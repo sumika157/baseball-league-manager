@@ -94,11 +94,15 @@ class LeagueAdmin(admin.ModelAdmin):
 
 @admin.register(Team)
 class TeamAdmin(admin.ModelAdmin):
-    list_display = ('name', 'league', 'city', 'active_player_count', 'game_count')
+    list_display = ('name', 'city', 'active_player_count', 'game_count')
     list_filter = ('league',)
     search_fields = ('name', 'city')
-    ordering = ('league', 'name')
+    # リーグごとにまとまるよう並べる。リーグ内は手動の表示順を尊重する
+    ordering = ('league__name', 'display_order', 'name')
     list_select_related = ('league',)
+
+    # 行をリーグごとに区切る。見出しに出るのでリーグ列は list_display から外した
+    group_by = staticmethod(lambda team: team.league.name)
 
     @admin.display(description='現役選手')
     def active_player_count(self, obj):
@@ -111,13 +115,17 @@ class TeamAdmin(admin.ModelAdmin):
 
 @admin.register(Player)
 class PlayerAdmin(admin.ModelAdmin):
-    list_display = ('number', 'name', 'team', 'position', 'is_active', 'appearances')
+    list_display = ('number', 'name', 'position', 'is_active', 'appearances')
     list_display_links = ('name',)
     list_filter = ('team__league', 'team', 'position', 'is_active')
     search_fields = ('name',)
-    ordering = ('team', 'number')
-    list_select_related = ('team',)
+    # リーグ・チームごとにまとまるよう並べる
+    ordering = ('team__league__name', 'team__name', 'number')
+    list_select_related = ('team', 'team__league')
     list_editable = ('is_active',)
+
+    # 行をチームごとに区切る。どのリーグのチームかも見出しに出す
+    group_by = staticmethod(lambda p: f'{p.team.league.name} · {p.team.name}')
 
     @admin.display(description='出場試合')
     def appearances(self, obj):

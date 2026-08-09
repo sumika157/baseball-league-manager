@@ -863,6 +863,61 @@ class LeagueDetailTest(BaseCase):
         self.assertIn(self.url, body)
 
 
+class AdminGroupingTest(BaseCase):
+    """管理画面の一覧をリーグ・チームごとに区切る。
+
+    標準テンプレートを差し替えているため、グループ化しない一覧が
+    従来どおり出ることも確かめる。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(User.objects.create_superuser(username='root', password='x'))
+        self.other = orm_models.League.objects.create(name='別リーグ')
+        self.x = orm_models.Team.objects.create(league=self.other, name='Xチーム')
+        self.service.register_player(self.team.id, '山田', 10, '内野手')
+        self.service.register_player(self.x.id, '田中', 20, '外野手')
+
+    def test_team_list_has_league_headings(self):
+        response = self.client.get('/admin/myapp/team/')
+
+        self.assertContains(response, 'group-heading-row')
+        self.assertContains(response, 'テストリーグ')
+        self.assertContains(response, '別リーグ')
+
+    def test_team_list_shows_each_league_once(self):
+        body = self.client.get('/admin/myapp/team/').content.decode()
+        self.assertEqual(body.count('>テストリーグ</td>'), 1)
+
+    def test_player_list_groups_by_team(self):
+        response = self.client.get('/admin/myapp/player/')
+
+        self.assertContains(response, 'group-heading-row')
+        self.assertContains(response, 'テストリーグ · テストチーム')
+
+    def test_grouping_is_dropped_when_the_user_sorts(self):
+        """列で並べ替えるとまとまりが崩れるので、見出しを出さない。"""
+        response = self.client.get('/admin/myapp/team/?o=1')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'group-heading-row')
+
+    def test_other_changelists_are_unaffected(self):
+        """group_by を持たない一覧は従来どおり描画されること。"""
+        for url in ['/admin/myapp/league/', '/admin/myapp/game/', '/admin/auth/user/']:
+            with self.subTest(url=url):
+                response = self.client.get(url)
+                self.assertEqual(response.status_code, 200)
+                self.assertNotContains(response, 'group-heading-row')
+
+    def test_result_rows_are_still_rendered(self):
+        body = self.client.get('/admin/myapp/team/').content.decode()
+
+        self.assertIn('result_list', body)
+        self.assertIn('テストチーム', body)
+        self.assertIn('Xチーム', body)
+
+
 class AuthTest(TestCase):
     def test_login_redirect_url_resolves(self):
         from django.conf import settings

@@ -286,6 +286,24 @@ div.breadcrumbs {
   background: var(--darkened-bg);
 }
 
+/* 一覧の区切り見出し（リーグごと・チームごと） */
+#result_list tr.group-heading-row > td {
+  background: var(--darkened-bg);
+  border-top: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+  padding: 8px 10px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--body-quiet-color);
+}
+
+/* 見出し行は選択やホバーの対象ではないので、行の反応を打ち消す */
+#result_list tr.group-heading-row:hover > td {
+  background: var(--darkened-bg);
+}
+
 /* 絞り込みパネル */
 #changelist-filter {
   border-radius: var(--admin-radius);

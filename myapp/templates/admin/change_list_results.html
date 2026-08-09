@@ -1,0 +1,59 @@
+{% load i18n admin_grouping %}
+{% comment %}
+Django 同梱の admin/change_list_results.html を差し替えたもの。
+
+内容は標準と同じで、ModelAdmin に group_by が定義されているときだけ
+区切りの見出し行を挟む。定義が無い場合（管理画面の大半）は標準と
+まったく同じ描画になるようにしてある。
+
+myapp は INSTALLED_APPS で django.contrib.admin より前にあるため、
+同名のこのファイルがすべての一覧で使われる点に注意。
+{% endcomment %}
+{% if result_hidden_fields %}
+<div class="hiddenfields">{# DIV for HTML validation #}
+{% for item in result_hidden_fields %}{{ item }}{% endfor %}
+</div>
+{% endif %}
+{% if results %}
+<div class="results">
+<table id="result_list">
+<thead>
+<tr>
+{% for header in result_headers %}
+<th scope="col"{{ header.class_attrib }}>
+   {% if header.sortable and header.sort_priority > 0 %}
+       <div class="sortoptions">
+         <a class="sortremove" href="{{ header.url_remove }}" title="{% translate "Remove from sorting" %}"></a>
+         {% if num_sorted_fields > 1 %}<span class="sortpriority" title="{% blocktranslate with priority_number=header.sort_priority %}Sorting priority: {{ priority_number }}{% endblocktranslate %}">{{ header.sort_priority }}</span>{% endif %}
+         <a href="{{ header.url_toggle }}" class="toggle {{ header.ascending|yesno:'ascending,descending' }}" title="{% translate "Toggle sorting" %}"></a>
+       </div>
+   {% endif %}
+   <div class="text">{% if header.sortable %}<a href="{{ header.url_primary }}">{{ header.text|capfirst }}</a>{% else %}<span>{{ header.text|capfirst }}</span>{% endif %}</div>
+   <div class="clear"></div>
+</th>{% endfor %}
+</tr>
+</thead>
+<tbody>
+{% grouped_results cl results as grouped %}
+{% if grouped %}
+    {% for row in grouped %}
+    {% if row.header %}
+        <tr class="group-heading-row"><td colspan="{{ row.result|length }}">{{ row.header }}</td></tr>
+    {% endif %}
+    {% if row.result.form and row.result.form.non_field_errors %}
+        <tr><td colspan="{{ row.result|length }}">{{ row.result.form.non_field_errors }}</td></tr>
+    {% endif %}
+    <tr>{% for item in row.result %}{{ item }}{% endfor %}</tr>
+    {% endfor %}
+{% else %}
+    {% for result in results %}
+    {% if result.form and result.form.non_field_errors %}
+        <tr><td colspan="{{ result|length }}">{{ result.form.non_field_errors }}</td></tr>
+    {% endif %}
+    <tr>{% for item in result %}{{ item }}{% endfor %}</tr>
+    {% endfor %}
+{% endif %}
+</tbody>
+</table>
+</div>
+{% endif %}
