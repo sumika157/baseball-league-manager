@@ -1565,6 +1565,86 @@ class AdminStintValidationTest(BaseCase):
         self.assertEqual(stint.from_year, 2024)
 
 
+class AdminPlayerWithStintsTest(BaseCase):
+    """選手登録画面から、在籍（経歴）を一緒に登録できること。"""
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(User.objects.create_superuser(username='root', password='x'))
+        self.past = orm_models.Team.objects.create(league=self.league, name='前所属')
+
+    def _post(self, stints):
+        payload = {
+            'name': '新人太郎', 'position': '投手',
+            'birth_date': '', 'throws': '', 'bats': '',
+            'height_cm': '', 'weight_kg': '', 'birthplace': '', 'debut_year': '',
+            'high_school': '', 'university': '', 'corporate_team': '',
+            'stints-TOTAL_FORMS': str(len(stints)), 'stints-INITIAL_FORMS': '0',
+            'stints-MIN_NUM_FORMS': '0', 'stints-MAX_NUM_FORMS': '1000',
+        }
+        for i, (team, number, from_year, to_year) in enumerate(stints):
+            payload.update({
+                f'stints-{i}-team': str(team.id), f'stints-{i}-number': str(number),
+                f'stints-{i}-from_year': str(from_year), f'stints-{i}-to_year': str(to_year),
+                f'stints-{i}-id': '', f'stints-{i}-player': '',
+            })
+        return self.client.post('/admin/myapp/player/add/', payload)
+
+    def _created(self):
+        return orm_models.Player.objects.filter(name='新人太郎').first()
+
+    def test_new_player_can_be_registered_with_a_stint(self):
+        """新規登録では選手がまだ保存されていない。
+
+        その状態で既存の在籍と突き合わせようとして落ちていた。
+        """
+        response = self._post([(self.team, 18, 2024, '')])
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self._created().stints.count(), 1)
+
+    def test_new_player_can_be_registered_with_a_transfer_history(self):
+        """経歴を複数まとめて登録できる。"""
+        self._post([(self.past, 18, 2018, 2021), (self.team, 11, 2022, '')])
+
+        stints = self._created().stints.order_by('from_year')
+        self.assertEqual(
+            [(s.team_id, s.number, s.from_year, s.to_year) for s in stints],
+            [(self.past.id, 18, 2018, 2021), (self.team.id, 11, 2022, None)],
+        )
+
+    def test_mid_season_transfer_is_allowed(self):
+        """移籍元と移籍先が同じ年を共有するのは普通のこと。"""
+        response = self._post([(self.past, 18, 2020, 2022), (self.team, 11, 2022, '')])
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self._created().stints.count(), 2)
+
+    def test_rejoining_the_same_team_later_is_allowed(self):
+        response = self._post([(self.team, 18, 2018, 2021), (self.team, 99, 2024, '')])
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self._created().stints.count(), 2)
+
+    def test_overlapping_stints_at_the_same_team_are_rejected(self):
+        """1行ずつの検証では、同時に送られた行どうしの矛盾に気づけない。"""
+        response = self._post([(self.team, 18, 2018, 2021), (self.team, 11, 2020, '')])
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '同じチームに同時に2度在籍することはできません')
+        self.assertIsNone(self._created())
+
+    def test_number_taken_by_another_player_is_still_rejected(self):
+        """新規登録でも、他の選手との背番号の重なりは弾く。"""
+        self.service.register_player(self.team.id, '山田', 10, '内野手')
+
+        response = self._post([(self.team, 10, 2026, '')])
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '期間が重なる同じ背番号は登録できません')
+        self.assertIsNone(self._created())
+
+
 class LeagueAccordionTest(BaseCase):
     """リーグ一覧で所属チームを折りたたんで確認できること。"""
 

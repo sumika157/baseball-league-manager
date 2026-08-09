@@ -341,8 +341,12 @@ class PlayerStintForm(forms.ModelForm):
         others = PlayerStint.objects.filter(team=team, number=number).select_related('player')
         if self.instance.pk:
             others = others.exclude(pk=self.instance.pk)
-        if cleaned.get('player'):
-            others = others.exclude(player=cleaned['player'])
+        # 選手の新規登録では、在籍と一緒に送られてくる選手がまだ保存されていない。
+        # 未保存のまま絞り込むと落ちるうえ、そもそも既存の在籍を持たないので
+        # 除外する必要も無い
+        player = cleaned.get('player')
+        if player is not None and player.pk:
+            others = others.exclude(player=player)
 
         for other in others:
             existing = DomainStint(
@@ -359,11 +363,56 @@ class PlayerStintForm(forms.ModelForm):
         return cleaned
 
 
+class PlayerStintFormSet(forms.BaseInlineFormSet):
+    """同じ選手の在籍どうしの食い違いを見る。
+
+    1行ずつの検証では、同時に送られた他の行が見えない。まとめて登録すると
+    「同じチームに期間が重なって在籍している」経歴が通ってしまうため、
+    ここで突き合わせる。
+
+    別チームどうしの重なりは弾かない。シーズン途中の移籍では、移籍元と
+    移籍先の在籍が同じ年を共有するのが普通のため。
+    """
+
+    def clean(self):
+        super().clean()
+        if any(self.errors):
+            return
+
+        checked = []
+        for form in self.forms:
+            data = getattr(form, 'cleaned_data', None)
+            if not data or data.get('DELETE'):
+                continue
+            team = data.get('team')
+            number = data.get('number')
+            from_year = data.get('from_year')
+            if not (team and number is not None and from_year is not None):
+                continue
+
+            current = DomainStint(
+                team_id=team.id,
+                number=JerseyNumber(number),
+                from_year=from_year,
+                to_year=data.get('to_year'),
+            )
+            for other in checked:
+                if other.team_id == current.team_id and current.overlaps(other):
+                    form.add_error(
+                        'from_year',
+                        f'{team.name} の在籍 {other} と期間が重なっています。'
+                        f'同じチームに同時に2度在籍することはできません。',
+                    )
+                    break
+            checked.append(current)
+
+
 class PlayerStintInline(admin.TabularInline):
     """在籍。所属と背番号はここが出典で、移籍すると行が増える。"""
 
     model = PlayerStint
     form = PlayerStintForm
+    formset = PlayerStintFormSet
     extra = 0
     fields = ('team', 'number', 'from_year', 'to_year')
     ordering = ('-from_year',)
