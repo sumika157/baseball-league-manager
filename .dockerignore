@@ -12,6 +12,9 @@ __pycache__/
 db.sqlite3
 db.sqlite3-journal
 
+# 秘密情報はイメージに焼き込まず、env_file で渡す
+.env
+
 # Git 関連
 .git/
 .gitignore

@@ -39,6 +39,42 @@
 docker info --format '{{.ServerVersion}}'
 ```
 
+3. **`.env` を作成する**
+   `SECRET_KEY` などの設定は環境変数で渡すため、`.env` が必要です。
+
+```bash
+cd ~/work/develop/my_django_project
+cp .env.example .env
+
+# SECRET_KEY を生成して .env の該当行を書き換える
+python3 -c "import secrets; print(secrets.token_urlsafe(64))"
+```
+
+`.env` は Git 管理外なので、リポジトリには公開されません。
+
+---
+
+## 環境変数
+
+設定値は `.env` から読み込まれます（`docker-compose.yml` の `env_file`）。
+
+| 変数名 | 必須 | 既定値 | 説明 |
+| --- | --- | --- | --- |
+| `DJANGO_SECRET_KEY` | ✅ | なし | 暗号署名に使う秘密鍵。未設定だと起動時にエラーになります |
+| `DJANGO_DEBUG` | | `False` | 開発時は `True`。本番では必ず `False` |
+| `DJANGO_ALLOWED_HOSTS` | | `localhost,127.0.0.1` | アクセスを許可するホスト名（カンマ区切り） |
+
+`DJANGO_SECRET_KEY` を設定せずに起動すると、次のエラーで停止します。
+
+```
+django.core.exceptions.ImproperlyConfigured: 環境変数 DJANGO_SECRET_KEY が設定されていません。
+```
+
+> **`.env` の値に `$` を含めないでください。**
+> Docker Compose が `.env` 内の `$xxx` を変数として展開してしまい、
+> `SECRET_KEY` が壊れた状態で Django に渡ります。エラーにならないため気づきにくい問題です。
+> `python3 -c "import secrets; print(secrets.token_urlsafe(64))"` で生成すれば `$` は含まれません。
+
 ---
 
 ## 起動と停止
@@ -219,6 +255,8 @@ my_django_project/
 ├── Dockerfile              # イメージ定義
 ├── docker-compose.yml      # サービス定義（ポート公開・マウント・自動 migrate）
 ├── .dockerignore           # イメージに含めないファイル
+├── .env                    # 環境変数の実値（Git 管理外）
+├── .env.example            # .env のテンプレート
 ├── db.sqlite3              # データベース（Git 管理外）
 ├── manage.py               # Django のコマンド入口
 └── requirements.txt        # 依存パッケージ

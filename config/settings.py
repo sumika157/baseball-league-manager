@@ -10,8 +10,10 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+import os
 from pathlib import Path
 from django.contrib.messages import constants as messages
+from django.core.exceptions import ImproperlyConfigured
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -21,12 +23,24 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-=nua^b*^0gjc8vd!e5huf*+23=l#o$wy^896w#z9kw99_dr7xz'
+# 値は .env で設定する（.env.example をコピーして作成）
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
+if not SECRET_KEY:
+    raise ImproperlyConfigured(
+        "環境変数 DJANGO_SECRET_KEY が設定されていません。"
+        ".env.example をコピーして .env を作成してください。"
+    )
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# 明示的に有効化しない限り False（安全側に倒す）
+DEBUG = os.environ.get('DJANGO_DEBUG', 'False').lower() in ('1', 'true', 'yes')
 
-ALLOWED_HOSTS = []
+# カンマ区切りで指定する（例: DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1）
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+    if host.strip()
+]
 
 
 # Application definition

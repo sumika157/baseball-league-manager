@@ -4,6 +4,9 @@ services:
     container_name: baseball-web
     ports:
       - "8000:8000"
+    # SECRET_KEY などの設定を読み込む（.env.example をコピーして作成する）
+    env_file:
+      - .env
     volumes:
       # ソースをマウントすることで、編集内容が即座に反映される（ホットリロード）
       # db.sqlite3 もこのマウント経由でホスト側のファイルを直接使う
