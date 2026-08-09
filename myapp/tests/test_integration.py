@@ -292,6 +292,52 @@ class HeaderNavigationTest(TestCase):
         self.assertEqual(self.client.get('/admin/').status_code, 200)
 
 
+class AdminTest(TestCase):
+    """管理画面のテーマ適用と一覧表示。"""
+
+    def setUp(self):
+        from django.contrib.auth.models import User
+
+        self.staff = User.objects.create_superuser(username='root', password='x')
+        self.client.force_login(self.staff)
+        self.league = orm_models.League.objects.create(name='テストリーグ')
+        self.team = orm_models.Team.objects.create(league=self.league, name='テストチーム')
+        self.service = TeamApplicationService(
+            teams=DjangoTeamRepository(), team_list_query=DjangoTeamListQuery()
+        )
+
+    def test_admin_pages_use_the_admin_theme(self):
+        for url in ['/admin/', '/admin/myapp/player/', '/admin/myapp/team/']:
+            with self.subTest(url=url):
+                response = self.client.get(url)
+                self.assertContains(response, 'myapp/css/admin-theme.css')
+                # サイト側のテーマが混ざっていないこと
+                self.assertNotContains(response, 'myapp/css/theme.css')
+
+    def test_site_pages_do_not_use_the_admin_theme(self):
+        response = self.client.get(reverse('dashboard'))
+        self.assertContains(response, 'myapp/css/theme.css')
+        self.assertNotContains(response, 'myapp/css/admin-theme.css')
+
+    def test_player_list_shows_key_stat_from_domain(self):
+        """一覧の主要成績はドメイン層の計算結果と一致すること。"""
+        player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        self.service.update_player(
+            self.team.id, player.id, name='山田', number=10, position_label='内野手',
+            batting=BattingLine(at_bats=10, singles=2, home_runs=1),
+        )
+
+        detail = self.service.get_player_detail(self.team.id, player.id)
+        response = self.client.get('/admin/myapp/player/')
+
+        self.assertContains(response, f'OPS {detail.ops:.3f}')
+
+    def test_pitcher_without_innings_is_labelled(self):
+        self.service.register_player(self.team.id, '佐藤', 18, '投手')
+        response = self.client.get('/admin/myapp/player/')
+        self.assertContains(response, '未登板')
+
+
 class AuthTest(TestCase):
     def test_login_redirect_url_resolves(self):
         from django.conf import settings

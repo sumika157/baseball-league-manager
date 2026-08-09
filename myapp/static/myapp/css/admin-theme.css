@@ -1,0 +1,396 @@
+/*
+ * Django 管理画面のテーマ層
+ *
+ * Django 5.x の admin は配色を CSS 変数で持っているため、変数を差し替えるだけで
+ * 大半の見た目が変わる。構造には手を入れず、色・角丸・余白・字面だけを調整する。
+ *
+ * ライト／ダークの切替（admin 右上のトグルと OS 設定）に追随させるため、
+ * Django 本体と同じ 3 つの文脈すべてで変数を定義する。
+ *   - html[data-theme="light"], :root      … 明示的にライト／既定
+ *   - @media (prefers-color-scheme: dark)  … OS 設定に追随
+ *   - html[data-theme="dark"]              … 明示的にダーク
+ * どれか 1 つでも欠けると、その状態のときだけ Django 既定色に戻ってしまう。
+ */
+
+/* ------------------------------------------------------------------
+   ライト（既定）
+   ------------------------------------------------------------------ */
+html[data-theme="light"],
+:root {
+  --primary: #4f46e5;
+  --secondary: #4f46e5;
+  --accent: #4f46e5;
+  --primary-fg: #ffffff;
+
+  --body-fg: #16181d;
+  --body-bg: #ffffff;
+  --body-quiet-color: #6b7280;
+  --body-medium-color: #4b5563;
+  --body-loud-color: #16181d;
+
+  /* ヘッダーはサイト側と揃えて白地＋下線にする */
+  --header-color: #6b7280;
+  --header-branding-color: #16181d;
+  --header-bg: #ffffff;
+  --header-link-color: #16181d;
+
+  --breadcrumbs-fg: #6b7280;
+  --breadcrumbs-link-fg: #4f46e5;
+  --breadcrumbs-bg: #f7f8fa;
+
+  --link-fg: #4f46e5;
+  --link-hover-color: #4338ca;
+  --link-selected-fg: #4338ca;
+
+  --hairline-color: #eceef1;
+  --border-color: #e6e8ec;
+
+  --error-fg: #b91c1c;
+
+  --message-success-bg: #ecfdf5;
+  --message-warning-bg: #fffbeb;
+  --message-error-bg: #fef2f2;
+
+  --darkened-bg: #fafbfc;
+  --selected-bg: #eef2ff;
+  --selected-row: #eef2ff;
+
+  --button-fg: #ffffff;
+  --button-bg: #4f46e5;
+  --button-hover-bg: #4338ca;
+  --default-button-bg: #4f46e5;
+  --default-button-hover-bg: #4338ca;
+  --close-button-bg: #6b7280;
+  --close-button-hover-bg: #4b5563;
+  --delete-button-bg: #dc2626;
+  --delete-button-hover-bg: #b91c1c;
+
+  --object-tools-fg: #ffffff;
+  --object-tools-bg: #16181d;
+  --object-tools-hover-bg: #000000;
+
+  /* 日本語を明示的に含めた字面。Django 既定は欧文のみ指定 */
+  --font-family-primary: -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", Meiryo,
+    sans-serif;
+
+  --admin-radius: 10px;
+  --admin-radius-sm: 6px;
+  --admin-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+  --admin-page-bg: #f7f8fa;
+}
+
+/* ------------------------------------------------------------------
+   ダーク（OS 設定に追随）
+   ------------------------------------------------------------------ */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --primary: #6366f1;
+    --secondary: #6366f1;
+    --accent: #818cf8;
+    --primary-fg: #ffffff;
+
+    --body-fg: #e8eaed;
+    --body-bg: #16181d;
+    --body-quiet-color: #9aa3af;
+    --body-medium-color: #c3c8d0;
+    --body-loud-color: #ffffff;
+
+    --header-color: #9aa3af;
+    --header-branding-color: #ffffff;
+    --header-bg: #16181d;
+    --header-link-color: #e8eaed;
+
+    --breadcrumbs-fg: #9aa3af;
+    --breadcrumbs-link-fg: #a5b4fc;
+    --breadcrumbs-bg: #1c1f26;
+
+    --link-fg: #a5b4fc;
+    --link-hover-color: #c7d2fe;
+    --link-selected-fg: #c7d2fe;
+
+    --hairline-color: #262a32;
+    --border-color: #2f343d;
+
+    --error-fg: #f87171;
+
+    --message-success-bg: #052e1d;
+    --message-warning-bg: #3a2a05;
+    --message-error-bg: #3b0d0d;
+
+    --darkened-bg: #1c1f26;
+    --selected-bg: #23262f;
+    --selected-row: #262a4a;
+
+    --button-bg: #4f46e5;
+    --button-hover-bg: #6366f1;
+    --default-button-bg: #4f46e5;
+    --default-button-hover-bg: #6366f1;
+    --close-button-bg: #3a3f4a;
+    --close-button-hover-bg: #4b515e;
+
+    --object-tools-bg: #3a3f4a;
+    --object-tools-hover-bg: #4b515e;
+
+    --admin-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --admin-page-bg: #101216;
+  }
+}
+
+/* ------------------------------------------------------------------
+   ダーク（明示指定）
+   ------------------------------------------------------------------ */
+html[data-theme="dark"] {
+  --primary: #6366f1;
+  --secondary: #6366f1;
+  --accent: #818cf8;
+  --primary-fg: #ffffff;
+
+  --body-fg: #e8eaed;
+  --body-bg: #16181d;
+  --body-quiet-color: #9aa3af;
+  --body-medium-color: #c3c8d0;
+  --body-loud-color: #ffffff;
+
+  --header-color: #9aa3af;
+  --header-branding-color: #ffffff;
+  --header-bg: #16181d;
+  --header-link-color: #e8eaed;
+
+  --breadcrumbs-fg: #9aa3af;
+  --breadcrumbs-link-fg: #a5b4fc;
+  --breadcrumbs-bg: #1c1f26;
+
+  --link-fg: #a5b4fc;
+  --link-hover-color: #c7d2fe;
+  --link-selected-fg: #c7d2fe;
+
+  --hairline-color: #262a32;
+  --border-color: #2f343d;
+
+  --error-fg: #f87171;
+
+  --message-success-bg: #052e1d;
+  --message-warning-bg: #3a2a05;
+  --message-error-bg: #3b0d0d;
+
+  --darkened-bg: #1c1f26;
+  --selected-bg: #23262f;
+  --selected-row: #262a4a;
+
+  --button-bg: #4f46e5;
+  --button-hover-bg: #6366f1;
+  --default-button-bg: #4f46e5;
+  --default-button-hover-bg: #6366f1;
+  --close-button-bg: #3a3f4a;
+  --close-button-hover-bg: #4b515e;
+
+  --object-tools-bg: #3a3f4a;
+  --object-tools-hover-bg: #4b515e;
+
+  --admin-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --admin-page-bg: #101216;
+}
+
+/* ------------------------------------------------------------------
+   構造の調整
+   ------------------------------------------------------------------ */
+body {
+  background: var(--admin-page-bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: 0.01em;
+}
+
+/* ヘッダー。色帯ではなく白地＋下線にして、サイト側と揃える */
+#header {
+  border-bottom: 1px solid var(--border-color);
+  padding: 12px 40px;
+  box-shadow: none;
+}
+
+#branding h1,
+#site-name a {
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  font-size: 1.0625rem;
+}
+
+#user-tools {
+  font-size: 0.8125rem;
+}
+
+#user-tools a {
+  border-bottom: none;
+  color: var(--header-link-color);
+}
+
+#user-tools a:hover {
+  color: var(--link-fg);
+}
+
+/* パンくず */
+div.breadcrumbs {
+  border-bottom: 1px solid var(--border-color);
+  padding: 10px 40px;
+  font-size: 0.8125rem;
+}
+
+/* 見出し */
+#content h1 {
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+
+/* モジュール（一覧・フォームの箱） */
+.module {
+  border: 1px solid var(--border-color);
+  border-radius: var(--admin-radius);
+  box-shadow: var(--admin-shadow);
+  overflow: hidden;
+  background: var(--body-bg);
+}
+
+.module > h2,
+.module caption,
+.inline-group h2 {
+  background: var(--darkened-bg);
+  color: var(--body-fg);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+/* 一覧テーブル */
+#changelist table thead th {
+  background: var(--body-bg);
+  border-bottom: 1px solid var(--border-color);
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--body-quiet-color);
+}
+
+#changelist table tbody td,
+#changelist table tbody th {
+  border-bottom: 1px solid var(--hairline-color);
+  padding: 10px;
+  /* 成績が並ぶので桁を揃える */
+  font-variant-numeric: tabular-nums;
+}
+
+#changelist table tbody tr:hover > * {
+  background: var(--darkened-bg);
+}
+
+/* 絞り込みパネル */
+#changelist-filter {
+  border-radius: var(--admin-radius);
+  border: 1px solid var(--border-color);
+  background: var(--body-bg);
+}
+
+#changelist-filter h2 {
+  border-radius: var(--admin-radius) var(--admin-radius) 0 0;
+}
+
+/* 検索欄 */
+#toolbar {
+  background: var(--darkened-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--admin-radius);
+  padding: 10px;
+}
+
+/* ボタン */
+.button,
+input[type="submit"],
+input[type="button"],
+.submit-row input,
+a.button {
+  border-radius: var(--admin-radius-sm);
+  font-weight: 550;
+  padding: 8px 14px;
+  transition: background 0.15s ease;
+}
+
+.object-tools a {
+  border-radius: var(--admin-radius-sm);
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 550;
+  font-size: 0.75rem;
+}
+
+.submit-row {
+  border-radius: var(--admin-radius);
+  border: 1px solid var(--border-color);
+  background: var(--darkened-bg);
+  padding: 12px 14px;
+}
+
+/* 入力欄 */
+input[type="text"],
+input[type="password"],
+input[type="email"],
+input[type="url"],
+input[type="number"],
+textarea,
+select {
+  border-radius: var(--admin-radius-sm);
+  border: 1px solid var(--border-color);
+  padding: 7px 10px;
+  background: var(--body-bg);
+  color: var(--body-fg);
+}
+
+input[type="text"]:focus,
+input[type="password"]:focus,
+input[type="email"]:focus,
+input[type="number"]:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15);
+}
+
+/* 通知 */
+ul.messagelist li {
+  border-radius: var(--admin-radius-sm);
+  font-size: 0.875rem;
+  border: 1px solid var(--border-color);
+}
+
+/* サイドバー */
+#nav-sidebar {
+  border-right: 1px solid var(--border-color);
+}
+
+.main > #nav-sidebar + .content {
+  max-width: none;
+}
+
+/* ログイン画面 */
+body.login #container {
+  border-radius: var(--admin-radius);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--admin-shadow);
+  background: var(--body-bg);
+}
+
+body.login #header {
+  border-radius: var(--admin-radius) var(--admin-radius) 0 0;
+}
+
+/* 小さい画面 */
+@media (max-width: 767px) {
+  #header,
+  div.breadcrumbs {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}

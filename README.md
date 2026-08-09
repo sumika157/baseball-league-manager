@@ -352,6 +352,13 @@ Bootstrap 5 の上に薄いテーマ層（[theme.css](myapp/static/myapp/css/the
 - 成績表は `tabular-nums` で桁を揃える（データが主役の画面では効果が大きい）
 - 表は枠線を持たせず行区切りのみで構成
 
+管理画面にも同じ考え方のテーマ層（[admin-theme.css](myapp/static/myapp/css/admin-theme.css)）を当てています。
+Django 5.x の admin は配色を CSS 変数で持っているため、変数を差し替えるだけで大半が変わります。
+
+> admin のライト／ダーク切替に追随させるには、Django 本体と同じ3つの文脈
+> （`html[data-theme="light"], :root` / `@media (prefers-color-scheme: dark)` / `html[data-theme="dark"]`）
+> すべてで変数を定義する必要があります。どれか1つ欠けると、その状態のときだけ Django 既定色に戻ります。
+
 ### テンプレートの優先順位に注意
 
 `INSTALLED_APPS` では **`myapp` を `django.contrib.admin` より前**に置いています。

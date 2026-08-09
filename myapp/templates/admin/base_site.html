@@ -1,0 +1,24 @@
+{# Django 同梱の admin/base_site.html を差し替えて、テーマ層を読み込ませる。
+   myapp は INSTALLED_APPS で django.contrib.admin より前にあるため、
+   同名のこのファイルが優先される。
+
+   内容は Django 既定と同じで、extrastyle にテーマの読み込みを足しただけ。
+   ヘッダーの文言は myapp/admin.py の site_header / site_title で設定している。 #}
+{% extends "admin/base.html" %}
+{% load i18n static %}
+
+{% block title %}{% if subtitle %}{{ subtitle }} | {% endif %}{{ title }} | {{ site_title|default:_('Django site admin') }}{% endblock %}
+
+{# base.css・dark_mode.css より後に読み込ませて CSS 変数を上書きする #}
+{% block extrastyle %}{{ block.super }}
+  <link rel="stylesheet" href="{% static 'myapp/css/admin-theme.css' %}">
+{% endblock %}
+
+{% block branding %}
+  <div id="site-name">
+    <a href="{% url 'admin:index' %}">{{ site_header|default:_('Django administration') }}</a>
+  </div>
+  {% if user.is_anonymous %}{% include "admin/color_theme_toggle.html" %}{% endif %}
+{% endblock %}
+
+{% block nav-global %}{% endblock %}
