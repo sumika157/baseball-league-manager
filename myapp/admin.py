@@ -3,6 +3,9 @@ import types
 from django import forms
 from django.contrib import admin
 
+from .domain.entities import Stint as DomainStint
+from .domain.exceptions import DomainError
+from .domain.value_objects import JerseyNumber
 from .infrastructure.orm_models import (
     Game,
     GameBattingLine,
@@ -132,10 +135,62 @@ class StadiumAdmin(admin.ModelAdmin):
         return '、'.join(names) if names else '—'
 
 
+class PlayerStintForm(forms.ModelForm):
+    """在籍の入力検証。
+
+    管理画面はドメインを経由しないため、放っておくと「同じチームで同じ背番号の
+    選手が同時に2人」といった状態を作れてしまう。判定そのものはドメインの
+    Stint に任せ、ここでは既存の在籍と突き合わせるだけにする。
+    """
+
+    class Meta:
+        model = PlayerStint
+        fields = '__all__'
+
+    def clean(self):
+        cleaned = super().clean()
+        team = cleaned.get('team')
+        number = cleaned.get('number')
+        from_year = cleaned.get('from_year')
+        if not (team and number is not None and from_year is not None):
+            return cleaned
+
+        try:
+            candidate = DomainStint(
+                team_id=team.id,
+                number=JerseyNumber(number),
+                from_year=from_year,
+                to_year=cleaned.get('to_year'),
+            )
+        except DomainError as error:
+            raise forms.ValidationError(str(error)) from None
+
+        others = PlayerStint.objects.filter(team=team, number=number).select_related('player')
+        if self.instance.pk:
+            others = others.exclude(pk=self.instance.pk)
+        if cleaned.get('player'):
+            others = others.exclude(player=cleaned['player'])
+
+        for other in others:
+            existing = DomainStint(
+                team_id=other.team_id,
+                number=JerseyNumber(other.number),
+                from_year=other.from_year,
+                to_year=other.to_year,
+            )
+            if candidate.overlaps(existing):
+                raise forms.ValidationError(
+                    f'背番号 {number} は {other.player.name} が {existing} に'
+                    f'使用しています。期間が重なる同じ背番号は登録できません。'
+                )
+        return cleaned
+
+
 class PlayerStintInline(admin.TabularInline):
     """在籍。所属と背番号はここが出典で、移籍すると行が増える。"""
 
     model = PlayerStint
+    form = PlayerStintForm
     extra = 0
     fields = ('team', 'number', 'from_year', 'to_year')
     ordering = ('-from_year',)
@@ -196,6 +251,7 @@ class PlayerAdmin(admin.ModelAdmin):
 class PlayerStintAdmin(admin.ModelAdmin):
     """在籍そのものの一覧。チームごとの名簿として使える。"""
 
+    form = PlayerStintForm
     list_display = ('number', 'player', 'from_year', 'to_year')
     list_filter = ('team__league', 'team')
     search_fields = ('player__name',)

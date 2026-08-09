@@ -1223,6 +1223,93 @@ class TransferTest(BaseCase):
         self.assertContains(response, 'field-current_number')
 
 
+class AdminStintValidationTest(BaseCase):
+    """管理画面から過去の経歴を登録するときの検証。
+
+    管理画面はドメインを経由しないため、判定を素通しにすると
+    「同じチームで同じ背番号の選手が同時に2人」を作れてしまう。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(User.objects.create_superuser(username='root', password='x'))
+        self.player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        self.other = self.service.register_player(self.team.id, '田中', 11, '外野手')
+
+    def _add(self, **overrides):
+        payload = {
+            'player': self.other.id, 'team': self.team.id,
+            'number': '10', 'from_year': '2020', 'to_year': '',
+        }
+        payload.update(overrides)
+        return self.client.post('/admin/myapp/playerstint/add/', payload)
+
+    def test_past_stint_can_be_registered(self):
+        """別チームでの過去の在籍は普通に登録できる。"""
+        past = orm_models.Team.objects.create(league=self.league, name='前所属')
+
+        self.client.post('/admin/myapp/playerstint/add/', {
+            'player': self.player.id, 'team': past.id,
+            'number': '55', 'from_year': '2020', 'to_year': '2023',
+        })
+
+        stints = orm_models.PlayerStint.objects.filter(player_id=self.player.id)
+        self.assertEqual(stints.count(), 2)
+        self.assertTrue(stints.filter(team=past, number=55, to_year=2023).exists())
+
+    def test_overlapping_number_is_rejected(self):
+        response = self._add()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '期間が重なる同じ背番号は登録できません')
+        self.assertFalse(
+            orm_models.PlayerStint.objects.filter(player_id=self.other.id, number=10).exists()
+        )
+
+    def test_same_number_is_allowed_when_periods_do_not_overlap(self):
+        """期間が重ならなければ同じ背番号を使える。"""
+        # 山田は10番を2024〜2025で使い終えている
+        orm_models.PlayerStint.objects.filter(player_id=self.player.id).update(
+            from_year=2024, to_year=2025
+        )
+        # 田中の既存の在籍は別の年にしておく（同じ年の二重加入を避けるため）
+        orm_models.PlayerStint.objects.filter(player_id=self.other.id).update(
+            from_year=2020, to_year=2021
+        )
+
+        self._add(from_year='2026', to_year='')
+
+        self.assertTrue(
+            orm_models.PlayerStint.objects
+            .filter(player_id=self.other.id, number=10, from_year=2026).exists()
+        )
+
+    def test_joining_the_same_team_twice_in_a_year_is_rejected(self):
+        """同じチームに同じ年から二重に加入することはない。"""
+        response = self._add(number='99', from_year='2026')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '既に存在します')
+
+    def test_leaving_before_joining_is_rejected(self):
+        response = self._add(number='99', from_year='2026', to_year='2020')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '退団年が加入年より前')
+
+    def test_editing_a_stint_does_not_conflict_with_itself(self):
+        stint = orm_models.PlayerStint.objects.get(player_id=self.player.id)
+
+        response = self.client.post(f'/admin/myapp/playerstint/{stint.id}/change/', {
+            'player': self.player.id, 'team': self.team.id,
+            'number': '10', 'from_year': '2024', 'to_year': '',
+        })
+
+        self.assertEqual(response.status_code, 302)
+        stint.refresh_from_db()
+        self.assertEqual(stint.from_year, 2024)
+
+
 class AuthTest(TestCase):
     def test_login_redirect_url_resolves(self):
         from django.conf import settings
