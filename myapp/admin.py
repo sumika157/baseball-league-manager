@@ -9,6 +9,7 @@ from .infrastructure.orm_models import (
     Player,
     PlayerStats,
     Team,
+    TeamSeasonRecord,
 )
 
 # ヘッダーの文言
@@ -69,17 +70,37 @@ class LeagueAdmin(admin.ModelAdmin):
         return obj.teams.count()
 
 
+class TeamSeasonRecordInline(admin.TabularInline):
+    """シーズン成績。チームの編集画面から年ごとに登録する。
+
+    順位は保持しない。勝率から算出するため、入力すると勝敗と矛盾しうる。
+    """
+
+    model = TeamSeasonRecord
+    extra = 1
+    fields = ('year', 'wins', 'losses', 'ties')
+    ordering = ('-year',)
+
+
 @admin.register(Team)
 class TeamAdmin(admin.ModelAdmin):
-    list_display = ('name', 'league', 'city', 'active_player_count')
+    list_display = ('name', 'league', 'city', 'active_player_count', 'latest_season')
     list_filter = ('league',)
     search_fields = ('name', 'city')
     ordering = ('league', 'name')
     list_select_related = ('league',)
+    inlines = [TeamSeasonRecordInline]
 
     @admin.display(description='現役選手')
     def active_player_count(self, obj):
         return obj.players.filter(is_active=True).count()
+
+    @admin.display(description='最新シーズン')
+    def latest_season(self, obj):
+        row = obj.season_records.order_by('-year').first()
+        if row is None:
+            return '—'
+        return f'{row.year}年 {row.wins}勝{row.losses}敗{row.ties}分'
 
 
 class PlayerStatsInline(admin.StackedInline):

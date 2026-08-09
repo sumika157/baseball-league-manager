@@ -15,6 +15,7 @@ from .exceptions import (
     InvalidInningsPitched,
     InvalidJerseyNumber,
     InvalidPosition,
+    InvalidSeason,
     InvalidStatValue,
 )
 
@@ -288,6 +289,78 @@ class PitchingLine:
         if self._outs == 0:
             return 0.0
         return self.strikeouts * 27.0 / self._outs
+
+
+@dataclass(frozen=True)
+class Season:
+    """シーズン（年）。
+
+    チームの成績に時間軸を与える。同じチームでも年ごとに別の記録を持つ。
+    """
+
+    year: int
+
+    MIN_YEAR = 1900
+    MAX_YEAR = 2100
+
+    def __post_init__(self) -> None:
+        try:
+            year = int(self.year)
+        except (TypeError, ValueError):
+            raise InvalidSeason("シーズンは西暦の数値で入力してください。") from None
+
+        if year != self.year:
+            object.__setattr__(self, 'year', year)
+
+        if not (self.MIN_YEAR <= year <= self.MAX_YEAR):
+            raise InvalidSeason(
+                f"シーズンは {self.MIN_YEAR}〜{self.MAX_YEAR} の範囲で入力してください。"
+            )
+
+    def __str__(self) -> str:
+        return f"{self.year}年"
+
+
+@dataclass(frozen=True)
+class TeamRecord:
+    """チームの年間成績（勝敗）。
+
+    勝率は日本プロ野球の規則にならい 勝 ÷ (勝 + 敗) で求める。
+    引分は分母に含めない。全て引分なら勝率は 0 とする。
+    """
+
+    wins: int = 0
+    losses: int = 0
+    ties: int = 0
+
+    def __post_init__(self) -> None:
+        for field_name, label in (
+            ('wins', '勝'), ('losses', '敗'), ('ties', '分'),
+        ):
+            object.__setattr__(
+                self, field_name, _require_non_negative(label, getattr(self, field_name))
+            )
+
+    @property
+    def games_played(self) -> int:
+        """試合数。引分を含む。"""
+        return self.wins + self.losses + self.ties
+
+    @property
+    def decisions(self) -> int:
+        """勝敗のついた試合数。勝率の分母。"""
+        return self.wins + self.losses
+
+    @property
+    def winning_percentage(self) -> float:
+        if self.decisions == 0:
+            return 0.0
+        return self.wins / self.decisions
+
+    def games_behind(self, leader: TeamRecord) -> float:
+        """首位とのゲーム差。((首位の勝 - 勝) + (敗 - 首位の敗)) ÷ 2。"""
+        diff = (leader.wins - self.wins) + (self.losses - leader.losses)
+        return diff / 2
 
 
 def format_average(value: float) -> str:

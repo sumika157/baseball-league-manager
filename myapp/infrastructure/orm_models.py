@@ -47,6 +47,32 @@ class Team(models.Model):
         return self.name
 
 
+class TeamSeasonRecord(models.Model):
+    """チームの年間成績。順位は保持せず、勝率から算出する。"""
+
+    team = models.ForeignKey(
+        Team, on_delete=models.CASCADE, related_name='season_records', verbose_name='チーム'
+    )
+    year = models.IntegerField(verbose_name='シーズン')
+    wins = models.IntegerField(default=0, verbose_name='勝')
+    losses = models.IntegerField(default=0, verbose_name='敗')
+    ties = models.IntegerField(default=0, verbose_name='分')
+
+    class Meta:
+        verbose_name = 'シーズン成績'
+        verbose_name_plural = 'シーズン成績'
+        ordering = ['-year']
+        constraints = [
+            # 1チームにつき1シーズン1件。重複すると順位表が破綻する
+            models.UniqueConstraint(
+                fields=['team', 'year'], name='unique_team_season'
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.team.name} {self.year}年"
+
+
 class Player(models.Model):
     team = models.ForeignKey(
         Team, on_delete=models.CASCADE, related_name='players', verbose_name='チーム'

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from django.db import transaction
 
-from ..domain.entities import League, Player, Team
+from ..domain.entities import League, Player, Team, TeamSeason
 from ..domain.exceptions import TeamNotFound
 from ..domain.value_objects import (
     BattingLine,
@@ -16,6 +16,8 @@ from ..domain.value_objects import (
     JerseyNumber,
     PitchingLine,
     Position,
+    Season,
+    TeamRecord,
 )
 from . import orm_models
 
@@ -28,7 +30,9 @@ class DjangoTeamRepository:
             row = (
                 orm_models.Team.objects
                 .select_related('league')
-                .prefetch_related('players__stats', 'players__pitcher_stats')
+                .prefetch_related(
+                    'players__stats', 'players__pitcher_stats', 'season_records'
+                )
                 .get(id=team_id)
             )
         except orm_models.Team.DoesNotExist:
@@ -70,6 +74,18 @@ class DjangoTeamRepository:
 
         for player in team.players:
             self._save_player(team_row, player)
+
+        for entry in team.seasons:
+            row, _ = orm_models.TeamSeasonRecord.objects.update_or_create(
+                team=team_row,
+                year=entry.season.year,
+                defaults={
+                    'wins': entry.record.wins,
+                    'losses': entry.record.losses,
+                    'ties': entry.record.ties,
+                },
+            )
+            entry.id = row.id
 
         return team
 
@@ -125,12 +141,25 @@ class DjangoTeamRepository:
             if with_roster
             else []
         )
+        seasons = (
+            [
+                TeamSeason(
+                    id=s.id,
+                    season=Season(s.year),
+                    record=TeamRecord(wins=s.wins, losses=s.losses, ties=s.ties),
+                )
+                for s in row.season_records.all()
+            ]
+            if with_roster
+            else []
+        )
         return Team(
             id=row.id,
             league_id=row.league_id,
             name=row.name,
             city=row.city,
             players=players,
+            seasons=seasons,
         )
 
     def _player_to_domain(self, row: orm_models.Player) -> Player:

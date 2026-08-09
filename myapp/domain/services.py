@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .entities import Player
+from .entities import Player, Team
+from .value_objects import Season, TeamRecord
 
 
 @dataclass(frozen=True)
@@ -107,3 +108,69 @@ def leaders_by_strikeouts(
     ]
     entries.sort(key=lambda e: (-e[1], e[0].name))
     return _rank(entries, limit)
+
+
+# ------------------------------------------------------------------
+# 順位表
+# ------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class StandingRow:
+    """順位表の1行。"""
+
+    rank: int
+    team_id: int
+    team_name: str
+    record: TeamRecord
+    games_behind: float
+
+    @property
+    def is_leader(self) -> bool:
+        return self.rank == 1
+
+
+def standings(teams: list[Team], season: Season) -> list[StandingRow]:
+    """指定シーズンの順位表を作る。
+
+    順位は勝率の高い順で決まる。勝率が同じなら同順位として扱う。
+    そのシーズンの成績が未登録のチームは順位表に載せない
+    （0勝0敗として最下位に並べると、未登録なのか全敗なのか区別できなくなる）。
+    """
+    entries = [
+        (team, team.season_record(season))
+        for team in teams
+    ]
+    entries = [(team, entry.record) for team, entry in entries if entry is not None]
+    entries.sort(key=lambda e: (-e[1].winning_percentage, -e[1].wins, e[0].name))
+
+    if not entries:
+        return []
+
+    leader_record = entries[0][1]
+
+    rows: list[StandingRow] = []
+    previous_percentage = None
+    for index, (team, record) in enumerate(entries, start=1):
+        if previous_percentage is not None and record.winning_percentage == previous_percentage:
+            rank = rows[-1].rank  # 同率
+        else:
+            rank = index
+        rows.append(
+            StandingRow(
+                rank=rank,
+                team_id=team.id,
+                team_name=team.name,
+                record=record,
+                games_behind=record.games_behind(leader_record),
+            )
+        )
+        previous_percentage = record.winning_percentage
+
+    return rows
+
+
+def recorded_seasons(teams: list[Team]) -> list[Season]:
+    """成績が1件でも登録されているシーズンを新しい順に返す。"""
+    years = {entry.season for team in teams for entry in team.seasons}
+    return sorted(years, key=lambda s: s.year, reverse=True)

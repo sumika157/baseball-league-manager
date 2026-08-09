@@ -19,6 +19,8 @@ from .value_objects import (
     JerseyNumber,
     PitchingLine,
     Position,
+    Season,
+    TeamRecord,
 )
 
 
@@ -79,10 +81,23 @@ class Player:
 
 
 @dataclass
+class TeamSeason:
+    """あるチームの、あるシーズンの成績。Team 集約の内部エンティティ。"""
+
+    season: Season
+    record: TeamRecord
+    id: int | None = None
+
+    def __str__(self) -> str:
+        return f"{self.season} {self.record.wins}勝{self.record.losses}敗{self.record.ties}分"
+
+
+@dataclass
 class Team:
     """チーム。集約ルート。
 
-    ロスター（選手一覧）を内部に持ち、背番号の一意性を保証する。
+    ロスター（選手一覧）とシーズンごとの成績を内部に持ち、
+    背番号の一意性と「1チーム1シーズン1件」を保証する。
     """
 
     name: str
@@ -90,9 +105,37 @@ class Team:
     city: str = ''
     id: int | None = None
     players: list[Player] = field(default_factory=list)
+    seasons: list[TeamSeason] = field(default_factory=list)
 
     def __str__(self) -> str:
         return self.name
+
+    # --- シーズン成績 ---
+
+    def record_season(self, season: Season, record: TeamRecord) -> TeamSeason:
+        """シーズンの成績を登録する。同じシーズンが既にあれば上書きする。
+
+        同一チームに同じ年の成績が2件並ぶと順位表が破綻するため、
+        集約側で1件に保つ。
+        """
+        existing = self.season_record(season)
+        if existing is not None:
+            existing.record = record
+            return existing
+
+        entry = TeamSeason(season=season, record=record)
+        self.seasons.append(entry)
+        return entry
+
+    def season_record(self, season: Season) -> TeamSeason | None:
+        for entry in self.seasons:
+            if entry.season == season:
+                return entry
+        return None
+
+    def seasons_desc(self) -> list[TeamSeason]:
+        """新しいシーズンから順に並べる。"""
+        return sorted(self.seasons, key=lambda s: s.season.year, reverse=True)
 
     # --- ロスターの参照 ---
 

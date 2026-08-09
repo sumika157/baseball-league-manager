@@ -29,6 +29,14 @@ class InvalidStatValue(DomainError):
     """成績の数値として許されない値（負数など）。"""
 
 
+class InvalidSeason(DomainError):
+    """シーズン（年）として許されない値。"""
+
+
+class DuplicateSeasonRecord(DomainError):
+    """同一チームに同じシーズンの成績が二重に登録された。"""
+
+
 class TeamNotFound(DomainError):
     """指定されたチームが存在しない。"""
 

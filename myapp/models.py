@@ -12,6 +12,7 @@ from .infrastructure.orm_models import (  # noqa: F401
     Player,
     PlayerStats,
     Team,
+    TeamSeasonRecord,
 )
 
 __all__ = [
@@ -21,4 +22,5 @@ __all__ = [
     'Player',
     'PlayerStats',
     'Team',
+    'TeamSeasonRecord',
 ]

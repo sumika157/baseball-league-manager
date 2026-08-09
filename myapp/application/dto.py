@@ -21,6 +21,30 @@ class TeamSummary:
 
 
 @dataclass(frozen=True)
+class StandingRow:
+    """順位表の1行。順位と勝率は勝敗から算出した結果。"""
+
+    rank: int
+    team_id: int
+    team_name: str
+    wins: int
+    losses: int
+    ties: int
+    games_played: int
+    winning_percentage: str
+    games_behind: str
+
+
+@dataclass(frozen=True)
+class Standings:
+    """指定シーズンの順位表。"""
+
+    year: int
+    rows: list[StandingRow]
+    available_years: list[int]
+
+
+@dataclass(frozen=True)
 class AdminOverview:
     """管理画面トップに出す概況。
 

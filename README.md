@@ -306,9 +306,9 @@ presentation  →  application  →  domain  ←  infrastructure
 
 | ファイル | 内容 |
 | --- | --- |
-| `value_objects.py` | `Position` `JerseyNumber` `InningsPitched` `BattingLine` `PitchingLine` |
-| `entities.py` | `Team`（集約ルート）・`Player`・`League` |
-| `services.py` | ランキング（誰を対象とし、何で順位づけるか） |
+| `value_objects.py` | `Position` `JerseyNumber` `InningsPitched` `BattingLine` `PitchingLine` `Season` `TeamRecord` |
+| `entities.py` | `Team`（集約ルート）・`Player`・`TeamSeason`・`League` |
+| `services.py` | ランキングと順位表（誰を対象とし、何で順位づけるか） |
 | `repositories.py` | 永続化のインターフェース（実装は infrastructure） |
 | `exceptions.py` | `DomainError` とその派生 |
 
@@ -316,11 +316,24 @@ presentation  →  application  →  domain  ←  infrastructure
 
 ```
 /                        ダッシュボード（ホーム）
+├── /standings/          順位表（年で切替）
 ├── /teams/              チーム一覧
 │   └── /team/<id>/      選手一覧（野手／投手を切替）
 │       └── .../player/<id>/edit/   選手の成績編集
 └── /accounts/...        ログイン・新規登録・パスワード関連
 ```
+
+### シーズン成績と順位
+
+チームの勝敗は年ごとに登録します（管理画面のチーム編集画面から）。
+**順位は保持せず、勝率の高い順で自動的に決まります。** 手入力できるようにすると
+勝敗と矛盾しても検知できないためです。
+
+- 勝率は日本プロ野球の規則にならい **勝 ÷ (勝 + 敗)**。引分は分母に含めません
+- 勝率が同じチームは同順位として扱います
+- ゲーム差は首位との差を `((首位の勝 - 勝) + (敗 - 首位の敗)) ÷ 2` で算出します
+- その年の成績が未登録のチームは順位表に載せません
+  （0勝0敗として並べると、未登録なのか全敗なのか区別できなくなるため）
 
 ダッシュボードはリーグ全体の概況と、OPS・本塁打・防御率・奪三振のランキングを表示します。
 順位づけの規則（未出場の選手を除く、規定打数など）はドメインサービスにあり、

@@ -1,0 +1,73 @@
+{% extends 'myapp/base.html' %}
+
+{% block title %}{{ standings.year }}年 順位表 - Baseball Manager{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>
+    <li class="breadcrumb-item active">順位表</li>
+  </ol>
+</nav>
+
+<div class="page-head">
+  <h1 class="page-title">順位表</h1>
+  <p class="page-subtitle">順位は勝率の高い順で自動的に決まります。</p>
+</div>
+
+{% if standings.available_years %}
+  <div class="segmented">
+    {% for year in standings.available_years %}
+      <a class="segmented-item {% if year == standings.year %}is-active{% endif %}"
+         href="{% url 'standings_by_year' year %}">{{ year }}年</a>
+    {% endfor %}
+  </div>
+
+  <div class="table-responsive">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>順位</th>
+          <th>チーム</th>
+          <th class="text-end">試合</th>
+          <th class="text-end">勝</th>
+          <th class="text-end">敗</th>
+          <th class="text-end">分</th>
+          <th class="text-end">勝率</th>
+          <th class="text-end">ゲーム差</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in standings.rows %}
+          <tr>
+            <td><span class="jersey-number">{{ row.rank }}</span></td>
+            <td>
+              <a href="{% url 'player_list' row.team_id %}" class="player-name">{{ row.team_name }}</a>
+            </td>
+            <td class="text-end stat-muted">{{ row.games_played }}</td>
+            <td class="text-end">{{ row.wins }}</td>
+            <td class="text-end">{{ row.losses }}</td>
+            <td class="text-end stat-muted">{{ row.ties }}</td>
+            <td class="text-end stat-key">{{ row.winning_percentage }}</td>
+            <td class="text-end stat-muted">{{ row.games_behind }}</td>
+          </tr>
+        {% empty %}
+          <tr>
+            <td colspan="8">
+              <div class="empty-state">
+                {{ standings.year }}年の成績が登録されていません。
+              </div>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <div class="card">
+    <div class="empty-state">
+      シーズン成績がまだ登録されていません。管理画面のチーム編集から登録してください。
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

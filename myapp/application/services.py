@@ -14,6 +14,9 @@ from ..domain.value_objects import (
     JerseyNumber,
     PitchingLine,
     Position,
+    Season,
+    TeamRecord,
+    format_average,
 )
 from .dto import (
     AdminOverview,
@@ -22,6 +25,8 @@ from .dto import (
     PitcherRow,
     PlayerDetail,
     RankingEntry,
+    Standings,
+    StandingRow,
     TeamSummary,
 )
 
@@ -106,6 +111,50 @@ class TeamApplicationService:
     def get_player_detail(self, team_id: int, player_id: int) -> PlayerDetail:
         team = self._teams.find_by_id(team_id)
         return self._to_detail(team, team.find_player(player_id))
+
+    def get_standings(self, year: int | None = None) -> Standings:
+        """指定シーズンの順位表を返す。年を省略した場合は最新シーズン。
+
+        順位づけの規則そのものはドメインサービスにあり、ここでは
+        表示用に整形するだけにとどめる。
+        """
+        teams = self._teams.find_all_with_roster()
+        seasons = domain_services.recorded_seasons(teams)
+
+        if not seasons:
+            return Standings(year=year or 0, rows=[], available_years=[])
+
+        target = Season(year) if year is not None else seasons[0]
+        rows = domain_services.standings(teams, target)
+
+        return Standings(
+            year=target.year,
+            rows=[
+                StandingRow(
+                    rank=row.rank,
+                    team_id=row.team_id,
+                    team_name=row.team_name,
+                    wins=row.record.wins,
+                    losses=row.record.losses,
+                    ties=row.record.ties,
+                    games_played=row.record.games_played,
+                    winning_percentage=format_average(row.record.winning_percentage),
+                    games_behind='—' if row.is_leader else f'{row.games_behind:.1f}',
+                )
+                for row in rows
+            ],
+            available_years=[s.year for s in seasons],
+        )
+
+    def record_team_season(
+        self, team_id: int, year: int, *, wins: int, losses: int, ties: int = 0
+    ) -> None:
+        """チームのシーズン成績を登録する。"""
+        team = self._teams.find_by_id(team_id)
+        team.record_season(
+            Season(year), TeamRecord(wins=wins, losses=losses, ties=ties)
+        )
+        self._teams.save(team)
 
     def get_admin_overview(self) -> AdminOverview:
         """管理画面トップ用の概況。

@@ -422,6 +422,90 @@ class AdminIndexTest(TestCase):
         self.assertContains(response, '成績が未入力の選手')
 
 
+class StandingsTest(TestCase):
+    """シーズン成績の永続化と順位表画面。"""
+
+    def setUp(self):
+        self.league = orm_models.League.objects.create(name='テストリーグ')
+        self.a = orm_models.Team.objects.create(league=self.league, name='Aチーム')
+        self.b = orm_models.Team.objects.create(league=self.league, name='Bチーム')
+        self.service = TeamApplicationService(
+            teams=DjangoTeamRepository(), team_list_query=DjangoTeamListQuery()
+        )
+
+    def test_record_survives_the_round_trip(self):
+        self.service.record_team_season(self.a.id, 2026, wins=80, losses=55, ties=8)
+
+        board = self.service.get_standings(2026)
+        row = board.rows[0]
+
+        self.assertEqual(row.wins, 80)
+        self.assertEqual(row.losses, 55)
+        self.assertEqual(row.ties, 8)
+        self.assertEqual(row.games_played, 143)
+        self.assertEqual(row.winning_percentage, '.593')
+
+    def test_same_season_updates_instead_of_duplicating(self):
+        self.service.record_team_season(self.a.id, 2026, wins=80, losses=55, ties=8)
+        self.service.record_team_season(self.a.id, 2026, wins=90, losses=45, ties=8)
+
+        self.assertEqual(
+            orm_models.TeamSeasonRecord.objects.filter(team=self.a, year=2026).count(), 1
+        )
+        self.assertEqual(self.service.get_standings(2026).rows[0].wins, 90)
+
+    def test_rank_is_derived_from_winning_percentage(self):
+        self.service.record_team_season(self.a.id, 2026, wins=60, losses=75, ties=8)
+        self.service.record_team_season(self.b.id, 2026, wins=80, losses=55, ties=8)
+
+        rows = self.service.get_standings(2026).rows
+
+        self.assertEqual([r.team_name for r in rows], ['Bチーム', 'Aチーム'])
+        self.assertEqual([r.rank for r in rows], [1, 2])
+        self.assertEqual(rows[0].games_behind, '—')
+        self.assertEqual(rows[1].games_behind, '20.0')
+
+    def test_defaults_to_the_latest_season(self):
+        self.service.record_team_season(self.a.id, 2025, wins=70, losses=65, ties=8)
+        self.service.record_team_season(self.a.id, 2026, wins=80, losses=55, ties=8)
+
+        board = self.service.get_standings()
+
+        self.assertEqual(board.year, 2026)
+        self.assertEqual(board.available_years, [2026, 2025])
+
+    def test_page_renders(self):
+        self.service.record_team_season(self.a.id, 2026, wins=80, losses=55, ties=8)
+
+        response = self.client.get(reverse('standings'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Aチーム')
+        self.assertContains(response, '.593')
+
+    def test_page_by_year(self):
+        self.service.record_team_season(self.a.id, 2025, wins=70, losses=65, ties=8)
+        self.service.record_team_season(self.a.id, 2026, wins=80, losses=55, ties=8)
+
+        response = self.client.get(reverse('standings_by_year', args=[2025]))
+        self.assertContains(response, '2025年')
+
+    def test_page_without_any_record(self):
+        response = self.client.get(reverse('standings'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'シーズン成績がまだ登録されていません')
+
+    def test_duplicate_is_blocked_at_the_database_too(self):
+        """集約だけでなく DB 制約でも一意性を担保していること。"""
+        from django.db import IntegrityError, transaction
+
+        orm_models.TeamSeasonRecord.objects.create(team=self.a, year=2026, wins=1, losses=1)
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                orm_models.TeamSeasonRecord.objects.create(
+                    team=self.a, year=2026, wins=2, losses=2
+                )
+
+
 class AuthTest(TestCase):
     def test_login_redirect_url_resolves(self):
         from django.conf import settings

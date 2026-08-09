@@ -40,6 +40,16 @@ def team_list(request):
     return render(request, 'myapp/team_list.html', {'teams': _service().list_teams()})
 
 
+def standings(request, year=None):
+    """年別の順位表。年を指定しない場合は最新シーズン。"""
+    try:
+        board = _service().get_standings(year)
+    except DomainError as error:
+        raise Http404(str(error))
+
+    return render(request, 'myapp/standings.html', {'standings': board})
+
+
 def player_list(request, team_id):
     """選手一覧。野手／投手モードを切り替えて表示する。"""
     service = _service()
