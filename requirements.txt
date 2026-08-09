@@ -1,0 +1,7 @@
+# 直接依存
+Django==5.2.10
+
+# Django の依存パッケージ（バージョン固定用）
+asgiref==3.11.0
+sqlparse==0.5.5
+typing_extensions==4.15.0

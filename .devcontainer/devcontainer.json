@@ -1,0 +1,27 @@
+{
+  "name": "Baseball League Manager",
+
+  // 既存の docker-compose.yml をそのまま利用する
+  "dockerComposeFile": "../docker-compose.yml",
+  "service": "web",
+  "workspaceFolder": "/app",
+
+  // VS Code を閉じてもコンテナは動かしたままにする
+  // （コンテナごと止めたい場合は "stopCompose" に変更）
+  "shutdownAction": "none",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "batisteo.vscode-django"
+      ],
+      "settings": {
+        // コンテナ内の Python を参照するので venv は不要
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.terminal.activateEnvironment": false
+      }
+    }
+  }
+}

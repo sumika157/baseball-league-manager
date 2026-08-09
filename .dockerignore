@@ -1,0 +1,30 @@
+# 仮想環境（Linux 用の venv はコンテナでは使わない）
+venv/
+env/
+.venv/
+
+# Python キャッシュ
+__pycache__/
+*.py[cod]
+*$py.class
+
+# データベースはイメージに焼き込まず、ボリュームマウントで渡す
+db.sqlite3
+db.sqlite3-journal
+
+# Git 関連
+.git/
+.gitignore
+
+# Docker 関連
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# その他
+*.log
+.claude/
+.vscode/
+.idea/
+.DS_Store
+README.md

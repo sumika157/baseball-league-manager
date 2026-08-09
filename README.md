@@ -1,0 +1,241 @@
+# Baseball League Manager
+
+野球のリーグ・チーム・選手と打撃／投球成績を管理する Django アプリケーションです。
+選手を登録すると、打率・OPS・防御率・WHIP などの指標が自動で計算されて一覧に表示されます。
+
+**このプロジェクトは Docker 上で動作します。** ローカルに Python や仮想環境を用意する必要はありません。
+
+---
+
+## 動作環境
+
+| 項目 | バージョン / 場所 |
+| --- | --- |
+| OS | Windows 11 + WSL2 (Ubuntu) |
+| Docker | 25.0.2 |
+| Docker Compose | v2.24.3 |
+| Python | 3.10（コンテナ内） |
+| Django | 5.2.10 |
+| データベース | SQLite (`db.sqlite3`) |
+| WSL 上のパス | `/home/sumika/work/develop/my_django_project` |
+| Windows 上のパス | `U:\home\sumika\work\develop\my_django_project` |
+
+> `U:` ドライブは `\\wsl.localhost\Ubuntu\` に割り当てられています。
+> エディタからは Windows パスで開けますが、**コマンドの実行は WSL のターミナルから行います**。
+
+---
+
+## 事前準備（初回のみ）
+
+1. **Docker Desktop を起動する**
+   タスクバーのクジラのアイコンが「Running」になるまで待ちます。
+2. **WSL 統合を有効にする**
+   Docker Desktop の `Settings` → `Resources` → `WSL Integration` を開き、
+   `Ubuntu` のトグルを ON にして `Apply & restart` を押します。
+
+準備できたか確認します。WSL のターミナルで次を実行し、バージョン番号が表示されれば完了です。
+
+```bash
+docker info --format '{{.ServerVersion}}'
+```
+
+---
+
+## 起動と停止
+
+WSL のターミナルを開いて実行します。
+
+```bash
+cd ~/work/develop/my_django_project
+
+# 起動（初回はイメージのビルドが走ります）
+docker compose up
+
+# バックグラウンドで起動する場合
+docker compose up -d
+
+# 停止
+docker compose down
+```
+
+起動時には**未適用のマイグレーションが自動で適用されてから**サーバーが立ち上がります。
+そのため `docker compose up` だけで常に最新の DB 状態になります。
+
+```
+baseball-web  | Operations to perform:
+baseball-web  |   Apply all migrations: admin, auth, contenttypes, myapp, sessions
+baseball-web  | Running migrations:
+baseball-web  |   No migrations to apply.
+baseball-web  | Starting development server at http://0.0.0.0:8000/
+```
+
+フォアグラウンド（`-d` なし）で起動した場合は `Ctrl + C` で停止できます。
+
+### ホットリロード
+
+ソースコードはコンテナにマウントされているため、**ファイルを編集して保存すると自動でリロードされます**。
+コンテナを再起動する必要はありません。
+
+```
+baseball-web  | /app/myapp/views.py changed, reloading.
+```
+
+---
+
+## ブラウザからのアクセス
+
+コンテナは WSL 内で動いていますが、**Windows のブラウザから `localhost` でそのままアクセスできます**。
+
+| 画面 | URL |
+| --- | --- |
+| チーム一覧（ホーム） | http://localhost:8000/ |
+| 選手一覧 | http://localhost:8000/team/&lt;チームID&gt;/ |
+| 選手の成績編集 | http://localhost:8000/player/&lt;選手ID&gt;/edit/ |
+| ログイン | http://localhost:8000/accounts/login/ |
+| 新規登録 | http://localhost:8000/accounts/signup/ |
+| 管理画面 | http://localhost:8000/admin/ |
+
+管理画面には既存の管理ユーザー **`admin`** でログインできます。
+
+---
+
+## よく使うコマンド
+
+`manage.py` のコマンドは、起動中のコンテナに対して `docker compose exec` 経由で実行します。
+
+| 目的 | コマンド |
+| --- | --- |
+| マイグレーションファイルの作成 | `docker compose exec web python manage.py makemigrations` |
+| マイグレーションの適用 | `docker compose exec web python manage.py migrate` |
+| マイグレーションの適用状況を確認 | `docker compose exec web python manage.py showmigrations` |
+| 管理ユーザーの作成 | `docker compose exec web python manage.py createsuperuser` |
+| 設定ミスの検査 | `docker compose exec web python manage.py check` |
+| テストの実行 | `docker compose exec web python manage.py test` |
+| Django シェル | `docker compose exec web python manage.py shell` |
+| コンテナ内のシェルに入る | `docker compose exec web bash` |
+| ログを見る | `docker compose logs -f web` |
+| 状態を確認する | `docker compose ps` |
+
+### イメージを作り直す
+
+`requirements.txt` を変更したときは、イメージのビルドし直しが必要です。
+
+```bash
+docker compose build --no-cache
+docker compose up -d
+```
+
+---
+
+## VS Code で開発する（Dev Container）
+
+`.devcontainer/` を用意しているため、VS Code からコンテナ内に直接接続して開発できます。
+**コンテナ内の Python を参照するので、補完や型チェックがそのまま効きます。**
+
+1. 拡張機能 **Dev Containers** をインストールする
+2. コマンドパレット（`F1`）から **「Dev Containers: Reopen in Container」** を選ぶ
+
+初回は自動で Python / Pylance / Django の拡張機能が入ります。
+
+> VS Code を閉じてもコンテナは動き続ける設定（`"shutdownAction": "none"`）です。
+> 一緒に停止させたい場合は `.devcontainer/devcontainer.json` を `"stopCompose"` に変更してください。
+
+---
+
+## データベースについて
+
+`db.sqlite3` は**イメージには含めず、ホスト側のファイルをマウントして使っています**。
+そのため次のようになります。
+
+- コンテナを作り直しても **データは消えません**
+- ホスト側の `db.sqlite3` を直接バックアップできます
+- Git 管理外です（`.gitignore` で除外）
+
+バックアップを取る場合は、コンテナを停止してからファイルをコピーします。
+
+```bash
+docker compose down
+cp db.sqlite3 db.sqlite3.bak
+```
+
+---
+
+## トラブルシューティング
+
+### `docker: command not found`（WSL 上で）
+
+Docker Desktop の WSL 統合が無効です。「事前準備」の手順2を実施してください。
+
+### `Cannot connect to the Docker daemon`
+
+Docker Desktop が起動していません。タスクバーのアイコンが「Running」になるまで待ってから再実行します。
+
+### ブラウザで「接続できません」と表示される
+
+コンテナが起動しているか確認します。
+
+```bash
+docker compose ps
+```
+
+`Up` と表示されない場合はログを確認します。
+
+```bash
+docker compose logs web
+```
+
+### ポートが既に使われている（`port is already allocated`）
+
+8000 番を別のプロセスが使っています。停止するか、`docker-compose.yml` の `ports` を
+`"8001:8000"` のように変更してください。
+
+### ソースを編集してもリロードされない
+
+`docker compose ps` でコンテナが `Up` か確認してください。
+それでも反映されない場合はコンテナを再起動します。
+
+```bash
+docker compose restart web
+```
+
+---
+
+## プロジェクト構成
+
+```
+my_django_project/
+├── .devcontainer/
+│   └── devcontainer.json   # VS Code Dev Container 設定
+├── config/                 # プロジェクト設定
+│   ├── settings.py         # Django の設定
+│   └── urls.py             # ルート URL 定義
+├── myapp/                  # アプリ本体
+│   ├── models.py           # League / Team / Player / PlayerStats / PitcherStats
+│   ├── views.py            # 画面表示と成績の集計
+│   ├── services.py         # ビジネスロジック（バリデーションなど）
+│   ├── urls.py             # アプリの URL 定義
+│   ├── migrations/         # マイグレーション
+│   └── templates/          # HTML テンプレート
+├── Dockerfile              # イメージ定義
+├── docker-compose.yml      # サービス定義（ポート公開・マウント・自動 migrate）
+├── .dockerignore           # イメージに含めないファイル
+├── db.sqlite3              # データベース（Git 管理外）
+├── manage.py               # Django のコマンド入口
+└── requirements.txt        # 依存パッケージ
+```
+
+---
+
+## テスト
+
+サービス層のバリデーションと主要な画面遷移をカバーしたテストがあります。
+
+```bash
+docker compose exec web python manage.py test
+```
+
+| テストクラス | 内容 |
+| --- | --- |
+| `BaseballServiceTest` | チーム作成・選手登録・背番号の重複チェック・打率計算 |
+| `PlayerListViewTest` | 画面からの登録で重複が弾かれること、成績レコードが自動作成されること |
+| `AuthRedirectTest` | ログイン後のリダイレクト先が解決できること、新規登録画面が開くこと |
