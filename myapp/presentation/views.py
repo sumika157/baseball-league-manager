@@ -4,7 +4,10 @@
 成績の計算も背番号の重複判定もここには無い（ドメイン層にある）。
 """
 
+from datetime import date
+
 from django.contrib import messages
+from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import UserCreationForm
 from django.http import Http404
 from django.shortcuts import redirect, render
@@ -19,14 +22,22 @@ from ..domain.exceptions import (
     PlayerNotFound,
     TeamNotFound,
 )
-from ..domain.value_objects import Position
+from ..domain.value_objects import BattingLine, InningsPitched, PitchingLine, Position
 from ..infrastructure.queries import DjangoTeamListQuery
 from ..infrastructure.repositories import (
     DjangoGameRepository,
     DjangoLeagueRepository,
     DjangoTeamRepository,
 )
-from .forms import PlayerRegistrationForm, PlayerUpdateForm
+from .forms import (
+    BattingEntryForm,
+    BattingEntryFormSet,
+    GameForm,
+    PitchingEntryForm,
+    PitchingEntryFormSet,
+    PlayerRegistrationForm,
+    PlayerUpdateForm,
+)
 
 BATTER_MODE = 'batter'
 PITCHER_MODE = 'pitcher'
@@ -171,6 +182,161 @@ def game_list(request):
         'selected_year': year,
         'selected_team': team_id,
     })
+
+
+@login_required
+def game_create(request):
+    """試合を作る。作成後、成績の入力画面へ進む。"""
+    service = _service()
+    teams = service.list_teams().rows
+    form = GameForm(request.POST or None, initial={'year': date.today().year})
+
+    if request.method == 'POST' and form.is_valid():
+        try:
+            game = service.create_game(
+                year=form.cleaned_data['year'],
+                played_on=form.cleaned_data['played_on'],
+                home_team_id=form.cleaned_data['home_team'],
+                away_team_id=form.cleaned_data['away_team'],
+                home_score=form.cleaned_data['home_score'],
+                away_score=form.cleaned_data['away_score'],
+            )
+        except DomainError as error:
+            messages.error(request, str(error))
+        else:
+            messages.success(request, "試合を登録しました。続けて成績を入力できます。")
+            return redirect(reverse('game_edit', args=[game.id]))
+    elif request.method == 'POST':
+        messages.error(request, _first_error(form))
+
+    return render(request, 'myapp/game_form.html', {'form': form, 'teams': teams})
+
+
+@login_required
+def game_edit(request, game_id):
+    """試合の基本情報と、両チームのロスターぶんの成績を一度に入力する。"""
+    service = _service()
+
+    try:
+        data = service.get_game_edit_data(game_id)
+    except GameNotFound:
+        raise Http404("試合が見つかりません。")
+
+    game, rosters = data['game'], data['rosters']
+    batters, pitchers = _split_roster(rosters)
+
+    if request.method == 'POST':
+        form = GameForm(request.POST)
+        batting_formset = BattingEntryFormSet(request.POST, prefix='batting')
+        pitching_formset = PitchingEntryFormSet(request.POST, prefix='pitching')
+
+        if form.is_valid() and batting_formset.is_valid() and pitching_formset.is_valid():
+            try:
+                service.update_game(
+                    game_id,
+                    year=form.cleaned_data['year'],
+                    played_on=form.cleaned_data['played_on'],
+                    home_team_id=form.cleaned_data['home_team'],
+                    away_team_id=form.cleaned_data['away_team'],
+                    home_score=form.cleaned_data['home_score'],
+                    away_score=form.cleaned_data['away_score'],
+                    batting=_collect_batting(batting_formset),
+                    pitching=_collect_pitching(pitching_formset),
+                )
+            except DomainError as error:
+                messages.error(request, str(error))
+            else:
+                messages.success(request, "試合の記録を保存しました。")
+                return redirect(reverse('game_detail', args=[game_id]))
+        else:
+            messages.error(
+                request,
+                _first_error(form)
+                or _first_formset_error(batting_formset)
+                or _first_formset_error(pitching_formset),
+            )
+    else:
+        form = GameForm(initial={
+            'year': game.season.year,
+            'played_on': game.played_on,
+            'home_team': game.home_team_id,
+            'away_team': game.away_team_id,
+            'home_score': game.home_score,
+            'away_score': game.away_score,
+        })
+        batting_formset = BattingEntryFormSet(
+            prefix='batting', initial=[_batting_initial(p) for p in batters]
+        )
+        pitching_formset = PitchingEntryFormSet(
+            prefix='pitching', initial=[_pitching_initial(p) for p in pitchers]
+        )
+
+    return render(request, 'myapp/game_edit.html', {
+        'game': game,
+        'form': form,
+        'rosters': rosters,
+        # フォームと選手情報を対にして渡す。テンプレート側で添字を扱わずに済ませる
+        'batting_rows': list(zip(batting_formset.forms, batters)),
+        'pitching_rows': list(zip(pitching_formset.forms, pitchers)),
+        'batting_formset': batting_formset,
+        'pitching_formset': pitching_formset,
+    })
+
+
+def _split_roster(rosters):
+    """両チームのロスターを、野手と投手に分ける。並びは画面と保存で共通。"""
+    batters, pitchers = [], []
+    for roster in rosters:
+        for player in roster['players']:
+            entry = dict(player, team_name=roster['team_name'])
+            (pitchers if player['is_pitcher'] else batters).append(entry)
+    return batters, pitchers
+
+
+def _batting_initial(player):
+    line = player['batting']
+    initial = {'player_id': player['id']}
+    if line is not None:
+        initial.update({f: getattr(line, f) for f in BattingEntryForm.STAT_FIELDS})
+    return initial
+
+
+def _pitching_initial(player):
+    line = player['pitching']
+    initial = {'player_id': player['id']}
+    if line is not None:
+        initial['innings_pitched'] = line.innings.to_notation()
+        initial.update({f: getattr(line, f) for f in PitchingEntryForm.COUNT_FIELDS})
+    return initial
+
+
+def _collect_batting(formset) -> dict:
+    """未入力の行は含めない。含めると出場していない選手の記録が残る。"""
+    result = {}
+    for form in formset:
+        if form.is_blank():
+            continue
+        result[form.cleaned_data['player_id']] = BattingLine(**form.counts())
+    return result
+
+
+def _collect_pitching(formset) -> dict:
+    result = {}
+    for form in formset:
+        if form.is_blank():
+            continue
+        result[form.cleaned_data['player_id']] = PitchingLine(
+            innings=InningsPitched.from_notation(form.innings()), **form.counts()
+        )
+    return result
+
+
+def _first_formset_error(formset) -> str:
+    for form in formset:
+        message = _first_error(form)
+        if message:
+            return message
+    return ''
 
 
 def game_detail(request, game_id):

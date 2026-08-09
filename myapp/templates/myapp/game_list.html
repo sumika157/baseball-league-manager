@@ -10,11 +10,16 @@
   </ol>
 </nav>
 
-<div class="page-head">
-  <h1 class="page-title">試合</h1>
-  <p class="page-subtitle">
-    ここに登録された結果から、チームの勝敗と選手の通算成績が集計されます。 · {{ games|length }}件
-  </p>
+<div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
+  <div class="page-head mb-0">
+    <h1 class="page-title">試合</h1>
+    <p class="page-subtitle">
+      ここに登録された結果から、チームの勝敗と選手の通算成績が集計されます。 · {{ games|length }}件
+    </p>
+  </div>
+  {% if user.is_authenticated %}
+    <a href="{% url 'game_create' %}" class="btn btn-primary">試合を登録</a>
+  {% endif %}
 </div>
 
 {% if years or teams %}

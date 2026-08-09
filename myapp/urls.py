@@ -14,7 +14,9 @@ urlpatterns = [
         name='league_detail_by_year',
     ),
     path('games/', views.game_list, name='game_list'),
+    path('games/new/', views.game_create, name='game_create'),
     path('games/<int:game_id>/', views.game_detail, name='game_detail'),
+    path('games/<int:game_id>/edit/', views.game_edit, name='game_edit'),
     path('team/<int:team_id>/', views.player_list, name='player_list'),
     # 選手は Team 集約の内部エンティティなので、URL もチームの下に置く
     path(

@@ -248,6 +248,15 @@ class DjangoGameRepository:
             )
             entry.id = line_row.id
 
+        # 集約から外された成績は削除する。上書きだけだと、いったん入力した
+        # 選手を「出場していない」に戻せない
+        orm_models.GameBattingLine.objects.filter(game=row).exclude(
+            player_id__in=[e.player_id for e in game.batting]
+        ).delete()
+        orm_models.GamePitchingLine.objects.filter(game=row).exclude(
+            player_id__in=[e.player_id for e in game.pitching]
+        ).delete()
+
         return game
 
     @staticmethod

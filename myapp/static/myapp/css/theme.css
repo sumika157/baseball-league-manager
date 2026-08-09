@@ -356,6 +356,28 @@ a:hover {
   padding-right: 1.25rem;
 }
 
+/* 成績の一括入力表。数値欄を詰めて1画面に収める */
+.entry-table td {
+  padding: 0.4rem 0.35rem;
+  vertical-align: middle;
+}
+
+.entry-table input[type="number"] {
+  width: 4.5rem;
+  padding: 0.3rem 0.4rem;
+  font-size: 0.875rem;
+  text-align: right;
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-radius-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.entry-table input[type="number"]:focus {
+  outline: none;
+  border-color: var(--app-accent-border);
+  box-shadow: 0 0 0 3px var(--app-accent-soft);
+}
+
 /* 編集できない成績値 */
 .stat-readout {
   display: flex;

@@ -918,6 +918,141 @@ class AdminGroupingTest(BaseCase):
         self.assertIn('Xチーム', body)
 
 
+class GameEntryTest(BaseCase):
+    """サイトからの試合登録と成績の一括入力（フェーズ3）。"""
+
+    def setUp(self):
+        super().setUp()
+        self.user = User.objects.create_user(username='scorer', password='x')
+        self.client.force_login(self.user)
+        self.batter = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        self.pitcher = self.service.register_player(self.team.id, '佐藤', 18, '投手')
+
+    def _create_game(self):
+        return self.client.post(reverse('game_create'), {
+            'year': '2026', 'played_on': '2026-04-01',
+            'home_team': self.team.id, 'away_team': self.rival.id,
+            'home_score': '5', 'away_score': '3',
+        })
+
+    def test_login_is_required(self):
+        self.client.logout()
+        response = self.client.get(reverse('game_create'))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/accounts/login/', response['Location'])
+
+    def test_create_game_then_go_to_stats(self):
+        response = self._create_game()
+
+        game = orm_models.Game.objects.get()
+        self.assertEqual(game.home_score, 5)
+        self.assertRedirects(response, reverse('game_edit', args=[game.id]))
+
+    def test_same_team_is_rejected_without_crashing(self):
+        response = self.client.post(reverse('game_create'), {
+            'year': '2026', 'played_on': '2026-04-01',
+            'home_team': self.team.id, 'away_team': self.team.id,
+            'home_score': '0', 'away_score': '0',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(orm_models.Game.objects.count(), 0)
+
+    def test_edit_page_lists_the_roster(self):
+        self._create_game()
+        game = orm_models.Game.objects.get()
+
+        response = self.client.get(reverse('game_edit', args=[game.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '山田')
+        self.assertContains(response, '佐藤')
+        # 野手は打撃表、投手は投球表に振り分けられる
+        self.assertEqual(len(response.context['batting_rows']), 1)
+        self.assertEqual(len(response.context['pitching_rows']), 1)
+
+    def _stats_payload(self, game, **overrides):
+        payload = {
+            'year': '2026', 'played_on': '2026-04-01',
+            'home_team': self.team.id, 'away_team': self.rival.id,
+            'home_score': '5', 'away_score': '3',
+            'batting-TOTAL_FORMS': '1', 'batting-INITIAL_FORMS': '1',
+            'batting-MIN_NUM_FORMS': '0', 'batting-MAX_NUM_FORMS': '1000',
+            'batting-0-player_id': str(self.batter.id),
+            'pitching-TOTAL_FORMS': '1', 'pitching-INITIAL_FORMS': '1',
+            'pitching-MIN_NUM_FORMS': '0', 'pitching-MAX_NUM_FORMS': '1000',
+            'pitching-0-player_id': str(self.pitcher.id),
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_save_stats_for_the_roster(self):
+        self._create_game()
+        game = orm_models.Game.objects.get()
+
+        self.client.post(reverse('game_edit', args=[game.id]), self._stats_payload(
+            game,
+            **{'batting-0-at_bats': '4', 'batting-0-singles': '2',
+               'pitching-0-innings_pitched': '7.0', 'pitching-0-strikeouts': '8'},
+        ))
+
+        detail = self.service.get_player_detail(self.team.id, self.batter.id)
+        self.assertEqual(detail.at_bats, 4)
+        pitcher = self.service.get_player_detail(self.team.id, self.pitcher.id)
+        self.assertEqual(pitcher.strikeouts, 8)
+        self.assertEqual(pitcher.innings_pitched, '7.0')
+
+    def test_blank_rows_are_not_recorded(self):
+        """出場しなかった選手の行を残さない。"""
+        self._create_game()
+        game = orm_models.Game.objects.get()
+
+        self.client.post(
+            reverse('game_edit', args=[game.id]), self._stats_payload(game)
+        )
+
+        self.assertEqual(orm_models.GameBattingLine.objects.count(), 0)
+        self.assertEqual(orm_models.GamePitchingLine.objects.count(), 0)
+
+    def test_clearing_a_row_removes_the_record(self):
+        """一度入力した選手を「出場していない」に戻せること。"""
+        self._create_game()
+        game = orm_models.Game.objects.get()
+        url = reverse('game_edit', args=[game.id])
+
+        self.client.post(url, self._stats_payload(game, **{'batting-0-at_bats': '4'}))
+        self.assertEqual(orm_models.GameBattingLine.objects.count(), 1)
+
+        self.client.post(url, self._stats_payload(game))
+        self.assertEqual(orm_models.GameBattingLine.objects.count(), 0)
+
+    def test_existing_stats_are_prefilled(self):
+        self._create_game()
+        game = orm_models.Game.objects.get()
+        url = reverse('game_edit', args=[game.id])
+        self.client.post(url, self._stats_payload(game, **{'batting-0-at_bats': '4'}))
+
+        form = self.client.get(url).context['batting_rows'][0][0]
+        self.assertEqual(form.initial['at_bats'], 4)
+
+    def test_score_can_be_corrected(self):
+        self._create_game()
+        game = orm_models.Game.objects.get()
+
+        self.client.post(
+            reverse('game_edit', args=[game.id]),
+            self._stats_payload(game, home_score='9'),
+        )
+
+        self.assertEqual(orm_models.Game.objects.get().home_score, 9)
+
+    def test_missing_game_returns_404(self):
+        self.assertEqual(
+            self.client.get(reverse('game_edit', args=[9999])).status_code, 404
+        )
+
+
 class AuthTest(TestCase):
     def test_login_redirect_url_resolves(self):
         from django.conf import settings

@@ -1,0 +1,82 @@
+{% extends 'myapp/base.html' %}
+
+{% block title %}試合の登録 - Baseball Manager{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>
+    <li class="breadcrumb-item"><a href="{% url 'game_list' %}">試合</a></li>
+    <li class="breadcrumb-item active">登録</li>
+  </ol>
+</nav>
+
+<div class="page-head">
+  <h1 class="page-title">試合の登録</h1>
+  <p class="page-subtitle">まず対戦カードと結果を登録します。選手の成績は次の画面で入力します。</p>
+</div>
+
+<form method="POST">
+  {% csrf_token %}
+
+  <div class="card mb-3">
+    <div class="card-header">対戦カード</div>
+    <div class="card-body">
+      <div class="row g-3">
+        <div class="col-md-3">
+          <label class="form-label">シーズン</label>
+          <input type="number" name="year" class="form-control"
+                 value="{{ form.year.value|default_if_none:'' }}" required />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">試合日</label>
+          <input type="date" name="played_on" class="form-control"
+                 value="{{ form.played_on.value|default_if_none:'' }}" required />
+        </div>
+      </div>
+
+      <div class="row g-3 mt-1 align-items-end">
+        <div class="col-md-4">
+          <label class="form-label">ホーム</label>
+          <select name="home_team" class="form-select" required>
+            <option value="">選択してください</option>
+            {% for team in teams %}
+              <option value="{{ team.id }}"
+                      {% if team.id|stringformat:'s' == form.home_team.value|stringformat:'s' %}selected{% endif %}>
+                {{ team.league_name }} · {{ team.name }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">得点</label>
+          <input type="number" name="home_score" class="form-control" min="0"
+                 value="{{ form.home_score.value|default_if_none:0 }}" required />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">ビジター</label>
+          <select name="away_team" class="form-select" required>
+            <option value="">選択してください</option>
+            {% for team in teams %}
+              <option value="{{ team.id }}"
+                      {% if team.id|stringformat:'s' == form.away_team.value|stringformat:'s' %}selected{% endif %}>
+                {{ team.league_name }} · {{ team.name }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">得点</label>
+          <input type="number" name="away_score" class="form-control" min="0"
+                 value="{{ form.away_score.value|default_if_none:0 }}" required />
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="d-flex justify-content-between">
+    <a href="{% url 'game_list' %}" class="btn btn-secondary">戻る</a>
+    <button type="submit" class="btn btn-primary">登録して成績入力へ</button>
+  </div>
+</form>
+{% endblock %}

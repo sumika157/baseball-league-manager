@@ -402,6 +402,80 @@ class TeamApplicationService:
 
     # --- 試合の登録 ---
 
+    def get_game_edit_data(self, game_id: int) -> dict:
+        """試合の編集画面に必要な材料をまとめて返す。
+
+        両チームのロスターと、既に入力されている成績を対応づける。
+        """
+        game = self._games.find_by_id(game_id)
+        names = self._team_names()
+
+        batting = {e.player_id: e.line for e in game.batting}
+        pitching = {e.player_id: e.line for e in game.pitching}
+
+        rosters = []
+        for team_id in (game.home_team_id, game.away_team_id):
+            team = self._teams.find_by_id(team_id)
+            rosters.append({
+                'team_id': team_id,
+                'team_name': names.get(team_id, team.name),
+                'players': [
+                    {
+                        'id': p.id,
+                        'name': p.name,
+                        'number': p.number.value,
+                        'position': p.position.label,
+                        'is_pitcher': p.is_pitcher,
+                        'batting': batting.get(p.id),
+                        'pitching': pitching.get(p.id),
+                    }
+                    for p in sorted(team.active_players, key=lambda p: p.number.value)
+                ],
+            })
+
+        return {'game': game, 'rosters': rosters}
+
+    def create_game(
+        self, *, year, played_on, home_team_id, away_team_id, home_score, away_score
+    ) -> Game:
+        """試合を作る。成績は後から入力する。"""
+        return self._games.save(Game(
+            season=Season(year),
+            played_on=played_on,
+            home_team_id=home_team_id,
+            away_team_id=away_team_id,
+            home_score=home_score,
+            away_score=away_score,
+        ))
+
+    def update_game(
+        self, game_id: int, *,
+        year, played_on, home_team_id, away_team_id, home_score, away_score,
+        batting: dict = None, pitching: dict = None,
+    ) -> Game:
+        """試合の基本情報と、出場選手の成績をまとめて更新する。
+
+        batting / pitching は {選手id: ライン}。渡された辞書に含まれない選手の
+        記録は取り消す（出場していない扱いに戻せるようにするため）。
+        """
+        current = self._games.find_by_id(game_id)
+
+        game = Game(
+            id=current.id,
+            season=Season(year),
+            played_on=played_on,
+            home_team_id=home_team_id,
+            away_team_id=away_team_id,
+            home_score=home_score,
+            away_score=away_score,
+        )
+        for player_id, line in (batting or {}).items():
+            game.record_batting(player_id, line)
+        for player_id, line in (pitching or {}).items():
+            game.record_pitching(player_id, line)
+
+        return self._games.save(game)
+
     def record_game(
         self,
         *,
