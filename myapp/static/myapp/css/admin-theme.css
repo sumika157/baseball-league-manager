@@ -366,6 +366,17 @@ div.breadcrumbs {
   font-size: 0.8125rem;
 }
 
+/* ドラッグできない状態。操作できなくなったように見えるので目立たせる */
+.sortable-hint-blocked {
+  background: var(--message-warning-bg);
+  border-color: var(--border-color);
+  color: var(--body-fg);
+}
+
+.sortable-hint-blocked a {
+  font-weight: 600;
+}
+
 /* 一覧の区切り見出し（リーグごと・チームごと） */
 #result_list tr.group-heading-row > td {
   background: var(--darkened-bg);

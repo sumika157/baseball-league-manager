@@ -541,6 +541,30 @@ class TeamOrderingTest(BaseCase):
             with self.subTest(url=url):
                 self.assertContains(self.client.get(url), 'sortable-hint')
 
+    def test_sorted_changelist_offers_a_way_back_to_dragging(self):
+        """列で並べ替えるとドラッグを止めるので、戻す導線を必ず出す。
+
+        導線が無いと、操作できなくなったように見えてしまう。
+        """
+        self.client.force_login(User.objects.create_superuser(username='t6', password='x'))
+
+        plain = self.client.get('/admin/myapp/team/').content.decode()
+        self.assertNotIn('sortable-hint-blocked', plain)
+
+        sorted_body = self.client.get('/admin/myapp/team/?o=1').content.decode()
+        self.assertIn('sortable-hint-blocked', sorted_body)
+        self.assertIn('並び順を戻す', sorted_body)
+
+    def test_way_back_keeps_the_league_filter(self):
+        """絞り込んだまま並び順だけ戻せること（絞り込みまで消えると面倒）。"""
+        self.client.force_login(User.objects.create_superuser(username='t7', password='x'))
+        url = f'/admin/myapp/team/?league__id__exact={self.league.id}&o=1'
+
+        body = self.client.get(url).content.decode()
+
+        self.assertIn(f'href="?league__id__exact={self.league.id}"', body)
+        self.assertNotIn(f'href="?league__id__exact={self.league.id}&amp;o=1"', body)
+
     def test_name_cell_is_rendered_as_a_header_cell(self):
         """一覧のリンク列は th で描かれる。
 

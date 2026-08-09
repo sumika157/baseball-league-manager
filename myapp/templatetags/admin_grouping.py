@@ -11,6 +11,22 @@ register = template.Library()
 
 
 @register.simple_tag
+def is_sorted_by_column(cl):
+    """利用者が列を押して並べ替えているか。"""
+    return bool(cl.params.get('o'))
+
+
+@register.simple_tag
+def query_without_sort(cl):
+    """列での並べ替えだけを外した問い合わせ文字列。
+
+    並べ替え中はドラッグを止めているため、元に戻す導線に使う。
+    絞り込みなど他の指定は保つ。
+    """
+    return cl.get_query_string(remove=['o'])
+
+
+@register.simple_tag
 def grouped_results(cl, results):
     """(見出し, 行) の並びを返す。グループ化しない場合は None。
 
