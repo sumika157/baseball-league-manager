@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# Django
+db.sqlite3
+db.sqlite3-journal
+*.log
+media/
+staticfiles/
+
+# Environment variables
+.env
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# Editors/OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

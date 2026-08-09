@@ -1,0 +1,130 @@
+{% extends "myapp/base.html" %}
+
+{% block title %}{{ team.name }} - 選手一覧{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-10">
+    <nav aria-label="breadcrumb">
+      <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="{% url 'team_list' %}">チーム一覧</a></li>
+        <li class="breadcrumb-item active">{{ team.name }}</li>
+      </ol>
+    </nav>
+
+    <div class="d-flex justify-content-between align-items-center mb-4">
+      <h2>{{ team.name }} 選手名簿</h2>
+    </div>
+
+    <div class="card mb-4 border-primary shadow-sm">
+      <div class="card-header bg-primary text-white">新入団選手の登録</div>
+      <div class="card-body">
+        <form method="POST" class="row g-3">
+          {% csrf_token %}
+          <div class="col-md-5">
+            <input type="text" name="name" class="form-control" placeholder="選手名" required />
+          </div>
+          <div class="col-md-3">
+            <input type="number" name="number" class="form-control" placeholder="背番号" required />
+          </div>
+          <div class="col-md-2">
+            <select name="position" class="form-select">
+              <option value="投手">投手</option>
+              <option value="捕手">捕手</option>
+              <option value="内野手" selected>内野手</option>
+              <option value="外野手">外野手</option>
+            </select>
+          </div>
+          <div class="col-md-2">
+            <button type="submit" class="btn btn-primary w-100">登録</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+<ul class="nav nav-pills mb-3">
+  <li class="nav-item">
+    <a class="nav-link {% if pos_mode == 'batter' %}active{% endif %}" href="?pos=batter">
+      <i class="bi bi-person-fill"></i> 野手成績
+    </a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {% if pos_mode == 'pitcher' %}active{% endif %}" href="?pos=pitcher">
+      <i class="bi bi-tsunami"></i> 投手成績
+    </a>
+  </li>
+</ul>
+
+<div class="table-responsive">
+  <table class="table table-hover border">
+    <thead class="table-light">
+      <tr>
+        <th>背番号</th>
+        <th>選手名</th>
+        {% if pos_mode == 'pitcher' %}
+            <th class="text-center">防御率</th>
+            <th class="text-center">勝利</th>
+            <th class="text-center">敗戦</th>
+            <th class="text-center">奪三振</th>                     
+            <th class="text-center">WHIP</th>
+            <th class="text-center">奪三振率</th>
+        {% else %}
+          <th class="text-center">打率</th>
+          <th class="text-center">安打</th>
+          <th class="text-center">二塁打</th>
+          <th class="text-center">三塁打</th>
+          <th class="text-center">本塁打</th>
+          <th class="text-center">打点</th>
+          <th class="text-center">出塁率</th>
+          <th class="text-center">OPS</th>
+
+        {% endif %}
+        <th>操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for player in players %}
+      <tr>
+        <td class="fw-bold">{{ player.number }}</td>
+        <td>
+          {{ player.name }}
+          <span class="badge bg-secondary ms-1">{{ player.position }}</span>
+        </td>
+
+        {% if pos_mode == 'pitcher' %}
+        <td class="text-center">{{ player.era|floatformat:2 }}</td>
+        <td class="text-center">{{ player.pitcher_stats.wins }}</td>
+        <td class="text-center">{{ player.pitcher_stats.losses }}</td>
+        <td class="text-center">{{ player.pitcher_stats.strikeouts }}</td>
+        <td class="text-center">{{ player.whip|floatformat:2 }}</td>
+        <td class="text-center">{{ player.k_9|floatformat:2 }}</td>
+
+        {% else %}
+          <td class="text-center">{{ player.calculated_avg|floatformat:3}}</td>
+          <td class="text-center">{{ player.total_hits }}</td> 
+          <td class="text-center">{{ player.stats.doubles|default:0 }}</td>
+          <td class="text-center">{{ player.stats.triples|default:0 }}</td>
+          <td class="text-center">{{ player.stats.home_runs|default:0 }}</td>
+          <td class="text-center">{{ player.stats.runs_batted_in|default:0 }}</td>
+          <td class="text-center ">{{ player.obp|floatformat:3 }}</td>
+          <td class="text-center fw-bold {% if player.ops >= 0.9 %}text-danger{% elif player.ops >= 0.8 %}text-primary{% endif %}">
+            {{ player.ops|floatformat:3 }}
+          </td>
+        {% endif %}
+
+        <td>
+          <a href="{% url 'player_edit' player.id %}" class="btn btn-sm btn-outline-info">編集</a>
+        </td>
+      </tr>
+      {% empty %}
+      <tr>
+        <td colspan="6" class="text-center text-muted py-4">
+          該当する選手が登録されていません。
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+</div>
+{% endblock %}

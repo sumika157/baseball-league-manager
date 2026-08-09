@@ -1,0 +1,149 @@
+{% extends "myapp/base.html" %}
+
+{% block title %}選手編集 - {{ player.name }}{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card shadow">
+            <div class="card-header bg-dark text-white">
+                <h5 class="mb-0">選手情報と成績の編集</h5>
+            </div>
+            <div class="card-body">
+                <form method="POST">
+                {% csrf_token %}
+                
+                <div class="card mb-4">
+                    <div class="card-header bg-dark text-white">基本情報</div>
+                    <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                        <label class="form-label">選手名</label>
+                        <input type="text" name="name" class="form-control" value="{{ player.name }}">
+                        </div>
+                        <div class="col-md-3">
+                        <label class="form-label">背番号</label>
+                        <input type="number" name="number" class="form-control" value="{{ player.number }}">
+                        </div>
+                        <div class="col-md-3">
+                        <label class="form-label">守備位置</label>
+                        <select name="position" class="form-select">
+                            <option value="投手" {% if player.position == '投手' %}selected{% endif %}>投手</option>
+                            <option value="捕手" {% if player.position == '捕手' %}selected{% endif %}>捕手</option>
+                            <option value="内野手" {% if player.position == '内野手' %}selected{% endif %}>内野手</option>
+                            <option value="外野手" {% if player.position == '外野手' %}selected{% endif %}>外野手</option>
+                        </select>
+                        </div>
+                    </div>
+                    </div>
+                </div>
+
+                <div class="card mb-4">
+                    <div class="card-header bg-primary text-white">
+                    {% if player.position == '投手' %}投手成績{% else %}野手成績{% endif %}
+                    </div>
+                    <div class="card-body">
+                    <div class="row g-3">
+                        {% if player.position == '投手' %}
+                        <div class="col-md-3">
+                        <label class="form-label">投球回</label>
+                        <input type="number" step="0.1" name="innings_pitched" id="id_innings_pitched" 
+                                class="form-control" value="{{ player.pitcher_stats.innings_pitched }}">
+                        </div>  
+                        <div class="col-md-3">
+                            <label class="form-label">自責点</label>
+                            <input type="number" name="earned_runs" class="form-control" value="{{ player.pitcher_stats.earned_runs }}">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">勝利</label>
+                            <input type="number" name="wins" class="form-control" value="{{ player.pitcher_stats.wins }}">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">奪三振</label>
+                            <input type="number" name="strikeouts" class="form-control" value="{{ player.pitcher_stats.strikeouts }}">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">被安打</label>
+                            <input type="number" name="hits_allowed" class="form-control" value="{{ player.pitcher_stats.hits_allowed }}">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">与四球</label>
+                            <input type="number" name="walks_allowed" class="form-control" value="{{ player.pitcher_stats.walks_allowed }}">
+                        </div>
+                        {% else %}
+                        <div class="col-md-3">
+                            <label class="form-label">打数</label>
+                            <input type="number" name="at_bats" class="form-control" value="{{ player.stats.at_bats }}">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">単打</label>
+                            <input type="number" name="singles" class="form-control" value="{{ player.stats.singles }}">
+                        </div>   
+                        <div class="col-md-3">
+                            <label class="form-label">二塁打</label>
+                            <input type="number" name="doubles" class="form-control" value="{{ player.stats.doubles }}">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">三塁打</label>
+                            <input type="number" name="triples" class="form-control" value="{{ player.stats.triples }}">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">本塁打</label>
+                            <input type="number" name="home_runs" class="form-control" value="{{ player.stats.home_runs }}">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">打点</label>
+                            <input type="number" name="rbi" class="form-control" value="{{ player.stats.runs_batted_in }}">
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label">四球</label>
+                            <input type="number" name="walks" class="form-control" value="{{ player.stats.walks }}">
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label">死球</label>
+                            <input type="number" name="hit_by_pitch" class="form-control" value="{{ player.stats.hit_by_pitch }}">
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label">犠飛</label>
+                            <input type="number" name="sacrifice_flies" class="form-control" value="{{ player.stats.sacrifice_flies }}">
+                        </div>
+                        {% endif %}
+                    </div>
+                    </div>
+                </div>
+
+                <div class="d-flex justify-content-between">
+                    <a href="{% url 'player_list' player.team.id %}" class="btn btn-secondary">戻る</a>
+                    <button type="submit" class="btn btn-success">更新する</button>
+                </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+<script>
+  const inningInput = document.getElementById('id_innings_pitched');
+
+  inningInput.addEventListener('input', function(e) {
+    let value = parseFloat(this.value);
+    if (isNaN(value)) return;
+
+    // 現在の値から、整数（イニング）と小数（アウト数）を抽出
+    let integerPart = Math.floor(value);
+    let decimalPart = Math.round((value - integerPart) * 10);
+
+    // 繰り下がりの処理: .9 や .8 など、マイナスボタンで発生する「.7以上」を検知
+    if (decimalPart >= 7) { 
+        // 例: 5.0 から下がって 4.9 になった場合 -> 4.2 に変換
+        this.value = (integerPart + 0.2).toFixed(1);
+    } 
+    // 繰り上がりの処理: .3 以上の端数が出た場合
+    else if (decimalPart >= 3) {
+        // 例: 5.2 から上がって 5.3 になった場合 -> 6.0 に変換
+        let additionalInnings = Math.floor(decimalPart / 3);
+        let remainingOuts = decimalPart % 3;
+        this.value = (integerPart + additionalInnings + (remainingOuts / 10)).toFixed(1);
+    }
+  });
+</script>
+{% endblock %}
