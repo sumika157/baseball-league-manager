@@ -69,10 +69,14 @@
       tr.setAttribute('draggable', 'true');
       tr.classList.add('sortable-row');
 
-      // つまみは最初の「表示されている入力セル」に置く。
-      // 先頭の td.original は幅0で中身が絶対配置のラベルなので、
-      // ここに入れると行が崩れて不自然に折り返す。
-      var target = tr.querySelector('td[class*="field-"]:not(.hidden)');
+      // つまみは最初の「表示されている項目セル」に置く。
+      //  - 先頭の td.original は幅0で中身が絶対配置のラベルなので、
+      //    ここに入れると行が崩れて不自然に折り返す
+      //  - 一覧ではリンク列が th で描かれるため、td だけを見ると
+      //    つまみが2列目（表示順）に入ってしまう
+      var target = tr.querySelector(
+        'th[class*="field-"]:not(.hidden), td[class*="field-"]:not(.hidden)'
+      );
       if (target && !target.querySelector('.sortable-handle')) {
         var handle = document.createElement('span');
         handle.className = 'sortable-handle';

@@ -1,0 +1,14 @@
+{% extends "admin/change_list.html" %}
+
+{% comment %}
+並べ替えできる一覧。表示順の列は隠してあるため、操作方法が分からないので
+一覧の上に案内を出す。
+{% endcomment %}
+
+{% block content %}
+  <p class="sortable-hint">
+    行をドラッグして並べ替え、<strong>保存</strong>で確定します。
+    列の見出しを押して並べ替えているあいだはドラッグできません。
+  </p>
+  {{ block.super }}
+{% endblock %}

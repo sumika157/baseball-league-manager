@@ -103,6 +103,9 @@ class LeagueAdmin(admin.ModelAdmin):
         js = ('myapp/js/admin-inline-sortable.js',)
         css = {'all': ('myapp/css/admin-theme.css',)}
 
+    # 表示順の列は隠してあるので、操作方法を画面上で伝える
+    change_list_template = 'admin/sortable_change_list.html'
+
     def get_queryset(self, request):
         """所属チームを先読みする。行ごとに引くと一覧で N+1 になる。"""
         teams = orm_models.Team.objects.annotate(
@@ -160,6 +163,9 @@ class TeamAdmin(admin.ModelAdmin):
     class Media:
         js = ('myapp/js/admin-inline-sortable.js',)
         css = {'all': ('myapp/css/admin-theme.css',)}
+
+    # 表示順の列は隠してあるので、操作方法を画面上で伝える
+    change_list_template = 'admin/sortable_change_list.html'
 
     # 行をリーグごとに区切る。見出しに出るのでリーグ列は list_display から外した。
     # 表示順はリーグの中でしか意味が無いため、ドラッグも区切りをまたげない

@@ -533,6 +533,24 @@ class TeamOrderingTest(BaseCase):
         self.assertContains(response, 'admin-inline-sortable.js')
         self.assertContains(response, 'name="form-0-display_order"')
 
+    def test_changelist_explains_how_to_reorder(self):
+        """表示順の列は隠しているので、操作方法を画面で伝える。"""
+        self.client.force_login(User.objects.create_superuser(username='t3', password='x'))
+
+        for url in ('/admin/myapp/team/', '/admin/myapp/league/'):
+            with self.subTest(url=url):
+                self.assertContains(self.client.get(url), 'sortable-hint')
+
+    def test_order_input_is_submitted_but_the_column_is_hidden(self):
+        """数値は送信するが列としては見せない（インラインと同じ扱い）。"""
+        self.client.force_login(User.objects.create_superuser(username='t4', password='x'))
+        body = self.client.get('/admin/myapp/team/').content.decode()
+
+        self.assertIn('name="form-0-display_order"', body)
+        # 列を隠す指定が読み込まれていること
+        self.assertIn('myapp/css/admin-theme.css', body)
+        self.assertIn('column-display_order', body)
+
     def test_team_changelist_is_ordered_by_league_then_order(self):
         self.client.force_login(User.objects.create_superuser(username='t2', password='x'))
         body = self.client.get('/admin/myapp/team/').content.decode()

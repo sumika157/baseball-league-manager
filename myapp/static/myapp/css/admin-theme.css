@@ -342,6 +342,30 @@ div.breadcrumbs {
   font-variant-numeric: tabular-nums;
 }
 
+/* ------------------------------------------------------------------
+   一覧の表示順の列
+   ------------------------------------------------------------------
+
+   数値そのものに意味は無く、行をドラッグした結果が入るだけなので列としては
+   見せない。ただし送信は必要なので入力欄は残す（JavaScript もこの欄に
+   書き込む）。インライン側で hidden ウィジェットにしているのと同じ考え方だが、
+   一覧では list_editable が列の表示を要求するため CSS で隠している。
+   ------------------------------------------------------------------ */
+#result_list th.column-display_order,
+#result_list td.field-display_order {
+  display: none;
+}
+
+.sortable-hint {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--admin-radius-sm);
+  background: var(--darkened-bg);
+  color: var(--body-quiet-color);
+  font-size: 0.8125rem;
+}
+
 /* 一覧の区切り見出し（リーグごと・チームごと） */
 #result_list tr.group-heading-row > td {
   background: var(--darkened-bg);
