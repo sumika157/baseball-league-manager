@@ -135,6 +135,24 @@ a:hover {
   color: var(--app-text-muted);
 }
 
+/* 管理画面への導線。別サイトへ移動するので、通常のリンクとは見た目を分ける */
+.nav-admin-link {
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-radius-sm);
+  color: var(--app-text-muted);
+  font-size: 0.8125rem;
+  font-weight: 550;
+  white-space: nowrap;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.nav-admin-link:hover {
+  background-color: var(--app-accent-soft);
+  border-color: var(--app-accent-border);
+  color: var(--app-accent-hover);
+}
+
 /* ------------------------------------------------------------------
    ページ見出し
    ------------------------------------------------------------------ */

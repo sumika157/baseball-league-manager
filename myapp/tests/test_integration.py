@@ -249,6 +249,49 @@ class DashboardTest(TestCase):
         self.assertEqual(response.status_code, 200)
 
 
+class HeaderNavigationTest(TestCase):
+    """ヘッダーの導線が権限に応じて出し分けられること。"""
+
+    def setUp(self):
+        from django.contrib.auth.models import User
+
+        self.staff = User.objects.create_user(
+            username='staff', password='x', is_staff=True
+        )
+        self.member = User.objects.create_user(username='member', password='x')
+
+    # 空状態の文言にも「管理画面」が出てくるため、リンク要素そのもので判定する
+    ADMIN_LINK = 'class="nav-admin-link"'
+
+    def test_staff_sees_admin_link(self):
+        self.client.force_login(self.staff)
+        response = self.client.get(reverse('dashboard'))
+        self.assertContains(response, self.ADMIN_LINK)
+        self.assertContains(response, 'href="/admin/"')
+
+    def test_normal_user_does_not_see_admin_link(self):
+        """一般ユーザーには管理画面への導線を出さない。"""
+        self.client.force_login(self.member)
+        response = self.client.get(reverse('dashboard'))
+        self.assertNotContains(response, self.ADMIN_LINK)
+
+    def test_anonymous_does_not_see_admin_link(self):
+        response = self.client.get(reverse('dashboard'))
+        self.assertNotContains(response, self.ADMIN_LINK)
+        self.assertContains(response, 'ログイン')
+
+    def test_admin_page_actually_rejects_normal_user(self):
+        """導線を隠すだけでなく、管理画面側でも入れないこと。"""
+        self.client.force_login(self.member)
+        response = self.client.get('/admin/')
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/admin/login/', response['Location'])
+
+    def test_admin_page_accepts_staff(self):
+        self.client.force_login(self.staff)
+        self.assertEqual(self.client.get('/admin/').status_code, 200)
+
+
 class AuthTest(TestCase):
     def test_login_redirect_url_resolves(self):
         from django.conf import settings

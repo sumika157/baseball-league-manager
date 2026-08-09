@@ -19,6 +19,10 @@
 
         <div class="app-nav-user">
           {% if user.is_authenticated %}
+            {# is_staff が管理画面へ入れる条件そのものなので、それを表示条件にする #}
+            {% if user.is_staff %}
+              <a href="{% url 'admin:index' %}" class="nav-admin-link">管理画面</a>
+            {% endif %}
             <span>{{ user.username }}</span>
             <form method="post" action="{% url 'logout' %}" class="d-inline">
               {% csrf_token %}
