@@ -2,7 +2,8 @@ import types
 
 from django import forms
 from django.contrib import admin
-from django.db.models import Count, Prefetch, Q
+from django.db.models import Count, IntegerField, OuterRef, Prefetch, Q, Subquery
+from django.db.models.functions import Coalesce
 from django.urls import reverse
 from django.utils.html import format_html, format_html_join
 
@@ -60,6 +61,20 @@ def _ordered_app_list(self, request, app_label=None):
 
 _original_get_app_list = admin.site.get_app_list
 admin.site.get_app_list = types.MethodType(_ordered_app_list, admin.site)
+
+
+def _grouped_count(queryset, group_field):
+    """親1件ぶんの件数を返す副問い合わせを組み立てる。
+
+    一覧の各行で数えると行数だけ問い合わせが増えるため、
+    annotate と組み合わせて1回のSQLにまとめるために使う。
+    """
+    return (
+        queryset.order_by()
+        .values(group_field)
+        .annotate(n=Count('pk'))
+        .values('n')[:1]
+    )
 
 
 class TeamInlineForm(forms.ModelForm):
@@ -167,18 +182,58 @@ class TeamAdmin(admin.ModelAdmin):
     # 表示順の列は隠してあるので、操作方法を画面上で伝える
     change_list_template = 'admin/sortable_change_list.html'
 
+    def get_queryset(self, request):
+        """一覧に出す件数を、すべて副問い合わせで先に数えておく。
+
+        行ごとに数えると表示する行数だけ問い合わせが増える。
+        """
+        return super().get_queryset(request).annotate(
+            league_team_count=Subquery(
+                orm_models.League.objects
+                .filter(pk=OuterRef('league_id'))
+                .annotate(n=Count('teams')).values('n')[:1]
+            ),
+            active_players_count=Coalesce(Subquery(
+                _grouped_count(
+                    orm_models.PlayerStint.objects.filter(
+                        team=OuterRef('pk'), to_year__isnull=True
+                    ),
+                    'team',
+                ),
+                output_field=IntegerField(),
+            ), 0),
+            played_games_count=(
+                Coalesce(Subquery(
+                    _grouped_count(
+                        orm_models.Game.objects.filter(home_team=OuterRef('pk')),
+                        'home_team',
+                    ),
+                    output_field=IntegerField(),
+                ), 0)
+                + Coalesce(Subquery(
+                    _grouped_count(
+                        orm_models.Game.objects.filter(away_team=OuterRef('pk')),
+                        'away_team',
+                    ),
+                    output_field=IntegerField(),
+                ), 0)
+            ),
+        )
+
     # 行をリーグごとに区切る。見出しに出るのでリーグ列は list_display から外した。
     # 表示順はリーグの中でしか意味が無いため、ドラッグも区切りをまたげない
-    group_by = staticmethod(lambda team: team.league.name)
+    group_by = staticmethod(
+        lambda team: f'{team.league.name}（{team.league_team_count}チーム）'
+    )
 
-    @admin.display(description='現役選手')
+    @admin.display(description='現役選手', ordering='active_players_count')
     def active_player_count(self, obj):
-        # 在籍中＝退団年が空の在籍
-        return obj.stints.filter(to_year__isnull=True).count()
+        # 在籍中＝退団年が空の在籍。件数は get_queryset で数えてある
+        return obj.active_players_count
 
-    @admin.display(description='試合数')
+    @admin.display(description='試合数', ordering='played_games_count')
     def game_count(self, obj):
-        return obj.home_games.count() + obj.away_games.count()
+        return obj.played_games_count
 
 
 @admin.register(Stadium)

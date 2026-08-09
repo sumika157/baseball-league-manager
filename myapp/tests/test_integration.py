@@ -876,6 +876,35 @@ class TeamListByLeagueTest(BaseCase):
         self.assertContains(response, '別リーグ')
         self.assertEqual(len(response.context['leagues']), 2)
 
+    def test_heading_shows_the_team_count(self):
+        body = self.client.get(reverse('team_list')).content.decode()
+
+        # テストリーグは2チーム、別リーグは1チーム
+        self.assertIn('>2チーム</span>', body)
+        self.assertIn('>1チーム</span>', body)
+
+    def test_admin_heading_shows_the_team_count(self):
+        self.client.force_login(User.objects.create_superuser(username='c', password='x'))
+        body = self.client.get('/admin/myapp/team/').content.decode()
+
+        self.assertIn('テストリーグ（2チーム）', body)
+        self.assertIn('別リーグ（1チーム）', body)
+
+    def test_admin_count_does_not_query_per_row(self):
+        """区切りごとに数えると行の数だけ問い合わせが増えるため、まとめて取る。"""
+        self.client.force_login(User.objects.create_superuser(username='c2', password='x'))
+
+        def count_queries():
+            with CaptureQueriesContext(connection) as captured:
+                self.client.get('/admin/myapp/team/')
+            return len(captured)
+
+        before = count_queries()
+        for i in range(5):
+            orm_models.Team.objects.create(league=self.other, name=f'T{i}')
+
+        self.assertEqual(count_queries(), before)
+
     def test_flat_list_is_still_available_for_filters(self):
         """試合一覧の絞り込みなどは平坦な一覧を使う。"""
         rows = self.service.list_teams().rows
@@ -1011,7 +1040,8 @@ class AdminGroupingTest(BaseCase):
 
     def test_team_list_shows_each_league_once(self):
         body = self.client.get('/admin/myapp/team/').content.decode()
-        self.assertEqual(body.count('>テストリーグ</td>'), 1)
+        # 見出しには所属チーム数も添える
+        self.assertEqual(body.count('>テストリーグ（2チーム）</td>'), 1)
 
     def test_stint_list_groups_by_team(self):
         """所属はもう選手ではなく在籍が持つので、区切るのは在籍一覧。"""

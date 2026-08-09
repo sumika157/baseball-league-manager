@@ -25,7 +25,10 @@
 {% endcomment %}
 {% for group in leagues %}
   <div class="d-flex justify-content-between align-items-center mb-2 {% if not forloop.first %}mt-4{% endif %}">
-    <h2 class="h6 mb-0">{{ group.league_name }}</h2>
+    <h2 class="h6 mb-0">
+      {{ group.league_name }}
+      <span class="league-team-count">{{ group.teams|length }}チーム</span>
+    </h2>
     <a href="{% url 'league_detail' group.league_id %}" style="font-size: 0.875rem;">リーグの詳細 →</a>
   </div>
 

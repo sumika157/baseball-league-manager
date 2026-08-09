@@ -443,6 +443,15 @@ a:hover {
   font-variant-numeric: tabular-nums;
 }
 
+/* リーグ見出しに添えるチーム数 */
+.league-team-count {
+  margin-left: 0.5em;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--app-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
 /* 並べ替え可能な見出し */
 .sort-link {
   display: inline-flex;
