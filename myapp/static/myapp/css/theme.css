@@ -233,6 +233,68 @@ a:hover {
   transform: translateX(3px);
 }
 
+.card-header-link {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--app-text-muted);
+}
+
+.card-header-link:hover {
+  color: var(--app-accent);
+}
+
+/* ------------------------------------------------------------------
+   カード内のリスト（ダッシュボードのチーム欄など）
+   ------------------------------------------------------------------ */
+.tile-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.tile-list li + li {
+  border-top: 1px solid var(--app-border);
+}
+
+.tile-list a {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+  color: var(--app-text);
+  transition: background-color 0.15s ease;
+}
+
+.tile-list a:hover {
+  background: var(--app-surface-muted);
+  color: var(--app-text);
+}
+
+.tile-list-main {
+  min-width: 0;
+}
+
+.tile-list-title {
+  display: block;
+  font-weight: 550;
+  font-size: 0.9375rem;
+}
+
+.tile-list-sub {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--app-text-muted);
+  margin-top: 0.125rem;
+}
+
+.tile-list-meta {
+  flex-shrink: 0;
+  font-size: 0.8125rem;
+  color: var(--app-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ------------------------------------------------------------------
    テーブル
    ------------------------------------------------------------------ */
