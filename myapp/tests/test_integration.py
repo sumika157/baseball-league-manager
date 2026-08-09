@@ -525,6 +525,22 @@ class TeamOrderingTest(BaseCase):
     def test_admin_league_page_loads_the_sortable_script(self):
         self.assertContains(self._league_page(), 'admin-inline-sortable.js')
 
+    def test_team_changelist_can_be_reordered(self):
+        """リーグ編集画面だけでなく、チーム一覧からも並べ替えられること。"""
+        self.client.force_login(User.objects.create_superuser(username='t', password='x'))
+        response = self.client.get('/admin/myapp/team/')
+
+        self.assertContains(response, 'admin-inline-sortable.js')
+        self.assertContains(response, 'name="form-0-display_order"')
+
+    def test_team_changelist_is_ordered_by_league_then_order(self):
+        self.client.force_login(User.objects.create_superuser(username='t2', password='x'))
+        body = self.client.get('/admin/myapp/team/').content.decode()
+
+        # リーグごとに区切られ、リーグ内は表示順に並ぶ
+        self.assertIn('group-heading-row', body)
+        self.assertLess(body.index('Bチーム'), body.index('Aチーム'))
+
     def test_order_field_is_submitted_but_not_shown(self):
         body = self._league_page().content.decode()
 

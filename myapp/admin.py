@@ -143,15 +143,26 @@ class LeagueAdmin(admin.ModelAdmin):
 
 @admin.register(Team)
 class TeamAdmin(admin.ModelAdmin):
-    list_display = ('name', 'home_stadium', 'active_player_count', 'game_count')
+    # display_order は行をドラッグすると書き換わる。リーグ編集画面からだけでなく
+    # この一覧でも並べ替えられるようにしてある
+    list_display = (
+        'name', 'display_order', 'home_stadium', 'active_player_count', 'game_count'
+    )
+    list_display_links = ('name',)
+    list_editable = ('display_order',)
     list_filter = ('league',)
     search_fields = ('name', 'home_stadium__name')
     autocomplete_fields = ('home_stadium',)
     # リーグごとにまとまるよう並べる。リーグ内は手動の表示順を尊重する
-    ordering = ('league__name', 'display_order', 'name')
+    ordering = ('league__display_order', 'league__name', 'display_order', 'name')
     list_select_related = ('league', 'home_stadium')
 
-    # 行をリーグごとに区切る。見出しに出るのでリーグ列は list_display から外した
+    class Media:
+        js = ('myapp/js/admin-inline-sortable.js',)
+        css = {'all': ('myapp/css/admin-theme.css',)}
+
+    # 行をリーグごとに区切る。見出しに出るのでリーグ列は list_display から外した。
+    # 表示順はリーグの中でしか意味が無いため、ドラッグも区切りをまたげない
     group_by = staticmethod(lambda team: team.league.name)
 
     @admin.display(description='現役選手')

@@ -20,6 +20,17 @@
     return new URLSearchParams(window.location.search).has('o');
   }
 
+  function groupOf(tr) {
+    // 一覧がリーグごとに区切られている場合、直前の見出し行がその行の所属。
+    // 区切りが無い（インラインなど）場合は全体で1つのまとまりとみなす。
+    var node = tr.previousElementSibling;
+    while (node) {
+      if (node.classList.contains('group-heading-row')) return node;
+      node = node.previousElementSibling;
+    }
+    return null;
+  }
+
   function tablesWithOrderField() {
     var tables = [];
     document.querySelectorAll(ORDER_SELECTOR).forEach(function (input) {
@@ -89,6 +100,9 @@
 
       tr.addEventListener('dragover', function (event) {
         if (!dragged || dragged === tr) return;
+        // 別のリーグの位置へは動かせない。表示順はリーグの中でしか意味が
+        // 無いうえ、見出し行は動かないので見た目も破綻するため
+        if (groupOf(dragged) !== groupOf(tr)) return;
         event.preventDefault();
         event.dataTransfer.dropEffect = 'move';
         tr.classList.add('is-drop-target');
@@ -100,6 +114,7 @@
 
       tr.addEventListener('drop', function (event) {
         if (!dragged || dragged === tr) return;
+        if (groupOf(dragged) !== groupOf(tr)) return;
         event.preventDefault();
         tr.classList.remove('is-drop-target');
 
