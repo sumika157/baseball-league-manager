@@ -54,8 +54,14 @@
     }
 
     function renumber() {
-      rows().forEach(function (tr, index) {
-        tr.querySelector(ORDER_SELECTOR).value = index;
+      // 表示順はまとまり（リーグ）の中でしか意味が無いので、通し番号ではなく
+      // まとまりごとに 0 から振り直す。区切りが無い場合は全体で1つとみなす。
+      var counters = new Map();
+      rows().forEach(function (tr) {
+        var group = groupOf(tr);
+        var next = counters.get(group) || 0;
+        tr.querySelector(ORDER_SELECTOR).value = next;
+        counters.set(group, next + 1);
       });
     }
 

@@ -1050,12 +1050,33 @@ class AdminGroupingTest(BaseCase):
         self.assertContains(response, 'group-heading-row')
         self.assertContains(response, 'テストリーグ · テストチーム')
 
-    def test_grouping_is_dropped_when_the_user_sorts(self):
-        """列で並べ替えるとまとまりが崩れるので、見出しを出さない。"""
+    def test_sorting_keeps_the_league_grouping(self):
+        """列で並べ替えても、リーグの区切りは崩れない。
+
+        リーグの順序が常に先に効き、指定された並びはその中で効く。
+        """
         response = self.client.get('/admin/myapp/team/?o=1')
 
         self.assertEqual(response.status_code, 200)
-        self.assertNotContains(response, 'group-heading-row')
+        self.assertContains(response, 'group-heading-row')
+
+    def test_sorting_orders_within_each_league(self):
+        for name in ('Cチーム', 'Aチーム', 'Bチーム'):
+            orm_models.Team.objects.create(league=self.other, name=name)
+
+        body = self.client.get('/admin/myapp/team/?o=1').content.decode()
+        # 別リーグの区切りの中だけを見る
+        segment = body[body.index('別リーグ'):]
+        names = [
+            m for m in ('Aチーム', 'Bチーム', 'Cチーム', 'Xチーム')
+            if m in segment
+        ]
+        positions = [segment.index(n) for n in sorted(names)]
+        self.assertEqual(positions, sorted(positions))
+
+    def test_each_league_still_appears_once_when_sorted(self):
+        body = self.client.get('/admin/myapp/team/?o=1').content.decode()
+        self.assertEqual(body.count('>テストリーグ（2チーム）</td>'), 1)
 
     def test_other_changelists_are_unaffected(self):
         """group_by を持たない一覧は従来どおり描画されること。"""

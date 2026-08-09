@@ -20,9 +20,10 @@ def grouped_results(cl, results):
     if not group_by:
         return None
 
-    # 利用者が列で並べ替えたときは、まとまりが崩れて見出しが何度も出るため
-    # グループ化をやめる
-    if cl.params.get('o'):
+    # 列で並べ替えても、まとまりの順序が常に先に効くため区切りは崩れない
+    # （GroupedChangeList が保証する）。まとまりを保てない一覧では
+    # 見出しが何度も出てしまうので、その場合はグループ化をやめる。
+    if cl.params.get('o') and not getattr(cl.model_admin, 'group_ordering', None):
         return None
 
     rows = []

@@ -2,6 +2,7 @@ import types
 
 from django import forms
 from django.contrib import admin
+from django.contrib.admin.views.main import ChangeList
 from django.db.models import Count, IntegerField, OuterRef, Prefetch, Q, Subquery
 from django.db.models.functions import Coalesce
 from django.urls import reverse
@@ -61,6 +62,31 @@ def _ordered_app_list(self, request, app_label=None):
 
 _original_get_app_list = admin.site.get_app_list
 admin.site.get_app_list = types.MethodType(_ordered_app_list, admin.site)
+
+
+class GroupedChangeList(ChangeList):
+    """区切りを保ったまま並べ替える一覧。
+
+    Django の既定では列を押すと並びがその列だけで決まり、リーグごとの
+    まとまりが崩れて全チームが混ざる。まとまりの順序を常に先に置き、
+    利用者が指定した並びはその中で効かせる。
+    """
+
+    def get_ordering(self, request, queryset):
+        ordering = super().get_ordering(request, queryset)
+        prefix = list(getattr(self.model_admin, 'group_ordering', ()))
+        if not prefix:
+            return ordering
+
+        fixed = {field.lstrip('-') for field in prefix}
+        return prefix + [f for f in ordering if f.lstrip('-') not in fixed]
+
+
+class GroupedAdminMixin:
+    """group_by で区切る一覧に、区切りを保つ並べ替えを組み込む。"""
+
+    def get_changelist(self, request, **kwargs):
+        return GroupedChangeList
 
 
 def _grouped_count(queryset, group_field):
@@ -160,7 +186,9 @@ class LeagueAdmin(admin.ModelAdmin):
 
 
 @admin.register(Team)
-class TeamAdmin(admin.ModelAdmin):
+class TeamAdmin(GroupedAdminMixin, admin.ModelAdmin):
+    # 列を押して並べ替えても、この順序は常に先に効く（リーグの区切りを保つ）
+    group_ordering = ('league__display_order', 'league__name')
     # display_order は行をドラッグすると書き換わる。リーグ編集画面からだけでなく
     # この一覧でも並べ替えられるようにしてある
     list_display = (
@@ -367,8 +395,10 @@ class PlayerAdmin(admin.ModelAdmin):
 
 
 @admin.register(PlayerStint)
-class PlayerStintAdmin(admin.ModelAdmin):
+class PlayerStintAdmin(GroupedAdminMixin, admin.ModelAdmin):
     """在籍そのものの一覧。チームごとの名簿として使える。"""
+
+    group_ordering = ('team__league__display_order', 'team__league__name', 'team__name')
 
     form = PlayerStintForm
     list_display = ('number', 'player', 'from_year', 'to_year')
