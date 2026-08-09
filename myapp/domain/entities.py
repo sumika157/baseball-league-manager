@@ -7,20 +7,20 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
+from datetime import date
 
 from .exceptions import (
     DuplicateJerseyNumber,
+    InvalidGame,
     PlayerNotFound,
 )
 from .value_objects import (
     BattingLine,
-    InningsPitched,
     JerseyNumber,
     PitchingLine,
     Position,
     Season,
-    TeamRecord,
 )
 
 
@@ -81,23 +81,11 @@ class Player:
 
 
 @dataclass
-class TeamSeason:
-    """あるチームの、あるシーズンの成績。Team 集約の内部エンティティ。"""
-
-    season: Season
-    record: TeamRecord
-    id: int | None = None
-
-    def __str__(self) -> str:
-        return f"{self.season} {self.record.wins}勝{self.record.losses}敗{self.record.ties}分"
-
-
-@dataclass
 class Team:
     """チーム。集約ルート。
 
-    ロスター（選手一覧）とシーズンごとの成績を内部に持ち、
-    背番号の一意性と「1チーム1シーズン1件」を保証する。
+    ロスター（選手一覧）を内部に持ち、背番号の一意性を保証する。
+    勝敗やシーズン成績は保持しない。試合（Game）から集計して求める。
     """
 
     name: str
@@ -107,37 +95,9 @@ class Team:
     # リーグ内での表示順。管理画面から手動で並べ替える
     display_order: int = 0
     players: list[Player] = field(default_factory=list)
-    seasons: list[TeamSeason] = field(default_factory=list)
 
     def __str__(self) -> str:
         return self.name
-
-    # --- シーズン成績 ---
-
-    def record_season(self, season: Season, record: TeamRecord) -> TeamSeason:
-        """シーズンの成績を登録する。同じシーズンが既にあれば上書きする。
-
-        同一チームに同じ年の成績が2件並ぶと順位表が破綻するため、
-        集約側で1件に保つ。
-        """
-        existing = self.season_record(season)
-        if existing is not None:
-            existing.record = record
-            return existing
-
-        entry = TeamSeason(season=season, record=record)
-        self.seasons.append(entry)
-        return entry
-
-    def season_record(self, season: Season) -> TeamSeason | None:
-        for entry in self.seasons:
-            if entry.season == season:
-                return entry
-        return None
-
-    def seasons_desc(self) -> list[TeamSeason]:
-        """新しいシーズンから順に並べる。"""
-        return sorted(self.seasons, key=lambda s: s.season.year, reverse=True)
 
     # --- ロスターの参照 ---
 
@@ -205,3 +165,105 @@ class Team:
                 raise DuplicateJerseyNumber(
                     f"背番号 {number} は「{self.name}」で既に使用されています。"
                 )
+
+
+@dataclass
+class GameBatting:
+    """1試合ぶんの、ある選手の打撃成績。"""
+
+    player_id: int
+    line: BattingLine
+    id: int | None = None
+
+
+@dataclass
+class GamePitching:
+    """1試合ぶんの、ある投手の投球成績。"""
+
+    player_id: int
+    line: PitchingLine
+    id: int | None = None
+
+
+@dataclass
+class Game:
+    """試合。集約ルート。
+
+    2つのチームにまたがるため Team の内部には置けず、独立した集約とする。
+    チームの勝敗も選手の通算成績も、すべてここから集計して求める。
+    試合が唯一の出典であり、手入力の勝敗や通算値は持たない。
+    """
+
+    season: Season
+    played_on: date
+    home_team_id: int
+    away_team_id: int
+    home_score: int = 0
+    away_score: int = 0
+    id: int | None = None
+    batting: list[GameBatting] = field(default_factory=list)
+    pitching: list[GamePitching] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.home_team_id == self.away_team_id:
+            raise InvalidGame("同じチーム同士の試合は登録できません。")
+        for label, value in (('ホームの得点', self.home_score), ('ビジターの得点', self.away_score)):
+            try:
+                score = int(value)
+            except (TypeError, ValueError):
+                raise InvalidGame(f"{label}は数値で入力してください。") from None
+            if score < 0:
+                raise InvalidGame(f"{label}に負の値は入力できません。")
+
+    def __str__(self) -> str:
+        return f"{self.played_on} {self.home_score}-{self.away_score}"
+
+    @property
+    def is_tie(self) -> bool:
+        return self.home_score == self.away_score
+
+    @property
+    def winner_team_id(self) -> int | None:
+        """勝ったチーム。引分なら None。"""
+        if self.is_tie:
+            return None
+        return self.home_team_id if self.home_score > self.away_score else self.away_team_id
+
+    def involves(self, team_id: int) -> bool:
+        return team_id in (self.home_team_id, self.away_team_id)
+
+    def result_for(self, team_id: int) -> str:
+        """指定チームから見た結果。'win' / 'loss' / 'tie'。"""
+        if not self.involves(team_id):
+            raise InvalidGame("この試合に参加していないチームです。")
+        if self.is_tie:
+            return 'tie'
+        return 'win' if self.winner_team_id == team_id else 'loss'
+
+    def score_for(self, team_id: int) -> tuple[int, int]:
+        """指定チームから見た (得点, 失点)。"""
+        if not self.involves(team_id):
+            raise InvalidGame("この試合に参加していないチームです。")
+        if team_id == self.home_team_id:
+            return self.home_score, self.away_score
+        return self.away_score, self.home_score
+
+    def record_batting(self, player_id: int, line: BattingLine) -> GameBatting:
+        """選手の打撃成績を記録する。同じ選手が既にあれば上書きする。"""
+        for entry in self.batting:
+            if entry.player_id == player_id:
+                entry.line = line
+                return entry
+        entry = GameBatting(player_id=player_id, line=line)
+        self.batting.append(entry)
+        return entry
+
+    def record_pitching(self, player_id: int, line: PitchingLine) -> GamePitching:
+        """投手の投球成績を記録する。同じ選手が既にあれば上書きする。"""
+        for entry in self.pitching:
+            if entry.player_id == player_id:
+                entry.line = line
+                return entry
+        entry = GamePitching(player_id=player_id, line=line)
+        self.pitching.append(entry)
+        return entry

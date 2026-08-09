@@ -356,6 +356,28 @@ a:hover {
   padding-right: 1.25rem;
 }
 
+/* 編集できない成績値 */
+.stat-readout {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--app-surface-muted);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-sm);
+}
+
+.stat-readout-label {
+  font-size: 0.8125rem;
+  color: var(--app-text-muted);
+}
+
+.stat-readout-value {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
 /* 並べ替え可能な見出し */
 .sort-link {
   display: inline-flex;

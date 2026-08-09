@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from ..domain import services as domain_services
-from ..domain.entities import Player, Team
+from ..domain.entities import Game, Player, Team
 from ..domain.value_objects import (
     BattingLine,
     InningsPitched,
@@ -35,11 +35,13 @@ from .dto import (
 class TeamApplicationService:
     """チームとロスターに関するユースケース。"""
 
-    def __init__(self, teams, team_list_query=None):
+    def __init__(self, teams, team_list_query=None, games=None):
         # 具象クラスではなくリポジトリのインターフェースに依存する
         self._teams = teams
         # 一覧表示は集約を組み立てないリードモデルを使う
         self._team_list_query = team_list_query
+        # 勝敗と通算成績の出典
+        self._games = games
 
     # --- 参照系 ---
 
@@ -165,13 +167,16 @@ class TeamApplicationService:
         表示用に整形するだけにとどめる。
         """
         teams = self._teams.find_all_with_roster()
-        seasons = domain_services.recorded_seasons(teams)
+        all_games = self._games.find_all()
+        seasons = domain_services.seasons_of(all_games)
 
         if not seasons:
             return Standings(year=year or 0, rows=[], available_years=[])
 
         target = Season(year) if year is not None else seasons[0]
-        rows = domain_services.standings(teams, target)
+        rows = domain_services.standings(
+            teams, [g for g in all_games if g.season == target]
+        )
 
         display_rows = [
             StandingRow(
@@ -204,15 +209,26 @@ class TeamApplicationService:
             descending=desc,
         )
 
-    def record_team_season(
-        self, team_id: int, year: int, *, wins: int, losses: int, ties: int = 0
-    ) -> None:
-        """チームのシーズン成績を登録する。"""
-        team = self._teams.find_by_id(team_id)
-        team.record_season(
-            Season(year), TeamRecord(wins=wins, losses=losses, ties=ties)
+    def record_game(
+        self,
+        *,
+        year: int,
+        played_on,
+        home_team_id: int,
+        away_team_id: int,
+        home_score: int,
+        away_score: int,
+    ) -> Game:
+        """試合を登録する。勝敗はここから集計されるので、別途入力しない。"""
+        game = Game(
+            season=Season(year),
+            played_on=played_on,
+            home_team_id=home_team_id,
+            away_team_id=away_team_id,
+            home_score=home_score,
+            away_score=away_score,
         )
-        self._teams.save(team)
+        return self._games.save(game)
 
     def get_admin_overview(self) -> AdminOverview:
         """管理画面トップ用の概況。
@@ -260,17 +276,12 @@ class TeamApplicationService:
         return player
 
     def update_player(
-        self,
-        team_id: int,
-        player_id: int,
-        *,
-        name: str,
-        number: int,
-        position_label: str,
-        batting: BattingLine | None = None,
-        pitching: PitchingLine | None = None,
+        self, team_id: int, player_id: int, *, name: str, number: int, position_label: str
     ) -> Player:
-        """選手の基本情報と成績を更新する。"""
+        """選手の基本情報を更新する。
+
+        成績は試合から集計するため、ここでは扱わない。
+        """
         team = self._teams.find_by_id(team_id)
         player = team.find_player(player_id)
 
@@ -278,11 +289,14 @@ class TeamApplicationService:
         team.change_player_number(player, JerseyNumber(number))
         player.change_position(Position.from_label(position_label))
 
-        if batting is not None:
-            player.record_batting(batting)
-        if pitching is not None:
-            player.record_pitching(pitching)
+        self._teams.save(team)
+        return player
 
+    def retire_player(self, team_id: int, player_id: int) -> Player:
+        """選手を退団させる。成績は残り、背番号は再利用できるようになる。"""
+        team = self._teams.find_by_id(team_id)
+        player = team.find_player(player_id)
+        player.retire()
         self._teams.save(team)
         return player
 

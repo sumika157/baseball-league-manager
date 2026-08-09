@@ -150,6 +150,12 @@ class InningsPitched:
         """実数としての投球回（5.2 → 5.666...）。指標計算に用いる。"""
         return self.outs / self.OUTS_PER_INNING
 
+    def __add__(self, other: InningsPitched) -> InningsPitched:
+        """試合ごとの投球回を積み上げる。アウト数で持っているので単純加算でよい。"""
+        if not isinstance(other, InningsPitched):
+            return NotImplemented
+        return InningsPitched(outs=self.outs + other.outs)
+
     def __str__(self) -> str:
         return f"{self.to_notation():.1f}"
 
@@ -239,6 +245,34 @@ class BattingLine:
         """OPS。出塁率＋長打率。"""
         return self.on_base_percentage + self.slugging_percentage
 
+    def __add__(self, other: BattingLine) -> BattingLine:
+        """試合ごとの成績を積み上げて通算にする。
+
+        率（打率・OPS など）は足し合わせず、合算した実数から計算し直す。
+        率の平均は正しい率にならないため。
+        """
+        if not isinstance(other, BattingLine):
+            return NotImplemented
+        return BattingLine(
+            at_bats=self.at_bats + other.at_bats,
+            singles=self.singles + other.singles,
+            doubles=self.doubles + other.doubles,
+            triples=self.triples + other.triples,
+            home_runs=self.home_runs + other.home_runs,
+            runs_batted_in=self.runs_batted_in + other.runs_batted_in,
+            walks=self.walks + other.walks,
+            hit_by_pitch=self.hit_by_pitch + other.hit_by_pitch,
+            sacrifice_flies=self.sacrifice_flies + other.sacrifice_flies,
+        )
+
+    @classmethod
+    def total(cls, lines) -> BattingLine:
+        """複数試合の合計。"""
+        result = cls()
+        for line in lines:
+            result = result + line
+        return result
+
 
 @dataclass(frozen=True)
 class PitchingLine:
@@ -289,6 +323,29 @@ class PitchingLine:
         if self._outs == 0:
             return 0.0
         return self.strikeouts * 27.0 / self._outs
+
+    def __add__(self, other: PitchingLine) -> PitchingLine:
+        """試合ごとの成績を積み上げて通算にする。率は合算後に計算し直す。"""
+        if not isinstance(other, PitchingLine):
+            return NotImplemented
+        return PitchingLine(
+            innings=self.innings + other.innings,
+            wins=self.wins + other.wins,
+            losses=self.losses + other.losses,
+            saves=self.saves + other.saves,
+            earned_runs=self.earned_runs + other.earned_runs,
+            strikeouts=self.strikeouts + other.strikeouts,
+            hits_allowed=self.hits_allowed + other.hits_allowed,
+            walks_allowed=self.walks_allowed + other.walks_allowed,
+        )
+
+    @classmethod
+    def total(cls, lines) -> PitchingLine:
+        """複数試合の合計。"""
+        result = cls()
+        for line in lines:
+            result = result + line
+        return result
 
 
 @dataclass(frozen=True)

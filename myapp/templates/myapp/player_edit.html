@@ -19,7 +19,10 @@
   <p class="page-subtitle">{{ player.position }}</p>
 </div>
 
-{# 保存済みの成績から算出した指標。入力がどう効くかをその場で確認できる #}
+{% comment %}
+成績は試合の記録から集計した結果なので、この画面では編集できない。
+値を直接いじれるようにすると試合の明細と食い違ってしまうため。
+{% endcomment %}
 <div class="stat-strip">
   {% if player.is_pitcher %}
     <div class="stat-cell">
@@ -91,89 +94,47 @@
   </div>
 
   <div class="card mb-3">
-    <div class="card-header">{% if player.is_pitcher %}投球成績{% else %}打撃成績{% endif %}</div>
+    <div class="card-header">
+      {% if player.is_pitcher %}投球成績{% else %}打撃成績{% endif %}（通算）
+    </div>
     <div class="card-body">
+      <p class="page-subtitle mb-3" style="font-size: 0.8125rem;">
+        試合の記録から集計しています。修正するには管理画面で該当の試合を編集してください。
+      </p>
       <div class="row g-3">
         {% if player.is_pitcher %}
-          <div class="col-6 col-md-3">
-            <label class="form-label">投球回</label>
-            <input type="number" step="0.1" min="0" name="innings_pitched"
-                   class="form-control" value="{{ player.innings_pitched }}" />
-            <div class="form-text">5.2 = 5回と2/3</div>
-          </div>
-          <div class="col-6 col-md-3">
-            <label class="form-label">自責点</label>
-            <input type="number" min="0" name="earned_runs" class="form-control" value="{{ player.earned_runs }}" />
-          </div>
-          <div class="col-6 col-md-3">
-            <label class="form-label">勝利</label>
-            <input type="number" min="0" name="wins" class="form-control" value="{{ player.wins }}" />
-          </div>
-          <div class="col-6 col-md-3">
-            <label class="form-label">敗戦</label>
-            <input type="number" min="0" name="losses" class="form-control" value="{{ player.losses }}" />
-          </div>
-          <div class="col-6 col-md-3">
-            <label class="form-label">セーブ</label>
-            <input type="number" min="0" name="saves" class="form-control" value="{{ player.saves }}" />
-          </div>
-          <div class="col-6 col-md-3">
-            <label class="form-label">奪三振</label>
-            <input type="number" min="0" name="strikeouts" class="form-control" value="{{ player.strikeouts }}" />
-          </div>
-          <div class="col-6 col-md-3">
-            <label class="form-label">被安打</label>
-            <input type="number" min="0" name="hits_allowed" class="form-control" value="{{ player.hits_allowed }}" />
-          </div>
-          <div class="col-6 col-md-3">
-            <label class="form-label">与四球</label>
-            <input type="number" min="0" name="walks_allowed" class="form-control" value="{{ player.walks_allowed }}" />
-          </div>
+          {% include 'myapp/_stat_readout.html' with label='投球回' value=player.innings_pitched %}
+          {% include 'myapp/_stat_readout.html' with label='勝利' value=player.wins %}
+          {% include 'myapp/_stat_readout.html' with label='敗戦' value=player.losses %}
+          {% include 'myapp/_stat_readout.html' with label='セーブ' value=player.saves %}
+          {% include 'myapp/_stat_readout.html' with label='自責点' value=player.earned_runs %}
+          {% include 'myapp/_stat_readout.html' with label='奪三振' value=player.strikeouts %}
+          {% include 'myapp/_stat_readout.html' with label='被安打' value=player.hits_allowed %}
+          {% include 'myapp/_stat_readout.html' with label='与四球' value=player.walks_allowed %}
         {% else %}
-          <div class="col-6 col-md-3">
-            <label class="form-label">打数</label>
-            <input type="number" min="0" name="at_bats" class="form-control" value="{{ player.at_bats }}" />
-          </div>
-          <div class="col-6 col-md-3">
-            <label class="form-label">単打</label>
-            <input type="number" min="0" name="singles" class="form-control" value="{{ player.singles }}" />
-          </div>
-          <div class="col-6 col-md-3">
-            <label class="form-label">二塁打</label>
-            <input type="number" min="0" name="doubles" class="form-control" value="{{ player.doubles }}" />
-          </div>
-          <div class="col-6 col-md-3">
-            <label class="form-label">三塁打</label>
-            <input type="number" min="0" name="triples" class="form-control" value="{{ player.triples }}" />
-          </div>
-          <div class="col-6 col-md-3">
-            <label class="form-label">本塁打</label>
-            <input type="number" min="0" name="home_runs" class="form-control" value="{{ player.home_runs }}" />
-          </div>
-          <div class="col-6 col-md-3">
-            <label class="form-label">打点</label>
-            <input type="number" min="0" name="runs_batted_in" class="form-control" value="{{ player.runs_batted_in }}" />
-          </div>
-          <div class="col-6 col-md-3">
-            <label class="form-label">四球</label>
-            <input type="number" min="0" name="walks" class="form-control" value="{{ player.walks }}" />
-          </div>
-          <div class="col-6 col-md-3">
-            <label class="form-label">死球</label>
-            <input type="number" min="0" name="hit_by_pitch" class="form-control" value="{{ player.hit_by_pitch }}" />
-          </div>
-          <div class="col-6 col-md-3">
-            <label class="form-label">犠飛</label>
-            <input type="number" min="0" name="sacrifice_flies" class="form-control" value="{{ player.sacrifice_flies }}" />
-          </div>
+          {% include 'myapp/_stat_readout.html' with label='打数' value=player.at_bats %}
+          {% include 'myapp/_stat_readout.html' with label='単打' value=player.singles %}
+          {% include 'myapp/_stat_readout.html' with label='二塁打' value=player.doubles %}
+          {% include 'myapp/_stat_readout.html' with label='三塁打' value=player.triples %}
+          {% include 'myapp/_stat_readout.html' with label='本塁打' value=player.home_runs %}
+          {% include 'myapp/_stat_readout.html' with label='打点' value=player.runs_batted_in %}
+          {% include 'myapp/_stat_readout.html' with label='四球' value=player.walks %}
+          {% include 'myapp/_stat_readout.html' with label='死球' value=player.hit_by_pitch %}
+          {% include 'myapp/_stat_readout.html' with label='犠飛' value=player.sacrifice_flies %}
         {% endif %}
       </div>
     </div>
   </div>
 
-  <div class="d-flex justify-content-between">
+  <div class="d-flex justify-content-between align-items-center">
     <a href="{% url 'player_list' player.team_id %}" class="btn btn-secondary">戻る</a>
-    <button type="submit" class="btn btn-primary">更新する</button>
+    <div class="d-flex gap-2">
+      <button type="submit" name="retire" value="1" class="btn btn-outline-danger"
+              onclick="return confirm('{{ player.name }} 選手を退団にします。成績は残り、背番号は再利用できるようになります。よろしいですか?')">
+        退団にする
+      </button>
+      <button type="submit" class="btn btn-primary">更新する</button>
+    </div>
   </div>
 </form>
 {% endblock %}

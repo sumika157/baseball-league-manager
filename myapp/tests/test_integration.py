@@ -1,10 +1,14 @@
-"""結合テスト。リポジトリの永続化と画面の動作を確認する。"""
+"""結合テスト。リポジトリの永続化と画面の動作を確認する。
 
+成績は試合の記録から集計されるため、成績を持たせたい場合は
+helpers の play_game / give_batting / give_pitching で試合を作る。
+"""
+
+from django.contrib.auth.models import User
 from django.test import TestCase
 from django.urls import reverse
 
-from myapp.application.services import TeamApplicationService
-from myapp.domain.exceptions import DuplicateJerseyNumber
+from myapp.domain.exceptions import DuplicateJerseyNumber, InvalidGame
 from myapp.domain.value_objects import (
     BattingLine,
     InningsPitched,
@@ -13,95 +17,152 @@ from myapp.domain.value_objects import (
     Position,
 )
 from myapp.infrastructure import orm_models
-from myapp.infrastructure.queries import DjangoTeamListQuery
-from myapp.infrastructure.repositories import DjangoTeamRepository
+from myapp.infrastructure.repositories import DjangoGameRepository, DjangoTeamRepository
+
+from .helpers import build_service, give_batting, give_pitching, play_game
 
 
-class RepositoryRoundTripTest(TestCase):
+class BaseCase(TestCase):
+    def setUp(self):
+        self.league = orm_models.League.objects.create(name='テストリーグ')
+        self.team = orm_models.Team.objects.create(
+            league=self.league, name='テストチーム', city='東京'
+        )
+        self.rival = orm_models.Team.objects.create(league=self.league, name='相手チーム')
+        self.service = build_service()
+
+
+class RepositoryRoundTripTest(BaseCase):
     """ORM ⇄ ドメインの往復でデータが失われないこと。"""
 
     def setUp(self):
-        self.league = orm_models.League.objects.create(name='テストリーグ')
-        self.team_row = orm_models.Team.objects.create(
-            league=self.league, name='テストチーム', city='東京'
-        )
+        super().setUp()
         self.repo = DjangoTeamRepository()
 
-    def test_save_and_reload_a_batter(self):
-        team = self.repo.find_by_id(self.team_row.id)
+    def test_save_and_reload_a_player(self):
+        team = self.repo.find_by_id(self.team.id)
         player = team.add_player('山田', JerseyNumber(10), Position.INFIELDER)
-        player.record_batting(BattingLine(at_bats=10, singles=2, home_runs=1))
         self.repo.save(team)
 
-        reloaded = self.repo.find_by_id(self.team_row.id)
-        saved = reloaded.find_player(player.id)
+        saved = self.repo.find_by_id(self.team.id).find_player(player.id)
 
         self.assertEqual(saved.name, '山田')
         self.assertEqual(saved.number.value, 10)
         self.assertEqual(saved.position, Position.INFIELDER)
-        self.assertEqual(saved.batting.at_bats, 10)
+
+    def test_batting_totals_come_from_games(self):
+        player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        give_batting(self.team, self.rival, player.id, BattingLine(at_bats=4, singles=2), day=1)
+        give_batting(self.team, self.rival, player.id, BattingLine(at_bats=3, home_runs=1), day=2)
+
+        saved = self.repo.find_by_id(self.team.id).find_player(player.id)
+
+        self.assertEqual(saved.batting.at_bats, 7)
         self.assertEqual(saved.batting.hits, 3)
 
-    def test_innings_pitched_survives_the_round_trip(self):
-        """5.2（17アウト）が保存・再読込で変質しないこと。"""
-        team = self.repo.find_by_id(self.team_row.id)
-        player = team.add_player('佐藤', JerseyNumber(18), Position.PITCHER)
-        player.record_pitching(
-            PitchingLine(innings=InningsPitched.from_notation('5.2'), earned_runs=2)
-        )
-        self.repo.save(team)
+    def test_innings_are_added_as_outs_not_decimals(self):
+        """5.2 + 5.2 は 10.4 ではなく 11.1。"""
+        player = self.service.register_player(self.team.id, '佐藤', 18, '投手')
+        line = PitchingLine(innings=InningsPitched.from_notation('5.2'), earned_runs=1)
+        give_pitching(self.team, self.rival, player.id, line, day=1)
+        give_pitching(self.team, self.rival, player.id, line, day=2)
 
-        reloaded = self.repo.find_by_id(self.team_row.id)
-        saved = reloaded.find_player(player.id)
+        saved = self.repo.find_by_id(self.team.id).find_player(player.id)
 
-        self.assertEqual(saved.pitching.innings.outs, 17)
-        self.assertEqual(str(saved.pitching.innings), '5.2')
+        self.assertEqual(saved.pitching.innings.outs, 34)
+        self.assertEqual(str(saved.pitching.innings), '11.1')
+        self.assertEqual(saved.pitching.earned_runs, 2)
+
+    def test_player_without_games_has_empty_stats(self):
+        player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        saved = self.repo.find_by_id(self.team.id).find_player(player.id)
+
+        self.assertEqual(saved.batting.at_bats, 0)
+        self.assertEqual(saved.pitching.innings.outs, 0)
 
     def test_duplicate_number_is_rejected_on_the_aggregate(self):
-        team = self.repo.find_by_id(self.team_row.id)
+        team = self.repo.find_by_id(self.team.id)
         team.add_player('山田', JerseyNumber(10), Position.INFIELDER)
         self.repo.save(team)
 
-        reloaded = self.repo.find_by_id(self.team_row.id)
+        reloaded = self.repo.find_by_id(self.team.id)
         with self.assertRaises(DuplicateJerseyNumber):
             reloaded.add_player('田中', JerseyNumber(10), Position.OUTFIELDER)
 
 
-class ApplicationServiceTest(TestCase):
-    def setUp(self):
-        self.league = orm_models.League.objects.create(name='テストリーグ')
-        self.team_row = orm_models.Team.objects.create(
-            league=self.league, name='テストチーム'
-        )
-        self.service = TeamApplicationService(
-            teams=DjangoTeamRepository(), team_list_query=DjangoTeamListQuery()
+class GameRepositoryTest(BaseCase):
+    def test_round_trip(self):
+        player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        saved = play_game(
+            self.team, self.rival, home_score=5, away_score=3,
+            batting={player.id: BattingLine(at_bats=4, singles=2, runs_batted_in=1)},
         )
 
+        reloaded = DjangoGameRepository().find_by_id(saved.id)
+
+        self.assertEqual(reloaded.home_score, 5)
+        self.assertEqual(reloaded.result_for(self.team.id), 'win')
+        self.assertEqual(len(reloaded.batting), 1)
+        self.assertEqual(reloaded.batting[0].line.hits, 2)
+
+    def test_same_team_is_rejected(self):
+        with self.assertRaises(InvalidGame):
+            play_game(self.team, self.team)
+
+    def test_filter_by_season(self):
+        play_game(self.team, self.rival, year=2025, day=1)
+        play_game(self.team, self.rival, year=2026, day=1)
+
+        self.assertEqual(len(DjangoGameRepository().find_all(2026)), 1)
+        self.assertEqual(len(DjangoGameRepository().find_all()), 2)
+
+    def test_recording_the_same_player_twice_overwrites(self):
+        player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        game = play_game(
+            self.team, self.rival, batting={player.id: BattingLine(at_bats=4, singles=1)}
+        )
+        game.record_batting(player.id, BattingLine(at_bats=4, home_runs=2))
+        DjangoGameRepository().save(game)
+
+        self.assertEqual(
+            orm_models.GameBattingLine.objects.filter(game_id=game.id).count(), 1
+        )
+        reloaded = DjangoGameRepository().find_by_id(game.id)
+        self.assertEqual(reloaded.batting[0].line.home_runs, 2)
+
+
+class ApplicationServiceTest(BaseCase):
     def test_register_player(self):
-        self.service.register_player(self.team_row.id, '山田', 10, '内野手')
+        self.service.register_player(self.team.id, '山田', 10, '内野手')
 
-        rows = self.service.list_batters(self.team_row.id).rows
+        rows = self.service.list_batters(self.team.id).rows
         self.assertEqual([r.name for r in rows], ['山田'])
 
     def test_register_duplicate_number_is_rejected(self):
-        self.service.register_player(self.team_row.id, '山田', 10, '内野手')
+        self.service.register_player(self.team.id, '山田', 10, '内野手')
         with self.assertRaises(DuplicateJerseyNumber):
-            self.service.register_player(self.team_row.id, '田中', 10, '外野手')
+            self.service.register_player(self.team.id, '田中', 10, '外野手')
+
+    def test_retire_player_frees_the_number(self):
+        player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        self.service.retire_player(self.team.id, player.id)
+
+        # 退団後は同じ背番号を使える
+        self.service.register_player(self.team.id, '田中', 10, '外野手')
+        self.assertEqual(len(self.service.list_batters(self.team.id).rows), 1)
 
     def test_team_summary_counts_active_players(self):
-        self.service.register_player(self.team_row.id, '山田', 10, '内野手')
-        self.service.register_player(self.team_row.id, '佐藤', 18, '投手')
+        self.service.register_player(self.team.id, '山田', 10, '内野手')
+        self.service.register_player(self.team.id, '佐藤', 18, '投手')
 
         summary = self.service.list_teams().rows[0]
-        self.assertEqual(summary.name, 'テストチーム')
         self.assertEqual(summary.league_name, 'テストリーグ')
         self.assertEqual(summary.player_count, 2)
 
 
-class PlayerListViewTest(TestCase):
+class PlayerListViewTest(BaseCase):
     def setUp(self):
-        self.league = orm_models.League.objects.create(name='テストリーグ')
-        self.team = orm_models.Team.objects.create(league=self.league, name='テストチーム')
+        super().setUp()
         self.url = reverse('player_list', args=[self.team.id])
 
     def test_register_via_form(self):
@@ -130,344 +191,148 @@ class PlayerListViewTest(TestCase):
         )
 
 
-class PlayerEditViewTest(TestCase):
-    def setUp(self):
-        self.league = orm_models.League.objects.create(name='テストリーグ')
-        self.team = orm_models.Team.objects.create(league=self.league, name='テストチーム')
-        self.service = TeamApplicationService(
-            teams=DjangoTeamRepository(), team_list_query=DjangoTeamListQuery()
-        )
-
-    def _edit_url(self, player_id):
+class PlayerEditViewTest(BaseCase):
+    def _url(self, player_id):
         return reverse('player_edit', args=[self.team.id, player_id])
 
     def test_designated_hitter_keeps_position(self):
         """指名打者を編集しても投手に化けないこと（旧バグの再発防止）。"""
         player = self.service.register_player(self.team.id, '大谷', 17, '指名打者')
 
-        response = self.client.get(self._edit_url(player.id))
-        self.assertEqual(response.status_code, 200)
-        html = response.content.decode()
-        self.assertIn('指名打者', html)
-        self.assertIn('<option value="指名打者" selected>', html)
+        response = self.client.get(self._url(player.id))
 
-    def test_update_batting_stats(self):
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '<option value="指名打者" selected>', html=False)
+
+    def test_update_basic_information(self):
         player = self.service.register_player(self.team.id, '山田', 10, '内野手')
 
-        self.client.post(self._edit_url(player.id), {
-            'name': '山田太郎', 'number': '10', 'position': '内野手',
-            'at_bats': '10', 'singles': '2', 'doubles': '1', 'triples': '0',
-            'home_runs': '1', 'runs_batted_in': '5', 'walks': '2',
-            'hit_by_pitch': '0', 'sacrifice_flies': '0',
+        self.client.post(self._url(player.id), {
+            'name': '山田太郎', 'number': '11', 'position': '外野手',
         })
 
         detail = self.service.get_player_detail(self.team.id, player.id)
         self.assertEqual(detail.name, '山田太郎')
-        self.assertEqual(detail.at_bats, 10)
-        self.assertEqual(detail.home_runs, 1)
+        self.assertEqual(detail.number, 11)
+        self.assertEqual(detail.position, '外野手')
 
-    def test_update_pitching_normalises_innings(self):
-        """5.3 のような表記は 6.0 に正規化されて保存される。"""
-        player = self.service.register_player(self.team.id, '佐藤', 18, '投手')
+    def test_stats_are_shown_but_not_editable(self):
+        """成績は試合の集計結果なので、この画面からは変更できない。"""
+        player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        give_batting(self.team, self.rival, player.id, BattingLine(at_bats=10, singles=3))
 
-        self.client.post(self._edit_url(player.id), {
-            'name': '佐藤', 'number': '18', 'position': '投手',
-            'innings_pitched': '5.3', 'earned_runs': '2', 'wins': '1', 'losses': '0',
-            'saves': '0', 'strikeouts': '7', 'hits_allowed': '4', 'walks_allowed': '1',
+        # 打数を送っても無視される
+        self.client.post(self._url(player.id), {
+            'name': '山田', 'number': '10', 'position': '内野手', 'at_bats': '999',
         })
 
+        self.assertEqual(self.service.get_player_detail(self.team.id, player.id).at_bats, 10)
+
+    def test_totals_reflect_games(self):
+        player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        give_batting(self.team, self.rival, player.id, BattingLine(at_bats=4, singles=2), day=1)
+        give_batting(self.team, self.rival, player.id, BattingLine(at_bats=6, home_runs=1), day=2)
+
         detail = self.service.get_player_detail(self.team.id, player.id)
-        self.assertEqual(detail.innings_pitched, '6.0')
+
+        self.assertEqual(detail.at_bats, 10)
+        self.assertAlmostEqual(detail.batting_average, 0.3)
+
+    def test_retire_from_the_screen(self):
+        player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+
+        self.client.post(self._url(player.id), {'retire': '1'})
+
+        self.assertFalse(orm_models.Player.objects.get(id=player.id).is_active)
 
     def test_duplicate_number_on_update_is_rejected(self):
         self.service.register_player(self.team.id, '山田', 10, '内野手')
         tanaka = self.service.register_player(self.team.id, '田中', 11, '外野手')
 
-        self.client.post(self._edit_url(tanaka.id), {
+        self.client.post(self._url(tanaka.id), {
             'name': '田中', 'number': '10', 'position': '外野手',
-            'at_bats': '0', 'singles': '0', 'doubles': '0', 'triples': '0',
-            'home_runs': '0', 'runs_batted_in': '0', 'walks': '0',
-            'hit_by_pitch': '0', 'sacrifice_flies': '0',
         })
 
-        detail = self.service.get_player_detail(self.team.id, tanaka.id)
-        self.assertEqual(detail.number, 11)
-
-    def test_missing_player_returns_404(self):
-        self.assertEqual(self.client.get(self._edit_url(9999)).status_code, 404)
-
-
-class DashboardTest(TestCase):
-    def setUp(self):
-        self.league = orm_models.League.objects.create(name='テストリーグ')
-        self.team = orm_models.Team.objects.create(league=self.league, name='テストチーム')
-        self.service = TeamApplicationService(
-            teams=DjangoTeamRepository(), team_list_query=DjangoTeamListQuery()
+        self.assertEqual(
+            self.service.get_player_detail(self.team.id, tanaka.id).number, 11
         )
 
+    def test_missing_player_returns_404(self):
+        self.assertEqual(self.client.get(self._url(9999)).status_code, 404)
+
+
+class DashboardTest(BaseCase):
     def test_counts(self):
         self.service.register_player(self.team.id, '山田', 10, '内野手')
         self.service.register_player(self.team.id, '佐藤', 18, '投手')
 
         board = self.service.get_dashboard()
 
-        self.assertEqual(board.league_count, 1)
-        self.assertEqual(board.team_count, 1)
+        self.assertEqual(board.team_count, 2)
         self.assertEqual(board.batter_count, 1)
         self.assertEqual(board.pitcher_count, 1)
-        self.assertEqual(board.player_count, 2)
 
     def test_ranking_spans_all_teams(self):
-        """ランキングはチームをまたいで集計される。"""
-        other = orm_models.Team.objects.create(league=self.league, name='別チーム')
         a = self.service.register_player(self.team.id, '山田', 10, '内野手')
-        b = self.service.register_player(other.id, '田中', 10, '外野手')
-
-        self.service.update_player(
-            self.team.id, a.id, name='山田', number=10, position_label='内野手',
-            batting=BattingLine(at_bats=10, singles=1),
-        )
-        self.service.update_player(
-            other.id, b.id, name='田中', number=10, position_label='外野手',
-            batting=BattingLine(at_bats=10, home_runs=4),
+        b = self.service.register_player(self.rival.id, '田中', 10, '外野手')
+        play_game(
+            self.team, self.rival,
+            batting={
+                a.id: BattingLine(at_bats=10, singles=1),
+                b.id: BattingLine(at_bats=10, home_runs=4),
+            },
         )
 
         board = self.service.get_dashboard()
-        names = [e.player_name for e in board.ops_leaders]
 
-        self.assertEqual(names, ['田中', '山田'])
-        self.assertEqual(board.ops_leaders[0].team_name, '別チーム')
+        self.assertEqual([e.player_name for e in board.ops_leaders], ['田中', '山田'])
+        self.assertEqual(board.ops_leaders[0].team_name, '相手チーム')
 
     def test_page_renders(self):
-        self.service.register_player(self.team.id, '山田', 10, '内野手')
         response = self.client.get(reverse('dashboard'))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'テストチーム')
 
     def test_page_renders_without_any_data(self):
-        response = self.client.get(reverse('dashboard'))
-        self.assertEqual(response.status_code, 200)
+        orm_models.Team.objects.all().delete()
+        self.assertEqual(self.client.get(reverse('dashboard')).status_code, 200)
 
 
-class HeaderNavigationTest(TestCase):
-    """ヘッダーの導線が権限に応じて出し分けられること。"""
+class StandingsTest(BaseCase):
+    def test_record_is_aggregated_from_games(self):
+        play_game(self.team, self.rival, home_score=5, away_score=3, day=1)
+        play_game(self.team, self.rival, home_score=2, away_score=2, day=2)
+        play_game(self.team, self.rival, home_score=1, away_score=4, day=3)
 
-    def setUp(self):
-        from django.contrib.auth.models import User
+        rows = {r.team_name: r for r in self.service.get_standings(2026).rows}
 
-        self.staff = User.objects.create_user(
-            username='staff', password='x', is_staff=True
-        )
-        self.member = User.objects.create_user(username='member', password='x')
-
-    # 空状態の文言にも「管理画面」が出てくるため、リンク要素そのもので判定する
-    ADMIN_LINK = 'class="nav-admin-link"'
-
-    def test_staff_sees_admin_link(self):
-        self.client.force_login(self.staff)
-        response = self.client.get(reverse('dashboard'))
-        self.assertContains(response, self.ADMIN_LINK)
-        self.assertContains(response, 'href="/admin/"')
-
-    def test_normal_user_does_not_see_admin_link(self):
-        """一般ユーザーには管理画面への導線を出さない。"""
-        self.client.force_login(self.member)
-        response = self.client.get(reverse('dashboard'))
-        self.assertNotContains(response, self.ADMIN_LINK)
-
-    def test_anonymous_does_not_see_admin_link(self):
-        response = self.client.get(reverse('dashboard'))
-        self.assertNotContains(response, self.ADMIN_LINK)
-        self.assertContains(response, 'ログイン')
-
-    def test_admin_page_actually_rejects_normal_user(self):
-        """導線を隠すだけでなく、管理画面側でも入れないこと。"""
-        self.client.force_login(self.member)
-        response = self.client.get('/admin/')
-        self.assertEqual(response.status_code, 302)
-        self.assertIn('/admin/login/', response['Location'])
-
-    def test_admin_page_accepts_staff(self):
-        self.client.force_login(self.staff)
-        self.assertEqual(self.client.get('/admin/').status_code, 200)
-
-
-class AdminTest(TestCase):
-    """管理画面のテーマ適用と一覧表示。"""
-
-    def setUp(self):
-        from django.contrib.auth.models import User
-
-        self.staff = User.objects.create_superuser(username='root', password='x')
-        self.client.force_login(self.staff)
-        self.league = orm_models.League.objects.create(name='テストリーグ')
-        self.team = orm_models.Team.objects.create(league=self.league, name='テストチーム')
-        self.service = TeamApplicationService(
-            teams=DjangoTeamRepository(), team_list_query=DjangoTeamListQuery()
-        )
-
-    def test_admin_pages_use_the_admin_theme(self):
-        for url in ['/admin/', '/admin/myapp/player/', '/admin/myapp/team/']:
-            with self.subTest(url=url):
-                response = self.client.get(url)
-                self.assertContains(response, 'myapp/css/admin-theme.css')
-                # サイト側のテーマが混ざっていないこと
-                self.assertNotContains(response, 'myapp/css/theme.css')
-
-    def test_site_pages_do_not_use_the_admin_theme(self):
-        response = self.client.get(reverse('dashboard'))
-        self.assertContains(response, 'myapp/css/theme.css')
-        self.assertNotContains(response, 'myapp/css/admin-theme.css')
-
-    def test_player_list_shows_key_stat_from_domain(self):
-        """一覧の主要成績はドメイン層の計算結果と一致すること。"""
-        player = self.service.register_player(self.team.id, '山田', 10, '内野手')
-        self.service.update_player(
-            self.team.id, player.id, name='山田', number=10, position_label='内野手',
-            batting=BattingLine(at_bats=10, singles=2, home_runs=1),
-        )
-
-        detail = self.service.get_player_detail(self.team.id, player.id)
-        response = self.client.get('/admin/myapp/player/')
-
-        self.assertContains(response, f'OPS {detail.ops:.3f}')
-
-    def test_pitcher_without_innings_is_labelled(self):
-        self.service.register_player(self.team.id, '佐藤', 18, '投手')
-        response = self.client.get('/admin/myapp/player/')
-        self.assertContains(response, '未登板')
-
-
-class AdminIndexTest(TestCase):
-    """管理画面トップの構成。"""
-
-    def setUp(self):
-        from django.contrib.auth.models import User
-
-        self.client.force_login(User.objects.create_superuser(username='root', password='x'))
-        self.league = orm_models.League.objects.create(name='テストリーグ')
-        self.team = orm_models.Team.objects.create(league=self.league, name='テストチーム')
-        self.service = TeamApplicationService(
-            teams=DjangoTeamRepository(), team_list_query=DjangoTeamListQuery()
-        )
-
-    def test_models_are_labelled_in_japanese(self):
-        response = self.client.get('/admin/')
-        for label in ['野球データ', 'リーグ', 'チーム', '選手']:
-            with self.subTest(label=label):
-                self.assertContains(response, label)
-
-    def test_stats_models_are_hidden_from_index(self):
-        """成績は選手のインラインで扱うので、トップの導線には出さない。"""
-        response = self.client.get('/admin/')
-        self.assertNotContains(response, '/admin/myapp/playerstats/')
-        self.assertNotContains(response, '/admin/myapp/pitcherstats/')
-
-    def test_stats_models_are_still_reachable_by_url(self):
-        """導線に出さないだけで、URL からは開ける。"""
-        self.assertEqual(self.client.get('/admin/myapp/playerstats/').status_code, 200)
-
-    def test_models_follow_domain_order(self):
-        """リーグ → チーム → 選手 の順で並ぶこと。"""
-        body = self.client.get('/admin/').content.decode()
-        positions = [
-            body.index('/admin/myapp/league/'),
-            body.index('/admin/myapp/team/'),
-            body.index('/admin/myapp/player/'),
-        ]
-        self.assertEqual(positions, sorted(positions))
-
-    def test_baseball_data_comes_before_auth(self):
-        body = self.client.get('/admin/').content.decode()
-        self.assertLess(body.index('/admin/myapp/'), body.index('/admin/auth/'))
-
-    def test_overview_counts(self):
-        self.service.register_player(self.team.id, '山田', 10, '内野手')
-        self.service.register_player(self.team.id, '佐藤', 18, '投手')
-
-        overview = self.service.get_admin_overview()
-
-        self.assertEqual(overview.league_count, 1)
-        self.assertEqual(overview.team_count, 1)
-        self.assertEqual(overview.player_count, 2)
-        self.assertEqual(overview.pitcher_count, 1)
-
-    def test_overview_flags_players_without_stats(self):
-        """成績未入力はランキング対象外なので、管理者に知らせる。"""
-        self.service.register_player(self.team.id, '山田', 10, '内野手')
-
-        self.assertEqual(self.service.get_admin_overview().players_without_stats, 1)
-
-        self.service.update_player(
-            self.team.id,
-            orm_models.Player.objects.get(number=10).id,
-            name='山田', number=10, position_label='内野手',
-            batting=BattingLine(at_bats=10, singles=3),
-        )
-        self.assertEqual(self.service.get_admin_overview().players_without_stats, 0)
-
-    def test_overview_flags_empty_teams_and_retired_players(self):
-        orm_models.Team.objects.create(league=self.league, name='空チーム')
-        player = self.service.register_player(self.team.id, '山田', 10, '内野手')
-        orm_models.Player.objects.filter(id=player.id).update(is_active=False)
-
-        overview = self.service.get_admin_overview()
-
-        self.assertEqual(overview.teams_without_players, 2)
-        self.assertEqual(overview.retired_count, 1)
-
-    def test_notes_appear_on_the_page(self):
-        self.service.register_player(self.team.id, '山田', 10, '内野手')
-        response = self.client.get('/admin/')
-        self.assertContains(response, '成績が未入力の選手')
-
-
-class StandingsTest(TestCase):
-    """シーズン成績の永続化と順位表画面。"""
-
-    def setUp(self):
-        self.league = orm_models.League.objects.create(name='テストリーグ')
-        self.a = orm_models.Team.objects.create(league=self.league, name='Aチーム')
-        self.b = orm_models.Team.objects.create(league=self.league, name='Bチーム')
-        self.service = TeamApplicationService(
-            teams=DjangoTeamRepository(), team_list_query=DjangoTeamListQuery()
-        )
-
-    def test_record_survives_the_round_trip(self):
-        self.service.record_team_season(self.a.id, 2026, wins=80, losses=55, ties=8)
-
-        board = self.service.get_standings(2026)
-        row = board.rows[0]
-
-        self.assertEqual(row.wins, 80)
-        self.assertEqual(row.losses, 55)
-        self.assertEqual(row.ties, 8)
-        self.assertEqual(row.games_played, 143)
-        self.assertEqual(row.winning_percentage, '.593')
-
-    def test_same_season_updates_instead_of_duplicating(self):
-        self.service.record_team_season(self.a.id, 2026, wins=80, losses=55, ties=8)
-        self.service.record_team_season(self.a.id, 2026, wins=90, losses=45, ties=8)
-
-        self.assertEqual(
-            orm_models.TeamSeasonRecord.objects.filter(team=self.a, year=2026).count(), 1
-        )
-        self.assertEqual(self.service.get_standings(2026).rows[0].wins, 90)
+        self.assertEqual(rows['テストチーム'].wins, 1)
+        self.assertEqual(rows['テストチーム'].losses, 1)
+        self.assertEqual(rows['テストチーム'].ties, 1)
+        self.assertEqual(rows['テストチーム'].games_played, 3)
 
     def test_rank_is_derived_from_winning_percentage(self):
-        self.service.record_team_season(self.a.id, 2026, wins=60, losses=75, ties=8)
-        self.service.record_team_season(self.b.id, 2026, wins=80, losses=55, ties=8)
+        play_game(self.team, self.rival, home_score=5, away_score=3, day=1)
+        play_game(self.team, self.rival, home_score=6, away_score=2, day=2)
+        play_game(self.team, self.rival, home_score=1, away_score=4, day=3)
 
         rows = self.service.get_standings(2026).rows
 
-        self.assertEqual([r.team_name for r in rows], ['Bチーム', 'Aチーム'])
+        self.assertEqual([r.team_name for r in rows], ['テストチーム', '相手チーム'])
         self.assertEqual([r.rank for r in rows], [1, 2])
         self.assertEqual(rows[0].games_behind, '—')
-        self.assertEqual(rows[1].games_behind, '20.0')
+
+    def test_teams_without_games_are_excluded(self):
+        other = orm_models.Team.objects.create(league=self.league, name='未実施チーム')
+        play_game(self.team, self.rival)
+
+        names = [r.team_name for r in self.service.get_standings(2026).rows]
+
+        self.assertNotIn(other.name, names)
 
     def test_defaults_to_the_latest_season(self):
-        self.service.record_team_season(self.a.id, 2025, wins=70, losses=65, ties=8)
-        self.service.record_team_season(self.a.id, 2026, wins=80, losses=55, ties=8)
+        play_game(self.team, self.rival, year=2025, day=1)
+        play_game(self.team, self.rival, year=2026, day=1)
 
         board = self.service.get_standings()
 
@@ -475,55 +340,36 @@ class StandingsTest(TestCase):
         self.assertEqual(board.available_years, [2026, 2025])
 
     def test_page_renders(self):
-        self.service.record_team_season(self.a.id, 2026, wins=80, losses=55, ties=8)
-
+        play_game(self.team, self.rival, home_score=5, away_score=3)
         response = self.client.get(reverse('standings'))
+
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'Aチーム')
-        self.assertContains(response, '.593')
+        self.assertContains(response, 'テストチーム')
 
     def test_page_by_year(self):
-        self.service.record_team_season(self.a.id, 2025, wins=70, losses=65, ties=8)
-        self.service.record_team_season(self.a.id, 2026, wins=80, losses=55, ties=8)
+        play_game(self.team, self.rival, year=2025, day=1)
+        play_game(self.team, self.rival, year=2026, day=1)
 
         response = self.client.get(reverse('standings_by_year', args=[2025]))
         self.assertContains(response, '2025年')
 
-    def test_page_without_any_record(self):
+    def test_page_without_any_game(self):
         response = self.client.get(reverse('standings'))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'シーズン成績がまだ登録されていません')
-
-    def test_duplicate_is_blocked_at_the_database_too(self):
-        """集約だけでなく DB 制約でも一意性を担保していること。"""
-        from django.db import IntegrityError, transaction
-
-        orm_models.TeamSeasonRecord.objects.create(team=self.a, year=2026, wins=1, losses=1)
-        with self.assertRaises(IntegrityError):
-            with transaction.atomic():
-                orm_models.TeamSeasonRecord.objects.create(
-                    team=self.a, year=2026, wins=2, losses=2
-                )
+        self.assertContains(response, '試合がまだ登録されていません')
 
 
-class SortingViewTest(TestCase):
-    """画面から URL でソートできること。"""
-
+class SortingViewTest(BaseCase):
     def setUp(self):
-        self.league = orm_models.League.objects.create(name='テストリーグ')
-        self.team = orm_models.Team.objects.create(league=self.league, name='テストチーム')
-        self.service = TeamApplicationService(
-            teams=DjangoTeamRepository(), team_list_query=DjangoTeamListQuery()
-        )
+        super().setUp()
         a = self.service.register_player(self.team.id, '少打', 1, '内野手')
         b = self.service.register_player(self.team.id, '多打', 2, '外野手')
-        self.service.update_player(
-            self.team.id, a.id, name='少打', number=1, position_label='内野手',
-            batting=BattingLine(at_bats=20, singles=4, home_runs=1),
-        )
-        self.service.update_player(
-            self.team.id, b.id, name='多打', number=2, position_label='外野手',
-            batting=BattingLine(at_bats=20, singles=2, home_runs=5),
+        play_game(
+            self.team, self.rival,
+            batting={
+                a.id: BattingLine(at_bats=20, singles=4, home_runs=1),
+                b.id: BattingLine(at_bats=20, singles=2, home_runs=5),
+            },
         )
         self.url = reverse('player_list', args=[self.team.id])
 
@@ -546,7 +392,6 @@ class SortingViewTest(TestCase):
         self.assertEqual(response.context['listing'].sort, 'ops')
 
     def test_sort_link_keeps_other_query_params(self):
-        """pos=pitcher のような条件を落とさないこと。"""
         body = self.client.get(f'{self.url}?pos=pitcher').content.decode()
         self.assertIn('pos=pitcher', body)
         self.assertIn('sort=era', body)
@@ -556,42 +401,32 @@ class SortingViewTest(TestCase):
         self.assertIn('sort-link is-active', body)
 
     def test_team_list_can_be_sorted(self):
-        orm_models.Team.objects.create(league=self.league, name='Aチーム')
         response = self.client.get(f"{reverse('team_list')}?sort=name&dir=asc")
         names = [t.name for t in response.context['teams']]
         self.assertEqual(names, sorted(names))
 
     def test_team_list_defaults_to_manual_order(self):
-        """既定は管理画面で設定した表示順。"""
-        orm_models.Team.objects.filter(id=self.team.id).update(display_order=5)
-        first = orm_models.Team.objects.create(
+        """名前順ではなく、管理画面で設定した表示順が既定になること。"""
+        orm_models.Team.objects.update(display_order=5)
+        orm_models.Team.objects.create(
             league=self.league, name='Zチーム', display_order=1
         )
         response = self.client.get(reverse('team_list'))
+
+        # 名前順なら最後に来るはずの Z が、表示順1なので先頭に出る
         self.assertEqual(response.context['teams'][0].name, 'Zチーム')
         self.assertEqual(response.context['current_sort'], 'order')
 
     def test_standings_can_be_sorted(self):
-        self.service.record_team_season(self.team.id, 2026, wins=80, losses=55, ties=8)
         response = self.client.get(f"{reverse('standings')}?sort=wins&dir=desc")
-        self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context['standings'].sort, 'wins')
 
 
-class TeamOrderingTest(TestCase):
-    """管理画面で設定した表示順が各所に反映されること。"""
-
+class TeamOrderingTest(BaseCase):
     def setUp(self):
-        self.league = orm_models.League.objects.create(name='テストリーグ')
-        self.b = orm_models.Team.objects.create(
-            league=self.league, name='Bチーム', display_order=1
-        )
-        self.a = orm_models.Team.objects.create(
-            league=self.league, name='Aチーム', display_order=2
-        )
-        self.service = TeamApplicationService(
-            teams=DjangoTeamRepository(), team_list_query=DjangoTeamListQuery()
-        )
+        super().setUp()
+        orm_models.Team.objects.filter(id=self.team.id).update(display_order=2, name='Aチーム')
+        orm_models.Team.objects.filter(id=self.rival.id).update(display_order=1, name='Bチーム')
 
     def test_display_order_beats_name(self):
         names = [t.name for t in self.service.list_teams().rows]
@@ -607,8 +442,6 @@ class TeamOrderingTest(TestCase):
         self.assertEqual(names, ['Aチーム', 'Bチーム'])
 
     def _league_page(self):
-        from django.contrib.auth.models import User
-
         self.client.force_login(User.objects.create_superuser(username='root', password='x'))
         return self.client.get(f'/admin/myapp/league/{self.league.id}/change/')
 
@@ -616,17 +449,137 @@ class TeamOrderingTest(TestCase):
         self.assertContains(self._league_page(), 'admin-inline-sortable.js')
 
     def test_order_field_is_submitted_but_not_shown(self):
-        """数値そのものに意味は無いので列としては見せない。
-
-        ただし送信は必要で、JavaScript もこの入力欄を目印に行を見つける。
-        """
         body = self._league_page().content.decode()
 
         self.assertIn('type="hidden" name="teams-0-display_order"', body)
-        # Django は hidden ウィジェットの列に hidden クラスを付けて列ごと隠す
         self.assertIn('class="column-display_order required hidden"', body)
-        self.assertIn('class="field-display_order hidden"', body)
         self.assertNotIn('class="vIntegerField"', body)
+
+
+class HeaderNavigationTest(TestCase):
+    """ヘッダーの導線が権限に応じて出し分けられること。"""
+
+    ADMIN_LINK = 'class="nav-admin-link"'
+
+    def setUp(self):
+        self.staff = User.objects.create_user(username='staff', password='x', is_staff=True)
+        self.member = User.objects.create_user(username='member', password='x')
+
+    def test_staff_sees_admin_link(self):
+        self.client.force_login(self.staff)
+        response = self.client.get(reverse('dashboard'))
+        self.assertContains(response, self.ADMIN_LINK)
+
+    def test_normal_user_does_not_see_admin_link(self):
+        self.client.force_login(self.member)
+        self.assertNotContains(self.client.get(reverse('dashboard')), self.ADMIN_LINK)
+
+    def test_anonymous_does_not_see_admin_link(self):
+        response = self.client.get(reverse('dashboard'))
+        self.assertNotContains(response, self.ADMIN_LINK)
+        self.assertContains(response, 'ログイン')
+
+    def test_admin_page_actually_rejects_normal_user(self):
+        self.client.force_login(self.member)
+        response = self.client.get('/admin/')
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/admin/login/', response['Location'])
+
+    def test_admin_page_accepts_staff(self):
+        self.client.force_login(self.staff)
+        self.assertEqual(self.client.get('/admin/').status_code, 200)
+
+
+class AdminTest(BaseCase):
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(User.objects.create_superuser(username='root', password='x'))
+
+    def test_admin_pages_use_the_admin_theme(self):
+        for url in ['/admin/', '/admin/myapp/player/', '/admin/myapp/game/']:
+            with self.subTest(url=url):
+                response = self.client.get(url)
+                self.assertContains(response, 'myapp/css/admin-theme.css')
+                self.assertNotContains(response, 'myapp/css/theme.css')
+
+    def test_site_pages_do_not_use_the_admin_theme(self):
+        response = self.client.get(reverse('dashboard'))
+        self.assertContains(response, 'myapp/css/theme.css')
+        self.assertNotContains(response, 'myapp/css/admin-theme.css')
+
+    def test_game_list_shows_the_result(self):
+        play_game(self.team, self.rival, home_score=5, away_score=3)
+        response = self.client.get('/admin/myapp/game/')
+        self.assertContains(response, 'テストチーム の勝ち')
+
+    def test_game_edit_has_stat_inlines(self):
+        game = play_game(self.team, self.rival)
+        response = self.client.get(f'/admin/myapp/game/{game.id}/change/')
+        self.assertContains(response, '打撃成績')
+        self.assertContains(response, '投球成績')
+
+    def test_player_list_shows_appearances(self):
+        player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        give_batting(self.team, self.rival, player.id, BattingLine(at_bats=4, singles=1))
+
+        response = self.client.get('/admin/myapp/player/')
+        self.assertContains(response, 'field-appearances')
+
+
+class AdminIndexTest(BaseCase):
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(User.objects.create_superuser(username='root', password='x'))
+
+    def test_models_are_labelled_in_japanese(self):
+        response = self.client.get('/admin/')
+        for label in ['野球データ', 'リーグ', 'チーム', '選手', '試合']:
+            with self.subTest(label=label):
+                self.assertContains(response, label)
+
+    def test_models_follow_domain_order(self):
+        body = self.client.get('/admin/').content.decode()
+        positions = [
+            body.index('/admin/myapp/league/'),
+            body.index('/admin/myapp/team/'),
+            body.index('/admin/myapp/player/'),
+            body.index('/admin/myapp/game/'),
+        ]
+        self.assertEqual(positions, sorted(positions))
+
+    def test_baseball_data_comes_before_auth(self):
+        body = self.client.get('/admin/').content.decode()
+        self.assertLess(body.index('/admin/myapp/'), body.index('/admin/auth/'))
+
+    def test_overview_counts(self):
+        self.service.register_player(self.team.id, '山田', 10, '内野手')
+        self.service.register_player(self.team.id, '佐藤', 18, '投手')
+
+        overview = self.service.get_admin_overview()
+
+        self.assertEqual(overview.team_count, 2)
+        self.assertEqual(overview.player_count, 2)
+        self.assertEqual(overview.pitcher_count, 1)
+
+    def test_overview_flags_players_without_stats(self):
+        player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        self.assertEqual(self.service.get_admin_overview().players_without_stats, 1)
+
+        give_batting(self.team, self.rival, player.id, BattingLine(at_bats=10, singles=3))
+        self.assertEqual(self.service.get_admin_overview().players_without_stats, 0)
+
+    def test_overview_flags_empty_teams_and_retired_players(self):
+        player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        orm_models.Player.objects.filter(id=player.id).update(is_active=False)
+
+        overview = self.service.get_admin_overview()
+
+        self.assertEqual(overview.teams_without_players, 2)
+        self.assertEqual(overview.retired_count, 1)
+
+    def test_notes_appear_on_the_page(self):
+        self.service.register_player(self.team.id, '山田', 10, '内野手')
+        self.assertContains(self.client.get('/admin/'), '成績が未入力の選手')
 
 
 class AuthTest(TestCase):

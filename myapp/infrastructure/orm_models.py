@@ -3,10 +3,8 @@
 ここにあるのは「テーブルの形」だけで、業務ルールは持たせない。
 ルールは myapp/domain 側にあり、両者の変換は repositories.py が担う。
 
-移動しても Django のアプリラベルは 'myapp' のままなので、
-既存のマイグレーションとテーブル名はそのまま使える。
-myapp/models.py が本モジュールを再輸出しており、Django のアプリ読み込み時に
-確実にインポートされるようにしている。
+チームの勝敗も選手の通算成績も**保持しない**。試合（Game）が唯一の出典で、
+必要な値はそこから集計して求める。同じ事実の出典を2つ作らないため。
 """
 
 from django.db import models
@@ -14,8 +12,6 @@ from django.db import models
 from ..domain.value_objects import Position
 
 # 守備位置の選択肢はドメインの Position を唯一の出典とする。
-# （以前はこことテンプレート2枚に別々の一覧があり、テンプレート側だけ
-#   '指名打者' が欠落して選手が投手に化けるバグが発生していた）
 POSITION_CHOICES = [(position.value, position.value) for position in Position]
 
 
@@ -51,32 +47,6 @@ class Team(models.Model):
         return self.name
 
 
-class TeamSeasonRecord(models.Model):
-    """チームの年間成績。順位は保持せず、勝率から算出する。"""
-
-    team = models.ForeignKey(
-        Team, on_delete=models.CASCADE, related_name='season_records', verbose_name='チーム'
-    )
-    year = models.IntegerField(verbose_name='シーズン')
-    wins = models.IntegerField(default=0, verbose_name='勝')
-    losses = models.IntegerField(default=0, verbose_name='敗')
-    ties = models.IntegerField(default=0, verbose_name='分')
-
-    class Meta:
-        verbose_name = 'シーズン成績'
-        verbose_name_plural = 'シーズン成績'
-        ordering = ['-year']
-        constraints = [
-            # 1チームにつき1シーズン1件。重複すると順位表が破綻する
-            models.UniqueConstraint(
-                fields=['team', 'year'], name='unique_team_season'
-            ),
-        ]
-
-    def __str__(self):
-        return f"{self.team.name} {self.year}年"
-
-
 class Player(models.Model):
     team = models.ForeignKey(
         Team, on_delete=models.CASCADE, related_name='players', verbose_name='チーム'
@@ -94,48 +64,100 @@ class Player(models.Model):
     class Meta:
         verbose_name = '選手'
         verbose_name_plural = '選手'
+        ordering = ['team', 'number']
 
     def __str__(self):
         return f"{self.number} {self.name} ({self.position})"
 
 
-class PlayerStats(models.Model):
-    player = models.OneToOneField(Player, on_delete=models.CASCADE, related_name='stats')
-    at_bats = models.IntegerField(default=0, verbose_name="打数")
-    singles = models.IntegerField(default=0, verbose_name="単打")
-    doubles = models.IntegerField(default=0, verbose_name="二塁打")
-    triples = models.IntegerField(default=0, verbose_name="三塁打")
-    home_runs = models.IntegerField(default=0, verbose_name="本塁打")
-    runs_batted_in = models.IntegerField(default=0, verbose_name="打点")
-    walks = models.IntegerField(default=0, verbose_name="四球")
-    hit_by_pitch = models.IntegerField(default=0, verbose_name="死球")
-    sacrifice_flies = models.IntegerField(default=0, verbose_name="犠飛")
+class Game(models.Model):
+    """試合。チームの勝敗も選手の成績も、すべてここから集計する。"""
+
+    year = models.IntegerField(verbose_name='シーズン')
+    played_on = models.DateField(verbose_name='試合日')
+    home_team = models.ForeignKey(
+        Team, on_delete=models.CASCADE, related_name='home_games', verbose_name='ホーム'
+    )
+    away_team = models.ForeignKey(
+        Team, on_delete=models.CASCADE, related_name='away_games', verbose_name='ビジター'
+    )
+    home_score = models.PositiveIntegerField(default=0, verbose_name='ホーム得点')
+    away_score = models.PositiveIntegerField(default=0, verbose_name='ビジター得点')
+
+    class Meta:
+        verbose_name = '試合'
+        verbose_name_plural = '試合'
+        ordering = ['-played_on', '-id']
+        constraints = [
+            models.CheckConstraint(
+                check=~models.Q(home_team=models.F('away_team')),
+                name='game_teams_differ',
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.played_on} {self.home_team.name} {self.home_score}-{self.away_score} {self.away_team.name}"
+
+
+class GameBattingLine(models.Model):
+    """1試合ぶんの打撃成績。"""
+
+    game = models.ForeignKey(
+        Game, on_delete=models.CASCADE, related_name='batting_lines', verbose_name='試合'
+    )
+    player = models.ForeignKey(
+        Player, on_delete=models.CASCADE, related_name='game_batting', verbose_name='選手'
+    )
+    at_bats = models.IntegerField(default=0, verbose_name='打数')
+    singles = models.IntegerField(default=0, verbose_name='単打')
+    doubles = models.IntegerField(default=0, verbose_name='二塁打')
+    triples = models.IntegerField(default=0, verbose_name='三塁打')
+    home_runs = models.IntegerField(default=0, verbose_name='本塁打')
+    runs_batted_in = models.IntegerField(default=0, verbose_name='打点')
+    walks = models.IntegerField(default=0, verbose_name='四球')
+    hit_by_pitch = models.IntegerField(default=0, verbose_name='死球')
+    sacrifice_flies = models.IntegerField(default=0, verbose_name='犠飛')
 
     class Meta:
         verbose_name = '打撃成績'
         verbose_name_plural = '打撃成績'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['game', 'player'], name='unique_game_batting'
+            ),
+        ]
 
     def __str__(self):
         return f"{self.player.name} の打撃成績"
 
 
-class PitcherStats(models.Model):
-    player = models.OneToOneField(
-        Player, on_delete=models.CASCADE, related_name='pitcher_stats'
+class GamePitchingLine(models.Model):
+    """1試合ぶんの投球成績。"""
+
+    game = models.ForeignKey(
+        Game, on_delete=models.CASCADE, related_name='pitching_lines', verbose_name='試合'
     )
-    wins = models.IntegerField(default=0, verbose_name="勝利")
-    losses = models.IntegerField(default=0, verbose_name="敗戦")
-    saves = models.IntegerField(default=0, verbose_name="セーブ")
+    player = models.ForeignKey(
+        Player, on_delete=models.CASCADE, related_name='game_pitching', verbose_name='選手'
+    )
     # 野球表記の投球回（5.2 = 5回と2/3）。解釈は domain の InningsPitched が担う。
-    innings_pitched = models.FloatField(default=0.0, verbose_name="投球回")
-    earned_runs = models.IntegerField(default=0, verbose_name="自責点")
-    strikeouts = models.IntegerField(default=0, verbose_name="奪三振")
-    hits_allowed = models.IntegerField(default=0, verbose_name="被安打")
-    walks_allowed = models.IntegerField(default=0, verbose_name="与四球")
+    innings_pitched = models.FloatField(default=0.0, verbose_name='投球回')
+    wins = models.IntegerField(default=0, verbose_name='勝利')
+    losses = models.IntegerField(default=0, verbose_name='敗戦')
+    saves = models.IntegerField(default=0, verbose_name='セーブ')
+    earned_runs = models.IntegerField(default=0, verbose_name='自責点')
+    strikeouts = models.IntegerField(default=0, verbose_name='奪三振')
+    hits_allowed = models.IntegerField(default=0, verbose_name='被安打')
+    walks_allowed = models.IntegerField(default=0, verbose_name='与四球')
 
     class Meta:
         verbose_name = '投球成績'
         verbose_name_plural = '投球成績'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['game', 'player'], name='unique_game_pitching'
+            ),
+        ]
 
     def __str__(self):
         return f"{self.player.name} の投球成績"

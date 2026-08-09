@@ -37,6 +37,14 @@ class DuplicateSeasonRecord(DomainError):
     """同一チームに同じシーズンの成績が二重に登録された。"""
 
 
+class InvalidGame(DomainError):
+    """試合として成立しない内容（同一チーム同士、負の得点など）。"""
+
+
+class GameNotFound(DomainError):
+    """指定された試合が存在しない。"""
+
+
 class TeamNotFound(DomainError):
     """指定されたチームが存在しない。"""
 

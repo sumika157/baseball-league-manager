@@ -13,10 +13,10 @@ from django.views.generic import CreateView
 
 from ..application.services import TeamApplicationService
 from ..domain.exceptions import DomainError, PlayerNotFound, TeamNotFound
-from ..domain.value_objects import BattingLine, InningsPitched, PitchingLine, Position
+from ..domain.value_objects import Position
 from ..infrastructure.queries import DjangoTeamListQuery
-from ..infrastructure.repositories import DjangoTeamRepository
-from .forms import BattingStatsForm, PitchingStatsForm, PlayerRegistrationForm, PlayerUpdateForm
+from ..infrastructure.repositories import DjangoGameRepository, DjangoTeamRepository
+from .forms import PlayerRegistrationForm, PlayerUpdateForm
 
 BATTER_MODE = 'batter'
 PITCHER_MODE = 'pitcher'
@@ -27,6 +27,7 @@ def _service() -> TeamApplicationService:
     return TeamApplicationService(
         teams=DjangoTeamRepository(),
         team_list_query=DjangoTeamListQuery(),
+        games=DjangoGameRepository(),
     )
 
 
@@ -139,45 +140,37 @@ def player_edit(request, team_id, player_id):
         raise Http404("選手が見つかりません。")
 
     if request.method == 'POST':
+        # 退団はフォームの検証を通さず、押されたボタンで判断する
+        if 'retire' in request.POST:
+            service.retire_player(team_id, player_id)
+            messages.success(request, f"{detail.name} 選手を退団にしました。")
+            return redirect(reverse('player_list', args=[team_id]))
+
         base_form = PlayerUpdateForm(request.POST)
-        is_pitcher = request.POST.get('position') == Position.PITCHER.value
-        stats_form = (
-            PitchingStatsForm(request.POST) if is_pitcher else BattingStatsForm(request.POST)
-        )
-
-        if base_form.is_valid() and stats_form.is_valid():
-            batting = pitching = None
+        if base_form.is_valid():
             try:
-                if is_pitcher:
-                    counts = stats_form.cleaned_counts()
-                    pitching = PitchingLine(
-                        innings=InningsPitched.from_notation(counts.pop('innings_pitched')),
-                        **counts,
-                    )
-                else:
-                    batting = BattingLine(**stats_form.cleaned_counts())
-
                 service.update_player(
                     team_id=team_id,
                     player_id=player_id,
                     name=base_form.cleaned_data['name'],
                     number=base_form.cleaned_data['number'],
                     position_label=base_form.cleaned_data['position'],
-                    batting=batting,
-                    pitching=pitching,
                 )
             except DomainError as error:
                 messages.error(request, str(error))
             else:
                 messages.success(request, "選手情報を更新しました。")
-                mode = PITCHER_MODE if is_pitcher else BATTER_MODE
+                mode = (
+                    PITCHER_MODE
+                    if base_form.cleaned_data['position'] == Position.PITCHER.value
+                    else BATTER_MODE
+                )
                 return redirect(
                     f"{reverse('player_list', args=[team_id])}?pos={mode}"
                 )
         else:
-            messages.error(request, _first_error(base_form) or _first_error(stats_form))
+            messages.error(request, _first_error(base_form))
 
-        # 入力エラー時は送信内容を保ったまま再表示する
         detail = service.get_player_detail(team_id, player_id)
 
     return render(request, 'myapp/player_edit.html', {

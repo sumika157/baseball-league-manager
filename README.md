@@ -250,7 +250,7 @@ my_django_project/
 │   ├── domain/             # 業務ルール（Django 非依存）
 │   │   ├── value_objects.py    Position / JerseyNumber /
 │   │   │                       InningsPitched / BattingLine / PitchingLine
-│   │   ├── entities.py         Team（集約ルート）/ Player / League
+│   │   ├── entities.py         Team / Game（集約ルート）/ Player / League
 │   │   ├── repositories.py     永続化のインターフェース
 │   │   └── exceptions.py       DomainError
 │   ├── application/        # ユースケース
@@ -307,7 +307,7 @@ presentation  →  application  →  domain  ←  infrastructure
 | ファイル | 内容 |
 | --- | --- |
 | `value_objects.py` | `Position` `JerseyNumber` `InningsPitched` `BattingLine` `PitchingLine` `Season` `TeamRecord` |
-| `entities.py` | `Team`（集約ルート）・`Player`・`TeamSeason`・`League` |
+| `entities.py` | `Team`・`Game`（いずれも集約ルート）・`Player`・`League` |
 | `services.py` | ランキングと順位表（誰を対象とし、何で順位づけるか） |
 | `repositories.py` | 永続化のインターフェース（実装は infrastructure） |
 | `exceptions.py` | `DomainError` とその派生 |
@@ -340,9 +340,25 @@ presentation  →  application  →  domain  ←  infrastructure
 その順序がサイトのチーム一覧とダッシュボードにも反映されます。
 ドラッグすると「表示順」の数値が振り直されるので、通常の「保存」で確定します。
 
-### シーズン成績と順位
+### 試合がすべての出典
 
-チームの勝敗は年ごとに登録します（管理画面のチーム編集画面から）。
+**チームの勝敗も選手の通算成績も、テーブルに持ちません。** 試合（`Game`）を登録すると、
+そこから集計して求めます。同じ事実の出典を2つ作らないためです。
+
+```
+試合を登録  →  スコア        →  チームの勝敗  →  順位
+            →  選手の成績    →  通算成績      →  打率・OPS・防御率
+```
+
+- 試合は管理画面の「試合」から登録します。1試合ぶんの打撃成績・投球成績も
+  そこでインラインで入力します
+- 選手編集画面では成績を変更できません。表示は集計結果で、直せるようにすると
+  試合の明細と食い違うためです
+- 投球回の合計は「アウト数」で足します。`5.2 + 5.2` は `10.4` ではなく `11.1` です
+- 率（打率・OPS・防御率）は試合ごとの率を平均せず、合算した実数から計算し直します
+
+### 順位
+
 **順位は保持せず、勝率の高い順で自動的に決まります。** 手入力できるようにすると
 勝敗と矛盾しても検知できないためです。
 
@@ -356,7 +372,10 @@ presentation  →  application  →  domain  ←  infrastructure
 順位づけの規則（未出場の選手を除く、規定打数など）はドメインサービスにあり、
 画面を持たなくても単体テストできます。
 
-**集約ルートは `Team`** です。「同一チーム内で背番号は重複しない」という不変条件は
+集約ルートは **`Team` と `Game`** の2つです。試合は2チームにまたがるため、
+`Team` の内部には置けず独立した集約になります。
+
+`Team` については「同一チーム内で背番号は重複しない」という不変条件は
 チーム全体を見ないと判定できないため、`Team` がロスターを保持して自ら保証します。
 
 ### 投球回（InningsPitched）

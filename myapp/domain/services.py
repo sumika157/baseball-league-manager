@@ -11,8 +11,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .entities import Player, Team
-from .value_objects import Season, TeamRecord
+from .entities import Game, Player, Team
+from .value_objects import BattingLine, PitchingLine, Season, TeamRecord
 
 
 @dataclass(frozen=True)
@@ -218,18 +218,64 @@ class StandingRow:
         return self.rank == 1
 
 
-def standings(teams: list[Team], season: Season) -> list[StandingRow]:
-    """指定シーズンの順位表を作る。
+def team_record(games: list[Game], team_id: int) -> TeamRecord:
+    """試合の一覧からチームの勝敗を集計する。
+
+    勝敗は試合が唯一の出典であり、手入力の値は持たない。
+    渡す games は対象シーズンに絞り込んだものを想定する。
+    """
+    wins = losses = ties = 0
+    for game in games:
+        if not game.involves(team_id):
+            continue
+        result = game.result_for(team_id)
+        if result == 'win':
+            wins += 1
+        elif result == 'loss':
+            losses += 1
+        else:
+            ties += 1
+    return TeamRecord(wins=wins, losses=losses, ties=ties)
+
+
+def player_batting_total(games: list[Game], player_id: int) -> BattingLine:
+    """試合の一覧から選手の通算打撃成績を集計する。"""
+    return BattingLine.total(
+        entry.line
+        for game in games
+        for entry in game.batting
+        if entry.player_id == player_id
+    )
+
+
+def player_pitching_total(games: list[Game], player_id: int) -> PitchingLine:
+    """試合の一覧から選手の通算投球成績を集計する。"""
+    return PitchingLine.total(
+        entry.line
+        for game in games
+        for entry in game.pitching
+        if entry.player_id == player_id
+    )
+
+
+def seasons_of(games: list[Game]) -> list[Season]:
+    """試合が登録されているシーズンを新しい順に返す。"""
+    return sorted({game.season for game in games}, key=lambda s: s.year, reverse=True)
+
+
+def standings(teams: list[Team], games: list[Game]) -> list[StandingRow]:
+    """順位表を作る。games は対象シーズンに絞り込んだものを渡す。
 
     順位は勝率の高い順で決まる。勝率が同じなら同順位として扱う。
-    そのシーズンの成績が未登録のチームは順位表に載せない
-    （0勝0敗として最下位に並べると、未登録なのか全敗なのか区別できなくなる）。
+    そのシーズンに1試合も無いチームは順位表に載せない
+    （0勝0敗として並べると、未実施なのか全敗なのか区別できなくなる）。
     """
-    entries = [
-        (team, team.season_record(season))
-        for team in teams
-    ]
-    entries = [(team, entry.record) for team, entry in entries if entry is not None]
+    entries = []
+    for team in teams:
+        if not any(g.involves(team.id) for g in games):
+            continue
+        entries.append((team, team_record(games, team.id)))
+
     entries.sort(key=lambda e: (-e[1].winning_percentage, -e[1].wins, e[0].name))
 
     if not entries:
@@ -256,9 +302,3 @@ def standings(teams: list[Team], season: Season) -> list[StandingRow]:
         previous_percentage = record.winning_percentage
 
     return rows
-
-
-def recorded_seasons(teams: list[Team]) -> list[Season]:
-    """成績が1件でも登録されているシーズンを新しい順に返す。"""
-    years = {entry.season for team in teams for entry in team.seasons}
-    return sorted(years, key=lambda s: s.year, reverse=True)

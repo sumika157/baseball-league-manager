@@ -7,20 +7,20 @@
 
 from .infrastructure.orm_models import (  # noqa: F401
     POSITION_CHOICES,
+    Game,
+    GameBattingLine,
+    GamePitchingLine,
     League,
-    PitcherStats,
     Player,
-    PlayerStats,
     Team,
-    TeamSeasonRecord,
 )
 
 __all__ = [
     'POSITION_CHOICES',
+    'Game',
+    'GameBattingLine',
+    'GamePitchingLine',
     'League',
-    'PitcherStats',
     'Player',
-    'PlayerStats',
     'Team',
-    'TeamSeasonRecord',
 ]
