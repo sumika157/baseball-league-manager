@@ -35,19 +35,41 @@ def dashboard(request):
     return render(request, 'myapp/dashboard.html', {'board': _service().get_dashboard()})
 
 
+def _sort_params(request):
+    """URL の sort / dir を読む。dir は 'desc' のときだけ降順。
+
+    未指定なら None を返し、既定の並び順をドメイン側に決めさせる。
+    """
+    sort = request.GET.get('sort') or None
+    direction = request.GET.get('dir')
+    descending = None if direction not in ('asc', 'desc') else (direction == 'desc')
+    return sort, descending
+
+
 def team_list(request):
     """チーム一覧。"""
-    return render(request, 'myapp/team_list.html', {'teams': _service().list_teams()})
+    sort, descending = _sort_params(request)
+    listing = _service().list_teams(sort=sort, descending=descending)
+    return render(request, 'myapp/team_list.html', {
+        'teams': listing.rows,
+        'current_sort': listing.sort,
+        'current_descending': listing.descending,
+    })
 
 
 def standings(request, year=None):
     """年別の順位表。年を指定しない場合は最新シーズン。"""
+    sort, descending = _sort_params(request)
     try:
-        board = _service().get_standings(year)
+        board = _service().get_standings(year, sort=sort, descending=descending)
     except DomainError as error:
         raise Http404(str(error))
 
-    return render(request, 'myapp/standings.html', {'standings': board})
+    return render(request, 'myapp/standings.html', {
+        'standings': board,
+        'current_sort': board.sort,
+        'current_descending': board.descending,
+    })
 
 
 def player_list(request, team_id):
@@ -87,19 +109,23 @@ def player_list(request, team_id):
             messages.error(request, _first_error(form))
 
     pos_mode = PITCHER_MODE if request.GET.get('pos') == PITCHER_MODE else BATTER_MODE
-    players = (
-        service.list_pitchers(team_id)
+    sort, descending = _sort_params(request)
+    listing = (
+        service.list_pitchers(team_id, sort=sort, descending=descending)
         if pos_mode == PITCHER_MODE
-        else service.list_batters(team_id)
+        else service.list_batters(team_id, sort=sort, descending=descending)
     )
 
     return render(request, 'myapp/player_list.html', {
         'team_id': team_id,
         'team_name': team_name,
-        'players': players,
+        'listing': listing,
+        'players': listing.rows,
         'pos_mode': pos_mode,
         'form': form,
         'positions': Position.labels(),
+        'current_sort': listing.sort,
+        'current_descending': listing.descending,
     })
 
 

@@ -22,6 +22,7 @@ from .dto import (
     AdminOverview,
     BatterRow,
     Dashboard,
+    Listing,
     PitcherRow,
     PlayerDetail,
     RankingEntry,
@@ -42,8 +43,27 @@ class TeamApplicationService:
 
     # --- 参照系 ---
 
-    def list_teams(self) -> list[TeamSummary]:
-        return self._team_list_query.list_summaries()
+    # チーム一覧の並べ替え。業務ルールではなく表示上の都合なのでここに置く。
+    # 既定は管理画面で設定した手動の表示順（DTO の並びそのまま）。
+    TEAM_SORT_KEYS = {
+        'name': (lambda t: t.name, False),
+        'league': (lambda t: (t.league_name, t.name), False),
+        'city': (lambda t: (t.city or '￿', t.name), False),
+        'players': (lambda t: t.player_count, True),
+    }
+
+    def list_teams(self, *, sort: str = None, descending: bool = None) -> Listing:
+        rows = self._team_list_query.list_summaries()
+
+        if sort not in self.TEAM_SORT_KEYS:
+            # 既定は手動の表示順。並べ替えずにそのまま返す
+            return Listing(rows=rows, sort='order', descending=False)
+
+        getter, default_desc = self.TEAM_SORT_KEYS[sort]
+        desc = default_desc if descending is None else bool(descending)
+        return Listing(
+            rows=sorted(rows, key=getter, reverse=desc), sort=sort, descending=desc
+        )
 
     def get_dashboard(self, *, leaders: int = 5) -> Dashboard:
         """ホーム画面の概況とランキングを組み立てる。
@@ -100,19 +120,45 @@ class TeamApplicationService:
     def get_team_name(self, team_id: int) -> str:
         return self._teams.find_by_id(team_id).name
 
-    def list_batters(self, team_id: int) -> list[BatterRow]:
+    def list_batters(
+        self, team_id: int, *, sort: str = None, descending: bool = None
+    ) -> Listing:
         team = self._teams.find_by_id(team_id)
-        return [self._to_batter_row(p) for p in team.batters_by_ops()]
+        batters = [p for p in team.active_players if not p.is_pitcher]
+        players, key, desc = domain_services.sort_batters(batters, sort, descending)
+        return Listing(
+            rows=[self._to_batter_row(p) for p in players], sort=key, descending=desc
+        )
 
-    def list_pitchers(self, team_id: int) -> list[PitcherRow]:
+    def list_pitchers(
+        self, team_id: int, *, sort: str = None, descending: bool = None
+    ) -> Listing:
         team = self._teams.find_by_id(team_id)
-        return [self._to_pitcher_row(p) for p in team.pitchers_by_era()]
+        pitchers = [p for p in team.active_players if p.is_pitcher]
+        players, key, desc = domain_services.sort_pitchers(pitchers, sort, descending)
+        return Listing(
+            rows=[self._to_pitcher_row(p) for p in players], sort=key, descending=desc
+        )
 
     def get_player_detail(self, team_id: int, player_id: int) -> PlayerDetail:
         team = self._teams.find_by_id(team_id)
         return self._to_detail(team, team.find_player(player_id))
 
-    def get_standings(self, year: int | None = None) -> Standings:
+    # 順位表の並べ替え。順位そのものは勝率から決まるので、ここでの並べ替えは
+    # 表示順を変えるだけで rank の値は変えない。
+    STANDING_SORT_KEYS = {
+        'rank': (lambda r: r.rank, False),
+        'team': (lambda r: r.team_name, False),
+        'games': (lambda r: r.games_played, True),
+        'wins': (lambda r: r.wins, True),
+        'losses': (lambda r: r.losses, True),
+        'ties': (lambda r: r.ties, True),
+        'pct': (lambda r: r.rank, False),  # 勝率順＝順位順
+    }
+
+    def get_standings(
+        self, year: int | None = None, *, sort: str = None, descending: bool = None
+    ) -> Standings:
         """指定シーズンの順位表を返す。年を省略した場合は最新シーズン。
 
         順位づけの規則そのものはドメインサービスにあり、ここでは
@@ -127,23 +173,35 @@ class TeamApplicationService:
         target = Season(year) if year is not None else seasons[0]
         rows = domain_services.standings(teams, target)
 
+        display_rows = [
+            StandingRow(
+                rank=row.rank,
+                team_id=row.team_id,
+                team_name=row.team_name,
+                wins=row.record.wins,
+                losses=row.record.losses,
+                ties=row.record.ties,
+                games_played=row.record.games_played,
+                winning_percentage=format_average(row.record.winning_percentage),
+                games_behind='—' if row.is_leader else f'{row.games_behind:.1f}',
+            )
+            for row in rows
+        ]
+
+        # 並べ替えは表示順を変えるだけで、rank の値は動かさない
+        if sort in self.STANDING_SORT_KEYS:
+            getter, default_desc = self.STANDING_SORT_KEYS[sort]
+            desc = default_desc if descending is None else bool(descending)
+            display_rows = sorted(display_rows, key=getter, reverse=desc)
+        else:
+            sort, desc = 'rank', False
+
         return Standings(
             year=target.year,
-            rows=[
-                StandingRow(
-                    rank=row.rank,
-                    team_id=row.team_id,
-                    team_name=row.team_name,
-                    wins=row.record.wins,
-                    losses=row.record.losses,
-                    ties=row.record.ties,
-                    games_played=row.record.games_played,
-                    winning_percentage=format_average(row.record.winning_percentage),
-                    games_behind='—' if row.is_leader else f'{row.games_behind:.1f}',
-                )
-                for row in rows
-            ],
+            rows=display_rows,
             available_years=[s.year for s in seasons],
+            sort=sort,
+            descending=desc,
         )
 
     def record_team_season(

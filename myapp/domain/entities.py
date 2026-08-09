@@ -104,6 +104,8 @@ class Team:
     league_id: int | None = None
     city: str = ''
     id: int | None = None
+    # リーグ内での表示順。管理画面から手動で並べ替える
+    display_order: int = 0
     players: list[Player] = field(default_factory=list)
     seasons: list[TeamSeason] = field(default_factory=list)
 

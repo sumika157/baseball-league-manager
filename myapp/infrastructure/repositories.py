@@ -41,7 +41,11 @@ class DjangoTeamRepository:
         return self._to_domain(row, with_roster=True)
 
     def find_all(self) -> list[Team]:
-        rows = orm_models.Team.objects.select_related('league').order_by('name')
+        rows = (
+            orm_models.Team.objects
+            .select_related('league')
+            .order_by('display_order', 'name')
+        )
         return [self._to_domain(row, with_roster=False) for row in rows]
 
     def find_all_with_roster(self) -> list[Team]:
@@ -49,7 +53,7 @@ class DjangoTeamRepository:
             orm_models.Team.objects
             .select_related('league')
             .prefetch_related('players__stats', 'players__pitcher_stats')
-            .order_by('name')
+            .order_by('display_order', 'name')
         )
         return [self._to_domain(row, with_roster=True) for row in rows]
 
@@ -68,6 +72,7 @@ class DjangoTeamRepository:
                 'league_id': team.league_id,
                 'name': team.name,
                 'city': team.city,
+                'display_order': team.display_order,
             },
         )
         team.id = team_row.id
@@ -158,6 +163,7 @@ class DjangoTeamRepository:
             league_id=row.league_id,
             name=row.name,
             city=row.city,
+            display_order=row.display_order,
             players=players,
             seasons=seasons,
         )

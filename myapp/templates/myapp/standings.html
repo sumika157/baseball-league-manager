@@ -1,4 +1,5 @@
 {% extends 'myapp/base.html' %}
+{% load sorting %}
 
 {% block title %}{{ standings.year }}年 順位表 - Baseball Manager{% endblock %}
 
@@ -27,13 +28,13 @@
     <table class="table table-hover">
       <thead>
         <tr>
-          <th>順位</th>
-          <th>チーム</th>
-          <th class="text-end">試合</th>
-          <th class="text-end">勝</th>
-          <th class="text-end">敗</th>
-          <th class="text-end">分</th>
-          <th class="text-end">勝率</th>
+          {% sort_header 'rank' '順位' 'start' False %}
+          {% sort_header 'team' 'チーム' 'start' False %}
+          {% sort_header 'games' '試合' 'end' %}
+          {% sort_header 'wins' '勝' 'end' %}
+          {% sort_header 'losses' '敗' 'end' %}
+          {% sort_header 'ties' '分' 'end' %}
+          {% sort_header 'pct' '勝率' 'end' False %}
           <th class="text-end">ゲーム差</th>
         </tr>
       </thead>

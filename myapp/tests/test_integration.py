@@ -80,7 +80,7 @@ class ApplicationServiceTest(TestCase):
     def test_register_player(self):
         self.service.register_player(self.team_row.id, '山田', 10, '内野手')
 
-        rows = self.service.list_batters(self.team_row.id)
+        rows = self.service.list_batters(self.team_row.id).rows
         self.assertEqual([r.name for r in rows], ['山田'])
 
     def test_register_duplicate_number_is_rejected(self):
@@ -92,7 +92,7 @@ class ApplicationServiceTest(TestCase):
         self.service.register_player(self.team_row.id, '山田', 10, '内野手')
         self.service.register_player(self.team_row.id, '佐藤', 18, '投手')
 
-        summary = self.service.list_teams()[0]
+        summary = self.service.list_teams().rows[0]
         self.assertEqual(summary.name, 'テストチーム')
         self.assertEqual(summary.league_name, 'テストリーグ')
         self.assertEqual(summary.player_count, 2)
@@ -504,6 +504,115 @@ class StandingsTest(TestCase):
                 orm_models.TeamSeasonRecord.objects.create(
                     team=self.a, year=2026, wins=2, losses=2
                 )
+
+
+class SortingViewTest(TestCase):
+    """画面から URL でソートできること。"""
+
+    def setUp(self):
+        self.league = orm_models.League.objects.create(name='テストリーグ')
+        self.team = orm_models.Team.objects.create(league=self.league, name='テストチーム')
+        self.service = TeamApplicationService(
+            teams=DjangoTeamRepository(), team_list_query=DjangoTeamListQuery()
+        )
+        a = self.service.register_player(self.team.id, '少打', 1, '内野手')
+        b = self.service.register_player(self.team.id, '多打', 2, '外野手')
+        self.service.update_player(
+            self.team.id, a.id, name='少打', number=1, position_label='内野手',
+            batting=BattingLine(at_bats=20, singles=4, home_runs=1),
+        )
+        self.service.update_player(
+            self.team.id, b.id, name='多打', number=2, position_label='外野手',
+            batting=BattingLine(at_bats=20, singles=2, home_runs=5),
+        )
+        self.url = reverse('player_list', args=[self.team.id])
+
+    def _names(self, query=''):
+        listing = self.client.get(f'{self.url}{query}').context['listing']
+        return [r.name for r in listing.rows]
+
+    def test_default_order_is_ops(self):
+        self.assertEqual(self._names(), ['多打', '少打'])
+
+    def test_sort_by_home_runs_ascending(self):
+        self.assertEqual(self._names('?sort=home_runs&dir=asc'), ['少打', '多打'])
+
+    def test_sort_by_home_runs_descending(self):
+        self.assertEqual(self._names('?sort=home_runs&dir=desc'), ['多打', '少打'])
+
+    def test_invalid_sort_key_does_not_break_the_page(self):
+        response = self.client.get(f'{self.url}?sort=../../etc/passwd')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['listing'].sort, 'ops')
+
+    def test_sort_link_keeps_other_query_params(self):
+        """pos=pitcher のような条件を落とさないこと。"""
+        body = self.client.get(f'{self.url}?pos=pitcher').content.decode()
+        self.assertIn('pos=pitcher', body)
+        self.assertIn('sort=era', body)
+
+    def test_header_shows_the_active_direction(self):
+        body = self.client.get(f'{self.url}?sort=home_runs&dir=desc').content.decode()
+        self.assertIn('sort-link is-active', body)
+
+    def test_team_list_can_be_sorted(self):
+        orm_models.Team.objects.create(league=self.league, name='Aチーム')
+        response = self.client.get(f"{reverse('team_list')}?sort=name&dir=asc")
+        names = [t.name for t in response.context['teams']]
+        self.assertEqual(names, sorted(names))
+
+    def test_team_list_defaults_to_manual_order(self):
+        """既定は管理画面で設定した表示順。"""
+        orm_models.Team.objects.filter(id=self.team.id).update(display_order=5)
+        first = orm_models.Team.objects.create(
+            league=self.league, name='Zチーム', display_order=1
+        )
+        response = self.client.get(reverse('team_list'))
+        self.assertEqual(response.context['teams'][0].name, 'Zチーム')
+        self.assertEqual(response.context['current_sort'], 'order')
+
+    def test_standings_can_be_sorted(self):
+        self.service.record_team_season(self.team.id, 2026, wins=80, losses=55, ties=8)
+        response = self.client.get(f"{reverse('standings')}?sort=wins&dir=desc")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['standings'].sort, 'wins')
+
+
+class TeamOrderingTest(TestCase):
+    """管理画面で設定した表示順が各所に反映されること。"""
+
+    def setUp(self):
+        self.league = orm_models.League.objects.create(name='テストリーグ')
+        self.b = orm_models.Team.objects.create(
+            league=self.league, name='Bチーム', display_order=1
+        )
+        self.a = orm_models.Team.objects.create(
+            league=self.league, name='Aチーム', display_order=2
+        )
+        self.service = TeamApplicationService(
+            teams=DjangoTeamRepository(), team_list_query=DjangoTeamListQuery()
+        )
+
+    def test_display_order_beats_name(self):
+        names = [t.name for t in self.service.list_teams().rows]
+        self.assertEqual(names, ['Bチーム', 'Aチーム'])
+
+    def test_dashboard_uses_the_same_order(self):
+        names = [t.name for t in self.service.get_dashboard().teams]
+        self.assertEqual(names, ['Bチーム', 'Aチーム'])
+
+    def test_same_order_falls_back_to_name(self):
+        orm_models.Team.objects.update(display_order=0)
+        names = [t.name for t in self.service.list_teams().rows]
+        self.assertEqual(names, ['Aチーム', 'Bチーム'])
+
+    def test_admin_league_page_includes_the_order_field(self):
+        from django.contrib.auth.models import User
+
+        self.client.force_login(User.objects.create_superuser(username='root', password='x'))
+        response = self.client.get(f'/admin/myapp/league/{self.league.id}/change/')
+        self.assertContains(response, 'display_order')
+        self.assertContains(response, 'admin-inline-sortable.js')
 
 
 class AuthTest(TestCase):

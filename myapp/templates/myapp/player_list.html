@@ -1,4 +1,5 @@
 {% extends "myapp/base.html" %}
+{% load sorting %}
 
 {% block title %}{{ team_name }} - Baseball Manager{% endblock %}
 
@@ -28,26 +29,30 @@
 <div class="table-responsive mb-4">
   <table class="table table-hover">
     <thead>
+      {% comment %}
+        見出しを押すと並べ替わる。現在の並びは current_sort / current_descending で
+        判定するため、with で渡してからタグを呼ぶ。
+      {% endcomment %}
       <tr>
-        <th>背番号</th>
-        <th>選手名</th>
+        {% sort_header 'number' '背番号' 'start' False %}
+        {% sort_header 'name' '選手名' 'start' False %}
         {% if pos_mode == 'pitcher' %}
-          <th class="text-end">投球回</th>
-          <th class="text-end">防御率</th>
-          <th class="text-end">勝</th>
-          <th class="text-end">敗</th>
-          <th class="text-end">奪三振</th>
-          <th class="text-end">WHIP</th>
-          <th class="text-end">K/9</th>
+          {% sort_header 'innings' '投球回' 'end' %}
+          {% sort_header 'era' '防御率' 'end' False %}
+          {% sort_header 'wins' '勝' 'end' %}
+          {% sort_header 'losses' '敗' 'end' %}
+          {% sort_header 'strikeouts' '奪三振' 'end' %}
+          {% sort_header 'whip' 'WHIP' 'end' False %}
+          {% sort_header 'k9' 'K/9' 'end' %}
         {% else %}
-          <th class="text-end">打率</th>
-          <th class="text-end">安打</th>
-          <th class="text-end">2B</th>
-          <th class="text-end">3B</th>
-          <th class="text-end">HR</th>
-          <th class="text-end">打点</th>
-          <th class="text-end">出塁率</th>
-          <th class="text-end">OPS</th>
+          {% sort_header 'average' '打率' 'end' %}
+          {% sort_header 'hits' '安打' 'end' %}
+          {% sort_header 'doubles' '2B' 'end' %}
+          {% sort_header 'triples' '3B' 'end' %}
+          {% sort_header 'home_runs' 'HR' 'end' %}
+          {% sort_header 'rbi' '打点' 'end' %}
+          {% sort_header 'obp' '出塁率' 'end' %}
+          {% sort_header 'ops' 'OPS' 'end' %}
         {% endif %}
         <th></th>
       </tr>

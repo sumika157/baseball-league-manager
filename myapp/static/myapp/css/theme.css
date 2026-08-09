@@ -356,6 +356,31 @@ a:hover {
   padding-right: 1.25rem;
 }
 
+/* 並べ替え可能な見出し */
+.sort-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2em;
+  color: inherit;
+  white-space: nowrap;
+  transition: color 0.15s ease;
+}
+
+.sort-link:hover {
+  color: var(--app-accent);
+}
+
+.sort-link.is-active {
+  color: var(--app-text);
+}
+
+.sort-mark {
+  font-size: 0.75em;
+  /* 矢印の有無で見出しの幅が変わらないように場所を確保しておく */
+  min-width: 0.75em;
+  display: inline-block;
+}
+
 /* 背番号 */
 .jersey-number {
   display: inline-flex;

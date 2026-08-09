@@ -38,10 +38,14 @@ class Team(models.Model):
     )
     name = models.CharField(max_length=100, verbose_name='チーム名')
     city = models.CharField(max_length=100, blank=True, verbose_name='本拠地')
+    # リーグ編集画面でドラッグして並べ替えた結果がここに入る
+    display_order = models.PositiveIntegerField(default=0, verbose_name='表示順')
 
     class Meta:
         verbose_name = 'チーム'
         verbose_name_plural = 'チーム'
+        # 手動の並び順を既定とし、未設定どうしは名前で安定させる
+        ordering = ['display_order', 'name']
 
     def __str__(self):
         return self.name

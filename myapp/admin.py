@@ -52,9 +52,16 @@ admin.site.get_app_list = types.MethodType(_ordered_app_list, admin.site)
 
 
 class TeamInline(admin.TabularInline):
+    """リーグに所属するチーム。行をドラッグして表示順を並べ替えられる。
+
+    表示順の欄はドラッグの結果が入るだけなので通常は触らなくてよいが、
+    JavaScript が動かない環境でも直接入力できるよう残してある。
+    """
+
     model = Team
     extra = 0
-    fields = ('name', 'city')
+    fields = ('display_order', 'name', 'city')
+    ordering = ('display_order', 'name')
     show_change_link = True
 
 
@@ -64,6 +71,10 @@ class LeagueAdmin(admin.ModelAdmin):
     search_fields = ('name',)
     ordering = ('name',)
     inlines = [TeamInline]
+
+    class Media:
+        js = ('myapp/js/admin-inline-sortable.js',)
+        css = {'all': ('myapp/css/admin-theme.css',)}
 
     @admin.display(description='チーム数')
     def team_count(self, obj):

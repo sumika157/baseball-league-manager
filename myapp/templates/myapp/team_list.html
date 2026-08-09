@@ -1,4 +1,5 @@
 {% extends 'myapp/base.html' %}
+{% load sorting %}
 
 {% block title %}チーム一覧 - Baseball Manager{% endblock %}
 
@@ -23,10 +24,10 @@
   <table class="table table-hover">
     <thead>
       <tr>
-        <th>チーム名</th>
-        <th>リーグ</th>
-        <th>本拠地</th>
-        <th class="text-end">在籍選手</th>
+        {% sort_header 'name' 'チーム名' 'start' False %}
+        {% sort_header 'league' 'リーグ' 'start' False %}
+        {% sort_header 'city' '本拠地' 'start' False %}
+        {% sort_header 'players' '在籍選手' 'end' %}
         <th></th>
       </tr>
     </thead>

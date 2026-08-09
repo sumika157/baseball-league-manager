@@ -21,6 +21,19 @@ class TeamSummary:
 
 
 @dataclass(frozen=True)
+class Listing:
+    """並べ替えた一覧と、実際に採用された並び順。
+
+    URL の指定が不正だった場合は既定に落とすため、要求された値ではなく
+    採用された値を返す。画面の見出しの矢印をこれに合わせる。
+    """
+
+    rows: list
+    sort: str
+    descending: bool
+
+
+@dataclass(frozen=True)
 class StandingRow:
     """順位表の1行。順位と勝率は勝敗から算出した結果。"""
 
@@ -42,6 +55,8 @@ class Standings:
     year: int
     rows: list[StandingRow]
     available_years: list[int]
+    sort: str = 'rank'
+    descending: bool = False
 
 
 @dataclass(frozen=True)

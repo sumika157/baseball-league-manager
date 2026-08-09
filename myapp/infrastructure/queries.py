@@ -21,7 +21,8 @@ class DjangoTeamListQuery:
             orm_models.Team.objects
             .select_related('league')
             .annotate(active_player_count=Count('players', filter=Q(players__is_active=True)))
-            .order_by('name')
+            # 管理画面で手動設定した表示順を既定にする
+            .order_by('display_order', 'name')
         )
         return [
             TeamSummary(
