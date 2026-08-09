@@ -51,13 +51,18 @@
       tr.setAttribute('draggable', 'true');
       tr.classList.add('sortable-row');
 
-      var firstCell = tr.querySelector('td');
-      if (firstCell && !firstCell.querySelector('.sortable-handle')) {
+      // つまみは最初の「表示されている入力セル」に置く。
+      // 先頭の td.original は幅0で中身が絶対配置のラベルなので、
+      // ここに入れると行が崩れて不自然に折り返す。
+      var target = tr.querySelector('td[class*="field-"]:not(.hidden)');
+      if (target && !target.querySelector('.sortable-handle')) {
         var handle = document.createElement('span');
         handle.className = 'sortable-handle';
         handle.title = 'ドラッグして並べ替え';
+        handle.setAttribute('aria-hidden', 'true');
         handle.textContent = '⠿';
-        firstCell.insertBefore(handle, firstCell.firstChild);
+        target.insertBefore(handle, target.firstChild);
+        target.classList.add('has-sortable-handle');
       }
 
       tr.addEventListener('dragstart', function (event) {

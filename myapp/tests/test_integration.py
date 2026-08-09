@@ -606,13 +606,27 @@ class TeamOrderingTest(TestCase):
         names = [t.name for t in self.service.list_teams().rows]
         self.assertEqual(names, ['Aチーム', 'Bチーム'])
 
-    def test_admin_league_page_includes_the_order_field(self):
+    def _league_page(self):
         from django.contrib.auth.models import User
 
         self.client.force_login(User.objects.create_superuser(username='root', password='x'))
-        response = self.client.get(f'/admin/myapp/league/{self.league.id}/change/')
-        self.assertContains(response, 'display_order')
-        self.assertContains(response, 'admin-inline-sortable.js')
+        return self.client.get(f'/admin/myapp/league/{self.league.id}/change/')
+
+    def test_admin_league_page_loads_the_sortable_script(self):
+        self.assertContains(self._league_page(), 'admin-inline-sortable.js')
+
+    def test_order_field_is_submitted_but_not_shown(self):
+        """数値そのものに意味は無いので列としては見せない。
+
+        ただし送信は必要で、JavaScript もこの入力欄を目印に行を見つける。
+        """
+        body = self._league_page().content.decode()
+
+        self.assertIn('type="hidden" name="teams-0-display_order"', body)
+        # Django は hidden ウィジェットの列に hidden クラスを付けて列ごと隠す
+        self.assertIn('class="column-display_order required hidden"', body)
+        self.assertIn('class="field-display_order hidden"', body)
+        self.assertNotIn('class="vIntegerField"', body)
 
 
 class AuthTest(TestCase):

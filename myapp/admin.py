@@ -1,5 +1,6 @@
 import types
 
+from django import forms
 from django.contrib import admin
 
 from .domain.value_objects import BattingLine, InningsPitched, PitchingLine
@@ -51,14 +52,25 @@ _original_get_app_list = admin.site.get_app_list
 admin.site.get_app_list = types.MethodType(_ordered_app_list, admin.site)
 
 
-class TeamInline(admin.TabularInline):
-    """リーグに所属するチーム。行をドラッグして表示順を並べ替えられる。
+class TeamInlineForm(forms.ModelForm):
+    """表示順は画面に出さない。
 
-    表示順の欄はドラッグの結果が入るだけなので通常は触らなくてよいが、
-    JavaScript が動かない環境でも直接入力できるよう残してある。
+    数値そのものに意味は無く、ドラッグした結果が入るだけなので、
+    列として見せると読み手を混乱させる。ただし送信は必要なので
+    hidden で残す（JavaScript もこの入力欄を目印に行を見つける）。
     """
 
+    class Meta:
+        model = Team
+        fields = ('display_order', 'name', 'city')
+        widgets = {'display_order': forms.HiddenInput()}
+
+
+class TeamInline(admin.TabularInline):
+    """リーグに所属するチーム。行をドラッグして表示順を並べ替えられる。"""
+
     model = Team
+    form = TeamInlineForm
     extra = 0
     fields = ('display_order', 'name', 'city')
     ordering = ('display_order', 'name')
