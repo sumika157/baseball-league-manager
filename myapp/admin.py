@@ -89,9 +89,14 @@ class TeamInline(admin.TabularInline):
 
 @admin.register(League)
 class LeagueAdmin(admin.ModelAdmin):
-    list_display = ('name', 'teams_accordion', 'created_at')
+    # display_order は行をドラッグすると書き換わる。数値そのものに意味は無いが、
+    # JavaScript が動かない環境でも直接入力できるよう残してある
+    list_display = ('name', 'display_order', 'teams_accordion', 'created_at')
+    list_display_links = ('name',)
+    list_editable = ('display_order',)
     search_fields = ('name',)
-    ordering = ('name',)
+    # 手動の並び順を既定にする。未設定どうしは名前で安定させる
+    ordering = ('display_order', 'name')
     inlines = [TeamInline]
 
     class Media:

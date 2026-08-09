@@ -435,7 +435,9 @@ class DjangoLeagueRepository:
         return League(id=row.id, name=row.name)
 
     def find_all(self) -> list[League]:
+        # 管理画面で手動設定した表示順を既定にする。順位表・ダッシュボードの
+        # タブ・チーム一覧の並びが、この順に揃う
         return [
             League(id=row.id, name=row.name)
-            for row in orm_models.League.objects.order_by('name')
+            for row in orm_models.League.objects.order_by('display_order', 'name')
         ]

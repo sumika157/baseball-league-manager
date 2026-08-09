@@ -19,7 +19,11 @@ from myapp.domain.value_objects import (
     Position,
 )
 from myapp.infrastructure import orm_models
-from myapp.infrastructure.repositories import DjangoGameRepository, DjangoTeamRepository
+from myapp.infrastructure.repositories import (
+    DjangoGameRepository,
+    DjangoLeagueRepository,
+    DjangoTeamRepository,
+)
 
 from .helpers import build_service, give_batting, give_pitching, play_game
 
@@ -526,7 +530,9 @@ class TeamOrderingTest(BaseCase):
 
         self.assertIn('type="hidden" name="teams-0-display_order"', body)
         self.assertIn('class="column-display_order required hidden"', body)
-        self.assertNotIn('class="vIntegerField"', body)
+        # インラインの表示順が数値欄として出ていないこと。
+        # （リーグ自身の表示順は別の欄なので、ページ全体では数値欄が存在する）
+        self.assertNotIn('type="number" name="teams-0-display_order"', body)
 
 
 class HeaderNavigationTest(TestCase):
@@ -1559,6 +1565,57 @@ class PlayerSearchTest(BaseCase):
         self.assertIn(
             reverse('player_detail', args=[self.rival.id, self.tanaka.id]), body
         )
+
+
+class LeagueOrderingTest(BaseCase):
+    """リーグの表示順を管理画面から並べ替えられること。"""
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(User.objects.create_superuser(username='root', password='x'))
+        # 名前順なら A → Z だが、表示順で逆にする
+        orm_models.League.objects.filter(id=self.league.id).update(
+            name='Zリーグ', display_order=1
+        )
+        self.first = orm_models.League.objects.create(name='Aリーグ', display_order=2)
+        orm_models.Team.objects.create(league=self.first, name='Aチーム')
+
+    def test_display_order_beats_name(self):
+        names = [lg.name for lg in DjangoLeagueRepository().find_all()]
+        self.assertEqual(names, ['Zリーグ', 'Aリーグ'])
+
+    def test_same_order_falls_back_to_name(self):
+        orm_models.League.objects.update(display_order=0)
+        names = [lg.name for lg in DjangoLeagueRepository().find_all()]
+        self.assertEqual(names, ['Aリーグ', 'Zリーグ'])
+
+    def test_admin_list_is_ordered_and_editable(self):
+        body = self.client.get('/admin/myapp/league/').content.decode()
+
+        self.assertLess(body.index('Zリーグ'), body.index('Aリーグ'))
+        # 一覧から直接編集できる（ドラッグの結果もここに入る）
+        self.assertIn('name="form-0-display_order"', body)
+
+    def test_admin_loads_the_sortable_script(self):
+        self.assertContains(
+            self.client.get('/admin/myapp/league/'), 'admin-inline-sortable.js'
+        )
+
+    def test_order_is_reflected_in_standings(self):
+        play_game(self.team, self.rival, day=1)
+        a2 = orm_models.Team.objects.create(league=self.first, name='A2チーム')
+        play_game(orm_models.Team.objects.get(name='Aチーム'), a2, day=1)
+
+        names = [g.league_name for g in self.service.get_standings(2026).leagues]
+        self.assertEqual(names, ['Zリーグ', 'Aリーグ'])
+
+    def test_order_is_reflected_in_the_team_list(self):
+        names = [g.league_name for g in self.service.list_teams_by_league().rows]
+        self.assertEqual(names, ['Zリーグ', 'Aリーグ'])
+
+    def test_order_is_reflected_in_dashboard_tabs(self):
+        names = [g.league_name for g in self.service.get_dashboard().league_teams]
+        self.assertEqual(names, ['Zリーグ', 'Aリーグ'])
 
 
 class AuthTest(TestCase):

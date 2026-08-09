@@ -1,17 +1,24 @@
 /*
- * 管理画面のインライン行をドラッグで並べ替える。
+ * 管理画面の行をドラッグで並べ替える。
  *
  * 外部ライブラリは使わず、HTML5 のドラッグ＆ドロップだけで実装する。
  * 並べ替えた結果は各行の「表示順」入力欄に 0, 1, 2 … と振り直すだけで、
  * 保存は通常の「保存」ボタンで行う（非同期の保存はしない）。
  *
- * 対象は name が "-display_order" で終わる入力欄を持つインライン行。
- * インライン側にマークアップを足さずに済むよう、入力欄の名前で見つける。
+ * 対象は name が "-display_order" で終わる入力欄を持つ行。インラインでも
+ * 一覧（list_editable）でも同じ形になるため、どちらでも動く。
+ * マークアップを足さずに済むよう、入力欄の名前で見つける。
  */
 (function () {
   'use strict';
 
   var ORDER_SELECTOR = 'input[name$="-display_order"]';
+
+  function isCustomSorted() {
+    // 一覧で列を押して並べ替えているときは、見えている順と保存される順が
+    // 食い違うため、ドラッグでの並べ替えは行わない
+    return new URLSearchParams(window.location.search).has('o');
+  }
 
   function tablesWithOrderField() {
     var tables = [];
@@ -119,6 +126,7 @@
   }
 
   document.addEventListener('DOMContentLoaded', function () {
+    if (isCustomSorted()) return;
     tablesWithOrderField().forEach(init);
   });
 })();

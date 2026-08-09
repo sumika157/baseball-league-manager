@@ -18,11 +18,15 @@ POSITION_CHOICES = [(position.value, position.value) for position in Position]
 class League(models.Model):
     name = models.CharField(max_length=50, unique=True, verbose_name='リーグ名')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='登録日時')
+    # 管理画面でドラッグして並べ替えた結果がここに入る
+    display_order = models.PositiveIntegerField(default=0, verbose_name='表示順')
 
     class Meta:
         verbose_name = 'リーグ'
         # 日本語では単複同形。既定のままだと管理画面に 'Leagues' と出る
         verbose_name_plural = 'リーグ'
+        # 手動の並び順を既定とし、未設定どうしは名前で安定させる
+        ordering = ['display_order', 'name']
 
     def __str__(self):
         return self.name
