@@ -25,8 +25,9 @@ from .helpers import build_service, give_batting, give_pitching, play_game
 class BaseCase(TestCase):
     def setUp(self):
         self.league = orm_models.League.objects.create(name='テストリーグ')
+        self.stadium = orm_models.Stadium.objects.create(name='テスト球場', city='東京')
         self.team = orm_models.Team.objects.create(
-            league=self.league, name='テストチーム', city='東京'
+            league=self.league, name='テストチーム', home_stadium=self.stadium
         )
         self.rival = orm_models.Team.objects.create(league=self.league, name='相手チーム')
         self.service = build_service()
@@ -1051,6 +1052,85 @@ class GameEntryTest(BaseCase):
         self.assertEqual(
             self.client.get(reverse('game_edit', args=[9999])).status_code, 404
         )
+
+
+class StadiumTest(BaseCase):
+    """球場と本拠地。"""
+
+    def test_team_summary_uses_the_stadium(self):
+        summary = self.service.list_teams().rows[0]
+
+        self.assertEqual(summary.stadium_name, 'テスト球場')
+        self.assertEqual(summary.city, '東京')
+
+    def test_team_without_a_stadium(self):
+        orm_models.Team.objects.filter(id=self.team.id).update(home_stadium=None)
+        summary = {s.id: s for s in self.service.list_teams().rows}[self.team.id]
+
+        self.assertEqual(summary.stadium_name, '')
+        self.assertEqual(summary.city, '')
+
+    def test_deleting_a_stadium_keeps_the_team(self):
+        """球場を消してもチームは残る（本拠地が未設定になるだけ）。"""
+        self.stadium.delete()
+
+        self.assertTrue(orm_models.Team.objects.filter(id=self.team.id).exists())
+        self.assertIsNone(orm_models.Team.objects.get(id=self.team.id).home_stadium)
+
+    def test_page_shows_the_stadium(self):
+        response = self.client.get(reverse('team_list'))
+        self.assertContains(response, 'テスト球場')
+
+    def test_can_be_sorted_by_stadium(self):
+        other = orm_models.Stadium.objects.create(name='あ球場')
+        orm_models.Team.objects.filter(id=self.rival.id).update(home_stadium=other)
+
+        rows = self.service.list_teams(sort='stadium', descending=False).rows
+        self.assertEqual(rows[0].stadium_name, 'あ球場')
+
+    def test_teams_without_a_stadium_sort_last(self):
+        rows = self.service.list_teams(sort='stadium', descending=False).rows
+        self.assertEqual(rows[-1].stadium_name, '')
+
+    def test_admin_page(self):
+        self.client.force_login(User.objects.create_superuser(username='root', password='x'))
+        response = self.client.get('/admin/myapp/stadium/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'テスト球場')
+
+
+class PlayerProfileTest(BaseCase):
+    """選手のプロフィール項目。"""
+
+    def test_profile_survives_the_round_trip(self):
+        player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        orm_models.Player.objects.filter(id=player.id).update(
+            birth_date='1998-03-15', throws='右', bats='左',
+            height_cm=180, weight_kg=78, birthplace='大阪府', debut_year=2021,
+        )
+
+        saved = DjangoTeamRepository().find_by_id(self.team.id).find_player(player.id)
+
+        self.assertEqual(saved.profile.height_cm, 180)
+        self.assertEqual(saved.profile.throws_bats, '右投左打')
+        self.assertEqual(saved.profile.birthplace, '大阪府')
+
+    def test_profile_is_optional(self):
+        player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        saved = DjangoTeamRepository().find_by_id(self.team.id).find_player(player.id)
+
+        self.assertTrue(saved.profile.is_empty)
+
+    def test_admin_edit_page_has_the_profile_section(self):
+        player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        self.client.force_login(User.objects.create_superuser(username='root', password='x'))
+
+        response = self.client.get(f'/admin/myapp/player/{player.id}/change/')
+
+        self.assertContains(response, 'プロフィール')
+        self.assertContains(response, 'birth_date')
+        self.assertContains(response, 'birthplace')
 
 
 class AuthTest(TestCase):

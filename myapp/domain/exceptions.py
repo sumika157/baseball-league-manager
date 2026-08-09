@@ -49,6 +49,14 @@ class LeagueNotFound(DomainError):
     """指定されたリーグが存在しない。"""
 
 
+class InvalidProfile(DomainError):
+    """プロフィールの値が不正（現実的でない身長など）。"""
+
+
+class StadiumNotFound(DomainError):
+    """指定された球場が存在しない。"""
+
+
 class TeamNotFound(DomainError):
     """指定されたチームが存在しない。"""
 

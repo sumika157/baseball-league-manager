@@ -19,7 +19,7 @@ class DjangoTeamListQuery:
     def list_summaries(self) -> list[TeamSummary]:
         rows = (
             orm_models.Team.objects
-            .select_related('league')
+            .select_related('league', 'home_stadium')
             .annotate(active_player_count=Count('players', filter=Q(players__is_active=True)))
             # 管理画面で手動設定した表示順を既定にする
             .order_by('display_order', 'name')
@@ -28,10 +28,12 @@ class DjangoTeamListQuery:
             TeamSummary(
                 id=row.id,
                 name=row.name,
-                city=row.city,
                 league_id=row.league_id,
                 league_name=row.league.name,
                 player_count=row.active_player_count,
+                stadium_name=row.home_stadium.name if row.home_stadium else '',
+                # 所在地は球場から取る。チーム側には持たせない
+                city=row.home_stadium.city if row.home_stadium else '',
             )
             for row in rows
         ]

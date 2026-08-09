@@ -9,6 +9,7 @@ from .infrastructure.orm_models import (
     GamePitchingLine,
     League,
     Player,
+    Stadium,
     Team,
 )
 
@@ -37,7 +38,7 @@ def _ordered_app_list(self, request, app_label=None):
     """
     app_list = _original_get_app_list(request, app_label)
 
-    model_order = {'League': 1, 'Team': 2, 'Player': 3, 'Game': 4}
+    model_order = {'League': 1, 'Team': 2, 'Player': 3, 'Game': 4, 'Stadium': 5}
     for app in app_list:
         if app.get('app_label') == 'myapp':
             app['models'].sort(key=lambda m: model_order.get(m.get('object_name'), 99))
@@ -61,7 +62,7 @@ class TeamInlineForm(forms.ModelForm):
 
     class Meta:
         model = Team
-        fields = ('display_order', 'name', 'city')
+        fields = ('display_order', 'name', 'home_stadium')
         widgets = {'display_order': forms.HiddenInput()}
 
 
@@ -71,7 +72,7 @@ class TeamInline(admin.TabularInline):
     model = Team
     form = TeamInlineForm
     extra = 0
-    fields = ('display_order', 'name', 'city')
+    fields = ('display_order', 'name', 'home_stadium')
     ordering = ('display_order', 'name')
     show_change_link = True
 
@@ -94,12 +95,13 @@ class LeagueAdmin(admin.ModelAdmin):
 
 @admin.register(Team)
 class TeamAdmin(admin.ModelAdmin):
-    list_display = ('name', 'city', 'active_player_count', 'game_count')
+    list_display = ('name', 'home_stadium', 'active_player_count', 'game_count')
     list_filter = ('league',)
-    search_fields = ('name', 'city')
+    search_fields = ('name', 'home_stadium__name')
+    autocomplete_fields = ('home_stadium',)
     # リーグごとにまとまるよう並べる。リーグ内は手動の表示順を尊重する
     ordering = ('league__name', 'display_order', 'name')
-    list_select_related = ('league',)
+    list_select_related = ('league', 'home_stadium')
 
     # 行をリーグごとに区切る。見出しに出るのでリーグ列は list_display から外した
     group_by = staticmethod(lambda team: team.league.name)
@@ -111,6 +113,19 @@ class TeamAdmin(admin.ModelAdmin):
     @admin.display(description='試合数')
     def game_count(self, obj):
         return obj.home_games.count() + obj.away_games.count()
+
+
+@admin.register(Stadium)
+class StadiumAdmin(admin.ModelAdmin):
+    list_display = ('name', 'city', 'capacity', 'surface', 'opened_year', 'home_team_names')
+    search_fields = ('name', 'city')
+    list_filter = ('surface',)
+    ordering = ('name',)
+
+    @admin.display(description='本拠地とするチーム')
+    def home_team_names(self, obj):
+        names = list(obj.home_teams.values_list('name', flat=True))
+        return '、'.join(names) if names else '—'
 
 
 @admin.register(Player)
@@ -126,6 +141,17 @@ class PlayerAdmin(admin.ModelAdmin):
 
     # 行をチームごとに区切る。どのリーグのチームかも見出しに出す
     group_by = staticmethod(lambda p: f'{p.team.league.name} · {p.team.name}')
+
+    fieldsets = (
+        (None, {'fields': ('team', 'name', 'number', 'position', 'is_active')}),
+        ('プロフィール', {
+            'description': '分かっているものだけ入力してください。すべて任意です。',
+            'fields': (
+                'birth_date', ('throws', 'bats'),
+                ('height_cm', 'weight_kg'), 'birthplace', 'debut_year',
+            ),
+        }),
+    )
 
     @admin.display(description='出場試合')
     def appearances(self, obj):

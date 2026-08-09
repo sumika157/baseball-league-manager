@@ -34,7 +34,7 @@
       <thead>
         <tr>
           {% sort_header 'name' 'チーム名' 'start' False %}
-          {% sort_header 'city' '本拠地' 'start' False %}
+          {% sort_header 'stadium' '本拠地球場' 'start' False %}
           {% sort_header 'players' '在籍選手' 'end' %}
           <th></th>
         </tr>
@@ -45,7 +45,12 @@
             <td>
               <a href="{% url 'player_list' team.id %}" class="player-name">{{ team.name }}</a>
             </td>
-            <td class="stat-muted">{{ team.city|default:"—" }}</td>
+            <td class="stat-muted">
+              {% if team.stadium_name %}
+                {{ team.stadium_name }}
+                {% if team.city %}<span style="font-size: 0.75rem;">（{{ team.city }}）</span>{% endif %}
+              {% else %}—{% endif %}
+            </td>
             <td class="text-end">{{ team.player_count }}名</td>
             <td class="text-end">
               <a href="{% url 'player_list' team.id %}" class="btn btn-sm btn-outline-info">選手名簿</a>

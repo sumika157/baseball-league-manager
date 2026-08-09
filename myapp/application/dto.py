@@ -15,10 +15,12 @@ class TeamSummary:
 
     id: int
     name: str
-    city: str
     league_id: int
     league_name: str
     player_count: int
+    # 本拠地球場。所在地は球場が持つので、チーム側に地名は持たない
+    stadium_name: str = ''
+    city: str = ''
 
 
 @dataclass(frozen=True)

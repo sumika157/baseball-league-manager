@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal, ROUND_DOWN
 from enum import Enum
 
@@ -15,6 +16,7 @@ from .exceptions import (
     InvalidInningsPitched,
     InvalidJerseyNumber,
     InvalidPosition,
+    InvalidProfile,
     InvalidSeason,
     InvalidStatValue,
 )
@@ -418,6 +420,121 @@ class TeamRecord:
         """首位とのゲーム差。((首位の勝 - 勝) + (敗 - 首位の敗)) ÷ 2。"""
         diff = (leader.wins - self.wins) + (self.losses - leader.losses)
         return diff / 2
+
+
+class Handedness(Enum):
+    """投打の左右。"""
+
+    RIGHT = '右'
+    LEFT = '左'
+    BOTH = '両'
+
+    @property
+    def label(self) -> str:
+        return self.value
+
+    @classmethod
+    def from_label(cls, label: str) -> 'Handedness | None':
+        """未設定（空）は None を返す。全選手に入力を強いないため。"""
+        if not label:
+            return None
+        for item in cls:
+            if item.value == label:
+                return item
+        raise InvalidProfile(f"「{label}」は投打として認識できません。")
+
+    @classmethod
+    def labels(cls) -> list[str]:
+        return [item.value for item in cls]
+
+
+@dataclass(frozen=True)
+class Profile:
+    """選手のプロフィール。
+
+    どの項目も任意。分かっているものだけ埋められるようにする。
+    年齢は生年月日から求めるので保持しない（保持すると翌年ずれる）。
+    """
+
+    birth_date: date | None = None
+    throws: Handedness | None = None
+    bats: Handedness | None = None
+    height_cm: int | None = None
+    weight_kg: int | None = None
+    birthplace: str = ''
+    debut_year: int | None = None
+
+    def __post_init__(self) -> None:
+        for name, label, upper in (
+            ('height_cm', '身長', 300), ('weight_kg', '体重', 300),
+        ):
+            value = getattr(self, name)
+            if value is None:
+                continue
+            try:
+                number = int(value)
+            except (TypeError, ValueError):
+                raise InvalidProfile(f"{label}は数値で入力してください。") from None
+            if not (0 < number <= upper):
+                raise InvalidProfile(f"{label}の値が現実的ではありません。")
+            object.__setattr__(self, name, number)
+
+        if self.debut_year is not None:
+            season = Season(self.debut_year)  # 年としての妥当性はここで検査する
+            object.__setattr__(self, 'debut_year', season.year)
+
+    def age(self, as_of: date) -> int | None:
+        """指定日時点の満年齢。生年月日が未設定なら None。"""
+        if self.birth_date is None:
+            return None
+        if as_of < self.birth_date:
+            raise InvalidProfile("生年月日より前の日付では年齢を求められません。")
+        had_birthday = (as_of.month, as_of.day) >= (
+            self.birth_date.month, self.birth_date.day
+        )
+        return as_of.year - self.birth_date.year - (0 if had_birthday else 1)
+
+    @property
+    def throws_bats(self) -> str:
+        """「右投左打」のような表記。片方でも欠けていれば空。"""
+        if self.throws is None or self.bats is None:
+            return ''
+        return f"{self.throws.label}投{self.bats.label}打"
+
+    @property
+    def is_empty(self) -> bool:
+        return not any([
+            self.birth_date, self.throws, self.bats, self.height_cm,
+            self.weight_kg, self.birthplace, self.debut_year,
+        ])
+
+
+@dataclass(frozen=True)
+class StadiumProfile:
+    """球場の属性。所在地・収容人数・グラウンドの種類。"""
+
+    city: str = ''
+    capacity: int | None = None
+    surface: str = ''
+    opened_year: int | None = None
+
+    SURFACES = ('天然芝', '人工芝', '土')
+
+    def __post_init__(self) -> None:
+        if self.capacity is not None:
+            try:
+                capacity = int(self.capacity)
+            except (TypeError, ValueError):
+                raise InvalidProfile("収容人数は数値で入力してください。") from None
+            if capacity < 0:
+                raise InvalidProfile("収容人数に負の値は入力できません。")
+            object.__setattr__(self, 'capacity', capacity)
+
+        if self.surface and self.surface not in self.SURFACES:
+            raise InvalidProfile(f"「{self.surface}」はグラウンドの種類として認識できません。")
+
+        if self.opened_year is not None:
+            object.__setattr__(self, 'opened_year', Season(self.opened_year).year)
 
 
 def format_average(value: float) -> str:

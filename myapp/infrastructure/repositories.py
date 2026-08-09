@@ -13,15 +13,31 @@ from __future__ import annotations
 from django.db import transaction
 from django.db.models import Sum
 
-from ..domain.entities import Game, GameBatting, GamePitching, League, Player, Team
-from ..domain.exceptions import GameNotFound, LeagueNotFound, TeamNotFound
+from ..domain.entities import (
+    Game,
+    GameBatting,
+    GamePitching,
+    League,
+    Player,
+    Stadium,
+    Team,
+)
+from ..domain.exceptions import (
+    GameNotFound,
+    LeagueNotFound,
+    StadiumNotFound,
+    TeamNotFound,
+)
 from ..domain.value_objects import (
     BattingLine,
+    Handedness,
     InningsPitched,
     JerseyNumber,
     PitchingLine,
     Position,
+    Profile,
     Season,
+    StadiumProfile,
 )
 from . import orm_models
 
@@ -83,7 +99,7 @@ class DjangoTeamRepository:
             defaults={
                 'league_id': team.league_id,
                 'name': team.name,
-                'city': team.city,
+                'home_stadium_id': team.home_stadium_id,
                 'display_order': team.display_order,
             },
         )
@@ -119,6 +135,7 @@ class DjangoTeamRepository:
                     number=JerseyNumber(p.number),
                     position=Position.from_label(p.position),
                     is_active=p.is_active,
+                    profile=_profile_of(p),
                     batting=batting.get(p.id, BattingLine()),
                     pitching=pitching.get(p.id, PitchingLine()),
                 )
@@ -129,9 +146,48 @@ class DjangoTeamRepository:
             id=row.id,
             league_id=row.league_id,
             name=row.name,
-            city=row.city,
+            home_stadium_id=row.home_stadium_id,
             display_order=row.display_order,
             players=players,
+        )
+
+
+def _profile_of(row) -> Profile:
+    return Profile(
+        birth_date=row.birth_date,
+        throws=Handedness.from_label(row.throws),
+        bats=Handedness.from_label(row.bats),
+        height_cm=row.height_cm,
+        weight_kg=row.weight_kg,
+        birthplace=row.birthplace,
+        debut_year=row.debut_year,
+    )
+
+
+class DjangoStadiumRepository:
+    """球場の永続化。"""
+
+    def find_by_id(self, stadium_id: int) -> Stadium:
+        try:
+            row = orm_models.Stadium.objects.get(id=stadium_id)
+        except orm_models.Stadium.DoesNotExist:
+            raise StadiumNotFound(f"球場が見つかりません（id={stadium_id}）。") from None
+        return self._to_domain(row)
+
+    def find_all(self) -> list[Stadium]:
+        return [self._to_domain(r) for r in orm_models.Stadium.objects.all()]
+
+    @staticmethod
+    def _to_domain(row) -> Stadium:
+        return Stadium(
+            id=row.id,
+            name=row.name,
+            profile=StadiumProfile(
+                city=row.city,
+                capacity=row.capacity,
+                surface=row.surface,
+                opened_year=row.opened_year,
+            ),
         )
 
 

@@ -9,7 +9,7 @@
 
 from django.db import models
 
-from ..domain.value_objects import Position
+from ..domain.value_objects import Handedness, Position, StadiumProfile
 
 # 守備位置の選択肢はドメインの Position を唯一の出典とする。
 POSITION_CHOICES = [(position.value, position.value) for position in Position]
@@ -28,12 +28,41 @@ class League(models.Model):
         return self.name
 
 
+class Stadium(models.Model):
+    """球場。所在地はここが持つ（チーム側に地名を二重に持たせない）。"""
+
+    SURFACE_CHOICES = [(s, s) for s in StadiumProfile.SURFACES]
+
+    name = models.CharField(max_length=100, unique=True, verbose_name='球場名')
+    city = models.CharField(max_length=100, blank=True, verbose_name='所在地')
+    capacity = models.PositiveIntegerField(null=True, blank=True, verbose_name='収容人数')
+    surface = models.CharField(
+        max_length=10, choices=SURFACE_CHOICES, blank=True, verbose_name='グラウンド'
+    )
+    opened_year = models.IntegerField(null=True, blank=True, verbose_name='開場年')
+
+    class Meta:
+        verbose_name = '球場'
+        verbose_name_plural = '球場'
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+
 class Team(models.Model):
     league = models.ForeignKey(
         League, on_delete=models.CASCADE, related_name='teams', verbose_name='リーグ'
     )
     name = models.CharField(max_length=100, verbose_name='チーム名')
-    city = models.CharField(max_length=100, blank=True, verbose_name='本拠地')
+    home_stadium = models.ForeignKey(
+        Stadium,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='home_teams',
+        verbose_name='本拠地球場',
+    )
     # リーグ編集画面でドラッグして並べ替えた結果がここに入る
     display_order = models.PositiveIntegerField(default=0, verbose_name='表示順')
 
@@ -60,6 +89,21 @@ class Player(models.Model):
         verbose_name='守備位置',
     )
     is_active = models.BooleanField(default=True, verbose_name='在籍中')
+
+    # --- プロフィール。どれも任意で、分かっているものだけ埋める ---
+    HANDEDNESS_CHOICES = [(h.value, h.value) for h in Handedness]
+
+    birth_date = models.DateField(null=True, blank=True, verbose_name='生年月日')
+    throws = models.CharField(
+        max_length=2, choices=HANDEDNESS_CHOICES, blank=True, verbose_name='投'
+    )
+    bats = models.CharField(
+        max_length=2, choices=HANDEDNESS_CHOICES, blank=True, verbose_name='打'
+    )
+    height_cm = models.PositiveIntegerField(null=True, blank=True, verbose_name='身長(cm)')
+    weight_kg = models.PositiveIntegerField(null=True, blank=True, verbose_name='体重(kg)')
+    birthplace = models.CharField(max_length=100, blank=True, verbose_name='出身地')
+    debut_year = models.IntegerField(null=True, blank=True, verbose_name='入団年')
 
     class Meta:
         verbose_name = '選手'

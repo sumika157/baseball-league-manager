@@ -60,7 +60,8 @@ class TeamApplicationService:
     TEAM_SORT_KEYS = {
         'name': (lambda t: t.name, False),
         'league': (lambda t: (t.league_name, t.name), False),
-        'city': (lambda t: (t.city or '￿', t.name), False),
+        # 未設定は末尾に来るよう、比較の最後に並ぶ文字を使う
+        'stadium': (lambda t: (t.stadium_name or '￿', t.name), False),
         'players': (lambda t: t.player_count, True),
     }
 

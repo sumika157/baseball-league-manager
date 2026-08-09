@@ -20,7 +20,9 @@ from .value_objects import (
     JerseyNumber,
     PitchingLine,
     Position,
+    Profile,
     Season,
+    StadiumProfile,
 )
 
 
@@ -33,6 +35,26 @@ class League:
 
     def __str__(self) -> str:
         return self.name
+
+
+@dataclass
+class Stadium:
+    """球場。
+
+    所在地はここが持つ。チーム側に本拠地の地名を別に持たせると、
+    同じ事実の出典が2つになるため。
+    """
+
+    name: str
+    id: int | None = None
+    profile: StadiumProfile = field(default_factory=StadiumProfile)
+
+    def __str__(self) -> str:
+        return self.name
+
+    @property
+    def city(self) -> str:
+        return self.profile.city
 
 
 @dataclass
@@ -49,6 +71,7 @@ class Player:
     position: Position
     id: int | None = None
     is_active: bool = True
+    profile: Profile = field(default_factory=Profile)
     batting: BattingLine = field(default_factory=BattingLine)
     pitching: PitchingLine = field(default_factory=PitchingLine)
 
@@ -90,7 +113,8 @@ class Team:
 
     name: str
     league_id: int | None = None
-    city: str = ''
+    # 本拠地。所在地は球場が持つので、チーム側に地名は持たない
+    home_stadium_id: int | None = None
     id: int | None = None
     # リーグ内での表示順。管理画面から手動で並べ替える
     display_order: int = 0
