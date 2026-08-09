@@ -582,6 +582,139 @@ class AdminIndexTest(BaseCase):
         self.assertContains(self.client.get('/admin/'), '成績が未入力の選手')
 
 
+class GameViewTest(BaseCase):
+    """試合一覧・試合詳細（フェーズ1）。"""
+
+    def setUp(self):
+        super().setUp()
+        self.batter = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        self.pitcher = self.service.register_player(self.team.id, '佐藤', 18, '投手')
+        self.game = play_game(
+            self.team, self.rival, home_score=5, away_score=3, day=1,
+            batting={self.batter.id: BattingLine(at_bats=4, singles=2, runs_batted_in=1)},
+            pitching={self.pitcher.id: PitchingLine(
+                innings=InningsPitched.from_notation('7.0'), earned_runs=2, strikeouts=8
+            )},
+        )
+
+    def test_list_renders(self):
+        response = self.client.get(reverse('game_list'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'テストチーム')
+        self.assertContains(response, 'テストチーム の勝ち')
+
+    def test_list_is_newest_first(self):
+        play_game(self.team, self.rival, day=5)
+        rows = self.client.get(reverse('game_list')).context['games']
+
+        self.assertEqual(rows[0].played_on.day, 5)
+
+    def test_list_can_be_filtered_by_team(self):
+        other = orm_models.Team.objects.create(league=self.league, name='第三チーム')
+        play_game(other, self.rival, day=9)
+
+        rows = self.client.get(f"{reverse('game_list')}?team={other.id}").context['games']
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].home_team_name, '第三チーム')
+
+    def test_list_can_be_filtered_by_year(self):
+        play_game(self.team, self.rival, year=2025, day=1)
+        rows = self.client.get(f"{reverse('game_list')}?year=2025").context['games']
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].year, 2025)
+
+    def test_invalid_filter_is_ignored(self):
+        response = self.client.get(f"{reverse('game_list')}?year=abc&team=xyz")
+        self.assertEqual(response.status_code, 200)
+
+    def test_detail_shows_both_stat_kinds(self):
+        response = self.client.get(reverse('game_detail', args=[self.game.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '山田')
+        self.assertContains(response, '佐藤')
+        self.assertContains(response, '7.0')
+
+    def test_detail_computes_rates_from_the_domain(self):
+        detail = self.service.get_game_detail(self.game.id)
+
+        self.assertAlmostEqual(detail.batting[0].batting_average, 0.5)
+        # 7回で自責点2 → 2*27/21
+        self.assertAlmostEqual(detail.pitching[0].earned_run_average, 2 * 27 / 21)
+
+    def test_missing_game_returns_404(self):
+        self.assertEqual(
+            self.client.get(reverse('game_detail', args=[9999])).status_code, 404
+        )
+
+
+class PlayerDetailViewTest(BaseCase):
+    """選手個人ページ（フェーズ1）。"""
+
+    def setUp(self):
+        super().setUp()
+        self.player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        play_game(
+            self.team, self.rival, home_score=5, away_score=3, day=1,
+            batting={self.player.id: BattingLine(at_bats=4, singles=2)},
+        )
+        play_game(
+            self.team, self.rival, home_score=1, away_score=4, day=2,
+            batting={self.player.id: BattingLine(at_bats=6, home_runs=1)},
+        )
+        self.url = reverse('player_detail', args=[self.team.id, self.player.id])
+
+    def test_page_renders(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '山田')
+
+    def test_shows_career_totals(self):
+        profile = self.service.get_player_profile(self.team.id, self.player.id)
+
+        self.assertEqual(profile.detail.at_bats, 10)
+        self.assertAlmostEqual(profile.detail.batting_average, 0.3)
+
+    def test_lists_each_game_newest_first(self):
+        profile = self.service.get_player_profile(self.team.id, self.player.id)
+
+        self.assertEqual(profile.appearances, 2)
+        self.assertEqual([r.played_on.day for r in profile.games], [2, 1])
+        self.assertEqual([r.result for r in profile.games], ['敗', '勝'])
+
+    def test_opponent_is_shown_from_the_player_side(self):
+        profile = self.service.get_player_profile(self.team.id, self.player.id)
+        self.assertEqual(profile.games[0].opponent_name, '相手チーム')
+
+    def test_games_without_the_player_are_excluded(self):
+        play_game(self.team, self.rival, day=3)
+        profile = self.service.get_player_profile(self.team.id, self.player.id)
+
+        self.assertEqual(profile.appearances, 2)
+
+    def test_player_without_games(self):
+        other = self.service.register_player(self.team.id, '控え', 99, '内野手')
+        response = self.client.get(reverse('player_detail', args=[self.team.id, other.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '出場した試合がまだありません')
+
+    def test_player_list_links_to_the_profile(self):
+        body = self.client.get(reverse('player_list', args=[self.team.id])).content.decode()
+        self.assertIn(self.url, body)
+
+    def test_missing_player_returns_404(self):
+        self.assertEqual(
+            self.client.get(
+                reverse('player_detail', args=[self.team.id, 9999])
+            ).status_code, 404
+        )
+
+
 class AuthTest(TestCase):
     def test_login_redirect_url_resolves(self):
         from django.conf import settings

@@ -12,7 +12,7 @@ from django.urls import reverse, reverse_lazy
 from django.views.generic import CreateView
 
 from ..application.services import TeamApplicationService
-from ..domain.exceptions import DomainError, PlayerNotFound, TeamNotFound
+from ..domain.exceptions import DomainError, GameNotFound, PlayerNotFound, TeamNotFound
 from ..domain.value_objects import Position
 from ..infrastructure.queries import DjangoTeamListQuery
 from ..infrastructure.repositories import DjangoGameRepository, DjangoTeamRepository
@@ -127,6 +127,49 @@ def player_list(request, team_id):
         'positions': Position.labels(),
         'current_sort': listing.sort,
         'current_descending': listing.descending,
+    })
+
+
+def game_list(request):
+    """試合一覧。年とチームで絞り込める。"""
+    service = _service()
+
+    def _int(name):
+        value = request.GET.get(name)
+        return int(value) if value and value.isdigit() else None
+
+    year, team_id = _int('year'), _int('team')
+    listing = service.list_games(year=year, team_id=team_id)
+
+    return render(request, 'myapp/game_list.html', {
+        'games': listing.rows,
+        'years': service.list_game_seasons(),
+        'teams': service.list_teams().rows,
+        'selected_year': year,
+        'selected_team': team_id,
+    })
+
+
+def game_detail(request, game_id):
+    """試合詳細。その試合の出場選手の成績を並べる。"""
+    try:
+        detail = _service().get_game_detail(game_id)
+    except GameNotFound:
+        raise Http404("試合が見つかりません。")
+
+    return render(request, 'myapp/game_detail.html', {'detail': detail})
+
+
+def player_detail(request, team_id, player_id):
+    """選手の個人ページ。通算成績と試合ごとの記録。"""
+    try:
+        profile = _service().get_player_profile(team_id, player_id)
+    except (TeamNotFound, PlayerNotFound):
+        raise Http404("選手が見つかりません。")
+
+    return render(request, 'myapp/player_detail.html', {
+        'profile': profile,
+        'player': profile.detail,
     })
 
 

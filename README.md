@@ -316,12 +316,17 @@ presentation  →  application  →  domain  ←  infrastructure
 
 ```
 /                        ダッシュボード（ホーム）
+├── /games/              試合一覧（年・チームで絞り込み）
+│   └── /games/<id>/     試合詳細（出場選手の成績）
 ├── /standings/          順位表（年で切替）
 ├── /teams/              チーム一覧
 │   └── /team/<id>/      選手一覧（野手／投手を切替）
-│       └── .../player/<id>/edit/   選手の成績編集
+│       └── .../player/<id>/        選手の個人ページ（通算＋試合ごと）
+│           └── .../edit/           選手の基本情報の編集
 └── /accounts/...        ログイン・新規登録・パスワード関連
 ```
+
+実装の進め方は [docs/ROADMAP.md](docs/ROADMAP.md) を参照。
 
 ### 並べ替え
 

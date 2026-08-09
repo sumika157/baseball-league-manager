@@ -1,0 +1,99 @@
+{% extends 'myapp/base.html' %}
+
+{% block title %}試合一覧 - Baseball Manager{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>
+    <li class="breadcrumb-item active">試合</li>
+  </ol>
+</nav>
+
+<div class="page-head">
+  <h1 class="page-title">試合</h1>
+  <p class="page-subtitle">
+    ここに登録された結果から、チームの勝敗と選手の通算成績が集計されます。 · {{ games|length }}件
+  </p>
+</div>
+
+{% if years or teams %}
+  <form method="get" class="card mb-3">
+    <div class="card-body">
+      <div class="row g-2 align-items-end">
+        <div class="col-md-3">
+          <label class="form-label">シーズン</label>
+          <select name="year" class="form-select">
+            <option value="">すべて</option>
+            {% for year in years %}
+              <option value="{{ year }}" {% if year == selected_year %}selected{% endif %}>{{ year }}年</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-5">
+          <label class="form-label">チーム</label>
+          <select name="team" class="form-select">
+            <option value="">すべて</option>
+            {% for team in teams %}
+              <option value="{{ team.id }}" {% if team.id == selected_team %}selected{% endif %}>{{ team.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-2">
+          <button type="submit" class="btn btn-primary w-100">絞り込む</button>
+        </div>
+        <div class="col-md-2">
+          <a href="{% url 'game_list' %}" class="btn btn-secondary w-100">解除</a>
+        </div>
+      </div>
+    </div>
+  </form>
+{% endif %}
+
+<div class="table-responsive">
+  <table class="table table-hover">
+    <thead>
+      <tr>
+        <th>試合日</th>
+        <th>ホーム</th>
+        <th class="text-center">スコア</th>
+        <th>ビジター</th>
+        <th>結果</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for game in games %}
+        <tr>
+          <td class="stat-muted">{{ game.played_on|date:"Y/m/d" }}</td>
+          <td>
+            <a href="{% url 'player_list' game.home_team_id %}"
+               class="player-name {% if game.winner_team_id == game.home_team_id %}stat-tier-high{% endif %}">
+              {{ game.home_team_name }}
+            </a>
+          </td>
+          <td class="text-center stat-key">{{ game.home_score }} - {{ game.away_score }}</td>
+          <td>
+            <a href="{% url 'player_list' game.away_team_id %}"
+               class="player-name {% if game.winner_team_id == game.away_team_id %}stat-tier-high{% endif %}">
+              {{ game.away_team_name }}
+            </a>
+          </td>
+          <td class="stat-muted">{{ game.result }}</td>
+          <td class="text-end">
+            <a href="{% url 'game_detail' game.id %}" class="btn btn-sm btn-outline-info">詳細</a>
+          </td>
+        </tr>
+      {% empty %}
+        <tr>
+          <td colspan="6">
+            <div class="empty-state">
+              該当する試合がありません。管理画面の「試合」から登録してください。
+            </div>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

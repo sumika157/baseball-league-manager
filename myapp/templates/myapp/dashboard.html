@@ -47,9 +47,11 @@
       <div class="card-header d-flex justify-content-between align-items-center">
         <span>チーム</span>
         <span>
+          <a href="{% url 'game_list' %}" class="card-header-link">試合</a>
+          <span class="stat-muted mx-1">/</span>
           <a href="{% url 'standings' %}" class="card-header-link">順位表</a>
           <span class="stat-muted mx-1">/</span>
-          <a href="{% url 'team_list' %}" class="card-header-link">すべて見る →</a>
+          <a href="{% url 'team_list' %}" class="card-header-link">すべて</a>
         </span>
       </div>
       <div class="card-body p-0">

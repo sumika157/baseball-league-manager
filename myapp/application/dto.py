@@ -21,6 +21,87 @@ class TeamSummary:
 
 
 @dataclass(frozen=True)
+class GameRow:
+    """試合一覧の1行。"""
+
+    id: int
+    year: int
+    played_on: object
+    home_team_id: int
+    home_team_name: str
+    away_team_id: int
+    away_team_name: str
+    home_score: int
+    away_score: int
+    result: str          # '引分' または '<チーム名> の勝ち'
+    winner_team_id: int | None
+
+
+@dataclass(frozen=True)
+class GamePlayerRow:
+    """試合詳細に並べる、1選手ぶんの成績。"""
+
+    player_id: int
+    player_name: str
+    number: int
+    team_id: int
+    team_name: str
+    # 打撃
+    at_bats: int = 0
+    hits: int = 0
+    home_runs: int = 0
+    runs_batted_in: int = 0
+    walks: int = 0
+    batting_average: float = 0.0
+    # 投球
+    innings_pitched: str = '0.0'
+    earned_runs: int = 0
+    strikeouts: int = 0
+    hits_allowed: int = 0
+    earned_run_average: float = 0.0
+
+
+@dataclass(frozen=True)
+class GameDetail:
+    """試合詳細。"""
+
+    game: GameRow
+    batting: list[GamePlayerRow]
+    pitching: list[GamePlayerRow]
+
+
+@dataclass(frozen=True)
+class PlayerGameRow:
+    """選手個人ページの、試合ごとの成績1行。"""
+
+    game_id: int
+    played_on: object
+    opponent_name: str
+    result: str          # '勝' / '敗' / '分'
+    # 打撃
+    at_bats: int = 0
+    hits: int = 0
+    home_runs: int = 0
+    runs_batted_in: int = 0
+    # 投球
+    innings_pitched: str = '0.0'
+    earned_runs: int = 0
+    strikeouts: int = 0
+
+
+@dataclass(frozen=True)
+class PlayerProfile:
+    """選手個人ページ。通算成績と試合ごとの記録。"""
+
+    detail: 'PlayerDetail'
+    games: list[PlayerGameRow]
+
+    @property
+    def appearances(self) -> int:
+        return len(self.games)
+
+
+@dataclass(frozen=True)
 class Listing:
     """並べ替えた一覧と、実際に採用された並び順。
 

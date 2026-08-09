@@ -22,9 +22,14 @@ from .dto import (
     AdminOverview,
     BatterRow,
     Dashboard,
+    GameDetail,
+    GamePlayerRow,
+    GameRow,
     Listing,
     PitcherRow,
     PlayerDetail,
+    PlayerGameRow,
+    PlayerProfile,
     RankingEntry,
     Standings,
     StandingRow,
@@ -209,6 +214,109 @@ class TeamApplicationService:
             descending=desc,
         )
 
+    # --- 試合の参照 ---
+
+    def list_games(self, *, year: int | None = None, team_id: int | None = None) -> Listing:
+        """試合の一覧。新しい順。"""
+        games = (
+            self._games.find_by_team(team_id, year)
+            if team_id is not None
+            else self._games.find_all(year)
+        )
+        names = self._team_names()
+        rows = [self._to_game_row(g, names) for g in games]
+        rows.sort(key=lambda r: (r.played_on, r.id), reverse=True)
+        return Listing(rows=rows, sort='date', descending=True)
+
+    def list_game_seasons(self) -> list[int]:
+        return [s.year for s in domain_services.seasons_of(self._games.find_all())]
+
+    def get_game_detail(self, game_id: int) -> GameDetail:
+        """試合詳細。出場選手の成績を名前付きで返す。"""
+        game = self._games.find_by_id(game_id)
+        names = self._team_names()
+        players = self._player_index()
+
+        batting = []
+        for entry in game.batting:
+            info = players.get(entry.player_id)
+            if info is None:
+                continue
+            line = entry.line
+            batting.append(GamePlayerRow(
+                player_id=entry.player_id,
+                player_name=info['name'],
+                number=info['number'],
+                team_id=info['team_id'],
+                team_name=names.get(info['team_id'], ''),
+                at_bats=line.at_bats,
+                hits=line.hits,
+                home_runs=line.home_runs,
+                runs_batted_in=line.runs_batted_in,
+                walks=line.walks,
+                batting_average=line.batting_average,
+            ))
+
+        pitching = []
+        for entry in game.pitching:
+            info = players.get(entry.player_id)
+            if info is None:
+                continue
+            line = entry.line
+            pitching.append(GamePlayerRow(
+                player_id=entry.player_id,
+                player_name=info['name'],
+                number=info['number'],
+                team_id=info['team_id'],
+                team_name=names.get(info['team_id'], ''),
+                innings_pitched=str(line.innings),
+                earned_runs=line.earned_runs,
+                strikeouts=line.strikeouts,
+                hits_allowed=line.hits_allowed,
+                earned_run_average=line.earned_run_average,
+            ))
+
+        batting.sort(key=lambda r: (r.team_name, r.number))
+        pitching.sort(key=lambda r: (r.team_name, r.number))
+
+        return GameDetail(
+            game=self._to_game_row(game, names), batting=batting, pitching=pitching
+        )
+
+    def get_player_profile(self, team_id: int, player_id: int) -> PlayerProfile:
+        """選手個人ページ。通算成績と、試合ごとの成績。"""
+        detail = self.get_player_detail(team_id, player_id)
+        names = self._team_names()
+
+        rows = []
+        for game in self._games.find_by_team(team_id):
+            batting = next((e for e in game.batting if e.player_id == player_id), None)
+            pitching = next((e for e in game.pitching if e.player_id == player_id), None)
+            if batting is None and pitching is None:
+                continue
+
+            opponent_id = (
+                game.away_team_id if game.home_team_id == team_id else game.home_team_id
+            )
+            rows.append(PlayerGameRow(
+                game_id=game.id,
+                played_on=game.played_on,
+                opponent_name=names.get(opponent_id, ''),
+                result={'win': '勝', 'loss': '敗', 'tie': '分'}[game.result_for(team_id)],
+                at_bats=batting.line.at_bats if batting else 0,
+                hits=batting.line.hits if batting else 0,
+                home_runs=batting.line.home_runs if batting else 0,
+                runs_batted_in=batting.line.runs_batted_in if batting else 0,
+                innings_pitched=str(pitching.line.innings) if pitching else '0.0',
+                earned_runs=pitching.line.earned_runs if pitching else 0,
+                strikeouts=pitching.line.strikeouts if pitching else 0,
+            ))
+
+        rows.sort(key=lambda r: (r.played_on, r.game_id), reverse=True)
+        return PlayerProfile(detail=detail, games=rows)
+
+    # --- 試合の登録 ---
+
     def record_game(
         self,
         *,
@@ -299,6 +407,40 @@ class TeamApplicationService:
         player.retire()
         self._teams.save(team)
         return player
+
+    # --- 参照用の索引 ---
+
+    def _team_names(self) -> dict[int, str]:
+        return {t.id: t.name for t in self._teams.find_all()}
+
+    def _player_index(self) -> dict[int, dict]:
+        """選手 id から名前・背番号・所属チームを引ける索引。"""
+        index = {}
+        for team in self._teams.find_all_with_roster():
+            for player in team.players:
+                index[player.id] = {
+                    'name': player.name,
+                    'number': player.number.value,
+                    'team_id': team.id,
+                }
+        return index
+
+    @staticmethod
+    def _to_game_row(game: Game, names: dict[int, str]) -> GameRow:
+        winner = game.winner_team_id
+        return GameRow(
+            id=game.id,
+            year=game.season.year,
+            played_on=game.played_on,
+            home_team_id=game.home_team_id,
+            home_team_name=names.get(game.home_team_id, ''),
+            away_team_id=game.away_team_id,
+            away_team_name=names.get(game.away_team_id, ''),
+            home_score=game.home_score,
+            away_score=game.away_score,
+            result='引分' if winner is None else f'{names.get(winner, "")} の勝ち',
+            winner_team_id=winner,
+        )
 
     # --- DTO への詰め替え ---
 

@@ -1,0 +1,118 @@
+{% extends 'myapp/base.html' %}
+
+{% block title %}{{ player.name }} - Baseball Manager{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>
+    <li class="breadcrumb-item"><a href="{% url 'team_list' %}">チーム一覧</a></li>
+    <li class="breadcrumb-item"><a href="{% url 'player_list' player.team_id %}">選手一覧</a></li>
+    <li class="breadcrumb-item active">{{ player.name }}</li>
+  </ol>
+</nav>
+
+<div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
+  <div class="page-head mb-0">
+    <h1 class="page-title">
+      <span class="jersey-number me-2">{{ player.number }}</span>{{ player.name }}
+    </h1>
+    <p class="page-subtitle">{{ player.position }} · 出場 {{ profile.appearances }}試合</p>
+  </div>
+  <a href="{% url 'player_edit' player.team_id player.id %}" class="btn btn-secondary">編集</a>
+</div>
+
+<div class="stat-strip">
+  {% if player.is_pitcher %}
+    <div class="stat-cell">
+      <div class="stat-value">{{ player.earned_run_average|floatformat:2 }}</div>
+      <div class="stat-label">防御率</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-value">{{ player.whip|floatformat:2 }}</div>
+      <div class="stat-label">WHIP</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-value">{{ player.strikeouts_per_nine|floatformat:2 }}</div>
+      <div class="stat-label">K/9</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-value">{{ player.innings_pitched }}</div>
+      <div class="stat-label">投球回</div>
+    </div>
+  {% else %}
+    <div class="stat-cell">
+      <div class="stat-value">{{ player.batting_average|floatformat:3 }}</div>
+      <div class="stat-label">打率</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-value">{{ player.on_base_percentage|floatformat:3 }}</div>
+      <div class="stat-label">出塁率</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-value">{{ player.slugging_percentage|floatformat:3 }}</div>
+      <div class="stat-label">長打率</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-value">{{ player.ops|floatformat:3 }}</div>
+      <div class="stat-label">OPS</div>
+    </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="card-header">試合ごとの成績</div>
+  <div class="card-body p-0">
+    {% if profile.games %}
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>試合日</th>
+            <th>対戦</th>
+            <th class="text-center">結果</th>
+            {% if player.is_pitcher %}
+              <th class="text-end">投球回</th>
+              <th class="text-end">自責点</th>
+              <th class="text-end">奪三振</th>
+            {% else %}
+              <th class="text-end">打数</th>
+              <th class="text-end">安打</th>
+              <th class="text-end">本塁打</th>
+              <th class="text-end">打点</th>
+            {% endif %}
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in profile.games %}
+            <tr>
+              <td class="stat-muted">{{ row.played_on|date:"Y/m/d" }}</td>
+              <td>{{ row.opponent_name }}</td>
+              <td class="text-center">
+                <span class="badge {% if row.result == '勝' %}bg-primary{% else %}bg-secondary{% endif %}">{{ row.result }}</span>
+              </td>
+              {% if player.is_pitcher %}
+                <td class="text-end">{{ row.innings_pitched }}</td>
+                <td class="text-end">{{ row.earned_runs }}</td>
+                <td class="text-end">{{ row.strikeouts }}</td>
+              {% else %}
+                <td class="text-end">{{ row.at_bats }}</td>
+                <td class="text-end">{{ row.hits }}</td>
+                <td class="text-end">{{ row.home_runs }}</td>
+                <td class="text-end">{{ row.runs_batted_in }}</td>
+              {% endif %}
+              <td class="text-end">
+                <a href="{% url 'game_detail' row.game_id %}" class="btn btn-sm btn-outline-info">試合</a>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="empty-state">
+        出場した試合がまだありません。管理画面の「試合」から成績を登録してください。
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
