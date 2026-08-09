@@ -1552,6 +1552,38 @@ class AdminStintValidationTest(BaseCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, '退団年が加入年より前')
 
+    def test_blank_joining_year_falls_back_to_the_debut_year(self):
+        """最初の在籍では加入年＝入団年になることがほとんど。
+
+        同じ年を二度入力させる意味が無いので、空欄なら入団年で埋める。
+        """
+        orm_models.Player.objects.filter(pk=self.other.id).update(debut_year=2019)
+        past = orm_models.Team.objects.create(league=self.league, name='前所属')
+
+        self._add(team=past.id, number='55', from_year='')
+
+        stint = orm_models.PlayerStint.objects.get(player_id=self.other.id, team=past)
+        self.assertEqual(stint.from_year, 2019)
+
+    def test_explicit_joining_year_wins_over_the_debut_year(self):
+        orm_models.Player.objects.filter(pk=self.other.id).update(debut_year=2019)
+        past = orm_models.Team.objects.create(league=self.league, name='前所属')
+
+        self._add(team=past.id, number='55', from_year='2022')
+
+        stint = orm_models.PlayerStint.objects.get(player_id=self.other.id, team=past)
+        self.assertEqual(stint.from_year, 2022)
+
+    def test_blank_joining_year_is_rejected_without_a_debut_year(self):
+        """埋める材料が無いときだけ入力を求める。"""
+        past = orm_models.Team.objects.create(league=self.league, name='前所属')
+
+        response = self._add(team=past.id, number='55', from_year='')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '加入年を入力してください')
+        self.assertFalse(orm_models.PlayerStint.objects.filter(team=past).exists())
+
     def test_editing_a_stint_does_not_conflict_with_itself(self):
         stint = orm_models.PlayerStint.objects.get(player_id=self.player.id)
 
@@ -1573,11 +1605,12 @@ class AdminPlayerWithStintsTest(BaseCase):
         self.client.force_login(User.objects.create_superuser(username='root', password='x'))
         self.past = orm_models.Team.objects.create(league=self.league, name='前所属')
 
-    def _post(self, stints):
+    def _post(self, stints, debut_year=''):
         payload = {
             'name': '新人太郎', 'position': '投手',
             'birth_date': '', 'throws': '', 'bats': '',
-            'height_cm': '', 'weight_kg': '', 'birthplace': '', 'debut_year': '',
+            'height_cm': '', 'weight_kg': '', 'birthplace': '',
+            'debut_year': debut_year,
             'high_school': '', 'university': '', 'corporate_team': '',
             'stints-TOTAL_FORMS': str(len(stints)), 'stints-INITIAL_FORMS': '0',
             'stints-MIN_NUM_FORMS': '0', 'stints-MAX_NUM_FORMS': '1000',
@@ -1633,6 +1666,13 @@ class AdminPlayerWithStintsTest(BaseCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, '同じチームに同時に2度在籍することはできません')
         self.assertIsNone(self._created())
+
+    def test_stint_takes_the_debut_year_entered_on_the_same_page(self):
+        """入団年はまだ保存されていないが、同じ画面で入力されている。"""
+        response = self._post([(self.team, 18, '', '')], debut_year='2021')
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self._created().stints.get().from_year, 2021)
 
     def test_number_taken_by_another_player_is_still_rejected(self):
         """新規登録でも、他の選手との背番号の重なりは弾く。"""

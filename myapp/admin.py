@@ -320,8 +320,16 @@ class PlayerStintForm(forms.ModelForm):
         model = PlayerStint
         fields = '__all__'
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # 入団年で埋められるので、入力そのものは必須にしない
+        self.fields['from_year'].required = False
+        self.fields['from_year'].help_text = '空欄なら選手の入団年を使います。'
+
     def clean(self):
         cleaned = super().clean()
+        self._fill_from_year(cleaned)
+
         team = cleaned.get('team')
         number = cleaned.get('number')
         from_year = cleaned.get('from_year')
@@ -361,6 +369,27 @@ class PlayerStintForm(forms.ModelForm):
                     f'使用しています。期間が重なる同じ背番号は登録できません。'
                 )
         return cleaned
+
+    def _fill_from_year(self, cleaned):
+        """加入年が空欄なら、選手の入団年で埋める。
+
+        最初の在籍では加入年＝入団年になることがほとんどで、同じ年を
+        二度入力させる意味が無い。どちらも空欄のときだけ入力を求める。
+        """
+        if cleaned.get('from_year') is not None:
+            return
+
+        player = cleaned.get('player')
+        debut_year = getattr(player, 'debut_year', None) if player else None
+        if debut_year is None:
+            self.add_error(
+                'from_year',
+                '加入年を入力してください。'
+                '選手に入団年が登録されていれば、空欄でもそちらを使います。',
+            )
+            return
+
+        cleaned['from_year'] = debut_year
 
 
 class PlayerStintFormSet(forms.BaseInlineFormSet):
