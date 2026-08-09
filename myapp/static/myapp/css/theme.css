@@ -1,0 +1,655 @@
+/*
+ * Baseball Manager テーマ層
+ *
+ * Bootstrap 5 の上に重ねる薄い層。グリッドとユーティリティは Bootstrap のまま使い、
+ * 配色・余白・タイポグラフィ・角丸だけをここで上書きする。
+ * Bootstrap 本体は差し替えないので、テンプレート側の class はほぼそのまま使える。
+ */
+
+/* ------------------------------------------------------------------
+   デザイントークン
+   ------------------------------------------------------------------ */
+:root {
+  /* 面と境界 */
+  --app-bg: #f7f8fa;
+  --app-surface: #ffffff;
+  --app-surface-muted: #fbfcfd;
+  --app-border: #e6e8ec;
+  --app-border-strong: #d6d9df;
+
+  /* 文字 */
+  --app-text: #16181d;
+  --app-text-muted: #6b7280;
+  --app-text-subtle: #9099a5;
+
+  /* アクセント（使いどころを絞る） */
+  --app-accent: #4f46e5;
+  --app-accent-hover: #4338ca;
+  --app-accent-soft: #eef2ff;
+  --app-accent-border: #c7d2fe;
+
+  /* 成績の良し悪しを示す色。多用せず、数値の強調だけに使う */
+  --app-positive: #047857;
+  --app-positive-soft: #ecfdf5;
+  --app-caution: #b45309;
+  --app-negative: #b91c1c;
+  --app-negative-soft: #fef2f2;
+
+  /* 影。輪郭を強調せず、面をわずかに浮かせる程度にとどめる */
+  --app-shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.04);
+  --app-shadow: 0 1px 3px rgba(16, 24, 40, 0.06), 0 1px 2px rgba(16, 24, 40, 0.04);
+  --app-shadow-lg: 0 8px 24px rgba(16, 24, 40, 0.08);
+
+  --app-radius-sm: 6px;
+  --app-radius: 10px;
+  --app-radius-lg: 14px;
+
+  --app-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Hiragino Kaku Gothic ProN", "Noto Sans JP", Meiryo, sans-serif;
+
+  /* Bootstrap 側の変数も揃えておく */
+  --bs-body-bg: var(--app-bg);
+  --bs-body-color: var(--app-text);
+  --bs-border-color: var(--app-border);
+  --bs-border-radius: var(--app-radius);
+  --bs-link-color: var(--app-accent);
+  --bs-link-hover-color: var(--app-accent-hover);
+  --bs-font-sans-serif: var(--app-font);
+}
+
+/* ------------------------------------------------------------------
+   ベース
+   ------------------------------------------------------------------ */
+body {
+  background-color: var(--app-bg);
+  color: var(--app-text);
+  font-family: var(--app-font);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: 0.01em;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  letter-spacing: -0.015em;
+  font-weight: 650;
+  color: var(--app-text);
+}
+
+a {
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: none;
+}
+
+/* 数値は必ず等幅にして桁を揃える。成績表の可読性はこれで大きく変わる */
+.stat,
+.table td,
+.table th {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* ------------------------------------------------------------------
+   ヘッダー
+   ------------------------------------------------------------------ */
+.app-header {
+  background-color: var(--app-surface);
+  border-bottom: 1px solid var(--app-border);
+  padding: 0.875rem 0;
+  margin-bottom: 2.5rem;
+}
+
+.app-header .app-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1.0625rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--app-text);
+}
+
+.app-header .app-brand:hover {
+  color: var(--app-accent);
+}
+
+.app-brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: var(--app-accent);
+  color: #fff;
+  font-size: 0.8125rem;
+}
+
+.app-nav-user {
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  font-size: 0.875rem;
+  color: var(--app-text-muted);
+}
+
+/* ------------------------------------------------------------------
+   ページ見出し
+   ------------------------------------------------------------------ */
+.page-head {
+  margin-bottom: 1.75rem;
+}
+
+.page-head .page-title {
+  font-size: 1.5rem;
+  font-weight: 650;
+  margin-bottom: 0.25rem;
+}
+
+.page-head .page-subtitle {
+  color: var(--app-text-muted);
+  font-size: 0.9375rem;
+  margin: 0;
+}
+
+/* ------------------------------------------------------------------
+   カード
+   ------------------------------------------------------------------ */
+.card {
+  background-color: var(--app-surface);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-lg);
+  box-shadow: var(--app-shadow-sm);
+}
+
+.card-header {
+  background-color: transparent;
+  border-bottom: 1px solid var(--app-border);
+  padding: 1rem 1.25rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--app-text);
+  letter-spacing: 0.005em;
+}
+
+.card-body {
+  padding: 1.25rem;
+}
+
+/* Bootstrap の色付きヘッダーは使わず、落ち着いた面に統一する */
+.card-header.bg-dark,
+.card-header.bg-primary {
+  background-color: var(--app-surface-muted) !important;
+  color: var(--app-text) !important;
+}
+
+.card.border-primary,
+.card.border-secondary {
+  border-color: var(--app-border) !important;
+}
+
+/* 一覧のカードは押せることが伝わる程度に反応させる */
+.card-link-tile {
+  display: block;
+  height: 100%;
+  color: inherit;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.card-link-tile:hover {
+  border-color: var(--app-border-strong);
+  box-shadow: var(--app-shadow-lg);
+  transform: translateY(-2px);
+  color: inherit;
+}
+
+.card-link-tile .tile-arrow {
+  color: var(--app-text-subtle);
+  transition: transform 0.15s ease, color 0.15s ease;
+}
+
+.card-link-tile:hover .tile-arrow {
+  color: var(--app-accent);
+  transform: translateX(3px);
+}
+
+/* ------------------------------------------------------------------
+   テーブル
+   ------------------------------------------------------------------ */
+.table {
+  --bs-table-bg: transparent;
+  margin-bottom: 0;
+  color: var(--app-text);
+}
+
+.table > thead th {
+  background-color: transparent;
+  border-bottom: 1px solid var(--app-border);
+  padding: 0.6rem 0.75rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--app-text-subtle);
+  white-space: nowrap;
+}
+
+.table > tbody td {
+  padding: 0.8rem 0.75rem;
+  border-bottom: 1px solid var(--app-border);
+  vertical-align: middle;
+  font-size: 0.9375rem;
+}
+
+.table > tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.table-hover > tbody > tr:hover > * {
+  --bs-table-accent-bg: transparent;
+  background-color: var(--app-surface-muted);
+}
+
+/* Bootstrap の枠線指定を打ち消して、行区切りだけで構成する */
+.table.border,
+.table-bordered {
+  border: none !important;
+}
+
+.table-responsive {
+  background-color: var(--app-surface);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-lg);
+  box-shadow: var(--app-shadow-sm);
+  overflow-x: auto;
+}
+
+.table-responsive > .table > thead th:first-child,
+.table-responsive > .table > tbody td:first-child {
+  padding-left: 1.25rem;
+}
+
+.table-responsive > .table > thead th:last-child,
+.table-responsive > .table > tbody td:last-child {
+  padding-right: 1.25rem;
+}
+
+/* 背番号 */
+.jersey-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2rem;
+  height: 1.75rem;
+  padding: 0 0.4rem;
+  border-radius: var(--app-radius-sm);
+  background: var(--app-surface-muted);
+  border: 1px solid var(--app-border);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--app-text-muted);
+}
+
+.player-name {
+  font-weight: 550;
+}
+
+/* 成績値。主要指標は少し大きく、それ以外は控えめに */
+.stat-key {
+  font-weight: 650;
+  font-size: 1rem;
+}
+
+.stat-tier-high {
+  color: var(--app-positive);
+}
+
+.stat-tier-mid {
+  color: var(--app-accent);
+}
+
+.stat-muted {
+  color: var(--app-text-muted);
+}
+
+/* ------------------------------------------------------------------
+   サマリー（主要指標の並び）
+   ------------------------------------------------------------------ */
+.stat-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px;
+  background: var(--app-border);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-lg);
+  overflow: hidden;
+  margin-bottom: 1.75rem;
+}
+
+.stat-strip .stat-cell {
+  flex: 1 1 0;
+  min-width: 7rem;
+  background: var(--app-surface);
+  padding: 1rem 1.25rem;
+}
+
+.stat-strip .stat-cell .stat-value {
+  font-size: 1.5rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.stat-strip .stat-cell .stat-label {
+  font-size: 0.75rem;
+  color: var(--app-text-subtle);
+  letter-spacing: 0.04em;
+  margin-top: 0.125rem;
+}
+
+/* ------------------------------------------------------------------
+   ボタン
+   ------------------------------------------------------------------ */
+.btn {
+  border-radius: var(--app-radius-sm);
+  font-size: 0.875rem;
+  font-weight: 550;
+  padding: 0.5rem 0.9rem;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.btn-primary,
+.btn-success {
+  background-color: var(--app-accent);
+  border-color: var(--app-accent);
+  color: #fff;
+}
+
+.btn-primary:hover,
+.btn-success:hover,
+.btn-primary:focus,
+.btn-success:focus {
+  background-color: var(--app-accent-hover);
+  border-color: var(--app-accent-hover);
+  color: #fff;
+}
+
+.btn-secondary,
+.btn-outline-secondary {
+  background-color: var(--app-surface);
+  border-color: var(--app-border-strong);
+  color: var(--app-text);
+}
+
+.btn-secondary:hover,
+.btn-outline-secondary:hover {
+  background-color: var(--app-surface-muted);
+  border-color: var(--app-border-strong);
+  color: var(--app-text);
+}
+
+.btn-outline-info,
+.btn-sm.btn-outline-info {
+  background-color: transparent;
+  border-color: var(--app-border-strong);
+  color: var(--app-text-muted);
+  padding: 0.3rem 0.7rem;
+  font-size: 0.8125rem;
+}
+
+.btn-outline-info:hover {
+  background-color: var(--app-accent-soft);
+  border-color: var(--app-accent-border);
+  color: var(--app-accent-hover);
+}
+
+.btn-link-quiet {
+  color: var(--app-text-muted);
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.875rem;
+}
+
+.btn-link-quiet:hover {
+  color: var(--app-accent);
+}
+
+/* ------------------------------------------------------------------
+   フォーム
+   ------------------------------------------------------------------ */
+.form-label {
+  font-size: 0.8125rem;
+  font-weight: 550;
+  color: var(--app-text-muted);
+  margin-bottom: 0.375rem;
+}
+
+.form-control,
+.form-select {
+  border-radius: var(--app-radius-sm);
+  border-color: var(--app-border-strong);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.9375rem;
+  color: var(--app-text);
+  background-color: var(--app-surface);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.form-control::placeholder {
+  color: var(--app-text-subtle);
+}
+
+.form-control:focus,
+.form-select:focus {
+  border-color: var(--app-accent-border);
+  box-shadow: 0 0 0 3px var(--app-accent-soft);
+}
+
+.form-text {
+  font-size: 0.75rem;
+  color: var(--app-text-subtle);
+}
+
+/* Django の form.as_p をそのまま使う画面（ログイン・新規登録）の調整 */
+.form-stack p {
+  margin-bottom: 1rem;
+}
+
+.form-stack label {
+  display: block;
+  font-size: 0.8125rem;
+  font-weight: 550;
+  color: var(--app-text-muted);
+  margin-bottom: 0.375rem;
+}
+
+.form-stack input {
+  width: 100%;
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-radius-sm);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.9375rem;
+  font-family: inherit;
+  color: var(--app-text);
+  background-color: var(--app-surface);
+}
+
+.form-stack input:focus {
+  outline: none;
+  border-color: var(--app-accent-border);
+  box-shadow: 0 0 0 3px var(--app-accent-soft);
+}
+
+.form-stack .helptext,
+.form-stack ul {
+  font-size: 0.75rem;
+  color: var(--app-text-subtle);
+  padding-left: 1rem;
+  margin: 0.375rem 0 0;
+}
+
+.form-stack .errorlist {
+  list-style: none;
+  padding: 0;
+  color: var(--app-negative);
+}
+
+/* ------------------------------------------------------------------
+   セグメント切替（野手／投手）
+   ------------------------------------------------------------------ */
+.segmented {
+  display: inline-flex;
+  padding: 3px;
+  gap: 3px;
+  background: var(--app-surface-muted);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius);
+  margin-bottom: 1.25rem;
+}
+
+.segmented .segmented-item {
+  padding: 0.4rem 1rem;
+  border-radius: var(--app-radius-sm);
+  font-size: 0.875rem;
+  font-weight: 550;
+  color: var(--app-text-muted);
+  transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.segmented .segmented-item:hover {
+  color: var(--app-text);
+}
+
+.segmented .segmented-item.is-active {
+  background: var(--app-surface);
+  color: var(--app-text);
+  box-shadow: var(--app-shadow-sm);
+}
+
+/* ------------------------------------------------------------------
+   バッジ・パンくず・通知
+   ------------------------------------------------------------------ */
+.badge {
+  font-size: 0.6875rem;
+  font-weight: 550;
+  padding: 0.25em 0.55em;
+  border-radius: var(--app-radius-sm);
+  letter-spacing: 0.01em;
+}
+
+.badge.bg-secondary {
+  background-color: var(--app-surface-muted) !important;
+  color: var(--app-text-muted) !important;
+  border: 1px solid var(--app-border);
+}
+
+.badge.bg-primary {
+  background-color: var(--app-accent-soft) !important;
+  color: var(--app-accent-hover) !important;
+  border: 1px solid var(--app-accent-border);
+}
+
+.breadcrumb {
+  font-size: 0.8125rem;
+  margin-bottom: 1rem;
+}
+
+.breadcrumb-item a {
+  color: var(--app-text-muted);
+}
+
+.breadcrumb-item a:hover {
+  color: var(--app-accent);
+}
+
+.breadcrumb-item.active {
+  color: var(--app-text);
+}
+
+.alert {
+  border-radius: var(--app-radius);
+  border: 1px solid transparent;
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  box-shadow: var(--app-shadow-sm);
+}
+
+.alert-success {
+  background-color: var(--app-positive-soft);
+  border-color: #a7f3d0;
+  color: var(--app-positive);
+}
+
+.alert-danger {
+  background-color: var(--app-negative-soft);
+  border-color: #fecaca;
+  color: var(--app-negative);
+}
+
+.alert-info,
+.alert-secondary {
+  background-color: var(--app-accent-soft);
+  border-color: var(--app-accent-border);
+  color: var(--app-accent-hover);
+}
+
+.alert-warning {
+  background-color: #fffbeb;
+  border-color: #fde68a;
+  color: var(--app-caution);
+}
+
+/* ------------------------------------------------------------------
+   空状態
+   ------------------------------------------------------------------ */
+.empty-state {
+  padding: 3rem 1rem;
+  text-align: center;
+  color: var(--app-text-subtle);
+  font-size: 0.9375rem;
+}
+
+/* ------------------------------------------------------------------
+   認証画面
+   ------------------------------------------------------------------ */
+.auth-shell {
+  max-width: 380px;
+  margin: 3rem auto;
+}
+
+.auth-shell .card-body {
+  padding: 1.75rem;
+}
+
+.auth-title {
+  font-size: 1.25rem;
+  font-weight: 650;
+  text-align: center;
+  margin-bottom: 1.5rem;
+}
+
+/* ------------------------------------------------------------------
+   小さい画面
+   ------------------------------------------------------------------ */
+@media (max-width: 575.98px) {
+  .app-header {
+    margin-bottom: 1.5rem;
+  }
+
+  .page-head .page-title {
+    font-size: 1.25rem;
+  }
+
+  .stat-strip .stat-cell {
+    min-width: 5.5rem;
+    padding: 0.75rem 0.875rem;
+  }
+
+  .stat-strip .stat-cell .stat-value {
+    font-size: 1.25rem;
+  }
+}

@@ -266,7 +266,12 @@ my_django_project/
 │   ├── urls.py             # アプリの URL 定義
 │   ├── migrations/         # マイグレーション
 │   ├── tests/              # 層ごとのテスト
+│   ├── static/myapp/css/
+│   │   └── theme.css       # Bootstrap に重ねるテーマ層
 │   └── templates/          # HTML テンプレート
+│       ├── myapp/              画面本体・404・500
+│       ├── registration/       ログイン・新規登録・パスワード関連
+│       └── admin/              管理画面用の上書き
 ├── Dockerfile              # イメージ定義
 ├── docker-compose.yml      # サービス定義（ポート公開・マウント・自動 migrate）
 ├── .dockerignore           # イメージに含めないファイル
@@ -319,6 +324,28 @@ presentation  →  application  →  domain  ←  infrastructure
 - **更新** はリポジトリ経由で集約単位に読み書きします（不変条件を守るため）
 - **参照** は一覧表示のように不変条件を扱わないため、集約を組み立てず
   [infrastructure/queries.py](myapp/infrastructure/queries.py) から直接 DTO を作ります
+
+---
+
+## デザイン
+
+Bootstrap 5 の上に薄いテーマ層（[theme.css](myapp/static/myapp/css/theme.css)）を重ねています。
+グリッドとユーティリティは Bootstrap のまま使い、配色・余白・タイポグラフィ・角丸だけを上書きします。
+
+- 明るいグレー地に白の面、細い罫線。アクセントは1色に絞る
+- 成績表は `tabular-nums` で桁を揃える（データが主役の画面では効果が大きい）
+- 表は枠線を持たせず行区切りのみで構成
+
+### テンプレートの優先順位に注意
+
+`INSTALLED_APPS` では **`myapp` を `django.contrib.admin` より前**に置いています。
+テンプレートはこの順に検索されるため、後ろにあると
+`django.contrib.admin` が持つ `registration/password_*.html` が優先され、
+サイト側のパスワード関連画面が管理画面の見た目になってしまいます。
+
+その副作用として管理画面内のパスワード変更までサイト側の見た目になるため、
+管理画面用のテンプレートを `templates/admin/` に別名で用意し、
+[myapp/admin.py](myapp/admin.py) の `admin.site.password_change_template` で指定しています。
 
 ---
 

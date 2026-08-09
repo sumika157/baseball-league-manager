@@ -85,3 +85,11 @@ class PlayerDetail:
     strikeouts: int
     hits_allowed: int
     walks_allowed: int
+    # 算出済みの指標（編集中の入力がどう効くかを画面で確認できるように）
+    batting_average: float
+    on_base_percentage: float
+    slugging_percentage: float
+    ops: float
+    earned_run_average: float
+    whip: float
+    strikeouts_per_nine: float

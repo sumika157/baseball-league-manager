@@ -1,20 +1,21 @@
 {% extends 'myapp/base.html' %}
+
+{% block title %}新規登録 - Baseball Manager{% endblock %}
+
 {% block content %}
-<div class="row justify-content-center mt-5">
-    <div class="col-md-4">
-        <div class="card shadow">
-            <div class="card-body">
-                <h3 class="card-title text-center mb-4">新規登録</h3>
-                <form method="post">
-                    {% csrf_token %}
-                    {{ form.as_p }}
-                    <button type="submit" class="btn btn-success w-100">登録する</button>
-                </form>
-                <div class="text-center mt-3">
-                    <a href="{% url 'login' %}">ログインはこちら</a>
-                </div>
-            </div>
-        </div>
+<div class="auth-shell">
+  <div class="card">
+    <div class="card-body">
+      <h1 class="auth-title">新規登録</h1>
+      <form method="post" class="form-stack">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <button type="submit" class="btn btn-primary w-100 mt-2">登録する</button>
+      </form>
+      <p class="text-center mt-3 mb-0" style="font-size: 0.875rem;">
+        <a href="{% url 'login' %}">ログインはこちら</a>
+      </p>
     </div>
+  </div>
 </div>
 {% endblock %}

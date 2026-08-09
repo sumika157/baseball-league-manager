@@ -153,4 +153,11 @@ class TeamApplicationService:
             strikeouts=pitching.strikeouts,
             hits_allowed=pitching.hits_allowed,
             walks_allowed=pitching.walks_allowed,
+            batting_average=batting.batting_average,
+            on_base_percentage=batting.on_base_percentage,
+            slugging_percentage=batting.slugging_percentage,
+            ops=batting.ops,
+            earned_run_average=pitching.earned_run_average,
+            whip=pitching.whip,
+            strikeouts_per_nine=pitching.strikeouts_per_nine,
         )

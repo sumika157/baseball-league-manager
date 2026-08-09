@@ -46,13 +46,16 @@ ALLOWED_HOSTS = [
 # Application definition
 
 INSTALLED_APPS = [
+    # myapp を admin より前に置く。テンプレートは INSTALLED_APPS の順に検索されるため、
+    # django.contrib.admin が持つ registration/password_*.html より
+    # myapp 側のテンプレートを優先させる必要がある
+    'myapp',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'myapp',
 ]
 
 MIDDLEWARE = [

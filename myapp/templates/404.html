@@ -1,0 +1,17 @@
+{% extends 'myapp/base.html' %}
+
+{% block title %}ページが見つかりません - Baseball Manager{% endblock %}
+
+{% block content %}
+<div class="auth-shell">
+  <div class="card">
+    <div class="card-body text-center">
+      <h1 class="auth-title">ページが見つかりません</h1>
+      <p class="page-subtitle mb-4">
+        お探しのページは削除されたか、URL が変更された可能性があります。
+      </p>
+      <a href="{% url 'team_list' %}" class="btn btn-primary w-100">チーム一覧へ</a>
+    </div>
+  </div>
+</div>
+{% endblock %}
