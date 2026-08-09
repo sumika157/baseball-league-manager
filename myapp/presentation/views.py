@@ -61,9 +61,11 @@ def _sort_params(request):
 def team_list(request):
     """チーム一覧。"""
     sort, descending = _sort_params(request)
-    listing = _service().list_teams(sort=sort, descending=descending)
+    listing = _service().list_teams_by_league(sort=sort, descending=descending)
     return render(request, 'myapp/team_list.html', {
-        'teams': listing.rows,
+        'leagues': listing.rows,
+        # 件数の表示や既存の判定に使うため、平坦にしたものも渡す
+        'teams': [team for group in listing.rows for team in group.teams],
         'current_sort': listing.sort,
         'current_descending': listing.descending,
     })

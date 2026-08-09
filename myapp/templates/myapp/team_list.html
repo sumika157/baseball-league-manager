@@ -13,49 +13,53 @@
 
 <div class="page-head">
   <h1 class="page-title">チーム一覧</h1>
-  <p class="page-subtitle">チームを選ぶと選手名簿と成績を確認できます。 · {{ teams|length }}件</p>
+  <p class="page-subtitle">
+    チームを選ぶと選手名簿と成績を確認できます。 · {{ leagues|length }}リーグ {{ teams|length }}チーム
+  </p>
 </div>
 
 {% comment %}
-カードのグリッドだとチームが少ないときに左だけ埋まって右が空くため、
-件数に関わらず幅いっぱいを使える表にしている。選手一覧とも見た目が揃う。
+チームはリーグに所属して戦うので、一覧もリーグ単位で見せる。
+見出しにリーグ名が出るので、表の中にリーグ列は置かない。
+並べ替えはリーグの中で効く。
 {% endcomment %}
-<div class="table-responsive">
-  <table class="table table-hover">
-    <thead>
-      <tr>
-        {% sort_header 'name' 'チーム名' 'start' False %}
-        {% sort_header 'league' 'リーグ' 'start' False %}
-        {% sort_header 'city' '本拠地' 'start' False %}
-        {% sort_header 'players' '在籍選手' 'end' %}
-        <th></th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for team in teams %}
+{% for group in leagues %}
+  <div class="d-flex justify-content-between align-items-center mb-2 {% if not forloop.first %}mt-4{% endif %}">
+    <h2 class="h6 mb-0">{{ group.league_name }}</h2>
+    <a href="{% url 'league_detail' group.league_id %}" style="font-size: 0.875rem;">リーグの詳細 →</a>
+  </div>
+
+  <div class="table-responsive">
+    <table class="table table-hover">
+      <thead>
         <tr>
-          <td>
-            <a href="{% url 'player_list' team.id %}" class="player-name">{{ team.name }}</a>
-          </td>
-          <td>
-            <a href="{% url 'league_detail' team.league_id %}" class="stat-muted">{{ team.league_name }}</a>
-          </td>
-          <td class="stat-muted">{{ team.city|default:"—" }}</td>
-          <td class="text-end">{{ team.player_count }}名</td>
-          <td class="text-end">
-            <a href="{% url 'player_list' team.id %}" class="btn btn-sm btn-outline-info">選手名簿</a>
-          </td>
+          {% sort_header 'name' 'チーム名' 'start' False %}
+          {% sort_header 'city' '本拠地' 'start' False %}
+          {% sort_header 'players' '在籍選手' 'end' %}
+          <th></th>
         </tr>
-      {% empty %}
-        <tr>
-          <td colspan="5">
-            <div class="empty-state">
-              まだチームが登録されていません。管理画面から追加してください。
-            </div>
-          </td>
-        </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
+      </thead>
+      <tbody>
+        {% for team in group.teams %}
+          <tr>
+            <td>
+              <a href="{% url 'player_list' team.id %}" class="player-name">{{ team.name }}</a>
+            </td>
+            <td class="stat-muted">{{ team.city|default:"—" }}</td>
+            <td class="text-end">{{ team.player_count }}名</td>
+            <td class="text-end">
+              <a href="{% url 'player_list' team.id %}" class="btn btn-sm btn-outline-info">選手名簿</a>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% empty %}
+  <div class="card">
+    <div class="empty-state">
+      まだチームが登録されていません。管理画面から追加してください。
+    </div>
+  </div>
+{% endfor %}
 {% endblock %}

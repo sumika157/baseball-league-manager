@@ -27,6 +27,7 @@ from .dto import (
     GameRow,
     LeagueDetail,
     LeagueStandings,
+    LeagueTeams,
     Listing,
     PitcherRow,
     PlayerDetail,
@@ -64,6 +65,7 @@ class TeamApplicationService:
     }
 
     def list_teams(self, *, sort: str = None, descending: bool = None) -> Listing:
+        """チームの平坦な一覧。絞り込みの選択肢などに使う。"""
         rows = self._team_list_query.list_summaries()
 
         if sort not in self.TEAM_SORT_KEYS:
@@ -75,6 +77,27 @@ class TeamApplicationService:
         return Listing(
             rows=sorted(rows, key=getter, reverse=desc), sort=sort, descending=desc
         )
+
+    def list_teams_by_league(self, *, sort: str = None, descending: bool = None) -> Listing:
+        """リーグごとに分けたチーム一覧。
+
+        チームはリーグに所属して戦うので、一覧もその単位で見せる。
+        並べ替えはリーグの中で効く。所属チームが1つも無いリーグは出さない。
+        """
+        listing = self.list_teams(sort=sort, descending=descending)
+
+        grouped: dict[int, list] = {}
+        for team in listing.rows:
+            grouped.setdefault(team.league_id, []).append(team)
+
+        groups = [
+            LeagueTeams(
+                league_id=league.id, league_name=league.name, teams=grouped[league.id]
+            )
+            for league in self._leagues.find_all()
+            if grouped.get(league.id)
+        ]
+        return Listing(rows=groups, sort=listing.sort, descending=listing.descending)
 
     def get_dashboard(self, *, leaders: int = 5) -> Dashboard:
         """ホーム画面の概況とランキングを組み立てる。

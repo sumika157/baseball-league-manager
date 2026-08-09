@@ -715,6 +715,49 @@ class PlayerDetailViewTest(BaseCase):
         )
 
 
+class TeamListByLeagueTest(BaseCase):
+    """チーム一覧もリーグごとに分ける。"""
+
+    def setUp(self):
+        super().setUp()
+        self.other = orm_models.League.objects.create(name='別リーグ')
+        self.x = orm_models.Team.objects.create(league=self.other, name='Xチーム')
+
+    def test_grouped_by_league(self):
+        listing = self.service.list_teams_by_league()
+
+        grouped = {g.league_name: [t.name for t in g.teams] for g in listing.rows}
+        self.assertEqual(
+            grouped, {'テストリーグ': ['テストチーム', '相手チーム'], '別リーグ': ['Xチーム']}
+        )
+
+    def test_leagues_without_teams_are_omitted(self):
+        orm_models.League.objects.create(name='空リーグ')
+        names = [g.league_name for g in self.service.list_teams_by_league().rows]
+
+        self.assertNotIn('空リーグ', names)
+
+    def test_sorting_applies_within_each_league(self):
+        orm_models.Team.objects.create(league=self.other, name='Aチーム')
+
+        listing = self.service.list_teams_by_league(sort='name', descending=False)
+        grouped = {g.league_name: [t.name for t in g.teams] for g in listing.rows}
+
+        self.assertEqual(grouped['別リーグ'], ['Aチーム', 'Xチーム'])
+
+    def test_page_shows_each_league_heading(self):
+        response = self.client.get(reverse('team_list'))
+
+        self.assertContains(response, 'テストリーグ')
+        self.assertContains(response, '別リーグ')
+        self.assertEqual(len(response.context['leagues']), 2)
+
+    def test_flat_list_is_still_available_for_filters(self):
+        """試合一覧の絞り込みなどは平坦な一覧を使う。"""
+        rows = self.service.list_teams().rows
+        self.assertEqual(len(rows), 3)
+
+
 class LeagueScopedStandingsTest(BaseCase):
     """順位はリーグの中で争われる（フェーズ2）。"""
 

@@ -131,6 +131,15 @@ class StandingRow:
 
 
 @dataclass(frozen=True)
+class LeagueTeams:
+    """1リーグぶんの所属チーム。"""
+
+    league_id: int
+    league_name: str
+    teams: list['TeamSummary']
+
+
+@dataclass(frozen=True)
 class LeagueStandings:
     """1リーグぶんの順位表。"""
 
