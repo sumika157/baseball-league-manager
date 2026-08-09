@@ -75,9 +75,11 @@
         </div>
         <div class="col-md-3">
           <label class="form-label">守備位置</label>
-          {# 選択肢は domain の Position が唯一の出典。
-             以前はここに4つ直書きされており、'指名打者' の選手を編集すると
-             どれも選択されず、保存時に '投手' へ化けるバグがあった #}
+          {% comment %}
+            選択肢は domain の Position が唯一の出典。
+            以前はここに4つ直書きされており、'指名打者' の選手を編集すると
+            どれも選択されず、保存時に '投手' へ化けるバグがあった
+          {% endcomment %}
           <select name="position" class="form-select">
             {% for label in positions %}
               <option value="{{ label }}" {% if label == player.position %}selected{% endif %}>{{ label }}</option>
