@@ -74,6 +74,17 @@
             {% if profile.birthplace %}{% include 'myapp/_stat_readout.html' with label='出身' value=profile.birthplace %}{% endif %}
             {% if profile.debut_year %}{% include 'myapp/_stat_readout.html' with label='入団' value=profile.debut_year %}{% endif %}
           </div>
+
+          {% if profile.amateur_career %}
+            <div class="mt-3">
+              <div class="stat-readout-label mb-1">プロ入り前</div>
+              <ul class="amateur-path">
+                {% for label, name in profile.amateur_career %}
+                  <li><span class="amateur-stage">{{ label }}</span>{{ name }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+          {% endif %}
         </div>
       </div>
     </div>

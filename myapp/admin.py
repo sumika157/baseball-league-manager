@@ -218,6 +218,11 @@ class PlayerAdmin(admin.ModelAdmin):
                 ('height_cm', 'weight_kg'), 'birthplace', 'debut_year',
             ),
         }),
+        ('プロ入り前の経歴', {
+            'description': '通った所だけ入力してください。高校からそのままプロ、'
+                           '大学を経ずに社会人へ、といった順路にも対応します。',
+            'fields': ('high_school', 'university', 'corporate_team'),
+        }),
     )
 
     @admin.display(description='現在の所属')

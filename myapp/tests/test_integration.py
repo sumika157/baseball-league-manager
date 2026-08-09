@@ -1125,6 +1125,45 @@ class PlayerProfileTest(BaseCase):
 
         self.assertTrue(saved.profile.is_empty)
 
+    def test_amateur_career_survives_the_round_trip(self):
+        player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        orm_models.Player.objects.filter(id=player.id).update(
+            high_school='甲子園高校', university='六大学', corporate_team='○○重工',
+        )
+
+        saved = DjangoTeamRepository().find_by_id(self.team.id).find_player(player.id)
+
+        self.assertEqual(saved.profile.amateur_path, '甲子園高校 → 六大学 → ○○重工')
+
+    def test_amateur_career_appears_on_the_player_page(self):
+        player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        orm_models.Player.objects.filter(id=player.id).update(high_school='甲子園高校')
+
+        response = self.client.get(
+            reverse('player_detail', args=[self.team.id, player.id])
+        )
+
+        self.assertContains(response, 'プロ入り前')
+        self.assertContains(response, '甲子園高校')
+
+    def test_player_without_amateur_career(self):
+        player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+
+        profile = self.service.get_player_profile(self.team.id, player.id)
+
+        self.assertEqual(profile.amateur_career, [])
+
+    def test_admin_has_the_amateur_career_section(self):
+        player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        self.client.force_login(User.objects.create_superuser(username='am', password='x'))
+
+        response = self.client.get(f'/admin/myapp/player/{player.id}/change/')
+
+        self.assertContains(response, 'プロ入り前の経歴')
+        for field in ('high_school', 'university', 'corporate_team'):
+            with self.subTest(field=field):
+                self.assertContains(response, field)
+
     def test_admin_edit_page_has_the_profile_section(self):
         player = self.service.register_player(self.team.id, '山田', 10, '内野手')
         self.client.force_login(User.objects.create_superuser(username='root', password='x'))

@@ -77,6 +77,45 @@ class ProfileTest(TestCase):
 
     def test_is_empty_becomes_false_with_any_field(self):
         self.assertFalse(Profile(birthplace='大阪府').is_empty)
+        self.assertFalse(Profile(high_school='甲子園高校').is_empty)
+
+
+class AmateurCareerTest(TestCase):
+    """プロ入り前の経歴。順路は人によって異なる。"""
+
+    def test_full_path(self):
+        profile = Profile(
+            high_school='甲子園高校', university='六大学', corporate_team='○○重工'
+        )
+
+        self.assertEqual(
+            profile.amateur_career,
+            [('高校', '甲子園高校'), ('大学', '六大学'), ('社会人', '○○重工')],
+        )
+        self.assertEqual(profile.amateur_path, '甲子園高校 → 六大学 → ○○重工')
+
+    def test_straight_from_high_school(self):
+        """高校からそのままプロ入りする順路。"""
+        profile = Profile(high_school='甲子園高校')
+
+        self.assertEqual(profile.amateur_career, [('高校', '甲子園高校')])
+        self.assertEqual(profile.amateur_path, '甲子園高校')
+
+    def test_high_school_to_corporate_without_university(self):
+        """大学を経ずに社会人へ進む順路。"""
+        profile = Profile(high_school='甲子園高校', corporate_team='○○重工')
+
+        self.assertEqual(
+            profile.amateur_career, [('高校', '甲子園高校'), ('社会人', '○○重工')]
+        )
+
+    def test_unknown_stages_are_omitted(self):
+        """入力されていない区分は並べない。"""
+        self.assertEqual(Profile(university='六大学').amateur_career, [('大学', '六大学')])
+
+    def test_no_career_recorded(self):
+        self.assertEqual(Profile().amateur_career, [])
+        self.assertEqual(Profile().amateur_path, '')
 
 
 class StadiumProfileTest(TestCase):

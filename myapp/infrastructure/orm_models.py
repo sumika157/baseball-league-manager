@@ -103,6 +103,12 @@ class Player(models.Model):
     weight_kg = models.PositiveIntegerField(null=True, blank=True, verbose_name='体重(kg)')
     birthplace = models.CharField(max_length=100, blank=True, verbose_name='出身地')
     debut_year = models.IntegerField(null=True, blank=True, verbose_name='入団年')
+    # プロ入り前の経歴。通った所だけ埋める
+    high_school = models.CharField(max_length=100, blank=True, verbose_name='出身高校')
+    university = models.CharField(max_length=100, blank=True, verbose_name='出身大学')
+    corporate_team = models.CharField(
+        max_length=100, blank=True, verbose_name='出身社会人チーム'
+    )
 
     class Meta:
         verbose_name = '選手'

@@ -219,6 +219,9 @@ def _profile_defaults(profile: Profile) -> dict:
         'weight_kg': profile.weight_kg,
         'birthplace': profile.birthplace,
         'debut_year': profile.debut_year,
+        'high_school': profile.high_school,
+        'university': profile.university,
+        'corporate_team': profile.corporate_team,
     }
 
 
@@ -231,6 +234,9 @@ def _profile_of(row) -> Profile:
         weight_kg=row.weight_kg,
         birthplace=row.birthplace,
         debut_year=row.debut_year,
+        high_school=row.high_school,
+        university=row.university,
+        corporate_team=row.corporate_team,
     )
 
 

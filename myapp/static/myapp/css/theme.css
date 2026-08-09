@@ -378,6 +378,31 @@ a:hover {
   box-shadow: 0 0 0 3px var(--app-accent-soft);
 }
 
+/* プロ入り前の経歴。通った順に縦に並べる */
+.amateur-path {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.amateur-path li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.35rem 0;
+  font-size: 0.9375rem;
+}
+
+.amateur-path li + li {
+  border-top: 1px solid var(--app-border);
+}
+
+.amateur-stage {
+  flex: 0 0 3.5rem;
+  font-size: 0.75rem;
+  color: var(--app-text-muted);
+}
+
 /* 編集できない成績値 */
 .stat-readout {
   display: flex;

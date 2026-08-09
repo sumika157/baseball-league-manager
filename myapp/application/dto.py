@@ -122,6 +122,8 @@ class PlayerProfile:
     weight_kg: int | None = None
     birthplace: str = ''
     debut_year: int | None = None
+    # プロ入り前の経歴。(区分, 名称) を通った順に並べたもの
+    amateur_career: list = None
     has_profile: bool = False
 
     @property

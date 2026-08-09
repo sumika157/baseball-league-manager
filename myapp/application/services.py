@@ -426,6 +426,7 @@ class TeamApplicationService:
             weight_kg=profile.weight_kg,
             birthplace=profile.birthplace,
             debut_year=profile.debut_year,
+            amateur_career=profile.amateur_career,
             has_profile=not profile.is_empty,
         )
 

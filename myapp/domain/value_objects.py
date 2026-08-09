@@ -463,6 +463,11 @@ class Profile:
     weight_kg: int | None = None
     birthplace: str = ''
     debut_year: int | None = None
+    # プロ入り前の経歴。日本では 高校 →（大学 または 社会人）→ プロ が多いが、
+    # 高校からプロ、大学から社会人を経てプロなど、順路はさまざま
+    high_school: str = ''
+    university: str = ''
+    corporate_team: str = ''
 
     def __post_init__(self) -> None:
         for name, label, upper in (
@@ -502,10 +507,33 @@ class Profile:
         return f"{self.throws.label}投{self.bats.label}打"
 
     @property
+    def amateur_career(self) -> list[tuple[str, str]]:
+        """プロ入り前の経歴を、通った順に並べる。
+
+        入力されているものだけを返す。高校からそのままプロ、
+        大学を経ずに社会人へ、といった順路にも対応する。
+        """
+        return [
+            (label, value)
+            for label, value in (
+                ('高校', self.high_school),
+                ('大学', self.university),
+                ('社会人', self.corporate_team),
+            )
+            if value
+        ]
+
+    @property
+    def amateur_path(self) -> str:
+        """「○○高校 → ○○大学」のような1行表記。"""
+        return ' → '.join(value for _, value in self.amateur_career)
+
+    @property
     def is_empty(self) -> bool:
         return not any([
             self.birth_date, self.throws, self.bats, self.height_cm,
             self.weight_kg, self.birthplace, self.debut_year,
+            self.high_school, self.university, self.corporate_team,
         ])
 
 
