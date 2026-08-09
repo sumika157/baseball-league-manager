@@ -338,6 +338,90 @@ class AdminTest(TestCase):
         self.assertContains(response, '未登板')
 
 
+class AdminIndexTest(TestCase):
+    """管理画面トップの構成。"""
+
+    def setUp(self):
+        from django.contrib.auth.models import User
+
+        self.client.force_login(User.objects.create_superuser(username='root', password='x'))
+        self.league = orm_models.League.objects.create(name='テストリーグ')
+        self.team = orm_models.Team.objects.create(league=self.league, name='テストチーム')
+        self.service = TeamApplicationService(
+            teams=DjangoTeamRepository(), team_list_query=DjangoTeamListQuery()
+        )
+
+    def test_models_are_labelled_in_japanese(self):
+        response = self.client.get('/admin/')
+        for label in ['野球データ', 'リーグ', 'チーム', '選手']:
+            with self.subTest(label=label):
+                self.assertContains(response, label)
+
+    def test_stats_models_are_hidden_from_index(self):
+        """成績は選手のインラインで扱うので、トップの導線には出さない。"""
+        response = self.client.get('/admin/')
+        self.assertNotContains(response, '/admin/myapp/playerstats/')
+        self.assertNotContains(response, '/admin/myapp/pitcherstats/')
+
+    def test_stats_models_are_still_reachable_by_url(self):
+        """導線に出さないだけで、URL からは開ける。"""
+        self.assertEqual(self.client.get('/admin/myapp/playerstats/').status_code, 200)
+
+    def test_models_follow_domain_order(self):
+        """リーグ → チーム → 選手 の順で並ぶこと。"""
+        body = self.client.get('/admin/').content.decode()
+        positions = [
+            body.index('/admin/myapp/league/'),
+            body.index('/admin/myapp/team/'),
+            body.index('/admin/myapp/player/'),
+        ]
+        self.assertEqual(positions, sorted(positions))
+
+    def test_baseball_data_comes_before_auth(self):
+        body = self.client.get('/admin/').content.decode()
+        self.assertLess(body.index('/admin/myapp/'), body.index('/admin/auth/'))
+
+    def test_overview_counts(self):
+        self.service.register_player(self.team.id, '山田', 10, '内野手')
+        self.service.register_player(self.team.id, '佐藤', 18, '投手')
+
+        overview = self.service.get_admin_overview()
+
+        self.assertEqual(overview.league_count, 1)
+        self.assertEqual(overview.team_count, 1)
+        self.assertEqual(overview.player_count, 2)
+        self.assertEqual(overview.pitcher_count, 1)
+
+    def test_overview_flags_players_without_stats(self):
+        """成績未入力はランキング対象外なので、管理者に知らせる。"""
+        self.service.register_player(self.team.id, '山田', 10, '内野手')
+
+        self.assertEqual(self.service.get_admin_overview().players_without_stats, 1)
+
+        self.service.update_player(
+            self.team.id,
+            orm_models.Player.objects.get(number=10).id,
+            name='山田', number=10, position_label='内野手',
+            batting=BattingLine(at_bats=10, singles=3),
+        )
+        self.assertEqual(self.service.get_admin_overview().players_without_stats, 0)
+
+    def test_overview_flags_empty_teams_and_retired_players(self):
+        orm_models.Team.objects.create(league=self.league, name='空チーム')
+        player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        orm_models.Player.objects.filter(id=player.id).update(is_active=False)
+
+        overview = self.service.get_admin_overview()
+
+        self.assertEqual(overview.teams_without_players, 2)
+        self.assertEqual(overview.retired_count, 1)
+
+    def test_notes_appear_on_the_page(self):
+        self.service.register_player(self.team.id, '山田', 10, '内野手')
+        response = self.client.get('/admin/')
+        self.assertContains(response, '成績が未入力の選手')
+
+
 class AuthTest(TestCase):
     def test_login_redirect_url_resolves(self):
         from django.conf import settings

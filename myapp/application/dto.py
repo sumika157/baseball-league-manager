@@ -21,6 +21,25 @@ class TeamSummary:
 
 
 @dataclass(frozen=True)
+class AdminOverview:
+    """管理画面トップに出す概況。
+
+    「いま何件あるか」と「手当てが必要なデータはどれか」に絞る。
+    成績のランキングはサイト側のダッシュボードの役割なので、ここには置かない。
+    """
+
+    league_count: int
+    team_count: int
+    player_count: int
+    batter_count: int
+    pitcher_count: int
+    # 手当てが必要なもの
+    players_without_stats: int
+    retired_count: int
+    teams_without_players: int
+
+
+@dataclass(frozen=True)
 class RankingEntry:
     """ランキングの1行。"""
 

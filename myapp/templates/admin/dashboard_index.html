@@ -1,0 +1,14 @@
+{% extends "admin/index.html" %}
+{% load admin_overview %}
+
+{% comment %}
+管理画面のトップ。Django 同梱の admin/index.html を継承して概況を足すだけ。
+
+ファイル名を index.html にすると自分自身を継承する形になって成立しないため、
+別名にして myapp/admin.py の admin.site.index_template で指定している。
+{% endcomment %}
+
+{% block content %}
+  {% admin_overview %}
+  {{ block.super }}
+{% endblock %}

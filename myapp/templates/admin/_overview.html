@@ -1,0 +1,51 @@
+{% load i18n %}
+<div class="module admin-overview">
+  <h2>データの概況</h2>
+
+  <div class="admin-overview-grid">
+    <a class="admin-overview-cell" href="{% url 'admin:myapp_league_changelist' %}">
+      <span class="admin-overview-value">{{ overview.league_count }}</span>
+      <span class="admin-overview-label">リーグ</span>
+    </a>
+    <a class="admin-overview-cell" href="{% url 'admin:myapp_team_changelist' %}">
+      <span class="admin-overview-value">{{ overview.team_count }}</span>
+      <span class="admin-overview-label">チーム</span>
+    </a>
+    <a class="admin-overview-cell" href="{% url 'admin:myapp_player_changelist' %}">
+      <span class="admin-overview-value">{{ overview.player_count }}</span>
+      <span class="admin-overview-label">在籍選手</span>
+    </a>
+    <a class="admin-overview-cell" href="{% url 'admin:myapp_player_changelist' %}?position=投手">
+      <span class="admin-overview-value">{{ overview.pitcher_count }}</span>
+      <span class="admin-overview-label">うち投手</span>
+    </a>
+  </div>
+
+  {% if overview.players_without_stats or overview.teams_without_players or overview.retired_count %}
+    <ul class="admin-overview-notes">
+      {% if overview.players_without_stats %}
+        <li>
+          <a href="{% url 'admin:myapp_player_changelist' %}">
+            成績が未入力の選手が {{ overview.players_without_stats }}名います
+          </a>
+          <span class="admin-overview-hint">ランキングの集計対象から外れています</span>
+        </li>
+      {% endif %}
+      {% if overview.teams_without_players %}
+        <li>
+          <a href="{% url 'admin:myapp_team_changelist' %}">
+            選手が1人もいないチームが {{ overview.teams_without_players }}件あります
+          </a>
+        </li>
+      {% endif %}
+      {% if overview.retired_count %}
+        <li>
+          <a href="{% url 'admin:myapp_player_changelist' %}?is_active__exact=0">
+            退団した選手が {{ overview.retired_count }}名います
+          </a>
+          <span class="admin-overview-hint">背番号は再利用できます</span>
+        </li>
+      {% endif %}
+    </ul>
+  {% endif %}
+</div>

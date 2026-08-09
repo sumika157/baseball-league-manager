@@ -1,3 +1,5 @@
+import types
+
 from django.contrib import admin
 
 from .domain.value_objects import BattingLine, InningsPitched, PitchingLine
@@ -19,6 +21,33 @@ admin.site.index_title = 'データ管理'
 # 管理画面には管理画面の体裁を保たせる。
 admin.site.password_change_template = 'admin/password_change_form.html'
 admin.site.password_change_done_template = 'admin/password_change_done.html'
+
+# トップに概況を足したテンプレート。index.html という名前にすると自分自身を
+# 継承する形になって成立しないため、別名にして明示指定している。
+admin.site.index_template = 'admin/dashboard_index.html'
+
+
+def _ordered_app_list(self, request, app_label=None):
+    """トップの並びを業務の重要度とドメインの階層に揃える。
+
+    Django の既定は表示名の五十音／アルファベット順のため、
+    「認証と認可」が先に来て、モデルもリーグ・チーム・選手が入り混じる。
+    主に扱うのは野球データなので、そちらを先頭に置く。
+    """
+    app_list = _original_get_app_list(request, app_label)
+
+    model_order = {'League': 1, 'Team': 2, 'Player': 3}
+    for app in app_list:
+        if app.get('app_label') == 'myapp':
+            app['models'].sort(key=lambda m: model_order.get(m.get('object_name'), 99))
+
+    # 野球データを先頭、認証を後ろに
+    app_list.sort(key=lambda a: 0 if a.get('app_label') == 'myapp' else 1)
+    return app_list
+
+
+_original_get_app_list = admin.site.get_app_list
+admin.site.get_app_list = types.MethodType(_ordered_app_list, admin.site)
 
 
 class TeamInline(admin.TabularInline):
@@ -126,15 +155,27 @@ class PlayerAdmin(admin.ModelAdmin):
         )
 
 
+class HiddenFromIndexMixin:
+    """トップの一覧には出さないが、URL からは開けるようにする。
+
+    打撃成績・投球成績は選手と 1 対 1 で、選手の編集画面からインラインで扱える。
+    トップに並べると項目が増えるうえ、選手を介さず成績だけを作れてしまい
+    「選手のいない成績」が生まれる余地ができるため、導線としては出さない。
+    """
+
+    def get_model_perms(self, request):
+        return {}
+
+
 @admin.register(PlayerStats)
-class PlayerStatsAdmin(admin.ModelAdmin):
+class PlayerStatsAdmin(HiddenFromIndexMixin, admin.ModelAdmin):
     list_display = ('player', 'at_bats', 'singles', 'doubles', 'triples', 'home_runs', 'runs_batted_in')
     search_fields = ('player__name',)
     list_select_related = ('player',)
 
 
 @admin.register(PitcherStats)
-class PitcherStatsAdmin(admin.ModelAdmin):
+class PitcherStatsAdmin(HiddenFromIndexMixin, admin.ModelAdmin):
     list_display = ('player', 'innings_pitched', 'wins', 'losses', 'saves', 'earned_runs', 'strikeouts')
     search_fields = ('player__name',)
     list_select_related = ('player',)

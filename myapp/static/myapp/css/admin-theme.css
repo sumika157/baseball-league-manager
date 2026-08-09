@@ -365,6 +365,74 @@ ul.messagelist li {
   border: 1px solid var(--border-color);
 }
 
+/* ------------------------------------------------------------------
+   トップの概況パネル
+   ------------------------------------------------------------------ */
+.admin-overview {
+  margin-bottom: 20px;
+}
+
+.admin-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 1px;
+  background: var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.admin-overview-cell {
+  display: block;
+  padding: 14px 16px;
+  background: var(--body-bg);
+  color: var(--body-fg);
+}
+
+.admin-overview-cell:hover {
+  background: var(--darkened-bg);
+  color: var(--body-fg);
+}
+
+.admin-overview-value {
+  display: block;
+  font-size: 1.5rem;
+  font-weight: 650;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.admin-overview-label {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.75rem;
+  color: var(--body-quiet-color);
+  letter-spacing: 0.03em;
+}
+
+.admin-overview-notes {
+  margin: 0;
+  padding: 10px 16px;
+  list-style: none;
+  background: var(--darkened-bg);
+}
+
+.admin-overview-notes li {
+  padding: 4px 0;
+  font-size: 0.8125rem;
+}
+
+.admin-overview-notes li::before {
+  content: '•';
+  color: var(--body-quiet-color);
+  margin-right: 8px;
+}
+
+.admin-overview-hint {
+  color: var(--body-quiet-color);
+  margin-left: 8px;
+  font-size: 0.75rem;
+}
+
 /* サイドバー */
 #nav-sidebar {
   border-right: 1px solid var(--border-color);
