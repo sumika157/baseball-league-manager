@@ -167,7 +167,7 @@ class TeamApplicationService:
             strikeout_leaders=to_entries(
                 domain_services.leaders_by_strikeouts(all_players, limit=leaders), count
             ),
-            teams=self._team_list_query.list_summaries(),
+            league_teams=self.list_teams_by_league().rows,
         )
 
     def get_team_name(self, team_id: int) -> str:

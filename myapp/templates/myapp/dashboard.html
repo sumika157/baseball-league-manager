@@ -58,29 +58,52 @@
           <a href="{% url 'team_list' %}" class="card-header-link">すべて</a>
         </span>
       </div>
-      <div class="card-body p-0">
-        {% if board.teams %}
-          <ul class="tile-list">
-            {% for team in board.teams %}
-              <li>
-                <a href="{% url 'player_list' team.id %}">
-                  <span class="tile-list-main">
-                    <span class="tile-list-title">{{ team.name }}</span>
-                    <span class="tile-list-sub">
-                      {{ team.league_name }}{% if team.city %} · {{ team.city }}{% endif %}
-                    </span>
-                  </span>
-                  <span class="tile-list-meta">{{ team.player_count }}名</span>
-                </a>
-              </li>
+      {% comment %}
+        リーグごとのタブ。チームが増えると1つの並びでは読みにくいため。
+        Bootstrap のタブ機能を使うので、独自の JavaScript は書かない。
+        Bootstrap は選択中の項目に active を付けるので、CSS は
+        is-active（サーバ側で描くリンク）と active の両方を見ている。
+      {% endcomment %}
+      {% if board.league_teams %}
+        <div class="card-body pb-0">
+          <div class="segmented segmented-scroll" role="tablist">
+            {% for group in board.league_teams %}
+              <button type="button" role="tab"
+                      class="segmented-item {% if forloop.first %}active{% endif %}"
+                      data-bs-toggle="tab"
+                      data-bs-target="#dashboard-league-{{ group.league_id }}">
+                {{ group.league_name }}
+                <span class="segmented-count">{{ group.teams|length }}</span>
+              </button>
             {% endfor %}
-          </ul>
-        {% else %}
-          <div class="empty-state" style="padding: 2rem 1rem; font-size: 0.875rem;">
-            まだチームが登録されていません。
           </div>
-        {% endif %}
-      </div>
+        </div>
+
+        <div class="tab-content">
+          {% for group in board.league_teams %}
+            <div class="tab-pane fade {% if forloop.first %}show active{% endif %}"
+                 id="dashboard-league-{{ group.league_id }}" role="tabpanel">
+              <ul class="tile-list">
+                {% for team in group.teams %}
+                  <li>
+                    <a href="{% url 'player_list' team.id %}">
+                      <span class="tile-list-main">
+                        <span class="tile-list-title">{{ team.name }}</span>
+                        {% if team.city %}<span class="tile-list-sub">{{ team.city }}</span>{% endif %}
+                      </span>
+                      <span class="tile-list-meta">{{ team.player_count }}名</span>
+                    </a>
+                  </li>
+                {% endfor %}
+              </ul>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="empty-state" style="padding: 2rem 1rem; font-size: 0.875rem;">
+          まだチームが登録されていません。
+        </div>
+      {% endif %}
     </div>
   </div>
 </div>

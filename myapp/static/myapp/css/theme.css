@@ -698,10 +698,40 @@ a:hover {
   color: var(--app-text);
 }
 
-.segmented .segmented-item.is-active {
+/* is-active はサーバ側で描くリンク、active は Bootstrap のタブが付ける */
+.segmented .segmented-item.is-active,
+.segmented .segmented-item.active {
   background: var(--app-surface);
   color: var(--app-text);
   box-shadow: var(--app-shadow-sm);
+}
+
+/* ボタンとしてのタブ。リンクと見た目を揃える */
+.segmented button.segmented-item {
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* リーグが増えても収まるよう横スクロールさせる */
+.segmented-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  flex-wrap: nowrap;
+  scrollbar-width: thin;
+}
+
+.segmented-count {
+  margin-left: 0.35em;
+  font-size: 0.75em;
+  color: var(--app-text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+.segmented-item.active .segmented-count {
+  color: var(--app-text-muted);
 }
 
 /* ------------------------------------------------------------------

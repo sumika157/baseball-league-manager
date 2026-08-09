@@ -279,11 +279,17 @@ class Dashboard:
     home_run_leaders: list[RankingEntry]
     era_leaders: list[RankingEntry]
     strikeout_leaders: list[RankingEntry]
-    teams: list['TeamSummary']
+    # チームはリーグごとに分けて持つ。数が増えると1つの並びでは読みにくいため
+    league_teams: list['LeagueTeams']
 
     @property
     def player_count(self) -> int:
         return self.batter_count + self.pitcher_count
+
+    @property
+    def teams(self) -> list['TeamSummary']:
+        """全リーグを平坦に並べたもの。件数の判定などに使う。"""
+        return [team for group in self.league_teams for team in group.teams]
 
 
 @dataclass(frozen=True)

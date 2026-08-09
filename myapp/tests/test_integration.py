@@ -298,6 +298,47 @@ class DashboardTest(BaseCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'テストチーム')
 
+    def test_teams_are_grouped_into_league_tabs(self):
+        """チームが増えると1つの並びでは読みにくいため、リーグごとに分ける。"""
+        other = orm_models.League.objects.create(name='別リーグ')
+        orm_models.Team.objects.create(league=other, name='Xチーム')
+
+        board = self.service.get_dashboard()
+
+        self.assertEqual(
+            {g.league_name: [t.name for t in g.teams] for g in board.league_teams},
+            {'テストリーグ': ['テストチーム', '相手チーム'], '別リーグ': ['Xチーム']},
+        )
+
+    def test_flat_team_list_is_still_available(self):
+        self.assertEqual(len(self.service.get_dashboard().teams), 2)
+
+    def test_first_league_tab_is_selected(self):
+        orm_models.Team.objects.create(
+            league=orm_models.League.objects.create(name='別リーグ'), name='Xチーム'
+        )
+        body = self.client.get(reverse('dashboard')).content.decode()
+
+        # 最初のタブだけが選択済みで、対応する中身が表示される
+        self.assertEqual(body.count('segmented-item active'), 1)
+        self.assertEqual(body.count('tab-pane fade show active'), 1)
+
+    def test_each_league_has_a_tab_and_a_pane(self):
+        other = orm_models.League.objects.create(name='別リーグ')
+        orm_models.Team.objects.create(league=other, name='Xチーム')
+        body = self.client.get(reverse('dashboard')).content.decode()
+
+        for league in (self.league, other):
+            with self.subTest(league=league.name):
+                self.assertIn(f'#dashboard-league-{league.id}', body)
+                self.assertIn(f'id="dashboard-league-{league.id}"', body)
+
+    def test_leagues_without_teams_are_omitted(self):
+        orm_models.League.objects.create(name='空リーグ')
+        board = self.service.get_dashboard()
+
+        self.assertNotIn('空リーグ', [g.league_name for g in board.league_teams])
+
     def test_page_renders_without_any_data(self):
         orm_models.Team.objects.all().delete()
         self.assertEqual(self.client.get(reverse('dashboard')).status_code, 200)
