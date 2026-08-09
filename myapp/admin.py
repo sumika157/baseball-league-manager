@@ -11,7 +11,8 @@ from django.utils.html import format_html, format_html_join
 
 from .domain.entities import Stint as DomainStint
 from .domain.exceptions import DomainError
-from .domain.value_objects import JerseyNumber
+from .domain.value_objects import JerseyNumber, StadiumProfile
+from .domain.value_objects import Profile as DomainProfile
 from .infrastructure import orm_models
 from .infrastructure.orm_models import (
     Game,
@@ -295,8 +296,47 @@ class TeamAdmin(ManualOrderAdminMixin, admin.ModelAdmin):
         return obj.played_games_count
 
 
+class DomainCheckedForm(forms.ModelForm):
+    """入力をドメインの値オブジェクトに検証させる ModelForm。
+
+    管理画面はドメインを経由しないため、放っておくと画面からだけ
+    現実的でない値（身長400cm、開場年1800年など）を保存できてしまう。
+    判定は値オブジェクトに任せ、ここでは組み立てて例外を訳すだけにする。
+    """
+
+    def clean(self):
+        cleaned = super().clean()
+        # 個々の欄が不正なうちは、組み立てても意味のある判定にならない
+        if self.errors:
+            return cleaned
+
+        try:
+            self.build_value_object(cleaned)
+        except DomainError as error:
+            raise forms.ValidationError(str(error)) from None
+        return cleaned
+
+    def build_value_object(self, cleaned):
+        raise NotImplementedError
+
+
+class StadiumForm(DomainCheckedForm):
+    class Meta:
+        model = Stadium
+        fields = '__all__'
+
+    def build_value_object(self, cleaned):
+        return StadiumProfile(
+            city=cleaned.get('city', ''),
+            capacity=cleaned.get('capacity'),
+            surface=cleaned.get('surface', ''),
+            opened_year=cleaned.get('opened_year'),
+        )
+
+
 @admin.register(Stadium)
 class StadiumAdmin(admin.ModelAdmin):
+    form = StadiumForm
     list_display = ('name', 'city', 'capacity', 'surface', 'opened_year', 'home_team_names')
     search_fields = ('name', 'city')
     list_filter = ('surface',)
@@ -449,8 +489,29 @@ class PlayerStintInline(admin.TabularInline):
     verbose_name_plural = '在籍（経歴）'
 
 
+class PlayerForm(DomainCheckedForm):
+    class Meta:
+        model = Player
+        fields = '__all__'
+
+    def build_value_object(self, cleaned):
+        return DomainProfile(
+            birth_date=cleaned.get('birth_date'),
+            throws=cleaned.get('throws') or None,
+            bats=cleaned.get('bats') or None,
+            height_cm=cleaned.get('height_cm'),
+            weight_kg=cleaned.get('weight_kg'),
+            birthplace=cleaned.get('birthplace', ''),
+            debut_year=cleaned.get('debut_year'),
+            high_school=cleaned.get('high_school', ''),
+            university=cleaned.get('university', ''),
+            corporate_team=cleaned.get('corporate_team', ''),
+        )
+
+
 @admin.register(Player)
 class PlayerAdmin(admin.ModelAdmin):
+    form = PlayerForm
     list_display = ('name', 'position', 'current_team', 'current_number', 'appearances')
     list_filter = ('position', 'stints__team__league', 'stints__team')
     search_fields = ('name',)

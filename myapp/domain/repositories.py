@@ -27,10 +27,6 @@ class TeamRepository(Protocol):
         """全チームをロスター込みで取得する。リーグ全体の順位づけに使う。"""
         ...
 
-    def exists_with_name(self, league_id: int, name: str) -> bool:
-        """同一リーグ内に同名のチームがあるか。"""
-        ...
-
     def save(self, team: Team) -> Team:
         """集約の変更内容を永続化する。"""
         ...

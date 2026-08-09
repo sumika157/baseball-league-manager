@@ -10,7 +10,8 @@
               <tr>
                 <td style="width: 2.5rem;" class="stat-muted">{{ entry.rank }}</td>
                 <td>
-                  <a href="{% url 'player_edit' entry.team_id entry.player_id %}" class="player-name">{{ entry.player_name }}</a>
+                  {# 選手名は個人ページへ。選手一覧・選手検索と同じ行き先に揃える #}
+                  <a href="{% url 'player_detail' entry.team_id entry.player_id %}" class="player-name">{{ entry.player_name }}</a>
                   <div class="stat-muted" style="font-size: 0.75rem;">{{ entry.team_name }}</div>
                 </td>
                 <td class="text-end stat-key">{{ entry.value }}</td>

@@ -171,6 +171,8 @@ class PlayerListViewTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.url = reverse('player_list', args=[self.team.id])
+        # 登録は書き込みなのでログインが要る（閲覧は誰でもできる）
+        self.client.force_login(User.objects.create_user(username='editor', password='x'))
 
     def test_register_via_form(self):
         self.client.post(self.url, {'name': '山田', 'number': '10', 'position': '内野手'})
@@ -199,6 +201,10 @@ class PlayerListViewTest(BaseCase):
 
 
 class PlayerEditViewTest(BaseCase):
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(User.objects.create_user(username='editor', password='x'))
+
     def _url(self, player_id):
         return reverse('player_edit', args=[self.team.id, player_id])
 
@@ -315,6 +321,27 @@ class DashboardTest(BaseCase):
 
         self.assertEqual(rankings['テストリーグ'], ['当リーグ'])
         self.assertEqual(rankings['別リーグ'], ['別リーグ選手'])
+
+    def test_ranking_names_link_to_the_player_page(self):
+        """選手名の行き先を、選手一覧・選手検索とそろえる。
+
+        ここだけ編集画面へ飛んでいた。読みに来た人を書き込み画面へ
+        送ることになるうえ、未ログインだとログイン画面に弾かれる。
+        """
+        player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        play_game(
+            self.team, self.rival,
+            batting={player.id: BattingLine(at_bats=10, home_runs=3)},
+        )
+
+        body = self.client.get(reverse('dashboard')).content.decode()
+
+        self.assertIn(
+            reverse('player_detail', args=[self.team.id, player.id]), body
+        )
+        self.assertNotIn(
+            reverse('player_edit', args=[self.team.id, player.id]), body
+        )
 
     def test_leagues_without_records_are_omitted(self):
         orm_models.League.objects.create(name='記録なしリーグ')
@@ -1138,6 +1165,89 @@ class AdminGroupingTest(BaseCase):
         self.assertIn('Xチーム', body)
 
 
+class WriteRequiresLoginTest(BaseCase):
+    """閲覧は誰でも、書き込みはログインした人だけ。
+
+    以前は試合だけがログイン必須で、選手の登録・編集・退団は
+    未ログインのまま実行できていた。画面ごとに要否が違うと、
+    どこが公開範囲なのか読み取れなくなる。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+
+    def test_reading_needs_no_login(self):
+        pages = [
+            reverse('dashboard'),
+            reverse('team_list'),
+            reverse('player_list', args=[self.team.id]),
+            reverse('player_detail', args=[self.team.id, self.player.id]),
+            reverse('game_list'),
+            reverse('standings'),
+        ]
+        for url in pages:
+            with self.subTest(url=url):
+                self.assertEqual(self.client.get(url).status_code, 200)
+
+    def test_writing_pages_redirect_to_login(self):
+        for url in (
+            reverse('game_create'),
+            reverse('player_edit', args=[self.team.id, self.player.id]),
+        ):
+            with self.subTest(url=url):
+                response = self.client.get(url)
+
+                self.assertEqual(response.status_code, 302)
+                self.assertIn('/accounts/login/', response['Location'])
+
+    def test_registering_a_player_without_login_changes_nothing(self):
+        before = orm_models.Player.objects.count()
+
+        response = self.client.post(
+            reverse('player_list', args=[self.team.id]),
+            {'name': '侵入', 'number': '99', 'position': '内野手'},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/accounts/login/', response['Location'])
+        self.assertEqual(orm_models.Player.objects.count(), before)
+
+    def test_editing_a_player_without_login_changes_nothing(self):
+        response = self.client.post(
+            reverse('player_edit', args=[self.team.id, self.player.id]),
+            {'name': '改ざん', 'number': '10', 'position': '内野手'},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/accounts/login/', response['Location'])
+        self.assertEqual(
+            orm_models.Player.objects.get(pk=self.player.id).name, '山田'
+        )
+
+    def test_retiring_a_player_without_login_changes_nothing(self):
+        self.client.post(
+            reverse('player_edit', args=[self.team.id, self.player.id]),
+            {'retire': '1'},
+        )
+
+        stint = orm_models.PlayerStint.objects.get(player_id=self.player.id)
+        self.assertIsNone(stint.to_year)
+
+    def test_write_controls_are_hidden_from_anonymous_visitors(self):
+        """押せない導線は見せない（試合の画面と同じ扱いに揃える）。"""
+        listing = self.client.get(reverse('player_list', args=[self.team.id]))
+        detail = self.client.get(
+            reverse('player_detail', args=[self.team.id, self.player.id])
+        )
+
+        self.assertNotContains(listing, '新入団選手の登録')
+        self.assertNotContains(detail, 'player_edit')
+        self.assertNotContains(
+            detail, reverse('player_edit', args=[self.team.id, self.player.id])
+        )
+
+
 class GameEntryTest(BaseCase):
     """サイトからの試合登録と成績の一括入力（フェーズ3）。"""
 
@@ -1595,6 +1705,72 @@ class AdminStintValidationTest(BaseCase):
         self.assertEqual(response.status_code, 302)
         stint.refresh_from_db()
         self.assertEqual(stint.from_year, 2024)
+
+
+class AdminUsesDomainRulesTest(BaseCase):
+    """管理画面から保存できる値と、ドメインが許す値をそろえる。
+
+    管理画面はドメインを経由しないため、繋いでおかないと画面からだけ
+    現実的でない値を保存できてしまう。在籍だけが検証されていて、
+    球場とプロフィールは素通りだった。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(User.objects.create_superuser(username='root', password='x'))
+
+    def _player_payload(self, **overrides):
+        payload = {
+            'name': '検証太郎', 'position': '投手',
+            'birth_date': '', 'throws': '', 'bats': '',
+            'height_cm': '', 'weight_kg': '', 'birthplace': '', 'debut_year': '',
+            'high_school': '', 'university': '', 'corporate_team': '',
+            'stints-TOTAL_FORMS': '0', 'stints-INITIAL_FORMS': '0',
+            'stints-MIN_NUM_FORMS': '0', 'stints-MAX_NUM_FORMS': '1000',
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_unrealistic_height_is_rejected(self):
+        response = self.client.post('/admin/myapp/player/add/', self._player_payload(height_cm='400'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '身長の値が現実的ではありません')
+        self.assertFalse(orm_models.Player.objects.filter(name='検証太郎').exists())
+
+    def test_debut_year_outside_the_season_range_is_rejected(self):
+        response = self.client.post('/admin/myapp/player/add/', self._player_payload(debut_year='1800'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'シーズンは')
+        self.assertFalse(orm_models.Player.objects.filter(name='検証太郎').exists())
+
+    def test_realistic_profile_is_accepted(self):
+        response = self.client.post('/admin/myapp/player/add/', self._player_payload(
+            height_cm='180', weight_kg='78', debut_year='2021', birthplace='大阪府',
+        ))
+
+        self.assertEqual(response.status_code, 302)
+        player = orm_models.Player.objects.get(name='検証太郎')
+        self.assertEqual((player.height_cm, player.debut_year), (180, 2021))
+
+    def test_stadium_opened_year_outside_the_season_range_is_rejected(self):
+        response = self.client.post('/admin/myapp/stadium/add/', {
+            'name': '検証球場', 'city': '', 'capacity': '', 'surface': '', 'opened_year': '1800',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'シーズンは')
+        self.assertFalse(orm_models.Stadium.objects.filter(name='検証球場').exists())
+
+    def test_valid_stadium_is_accepted(self):
+        response = self.client.post('/admin/myapp/stadium/add/', {
+            'name': '検証球場', 'city': '仙台市', 'capacity': '30000',
+            'surface': '人工芝', 'opened_year': '1950',
+        })
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(orm_models.Stadium.objects.filter(name='検証球場').exists())
 
 
 class AdminPlayerWithStintsTest(BaseCase):

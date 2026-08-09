@@ -33,10 +33,6 @@ class InvalidSeason(DomainError):
     """シーズン（年）として許されない値。"""
 
 
-class DuplicateSeasonRecord(DomainError):
-    """同一チームに同じシーズンの成績が二重に登録された。"""
-
-
 class InvalidGame(DomainError):
     """試合として成立しない内容（同一チーム同士、負の得点など）。"""
 
@@ -53,10 +49,6 @@ class InvalidProfile(DomainError):
     """プロフィールの値が不正（現実的でない身長など）。"""
 
 
-class StadiumNotFound(DomainError):
-    """指定された球場が存在しない。"""
-
-
 class InvalidStint(DomainError):
     """在籍期間として成立しない（退団年が加入年より前など）。"""
 
@@ -67,7 +59,3 @@ class TeamNotFound(DomainError):
 
 class PlayerNotFound(DomainError):
     """指定された選手が存在しない。"""
-
-
-class DuplicateTeamName(DomainError):
-    """同一リーグ内でチーム名が重複している。"""

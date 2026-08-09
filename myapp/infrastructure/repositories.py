@@ -19,14 +19,12 @@ from ..domain.entities import (
     GamePitching,
     League,
     Player,
-    Stadium,
     Stint,
     Team,
 )
 from ..domain.exceptions import (
     GameNotFound,
     LeagueNotFound,
-    StadiumNotFound,
     TeamNotFound,
 )
 from ..domain.value_objects import (
@@ -38,7 +36,6 @@ from ..domain.value_objects import (
     Position,
     Profile,
     Season,
-    StadiumProfile,
 )
 from . import orm_models
 
@@ -85,9 +82,6 @@ class DjangoTeamRepository:
             .order_by('display_order', 'name')
         )
         return [self._to_domain(row, with_roster=True) for row in rows]
-
-    def exists_with_name(self, league_id: int, name: str) -> bool:
-        return orm_models.Team.objects.filter(league_id=league_id, name=name).exists()
 
     @transaction.atomic
     def save(self, team: Team) -> Team:
@@ -238,33 +232,6 @@ def _profile_of(row) -> Profile:
         university=row.university,
         corporate_team=row.corporate_team,
     )
-
-
-class DjangoStadiumRepository:
-    """球場の永続化。"""
-
-    def find_by_id(self, stadium_id: int) -> Stadium:
-        try:
-            row = orm_models.Stadium.objects.get(id=stadium_id)
-        except orm_models.Stadium.DoesNotExist:
-            raise StadiumNotFound(f"球場が見つかりません（id={stadium_id}）。") from None
-        return self._to_domain(row)
-
-    def find_all(self) -> list[Stadium]:
-        return [self._to_domain(r) for r in orm_models.Stadium.objects.all()]
-
-    @staticmethod
-    def _to_domain(row) -> Stadium:
-        return Stadium(
-            id=row.id,
-            name=row.name,
-            profile=StadiumProfile(
-                city=row.city,
-                capacity=row.capacity,
-                surface=row.surface,
-                opened_year=row.opened_year,
-            ),
-        )
 
 
 def _batting_totals(player_ids: list[int]) -> dict[int, BattingLine]:

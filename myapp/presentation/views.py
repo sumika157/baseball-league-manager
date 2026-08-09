@@ -9,6 +9,7 @@ from datetime import date
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import UserCreationForm
+from django.contrib.auth.views import redirect_to_login
 from django.http import Http404
 from django.shortcuts import redirect, render
 from django.urls import reverse, reverse_lazy
@@ -41,6 +42,17 @@ from .forms import (
 
 BATTER_MODE = 'batter'
 PITCHER_MODE = 'pitcher'
+
+
+def _requires_login(request):
+    """閲覧は誰でも、書き込みはログイン必須。
+
+    一覧のように読み書きが同じ URL に同居する画面で使う。画面ごと
+    login_required にすると閲覧までログインが要る。
+    """
+    if request.user.is_authenticated:
+        return None
+    return redirect_to_login(request.get_full_path())
 
 
 def _service() -> TeamApplicationService:
@@ -109,6 +121,11 @@ def player_list(request, team_id):
     form = PlayerRegistrationForm()
 
     if request.method == 'POST':
+        # 一覧の閲覧は誰でもできるが、登録は試合と同じくログインを求める
+        denied = _requires_login(request)
+        if denied is not None:
+            return denied
+
         form = PlayerRegistrationForm(request.POST)
         if form.is_valid():
             try:
@@ -375,6 +392,7 @@ def player_detail(request, team_id, player_id):
     })
 
 
+@login_required
 def player_edit(request, team_id, player_id):
     """選手の基本情報と成績を編集する。"""
     service = _service()

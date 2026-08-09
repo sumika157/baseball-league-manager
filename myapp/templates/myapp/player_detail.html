@@ -19,7 +19,10 @@
     </h1>
     <p class="page-subtitle">{{ player.position }} · 出場 {{ profile.appearances }}試合</p>
   </div>
-  <a href="{% url 'player_edit' player.team_id player.id %}" class="btn btn-secondary">編集</a>
+  {# 試合詳細と同じく、書き込みできる人にだけ導線を出す #}
+  {% if user.is_authenticated %}
+    <a href="{% url 'player_edit' player.team_id player.id %}" class="btn btn-secondary">編集</a>
+  {% endif %}
 </div>
 
 <div class="stat-strip">

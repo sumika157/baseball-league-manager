@@ -104,7 +104,8 @@
           {% sort_header 'obp' '出塁率' 'end' %}
           {% sort_header 'ops' 'OPS' 'end' %}
         {% endif %}
-        <th></th>
+        {# 編集列。書き込みにはログインが要るので、押せない人には出さない #}
+        {% if user.is_authenticated %}<th></th>{% endif %}
       </tr>
     </thead>
     <tbody>
@@ -137,9 +138,11 @@
           </td>
         {% endif %}
 
-        <td class="text-end">
-          <a href="{% url 'player_edit' team_id player.id %}" class="btn btn-sm btn-outline-info">編集</a>
-        </td>
+        {% if user.is_authenticated %}
+          <td class="text-end">
+            <a href="{% url 'player_edit' team_id player.id %}" class="btn btn-sm btn-outline-info">編集</a>
+          </td>
+        {% endif %}
       </tr>
       {% empty %}
       <tr>
@@ -154,6 +157,11 @@
   </table>
 </div>
 
+{% comment %}
+登録はログインした人だけができる。押せないフォームを見せても、
+送信してログイン画面へ飛ばされるだけなので出さない。
+{% endcomment %}
+{% if user.is_authenticated %}
 <div class="card">
   <div class="card-header">新入団選手の登録</div>
   <div class="card-body">
@@ -169,10 +177,10 @@
       </div>
       <div class="col-md-3">
         <label class="form-label">守備位置</label>
-        {# 選択肢は domain の Position が唯一の出典。テンプレートに直書きしない #}
+        {# 選択肢も既定値も domain の Position が唯一の出典。直書きしない #}
         <select name="position" class="form-select">
           {% for label in positions %}
-            <option value="{{ label }}" {% if label == '内野手' %}selected{% endif %}>{{ label }}</option>
+            <option value="{{ label }}" {% if label == form.fields.position.initial %}selected{% endif %}>{{ label }}</option>
           {% endfor %}
         </select>
       </div>
@@ -182,4 +190,5 @@
     </form>
   </div>
 </div>
+{% endif %}
 {% endblock %}

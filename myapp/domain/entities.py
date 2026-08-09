@@ -371,19 +371,6 @@ class Game:
         self.pitching.append(entry)
         return entry
 
-    def clear_batting(self, player_id: int) -> None:
-        """打撃成績を取り消す。出場しなかった選手の行を残さないため。
-
-        すべて0の行を残すと「出場したが無安打」と「出場していない」が
-        区別できなくなる。
-        """
-        self.batting = [e for e in self.batting if e.player_id != player_id]
-
-    def clear_pitching(self, player_id: int) -> None:
-        """投球成績を取り消す。"""
-        self.pitching = [e for e in self.pitching if e.player_id != player_id]
-
-    @property
-    def participant_ids(self) -> set[int]:
-        """この試合で何らかの成績が記録された選手。"""
-        return {e.player_id for e in self.batting} | {e.player_id for e in self.pitching}
+    # 成績の取り消しは、集約を組み直して保存することで表す。
+    # 渡されなかった選手の行はリポジトリ側で消えるため、
+    # 個別に取り消す操作は持たない（出典を1つに保つため）。

@@ -11,13 +11,9 @@ from datetime import date
 from ..domain import services as domain_services
 from ..domain.entities import Game, Player, Stint, Team
 from ..domain.value_objects import (
-    BattingLine,
-    InningsPitched,
     JerseyNumber,
-    PitchingLine,
     Position,
     Season,
-    TeamRecord,
     format_average,
 )
 from .dto import (
@@ -40,7 +36,6 @@ from .dto import (
     RankingEntry,
     Standings,
     StandingRow,
-    TeamSummary,
     TeamTotals,
 )
 
@@ -548,27 +543,6 @@ class TeamApplicationService:
         for player_id, line in (pitching or {}).items():
             game.record_pitching(player_id, line)
 
-        return self._games.save(game)
-
-    def record_game(
-        self,
-        *,
-        year: int,
-        played_on,
-        home_team_id: int,
-        away_team_id: int,
-        home_score: int,
-        away_score: int,
-    ) -> Game:
-        """試合を登録する。勝敗はここから集計されるので、別途入力しない。"""
-        game = Game(
-            season=Season(year),
-            played_on=played_on,
-            home_team_id=home_team_id,
-            away_team_id=away_team_id,
-            home_score=home_score,
-            away_score=away_score,
-        )
         return self._games.save(game)
 
     def get_admin_overview(self) -> AdminOverview:
