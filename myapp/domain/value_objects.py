@@ -548,14 +548,18 @@ class Profile:
 
 @dataclass(frozen=True)
 class StadiumProfile:
-    """球場の属性。所在地・収容人数・グラウンドの種類。"""
+    """球場の属性。所在地・収容人数・グラウンドの種類・屋根。"""
 
     city: str = ''
     capacity: int | None = None
     surface: str = ''
     opened_year: int | None = None
+    roof: str = ''
 
     SURFACES = ('天然芝', '人工芝', '土')
+    # 屋根の有無は「雨天中止があり得るか」を分ける。開閉式は屋根を閉じれば
+    # ドームと同じように試合できるため、屋外とは別に扱う
+    ROOFS = ('屋外', 'ドーム', '開閉式屋根')
 
     def __post_init__(self) -> None:
         if self.capacity is not None:
@@ -570,8 +574,20 @@ class StadiumProfile:
         if self.surface and self.surface not in self.SURFACES:
             raise InvalidProfile(f"「{self.surface}」はグラウンドの種類として認識できません。")
 
+        if self.roof and self.roof not in self.ROOFS:
+            raise InvalidProfile(f"「{self.roof}」は屋根の種類として認識できません。")
+
         if self.opened_year is not None:
             object.__setattr__(self, 'opened_year', Season(self.opened_year).year)
+
+    @property
+    def is_covered(self) -> bool:
+        """屋根で覆える球場か。天候に左右されないかの判断に使う。
+
+        未設定のときは「分からない」ではなく False とする。覆えると
+        言い切れないため。
+        """
+        return self.roof in ('ドーム', '開閉式屋根')
 
 
 def format_average(value: float) -> str:

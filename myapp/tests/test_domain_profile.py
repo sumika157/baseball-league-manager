@@ -137,6 +137,21 @@ class StadiumProfileTest(TestCase):
         with self.assertRaises(InvalidSeason):
             StadiumProfile(opened_year=1800)
 
+    def test_roof_is_restricted(self):
+        self.assertEqual(StadiumProfile(roof='ドーム').roof, 'ドーム')
+        with self.assertRaises(InvalidProfile):
+            StadiumProfile(roof='ガラス張り')
+
+    def test_covered_stadiums_are_not_affected_by_weather(self):
+        """開閉式は閉じればドームと同じなので、覆える側に入れる。"""
+        self.assertTrue(StadiumProfile(roof='ドーム').is_covered)
+        self.assertTrue(StadiumProfile(roof='開閉式屋根').is_covered)
+        self.assertFalse(StadiumProfile(roof='屋外').is_covered)
+
+    def test_unknown_roof_is_not_treated_as_covered(self):
+        """未設定は「分からない」。覆えると言い切れない以上そう扱わない。"""
+        self.assertFalse(StadiumProfile().is_covered)
+
 
 class StadiumTest(TestCase):
     def test_city_comes_from_the_stadium(self):

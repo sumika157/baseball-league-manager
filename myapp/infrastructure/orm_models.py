@@ -35,13 +35,19 @@ class League(models.Model):
 class Stadium(models.Model):
     """球場。所在地はここが持つ（チーム側に地名を二重に持たせない）。"""
 
+    # 選択肢はドメインの StadiumProfile が唯一の出典。ここには並べない
     SURFACE_CHOICES = [(s, s) for s in StadiumProfile.SURFACES]
+    ROOF_CHOICES = [(r, r) for r in StadiumProfile.ROOFS]
 
     name = models.CharField(max_length=100, unique=True, verbose_name='球場名')
     city = models.CharField(max_length=100, blank=True, verbose_name='所在地')
     capacity = models.PositiveIntegerField(null=True, blank=True, verbose_name='収容人数')
     surface = models.CharField(
         max_length=10, choices=SURFACE_CHOICES, blank=True, verbose_name='グラウンド'
+    )
+    roof = models.CharField(
+        max_length=10, choices=ROOF_CHOICES, blank=True, verbose_name='屋根',
+        help_text='開閉式は、屋根を閉じれば天候に左右されません。',
     )
     opened_year = models.IntegerField(null=True, blank=True, verbose_name='開場年')
 

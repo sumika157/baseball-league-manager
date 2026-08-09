@@ -3,6 +3,7 @@ import types
 from django import forms
 from django.contrib import admin
 from django.contrib.admin.views.main import ORDER_VAR, ChangeList
+from django.contrib.admin.widgets import FilteredSelectMultiple
 from django.db.models import Count, IntegerField, OuterRef, Prefetch, Q, Subquery
 from django.db.models.functions import Coalesce
 from django.http import HttpResponseRedirect
@@ -321,9 +322,31 @@ class DomainCheckedForm(forms.ModelForm):
 
 
 class StadiumForm(DomainCheckedForm):
+    """球場の編集。本拠地とするチームもここから決められる。
+
+    所属の出典は Team.home_stadium の1か所だけ。この欄は同じ関係を
+    球場の側から編むためのもので、別に持つわけではない。
+    """
+
+    home_teams = forms.ModelMultipleChoiceField(
+        queryset=Team.objects.select_related('league').order_by(
+            'league__display_order', 'league__name', 'display_order', 'name'
+        ),
+        required=False,
+        label='本拠地とするチーム',
+        help_text='ここで選ぶと、そのチームの本拠地がこの球場になります。'
+                  '他の球場を本拠地にしていたチームは、こちらへ移ります。',
+        widget=FilteredSelectMultiple('チーム', is_stacked=False),
+    )
+
     class Meta:
         model = Stadium
         fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance.pk:
+            self.fields['home_teams'].initial = self.instance.home_teams.all()
 
     def build_value_object(self, cleaned):
         return StadiumProfile(
@@ -331,21 +354,61 @@ class StadiumForm(DomainCheckedForm):
             capacity=cleaned.get('capacity'),
             surface=cleaned.get('surface', ''),
             opened_year=cleaned.get('opened_year'),
+            roof=cleaned.get('roof', ''),
         )
 
 
 @admin.register(Stadium)
 class StadiumAdmin(admin.ModelAdmin):
     form = StadiumForm
-    list_display = ('name', 'city', 'capacity', 'surface', 'opened_year', 'home_team_names')
+    list_display = (
+        'name', 'city', 'capacity', 'surface', 'roof', 'opened_year', 'home_team_names'
+    )
     search_fields = ('name', 'city')
-    list_filter = ('surface',)
+    list_filter = ('surface', 'roof')
     ordering = ('name',)
+
+    fieldsets = (
+        (None, {'fields': ('name', 'city')}),
+        ('設備', {
+            'description': '分かっているものだけ入力してください。すべて任意です。',
+            'fields': ('capacity', 'surface', 'roof', 'opened_year'),
+        }),
+        ('本拠地', {
+            'description': 'この球場を本拠地とするチーム。'
+                           'チームの編集画面からも同じ設定ができます。',
+            'fields': ('home_teams',),
+        }),
+    )
+
+    def get_queryset(self, request):
+        """一覧に出す本拠地チームを先読みする。行ごとに引くと N+1 になる。"""
+        return super().get_queryset(request).prefetch_related('home_teams')
 
     @admin.display(description='本拠地とするチーム')
     def home_team_names(self, obj):
-        names = list(obj.home_teams.values_list('name', flat=True))
+        names = [team.name for team in obj.home_teams.all()]
         return '、'.join(names) if names else '—'
+
+    def save_related(self, request, form, formsets, change):
+        """本拠地の割り当てを Team 側へ書き戻す。
+
+        持ち主は Team.home_stadium なので、球場の側で選んだ結果を
+        そちらへ反映する。外されたチームは本拠地なしに戻す。
+        """
+        super().save_related(request, form, formsets, change)
+
+        stadium = form.instance
+        selected = form.cleaned_data.get('home_teams')
+        if selected is None:
+            return
+
+        Team.objects.filter(home_stadium=stadium).exclude(
+            pk__in=[team.pk for team in selected]
+        ).update(home_stadium=None)
+        Team.objects.filter(pk__in=[team.pk for team in selected]).update(
+            home_stadium=stadium
+        )
 
 
 class PlayerStintForm(forms.ModelForm):
