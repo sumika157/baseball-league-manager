@@ -10,7 +10,11 @@ from myapp.application.services import TeamApplicationService
 from myapp.domain.entities import Game
 from myapp.domain.value_objects import BattingLine, PitchingLine, Season
 from myapp.infrastructure.queries import DjangoTeamListQuery
-from myapp.infrastructure.repositories import DjangoGameRepository, DjangoTeamRepository
+from myapp.infrastructure.repositories import (
+    DjangoGameRepository,
+    DjangoLeagueRepository,
+    DjangoTeamRepository,
+)
 
 
 def build_service() -> TeamApplicationService:
@@ -18,6 +22,7 @@ def build_service() -> TeamApplicationService:
         teams=DjangoTeamRepository(),
         team_list_query=DjangoTeamListQuery(),
         games=DjangoGameRepository(),
+        leagues=DjangoLeagueRepository(),
     )
 
 

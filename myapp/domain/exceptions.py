@@ -45,6 +45,10 @@ class GameNotFound(DomainError):
     """指定された試合が存在しない。"""
 
 
+class LeagueNotFound(DomainError):
+    """指定されたリーグが存在しない。"""
+
+
 class TeamNotFound(DomainError):
     """指定されたチームが存在しない。"""
 

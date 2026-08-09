@@ -25,6 +25,8 @@ from .dto import (
     GameDetail,
     GamePlayerRow,
     GameRow,
+    LeagueDetail,
+    LeagueStandings,
     Listing,
     PitcherRow,
     PlayerDetail,
@@ -40,13 +42,15 @@ from .dto import (
 class TeamApplicationService:
     """チームとロスターに関するユースケース。"""
 
-    def __init__(self, teams, team_list_query=None, games=None):
+    def __init__(self, teams, team_list_query=None, games=None, leagues=None):
         # 具象クラスではなくリポジトリのインターフェースに依存する
         self._teams = teams
         # 一覧表示は集約を組み立てないリードモデルを使う
         self._team_list_query = team_list_query
         # 勝敗と通算成績の出典
         self._games = games
+        # 順位はリーグの中で決まるため、リーグの一覧が要る
+        self._leagues = leagues
 
     # --- 参照系 ---
 
@@ -176,12 +180,36 @@ class TeamApplicationService:
         seasons = domain_services.seasons_of(all_games)
 
         if not seasons:
-            return Standings(year=year or 0, rows=[], available_years=[])
+            return Standings(year=year or 0, leagues=[], available_years=[])
 
         target = Season(year) if year is not None else seasons[0]
-        rows = domain_services.standings(
-            teams, [g for g in all_games if g.season == target]
+        season_games = [g for g in all_games if g.season == target]
+
+        leagues = []
+        for league in self._leagues.find_all():
+            members = [t for t in teams if t.league_id == league.id]
+            rows = domain_services.standings(members, season_games)
+            if not rows:
+                continue
+            leagues.append(LeagueStandings(
+                league_id=league.id,
+                league_name=league.name,
+                rows=self._to_standing_rows(rows, sort, descending),
+            ))
+
+        return Standings(
+            year=target.year,
+            leagues=leagues,
+            available_years=[s.year for s in seasons],
+            sort=sort if sort in self.STANDING_SORT_KEYS else 'rank',
+            descending=bool(descending) if sort in self.STANDING_SORT_KEYS else False,
         )
+
+    def _to_standing_rows(self, rows, sort, descending) -> list[StandingRow]:
+        """ドメインの順位表を表示用に整え、必要なら並べ替える。
+
+        並べ替えても rank の値は動かさない。順位は勝率で決まっているため。
+        """
 
         display_rows = [
             StandingRow(
@@ -198,20 +226,54 @@ class TeamApplicationService:
             for row in rows
         ]
 
-        # 並べ替えは表示順を変えるだけで、rank の値は動かさない
         if sort in self.STANDING_SORT_KEYS:
             getter, default_desc = self.STANDING_SORT_KEYS[sort]
             desc = default_desc if descending is None else bool(descending)
             display_rows = sorted(display_rows, key=getter, reverse=desc)
-        else:
-            sort, desc = 'rank', False
 
-        return Standings(
-            year=target.year,
-            rows=display_rows,
+        return display_rows
+
+    def get_league_detail(self, league_id: int, year: int | None = None) -> LeagueDetail:
+        """リーグ画面。所属チーム・順位表・直近の試合をまとめて返す。"""
+        league = self._leagues.find_by_id(league_id)
+        teams = [t for t in self._teams.find_all_with_roster() if t.league_id == league_id]
+        member_ids = {t.id for t in teams}
+
+        all_games = self._games.find_all()
+        league_games = [
+            g for g in all_games
+            if g.home_team_id in member_ids and g.away_team_id in member_ids
+        ]
+        seasons = domain_services.seasons_of(league_games)
+
+        target = None
+        rows = []
+        if seasons:
+            target = Season(year) if year is not None else seasons[0]
+            rows = self._to_standing_rows(
+                domain_services.standings(
+                    teams, [g for g in league_games if g.season == target]
+                ),
+                None, None,
+            )
+
+        names = self._team_names()
+        recent = sorted(
+            (self._to_game_row(g, names) for g in league_games),
+            key=lambda r: (r.played_on, r.id),
+            reverse=True,
+        )[:10]
+
+        summaries = {s.id: s for s in self._team_list_query.list_summaries()}
+
+        return LeagueDetail(
+            id=league.id,
+            name=league.name,
+            year=target.year if target else None,
             available_years=[s.year for s in seasons],
-            sort=sort,
-            descending=desc,
+            teams=[summaries[t.id] for t in teams if t.id in summaries],
+            standings=rows,
+            recent_games=recent,
         )
 
     # --- 試合の参照 ---

@@ -16,6 +16,7 @@ class TeamSummary:
     id: int
     name: str
     city: str
+    league_id: int
     league_name: str
     player_count: int
 
@@ -130,14 +131,46 @@ class StandingRow:
 
 
 @dataclass(frozen=True)
+class LeagueStandings:
+    """1リーグぶんの順位表。"""
+
+    league_id: int
+    league_name: str
+    rows: list[StandingRow]
+
+
+@dataclass(frozen=True)
 class Standings:
-    """指定シーズンの順位表。"""
+    """指定シーズンの順位表。
+
+    順位はリーグの中で決まるので、リーグごとに分けて持つ。
+    リーグをまたいで1つの表にすると、別々に戦っているチームが
+    同じ土俵で並んでしまう。
+    """
 
     year: int
-    rows: list[StandingRow]
+    leagues: list[LeagueStandings]
     available_years: list[int]
     sort: str = 'rank'
     descending: bool = False
+
+    @property
+    def rows(self) -> list[StandingRow]:
+        """全リーグを平坦に並べたもの。件数の判定などに使う。"""
+        return [row for league in self.leagues for row in league.rows]
+
+
+@dataclass(frozen=True)
+class LeagueDetail:
+    """リーグ画面。"""
+
+    id: int
+    name: str
+    year: int | None
+    available_years: list[int]
+    teams: list[TeamSummary]
+    standings: list[StandingRow]
+    recent_games: list['GameRow']
 
 
 @dataclass(frozen=True)

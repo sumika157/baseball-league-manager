@@ -12,10 +12,20 @@ from django.urls import reverse, reverse_lazy
 from django.views.generic import CreateView
 
 from ..application.services import TeamApplicationService
-from ..domain.exceptions import DomainError, GameNotFound, PlayerNotFound, TeamNotFound
+from ..domain.exceptions import (
+    DomainError,
+    GameNotFound,
+    LeagueNotFound,
+    PlayerNotFound,
+    TeamNotFound,
+)
 from ..domain.value_objects import Position
 from ..infrastructure.queries import DjangoTeamListQuery
-from ..infrastructure.repositories import DjangoGameRepository, DjangoTeamRepository
+from ..infrastructure.repositories import (
+    DjangoGameRepository,
+    DjangoLeagueRepository,
+    DjangoTeamRepository,
+)
 from .forms import PlayerRegistrationForm, PlayerUpdateForm
 
 BATTER_MODE = 'batter'
@@ -28,6 +38,7 @@ def _service() -> TeamApplicationService:
         teams=DjangoTeamRepository(),
         team_list_query=DjangoTeamListQuery(),
         games=DjangoGameRepository(),
+        leagues=DjangoLeagueRepository(),
     )
 
 
@@ -128,6 +139,16 @@ def player_list(request, team_id):
         'current_sort': listing.sort,
         'current_descending': listing.descending,
     })
+
+
+def league_detail(request, league_id, year=None):
+    """リーグ画面。所属チーム・順位表・直近の試合。"""
+    try:
+        detail = _service().get_league_detail(league_id, year)
+    except LeagueNotFound:
+        raise Http404("リーグが見つかりません。")
+
+    return render(request, 'myapp/league_detail.html', {'league': detail})
 
 
 def game_list(request):

@@ -29,6 +29,7 @@ class DjangoTeamListQuery:
                 id=row.id,
                 name=row.name,
                 city=row.city,
+                league_id=row.league_id,
                 league_name=row.league.name,
                 player_count=row.active_player_count,
             )

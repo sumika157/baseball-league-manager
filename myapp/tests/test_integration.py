@@ -715,6 +715,111 @@ class PlayerDetailViewTest(BaseCase):
         )
 
 
+class LeagueScopedStandingsTest(BaseCase):
+    """順位はリーグの中で争われる（フェーズ2）。"""
+
+    def setUp(self):
+        super().setUp()
+        self.other_league = orm_models.League.objects.create(name='別リーグ')
+        self.x = orm_models.Team.objects.create(league=self.other_league, name='Xチーム')
+        self.y = orm_models.Team.objects.create(league=self.other_league, name='Yチーム')
+
+        # テストリーグ側は僅差、別リーグ側は圧勝
+        play_game(self.team, self.rival, home_score=2, away_score=1, day=1)
+        play_game(self.x, self.y, home_score=10, away_score=0, day=1)
+
+    def test_standings_are_split_by_league(self):
+        board = self.service.get_standings(2026)
+
+        names = {lg.league_name: [r.team_name for r in lg.rows] for lg in board.leagues}
+        self.assertEqual(len(board.leagues), 2)
+        self.assertEqual(names['テストリーグ'], ['テストチーム', '相手チーム'])
+        self.assertEqual(names['別リーグ'], ['Xチーム', 'Yチーム'])
+
+    def test_other_league_teams_do_not_share_the_rank(self):
+        """別リーグの1位どうしが同じ表で2位に落ちたりしないこと。"""
+        board = self.service.get_standings(2026)
+
+        leaders = [lg.rows[0] for lg in board.leagues]
+        self.assertTrue(all(row.rank == 1 for row in leaders))
+
+    def test_leagues_without_games_are_omitted(self):
+        orm_models.League.objects.create(name='未実施リーグ')
+        board = self.service.get_standings(2026)
+
+        self.assertNotIn('未実施リーグ', [lg.league_name for lg in board.leagues])
+
+    def test_page_shows_each_league_heading(self):
+        response = self.client.get(reverse('standings'))
+
+        self.assertContains(response, 'テストリーグ')
+        self.assertContains(response, '別リーグ')
+
+
+class LeagueDetailTest(BaseCase):
+    """リーグ画面（フェーズ2）。"""
+
+    def setUp(self):
+        super().setUp()
+        self.outsider_league = orm_models.League.objects.create(name='別リーグ')
+        self.outsider = orm_models.Team.objects.create(
+            league=self.outsider_league, name='部外チーム'
+        )
+        play_game(self.team, self.rival, home_score=5, away_score=3, day=1)
+        self.url = reverse('league_detail', args=[self.league.id])
+
+    def test_page_renders(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'テストリーグ')
+
+    def test_shows_only_member_teams(self):
+        detail = self.service.get_league_detail(self.league.id)
+
+        names = [t.name for t in detail.teams]
+        self.assertIn('テストチーム', names)
+        self.assertNotIn('部外チーム', names)
+
+    def test_shows_standings_and_recent_games(self):
+        detail = self.service.get_league_detail(self.league.id)
+
+        self.assertEqual(detail.standings[0].team_name, 'テストチーム')
+        self.assertEqual(len(detail.recent_games), 1)
+
+    def test_games_of_other_leagues_are_excluded(self):
+        another = orm_models.Team.objects.create(
+            league=self.outsider_league, name='部外チーム2'
+        )
+        play_game(self.outsider, another, day=2)
+
+        detail = self.service.get_league_detail(self.league.id)
+        self.assertEqual(len(detail.recent_games), 1)
+
+    def test_season_can_be_selected(self):
+        play_game(self.team, self.rival, year=2025, day=1)
+
+        detail = self.service.get_league_detail(self.league.id, 2025)
+
+        self.assertEqual(detail.year, 2025)
+        self.assertEqual(detail.available_years, [2026, 2025])
+
+    def test_league_without_games(self):
+        detail = self.service.get_league_detail(self.outsider_league.id)
+
+        self.assertEqual(detail.standings, [])
+        self.assertIsNone(detail.year)
+
+    def test_missing_league_returns_404(self):
+        self.assertEqual(
+            self.client.get(reverse('league_detail', args=[9999])).status_code, 404
+        )
+
+    def test_team_list_links_to_the_league(self):
+        body = self.client.get(reverse('team_list')).content.decode()
+        self.assertIn(self.url, body)
+
+
 class AuthTest(TestCase):
     def test_login_redirect_url_resolves(self):
         from django.conf import settings

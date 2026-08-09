@@ -1,0 +1,99 @@
+{% extends 'myapp/base.html' %}
+
+{% block title %}{{ league.name }} - Baseball Manager{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>
+    <li class="breadcrumb-item"><a href="{% url 'standings' %}">順位表</a></li>
+    <li class="breadcrumb-item active">{{ league.name }}</li>
+  </ol>
+</nav>
+
+<div class="page-head">
+  <h1 class="page-title">{{ league.name }}</h1>
+  <p class="page-subtitle">
+    {{ league.teams|length }}チーム
+    {% if league.year %} · {{ league.year }}年シーズン{% endif %}
+  </p>
+</div>
+
+{% if league.available_years %}
+  <div class="segmented">
+    {% for year in league.available_years %}
+      <a class="segmented-item {% if year == league.year %}is-active{% endif %}"
+         href="{% url 'league_detail_by_year' league.id year %}">{{ year }}年</a>
+    {% endfor %}
+  </div>
+{% endif %}
+
+<div class="row g-3">
+  <div class="col-lg-8">
+    <h2 class="h6 mb-2">順位表</h2>
+    {% if league.standings %}
+      {% include 'myapp/_standings_table.html' with rows=league.standings sortable=False %}
+    {% else %}
+      <div class="card">
+        <div class="empty-state">
+          このリーグの試合がまだ登録されていません。
+        </div>
+      </div>
+    {% endif %}
+
+    <h2 class="h6 mb-2 mt-4">直近の試合</h2>
+    <div class="card">
+      <div class="card-body p-0">
+        {% if league.recent_games %}
+          <ul class="tile-list">
+            {% for game in league.recent_games %}
+              <li>
+                <a href="{% url 'game_detail' game.id %}">
+                  <span class="tile-list-main">
+                    <span class="tile-list-title">
+                      {{ game.home_team_name }} {{ game.home_score }} - {{ game.away_score }} {{ game.away_team_name }}
+                    </span>
+                    <span class="tile-list-sub">{{ game.played_on|date:"Y/m/d" }} · {{ game.result }}</span>
+                  </span>
+                  <span class="tile-arrow">→</span>
+                </a>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <div class="empty-state" style="padding: 2rem 1rem; font-size: 0.875rem;">
+            試合がありません。
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    <h2 class="h6 mb-2">所属チーム</h2>
+    <div class="card h-100">
+      <div class="card-body p-0">
+        {% if league.teams %}
+          <ul class="tile-list">
+            {% for team in league.teams %}
+              <li>
+                <a href="{% url 'player_list' team.id %}">
+                  <span class="tile-list-main">
+                    <span class="tile-list-title">{{ team.name }}</span>
+                    {% if team.city %}<span class="tile-list-sub">{{ team.city }}</span>{% endif %}
+                  </span>
+                  <span class="tile-list-meta">{{ team.player_count }}名</span>
+                </a>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <div class="empty-state" style="padding: 2rem 1rem; font-size: 0.875rem;">
+            チームが登録されていません。
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

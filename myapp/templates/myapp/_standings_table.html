@@ -1,0 +1,53 @@
+{% load sorting %}
+{% comment %}
+順位表のテーブル1つぶん。rows と、並べ替えを有効にするかの sortable を渡す。
+リーグ画面と順位表ページの両方から使う。
+{% endcomment %}
+<div class="table-responsive">
+  <table class="table table-hover">
+    <thead>
+      <tr>
+        {% if sortable %}
+          {% sort_header 'rank' '順位' 'start' False %}
+          {% sort_header 'team' 'チーム' 'start' False %}
+          {% sort_header 'games' '試合' 'end' %}
+          {% sort_header 'wins' '勝' 'end' %}
+          {% sort_header 'losses' '敗' 'end' %}
+          {% sort_header 'ties' '分' 'end' %}
+          {% sort_header 'pct' '勝率' 'end' False %}
+        {% else %}
+          <th>順位</th>
+          <th>チーム</th>
+          <th class="text-end">試合</th>
+          <th class="text-end">勝</th>
+          <th class="text-end">敗</th>
+          <th class="text-end">分</th>
+          <th class="text-end">勝率</th>
+        {% endif %}
+        <th class="text-end">ゲーム差</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+        <tr>
+          <td><span class="jersey-number">{{ row.rank }}</span></td>
+          <td>
+            <a href="{% url 'player_list' row.team_id %}" class="player-name">{{ row.team_name }}</a>
+          </td>
+          <td class="text-end stat-muted">{{ row.games_played }}</td>
+          <td class="text-end">{{ row.wins }}</td>
+          <td class="text-end">{{ row.losses }}</td>
+          <td class="text-end stat-muted">{{ row.ties }}</td>
+          <td class="text-end stat-key">{{ row.winning_percentage }}</td>
+          <td class="text-end stat-muted">{{ row.games_behind }}</td>
+        </tr>
+      {% empty %}
+        <tr>
+          <td colspan="8">
+            <div class="empty-state">まだ試合が行われていません。</div>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

@@ -37,7 +37,9 @@
           <td>
             <a href="{% url 'player_list' team.id %}" class="player-name">{{ team.name }}</a>
           </td>
-          <td class="stat-muted">{{ team.league_name }}</td>
+          <td>
+            <a href="{% url 'league_detail' team.league_id %}" class="stat-muted">{{ team.league_name }}</a>
+          </td>
           <td class="stat-muted">{{ team.city|default:"—" }}</td>
           <td class="text-end">{{ team.player_count }}名</td>
           <td class="text-end">

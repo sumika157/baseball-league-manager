@@ -1,5 +1,4 @@
 {% extends 'myapp/base.html' %}
-{% load sorting %}
 
 {% block title %}{{ standings.year }}年 順位表 - Baseball Manager{% endblock %}
 
@@ -13,7 +12,9 @@
 
 <div class="page-head">
   <h1 class="page-title">順位表</h1>
-  <p class="page-subtitle">順位は勝率の高い順で自動的に決まります。</p>
+  <p class="page-subtitle">
+    順位は勝率の高い順で自動的に決まります。順位はリーグの中で争われるため、リーグごとに分けています。
+  </p>
 </div>
 
 {% if standings.available_years %}
@@ -24,46 +25,17 @@
     {% endfor %}
   </div>
 
-  <div class="table-responsive">
-    <table class="table table-hover">
-      <thead>
-        <tr>
-          {% sort_header 'rank' '順位' 'start' False %}
-          {% sort_header 'team' 'チーム' 'start' False %}
-          {% sort_header 'games' '試合' 'end' %}
-          {% sort_header 'wins' '勝' 'end' %}
-          {% sort_header 'losses' '敗' 'end' %}
-          {% sort_header 'ties' '分' 'end' %}
-          {% sort_header 'pct' '勝率' 'end' False %}
-          <th class="text-end">ゲーム差</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in standings.rows %}
-          <tr>
-            <td><span class="jersey-number">{{ row.rank }}</span></td>
-            <td>
-              <a href="{% url 'player_list' row.team_id %}" class="player-name">{{ row.team_name }}</a>
-            </td>
-            <td class="text-end stat-muted">{{ row.games_played }}</td>
-            <td class="text-end">{{ row.wins }}</td>
-            <td class="text-end">{{ row.losses }}</td>
-            <td class="text-end stat-muted">{{ row.ties }}</td>
-            <td class="text-end stat-key">{{ row.winning_percentage }}</td>
-            <td class="text-end stat-muted">{{ row.games_behind }}</td>
-          </tr>
-        {% empty %}
-          <tr>
-            <td colspan="8">
-              <div class="empty-state">
-                {{ standings.year }}年の成績が登録されていません。
-              </div>
-            </td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
+  {% for league in standings.leagues %}
+    <div class="d-flex justify-content-between align-items-center mb-2 mt-4">
+      <h2 class="h6 mb-0">{{ league.league_name }}</h2>
+      <a href="{% url 'league_detail' league.league_id %}" style="font-size: 0.875rem;">リーグの詳細 →</a>
+    </div>
+    {% include 'myapp/_standings_table.html' with rows=league.rows sortable=True %}
+  {% empty %}
+    <div class="card">
+      <div class="empty-state">{{ standings.year }}年の試合が登録されていません。</div>
+    </div>
+  {% endfor %}
 {% else %}
   <div class="card">
     <div class="empty-state">

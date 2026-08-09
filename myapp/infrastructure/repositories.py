@@ -14,7 +14,7 @@ from django.db import transaction
 from django.db.models import Sum
 
 from ..domain.entities import Game, GameBatting, GamePitching, League, Player, Team
-from ..domain.exceptions import GameNotFound, TeamNotFound
+from ..domain.exceptions import GameNotFound, LeagueNotFound, TeamNotFound
 from ..domain.value_objects import (
     BattingLine,
     InningsPitched,
@@ -287,7 +287,10 @@ class DjangoLeagueRepository:
     """LeagueRepository の Django ORM 実装。"""
 
     def find_by_id(self, league_id: int) -> League:
-        row = orm_models.League.objects.get(id=league_id)
+        try:
+            row = orm_models.League.objects.get(id=league_id)
+        except orm_models.League.DoesNotExist:
+            raise LeagueNotFound(f"リーグが見つかりません（id={league_id}）。") from None
         return League(id=row.id, name=row.name)
 
     def find_all(self) -> list[League]:
