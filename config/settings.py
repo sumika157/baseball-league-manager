@@ -35,10 +35,16 @@ if not SECRET_KEY:
 # 明示的に有効化しない限り False（安全側に倒す）
 DEBUG = os.environ.get('DJANGO_DEBUG', 'False').lower() in ('1', 'true', 'yes')
 
-# カンマ区切りで指定する（例: DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1）
+# カンマ区切りで指定する（例: DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,[::1]）
+#
+# [::1] は IPv6 のループバック。localhost は IPv4 と IPv6 の両方に解決され、
+# ブラウザは IPv6 を優先することが多い。これを入れておかないと、
+# 同じ localhost でもブラウザからだけ DisallowedHost で 400 になる。
 ALLOWED_HOSTS = [
     host.strip()
-    for host in os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+    for host in os.environ.get(
+        'DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1,[::1]'
+    ).split(',')
     if host.strip()
 ]
 

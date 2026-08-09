@@ -2,13 +2,18 @@
 {% load admin_overview %}
 
 {% comment %}
-管理画面のトップ。Django 同梱の admin/index.html を継承して概況を足すだけ。
+管理画面のトップ。Django 同梱の admin/index.html を継承する。
 
 ファイル名を index.html にすると自分自身を継承する形になって成立しないため、
 別名にして myapp/admin.py の admin.site.index_template で指定している。
+
+概況パネルは #content-main の中に入れる。外に置くとグリッドの外側になり、
+アプリの箱と横幅が揃わないため。
 {% endcomment %}
 
 {% block content %}
-  {% admin_overview %}
-  {{ block.super }}
+  <div id="content-main">
+    {% admin_overview %}
+    {% include "admin/app_list.html" with app_list=app_list show_changelinks=True %}
+  </div>
 {% endblock %}

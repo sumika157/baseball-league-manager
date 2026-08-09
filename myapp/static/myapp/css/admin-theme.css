@@ -366,10 +366,59 @@ ul.messagelist li {
 }
 
 /* ------------------------------------------------------------------
+   トップのレイアウト
+   ------------------------------------------------------------------
+
+   Django 既定ではアプリの箱（野球データ／認証と認可）が縦に積まれるため、
+   横幅の広い画面では右側が空いて左寄りに見える。
+   箱を横に並べて幅を使い切る。body.dashboard はトップ画面にだけ付く。
+   ------------------------------------------------------------------ */
+.dashboard #content-main {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+/* 概況パネルは要約なので、アプリの箱の上に1枚で通す */
+.dashboard #content-main > .admin-overview {
+  grid-column: 1 / -1;
+}
+
+.dashboard #content-main > .module {
+  margin-bottom: 0;
+}
+
+/* 右カラム（最近の操作）を左カラムの上端に揃える */
+.dashboard #content-related {
+  margin-top: 0;
+}
+
+.dashboard #content-related .module {
+  margin-bottom: 0;
+}
+
+/* 箱が横に並ぶと1つあたりが狭くなるので、余白を詰めて折り返しを防ぐ */
+.dashboard #content-main .module table td {
+  white-space: nowrap;
+  width: 1%;
+}
+
+.dashboard #content-main .module table th {
+  width: auto;
+}
+
+@media (max-width: 1024px) {
+  .dashboard #content-main {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ------------------------------------------------------------------
    トップの概況パネル
    ------------------------------------------------------------------ */
 .admin-overview {
-  margin-bottom: 20px;
+  margin-bottom: 0;
 }
 
 .admin-overview-grid {
