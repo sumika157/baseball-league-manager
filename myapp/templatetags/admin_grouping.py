@@ -26,10 +26,20 @@ def grouped_results(cl, results):
     if cl.params.get('o') and not getattr(cl.model_admin, 'group_ordering', None):
         return None
 
+    # 見出しからそのまとまりだけに絞り込めるようにする。
+    # 一覧の並び順は1つしか持てないため、リーグごとに別々の順で見たい場合は
+    # 絞り込んでから並べ替える。
+    group_link = getattr(cl.model_admin, 'group_link', None)
+
     rows = []
     previous = object()  # 最初の行では必ず見出しを出すための番兵
     for obj, result in zip(cl.result_list, results):
         label = group_by(obj)
-        rows.append({'header': label if label != previous else None, 'result': result})
+        is_new = label != previous
+        rows.append({
+            'header': label if is_new else None,
+            'header_url': group_link(obj) if (is_new and group_link) else None,
+            'result': result,
+        })
         previous = label
     return rows

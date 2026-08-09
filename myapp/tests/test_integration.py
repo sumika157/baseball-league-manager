@@ -1041,7 +1041,8 @@ class AdminGroupingTest(BaseCase):
     def test_team_list_shows_each_league_once(self):
         body = self.client.get('/admin/myapp/team/').content.decode()
         # 見出しには所属チーム数も添える
-        self.assertEqual(body.count('>テストリーグ（2チーム）</td>'), 1)
+        # 見出しには絞り込みリンクも付くため、見出し文言そのもので数える
+        self.assertEqual(body.count('テストリーグ（2チーム）'), 1)
 
     def test_stint_list_groups_by_team(self):
         """所属はもう選手ではなく在籍が持つので、区切るのは在籍一覧。"""
@@ -1074,9 +1075,33 @@ class AdminGroupingTest(BaseCase):
         positions = [segment.index(n) for n in sorted(names)]
         self.assertEqual(positions, sorted(positions))
 
+    def test_heading_links_to_a_single_league(self):
+        """一覧の並び順は1つしか持てないため、リーグごとに別々の順で見たい
+        場合は絞り込んでから並べ替える。その導線を見出しに置く。"""
+        body = self.client.get('/admin/myapp/team/').content.decode()
+
+        self.assertIn('group-heading-link', body)
+        self.assertIn(f'?league__id__exact={self.league.id}', body)
+
+    def test_filtered_league_can_be_sorted_on_its_own(self):
+        for name in ('Cチーム', 'Aチーム', 'Bチーム'):
+            orm_models.Team.objects.create(league=self.other, name=name)
+
+        response = self.client.get(
+            f'/admin/myapp/team/?league__id__exact={self.other.id}&o=1'
+        )
+        body = response.content.decode()
+
+        # 絞り込んだリーグだけが並び、その中で名前順になる
+        self.assertNotIn('テストチーム', body)
+        for earlier, later in (('Aチーム', 'Bチーム'), ('Bチーム', 'Cチーム')):
+            with self.subTest(pair=(earlier, later)):
+                self.assertLess(body.index(earlier), body.index(later))
+
     def test_each_league_still_appears_once_when_sorted(self):
         body = self.client.get('/admin/myapp/team/?o=1').content.decode()
-        self.assertEqual(body.count('>テストリーグ（2チーム）</td>'), 1)
+        # 見出しには絞り込みリンクも付くため、見出し文言そのもので数える
+        self.assertEqual(body.count('テストリーグ（2チーム）'), 1)
 
     def test_other_changelists_are_unaffected(self):
         """group_by を持たない一覧は従来どおり描画されること。"""

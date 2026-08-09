@@ -253,6 +253,9 @@ class TeamAdmin(GroupedAdminMixin, admin.ModelAdmin):
     group_by = staticmethod(
         lambda team: f'{team.league.name}（{team.league_team_count}チーム）'
     )
+    # 一覧の並び順は1つしか持てない。リーグごとに別々の順で見たい場合は
+    # ここから絞り込んでから並べ替える
+    group_link = staticmethod(lambda team: f'?league__id__exact={team.league_id}')
 
     @admin.display(description='現役選手', ordering='active_players_count')
     def active_player_count(self, obj):

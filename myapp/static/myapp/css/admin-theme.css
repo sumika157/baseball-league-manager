@@ -379,6 +379,16 @@ div.breadcrumbs {
   color: var(--body-quiet-color);
 }
 
+/* 見出しから、そのまとまりだけに絞り込む */
+.group-heading-link {
+  margin-left: 10px;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--link-fg);
+}
+
 /* 見出し行は選択やホバーの対象ではないので、行の反応を打ち消す */
 #result_list tr.group-heading-row:hover > td {
   background: var(--darkened-bg);
