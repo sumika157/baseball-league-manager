@@ -126,7 +126,7 @@ baseball-web  | /app/myapp/views.py changed, reloading.
 | --- | --- |
 | チーム一覧（ホーム） | http://localhost:8000/ |
 | 選手一覧 | http://localhost:8000/team/&lt;チームID&gt;/ |
-| 選手の成績編集 | http://localhost:8000/player/&lt;選手ID&gt;/edit/ |
+| 選手の成績編集 | http://localhost:8000/team/&lt;チームID&gt;/player/&lt;選手ID&gt;/edit/ |
 | ログイン | http://localhost:8000/accounts/login/ |
 | 新規登録 | http://localhost:8000/accounts/signup/ |
 | 管理画面 | http://localhost:8000/admin/ |
@@ -246,11 +246,26 @@ my_django_project/
 │   ├── settings.py         # Django の設定
 │   └── urls.py             # ルート URL 定義
 ├── myapp/                  # アプリ本体
-│   ├── models.py           # League / Team / Player / PlayerStats / PitcherStats
-│   ├── views.py            # 画面表示と成績の集計
-│   ├── services.py         # ビジネスロジック（バリデーションなど）
+│   ├── domain/             # 業務ルール（Django 非依存）
+│   │   ├── value_objects.py    Position / JerseyNumber /
+│   │   │                       InningsPitched / BattingLine / PitchingLine
+│   │   ├── entities.py         Team（集約ルート）/ Player / League
+│   │   ├── repositories.py     永続化のインターフェース
+│   │   └── exceptions.py       DomainError
+│   ├── application/        # ユースケース
+│   │   ├── services.py         TeamApplicationService
+│   │   └── dto.py              画面へ渡す読み取り専用データ
+│   ├── infrastructure/     # Django ORM への接続
+│   │   ├── orm_models.py       Django の Model 定義
+│   │   ├── repositories.py     リポジトリ実装とマッピング
+│   │   └── queries.py          一覧表示用の参照クエリ
+│   ├── presentation/       # HTTP
+│   │   ├── views.py            ビュー
+│   │   └── forms.py            入力検証
+│   ├── models.py           # infrastructure/orm_models.py の再輸出
 │   ├── urls.py             # アプリの URL 定義
 │   ├── migrations/         # マイグレーション
+│   ├── tests/              # 層ごとのテスト
 │   └── templates/          # HTML テンプレート
 ├── Dockerfile              # イメージ定義
 ├── docker-compose.yml      # サービス定義（ポート公開・マウント・自動 migrate）
@@ -264,16 +279,64 @@ my_django_project/
 
 ---
 
-## テスト
+## アーキテクチャ
 
-サービス層のバリデーションと主要な画面遷移をカバーしたテストがあります。
+ドメイン駆動設計（DDD）にもとづき、4つの層に分けています。
+**依存の向きは常に内側（ドメイン）へ**で、ドメイン層は Django を一切知りません。
+
+```
+presentation  →  application  →  domain  ←  infrastructure
+（HTTP・画面）    （ユースケース）  （業務ルール）  （Django ORM）
+```
+
+| 層 | ディレクトリ | 責務 |
+| --- | --- | --- |
+| ドメイン | [myapp/domain/](myapp/domain/) | 野球の語彙とルール。Django 非依存 |
+| アプリケーション | [myapp/application/](myapp/application/) | ユースケースの手順と画面用 DTO |
+| インフラ | [myapp/infrastructure/](myapp/infrastructure/) | Django ORM、リポジトリ実装、参照用クエリ |
+| プレゼンテーション | [myapp/presentation/](myapp/presentation/) | HTTP の解釈とフォーム検証 |
+
+### ドメイン層の中身
+
+| ファイル | 内容 |
+| --- | --- |
+| `value_objects.py` | `Position` `JerseyNumber` `InningsPitched` `BattingLine` `PitchingLine` |
+| `entities.py` | `Team`（集約ルート）・`Player`・`League` |
+| `repositories.py` | 永続化のインターフェース（実装は infrastructure） |
+| `exceptions.py` | `DomainError` とその派生 |
+
+**集約ルートは `Team`** です。「同一チーム内で背番号は重複しない」という不変条件は
+チーム全体を見ないと判定できないため、`Team` がロスターを保持して自ら保証します。
+
+### 投球回（InningsPitched）
+
+野球では `5.2` が **5回と2/3**（＝17アウト）を意味し、10進数の 5.2 ではありません。
+この変換ルールは `InningsPitched` 値オブジェクトが唯一の出典で、内部では常に
+アウト数の整数で保持します。`5.3` のような存在しない表記は `6.0` に正規化されます。
+
+### 更新と参照の分離
+
+- **更新** はリポジトリ経由で集約単位に読み書きします（不変条件を守るため）
+- **参照** は一覧表示のように不変条件を扱わないため、集約を組み立てず
+  [infrastructure/queries.py](myapp/infrastructure/queries.py) から直接 DTO を作ります
+
+---
+
+## テスト
 
 ```bash
 docker compose exec web python manage.py test
 ```
 
-| テストクラス | 内容 |
-| --- | --- |
-| `BaseballServiceTest` | チーム作成・選手登録・背番号の重複チェック・打率計算 |
-| `PlayerListViewTest` | 画面からの登録で重複が弾かれること、成績レコードが自動作成されること |
-| `AuthRedirectTest` | ログイン後のリダイレクト先が解決できること、新規登録画面が開くこと |
+| ファイル | 内容 | DB |
+| --- | --- | --- |
+| `tests/test_domain_value_objects.py` | 指標計算・投球回の変換・入力値の検証 | 不要 |
+| `tests/test_domain_entities.py` | 背番号の一意性・並び順・ポジション変更 | 不要 |
+| `tests/test_integration.py` | リポジトリの往復・画面の動作 | 必要 |
+
+ドメイン層のテストは Django の設定すら読み込まずに実行できます。
+
+```bash
+docker compose exec -e DJANGO_SETTINGS_MODULE= web \
+  python -m unittest myapp.tests.test_domain_value_objects myapp.tests.test_domain_entities
+```

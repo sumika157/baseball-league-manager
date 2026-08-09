@@ -1,5 +1,12 @@
 from django.contrib import admin
-from .models import League, Team, Player, PlayerStats, PitcherStats
+
+from .infrastructure.orm_models import (
+    League,
+    PitcherStats,
+    Player,
+    PlayerStats,
+    Team,
+)
 
 # 管理画面で野球のデータを作成・編集できるように登録
 admin.site.register(League)
