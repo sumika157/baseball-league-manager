@@ -23,7 +23,7 @@ from ..domain.exceptions import (
     TeamNotFound,
 )
 from ..domain.value_objects import BattingLine, InningsPitched, PitchingLine, Position
-from ..infrastructure.queries import DjangoTeamListQuery
+from ..infrastructure.queries import DjangoPlayerSearchQuery, DjangoTeamListQuery
 from ..infrastructure.repositories import (
     DjangoGameRepository,
     DjangoLeagueRepository,
@@ -152,6 +152,18 @@ def player_list(request, team_id):
         'positions': Position.labels(),
         'current_sort': listing.sort,
         'current_descending': listing.descending,
+    })
+
+
+def player_search(request):
+    """選手を名前で探す。チームが増えると所属からはたどり着きにくいため。"""
+    keyword = (request.GET.get('q') or '').strip()
+    results = DjangoPlayerSearchQuery().search(keyword) if keyword else []
+
+    return render(request, 'myapp/player_search.html', {
+        'keyword': keyword,
+        'results': results,
+        'searched': bool(keyword),
     })
 
 

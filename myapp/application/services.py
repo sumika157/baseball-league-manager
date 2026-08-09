@@ -29,6 +29,7 @@ from .dto import (
     GamePlayerRow,
     GameRow,
     LeagueDetail,
+    LeagueRankings,
     LeagueStandings,
     LeagueTeams,
     Listing,
@@ -148,27 +149,55 @@ class TeamApplicationService:
             team_count=len(teams),
             batter_count=sum(1 for p in all_players if not p.is_pitcher),
             pitcher_count=sum(1 for p in all_players if p.is_pitcher),
-            ops_leaders=to_entries(
-                domain_services.leaders_by_ops(
-                    all_players, limit=leaders, team_games=team_games
-                ),
-                rate3,
-            ),
-            # 本塁打は本数そのものが記録なので規定を設けない
-            home_run_leaders=to_entries(
-                domain_services.leaders_by_home_runs(all_players, limit=leaders), count
-            ),
-            era_leaders=to_entries(
-                domain_services.leaders_by_era(
-                    all_players, limit=leaders, team_games=team_games
-                ),
-                rate2,
-            ),
-            strikeout_leaders=to_entries(
-                domain_services.leaders_by_strikeouts(all_players, limit=leaders), count
+            league_rankings=self._league_rankings(
+                teams, leaders, team_games, to_entries, rate3, rate2, count
             ),
             league_teams=self.list_teams_by_league().rows,
         )
+
+    def _league_rankings(
+        self, teams, leaders, team_games, to_entries, rate3, rate2, count
+    ) -> list[LeagueRankings]:
+        """リーグごとのランキング。
+
+        タイトルはリーグの中で争われるので、他リーグの選手と同じ表に並べない。
+        1人も載らないリーグは出さない。
+        """
+        rankings = []
+        for league in self._leagues.find_all():
+            members = [
+                p for team in teams if team.league_id == league.id
+                for p in team.active_players
+            ]
+            if not members:
+                continue
+
+            entry = LeagueRankings(
+                league_id=league.id,
+                league_name=league.name,
+                ops_leaders=to_entries(
+                    domain_services.leaders_by_ops(
+                        members, limit=leaders, team_games=team_games
+                    ),
+                    rate3,
+                ),
+                # 本塁打と奪三振は本数そのものが記録なので規定を設けない
+                home_run_leaders=to_entries(
+                    domain_services.leaders_by_home_runs(members, limit=leaders), count
+                ),
+                era_leaders=to_entries(
+                    domain_services.leaders_by_era(
+                        members, limit=leaders, team_games=team_games
+                    ),
+                    rate2,
+                ),
+                strikeout_leaders=to_entries(
+                    domain_services.leaders_by_strikeouts(members, limit=leaders), count
+                ),
+            )
+            if entry.has_any:
+                rankings.append(entry)
+        return rankings
 
     def get_team_name(self, team_id: int) -> str:
         return self._teams.find_by_id(team_id).name

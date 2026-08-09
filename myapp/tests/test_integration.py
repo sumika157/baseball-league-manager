@@ -277,7 +277,7 @@ class DashboardTest(BaseCase):
         self.assertEqual(board.batter_count, 1)
         self.assertEqual(board.pitcher_count, 1)
 
-    def test_ranking_spans_all_teams(self):
+    def test_ranking_spans_teams_within_a_league(self):
         a = self.service.register_player(self.team.id, '山田', 10, '内野手')
         b = self.service.register_player(self.rival.id, '田中', 10, '外野手')
         play_game(
@@ -288,10 +288,37 @@ class DashboardTest(BaseCase):
             },
         )
 
+        rankings = self.service.get_dashboard().league_rankings[0]
+
+        self.assertEqual([e.player_name for e in rankings.ops_leaders], ['田中', '山田'])
+        self.assertEqual(rankings.ops_leaders[0].team_name, '相手チーム')
+
+    def test_rankings_are_split_by_league(self):
+        """タイトルはリーグの中で争われる。他リーグの選手と同じ表に並べない。"""
+        other = orm_models.League.objects.create(name='別リーグ')
+        x = orm_models.Team.objects.create(league=other, name='Xチーム')
+        y = orm_models.Team.objects.create(league=other, name='Yチーム')
+
+        here = self.service.register_player(self.team.id, '当リーグ', 10, '内野手')
+        there = self.service.register_player(x.id, '別リーグ選手', 10, '内野手')
+        play_game(self.team, self.rival, batting={here.id: BattingLine(at_bats=10, singles=3)})
+        play_game(x, y, batting={there.id: BattingLine(at_bats=10, home_runs=5)})
+
+        rankings = {
+            g.league_name: [e.player_name for e in g.ops_leaders]
+            for g in self.service.get_dashboard().league_rankings
+        }
+
+        self.assertEqual(rankings['テストリーグ'], ['当リーグ'])
+        self.assertEqual(rankings['別リーグ'], ['別リーグ選手'])
+
+    def test_leagues_without_records_are_omitted(self):
+        orm_models.League.objects.create(name='記録なしリーグ')
         board = self.service.get_dashboard()
 
-        self.assertEqual([e.player_name for e in board.ops_leaders], ['田中', '山田'])
-        self.assertEqual(board.ops_leaders[0].team_name, '相手チーム')
+        self.assertNotIn(
+            '記録なしリーグ', [g.league_name for g in board.league_rankings]
+        )
 
     def test_page_renders(self):
         response = self.client.get(reverse('dashboard'))
@@ -1459,6 +1486,79 @@ class LeagueAccordionTest(BaseCase):
             orm_models.Team.objects.create(league=league, name=f'T{i}')
 
         self.assertEqual(count_queries(), before)
+
+
+class PlayerSearchTest(BaseCase):
+    """選手を名前で探す。所属を知らなくてもたどり着けるようにする。"""
+
+    def setUp(self):
+        super().setUp()
+        self.yamada = self.service.register_player(self.team.id, '山田太郎', 10, '内野手')
+        self.yamamoto = self.service.register_player(self.team.id, '山本次郎', 11, '投手')
+        self.tanaka = self.service.register_player(self.rival.id, '田中三郎', 7, '外野手')
+        self.url = reverse('player_search')
+
+    def _search(self, keyword):
+        return self.client.get(f'{self.url}?q={keyword}').context['results']
+
+    def test_partial_match(self):
+        names = [r.name for r in self._search('山')]
+        self.assertEqual(sorted(names), ['山本次郎', '山田太郎'])
+
+    def test_exact_name(self):
+        self.assertEqual([r.name for r in self._search('田中三郎')], ['田中三郎'])
+
+    def test_shows_the_current_team_and_league(self):
+        row = self._search('田中三郎')[0]
+
+        self.assertEqual(row.team_name, '相手チーム')
+        self.assertEqual(row.league_name, 'テストリーグ')
+        self.assertEqual(row.number, 7)
+        self.assertTrue(row.is_active)
+
+    def test_retired_players_are_found(self):
+        """退団した選手も探せる。経歴を確認したい場面があるため。"""
+        self.service.retire_player(self.team.id, self.yamada.id)
+
+        row = next(r for r in self._search('山田') if r.name == '山田太郎')
+
+        self.assertFalse(row.is_active)
+        self.assertEqual(row.team_name, 'テストチーム')
+
+    def test_transferred_player_shows_the_current_team(self):
+        self.service.transfer_player(
+            self.yamada.id, from_team_id=self.team.id,
+            to_team_id=self.rival.id, number=99, year=2026,
+        )
+
+        row = self._search('山田太郎')[0]
+
+        self.assertEqual(row.team_name, '相手チーム')
+        self.assertEqual(row.number, 99)
+
+    def test_no_match(self):
+        response = self.client.get(f'{self.url}?q=存在しない名前')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '見つかりませんでした')
+
+    def test_empty_keyword_shows_the_form_only(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.context['searched'])
+        self.assertEqual(response.context['results'], [])
+
+    def test_search_box_is_on_every_page(self):
+        for name in ('dashboard', 'team_list', 'game_list'):
+            with self.subTest(page=name):
+                self.assertContains(self.client.get(reverse(name)), 'app-search')
+
+    def test_results_link_to_the_player_page(self):
+        body = self.client.get(f'{self.url}?q=田中').content.decode()
+        self.assertIn(
+            reverse('player_detail', args=[self.rival.id, self.tanaka.id]), body
+        )
 
 
 class AuthTest(TestCase):

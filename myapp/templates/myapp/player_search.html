@@ -1,0 +1,83 @@
+{% extends 'myapp/base.html' %}
+
+{% block title %}選手検索 - Baseball Manager{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>
+    <li class="breadcrumb-item active">選手検索</li>
+  </ol>
+</nav>
+
+<div class="page-head">
+  <h1 class="page-title">選手検索</h1>
+  <p class="page-subtitle">名前の一部でも探せます。退団した選手も見つかります。</p>
+</div>
+
+<form method="get" class="card mb-3">
+  <div class="card-body">
+    <div class="row g-2">
+      <div class="col-md-9">
+        <input type="search" name="q" class="form-control" value="{{ keyword }}"
+               placeholder="選手名（例: 山田）" autofocus />
+      </div>
+      <div class="col-md-3">
+        <button type="submit" class="btn btn-primary w-100">検索</button>
+      </div>
+    </div>
+  </div>
+</form>
+
+{% if searched %}
+  <div class="table-responsive">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>背番号</th>
+          <th>選手名</th>
+          <th>守備位置</th>
+          <th>所属</th>
+          <th>リーグ</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in results %}
+          <tr>
+            <td>{% if row.number %}<span class="jersey-number">{{ row.number }}</span>{% else %}—{% endif %}</td>
+            <td>
+              {% if row.team_id %}
+                <a href="{% url 'player_detail' row.team_id row.id %}" class="player-name">{{ row.name }}</a>
+              {% else %}
+                <span class="player-name">{{ row.name }}</span>
+              {% endif %}
+              {% if not row.is_active %}<span class="badge bg-secondary ms-1">退団</span>{% endif %}
+            </td>
+            <td class="stat-muted">{{ row.position }}</td>
+            <td>
+              {% if row.team_id %}
+                <a href="{% url 'player_list' row.team_id %}" class="stat-muted">{{ row.team_name }}</a>
+              {% else %}—{% endif %}
+            </td>
+            <td class="stat-muted">{{ row.league_name|default:"—" }}</td>
+            <td class="text-end">
+              {% if row.team_id %}
+                <a href="{% url 'player_detail' row.team_id row.id %}" class="btn btn-sm btn-outline-info">詳細</a>
+              {% endif %}
+            </td>
+          </tr>
+        {% empty %}
+          <tr>
+            <td colspan="6">
+              <div class="empty-state">
+                「{{ keyword }}」に一致する選手は見つかりませんでした。
+              </div>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endif %}
+{% endblock %}

@@ -5,6 +5,7 @@ from .presentation import views
 urlpatterns = [
     path('', views.dashboard, name='dashboard'),
     path('teams/', views.team_list, name='team_list'),
+    path('players/', views.player_search, name='player_search'),
     path('standings/', views.standings, name='standings'),
     path('standings/<int:year>/', views.standings, name='standings_by_year'),
     path('league/<int:league_id>/', views.league_detail, name='league_detail'),

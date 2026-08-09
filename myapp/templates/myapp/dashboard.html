@@ -34,16 +34,43 @@
 {% endcomment %}
 <div class="row g-3">
   <div class="col-lg-8">
-    <div class="row g-3">
-      {% comment %}
-        OPS と防御率は規定打席・規定投球回に達した選手だけを対象にする。
-        本塁打と奪三振は本数そのものが記録なので規定を設けない。
-      {% endcomment %}
-      {% include 'myapp/_ranking_card.html' with title='OPS（規定到達）' entries=board.ops_leaders qualified=True %}
-      {% include 'myapp/_ranking_card.html' with title='本塁打' entries=board.home_run_leaders %}
-      {% include 'myapp/_ranking_card.html' with title='防御率（規定到達）' entries=board.era_leaders qualified=True %}
-      {% include 'myapp/_ranking_card.html' with title='奪三振' entries=board.strikeout_leaders %}
-    </div>
+    {% comment %}
+      タイトルはリーグの中で争われるので、ランキングもリーグごとに分ける。
+      OPS と防御率は規定打席・規定投球回に達した選手だけを対象にする。
+      本塁打と奪三振は本数そのものが記録なので規定を設けない。
+    {% endcomment %}
+    {% if board.league_rankings %}
+      <div class="segmented segmented-scroll" role="tablist">
+        {% for group in board.league_rankings %}
+          <button type="button" role="tab"
+                  class="segmented-item {% if forloop.first %}active{% endif %}"
+                  data-bs-toggle="tab"
+                  data-bs-target="#ranking-league-{{ group.league_id }}">
+            {{ group.league_name }}
+          </button>
+        {% endfor %}
+      </div>
+
+      <div class="tab-content">
+        {% for group in board.league_rankings %}
+          <div class="tab-pane fade {% if forloop.first %}show active{% endif %}"
+               id="ranking-league-{{ group.league_id }}" role="tabpanel">
+            <div class="row g-3">
+              {% include 'myapp/_ranking_card.html' with title='OPS（規定到達）' entries=group.ops_leaders qualified=True %}
+              {% include 'myapp/_ranking_card.html' with title='本塁打' entries=group.home_run_leaders %}
+              {% include 'myapp/_ranking_card.html' with title='防御率（規定到達）' entries=group.era_leaders qualified=True %}
+              {% include 'myapp/_ranking_card.html' with title='奪三振' entries=group.strikeout_leaders %}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="card">
+        <div class="empty-state">
+          成績の記録がまだありません。試合を登録するとランキングが出ます。
+        </div>
+      </div>
+    {% endif %}
   </div>
 
   <div class="col-lg-4">

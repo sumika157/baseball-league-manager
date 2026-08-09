@@ -160,6 +160,43 @@ class StandingRow:
 
 
 @dataclass(frozen=True)
+class PlayerSearchRow:
+    """選手検索の1行。所属が分からなくても名前でたどり着けるようにする。"""
+
+    id: int
+    name: str
+    position: str
+    team_id: int | None
+    team_name: str
+    league_name: str
+    number: int | None
+    is_active: bool
+
+
+@dataclass(frozen=True)
+class LeagueRankings:
+    """1リーグぶんの各種ランキング。
+
+    打撃・投手のタイトルはリーグの中で争われるため、リーグをまたいで
+    1つの表にはしない。
+    """
+
+    league_id: int
+    league_name: str
+    ops_leaders: list['RankingEntry']
+    home_run_leaders: list['RankingEntry']
+    era_leaders: list['RankingEntry']
+    strikeout_leaders: list['RankingEntry']
+
+    @property
+    def has_any(self) -> bool:
+        return bool(
+            self.ops_leaders or self.home_run_leaders
+            or self.era_leaders or self.strikeout_leaders
+        )
+
+
+@dataclass(frozen=True)
 class TeamTotals:
     """チームの合計成績と、そこから求めた指標。
 
@@ -275,10 +312,8 @@ class Dashboard:
     team_count: int
     batter_count: int
     pitcher_count: int
-    ops_leaders: list[RankingEntry]
-    home_run_leaders: list[RankingEntry]
-    era_leaders: list[RankingEntry]
-    strikeout_leaders: list[RankingEntry]
+    # タイトルはリーグの中で争われるので、ランキングもリーグごとに持つ
+    league_rankings: list['LeagueRankings']
     # チームはリーグごとに分けて持つ。数が増えると1つの並びでは読みにくいため
     league_teams: list['LeagueTeams']
 

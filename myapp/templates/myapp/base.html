@@ -17,6 +17,12 @@
           Baseball Manager
         </a>
 
+        {# 所属が分からなくても選手にたどり着けるよう、どの画面からも探せるようにする #}
+        <form method="get" action="{% url 'player_search' %}" class="app-search" role="search">
+          <input type="search" name="q" class="form-control form-control-sm"
+                 placeholder="選手を探す" aria-label="選手を探す" />
+        </form>
+
         <div class="app-nav-user">
           {% if user.is_authenticated %}
             {# is_staff が管理画面へ入れる条件そのものなので、それを表示条件にする #}

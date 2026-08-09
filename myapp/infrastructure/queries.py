@@ -9,8 +9,49 @@ from __future__ import annotations
 
 from django.db.models import Count, Q
 
-from ..application.dto import TeamSummary
+from ..application.dto import PlayerSearchRow, TeamSummary
 from . import orm_models
+
+
+class DjangoPlayerSearchQuery:
+    """選手を名前で探す。
+
+    チーム数が増えると、所属を知らないと選手にたどり着けないため。
+    集約を組み立てず、一覧に必要な値だけを読む。
+    """
+
+    LIMIT = 50
+
+    def search(self, keyword: str) -> list[PlayerSearchRow]:
+        keyword = (keyword or '').strip()
+        if not keyword:
+            return []
+
+        rows = (
+            orm_models.Player.objects
+            .filter(name__icontains=keyword)
+            .prefetch_related('stints__team__league')
+            .order_by('name')[:self.LIMIT]
+        )
+
+        results = []
+        for row in rows:
+            stints = list(row.stints.all())
+            current = next((s for s in stints if s.to_year is None), None)
+            latest = current or (
+                max(stints, key=lambda s: s.from_year) if stints else None
+            )
+            results.append(PlayerSearchRow(
+                id=row.id,
+                name=row.name,
+                position=row.position,
+                team_id=latest.team_id if latest else None,
+                team_name=latest.team.name if latest else '',
+                league_name=latest.team.league.name if latest else '',
+                number=latest.number if latest else None,
+                is_active=current is not None,
+            ))
+        return results
 
 
 class DjangoTeamListQuery:

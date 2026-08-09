@@ -127,6 +127,24 @@ a:hover {
   font-size: 0.8125rem;
 }
 
+/* ヘッダーの検索。狭い画面では隠して場所を空ける */
+.app-search {
+  margin-left: auto;
+  margin-right: 1rem;
+  max-width: 14rem;
+  flex: 1 1 auto;
+}
+
+.app-search input {
+  font-size: 0.8125rem;
+}
+
+@media (max-width: 575.98px) {
+  .app-search {
+    display: none;
+  }
+}
+
 .app-nav-user {
   display: flex;
   align-items: center;
