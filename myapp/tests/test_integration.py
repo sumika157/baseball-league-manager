@@ -4,6 +4,8 @@
 helpers の play_game / give_batting / give_pitching で試合を作る。
 """
 
+import re
+
 from django.contrib.auth.models import User
 from django.db import connection
 from django.test import TestCase
@@ -1500,6 +1502,68 @@ class StadiumHomeTeamAssignmentTest(BaseCase):
         self._save([])
 
         self.assertIsNone(self._home_of(self.team))
+
+
+class StadiumOrderingTest(BaseCase):
+    """球場一覧の既定の並び。
+
+    球場名順よりも、本拠地とするチームの並びをたどるほうが目的の球場に
+    行き着きやすい。使われていない球場は末尾へ回す。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(User.objects.create_superuser(username='root', password='x'))
+        # テストチーム(表示順1)・相手チーム(表示順2) の順に並ぶようにする
+        orm_models.Team.objects.filter(pk=self.team.id).update(display_order=1)
+        orm_models.Team.objects.filter(pk=self.rival.id).update(display_order=2)
+        # 球場名の順（あ→た→わ）と、チームの並び順をわざと食い違わせる
+        orm_models.Stadium.objects.filter(pk=self.stadium.id).update(name='わ球場')
+        self.rival_stadium = orm_models.Stadium.objects.create(name='た球場')
+        orm_models.Team.objects.filter(pk=self.rival.id).update(
+            home_stadium=self.rival_stadium
+        )
+        self.unused = orm_models.Stadium.objects.create(name='あ球場')
+
+    def _listed(self):
+        body = self.client.get('/admin/myapp/stadium/').content.decode()
+        return re.findall(r'<th class="field-name"><a[^>]*>([^<]+)</a>', body)
+
+    def test_ordered_by_the_home_team_order(self):
+        self.assertEqual(self._listed()[:2], ['わ球場', 'た球場'])
+
+    def test_stadiums_without_a_home_team_come_last(self):
+        self.assertEqual(self._listed()[-1], 'あ球場')
+
+    def test_unused_stadiums_are_ordered_by_name_among_themselves(self):
+        orm_models.Stadium.objects.create(name='い球場')
+
+        listed = self._listed()
+
+        self.assertEqual(listed[-2:], ['あ球場', 'い球場'])
+
+    def test_leagues_are_followed_before_teams(self):
+        """リーグの表示順が先に効く。
+
+        球場名でもチームの表示順でも最後に来る球場が、リーグを先に置いた
+        ことで先頭へ来る。
+        """
+        orm_models.League.objects.filter(pk=self.league.id).update(display_order=1)
+        other = orm_models.League.objects.create(name='別リーグ', display_order=0)
+        far = orm_models.Team.objects.create(
+            league=other, name='別リーグのチーム', display_order=99
+        )
+        first = orm_models.Stadium.objects.create(name='ん球場')
+        orm_models.Team.objects.filter(pk=far.id).update(home_stadium=first)
+
+        self.assertEqual(self._listed()[0], 'ん球場')
+
+    def test_columns_can_still_be_sorted(self):
+        """既定を変えても、列を押しての並べ替えは残る。"""
+        body = self.client.get('/admin/myapp/stadium/?o=1').content.decode()
+        listed = re.findall(r'<th class="field-name"><a[^>]*>([^<]+)</a>', body)
+
+        self.assertEqual(listed, sorted(listed))
 
 
 class StadiumRoofTest(BaseCase):

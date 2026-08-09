@@ -4,7 +4,15 @@ from django import forms
 from django.contrib import admin
 from django.contrib.admin.views.main import ORDER_VAR, ChangeList
 from django.contrib.admin.widgets import FilteredSelectMultiple
-from django.db.models import Count, IntegerField, OuterRef, Prefetch, Q, Subquery
+from django.db.models import (
+    Count,
+    F,
+    IntegerField,
+    OuterRef,
+    Prefetch,
+    Q,
+    Subquery,
+)
 from django.db.models.functions import Coalesce
 from django.http import HttpResponseRedirect
 from django.urls import reverse
@@ -92,6 +100,32 @@ class GroupedAdminMixin:
 
     def get_changelist(self, request, **kwargs):
         return GroupedChangeList
+
+
+class HomeTeamOrderedChangeList(ChangeList):
+    """球場を、本拠地とするチームの並び順で並べる一覧。
+
+    ModelAdmin.get_ordering はチームの編集画面の本拠地プルダウンにも使われる。
+    そちらは注釈の無い問い合わせなので、注釈を前提にした並びを ModelAdmin 側に
+    置くと壊れる。一覧に閉じてここで指定する。
+    """
+
+    # 並べ替えの手がかり。ModelAdmin 側の annotate と対になっている
+    HOME_TEAM_ORDER = (
+        'home_league_order', 'home_league_name', 'home_team_order', 'home_team_name',
+    )
+
+    def get_ordering(self, request, queryset):
+        ordering = super().get_ordering(request, queryset)
+        # 列を押したときは、その指定をそのまま使う
+        if ORDER_VAR in self.params:
+            return ordering
+
+        # 本拠地の無い球場はどの手がかりも空になるため末尾へ回す。
+        # そのあとは ModelAdmin の並び（球場名）が効く
+        return [
+            F(field).asc(nulls_last=True) for field in self.HOME_TEAM_ORDER
+        ] + list(ordering)
 
 
 class ManualOrderAdminMixin:
@@ -366,6 +400,8 @@ class StadiumAdmin(admin.ModelAdmin):
     )
     search_fields = ('name', 'city')
     list_filter = ('surface', 'roof')
+    # 一覧では本拠地チームの並びが先に効き、その中でこの順になる。
+    # プルダウンなど一覧以外の場所ではこれがそのまま使われる
     ordering = ('name',)
 
     fieldsets = (
@@ -381,9 +417,25 @@ class StadiumAdmin(admin.ModelAdmin):
         }),
     )
 
+    def get_changelist(self, request, **kwargs):
+        return HomeTeamOrderedChangeList
+
     def get_queryset(self, request):
-        """一覧に出す本拠地チームを先読みする。行ごとに引くと N+1 になる。"""
-        return super().get_queryset(request).prefetch_related('home_teams')
+        """本拠地チームを先読みし、並べ替えの手がかりも一緒に引く。
+
+        行ごとに引くと N+1 になるため、どちらも副問い合わせでまとめる。
+        本拠地が複数あるときは、チームの並びで先頭に来るものを代表とする。
+        """
+        home_teams = orm_models.Team.objects.filter(
+            home_stadium=OuterRef('pk')
+        ).order_by('league__display_order', 'league__name', 'display_order', 'name')
+
+        return super().get_queryset(request).prefetch_related('home_teams').annotate(
+            home_league_order=Subquery(home_teams.values('league__display_order')[:1]),
+            home_league_name=Subquery(home_teams.values('league__name')[:1]),
+            home_team_order=Subquery(home_teams.values('display_order')[:1]),
+            home_team_name=Subquery(home_teams.values('name')[:1]),
+        )
 
     @admin.display(description='本拠地とするチーム')
     def home_team_names(self, obj):
