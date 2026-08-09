@@ -2,10 +2,14 @@ import types
 
 from django import forms
 from django.contrib import admin
+from django.db.models import Count, Prefetch, Q
+from django.urls import reverse
+from django.utils.html import format_html, format_html_join
 
 from .domain.entities import Stint as DomainStint
 from .domain.exceptions import DomainError
 from .domain.value_objects import JerseyNumber
+from .infrastructure import orm_models
 from .infrastructure.orm_models import (
     Game,
     GameBattingLine,
@@ -85,7 +89,7 @@ class TeamInline(admin.TabularInline):
 
 @admin.register(League)
 class LeagueAdmin(admin.ModelAdmin):
-    list_display = ('name', 'team_count', 'created_at')
+    list_display = ('name', 'teams_accordion', 'created_at')
     search_fields = ('name',)
     ordering = ('name',)
     inlines = [TeamInline]
@@ -94,9 +98,42 @@ class LeagueAdmin(admin.ModelAdmin):
         js = ('myapp/js/admin-inline-sortable.js',)
         css = {'all': ('myapp/css/admin-theme.css',)}
 
-    @admin.display(description='チーム数')
-    def team_count(self, obj):
-        return obj.teams.count()
+    def get_queryset(self, request):
+        """所属チームを先読みする。行ごとに引くと一覧で N+1 になる。"""
+        teams = orm_models.Team.objects.annotate(
+            active_players=Count('stints', filter=Q(stints__to_year__isnull=True))
+        ).order_by('display_order', 'name')
+        return super().get_queryset(request).prefetch_related(
+            Prefetch('teams', queryset=teams)
+        )
+
+    @admin.display(description='所属チーム')
+    def teams_accordion(self, obj):
+        """所属チームを折りたたんで表示する。
+
+        details 要素を使えば JavaScript なしで開閉できる。行数の多い一覧で
+        全チームを常に出すと縦に長くなるため、既定では畳んでおく。
+        """
+        teams = list(obj.teams.all())
+        if not teams:
+            return '—'
+
+        items = format_html_join(
+            '', '<li><a href="{}">{}</a><span class="team-accordion-meta">{}名</span></li>',
+            (
+                (
+                    reverse('admin:myapp_team_change', args=[team.id]),
+                    team.name,
+                    team.active_players,
+                )
+                for team in teams
+            ),
+        )
+        return format_html(
+            '<details class="team-accordion">'
+            '<summary>{}チーム</summary><ul>{}</ul></details>',
+            len(teams), items,
+        )
 
 
 @admin.register(Team)

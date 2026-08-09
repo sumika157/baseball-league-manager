@@ -286,6 +286,62 @@ div.breadcrumbs {
   background: var(--darkened-bg);
 }
 
+/* ------------------------------------------------------------------
+   所属チームのアコーディオン（リーグ一覧）
+   ------------------------------------------------------------------ */
+.team-accordion summary {
+  cursor: pointer;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--link-fg);
+  font-size: 0.8125rem;
+  user-select: none;
+}
+
+/* 既定の三角を消して、自前の記号に置き換える */
+.team-accordion summary::-webkit-details-marker {
+  display: none;
+}
+
+.team-accordion summary::before {
+  content: '▸';
+  font-size: 0.75rem;
+  transition: transform 0.15s ease;
+}
+
+.team-accordion[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.team-accordion summary:hover {
+  color: var(--link-hover-color);
+}
+
+.team-accordion ul {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  border-left: 2px solid var(--border-color);
+}
+
+.team-accordion li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 3px 0 3px 10px;
+  font-size: 0.8125rem;
+  white-space: nowrap;
+}
+
+.team-accordion-meta {
+  color: var(--body-quiet-color);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
 /* 一覧の区切り見出し（リーグごと・チームごと） */
 #result_list tr.group-heading-row > td {
   background: var(--darkened-bg);

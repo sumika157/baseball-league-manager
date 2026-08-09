@@ -5,7 +5,9 @@ helpers の play_game / give_batting / give_pitching で試合を作る。
 """
 
 from django.contrib.auth.models import User
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
 from myapp.domain.exceptions import DuplicateJerseyNumber, InvalidGame
@@ -1347,6 +1349,75 @@ class AdminStintValidationTest(BaseCase):
         self.assertEqual(response.status_code, 302)
         stint.refresh_from_db()
         self.assertEqual(stint.from_year, 2024)
+
+
+class LeagueAccordionTest(BaseCase):
+    """リーグ一覧で所属チームを折りたたんで確認できること。"""
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(User.objects.create_superuser(username='root', password='x'))
+        self.service.register_player(self.team.id, '山田', 10, '内野手')
+        self.service.register_player(self.team.id, '佐藤', 18, '投手')
+
+    def _body(self):
+        return self.client.get('/admin/myapp/league/').content.decode()
+
+    def test_teams_are_listed_inside_details(self):
+        body = self._body()
+
+        self.assertIn('<details class="team-accordion">', body)
+        self.assertIn('テストチーム', body)
+        self.assertIn('相手チーム', body)
+
+    def test_summary_shows_the_count(self):
+        self.assertIn('<summary>2チーム</summary>', self._body())
+
+    def test_each_team_links_to_its_edit_page(self):
+        self.assertIn(f'/admin/myapp/team/{self.team.id}/change/', self._body())
+
+    def test_active_player_count_is_shown(self):
+        """在籍中の人数を出す。退団した選手は数えない。"""
+        self.assertIn('2名', self._body())
+
+    def test_retired_players_are_not_counted(self):
+        player = self.service.register_player(self.team.id, '退団', 99, '内野手')
+        self.service.retire_player(self.team.id, player.id)
+
+        # 在籍中は2名のまま
+        self.assertIn('2名', self._body())
+
+    def test_league_without_teams(self):
+        orm_models.League.objects.create(name='空リーグ')
+        body = self._body()
+
+        self.assertIn('空リーグ', body)
+        self.assertIn('—', body)
+
+    def test_team_names_are_escaped(self):
+        """チーム名をそのまま埋め込まないこと。"""
+        orm_models.Team.objects.create(league=self.league, name='<script>x</script>')
+
+        self.assertNotIn('<script>x</script>', self._body())
+
+    def test_query_count_does_not_grow_with_rows(self):
+        """行ごとにチームを引くと一覧で N+1 になるため、先読みしている。
+
+        リーグを増やしても問い合わせ数が変わらないことを確かめる
+        （所属チームはまとめて1回で取る）。
+        """
+        def count_queries():
+            with CaptureQueriesContext(connection) as captured:
+                self.client.get('/admin/myapp/league/')
+            return len(captured)
+
+        before = count_queries()
+
+        for i in range(5):
+            league = orm_models.League.objects.create(name=f'L{i}')
+            orm_models.Team.objects.create(league=league, name=f'T{i}')
+
+        self.assertEqual(count_queries(), before)
 
 
 class AuthTest(TestCase):
