@@ -5,6 +5,7 @@
 {% block content %}
 <nav aria-label="breadcrumb">
   <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>
     <li class="breadcrumb-item"><a href="{% url 'team_list' %}">チーム一覧</a></li>
     <li class="breadcrumb-item"><a href="{% url 'player_list' player.team_id %}">選手一覧</a></li>
     <li class="breadcrumb-item active">{{ player.name }}</li>

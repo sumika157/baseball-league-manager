@@ -197,6 +197,58 @@ class PlayerEditViewTest(TestCase):
         self.assertEqual(self.client.get(self._edit_url(9999)).status_code, 404)
 
 
+class DashboardTest(TestCase):
+    def setUp(self):
+        self.league = orm_models.League.objects.create(name='テストリーグ')
+        self.team = orm_models.Team.objects.create(league=self.league, name='テストチーム')
+        self.service = TeamApplicationService(
+            teams=DjangoTeamRepository(), team_list_query=DjangoTeamListQuery()
+        )
+
+    def test_counts(self):
+        self.service.register_player(self.team.id, '山田', 10, '内野手')
+        self.service.register_player(self.team.id, '佐藤', 18, '投手')
+
+        board = self.service.get_dashboard()
+
+        self.assertEqual(board.league_count, 1)
+        self.assertEqual(board.team_count, 1)
+        self.assertEqual(board.batter_count, 1)
+        self.assertEqual(board.pitcher_count, 1)
+        self.assertEqual(board.player_count, 2)
+
+    def test_ranking_spans_all_teams(self):
+        """ランキングはチームをまたいで集計される。"""
+        other = orm_models.Team.objects.create(league=self.league, name='別チーム')
+        a = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        b = self.service.register_player(other.id, '田中', 10, '外野手')
+
+        self.service.update_player(
+            self.team.id, a.id, name='山田', number=10, position_label='内野手',
+            batting=BattingLine(at_bats=10, singles=1),
+        )
+        self.service.update_player(
+            other.id, b.id, name='田中', number=10, position_label='外野手',
+            batting=BattingLine(at_bats=10, home_runs=4),
+        )
+
+        board = self.service.get_dashboard()
+        names = [e.player_name for e in board.ops_leaders]
+
+        self.assertEqual(names, ['田中', '山田'])
+        self.assertEqual(board.ops_leaders[0].team_name, '別チーム')
+
+    def test_page_renders(self):
+        self.service.register_player(self.team.id, '山田', 10, '内野手')
+        response = self.client.get(reverse('dashboard'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'テストチーム')
+
+    def test_page_renders_without_any_data(self):
+        response = self.client.get(reverse('dashboard'))
+        self.assertEqual(response.status_code, 200)
+
+
 class AuthTest(TestCase):
     def test_login_redirect_url_resolves(self):
         from django.conf import settings

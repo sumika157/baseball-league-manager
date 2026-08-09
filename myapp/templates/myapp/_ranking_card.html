@@ -1,0 +1,28 @@
+{# ランキング1枚分。dashboard.html から title / entries を渡して使う #}
+<div class="col-md-6 col-lg-3">
+  <div class="card h-100">
+    <div class="card-header">{{ title }}</div>
+    <div class="card-body p-0">
+      {% if entries %}
+        <table class="table table-hover mb-0">
+          <tbody>
+            {% for entry in entries %}
+              <tr>
+                <td style="width: 2.5rem;" class="stat-muted">{{ entry.rank }}</td>
+                <td>
+                  <a href="{% url 'player_edit' entry.team_id entry.player_id %}" class="player-name">{{ entry.player_name }}</a>
+                  <div class="stat-muted" style="font-size: 0.75rem;">{{ entry.team_name }}</div>
+                </td>
+                <td class="text-end stat-key">{{ entry.value }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <div class="empty-state" style="padding: 1.75rem 1rem; font-size: 0.8125rem;">
+          記録がありません
+        </div>
+      {% endif %}
+    </div>
+  </div>
+</div>

@@ -30,8 +30,13 @@ def _service() -> TeamApplicationService:
     )
 
 
+def dashboard(request):
+    """ホーム画面。リーグ全体の概況と各種ランキングを表示する。"""
+    return render(request, 'myapp/dashboard.html', {'board': _service().get_dashboard()})
+
+
 def team_list(request):
-    """全てのチームを表示する（ホーム画面）。"""
+    """チーム一覧。"""
     return render(request, 'myapp/team_list.html', {'teams': _service().list_teams()})
 
 

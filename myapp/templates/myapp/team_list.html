@@ -3,6 +3,13 @@
 {% block title %}チーム一覧 - Baseball Manager{% endblock %}
 
 {% block content %}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>
+    <li class="breadcrumb-item active">チーム一覧</li>
+  </ol>
+</nav>
+
 <div class="page-head">
   <h1 class="page-title">チーム一覧</h1>
   <p class="page-subtitle">チームを選ぶと選手名簿と成績を確認できます。</p>

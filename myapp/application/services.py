@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from ..domain import services as domain_services
 from ..domain.entities import Player, Team
 from ..domain.value_objects import (
     BattingLine,
@@ -14,7 +15,7 @@ from ..domain.value_objects import (
     PitchingLine,
     Position,
 )
-from .dto import BatterRow, PitcherRow, PlayerDetail, TeamSummary
+from .dto import BatterRow, Dashboard, PitcherRow, PlayerDetail, RankingEntry, TeamSummary
 
 
 class TeamApplicationService:
@@ -30,6 +31,58 @@ class TeamApplicationService:
 
     def list_teams(self) -> list[TeamSummary]:
         return self._team_list_query.list_summaries()
+
+    def get_dashboard(self, *, leaders: int = 5) -> Dashboard:
+        """ホーム画面の概況とランキングを組み立てる。
+
+        順位づけの規則そのものはドメインサービスに委ね、ここでは
+        集約をまたいで選手を集め、DTO に詰め替えるだけにとどめる。
+        """
+        teams = self._teams.find_all_with_roster()
+        team_name_by_id = {team.id: team.name for team in teams}
+
+        players: list[tuple[Player, int]] = [
+            (player, team.id) for team in teams for player in team.active_players
+        ]
+        team_of = {id(player): team_id for player, team_id in players}
+        all_players = [player for player, _ in players]
+
+        def to_entries(ranked, formatter) -> list[RankingEntry]:
+            return [
+                RankingEntry(
+                    rank=item.rank,
+                    player_id=item.player.id,
+                    player_name=item.player.name,
+                    team_id=team_of[id(item.player)],
+                    team_name=team_name_by_id[team_of[id(item.player)]],
+                    value=formatter(item.value),
+                )
+                for item in ranked
+            ]
+
+        rate3 = lambda v: f"{v:.3f}"
+        rate2 = lambda v: f"{v:.2f}"
+        count = lambda v: str(int(v))
+
+        return Dashboard(
+            league_count=len({team.league_id for team in teams}),
+            team_count=len(teams),
+            batter_count=sum(1 for p in all_players if not p.is_pitcher),
+            pitcher_count=sum(1 for p in all_players if p.is_pitcher),
+            ops_leaders=to_entries(
+                domain_services.leaders_by_ops(all_players, limit=leaders), rate3
+            ),
+            home_run_leaders=to_entries(
+                domain_services.leaders_by_home_runs(all_players, limit=leaders), count
+            ),
+            era_leaders=to_entries(
+                domain_services.leaders_by_era(all_players, limit=leaders), rate2
+            ),
+            strikeout_leaders=to_entries(
+                domain_services.leaders_by_strikeouts(all_players, limit=leaders), count
+            ),
+            teams=self._team_list_query.list_summaries(),
+        )
 
     def get_team_name(self, team_id: int) -> str:
         return self._teams.find_by_id(team_id).name

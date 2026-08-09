@@ -1,0 +1,68 @@
+{% extends 'myapp/base.html' %}
+
+{% block title %}ダッシュボード - Baseball Manager{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">ダッシュボード</h1>
+  <p class="page-subtitle">登録されているリーグ全体の概況です。</p>
+</div>
+
+<div class="stat-strip">
+  <div class="stat-cell">
+    <div class="stat-value">{{ board.league_count }}</div>
+    <div class="stat-label">リーグ</div>
+  </div>
+  <div class="stat-cell">
+    <div class="stat-value">{{ board.team_count }}</div>
+    <div class="stat-label">チーム</div>
+  </div>
+  <div class="stat-cell">
+    <div class="stat-value">{{ board.batter_count }}</div>
+    <div class="stat-label">野手</div>
+  </div>
+  <div class="stat-cell">
+    <div class="stat-value">{{ board.pitcher_count }}</div>
+    <div class="stat-label">投手</div>
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  {% include 'myapp/_ranking_card.html' with title='OPS' entries=board.ops_leaders %}
+  {% include 'myapp/_ranking_card.html' with title='本塁打' entries=board.home_run_leaders %}
+  {% include 'myapp/_ranking_card.html' with title='防御率' entries=board.era_leaders %}
+  {% include 'myapp/_ranking_card.html' with title='奪三振' entries=board.strikeout_leaders %}
+</div>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2 class="h6 mb-0">チーム</h2>
+  <a href="{% url 'team_list' %}" style="font-size: 0.875rem;">すべて見る →</a>
+</div>
+
+<div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-3">
+  {% for team in board.teams %}
+    <div class="col">
+      <a href="{% url 'player_list' team.id %}" class="card card-link-tile">
+        <div class="card-body d-flex flex-column">
+          <h3 class="h6 mb-1">{{ team.name }}</h3>
+          <p class="page-subtitle mb-3" style="font-size: 0.8125rem;">
+            {{ team.league_name }}{% if team.city %} · {{ team.city }}{% endif %}
+          </p>
+          <div class="mt-auto d-flex justify-content-between align-items-center">
+            <span class="badge bg-primary">選手 {{ team.player_count }}名</span>
+            <span class="tile-arrow">→</span>
+          </div>
+        </div>
+      </a>
+    </div>
+  {% empty %}
+    <div class="col-12">
+      <div class="card">
+        <div class="empty-state">
+          まだチームが登録されていません。管理画面から追加してください。
+        </div>
+      </div>
+    </div>
+  {% endfor %}
+</div>
+{% endblock %}

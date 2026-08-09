@@ -3,7 +3,8 @@ from django.urls import path
 from .presentation import views
 
 urlpatterns = [
-    path('', views.team_list, name='team_list'),
+    path('', views.dashboard, name='dashboard'),
+    path('teams/', views.team_list, name='team_list'),
     path('team/<int:team_id>/', views.player_list, name='player_list'),
     # 選手は Team 集約の内部エンティティなので、URL もチームの下に置く
     path(

@@ -23,6 +23,10 @@ class TeamRepository(Protocol):
         """全チームを取得する（ロスターは含めない軽量版）。"""
         ...
 
+    def find_all_with_roster(self) -> list[Team]:
+        """全チームをロスター込みで取得する。リーグ全体の順位づけに使う。"""
+        ...
+
     def exists_with_name(self, league_id: int, name: str) -> bool:
         """同一リーグ内に同名のチームがあるか。"""
         ...

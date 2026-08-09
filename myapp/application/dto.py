@@ -21,6 +21,37 @@ class TeamSummary:
 
 
 @dataclass(frozen=True)
+class RankingEntry:
+    """ランキングの1行。"""
+
+    rank: int
+    player_id: int
+    player_name: str
+    team_id: int
+    team_name: str
+    value: str
+
+
+@dataclass(frozen=True)
+class Dashboard:
+    """ホーム画面（ダッシュボード）に表示する内容。"""
+
+    league_count: int
+    team_count: int
+    batter_count: int
+    pitcher_count: int
+    ops_leaders: list[RankingEntry]
+    home_run_leaders: list[RankingEntry]
+    era_leaders: list[RankingEntry]
+    strikeout_leaders: list[RankingEntry]
+    teams: list['TeamSummary']
+
+    @property
+    def player_count(self) -> int:
+        return self.batter_count + self.pitcher_count
+
+
+@dataclass(frozen=True)
 class BatterRow:
     """野手成績の1行。"""
 

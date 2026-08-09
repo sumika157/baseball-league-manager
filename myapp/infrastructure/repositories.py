@@ -40,6 +40,15 @@ class DjangoTeamRepository:
         rows = orm_models.Team.objects.select_related('league').order_by('name')
         return [self._to_domain(row, with_roster=False) for row in rows]
 
+    def find_all_with_roster(self) -> list[Team]:
+        rows = (
+            orm_models.Team.objects
+            .select_related('league')
+            .prefetch_related('players__stats', 'players__pitcher_stats')
+            .order_by('name')
+        )
+        return [self._to_domain(row, with_roster=True) for row in rows]
+
     def exists_with_name(self, league_id: int, name: str) -> bool:
         return orm_models.Team.objects.filter(league_id=league_id, name=name).exists()
 

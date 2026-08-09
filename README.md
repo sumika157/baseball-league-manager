@@ -124,7 +124,8 @@ baseball-web  | /app/myapp/views.py changed, reloading.
 
 | 画面 | URL |
 | --- | --- |
-| チーム一覧（ホーム） | http://localhost:8000/ |
+| ダッシュボード（ホーム） | http://localhost:8000/ |
+| チーム一覧 | http://localhost:8000/teams/ |
 | 選手一覧 | http://localhost:8000/team/&lt;チームID&gt;/ |
 | 選手の成績編集 | http://localhost:8000/team/&lt;チームID&gt;/player/&lt;選手ID&gt;/edit/ |
 | ログイン | http://localhost:8000/accounts/login/ |
@@ -307,8 +308,23 @@ presentation  →  application  →  domain  ←  infrastructure
 | --- | --- |
 | `value_objects.py` | `Position` `JerseyNumber` `InningsPitched` `BattingLine` `PitchingLine` |
 | `entities.py` | `Team`（集約ルート）・`Player`・`League` |
+| `services.py` | ランキング（誰を対象とし、何で順位づけるか） |
 | `repositories.py` | 永続化のインターフェース（実装は infrastructure） |
 | `exceptions.py` | `DomainError` とその派生 |
+
+### 画面構成
+
+```
+/                        ダッシュボード（ホーム）
+├── /teams/              チーム一覧
+│   └── /team/<id>/      選手一覧（野手／投手を切替）
+│       └── .../player/<id>/edit/   選手の成績編集
+└── /accounts/...        ログイン・新規登録・パスワード関連
+```
+
+ダッシュボードはリーグ全体の概況と、OPS・本塁打・防御率・奪三振のランキングを表示します。
+順位づけの規則（未出場の選手を除く、規定打数など）はドメインサービスにあり、
+画面を持たなくても単体テストできます。
 
 **集約ルートは `Team`** です。「同一チーム内で背番号は重複しない」という不変条件は
 チーム全体を見ないと判定できないため、`Team` がロスターを保持して自ら保証します。
