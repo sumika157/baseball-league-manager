@@ -598,19 +598,34 @@ tr.sortable-row.is-drop-target > * {
 }
 
 /* つまみは入力欄と同じ行に収める */
-td.has-sortable-handle {
+/* つまみと中身を同じ行に収める。
+   一覧ではリンク列が th で描かれるため、td だけを指定していると
+   flex が効かず、つまみに押し出されて名前が折り返してしまう。 */
+td.has-sortable-handle,
+th.has-sortable-handle {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
+/* 名前は折り返さない。列幅は中身に合わせる */
+th.has-sortable-handle {
+  white-space: nowrap;
+}
+
 .sortable-handle {
+  /* つまみは縮ませない。縮むと隣の中身が押し出されて折り返す */
   flex: 0 0 auto;
   color: var(--body-quiet-color);
   cursor: grab;
   user-select: none;
   font-size: 1rem;
   line-height: 1;
+}
+
+/* 名前のリンク自体も折り返さない */
+.has-sortable-handle > a {
+  white-space: nowrap;
 }
 
 .sortable-handle:hover {

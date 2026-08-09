@@ -541,6 +541,17 @@ class TeamOrderingTest(BaseCase):
             with self.subTest(url=url):
                 self.assertContains(self.client.get(url), 'sortable-hint')
 
+    def test_name_cell_is_rendered_as_a_header_cell(self):
+        """一覧のリンク列は th で描かれる。
+
+        つまみと折り返しの CSS が td だけを指していると効かないため、
+        この前提が変わっていないことを確かめる。
+        """
+        self.client.force_login(User.objects.create_superuser(username='t5', password='x'))
+        body = self.client.get('/admin/myapp/team/').content.decode()
+
+        self.assertIn('<th class="field-name">', body)
+
     def test_order_input_is_submitted_but_the_column_is_hidden(self):
         """数値は送信するが列としては見せない（インラインと同じ扱い）。"""
         self.client.force_login(User.objects.create_superuser(username='t4', password='x'))
