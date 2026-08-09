@@ -366,17 +366,6 @@ div.breadcrumbs {
   font-size: 0.8125rem;
 }
 
-/* ドラッグできない状態。操作できなくなったように見えるので目立たせる */
-.sortable-hint-blocked {
-  background: var(--message-warning-bg);
-  border-color: var(--border-color);
-  color: var(--body-fg);
-}
-
-.sortable-hint-blocked a {
-  font-weight: 600;
-}
-
 /* 一覧の区切り見出し（リーグごと・チームごと） */
 #result_list tr.group-heading-row > td {
   background: var(--darkened-bg);
@@ -388,16 +377,6 @@ div.breadcrumbs {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--body-quiet-color);
-}
-
-/* 見出しから、そのまとまりだけに絞り込む */
-.group-heading-link {
-  margin-left: 10px;
-  font-size: 0.6875rem;
-  font-weight: 500;
-  text-transform: none;
-  letter-spacing: 0;
-  color: var(--link-fg);
 }
 
 /* 見出し行は選択やホバーの対象ではないので、行の反応を打ち消す */

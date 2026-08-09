@@ -541,29 +541,18 @@ class TeamOrderingTest(BaseCase):
             with self.subTest(url=url):
                 self.assertContains(self.client.get(url), 'sortable-hint')
 
-    def test_sorted_changelist_offers_a_way_back_to_dragging(self):
-        """列で並べ替えるとドラッグを止めるので、戻す導線を必ず出す。
+    def test_no_link_on_the_page_carries_a_sort(self):
+        """絞り込みのリンクなどに並べ替えが紛れ込まないこと。
 
-        導線が無いと、操作できなくなったように見えてしまう。
+        1つでも残っていると、そこから並べ替えられない状態に入ってしまう。
         """
         self.client.force_login(User.objects.create_superuser(username='t6', password='x'))
-
-        plain = self.client.get('/admin/myapp/team/').content.decode()
-        self.assertNotIn('sortable-hint-blocked', plain)
-
-        sorted_body = self.client.get('/admin/myapp/team/?o=1').content.decode()
-        self.assertIn('sortable-hint-blocked', sorted_body)
-        self.assertIn('並び順を戻す', sorted_body)
-
-    def test_way_back_keeps_the_league_filter(self):
-        """絞り込んだまま並び順だけ戻せること（絞り込みまで消えると面倒）。"""
-        self.client.force_login(User.objects.create_superuser(username='t7', password='x'))
         url = f'/admin/myapp/team/?league__id__exact={self.league.id}&o=1'
 
-        body = self.client.get(url).content.decode()
+        body = self.client.get(url, follow=True).content.decode()
 
-        self.assertIn(f'href="?league__id__exact={self.league.id}"', body)
-        self.assertNotIn(f'href="?league__id__exact={self.league.id}&amp;o=1"', body)
+        self.assertNotIn('?o=', body)
+        self.assertIn('admin-inline-sortable.js', body)
 
     def test_name_cell_is_rendered_as_a_header_cell(self):
         """一覧のリンク列は th で描かれる。
@@ -1075,57 +1064,63 @@ class AdminGroupingTest(BaseCase):
         self.assertContains(response, 'group-heading-row')
         self.assertContains(response, 'テストリーグ · テストチーム')
 
-    def test_sorting_keeps_the_league_grouping(self):
-        """列で並べ替えても、リーグの区切りは崩れない。
+    def _manually_ordered_teams(self):
+        """手動の並びが名前順とは異なるチームを作る。"""
+        for order, name in enumerate(('Cチーム', 'Aチーム', 'Bチーム'), start=1):
+            orm_models.Team.objects.create(
+                league=self.other, name=name, display_order=order
+            )
+        return ('Cチーム', 'Aチーム', 'Bチーム')
 
-        リーグの順序が常に先に効き、指定された並びはその中で効く。
+    def test_columns_cannot_be_sorted(self):
+        """列での並べ替えは持たない。
+
+        ドラッグした順がそのまま保存される順なので、列で並べ替えると
+        見えている順と食い違う。両立しないため並べ替え自体を置かない。
         """
+        for url in ('/admin/myapp/team/', '/admin/myapp/league/'):
+            with self.subTest(url=url):
+                body = self.client.get(url).content.decode()
+
+                self.assertIn('id="result_list"', body)
+                self.assertNotIn('?o=', body)
+                self.assertNotIn('sortoptions', body)
+
+    def test_sorting_written_in_the_url_is_dropped(self):
+        """古いリンクや履歴から来ても、並べ替えられない状態に入らない。"""
+        manual_order = self._manually_ordered_teams()
+
         response = self.client.get('/admin/myapp/team/?o=1')
 
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'group-heading-row')
-
-    def test_sorting_orders_within_each_league(self):
-        for name in ('Cチーム', 'Aチーム', 'Bチーム'):
-            orm_models.Team.objects.create(league=self.other, name=name)
-
-        body = self.client.get('/admin/myapp/team/?o=1').content.decode()
-        # 別リーグの区切りの中だけを見る
-        segment = body[body.index('別リーグ'):]
-        names = [
-            m for m in ('Aチーム', 'Bチーム', 'Cチーム', 'Xチーム')
-            if m in segment
-        ]
-        positions = [segment.index(n) for n in sorted(names)]
+        self.assertRedirects(response, '/admin/myapp/team/')
+        body = self.client.get('/admin/myapp/team/?o=1', follow=True).content.decode()
+        # 名前順ではなく手動の順のまま
+        positions = [body.index(name) for name in manual_order]
         self.assertEqual(positions, sorted(positions))
+        # 区切りも崩れず、ドラッグもできる
+        self.assertEqual(body.count('テストリーグ（2チーム）'), 1)
+        self.assertIn('admin-inline-sortable.js', body)
 
-    def test_heading_links_to_a_single_league(self):
-        """一覧の並び順は1つしか持てないため、リーグごとに別々の順で見たい
-        場合は絞り込んでから並べ替える。その導線を見出しに置く。"""
-        body = self.client.get('/admin/myapp/team/').content.decode()
-
-        self.assertIn('group-heading-link', body)
-        self.assertIn(f'?league__id__exact={self.league.id}', body)
-
-    def test_filtered_league_can_be_sorted_on_its_own(self):
-        for name in ('Cチーム', 'Aチーム', 'Bチーム'):
-            orm_models.Team.objects.create(league=self.other, name=name)
-
+    def test_dropping_the_sort_keeps_the_other_parameters(self):
+        """並べ替えだけを落とし、絞り込みは保つ。"""
         response = self.client.get(
             f'/admin/myapp/team/?league__id__exact={self.other.id}&o=1'
         )
-        body = response.content.decode()
 
-        # 絞り込んだリーグだけが並び、その中で名前順になる
+        self.assertRedirects(
+            response, f'/admin/myapp/team/?league__id__exact={self.other.id}'
+        )
+
+    def test_league_filter_is_still_available(self):
+        """リーグを1つに絞る手段は絞り込みパネルが担う。"""
+        self._manually_ordered_teams()
+
+        body = self.client.get(
+            f'/admin/myapp/team/?league__id__exact={self.other.id}'
+        ).content.decode()
+
         self.assertNotIn('テストチーム', body)
-        for earlier, later in (('Aチーム', 'Bチーム'), ('Bチーム', 'Cチーム')):
-            with self.subTest(pair=(earlier, later)):
-                self.assertLess(body.index(earlier), body.index(later))
-
-    def test_each_league_still_appears_once_when_sorted(self):
-        body = self.client.get('/admin/myapp/team/?o=1').content.decode()
-        # 見出しには絞り込みリンクも付くため、見出し文言そのもので数える
-        self.assertEqual(body.count('テストリーグ（2チーム）'), 1)
+        self.assertIn('Aチーム', body)
 
     def test_other_changelists_are_unaffected(self):
         """group_by を持たない一覧は従来どおり描画されること。"""

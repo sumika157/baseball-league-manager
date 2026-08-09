@@ -38,12 +38,7 @@ myapp は INSTALLED_APPS で django.contrib.admin より前にあるため、
 {% if grouped %}
     {% for row in grouped %}
     {% if row.header %}
-        <tr class="group-heading-row"><td colspan="{{ row.result|length }}">
-          {{ row.header }}
-          {% if row.header_url %}
-            <a href="{{ row.header_url }}" class="group-heading-link">このリーグだけ表示</a>
-          {% endif %}
-        </td></tr>
+        <tr class="group-heading-row"><td colspan="{{ row.result|length }}">{{ row.header }}</td></tr>
     {% endif %}
     {% if row.result.form and row.result.form.non_field_errors %}
         <tr><td colspan="{{ row.result|length }}">{{ row.result.form.non_field_errors }}</td></tr>

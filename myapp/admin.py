@@ -2,9 +2,10 @@ import types
 
 from django import forms
 from django.contrib import admin
-from django.contrib.admin.views.main import ChangeList
+from django.contrib.admin.views.main import ORDER_VAR, ChangeList
 from django.db.models import Count, IntegerField, OuterRef, Prefetch, Q, Subquery
 from django.db.models.functions import Coalesce
+from django.http import HttpResponseRedirect
 from django.urls import reverse
 from django.utils.html import format_html, format_html_join
 
@@ -67,9 +68,11 @@ admin.site.get_app_list = types.MethodType(_ordered_app_list, admin.site)
 class GroupedChangeList(ChangeList):
     """区切りを保ったまま並べ替える一覧。
 
-    Django の既定では列を押すと並びがその列だけで決まり、リーグごとの
-    まとまりが崩れて全チームが混ざる。まとまりの順序を常に先に置き、
-    利用者が指定した並びはその中で効かせる。
+    Django の既定では列を押すと並びがその列だけで決まり、まとまりが崩れて
+    全行が混ざる。まとまりの順序を常に先に置き、利用者が指定した並びは
+    その中で効かせる。
+
+    手動で並べ替える一覧では使えない（ManualOrderAdminMixin を使う）。
     """
 
     def get_ordering(self, request, queryset):
@@ -87,6 +90,34 @@ class GroupedAdminMixin:
 
     def get_changelist(self, request, **kwargs):
         return GroupedChangeList
+
+
+class ManualOrderAdminMixin:
+    """行をドラッグして並べ替える一覧。列での並べ替えは持たない。
+
+    ドラッグした順がそのまま保存される順なので、列で並べ替えると
+    見えている順と保存される順が食い違い、ドラッグを止めるほかなくなる。
+    2つの並べ方は両立しないため、この一覧では手動の順だけを扱う。
+    """
+
+    # 列見出しの並べ替えリンクを出さない
+    sortable_by = ()
+
+    def changelist_view(self, request, extra_context=None):
+        """URL に並べ替えが残っていたら落として開き直す。
+
+        古いリンクや履歴から入っても、並べ替えられない状態に迷い込ませない。
+        無視するだけでは絞り込みのリンクなどに紛れて残ってしまうため、
+        URL そのものから消す。絞り込みなど他の指定は保つ。
+        """
+        if request.method == 'GET' and ORDER_VAR in request.GET:
+            params = request.GET.copy()
+            del params[ORDER_VAR]
+            query = params.urlencode()
+            return HttpResponseRedirect(
+                f'{request.path}?{query}' if query else request.path
+            )
+        return super().changelist_view(request, extra_context)
 
 
 def _grouped_count(queryset, group_field):
@@ -129,7 +160,7 @@ class TeamInline(admin.TabularInline):
 
 
 @admin.register(League)
-class LeagueAdmin(admin.ModelAdmin):
+class LeagueAdmin(ManualOrderAdminMixin, admin.ModelAdmin):
     # display_order は行をドラッグすると書き換わる。数値そのものに意味は無いが、
     # JavaScript が動かない環境でも直接入力できるよう残してある
     list_display = ('name', 'display_order', 'teams_accordion', 'created_at')
@@ -186,9 +217,7 @@ class LeagueAdmin(admin.ModelAdmin):
 
 
 @admin.register(Team)
-class TeamAdmin(GroupedAdminMixin, admin.ModelAdmin):
-    # 列を押して並べ替えても、この順序は常に先に効く（リーグの区切りを保つ）
-    group_ordering = ('league__display_order', 'league__name')
+class TeamAdmin(ManualOrderAdminMixin, admin.ModelAdmin):
     # display_order は行をドラッグすると書き換わる。リーグ編集画面からだけでなく
     # この一覧でも並べ替えられるようにしてある
     list_display = (
@@ -199,7 +228,8 @@ class TeamAdmin(GroupedAdminMixin, admin.ModelAdmin):
     list_filter = ('league',)
     search_fields = ('name', 'home_stadium__name')
     autocomplete_fields = ('home_stadium',)
-    # リーグごとにまとまるよう並べる。リーグ内は手動の表示順を尊重する
+    # リーグごとにまとまるよう並べる。リーグ内は手動の表示順を尊重する。
+    # この並びが区切り表示の前提（同じリーグの行が続いていないと見出しが何度も出る）
     ordering = ('league__display_order', 'league__name', 'display_order', 'name')
     list_select_related = ('league', 'home_stadium')
 
@@ -249,13 +279,11 @@ class TeamAdmin(GroupedAdminMixin, admin.ModelAdmin):
         )
 
     # 行をリーグごとに区切る。見出しに出るのでリーグ列は list_display から外した。
-    # 表示順はリーグの中でしか意味が無いため、ドラッグも区切りをまたげない
+    # 表示順はリーグの中でしか意味が無いため、ドラッグも区切りをまたげない。
+    # 区切りが成立するのは ordering がリーグ単位でまとめているから
     group_by = staticmethod(
         lambda team: f'{team.league.name}（{team.league_team_count}チーム）'
     )
-    # 一覧の並び順は1つしか持てない。リーグごとに別々の順で見たい場合は
-    # ここから絞り込んでから並べ替える
-    group_link = staticmethod(lambda team: f'?league__id__exact={team.league_id}')
 
     @admin.display(description='現役選手', ordering='active_players_count')
     def active_player_count(self, obj):

@@ -1,26 +1,13 @@
 {% extends "admin/change_list.html" %}
-{% load admin_grouping %}
 
 {% comment %}
-並べ替えできる一覧。表示順の列は隠してあるため、操作方法が分からない。
-列で並べ替えているあいだはドラッグを止めているので、そのことと元に戻す
-方法も伝える（伝えないと操作できなくなったように見える）。
+行をドラッグして並べ替える一覧。表示順の列は隠してあるため、
+操作方法が画面から分からない。
 {% endcomment %}
 
 {% block content %}
-  {% is_sorted_by_column cl as sorted_by_column %}
-  {% if sorted_by_column %}
-    <p class="sortable-hint sortable-hint-blocked">
-      列で並べ替えているあいだは、行をドラッグして並べ替えられません。
-      見えている順と保存される順が食い違うためです。
-      <a href="{% query_without_sort cl %}">並び順を戻す</a>とドラッグできます。
-    </p>
-  {% else %}
-    <p class="sortable-hint">
-      行をドラッグして並べ替え、<strong>保存</strong>で確定します。
-      リーグごとに別々の順で見たい場合は、区切りの
-      <strong>「このリーグだけ表示」</strong>で絞り込んでから並べ替えてください。
-    </p>
-  {% endif %}
+  <p class="sortable-hint">
+    行をドラッグして並べ替え、<strong>保存</strong>で確定します。
+  </p>
   {{ block.super }}
 {% endblock %}

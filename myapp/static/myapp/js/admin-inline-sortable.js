@@ -14,12 +14,6 @@
 
   var ORDER_SELECTOR = 'input[name$="-display_order"]';
 
-  function isCustomSorted() {
-    // 一覧で列を押して並べ替えているときは、見えている順と保存される順が
-    // 食い違うため、ドラッグでの並べ替えは行わない
-    return new URLSearchParams(window.location.search).has('o');
-  }
-
   function groupOf(tr) {
     // 一覧がリーグごとに区切られている場合、直前の見出し行がその行の所属。
     // 区切りが無い（インラインなど）場合は全体で1つのまとまりとみなす。
@@ -151,7 +145,8 @@
   }
 
   document.addEventListener('DOMContentLoaded', function () {
-    if (isCustomSorted()) return;
+    // 対象の一覧は列での並べ替えを持たない（ManualOrderAdminMixin）。
+    // 見えている順は常に保存される順なので、無条件にドラッグを有効にできる
     tablesWithOrderField().forEach(init);
   });
 })();
