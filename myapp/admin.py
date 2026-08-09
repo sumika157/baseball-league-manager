@@ -9,6 +9,7 @@ from .infrastructure.orm_models import (
     GamePitchingLine,
     League,
     Player,
+    PlayerStint,
     Stadium,
     Team,
 )
@@ -38,7 +39,9 @@ def _ordered_app_list(self, request, app_label=None):
     """
     app_list = _original_get_app_list(request, app_label)
 
-    model_order = {'League': 1, 'Team': 2, 'Player': 3, 'Game': 4, 'Stadium': 5}
+    model_order = {
+        'League': 1, 'Team': 2, 'Player': 3, 'PlayerStint': 4, 'Game': 5, 'Stadium': 6,
+    }
     for app in app_list:
         if app.get('app_label') == 'myapp':
             app['models'].sort(key=lambda m: model_order.get(m.get('object_name'), 99))
@@ -108,7 +111,8 @@ class TeamAdmin(admin.ModelAdmin):
 
     @admin.display(description='現役選手')
     def active_player_count(self, obj):
-        return obj.players.filter(is_active=True).count()
+        # 在籍中＝退団年が空の在籍
+        return obj.stints.filter(to_year__isnull=True).count()
 
     @admin.display(description='試合数')
     def game_count(self, obj):
@@ -128,22 +132,30 @@ class StadiumAdmin(admin.ModelAdmin):
         return '、'.join(names) if names else '—'
 
 
+class PlayerStintInline(admin.TabularInline):
+    """在籍。所属と背番号はここが出典で、移籍すると行が増える。"""
+
+    model = PlayerStint
+    extra = 0
+    fields = ('team', 'number', 'from_year', 'to_year')
+    ordering = ('-from_year',)
+    autocomplete_fields = ('team',)
+    verbose_name_plural = '在籍（経歴）'
+
+
 @admin.register(Player)
 class PlayerAdmin(admin.ModelAdmin):
-    list_display = ('number', 'name', 'position', 'is_active', 'appearances')
-    list_display_links = ('name',)
-    list_filter = ('team__league', 'team', 'position', 'is_active')
+    list_display = ('name', 'position', 'current_team', 'current_number', 'appearances')
+    list_filter = ('position', 'stints__team__league', 'stints__team')
     search_fields = ('name',)
-    # リーグ・チームごとにまとまるよう並べる
-    ordering = ('team__league__name', 'team__name', 'number')
-    list_select_related = ('team', 'team__league')
-    list_editable = ('is_active',)
-
-    # 行をチームごとに区切る。どのリーグのチームかも見出しに出す
-    group_by = staticmethod(lambda p: f'{p.team.league.name} · {p.team.name}')
+    ordering = ('name',)
+    inlines = [PlayerStintInline]
 
     fieldsets = (
-        (None, {'fields': ('team', 'name', 'number', 'position', 'is_active')}),
+        (None, {
+            'fields': ('name', 'position'),
+            'description': '所属チームと背番号は下の「在籍」で管理します。',
+        }),
         ('プロフィール', {
             'description': '分かっているものだけ入力してください。すべて任意です。',
             'fields': (
@@ -153,14 +165,46 @@ class PlayerAdmin(admin.ModelAdmin):
         }),
     )
 
+    @admin.display(description='現在の所属')
+    def current_team(self, obj):
+        stint = self._current(obj)
+        return stint.team.name if stint else '—'
+
+    @admin.display(description='背番号')
+    def current_number(self, obj):
+        stint = self._current(obj)
+        return stint.number if stint else '—'
+
     @admin.display(description='出場試合')
     def appearances(self, obj):
         """成績そのものは試合側にあるので、ここでは出場数だけ示す。"""
         count = obj.game_batting.count() + obj.game_pitching.count()
         return count or '—'
 
+    @staticmethod
+    def _current(obj):
+        for stint in obj.stints.all():
+            if stint.to_year is None:
+                return stint
+        return None
+
     def get_queryset(self, request):
-        return super().get_queryset(request).select_related('team')
+        return super().get_queryset(request).prefetch_related('stints__team')
+
+
+@admin.register(PlayerStint)
+class PlayerStintAdmin(admin.ModelAdmin):
+    """在籍そのものの一覧。チームごとの名簿として使える。"""
+
+    list_display = ('number', 'player', 'from_year', 'to_year')
+    list_filter = ('team__league', 'team')
+    search_fields = ('player__name',)
+    ordering = ('team__league__name', 'team__name', 'number')
+    list_select_related = ('player', 'team', 'team__league')
+    autocomplete_fields = ('player', 'team')
+
+    # 行をチームごとに区切る
+    group_by = staticmethod(lambda s: f'{s.team.league.name} · {s.team.name}')
 
 
 class GameBattingLineInline(admin.TabularInline):

@@ -12,6 +12,7 @@ from .infrastructure.orm_models import (  # noqa: F401
     GamePitchingLine,
     League,
     Player,
+    PlayerStint,
     Stadium,
     Team,
 )
@@ -23,6 +24,7 @@ __all__ = [
     'GamePitchingLine',
     'League',
     'Player',
+    'PlayerStint',
     'Stadium',
     'Team',
 ]

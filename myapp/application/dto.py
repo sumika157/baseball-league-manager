@@ -93,11 +93,36 @@ class PlayerGameRow:
 
 
 @dataclass(frozen=True)
+class CareerRow:
+    """経歴の1行。どのチームにいつ在籍したか。"""
+
+    team_id: int
+    team_name: str
+    number: int
+    from_year: int
+    to_year: int | None
+    is_current: bool
+
+    @property
+    def period(self) -> str:
+        return f"{self.from_year}〜{self.to_year or '現在'}"
+
+
+@dataclass(frozen=True)
 class PlayerProfile:
-    """選手個人ページ。通算成績と試合ごとの記録。"""
+    """選手個人ページ。プロフィール・経歴・通算成績・試合ごとの記録。"""
 
     detail: 'PlayerDetail'
     games: list[PlayerGameRow]
+    career: list[CareerRow] = None
+    # プロフィール
+    age: int | None = None
+    throws_bats: str = ''
+    height_cm: int | None = None
+    weight_kg: int | None = None
+    birthplace: str = ''
+    debut_year: int | None = None
+    has_profile: bool = False
 
     @property
     def appearances(self) -> int:

@@ -6,8 +6,10 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 from ..domain import services as domain_services
-from ..domain.entities import Game, Player, Team
+from ..domain.entities import Game, Player, Stint, Team
 from ..domain.value_objects import (
     BattingLine,
     InningsPitched,
@@ -21,6 +23,7 @@ from ..domain.value_objects import (
 from .dto import (
     AdminOverview,
     BatterRow,
+    CareerRow,
     Dashboard,
     GameDetail,
     GamePlayerRow,
@@ -399,7 +402,32 @@ class TeamApplicationService:
             ))
 
         rows.sort(key=lambda r: (r.played_on, r.game_id), reverse=True)
-        return PlayerProfile(detail=detail, games=rows)
+
+        player = self._teams.find_by_id(team_id).find_player(player_id)
+        profile = player.profile
+
+        return PlayerProfile(
+            detail=detail,
+            games=rows,
+            career=[
+                CareerRow(
+                    team_id=s.team_id,
+                    team_name=s.team_name,
+                    number=s.number.value,
+                    from_year=s.from_year,
+                    to_year=s.to_year,
+                    is_current=s.is_current,
+                )
+                for s in player.career
+            ],
+            age=profile.age(date.today()),
+            throws_bats=profile.throws_bats,
+            height_cm=profile.height_cm,
+            weight_kg=profile.weight_kg,
+            birthplace=profile.birthplace,
+            debut_year=profile.debut_year,
+            has_profile=not profile.is_empty,
+        )
 
     # --- 試合の登録 ---
 
@@ -560,13 +588,42 @@ class TeamApplicationService:
         self._teams.save(team)
         return player
 
-    def retire_player(self, team_id: int, player_id: int) -> Player:
+    def retire_player(self, team_id: int, player_id: int, year: int = None) -> Player:
         """選手を退団させる。成績は残り、背番号は再利用できるようになる。"""
         team = self._teams.find_by_id(team_id)
         player = team.find_player(player_id)
-        player.retire()
+        team.retire_player(player, year)
         self._teams.save(team)
         return player
+
+    def transfer_player(
+        self, player_id: int, *, from_team_id: int, to_team_id: int,
+        number: int, year: int = None,
+    ) -> None:
+        """選手を移籍させる。元の在籍を閉じ、移籍先で新しい在籍を開く。
+
+        成績は選手に紐づくため移籍しても失われない。経歴として
+        「いつどのチームに居たか」が残る。
+        """
+        season = year if year is not None else date.today().year
+
+        source = self._teams.find_by_id(from_team_id)
+        player = source.find_player(player_id)
+        source.retire_player(player, season)
+        self._teams.save(source)
+
+        destination = self._teams.find_by_id(to_team_id)
+        destination._ensure_number_is_available(JerseyNumber(number))
+        player.career.append(Stint(
+            team_id=to_team_id,
+            team_name=destination.name,
+            number=JerseyNumber(number),
+            from_year=season,
+        ))
+        player.number = JerseyNumber(number)
+        player.is_active = True
+        destination.players.append(player)
+        self._teams.save(destination)
 
     # --- 参照用の索引 ---
 

@@ -77,19 +77,18 @@ class Team(models.Model):
 
 
 class Player(models.Model):
-    team = models.ForeignKey(
-        Team, on_delete=models.CASCADE, related_name='players', verbose_name='チーム'
-    )
+    """選手。所属チームと背番号は在籍（PlayerStint）が持つ。
+
+    移籍すると所属が変わるため、選手そのものにチームを持たせない。
+    """
+
     name = models.CharField(max_length=100, verbose_name='選手名')
-    number = models.IntegerField(verbose_name='背番号')
     position = models.CharField(
         max_length=10,
         choices=POSITION_CHOICES,
         default=Position.INFIELDER.value,
         verbose_name='守備位置',
     )
-    is_active = models.BooleanField(default=True, verbose_name='在籍中')
-
     # --- プロフィール。どれも任意で、分かっているものだけ埋める ---
     HANDEDNESS_CHOICES = [(h.value, h.value) for h in Handedness]
 
@@ -108,10 +107,46 @@ class Player(models.Model):
     class Meta:
         verbose_name = '選手'
         verbose_name_plural = '選手'
-        ordering = ['team', 'number']
+        ordering = ['name']
 
     def __str__(self):
-        return f"{self.number} {self.name} ({self.position})"
+        return f"{self.name} ({self.position})"
+
+
+class PlayerStint(models.Model):
+    """在籍。ある選手が、あるチームに、いつからいつまで在籍したか。
+
+    背番号も在籍ごとに持つ。移籍で変わるため選手側には持たせない。
+    to_year が空なら現在も在籍している。
+    """
+
+    player = models.ForeignKey(
+        Player, on_delete=models.CASCADE, related_name='stints', verbose_name='選手'
+    )
+    team = models.ForeignKey(
+        Team, on_delete=models.CASCADE, related_name='stints', verbose_name='チーム'
+    )
+    number = models.IntegerField(verbose_name='背番号')
+    from_year = models.IntegerField(verbose_name='加入年')
+    to_year = models.IntegerField(
+        null=True, blank=True, verbose_name='退団年',
+        help_text='空欄なら現在も在籍しています。',
+    )
+
+    class Meta:
+        verbose_name = '在籍'
+        verbose_name_plural = '在籍'
+        ordering = ['-from_year', 'number']
+        constraints = [
+            # 同じチームに同じ年から二重に加入することはない
+            models.UniqueConstraint(
+                fields=['player', 'team', 'from_year'], name='unique_player_team_from'
+            ),
+        ]
+
+    def __str__(self):
+        end = self.to_year or '現在'
+        return f"{self.player.name} / {self.team.name} ({self.from_year}〜{end})"
 
 
 class Game(models.Model):

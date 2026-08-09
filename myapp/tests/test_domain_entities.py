@@ -39,11 +39,11 @@ class TeamRosterTest(TestCase):
 
     def test_retired_player_frees_the_number(self):
         team = _team()
-        retired = team.add_player('山田', JerseyNumber(10), Position.INFIELDER)
-        retired.retire()
+        retired = team.add_player('山田', JerseyNumber(10), Position.INFIELDER, from_year=2025)
+        team.retire_player(retired, 2025)
 
-        # 引退した選手の背番号は再利用できる
-        team.add_player('田中', JerseyNumber(10), Position.OUTFIELDER)
+        # 在籍期間が閉じたので、同じ背番号を再利用できる
+        team.add_player('田中', JerseyNumber(10), Position.OUTFIELDER, from_year=2026)
         self.assertEqual(len(team.active_players), 1)
 
     def test_empty_name_is_rejected(self):

@@ -168,12 +168,12 @@ class PlayerListViewTest(BaseCase):
 
     def test_register_via_form(self):
         self.client.post(self.url, {'name': '山田', 'number': '10', 'position': '内野手'})
-        self.assertEqual(orm_models.Player.objects.filter(number=10).count(), 1)
+        self.assertEqual(orm_models.PlayerStint.objects.filter(number=10).count(), 1)
 
     def test_duplicate_number_is_rejected_via_form(self):
         self.client.post(self.url, {'name': '山田', 'number': '10', 'position': '内野手'})
         self.client.post(self.url, {'name': '田中', 'number': '10', 'position': '外野手'})
-        self.assertEqual(orm_models.Player.objects.filter(number=10).count(), 1)
+        self.assertEqual(orm_models.PlayerStint.objects.filter(number=10).count(), 1)
 
     def test_non_numeric_number_is_rejected_without_crashing(self):
         response = self.client.post(
@@ -244,7 +244,9 @@ class PlayerEditViewTest(BaseCase):
 
         self.client.post(self._url(player.id), {'retire': '1'})
 
-        self.assertFalse(orm_models.Player.objects.get(id=player.id).is_active)
+        # 退団は在籍期間を閉じることで表す
+        stint = orm_models.PlayerStint.objects.get(player_id=player.id)
+        self.assertIsNotNone(stint.to_year)
 
     def test_duplicate_number_on_update_is_rejected(self):
         self.service.register_player(self.team.id, '山田', 10, '内野手')
@@ -571,7 +573,7 @@ class AdminIndexTest(BaseCase):
 
     def test_overview_flags_empty_teams_and_retired_players(self):
         player = self.service.register_player(self.team.id, '山田', 10, '内野手')
-        orm_models.Player.objects.filter(id=player.id).update(is_active=False)
+        self.service.retire_player(self.team.id, player.id)
 
         overview = self.service.get_admin_overview()
 
@@ -890,8 +892,9 @@ class AdminGroupingTest(BaseCase):
         body = self.client.get('/admin/myapp/team/').content.decode()
         self.assertEqual(body.count('>テストリーグ</td>'), 1)
 
-    def test_player_list_groups_by_team(self):
-        response = self.client.get('/admin/myapp/player/')
+    def test_stint_list_groups_by_team(self):
+        """所属はもう選手ではなく在籍が持つので、区切るのは在籍一覧。"""
+        response = self.client.get('/admin/myapp/playerstint/')
 
         self.assertContains(response, 'group-heading-row')
         self.assertContains(response, 'テストリーグ · テストチーム')
@@ -1131,6 +1134,93 @@ class PlayerProfileTest(BaseCase):
         self.assertContains(response, 'プロフィール')
         self.assertContains(response, 'birth_date')
         self.assertContains(response, 'birthplace')
+
+
+class TransferTest(BaseCase):
+    """移籍と経歴。"""
+
+    def setUp(self):
+        super().setUp()
+        self.player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+
+    def test_transfer_closes_the_old_stint_and_opens_a_new_one(self):
+        self.service.transfer_player(
+            self.player.id, from_team_id=self.team.id, to_team_id=self.rival.id,
+            number=7, year=2026,
+        )
+
+        stints = list(
+            orm_models.PlayerStint.objects
+            .filter(player_id=self.player.id).order_by('from_year')
+        )
+        self.assertEqual(len(stints), 2)
+        self.assertEqual(stints[0].team_id, self.team.id)
+        self.assertEqual(stints[0].to_year, 2026)
+        self.assertEqual(stints[1].team_id, self.rival.id)
+        self.assertEqual(stints[1].number, 7)
+        self.assertIsNone(stints[1].to_year)
+
+    def test_player_appears_on_the_new_roster_only(self):
+        self.service.transfer_player(
+            self.player.id, from_team_id=self.team.id, to_team_id=self.rival.id,
+            number=7, year=2026,
+        )
+
+        self.assertEqual(self.service.list_batters(self.team.id).rows, [])
+        self.assertEqual(
+            [r.name for r in self.service.list_batters(self.rival.id).rows], ['山田']
+        )
+
+    def test_stats_follow_the_player_not_the_team(self):
+        """成績は選手に紐づくので、移籍しても失われない。"""
+        give_batting(self.team, self.rival, self.player.id, BattingLine(at_bats=10, singles=3))
+
+        self.service.transfer_player(
+            self.player.id, from_team_id=self.team.id, to_team_id=self.rival.id,
+            number=7, year=2026,
+        )
+
+        detail = self.service.get_player_detail(self.rival.id, self.player.id)
+        self.assertEqual(detail.at_bats, 10)
+
+    def test_the_old_number_becomes_available(self):
+        self.service.transfer_player(
+            self.player.id, from_team_id=self.team.id, to_team_id=self.rival.id,
+            number=7, year=2026,
+        )
+
+        # 空いた10番を別の選手が使える
+        self.service.register_player(self.team.id, '田中', 10, '外野手')
+        self.assertEqual(
+            [r.name for r in self.service.list_batters(self.team.id).rows], ['田中']
+        )
+
+    def test_number_in_use_at_the_destination_is_rejected(self):
+        self.service.register_player(self.rival.id, '先客', 7, '外野手')
+
+        with self.assertRaises(DuplicateJerseyNumber):
+            self.service.transfer_player(
+                self.player.id, from_team_id=self.team.id, to_team_id=self.rival.id,
+                number=7, year=2026,
+            )
+
+    def test_career_is_visible_on_the_team_aggregate(self):
+        self.service.transfer_player(
+            self.player.id, from_team_id=self.team.id, to_team_id=self.rival.id,
+            number=7, year=2026,
+        )
+
+        team = DjangoTeamRepository().find_by_id(self.rival.id)
+        career = team.find_player(self.player.id).career
+
+        self.assertEqual([s.team_name for s in career], ['相手チーム', 'テストチーム'])
+
+    def test_admin_shows_the_current_team(self):
+        self.client.force_login(User.objects.create_superuser(username='root', password='x'))
+        response = self.client.get('/admin/myapp/player/')
+
+        self.assertContains(response, 'テストチーム')
+        self.assertContains(response, 'field-current_number')
 
 
 class AuthTest(TestCase):

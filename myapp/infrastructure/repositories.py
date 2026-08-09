@@ -20,6 +20,7 @@ from ..domain.entities import (
     League,
     Player,
     Stadium,
+    Stint,
     Team,
 )
 from ..domain.exceptions import (
@@ -60,7 +61,7 @@ class DjangoTeamRepository:
             row = (
                 orm_models.Team.objects
                 .select_related('league')
-                .prefetch_related('players')
+                .prefetch_related('stints__player')
                 .get(id=team_id)
             )
         except orm_models.Team.DoesNotExist:
@@ -80,7 +81,7 @@ class DjangoTeamRepository:
         rows = (
             orm_models.Team.objects
             .select_related('league')
-            .prefetch_related('players')
+            .prefetch_related('stints__player')
             .order_by('display_order', 'name')
         )
         return [self._to_domain(row, with_roster=True) for row in rows]
@@ -109,14 +110,26 @@ class DjangoTeamRepository:
             row, _ = orm_models.Player.objects.update_or_create(
                 id=player.id,
                 defaults={
-                    'team': team_row,
                     'name': player.name,
-                    'number': player.number.value,
                     'position': player.position.value,
-                    'is_active': player.is_active,
+                    **_profile_defaults(player.profile),
                 },
             )
             player.id = row.id
+
+            # 在籍が所属と背番号の出典。選手側には持たせない
+            for stint in player.career:
+                stint_row, _ = orm_models.PlayerStint.objects.update_or_create(
+                    id=stint.id,
+                    defaults={
+                        'player': row,
+                        'team_id': stint.team_id,
+                        'number': stint.number.value,
+                        'from_year': stint.from_year,
+                        'to_year': stint.to_year,
+                    },
+                )
+                stint.id = stint_row.id
 
         return team
 
@@ -125,22 +138,43 @@ class DjangoTeamRepository:
     def _to_domain(self, row: orm_models.Team, *, with_roster: bool) -> Team:
         players = []
         if with_roster:
-            player_rows = list(row.players.all())
-            batting = _batting_totals([p.id for p in player_rows])
-            pitching = _pitching_totals([p.id for p in player_rows])
-            players = [
-                Player(
-                    id=p.id,
-                    name=p.name,
-                    number=JerseyNumber(p.number),
-                    position=Position.from_label(p.position),
-                    is_active=p.is_active,
-                    profile=_profile_of(p),
-                    batting=batting.get(p.id, BattingLine()),
-                    pitching=pitching.get(p.id, PitchingLine()),
+            # このチームに在籍したことのある選手を、在籍の情報つきで組み立てる
+            stint_rows = list(
+                orm_models.PlayerStint.objects
+                .filter(team=row)
+                .select_related('player')
+                .order_by('number')
+            )
+            player_rows = {s.player.id: s.player for s in stint_rows}
+            batting = _batting_totals(list(player_rows))
+            pitching = _pitching_totals(list(player_rows))
+
+            careers = _careers_of(list(player_rows))
+
+            for player_id, p in player_rows.items():
+                career = careers.get(player_id, [])
+                here = next(
+                    (s for s in career if s.team_id == row.id and s.is_current), None
                 )
-                for p in player_rows
-            ]
+                # 現在このチームに居ないなら、最後にこのチームに居たときの背番号
+                last_here = next(
+                    (s for s in career if s.team_id == row.id), None
+                )
+                stint = here or last_here
+                if stint is None:
+                    continue
+                players.append(Player(
+                    id=player_id,
+                    name=p.name,
+                    number=stint.number,
+                    position=Position.from_label(p.position),
+                    is_active=here is not None,
+                    profile=_profile_of(p),
+                    batting=batting.get(player_id, BattingLine()),
+                    pitching=pitching.get(player_id, PitchingLine()),
+                    career=career,
+                ))
+            players.sort(key=lambda p: p.number.value)
 
         return Team(
             id=row.id,
@@ -150,6 +184,42 @@ class DjangoTeamRepository:
             display_order=row.display_order,
             players=players,
         )
+
+
+def _careers_of(player_ids: list[int]) -> dict[int, list[Stint]]:
+    """選手ごとの在籍履歴。新しい順に並べる。"""
+    if not player_ids:
+        return {}
+
+    careers: dict[int, list[Stint]] = {}
+    rows = (
+        orm_models.PlayerStint.objects
+        .filter(player_id__in=player_ids)
+        .select_related('team')
+        .order_by('-from_year', '-id')
+    )
+    for row in rows:
+        careers.setdefault(row.player_id, []).append(Stint(
+            id=row.id,
+            team_id=row.team_id,
+            team_name=row.team.name,
+            number=JerseyNumber(row.number),
+            from_year=row.from_year,
+            to_year=row.to_year,
+        ))
+    return careers
+
+
+def _profile_defaults(profile: Profile) -> dict:
+    return {
+        'birth_date': profile.birth_date,
+        'throws': profile.throws.value if profile.throws else '',
+        'bats': profile.bats.value if profile.bats else '',
+        'height_cm': profile.height_cm,
+        'weight_kg': profile.weight_kg,
+        'birthplace': profile.birthplace,
+        'debut_year': profile.debut_year,
+    }
 
 
 def _profile_of(row) -> Profile:

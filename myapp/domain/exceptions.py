@@ -57,6 +57,10 @@ class StadiumNotFound(DomainError):
     """指定された球場が存在しない。"""
 
 
+class InvalidStint(DomainError):
+    """在籍期間として成立しない（退団年が加入年より前など）。"""
+
+
 class TeamNotFound(DomainError):
     """指定されたチームが存在しない。"""
 

@@ -13,6 +13,7 @@ from datetime import date
 from .exceptions import (
     DuplicateJerseyNumber,
     InvalidGame,
+    InvalidStint,
     PlayerNotFound,
 )
 from .value_objects import (
@@ -58,6 +59,52 @@ class Stadium:
 
 
 @dataclass
+class Stint:
+    """在籍。ある選手が、あるチームに、いつからいつまで在籍したか。
+
+    背番号も在籍ごとに持つ。移籍で変わるため選手そのものには持たせない。
+    """
+
+    team_id: int
+    number: JerseyNumber
+    from_year: int
+    to_year: int | None = None
+    id: int | None = None
+    team_name: str = ''
+
+    def __post_init__(self) -> None:
+        self.from_year = Season(self.from_year).year
+        if self.to_year is not None:
+            self.to_year = Season(self.to_year).year
+            if self.to_year < self.from_year:
+                raise InvalidStint("退団年が加入年より前になっています。")
+
+    def __str__(self) -> str:
+        return f"{self.from_year}〜{self.to_year or '現在'}"
+
+    @property
+    def is_current(self) -> bool:
+        return self.to_year is None
+
+    def covers(self, year: int) -> bool:
+        return self.from_year <= year and (self.to_year is None or year <= self.to_year)
+
+    def overlaps(self, other: 'Stint') -> bool:
+        """期間が重なるか。片方でも在籍中（to_year が空）なら無限として扱う。"""
+        end, other_end = self.to_year, other.to_year
+        starts_before_other_ends = other_end is None or self.from_year <= other_end
+        other_starts_before_end = end is None or other.from_year <= end
+        return starts_before_other_ends and other_starts_before_end
+
+    def close(self, year: int) -> None:
+        """退団させる。"""
+        season = Season(year).year
+        if season < self.from_year:
+            raise InvalidStint("加入年より前の年で退団にはできません。")
+        self.to_year = season
+
+
+@dataclass
 class Player:
     """選手。Team 集約の内部エンティティ。
 
@@ -74,6 +121,8 @@ class Player:
     profile: Profile = field(default_factory=Profile)
     batting: BattingLine = field(default_factory=BattingLine)
     pitching: PitchingLine = field(default_factory=PitchingLine)
+    # 経歴。number と is_active は、このうち現在の在籍から導いた値
+    career: list[Stint] = field(default_factory=list)
 
     def __str__(self) -> str:
         return f"{self.number} {self.name} ({self.position.label})"
@@ -158,9 +207,9 @@ class Team:
     # --- ロスターの変更（不変条件を守る） ---
 
     def add_player(
-        self, name: str, number: JerseyNumber, position: Position
+        self, name: str, number: JerseyNumber, position: Position, from_year: int = None
     ) -> Player:
-        """選手を登録する。背番号が現役選手と重複する場合は拒否する。"""
+        """選手を加入させる。背番号が在籍中の選手と重複する場合は拒否する。"""
         self._ensure_number_is_available(number)
 
         player = Player(name=(name or '').strip(), number=number, position=position)
@@ -169,26 +218,56 @@ class Team:
 
             raise DomainError("選手名を入力してください。")
 
+        player.career = [Stint(
+            team_id=self.id,
+            number=number,
+            from_year=from_year if from_year is not None else date.today().year,
+            team_name=self.name,
+        )]
         self.players.append(player)
         return player
 
     def change_player_number(self, player: Player, number: JerseyNumber) -> None:
-        """背番号を変更する。他の現役選手と重複する場合は拒否する。"""
+        """背番号を変更する。在籍中の他の選手と重複する場合は拒否する。"""
         if player.number == number:
             return
         self._ensure_number_is_available(number, excluding=player)
         player.number = number
+        current = self.current_stint(player)
+        if current is not None:
+            current.number = number
+
+    def current_stint(self, player: Player) -> Stint | None:
+        """このチームでの現在の在籍。"""
+        for stint in player.career:
+            if stint.team_id == self.id and stint.is_current:
+                return stint
+        return None
+
+    def retire_player(self, player: Player, year: int = None) -> None:
+        """退団させる。在籍期間を閉じることで、背番号が空く。"""
+        player.retire()
+        current = self.current_stint(player)
+        if current is not None:
+            current.close(year if year is not None else date.today().year)
 
     def _ensure_number_is_available(
         self, number: JerseyNumber, excluding: Player | None = None
     ) -> None:
-        for player in self.active_players:
+        """在籍期間が重なる選手どうしで背番号が重複しないことを確かめる。
+
+        過去に同じ番号を付けた選手がいても、期間が重なっていなければ問題ない。
+        """
+        for player in self.players:
             if player is excluding:
                 continue
-            if player.number == number:
-                raise DuplicateJerseyNumber(
-                    f"背番号 {number} は「{self.name}」で既に使用されています。"
-                )
+            for stint in player.career:
+                if stint.team_id != self.id or not stint.is_current:
+                    continue
+                if stint.number == number:
+                    raise DuplicateJerseyNumber(
+                        f"背番号 {number} は「{self.name}」で既に使用されています。"
+                    )
 
 
 @dataclass

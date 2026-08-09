@@ -60,6 +60,56 @@
   {% endif %}
 </div>
 
+<div class="row g-3 mb-3">
+  {% if profile.has_profile %}
+    <div class="col-lg-6">
+      <div class="card h-100">
+        <div class="card-header">プロフィール</div>
+        <div class="card-body">
+          <div class="row g-2">
+            {% if profile.age %}{% include 'myapp/_stat_readout.html' with label='年齢' value=profile.age %}{% endif %}
+            {% if profile.throws_bats %}{% include 'myapp/_stat_readout.html' with label='投打' value=profile.throws_bats %}{% endif %}
+            {% if profile.height_cm %}{% include 'myapp/_stat_readout.html' with label='身長' value=profile.height_cm %}{% endif %}
+            {% if profile.weight_kg %}{% include 'myapp/_stat_readout.html' with label='体重' value=profile.weight_kg %}{% endif %}
+            {% if profile.birthplace %}{% include 'myapp/_stat_readout.html' with label='出身' value=profile.birthplace %}{% endif %}
+            {% if profile.debut_year %}{% include 'myapp/_stat_readout.html' with label='入団' value=profile.debut_year %}{% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  {% endif %}
+
+  <div class="{% if profile.has_profile %}col-lg-6{% else %}col-12{% endif %}">
+    <div class="card h-100">
+      <div class="card-header">経歴</div>
+      <div class="card-body p-0">
+        {% if profile.career %}
+          <ul class="tile-list">
+            {% for row in profile.career %}
+              <li>
+                <a href="{% url 'player_list' row.team_id %}">
+                  <span class="tile-list-main">
+                    <span class="tile-list-title">
+                      {{ row.team_name }}
+                      {% if row.is_current %}<span class="badge bg-primary ms-1">在籍中</span>{% endif %}
+                    </span>
+                    <span class="tile-list-sub">{{ row.period }}</span>
+                  </span>
+                  <span class="tile-list-meta">#{{ row.number }}</span>
+                </a>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <div class="empty-state" style="padding: 2rem 1rem; font-size: 0.875rem;">
+            在籍の記録がありません。
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="card">
   <div class="card-header">試合ごとの成績</div>
   <div class="card-body p-0">
