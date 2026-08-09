@@ -160,6 +160,31 @@ class StandingRow:
 
 
 @dataclass(frozen=True)
+class TeamTotals:
+    """チームの合計成績と、そこから求めた指標。
+
+    率は選手ごとの率を平均せず、合算した実数から計算し直したもの。
+    """
+
+    games: int
+    # 打撃
+    batting_average: float
+    on_base_percentage: float
+    slugging_percentage: float
+    ops: float
+    home_runs: int
+    runs_batted_in: int
+    # 投球
+    earned_run_average: float
+    whip: float
+    strikeouts: int
+    innings_pitched: str
+    # タイトルの対象になる目安
+    required_plate_appearances: int
+    required_innings: str
+
+
+@dataclass(frozen=True)
 class LeagueTeams:
     """1リーグぶんの所属チーム。"""
 

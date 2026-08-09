@@ -221,6 +221,15 @@ class BattingLine:
         return self.at_bats + self.walks + self.hit_by_pitch + self.sacrifice_flies
 
     @property
+    def plate_appearances(self) -> int:
+        """打席数。規定打席の判定に使う。
+
+        本来は犠打も含むが、このアプリでは記録していないため、
+        記録している項目（打数・四球・死球・犠飛）の合計とする。
+        """
+        return self.plate_appearances_for_obp
+
+    @property
     def batting_average(self) -> float:
         """打率。"""
         if self.at_bats == 0:

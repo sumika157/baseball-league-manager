@@ -20,7 +20,7 @@
         </table>
       {% else %}
         <div class="empty-state" style="padding: 1.75rem 1rem; font-size: 0.8125rem;">
-          記録がありません
+          {% if qualified %}規定に到達した選手がいません{% else %}記録がありません{% endif %}
         </div>
       {% endif %}
     </div>

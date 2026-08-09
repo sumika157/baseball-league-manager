@@ -20,6 +20,56 @@
   </p>
 </div>
 
+{% comment %}
+チーム全体の成績。率は選手ごとの率を平均せず、合算した実数から計算し直している。
+{% endcomment %}
+{% if totals.games %}
+  <div class="stat-strip">
+    {% if pos_mode == 'pitcher' %}
+      <div class="stat-cell">
+        <div class="stat-value">{{ totals.earned_run_average|floatformat:2 }}</div>
+        <div class="stat-label">チーム防御率</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-value">{{ totals.whip|floatformat:2 }}</div>
+        <div class="stat-label">チームWHIP</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-value">{{ totals.strikeouts }}</div>
+        <div class="stat-label">奪三振</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-value">{{ totals.games }}</div>
+        <div class="stat-label">試合</div>
+      </div>
+    {% else %}
+      <div class="stat-cell">
+        <div class="stat-value">{{ totals.batting_average|floatformat:3 }}</div>
+        <div class="stat-label">チーム打率</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-value">{{ totals.ops|floatformat:3 }}</div>
+        <div class="stat-label">チームOPS</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-value">{{ totals.home_runs }}</div>
+        <div class="stat-label">本塁打</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-value">{{ totals.games }}</div>
+        <div class="stat-label">試合</div>
+      </div>
+    {% endif %}
+  </div>
+  <p class="page-subtitle mb-3" style="font-size: 0.8125rem;">
+    {% if pos_mode == 'pitcher' %}
+      規定投球回は {{ totals.required_innings }} 回（{{ totals.games }}試合 × 1.0）
+    {% else %}
+      規定打席は {{ totals.required_plate_appearances }} 打席（{{ totals.games }}試合 × 3.1）
+    {% endif %}
+  </p>
+{% endif %}
+
 {# 野手／投手の切替。Bootstrap の nav-pills よりセグメント風の方が締まる #}
 <div class="segmented">
   <a class="segmented-item {% if pos_mode == 'batter' %}is-active{% endif %}" href="?pos=batter">野手</a>

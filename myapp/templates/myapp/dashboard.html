@@ -35,9 +35,13 @@
 <div class="row g-3">
   <div class="col-lg-8">
     <div class="row g-3">
-      {% include 'myapp/_ranking_card.html' with title='OPS' entries=board.ops_leaders %}
+      {% comment %}
+        OPS と防御率は規定打席・規定投球回に達した選手だけを対象にする。
+        本塁打と奪三振は本数そのものが記録なので規定を設けない。
+      {% endcomment %}
+      {% include 'myapp/_ranking_card.html' with title='OPS（規定到達）' entries=board.ops_leaders qualified=True %}
       {% include 'myapp/_ranking_card.html' with title='本塁打' entries=board.home_run_leaders %}
-      {% include 'myapp/_ranking_card.html' with title='防御率' entries=board.era_leaders %}
+      {% include 'myapp/_ranking_card.html' with title='防御率（規定到達）' entries=board.era_leaders qualified=True %}
       {% include 'myapp/_ranking_card.html' with title='奪三振' entries=board.strikeout_leaders %}
     </div>
   </div>

@@ -144,6 +144,7 @@ def player_list(request, team_id):
     return render(request, 'myapp/player_list.html', {
         'team_id': team_id,
         'team_name': team_name,
+        'totals': service.get_team_totals(team_id),
         'listing': listing,
         'players': listing.rows,
         'pos_mode': pos_mode,

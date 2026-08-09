@@ -40,6 +40,7 @@ from .dto import (
     Standings,
     StandingRow,
     TeamSummary,
+    TeamTotals,
 )
 
 
@@ -135,19 +136,33 @@ class TeamApplicationService:
         rate2 = lambda v: f"{v:.2f}"
         count = lambda v: str(int(v))
 
+        # 規定打席・規定投球回は所属チームの試合数で決まる
+        games_played = self._team_game_counts()
+        team_games = {
+            player.id: games_played.get(team_id, 0)
+            for player, team_id in players
+        }
+
         return Dashboard(
             league_count=len({team.league_id for team in teams}),
             team_count=len(teams),
             batter_count=sum(1 for p in all_players if not p.is_pitcher),
             pitcher_count=sum(1 for p in all_players if p.is_pitcher),
             ops_leaders=to_entries(
-                domain_services.leaders_by_ops(all_players, limit=leaders), rate3
+                domain_services.leaders_by_ops(
+                    all_players, limit=leaders, team_games=team_games
+                ),
+                rate3,
             ),
+            # 本塁打は本数そのものが記録なので規定を設けない
             home_run_leaders=to_entries(
                 domain_services.leaders_by_home_runs(all_players, limit=leaders), count
             ),
             era_leaders=to_entries(
-                domain_services.leaders_by_era(all_players, limit=leaders), rate2
+                domain_services.leaders_by_era(
+                    all_players, limit=leaders, team_games=team_games
+                ),
+                rate2,
             ),
             strikeout_leaders=to_entries(
                 domain_services.leaders_by_strikeouts(all_players, limit=leaders), count
@@ -627,6 +642,38 @@ class TeamApplicationService:
         self._teams.save(destination)
 
     # --- 参照用の索引 ---
+
+    def _team_game_counts(self, year: int | None = None) -> dict[int, int]:
+        """チームごとの試合数。規定打席・規定投球回の基準になる。"""
+        counts: dict[int, int] = {}
+        for game in self._games.find_all(year):
+            for team_id in (game.home_team_id, game.away_team_id):
+                counts[team_id] = counts.get(team_id, 0) + 1
+        return counts
+
+    def get_team_totals(self, team_id: int) -> TeamTotals:
+        """チームの打撃・投球の合計と、そこから求めた指標。"""
+        team = self._teams.find_by_id(team_id)
+        active = team.active_players
+        batting = domain_services.team_batting(active)
+        pitching = domain_services.team_pitching(active)
+        games = self._team_game_counts().get(team_id, 0)
+
+        return TeamTotals(
+            games=games,
+            batting_average=batting.batting_average,
+            on_base_percentage=batting.on_base_percentage,
+            slugging_percentage=batting.slugging_percentage,
+            ops=batting.ops,
+            home_runs=batting.home_runs,
+            runs_batted_in=batting.runs_batted_in,
+            earned_run_average=pitching.earned_run_average,
+            whip=pitching.whip,
+            strikeouts=pitching.strikeouts,
+            innings_pitched=str(pitching.innings),
+            required_plate_appearances=domain_services.required_plate_appearances(games),
+            required_innings=f'{domain_services.required_outs(games) / 3:.1f}',
+        )
 
     def _team_names(self) -> dict[int, str]:
         return {t.id: t.name for t in self._teams.find_all()}
