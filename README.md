@@ -371,7 +371,7 @@ presentation  →  application  →  domain  ←  infrastructure
 | --- | --- |
 | `value_objects.py` | `Position` `JerseyNumber` `InningsPitched` `BattingLine` `PitchingLine` `Season` `TeamRecord` |
 | `entities.py` | `Team`・`Game`（いずれも集約ルート）・`Player`・`League` |
-| `services.py` | ランキング・順位表・対戦成績・月別成績（誰を対象とし、何で順位づけるか） |
+| `services/` | ドメインサービス。関心事ごとに `rankings`（規定とタイトル）・`sorting`（並べ替え）・`records`（試合からの集計）・`decisions`（勝敗・S・Hの導出）に分かれる |
 | `repositories.py` | 永続化のインターフェース（実装は infrastructure） |
 | `exceptions.py` | `DomainError` とその派生 |
 
@@ -634,7 +634,7 @@ POST だけ権限を求めます（画面ごと `login_required` にすると閲
 
 - どの条件も「継投した時点のスコア」を見るため、**回ごとの得点（イニングスコア）**が
   必要です。最終得点だけでは判定できません
-- 判定は [domain/services.py](myapp/domain/services.py) の `pitching_decisions()` に
+- 判定は [domain/services/decisions.py](myapp/domain/services/decisions.py) の `pitching_decisions()` に
   あり、DB を使わずに単体テストできます。手動入力と仮想データの投入で
   **同じ関数**を使うので、2つの実装がずれることがありません
 - イニングスコアが未記録の試合では判定できないため、何も付けません
