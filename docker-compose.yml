@@ -20,3 +20,14 @@ services:
     # コンテナ内で pdb などの対話操作を使えるようにする
     stdin_open: true
     tty: true
+
+  # React（frontend/）のビルド専用コンテナ。web イメージには Node を入れない。
+  # dev server は使わず、watch ビルドで myapp/static/myapp/dist/ に常時出力し、
+  # Django が静的ファイルとして配信する（docs/design/frontend-react-islands.md）
+  frontend:
+    image: node:22-bookworm-slim
+    container_name: baseball-frontend
+    working_dir: /app/frontend
+    volumes:
+      - .:/app
+    command: sh -c "npm install && npm run watch"

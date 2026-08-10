@@ -31,3 +31,7 @@ Thumbs.db
 # Lint / 型チェックのキャッシュ
 .ruff_cache/
 .mypy_cache/
+
+# フロントエンド（依存とビルド成果物はコミットしない。package-lock.json はコミットする）
+frontend/node_modules/
+myapp/static/myapp/dist/

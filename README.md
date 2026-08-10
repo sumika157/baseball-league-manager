@@ -16,6 +16,8 @@
 | Docker Compose | v2.24.3 |
 | Python | 3.10（コンテナ内） |
 | Django | 5.2.10 |
+| Node.js | 22（`frontend` コンテナ内。ホストには不要） |
+| React / Vite | 19 / 6（`frontend/package.json` で完全固定） |
 | データベース | SQLite (`db.sqlite3`) |
 | WSL 上のパス | `/home/sumika/work/develop/my_django_project` |
 | Windows 上のパス | `U:\home\sumika\work\develop\my_django_project` |
@@ -116,6 +118,18 @@ baseball-web  | Starting development server at http://0.0.0.0:8000/
 baseball-web  | /app/myapp/views.py changed, reloading.
 ```
 
+### フロントエンドのビルド（React）
+
+リッチな編集画面は React（`frontend/`）で実装し、ビルド成果物を Django の静的ファイルとして
+配信します（アイランド構成。詳細は「アーキテクチャ」の節）。
+
+- `docker compose up` で `frontend` コンテナも一緒に起動し、**watch ビルドが回り続けます**。
+  `frontend/src/` を編集して保存すると `myapp/static/myapp/dist/` に自動で再出力されるので、
+  ブラウザをリロードすれば反映されます（HMR はありません）。
+- ホストに Node.js は不要です。npm の操作はすべて `frontend` コンテナで行います。
+- `myapp/static/myapp/dist/` と `frontend/node_modules/` は Git 管理外です。
+  **クローン直後や E2E テストの前は `make frontend-build` で成果物を作ってください。**
+
 ---
 
 ## ブラウザからのアクセス
@@ -163,6 +177,8 @@ make            # ターゲット一覧を表示（make help と同じ）
 make test       # フルスイート（t=myapp.tests.xxx で個別指定）
 make test-domain # domain 層のみ（DB 不要・最速）
 make lint       # ruff check + mypy（コミット前に必須）
+make frontend-build # React 画面のビルド（E2E テストの前提）
+make frontend-check # TypeScript の型チェック
 make up / make down / make logs
 ```
 
@@ -332,10 +348,15 @@ my_django_project/
 │   ├── tests/              # 層ごとのテスト
 │   ├── static/myapp/css/
 │   │   └── theme.css       # Bootstrap に重ねるテーマ層
+│   ├── static/myapp/dist/  # React のビルド成果物（Git 管理外）
 │   └── templates/          # HTML テンプレート
 │       ├── myapp/              画面本体・404・500
 │       ├── registration/       ログイン・新規登録・パスワード関連
 │       └── admin/              管理画面用の上書き
+├── frontend/               # React（リッチな編集画面）のソース
+│   ├── package.json        # npm 依存（バージョン完全固定）
+│   ├── vite.config.ts      # ビルド設定（出力先は myapp/static/myapp/dist/）
+│   └── src/                # 画面ごとのエントリ（game_edit など）
 ├── Dockerfile              # イメージ定義
 ├── docker-compose.yml      # サービス定義（ポート公開・マウント・自動 migrate）
 ├── .dockerignore           # イメージに含めないファイル

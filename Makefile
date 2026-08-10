@@ -27,6 +27,18 @@ test-integration: ## integration 層のみ（リポジトリ往復・画面動�
 test-e2e: ## E2E のみ（Playwright 実ブラウザ・遅い）
 	$(EXEC) python manage.py test myapp.tests.e2e
 
+# ---- フロントエンド ----
+# React 画面のビルドは frontend コンテナで行う（ホストに Node 環境は作らない）。
+# `make up` で watch ビルドも一緒に起動する。単発で成果物を作るときは frontend-build。
+
+.PHONY: frontend-build
+frontend-build: ## React 画面をビルドする（E2E テスト実行の前提）
+	docker compose run --rm frontend sh -c "npm install && npm run build"
+
+.PHONY: frontend-check
+frontend-check: ## TypeScript の型チェック（tsc --noEmit）
+	docker compose run --rm frontend sh -c "npm install && npm run typecheck"
+
 # ---- 品質チェック ----
 
 .PHONY: lint
