@@ -22,6 +22,7 @@ from django.utils.html import format_html, format_html_join
 
 from .domain.entities import Captaincy as DomainCaptaincy
 from .domain.entities import Stint as DomainStint
+from .domain.entities import winning_team_id
 from .domain.exceptions import DomainError
 from .domain.value_objects import JerseyNumber, StadiumProfile, ensure_quota_not_exceeded
 from .domain.value_objects import Profile as DomainProfile
@@ -911,7 +912,8 @@ class GameAdmin(admin.ModelAdmin):
 
     @admin.display(description="結果")
     def result(self, obj):
-        if obj.home_score == obj.away_score:
+        # 勝敗の判定はドメインの関数が唯一の出典。ここで比較を書き直さない
+        winner = winning_team_id(obj.home_team_id, obj.away_team_id, obj.home_score, obj.away_score)
+        if winner is None:
             return "引分"
-        winner = obj.home_team if obj.home_score > obj.away_score else obj.away_team
-        return f"{winner.name} の勝ち"
+        return f"{(obj.home_team if winner == obj.home_team_id else obj.away_team).name} の勝ち"

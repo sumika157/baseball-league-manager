@@ -13,7 +13,7 @@ from django.urls import reverse
 from myapp.application.services import TeamApplicationService
 from myapp.domain.entities import Game
 from myapp.domain.value_objects import BattingLine, PitchingLine, Season
-from myapp.infrastructure.queries import DjangoTeamListQuery
+from myapp.infrastructure.queries import DjangoGameListQuery, DjangoTeamListQuery
 from myapp.infrastructure.repositories import (
     DjangoGameRepository,
     DjangoLeagueRepository,
@@ -27,6 +27,7 @@ def build_service() -> TeamApplicationService:
         team_list_query=DjangoTeamListQuery(),
         games=DjangoGameRepository(),
         leagues=DjangoLeagueRepository(),
+        game_list_query=DjangoGameListQuery(),
     )
 
 

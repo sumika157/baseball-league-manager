@@ -95,7 +95,8 @@ Bootstrap のタブ機能を使うので、独自の JavaScript は書かない�
                           data-bs-target="#league-{{ league.league_id }}-teams">チーム</button>
                 </div>
                 <span>
-                  <a href="{% url 'game_list' %}" class="card-header-link">試合</a>
+                  {# 見ているリーグのタブから移るので、日程もそのリーグに絞って開く #}
+                  <a href="{% url 'game_list' %}?league={{ league.league_id }}" class="card-header-link">試合</a>
                   <span class="stat-muted mx-1">/</span>
                   <a href="{% url 'team_list' %}" class="card-header-link">すべて</a>
                 </span>

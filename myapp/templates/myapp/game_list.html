@@ -13,8 +13,15 @@
 <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
   <div class="page-head mb-0">
     <h1 class="page-title">試合</h1>
+    {% comment %}
+    件数はいま表示している範囲のもの。既定で月に絞られるため、何の件数かを
+    添えないと「シーズンの試合数」と読み違える。
+    {% endcomment %}
     <p class="page-subtitle">
-      ここに登録された結果から、チームの勝敗と選手の通算成績が集計されます。 · {{ games|length }}件
+      {% if selected_year %}{{ selected_year }}年{% endif %}{% if selected_month %}{{ selected_month }}月{% endif %}{% if selected_league_name %} · {{ selected_league_name }}{% endif %}{% if selected_team_name %} · {{ selected_team_name }}{% endif %} · {{ games|length }}件
+    </p>
+    <p class="page-subtitle">
+      ここに登録された結果から、チームの勝敗と選手の通算成績が集計されます。
     </p>
   </div>
   {% if can_create_game %}
@@ -26,16 +33,17 @@
   <form method="get" class="card mb-3">
     <div class="card-body">
       <div class="row g-2 align-items-end">
-        <div class="col-md-3">
+        <div class="col-md-2">
           <label class="form-label">シーズン</label>
           <select name="year" class="form-select">
-            <option value="">すべて</option>
             {% for year in years %}
               <option value="{{ year }}" {% if year == selected_year %}selected{% endif %}>{{ year }}年</option>
             {% endfor %}
           </select>
         </div>
-        <div class="col-md-5">
+        {# リーグはタブで切り替える。ここに残すと同じ選択が2か所に並ぶ #}
+        <input type="hidden" name="league" value="{{ selected_league|default_if_none:'' }}" />
+        <div class="col-md-6">
           <label class="form-label">チーム</label>
           <select name="team" class="form-select">
             <option value="">すべて</option>
@@ -53,6 +61,31 @@
       </div>
     </div>
   </form>
+{% endif %}
+
+{% comment %}
+リーグと月の切り替え。1シーズンぶんを一度に並べると重いため、月ごとに見る。
+リーグはダッシュボードと同じくタブで切り替える（絞り込みの選択肢にはしない）。
+どちらもシーズンとチームの絞り込みは保ったまま、その軸だけを差し替える。
+{% endcomment %}
+{% if leagues %}
+  <div class="segmented segmented-scroll">
+    <a class="segmented-item {% if not selected_league %}is-active{% endif %}"
+       href="?year={{ selected_year }}{% if selected_team %}&amp;team={{ selected_team }}{% endif %}{% if selected_month %}&amp;month={{ selected_month }}{% endif %}">すべて</a>
+    {% for league in leagues %}
+      <a class="segmented-item {% if league.id == selected_league %}is-active{% endif %}"
+         href="?year={{ selected_year }}&amp;league={{ league.id }}{% if selected_team %}&amp;team={{ selected_team }}{% endif %}{% if selected_month %}&amp;month={{ selected_month }}{% endif %}">{{ league.name }}</a>
+    {% endfor %}
+  </div>
+{% endif %}
+
+{% if months %}
+  <div class="segmented segmented-scroll">
+    {% for month in months %}
+      <a class="segmented-item {% if month == selected_month %}is-active{% endif %}"
+         href="?year={{ selected_year }}{% if selected_league %}&amp;league={{ selected_league }}{% endif %}{% if selected_team %}&amp;team={{ selected_team }}{% endif %}&amp;month={{ month }}">{{ month }}月</a>
+    {% endfor %}
+  </div>
 {% endif %}
 
 <div class="table-responsive">

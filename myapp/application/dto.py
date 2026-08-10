@@ -36,8 +36,19 @@ class GameRow:
     away_team_name: str
     home_score: int
     away_score: int
-    result: str  # '引分' または '<チーム名> の勝ち'
     winner_team_id: int | None
+
+    @property
+    def result(self) -> str:
+        """'引分' または '<チーム名> の勝ち'。
+
+        持っている値から決まるので、作る側ごとに組み立てない
+        （勝者そのものはドメインの winning_team_id が唯一の出典）。
+        """
+        if self.winner_team_id is None:
+            return "引分"
+        name = self.home_team_name if self.winner_team_id == self.home_team_id else self.away_team_name
+        return f"{name} の勝ち"
 
 
 @dataclass(frozen=True)
@@ -362,6 +373,14 @@ class TeamTotals:
     required_innings: str
     # 守備に左右されない投球内容。チーム防御率との差が守備・運の寄与を示す
     fip: float = 0.0
+
+
+@dataclass(frozen=True)
+class LeagueOption:
+    """絞り込みの選択肢としてのリーグ。表示に要る最小限だけ持つ。"""
+
+    id: int
+    name: str
 
 
 @dataclass(frozen=True)

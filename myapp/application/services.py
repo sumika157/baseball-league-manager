@@ -33,6 +33,7 @@ from .dto import (
     GameTeamBox,
     InningScoreColumn,
     LeagueDetail,
+    LeagueOption,
     LeaguePlayerRow,
     LeagueRankings,
     LeagueStandings,
@@ -121,11 +122,12 @@ _EMPTY_LEAGUE_CONTEXT = _LeagueContext(fip_constant=0.0, average_ops=0.0, averag
 class TeamApplicationService:
     """チームとロスターに関するユースケース。"""
 
-    def __init__(self, teams, team_list_query=None, games=None, leagues=None):
+    def __init__(self, teams, team_list_query=None, games=None, leagues=None, game_list_query=None):
         # 具象クラスではなくリポジトリのインターフェースに依存する
         self._teams = teams
         # 一覧表示は集約を組み立てないリードモデルを使う
         self._team_list_query = team_list_query
+        self._game_list_query = game_list_query
         # 勝敗と通算成績の出典
         self._games = games
         # 順位はリーグの中で決まるため、リーグの一覧が要る
@@ -650,16 +652,41 @@ class TeamApplicationService:
 
     # --- 試合の参照 ---
 
-    def list_games(self, *, year: int | None = None, team_id: int | None = None) -> Listing:
-        """試合の一覧。新しい順。"""
-        games = self._games.find_by_team(team_id, year) if team_id is not None else self._games.find_all(year)
-        names = self._team_names()
-        rows = [self._to_game_row(g, names) for g in games]
-        rows.sort(key=lambda r: (r.played_on, r.id), reverse=True)
+    def list_games(
+        self,
+        *,
+        year: int | None = None,
+        team_id: int | None = None,
+        month: int | None = None,
+        league_id: int | None = None,
+    ) -> Listing:
+        """試合の一覧。新しい順。
+
+        参照だけなので集約は組み立てず、リードモデルから直接 DTO を受け取る。
+        """
+        rows = self._game_list_query.list_rows(year=year, team_id=team_id, month=month, league_id=league_id)
         return Listing(rows=rows, sort="date", descending=True)
 
     def list_game_seasons(self) -> list[int]:
-        return [s.year for s in domain_services.seasons_of(self._games.find_all())]
+        return self._game_list_query.list_seasons()
+
+    def list_game_months(
+        self, *, year: int | None = None, team_id: int | None = None, league_id: int | None = None
+    ) -> list[int]:
+        """その絞り込みで試合がある月。一覧の切り替えに使う。"""
+        return self._game_list_query.list_months(year=year, team_id=team_id, league_id=league_id)
+
+    def latest_game_year(self) -> int | None:
+        """試合一覧を開いたときに最初に見せるシーズン。
+
+        月の既定は「その範囲で試合がある月の最後」で、選んだ月に試合が無い
+        ときの落とし先と同じ規則なので、画面側の1か所にまとめてある。
+        """
+        return self._game_list_query.latest_year()
+
+    def list_leagues(self) -> list[LeagueOption]:
+        """リーグの絞り込みに使う選択肢。表示順は管理画面で決めた順。"""
+        return [LeagueOption(id=league.id, name=league.name) for league in self._leagues.find_all()]
 
     def get_game_detail(self, game_id: int) -> GameDetail:
         """試合詳細。ボックススコアの形（チームごと・打順の順）で返す。"""
@@ -1257,7 +1284,6 @@ class TeamApplicationService:
     @staticmethod
     def _to_game_row(game: Game, names: dict[int, str]) -> GameRow:
         assert game.id is not None, "一覧に載る試合は保存済み"
-        winner = game.winner_team_id
         return GameRow(
             id=game.id,
             year=game.season.year,
@@ -1268,8 +1294,7 @@ class TeamApplicationService:
             away_team_name=names.get(game.away_team_id, ""),
             home_score=game.home_score,
             away_score=game.away_score,
-            result="引分" if winner is None else f"{names.get(winner, '')} の勝ち",
-            winner_team_id=winner,
+            winner_team_id=game.winner_team_id,
         )
 
     # --- DTO への詰め替え ---

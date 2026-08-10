@@ -452,6 +452,17 @@ class GamePitching:
         return self.appearance_order == 1
 
 
+def winning_team_id(home_team_id: int, away_team_id: int, home_score: int, away_score: int) -> int | None:
+    """得点から勝ったチームを決める。同点なら None（引分）。
+
+    「どちらが勝ちか」の唯一の出典。集約（Game.winner_team_id）と、集約を
+    組み立てずに一覧を作る参照クエリの両方がここを通る。
+    """
+    if home_score == away_score:
+        return None
+    return home_team_id if home_score > away_score else away_team_id
+
+
 @dataclass
 class Game:
     """試合。集約ルート。
@@ -495,9 +506,7 @@ class Game:
     @property
     def winner_team_id(self) -> int | None:
         """勝ったチーム。引分なら None。"""
-        if self.is_tie:
-            return None
-        return self.home_team_id if self.home_score > self.away_score else self.away_team_id
+        return winning_team_id(self.home_team_id, self.away_team_id, self.home_score, self.away_score)
 
     def involves(self, team_id: int) -> bool:
         return team_id in (self.home_team_id, self.away_team_id)

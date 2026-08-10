@@ -28,6 +28,7 @@ from ..domain.exceptions import (
 )
 from ..domain.value_objects import FieldingPosition, Position
 from ..infrastructure.queries import (
+    DjangoGameListQuery,
     DjangoPlayerSearchQuery,
     DjangoTeamListQuery,
     DjangoTeamPermissionQuery,
@@ -82,6 +83,7 @@ def _service() -> TeamApplicationService:
         team_list_query=DjangoTeamListQuery(),
         games=DjangoGameRepository(),
         leagues=DjangoLeagueRepository(),
+        game_list_query=DjangoGameListQuery(),
     )
 
 
@@ -269,16 +271,39 @@ def league_stats(request, league_id):
 
 
 def game_list(request):
-    """試合一覧。年とチームで絞り込める。"""
+    """試合一覧。シーズン・月・リーグ・チームで絞り込める。
+
+    全件を一度に描くと件数ぶん重くなるため、指定が無ければ最新シーズンの
+    最後に試合があった月を見せる。
+    """
     service = _service()
 
     def _int(name):
         value = request.GET.get(name)
         return int(value) if value and value.isdigit() else None
 
-    year, team_id = _int("year"), _int("team")
-    listing = service.list_games(year=year, team_id=team_id)
-    teams = service.list_teams().rows
+    year, team_id, month, league_id = _int("year"), _int("team"), _int("month"), _int("league")
+
+    # チームの選択肢は、選んでいるリーグに所属するチームだけにする。
+    # 他リーグのチームを選べても、結果が必ず空になるだけのため
+    all_teams = service.list_teams().rows
+    teams = [t for t in all_teams if league_id is None or t.league_id == league_id]
+    if team_id is not None and team_id not in {t.id for t in teams}:
+        # リーグを切り替えると、選んでいたチームがそのリーグにいないことがある
+        team_id = None
+
+    if year is None:
+        year = service.latest_game_year()
+
+    months = service.list_game_months(year=year, team_id=team_id, league_id=league_id)
+    # 月を選んでいないとき（＝一覧を開いた直後）と、年・リーグ・チームを変えて
+    # 選んでいた月に試合が無くなったときは、その範囲の最新の月に落とす。
+    # 全件を一度に描くと件数ぶん重くなるため、月は必ず1つに決める
+    if months and month not in months:
+        month = months[-1]
+
+    listing = service.list_games(year=year, team_id=team_id, month=month, league_id=league_id)
+    leagues = service.list_leagues()
 
     return render(
         request,
@@ -286,11 +311,19 @@ def game_list(request):
         {
             "games": listing.rows,
             "years": service.list_game_seasons(),
+            "months": months,
+            "leagues": leagues,
             "teams": teams,
             "selected_year": year,
+            "selected_month": month,
             "selected_team": team_id,
-            # 担当チームが1つも無ければ、押しても弾かれるだけの登録導線は見せない
-            "can_create_game": DjangoTeamPermissionQuery().can_manage_any(request.user, [t.id for t in teams]),
+            "selected_league": league_id,
+            # 件数が何の件数かを添えるため、選んでいるものの名前も渡す
+            "selected_league_name": next((lg.name for lg in leagues if lg.id == league_id), ""),
+            "selected_team_name": next((t.name for t in teams if t.id == team_id), ""),
+            # 担当チームが1つも無ければ、押しても弾かれるだけの登録導線は見せない。
+            # 判定はリーグの絞り込みに関係なく、全チームで行う
+            "can_create_game": DjangoTeamPermissionQuery().can_manage_any(request.user, [t.id for t in all_teams]),
         },
     )
 

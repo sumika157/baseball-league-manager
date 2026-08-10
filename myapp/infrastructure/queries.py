@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from django.db.models import Count, Q
 
-from ..application.dto import PlayerSearchRow, TeamSummary
+from ..application.dto import GameRow, PlayerSearchRow, TeamSummary
+from ..domain.entities import winning_team_id
 from . import orm_models
 
 
@@ -76,6 +77,68 @@ class DjangoTeamPermissionQuery:
         if user.is_staff or user.is_superuser:
             return True
         return orm_models.Team.objects.filter(id__in=team_ids, managers=user).exists()
+
+
+class DjangoGameListQuery:
+    """試合一覧に必要な値だけを取得する。
+
+    一覧に要るのは日付・チーム名・スコアだけなので、集約（Game）を組み立てない。
+    集約経由だと1試合ごとに打撃・投球・イニングスコアの明細まで読むため、
+    件数が増えると一覧が開かなくなる。
+    """
+
+    def _rows(self, *, year=None, team_id=None, month=None, league_id=None):
+        """絞り込みは SQL 側で行う。取得後に Python で捨てると件数ぶん無駄になる。"""
+        rows = orm_models.Game.objects.select_related("home_team", "away_team")
+        if year is not None:
+            rows = rows.filter(year=year)
+        if league_id is not None:
+            # どちらかのチームが所属していれば、そのリーグの日程に含める
+            # （リーグをまたぐ対戦も、両リーグの日程に現れる）
+            rows = rows.filter(Q(home_team__league_id=league_id) | Q(away_team__league_id=league_id))
+        if team_id is not None:
+            rows = rows.filter(Q(home_team_id=team_id) | Q(away_team_id=team_id))
+        if month is not None:
+            rows = rows.filter(played_on__month=month)
+        return rows
+
+    def list_rows(self, *, year=None, team_id=None, month=None, league_id=None) -> list[GameRow]:
+        rows = self._rows(year=year, team_id=team_id, month=month, league_id=league_id).order_by("-played_on", "-id")
+        return [
+            GameRow(
+                id=row.id,
+                year=row.year,
+                played_on=row.played_on,
+                home_team_id=row.home_team_id,
+                home_team_name=row.home_team.name,
+                away_team_id=row.away_team_id,
+                away_team_name=row.away_team.name,
+                home_score=row.home_score,
+                away_score=row.away_score,
+                # 勝敗の判定はドメインの関数が唯一の出典。結果の文言は GameRow が持つ
+                winner_team_id=winning_team_id(row.home_team_id, row.away_team_id, row.home_score, row.away_score),
+            )
+            for row in rows
+        ]
+
+    def list_seasons(self) -> list[int]:
+        """試合のある年を新しい順に。"""
+        return sorted(orm_models.Game.objects.values_list("year", flat=True).distinct(), reverse=True)
+
+    def list_months(self, *, year=None, team_id=None, league_id=None) -> list[int]:
+        """その絞り込みで試合がある月を昇順に。
+
+        月の切り出しは SQL 側で行う。1シーズンで千件を超えるため、
+        全部の試合日を持ってきて Python で数えると月を割る意味が薄れる。
+        """
+        rows = self._rows(year=year, team_id=team_id, league_id=league_id)
+        # dates() は月ごとに1つの日付を SQL 側で重複なく返す（返るのは最大12件）
+        return sorted({date.month for date in rows.dates("played_on", "month")})
+
+    def latest_year(self) -> int | None:
+        """最新シーズン。一覧の既定に使う。"""
+        seasons = self.list_seasons()
+        return seasons[0] if seasons else None
 
 
 class DjangoTeamListQuery:
