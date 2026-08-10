@@ -132,7 +132,7 @@ def standings(request, year=None):
     try:
         board = _service().get_standings(year, sort=sort, descending=descending)
     except DomainError as error:
-        raise Http404(str(error))
+        raise Http404(str(error)) from error
 
     return render(
         request,
@@ -152,7 +152,7 @@ def player_list(request, team_id):
     try:
         team_name = service.get_team_name(team_id)
     except TeamNotFound:
-        raise Http404("チームが見つかりません。")
+        raise Http404("チームが見つかりません。") from None
 
     form = PlayerRegistrationForm()
 
@@ -231,7 +231,7 @@ def league_detail(request, league_id, year=None):
     try:
         detail = _service().get_league_detail(league_id, year)
     except LeagueNotFound:
-        raise Http404("リーグが見つかりません。")
+        raise Http404("リーグが見つかりません。") from None
 
     return render(request, "myapp/league_detail.html", {"league": detail})
 
@@ -241,9 +241,9 @@ def league_titles(request, league_id, year=None):
     try:
         titles = _service().get_league_titles(league_id, year)
     except LeagueNotFound:
-        raise Http404("リーグが見つかりません。")
+        raise Http404("リーグが見つかりません。") from None
     except DomainError as error:
-        raise Http404(str(error))
+        raise Http404(str(error)) from error
 
     return render(request, "myapp/league_titles.html", {"titles": titles})
 
@@ -316,7 +316,7 @@ def game_edit(request, game_id):
     try:
         data = service.get_game_edit_data(game_id)
     except GameNotFound:
-        raise Http404("試合が見つかりません。")
+        raise Http404("試合が見つかりません。") from None
 
     game, rosters = data["game"], data["rosters"]
     if not DjangoTeamPermissionQuery().can_manage_any(request.user, (game.home_team_id, game.away_team_id)):
@@ -387,8 +387,8 @@ def game_edit(request, game_id):
             "form": form,
             "rosters": rosters,
             # フォームと選手情報を対にして渡す。テンプレート側で添字を扱わずに済ませる
-            "batting_rows": list(zip(batting_formset.forms, batters)),
-            "pitching_rows": list(zip(pitching_formset.forms, pitchers)),
+            "batting_rows": list(zip(batting_formset.forms, batters, strict=False)),
+            "pitching_rows": list(zip(pitching_formset.forms, pitchers, strict=False)),
             "batting_formset": batting_formset,
             "pitching_formset": pitching_formset,
             "inning_formset": inning_formset,
@@ -513,7 +513,7 @@ def game_detail(request, game_id):
     try:
         detail = _service().get_game_detail(game_id)
     except GameNotFound:
-        raise Http404("試合が見つかりません。")
+        raise Http404("試合が見つかりません。") from None
 
     can_edit = DjangoTeamPermissionQuery().can_manage_any(
         request.user, (detail.game.home_team_id, detail.game.away_team_id)
@@ -526,7 +526,7 @@ def player_detail(request, team_id, player_id):
     try:
         profile = _service().get_player_profile(team_id, player_id)
     except (TeamNotFound, PlayerNotFound):
-        raise Http404("選手が見つかりません。")
+        raise Http404("選手が見つかりません。") from None
 
     return render(
         request,
@@ -547,7 +547,7 @@ def player_edit(request, team_id, player_id):
     try:
         detail = service.get_player_detail(team_id, player_id)
     except (TeamNotFound, PlayerNotFound):
-        raise Http404("選手が見つかりません。")
+        raise Http404("選手が見つかりません。") from None
 
     if not DjangoTeamPermissionQuery().can_manage(request.user, team_id):
         raise PermissionDenied("このチームを編集する権限がありません。")

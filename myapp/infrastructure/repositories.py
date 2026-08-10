@@ -117,7 +117,9 @@ class DjangoTeamRepository:
 
         成績は試合側に持つため、ここでは書かない。
         """
-        team_row, _ = orm_models.Team.objects.update_or_create(
+        # id=None（未保存）なら update_or_create が新規作成に落ちる。この使い方は
+        # 型スタブで表現できないため、このファイルの id 検索は ignore で明示する
+        team_row, _ = orm_models.Team.objects.update_or_create(  # type: ignore[misc]
             id=team.id,
             defaults={
                 "league_id": team.league_id,
@@ -129,7 +131,7 @@ class DjangoTeamRepository:
         team.id = team_row.id
 
         for player in team.players:
-            row, _ = orm_models.Player.objects.update_or_create(
+            row, _ = orm_models.Player.objects.update_or_create(  # type: ignore[misc]
                 id=player.id,
                 defaults={
                     "name": player.name,
@@ -141,7 +143,7 @@ class DjangoTeamRepository:
 
             # 在籍が所属と背番号の出典。選手側には持たせない
             for stint in player.career:
-                stint_row, _ = orm_models.PlayerStint.objects.update_or_create(
+                stint_row, _ = orm_models.PlayerStint.objects.update_or_create(  # type: ignore[misc]
                     id=stint.id,
                     defaults={
                         "player": row,
@@ -154,7 +156,7 @@ class DjangoTeamRepository:
                 stint.id = stint_row.id
 
             for captaincy in player.captaincies:
-                captaincy_row, _ = orm_models.Captaincy.objects.update_or_create(
+                captaincy_row, _ = orm_models.Captaincy.objects.update_or_create(  # type: ignore[misc]
                     id=captaincy.id,
                     defaults={
                         "player": row,
@@ -309,7 +311,8 @@ def _batting_totals(player_ids: list[int]) -> dict[int, BattingLine]:
         .values("player_id")
         .annotate(**{f: Sum(f) for f in _BATTING_FIELDS})
     )
-    return {r["player_id"]: BattingLine(**{f: r[f] or 0 for f in _BATTING_FIELDS}) for r in rows}
+    # values() の行から可変のキーで取り出すため、TypedDict の字面キー検査は効かない
+    return {r["player_id"]: BattingLine(**{f: r[f] or 0 for f in _BATTING_FIELDS}) for r in rows}  # type: ignore[literal-required]
 
 
 def _pitching_totals(player_ids: list[int]) -> dict[int, PitchingLine]:
@@ -344,7 +347,7 @@ def _pitching_totals(player_ids: list[int]) -> dict[int, PitchingLine]:
     return {
         r["player_id"]: PitchingLine(
             innings=innings.get(r["player_id"], InningsPitched.zero()),
-            **{f: r[f] or 0 for f in _PITCHING_COUNTS},
+            **{f: r[f] or 0 for f in _PITCHING_COUNTS},  # type: ignore[literal-required]
             **derived.get(r["player_id"], {}),
         )
         for r in counts
@@ -381,7 +384,7 @@ class DjangoGameRepository:
 
     @transaction.atomic
     def save(self, game: Game) -> Game:
-        row, _ = orm_models.Game.objects.update_or_create(
+        row, _ = orm_models.Game.objects.update_or_create(  # type: ignore[misc]
             id=game.id,
             defaults={
                 "year": game.season.year,
@@ -408,15 +411,15 @@ class DjangoGameRepository:
             )
             entry.id = line_row.id
 
-        for entry in game.pitching:
-            defaults = {f: getattr(entry.line, f) for f in _PITCHING_COUNTS}
-            defaults["innings_pitched"] = float(entry.line.innings.to_notation())
-            defaults["appearance_order"] = entry.appearance_order
-            defaults["entered_inning"] = entry.entered_inning
-            line_row, _ = orm_models.GamePitchingLine.objects.update_or_create(
-                game=row, player_id=entry.player_id, defaults=defaults
+        for pitching_entry in game.pitching:
+            defaults = {f: getattr(pitching_entry.line, f) for f in _PITCHING_COUNTS}
+            defaults["innings_pitched"] = float(pitching_entry.line.innings.to_notation())
+            defaults["appearance_order"] = pitching_entry.appearance_order
+            defaults["entered_inning"] = pitching_entry.entered_inning
+            pitching_row, _ = orm_models.GamePitchingLine.objects.update_or_create(
+                game=row, player_id=pitching_entry.player_id, defaults=defaults
             )
-            entry.id = line_row.id
+            pitching_entry.id = pitching_row.id
 
         self._save_line_score(row, game)
 

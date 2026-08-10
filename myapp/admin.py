@@ -1,5 +1,6 @@
 import types
 from dataclasses import replace
+from typing import ClassVar
 
 from django import forms
 from django.contrib import admin
@@ -81,7 +82,8 @@ def _ordered_app_list(self, request, app_label=None):
 
 
 _original_get_app_list = admin.site.get_app_list
-admin.site.get_app_list = types.MethodType(_ordered_app_list, admin.site)
+# AdminSite を継承した独自サイトに置き換えるほどではないため、メソッドを差し替える
+admin.site.get_app_list = types.MethodType(_ordered_app_list, admin.site)  # type: ignore[method-assign]
 
 
 class GroupedChangeList(ChangeList):
@@ -146,8 +148,8 @@ class ManualOrderAdminMixin:
     2つの並べ方は両立しないため、この一覧では手動の順だけを扱う。
     """
 
-    # 列見出しの並べ替えリンクを出さない
-    sortable_by = ()
+    # 列見出しの並べ替えリンクを出さない。型は BaseModelAdmin の宣言に合わせる
+    sortable_by: ClassVar[list[str] | tuple[str, ...] | None] = ()
 
     def changelist_view(self, request, extra_context=None):
         """URL に並べ替えが残っていたら落として開き直す。

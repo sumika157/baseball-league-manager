@@ -142,7 +142,7 @@ class TeamApplicationService:
         "players": (lambda t: t.player_count, True),
     }
 
-    def list_teams(self, *, sort: str = None, descending: bool = None) -> Listing:
+    def list_teams(self, *, sort: str | None = None, descending: bool | None = None) -> Listing:
         """チームの平坦な一覧。絞り込みの選択肢などに使う。"""
         rows = self._team_list_query.list_summaries()
 
@@ -154,7 +154,7 @@ class TeamApplicationService:
         desc = default_desc if descending is None else bool(descending)
         return Listing(rows=sorted(rows, key=getter, reverse=desc), sort=sort, descending=desc)
 
-    def list_teams_by_league(self, *, sort: str = None, descending: bool = None) -> Listing:
+    def list_teams_by_league(self, *, sort: str | None = None, descending: bool | None = None) -> Listing:
         """リーグごとに分けたチーム一覧。
 
         チームはリーグに所属して戦うので、一覧もその単位で見せる。
@@ -199,9 +199,14 @@ class TeamApplicationService:
                 for item in ranked
             ]
 
-        rate3 = lambda v: f"{v:.3f}"
-        rate2 = lambda v: f"{v:.2f}"
-        count = lambda v: str(int(v))
+        def rate3(v):
+            return f"{v:.3f}"
+
+        def rate2(v):
+            return f"{v:.2f}"
+
+        def count(v):
+            return str(int(v))
 
         # 規定打席・規定投球回は所属チームの試合数で決まる
         games_played = self._team_game_counts()
@@ -250,7 +255,7 @@ class TeamApplicationService:
     def get_team_name(self, team_id: int) -> str:
         return self._teams.find_by_id(team_id).name
 
-    def list_batters(self, team_id: int, *, sort: str = None, descending: bool = None) -> Listing:
+    def list_batters(self, team_id: int, *, sort: str | None = None, descending: bool | None = None) -> Listing:
         team = self._teams.find_by_id(team_id)
         batters = [p for p in team.active_players if not p.is_pitcher]
         players, key, desc = domain_services.sort_batters(batters, sort, descending)
@@ -262,7 +267,7 @@ class TeamApplicationService:
             descending=desc,
         )
 
-    def list_pitchers(self, team_id: int, *, sort: str = None, descending: bool = None) -> Listing:
+    def list_pitchers(self, team_id: int, *, sort: str | None = None, descending: bool | None = None) -> Listing:
         team = self._teams.find_by_id(team_id)
         pitchers = [p for p in team.active_players if p.is_pitcher]
         players, key, desc = domain_services.sort_pitchers(pitchers, sort, descending)
@@ -290,7 +295,9 @@ class TeamApplicationService:
         "pct": (lambda r: r.rank, False),  # 勝率順＝順位順
     }
 
-    def get_standings(self, year: int | None = None, *, sort: str = None, descending: bool = None) -> Standings:
+    def get_standings(
+        self, year: int | None = None, *, sort: str | None = None, descending: bool | None = None
+    ) -> Standings:
         """指定シーズンの順位表を返す。年を省略した場合は最新シーズン。
 
         順位づけの規則そのものはドメインサービスにあり、ここでは
@@ -431,7 +438,7 @@ class TeamApplicationService:
 
         # そのシーズンの成績だけを持つ選手に組み替える。通算値のままでは
         # 別のシーズンの記録まで混ざってタイトルの対象にならない
-        games_played = {}
+        games_played: dict[int, int] = {}
         for game in season_games:
             for team_id in (game.home_team_id, game.away_team_id):
                 games_played[team_id] = games_played.get(team_id, 0) + 1
@@ -824,10 +831,10 @@ class TeamApplicationService:
         away_team_id,
         home_score,
         away_score,
-        batting: dict = None,
-        pitching: dict = None,
-        lineup: dict = None,
-        staff: dict = None,
+        batting: dict | None = None,
+        pitching: dict | None = None,
+        lineup: dict | None = None,
+        staff: dict | None = None,
         line_score=None,
     ) -> Game:
         """試合の基本情報と、出場選手の成績をまとめて更新する。
@@ -854,9 +861,11 @@ class TeamApplicationService:
         )
         game.ensure_line_score_matches()
 
+        batting = batting or {}
+        pitching = pitching or {}
         lineup = lineup or {}
         staff = staff or {}
-        for player_id, line in (batting or {}).items():
+        for player_id, line in batting.items():
             order, sequence, position = lineup.get(player_id, (None, 0, None))
             game.record_batting(
                 player_id,
@@ -867,9 +876,10 @@ class TeamApplicationService:
             )
         # 登板順は登板した回の順に振る。**チームごとに1から振る**（両チームの投手を
         # まとめて数えると、相手の先発が2番手になってしまう）
-        entered = {pid: staff.get(pid, 1) for pid in (pitching or {})}
+        entered = {pid: staff.get(pid, 1) for pid in pitching}
         players = self._player_index()
-        by_team: dict[int, list[int]] = {}
+        # 選手索引に無い選手は team_id が None のまとまりに入る（現状の挙動を維持）
+        by_team: dict[int | None, list[int]] = {}
         for player_id in sorted(entered, key=lambda pid: (entered[pid], pid)):
             team_id = players.get(player_id, {}).get("team_id")
             by_team.setdefault(team_id, []).append(player_id)
@@ -883,7 +893,7 @@ class TeamApplicationService:
                     entered_inning=entered[player_id],
                 )
 
-        self._ensure_foreign_player_game_quota(game, batting or {}, pitching or {})
+        self._ensure_foreign_player_game_quota(game, batting, pitching)
         self._apply_pitching_decisions(game)
         return self._games.save(game)
 
@@ -991,7 +1001,7 @@ class TeamApplicationService:
         self._teams.save(team)
         return player
 
-    def retire_player(self, team_id: int, player_id: int, year: int = None) -> Player:
+    def retire_player(self, team_id: int, player_id: int, year: int | None = None) -> Player:
         """選手を退団させる。成績は残り、背番号は再利用できるようになる。"""
         team = self._teams.find_by_id(team_id)
         player = team.find_player(player_id)
@@ -1007,7 +1017,7 @@ class TeamApplicationService:
         from_team_id: int,
         to_team_id: int,
         number: int,
-        year: int = None,
+        year: int | None = None,
     ) -> None:
         """選手を移籍させる。元の在籍を閉じ、移籍先で新しい在籍を開く。
 
@@ -1043,7 +1053,7 @@ class TeamApplicationService:
         self._teams.save(source)
         self._teams.save(destination)
 
-    def appoint_captain(self, team_id: int, player_id: int, year: int = None) -> Player:
+    def appoint_captain(self, team_id: int, player_id: int, year: int | None = None) -> Player:
         """選手をチームの主将に指名する。"""
         team = self._teams.find_by_id(team_id)
         player = team.find_player(player_id)
@@ -1051,7 +1061,7 @@ class TeamApplicationService:
         self._teams.save(team)
         return player
 
-    def remove_captain(self, team_id: int, player_id: int, year: int = None) -> Player:
+    def remove_captain(self, team_id: int, player_id: int, year: int | None = None) -> Player:
         """選手の主将を解任する。"""
         team = self._teams.find_by_id(team_id)
         player = team.find_player(player_id)
@@ -1158,6 +1168,7 @@ class TeamApplicationService:
 
     @staticmethod
     def _to_game_row(game: Game, names: dict[int, str]) -> GameRow:
+        assert game.id is not None, "一覧に載る試合は保存済み"
         winner = game.winner_team_id
         return GameRow(
             id=game.id,
@@ -1182,6 +1193,7 @@ class TeamApplicationService:
         is_captain: bool = False,
         league_context: _LeagueContext = _EMPTY_LEAGUE_CONTEXT,
     ) -> BatterRow:
+        assert player.id is not None, "一覧に載る選手は保存済み"
         line = player.batting
         profile = player.profile
         return BatterRow(
@@ -1218,6 +1230,7 @@ class TeamApplicationService:
         is_captain: bool = False,
         league_context: _LeagueContext = _EMPTY_LEAGUE_CONTEXT,
     ) -> PitcherRow:
+        assert player.id is not None, "一覧に載る選手は保存済み"
         line = player.pitching
         profile = player.profile
         return PitcherRow(
@@ -1255,6 +1268,7 @@ class TeamApplicationService:
         player: Player,
         league_context: _LeagueContext = _EMPTY_LEAGUE_CONTEXT,
     ) -> PlayerDetail:
+        assert player.id is not None and team.id is not None, "個人ページの選手・チームは保存済み"
         batting, pitching = player.batting, player.pitching
         return PlayerDetail(
             id=player.id,

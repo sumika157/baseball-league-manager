@@ -244,7 +244,8 @@ class Game(models.Model):
         ordering = ["-played_on", "-id"]
         constraints = [
             models.CheckConstraint(
-                check=~models.Q(home_team=models.F("away_team")),
+                # check= は Django 5.1 で condition= に改名された（6.0 で削除）
+                condition=~models.Q(home_team=models.F("away_team")),
                 name="game_teams_differ",
             ),
         ]

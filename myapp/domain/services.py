@@ -77,7 +77,8 @@ def qualified_batters(
     return [
         p
         for p in batters
-        if p.batting.plate_appearances >= required_plate_appearances(team_games.get(p.id, 0)) and p.batting.at_bats > 0
+        if p.batting.plate_appearances >= required_plate_appearances(team_games.get(p.id or 0, 0))
+        and p.batting.at_bats > 0
     ]
 
 
@@ -91,7 +92,7 @@ def qualified_pitchers(players: list[Player], *, team_games: dict[int, int] | No
     if team_games is None:
         return pitchers
 
-    return [p for p in pitchers if p.pitching.innings.outs >= required_outs(team_games.get(p.id, 0))]
+    return [p for p in pitchers if p.pitching.innings.outs >= required_outs(team_games.get(p.id or 0, 0))]
 
 
 def leaders_by_ops(
@@ -238,7 +239,7 @@ def _ordered(players, getter, descending):
     return ordered
 
 
-def sort_batters(players: list[Player], key: str = None, descending: bool = None):
+def sort_batters(players: list[Player], key: str | None = None, descending: bool | None = None):
     """野手を並べ替える。key が未指定・不正なら OPS の高い順。
 
     戻り値は (並べ替え後, 実際に使ったキー, 向き)。画面側で見出しの表示を
@@ -248,7 +249,7 @@ def sort_batters(players: list[Player], key: str = None, descending: bool = None
     return _ordered(players, BATTER_SORT_KEYS[key][0], descending), key, descending
 
 
-def sort_pitchers(players: list[Player], key: str = None, descending: bool = None):
+def sort_pitchers(players: list[Player], key: str | None = None, descending: bool | None = None):
     """投手を並べ替える。key が未指定・不正なら防御率の低い順。"""
     key, descending = _resolve(PITCHER_SORT_KEYS, key, descending, DEFAULT_PITCHER_SORT)
     getter = PITCHER_SORT_KEYS[key][0]
@@ -356,20 +357,21 @@ def standings(teams: list[Team], games: list[Game]) -> list[StandingRow]:
     """
     entries = []
     for team in teams:
-        if not any(g.involves(team.id) for g in games):
+        # 未保存（id が無い）のチームは試合を持てないので載らない
+        if team.id is None or not any(g.involves(team.id) for g in games):
             continue
-        entries.append((team, team_record(games, team.id)))
+        entries.append((team.id, team.name, team_record(games, team.id)))
 
-    entries.sort(key=lambda e: (-e[1].winning_percentage, -e[1].wins, e[0].name))
+    entries.sort(key=lambda e: (-e[2].winning_percentage, -e[2].wins, e[1]))
 
     if not entries:
         return []
 
-    leader_record = entries[0][1]
+    leader_record = entries[0][2]
 
     rows: list[StandingRow] = []
     previous_percentage = None
-    for index, (team, record) in enumerate(entries, start=1):
+    for index, (team_id, team_name, record) in enumerate(entries, start=1):
         if previous_percentage is not None and record.winning_percentage == previous_percentage:
             rank = rows[-1].rank  # 同率
         else:
@@ -377,8 +379,8 @@ def standings(teams: list[Team], games: list[Game]) -> list[StandingRow]:
         rows.append(
             StandingRow(
                 rank=rank,
-                team_id=team.id,
-                team_name=team.name,
+                team_id=team_id,
+                team_name=team_name,
                 record=record,
                 games_behind=record.games_behind(leader_record),
             )

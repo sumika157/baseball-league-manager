@@ -242,9 +242,9 @@ class PlayerProfile:
 
     detail: PlayerDetail
     games: list[PlayerGameRow]
-    career: list[CareerRow] = None
+    career: list[CareerRow] | None = None
     # 月別成績。調子の波は通算値では見えないため、期間で区切って並べる
-    months: list[MonthlyRow] = None
+    months: list[MonthlyRow] | None = None
     # プロフィール
     age: int | None = None
     throws_bats: str = ""
@@ -253,7 +253,7 @@ class PlayerProfile:
     birthplace: str = ""
     debut_year: int | None = None
     # プロ入り前の経歴。(区分, 名称) を通った順に並べたもの
-    amateur_career: list = None
+    amateur_career: list | None = None
     has_profile: bool = False
 
     @property
@@ -450,7 +450,7 @@ class TitleDepartment:
     key: str
     label: str
     note: str = ""  # '規定打席以上' など。率の部門だけ付く
-    entries: list[RankingEntry] = None
+    entries: list[RankingEntry] | None = None
 
     @property
     def leader(self) -> RankingEntry | None:

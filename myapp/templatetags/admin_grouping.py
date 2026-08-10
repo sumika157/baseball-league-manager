@@ -31,7 +31,7 @@ def grouped_results(cl, results):
 
     rows = []
     previous = object()  # 最初の行では必ず見出しを出すための番兵
-    for obj, result in zip(cl.result_list, results):
+    for obj, result in zip(cl.result_list, results, strict=True):
         label = group_by(obj)
         rows.append(
             {

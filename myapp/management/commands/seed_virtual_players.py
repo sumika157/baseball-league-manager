@@ -1457,7 +1457,7 @@ class Command(BaseCommand):
         counts = Counter(surname_romaji_by_id.values())
 
         to_update = []
-        for player, _, given_romaji in new_players:
+        for player, _, _given_romaji in new_players:
             surname_romaji = surname_romaji_by_id[player.id]
             if counts[surname_romaji] > 1:
                 player.back_name = f"{given_initial_by_id[player.id]}.{surname_romaji}"

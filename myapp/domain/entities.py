@@ -264,8 +264,9 @@ class Team:
 
     # --- ロスターの変更（不変条件を守る） ---
 
-    def add_player(self, name: str, number: JerseyNumber, position: Position, from_year: int = None) -> Player:
+    def add_player(self, name: str, number: JerseyNumber, position: Position, from_year: int | None = None) -> Player:
         """選手を加入させる。背番号が在籍中の選手と重複する場合は拒否する。"""
+        assert self.id is not None, "ロスターの変更は保存済みのチームに対して行う"
         self._ensure_number_is_available(number)
 
         player = Player(name=(name or "").strip(), number=number, position=position)
@@ -302,7 +303,7 @@ class Team:
                 return stint
         return None
 
-    def retire_player(self, player: Player, year: int = None) -> None:
+    def retire_player(self, player: Player, year: int | None = None) -> None:
         """退団させる。在籍期間を閉じることで、背番号が空く。"""
         player.retire()
         current = self.current_stint(player)
@@ -327,8 +328,9 @@ class Team:
 
     # --- 主将の指名・解任（不変条件を守る） ---
 
-    def appoint_captain(self, player: Player, year: int = None) -> None:
+    def appoint_captain(self, player: Player, year: int | None = None) -> None:
         """主将に指名する。在籍していない選手や、既に他の選手が主将の場合は拒否する。"""
+        assert self.id is not None, "主将の指名は保存済みのチームに対して行う"
         if self.current_stint(player) is None:
             raise PlayerNotEligibleForCaptaincy(f"「{self.name}」に在籍していない選手を主将にはできません。")
         if self.current_captain is player:
@@ -342,7 +344,7 @@ class Team:
             )
         )
 
-    def remove_captain(self, player: Player, year: int = None) -> None:
+    def remove_captain(self, player: Player, year: int | None = None) -> None:
         """主将を解任する。主将でなければ何もしない。"""
         current = self._current_captaincy(player)
         if current is not None:
