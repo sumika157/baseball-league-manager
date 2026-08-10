@@ -111,6 +111,8 @@
           {% include 'myapp/_stat_readout.html' with label='奪三振' value=player.strikeouts %}
           {% include 'myapp/_stat_readout.html' with label='被安打' value=player.hits_allowed %}
           {% include 'myapp/_stat_readout.html' with label='与四球' value=player.walks_allowed %}
+          {% include 'myapp/_stat_readout.html' with label='被本塁打' value=player.home_runs_allowed %}
+          {% include 'myapp/_stat_readout.html' with label='与死球' value=player.hit_by_pitch_allowed %}
         {% else %}
           {% include 'myapp/_stat_readout.html' with label='打数' value=player.at_bats %}
           {% include 'myapp/_stat_readout.html' with label='単打' value=player.singles %}

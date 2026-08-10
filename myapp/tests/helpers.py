@@ -27,16 +27,17 @@ def build_service() -> TeamApplicationService:
 
 
 def play_game(
-    home_team, away_team, *, home_score=1, away_score=0, year=2026, day=1,
+    home_team, away_team, *, home_score=1, away_score=0, year=2026, month=4, day=1,
     batting=None, pitching=None,
 ) -> Game:
     """試合を1件作って保存する。
 
     batting / pitching は {選手id: ライン} の辞書。
+    月別成績のように試合日をずらしたい場合は month も指定する。
     """
     game = Game(
         season=Season(year),
-        played_on=date(year, 4, day),
+        played_on=date(year, month, day),
         home_team_id=home_team.id,
         away_team_id=away_team.id,
         home_score=home_score,

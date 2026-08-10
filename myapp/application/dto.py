@@ -93,6 +93,31 @@ class PlayerGameRow:
 
 
 @dataclass(frozen=True)
+class MonthlyRow:
+    """選手の月別成績1行。
+
+    率は月ごとに合算した実数から計算し直したもの（月々の率を平均しても
+    正しい率にはならない）。
+    """
+
+    label: str           # '2026年4月'
+    appearances: int
+    # 打撃
+    at_bats: int = 0
+    hits: int = 0
+    home_runs: int = 0
+    runs_batted_in: int = 0
+    batting_average: float = 0.0
+    ops: float = 0.0
+    # 投球
+    innings_pitched: str = '0.0'
+    earned_runs: int = 0
+    strikeouts: int = 0
+    earned_run_average: float = 0.0
+    whip: float = 0.0
+
+
+@dataclass(frozen=True)
 class CareerRow:
     """経歴の1行。どのチームにいつ在籍したか。"""
 
@@ -115,6 +140,8 @@ class PlayerProfile:
     detail: 'PlayerDetail'
     games: list[PlayerGameRow]
     career: list[CareerRow] = None
+    # 月別成績。調子の波は通算値では見えないため、期間で区切って並べる
+    months: list[MonthlyRow] = None
     # プロフィール
     age: int | None = None
     throws_bats: str = ''
@@ -219,6 +246,8 @@ class TeamTotals:
     # タイトルの対象になる目安
     required_plate_appearances: int
     required_innings: str
+    # 守備に左右されない投球内容。チーム防御率との差が守備・運の寄与を示す
+    fip: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -261,6 +290,60 @@ class Standings:
 
 
 @dataclass(frozen=True)
+class MatchupColumn:
+    """対戦成績表の列見出し。"""
+
+    team_id: int
+    team_name: str
+
+    @property
+    def short_name(self) -> str:
+        """列幅を抑えるための略称。先頭2文字。
+
+        チーム名をそのまま並べると、チーム数ぶんの列で表が横に伸びる。
+        行の見出しには正式名を出すので、対応は付く。
+        """
+        return self.team_name[:2]
+
+
+@dataclass(frozen=True)
+class MatchupCell:
+    """対戦成績表の1マス。行のチームから見た、列のチームとの成績。"""
+
+    opponent_id: int | None
+    label: str            # '3-1-1'（勝-敗-分）。自分自身の列は '—'
+    is_self: bool = False
+    is_winning: bool = False   # 勝ち越している
+    is_losing: bool = False    # 負けている
+
+
+@dataclass(frozen=True)
+class MatchupRow:
+    """対戦成績表の1行。"""
+
+    team_id: int
+    team_name: str
+    cells: list[MatchupCell]
+    total_label: str
+
+
+@dataclass(frozen=True)
+class MatchupTable:
+    """チーム間の対戦成績表。
+
+    列の並びは行と同じ（順位表の順）。行と列で同じ順に並べることで、
+    対角線が自分自身になり、表として読めるようになる。
+    """
+
+    columns: list[MatchupColumn]
+    rows: list[MatchupRow]
+
+    @property
+    def has_rows(self) -> bool:
+        return bool(self.rows)
+
+
+@dataclass(frozen=True)
 class LeagueDetail:
     """リーグ画面。"""
 
@@ -271,6 +354,8 @@ class LeagueDetail:
     teams: list[TeamSummary]
     standings: list[StandingRow]
     recent_games: list['GameRow']
+    # チーム間の相性。順位表の背景として同じ画面に置く
+    matchups: MatchupTable | None = None
 
 
 @dataclass(frozen=True)
@@ -344,7 +429,16 @@ class BatterRow:
     batting_average: float
     on_base_percentage: float
     ops: float
+    isolated_power: float = 0.0
+    walks: int = 0
+    sacrifice_flies: int = 0
+    slugging_percentage: float = 0.0
     is_captain: bool = False
+    is_foreign_player: bool = False
+    throws_bats: str = ''
+    height_cm: int | None = None
+    weight_kg: int | None = None
+    age: int | None = None
 
 
 @dataclass(frozen=True)
@@ -362,7 +456,18 @@ class PitcherRow:
     earned_run_average: float
     whip: float
     strikeouts_per_nine: float
+    walks_per_nine: float = 0.0
+    # FIP はリーグの定数を足して仕上げるため、リーグを知る側で計算して渡す
+    fip: float = 0.0
+    saves: int = 0
+    home_runs_allowed: int = 0
+    hit_by_pitch_allowed: int = 0
     is_captain: bool = False
+    is_foreign_player: bool = False
+    throws_bats: str = ''
+    height_cm: int | None = None
+    weight_kg: int | None = None
+    age: int | None = None
 
 
 @dataclass(frozen=True)
@@ -402,4 +507,9 @@ class PlayerDetail:
     earned_run_average: float
     whip: float
     strikeouts_per_nine: float
+    home_runs_allowed: int = 0
+    hit_by_pitch_allowed: int = 0
+    isolated_power: float = 0.0
+    walks_per_nine: float = 0.0
+    fip: float = 0.0
     is_captain: bool = False

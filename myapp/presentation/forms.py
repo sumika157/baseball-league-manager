@@ -91,10 +91,13 @@ class PitchingEntryForm(forms.Form):
     strikeouts = forms.IntegerField(label='奪三振', min_value=0, required=False)
     hits_allowed = forms.IntegerField(label='被安打', min_value=0, required=False)
     walks_allowed = forms.IntegerField(label='与四球', min_value=0, required=False)
+    home_runs_allowed = forms.IntegerField(label='被本塁打', min_value=0, required=False)
+    hit_by_pitch_allowed = forms.IntegerField(label='与死球', min_value=0, required=False)
 
     COUNT_FIELDS = (
         'wins', 'losses', 'saves', 'earned_runs',
         'strikeouts', 'hits_allowed', 'walks_allowed',
+        'home_runs_allowed', 'hit_by_pitch_allowed',
     )
 
     def counts(self) -> dict:

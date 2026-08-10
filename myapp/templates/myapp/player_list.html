@@ -35,6 +35,10 @@
         <div class="stat-label">チームWHIP</div>
       </div>
       <div class="stat-cell">
+        <div class="stat-value">{{ totals.fip|floatformat:2 }}</div>
+        <div class="stat-label">チームFIP</div>
+      </div>
+      <div class="stat-cell">
         <div class="stat-value">{{ totals.strikeouts }}</div>
         <div class="stat-label">奪三振</div>
       </div>
@@ -64,8 +68,11 @@
   <p class="page-subtitle mb-3" style="font-size: 0.8125rem;">
     {% if pos_mode == 'pitcher' %}
       規定投球回は {{ totals.required_innings }} 回（{{ totals.games }}試合 × 1.0）
+      · FIP は本塁打・四死球・奪三振だけで投球内容を測り、リーグの得点環境に
+      合わせて防御率と同じ尺度に直した指標
     {% else %}
       規定打席は {{ totals.required_plate_appearances }} 打席（{{ totals.games }}試合 × 3.1）
+      · IsoP は長打率 − 打率で、長打力だけを取り出した指標
     {% endif %}
   </p>
 {% endif %}
@@ -86,14 +93,22 @@
       <tr>
         {% sort_header 'number' '背番号' 'start' False %}
         {% sort_header 'name' '選手名' 'start' False %}
+        <th>投打</th>
+        <th class="text-end">身長/体重</th>
+        <th class="text-end">年齢</th>
         {% if pos_mode == 'pitcher' %}
           {% sort_header 'innings' '投球回' 'end' %}
           {% sort_header 'era' '防御率' 'end' False %}
           {% sort_header 'wins' '勝' 'end' %}
           {% sort_header 'losses' '敗' 'end' %}
+          {% sort_header 'saves' 'S' 'end' %}
           {% sort_header 'strikeouts' '奪三振' 'end' %}
           {% sort_header 'whip' 'WHIP' 'end' False %}
           {% sort_header 'k9' 'K/9' 'end' %}
+          {% sort_header 'bb9' 'BB/9' 'end' False %}
+          {% sort_header 'fip' 'FIP' 'end' False %}
+          {% sort_header 'home_runs_allowed' '被本塁打' 'end' %}
+          {% sort_header 'hit_by_pitch_allowed' '与死球' 'end' %}
         {% else %}
           {% sort_header 'average' '打率' 'end' %}
           {% sort_header 'hits' '安打' 'end' %}
@@ -101,8 +116,12 @@
           {% sort_header 'triples' '3B' 'end' %}
           {% sort_header 'home_runs' 'HR' 'end' %}
           {% sort_header 'rbi' '打点' 'end' %}
+          {% sort_header 'walks' '四球' 'end' %}
+          {% sort_header 'sacrifice_flies' '犠飛' 'end' %}
           {% sort_header 'obp' '出塁率' 'end' %}
+          {% sort_header 'slg' '長打率' 'end' %}
           {% sort_header 'ops' 'OPS' 'end' %}
+          {% sort_header 'iso' 'IsoP' 'end' %}
         {% endif %}
         {# 編集列。書き込みにはログインが要るので、押せない人には出さない #}
         {% if user.is_authenticated %}<th></th>{% endif %}
@@ -116,16 +135,29 @@
           <a href="{% url 'player_detail' team_id player.id %}" class="player-name">{{ player.name }}</a>
           <span class="badge bg-secondary ms-1">{{ player.position }}</span>
           {% if player.is_captain %}<span class="badge bg-warning text-dark ms-1">主将</span>{% endif %}
+          {% if player.is_foreign_player %}<span class="badge bg-info text-dark ms-1">外国人</span>{% endif %}
         </td>
+        <td class="stat-muted">{{ player.throws_bats|default:'—' }}</td>
+        <td class="text-end stat-muted">
+          {% if player.height_cm or player.weight_kg %}
+            {{ player.height_cm|default:'—' }}cm/{{ player.weight_kg|default:'—' }}kg
+          {% else %}—{% endif %}
+        </td>
+        <td class="text-end stat-muted">{{ player.age|default:'—' }}</td>
 
         {% if pos_mode == 'pitcher' %}
           <td class="text-end stat-muted">{{ player.innings_pitched }}</td>
           <td class="text-end stat-key">{{ player.earned_run_average|floatformat:2 }}</td>
           <td class="text-end stat-muted">{{ player.wins }}</td>
           <td class="text-end stat-muted">{{ player.losses }}</td>
+          <td class="text-end stat-muted">{{ player.saves }}</td>
           <td class="text-end stat-muted">{{ player.strikeouts }}</td>
           <td class="text-end">{{ player.whip|floatformat:2 }}</td>
           <td class="text-end stat-muted">{{ player.strikeouts_per_nine|floatformat:2 }}</td>
+          <td class="text-end stat-muted">{{ player.walks_per_nine|floatformat:2 }}</td>
+          <td class="text-end">{{ player.fip|floatformat:2 }}</td>
+          <td class="text-end stat-muted">{{ player.home_runs_allowed }}</td>
+          <td class="text-end stat-muted">{{ player.hit_by_pitch_allowed }}</td>
         {% else %}
           <td class="text-end stat-key">{{ player.batting_average|floatformat:3 }}</td>
           <td class="text-end stat-muted">{{ player.hits }}</td>
@@ -133,10 +165,14 @@
           <td class="text-end stat-muted">{{ player.triples }}</td>
           <td class="text-end stat-muted">{{ player.home_runs }}</td>
           <td class="text-end stat-muted">{{ player.runs_batted_in }}</td>
+          <td class="text-end stat-muted">{{ player.walks }}</td>
+          <td class="text-end stat-muted">{{ player.sacrifice_flies }}</td>
           <td class="text-end">{{ player.on_base_percentage|floatformat:3 }}</td>
+          <td class="text-end stat-muted">{{ player.slugging_percentage|floatformat:3 }}</td>
           <td class="text-end stat-key {% if player.ops >= 0.9 %}stat-tier-high{% elif player.ops >= 0.8 %}stat-tier-mid{% endif %}">
             {{ player.ops|floatformat:3 }}
           </td>
+          <td class="text-end stat-muted">{{ player.isolated_power|floatformat:3 }}</td>
         {% endif %}
 
         {% if user.is_authenticated %}
@@ -147,7 +183,7 @@
       </tr>
       {% empty %}
       <tr>
-        <td colspan="11">
+        <td colspan="12">
           <div class="empty-state">
             {% if pos_mode == 'pitcher' %}投手{% else %}野手{% endif %}がまだ登録されていません。
           </div>

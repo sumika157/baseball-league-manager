@@ -257,6 +257,27 @@ class BattingLine:
         """OPS。出塁率＋長打率。"""
         return self.on_base_percentage + self.slugging_percentage
 
+    @property
+    def isolated_power(self) -> float:
+        """長打力（IsoP）。長打率 − 打率。
+
+        単打を差し引くことで「安打のうちどれだけ長打だったか」だけが残る。
+        打率が高いだけの打者と、一発のある打者を区別するために使う。
+        """
+        return self.slugging_percentage - self.batting_average
+
+    def ops_plus(self, league_ops: float) -> float:
+        """OPS+。リーグ平均の OPS を100とした指数。
+
+        リーグによって得点環境（投高打低か打高投低か）が異なるため、
+        OPS の素点だけではリーグ間・シーズン間を比べられない。
+        リーグ平均に対する比率にすることで、環境の違いを均して比べられる。
+        打席が無ければ比べる相手がいないため 0。
+        """
+        if self.at_bats == 0 or league_ops == 0:
+            return 0.0
+        return self.ops / league_ops * 100
+
     def __add__(self, other: BattingLine) -> BattingLine:
         """試合ごとの成績を積み上げて通算にする。
 
@@ -288,7 +309,7 @@ class BattingLine:
 
 @dataclass(frozen=True)
 class PitchingLine:
-    """投球成績。防御率・WHIP・奪三振率の算出責務を持つ。"""
+    """投球成績。防御率・WHIP・奪三振率・FIP の算出責務を持つ。"""
 
     innings: InningsPitched = InningsPitched(outs=0)
     wins: int = 0
@@ -298,6 +319,21 @@ class PitchingLine:
     strikeouts: int = 0
     hits_allowed: int = 0
     walks_allowed: int = 0
+    # FIP を求めるには被本塁打と与死球が要る。被安打の内訳（本塁打）と
+    # 与四球とは別の事実なので、それぞれ独立して記録する
+    home_runs_allowed: int = 0
+    hit_by_pitch_allowed: int = 0
+
+    # FIP の重み。本塁打・与四球死球・奪三振が失点にどれだけ効くかの係数で、
+    # 野球の指標として定まった値のためドメインに置く
+    FIP_HOME_RUN_WEIGHT = 13
+    FIP_WALK_WEIGHT = 3
+    FIP_STRIKEOUT_WEIGHT = 2
+
+    # ERA+ の表示上の上限。自責点0（防御率0）だとリーグ平均との比率が
+    # 無限大になり、少ない登板でも際限なく大きな値になってしまうため、
+    # 表示に耐える値で頭打ちにする。実力の順序（自責点0どうしは同値）は保たれる
+    ERA_PLUS_CAP = 300.0
 
     def __post_init__(self) -> None:
         if not isinstance(self.innings, InningsPitched):
@@ -306,9 +342,16 @@ class PitchingLine:
             ('wins', '勝利'), ('losses', '敗戦'), ('saves', 'セーブ'),
             ('earned_runs', '自責点'), ('strikeouts', '奪三振'),
             ('hits_allowed', '被安打'), ('walks_allowed', '与四球'),
+            ('home_runs_allowed', '被本塁打'), ('hit_by_pitch_allowed', '与死球'),
         ):
             object.__setattr__(
                 self, field_name, _require_non_negative(label, getattr(self, field_name))
+            )
+
+        if self.home_runs_allowed > self.hits_allowed:
+            raise InvalidStatValue(
+                f"被本塁打（{self.home_runs_allowed}）が"
+                f"被安打（{self.hits_allowed}）を超えています。"
             )
 
     @property
@@ -336,6 +379,59 @@ class PitchingLine:
             return 0.0
         return self.strikeouts * 27.0 / self._outs
 
+    @property
+    def walks_per_nine(self) -> float:
+        """与四球率（BB/9）。与四球 × 9 ÷ 投球回。
+
+        死球は含めない。四球は投手の制御そのものを表す記録で、
+        BB/9 という指標も四球だけを分子に取る。
+        """
+        if self._outs == 0:
+            return 0.0
+        return self.walks_allowed * 27.0 / self._outs
+
+    @property
+    def fip_base(self) -> float:
+        """FIP の素点。(13×被本塁打 + 3×(与四球+与死球) − 2×奪三振) ÷ 投球回。
+
+        FIP は「野手の守備に左右されない結果（本塁打・四死球・三振）だけで
+        投手を評価する」指標。防御率と同じ尺度で読めるようにリーグごとの定数を
+        足して仕上げるが、その定数はリーグ全体の成績から決まるため、
+        1人ぶんの記録だけでは確定できない。ここでは定数を足す前までを求め、
+        リーグとの突き合わせは fip() に委ねる。
+        """
+        if self._outs == 0:
+            return 0.0
+        numerator = (
+            self.FIP_HOME_RUN_WEIGHT * self.home_runs_allowed
+            + self.FIP_WALK_WEIGHT * (self.walks_allowed + self.hit_by_pitch_allowed)
+            - self.FIP_STRIKEOUT_WEIGHT * self.strikeouts
+        )
+        return numerator * 3.0 / self._outs
+
+    def fip(self, constant: float) -> float:
+        """FIP。素点にリーグの定数を足したもの。
+
+        constant はリーグの得点環境に合わせる補正で、
+        domain.services.fip_constant() が求める。未登板なら 0。
+        """
+        if self._outs == 0:
+            return 0.0
+        return self.fip_base + constant
+
+    def era_plus(self, league_era: float) -> float:
+        """ERA+。リーグ平均防御率 ÷ 自身の防御率 × 100。高いほど良い（FIP と逆）。
+
+        防御率は低いほど良いが、指数はどの指標でも「大きいほど良い」に
+        揃えたいため、比率を反転させる。未登板、またはリーグに比べる
+        相手がいなければ 0。自責点0は ERA_PLUS_CAP で頭打ちにする。
+        """
+        if self._outs == 0 or league_era == 0:
+            return 0.0
+        if self.earned_run_average == 0:
+            return self.ERA_PLUS_CAP
+        return min(league_era / self.earned_run_average * 100, self.ERA_PLUS_CAP)
+
     def __add__(self, other: PitchingLine) -> PitchingLine:
         """試合ごとの成績を積み上げて通算にする。率は合算後に計算し直す。"""
         if not isinstance(other, PitchingLine):
@@ -349,6 +445,8 @@ class PitchingLine:
             strikeouts=self.strikeouts + other.strikeouts,
             hits_allowed=self.hits_allowed + other.hits_allowed,
             walks_allowed=self.walks_allowed + other.walks_allowed,
+            home_runs_allowed=self.home_runs_allowed + other.home_runs_allowed,
+            hit_by_pitch_allowed=self.hit_by_pitch_allowed + other.hit_by_pitch_allowed,
         )
 
     @classmethod

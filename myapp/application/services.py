@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
 
 from django.db import transaction
@@ -32,6 +33,11 @@ from .dto import (
     LeagueStandings,
     LeagueTeams,
     Listing,
+    MatchupCell,
+    MatchupColumn,
+    MatchupRow,
+    MatchupTable,
+    MonthlyRow,
     PitcherRow,
     PlayerDetail,
     PlayerGameRow,
@@ -41,6 +47,32 @@ from .dto import (
     StandingRow,
     TeamTotals,
 )
+
+
+def _record_label(record) -> str:
+    """勝敗を「3-1-1」（勝-敗-分）の1行で表す。
+
+    対戦成績はチーム数ぶんの列が並ぶため、「3勝1敗1分」では表が横に伸びる。
+    引分が0でも省かない。列によって桁数が変わると読み違えるため。
+    """
+    return f"{record.wins}-{record.losses}-{record.ties}"
+
+
+@dataclass(frozen=True)
+class _LeagueContext:
+    """リーグ全体の成績から決まる、個々の成績を評価するための基準値。
+
+    FIP の定数と、OPS+・ERA+ の基準になるリーグ平均。いずれもリーグ全体を
+    見ないと決まらない値で、1回の要求の中で何度も参照されるため
+    リーグ単位でまとめて求めて覚えておく。
+    """
+
+    fip_constant: float
+    average_ops: float
+    average_era: float
+
+
+_EMPTY_LEAGUE_CONTEXT = _LeagueContext(fip_constant=0.0, average_ops=0.0, average_era=0.0)
 
 
 class TeamApplicationService:
@@ -55,6 +87,8 @@ class TeamApplicationService:
         self._games = games
         # 順位はリーグの中で決まるため、リーグの一覧が要る
         self._leagues = leagues
+        # リーグの基準値（FIP 定数・OPS+/ERA+ の平均）は何度も引くため覚えておく
+        self._league_contexts: dict[int, _LeagueContext] = {}
 
     # --- 参照系 ---
 
@@ -207,8 +241,12 @@ class TeamApplicationService:
         batters = [p for p in team.active_players if not p.is_pitcher]
         players, key, desc = domain_services.sort_batters(batters, sort, descending)
         captain = team.current_captain
+        context = self._league_context(team.league_id)
         return Listing(
-            rows=[self._to_batter_row(p, is_captain=p is captain) for p in players],
+            rows=[
+                self._to_batter_row(p, is_captain=p is captain, league_context=context)
+                for p in players
+            ],
             sort=key, descending=desc,
         )
 
@@ -219,14 +257,20 @@ class TeamApplicationService:
         pitchers = [p for p in team.active_players if p.is_pitcher]
         players, key, desc = domain_services.sort_pitchers(pitchers, sort, descending)
         captain = team.current_captain
+        context = self._league_context(team.league_id)
         return Listing(
-            rows=[self._to_pitcher_row(p, is_captain=p is captain) for p in players],
+            rows=[
+                self._to_pitcher_row(p, is_captain=p is captain, league_context=context)
+                for p in players
+            ],
             sort=key, descending=desc,
         )
 
     def get_player_detail(self, team_id: int, player_id: int) -> PlayerDetail:
         team = self._teams.find_by_id(team_id)
-        return self._to_detail(team, team.find_player(player_id))
+        return self._to_detail(
+            team, team.find_player(player_id), self._league_context(team.league_id)
+        )
 
     # 順位表の並べ替え。順位そのものは勝率から決まるので、ここでの並べ替えは
     # 表示順を変えるだけで rank の値は変えない。
@@ -339,6 +383,12 @@ class TeamApplicationService:
 
         summaries = {s.id: s for s in self._team_list_query.list_summaries()}
 
+        matchups = None
+        if target is not None:
+            matchups = self._to_matchup_table(domain_services.matchups(
+                teams, [g for g in league_games if g.season == target]
+            ))
+
         return LeagueDetail(
             id=league.id,
             name=league.name,
@@ -347,7 +397,44 @@ class TeamApplicationService:
             teams=[summaries[t.id] for t in teams if t.id in summaries],
             standings=rows,
             recent_games=recent,
+            matchups=matchups,
         )
+
+    @staticmethod
+    def _to_matchup_table(rows) -> MatchupTable:
+        """ドメインの対戦成績を表示用の表に整える。
+
+        行と列を同じ順（順位表の順）に並べる。こうすると対角線が自分自身に
+        なり、どのマスが誰と誰の対戦かを迷わず読める。
+        """
+        columns = [
+            MatchupColumn(team_id=row.team_id, team_name=row.team_name) for row in rows
+        ]
+
+        table_rows = []
+        for row in rows:
+            cells = []
+            for column in columns:
+                record = row.record_against(column.team_id)
+                if record is None:
+                    cells.append(MatchupCell(
+                        opponent_id=None, label='—', is_self=True
+                    ))
+                    continue
+                cells.append(MatchupCell(
+                    opponent_id=column.team_id,
+                    label=_record_label(record),
+                    is_winning=record.wins > record.losses,
+                    is_losing=record.losses > record.wins,
+                ))
+            table_rows.append(MatchupRow(
+                team_id=row.team_id,
+                team_name=row.team_name,
+                cells=cells,
+                total_label=_record_label(row.total),
+            ))
+
+        return MatchupTable(columns=columns, rows=table_rows)
 
     # --- 試合の参照 ---
 
@@ -422,9 +509,10 @@ class TeamApplicationService:
         """選手個人ページ。通算成績と、試合ごとの成績。"""
         detail = self.get_player_detail(team_id, player_id)
         names = self._team_names()
+        team_games = self._games.find_by_team(team_id)
 
         rows = []
-        for game in self._games.find_by_team(team_id):
+        for game in team_games:
             batting = next((e for e in game.batting if e.player_id == player_id), None)
             pitching = next((e for e in game.pitching if e.player_id == player_id), None)
             if batting is None and pitching is None:
@@ -455,6 +543,10 @@ class TeamApplicationService:
         return PlayerProfile(
             detail=detail,
             games=rows,
+            months=[
+                self._to_monthly_row(split)
+                for split in domain_services.monthly_splits(team_games, player_id)
+            ],
             career=[
                 CareerRow(
                     team_id=s.team_id,
@@ -474,6 +566,26 @@ class TeamApplicationService:
             debut_year=profile.debut_year,
             amateur_career=profile.amateur_career,
             has_profile=not profile.is_empty,
+        )
+
+    @staticmethod
+    def _to_monthly_row(split) -> MonthlyRow:
+        """月別成績を表示用に整える。率は月ごとの合計から計算し直された値。"""
+        batting, pitching = split.batting, split.pitching
+        return MonthlyRow(
+            label=split.label,
+            appearances=split.appearances,
+            at_bats=batting.at_bats,
+            hits=batting.hits,
+            home_runs=batting.home_runs,
+            runs_batted_in=batting.runs_batted_in,
+            batting_average=batting.batting_average,
+            ops=batting.ops,
+            innings_pitched=str(pitching.innings),
+            earned_runs=pitching.earned_runs,
+            strikeouts=pitching.strikeouts,
+            earned_run_average=pitching.earned_run_average,
+            whip=pitching.whip,
         )
 
     # --- 試合の登録 ---
@@ -734,7 +846,30 @@ class TeamApplicationService:
             innings_pitched=str(pitching.innings),
             required_plate_appearances=domain_services.required_plate_appearances(games),
             required_innings=f'{domain_services.required_outs(games) / 3:.1f}',
+            fip=pitching.fip(self._league_context(team.league_id).fip_constant),
         )
+
+    def _league_context(self, league_id: int | None) -> _LeagueContext:
+        """そのリーグの基準値。リーグ全体の成績から決まるので、リーグを
+        知らなければ求められない（未登板と同じ、全て0の基準値を返す）。
+        """
+        if league_id is None:
+            return _EMPTY_LEAGUE_CONTEXT
+        if league_id not in self._league_contexts:
+            members = [
+                player
+                for team in self._teams.find_all_with_roster()
+                if team.league_id == league_id
+                for player in team.active_players
+            ]
+            batting = domain_services.team_batting(members)
+            pitching = domain_services.team_pitching(members)
+            self._league_contexts[league_id] = _LeagueContext(
+                fip_constant=domain_services.fip_constant(pitching),
+                average_ops=batting.ops,
+                average_era=pitching.earned_run_average,
+            )
+        return self._league_contexts[league_id]
 
     def _team_names(self) -> dict[int, str]:
         return {t.id: t.name for t in self._teams.find_all()}
@@ -772,8 +907,14 @@ class TeamApplicationService:
     # --- DTO への詰め替え ---
 
     @staticmethod
-    def _to_batter_row(player: Player, *, is_captain: bool = False) -> BatterRow:
+    def _to_batter_row(
+        player: Player,
+        *,
+        is_captain: bool = False,
+        league_context: '_LeagueContext' = _EMPTY_LEAGUE_CONTEXT,
+    ) -> BatterRow:
         line = player.batting
+        profile = player.profile
         return BatterRow(
             id=player.id,
             name=player.name,
@@ -788,12 +929,27 @@ class TeamApplicationService:
             batting_average=line.batting_average,
             on_base_percentage=line.on_base_percentage,
             ops=line.ops,
+            isolated_power=line.isolated_power,
+            walks=line.walks,
+            sacrifice_flies=line.sacrifice_flies,
+            slugging_percentage=line.slugging_percentage,
             is_captain=is_captain,
+            is_foreign_player=profile.is_foreign_player,
+            throws_bats=profile.throws_bats,
+            height_cm=profile.height_cm,
+            weight_kg=profile.weight_kg,
+            age=profile.age(date.today()),
         )
 
     @staticmethod
-    def _to_pitcher_row(player: Player, *, is_captain: bool = False) -> PitcherRow:
+    def _to_pitcher_row(
+        player: Player,
+        *,
+        is_captain: bool = False,
+        league_context: '_LeagueContext' = _EMPTY_LEAGUE_CONTEXT,
+    ) -> PitcherRow:
         line = player.pitching
+        profile = player.profile
         return PitcherRow(
             id=player.id,
             name=player.name,
@@ -806,11 +962,25 @@ class TeamApplicationService:
             earned_run_average=line.earned_run_average,
             whip=line.whip,
             strikeouts_per_nine=line.strikeouts_per_nine,
+            walks_per_nine=line.walks_per_nine,
+            fip=line.fip(league_context.fip_constant),
+            saves=line.saves,
+            home_runs_allowed=line.home_runs_allowed,
+            hit_by_pitch_allowed=line.hit_by_pitch_allowed,
             is_captain=is_captain,
+            is_foreign_player=profile.is_foreign_player,
+            throws_bats=profile.throws_bats,
+            height_cm=profile.height_cm,
+            weight_kg=profile.weight_kg,
+            age=profile.age(date.today()),
         )
 
     @staticmethod
-    def _to_detail(team: Team, player: Player) -> PlayerDetail:
+    def _to_detail(
+        team: Team,
+        player: Player,
+        league_context: '_LeagueContext' = _EMPTY_LEAGUE_CONTEXT,
+    ) -> PlayerDetail:
         batting, pitching = player.batting, player.pitching
         return PlayerDetail(
             id=player.id,
@@ -837,6 +1007,8 @@ class TeamApplicationService:
             strikeouts=pitching.strikeouts,
             hits_allowed=pitching.hits_allowed,
             walks_allowed=pitching.walks_allowed,
+            home_runs_allowed=pitching.home_runs_allowed,
+            hit_by_pitch_allowed=pitching.hit_by_pitch_allowed,
             batting_average=batting.batting_average,
             on_base_percentage=batting.on_base_percentage,
             slugging_percentage=batting.slugging_percentage,
@@ -844,4 +1016,7 @@ class TeamApplicationService:
             earned_run_average=pitching.earned_run_average,
             whip=pitching.whip,
             strikeouts_per_nine=pitching.strikeouts_per_nine,
+            isolated_power=batting.isolated_power,
+            walks_per_nine=pitching.walks_per_nine,
+            fip=pitching.fip(league_context.fip_constant),
         )

@@ -101,6 +101,10 @@ a:hover {
   margin-bottom: 2.5rem;
 }
 
+main.container {
+  padding-bottom: 5rem;
+}
+
 .app-header .app-brand {
   display: inline-flex;
   align-items: center;
@@ -842,6 +846,40 @@ a:hover {
   text-align: center;
   color: var(--app-text-subtle);
   font-size: 0.9375rem;
+}
+
+/* ------------------------------------------------------------------
+   対戦成績表
+
+   チーム数ぶんの列が並ぶため、通常の表より字を詰めて折り返さない。
+   勝ち越し・負けは色で示すが、成績の色（positive / negative）を
+   そのまま使い、この表だけの配色は増やさない。
+   ------------------------------------------------------------------ */
+.matchup-table {
+  font-size: 0.8125rem;
+}
+
+.matchup-table th,
+.matchup-table td {
+  white-space: nowrap;
+}
+
+.matchup-table .matchup-self {
+  background: var(--app-surface-muted);
+  color: var(--app-text-subtle);
+}
+
+.matchup-table .matchup-winning {
+  color: var(--app-positive);
+  font-weight: 600;
+}
+
+.matchup-table .matchup-losing {
+  color: var(--app-negative);
+}
+
+.matchup-table .matchup-total {
+  font-weight: 650;
 }
 
 /* ------------------------------------------------------------------

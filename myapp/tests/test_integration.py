@@ -5,6 +5,7 @@ helpers の play_game / give_batting / give_pitching で試合を作る。
 """
 
 import re
+from datetime import date
 
 from django.contrib.auth.models import User
 from django.db import connection
@@ -12,6 +13,7 @@ from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
+from myapp.domain.entities import Game
 from myapp.domain.exceptions import (
     DuplicateJerseyNumber,
     ForeignPlayerQuotaExceeded,
@@ -23,6 +25,7 @@ from myapp.domain.value_objects import (
     JerseyNumber,
     PitchingLine,
     Position,
+    Season,
     StadiumProfile,
 )
 from myapp.infrastructure import orm_models
@@ -2509,6 +2512,310 @@ class LeagueOrderingTest(BaseCase):
     def test_order_is_reflected_in_dashboard_tabs(self):
         names = [g.league_name for g in self.service.get_dashboard().league_teams]
         self.assertEqual(names, ['Zリーグ', 'Aリーグ'])
+
+
+class MatchupViewTest(BaseCase):
+    """対戦成績（フェーズ4）。リーグ画面に、順位表と同じ並びで並べる。"""
+
+    def setUp(self):
+        super().setUp()
+        self.third = orm_models.Team.objects.create(league=self.league, name='第三チーム')
+        # テストチームは相手チームに2勝0敗、第三チームに0勝1敗
+        play_game(self.team, self.rival, home_score=5, away_score=3, day=1)
+        play_game(self.team, self.rival, home_score=2, away_score=1, day=2)
+        play_game(self.third, self.team, home_score=6, away_score=0, day=3)
+        self.url = reverse('league_detail', args=[self.league.id])
+
+    def _table(self):
+        return self.service.get_league_detail(self.league.id).matchups
+
+    def test_rows_and_columns_share_the_order(self):
+        table = self._table()
+
+        self.assertEqual(
+            [c.team_id for c in table.columns], [r.team_id for r in table.rows]
+        )
+
+    def test_record_against_each_opponent(self):
+        table = self._table()
+        row = next(r for r in table.rows if r.team_id == self.team.id)
+        cells = {c.opponent_id: c.label for c in row.cells}
+
+        self.assertEqual(cells[self.rival.id], '2-0-0')
+        self.assertEqual(cells[self.third.id], '0-1-0')
+        self.assertEqual(row.total_label, '2-1-0')
+
+    def test_own_column_is_blank(self):
+        table = self._table()
+        row = next(r for r in table.rows if r.team_id == self.team.id)
+        own = next(c for c in row.cells if c.is_self)
+
+        self.assertIsNone(own.opponent_id)
+        self.assertEqual(own.label, '—')
+
+    def test_winning_and_losing_are_marked(self):
+        table = self._table()
+        row = next(r for r in table.rows if r.team_id == self.team.id)
+        cells = {c.opponent_id: c for c in row.cells}
+
+        self.assertTrue(cells[self.rival.id].is_winning)
+        self.assertTrue(cells[self.third.id].is_losing)
+
+    def test_page_shows_the_table(self):
+        response = self.client.get(self.url)
+
+        self.assertContains(response, '対戦成績')
+        self.assertContains(response, '2-0-0')
+
+    def test_table_follows_the_selected_season(self):
+        play_game(self.team, self.rival, year=2025, home_score=0, away_score=9, day=1)
+
+        table = self.service.get_league_detail(self.league.id, 2025).matchups
+        row = next(r for r in table.rows if r.team_id == self.team.id)
+
+        self.assertEqual(row.total_label, '0-1-0')
+
+    def test_league_without_games_has_no_table(self):
+        empty = orm_models.League.objects.create(name='無試合リーグ')
+        orm_models.Team.objects.create(league=empty, name='新チーム')
+
+        self.assertIsNone(self.service.get_league_detail(empty.id).matchups)
+
+
+class MonthlySplitViewTest(BaseCase):
+    """月別成績（フェーズ4）。通算値では見えない調子の波を出す。"""
+
+    def setUp(self):
+        super().setUp()
+        self.player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        self.pitcher = self.service.register_player(self.team.id, '佐藤', 18, '投手')
+        self._play(month=4, day=1, at_bats=4, singles=1)
+        self._play(month=4, day=2, at_bats=4, singles=1)
+        self._play(month=5, day=1, at_bats=4, singles=3)
+        self.url = reverse('player_detail', args=[self.team.id, self.player.id])
+
+    def _play(self, *, month, day, **line):
+        game = Game(
+            season=Season(2026),
+            played_on=date(2026, month, day),
+            home_team_id=self.team.id,
+            away_team_id=self.rival.id,
+            home_score=1,
+            away_score=0,
+        )
+        game.record_batting(self.player.id, BattingLine(**line))
+        DjangoGameRepository().save(game)
+
+    def _months(self, player_id=None):
+        profile = self.service.get_player_profile(
+            self.team.id, player_id or self.player.id
+        )
+        return profile.months
+
+    def test_grouped_by_month_oldest_first(self):
+        self.assertEqual([m.label for m in self._months()], ['2026年4月', '2026年5月'])
+
+    def test_rate_comes_from_the_monthly_total(self):
+        april, may = self._months()
+
+        self.assertEqual(april.appearances, 2)
+        self.assertAlmostEqual(april.batting_average, 0.25)
+        self.assertAlmostEqual(may.batting_average, 0.75)
+
+    def test_months_without_appearance_are_omitted(self):
+        play_game(self.team, self.rival, year=2026, day=20)
+
+        self.assertEqual(len(self._months()), 2)
+
+    def test_player_without_games_has_no_months(self):
+        self.assertEqual(self._months(self.pitcher.id), [])
+
+    def test_page_shows_the_table(self):
+        response = self.client.get(self.url)
+
+        self.assertContains(response, '月別成績')
+        self.assertContains(response, '2026年4月')
+
+    def test_page_of_a_player_without_games_omits_the_table(self):
+        response = self.client.get(
+            reverse('player_detail', args=[self.team.id, self.pitcher.id])
+        )
+
+        self.assertNotContains(response, '月別成績')
+
+
+class AdvancedMetricsTest(BaseCase):
+    """指標の拡充（フェーズ4）。FIP と IsoP。"""
+
+    def setUp(self):
+        super().setUp()
+        self.pitcher = self.service.register_player(self.team.id, '佐藤', 18, '投手')
+        self.batter = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        give_pitching(
+            self.team, self.rival, self.pitcher.id,
+            PitchingLine(
+                innings=InningsPitched.from_notation('9.0'), earned_runs=3,
+                hits_allowed=6, home_runs_allowed=1, walks_allowed=2,
+                hit_by_pitch_allowed=1, strikeouts=9,
+            ),
+            day=1,
+        )
+        give_batting(
+            self.team, self.rival, self.batter.id,
+            BattingLine(at_bats=10, singles=1, home_runs=2), day=2,
+        )
+
+    def test_new_counts_survive_the_round_trip(self):
+        detail = self.service.get_player_detail(self.team.id, self.pitcher.id)
+
+        self.assertEqual(detail.home_runs_allowed, 1)
+        self.assertEqual(detail.hit_by_pitch_allowed, 1)
+
+    def test_fip_uses_the_league_constant(self):
+        """リーグに1人しかいなければ、その投手の FIP は防御率と一致する。
+
+        定数はリーグ全体の防御率と素点の差なので、本人＝リーグ全体のとき
+        素点との差がそのまま埋まる。
+        """
+        detail = self.service.get_player_detail(self.team.id, self.pitcher.id)
+
+        self.assertAlmostEqual(detail.fip, detail.earned_run_average)
+
+    def test_isolated_power(self):
+        detail = self.service.get_player_detail(self.team.id, self.batter.id)
+
+        self.assertAlmostEqual(
+            detail.isolated_power, detail.slugging_percentage - detail.batting_average
+        )
+
+    def test_pitcher_list_shows_fip(self):
+        response = self.client.get(
+            f"{reverse('player_list', args=[self.team.id])}?pos=pitcher"
+        )
+
+        self.assertContains(response, 'FIP')
+        self.assertContains(response, 'BB/9')
+        self.assertAlmostEqual(response.context['players'][0].fip, 3.0)
+
+    def test_batter_list_shows_iso(self):
+        response = self.client.get(reverse('player_list', args=[self.team.id]))
+
+        self.assertContains(response, 'IsoP')
+        self.assertAlmostEqual(response.context['players'][0].isolated_power, 0.6)
+
+    def test_pitchers_can_be_sorted_by_fip(self):
+        weak = self.service.register_player(self.team.id, '田中', 19, '投手')
+        give_pitching(
+            self.team, self.rival, weak.id,
+            PitchingLine(
+                innings=InningsPitched.from_notation('9.0'), earned_runs=9,
+                hits_allowed=12, home_runs_allowed=4, walks_allowed=5,
+            ),
+            day=3,
+        )
+
+        listing = self.service.list_pitchers(self.team.id, sort='fip')
+
+        self.assertEqual([r.name for r in listing.rows], ['佐藤', '田中'])
+
+    def test_team_totals_include_fip(self):
+        totals = self.service.get_team_totals(self.team.id)
+
+        self.assertAlmostEqual(totals.fip, totals.earned_run_average)
+
+    def test_player_page_shows_fip(self):
+        response = self.client.get(
+            reverse('player_detail', args=[self.team.id, self.pitcher.id])
+        )
+
+        self.assertContains(response, 'FIP')
+
+    def test_entry_form_saves_the_new_counts(self):
+        self.client.force_login(User.objects.create_user(username='scorer', password='x'))
+        self.client.post(reverse('game_create'), {
+            'year': '2026', 'played_on': '2026-05-01',
+            'home_team': self.team.id, 'away_team': self.rival.id,
+            'home_score': '1', 'away_score': '0',
+        })
+        game = orm_models.Game.objects.latest('id')
+
+        response = self.client.get(reverse('game_edit', args=[game.id]))
+        self.assertContains(response, '被本塁打')
+        self.assertContains(response, '与死球')
+
+        rows = response.context['pitching_rows']
+        payload = {
+            'year': '2026', 'played_on': '2026-05-01',
+            'home_team': self.team.id, 'away_team': self.rival.id,
+            'home_score': '1', 'away_score': '0',
+            'batting-TOTAL_FORMS': '0', 'batting-INITIAL_FORMS': '0',
+            'batting-MIN_NUM_FORMS': '0', 'batting-MAX_NUM_FORMS': '1000',
+            'pitching-TOTAL_FORMS': str(len(rows)),
+            'pitching-INITIAL_FORMS': str(len(rows)),
+            'pitching-MIN_NUM_FORMS': '0', 'pitching-MAX_NUM_FORMS': '1000',
+        }
+        for index, (_, player) in enumerate(rows):
+            payload[f'pitching-{index}-player_id'] = str(player['id'])
+        target = next(
+            index for index, (_, player) in enumerate(rows)
+            if player['id'] == self.pitcher.id
+        )
+        payload.update({
+            f'pitching-{target}-innings_pitched': '6.0',
+            f'pitching-{target}-hits_allowed': '5',
+            f'pitching-{target}-home_runs_allowed': '2',
+            f'pitching-{target}-hit_by_pitch_allowed': '1',
+        })
+
+        self.client.post(reverse('game_edit', args=[game.id]), payload)
+
+        line = orm_models.GamePitchingLine.objects.get(
+            game=game, player_id=self.pitcher.id
+        )
+        self.assertEqual(line.home_runs_allowed, 2)
+        self.assertEqual(line.hit_by_pitch_allowed, 1)
+
+    def test_home_runs_beyond_hits_allowed_are_rejected(self):
+        """被本塁打は被安打の内数。超える入力は保存させない。"""
+        self.client.force_login(User.objects.create_user(username='scorer2', password='x'))
+        self.client.post(reverse('game_create'), {
+            'year': '2026', 'played_on': '2026-06-01',
+            'home_team': self.team.id, 'away_team': self.rival.id,
+            'home_score': '1', 'away_score': '0',
+        })
+        game = orm_models.Game.objects.latest('id')
+        rows = self.client.get(
+            reverse('game_edit', args=[game.id])
+        ).context['pitching_rows']
+
+        payload = {
+            'year': '2026', 'played_on': '2026-06-01',
+            'home_team': self.team.id, 'away_team': self.rival.id,
+            'home_score': '1', 'away_score': '0',
+            'batting-TOTAL_FORMS': '0', 'batting-INITIAL_FORMS': '0',
+            'batting-MIN_NUM_FORMS': '0', 'batting-MAX_NUM_FORMS': '1000',
+            'pitching-TOTAL_FORMS': str(len(rows)),
+            'pitching-INITIAL_FORMS': str(len(rows)),
+            'pitching-MIN_NUM_FORMS': '0', 'pitching-MAX_NUM_FORMS': '1000',
+        }
+        for index, (_, player) in enumerate(rows):
+            payload[f'pitching-{index}-player_id'] = str(player['id'])
+        target = next(
+            index for index, (_, player) in enumerate(rows)
+            if player['id'] == self.pitcher.id
+        )
+        payload.update({
+            f'pitching-{target}-innings_pitched': '6.0',
+            f'pitching-{target}-hits_allowed': '1',
+            f'pitching-{target}-home_runs_allowed': '3',
+        })
+
+        response = self.client.post(reverse('game_edit', args=[game.id]), payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(
+            orm_models.GamePitchingLine.objects.filter(game=game).exists()
+        )
 
 
 class AuthTest(TestCase):

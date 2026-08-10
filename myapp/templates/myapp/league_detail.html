@@ -41,6 +41,49 @@
       </div>
     {% endif %}
 
+    {% comment %}
+    対戦成績。順位表と同じ並びで、行のチームから見た成績をマスに置く。
+    対角線（自分自身）は対戦が存在しないので空にする。
+    {% endcomment %}
+    {% if league.matchups.has_rows %}
+      <h2 class="h6 mb-2 mt-4">対戦成績</h2>
+      <div class="card">
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table matchup-table mb-0">
+              <thead>
+                <tr>
+                  <th>チーム</th>
+                  {% for column in league.matchups.columns %}
+                    <th class="text-center" title="{{ column.team_name }}">{{ column.short_name }}</th>
+                  {% endfor %}
+                  <th class="text-end">通算</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in league.matchups.rows %}
+                  <tr>
+                    <td>
+                      <a href="{% url 'player_list' row.team_id %}" class="player-name">{{ row.team_name }}</a>
+                    </td>
+                    {% for cell in row.cells %}
+                      <td class="text-center {% if cell.is_self %}matchup-self{% elif cell.is_winning %}matchup-winning{% elif cell.is_losing %}matchup-losing{% endif %}">
+                        {{ cell.label }}
+                      </td>
+                    {% endfor %}
+                    <td class="text-end matchup-total">{{ row.total_label }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <p class="page-subtitle mt-2" style="font-size: 0.8125rem;">
+        各マスは「勝-敗-分」。左の列のチームから見た成績です。
+      </p>
+    {% endif %}
+
     <h2 class="h6 mb-2 mt-4">直近の試合</h2>
     <div class="card">
       <div class="card-body p-0">

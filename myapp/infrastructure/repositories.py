@@ -48,6 +48,7 @@ _BATTING_FIELDS = (
 _PITCHING_COUNTS = (
     'wins', 'losses', 'saves', 'earned_runs',
     'strikeouts', 'hits_allowed', 'walks_allowed',
+    'home_runs_allowed', 'hit_by_pitch_allowed',
 )
 
 

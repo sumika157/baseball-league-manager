@@ -295,6 +295,9 @@ class GamePitchingLine(models.Model):
     strikeouts = models.IntegerField(default=0, verbose_name='奪三振')
     hits_allowed = models.IntegerField(default=0, verbose_name='被安打')
     walks_allowed = models.IntegerField(default=0, verbose_name='与四球')
+    # FIP は本塁打・四死球・三振だけで投手を評価するため、この2つが要る
+    home_runs_allowed = models.IntegerField(default=0, verbose_name='被本塁打')
+    hit_by_pitch_allowed = models.IntegerField(default=0, verbose_name='与死球')
 
     class Meta:
         verbose_name = '投球成績'

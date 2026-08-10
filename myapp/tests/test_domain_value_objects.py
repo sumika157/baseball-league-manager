@@ -143,6 +143,28 @@ class BattingLineTest(TestCase):
         with self.assertRaises(InvalidStatValue):
             BattingLine(at_bats=1, singles=2)
 
+    def test_isolated_power_is_slugging_minus_average(self):
+        # 10打数で本塁打2・単打1 → 長打率 .900、打率 .300
+        line = BattingLine(at_bats=10, singles=1, home_runs=2)
+        self.assertAlmostEqual(line.isolated_power, 0.9 - 0.3)
+
+    def test_isolated_power_is_zero_for_singles_only(self):
+        """単打だけの打者は長打力0。打率が高くても IsoP には表れない。"""
+        line = BattingLine(at_bats=10, singles=5)
+        self.assertAlmostEqual(line.isolated_power, 0.0)
+
+    def test_ops_plus_is_a_ratio_to_league_average(self):
+        line = BattingLine(at_bats=4, singles=1, doubles=1, walks=1)
+        self.assertAlmostEqual(line.ops_plus(line.ops), 100.0)
+        self.assertAlmostEqual(line.ops_plus(line.ops * 2), 50.0)
+
+    def test_ops_plus_without_at_bats_is_zero(self):
+        self.assertEqual(BattingLine().ops_plus(0.700), 0.0)
+
+    def test_ops_plus_without_league_average_is_zero(self):
+        line = BattingLine(at_bats=4, singles=1)
+        self.assertEqual(line.ops_plus(0.0), 0.0)
+
 
 class PitchingLineTest(TestCase):
     def test_earned_run_average(self):
@@ -166,12 +188,77 @@ class PitchingLineTest(TestCase):
         line = PitchingLine(innings=InningsPitched.from_notation('9.0'), strikeouts=12)
         self.assertAlmostEqual(line.strikeouts_per_nine, 12.0)
 
+    def test_walks_per_nine(self):
+        line = PitchingLine(
+            innings=InningsPitched.from_notation('9.0'), walks_allowed=3,
+            hit_by_pitch_allowed=2,
+        )
+        # 死球は分子に含めない
+        self.assertAlmostEqual(line.walks_per_nine, 3.0)
+
+    def test_fip_base(self):
+        # 9回で被本塁打1・与四球2・与死球1・奪三振9
+        # → (13×1 + 3×3 − 2×9) ÷ 9 = 4 ÷ 9
+        line = PitchingLine(
+            innings=InningsPitched.from_notation('9.0'), hits_allowed=1,
+            home_runs_allowed=1, walks_allowed=2, hit_by_pitch_allowed=1,
+            strikeouts=9,
+        )
+        self.assertAlmostEqual(line.fip_base, 4 / 9)
+
+    def test_fip_adds_the_league_constant(self):
+        line = PitchingLine(
+            innings=InningsPitched.from_notation('9.0'), hits_allowed=1,
+            home_runs_allowed=1, strikeouts=9,
+        )
+        self.assertAlmostEqual(line.fip(3.10), line.fip_base + 3.10)
+
+    def test_fip_of_an_unused_pitcher_is_zero(self):
+        """未登板は定数を足さない。0回の投球に指標を与えると実力と無関係な値になる。"""
+        self.assertEqual(PitchingLine().fip(3.10), 0.0)
+
+    def test_era_plus_is_the_inverse_ratio_to_league_average(self):
+        # リーグ平均と同じ防御率なら100。自分の防御率が半分（良い）なら200
+        line = PitchingLine(innings=InningsPitched.from_notation('9.0'), earned_runs=2)
+        self.assertAlmostEqual(line.era_plus(line.earned_run_average), 100.0)
+        self.assertAlmostEqual(line.era_plus(line.earned_run_average / 2), 50.0)
+        self.assertAlmostEqual(line.era_plus(line.earned_run_average * 2), 200.0)
+
+    def test_era_plus_of_a_scoreless_pitcher_is_capped(self):
+        """自責点0は比率が無限大になるため、上限値で頭打ちにする。"""
+        line = PitchingLine(innings=InningsPitched.from_notation('9.0'), earned_runs=0)
+        self.assertEqual(line.era_plus(3.50), PitchingLine.ERA_PLUS_CAP)
+
+    def test_era_plus_of_an_unused_pitcher_is_zero(self):
+        self.assertEqual(PitchingLine().era_plus(3.50), 0.0)
+
+    def test_era_plus_without_league_average_is_zero(self):
+        line = PitchingLine(innings=InningsPitched.from_notation('9.0'), earned_runs=2)
+        self.assertEqual(line.era_plus(0.0), 0.0)
+
     def test_no_innings_does_not_divide_by_zero(self):
         line = PitchingLine()
         self.assertEqual(line.earned_run_average, 0.0)
         self.assertEqual(line.whip, 0.0)
         self.assertEqual(line.strikeouts_per_nine, 0.0)
+        self.assertEqual(line.walks_per_nine, 0.0)
+        self.assertEqual(line.fip_base, 0.0)
 
     def test_negative_value_is_rejected(self):
         with self.assertRaises(InvalidStatValue):
             PitchingLine(earned_runs=-1)
+
+    def test_home_runs_allowed_cannot_exceed_hits_allowed(self):
+        """被本塁打は被安打の内数。超える組み合わせは記録として成立しない。"""
+        with self.assertRaises(InvalidStatValue):
+            PitchingLine(hits_allowed=1, home_runs_allowed=2)
+
+    def test_totals_add_the_new_counts(self):
+        line = PitchingLine(
+            innings=InningsPitched.from_notation('3.0'), hits_allowed=2,
+            home_runs_allowed=1, hit_by_pitch_allowed=1,
+        )
+        total = PitchingLine.total([line, line])
+
+        self.assertEqual(total.home_runs_allowed, 2)
+        self.assertEqual(total.hit_by_pitch_allowed, 2)

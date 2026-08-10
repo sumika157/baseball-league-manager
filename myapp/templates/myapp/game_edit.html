@@ -109,6 +109,13 @@
     <div class="card-header">投球成績</div>
     <div class="card-body p-0">
       {% if pitching_rows %}
+        {% comment %}
+        被本塁打は被安打の内数。入力する側が取り違えると被安打より多い値が
+        入りうるので、ドメインで弾く前にここで断っておく。
+        {% endcomment %}
+        <p class="page-subtitle mb-0" style="font-size: 0.8125rem; padding: 0.875rem 1.25rem 0;">
+          被本塁打は被安打の内数です（被安打より多い値は保存できません）。
+        </p>
         <div class="table-responsive">
           <table class="table entry-table mb-0">
             <thead>
@@ -122,6 +129,8 @@
                 <th class="text-end">奪三振</th>
                 <th class="text-end">被安打</th>
                 <th class="text-end">与四球</th>
+                <th class="text-end">被本塁打</th>
+                <th class="text-end">与死球</th>
               </tr>
             </thead>
             <tbody>
@@ -141,6 +150,8 @@
                   <td>{{ entry.strikeouts }}</td>
                   <td>{{ entry.hits_allowed }}</td>
                   <td>{{ entry.walks_allowed }}</td>
+                  <td>{{ entry.home_runs_allowed }}</td>
+                  <td>{{ entry.hit_by_pitch_allowed }}</td>
                 </tr>
               {% endfor %}
             </tbody>
