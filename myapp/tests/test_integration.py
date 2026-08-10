@@ -35,7 +35,14 @@ from myapp.infrastructure.repositories import (
     DjangoTeamRepository,
 )
 
-from .helpers import build_service, give_batting, give_pitching, play_game
+from .helpers import (
+    build_service,
+    give_batting,
+    give_pitching,
+    inning_payload,
+    login_as_manager,
+    play_game,
+)
 
 
 class BaseCase(TestCase):
@@ -181,8 +188,8 @@ class PlayerListViewTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.url = reverse('player_list', args=[self.team.id])
-        # 登録は書き込みなのでログインが要る（閲覧は誰でもできる）
-        self.client.force_login(User.objects.create_user(username='editor', password='x'))
+        # 登録は書き込みなので担当者であることが要る（閲覧は誰でもできる）
+        login_as_manager(self.client, self.team, username='editor')
 
     def test_register_via_form(self):
         self.client.post(self.url, {'name': '山田', 'number': '10', 'position': '内野手'})
@@ -213,7 +220,7 @@ class PlayerListViewTest(BaseCase):
 class PlayerEditViewTest(BaseCase):
     def setUp(self):
         super().setUp()
-        self.client.force_login(User.objects.create_user(username='editor', password='x'))
+        login_as_manager(self.client, self.team, username='editor')
 
     def _url(self, player_id):
         return reverse('player_edit', args=[self.team.id, player_id])
@@ -1263,8 +1270,7 @@ class GameEntryTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.user = User.objects.create_user(username='scorer', password='x')
-        self.client.force_login(self.user)
+        self.user = login_as_manager(self.client, self.team, username='scorer')
         self.batter = self.service.register_player(self.team.id, '山田', 10, '内野手')
         self.pitcher = self.service.register_player(self.team.id, '佐藤', 18, '投手')
 
@@ -1324,6 +1330,7 @@ class GameEntryTest(BaseCase):
             'pitching-MIN_NUM_FORMS': '0', 'pitching-MAX_NUM_FORMS': '1000',
             'pitching-0-player_id': str(self.pitcher.id),
         }
+        payload.update(inning_payload())
         payload.update(overrides)
         return payload
 
@@ -1391,6 +1398,140 @@ class GameEntryTest(BaseCase):
         self.assertEqual(
             self.client.get(reverse('game_edit', args=[9999])).status_code, 404
         )
+
+
+class BoxScoreEntryTest(BaseCase):
+    """手動入力でもボックススコアとNPBの記録が揃うこと。
+
+    イニングスコアと継投を入れれば、勝敗・セーブ・ホールドは規則で決まる。
+    投手の欄に勝敗を入力させないのは、規則から一意に決まるものを人が入れると
+    記録どうしが食い違うため。
+    """
+
+    def setUp(self):
+        super().setUp()
+        login_as_manager(self.client, self.team, self.rival)
+        self.starter = self.service.register_player(self.team.id, '先発', 11, '投手')
+        self.middle = self.service.register_player(self.team.id, '中継ぎ', 12, '投手')
+        self.closer = self.service.register_player(self.team.id, '抑え', 13, '投手')
+        self.batter = self.service.register_player(self.team.id, '4番', 3, '内野手')
+        self.loser = self.service.register_player(self.rival.id, '相手先発', 21, '投手')
+        self.game = play_game(self.team, self.rival, home_score=0, away_score=0)
+        self.url = reverse('game_edit', args=[self.game.id])
+
+    def _payload(self, **overrides):
+        pitchers = [self.starter, self.middle, self.closer, self.loser]
+        payload = {
+            'year': '2026', 'played_on': '2026-04-01',
+            'home_team': self.team.id, 'away_team': self.rival.id,
+            # ホーム2点・ビジター0点。抑えは1点差以内ではないが3点差以内で締める
+            'home_score': '2', 'away_score': '0',
+            'batting-TOTAL_FORMS': '1', 'batting-INITIAL_FORMS': '1',
+            'batting-MIN_NUM_FORMS': '0', 'batting-MAX_NUM_FORMS': '1000',
+            'batting-0-player_id': str(self.batter.id),
+            'batting-0-at_bats': '4', 'batting-0-singles': '2',
+            'batting-0-runs_batted_in': '2',
+            'batting-0-batting_order': '4',
+            'batting-0-slot_sequence': '0',
+            'batting-0-fielding_position': '一',
+            'pitching-TOTAL_FORMS': str(len(pitchers)),
+            'pitching-INITIAL_FORMS': str(len(pitchers)),
+            'pitching-MIN_NUM_FORMS': '0', 'pitching-MAX_NUM_FORMS': '1000',
+        }
+        # ホームは 先発6回 → 中継ぎ2回 → 抑え1回、ビジターは先発が完投
+        for index, (player, entered, innings) in enumerate([
+            (self.starter, '1', '6.0'),
+            (self.middle, '7', '2.0'),
+            (self.closer, '9', '1.0'),
+            (self.loser, '1', '9.0'),
+        ]):
+            payload[f'pitching-{index}-player_id'] = str(player.id)
+            payload[f'pitching-{index}-entered_inning'] = entered
+            payload[f'pitching-{index}-innings_pitched'] = innings
+        payload.update(inning_payload(away=[0] * 9, home=[2] + [0] * 8))
+        payload.update(overrides)
+        return payload
+
+    def _line_of(self, player):
+        return orm_models.GamePitchingLine.objects.get(
+            game_id=self.game.id, player_id=player.id
+        )
+
+    def test_decisions_are_derived_from_the_line_score(self):
+        self.client.post(self.url, self._payload())
+
+        self.assertEqual(self._line_of(self.starter).wins, 1)
+        self.assertEqual(self._line_of(self.loser).losses, 1)
+        self.assertEqual(self._line_of(self.closer).saves, 1)
+        self.assertEqual(self._line_of(self.middle).holds, 1)
+
+    def test_the_winner_does_not_also_get_a_save(self):
+        self.client.post(self.url, self._payload())
+
+        self.assertEqual(self._line_of(self.starter).saves, 0)
+        self.assertEqual(self._line_of(self.closer).wins, 0)
+
+    def test_a_large_lead_yields_no_save(self):
+        """5点差で登板した抑えにはセーブが付かない（1回だけの登板では）。"""
+        self.client.post(self.url, self._payload(
+            home_score='5',
+            **inning_payload(away=[0] * 9, home=[5] + [0] * 8),
+        ))
+
+        self.assertEqual(self._line_of(self.closer).saves, 0)
+        self.assertEqual(self._line_of(self.starter).wins, 1)
+
+    def test_the_line_score_must_match_the_final_score(self):
+        response = self.client.post(self.url, self._payload(home_score='7'), follow=True)
+
+        self.assertContains(response, 'イニングスコアの合計が得点と一致しません')
+
+    def test_lineup_is_saved_and_shown_in_the_box_score(self):
+        self.client.post(self.url, self._payload())
+
+        line = orm_models.GameBattingLine.objects.get(
+            game_id=self.game.id, player_id=self.batter.id
+        )
+        self.assertEqual(line.batting_order, 4)
+        self.assertEqual(line.fielding_position, '一')
+
+        response = self.client.get(reverse('game_detail', args=[self.game.id]))
+        self.assertContains(response, '打順')
+        self.assertContains(response, '一')
+
+    def test_appearance_order_follows_the_entered_inning(self):
+        self.client.post(self.url, self._payload())
+
+        orders = {
+            self._line_of(p).player_id: self._line_of(p).appearance_order
+            for p in (self.starter, self.middle, self.closer)
+        }
+        self.assertEqual(orders[self.starter.id], 1)
+        self.assertEqual(orders[self.middle.id], 2)
+        self.assertEqual(orders[self.closer.id], 3)
+
+    def test_hold_points_accumulate_for_the_reliever(self):
+        self.client.post(self.url, self._payload())
+
+        detail = self.service.get_player_detail(self.team.id, self.middle.id)
+        self.assertEqual(detail.holds, 1)
+        self.assertEqual(detail.hold_points, 1)
+
+    def test_line_score_is_shown_on_the_detail_page(self):
+        self.client.post(self.url, self._payload())
+
+        response = self.client.get(reverse('game_detail', args=[self.game.id]))
+
+        self.assertContains(response, 'linescore-table')
+        self.assertEqual(len(response.context['detail'].line_score.columns), 9)
+
+    def test_the_edit_form_has_no_win_or_save_inputs(self):
+        """勝敗・セーブは導出するので、入力欄を置かない。"""
+        response = self.client.get(self.url)
+
+        self.assertNotContains(response, 'name="pitching-0-wins"')
+        self.assertNotContains(response, 'name="pitching-0-saves"')
+        self.assertContains(response, 'name="pitching-0-entered_inning"')
 
 
 class StadiumTest(BaseCase):
@@ -1894,7 +2035,7 @@ class CaptaincyApplicationTest(BaseCase):
         self.assertIsNone(team.current_captain)
 
     def test_player_edit_appoints_a_captain(self):
-        self.client.force_login(User.objects.create_user(username='u', password='x'))
+        login_as_manager(self.client, self.team, username='u')
 
         response = self.client.post(
             reverse('player_edit', args=[self.team.id, self.player.id]),
@@ -1910,7 +2051,7 @@ class CaptaincyApplicationTest(BaseCase):
     def test_player_edit_shows_duplicate_captain_error(self):
         other = self.service.register_player(self.team.id, '田中', 11, '外野手')
         self.service.appoint_captain(self.team.id, other.id)
-        self.client.force_login(User.objects.create_user(username='u', password='x'))
+        login_as_manager(self.client, self.team, username='u')
 
         response = self.client.post(
             reverse('player_edit', args=[self.team.id, self.player.id]),
@@ -2644,6 +2785,283 @@ class MonthlySplitViewTest(BaseCase):
         self.assertNotContains(response, '月別成績')
 
 
+class LeagueTitlesViewTest(BaseCase):
+    """リーグのタイトル一覧（フェーズ4）。
+
+    ダッシュボードのランキングは通算成績だが、タイトルはシーズンごとに
+    争われるので、対象シーズンの試合だけから成績を積み直す。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.slugger = self.service.register_player(self.team.id, '大砲', 3, '内野手')
+        self.ace = self.service.register_player(self.team.id, 'エース', 18, '投手')
+        self.url = reverse('league_titles', args=[self.league.id])
+
+    def _departments(self, year=None):
+        titles = self.service.get_league_titles(self.league.id, year)
+        return {d.key: d for d in titles.departments}
+
+    def test_home_run_leader(self):
+        give_batting(
+            self.team, self.rival, self.slugger.id,
+            BattingLine(at_bats=10, home_runs=3), day=1,
+        )
+
+        leader = self._departments()['home_runs'].leader
+
+        self.assertEqual(leader.player_name, '大砲')
+        self.assertEqual(leader.value, '3')
+
+    def test_runs_batted_in_leader(self):
+        give_batting(
+            self.team, self.rival, self.slugger.id,
+            BattingLine(at_bats=10, singles=4, runs_batted_in=7), day=1,
+        )
+
+        leader = self._departments()['rbi'].leader
+
+        self.assertEqual(leader.player_name, '大砲')
+        self.assertEqual(leader.value, '7')
+
+    def test_rate_departments_require_qualification(self):
+        """1打数1安打の選手は首位打者にしない。規定打席で絞る。"""
+        give_batting(
+            self.team, self.rival, self.slugger.id,
+            BattingLine(at_bats=1, singles=1), day=1,
+        )
+
+        self.assertEqual(self._departments()['average'].entries, [])
+
+    def test_qualified_batter_takes_the_batting_title(self):
+        # 1試合なら規定打席は ceil(1 × 3.1) = 4 打席
+        give_batting(
+            self.team, self.rival, self.slugger.id,
+            BattingLine(at_bats=4, singles=2), day=1,
+        )
+
+        leader = self._departments()['average'].leader
+
+        self.assertEqual(leader.player_name, '大砲')
+        self.assertEqual(leader.value, '.500')
+
+    def test_era_department_requires_qualifying_innings(self):
+        give_pitching(
+            self.team, self.rival, self.ace.id,
+            PitchingLine(innings=InningsPitched.from_notation('9.0'), earned_runs=2),
+            day=1,
+        )
+
+        leader = self._departments()['era'].leader
+
+        self.assertEqual(leader.player_name, 'エース')
+        self.assertEqual(leader.value, '2.00')
+
+    def test_departments_are_scoped_to_the_season(self):
+        give_batting(
+            self.team, self.rival, self.slugger.id,
+            BattingLine(at_bats=10, home_runs=5), year=2025, day=1,
+        )
+        give_batting(
+            self.team, self.rival, self.slugger.id,
+            BattingLine(at_bats=10, home_runs=1), year=2026, day=1,
+        )
+
+        self.assertEqual(self._departments(2025)['home_runs'].leader.value, '5')
+        self.assertEqual(self._departments(2026)['home_runs'].leader.value, '1')
+
+    def test_players_of_another_league_are_not_listed(self):
+        other_league = orm_models.League.objects.create(name='別リーグ')
+        other = orm_models.Team.objects.create(league=other_league, name='別チーム')
+        opponent = orm_models.Team.objects.create(league=other_league, name='別の相手')
+        outsider = self.service.register_player(other.id, '他リーグの大砲', 9, '内野手')
+        give_batting(
+            other, opponent, outsider.id, BattingLine(at_bats=10, home_runs=9), day=1
+        )
+        give_batting(
+            self.team, self.rival, self.slugger.id,
+            BattingLine(at_bats=10, home_runs=1), day=2,
+        )
+
+        names = [e.player_name for e in self._departments()['home_runs'].entries]
+
+        self.assertEqual(names, ['大砲'])
+
+    def test_page_renders_every_department(self):
+        give_batting(
+            self.team, self.rival, self.slugger.id,
+            BattingLine(at_bats=4, singles=2, home_runs=1, runs_batted_in=3), day=1,
+        )
+
+        response = self.client.get(self.url)
+
+        for label in ['首位打者', '本塁打王', '打点王', '最優秀防御率', '最多奪三振']:
+            self.assertContains(response, label)
+
+    def test_page_without_games_says_so(self):
+        response = self.client.get(self.url)
+
+        self.assertContains(response, 'まだ登録されていません')
+
+    def test_missing_league_returns_404(self):
+        self.assertEqual(
+            self.client.get(reverse('league_titles', args=[9999])).status_code, 404
+        )
+
+    def test_league_page_links_to_the_titles_page(self):
+        play_game(self.team, self.rival)
+
+        response = self.client.get(reverse('league_detail', args=[self.league.id]))
+
+        self.assertContains(
+            response, reverse('league_titles_by_year', args=[self.league.id, 2026])
+        )
+
+
+class TeamMonthlySplitViewTest(BaseCase):
+    """チームの月別成績（フェーズ4）。個人の月別成績と対になる推移。"""
+
+    def setUp(self):
+        super().setUp()
+        self.batter = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        self.url = reverse('player_list', args=[self.team.id])
+
+    def test_grouped_by_month_oldest_first(self):
+        play_game(self.team, self.rival, month=5, day=1)
+        play_game(self.team, self.rival, month=4, day=1)
+
+        rows = self.service.list_team_monthly_splits(self.team.id)
+
+        self.assertEqual([r.label for r in rows], ['2026年4月', '2026年5月'])
+
+    def test_record_and_rate_per_month(self):
+        play_game(
+            self.team, self.rival, month=4, day=1, home_score=5, away_score=3,
+            batting={self.batter.id: BattingLine(at_bats=4, singles=1)},
+        )
+        play_game(
+            self.team, self.rival, month=4, day=2, home_score=1, away_score=2,
+            batting={self.batter.id: BattingLine(at_bats=4, singles=1)},
+        )
+
+        april = self.service.list_team_monthly_splits(self.team.id)[0]
+
+        self.assertEqual(april.games_played, 2)
+        self.assertEqual(april.record_label, '1-1-0')
+        self.assertAlmostEqual(april.batting_average, 0.25)  # 2/8
+
+    def test_the_opponents_lines_are_not_counted(self):
+        """試合の明細には相手の選手も入る。自チームの分だけを合計する。"""
+        theirs = self.service.register_player(self.rival.id, '相手', 1, '内野手')
+        play_game(
+            self.team, self.rival, month=4, batting={
+                self.batter.id: BattingLine(at_bats=4, singles=1),
+                theirs.id: BattingLine(at_bats=4, singles=4),
+            },
+        )
+
+        april = self.service.list_team_monthly_splits(self.team.id)[0]
+
+        self.assertAlmostEqual(april.batting_average, 0.25)
+
+    def test_page_shows_the_table(self):
+        play_game(self.team, self.rival, month=4)
+
+        response = self.client.get(self.url)
+
+        self.assertContains(response, '月別成績')
+        self.assertContains(response, '2026年4月')
+
+    def test_team_without_games_has_no_months(self):
+        self.assertEqual(self.service.list_team_monthly_splits(self.team.id), [])
+        self.assertNotContains(self.client.get(self.url), '月別成績')
+
+
+class RelativeMetricsTest(BaseCase):
+    """対リーグ相対指標（フェーズ4）。OPS+ と ERA+。
+
+    どちらもリーグ平均を100とした指数。リーグ全体の合計から基準を作るため、
+    リーグを知らないアプリ層では確定できない。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.batter = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        self.pitcher = self.service.register_player(self.team.id, '佐藤', 18, '投手')
+        give_batting(
+            self.team, self.rival, self.batter.id,
+            BattingLine(at_bats=10, singles=2, home_runs=1), day=1,
+        )
+        give_pitching(
+            self.team, self.rival, self.pitcher.id,
+            PitchingLine(innings=InningsPitched.from_notation('9.0'), earned_runs=3),
+            day=2,
+        )
+
+    def test_a_lone_player_sits_at_the_league_average(self):
+        """リーグにその選手しかいなければ、本人がリーグ平均そのもの＝100。"""
+        batter = self.service.get_player_detail(self.team.id, self.batter.id)
+        pitcher = self.service.get_player_detail(self.team.id, self.pitcher.id)
+
+        self.assertAlmostEqual(batter.ops_plus, 100.0)
+        self.assertAlmostEqual(pitcher.era_plus, 100.0)
+
+    def test_a_better_batter_scores_above_a_hundred(self):
+        """リーグ平均より良い打者は100を超える。"""
+        weak = self.service.register_player(self.team.id, '田中', 11, '外野手')
+        give_batting(
+            self.team, self.rival, weak.id, BattingLine(at_bats=10, singles=1), day=3
+        )
+
+        rows = {r.name: r for r in self.service.list_batters(self.team.id).rows}
+
+        self.assertGreater(rows['山田'].ops_plus, 100.0)
+        self.assertLess(rows['田中'].ops_plus, 100.0)
+
+    def test_era_plus_rewards_the_lower_earned_run_average(self):
+        """ERA+ は防御率が低いほど大きい（FIP と向きが逆）。"""
+        weak = self.service.register_player(self.team.id, '鈴木', 19, '投手')
+        give_pitching(
+            self.team, self.rival, weak.id,
+            PitchingLine(innings=InningsPitched.from_notation('9.0'), earned_runs=9),
+            day=4,
+        )
+
+        rows = {r.name: r for r in self.service.list_pitchers(self.team.id).rows}
+
+        self.assertGreater(rows['佐藤'].era_plus, rows['鈴木'].era_plus)
+        self.assertGreater(rows['佐藤'].era_plus, 100.0)
+
+    def test_players_in_another_league_do_not_move_the_baseline(self):
+        """指数はリーグごとに閉じる。他リーグの成績は基準に混ぜない。"""
+        other_league = orm_models.League.objects.create(name='別リーグ')
+        other = orm_models.Team.objects.create(league=other_league, name='別チーム')
+        opponent = orm_models.Team.objects.create(league=other_league, name='別の相手')
+        slugger = self.service.register_player(other.id, '大砲', 3, '内野手')
+        give_batting(
+            other, opponent, slugger.id,
+            BattingLine(at_bats=10, home_runs=5), day=5,
+        )
+
+        # 別リーグに強打者が現れても、こちらのリーグの基準は動かない
+        detail = self.service.get_player_detail(self.team.id, self.batter.id)
+
+        self.assertAlmostEqual(detail.ops_plus, 100.0)
+
+    def test_lists_and_pages_show_the_indexes(self):
+        batters = self.client.get(reverse('player_list', args=[self.team.id]))
+        pitchers = self.client.get(
+            f"{reverse('player_list', args=[self.team.id])}?pos=pitcher"
+        )
+        page = self.client.get(
+            reverse('player_detail', args=[self.team.id, self.batter.id])
+        )
+
+        self.assertContains(batters, 'OPS+')
+        self.assertContains(pitchers, 'ERA+')
+        self.assertContains(page, 'OPS+')
+
+
 class AdvancedMetricsTest(BaseCase):
     """指標の拡充（フェーズ4）。FIP と IsoP。"""
 
@@ -2731,7 +3149,7 @@ class AdvancedMetricsTest(BaseCase):
         self.assertContains(response, 'FIP')
 
     def test_entry_form_saves_the_new_counts(self):
-        self.client.force_login(User.objects.create_user(username='scorer', password='x'))
+        login_as_manager(self.client, self.team, username='scorer')
         self.client.post(reverse('game_create'), {
             'year': '2026', 'played_on': '2026-05-01',
             'home_team': self.team.id, 'away_team': self.rival.id,
@@ -2753,6 +3171,7 @@ class AdvancedMetricsTest(BaseCase):
             'pitching-TOTAL_FORMS': str(len(rows)),
             'pitching-INITIAL_FORMS': str(len(rows)),
             'pitching-MIN_NUM_FORMS': '0', 'pitching-MAX_NUM_FORMS': '1000',
+            **inning_payload(),
         }
         for index, (_, player) in enumerate(rows):
             payload[f'pitching-{index}-player_id'] = str(player['id'])
@@ -2777,7 +3196,7 @@ class AdvancedMetricsTest(BaseCase):
 
     def test_home_runs_beyond_hits_allowed_are_rejected(self):
         """被本塁打は被安打の内数。超える入力は保存させない。"""
-        self.client.force_login(User.objects.create_user(username='scorer2', password='x'))
+        login_as_manager(self.client, self.team, username='scorer2')
         self.client.post(reverse('game_create'), {
             'year': '2026', 'played_on': '2026-06-01',
             'home_team': self.team.id, 'away_team': self.rival.id,
@@ -2797,6 +3216,7 @@ class AdvancedMetricsTest(BaseCase):
             'pitching-TOTAL_FORMS': str(len(rows)),
             'pitching-INITIAL_FORMS': str(len(rows)),
             'pitching-MIN_NUM_FORMS': '0', 'pitching-MAX_NUM_FORMS': '1000',
+            **inning_payload(),
         }
         for index, (_, player) in enumerate(rows):
             payload[f'pitching-{index}-player_id'] = str(player['id'])
@@ -2816,6 +3236,121 @@ class AdvancedMetricsTest(BaseCase):
         self.assertFalse(
             orm_models.GamePitchingLine.objects.filter(game=game).exists()
         )
+
+
+class TeamManagerPermissionTest(BaseCase):
+    """チーム担当者制（フェーズ5）。
+
+    ログインしただけでは書き込めない。担当するチームが関わる範囲だけを
+    編集でき、管理ユーザーは担当に関わらず全権を持つ。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        self.game = play_game(self.team, self.rival)
+        # 相手チームとも別リーグとも無関係な、どこも担当していないチーム
+        self.outsider = orm_models.Team.objects.create(
+            league=self.league, name='無関係チーム'
+        )
+
+    def _player_edit_url(self):
+        return reverse('player_edit', args=[self.team.id, self.player.id])
+
+    # --- 選手 ---
+
+    def test_manager_can_open_player_edit(self):
+        login_as_manager(self.client, self.team)
+        self.assertEqual(self.client.get(self._player_edit_url()).status_code, 200)
+
+    def test_logged_in_non_manager_is_rejected(self):
+        """ログインしていても担当外なら編集できない。"""
+        self.client.force_login(User.objects.create_user(username='other', password='x'))
+        self.assertEqual(self.client.get(self._player_edit_url()).status_code, 403)
+
+    def test_manager_of_another_team_is_rejected(self):
+        login_as_manager(self.client, self.outsider)
+        self.assertEqual(self.client.get(self._player_edit_url()).status_code, 403)
+
+    def test_staff_can_edit_any_team(self):
+        self.client.force_login(
+            User.objects.create_user(username='staff', password='x', is_staff=True)
+        )
+        self.assertEqual(self.client.get(self._player_edit_url()).status_code, 200)
+
+    def test_anonymous_is_sent_to_login_not_403(self):
+        """未ログインは拒否ではなくログインへ誘導する。まだ入る余地があるため。"""
+        response = self.client.get(self._player_edit_url())
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/accounts/login/', response['Location'])
+
+    def test_non_manager_cannot_register_a_player(self):
+        self.client.force_login(User.objects.create_user(username='other', password='x'))
+
+        response = self.client.post(
+            reverse('player_list', args=[self.team.id]),
+            {'name': '田中', 'number': '11', 'position': '外野手'},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(orm_models.PlayerStint.objects.filter(number=11).exists())
+
+    def test_player_list_hides_write_controls_from_non_managers(self):
+        self.client.force_login(User.objects.create_user(username='other', password='x'))
+
+        response = self.client.get(reverse('player_list', args=[self.team.id]))
+
+        self.assertEqual(response.status_code, 200)  # 閲覧はできる
+        self.assertNotContains(response, '新入団選手の登録')
+
+    def test_player_list_shows_write_controls_to_managers(self):
+        login_as_manager(self.client, self.team)
+
+        response = self.client.get(reverse('player_list', args=[self.team.id]))
+
+        self.assertContains(response, '新入団選手の登録')
+
+    # --- 試合 ---
+
+    def test_manager_of_either_side_can_edit_the_game(self):
+        """試合は2チームにまたがる。どちらか一方の担当者なら編集できる。"""
+        login_as_manager(self.client, self.rival)
+        self.assertEqual(
+            self.client.get(reverse('game_edit', args=[self.game.id])).status_code, 200
+        )
+
+    def test_manager_of_an_uninvolved_team_cannot_edit_the_game(self):
+        login_as_manager(self.client, self.outsider)
+        self.assertEqual(
+            self.client.get(reverse('game_edit', args=[self.game.id])).status_code, 403
+        )
+
+    def test_game_detail_hides_the_edit_link_from_non_managers(self):
+        login_as_manager(self.client, self.outsider)
+
+        response = self.client.get(reverse('game_detail', args=[self.game.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, '記録を編集')
+
+    def test_creating_a_game_between_teams_you_do_not_manage_is_refused(self):
+        login_as_manager(self.client, self.outsider)
+
+        response = self.client.post(reverse('game_create'), {
+            'year': '2026', 'played_on': '2026-04-02',
+            'home_team': self.team.id, 'away_team': self.rival.id,
+            'home_score': '1', 'away_score': '0',
+        }, follow=True)
+
+        self.assertContains(response, 'どちらのチームも担当していない')
+        self.assertEqual(orm_models.Game.objects.count(), 1)  # 既存の1件のみ
+
+    def test_game_list_hides_the_create_link_when_you_manage_nothing(self):
+        self.client.force_login(User.objects.create_user(username='other', password='x'))
+
+        response = self.client.get(reverse('game_list'))
+
+        self.assertNotContains(response, '試合を登録')
 
 
 class AuthTest(TestCase):

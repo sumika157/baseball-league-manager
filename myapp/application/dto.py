@@ -62,15 +62,96 @@ class GamePlayerRow:
     strikeouts: int = 0
     hits_allowed: int = 0
     earned_run_average: float = 0.0
+    # 打線での位置づけ。ボックススコアの並びと表示に使う
+    batting_order: int | None = None
+    slot_sequence: int = 0
+    position_label: str = ''
+    # 投手の登板順と、その試合で付いた記録
+    appearance_order: int = 1
+    walks_allowed: int = 0
+    hit_by_pitch_allowed: int = 0
+    home_runs_allowed: int = 0
+    decision: str = ''   # '勝' / '敗' / 'Ｓ' / 'Ｈ'。付かなければ空
+    # その試合ぶんの内訳
+    doubles: int = 0
+    triples: int = 0
+    hit_by_pitch: int = 0
+    sacrifice_flies: int = 0
+    # 通算の率。ボックススコアの「打率」「防御率」は、その試合の率ではなく
+    # 積み上がった率を参考として並べる（1試合の率は標本が小さすぎて読めない）
+    career_batting_average: float = 0.0
+    career_earned_run_average: float = 0.0
+
+    @property
+    def is_starter(self) -> bool:
+        """スタメンか。打順の先頭に入っていればスタメン。"""
+        return self.slot_sequence == 0
+
+    @property
+    def order_label(self) -> str:
+        """打順の表示。交代で入った選手は打順を繰り返さず空にする。"""
+        if self.batting_order is None or not self.is_starter:
+            return ''
+        return str(self.batting_order)
+
+
+@dataclass(frozen=True)
+class InningScoreColumn:
+    """イニングスコアの1列。"""
+
+    inning: int
+    away: str            # 得点。ホームが攻めていない回は 'X'
+    home: str
+
+
+@dataclass(frozen=True)
+class GameLineScore:
+    """イニングスコア（スコアボード）。
+
+    ビジターが表、ホームが裏。回数は延長も含めて記録されているぶんだけ出す。
+    """
+
+    columns: list[InningScoreColumn]
+    away_total: int
+    home_total: int
+    away_hits: int
+    home_hits: int
+
+    @property
+    def has_columns(self) -> bool:
+        return bool(self.columns)
+
+
+@dataclass(frozen=True)
+class GameTeamBox:
+    """1チームぶんのボックススコア。"""
+
+    team_id: int
+    team_name: str
+    score: int
+    batting: list[GamePlayerRow]
+    pitching: list[GamePlayerRow]
 
 
 @dataclass(frozen=True)
 class GameDetail:
-    """試合詳細。"""
+    """試合詳細。
+
+    打撃・投球はチームごとに分けて持つ。ボックススコアはチーム単位で
+    読むものなので、両チームを1つの表に混ぜると打順が追えない。
+    """
 
     game: GameRow
     batting: list[GamePlayerRow]
     pitching: list[GamePlayerRow]
+    line_score: GameLineScore | None = None
+    away_box: GameTeamBox | None = None
+    home_box: GameTeamBox | None = None
+
+    @property
+    def boxes(self) -> list[GameTeamBox]:
+        """ビジター → ホームの順。スコアボードと同じ並びにする。"""
+        return [box for box in (self.away_box, self.home_box) if box is not None]
 
 
 @dataclass(frozen=True)
@@ -118,6 +199,28 @@ class MonthlyRow:
 
 
 @dataclass(frozen=True)
+class TeamMonthlyRow:
+    """チームの月別成績1行。
+
+    選手の MonthlyRow と対になるが、束ねる対象がチームなので勝敗を持ち、
+    打撃と投球を同時に並べる（チームは常に攻守どちらも行う）。
+    """
+
+    label: str           # '2026年4月'
+    games_played: int
+    record_label: str    # '8-4-1'（勝-敗-分）
+    winning_percentage: str
+    # 打撃
+    batting_average: float = 0.0
+    ops: float = 0.0
+    home_runs: int = 0
+    # 投球
+    earned_run_average: float = 0.0
+    whip: float = 0.0
+    strikeouts: int = 0
+
+
+@dataclass(frozen=True)
 class CareerRow:
     """経歴の1行。どのチームにいつ在籍したか。"""
 
@@ -137,7 +240,7 @@ class CareerRow:
 class PlayerProfile:
     """選手個人ページ。プロフィール・経歴・通算成績・試合ごとの記録。"""
 
-    detail: 'PlayerDetail'
+    detail: PlayerDetail
     games: list[PlayerGameRow]
     career: list[CareerRow] = None
     # 月別成績。調子の波は通算値では見えないため、期間で区切って並べる
@@ -210,10 +313,10 @@ class LeagueRankings:
 
     league_id: int
     league_name: str
-    ops_leaders: list['RankingEntry']
-    home_run_leaders: list['RankingEntry']
-    era_leaders: list['RankingEntry']
-    strikeout_leaders: list['RankingEntry']
+    ops_leaders: list[RankingEntry]
+    home_run_leaders: list[RankingEntry]
+    era_leaders: list[RankingEntry]
+    strikeout_leaders: list[RankingEntry]
 
     @property
     def has_any(self) -> bool:
@@ -256,7 +359,7 @@ class LeagueTeams:
 
     league_id: int
     league_name: str
-    teams: list['TeamSummary']
+    teams: list[TeamSummary]
 
 
 @dataclass(frozen=True)
@@ -344,6 +447,40 @@ class MatchupTable:
 
 
 @dataclass(frozen=True)
+class TitleDepartment:
+    """タイトル1部門。打率・本塁打などの部門ごとの上位者。"""
+
+    key: str
+    label: str
+    note: str = ''       # '規定打席以上' など。率の部門だけ付く
+    entries: list[RankingEntry] = None
+
+    @property
+    def leader(self) -> RankingEntry | None:
+        """首位者。同率なら先頭の1人（順位そのものは entry.rank が持つ）。"""
+        return self.entries[0] if self.entries else None
+
+
+@dataclass(frozen=True)
+class LeagueTitles:
+    """リーグのタイトル一覧。
+
+    ダッシュボードのランキングは全体の概況で、通算成績を並べる。こちらは
+    シーズンで区切り、部門を掘り下げて確認する場所として役割を分ける。
+    """
+
+    league_id: int
+    league_name: str
+    year: int | None
+    available_years: list[int]
+    departments: list[TitleDepartment]
+
+    @property
+    def has_any(self) -> bool:
+        return any(d.entries for d in self.departments)
+
+
+@dataclass(frozen=True)
 class LeagueDetail:
     """リーグ画面。"""
 
@@ -353,7 +490,7 @@ class LeagueDetail:
     available_years: list[int]
     teams: list[TeamSummary]
     standings: list[StandingRow]
-    recent_games: list['GameRow']
+    recent_games: list[GameRow]
     # チーム間の相性。順位表の背景として同じ画面に置く
     matchups: MatchupTable | None = None
 
@@ -398,16 +535,16 @@ class Dashboard:
     batter_count: int
     pitcher_count: int
     # タイトルはリーグの中で争われるので、ランキングもリーグごとに持つ
-    league_rankings: list['LeagueRankings']
+    league_rankings: list[LeagueRankings]
     # チームはリーグごとに分けて持つ。数が増えると1つの並びでは読みにくいため
-    league_teams: list['LeagueTeams']
+    league_teams: list[LeagueTeams]
 
     @property
     def player_count(self) -> int:
         return self.batter_count + self.pitcher_count
 
     @property
-    def teams(self) -> list['TeamSummary']:
+    def teams(self) -> list[TeamSummary]:
         """全リーグを平坦に並べたもの。件数の判定などに使う。"""
         return [team for group in self.league_teams for team in group.teams]
 
@@ -433,6 +570,8 @@ class BatterRow:
     walks: int = 0
     sacrifice_flies: int = 0
     slugging_percentage: float = 0.0
+    # リーグ平均を100とした指数。得点環境の違うリーグ・シーズンでも比べられる
+    ops_plus: float = 0.0
     is_captain: bool = False
     is_foreign_player: bool = False
     throws_bats: str = ''
@@ -459,7 +598,13 @@ class PitcherRow:
     walks_per_nine: float = 0.0
     # FIP はリーグの定数を足して仕上げるため、リーグを知る側で計算して渡す
     fip: float = 0.0
+    # リーグ平均防御率を100とした指数。FIP と逆で、大きいほど良い
+    era_plus: float = 0.0
     saves: int = 0
+    # 救援投手の指標。HP（ホールドポイント）はホールド＋救援勝利
+    holds: int = 0
+    hold_points: int = 0
+    starts: int = 0
     home_runs_allowed: int = 0
     hit_by_pitch_allowed: int = 0
     is_captain: bool = False
@@ -512,4 +657,9 @@ class PlayerDetail:
     isolated_power: float = 0.0
     walks_per_nine: float = 0.0
     fip: float = 0.0
+    ops_plus: float = 0.0
+    era_plus: float = 0.0
+    holds: int = 0
+    hold_points: int = 0
+    starts: int = 0
     is_captain: bool = False

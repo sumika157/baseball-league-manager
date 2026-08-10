@@ -30,9 +30,11 @@ from ..domain.exceptions import (
 )
 from ..domain.value_objects import (
     BattingLine,
+    FieldingPosition,
     Handedness,
     InningsPitched,
     JerseyNumber,
+    LineScore,
     PitchingLine,
     Position,
     Profile,
@@ -48,8 +50,12 @@ _BATTING_FIELDS = (
 _PITCHING_COUNTS = (
     'wins', 'losses', 'saves', 'earned_runs',
     'strikeouts', 'hits_allowed', 'walks_allowed',
-    'home_runs_allowed', 'hit_by_pitch_allowed',
+    'home_runs_allowed', 'hit_by_pitch_allowed', 'holds',
 )
+
+# 先発登板数と救援勝利は行に持たず、登板順から導く。同じ事実を2つ持たないため
+# （登板順1なら先発、2以上での勝利は救援勝利）。
+_DERIVED_PITCHING_COUNTS = ('starts', 'relief_wins')
 
 
 class DjangoTeamRepository:
@@ -324,18 +330,27 @@ def _pitching_totals(player_ids: list[int]) -> dict[int, PitchingLine]:
         .annotate(**{f: Sum(f) for f in _PITCHING_COUNTS})
     )
     innings: dict[int, InningsPitched] = {}
-    for player_id, notation in (
+    # 先発登板数と救援勝利は登板順から導く。SQL の集計では表しにくいので
+    # 明細を1度読んで数える（投球回の合計も同じ明細から取る）
+    derived: dict[int, dict[str, int]] = {}
+    for player_id, notation, order, wins in (
         orm_models.GamePitchingLine.objects
         .filter(player_id__in=player_ids)
-        .values_list('player_id', 'innings_pitched')
+        .values_list('player_id', 'innings_pitched', 'appearance_order', 'wins')
     ):
         innings[player_id] = innings.get(player_id, InningsPitched.zero()) + \
             InningsPitched.from_notation(notation)
+        entry = derived.setdefault(player_id, {'starts': 0, 'relief_wins': 0})
+        if order <= 1:
+            entry['starts'] += 1
+        else:
+            entry['relief_wins'] += wins
 
     return {
         r['player_id']: PitchingLine(
             innings=innings.get(r['player_id'], InningsPitched.zero()),
             **{f: r[f] or 0 for f in _PITCHING_COUNTS},
+            **derived.get(r['player_id'], {}),
         )
         for r in counts
     }
@@ -348,7 +363,7 @@ class DjangoGameRepository:
         try:
             row = (
                 orm_models.Game.objects
-                .prefetch_related('batting_lines', 'pitching_lines')
+                .prefetch_related('batting_lines', 'pitching_lines', 'inning_scores')
                 .get(id=game_id)
             )
         except orm_models.Game.DoesNotExist:
@@ -356,7 +371,7 @@ class DjangoGameRepository:
         return self._to_domain(row)
 
     def find_all(self, year: int | None = None) -> list[Game]:
-        rows = orm_models.Game.objects.prefetch_related('batting_lines', 'pitching_lines')
+        rows = orm_models.Game.objects.prefetch_related('batting_lines', 'pitching_lines', 'inning_scores')
         if year is not None:
             rows = rows.filter(year=year)
         return [self._to_domain(row) for row in rows]
@@ -367,7 +382,7 @@ class DjangoGameRepository:
         rows = (
             orm_models.Game.objects
             .filter(Q(home_team_id=team_id) | Q(away_team_id=team_id))
-            .prefetch_related('batting_lines', 'pitching_lines')
+            .prefetch_related('batting_lines', 'pitching_lines', 'inning_scores')
         )
         if year is not None:
             rows = rows.filter(year=year)
@@ -389,20 +404,30 @@ class DjangoGameRepository:
         game.id = row.id
 
         for entry in game.batting:
+            defaults = {f: getattr(entry.line, f) for f in _BATTING_FIELDS}
+            defaults.update({
+                'batting_order': entry.batting_order,
+                'slot_sequence': entry.slot_sequence,
+                'fielding_position': (
+                    entry.fielding_position.value if entry.fielding_position else ''
+                ),
+            })
             line_row, _ = orm_models.GameBattingLine.objects.update_or_create(
-                game=row,
-                player_id=entry.player_id,
-                defaults={f: getattr(entry.line, f) for f in _BATTING_FIELDS},
+                game=row, player_id=entry.player_id, defaults=defaults
             )
             entry.id = line_row.id
 
         for entry in game.pitching:
             defaults = {f: getattr(entry.line, f) for f in _PITCHING_COUNTS}
             defaults['innings_pitched'] = float(entry.line.innings.to_notation())
+            defaults['appearance_order'] = entry.appearance_order
+            defaults['entered_inning'] = entry.entered_inning
             line_row, _ = orm_models.GamePitchingLine.objects.update_or_create(
                 game=row, player_id=entry.player_id, defaults=defaults
             )
             entry.id = line_row.id
+
+        self._save_line_score(row, game)
 
         # 集約から外された成績は削除する。上書きだけだと、いったん入力した
         # 選手を「出場していない」に戻せない
@@ -416,7 +441,38 @@ class DjangoGameRepository:
         return game
 
     @staticmethod
-    def _to_domain(row: orm_models.Game) -> Game:
+    def _save_line_score(row: orm_models.Game, game: Game) -> None:
+        """イニングスコアを保存する。回数が減った場合は余った行を消す。"""
+        score = game.line_score
+        for inning in range(1, score.innings + 1):
+            for is_home in (False, True):
+                values = score.home if is_home else score.away
+                if inning > len(values):
+                    continue
+                orm_models.GameInningScore.objects.update_or_create(
+                    game=row, inning=inning, is_home=is_home,
+                    defaults={'runs': values[inning - 1]},
+                )
+        orm_models.GameInningScore.objects.filter(
+            game=row, inning__gt=score.innings
+        ).delete()
+
+    @staticmethod
+    def _to_line_score(row: orm_models.Game) -> LineScore:
+        """行から回ごとの得点を組み立てる。抜けている回は 0 で埋める。"""
+        halves: dict[bool, dict[int, int]] = {False: {}, True: {}}
+        for entry in row.inning_scores.all():
+            halves[entry.is_home][entry.inning] = entry.runs
+
+        def to_tuple(values: dict[int, int]) -> tuple[int, ...]:
+            if not values:
+                return ()
+            return tuple(values.get(i, 0) for i in range(1, max(values) + 1))
+
+        return LineScore(away=to_tuple(halves[False]), home=to_tuple(halves[True]))
+
+    @classmethod
+    def _to_domain(cls, row: orm_models.Game) -> Game:
         game = Game(
             id=row.id,
             season=Season(row.year),
@@ -425,12 +481,16 @@ class DjangoGameRepository:
             away_team_id=row.away_team_id,
             home_score=row.home_score,
             away_score=row.away_score,
+            line_score=cls._to_line_score(row),
         )
         game.batting = [
             GameBatting(
                 id=b.id,
                 player_id=b.player_id,
                 line=BattingLine(**{f: getattr(b, f) for f in _BATTING_FIELDS}),
+                batting_order=b.batting_order,
+                slot_sequence=b.slot_sequence,
+                fielding_position=FieldingPosition.from_label(b.fielding_position),
             )
             for b in row.batting_lines.all()
         ]
@@ -441,7 +501,12 @@ class DjangoGameRepository:
                 line=PitchingLine(
                     innings=InningsPitched.from_notation(p.innings_pitched),
                     **{f: getattr(p, f) for f in _PITCHING_COUNTS},
+                    # 1試合の行なので、先発なら1、救援での勝利ならその勝利数
+                    starts=1 if p.appearance_order <= 1 else 0,
+                    relief_wins=p.wins if p.appearance_order > 1 else 0,
                 ),
+                appearance_order=p.appearance_order,
+                entered_inning=p.entered_inning,
             )
             for p in row.pitching_lines.all()
         ]

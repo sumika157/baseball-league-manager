@@ -10,6 +10,7 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.views import redirect_to_login
+from django.core.exceptions import PermissionDenied
 from django.http import Http404
 from django.shortcuts import redirect, render
 from django.urls import reverse, reverse_lazy
@@ -23,17 +24,30 @@ from ..domain.exceptions import (
     PlayerNotFound,
     TeamNotFound,
 )
-from ..domain.value_objects import BattingLine, InningsPitched, PitchingLine, Position
-from ..infrastructure.queries import DjangoPlayerSearchQuery, DjangoTeamListQuery
+from ..domain.value_objects import (
+    BattingLine,
+    FieldingPosition,
+    InningsPitched,
+    LineScore,
+    PitchingLine,
+    Position,
+)
+from ..infrastructure.queries import (
+    DjangoPlayerSearchQuery,
+    DjangoTeamListQuery,
+    DjangoTeamPermissionQuery,
+)
 from ..infrastructure.repositories import (
     DjangoGameRepository,
     DjangoLeagueRepository,
     DjangoTeamRepository,
 )
 from .forms import (
+    MAX_INNINGS,
     BattingEntryForm,
     BattingEntryFormSet,
     GameForm,
+    InningScoreFormSet,
     PitchingEntryForm,
     PitchingEntryFormSet,
     PlayerRegistrationForm,
@@ -53,6 +67,20 @@ def _requires_login(request):
     if request.user.is_authenticated:
         return None
     return redirect_to_login(request.get_full_path())
+
+
+def _requires_team_permission(request, *team_ids):
+    """担当チームでなければ拒否する。
+
+    _requires_login と役割は同じだが、ログインしているだけでは通さない。
+    管理ユーザーは常に通り、それ以外は渡したチームのうち少なくとも1つの
+    担当者であることを求める（試合は2チームにまたがるため）。
+    """
+    if not request.user.is_authenticated:
+        return redirect_to_login(request.get_full_path())
+    if not DjangoTeamPermissionQuery().can_manage_any(request.user, team_ids):
+        raise PermissionDenied("このチームを編集する権限がありません。")
+    return None
 
 
 def _service() -> TeamApplicationService:
@@ -121,8 +149,8 @@ def player_list(request, team_id):
     form = PlayerRegistrationForm()
 
     if request.method == 'POST':
-        # 一覧の閲覧は誰でもできるが、登録は試合と同じくログインを求める
-        denied = _requires_login(request)
+        # 一覧の閲覧は誰でもできるが、登録はこのチームの担当者だけができる
+        denied = _requires_team_permission(request, team_id)
         if denied is not None:
             return denied
 
@@ -169,6 +197,10 @@ def player_list(request, team_id):
         'positions': Position.labels(),
         'current_sort': listing.sort,
         'current_descending': listing.descending,
+        # 通算値では見えない調子の波を、月ごとに区切って出す
+        'months': service.list_team_monthly_splits(team_id),
+        # このチームの担当者（または管理ユーザー）だけが登録・編集の導線を見える
+        'can_edit_team': DjangoTeamPermissionQuery().can_manage(request.user, team_id),
     })
 
 
@@ -194,6 +226,18 @@ def league_detail(request, league_id, year=None):
     return render(request, 'myapp/league_detail.html', {'league': detail})
 
 
+def league_titles(request, league_id, year=None):
+    """リーグのタイトル一覧。部門別の上位者をシーズンで区切って並べる。"""
+    try:
+        titles = _service().get_league_titles(league_id, year)
+    except LeagueNotFound:
+        raise Http404("リーグが見つかりません。")
+    except DomainError as error:
+        raise Http404(str(error))
+
+    return render(request, 'myapp/league_titles.html', {'titles': titles})
+
+
 def game_list(request):
     """試合一覧。年とチームで絞り込める。"""
     service = _service()
@@ -204,13 +248,18 @@ def game_list(request):
 
     year, team_id = _int('year'), _int('team')
     listing = service.list_games(year=year, team_id=team_id)
+    teams = service.list_teams().rows
 
     return render(request, 'myapp/game_list.html', {
         'games': listing.rows,
         'years': service.list_game_seasons(),
-        'teams': service.list_teams().rows,
+        'teams': teams,
         'selected_year': year,
         'selected_team': team_id,
+        # 担当チームが1つも無ければ、押しても弾かれるだけの登録導線は見せない
+        'can_create_game': DjangoTeamPermissionQuery().can_manage_any(
+            request.user, [t.id for t in teams]
+        ),
     })
 
 
@@ -222,20 +271,27 @@ def game_create(request):
     form = GameForm(request.POST or None, initial={'year': date.today().year})
 
     if request.method == 'POST' and form.is_valid():
-        try:
-            game = service.create_game(
-                year=form.cleaned_data['year'],
-                played_on=form.cleaned_data['played_on'],
-                home_team_id=form.cleaned_data['home_team'],
-                away_team_id=form.cleaned_data['away_team'],
-                home_score=form.cleaned_data['home_score'],
-                away_score=form.cleaned_data['away_score'],
-            )
-        except DomainError as error:
-            messages.error(request, str(error))
+        home_team_id = form.cleaned_data['home_team']
+        away_team_id = form.cleaned_data['away_team']
+        if not DjangoTeamPermissionQuery().can_manage_any(
+            request.user, (home_team_id, away_team_id)
+        ):
+            messages.error(request, "どちらのチームも担当していないため、この試合は登録できません。")
         else:
-            messages.success(request, "試合を登録しました。続けて成績を入力できます。")
-            return redirect(reverse('game_edit', args=[game.id]))
+            try:
+                game = service.create_game(
+                    year=form.cleaned_data['year'],
+                    played_on=form.cleaned_data['played_on'],
+                    home_team_id=home_team_id,
+                    away_team_id=away_team_id,
+                    home_score=form.cleaned_data['home_score'],
+                    away_score=form.cleaned_data['away_score'],
+                )
+            except DomainError as error:
+                messages.error(request, str(error))
+            else:
+                messages.success(request, "試合を登録しました。続けて成績を入力できます。")
+                return redirect(reverse('game_edit', args=[game.id]))
     elif request.method == 'POST':
         messages.error(request, _first_error(form))
 
@@ -253,14 +309,23 @@ def game_edit(request, game_id):
         raise Http404("試合が見つかりません。")
 
     game, rosters = data['game'], data['rosters']
+    if not DjangoTeamPermissionQuery().can_manage_any(
+        request.user, (game.home_team_id, game.away_team_id)
+    ):
+        raise PermissionDenied("このチームを編集する権限がありません。")
+
     batters, pitchers = _split_roster(rosters)
 
     if request.method == 'POST':
         form = GameForm(request.POST)
         batting_formset = BattingEntryFormSet(request.POST, prefix='batting')
         pitching_formset = PitchingEntryFormSet(request.POST, prefix='pitching')
+        inning_formset = InningScoreFormSet(request.POST, prefix='innings')
 
-        if form.is_valid() and batting_formset.is_valid() and pitching_formset.is_valid():
+        if (
+            form.is_valid() and batting_formset.is_valid()
+            and pitching_formset.is_valid() and inning_formset.is_valid()
+        ):
             try:
                 service.update_game(
                     game_id,
@@ -272,6 +337,9 @@ def game_edit(request, game_id):
                     away_score=form.cleaned_data['away_score'],
                     batting=_collect_batting(batting_formset),
                     pitching=_collect_pitching(pitching_formset),
+                    lineup=_collect_lineup(batting_formset),
+                    staff=_collect_staff(pitching_formset),
+                    line_score=_collect_line_score(inning_formset),
                 )
             except DomainError as error:
                 messages.error(request, str(error))
@@ -282,6 +350,7 @@ def game_edit(request, game_id):
             messages.error(
                 request,
                 _first_error(form)
+                or _first_formset_error(inning_formset)
                 or _first_formset_error(batting_formset)
                 or _first_formset_error(pitching_formset),
             )
@@ -300,6 +369,9 @@ def game_edit(request, game_id):
         pitching_formset = PitchingEntryFormSet(
             prefix='pitching', initial=[_pitching_initial(p) for p in pitchers]
         )
+        inning_formset = InningScoreFormSet(
+            prefix='innings', initial=_inning_initial(game.line_score)
+        )
 
     return render(request, 'myapp/game_edit.html', {
         'game': game,
@@ -310,7 +382,64 @@ def game_edit(request, game_id):
         'pitching_rows': list(zip(pitching_formset.forms, pitchers)),
         'batting_formset': batting_formset,
         'pitching_formset': pitching_formset,
+        'inning_formset': inning_formset,
+        'positions': FieldingPosition.labels(),
     })
+
+
+def _inning_initial(line_score):
+    """イニングスコアの初期値。記録されている回まで埋め、残りは空欄で用意する。"""
+    return [
+        {
+            'inning': inning,
+            'away': (
+                line_score.runs_in(inning, home=False)
+                if inning <= len(line_score.away) else None
+            ),
+            'home': (
+                line_score.runs_in(inning, home=True)
+                if inning <= len(line_score.home) else None
+            ),
+        }
+        for inning in range(1, MAX_INNINGS + 1)
+    ]
+
+
+def _collect_line_score(formset) -> LineScore:
+    """入力された回ごとの得点を組み立てる。
+
+    後ろの空欄は「行われていない回」として切り落とす。途中の空欄は 0 とみなす
+    （1回に得点が無ければ空欄のままにする人もいるため）。
+    """
+    away, home = [], []
+    for form in formset:
+        if form.is_blank():
+            continue
+        away.append(form.cleaned_data.get('away') or 0)
+        home.append(form.cleaned_data.get('home') or 0)
+
+    # ホームが最終回を攻めていない（裏が空欄）場合は、その回を落とす
+    if home and formset.forms:
+        last = len(away)
+        if last and formset.forms[last - 1].cleaned_data.get('home') is None:
+            home = home[:-1]
+    return LineScore(away=tuple(away), home=tuple(home))
+
+
+def _collect_lineup(formset) -> dict:
+    """打順・交代の順・守備位置を {選手id: (打順, 交代の順, 守備位置)} で返す。"""
+    return {
+        form.cleaned_data['player_id']: form.lineup()
+        for form in formset if not form.is_blank()
+    }
+
+
+def _collect_staff(formset) -> dict:
+    """登板した回を {選手id: 回} で返す。"""
+    return {
+        form.cleaned_data['player_id']: form.entered()
+        for form in formset if not form.is_blank()
+    }
 
 
 def _split_roster(rosters):
@@ -328,6 +457,14 @@ def _batting_initial(player):
     initial = {'player_id': player['id']}
     if line is not None:
         initial.update({f: getattr(line, f) for f in BattingEntryForm.STAT_FIELDS})
+    lineup = player.get('lineup')
+    if lineup is not None:
+        order, sequence, position = lineup
+        initial.update({
+            'batting_order': order,
+            'slot_sequence': sequence,
+            'fielding_position': position.value if position else '',
+        })
     return initial
 
 
@@ -337,6 +474,8 @@ def _pitching_initial(player):
     if line is not None:
         initial['innings_pitched'] = line.innings.to_notation()
         initial.update({f: getattr(line, f) for f in PitchingEntryForm.COUNT_FIELDS})
+    if player.get('entered_inning') is not None:
+        initial['entered_inning'] = player['entered_inning']
     return initial
 
 
@@ -376,7 +515,10 @@ def game_detail(request, game_id):
     except GameNotFound:
         raise Http404("試合が見つかりません。")
 
-    return render(request, 'myapp/game_detail.html', {'detail': detail})
+    can_edit = DjangoTeamPermissionQuery().can_manage_any(
+        request.user, (detail.game.home_team_id, detail.game.away_team_id)
+    )
+    return render(request, 'myapp/game_detail.html', {'detail': detail, 'can_edit': can_edit})
 
 
 def player_detail(request, team_id, player_id):
@@ -389,6 +531,7 @@ def player_detail(request, team_id, player_id):
     return render(request, 'myapp/player_detail.html', {
         'profile': profile,
         'player': profile.detail,
+        'can_edit_team': DjangoTeamPermissionQuery().can_manage(request.user, team_id),
     })
 
 
@@ -401,6 +544,9 @@ def player_edit(request, team_id, player_id):
         detail = service.get_player_detail(team_id, player_id)
     except (TeamNotFound, PlayerNotFound):
         raise Http404("選手が見つかりません。")
+
+    if not DjangoTeamPermissionQuery().can_manage(request.user, team_id):
+        raise PermissionDenied("このチームを編集する権限がありません。")
 
     if request.method == 'POST':
         # 退団・主将の指名/解任はフォームの検証を通さず、押されたボタンで判断する

@@ -224,6 +224,103 @@ class MonthlySplitTest(TestCase):
         self.assertAlmostEqual(april.pitching.earned_run_average, 3.0)
 
 
+class TeamMonthlySplitTest(TestCase):
+    """チームの月別成績。選手の月別成績と対になる、チーム単位の推移。"""
+
+    OURS, THEIRS = {10, 11}, {20}
+
+    def test_record_and_totals_per_month(self):
+        games = [
+            _game(TIGERS, DRAGONS, 5, 3, month=4, day=1, batting={
+                10: BattingLine(at_bats=4, singles=2),
+                11: BattingLine(at_bats=3, home_runs=1),
+            }),
+            _game(TIGERS, DRAGONS, 1, 2, month=4, day=2, batting={
+                10: BattingLine(at_bats=4, singles=1),
+            }),
+            _game(TIGERS, DRAGONS, 0, 0, month=5, day=1, batting={
+                10: BattingLine(at_bats=4, singles=3),
+            }),
+        ]
+
+        splits = services.team_monthly_splits(games, TIGERS, self.OURS)
+
+        self.assertEqual([s.label for s in splits], ['2026年4月', '2026年5月'])
+        april = splits[0]
+        self.assertEqual((april.record.wins, april.record.losses), (1, 1))
+        self.assertEqual(april.batting.at_bats, 11)
+        self.assertEqual(april.batting.hits, 4)
+        self.assertEqual(splits[1].record.ties, 1)
+
+    def test_opponent_lines_are_not_counted(self):
+        """試合の明細には相手の選手も入っている。自チームの分だけを足す。"""
+        games = [
+            _game(TIGERS, DRAGONS, 1, 0, month=4, batting={
+                10: BattingLine(at_bats=4, singles=1),
+                20: BattingLine(at_bats=4, singles=4),
+            }),
+        ]
+
+        april = services.team_monthly_splits(games, TIGERS, self.OURS)[0]
+
+        self.assertEqual(april.batting.at_bats, 4)
+        self.assertEqual(april.batting.hits, 1)
+
+    def test_rate_is_recalculated_from_the_monthly_total(self):
+        games = [
+            _game(TIGERS, DRAGONS, 1, 0, month=4, day=1, batting={
+                10: BattingLine(at_bats=1, singles=1),
+            }),
+            _game(TIGERS, DRAGONS, 1, 0, month=4, day=2, batting={
+                10: BattingLine(at_bats=3),
+            }),
+        ]
+
+        april = services.team_monthly_splits(games, TIGERS, self.OURS)[0]
+
+        # 率の平均なら .500 だが、合計から求めれば 1/4 = .250
+        self.assertAlmostEqual(april.batting.batting_average, 0.25)
+
+    def test_games_of_other_teams_are_excluded(self):
+        games = [
+            _game(TIGERS, DRAGONS, 1, 0, month=4),
+            _game(DRAGONS, SWALLOWS, 5, 0, month=4, day=2),
+        ]
+
+        april = services.team_monthly_splits(games, TIGERS, self.OURS)[0]
+
+        self.assertEqual(april.games_played, 1)
+
+    def test_same_month_of_different_seasons_is_not_merged(self):
+        games = [
+            _game(TIGERS, DRAGONS, 1, 0, season=2025, month=4),
+            _game(TIGERS, DRAGONS, 1, 0, season=2026, month=4),
+        ]
+
+        splits = services.team_monthly_splits(games, TIGERS, self.OURS)
+
+        self.assertEqual([s.label for s in splits], ['2025年4月', '2026年4月'])
+
+    def test_months_without_games_are_omitted(self):
+        """試合の無い月は行を作らない。選手の月別成績と同じ規則。"""
+        self.assertEqual(services.team_monthly_splits([], TIGERS, self.OURS), [])
+
+    def test_innings_are_added_as_outs(self):
+        games = [
+            _game(TIGERS, DRAGONS, 1, 0, month=4, day=1, pitching={
+                11: PitchingLine(innings=InningsPitched.from_notation('5.2')),
+            }),
+            _game(TIGERS, DRAGONS, 1, 0, month=4, day=2, pitching={
+                11: PitchingLine(innings=InningsPitched.from_notation('5.2')),
+            }),
+        ]
+
+        april = services.team_monthly_splits(games, TIGERS, self.OURS)[0]
+
+        # 5.2 + 5.2 = 11.1（10.4 にはならない）
+        self.assertEqual(str(april.pitching.innings), '11.1')
+
+
 class FipConstantTest(TestCase):
     def test_constant_aligns_fip_with_the_league_era(self):
         """定数を足した FIP は、リーグ全体では防御率と同じ値になる。"""

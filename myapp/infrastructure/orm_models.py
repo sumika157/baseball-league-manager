@@ -7,12 +7,20 @@
 必要な値はそこから集計して求める。同じ事実の出典を2つ作らないため。
 """
 
+from django.conf import settings
 from django.db import models
 
-from ..domain.value_objects import Handedness, Position, StadiumProfile
+from ..domain.value_objects import (
+    FieldingPosition,
+    Handedness,
+    Position,
+    StadiumProfile,
+)
 
 # 守備位置の選択肢はドメインの Position を唯一の出典とする。
 POSITION_CHOICES = [(position.value, position.value) for position in Position]
+# 試合で就いた守備位置。登録位置（Position）とは別の概念
+FIELDING_POSITION_CHOICES = [(p.value, p.value) for p in FieldingPosition]
 
 
 class League(models.Model):
@@ -83,6 +91,14 @@ class Team(models.Model):
     )
     # リーグ編集画面でドラッグして並べ替えた結果がここに入る
     display_order = models.PositiveIntegerField(default=0, verbose_name='表示順')
+    # チーム担当者。ログインすれば誰でも全チームを編集できた状態をやめ、
+    # 担当者はこのチームが関わる範囲（ロスター・このチームが絡む試合）だけ
+    # 編集できるようにする。管理ユーザー（is_staff）は担当者に関わらず全権を持つ
+    managers = models.ManyToManyField(
+        settings.AUTH_USER_MODEL, blank=True, related_name='managed_teams',
+        verbose_name='担当者',
+        help_text='このチームの選手・試合を編集できるユーザー。管理ユーザーは常に編集できます。',
+    )
 
     class Meta:
         verbose_name = 'チーム'
@@ -245,6 +261,38 @@ class Game(models.Model):
         return f"{self.played_on} {self.home_team.name} {self.home_score}-{self.away_score} {self.away_team.name}"
 
 
+class GameInningScore(models.Model):
+    """イニングスコア。回ごとの得点。
+
+    勝敗・セーブ・ホールドは継投した時点のスコアで決まるため、最終得点だけでは
+    導けない。延長もあるので回数は固定しない。
+    """
+
+    game = models.ForeignKey(
+        Game, on_delete=models.CASCADE, related_name='inning_scores', verbose_name='試合'
+    )
+    inning = models.PositiveIntegerField(verbose_name='回')
+    is_home = models.BooleanField(
+        verbose_name='ホームの攻撃',
+        help_text='ビジターが表、ホームが裏に攻めます。',
+    )
+    runs = models.PositiveIntegerField(default=0, verbose_name='得点')
+
+    class Meta:
+        verbose_name = 'イニングスコア'
+        verbose_name_plural = 'イニングスコア'
+        ordering = ['inning', 'is_home']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['game', 'inning', 'is_home'], name='unique_game_inning_half'
+            ),
+        ]
+
+    def __str__(self):
+        half = '裏' if self.is_home else '表'
+        return f"{self.inning}回{half} {self.runs}点"
+
+
 class GameBattingLine(models.Model):
     """1試合ぶんの打撃成績。"""
 
@@ -253,6 +301,19 @@ class GameBattingLine(models.Model):
     )
     player = models.ForeignKey(
         Player, on_delete=models.CASCADE, related_name='game_batting', verbose_name='選手'
+    )
+    # 打線での位置づけ。並びはこの3つで決まる（打順 → 交代の順）
+    batting_order = models.IntegerField(
+        null=True, blank=True, verbose_name='打順',
+        help_text='1〜9。空欄なら並びは末尾になります。',
+    )
+    slot_sequence = models.IntegerField(
+        default=0, verbose_name='交代の順',
+        help_text='0 がスタメン。1以上は同じ打順への途中出場です。',
+    )
+    fielding_position = models.CharField(
+        max_length=2, choices=FIELDING_POSITION_CHOICES, blank=True,
+        verbose_name='守備位置', help_text='この試合で就いた守備。代打は「打」、代走は「走」。',
     )
     at_bats = models.IntegerField(default=0, verbose_name='打数')
     singles = models.IntegerField(default=0, verbose_name='単打')
@@ -286,11 +347,18 @@ class GamePitchingLine(models.Model):
     player = models.ForeignKey(
         Player, on_delete=models.CASCADE, related_name='game_pitching', verbose_name='選手'
     )
+    # 登板順。1 が先発。ボックススコアは投げた順に並べる
+    appearance_order = models.IntegerField(default=1, verbose_name='登板順')
+    # 何回から投げたか。セーブ・ホールドの条件は登板した時点のスコアで決まる
+    entered_inning = models.PositiveIntegerField(default=1, verbose_name='登板した回')
     # 野球表記の投球回（5.2 = 5回と2/3）。解釈は domain の InningsPitched が担う。
     innings_pitched = models.FloatField(default=0.0, verbose_name='投球回')
     wins = models.IntegerField(default=0, verbose_name='勝利')
     losses = models.IntegerField(default=0, verbose_name='敗戦')
     saves = models.IntegerField(default=0, verbose_name='セーブ')
+    # 日本プロ野球の公式記録。セーブが記録される状況で登板し、
+    # リードを保ったまま次の投手へ引き継いだ救援投手に付く
+    holds = models.IntegerField(default=0, verbose_name='ホールド')
     earned_runs = models.IntegerField(default=0, verbose_name='自責点')
     strikeouts = models.IntegerField(default=0, verbose_name='奪三振')
     hits_allowed = models.IntegerField(default=0, verbose_name='被安打')

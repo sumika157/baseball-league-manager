@@ -54,6 +54,31 @@ class DjangoPlayerSearchQuery:
         return results
 
 
+class DjangoTeamPermissionQuery:
+    """チーム担当者の権限判定。
+
+    ログインすれば誰でも全チームを編集できた状態をやめ、管理ユーザー
+    （is_staff）以外は自分が担当するチームが関わる範囲だけ編集できるようにする。
+    「担当者かどうか」は Team.managers という事実だけを見て決まるので、
+    ドメインの業務ルールではなく、この参照専用クエリに置く。
+    """
+
+    def can_manage(self, user, team_id: int) -> bool:
+        """指定チームを編集できるか。"""
+        return self.can_manage_any(user, (team_id,))
+
+    def can_manage_any(self, user, team_ids) -> bool:
+        """渡したチームのうち、少なくとも1つを編集できるか。
+
+        試合は2チームにまたがるため、どちらか一方の担当者であれば編集できる。
+        """
+        if not user.is_authenticated:
+            return False
+        if user.is_staff or user.is_superuser:
+            return True
+        return orm_models.Team.objects.filter(id__in=team_ids, managers=user).exists()
+
+
 class DjangoTeamListQuery:
     """チーム一覧に必要な値だけを取得する。"""
 

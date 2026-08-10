@@ -25,7 +25,9 @@ from .exceptions import (
 )
 from .value_objects import (
     BattingLine,
+    FieldingPosition,
     JerseyNumber,
+    LineScore,
     PitchingLine,
     Position,
     Profile,
@@ -100,7 +102,7 @@ class Stint:
     def covers(self, year: int) -> bool:
         return self.from_year <= year and (self.to_year is None or year <= self.to_year)
 
-    def overlaps(self, other: 'Stint') -> bool:
+    def overlaps(self, other: Stint) -> bool:
         """期間が重なるか。片方でも在籍中（to_year が空）なら無限として扱う。"""
         end, other_end = self.to_year, other.to_year
         starts_before_other_ends = other_end is None or self.from_year <= other_end
@@ -143,7 +145,7 @@ class Captaincy:
     def is_current(self) -> bool:
         return self.to_year is None
 
-    def overlaps(self, other: 'Captaincy') -> bool:
+    def overlaps(self, other: Captaincy) -> bool:
         """期間が重なるか。片方でも在任中（to_year が空）なら無限として扱う。"""
         end, other_end = self.to_year, other.to_year
         starts_before_other_ends = other_end is None or self.from_year <= other_end
@@ -392,20 +394,66 @@ class Team:
 
 @dataclass
 class GameBatting:
-    """1試合ぶんの、ある選手の打撃成績。"""
+    """1試合ぶんの、ある選手の打撃成績と、打線での位置づけ。
+
+    打順のどこに入り、その打順の何番目に出て、どこを守ったか。ボックススコアは
+    この3つで並びが決まる（1番から順に、同じ打順は交代の順に並べる）。
+    """
 
     player_id: int
     line: BattingLine
     id: int | None = None
+    # 打順（1〜9）。記録しない試合もあるため未設定を許す
+    batting_order: int | None = None
+    # 同じ打順の何番目か。0 がスタメンで、1以上は途中出場
+    slot_sequence: int = 0
+    fielding_position: FieldingPosition | None = None
+
+    def __post_init__(self) -> None:
+        if self.batting_order is not None and not (1 <= self.batting_order <= 9):
+            raise InvalidGame("打順は1〜9で入力してください。")
+        if self.slot_sequence < 0:
+            raise InvalidGame("交代の順に負の値は指定できません。")
+
+    @property
+    def is_starter(self) -> bool:
+        """スタメンか。打順の先頭に入っていればスタメン。
+
+        別に旗を持たせると「交代なのにスタメン」という食い違いが起こりうるため、
+        交代の順から導く。
+        """
+        return self.slot_sequence == 0
+
+    @property
+    def position_label(self) -> str:
+        return self.fielding_position.label if self.fielding_position else ''
 
 
 @dataclass
 class GamePitching:
-    """1試合ぶんの、ある投手の投球成績。"""
+    """1試合ぶんの、ある投手の投球成績と、登板の順番。
+
+    登板順は先発を1とする。ボックススコアは投げた順に並べるため、
+    順番を持たないと先発と抑えの区別が付かない。
+    """
 
     player_id: int
     line: PitchingLine
     id: int | None = None
+    appearance_order: int = 1
+    # 何回から投げたか。勝敗・セーブ・ホールドは登板した時点のスコアで決まるため、
+    # 登板順だけでは足りない（何回のスコアを見るかが決まらない）
+    entered_inning: int = 1
+
+    def __post_init__(self) -> None:
+        if self.appearance_order < 1:
+            raise InvalidGame("登板順は1以上で入力してください。")
+        if self.entered_inning < 1:
+            raise InvalidGame("登板した回は1以上で入力してください。")
+
+    @property
+    def is_starter(self) -> bool:
+        return self.appearance_order == 1
 
 
 @dataclass
@@ -426,6 +474,9 @@ class Game:
     id: int | None = None
     batting: list[GameBatting] = field(default_factory=list)
     pitching: list[GamePitching] = field(default_factory=list)
+    # 回ごとの得点。勝敗・セーブ・ホールドの判定に使う。空でも試合は成立する
+    # （経過を記録しない試合では、勝敗も導けないだけ）
+    line_score: LineScore = field(default_factory=LineScore)
 
     def __post_init__(self) -> None:
         if self.home_team_id == self.away_team_id:
@@ -471,25 +522,73 @@ class Game:
             return self.home_score, self.away_score
         return self.away_score, self.home_score
 
-    def record_batting(self, player_id: int, line: BattingLine) -> GameBatting:
+    def record_batting(
+        self, player_id: int, line: BattingLine, *,
+        batting_order: int | None = None, slot_sequence: int = 0,
+        fielding_position: FieldingPosition | None = None,
+    ) -> GameBatting:
         """選手の打撃成績を記録する。同じ選手が既にあれば上書きする。"""
         for entry in self.batting:
             if entry.player_id == player_id:
                 entry.line = line
+                entry.batting_order = batting_order
+                entry.slot_sequence = slot_sequence
+                entry.fielding_position = fielding_position
                 return entry
-        entry = GameBatting(player_id=player_id, line=line)
+        entry = GameBatting(
+            player_id=player_id, line=line, batting_order=batting_order,
+            slot_sequence=slot_sequence, fielding_position=fielding_position,
+        )
         self.batting.append(entry)
         return entry
 
-    def record_pitching(self, player_id: int, line: PitchingLine) -> GamePitching:
+    def record_pitching(
+        self, player_id: int, line: PitchingLine, *,
+        appearance_order: int = 1, entered_inning: int = 1,
+    ) -> GamePitching:
         """投手の投球成績を記録する。同じ選手が既にあれば上書きする。"""
         for entry in self.pitching:
             if entry.player_id == player_id:
                 entry.line = line
+                entry.appearance_order = appearance_order
+                entry.entered_inning = entered_inning
                 return entry
-        entry = GamePitching(player_id=player_id, line=line)
+        entry = GamePitching(
+            player_id=player_id, line=line,
+            appearance_order=appearance_order, entered_inning=entered_inning,
+        )
         self.pitching.append(entry)
         return entry
+
+    def ensure_line_score_matches(self) -> None:
+        """イニングスコアの合計が最終得点と一致することを確かめる。
+
+        両方を持つと食い違いうるが、イニングスコアは記録されない試合もあるため
+        最終得点を残している。空でない場合だけ照合する。
+        """
+        if self.line_score.is_empty:
+            return
+        if not self.line_score.matches(self.away_score, self.home_score):
+            raise InvalidGame(
+                "イニングスコアの合計が得点と一致しません"
+                f"（ビジター {self.line_score.away_total}/{self.away_score}、"
+                f"ホーム {self.line_score.home_total}/{self.home_score}）。"
+            )
+
+    def batting_in_order(self) -> list[GameBatting]:
+        """ボックススコアの並び。打順の順に、同じ打順は交代の順に並べる。
+
+        打順が未記録の行は末尾に回す（記録の無いものを先頭に置くと、
+        1番打者が誰なのか読めなくなる）。
+        """
+        return sorted(
+            self.batting,
+            key=lambda e: (e.batting_order is None, e.batting_order or 0, e.slot_sequence),
+        )
+
+    def pitching_in_order(self) -> list[GamePitching]:
+        """ボックススコアの並び。投げた順に並べる。"""
+        return sorted(self.pitching, key=lambda e: e.appearance_order)
 
     # 成績の取り消しは、集約を組み直して保存することで表す。
     # 渡されなかった選手の行はリポジトリ側で消えるため、

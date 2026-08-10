@@ -104,9 +104,12 @@
       <div class="row g-3">
         {% if player.is_pitcher %}
           {% include 'myapp/_stat_readout.html' with label='投球回' value=player.innings_pitched %}
+          {% include 'myapp/_stat_readout.html' with label='先発' value=player.starts %}
           {% include 'myapp/_stat_readout.html' with label='勝利' value=player.wins %}
           {% include 'myapp/_stat_readout.html' with label='敗戦' value=player.losses %}
           {% include 'myapp/_stat_readout.html' with label='セーブ' value=player.saves %}
+          {% include 'myapp/_stat_readout.html' with label='ホールド' value=player.holds %}
+          {% include 'myapp/_stat_readout.html' with label='HP' value=player.hold_points %}
           {% include 'myapp/_stat_readout.html' with label='自責点' value=player.earned_runs %}
           {% include 'myapp/_stat_readout.html' with label='奪三振' value=player.strikeouts %}
           {% include 'myapp/_stat_readout.html' with label='被安打' value=player.hits_allowed %}

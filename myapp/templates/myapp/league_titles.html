@@ -1,0 +1,75 @@
+{% extends 'myapp/base.html' %}
+
+{% block title %}{{ titles.league_name }} タイトル - Baseball Manager{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>
+    <li class="breadcrumb-item"><a href="{% url 'league_detail' titles.league_id %}">{{ titles.league_name }}</a></li>
+    <li class="breadcrumb-item active">タイトル</li>
+  </ol>
+</nav>
+
+<div class="page-head">
+  <h1 class="page-title">{{ titles.league_name }} タイトル</h1>
+  <p class="page-subtitle">
+    {% if titles.year %}{{ titles.year }}年シーズン · {% endif %}
+    部門別の上位者。率の部門は規定に到達した選手だけを対象にします。
+  </p>
+</div>
+
+{% if titles.available_years %}
+  <div class="segmented">
+    {% for year in titles.available_years %}
+      <a class="segmented-item {% if year == titles.year %}is-active{% endif %}"
+         href="{% url 'league_titles_by_year' titles.league_id year %}">{{ year }}年</a>
+    {% endfor %}
+  </div>
+{% endif %}
+
+{% if titles.has_any %}
+  <div class="row g-3">
+    {% for department in titles.departments %}
+      <div class="col-md-6">
+        <div class="card h-100">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <span>{{ department.label }}</span>
+            {% if department.note %}
+              <span class="stat-muted" style="font-size: 0.75rem;">{{ department.note }}</span>
+            {% endif %}
+          </div>
+          <div class="card-body p-0">
+            {% if department.entries %}
+              <table class="table table-hover mb-0">
+                <tbody>
+                  {% for entry in department.entries %}
+                    <tr>
+                      <td style="width: 2.5rem;" class="stat-muted">{{ entry.rank }}</td>
+                      <td>
+                        <a href="{% url 'player_detail' entry.team_id entry.player_id %}" class="player-name">{{ entry.player_name }}</a>
+                        <div class="stat-muted" style="font-size: 0.75rem;">{{ entry.team_name }}</div>
+                      </td>
+                      <td class="text-end stat-key">{{ entry.value }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            {% else %}
+              <div class="empty-state" style="padding: 1.75rem 1rem; font-size: 0.8125rem;">
+                {% if department.note %}規定に到達した選手がいません{% else %}記録がありません{% endif %}
+              </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="card">
+    <div class="empty-state">
+      このリーグの試合がまだ登録されていません。
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

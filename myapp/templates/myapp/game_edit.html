@@ -23,6 +23,7 @@
   {% csrf_token %}
   {{ batting_formset.management_form }}
   {{ pitching_formset.management_form }}
+  {{ inning_formset.management_form }}
 
   <div class="card mb-3">
     <div class="card-header">試合の情報</div>
@@ -54,6 +55,48 @@
     </div>
   </div>
 
+  {% comment %}
+  イニングスコア。勝敗・セーブ・ホールドはここと継投から日本プロ野球の規則で
+  決まるので、投手の欄には勝敗を入力しない。
+  行われていない回は空欄のままにする（0点で終えた回とは区別する）。
+  {% endcomment %}
+  <div class="card mb-3">
+    <div class="card-header">イニングスコア</div>
+    <div class="card-body">
+      <p class="page-subtitle mb-3" style="font-size: 0.8125rem;">
+        回ごとの得点を入れると、勝利投手・敗戦投手・セーブ・ホールドが
+        日本プロ野球の規則で自動的に決まります。
+        行われていない回は空欄にしてください（ホームが最終回を攻めていない場合は裏を空欄に）。
+      </p>
+      <div class="table-responsive">
+        <table class="table linescore-table entry-table mb-0">
+          <thead>
+            <tr>
+              <th></th>
+              {% for entry in inning_formset %}
+                <th class="text-center">{{ entry.inning.value }}</th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th>{{ rosters.1.team_name }}（表）</th>
+              {% for entry in inning_formset %}
+                <td>{{ entry.inning }}{{ entry.away }}</td>
+              {% endfor %}
+            </tr>
+            <tr>
+              <th>{{ rosters.0.team_name }}（裏）</th>
+              {% for entry in inning_formset %}
+                <td>{{ entry.home }}</td>
+              {% endfor %}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <div class="card mb-3">
     <div class="card-header">打撃成績</div>
     <div class="card-body p-0">
@@ -63,6 +106,9 @@
             <thead>
               <tr>
                 <th>選手</th>
+                <th class="text-center">打順</th>
+                <th class="text-center">交代</th>
+                <th class="text-center">守備</th>
                 <th class="text-end">打数</th>
                 <th class="text-end">単打</th>
                 <th class="text-end">二塁打</th>
@@ -83,6 +129,9 @@
                     <span class="jersey-number me-1">{{ player.number }}</span>
                     <span class="player-name">{{ player.name }}</span>
                   </td>
+                  <td>{{ entry.batting_order }}</td>
+                  <td>{{ entry.slot_sequence }}</td>
+                  <td>{{ entry.fielding_position }}</td>
                   <td>{{ entry.at_bats }}</td>
                   <td>{{ entry.singles }}</td>
                   <td>{{ entry.doubles }}</td>
@@ -115,16 +164,16 @@
         {% endcomment %}
         <p class="page-subtitle mb-0" style="font-size: 0.8125rem; padding: 0.875rem 1.25rem 0;">
           被本塁打は被安打の内数です（被安打より多い値は保存できません）。
+          勝敗・セーブ・ホールドは入力しません。イニングスコアと「登板」した回から
+          日本プロ野球の規則で決まります。
         </p>
         <div class="table-responsive">
           <table class="table entry-table mb-0">
             <thead>
               <tr>
                 <th>選手</th>
+                <th class="text-center">登板</th>
                 <th class="text-end">投球回</th>
-                <th class="text-end">勝</th>
-                <th class="text-end">敗</th>
-                <th class="text-end">S</th>
                 <th class="text-end">自責点</th>
                 <th class="text-end">奪三振</th>
                 <th class="text-end">被安打</th>
@@ -142,10 +191,8 @@
                     <span class="jersey-number me-1">{{ player.number }}</span>
                     <span class="player-name">{{ player.name }}</span>
                   </td>
+                  <td>{{ entry.entered_inning }}</td>
                   <td>{{ entry.innings_pitched }}</td>
-                  <td>{{ entry.wins }}</td>
-                  <td>{{ entry.losses }}</td>
-                  <td>{{ entry.saves }}</td>
                   <td>{{ entry.earned_runs }}</td>
                   <td>{{ entry.strikeouts }}</td>
                   <td>{{ entry.hits_allowed }}</td>

@@ -6,6 +6,8 @@
 
 from datetime import date
 
+from django.contrib.auth.models import User
+
 from myapp.application.services import TeamApplicationService
 from myapp.domain.entities import Game
 from myapp.domain.value_objects import BattingLine, PitchingLine, Season
@@ -24,6 +26,40 @@ def build_service() -> TeamApplicationService:
         games=DjangoGameRepository(),
         leagues=DjangoLeagueRepository(),
     )
+
+
+def inning_payload(away=(), home=(), *, total=12) -> dict:
+    """試合編集フォームのイニングスコアぶんの POST データ。
+
+    勝敗・セーブ・ホールドはイニングスコアから導出されるため、画面には
+    常にこの欄がある。空のまま送れば「経過を記録しない」扱いになる。
+    """
+    payload = {
+        'innings-TOTAL_FORMS': str(total),
+        'innings-INITIAL_FORMS': str(total),
+        'innings-MIN_NUM_FORMS': '0',
+        'innings-MAX_NUM_FORMS': '1000',
+    }
+    for index in range(total):
+        payload[f'innings-{index}-inning'] = str(index + 1)
+        if index < len(away):
+            payload[f'innings-{index}-away'] = str(away[index])
+        if index < len(home):
+            payload[f'innings-{index}-home'] = str(home[index])
+    return payload
+
+
+def login_as_manager(client, *teams, username='manager') -> User:
+    """渡したチームの担当者としてログインする。
+
+    書き込みはログインだけでは通らず、対象チームの担当者であることが要る。
+    ログインさせるテストの大半はこの形になる。
+    """
+    user = User.objects.create_user(username=username, password='x')
+    for team in teams:
+        team.managers.add(user)
+    client.force_login(user)
+    return user
 
 
 def play_game(

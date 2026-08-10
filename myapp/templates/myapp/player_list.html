@@ -70,9 +70,12 @@
       規定投球回は {{ totals.required_innings }} 回（{{ totals.games }}試合 × 1.0）
       · FIP は本塁打・四死球・奪三振だけで投球内容を測り、リーグの得点環境に
       合わせて防御率と同じ尺度に直した指標
+      · ERA+ はリーグ平均防御率を100とした指数（大きいほど良い）
+      · HP はホールド＋救援勝利
     {% else %}
       規定打席は {{ totals.required_plate_appearances }} 打席（{{ totals.games }}試合 × 3.1）
       · IsoP は長打率 − 打率で、長打力だけを取り出した指標
+      · OPS+ はリーグ平均 OPS を100とした指数
     {% endif %}
   </p>
 {% endif %}
@@ -99,14 +102,19 @@
         {% if pos_mode == 'pitcher' %}
           {% sort_header 'innings' '投球回' 'end' %}
           {% sort_header 'era' '防御率' 'end' False %}
+          {% sort_header 'starts' '先発' 'end' %}
           {% sort_header 'wins' '勝' 'end' %}
           {% sort_header 'losses' '敗' 'end' %}
           {% sort_header 'saves' 'S' 'end' %}
+          {% sort_header 'holds' 'H' 'end' %}
+          {% sort_header 'hold_points' 'HP' 'end' %}
           {% sort_header 'strikeouts' '奪三振' 'end' %}
           {% sort_header 'whip' 'WHIP' 'end' False %}
           {% sort_header 'k9' 'K/9' 'end' %}
           {% sort_header 'bb9' 'BB/9' 'end' False %}
           {% sort_header 'fip' 'FIP' 'end' False %}
+          {# ERA+ は防御率と順序が一致する（分子が同じリーグ平均）ので、列は押せない #}
+          <th class="text-end">ERA+</th>
           {% sort_header 'home_runs_allowed' '被本塁打' 'end' %}
           {% sort_header 'hit_by_pitch_allowed' '与死球' 'end' %}
         {% else %}
@@ -122,9 +130,11 @@
           {% sort_header 'slg' '長打率' 'end' %}
           {% sort_header 'ops' 'OPS' 'end' %}
           {% sort_header 'iso' 'IsoP' 'end' %}
+          {# OPS+ は OPS と順序が一致する（同じリーグなら分母が同じ）ので、列は押せない #}
+          <th class="text-end">OPS+</th>
         {% endif %}
-        {# 編集列。書き込みにはログインが要るので、押せない人には出さない #}
-        {% if user.is_authenticated %}<th></th>{% endif %}
+        {# 編集列。書き込みは担当者だけなので、押せない人には出さない #}
+        {% if can_edit_team %}<th></th>{% endif %}
       </tr>
     </thead>
     <tbody>
@@ -148,14 +158,18 @@
         {% if pos_mode == 'pitcher' %}
           <td class="text-end stat-muted">{{ player.innings_pitched }}</td>
           <td class="text-end stat-key">{{ player.earned_run_average|floatformat:2 }}</td>
+          <td class="text-end stat-muted">{{ player.starts }}</td>
           <td class="text-end stat-muted">{{ player.wins }}</td>
           <td class="text-end stat-muted">{{ player.losses }}</td>
           <td class="text-end stat-muted">{{ player.saves }}</td>
+          <td class="text-end stat-muted">{{ player.holds }}</td>
+          <td class="text-end stat-muted">{{ player.hold_points }}</td>
           <td class="text-end stat-muted">{{ player.strikeouts }}</td>
           <td class="text-end">{{ player.whip|floatformat:2 }}</td>
           <td class="text-end stat-muted">{{ player.strikeouts_per_nine|floatformat:2 }}</td>
           <td class="text-end stat-muted">{{ player.walks_per_nine|floatformat:2 }}</td>
           <td class="text-end">{{ player.fip|floatformat:2 }}</td>
+          <td class="text-end stat-muted">{{ player.era_plus|floatformat:0 }}</td>
           <td class="text-end stat-muted">{{ player.home_runs_allowed }}</td>
           <td class="text-end stat-muted">{{ player.hit_by_pitch_allowed }}</td>
         {% else %}
@@ -173,9 +187,10 @@
             {{ player.ops|floatformat:3 }}
           </td>
           <td class="text-end stat-muted">{{ player.isolated_power|floatformat:3 }}</td>
+          <td class="text-end stat-muted">{{ player.ops_plus|floatformat:0 }}</td>
         {% endif %}
 
-        {% if user.is_authenticated %}
+        {% if can_edit_team %}
           <td class="text-end">
             <a href="{% url 'player_edit' team_id player.id %}" class="btn btn-sm btn-outline-info">編集</a>
           </td>
@@ -195,10 +210,56 @@
 </div>
 
 {% comment %}
-登録はログインした人だけができる。押せないフォームを見せても、
-送信してログイン画面へ飛ばされるだけなので出さない。
+チームの月別成績。個人の月別成績と対になる、チーム単位の推移。
+率は月ごとの合計から計算し直した値（月々の率を平均したものではない）。
 {% endcomment %}
-{% if user.is_authenticated %}
+{% if months %}
+  <div class="card mb-4">
+    <div class="card-header">月別成績</div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table mb-0">
+          <thead>
+            <tr>
+              <th>月</th>
+              <th class="text-end">試合</th>
+              <th class="text-end">勝-敗-分</th>
+              <th class="text-end">勝率</th>
+              <th class="text-end">打率</th>
+              <th class="text-end">OPS</th>
+              <th class="text-end">本塁打</th>
+              <th class="text-end">防御率</th>
+              <th class="text-end">WHIP</th>
+              <th class="text-end">奪三振</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in months %}
+              <tr>
+                <td>{{ row.label }}</td>
+                <td class="text-end stat-muted">{{ row.games_played }}</td>
+                <td class="text-end">{{ row.record_label }}</td>
+                <td class="text-end stat-key">{{ row.winning_percentage }}</td>
+                <td class="text-end">{{ row.batting_average|floatformat:3 }}</td>
+                <td class="text-end stat-muted">{{ row.ops|floatformat:3 }}</td>
+                <td class="text-end stat-muted">{{ row.home_runs }}</td>
+                <td class="text-end">{{ row.earned_run_average|floatformat:2 }}</td>
+                <td class="text-end stat-muted">{{ row.whip|floatformat:2 }}</td>
+                <td class="text-end stat-muted">{{ row.strikeouts }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+{% endif %}
+
+{% comment %}
+登録はこのチームの担当者だけができる。押せないフォームを見せても、
+送信して弾かれるだけなので出さない。
+{% endcomment %}
+{% if can_edit_team %}
 <div class="card">
   <div class="card-header">新入団選手の登録</div>
   <div class="card-body">

@@ -14,6 +14,16 @@ urlpatterns = [
         views.league_detail,
         name='league_detail_by_year',
     ),
+    path(
+        'league/<int:league_id>/titles/',
+        views.league_titles,
+        name='league_titles',
+    ),
+    path(
+        'league/<int:league_id>/titles/<int:year>/',
+        views.league_titles,
+        name='league_titles_by_year',
+    ),
     path('games/', views.game_list, name='game_list'),
     path('games/new/', views.game_create, name='game_create'),
     path('games/<int:game_id>/', views.game_detail, name='game_detail'),

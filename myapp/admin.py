@@ -275,6 +275,8 @@ class TeamAdmin(ManualOrderAdminMixin, admin.ModelAdmin):
     list_filter = ('league',)
     search_fields = ('name', 'home_stadium__name')
     autocomplete_fields = ('home_stadium',)
+    # 担当者はここで割り当てる。左右2ペインの選択肢の方が M2M の既定より選びやすい
+    filter_horizontal = ('managers',)
     # リーグごとにまとまるよう並べる。リーグ内は手動の表示順を尊重する。
     # この並びが区切り表示の前提（同じリーグの行が続いていないと見出しが何度も出る）
     ordering = ('league__display_order', 'league__name', 'display_order', 'name')

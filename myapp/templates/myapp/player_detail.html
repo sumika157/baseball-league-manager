@@ -20,7 +20,7 @@
     <p class="page-subtitle">{{ player.position }} · 出場 {{ profile.appearances }}試合</p>
   </div>
   {# 試合詳細と同じく、書き込みできる人にだけ導線を出す #}
-  {% if user.is_authenticated %}
+  {% if can_edit_team %}
     <a href="{% url 'player_edit' player.team_id player.id %}" class="btn btn-secondary">編集</a>
   {% endif %}
 </div>
@@ -44,8 +44,24 @@
       <div class="stat-label">FIP</div>
     </div>
     <div class="stat-cell">
+      <div class="stat-value">{{ player.era_plus|floatformat:0 }}</div>
+      <div class="stat-label">ERA+</div>
+    </div>
+    <div class="stat-cell">
       <div class="stat-value">{{ player.innings_pitched }}</div>
       <div class="stat-label">投球回</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-value">{{ player.wins }}-{{ player.losses }}</div>
+      <div class="stat-label">勝敗</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-value">{{ player.saves }}</div>
+      <div class="stat-label">セーブ</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-value">{{ player.hold_points }}</div>
+      <div class="stat-label">HP</div>
     </div>
   {% else %}
     <div class="stat-cell">
@@ -68,6 +84,10 @@
       <div class="stat-value">{{ player.isolated_power|floatformat:3 }}</div>
       <div class="stat-label">IsoP</div>
     </div>
+    <div class="stat-cell">
+      <div class="stat-value">{{ player.ops_plus|floatformat:0 }}</div>
+      <div class="stat-label">OPS+</div>
+    </div>
   {% endif %}
 </div>
 
@@ -75,8 +95,11 @@
   {% if player.is_pitcher %}
     FIP は本塁打・四死球・奪三振だけで投球内容を測り、リーグの得点環境に合わせて
     防御率と同じ尺度に直した指標です。防御率との差は守備や打球の行方の影響を表します。
+    ERA+ はリーグ平均防御率を100とした指数で、100 を超えていればリーグ平均より良い投手です。
+    HP はホールドと救援勝利の合計で、勝ちを繋いだ働きを表します。
   {% else %}
     IsoP は長打率 − 打率。安打のうちどれだけ長打だったかを表します。
+    OPS+ はリーグ平均 OPS を100とした指数で、得点環境の違うリーグ・シーズンでも比べられます。
   {% endif %}
 </p>
 

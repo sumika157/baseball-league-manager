@@ -13,99 +13,184 @@
 
 <div class="page-head">
   <h1 class="page-title">
-    {{ detail.game.home_team_name }}
-    <span class="stat-muted">{{ detail.game.home_score }} - {{ detail.game.away_score }}</span>
     {{ detail.game.away_team_name }}
+    <span class="stat-muted">{{ detail.game.away_score }} - {{ detail.game.home_score }}</span>
+    {{ detail.game.home_team_name }}
   </h1>
   <p class="page-subtitle">
     {{ detail.game.played_on|date:"Y年n月j日" }}（{{ detail.game.year }}年シーズン） · {{ detail.game.result }}
   </p>
-  {% if user.is_authenticated %}
+  {% if can_edit %}
     <a href="{% url 'game_edit' detail.game.id %}" class="btn btn-secondary mt-2">記録を編集</a>
   {% endif %}
 </div>
 
-<div class="card mb-3">
-  <div class="card-header">打撃成績</div>
-  <div class="card-body p-0">
-    {% if detail.batting %}
-      <table class="table table-hover mb-0">
-        <thead>
-          <tr>
-            <th>チーム</th>
-            <th>選手</th>
-            <th class="text-end">打数</th>
-            <th class="text-end">安打</th>
-            <th class="text-end">本塁打</th>
-            <th class="text-end">打点</th>
-            <th class="text-end">四球</th>
-            <th class="text-end">打率</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for row in detail.batting %}
+{% comment %}
+スコアボード。ビジターが表、ホームが裏に攻めるので上下の並びもその順にする。
+ホームが最終回を攻めずに終わった場合は「X」が入る。
+{% endcomment %}
+{% if detail.line_score.has_columns %}
+  <div class="card mb-3">
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table linescore-table mb-0">
+          <thead>
             <tr>
-              <td class="stat-muted">{{ row.team_name }}</td>
-              <td>
-                <span class="jersey-number me-1">{{ row.number }}</span>
-                <a href="{% url 'player_detail' row.team_id row.player_id %}" class="player-name">{{ row.player_name }}</a>
-              </td>
-              <td class="text-end">{{ row.at_bats }}</td>
-              <td class="text-end">{{ row.hits }}</td>
-              <td class="text-end">{{ row.home_runs }}</td>
-              <td class="text-end">{{ row.runs_batted_in }}</td>
-              <td class="text-end stat-muted">{{ row.walks }}</td>
-              <td class="text-end stat-key">{{ row.batting_average|floatformat:3 }}</td>
+              <th></th>
+              {% for column in detail.line_score.columns %}
+                <th class="text-center">{{ column.inning }}</th>
+              {% endfor %}
+              <th class="text-center linescore-total">計</th>
+              <th class="text-center">安</th>
             </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    {% else %}
-      <div class="empty-state" style="padding: 2rem 1rem; font-size: 0.875rem;">
-        打撃成績が登録されていません。
+          </thead>
+          <tbody>
+            <tr>
+              <th>{{ detail.game.away_team_name }}</th>
+              {% for column in detail.line_score.columns %}
+                <td class="text-center">{{ column.away }}</td>
+              {% endfor %}
+              <td class="text-center linescore-total">{{ detail.line_score.away_total }}</td>
+              <td class="text-center stat-muted">{{ detail.line_score.away_hits }}</td>
+            </tr>
+            <tr>
+              <th>{{ detail.game.home_team_name }}</th>
+              {% for column in detail.line_score.columns %}
+                <td class="text-center">{{ column.home }}</td>
+              {% endfor %}
+              <td class="text-center linescore-total">{{ detail.line_score.home_total }}</td>
+              <td class="text-center stat-muted">{{ detail.line_score.home_hits }}</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
-    {% endif %}
+    </div>
   </div>
-</div>
+{% endif %}
 
-<div class="card">
-  <div class="card-header">投球成績</div>
-  <div class="card-body p-0">
-    {% if detail.pitching %}
-      <table class="table table-hover mb-0">
-        <thead>
-          <tr>
-            <th>チーム</th>
-            <th>選手</th>
-            <th class="text-end">投球回</th>
-            <th class="text-end">自責点</th>
-            <th class="text-end">奪三振</th>
-            <th class="text-end">被安打</th>
-            <th class="text-end">防御率</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for row in detail.pitching %}
-            <tr>
-              <td class="stat-muted">{{ row.team_name }}</td>
-              <td>
-                <span class="jersey-number me-1">{{ row.number }}</span>
-                <a href="{% url 'player_detail' row.team_id row.player_id %}" class="player-name">{{ row.player_name }}</a>
-              </td>
-              <td class="text-end">{{ row.innings_pitched }}</td>
-              <td class="text-end">{{ row.earned_runs }}</td>
-              <td class="text-end">{{ row.strikeouts }}</td>
-              <td class="text-end stat-muted">{{ row.hits_allowed }}</td>
-              <td class="text-end stat-key">{{ row.earned_run_average|floatformat:2 }}</td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    {% else %}
-      <div class="empty-state" style="padding: 2rem 1rem; font-size: 0.875rem;">
-        投球成績が登録されていません。
-      </div>
-    {% endif %}
+{% comment %}
+チームごとのボックススコア。打順の順に並び、同じ打順の交代選手は
+打順を繰り返さず一段下げて示す（スコアブックの慣例）。
+{% endcomment %}
+{% for box in detail.boxes %}
+  <div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>{{ box.team_name }} 打撃</span>
+      <span class="stat-muted">{{ box.score }}点</span>
+    </div>
+    <div class="card-body p-0">
+      {% if box.batting %}
+        <div class="table-responsive">
+          <table class="table table-hover boxscore-table mb-0">
+            <thead>
+              <tr>
+                <th class="text-center">打順</th>
+                <th class="text-center">位置</th>
+                <th>選手名</th>
+                <th class="text-end">打率</th>
+                <th class="text-end">打数</th>
+                <th class="text-end">安打</th>
+                <th class="text-end">打点</th>
+                <th class="text-end">本塁打</th>
+                <th class="text-end">二塁打</th>
+                <th class="text-end">三塁打</th>
+                <th class="text-end">四球</th>
+                <th class="text-end">死球</th>
+                <th class="text-end">犠飛</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in box.batting %}
+                <tr {% if not row.is_starter %}class="boxscore-substitute"{% endif %}>
+                  <td class="text-center stat-muted">{{ row.order_label }}</td>
+                  <td class="text-center">{{ row.position_label|default:'—' }}</td>
+                  <td>
+                    <span class="jersey-number me-1">{{ row.number }}</span>
+                    <a href="{% url 'player_detail' row.team_id row.player_id %}" class="player-name">{{ row.player_name }}</a>
+                  </td>
+                  <td class="text-end stat-key">{{ row.career_batting_average|floatformat:3 }}</td>
+                  <td class="text-end">{{ row.at_bats }}</td>
+                  <td class="text-end">{{ row.hits }}</td>
+                  <td class="text-end">{{ row.runs_batted_in }}</td>
+                  <td class="text-end">{{ row.home_runs }}</td>
+                  <td class="text-end stat-muted">{{ row.doubles }}</td>
+                  <td class="text-end stat-muted">{{ row.triples }}</td>
+                  <td class="text-end stat-muted">{{ row.walks }}</td>
+                  <td class="text-end stat-muted">{{ row.hit_by_pitch }}</td>
+                  <td class="text-end stat-muted">{{ row.sacrifice_flies }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="empty-state" style="padding: 2rem 1rem; font-size: 0.875rem;">
+          打撃成績が登録されていません。
+        </div>
+      {% endif %}
+    </div>
   </div>
-</div>
+
+  <div class="card mb-4">
+    <div class="card-header">{{ box.team_name }} 投手</div>
+    <div class="card-body p-0">
+      {% if box.pitching %}
+        <div class="table-responsive">
+          <table class="table table-hover boxscore-table mb-0">
+            <thead>
+              <tr>
+                <th>選手名</th>
+                <th class="text-end">防御率</th>
+                <th class="text-end">投球回</th>
+                <th class="text-end">被安打</th>
+                <th class="text-end">被本塁打</th>
+                <th class="text-end">奪三振</th>
+                <th class="text-end">与四球</th>
+                <th class="text-end">与死球</th>
+                <th class="text-end">自責点</th>
+                <th class="text-center">記録</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in box.pitching %}
+                <tr>
+                  <td>
+                    <span class="jersey-number me-1">{{ row.number }}</span>
+                    <a href="{% url 'player_detail' row.team_id row.player_id %}" class="player-name">{{ row.player_name }}</a>
+                    {% if row.appearance_order == 1 %}<span class="badge bg-secondary ms-1">先発</span>{% endif %}
+                  </td>
+                  <td class="text-end stat-key">{{ row.career_earned_run_average|floatformat:2 }}</td>
+                  <td class="text-end">{{ row.innings_pitched }}</td>
+                  <td class="text-end stat-muted">{{ row.hits_allowed }}</td>
+                  <td class="text-end stat-muted">{{ row.home_runs_allowed }}</td>
+                  <td class="text-end">{{ row.strikeouts }}</td>
+                  <td class="text-end stat-muted">{{ row.walks_allowed }}</td>
+                  <td class="text-end stat-muted">{{ row.hit_by_pitch_allowed }}</td>
+                  <td class="text-end">{{ row.earned_runs }}</td>
+                  <td class="text-center stat-key">{{ row.decision|default:'—' }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="empty-state" style="padding: 2rem 1rem; font-size: 0.875rem;">
+          投球成績が登録されていません。
+        </div>
+      {% endif %}
+    </div>
+  </div>
+{% empty %}
+  <div class="card">
+    <div class="empty-state">
+      出場選手の成績が登録されていません。
+    </div>
+  </div>
+{% endfor %}
+
+<p class="page-subtitle" style="font-size: 0.8125rem;">
+  位置は守った場所（代打は「打」、代走は「走」）。一段下げた行は途中出場です。
+  打率と防御率はこの試合の値ではなく通算の値です（1試合の率は標本が小さすぎて読めないため）。
+  記録の「勝」「敗」「Ｓ」「Ｈ」は、イニングスコアと継投から日本プロ野球の規則で決まります。
+</p>
 {% endblock %}

@@ -17,7 +17,7 @@
       ここに登録された結果から、チームの勝敗と選手の通算成績が集計されます。 · {{ games|length }}件
     </p>
   </div>
-  {% if user.is_authenticated %}
+  {% if can_create_game %}
     <a href="{% url 'game_create' %}" class="btn btn-primary">試合を登録</a>
   {% endif %}
 </div>

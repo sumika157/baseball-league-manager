@@ -883,6 +883,58 @@ main.container {
 }
 
 /* ------------------------------------------------------------------
+   スコアボードとボックススコア
+
+   回数ぶんの列が並ぶので字を詰め、折り返さない。合計（R）だけ太字にして
+   回ごとの得点と区別する。
+   ------------------------------------------------------------------ */
+.linescore-table {
+  font-size: 0.875rem;
+  width: auto;
+  min-width: 100%;
+}
+
+.linescore-table th,
+.linescore-table td {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.linescore-table thead th {
+  color: var(--app-text-subtle);
+  font-weight: 500;
+}
+
+.linescore-table tbody th {
+  font-weight: 600;
+  text-align: left;
+}
+
+.linescore-table .linescore-total {
+  font-weight: 700;
+  border-left: 1px solid var(--app-border);
+}
+
+.boxscore-table {
+  font-size: 0.875rem;
+}
+
+.boxscore-table th,
+.boxscore-table td {
+  white-space: nowrap;
+}
+
+/* 途中出場は一段下げて、スタメンとの区別を並びで示す。
+   色を足すと守備位置の印と競合するため、字下げと文字色だけで表す。 */
+.boxscore-table .boxscore-substitute td:nth-child(3) {
+  padding-left: 1.75rem;
+}
+
+.boxscore-table .boxscore-substitute {
+  color: var(--app-text-subtle);
+}
+
+/* ------------------------------------------------------------------
    認証画面
    ------------------------------------------------------------------ */
 .auth-shell {

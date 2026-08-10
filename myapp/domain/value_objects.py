@@ -58,6 +58,60 @@ class Position(Enum):
         return [position.value for position in cls]
 
 
+class FieldingPosition(Enum):
+    """試合で実際に就いた守備位置。
+
+    選手の登録位置（Position）とは別の概念。登録は「主にどこを守るか」で
+    投手／野手の振り分けに使い、こちらは「この試合でどこを守ったか」を表す。
+    内野手として登録された選手が遊撃でも二塁でも出られるため、1つにまとめると
+    どちらの問いにも答えられなくなる。
+
+    代打・代走は守備に就かないまま打席・塁上にだけ現れるので、
+    守備位置と同じ欄に並ぶ印として扱う（ボックススコアの慣例）。
+    """
+
+    PITCHER = '投'
+    CATCHER = '捕'
+    FIRST_BASE = '一'
+    SECOND_BASE = '二'
+    THIRD_BASE = '三'
+    SHORTSTOP = '遊'
+    LEFT_FIELD = '左'
+    CENTER_FIELD = '中'
+    RIGHT_FIELD = '右'
+    DESIGNATED_HITTER = '指'
+    PINCH_HITTER = '打'
+    PINCH_RUNNER = '走'
+
+    @property
+    def label(self) -> str:
+        return self.value
+
+    @property
+    def is_substitute_only(self) -> bool:
+        """守備に就かず、代打・代走としてのみ出場したか。"""
+        return self in (FieldingPosition.PINCH_HITTER, FieldingPosition.PINCH_RUNNER)
+
+    @classmethod
+    def from_label(cls, label: str) -> FieldingPosition | None:
+        """未設定（空）は None を返す。守備位置を記録しない試合もあるため。"""
+        if not label:
+            return None
+        for item in cls:
+            if item.value == label:
+                return item
+        raise InvalidPosition(f"「{label}」は守備位置として認識できません。")
+
+    @classmethod
+    def labels(cls) -> list[str]:
+        return [item.value for item in cls]
+
+    @classmethod
+    def defensive_labels(cls) -> list[str]:
+        """守備に就く位置だけ。スタメンの選択肢に使う。"""
+        return [item.value for item in cls if not item.is_substitute_only]
+
+
 @dataclass(frozen=True)
 class JerseyNumber:
     """背番号。
@@ -323,6 +377,13 @@ class PitchingLine:
     # 与四球とは別の事実なので、それぞれ独立して記録する
     home_runs_allowed: int = 0
     hit_by_pitch_allowed: int = 0
+    # ホールド。日本プロ野球では公式記録で、セーブが記録される状況で登板し、
+    # リードを保ったまま次の投手に引き継いだ救援投手に付く
+    holds: int = 0
+    # 先発登板数と、救援での勝利。HP（ホールドポイント）は
+    # ホールド＋救援勝利で決まるため、勝利のうち救援ぶんを分けて持つ
+    starts: int = 0
+    relief_wins: int = 0
 
     # FIP の重み。本塁打・与四球死球・奪三振が失点にどれだけ効くかの係数で、
     # 野球の指標として定まった値のためドメインに置く
@@ -343,6 +404,7 @@ class PitchingLine:
             ('earned_runs', '自責点'), ('strikeouts', '奪三振'),
             ('hits_allowed', '被安打'), ('walks_allowed', '与四球'),
             ('home_runs_allowed', '被本塁打'), ('hit_by_pitch_allowed', '与死球'),
+            ('holds', 'ホールド'), ('starts', '先発登板'), ('relief_wins', '救援勝利'),
         ):
             object.__setattr__(
                 self, field_name, _require_non_negative(label, getattr(self, field_name))
@@ -352,6 +414,11 @@ class PitchingLine:
             raise InvalidStatValue(
                 f"被本塁打（{self.home_runs_allowed}）が"
                 f"被安打（{self.hits_allowed}）を超えています。"
+            )
+
+        if self.relief_wins > self.wins:
+            raise InvalidStatValue(
+                f"救援勝利（{self.relief_wins}）が勝利（{self.wins}）を超えています。"
             )
 
     @property
@@ -419,6 +486,15 @@ class PitchingLine:
             return 0.0
         return self.fip_base + constant
 
+    @property
+    def hold_points(self) -> int:
+        """HP（ホールドポイント）。ホールド＋救援勝利。
+
+        日本プロ野球の救援投手の指標。ホールドだけでは「リードを守って
+        引き継いだ」働きしか見えず、逆転して勝利投手になった登板が抜け落ちる。
+        """
+        return self.holds + self.relief_wins
+
     def era_plus(self, league_era: float) -> float:
         """ERA+。リーグ平均防御率 ÷ 自身の防御率 × 100。高いほど良い（FIP と逆）。
 
@@ -447,6 +523,9 @@ class PitchingLine:
             walks_allowed=self.walks_allowed + other.walks_allowed,
             home_runs_allowed=self.home_runs_allowed + other.home_runs_allowed,
             hit_by_pitch_allowed=self.hit_by_pitch_allowed + other.hit_by_pitch_allowed,
+            holds=self.holds + other.holds,
+            starts=self.starts + other.starts,
+            relief_wins=self.relief_wins + other.relief_wins,
         )
 
     @classmethod
@@ -486,6 +565,65 @@ class Season:
 
     def __str__(self) -> str:
         return f"{self.year}年"
+
+
+@dataclass(frozen=True)
+class LineScore:
+    """イニングスコア。回ごとの得点。
+
+    勝敗・セーブ・ホールドは「継投した時点のスコア」で決まるため、最終得点だけでは
+    決められない。回ごとの経過を持つことで、日本プロ野球の規則どおりに導ける。
+
+    ビジターが表、ホームが裏に攻める。ホームが最終回を攻めずに終わる（サヨナラ勝ち
+    以外でリードしている）場合、裏の得点は記録されないので長さが表と揃わないことがある。
+    """
+
+    away: tuple[int, ...] = ()
+    home: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        for name in ('away', 'home'):
+            values = tuple(
+                _require_non_negative('イニングの得点', value)
+                for value in getattr(self, name)
+            )
+            object.__setattr__(self, name, values)
+
+    @property
+    def innings(self) -> int:
+        """記録されている回数。延長も含む。"""
+        return max(len(self.away), len(self.home))
+
+    @property
+    def away_total(self) -> int:
+        return sum(self.away)
+
+    @property
+    def home_total(self) -> int:
+        return sum(self.home)
+
+    @property
+    def is_empty(self) -> bool:
+        return self.innings == 0
+
+    def runs_in(self, inning: int, *, home: bool) -> int:
+        """指定の回の得点。記録が無ければ 0。"""
+        values = self.home if home else self.away
+        index = inning - 1
+        return values[index] if 0 <= index < len(values) else 0
+
+    def score_after(self, inning: int, *, bottom: bool) -> tuple[int, int]:
+        """指定の半回を終えた時点の (ビジター, ホーム) の得点。
+
+        bottom が False なら表を終えた時点（ホームはまだその回を攻めていない）。
+        """
+        away = sum(self.away[:inning])
+        home = sum(self.home[:inning if bottom else inning - 1])
+        return away, home
+
+    def matches(self, away_total: int, home_total: int) -> bool:
+        """合計が最終得点と一致するか。ずれた入力を弾くために使う。"""
+        return self.away_total == away_total and self.home_total == home_total
 
 
 @dataclass(frozen=True)
@@ -542,7 +680,7 @@ class Handedness(Enum):
         return self.value
 
     @classmethod
-    def from_label(cls, label: str) -> 'Handedness | None':
+    def from_label(cls, label: str) -> Handedness | None:
         """未設定（空）は None を返す。全選手に入力を強いないため。"""
         if not label:
             return None
