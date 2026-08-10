@@ -403,11 +403,25 @@ def player_edit(request, team_id, player_id):
         raise Http404("選手が見つかりません。")
 
     if request.method == 'POST':
-        # 退団はフォームの検証を通さず、押されたボタンで判断する
+        # 退団・主将の指名/解任はフォームの検証を通さず、押されたボタンで判断する
         if 'retire' in request.POST:
             service.retire_player(team_id, player_id)
             messages.success(request, f"{detail.name} 選手を退団にしました。")
             return redirect(reverse('player_list', args=[team_id]))
+
+        if 'appoint_captain' in request.POST:
+            try:
+                service.appoint_captain(team_id, player_id)
+            except DomainError as error:
+                messages.error(request, str(error))
+            else:
+                messages.success(request, f"{detail.name} 選手を主将に指名しました。")
+            return redirect(reverse('player_edit', args=[team_id, player_id]))
+
+        if 'remove_captain' in request.POST:
+            service.remove_captain(team_id, player_id)
+            messages.success(request, f"{detail.name} 選手の主将を解任しました。")
+            return redirect(reverse('player_edit', args=[team_id, player_id]))
 
         base_form = PlayerUpdateForm(request.POST)
         if base_form.is_valid():

@@ -13,6 +13,7 @@ from decimal import Decimal, ROUND_DOWN
 from enum import Enum
 
 from .exceptions import (
+    ForeignPlayerQuotaExceeded,
     InvalidInningsPitched,
     InvalidJerseyNumber,
     InvalidPosition,
@@ -477,6 +478,11 @@ class Profile:
     high_school: str = ''
     university: str = ''
     corporate_team: str = ''
+    # 表示用の記述情報。既存の birthplace と同じ扱いで、検証は行わない
+    nationality: str = ''
+    # 外国人枠の判定に使う唯一の出典。nationality（実際の国籍という事実）とは
+    # 別の概念（帰化選手など、枠制度上の扱いは国籍と一致しないことがある）
+    is_foreign_player: bool = False
 
     def __post_init__(self) -> None:
         for name, label, upper in (
@@ -543,6 +549,7 @@ class Profile:
             self.birth_date, self.throws, self.bats, self.height_cm,
             self.weight_kg, self.birthplace, self.debut_year,
             self.high_school, self.university, self.corporate_team,
+            self.nationality,
         ])
 
 
@@ -593,3 +600,12 @@ class StadiumProfile:
 def format_average(value: float) -> str:
     """打率・出塁率を野球慣例の「.333」形式で表す。"""
     return f"{value:.3f}".lstrip('0') if value < 1 else f"{value:.3f}"
+
+
+def ensure_quota_not_exceeded(count: int, limit: int | None, message: str) -> None:
+    """人数が上限を超えていないか確認する。limit が None なら無制限。
+
+    外国人選手の登録枠・試合出場枠のどちらも、この同じ規則で判定する。
+    """
+    if limit is not None and count > limit:
+        raise ForeignPlayerQuotaExceeded(message)

@@ -8,12 +8,15 @@ from __future__ import annotations
 
 from datetime import date
 
+from django.db import transaction
+
 from ..domain import services as domain_services
 from ..domain.entities import Game, Player, Stint, Team
 from ..domain.value_objects import (
     JerseyNumber,
     Position,
     Season,
+    ensure_quota_not_exceeded,
     format_average,
 )
 from .dto import (
@@ -203,8 +206,10 @@ class TeamApplicationService:
         team = self._teams.find_by_id(team_id)
         batters = [p for p in team.active_players if not p.is_pitcher]
         players, key, desc = domain_services.sort_batters(batters, sort, descending)
+        captain = team.current_captain
         return Listing(
-            rows=[self._to_batter_row(p) for p in players], sort=key, descending=desc
+            rows=[self._to_batter_row(p, is_captain=p is captain) for p in players],
+            sort=key, descending=desc,
         )
 
     def list_pitchers(
@@ -213,8 +218,10 @@ class TeamApplicationService:
         team = self._teams.find_by_id(team_id)
         pitchers = [p for p in team.active_players if p.is_pitcher]
         players, key, desc = domain_services.sort_pitchers(pitchers, sort, descending)
+        captain = team.current_captain
         return Listing(
-            rows=[self._to_pitcher_row(p) for p in players], sort=key, descending=desc
+            rows=[self._to_pitcher_row(p, is_captain=p is captain) for p in players],
+            sort=key, descending=desc,
         )
 
     def get_player_detail(self, team_id: int, player_id: int) -> PlayerDetail:
@@ -543,7 +550,34 @@ class TeamApplicationService:
         for player_id, line in (pitching or {}).items():
             game.record_pitching(player_id, line)
 
+        self._ensure_foreign_player_game_quota(game, batting or {}, pitching or {})
         return self._games.save(game)
+
+    def _ensure_foreign_player_game_quota(
+        self, game: Game, batting: dict, pitching: dict
+    ) -> None:
+        """1試合の出場選手（打撃または投球成績が記録される選手）のうち、
+        外国人選手がチームごとの上限を超えていないか確認する。
+
+        ホーム・ビジターはそれぞれ独立に判定する（合算しない）。
+        """
+        players = self._player_index()
+        names = self._team_names()
+        participant_ids = set(batting) | set(pitching)
+
+        for team_id in (game.home_team_id, game.away_team_id):
+            foreign_count = sum(
+                1 for pid in participant_ids
+                if players.get(pid, {}).get('team_id') == team_id
+                and players[pid]['is_foreign_player']
+            )
+            league_id = self._teams.find_by_id(team_id).league_id
+            limit = self._leagues.find_by_id(league_id).foreign_player_game_limit
+            ensure_quota_not_exceeded(
+                foreign_count, limit,
+                f"「{names.get(team_id, '')}」の外国人選手出場人数（{foreign_count}人）が"
+                f"上限（{limit}人）を超えています。",
+            )
 
     def get_admin_overview(self) -> AdminOverview:
         """管理画面トップ用の概況。
@@ -615,6 +649,7 @@ class TeamApplicationService:
         self._teams.save(team)
         return player
 
+    @transaction.atomic
     def transfer_player(
         self, player_id: int, *, from_team_id: int, to_team_id: int,
         number: int, year: int = None,
@@ -623,13 +658,15 @@ class TeamApplicationService:
 
         成績は選手に紐づくため移籍しても失われない。経歴として
         「いつどのチームに居たか」が残る。
+
+        検査がすべて終わってから保存する。途中で拒否された場合に、元チームだけ
+        退団済みで移籍先には入らない、という中途半端な状態を残さないため。
         """
         season = year if year is not None else date.today().year
 
         source = self._teams.find_by_id(from_team_id)
         player = source.find_player(player_id)
         source.retire_player(player, season)
-        self._teams.save(source)
 
         destination = self._teams.find_by_id(to_team_id)
         destination._ensure_number_is_available(JerseyNumber(number))
@@ -642,7 +679,28 @@ class TeamApplicationService:
         player.number = JerseyNumber(number)
         player.is_active = True
         destination.players.append(player)
+
+        league = self._leagues.find_by_id(destination.league_id)
+        destination.ensure_foreign_player_quota(league.foreign_player_roster_limit)
+
+        self._teams.save(source)
         self._teams.save(destination)
+
+    def appoint_captain(self, team_id: int, player_id: int, year: int = None) -> Player:
+        """選手をチームの主将に指名する。"""
+        team = self._teams.find_by_id(team_id)
+        player = team.find_player(player_id)
+        team.appoint_captain(player, year)
+        self._teams.save(team)
+        return player
+
+    def remove_captain(self, team_id: int, player_id: int, year: int = None) -> Player:
+        """選手の主将を解任する。"""
+        team = self._teams.find_by_id(team_id)
+        player = team.find_player(player_id)
+        team.remove_captain(player, year)
+        self._teams.save(team)
+        return player
 
     # --- 参照用の索引 ---
 
@@ -690,6 +748,7 @@ class TeamApplicationService:
                     'name': player.name,
                     'number': player.number.value,
                     'team_id': team.id,
+                    'is_foreign_player': player.profile.is_foreign_player,
                 }
         return index
 
@@ -713,7 +772,7 @@ class TeamApplicationService:
     # --- DTO への詰め替え ---
 
     @staticmethod
-    def _to_batter_row(player: Player) -> BatterRow:
+    def _to_batter_row(player: Player, *, is_captain: bool = False) -> BatterRow:
         line = player.batting
         return BatterRow(
             id=player.id,
@@ -729,10 +788,11 @@ class TeamApplicationService:
             batting_average=line.batting_average,
             on_base_percentage=line.on_base_percentage,
             ops=line.ops,
+            is_captain=is_captain,
         )
 
     @staticmethod
-    def _to_pitcher_row(player: Player) -> PitcherRow:
+    def _to_pitcher_row(player: Player, *, is_captain: bool = False) -> PitcherRow:
         line = player.pitching
         return PitcherRow(
             id=player.id,
@@ -746,6 +806,7 @@ class TeamApplicationService:
             earned_run_average=line.earned_run_average,
             whip=line.whip,
             strikeouts_per_nine=line.strikeouts_per_nine,
+            is_captain=is_captain,
         )
 
     @staticmethod
@@ -758,6 +819,7 @@ class TeamApplicationService:
             number=player.number.value,
             position=player.position.label,
             is_pitcher=player.is_pitcher,
+            is_captain=team.current_captain is player,
             at_bats=batting.at_bats,
             singles=batting.singles,
             doubles=batting.doubles,

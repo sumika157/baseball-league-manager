@@ -3,6 +3,10 @@
 集約ルートは Team。「同一チーム内で背番号は重複しない」という不変条件は
 チーム全体を見ないと判定できないため、Team がロスターを保持して自ら保証する。
 リポジトリはこの集約単位で読み書きする。
+
+Captaincy は Stint とロジック（is_current/overlaps/close）が同型だが、対象の異なる
+別概念（在籍と主将在任は開始・終了のタイミングが一致しない）のため独立させている。
+共通化の余地はあるが、Stint は既存テストの対象が多く触るリスクが大きいため見送った。
 """
 
 from __future__ import annotations
@@ -11,9 +15,12 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from .exceptions import (
+    DuplicateCaptain,
     DuplicateJerseyNumber,
+    InvalidCaptaincy,
     InvalidGame,
     InvalidStint,
+    PlayerNotEligibleForCaptaincy,
     PlayerNotFound,
 )
 from .value_objects import (
@@ -24,6 +31,7 @@ from .value_objects import (
     Profile,
     Season,
     StadiumProfile,
+    ensure_quota_not_exceeded,
 )
 
 
@@ -33,6 +41,9 @@ class League:
 
     name: str
     id: int | None = None
+    # 外国人選手の枠。リーグごとにルールが異なりうるためここに持つ。None なら無制限
+    foreign_player_roster_limit: int | None = None
+    foreign_player_game_limit: int | None = None
 
     def __str__(self) -> str:
         return self.name
@@ -105,6 +116,49 @@ class Stint:
 
 
 @dataclass
+class Captaincy:
+    """主将在任。あるチームで、いつからいつまで主将だったか。
+
+    在籍（Stint）とは開始・終了のタイミングが一致しない別軸の期間のため、
+    Stint を再利用せず並列の型として持つ（ロジックは同型だが対象が異なる）。
+    """
+
+    team_id: int
+    from_year: int
+    to_year: int | None = None
+    id: int | None = None
+    team_name: str = ''
+
+    def __post_init__(self) -> None:
+        self.from_year = Season(self.from_year).year
+        if self.to_year is not None:
+            self.to_year = Season(self.to_year).year
+            if self.to_year < self.from_year:
+                raise InvalidCaptaincy("退任年が就任年より前になっています。")
+
+    def __str__(self) -> str:
+        return f"{self.from_year}〜{self.to_year or '現在'}"
+
+    @property
+    def is_current(self) -> bool:
+        return self.to_year is None
+
+    def overlaps(self, other: 'Captaincy') -> bool:
+        """期間が重なるか。片方でも在任中（to_year が空）なら無限として扱う。"""
+        end, other_end = self.to_year, other.to_year
+        starts_before_other_ends = other_end is None or self.from_year <= other_end
+        other_starts_before_end = end is None or other.from_year <= end
+        return starts_before_other_ends and other_starts_before_end
+
+    def close(self, year: int) -> None:
+        """解任する。"""
+        season = Season(year).year
+        if season < self.from_year:
+            raise InvalidCaptaincy("就任年より前の年で解任にはできません。")
+        self.to_year = season
+
+
+@dataclass
 class Player:
     """選手。Team 集約の内部エンティティ。
 
@@ -123,6 +177,8 @@ class Player:
     pitching: PitchingLine = field(default_factory=PitchingLine)
     # 経歴。number と is_active は、このうち現在の在籍から導いた値
     career: list[Stint] = field(default_factory=list)
+    # 主将在任歴。career と同様、生涯を通じた経歴として選手自身が持つ
+    captaincies: list[Captaincy] = field(default_factory=list)
 
     def __str__(self) -> str:
         return f"{self.number} {self.name} ({self.position.label})"
@@ -250,6 +306,8 @@ class Team:
         current = self.current_stint(player)
         if current is not None:
             current.close(year if year is not None else date.today().year)
+        # 在籍していないのに主将、という両立しない状態を残さない
+        self.remove_captain(player, year)
 
     def _ensure_number_is_available(
         self, number: JerseyNumber, excluding: Player | None = None
@@ -268,6 +326,68 @@ class Team:
                     raise DuplicateJerseyNumber(
                         f"背番号 {number} は「{self.name}」で既に使用されています。"
                     )
+
+    # --- 主将の指名・解任（不変条件を守る） ---
+
+    def appoint_captain(self, player: Player, year: int = None) -> None:
+        """主将に指名する。在籍していない選手や、既に他の選手が主将の場合は拒否する。"""
+        if self.current_stint(player) is None:
+            raise PlayerNotEligibleForCaptaincy(
+                f"「{self.name}」に在籍していない選手を主将にはできません。"
+            )
+        if self.current_captain is player:
+            return
+        self._ensure_no_current_captain(excluding=player)
+        player.captaincies.append(Captaincy(
+            team_id=self.id, team_name=self.name,
+            from_year=year if year is not None else date.today().year,
+        ))
+
+    def remove_captain(self, player: Player, year: int = None) -> None:
+        """主将を解任する。主将でなければ何もしない。"""
+        current = self._current_captaincy(player)
+        if current is not None:
+            current.close(year if year is not None else date.today().year)
+
+    @property
+    def current_captain(self) -> Player | None:
+        return next(
+            (p for p in self.players if self._current_captaincy(p) is not None), None
+        )
+
+    def _current_captaincy(self, player: Player) -> Captaincy | None:
+        return next(
+            (c for c in player.captaincies if c.team_id == self.id and c.is_current),
+            None,
+        )
+
+    def _ensure_no_current_captain(self, excluding: Player | None = None) -> None:
+        """このチームに同時に主将は1人まで。ロスター全体を見て検査する。"""
+        for player in self.players:
+            if player is excluding:
+                continue
+            if self._current_captaincy(player) is not None:
+                raise DuplicateCaptain(
+                    f"「{self.name}」には既に主将（{player.name}）がいます。"
+                )
+
+    # --- 外国人枠 ---
+
+    @property
+    def foreign_player_count(self) -> int:
+        return sum(1 for p in self.active_players if p.profile.is_foreign_player)
+
+    def ensure_foreign_player_quota(self, limit: int | None) -> None:
+        """現在のロスターが外国人枠の上限を超えていないか確認する。
+
+        呼び出し側は、検査したい変更（選手追加・移籍受け入れ・国籍フラグ変更）を
+        保存前の roster に反映してから呼ぶ。超えていれば例外を投げ、
+        呼び出し元のサービスがそれ以降の保存処理を止める。
+        """
+        ensure_quota_not_exceeded(
+            self.foreign_player_count, limit,
+            f"「{self.name}」の外国人選手登録数が上限（{limit}人）を超えています。",
+        )
 
 
 @dataclass

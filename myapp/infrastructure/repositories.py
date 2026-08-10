@@ -14,6 +14,7 @@ from django.db import transaction
 from django.db.models import Prefetch, Sum
 
 from ..domain.entities import (
+    Captaincy,
     Game,
     GameBatting,
     GamePitching,
@@ -139,6 +140,18 @@ class DjangoTeamRepository:
                 )
                 stint.id = stint_row.id
 
+            for captaincy in player.captaincies:
+                captaincy_row, _ = orm_models.Captaincy.objects.update_or_create(
+                    id=captaincy.id,
+                    defaults={
+                        'player': row,
+                        'team_id': captaincy.team_id,
+                        'from_year': captaincy.from_year,
+                        'to_year': captaincy.to_year,
+                    },
+                )
+                captaincy.id = captaincy_row.id
+
         return team
 
     # --- 内部処理 ---
@@ -158,6 +171,7 @@ class DjangoTeamRepository:
             pitching = _pitching_totals(list(player_rows))
 
             careers = _careers_of(list(player_rows))
+            captaincies = _captaincies_of(list(player_rows))
 
             for player_id, p in player_rows.items():
                 career = careers.get(player_id, [])
@@ -181,6 +195,7 @@ class DjangoTeamRepository:
                     batting=batting.get(player_id, BattingLine()),
                     pitching=pitching.get(player_id, PitchingLine()),
                     career=career,
+                    captaincies=captaincies.get(player_id, []),
                 ))
             players.sort(key=lambda p: p.number.value)
 
@@ -218,6 +233,29 @@ def _careers_of(player_ids: list[int]) -> dict[int, list[Stint]]:
     return careers
 
 
+def _captaincies_of(player_ids: list[int]) -> dict[int, list[Captaincy]]:
+    """選手ごとの主将在任歴。新しい順に並べる。_careers_of と同じ形。"""
+    if not player_ids:
+        return {}
+
+    captaincies: dict[int, list[Captaincy]] = {}
+    rows = (
+        orm_models.Captaincy.objects
+        .filter(player_id__in=player_ids)
+        .select_related('team')
+        .order_by('-from_year', '-id')
+    )
+    for row in rows:
+        captaincies.setdefault(row.player_id, []).append(Captaincy(
+            id=row.id,
+            team_id=row.team_id,
+            team_name=row.team.name,
+            from_year=row.from_year,
+            to_year=row.to_year,
+        ))
+    return captaincies
+
+
 def _profile_defaults(profile: Profile) -> dict:
     return {
         'birth_date': profile.birth_date,
@@ -230,6 +268,8 @@ def _profile_defaults(profile: Profile) -> dict:
         'high_school': profile.high_school,
         'university': profile.university,
         'corporate_team': profile.corporate_team,
+        'nationality': profile.nationality,
+        'is_foreign_player': profile.is_foreign_player,
     }
 
 
@@ -245,6 +285,8 @@ def _profile_of(row) -> Profile:
         high_school=row.high_school,
         university=row.university,
         corporate_team=row.corporate_team,
+        nationality=row.nationality,
+        is_foreign_player=row.is_foreign_player,
     )
 
 
@@ -413,12 +455,21 @@ class DjangoLeagueRepository:
             row = orm_models.League.objects.get(id=league_id)
         except orm_models.League.DoesNotExist:
             raise LeagueNotFound(f"リーグが見つかりません（id={league_id}）。") from None
-        return League(id=row.id, name=row.name)
+        return self._to_domain(row)
 
     def find_all(self) -> list[League]:
         # 管理画面で手動設定した表示順を既定にする。順位表・ダッシュボードの
         # タブ・チーム一覧の並びが、この順に揃う
         return [
-            League(id=row.id, name=row.name)
+            self._to_domain(row)
             for row in orm_models.League.objects.order_by('display_order', 'name')
         ]
+
+    @staticmethod
+    def _to_domain(row: orm_models.League) -> League:
+        return League(
+            id=row.id,
+            name=row.name,
+            foreign_player_roster_limit=row.foreign_player_roster_limit,
+            foreign_player_game_limit=row.foreign_player_game_limit,
+        )

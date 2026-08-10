@@ -344,6 +344,7 @@ class BatterRow:
     batting_average: float
     on_base_percentage: float
     ops: float
+    is_captain: bool = False
 
 
 @dataclass(frozen=True)
@@ -361,6 +362,7 @@ class PitcherRow:
     earned_run_average: float
     whip: float
     strikeouts_per_nine: float
+    is_captain: bool = False
 
 
 @dataclass(frozen=True)
@@ -400,3 +402,4 @@ class PlayerDetail:
     earned_run_average: float
     whip: float
     strikeouts_per_nine: float
+    is_captain: bool = False

@@ -115,6 +115,7 @@
         <td>
           <a href="{% url 'player_detail' team_id player.id %}" class="player-name">{{ player.name }}</a>
           <span class="badge bg-secondary ms-1">{{ player.position }}</span>
+          {% if player.is_captain %}<span class="badge bg-warning text-dark ms-1">主将</span>{% endif %}
         </td>
 
         {% if pos_mode == 'pitcher' %}

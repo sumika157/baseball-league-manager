@@ -1,4 +1,5 @@
 import types
+from dataclasses import replace
 
 from django import forms
 from django.contrib import admin
@@ -18,12 +19,14 @@ from django.http import HttpResponseRedirect
 from django.urls import reverse
 from django.utils.html import format_html, format_html_join
 
+from .domain.entities import Captaincy as DomainCaptaincy
 from .domain.entities import Stint as DomainStint
 from .domain.exceptions import DomainError
-from .domain.value_objects import JerseyNumber, StadiumProfile
+from .domain.value_objects import JerseyNumber, StadiumProfile, ensure_quota_not_exceeded
 from .domain.value_objects import Profile as DomainProfile
 from .infrastructure import orm_models
 from .infrastructure.orm_models import (
+    Captaincy,
     Game,
     GameBattingLine,
     GamePitchingLine,
@@ -33,6 +36,7 @@ from .infrastructure.orm_models import (
     Stadium,
     Team,
 )
+from .infrastructure.repositories import DjangoLeagueRepository, DjangoTeamRepository
 
 # ヘッダーの文言
 admin.site.site_header = 'Baseball Manager 管理'
@@ -206,6 +210,13 @@ class LeagueAdmin(ManualOrderAdminMixin, admin.ModelAdmin):
     # 手動の並び順を既定にする。未設定どうしは名前で安定させる
     ordering = ('display_order', 'name')
     inlines = [TeamInline]
+    fieldsets = (
+        (None, {'fields': ('name', 'display_order')}),
+        ('外国人枠', {
+            'description': '空欄なら無制限として扱います。',
+            'fields': ('foreign_player_roster_limit', 'foreign_player_game_limit'),
+        }),
+    )
 
     class Media:
         js = ('myapp/js/admin-inline-sortable.js',)
@@ -346,13 +357,17 @@ class DomainCheckedForm(forms.ModelForm):
             return cleaned
 
         try:
-            self.build_value_object(cleaned)
+            value_object = self.build_value_object(cleaned)
+            self.extra_clean(cleaned, value_object)
         except DomainError as error:
             raise forms.ValidationError(str(error)) from None
         return cleaned
 
     def build_value_object(self, cleaned):
         raise NotImplementedError
+
+    def extra_clean(self, cleaned, value_object) -> None:
+        """既定では何もしない。サブクラスが追加のドメイン検査を差し込む。"""
 
 
 class StadiumForm(DomainCheckedForm):
@@ -523,7 +538,40 @@ class PlayerStintForm(forms.ModelForm):
                     f'背番号 {number} は {other.player.name} が {existing} に'
                     f'使用しています。期間が重なる同じ背番号は登録できません。'
                 )
+
+        self._ensure_foreign_player_quota(cleaned, team, player)
         return cleaned
+
+    def _ensure_foreign_player_quota(self, cleaned, team, player):
+        """外国人選手が新たにこのチームに加わる（在籍を開始する）場合、枠を超えないか確認する。
+
+        player が分からない（インライン経由で未確定など）場合は検査を諦める。
+        主な適用対象は PlayerStintAdmin 経由の移籍・新規在籍の登録。
+        """
+        if cleaned.get('to_year') is not None or player is None or not player.pk:
+            return
+        if not player.is_foreign_player:
+            return
+
+        already_here = PlayerStint.objects.filter(
+            player=player, team=team, to_year__isnull=True
+        )
+        if self.instance.pk:
+            already_here = already_here.exclude(pk=self.instance.pk)
+        if already_here.exists():
+            return  # 既にこのチームに在籍中（背番号の変更など）なら人数は増えない
+
+        domain_team = DjangoTeamRepository().find_by_id(team.id)
+        league = DjangoLeagueRepository().find_by_id(team.league_id)
+        try:
+            ensure_quota_not_exceeded(
+                domain_team.foreign_player_count + 1,
+                league.foreign_player_roster_limit,
+                f'「{team.name}」の外国人選手登録数が上限'
+                f'（{league.foreign_player_roster_limit}人）を超えています。',
+            )
+        except DomainError as error:
+            raise forms.ValidationError(str(error)) from None
 
     def _fill_from_year(self, cleaned):
         """加入年が空欄なら、選手の入団年で埋める。
@@ -604,6 +652,100 @@ class PlayerStintInline(admin.TabularInline):
     verbose_name_plural = '在籍（経歴）'
 
 
+class CaptaincyForm(forms.ModelForm):
+    """主将在任の入力検証。PlayerStintForm と同じパターンの相互検証。"""
+
+    class Meta:
+        model = Captaincy
+        fields = '__all__'
+
+    def clean(self):
+        cleaned = super().clean()
+        team, from_year = cleaned.get('team'), cleaned.get('from_year')
+        if not (team and from_year is not None):
+            return cleaned
+
+        try:
+            candidate = DomainCaptaincy(
+                team_id=team.id, from_year=from_year, to_year=cleaned.get('to_year')
+            )
+        except DomainError as error:
+            raise forms.ValidationError(str(error)) from None
+
+        # 同チームの他選手の在任と重ならないか(PlayerStintForm と同じ突き合わせ)
+        others = Captaincy.objects.filter(team=team).select_related('player')
+        if self.instance.pk:
+            others = others.exclude(pk=self.instance.pk)
+        player = cleaned.get('player')
+        if player is not None and player.pk:
+            others = others.exclude(player=player)
+
+        for other in others:
+            existing = DomainCaptaincy(
+                team_id=other.team_id, from_year=other.from_year, to_year=other.to_year
+            )
+            if candidate.overlaps(existing):
+                raise forms.ValidationError(
+                    f'{other.player.name} が {existing} に主将です。'
+                    f'期間が重なる主将指名はできません。'
+                )
+
+        # 現在(to_year 空)の指名は、現在在籍中の選手にしか行えない。過去の在任行
+        # (to_year 入力済み、退団済み選手の履歴入力など)には適用しない
+        if cleaned.get('to_year') is None and player is not None and player.pk:
+            if not PlayerStint.objects.filter(
+                player=player, team=team, to_year__isnull=True
+            ).exists():
+                raise forms.ValidationError(
+                    f'{player.name} は現在「{team.name}」に在籍していないため主将にできません。'
+                )
+        return cleaned
+
+
+class CaptaincyFormSet(forms.BaseInlineFormSet):
+    """同じ選手の複数行を同時編集する際のクロスチェック(PlayerStintFormSet と同型)。"""
+
+    def clean(self):
+        super().clean()
+        if any(self.errors):
+            return
+
+        checked = []
+        for form in self.forms:
+            data = getattr(form, 'cleaned_data', None)
+            if not data or data.get('DELETE'):
+                continue
+            team = data.get('team')
+            from_year = data.get('from_year')
+            if not (team and from_year is not None):
+                continue
+
+            current = DomainCaptaincy(
+                team_id=team.id, from_year=from_year, to_year=data.get('to_year')
+            )
+            for other in checked:
+                if other.team_id == current.team_id and current.overlaps(other):
+                    form.add_error(
+                        'from_year',
+                        f'{team.name} の主将在任 {other} と期間が重なっています。'
+                    )
+                    break
+            checked.append(current)
+
+
+class CaptaincyInline(admin.TabularInline):
+    """主将在任歴。在籍とは別軸の期間として管理する。"""
+
+    model = Captaincy
+    form = CaptaincyForm
+    formset = CaptaincyFormSet
+    extra = 0
+    fields = ('team', 'from_year', 'to_year')
+    ordering = ('-from_year',)
+    autocomplete_fields = ('team',)
+    verbose_name_plural = '主将在任歴'
+
+
 class PlayerForm(DomainCheckedForm):
     class Meta:
         model = Player
@@ -621,7 +763,24 @@ class PlayerForm(DomainCheckedForm):
             high_school=cleaned.get('high_school', ''),
             university=cleaned.get('university', ''),
             corporate_team=cleaned.get('corporate_team', ''),
+            nationality=cleaned.get('nationality', ''),
+            is_foreign_player=cleaned.get('is_foreign_player', False),
         )
+
+    def extra_clean(self, cleaned, profile):
+        if not profile.is_foreign_player:
+            return  # False へ戻す/変化なしは枠を超えない
+        stint = PlayerStint.objects.filter(
+            player=self.instance, to_year__isnull=True
+        ).select_related('team__league').first()
+        if stint is None:
+            return  # まだどこにも在籍していない選手は検査不要
+
+        team = DjangoTeamRepository().find_by_id(stint.team_id)
+        league = DjangoLeagueRepository().find_by_id(stint.team.league_id)
+        player = team.find_player(self.instance.id)
+        player.profile = replace(player.profile, is_foreign_player=True)
+        team.ensure_foreign_player_quota(league.foreign_player_roster_limit)
 
 
 @admin.register(Player)
@@ -631,7 +790,7 @@ class PlayerAdmin(admin.ModelAdmin):
     list_filter = ('position', 'stints__team__league', 'stints__team')
     search_fields = ('name', 'name_kana', 'back_name')
     ordering = ('name',)
-    inlines = [PlayerStintInline]
+    inlines = [PlayerStintInline, CaptaincyInline]
 
     fieldsets = (
         (None, {
@@ -643,6 +802,7 @@ class PlayerAdmin(admin.ModelAdmin):
             'fields': (
                 'birth_date', ('throws', 'bats'),
                 ('height_cm', 'weight_kg'), 'birthplace', 'debut_year',
+                'nationality', 'is_foreign_player',
             ),
         }),
         ('プロ入り前の経歴', {

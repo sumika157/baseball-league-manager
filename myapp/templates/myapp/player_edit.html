@@ -16,7 +16,7 @@
   <h1 class="page-title">
     <span class="jersey-number me-2">{{ player.number }}</span>{{ player.name }}
   </h1>
-  <p class="page-subtitle">{{ player.position }}</p>
+  <p class="page-subtitle">{{ player.position }}{% if player.is_captain %} · 主将{% endif %}</p>
 </div>
 
 {% comment %}
@@ -129,6 +129,15 @@
   <div class="d-flex justify-content-between align-items-center">
     <a href="{% url 'player_list' player.team_id %}" class="btn btn-secondary">戻る</a>
     <div class="d-flex gap-2">
+      {% if player.is_captain %}
+        <button type="submit" name="remove_captain" value="1" class="btn btn-outline-secondary">
+          主将を解任する
+        </button>
+      {% else %}
+        <button type="submit" name="appoint_captain" value="1" class="btn btn-outline-secondary">
+          主将にする
+        </button>
+      {% endif %}
       <button type="submit" name="retire" value="1" class="btn btn-outline-danger"
               onclick="return confirm('{{ player.name }} 選手を退団にします。成績は残り、背番号は再利用できるようになります。よろしいですか?')">
         退団にする

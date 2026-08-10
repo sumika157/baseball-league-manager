@@ -59,3 +59,19 @@ class TeamNotFound(DomainError):
 
 class PlayerNotFound(DomainError):
     """指定された選手が存在しない。"""
+
+
+class DuplicateCaptain(DomainError):
+    """同一チーム内で主将が重複している。"""
+
+
+class PlayerNotEligibleForCaptaincy(DomainError):
+    """在籍していない選手（退団済み・他チーム所属）を主将にしようとした。"""
+
+
+class InvalidCaptaincy(DomainError):
+    """主将在任期間として成立しない（退任年が就任年より前など）。"""
+
+
+class ForeignPlayerQuotaExceeded(DomainError):
+    """外国人選手の人数が上限を超えている（登録枠・試合出場枠のどちらにも使う）。"""

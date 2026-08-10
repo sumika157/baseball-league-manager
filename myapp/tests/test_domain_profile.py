@@ -79,6 +79,18 @@ class ProfileTest(TestCase):
         self.assertFalse(Profile(birthplace='大阪府').is_empty)
         self.assertFalse(Profile(high_school='甲子園高校').is_empty)
 
+    def test_nationality_and_foreign_flag_default_to_unset(self):
+        profile = Profile()
+        self.assertEqual(profile.nationality, '')
+        self.assertFalse(profile.is_foreign_player)
+
+    def test_nationality_makes_the_profile_non_empty(self):
+        self.assertFalse(Profile(nationality='アメリカ合衆国').is_empty)
+
+    def test_is_foreign_player_alone_does_not_make_the_profile_non_empty(self):
+        """枠制度上の分類であり、記述情報ではないため is_empty には影響しない。"""
+        self.assertTrue(Profile(is_foreign_player=True).is_empty)
+
 
 class AmateurCareerTest(TestCase):
     """プロ入り前の経歴。順路は人によって異なる。"""

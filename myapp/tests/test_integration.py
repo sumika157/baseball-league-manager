@@ -12,7 +12,11 @@ from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
-from myapp.domain.exceptions import DuplicateJerseyNumber, InvalidGame
+from myapp.domain.exceptions import (
+    DuplicateJerseyNumber,
+    ForeignPlayerQuotaExceeded,
+    InvalidGame,
+)
 from myapp.domain.value_objects import (
     BattingLine,
     InningsPitched,
@@ -1764,6 +1768,156 @@ class TransferTest(BaseCase):
         self.assertContains(response, 'テストチーム')
         self.assertContains(response, 'field-current_number')
 
+    def test_failed_transfer_leaves_the_source_team_untouched(self):
+        """検査に失敗したら、元チームの退団も取り消されること（部分的な保存を残さない）。"""
+        self.service.register_player(self.rival.id, '先客', 7, '外野手')
+
+        with self.assertRaises(DuplicateJerseyNumber):
+            self.service.transfer_player(
+                self.player.id, from_team_id=self.team.id, to_team_id=self.rival.id,
+                number=7, year=2026,
+            )
+
+        stint = orm_models.PlayerStint.objects.get(player_id=self.player.id)
+        self.assertIsNone(stint.to_year)
+        self.assertEqual(stint.team_id, self.team.id)
+
+
+class ForeignPlayerQuotaTest(BaseCase):
+    """外国人枠（登録上限・試合出場上限）。"""
+
+    def setUp(self):
+        super().setUp()
+        self.foreign = self.service.register_player(self.team.id, '助っ人', 50, '外野手')
+        orm_models.Player.objects.filter(id=self.foreign.id).update(is_foreign_player=True)
+
+    def test_transfer_rejects_when_destination_quota_exceeded(self):
+        orm_models.League.objects.filter(id=self.league.id).update(
+            foreign_player_roster_limit=0
+        )
+
+        with self.assertRaises(ForeignPlayerQuotaExceeded):
+            self.service.transfer_player(
+                self.foreign.id, from_team_id=self.team.id, to_team_id=self.rival.id,
+                number=99, year=2026,
+            )
+
+        # ロールバックされ、元チームの在籍は閉じられていない
+        stint = orm_models.PlayerStint.objects.get(player_id=self.foreign.id)
+        self.assertIsNone(stint.to_year)
+        self.assertEqual(stint.team_id, self.team.id)
+
+    def test_update_game_rejects_when_home_team_quota_exceeded(self):
+        orm_models.League.objects.filter(id=self.league.id).update(
+            foreign_player_game_limit=0
+        )
+        game = play_game(self.team, self.rival)
+
+        with self.assertRaises(ForeignPlayerQuotaExceeded):
+            self.service.update_game(
+                game.id, year=2026, played_on=game.played_on,
+                home_team_id=self.team.id, away_team_id=self.rival.id,
+                home_score=1, away_score=0,
+                batting={self.foreign.id: BattingLine(at_bats=1, singles=1)},
+            )
+        self.assertEqual(orm_models.GameBattingLine.objects.count(), 0)
+
+    def test_update_game_rejects_when_away_team_quota_exceeded(self):
+        """ホーム・ビジターは独立に判定する。ホームに助っ人がいなくても、
+        ビジター側の上限超過は検出される。"""
+        rival_foreign = self.service.register_player(self.rival.id, '助っ人2', 51, '外野手')
+        orm_models.Player.objects.filter(id=rival_foreign.id).update(is_foreign_player=True)
+        orm_models.League.objects.filter(id=self.league.id).update(
+            foreign_player_game_limit=0
+        )
+        game = play_game(self.team, self.rival)
+
+        with self.assertRaises(ForeignPlayerQuotaExceeded):
+            self.service.update_game(
+                game.id, year=2026, played_on=game.played_on,
+                home_team_id=self.team.id, away_team_id=self.rival.id,
+                home_score=1, away_score=0,
+                batting={rival_foreign.id: BattingLine(at_bats=1, singles=1)},
+            )
+
+    def test_update_game_allows_exactly_at_the_game_limit(self):
+        orm_models.League.objects.filter(id=self.league.id).update(
+            foreign_player_game_limit=1
+        )
+        game = play_game(self.team, self.rival)
+
+        self.service.update_game(
+            game.id, year=2026, played_on=game.played_on,
+            home_team_id=self.team.id, away_team_id=self.rival.id,
+            home_score=1, away_score=0,
+            batting={self.foreign.id: BattingLine(at_bats=1, singles=1)},
+        )  # 例外にならない
+
+        self.assertEqual(orm_models.GameBattingLine.objects.count(), 1)
+
+    def test_update_game_with_no_limit_set_never_rejects(self):
+        """空欄（無制限）はリーグの既定値（3人）とは別に、明示的に検証しておく。"""
+        orm_models.League.objects.filter(id=self.league.id).update(
+            foreign_player_game_limit=None
+        )
+        game = play_game(self.team, self.rival)
+
+        self.service.update_game(
+            game.id, year=2026, played_on=game.played_on,
+            home_team_id=self.team.id, away_team_id=self.rival.id,
+            home_score=1, away_score=0,
+            batting={self.foreign.id: BattingLine(at_bats=1, singles=1)},
+        )  # 例外にならない
+
+        self.assertEqual(orm_models.GameBattingLine.objects.count(), 1)
+
+
+class CaptaincyApplicationTest(BaseCase):
+    """主将の指名・解任。"""
+
+    def setUp(self):
+        super().setUp()
+        self.player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+
+    def test_appoint_and_remove_round_trip_through_the_database(self):
+        self.service.appoint_captain(self.team.id, self.player.id, 2026)
+
+        team = DjangoTeamRepository().find_by_id(self.team.id)
+        self.assertEqual(team.current_captain.id, self.player.id)
+
+        self.service.remove_captain(self.team.id, self.player.id, 2027)
+
+        team = DjangoTeamRepository().find_by_id(self.team.id)
+        self.assertIsNone(team.current_captain)
+
+    def test_player_edit_appoints_a_captain(self):
+        self.client.force_login(User.objects.create_user(username='u', password='x'))
+
+        response = self.client.post(
+            reverse('player_edit', args=[self.team.id, self.player.id]),
+            {'appoint_captain': '1'},
+        )
+
+        self.assertRedirects(
+            response, reverse('player_edit', args=[self.team.id, self.player.id])
+        )
+        team = DjangoTeamRepository().find_by_id(self.team.id)
+        self.assertEqual(team.current_captain.id, self.player.id)
+
+    def test_player_edit_shows_duplicate_captain_error(self):
+        other = self.service.register_player(self.team.id, '田中', 11, '外野手')
+        self.service.appoint_captain(self.team.id, other.id)
+        self.client.force_login(User.objects.create_user(username='u', password='x'))
+
+        response = self.client.post(
+            reverse('player_edit', args=[self.team.id, self.player.id]),
+            {'appoint_captain': '1'}, follow=True,
+        )
+
+        self.assertContains(response, 'には既に主将')
+        team = DjangoTeamRepository().find_by_id(self.team.id)
+        self.assertEqual(team.current_captain.id, other.id)
+
 
 class AdminStintValidationTest(BaseCase):
     """管理画面から過去の経歴を登録するときの検証。
@@ -1884,6 +2038,128 @@ class AdminStintValidationTest(BaseCase):
         self.assertEqual(stint.from_year, 2024)
 
 
+class AdminCaptaincyValidationTest(BaseCase):
+    """管理画面から主将を登録するときの検証。"""
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(User.objects.create_superuser(username='root', password='x'))
+        self.player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+        self.other = self.service.register_player(self.team.id, '田中', 11, '外野手')
+
+    def _change_payload(self, player, **captaincy_overrides):
+        payload = {
+            'name': player.name, 'position': '内野手',
+            'birth_date': '', 'throws': '', 'bats': '',
+            'height_cm': '', 'weight_kg': '', 'birthplace': '', 'debut_year': '',
+            'high_school': '', 'university': '', 'corporate_team': '',
+            'nationality': '', 'is_foreign_player': '',
+            'stints-TOTAL_FORMS': '0', 'stints-INITIAL_FORMS': '0',
+            'stints-MIN_NUM_FORMS': '0', 'stints-MAX_NUM_FORMS': '1000',
+            'captaincies-TOTAL_FORMS': '1', 'captaincies-INITIAL_FORMS': '0',
+            'captaincies-MIN_NUM_FORMS': '0', 'captaincies-MAX_NUM_FORMS': '1000',
+            'captaincies-0-team': str(self.team.id), 'captaincies-0-from_year': '2026',
+            'captaincies-0-to_year': '', 'captaincies-0-id': '',
+        }
+        payload.update(captaincy_overrides)
+        return payload
+
+    def test_appointing_a_captain_via_admin(self):
+        response = self.client.post(
+            f'/admin/myapp/player/{self.player.id}/change/', self._change_payload(self.player)
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(
+            orm_models.Captaincy.objects
+            .filter(player_id=self.player.id, team_id=self.team.id, to_year__isnull=True)
+            .exists()
+        )
+
+    def test_duplicate_captain_is_rejected(self):
+        orm_models.Captaincy.objects.create(
+            player_id=self.other.id, team_id=self.team.id, from_year=2025
+        )
+
+        response = self.client.post(
+            f'/admin/myapp/player/{self.player.id}/change/', self._change_payload(self.player)
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'に主将です')
+
+    def test_appointing_a_player_not_on_the_roster_is_rejected(self):
+        past = orm_models.Team.objects.create(league=self.league, name='前所属')
+
+        response = self.client.post(
+            f'/admin/myapp/player/{self.player.id}/change/',
+            self._change_payload(self.player, **{'captaincies-0-team': str(past.id)}),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '在籍していないため主将にできません')
+
+
+class AdminForeignPlayerQuotaTest(BaseCase):
+    """管理画面から外国人選手を登録・移籍するときの、枠の検証。"""
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(User.objects.create_superuser(username='root', password='x'))
+        orm_models.League.objects.filter(id=self.league.id).update(
+            foreign_player_roster_limit=1
+        )
+        self.existing_foreign = self.service.register_player(self.team.id, '既存助っ人', 50, '外野手')
+        orm_models.Player.objects.filter(id=self.existing_foreign.id).update(
+            is_foreign_player=True
+        )
+        self.player = self.service.register_player(self.team.id, '山田', 10, '内野手')
+
+    def _player_change_payload(self, player, **overrides):
+        payload = {
+            'name': player.name, 'position': '内野手',
+            'birth_date': '', 'throws': '', 'bats': '',
+            'height_cm': '', 'weight_kg': '', 'birthplace': '', 'debut_year': '',
+            'high_school': '', 'university': '', 'corporate_team': '',
+            'nationality': '', 'is_foreign_player': '',
+            'stints-TOTAL_FORMS': '0', 'stints-INITIAL_FORMS': '0',
+            'stints-MIN_NUM_FORMS': '0', 'stints-MAX_NUM_FORMS': '1000',
+            'captaincies-TOTAL_FORMS': '0', 'captaincies-INITIAL_FORMS': '0',
+            'captaincies-MIN_NUM_FORMS': '0', 'captaincies-MAX_NUM_FORMS': '1000',
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_marking_a_player_as_foreign_is_rejected_over_the_roster_limit(self):
+        response = self.client.post(
+            f'/admin/myapp/player/{self.player.id}/change/',
+            self._player_change_payload(self.player, is_foreign_player='on'),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '外国人選手登録数が上限')
+        self.assertFalse(
+            orm_models.Player.objects.get(id=self.player.id).is_foreign_player
+        )
+
+    def test_transferring_a_foreign_player_is_rejected_over_the_destination_limit(self):
+        orm_models.League.objects.filter(id=self.league.id).update(
+            foreign_player_roster_limit=0
+        )
+
+        response = self.client.post('/admin/myapp/playerstint/add/', {
+            'player': self.existing_foreign.id, 'team': self.rival.id,
+            'number': '77', 'from_year': '2026', 'to_year': '',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '外国人選手登録数が上限')
+        self.assertFalse(
+            orm_models.PlayerStint.objects
+            .filter(player_id=self.existing_foreign.id, team_id=self.rival.id).exists()
+        )
+
+
 class AdminUsesDomainRulesTest(BaseCase):
     """管理画面から保存できる値と、ドメインが許す値をそろえる。
 
@@ -1904,6 +2180,8 @@ class AdminUsesDomainRulesTest(BaseCase):
             'high_school': '', 'university': '', 'corporate_team': '',
             'stints-TOTAL_FORMS': '0', 'stints-INITIAL_FORMS': '0',
             'stints-MIN_NUM_FORMS': '0', 'stints-MAX_NUM_FORMS': '1000',
+            'captaincies-TOTAL_FORMS': '0', 'captaincies-INITIAL_FORMS': '0',
+            'captaincies-MIN_NUM_FORMS': '0', 'captaincies-MAX_NUM_FORMS': '1000',
         }
         payload.update(overrides)
         return payload
@@ -1967,6 +2245,8 @@ class AdminPlayerWithStintsTest(BaseCase):
             'high_school': '', 'university': '', 'corporate_team': '',
             'stints-TOTAL_FORMS': str(len(stints)), 'stints-INITIAL_FORMS': '0',
             'stints-MIN_NUM_FORMS': '0', 'stints-MAX_NUM_FORMS': '1000',
+            'captaincies-TOTAL_FORMS': '0', 'captaincies-INITIAL_FORMS': '0',
+            'captaincies-MIN_NUM_FORMS': '0', 'captaincies-MAX_NUM_FORMS': '1000',
         }
         for i, (team, number, from_year, to_year) in enumerate(stints):
             payload.update({

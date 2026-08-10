@@ -20,6 +20,14 @@ class League(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='登録日時')
     # 管理画面でドラッグして並べ替えた結果がここに入る
     display_order = models.PositiveIntegerField(default=0, verbose_name='表示順')
+    foreign_player_roster_limit = models.PositiveIntegerField(
+        null=True, blank=True, default=5, verbose_name='外国人選手登録枠',
+        help_text='登録できる外国人選手の上限人数。空欄なら無制限。',
+    )
+    foreign_player_game_limit = models.PositiveIntegerField(
+        null=True, blank=True, default=3, verbose_name='外国人選手出場枠',
+        help_text='1試合に出場できる外国人選手の上限人数。空欄なら無制限。',
+    )
 
     class Meta:
         verbose_name = 'リーグ'
@@ -124,6 +132,11 @@ class Player(models.Model):
     corporate_team = models.CharField(
         max_length=100, blank=True, verbose_name='出身社会人チーム'
     )
+    nationality = models.CharField(max_length=100, blank=True, verbose_name='国籍')
+    is_foreign_player = models.BooleanField(
+        default=False, verbose_name='外国人選手',
+        help_text='外国人枠の対象として数える選手かどうか。',
+    )
 
     class Meta:
         verbose_name = '選手'
@@ -168,6 +181,39 @@ class PlayerStint(models.Model):
     def __str__(self):
         end = self.to_year or '現在'
         return f"{self.player.name} / {self.team.name} ({self.from_year}〜{end})"
+
+
+class Captaincy(models.Model):
+    """主将在任。PlayerStint と同じ形の期間テーブルだが、対象は別軸。
+
+    to_year が空なら現在も主将。
+    """
+
+    player = models.ForeignKey(
+        Player, on_delete=models.CASCADE, related_name='captaincies', verbose_name='選手'
+    )
+    team = models.ForeignKey(
+        Team, on_delete=models.CASCADE, related_name='captaincies', verbose_name='チーム'
+    )
+    from_year = models.IntegerField(verbose_name='就任年')
+    to_year = models.IntegerField(
+        null=True, blank=True, verbose_name='退任年',
+        help_text='空欄なら現在も主将です。',
+    )
+
+    class Meta:
+        verbose_name = '主将在任'
+        verbose_name_plural = '主将在任'
+        ordering = ['-from_year']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['player', 'team', 'from_year'], name='unique_captaincy_player_team_from'
+            ),
+        ]
+
+    def __str__(self):
+        end = self.to_year or '現在'
+        return f"{self.player.name} / {self.team.name} 主将 ({self.from_year}〜{end})"
 
 
 class Game(models.Model):
