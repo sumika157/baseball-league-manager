@@ -153,6 +153,19 @@ baseball-web  | /app/myapp/views.py changed, reloading.
 | ログを見る | `docker compose logs -f web` |
 | 状態を確認する | `docker compose ps` |
 
+### 短縮コマンド（Makefile）
+
+上記の定型コマンドは Makefile に短縮コマンドとして定義してあります。
+WSL のターミナルからリポジトリのルートで実行します（Windows 側の PowerShell からは使えません）。
+
+```bash
+make            # ターゲット一覧を表示（make help と同じ）
+make test       # フルスイート（t=myapp.tests.xxx で個別指定）
+make test-domain # domain 層のみ（DB 不要・最速）
+make lint       # ruff check + mypy（コミット前に必須）
+make up / make down / make logs
+```
+
 ### 仮想データの投入（開発用）
 
 画面を確認するには、ある程度の量のデータが必要です。順位表・タイトル・

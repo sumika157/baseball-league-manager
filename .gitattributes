@@ -1,0 +1,2 @@
+# WSL 側の make は CRLF を解釈できないため、Windows の git（autocrlf）でも常に LF で checkout する
+Makefile text eol=lf
