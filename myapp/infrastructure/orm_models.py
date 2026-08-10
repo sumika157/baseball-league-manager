@@ -93,6 +93,11 @@ class Player(models.Model):
     """
 
     name = models.CharField(max_length=100, verbose_name='選手名')
+    name_kana = models.CharField(max_length=100, blank=True, verbose_name='よみがな')
+    back_name = models.CharField(
+        max_length=20, blank=True, verbose_name='背ネーム',
+        help_text='ユニフォーム背面のアルファベット表記。',
+    )
     position = models.CharField(
         max_length=10,
         choices=POSITION_CHOICES,

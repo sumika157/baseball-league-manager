@@ -629,13 +629,13 @@ class PlayerAdmin(admin.ModelAdmin):
     form = PlayerForm
     list_display = ('name', 'position', 'current_team', 'current_number', 'appearances')
     list_filter = ('position', 'stints__team__league', 'stints__team')
-    search_fields = ('name',)
+    search_fields = ('name', 'name_kana', 'back_name')
     ordering = ('name',)
     inlines = [PlayerStintInline]
 
     fieldsets = (
         (None, {
-            'fields': ('name', 'position'),
+            'fields': ('name', 'name_kana', 'back_name', 'position'),
             'description': '所属チームと背番号は下の「在籍」で管理します。',
         }),
         ('プロフィール', {
