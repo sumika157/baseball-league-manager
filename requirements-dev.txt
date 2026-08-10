@@ -1,0 +1,19 @@
+# 直接依存
+ruff==0.16.2
+mypy==2.3.0
+django-stubs==6.0.9
+playwright==1.62.0
+# 仮想の試合データ投入（seed_virtual_games）で確率分布から成績を引くのに使う。
+# 本番の実行には不要なので dev 側に置く
+numpy==2.2.6
+
+# 上記の依存パッケージ（バージョン固定用）
+ast-serialize==0.8.0
+django-stubs-ext==6.0.9
+greenlet==3.5.4
+librt==0.15.0
+mypy-extensions==1.1.0
+pathspec==1.1.1
+pyee==13.0.1
+tomli==2.4.1
+types-pyyaml==6.0.12.20260724

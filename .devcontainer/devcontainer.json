@@ -15,7 +15,8 @@
       "extensions": [
         "ms-python.python",
         "ms-python.vscode-pylance",
-        "batisteo.vscode-django"
+        "batisteo.vscode-django",
+        "charliermarsh.ruff"
       ],
       "settings": {
         // コンテナ内の Python を参照するので venv は不要

@@ -4,6 +4,8 @@ services:
     container_name: baseball-web
     ports:
       - "8000:8000"
+    # Playwright(Chromium)がデフォルトの64MBだとクラッシュしやすいため拡張
+    shm_size: '1gb'
     # SECRET_KEY などの設定を読み込む（.env.example をコピーして作成する）
     env_file:
       - .env

@@ -8,8 +8,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # 依存関係を先にインストールしてレイヤーキャッシュを効かせる
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt requirements-dev.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-dev.txt
+
+# Playwright（E2Eテスト用ブラウザ）は別レイヤーにして、
+# Pythonパッケージだけ変わった時に再ダウンロードされないようにする
+RUN playwright install --with-deps chromium
 
 # アプリ本体をコピー（実際の開発時は compose のボリュームマウントで上書きされます）
 COPY . .

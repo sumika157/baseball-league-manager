@@ -27,3 +27,7 @@ staticfiles/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Lint / 型チェックのキャッシュ
+.ruff_cache/
+.mypy_cache/
