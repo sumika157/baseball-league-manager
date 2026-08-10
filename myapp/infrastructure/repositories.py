@@ -11,7 +11,7 @@ ORM モデルとドメインオブジェクトの相互変換（マッピング�
 from __future__ import annotations
 
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import Prefetch, Sum
 
 from ..domain.entities import (
     Game,
@@ -58,7 +58,7 @@ class DjangoTeamRepository:
             row = (
                 orm_models.Team.objects
                 .select_related('league')
-                .prefetch_related('stints__player')
+                .prefetch_related(self._stints_prefetch())
                 .get(id=team_id)
             )
         except orm_models.Team.DoesNotExist:
@@ -78,10 +78,24 @@ class DjangoTeamRepository:
         rows = (
             orm_models.Team.objects
             .select_related('league')
-            .prefetch_related('stints__player')
+            .prefetch_related(self._stints_prefetch())
             .order_by('display_order', 'name')
         )
         return [self._to_domain(row, with_roster=True) for row in rows]
+
+    @staticmethod
+    def _stints_prefetch() -> Prefetch:
+        """在籍と選手を1クエリのJOINで取得する。
+
+        単純に prefetch_related('stints__player') とすると、選手側の取得が
+        「id = 1 OR id = 2 OR ...」という選手数ぶんのOR連結クエリになり、
+        全チーム分をまとめて読む find_all_with_roster() では選手数が
+        1000人を超えたあたりでSQLiteの式木の深さ上限に達してエラーになる。
+        select_related で同じクエリのJOINにまとめることで回避する。
+        """
+        return Prefetch(
+            'stints', queryset=orm_models.PlayerStint.objects.select_related('player')
+        )
 
     @transaction.atomic
     def save(self, team: Team) -> Team:
