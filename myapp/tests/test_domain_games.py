@@ -31,8 +31,10 @@ class GameRuleTest(TestCase):
     def test_same_team_is_rejected(self):
         with self.assertRaises(InvalidGame):
             Game(
-                season=Season(2026), played_on=date(2026, 4, 1),
-                home_team_id=1, away_team_id=1,
+                season=Season(2026),
+                played_on=date(2026, 4, 1),
+                home_team_id=1,
+                away_team_id=1,
             )
 
     def test_negative_score_is_rejected(self):
@@ -42,8 +44,8 @@ class GameRuleTest(TestCase):
     def test_result_seen_from_each_team(self):
         game = _game(5, 3)
 
-        self.assertEqual(game.result_for(HOME), 'win')
-        self.assertEqual(game.result_for(AWAY), 'loss')
+        self.assertEqual(game.result_for(HOME), "win")
+        self.assertEqual(game.result_for(AWAY), "loss")
         self.assertEqual(game.winner_team_id, HOME)
 
     def test_tie(self):
@@ -51,8 +53,8 @@ class GameRuleTest(TestCase):
 
         self.assertTrue(game.is_tie)
         self.assertIsNone(game.winner_team_id)
-        self.assertEqual(game.result_for(HOME), 'tie')
-        self.assertEqual(game.result_for(AWAY), 'tie')
+        self.assertEqual(game.result_for(HOME), "tie")
+        self.assertEqual(game.result_for(AWAY), "tie")
 
     def test_score_seen_from_each_team(self):
         game = _game(5, 3)
@@ -111,8 +113,8 @@ class PlayerTotalsTest(TestCase):
     def test_rates_are_recomputed_not_averaged(self):
         """率は試合ごとの率の平均ではなく、合算した実数から計算し直す。"""
         g1, g2 = _game(5, 3, 1), _game(1, 4, 2)
-        g1.record_batting(10, BattingLine(at_bats=1, singles=1))   # 10割
-        g2.record_batting(10, BattingLine(at_bats=9, singles=0))   # 0割
+        g1.record_batting(10, BattingLine(at_bats=1, singles=1))  # 10割
+        g2.record_batting(10, BattingLine(at_bats=9, singles=0))  # 0割
 
         total = services.player_batting_total([g1, g2], 10)
 
@@ -122,14 +124,14 @@ class PlayerTotalsTest(TestCase):
     def test_pitching_totals_add_innings_correctly(self):
         """5.2 + 5.2 は 10.4 ではなく 11.1（アウト数で足す）。"""
         g1, g2 = _game(5, 3, 1), _game(1, 4, 2)
-        line = PitchingLine(innings=InningsPitched.from_notation('5.2'), earned_runs=1)
+        line = PitchingLine(innings=InningsPitched.from_notation("5.2"), earned_runs=1)
         g1.record_pitching(18, line)
         g2.record_pitching(18, line)
 
         total = services.player_pitching_total([g1, g2], 18)
 
         self.assertEqual(total.innings.outs, 34)
-        self.assertEqual(str(total.innings), '11.1')
+        self.assertEqual(str(total.innings), "11.1")
         self.assertEqual(total.earned_runs, 2)
 
     def test_other_players_are_ignored(self):
@@ -150,9 +152,9 @@ class PlayerTotalsTest(TestCase):
 class StandingsFromGamesTest(TestCase):
     def setUp(self):
         self.teams = [
-            Team(name='ホーム', id=HOME, league_id=1),
-            Team(name='ビジター', id=AWAY, league_id=1),
-            Team(name='未実施', id=3, league_id=1),
+            Team(name="ホーム", id=HOME, league_id=1),
+            Team(name="ビジター", id=AWAY, league_id=1),
+            Team(name="未実施", id=3, league_id=1),
         ]
 
     def test_ranked_by_winning_percentage(self):
@@ -160,7 +162,7 @@ class StandingsFromGamesTest(TestCase):
 
         rows = services.standings(self.teams, games)
 
-        self.assertEqual([r.team_name for r in rows], ['ホーム', 'ビジター'])
+        self.assertEqual([r.team_name for r in rows], ["ホーム", "ビジター"])
         self.assertEqual(rows[0].record.wins, 2)
 
     def test_teams_without_games_are_excluded(self):
@@ -168,7 +170,7 @@ class StandingsFromGamesTest(TestCase):
         rows = services.standings(self.teams, [_game(5, 3)])
 
         self.assertEqual(len(rows), 2)
-        self.assertNotIn('未実施', [r.team_name for r in rows])
+        self.assertNotIn("未実施", [r.team_name for r in rows])
 
     def test_ties_share_the_rank(self):
         games = [_game(5, 3, 1), _game(3, 5, 2)]

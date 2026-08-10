@@ -19,14 +19,14 @@ from .infrastructure.orm_models import (  # noqa: F401
 )
 
 __all__ = [
-    'POSITION_CHOICES',
-    'Game',
-    'GameBattingLine',
-    'GameInningScore',
-    'GamePitchingLine',
-    'League',
-    'Player',
-    'PlayerStint',
-    'Stadium',
-    'Team',
+    "POSITION_CHOICES",
+    "Game",
+    "GameBattingLine",
+    "GameInningScore",
+    "GamePitchingLine",
+    "League",
+    "Player",
+    "PlayerStint",
+    "Stadium",
+    "Team",
 ]

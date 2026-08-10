@@ -19,8 +19,8 @@ class TeamSummary:
     league_name: str
     player_count: int
     # 本拠地球場。所在地は球場が持つので、チーム側に地名は持たない
-    stadium_name: str = ''
-    city: str = ''
+    stadium_name: str = ""
+    city: str = ""
 
 
 @dataclass(frozen=True)
@@ -36,7 +36,7 @@ class GameRow:
     away_team_name: str
     home_score: int
     away_score: int
-    result: str          # '引分' または '<チーム名> の勝ち'
+    result: str  # '引分' または '<チーム名> の勝ち'
     winner_team_id: int | None
 
 
@@ -57,7 +57,7 @@ class GamePlayerRow:
     walks: int = 0
     batting_average: float = 0.0
     # 投球
-    innings_pitched: str = '0.0'
+    innings_pitched: str = "0.0"
     earned_runs: int = 0
     strikeouts: int = 0
     hits_allowed: int = 0
@@ -65,13 +65,13 @@ class GamePlayerRow:
     # 打線での位置づけ。ボックススコアの並びと表示に使う
     batting_order: int | None = None
     slot_sequence: int = 0
-    position_label: str = ''
+    position_label: str = ""
     # 投手の登板順と、その試合で付いた記録
     appearance_order: int = 1
     walks_allowed: int = 0
     hit_by_pitch_allowed: int = 0
     home_runs_allowed: int = 0
-    decision: str = ''   # '勝' / '敗' / 'Ｓ' / 'Ｈ'。付かなければ空
+    decision: str = ""  # '勝' / '敗' / 'Ｓ' / 'Ｈ'。付かなければ空
     # その試合ぶんの内訳
     doubles: int = 0
     triples: int = 0
@@ -91,7 +91,7 @@ class GamePlayerRow:
     def order_label(self) -> str:
         """打順の表示。交代で入った選手は打順を繰り返さず空にする。"""
         if self.batting_order is None or not self.is_starter:
-            return ''
+            return ""
         return str(self.batting_order)
 
 
@@ -100,7 +100,7 @@ class InningScoreColumn:
     """イニングスコアの1列。"""
 
     inning: int
-    away: str            # 得点。ホームが攻めていない回は 'X'
+    away: str  # 得点。ホームが攻めていない回は 'X'
     home: str
 
 
@@ -161,14 +161,14 @@ class PlayerGameRow:
     game_id: int
     played_on: object
     opponent_name: str
-    result: str          # '勝' / '敗' / '分'
+    result: str  # '勝' / '敗' / '分'
     # 打撃
     at_bats: int = 0
     hits: int = 0
     home_runs: int = 0
     runs_batted_in: int = 0
     # 投球
-    innings_pitched: str = '0.0'
+    innings_pitched: str = "0.0"
     earned_runs: int = 0
     strikeouts: int = 0
 
@@ -181,7 +181,7 @@ class MonthlyRow:
     正しい率にはならない）。
     """
 
-    label: str           # '2026年4月'
+    label: str  # '2026年4月'
     appearances: int
     # 打撃
     at_bats: int = 0
@@ -191,7 +191,7 @@ class MonthlyRow:
     batting_average: float = 0.0
     ops: float = 0.0
     # 投球
-    innings_pitched: str = '0.0'
+    innings_pitched: str = "0.0"
     earned_runs: int = 0
     strikeouts: int = 0
     earned_run_average: float = 0.0
@@ -206,9 +206,9 @@ class TeamMonthlyRow:
     打撃と投球を同時に並べる（チームは常に攻守どちらも行う）。
     """
 
-    label: str           # '2026年4月'
+    label: str  # '2026年4月'
     games_played: int
-    record_label: str    # '8-4-1'（勝-敗-分）
+    record_label: str  # '8-4-1'（勝-敗-分）
     winning_percentage: str
     # 打撃
     batting_average: float = 0.0
@@ -247,10 +247,10 @@ class PlayerProfile:
     months: list[MonthlyRow] = None
     # プロフィール
     age: int | None = None
-    throws_bats: str = ''
+    throws_bats: str = ""
     height_cm: int | None = None
     weight_kg: int | None = None
-    birthplace: str = ''
+    birthplace: str = ""
     debut_year: int | None = None
     # プロ入り前の経歴。(区分, 名称) を通った順に並べたもの
     amateur_career: list = None
@@ -320,10 +320,7 @@ class LeagueRankings:
 
     @property
     def has_any(self) -> bool:
-        return bool(
-            self.ops_leaders or self.home_run_leaders
-            or self.era_leaders or self.strikeout_leaders
-        )
+        return bool(self.ops_leaders or self.home_run_leaders or self.era_leaders or self.strikeout_leaders)
 
 
 @dataclass(frozen=True)
@@ -383,7 +380,7 @@ class Standings:
     year: int
     leagues: list[LeagueStandings]
     available_years: list[int]
-    sort: str = 'rank'
+    sort: str = "rank"
     descending: bool = False
 
     @property
@@ -414,10 +411,10 @@ class MatchupCell:
     """対戦成績表の1マス。行のチームから見た、列のチームとの成績。"""
 
     opponent_id: int | None
-    label: str            # '3-1-1'（勝-敗-分）。自分自身の列は '—'
+    label: str  # '3-1-1'（勝-敗-分）。自分自身の列は '—'
     is_self: bool = False
-    is_winning: bool = False   # 勝ち越している
-    is_losing: bool = False    # 負けている
+    is_winning: bool = False  # 勝ち越している
+    is_losing: bool = False  # 負けている
 
 
 @dataclass(frozen=True)
@@ -452,7 +449,7 @@ class TitleDepartment:
 
     key: str
     label: str
-    note: str = ''       # '規定打席以上' など。率の部門だけ付く
+    note: str = ""  # '規定打席以上' など。率の部門だけ付く
     entries: list[RankingEntry] = None
 
     @property
@@ -574,7 +571,7 @@ class BatterRow:
     ops_plus: float = 0.0
     is_captain: bool = False
     is_foreign_player: bool = False
-    throws_bats: str = ''
+    throws_bats: str = ""
     height_cm: int | None = None
     weight_kg: int | None = None
     age: int | None = None
@@ -609,7 +606,7 @@ class PitcherRow:
     hit_by_pitch_allowed: int = 0
     is_captain: bool = False
     is_foreign_player: bool = False
-    throws_bats: str = ''
+    throws_bats: str = ""
     height_cm: int | None = None
     weight_kg: int | None = None
     age: int | None = None

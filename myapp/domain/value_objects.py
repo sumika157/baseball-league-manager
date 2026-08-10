@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal, ROUND_DOWN
+from decimal import ROUND_DOWN, Decimal
 from enum import Enum
 
 from .exceptions import (
@@ -31,11 +31,11 @@ class Position(Enum):
     発生していた。守備位置の語彙はこの Enum を唯一の出典とする。
     """
 
-    PITCHER = '投手'
-    CATCHER = '捕手'
-    INFIELDER = '内野手'
-    OUTFIELDER = '外野手'
-    DESIGNATED_HITTER = '指名打者'
+    PITCHER = "投手"
+    CATCHER = "捕手"
+    INFIELDER = "内野手"
+    OUTFIELDER = "外野手"
+    DESIGNATED_HITTER = "指名打者"
 
     @property
     def label(self) -> str:
@@ -70,18 +70,18 @@ class FieldingPosition(Enum):
     守備位置と同じ欄に並ぶ印として扱う（ボックススコアの慣例）。
     """
 
-    PITCHER = '投'
-    CATCHER = '捕'
-    FIRST_BASE = '一'
-    SECOND_BASE = '二'
-    THIRD_BASE = '三'
-    SHORTSTOP = '遊'
-    LEFT_FIELD = '左'
-    CENTER_FIELD = '中'
-    RIGHT_FIELD = '右'
-    DESIGNATED_HITTER = '指'
-    PINCH_HITTER = '打'
-    PINCH_RUNNER = '走'
+    PITCHER = "投"
+    CATCHER = "捕"
+    FIRST_BASE = "一"
+    SECOND_BASE = "二"
+    THIRD_BASE = "三"
+    SHORTSTOP = "遊"
+    LEFT_FIELD = "左"
+    CENTER_FIELD = "中"
+    RIGHT_FIELD = "右"
+    DESIGNATED_HITTER = "指"
+    PINCH_HITTER = "打"
+    PINCH_RUNNER = "走"
 
     @property
     def label(self) -> str:
@@ -132,12 +132,10 @@ class JerseyNumber:
 
         if number != self.value:
             # int() を通した結果と食い違う場合（'10' や 10.5 など）は正規化して差し替える
-            object.__setattr__(self, 'value', number)
+            object.__setattr__(self, "value", number)
 
         if not (self.MIN <= number <= self.MAX):
-            raise InvalidJerseyNumber(
-                f"背番号は {self.MIN}〜{self.MAX} の範囲で入力してください。"
-            )
+            raise InvalidJerseyNumber(f"背番号は {self.MIN}〜{self.MAX} の範囲で入力してください。")
 
     def __str__(self) -> str:
         return str(self.value)
@@ -179,15 +177,13 @@ class InningsPitched:
         小数第1位はアウト数（0〜2）を表す。3 以上が来た場合は
         繰り上げて正規化する（5.3 → 6.0）。
         """
-        if value is None or value == '':
+        if value is None or value == "":
             return cls.zero()
 
         try:
-            notation = Decimal(str(value)).quantize(Decimal('0.1'), rounding=ROUND_DOWN)
+            notation = Decimal(str(value)).quantize(Decimal("0.1"), rounding=ROUND_DOWN)
         except Exception:
-            raise InvalidInningsPitched(
-                f"投球回として解釈できない値です: {value!r}"
-            ) from None
+            raise InvalidInningsPitched(f"投球回として解釈できない値です: {value!r}") from None
 
         if notation < 0:
             raise InvalidInningsPitched("投球回に負の値は指定できません。")
@@ -247,18 +243,20 @@ class BattingLine:
 
     def __post_init__(self) -> None:
         for field_name, label in (
-            ('at_bats', '打数'), ('singles', '単打'), ('doubles', '二塁打'),
-            ('triples', '三塁打'), ('home_runs', '本塁打'), ('runs_batted_in', '打点'),
-            ('walks', '四球'), ('hit_by_pitch', '死球'), ('sacrifice_flies', '犠飛'),
+            ("at_bats", "打数"),
+            ("singles", "単打"),
+            ("doubles", "二塁打"),
+            ("triples", "三塁打"),
+            ("home_runs", "本塁打"),
+            ("runs_batted_in", "打点"),
+            ("walks", "四球"),
+            ("hit_by_pitch", "死球"),
+            ("sacrifice_flies", "犠飛"),
         ):
-            object.__setattr__(
-                self, field_name, _require_non_negative(label, getattr(self, field_name))
-            )
+            object.__setattr__(self, field_name, _require_non_negative(label, getattr(self, field_name)))
 
         if self.hits > self.at_bats:
-            raise InvalidStatValue(
-                f"安打数（{self.hits}）が打数（{self.at_bats}）を超えています。"
-            )
+            raise InvalidStatValue(f"安打数（{self.hits}）が打数（{self.at_bats}）を超えています。")
 
     @property
     def hits(self) -> int:
@@ -400,26 +398,28 @@ class PitchingLine:
         if not isinstance(self.innings, InningsPitched):
             raise InvalidInningsPitched("innings には InningsPitched を渡してください。")
         for field_name, label in (
-            ('wins', '勝利'), ('losses', '敗戦'), ('saves', 'セーブ'),
-            ('earned_runs', '自責点'), ('strikeouts', '奪三振'),
-            ('hits_allowed', '被安打'), ('walks_allowed', '与四球'),
-            ('home_runs_allowed', '被本塁打'), ('hit_by_pitch_allowed', '与死球'),
-            ('holds', 'ホールド'), ('starts', '先発登板'), ('relief_wins', '救援勝利'),
+            ("wins", "勝利"),
+            ("losses", "敗戦"),
+            ("saves", "セーブ"),
+            ("earned_runs", "自責点"),
+            ("strikeouts", "奪三振"),
+            ("hits_allowed", "被安打"),
+            ("walks_allowed", "与四球"),
+            ("home_runs_allowed", "被本塁打"),
+            ("hit_by_pitch_allowed", "与死球"),
+            ("holds", "ホールド"),
+            ("starts", "先発登板"),
+            ("relief_wins", "救援勝利"),
         ):
-            object.__setattr__(
-                self, field_name, _require_non_negative(label, getattr(self, field_name))
-            )
+            object.__setattr__(self, field_name, _require_non_negative(label, getattr(self, field_name)))
 
         if self.home_runs_allowed > self.hits_allowed:
             raise InvalidStatValue(
-                f"被本塁打（{self.home_runs_allowed}）が"
-                f"被安打（{self.hits_allowed}）を超えています。"
+                f"被本塁打（{self.home_runs_allowed}）が被安打（{self.hits_allowed}）を超えています。"
             )
 
         if self.relief_wins > self.wins:
-            raise InvalidStatValue(
-                f"救援勝利（{self.relief_wins}）が勝利（{self.wins}）を超えています。"
-            )
+            raise InvalidStatValue(f"救援勝利（{self.relief_wins}）が勝利（{self.wins}）を超えています。")
 
     @property
     def _outs(self) -> int:
@@ -556,12 +556,10 @@ class Season:
             raise InvalidSeason("シーズンは西暦の数値で入力してください。") from None
 
         if year != self.year:
-            object.__setattr__(self, 'year', year)
+            object.__setattr__(self, "year", year)
 
         if not (self.MIN_YEAR <= year <= self.MAX_YEAR):
-            raise InvalidSeason(
-                f"シーズンは {self.MIN_YEAR}〜{self.MAX_YEAR} の範囲で入力してください。"
-            )
+            raise InvalidSeason(f"シーズンは {self.MIN_YEAR}〜{self.MAX_YEAR} の範囲で入力してください。")
 
     def __str__(self) -> str:
         return f"{self.year}年"
@@ -582,11 +580,8 @@ class LineScore:
     home: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
-        for name in ('away', 'home'):
-            values = tuple(
-                _require_non_negative('イニングの得点', value)
-                for value in getattr(self, name)
-            )
+        for name in ("away", "home"):
+            values = tuple(_require_non_negative("イニングの得点", value) for value in getattr(self, name))
             object.__setattr__(self, name, values)
 
     @property
@@ -618,7 +613,7 @@ class LineScore:
         bottom が False なら表を終えた時点（ホームはまだその回を攻めていない）。
         """
         away = sum(self.away[:inning])
-        home = sum(self.home[:inning if bottom else inning - 1])
+        home = sum(self.home[: inning if bottom else inning - 1])
         return away, home
 
     def matches(self, away_total: int, home_total: int) -> bool:
@@ -640,11 +635,11 @@ class TeamRecord:
 
     def __post_init__(self) -> None:
         for field_name, label in (
-            ('wins', '勝'), ('losses', '敗'), ('ties', '分'),
+            ("wins", "勝"),
+            ("losses", "敗"),
+            ("ties", "分"),
         ):
-            object.__setattr__(
-                self, field_name, _require_non_negative(label, getattr(self, field_name))
-            )
+            object.__setattr__(self, field_name, _require_non_negative(label, getattr(self, field_name)))
 
     @property
     def games_played(self) -> int:
@@ -671,9 +666,9 @@ class TeamRecord:
 class Handedness(Enum):
     """投打の左右。"""
 
-    RIGHT = '右'
-    LEFT = '左'
-    BOTH = '両'
+    RIGHT = "右"
+    LEFT = "左"
+    BOTH = "両"
 
     @property
     def label(self) -> str:
@@ -707,22 +702,23 @@ class Profile:
     bats: Handedness | None = None
     height_cm: int | None = None
     weight_kg: int | None = None
-    birthplace: str = ''
+    birthplace: str = ""
     debut_year: int | None = None
     # プロ入り前の経歴。日本では 高校 →（大学 または 社会人）→ プロ が多いが、
     # 高校からプロ、大学から社会人を経てプロなど、順路はさまざま
-    high_school: str = ''
-    university: str = ''
-    corporate_team: str = ''
+    high_school: str = ""
+    university: str = ""
+    corporate_team: str = ""
     # 表示用の記述情報。既存の birthplace と同じ扱いで、検証は行わない
-    nationality: str = ''
+    nationality: str = ""
     # 外国人枠の判定に使う唯一の出典。nationality（実際の国籍という事実）とは
     # 別の概念（帰化選手など、枠制度上の扱いは国籍と一致しないことがある）
     is_foreign_player: bool = False
 
     def __post_init__(self) -> None:
         for name, label, upper in (
-            ('height_cm', '身長', 300), ('weight_kg', '体重', 300),
+            ("height_cm", "身長", 300),
+            ("weight_kg", "体重", 300),
         ):
             value = getattr(self, name)
             if value is None:
@@ -737,7 +733,7 @@ class Profile:
 
         if self.debut_year is not None:
             season = Season(self.debut_year)  # 年としての妥当性はここで検査する
-            object.__setattr__(self, 'debut_year', season.year)
+            object.__setattr__(self, "debut_year", season.year)
 
     def age(self, as_of: date) -> int | None:
         """指定日時点の満年齢。生年月日が未設定なら None。"""
@@ -745,16 +741,14 @@ class Profile:
             return None
         if as_of < self.birth_date:
             raise InvalidProfile("生年月日より前の日付では年齢を求められません。")
-        had_birthday = (as_of.month, as_of.day) >= (
-            self.birth_date.month, self.birth_date.day
-        )
+        had_birthday = (as_of.month, as_of.day) >= (self.birth_date.month, self.birth_date.day)
         return as_of.year - self.birth_date.year - (0 if had_birthday else 1)
 
     @property
     def throws_bats(self) -> str:
         """「右投左打」のような表記。片方でも欠けていれば空。"""
         if self.throws is None or self.bats is None:
-            return ''
+            return ""
         return f"{self.throws.label}投{self.bats.label}打"
 
     @property
@@ -767,9 +761,9 @@ class Profile:
         return [
             (label, value)
             for label, value in (
-                ('高校', self.high_school),
-                ('大学', self.university),
-                ('社会人', self.corporate_team),
+                ("高校", self.high_school),
+                ("大学", self.university),
+                ("社会人", self.corporate_team),
             )
             if value
         ]
@@ -777,32 +771,41 @@ class Profile:
     @property
     def amateur_path(self) -> str:
         """「○○高校 → ○○大学」のような1行表記。"""
-        return ' → '.join(value for _, value in self.amateur_career)
+        return " → ".join(value for _, value in self.amateur_career)
 
     @property
     def is_empty(self) -> bool:
-        return not any([
-            self.birth_date, self.throws, self.bats, self.height_cm,
-            self.weight_kg, self.birthplace, self.debut_year,
-            self.high_school, self.university, self.corporate_team,
-            self.nationality,
-        ])
+        return not any(
+            [
+                self.birth_date,
+                self.throws,
+                self.bats,
+                self.height_cm,
+                self.weight_kg,
+                self.birthplace,
+                self.debut_year,
+                self.high_school,
+                self.university,
+                self.corporate_team,
+                self.nationality,
+            ]
+        )
 
 
 @dataclass(frozen=True)
 class StadiumProfile:
     """球場の属性。所在地・収容人数・グラウンドの種類・屋根。"""
 
-    city: str = ''
+    city: str = ""
     capacity: int | None = None
-    surface: str = ''
+    surface: str = ""
     opened_year: int | None = None
-    roof: str = ''
+    roof: str = ""
 
-    SURFACES = ('天然芝', '人工芝', '土')
+    SURFACES = ("天然芝", "人工芝", "土")
     # 屋根の有無は「雨天中止があり得るか」を分ける。開閉式は屋根を閉じれば
     # ドームと同じように試合できるため、屋外とは別に扱う
-    ROOFS = ('屋外', 'ドーム', '開閉式屋根')
+    ROOFS = ("屋外", "ドーム", "開閉式屋根")
 
     def __post_init__(self) -> None:
         if self.capacity is not None:
@@ -812,7 +815,7 @@ class StadiumProfile:
                 raise InvalidProfile("収容人数は数値で入力してください。") from None
             if capacity < 0:
                 raise InvalidProfile("収容人数に負の値は入力できません。")
-            object.__setattr__(self, 'capacity', capacity)
+            object.__setattr__(self, "capacity", capacity)
 
         if self.surface and self.surface not in self.SURFACES:
             raise InvalidProfile(f"「{self.surface}」はグラウンドの種類として認識できません。")
@@ -821,7 +824,7 @@ class StadiumProfile:
             raise InvalidProfile(f"「{self.roof}」は屋根の種類として認識できません。")
 
         if self.opened_year is not None:
-            object.__setattr__(self, 'opened_year', Season(self.opened_year).year)
+            object.__setattr__(self, "opened_year", Season(self.opened_year).year)
 
     @property
     def is_covered(self) -> bool:
@@ -830,12 +833,12 @@ class StadiumProfile:
         未設定のときは「分からない」ではなく False とする。覆えると
         言い切れないため。
         """
-        return self.roof in ('ドーム', '開閉式屋根')
+        return self.roof in ("ドーム", "開閉式屋根")
 
 
 def format_average(value: float) -> str:
     """打率・出塁率を野球慣例の「.333」形式で表す。"""
-    return f"{value:.3f}".lstrip('0') if value < 1 else f"{value:.3f}"
+    return f"{value:.3f}".lstrip("0") if value < 1 else f"{value:.3f}"
 
 
 def ensure_quota_not_exceeded(count: int, limit: int | None, message: str) -> None:

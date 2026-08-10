@@ -43,19 +43,33 @@ from ..domain.value_objects import (
 from . import orm_models
 
 _BATTING_FIELDS = (
-    'at_bats', 'singles', 'doubles', 'triples', 'home_runs',
-    'runs_batted_in', 'walks', 'hit_by_pitch', 'sacrifice_flies',
+    "at_bats",
+    "singles",
+    "doubles",
+    "triples",
+    "home_runs",
+    "runs_batted_in",
+    "walks",
+    "hit_by_pitch",
+    "sacrifice_flies",
 )
 
 _PITCHING_COUNTS = (
-    'wins', 'losses', 'saves', 'earned_runs',
-    'strikeouts', 'hits_allowed', 'walks_allowed',
-    'home_runs_allowed', 'hit_by_pitch_allowed', 'holds',
+    "wins",
+    "losses",
+    "saves",
+    "earned_runs",
+    "strikeouts",
+    "hits_allowed",
+    "walks_allowed",
+    "home_runs_allowed",
+    "hit_by_pitch_allowed",
+    "holds",
 )
 
 # 先発登板数と救援勝利は行に持たず、登板順から導く。同じ事実を2つ持たないため
 # （登板順1なら先発、2以上での勝利は救援勝利）。
-_DERIVED_PITCHING_COUNTS = ('starts', 'relief_wins')
+_DERIVED_PITCHING_COUNTS = ("starts", "relief_wins")
 
 
 class DjangoTeamRepository:
@@ -64,8 +78,7 @@ class DjangoTeamRepository:
     def find_by_id(self, team_id: int) -> Team:
         try:
             row = (
-                orm_models.Team.objects
-                .select_related('league')
+                orm_models.Team.objects.select_related("league")
                 .prefetch_related(self._stints_prefetch())
                 .get(id=team_id)
             )
@@ -75,19 +88,14 @@ class DjangoTeamRepository:
         return self._to_domain(row, with_roster=True)
 
     def find_all(self) -> list[Team]:
-        rows = (
-            orm_models.Team.objects
-            .select_related('league')
-            .order_by('display_order', 'name')
-        )
+        rows = orm_models.Team.objects.select_related("league").order_by("display_order", "name")
         return [self._to_domain(row, with_roster=False) for row in rows]
 
     def find_all_with_roster(self) -> list[Team]:
         rows = (
-            orm_models.Team.objects
-            .select_related('league')
+            orm_models.Team.objects.select_related("league")
             .prefetch_related(self._stints_prefetch())
-            .order_by('display_order', 'name')
+            .order_by("display_order", "name")
         )
         return [self._to_domain(row, with_roster=True) for row in rows]
 
@@ -101,9 +109,7 @@ class DjangoTeamRepository:
         1000人を超えたあたりでSQLiteの式木の深さ上限に達してエラーになる。
         select_related で同じクエリのJOINにまとめることで回避する。
         """
-        return Prefetch(
-            'stints', queryset=orm_models.PlayerStint.objects.select_related('player')
-        )
+        return Prefetch("stints", queryset=orm_models.PlayerStint.objects.select_related("player"))
 
     @transaction.atomic
     def save(self, team: Team) -> Team:
@@ -114,10 +120,10 @@ class DjangoTeamRepository:
         team_row, _ = orm_models.Team.objects.update_or_create(
             id=team.id,
             defaults={
-                'league_id': team.league_id,
-                'name': team.name,
-                'home_stadium_id': team.home_stadium_id,
-                'display_order': team.display_order,
+                "league_id": team.league_id,
+                "name": team.name,
+                "home_stadium_id": team.home_stadium_id,
+                "display_order": team.display_order,
             },
         )
         team.id = team_row.id
@@ -126,8 +132,8 @@ class DjangoTeamRepository:
             row, _ = orm_models.Player.objects.update_or_create(
                 id=player.id,
                 defaults={
-                    'name': player.name,
-                    'position': player.position.value,
+                    "name": player.name,
+                    "position": player.position.value,
                     **_profile_defaults(player.profile),
                 },
             )
@@ -138,11 +144,11 @@ class DjangoTeamRepository:
                 stint_row, _ = orm_models.PlayerStint.objects.update_or_create(
                     id=stint.id,
                     defaults={
-                        'player': row,
-                        'team_id': stint.team_id,
-                        'number': stint.number.value,
-                        'from_year': stint.from_year,
-                        'to_year': stint.to_year,
+                        "player": row,
+                        "team_id": stint.team_id,
+                        "number": stint.number.value,
+                        "from_year": stint.from_year,
+                        "to_year": stint.to_year,
                     },
                 )
                 stint.id = stint_row.id
@@ -151,10 +157,10 @@ class DjangoTeamRepository:
                 captaincy_row, _ = orm_models.Captaincy.objects.update_or_create(
                     id=captaincy.id,
                     defaults={
-                        'player': row,
-                        'team_id': captaincy.team_id,
-                        'from_year': captaincy.from_year,
-                        'to_year': captaincy.to_year,
+                        "player": row,
+                        "team_id": captaincy.team_id,
+                        "from_year": captaincy.from_year,
+                        "to_year": captaincy.to_year,
                     },
                 )
                 captaincy.id = captaincy_row.id
@@ -168,10 +174,7 @@ class DjangoTeamRepository:
         if with_roster:
             # このチームに在籍したことのある選手を、在籍の情報つきで組み立てる
             stint_rows = list(
-                orm_models.PlayerStint.objects
-                .filter(team=row)
-                .select_related('player')
-                .order_by('number')
+                orm_models.PlayerStint.objects.filter(team=row).select_related("player").order_by("number")
             )
             player_rows = {s.player.id: s.player for s in stint_rows}
             batting = _batting_totals(list(player_rows))
@@ -182,28 +185,26 @@ class DjangoTeamRepository:
 
             for player_id, p in player_rows.items():
                 career = careers.get(player_id, [])
-                here = next(
-                    (s for s in career if s.team_id == row.id and s.is_current), None
-                )
+                here = next((s for s in career if s.team_id == row.id and s.is_current), None)
                 # 現在このチームに居ないなら、最後にこのチームに居たときの背番号
-                last_here = next(
-                    (s for s in career if s.team_id == row.id), None
-                )
+                last_here = next((s for s in career if s.team_id == row.id), None)
                 stint = here or last_here
                 if stint is None:
                     continue
-                players.append(Player(
-                    id=player_id,
-                    name=p.name,
-                    number=stint.number,
-                    position=Position.from_label(p.position),
-                    is_active=here is not None,
-                    profile=_profile_of(p),
-                    batting=batting.get(player_id, BattingLine()),
-                    pitching=pitching.get(player_id, PitchingLine()),
-                    career=career,
-                    captaincies=captaincies.get(player_id, []),
-                ))
+                players.append(
+                    Player(
+                        id=player_id,
+                        name=p.name,
+                        number=stint.number,
+                        position=Position.from_label(p.position),
+                        is_active=here is not None,
+                        profile=_profile_of(p),
+                        batting=batting.get(player_id, BattingLine()),
+                        pitching=pitching.get(player_id, PitchingLine()),
+                        career=career,
+                        captaincies=captaincies.get(player_id, []),
+                    )
+                )
             players.sort(key=lambda p: p.number.value)
 
         return Team(
@@ -223,20 +224,21 @@ def _careers_of(player_ids: list[int]) -> dict[int, list[Stint]]:
 
     careers: dict[int, list[Stint]] = {}
     rows = (
-        orm_models.PlayerStint.objects
-        .filter(player_id__in=player_ids)
-        .select_related('team')
-        .order_by('-from_year', '-id')
+        orm_models.PlayerStint.objects.filter(player_id__in=player_ids)
+        .select_related("team")
+        .order_by("-from_year", "-id")
     )
     for row in rows:
-        careers.setdefault(row.player_id, []).append(Stint(
-            id=row.id,
-            team_id=row.team_id,
-            team_name=row.team.name,
-            number=JerseyNumber(row.number),
-            from_year=row.from_year,
-            to_year=row.to_year,
-        ))
+        careers.setdefault(row.player_id, []).append(
+            Stint(
+                id=row.id,
+                team_id=row.team_id,
+                team_name=row.team.name,
+                number=JerseyNumber(row.number),
+                from_year=row.from_year,
+                to_year=row.to_year,
+            )
+        )
     return careers
 
 
@@ -247,36 +249,37 @@ def _captaincies_of(player_ids: list[int]) -> dict[int, list[Captaincy]]:
 
     captaincies: dict[int, list[Captaincy]] = {}
     rows = (
-        orm_models.Captaincy.objects
-        .filter(player_id__in=player_ids)
-        .select_related('team')
-        .order_by('-from_year', '-id')
+        orm_models.Captaincy.objects.filter(player_id__in=player_ids)
+        .select_related("team")
+        .order_by("-from_year", "-id")
     )
     for row in rows:
-        captaincies.setdefault(row.player_id, []).append(Captaincy(
-            id=row.id,
-            team_id=row.team_id,
-            team_name=row.team.name,
-            from_year=row.from_year,
-            to_year=row.to_year,
-        ))
+        captaincies.setdefault(row.player_id, []).append(
+            Captaincy(
+                id=row.id,
+                team_id=row.team_id,
+                team_name=row.team.name,
+                from_year=row.from_year,
+                to_year=row.to_year,
+            )
+        )
     return captaincies
 
 
 def _profile_defaults(profile: Profile) -> dict:
     return {
-        'birth_date': profile.birth_date,
-        'throws': profile.throws.value if profile.throws else '',
-        'bats': profile.bats.value if profile.bats else '',
-        'height_cm': profile.height_cm,
-        'weight_kg': profile.weight_kg,
-        'birthplace': profile.birthplace,
-        'debut_year': profile.debut_year,
-        'high_school': profile.high_school,
-        'university': profile.university,
-        'corporate_team': profile.corporate_team,
-        'nationality': profile.nationality,
-        'is_foreign_player': profile.is_foreign_player,
+        "birth_date": profile.birth_date,
+        "throws": profile.throws.value if profile.throws else "",
+        "bats": profile.bats.value if profile.bats else "",
+        "height_cm": profile.height_cm,
+        "weight_kg": profile.weight_kg,
+        "birthplace": profile.birthplace,
+        "debut_year": profile.debut_year,
+        "high_school": profile.high_school,
+        "university": profile.university,
+        "corporate_team": profile.corporate_team,
+        "nationality": profile.nationality,
+        "is_foreign_player": profile.is_foreign_player,
     }
 
 
@@ -302,15 +305,11 @@ def _batting_totals(player_ids: list[int]) -> dict[int, BattingLine]:
     if not player_ids:
         return {}
     rows = (
-        orm_models.GameBattingLine.objects
-        .filter(player_id__in=player_ids)
-        .values('player_id')
+        orm_models.GameBattingLine.objects.filter(player_id__in=player_ids)
+        .values("player_id")
         .annotate(**{f: Sum(f) for f in _BATTING_FIELDS})
     )
-    return {
-        r['player_id']: BattingLine(**{f: r[f] or 0 for f in _BATTING_FIELDS})
-        for r in rows
-    }
+    return {r["player_id"]: BattingLine(**{f: r[f] or 0 for f in _BATTING_FIELDS}) for r in rows}
 
 
 def _pitching_totals(player_ids: list[int]) -> dict[int, PitchingLine]:
@@ -324,33 +323,29 @@ def _pitching_totals(player_ids: list[int]) -> dict[int, PitchingLine]:
         return {}
 
     counts = (
-        orm_models.GamePitchingLine.objects
-        .filter(player_id__in=player_ids)
-        .values('player_id')
+        orm_models.GamePitchingLine.objects.filter(player_id__in=player_ids)
+        .values("player_id")
         .annotate(**{f: Sum(f) for f in _PITCHING_COUNTS})
     )
     innings: dict[int, InningsPitched] = {}
     # 先発登板数と救援勝利は登板順から導く。SQL の集計では表しにくいので
     # 明細を1度読んで数える（投球回の合計も同じ明細から取る）
     derived: dict[int, dict[str, int]] = {}
-    for player_id, notation, order, wins in (
-        orm_models.GamePitchingLine.objects
-        .filter(player_id__in=player_ids)
-        .values_list('player_id', 'innings_pitched', 'appearance_order', 'wins')
-    ):
-        innings[player_id] = innings.get(player_id, InningsPitched.zero()) + \
-            InningsPitched.from_notation(notation)
-        entry = derived.setdefault(player_id, {'starts': 0, 'relief_wins': 0})
+    for player_id, notation, order, wins in orm_models.GamePitchingLine.objects.filter(
+        player_id__in=player_ids
+    ).values_list("player_id", "innings_pitched", "appearance_order", "wins"):
+        innings[player_id] = innings.get(player_id, InningsPitched.zero()) + InningsPitched.from_notation(notation)
+        entry = derived.setdefault(player_id, {"starts": 0, "relief_wins": 0})
         if order <= 1:
-            entry['starts'] += 1
+            entry["starts"] += 1
         else:
-            entry['relief_wins'] += wins
+            entry["relief_wins"] += wins
 
     return {
-        r['player_id']: PitchingLine(
-            innings=innings.get(r['player_id'], InningsPitched.zero()),
+        r["player_id"]: PitchingLine(
+            innings=innings.get(r["player_id"], InningsPitched.zero()),
             **{f: r[f] or 0 for f in _PITCHING_COUNTS},
-            **derived.get(r['player_id'], {}),
+            **derived.get(r["player_id"], {}),
         )
         for r in counts
     }
@@ -361,17 +356,15 @@ class DjangoGameRepository:
 
     def find_by_id(self, game_id: int) -> Game:
         try:
-            row = (
-                orm_models.Game.objects
-                .prefetch_related('batting_lines', 'pitching_lines', 'inning_scores')
-                .get(id=game_id)
+            row = orm_models.Game.objects.prefetch_related("batting_lines", "pitching_lines", "inning_scores").get(
+                id=game_id
             )
         except orm_models.Game.DoesNotExist:
             raise GameNotFound(f"試合が見つかりません（id={game_id}）。") from None
         return self._to_domain(row)
 
     def find_all(self, year: int | None = None) -> list[Game]:
-        rows = orm_models.Game.objects.prefetch_related('batting_lines', 'pitching_lines', 'inning_scores')
+        rows = orm_models.Game.objects.prefetch_related("batting_lines", "pitching_lines", "inning_scores")
         if year is not None:
             rows = rows.filter(year=year)
         return [self._to_domain(row) for row in rows]
@@ -379,10 +372,8 @@ class DjangoGameRepository:
     def find_by_team(self, team_id: int, year: int | None = None) -> list[Game]:
         from django.db.models import Q
 
-        rows = (
-            orm_models.Game.objects
-            .filter(Q(home_team_id=team_id) | Q(away_team_id=team_id))
-            .prefetch_related('batting_lines', 'pitching_lines', 'inning_scores')
+        rows = orm_models.Game.objects.filter(Q(home_team_id=team_id) | Q(away_team_id=team_id)).prefetch_related(
+            "batting_lines", "pitching_lines", "inning_scores"
         )
         if year is not None:
             rows = rows.filter(year=year)
@@ -393,25 +384,25 @@ class DjangoGameRepository:
         row, _ = orm_models.Game.objects.update_or_create(
             id=game.id,
             defaults={
-                'year': game.season.year,
-                'played_on': game.played_on,
-                'home_team_id': game.home_team_id,
-                'away_team_id': game.away_team_id,
-                'home_score': game.home_score,
-                'away_score': game.away_score,
+                "year": game.season.year,
+                "played_on": game.played_on,
+                "home_team_id": game.home_team_id,
+                "away_team_id": game.away_team_id,
+                "home_score": game.home_score,
+                "away_score": game.away_score,
             },
         )
         game.id = row.id
 
         for entry in game.batting:
             defaults = {f: getattr(entry.line, f) for f in _BATTING_FIELDS}
-            defaults.update({
-                'batting_order': entry.batting_order,
-                'slot_sequence': entry.slot_sequence,
-                'fielding_position': (
-                    entry.fielding_position.value if entry.fielding_position else ''
-                ),
-            })
+            defaults.update(
+                {
+                    "batting_order": entry.batting_order,
+                    "slot_sequence": entry.slot_sequence,
+                    "fielding_position": (entry.fielding_position.value if entry.fielding_position else ""),
+                }
+            )
             line_row, _ = orm_models.GameBattingLine.objects.update_or_create(
                 game=row, player_id=entry.player_id, defaults=defaults
             )
@@ -419,9 +410,9 @@ class DjangoGameRepository:
 
         for entry in game.pitching:
             defaults = {f: getattr(entry.line, f) for f in _PITCHING_COUNTS}
-            defaults['innings_pitched'] = float(entry.line.innings.to_notation())
-            defaults['appearance_order'] = entry.appearance_order
-            defaults['entered_inning'] = entry.entered_inning
+            defaults["innings_pitched"] = float(entry.line.innings.to_notation())
+            defaults["appearance_order"] = entry.appearance_order
+            defaults["entered_inning"] = entry.entered_inning
             line_row, _ = orm_models.GamePitchingLine.objects.update_or_create(
                 game=row, player_id=entry.player_id, defaults=defaults
             )
@@ -450,12 +441,12 @@ class DjangoGameRepository:
                 if inning > len(values):
                     continue
                 orm_models.GameInningScore.objects.update_or_create(
-                    game=row, inning=inning, is_home=is_home,
-                    defaults={'runs': values[inning - 1]},
+                    game=row,
+                    inning=inning,
+                    is_home=is_home,
+                    defaults={"runs": values[inning - 1]},
                 )
-        orm_models.GameInningScore.objects.filter(
-            game=row, inning__gt=score.innings
-        ).delete()
+        orm_models.GameInningScore.objects.filter(game=row, inning__gt=score.innings).delete()
 
     @staticmethod
     def _to_line_score(row: orm_models.Game) -> LineScore:
@@ -526,10 +517,7 @@ class DjangoLeagueRepository:
     def find_all(self) -> list[League]:
         # 管理画面で手動設定した表示順を既定にする。順位表・ダッシュボードの
         # タブ・チーム一覧の並びが、この順に揃う
-        return [
-            self._to_domain(row)
-            for row in orm_models.League.objects.order_by('display_order', 'name')
-        ]
+        return [self._to_domain(row) for row in orm_models.League.objects.order_by("display_order", "name")]
 
     @staticmethod
     def _to_domain(row: orm_models.League) -> League:

@@ -47,8 +47,8 @@ from .dto import (
     PlayerGameRow,
     PlayerProfile,
     RankingEntry,
-    Standings,
     StandingRow,
+    Standings,
     TeamMonthlyRow,
     TeamTotals,
     TitleDepartment,
@@ -88,12 +88,14 @@ def _decision_label(line) -> str:
     ものを返す。ホールドは勝敗と両立しない（勝利投手にホールドは付かない）。
     """
     for count, label in (
-        (line.wins, '勝'), (line.losses, '敗'),
-        (line.saves, 'Ｓ'), (line.holds, 'Ｈ'),
+        (line.wins, "勝"),
+        (line.losses, "敗"),
+        (line.saves, "Ｓ"),
+        (line.holds, "Ｈ"),
     ):
         if count:
             return label
-    return ''
+    return ""
 
 
 @dataclass(frozen=True)
@@ -133,11 +135,11 @@ class TeamApplicationService:
     # チーム一覧の並べ替え。業務ルールではなく表示上の都合なのでここに置く。
     # 既定は管理画面で設定した手動の表示順（DTO の並びそのまま）。
     TEAM_SORT_KEYS = {
-        'name': (lambda t: t.name, False),
-        'league': (lambda t: (t.league_name, t.name), False),
+        "name": (lambda t: t.name, False),
+        "league": (lambda t: (t.league_name, t.name), False),
         # 未設定は末尾に来るよう、比較の最後に並ぶ文字を使う
-        'stadium': (lambda t: (t.stadium_name or '￿', t.name), False),
-        'players': (lambda t: t.player_count, True),
+        "stadium": (lambda t: (t.stadium_name or "￿", t.name), False),
+        "players": (lambda t: t.player_count, True),
     }
 
     def list_teams(self, *, sort: str = None, descending: bool = None) -> Listing:
@@ -146,13 +148,11 @@ class TeamApplicationService:
 
         if sort not in self.TEAM_SORT_KEYS:
             # 既定は手動の表示順。並べ替えずにそのまま返す
-            return Listing(rows=rows, sort='order', descending=False)
+            return Listing(rows=rows, sort="order", descending=False)
 
         getter, default_desc = self.TEAM_SORT_KEYS[sort]
         desc = default_desc if descending is None else bool(descending)
-        return Listing(
-            rows=sorted(rows, key=getter, reverse=desc), sort=sort, descending=desc
-        )
+        return Listing(rows=sorted(rows, key=getter, reverse=desc), sort=sort, descending=desc)
 
     def list_teams_by_league(self, *, sort: str = None, descending: bool = None) -> Listing:
         """リーグごとに分けたチーム一覧。
@@ -167,9 +167,7 @@ class TeamApplicationService:
             grouped.setdefault(team.league_id, []).append(team)
 
         groups = [
-            LeagueTeams(
-                league_id=league.id, league_name=league.name, teams=grouped[league.id]
-            )
+            LeagueTeams(league_id=league.id, league_name=league.name, teams=grouped[league.id])
             for league in self._leagues.find_all()
             if grouped.get(league.id)
         ]
@@ -184,9 +182,7 @@ class TeamApplicationService:
         teams = self._teams.find_all_with_roster()
         team_name_by_id = {team.id: team.name for team in teams}
 
-        players: list[tuple[Player, int]] = [
-            (player, team.id) for team in teams for player in team.active_players
-        ]
+        players: list[tuple[Player, int]] = [(player, team.id) for team in teams for player in team.active_players]
         team_of = {id(player): team_id for player, team_id in players}
         all_players = [player for player, _ in players]
 
@@ -209,25 +205,18 @@ class TeamApplicationService:
 
         # 規定打席・規定投球回は所属チームの試合数で決まる
         games_played = self._team_game_counts()
-        team_games = {
-            player.id: games_played.get(team_id, 0)
-            for player, team_id in players
-        }
+        team_games = {player.id: games_played.get(team_id, 0) for player, team_id in players}
 
         return Dashboard(
             league_count=len({team.league_id for team in teams}),
             team_count=len(teams),
             batter_count=sum(1 for p in all_players if not p.is_pitcher),
             pitcher_count=sum(1 for p in all_players if p.is_pitcher),
-            league_rankings=self._league_rankings(
-                teams, leaders, team_games, to_entries, rate3, rate2, count
-            ),
+            league_rankings=self._league_rankings(teams, leaders, team_games, to_entries, rate3, rate2, count),
             league_teams=self.list_teams_by_league().rows,
         )
 
-    def _league_rankings(
-        self, teams, leaders, team_games, to_entries, rate3, rate2, count
-    ) -> list[LeagueRankings]:
+    def _league_rankings(self, teams, leaders, team_games, to_entries, rate3, rate2, count) -> list[LeagueRankings]:
         """リーグごとのランキング。
 
         タイトルはリーグの中で争われるので、他リーグの選手と同じ表に並べない。
@@ -235,10 +224,7 @@ class TeamApplicationService:
         """
         rankings = []
         for league in self._leagues.find_all():
-            members = [
-                p for team in teams if team.league_id == league.id
-                for p in team.active_players
-            ]
+            members = [p for team in teams if team.league_id == league.id for p in team.active_players]
             if not members:
                 continue
 
@@ -246,24 +232,16 @@ class TeamApplicationService:
                 league_id=league.id,
                 league_name=league.name,
                 ops_leaders=to_entries(
-                    domain_services.leaders_by_ops(
-                        members, limit=leaders, team_games=team_games
-                    ),
+                    domain_services.leaders_by_ops(members, limit=leaders, team_games=team_games),
                     rate3,
                 ),
                 # 本塁打と奪三振は本数そのものが記録なので規定を設けない
-                home_run_leaders=to_entries(
-                    domain_services.leaders_by_home_runs(members, limit=leaders), count
-                ),
+                home_run_leaders=to_entries(domain_services.leaders_by_home_runs(members, limit=leaders), count),
                 era_leaders=to_entries(
-                    domain_services.leaders_by_era(
-                        members, limit=leaders, team_games=team_games
-                    ),
+                    domain_services.leaders_by_era(members, limit=leaders, team_games=team_games),
                     rate2,
                 ),
-                strikeout_leaders=to_entries(
-                    domain_services.leaders_by_strikeouts(members, limit=leaders), count
-                ),
+                strikeout_leaders=to_entries(domain_services.leaders_by_strikeouts(members, limit=leaders), count),
             )
             if entry.has_any:
                 rankings.append(entry)
@@ -272,59 +250,47 @@ class TeamApplicationService:
     def get_team_name(self, team_id: int) -> str:
         return self._teams.find_by_id(team_id).name
 
-    def list_batters(
-        self, team_id: int, *, sort: str = None, descending: bool = None
-    ) -> Listing:
+    def list_batters(self, team_id: int, *, sort: str = None, descending: bool = None) -> Listing:
         team = self._teams.find_by_id(team_id)
         batters = [p for p in team.active_players if not p.is_pitcher]
         players, key, desc = domain_services.sort_batters(batters, sort, descending)
         captain = team.current_captain
         context = self._league_context(team.league_id)
         return Listing(
-            rows=[
-                self._to_batter_row(p, is_captain=p is captain, league_context=context)
-                for p in players
-            ],
-            sort=key, descending=desc,
+            rows=[self._to_batter_row(p, is_captain=p is captain, league_context=context) for p in players],
+            sort=key,
+            descending=desc,
         )
 
-    def list_pitchers(
-        self, team_id: int, *, sort: str = None, descending: bool = None
-    ) -> Listing:
+    def list_pitchers(self, team_id: int, *, sort: str = None, descending: bool = None) -> Listing:
         team = self._teams.find_by_id(team_id)
         pitchers = [p for p in team.active_players if p.is_pitcher]
         players, key, desc = domain_services.sort_pitchers(pitchers, sort, descending)
         captain = team.current_captain
         context = self._league_context(team.league_id)
         return Listing(
-            rows=[
-                self._to_pitcher_row(p, is_captain=p is captain, league_context=context)
-                for p in players
-            ],
-            sort=key, descending=desc,
+            rows=[self._to_pitcher_row(p, is_captain=p is captain, league_context=context) for p in players],
+            sort=key,
+            descending=desc,
         )
 
     def get_player_detail(self, team_id: int, player_id: int) -> PlayerDetail:
         team = self._teams.find_by_id(team_id)
-        return self._to_detail(
-            team, team.find_player(player_id), self._league_context(team.league_id)
-        )
+        return self._to_detail(team, team.find_player(player_id), self._league_context(team.league_id))
 
     # 順位表の並べ替え。順位そのものは勝率から決まるので、ここでの並べ替えは
     # 表示順を変えるだけで rank の値は変えない。
     STANDING_SORT_KEYS = {
-        'rank': (lambda r: r.rank, False),
-        'team': (lambda r: r.team_name, False),
-        'games': (lambda r: r.games_played, True),
-        'wins': (lambda r: r.wins, True),
-        'losses': (lambda r: r.losses, True),
-        'ties': (lambda r: r.ties, True),
-        'pct': (lambda r: r.rank, False),  # 勝率順＝順位順
+        "rank": (lambda r: r.rank, False),
+        "team": (lambda r: r.team_name, False),
+        "games": (lambda r: r.games_played, True),
+        "wins": (lambda r: r.wins, True),
+        "losses": (lambda r: r.losses, True),
+        "ties": (lambda r: r.ties, True),
+        "pct": (lambda r: r.rank, False),  # 勝率順＝順位順
     }
 
-    def get_standings(
-        self, year: int | None = None, *, sort: str = None, descending: bool = None
-    ) -> Standings:
+    def get_standings(self, year: int | None = None, *, sort: str = None, descending: bool = None) -> Standings:
         """指定シーズンの順位表を返す。年を省略した場合は最新シーズン。
 
         順位づけの規則そのものはドメインサービスにあり、ここでは
@@ -346,17 +312,19 @@ class TeamApplicationService:
             rows = domain_services.standings(members, season_games)
             if not rows:
                 continue
-            leagues.append(LeagueStandings(
-                league_id=league.id,
-                league_name=league.name,
-                rows=self._to_standing_rows(rows, sort, descending),
-            ))
+            leagues.append(
+                LeagueStandings(
+                    league_id=league.id,
+                    league_name=league.name,
+                    rows=self._to_standing_rows(rows, sort, descending),
+                )
+            )
 
         return Standings(
             year=target.year,
             leagues=leagues,
             available_years=[s.year for s in seasons],
-            sort=sort if sort in self.STANDING_SORT_KEYS else 'rank',
+            sort=sort if sort in self.STANDING_SORT_KEYS else "rank",
             descending=bool(descending) if sort in self.STANDING_SORT_KEYS else False,
         )
 
@@ -376,7 +344,7 @@ class TeamApplicationService:
                 ties=row.record.ties,
                 games_played=row.record.games_played,
                 winning_percentage=format_average(row.record.winning_percentage),
-                games_behind='—' if row.is_leader else f'{row.games_behind:.1f}',
+                games_behind="—" if row.is_leader else f"{row.games_behind:.1f}",
             )
             for row in rows
         ]
@@ -395,10 +363,7 @@ class TeamApplicationService:
         member_ids = {t.id for t in teams}
 
         all_games = self._games.find_all()
-        league_games = [
-            g for g in all_games
-            if g.home_team_id in member_ids and g.away_team_id in member_ids
-        ]
+        league_games = [g for g in all_games if g.home_team_id in member_ids and g.away_team_id in member_ids]
         seasons = domain_services.seasons_of(league_games)
 
         target = None
@@ -406,10 +371,9 @@ class TeamApplicationService:
         if seasons:
             target = Season(year) if year is not None else seasons[0]
             rows = self._to_standing_rows(
-                domain_services.standings(
-                    teams, [g for g in league_games if g.season == target]
-                ),
-                None, None,
+                domain_services.standings(teams, [g for g in league_games if g.season == target]),
+                None,
+                None,
             )
 
         names = self._team_names()
@@ -423,9 +387,9 @@ class TeamApplicationService:
 
         matchups = None
         if target is not None:
-            matchups = self._to_matchup_table(domain_services.matchups(
-                teams, [g for g in league_games if g.season == target]
-            ))
+            matchups = self._to_matchup_table(
+                domain_services.matchups(teams, [g for g in league_games if g.season == target])
+            )
 
         return LeagueDetail(
             id=league.id,
@@ -438,9 +402,7 @@ class TeamApplicationService:
             matchups=matchups,
         )
 
-    def get_league_titles(
-        self, league_id: int, year: int | None = None, *, leaders: int = 10
-    ) -> LeagueTitles:
+    def get_league_titles(self, league_id: int, year: int | None = None, *, leaders: int = 10) -> LeagueTitles:
         """リーグのタイトル一覧。シーズンで区切った部門別の上位者。
 
         ダッシュボードのランキングは通算成績だが、タイトルはシーズンごとに
@@ -451,15 +413,17 @@ class TeamApplicationService:
         member_ids = {t.id for t in teams}
 
         league_games = [
-            g for g in self._games.find_all()
-            if g.home_team_id in member_ids and g.away_team_id in member_ids
+            g for g in self._games.find_all() if g.home_team_id in member_ids and g.away_team_id in member_ids
         ]
         seasons = domain_services.seasons_of(league_games)
 
         if not seasons:
             return LeagueTitles(
-                league_id=league.id, league_name=league.name, year=None,
-                available_years=[], departments=[],
+                league_id=league.id,
+                league_name=league.name,
+                year=None,
+                available_years=[],
+                departments=[],
             )
 
         target = Season(year) if year is not None else seasons[0]
@@ -477,12 +441,8 @@ class TeamApplicationService:
             for player in team.active_players:
                 scoped = replace(
                     player,
-                    batting=domain_services.player_batting_total(
-                        season_games, player.id
-                    ),
-                    pitching=domain_services.player_pitching_total(
-                        season_games, player.id
-                    ),
+                    batting=domain_services.player_batting_total(season_games, player.id),
+                    pitching=domain_services.player_pitching_total(season_games, player.id),
                 )
                 players.append(scoped)
                 team_of[scoped.id] = (team.id, team.name)
@@ -493,9 +453,7 @@ class TeamApplicationService:
             league_name=league.name,
             year=target.year,
             available_years=[s.year for s in seasons],
-            departments=self._title_departments(
-                players, team_of, team_games, leaders
-            ),
+            departments=self._title_departments(players, team_of, team_games, leaders),
         )
 
     @staticmethod
@@ -505,57 +463,59 @@ class TeamApplicationService:
         率の部門（打率・防御率）は規定に達した選手だけを対象にする。
         本数そのものが記録になる部門（本塁打・打点・奪三振）は規定を設けない。
         """
+
         def to_entries(ranked, formatter) -> list[RankingEntry]:
             rows = []
             for item in ranked:
                 team_id, team_name = team_of[item.player.id]
-                rows.append(RankingEntry(
-                    rank=item.rank,
-                    player_id=item.player.id,
-                    player_name=item.player.name,
-                    team_id=team_id,
-                    team_name=team_name,
-                    value=formatter(item.value),
-                ))
+                rows.append(
+                    RankingEntry(
+                        rank=item.rank,
+                        player_id=item.player.id,
+                        player_name=item.player.name,
+                        team_id=team_id,
+                        team_name=team_name,
+                        value=formatter(item.value),
+                    )
+                )
             return rows
 
         return [
             TitleDepartment(
-                key='average', label='首位打者', note='規定打席以上',
+                key="average",
+                label="首位打者",
+                note="規定打席以上",
                 entries=to_entries(
-                    domain_services.leaders_by_batting_average(
-                        players, limit=leaders, team_games=team_games
-                    ),
+                    domain_services.leaders_by_batting_average(players, limit=leaders, team_games=team_games),
                     _as_average,
                 ),
             ),
             TitleDepartment(
-                key='home_runs', label='本塁打王',
-                entries=to_entries(
-                    domain_services.leaders_by_home_runs(players, limit=leaders), _as_count
-                ),
+                key="home_runs",
+                label="本塁打王",
+                entries=to_entries(domain_services.leaders_by_home_runs(players, limit=leaders), _as_count),
             ),
             TitleDepartment(
-                key='rbi', label='打点王',
+                key="rbi",
+                label="打点王",
                 entries=to_entries(
                     domain_services.leaders_by_runs_batted_in(players, limit=leaders),
                     _as_count,
                 ),
             ),
             TitleDepartment(
-                key='era', label='最優秀防御率', note='規定投球回以上',
+                key="era",
+                label="最優秀防御率",
+                note="規定投球回以上",
                 entries=to_entries(
-                    domain_services.leaders_by_era(
-                        players, limit=leaders, team_games=team_games
-                    ),
+                    domain_services.leaders_by_era(players, limit=leaders, team_games=team_games),
                     _as_rate,
                 ),
             ),
             TitleDepartment(
-                key='strikeouts', label='最多奪三振',
-                entries=to_entries(
-                    domain_services.leaders_by_strikeouts(players, limit=leaders), _as_count
-                ),
+                key="strikeouts",
+                label="最多奪三振",
+                entries=to_entries(domain_services.leaders_by_strikeouts(players, limit=leaders), _as_count),
             ),
         ]
 
@@ -566,9 +526,7 @@ class TeamApplicationService:
         行と列を同じ順（順位表の順）に並べる。こうすると対角線が自分自身に
         なり、どのマスが誰と誰の対戦かを迷わず読める。
         """
-        columns = [
-            MatchupColumn(team_id=row.team_id, team_name=row.team_name) for row in rows
-        ]
+        columns = [MatchupColumn(team_id=row.team_id, team_name=row.team_name) for row in rows]
 
         table_rows = []
         for row in rows:
@@ -576,22 +534,24 @@ class TeamApplicationService:
             for column in columns:
                 record = row.record_against(column.team_id)
                 if record is None:
-                    cells.append(MatchupCell(
-                        opponent_id=None, label='—', is_self=True
-                    ))
+                    cells.append(MatchupCell(opponent_id=None, label="—", is_self=True))
                     continue
-                cells.append(MatchupCell(
-                    opponent_id=column.team_id,
-                    label=_record_label(record),
-                    is_winning=record.wins > record.losses,
-                    is_losing=record.losses > record.wins,
-                ))
-            table_rows.append(MatchupRow(
-                team_id=row.team_id,
-                team_name=row.team_name,
-                cells=cells,
-                total_label=_record_label(row.total),
-            ))
+                cells.append(
+                    MatchupCell(
+                        opponent_id=column.team_id,
+                        label=_record_label(record),
+                        is_winning=record.wins > record.losses,
+                        is_losing=record.losses > record.wins,
+                    )
+                )
+            table_rows.append(
+                MatchupRow(
+                    team_id=row.team_id,
+                    team_name=row.team_name,
+                    cells=cells,
+                    total_label=_record_label(row.total),
+                )
+            )
 
         return MatchupTable(columns=columns, rows=table_rows)
 
@@ -599,15 +559,11 @@ class TeamApplicationService:
 
     def list_games(self, *, year: int | None = None, team_id: int | None = None) -> Listing:
         """試合の一覧。新しい順。"""
-        games = (
-            self._games.find_by_team(team_id, year)
-            if team_id is not None
-            else self._games.find_all(year)
-        )
+        games = self._games.find_by_team(team_id, year) if team_id is not None else self._games.find_all(year)
         names = self._team_names()
         rows = [self._to_game_row(g, names) for g in games]
         rows.sort(key=lambda r: (r.played_on, r.id), reverse=True)
-        return Listing(rows=rows, sort='date', descending=True)
+        return Listing(rows=rows, sort="date", descending=True)
 
     def list_game_seasons(self) -> list[int]:
         return [s.year for s in domain_services.seasons_of(self._games.find_all())]
@@ -624,27 +580,29 @@ class TeamApplicationService:
             if info is None:
                 continue
             line = entry.line
-            batting.append(GamePlayerRow(
-                player_id=entry.player_id,
-                player_name=info['name'],
-                number=info['number'],
-                team_id=info['team_id'],
-                team_name=names.get(info['team_id'], ''),
-                at_bats=line.at_bats,
-                hits=line.hits,
-                home_runs=line.home_runs,
-                runs_batted_in=line.runs_batted_in,
-                walks=line.walks,
-                batting_average=line.batting_average,
-                doubles=line.doubles,
-                triples=line.triples,
-                hit_by_pitch=line.hit_by_pitch,
-                sacrifice_flies=line.sacrifice_flies,
-                career_batting_average=info['batting_average'],
-                batting_order=entry.batting_order,
-                slot_sequence=entry.slot_sequence,
-                position_label=entry.position_label,
-            ))
+            batting.append(
+                GamePlayerRow(
+                    player_id=entry.player_id,
+                    player_name=info["name"],
+                    number=info["number"],
+                    team_id=info["team_id"],
+                    team_name=names.get(info["team_id"], ""),
+                    at_bats=line.at_bats,
+                    hits=line.hits,
+                    home_runs=line.home_runs,
+                    runs_batted_in=line.runs_batted_in,
+                    walks=line.walks,
+                    batting_average=line.batting_average,
+                    doubles=line.doubles,
+                    triples=line.triples,
+                    hit_by_pitch=line.hit_by_pitch,
+                    sacrifice_flies=line.sacrifice_flies,
+                    career_batting_average=info["batting_average"],
+                    batting_order=entry.batting_order,
+                    slot_sequence=entry.slot_sequence,
+                    position_label=entry.position_label,
+                )
+            )
 
         pitching = []
         for entry in game.pitching_in_order():
@@ -652,24 +610,26 @@ class TeamApplicationService:
             if info is None:
                 continue
             line = entry.line
-            pitching.append(GamePlayerRow(
-                player_id=entry.player_id,
-                player_name=info['name'],
-                number=info['number'],
-                team_id=info['team_id'],
-                team_name=names.get(info['team_id'], ''),
-                innings_pitched=str(line.innings),
-                earned_runs=line.earned_runs,
-                strikeouts=line.strikeouts,
-                hits_allowed=line.hits_allowed,
-                walks_allowed=line.walks_allowed,
-                hit_by_pitch_allowed=line.hit_by_pitch_allowed,
-                home_runs_allowed=line.home_runs_allowed,
-                earned_run_average=line.earned_run_average,
-                career_earned_run_average=info['earned_run_average'],
-                appearance_order=entry.appearance_order,
-                decision=_decision_label(line),
-            ))
+            pitching.append(
+                GamePlayerRow(
+                    player_id=entry.player_id,
+                    player_name=info["name"],
+                    number=info["number"],
+                    team_id=info["team_id"],
+                    team_name=names.get(info["team_id"], ""),
+                    innings_pitched=str(line.innings),
+                    earned_runs=line.earned_runs,
+                    strikeouts=line.strikeouts,
+                    hits_allowed=line.hits_allowed,
+                    walks_allowed=line.walks_allowed,
+                    hit_by_pitch_allowed=line.hit_by_pitch_allowed,
+                    home_runs_allowed=line.home_runs_allowed,
+                    earned_run_average=line.earned_run_average,
+                    career_earned_run_average=info["earned_run_average"],
+                    appearance_order=entry.appearance_order,
+                    decision=_decision_label(line),
+                )
+            )
 
         return GameDetail(
             game=self._to_game_row(game, names),
@@ -689,10 +649,8 @@ class TeamApplicationService:
             return None
         return GameTeamBox(
             team_id=team_id,
-            team_name=names.get(team_id, ''),
-            score=(
-                game.home_score if team_id == game.home_team_id else game.away_score
-            ),
+            team_name=names.get(team_id, ""),
+            score=(game.home_score if team_id == game.home_team_id else game.away_score),
             batting=rows,
             pitching=staff,
         )
@@ -708,10 +666,7 @@ class TeamApplicationService:
         for inning in range(1, score.innings + 1):
             away = str(score.runs_in(inning, home=False))
             # ホームが最終回を攻めずに終わった場合は 'X' を置く（記録の慣例）
-            home = (
-                str(score.runs_in(inning, home=True))
-                if inning <= len(score.home) else 'X'
-            )
+            home = str(score.runs_in(inning, home=True)) if inning <= len(score.home) else "X"
             columns.append(InningScoreColumn(inning=inning, away=away, home=home))
 
         def hits_of(team_id: int) -> int:
@@ -738,22 +693,22 @@ class TeamApplicationService:
             if batting is None and pitching is None:
                 continue
 
-            opponent_id = (
-                game.away_team_id if game.home_team_id == team_id else game.home_team_id
+            opponent_id = game.away_team_id if game.home_team_id == team_id else game.home_team_id
+            rows.append(
+                PlayerGameRow(
+                    game_id=game.id,
+                    played_on=game.played_on,
+                    opponent_name=names.get(opponent_id, ""),
+                    result={"win": "勝", "loss": "敗", "tie": "分"}[game.result_for(team_id)],
+                    at_bats=batting.line.at_bats if batting else 0,
+                    hits=batting.line.hits if batting else 0,
+                    home_runs=batting.line.home_runs if batting else 0,
+                    runs_batted_in=batting.line.runs_batted_in if batting else 0,
+                    innings_pitched=str(pitching.line.innings) if pitching else "0.0",
+                    earned_runs=pitching.line.earned_runs if pitching else 0,
+                    strikeouts=pitching.line.strikeouts if pitching else 0,
+                )
             )
-            rows.append(PlayerGameRow(
-                game_id=game.id,
-                played_on=game.played_on,
-                opponent_name=names.get(opponent_id, ''),
-                result={'win': '勝', 'loss': '敗', 'tie': '分'}[game.result_for(team_id)],
-                at_bats=batting.line.at_bats if batting else 0,
-                hits=batting.line.hits if batting else 0,
-                home_runs=batting.line.home_runs if batting else 0,
-                runs_batted_in=batting.line.runs_batted_in if batting else 0,
-                innings_pitched=str(pitching.line.innings) if pitching else '0.0',
-                earned_runs=pitching.line.earned_runs if pitching else 0,
-                strikeouts=pitching.line.strikeouts if pitching else 0,
-            ))
 
         rows.sort(key=lambda r: (r.played_on, r.game_id), reverse=True)
 
@@ -763,10 +718,7 @@ class TeamApplicationService:
         return PlayerProfile(
             detail=detail,
             games=rows,
-            months=[
-                self._to_monthly_row(split)
-                for split in domain_services.monthly_splits(team_games, player_id)
-            ],
+            months=[self._to_monthly_row(split) for split in domain_services.monthly_splits(team_games, player_id)],
             career=[
                 CareerRow(
                     team_id=s.team_id,
@@ -820,54 +772,63 @@ class TeamApplicationService:
 
         batting = {e.player_id: e.line for e in game.batting}
         pitching = {e.player_id: e.line for e in game.pitching}
-        lineup = {
-            e.player_id: (e.batting_order, e.slot_sequence, e.fielding_position)
-            for e in game.batting
-        }
+        lineup = {e.player_id: (e.batting_order, e.slot_sequence, e.fielding_position) for e in game.batting}
         entered = {e.player_id: e.entered_inning for e in game.pitching}
 
         rosters = []
         for team_id in (game.home_team_id, game.away_team_id):
             team = self._teams.find_by_id(team_id)
-            rosters.append({
-                'team_id': team_id,
-                'team_name': names.get(team_id, team.name),
-                'players': [
-                    {
-                        'id': p.id,
-                        'name': p.name,
-                        'number': p.number.value,
-                        'position': p.position.label,
-                        'is_pitcher': p.is_pitcher,
-                        'batting': batting.get(p.id),
-                        'pitching': pitching.get(p.id),
-                        'lineup': lineup.get(p.id),
-                        'entered_inning': entered.get(p.id),
-                    }
-                    for p in sorted(team.active_players, key=lambda p: p.number.value)
-                ],
-            })
+            rosters.append(
+                {
+                    "team_id": team_id,
+                    "team_name": names.get(team_id, team.name),
+                    "players": [
+                        {
+                            "id": p.id,
+                            "name": p.name,
+                            "number": p.number.value,
+                            "position": p.position.label,
+                            "is_pitcher": p.is_pitcher,
+                            "batting": batting.get(p.id),
+                            "pitching": pitching.get(p.id),
+                            "lineup": lineup.get(p.id),
+                            "entered_inning": entered.get(p.id),
+                        }
+                        for p in sorted(team.active_players, key=lambda p: p.number.value)
+                    ],
+                }
+            )
 
-        return {'game': game, 'rosters': rosters}
+        return {"game": game, "rosters": rosters}
 
-    def create_game(
-        self, *, year, played_on, home_team_id, away_team_id, home_score, away_score
-    ) -> Game:
+    def create_game(self, *, year, played_on, home_team_id, away_team_id, home_score, away_score) -> Game:
         """試合を作る。成績は後から入力する。"""
-        return self._games.save(Game(
-            season=Season(year),
-            played_on=played_on,
-            home_team_id=home_team_id,
-            away_team_id=away_team_id,
-            home_score=home_score,
-            away_score=away_score,
-        ))
+        return self._games.save(
+            Game(
+                season=Season(year),
+                played_on=played_on,
+                home_team_id=home_team_id,
+                away_team_id=away_team_id,
+                home_score=home_score,
+                away_score=away_score,
+            )
+        )
 
     def update_game(
-        self, game_id: int, *,
-        year, played_on, home_team_id, away_team_id, home_score, away_score,
-        batting: dict = None, pitching: dict = None,
-        lineup: dict = None, staff: dict = None, line_score=None,
+        self,
+        game_id: int,
+        *,
+        year,
+        played_on,
+        home_team_id,
+        away_team_id,
+        home_score,
+        away_score,
+        batting: dict = None,
+        pitching: dict = None,
+        lineup: dict = None,
+        staff: dict = None,
+        line_score=None,
     ) -> Game:
         """試合の基本情報と、出場選手の成績をまとめて更新する。
 
@@ -898,8 +859,11 @@ class TeamApplicationService:
         for player_id, line in (batting or {}).items():
             order, sequence, position = lineup.get(player_id, (None, 0, None))
             game.record_batting(
-                player_id, line, batting_order=order,
-                slot_sequence=sequence, fielding_position=position,
+                player_id,
+                line,
+                batting_order=order,
+                slot_sequence=sequence,
+                fielding_position=position,
             )
         # 登板順は登板した回の順に振る。**チームごとに1から振る**（両チームの投手を
         # まとめて数えると、相手の先発が2番手になってしまう）
@@ -907,14 +871,16 @@ class TeamApplicationService:
         players = self._player_index()
         by_team: dict[int, list[int]] = {}
         for player_id in sorted(entered, key=lambda pid: (entered[pid], pid)):
-            team_id = players.get(player_id, {}).get('team_id')
+            team_id = players.get(player_id, {}).get("team_id")
             by_team.setdefault(team_id, []).append(player_id)
 
         for ordered in by_team.values():
             for order, player_id in enumerate(ordered, start=1):
                 game.record_pitching(
-                    player_id, pitching[player_id],
-                    appearance_order=order, entered_inning=entered[player_id],
+                    player_id,
+                    pitching[player_id],
+                    appearance_order=order,
+                    entered_inning=entered[player_id],
                 )
 
         self._ensure_foreign_player_game_quota(game, batting or {}, pitching or {})
@@ -930,9 +896,7 @@ class TeamApplicationService:
             return
 
         players = self._player_index()
-        team_of = {
-            pid: info['team_id'] for pid, info in players.items()
-        }
+        team_of = {pid: info["team_id"] for pid, info in players.items()}
         decisions = domain_services.pitching_decisions(game, team_of)
 
         for entry in game.pitching:
@@ -948,9 +912,7 @@ class TeamApplicationService:
                 relief_wins=wins if entry.appearance_order > 1 else 0,
             )
 
-    def _ensure_foreign_player_game_quota(
-        self, game: Game, batting: dict, pitching: dict
-    ) -> None:
+    def _ensure_foreign_player_game_quota(self, game: Game, batting: dict, pitching: dict) -> None:
         """1試合の出場選手（打撃または投球成績が記録される選手）のうち、
         外国人選手がチームごとの上限を超えていないか確認する。
 
@@ -962,14 +924,15 @@ class TeamApplicationService:
 
         for team_id in (game.home_team_id, game.away_team_id):
             foreign_count = sum(
-                1 for pid in participant_ids
-                if players.get(pid, {}).get('team_id') == team_id
-                and players[pid]['is_foreign_player']
+                1
+                for pid in participant_ids
+                if players.get(pid, {}).get("team_id") == team_id and players[pid]["is_foreign_player"]
             )
             league_id = self._teams.find_by_id(team_id).league_id
             limit = self._leagues.find_by_id(league_id).foreign_player_game_limit
             ensure_quota_not_exceeded(
-                foreign_count, limit,
+                foreign_count,
+                limit,
                 f"「{names.get(team_id, '')}」の外国人選手出場人数（{foreign_count}人）が"
                 f"上限（{limit}人）を超えています。",
             )
@@ -983,13 +946,9 @@ class TeamApplicationService:
         """
         teams = self._teams.find_all_with_roster()
         active = [p for team in teams for p in team.active_players]
-        retired = sum(
-            1 for team in teams for p in team.players if not p.is_active
-        )
+        retired = sum(1 for team in teams for p in team.players if not p.is_active)
 
-        qualified = {
-            id(p) for p in domain_services.qualified_batters(active)
-        } | {
+        qualified = {id(p) for p in domain_services.qualified_batters(active)} | {
             id(p) for p in domain_services.qualified_pitchers(active)
         }
 
@@ -1006,9 +965,7 @@ class TeamApplicationService:
 
     # --- 更新系 ---
 
-    def register_player(
-        self, team_id: int, name: str, number: int, position_label: str
-    ) -> Player:
+    def register_player(self, team_id: int, name: str, number: int, position_label: str) -> Player:
         """新しい選手をロスターに加える。"""
         team = self._teams.find_by_id(team_id)
         player = team.add_player(
@@ -1019,9 +976,7 @@ class TeamApplicationService:
         self._teams.save(team)
         return player
 
-    def update_player(
-        self, team_id: int, player_id: int, *, name: str, number: int, position_label: str
-    ) -> Player:
+    def update_player(self, team_id: int, player_id: int, *, name: str, number: int, position_label: str) -> Player:
         """選手の基本情報を更新する。
 
         成績は試合から集計するため、ここでは扱わない。
@@ -1046,8 +1001,13 @@ class TeamApplicationService:
 
     @transaction.atomic
     def transfer_player(
-        self, player_id: int, *, from_team_id: int, to_team_id: int,
-        number: int, year: int = None,
+        self,
+        player_id: int,
+        *,
+        from_team_id: int,
+        to_team_id: int,
+        number: int,
+        year: int = None,
     ) -> None:
         """選手を移籍させる。元の在籍を閉じ、移籍先で新しい在籍を開く。
 
@@ -1065,12 +1025,14 @@ class TeamApplicationService:
 
         destination = self._teams.find_by_id(to_team_id)
         destination._ensure_number_is_available(JerseyNumber(number))
-        player.career.append(Stint(
-            team_id=to_team_id,
-            team_name=destination.name,
-            number=JerseyNumber(number),
-            from_year=season,
-        ))
+        player.career.append(
+            Stint(
+                team_id=to_team_id,
+                team_name=destination.name,
+                number=JerseyNumber(number),
+                from_year=season,
+            )
+        )
         player.number = JerseyNumber(number)
         player.is_active = True
         destination.players.append(player)
@@ -1128,7 +1090,7 @@ class TeamApplicationService:
             strikeouts=pitching.strikeouts,
             innings_pitched=str(pitching.innings),
             required_plate_appearances=domain_services.required_plate_appearances(games),
-            required_innings=f'{domain_services.required_outs(games) / 3:.1f}',
+            required_innings=f"{domain_services.required_outs(games) / 3:.1f}",
             fip=pitching.fip(self._league_context(team.league_id).fip_constant),
         )
 
@@ -1150,9 +1112,7 @@ class TeamApplicationService:
                 whip=split.pitching.whip,
                 strikeouts=split.pitching.strikeouts,
             )
-            for split in domain_services.team_monthly_splits(
-                self._games.find_by_team(team_id), team_id, member_ids
-            )
+            for split in domain_services.team_monthly_splits(self._games.find_by_team(team_id), team_id, member_ids)
         ]
 
     def _league_context(self, league_id: int | None) -> _LeagueContext:
@@ -1186,13 +1146,13 @@ class TeamApplicationService:
         for team in self._teams.find_all_with_roster():
             for player in team.players:
                 index[player.id] = {
-                    'name': player.name,
-                    'number': player.number.value,
-                    'team_id': team.id,
-                    'is_foreign_player': player.profile.is_foreign_player,
+                    "name": player.name,
+                    "number": player.number.value,
+                    "team_id": team.id,
+                    "is_foreign_player": player.profile.is_foreign_player,
                     # ボックススコアに並べる参考値。1試合の率は読めないため通算を出す
-                    'batting_average': player.batting.batting_average,
-                    'earned_run_average': player.pitching.earned_run_average,
+                    "batting_average": player.batting.batting_average,
+                    "earned_run_average": player.pitching.earned_run_average,
                 }
         return index
 
@@ -1204,12 +1164,12 @@ class TeamApplicationService:
             year=game.season.year,
             played_on=game.played_on,
             home_team_id=game.home_team_id,
-            home_team_name=names.get(game.home_team_id, ''),
+            home_team_name=names.get(game.home_team_id, ""),
             away_team_id=game.away_team_id,
-            away_team_name=names.get(game.away_team_id, ''),
+            away_team_name=names.get(game.away_team_id, ""),
             home_score=game.home_score,
             away_score=game.away_score,
-            result='引分' if winner is None else f'{names.get(winner, "")} の勝ち',
+            result="引分" if winner is None else f"{names.get(winner, '')} の勝ち",
             winner_team_id=winner,
         )
 

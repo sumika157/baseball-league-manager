@@ -24,25 +24,31 @@ FIELDING_POSITION_CHOICES = [(p.value, p.value) for p in FieldingPosition]
 
 
 class League(models.Model):
-    name = models.CharField(max_length=50, unique=True, verbose_name='リーグ名')
-    created_at = models.DateTimeField(auto_now_add=True, verbose_name='登録日時')
+    name = models.CharField(max_length=50, unique=True, verbose_name="リーグ名")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="登録日時")
     # 管理画面でドラッグして並べ替えた結果がここに入る
-    display_order = models.PositiveIntegerField(default=0, verbose_name='表示順')
+    display_order = models.PositiveIntegerField(default=0, verbose_name="表示順")
     foreign_player_roster_limit = models.PositiveIntegerField(
-        null=True, blank=True, default=5, verbose_name='外国人選手登録枠',
-        help_text='登録できる外国人選手の上限人数。空欄なら無制限。',
+        null=True,
+        blank=True,
+        default=5,
+        verbose_name="外国人選手登録枠",
+        help_text="登録できる外国人選手の上限人数。空欄なら無制限。",
     )
     foreign_player_game_limit = models.PositiveIntegerField(
-        null=True, blank=True, default=3, verbose_name='外国人選手出場枠',
-        help_text='1試合に出場できる外国人選手の上限人数。空欄なら無制限。',
+        null=True,
+        blank=True,
+        default=3,
+        verbose_name="外国人選手出場枠",
+        help_text="1試合に出場できる外国人選手の上限人数。空欄なら無制限。",
     )
 
     class Meta:
-        verbose_name = 'リーグ'
+        verbose_name = "リーグ"
         # 日本語では単複同形。既定のままだと管理画面に 'Leagues' と出る
-        verbose_name_plural = 'リーグ'
+        verbose_name_plural = "リーグ"
         # 手動の並び順を既定とし、未設定どうしは名前で安定させる
-        ordering = ['display_order', 'name']
+        ordering = ["display_order", "name"]
 
     def __str__(self):
         return self.name
@@ -55,56 +61,57 @@ class Stadium(models.Model):
     SURFACE_CHOICES = [(s, s) for s in StadiumProfile.SURFACES]
     ROOF_CHOICES = [(r, r) for r in StadiumProfile.ROOFS]
 
-    name = models.CharField(max_length=100, unique=True, verbose_name='球場名')
-    city = models.CharField(max_length=100, blank=True, verbose_name='所在地')
-    capacity = models.PositiveIntegerField(null=True, blank=True, verbose_name='収容人数')
-    surface = models.CharField(
-        max_length=10, choices=SURFACE_CHOICES, blank=True, verbose_name='グラウンド'
-    )
+    name = models.CharField(max_length=100, unique=True, verbose_name="球場名")
+    city = models.CharField(max_length=100, blank=True, verbose_name="所在地")
+    capacity = models.PositiveIntegerField(null=True, blank=True, verbose_name="収容人数")
+    surface = models.CharField(max_length=10, choices=SURFACE_CHOICES, blank=True, verbose_name="グラウンド")
     roof = models.CharField(
-        max_length=10, choices=ROOF_CHOICES, blank=True, verbose_name='屋根',
-        help_text='開閉式は、屋根を閉じれば天候に左右されません。',
+        max_length=10,
+        choices=ROOF_CHOICES,
+        blank=True,
+        verbose_name="屋根",
+        help_text="開閉式は、屋根を閉じれば天候に左右されません。",
     )
-    opened_year = models.IntegerField(null=True, blank=True, verbose_name='開場年')
+    opened_year = models.IntegerField(null=True, blank=True, verbose_name="開場年")
 
     class Meta:
-        verbose_name = '球場'
-        verbose_name_plural = '球場'
-        ordering = ['name']
+        verbose_name = "球場"
+        verbose_name_plural = "球場"
+        ordering = ["name"]
 
     def __str__(self):
         return self.name
 
 
 class Team(models.Model):
-    league = models.ForeignKey(
-        League, on_delete=models.CASCADE, related_name='teams', verbose_name='リーグ'
-    )
-    name = models.CharField(max_length=100, verbose_name='チーム名')
+    league = models.ForeignKey(League, on_delete=models.CASCADE, related_name="teams", verbose_name="リーグ")
+    name = models.CharField(max_length=100, verbose_name="チーム名")
     home_stadium = models.ForeignKey(
         Stadium,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='home_teams',
-        verbose_name='本拠地球場',
+        related_name="home_teams",
+        verbose_name="本拠地球場",
     )
     # リーグ編集画面でドラッグして並べ替えた結果がここに入る
-    display_order = models.PositiveIntegerField(default=0, verbose_name='表示順')
+    display_order = models.PositiveIntegerField(default=0, verbose_name="表示順")
     # チーム担当者。ログインすれば誰でも全チームを編集できた状態をやめ、
     # 担当者はこのチームが関わる範囲（ロスター・このチームが絡む試合）だけ
     # 編集できるようにする。管理ユーザー（is_staff）は担当者に関わらず全権を持つ
     managers = models.ManyToManyField(
-        settings.AUTH_USER_MODEL, blank=True, related_name='managed_teams',
-        verbose_name='担当者',
-        help_text='このチームの選手・試合を編集できるユーザー。管理ユーザーは常に編集できます。',
+        settings.AUTH_USER_MODEL,
+        blank=True,
+        related_name="managed_teams",
+        verbose_name="担当者",
+        help_text="このチームの選手・試合を編集できるユーザー。管理ユーザーは常に編集できます。",
     )
 
     class Meta:
-        verbose_name = 'チーム'
-        verbose_name_plural = 'チーム'
+        verbose_name = "チーム"
+        verbose_name_plural = "チーム"
         # 手動の並び順を既定とし、未設定どうしは名前で安定させる
-        ordering = ['display_order', 'name']
+        ordering = ["display_order", "name"]
 
     def __str__(self):
         return self.name
@@ -116,48 +123,45 @@ class Player(models.Model):
     移籍すると所属が変わるため、選手そのものにチームを持たせない。
     """
 
-    name = models.CharField(max_length=100, verbose_name='選手名')
-    name_kana = models.CharField(max_length=100, blank=True, verbose_name='よみがな')
+    name = models.CharField(max_length=100, verbose_name="選手名")
+    name_kana = models.CharField(max_length=100, blank=True, verbose_name="よみがな")
     back_name = models.CharField(
-        max_length=20, blank=True, verbose_name='背ネーム',
-        help_text='ユニフォーム背面のアルファベット表記。',
+        max_length=20,
+        blank=True,
+        verbose_name="背ネーム",
+        help_text="ユニフォーム背面のアルファベット表記。",
     )
     position = models.CharField(
         max_length=10,
         choices=POSITION_CHOICES,
         default=Position.INFIELDER.value,
-        verbose_name='守備位置',
+        verbose_name="守備位置",
     )
     # --- プロフィール。どれも任意で、分かっているものだけ埋める ---
     HANDEDNESS_CHOICES = [(h.value, h.value) for h in Handedness]
 
-    birth_date = models.DateField(null=True, blank=True, verbose_name='生年月日')
-    throws = models.CharField(
-        max_length=2, choices=HANDEDNESS_CHOICES, blank=True, verbose_name='投'
-    )
-    bats = models.CharField(
-        max_length=2, choices=HANDEDNESS_CHOICES, blank=True, verbose_name='打'
-    )
-    height_cm = models.PositiveIntegerField(null=True, blank=True, verbose_name='身長(cm)')
-    weight_kg = models.PositiveIntegerField(null=True, blank=True, verbose_name='体重(kg)')
-    birthplace = models.CharField(max_length=100, blank=True, verbose_name='出身地')
-    debut_year = models.IntegerField(null=True, blank=True, verbose_name='入団年')
+    birth_date = models.DateField(null=True, blank=True, verbose_name="生年月日")
+    throws = models.CharField(max_length=2, choices=HANDEDNESS_CHOICES, blank=True, verbose_name="投")
+    bats = models.CharField(max_length=2, choices=HANDEDNESS_CHOICES, blank=True, verbose_name="打")
+    height_cm = models.PositiveIntegerField(null=True, blank=True, verbose_name="身長(cm)")
+    weight_kg = models.PositiveIntegerField(null=True, blank=True, verbose_name="体重(kg)")
+    birthplace = models.CharField(max_length=100, blank=True, verbose_name="出身地")
+    debut_year = models.IntegerField(null=True, blank=True, verbose_name="入団年")
     # プロ入り前の経歴。通った所だけ埋める
-    high_school = models.CharField(max_length=100, blank=True, verbose_name='出身高校')
-    university = models.CharField(max_length=100, blank=True, verbose_name='出身大学')
-    corporate_team = models.CharField(
-        max_length=100, blank=True, verbose_name='出身社会人チーム'
-    )
-    nationality = models.CharField(max_length=100, blank=True, verbose_name='国籍')
+    high_school = models.CharField(max_length=100, blank=True, verbose_name="出身高校")
+    university = models.CharField(max_length=100, blank=True, verbose_name="出身大学")
+    corporate_team = models.CharField(max_length=100, blank=True, verbose_name="出身社会人チーム")
+    nationality = models.CharField(max_length=100, blank=True, verbose_name="国籍")
     is_foreign_player = models.BooleanField(
-        default=False, verbose_name='外国人選手',
-        help_text='外国人枠の対象として数える選手かどうか。',
+        default=False,
+        verbose_name="外国人選手",
+        help_text="外国人枠の対象として数える選手かどうか。",
     )
 
     class Meta:
-        verbose_name = '選手'
-        verbose_name_plural = '選手'
-        ordering = ['name']
+        verbose_name = "選手"
+        verbose_name_plural = "選手"
+        ordering = ["name"]
 
     def __str__(self):
         return f"{self.name} ({self.position})"
@@ -170,32 +174,28 @@ class PlayerStint(models.Model):
     to_year が空なら現在も在籍している。
     """
 
-    player = models.ForeignKey(
-        Player, on_delete=models.CASCADE, related_name='stints', verbose_name='選手'
-    )
-    team = models.ForeignKey(
-        Team, on_delete=models.CASCADE, related_name='stints', verbose_name='チーム'
-    )
-    number = models.IntegerField(verbose_name='背番号')
-    from_year = models.IntegerField(verbose_name='加入年')
+    player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="stints", verbose_name="選手")
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="stints", verbose_name="チーム")
+    number = models.IntegerField(verbose_name="背番号")
+    from_year = models.IntegerField(verbose_name="加入年")
     to_year = models.IntegerField(
-        null=True, blank=True, verbose_name='退団年',
-        help_text='空欄なら現在も在籍しています。',
+        null=True,
+        blank=True,
+        verbose_name="退団年",
+        help_text="空欄なら現在も在籍しています。",
     )
 
     class Meta:
-        verbose_name = '在籍'
-        verbose_name_plural = '在籍'
-        ordering = ['-from_year', 'number']
+        verbose_name = "在籍"
+        verbose_name_plural = "在籍"
+        ordering = ["-from_year", "number"]
         constraints = [
             # 同じチームに同じ年から二重に加入することはない
-            models.UniqueConstraint(
-                fields=['player', 'team', 'from_year'], name='unique_player_team_from'
-            ),
+            models.UniqueConstraint(fields=["player", "team", "from_year"], name="unique_player_team_from"),
         ]
 
     def __str__(self):
-        end = self.to_year or '現在'
+        end = self.to_year or "現在"
         return f"{self.player.name} / {self.team.name} ({self.from_year}〜{end})"
 
 
@@ -205,55 +205,47 @@ class Captaincy(models.Model):
     to_year が空なら現在も主将。
     """
 
-    player = models.ForeignKey(
-        Player, on_delete=models.CASCADE, related_name='captaincies', verbose_name='選手'
-    )
-    team = models.ForeignKey(
-        Team, on_delete=models.CASCADE, related_name='captaincies', verbose_name='チーム'
-    )
-    from_year = models.IntegerField(verbose_name='就任年')
+    player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="captaincies", verbose_name="選手")
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="captaincies", verbose_name="チーム")
+    from_year = models.IntegerField(verbose_name="就任年")
     to_year = models.IntegerField(
-        null=True, blank=True, verbose_name='退任年',
-        help_text='空欄なら現在も主将です。',
+        null=True,
+        blank=True,
+        verbose_name="退任年",
+        help_text="空欄なら現在も主将です。",
     )
 
     class Meta:
-        verbose_name = '主将在任'
-        verbose_name_plural = '主将在任'
-        ordering = ['-from_year']
+        verbose_name = "主将在任"
+        verbose_name_plural = "主将在任"
+        ordering = ["-from_year"]
         constraints = [
-            models.UniqueConstraint(
-                fields=['player', 'team', 'from_year'], name='unique_captaincy_player_team_from'
-            ),
+            models.UniqueConstraint(fields=["player", "team", "from_year"], name="unique_captaincy_player_team_from"),
         ]
 
     def __str__(self):
-        end = self.to_year or '現在'
+        end = self.to_year or "現在"
         return f"{self.player.name} / {self.team.name} 主将 ({self.from_year}〜{end})"
 
 
 class Game(models.Model):
     """試合。チームの勝敗も選手の成績も、すべてここから集計する。"""
 
-    year = models.IntegerField(verbose_name='シーズン')
-    played_on = models.DateField(verbose_name='試合日')
-    home_team = models.ForeignKey(
-        Team, on_delete=models.CASCADE, related_name='home_games', verbose_name='ホーム'
-    )
-    away_team = models.ForeignKey(
-        Team, on_delete=models.CASCADE, related_name='away_games', verbose_name='ビジター'
-    )
-    home_score = models.PositiveIntegerField(default=0, verbose_name='ホーム得点')
-    away_score = models.PositiveIntegerField(default=0, verbose_name='ビジター得点')
+    year = models.IntegerField(verbose_name="シーズン")
+    played_on = models.DateField(verbose_name="試合日")
+    home_team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="home_games", verbose_name="ホーム")
+    away_team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="away_games", verbose_name="ビジター")
+    home_score = models.PositiveIntegerField(default=0, verbose_name="ホーム得点")
+    away_score = models.PositiveIntegerField(default=0, verbose_name="ビジター得点")
 
     class Meta:
-        verbose_name = '試合'
-        verbose_name_plural = '試合'
-        ordering = ['-played_on', '-id']
+        verbose_name = "試合"
+        verbose_name_plural = "試合"
+        ordering = ["-played_on", "-id"]
         constraints = [
             models.CheckConstraint(
-                check=~models.Q(home_team=models.F('away_team')),
-                name='game_teams_differ',
+                check=~models.Q(home_team=models.F("away_team")),
+                name="game_teams_differ",
             ),
         ]
 
@@ -268,70 +260,66 @@ class GameInningScore(models.Model):
     導けない。延長もあるので回数は固定しない。
     """
 
-    game = models.ForeignKey(
-        Game, on_delete=models.CASCADE, related_name='inning_scores', verbose_name='試合'
-    )
-    inning = models.PositiveIntegerField(verbose_name='回')
+    game = models.ForeignKey(Game, on_delete=models.CASCADE, related_name="inning_scores", verbose_name="試合")
+    inning = models.PositiveIntegerField(verbose_name="回")
     is_home = models.BooleanField(
-        verbose_name='ホームの攻撃',
-        help_text='ビジターが表、ホームが裏に攻めます。',
+        verbose_name="ホームの攻撃",
+        help_text="ビジターが表、ホームが裏に攻めます。",
     )
-    runs = models.PositiveIntegerField(default=0, verbose_name='得点')
+    runs = models.PositiveIntegerField(default=0, verbose_name="得点")
 
     class Meta:
-        verbose_name = 'イニングスコア'
-        verbose_name_plural = 'イニングスコア'
-        ordering = ['inning', 'is_home']
+        verbose_name = "イニングスコア"
+        verbose_name_plural = "イニングスコア"
+        ordering = ["inning", "is_home"]
         constraints = [
-            models.UniqueConstraint(
-                fields=['game', 'inning', 'is_home'], name='unique_game_inning_half'
-            ),
+            models.UniqueConstraint(fields=["game", "inning", "is_home"], name="unique_game_inning_half"),
         ]
 
     def __str__(self):
-        half = '裏' if self.is_home else '表'
+        half = "裏" if self.is_home else "表"
         return f"{self.inning}回{half} {self.runs}点"
 
 
 class GameBattingLine(models.Model):
     """1試合ぶんの打撃成績。"""
 
-    game = models.ForeignKey(
-        Game, on_delete=models.CASCADE, related_name='batting_lines', verbose_name='試合'
-    )
-    player = models.ForeignKey(
-        Player, on_delete=models.CASCADE, related_name='game_batting', verbose_name='選手'
-    )
+    game = models.ForeignKey(Game, on_delete=models.CASCADE, related_name="batting_lines", verbose_name="試合")
+    player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="game_batting", verbose_name="選手")
     # 打線での位置づけ。並びはこの3つで決まる（打順 → 交代の順）
     batting_order = models.IntegerField(
-        null=True, blank=True, verbose_name='打順',
-        help_text='1〜9。空欄なら並びは末尾になります。',
+        null=True,
+        blank=True,
+        verbose_name="打順",
+        help_text="1〜9。空欄なら並びは末尾になります。",
     )
     slot_sequence = models.IntegerField(
-        default=0, verbose_name='交代の順',
-        help_text='0 がスタメン。1以上は同じ打順への途中出場です。',
+        default=0,
+        verbose_name="交代の順",
+        help_text="0 がスタメン。1以上は同じ打順への途中出場です。",
     )
     fielding_position = models.CharField(
-        max_length=2, choices=FIELDING_POSITION_CHOICES, blank=True,
-        verbose_name='守備位置', help_text='この試合で就いた守備。代打は「打」、代走は「走」。',
+        max_length=2,
+        choices=FIELDING_POSITION_CHOICES,
+        blank=True,
+        verbose_name="守備位置",
+        help_text="この試合で就いた守備。代打は「打」、代走は「走」。",
     )
-    at_bats = models.IntegerField(default=0, verbose_name='打数')
-    singles = models.IntegerField(default=0, verbose_name='単打')
-    doubles = models.IntegerField(default=0, verbose_name='二塁打')
-    triples = models.IntegerField(default=0, verbose_name='三塁打')
-    home_runs = models.IntegerField(default=0, verbose_name='本塁打')
-    runs_batted_in = models.IntegerField(default=0, verbose_name='打点')
-    walks = models.IntegerField(default=0, verbose_name='四球')
-    hit_by_pitch = models.IntegerField(default=0, verbose_name='死球')
-    sacrifice_flies = models.IntegerField(default=0, verbose_name='犠飛')
+    at_bats = models.IntegerField(default=0, verbose_name="打数")
+    singles = models.IntegerField(default=0, verbose_name="単打")
+    doubles = models.IntegerField(default=0, verbose_name="二塁打")
+    triples = models.IntegerField(default=0, verbose_name="三塁打")
+    home_runs = models.IntegerField(default=0, verbose_name="本塁打")
+    runs_batted_in = models.IntegerField(default=0, verbose_name="打点")
+    walks = models.IntegerField(default=0, verbose_name="四球")
+    hit_by_pitch = models.IntegerField(default=0, verbose_name="死球")
+    sacrifice_flies = models.IntegerField(default=0, verbose_name="犠飛")
 
     class Meta:
-        verbose_name = '打撃成績'
-        verbose_name_plural = '打撃成績'
+        verbose_name = "打撃成績"
+        verbose_name_plural = "打撃成績"
         constraints = [
-            models.UniqueConstraint(
-                fields=['game', 'player'], name='unique_game_batting'
-            ),
+            models.UniqueConstraint(fields=["game", "player"], name="unique_game_batting"),
         ]
 
     def __str__(self):
@@ -341,39 +329,33 @@ class GameBattingLine(models.Model):
 class GamePitchingLine(models.Model):
     """1試合ぶんの投球成績。"""
 
-    game = models.ForeignKey(
-        Game, on_delete=models.CASCADE, related_name='pitching_lines', verbose_name='試合'
-    )
-    player = models.ForeignKey(
-        Player, on_delete=models.CASCADE, related_name='game_pitching', verbose_name='選手'
-    )
+    game = models.ForeignKey(Game, on_delete=models.CASCADE, related_name="pitching_lines", verbose_name="試合")
+    player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="game_pitching", verbose_name="選手")
     # 登板順。1 が先発。ボックススコアは投げた順に並べる
-    appearance_order = models.IntegerField(default=1, verbose_name='登板順')
+    appearance_order = models.IntegerField(default=1, verbose_name="登板順")
     # 何回から投げたか。セーブ・ホールドの条件は登板した時点のスコアで決まる
-    entered_inning = models.PositiveIntegerField(default=1, verbose_name='登板した回')
+    entered_inning = models.PositiveIntegerField(default=1, verbose_name="登板した回")
     # 野球表記の投球回（5.2 = 5回と2/3）。解釈は domain の InningsPitched が担う。
-    innings_pitched = models.FloatField(default=0.0, verbose_name='投球回')
-    wins = models.IntegerField(default=0, verbose_name='勝利')
-    losses = models.IntegerField(default=0, verbose_name='敗戦')
-    saves = models.IntegerField(default=0, verbose_name='セーブ')
+    innings_pitched = models.FloatField(default=0.0, verbose_name="投球回")
+    wins = models.IntegerField(default=0, verbose_name="勝利")
+    losses = models.IntegerField(default=0, verbose_name="敗戦")
+    saves = models.IntegerField(default=0, verbose_name="セーブ")
     # 日本プロ野球の公式記録。セーブが記録される状況で登板し、
     # リードを保ったまま次の投手へ引き継いだ救援投手に付く
-    holds = models.IntegerField(default=0, verbose_name='ホールド')
-    earned_runs = models.IntegerField(default=0, verbose_name='自責点')
-    strikeouts = models.IntegerField(default=0, verbose_name='奪三振')
-    hits_allowed = models.IntegerField(default=0, verbose_name='被安打')
-    walks_allowed = models.IntegerField(default=0, verbose_name='与四球')
+    holds = models.IntegerField(default=0, verbose_name="ホールド")
+    earned_runs = models.IntegerField(default=0, verbose_name="自責点")
+    strikeouts = models.IntegerField(default=0, verbose_name="奪三振")
+    hits_allowed = models.IntegerField(default=0, verbose_name="被安打")
+    walks_allowed = models.IntegerField(default=0, verbose_name="与四球")
     # FIP は本塁打・四死球・三振だけで投手を評価するため、この2つが要る
-    home_runs_allowed = models.IntegerField(default=0, verbose_name='被本塁打')
-    hit_by_pitch_allowed = models.IntegerField(default=0, verbose_name='与死球')
+    home_runs_allowed = models.IntegerField(default=0, verbose_name="被本塁打")
+    hit_by_pitch_allowed = models.IntegerField(default=0, verbose_name="与死球")
 
     class Meta:
-        verbose_name = '投球成績'
-        verbose_name_plural = '投球成績'
+        verbose_name = "投球成績"
+        verbose_name_plural = "投球成績"
         constraints = [
-            models.UniqueConstraint(
-                fields=['game', 'player'], name='unique_game_pitching'
-            ),
+            models.UniqueConstraint(fields=["game", "player"], name="unique_game_pitching"),
         ]
 
     def __str__(self):

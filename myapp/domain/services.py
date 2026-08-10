@@ -58,7 +58,9 @@ def required_outs(team_games: int) -> int:
 
 
 def qualified_batters(
-    players: list[Player], *, team_games: dict[int, int] | None = None,
+    players: list[Player],
+    *,
+    team_games: dict[int, int] | None = None,
     minimum_at_bats: int = 1,
 ) -> list[Player]:
     """打撃タイトルの対象となる選手。
@@ -73,17 +75,13 @@ def qualified_batters(
         return [p for p in batters if p.batting.at_bats >= minimum_at_bats]
 
     return [
-        p for p in batters
-        if p.batting.plate_appearances >= required_plate_appearances(
-            team_games.get(p.id, 0)
-        )
-        and p.batting.at_bats > 0
+        p
+        for p in batters
+        if p.batting.plate_appearances >= required_plate_appearances(team_games.get(p.id, 0)) and p.batting.at_bats > 0
     ]
 
 
-def qualified_pitchers(
-    players: list[Player], *, team_games: dict[int, int] | None = None
-) -> list[Player]:
+def qualified_pitchers(players: list[Player], *, team_games: dict[int, int] | None = None) -> list[Player]:
     """投球タイトルの対象となる投手。
 
     team_games を渡すと規定投球回で絞る。渡さない場合は未登板だけを除く。
@@ -93,90 +91,71 @@ def qualified_pitchers(
     if team_games is None:
         return pitchers
 
-    return [
-        p for p in pitchers
-        if p.pitching.innings.outs >= required_outs(team_games.get(p.id, 0))
-    ]
+    return [p for p in pitchers if p.pitching.innings.outs >= required_outs(team_games.get(p.id, 0))]
 
 
 def leaders_by_ops(
-    players: list[Player], *, limit: int | None = 5,
-    team_games: dict[int, int] | None = None, minimum_at_bats: int = 1,
+    players: list[Player],
+    *,
+    limit: int | None = 5,
+    team_games: dict[int, int] | None = None,
+    minimum_at_bats: int = 1,
 ) -> list[RankedPlayer]:
     """OPS の高い順。規定打席に達した選手のみ。"""
     entries = [
-        (p, p.batting.ops)
-        for p in qualified_batters(
-            players, team_games=team_games, minimum_at_bats=minimum_at_bats
-        )
+        (p, p.batting.ops) for p in qualified_batters(players, team_games=team_games, minimum_at_bats=minimum_at_bats)
     ]
     entries.sort(key=lambda e: (-e[1], e[0].name))
     return _rank(entries, limit)
 
 
 def leaders_by_batting_average(
-    players: list[Player], *, limit: int | None = 5,
-    team_games: dict[int, int] | None = None, minimum_at_bats: int = 1,
+    players: list[Player],
+    *,
+    limit: int | None = 5,
+    team_games: dict[int, int] | None = None,
+    minimum_at_bats: int = 1,
 ) -> list[RankedPlayer]:
     """打率の高い順。規定打席に達した選手のみ。"""
     entries = [
         (p, p.batting.batting_average)
-        for p in qualified_batters(
-            players, team_games=team_games, minimum_at_bats=minimum_at_bats
-        )
+        for p in qualified_batters(players, team_games=team_games, minimum_at_bats=minimum_at_bats)
     ]
     entries.sort(key=lambda e: (-e[1], e[0].name))
     return _rank(entries, limit)
 
 
-def leaders_by_home_runs(
-    players: list[Player], *, limit: int | None = 5
-) -> list[RankedPlayer]:
+def leaders_by_home_runs(players: list[Player], *, limit: int | None = 5) -> list[RankedPlayer]:
     """本塁打の多い順。本数そのものが記録なので打数の規定は設けない。"""
-    entries = [
-        (p, float(p.batting.home_runs))
-        for p in players
-        if not p.is_pitcher and p.batting.home_runs > 0
-    ]
+    entries = [(p, float(p.batting.home_runs)) for p in players if not p.is_pitcher and p.batting.home_runs > 0]
     entries.sort(key=lambda e: (-e[1], e[0].name))
     return _rank(entries, limit)
 
 
-def leaders_by_runs_batted_in(
-    players: list[Player], *, limit: int | None = 5
-) -> list[RankedPlayer]:
+def leaders_by_runs_batted_in(players: list[Player], *, limit: int | None = 5) -> list[RankedPlayer]:
     """打点の多い順。本塁打と同じく本数そのものが記録なので規定を設けない。"""
     entries = [
-        (p, float(p.batting.runs_batted_in))
-        for p in players
-        if not p.is_pitcher and p.batting.runs_batted_in > 0
+        (p, float(p.batting.runs_batted_in)) for p in players if not p.is_pitcher and p.batting.runs_batted_in > 0
     ]
     entries.sort(key=lambda e: (-e[1], e[0].name))
     return _rank(entries, limit)
 
 
 def leaders_by_era(
-    players: list[Player], *, limit: int | None = 5,
+    players: list[Player],
+    *,
+    limit: int | None = 5,
     team_games: dict[int, int] | None = None,
 ) -> list[RankedPlayer]:
     """防御率の低い順。規定投球回に達した投手のみ。"""
-    entries = [
-        (p, p.pitching.earned_run_average)
-        for p in qualified_pitchers(players, team_games=team_games)
-    ]
+    entries = [(p, p.pitching.earned_run_average) for p in qualified_pitchers(players, team_games=team_games)]
     entries.sort(key=lambda e: (e[1], e[0].name))
     return _rank(entries, limit)
 
 
-def leaders_by_strikeouts(
-    players: list[Player], *, limit: int | None = 5
-) -> list[RankedPlayer]:
+def leaders_by_strikeouts(players: list[Player], *, limit: int | None = 5) -> list[RankedPlayer]:
     """奪三振の多い順。"""
-    entries = [
-        (p, float(p.pitching.strikeouts))
-        for p in players
-        if p.is_pitcher and p.pitching.strikeouts > 0
-    ]
+    entries = [(p, float(p.pitching.strikeouts)) for p in players if p.is_pitcher and p.pitching.strikeouts > 0]
     entries.sort(key=lambda e: (-e[1], e[0].name))
     return _rank(entries, limit)
 
@@ -190,52 +169,52 @@ def leaders_by_strikeouts(
 # 打率や本塁打は多いほど良く、防御率や敗戦は少ないほど良い、という違いを
 # 画面側で覚えずに済ませるため。
 BATTER_SORT_KEYS = {
-    'number': (lambda p: p.number.value, False),
-    'name': (lambda p: p.name, False),
-    'average': (lambda p: p.batting.batting_average, True),
-    'hits': (lambda p: p.batting.hits, True),
-    'doubles': (lambda p: p.batting.doubles, True),
-    'triples': (lambda p: p.batting.triples, True),
-    'home_runs': (lambda p: p.batting.home_runs, True),
-    'rbi': (lambda p: p.batting.runs_batted_in, True),
-    'walks': (lambda p: p.batting.walks, True),
-    'sacrifice_flies': (lambda p: p.batting.sacrifice_flies, True),
-    'obp': (lambda p: p.batting.on_base_percentage, True),
-    'slg': (lambda p: p.batting.slugging_percentage, True),
-    'ops': (lambda p: p.batting.ops, True),
-    'iso': (lambda p: p.batting.isolated_power, True),
+    "number": (lambda p: p.number.value, False),
+    "name": (lambda p: p.name, False),
+    "average": (lambda p: p.batting.batting_average, True),
+    "hits": (lambda p: p.batting.hits, True),
+    "doubles": (lambda p: p.batting.doubles, True),
+    "triples": (lambda p: p.batting.triples, True),
+    "home_runs": (lambda p: p.batting.home_runs, True),
+    "rbi": (lambda p: p.batting.runs_batted_in, True),
+    "walks": (lambda p: p.batting.walks, True),
+    "sacrifice_flies": (lambda p: p.batting.sacrifice_flies, True),
+    "obp": (lambda p: p.batting.on_base_percentage, True),
+    "slg": (lambda p: p.batting.slugging_percentage, True),
+    "ops": (lambda p: p.batting.ops, True),
+    "iso": (lambda p: p.batting.isolated_power, True),
 }
 
 PITCHER_SORT_KEYS = {
-    'number': (lambda p: p.number.value, False),
-    'name': (lambda p: p.name, False),
-    'innings': (lambda p: p.pitching.innings.outs, True),
-    'era': (lambda p: p.pitching.earned_run_average, False),
-    'wins': (lambda p: p.pitching.wins, True),
-    'losses': (lambda p: p.pitching.losses, True),
-    'saves': (lambda p: p.pitching.saves, True),
-    'holds': (lambda p: p.pitching.holds, True),
-    'hold_points': (lambda p: p.pitching.hold_points, True),
-    'starts': (lambda p: p.pitching.starts, True),
-    'strikeouts': (lambda p: p.pitching.strikeouts, True),
-    'whip': (lambda p: p.pitching.whip, False),
-    'k9': (lambda p: p.pitching.strikeouts_per_nine, True),
-    'bb9': (lambda p: p.pitching.walks_per_nine, False),
+    "number": (lambda p: p.number.value, False),
+    "name": (lambda p: p.name, False),
+    "innings": (lambda p: p.pitching.innings.outs, True),
+    "era": (lambda p: p.pitching.earned_run_average, False),
+    "wins": (lambda p: p.pitching.wins, True),
+    "losses": (lambda p: p.pitching.losses, True),
+    "saves": (lambda p: p.pitching.saves, True),
+    "holds": (lambda p: p.pitching.holds, True),
+    "hold_points": (lambda p: p.pitching.hold_points, True),
+    "starts": (lambda p: p.pitching.starts, True),
+    "strikeouts": (lambda p: p.pitching.strikeouts, True),
+    "whip": (lambda p: p.pitching.whip, False),
+    "k9": (lambda p: p.pitching.strikeouts_per_nine, True),
+    "bb9": (lambda p: p.pitching.walks_per_nine, False),
     # FIP はリーグ共通の定数を足して仕上げる指標なので、素点で並べても
     # 順序は変わらない（全員に同じ値が足されるだけ）。定数を持たない
     # 並べ替えの場面でも、素点をそのまま比較に使える
-    'fip': (lambda p: p.pitching.fip_base, False),
-    'home_runs_allowed': (lambda p: p.pitching.home_runs_allowed, True),
-    'hit_by_pitch_allowed': (lambda p: p.pitching.hit_by_pitch_allowed, True),
+    "fip": (lambda p: p.pitching.fip_base, False),
+    "home_runs_allowed": (lambda p: p.pitching.home_runs_allowed, True),
+    "hit_by_pitch_allowed": (lambda p: p.pitching.hit_by_pitch_allowed, True),
 }
 
-DEFAULT_BATTER_SORT = 'ops'
-DEFAULT_PITCHER_SORT = 'era'
+DEFAULT_BATTER_SORT = "ops"
+DEFAULT_PITCHER_SORT = "era"
 
 
 # 率で並べる指標。未登板だと 0 になり、実力と無関係に上位や下位へ寄るため、
 # これらで並べるときは未登板を常に末尾へ回す。
-_RATE_PITCHER_KEYS = {'era', 'whip', 'k9', 'bb9', 'fip'}
+_RATE_PITCHER_KEYS = {"era", "whip", "k9", "bb9", "fip"}
 
 
 def _resolve(keys, key, descending, default_key):
@@ -315,9 +294,9 @@ def team_record(games: list[Game], team_id: int) -> TeamRecord:
         if not game.involves(team_id):
             continue
         result = game.result_for(team_id)
-        if result == 'win':
+        if result == "win":
             wins += 1
-        elif result == 'loss':
+        elif result == "loss":
             losses += 1
         else:
             ties += 1
@@ -326,22 +305,12 @@ def team_record(games: list[Game], team_id: int) -> TeamRecord:
 
 def player_batting_total(games: list[Game], player_id: int) -> BattingLine:
     """試合の一覧から選手の通算打撃成績を集計する。"""
-    return BattingLine.total(
-        entry.line
-        for game in games
-        for entry in game.batting
-        if entry.player_id == player_id
-    )
+    return BattingLine.total(entry.line for game in games for entry in game.batting if entry.player_id == player_id)
 
 
 def player_pitching_total(games: list[Game], player_id: int) -> PitchingLine:
     """試合の一覧から選手の通算投球成績を集計する。"""
-    return PitchingLine.total(
-        entry.line
-        for game in games
-        for entry in game.pitching
-        if entry.player_id == player_id
-    )
+    return PitchingLine.total(entry.line for game in games for entry in game.pitching if entry.player_id == player_id)
 
 
 def team_batting(players: list[Player]) -> BattingLine:
@@ -444,9 +413,7 @@ def head_to_head(games: list[Game], team_id: int, opponent_id: int) -> TeamRecor
 
     games は対象シーズンに絞り込んだものを渡す。
     """
-    between = [
-        g for g in games if g.involves(team_id) and g.involves(opponent_id)
-    ]
+    between = [g for g in games if g.involves(team_id) and g.involves(opponent_id)]
     return team_record(between, team_id)
 
 
@@ -467,12 +434,14 @@ def matchups(teams: list[Team], games: list[Game]) -> list[MatchupRow]:
             for other in order
             if other.team_id != row.team_id
         }
-        rows.append(MatchupRow(
-            team_id=row.team_id,
-            team_name=name_of.get(row.team_id, row.team_name),
-            against=against,
-            total=row.record,
-        ))
+        rows.append(
+            MatchupRow(
+                team_id=row.team_id,
+                team_name=name_of.get(row.team_id, row.team_name),
+                against=against,
+                total=row.record,
+            )
+        )
     return rows
 
 
@@ -519,9 +488,7 @@ class TeamMonthlySplit:
         return self.record.games_played
 
 
-def team_monthly_splits(
-    games: list[Game], team_id: int, member_ids: set[int]
-) -> list[TeamMonthlySplit]:
+def team_monthly_splits(games: list[Game], team_id: int, member_ids: set[int]) -> list[TeamMonthlySplit]:
     """チームの成績を月ごとにまとめる。古い順。
 
     member_ids はそのチームの選手。試合の明細は両チームの選手が混ざって
@@ -541,16 +508,10 @@ def team_monthly_splits(
             month=month,
             record=team_record(month_games, team_id),
             batting=BattingLine.total(
-                entry.line
-                for game in month_games
-                for entry in game.batting
-                if entry.player_id in member_ids
+                entry.line for game in month_games for entry in game.batting if entry.player_id in member_ids
             ),
             pitching=PitchingLine.total(
-                entry.line
-                for game in month_games
-                for entry in game.pitching
-                if entry.player_id in member_ids
+                entry.line for game in month_games for entry in game.pitching if entry.player_id in member_ids
             ),
         )
         for (year, month), month_games in sorted(buckets.items())
@@ -629,10 +590,7 @@ class PitchingDecisions:
 
 def _staff_of(game: Game, team_ids: set[int], team_of: dict[int, int]):
     """指定チームの投手を、登板順に並べて返す。"""
-    entries = [
-        entry for entry in game.pitching
-        if team_of.get(entry.player_id) in team_ids
-    ]
+    entries = [entry for entry in game.pitching if team_of.get(entry.player_id) in team_ids]
     return sorted(entries, key=lambda e: (e.appearance_order, e.entered_inning))
 
 
@@ -730,9 +688,7 @@ def pitching_decisions(game: Game, team_of: dict[int, int]) -> PitchingDecisions
     inning, _ = _decisive_inning(game, winner_is_home=winner_is_home)
 
     winner = _pitcher_covering(winning_staff, inning)
-    if winner is not None and winner.is_starter and (
-        winner.line.innings.outs < STARTER_WIN_MINIMUM_OUTS
-    ):
+    if winner is not None and winner.is_starter and (winner.line.innings.outs < STARTER_WIN_MINIMUM_OUTS):
         winner = _most_effective_reliever(winning_staff) or winner
 
     loser = _pitcher_covering(losing_staff, inning)
@@ -743,9 +699,7 @@ def pitching_decisions(game: Game, team_of: dict[int, int]) -> PitchingDecisions
         loser_id=loser.player_id if loser else None,
         save_id=save.player_id if save else None,
         # 勝利投手にホールドは付かない
-        hold_ids=frozenset(
-            pid for pid in holds if winner is None or pid != winner.player_id
-        ),
+        hold_ids=frozenset(pid for pid in holds if winner is None or pid != winner.player_id),
     )
 
 
@@ -766,10 +720,7 @@ def _save(game: Game, staff, winner, *, is_home: bool):
         return None
 
     outs = finisher.line.innings.outs
-    qualifies = (
-        (lead <= SAVE_LEAD_LIMIT and outs >= SAVE_MINIMUM_OUTS)
-        or outs >= SAVE_LONG_RELIEF_OUTS
-    )
+    qualifies = (lead <= SAVE_LEAD_LIMIT and outs >= SAVE_MINIMUM_OUTS) or outs >= SAVE_LONG_RELIEF_OUTS
     return finisher if qualifies else None
 
 

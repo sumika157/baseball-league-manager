@@ -13,9 +13,7 @@ from ..infrastructure.repositories import DjangoTeamRepository
 register = template.Library()
 
 
-@register.inclusion_tag('admin/_overview.html')
+@register.inclusion_tag("admin/_overview.html")
 def admin_overview():
-    service = TeamApplicationService(
-        teams=DjangoTeamRepository(), team_list_query=DjangoTeamListQuery()
-    )
-    return {'overview': service.get_admin_overview()}
+    service = TeamApplicationService(teams=DjangoTeamRepository(), team_list_query=DjangoTeamListQuery())
+    return {"overview": service.get_admin_overview()}

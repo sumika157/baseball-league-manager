@@ -43,12 +43,10 @@ class CaptaincyTest(TestCase):
 
 class TeamCaptaincyTest(TestCase):
     def setUp(self):
-        self.team = Team(name='テストチーム', id=1, league_id=1)
+        self.team = Team(name="テストチーム", id=1, league_id=1)
 
     def test_appointing_a_captain_opens_a_captaincy(self):
-        player = self.team.add_player(
-            '山田', JerseyNumber(10), Position.INFIELDER, from_year=2026
-        )
+        player = self.team.add_player("山田", JerseyNumber(10), Position.INFIELDER, from_year=2026)
 
         self.team.appoint_captain(player, 2026)
 
@@ -57,30 +55,22 @@ class TeamCaptaincyTest(TestCase):
         self.assertIs(self.team.current_captain, player)
 
     def test_appointing_a_second_captain_is_rejected(self):
-        first = self.team.add_player(
-            '山田', JerseyNumber(10), Position.INFIELDER, from_year=2026
-        )
-        second = self.team.add_player(
-            '田中', JerseyNumber(11), Position.OUTFIELDER, from_year=2026
-        )
+        first = self.team.add_player("山田", JerseyNumber(10), Position.INFIELDER, from_year=2026)
+        second = self.team.add_player("田中", JerseyNumber(11), Position.OUTFIELDER, from_year=2026)
         self.team.appoint_captain(first, 2026)
 
         with self.assertRaises(DuplicateCaptain):
             self.team.appoint_captain(second, 2026)
 
     def test_appointing_a_player_not_on_the_roster_is_rejected(self):
-        player = self.team.add_player(
-            '山田', JerseyNumber(10), Position.INFIELDER, from_year=2024
-        )
+        player = self.team.add_player("山田", JerseyNumber(10), Position.INFIELDER, from_year=2024)
         self.team.retire_player(player, 2025)
 
         with self.assertRaises(PlayerNotEligibleForCaptaincy):
             self.team.appoint_captain(player, 2026)
 
     def test_appointing_the_current_captain_again_is_a_no_op(self):
-        player = self.team.add_player(
-            '山田', JerseyNumber(10), Position.INFIELDER, from_year=2026
-        )
+        player = self.team.add_player("山田", JerseyNumber(10), Position.INFIELDER, from_year=2026)
         self.team.appoint_captain(player, 2026)
 
         self.team.appoint_captain(player, 2026)
@@ -88,9 +78,7 @@ class TeamCaptaincyTest(TestCase):
         self.assertEqual(len(player.captaincies), 1)
 
     def test_removing_the_captain_closes_the_captaincy(self):
-        player = self.team.add_player(
-            '山田', JerseyNumber(10), Position.INFIELDER, from_year=2026
-        )
+        player = self.team.add_player("山田", JerseyNumber(10), Position.INFIELDER, from_year=2026)
         self.team.appoint_captain(player, 2026)
 
         self.team.remove_captain(player, 2027)
@@ -100,9 +88,7 @@ class TeamCaptaincyTest(TestCase):
         self.assertIsNone(self.team.current_captain)
 
     def test_removing_a_non_captain_is_a_no_op(self):
-        player = self.team.add_player(
-            '山田', JerseyNumber(10), Position.INFIELDER, from_year=2026
-        )
+        player = self.team.add_player("山田", JerseyNumber(10), Position.INFIELDER, from_year=2026)
 
         self.team.remove_captain(player, 2027)  # 例外にならない
 
@@ -110,9 +96,7 @@ class TeamCaptaincyTest(TestCase):
 
     def test_retiring_the_captain_also_closes_the_captaincy(self):
         """在籍していないのに主将、という両立しない状態を残さない。"""
-        player = self.team.add_player(
-            '山田', JerseyNumber(10), Position.INFIELDER, from_year=2024
-        )
+        player = self.team.add_player("山田", JerseyNumber(10), Position.INFIELDER, from_year=2024)
         self.team.appoint_captain(player, 2024)
 
         self.team.retire_player(player, 2026)
@@ -121,12 +105,8 @@ class TeamCaptaincyTest(TestCase):
         self.assertFalse(player.captaincies[0].is_current)
 
     def test_reappointing_a_different_captain_after_removal(self):
-        first = self.team.add_player(
-            '山田', JerseyNumber(10), Position.INFIELDER, from_year=2026
-        )
-        second = self.team.add_player(
-            '田中', JerseyNumber(11), Position.OUTFIELDER, from_year=2026
-        )
+        first = self.team.add_player("山田", JerseyNumber(10), Position.INFIELDER, from_year=2026)
+        second = self.team.add_player("田中", JerseyNumber(11), Position.OUTFIELDER, from_year=2026)
         self.team.appoint_captain(first, 2026)
         self.team.remove_captain(first, 2027)
 

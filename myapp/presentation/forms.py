@@ -11,9 +11,7 @@ from ..domain.value_objects import FieldingPosition, Position
 
 POSITION_CHOICES = [(position.value, position.value) for position in Position]
 # 試合で就いた守備位置。未記録も許すので空の選択肢を先頭に置く
-FIELDING_POSITION_CHOICES = [('', '—')] + [
-    (p.value, p.value) for p in FieldingPosition
-]
+FIELDING_POSITION_CHOICES = [("", "—")] + [(p.value, p.value) for p in FieldingPosition]
 # 1試合の回数。延長を含めても12回までを入力できるようにする
 MAX_INNINGS = 12
 
@@ -21,10 +19,10 @@ MAX_INNINGS = 12
 class PlayerRegistrationForm(forms.Form):
     """新入団選手の登録。"""
 
-    name = forms.CharField(label='選手名', max_length=100)
-    number = forms.IntegerField(label='背番号', min_value=0, max_value=999)
+    name = forms.CharField(label="選手名", max_length=100)
+    number = forms.IntegerField(label="背番号", min_value=0, max_value=999)
     position = forms.ChoiceField(
-        label='守備位置',
+        label="守備位置",
         choices=POSITION_CHOICES,
         initial=Position.INFIELDER.value,
     )
@@ -41,14 +39,12 @@ class GameForm(forms.Form):
     ここでは型と必須だけを見る。
     """
 
-    year = forms.IntegerField(label='シーズン', min_value=1900, max_value=2100)
-    played_on = forms.DateField(
-        label='試合日', widget=forms.DateInput(attrs={'type': 'date'})
-    )
-    home_team = forms.IntegerField(label='ホーム', widget=forms.HiddenInput)
-    away_team = forms.IntegerField(label='ビジター', widget=forms.HiddenInput)
-    home_score = forms.IntegerField(label='ホーム得点', min_value=0, initial=0)
-    away_score = forms.IntegerField(label='ビジター得点', min_value=0, initial=0)
+    year = forms.IntegerField(label="シーズン", min_value=1900, max_value=2100)
+    played_on = forms.DateField(label="試合日", widget=forms.DateInput(attrs={"type": "date"}))
+    home_team = forms.IntegerField(label="ホーム", widget=forms.HiddenInput)
+    away_team = forms.IntegerField(label="ビジター", widget=forms.HiddenInput)
+    home_score = forms.IntegerField(label="ホーム得点", min_value=0, initial=0)
+    away_score = forms.IntegerField(label="ビジター得点", min_value=0, initial=0)
 
 
 class InningScoreForm(forms.Form):
@@ -59,18 +55,15 @@ class InningScoreForm(forms.Form):
     """
 
     inning = forms.IntegerField(widget=forms.HiddenInput)
-    away = forms.IntegerField(label='表', min_value=0, required=False)
-    home = forms.IntegerField(label='裏', min_value=0, required=False)
+    away = forms.IntegerField(label="表", min_value=0, required=False)
+    home = forms.IntegerField(label="裏", min_value=0, required=False)
 
     def is_blank(self) -> bool:
         """両方とも未入力なら、その回は行われていないとみなす。
 
         0 と未入力は区別する（0点で終えた回と、まだ無い回は違う）。
         """
-        return (
-            self.cleaned_data.get('away') is None
-            and self.cleaned_data.get('home') is None
-        )
+        return self.cleaned_data.get("away") is None and self.cleaned_data.get("home") is None
 
 
 class BattingEntryForm(forms.Form):
@@ -78,29 +71,35 @@ class BattingEntryForm(forms.Form):
 
     player_id = forms.IntegerField(widget=forms.HiddenInput)
     # 打線での位置づけ。ボックススコアの並びに使う
-    batting_order = forms.IntegerField(
-        label='打順', min_value=1, max_value=9, required=False
-    )
+    batting_order = forms.IntegerField(label="打順", min_value=1, max_value=9, required=False)
     slot_sequence = forms.IntegerField(
-        label='交代', min_value=0, max_value=9, required=False,
-        help_text='0 がスタメン。1以上は同じ打順への途中出場。',
+        label="交代",
+        min_value=0,
+        max_value=9,
+        required=False,
+        help_text="0 がスタメン。1以上は同じ打順への途中出場。",
     )
-    fielding_position = forms.ChoiceField(
-        label='守備位置', choices=FIELDING_POSITION_CHOICES, required=False
-    )
-    at_bats = forms.IntegerField(label='打数', min_value=0, required=False)
-    singles = forms.IntegerField(label='単打', min_value=0, required=False)
-    doubles = forms.IntegerField(label='二塁打', min_value=0, required=False)
-    triples = forms.IntegerField(label='三塁打', min_value=0, required=False)
-    home_runs = forms.IntegerField(label='本塁打', min_value=0, required=False)
-    runs_batted_in = forms.IntegerField(label='打点', min_value=0, required=False)
-    walks = forms.IntegerField(label='四球', min_value=0, required=False)
-    hit_by_pitch = forms.IntegerField(label='死球', min_value=0, required=False)
-    sacrifice_flies = forms.IntegerField(label='犠飛', min_value=0, required=False)
+    fielding_position = forms.ChoiceField(label="守備位置", choices=FIELDING_POSITION_CHOICES, required=False)
+    at_bats = forms.IntegerField(label="打数", min_value=0, required=False)
+    singles = forms.IntegerField(label="単打", min_value=0, required=False)
+    doubles = forms.IntegerField(label="二塁打", min_value=0, required=False)
+    triples = forms.IntegerField(label="三塁打", min_value=0, required=False)
+    home_runs = forms.IntegerField(label="本塁打", min_value=0, required=False)
+    runs_batted_in = forms.IntegerField(label="打点", min_value=0, required=False)
+    walks = forms.IntegerField(label="四球", min_value=0, required=False)
+    hit_by_pitch = forms.IntegerField(label="死球", min_value=0, required=False)
+    sacrifice_flies = forms.IntegerField(label="犠飛", min_value=0, required=False)
 
     STAT_FIELDS = (
-        'at_bats', 'singles', 'doubles', 'triples', 'home_runs',
-        'runs_batted_in', 'walks', 'hit_by_pitch', 'sacrifice_flies',
+        "at_bats",
+        "singles",
+        "doubles",
+        "triples",
+        "home_runs",
+        "runs_batted_in",
+        "walks",
+        "hit_by_pitch",
+        "sacrifice_flies",
     )
 
     def counts(self) -> dict:
@@ -109,9 +108,9 @@ class BattingEntryForm(forms.Form):
     def lineup(self) -> tuple:
         """(打順, 交代の順, 守備位置)。ドメインの値に直して返す。"""
         return (
-            self.cleaned_data.get('batting_order'),
-            self.cleaned_data.get('slot_sequence') or 0,
-            FieldingPosition.from_label(self.cleaned_data.get('fielding_position') or ''),
+            self.cleaned_data.get("batting_order"),
+            self.cleaned_data.get("slot_sequence") or 0,
+            FieldingPosition.from_label(self.cleaned_data.get("fielding_position") or ""),
         )
 
     def is_blank(self) -> bool:
@@ -138,33 +137,38 @@ class PitchingEntryForm(forms.Form):
     player_id = forms.IntegerField(widget=forms.HiddenInput)
     # 何回から投げたか。セーブ・ホールドの条件は登板した時点のスコアで決まる
     entered_inning = forms.IntegerField(
-        label='登板', min_value=1, max_value=MAX_INNINGS, required=False,
-        help_text='何回から投げたか。先発は1。',
+        label="登板",
+        min_value=1,
+        max_value=MAX_INNINGS,
+        required=False,
+        help_text="何回から投げたか。先発は1。",
     )
     # 5.2（5回と2/3）のような野球表記を受け取る。解釈は InningsPitched が担う
-    innings_pitched = forms.DecimalField(
-        label='投球回', min_value=0, decimal_places=1, required=False
-    )
-    earned_runs = forms.IntegerField(label='自責点', min_value=0, required=False)
-    strikeouts = forms.IntegerField(label='奪三振', min_value=0, required=False)
-    hits_allowed = forms.IntegerField(label='被安打', min_value=0, required=False)
-    walks_allowed = forms.IntegerField(label='与四球', min_value=0, required=False)
-    home_runs_allowed = forms.IntegerField(label='被本塁打', min_value=0, required=False)
-    hit_by_pitch_allowed = forms.IntegerField(label='与死球', min_value=0, required=False)
+    innings_pitched = forms.DecimalField(label="投球回", min_value=0, decimal_places=1, required=False)
+    earned_runs = forms.IntegerField(label="自責点", min_value=0, required=False)
+    strikeouts = forms.IntegerField(label="奪三振", min_value=0, required=False)
+    hits_allowed = forms.IntegerField(label="被安打", min_value=0, required=False)
+    walks_allowed = forms.IntegerField(label="与四球", min_value=0, required=False)
+    home_runs_allowed = forms.IntegerField(label="被本塁打", min_value=0, required=False)
+    hit_by_pitch_allowed = forms.IntegerField(label="与死球", min_value=0, required=False)
 
     COUNT_FIELDS = (
-        'earned_runs', 'strikeouts', 'hits_allowed', 'walks_allowed',
-        'home_runs_allowed', 'hit_by_pitch_allowed',
+        "earned_runs",
+        "strikeouts",
+        "hits_allowed",
+        "walks_allowed",
+        "home_runs_allowed",
+        "hit_by_pitch_allowed",
     )
 
     def counts(self) -> dict:
         return {f: (self.cleaned_data.get(f) or 0) for f in self.COUNT_FIELDS}
 
     def innings(self):
-        return self.cleaned_data.get('innings_pitched') or 0
+        return self.cleaned_data.get("innings_pitched") or 0
 
     def entered(self) -> int:
-        return self.cleaned_data.get('entered_inning') or 1
+        return self.cleaned_data.get("entered_inning") or 1
 
     def is_blank(self) -> bool:
         """投げていなければ出場していないとみなす。

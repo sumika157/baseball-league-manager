@@ -39,19 +39,19 @@ from .infrastructure.orm_models import (
 from .infrastructure.repositories import DjangoLeagueRepository, DjangoTeamRepository
 
 # ヘッダーの文言
-admin.site.site_header = 'Baseball Manager 管理'
-admin.site.site_title = 'Baseball Manager'
-admin.site.index_title = 'データ管理'
+admin.site.site_header = "Baseball Manager 管理"
+admin.site.site_title = "Baseball Manager"
+admin.site.index_title = "データ管理"
 
 # サイト側で registration/password_change_*.html を上書きしているため、
 # 同名テンプレートを使う管理画面までサイトの見た目になってしまう。
 # 管理画面には管理画面の体裁を保たせる。
-admin.site.password_change_template = 'admin/password_change_form.html'
-admin.site.password_change_done_template = 'admin/password_change_done.html'
+admin.site.password_change_template = "admin/password_change_form.html"
+admin.site.password_change_done_template = "admin/password_change_done.html"
 
 # トップに概況を足したテンプレート。index.html という名前にすると自分自身を
 # 継承する形になって成立しないため、別名にして明示指定している。
-admin.site.index_template = 'admin/dashboard_index.html'
+admin.site.index_template = "admin/dashboard_index.html"
 
 
 def _ordered_app_list(self, request, app_label=None):
@@ -64,14 +64,19 @@ def _ordered_app_list(self, request, app_label=None):
     app_list = _original_get_app_list(request, app_label)
 
     model_order = {
-        'League': 1, 'Team': 2, 'Player': 3, 'PlayerStint': 4, 'Game': 5, 'Stadium': 6,
+        "League": 1,
+        "Team": 2,
+        "Player": 3,
+        "PlayerStint": 4,
+        "Game": 5,
+        "Stadium": 6,
     }
     for app in app_list:
-        if app.get('app_label') == 'myapp':
-            app['models'].sort(key=lambda m: model_order.get(m.get('object_name'), 99))
+        if app.get("app_label") == "myapp":
+            app["models"].sort(key=lambda m: model_order.get(m.get("object_name"), 99))
 
     # 野球データを先頭、認証を後ろに
-    app_list.sort(key=lambda a: 0 if a.get('app_label') == 'myapp' else 1)
+    app_list.sort(key=lambda a: 0 if a.get("app_label") == "myapp" else 1)
     return app_list
 
 
@@ -91,12 +96,12 @@ class GroupedChangeList(ChangeList):
 
     def get_ordering(self, request, queryset):
         ordering = super().get_ordering(request, queryset)
-        prefix = list(getattr(self.model_admin, 'group_ordering', ()))
+        prefix = list(getattr(self.model_admin, "group_ordering", ()))
         if not prefix:
             return ordering
 
-        fixed = {field.lstrip('-') for field in prefix}
-        return prefix + [f for f in ordering if f.lstrip('-') not in fixed]
+        fixed = {field.lstrip("-") for field in prefix}
+        return prefix + [f for f in ordering if f.lstrip("-") not in fixed]
 
 
 class GroupedAdminMixin:
@@ -116,7 +121,10 @@ class HomeTeamOrderedChangeList(ChangeList):
 
     # 並べ替えの手がかり。ModelAdmin 側の annotate と対になっている
     HOME_TEAM_ORDER = (
-        'home_league_order', 'home_league_name', 'home_team_order', 'home_team_name',
+        "home_league_order",
+        "home_league_name",
+        "home_team_order",
+        "home_team_name",
     )
 
     def get_ordering(self, request, queryset):
@@ -127,9 +135,7 @@ class HomeTeamOrderedChangeList(ChangeList):
 
         # 本拠地の無い球場はどの手がかりも空になるため末尾へ回す。
         # そのあとは ModelAdmin の並び（球場名）が効く
-        return [
-            F(field).asc(nulls_last=True) for field in self.HOME_TEAM_ORDER
-        ] + list(ordering)
+        return [F(field).asc(nulls_last=True) for field in self.HOME_TEAM_ORDER] + list(ordering)
 
 
 class ManualOrderAdminMixin:
@@ -150,13 +156,11 @@ class ManualOrderAdminMixin:
         無視するだけでは絞り込みのリンクなどに紛れて残ってしまうため、
         URL そのものから消す。絞り込みなど他の指定は保つ。
         """
-        if request.method == 'GET' and ORDER_VAR in request.GET:
+        if request.method == "GET" and ORDER_VAR in request.GET:
             params = request.GET.copy()
             del params[ORDER_VAR]
             query = params.urlencode()
-            return HttpResponseRedirect(
-                f'{request.path}?{query}' if query else request.path
-            )
+            return HttpResponseRedirect(f"{request.path}?{query}" if query else request.path)
         return super().changelist_view(request, extra_context)
 
 
@@ -166,12 +170,7 @@ def _grouped_count(queryset, group_field):
     一覧の各行で数えると行数だけ問い合わせが増えるため、
     annotate と組み合わせて1回のSQLにまとめるために使う。
     """
-    return (
-        queryset.order_by()
-        .values(group_field)
-        .annotate(n=Count('pk'))
-        .values('n')[:1]
-    )
+    return queryset.order_by().values(group_field).annotate(n=Count("pk")).values("n")[:1]
 
 
 class TeamInlineForm(forms.ModelForm):
@@ -184,8 +183,8 @@ class TeamInlineForm(forms.ModelForm):
 
     class Meta:
         model = Team
-        fields = ('display_order', 'name', 'home_stadium')
-        widgets = {'display_order': forms.HiddenInput()}
+        fields = ("display_order", "name", "home_stadium")
+        widgets = {"display_order": forms.HiddenInput()}
 
 
 class TeamInline(admin.TabularInline):
@@ -194,8 +193,8 @@ class TeamInline(admin.TabularInline):
     model = Team
     form = TeamInlineForm
     extra = 0
-    fields = ('display_order', 'name', 'home_stadium')
-    ordering = ('display_order', 'name')
+    fields = ("display_order", "name", "home_stadium")
+    ordering = ("display_order", "name")
     show_change_link = True
 
 
@@ -203,38 +202,39 @@ class TeamInline(admin.TabularInline):
 class LeagueAdmin(ManualOrderAdminMixin, admin.ModelAdmin):
     # display_order は行をドラッグすると書き換わる。数値そのものに意味は無いが、
     # JavaScript が動かない環境でも直接入力できるよう残してある
-    list_display = ('name', 'display_order', 'teams_accordion', 'created_at')
-    list_display_links = ('name',)
-    list_editable = ('display_order',)
-    search_fields = ('name',)
+    list_display = ("name", "display_order", "teams_accordion", "created_at")
+    list_display_links = ("name",)
+    list_editable = ("display_order",)
+    search_fields = ("name",)
     # 手動の並び順を既定にする。未設定どうしは名前で安定させる
-    ordering = ('display_order', 'name')
+    ordering = ("display_order", "name")
     inlines = [TeamInline]
     fieldsets = (
-        (None, {'fields': ('name', 'display_order')}),
-        ('外国人枠', {
-            'description': '空欄なら無制限として扱います。',
-            'fields': ('foreign_player_roster_limit', 'foreign_player_game_limit'),
-        }),
+        (None, {"fields": ("name", "display_order")}),
+        (
+            "外国人枠",
+            {
+                "description": "空欄なら無制限として扱います。",
+                "fields": ("foreign_player_roster_limit", "foreign_player_game_limit"),
+            },
+        ),
     )
 
     class Media:
-        js = ('myapp/js/admin-inline-sortable.js',)
-        css = {'all': ('myapp/css/admin-theme.css',)}
+        js = ("myapp/js/admin-inline-sortable.js",)
+        css = {"all": ("myapp/css/admin-theme.css",)}
 
     # 表示順の列は隠してあるので、操作方法を画面上で伝える
-    change_list_template = 'admin/sortable_change_list.html'
+    change_list_template = "admin/sortable_change_list.html"
 
     def get_queryset(self, request):
         """所属チームを先読みする。行ごとに引くと一覧で N+1 になる。"""
         teams = orm_models.Team.objects.annotate(
-            active_players=Count('stints', filter=Q(stints__to_year__isnull=True))
-        ).order_by('display_order', 'name')
-        return super().get_queryset(request).prefetch_related(
-            Prefetch('teams', queryset=teams)
-        )
+            active_players=Count("stints", filter=Q(stints__to_year__isnull=True))
+        ).order_by("display_order", "name")
+        return super().get_queryset(request).prefetch_related(Prefetch("teams", queryset=teams))
 
-    @admin.display(description='所属チーム')
+    @admin.display(description="所属チーム")
     def teams_accordion(self, obj):
         """所属チームを折りたたんで表示する。
 
@@ -243,13 +243,14 @@ class LeagueAdmin(ManualOrderAdminMixin, admin.ModelAdmin):
         """
         teams = list(obj.teams.all())
         if not teams:
-            return '—'
+            return "—"
 
         items = format_html_join(
-            '', '<li><a href="{}">{}</a><span class="team-accordion-meta">{}名</span></li>',
+            "",
+            '<li><a href="{}">{}</a><span class="team-accordion-meta">{}名</span></li>',
             (
                 (
-                    reverse('admin:myapp_team_change', args=[team.id]),
+                    reverse("admin:myapp_team_change", args=[team.id]),
                     team.name,
                     team.active_players,
                 )
@@ -257,9 +258,9 @@ class LeagueAdmin(ManualOrderAdminMixin, admin.ModelAdmin):
             ),
         )
         return format_html(
-            '<details class="team-accordion">'
-            '<summary>{}チーム</summary><ul>{}</ul></details>',
-            len(teams), items,
+            '<details class="team-accordion"><summary>{}チーム</summary><ul>{}</ul></details>',
+            len(teams),
+            items,
         )
 
 
@@ -267,79 +268,86 @@ class LeagueAdmin(ManualOrderAdminMixin, admin.ModelAdmin):
 class TeamAdmin(ManualOrderAdminMixin, admin.ModelAdmin):
     # display_order は行をドラッグすると書き換わる。リーグ編集画面からだけでなく
     # この一覧でも並べ替えられるようにしてある
-    list_display = (
-        'name', 'display_order', 'home_stadium', 'active_player_count', 'game_count'
-    )
-    list_display_links = ('name',)
-    list_editable = ('display_order',)
-    list_filter = ('league',)
-    search_fields = ('name', 'home_stadium__name')
-    autocomplete_fields = ('home_stadium',)
+    list_display = ("name", "display_order", "home_stadium", "active_player_count", "game_count")
+    list_display_links = ("name",)
+    list_editable = ("display_order",)
+    list_filter = ("league",)
+    search_fields = ("name", "home_stadium__name")
+    autocomplete_fields = ("home_stadium",)
     # 担当者はここで割り当てる。左右2ペインの選択肢の方が M2M の既定より選びやすい
-    filter_horizontal = ('managers',)
+    filter_horizontal = ("managers",)
     # リーグごとにまとまるよう並べる。リーグ内は手動の表示順を尊重する。
     # この並びが区切り表示の前提（同じリーグの行が続いていないと見出しが何度も出る）
-    ordering = ('league__display_order', 'league__name', 'display_order', 'name')
-    list_select_related = ('league', 'home_stadium')
+    ordering = ("league__display_order", "league__name", "display_order", "name")
+    list_select_related = ("league", "home_stadium")
 
     class Media:
-        js = ('myapp/js/admin-inline-sortable.js',)
-        css = {'all': ('myapp/css/admin-theme.css',)}
+        js = ("myapp/js/admin-inline-sortable.js",)
+        css = {"all": ("myapp/css/admin-theme.css",)}
 
     # 表示順の列は隠してあるので、操作方法を画面上で伝える
-    change_list_template = 'admin/sortable_change_list.html'
+    change_list_template = "admin/sortable_change_list.html"
 
     def get_queryset(self, request):
         """一覧に出す件数を、すべて副問い合わせで先に数えておく。
 
         行ごとに数えると表示する行数だけ問い合わせが増える。
         """
-        return super().get_queryset(request).annotate(
-            league_team_count=Subquery(
-                orm_models.League.objects
-                .filter(pk=OuterRef('league_id'))
-                .annotate(n=Count('teams')).values('n')[:1]
-            ),
-            active_players_count=Coalesce(Subquery(
-                _grouped_count(
-                    orm_models.PlayerStint.objects.filter(
-                        team=OuterRef('pk'), to_year__isnull=True
-                    ),
-                    'team',
+        return (
+            super()
+            .get_queryset(request)
+            .annotate(
+                league_team_count=Subquery(
+                    orm_models.League.objects.filter(pk=OuterRef("league_id"))
+                    .annotate(n=Count("teams"))
+                    .values("n")[:1]
                 ),
-                output_field=IntegerField(),
-            ), 0),
-            played_games_count=(
-                Coalesce(Subquery(
-                    _grouped_count(
-                        orm_models.Game.objects.filter(home_team=OuterRef('pk')),
-                        'home_team',
+                active_players_count=Coalesce(
+                    Subquery(
+                        _grouped_count(
+                            orm_models.PlayerStint.objects.filter(team=OuterRef("pk"), to_year__isnull=True),
+                            "team",
+                        ),
+                        output_field=IntegerField(),
                     ),
-                    output_field=IntegerField(),
-                ), 0)
-                + Coalesce(Subquery(
-                    _grouped_count(
-                        orm_models.Game.objects.filter(away_team=OuterRef('pk')),
-                        'away_team',
-                    ),
-                    output_field=IntegerField(),
-                ), 0)
-            ),
+                    0,
+                ),
+                played_games_count=(
+                    Coalesce(
+                        Subquery(
+                            _grouped_count(
+                                orm_models.Game.objects.filter(home_team=OuterRef("pk")),
+                                "home_team",
+                            ),
+                            output_field=IntegerField(),
+                        ),
+                        0,
+                    )
+                    + Coalesce(
+                        Subquery(
+                            _grouped_count(
+                                orm_models.Game.objects.filter(away_team=OuterRef("pk")),
+                                "away_team",
+                            ),
+                            output_field=IntegerField(),
+                        ),
+                        0,
+                    )
+                ),
+            )
         )
 
     # 行をリーグごとに区切る。見出しに出るのでリーグ列は list_display から外した。
     # 表示順はリーグの中でしか意味が無いため、ドラッグも区切りをまたげない。
     # 区切りが成立するのは ordering がリーグ単位でまとめているから
-    group_by = staticmethod(
-        lambda team: f'{team.league.name}（{team.league_team_count}チーム）'
-    )
+    group_by = staticmethod(lambda team: f"{team.league.name}（{team.league_team_count}チーム）")
 
-    @admin.display(description='現役選手', ordering='active_players_count')
+    @admin.display(description="現役選手", ordering="active_players_count")
     def active_player_count(self, obj):
         # 在籍中＝退団年が空の在籍。件数は get_queryset で数えてある
         return obj.active_players_count
 
-    @admin.display(description='試合数', ordering='played_games_count')
+    @admin.display(description="試合数", ordering="played_games_count")
     def game_count(self, obj):
         return obj.played_games_count
 
@@ -380,58 +388,61 @@ class StadiumForm(DomainCheckedForm):
     """
 
     home_teams = forms.ModelMultipleChoiceField(
-        queryset=Team.objects.select_related('league').order_by(
-            'league__display_order', 'league__name', 'display_order', 'name'
+        queryset=Team.objects.select_related("league").order_by(
+            "league__display_order", "league__name", "display_order", "name"
         ),
         required=False,
-        label='本拠地とするチーム',
-        help_text='ここで選ぶと、そのチームの本拠地がこの球場になります。'
-                  '他の球場を本拠地にしていたチームは、こちらへ移ります。',
-        widget=FilteredSelectMultiple('チーム', is_stacked=False),
+        label="本拠地とするチーム",
+        help_text="ここで選ぶと、そのチームの本拠地がこの球場になります。"
+        "他の球場を本拠地にしていたチームは、こちらへ移ります。",
+        widget=FilteredSelectMultiple("チーム", is_stacked=False),
     )
 
     class Meta:
         model = Stadium
-        fields = '__all__'
+        fields = "__all__"
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if self.instance.pk:
-            self.fields['home_teams'].initial = self.instance.home_teams.all()
+            self.fields["home_teams"].initial = self.instance.home_teams.all()
 
     def build_value_object(self, cleaned):
         return StadiumProfile(
-            city=cleaned.get('city', ''),
-            capacity=cleaned.get('capacity'),
-            surface=cleaned.get('surface', ''),
-            opened_year=cleaned.get('opened_year'),
-            roof=cleaned.get('roof', ''),
+            city=cleaned.get("city", ""),
+            capacity=cleaned.get("capacity"),
+            surface=cleaned.get("surface", ""),
+            opened_year=cleaned.get("opened_year"),
+            roof=cleaned.get("roof", ""),
         )
 
 
 @admin.register(Stadium)
 class StadiumAdmin(admin.ModelAdmin):
     form = StadiumForm
-    list_display = (
-        'name', 'city', 'capacity', 'surface', 'roof', 'opened_year', 'home_team_names'
-    )
-    search_fields = ('name', 'city')
-    list_filter = ('surface', 'roof')
+    list_display = ("name", "city", "capacity", "surface", "roof", "opened_year", "home_team_names")
+    search_fields = ("name", "city")
+    list_filter = ("surface", "roof")
     # 一覧では本拠地チームの並びが先に効き、その中でこの順になる。
     # プルダウンなど一覧以外の場所ではこれがそのまま使われる
-    ordering = ('name',)
+    ordering = ("name",)
 
     fieldsets = (
-        (None, {'fields': ('name', 'city')}),
-        ('設備', {
-            'description': '分かっているものだけ入力してください。すべて任意です。',
-            'fields': ('capacity', 'surface', 'roof', 'opened_year'),
-        }),
-        ('本拠地', {
-            'description': 'この球場を本拠地とするチーム。'
-                           'チームの編集画面からも同じ設定ができます。',
-            'fields': ('home_teams',),
-        }),
+        (None, {"fields": ("name", "city")}),
+        (
+            "設備",
+            {
+                "description": "分かっているものだけ入力してください。すべて任意です。",
+                "fields": ("capacity", "surface", "roof", "opened_year"),
+            },
+        ),
+        (
+            "本拠地",
+            {
+                "description": "この球場を本拠地とするチーム。チームの編集画面からも同じ設定ができます。",
+                "fields": ("home_teams",),
+            },
+        ),
     )
 
     def get_changelist(self, request, **kwargs):
@@ -443,21 +454,26 @@ class StadiumAdmin(admin.ModelAdmin):
         行ごとに引くと N+1 になるため、どちらも副問い合わせでまとめる。
         本拠地が複数あるときは、チームの並びで先頭に来るものを代表とする。
         """
-        home_teams = orm_models.Team.objects.filter(
-            home_stadium=OuterRef('pk')
-        ).order_by('league__display_order', 'league__name', 'display_order', 'name')
-
-        return super().get_queryset(request).prefetch_related('home_teams').annotate(
-            home_league_order=Subquery(home_teams.values('league__display_order')[:1]),
-            home_league_name=Subquery(home_teams.values('league__name')[:1]),
-            home_team_order=Subquery(home_teams.values('display_order')[:1]),
-            home_team_name=Subquery(home_teams.values('name')[:1]),
+        home_teams = orm_models.Team.objects.filter(home_stadium=OuterRef("pk")).order_by(
+            "league__display_order", "league__name", "display_order", "name"
         )
 
-    @admin.display(description='本拠地とするチーム')
+        return (
+            super()
+            .get_queryset(request)
+            .prefetch_related("home_teams")
+            .annotate(
+                home_league_order=Subquery(home_teams.values("league__display_order")[:1]),
+                home_league_name=Subquery(home_teams.values("league__name")[:1]),
+                home_team_order=Subquery(home_teams.values("display_order")[:1]),
+                home_team_name=Subquery(home_teams.values("name")[:1]),
+            )
+        )
+
+    @admin.display(description="本拠地とするチーム")
     def home_team_names(self, obj):
         names = [team.name for team in obj.home_teams.all()]
-        return '、'.join(names) if names else '—'
+        return "、".join(names) if names else "—"
 
     def save_related(self, request, form, formsets, change):
         """本拠地の割り当てを Team 側へ書き戻す。
@@ -468,16 +484,14 @@ class StadiumAdmin(admin.ModelAdmin):
         super().save_related(request, form, formsets, change)
 
         stadium = form.instance
-        selected = form.cleaned_data.get('home_teams')
+        selected = form.cleaned_data.get("home_teams")
         if selected is None:
             return
 
-        Team.objects.filter(home_stadium=stadium).exclude(
-            pk__in=[team.pk for team in selected]
-        ).update(home_stadium=None)
-        Team.objects.filter(pk__in=[team.pk for team in selected]).update(
-            home_stadium=stadium
+        Team.objects.filter(home_stadium=stadium).exclude(pk__in=[team.pk for team in selected]).update(
+            home_stadium=None
         )
+        Team.objects.filter(pk__in=[team.pk for team in selected]).update(home_stadium=stadium)
 
 
 class PlayerStintForm(forms.ModelForm):
@@ -490,21 +504,21 @@ class PlayerStintForm(forms.ModelForm):
 
     class Meta:
         model = PlayerStint
-        fields = '__all__'
+        fields = "__all__"
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # 入団年で埋められるので、入力そのものは必須にしない
-        self.fields['from_year'].required = False
-        self.fields['from_year'].help_text = '空欄なら選手の入団年を使います。'
+        self.fields["from_year"].required = False
+        self.fields["from_year"].help_text = "空欄なら選手の入団年を使います。"
 
     def clean(self):
         cleaned = super().clean()
         self._fill_from_year(cleaned)
 
-        team = cleaned.get('team')
-        number = cleaned.get('number')
-        from_year = cleaned.get('from_year')
+        team = cleaned.get("team")
+        number = cleaned.get("number")
+        from_year = cleaned.get("from_year")
         if not (team and number is not None and from_year is not None):
             return cleaned
 
@@ -513,18 +527,18 @@ class PlayerStintForm(forms.ModelForm):
                 team_id=team.id,
                 number=JerseyNumber(number),
                 from_year=from_year,
-                to_year=cleaned.get('to_year'),
+                to_year=cleaned.get("to_year"),
             )
         except DomainError as error:
             raise forms.ValidationError(str(error)) from None
 
-        others = PlayerStint.objects.filter(team=team, number=number).select_related('player')
+        others = PlayerStint.objects.filter(team=team, number=number).select_related("player")
         if self.instance.pk:
             others = others.exclude(pk=self.instance.pk)
         # 選手の新規登録では、在籍と一緒に送られてくる選手がまだ保存されていない。
         # 未保存のまま絞り込むと落ちるうえ、そもそも既存の在籍を持たないので
         # 除外する必要も無い
-        player = cleaned.get('player')
+        player = cleaned.get("player")
         if player is not None and player.pk:
             others = others.exclude(player=player)
 
@@ -537,8 +551,8 @@ class PlayerStintForm(forms.ModelForm):
             )
             if candidate.overlaps(existing):
                 raise forms.ValidationError(
-                    f'背番号 {number} は {other.player.name} が {existing} に'
-                    f'使用しています。期間が重なる同じ背番号は登録できません。'
+                    f"背番号 {number} は {other.player.name} が {existing} に"
+                    f"使用しています。期間が重なる同じ背番号は登録できません。"
                 )
 
         self._ensure_foreign_player_quota(cleaned, team, player)
@@ -550,14 +564,12 @@ class PlayerStintForm(forms.ModelForm):
         player が分からない（インライン経由で未確定など）場合は検査を諦める。
         主な適用対象は PlayerStintAdmin 経由の移籍・新規在籍の登録。
         """
-        if cleaned.get('to_year') is not None or player is None or not player.pk:
+        if cleaned.get("to_year") is not None or player is None or not player.pk:
             return
         if not player.is_foreign_player:
             return
 
-        already_here = PlayerStint.objects.filter(
-            player=player, team=team, to_year__isnull=True
-        )
+        already_here = PlayerStint.objects.filter(player=player, team=team, to_year__isnull=True)
         if self.instance.pk:
             already_here = already_here.exclude(pk=self.instance.pk)
         if already_here.exists():
@@ -569,8 +581,7 @@ class PlayerStintForm(forms.ModelForm):
             ensure_quota_not_exceeded(
                 domain_team.foreign_player_count + 1,
                 league.foreign_player_roster_limit,
-                f'「{team.name}」の外国人選手登録数が上限'
-                f'（{league.foreign_player_roster_limit}人）を超えています。',
+                f"「{team.name}」の外国人選手登録数が上限（{league.foreign_player_roster_limit}人）を超えています。",
             )
         except DomainError as error:
             raise forms.ValidationError(str(error)) from None
@@ -581,20 +592,19 @@ class PlayerStintForm(forms.ModelForm):
         最初の在籍では加入年＝入団年になることがほとんどで、同じ年を
         二度入力させる意味が無い。どちらも空欄のときだけ入力を求める。
         """
-        if cleaned.get('from_year') is not None:
+        if cleaned.get("from_year") is not None:
             return
 
-        player = cleaned.get('player')
-        debut_year = getattr(player, 'debut_year', None) if player else None
+        player = cleaned.get("player")
+        debut_year = getattr(player, "debut_year", None) if player else None
         if debut_year is None:
             self.add_error(
-                'from_year',
-                '加入年を入力してください。'
-                '選手に入団年が登録されていれば、空欄でもそちらを使います。',
+                "from_year",
+                "加入年を入力してください。選手に入団年が登録されていれば、空欄でもそちらを使います。",
             )
             return
 
-        cleaned['from_year'] = debut_year
+        cleaned["from_year"] = debut_year
 
 
 class PlayerStintFormSet(forms.BaseInlineFormSet):
@@ -615,12 +625,12 @@ class PlayerStintFormSet(forms.BaseInlineFormSet):
 
         checked = []
         for form in self.forms:
-            data = getattr(form, 'cleaned_data', None)
-            if not data or data.get('DELETE'):
+            data = getattr(form, "cleaned_data", None)
+            if not data or data.get("DELETE"):
                 continue
-            team = data.get('team')
-            number = data.get('number')
-            from_year = data.get('from_year')
+            team = data.get("team")
+            number = data.get("number")
+            from_year = data.get("from_year")
             if not (team and number is not None and from_year is not None):
                 continue
 
@@ -628,14 +638,14 @@ class PlayerStintFormSet(forms.BaseInlineFormSet):
                 team_id=team.id,
                 number=JerseyNumber(number),
                 from_year=from_year,
-                to_year=data.get('to_year'),
+                to_year=data.get("to_year"),
             )
             for other in checked:
                 if other.team_id == current.team_id and current.overlaps(other):
                     form.add_error(
-                        'from_year',
-                        f'{team.name} の在籍 {other} と期間が重なっています。'
-                        f'同じチームに同時に2度在籍することはできません。',
+                        "from_year",
+                        f"{team.name} の在籍 {other} と期間が重なっています。"
+                        f"同じチームに同時に2度在籍することはできません。",
                     )
                     break
             checked.append(current)
@@ -648,10 +658,10 @@ class PlayerStintInline(admin.TabularInline):
     form = PlayerStintForm
     formset = PlayerStintFormSet
     extra = 0
-    fields = ('team', 'number', 'from_year', 'to_year')
-    ordering = ('-from_year',)
-    autocomplete_fields = ('team',)
-    verbose_name_plural = '在籍（経歴）'
+    fields = ("team", "number", "from_year", "to_year")
+    ordering = ("-from_year",)
+    autocomplete_fields = ("team",)
+    verbose_name_plural = "在籍（経歴）"
 
 
 class CaptaincyForm(forms.ModelForm):
@@ -659,47 +669,40 @@ class CaptaincyForm(forms.ModelForm):
 
     class Meta:
         model = Captaincy
-        fields = '__all__'
+        fields = "__all__"
 
     def clean(self):
         cleaned = super().clean()
-        team, from_year = cleaned.get('team'), cleaned.get('from_year')
+        team, from_year = cleaned.get("team"), cleaned.get("from_year")
         if not (team and from_year is not None):
             return cleaned
 
         try:
-            candidate = DomainCaptaincy(
-                team_id=team.id, from_year=from_year, to_year=cleaned.get('to_year')
-            )
+            candidate = DomainCaptaincy(team_id=team.id, from_year=from_year, to_year=cleaned.get("to_year"))
         except DomainError as error:
             raise forms.ValidationError(str(error)) from None
 
         # 同チームの他選手の在任と重ならないか(PlayerStintForm と同じ突き合わせ)
-        others = Captaincy.objects.filter(team=team).select_related('player')
+        others = Captaincy.objects.filter(team=team).select_related("player")
         if self.instance.pk:
             others = others.exclude(pk=self.instance.pk)
-        player = cleaned.get('player')
+        player = cleaned.get("player")
         if player is not None and player.pk:
             others = others.exclude(player=player)
 
         for other in others:
-            existing = DomainCaptaincy(
-                team_id=other.team_id, from_year=other.from_year, to_year=other.to_year
-            )
+            existing = DomainCaptaincy(team_id=other.team_id, from_year=other.from_year, to_year=other.to_year)
             if candidate.overlaps(existing):
                 raise forms.ValidationError(
-                    f'{other.player.name} が {existing} に主将です。'
-                    f'期間が重なる主将指名はできません。'
+                    f"{other.player.name} が {existing} に主将です。期間が重なる主将指名はできません。"
                 )
 
         # 現在(to_year 空)の指名は、現在在籍中の選手にしか行えない。過去の在任行
         # (to_year 入力済み、退団済み選手の履歴入力など)には適用しない
-        if cleaned.get('to_year') is None and player is not None and player.pk:
-            if not PlayerStint.objects.filter(
-                player=player, team=team, to_year__isnull=True
-            ).exists():
+        if cleaned.get("to_year") is None and player is not None and player.pk:
+            if not PlayerStint.objects.filter(player=player, team=team, to_year__isnull=True).exists():
                 raise forms.ValidationError(
-                    f'{player.name} は現在「{team.name}」に在籍していないため主将にできません。'
+                    f"{player.name} は現在「{team.name}」に在籍していないため主将にできません。"
                 )
         return cleaned
 
@@ -714,23 +717,18 @@ class CaptaincyFormSet(forms.BaseInlineFormSet):
 
         checked = []
         for form in self.forms:
-            data = getattr(form, 'cleaned_data', None)
-            if not data or data.get('DELETE'):
+            data = getattr(form, "cleaned_data", None)
+            if not data or data.get("DELETE"):
                 continue
-            team = data.get('team')
-            from_year = data.get('from_year')
+            team = data.get("team")
+            from_year = data.get("from_year")
             if not (team and from_year is not None):
                 continue
 
-            current = DomainCaptaincy(
-                team_id=team.id, from_year=from_year, to_year=data.get('to_year')
-            )
+            current = DomainCaptaincy(team_id=team.id, from_year=from_year, to_year=data.get("to_year"))
             for other in checked:
                 if other.team_id == current.team_id and current.overlaps(other):
-                    form.add_error(
-                        'from_year',
-                        f'{team.name} の主将在任 {other} と期間が重なっています。'
-                    )
+                    form.add_error("from_year", f"{team.name} の主将在任 {other} と期間が重なっています。")
                     break
             checked.append(current)
 
@@ -742,39 +740,41 @@ class CaptaincyInline(admin.TabularInline):
     form = CaptaincyForm
     formset = CaptaincyFormSet
     extra = 0
-    fields = ('team', 'from_year', 'to_year')
-    ordering = ('-from_year',)
-    autocomplete_fields = ('team',)
-    verbose_name_plural = '主将在任歴'
+    fields = ("team", "from_year", "to_year")
+    ordering = ("-from_year",)
+    autocomplete_fields = ("team",)
+    verbose_name_plural = "主将在任歴"
 
 
 class PlayerForm(DomainCheckedForm):
     class Meta:
         model = Player
-        fields = '__all__'
+        fields = "__all__"
 
     def build_value_object(self, cleaned):
         return DomainProfile(
-            birth_date=cleaned.get('birth_date'),
-            throws=cleaned.get('throws') or None,
-            bats=cleaned.get('bats') or None,
-            height_cm=cleaned.get('height_cm'),
-            weight_kg=cleaned.get('weight_kg'),
-            birthplace=cleaned.get('birthplace', ''),
-            debut_year=cleaned.get('debut_year'),
-            high_school=cleaned.get('high_school', ''),
-            university=cleaned.get('university', ''),
-            corporate_team=cleaned.get('corporate_team', ''),
-            nationality=cleaned.get('nationality', ''),
-            is_foreign_player=cleaned.get('is_foreign_player', False),
+            birth_date=cleaned.get("birth_date"),
+            throws=cleaned.get("throws") or None,
+            bats=cleaned.get("bats") or None,
+            height_cm=cleaned.get("height_cm"),
+            weight_kg=cleaned.get("weight_kg"),
+            birthplace=cleaned.get("birthplace", ""),
+            debut_year=cleaned.get("debut_year"),
+            high_school=cleaned.get("high_school", ""),
+            university=cleaned.get("university", ""),
+            corporate_team=cleaned.get("corporate_team", ""),
+            nationality=cleaned.get("nationality", ""),
+            is_foreign_player=cleaned.get("is_foreign_player", False),
         )
 
     def extra_clean(self, cleaned, profile):
         if not profile.is_foreign_player:
             return  # False へ戻す/変化なしは枠を超えない
-        stint = PlayerStint.objects.filter(
-            player=self.instance, to_year__isnull=True
-        ).select_related('team__league').first()
+        stint = (
+            PlayerStint.objects.filter(player=self.instance, to_year__isnull=True)
+            .select_related("team__league")
+            .first()
+        )
         if stint is None:
             return  # まだどこにも在籍していない選手は検査不要
 
@@ -788,47 +788,60 @@ class PlayerForm(DomainCheckedForm):
 @admin.register(Player)
 class PlayerAdmin(admin.ModelAdmin):
     form = PlayerForm
-    list_display = ('name', 'position', 'current_team', 'current_number', 'appearances')
-    list_filter = ('position', 'stints__team__league', 'stints__team')
-    search_fields = ('name', 'name_kana', 'back_name')
-    ordering = ('name',)
+    list_display = ("name", "position", "current_team", "current_number", "appearances")
+    list_filter = ("position", "stints__team__league", "stints__team")
+    search_fields = ("name", "name_kana", "back_name")
+    ordering = ("name",)
     inlines = [PlayerStintInline, CaptaincyInline]
 
     fieldsets = (
-        (None, {
-            'fields': ('name', 'name_kana', 'back_name', 'position'),
-            'description': '所属チームと背番号は下の「在籍」で管理します。',
-        }),
-        ('プロフィール', {
-            'description': '分かっているものだけ入力してください。すべて任意です。',
-            'fields': (
-                'birth_date', ('throws', 'bats'),
-                ('height_cm', 'weight_kg'), 'birthplace', 'debut_year',
-                'nationality', 'is_foreign_player',
-            ),
-        }),
-        ('プロ入り前の経歴', {
-            'description': '通った所だけ入力してください。高校からそのままプロ、'
-                           '大学を経ずに社会人へ、といった順路にも対応します。',
-            'fields': ('high_school', 'university', 'corporate_team'),
-        }),
+        (
+            None,
+            {
+                "fields": ("name", "name_kana", "back_name", "position"),
+                "description": "所属チームと背番号は下の「在籍」で管理します。",
+            },
+        ),
+        (
+            "プロフィール",
+            {
+                "description": "分かっているものだけ入力してください。すべて任意です。",
+                "fields": (
+                    "birth_date",
+                    ("throws", "bats"),
+                    ("height_cm", "weight_kg"),
+                    "birthplace",
+                    "debut_year",
+                    "nationality",
+                    "is_foreign_player",
+                ),
+            },
+        ),
+        (
+            "プロ入り前の経歴",
+            {
+                "description": "通った所だけ入力してください。高校からそのままプロ、"
+                "大学を経ずに社会人へ、といった順路にも対応します。",
+                "fields": ("high_school", "university", "corporate_team"),
+            },
+        ),
     )
 
-    @admin.display(description='現在の所属')
+    @admin.display(description="現在の所属")
     def current_team(self, obj):
         stint = self._current(obj)
-        return stint.team.name if stint else '—'
+        return stint.team.name if stint else "—"
 
-    @admin.display(description='背番号')
+    @admin.display(description="背番号")
     def current_number(self, obj):
         stint = self._current(obj)
-        return stint.number if stint else '—'
+        return stint.number if stint else "—"
 
-    @admin.display(description='出場試合')
+    @admin.display(description="出場試合")
     def appearances(self, obj):
         """成績そのものは試合側にあるので、ここでは出場数だけ示す。"""
         count = obj.game_batting.count() + obj.game_pitching.count()
-        return count or '—'
+        return count or "—"
 
     @staticmethod
     def _current(obj):
@@ -838,25 +851,25 @@ class PlayerAdmin(admin.ModelAdmin):
         return None
 
     def get_queryset(self, request):
-        return super().get_queryset(request).prefetch_related('stints__team')
+        return super().get_queryset(request).prefetch_related("stints__team")
 
 
 @admin.register(PlayerStint)
 class PlayerStintAdmin(GroupedAdminMixin, admin.ModelAdmin):
     """在籍そのものの一覧。チームごとの名簿として使える。"""
 
-    group_ordering = ('team__league__display_order', 'team__league__name', 'team__name')
+    group_ordering = ("team__league__display_order", "team__league__name", "team__name")
 
     form = PlayerStintForm
-    list_display = ('number', 'player', 'from_year', 'to_year')
-    list_filter = ('team__league', 'team')
-    search_fields = ('player__name',)
-    ordering = ('team__league__name', 'team__name', 'number')
-    list_select_related = ('player', 'team', 'team__league')
-    autocomplete_fields = ('player', 'team')
+    list_display = ("number", "player", "from_year", "to_year")
+    list_filter = ("team__league", "team")
+    search_fields = ("player__name",)
+    ordering = ("team__league__name", "team__name", "number")
+    list_select_related = ("player", "team", "team__league")
+    autocomplete_fields = ("player", "team")
 
     # 行をチームごとに区切る
-    group_by = staticmethod(lambda s: f'{s.team.league.name} · {s.team.name}')
+    group_by = staticmethod(lambda s: f"{s.team.league.name} · {s.team.name}")
 
 
 class GameBattingLineInline(admin.TabularInline):
@@ -864,7 +877,7 @@ class GameBattingLineInline(admin.TabularInline):
 
     model = GameBattingLine
     extra = 0
-    autocomplete_fields = ('player',)
+    autocomplete_fields = ("player",)
 
 
 class GamePitchingLineInline(admin.TabularInline):
@@ -872,31 +885,31 @@ class GamePitchingLineInline(admin.TabularInline):
 
     model = GamePitchingLine
     extra = 0
-    autocomplete_fields = ('player',)
+    autocomplete_fields = ("player",)
 
 
 @admin.register(Game)
 class GameAdmin(admin.ModelAdmin):
     """試合。チームの勝敗も選手の通算成績も、すべてここから集計される。"""
 
-    list_display = ('played_on', 'year', 'matchup', 'score', 'result')
-    list_filter = ('year', 'home_team__league')
-    date_hierarchy = 'played_on'
-    ordering = ('-played_on',)
-    list_select_related = ('home_team', 'away_team')
+    list_display = ("played_on", "year", "matchup", "score", "result")
+    list_filter = ("year", "home_team__league")
+    date_hierarchy = "played_on"
+    ordering = ("-played_on",)
+    list_select_related = ("home_team", "away_team")
     inlines = [GameBattingLineInline, GamePitchingLineInline]
 
-    @admin.display(description='対戦')
+    @admin.display(description="対戦")
     def matchup(self, obj):
-        return f'{obj.home_team.name} vs {obj.away_team.name}'
+        return f"{obj.home_team.name} vs {obj.away_team.name}"
 
-    @admin.display(description='スコア')
+    @admin.display(description="スコア")
     def score(self, obj):
-        return f'{obj.home_score} - {obj.away_score}'
+        return f"{obj.home_score} - {obj.away_score}"
 
-    @admin.display(description='結果')
+    @admin.display(description="結果")
     def result(self, obj):
         if obj.home_score == obj.away_score:
-            return '引分'
+            return "引分"
         winner = obj.home_team if obj.home_score > obj.away_score else obj.away_team
-        return f'{winner.name} の勝ち'
+        return f"{winner.name} の勝ち"

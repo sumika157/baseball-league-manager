@@ -133,11 +133,13 @@ BATTER_SDS = np.array([0.030, 0.058, 0.020])
 BATTER_BOUNDS = np.array([[0.170, 0.335], [0.010, 0.270], [0.020, 0.140]])
 # 能力の相関。長打力のある打者は歩かされやすい（0.35）。打率と長打力は
 # 弱い正の相関にとどめる（打率だけ高い単打型と、一発屋の両方を残すため）。
-BATTER_CORRELATION = np.array([
-    [1.00, 0.15, 0.10],
-    [0.15, 1.00, 0.35],
-    [0.10, 0.35, 1.00],
-])
+BATTER_CORRELATION = np.array(
+    [
+        [1.00, 0.15, 0.10],
+        [0.15, 1.00, 0.35],
+        [0.10, 0.35, 1.00],
+    ]
+)
 
 # 安打の内訳（本塁打を除いた残りの配分）。二塁打・三塁打・単打の比。
 DOUBLE_SHARE, TRIPLE_SHARE = 0.225, 0.030
@@ -171,14 +173,23 @@ DEFAULT_GAMES_PER_PAIR = 29
 # 守備の並び。捕手・内野4・外野3・指名打者で9人。登録位置からこの順に埋める。
 DEFENSIVE_SLOTS = (
     (Position.CATCHER, (FieldingPosition.CATCHER,)),
-    (Position.INFIELDER, (
-        FieldingPosition.FIRST_BASE, FieldingPosition.SECOND_BASE,
-        FieldingPosition.THIRD_BASE, FieldingPosition.SHORTSTOP,
-    )),
-    (Position.OUTFIELDER, (
-        FieldingPosition.LEFT_FIELD, FieldingPosition.CENTER_FIELD,
-        FieldingPosition.RIGHT_FIELD,
-    )),
+    (
+        Position.INFIELDER,
+        (
+            FieldingPosition.FIRST_BASE,
+            FieldingPosition.SECOND_BASE,
+            FieldingPosition.THIRD_BASE,
+            FieldingPosition.SHORTSTOP,
+        ),
+    ),
+    (
+        Position.OUTFIELDER,
+        (
+            FieldingPosition.LEFT_FIELD,
+            FieldingPosition.CENTER_FIELD,
+            FieldingPosition.RIGHT_FIELD,
+        ),
+    ),
     (Position.DESIGNATED_HITTER, (FieldingPosition.DESIGNATED_HITTER,)),
 )
 
@@ -203,43 +214,42 @@ def _expected_ops(talent):
     近似する。塁打数は本塁打の割合が高いほど大きくなる。
     """
     contact, power, walk = talent[:, 0], talent[:, 1], talent[:, 2]
-    bases_per_hit = power * 4 + (1 - power) * (
-        DOUBLE_SHARE * 2 + TRIPLE_SHARE * 3 + (1 - DOUBLE_SHARE - TRIPLE_SHARE)
-    )
+    bases_per_hit = power * 4 + (1 - power) * (DOUBLE_SHARE * 2 + TRIPLE_SHARE * 3 + (1 - DOUBLE_SHARE - TRIPLE_SHARE))
     return (contact + walk) + contact * bases_per_hit
 
 
 class Command(BaseCommand):
-    help = '各リーグに仮想の試合データを投入する（順位表・タイトルなどの確認用）'
+    help = "各リーグに仮想の試合データを投入する（順位表・タイトルなどの確認用）"
 
     def add_arguments(self, parser):
-        parser.add_argument('--seed', type=int, default=None, help='乱数シード（再現用）')
+        parser.add_argument("--seed", type=int, default=None, help="乱数シード（再現用）")
+        parser.add_argument("--year", type=int, default=date.today().year, help="投入するシーズン（西暦）")
         parser.add_argument(
-            '--year', type=int, default=date.today().year, help='投入するシーズン（西暦）'
+            "--games-per-pair",
+            type=int,
+            default=DEFAULT_GAMES_PER_PAIR,
+            help=f"対戦カードごとの試合数（既定 {DEFAULT_GAMES_PER_PAIR}）",
         )
+        parser.add_argument("--dry-run", action="store_true", help="投入せず件数だけ表示する")
         parser.add_argument(
-            '--games-per-pair', type=int, default=DEFAULT_GAMES_PER_PAIR,
-            help=f'対戦カードごとの試合数（既定 {DEFAULT_GAMES_PER_PAIR}）',
-        )
-        parser.add_argument('--dry-run', action='store_true', help='投入せず件数だけ表示する')
-        parser.add_argument(
-            '--replace', action='store_true',
-            help='指定シーズンの既存の試合を削除してから投入する（既定は中止する）',
+            "--replace",
+            action="store_true",
+            help="指定シーズンの既存の試合を削除してから投入する（既定は中止する）",
         )
 
     def handle(self, *args, **options):
-        self.rng = np.random.default_rng(options['seed'])
+        self.rng = np.random.default_rng(options["seed"])
 
-        year = options['year']
-        per_pair = options['games_per_pair']
+        year = options["year"]
+        per_pair = options["games_per_pair"]
         if per_pair < 1:
-            raise CommandError('--games-per-pair は1以上を指定してください。')
+            raise CommandError("--games-per-pair は1以上を指定してください。")
 
         existing = Game.objects.filter(year=year)
-        if existing.exists() and not options['replace']:
+        if existing.exists() and not options["replace"]:
             raise CommandError(
-                f'{year}年の試合が既に {existing.count()} 件あります。'
-                '重複を防ぐため中止しました。作り直す場合は --replace を付けてください。'
+                f"{year}年の試合が既に {existing.count()} 件あります。"
+                "重複を防ぐため中止しました。作り直す場合は --replace を付けてください。"
             )
 
         rosters = self._rosters(year)
@@ -247,30 +257,30 @@ class Command(BaseCommand):
 
         if not plans:
             raise CommandError(
-                '試合を作れるリーグがありません。'
-                '同じリーグに2チーム以上あり、各チームに投手と野手が登録されている必要があります。'
+                "試合を作れるリーグがありません。"
+                "同じリーグに2チーム以上あり、各チームに投手と野手が登録されている必要があります。"
             )
 
-        if options['dry_run']:
-            self.stdout.write(f'{year}年 · {len(plans)}試合を投入します（--dry-run のため未実行）')
+        if options["dry_run"]:
+            self.stdout.write(f"{year}年 · {len(plans)}試合を投入します（--dry-run のため未実行）")
             self._report(plans)
             return
 
         with transaction.atomic():
-            if options['replace'] and existing.exists():
+            if options["replace"] and existing.exists():
                 removed = existing.count()
                 existing.delete()  # 明細は on_delete=CASCADE で一緒に消える
-                self.stdout.write(f'{year}年の既存の試合 {removed} 件を削除しました。')
+                self.stdout.write(f"{year}年の既存の試合 {removed} 件を削除しました。")
 
             batting_rows, pitching_rows, inning_rows = [], [], []
             for plan in plans:
                 game = Game.objects.create(
                     year=year,
-                    played_on=plan['played_on'],
-                    home_team=plan['home'],
-                    away_team=plan['away'],
-                    home_score=plan['home_score'],
-                    away_score=plan['away_score'],
+                    played_on=plan["played_on"],
+                    home_team=plan["home"],
+                    away_team=plan["away"],
+                    home_score=plan["home_score"],
+                    away_score=plan["away_score"],
                 )
                 batting_rows.extend(self._batting_rows(game, plan))
                 pitching_rows.extend(self._pitching_rows(game, plan))
@@ -280,51 +290,61 @@ class Command(BaseCommand):
             GamePitchingLine.objects.bulk_create(pitching_rows, batch_size=500)
             GameInningScore.objects.bulk_create(inning_rows, batch_size=500)
 
-        self.stdout.write(self.style.SUCCESS(
-            f'{year}年 · {len(plans)}試合を投入しました'
-            f'（打撃 {len(batting_rows)}件 / 投球 {len(pitching_rows)}件）'
-        ))
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"{year}年 · {len(plans)}試合を投入しました"
+                f"（打撃 {len(batting_rows)}件 / 投球 {len(pitching_rows)}件）"
+            )
+        )
         self._report(plans)
 
     @staticmethod
     def _batting_rows(game, plan):
-        for entry in plan['batting']:
-            line = entry['line']
+        for entry in plan["batting"]:
+            line = entry["line"]
             yield GameBattingLine(
-                game=game, player=entry['player'],
-                batting_order=entry['batting_order'],
-                slot_sequence=entry['slot_sequence'],
-                fielding_position=entry['fielding_position'].value,
-                at_bats=line.at_bats, singles=line.singles, doubles=line.doubles,
-                triples=line.triples, home_runs=line.home_runs,
-                runs_batted_in=line.runs_batted_in, walks=line.walks,
+                game=game,
+                player=entry["player"],
+                batting_order=entry["batting_order"],
+                slot_sequence=entry["slot_sequence"],
+                fielding_position=entry["fielding_position"].value,
+                at_bats=line.at_bats,
+                singles=line.singles,
+                doubles=line.doubles,
+                triples=line.triples,
+                home_runs=line.home_runs,
+                runs_batted_in=line.runs_batted_in,
+                walks=line.walks,
                 hit_by_pitch=line.hit_by_pitch,
                 sacrifice_flies=line.sacrifice_flies,
             )
 
     @staticmethod
     def _inning_rows(game, plan):
-        score = plan['line_score']
+        score = plan["line_score"]
         for is_home, values in ((False, score.away), (True, score.home)):
             for index, runs in enumerate(values, start=1):
-                yield GameInningScore(
-                    game=game, inning=index, is_home=is_home, runs=runs
-                )
+                yield GameInningScore(game=game, inning=index, is_home=is_home, runs=runs)
 
     @staticmethod
     def _pitching_rows(game, plan):
-        for entry in plan['pitching']:
-            line = entry['line']
+        for entry in plan["pitching"]:
+            line = entry["line"]
             yield GamePitchingLine(
-                game=game, player=entry['player'],
-                appearance_order=entry['appearance_order'],
-                entered_inning=entry['segment']['innings'][0],
+                game=game,
+                player=entry["player"],
+                appearance_order=entry["appearance_order"],
+                entered_inning=entry["segment"]["innings"][0],
                 # 保存は野球表記（5.2 = 5回と2/3）。変換は値オブジェクトに任せる
                 innings_pitched=float(line.innings.to_notation()),
-                wins=line.wins, losses=line.losses, saves=line.saves,
+                wins=line.wins,
+                losses=line.losses,
+                saves=line.saves,
                 holds=line.holds,
-                earned_runs=line.earned_runs, strikeouts=line.strikeouts,
-                hits_allowed=line.hits_allowed, walks_allowed=line.walks_allowed,
+                earned_runs=line.earned_runs,
+                strikeouts=line.strikeouts,
+                hits_allowed=line.hits_allowed,
+                walks_allowed=line.walks_allowed,
                 home_runs_allowed=line.home_runs_allowed,
                 hit_by_pitch_allowed=line.hit_by_pitch_allowed,
             )
@@ -337,22 +357,18 @@ class Command(BaseCommand):
         その年に在籍している選手だけを対象にする（加入前・退団後の選手を
         出場させると、経歴と成績が食い違う）。
         """
-        rosters = defaultdict(lambda: {'batters': [], 'pitchers': [], 'foreign': set()})
-        stints = (
-            PlayerStint.objects
-            .filter(from_year__lte=year)
-            .select_related('player', 'team')
-        )
+        rosters = defaultdict(lambda: {"batters": [], "pitchers": [], "foreign": set()})
+        stints = PlayerStint.objects.filter(from_year__lte=year).select_related("player", "team")
         for stint in stints:
             if stint.to_year is not None and stint.to_year < year:
                 continue
             entry = rosters[stint.team_id]
             if stint.player.position == Position.PITCHER.value:
-                entry['pitchers'].append(stint.player)
+                entry["pitchers"].append(stint.player)
             else:
-                entry['batters'].append(stint.player)
+                entry["batters"].append(stint.player)
             if stint.player.is_foreign_player:
-                entry['foreign'].add(stint.player.id)
+                entry["foreign"].add(stint.player.id)
 
         for entry in rosters.values():
             self._assign_depth_chart(entry)
@@ -370,37 +386,35 @@ class Command(BaseCommand):
         **序列は能力の高い順に決める。** 無作為に選ぶと、打率 .170 の打者が
         規定打席に到達し、防御率 4.90 の投手がローテーションに残ってしまう。
         """
-        batters = roster['batters']
+        batters = roster["batters"]
         talents = self._batter_talents(batters)
         if batters:
-            order = np.argsort(-_expected_ops(
-                np.array([talents[p.id] for p in batters])
-            ))
+            order = np.argsort(-_expected_ops(np.array([talents[p.id] for p in batters])))
             batters = [batters[index] for index in order]
 
-        roster['batting_talent'] = talents
-        roster['regulars'] = batters[:LINEUP_SIZE]
-        roster['bench'] = batters[LINEUP_SIZE:]
-        roster['bench_weights'] = _depth_weights(len(roster['bench']), BENCH_DECAY)
-        roster['positions'] = self._defensive_alignment(roster['regulars'])
+        roster["batting_talent"] = talents
+        roster["regulars"] = batters[:LINEUP_SIZE]
+        roster["bench"] = batters[LINEUP_SIZE:]
+        roster["bench_weights"] = _depth_weights(len(roster["bench"]), BENCH_DECAY)
+        roster["positions"] = self._defensive_alignment(roster["regulars"])
 
-        pitchers = roster['pitchers']
+        pitchers = roster["pitchers"]
         skills = self._pitcher_talents(pitchers)
         # 失点の倍率なので小さいほど good。昇順に並べれば上位が主力になる
         pitchers = sorted(pitchers, key=lambda p: skills[p.id])
 
-        roster['pitching_talent'] = skills
-        roster['rotation'] = pitchers[:ROTATION_SIZE]
-        roster['bullpen'] = pitchers[ROTATION_SIZE:] or roster['rotation']
-        roster['bullpen_weights'] = _depth_weights(len(roster['bullpen']), BULLPEN_DECAY)
+        roster["pitching_talent"] = skills
+        roster["rotation"] = pitchers[:ROTATION_SIZE]
+        roster["bullpen"] = pitchers[ROTATION_SIZE:] or roster["rotation"]
+        roster["bullpen_weights"] = _depth_weights(len(roster["bullpen"]), BULLPEN_DECAY)
 
         # 打線の戦力と投手陣の戦力。得点の期待値に反映させる
-        roster['offense'] = float(np.mean([
-            _expected_ops(np.array([talents[p.id]]))[0] for p in roster['regulars']
-        ])) if roster['regulars'] else 1.0
-        roster['defense'] = float(np.mean([
-            skills[p.id] for p in roster['rotation']
-        ])) if roster['rotation'] else 1.0
+        roster["offense"] = (
+            float(np.mean([_expected_ops(np.array([talents[p.id]]))[0] for p in roster["regulars"]]))
+            if roster["regulars"]
+            else 1.0
+        )
+        roster["defense"] = float(np.mean([skills[p.id] for p in roster["rotation"]])) if roster["rotation"] else 1.0
 
     @staticmethod
     def _defensive_alignment(regulars):
@@ -422,13 +436,9 @@ class Command(BaseCommand):
             else:
                 leftovers.append(player)
 
-        spare = [
-            slot for slots in available.values() for slot in slots
-        ]
+        spare = [slot for slots in available.values() for slot in slots]
         for player in leftovers:
-            assigned[player.id] = (
-                spare.pop(0) if spare else FieldingPosition.DESIGNATED_HITTER
-            )
+            assigned[player.id] = spare.pop(0) if spare else FieldingPosition.DESIGNATED_HITTER
         return assigned
 
     def _batter_talents(self, batters):
@@ -452,40 +462,42 @@ class Command(BaseCommand):
     def _plans(self, year, per_pair, rosters):
         """投入する試合の一覧を組み立てる。保存はまだしない。"""
         plans = []
-        for league in League.objects.prefetch_related('teams'):
+        for league in League.objects.prefetch_related("teams"):
             teams = [
-                team for team in league.teams.all()
-                if rosters[team.id]['batters'] and rosters[team.id]['pitchers']
+                team for team in league.teams.all() if rosters[team.id]["batters"] and rosters[team.id]["pitchers"]
             ]
             if len(teams) < 2:
                 continue
 
             # 戦力はリーグの平均を1とした比で効かせる
-            league_offense = float(np.mean([rosters[t.id]['offense'] for t in teams]))
-            league_defense = float(np.mean([rosters[t.id]['defense'] for t in teams]))
+            league_offense = float(np.mean([rosters[t.id]["offense"] for t in teams]))
+            league_defense = float(np.mean([rosters[t.id]["defense"] for t in teams]))
 
             cards = [
                 (home, away)
                 for index, home in enumerate(teams)
-                for away in teams[index + 1:]
+                for away in teams[index + 1 :]
                 for _ in range(per_pair)
             ]
             # ホームとビジターが偏らないよう半分は入れ替える
-            cards = [
-                (away, home) if position % 2 else (home, away)
-                for position, (home, away) in enumerate(cards)
-            ]
+            cards = [(away, home) if position % 2 else (home, away) for position, (home, away) in enumerate(cards)]
             cards = self._shuffled(cards)
 
             # 先発が何番手かを数えるための、チームごとの登板順
             starts = defaultdict(int)
-            for played_on, (home, away) in zip(
-                self._dates(year, len(cards)), cards, strict=True
-            ):
-                plans.append(self._plan(
-                    league, home, away, played_on, rosters, starts,
-                    league_offense, league_defense,
-                ))
+            for played_on, (home, away) in zip(self._dates(year, len(cards)), cards, strict=True):
+                plans.append(
+                    self._plan(
+                        league,
+                        home,
+                        away,
+                        played_on,
+                        rosters,
+                        starts,
+                        league_offense,
+                        league_defense,
+                    )
+                )
         return plans
 
     def _shuffled(self, items):
@@ -497,16 +509,20 @@ class Command(BaseCommand):
         """試合日を開幕から終了まで均等に散らす。"""
         start = date(year, *SEASON_START)
         span = (date(year, *SEASON_END) - start).days
-        return [
-            start + timedelta(days=index * span // max(1, count))
-            for index in range(count)
-        ]
+        return [start + timedelta(days=index * span // max(1, count)) for index in range(count)]
 
     # --- 1試合ぶんの組み立て ---
 
     def _plan(
-        self, league, home, away, played_on, rosters, starts,
-        league_offense, league_defense,
+        self,
+        league,
+        home,
+        away,
+        played_on,
+        rosters,
+        starts,
+        league_offense,
+        league_defense,
     ):
         """1試合ぶんの明細を作る。
 
@@ -517,24 +533,23 @@ class Command(BaseCommand):
         sides = {}
         for team, opponent in ((home, away), (away, home)):
             sides[team.id] = {
-                'team': team, 'opponent': opponent, 'roster': rosters[team.id],
-                'is_home': team is home,
+                "team": team,
+                "opponent": opponent,
+                "roster": rosters[team.id],
+                "is_home": team is home,
             }
 
         # 得点の総数を先に決める。抑えを使うかは点差で決まるため、継投より前に要る
-        totals = self._totals(
-            sides[home.id], sides[away.id], league_offense, league_defense
-        )
+        totals = self._totals(sides[home.id], sides[away.id], league_offense, league_defense)
 
         for team_id, side in sides.items():
-            roster = side['roster']
-            side['lineup'] = self._lineup(roster, limit)
-            used_foreign = sum(
-                1 for e in side['lineup'] if e['player'].id in roster['foreign']
-            )
-            margin = totals[team_id] - totals[side['opponent'].id]
-            side['staff'] = self._staff(
-                roster, starts[team_id],
+            roster = side["roster"]
+            side["lineup"] = self._lineup(roster, limit)
+            used_foreign = sum(1 for e in side["lineup"] if e["player"].id in roster["foreign"])
+            margin = totals[team_id] - totals[side["opponent"].id]
+            side["staff"] = self._staff(
+                roster,
+                starts[team_id],
                 None if limit is None else max(0, limit - used_foreign),
                 # 勝っている接戦が抑えの出番。大差や負け試合では別の投手が締める
                 closing=0 < margin <= SAVE_LEAD_LIMIT,
@@ -544,21 +559,19 @@ class Command(BaseCommand):
         # 回ごとの得点。登板中の投手の力量で重みを付ける（打たれる投手の回に集まる）。
         # side['runs_by_inning'] は「その側の投手が投げた回に相手が挙げた点」
         for side in sides.values():
-            side['runs_by_inning'] = self._runs_by_inning(
-                totals[side['opponent'].id], side['staff']
-            )
+            side["runs_by_inning"] = self._runs_by_inning(totals[side["opponent"].id], side["staff"])
 
         home_score, away_score = totals[home.id], totals[away.id]
         # ホームの投手が投げた回にビジターが挙げた点が、ビジターのイニングスコア
         line_score = LineScore(
-            away=tuple(int(v) for v in sides[home.id]['runs_by_inning']),
-            home=tuple(int(v) for v in sides[away.id]['runs_by_inning']),
+            away=tuple(int(v) for v in sides[home.id]["runs_by_inning"]),
+            home=tuple(int(v) for v in sides[away.id]["runs_by_inning"]),
         )
 
         for side in sides.values():
-            self._batting_entries(side, totals[side['team'].id])
+            self._batting_entries(side, totals[side["team"].id])
         for side in sides.values():
-            self._pitching_entries(side, sides[side['opponent'].id])
+            self._pitching_entries(side, sides[side["opponent"].id])
 
         # 勝敗はドメインの規則に決めさせる。集約を組んで渡す
         game = DomainGame(
@@ -572,26 +585,26 @@ class Command(BaseCommand):
         )
         team_of = {}
         for side in sides.values():
-            for entry in side['pitching_entries']:
-                team_of[entry['player'].id] = side['team'].id
+            for entry in side["pitching_entries"]:
+                team_of[entry["player"].id] = side["team"].id
                 game.record_pitching(
-                    entry['player'].id, entry['line'],
-                    appearance_order=entry['appearance_order'],
-                    entered_inning=entry['segment']['innings'][0],
+                    entry["player"].id,
+                    entry["line"],
+                    appearance_order=entry["appearance_order"],
+                    entered_inning=entry["segment"]["innings"][0],
                 )
         self._assign_decisions(game, sides, team_of)
 
         return {
-            'league_name': league.name,
-            'home': home, 'away': away, 'played_on': played_on,
-            'home_score': home_score, 'away_score': away_score,
-            'line_score': line_score,
-            'batting': [
-                entry for side in sides.values() for entry in side['batting_entries']
-            ],
-            'pitching': [
-                entry for side in sides.values() for entry in side['pitching_entries']
-            ],
+            "league_name": league.name,
+            "home": home,
+            "away": away,
+            "played_on": played_on,
+            "home_score": home_score,
+            "away_score": away_score,
+            "line_score": line_score,
+            "batting": [entry for side in sides.values() for entry in side["batting_entries"]],
+            "pitching": [entry for side in sides.values() for entry in side["pitching_entries"]],
         }
 
     def _totals(self, home_side, away_side, league_offense, league_defense):
@@ -602,18 +615,14 @@ class Command(BaseCommand):
         """
         drawn = {}
         for side, opponent in ((home_side, away_side), (away_side, home_side)):
-            offense = (side['roster']['offense'] / league_offense) ** OFFENSE_ELASTICITY
+            offense = (side["roster"]["offense"] / league_offense) ** OFFENSE_ELASTICITY
             # 相手投手陣の倍率は大きいほど打たれるので、そのまま得点に効く
-            defense = (
-                opponent['roster']['defense'] / league_defense
-            ) ** DEFENSE_ELASTICITY
+            defense = (opponent["roster"]["defense"] / league_defense) ** DEFENSE_ELASTICITY
             mean = max(0.5, RUNS_MEAN * offense * defense)
             probability = RUNS_SHAPE / (RUNS_SHAPE + mean)
-            drawn[side['team'].id] = int(
-                self.rng.negative_binomial(RUNS_SHAPE, probability)
-            )
+            drawn[side["team"].id] = int(self.rng.negative_binomial(RUNS_SHAPE, probability))
 
-        home_id, away_id = home_side['team'].id, away_side['team'].id
+        home_id, away_id = home_side["team"].id, away_side["team"].id
         if drawn[home_id] == drawn[away_id] and self.rng.random() >= TIE_SURVIVAL_RATIO:
             winner = home_id if self.rng.random() < 0.5 else away_id
             drawn[winner] += 1
@@ -625,9 +634,7 @@ class Command(BaseCommand):
         重みは、その回に投げている投手の失点の倍率。打たれる投手の回に得点が
         集まるので、同じチームの中でも防御率に差が付く。
         """
-        weights = np.array([
-            segment['skill'] for segment in staff for _ in segment['innings']
-        ])
+        weights = np.array([segment["skill"] for segment in staff for _ in segment["innings"]])
         if weights.size != INNINGS_PER_GAME:
             # 継投が9回を覆えていない場合は均等に配る（起こらない想定の保険）
             weights = np.ones(INNINGS_PER_GAME)
@@ -642,56 +649,55 @@ class Command(BaseCommand):
         少なすぎて、極端な率の選手が一覧の上位に並ぶ。
         代打は打順の途中出場（果次1）として別に加える。
         """
-        bench = roster['bench']
-        swap = self.rng.random(len(roster['regulars'])) < BENCH_RATIO
+        bench = roster["bench"]
+        swap = self.rng.random(len(roster["regulars"])) < BENCH_RATIO
 
         starters = []
         used = set()
-        for order, (regular, replaced) in enumerate(
-            zip(roster['regulars'], swap, strict=True), start=1
-        ):
+        for order, (regular, replaced) in enumerate(zip(roster["regulars"], swap, strict=True), start=1):
             player = regular
             if replaced and bench:
-                picked = bench[self.rng.choice(len(bench), p=roster['bench_weights'])]
+                picked = bench[self.rng.choice(len(bench), p=roster["bench_weights"])]
                 if picked.id not in used:
                     player = picked
             if player.id in used:
                 player = regular
             used.add(player.id)
-            starters.append({
-                'player': player,
-                'batting_order': order,
-                'slot_sequence': 0,
-                # 控えが先発する場合はレギュラーの守備位置を引き継ぐ
-                'fielding_position': roster['positions'].get(
-                    player.id, roster['positions'].get(regular.id)
-                ) or FieldingPosition.DESIGNATED_HITTER,
-            })
+            starters.append(
+                {
+                    "player": player,
+                    "batting_order": order,
+                    "slot_sequence": 0,
+                    # 控えが先発する場合はレギュラーの守備位置を引き継ぐ
+                    "fielding_position": roster["positions"].get(player.id, roster["positions"].get(regular.id))
+                    or FieldingPosition.DESIGNATED_HITTER,
+                }
+            )
 
         return self._with_pinch_hitters(starters, roster, used, limit)
 
     def _with_pinch_hitters(self, starters, roster, used, limit):
         """代打を加える。スタメンと控えの区別がボックススコアに出るようにする。"""
         entries = list(starters)
-        bench = [p for p in roster['bench'] if p.id not in used]
+        bench = [p for p in roster["bench"] if p.id not in used]
 
         if bench and self.rng.random() < PINCH_HITTER_RATIO:
             count = min(len(bench), int(self.rng.integers(1, MAX_PINCH_HITTERS + 1)))
             picks = self.rng.choice(len(bench), size=count, replace=False)
             orders = self.rng.choice(LINEUP_SIZE, size=count, replace=False) + 1
             for index, order in zip(picks, orders, strict=True):
-                entries.append({
-                    'player': bench[index],
-                    'batting_order': int(order),
-                    'slot_sequence': 1,
-                    'fielding_position': FieldingPosition.PINCH_HITTER,
-                })
+                entries.append(
+                    {
+                        "player": bench[index],
+                        "batting_order": int(order),
+                        "slot_sequence": 1,
+                        "fielding_position": FieldingPosition.PINCH_HITTER,
+                    }
+                )
 
-        kept = self._within_quota(
-            [e['player'] for e in entries], roster['foreign'], limit
-        )
+        kept = self._within_quota([e["player"] for e in entries], roster["foreign"], limit)
         allowed = {p.id for p in kept}
-        return [e for e in entries if e['player'].id in allowed]
+        return [e for e in entries if e["player"].id in allowed]
 
     def _staff(self, roster, start_index, limit, *, closing=False):
         """その試合の投手陣。先発はローテーション順、救援は序列の上位から。
@@ -702,37 +708,35 @@ class Command(BaseCommand):
 
         closing は「勝っている接戦か」。抑えの出番をここで絞る。
         """
-        rotation = roster['rotation']
+        rotation = roster["rotation"]
         starter = rotation[start_index % len(rotation)]
 
         starter_innings = int(self.rng.integers(*STARTER_INNINGS, endpoint=True))
         remaining = INNINGS_PER_GAME - starter_innings
 
-        pitchers = [starter] + self._relievers(
-            roster, starter, remaining, closing=closing
-        )
+        pitchers = [starter] + self._relievers(roster, starter, remaining, closing=closing)
         blocks = self._split_innings(starter_innings, len(pitchers))
 
         staff = []
         # 枠に収まらなかった投手は blocks より少なくなるので、短い方に合わせる
         for order, (pitcher, innings) in enumerate(zip(pitchers, blocks), start=1):  # noqa: B905
-            staff.append({
-                'player': pitcher,
-                'appearance_order': order,
-                'innings': innings,
-                'skill': roster['pitching_talent'][pitcher.id],
-            })
+            staff.append(
+                {
+                    "player": pitcher,
+                    "appearance_order": order,
+                    "innings": innings,
+                    "skill": roster["pitching_talent"][pitcher.id],
+                }
+            )
 
         self._shave_outs(staff)
-        kept = self._within_quota(
-            [s['player'] for s in staff], roster['foreign'], limit
-        )
+        kept = self._within_quota([s["player"] for s in staff], roster["foreign"], limit)
         allowed = {p.id for p in kept}
         if len(allowed) == len(staff):
             return staff
         if not allowed:
             # 全員が枠から外れることは無いが、投手が居ない試合は成立しない
-            allowed = {staff[0]['player'].id}
+            allowed = {staff[0]["player"].id}
         # 枠で外れた投手の回は、残った投手が引き受ける
         return self._merge_innings(staff, allowed)
 
@@ -742,7 +746,7 @@ class Command(BaseCommand):
         抑えを固定しないとセーブが数人に分散し、1人で年30セーブという実際の
         形にならない。中継ぎは序列の上位から選ばれやすい。
         """
-        bullpen = [p for p in roster['bullpen'] if p is not starter]
+        bullpen = [p for p in roster["bullpen"] if p is not starter]
         if not bullpen:
             return []
 
@@ -751,18 +755,19 @@ class Command(BaseCommand):
         # 抑えは中継ぎの候補には入れない。候補に残すと序列1位ゆえ中継ぎとしても
         # 頻繁に選ばれ、投球回が実際の抑えの倍を超えてしまう
         pool = bullpen[1:]
-        usage = (
-            CLOSER_USAGE_IN_SAVE_SITUATION if closing else CLOSER_USAGE_OTHERWISE
-        )
+        usage = CLOSER_USAGE_IN_SAVE_SITUATION if closing else CLOSER_USAGE_OTHERWISE
         use_closer = bool(pool) and wanted > 1 and self.rng.random() < usage
 
         middle_wanted = min(len(pool), wanted - 1 if use_closer else wanted)
         picks = (
             self.rng.choice(
-                len(pool), size=middle_wanted, replace=False,
+                len(pool),
+                size=middle_wanted,
+                replace=False,
                 p=_depth_weights(len(pool), BULLPEN_DECAY),
             )
-            if pool and middle_wanted else []
+            if pool and middle_wanted
+            else []
         )
         # 中継ぎは序列の下位から先に投げる（良い投手を後ろに残す）
         middle = [pool[index] for index in reversed(sorted(picks))]
@@ -801,7 +806,7 @@ class Command(BaseCommand):
         cursor = 0
         for index in range(relievers):
             size = base + (1 if index >= relievers - extra else 0)
-            blocks.append(remaining[cursor:cursor + size])
+            blocks.append(remaining[cursor : cursor + size])
             cursor += size
         if closing:
             blocks.append(closing)
@@ -813,16 +818,16 @@ class Command(BaseCommand):
         こうしないと投球回が常に X.0 になり、5.2 のような表記が出てこない。
         """
         for segment in staff:
-            segment['outs'] = len(segment['innings']) * OUTS_PER_INNING
+            segment["outs"] = len(segment["innings"]) * OUTS_PER_INNING
 
         for index in range(len(staff) - 1):
             if self.rng.random() >= MID_INNING_CHANGE_RATIO:
                 continue
             handed = int(self.rng.integers(1, OUTS_PER_INNING))
-            if staff[index]['outs'] - handed < 1:
+            if staff[index]["outs"] - handed < 1:
                 continue
-            staff[index]['outs'] -= handed
-            staff[index + 1]['outs'] += handed
+            staff[index]["outs"] -= handed
+            staff[index + 1]["outs"] += handed
 
     @staticmethod
     def _merge_innings(staff, allowed):
@@ -835,25 +840,23 @@ class Command(BaseCommand):
         # まだ引き受け先が決まっていない区間（先発が外れた場合の先頭の回）
         pending = []
         for segment in staff:
-            if segment['player'].id not in allowed:
+            if segment["player"].id not in allowed:
                 if merged:
-                    merged[-1]['innings'] += segment['innings']
-                    merged[-1]['outs'] += segment['outs']
+                    merged[-1]["innings"] += segment["innings"]
+                    merged[-1]["outs"] += segment["outs"]
                 else:
                     pending.append(segment)
                 continue
 
             kept = dict(segment)
             if pending:
-                kept['innings'] = [
-                    inning for dropped in pending for inning in dropped['innings']
-                ] + kept['innings']
-                kept['outs'] += sum(dropped['outs'] for dropped in pending)
+                kept["innings"] = [inning for dropped in pending for inning in dropped["innings"]] + kept["innings"]
+                kept["outs"] += sum(dropped["outs"] for dropped in pending)
                 pending = []
             merged.append(kept)
 
         for order, segment in enumerate(merged, start=1):
-            segment['appearance_order'] = order
+            segment["appearance_order"] = order
         return merged
 
     @staticmethod
@@ -884,17 +887,15 @@ class Command(BaseCommand):
         三塁打・単打の順に、残りから引き算しながら決める。
         代打は1打席だけなので、打数の引き方を分ける。
         """
-        entries = side['lineup']
-        talents = side['roster']['batting_talent']
-        talent = np.array([talents[e['player'].id] for e in entries])
+        entries = side["lineup"]
+        talents = side["roster"]["batting_talent"]
+        talent = np.array([talents[e["player"].id] for e in entries])
         contact, power, walk_rate = talent[:, 0], talent[:, 1], talent[:, 2]
 
-        is_starter = np.array([e['slot_sequence'] == 0 for e in entries])
+        is_starter = np.array([e["slot_sequence"] == 0 for e in entries])
         at_bats = np.where(
             is_starter,
-            AT_BATS_BASE + self.rng.binomial(
-                AT_BATS_EXTRA_TRIALS, AT_BATS_EXTRA_RATIO, size=len(entries)
-            ),
+            AT_BATS_BASE + self.rng.binomial(AT_BATS_EXTRA_TRIALS, AT_BATS_EXTRA_RATIO, size=len(entries)),
             1,
         )
 
@@ -907,35 +908,34 @@ class Command(BaseCommand):
         singles = rest - triples
 
         walks = self.rng.binomial(at_bats + 1, walk_rate)
-        hit_by_pitch = self.rng.binomial(
-            1, BATTER_HIT_BY_PITCH_RATIO, size=len(entries)
-        )
+        hit_by_pitch = self.rng.binomial(1, BATTER_HIT_BY_PITCH_RATIO, size=len(entries))
 
         # 打点は得点そのものを分配する。長打力のある打者に寄せる（走者を還すのは
         # 長打で、打点は中軸に集まる）。無安打でも犠飛で打点は付くので下限を置く
         weights = np.maximum(1.0, (hits + home_runs * 3) * (1.0 + power * 4))
-        runs_batted_in = self.rng.multinomial(
-            runs_to_drive_in, weights / weights.sum()
-        )
+        runs_batted_in = self.rng.multinomial(runs_to_drive_in, weights / weights.sum())
 
         built = []
         for index, entry in enumerate(entries):
-            hit_total = int(
-                singles[index] + doubles[index] + triples[index] + home_runs[index]
+            hit_total = int(singles[index] + doubles[index] + triples[index] + home_runs[index])
+            built.append(
+                dict(
+                    entry,
+                    line=BattingLine(
+                        at_bats=int(at_bats[index]),
+                        singles=int(singles[index]),
+                        doubles=int(doubles[index]),
+                        triples=int(triples[index]),
+                        home_runs=int(home_runs[index]),
+                        runs_batted_in=int(runs_batted_in[index]),
+                        walks=int(walks[index]),
+                        hit_by_pitch=int(hit_by_pitch[index]),
+                        # 無安打で打点が付いた打者は犠飛として記録の形を整える
+                        sacrifice_flies=1 if hit_total == 0 and runs_batted_in[index] else 0,
+                    ),
+                )
             )
-            built.append(dict(entry, line=BattingLine(
-                at_bats=int(at_bats[index]),
-                singles=int(singles[index]),
-                doubles=int(doubles[index]),
-                triples=int(triples[index]),
-                home_runs=int(home_runs[index]),
-                runs_batted_in=int(runs_batted_in[index]),
-                walks=int(walks[index]),
-                hit_by_pitch=int(hit_by_pitch[index]),
-                # 無安打で打点が付いた打者は犠飛として記録の形を整える
-                sacrifice_flies=1 if hit_total == 0 and runs_batted_in[index] else 0,
-            )))
-        side['batting_entries'] = built
+        side["batting_entries"] = built
         return built
 
     def _pitching_entries(self, side, opponent):
@@ -945,13 +945,13 @@ class Command(BaseCommand):
         引くと、リーグ全体の本塁打と被本塁打が食い違ってしまう。
         失点はその投手が投げた回に相手が挙げた得点。
         """
-        staff = side['staff']
-        outs = np.array([segment['outs'] for segment in staff])
-        skill = np.array([segment['skill'] for segment in staff])
+        staff = side["staff"]
+        outs = np.array([segment["outs"] for segment in staff])
+        skill = np.array([segment["skill"] for segment in staff])
         weights = outs * skill
         share = weights / weights.sum()
 
-        opponent_lines = [entry['line'] for entry in opponent['batting_entries']]
+        opponent_lines = [entry["line"] for entry in opponent["batting_entries"]]
         hits_total = sum(line.hits for line in opponent_lines)
         home_runs_total = sum(line.home_runs for line in opponent_lines)
         walks_total = sum(line.walks for line in opponent_lines)
@@ -963,34 +963,32 @@ class Command(BaseCommand):
         walks = self.rng.multinomial(walks_total, share)
         hit_by_pitch = self.rng.multinomial(hit_by_pitch_total, share)
 
-        strikeouts = self.rng.binomial(
-            outs, np.clip(STRIKEOUTS_PER_OUT / skill ** STRIKEOUT_BOOST, 0, 1)
-        )
+        strikeouts = self.rng.binomial(outs, np.clip(STRIKEOUTS_PER_OUT / skill**STRIKEOUT_BOOST, 0, 1))
 
-        runs_by_inning = side['runs_by_inning']
+        runs_by_inning = side["runs_by_inning"]
         built = []
         for index, segment in enumerate(staff):
-            runs = int(sum(
-                runs_by_inning[inning - 1] for inning in segment['innings']
-            ))
+            runs = int(sum(runs_by_inning[inning - 1] for inning in segment["innings"]))
             earned = int(self.rng.binomial(runs, EARNED_RUN_RATIO))
-            built.append({
-                'player': segment['player'],
-                'appearance_order': segment['appearance_order'],
-                'segment': segment,
-                'runs': runs,
-                'line': PitchingLine(
-                    innings=InningsPitched(outs=int(outs[index])),
-                    earned_runs=earned,
-                    hits_allowed=int(hits[index]),
-                    home_runs_allowed=int(home_runs[index]),
-                    walks_allowed=int(walks[index]),
-                    hit_by_pitch_allowed=int(hit_by_pitch[index]),
-                    strikeouts=int(strikeouts[index]),
-                    starts=1 if segment['appearance_order'] == 1 else 0,
-                ),
-            })
-        side['pitching_entries'] = built
+            built.append(
+                {
+                    "player": segment["player"],
+                    "appearance_order": segment["appearance_order"],
+                    "segment": segment,
+                    "runs": runs,
+                    "line": PitchingLine(
+                        innings=InningsPitched(outs=int(outs[index])),
+                        earned_runs=earned,
+                        hits_allowed=int(hits[index]),
+                        home_runs_allowed=int(home_runs[index]),
+                        walks_allowed=int(walks[index]),
+                        hit_by_pitch_allowed=int(hit_by_pitch[index]),
+                        strikeouts=int(strikeouts[index]),
+                        starts=1 if segment["appearance_order"] == 1 else 0,
+                    ),
+                }
+            )
+        side["pitching_entries"] = built
         return built
 
     # --- 勝敗・セーブ・ホールド ---
@@ -1004,11 +1002,11 @@ class Command(BaseCommand):
         decisions = domain_services.pitching_decisions(game, team_of)
 
         for side in sides.values():
-            for entry in side['pitching_entries']:
-                player_id = entry['player'].id
-                line = entry['line']
+            for entry in side["pitching_entries"]:
+                player_id = entry["player"].id
+                line = entry["line"]
                 wins = decisions.wins_for(player_id)
-                entry['line'] = PitchingLine(
+                entry["line"] = PitchingLine(
                     innings=line.innings,
                     earned_runs=line.earned_runs,
                     strikeouts=line.strikeouts,
@@ -1021,12 +1019,12 @@ class Command(BaseCommand):
                     losses=decisions.losses_for(player_id),
                     saves=decisions.saves_for(player_id),
                     holds=decisions.holds_for(player_id),
-                    relief_wins=wins if entry['appearance_order'] > 1 else 0,
+                    relief_wins=wins if entry["appearance_order"] > 1 else 0,
                 )
 
     def _report(self, plans):
         counts = defaultdict(int)
         for plan in plans:
-            counts[plan['league_name']] += 1
+            counts[plan["league_name"]] += 1
         for league_name, count in sorted(counts.items()):
-            self.stdout.write(f'  {league_name}: {count}試合')
+            self.stdout.write(f"  {league_name}: {count}試合")

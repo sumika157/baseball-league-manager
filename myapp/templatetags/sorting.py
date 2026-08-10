@@ -9,12 +9,12 @@ from django.utils.html import format_html
 
 register = template.Library()
 
-ASCENDING_MARK = '↑'
-DESCENDING_MARK = '↓'
+ASCENDING_MARK = "↑"
+DESCENDING_MARK = "↓"
 
 
 @register.simple_tag(takes_context=True)
-def sort_header(context, key, label, align='start', default_desc=True):
+def sort_header(context, key, label, align="start", default_desc=True):
     """並べ替え可能な見出しセルを描画する。
 
     key      … 並べ替えキー（URL の sort に入る値）
@@ -22,9 +22,9 @@ def sort_header(context, key, label, align='start', default_desc=True):
     align    … 'start' か 'end'。数値列は 'end'
     default_desc … その列を初めて押したときに降順にするか
     """
-    request = context.get('request')
-    current = context.get('current_sort')
-    current_desc = context.get('current_descending')
+    request = context.get("request")
+    current = context.get("current_sort")
+    current_desc = context.get("current_descending")
 
     is_active = current == key
 
@@ -32,21 +32,21 @@ def sort_header(context, key, label, align='start', default_desc=True):
     next_desc = (not current_desc) if is_active else bool(default_desc)
 
     params = request.GET.copy() if request else {}
-    if hasattr(params, 'setlist'):
-        params['sort'] = key
-        params['dir'] = 'desc' if next_desc else 'asc'
+    if hasattr(params, "setlist"):
+        params["sort"] = key
+        params["dir"] = "desc" if next_desc else "asc"
         query = params.urlencode()
     else:  # pragma: no cover - request が無い場合の保険
-        query = f'sort={key}&dir=' + ('desc' if next_desc else 'asc')
+        query = f"sort={key}&dir=" + ("desc" if next_desc else "asc")
 
-    mark = ''
+    mark = ""
     if is_active:
         mark = DESCENDING_MARK if current_desc else ASCENDING_MARK
 
     return format_html(
         '<th class="{}"><a class="sort-link{}" href="?{}">{}<span class="sort-mark">{}</span></a></th>',
-        'text-end' if align == 'end' else '',
-        ' is-active' if is_active else '',
+        "text-end" if align == "end" else "",
+        " is-active" if is_active else "",
         query,
         label,
         mark,

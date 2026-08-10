@@ -83,7 +83,7 @@ class Stint:
     from_year: int
     to_year: int | None = None
     id: int | None = None
-    team_name: str = ''
+    team_name: str = ""
 
     def __post_init__(self) -> None:
         self.from_year = Season(self.from_year).year
@@ -129,7 +129,7 @@ class Captaincy:
     from_year: int
     to_year: int | None = None
     id: int | None = None
-    team_name: str = ''
+    team_name: str = ""
 
     def __post_init__(self) -> None:
         self.from_year = Season(self.from_year).year
@@ -190,7 +190,7 @@ class Player:
         return self.position.is_pitcher
 
     def rename(self, name: str) -> None:
-        cleaned = (name or '').strip()
+        cleaned = (name or "").strip()
         if not cleaned:
             from .exceptions import DomainError
 
@@ -264,24 +264,24 @@ class Team:
 
     # --- ロスターの変更（不変条件を守る） ---
 
-    def add_player(
-        self, name: str, number: JerseyNumber, position: Position, from_year: int = None
-    ) -> Player:
+    def add_player(self, name: str, number: JerseyNumber, position: Position, from_year: int = None) -> Player:
         """選手を加入させる。背番号が在籍中の選手と重複する場合は拒否する。"""
         self._ensure_number_is_available(number)
 
-        player = Player(name=(name or '').strip(), number=number, position=position)
+        player = Player(name=(name or "").strip(), number=number, position=position)
         if not player.name:
             from .exceptions import DomainError
 
             raise DomainError("選手名を入力してください。")
 
-        player.career = [Stint(
-            team_id=self.id,
-            number=number,
-            from_year=from_year if from_year is not None else date.today().year,
-            team_name=self.name,
-        )]
+        player.career = [
+            Stint(
+                team_id=self.id,
+                number=number,
+                from_year=from_year if from_year is not None else date.today().year,
+                team_name=self.name,
+            )
+        ]
         self.players.append(player)
         return player
 
@@ -311,9 +311,7 @@ class Team:
         # 在籍していないのに主将、という両立しない状態を残さない
         self.remove_captain(player, year)
 
-    def _ensure_number_is_available(
-        self, number: JerseyNumber, excluding: Player | None = None
-    ) -> None:
+    def _ensure_number_is_available(self, number: JerseyNumber, excluding: Player | None = None) -> None:
         """在籍期間が重なる選手どうしで背番号が重複しないことを確かめる。
 
         過去に同じ番号を付けた選手がいても、期間が重なっていなければ問題ない。
@@ -325,25 +323,24 @@ class Team:
                 if stint.team_id != self.id or not stint.is_current:
                     continue
                 if stint.number == number:
-                    raise DuplicateJerseyNumber(
-                        f"背番号 {number} は「{self.name}」で既に使用されています。"
-                    )
+                    raise DuplicateJerseyNumber(f"背番号 {number} は「{self.name}」で既に使用されています。")
 
     # --- 主将の指名・解任（不変条件を守る） ---
 
     def appoint_captain(self, player: Player, year: int = None) -> None:
         """主将に指名する。在籍していない選手や、既に他の選手が主将の場合は拒否する。"""
         if self.current_stint(player) is None:
-            raise PlayerNotEligibleForCaptaincy(
-                f"「{self.name}」に在籍していない選手を主将にはできません。"
-            )
+            raise PlayerNotEligibleForCaptaincy(f"「{self.name}」に在籍していない選手を主将にはできません。")
         if self.current_captain is player:
             return
         self._ensure_no_current_captain(excluding=player)
-        player.captaincies.append(Captaincy(
-            team_id=self.id, team_name=self.name,
-            from_year=year if year is not None else date.today().year,
-        ))
+        player.captaincies.append(
+            Captaincy(
+                team_id=self.id,
+                team_name=self.name,
+                from_year=year if year is not None else date.today().year,
+            )
+        )
 
     def remove_captain(self, player: Player, year: int = None) -> None:
         """主将を解任する。主将でなければ何もしない。"""
@@ -353,9 +350,7 @@ class Team:
 
     @property
     def current_captain(self) -> Player | None:
-        return next(
-            (p for p in self.players if self._current_captaincy(p) is not None), None
-        )
+        return next((p for p in self.players if self._current_captaincy(p) is not None), None)
 
     def _current_captaincy(self, player: Player) -> Captaincy | None:
         return next(
@@ -369,9 +364,7 @@ class Team:
             if player is excluding:
                 continue
             if self._current_captaincy(player) is not None:
-                raise DuplicateCaptain(
-                    f"「{self.name}」には既に主将（{player.name}）がいます。"
-                )
+                raise DuplicateCaptain(f"「{self.name}」には既に主将（{player.name}）がいます。")
 
     # --- 外国人枠 ---
 
@@ -387,7 +380,8 @@ class Team:
         呼び出し元のサービスがそれ以降の保存処理を止める。
         """
         ensure_quota_not_exceeded(
-            self.foreign_player_count, limit,
+            self.foreign_player_count,
+            limit,
             f"「{self.name}」の外国人選手登録数が上限（{limit}人）を超えています。",
         )
 
@@ -426,7 +420,7 @@ class GameBatting:
 
     @property
     def position_label(self) -> str:
-        return self.fielding_position.label if self.fielding_position else ''
+        return self.fielding_position.label if self.fielding_position else ""
 
 
 @dataclass
@@ -481,7 +475,7 @@ class Game:
     def __post_init__(self) -> None:
         if self.home_team_id == self.away_team_id:
             raise InvalidGame("同じチーム同士の試合は登録できません。")
-        for label, value in (('ホームの得点', self.home_score), ('ビジターの得点', self.away_score)):
+        for label, value in (("ホームの得点", self.home_score), ("ビジターの得点", self.away_score)):
             try:
                 score = int(value)
             except (TypeError, ValueError):
@@ -511,8 +505,8 @@ class Game:
         if not self.involves(team_id):
             raise InvalidGame("この試合に参加していないチームです。")
         if self.is_tie:
-            return 'tie'
-        return 'win' if self.winner_team_id == team_id else 'loss'
+            return "tie"
+        return "win" if self.winner_team_id == team_id else "loss"
 
     def score_for(self, team_id: int) -> tuple[int, int]:
         """指定チームから見た (得点, 失点)。"""
@@ -523,8 +517,12 @@ class Game:
         return self.away_score, self.home_score
 
     def record_batting(
-        self, player_id: int, line: BattingLine, *,
-        batting_order: int | None = None, slot_sequence: int = 0,
+        self,
+        player_id: int,
+        line: BattingLine,
+        *,
+        batting_order: int | None = None,
+        slot_sequence: int = 0,
         fielding_position: FieldingPosition | None = None,
     ) -> GameBatting:
         """選手の打撃成績を記録する。同じ選手が既にあれば上書きする。"""
@@ -536,15 +534,22 @@ class Game:
                 entry.fielding_position = fielding_position
                 return entry
         entry = GameBatting(
-            player_id=player_id, line=line, batting_order=batting_order,
-            slot_sequence=slot_sequence, fielding_position=fielding_position,
+            player_id=player_id,
+            line=line,
+            batting_order=batting_order,
+            slot_sequence=slot_sequence,
+            fielding_position=fielding_position,
         )
         self.batting.append(entry)
         return entry
 
     def record_pitching(
-        self, player_id: int, line: PitchingLine, *,
-        appearance_order: int = 1, entered_inning: int = 1,
+        self,
+        player_id: int,
+        line: PitchingLine,
+        *,
+        appearance_order: int = 1,
+        entered_inning: int = 1,
     ) -> GamePitching:
         """投手の投球成績を記録する。同じ選手が既にあれば上書きする。"""
         for entry in self.pitching:
@@ -554,8 +559,10 @@ class Game:
                 entry.entered_inning = entered_inning
                 return entry
         entry = GamePitching(
-            player_id=player_id, line=line,
-            appearance_order=appearance_order, entered_inning=entered_inning,
+            player_id=player_id,
+            line=line,
+            appearance_order=appearance_order,
+            entered_inning=entered_inning,
         )
         self.pitching.append(entry)
         return entry

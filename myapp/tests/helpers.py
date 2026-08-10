@@ -35,27 +35,27 @@ def inning_payload(away=(), home=(), *, total=12) -> dict:
     常にこの欄がある。空のまま送れば「経過を記録しない」扱いになる。
     """
     payload = {
-        'innings-TOTAL_FORMS': str(total),
-        'innings-INITIAL_FORMS': str(total),
-        'innings-MIN_NUM_FORMS': '0',
-        'innings-MAX_NUM_FORMS': '1000',
+        "innings-TOTAL_FORMS": str(total),
+        "innings-INITIAL_FORMS": str(total),
+        "innings-MIN_NUM_FORMS": "0",
+        "innings-MAX_NUM_FORMS": "1000",
     }
     for index in range(total):
-        payload[f'innings-{index}-inning'] = str(index + 1)
+        payload[f"innings-{index}-inning"] = str(index + 1)
         if index < len(away):
-            payload[f'innings-{index}-away'] = str(away[index])
+            payload[f"innings-{index}-away"] = str(away[index])
         if index < len(home):
-            payload[f'innings-{index}-home'] = str(home[index])
+            payload[f"innings-{index}-home"] = str(home[index])
     return payload
 
 
-def login_as_manager(client, *teams, username='manager') -> User:
+def login_as_manager(client, *teams, username="manager") -> User:
     """渡したチームの担当者としてログインする。
 
     書き込みはログインだけでは通らず、対象チームの担当者であることが要る。
     ログインさせるテストの大半はこの形になる。
     """
-    user = User.objects.create_user(username=username, password='x')
+    user = User.objects.create_user(username=username, password="x")
     for team in teams:
         team.managers.add(user)
     client.force_login(user)
@@ -63,8 +63,16 @@ def login_as_manager(client, *teams, username='manager') -> User:
 
 
 def play_game(
-    home_team, away_team, *, home_score=1, away_score=0, year=2026, month=4, day=1,
-    batting=None, pitching=None,
+    home_team,
+    away_team,
+    *,
+    home_score=1,
+    away_score=0,
+    year=2026,
+    month=4,
+    day=1,
+    batting=None,
+    pitching=None,
 ) -> Game:
     """試合を1件作って保存する。
 
@@ -89,13 +97,9 @@ def play_game(
 
 def give_batting(home_team, away_team, player_id, line: BattingLine, *, year=2026, day=1):
     """ある選手に打撃成績を持たせるためだけの試合を作る。"""
-    return play_game(
-        home_team, away_team, year=year, day=day, batting={player_id: line}
-    )
+    return play_game(home_team, away_team, year=year, day=day, batting={player_id: line})
 
 
 def give_pitching(home_team, away_team, player_id, line: PitchingLine, *, year=2026, day=1):
     """ある選手に投球成績を持たせるためだけの試合を作る。"""
-    return play_game(
-        home_team, away_team, year=year, day=day, pitching={player_id: line}
-    )
+    return play_game(home_team, away_team, year=year, day=day, pitching={player_id: line})

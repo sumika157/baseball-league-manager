@@ -24,9 +24,7 @@ TEAM_OF = {pid: HOME for pid in HOME_PITCHERS} | {pid: AWAY for pid in AWAY_PITC
 
 
 def _line(notation, *, earned_runs=0):
-    return PitchingLine(
-        innings=InningsPitched.from_notation(notation), earned_runs=earned_runs
-    )
+    return PitchingLine(innings=InningsPitched.from_notation(notation), earned_runs=earned_runs)
 
 
 def _game(away_innings, home_innings, *, home_staff=(), away_staff=()) -> Game:
@@ -47,8 +45,10 @@ def _game(away_innings, home_innings, *, home_staff=(), away_staff=()) -> Game:
     for staff in (home_staff, away_staff):
         for order, (player_id, notation, entered) in enumerate(staff, start=1):
             game.record_pitching(
-                player_id, _line(notation),
-                appearance_order=order, entered_inning=entered,
+                player_id,
+                _line(notation),
+                appearance_order=order,
+                entered_inning=entered,
             )
     return game
 
@@ -56,9 +56,10 @@ def _game(away_innings, home_innings, *, home_staff=(), away_staff=()) -> Game:
 class WinningPitcherTest(TestCase):
     def test_starter_who_holds_the_lead_gets_the_win(self):
         game = _game(
-            [0] * 9, [2, 0, 0, 0, 0, 0, 0, 0, 0],
-            home_staff=[(10, '9.0', 1)],
-            away_staff=[(20, '9.0', 1)],
+            [0] * 9,
+            [2, 0, 0, 0, 0, 0, 0, 0, 0],
+            home_staff=[(10, "9.0", 1)],
+            away_staff=[(20, "9.0", 1)],
         )
 
         decisions = services.pitching_decisions(game, TEAM_OF)
@@ -69,10 +70,11 @@ class WinningPitcherTest(TestCase):
     def test_loss_goes_to_the_pitcher_who_allowed_the_decisive_run(self):
         """決勝点を許した投手が敗戦投手。先発とは限らない。"""
         game = _game(
-            [1] + [0] * 8, [0, 0, 0, 0, 0, 0, 2, 0, 0],
-            home_staff=[(10, '9.0', 1)],
+            [1] + [0] * 8,
+            [0, 0, 0, 0, 0, 0, 2, 0, 0],
+            home_staff=[(10, "9.0", 1)],
             # ビジターは7回から2番手。その回に決勝点が入る
-            away_staff=[(20, '6.0', 1), (21, '3.0', 7)],
+            away_staff=[(20, "6.0", 1), (21, "3.0", 7)],
         )
 
         decisions = services.pitching_decisions(game, TEAM_OF)
@@ -82,13 +84,14 @@ class WinningPitcherTest(TestCase):
     def test_starter_under_five_innings_yields_the_win_to_a_reliever(self):
         """先発は5回以上投げないと勝利投手になれない。最も内容の良い救援に回る。"""
         game = _game(
-            [0] * 9, [3, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0] * 9,
+            [3, 0, 0, 0, 0, 0, 0, 0, 0],
             home_staff=[
-                (10, '4.0', 1),          # 先発は4回で降板
-                (11, '3.0', 5),          # 3回を無失点。最も内容が良い
-                (12, '2.0', 8),
+                (10, "4.0", 1),  # 先発は4回で降板
+                (11, "3.0", 5),  # 3回を無失点。最も内容が良い
+                (12, "2.0", 8),
             ],
-            away_staff=[(20, '9.0', 1)],
+            away_staff=[(20, "9.0", 1)],
         )
 
         decisions = services.pitching_decisions(game, TEAM_OF)
@@ -98,10 +101,11 @@ class WinningPitcherTest(TestCase):
     def test_a_reliever_of_record_wins_regardless_of_length(self):
         """救援は投球回の下限が無い。逆転した時点の投手が勝利投手になる。"""
         game = _game(
-            [2] + [0] * 8, [0, 0, 0, 0, 0, 0, 3, 0, 0],
+            [2] + [0] * 8,
+            [0, 0, 0, 0, 0, 0, 3, 0, 0],
             # ホームは7回から2番手。その裏に逆転する
-            home_staff=[(10, '6.0', 1), (11, '1.0', 7), (12, '2.0', 8)],
-            away_staff=[(20, '9.0', 1)],
+            home_staff=[(10, "6.0", 1), (11, "1.0", 7), (12, "2.0", 8)],
+            away_staff=[(20, "9.0", 1)],
         )
 
         decisions = services.pitching_decisions(game, TEAM_OF)
@@ -110,9 +114,10 @@ class WinningPitcherTest(TestCase):
 
     def test_a_tie_has_no_winner_or_loser(self):
         game = _game(
-            [1] + [0] * 8, [1] + [0] * 8,
-            home_staff=[(10, '9.0', 1)],
-            away_staff=[(20, '9.0', 1)],
+            [1] + [0] * 8,
+            [1] + [0] * 8,
+            home_staff=[(10, "9.0", 1)],
+            away_staff=[(20, "9.0", 1)],
         )
 
         decisions = services.pitching_decisions(game, TEAM_OF)
@@ -124,10 +129,14 @@ class WinningPitcherTest(TestCase):
     def test_no_line_score_means_no_decisions(self):
         """イニングスコアが無ければ判定できない。何も付けない。"""
         game = Game(
-            season=Season(2026), played_on=date(2026, 4, 1),
-            home_team_id=HOME, away_team_id=AWAY, home_score=5, away_score=3,
+            season=Season(2026),
+            played_on=date(2026, 4, 1),
+            home_team_id=HOME,
+            away_team_id=AWAY,
+            home_score=5,
+            away_score=3,
         )
-        game.record_pitching(10, _line('9.0'), appearance_order=1, entered_inning=1)
+        game.record_pitching(10, _line("9.0"), appearance_order=1, entered_inning=1)
 
         decisions = services.pitching_decisions(game, TEAM_OF)
 
@@ -137,9 +146,10 @@ class WinningPitcherTest(TestCase):
 class SaveTest(TestCase):
     def test_closer_with_a_small_lead_gets_the_save(self):
         game = _game(
-            [0] * 9, [2, 0, 0, 0, 0, 0, 0, 0, 0],
-            home_staff=[(10, '8.0', 1), (11, '1.0', 9)],
-            away_staff=[(20, '9.0', 1)],
+            [0] * 9,
+            [2, 0, 0, 0, 0, 0, 0, 0, 0],
+            home_staff=[(10, "8.0", 1), (11, "1.0", 9)],
+            away_staff=[(20, "9.0", 1)],
         )
 
         decisions = services.pitching_decisions(game, TEAM_OF)
@@ -150,9 +160,10 @@ class SaveTest(TestCase):
     def test_no_save_when_the_lead_is_too_large(self):
         """4点差以上のリードで登板し、1回だけならセーブは付かない。"""
         game = _game(
-            [0] * 9, [5, 0, 0, 0, 0, 0, 0, 0, 0],
-            home_staff=[(10, '8.0', 1), (11, '1.0', 9)],
-            away_staff=[(20, '9.0', 1)],
+            [0] * 9,
+            [5, 0, 0, 0, 0, 0, 0, 0, 0],
+            home_staff=[(10, "8.0", 1), (11, "1.0", 9)],
+            away_staff=[(20, "9.0", 1)],
         )
 
         decisions = services.pitching_decisions(game, TEAM_OF)
@@ -162,9 +173,10 @@ class SaveTest(TestCase):
     def test_long_relief_earns_a_save_even_with_a_big_lead(self):
         """3回以上を投げて締めれば、点差に関わらずセーブが付く。"""
         game = _game(
-            [0] * 9, [8, 0, 0, 0, 0, 0, 0, 0, 0],
-            home_staff=[(10, '6.0', 1), (11, '3.0', 7)],
-            away_staff=[(20, '9.0', 1)],
+            [0] * 9,
+            [8, 0, 0, 0, 0, 0, 0, 0, 0],
+            home_staff=[(10, "6.0", 1), (11, "3.0", 7)],
+            away_staff=[(20, "9.0", 1)],
         )
 
         decisions = services.pitching_decisions(game, TEAM_OF)
@@ -174,9 +186,10 @@ class SaveTest(TestCase):
     def test_a_complete_game_has_no_save(self):
         """完投は勝利のみ。セーブは救援に付く記録。"""
         game = _game(
-            [0] * 9, [1, 0, 0, 0, 0, 0, 0, 0, 0],
-            home_staff=[(10, '9.0', 1)],
-            away_staff=[(20, '9.0', 1)],
+            [0] * 9,
+            [1, 0, 0, 0, 0, 0, 0, 0, 0],
+            home_staff=[(10, "9.0", 1)],
+            away_staff=[(20, "9.0", 1)],
         )
 
         decisions = services.pitching_decisions(game, TEAM_OF)
@@ -186,9 +199,10 @@ class SaveTest(TestCase):
     def test_the_winning_pitcher_does_not_also_get_a_save(self):
         """逆転してそのまま締めた投手は勝利投手。セーブは付かない。"""
         game = _game(
-            [1] + [0] * 8, [0, 0, 0, 0, 0, 0, 0, 0, 2],
-            home_staff=[(10, '8.0', 1), (11, '1.0', 9)],
-            away_staff=[(20, '9.0', 1)],
+            [1] + [0] * 8,
+            [0, 0, 0, 0, 0, 0, 0, 0, 2],
+            home_staff=[(10, "8.0", 1), (11, "1.0", 9)],
+            away_staff=[(20, "9.0", 1)],
         )
 
         decisions = services.pitching_decisions(game, TEAM_OF)
@@ -200,9 +214,10 @@ class SaveTest(TestCase):
 class HoldTest(TestCase):
     def test_middle_reliever_preserving_a_small_lead_gets_a_hold(self):
         game = _game(
-            [0] * 9, [2, 0, 0, 0, 0, 0, 0, 0, 0],
-            home_staff=[(10, '6.0', 1), (11, '2.0', 7), (12, '1.0', 9)],
-            away_staff=[(20, '9.0', 1)],
+            [0] * 9,
+            [2, 0, 0, 0, 0, 0, 0, 0, 0],
+            home_staff=[(10, "6.0", 1), (11, "2.0", 7), (12, "1.0", 9)],
+            away_staff=[(20, "9.0", 1)],
         )
 
         decisions = services.pitching_decisions(game, TEAM_OF)
@@ -212,9 +227,10 @@ class HoldTest(TestCase):
 
     def test_no_hold_for_the_starter_or_the_finisher(self):
         game = _game(
-            [0] * 9, [2, 0, 0, 0, 0, 0, 0, 0, 0],
-            home_staff=[(10, '6.0', 1), (11, '2.0', 7), (12, '1.0', 9)],
-            away_staff=[(20, '9.0', 1)],
+            [0] * 9,
+            [2, 0, 0, 0, 0, 0, 0, 0, 0],
+            home_staff=[(10, "6.0", 1), (11, "2.0", 7), (12, "1.0", 9)],
+            away_staff=[(20, "9.0", 1)],
         )
 
         decisions = services.pitching_decisions(game, TEAM_OF)
@@ -225,9 +241,10 @@ class HoldTest(TestCase):
     def test_no_hold_when_entering_without_a_lead(self):
         """リードしていない場面での登板はセーブ機会ではないのでホールドも付かない。"""
         game = _game(
-            [3] + [0] * 8, [0, 0, 0, 0, 0, 0, 0, 0, 4],
-            home_staff=[(10, '6.0', 1), (11, '2.0', 7), (12, '1.0', 9)],
-            away_staff=[(20, '9.0', 1)],
+            [3] + [0] * 8,
+            [0, 0, 0, 0, 0, 0, 0, 0, 4],
+            home_staff=[(10, "6.0", 1), (11, "2.0", 7), (12, "1.0", 9)],
+            away_staff=[(20, "9.0", 1)],
         )
 
         decisions = services.pitching_decisions(game, TEAM_OF)
@@ -237,9 +254,10 @@ class HoldTest(TestCase):
     def test_no_hold_when_the_lead_is_lost(self):
         """引き継いだ時点でリードが消えていればホールドは付かない。"""
         game = _game(
-            [0, 0, 0, 0, 0, 0, 3, 0, 0], [2, 0, 0, 0, 0, 0, 0, 0, 3],
-            home_staff=[(10, '6.0', 1), (11, '2.0', 7), (12, '1.0', 9)],
-            away_staff=[(20, '9.0', 1)],
+            [0, 0, 0, 0, 0, 0, 3, 0, 0],
+            [2, 0, 0, 0, 0, 0, 0, 0, 3],
+            home_staff=[(10, "6.0", 1), (11, "2.0", 7), (12, "1.0", 9)],
+            away_staff=[(20, "9.0", 1)],
         )
 
         decisions = services.pitching_decisions(game, TEAM_OF)
@@ -249,9 +267,10 @@ class HoldTest(TestCase):
     def test_holds_are_recorded_even_in_a_tie(self):
         """引分でも、リードを保って引き継いだ救援にはホールドが付く。"""
         game = _game(
-            [0, 0, 0, 0, 0, 0, 0, 0, 2], [2, 0, 0, 0, 0, 0, 0, 0, 0],
-            home_staff=[(10, '6.0', 1), (11, '2.0', 7), (12, '1.0', 9)],
-            away_staff=[(20, '9.0', 1)],
+            [0, 0, 0, 0, 0, 0, 0, 0, 2],
+            [2, 0, 0, 0, 0, 0, 0, 0, 0],
+            home_staff=[(10, "6.0", 1), (11, "2.0", 7), (12, "1.0", 9)],
+            away_staff=[(20, "9.0", 1)],
         )
 
         decisions = services.pitching_decisions(game, TEAM_OF)
@@ -263,16 +282,21 @@ class HoldTest(TestCase):
 class HoldPointTest(TestCase):
     def test_hold_points_are_holds_plus_relief_wins(self):
         line = PitchingLine(
-            innings=InningsPitched.from_notation('60.0'),
-            wins=5, relief_wins=5, holds=25,
+            innings=InningsPitched.from_notation("60.0"),
+            wins=5,
+            relief_wins=5,
+            holds=25,
         )
 
         self.assertEqual(line.hold_points, 30)
 
     def test_a_starters_win_does_not_count_toward_hold_points(self):
         line = PitchingLine(
-            innings=InningsPitched.from_notation('180.0'),
-            wins=15, relief_wins=0, holds=0, starts=28,
+            innings=InningsPitched.from_notation("180.0"),
+            wins=15,
+            relief_wins=0,
+            holds=0,
+            starts=28,
         )
 
         self.assertEqual(line.hold_points, 0)
