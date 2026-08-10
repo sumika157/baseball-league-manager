@@ -10,7 +10,8 @@ from __future__ import annotations
 from django.db.models import Count, Q
 
 from ..application.dto import GameRow, PlayerSearchRow, TeamSummary
-from ..domain.entities import winning_team_id
+from ..domain.entities import Game, winning_team_id
+from ..domain.value_objects import Season
 from . import orm_models
 
 
@@ -117,6 +118,30 @@ class DjangoGameListQuery:
                 away_score=row.away_score,
                 # 勝敗の判定はドメインの関数が唯一の出典。結果の文言は GameRow が持つ
                 winner_team_id=winning_team_id(row.home_team_id, row.away_team_id, row.home_score, row.away_score),
+            )
+            for row in rows
+        ]
+
+    def list_for_standings(self, *, year=None) -> list[Game]:
+        """順位表の計算に渡す試合。**明細は読まない**。
+
+        順位は得点と対戦カードだけで決まるので、打撃・投球・イニングスコアは
+        要らない。リポジトリの find_all() は集約として明細まで揃えるため、
+        順位表のためだけに呼ぶと件数ぶん無駄になる（3480試合で3.5秒かかった）。
+        戻り値は成績を持たない Game なので、順位・勝敗の集計にだけ使う。
+        """
+        rows = orm_models.Game.objects.all()
+        if year is not None:
+            rows = rows.filter(year=year)
+        return [
+            Game(
+                id=row.id,
+                season=Season(row.year),
+                played_on=row.played_on,
+                home_team_id=row.home_team_id,
+                away_team_id=row.away_team_id,
+                home_score=row.home_score,
+                away_score=row.away_score,
             )
             for row in rows
         ]

@@ -484,6 +484,25 @@ class DashboardTest(BaseCase):
                 self.assertIn(f"{stats_url}?{query}", body)
         self.assertIn("成績一覧を見る", body)
 
+    def test_standings_card_does_not_read_game_details(self):
+        """順位表は得点だけで決まる。明細まで読むと試合数ぶん重くなる。
+
+        試合を増やしてもクエリ数が変わらないことで、明細を読んでいないと分かる。
+        """
+        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        play_game(self.team, self.rival, day=1, batting={player.id: BattingLine(at_bats=4, singles=2)})
+
+        with CaptureQueriesContext(connection) as first:
+            self.client.get(reverse("dashboard"))
+
+        for day in range(2, 12):
+            play_game(self.team, self.rival, day=day, batting={player.id: BattingLine(at_bats=4, singles=1)})
+
+        with CaptureQueriesContext(connection) as grown:
+            self.client.get(reverse("dashboard"))
+
+        self.assertEqual(len(grown.captured_queries), len(first.captured_queries))
+
     def test_page_renders_without_any_data(self):
         orm_models.Team.objects.all().delete()
         self.assertEqual(self.client.get(reverse("dashboard")).status_code, 200)

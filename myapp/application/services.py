@@ -208,7 +208,9 @@ class TeamApplicationService:
         games_played = self._team_game_counts()
         team_games = {player.id: games_played.get(team_id, 0) for player, team_id in players}
 
-        all_games = self._games.find_all()
+        # 順位表は得点だけで決まるので、明細を読まない一覧を使う
+        # （集約の find_all() を呼ぶと全試合の打撃・投球まで読み込む）
+        all_games = self._game_list_query.list_for_standings()
         teams_by_league = {group.league_id: group.teams for group in self.list_teams_by_league().rows}
 
         leagues = []
