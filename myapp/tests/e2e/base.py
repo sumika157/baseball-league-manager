@@ -4,8 +4,15 @@ StaticLiveServerTestCase を使うことで、テスト用サーバーを実際�
 静的ファイル（CSS/JS）まで含めた本物のブラウザ表示を検証できる。
 """
 
+import os
+
 from django.contrib.staticfiles.testing import StaticLiveServerTestCase
 from playwright.sync_api import sync_playwright
+
+# Playwrightのsync APIは内部でasyncioを使うため、DjangoのDB操作が
+# 「asyncコンテキストから呼ばれた」と誤検知されることがある
+# （テスト用サーバーのプロセス内だけの話で、本番の安全性には影響しない）。
+os.environ.setdefault("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
 
 
 class PlaywrightTestCase(StaticLiveServerTestCase):
