@@ -4,9 +4,11 @@
 という手順を踏む。その定型をここにまとめる。
 """
 
+import json
 from datetime import date
 
 from django.contrib.auth.models import User
+from django.urls import reverse
 
 from myapp.application.services import TeamApplicationService
 from myapp.domain.entities import Game
@@ -28,25 +30,29 @@ def build_service() -> TeamApplicationService:
     )
 
 
-def inning_payload(away=(), home=(), *, total=12) -> dict:
-    """試合編集フォームのイニングスコアぶんの POST データ。
+def api_inning_rows(away=(), home=(), *, total=12) -> list[dict]:
+    """試合編集 API（JSON）のイニングスコアぶんの行データ。
 
-    勝敗・セーブ・ホールドはイニングスコアから導出されるため、画面には
-    常にこの欄がある。空のまま送れば「経過を記録しない」扱いになる。
+    away / home に値が無い回は None（未入力）で送る。イニングスコアから
+    導出できるものは入力させない方針のため、テストでも欄の意味は変えない。
     """
-    payload = {
-        "innings-TOTAL_FORMS": str(total),
-        "innings-INITIAL_FORMS": str(total),
-        "innings-MIN_NUM_FORMS": "0",
-        "innings-MAX_NUM_FORMS": "1000",
-    }
-    for index in range(total):
-        payload[f"innings-{index}-inning"] = str(index + 1)
-        if index < len(away):
-            payload[f"innings-{index}-away"] = str(away[index])
-        if index < len(home):
-            payload[f"innings-{index}-home"] = str(home[index])
-    return payload
+    return [
+        {
+            "inning": index + 1,
+            "away": away[index] if index < len(away) else None,
+            "home": home[index] if index < len(home) else None,
+        }
+        for index in range(total)
+    ]
+
+
+def post_game_update(client, game_id, payload):
+    """試合編集の保存 API（api_game_update）に JSON で POST する。"""
+    return client.post(
+        reverse("api_game_update", args=[game_id]),
+        data=json.dumps(payload),
+        content_type="application/json",
+    )
 
 
 def login_as_manager(client, *teams, username="manager") -> User:

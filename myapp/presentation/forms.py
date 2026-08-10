@@ -54,7 +54,10 @@ class InningScoreForm(forms.Form):
     無いと日本プロ野球の規則どおりに決められない。
     """
 
-    inning = forms.IntegerField(widget=forms.HiddenInput)
+    # min/max を付けているのは、JSON API（presentation/api.py）が手作りの
+    # リクエストを受け取れるため。範囲外の回番号で巨大なタプルを作られたり、
+    # 位置ではなく回番号で値を割り当てる処理が取り違えたりしないようにする。
+    inning = forms.IntegerField(widget=forms.HiddenInput, min_value=1, max_value=MAX_INNINGS)
     away = forms.IntegerField(label="表", min_value=0, required=False)
     home = forms.IntegerField(label="裏", min_value=0, required=False)
 

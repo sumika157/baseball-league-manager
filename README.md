@@ -433,6 +433,7 @@ OPS+ は OPS と、ERA+ は防御率と順序が一致する（同じリーグ�
 ├── /games/              試合一覧（年・チームで絞り込み）
 │   ├── /games/new/      試合の登録
 │   └── /games/<id>/     試合詳細（出場選手の成績）
+│       └── .../edit/    試合の記録の編集（React。担当チームのみ）
 ├── /standings/          順位表（リーグ別・年で切替）
 ├── /league/<id>/        リーグ画面（所属チーム・順位表・対戦成績・直近の試合）
 │   ├── .../titles/      タイトル一覧（部門別の上位者。年で切替）
@@ -701,6 +702,30 @@ POST だけ権限を求めます（画面ごと `login_required` にすると閲
 - **参照** は一覧表示のように不変条件を扱わないため、集約を組み立てず
   [infrastructure/queries.py](myapp/infrastructure/queries.py) から直接 DTO を作ります
 
+### リッチな編集画面（React アイランド）
+
+参照系の画面は Django テンプレートのまま、入力の構造が深い編集画面だけを
+React（[frontend/](frontend/)）で作っています。全面 SPA 化はしません。
+
+- 対象画面: 試合の記録の編集（`/games/<id>/edit/`）
+- ビューが初期データ（payload）を `json_script` でテンプレートに埋め込み、ビルド済みの
+  React（`myapp/static/myapp/dist/game_edit.js`）が `#game-edit-root` にマウントされます。
+  GET 用の API はありません（画面の URL・権限・404 は既存ビューのまま）
+- 保存だけ JSON API（[presentation/api.py](myapp/presentation/api.py)、`POST /api/games/<id>/`）。
+  型変換・必須チェックは既存フォーム（[presentation/forms.py](myapp/presentation/forms.py)）を
+  行単位で再利用し、業務ルール（勝敗・セーブ・ホールドの導出、被本塁打≦被安打など）は
+  ドメイン層のまま。**検証の出典を増やしません**
+- payload と API のキーはフォームのフィールド名と同じ snake_case。クライアントは全行を送り、
+  「全欄空 ＝ 出場していない」の間引きはサーバー（フォームの `is_blank`）が行います
+- React 側の自動計算（イニングスコアからの得点導出）や行内警告は入力補助で、
+  確定判断は常にサーバーが持ちます
+- ビルドは `vite build --watch` の常時出力方式（dev server 無し）。出力はハッシュ無しの固定名で、
+  テンプレートは `{% static %}` で参照するだけ。dev/prod の分岐や manifest 解析を持ち込まず、
+  **Python 側の依存追加はありません**
+
+新しい画面を React 化するときは `frontend/src/` にエントリを増やし、
+`frontend/vite.config.ts` の `rollupOptions.input` に追加します。
+
 ---
 
 ## デザイン
@@ -743,8 +768,11 @@ docker compose exec web python manage.py test
 | ディレクトリ | 内容 | DB |
 | --- | --- | --- |
 | `tests/domain/` | 業務ルール（指標計算・投球回の変換・背番号の一意性・規定打席など） | 不要 |
-| `tests/integration/` | リポジトリの往復・画面の動作・権限・テンプレートの検査 | 必要 |
-| `tests/e2e/` | Playwright による実ブラウザでのE2Eスモークテスト | 必要 |
+| `tests/integration/` | リポジトリの往復・画面の動作・権限・テンプレートの検査・保存 API | 必要 |
+| `tests/e2e/` | Playwright による実ブラウザでのE2Eスモークテスト（React 画面の操作を含む） | 必要 |
+
+> E2E は React 画面を実ブラウザで操作するため、**実行前にビルド成果物が必要**です
+> （`make frontend-build`、または `make up` で watch ビルドが動いていれば常に最新です）。
 
 ドメイン層のテストは Django の設定すら読み込まずに実行できます。
 
@@ -773,6 +801,9 @@ docker compose exec web ruff format .
 
 # 型チェック（django-stubs 併用）
 docker compose exec web mypy .
+
+# フロントエンドの型チェック（TypeScript）
+make frontend-check
 ```
 
 `requirements.txt` を変更した場合と同様、これらのツールを追加・更新した場合も

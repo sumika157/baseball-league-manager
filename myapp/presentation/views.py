@@ -12,8 +12,10 @@ from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.views import redirect_to_login
 from django.core.exceptions import PermissionDenied
 from django.http import Http404
+from django.middleware.csrf import get_token
 from django.shortcuts import redirect, render
 from django.urls import reverse, reverse_lazy
+from django.views.decorators.http import require_GET
 from django.views.generic import CreateView
 
 from ..application.services import TeamApplicationService
@@ -24,14 +26,7 @@ from ..domain.exceptions import (
     PlayerNotFound,
     TeamNotFound,
 )
-from ..domain.value_objects import (
-    BattingLine,
-    FieldingPosition,
-    InningsPitched,
-    LineScore,
-    PitchingLine,
-    Position,
-)
+from ..domain.value_objects import FieldingPosition, Position
 from ..infrastructure.queries import (
     DjangoPlayerSearchQuery,
     DjangoTeamListQuery,
@@ -45,11 +40,8 @@ from ..infrastructure.repositories import (
 from .forms import (
     MAX_INNINGS,
     BattingEntryForm,
-    BattingEntryFormSet,
     GameForm,
-    InningScoreFormSet,
     PitchingEntryForm,
-    PitchingEntryFormSet,
     PlayerRegistrationForm,
     PlayerUpdateForm,
 )
@@ -337,8 +329,16 @@ def game_create(request):
 
 
 @login_required
+@require_GET
 def game_edit(request, game_id):
-    """試合の基本情報と、両チームのロスターぶんの成績を一度に入力する。"""
+    """試合の基本情報と、両チームのロスターぶんの成績を入力する画面を返す。
+
+    編集フォームは React（frontend/src/game_edit/）が描画する。ここでは
+    初期データを埋め込んだ器を返すだけで、保存は presentation/api.py が担う
+    （保存経路を2つ残すと検証・文言の出典が増えるため、POST は受け付けない。
+    require_GET により POST は 405 になり、旧フォームからの投稿が
+    黙って捨てられて 200 が返る、という無反応な行き止まりを避ける）。
+    """
     service = _service()
 
     try:
@@ -350,190 +350,93 @@ def game_edit(request, game_id):
     if not DjangoTeamPermissionQuery().can_manage_any(request.user, (game.home_team_id, game.away_team_id)):
         raise PermissionDenied("このチームを編集する権限がありません。")
 
-    batters, pitchers = _split_roster(rosters)
-
-    if request.method == "POST":
-        form = GameForm(request.POST)
-        batting_formset = BattingEntryFormSet(request.POST, prefix="batting")
-        pitching_formset = PitchingEntryFormSet(request.POST, prefix="pitching")
-        inning_formset = InningScoreFormSet(request.POST, prefix="innings")
-
-        if (
-            form.is_valid()
-            and batting_formset.is_valid()
-            and pitching_formset.is_valid()
-            and inning_formset.is_valid()
-        ):
-            try:
-                service.update_game(
-                    game_id,
-                    year=form.cleaned_data["year"],
-                    played_on=form.cleaned_data["played_on"],
-                    home_team_id=form.cleaned_data["home_team"],
-                    away_team_id=form.cleaned_data["away_team"],
-                    home_score=form.cleaned_data["home_score"],
-                    away_score=form.cleaned_data["away_score"],
-                    batting=_collect_batting(batting_formset),
-                    pitching=_collect_pitching(pitching_formset),
-                    lineup=_collect_lineup(batting_formset),
-                    staff=_collect_staff(pitching_formset),
-                    line_score=_collect_line_score(inning_formset),
-                )
-            except DomainError as error:
-                messages.error(request, str(error))
-            else:
-                messages.success(request, "試合の記録を保存しました。")
-                return redirect(reverse("game_detail", args=[game_id]))
-        else:
-            messages.error(
-                request,
-                _first_error(form)
-                or _first_formset_error(inning_formset)
-                or _first_formset_error(batting_formset)
-                or _first_formset_error(pitching_formset),
-            )
-    else:
-        form = GameForm(
-            initial={
-                "year": game.season.year,
-                "played_on": game.played_on,
-                "home_team": game.home_team_id,
-                "away_team": game.away_team_id,
-                "home_score": game.home_score,
-                "away_score": game.away_score,
-            }
-        )
-        batting_formset = BattingEntryFormSet(prefix="batting", initial=[_batting_initial(p) for p in batters])
-        pitching_formset = PitchingEntryFormSet(prefix="pitching", initial=[_pitching_initial(p) for p in pitchers])
-        inning_formset = InningScoreFormSet(prefix="innings", initial=_inning_initial(game.line_score))
-
     return render(
         request,
         "myapp/game_edit.html",
-        {
-            "game": game,
-            "form": form,
-            "rosters": rosters,
-            # フォームと選手情報を対にして渡す。テンプレート側で添字を扱わずに済ませる
-            "batting_rows": list(zip(batting_formset.forms, batters, strict=False)),
-            "pitching_rows": list(zip(pitching_formset.forms, pitchers, strict=False)),
-            "batting_formset": batting_formset,
-            "pitching_formset": pitching_formset,
-            "inning_formset": inning_formset,
-            "positions": FieldingPosition.labels(),
-        },
+        {"game": game, "payload": _game_edit_payload(request, game, rosters)},
     )
 
 
-def _inning_initial(line_score):
-    """イニングスコアの初期値。記録されている回まで埋め、残りは空欄で用意する。"""
-    return [
+def _game_edit_payload(request, game, rosters) -> dict:
+    """試合編集画面（React）に埋め込む初期データ。
+
+    キーはフォーム（GameForm・InningScoreForm・BattingEntryForm・
+    PitchingEntryForm）のフィールド名と 1:1 の snake_case にし、保存 API
+    （api_game_update）に送り返すときにそのまま使える形にする。
+    """
+    innings = [
         {
             "inning": inning,
-            "away": (line_score.runs_in(inning, home=False) if inning <= len(line_score.away) else None),
-            "home": (line_score.runs_in(inning, home=True) if inning <= len(line_score.home) else None),
+            "away": (game.line_score.runs_in(inning, home=False) if inning <= len(game.line_score.away) else None),
+            "home": (game.line_score.runs_in(inning, home=True) if inning <= len(game.line_score.home) else None),
         }
         for inning in range(1, MAX_INNINGS + 1)
     ]
 
-
-def _collect_line_score(formset) -> LineScore:
-    """入力された回ごとの得点を組み立てる。
-
-    後ろの空欄は「行われていない回」として切り落とす。途中の空欄は 0 とみなす
-    （1回に得点が無ければ空欄のままにする人もいるため）。
-    """
-    away, home = [], []
-    for form in formset:
-        if form.is_blank():
-            continue
-        away.append(form.cleaned_data.get("away") or 0)
-        home.append(form.cleaned_data.get("home") or 0)
-
-    # ホームが最終回を攻めていない（裏が空欄）場合は、その回を落とす
-    if home and formset.forms:
-        last = len(away)
-        if last and formset.forms[last - 1].cleaned_data.get("home") is None:
-            home = home[:-1]
-    return LineScore(away=tuple(away), home=tuple(home))
-
-
-def _collect_lineup(formset) -> dict:
-    """打順・交代の順・守備位置を {選手id: (打順, 交代の順, 守備位置)} で返す。"""
-    return {form.cleaned_data["player_id"]: form.lineup() for form in formset if not form.is_blank()}
-
-
-def _collect_staff(formset) -> dict:
-    """登板した回を {選手id: 回} で返す。"""
-    return {form.cleaned_data["player_id"]: form.entered() for form in formset if not form.is_blank()}
-
-
-def _split_roster(rosters):
-    """両チームのロスターを、野手と投手に分ける。並びは画面と保存で共通。"""
-    batters, pitchers = [], []
-    for roster in rosters:
-        for player in roster["players"]:
-            entry = dict(player, team_name=roster["team_name"])
-            (pitchers if player["is_pitcher"] else batters).append(entry)
-    return batters, pitchers
-
-
-def _batting_initial(player):
-    line = player["batting"]
-    initial = {"player_id": player["id"]}
-    if line is not None:
-        initial.update({f: getattr(line, f) for f in BattingEntryForm.STAT_FIELDS})
-    lineup = player.get("lineup")
-    if lineup is not None:
-        order, sequence, position = lineup
-        initial.update(
+    return {
+        "game": {
+            "id": game.id,
+            "year": game.season.year,
+            "played_on": game.played_on.isoformat(),
+            "home_team": game.home_team_id,
+            "away_team": game.away_team_id,
+            "home_score": game.home_score,
+            "away_score": game.away_score,
+        },
+        "innings": innings,
+        "rosters": [
             {
-                "batting_order": order,
-                "slot_sequence": sequence,
-                "fielding_position": position.value if position else "",
+                "team_id": roster["team_id"],
+                "team_name": roster["team_name"],
+                # rosters が home を先頭に返す前提に頼らず、試合の home_team_id と比べて決める
+                "is_home": roster["team_id"] == game.home_team_id,
+                "batters": [_batting_row(p) for p in roster["players"] if not p["is_pitcher"]],
+                "pitchers": [_pitching_row(p) for p in roster["players"] if p["is_pitcher"]],
             }
-        )
-    return initial
+            for roster in rosters
+        ],
+        "fielding_positions": FieldingPosition.labels(),
+        "max_innings": MAX_INNINGS,
+        "urls": {
+            "save": reverse("api_game_update", args=[game.id]),
+            "detail": reverse("game_detail", args=[game.id]),
+        },
+        "csrf_token": get_token(request),
+    }
 
 
-def _pitching_initial(player):
+def _batting_row(player: dict) -> dict:
+    """打撃成績1人ぶん。line が無ければ各成績欄は None（未入力）にする。"""
+    line = player["batting"]
+    order, sequence, position = player["lineup"] or (None, None, None)
+    row = {
+        "player_id": player["id"],
+        "name": player["name"],
+        "number": player["number"],
+        "position": player["position"],
+        "batting_order": order,
+        "slot_sequence": sequence,
+        "fielding_position": position.value if position else "",
+    }
+    row.update({field: (getattr(line, field) if line is not None else None) for field in BattingEntryForm.STAT_FIELDS})
+    return row
+
+
+def _pitching_row(player: dict) -> dict:
+    """投球成績1人ぶん。line が無ければ各成績欄は None（未入力）にする。"""
     line = player["pitching"]
-    initial = {"player_id": player["id"]}
-    if line is not None:
-        initial["innings_pitched"] = line.innings.to_notation()
-        initial.update({f: getattr(line, f) for f in PitchingEntryForm.COUNT_FIELDS})
-    if player.get("entered_inning") is not None:
-        initial["entered_inning"] = player["entered_inning"]
-    return initial
-
-
-def _collect_batting(formset) -> dict:
-    """未入力の行は含めない。含めると出場していない選手の記録が残る。"""
-    result = {}
-    for form in formset:
-        if form.is_blank():
-            continue
-        result[form.cleaned_data["player_id"]] = BattingLine(**form.counts())
-    return result
-
-
-def _collect_pitching(formset) -> dict:
-    result = {}
-    for form in formset:
-        if form.is_blank():
-            continue
-        result[form.cleaned_data["player_id"]] = PitchingLine(
-            innings=InningsPitched.from_notation(form.innings()), **form.counts()
-        )
-    return result
-
-
-def _first_formset_error(formset) -> str:
-    for form in formset:
-        message = _first_error(form)
-        if message:
-            return message
-    return ""
+    row = {
+        "player_id": player["id"],
+        "name": player["name"],
+        "number": player["number"],
+        "position": player["position"],
+        "entered_inning": player["entered_inning"],
+        "innings_pitched": str(line.innings.to_notation()) if line is not None else None,
+    }
+    row.update(
+        {field: (getattr(line, field) if line is not None else None) for field in PitchingEntryForm.COUNT_FIELDS}
+    )
+    return row
 
 
 def game_detail(request, game_id):

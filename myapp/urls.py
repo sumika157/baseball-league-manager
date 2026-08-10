@@ -1,6 +1,6 @@
 from django.urls import path
 
-from .presentation import views
+from .presentation import api, views
 
 urlpatterns = [
     path("", views.dashboard, name="dashboard"),
@@ -33,6 +33,7 @@ urlpatterns = [
     path("games/new/", views.game_create, name="game_create"),
     path("games/<int:game_id>/", views.game_detail, name="game_detail"),
     path("games/<int:game_id>/edit/", views.game_edit, name="game_edit"),
+    path("api/games/<int:game_id>/", api.game_update, name="api_game_update"),
     path("team/<int:team_id>/", views.player_list, name="player_list"),
     # 選手は Team 集約の内部エンティティなので、URL もチームの下に置く
     path(

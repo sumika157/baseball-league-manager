@@ -36,12 +36,13 @@ from myapp.infrastructure.repositories import (
 )
 
 from ..helpers import (
+    api_inning_rows,
     build_service,
     give_batting,
     give_pitching,
-    inning_payload,
     login_as_manager,
     play_game,
+    post_game_update,
 )
 
 
@@ -1406,32 +1407,28 @@ class GameEntryTest(BaseCase):
         response = self.client.get(reverse("game_edit", args=[game.id]))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "山田")
-        self.assertContains(response, "佐藤")
+        payload = response.context["payload"]
+        batters = [p for roster in payload["rosters"] for p in roster["batters"]]
+        pitchers = [p for roster in payload["rosters"] for p in roster["pitchers"]]
+        names = {p["name"] for p in batters + pitchers}
+        self.assertIn("山田", names)
+        self.assertIn("佐藤", names)
         # 野手は打撃表、投手は投球表に振り分けられる
-        self.assertEqual(len(response.context["batting_rows"]), 1)
-        self.assertEqual(len(response.context["pitching_rows"]), 1)
+        self.assertEqual(len(batters), 1)
+        self.assertEqual(len(pitchers), 1)
 
     def _stats_payload(self, game, **overrides):
         payload = {
-            "year": "2026",
+            "year": 2026,
             "played_on": "2026-04-01",
             "home_team": self.team.id,
             "away_team": self.rival.id,
-            "home_score": "5",
-            "away_score": "3",
-            "batting-TOTAL_FORMS": "1",
-            "batting-INITIAL_FORMS": "1",
-            "batting-MIN_NUM_FORMS": "0",
-            "batting-MAX_NUM_FORMS": "1000",
-            "batting-0-player_id": str(self.batter.id),
-            "pitching-TOTAL_FORMS": "1",
-            "pitching-INITIAL_FORMS": "1",
-            "pitching-MIN_NUM_FORMS": "0",
-            "pitching-MAX_NUM_FORMS": "1000",
-            "pitching-0-player_id": str(self.pitcher.id),
+            "home_score": 5,
+            "away_score": 3,
+            "batting": [{"player_id": self.batter.id}],
+            "pitching": [{"player_id": self.pitcher.id}],
+            "innings": api_inning_rows(),
         }
-        payload.update(inning_payload())
         payload.update(overrides)
         return payload
 
@@ -1439,16 +1436,13 @@ class GameEntryTest(BaseCase):
         self._create_game()
         game = orm_models.Game.objects.get()
 
-        self.client.post(
-            reverse("game_edit", args=[game.id]),
+        post_game_update(
+            self.client,
+            game.id,
             self._stats_payload(
                 game,
-                **{
-                    "batting-0-at_bats": "4",
-                    "batting-0-singles": "2",
-                    "pitching-0-innings_pitched": "7.0",
-                    "pitching-0-strikeouts": "8",
-                },
+                batting=[{"player_id": self.batter.id, "at_bats": 4, "singles": 2}],
+                pitching=[{"player_id": self.pitcher.id, "innings_pitched": "7.0", "strikeouts": 8}],
             ),
         )
 
@@ -1463,7 +1457,7 @@ class GameEntryTest(BaseCase):
         self._create_game()
         game = orm_models.Game.objects.get()
 
-        self.client.post(reverse("game_edit", args=[game.id]), self._stats_payload(game))
+        post_game_update(self.client, game.id, self._stats_payload(game))
 
         self.assertEqual(orm_models.GameBattingLine.objects.count(), 0)
         self.assertEqual(orm_models.GamePitchingLine.objects.count(), 0)
@@ -1472,31 +1466,37 @@ class GameEntryTest(BaseCase):
         """一度入力した選手を「出場していない」に戻せること。"""
         self._create_game()
         game = orm_models.Game.objects.get()
-        url = reverse("game_edit", args=[game.id])
 
-        self.client.post(url, self._stats_payload(game, **{"batting-0-at_bats": "4"}))
+        post_game_update(
+            self.client,
+            game.id,
+            self._stats_payload(game, batting=[{"player_id": self.batter.id, "at_bats": 4}]),
+        )
         self.assertEqual(orm_models.GameBattingLine.objects.count(), 1)
 
-        self.client.post(url, self._stats_payload(game))
+        post_game_update(self.client, game.id, self._stats_payload(game))
         self.assertEqual(orm_models.GameBattingLine.objects.count(), 0)
 
     def test_existing_stats_are_prefilled(self):
         self._create_game()
         game = orm_models.Game.objects.get()
-        url = reverse("game_edit", args=[game.id])
-        self.client.post(url, self._stats_payload(game, **{"batting-0-at_bats": "4"}))
 
-        form = self.client.get(url).context["batting_rows"][0][0]
-        self.assertEqual(form.initial["at_bats"], 4)
+        post_game_update(
+            self.client,
+            game.id,
+            self._stats_payload(game, batting=[{"player_id": self.batter.id, "at_bats": 4}]),
+        )
+
+        payload = self.client.get(reverse("game_edit", args=[game.id])).context["payload"]
+        batters = [p for roster in payload["rosters"] for p in roster["batters"]]
+        batter_row = next(p for p in batters if p["player_id"] == self.batter.id)
+        self.assertEqual(batter_row["at_bats"], 4)
 
     def test_score_can_be_corrected(self):
         self._create_game()
         game = orm_models.Game.objects.get()
 
-        self.client.post(
-            reverse("game_edit", args=[game.id]),
-            self._stats_payload(game, home_score="9"),
-        )
+        post_game_update(self.client, game.id, self._stats_payload(game, home_score=9))
 
         self.assertEqual(orm_models.Game.objects.get().home_score, 9)
 
@@ -1524,44 +1524,34 @@ class BoxScoreEntryTest(BaseCase):
         self.url = reverse("game_edit", args=[self.game.id])
 
     def _payload(self, **overrides):
-        pitchers = [self.starter, self.middle, self.closer, self.loser]
         payload = {
-            "year": "2026",
+            "year": 2026,
             "played_on": "2026-04-01",
             "home_team": self.team.id,
             "away_team": self.rival.id,
             # ホーム2点・ビジター0点。抑えは1点差以内ではないが3点差以内で締める
-            "home_score": "2",
-            "away_score": "0",
-            "batting-TOTAL_FORMS": "1",
-            "batting-INITIAL_FORMS": "1",
-            "batting-MIN_NUM_FORMS": "0",
-            "batting-MAX_NUM_FORMS": "1000",
-            "batting-0-player_id": str(self.batter.id),
-            "batting-0-at_bats": "4",
-            "batting-0-singles": "2",
-            "batting-0-runs_batted_in": "2",
-            "batting-0-batting_order": "4",
-            "batting-0-slot_sequence": "0",
-            "batting-0-fielding_position": "一",
-            "pitching-TOTAL_FORMS": str(len(pitchers)),
-            "pitching-INITIAL_FORMS": str(len(pitchers)),
-            "pitching-MIN_NUM_FORMS": "0",
-            "pitching-MAX_NUM_FORMS": "1000",
+            "home_score": 2,
+            "away_score": 0,
+            "batting": [
+                {
+                    "player_id": self.batter.id,
+                    "at_bats": 4,
+                    "singles": 2,
+                    "runs_batted_in": 2,
+                    "batting_order": 4,
+                    "slot_sequence": 0,
+                    "fielding_position": "一",
+                }
+            ],
+            # ホームは 先発6回 → 中継ぎ2回 → 抑え1回、ビジターは先発が完投
+            "pitching": [
+                {"player_id": self.starter.id, "entered_inning": 1, "innings_pitched": "6.0"},
+                {"player_id": self.middle.id, "entered_inning": 7, "innings_pitched": "2.0"},
+                {"player_id": self.closer.id, "entered_inning": 9, "innings_pitched": "1.0"},
+                {"player_id": self.loser.id, "entered_inning": 1, "innings_pitched": "9.0"},
+            ],
+            "innings": api_inning_rows(away=[0] * 9, home=[2] + [0] * 8),
         }
-        # ホームは 先発6回 → 中継ぎ2回 → 抑え1回、ビジターは先発が完投
-        for index, (player, entered, innings) in enumerate(
-            [
-                (self.starter, "1", "6.0"),
-                (self.middle, "7", "2.0"),
-                (self.closer, "9", "1.0"),
-                (self.loser, "1", "9.0"),
-            ]
-        ):
-            payload[f"pitching-{index}-player_id"] = str(player.id)
-            payload[f"pitching-{index}-entered_inning"] = entered
-            payload[f"pitching-{index}-innings_pitched"] = innings
-        payload.update(inning_payload(away=[0] * 9, home=[2] + [0] * 8))
         payload.update(overrides)
         return payload
 
@@ -1569,7 +1559,7 @@ class BoxScoreEntryTest(BaseCase):
         return orm_models.GamePitchingLine.objects.get(game_id=self.game.id, player_id=player.id)
 
     def test_decisions_are_derived_from_the_line_score(self):
-        self.client.post(self.url, self._payload())
+        post_game_update(self.client, self.game.id, self._payload())
 
         self.assertEqual(self._line_of(self.starter).wins, 1)
         self.assertEqual(self._line_of(self.loser).losses, 1)
@@ -1577,18 +1567,19 @@ class BoxScoreEntryTest(BaseCase):
         self.assertEqual(self._line_of(self.middle).holds, 1)
 
     def test_the_winner_does_not_also_get_a_save(self):
-        self.client.post(self.url, self._payload())
+        post_game_update(self.client, self.game.id, self._payload())
 
         self.assertEqual(self._line_of(self.starter).saves, 0)
         self.assertEqual(self._line_of(self.closer).wins, 0)
 
     def test_a_large_lead_yields_no_save(self):
         """5点差で登板した抑えにはセーブが付かない（1回だけの登板では）。"""
-        self.client.post(
-            self.url,
+        post_game_update(
+            self.client,
+            self.game.id,
             self._payload(
-                home_score="5",
-                **inning_payload(away=[0] * 9, home=[5] + [0] * 8),
+                home_score=5,
+                innings=api_inning_rows(away=[0] * 9, home=[5] + [0] * 8),
             ),
         )
 
@@ -1596,12 +1587,13 @@ class BoxScoreEntryTest(BaseCase):
         self.assertEqual(self._line_of(self.starter).wins, 1)
 
     def test_the_line_score_must_match_the_final_score(self):
-        response = self.client.post(self.url, self._payload(home_score="7"), follow=True)
+        response = post_game_update(self.client, self.game.id, self._payload(home_score=7))
 
-        self.assertContains(response, "イニングスコアの合計が得点と一致しません")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("イニングスコアの合計が得点と一致しません", response.json()["error"])
 
     def test_lineup_is_saved_and_shown_in_the_box_score(self):
-        self.client.post(self.url, self._payload())
+        post_game_update(self.client, self.game.id, self._payload())
 
         line = orm_models.GameBattingLine.objects.get(game_id=self.game.id, player_id=self.batter.id)
         self.assertEqual(line.batting_order, 4)
@@ -1612,7 +1604,7 @@ class BoxScoreEntryTest(BaseCase):
         self.assertContains(response, "一")
 
     def test_appearance_order_follows_the_entered_inning(self):
-        self.client.post(self.url, self._payload())
+        post_game_update(self.client, self.game.id, self._payload())
 
         orders = {
             self._line_of(p).player_id: self._line_of(p).appearance_order
@@ -1623,14 +1615,14 @@ class BoxScoreEntryTest(BaseCase):
         self.assertEqual(orders[self.closer.id], 3)
 
     def test_hold_points_accumulate_for_the_reliever(self):
-        self.client.post(self.url, self._payload())
+        post_game_update(self.client, self.game.id, self._payload())
 
         detail = self.service.get_player_detail(self.team.id, self.middle.id)
         self.assertEqual(detail.holds, 1)
         self.assertEqual(detail.hold_points, 1)
 
     def test_line_score_is_shown_on_the_detail_page(self):
-        self.client.post(self.url, self._payload())
+        post_game_update(self.client, self.game.id, self._payload())
 
         response = self.client.get(reverse("game_detail", args=[self.game.id]))
 
@@ -1641,9 +1633,13 @@ class BoxScoreEntryTest(BaseCase):
         """勝敗・セーブは導出するので、入力欄を置かない。"""
         response = self.client.get(self.url)
 
-        self.assertNotContains(response, 'name="pitching-0-wins"')
-        self.assertNotContains(response, 'name="pitching-0-saves"')
-        self.assertContains(response, 'name="pitching-0-entered_inning"')
+        payload = response.context["payload"]
+        pitchers = [p for roster in payload["rosters"] for p in roster["pitchers"]]
+        self.assertTrue(pitchers)
+        for pitcher in pitchers:
+            self.assertNotIn("wins", pitcher)
+            self.assertNotIn("saves", pitcher)
+        self.assertIn("entered_inning", pitchers[0])
 
 
 class StadiumTest(BaseCase):
@@ -3591,40 +3587,40 @@ class AdvancedMetricsTest(BaseCase):
         game = orm_models.Game.objects.latest("id")
 
         response = self.client.get(reverse("game_edit", args=[game.id]))
-        self.assertContains(response, "被本塁打")
-        self.assertContains(response, "与死球")
+        payload = response.context["payload"]
+        pitchers = [p for roster in payload["rosters"] for p in roster["pitchers"]]
 
-        rows = response.context["pitching_rows"]
-        payload = {
-            "year": "2026",
-            "played_on": "2026-05-01",
-            "home_team": self.team.id,
-            "away_team": self.rival.id,
-            "home_score": "1",
-            "away_score": "0",
-            "batting-TOTAL_FORMS": "0",
-            "batting-INITIAL_FORMS": "0",
-            "batting-MIN_NUM_FORMS": "0",
-            "batting-MAX_NUM_FORMS": "1000",
-            "pitching-TOTAL_FORMS": str(len(rows)),
-            "pitching-INITIAL_FORMS": str(len(rows)),
-            "pitching-MIN_NUM_FORMS": "0",
-            "pitching-MAX_NUM_FORMS": "1000",
-            **inning_payload(),
-        }
-        for index, (_, player) in enumerate(rows):
-            payload[f"pitching-{index}-player_id"] = str(player["id"])
-        target = next(index for index, (_, player) in enumerate(rows) if player["id"] == self.pitcher.id)
-        payload.update(
+        pitching_rows = [
             {
-                f"pitching-{target}-innings_pitched": "6.0",
-                f"pitching-{target}-hits_allowed": "5",
-                f"pitching-{target}-home_runs_allowed": "2",
-                f"pitching-{target}-hit_by_pitch_allowed": "1",
+                "player_id": p["player_id"],
+                **(
+                    {
+                        "innings_pitched": "6.0",
+                        "hits_allowed": 5,
+                        "home_runs_allowed": 2,
+                        "hit_by_pitch_allowed": 1,
+                    }
+                    if p["player_id"] == self.pitcher.id
+                    else {}
+                ),
             }
+            for p in pitchers
+        ]
+        post_game_update(
+            self.client,
+            game.id,
+            {
+                "year": 2026,
+                "played_on": "2026-05-01",
+                "home_team": self.team.id,
+                "away_team": self.rival.id,
+                "home_score": 1,
+                "away_score": 0,
+                "batting": [],
+                "pitching": pitching_rows,
+                "innings": api_inning_rows(),
+            },
         )
-
-        self.client.post(reverse("game_edit", args=[game.id]), payload)
 
         line = orm_models.GamePitchingLine.objects.get(game=game, player_id=self.pitcher.id)
         self.assertEqual(line.home_runs_allowed, 2)
@@ -3645,39 +3641,37 @@ class AdvancedMetricsTest(BaseCase):
             },
         )
         game = orm_models.Game.objects.latest("id")
-        rows = self.client.get(reverse("game_edit", args=[game.id])).context["pitching_rows"]
+        payload = self.client.get(reverse("game_edit", args=[game.id])).context["payload"]
+        pitchers = [p for roster in payload["rosters"] for p in roster["pitchers"]]
 
-        payload = {
-            "year": "2026",
-            "played_on": "2026-06-01",
-            "home_team": self.team.id,
-            "away_team": self.rival.id,
-            "home_score": "1",
-            "away_score": "0",
-            "batting-TOTAL_FORMS": "0",
-            "batting-INITIAL_FORMS": "0",
-            "batting-MIN_NUM_FORMS": "0",
-            "batting-MAX_NUM_FORMS": "1000",
-            "pitching-TOTAL_FORMS": str(len(rows)),
-            "pitching-INITIAL_FORMS": str(len(rows)),
-            "pitching-MIN_NUM_FORMS": "0",
-            "pitching-MAX_NUM_FORMS": "1000",
-            **inning_payload(),
-        }
-        for index, (_, player) in enumerate(rows):
-            payload[f"pitching-{index}-player_id"] = str(player["id"])
-        target = next(index for index, (_, player) in enumerate(rows) if player["id"] == self.pitcher.id)
-        payload.update(
+        pitching_rows = [
             {
-                f"pitching-{target}-innings_pitched": "6.0",
-                f"pitching-{target}-hits_allowed": "1",
-                f"pitching-{target}-home_runs_allowed": "3",
+                "player_id": p["player_id"],
+                **(
+                    {"innings_pitched": "6.0", "hits_allowed": 1, "home_runs_allowed": 3}
+                    if p["player_id"] == self.pitcher.id
+                    else {}
+                ),
             }
+            for p in pitchers
+        ]
+        response = post_game_update(
+            self.client,
+            game.id,
+            {
+                "year": 2026,
+                "played_on": "2026-06-01",
+                "home_team": self.team.id,
+                "away_team": self.rival.id,
+                "home_score": 1,
+                "away_score": 0,
+                "batting": [],
+                "pitching": pitching_rows,
+                "innings": api_inning_rows(),
+            },
         )
 
-        response = self.client.post(reverse("game_edit", args=[game.id]), payload)
-
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 400)
         self.assertFalse(orm_models.GamePitchingLine.objects.filter(game=game).exists())
 
 

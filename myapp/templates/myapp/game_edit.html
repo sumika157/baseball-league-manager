@@ -1,4 +1,5 @@
 {% extends 'myapp/base.html' %}
+{% load static %}
 
 {% block title %}成績の入力 - Baseball Manager{% endblock %}
 
@@ -19,202 +20,15 @@
   </p>
 </div>
 
-<form method="POST">
-  {% csrf_token %}
-  {{ batting_formset.management_form }}
-  {{ pitching_formset.management_form }}
-  {{ inning_formset.management_form }}
-
-  <div class="card mb-3">
-    <div class="card-header">試合の情報</div>
-    <div class="card-body">
-      <input type="hidden" name="home_team" value="{{ game.home_team_id }}" />
-      <input type="hidden" name="away_team" value="{{ game.away_team_id }}" />
-      <div class="row g-3">
-        <div class="col-md-3">
-          <label class="form-label">シーズン</label>
-          <input type="number" name="year" class="form-control"
-                 value="{{ form.year.value|default_if_none:'' }}" required />
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">試合日</label>
-          <input type="date" name="played_on" class="form-control"
-                 value="{{ form.played_on.value|date:'Y-m-d'|default_if_none:'' }}" required />
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">{{ rosters.0.team_name }}（ホーム）</label>
-          <input type="number" name="home_score" class="form-control" min="0"
-                 value="{{ form.home_score.value|default_if_none:0 }}" required />
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">{{ rosters.1.team_name }}（ビジター）</label>
-          <input type="number" name="away_score" class="form-control" min="0"
-                 value="{{ form.away_score.value|default_if_none:0 }}" required />
-        </div>
-      </div>
-    </div>
+{% comment %}
+編集フォームは React（frontend/src/game_edit/）が描画する。初期データは
+json_script で埋め込み、保存は api_game_update に JSON で送る。
+{% endcomment %}
+{{ payload|json_script:"game-edit-data" }}
+<div id="game-edit-root">
+  <div class="empty-state" style="padding: 2rem 1rem; font-size: 0.875rem;">
+    画面を読み込んでいます。表示が変わらない場合は、フロントエンドのビルド（make frontend-build）が済んでいるか確認してください。
   </div>
-
-  {% comment %}
-  イニングスコア。勝敗・セーブ・ホールドはここと継投から日本プロ野球の規則で
-  決まるので、投手の欄には勝敗を入力しない。
-  行われていない回は空欄のままにする（0点で終えた回とは区別する）。
-  {% endcomment %}
-  <div class="card mb-3">
-    <div class="card-header">イニングスコア</div>
-    <div class="card-body">
-      <p class="page-subtitle mb-3" style="font-size: 0.8125rem;">
-        回ごとの得点を入れると、勝利投手・敗戦投手・セーブ・ホールドが
-        日本プロ野球の規則で自動的に決まります。
-        行われていない回は空欄にしてください（ホームが最終回を攻めていない場合は裏を空欄に）。
-      </p>
-      <div class="table-responsive">
-        <table class="table linescore-table entry-table mb-0">
-          <thead>
-            <tr>
-              <th></th>
-              {% for entry in inning_formset %}
-                <th class="text-center">{{ entry.inning.value }}</th>
-              {% endfor %}
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <th>{{ rosters.1.team_name }}（表）</th>
-              {% for entry in inning_formset %}
-                <td>{{ entry.inning }}{{ entry.away }}</td>
-              {% endfor %}
-            </tr>
-            <tr>
-              <th>{{ rosters.0.team_name }}（裏）</th>
-              {% for entry in inning_formset %}
-                <td>{{ entry.home }}</td>
-              {% endfor %}
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </div>
-
-  <div class="card mb-3">
-    <div class="card-header">打撃成績</div>
-    <div class="card-body p-0">
-      {% if batting_rows %}
-        <div class="table-responsive">
-          <table class="table entry-table mb-0">
-            <thead>
-              <tr>
-                <th>選手</th>
-                <th class="text-center">打順</th>
-                <th class="text-center">交代</th>
-                <th class="text-center">守備</th>
-                <th class="text-end">打数</th>
-                <th class="text-end">単打</th>
-                <th class="text-end">二塁打</th>
-                <th class="text-end">三塁打</th>
-                <th class="text-end">本塁打</th>
-                <th class="text-end">打点</th>
-                <th class="text-end">四球</th>
-                <th class="text-end">死球</th>
-                <th class="text-end">犠飛</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for entry, player in batting_rows %}
-                <tr>
-                  <td>
-                    {{ entry.player_id }}
-                    <span class="stat-muted" style="font-size: 0.75rem;">{{ player.team_name }}</span><br />
-                    <span class="jersey-number me-1">{{ player.number }}</span>
-                    <span class="player-name">{{ player.name }}</span>
-                  </td>
-                  <td>{{ entry.batting_order }}</td>
-                  <td>{{ entry.slot_sequence }}</td>
-                  <td>{{ entry.fielding_position }}</td>
-                  <td>{{ entry.at_bats }}</td>
-                  <td>{{ entry.singles }}</td>
-                  <td>{{ entry.doubles }}</td>
-                  <td>{{ entry.triples }}</td>
-                  <td>{{ entry.home_runs }}</td>
-                  <td>{{ entry.runs_batted_in }}</td>
-                  <td>{{ entry.walks }}</td>
-                  <td>{{ entry.hit_by_pitch }}</td>
-                  <td>{{ entry.sacrifice_flies }}</td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <div class="empty-state" style="padding: 2rem 1rem; font-size: 0.875rem;">
-          両チームに野手が登録されていません。
-        </div>
-      {% endif %}
-    </div>
-  </div>
-
-  <div class="card mb-3">
-    <div class="card-header">投球成績</div>
-    <div class="card-body p-0">
-      {% if pitching_rows %}
-        {% comment %}
-        被本塁打は被安打の内数。入力する側が取り違えると被安打より多い値が
-        入りうるので、ドメインで弾く前にここで断っておく。
-        {% endcomment %}
-        <p class="page-subtitle mb-0" style="font-size: 0.8125rem; padding: 0.875rem 1.25rem 0;">
-          被本塁打は被安打の内数です（被安打より多い値は保存できません）。
-          勝敗・セーブ・ホールドは入力しません。イニングスコアと「登板」した回から
-          日本プロ野球の規則で決まります。
-        </p>
-        <div class="table-responsive">
-          <table class="table entry-table mb-0">
-            <thead>
-              <tr>
-                <th>選手</th>
-                <th class="text-center">登板</th>
-                <th class="text-end">投球回</th>
-                <th class="text-end">自責点</th>
-                <th class="text-end">奪三振</th>
-                <th class="text-end">被安打</th>
-                <th class="text-end">与四球</th>
-                <th class="text-end">被本塁打</th>
-                <th class="text-end">与死球</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for entry, player in pitching_rows %}
-                <tr>
-                  <td>
-                    {{ entry.player_id }}
-                    <span class="stat-muted" style="font-size: 0.75rem;">{{ player.team_name }}</span><br />
-                    <span class="jersey-number me-1">{{ player.number }}</span>
-                    <span class="player-name">{{ player.name }}</span>
-                  </td>
-                  <td>{{ entry.entered_inning }}</td>
-                  <td>{{ entry.innings_pitched }}</td>
-                  <td>{{ entry.earned_runs }}</td>
-                  <td>{{ entry.strikeouts }}</td>
-                  <td>{{ entry.hits_allowed }}</td>
-                  <td>{{ entry.walks_allowed }}</td>
-                  <td>{{ entry.home_runs_allowed }}</td>
-                  <td>{{ entry.hit_by_pitch_allowed }}</td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <div class="empty-state" style="padding: 2rem 1rem; font-size: 0.875rem;">
-          両チームに投手が登録されていません。
-        </div>
-      {% endif %}
-    </div>
-  </div>
-
-  <div class="d-flex justify-content-between">
-    <a href="{% url 'game_detail' game.id %}" class="btn btn-secondary">戻る</a>
-    <button type="submit" class="btn btn-primary">保存する</button>
-  </div>
-</form>
+</div>
+<script type="module" src="{% static 'myapp/dist/game_edit.js' %}"></script>
 {% endblock %}
