@@ -711,6 +711,8 @@ class Profile:
     corporate_team: str = ""
     # 表示用の記述情報。既存の birthplace と同じ扱いで、検証は行わない
     nationality: str = ""
+    name_kana: str = ""  # 氏名のよみがな（カタカナ）
+    back_name: str = ""  # ユニフォーム背面の表記（例: T.YAMADA）
     # 外国人枠の判定に使う唯一の出典。nationality（実際の国籍という事実）とは
     # 別の概念（帰化選手など、枠制度上の扱いは国籍と一致しないことがある）
     is_foreign_player: bool = False

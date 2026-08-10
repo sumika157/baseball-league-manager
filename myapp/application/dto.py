@@ -251,6 +251,8 @@ class PlayerProfile:
     months: list[MonthlyRow] | None = None
     # プロフィール
     age: int | None = None
+    name_kana: str = ""  # 氏名のよみがな。名前に添えて出す
+    back_name: str = ""  # ユニフォーム背面の表記（例: T.YAMADA）
     throws_bats: str = ""
     height_cm: int | None = None
     weight_kg: int | None = None

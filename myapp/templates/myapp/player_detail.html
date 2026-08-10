@@ -15,9 +15,18 @@
 <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
   <div class="page-head mb-0">
     <h1 class="page-title">
-      <span class="jersey-number me-2">{{ player.number }}</span>{{ player.name }}
+      <span class="jersey-number me-2">{{ player.number }}</span>
+      {% if profile.name_kana and profile.name_kana != player.name %}
+        {# よみがなは名前の一部なので、プロフィール欄ではなくルビで名前に添える #}
+        {# カタカナ名の選手（外国人など）は名前と読みが同じになるため、出さない #}
+        <ruby>{{ player.name }}<rt>{{ profile.name_kana }}</rt></ruby>
+      {% else %}
+        {{ player.name }}
+      {% endif %}
     </h1>
-    <p class="page-subtitle">{{ player.position }} · 出場 {{ profile.appearances }}試合</p>
+    <p class="page-subtitle">
+      {% if profile.back_name %}<span class="back-name">{{ profile.back_name }}</span> · {% endif %}{{ player.position }} · 出場 {{ profile.appearances }}試合
+    </p>
   </div>
   {# 試合詳細と同じく、書き込みできる人にだけ導線を出す #}
   {% if can_edit_team %}

@@ -1921,6 +1921,55 @@ class PlayerProfileTest(BaseCase):
 
         self.assertEqual(saved.profile.amateur_path, "甲子園高校 → 六大学 → ○○重工")
 
+    def test_name_kana_and_back_name_reach_the_player_page(self):
+        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        orm_models.Player.objects.filter(id=player.id).update(name_kana="ヤマダタロウ", back_name="T.YAMADA")
+
+        profile = self.service.get_player_profile(self.team.id, player.id)
+
+        self.assertEqual(profile.name_kana, "ヤマダタロウ")
+        self.assertEqual(profile.back_name, "T.YAMADA")
+
+    def test_name_kana_and_back_name_appear_on_the_page(self):
+        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        orm_models.Player.objects.filter(id=player.id).update(name_kana="ヤマダタロウ", back_name="T.YAMADA")
+
+        body = self.client.get(reverse("player_detail", args=[self.team.id, player.id])).content.decode()
+
+        self.assertIn("<rt>ヤマダタロウ</rt>", body)
+        self.assertIn("T.YAMADA", body)
+
+    def test_page_without_kana_or_back_name_stays_plain(self):
+        """未入力の選手に空のルビや区切り記号を出さない。"""
+        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+
+        body = self.client.get(reverse("player_detail", args=[self.team.id, player.id])).content.decode()
+
+        self.assertNotIn("<ruby>", body)
+        self.assertNotIn("back-name", body)
+
+    def test_kana_identical_to_the_name_is_not_shown_as_ruby(self):
+        """カタカナ名の選手（外国人など）は名前と読みが同じになるため、ルビを出さない。"""
+        player = self.service.register_player(self.team.id, "デイミアン・ベル", 42, "外野手")
+        orm_models.Player.objects.filter(id=player.id).update(name_kana="デイミアン・ベル")
+
+        body = self.client.get(reverse("player_detail", args=[self.team.id, player.id])).content.decode()
+
+        self.assertNotIn("<ruby>", body)
+
+    def test_name_kana_and_back_name_survive_an_aggregate_save(self):
+        """集約経由の保存で、ドメインが知らない項目として消えないこと。"""
+        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        orm_models.Player.objects.filter(id=player.id).update(name_kana="ヤマダタロウ", back_name="T.YAMADA")
+
+        self.service.update_player(
+            team_id=self.team.id, player_id=player.id, name="山田", number=11, position_label="内野手"
+        )
+
+        row = orm_models.Player.objects.get(id=player.id)
+        self.assertEqual(row.name_kana, "ヤマダタロウ")
+        self.assertEqual(row.back_name, "T.YAMADA")
+
     def test_amateur_career_appears_on_the_player_page(self):
         player = self.service.register_player(self.team.id, "山田", 10, "内野手")
         orm_models.Player.objects.filter(id=player.id).update(high_school="甲子園高校")

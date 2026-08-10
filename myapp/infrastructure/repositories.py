@@ -281,6 +281,8 @@ def _profile_defaults(profile: Profile) -> dict:
         "university": profile.university,
         "corporate_team": profile.corporate_team,
         "nationality": profile.nationality,
+        "name_kana": profile.name_kana,
+        "back_name": profile.back_name,
         "is_foreign_player": profile.is_foreign_player,
     }
 
@@ -298,6 +300,8 @@ def _profile_of(row) -> Profile:
         university=row.university,
         corporate_team=row.corporate_team,
         nationality=row.nationality,
+        name_kana=row.name_kana,
+        back_name=row.back_name,
         is_foreign_player=row.is_foreign_player,
     )
 

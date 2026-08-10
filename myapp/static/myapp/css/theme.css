@@ -194,6 +194,21 @@ main.container {
   margin: 0;
 }
 
+/* 選手名のよみがな。名前の一部なので、プロフィール欄ではなくルビで直上に添える */
+.page-title ruby rt {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.25em;
+  color: var(--app-text-muted);
+}
+
+/* 背ネーム（ユニフォーム背面の表記）。subtitle の中で一段だけ目立たせる */
+.page-subtitle .back-name {
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--app-text);
+}
+
 /* ------------------------------------------------------------------
    カード
    ------------------------------------------------------------------ */
