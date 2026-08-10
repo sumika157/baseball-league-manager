@@ -6,7 +6,8 @@
 ## 実行環境
 
 - **すべてのコマンドは Docker コンテナ経由**で実行する（`docker compose exec web python manage.py ...`）。ホストに Python 環境は無い。
-- リポジトリの実体は WSL2 内。Windows からは `U:\` 経由で見えるが、**Docker は Windows 側から直接叩ける**。`wsl -e bash -c` で包まない。
+- リポジトリの実体は WSL2 内。Windows からは `U:\` 経由で見えるが、**実行中コンテナへの操作（`exec` / `logs` / `ps`）は Windows 側から直接叩ける**。`wsl -e bash -c` で包まない。
+- ただし**コンテナを新規作成する操作（`docker compose up` / `run`）だけは WSL 側から実行する**。Windows 側から作るとバインドマウントが実体と切り離され、空マウントや容量 127MB の幽霊ディスク（書き込みが実リポジトリに届かない・`ENOSPC` で死ぬ）になる。
 - テスト: `docker compose exec web python manage.py test`（フル）。domain 層のみなら
   `docker compose exec -e DJANGO_SETTINGS_MODULE= web python -m unittest discover -s myapp/tests/domain -t .`（DB 不要・最速）。
 - `.env` の値に `$` を含めない（Docker Compose が変数展開して壊す。エラーにならず気づけない）。
