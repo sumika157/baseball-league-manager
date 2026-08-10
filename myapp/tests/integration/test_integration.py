@@ -323,10 +323,11 @@ class DashboardTest(BaseCase):
             },
         )
 
-        rankings = self.service.get_dashboard().league_rankings[0]
+        rankings = self.service.get_dashboard().leagues[0].rankings
 
-        self.assertEqual([e.player_name for e in rankings.ops_leaders], ["田中", "山田"])
-        self.assertEqual(rankings.ops_leaders[0].team_name, "相手チーム")
+        self.assertEqual([e.player_name for e in rankings.average_leaders], ["田中", "山田"])
+        self.assertEqual(rankings.average_leaders[0].team_name, "相手チーム")
+        self.assertEqual(rankings.average_leaders[0].value, ".400")
 
     def test_rankings_are_split_by_league(self):
         """タイトルはリーグの中で争われる。他リーグの選手と同じ表に並べない。"""
@@ -340,11 +341,39 @@ class DashboardTest(BaseCase):
         play_game(x, y, batting={there.id: BattingLine(at_bats=10, home_runs=5)})
 
         rankings = {
-            g.league_name: [e.player_name for e in g.ops_leaders] for g in self.service.get_dashboard().league_rankings
+            g.league_name: [e.player_name for e in g.rankings.average_leaders]
+            for g in self.service.get_dashboard().leagues
         }
 
         self.assertEqual(rankings["テストリーグ"], ["当リーグ"])
         self.assertEqual(rankings["別リーグ"], ["別リーグ選手"])
+
+    def test_win_and_save_rankings(self):
+        """投手のランキングは防御率・勝利・セーブ。NPB の個人成績ページにならう。"""
+        ace = self.service.register_player(self.team.id, "エース", 18, "投手")
+        closer = self.service.register_player(self.team.id, "守護神", 22, "投手")
+        play_game(
+            self.team,
+            self.rival,
+            pitching={
+                ace.id: PitchingLine(innings=InningsPitched.from_notation("8.0"), wins=1),
+                closer.id: PitchingLine(innings=InningsPitched.from_notation("1.0"), saves=1),
+            },
+        )
+
+        rankings = self.service.get_dashboard().leagues[0].rankings
+
+        self.assertEqual([e.player_name for e in rankings.win_leaders], ["エース"])
+        self.assertEqual([e.player_name for e in rankings.save_leaders], ["守護神"])
+
+    def test_rbi_ranking(self):
+        slugger = self.service.register_player(self.team.id, "大砲", 3, "内野手")
+        give_batting(self.team, self.rival, slugger.id, BattingLine(at_bats=10, home_runs=2, runs_batted_in=5))
+
+        rankings = self.service.get_dashboard().leagues[0].rankings
+
+        self.assertEqual(rankings.rbi_leaders[0].player_name, "大砲")
+        self.assertEqual(rankings.rbi_leaders[0].value, "5")
 
     def test_ranking_names_link_to_the_player_page(self):
         """選手名の行き先を、選手一覧・選手検索とそろえる。
@@ -364,11 +393,13 @@ class DashboardTest(BaseCase):
         self.assertIn(reverse("player_detail", args=[self.team.id, player.id]), body)
         self.assertNotIn(reverse("player_edit", args=[self.team.id, player.id]), body)
 
-    def test_leagues_without_records_are_omitted(self):
-        orm_models.League.objects.create(name="記録なしリーグ")
-        board = self.service.get_dashboard()
+    def test_league_without_records_still_has_a_tab(self):
+        """チームがあるリーグは、記録が無くてもタブを出す（チーム一覧を見るため）。"""
+        league = self.service.get_dashboard().leagues[0]
 
-        self.assertNotIn("記録なしリーグ", [g.league_name for g in board.league_rankings])
+        self.assertEqual(league.league_name, "テストリーグ")
+        self.assertFalse(league.rankings.has_any)
+        self.assertEqual(league.standings, [])
 
     def test_page_renders(self):
         response = self.client.get(reverse("dashboard"))
@@ -383,7 +414,7 @@ class DashboardTest(BaseCase):
         board = self.service.get_dashboard()
 
         self.assertEqual(
-            {g.league_name: [t.name for t in g.teams] for g in board.league_teams},
+            {g.league_name: [t.name for t in g.teams] for g in board.leagues},
             {"テストリーグ": ["テストチーム", "相手チーム"], "別リーグ": ["Xチーム"]},
         )
 
@@ -391,12 +422,13 @@ class DashboardTest(BaseCase):
         self.assertEqual(len(self.service.get_dashboard().teams), 2)
 
     def test_first_league_tab_is_selected(self):
-        orm_models.Team.objects.create(league=orm_models.League.objects.create(name="別リーグ"), name="Xチーム")
+        other = orm_models.League.objects.create(name="別リーグ")
+        orm_models.Team.objects.create(league=other, name="Xチーム")
         body = self.client.get(reverse("dashboard")).content.decode()
 
-        # 最初のタブだけが選択済みで、対応する中身が表示される
-        self.assertEqual(body.count("segmented-item active"), 1)
-        self.assertEqual(body.count("tab-pane fade show active"), 1)
+        # 最初のリーグのタブだけが選択済みで、対応する中身が表示される
+        self.assertRegex(body, rf'tab-pane fade show active"\s+id="league-pane-{self.league.id}"')
+        self.assertNotRegex(body, rf'tab-pane fade show active"\s+id="league-pane-{other.id}"')
 
     def test_each_league_has_a_tab_and_a_pane(self):
         other = orm_models.League.objects.create(name="別リーグ")
@@ -405,14 +437,51 @@ class DashboardTest(BaseCase):
 
         for league in (self.league, other):
             with self.subTest(league=league.name):
-                self.assertIn(f"#dashboard-league-{league.id}", body)
-                self.assertIn(f'id="dashboard-league-{league.id}"', body)
+                self.assertIn(f"#league-pane-{league.id}", body)
+                self.assertIn(f'id="league-pane-{league.id}"', body)
 
     def test_leagues_without_teams_are_omitted(self):
         orm_models.League.objects.create(name="空リーグ")
         board = self.service.get_dashboard()
 
-        self.assertNotIn("空リーグ", [g.league_name for g in board.league_teams])
+        self.assertNotIn("空リーグ", [g.league_name for g in board.leagues])
+
+    def test_standings_show_the_latest_season(self):
+        """順位表カードは最新シーズンのもの。年は選ばせず、概況に徹する。"""
+        play_game(self.team, self.rival, home_score=5, away_score=3, year=2025)
+        play_game(self.team, self.rival, home_score=2, away_score=7, year=2026)
+
+        league = self.service.get_dashboard().leagues[0]
+
+        self.assertEqual(league.standings_year, 2026)
+        self.assertEqual([r.team_name for r in league.standings], ["相手チーム", "テストチーム"])
+
+    def test_standings_pane_is_shown_first(self):
+        """右カードの初期表示は順位表。チーム一覧はタブで切り替える。"""
+        play_game(self.team, self.rival)
+        body = self.client.get(reverse("dashboard")).content.decode()
+
+        self.assertIn(f'class="tab-pane fade show active" id="league-{self.league.id}-standings"', body)
+        self.assertIn(f'class="tab-pane fade" id="league-{self.league.id}-teams"', body)
+
+    def test_ranking_cards_link_to_the_league_stats(self):
+        """各ランキングカードから、その部門で並べた成績一覧へ飛べる。"""
+        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        give_batting(self.team, self.rival, player.id, BattingLine(at_bats=10, home_runs=3))
+        body = self.client.get(reverse("dashboard")).content.decode()
+
+        stats_url = reverse("league_stats", args=[self.league.id])
+        for query in (
+            "pos=batter&amp;sort=average",
+            "pos=batter&amp;sort=home_runs",
+            "pos=batter&amp;sort=rbi",
+            "pos=pitcher&amp;sort=era",
+            "pos=pitcher&amp;sort=wins",
+            "pos=pitcher&amp;sort=saves",
+        ):
+            with self.subTest(query=query):
+                self.assertIn(f"{stats_url}?{query}", body)
+        self.assertIn("成績一覧を見る", body)
 
     def test_page_renders_without_any_data(self):
         orm_models.Team.objects.all().delete()
@@ -2779,7 +2848,7 @@ class LeagueOrderingTest(BaseCase):
         self.assertEqual(names, ["Zリーグ", "Aリーグ"])
 
     def test_order_is_reflected_in_dashboard_tabs(self):
-        names = [g.league_name for g in self.service.get_dashboard().league_teams]
+        names = [g.league_name for g in self.service.get_dashboard().leagues]
         self.assertEqual(names, ["Zリーグ", "Aリーグ"])
 
 
@@ -2993,6 +3062,31 @@ class LeagueTitlesViewTest(BaseCase):
         self.assertEqual(leader.player_name, "エース")
         self.assertEqual(leader.value, "2.00")
 
+    def test_win_and_save_leaders(self):
+        """勝利・セーブも部門になる。数そのものが記録なので規定は設けない。"""
+        give_pitching(
+            self.team,
+            self.rival,
+            self.ace.id,
+            PitchingLine(innings=InningsPitched.from_notation("9.0"), wins=1),
+            day=1,
+        )
+        closer = self.service.register_player(self.team.id, "守護神", 22, "投手")
+        give_pitching(
+            self.team,
+            self.rival,
+            closer.id,
+            PitchingLine(innings=InningsPitched.from_notation("1.0"), saves=1),
+            day=2,
+        )
+
+        departments = self._departments()
+
+        self.assertEqual(departments["wins"].leader.player_name, "エース")
+        self.assertEqual(departments["wins"].leader.value, "1")
+        self.assertEqual(departments["saves"].leader.player_name, "守護神")
+        self.assertEqual(departments["saves"].leader.value, "1")
+
     def test_departments_are_scoped_to_the_season(self):
         give_batting(
             self.team,
@@ -3043,7 +3137,7 @@ class LeagueTitlesViewTest(BaseCase):
 
         response = self.client.get(self.url)
 
-        for label in ["首位打者", "本塁打王", "打点王", "最優秀防御率", "最多奪三振"]:
+        for label in ["首位打者", "本塁打王", "打点王", "最優秀防御率", "最多勝利", "最多セーブ", "最多奪三振"]:
             self.assertContains(response, label)
 
     def test_page_without_games_says_so(self):
@@ -3060,6 +3154,91 @@ class LeagueTitlesViewTest(BaseCase):
         response = self.client.get(reverse("league_detail", args=[self.league.id]))
 
         self.assertContains(response, reverse("league_titles_by_year", args=[self.league.id, 2026]))
+
+
+class LeagueStatsViewTest(BaseCase):
+    """リーグの成績一覧。所属する全選手の通算成績を1つの表で見る。"""
+
+    def setUp(self):
+        super().setUp()
+        self.slugger = self.service.register_player(self.team.id, "大砲", 3, "内野手")
+        self.contact = self.service.register_player(self.rival.id, "安打製造機", 7, "外野手")
+        self.ace = self.service.register_player(self.team.id, "エース", 18, "投手")
+        self.url = reverse("league_stats", args=[self.league.id])
+
+    def test_batters_span_teams_within_the_league(self):
+        give_batting(self.team, self.rival, self.slugger.id, BattingLine(at_bats=10, home_runs=2), day=1)
+        give_batting(self.rival, self.team, self.contact.id, BattingLine(at_bats=10, singles=5), day=2)
+
+        rows = self.service.get_league_stats(self.league.id).listing.rows
+
+        self.assertEqual({r.player.name for r in rows}, {"大砲", "安打製造機"})
+        self.assertEqual({r.team_name for r in rows}, {"テストチーム", "相手チーム"})
+
+    def test_players_of_another_league_are_not_listed(self):
+        other_league = orm_models.League.objects.create(name="別リーグ")
+        other = orm_models.Team.objects.create(league=other_league, name="別チーム")
+        self.service.register_player(other.id, "他リーグの大砲", 9, "内野手")
+
+        rows = self.service.get_league_stats(self.league.id).listing.rows
+
+        self.assertNotIn("他リーグの大砲", [r.player.name for r in rows])
+
+    def test_default_batter_sort_is_ops(self):
+        listing = self.service.get_league_stats(self.league.id).listing
+
+        self.assertEqual(listing.sort, "ops")
+        self.assertTrue(listing.descending)
+
+    def test_sort_key_from_url_is_applied(self):
+        give_batting(self.team, self.rival, self.slugger.id, BattingLine(at_bats=10, home_runs=2), day=1)
+        give_batting(self.rival, self.team, self.contact.id, BattingLine(at_bats=10, singles=5), day=2)
+
+        listing = self.service.get_league_stats(self.league.id, sort="average").listing
+
+        self.assertEqual(listing.sort, "average")
+        self.assertEqual([r.player.name for r in listing.rows], ["安打製造機", "大砲"])
+
+    def test_invalid_sort_key_falls_back_to_the_default(self):
+        listing = self.service.get_league_stats(self.league.id, sort="怪しいキー").listing
+
+        self.assertEqual(listing.sort, "ops")
+
+    def test_pitcher_mode_lists_pitchers(self):
+        give_pitching(
+            self.team,
+            self.rival,
+            self.ace.id,
+            PitchingLine(innings=InningsPitched.from_notation("9.0"), wins=1, strikeouts=9),
+            day=1,
+        )
+
+        rows = self.service.get_league_stats(self.league.id, pitchers=True).listing.rows
+
+        self.assertEqual([r.player.name for r in rows], ["エース"])
+        self.assertEqual(rows[0].player.wins, 1)
+
+    def test_page_renders_and_links_to_player_pages(self):
+        give_batting(self.team, self.rival, self.slugger.id, BattingLine(at_bats=10, home_runs=2), day=1)
+
+        body = self.client.get(self.url).content.decode()
+
+        self.assertIn(reverse("player_detail", args=[self.team.id, self.slugger.id]), body)
+        self.assertIn("成績一覧", body)
+
+    def test_pitcher_page_renders(self):
+        response = self.client.get(f"{self.url}?pos=pitcher")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "防御率")
+
+    def test_missing_league_returns_404(self):
+        self.assertEqual(self.client.get(reverse("league_stats", args=[9999])).status_code, 404)
+
+    def test_league_page_links_here(self):
+        response = self.client.get(reverse("league_detail", args=[self.league.id]))
+
+        self.assertContains(response, reverse("league_stats", args=[self.league.id]))
 
 
 class TeamMonthlySplitViewTest(BaseCase):

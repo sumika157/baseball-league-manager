@@ -19,9 +19,12 @@
       {% if league.year %} · {{ league.year }}年シーズン{% endif %}
     </p>
   </div>
-  {% if league.available_years %}
-    <a href="{% url 'league_titles_by_year' league.id league.year %}" class="btn btn-secondary">タイトル</a>
-  {% endif %}
+  <div class="d-flex gap-2">
+    <a href="{% url 'league_stats' league.id %}" class="btn btn-secondary">成績一覧</a>
+    {% if league.available_years %}
+      <a href="{% url 'league_titles_by_year' league.id league.year %}" class="btn btn-secondary">タイトル</a>
+    {% endif %}
+  </div>
 </div>
 
 {% if league.available_years %}

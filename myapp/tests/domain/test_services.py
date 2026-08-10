@@ -134,6 +134,42 @@ class PitchingLeaderTest(TestCase):
 
         self.assertEqual([r.player.name for r in result], ["奪三振王"])
 
+    def test_win_ranking_sorted_and_excludes_zero(self):
+        ace = _pitcher("エース", 18, wins=12)
+        second = _pitcher("二番手", 19, wins=8)
+        winless = _pitcher("未勝利", 20, wins=0)
+
+        result = services.leaders_by_wins([second, ace, winless])
+
+        self.assertEqual([r.player.name for r in result], ["エース", "二番手"])
+        self.assertEqual(result[0].value, 12.0)
+
+    def test_win_ranking_ignores_the_innings_threshold(self):
+        """勝利は数そのものが記録なので、投球回が少なくても載る。"""
+        reliever = _pitcher("救援", 30, notation="10.0", wins=5, relief_wins=5)
+
+        result = services.leaders_by_wins([reliever])
+
+        self.assertEqual([r.player.name for r in result], ["救援"])
+
+    def test_save_ranking_sorted_and_excludes_zero(self):
+        closer = _pitcher("守護神", 22, saves=30)
+        setup = _pitcher("勝ちパターン", 23, saves=3)
+        starter = _pitcher("先発", 24, saves=0)
+
+        result = services.leaders_by_saves([setup, closer, starter])
+
+        self.assertEqual([r.player.name for r in result], ["守護神", "勝ちパターン"])
+        self.assertEqual(result[0].value, 30.0)
+
+    def test_batters_are_not_in_win_or_save_rankings(self):
+        batter = _batter("野手", 1, at_bats=10, singles=3)
+
+        self.assertEqual(services.leaders_by_wins([batter]), [])
+        self.assertEqual(services.leaders_by_saves([batter]), [])
+
     def test_empty_input_returns_empty(self):
         self.assertEqual(services.leaders_by_era([]), [])
         self.assertEqual(services.leaders_by_ops([]), [])
+        self.assertEqual(services.leaders_by_wins([]), [])
+        self.assertEqual(services.leaders_by_saves([]), [])

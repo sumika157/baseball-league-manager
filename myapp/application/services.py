@@ -25,6 +25,7 @@ from .dto import (
     BatterRow,
     CareerRow,
     Dashboard,
+    DashboardLeague,
     GameDetail,
     GameLineScore,
     GamePlayerRow,
@@ -32,8 +33,10 @@ from .dto import (
     GameTeamBox,
     InningScoreColumn,
     LeagueDetail,
+    LeaguePlayerRow,
     LeagueRankings,
     LeagueStandings,
+    LeagueStats,
     LeagueTeams,
     LeagueTitles,
     Listing,
@@ -174,7 +177,7 @@ class TeamApplicationService:
         return Listing(rows=groups, sort=listing.sort, descending=listing.descending)
 
     def get_dashboard(self, *, leaders: int = 5) -> Dashboard:
-        """ホーム画面の概況とランキングを組み立てる。
+        """ホーム画面の概況と、リーグごとのランキング・順位表を組み立てる。
 
         順位づけの規則そのものはドメインサービスに委ね、ここでは
         集約をまたいで選手を集め、DTO に詰め替えるだけにとどめる。
@@ -199,58 +202,79 @@ class TeamApplicationService:
                 for item in ranked
             ]
 
-        def rate3(v):
-            return f"{v:.3f}"
-
-        def rate2(v):
-            return f"{v:.2f}"
-
-        def count(v):
-            return str(int(v))
-
         # 規定打席・規定投球回は所属チームの試合数で決まる
         games_played = self._team_game_counts()
         team_games = {player.id: games_played.get(team_id, 0) for player, team_id in players}
+
+        all_games = self._games.find_all()
+        teams_by_league = {group.league_id: group.teams for group in self.list_teams_by_league().rows}
+
+        leagues = []
+        for league in self._leagues.find_all():
+            league_teams = [t for t in teams if t.league_id == league.id]
+            if not league_teams:
+                # チームの無いリーグは切り替えても何も出せないので、タブを作らない
+                continue
+            standings_rows, standings_year = self._latest_standings(league_teams, all_games)
+            leagues.append(
+                DashboardLeague(
+                    league_id=league.id,
+                    league_name=league.name,
+                    rankings=self._league_rankings(league_teams, leaders, team_games, to_entries),
+                    standings=standings_rows,
+                    standings_year=standings_year,
+                    teams=teams_by_league.get(league.id, []),
+                )
+            )
 
         return Dashboard(
             league_count=len({team.league_id for team in teams}),
             team_count=len(teams),
             batter_count=sum(1 for p in all_players if not p.is_pitcher),
             pitcher_count=sum(1 for p in all_players if p.is_pitcher),
-            league_rankings=self._league_rankings(teams, leaders, team_games, to_entries, rate3, rate2, count),
-            league_teams=self.list_teams_by_league().rows,
+            leagues=leagues,
         )
 
-    def _league_rankings(self, teams, leaders, team_games, to_entries, rate3, rate2, count) -> list[LeagueRankings]:
-        """リーグごとのランキング。
+    @staticmethod
+    def _league_rankings(league_teams, leaders, team_games, to_entries) -> LeagueRankings:
+        """1リーグぶんのランキング。
 
         タイトルはリーグの中で争われるので、他リーグの選手と同じ表に並べない。
-        1人も載らないリーグは出さない。
+        部門は NPB の個人成績ページにならい、打者は打率・本塁打・打点、
+        投手は防御率・勝利・セーブを出す。
         """
-        rankings = []
-        for league in self._leagues.find_all():
-            members = [p for team in teams if team.league_id == league.id for p in team.active_players]
-            if not members:
-                continue
+        members = [p for team in league_teams for p in team.active_players]
+        return LeagueRankings(
+            average_leaders=to_entries(
+                domain_services.leaders_by_batting_average(members, limit=leaders, team_games=team_games),
+                _as_average,
+            ),
+            # 本塁打・打点・勝利・セーブは数そのものが記録なので規定を設けない
+            home_run_leaders=to_entries(domain_services.leaders_by_home_runs(members, limit=leaders), _as_count),
+            rbi_leaders=to_entries(domain_services.leaders_by_runs_batted_in(members, limit=leaders), _as_count),
+            era_leaders=to_entries(
+                domain_services.leaders_by_era(members, limit=leaders, team_games=team_games),
+                _as_rate,
+            ),
+            win_leaders=to_entries(domain_services.leaders_by_wins(members, limit=leaders), _as_count),
+            save_leaders=to_entries(domain_services.leaders_by_saves(members, limit=leaders), _as_count),
+        )
 
-            entry = LeagueRankings(
-                league_id=league.id,
-                league_name=league.name,
-                ops_leaders=to_entries(
-                    domain_services.leaders_by_ops(members, limit=leaders, team_games=team_games),
-                    rate3,
-                ),
-                # 本塁打と奪三振は本数そのものが記録なので規定を設けない
-                home_run_leaders=to_entries(domain_services.leaders_by_home_runs(members, limit=leaders), count),
-                era_leaders=to_entries(
-                    domain_services.leaders_by_era(members, limit=leaders, team_games=team_games),
-                    rate2,
-                ),
-                strikeout_leaders=to_entries(domain_services.leaders_by_strikeouts(members, limit=leaders), count),
-            )
-            if entry.has_any:
-                rankings.append(entry)
-        return rankings
+    def _latest_standings(self, league_teams, all_games) -> tuple[list[StandingRow], int | None]:
+        """1リーグぶんの最新シーズンの順位表と、そのシーズンの年。
+
+        ダッシュボードは概況なので年は選ばせず、最新シーズンだけを出す。
+        年をさかのぼる場合は順位表ページが受け持つ。
+        """
+        member_ids = {t.id for t in league_teams}
+        league_games = [g for g in all_games if g.home_team_id in member_ids and g.away_team_id in member_ids]
+        seasons = domain_services.seasons_of(league_games)
+        if not seasons:
+            return [], None
+
+        latest = seasons[0]
+        rows = domain_services.standings(league_teams, [g for g in league_games if g.season == latest])
+        return self._to_standing_rows(rows, None, None), latest.year
 
     def get_team_name(self, team_id: int) -> str:
         return self._teams.find_by_id(team_id).name
@@ -520,11 +544,73 @@ class TeamApplicationService:
                 ),
             ),
             TitleDepartment(
+                key="wins",
+                label="最多勝利",
+                entries=to_entries(domain_services.leaders_by_wins(players, limit=leaders), _as_count),
+            ),
+            TitleDepartment(
+                key="saves",
+                label="最多セーブ",
+                entries=to_entries(domain_services.leaders_by_saves(players, limit=leaders), _as_count),
+            ),
+            TitleDepartment(
                 key="strikeouts",
                 label="最多奪三振",
                 entries=to_entries(domain_services.leaders_by_strikeouts(players, limit=leaders), _as_count),
             ),
         ]
+
+    def get_league_stats(
+        self,
+        league_id: int,
+        *,
+        pitchers: bool = False,
+        sort: str | None = None,
+        descending: bool | None = None,
+    ) -> LeagueStats:
+        """リーグの成績一覧。所属する全選手の通算成績を1つの表に並べる。
+
+        ダッシュボードのランキング（通算の上位だけ）から全体を確認しに来る
+        場所なので、こちらも通算で揃える。並べ替えの規則はドメイン側にあり、
+        不正なキーは既定の並びに落ちる。
+        """
+        league = self._leagues.find_by_id(league_id)
+        teams = [t for t in self._teams.find_all_with_roster() if t.league_id == league_id]
+        context = self._league_context(league_id)
+
+        members: list[Player] = []
+        home_of: dict[int, tuple[int, str]] = {}
+        captains: set[int] = set()
+        for team in teams:
+            captain = team.current_captain
+            for player in team.active_players:
+                if player.is_pitcher != pitchers:
+                    continue
+                members.append(player)
+                home_of[id(player)] = (team.id, team.name)
+                if player is captain:
+                    captains.add(id(player))
+
+        sorter = domain_services.sort_pitchers if pitchers else domain_services.sort_batters
+        ordered, key, desc = sorter(members, sort, descending)
+        to_row = self._to_pitcher_row if pitchers else self._to_batter_row
+
+        rows = []
+        for player in ordered:
+            team_id, team_name = home_of[id(player)]
+            rows.append(
+                LeaguePlayerRow(
+                    team_id=team_id,
+                    team_name=team_name,
+                    player=to_row(player, is_captain=id(player) in captains, league_context=context),
+                )
+            )
+
+        return LeagueStats(
+            league_id=league.id,
+            league_name=league.name,
+            listing=Listing(rows=rows, sort=key, descending=desc),
+        )
 
     @staticmethod
     def _to_matchup_table(rows) -> MatchupTable:

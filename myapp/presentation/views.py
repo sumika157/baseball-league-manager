@@ -248,6 +248,34 @@ def league_titles(request, league_id, year=None):
     return render(request, "myapp/league_titles.html", {"titles": titles})
 
 
+def league_stats(request, league_id):
+    """リーグの成績一覧。所属する全選手の通算成績を並べ替えて見る。"""
+    pos_mode = PITCHER_MODE if request.GET.get("pos") == PITCHER_MODE else BATTER_MODE
+    sort, descending = _sort_params(request)
+
+    try:
+        stats = _service().get_league_stats(
+            league_id,
+            pitchers=pos_mode == PITCHER_MODE,
+            sort=sort,
+            descending=descending,
+        )
+    except LeagueNotFound:
+        raise Http404("リーグが見つかりません。") from None
+
+    return render(
+        request,
+        "myapp/league_stats.html",
+        {
+            "stats": stats,
+            "players": stats.listing.rows,
+            "pos_mode": pos_mode,
+            "current_sort": stats.listing.sort,
+            "current_descending": stats.listing.descending,
+        },
+    )
+
+
 def game_list(request):
     """試合一覧。年とチームで絞り込める。"""
     service = _service()

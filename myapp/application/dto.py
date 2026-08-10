@@ -308,19 +308,27 @@ class LeagueRankings:
     """1リーグぶんの各種ランキング。
 
     打撃・投手のタイトルはリーグの中で争われるため、リーグをまたいで
-    1つの表にはしない。
+    1つの表にはしない。部門は NPB の個人成績ページにならい、
+    打者は打率・本塁打・打点、投手は防御率・勝利・セーブを出す。
     """
 
-    league_id: int
-    league_name: str
-    ops_leaders: list[RankingEntry]
+    average_leaders: list[RankingEntry]
     home_run_leaders: list[RankingEntry]
+    rbi_leaders: list[RankingEntry]
     era_leaders: list[RankingEntry]
-    strikeout_leaders: list[RankingEntry]
+    win_leaders: list[RankingEntry]
+    save_leaders: list[RankingEntry]
 
     @property
     def has_any(self) -> bool:
-        return bool(self.ops_leaders or self.home_run_leaders or self.era_leaders or self.strikeout_leaders)
+        return bool(
+            self.average_leaders
+            or self.home_run_leaders
+            or self.rbi_leaders
+            or self.era_leaders
+            or self.win_leaders
+            or self.save_leaders
+        )
 
 
 @dataclass(frozen=True)
@@ -478,6 +486,28 @@ class LeagueTitles:
 
 
 @dataclass(frozen=True)
+class LeaguePlayerRow:
+    """リーグの成績一覧の1行。チームをまたいで並べるため所属を添える。"""
+
+    team_id: int
+    team_name: str
+    player: BatterRow | PitcherRow
+
+
+@dataclass(frozen=True)
+class LeagueStats:
+    """リーグの成績一覧。所属する全選手の通算成績を1つの表で見る。
+
+    ダッシュボードのランキングは通算の上位だけを出す。ここはその続きとして
+    全員を並べる場所。シーズンで区切った部門別の上位者はタイトル一覧が担う。
+    """
+
+    league_id: int
+    league_name: str
+    listing: Listing
+
+
+@dataclass(frozen=True)
 class LeagueDetail:
     """リーグ画面。"""
 
@@ -524,6 +554,23 @@ class RankingEntry:
 
 
 @dataclass(frozen=True)
+class DashboardLeague:
+    """ダッシュボードの1リーグぶんのまとまり。
+
+    ランキング・順位表・チームを1本のタブで切り替えるため、リーグ単位で
+    まとめて持つ。タブバーを内容ごとに分けると、左右で別のリーグが
+    表示される状態が生まれてしまう。順位表は最新シーズンのもの。
+    """
+
+    league_id: int
+    league_name: str
+    rankings: LeagueRankings
+    standings: list[StandingRow]
+    standings_year: int | None
+    teams: list[TeamSummary]
+
+
+@dataclass(frozen=True)
 class Dashboard:
     """ホーム画面（ダッシュボード）に表示する内容。"""
 
@@ -531,10 +578,8 @@ class Dashboard:
     team_count: int
     batter_count: int
     pitcher_count: int
-    # タイトルはリーグの中で争われるので、ランキングもリーグごとに持つ
-    league_rankings: list[LeagueRankings]
-    # チームはリーグごとに分けて持つ。数が増えると1つの並びでは読みにくいため
-    league_teams: list[LeagueTeams]
+    # タイトルも順位もリーグの中で争われるので、内容はリーグごとに持つ
+    leagues: list[DashboardLeague]
 
     @property
     def player_count(self) -> int:
@@ -543,7 +588,7 @@ class Dashboard:
     @property
     def teams(self) -> list[TeamSummary]:
         """全リーグを平坦に並べたもの。件数の判定などに使う。"""
-        return [team for group in self.league_teams for team in group.teams]
+        return [team for league in self.leagues for team in league.teams]
 
 
 @dataclass(frozen=True)

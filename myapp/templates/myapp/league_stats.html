@@ -1,0 +1,132 @@
+{% extends "myapp/base.html" %}
+{% load sorting %}
+
+{% block title %}{{ stats.league_name }} 成績一覧 - Baseball Manager{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>
+    <li class="breadcrumb-item"><a href="{% url 'league_detail' stats.league_id %}">{{ stats.league_name }}</a></li>
+    <li class="breadcrumb-item active">成績一覧</li>
+  </ol>
+</nav>
+
+<div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+  <div class="page-head">
+    <h1 class="page-title">{{ stats.league_name }} 成績一覧</h1>
+    <p class="page-subtitle">
+      リーグ所属の{% if pos_mode == 'pitcher' %}投手{% else %}野手{% endif %}全員の通算成績。
+      見出しを押すと並べ替えられます。シーズンごとの上位者はタイトルへ。
+    </p>
+  </div>
+  <a href="{% url 'league_titles' stats.league_id %}" class="btn btn-secondary">タイトル</a>
+</div>
+
+{# 野手／投手の切替。選手一覧と同じ操作感に揃える #}
+<div class="segmented">
+  <a class="segmented-item {% if pos_mode == 'batter' %}is-active{% endif %}" href="?pos=batter">野手</a>
+  <a class="segmented-item {% if pos_mode == 'pitcher' %}is-active{% endif %}" href="?pos=pitcher">投手</a>
+</div>
+
+<div class="table-responsive">
+  <table class="table table-hover">
+    <thead>
+      <tr>
+        {% sort_header 'name' '選手名' 'start' False %}
+        <th>チーム</th>
+        {% if pos_mode == 'pitcher' %}
+          {% sort_header 'innings' '投球回' 'end' %}
+          {% sort_header 'era' '防御率' 'end' False %}
+          {% sort_header 'starts' '先発' 'end' %}
+          {% sort_header 'wins' '勝' 'end' %}
+          {% sort_header 'losses' '敗' 'end' %}
+          {% sort_header 'saves' 'S' 'end' %}
+          {% sort_header 'holds' 'H' 'end' %}
+          {% sort_header 'hold_points' 'HP' 'end' %}
+          {% sort_header 'strikeouts' '奪三振' 'end' %}
+          {% sort_header 'whip' 'WHIP' 'end' False %}
+          {% sort_header 'k9' 'K/9' 'end' %}
+          {% sort_header 'bb9' 'BB/9' 'end' False %}
+          {% sort_header 'fip' 'FIP' 'end' False %}
+          {# ERA+ は防御率と順序が一致する（分子が同じリーグ平均）ので、列は押せない #}
+          <th class="text-end">ERA+</th>
+          {% sort_header 'home_runs_allowed' '被本塁打' 'end' %}
+          {% sort_header 'hit_by_pitch_allowed' '与死球' 'end' %}
+        {% else %}
+          {% sort_header 'average' '打率' 'end' %}
+          {% sort_header 'hits' '安打' 'end' %}
+          {% sort_header 'doubles' '2B' 'end' %}
+          {% sort_header 'triples' '3B' 'end' %}
+          {% sort_header 'home_runs' 'HR' 'end' %}
+          {% sort_header 'rbi' '打点' 'end' %}
+          {% sort_header 'walks' '四球' 'end' %}
+          {% sort_header 'sacrifice_flies' '犠飛' 'end' %}
+          {% sort_header 'obp' '出塁率' 'end' %}
+          {% sort_header 'slg' '長打率' 'end' %}
+          {% sort_header 'ops' 'OPS' 'end' %}
+          {% sort_header 'iso' 'IsoP' 'end' %}
+          {# OPS+ は OPS と順序が一致する（同じリーグなら分母が同じ）ので、列は押せない #}
+          <th class="text-end">OPS+</th>
+        {% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in players %}
+      <tr>
+        <td>
+          <a href="{% url 'player_detail' row.team_id row.player.id %}" class="player-name">{{ row.player.name }}</a>
+          <span class="badge bg-secondary ms-1">{{ row.player.position }}</span>
+        </td>
+        <td>
+          <a href="{% url 'player_list' row.team_id %}" class="stat-muted">{{ row.team_name }}</a>
+        </td>
+
+        {% if pos_mode == 'pitcher' %}
+          <td class="text-end stat-muted">{{ row.player.innings_pitched }}</td>
+          <td class="text-end stat-key">{{ row.player.earned_run_average|floatformat:2 }}</td>
+          <td class="text-end stat-muted">{{ row.player.starts }}</td>
+          <td class="text-end">{{ row.player.wins }}</td>
+          <td class="text-end stat-muted">{{ row.player.losses }}</td>
+          <td class="text-end">{{ row.player.saves }}</td>
+          <td class="text-end stat-muted">{{ row.player.holds }}</td>
+          <td class="text-end stat-muted">{{ row.player.hold_points }}</td>
+          <td class="text-end stat-muted">{{ row.player.strikeouts }}</td>
+          <td class="text-end">{{ row.player.whip|floatformat:2 }}</td>
+          <td class="text-end stat-muted">{{ row.player.strikeouts_per_nine|floatformat:2 }}</td>
+          <td class="text-end stat-muted">{{ row.player.walks_per_nine|floatformat:2 }}</td>
+          <td class="text-end">{{ row.player.fip|floatformat:2 }}</td>
+          <td class="text-end stat-muted">{{ row.player.era_plus|floatformat:0 }}</td>
+          <td class="text-end stat-muted">{{ row.player.home_runs_allowed }}</td>
+          <td class="text-end stat-muted">{{ row.player.hit_by_pitch_allowed }}</td>
+        {% else %}
+          <td class="text-end stat-key">{{ row.player.batting_average|floatformat:3 }}</td>
+          <td class="text-end stat-muted">{{ row.player.hits }}</td>
+          <td class="text-end stat-muted">{{ row.player.doubles }}</td>
+          <td class="text-end stat-muted">{{ row.player.triples }}</td>
+          <td class="text-end">{{ row.player.home_runs }}</td>
+          <td class="text-end">{{ row.player.runs_batted_in }}</td>
+          <td class="text-end stat-muted">{{ row.player.walks }}</td>
+          <td class="text-end stat-muted">{{ row.player.sacrifice_flies }}</td>
+          <td class="text-end">{{ row.player.on_base_percentage|floatformat:3 }}</td>
+          <td class="text-end stat-muted">{{ row.player.slugging_percentage|floatformat:3 }}</td>
+          <td class="text-end stat-key {% if row.player.ops >= 0.9 %}stat-tier-high{% elif row.player.ops >= 0.8 %}stat-tier-mid{% endif %}">
+            {{ row.player.ops|floatformat:3 }}
+          </td>
+          <td class="text-end stat-muted">{{ row.player.isolated_power|floatformat:3 }}</td>
+          <td class="text-end stat-muted">{{ row.player.ops_plus|floatformat:0 }}</td>
+        {% endif %}
+      </tr>
+      {% empty %}
+      <tr>
+        <td colspan="{% if pos_mode == 'pitcher' %}18{% else %}15{% endif %}">
+          <div class="empty-state">
+            {% if pos_mode == 'pitcher' %}投手{% else %}野手{% endif %}がまだ登録されていません。
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

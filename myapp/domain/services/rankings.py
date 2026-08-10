@@ -155,3 +155,17 @@ def leaders_by_strikeouts(players: list[Player], *, limit: int | None = 5) -> li
     entries = [(p, float(p.pitching.strikeouts)) for p in players if p.is_pitcher and p.pitching.strikeouts > 0]
     entries.sort(key=lambda e: (-e[1], e[0].name))
     return _rank(entries, limit)
+
+
+def leaders_by_wins(players: list[Player], *, limit: int | None = 5) -> list[RankedPlayer]:
+    """勝利の多い順。数そのものが記録なので投球回の規定は設けない。"""
+    entries = [(p, float(p.pitching.wins)) for p in players if p.is_pitcher and p.pitching.wins > 0]
+    entries.sort(key=lambda e: (-e[1], e[0].name))
+    return _rank(entries, limit)
+
+
+def leaders_by_saves(players: list[Player], *, limit: int | None = 5) -> list[RankedPlayer]:
+    """セーブの多い順。勝利と同じく数そのものが記録なので規定を設けない。"""
+    entries = [(p, float(p.pitching.saves)) for p in players if p.is_pitcher and p.pitching.saves > 0]
+    entries.sort(key=lambda e: (-e[1], e[0].name))
+    return _rank(entries, limit)

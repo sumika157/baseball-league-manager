@@ -1,5 +1,6 @@
-{# ランキング1枚分。dashboard.html から title / entries を渡して使う #}
-<div class="col-md-6">
+{# ランキング1枚分。dashboard.html から title / entries などを渡して使う #}
+{# league_id / pos / sort_key を渡すと、その部門で並べた成績一覧へのリンクが付く #}
+<div class="col-md-4">
   <div class="card h-100">
     <div class="card-header">{{ title }}</div>
     <div class="card-body p-0">
@@ -25,5 +26,10 @@
         </div>
       {% endif %}
     </div>
+    {% if league_id %}
+      <div class="card-footer text-end">
+        <a href="{% url 'league_stats' league_id %}?pos={{ pos }}&amp;sort={{ sort_key }}" class="card-header-link">成績一覧を見る</a>
+      </div>
+    {% endif %}
   </div>
 </div>

@@ -28,110 +28,148 @@
 </div>
 
 {% comment %}
-ランキングを主、チームを従として左右に分ける。
-カードを1行に並べるとチームが少ないときに右側が空くため、
-幅の広い左カラムにランキングを 2×2 で置き、右カラムをチームで埋める。
+リーグのタブは1本だけ持ち、ランキングと順位表・チームをまとめて切り替える。
+内容ごとにタブバーを分けると、左右で別のリーグが表示される状態が生まれるため。
+Bootstrap のタブ機能を使うので、独自の JavaScript は書かない。
 {% endcomment %}
-<div class="row g-3">
-  <div class="col-lg-8">
-    {% comment %}
-      タイトルはリーグの中で争われるので、ランキングもリーグごとに分ける。
-      OPS と防御率は規定打席・規定投球回に達した選手だけを対象にする。
-      本塁打と奪三振は本数そのものが記録なので規定を設けない。
-    {% endcomment %}
-    {% if board.league_rankings %}
-      <div class="segmented segmented-scroll" role="tablist">
-        {% for group in board.league_rankings %}
-          <button type="button" role="tab"
-                  class="segmented-item {% if forloop.first %}active{% endif %}"
-                  data-bs-toggle="tab"
-                  data-bs-target="#ranking-league-{{ group.league_id }}">
-            {{ group.league_name }}
-          </button>
-        {% endfor %}
-      </div>
-
-      <div class="tab-content">
-        {% for group in board.league_rankings %}
-          <div class="tab-pane fade {% if forloop.first %}show active{% endif %}"
-               id="ranking-league-{{ group.league_id }}" role="tabpanel">
-            <div class="row g-3">
-              {% include 'myapp/_ranking_card.html' with title='OPS（規定到達）' entries=group.ops_leaders qualified=True %}
-              {% include 'myapp/_ranking_card.html' with title='本塁打' entries=group.home_run_leaders %}
-              {% include 'myapp/_ranking_card.html' with title='防御率（規定到達）' entries=group.era_leaders qualified=True %}
-              {% include 'myapp/_ranking_card.html' with title='奪三振' entries=group.strikeout_leaders %}
-            </div>
-          </div>
-        {% endfor %}
-      </div>
-    {% else %}
-      <div class="card">
-        <div class="empty-state">
-          成績の記録がまだありません。試合を登録するとランキングが出ます。
-        </div>
-      </div>
-    {% endif %}
+{% if board.leagues %}
+  <div class="segmented segmented-scroll" role="tablist">
+    {% for league in board.leagues %}
+      <button type="button" role="tab"
+              class="segmented-item {% if forloop.first %}active{% endif %}"
+              data-bs-toggle="tab"
+              data-bs-target="#league-pane-{{ league.league_id }}">
+        {{ league.league_name }}
+      </button>
+    {% endfor %}
   </div>
 
-  <div class="col-lg-4">
-    <div class="card h-100">
-      <div class="card-header d-flex justify-content-between align-items-center">
-        <span>チーム</span>
-        <span>
-          <a href="{% url 'game_list' %}" class="card-header-link">試合</a>
-          <span class="stat-muted mx-1">/</span>
-          <a href="{% url 'standings' %}" class="card-header-link">順位表</a>
-          <span class="stat-muted mx-1">/</span>
-          <a href="{% url 'team_list' %}" class="card-header-link">すべて</a>
-        </span>
-      </div>
-      {% comment %}
-        リーグごとのタブ。チームが増えると1つの並びでは読みにくいため。
-        Bootstrap のタブ機能を使うので、独自の JavaScript は書かない。
-        Bootstrap は選択中の項目に active を付けるので、CSS は
-        is-active（サーバ側で描くリンク）と active の両方を見ている。
-      {% endcomment %}
-      {% if board.league_teams %}
-        <div class="card-body pb-0">
-          <div class="segmented segmented-scroll" role="tablist">
-            {% for group in board.league_teams %}
-              <button type="button" role="tab"
-                      class="segmented-item {% if forloop.first %}active{% endif %}"
-                      data-bs-toggle="tab"
-                      data-bs-target="#dashboard-league-{{ group.league_id }}">
-                {{ group.league_name }}
-                <span class="segmented-count">{{ group.teams|length }}</span>
-              </button>
-            {% endfor %}
+  <div class="tab-content">
+    {% for league in board.leagues %}
+      <div class="tab-pane fade {% if forloop.first %}show active{% endif %}"
+           id="league-pane-{{ league.league_id }}" role="tabpanel">
+        <div class="row g-3">
+          <div class="col-lg-8">
+            {% comment %}
+              部門は NPB の個人成績ページにならい、打者は打率・本塁打・打点、
+              投手は防御率・勝利・セーブを出す。率の部門（打率・防御率）は
+              規定に達した選手だけを対象にする。
+            {% endcomment %}
+            {% if league.rankings.has_any %}
+              <h2 class="h6 mb-2">打者ランキング</h2>
+              <div class="row g-3 mb-3">
+                {% include 'myapp/_ranking_card.html' with title='打率（規定到達）' entries=league.rankings.average_leaders qualified=True league_id=league.league_id pos='batter' sort_key='average' %}
+                {% include 'myapp/_ranking_card.html' with title='本塁打' entries=league.rankings.home_run_leaders league_id=league.league_id pos='batter' sort_key='home_runs' %}
+                {% include 'myapp/_ranking_card.html' with title='打点' entries=league.rankings.rbi_leaders league_id=league.league_id pos='batter' sort_key='rbi' %}
+              </div>
+              <h2 class="h6 mb-2">投手ランキング</h2>
+              <div class="row g-3">
+                {% include 'myapp/_ranking_card.html' with title='防御率（規定到達）' entries=league.rankings.era_leaders qualified=True league_id=league.league_id pos='pitcher' sort_key='era' %}
+                {% include 'myapp/_ranking_card.html' with title='勝利' entries=league.rankings.win_leaders league_id=league.league_id pos='pitcher' sort_key='wins' %}
+                {% include 'myapp/_ranking_card.html' with title='セーブ' entries=league.rankings.save_leaders league_id=league.league_id pos='pitcher' sort_key='saves' %}
+              </div>
+            {% else %}
+              <div class="card">
+                <div class="empty-state">
+                  成績の記録がまだありません。試合を登録するとランキングが出ます。
+                </div>
+              </div>
+            {% endif %}
+          </div>
+
+          <div class="col-lg-4">
+            <div class="card h-100">
+              {% comment %}
+                順位表とチームの切替。初期表示は順位表にして、いま競っている
+                状況を先に見せる。所属チームの一覧は補助に回す。
+              {% endcomment %}
+              <div class="card-header d-flex justify-content-between align-items-center">
+                <div class="segmented" role="tablist">
+                  <button type="button" role="tab"
+                          class="segmented-item active"
+                          data-bs-toggle="tab"
+                          data-bs-target="#league-{{ league.league_id }}-standings">順位表</button>
+                  <button type="button" role="tab"
+                          class="segmented-item"
+                          data-bs-toggle="tab"
+                          data-bs-target="#league-{{ league.league_id }}-teams">チーム</button>
+                </div>
+                <span>
+                  <a href="{% url 'game_list' %}" class="card-header-link">試合</a>
+                  <span class="stat-muted mx-1">/</span>
+                  <a href="{% url 'team_list' %}" class="card-header-link">すべて</a>
+                </span>
+              </div>
+
+              <div class="tab-content">
+                <div class="tab-pane fade show active" id="league-{{ league.league_id }}-standings" role="tabpanel">
+                  {% if league.standings %}
+                    <table class="table table-hover mb-0">
+                      <thead>
+                        <tr>
+                          <th>順位</th>
+                          <th>チーム</th>
+                          <th class="text-end">勝-敗-分</th>
+                          <th class="text-end">差</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {% for row in league.standings %}
+                          <tr>
+                            <td style="width: 3rem;"><span class="jersey-number">{{ row.rank }}</span></td>
+                            <td>
+                              <a href="{% url 'player_list' row.team_id %}" class="player-name">{{ row.team_name }}</a>
+                            </td>
+                            <td class="text-end">{{ row.wins }}-{{ row.losses }}-{{ row.ties }}</td>
+                            <td class="text-end stat-muted">{{ row.games_behind }}</td>
+                          </tr>
+                        {% endfor %}
+                      </tbody>
+                    </table>
+                    <div class="card-footer d-flex justify-content-between align-items-center">
+                      <span class="stat-muted" style="font-size: 0.75rem;">{{ league.standings_year }}年シーズン</span>
+                      <a href="{% url 'standings' %}" class="card-header-link">順位表を見る</a>
+                    </div>
+                  {% else %}
+                    <div class="empty-state" style="padding: 2rem 1rem; font-size: 0.875rem;">
+                      まだ試合が行われていません。
+                    </div>
+                  {% endif %}
+                </div>
+
+                <div class="tab-pane fade" id="league-{{ league.league_id }}-teams" role="tabpanel">
+                  {% if league.teams %}
+                    <ul class="tile-list">
+                      {% for team in league.teams %}
+                        <li>
+                          <a href="{% url 'player_list' team.id %}">
+                            <span class="tile-list-main">
+                              <span class="tile-list-title">{{ team.name }}</span>
+                              {% if team.city %}<span class="tile-list-sub">{{ team.city }}</span>{% endif %}
+                            </span>
+                            <span class="tile-list-meta">{{ team.player_count }}名</span>
+                          </a>
+                        </li>
+                      {% endfor %}
+                    </ul>
+                  {% else %}
+                    <div class="empty-state" style="padding: 2rem 1rem; font-size: 0.875rem;">
+                      まだチームが登録されていません。
+                    </div>
+                  {% endif %}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
-
-        <div class="tab-content">
-          {% for group in board.league_teams %}
-            <div class="tab-pane fade {% if forloop.first %}show active{% endif %}"
-                 id="dashboard-league-{{ group.league_id }}" role="tabpanel">
-              <ul class="tile-list">
-                {% for team in group.teams %}
-                  <li>
-                    <a href="{% url 'player_list' team.id %}">
-                      <span class="tile-list-main">
-                        <span class="tile-list-title">{{ team.name }}</span>
-                        {% if team.city %}<span class="tile-list-sub">{{ team.city }}</span>{% endif %}
-                      </span>
-                      <span class="tile-list-meta">{{ team.player_count }}名</span>
-                    </a>
-                  </li>
-                {% endfor %}
-              </ul>
-            </div>
-          {% endfor %}
-        </div>
-      {% else %}
-        <div class="empty-state" style="padding: 2rem 1rem; font-size: 0.875rem;">
-          まだチームが登録されていません。
-        </div>
-      {% endif %}
+      </div>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="card">
+    <div class="empty-state">
+      まだチームが登録されていません。
     </div>
   </div>
-</div>
+{% endif %}
 {% endblock %}
