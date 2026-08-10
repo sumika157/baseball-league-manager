@@ -8,7 +8,7 @@
 - **すべてのコマンドは Docker コンテナ経由**で実行する（`docker compose exec web python manage.py ...`）。ホストに Python 環境は無い。
 - リポジトリの実体は WSL2 内。Windows からは `U:\` 経由で見えるが、**Docker は Windows 側から直接叩ける**。`wsl -e bash -c` で包まない。
 - テスト: `docker compose exec web python manage.py test`（フル）。domain 層のみなら
-  `docker compose exec -e DJANGO_SETTINGS_MODULE= web python -m unittest myapp.tests.test_domain_...`（DB 不要・最速）。
+  `docker compose exec -e DJANGO_SETTINGS_MODULE= web python -m unittest discover -s myapp/tests/domain -t .`（DB 不要・最速）。
 - `.env` の値に `$` を含めない（Docker Compose が変数展開して壊す。エラーにならず気づけない）。
 - `requirements.txt`・`requirements-dev.txt` は**間接依存まで `==` でバージョン固定**する（現状の方針を維持）。どちらかを変更したら `docker compose build --no-cache` でイメージの再ビルドが必要。
 
@@ -35,10 +35,9 @@ ORM に直接 `bulk_create` 等で書き込むコード（データ投入コマ�
 
 ## テスト
 
-- **業務ルールのテストは domain 層のテスト**（`tests/test_domain_*.py`）に置く。DB 不要・Django 非依存で、Django 設定を読み込まずに通ること。
-- 画面の動作・リポジトリの往復・フォーム検証は `tests/test_integration.py` に置く。
+- **テストは層ごとのディレクトリに置く**: 業務ルールは `tests/domain/`（DB 不要・Django 非依存で、Django 設定を読み込まずに通ること）、画面の動作・リポジトリの往復・フォーム検証・テンプレート検査は `tests/integration/`。
 - **実ブラウザでの確認だけを E2E**（`tests/e2e/`、Playwright + `StaticLiveServerTestCase`）に置く。対象は主要導線のスモークと、JS・CSS が絡んで integration テストでは検証できないもの。業務ルールや画面のロジックは domain / integration 側で検証し、E2E に寄せない（遅く壊れやすいため）。
-- **バグを修正したら、同じコミットに再発防止テストを添える**（前例: テンプレートのコメント漏れを検査する `tests/test_templates.py`）。どの層のバグかに応じて上記の置き場所に従う。
+- **バグを修正したら、同じコミットに再発防止テストを添える**（前例: テンプレートのコメント漏れを検査する `tests/integration/test_templates.py`）。どの層のバグかに応じて上記の置き場所に従う。
 - コミット前に `ruff check .` と `mypy .`（いずれもコンテナ内）を通す。設定は `pyproject.toml` が唯一の出典。
 
 ## マイグレーションとデータ
@@ -58,7 +57,7 @@ ORM に直接 `bulk_create` 等で書き込むコード（データ投入コマ�
 ## 既知の罠（踏み直さない）
 
 - **SQLite + `prefetch_related` の多段リレーション**: 関連行が1000件を超えると OR 連結クエリになり `Expression tree is too large` で落ちる。`Prefetch(..., queryset=...select_related(...))` で JOIN にまとめる（回避例: `infrastructure/repositories.py` の `DjangoTeamRepository`）。
-- **テンプレートのコメント**: `{# ... #}` は単一行専用。複数行にまたがると中身がそのまま画面に出る（エラーにならない）。複数行は `{% comment %}` を使い、必ず `{% extends %}` より後に置く。検査は `tests/test_templates.py` にある。
+- **テンプレートのコメント**: `{# ... #}` は単一行専用。複数行にまたがると中身がそのまま画面に出る（エラーにならない）。複数行は `{% comment %}` を使い、必ず `{% extends %}` より後に置く。検査は `tests/integration/test_templates.py` にある。
 - **単発スクリプトの `django.test.Client`**: `Client(SERVER_NAME='localhost')` を指定する（既定の `testserver` は `ALLOWED_HOSTS` に無く 400 になる）。検証用に作ったデータは必ず後始末する。
 - **テンプレート検索順**: `INSTALLED_APPS` の `myapp` は `django.contrib.admin` より前に置いたまま動かさない（`registration/` テンプレートの優先順位が壊れる）。
 

@@ -32,26 +32,24 @@ docker compose up -d
 docker compose exec web python manage.py test
 ```
 
-対象: `tests/test_domain_*.py`（DB不要な内容も含む）+ `tests/test_integration.py`（リポジトリ往復・画面動作）+ `tests/test_templates.py`（テンプレートのコメント漏れ・extends順序チェック）+ `tests/e2e/`（Playwright実ブラウザ。**フルスイートに含まれ、そのぶん遅い**）。
+対象: `tests/domain/`（業務ルール。DB不要な内容も含む）+ `tests/integration/`（リポジトリ往復・画面動作・テンプレート検査）+ `tests/e2e/`（Playwright実ブラウザ。**フルスイートに含まれ、そのぶん遅い**）。
 
-特定ファイルだけ実行する場合:
+ディレクトリ・ファイル単位で実行する場合:
 
 ```bash
-docker compose exec web python manage.py test myapp.tests.test_domain_entities
+docker compose exec web python manage.py test myapp.tests.integration
+docker compose exec web python manage.py test myapp.tests.domain.test_entities
 ```
 
 ## 4. domain層のみ（Django設定を読み込まない、最速）
 
 ```bash
 docker compose exec -e DJANGO_SETTINGS_MODULE= web \
-  python -m unittest myapp.tests.test_domain_value_objects myapp.tests.test_domain_entities
+  python -m unittest discover -s myapp/tests/domain -t .
 ```
 
-他の `test_domain_*.py`（`test_domain_captaincy` / `test_domain_stints` / `test_domain_games` /
-`test_domain_qualification` / `test_domain_analysis` / `test_domain_sorting` /
-`test_domain_foreign_quota` / `test_domain_profile` / `test_domain_services`）も同様に
-`DJANGO_SETTINGS_MODULE=` を空にして `unittest` で直接実行できる。まとめて実行する場合は
-モジュール名をスペース区切りで並べる。
+`tests/domain/` 配下の全ファイルが対象になる。個別に実行する場合は
+`python -m unittest myapp.tests.domain.test_value_objects` のようにモジュール名で指定する。
 
 ## 5. E2Eのみ（Playwright実ブラウザ、DB必要）
 

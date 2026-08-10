@@ -698,24 +698,25 @@ Django 5.x の admin は配色を CSS 変数で持っているため、変数を
 docker compose exec web python manage.py test
 ```
 
-| ファイル | 内容 | DB |
+テストは層ごとのディレクトリに分かれています。
+
+| ディレクトリ | 内容 | DB |
 | --- | --- | --- |
-| `tests/test_domain_value_objects.py` | 指標計算・投球回の変換・入力値の検証 | 不要 |
-| `tests/test_domain_entities.py` | 背番号の一意性・並び順・ポジション変更 | 不要 |
-| `tests/test_domain_analysis.py` | 対戦成績・月別成績・FIP 定数の規則 | 不要 |
-| `tests/test_integration.py` | リポジトリの往復・画面の動作・権限 | 必要 |
+| `tests/domain/` | 業務ルール（指標計算・投球回の変換・背番号の一意性・規定打席など） | 不要 |
+| `tests/integration/` | リポジトリの往復・画面の動作・権限・テンプレートの検査 | 必要 |
 | `tests/e2e/` | Playwright による実ブラウザでのE2Eスモークテスト | 必要 |
 
 ドメイン層のテストは Django の設定すら読み込まずに実行できます。
 
 ```bash
 docker compose exec -e DJANGO_SETTINGS_MODULE= web \
-  python -m unittest myapp.tests.test_domain_value_objects myapp.tests.test_domain_entities
+  python -m unittest discover -s myapp/tests/domain -t .
 ```
 
-E2Eテストだけを実行する場合:
+ディレクトリ単位で実行する場合:
 
 ```bash
+docker compose exec web python manage.py test myapp.tests.integration
 docker compose exec web python manage.py test myapp.tests.e2e
 ```
 

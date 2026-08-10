@@ -35,7 +35,7 @@ from myapp.infrastructure.repositories import (
     DjangoTeamRepository,
 )
 
-from .helpers import (
+from ..helpers import (
     build_service,
     give_batting,
     give_pitching,

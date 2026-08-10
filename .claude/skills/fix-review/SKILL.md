@@ -31,7 +31,7 @@ description: レビュー（ddd-boundary-reviewer エージェントや /code-re
 
 ## 4. 再発防止テストを添える
 
-- バグ・不変条件の欠落を直したら、**同じ修正の中に再発防止テストを書く**（CLAUDE.md の規約）。業務ルールなら `tests/test_domain_*.py`（DB 不要）、画面・永続化なら `tests/test_integration.py`。
+- バグ・不変条件の欠落を直したら、**同じ修正の中に再発防止テストを書く**（CLAUDE.md の規約）。業務ルールなら `tests/domain/`（DB 不要）、画面・永続化なら `tests/integration/`。
 - 純粋なリファクタリング指摘（重複除去・簡素化）は既存テストが通ることの確認でよい。
 
 ## 5. 検証と報告

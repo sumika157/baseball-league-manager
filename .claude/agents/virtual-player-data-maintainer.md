@@ -31,5 +31,5 @@ model: inherit
 
 ## 変更後にやること
 
-1. `docker compose exec web python manage.py test` で既存テスト（`myapp/tests/test_domain_foreign_quota.py` など）が通ることを確認する。
+1. `docker compose exec web python manage.py test` で既存テスト（`myapp/tests/domain/test_foreign_quota.py` など）が通ることを確認する。
 2. 生成比率・backfillの前提・完了状況など「再発する・後から分かりにくい」情報が変わった場合は、ユーザーに `[[virtual-player-seed-data]]` メモリの更新を提案する（コード自体はREADMEやgit履歴が出典なので、メモリに書くのは「読んでも分からないこと」に限る）。
