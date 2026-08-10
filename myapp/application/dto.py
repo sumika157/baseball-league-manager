@@ -156,12 +156,15 @@ class GameDetail:
 
 @dataclass(frozen=True)
 class PlayerGameRow:
-    """選手個人ページの、試合ごとの成績1行。"""
+    """選手個人ページの、試合ごとの成績1行。
+
+    チームの勝敗は持たない。個人ページはその選手の働きを見る場所なので、
+    投手には本人に付いた記録（勝・敗・Ｓ・Ｈ）を出し、野手には出さない。
+    """
 
     game_id: int
     played_on: object
     opponent_name: str
-    result: str  # '勝' / '敗' / '分'
     # 打撃
     at_bats: int = 0
     hits: int = 0
@@ -171,6 +174,7 @@ class PlayerGameRow:
     innings_pitched: str = "0.0"
     earned_runs: int = 0
     strikeouts: int = 0
+    decision: str = ""  # 本人に付いた記録。ボックススコアと同じ印
 
 
 @dataclass(frozen=True)

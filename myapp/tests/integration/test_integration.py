@@ -943,7 +943,37 @@ class PlayerDetailViewTest(BaseCase):
 
         self.assertEqual(profile.appearances, 2)
         self.assertEqual([r.played_on.day for r in profile.games], [2, 1])
-        self.assertEqual([r.result for r in profile.games], ["敗", "勝"])
+
+    def test_batter_rows_have_no_decision(self):
+        """個人ページはその選手の働きを見る場所。野手にチームの勝敗は出さない。"""
+        profile = self.service.get_player_profile(self.team.id, self.player.id)
+
+        self.assertEqual([r.decision for r in profile.games], ["", ""])
+
+    def test_pitcher_rows_show_the_pitchers_own_decision(self):
+        """投手には本人に付いた記録（勝・敗・Ｓ・Ｈ）を、ボックススコアと同じ印で出す。"""
+        ace = self.service.register_player(self.team.id, "エース", 18, "投手")
+        give_pitching(
+            self.team,
+            self.rival,
+            ace.id,
+            PitchingLine(innings=InningsPitched.from_notation("9.0"), wins=1),
+            day=3,
+        )
+        closer = self.service.register_player(self.team.id, "守護神", 22, "投手")
+        give_pitching(
+            self.team,
+            self.rival,
+            closer.id,
+            PitchingLine(innings=InningsPitched.from_notation("1.0"), saves=1),
+            day=4,
+        )
+
+        ace_games = self.service.get_player_profile(self.team.id, ace.id).games
+        closer_games = self.service.get_player_profile(self.team.id, closer.id).games
+
+        self.assertEqual(ace_games[0].decision, "勝")
+        self.assertEqual(closer_games[0].decision, "Ｓ")
 
     def test_opponent_is_shown_from_the_player_side(self):
         profile = self.service.get_player_profile(self.team.id, self.player.id)

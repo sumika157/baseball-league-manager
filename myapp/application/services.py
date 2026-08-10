@@ -792,7 +792,6 @@ class TeamApplicationService:
                     game_id=game.id,
                     played_on=game.played_on,
                     opponent_name=names.get(opponent_id, ""),
-                    result={"win": "勝", "loss": "敗", "tie": "分"}[game.result_for(team_id)],
                     at_bats=batting.line.at_bats if batting else 0,
                     hits=batting.line.hits if batting else 0,
                     home_runs=batting.line.home_runs if batting else 0,
@@ -800,6 +799,7 @@ class TeamApplicationService:
                     innings_pitched=str(pitching.line.innings) if pitching else "0.0",
                     earned_runs=pitching.line.earned_runs if pitching else 0,
                     strikeouts=pitching.line.strikeouts if pitching else 0,
+                    decision=_decision_label(pitching.line) if pitching else "",
                 )
             )
 
