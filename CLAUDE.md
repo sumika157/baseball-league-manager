@@ -12,6 +12,7 @@
 | `.claude/rules/migrations.md` | `myapp/migrations/`・`myapp/management/commands/` | マイグレーションとデータ投入 |
 | `.claude/rules/templates.md` | `myapp/templates/**/*.html` | テンプレートの書き方 |
 | `.claude/rules/frontend.md` | `frontend/**`・`static/myapp/css/*.css` | React アイランドの配線・スタイル |
+| `.claude/rules/performance.md` | `myapp/application/`・`myapp/infrastructure/`・`views.py` | 読む範囲の絞り方と計測 |
 
 パス限定の規則は「そのファイルを読んだとき」に効くので、**何を作るかを決める段階で必要な規則
 （依存の向き・出典の一元化・不変条件）はこのファイルに置いたままにする。**
@@ -66,7 +67,8 @@ ORM に直接 `bulk_create` 等で書き込むコード（データ投入コマ�
 
 ## 既知の罠（踏み直さない）
 
-- **SQLite + `prefetch_related` の多段リレーション**: 関連行が1000件を超えると OR 連結クエリになり `Expression tree is too large` で落ちる。`Prefetch(..., queryset=...select_related(...))` で JOIN にまとめる（回避例: `infrastructure/repositories.py` の `DjangoTeamRepository`）。**落ちずに「ただ遅い」形で出ることもある**ので、データ投入後は主要画面の応答を実測する。
+- **SQLite + `prefetch_related` の多段リレーション**: 関連行が1000件を超えると OR 連結クエリになり `Expression tree is too large` で落ちる。`Prefetch(..., queryset=...select_related(...))` で JOIN にまとめる（回避例: `infrastructure/repositories.py` の `DjangoTeamRepository`）。**落ちずに「ただ遅い」形で出ることもある**ので、データ投入後は `manage.py measure_pages` で主要画面の応答を実測する。
+- **遅さは SQL ではなく Python 側に出る**: 主要画面が4〜5秒かかっていたとき、SQL は 38ms しかなかった。残りは ORM のモデル生成と値オブジェクトの組み立て。**SQL 時間だけを見ても気づけない**（詳細と直し方は `.claude/rules/performance.md`）。
 - **単発スクリプトの `django.test.Client`**: `Client(SERVER_NAME='localhost')` を指定する（既定の `testserver` は `ALLOWED_HOSTS` に無く 400 になる）。検証用に作ったデータは必ず後始末する。
 - **JSON API の部分更新**: キーの欠落を「空リスト」と同じ扱いにすると既存データが全消去される。行は位置ではなく識別子で組み立てる。
 

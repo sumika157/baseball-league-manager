@@ -54,6 +54,16 @@ docker compose exec web python manage.py test myapp.tests.e2e
 
 「lintも」「型チェックも」と言われたら、あわせて実行する（コミット前は必須。対象コマンドは CLAUDE.md）。
 
+## 5.5 性能の確認
+
+「遅い」「重い」「速くして」と言われたら、まず実測する。テストでは出ない（テストのデータ量が
+小さいため）。判断基準は `.claude/rules/performance.md`。
+
+```bash
+docker compose exec web python manage.py measure_pages
+MSYS_NO_PATHCONV=1 docker compose exec web python manage.py measure_pages --profile /games/
+```
+
 ## 6. 失敗したときの一次診断
 
 - `ImproperlyConfigured: ... DJANGO_SECRET_KEY ...` → `.env` が無い、または読み込まれていない。コンテナ再起動を確認する。

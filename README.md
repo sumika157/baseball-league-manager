@@ -197,6 +197,9 @@ docker compose exec web python manage.py seed_virtual_games --seed 42
 
 # 作り直す場合（そのシーズンの既存の試合を消してから入れる）
 docker compose exec web python manage.py seed_virtual_games --seed 42 --replace
+
+# 投入したら主要画面の応答を実測する（件数が増えて初めて出る遅さがあるため）
+docker compose exec web python manage.py measure_pages
 ```
 
 `seed_virtual_games` は成績を**確率分布から引きます**（numpy）。「1打数ずつ乱数を
@@ -718,6 +721,34 @@ POST だけ権限を求めます（画面ごと `login_required` にすると閲
 勝敗の判定だけは両方の経路で必要になるため、`winning_team_id()` という純粋関数を
 ドメインに置き、集約（`Game.winner_team_id`）と参照クエリの両方がそこを通ります。
 参照側で「得点が多い方が勝ち」を書き直すと、同じ事実の出典が2つになるためです。
+
+### 読む範囲を絞る
+
+同じ分離を他の画面にも徹底したところ、主要画面が **6〜55倍** 速くなりました。
+
+| 画面 | 前 | 後 | 何をやめたか |
+| --- | --- | --- | --- |
+| リーグ詳細 | 4,604ms / 297クエリ | 57ms / 5クエリ | 順位と対戦成績のために全試合の明細とロスターを読んでいた |
+| 順位表 | 4,163ms / 295クエリ | 83ms / 3クエリ | 同上 |
+| 選手一覧 | 4,580ms / 330クエリ | 257ms / 41クエリ | リーグ平均のために全48チームのロスターを読んでいた |
+| ダッシュボード | 4,864ms / 298クエリ | 426ms / 13クエリ | ロスターをチームごとに引き直していた（N+1） |
+| リーグ成績 | 1,094ms / 581クエリ | 114ms / 15クエリ | 同上 |
+| リーグタイトル | 5,003ms / 295クエリ | 701ms / 13クエリ | リーグ内の対戦を Python で絞っていた |
+
+判断の基準は3つです。
+
+- **参照では集約を組み立てない**（順位・対戦成績・試合数は得点と対戦カードだけで決まる）
+- **絞り込みと集計は SQL 側で行う**（`count_by_team` / `find_between_teams` /
+  `find_by_league_with_roster`）
+- **マッピングの中で関連を引き直さない**（`_RosterData` に選手をまとめて渡す）
+
+計測は専用コマンドで繰り返せます。**SQL 時間だけを見ても遅さには気づけません**
+（4.8秒かかっていた画面の SQL は 38ms でした）。
+
+```bash
+docker compose exec web python manage.py measure_pages
+MSYS_NO_PATHCONV=1 docker compose exec web python manage.py measure_pages --profile /games/
+```
 
 ### 依存の組み立て
 
