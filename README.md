@@ -323,6 +323,11 @@ docker compose restart web
 my_django_project/
 ├── .devcontainer/
 │   └── devcontainer.json   # VS Code Dev Container 設定
+├── .claude/                # Claude Code の設定（規則・スキル・エージェント）
+│   ├── rules/              # 場所ごとの規則（paths で対象を限定）
+│   ├── skills/             # 作業手順
+│   └── agents/             # レビュー・設計の担当
+├── CLAUDE.md               # 全体に効く規則（.claude/rules/ の索引を兼ねる）
 ├── config/                 # プロジェクト設定
 │   ├── settings.py         # Django の設定
 │   └── urls.py             # ルート URL 定義

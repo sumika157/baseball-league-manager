@@ -1,7 +1,19 @@
 # プロジェクト規則
 
 野球リーグ管理の Django アプリ。全体像・画面構成・セットアップは [README.md](README.md) を参照。
-ここには**作業時に必ず守る規則**だけを書く。
+
+ここには**どのファイルを触るときでも効く規則**だけを書く。特定の場所でだけ効く規則は
+`.claude/rules/` にあり、**該当するファイルを触ったときに読み込まれる**（`paths` でスコープ済み）。
+
+| ファイル | 適用範囲 | 内容 |
+| --- | --- | --- |
+| `.claude/rules/python-typing.md` | `myapp/**/*.py`・`config/**/*.py` | 型注釈と静的検査 |
+| `.claude/rules/tests.md` | `myapp/tests/**/*.py` | テストの置き場所とファイル分割 |
+| `.claude/rules/migrations.md` | `myapp/migrations/`・`myapp/management/commands/` | マイグレーションとデータ投入 |
+| `.claude/rules/templates.md` | `myapp/templates/**/*.html` | テンプレートの書き方 |
+
+パス限定の規則は「そのファイルを読んだとき」に効くので、**何を作るかを決める段階で必要な規則
+（依存の向き・出典の一元化・不変条件）はこのファイルに置いたままにする。**
 
 ## 実行環境
 
@@ -38,27 +50,11 @@
 背番号の一意性（期間が重なる同番号の禁止）、在籍期間の重複禁止などは `Team` 集約が自身で検査する。
 ORM に直接 `bulk_create` 等で書き込むコード（データ投入コマンドなど）は、集約の検査を素通りするため自分で同じ検査を行うこと。
 
-## 型と静的検査
+## テストと品質のゲート
 
-- **`domain` / `application` / `infrastructure` の関数は引数・戻り値に型注釈を付ける**（`disallow_untyped_defs` が効いている）。注釈の無い関数は **mypy の検査対象から外れ、中身がどれだけ間違っていても黙って通る**。`services.py` の `__init__` に注釈を付けただけで、同ファイルから29件の指摘が出た前例がある。`presentation` は `request` など注釈しにくい引数が多いため対象外。
-- 注釈が付けにくいときに `Any` や `# type: ignore` で通すのは、**その関数が本当に型を選ばない場合だけ**（例: 何が来ても int に直す `_require_non_negative`）。理由をコメントに書く。`# type: ignore` は `[misc]` のようにコードまで書く。
-- **同じスコープで、型の違う値に同じ変数名を使わない。** mypy は最初の代入で型を固定するため、2つ目以降が検査されない・誤った指摘になる。前例: ボックススコアで打撃と投球のループ変数をどちらも `entry` / `line` にしていた（`outing` / `pitched` に改名して解消）。
-- 保存済みの集約から取り出す id（型は `int | None`）は `application/services.py` の `_saved_id()` を通す。内包表記の中でも同じ書き方で済む。
-
-## テスト
-
-- **テストは層ごとのディレクトリに置く**: 業務ルールは `tests/domain/`（DB 不要・Django 非依存で、Django 設定を読み込まずに通ること）、画面の動作・リポジトリの往復・フォーム検証・テンプレート検査は `tests/integration/`。
-- **ディレクトリの中は対象ごとのファイルに分ける。** 既存の大きいファイルに足し続けない（`test_integration.py` が 3,975行・47クラスまで膨らんで分割した前例がある）。目安として1ファイル600行を超えたら分ける。結合テストの共通の土台は `tests/integration/base.py` の `BaseCase`。
-- **実ブラウザでの確認だけを E2E**（`tests/e2e/`、Playwright + `StaticLiveServerTestCase`）に置く。対象は主要導線のスモークと、JS・CSS が絡んで integration テストでは検証できないもの。業務ルールや画面のロジックは domain / integration 側で検証し、E2E に寄せない（遅く壊れやすいため）。
+- **テストは層ごとのディレクトリに置く**: 業務ルールは `tests/domain/`（DB 不要・Django 非依存）、画面の動作・リポジトリの往復・フォーム検証は `tests/integration/`、実ブラウザでの確認だけ `tests/e2e/`。
 - **バグを修正したら、同じコミットに再発防止テストを添える**（前例: テンプレートのコメント漏れを検査する `tests/integration/test_templates.py`）。どの層のバグかに応じて上記の置き場所に従う。
 - コミット前に `ruff check .`・`ruff format --check .`・`mypy .` を通す（いずれもコンテナ内。整形漏れは `ruff format .` で直す。WSL からは `make lint` が同じ3つを実行する）。ルールの設定は `pyproject.toml` が唯一の出典。**`# noqa` で黙らせる前に指摘のとおり直す**（それでも黙らせるなら理由をコメントに残す）。
-
-## マイグレーションとデータ
-
-- **適用済み（コミット済み）のマイグレーションは編集しない。** 起動時に自動 migrate される運用のため、履歴が壊れるとどの環境でも起動しなくなる。直したい場合は新しいマイグレーションを追加する。
-- **データ移行（`RunPython`）はスキーマ変更と別ファイルに分ける**（前例: `0022` でフィールド追加 → `0024` で backfill）。
-- 既存データの一括更新はマイグレーションで行う。`seed_virtual_players.py` などの管理コマンドは**追加専用**とし、既存レコードの更新と責務を混ぜない。
-- 一括削除やマイグレーションのロールバックなど**破壊的なデータ操作の前は、コンテナを停止して `db.sqlite3` をコピーしてバックアップ**を取る。
 
 ## UI・設計方針
 
@@ -69,10 +65,9 @@ ORM に直接 `bulk_create` 等で書き込むコード（データ投入コマ�
 
 ## 既知の罠（踏み直さない）
 
-- **SQLite + `prefetch_related` の多段リレーション**: 関連行が1000件を超えると OR 連結クエリになり `Expression tree is too large` で落ちる。`Prefetch(..., queryset=...select_related(...))` で JOIN にまとめる（回避例: `infrastructure/repositories.py` の `DjangoTeamRepository`）。
-- **テンプレートのコメント**: `{# ... #}` は単一行専用。複数行にまたがると中身がそのまま画面に出る（エラーにならない）。複数行は `{% comment %}` を使い、必ず `{% extends %}` より後に置く。検査は `tests/integration/test_templates.py` にある。
+- **SQLite + `prefetch_related` の多段リレーション**: 関連行が1000件を超えると OR 連結クエリになり `Expression tree is too large` で落ちる。`Prefetch(..., queryset=...select_related(...))` で JOIN にまとめる（回避例: `infrastructure/repositories.py` の `DjangoTeamRepository`）。**落ちずに「ただ遅い」形で出ることもある**ので、データ投入後は主要画面の応答を実測する。
 - **単発スクリプトの `django.test.Client`**: `Client(SERVER_NAME='localhost')` を指定する（既定の `testserver` は `ALLOWED_HOSTS` に無く 400 になる）。検証用に作ったデータは必ず後始末する。
-- **テンプレート検索順**: `INSTALLED_APPS` の `myapp` は `django.contrib.admin` より前に置いたまま動かさない（`registration/` テンプレートの優先順位が壊れる）。
+- **JSON API の部分更新**: キーの欠落を「空リスト」と同じ扱いにすると既存データが全消去される。行は位置ではなく識別子で組み立てる。
 
 ## 文言・命名
 
