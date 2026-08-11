@@ -8,6 +8,10 @@
   <p class="page-subtitle">登録されているリーグ全体の概況です。</p>
 </div>
 
+{% comment %}
+規模が分かればよい場所なので、野手と投手は分けずに選手として数える
+（内訳を知りたい場面はここではなく、チームやリーグの成績一覧にある）。
+{% endcomment %}
 <div class="stat-strip">
   <div class="stat-cell">
     <div class="stat-value">{{ board.league_count }}</div>
@@ -18,12 +22,8 @@
     <div class="stat-label">チーム</div>
   </div>
   <div class="stat-cell">
-    <div class="stat-value">{{ board.batter_count }}</div>
-    <div class="stat-label">野手</div>
-  </div>
-  <div class="stat-cell">
-    <div class="stat-value">{{ board.pitcher_count }}</div>
-    <div class="stat-label">投手</div>
+    <div class="stat-value">{{ board.player_count }}</div>
+    <div class="stat-label">選手</div>
   </div>
 </div>
 
@@ -78,22 +78,23 @@ Bootstrap のタブ機能を使うので、独自の JavaScript は書かない�
           </div>
 
           <div class="col-lg-4">
-            <div class="card h-100">
+            {% comment %}
+              カードに h-100 は付けない。左のランキング2段に合わせて伸ばすと、
+              6行の順位表に対して500px超の空洞がカードの中に残る。
+              高さの差は「直近の試合」で埋める（同じ league_games から作るので
+              試合を読み直さない）。
+            {% endcomment %}
+            <div class="card">
               {% comment %}
                 順位表とチーム一覧は同じチームの並びを、同じ選手名簿へ向けて出す。
                 並べても切り替えても二重になるので、カードは常に片方だけを持つ。
                 普段は順位表。順位表を作れないリーグ（そのシーズンに1試合も
                 行われていない）に限ってチーム一覧に差し替える。
-                所在地・在籍人数まで見るときはヘッダーの「すべて」から一覧へ移る。
               {% endcomment %}
               <div class="card-header d-flex justify-content-between align-items-center">
                 <span>{% if league.standings %}順位表{% else %}チーム{% endif %}</span>
-                <span>
-                  {# 見ているリーグのタブから移るので、日程もそのリーグに絞って開く #}
-                  <a href="{% url 'game_list' %}?league={{ league.league_id }}" class="card-header-link">試合</a>
-                  <span class="stat-muted mx-1">/</span>
-                  <a href="{% url 'team_list' %}" class="card-header-link">すべて</a>
-                </span>
+                {# 所在地・在籍人数まで見るときの行き先。順位表からは辿れない #}
+                <a href="{% url 'team_list' %}" class="card-header-link">チーム一覧</a>
               </div>
 
               {% if league.standings %}
@@ -102,7 +103,8 @@ Bootstrap のタブ機能を使うので、独自の JavaScript は書かない�
                     <tr>
                       <th>順位</th>
                       <th>チーム</th>
-                      <th class="text-end">勝-敗-分</th>
+                      {# 「76-65-4」は途中で折り返すと読めないので分割させない #}
+                      <th class="text-end text-nowrap">勝-敗-分</th>
                       <th class="text-end">差</th>
                     </tr>
                   </thead>
@@ -113,7 +115,7 @@ Bootstrap のタブ機能を使うので、独自の JavaScript は書かない�
                         <td>
                           <a href="{% url 'player_list' row.team_id %}" class="player-name">{{ row.team_name }}</a>
                         </td>
-                        <td class="text-end">{{ row.wins }}-{{ row.losses }}-{{ row.ties }}</td>
+                        <td class="text-end text-nowrap">{{ row.wins }}-{{ row.losses }}-{{ row.ties }}</td>
                         <td class="text-end stat-muted">{{ row.games_behind }}</td>
                       </tr>
                     {% endfor %}
@@ -143,6 +145,35 @@ Bootstrap のタブ機能を使うので、独自の JavaScript は書かない�
                 </div>
               {% endif %}
             </div>
+
+            {% comment %}
+              順位表が「どこが強いか」を示すのに対して、こちらは「いま何が起きて
+              いるか」を示す。並びと表記はリーグ画面の同じ欄に揃える。
+            {% endcomment %}
+            {% if league.recent_games %}
+              <div class="card mt-3">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                  <span>直近の試合</span>
+                  {# 見ているリーグのタブから移るので、日程もそのリーグに絞って開く #}
+                  <a href="{% url 'game_list' %}?league={{ league.league_id }}" class="card-header-link">試合一覧</a>
+                </div>
+                <ul class="tile-list">
+                  {% for game in league.recent_games %}
+                    <li>
+                      <a href="{% url 'game_detail' game.id %}">
+                        <span class="tile-list-main">
+                          <span class="tile-list-title">
+                            {{ game.home_team_name }} {{ game.home_score }} - {{ game.away_score }} {{ game.away_team_name }}
+                          </span>
+                          <span class="tile-list-sub">{{ game.played_on|date:"Y/m/d" }} · {{ game.result }}</span>
+                        </span>
+                        <span class="tile-arrow">→</span>
+                      </a>
+                    </li>
+                  {% endfor %}
+                </ul>
+              </div>
+            {% endif %}
           </div>
         </div>
       </div>
