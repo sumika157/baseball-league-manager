@@ -851,3 +851,16 @@ make frontend-check
 
 `requirements.txt` を変更した場合と同様、これらのツールを追加・更新した場合も
 `requirements-dev.txt` の変更後にイメージの再ビルドが必要です。
+
+### エディタ上の型チェック（Pylance）
+
+**型チェックのゲートは mypy です。**Pylance（pyright）は編集中の補助という位置づけで、
+水準を `pyproject.toml` の `[tool.pyright]` に固定しています（`typeCheckingMode = "standard"`）。
+
+これを書いていないと、各自の VS Code ユーザー設定 `python.analysis.typeCheckingMode` が効いてしまい、
+`strict` にしている人の画面だけ `reportMissingParameterType` などの警告が大量に出ます
+（mypy は `disallow_untyped_defs` を有効にしていないため、CI もコミット前チェックも通るのに、です）。
+`[tool.pyright]` がある限り `settings.json` の `python.analysis.*` は無視されるため、
+このリポジトリでは全員が同じ水準になります。
+
+水準を上げたい場合は `pyproject.toml` を変更してください（各自の VS Code 設定ではなく）。

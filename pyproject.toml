@@ -14,3 +14,13 @@ exclude = ["myapp/migrations"]
 
 [tool.django-stubs]
 django_settings_module = "config.settings"
+
+# Pylance（pyright）はエディタ上の補助であって、型チェックのゲートは上の mypy。
+# ここで水準を明示しないと各自の VS Code ユーザー設定（strict など）が効いてしまい、
+# mypy が通るコードにエディタだけが大量の警告を出す状態になるため、この節で固定する。
+# この節がある限り settings.json の python.analysis.* は無視される。
+[tool.pyright]
+typeCheckingMode = "standard"
+pythonVersion = "3.10"
+# exclude を書くと pyright の既定の除外が置き換わるので、node_modules 等も明示する
+exclude = ["myapp/migrations", "**/node_modules", "**/__pycache__", ".git"]
