@@ -28,7 +28,7 @@
 </div>
 
 {% comment %}
-リーグのタブは1本だけ持ち、ランキングと順位表・チームをまとめて切り替える。
+リーグのタブは1本だけ持ち、ランキングと順位表をまとめて切り替える。
 内容ごとにタブバーを分けると、左右で別のリーグが表示される状態が生まれるため。
 Bootstrap のタブ機能を使うので、独自の JavaScript は書かない。
 {% endcomment %}
@@ -80,20 +80,14 @@ Bootstrap のタブ機能を使うので、独自の JavaScript は書かない�
           <div class="col-lg-4">
             <div class="card h-100">
               {% comment %}
-                順位表とチームの切替。初期表示は順位表にして、いま競っている
-                状況を先に見せる。所属チームの一覧は補助に回す。
+                順位表とチーム一覧は同じチームの並びを、同じ選手名簿へ向けて出す。
+                並べても切り替えても二重になるので、カードは常に片方だけを持つ。
+                普段は順位表。順位表を作れないリーグ（そのシーズンに1試合も
+                行われていない）に限ってチーム一覧に差し替える。
+                所在地・在籍人数まで見るときはヘッダーの「すべて」から一覧へ移る。
               {% endcomment %}
               <div class="card-header d-flex justify-content-between align-items-center">
-                <div class="segmented" role="tablist">
-                  <button type="button" role="tab"
-                          class="segmented-item active"
-                          data-bs-toggle="tab"
-                          data-bs-target="#league-{{ league.league_id }}-standings">順位表</button>
-                  <button type="button" role="tab"
-                          class="segmented-item"
-                          data-bs-toggle="tab"
-                          data-bs-target="#league-{{ league.league_id }}-teams">チーム</button>
-                </div>
+                <span>{% if league.standings %}順位表{% else %}チーム{% endif %}</span>
                 <span>
                   {# 見ているリーグのタブから移るので、日程もそのリーグに絞って開く #}
                   <a href="{% url 'game_list' %}?league={{ league.league_id }}" class="card-header-link">試合</a>
@@ -102,64 +96,52 @@ Bootstrap のタブ機能を使うので、独自の JavaScript は書かない�
                 </span>
               </div>
 
-              <div class="tab-content">
-                <div class="tab-pane fade show active" id="league-{{ league.league_id }}-standings" role="tabpanel">
-                  {% if league.standings %}
-                    <table class="table table-hover mb-0">
-                      <thead>
-                        <tr>
-                          <th>順位</th>
-                          <th>チーム</th>
-                          <th class="text-end">勝-敗-分</th>
-                          <th class="text-end">差</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {% for row in league.standings %}
-                          <tr>
-                            <td style="width: 3rem;"><span class="jersey-number">{{ row.rank }}</span></td>
-                            <td>
-                              <a href="{% url 'player_list' row.team_id %}" class="player-name">{{ row.team_name }}</a>
-                            </td>
-                            <td class="text-end">{{ row.wins }}-{{ row.losses }}-{{ row.ties }}</td>
-                            <td class="text-end stat-muted">{{ row.games_behind }}</td>
-                          </tr>
-                        {% endfor %}
-                      </tbody>
-                    </table>
-                    <div class="card-footer d-flex justify-content-between align-items-center">
-                      <span class="stat-muted" style="font-size: 0.75rem;">{{ league.standings_year }}年シーズン</span>
-                      <a href="{% url 'standings' %}" class="card-header-link">順位表を見る</a>
-                    </div>
-                  {% else %}
-                    <div class="empty-state" style="padding: 2rem 1rem; font-size: 0.875rem;">
-                      まだ試合が行われていません。
-                    </div>
-                  {% endif %}
+              {% if league.standings %}
+                <table class="table table-hover mb-0">
+                  <thead>
+                    <tr>
+                      <th>順位</th>
+                      <th>チーム</th>
+                      <th class="text-end">勝-敗-分</th>
+                      <th class="text-end">差</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for row in league.standings %}
+                      <tr>
+                        <td style="width: 3rem;"><span class="jersey-number">{{ row.rank }}</span></td>
+                        <td>
+                          <a href="{% url 'player_list' row.team_id %}" class="player-name">{{ row.team_name }}</a>
+                        </td>
+                        <td class="text-end">{{ row.wins }}-{{ row.losses }}-{{ row.ties }}</td>
+                        <td class="text-end stat-muted">{{ row.games_behind }}</td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+                <div class="card-footer d-flex justify-content-between align-items-center">
+                  <span class="stat-muted" style="font-size: 0.75rem;">{{ league.standings_year }}年シーズン</span>
+                  <a href="{% url 'standings' %}" class="card-header-link">順位表を見る</a>
                 </div>
-
-                <div class="tab-pane fade" id="league-{{ league.league_id }}-teams" role="tabpanel">
-                  {% if league.teams %}
-                    <ul class="tile-list">
-                      {% for team in league.teams %}
-                        <li>
-                          <a href="{% url 'player_list' team.id %}">
-                            <span class="tile-list-main">
-                              <span class="tile-list-title">{{ team.name }}</span>
-                              {% if team.city %}<span class="tile-list-sub">{{ team.city }}</span>{% endif %}
-                            </span>
-                            <span class="tile-list-meta">{{ team.player_count }}名</span>
-                          </a>
-                        </li>
-                      {% endfor %}
-                    </ul>
-                  {% else %}
-                    <div class="empty-state" style="padding: 2rem 1rem; font-size: 0.875rem;">
-                      まだチームが登録されていません。
-                    </div>
-                  {% endif %}
+              {% else %}
+                {# チームが1つも無いリーグはタブ自体が作られないので、ここは必ず1件以上ある #}
+                <ul class="tile-list">
+                  {% for team in league.teams %}
+                    <li>
+                      <a href="{% url 'player_list' team.id %}">
+                        <span class="tile-list-main">
+                          <span class="tile-list-title">{{ team.name }}</span>
+                          {% if team.city %}<span class="tile-list-sub">{{ team.city }}</span>{% endif %}
+                        </span>
+                        <span class="tile-list-meta">{{ team.player_count }}名</span>
+                      </a>
+                    </li>
+                  {% endfor %}
+                </ul>
+                <div class="card-footer">
+                  <span class="stat-muted" style="font-size: 0.75rem;">まだ試合が行われていません。</span>
                 </div>
-              </div>
+              {% endif %}
             </div>
           </div>
         </div>

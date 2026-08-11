@@ -174,13 +174,26 @@ class DashboardTest(BaseCase):
         self.assertEqual(league.standings_year, 2026)
         self.assertEqual([r.team_name for r in league.standings], ["相手チーム", "テストチーム"])
 
-    def test_standings_pane_is_shown_first(self):
-        """右カードの初期表示は順位表。チーム一覧はタブで切り替える。"""
+    def test_standings_replace_the_team_list(self):
+        """右カードは順位表だけ。同じチームの並びを二重に出さない。"""
         play_game(self.team, self.rival)
         body = self.client.get(reverse("dashboard")).content.decode()
 
-        self.assertIn(f'class="tab-pane fade show active" id="league-{self.league.id}-standings"', body)
-        self.assertIn(f'class="tab-pane fade" id="league-{self.league.id}-teams"', body)
+        self.assertIn("<span>順位表</span>", body)
+        # チームのタイル一覧は出さない（順位表が同じチームを並べている）
+        self.assertNotIn("tile-list", body)
+
+    def test_team_list_stands_in_when_no_game_has_been_played(self):
+        """1試合も無いリーグでは順位表が作れないので、チーム一覧に差し替える。
+
+        登録したばかりのチームが概況のどこにも出ない状態を作らないため。
+        """
+        body = self.client.get(reverse("dashboard")).content.decode()
+
+        self.assertIn("<span>チーム</span>", body)
+        self.assertIn("tile-list", body)
+        self.assertIn("テストチーム", body)
+        self.assertIn("まだ試合が行われていません。", body)
 
     def test_ranking_cards_link_to_the_league_stats(self):
         """各ランキングカードから、その部門で並べた成績一覧へ飛べる。"""

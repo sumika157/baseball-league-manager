@@ -582,9 +582,9 @@ class RankingEntry:
 class DashboardLeague:
     """ダッシュボードの1リーグぶんのまとまり。
 
-    ランキング・順位表・チームを1本のタブで切り替えるため、リーグ単位で
-    まとめて持つ。タブバーを内容ごとに分けると、左右で別のリーグが
-    表示される状態が生まれてしまう。順位表は最新シーズンのもの。
+    ランキングと順位表を1本のタブで切り替えるため、リーグ単位でまとめて持つ。
+    タブバーを内容ごとに分けると、左右で別のリーグが表示される状態が
+    生まれてしまう。順位表は最新シーズンのもの。
     """
 
     league_id: int
@@ -592,6 +592,8 @@ class DashboardLeague:
     rankings: LeagueRankings
     standings: list[StandingRow]
     standings_year: int | None
+    # 順位表と同じチームの並びなので画面には並べない。1試合も行われておらず
+    # 順位表を作れないリーグで、順位表の代わりに出すためだけに持つ
     teams: list[TeamSummary]
 
 
