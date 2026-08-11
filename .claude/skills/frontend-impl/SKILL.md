@@ -4,7 +4,11 @@ description: フロントエンド（Django テンプレート・theme.css・fro
 model: sonnet
 ---
 
-フロントエンド実装のワークフロー。規約の本体は `CLAUDE.md`（UI・設計方針、文言、既知の罠）。ここには進め方と画面側固有の規則だけを書く。
+フロントエンド実装のワークフロー。**ここには進め方だけを書く。** 規約の本体は
+`CLAUDE.md`（UI・設計方針、文言）と `.claude/rules/`（触ったファイルに応じて自動で読み込まれる）:
+
+- `rules/frontend.md` — React アイランドの配線・API のやりとり・`theme.css`
+- `rules/templates.md` — Django テンプレートの書き方
 
 ## 0. モデルの使い分け
 
@@ -13,7 +17,7 @@ model: sonnet
 
 ## 1. 設計を確認してから書く
 
-- `docs/design/` に該当する設計ドキュメントがあればそれが仕様。従って実装し、末尾の進捗チェックリストを更新する（現在: `frontend-react-islands.md` が React 導入の設計。README へ吸収後は README「画面構成」が出典）。
+- `docs/design/` に該当する設計ドキュメントがあればそれが仕様。従って実装し、末尾の進捗チェックリストを更新する（完了後は README へ吸収して削除する運用。React 導入の設計は既に README「画面構成」「リッチな編集画面」に吸収済み）。
 - 新しい画面・大きな UI 変更は、先に `feature-designer` エージェントで設計書を作る。文言修正・スタイル調整・既存画面の小さな改善は設計なしでそのまま実装してよい。
 
 ## 2. 方式を選ぶ
@@ -23,27 +27,22 @@ model: sonnet
 | 参照系（一覧・詳細・順位表など） | Django テンプレート + Bootstrap + `theme.css`。React 化しない |
 | リッチな編集画面 | React アイランド。`frontend/src/<エントリ名>/` を作り、テンプレートの root div にマウントする |
 
-## 3. React アイランドの規則
+## 3. 画面の設計判断（ファイルを開く前に決めること）
 
-- dev server（HMR）は使わない。`vite build --watch` が `myapp/static/myapp/dist/` にハッシュ無しの固定名で出力し、テンプレートは `{% static 'myapp/dist/<エントリ名>.js' %}` で参照する。新しいエントリは `frontend/vite.config.ts` の `rollupOptions.input` に追加する。
-- 初期データはビューが payload を組み立てて `json_script` で埋め込む（GET 用 API は作らない）。保存だけ JSON API（`presentation/api.py`、CSRF は payload の `csrf_token` を `X-CSRFToken` ヘッダで送る）。JSON のキーは snake_case のまま（camelCase 変換層を作らない）。
-- **検証の出典を増やさない**: 型変換・必須チェックは `presentation/forms.py` のフォームを再利用し、業務ルールはドメイン層のまま。React 側の検証は保存前の入力補助（警告表示）に留め、確定判断はサーバーのエラーメッセージを表示する。
-- npm 操作はすべて `docker compose run --rm frontend npm ...`（ホストに Node 環境を作らない）。**コンテナを新規作成する操作（up / run）は必ず WSL 側から実行する**（Windows 側から作るとバインドマウントが壊れ npm install が ENOSPC で死ぬ）。
+`.claude/rules/` はファイルを触ったときに読み込まれるため、**作るものを決める段階では効かない。**
+次の3点はここで確認する（詳細は CLAUDE.md の「UI・設計方針」）。
 
-## 4. UI の規則（CLAUDE.md の要点）
-
-- 両立しない操作を同じ画面に並べない。書き込み導線は未ログインの人に見せない。GET は公開・POST はログイン必須。
+- 両立しない操作を同じ画面に並べない。片方を無効化して案内文で繕う前に、片方を消せないか考える。
+- 書き込みの導線は未ログインの人に見せない。GET は公開・POST はログイン必須。
 - 導出できる値は入力させない（自動計算して読み取り専用にする）。
-- ユーザーの目に触れる文言はすべて日本語。見た目は既存の Bootstrap + `theme.css` のクラス（`entry-table` 等）に揃える。
-- テンプレートのコメント `{# #}` は単一行専用。複数行は `{% comment %}` を `{% extends %}` より後に置く。
 
-## 5. 検証
+## 4. 検証
 
 - React を触ったら `make frontend-check`（tsc --noEmit）と `make frontend-build` を通す。
 - テンプレートの描画・API の動作は `tests/integration/`、JS・CSS が絡む実ブラウザ確認だけ `tests/e2e/`（ビルド済みアセットが前提）。実行方法は `run-tests` スキル参照。
 - Python 側（views・api・forms）も触ったら `make lint` とフルスイートを通す。
 
-## 6. 仕上げ
+## 5. 仕上げ
 
 - README の画面構成の節を更新する。docs/design/ のドキュメントが完了したら README へ吸収して削除する。
 - コミットはユーザーに求められたときだけ。機能ごとに1コミット・日本語メッセージ・main に直接。

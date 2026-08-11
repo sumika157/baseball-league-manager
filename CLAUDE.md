@@ -11,6 +11,7 @@
 | `.claude/rules/tests.md` | `myapp/tests/**/*.py` | テストの置き場所とファイル分割 |
 | `.claude/rules/migrations.md` | `myapp/migrations/`・`myapp/management/commands/` | マイグレーションとデータ投入 |
 | `.claude/rules/templates.md` | `myapp/templates/**/*.html` | テンプレートの書き方 |
+| `.claude/rules/frontend.md` | `frontend/**`・`static/myapp/css/*.css` | React アイランドの配線・スタイル |
 
 パス限定の規則は「そのファイルを読んだとき」に効くので、**何を作るかを決める段階で必要な規則
 （依存の向き・出典の一元化・不変条件）はこのファイルに置いたままにする。**
