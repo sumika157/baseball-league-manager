@@ -817,6 +817,11 @@ docker compose exec web python manage.py test
 > E2E は React 画面を実ブラウザで操作するため、**実行前にビルド成果物が必要**です
 > （`make frontend-build`、または `make up` で watch ビルドが動いていれば常に最新です）。
 
+各ディレクトリの中は**対象ごとにファイルを分けます**（`test_players.py`・`test_games.py`・
+`test_admin_validation.py` など）。結合テストの共通の土台は
+[tests/integration/base.py](myapp/tests/integration/base.py) の `BaseCase` で、
+リーグ・球場・チーム2つと組み立て済みのサービスを用意します。
+
 ドメイン層のテストは Django の設定すら読み込まずに実行できます。
 
 ```bash

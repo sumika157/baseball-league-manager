@@ -1,5 +1,9 @@
-"""テスト。層ごとに分けている。
+"""テスト。層ごとにディレクトリを分けている。
 
-- test_domain_*.py : Django も DB も使わない純粋な単体テスト
-- test_integration_*.py : リポジトリと画面を通した結合テスト
+- domain/ : Django も DB も使わない純粋な単体テスト（業務ルール）
+- integration/ : リポジトリの往復・画面の動作・フォーム検証・テンプレート検査
+- e2e/ : 実ブラウザ（Playwright）でしか確認できないものだけ
+
+各ディレクトリの中は**対象ごとにファイルを分ける**。共通の土台は
+integration/base.py の BaseCase。
 """

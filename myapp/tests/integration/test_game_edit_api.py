@@ -12,7 +12,7 @@ from django.urls import reverse
 from myapp.infrastructure import orm_models
 
 from ..helpers import api_inning_rows, login_as_manager, play_game, post_game_update
-from .test_integration import BaseCase
+from .base import BaseCase
 
 
 class GameUpdateApiTest(BaseCase):
