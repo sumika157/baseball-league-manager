@@ -530,6 +530,11 @@ class LeagueStats:
     league_id: int
     league_name: str
     listing: Listing
+    # 規定（規定打席・規定投球回）に到達した選手だけに絞っているか。
+    # 到達した人数と全体の人数を添えて、切り替えの前に規模が分かるようにする
+    qualified: bool = False
+    qualified_count: int = 0
+    total_count: int = 0
 
 
 @dataclass(frozen=True)

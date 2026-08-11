@@ -783,6 +783,7 @@ main.container {
   font-variant-numeric: tabular-nums;
 }
 
+.segmented-item.is-active .segmented-count,
 .segmented-item.active .segmented-count {
   color: var(--app-text-muted);
 }

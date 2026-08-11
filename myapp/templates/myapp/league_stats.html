@@ -16,7 +16,7 @@
   <div class="page-head">
     <h1 class="page-title">{{ stats.league_name }} 成績一覧</h1>
     <p class="page-subtitle">
-      リーグ所属の{% if pos_mode == 'pitcher' %}投手{% else %}野手{% endif %}全員の通算成績。
+      リーグ所属の{% if pos_mode == 'pitcher' %}投手{% else %}野手{% endif %}{% if stats.qualified %}のうち、{% if pos_mode == 'pitcher' %}規定投球回{% else %}規定打席{% endif %}に到達した選手{% else %}全員{% endif %}の通算成績。
       見出しを押すと並べ替えられます。シーズンごとの上位者はタイトルへ。
     </p>
   </div>
@@ -24,9 +24,22 @@
 </div>
 
 {# 野手／投手の切替。選手一覧と同じ操作感に揃える #}
-<div class="segmented">
-  <a class="segmented-item {% if pos_mode == 'batter' %}is-active{% endif %}" href="?pos=batter">野手</a>
-  <a class="segmented-item {% if pos_mode == 'pitcher' %}is-active{% endif %}" href="?pos=pitcher">投手</a>
+{# href は query_with で組む。並べ替えや規定の指定を落とさないため #}
+<div class="d-flex flex-wrap gap-2">
+  <div class="segmented">
+    <a class="segmented-item {% if pos_mode == 'batter' %}is-active{% endif %}" href="{% query_with pos='batter' %}">野手</a>
+    <a class="segmented-item {% if pos_mode == 'pitcher' %}is-active{% endif %}" href="{% query_with pos='pitcher' %}">投手</a>
+  </div>
+
+  {# 規定に到達した選手だけに絞る。率の指標は規定未満の選手が混ざると読めないため #}
+  <div class="segmented">
+    <a class="segmented-item {% if not stats.qualified %}is-active{% endif %}" href="{% query_with qualified='' %}">
+      全員<span class="segmented-count">{{ stats.total_count }}</span>
+    </a>
+    <a class="segmented-item {% if stats.qualified %}is-active{% endif %}" href="{% query_with qualified='1' %}">
+      {% if pos_mode == 'pitcher' %}規定投球回{% else %}規定打席{% endif %}到達<span class="segmented-count">{{ stats.qualified_count }}</span>
+    </a>
+  </div>
 </div>
 
 <div class="table-responsive">
@@ -121,7 +134,11 @@
       <tr>
         <td colspan="{% if pos_mode == 'pitcher' %}18{% else %}15{% endif %}">
           <div class="empty-state">
-            {% if pos_mode == 'pitcher' %}投手{% else %}野手{% endif %}がまだ登録されていません。
+            {% if stats.qualified %}
+              {% if pos_mode == 'pitcher' %}規定投球回{% else %}規定打席{% endif %}に到達した選手がいません。
+            {% else %}
+              {% if pos_mode == 'pitcher' %}投手{% else %}野手{% endif %}がまだ登録されていません。
+            {% endif %}
           </div>
         </td>
       </tr>

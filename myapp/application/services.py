@@ -633,6 +633,7 @@ class TeamApplicationService:
         league_id: int,
         *,
         pitchers: bool = False,
+        qualified: bool = False,
         sort: str | None = None,
         descending: bool | None = None,
     ) -> LeagueStats:
@@ -641,6 +642,11 @@ class TeamApplicationService:
         ダッシュボードのランキング（通算の上位だけ）から全体を確認しに来る
         場所なので、こちらも通算で揃える。並べ替えの規則はドメイン側にあり、
         不正なキーは既定の並びに落ちる。
+
+        qualified を立てると規定（規定打席・規定投球回）に到達した選手だけに
+        絞る。規定の条件はドメインサービスが持つ（タイトルの対象と同じ規則で、
+        画面側に別の条件を書かない）。切り替えの前に規模が分かるよう、
+        到達した人数と全体の人数はどちらの状態でも返す。
         """
         league = self._leagues.find_by_id(league_id)
         teams = self._teams.find_by_league_with_roster(league_id)
@@ -649,6 +655,9 @@ class TeamApplicationService:
         members: list[Player] = []
         home_of: dict[int, tuple[int, str]] = {}
         captains: set[int] = set()
+        # 規定は所属チームの試合数で決まるため、選手ごとに引けるようにしておく
+        games_played = self._team_game_counts()
+        team_games: dict[int, int] = {}
         for team in teams:
             captain = team.current_captain
             for player in team.active_players:
@@ -656,11 +665,18 @@ class TeamApplicationService:
                     continue
                 members.append(player)
                 home_of[id(player)] = (_saved_id(team.id), team.name)
+                team_games[_saved_id(player.id)] = games_played.get(_saved_id(team.id), 0)
                 if player is captain:
                     captains.add(id(player))
 
+        reaching = (
+            domain_services.qualified_pitchers(members, team_games=team_games)
+            if pitchers
+            else domain_services.qualified_batters(members, team_games=team_games)
+        )
+
         sorter = domain_services.sort_pitchers if pitchers else domain_services.sort_batters
-        ordered, key, desc = sorter(members, sort, descending)
+        ordered, key, desc = sorter(reaching if qualified else members, sort, descending)
         to_row = self._to_pitcher_row if pitchers else self._to_batter_row
 
         rows = []
@@ -678,6 +694,9 @@ class TeamApplicationService:
             league_id=_saved_id(league.id),
             league_name=league.name,
             listing=Listing(rows=rows, sort=key, descending=desc),
+            qualified=qualified,
+            qualified_count=len(reaching),
+            total_count=len(members),
         )
 
     @staticmethod

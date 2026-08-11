@@ -1,5 +1,7 @@
 """リーグの画面。所属チーム・リーグ詳細・タイトル・成績一覧。"""
 
+import re
+
 from django.contrib.auth.models import User
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
@@ -406,6 +408,96 @@ class LeagueStatsViewTest(BaseCase):
 
     def test_missing_league_returns_404(self):
         self.assertEqual(self.client.get(reverse("league_stats", args=[9999])).status_code, 404)
+
+    # --- 規定到達での絞り込み ---
+    #
+    # 規定打席はチームの試合数 × 3.1。give_batting は1試合を作るので規定は4打席。
+    # 「10打席の選手は残り、1打席の選手は消える」で検査する。
+
+    def test_qualified_filter_keeps_only_players_reaching_the_line(self):
+        game = give_batting(self.team, self.rival, self.slugger.id, BattingLine(at_bats=10, singles=3), day=1)
+        # 同じ試合に1打席だけの選手を足す（試合数を増やさずに規定未満を作る）
+        pinch = self.service.register_player(self.team.id, "代打", 44, "外野手")
+        self.service.update_game(
+            game.id,
+            year=game.season.year,
+            played_on=game.played_on,
+            home_team_id=game.home_team_id,
+            away_team_id=game.away_team_id,
+            home_score=game.home_score,
+            away_score=game.away_score,
+            batting={
+                self.slugger.id: BattingLine(at_bats=10, singles=3),
+                pinch.id: BattingLine(at_bats=1, singles=1),
+            },
+        )
+
+        everyone = self.service.get_league_stats(self.league.id)
+        reaching = self.service.get_league_stats(self.league.id, qualified=True)
+
+        self.assertIn("代打", [r.player.name for r in everyone.listing.rows])
+        self.assertNotIn("代打", [r.player.name for r in reaching.listing.rows])
+        self.assertIn("大砲", [r.player.name for r in reaching.listing.rows])
+
+    def test_counts_are_returned_in_both_states(self):
+        """切り替える前に規模が分かるよう、人数はどちらの状態でも返す。"""
+        give_batting(self.team, self.rival, self.slugger.id, BattingLine(at_bats=10, singles=3), day=1)
+
+        everyone = self.service.get_league_stats(self.league.id)
+        reaching = self.service.get_league_stats(self.league.id, qualified=True)
+
+        self.assertFalse(everyone.qualified)
+        self.assertTrue(reaching.qualified)
+        for stats in (everyone, reaching):
+            self.assertEqual(stats.total_count, 2)
+            self.assertEqual(stats.qualified_count, 1)
+
+    def test_pitchers_are_filtered_by_required_innings(self):
+        short = self.service.register_player(self.team.id, "ワンポイント", 45, "投手")
+        game = give_pitching(
+            self.team,
+            self.rival,
+            self.ace.id,
+            PitchingLine(innings=InningsPitched.from_notation("9.0"), wins=1),
+            day=1,
+        )
+        self.service.update_game(
+            game.id,
+            year=game.season.year,
+            played_on=game.played_on,
+            home_team_id=game.home_team_id,
+            away_team_id=game.away_team_id,
+            home_score=game.home_score,
+            away_score=game.away_score,
+            pitching={
+                self.ace.id: PitchingLine(innings=InningsPitched.from_notation("9.0"), wins=1),
+                short.id: PitchingLine(innings=InningsPitched.from_notation("0.1")),
+            },
+        )
+
+        rows = self.service.get_league_stats(self.league.id, pitchers=True, qualified=True).listing.rows
+
+        self.assertEqual([r.player.name for r in rows], ["エース"])
+
+    def test_unknown_qualified_value_shows_everyone(self):
+        """不正な指定はエラーにせず全員に落とす（並べ替えのキーと同じ扱い）。"""
+        give_batting(self.team, self.rival, self.slugger.id, BattingLine(at_bats=1, singles=1), day=1)
+
+        response = self.client.get(f"{self.url}?qualified=怪しい値")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "大砲")
+
+    def test_toggle_links_keep_the_other_conditions(self):
+        """規定の切り替えを押しても投手モードと並べ替えが外れないこと。"""
+        response = self.client.get(f"{self.url}?pos=pitcher&sort=era&dir=asc")
+        body = response.content.decode()
+
+        self.assertIn("qualified=1", body)
+        # 規定リンクにも pos と sort が乗っている（順序は urlencode 依存なので個別に確認）
+        for link in re.findall(r'href="\?([^"]*qualified=1[^"]*)"', body):
+            self.assertIn("pos=pitcher", link)
+            self.assertIn("sort=era", link)
 
     def test_league_page_links_here(self):
         response = self.client.get(reverse("league_detail", args=[self.league.id]))

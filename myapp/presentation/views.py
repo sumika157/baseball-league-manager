@@ -250,12 +250,15 @@ def league_titles(request, league_id, year=None):
 def league_stats(request, league_id):
     """リーグの成績一覧。所属する全選手の通算成績を並べ替えて見る。"""
     pos_mode = PITCHER_MODE if request.GET.get("pos") == PITCHER_MODE else BATTER_MODE
+    # 規定の絞り込み。指定が無い・読めない値なら全員（並べ替えのキーと同じ扱い）
+    qualified = request.GET.get("qualified") == "1"
     sort, descending = _sort_params(request)
 
     try:
         stats = build_service().get_league_stats(
             league_id,
             pitchers=pos_mode == PITCHER_MODE,
+            qualified=qualified,
             sort=sort,
             descending=descending,
         )
