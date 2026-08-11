@@ -37,6 +37,14 @@ class InvalidGame(DomainError):
     """試合として成立しない内容（同一チーム同士、負の得点など）。"""
 
 
+class InvalidPlateAppearance(DomainError):
+    """打席の記録として成立しない内容。
+
+    打順が1〜9でない、打者の進塁が結果と食い違う、同じ塁に2人の走者がいる、
+    1つの半回にアウトが4つある、など。スコアブックとして読めない記録を弾く。
+    """
+
+
 class GameNotFound(DomainError):
     """指定された試合が存在しない。"""
 

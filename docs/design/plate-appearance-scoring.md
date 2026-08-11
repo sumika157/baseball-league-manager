@@ -148,15 +148,28 @@ PlateAppearanceResult (Enum)   打者の結果。各値が以下を知ってい�
   失策出塁 / 野選出塁
   打撃妨害 / 守備妨害
 
-AdvanceReason (Enum)           進塁・アウトの理由
-  打撃 / 押し出し / タッチアップ
+AdvanceReason (Enum)           進塁・アウトの理由。各値が以下を知っている:
+                                 is_out             アウトになる理由か
+                                 earns_run_batted_in 還ったとき打点が付くか
+                                 is_unearned_cause  自責点の判定から除くか
+  打撃 / 四死球・妨害 / 押し出し / タッチアップ
   盗塁 / 盗塁刺 / 牽制死
   失策 / 暴投 / 捕逸 / ボーク
-  野選 / 封殺 / 走塁死 / 併殺
+  野選 / アウト / 封殺 / 走塁死
 
 ErrorKind (Enum)               失策の種類
-  捕球 / 送球 / 落球 / 悪送球 / 捕逸
+  捕球 / 送球 / 落球
 ```
+
+実装して分かった追加が3つある。
+
+- **`アウト`（`PUT_OUT`）** — 打球・三振でそのままアウトになる場合に当てはまる理由が
+  無かった。三振は封殺でも走塁死でもない。打者アウトの大半がこれになる。
+- **`四死球・妨害`（`AWARDED_BASE`）** — 打者が四死球で一塁を与えられる場合の理由も
+  無かった。塁を詰められて進む走者の `押し出し` とは別概念で、**押し出しは還れば
+  打点が付くが、こちらは付かない**（打者は自分の四球で還れない）。
+- **`捕逸` を `ErrorKind` から外した** — 捕逸は公式記録では失策として数えない別の記録。
+  進塁の理由（`PASSED_BALL`）としてだけ持つ。
 
 打数に数えるかの判定表（`counts_as_at_bat`）:
 四死球・故意四球・犠打・犠飛・妨害は**数えない**。失策出塁・野選出塁・三振・凡打は**数える**。
@@ -178,17 +191,26 @@ RunnerAdvance (frozen)
 FieldingError (frozen)
   player_id / position / kind
 
+RunnerSubstitution (frozen)    代走。塁上の走者を入れ替える
+  base / leaving_runner_id / entering_runner_id
+
 PlateAppearance
-  sequence      試合内の通し番号。**時系列の唯一の出典**
+  sequence        試合内の通し番号。**時系列の唯一の出典**
   inning / is_bottom
   batter_id / pitcher_id
   batting_order / slot_sequence
-  result        PlateAppearanceResult
-  fielded_by    打球の処理経路（6-3 なら (遊, 一)）。刺殺・補殺の出典
-  outs_before   打席前のアウト数
-  advances      list[RunnerAdvance]
-  errors        list[FieldingError]
+  result          PlateAppearanceResult
+  fielded_by      打球の処理経路（6-3 なら (遊, 一)）。刺殺・補殺の出典
+  advances        list[RunnerAdvance]
+  substitutions   list[RunnerSubstitution]
+  errors          list[FieldingError]
 ```
+
+- **`outs_before`（打席前のアウト数）は持たない。** 塁の状態を再生すれば求まるので、
+  持つと同じ事実の出典が2つになる（当初の設計から外した）。
+- **`RunnerSubstitution`（代走）を足した。** 交代は進塁ではないため `RunnerAdvance` では
+  表せず、走者が入れ替わっていないと塁の再生が「その塁にいない走者が進んだ」と
+  誤って弾いてしまう。**失点の責任投手は塁について回るので、代走にも自動で引き継がれる。**
 
 `Game` 集約が `plate_appearances: list[PlateAppearance]` を持つ。
 1試合あたり約 76打席・約 200進塁・約 1.3失策。集約の読み込みは1試合 約280行になる
@@ -407,7 +429,7 @@ SQL は 3ms）。したがって移行後に見るべきは SQL 時間ではな�
 | | 内容 | 検証 |
 | --- | --- | --- |
 | **P0** ✅ | `measure_pages` でベースラインを取る | 実測値を上表に記録済み |
-| **P1** | ドメイン層（値オブジェクト・`PlateAppearance`・導出・検算） | `tests/domain/`（DB 不要） |
+| **P1** ✅ | ドメイン層（値オブジェクト・`PlateAppearance`・導出・検算） | `tests/domain/` 58件（DB 不要） |
 | **P2** | 新テーブル3つ ＋ リポジトリ ＋ 集計クエリを打席ベースに | 実測 → **既存テーブルの去就を決める** |
 | **P3** | `seed_virtual_games` を打席ベースに書き換え、全再生成 | 実測 ＋ NPB 水準の維持を確認 |
 | **P4** | React の入力画面（ラインアップ・スコアブックのマス目・進塁の既定値） | integration ＋ e2e |

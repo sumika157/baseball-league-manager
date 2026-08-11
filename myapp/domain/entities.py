@@ -19,22 +19,30 @@ from .exceptions import (
     DuplicateJerseyNumber,
     InvalidCaptaincy,
     InvalidGame,
+    InvalidPlateAppearance,
     InvalidStint,
     PlayerNotEligibleForCaptaincy,
     PlayerNotFound,
 )
 from .value_objects import (
+    AdvanceReason,
+    Base,
     BattingLine,
+    ErrorKind,
     FieldingPosition,
     JerseyNumber,
     LineScore,
     PitchingLine,
+    PlateAppearanceResult,
     Position,
     Profile,
     Season,
     StadiumProfile,
     ensure_quota_not_exceeded,
 )
+
+OUTS_PER_HALF_INNING = 3
+BATTING_ORDER_SIZE = 9
 
 
 @dataclass
@@ -452,6 +460,209 @@ class GamePitching:
         return self.appearance_order == 1
 
 
+@dataclass(frozen=True)
+class RunnerAdvance:
+    """1人の走者が、この打席の中でどこからどこへ動いたか。
+
+    打者自身も走者として記録する（`from_base` は `Base.BATTER`）。得点・打点・盗塁・
+    残塁・自責点はすべてこの記録から導く。動かなかった走者は記録しない。
+    """
+
+    runner_id: int
+    from_base: Base
+    to_base: Base
+    reason: AdvanceReason
+    # 失策に起因する進塁なら、同じ打席の errors の位置。自責点の判定に使う
+    error_index: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.from_base in (Base.OUT, Base.HOME):
+            raise InvalidPlateAppearance(f"{self.from_base.label}の走者は進塁できません。")
+        if self.reason.is_out != self.to_base.is_out:
+            raise InvalidPlateAppearance(
+                f"進塁の理由（{self.reason.label}）と到達（{self.to_base.label}）が食い違っています。"
+            )
+        if not self.to_base.is_out and self.to_base.value <= self.from_base.value:
+            raise InvalidPlateAppearance(f"走者は{self.from_base.label}から{self.to_base.label}へは進めません。")
+        if self.error_index is not None and self.error_index < 0:
+            raise InvalidPlateAppearance("失策の位置に負の値は指定できません。")
+
+    @property
+    def is_out(self) -> bool:
+        return self.to_base.is_out
+
+    @property
+    def has_scored(self) -> bool:
+        return self.to_base.has_scored
+
+    @property
+    def is_batter(self) -> bool:
+        """打者自身の進塁か。"""
+        return self.from_base is Base.BATTER
+
+
+@dataclass(frozen=True)
+class RunnerSubstitution:
+    """代走。塁上の走者を別の選手に入れ替える。
+
+    交代は進塁ではないため `RunnerAdvance` では表せない。塁の状態を再生するときに
+    走者が入れ替わっていないと「その塁にいない走者が進んだ」と誤って弾いてしまう。
+    失点の責任投手は交代前の走者から引き継ぐ。
+    """
+
+    base: Base
+    leaving_runner_id: int
+    entering_runner_id: int
+
+    def __post_init__(self) -> None:
+        if not self.base.occupies_base:
+            raise InvalidPlateAppearance("代走は塁上の走者にだけ出せます。")
+        if self.leaving_runner_id == self.entering_runner_id:
+            raise InvalidPlateAppearance("同じ選手に代走は出せません。")
+
+
+@dataclass(frozen=True)
+class FieldingError:
+    """失策。誰がどこで何をしたか。
+
+    自責点の判定（規則 9.16 の「失策が無かったものと仮定した再構成」）と、
+    守備成績の出典。
+    """
+
+    player_id: int
+    position: FieldingPosition
+    kind: ErrorKind
+
+
+@dataclass
+class PlateAppearance:
+    """1打席。スコアブックのマス目1つにあたる。
+
+    打撃成績・投球成績・守備成績・イニングスコアはすべてここから導出する
+    （導出は `domain.services.scoring`）。`sequence` が試合内の時系列の唯一の出典で、
+    アウトの数も塁の状態も並び順を再生して求めるため、ここには持たない。
+    """
+
+    sequence: int
+    inning: int
+    is_bottom: bool
+    batter_id: int
+    pitcher_id: int
+    batting_order: int
+    result: PlateAppearanceResult
+    slot_sequence: int = 0
+    # 打球の処理経路（6-3 なら (遊, 一)）。刺殺・補殺の出典
+    fielded_by: tuple[FieldingPosition, ...] = ()
+    advances: list[RunnerAdvance] = field(default_factory=list)
+    substitutions: list[RunnerSubstitution] = field(default_factory=list)
+    errors: list[FieldingError] = field(default_factory=list)
+    id: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.sequence < 1:
+            raise InvalidPlateAppearance("打席の通し番号は1以上で入力してください。")
+        if self.inning < 1:
+            raise InvalidPlateAppearance("回は1以上で入力してください。")
+        if not (1 <= self.batting_order <= BATTING_ORDER_SIZE):
+            raise InvalidPlateAppearance(f"打順は1〜{BATTING_ORDER_SIZE}で入力してください。")
+        if self.slot_sequence < 0:
+            raise InvalidPlateAppearance("交代の順に負の値は指定できません。")
+        self._ensure_batter_advance_matches_result()
+        self._ensure_result_requirements()
+
+    def __str__(self) -> str:
+        half = "裏" if self.is_bottom else "表"
+        return f"{self.inning}回{half} {self.batting_order}番 {self.result.label}"
+
+    def _ensure_batter_advance_matches_result(self) -> None:
+        """打者の進塁が1つだけあり、打席の結果と噛み合っていることを確かめる。"""
+        moves = [advance for advance in self.advances if advance.is_batter]
+        if not moves:
+            raise InvalidPlateAppearance("打者の進塁が記録されていません。")
+        if len(moves) > 1:
+            raise InvalidPlateAppearance("1打席に打者の進塁を2つ以上は記録できません。")
+
+        moved = moves[0]
+        if moved.runner_id != self.batter_id:
+            raise InvalidPlateAppearance("打者の進塁の選手が打者と一致していません。")
+        if self.result.retires_batter and not moved.is_out:
+            raise InvalidPlateAppearance(f"{self.result.label}なのに打者が{moved.to_base.label}に達しています。")
+        if self.result is PlateAppearanceResult.HOME_RUN and not moved.has_scored:
+            raise InvalidPlateAppearance("本塁打なのに打者が本塁に達していません。")
+        # 単打で二塁を陥れることはあるので下限だけを見る。走塁死は結果と両立する
+        if self.result.is_hit and not moved.is_out and moved.to_base.value < self.result.bases:
+            raise InvalidPlateAppearance(
+                f"{self.result.label}なのに打者が{moved.to_base.label}までしか進んでいません。"
+            )
+
+    def _ensure_result_requirements(self) -> None:
+        """結果の種別が要求する条件を確かめる。"""
+        for advance in self.advances:
+            if advance.error_index is not None and advance.error_index >= len(self.errors):
+                raise InvalidPlateAppearance("進塁が参照している失策が記録されていません。")
+
+        if self.result is PlateAppearanceResult.REACHED_ON_ERROR and not self.errors:
+            raise InvalidPlateAppearance("失策出塁には失策の記録が必要です。")
+        # 犠飛は走者が還って初めて成立し、犠打は走者が進んで初めて成立する（規則 9.08）
+        if self.result is PlateAppearanceResult.SACRIFICE_FLY and self.runs_scored == 0:
+            raise InvalidPlateAppearance("犠飛は走者が本塁に達していないと記録できません。")
+        if self.result is PlateAppearanceResult.SACRIFICE_BUNT and not self._runners_advanced:
+            raise InvalidPlateAppearance("犠打は走者が進んでいないと記録できません。")
+
+    @property
+    def _runners_advanced(self) -> bool:
+        return any(not advance.is_batter and not advance.is_out for advance in self.advances)
+
+    @property
+    def half_inning(self) -> tuple[int, bool]:
+        """どの半回か。回と表裏の組。"""
+        return (self.inning, self.is_bottom)
+
+    @property
+    def batter_advance(self) -> RunnerAdvance:
+        """打者自身の進塁。生成時に1つだけあることを保証している。"""
+        return next(advance for advance in self.advances if advance.is_batter)
+
+    @property
+    def outs_recorded(self) -> int:
+        """この打席で記録されたアウトの数。投球回と半回の終わりの出典。"""
+        return sum(1 for advance in self.advances if advance.is_out)
+
+    @property
+    def runs_scored(self) -> int:
+        """この打席で本塁に達した走者の数。"""
+        return sum(1 for advance in self.advances if advance.has_scored)
+
+    @property
+    def is_double_play(self) -> bool:
+        """併殺（以上）か。アウトが2つ以上記録されたかで判断する。"""
+        return self.outs_recorded >= 2
+
+    @property
+    def runs_batted_in(self) -> int:
+        """打点。
+
+        打者の打撃行為の結果として還った得点だけを数える。失策・野選・暴投・捕逸・
+        盗塁で還った得点には付かない。併殺の間に還った得点にも付かない（規則 9.04）。
+        """
+        if self.is_double_play:
+            return 0
+        return sum(1 for advance in self.advances if advance.has_scored and advance.reason.earns_run_batted_in)
+
+    def scoring_advances(self) -> list[RunnerAdvance]:
+        """本塁に達した進塁。失点・自責点の判定に使う。"""
+        return [advance for advance in self.advances if advance.has_scored]
+
+    def advances_lead_runner_first(self) -> list[RunnerAdvance]:
+        """先の塁の走者から順に並べた進塁。
+
+        塁の状態を再生するときは、前を走る走者が塁を空けてから後続が入る順で
+        適用しなければならない（一塁走者を先に二塁へ動かすと、二塁走者がまだ
+        居るために衝突と誤判定される）。
+        """
+        return sorted(self.advances, key=lambda advance: -advance.from_base.value)
+
+
 def winning_team_id(home_team_id: int, away_team_id: int, home_score: int, away_score: int) -> int | None:
     """得点から勝ったチームを決める。同点なら None（引分）。
 
@@ -484,6 +695,9 @@ class Game:
     # 回ごとの得点。勝敗・セーブ・ホールドの判定に使う。空でも試合は成立する
     # （経過を記録しない試合では、勝敗も導けないだけ）
     line_score: LineScore = field(default_factory=LineScore)
+    # 打席ごとの記録。スコアブックのマス目にあたり、記録があれば打撃・投球・守備成績と
+    # イニングスコアはすべてここから導出できる。イニングスコアと同じく空でも試合は成立する
+    plate_appearances: list[PlateAppearance] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.home_team_id == self.away_team_id:
@@ -591,6 +805,133 @@ class Game:
                 "イニングスコアの合計が得点と一致しません"
                 f"（ビジター {self.line_score.away_total}/{self.away_score}、"
                 f"ホーム {self.line_score.home_total}/{self.home_score}）。"
+            )
+
+    def plate_appearances_in_order(self) -> list[PlateAppearance]:
+        """打席を試合の進行順に並べる。通し番号が時系列の出典。"""
+        return sorted(self.plate_appearances, key=lambda entry: entry.sequence)
+
+    def derived_line_score(self) -> LineScore:
+        """打席の記録から回ごとの得点を組み立てる。
+
+        イニングスコアの出典を打席に一本化するためのもの。得点が無かった半回も
+        「行われた」なら 0 として残し、ホームが攻めずに終わった最終回は記録しない
+        （`LineScore` が表と裏で長さの違いを許すのはこのため）。
+        打席の記録が無い試合では空を返す（手入力の `line_score` をそのまま使う）。
+        """
+        if not self.plate_appearances:
+            return LineScore()
+
+        away: dict[int, int] = {}
+        home: dict[int, int] = {}
+        for entry in self.plate_appearances:
+            half = home if entry.is_bottom else away
+            half[entry.inning] = half.get(entry.inning, 0) + entry.runs_scored
+
+        def to_tuple(half: dict[int, int]) -> tuple[int, ...]:
+            if not half:
+                return ()
+            return tuple(half.get(inning, 0) for inning in range(1, max(half) + 1))
+
+        return LineScore(away=to_tuple(away), home=to_tuple(home))
+
+    def ensure_plate_appearances_consistent(self) -> None:
+        """打席の記録がスコアブックとして成立していることを確かめる。
+
+        紙のスコアブックで縦計・横計を取って検算する作業にあたる。記録が無い試合では
+        何もしない（経過を記録しない試合もあるため）。
+        """
+        if not self.plate_appearances:
+            return
+        ordered = self.plate_appearances_in_order()
+        self._ensure_sequences_are_contiguous(ordered)
+        self._ensure_batting_order_cycles(ordered)
+        self._replay_bases(ordered)
+        self._ensure_derived_line_score_matches()
+
+    @staticmethod
+    def _ensure_sequences_are_contiguous(ordered: list[PlateAppearance]) -> None:
+        """通し番号が1から欠けも重複もなく続いていることを確かめる。
+
+        番号が飛ぶと打席が抜け落ちていることになり、塁の状態を再生できない。
+        """
+        for expected, entry in enumerate(ordered, start=1):
+            if entry.sequence != expected:
+                raise InvalidPlateAppearance(
+                    f"打席の通し番号が連続していません（{expected} のはずが {entry.sequence}）。"
+                )
+
+    @staticmethod
+    def _ensure_batting_order_cycles(ordered: list[PlateAppearance]) -> None:
+        """打順が1〜9を巡回していることを確かめる。
+
+        スコアブックを横に読む性質そのもので、打席の抜け・重複を強く捕まえる。
+        攻守が入れ替わっても打線は続くため、チーム（表裏）ごとに追う。
+        """
+        previous: dict[bool, int] = {}
+        for entry in ordered:
+            last = previous.get(entry.is_bottom)
+            if last is not None:
+                expected = last % BATTING_ORDER_SIZE + 1
+                if entry.batting_order != expected:
+                    half = "裏" if entry.is_bottom else "表"
+                    raise InvalidPlateAppearance(
+                        f"{entry.inning}回{half}の打順が飛んでいます（{expected}番のはずが{entry.batting_order}番）。"
+                    )
+            previous[entry.is_bottom] = entry.batting_order
+
+    @staticmethod
+    def _replay_bases(ordered: list[PlateAppearance]) -> None:
+        """塁の状態を打席順に再生し、走者とアウトの整合を確かめる。
+
+        検査するのは3点。同じ塁に2人の走者がいないこと、その塁にいない走者が
+        進んでいないこと、1つの半回のアウトが3を超えないこと。
+        """
+        occupied: dict[Base, int] = {}
+        outs = 0
+        current: tuple[int, bool] | None = None
+
+        for entry in ordered:
+            if entry.half_inning != current:
+                current = entry.half_inning
+                occupied = {}
+                outs = 0
+
+            half = "裏" if entry.is_bottom else "表"
+            where = f"{entry.inning}回{half}{entry.batting_order}番"
+
+            for substitution in entry.substitutions:
+                if occupied.get(substitution.base) != substitution.leaving_runner_id:
+                    raise InvalidPlateAppearance(f"{where}: 代走を出す走者が{substitution.base.label}にいません。")
+                occupied[substitution.base] = substitution.entering_runner_id
+
+            for advance in entry.advances_lead_runner_first():
+                if advance.is_batter:
+                    pass
+                elif occupied.get(advance.from_base) != advance.runner_id:
+                    raise InvalidPlateAppearance(f"{where}: 進塁した走者が{advance.from_base.label}にいません。")
+                else:
+                    del occupied[advance.from_base]
+
+                if advance.to_base.occupies_base:
+                    if advance.to_base in occupied:
+                        raise InvalidPlateAppearance(f"{where}: {advance.to_base.label}に走者が2人います。")
+                    occupied[advance.to_base] = advance.runner_id
+
+            outs += entry.outs_recorded
+            if outs > OUTS_PER_HALF_INNING:
+                raise InvalidPlateAppearance(
+                    f"{entry.inning}回{half}のアウトが{outs}になっています（1つの半回は{OUTS_PER_HALF_INNING}まで）。"
+                )
+
+    def _ensure_derived_line_score_matches(self) -> None:
+        """打席から導いた得点が最終得点と一致することを確かめる。"""
+        derived = self.derived_line_score()
+        if not derived.matches(self.away_score, self.home_score):
+            raise InvalidPlateAppearance(
+                "打席の記録から導いた得点が最終得点と一致しません"
+                f"（ビジター {derived.away_total}/{self.away_score}、"
+                f"ホーム {derived.home_total}/{self.home_score}）。"
             )
 
     def batting_in_order(self) -> list[GameBatting]:

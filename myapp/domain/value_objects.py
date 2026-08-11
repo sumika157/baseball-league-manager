@@ -19,6 +19,7 @@ from .exceptions import (
     ForeignPlayerQuotaExceeded,
     InvalidInningsPitched,
     InvalidJerseyNumber,
+    InvalidPlateAppearance,
     InvalidPosition,
     InvalidProfile,
     InvalidSeason,
@@ -113,6 +114,303 @@ class FieldingPosition(Enum):
     def defensive_labels(cls) -> list[str]:
         """守備に就く位置だけ。スタメンの選択肢に使う。"""
         return [item.value for item in cls if not item.is_substitute_only]
+
+
+# Base の値は塁の順序そのもの（大小比較が「進んだか」の判定になる）ため数値にしてある。
+# 表示用の名前は数値から引く。
+_BASE_LABELS = {0: "打者席", 1: "一塁", 2: "二塁", 3: "三塁", 4: "本塁", -1: "アウト"}
+
+
+class Base(Enum):
+    """走者の位置。打者席から本塁までと、アウト。
+
+    進塁は「どこから どこへ」で記録するため、まだ塁に出ていない打者席と、
+    塁から消えるアウトも位置として扱う。
+    """
+
+    BATTER = 0
+    FIRST = 1
+    SECOND = 2
+    THIRD = 3
+    HOME = 4
+    OUT = -1
+
+    @property
+    def label(self) -> str:
+        return _BASE_LABELS[self.value]
+
+    @property
+    def is_out(self) -> bool:
+        return self is Base.OUT
+
+    @property
+    def has_scored(self) -> bool:
+        """本塁に達したか（得点）。"""
+        return self is Base.HOME
+
+    @property
+    def occupies_base(self) -> bool:
+        """塁上に留まるか。打者席・本塁・アウトは塁を占めない。"""
+        return self in (Base.FIRST, Base.SECOND, Base.THIRD)
+
+    @classmethod
+    def occupiable(cls) -> tuple[Base, ...]:
+        """走者が留まれる塁。塁の状態を再生するときに使う。"""
+        return (cls.FIRST, cls.SECOND, cls.THIRD)
+
+
+class PlateAppearanceResult(Enum):
+    """打席の結果（打者から見た結末）。スコアブックのマス目に書く記号にあたる。
+
+    打数に数えるか・安打か・打者がアウトになったかを各値が自分で知っており、
+    打撃成績はここから導出する。**併殺打は種別として持たない**
+    （1打席でアウトが2つ記録されたことから導く。種別にも持たせると
+    同じ事実の出典が2つになる）。
+    """
+
+    SINGLE = "単打"
+    DOUBLE = "二塁打"
+    TRIPLE = "三塁打"
+    HOME_RUN = "本塁打"
+    WALK = "四球"
+    INTENTIONAL_WALK = "故意四球"
+    HIT_BY_PITCH = "死球"
+    STRIKEOUT_SWINGING = "空振り三振"
+    STRIKEOUT_LOOKING = "見逃し三振"
+    GROUND_OUT = "ゴロアウト"
+    FLY_OUT = "フライアウト"
+    LINE_OUT = "ライナーアウト"
+    FOUL_FLY_OUT = "邪飛"
+    SACRIFICE_BUNT = "犠打"
+    SACRIFICE_FLY = "犠飛"
+    REACHED_ON_ERROR = "失策出塁"
+    FIELDERS_CHOICE = "野選出塁"
+    CATCHER_INTERFERENCE = "打撃妨害"
+    OBSTRUCTION = "走塁妨害"
+
+    @property
+    def label(self) -> str:
+        return self.value
+
+    @classmethod
+    def from_label(cls, label: str) -> PlateAppearanceResult:
+        for item in cls:
+            if item.value == label:
+                return item
+        raise InvalidPlateAppearance(f"「{label}」は打席の結果として認識できません。")
+
+    @classmethod
+    def labels(cls) -> list[str]:
+        return [item.value for item in cls]
+
+    @property
+    def counts_as_at_bat(self) -> bool:
+        """打数に数えるか。四死球・犠打・犠飛・妨害は数えない。"""
+        return self not in (
+            PlateAppearanceResult.WALK,
+            PlateAppearanceResult.INTENTIONAL_WALK,
+            PlateAppearanceResult.HIT_BY_PITCH,
+            PlateAppearanceResult.SACRIFICE_BUNT,
+            PlateAppearanceResult.SACRIFICE_FLY,
+            PlateAppearanceResult.CATCHER_INTERFERENCE,
+            PlateAppearanceResult.OBSTRUCTION,
+        )
+
+    @property
+    def is_hit(self) -> bool:
+        return self in (
+            PlateAppearanceResult.SINGLE,
+            PlateAppearanceResult.DOUBLE,
+            PlateAppearanceResult.TRIPLE,
+            PlateAppearanceResult.HOME_RUN,
+        )
+
+    @property
+    def bases(self) -> int:
+        """安打なら何塁打か。安打でなければ 0。塁打数の出典。"""
+        return _HIT_BASES.get(self, 0)
+
+    @property
+    def is_strikeout(self) -> bool:
+        return self in (
+            PlateAppearanceResult.STRIKEOUT_SWINGING,
+            PlateAppearanceResult.STRIKEOUT_LOOKING,
+        )
+
+    @property
+    def is_walk(self) -> bool:
+        """四球か。日本プロ野球の集計では故意四球も四球に含む。"""
+        return self in (PlateAppearanceResult.WALK, PlateAppearanceResult.INTENTIONAL_WALK)
+
+    @property
+    def retires_batter(self) -> bool:
+        """打者がアウトになる結果か。
+
+        犠打・犠飛は打者がアウトになるが打数には数えない（上の counts_as_at_bat と
+        独立した判定であることに注意）。
+        """
+        return self in (
+            PlateAppearanceResult.STRIKEOUT_SWINGING,
+            PlateAppearanceResult.STRIKEOUT_LOOKING,
+            PlateAppearanceResult.GROUND_OUT,
+            PlateAppearanceResult.FLY_OUT,
+            PlateAppearanceResult.LINE_OUT,
+            PlateAppearanceResult.FOUL_FLY_OUT,
+            PlateAppearanceResult.SACRIFICE_BUNT,
+            PlateAppearanceResult.SACRIFICE_FLY,
+        )
+
+    @property
+    def default_batter_base(self) -> Base:
+        """打者が既定でどこまで進むか。
+
+        入力画面が進塁の既定値を埋めるために使う。実際の到達塁は記録された進塁が
+        出典で、これは初期値の対応表を1か所に集めるためのもの
+        （画面側に同じ表を持たせない）。単打で二塁を陥れるような既定外の進塁は、
+        記録側で上書きする。
+        """
+        if self.retires_batter:
+            return Base.OUT
+        return _BATTER_DESTINATIONS.get(self, Base.FIRST)
+
+    @property
+    def default_batter_reason(self) -> AdvanceReason:
+        """打者の進塁に既定で付く理由。`default_batter_base` と対で使う。
+
+        AdvanceReason はこのクラスより後で定義されるが、参照は実行時に解決される。
+        並びは「結果 → 進塁の語彙」の順に読めるようにこのままにしてある。
+        """
+        if self.retires_batter:
+            return AdvanceReason.PUT_OUT
+        if self is PlateAppearanceResult.REACHED_ON_ERROR:
+            return AdvanceReason.ERROR
+        if self is PlateAppearanceResult.FIELDERS_CHOICE:
+            return AdvanceReason.FIELDERS_CHOICE
+        if self in (
+            PlateAppearanceResult.WALK,
+            PlateAppearanceResult.INTENTIONAL_WALK,
+            PlateAppearanceResult.HIT_BY_PITCH,
+            PlateAppearanceResult.CATCHER_INTERFERENCE,
+            PlateAppearanceResult.OBSTRUCTION,
+        ):
+            return AdvanceReason.AWARDED_BASE
+        return AdvanceReason.BATTED_BALL
+
+
+# 塁打数と、打者の既定の到達塁。enum のメンバーを参照するためクラス定義の後に置く。
+_HIT_BASES = {
+    PlateAppearanceResult.SINGLE: 1,
+    PlateAppearanceResult.DOUBLE: 2,
+    PlateAppearanceResult.TRIPLE: 3,
+    PlateAppearanceResult.HOME_RUN: 4,
+}
+
+_BATTER_DESTINATIONS = {
+    PlateAppearanceResult.SINGLE: Base.FIRST,
+    PlateAppearanceResult.DOUBLE: Base.SECOND,
+    PlateAppearanceResult.TRIPLE: Base.THIRD,
+    PlateAppearanceResult.HOME_RUN: Base.HOME,
+}
+
+
+class AdvanceReason(Enum):
+    """走者が進んだ（またはアウトになった）理由。
+
+    打点・盗塁・自責点の判定はすべてここから導く。理由を持たずに進塁だけを
+    記録すると、失策で還った走者に打点が付いてしまう。
+    """
+
+    BATTED_BALL = "打撃"
+    # 打者が四球・死球・妨害で一塁を与えられた場合。塁を詰められて進む走者は
+    # FORCED（押し出し）で、そちらは還れば打点が付く
+    AWARDED_BASE = "四死球・妨害"
+    FORCED = "押し出し"
+    TAG_UP = "タッチアップ"
+    STOLEN_BASE = "盗塁"
+    CAUGHT_STEALING = "盗塁刺"
+    PICKED_OFF = "牽制死"
+    ERROR = "失策"
+    WILD_PITCH = "暴投"
+    PASSED_BALL = "捕逸"
+    BALK = "ボーク"
+    FIELDERS_CHOICE = "野選"
+    # 打球・三振でそのままアウトになった場合。封殺・走塁死と違い、どこかへ
+    # 走った結果ではないため別に持つ（打者アウトの大半がこれになる）
+    PUT_OUT = "アウト"
+    FORCE_OUT = "封殺"
+    THROWN_OUT = "走塁死"
+
+    @property
+    def label(self) -> str:
+        return self.value
+
+    @classmethod
+    def from_label(cls, label: str) -> AdvanceReason:
+        for item in cls:
+            if item.value == label:
+                return item
+        raise InvalidPlateAppearance(f"「{label}」は進塁の理由として認識できません。")
+
+    @classmethod
+    def labels(cls) -> list[str]:
+        return [item.value for item in cls]
+
+    @property
+    def is_out(self) -> bool:
+        """走者（打者を含む）がアウトになる理由か。"""
+        return self in (
+            AdvanceReason.PUT_OUT,
+            AdvanceReason.CAUGHT_STEALING,
+            AdvanceReason.PICKED_OFF,
+            AdvanceReason.FORCE_OUT,
+            AdvanceReason.THROWN_OUT,
+        )
+
+    @property
+    def earns_run_batted_in(self) -> bool:
+        """この理由で本塁に達したとき、打者に打点が付くか。
+
+        打点は打者の打撃行為の結果として還った場合に付く。失策・野選・暴投・
+        捕逸・盗塁・ボークで還った得点には付かない。
+        """
+        return self in (AdvanceReason.BATTED_BALL, AdvanceReason.FORCED, AdvanceReason.TAG_UP)
+
+    @property
+    def is_unearned_cause(self) -> bool:
+        """この理由による進塁を自責点の判定から除くか。
+
+        日本プロ野球規則 9.16 は**失策と捕逸**を「無かったものと仮定して」
+        イニングを再構成する。暴投とボークは投手自身の責任なので自責点に含める。
+        """
+        return self in (AdvanceReason.ERROR, AdvanceReason.PASSED_BALL)
+
+
+class ErrorKind(Enum):
+    """失策の種類。
+
+    公式記録は失策を一括で数えるが、内訳を残すと守備の傾向が読める。
+    捕逸（パスボール）は失策として数えない別の記録なので、ここには含めず
+    進塁の理由（AdvanceReason.PASSED_BALL）として扱う。
+    """
+
+    FIELDING = "捕球"
+    THROWING = "送球"
+    DROPPED_FLY = "落球"
+
+    @property
+    def label(self) -> str:
+        return self.value
+
+    @classmethod
+    def from_label(cls, label: str) -> ErrorKind:
+        for item in cls:
+            if item.value == label:
+                return item
+        raise InvalidPlateAppearance(f"「{label}」は失策の種類として認識できません。")
+
+    @classmethod
+    def labels(cls) -> list[str]:
+        return [item.value for item in cls]
 
 
 @dataclass(frozen=True)
