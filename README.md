@@ -760,6 +760,10 @@ React（[frontend/](frontend/)）で作っています。全面 SPA 化はしま
   ドメイン層のまま。**検証の出典を増やしません**
 - payload と API のキーはフォームのフィールド名と同じ snake_case。クライアントは全行を送り、
   「全欄空 ＝ 出場していない」の間引きはサーバー（フォームの `is_blank`）が行います
+- 成績のカウント項目は `frontend/src/game_edit/types.ts` にも列挙されています。TypeScript から
+  Python を読めないため、この重複だけは消せません。ずれると「その項目の入力欄が出ない」という
+  静かな不具合になるので、[tests/integration/test_stat_fields.py](myapp/tests/integration/test_stat_fields.py)
+  が Python 側の列挙（値オブジェクト・永続化・フォーム）と突き合わせます
 - React 側の自動計算（イニングスコアからの得点導出）や行内警告は入力補助で、
   確定判断は常にサーバーが持ちます
 - ビルドは `vite build --watch` の常時出力方式（dev server 無し）。出力はハッシュ無しの固定名で、
