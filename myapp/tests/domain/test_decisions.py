@@ -20,7 +20,7 @@ HOME, AWAY = 1, 2
 # 選手id → チームid。試合の明細は両チームの投手が混ざるため外から渡す
 HOME_PITCHERS = (10, 11, 12, 13)
 AWAY_PITCHERS = (20, 21, 22, 23)
-TEAM_OF = {pid: HOME for pid in HOME_PITCHERS} | {pid: AWAY for pid in AWAY_PITCHERS}
+TEAM_OF = dict.fromkeys(HOME_PITCHERS, HOME) | dict.fromkeys(AWAY_PITCHERS, AWAY)
 
 
 def _line(notation, *, earned_runs=0):

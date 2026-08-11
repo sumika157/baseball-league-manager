@@ -702,11 +702,13 @@ class CaptaincyForm(forms.ModelForm):
 
         # 現在(to_year 空)の指名は、現在在籍中の選手にしか行えない。過去の在任行
         # (to_year 入力済み、退団済み選手の履歴入力など)には適用しない
-        if cleaned.get("to_year") is None and player is not None and player.pk:
-            if not PlayerStint.objects.filter(player=player, team=team, to_year__isnull=True).exists():
-                raise forms.ValidationError(
-                    f"{player.name} は現在「{team.name}」に在籍していないため主将にできません。"
-                )
+        if (
+            cleaned.get("to_year") is None
+            and player is not None
+            and player.pk
+            and not PlayerStint.objects.filter(player=player, team=team, to_year__isnull=True).exists()
+        ):
+            raise forms.ValidationError(f"{player.name} は現在「{team.name}」に在籍していないため主将にできません。")
         return cleaned
 
 

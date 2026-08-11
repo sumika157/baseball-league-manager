@@ -26,10 +26,8 @@ def _rank(entries: list[tuple[Player, float]], limit: int | None) -> list[Ranked
     ranked: list[RankedPlayer] = []
     previous_value = None
     for index, (player, value) in enumerate(entries, start=1):
-        if previous_value is not None and value == previous_value:
-            rank = ranked[-1].rank  # 同率
-        else:
-            rank = index
+        # 同値なら前の選手と同順位（1・1・3 のように次の順位は飛ぶ）
+        rank = ranked[-1].rank if previous_value is not None and value == previous_value else index
         ranked.append(RankedPlayer(rank=rank, player=player, value=value))
         previous_value = value
 

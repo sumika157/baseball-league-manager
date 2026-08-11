@@ -1528,13 +1528,8 @@ class Command(BaseCommand):
         given_lookup = {kanji: (kana, romaji) for kanji, kana, romaji in JP_GIVEN_NAMES + RARE_JP_GIVEN_NAMES}
         surnames_by_length = sorted(surname_lookup, key=len, reverse=True)
 
-        foreign_given_lookup = {}
-        foreign_surname_lookup = {}
-        for group in FOREIGN_GROUPS:
-            for kana, romaji in group["given"]:
-                foreign_given_lookup[kana] = romaji
-            for kana, romaji in group["surname"]:
-                foreign_surname_lookup[kana] = romaji
+        foreign_given_lookup = {kana: romaji for group in FOREIGN_GROUPS for kana, romaji in group["given"]}
+        foreign_surname_lookup = {kana: romaji for group in FOREIGN_GROUPS for kana, romaji in group["surname"]}
 
         players = list(Player.objects.all())
         surname_romaji_by_id = {}

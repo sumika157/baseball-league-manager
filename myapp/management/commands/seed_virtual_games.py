@@ -770,7 +770,7 @@ class Command(BaseCommand):
             else []
         )
         # 中継ぎは序列の下位から先に投げる（良い投手を後ろに残す）
-        middle = [pool[index] for index in reversed(sorted(picks))]
+        middle = [pool[index] for index in sorted(picks, reverse=True)]
 
         if use_closer:
             return middle + [closer]

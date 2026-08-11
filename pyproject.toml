@@ -4,7 +4,12 @@ line-length = 119
 exclude = ["myapp/migrations"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B"]
+# E/F/W/I/UP/B に加えて、読みにくさ・書き崩れを機械で拾う分を足している。
+# 意図的に入れていないもの:
+#   RUF001-003（日本語の全角記号を「紛らわしい文字」と誤検知する）
+#   ARG（Django の override は使わない request を受け取らざるを得ない）
+#   ANN（注釈の強制は mypy 側の disallow_untyped_defs で層を絞って行う）
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RET", "PIE", "PERF", "FURB", "LOG", "T20"]
 
 [tool.mypy]
 python_version = "3.10"
