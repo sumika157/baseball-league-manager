@@ -57,6 +57,15 @@ def player_pitching_total(games: list[Game], player_id: int) -> PitchingLine:
     return PitchingLine.total(entry.line for game in games for entry in game.pitching if entry.player_id == player_id)
 
 
+def appeared_in(game: Game, player_id: int) -> bool:
+    """その試合に出場したか。打撃・投球のどちらかに記録があれば出場とみなす。
+
+    「出場した」の判定は期間別成績（月別・年度別）の行を作るかどうかを決めるため、
+    束ね方ごとに書き直さず、ここを唯一の出典にする。
+    """
+    return any(e.player_id == player_id for e in game.batting) or any(e.player_id == player_id for e in game.pitching)
+
+
 def team_batting(players: list[Player]) -> BattingLine:
     """チームの打撃成績。所属選手の成績を合算する。
 
@@ -186,6 +195,24 @@ def matchups(teams: list[Team], games: list[Game]) -> list[MatchupRow]:
 
 
 @dataclass(frozen=True)
+class YearlySplit:
+    """ある選手の、ひとシーズンぶんの成績。
+
+    束ね方は MonthlySplit と同じで、単位が年になるだけ。年度別成績（年ごとの
+    働き）とキャリア通算（選手の積み上げ全体）を分けて見るために使う。
+    """
+
+    year: int
+    appearances: int
+    batting: BattingLine
+    pitching: PitchingLine
+
+    @property
+    def label(self) -> str:
+        return f"{self.year}年"
+
+
+@dataclass(frozen=True)
 class MonthlySplit:
     """ある選手の、ひと月ぶんの成績。"""
 
@@ -262,10 +289,7 @@ def monthly_splits(games: list[Game], player_id: int) -> list[MonthlySplit]:
     """
     buckets: dict[tuple[int, int], list[Game]] = {}
     for game in games:
-        played = any(e.player_id == player_id for e in game.batting) or any(
-            e.player_id == player_id for e in game.pitching
-        )
-        if not played:
+        if not appeared_in(game, player_id):
             continue
         key = (game.played_on.year, game.played_on.month)
         buckets.setdefault(key, []).append(game)
@@ -279,4 +303,28 @@ def monthly_splits(games: list[Game], player_id: int) -> list[MonthlySplit]:
             pitching=player_pitching_total(month_games, player_id),
         )
         for (year, month), month_games in sorted(buckets.items())
+    ]
+
+
+def yearly_splits(games: list[Game], player_id: int) -> list[YearlySplit]:
+    """選手の成績を年ごとにまとめる。古い順。
+
+    月別（monthly_splits）と同じ規則で、束ねる単位が年になるだけ。出場した年
+    だけを返す（記録の無い年は行を作らない）。デビューからの推移を追う並びなので
+    古い順に返す。
+    """
+    buckets: dict[int, list[Game]] = {}
+    for game in games:
+        if not appeared_in(game, player_id):
+            continue
+        buckets.setdefault(game.played_on.year, []).append(game)
+
+    return [
+        YearlySplit(
+            year=year,
+            appearances=len(year_games),
+            batting=player_batting_total(year_games, player_id),
+            pitching=player_pitching_total(year_games, player_id),
+        )
+        for year, year_games in sorted(buckets.items())
     ]

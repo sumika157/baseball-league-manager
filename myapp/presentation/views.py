@@ -494,9 +494,13 @@ def game_detail(request, game_id):
 
 
 def player_detail(request, team_id, player_id):
-    """選手の個人ページ。通算成績と試合ごとの記録。"""
+    """選手の個人ページ。通算・年度別・月別の成績と、選んだ月の試合ごとの記録。
+
+    月の指定（`?month=2026-04`）が不正なら application 側が最新の月に落とす。
+    ここでは弾かず、そのまま渡す（並べ替えのキーと同じ扱い）。
+    """
     try:
-        profile = build_service().get_player_profile(team_id, player_id)
+        profile = build_service().get_player_profile(team_id, player_id, month=request.GET.get("month"))
     except (TeamNotFound, PlayerNotFound):
         raise Http404("選手が見つかりません。") from None
 

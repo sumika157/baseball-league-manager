@@ -144,6 +144,144 @@ class MonthlySplitViewTest(BaseCase):
         self.assertNotContains(response, "月別成績")
 
 
+class YearlySplitViewTest(BaseCase):
+    """年度別成績。上の帯は率と補正指標だけなので、実数はこの表が出し場所。"""
+
+    def setUp(self):
+        super().setUp()
+        self.player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        self.url = reverse("player_detail", args=[self.team.id, self.player.id])
+
+    def _play(self, *, year=2026, month=4, day=1, **line):
+        play_game(
+            self.team,
+            self.rival,
+            year=year,
+            month=month,
+            day=day,
+            batting={self.player.id: BattingLine(**line)},
+        )
+
+    def _years(self, player_id=None):
+        return self.service.get_player_profile(self.team.id, player_id or self.player.id).years
+
+    def test_grouped_by_year_oldest_first(self):
+        self._play(year=2026, at_bats=4, singles=3)
+        self._play(year=2025, at_bats=4, singles=1)
+
+        self.assertEqual([y.label for y in self._years()], ["2025年", "2026年"])
+
+    def test_months_of_the_same_year_are_merged(self):
+        self._play(month=4, at_bats=4, singles=1)
+        self._play(month=5, at_bats=4, singles=3)
+
+        years = self._years()
+
+        self.assertEqual(len(years), 1)
+        self.assertEqual(years[0].appearances, 2)
+        self.assertAlmostEqual(years[0].batting_average, 0.5)  # 4/8
+
+    def test_shows_the_counts_that_the_summary_strip_omits(self):
+        """打席・安打・二塁打などの実数は個人ページのどこにも出ていなかった。"""
+        self._play(at_bats=4, singles=1, doubles=1, runs_batted_in=2, walks=1)
+
+        year = self._years()[0]
+
+        self.assertEqual((year.at_bats, year.hits, year.doubles), (4, 2, 1))
+        self.assertEqual((year.runs_batted_in, year.walks), (2, 1))
+        self.assertEqual(year.plate_appearances, 5)  # 打数4 ＋ 四球1
+
+    def test_page_shows_the_table(self):
+        self._play(at_bats=4, singles=1)
+
+        response = self.client.get(self.url)
+
+        self.assertContains(response, "年度別成績")
+        self.assertContains(response, "2026年")
+
+    def test_career_total_row_is_omitted_for_a_single_year(self):
+        """年度も在籍も1つなら、通算行は年度行と同じ値になるので出さない。"""
+        self._play(at_bats=4, singles=1)
+
+        self.assertNotContains(self.client.get(self.url), "通算")
+
+    def test_career_total_row_appears_across_years(self):
+        self._play(year=2025, at_bats=4, singles=1)
+        self._play(year=2026, at_bats=4, singles=3)
+
+        self.assertContains(self.client.get(self.url), "通算")
+
+    def test_career_total_row_holds_the_career_totals(self):
+        """通算行は年度行と同じ列を使う。項目名がずれると空欄になって気づけない。"""
+        self._play(year=2025, at_bats=4, singles=1)
+        self._play(year=2026, at_bats=4, singles=3)
+
+        detail = self.service.get_player_profile(self.team.id, self.player.id).detail
+
+        self.assertEqual((detail.at_bats, detail.hits, detail.plate_appearances), (8, 4, 8))
+        self.assertContains(self.client.get(self.url), "0.500")  # 通算打率 4/8
+
+    def test_player_without_games_has_no_years(self):
+        self.assertEqual(self._years(), [])
+        self.assertNotContains(self.client.get(self.url), "年度別成績")
+
+
+class PlayerGameMonthTabTest(BaseCase):
+    """試合ごとの成績は月で切り替える。1シーズン140試合を1つの表に並べない。"""
+
+    def setUp(self):
+        super().setUp()
+        self.player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        self._play(month=4, day=1)
+        self._play(month=4, day=2)
+        self._play(month=5, day=1)
+        self.url = reverse("player_detail", args=[self.team.id, self.player.id])
+
+    def _play(self, *, month, day):
+        play_game(
+            self.team,
+            self.rival,
+            month=month,
+            day=day,
+            batting={self.player.id: BattingLine(at_bats=4, singles=1)},
+        )
+
+    def _profile(self, month=None):
+        return self.service.get_player_profile(self.team.id, self.player.id, month=month)
+
+    def test_latest_month_is_selected_by_default(self):
+        profile = self._profile()
+
+        self.assertEqual(profile.selected_month, "2026-05")
+        self.assertEqual([r.played_on.month for r in profile.games], [5])
+
+    def test_selected_month_shows_only_that_month_newest_first(self):
+        profile = self._profile("2026-04")
+
+        self.assertEqual([r.played_on.day for r in profile.games], [2, 1])
+
+    def test_unknown_month_falls_back_to_the_latest(self):
+        """不正な指定はエラーにせず既定に落とす（並べ替えのキーと同じ扱い）。"""
+        self.assertEqual(self._profile("2026-99").selected_month, "2026-05")
+        self.assertEqual(self._profile("なにか").selected_month, "2026-05")
+
+    def test_appearances_counts_every_month(self):
+        """出場試合数は選んだ月ではなく全期間の数。"""
+        self.assertEqual(self._profile("2026-04").appearances, 3)
+
+    def test_page_has_a_tab_per_month(self):
+        body = self.client.get(self.url).content.decode()
+
+        self.assertIn("?month=2026-04", body)
+        self.assertIn("?month=2026-05", body)
+
+    def test_page_shows_only_the_selected_month(self):
+        response = self.client.get(self.url, {"month": "2026-04"})
+
+        self.assertContains(response, "2026/04/02")
+        self.assertNotContains(response, "2026/05/01")
+
+
 class TeamMonthlySplitViewTest(BaseCase):
     """チームの月別成績（フェーズ4）。個人の月別成績と対になる推移。"""
 

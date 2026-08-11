@@ -327,6 +327,38 @@ class PlayerProfileTest(BaseCase):
         self.assertEqual(row.name_kana, "ヤマダタロウ")
         self.assertEqual(row.back_name, "T.YAMADA")
 
+    def test_nationality_reaches_the_player_page(self):
+        """国籍と外国人枠は選手一覧にしか出ていなかった（本人のページに無かった）。"""
+        player = self.service.register_player(self.team.id, "デイミアン・ベル", 42, "外野手")
+        orm_models.Player.objects.filter(id=player.id).update(nationality="アメリカ合衆国", is_foreign_player=True)
+
+        response = self.client.get(reverse("player_detail", args=[self.team.id, player.id]))
+
+        self.assertContains(response, "国籍")
+        self.assertContains(response, "アメリカ合衆国")
+        self.assertContains(response, "外国人")
+
+    def test_domestic_player_has_no_nationality_row_or_badge(self):
+        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+
+        response = self.client.get(reverse("player_detail", args=[self.team.id, player.id]))
+
+        self.assertNotContains(response, "国籍")
+        self.assertNotContains(response, "外国人")
+
+    def test_captain_badge_appears_on_the_player_page(self):
+        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        self.service.appoint_captain(self.team.id, player.id)
+
+        response = self.client.get(reverse("player_detail", args=[self.team.id, player.id]))
+
+        self.assertContains(response, "主将")
+
+    def test_player_without_captaincy_has_no_badge(self):
+        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+
+        self.assertNotContains(self.client.get(reverse("player_detail", args=[self.team.id, player.id])), "主将")
+
     def test_amateur_career_appears_on_the_player_page(self):
         player = self.service.register_player(self.team.id, "山田", 10, "内野手")
         orm_models.Player.objects.filter(id=player.id).update(high_school="甲子園高校")
