@@ -42,12 +42,13 @@ frontend-check: ## TypeScript の型チェック（tsc --noEmit）
 # ---- 品質チェック ----
 
 .PHONY: lint
-lint: ## ruff check + mypy（コミット前に必須）
+lint: ## ruff check + ruff format --check + mypy（コミット前に必須）
 	$(EXEC) ruff check .
+	$(EXEC) ruff format --check .
 	$(EXEC) mypy .
 
 .PHONY: format
-format: ## ruff format で整形する
+format: ## ruff format で整形する（lint が整形漏れを指摘したらこれを実行する）
 	$(EXEC) ruff format .
 
 # ---- Docker 運用 ----

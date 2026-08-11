@@ -28,7 +28,7 @@ model: sonnet
 ## 3. テストと検証
 
 - 実装と同時にテストを書く: 業務ルールは `tests/domain/`（Django 非依存）、画面・永続化・フォームは `tests/integration/`。実行方法は `run-tests` スキル参照。
-- 最後にフルスイート（`make test`）と `make lint`（ruff check + mypy）を通す。
+- 最後にフルスイート（`make test`）と `make lint`（コミット前の必須ゲート。中身は Makefile が出典）を通す。
 
 ## 4. 仕上げ
 

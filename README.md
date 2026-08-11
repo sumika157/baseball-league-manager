@@ -176,7 +176,8 @@ WSL のターミナルからリポジトリのルートで実行します（Wind
 make            # ターゲット一覧を表示（make help と同じ）
 make test       # フルスイート（t=myapp.tests.xxx で個別指定）
 make test-domain # domain 層のみ（DB 不要・最速）
-make lint       # ruff check + mypy（コミット前に必須）
+make lint       # ruff check + ruff format --check + mypy（コミット前に必須）
+make format     # ruff format で整形（lint が整形漏れを指摘したとき）
 make frontend-build # React 画面のビルド（E2E テストの前提）
 make frontend-check # TypeScript の型チェック
 make up / make down / make logs

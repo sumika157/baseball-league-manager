@@ -51,7 +51,7 @@ ORM に直接 `bulk_create` 等で書き込むコード（データ投入コマ�
 - **ディレクトリの中は対象ごとのファイルに分ける。** 既存の大きいファイルに足し続けない（`test_integration.py` が 3,975行・47クラスまで膨らんで分割した前例がある）。目安として1ファイル600行を超えたら分ける。結合テストの共通の土台は `tests/integration/base.py` の `BaseCase`。
 - **実ブラウザでの確認だけを E2E**（`tests/e2e/`、Playwright + `StaticLiveServerTestCase`）に置く。対象は主要導線のスモークと、JS・CSS が絡んで integration テストでは検証できないもの。業務ルールや画面のロジックは domain / integration 側で検証し、E2E に寄せない（遅く壊れやすいため）。
 - **バグを修正したら、同じコミットに再発防止テストを添える**（前例: テンプレートのコメント漏れを検査する `tests/integration/test_templates.py`）。どの層のバグかに応じて上記の置き場所に従う。
-- コミット前に `ruff check .`・`ruff format .`・`mypy .`（いずれもコンテナ内）を通す。設定は `pyproject.toml` が唯一の出典。**`# noqa` で黙らせる前に指摘のとおり直す**（それでも黙らせるなら理由をコメントに残す）。
+- コミット前に `ruff check .`・`ruff format --check .`・`mypy .` を通す（いずれもコンテナ内。整形漏れは `ruff format .` で直す。WSL からは `make lint` が同じ3つを実行する）。ルールの設定は `pyproject.toml` が唯一の出典。**`# noqa` で黙らせる前に指摘のとおり直す**（それでも黙らせるなら理由をコメントに残す）。
 
 ## マイグレーションとデータ
 
