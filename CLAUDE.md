@@ -78,11 +78,40 @@ ORM に直接 `bulk_create` 等で書き込むコード（データ投入コマ�
 - docstring・コード内コメントも日本語で書く。
 - コードの識別子（クラス名・関数名・変数名・URL 名）は英語。
 
-## コミット
+## ブランチとコミット
 
+- **タスクごとにブランチを切る。main に直接コミットしない。** 命名は `feature/` `fix/` `refactor/` `docs/` ＋ 英語の kebab-case（例: `feature/player-nationality`）。
 - **機能ごとにコミットする。** 複数の機能や無関係な修正を1つのコミットに混ぜない。逆に、1つの機能（実装＋テスト＋README更新）は1コミットにまとめる。
 - コミットメッセージは既存の履歴にならい日本語で書く。
-- ブランチは切らず **main に直接コミット**する（単独開発のため）。
+- 完了したら `git push -u origin <ブランチ>` し、**PR 作成 URL（`https://github.com/sumika157/baseball-league-manager/compare/main...<ブランチ>?expand=1`）を提示して終わる**。`gh` は Windows にも WSL にも入っていないので、PR 作成とマージはユーザーが GitHub 上で行う。こちらでマージしない。
+- **ブランチを切る前に `git log --oneline origin/main..main` を見る。** ローカル main が先行していたらユーザーに push を促す（worktree は origin/main を基点にするため、先行分が抜けたブランチができる）。
+
+### 並行して作業するときは worktree を使う
+
+`.git/index` は単一ファイルで、git はコマンド単位でしかロックしない。同じ作業ツリーで別セッションが `git add` すると、
+**自分のステージ内容ではなく相手の変更が自分のコミットメッセージで確定する**（実際に起きた）。ブランチを分けるだけでは
+防げないので、作業ツリーごと分ける。
+
+- 次のいずれかに当てはまるなら worktree にする: ユーザーが並行作業だと言った / `git worktree list` に他の worktree がある / 未コミットの変更が自分のタスクと無関係。
+- 作成は `EnterWorktree`（`.claude/worktrees/<名前>` に作られる。gitignore 済み）。
+- **`make` と `docker compose` は必ず main の作業ツリーから実行し、対象の worktree を明示する。**
+  `make test WT=<名前>` / `docker compose exec -w /app/.claude/worktrees/<名前> web ...`（`make where WT=<名前>` で対象を確認できる）。
+  バインドマウントが `.:/app` なので worktree も同じコンテナから見えるが、**`-w` を省くと main のコードを検査・テストして
+  「通ったのに直っていない」形になる**（エラーにならないので気づけない）。worktree の中から `WT` 無しで `make` を呼ぶと止まる。
+- **worktree の中で `docker compose` を叩かない。** worktree 側の `docker-compose.yml` と、gitignore で存在しない `.env` を読み、
+  別プロジェクト＝別コンテナを作りにいって失敗する。
+- gitignore されたものは worktree に無い。**e2e と TypeScript の型検査の前に `make frontend-build WT=<名前>`**（`dist`・`node_modules` が無い）。
+  `db.sqlite3` はテストが作るので integration までは不要。
+- worktree の `.git` には Windows 側のパスが書かれるため、**WSL のターミナルからは worktree 内で git が動かない**。git 操作は
+  Claude Code（Windows 側）から行い、ユーザーの WSL ターミナルは main の作業ツリーに置いたままにする。
+- `runserver`（localhost:8000）が配信するのは main の作業ツリーのコード。**worktree の変更はブラウザで見られない**ので、
+  確認は自動テスト（必要なら e2e）で行う。
+- **後始末は `ExitWorktree`（remove）か `git worktree remove .claude/worktrees/<名前>`。** 「Directory not empty」で失敗したら
+  コンテナ（root）が作った生成物が残っている。WSL の `sudo` はパスワードを要求するので、**コンテナ経由で消す**:
+  `docker compose exec web rm -rf /app/.claude/worktrees/<名前>/.mypy_cache`（`.ruff_cache`・`__pycache__` も同様）。
+  `make` 経由ならこれらは `/tmp` に逃がしてあるので起きない。直接 `docker compose exec` を叩くときは Makefile の
+  `CACHE_ENV` と同じ `-e` を付ける。なお **`git worktree remove --force` は中途半端に成功することがある**
+  （追跡ファイルだけ消えて登録が残り、以後 `No module named 'config'` のような形で現れる）。失敗したら残骸を確認する。
 
 ## ドキュメント
 

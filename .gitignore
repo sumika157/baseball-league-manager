@@ -35,3 +35,6 @@ Thumbs.db
 # フロントエンド（依存とビルド成果物はコミットしない。package-lock.json はコミットする）
 frontend/node_modules/
 myapp/static/myapp/dist/
+
+# git worktree（タスクごとの並行作業。CLAUDE.md「ブランチと worktree」参照）
+.claude/worktrees/

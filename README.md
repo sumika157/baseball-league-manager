@@ -181,7 +181,15 @@ make format     # ruff format で整形（lint が整形漏れを指摘したと
 make frontend-build # React 画面のビルド（E2E テストの前提）
 make frontend-check # TypeScript の型チェック
 make up / make down / make logs
+make where      # どの作業ツリーを対象にしているか表示
 ```
+
+並行作業のために git worktree（`.claude/worktrees/<名前>`）を使っているときは、
+**main の作業ツリーから `WT=<名前>` を付けて実行します**（例: `make test WT=player-nationality`）。
+バインドマウントは main の作業ツリー全体なので、worktree のコードも同じコンテナから
+`/app/.claude/worktrees/<名前>` として扱えます。`WT` を付け忘れると main のコードを
+テストしてしまい、エラーにならないぶん気づけません。worktree の中から `WT` 無しで
+`make` を呼んだ場合は止まるようにしてあります（詳細は CLAUDE.md「ブランチとコミット」）。
 
 ### 仮想データの投入（開発用）
 
