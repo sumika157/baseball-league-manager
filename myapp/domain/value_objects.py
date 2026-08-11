@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_DOWN, Decimal
 from enum import Enum
+from functools import lru_cache
 from typing import Any
 
 from .exceptions import (
@@ -143,6 +144,31 @@ class JerseyNumber:
         return str(self.value)
 
 
+_OUTS_PER_INNING = 3
+
+
+@lru_cache(maxsize=1024)
+def _outs_of(value: str | float | Decimal) -> int:
+    """野球表記をアウト数に直す（`InningsPitched.from_notation` の中身）。
+
+    Decimal を使うのは、5.2 を二進小数で扱うと 5.199999… になって小数第1位が
+    1 に落ちてしまうため。ただし Decimal の生成と量子化は重く、通算成績の集計で
+    数万回呼ばれる。現れる表記は数十通りしかないので結果を覚えておく。
+    """
+    try:
+        notation = Decimal(str(value)).quantize(Decimal("0.1"), rounding=ROUND_DOWN)
+    except Exception:
+        raise InvalidInningsPitched(f"投球回として解釈できない値です: {value!r}") from None
+
+    if notation < 0:
+        raise InvalidInningsPitched("投球回に負の値は指定できません。")
+
+    whole = int(notation)
+    fraction = int((notation - whole) * 10)
+    # fraction が 3 以上でも outs の計算上そのまま繰り上がる（5.3 → 18アウト → 6.0）
+    return whole * _OUTS_PER_INNING + fraction
+
+
 @dataclass(frozen=True)
 class InningsPitched:
     """投球回。
@@ -160,7 +186,8 @@ class InningsPitched:
 
     outs: int
 
-    OUTS_PER_INNING = 3
+    # 出典は1つ。上の _outs_of と同じ値を使う
+    OUTS_PER_INNING = _OUTS_PER_INNING
 
     def __post_init__(self) -> None:
         if not isinstance(self.outs, int):
@@ -178,22 +205,14 @@ class InningsPitched:
 
         小数第1位はアウト数（0〜2）を表す。3 以上が来た場合は
         繰り上げて正規化する（5.3 → 6.0）。
+
+        通算成績の集計で数万回呼ばれるが、現れる表記は「0.0〜十数.2」の
+        数十通りしかない。不変な値オブジェクトなので、同じ表記には同じ
+        インスタンスを返して変換をやり直さない（`_outs_of` が覚えている）。
         """
         if value is None or value == "":
             return cls.zero()
-
-        try:
-            notation = Decimal(str(value)).quantize(Decimal("0.1"), rounding=ROUND_DOWN)
-        except Exception:
-            raise InvalidInningsPitched(f"投球回として解釈できない値です: {value!r}") from None
-
-        if notation < 0:
-            raise InvalidInningsPitched("投球回に負の値は指定できません。")
-
-        whole = int(notation)
-        fraction = int((notation - whole) * 10)
-        # fraction が 3 以上でも outs の計算上そのまま繰り上がる（5.3 → 18アウト → 6.0）
-        return cls(outs=whole * cls.OUTS_PER_INNING + fraction)
+        return cls(outs=_outs_of(value))
 
     def to_notation(self) -> Decimal:
         """野球表記（5.2 など）に戻す。"""
