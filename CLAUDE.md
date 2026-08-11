@@ -86,6 +86,9 @@ ORM に直接 `bulk_create` 等で書き込むコード（データ投入コマ�
 - 完了したら `git push -u origin <ブランチ>` し、**`gh pr create` で PR を作って URL を提示して終わる**。タイトルと本文は日本語。本文はファイルに書いて `--body-file` で渡す（引用符と改行で壊れない）。**マージはユーザーが GitHub 上で行う。こちらでマージしない。**
 - `gh` は **Windows 側だけ**にある（winget の user スコープ。`sumika157` で認証済み）。**WSL には無い**ので `wsl -e` 経由では呼べない。既に開いているシェルの PATH には載っていないことがあるので、その場合は
   `C:\Users\sumik\AppData\Local\Microsoft\WinGet\Packages\GitHub.cli_Microsoft.Winget.Source_8wekyb3d8bbwe\bin\gh.exe` を直接叩く。
+- **`gh pr create` の前に `gh pr list --head <ブランチ> --state all` を見る。** push だけして URL を渡した時点で、
+  **ユーザーがそれをクリックして先に PR を作っていることがある**。同じブランチで2本目を作るとスカッシュマージが
+  差分ゼロになり、**main に空コミットが残る**（#1 と #2 で実際に起きた。エラーにならないので気づけない）。
 - **ブランチを切る前に `git log --oneline origin/main..main` を見る。** ローカル main が先行していたらユーザーに push を促す（worktree は origin/main を基点にするため、先行分が抜けたブランチができる）。
 
 ### 並行して作業するときは worktree を使う
