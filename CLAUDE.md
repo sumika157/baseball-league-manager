@@ -20,7 +20,10 @@
 - **`myapp/domain/` は Django を一切 import しない。** domain 層のテストは Django 設定なしで通ること。
 - application は domain のインターフェース（`domain/repositories.py`）越しに永続化を使う。`infrastructure/orm_models.py` を直接 import しない。
 - presentation（views）は application 経由で操作する。ORM モデルやリポジトリ実装を直接触らない。
-- **更新と参照を分ける**: 更新はリポジトリ経由で集約単位（`Team` / `Game`）に読み書きする。一覧表示などの参照は `infrastructure/queries.py` から直接 DTO を作る（集約を組み立てない）。
+- **更新と参照を分ける**: 更新はリポジトリ経由で集約単位（`Team` / `Game`）に読み書きする。一覧表示などの参照は `infrastructure/queries.py` から直接 DTO を作る（集約を組み立てない）。参照クエリのインターフェースは `application/queries.py`（戻り値が DTO のため domain には置けない）。
+- **依存の組み立ては `presentation/views.py` の `build_service()` だけ。** 呼ぶ側ごとに一部の依存だけを渡さない。渡し忘れが「開く画面によって落ちるサービス」になる（管理画面のテンプレートタグで実際に起きた）。テストも `tests/helpers.py` 経由でここを呼ぶ。
+- **層をまたぐ受け渡しに素の `dict` を使わない。** application が presentation に返す形は `application/dto.py` の dataclass にする。文字列キーの dict は綴りを間違えても静的検査が黙る。`get_game_edit_data` と `_player_index` は dict のまま残っているが、**新しく増やさない**。触ったついでに DTO へ寄せる。
+- **`TeamApplicationService` は既に約50メソッド・1,500行**あり、チーム・選手・試合・リーグ・管理画面の概況を1クラスで抱えている。ここへ足す前に、対象ごとの別サービスに置けないか考える。分ける判断は選択肢としてユーザーに提示する。
 
 ## 同じ事実の出典を2つ作らない
 
@@ -28,18 +31,27 @@
 - **年齢は保持しない。** 生年月日から算出する。
 - 投球回の変換（`5.2` = 5回2/3 = 17アウト）は `InningsPitched` 値オブジェクトが唯一の出典。他の場所に再実装しない。率（打率・防御率など）は試合ごとの率を平均せず、合算した実数から計算し直す。
 - 選択肢の一覧（球場の屋根種別など）はドメインの値オブジェクトが唯一の出典。画面やモデルに複製しない。
+- **成績のカウント項目は値オブジェクト（`BattingLine` / `PitchingLine`）のフィールドが出典。** 永続化（`_BATTING_FIELDS`）・入力フォーム（`STAT_FIELDS`）・React（`frontend/src/game_edit/types.ts`）の列挙はそれに従う。TypeScript から Python を読めないためこの重複だけは消せないので、`tests/integration/test_stat_fields.py` が突き合わせる。**項目を増やすときはこの4か所を同じコミットで直す**（ずれても例外にならず、その項目だけ保存されない・入力欄が出ないという静かな不具合になる）。
 
 ## 不変条件は集約が守る
 
 背番号の一意性（期間が重なる同番号の禁止）、在籍期間の重複禁止などは `Team` 集約が自身で検査する。
 ORM に直接 `bulk_create` 等で書き込むコード（データ投入コマンドなど）は、集約の検査を素通りするため自分で同じ検査を行うこと。
 
+## 型と静的検査
+
+- **`domain` / `application` / `infrastructure` の関数は引数・戻り値に型注釈を付ける**（`disallow_untyped_defs` が効いている）。注釈の無い関数は **mypy の検査対象から外れ、中身がどれだけ間違っていても黙って通る**。`services.py` の `__init__` に注釈を付けただけで、同ファイルから29件の指摘が出た前例がある。`presentation` は `request` など注釈しにくい引数が多いため対象外。
+- 注釈が付けにくいときに `Any` や `# type: ignore` で通すのは、**その関数が本当に型を選ばない場合だけ**（例: 何が来ても int に直す `_require_non_negative`）。理由をコメントに書く。`# type: ignore` は `[misc]` のようにコードまで書く。
+- **同じスコープで、型の違う値に同じ変数名を使わない。** mypy は最初の代入で型を固定するため、2つ目以降が検査されない・誤った指摘になる。前例: ボックススコアで打撃と投球のループ変数をどちらも `entry` / `line` にしていた（`outing` / `pitched` に改名して解消）。
+- 保存済みの集約から取り出す id（型は `int | None`）は `application/services.py` の `_saved_id()` を通す。内包表記の中でも同じ書き方で済む。
+
 ## テスト
 
 - **テストは層ごとのディレクトリに置く**: 業務ルールは `tests/domain/`（DB 不要・Django 非依存で、Django 設定を読み込まずに通ること）、画面の動作・リポジトリの往復・フォーム検証・テンプレート検査は `tests/integration/`。
+- **ディレクトリの中は対象ごとのファイルに分ける。** 既存の大きいファイルに足し続けない（`test_integration.py` が 3,975行・47クラスまで膨らんで分割した前例がある）。目安として1ファイル600行を超えたら分ける。結合テストの共通の土台は `tests/integration/base.py` の `BaseCase`。
 - **実ブラウザでの確認だけを E2E**（`tests/e2e/`、Playwright + `StaticLiveServerTestCase`）に置く。対象は主要導線のスモークと、JS・CSS が絡んで integration テストでは検証できないもの。業務ルールや画面のロジックは domain / integration 側で検証し、E2E に寄せない（遅く壊れやすいため）。
 - **バグを修正したら、同じコミットに再発防止テストを添える**（前例: テンプレートのコメント漏れを検査する `tests/integration/test_templates.py`）。どの層のバグかに応じて上記の置き場所に従う。
-- コミット前に `ruff check .` と `mypy .`（いずれもコンテナ内）を通す。設定は `pyproject.toml` が唯一の出典。
+- コミット前に `ruff check .`・`ruff format .`・`mypy .`（いずれもコンテナ内）を通す。設定は `pyproject.toml` が唯一の出典。**`# noqa` で黙らせる前に指摘のとおり直す**（それでも黙らせるなら理由をコメントに残す）。
 
 ## マイグレーションとデータ
 
