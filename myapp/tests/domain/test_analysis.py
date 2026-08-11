@@ -303,6 +303,137 @@ class MonthlySplitTest(TestCase):
         self.assertAlmostEqual(april.pitching.earned_run_average, 3.0)
 
 
+class YearlySplitTest(TestCase):
+    """選手の年度別成績。月別と同じ束ね方で、単位が年になる。"""
+
+    PLAYER = 10
+
+    def test_grouped_by_year_in_chronological_order(self):
+        games = [
+            _game(
+                TIGERS,
+                DRAGONS,
+                1,
+                0,
+                season=2026,
+                month=4,
+                batting={self.PLAYER: BattingLine(at_bats=4, singles=2)},
+            ),
+            _game(
+                TIGERS,
+                DRAGONS,
+                1,
+                0,
+                season=2025,
+                month=9,
+                batting={self.PLAYER: BattingLine(at_bats=3, singles=1)},
+            ),
+        ]
+
+        splits = services.yearly_splits(games, self.PLAYER)
+
+        self.assertEqual([s.label for s in splits], ["2025年", "2026年"])
+
+    def test_months_of_the_same_year_are_merged(self):
+        """月別と違い、同じ年の別の月は1行にまとまる。"""
+        games = [
+            _game(
+                TIGERS,
+                DRAGONS,
+                1,
+                0,
+                month=4,
+                day=1,
+                batting={self.PLAYER: BattingLine(at_bats=3, singles=1)},
+            ),
+            _game(
+                TIGERS,
+                DRAGONS,
+                1,
+                0,
+                month=5,
+                day=1,
+                batting={self.PLAYER: BattingLine(at_bats=1, home_runs=1)},
+            ),
+        ]
+
+        splits = services.yearly_splits(games, self.PLAYER)
+
+        self.assertEqual(len(splits), 1)
+        self.assertEqual(splits[0].appearances, 2)
+        self.assertEqual(splits[0].batting.at_bats, 4)
+
+    def test_rate_is_recalculated_from_the_yearly_total(self):
+        """年の率は、その年の合計から計算し直す（月々の率の平均ではない）。"""
+        games = [
+            _game(
+                TIGERS,
+                DRAGONS,
+                1,
+                0,
+                month=4,
+                batting={self.PLAYER: BattingLine(at_bats=1, singles=1)},
+            ),
+            _game(
+                TIGERS,
+                DRAGONS,
+                1,
+                0,
+                month=5,
+                batting={self.PLAYER: BattingLine(at_bats=3)},
+            ),
+        ]
+
+        year = services.yearly_splits(games, self.PLAYER)[0]
+
+        # 月ごとの打率（1.000 と .000）の平均なら .500 になるが、合計なら 1/4 = .250
+        self.assertAlmostEqual(year.batting.batting_average, 0.25)
+
+    def test_years_without_appearance_are_omitted(self):
+        """出場していない年は行を作らない（月別と同じ規則）。"""
+        games = [
+            _game(
+                TIGERS,
+                DRAGONS,
+                1,
+                0,
+                season=2025,
+                month=4,
+                batting={self.PLAYER: BattingLine(at_bats=4, singles=1)},
+            ),
+            _game(TIGERS, DRAGONS, 1, 0, season=2026, month=4),
+        ]
+
+        splits = services.yearly_splits(games, self.PLAYER)
+
+        self.assertEqual([s.label for s in splits], ["2025年"])
+
+    def test_pitching_innings_are_summed_as_outs(self):
+        games = [
+            _game(
+                TIGERS,
+                DRAGONS,
+                1,
+                0,
+                month=4,
+                pitching={self.PLAYER: PitchingLine(innings=InningsPitched.from_notation("5.2"), earned_runs=1)},
+            ),
+            _game(
+                TIGERS,
+                DRAGONS,
+                1,
+                0,
+                month=8,
+                pitching={self.PLAYER: PitchingLine(innings=InningsPitched.from_notation("3.1"), earned_runs=2)},
+            ),
+        ]
+
+        year = services.yearly_splits(games, self.PLAYER)[0]
+
+        self.assertEqual(str(year.pitching.innings), "9.0")
+        self.assertAlmostEqual(year.pitching.earned_run_average, 3.0)
+
+
 class TeamMonthlySplitTest(TestCase):
     """チームの月別成績。選手の月別成績と対になる、チーム単位の推移。"""
 

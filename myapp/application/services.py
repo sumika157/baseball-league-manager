@@ -63,6 +63,7 @@ from .dto import (
     TeamMonthlyRow,
     TeamTotals,
     TitleDepartment,
+    YearlyRow,
 )
 from .queries import GameListQuery, TeamListQuery
 
@@ -904,21 +905,30 @@ class TeamApplicationService:
             home_hits=hits_of(game.home_team_id),
         )
 
-    def get_player_profile(self, team_id: int, player_id: int) -> PlayerProfile:
-        """選手個人ページ。通算成績と、試合ごとの成績。"""
+    def get_player_profile(self, team_id: int, player_id: int, *, month: str | None = None) -> PlayerProfile:
+        """選手個人ページ。キャリア通算・年度別・月別と、選んだ月の試合ごとの成績。
+
+        試合ごとの成績は**月で絞って**返す。1シーズンで140試合を超えるため、
+        全期間を1つの表に並べると読む場所ではなくなる。month の指定が無い・
+        出場していない月を指定された場合は最新の月に落とす（並べ替えのキーと
+        同じ扱いで、エラーにはしない）。
+        """
         detail = self.get_player_detail(team_id, player_id)
         names = self._team_names()
         team_games = self._games.find_by_team(team_id)
 
-        rows = []
-        for game in team_games:
+        # 月ごとに束ねてから選んだ月だけを取り出す。行の側で日付を見て絞ると、
+        # 表示用の DTO（played_on の型を問わない）に日付の解釈を持ち込むことになる
+        by_month: dict[str, list[PlayerGameRow]] = {}
+        # 新しい試合から順に詰める（表示も新しい順。並べ替えを DTO 側でやり直さない）
+        for game in sorted(team_games, key=lambda g: (g.played_on, _saved_id(g.id)), reverse=True):
             batting = next((e for e in game.batting if e.player_id == player_id), None)
             pitching = next((e for e in game.pitching if e.player_id == player_id), None)
             if batting is None and pitching is None:
                 continue
 
             opponent_id = game.away_team_id if game.home_team_id == team_id else game.home_team_id
-            rows.append(
+            by_month.setdefault(f"{game.played_on.year}-{game.played_on.month:02d}", []).append(
                 PlayerGameRow(
                     game_id=_saved_id(game.id),
                     played_on=game.played_on,
@@ -934,7 +944,9 @@ class TeamApplicationService:
                 )
             )
 
-        rows.sort(key=lambda r: (r.played_on, r.game_id), reverse=True)
+        months = [self._to_monthly_row(split) for split in domain_services.monthly_splits(team_games, player_id)]
+        selected = next((row for row in months if row.key == month), months[-1] if months else None)
+        rows = by_month.get(selected.key, []) if selected else []
 
         player = self._teams.find_by_id(team_id).find_player(player_id)
         profile = player.profile
@@ -942,7 +954,11 @@ class TeamApplicationService:
         return PlayerProfile(
             detail=detail,
             games=rows,
-            months=[self._to_monthly_row(split) for split in domain_services.monthly_splits(team_games, player_id)],
+            appearances=sum(len(month_rows) for month_rows in by_month.values()),
+            selected_month=selected.key if selected else "",
+            selected_month_label=selected.label if selected else "",
+            years=[self._to_yearly_row(split) for split in domain_services.yearly_splits(team_games, player_id)],
+            months=months,
             career=[
                 CareerRow(
                     team_id=s.team_id,
@@ -961,9 +977,50 @@ class TeamApplicationService:
             height_cm=profile.height_cm,
             weight_kg=profile.weight_kg,
             birthplace=profile.birthplace,
+            nationality=profile.nationality,
+            is_foreign_player=profile.is_foreign_player,
             debut_year=profile.debut_year,
             amateur_career=profile.amateur_career,
             has_profile=not profile.is_empty,
+        )
+
+    @staticmethod
+    def _to_yearly_row(split: domain_services.YearlySplit) -> YearlyRow:
+        """年度別成績を表示用に整える。率は年ごとの合計から計算し直された値。"""
+        batting, pitching = split.batting, split.pitching
+        return YearlyRow(
+            label=split.label,
+            appearances=split.appearances,
+            plate_appearances=batting.plate_appearances,
+            at_bats=batting.at_bats,
+            hits=batting.hits,
+            doubles=batting.doubles,
+            triples=batting.triples,
+            home_runs=batting.home_runs,
+            runs_batted_in=batting.runs_batted_in,
+            walks=batting.walks,
+            hit_by_pitch=batting.hit_by_pitch,
+            sacrifice_flies=batting.sacrifice_flies,
+            batting_average=batting.batting_average,
+            on_base_percentage=batting.on_base_percentage,
+            slugging_percentage=batting.slugging_percentage,
+            ops=batting.ops,
+            starts=pitching.starts,
+            innings_pitched=str(pitching.innings),
+            wins=pitching.wins,
+            losses=pitching.losses,
+            saves=pitching.saves,
+            holds=pitching.holds,
+            hold_points=pitching.hold_points,
+            hits_allowed=pitching.hits_allowed,
+            home_runs_allowed=pitching.home_runs_allowed,
+            walks_allowed=pitching.walks_allowed,
+            hit_by_pitch_allowed=pitching.hit_by_pitch_allowed,
+            strikeouts=pitching.strikeouts,
+            earned_runs=pitching.earned_runs,
+            earned_run_average=pitching.earned_run_average,
+            whip=pitching.whip,
+            strikeouts_per_nine=pitching.strikeouts_per_nine,
         )
 
     @staticmethod
@@ -973,6 +1030,8 @@ class TeamApplicationService:
         return MonthlyRow(
             label=split.label,
             appearances=split.appearances,
+            year=split.year,
+            month=split.month,
             at_bats=batting.at_bats,
             hits=batting.hits,
             home_runs=batting.home_runs,
@@ -1506,6 +1565,8 @@ class TeamApplicationService:
             is_captain=team.current_captain is player,
             at_bats=batting.at_bats,
             singles=batting.singles,
+            plate_appearances=batting.plate_appearances,
+            hits=batting.hits,
             doubles=batting.doubles,
             triples=batting.triples,
             home_runs=batting.home_runs,

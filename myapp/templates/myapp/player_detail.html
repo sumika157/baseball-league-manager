@@ -23,6 +23,9 @@
       {% else %}
         {{ player.name }}
       {% endif %}
+      {# 選手一覧と同じ印。本人のページでも肩書きと枠が分かるようにする #}
+      {% if player.is_captain %}<span class="badge bg-warning text-dark ms-1">主将</span>{% endif %}
+      {% if profile.is_foreign_player %}<span class="badge bg-info text-dark ms-1">外国人</span>{% endif %}
     </h1>
     <p class="page-subtitle">
       {% if profile.back_name %}<span class="back-name">{{ profile.back_name }}</span> · {% endif %}{{ player.position }} · 出場 {{ profile.appearances }}試合
@@ -100,17 +103,24 @@
   {% endif %}
 </div>
 
-<p class="page-subtitle mb-3" style="font-size: 0.8125rem;">
-  {% if player.is_pitcher %}
-    FIP は本塁打・四死球・奪三振だけで投球内容を測り、リーグの得点環境に合わせて
-    防御率と同じ尺度に直した指標です。防御率との差は守備や打球の行方の影響を表します。
-    ERA+ はリーグ平均防御率を100とした指数で、100 を超えていればリーグ平均より良い投手です。
-    HP はホールドと救援勝利の合計で、勝ちを繋いだ働きを表します。
-  {% else %}
-    IsoP は長打率 − 打率。安打のうちどれだけ長打だったかを表します。
-    OPS+ はリーグ平均 OPS を100とした指数で、得点環境の違うリーグ・シーズンでも比べられます。
-  {% endif %}
-</p>
+{% comment %}
+指標の説明は畳んでおく。毎回読むものではないのに、常に出していると
+画面の一番目立つ位置（成績の直後）を解説が占めてしまう。
+{% endcomment %}
+<details class="mb-3">
+  <summary class="page-subtitle mb-0" style="font-size: 0.8125rem; cursor: pointer;">指標の説明</summary>
+  <p class="page-subtitle mt-2 mb-0" style="font-size: 0.8125rem;">
+    {% if player.is_pitcher %}
+      FIP は本塁打・四死球・奪三振だけで投球内容を測り、リーグの得点環境に合わせて
+      防御率と同じ尺度に直した指標です。防御率との差は守備や打球の行方の影響を表します。
+      ERA+ はリーグ平均防御率を100とした指数で、100 を超えていればリーグ平均より良い投手です。
+      HP はホールドと救援勝利の合計で、勝ちを繋いだ働きを表します。
+    {% else %}
+      IsoP は長打率 − 打率。安打のうちどれだけ長打だったかを表します。
+      OPS+ はリーグ平均 OPS を100とした指数で、得点環境の違うリーグ・シーズンでも比べられます。
+    {% endif %}
+  </p>
+</details>
 
 <div class="row g-3 mb-3">
   {% if profile.has_profile %}
@@ -124,6 +134,7 @@
             {% if profile.height_cm %}{% include 'myapp/_stat_readout.html' with label='身長' value=profile.height_cm %}{% endif %}
             {% if profile.weight_kg %}{% include 'myapp/_stat_readout.html' with label='体重' value=profile.weight_kg %}{% endif %}
             {% if profile.birthplace %}{% include 'myapp/_stat_readout.html' with label='出身' value=profile.birthplace %}{% endif %}
+            {% if profile.nationality %}{% include 'myapp/_stat_readout.html' with label='国籍' value=profile.nationality %}{% endif %}
             {% if profile.debut_year %}{% include 'myapp/_stat_readout.html' with label='入団' value=profile.debut_year %}{% endif %}
           </div>
 
@@ -172,6 +183,84 @@
     </div>
   </div>
 </div>
+
+{% comment %}
+年度別成績。上の帯は率と補正指標だけなので、実数（打数・安打・打点・被安打など）
+はここが唯一の出し場所になる。率は年ごとの合計から計算し直した値。
+
+最後の通算行はキャリア通算（在籍したすべてのチームの合計）。年度も在籍も1つなら
+年度行とまったく同じ値になるため出さない。
+{% endcomment %}
+{% if profile.years %}
+  <div class="card mb-3">
+    <div class="card-header">年度別成績</div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table mb-0">
+          <thead>
+            <tr>
+              <th>年度</th>
+              {% if player.is_pitcher %}
+                <th class="text-end">登板</th>
+                <th class="text-end">先発</th>
+                <th class="text-end">投球回</th>
+                <th class="text-end">勝</th>
+                <th class="text-end">敗</th>
+                <th class="text-end">S</th>
+                <th class="text-end">H</th>
+                <th class="text-end">HP</th>
+                <th class="text-end">被安打</th>
+                <th class="text-end">被本塁打</th>
+                <th class="text-end">与四球</th>
+                <th class="text-end">与死球</th>
+                <th class="text-end">奪三振</th>
+                <th class="text-end">自責点</th>
+                <th class="text-end">防御率</th>
+                <th class="text-end">WHIP</th>
+                <th class="text-end">K/9</th>
+              {% else %}
+                <th class="text-end">試合</th>
+                <th class="text-end">打席</th>
+                <th class="text-end">打数</th>
+                <th class="text-end">安打</th>
+                <th class="text-end">2B</th>
+                <th class="text-end">3B</th>
+                <th class="text-end">HR</th>
+                <th class="text-end">打点</th>
+                <th class="text-end">四球</th>
+                <th class="text-end">死球</th>
+                <th class="text-end">犠飛</th>
+                <th class="text-end">打率</th>
+                <th class="text-end">出塁率</th>
+                <th class="text-end">長打率</th>
+                <th class="text-end">OPS</th>
+              {% endif %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in profile.years %}
+              <tr>
+                <td>{{ row.label }}</td>
+                {% include 'myapp/_player_stat_cells.html' with row=row appearances=row.appearances is_pitcher=player.is_pitcher %}
+              </tr>
+            {% endfor %}
+            {% if profile.years|length > 1 or profile.career|length > 1 %}
+              <tr class="fw-semibold">
+                <td>通算</td>
+                {% include 'myapp/_player_stat_cells.html' with row=player appearances=profile.appearances is_pitcher=player.is_pitcher %}
+              </tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% if profile.career|length > 1 %}
+      <div class="card-footer stat-muted" style="font-size: 0.8125rem;">
+        年度別と{% if player.is_pitcher %}登板{% else %}試合{% endif %}数はこのチームでの成績です。通算は移籍前のチームでの成績も含みます。
+      </div>
+    {% endif %}
+  </div>
+{% endif %}
 
 {% comment %}
 月別成績。通算値だけでは調子の波が見えないため、期間で区切って並べる。
@@ -231,8 +320,24 @@
   </div>
 {% endif %}
 
+{% comment %}
+試合ごとの成績は月で切り替える。1シーズンで140試合を超えるため、全期間を
+1つの表に並べると読む場所ではなくなる。タブの作法は試合一覧と揃える。
+{% ifchanged %} で年が変わる最初の月だけ年を出す（別シーズンの同じ月と混ざらない）。
+{% endcomment %}
+{% if profile.months %}
+  <div class="segmented segmented-scroll">
+    {% for row in profile.months %}
+      <a class="segmented-item {% if row.key == profile.selected_month %}is-active{% endif %}"
+         href="?month={{ row.key }}">{% ifchanged row.year %}{{ row.year }}年{% endifchanged %}{{ row.month }}月<span class="segmented-count">{{ row.appearances }}</span></a>
+    {% endfor %}
+  </div>
+{% endif %}
+
 <div class="card">
-  <div class="card-header">試合ごとの成績</div>
+  <div class="card-header">
+    試合ごとの成績{% if profile.selected_month_label %}（{{ profile.selected_month_label }}）{% endif %}
+  </div>
   <div class="card-body p-0">
     {% if profile.games %}
       <table class="table table-hover mb-0">
