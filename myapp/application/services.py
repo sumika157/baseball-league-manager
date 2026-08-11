@@ -258,7 +258,10 @@ class TeamApplicationService:
             if not league_teams:
                 # チームの無いリーグは切り替えても何も出せないので、タブを作らない
                 continue
-            standings_rows, standings_year = self._latest_standings(league_teams, all_games)
+            # 順位表も直近の試合も「そのリーグ内の対戦」だけを見るので、絞り込みは1回で済ませる
+            member_ids = {t.id for t in league_teams}
+            league_games = [g for g in all_games if g.home_team_id in member_ids and g.away_team_id in member_ids]
+            standings_rows, standings_year = self._latest_standings(league_teams, league_games)
             leagues.append(
                 DashboardLeague(
                     league_id=league_id,
@@ -267,6 +270,7 @@ class TeamApplicationService:
                     standings=standings_rows,
                     standings_year=standings_year,
                     teams=teams_by_league.get(league_id, []),
+                    recent_games=self._recent_games(league_games, team_name_by_id),
                 )
             )
 
@@ -306,15 +310,14 @@ class TeamApplicationService:
         )
 
     def _latest_standings(
-        self, league_teams: list[Team], all_games: list[Game]
+        self, league_teams: list[Team], league_games: list[Game]
     ) -> tuple[list[StandingRow], int | None]:
         """1リーグぶんの最新シーズンの順位表と、そのシーズンの年。
 
+        league_games はそのリーグ内の対戦だけに絞ったもの（絞り込みは呼ぶ側が行う）。
         ダッシュボードは概況なので年は選ばせず、最新シーズンだけを出す。
         年をさかのぼる場合は順位表ページが受け持つ。
         """
-        member_ids = {t.id for t in league_teams}
-        league_games = [g for g in all_games if g.home_team_id in member_ids and g.away_team_id in member_ids]
         seasons = domain_services.seasons_of(league_games)
         if not seasons:
             return [], None
@@ -322,6 +325,15 @@ class TeamApplicationService:
         latest = seasons[0]
         rows = domain_services.standings(league_teams, [g for g in league_games if g.season == latest])
         return self._to_standing_rows(rows, None, None), latest.year
+
+    def _recent_games(self, league_games: list[Game], names: dict[int, str], *, limit: int = 5) -> list[GameRow]:
+        """1リーグぶんの直近の試合。新しい順。
+
+        順位表と同じ league_games から作るので、試合を読み直さない。
+        概況なので件数を絞り、さかのぼるのは試合一覧が受け持つ。
+        """
+        latest = sorted(league_games, key=lambda g: (g.played_on, g.id or 0), reverse=True)[:limit]
+        return [self._to_game_row(g, names) for g in latest]
 
     def get_team_name(self, team_id: int) -> str:
         return self._teams.find_by_id(team_id).name

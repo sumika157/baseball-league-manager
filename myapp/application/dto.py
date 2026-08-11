@@ -600,6 +600,9 @@ class DashboardLeague:
     # 順位表と同じチームの並びなので画面には並べない。1試合も行われておらず
     # 順位表を作れないリーグで、順位表の代わりに出すためだけに持つ
     teams: list[TeamSummary]
+    # 直近の試合（新しい順）。順位表が「どこが強いか」を示すのに対して、
+    # 「いま何が起きているか」を示す。さかのぼるのは試合一覧が受け持つ
+    recent_games: list[GameRow]
 
 
 @dataclass(frozen=True)
