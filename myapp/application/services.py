@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import date
 
@@ -15,9 +16,14 @@ from ..domain import services as domain_services
 from ..domain.entities import Game, Player, Stint, Team
 from ..domain.repositories import GameRepository, LeagueRepository, TeamRepository
 from ..domain.value_objects import (
+    BattingLine,
+    FieldingPosition,
     JerseyNumber,
+    LineScore,
+    PitchingLine,
     Position,
     Season,
+    TeamRecord,
     ensure_quota_not_exceeded,
     format_average,
 )
@@ -73,7 +79,13 @@ def _saved_id(value: int | None) -> int:
     return value
 
 
-def _record_label(record) -> str:
+# ランキングの値を画面の書式に直す関数（_as_average など）
+ValueFormatter = Callable[[float], str]
+# ランキング1部門ぶんを DTO に詰める関数。ダッシュボードとタイトル一覧で形が同じ
+ToEntries = Callable[[list[domain_services.RankedPlayer], ValueFormatter], list[RankingEntry]]
+
+
+def _record_label(record: TeamRecord) -> str:
     """勝敗を「3-1-1」（勝-敗-分）の1行で表す。
 
     対戦成績はチーム数ぶんの列が並ぶため、「3勝1敗1分」では表が横に伸びる。
@@ -99,7 +111,7 @@ def _as_count(value: float) -> str:
     return str(int(value))
 
 
-def _decision_label(line) -> str:
+def _decision_label(line: PitchingLine) -> str:
     """その試合で投手に付いた記録。ボックススコアの「勝」「S」の印。
 
     1試合では勝利・敗戦・セーブは1つずつしか付かないので、先に見つかった
@@ -217,11 +229,11 @@ class TeamApplicationService:
         team_of = {id(player): team_id for player, team_id in players}
         all_players = [player for player, _ in players]
 
-        def to_entries(ranked, formatter) -> list[RankingEntry]:
+        def to_entries(ranked: list[domain_services.RankedPlayer], formatter: ValueFormatter) -> list[RankingEntry]:
             return [
                 RankingEntry(
                     rank=item.rank,
-                    player_id=item.player.id,
+                    player_id=_saved_id(item.player.id),
                     player_name=item.player.name,
                     team_id=team_of[id(item.player)],
                     team_name=team_name_by_id[team_of[id(item.player)]],
@@ -232,7 +244,7 @@ class TeamApplicationService:
 
         # 規定打席・規定投球回は所属チームの試合数で決まる
         games_played = self._team_game_counts()
-        team_games = {player.id: games_played.get(team_id, 0) for player, team_id in players}
+        team_games = {_saved_id(player.id): games_played.get(team_id, 0) for player, team_id in players}
 
         # 順位表は得点だけで決まるので、明細を読まない一覧を使う
         # （集約の find_all() を呼ぶと全試合の打撃・投球まで読み込む）
@@ -267,7 +279,9 @@ class TeamApplicationService:
         )
 
     @staticmethod
-    def _league_rankings(league_teams, leaders, team_games, to_entries) -> LeagueRankings:
+    def _league_rankings(
+        league_teams: list[Team], leaders: int, team_games: dict[int, int], to_entries: ToEntries
+    ) -> LeagueRankings:
         """1リーグぶんのランキング。
 
         タイトルはリーグの中で争われるので、他リーグの選手と同じ表に並べない。
@@ -291,7 +305,9 @@ class TeamApplicationService:
             save_leaders=to_entries(domain_services.leaders_by_saves(members, limit=leaders), _as_count),
         )
 
-    def _latest_standings(self, league_teams, all_games) -> tuple[list[StandingRow], int | None]:
+    def _latest_standings(
+        self, league_teams: list[Team], all_games: list[Game]
+    ) -> tuple[list[StandingRow], int | None]:
         """1リーグぶんの最新シーズンの順位表と、そのシーズンの年。
 
         ダッシュボードは概況なので年は選ばせず、最新シーズンだけを出す。
@@ -390,7 +406,9 @@ class TeamApplicationService:
             descending=bool(descending) if sort in self.STANDING_SORT_KEYS else False,
         )
 
-    def _to_standing_rows(self, rows, sort, descending) -> list[StandingRow]:
+    def _to_standing_rows(
+        self, rows: list[domain_services.StandingRow], sort: str | None, descending: bool | None
+    ) -> list[StandingRow]:
         """ドメインの順位表を表示用に整え、必要なら並べ替える。
 
         並べ替えても rank の値は動かさない。順位は勝率で決まっているため。
@@ -521,21 +539,27 @@ class TeamApplicationService:
         )
 
     @staticmethod
-    def _title_departments(players, team_of, team_games, leaders) -> list[TitleDepartment]:
+    def _title_departments(
+        players: list[Player],
+        team_of: dict[int, tuple[int, str]],
+        team_games: dict[int, int],
+        leaders: int,
+    ) -> list[TitleDepartment]:
         """部門ごとの上位者。
 
         率の部門（打率・防御率）は規定に達した選手だけを対象にする。
         本数そのものが記録になる部門（本塁打・打点・奪三振）は規定を設けない。
         """
 
-        def to_entries(ranked, formatter) -> list[RankingEntry]:
+        def to_entries(ranked: list[domain_services.RankedPlayer], formatter: ValueFormatter) -> list[RankingEntry]:
             rows = []
             for item in ranked:
-                team_id, team_name = team_of[item.player.id]
+                player_id = _saved_id(item.player.id)
+                team_id, team_name = team_of[player_id]
                 rows.append(
                     RankingEntry(
                         rank=item.rank,
-                        player_id=item.player.id,
+                        player_id=player_id,
                         player_name=item.player.name,
                         team_id=team_id,
                         team_name=team_name,
@@ -646,7 +670,7 @@ class TeamApplicationService:
         )
 
     @staticmethod
-    def _to_matchup_table(rows) -> MatchupTable:
+    def _to_matchup_table(rows: list[domain_services.MatchupRow]) -> MatchupTable:
         """ドメインの対戦成績を表示用の表に整える。
 
         行と列を同じ順（順位表の順）に並べる。こうすると対角線が自分自身に
@@ -793,7 +817,13 @@ class TeamApplicationService:
         )
 
     @staticmethod
-    def _to_team_box(team_id, names, batting, pitching, game) -> GameTeamBox | None:
+    def _to_team_box(
+        team_id: int,
+        names: dict[int, str],
+        batting: list[GamePlayerRow],
+        pitching: list[GamePlayerRow],
+        game: Game,
+    ) -> GameTeamBox | None:
         """1チームぶんのボックススコア。並びは既に打順・登板順になっている。"""
         rows = [row for row in batting if row.team_id == team_id]
         staff = [row for row in pitching if row.team_id == team_id]
@@ -808,7 +838,7 @@ class TeamApplicationService:
         )
 
     @staticmethod
-    def _to_line_score(game, batting) -> GameLineScore | None:
+    def _to_line_score(game: Game, batting: list[GamePlayerRow]) -> GameLineScore | None:
         """スコアボード。回ごとの得点が記録されていなければ出さない。"""
         score = game.line_score
         if score.is_empty:
@@ -895,7 +925,7 @@ class TeamApplicationService:
         )
 
     @staticmethod
-    def _to_monthly_row(split) -> MonthlyRow:
+    def _to_monthly_row(split: domain_services.MonthlySplit) -> MonthlyRow:
         """月別成績を表示用に整える。率は月ごとの合計から計算し直された値。"""
         batting, pitching = split.batting, split.pitching
         return MonthlyRow(
@@ -958,7 +988,16 @@ class TeamApplicationService:
 
         return {"game": game, "rosters": rosters}
 
-    def create_game(self, *, year, played_on, home_team_id, away_team_id, home_score, away_score) -> Game:
+    def create_game(
+        self,
+        *,
+        year: int,
+        played_on: date,
+        home_team_id: int,
+        away_team_id: int,
+        home_score: int,
+        away_score: int,
+    ) -> Game:
         """試合を作る。成績は後から入力する。"""
         return self._games.save(
             Game(
@@ -975,17 +1014,17 @@ class TeamApplicationService:
         self,
         game_id: int,
         *,
-        year,
-        played_on,
-        home_team_id,
-        away_team_id,
-        home_score,
-        away_score,
-        batting: dict | None = None,
-        pitching: dict | None = None,
-        lineup: dict | None = None,
-        staff: dict | None = None,
-        line_score=None,
+        year: int,
+        played_on: date,
+        home_team_id: int,
+        away_team_id: int,
+        home_score: int,
+        away_score: int,
+        batting: dict[int, BattingLine] | None = None,
+        pitching: dict[int, PitchingLine] | None = None,
+        lineup: dict[int, tuple[int | None, int, FieldingPosition | None]] | None = None,
+        staff: dict[int, int] | None = None,
+        line_score: LineScore | None = None,
     ) -> Game:
         """試合の基本情報と、出場選手の成績をまとめて更新する。
 

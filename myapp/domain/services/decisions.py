@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..entities import Game
+from ..entities import Game, GamePitching
 
 # セーブは3点差以内のリードで登板して1回以上、または3回以上を投げた場合。
 SAVE_LEAD_LIMIT = 3
@@ -44,13 +44,13 @@ class PitchingDecisions:
         return 1 if player_id in self.hold_ids else 0
 
 
-def _staff_of(game: Game, team_ids: set[int], team_of: dict[int, int]):
+def _staff_of(game: Game, team_ids: set[int], team_of: dict[int, int]) -> list[GamePitching]:
     """指定チームの投手を、登板順に並べて返す。"""
     entries = [entry for entry in game.pitching if team_of.get(entry.player_id) in team_ids]
     return sorted(entries, key=lambda e: (e.appearance_order, e.entered_inning))
 
 
-def _pitcher_covering(staff, inning: int):
+def _pitcher_covering(staff: list[GamePitching], inning: int) -> GamePitching | None:
     """その回に投げていた投手。登板した回がその回以前で最も後の投手。"""
     covering = None
     for entry in staff:
@@ -99,7 +99,7 @@ def _decisive_inning(game: Game, *, winner_is_home: bool) -> tuple[int, bool]:
     return decisive
 
 
-def _most_effective_reliever(staff):
+def _most_effective_reliever(staff: list[GamePitching]) -> GamePitching | None:
     """最も内容の良い救援。長く投げて自責点が少ない順。
 
     先発が5回未満で勝利投手の条件を満たさない場合の受け皿。規則では記録員の
@@ -159,7 +159,7 @@ def pitching_decisions(game: Game, team_of: dict[int, int]) -> PitchingDecisions
     )
 
 
-def _save(game: Game, staff, winner, *, is_home: bool):
+def _save(game: Game, staff: list[GamePitching], winner: GamePitching | None, *, is_home: bool) -> GamePitching | None:
     """セーブ。試合を締めた投手が条件を満たす場合に付く。
 
     完投は勝利のみでセーブは付かない。勝利投手にも付かない。
@@ -180,7 +180,7 @@ def _save(game: Game, staff, winner, *, is_home: bool):
     return finisher if qualifies else None
 
 
-def _holds(game: Game, staff, *, is_home: bool) -> set[int]:
+def _holds(game: Game, staff: list[GamePitching], *, is_home: bool) -> set[int]:
     """ホールド。セーブの条件を満たす状況で登板し、1つ以上アウトを取って
     リードを保ったまま次の投手に引き継いだ救援投手に付く。
     """

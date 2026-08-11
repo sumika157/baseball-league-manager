@@ -50,7 +50,7 @@ class League(models.Model):
         # 手動の並び順を既定とし、未設定どうしは名前で安定させる
         ordering = ["display_order", "name"]
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.name
 
 
@@ -79,7 +79,7 @@ class Stadium(models.Model):
         verbose_name_plural = "球場"
         ordering = ["name"]
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.name
 
 
@@ -113,7 +113,7 @@ class Team(models.Model):
         # 手動の並び順を既定とし、未設定どうしは名前で安定させる
         ordering = ["display_order", "name"]
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.name
 
 
@@ -163,7 +163,7 @@ class Player(models.Model):
         verbose_name_plural = "選手"
         ordering = ["name"]
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"{self.name} ({self.position})"
 
 
@@ -194,7 +194,7 @@ class PlayerStint(models.Model):
             models.UniqueConstraint(fields=["player", "team", "from_year"], name="unique_player_team_from"),
         ]
 
-    def __str__(self):
+    def __str__(self) -> str:
         end = self.to_year or "現在"
         return f"{self.player.name} / {self.team.name} ({self.from_year}〜{end})"
 
@@ -223,7 +223,7 @@ class Captaincy(models.Model):
             models.UniqueConstraint(fields=["player", "team", "from_year"], name="unique_captaincy_player_team_from"),
         ]
 
-    def __str__(self):
+    def __str__(self) -> str:
         end = self.to_year or "現在"
         return f"{self.player.name} / {self.team.name} 主将 ({self.from_year}〜{end})"
 
@@ -250,7 +250,7 @@ class Game(models.Model):
             ),
         ]
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"{self.played_on} {self.home_team.name} {self.home_score}-{self.away_score} {self.away_team.name}"
 
 
@@ -277,7 +277,7 @@ class GameInningScore(models.Model):
             models.UniqueConstraint(fields=["game", "inning", "is_home"], name="unique_game_inning_half"),
         ]
 
-    def __str__(self):
+    def __str__(self) -> str:
         half = "裏" if self.is_home else "表"
         return f"{self.inning}回{half} {self.runs}点"
 
@@ -323,7 +323,7 @@ class GameBattingLine(models.Model):
             models.UniqueConstraint(fields=["game", "player"], name="unique_game_batting"),
         ]
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"{self.player.name} の打撃成績"
 
 
@@ -359,5 +359,5 @@ class GamePitchingLine(models.Model):
             models.UniqueConstraint(fields=["game", "player"], name="unique_game_pitching"),
         ]
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"{self.player.name} の投球成績"

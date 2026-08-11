@@ -17,6 +17,13 @@ plugins = ["mypy_django_plugin.main"]
 ignore_missing_imports = true
 exclude = ["myapp/migrations"]
 
+# 注釈の無い関数は mypy の検査対象から外れる（黙って素通りする）ため、内側の
+# 3層では注釈を必須にする。presentation は Django の request など注釈しにくい
+# 引数が多いので外してある。
+[[tool.mypy.overrides]]
+module = ["myapp.domain.*", "myapp.application.*", "myapp.infrastructure.*"]
+disallow_untyped_defs = true
+
 [tool.django-stubs]
 django_settings_module = "config.settings"
 

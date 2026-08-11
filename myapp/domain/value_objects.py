@@ -7,10 +7,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_DOWN, Decimal
 from enum import Enum
+from typing import Any
 
 from .exceptions import (
     ForeignPlayerQuotaExceeded,
@@ -171,7 +173,7 @@ class InningsPitched:
         return cls(outs=0)
 
     @classmethod
-    def from_notation(cls, value) -> InningsPitched:
+    def from_notation(cls, value: str | float | Decimal | None) -> InningsPitched:
         """野球表記（5.2 など）からインスタンスを作る。
 
         小数第1位はアウト数（0〜2）を表す。3 以上が来た場合は
@@ -213,7 +215,8 @@ class InningsPitched:
         return f"{self.to_notation():.1f}"
 
 
-def _require_non_negative(name: str, value) -> int:
+def _require_non_negative(name: str, value: Any) -> int:
+    """何が来ても非負の整数に直す（直せなければ例外）。入力の型を選ばないのが役目なので Any。"""
     try:
         number = int(value)
     except (TypeError, ValueError):
@@ -351,7 +354,7 @@ class BattingLine:
         )
 
     @classmethod
-    def total(cls, lines) -> BattingLine:
+    def total(cls, lines: Iterable[BattingLine]) -> BattingLine:
         """複数試合の合計。"""
         result = cls()
         for line in lines:
@@ -529,7 +532,7 @@ class PitchingLine:
         )
 
     @classmethod
-    def total(cls, lines) -> PitchingLine:
+    def total(cls, lines: Iterable[PitchingLine]) -> PitchingLine:
         """複数試合の合計。"""
         result = cls()
         for line in lines:

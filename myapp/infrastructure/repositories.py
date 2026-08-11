@@ -287,7 +287,7 @@ def _profile_defaults(profile: Profile) -> dict:
     }
 
 
-def _profile_of(row) -> Profile:
+def _profile_of(row: orm_models.Player) -> Profile:
     return Profile(
         birth_date=row.birth_date,
         throws=Handedness.from_label(row.throws),

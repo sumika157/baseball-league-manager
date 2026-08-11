@@ -8,9 +8,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any
+
 from ..entities import Player
 
-BATTER_SORT_KEYS = {
+# 並べ替えキー → (選手から比較する値を取り出す関数, 既定の向き)。
+# 取り出す値は指標ごとに数値・文字列が混ざるため Any にしてある。
+SortKeys = dict[str, tuple[Callable[[Player], Any], bool]]
+
+BATTER_SORT_KEYS: SortKeys = {
     "number": (lambda p: p.number.value, False),
     "name": (lambda p: p.name, False),
     "average": (lambda p: p.batting.batting_average, True),
@@ -27,7 +34,7 @@ BATTER_SORT_KEYS = {
     "iso": (lambda p: p.batting.isolated_power, True),
 }
 
-PITCHER_SORT_KEYS = {
+PITCHER_SORT_KEYS: SortKeys = {
     "number": (lambda p: p.number.value, False),
     "name": (lambda p: p.name, False),
     "innings": (lambda p: p.pitching.innings.outs, True),
@@ -59,16 +66,15 @@ DEFAULT_PITCHER_SORT = "era"
 _RATE_PITCHER_KEYS = {"era", "whip", "k9", "bb9", "fip"}
 
 
-def _resolve(keys, key, descending, default_key):
+def _resolve(keys: SortKeys, key: str | None, descending: bool | None, default_key: str) -> tuple[str, bool]:
     """URL 由来のキーを検証する。不正なら既定に落とす（エラーにしない）。"""
-    if key not in keys:
-        key = default_key
+    resolved = key if key is not None and key in keys else default_key
     if descending is None:
-        descending = keys[key][1]
-    return key, bool(descending)
+        descending = keys[resolved][1]
+    return resolved, bool(descending)
 
 
-def _ordered(players, getter, descending):
+def _ordered(players: list[Player], getter: Callable[[Player], Any], descending: bool) -> list[Player]:
     """指定のキーで並べ替え、同値は背番号の小さい順で安定させる。
 
     sorted(..., key=(指標, 背番号), reverse=True) と書くと同値のときの
@@ -80,7 +86,9 @@ def _ordered(players, getter, descending):
     return ordered
 
 
-def sort_batters(players: list[Player], key: str | None = None, descending: bool | None = None):
+def sort_batters(
+    players: list[Player], key: str | None = None, descending: bool | None = None
+) -> tuple[list[Player], str, bool]:
     """野手を並べ替える。key が未指定・不正なら OPS の高い順。
 
     戻り値は (並べ替え後, 実際に使ったキー, 向き)。画面側で見出しの表示を
@@ -90,7 +98,9 @@ def sort_batters(players: list[Player], key: str | None = None, descending: bool
     return _ordered(players, BATTER_SORT_KEYS[key][0], descending), key, descending
 
 
-def sort_pitchers(players: list[Player], key: str | None = None, descending: bool | None = None):
+def sort_pitchers(
+    players: list[Player], key: str | None = None, descending: bool | None = None
+) -> tuple[list[Player], str, bool]:
     """投手を並べ替える。key が未指定・不正なら防御率の低い順。"""
     key, descending = _resolve(PITCHER_SORT_KEYS, key, descending, DEFAULT_PITCHER_SORT)
     getter = PITCHER_SORT_KEYS[key][0]

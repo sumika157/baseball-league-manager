@@ -7,7 +7,10 @@
 
 from __future__ import annotations
 
-from django.db.models import Count, Q
+from collections.abc import Iterable
+
+from django.contrib.auth.models import AnonymousUser, User
+from django.db.models import Count, Q, QuerySet
 
 from ..application.dto import GameRow, PlayerSearchRow, TeamSummary
 from ..domain.entities import Game, winning_team_id
@@ -64,11 +67,11 @@ class DjangoTeamPermissionQuery:
     ドメインの業務ルールではなく、この参照専用クエリに置く。
     """
 
-    def can_manage(self, user, team_id: int) -> bool:
+    def can_manage(self, user: User | AnonymousUser, team_id: int) -> bool:
         """指定チームを編集できるか。"""
         return self.can_manage_any(user, (team_id,))
 
-    def can_manage_any(self, user, team_ids) -> bool:
+    def can_manage_any(self, user: User | AnonymousUser, team_ids: Iterable[int]) -> bool:
         """渡したチームのうち、少なくとも1つを編集できるか。
 
         試合は2チームにまたがるため、どちらか一方の担当者であれば編集できる。
@@ -95,7 +98,7 @@ class DjangoGameListQuery:
         team_id: int | None = None,
         month: int | None = None,
         league_id: int | None = None,
-    ):
+    ) -> QuerySet[orm_models.Game]:
         """絞り込みは SQL 側で行う。取得後に Python で捨てると件数ぶん無駄になる。"""
         rows = orm_models.Game.objects.select_related("home_team", "away_team")
         if year is not None:
