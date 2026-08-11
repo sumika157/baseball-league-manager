@@ -189,6 +189,50 @@ class PlayerGameRow:
 
 
 @dataclass(frozen=True)
+class YearlyRow:
+    """選手の年度別成績1行。
+
+    キャリア通算（`PlayerDetail`）が積み上げ全体を表すのに対し、こちらは
+    シーズンごとの働きを表す。率は年ごとに合算した実数から計算し直した値。
+    """
+
+    label: str  # '2026年'
+    appearances: int
+    # 打撃
+    plate_appearances: int = 0
+    at_bats: int = 0
+    hits: int = 0
+    doubles: int = 0
+    triples: int = 0
+    home_runs: int = 0
+    runs_batted_in: int = 0
+    walks: int = 0
+    hit_by_pitch: int = 0
+    sacrifice_flies: int = 0
+    batting_average: float = 0.0
+    on_base_percentage: float = 0.0
+    slugging_percentage: float = 0.0
+    ops: float = 0.0
+    # 投球
+    starts: int = 0
+    innings_pitched: str = "0.0"
+    wins: int = 0
+    losses: int = 0
+    saves: int = 0
+    holds: int = 0
+    hold_points: int = 0
+    hits_allowed: int = 0
+    home_runs_allowed: int = 0
+    walks_allowed: int = 0
+    hit_by_pitch_allowed: int = 0
+    strikeouts: int = 0
+    earned_runs: int = 0
+    earned_run_average: float = 0.0
+    whip: float = 0.0
+    strikeouts_per_nine: float = 0.0
+
+
+@dataclass(frozen=True)
 class MonthlyRow:
     """選手の月別成績1行。
 
@@ -198,6 +242,9 @@ class MonthlyRow:
 
     label: str  # '2026年4月'
     appearances: int
+    # 月のタブ（試合ごとの成績の絞り込み）に使う。ラベルから月を切り出さない
+    year: int = 0
+    month: int = 0
     # 打撃
     at_bats: int = 0
     hits: int = 0
@@ -211,6 +258,15 @@ class MonthlyRow:
     strikeouts: int = 0
     earned_run_average: float = 0.0
     whip: float = 0.0
+
+    @property
+    def key(self) -> str:
+        """月のタブの値。'2026-04' のように年と月を1つの値にまとめたもの。
+
+        年と月を別の引数にすると、片方だけ指定された組み合わせを画面側で
+        繕うことになる。選べるのは「出場した月」だけなので1つの値で表す。
+        """
+        return f"{self.year}-{self.month:02d}"
 
 
 @dataclass(frozen=True)
@@ -256,10 +312,20 @@ class PlayerProfile:
     """選手個人ページ。プロフィール・経歴・通算成績・試合ごとの記録。"""
 
     detail: PlayerDetail
+    # 試合ごとの成績。**選択された月のぶんだけ**が入る（全期間を並べると
+    # 1シーズンで140行を超え、読む場所ではなくなる）。全期間の出場試合数は
+    # appearances、月の一覧は months が持つ。
     games: list[PlayerGameRow]
     career: list[CareerRow] | None = None
+    # 年度別成績。キャリア通算（detail）とシーズンごとの働きを分けて見るため
+    years: list[YearlyRow] | None = None
     # 月別成績。調子の波は通算値では見えないため、期間で区切って並べる
     months: list[MonthlyRow] | None = None
+    # 選択されている月（MonthlyRow.key と同じ形式）と、その表示名
+    selected_month: str = ""
+    selected_month_label: str = ""
+    # 全期間の出場試合数。games は月で絞られるため、数はここから出す
+    appearances: int = 0
     # プロフィール
     age: int | None = None
     name_kana: str = ""  # 氏名のよみがな。名前に添えて出す
@@ -268,14 +334,13 @@ class PlayerProfile:
     height_cm: int | None = None
     weight_kg: int | None = None
     birthplace: str = ""
+    nationality: str = ""
+    # 外国人枠の対象か。国籍（事実）とは別の概念なので独立して持つ
+    is_foreign_player: bool = False
     debut_year: int | None = None
     # プロ入り前の経歴。(区分, 名称) を通った順に並べたもの
     amateur_career: list | None = None
     has_profile: bool = False
-
-    @property
-    def appearances(self) -> int:
-        return len(self.games)
 
 
 @dataclass(frozen=True)
@@ -600,6 +665,9 @@ class DashboardLeague:
     # 順位表と同じチームの並びなので画面には並べない。1試合も行われておらず
     # 順位表を作れないリーグで、順位表の代わりに出すためだけに持つ
     teams: list[TeamSummary]
+    # 直近の試合（新しい順）。順位表が「どこが強いか」を示すのに対して、
+    # 「いま何が起きているか」を示す。さかのぼるのは試合一覧が受け持つ
+    recent_games: list[GameRow]
 
 
 @dataclass(frozen=True)
@@ -702,6 +770,10 @@ class PlayerDetail:
     # 打撃
     at_bats: int
     singles: int
+    # 打席と安打は単打などから導ける値だが、導出の出典は BattingLine 側にあり、
+    # 画面ごとに足し算を書き直さないためここに持たせる
+    plate_appearances: int
+    hits: int
     doubles: int
     triples: int
     home_runs: int

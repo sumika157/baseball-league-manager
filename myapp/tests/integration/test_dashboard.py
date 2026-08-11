@@ -180,8 +180,9 @@ class DashboardTest(BaseCase):
         body = self.client.get(reverse("dashboard")).content.decode()
 
         self.assertIn("<span>順位表</span>", body)
-        # チームのタイル一覧は出さない（順位表が同じチームを並べている）
-        self.assertNotIn("tile-list", body)
+        # チームの一覧に差し替わっていない（在籍人数はそこにしか出ない）
+        self.assertNotIn("<span>チーム</span>", body)
+        self.assertNotIn("tile-list-meta", body)
 
     def test_team_list_stands_in_when_no_game_has_been_played(self):
         """1試合も無いリーグでは順位表が作れないので、チーム一覧に差し替える。
@@ -191,9 +192,48 @@ class DashboardTest(BaseCase):
         body = self.client.get(reverse("dashboard")).content.decode()
 
         self.assertIn("<span>チーム</span>", body)
-        self.assertIn("tile-list", body)
+        self.assertIn("tile-list-meta", body)
         self.assertIn("テストチーム", body)
         self.assertIn("まだ試合が行われていません。", body)
+
+    def test_recent_games_are_newest_first(self):
+        """右カラムの高さを埋めるだけでなく、「いま何が起きているか」を出す。"""
+        play_game(self.team, self.rival, day=1)
+        play_game(self.rival, self.team, day=3)
+        play_game(self.team, self.rival, day=2)
+
+        league = self.service.get_dashboard().leagues[0]
+
+        self.assertEqual([g.played_on.day for g in league.recent_games], [3, 2, 1])
+
+    def test_recent_games_are_capped(self):
+        """概況なので件数を絞る。さかのぼるのは試合一覧が受け持つ。"""
+        for day in range(1, 9):
+            play_game(self.team, self.rival, day=day)
+
+        league = self.service.get_dashboard().leagues[0]
+
+        self.assertEqual(len(league.recent_games), 5)
+
+    def test_recent_games_stay_within_the_league(self):
+        """他リーグの試合を混ぜない（順位表と同じ範囲だけを見る）。"""
+        other = orm_models.League.objects.create(name="別リーグ")
+        a = orm_models.Team.objects.create(league=other, name="Xチーム")
+        b = orm_models.Team.objects.create(league=other, name="Yチーム")
+        play_game(self.team, self.rival, day=1)
+        play_game(a, b, day=2)
+
+        boards = {g.league_name: g.recent_games for g in self.service.get_dashboard().leagues}
+
+        self.assertEqual([r.home_team_name for r in boards["テストリーグ"]], ["テストチーム"])
+        self.assertEqual([r.home_team_name for r in boards["別リーグ"]], ["Xチーム"])
+
+    def test_recent_games_card_links_to_each_game(self):
+        game = play_game(self.team, self.rival)
+        body = self.client.get(reverse("dashboard")).content.decode()
+
+        self.assertIn("<span>直近の試合</span>", body)
+        self.assertIn(reverse("game_detail", args=[game.id]), body)
 
     def test_ranking_cards_link_to_the_league_stats(self):
         """各ランキングカードから、その部門で並べた成績一覧へ飛べる。"""

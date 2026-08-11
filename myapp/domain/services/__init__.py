@@ -6,7 +6,7 @@
 
 - rankings: 規定（規定打席・規定投球回）とタイトルランキング
 - sorting: 一覧の並べ替えキーと既定の向き
-- records: 試合からの集計（通算・順位表・対戦成績・月別成績）
+- records: 試合からの集計（通算・順位表・対戦成績・年度別成績・月別成績）
 - decisions: 勝敗・セーブ・ホールドの導出（日本プロ野球の規則）
 - scoring: 打席の記録から1試合ぶんの成績を導く（打撃・投球・失点・残塁）
 """
@@ -41,6 +41,8 @@ from .records import (
     MonthlySplit,
     StandingRow,
     TeamMonthlySplit,
+    YearlySplit,
+    appeared_in,
     fip_constant,
     head_to_head,
     matchups,
@@ -53,6 +55,7 @@ from .records import (
     team_monthly_splits,
     team_pitching,
     team_record,
+    yearly_splits,
 )
 from .scoring import (
     RunScored,
@@ -102,6 +105,8 @@ __all__ = [
     "MonthlySplit",
     "StandingRow",
     "TeamMonthlySplit",
+    "YearlySplit",
+    "appeared_in",
     "fip_constant",
     "head_to_head",
     "matchups",
@@ -114,6 +119,7 @@ __all__ = [
     "team_monthly_splits",
     "team_pitching",
     "team_record",
+    "yearly_splits",
     # decisions
     "SAVE_LEAD_LIMIT",
     "SAVE_LONG_RELIEF_OUTS",

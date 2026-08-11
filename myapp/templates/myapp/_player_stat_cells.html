@@ -1,0 +1,45 @@
+{% comment %}
+成績の実数を並べる列。年度別成績の各行と通算行で共有する。
+
+行ごとに列を書き直すと、片方だけ項目が増えて「同じ表なのに桁が合わない」形に
+なるため、列の並びはここが唯一の出典。渡すもの:
+
+- row: YearlyRow か PlayerDetail（どちらも同じ項目名を持つ）
+- appearances: 試合数（投手なら登板数）。row 側に無いため別に渡す
+- is_pitcher: 投手の列に切り替えるか
+{% endcomment %}
+{% if is_pitcher %}
+  <td class="text-end stat-muted">{{ appearances }}</td>
+  <td class="text-end stat-muted">{{ row.starts }}</td>
+  <td class="text-end">{{ row.innings_pitched }}</td>
+  <td class="text-end">{{ row.wins }}</td>
+  <td class="text-end stat-muted">{{ row.losses }}</td>
+  <td class="text-end">{{ row.saves }}</td>
+  <td class="text-end stat-muted">{{ row.holds }}</td>
+  <td class="text-end stat-muted">{{ row.hold_points }}</td>
+  <td class="text-end stat-muted">{{ row.hits_allowed }}</td>
+  <td class="text-end stat-muted">{{ row.home_runs_allowed }}</td>
+  <td class="text-end stat-muted">{{ row.walks_allowed }}</td>
+  <td class="text-end stat-muted">{{ row.hit_by_pitch_allowed }}</td>
+  <td class="text-end">{{ row.strikeouts }}</td>
+  <td class="text-end stat-muted">{{ row.earned_runs }}</td>
+  <td class="text-end stat-key">{{ row.earned_run_average|floatformat:2 }}</td>
+  <td class="text-end">{{ row.whip|floatformat:2 }}</td>
+  <td class="text-end stat-muted">{{ row.strikeouts_per_nine|floatformat:2 }}</td>
+{% else %}
+  <td class="text-end stat-muted">{{ appearances }}</td>
+  <td class="text-end stat-muted">{{ row.plate_appearances }}</td>
+  <td class="text-end stat-muted">{{ row.at_bats }}</td>
+  <td class="text-end">{{ row.hits }}</td>
+  <td class="text-end stat-muted">{{ row.doubles }}</td>
+  <td class="text-end stat-muted">{{ row.triples }}</td>
+  <td class="text-end">{{ row.home_runs }}</td>
+  <td class="text-end">{{ row.runs_batted_in }}</td>
+  <td class="text-end stat-muted">{{ row.walks }}</td>
+  <td class="text-end stat-muted">{{ row.hit_by_pitch }}</td>
+  <td class="text-end stat-muted">{{ row.sacrifice_flies }}</td>
+  <td class="text-end stat-key">{{ row.batting_average|floatformat:3 }}</td>
+  <td class="text-end">{{ row.on_base_percentage|floatformat:3 }}</td>
+  <td class="text-end stat-muted">{{ row.slugging_percentage|floatformat:3 }}</td>
+  <td class="text-end stat-key">{{ row.ops|floatformat:3 }}</td>
+{% endif %}
