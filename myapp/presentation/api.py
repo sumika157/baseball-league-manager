@@ -17,7 +17,7 @@ from ..domain.exceptions import DomainError, GameNotFound
 from ..domain.value_objects import BattingLine, InningsPitched, LineScore, PitchingLine
 from ..infrastructure.queries import DjangoTeamPermissionQuery
 from .forms import BattingEntryForm, GameForm, InningScoreForm, PitchingEntryForm
-from .views import _first_error, _service
+from .views import _first_error, build_service
 
 
 def _collect_line_score(inning_forms) -> LineScore:
@@ -100,7 +100,7 @@ def game_update(request, game_id):
     if not isinstance(body, dict):
         return JsonResponse({"ok": False, "error": "リクエストの形式が不正です。"}, status=400)
 
-    service = _service()
+    service = build_service()
     try:
         game = service.get_game_edit_data(game_id)["game"]
     except GameNotFound:

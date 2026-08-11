@@ -359,7 +359,7 @@ def _pitching_totals(player_ids: list[int]) -> dict[int, PitchingLine]:
 
 
 class DjangoGameRepository:
-    """試合（Game 集約）の永続化。"""
+    """GameRepository の Django ORM 実装。試合（Game 集約）の永続化。"""
 
     def find_by_id(self, game_id: int) -> Game:
         try:

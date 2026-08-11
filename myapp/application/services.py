@@ -13,6 +13,7 @@ from django.db import transaction
 
 from ..domain import services as domain_services
 from ..domain.entities import Game, Player, Stint, Team
+from ..domain.repositories import GameRepository, LeagueRepository, TeamRepository
 from ..domain.value_objects import (
     JerseyNumber,
     Position,
@@ -57,6 +58,19 @@ from .dto import (
     TeamTotals,
     TitleDepartment,
 )
+from .queries import GameListQuery, TeamListQuery
+
+
+def _saved_id(value: int | None) -> int:
+    """保存済みの集約が持つ id を取り出す。
+
+    集約は未保存のあいだ id を持たないため型は `int | None` だが、
+    リポジトリ・参照クエリから読んだものは必ず保存済みで、所属先の id
+    （チームのリーグなど）も埋まっている。内包表記の中など assert を
+    置けない場所でも同じ書き方で済むよう、関数にしてある。
+    """
+    assert value is not None, "リポジトリから読んだ集約は保存済み"
+    return value
 
 
 def _record_label(record) -> str:
@@ -122,8 +136,17 @@ _EMPTY_LEAGUE_CONTEXT = _LeagueContext(fip_constant=0.0, average_ops=0.0, averag
 class TeamApplicationService:
     """チームとロスターに関するユースケース。"""
 
-    def __init__(self, teams, team_list_query=None, games=None, leagues=None, game_list_query=None):
-        # 具象クラスではなくリポジトリのインターフェースに依存する
+    def __init__(
+        self,
+        teams: TeamRepository,
+        team_list_query: TeamListQuery,
+        games: GameRepository,
+        leagues: LeagueRepository,
+        game_list_query: GameListQuery,
+    ) -> None:
+        # 具象クラスではなくリポジトリ・参照クエリのインターフェースに依存する。
+        # 省略可能にすると、一部だけ渡した半端なサービスが作れてしまい、呼ぶ経路に
+        # よって「None に find_all は無い」で落ちる。そのため全部を必須にしている。
         self._teams = teams
         # 一覧表示は集約を組み立てないリードモデルを使う
         self._team_list_query = team_list_query
@@ -171,11 +194,12 @@ class TeamApplicationService:
         for team in listing.rows:
             grouped.setdefault(team.league_id, []).append(team)
 
-        groups = [
-            LeagueTeams(league_id=league.id, league_name=league.name, teams=grouped[league.id])
-            for league in self._leagues.find_all()
-            if grouped.get(league.id)
-        ]
+        groups = []
+        for league in self._leagues.find_all():
+            members = grouped.get(_saved_id(league.id))
+            if members:
+                groups.append(LeagueTeams(league_id=_saved_id(league.id), league_name=league.name, teams=members))
+
         return Listing(rows=groups, sort=listing.sort, descending=listing.descending)
 
     def get_dashboard(self, *, leaders: int = 5) -> Dashboard:
@@ -185,9 +209,11 @@ class TeamApplicationService:
         集約をまたいで選手を集め、DTO に詰め替えるだけにとどめる。
         """
         teams = self._teams.find_all_with_roster()
-        team_name_by_id = {team.id: team.name for team in teams}
+        team_name_by_id = {_saved_id(team.id): team.name for team in teams}
 
-        players: list[tuple[Player, int]] = [(player, team.id) for team in teams for player in team.active_players]
+        players: list[tuple[Player, int]] = [
+            (player, _saved_id(team.id)) for team in teams for player in team.active_players
+        ]
         team_of = {id(player): team_id for player, team_id in players}
         all_players = [player for player, _ in players]
 
@@ -215,19 +241,20 @@ class TeamApplicationService:
 
         leagues = []
         for league in self._leagues.find_all():
-            league_teams = [t for t in teams if t.league_id == league.id]
+            league_id = _saved_id(league.id)
+            league_teams = [t for t in teams if t.league_id == league_id]
             if not league_teams:
                 # チームの無いリーグは切り替えても何も出せないので、タブを作らない
                 continue
             standings_rows, standings_year = self._latest_standings(league_teams, all_games)
             leagues.append(
                 DashboardLeague(
-                    league_id=league.id,
+                    league_id=league_id,
                     league_name=league.name,
                     rankings=self._league_rankings(league_teams, leaders, team_games, to_entries),
                     standings=standings_rows,
                     standings_year=standings_year,
-                    teams=teams_by_league.get(league.id, []),
+                    teams=teams_by_league.get(league_id, []),
                 )
             )
 
@@ -349,7 +376,7 @@ class TeamApplicationService:
                 continue
             leagues.append(
                 LeagueStandings(
-                    league_id=league.id,
+                    league_id=_saved_id(league.id),
                     league_name=league.name,
                     rows=self._to_standing_rows(rows, sort, descending),
                 )
@@ -427,7 +454,7 @@ class TeamApplicationService:
             )
 
         return LeagueDetail(
-            id=league.id,
+            id=_saved_id(league.id),
             name=league.name,
             year=target.year if target else None,
             available_years=[s.year for s in seasons],
@@ -454,7 +481,7 @@ class TeamApplicationService:
 
         if not seasons:
             return LeagueTitles(
-                league_id=league.id,
+                league_id=_saved_id(league.id),
                 league_name=league.name,
                 year=None,
                 available_years=[],
@@ -473,18 +500,20 @@ class TeamApplicationService:
 
         players, team_of, team_games = [], {}, {}
         for team in teams:
+            team_id = _saved_id(team.id)
             for player in team.active_players:
+                player_id = _saved_id(player.id)
                 scoped = replace(
                     player,
-                    batting=domain_services.player_batting_total(season_games, player.id),
-                    pitching=domain_services.player_pitching_total(season_games, player.id),
+                    batting=domain_services.player_batting_total(season_games, player_id),
+                    pitching=domain_services.player_pitching_total(season_games, player_id),
                 )
                 players.append(scoped)
-                team_of[scoped.id] = (team.id, team.name)
-                team_games[scoped.id] = games_played.get(team.id, 0)
+                team_of[player_id] = (team_id, team.name)
+                team_games[player_id] = games_played.get(team_id, 0)
 
         return LeagueTitles(
-            league_id=league.id,
+            league_id=_saved_id(league.id),
             league_name=league.name,
             year=target.year,
             available_years=[s.year for s in seasons],
@@ -591,7 +620,7 @@ class TeamApplicationService:
                 if player.is_pitcher != pitchers:
                     continue
                 members.append(player)
-                home_of[id(player)] = (team.id, team.name)
+                home_of[id(player)] = (_saved_id(team.id), team.name)
                 if player is captain:
                     captains.add(id(player))
 
@@ -611,7 +640,7 @@ class TeamApplicationService:
             )
 
         return LeagueStats(
-            league_id=league.id,
+            league_id=_saved_id(league.id),
             league_name=league.name,
             listing=Listing(rows=rows, sort=key, descending=desc),
         )
@@ -688,7 +717,7 @@ class TeamApplicationService:
 
     def list_leagues(self) -> list[LeagueOption]:
         """リーグの絞り込みに使う選択肢。表示順は管理画面で決めた順。"""
-        return [LeagueOption(id=league.id, name=league.name) for league in self._leagues.find_all()]
+        return [LeagueOption(id=_saved_id(league.id), name=league.name) for league in self._leagues.find_all()]
 
     def get_game_detail(self, game_id: int) -> GameDetail:
         """試合詳細。ボックススコアの形（チームごと・打順の順）で返す。"""
@@ -726,30 +755,31 @@ class TeamApplicationService:
                 )
             )
 
+        # 打撃と別の名前にしておく（同じ名前を使い回すと、打撃の型に固定される）
         pitching = []
-        for entry in game.pitching_in_order():
-            info = players.get(entry.player_id)
+        for outing in game.pitching_in_order():
+            info = players.get(outing.player_id)
             if info is None:
                 continue
-            line = entry.line
+            pitched = outing.line
             pitching.append(
                 GamePlayerRow(
-                    player_id=entry.player_id,
+                    player_id=outing.player_id,
                     player_name=info["name"],
                     number=info["number"],
                     team_id=info["team_id"],
                     team_name=names.get(info["team_id"], ""),
-                    innings_pitched=str(line.innings),
-                    earned_runs=line.earned_runs,
-                    strikeouts=line.strikeouts,
-                    hits_allowed=line.hits_allowed,
-                    walks_allowed=line.walks_allowed,
-                    hit_by_pitch_allowed=line.hit_by_pitch_allowed,
-                    home_runs_allowed=line.home_runs_allowed,
-                    earned_run_average=line.earned_run_average,
+                    innings_pitched=str(pitched.innings),
+                    earned_runs=pitched.earned_runs,
+                    strikeouts=pitched.strikeouts,
+                    hits_allowed=pitched.hits_allowed,
+                    walks_allowed=pitched.walks_allowed,
+                    hit_by_pitch_allowed=pitched.hit_by_pitch_allowed,
+                    home_runs_allowed=pitched.home_runs_allowed,
+                    earned_run_average=pitched.earned_run_average,
                     career_earned_run_average=info["earned_run_average"],
-                    appearance_order=entry.appearance_order,
-                    decision=_decision_label(line),
+                    appearance_order=outing.appearance_order,
+                    decision=_decision_label(pitched),
                 )
             )
 
@@ -818,7 +848,7 @@ class TeamApplicationService:
             opponent_id = game.away_team_id if game.home_team_id == team_id else game.home_team_id
             rows.append(
                 PlayerGameRow(
-                    game_id=game.id,
+                    game_id=_saved_id(game.id),
                     played_on=game.played_on,
                     opponent_name=names.get(opponent_id, ""),
                     at_bats=batting.line.at_bats if batting else 0,
@@ -902,24 +932,27 @@ class TeamApplicationService:
         rosters = []
         for team_id in (game.home_team_id, game.away_team_id):
             team = self._teams.find_by_id(team_id)
+            members = []
+            for player in sorted(team.active_players, key=lambda p: p.number.value):
+                player_id = _saved_id(player.id)
+                members.append(
+                    {
+                        "id": player_id,
+                        "name": player.name,
+                        "number": player.number.value,
+                        "position": player.position.label,
+                        "is_pitcher": player.is_pitcher,
+                        "batting": batting.get(player_id),
+                        "pitching": pitching.get(player_id),
+                        "lineup": lineup.get(player_id),
+                        "entered_inning": entered.get(player_id),
+                    }
+                )
             rosters.append(
                 {
                     "team_id": team_id,
                     "team_name": names.get(team_id, team.name),
-                    "players": [
-                        {
-                            "id": p.id,
-                            "name": p.name,
-                            "number": p.number.value,
-                            "position": p.position.label,
-                            "is_pitcher": p.is_pitcher,
-                            "batting": batting.get(p.id),
-                            "pitching": pitching.get(p.id),
-                            "lineup": lineup.get(p.id),
-                            "entered_inning": entered.get(p.id),
-                        }
-                        for p in sorted(team.active_players, key=lambda p: p.number.value)
-                    ],
+                    "players": members,
                 }
             )
 
@@ -1055,7 +1088,7 @@ class TeamApplicationService:
                 for pid in participant_ids
                 if players.get(pid, {}).get("team_id") == team_id and players[pid]["is_foreign_player"]
             )
-            league_id = self._teams.find_by_id(team_id).league_id
+            league_id = _saved_id(self._teams.find_by_id(team_id).league_id)
             limit = self._leagues.find_by_id(league_id).foreign_player_game_limit
             ensure_quota_not_exceeded(
                 foreign_count,
@@ -1164,7 +1197,7 @@ class TeamApplicationService:
         player.is_active = True
         destination.players.append(player)
 
-        league = self._leagues.find_by_id(destination.league_id)
+        league = self._leagues.find_by_id(_saved_id(destination.league_id))
         destination.ensure_foreign_player_quota(league.foreign_player_roster_limit)
 
         self._teams.save(source)
@@ -1224,7 +1257,7 @@ class TeamApplicationService:
     def list_team_monthly_splits(self, team_id: int) -> list[TeamMonthlyRow]:
         """チームの月別成績。個人の月別成績と対になる、チーム単位の推移。"""
         team = self._teams.find_by_id(team_id)
-        member_ids = {p.id for p in team.players}
+        member_ids = {_saved_id(p.id) for p in team.players}
 
         return [
             TeamMonthlyRow(
@@ -1265,17 +1298,17 @@ class TeamApplicationService:
         return self._league_contexts[league_id]
 
     def _team_names(self) -> dict[int, str]:
-        return {t.id: t.name for t in self._teams.find_all()}
+        return {_saved_id(t.id): t.name for t in self._teams.find_all()}
 
     def _player_index(self) -> dict[int, dict]:
         """選手 id から名前・背番号・所属チーム・通算の率を引ける索引。"""
-        index = {}
+        index: dict[int, dict] = {}
         for team in self._teams.find_all_with_roster():
             for player in team.players:
-                index[player.id] = {
+                index[_saved_id(player.id)] = {
                     "name": player.name,
                     "number": player.number.value,
-                    "team_id": team.id,
+                    "team_id": _saved_id(team.id),
                     "is_foreign_player": player.profile.is_foreign_player,
                     # ボックススコアに並べる参考値。1試合の率は読めないため通算を出す
                     "batting_average": player.batting.batting_average,

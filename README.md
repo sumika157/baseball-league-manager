@@ -334,6 +334,7 @@ my_django_project/
 │   │   └── exceptions.py       DomainError
 │   ├── application/        # ユースケース
 │   │   ├── services.py         TeamApplicationService
+│   │   ├── queries.py          参照クエリのインターフェース
 │   │   └── dto.py              画面へ渡す読み取り専用データ
 │   ├── infrastructure/     # Django ORM への接続
 │   │   ├── orm_models.py       Django の Model 定義
@@ -382,7 +383,7 @@ presentation  →  application  →  domain  ←  infrastructure
 | 層 | ディレクトリ | 責務 |
 | --- | --- | --- |
 | ドメイン | [myapp/domain/](myapp/domain/) | 野球の語彙とルール。Django 非依存 |
-| アプリケーション | [myapp/application/](myapp/application/) | ユースケースの手順と画面用 DTO |
+| アプリケーション | [myapp/application/](myapp/application/) | ユースケースの手順・画面用 DTO・参照クエリのインターフェース |
 | インフラ | [myapp/infrastructure/](myapp/infrastructure/) | Django ORM、リポジトリ実装、参照用クエリ |
 | プレゼンテーション | [myapp/presentation/](myapp/presentation/) | HTTP の解釈とフォーム検証 |
 
@@ -711,6 +712,27 @@ POST だけ権限を求めます（画面ごと `login_required` にすると閲
 勝敗の判定だけは両方の経路で必要になるため、`winning_team_id()` という純粋関数を
 ドメインに置き、集約（`Game.winner_team_id`）と参照クエリの両方がそこを通ります。
 参照側で「得点が多い方が勝ち」を書き直すと、同じ事実の出典が2つになるためです。
+
+### 依存の組み立て
+
+アプリケーションサービスは実装ではなく**インターフェース**（`Protocol`）だけに依存します。
+更新側と参照側で置き場所が分かれます。
+
+| インターフェース | 置き場所 | 実装 |
+| --- | --- | --- |
+| `TeamRepository` `GameRepository` `LeagueRepository` | [domain/repositories.py](myapp/domain/repositories.py) | `infrastructure/repositories.py` |
+| `TeamListQuery` `GameListQuery` | [application/queries.py](myapp/application/queries.py) | `infrastructure/queries.py` |
+
+参照クエリだけドメイン層に置けないのは、戻り値が画面向けの DTO（`application/dto.py`）で、
+ドメイン層から参照できないためです。
+
+実装を差し込むのは [presentation/views.py](myapp/presentation/views.py) の `build_service()`
+**1か所だけ**です。管理画面のテンプレートタグもテストもここを呼びます。依存を省略可能にして
+呼ぶ側ごとに一部だけ渡すと、開く画面によって落ちるサービスができてしまうため、すべて必須です。
+
+実装がインターフェースを満たしているか、組み立てに欠けが無いかは
+[tests/integration/test_wiring.py](myapp/tests/integration/test_wiring.py) が機械的に検査します
+（`Protocol` は静的型検査では実装側に何も強制しないため、実行時にも確かめます）。
 
 ### 試合一覧の絞り込み
 

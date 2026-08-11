@@ -76,8 +76,13 @@ def _requires_team_permission(request, *team_ids):
     return None
 
 
-def _service() -> TeamApplicationService:
-    """依存を組み立てる。差し替えたい場合はここだけ変えればよい。"""
+def build_service() -> TeamApplicationService:
+    """依存を組み立てる。差し替えたい場合はここだけ変えればよい。
+
+    組み立ては**この1か所だけ**にする（管理画面のテンプレートタグもテストも
+    ここを呼ぶ）。呼ぶ側ごとに一部の依存だけを渡すと、使う画面によって
+    落ちるサービスができてしまうため。
+    """
     return TeamApplicationService(
         teams=DjangoTeamRepository(),
         team_list_query=DjangoTeamListQuery(),
@@ -89,7 +94,7 @@ def _service() -> TeamApplicationService:
 
 def dashboard(request):
     """ホーム画面。リーグ全体の概況と各種ランキングを表示する。"""
-    return render(request, "myapp/dashboard.html", {"board": _service().get_dashboard()})
+    return render(request, "myapp/dashboard.html", {"board": build_service().get_dashboard()})
 
 
 def _sort_params(request):
@@ -106,7 +111,7 @@ def _sort_params(request):
 def team_list(request):
     """チーム一覧。"""
     sort, descending = _sort_params(request)
-    listing = _service().list_teams_by_league(sort=sort, descending=descending)
+    listing = build_service().list_teams_by_league(sort=sort, descending=descending)
     return render(
         request,
         "myapp/team_list.html",
@@ -124,7 +129,7 @@ def standings(request, year=None):
     """年別の順位表。年を指定しない場合は最新シーズン。"""
     sort, descending = _sort_params(request)
     try:
-        board = _service().get_standings(year, sort=sort, descending=descending)
+        board = build_service().get_standings(year, sort=sort, descending=descending)
     except DomainError as error:
         raise Http404(str(error)) from error
 
@@ -141,7 +146,7 @@ def standings(request, year=None):
 
 def player_list(request, team_id):
     """選手一覧。野手／投手モードを切り替えて表示する。"""
-    service = _service()
+    service = build_service()
 
     try:
         team_name = service.get_team_name(team_id)
@@ -223,7 +228,7 @@ def player_search(request):
 def league_detail(request, league_id, year=None):
     """リーグ画面。所属チーム・順位表・直近の試合。"""
     try:
-        detail = _service().get_league_detail(league_id, year)
+        detail = build_service().get_league_detail(league_id, year)
     except LeagueNotFound:
         raise Http404("リーグが見つかりません。") from None
 
@@ -233,7 +238,7 @@ def league_detail(request, league_id, year=None):
 def league_titles(request, league_id, year=None):
     """リーグのタイトル一覧。部門別の上位者をシーズンで区切って並べる。"""
     try:
-        titles = _service().get_league_titles(league_id, year)
+        titles = build_service().get_league_titles(league_id, year)
     except LeagueNotFound:
         raise Http404("リーグが見つかりません。") from None
     except DomainError as error:
@@ -248,7 +253,7 @@ def league_stats(request, league_id):
     sort, descending = _sort_params(request)
 
     try:
-        stats = _service().get_league_stats(
+        stats = build_service().get_league_stats(
             league_id,
             pitchers=pos_mode == PITCHER_MODE,
             sort=sort,
@@ -276,7 +281,7 @@ def game_list(request):
     全件を一度に描くと件数ぶん重くなるため、指定が無ければ最新シーズンの
     最後に試合があった月を見せる。
     """
-    service = _service()
+    service = build_service()
 
     def _int(name):
         value = request.GET.get(name)
@@ -331,7 +336,7 @@ def game_list(request):
 @login_required
 def game_create(request):
     """試合を作る。作成後、成績の入力画面へ進む。"""
-    service = _service()
+    service = build_service()
     teams = service.list_teams().rows
     form = GameForm(request.POST or None, initial={"year": date.today().year})
 
@@ -372,7 +377,7 @@ def game_edit(request, game_id):
     require_GET により POST は 405 になり、旧フォームからの投稿が
     黙って捨てられて 200 が返る、という無反応な行き止まりを避ける）。
     """
-    service = _service()
+    service = build_service()
 
     try:
         data = service.get_game_edit_data(game_id)
@@ -475,7 +480,7 @@ def _pitching_row(player: dict) -> dict:
 def game_detail(request, game_id):
     """試合詳細。その試合の出場選手の成績を並べる。"""
     try:
-        detail = _service().get_game_detail(game_id)
+        detail = build_service().get_game_detail(game_id)
     except GameNotFound:
         raise Http404("試合が見つかりません。") from None
 
@@ -488,7 +493,7 @@ def game_detail(request, game_id):
 def player_detail(request, team_id, player_id):
     """選手の個人ページ。通算成績と試合ごとの記録。"""
     try:
-        profile = _service().get_player_profile(team_id, player_id)
+        profile = build_service().get_player_profile(team_id, player_id)
     except (TeamNotFound, PlayerNotFound):
         raise Http404("選手が見つかりません。") from None
 
@@ -506,7 +511,7 @@ def player_detail(request, team_id, player_id):
 @login_required
 def player_edit(request, team_id, player_id):
     """選手の基本情報と成績を編集する。"""
-    service = _service()
+    service = build_service()
 
     try:
         detail = service.get_player_detail(team_id, player_id)

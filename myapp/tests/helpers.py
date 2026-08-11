@@ -10,25 +10,13 @@ from datetime import date
 from django.contrib.auth.models import User
 from django.urls import reverse
 
-from myapp.application.services import TeamApplicationService
 from myapp.domain.entities import Game
 from myapp.domain.value_objects import BattingLine, PitchingLine, Season
-from myapp.infrastructure.queries import DjangoGameListQuery, DjangoTeamListQuery
-from myapp.infrastructure.repositories import (
-    DjangoGameRepository,
-    DjangoLeagueRepository,
-    DjangoTeamRepository,
-)
+from myapp.infrastructure.repositories import DjangoGameRepository
 
-
-def build_service() -> TeamApplicationService:
-    return TeamApplicationService(
-        teams=DjangoTeamRepository(),
-        team_list_query=DjangoTeamListQuery(),
-        games=DjangoGameRepository(),
-        leagues=DjangoLeagueRepository(),
-        game_list_query=DjangoGameListQuery(),
-    )
+# テストも画面と同じ組み立て（presentation/views.py）を使い、ここから再輸出する。
+# テスト専用の組み立てを別に持つと、依存が食い違ってもテストでは気づけない
+from myapp.presentation.views import build_service as build_service
 
 
 def api_inning_rows(away=(), home=(), *, total=12) -> list[dict]:

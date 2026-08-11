@@ -81,14 +81,21 @@ class DjangoTeamPermissionQuery:
 
 
 class DjangoGameListQuery:
-    """試合一覧に必要な値だけを取得する。
+    """GameListQuery の Django ORM 実装。試合一覧に必要な値だけを取得する。
 
     一覧に要るのは日付・チーム名・スコアだけなので、集約（Game）を組み立てない。
     集約経由だと1試合ごとに打撃・投球・イニングスコアの明細まで読むため、
     件数が増えると一覧が開かなくなる。
     """
 
-    def _rows(self, *, year=None, team_id=None, month=None, league_id=None):
+    def _rows(
+        self,
+        *,
+        year: int | None = None,
+        team_id: int | None = None,
+        month: int | None = None,
+        league_id: int | None = None,
+    ):
         """絞り込みは SQL 側で行う。取得後に Python で捨てると件数ぶん無駄になる。"""
         rows = orm_models.Game.objects.select_related("home_team", "away_team")
         if year is not None:
@@ -103,7 +110,14 @@ class DjangoGameListQuery:
             rows = rows.filter(played_on__month=month)
         return rows
 
-    def list_rows(self, *, year=None, team_id=None, month=None, league_id=None) -> list[GameRow]:
+    def list_rows(
+        self,
+        *,
+        year: int | None = None,
+        team_id: int | None = None,
+        month: int | None = None,
+        league_id: int | None = None,
+    ) -> list[GameRow]:
         rows = self._rows(year=year, team_id=team_id, month=month, league_id=league_id).order_by("-played_on", "-id")
         return [
             GameRow(
@@ -122,7 +136,7 @@ class DjangoGameListQuery:
             for row in rows
         ]
 
-    def list_for_standings(self, *, year=None) -> list[Game]:
+    def list_for_standings(self, *, year: int | None = None) -> list[Game]:
         """順位表の計算に渡す試合。**明細は読まない**。
 
         順位は得点と対戦カードだけで決まるので、打撃・投球・イニングスコアは
@@ -150,7 +164,9 @@ class DjangoGameListQuery:
         """試合のある年を新しい順に。"""
         return sorted(orm_models.Game.objects.values_list("year", flat=True).distinct(), reverse=True)
 
-    def list_months(self, *, year=None, team_id=None, league_id=None) -> list[int]:
+    def list_months(
+        self, *, year: int | None = None, team_id: int | None = None, league_id: int | None = None
+    ) -> list[int]:
         """その絞り込みで試合がある月を昇順に。
 
         月の切り出しは SQL 側で行う。1シーズンで千件を超えるため、
@@ -167,7 +183,7 @@ class DjangoGameListQuery:
 
 
 class DjangoTeamListQuery:
-    """チーム一覧に必要な値だけを取得する。"""
+    """TeamListQuery の Django ORM 実装。チーム一覧に必要な値だけを取得する。"""
 
     def list_summaries(self) -> list[TeamSummary]:
         rows = (

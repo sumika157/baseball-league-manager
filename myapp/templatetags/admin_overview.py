@@ -6,14 +6,11 @@ AdminSite を差し替えずに済ませるため、テンプレート側から�
 
 from django import template
 
-from ..application.services import TeamApplicationService
-from ..infrastructure.queries import DjangoTeamListQuery
-from ..infrastructure.repositories import DjangoTeamRepository
+from ..presentation.views import build_service
 
 register = template.Library()
 
 
 @register.inclusion_tag("admin/_overview.html")
 def admin_overview():
-    service = TeamApplicationService(teams=DjangoTeamRepository(), team_list_query=DjangoTeamListQuery())
-    return {"overview": service.get_admin_overview()}
+    return {"overview": build_service().get_admin_overview()}

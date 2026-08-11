@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from .entities import League, Team
+from .entities import Game, League, Team
 
 
 @runtime_checkable
@@ -28,6 +28,27 @@ class TeamRepository(Protocol):
         ...
 
     def save(self, team: Team) -> Team:
+        """集約の変更内容を永続化する。"""
+        ...
+
+
+@runtime_checkable
+class GameRepository(Protocol):
+    """Game 集約の永続化。試合は2チームにまたがるため Team とは別の集約。"""
+
+    def find_by_id(self, game_id: int) -> Game:
+        """打撃・投球・イニングスコアの明細込みで取得する。無ければ GameNotFound。"""
+        ...
+
+    def find_all(self, year: int | None = None) -> list[Game]:
+        """全試合を取得する。年を渡すとそのシーズンだけ。"""
+        ...
+
+    def find_by_team(self, team_id: int, year: int | None = None) -> list[Game]:
+        """そのチームが出場した試合を取得する（ホーム・ビジターの別を問わない）。"""
+        ...
+
+    def save(self, game: Game) -> Game:
         """集約の変更内容を永続化する。"""
         ...
 
