@@ -10,8 +10,11 @@ ORM モデルとドメインオブジェクトの相互変換（マッピング�
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+from dataclasses import dataclass
+
 from django.db import transaction
-from django.db.models import Prefetch, Sum
+from django.db.models import Prefetch, Q, QuerySet, Sum
 
 from ..domain.entities import (
     Captaincy,
@@ -72,6 +75,34 @@ _PITCHING_COUNTS = (
 _DERIVED_PITCHING_COUNTS = ("starts", "relief_wins")
 
 
+@dataclass(frozen=True)
+class _RosterData:
+    """ロスターを組み立てるのに要る、選手単位の材料をまとめたもの。
+
+    在籍・履歴・通算成績をチームごとに引くと、**チーム数ぶんのクエリ**になる
+    （48チームで約290クエリ・応答4.5秒だった）。選手idをまとめて渡して
+    一度に読み、各チームはそこから自分の選手を取り出す。
+    """
+
+    players: dict[int, orm_models.Player]
+    batting: dict[int, BattingLine]
+    pitching: dict[int, PitchingLine]
+    careers: dict[int, list[Stint]]
+    captaincies: dict[int, list[Captaincy]]
+
+    @classmethod
+    def for_players(cls, rows: Iterable[orm_models.Player]) -> _RosterData:
+        players = {row.id: row for row in rows}
+        player_ids = list(players)
+        return cls(
+            players=players,
+            batting=_batting_totals(player_ids),
+            pitching=_pitching_totals(player_ids),
+            careers=_careers_of(player_ids),
+            captaincies=_captaincies_of(player_ids),
+        )
+
+
 class DjangoTeamRepository:
     """TeamRepository の Django ORM 実装。"""
 
@@ -85,19 +116,37 @@ class DjangoTeamRepository:
         except orm_models.Team.DoesNotExist:
             raise TeamNotFound(f"チームが見つかりません（id={team_id}）。") from None
 
-        return self._to_domain(row, with_roster=True)
+        return self._to_domain(row, roster=_RosterData.for_players(s.player for s in row.stints.all()))
 
     def find_all(self) -> list[Team]:
         rows = orm_models.Team.objects.select_related("league").order_by("display_order", "name")
-        return [self._to_domain(row, with_roster=False) for row in rows]
+        return [self._to_domain(row) for row in rows]
 
     def find_all_with_roster(self) -> list[Team]:
-        rows = (
+        return self._with_rosters(self._roster_rows())
+
+    def find_by_league_with_roster(self, league_id: int) -> list[Team]:
+        """そのリーグのチームだけを、ロスター込みで読む。**絞り込みは SQL 側で行う**。
+
+        全チームを読んでから Python で絞ると、使わないリーグの選手の通算成績まで
+        組み立てることになる（6チームのリーグ平均のために48チーム読んでいた）。
+        """
+        return self._with_rosters(self._roster_rows().filter(league_id=league_id))
+
+    @staticmethod
+    def _roster_rows() -> QuerySet[orm_models.Team]:
+        return (
             orm_models.Team.objects.select_related("league")
-            .prefetch_related(self._stints_prefetch())
+            .prefetch_related(DjangoTeamRepository._stints_prefetch())
             .order_by("display_order", "name")
         )
-        return [self._to_domain(row, with_roster=True) for row in rows]
+
+    def _with_rosters(self, rows: QuerySet[orm_models.Team]) -> list[Team]:
+        """渡したチーム全部のロスターを、選手をまとめて1度に読んで組み立てる。"""
+        team_rows = list(rows)
+        # チームごとに引くとチーム数ぶんのクエリになる（_RosterData の説明を参照）
+        roster = _RosterData.for_players(s.player for row in team_rows for s in row.stints.all())
+        return [self._to_domain(row, roster=roster) for row in team_rows]
 
     @staticmethod
     def _stints_prefetch() -> Prefetch:
@@ -171,22 +220,17 @@ class DjangoTeamRepository:
 
     # --- 内部処理 ---
 
-    def _to_domain(self, row: orm_models.Team, *, with_roster: bool) -> Team:
+    def _to_domain(self, row: orm_models.Team, *, roster: _RosterData | None = None) -> Team:
+        """ORM のチーム行をドメインのチームにする。roster を渡すとロスターも組み立てる。"""
         players = []
-        if with_roster:
-            # このチームに在籍したことのある選手を、在籍の情報つきで組み立てる
-            stint_rows = list(
-                orm_models.PlayerStint.objects.filter(team=row).select_related("player").order_by("number")
-            )
-            player_rows = {s.player.id: s.player for s in stint_rows}
-            batting = _batting_totals(list(player_rows))
-            pitching = _pitching_totals(list(player_rows))
+        if roster is not None:
+            # このチームに在籍したことのある選手を、在籍の情報つきで組み立てる。
+            # 同じチームへの再加入で在籍が複数ある選手は1人にまとめる
+            team_player_ids = dict.fromkeys(stint.player_id for stint in row.stints.all())
 
-            careers = _careers_of(list(player_rows))
-            captaincies = _captaincies_of(list(player_rows))
-
-            for player_id, p in player_rows.items():
-                career = careers.get(player_id, [])
+            for player_id in team_player_ids:
+                p = roster.players[player_id]
+                career = roster.careers.get(player_id, [])
                 here = next((s for s in career if s.team_id == row.id and s.is_current), None)
                 # 現在このチームに居ないなら、最後にこのチームに居たときの背番号
                 last_here = next((s for s in career if s.team_id == row.id), None)
@@ -201,10 +245,10 @@ class DjangoTeamRepository:
                         position=Position.from_label(p.position),
                         is_active=here is not None,
                         profile=_profile_of(p),
-                        batting=batting.get(player_id, BattingLine()),
-                        pitching=pitching.get(player_id, PitchingLine()),
+                        batting=roster.batting.get(player_id, BattingLine()),
+                        pitching=roster.pitching.get(player_id, PitchingLine()),
                         career=career,
-                        captaincies=captaincies.get(player_id, []),
+                        captaincies=roster.captaincies.get(player_id, []),
                     )
                 )
             players.sort(key=lambda p: p.number.value)
@@ -371,20 +415,33 @@ class DjangoGameRepository:
         return self._to_domain(row)
 
     def find_all(self, year: int | None = None) -> list[Game]:
-        rows = orm_models.Game.objects.prefetch_related("batting_lines", "pitching_lines", "inning_scores")
+        rows = self._with_details()
         if year is not None:
             rows = rows.filter(year=year)
         return [self._to_domain(row) for row in rows]
 
     def find_by_team(self, team_id: int, year: int | None = None) -> list[Game]:
-        from django.db.models import Q
-
-        rows = orm_models.Game.objects.filter(Q(home_team_id=team_id) | Q(away_team_id=team_id)).prefetch_related(
-            "batting_lines", "pitching_lines", "inning_scores"
-        )
+        rows = self._with_details().filter(Q(home_team_id=team_id) | Q(away_team_id=team_id))
         if year is not None:
             rows = rows.filter(year=year)
         return [self._to_domain(row) for row in rows]
+
+    def find_between_teams(self, team_ids: set[int], year: int | None = None) -> list[Game]:
+        """渡したチームどうしの試合だけ。**絞り込みは SQL 側で行う**。
+
+        全試合を読んでから Python で捨てると、使わない試合の打撃・投球の明細まで
+        組み立てることになる（リーグ6チームぶんを得るために全48チームぶんの
+        明細を読んでいて、4.5秒かかっていた）。
+        """
+        rows = self._with_details().filter(home_team_id__in=team_ids, away_team_id__in=team_ids)
+        if year is not None:
+            rows = rows.filter(year=year)
+        return [self._to_domain(row) for row in rows]
+
+    @staticmethod
+    def _with_details() -> QuerySet[orm_models.Game]:
+        """打撃・投球・イニングスコアの明細つきで読む。集約として扱うときに使う。"""
+        return orm_models.Game.objects.prefetch_related("batting_lines", "pitching_lines", "inning_scores")
 
     @transaction.atomic
     def save(self, game: Game) -> Game:

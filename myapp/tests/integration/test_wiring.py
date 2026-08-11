@@ -6,6 +6,8 @@ application/queries.py）だけに依存し、実装は組み立ての1か所（
 気づけないため、機械的に確かめる。
 """
 
+from inspect import signature
+
 from django.test import SimpleTestCase
 
 from myapp.application.queries import GameListQuery, TeamListQuery
@@ -42,9 +44,16 @@ class BuildServiceTest(SimpleTestCase):
 
         欠けたまま作れると、使う画面によって「None に find_all は無い」で
         落ちるサービスができてしまう。
+
+        検査対象は `__init__` の引数に対応する属性だけ（引数 `teams` →
+        属性 `_teams` の対応を前提にする）。内部の控えは初期値が None を
+        取りうるので、`vars()` を丸ごと見ない。
         """
         service = build_service()
-        missing = [name for name, value in vars(service).items() if value is None]
+        parameters = [name for name in signature(TeamApplicationService.__init__).parameters if name != "self"]
+        self.assertTrue(parameters, "依存が1つも宣言されていません")
+
+        missing = [name for name in parameters if getattr(service, f"_{name}", None) is None]
         self.assertEqual(missing, [], f"依存が渡されていません: {missing}")
 
     def test_requires_every_dependency(self):

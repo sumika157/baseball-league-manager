@@ -49,6 +49,10 @@ class GameListQuery(Protocol):
         """試合のある年を新しい順に返す。"""
         ...
 
+    def count_by_team(self, *, year: int | None = None) -> dict[int, int]:
+        """チームid → 試合数。ホーム・ビジターの両方を数える。"""
+        ...
+
     def list_months(
         self, *, year: int | None = None, team_id: int | None = None, league_id: int | None = None
     ) -> list[int]:

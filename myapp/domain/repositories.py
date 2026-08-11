@@ -23,6 +23,15 @@ class TeamRepository(Protocol):
         """全チームを取得する（ロスターは含めない軽量版）。"""
         ...
 
+    def find_by_league_with_roster(self, league_id: int) -> list[Team]:
+        """そのリーグのチームを、ロスター込みで取得する。
+
+        リーグ平均（FIP 定数・OPS+/ERA+ の基準）やリーグ内のランキングに使う。
+        全チームを読んでから Python で絞ると、他リーグの選手の通算成績まで
+        組み立てることになる。
+        """
+        ...
+
     def find_all_with_roster(self) -> list[Team]:
         """全チームをロスター込みで取得する。リーグ全体の順位づけに使う。"""
         ...
@@ -46,6 +55,14 @@ class GameRepository(Protocol):
 
     def find_by_team(self, team_id: int, year: int | None = None) -> list[Game]:
         """そのチームが出場した試合を取得する（ホーム・ビジターの別を問わない）。"""
+        ...
+
+    def find_between_teams(self, team_ids: set[int], year: int | None = None) -> list[Game]:
+        """渡したチームどうしの試合だけを取得する（両チームが対象に含まれるもの）。
+
+        リーグ内の試合を集めるのに使う。全試合を読んでから Python で捨てると、
+        使わない試合の明細まで組み立てることになる。
+        """
         ...
 
     def save(self, game: Game) -> Game:

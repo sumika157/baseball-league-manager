@@ -167,6 +167,22 @@ class DjangoGameListQuery:
         """試合のある年を新しい順に。"""
         return sorted(orm_models.Game.objects.values_list("year", flat=True).distinct(), reverse=True)
 
+    def count_by_team(self, *, year: int | None = None) -> dict[int, int]:
+        """チームid → 試合数。規定打席・規定投球回の基準になる。
+
+        数えるだけなので試合を1件も組み立てない。ホームとビジターで別に数えて
+        足す（1試合は両チームの1試合として数える）。
+        """
+        rows = orm_models.Game.objects.all()
+        if year is not None:
+            rows = rows.filter(year=year)
+
+        counts: dict[int, int] = {}
+        for field in ("home_team_id", "away_team_id"):
+            for entry in rows.values(field).annotate(played=Count("id")):
+                counts[entry[field]] = counts.get(entry[field], 0) + entry["played"]
+        return counts
+
     def list_months(
         self, *, year: int | None = None, team_id: int | None = None, league_id: int | None = None
     ) -> list[int]:

@@ -373,9 +373,12 @@ class TeamApplicationService:
 
         順位づけの規則そのものはドメインサービスにあり、ここでは
         表示用に整形するだけにとどめる。
+
+        順位は得点と対戦カードだけで決まる。**ロスターも成績の明細も読まない**
+        （どちらも件数ぶん重くなるだけで、順位には影響しない）。
         """
-        teams = self._teams.find_all_with_roster()
-        all_games = self._games.find_all()
+        teams = self._teams.find_all()
+        all_games = self._game_list_query.list_for_standings()
         seasons = domain_services.seasons_of(all_games)
 
         if not seasons:
@@ -437,12 +440,16 @@ class TeamApplicationService:
         return display_rows
 
     def get_league_detail(self, league_id: int, year: int | None = None) -> LeagueDetail:
-        """リーグ画面。所属チーム・順位表・直近の試合をまとめて返す。"""
+        """リーグ画面。所属チーム・順位表・直近の試合をまとめて返す。
+
+        並べるのは順位・対戦成績・直近の試合だけなので、**ロスターも成績の明細も
+        読まない**。所属チームの一覧は参照クエリの概要（TeamSummary）を使う。
+        """
         league = self._leagues.find_by_id(league_id)
-        teams = [t for t in self._teams.find_all_with_roster() if t.league_id == league_id]
+        teams = [t for t in self._teams.find_all() if t.league_id == league_id]
         member_ids = {t.id for t in teams}
 
-        all_games = self._games.find_all()
+        all_games = self._game_list_query.list_for_standings()
         league_games = [g for g in all_games if g.home_team_id in member_ids and g.away_team_id in member_ids]
         seasons = domain_services.seasons_of(league_games)
 
@@ -487,15 +494,19 @@ class TeamApplicationService:
 
         ダッシュボードのランキングは通算成績だが、タイトルはシーズンごとに
         争われるので、こちらは対象シーズンの試合だけから成績を積み直す。
+
+        成績の明細が要るのは**対象シーズンの試合だけ**。どの年が選べるかは
+        明細を読まない一覧で決め、明細は年で絞ってから読む（全シーズンぶんの
+        明細を読むと、1シーズンぶんを使うために数万行を無駄に組み立てる）。
         """
         league = self._leagues.find_by_id(league_id)
-        teams = [t for t in self._teams.find_all_with_roster() if t.league_id == league_id]
-        member_ids = {t.id for t in teams}
+        teams = self._teams.find_by_league_with_roster(league_id)
+        member_ids = {_saved_id(t.id) for t in teams}
 
-        league_games = [
-            g for g in self._games.find_all() if g.home_team_id in member_ids and g.away_team_id in member_ids
-        ]
-        seasons = domain_services.seasons_of(league_games)
+        def in_league(game: Game) -> bool:
+            return game.home_team_id in member_ids and game.away_team_id in member_ids
+
+        seasons = domain_services.seasons_of([g for g in self._game_list_query.list_for_standings() if in_league(g)])
 
         if not seasons:
             return LeagueTitles(
@@ -507,7 +518,7 @@ class TeamApplicationService:
             )
 
         target = Season(year) if year is not None else seasons[0]
-        season_games = [g for g in league_games if g.season == target]
+        season_games = self._games.find_between_teams(member_ids, target.year)
 
         # そのシーズンの成績だけを持つ選手に組み替える。通算値のままでは
         # 別のシーズンの記録まで混ざってタイトルの対象にならない
@@ -632,7 +643,7 @@ class TeamApplicationService:
         不正なキーは既定の並びに落ちる。
         """
         league = self._leagues.find_by_id(league_id)
-        teams = [t for t in self._teams.find_all_with_roster() if t.league_id == league_id]
+        teams = self._teams.find_by_league_with_roster(league_id)
         context = self._league_context(league_id)
 
         members: list[Player] = []
@@ -1261,12 +1272,11 @@ class TeamApplicationService:
     # --- 参照用の索引 ---
 
     def _team_game_counts(self, year: int | None = None) -> dict[int, int]:
-        """チームごとの試合数。規定打席・規定投球回の基準になる。"""
-        counts: dict[int, int] = {}
-        for game in self._games.find_all(year):
-            for team_id in (game.home_team_id, game.away_team_id):
-                counts[team_id] = counts.get(team_id, 0) + 1
-        return counts
+        """チームごとの試合数。規定打席・規定投球回の基準になる。
+
+        数えるだけなので集約を組み立てず、参照クエリに SQL で数えさせる。
+        """
+        return self._game_list_query.count_by_team(year=year)
 
     def get_team_totals(self, team_id: int) -> TeamTotals:
         """チームの打撃・投球の合計と、そこから求めた指標。"""
@@ -1321,11 +1331,9 @@ class TeamApplicationService:
         if league_id is None:
             return _EMPTY_LEAGUE_CONTEXT
         if league_id not in self._league_contexts:
+            # 基準はそのリーグの中だけで決まる。他リーグのチームは読まない
             members = [
-                player
-                for team in self._teams.find_all_with_roster()
-                if team.league_id == league_id
-                for player in team.active_players
+                player for team in self._teams.find_by_league_with_roster(league_id) for player in team.active_players
             ]
             batting = domain_services.team_batting(members)
             pitching = domain_services.team_pitching(members)
