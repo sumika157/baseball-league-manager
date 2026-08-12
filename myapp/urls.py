@@ -33,9 +33,6 @@ urlpatterns = [
     path("games/new/", views.game_create, name="game_create"),
     path("games/<int:game_id>/", views.game_detail, name="game_detail"),
     path("games/<int:game_id>/edit/", views.game_edit, name="game_edit"),
-    path("api/games/<int:game_id>/", api.game_update, name="api_game_update"),
-    # 打席の記録での保存。上の api_game_update は成績を手入力する旧画面のためのもので、
-    # 入力画面をスコアブックに置き換えたら消す
     path("api/games/<int:game_id>/scorebook/", api.game_scorebook, name="api_game_scorebook"),
     path("team/<int:team_id>/", views.player_list, name="player_list"),
     # 選手は Team 集約の内部エンティティなので、URL もチームの下に置く

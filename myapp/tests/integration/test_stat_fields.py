@@ -23,7 +23,6 @@ from myapp.infrastructure.repositories import (
     _DERIVED_PITCHING_COUNTS,
     _PITCHING_COUNTS,
 )
-from myapp.presentation.forms import BattingEntryForm, PitchingEntryForm
 
 TYPES_TS = pathlib.Path(settings.BASE_DIR) / "frontend" / "src" / "game_edit" / "types.ts"
 
@@ -45,29 +44,24 @@ def _ts_number(name: str) -> int:
 
 
 class BattingStatFieldsTest(SimpleTestCase):
-    """打撃のカウント項目は、どの層でも同じ9項目であること。"""
+    """打撃のカウント項目は、値オブジェクトと永続化で同じであること。
 
-    def test_all_sources_agree(self):
+    **入力フォームの列挙は無くなった**（成績を手入力する画面が消え、打席から
+    導くようになったため）。残る重複は値オブジェクト ↔ 永続化の2か所だけ。
+    """
+
+    def test_persistence_matches_the_line(self):
         domain = {f.name for f in fields(BattingLine)}
         self.assertEqual(domain, set(_BATTING_FIELDS), "永続化の列挙が BattingLine と違います")
-        self.assertEqual(domain, set(BattingEntryForm.STAT_FIELDS), "入力フォームの列挙が BattingLine と違います")
 
 
 class PitchingStatFieldsTest(SimpleTestCase):
-    """投球は、手で入力する項目と導出する項目に分かれる。
-
-    勝敗・セーブ・ホールドは継投から導くため入力欄を持たない
-    （フォームの列挙が永続化より少ないのは、そのぶん）。
-    """
+    """投球は、打席から数える項目と継投から導く項目に分かれる。"""
 
     def test_persistence_covers_the_whole_line(self):
         domain = {f.name for f in fields(PitchingLine)}
         persisted = {"innings", *_PITCHING_COUNTS, *_DERIVED_PITCHING_COUNTS}
         self.assertEqual(domain, persisted, "永続化の列挙が PitchingLine と違います")
-
-    def test_entered_fields_are_persisted(self):
-        """入力できる項目が、保存される項目に含まれていること。"""
-        self.assertLessEqual(set(PitchingEntryForm.COUNT_FIELDS), set(_PITCHING_COUNTS))
 
 
 class BaseNumbersTest(SimpleTestCase):

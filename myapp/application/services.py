@@ -16,15 +16,11 @@ from ..domain import services as domain_services
 from ..domain.entities import Game, Player, Stint, Team
 from ..domain.repositories import GameRepository, LeagueRepository, TeamRepository
 from ..domain.value_objects import (
-    BattingLine,
-    FieldingPosition,
     JerseyNumber,
-    LineScore,
     PitchingLine,
     Position,
     Season,
     TeamRecord,
-    ensure_quota_not_exceeded,
     format_average,
 )
 from .dto import (
@@ -1110,137 +1106,6 @@ class TeamApplicationService:
                 away_score=away_score,
             )
         )
-
-    def update_game(
-        self,
-        game_id: int,
-        *,
-        year: int,
-        played_on: date,
-        home_team_id: int,
-        away_team_id: int,
-        home_score: int,
-        away_score: int,
-        batting: dict[int, BattingLine] | None = None,
-        pitching: dict[int, PitchingLine] | None = None,
-        lineup: dict[int, tuple[int | None, int, FieldingPosition | None]] | None = None,
-        staff: dict[int, int] | None = None,
-        line_score: LineScore | None = None,
-    ) -> Game:
-        """試合の基本情報と、出場選手の成績をまとめて更新する。
-
-        batting / pitching は {選手id: ライン}。渡された辞書に含まれない選手の
-        記録は取り消す（出場していない扱いに戻せるようにするため）。
-
-        lineup は {選手id: (打順, 交代の順, 守備位置)}、staff は {選手id: 登板した回}。
-        line_score があれば、勝敗・セーブ・ホールドは日本プロ野球の規則で導出して
-        上書きする。手入力させないのは、規則から一意に決まるものを人が入れると
-        記録どうしが食い違うため。
-        """
-        current = self._games.find_by_id(game_id)
-
-        game = Game(
-            id=current.id,
-            season=Season(year),
-            played_on=played_on,
-            home_team_id=home_team_id,
-            away_team_id=away_team_id,
-            home_score=home_score,
-            away_score=away_score,
-            line_score=line_score if line_score is not None else current.line_score,
-            # **打席の記録を引き継ぐ。** 組み立て直した集約に載せ忘れると、
-            # 「読み込んでいない」ではなく「記録が無い」として保存され、
-            # 記録済みの打席が黙って全部消える（エラーにならないので気づけない）
-            plate_appearances=current.plate_appearances,
-            plate_appearances_loaded=current.plate_appearances_loaded,
-        )
-        game.ensure_line_score_matches()
-
-        batting = batting or {}
-        pitching = pitching or {}
-        lineup = lineup or {}
-        staff = staff or {}
-        for player_id, line in batting.items():
-            order, sequence, position = lineup.get(player_id, (None, 0, None))
-            game.record_batting(
-                player_id,
-                line,
-                batting_order=order,
-                slot_sequence=sequence,
-                fielding_position=position,
-            )
-        # 登板順は登板した回の順に振る。**チームごとに1から振る**（両チームの投手を
-        # まとめて数えると、相手の先発が2番手になってしまう）
-        entered = {pid: staff.get(pid, 1) for pid in pitching}
-        players = self._player_index()
-        # 選手索引に無い選手は team_id が None のまとまりに入る（現状の挙動を維持）
-        by_team: dict[int | None, list[int]] = {}
-        for player_id in sorted(entered, key=lambda pid: (entered[pid], pid)):
-            team_id = players.get(player_id, {}).get("team_id")
-            by_team.setdefault(team_id, []).append(player_id)
-
-        for ordered in by_team.values():
-            for order, player_id in enumerate(ordered, start=1):
-                game.record_pitching(
-                    player_id,
-                    pitching[player_id],
-                    appearance_order=order,
-                    entered_inning=entered[player_id],
-                )
-
-        self._ensure_foreign_player_game_quota(game, batting, pitching)
-        self._apply_pitching_decisions(game)
-        return self._games.save(game)
-
-    def _apply_pitching_decisions(self, game: Game) -> None:
-        """勝敗・セーブ・ホールドをドメインの規則で決め、記録に反映する。
-
-        イニングスコアが無い試合では判定できないので、そのまま残す。
-        """
-        if game.line_score.is_empty:
-            return
-
-        players = self._player_index()
-        team_of = {pid: info["team_id"] for pid, info in players.items()}
-        decisions = domain_services.pitching_decisions(game, team_of)
-
-        for entry in game.pitching:
-            line = entry.line
-            wins = decisions.wins_for(entry.player_id)
-            entry.line = replace(
-                line,
-                wins=wins,
-                losses=decisions.losses_for(entry.player_id),
-                saves=decisions.saves_for(entry.player_id),
-                holds=decisions.holds_for(entry.player_id),
-                starts=1 if entry.appearance_order == 1 else 0,
-                relief_wins=wins if entry.appearance_order > 1 else 0,
-            )
-
-    def _ensure_foreign_player_game_quota(self, game: Game, batting: dict, pitching: dict) -> None:
-        """1試合の出場選手（打撃または投球成績が記録される選手）のうち、
-        外国人選手がチームごとの上限を超えていないか確認する。
-
-        ホーム・ビジターはそれぞれ独立に判定する（合算しない）。
-        """
-        players = self._player_index()
-        names = self._team_names()
-        participant_ids = set(batting) | set(pitching)
-
-        for team_id in (game.home_team_id, game.away_team_id):
-            foreign_count = sum(
-                1
-                for pid in participant_ids
-                if players.get(pid, {}).get("team_id") == team_id and players[pid]["is_foreign_player"]
-            )
-            league_id = _saved_id(self._teams.find_by_id(team_id).league_id)
-            limit = self._leagues.find_by_id(league_id).foreign_player_game_limit
-            ensure_quota_not_exceeded(
-                foreign_count,
-                limit,
-                f"「{names.get(team_id, '')}」の外国人選手出場人数（{foreign_count}人）が"
-                f"上限（{limit}人）を超えています。",
-            )
 
     def get_admin_overview(self) -> AdminOverview:
         """管理画面トップ用の概況。
