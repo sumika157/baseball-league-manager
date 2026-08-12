@@ -90,6 +90,14 @@ class GamePlayerRow:
     triples: int = 0
     hit_by_pitch: int = 0
     sacrifice_flies: int = 0
+    runs: int = 0
+    sacrifice_bunts: int = 0
+    stolen_bases: int = 0
+    double_plays: int = 0
+    # 打者の三振。投手の `strikeouts`（奪三振）とは別の事実なので名前を分ける
+    # （1つの DTO を打撃行と投球行の両方に使っているため）
+    strikeouts_batting: int = 0
+    runs_allowed: int = 0
     # 通算の率。ボックススコアの「打率」「防御率」は、その試合の率ではなく
     # 積み上がった率を参考として並べる（1試合の率は標本が小さすぎて読めない）
     career_batting_average: float = 0.0

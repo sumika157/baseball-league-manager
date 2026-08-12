@@ -474,3 +474,70 @@ class BoxScoreEntryTest(BaseCase):
             self.assertEqual(set(player), {"id", "name", "number", "position", "is_pitcher"})
         # 代わりに打席の語彙が載る（画面側に同じ表を持たせないため）
         self.assertIn("results", payload["vocabulary"])
+
+
+class BoxScoreColumnsTest(BaseCase):
+    """ボックススコアに、打席から導いた項目が並ぶこと。
+
+    打撃の得点・三振・犠打・盗塁・併殺打と、投球の失点。手入力していた頃は
+    数えられず、表に欄が無かったもの。
+    """
+
+    def setUp(self):
+        super().setUp()
+        login_as_manager(self.client, self.team, self.rival)
+        self.pitcher = self.service.register_player(self.team.id, "先発", 11, "投手")
+        self.rival_pitcher = self.service.register_player(self.rival.id, "相手先発", 21, "投手")
+        self.home_batters = register_lineup(self.service, self.team, prefix="ホーム", first_number=31)
+        self.away_batters = register_lineup(self.service, self.rival, prefix="ビジター", first_number=41)
+        self.game = play_game(self.team, self.rival, home_score=0, away_score=0)
+
+        post_game_scorebook(
+            self.client,
+            self.game.id,
+            {
+                "year": 2026,
+                "played_on": "2026-04-01",
+                "home_team": self.team.id,
+                "away_team": self.rival.id,
+                "lineup": lineup_rows(self.team, self.home_batters) + lineup_rows(self.rival, self.away_batters),
+                # ビジターが1回表に2点。裏はホームが3人で終わる
+                "plate_appearances": build_scorebook(
+                    away=[2],
+                    home=[0],
+                    away_batters=self.away_batters,
+                    home_batters=self.home_batters,
+                    away_pitchers={1: self.rival_pitcher.id},
+                    home_pitchers={1: self.pitcher.id},
+                ),
+            },
+        )
+
+    def test_the_batting_table_has_the_new_columns(self):
+        response = self.client.get(reverse("game_detail", args=[self.game.id]))
+
+        for label in ("得点", "三振", "犠打", "盗塁", "併殺打"):
+            with self.subTest(label=label):
+                self.assertContains(response, f'<th class="text-end">{label}</th>', html=False)
+
+    def test_the_pitching_table_shows_runs_allowed(self):
+        response = self.client.get(reverse("game_detail", args=[self.game.id]))
+
+        self.assertContains(response, '<th class="text-end">失点</th>', html=False)
+
+    def test_runs_are_shown_for_the_batter_who_scored(self):
+        """本塁打を打った選手に得点が付く（打点と別の欄で並ぶ）。"""
+        rows = self.client.get(reverse("game_detail", args=[self.game.id])).context["detail"].away_box.batting
+
+        scorer = next(row for row in rows if row.player_id == self.away_batters[0])
+        self.assertEqual((scorer.runs, scorer.home_runs, scorer.runs_batted_in), (1, 1, 1))
+
+    def test_strikeouts_are_shown_for_the_batter(self):
+        rows = self.client.get(reverse("game_detail", args=[self.game.id])).context["detail"].home_box.batting
+
+        self.assertEqual(sum(row.strikeouts_batting for row in rows), 3)
+
+    def test_runs_allowed_is_shown_for_the_pitcher(self):
+        rows = self.client.get(reverse("game_detail", args=[self.game.id])).context["detail"].home_box.pitching
+
+        self.assertEqual(rows[0].runs_allowed, 2)
