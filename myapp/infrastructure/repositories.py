@@ -18,27 +18,36 @@ from django.db.models import Prefetch, Q, QuerySet, Sum
 
 from ..domain.entities import (
     Captaincy,
+    FieldingError,
     Game,
     GameBatting,
     GamePitching,
     League,
+    PlateAppearance,
     Player,
+    RunnerAdvance,
+    RunnerSubstitution,
     Stint,
     Team,
 )
 from ..domain.exceptions import (
     GameNotFound,
+    InvalidPosition,
     LeagueNotFound,
     TeamNotFound,
 )
 from ..domain.value_objects import (
+    AdvanceReason,
+    Base,
     BattingLine,
+    ErrorKind,
     FieldingPosition,
     Handedness,
     InningsPitched,
     JerseyNumber,
     LineScore,
     PitchingLine,
+    PlateAppearanceResult,
     Position,
     Profile,
     Season,
@@ -402,17 +411,34 @@ def _pitching_totals(player_ids: list[int]) -> dict[int, PitchingLine]:
     }
 
 
+def _to_fielded_by(value: str) -> tuple[FieldingPosition, ...]:
+    """「遊-二-一」の1列から打球の処理経路に戻す。空欄は経路なし。"""
+    positions = (FieldingPosition.from_label(label) for label in value.split(orm_models.FIELDED_BY_SEPARATOR))
+    return tuple(position for position in positions if position is not None)
+
+
+def _from_fielded_by(positions: tuple[FieldingPosition, ...]) -> str:
+    """打球の処理経路を1列にまとめる。読み書きで同じ形に戻ることが条件。"""
+    return orm_models.FIELDED_BY_SEPARATOR.join(position.value for position in positions)
+
+
+def _required_position(label: str) -> FieldingPosition:
+    """守備位置を必須として読む。失策には必ず守備者の位置が付く。"""
+    position = FieldingPosition.from_label(label)
+    if position is None:
+        raise InvalidPosition("失策には守備位置が必要です。")
+    return position
+
+
 class DjangoGameRepository:
     """GameRepository の Django ORM 実装。試合（Game 集約）の永続化。"""
 
     def find_by_id(self, game_id: int) -> Game:
         try:
-            row = orm_models.Game.objects.prefetch_related("batting_lines", "pitching_lines", "inning_scores").get(
-                id=game_id
-            )
+            row = self._with_details().prefetch_related(self._plate_appearance_prefetch()).get(id=game_id)
         except orm_models.Game.DoesNotExist:
             raise GameNotFound(f"試合が見つかりません（id={game_id}）。") from None
-        return self._to_domain(row)
+        return self._to_domain(row, with_plate_appearances=True)
 
     def find_all(self, year: int | None = None) -> list[Game]:
         rows = self._with_details()
@@ -425,6 +451,18 @@ class DjangoGameRepository:
         if year is not None:
             rows = rows.filter(year=year)
         return [self._to_domain(row) for row in rows]
+
+    @staticmethod
+    def _plate_appearance_prefetch() -> Prefetch:
+        """打席を進塁・代走・失策ごとまとめて読む。
+
+        多段の prefetch を素で書くと、SQLite では関連が1000件を超えた時点で
+        OR 連結クエリになって落ちる（既知の罠）。打席を軸に1段ずつまとめて読む。
+        """
+        return Prefetch(
+            "plate_appearances",
+            queryset=orm_models.GamePlateAppearance.objects.prefetch_related("advances", "substitutions", "errors"),
+        )
 
     def find_between_teams(self, team_ids: set[int], year: int | None = None) -> list[Game]:
         """渡したチームどうしの試合だけ。**絞り込みは SQL 側で行う**。
@@ -440,7 +478,12 @@ class DjangoGameRepository:
 
     @staticmethod
     def _with_details() -> QuerySet[orm_models.Game]:
-        """打撃・投球・イニングスコアの明細つきで読む。集約として扱うときに使う。"""
+        """打撃・投球・イニングスコアの明細つきで読む。集約として扱うときに使う。
+
+        **打席は含めない。** 1試合で約280行あり、まとめて読む用途（リーグ集計など）で
+        付けると数十万行を組み立てることになる。打席が要るのは1試合を編集するときだけで、
+        そこは `find_by_id` が読む。
+        """
         return orm_models.Game.objects.prefetch_related("batting_lines", "pitching_lines", "inning_scores")
 
     @transaction.atomic
@@ -483,6 +526,7 @@ class DjangoGameRepository:
             pitching_entry.id = pitching_row.id
 
         self._save_line_score(row, game)
+        self._save_plate_appearances(row, game)
 
         # 集約から外された成績は削除する。上書きだけだと、いったん入力した
         # 選手を「出場していない」に戻せない
@@ -512,6 +556,132 @@ class DjangoGameRepository:
                 )
         orm_models.GameInningScore.objects.filter(game=row, inning__gt=score.innings).delete()
 
+    @classmethod
+    def _save_plate_appearances(cls, row: orm_models.Game, game: Game) -> None:
+        """打席の記録を保存する。
+
+        **打席を省いて読んだ集約では何もしない。** 省略を「記録が無い」と解釈すると、
+        一覧のために読んだ試合を保存しただけで記録済みの打席が全部消える
+        （既知の罠と同じ形。エラーにならないので気づけない）。
+
+        記録があるときは、その試合の打席をいったん消してから入れ直す。進塁・代走・失策は
+        打席の中の位置で識別する（`error_index` が並び順を指す）ため、1行ずつ突き合わせても
+        安定した対応が付けられない。1試合あたり6クエリで済み、行ごとの更新より速い。
+        """
+        if not game.plate_appearances_loaded:
+            return
+
+        orm_models.GamePlateAppearance.objects.filter(game=row).delete()
+        ordered = game.plate_appearances_in_order()
+        if not ordered:
+            return
+
+        orm_models.GamePlateAppearance.objects.bulk_create(
+            [
+                orm_models.GamePlateAppearance(
+                    game=row,
+                    sequence=entry.sequence,
+                    inning=entry.inning,
+                    is_bottom=entry.is_bottom,
+                    batter_id=entry.batter_id,
+                    pitcher_id=entry.pitcher_id,
+                    batting_order=entry.batting_order,
+                    slot_sequence=entry.slot_sequence,
+                    result=entry.result.value,
+                    fielded_by=_from_fielded_by(entry.fielded_by),
+                )
+                for entry in ordered
+            ]
+        )
+        # bulk_create が主キーを返すかは DB に依存するため、読み直して対応づける
+        saved = {r.sequence: r for r in orm_models.GamePlateAppearance.objects.filter(game=row)}
+        for entry in ordered:
+            entry.id = saved[entry.sequence].id
+
+        orm_models.GameRunnerAdvance.objects.bulk_create(
+            [
+                orm_models.GameRunnerAdvance(
+                    plate_appearance=saved[entry.sequence],
+                    runner_id=advance.runner_id,
+                    from_base=advance.from_base.value,
+                    to_base=advance.to_base.value,
+                    reason=advance.reason.value,
+                    error_index=advance.error_index,
+                )
+                for entry in ordered
+                for advance in entry.advances
+            ]
+        )
+        orm_models.GameRunnerSubstitution.objects.bulk_create(
+            [
+                orm_models.GameRunnerSubstitution(
+                    plate_appearance=saved[entry.sequence],
+                    base=substitution.base.value,
+                    leaving_runner_id=substitution.leaving_runner_id,
+                    entering_runner_id=substitution.entering_runner_id,
+                )
+                for entry in ordered
+                for substitution in entry.substitutions
+            ]
+        )
+        orm_models.GameFieldingError.objects.bulk_create(
+            [
+                orm_models.GameFieldingError(
+                    plate_appearance=saved[entry.sequence],
+                    player_id=error.player_id,
+                    position=error.position.value,
+                    kind=error.kind.value,
+                )
+                for entry in ordered
+                for error in entry.errors
+            ]
+        )
+
+    @staticmethod
+    def _to_plate_appearances(row: orm_models.Game) -> list[PlateAppearance]:
+        """行から打席の記録を組み立てる。進塁・代走・失策は打席の中の並びを保つ。"""
+        return [
+            PlateAppearance(
+                id=pa.id,
+                sequence=pa.sequence,
+                inning=pa.inning,
+                is_bottom=pa.is_bottom,
+                batter_id=pa.batter_id,
+                pitcher_id=pa.pitcher_id,
+                batting_order=pa.batting_order,
+                slot_sequence=pa.slot_sequence,
+                result=PlateAppearanceResult.from_label(pa.result),
+                fielded_by=_to_fielded_by(pa.fielded_by),
+                advances=[
+                    RunnerAdvance(
+                        runner_id=advance.runner_id,
+                        from_base=Base(advance.from_base),
+                        to_base=Base(advance.to_base),
+                        reason=AdvanceReason.from_label(advance.reason),
+                        error_index=advance.error_index,
+                    )
+                    for advance in pa.advances.all()
+                ],
+                substitutions=[
+                    RunnerSubstitution(
+                        base=Base(substitution.base),
+                        leaving_runner_id=substitution.leaving_runner_id,
+                        entering_runner_id=substitution.entering_runner_id,
+                    )
+                    for substitution in pa.substitutions.all()
+                ],
+                errors=[
+                    FieldingError(
+                        player_id=error.player_id,
+                        position=_required_position(error.position),
+                        kind=ErrorKind.from_label(error.kind),
+                    )
+                    for error in pa.errors.all()
+                ],
+            )
+            for pa in row.plate_appearances.all()
+        ]
+
     @staticmethod
     def _to_line_score(row: orm_models.Game) -> LineScore:
         """行から回ごとの得点を組み立てる。抜けている回は 0 で埋める。"""
@@ -527,7 +697,12 @@ class DjangoGameRepository:
         return LineScore(away=to_tuple(halves[False]), home=to_tuple(halves[True]))
 
     @classmethod
-    def _to_domain(cls, row: orm_models.Game) -> Game:
+    def _to_domain(cls, row: orm_models.Game, *, with_plate_appearances: bool = False) -> Game:
+        """行から集約を組み立てる。
+
+        打席を読んだかどうかは集約に持たせる。読んでいない集約をそのまま保存しても
+        記録済みの打席が消えないようにするため（`_save_plate_appearances` を参照）。
+        """
         game = Game(
             id=row.id,
             season=Season(row.year),
@@ -537,6 +712,8 @@ class DjangoGameRepository:
             home_score=row.home_score,
             away_score=row.away_score,
             line_score=cls._to_line_score(row),
+            plate_appearances=cls._to_plate_appearances(row) if with_plate_appearances else [],
+            plate_appearances_loaded=with_plate_appearances,
         )
         game.batting = [
             GameBatting(

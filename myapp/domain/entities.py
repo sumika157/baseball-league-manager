@@ -698,6 +698,11 @@ class Game:
     # 打席ごとの記録。スコアブックのマス目にあたり、記録があれば打撃・投球・守備成績と
     # イニングスコアはすべてここから導出できる。イニングスコアと同じく空でも試合は成立する
     plate_appearances: list[PlateAppearance] = field(default_factory=list)
+    # 打席の記録を伴って読み込んだか。1試合あたり約280行になるため、一覧のために
+    # まとめて読むときは打席を省く。**「省いた」と「記録が無い」は区別しなければならない**
+    # （区別しないと、省いて読んだ集約を保存したときに記録済みの打席が全部消える）。
+    # 記録は打席入力の画面だけが書き換えるので、省いて読んだ集約の保存は打席に触れない。
+    plate_appearances_loaded: bool = True
 
     def __post_init__(self) -> None:
         if self.home_team_id == self.away_team_id:
