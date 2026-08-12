@@ -1148,6 +1148,11 @@ class TeamApplicationService:
             home_score=home_score,
             away_score=away_score,
             line_score=line_score if line_score is not None else current.line_score,
+            # **打席の記録を引き継ぐ。** 組み立て直した集約に載せ忘れると、
+            # 「読み込んでいない」ではなく「記録が無い」として保存され、
+            # 記録済みの打席が黙って全部消える（エラーにならないので気づけない）
+            plate_appearances=current.plate_appearances,
+            plate_appearances_loaded=current.plate_appearances_loaded,
         )
         game.ensure_line_score_matches()
 
