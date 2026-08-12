@@ -219,7 +219,7 @@ class AdvancedMetricsTest(BaseCase):
 
         response = self.client.get(reverse("game_edit", args=[game.id]))
         payload = response.context["payload"]
-        pitchers = [p for roster in payload["rosters"] for p in roster["pitchers"]]
+        pitchers = [{"player_id": p["id"]} for team in payload["teams"] for p in team["players"] if p["is_pitcher"]]
 
         pitching_rows = [
             {
@@ -273,7 +273,7 @@ class AdvancedMetricsTest(BaseCase):
         )
         game = orm_models.Game.objects.latest("id")
         payload = self.client.get(reverse("game_edit", args=[game.id])).context["payload"]
-        pitchers = [p for roster in payload["rosters"] for p in roster["pitchers"]]
+        pitchers = [{"player_id": p["id"]} for team in payload["teams"] for p in team["players"] if p["is_pitcher"]]
 
         pitching_rows = [
             {

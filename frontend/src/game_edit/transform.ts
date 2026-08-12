@@ -1,188 +1,185 @@
 // game_edit/transform.ts
-// payload ⇔ 編集状態 ⇔ 送信 body の変換と、画面側の入力補助（自動計算・警告・行のハイライト判定）。
-// 業務ルールの確定判断はサーバー（ドメイン層）が持つ。ここでの判定はあくまで入力補助。
+// payload ⇄ 編集状態 ⇄ リクエスト body の変換と、入力補助の計算。
+//
+// **ここでやるのは入力補助まで。** 確定はサーバー（フォームとドメイン層）が行う。
+// 塁の再生も既定の進塁も、画面を先回りさせるためのもので、判定の出典ではない。
 
 import {
-  BATTING_STAT_FIELDS,
-  PITCHING_COUNT_FIELDS,
-  type BatterFormRow,
-  type BatterPayload,
-  type BattingRequestRow,
-  type GameEditFormState,
-  type GameEditPayload,
-  type GameUpdateRequest,
-  type InningFormRow,
-  type PitcherFormRow,
-  type PitcherPayload,
-  type PitchingRequestRow,
+  BASE_BATTER,
+  BASE_HOME,
+  BASE_OUT,
+  BASE_THIRD,
+  LINEUP_SIZE,
+  OCCUPIABLE_BASES,
+  OUTS_PER_INNING,
+} from "./types";
+import type {
+  AdvancePayload,
+  GameEditPayload,
+  HalfState,
+  LineupRequestRow,
+  PlateAppearancePayload,
+  ResultVocabulary,
+  ScorebookRequest,
+  ScorebookState,
 } from "./types";
 
-/** payload の null は編集状態では空文字列として表す。 */
-function toInputValue(value: number | string | null): string {
-  return value === null || value === undefined ? "" : String(value);
-}
-
-function toBatterFormRow(player: BatterPayload): BatterFormRow {
-  const stats = {} as Record<(typeof BATTING_STAT_FIELDS)[number], string>;
-  for (const field of BATTING_STAT_FIELDS) {
-    stats[field] = toInputValue(player[field]);
+export function buildInitialState(payload: GameEditPayload): ScorebookState {
+  const lineups: Record<number, ScorebookState["lineups"][number]> = {};
+  for (const team of payload.teams) {
+    lineups[team.team_id] = [...team.lineup].sort(
+      (a, b) => a.batting_order - b.batting_order || a.slot_sequence - b.slot_sequence,
+    );
   }
   return {
-    player_id: player.player_id,
-    name: player.name,
-    number: player.number,
-    batting_order: toInputValue(player.batting_order),
-    slot_sequence: toInputValue(player.slot_sequence),
-    fielding_position: toInputValue(player.fielding_position),
-    ...stats,
-  };
-}
-
-function toPitcherFormRow(player: PitcherPayload): PitcherFormRow {
-  const counts = {} as Record<(typeof PITCHING_COUNT_FIELDS)[number], string>;
-  for (const field of PITCHING_COUNT_FIELDS) {
-    counts[field] = toInputValue(player[field]);
-  }
-  return {
-    player_id: player.player_id,
-    name: player.name,
-    number: player.number,
-    entered_inning: toInputValue(player.entered_inning),
-    innings_pitched: toInputValue(player.innings_pitched),
-    ...counts,
-  };
-}
-
-/** payload から編集状態の初期値を組み立てる。 */
-export function buildInitialState(payload: GameEditPayload): GameEditFormState {
-  return {
-    year: toInputValue(payload.game.year),
+    year: String(payload.game.year),
     played_on: payload.game.played_on,
-    home_score: toInputValue(payload.game.home_score),
-    away_score: toInputValue(payload.game.away_score),
-    innings: payload.innings.map((row) => ({
-      inning: row.inning,
-      away: toInputValue(row.away),
-      home: toInputValue(row.home),
-    })),
-    rosters: payload.rosters.map((roster) => ({
-      team_id: roster.team_id,
-      team_name: roster.team_name,
-      is_home: roster.is_home,
-      batters: roster.batters.map(toBatterFormRow),
-      pitchers: roster.pitchers.map(toPitcherFormRow),
-    })),
+    lineups,
+    plate_appearances: [...payload.plate_appearances].sort((a, b) => a.sequence - b.sequence),
   };
 }
 
-/**
- * 文字列入力を数値に変換する。空欄・不正な値は 0 として扱う。
- * 表示上の合計・警告・行のハイライト判定にだけ使う（送信値そのものには使わない）。
- */
-function parseOrZero(value: string): number {
-  if (value.trim() === "") {
-    return 0;
+export function buildRequestBody(state: ScorebookState, payload: GameEditPayload): ScorebookRequest {
+  const lineup: LineupRequestRow[] = [];
+  for (const team of payload.teams) {
+    for (const slot of state.lineups[team.team_id] ?? []) {
+      lineup.push({ ...slot, team_id: team.team_id });
+    }
   }
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-export function sumInningValues(rows: InningFormRow[], key: "away" | "home"): number {
-  return rows.reduce((total, row) => total + parseOrZero(row[key]), 0);
-}
-
-export function hasAnyInningInput(rows: InningFormRow[]): boolean {
-  return rows.some((row) => row.away !== "" || row.home !== "");
-}
-
-export interface DerivedScores {
-  home: string;
-  away: string;
-  /** true の間、得点欄は自動計算値を表示する読み取り専用になる。 */
-  locked: boolean;
-}
-
-/** イニングスコアが1マスでも入力されていたら、得点は表裏の合計から自動計算する。 */
-export function deriveScores(state: GameEditFormState): DerivedScores {
-  const locked = hasAnyInningInput(state.innings);
-  if (!locked) {
-    return { home: state.home_score, away: state.away_score, locked };
-  }
-  return {
-    home: String(sumInningValues(state.innings, "home")),
-    away: String(sumInningValues(state.innings, "away")),
-    locked,
-  };
-}
-
-/** 統計のどれかが 0 より大きい、または打順か守備位置が入力されている行を出場扱いとする。 */
-export function isBatterActive(row: BatterFormRow): boolean {
-  const hasStat = BATTING_STAT_FIELDS.some((field) => parseOrZero(row[field]) > 0);
-  return hasStat || row.batting_order !== "" || row.fielding_position !== "";
-}
-
-/** 投球回が 0 より大きい、またはカウントのどれかが 0 より大きい行を出場扱いとする。 */
-export function isPitcherActive(row: PitcherFormRow): boolean {
-  const hasInnings = parseOrZero(row.innings_pitched) > 0;
-  const hasCount = PITCHING_COUNT_FIELDS.some((field) => parseOrZero(row[field]) > 0);
-  return hasInnings || hasCount;
-}
-
-/** 被本塁打は被安打の内数。取り違えを保存前に気づけるようにする（送信は妨げない）。 */
-export function hasHomeRunWarning(row: PitcherFormRow): boolean {
-  return parseOrZero(row.home_runs_allowed) > parseOrZero(row.hits_allowed);
-}
-
-/** 編集状態から保存 API へ送る body を組み立てる。全行を送り、空行の間引きはサーバーに任せる。 */
-export function buildRequestBody(
-  state: GameEditFormState,
-  payload: GameEditPayload,
-  scores: DerivedScores,
-): GameUpdateRequest {
-  const batting: BattingRequestRow[] = state.rosters.flatMap((roster) =>
-    roster.batters.map((row) => {
-      const stats = {} as Record<(typeof BATTING_STAT_FIELDS)[number], string>;
-      for (const field of BATTING_STAT_FIELDS) {
-        stats[field] = row[field];
-      }
-      return {
-        player_id: row.player_id,
-        batting_order: row.batting_order,
-        slot_sequence: row.slot_sequence,
-        fielding_position: row.fielding_position,
-        ...stats,
-      };
-    }),
-  );
-
-  const pitching: PitchingRequestRow[] = state.rosters.flatMap((roster) =>
-    roster.pitchers.map((row) => {
-      const counts = {} as Record<(typeof PITCHING_COUNT_FIELDS)[number], string>;
-      for (const field of PITCHING_COUNT_FIELDS) {
-        counts[field] = row[field];
-      }
-      return {
-        player_id: row.player_id,
-        entered_inning: row.entered_inning,
-        innings_pitched: row.innings_pitched,
-        ...counts,
-      };
-    }),
-  );
-
   return {
     year: state.year,
     played_on: state.played_on,
     home_team: payload.game.home_team,
     away_team: payload.game.away_team,
-    home_score: scores.home,
-    away_score: scores.away,
-    innings: state.innings.map((row) => ({
-      inning: row.inning,
-      away: row.away,
-      home: row.home,
-    })),
-    batting,
-    pitching,
+    lineup,
+    plate_appearances: state.plate_appearances,
   };
+}
+
+// --- 塁の再生 -------------------------------------------------------------
+
+const EMPTY_HALF: HalfState = { inning: 1, is_bottom: false, outs: 0, occupied: {} };
+
+/** 打席を順に適用し、「各打席の直前の状態」と「最後の打席のあとの状態」を返す。
+ *
+ *  半回の切れ目は打席が持つ回・表裏の変わり目で判断する（ドメインの再生と同じ）。 */
+export function replay(entries: PlateAppearancePayload[]): { before: HalfState[]; next: HalfState } {
+  const before: HalfState[] = [];
+  let current: HalfState = { ...EMPTY_HALF, occupied: {} };
+
+  for (const entry of entries) {
+    if (entry.inning !== current.inning || entry.is_bottom !== current.is_bottom) {
+      current = { inning: entry.inning, is_bottom: entry.is_bottom, outs: 0, occupied: {} };
+    }
+    before.push({ ...current, occupied: { ...current.occupied } });
+
+    const occupied = { ...current.occupied };
+    let outs = current.outs;
+    // 先の塁の走者から動かす（一塁走者を先に動かすと二塁走者に塞がれて見える）
+    for (const advance of [...entry.advances].sort((a, b) => b.from_base - a.from_base)) {
+      if (advance.from_base !== BASE_BATTER) delete occupied[advance.from_base];
+      if (advance.to_base === BASE_OUT) outs += 1;
+      else if (advance.to_base !== BASE_HOME) occupied[advance.to_base] = advance.runner_id;
+    }
+    current = { ...current, outs, occupied };
+  }
+
+  return { before, next: advanceHalfIfOver(current) };
+}
+
+function advanceHalfIfOver(state: HalfState): HalfState {
+  if (state.outs < OUTS_PER_INNING) return state;
+  return state.is_bottom
+    ? { inning: state.inning + 1, is_bottom: false, outs: 0, occupied: {} }
+    : { inning: state.inning, is_bottom: true, outs: 0, occupied: {} };
+}
+
+/** 次に打席に立つ枠。打順はチーム（表裏）ごとに1〜9を巡回する。 */
+export function nextBattingOrder(entries: PlateAppearancePayload[], isBottom: boolean): number {
+  const own = entries.filter((entry) => entry.is_bottom === isBottom);
+  const last = own[own.length - 1];
+  return last ? (last.batting_order % LINEUP_SIZE) + 1 : 1;
+}
+
+/** その守備側が最後に投げさせた投手。継投していなければそのまま次の打席も投げる。 */
+export function currentPitcherId(entries: PlateAppearancePayload[], isBottom: boolean): number | null {
+  const own = entries.filter((entry) => entry.is_bottom === isBottom);
+  const last = own[own.length - 1];
+  return last ? last.pitcher_id : null;
+}
+
+// --- 既定の進塁 -----------------------------------------------------------
+
+/** 結果を選んだ時点で埋める進塁。**対応表はサーバー（ドメイン）から届く。**
+ *
+ *  素朴に作ると1打席あたり3〜5操作になるので、大半の打席が「結果を選ぶだけ」で
+ *  終わるようにする。既定と違うときだけ触る。 */
+export function defaultAdvances(
+  result: ResultVocabulary,
+  occupied: Record<number, number>,
+  batterId: number,
+): AdvancePayload[] {
+  const advances: AdvancePayload[] = [];
+  const taken = { ...occupied };
+  const errorIndex = result.requires_error ? 0 : null;
+  const reason = result.default_runner_reason;
+
+  const place = (from: number, wanted: number) => {
+    let target = wanted;
+    while (target !== BASE_HOME && target !== BASE_OUT && taken[target] !== undefined) {
+      if (target <= from + 1) return; // 隣も塞がっている。この走者は動かない
+      target -= 1;
+    }
+    const runner = taken[from];
+    delete taken[from];
+    if (target !== BASE_HOME) taken[target] = runner;
+    advances.push({ runner_id: runner, from_base: from, to_base: target, reason, error_index: errorIndex });
+  };
+
+  const step = STEPS[result.default_runner_advance] ?? 0;
+  for (const base of OCCUPIABLE_BASES) {
+    if (taken[base] === undefined) continue;
+    if (result.default_runner_advance === "all_home") place(base, BASE_HOME);
+    else if (result.default_runner_advance === "third_scores") {
+      if (base === BASE_THIRD) place(base, BASE_HOME);
+    } else if (result.default_runner_advance === "forced_only") {
+      if (isForced(base, occupied)) place(base, base + 1);
+    } else if (step > 0) place(base, Math.min(base + step, BASE_HOME));
+  }
+
+  advances.push({
+    runner_id: batterId,
+    from_base: BASE_BATTER,
+    to_base: result.default_batter_base,
+    reason: result.default_batter_reason,
+    error_index: errorIndex,
+  });
+  return advances;
+}
+
+const STEPS: Record<string, number> = { one_base: 1, two_bases: 2, three_bases: 3 };
+
+/** 打者が一塁を与えられたときに押し出されるか。一塁から詰まっている塁だけ。 */
+function isForced(base: number, occupied: Record<number, number>): boolean {
+  for (let each = 1; each <= base; each += 1) {
+    if (occupied[each] === undefined) return false;
+  }
+  return true;
+}
+
+// --- 導出値の目安 ---------------------------------------------------------
+
+/** 回ごとの得点。サーバーが打席から導く値と同じものを画面にも出す（確定は保存時）。 */
+export function deriveLineScore(entries: PlateAppearancePayload[]): { away: number[]; home: number[] } {
+  const halves: { away: number[]; home: number[] } = { away: [], home: [] };
+  for (const entry of entries) {
+    const side = entry.is_bottom ? halves.home : halves.away;
+    while (side.length < entry.inning) side.push(0);
+    side[entry.inning - 1] += entry.advances.filter((advance) => advance.to_base === BASE_HOME).length;
+  }
+  return halves;
+}
+
+export function totalRuns(values: number[]): number {
+  return values.reduce((sum, runs) => sum + runs, 0);
 }

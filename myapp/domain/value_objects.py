@@ -159,6 +159,22 @@ class Base(Enum):
         return (cls.FIRST, cls.SECOND, cls.THIRD)
 
 
+class DefaultRunnerAdvance(Enum):
+    """打席の結果から既定で埋める、塁上の走者の動き。
+
+    **値は画面に出す文言ではなく識別子。** 入力画面が既定の進塁を組み立てるための
+    合図で、ユーザーには進塁そのもの（「二塁→本塁」など）が見える。
+    """
+
+    NONE = "none"
+    ONE_BASE = "one_base"
+    TWO_BASES = "two_bases"
+    THREE_BASES = "three_bases"
+    ALL_HOME = "all_home"
+    FORCED_ONLY = "forced_only"
+    THIRD_SCORES = "third_scores"
+
+
 class PlateAppearanceResult(Enum):
     """打席の結果（打者から見た結末）。スコアブックのマス目に書く記号にあたる。
 
@@ -296,6 +312,50 @@ class PlateAppearanceResult(Enum):
             return AdvanceReason.AWARDED_BASE
         return AdvanceReason.BATTED_BALL
 
+    @property
+    def default_runner_advance(self) -> DefaultRunnerAdvance:
+        """塁上の走者が既定でどう動くか。`default_batter_base` の走者版。
+
+        入力画面が「結果を選んだ時点で進塁を自動で埋める」ために使う。素朴に作ると
+        1打席あたり3〜5操作になるので、大半の打席が「結果を選ぶだけ」で終わるようにする。
+        **この対応表をここに置くのは、画面側に同じ表を持たせないため**（ずれても
+        例外にならず、既定値だけが静かに間違う）。実際の進塁は記録された進塁が出典で、
+        既定と違うときは記録側で上書きする。
+        """
+        if self is PlateAppearanceResult.HOME_RUN:
+            return DefaultRunnerAdvance.ALL_HOME
+        if self is PlateAppearanceResult.SACRIFICE_FLY:
+            return DefaultRunnerAdvance.THIRD_SCORES
+        if self.is_hit:
+            # 単打なら1つ、二塁打なら2つ、三塁打なら3つ
+            return _HIT_RUNNER_ADVANCES[self]
+        if self in (
+            PlateAppearanceResult.WALK,
+            PlateAppearanceResult.INTENTIONAL_WALK,
+            PlateAppearanceResult.HIT_BY_PITCH,
+            PlateAppearanceResult.CATCHER_INTERFERENCE,
+            PlateAppearanceResult.OBSTRUCTION,
+        ):
+            return DefaultRunnerAdvance.FORCED_ONLY
+        if self in (PlateAppearanceResult.SACRIFICE_BUNT, PlateAppearanceResult.REACHED_ON_ERROR):
+            return DefaultRunnerAdvance.ONE_BASE
+        return DefaultRunnerAdvance.NONE
+
+    @property
+    def default_runner_reason(self) -> AdvanceReason:
+        """既定で埋める走者の進塁に付く理由。`default_runner_advance` と対で使う。
+
+        打者の理由（`default_batter_reason`）とは別物。四球で押し出される走者は
+        還れば打点が付くが、打者自身の四球には付かない。
+        """
+        if self is PlateAppearanceResult.SACRIFICE_FLY:
+            return AdvanceReason.TAG_UP
+        if self is PlateAppearanceResult.REACHED_ON_ERROR:
+            return AdvanceReason.ERROR
+        if self.default_runner_advance is DefaultRunnerAdvance.FORCED_ONLY:
+            return AdvanceReason.FORCED
+        return AdvanceReason.BATTED_BALL
+
 
 # 塁打数と、打者の既定の到達塁。enum のメンバーを参照するためクラス定義の後に置く。
 _HIT_BASES = {
@@ -310,6 +370,13 @@ _BATTER_DESTINATIONS = {
     PlateAppearanceResult.DOUBLE: Base.SECOND,
     PlateAppearanceResult.TRIPLE: Base.THIRD,
     PlateAppearanceResult.HOME_RUN: Base.HOME,
+}
+
+# 安打で走者が既定で進む塁の数。打者の到達塁と同じだけ進める
+_HIT_RUNNER_ADVANCES = {
+    PlateAppearanceResult.SINGLE: DefaultRunnerAdvance.ONE_BASE,
+    PlateAppearanceResult.DOUBLE: DefaultRunnerAdvance.TWO_BASES,
+    PlateAppearanceResult.TRIPLE: DefaultRunnerAdvance.THREE_BASES,
 }
 
 

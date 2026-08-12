@@ -869,18 +869,33 @@ React（[frontend/](frontend/)）で作っています。全面 SPA 化はしま
 - ビューが初期データ（payload）を `json_script` でテンプレートに埋め込み、ビルド済みの
   React（`myapp/static/myapp/dist/game_edit.js`）が `#game-edit-root` にマウントされます。
   GET 用の API はありません（画面の URL・権限・404 は既存ビューのまま）
-- 保存だけ JSON API（[presentation/api.py](myapp/presentation/api.py)、`POST /api/games/<id>/`）。
-  型変換・必須チェックは既存フォーム（[presentation/forms.py](myapp/presentation/forms.py)）を
-  行単位で再利用し、業務ルール（勝敗・セーブ・ホールドの導出、被本塁打≦被安打など）は
-  ドメイン層のまま。**検証の出典を増やしません**
-- payload と API のキーはフォームのフィールド名と同じ snake_case。クライアントは全行を送り、
-  「全欄空 ＝ 出場していない」の間引きはサーバー（フォームの `is_blank`）が行います
-- 成績のカウント項目は `frontend/src/game_edit/types.ts` にも列挙されています。TypeScript から
-  Python を読めないため、この重複だけは消せません。ずれると「その項目の入力欄が出ない」という
-  静かな不具合になるので、[tests/integration/test_stat_fields.py](myapp/tests/integration/test_stat_fields.py)
-  が Python 側の列挙（値オブジェクト・永続化・フォーム）と突き合わせます
-- React 側の自動計算（イニングスコアからの得点導出）や行内警告は入力補助で、
-  確定判断は常にサーバーが持ちます
+- 保存だけ JSON API（[presentation/api.py](myapp/presentation/api.py)、
+  `POST /api/games/<id>/scorebook/`）。型変換・必須チェックはフォーム
+  （[presentation/forms.py](myapp/presentation/forms.py)）、業務ルールはドメイン層のまま。
+  **検証の出典を増やしません**
+
+画面は4つのカードでできています。
+
+| カード | 内容 |
+| --- | --- |
+| 試合の情報 | シーズン・試合日と、**打席から導いた得点の表示**（入力欄ではありません） |
+| ラインアップ | 両チームの打順1〜9をロスターから選ぶ |
+| スコアブック | 打順9行 × イニング列のマス目と、打席の入力パネル |
+| 導出値の確認 | イニングスコアと検算（打点の合計が得点を超えていないか） |
+
+- **入力は順番に積みます。** 打席の通し番号は1から欠けずに続き、打順は1〜9を巡回するという
+  決まりがあるので、任意のマスに後から差し込む形にはしていません。マス目は記録済みの打席を
+  読むためのもので、クリックするとその打席を直せます
+- **結果を選んだ時点で走者の進塁が既定値で埋まります**（単打なら走者は1つ進む、四球なら
+  埋まっている塁だけ押し出し、など）。既定と違うときだけ触ります。素朴に作ると1打席あたり
+  3〜5操作になるところを、大半の打席は「結果を選ぶだけ」で終わります
+- **打席の語彙（結果・進塁の理由・塁・失策の種類）と既定の進塁の対応表は payload に載せます。**
+  TypeScript から Python の Enum は読めないので、画面側に同じ表を書くとずれても例外にならず、
+  選択肢や既定値だけが静かに古くなります。払い出せば出典は1つのままです。
+  TypeScript に残る重複は塁の番号だけで、
+  [tests/integration/test_stat_fields.py](myapp/tests/integration/test_stat_fields.py) が
+  ドメインの `Base` と突き合わせます
+- React 側の塁の再生・既定の進塁・検算はすべて入力補助で、確定判断は常にサーバーが持ちます
 - ビルドは `vite build --watch` の常時出力方式（dev server 無し）。出力はハッシュ無しの固定名で、
   テンプレートは `{% static %}` で参照するだけ。dev/prod の分岐や manifest 解析を持ち込まず、
   **Python 側の依存追加はありません**

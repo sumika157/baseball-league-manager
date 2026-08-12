@@ -16,13 +16,16 @@
 <div class="page-head">
   <h1 class="page-title">試合の記録</h1>
   <p class="page-subtitle">
-    出場しなかった選手は空欄のままにしてください。すべて空欄の行は記録されません。
+    打順を決めてから、打席を1つずつ記録します。得点・イニングスコア・打撃成績・投球成績・
+    勝敗は打席から導かれるので、入力する欄はありません。
   </p>
 </div>
 
 {% comment %}
 編集フォームは React（frontend/src/game_edit/）が描画する。初期データは
-json_script で埋め込み、保存は api_game_update に JSON で送る。
+json_script で埋め込み、保存は api_game_scorebook に JSON で送る。
+打席の語彙（結果・進塁の理由・塁）と既定の進塁も payload に載せてある
+（TypeScript から Python の Enum は読めないため、画面側に同じ表を持たせない）。
 {% endcomment %}
 {{ payload|json_script:"game-edit-data" }}
 <div id="game-edit-root">
