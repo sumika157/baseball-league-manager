@@ -817,12 +817,95 @@ P6 でこの画面にスコアブックを出すので読むこと自体は目�
 `strikeouts_batting` という別の名前にした**（`strikeouts` は投手の奪三振）。
 同じ欄に別の事実を入れると、表のどちらを見ているかで意味が変わってしまう。
 
-### 残っている作業
+---
 
-- **選手個人ページの新項目**（通算・年度別・月別）。`_player_stat_cells.html` を
-  年度別・月別・試合ごとの行 DTO が共有しているため、DTO 3つと include をまとめて
-  直す必要がある。この PR には入れていない
-- **守備成績**（`FieldingLine`・刺殺・補殺・守備率）。`fielded_by` は記録済みなので
-  導出はできる状態
-- **スコアボードの安打・失策の欄**、**スコアブックの読み取り専用表示**
-- README への吸収と設計書の削除
+# 引き継ぎ（ここから読めば再開できる）
+
+## 現在地
+
+**打席を出典にする仕組みは動いている。** 入力・保存・導出・通算集計・ボックススコアまで
+通っていて、3,480試合の仮想データも打席から作り直してある。残っているのは**表示の続き**と
+**守備成績**、そして main へ出すための片付け。
+
+| 段階 | 状態 | 内容 |
+| --- | --- | --- |
+| P0〜P6c | ✅ | 上の各節を参照。PR #6・#7・#8・#9・#10・#11・#12・#13 |
+| **次** | | 選手個人ページの新項目 |
+| | | 守備成績（`FieldingLine`） |
+| | | スコアボードの安打・失策、スコアブックの読み取り専用表示 |
+| | | README への吸収 → **この設計書を削除** → main へ PR |
+
+統合ブランチは `epic/plate-appearance-scoring`。**main への PR はここから1本だけ出す。**
+
+## 次にやること（優先順）
+
+### 1. 選手個人ページの新項目
+
+通算成績が見える画面なので、増えた項目の価値がいちばん出る。出す項目は
+打撃が得点・盗塁・盗塁刺・犠打・故意四球・三振・併殺打、投球が失点。
+
+**まとめて直す必要がある場所:**
+
+- `application/dto.py` の `PlayerDetail`・`YearlyRow`・`MonthlyRow`（＋`PlayerGameRow`）
+- それらを組み立てる `application/services.py`
+- `templates/myapp/_player_stat_cells.html`（**3つの行 DTO が共有している**）と、
+  呼び出し側の表ヘッダ（年度別・月別・試合ごとで別々に書かれている）
+
+**ヘッダと include がずれると列が食い違う**（片方だけ直しても例外にならない）。
+`test_players.py` に列の突き合わせを足すとよい。
+
+### 2. 守備成績（`FieldingLine`）
+
+`fielded_by`（打球の処理経路）と `errors` は記録済みなので、導出はできる状態。
+
+- `FieldingLine` 値オブジェクト（刺殺・補殺・失策・併殺参加・守備率）
+- `domain/services/scoring.py` に `fielding_line_for()`
+- **経路の読み方**: 最後の守備位置が刺殺、手前が補殺（6-3 なら遊が補殺・一が刺殺）。
+  併殺なら中継の位置にも刺殺が付く（6-4-3 は二が刺殺＋補殺）
+- 永続化は `GameFieldingLine` を新設して P4 と同じ扱い（導出値だが通算集計のために保存し、
+  集約が照合する）
+- **投入コマンドの `_fielded_by()` は結果ごとに固定の経路を1つ当てているだけ**なので、
+  守備成績を出すなら打球方向を散らす必要がある（三振は捕手の刺殺として `fielded_by` に
+  捕を入れる、併殺は3人の経路にする、など）
+- 捕手の捕逸・盗塁阻止率は、投入コマンドが捕逸を作っていないので当面ゼロになる
+
+### 3. スコアボードの安打・失策、スコアブック表示
+
+試合詳細のスコアボードに H・E 欄を足す（回ごとの安打・失策は打席から導ける）。
+スコアブックの読み取り専用表示は、React の `ScorebookCard` のマス目をそのまま
+テンプレート側に写す形になる。
+
+### 4. main へ出す
+
+**この設計書の内容を README に吸収してから、設計書を削除する**（CLAUDE.md の規則）。
+吸収先は README の「試合がすべての出典」「リッチな編集画面（React アイランド）」の節。
+
+## 作業の始め方
+
+```bash
+# 統合ブランチを最新にしてから、その上にタスクブランチを切る
+git fetch origin
+git worktree add -b feature/<タスク> .claude/worktrees/<名前> origin/epic/plate-appearance-scoring
+git config --global --add safe.directory '%(prefix)///wsl.localhost/Ubuntu/home/sumika/work/develop/my_django_project/.claude/worktrees/<名前>'
+```
+
+- **PR の base は `epic/plate-appearance-scoring`**（`gh pr create --base epic/plate-appearance-scoring`）
+- 段階の区切りごとに main を取り込む（`git merge origin/main`）
+- 詳しい手順は CLAUDE.md の「段階単体では main に入れられない機能は `epic/` に積む」
+
+## 触るときに知っておくこと
+
+- **成績項目を増やすときに直す場所は3か所**: 値オブジェクト（`BattingLine` /
+  `PitchingLine`）・永続化（`orm_models` の列と `_BATTING_FIELDS` / `_PITCHING_COUNTS`）・
+  マイグレーション。**投入コマンドは値オブジェクトのフィールドから流し込むので触らなくてよい**
+  （P6b で3か所踏んだので、そう直してある）。React は語彙を payload で受け取るので不要
+- **`ensure_lines_match_plate_appearances()` が保存前に照合する。** 明細と打席が
+  食い違うと日本語のメッセージで弾かれる。テストで明細を手で作るときはここを通る
+- **テストで試合の記録を作るなら `tests/helpers.py` の `build_scorebook()`。**
+  得点は本塁打・アウトは三振で表すので、回ごとの得点と継投を渡すだけで成立する
+  打席の並びが作れる。打順は1〜9を巡回する決まりなので**9人ぶんの選手が要る**
+  （`register_lineup()`）
+- **実データで試すときは `db.sqlite3` をコピーしてから。** worktree で `manage.py` を
+  動かすと、その worktree の `db.sqlite3` を使う（実 DB とは別物になるので安全）
+- 投入し直したら `manage.py measure_pages` で主要画面の応答を実測する。
+  **段階をまたいだ絶対値の比較は当てにならない**ので、同じ DB で前後を測ること
