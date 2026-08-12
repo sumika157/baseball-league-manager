@@ -98,11 +98,23 @@ ORM に直接 `bulk_create` 等で書き込むコード（データ投入コマ�
 防げないので、作業ツリーごと分ける。
 
 - 次のいずれかに当てはまるなら worktree にする: ユーザーが並行作業だと言った / `git worktree list` に他の worktree がある / 未コミットの変更が自分のタスクと無関係。
-- 作成は `EnterWorktree`（`.claude/worktrees/<名前>` に作られる。gitignore 済み）。
+- 作成は `git worktree add -b <ブランチ> .claude/worktrees/<名前> origin/main`（`.claude/worktrees/` は gitignore 済み）。
+  **`EnterWorktree` ツールはこの構成では使えない**（U: 形式のパスは「メインの作業ツリー」と誤認され、
+  UNC 形式は「UNC network path」として拒否される）。作った worktree に**セッションごと移ることはできない**ので、
+  cwd は main の作業ツリーに置いたまま、Read / Write / Bash に worktree の絶対パスを明示して作業する。
+- **worktree を作ったら `safe.directory` に登録する。** `//wsl.localhost/...` は所有者チェックに引っかかり、
+  登録前は worktree 内で git が一切動かない（`fatal: detected dubious ownership`）。**worktree ごとに1行必要**で、
+  末尾 `/*` のグロブは `%(prefix)///` と併用すると効かない。git が提示してくるフルパスをそのまま登録する:
+  `git config --global --add safe.directory '%(prefix)///wsl.localhost/Ubuntu/home/sumika/work/develop/my_django_project/.claude/worktrees/<名前>'`
 - **`make` と `docker compose` は必ず main の作業ツリーから実行し、対象の worktree を明示する。**
   `make test WT=<名前>` / `docker compose exec -w /app/.claude/worktrees/<名前> web ...`（`make where WT=<名前>` で対象を確認できる）。
   バインドマウントが `.:/app` なので worktree も同じコンテナから見えるが、**`-w` を省くと main のコードを検査・テストして
   「通ったのに直っていない」形になる**（エラーにならないので気づけない）。worktree の中から `WT` 無しで `make` を呼ぶと止まる。
+  - **`make` は Windows 側に無い。** `make ... WT=<名前>` はユーザーの WSL ターミナル用。Claude Code からは
+    `docker compose exec -w /app/.claude/worktrees/<名前> <CACHE_ENV> web ...` を直接叩く。`CACHE_ENV` を省くと
+    **root 所有のキャッシュが worktree に残り、後始末で消せなくなる**（Makefile と同じ3つの `-e` を付ける）。
+  - **`-w /app/...` は Bash ツールから渡すと MSYS のパス変換で壊れる**
+    （`OCI runtime exec failed: Cwd must be an absolute path`）。`MSYS_NO_PATHCONV=1` を付けるか PowerShell から叩く。
 - **worktree の中で `docker compose` を叩かない。** worktree 側の `docker-compose.yml` と、gitignore で存在しない `.env` を読み、
   別プロジェクト＝別コンテナを作りにいって失敗する。
 - gitignore されたものは worktree に無い。**e2e と TypeScript の型検査の前に `make frontend-build WT=<名前>`**（`dist`・`node_modules` が無い）。
@@ -117,6 +129,28 @@ ORM に直接 `bulk_create` 等で書き込むコード（データ投入コマ�
   `make` 経由ならこれらは `/tmp` に逃がしてあるので起きない。直接 `docker compose exec` を叩くときは Makefile の
   `CACHE_ENV` と同じ `-e` を付ける。なお **`git worktree remove --force` は中途半端に成功することがある**
   （追跡ファイルだけ消えて登録が残り、以後 `No module named 'config'` のような形で現れる）。失敗したら残骸を確認する。
+
+### 段階単体では main に入れられない機能は `epic/` に積む
+
+**「タスクごとにブランチを切って main へ PR」が成り立たない機能がある。** 永続化だけ・画面だけの段階は
+単体では動かないため、main に入れると中途半端な状態が残る。この場合だけ統合ブランチを1本立て、
+その上にタスクブランチを乗せて、**main への PR は統合ブランチの1本だけ**にする。
+
+- 次のいずれかに当てはまるなら統合ブランチにする: **段階単体では動かない**（永続化なし・画面なし）/
+  **データの全再生成を伴う** / 3コミット以上に分かれる見込み。
+  **当てはまらない単発の修正・小さい機能は従来どおり `feature/xxx` 1本で main へ PR**（2段にしても手間だけ増える）。
+- 命名は統合が `epic/` ＋ 英語の kebab-case、タスクは従来どおり `feature/` `fix/` `refactor/` `docs/`。
+  **`epic/x` の下に `epic/x/task` は作れない。** git は ref を入れ子にできず
+  `cannot lock ref 'refs/heads/epic/x/task': 'refs/heads/epic/x' exists` で失敗する。
+  タスク名は統合ブランチ名の接頭辞にせず、独立した短い名前にする（`feature/pa-persistence` など）。
+- **タスクの PR は base を統合ブランチにする。** `gh pr create --base epic/<機能>` を忘れると
+  main が base になり、前の段階の差分まで含んだ PR ができる。
+- **worktree は origin/main を基点に作られる**ので、統合ブランチの上に乗せるには自分で作る:
+  `git worktree add -b <タスク> .claude/worktrees/<名前> epic/<機能>`
+- **統合ブランチは長生きするので、段階の区切りごとに main を取り込む**（`git merge origin/main`）。
+  放っておくと最後に大きく衝突する。並行して別のタスクが main にマージされていく前提で動く。
+- 設計は `docs/design/<機能>.md` に置き、**段階ごとに実測値と決定を追記する**（次のセッションへの引き継ぎになる）。
+  統合ブランチを main にマージするときに README へ吸収して削除する。
 
 ## ドキュメント
 
