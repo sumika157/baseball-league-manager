@@ -65,12 +65,20 @@ _BATTING_FIELDS = (
     "walks",
     "hit_by_pitch",
     "sacrifice_flies",
+    "runs",
+    "strikeouts",
+    "sacrifice_bunts",
+    "intentional_walks",
+    "stolen_bases",
+    "caught_stealing",
+    "double_plays",
 )
 
 _PITCHING_COUNTS = (
     "wins",
     "losses",
     "saves",
+    "runs_allowed",
     "earned_runs",
     "strikeouts",
     "hits_allowed",

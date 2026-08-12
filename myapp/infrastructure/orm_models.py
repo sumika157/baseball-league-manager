@@ -328,6 +328,14 @@ class GameBattingLine(models.Model):
     walks = models.IntegerField(default=0, verbose_name="四球")
     hit_by_pitch = models.IntegerField(default=0, verbose_name="死球")
     sacrifice_flies = models.IntegerField(default=0, verbose_name="犠飛")
+    # ここから下は打席の記録から導く項目。手入力していた頃は数えられなかった
+    runs = models.IntegerField(default=0, verbose_name="得点")
+    strikeouts = models.IntegerField(default=0, verbose_name="三振")
+    sacrifice_bunts = models.IntegerField(default=0, verbose_name="犠打")
+    intentional_walks = models.IntegerField(default=0, verbose_name="故意四球")
+    stolen_bases = models.IntegerField(default=0, verbose_name="盗塁")
+    caught_stealing = models.IntegerField(default=0, verbose_name="盗塁刺")
+    double_plays = models.IntegerField(default=0, verbose_name="併殺打")
 
     class Meta:
         verbose_name = "打撃成績"
@@ -357,6 +365,8 @@ class GamePitchingLine(models.Model):
     # 日本プロ野球の公式記録。セーブが記録される状況で登板し、
     # リードを保ったまま次の投手へ引き継いだ救援投手に付く
     holds = models.IntegerField(default=0, verbose_name="ホールド")
+    # 失点。自責点だけでは「失策絡みで失点したが自責点ではない」投手を評価できない
+    runs_allowed = models.IntegerField(default=0, verbose_name="失点")
     earned_runs = models.IntegerField(default=0, verbose_name="自責点")
     strikeouts = models.IntegerField(default=0, verbose_name="奪三振")
     hits_allowed = models.IntegerField(default=0, verbose_name="被安打")

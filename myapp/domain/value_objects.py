@@ -434,6 +434,15 @@ class AdvanceReason(Enum):
         )
 
     @property
+    def is_baserunning_out(self) -> bool:
+        """打者への守備とは別に、走塁で取られたアウトか。
+
+        併殺の判定から除くために使う。三振と盗塁刺が同じ打席に入っていても、
+        それは併殺ではない（打者の打球で2つ取ったわけではない）。
+        """
+        return self in (AdvanceReason.CAUGHT_STEALING, AdvanceReason.PICKED_OFF)
+
+    @property
     def earns_run_batted_in(self) -> bool:
         """この理由で本塁に達したとき、打者に打点が付くか。
 
@@ -627,6 +636,14 @@ class BattingLine:
     walks: int = 0
     hit_by_pitch: int = 0
     sacrifice_flies: int = 0
+    # ここから下は打席の記録から導く項目。手入力していた頃は数えられなかった
+    runs: int = 0
+    strikeouts: int = 0
+    sacrifice_bunts: int = 0
+    intentional_walks: int = 0
+    stolen_bases: int = 0
+    caught_stealing: int = 0
+    double_plays: int = 0
 
     def __post_init__(self) -> None:
         for field_name, label in (
@@ -639,11 +656,20 @@ class BattingLine:
             ("walks", "四球"),
             ("hit_by_pitch", "死球"),
             ("sacrifice_flies", "犠飛"),
+            ("runs", "得点"),
+            ("strikeouts", "三振"),
+            ("sacrifice_bunts", "犠打"),
+            ("intentional_walks", "故意四球"),
+            ("stolen_bases", "盗塁"),
+            ("caught_stealing", "盗塁刺"),
+            ("double_plays", "併殺打"),
         ):
             object.__setattr__(self, field_name, _require_non_negative(label, getattr(self, field_name)))
 
         if self.hits > self.at_bats:
             raise InvalidStatValue(f"安打数（{self.hits}）が打数（{self.at_bats}）を超えています。")
+        if self.intentional_walks > self.walks:
+            raise InvalidStatValue(f"故意四球（{self.intentional_walks}）が四球（{self.walks}）を超えています。")
 
     @property
     def hits(self) -> int:
@@ -664,10 +690,18 @@ class BattingLine:
     def plate_appearances(self) -> int:
         """打席数。規定打席の判定に使う。
 
-        本来は犠打も含むが、このアプリでは記録していないため、
-        記録している項目（打数・四球・死球・犠飛）の合計とする。
+        **犠打を含む。** 打席から導くようになって数えられるようになった項目で、
+        規定打席の分母がそのぶん増える（以前は記録していなかった）。
         """
-        return self.plate_appearances_for_obp
+        return self.plate_appearances_for_obp + self.sacrifice_bunts
+
+    @property
+    def stolen_base_percentage(self) -> float:
+        """盗塁成功率。企図（盗塁＋盗塁刺）に対する成功の割合。"""
+        attempts = self.stolen_bases + self.caught_stealing
+        if attempts == 0:
+            return 0.0
+        return self.stolen_bases / attempts
 
     @property
     def batting_average(self) -> float:
@@ -769,6 +803,9 @@ class PitchingLine:
     # ホールド＋救援勝利で決まるため、勝利のうち救援ぶんを分けて持つ
     starts: int = 0
     relief_wins: int = 0
+    # 失点。自責点だけでは「失策絡みで失点したが自責点ではない」投手を評価できない。
+    # 打席の記録から、走者ごとの責任投手を追って数える
+    runs_allowed: int = 0
 
     # FIP の重み。本塁打・与四球死球・奪三振が失点にどれだけ効くかの係数で、
     # 野球の指標として定まった値のためドメインに置く
@@ -797,6 +834,7 @@ class PitchingLine:
             ("holds", "ホールド"),
             ("starts", "先発登板"),
             ("relief_wins", "救援勝利"),
+            ("runs_allowed", "失点"),
         ):
             object.__setattr__(self, field_name, _require_non_negative(label, getattr(self, field_name)))
 
@@ -804,6 +842,9 @@ class PitchingLine:
             raise InvalidStatValue(
                 f"被本塁打（{self.home_runs_allowed}）が被安打（{self.hits_allowed}）を超えています。"
             )
+
+        # 自責点 ≦ 失点 はここでは検査しない。打席から導くと必ず成り立つ関係で、
+        # 失点だけを空にした行（率の検査など）を作れなくする副作用のほうが大きい
 
         if self.relief_wins > self.wins:
             raise InvalidStatValue(f"救援勝利（{self.relief_wins}）が勝利（{self.wins}）を超えています。")
