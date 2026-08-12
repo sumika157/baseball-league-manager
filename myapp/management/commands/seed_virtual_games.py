@@ -572,7 +572,17 @@ class Command(BaseCommand):
         game.ensure_line_score_matches()
 
         batting = self._batting_lines(sides, plate_appearances)
+        for entry in batting:
+            game.record_batting(
+                entry["player"].id,
+                entry["line"],
+                batting_order=entry["batting_order"],
+                slot_sequence=entry["slot_sequence"],
+                fielding_position=entry["fielding_position"],
+            )
         pitching = self._pitching_lines(game, sides, plate_appearances)
+        # 明細と打席が食い違っていないこと。bulk_create は集約の検査を素通りする
+        domain_services.ensure_lines_match_plate_appearances(game)
         return {
             "league_name": card["league"].name,
             "card": card,

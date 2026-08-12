@@ -15,8 +15,11 @@ from myapp.domain.exceptions import InvalidPlateAppearance
 from myapp.domain.value_objects import (
     AdvanceReason,
     Base,
+    BattingLine,
     ErrorKind,
     FieldingPosition,
+    InningsPitched,
+    PitchingLine,
     PlateAppearanceResult,
     Season,
 )
@@ -603,3 +606,57 @@ class FieldingErrorTest(TestCase):
 
         self.assertEqual(services.errors_for(entries, player_id=6), 1)
         self.assertEqual(services.errors_for(entries, player_id=4), 0)
+
+
+class LinesMatchPlateAppearancesTest(TestCase):
+    """明細と打席の照合。
+
+    打撃・投球の明細は打席から導ける値だが、通算成績の集計のために保存もしている
+    （自責点は SQL で集計できないため）。同じ事実が2か所にあるので、集約が照合する。
+    """
+
+    def _game_with_lines(self):
+        game = _game(_half_inning(), away_score=1)
+        for batter in (1, 2, 3, 4, 5):
+            game.record_batting(
+                batter, services.batting_line_for(game.plate_appearances, batter), batting_order=batter
+            )
+        game.record_pitching(STARTER, services.pitching_line_for(game.plate_appearances, STARTER))
+        return game
+
+    def test_derived_lines_pass(self):
+        services.ensure_lines_match_plate_appearances(self._game_with_lines())
+
+    def test_a_game_without_plate_appearances_is_left_alone(self):
+        """経過を記録しない試合では照合するものが無い。"""
+        game = Game(
+            season=Season(2026),
+            played_on=date(2026, 4, 1),
+            home_team_id=HOME,
+            away_team_id=AWAY,
+        )
+        game.record_batting(1, BattingLine(at_bats=4, singles=2))
+
+        services.ensure_lines_match_plate_appearances(game)
+
+    def test_a_batting_line_that_drifted_is_rejected(self):
+        game = self._game_with_lines()
+        game.record_batting(1, BattingLine(at_bats=4, home_runs=3), batting_order=1)
+
+        with self.assertRaises(InvalidPlateAppearance):
+            services.ensure_lines_match_plate_appearances(game)
+
+    def test_a_pitching_line_that_drifted_is_rejected(self):
+        game = self._game_with_lines()
+        game.record_pitching(STARTER, PitchingLine(innings=InningsPitched(outs=27)))
+
+        with self.assertRaises(InvalidPlateAppearance):
+            services.ensure_lines_match_plate_appearances(game)
+
+    def test_a_batter_missing_from_the_box_score_is_rejected(self):
+        """打席に立ったのに明細が無い選手がいると、その成績が消える。"""
+        game = self._game_with_lines()
+        game.batting = [entry for entry in game.batting if entry.player_id != 3]
+
+        with self.assertRaises(InvalidPlateAppearance):
+            services.ensure_lines_match_plate_appearances(game)

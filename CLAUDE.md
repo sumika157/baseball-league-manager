@@ -47,6 +47,26 @@
 - 選択肢の一覧（球場の屋根種別など）はドメインの値オブジェクトが唯一の出典。画面やモデルに複製しない。
 - **成績のカウント項目は値オブジェクト（`BattingLine` / `PitchingLine`）のフィールドが出典。** 永続化（`_BATTING_FIELDS`）・入力フォーム（`STAT_FIELDS`）・React（`frontend/src/game_edit/types.ts`）の列挙はそれに従う。TypeScript から Python を読めないためこの重複だけは消せないので、`tests/integration/test_stat_fields.py` が突き合わせる。**項目を増やすときはこの4か所を同じコミットで直す**（ずれても例外にならず、その項目だけ保存されない・入力欄が出ないという静かな不具合になる）。
 
+### 例外: 1試合の明細は打席の導出値だが、保存もする
+
+**試合の成績の出典は打席（`GamePlateAppearance`）。** `GameBattingLine` /
+`GamePitchingLine` / `GameInningScore` はそこから導ける値だが、**通算成績の集計のために
+保存もしている**（この規則の唯一の例外）。理由は**自責点が SQL で集計できない**こと。
+自責点と失点は走者ごとに「誰が塁に出したか」「失策が絡んだか」を追う逐次再生でしか
+出せず、3,480試合を再生すると約68秒かかる（実測。経緯は `docs/design/plate-appearance-scoring.md`）。
+
+同じ事実が2か所にあるので、**集約が照合する**:
+
+- `domain/services/scoring.py` の `ensure_lines_match_plate_appearances()` が、保存しようとしている
+  明細を打席から数え直した値と突き合わせる（`ensure_line_score_matches()` と同じ形）。
+- `DjangoGameRepository.save()` が保存前に必ず通す。`bulk_create` で直接書くコード
+  （`seed_virtual_games`）は素通りするので、自分で呼ぶ。
+- 照合しないのは勝敗・セーブ・ホールド・先発登板だけ（打席からは決まらず、イニングスコアと
+  継投から決まる別の関心事）。
+
+**この例外を他の項目に広げない。** 「集計が遅いから保存する」を一般化すると、通算成績も
+順位も保存する形に戻ってしまう。
+
 ## 不変条件は集約が守る
 
 背番号の一意性（期間が重なる同番号の禁止）、在籍期間の重複禁止などは `Team` 集約が自身で検査する。

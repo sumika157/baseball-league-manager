@@ -16,7 +16,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from ..entities import PlateAppearance
+from ..entities import Game, PlateAppearance
+from ..exceptions import InvalidPlateAppearance
 from ..value_objects import (
     Base,
     BattingLine,
@@ -176,3 +177,59 @@ def left_on_base(plate_appearances: Iterable[PlateAppearance], *, is_bottom: boo
 def errors_for(plate_appearances: Iterable[PlateAppearance], player_id: int) -> int:
     """失策の数。守備成績の出典。"""
     return sum(1 for entry in plate_appearances for error in entry.errors if error.player_id == player_id)
+
+
+# 打席から導ける投球成績の項目。勝敗・セーブ・ホールド・先発登板は打席からは
+# 決まらない（イニングスコアと継投から決まる別の関心事）ので照合しない。
+_PITCHING_FIELDS_FROM_PLATE_APPEARANCES = (
+    "earned_runs",
+    "strikeouts",
+    "hits_allowed",
+    "walks_allowed",
+    "home_runs_allowed",
+    "hit_by_pitch_allowed",
+)
+
+
+def ensure_lines_match_plate_appearances(game: Game) -> None:
+    """保存する明細が、打席の記録から導ける値と一致することを確かめる。
+
+    打撃・投球の明細は打席から導出できるが、**通算成績の集計のために保存もしている。**
+    自責点は走者ごとの経路を再生しないと出ず、SQL で集計できないため
+    （3,480試合を再生すると約68秒かかる。詳細は `docs/design/plate-appearance-scoring.md`）。
+
+    同じ事実を2か所に持つことになるので、**集約が照合する**。イニングスコアと
+    最終得点を突き合わせる `ensure_line_score_matches()` と同じ形で、片方だけを
+    書き換えた記録が保存されるのを防ぐ。打席の記録が無い試合では何もしない。
+    """
+    if not game.plate_appearances:
+        return
+
+    for entry in game.batting:
+        counted = batting_line_for(game.plate_appearances, entry.player_id)
+        if entry.line != counted:
+            raise InvalidPlateAppearance(
+                f"打撃成績が打席の記録と一致しません（選手id={entry.player_id}）。"
+                f"打席から数え直すと 打数{counted.at_bats}・安打{counted.hits}・打点{counted.runs_batted_in} です。"
+                "この試合は打席が出典なので、成績だけを書き換えることはできません。"
+            )
+
+    # 打撃と型が違うので変数名を分ける（同じ名前だと mypy が最初の型で固定してしまう）
+    for outing in game.pitching:
+        pitched = pitching_line_for(game.plate_appearances, outing.player_id)
+        if outing.line.innings != pitched.innings:
+            raise InvalidPlateAppearance(
+                f"投球回が打席の記録と一致しません（選手id={outing.player_id}）。"
+                f"打席から数え直すと{pitched.innings.to_notation()}回です。"
+            )
+        for name in _PITCHING_FIELDS_FROM_PLATE_APPEARANCES:
+            if getattr(outing.line, name) != getattr(pitched, name):
+                raise InvalidPlateAppearance(
+                    f"投球成績が打席の記録と一致しません（選手id={outing.player_id}・{name}）。"
+                    f"打席から数え直すと{getattr(pitched, name)}です。"
+                )
+
+    recorded = {entry.player_id for entry in game.batting}
+    missing = {entry.batter_id for entry in game.plate_appearances} - recorded
+    if recorded and missing:
+        raise InvalidPlateAppearance(f"打席に立った選手の打撃成績がありません（選手id={sorted(missing)}）。")

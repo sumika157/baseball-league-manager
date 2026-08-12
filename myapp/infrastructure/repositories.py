@@ -36,6 +36,7 @@ from ..domain.exceptions import (
     LeagueNotFound,
     TeamNotFound,
 )
+from ..domain.services import ensure_lines_match_plate_appearances
 from ..domain.value_objects import (
     AdvanceReason,
     Base,
@@ -488,6 +489,9 @@ class DjangoGameRepository:
 
     @transaction.atomic
     def save(self, game: Game) -> Game:
+        # 打撃・投球の明細は打席から導ける値だが、通算成績の集計のために保存もしている。
+        # 同じ事実を2か所に持つので、食い違ったまま保存されないよう集約に照合させる
+        ensure_lines_match_plate_appearances(game)
         row, _ = orm_models.Game.objects.update_or_create(  # type: ignore[misc]
             id=game.id,
             defaults={

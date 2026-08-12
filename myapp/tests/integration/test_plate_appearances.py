@@ -13,9 +13,12 @@ from myapp.domain.entities import (
     RunnerAdvance,
     RunnerSubstitution,
 )
+from myapp.domain.exceptions import InvalidPlateAppearance
+from myapp.domain.services import batting_line_for
 from myapp.domain.value_objects import (
     AdvanceReason,
     Base,
+    BattingLine,
     ErrorKind,
     FieldingPosition,
     PlateAppearanceResult,
@@ -208,6 +211,32 @@ class PlateAppearancePersistenceTest(BaseCase):
         self.repo.save(from_list)
 
         self.assertEqual(len(self.repo.find_by_id(saved.id).plate_appearances), 6)
+
+    def test_lines_that_contradict_the_plate_appearances_are_not_saved(self):
+        """打席から導ける明細を手入力で書き換えようとしたら弾かれること。
+
+        通算成績の集計のために明細も保存しているので、同じ事実が2か所にある。
+        片方だけ書き換わると、ボックススコアと経過が静かに食い違う。
+        """
+        saved = self._save_game()
+
+        edited = self.repo.find_by_id(saved.id)
+        edited.record_batting(self.batters[0], BattingLine(at_bats=4, home_runs=3), batting_order=1)
+
+        with self.assertRaises(InvalidPlateAppearance):
+            self.repo.save(edited)
+
+    def test_derived_lines_are_saved(self):
+        """打席から導いた明細ならそのまま保存できること。"""
+        saved = self._save_game()
+
+        edited = self.repo.find_by_id(saved.id)
+        for batter in {entry.batter_id for entry in edited.plate_appearances}:
+            edited.record_batting(batter, batting_line_for(edited.plate_appearances, batter), batting_order=1)
+
+        self.repo.save(edited)
+
+        self.assertEqual(orm_models.GameBattingLine.objects.filter(game_id=saved.id).count(), 6)
 
     def test_bulk_reads_leave_plate_appearances_alone(self):
         """まとめて読む経路は打席を組み立てない（1試合で約280行あるため）。"""
