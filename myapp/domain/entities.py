@@ -635,8 +635,13 @@ class PlateAppearance:
 
     @property
     def is_double_play(self) -> bool:
-        """併殺（以上）か。アウトが2つ以上記録されたかで判断する。"""
-        return self.outs_recorded >= 2
+        """併殺（以上）か。**打者への守備でアウトが2つ以上取られた**かで判断する。
+
+        盗塁刺・牽制死は同じ打席に記録されていても併殺ではない（打者の打球とは
+        別に起きた走塁のアウト）。単純に `outs_recorded >= 2` とすると、三振と
+        盗塁刺が重なった打席が併殺打として数えられ、打点まで消えてしまう。
+        """
+        return sum(1 for advance in self.advances if advance.is_out and not advance.reason.is_baserunning_out) >= 2
 
     @property
     def runs_batted_in(self) -> int:

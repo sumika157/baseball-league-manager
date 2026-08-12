@@ -11,7 +11,7 @@ from myapp.domain.entities import (
     RunnerAdvance,
     RunnerSubstitution,
 )
-from myapp.domain.exceptions import InvalidPlateAppearance
+from myapp.domain.exceptions import InvalidPlateAppearance, InvalidStatValue
 from myapp.domain.value_objects import (
     AdvanceReason,
     Base,
@@ -660,3 +660,183 @@ class LinesMatchPlateAppearancesTest(TestCase):
 
         with self.assertRaises(InvalidPlateAppearance):
             services.ensure_lines_match_plate_appearances(game)
+
+
+class DerivedBattingCountsTest(TestCase):
+    """打席から数えられるようになった項目。手入力していた頃は無かったもの。"""
+
+    def test_a_run_is_counted_for_the_runner_not_the_batter(self):
+        """得点は自分の打席の外で起きる。単打で出た走者が、次の打者の本塁打で還る。"""
+        entries = [
+            _pa(1, 1, P.SINGLE),
+            _pa(
+                2,
+                2,
+                P.HOME_RUN,
+                advances=[_to(1, Base.FIRST, Base.HOME), _to(2, Base.BATTER, Base.HOME)],
+            ),
+        ]
+
+        self.assertEqual(services.batting_line_for(entries, 1).runs, 1)
+        self.assertEqual(services.batting_line_for(entries, 2).runs, 1)
+        # 打点は打った側にだけ2つ付く
+        self.assertEqual(services.batting_line_for(entries, 2).runs_batted_in, 2)
+        self.assertEqual(services.batting_line_for(entries, 1).runs_batted_in, 0)
+
+    def test_stolen_bases_come_from_the_reason(self):
+        entries = [
+            _pa(1, 1, P.SINGLE),
+            _pa(
+                2,
+                2,
+                P.STRIKEOUT_SWINGING,
+                advances=[_to(1, Base.FIRST, Base.SECOND, R.STOLEN_BASE), _to(2, Base.BATTER, Base.OUT, R.PUT_OUT)],
+            ),
+        ]
+
+        line = services.batting_line_for(entries, 1)
+        self.assertEqual((line.stolen_bases, line.caught_stealing), (1, 0))
+        self.assertAlmostEqual(line.stolen_base_percentage, 1.0)
+
+    def test_caught_stealing_is_counted_too(self):
+        entries = [
+            _pa(1, 1, P.SINGLE),
+            _pa(
+                2,
+                2,
+                P.WALK,
+                advances=[
+                    _to(1, Base.FIRST, Base.OUT, R.CAUGHT_STEALING),
+                    _to(2, Base.BATTER, Base.FIRST, R.AWARDED_BASE),
+                ],
+            ),
+        ]
+
+        line = services.batting_line_for(entries, 1)
+        self.assertEqual((line.stolen_bases, line.caught_stealing), (0, 1))
+        self.assertAlmostEqual(line.stolen_base_percentage, 0.0)
+
+    def test_strikeouts_and_sacrifices_are_counted(self):
+        entries = [
+            _pa(1, 1, P.SINGLE),
+            _pa(
+                2,
+                2,
+                P.SACRIFICE_BUNT,
+                advances=[_to(2, Base.BATTER, Base.OUT, R.PUT_OUT), _to(1, Base.FIRST, Base.SECOND)],
+            ),
+            _pa(3, 3, P.STRIKEOUT_LOOKING),
+        ]
+
+        self.assertEqual(services.batting_line_for(entries, 2).sacrifice_bunts, 1)
+        self.assertEqual(services.batting_line_for(entries, 3).strikeouts, 1)
+
+    def test_a_sacrifice_bunt_counts_toward_the_qualifying_line(self):
+        """規定打席の分母に犠打が入る（打数には入らない）。"""
+        line = BattingLine(at_bats=3, sacrifice_bunts=1)
+
+        self.assertEqual(line.at_bats, 3)
+        self.assertEqual(line.plate_appearances, 4)
+        self.assertEqual(line.plate_appearances_for_obp, 3)
+
+    def test_intentional_walks_are_a_subset_of_walks(self):
+        entries = [_pa(1, 1, P.INTENTIONAL_WALK)]
+
+        line = services.batting_line_for(entries, 1)
+        self.assertEqual((line.walks, line.intentional_walks), (1, 1))
+        with self.assertRaises(InvalidStatValue):
+            BattingLine(walks=1, intentional_walks=2)
+
+    def test_a_double_play_is_charged_to_the_batter(self):
+        entries = [
+            _pa(1, 1, P.SINGLE),
+            _pa(
+                2,
+                2,
+                P.GROUND_OUT,
+                advances=[
+                    _to(1, Base.FIRST, Base.OUT, R.FORCE_OUT),
+                    _to(2, Base.BATTER, Base.OUT, R.PUT_OUT),
+                ],
+            ),
+        ]
+
+        self.assertEqual(services.batting_line_for(entries, 2).double_plays, 1)
+        self.assertEqual(services.batting_line_for(entries, 1).double_plays, 0)
+
+
+class RunsAllowedTest(TestCase):
+    """失点と自責点。失策が絡むと差が出る。"""
+
+    def test_runs_allowed_counts_unearned_runs_too(self):
+        entries = [
+            _pa(
+                1,
+                1,
+                P.REACHED_ON_ERROR,
+                advances=[_to(1, Base.BATTER, Base.FIRST, R.ERROR, error_index=0)],
+                errors=[FieldingError(player_id=6, position=FieldingPosition.SHORTSTOP, kind=ErrorKind.THROWING)],
+            ),
+            _pa(
+                2,
+                2,
+                P.HOME_RUN,
+                advances=[_to(1, Base.FIRST, Base.HOME), _to(2, Base.BATTER, Base.HOME)],
+            ),
+        ]
+
+        line = services.pitching_line_for(entries, STARTER)
+
+        # 失策で出た走者の得点は失点だが自責点ではない
+        self.assertEqual(line.runs_allowed, 2)
+        self.assertEqual(line.earned_runs, 1)
+
+
+class DoublePlayDefinitionTest(TestCase):
+    """併殺は「打者への守備で2つ取った」こと。走塁のアウトは数えない。"""
+
+    def _strikeout_with_caught_stealing(self):
+        return _pa(
+            1,
+            1,
+            P.STRIKEOUT_SWINGING,
+            advances=[
+                _to(9, Base.FIRST, Base.OUT, R.CAUGHT_STEALING),
+                _to(1, Base.BATTER, Base.OUT, R.PUT_OUT),
+            ],
+        )
+
+    def test_a_strikeout_with_a_caught_stealing_is_not_a_double_play(self):
+        entry = self._strikeout_with_caught_stealing()
+
+        self.assertEqual(entry.outs_recorded, 2)
+        self.assertFalse(entry.is_double_play)
+        self.assertEqual(services.batting_line_for([entry], 1).double_plays, 0)
+
+    def test_a_ground_ball_that_retires_two_is_a_double_play(self):
+        entry = _pa(
+            1,
+            1,
+            P.GROUND_OUT,
+            advances=[
+                _to(9, Base.FIRST, Base.OUT, R.FORCE_OUT),
+                _to(1, Base.BATTER, Base.OUT, R.PUT_OUT),
+            ],
+        )
+
+        self.assertTrue(entry.is_double_play)
+
+    def test_a_run_on_a_caught_stealing_play_still_earns_a_run_batted_in(self):
+        """走塁のアウトで打点が消えないこと（併殺の間の得点だけが対象）。"""
+        entry = _pa(
+            1,
+            1,
+            P.SACRIFICE_FLY,
+            advances=[
+                _to(9, Base.FIRST, Base.OUT, R.CAUGHT_STEALING),
+                _to(8, Base.THIRD, Base.HOME, R.TAG_UP),
+                _to(1, Base.BATTER, Base.OUT, R.PUT_OUT),
+            ],
+        )
+
+        self.assertEqual(entry.runs_batted_in, 1)

@@ -5,9 +5,12 @@
 （成立していなくても例外にはならず、画面の数字が静かにずれるだけになる）。
 """
 
+from dataclasses import fields
+
 from django.core.management import call_command
 
 from myapp.domain import services as domain_services
+from myapp.domain.value_objects import BattingLine, PitchingLine
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
 
@@ -59,16 +62,12 @@ class SeedVirtualGamesTest(BaseCase):
             self.assertTrue(stored.exists())
             for row in stored:
                 counted = domain_services.batting_line_for(game.plate_appearances, row.player_id)
+                # **項目を1つずつ並べず、値オブジェクトの全フィールドを突き合わせる。**
+                # 一部だけ見ていると、増やした項目が 0 のまま保存されても気づけない
+                # （実際に起きた。投入コマンドが項目を独自に列挙していた）
                 self.assertEqual(
-                    (row.at_bats, row.singles, row.doubles, row.triples, row.home_runs, row.walks),
-                    (
-                        counted.at_bats,
-                        counted.singles,
-                        counted.doubles,
-                        counted.triples,
-                        counted.home_runs,
-                        counted.walks,
-                    ),
+                    {f.name: getattr(row, f.name) for f in fields(BattingLine)},
+                    {f.name: getattr(counted, f.name) for f in fields(BattingLine)},
                     f"打撃成績が打席と食い違っています（試合 {game.id} / 選手 {row.player_id}）",
                 )
 
@@ -77,14 +76,12 @@ class SeedVirtualGamesTest(BaseCase):
             for row in orm_models.GamePitchingLine.objects.filter(game_id=game.id):
                 counted = domain_services.pitching_line_for(game.plate_appearances, row.player_id)
                 self.assertEqual(row.innings_pitched, float(counted.innings.to_notation()))
+                # 勝敗・セーブ・先発登板は打席からは決まらないので突き合わせない
+                derived = {"innings", "wins", "losses", "saves", "holds", "starts", "relief_wins"}
                 self.assertEqual(
-                    (row.strikeouts, row.hits_allowed, row.walks_allowed, row.home_runs_allowed),
-                    (
-                        counted.strikeouts,
-                        counted.hits_allowed,
-                        counted.walks_allowed,
-                        counted.home_runs_allowed,
-                    ),
+                    {f.name: getattr(row, f.name) for f in fields(PitchingLine) if f.name not in derived},
+                    {f.name: getattr(counted, f.name) for f in fields(PitchingLine) if f.name not in derived},
+                    f"投球成績が打席と食い違っています（試合 {game.id} / 選手 {row.player_id}）",
                 )
 
     def test_every_out_belongs_to_a_pitcher(self):

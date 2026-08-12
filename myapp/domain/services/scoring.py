@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from ..entities import Game, PlateAppearance
 from ..exceptions import InvalidPlateAppearance
 from ..value_objects import (
+    AdvanceReason,
     Base,
     BattingLine,
     InningsPitched,
@@ -41,8 +42,13 @@ def batting_line_for(plate_appearances: Iterable[PlateAppearance], batter_id: in
 
     打数に数えるか・安打か・何塁打かは `PlateAppearanceResult` が知っており、
     打点は打席が自分で数える。ここは振り分けるだけで判定は持たない。
+
+    **得点と盗塁は自分の打席の外で起きる。** 走者としての動きなので、
+    自分が打者でない打席の進塁も見る必要がある。
     """
-    own = [entry for entry in plate_appearances if entry.batter_id == batter_id]
+    entries = list(plate_appearances)
+    own = [entry for entry in entries if entry.batter_id == batter_id]
+    moves = [advance for entry in entries for advance in entry.advances if advance.runner_id == batter_id]
     return BattingLine(
         at_bats=sum(1 for entry in own if entry.result.counts_as_at_bat),
         singles=_count_results(own, PlateAppearanceResult.SINGLE),
@@ -53,6 +59,14 @@ def batting_line_for(plate_appearances: Iterable[PlateAppearance], batter_id: in
         walks=sum(1 for entry in own if entry.result.is_walk),
         hit_by_pitch=_count_results(own, PlateAppearanceResult.HIT_BY_PITCH),
         sacrifice_flies=_count_results(own, PlateAppearanceResult.SACRIFICE_FLY),
+        runs=sum(1 for advance in moves if advance.has_scored),
+        strikeouts=sum(1 for entry in own if entry.result.is_strikeout),
+        sacrifice_bunts=_count_results(own, PlateAppearanceResult.SACRIFICE_BUNT),
+        intentional_walks=_count_results(own, PlateAppearanceResult.INTENTIONAL_WALK),
+        stolen_bases=sum(1 for advance in moves if advance.reason is AdvanceReason.STOLEN_BASE),
+        caught_stealing=sum(1 for advance in moves if advance.reason is AdvanceReason.CAUGHT_STEALING),
+        # 併殺打は「自分の打席でアウトが2つ記録された」こと。種別では持たない
+        double_plays=sum(1 for entry in own if entry.is_double_play),
     )
 
 
@@ -65,9 +79,12 @@ def pitching_line_for(plate_appearances: Iterable[PlateAppearance], pitcher_id: 
     """
     ordered = _in_order(plate_appearances)
     faced = [entry for entry in ordered if entry.pitcher_id == pitcher_id]
+    # 失点と自責点は同じ再生から出る。2度呼ぶと1試合ぶんを2回たどることになる
+    charged = [run for run in runs_scored_in(ordered) if run.responsible_pitcher_id == pitcher_id]
     return PitchingLine(
         innings=InningsPitched(outs=sum(entry.outs_recorded for entry in faced)),
-        earned_runs=earned_runs_for(ordered, pitcher_id),
+        runs_allowed=len(charged),
+        earned_runs=sum(1 for run in charged if run.is_earned),
         strikeouts=sum(1 for entry in faced if entry.result.is_strikeout),
         hits_allowed=sum(1 for entry in faced if entry.result.is_hit),
         walks_allowed=sum(1 for entry in faced if entry.result.is_walk),
@@ -182,6 +199,7 @@ def errors_for(plate_appearances: Iterable[PlateAppearance], player_id: int) -> 
 # 打席から導ける投球成績の項目。勝敗・セーブ・ホールド・先発登板は打席からは
 # 決まらない（イニングスコアと継投から決まる別の関心事）ので照合しない。
 _PITCHING_FIELDS_FROM_PLATE_APPEARANCES = (
+    "runs_allowed",
     "earned_runs",
     "strikeouts",
     "hits_allowed",

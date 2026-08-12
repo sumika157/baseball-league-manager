@@ -38,7 +38,7 @@
 """
 
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, replace
 from datetime import date, timedelta
 
 import numpy as np
@@ -51,6 +51,7 @@ from myapp.domain.entities import Game as DomainGame
 from myapp.domain.value_objects import (
     AdvanceReason,
     Base,
+    BattingLine,
     ErrorKind,
     FieldingPosition,
     PitchingLine,
@@ -168,17 +169,16 @@ SACRIFICE_BUNT_RATIO = 0.075
 # 犠飛（三塁に走者がいて2アウト未満のとき）。
 SACRIFICE_FLY_RATIO = 0.10
 # 併殺（一塁に走者がいて2アウト未満のゴロ）。
-DOUBLE_PLAY_RATIO = 0.22
+DOUBLE_PLAY_RATIO = 0.40
 # ゴロアウトで走者が1つ進む確率（併殺にならなかった場合）。
 # **ここは得点に強く効く。** 三塁走者はゴロが転がるたびに還ってしまうので、
 # 高くすると1試合平均得点がNPBの水準を大きく超える。
 ADVANCE_ON_GROUND_OUT_RATIO = 0.18
 
 # 盗塁。**打者が打球を放たない打席（四死球・三振）でだけ試みる。**
-# 進塁は打席に属するため、打球が飛ぶ打席に盗塁を混ぜると「1打席にアウト2つ」＝
-# 併殺と区別が付かなくなる（打点の判定が変わってしまう）。
-STEAL_ATTEMPT_RATIO = 0.35
-STEAL_SUCCESS_RATIO = 0.74
+# 打球が飛ぶ打席に混ぜると、走塁のアウトが打球の処理と同じ打席に並んでしまう。
+STEAL_ATTEMPT_RATIO = 0.55
+STEAL_SUCCESS_RATIO = 0.72
 
 # 単打・二塁打での走者の進み方。**1試合平均得点はここでほぼ決まる。**
 # 打率・四球・本塁打を水準に合わせてもなお得点が多い場合は、走者を還す効率が
@@ -232,6 +232,11 @@ DEFENSIVE_SLOTS = (
 
 P = PlateAppearanceResult
 R = AdvanceReason
+
+# 投球成績のうち、列としては持たない項目。投球回は野球表記の1列（innings_pitched）に
+# 直して持ち、先発登板と救援勝利は登板順から導く。**これ以外は値オブジェクトの
+# フィールドをそのまま列に流す**（項目を並べ直すと、増やしたときにここだけ古くなる）。
+PITCHING_NOT_STORED = ("innings", "starts", "relief_wins")
 
 
 def _covariance(sds, correlation):
@@ -827,7 +832,7 @@ class Command(BaseCommand):
 
         # 盗塁は打球が飛ばない打席でだけ。理由は STEAL_ATTEMPT_RATIO の説明を参照
         if result in (P.WALK, P.INTENTIONAL_WALK, P.HIT_BY_PITCH) or result.is_strikeout:
-            self._maybe_steal(advances, occupied, outs, allow_caught=not result.is_strikeout)
+            self._maybe_steal(advances, occupied, outs)
 
         if result is P.REACHED_ON_ERROR:
             errors.append(self._draw_error(fielding))
@@ -918,11 +923,11 @@ class Command(BaseCommand):
             return P.LINE_OUT
         return P.FOUL_FLY_OUT
 
-    def _maybe_steal(self, advances, occupied, outs, *, allow_caught):
-        """一塁走者の盗塁。二塁が空いているときだけ試みる。
+    def _maybe_steal(self, advances, occupied, outs):
+        """一塁走者の盗塁。二塁が空いていて、2アウト未満のときだけ試みる。
 
-        **盗塁刺は打者がアウトにならない打席でだけ起こす。** 打者のアウトと重なると
-        1打席にアウトが2つ記録され、併殺と区別が付かなくなる（打点が消える）。
+        2アウトで試みないのは、盗塁刺と打者のアウトが重なると1つの半回で
+        アウトが4つになるため（打者はもう打席を終えている）。
         """
         runner = occupied.get(Base.FIRST)
         if runner is None or Base.SECOND in occupied:
@@ -932,10 +937,8 @@ class Command(BaseCommand):
 
         if self.rng.random() < STEAL_SUCCESS_RATIO:
             advances.append(RunnerAdvance(runner, Base.FIRST, Base.SECOND, R.STOLEN_BASE))
-        elif allow_caught:
-            advances.append(RunnerAdvance(runner, Base.FIRST, Base.OUT, R.CAUGHT_STEALING))
         else:
-            return
+            advances.append(RunnerAdvance(runner, Base.FIRST, Base.OUT, R.CAUGHT_STEALING))
         # 盗塁の結果は打者の進塁を組み立てる前に反映する（押し出しの判定が変わる）
         occupied.pop(Base.FIRST, None)
         if advances[-1].to_base.occupies_base:
@@ -1142,21 +1145,16 @@ class Command(BaseCommand):
         rows = []
         for side in sides.values():
             for outing in side.outings:
-                counted = derived[outing.player.id]
                 wins = decisions.wins_for(outing.player.id)
                 rows.append(
                     {
                         "player": outing.player,
                         "appearance_order": outing.appearance_order,
                         "entered_inning": outing.entered_inning,
-                        "line": PitchingLine(
-                            innings=counted.innings,
-                            earned_runs=counted.earned_runs,
-                            strikeouts=counted.strikeouts,
-                            hits_allowed=counted.hits_allowed,
-                            walks_allowed=counted.walks_allowed,
-                            home_runs_allowed=counted.home_runs_allowed,
-                            hit_by_pitch_allowed=counted.hit_by_pitch_allowed,
+                        # **打席から数えた行に、継投で決まる記録だけを重ねる。**
+                        # 組み立て直すと、項目を増やしたときにここだけ古くなる
+                        "line": replace(
+                            derived[outing.player.id],
                             starts=1 if outing.appearance_order == 1 else 0,
                             wins=wins,
                             losses=decisions.losses_for(outing.player.id),
@@ -1258,27 +1256,29 @@ class Command(BaseCommand):
 
     @staticmethod
     def _batting_orm_rows(row, record):
+        """打撃成績の行。**項目は値オブジェクトから引く。**
+
+        ここに項目名を並べると、`BattingLine` に足しても投入コマンドだけが古いまま
+        になり、その項目が 0 のまま保存される（実際に起きた。例外にならないので
+        画面の欄が空になるまで気づけない）。
+        """
         for entry in record["batting"]:
-            line = entry["line"]
             yield GameBattingLine(
                 game=row,
                 player=entry["player"],
                 batting_order=entry["batting_order"],
                 slot_sequence=entry["slot_sequence"],
                 fielding_position=entry["fielding_position"].value,
-                at_bats=line.at_bats,
-                singles=line.singles,
-                doubles=line.doubles,
-                triples=line.triples,
-                home_runs=line.home_runs,
-                runs_batted_in=line.runs_batted_in,
-                walks=line.walks,
-                hit_by_pitch=line.hit_by_pitch,
-                sacrifice_flies=line.sacrifice_flies,
+                **{f.name: getattr(entry["line"], f.name) for f in fields(BattingLine)},
             )
 
     @staticmethod
     def _pitching_orm_rows(row, record):
+        """投球成績の行。打撃と同じく項目は値オブジェクトから引く。
+
+        投球回は野球表記（5.2 = 5回と2/3）に直して1列で持ち、先発登板と救援勝利は
+        登板順から導くので列に持たない。この3つだけを除く。
+        """
         for entry in record["pitching"]:
             line = entry["line"]
             yield GamePitchingLine(
@@ -1286,18 +1286,8 @@ class Command(BaseCommand):
                 player=entry["player"],
                 appearance_order=entry["appearance_order"],
                 entered_inning=entry["entered_inning"],
-                # 保存は野球表記（5.2 = 5回と2/3）。変換は値オブジェクトに任せる
                 innings_pitched=float(line.innings.to_notation()),
-                wins=line.wins,
-                losses=line.losses,
-                saves=line.saves,
-                holds=line.holds,
-                earned_runs=line.earned_runs,
-                strikeouts=line.strikeouts,
-                hits_allowed=line.hits_allowed,
-                walks_allowed=line.walks_allowed,
-                home_runs_allowed=line.home_runs_allowed,
-                hit_by_pitch_allowed=line.hit_by_pitch_allowed,
+                **{f.name: getattr(line, f.name) for f in fields(PitchingLine) if f.name not in PITCHING_NOT_STORED},
             )
 
     @staticmethod
@@ -1323,10 +1313,15 @@ class Command(BaseCommand):
             self.totals["hits"] += line.hits
             self.totals["home_runs"] += line.home_runs
             self.totals["walks"] += line.walks
+            self.totals["sacrifice_bunts"] += line.sacrifice_bunts
+            self.totals["stolen_bases"] += line.stolen_bases
+            self.totals["caught_stealing"] += line.caught_stealing
+            self.totals["double_plays"] += line.double_plays
         for entry in record["pitching"]:
             line = entry["line"]
             self.totals["outs"] += line.innings.outs
             self.totals["earned_runs"] += line.earned_runs
+            self.totals["runs_allowed"] += line.runs_allowed
             self.totals["strikeouts"] += line.strikeouts
 
     def _report_schedule(self, schedule):
@@ -1342,14 +1337,21 @@ class Command(BaseCommand):
         at_bats = max(1, self.totals["at_bats"])
         innings = max(1.0, self.totals["outs"] / OUTS_PER_INNING)
 
+        per_team_game = games * 2
         rows = [
-            ("1試合平均得点", self.totals["runs"] / games / 2, 3.9),
+            ("1試合平均得点", self.totals["runs"] / per_team_game, 3.9),
             ("リーグ打率", self.totals["hits"] / at_bats, 0.255),
             ("リーグ防御率", self.totals["earned_runs"] * 9 / innings, 3.50),
             ("K/9", self.totals["strikeouts"] * 9 / innings, 7.5),
             ("BB/9", self.totals["walks"] * 9 / innings, 2.7),
             ("HR/9", self.totals["home_runs"] * 9 / innings, 0.9),
             ("1試合の失策", self.totals["errors"] / games, 1.2),
+            # 打席から数えられるようになった項目。1チーム1試合あたりで見る
+            ("犠打", self.totals["sacrifice_bunts"] / per_team_game, 0.6),
+            ("盗塁", self.totals["stolen_bases"] / per_team_game, 0.55),
+            ("盗塁刺", self.totals["caught_stealing"] / per_team_game, 0.2),
+            ("併殺打", self.totals["double_plays"] / per_team_game, 0.7),
+            ("失点", self.totals["runs_allowed"] / per_team_game, 3.9),
         ]
         self._say("  リーグ全体の水準（括弧内は NPB の目安）:")
         for label, value, target in rows:
