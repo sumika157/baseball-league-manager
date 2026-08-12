@@ -44,6 +44,15 @@ def post_game_update(client, game_id, payload):
     )
 
 
+def post_game_scorebook(client, game_id, payload):
+    """スコアブックの保存 API（api_game_scorebook）に JSON で POST する。"""
+    return client.post(
+        reverse("api_game_scorebook", args=[game_id]),
+        data=json.dumps(payload),
+        content_type="application/json",
+    )
+
+
 def login_as_manager(client, *teams, username="manager") -> User:
     """渡したチームの担当者としてログインする。
 

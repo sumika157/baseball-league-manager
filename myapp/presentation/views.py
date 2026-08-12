@@ -18,6 +18,7 @@ from django.urls import reverse, reverse_lazy
 from django.views.decorators.http import require_GET
 from django.views.generic import CreateView
 
+from ..application.game_recording import GameRecordingService
 from ..application.services import TeamApplicationService
 from ..domain.exceptions import (
     DomainError,
@@ -89,6 +90,19 @@ def build_service() -> TeamApplicationService:
         games=DjangoGameRepository(),
         leagues=DjangoLeagueRepository(),
         game_list_query=DjangoGameListQuery(),
+    )
+
+
+def build_recording_service() -> GameRecordingService:
+    """スコアブックを保存するサービスを組み立てる。
+
+    `build_service()` と同じく**組み立てはここだけ**にする。打席の記録は
+    チームの一覧も試合の一覧も要らないので、依存は3つで足りる。
+    """
+    return GameRecordingService(
+        games=DjangoGameRepository(),
+        teams=DjangoTeamRepository(),
+        leagues=DjangoLeagueRepository(),
     )
 
 

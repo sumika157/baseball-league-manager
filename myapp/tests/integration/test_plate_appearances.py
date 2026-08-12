@@ -238,6 +238,29 @@ class PlateAppearancePersistenceTest(BaseCase):
 
         self.assertEqual(orm_models.GameBattingLine.objects.filter(game_id=saved.id).count(), 6)
 
+    def test_updating_a_game_keeps_its_plate_appearances(self):
+        """試合の基本情報だけを更新しても、打席の記録が消えないこと。
+
+        集約を組み立て直すときに打席を載せ忘れると、「読み込んでいない」ではなく
+        「記録が無い」として保存され、記録済みの打席が黙って全部消える。
+        """
+        saved = self._save_game()
+
+        with self.assertRaises(InvalidPlateAppearance):
+            # 打席から導けない打撃成績を送ると弾かれる（消えるのではなく）
+            self.service.update_game(
+                saved.id,
+                year=2026,
+                played_on=date(2026, 4, 1),
+                home_team_id=self.team.id,
+                away_team_id=self.rival.id,
+                home_score=0,
+                away_score=1,
+                batting={self.batters[0]: BattingLine(at_bats=4, home_runs=3)},
+            )
+
+        self.assertEqual(orm_models.GamePlateAppearance.objects.filter(game_id=saved.id).count(), 6)
+
     def test_bulk_reads_leave_plate_appearances_alone(self):
         """まとめて読む経路は打席を組み立てない（1試合で約280行あるため）。"""
         self._save_game()

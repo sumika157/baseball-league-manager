@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..domain.value_objects import FieldingPosition
+
 
 @dataclass(frozen=True)
 class TeamSummary:
@@ -809,3 +811,18 @@ class PlayerDetail:
     hold_points: int = 0
     starts: int = 0
     is_captain: bool = False
+
+
+@dataclass(frozen=True)
+class LineupSlot:
+    """打順の1枠。誰が何番でどこを守ったか。
+
+    スコアブックの保存でプレゼンテーション層から受け取る。成績は含めない
+    （打席から導くため）。同じ打順に複数の選手が並ぶ場合は slot_sequence で区別する。
+    """
+
+    team_id: int
+    player_id: int
+    batting_order: int
+    slot_sequence: int
+    fielding_position: FieldingPosition | None
