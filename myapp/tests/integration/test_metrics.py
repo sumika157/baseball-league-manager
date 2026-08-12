@@ -10,11 +10,14 @@ from myapp.domain.value_objects import (
 from myapp.infrastructure import orm_models
 
 from ..helpers import (
-    api_inning_rows,
+    build_scorebook,
     give_batting,
     give_pitching,
+    lineup_rows,
     login_as_manager,
-    post_game_update,
+    play_game,
+    post_game_scorebook,
+    register_lineup,
 )
 from .base import BaseCase
 
@@ -202,42 +205,19 @@ class AdvancedMetricsTest(BaseCase):
 
         self.assertContains(response, "FIP")
 
-    def test_entry_form_saves_the_new_counts(self):
+    def test_new_counts_are_derived_from_the_scorebook(self):
+        """被本塁打・与死球は入力せず、打席の結果から数えること。
+
+        **被本塁打が被安打を超える入力は、もう起こりえない**（本塁打は安打の一種
+        として1打席から数えるため）。組み合わせとして成立しないことの検査は
+        値オブジェクト側（tests/domain/test_value_objects.py）に残っている。
+        """
         login_as_manager(self.client, self.team, username="scorer")
-        self.client.post(
-            reverse("game_create"),
-            {
-                "year": "2026",
-                "played_on": "2026-05-01",
-                "home_team": self.team.id,
-                "away_team": self.rival.id,
-                "home_score": "1",
-                "away_score": "0",
-            },
-        )
-        game = orm_models.Game.objects.latest("id")
+        game = play_game(self.team, self.rival, home_score=0, away_score=0)
+        batters = register_lineup(self.service, self.rival, prefix="相手打者", first_number=71)
+        home_batters = register_lineup(self.service, self.team, prefix="自軍打者", first_number=81)
 
-        response = self.client.get(reverse("game_edit", args=[game.id]))
-        payload = response.context["payload"]
-        pitchers = [{"player_id": p["id"]} for team in payload["teams"] for p in team["players"] if p["is_pitcher"]]
-
-        pitching_rows = [
-            {
-                "player_id": p["player_id"],
-                **(
-                    {
-                        "innings_pitched": "6.0",
-                        "hits_allowed": 5,
-                        "home_runs_allowed": 2,
-                        "hit_by_pitch_allowed": 1,
-                    }
-                    if p["player_id"] == self.pitcher.id
-                    else {}
-                ),
-            }
-            for p in pitchers
-        ]
-        post_game_update(
+        post_game_scorebook(
             self.client,
             game.id,
             {
@@ -245,62 +225,20 @@ class AdvancedMetricsTest(BaseCase):
                 "played_on": "2026-05-01",
                 "home_team": self.team.id,
                 "away_team": self.rival.id,
-                "home_score": 1,
-                "away_score": 0,
-                "batting": [],
-                "pitching": pitching_rows,
-                "innings": api_inning_rows(),
+                "lineup": lineup_rows(self.rival, batters) + lineup_rows(self.team, home_batters),
+                # ビジターが1回表に2点（本塁打2本）。投げているのは自軍の投手
+                "plate_appearances": build_scorebook(
+                    away=[2],
+                    home=[0],
+                    away_batters=batters,
+                    home_batters=home_batters,
+                    away_pitchers={1: self.pitcher.id},
+                    home_pitchers={1: self.pitcher.id},
+                ),
             },
         )
 
-        line = orm_models.GamePitchingLine.objects.get(game=game, player_id=self.pitcher.id)
+        line = orm_models.GamePitchingLine.objects.get(game_id=game.id, player_id=self.pitcher.id)
         self.assertEqual(line.home_runs_allowed, 2)
-        self.assertEqual(line.hit_by_pitch_allowed, 1)
-
-    def test_home_runs_beyond_hits_allowed_are_rejected(self):
-        """被本塁打は被安打の内数。超える入力は保存させない。"""
-        login_as_manager(self.client, self.team, username="scorer2")
-        self.client.post(
-            reverse("game_create"),
-            {
-                "year": "2026",
-                "played_on": "2026-06-01",
-                "home_team": self.team.id,
-                "away_team": self.rival.id,
-                "home_score": "1",
-                "away_score": "0",
-            },
-        )
-        game = orm_models.Game.objects.latest("id")
-        payload = self.client.get(reverse("game_edit", args=[game.id])).context["payload"]
-        pitchers = [{"player_id": p["id"]} for team in payload["teams"] for p in team["players"] if p["is_pitcher"]]
-
-        pitching_rows = [
-            {
-                "player_id": p["player_id"],
-                **(
-                    {"innings_pitched": "6.0", "hits_allowed": 1, "home_runs_allowed": 3}
-                    if p["player_id"] == self.pitcher.id
-                    else {}
-                ),
-            }
-            for p in pitchers
-        ]
-        response = post_game_update(
-            self.client,
-            game.id,
-            {
-                "year": 2026,
-                "played_on": "2026-06-01",
-                "home_team": self.team.id,
-                "away_team": self.rival.id,
-                "home_score": 1,
-                "away_score": 0,
-                "batting": [],
-                "pitching": pitching_rows,
-                "innings": api_inning_rows(),
-            },
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertFalse(orm_models.GamePitchingLine.objects.filter(game=game).exists())
+        self.assertEqual(line.hits_allowed, 2)
+        self.assertEqual(line.strikeouts, 6)

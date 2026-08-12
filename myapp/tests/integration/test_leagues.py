@@ -415,17 +415,12 @@ class LeagueStatsViewTest(BaseCase):
     # 「10打席の選手は残り、1打席の選手は消える」で検査する。
 
     def test_qualified_filter_keeps_only_players_reaching_the_line(self):
-        game = give_batting(self.team, self.rival, self.slugger.id, BattingLine(at_bats=10, singles=3), day=1)
-        # 同じ試合に1打席だけの選手を足す（試合数を増やさずに規定未満を作る）
+        # 1つの試合に2人ぶんを入れる（試合数を増やさずに規定未満の選手を作る）
         pinch = self.service.register_player(self.team.id, "代打", 44, "外野手")
-        self.service.update_game(
-            game.id,
-            year=game.season.year,
-            played_on=game.played_on,
-            home_team_id=game.home_team_id,
-            away_team_id=game.away_team_id,
-            home_score=game.home_score,
-            away_score=game.away_score,
+        play_game(
+            self.team,
+            self.rival,
+            day=1,
             batting={
                 self.slugger.id: BattingLine(at_bats=10, singles=3),
                 pinch.id: BattingLine(at_bats=1, singles=1),
@@ -454,21 +449,10 @@ class LeagueStatsViewTest(BaseCase):
 
     def test_pitchers_are_filtered_by_required_innings(self):
         short = self.service.register_player(self.team.id, "ワンポイント", 45, "投手")
-        game = give_pitching(
+        play_game(
             self.team,
             self.rival,
-            self.ace.id,
-            PitchingLine(innings=InningsPitched.from_notation("9.0"), wins=1),
             day=1,
-        )
-        self.service.update_game(
-            game.id,
-            year=game.season.year,
-            played_on=game.played_on,
-            home_team_id=game.home_team_id,
-            away_team_id=game.away_team_id,
-            home_score=game.home_score,
-            away_score=game.away_score,
             pitching={
                 self.ace.id: PitchingLine(innings=InningsPitched.from_notation("9.0"), wins=1),
                 short.id: PitchingLine(innings=InningsPitched.from_notation("0.1")),
