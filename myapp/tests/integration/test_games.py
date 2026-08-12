@@ -308,14 +308,12 @@ class GameEntryTest(BaseCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.context["payload"]
-        batters = [p for roster in payload["rosters"] for p in roster["batters"]]
-        pitchers = [p for roster in payload["rosters"] for p in roster["pitchers"]]
-        names = {p["name"] for p in batters + pitchers}
+        players = [p for team in payload["teams"] for p in team["players"]]
+        names = {p["name"] for p in players}
         self.assertIn("山田", names)
         self.assertIn("佐藤", names)
-        # 野手は打撃表、投手は投球表に振り分けられる
-        self.assertEqual(len(batters), 1)
-        self.assertEqual(len(pitchers), 1)
+        # 打順・投手の選択肢に使うので、投手かどうかが分かる
+        self.assertEqual(len([p for p in players if p["is_pitcher"]]), 1)
 
     def _stats_payload(self, game, **overrides):
         payload = {
@@ -377,20 +375,25 @@ class GameEntryTest(BaseCase):
         post_game_update(self.client, game.id, self._stats_payload(game))
         self.assertEqual(orm_models.GameBattingLine.objects.count(), 0)
 
-    def test_existing_stats_are_prefilled(self):
+    def test_the_lineup_is_prefilled(self):
+        """入力済みの打順は開き直したときに残っていること。
+
+        成績そのものは payload に載せない（打席から導く値なので、編集画面が
+        持つのは打順と打席だけ）。
+        """
         self._create_game()
         game = orm_models.Game.objects.get()
 
         post_game_update(
             self.client,
             game.id,
-            self._stats_payload(game, batting=[{"player_id": self.batter.id, "at_bats": 4}]),
+            self._stats_payload(game, batting=[{"player_id": self.batter.id, "at_bats": 4, "batting_order": 3}]),
         )
 
         payload = self.client.get(reverse("game_edit", args=[game.id])).context["payload"]
-        batters = [p for roster in payload["rosters"] for p in roster["batters"]]
-        batter_row = next(p for p in batters if p["player_id"] == self.batter.id)
-        self.assertEqual(batter_row["at_bats"], 4)
+        slots = [slot for team in payload["teams"] for slot in team["lineup"]]
+        slot = next(each for each in slots if each["player_id"] == self.batter.id)
+        self.assertEqual(slot["batting_order"], 3)
 
     def test_score_can_be_corrected(self):
         self._create_game()
@@ -529,14 +532,18 @@ class BoxScoreEntryTest(BaseCase):
         self.assertContains(response, "linescore-table")
         self.assertEqual(len(response.context["detail"].line_score.columns), 9)
 
-    def test_the_edit_form_has_no_win_or_save_inputs(self):
-        """勝敗・セーブは導出するので、入力欄を置かない。"""
+    def test_the_edit_form_has_no_stat_inputs_at_all(self):
+        """成績は打席から導くので、入力欄の材料を payload に載せない。
+
+        勝敗・セーブだけでなく、打数も投球回も登板順も送らない。載せると
+        「打席と食い違う成績」を入力できる余地が残る。
+        """
         response = self.client.get(self.url)
 
         payload = response.context["payload"]
-        pitchers = [p for roster in payload["rosters"] for p in roster["pitchers"]]
-        self.assertTrue(pitchers)
-        for pitcher in pitchers:
-            self.assertNotIn("wins", pitcher)
-            self.assertNotIn("saves", pitcher)
-        self.assertIn("entered_inning", pitchers[0])
+        players = [p for team in payload["teams"] for p in team["players"]]
+        self.assertTrue(players)
+        for player in players:
+            self.assertEqual(set(player), {"id", "name", "number", "position", "is_pitcher"})
+        # 代わりに打席の語彙が載る（画面側に同じ表を持たせないため）
+        self.assertIn("results", payload["vocabulary"])
