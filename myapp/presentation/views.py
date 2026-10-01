@@ -37,6 +37,7 @@ from ..domain.value_objects import (
 )
 from ..infrastructure.queries import (
     DjangoGameListQuery,
+    DjangoPlayerFieldingQuery,
     DjangoPlayerSearchQuery,
     DjangoTeamListQuery,
     DjangoTeamPermissionQuery,
@@ -96,6 +97,7 @@ def build_service() -> TeamApplicationService:
         games=DjangoGameRepository(),
         leagues=DjangoLeagueRepository(),
         game_list_query=DjangoGameListQuery(),
+        player_fielding_query=DjangoPlayerFieldingQuery(),
     )
 
 
@@ -429,15 +431,28 @@ def _game_edit_payload(request, game, rosters) -> dict:
     同じ表を書くとずれても例外にならず、選択肢や既定値だけが静かに古くなる。
     払い出せば出典は1つのままになる。
     """
-    lineup = {
-        entry.player_id: {
+    # 保存済みの出場した打席を、入力と同じ（回・表裏・その半回の何人目）に戻す
+    located: dict[int, tuple[int, bool, int]] = {}
+    counts: dict[tuple[int, bool], int] = {}
+    for entry in game.plate_appearances_in_order():
+        half = (entry.inning, entry.is_bottom)
+        counts[half] = counts.get(half, 0) + 1
+        located[entry.sequence] = (entry.inning, entry.is_bottom, counts[half])
+    lineup = {}
+    for entry in game.batting:
+        position = entry.fielding_position
+        # 代打・代走・投手は入った時点を打席から導くので、入力欄には出さない（返して再保存すると、
+        # 打席より前に入ったことになりうる）。守備固めなどは、保存した値を返して直せるようにする
+        derived = position is not None and position.entry_is_derived
+        inning, is_bottom, batter = located.get(entry.entered_sequence or 0, (None, False, 1))
+        lineup[entry.player_id] = {
             "batting_order": entry.batting_order,
             "slot_sequence": entry.slot_sequence,
-            "fielding_position": entry.fielding_position.value if entry.fielding_position else "",
+            "fielding_position": position.value if position else "",
+            "entered_inning": None if derived else inning,
+            "entered_is_bottom": False if derived else is_bottom,
+            "entered_batter": 1 if derived else batter,
         }
-        for entry in game.batting
-    }
-
     return {
         "game": {
             "id": game.id,
@@ -541,6 +556,8 @@ def _scorebook_vocabulary() -> dict:
         "error_kinds": [kind.value for kind in ErrorKind],
         "fielding_positions": FieldingPosition.labels(),
         "defensive_positions": FieldingPosition.defensive_labels(),
+        # 出場時刻を打席から導く位置（代打・代走・投手）。画面は出場した半回の入力欄を出さない
+        "entry_derived_positions": [position.value for position in FieldingPosition if position.entry_is_derived],
     }
 
 

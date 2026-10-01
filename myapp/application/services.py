@@ -16,6 +16,7 @@ from ..domain import services as domain_services
 from ..domain.entities import Game, Player, Stint, Team
 from ..domain.repositories import GameRepository, LeagueRepository, TeamRepository
 from ..domain.value_objects import (
+    FieldingPosition,
     JerseyNumber,
     PitchingLine,
     Position,
@@ -30,6 +31,7 @@ from .dto import (
     Dashboard,
     DashboardLeague,
     GameDetail,
+    GameFieldingRow,
     GameLineScore,
     GamePlayerRow,
     GameRow,
@@ -61,7 +63,7 @@ from .dto import (
     TitleDepartment,
     YearlyRow,
 )
-from .queries import GameListQuery, TeamListQuery
+from .queries import GameListQuery, PlayerFieldingQuery, TeamListQuery
 from .scorebook_view import build_scorebook_grids
 
 
@@ -153,6 +155,7 @@ class TeamApplicationService:
         games: GameRepository,
         leagues: LeagueRepository,
         game_list_query: GameListQuery,
+        player_fielding_query: PlayerFieldingQuery,
     ) -> None:
         # 具象クラスではなくリポジトリ・参照クエリのインターフェースに依存する。
         # 省略可能にすると、一部だけ渡した半端なサービスが作れてしまい、呼ぶ経路に
@@ -161,6 +164,8 @@ class TeamApplicationService:
         # 一覧表示は集約を組み立てないリードモデルを使う
         self._team_list_query = team_list_query
         self._game_list_query = game_list_query
+        # 守備成績は選手ページで通算・年度別を合計で出すだけなので、集約を組み立てずに読む
+        self._player_fielding_query = player_fielding_query
         # 勝敗と通算成績の出典
         self._games = games
         # 順位はリーグの中で決まるため、リーグの一覧が要る
@@ -853,13 +858,15 @@ class TeamApplicationService:
                 )
             )
 
+        fielding = self._to_fielding_rows(game, players)
+
         return GameDetail(
             game=self._to_game_row(game, names),
             batting=batting,
             pitching=pitching,
             line_score=self._to_line_score(game, batting),
-            away_box=self._to_team_box(game.away_team_id, names, batting, pitching, game),
-            home_box=self._to_team_box(game.home_team_id, names, batting, pitching, game),
+            away_box=self._to_team_box(game.away_team_id, names, batting, pitching, fielding, game),
+            home_box=self._to_team_box(game.home_team_id, names, batting, pitching, fielding, game),
             scorebook=build_scorebook_grids(
                 game,
                 names,
@@ -868,11 +875,54 @@ class TeamApplicationService:
         )
 
     @staticmethod
+    def _to_fielding_rows(game: Game, players: dict[int, dict]) -> list[GameFieldingRow]:
+        """守備成績の行。打順の順に並べ、続けて打順にいない投手（指名打者制）を登板順に並べる。
+
+        位置はラインアップの守備位置。打順にいない投手は「投」。守備成績は打席から導いた値で、
+        打席の記録が無い試合では行が無い。
+        """
+        by_player = {entry.player_id: entry.line for entry in game.fielding}
+        lineup = {entry.player_id: entry for entry in game.batting}
+        pitched = {outing.player_id for outing in game.pitching}
+
+        ordered = [entry.player_id for entry in game.batting_in_order() if entry.player_id in by_player]
+        ordered += [outing.player_id for outing in game.pitching_in_order() if outing.player_id not in ordered]
+        # 打席にも登板にも現れない守備者（失策だけが記録された選手など）は最後に
+        ordered += sorted(set(by_player) - set(ordered))
+
+        rows = []
+        for player_id in ordered:
+            info = players.get(player_id)
+            if info is None or player_id not in by_player:
+                continue
+            batting = lineup.get(player_id)
+            position = batting.fielding_position if batting else None
+            if position is not None and position.takes_the_field:
+                label = position.label
+            else:
+                label = FieldingPosition.PITCHER.label if player_id in pitched else ""
+            line = by_player[player_id]
+            rows.append(
+                GameFieldingRow(
+                    player_id=player_id,
+                    player_name=info["name"],
+                    number=info["number"],
+                    team_id=info["team_id"],
+                    position_label=label,
+                    putouts=line.putouts,
+                    assists=line.assists,
+                    errors=line.errors,
+                )
+            )
+        return rows
+
+    @staticmethod
     def _to_team_box(
         team_id: int,
         names: dict[int, str],
         batting: list[GamePlayerRow],
         pitching: list[GamePlayerRow],
+        fielding: list[GameFieldingRow],
         game: Game,
     ) -> GameTeamBox | None:
         """1チームぶんのボックススコア。並びは既に打順・登板順になっている。"""
@@ -886,6 +936,7 @@ class TeamApplicationService:
             score=(game.home_score if team_id == game.home_team_id else game.away_score),
             batting=rows,
             pitching=staff,
+            fielding=[row for row in fielding if row.team_id == team_id],
         )
 
     @staticmethod
@@ -990,6 +1041,7 @@ class TeamApplicationService:
             selected_month_label=selected.label if selected else "",
             years=[self._to_yearly_row(split) for split in domain_services.yearly_splits(team_games, player_id)],
             months=months,
+            fielding=self._player_fielding_query.for_player(player_id, team_id),
             career=[
                 CareerRow(
                     team_id=s.team_id,

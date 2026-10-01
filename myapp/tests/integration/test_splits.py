@@ -107,7 +107,7 @@ class MonthlySplitViewTest(BaseCase):
             home_score=1,
             away_score=0,
         )
-        game.record_batting(self.player.id, BattingLine(**line))
+        game.record_batting(self.player.id, BattingLine(**line), team_id=game.home_team_id)
         DjangoGameRepository().save(game)
 
     def _months(self, player_id=None):

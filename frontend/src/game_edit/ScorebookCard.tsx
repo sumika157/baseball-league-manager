@@ -30,6 +30,11 @@ export function ScorebookCard({ state, setState, payload }: Props) {
 
   const draft = recording ? (editing ?? buildNextEntry(state, payload, next)) : editing;
   const draftBefore = draft && draft.sequence <= entries.length ? before[draft.sequence - 1] : next;
+  const draftBatters = draft
+    ? (state.lineups[(draft.is_bottom ? home : away)?.team_id ?? 0] ?? []).filter(
+        (slot) => slot.batting_order === draft.batting_order && slot.player_id > 0,
+      )
+    : [];
 
   function commit(entry: PlateAppearancePayload) {
     setState((current) => {
@@ -75,6 +80,7 @@ export function ScorebookCard({ state, setState, payload }: Props) {
             entry={draft}
             before={draftBefore}
             nameOf={nameOf}
+            batters={draftBatters}
             pitchers={fieldingTeam?.players ?? []}
             fielders={(fieldingTeam?.players ?? []).filter((player) => !player.is_pitcher)}
             onChange={(entry) => {

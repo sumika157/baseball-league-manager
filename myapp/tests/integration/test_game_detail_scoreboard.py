@@ -131,7 +131,7 @@ class GameDetailScoreboardTest(_DetailCase):
             away_score=1,
             line_score=LineScore(away=(1,), home=(2,)),
         )
-        old.record_batting(batter.id, BattingLine(at_bats=4, singles=2))
+        old.record_batting(batter.id, BattingLine(at_bats=4, singles=2), team_id=self.team.id)
         game = DjangoGameRepository().save(old)
 
         response = self.client.get(reverse("game_detail", args=[game.id]))

@@ -41,6 +41,29 @@ def _as_row_list(body: dict, key: str) -> list | None:
     return value
 
 
+ENTRY_KEYS = ("entered_inning", "entered_is_bottom", "entered_batter")
+
+
+def _lineup_row_missing_entry_keys(rows: list) -> str | None:
+    """途中出場の行に、出場時刻のキーが揃っているか。揃っていなければエラー文を返す。
+
+    **キーの欠落と、明示的な未入力（null）は別物**。欠落を「未入力」と同じに扱うと、キーを
+    落としたクライアントの保存で、守備固めの出場時刻が黙って消える（既知の罠と同じ形）。
+    """
+    for row in rows:
+        try:
+            substitute = int(row.get("slot_sequence") or 0) >= 1
+        except (TypeError, ValueError):
+            continue  # 型の不正はフォームが弾く
+        missing = [key for key in ENTRY_KEYS if key not in row]
+        if substitute and missing:
+            return (
+                f"途中出場の行に出場時刻のキーがありません（選手id={row.get('player_id')}・{', '.join(missing)}）。"
+                "未入力は null で送ってください。"
+            )
+    return None
+
+
 def _collect_plate_appearances(rows: list) -> tuple[list, str | None]:
     """打席の行を検証してドメインの打席に組み立てる。
 
@@ -107,6 +130,10 @@ def game_scorebook(request, game_id):
     plate_appearance_data = _as_row_list(body, "plate_appearances")
     if lineup_data is None or plate_appearance_data is None:
         return JsonResponse({"ok": False, "error": "リクエストの形式が不正です。"}, status=400)
+
+    missing_entry = _lineup_row_missing_entry_keys(lineup_data)
+    if missing_entry is not None:
+        return JsonResponse({"ok": False, "error": missing_entry}, status=400)
 
     game_form = ScorebookGameForm(body)
     lineup_forms = [LineupSlotForm(row) for row in lineup_data]

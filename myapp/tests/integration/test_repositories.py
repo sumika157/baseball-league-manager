@@ -115,7 +115,7 @@ class GameRepositoryTest(BaseCase):
     def test_recording_the_same_player_twice_overwrites(self):
         player = self.service.register_player(self.team.id, "山田", 10, "内野手")
         game = play_game(self.team, self.rival, batting={player.id: BattingLine(at_bats=4, singles=1)})
-        game.record_batting(player.id, BattingLine(at_bats=4, home_runs=2))
+        game.record_batting(player.id, BattingLine(at_bats=4, home_runs=2), team_id=game.home_team_id)
         DjangoGameRepository().save(game)
 
         self.assertEqual(orm_models.GameBattingLine.objects.filter(game_id=game.id).count(), 1)

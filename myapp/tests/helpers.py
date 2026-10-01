@@ -19,6 +19,7 @@ from myapp.domain.value_objects import (
     PlateAppearanceResult,
     Season,
 )
+from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
 
 # テストも画面と同じ組み立て（presentation/views.py）を使い、ここから再輸出する。
@@ -199,11 +200,17 @@ def play_game(
         away_score=away_score,
     )
     for player_id, line in (batting or {}).items():
-        game.record_batting(player_id, line)
+        game.record_batting(player_id, line, team_id=_team_of(player_id, home_team, away_team))
     for player_id, line in (pitching or {}).items():
         game.record_pitching(player_id, line)
 
     return DjangoGameRepository().save(game)
+
+
+def _team_of(player_id, home_team, away_team) -> int:
+    """選手がどちらのチームに在籍しているか。成績だけを持たせるテスト用の試合に要る。"""
+    stints = orm_models.PlayerStint.objects.filter(player_id=player_id)
+    return home_team.id if stints.filter(team_id=home_team.id).exists() else away_team.id
 
 
 def give_batting(home_team, away_team, player_id, line: BattingLine, *, year=2026, day=1):

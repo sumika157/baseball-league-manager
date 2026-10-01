@@ -211,3 +211,41 @@ class ScorebookApiTest(BaseCase):
         response = post_game_scorebook(self.client, self.game.id, self._payload())
 
         self.assertEqual(response.status_code, 403)
+
+    def _payload_with_substitute(self, **entry):
+        substitute = self._register(self.rival, "ビジター代打", 99, "内野手")
+        row = {
+            "team_id": self.rival.id,
+            "player_id": substitute,
+            "batting_order": 2,
+            "slot_sequence": 1,
+            "fielding_position": "指",
+            **entry,
+        }
+        return self._payload(lineup=[*self._lineup(), row])
+
+    def test_a_substitute_row_without_the_entry_keys_is_rejected(self):
+        response = post_game_scorebook(self.client, self.game.id, self._payload_with_substitute())
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("キーがありません", response.json()["error"])
+
+    def test_a_single_missing_key_is_rejected_too(self):
+        payload = self._payload_with_substitute(entered_inning=None, entered_is_bottom=False)
+
+        response = post_game_scorebook(self.client, self.game.id, payload)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("entered_batter", response.json()["error"])
+
+    def test_explicit_nulls_are_accepted(self):
+        payload = self._payload_with_substitute(entered_inning=None, entered_is_bottom=False, entered_batter=None)
+
+        response = post_game_scorebook(self.client, self.game.id, payload)
+
+        self.assertEqual(response.status_code, 200, response.content)
+
+    def test_starters_do_not_need_the_keys(self):
+        response = post_game_scorebook(self.client, self.game.id, self._payload())
+
+        self.assertEqual(response.status_code, 200, response.content)

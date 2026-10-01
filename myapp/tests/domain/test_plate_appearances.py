@@ -619,9 +619,13 @@ class LinesMatchPlateAppearancesTest(TestCase):
         game = _game(_half_inning(), away_score=1)
         for batter in (1, 2, 3, 4, 5):
             game.record_batting(
-                batter, services.batting_line_for(game.plate_appearances, batter), batting_order=batter
+                batter,
+                services.batting_line_for(game.plate_appearances, batter),
+                batting_order=batter,
+                team_id=game.away_team_id,
             )
         game.record_pitching(STARTER, services.pitching_line_for(game.plate_appearances, STARTER))
+        services.record_derived_fielding(game)
         return game
 
     def test_derived_lines_pass(self):
@@ -635,13 +639,13 @@ class LinesMatchPlateAppearancesTest(TestCase):
             home_team_id=HOME,
             away_team_id=AWAY,
         )
-        game.record_batting(1, BattingLine(at_bats=4, singles=2))
+        game.record_batting(1, BattingLine(at_bats=4, singles=2), team_id=game.home_team_id)
 
         services.ensure_lines_match_plate_appearances(game)
 
     def test_a_batting_line_that_drifted_is_rejected(self):
         game = self._game_with_lines()
-        game.record_batting(1, BattingLine(at_bats=4, home_runs=3), batting_order=1)
+        game.record_batting(1, BattingLine(at_bats=4, home_runs=3), batting_order=1, team_id=game.home_team_id)
 
         with self.assertRaises(InvalidPlateAppearance):
             services.ensure_lines_match_plate_appearances(game)

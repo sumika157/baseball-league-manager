@@ -96,6 +96,24 @@ class FieldingPosition(Enum):
         """守備に就かず、代打・代走としてのみ出場したか。"""
         return self in (FieldingPosition.PINCH_HITTER, FieldingPosition.PINCH_RUNNER)
 
+    @property
+    def takes_the_field(self) -> bool:
+        """実際に守備に就く位置か。代打・代走に加えて指名打者も就かない。
+
+        `defensive_labels` はスタメンの選択肢なので指名打者を含む。こちらは
+        刺殺・補殺を付けられる（守備機会がありうる）位置だけ。
+        """
+        return not self.is_substitute_only and self is not FieldingPosition.DESIGNATED_HITTER
+
+    @property
+    def entry_is_derived(self) -> bool:
+        """途中出場の時刻を打席の記録から導ける位置か（入力させない）。
+
+        代打は初めて打席に立った打席、代走は代走を出した打席、投手は初めて投げた打席。
+        これ以外の位置（守備固めなど）は打席に現れないので、入った半回を入力させる。
+        """
+        return self.is_substitute_only or self is FieldingPosition.PITCHER
+
     @classmethod
     def from_label(cls, label: str) -> FieldingPosition | None:
         """未設定（空）は None を返す。守備位置を記録しない試合もあるため。"""
@@ -944,6 +962,56 @@ class PitchingLine:
 
     @classmethod
     def total(cls, lines: Iterable[PitchingLine]) -> PitchingLine:
+        """複数試合の合計。"""
+        result = cls()
+        for line in lines:
+            result = result + line
+        return result
+
+
+@dataclass(frozen=True)
+class FieldingLine:
+    """守備成績。刺殺・補殺・失策・併殺参加と、そこから導く守備機会・守備率。
+
+    `BattingLine` / `PitchingLine` と対になる。**どれも打席の記録から導く値**で、
+    手入力しない（導出は `domain.services.scoring.fielding_lines_for`）。
+    守備率は試合ごとの率を平均せず、足し合わせた実数から計算し直す。
+    """
+
+    putouts: int = 0
+    assists: int = 0
+    errors: int = 0
+    double_plays_turned: int = 0
+
+    def __post_init__(self) -> None:
+        for field_name, label in (
+            ("putouts", "刺殺"),
+            ("assists", "補殺"),
+            ("errors", "失策"),
+            ("double_plays_turned", "併殺参加"),
+        ):
+            object.__setattr__(self, field_name, _require_non_negative(label, getattr(self, field_name)))
+
+    @property
+    def total_chances(self) -> int:
+        """守備機会。刺殺＋補殺＋失策。"""
+        return self.putouts + self.assists + self.errors
+
+    @property
+    def fielding_percentage(self) -> float:
+        """守備率。(刺殺＋補殺) ÷ 守備機会。機会が無ければ 0。"""
+        if self.total_chances == 0:
+            return 0.0
+        return (self.putouts + self.assists) / self.total_chances
+
+    def __add__(self, other: FieldingLine) -> FieldingLine:
+        """試合ごとの成績を積み上げて通算にする。率は合算した実数から計算し直す。"""
+        if not isinstance(other, FieldingLine):
+            return NotImplemented
+        return FieldingLine(**_summed_fields(self, other))
+
+    @classmethod
+    def total(cls, lines: Iterable[FieldingLine]) -> FieldingLine:
         """複数試合の合計。"""
         result = cls()
         for line in lines:

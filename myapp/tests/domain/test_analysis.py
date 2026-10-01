@@ -45,7 +45,7 @@ def _game(
         away_score=away_score,
     )
     for player_id, line in (batting or {}).items():
-        game.record_batting(player_id, line)
+        game.record_batting(player_id, line, team_id=game.home_team_id)
     for player_id, line in (pitching or {}).items():
         game.record_pitching(player_id, line)
     return game

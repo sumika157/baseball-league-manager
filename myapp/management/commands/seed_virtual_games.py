@@ -53,6 +53,7 @@ from myapp.domain.value_objects import (
     Base,
     BattingLine,
     ErrorKind,
+    FieldingLine,
     FieldingPosition,
     PitchingLine,
     PlateAppearanceResult,
@@ -63,6 +64,7 @@ from myapp.models import (
     Game,
     GameBattingLine,
     GameFieldingError,
+    GameFieldingLine,
     GameInningScore,
     GamePitchingLine,
     GamePlateAppearance,
@@ -583,9 +585,13 @@ class Command(BaseCommand):
                 entry["line"],
                 batting_order=entry["batting_order"],
                 slot_sequence=entry["slot_sequence"],
+                team_id=entry["team_id"],
+                entered_sequence=entry["entered_sequence"],
                 fielding_position=entry["fielding_position"],
             )
         pitching = self._pitching_lines(game, sides, plate_appearances)
+        # 守備成績は打席から導く。守備位置を選手に引くのにラインアップが要るので、打撃を載せた後に呼ぶ
+        domain_services.record_derived_fielding(game)
         # 明細と打席が食い違っていないこと。bulk_create は集約の検査を素通りする
         domain_services.ensure_lines_match_plate_appearances(game)
         return {
@@ -1114,12 +1120,22 @@ class Command(BaseCommand):
                 "player": entry.player,
                 "batting_order": entry.batting_order,
                 "slot_sequence": entry.slot_sequence,
+                "team_id": side.team.id,
+                # 代打は初めて打席に立った打席から入る（守備に就く途中出場は、このコマンドでは作らない）
+                "entered_sequence": self._first_turn(plate_appearances, entry.player.id)
+                if entry.slot_sequence
+                else None,
                 "fielding_position": entry.fielding_position,
                 "line": domain_services.batting_line_for(plate_appearances, entry.player.id),
             }
             for side in sides.values()
             for entry in side.appearances
         ]
+
+    @staticmethod
+    def _first_turn(plate_appearances, player_id):
+        """選手が初めて打席に立った打席の通し番号（代打の出場時刻）。立たなければ None。"""
+        return next((entry.sequence for entry in plate_appearances if entry.batter_id == player_id), None)
 
     def _pitching_lines(self, game, sides, plate_appearances):
         """投球成績を打席から導き、勝敗・セーブ・ホールドをドメインに決めさせる。
@@ -1170,7 +1186,7 @@ class Command(BaseCommand):
 
     def _save(self, year, played):
         """ためた試合を DB に流す。打席 → 進塁・失策の順に入れる。"""
-        batting_rows, pitching_rows, inning_rows, pa_rows = [], [], [], []
+        batting_rows, pitching_rows, inning_rows, pa_rows, fielding_rows = [], [], [], [], []
         for record in played:
             game = record["game"]
             row = Game.objects.create(
@@ -1186,10 +1202,12 @@ class Command(BaseCommand):
             pitching_rows.extend(self._pitching_orm_rows(row, record))
             inning_rows.extend(self._inning_orm_rows(row, game))
             pa_rows.extend(self._plate_appearance_orm_rows(row, game))
+            fielding_rows.extend(self._fielding_orm_rows(row, game))
             self._count(record)
 
         GameBattingLine.objects.bulk_create(batting_rows, batch_size=500)
         GamePitchingLine.objects.bulk_create(pitching_rows, batch_size=500)
+        GameFieldingLine.objects.bulk_create(fielding_rows, batch_size=500)
         GameInningScore.objects.bulk_create(inning_rows, batch_size=500)
         GamePlateAppearance.objects.bulk_create(pa_rows, batch_size=500)
 
@@ -1268,6 +1286,8 @@ class Command(BaseCommand):
                 player=entry["player"],
                 batting_order=entry["batting_order"],
                 slot_sequence=entry["slot_sequence"],
+                team_id=entry["team_id"],
+                entered_sequence=entry["entered_sequence"],
                 fielding_position=entry["fielding_position"].value,
                 **{f.name: getattr(entry["line"], f.name) for f in fields(BattingLine)},
             )
@@ -1288,6 +1308,16 @@ class Command(BaseCommand):
                 entered_inning=entry["entered_inning"],
                 innings_pitched=float(line.innings.to_notation()),
                 **{f.name: getattr(line, f.name) for f in fields(PitchingLine) if f.name not in PITCHING_NOT_STORED},
+            )
+
+    @staticmethod
+    def _fielding_orm_rows(row, game):
+        """守備成績の行。打撃・投球と同じく項目は値オブジェクトから引く。"""
+        for entry in game.fielding:
+            yield GameFieldingLine(
+                game=row,
+                player_id=entry.player_id,
+                **{f.name: getattr(entry.line, f.name) for f in fields(FieldingLine)},
             )
 
     @staticmethod

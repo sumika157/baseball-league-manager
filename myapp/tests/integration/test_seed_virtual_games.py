@@ -10,7 +10,7 @@ from dataclasses import fields
 from django.core.management import call_command
 
 from myapp.domain import services as domain_services
-from myapp.domain.value_objects import BattingLine, PitchingLine
+from myapp.domain.value_objects import BattingLine, FieldingLine, PitchingLine
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
 
@@ -82,6 +82,22 @@ class SeedVirtualGamesTest(BaseCase):
                     {f.name: getattr(row, f.name) for f in fields(PitchingLine) if f.name not in derived},
                     {f.name: getattr(counted, f.name) for f in fields(PitchingLine) if f.name not in derived},
                     f"投球成績が打席と食い違っています（試合 {game.id} / 選手 {row.player_id}）",
+                )
+
+    def test_fielding_lines_match_the_plate_appearances(self):
+        """保存された守備成績が、打席から導き直した値と一致すること。
+
+        投入コマンドは bulk_create で書くので、集約の照合を素通りする。ここで同じ検査をかける。
+        """
+        for game in self.games:
+            self.assertTrue(game.fielding, "守備成績が保存されていません")
+            domain_services.ensure_lines_match_plate_appearances(game)
+            stored = {row.player_id: row for row in orm_models.GameFieldingLine.objects.filter(game_id=game.id)}
+            for player_id, counted in domain_services.fielding_lines_for(game).items():
+                self.assertEqual(
+                    {f.name: getattr(stored[player_id], f.name) for f in fields(FieldingLine)},
+                    {f.name: getattr(counted, f.name) for f in fields(FieldingLine)},
+                    f"守備成績が打席と食い違っています（試合 {game.id} / 選手 {player_id}）",
                 )
 
     def test_every_out_belongs_to_a_pitcher(self):

@@ -13,15 +13,18 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from ..entities import Game, PlateAppearance
-from ..exceptions import InvalidPlateAppearance
+from ..entities import Game, GameBatting, PlateAppearance
+from ..exceptions import InvalidGame, InvalidPlateAppearance
 from ..value_objects import (
     AdvanceReason,
     Base,
     BattingLine,
+    FieldingLine,
+    FieldingPosition,
     InningsPitched,
     PitchingLine,
     PlateAppearanceResult,
@@ -196,6 +199,202 @@ def errors_for(plate_appearances: Iterable[PlateAppearance], player_id: int) -> 
     return sum(1 for entry in plate_appearances for error in entry.errors if error.player_id == player_id)
 
 
+# --- 守備成績 ---------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FieldingCredits:
+    """1打席の打球の処理で、どの守備位置に何が付くか。位置のままで、選手には直さない。"""
+
+    putouts: tuple[FieldingPosition, ...] = ()
+    assists: tuple[FieldingPosition, ...] = ()
+    # 併殺に関わった位置。同じ位置が2度出ることがある（3-6-3 の一塁）ので、
+    # 選手に直してから重複を除く
+    double_play: tuple[FieldingPosition, ...] = ()
+
+
+def _made_fielded_out(entry: PlateAppearance) -> bool:
+    """打球の処理でアウトが取られた打席か。経路を読んでよいのはこの場合だけ。
+
+    **打者がアウトになる結果**（凡打・三振・犠打・犠飛）と、**野選出塁**（打者は生きるが
+    走者が封殺される。経路はそのアウトを取るまでの処理）が当たる。安打・四死球・
+    本塁打・妨害は経路があっても付けない。**失策出塁も付けない**（アウトが無く、
+    送球失策の補殺の扱いまで入り込むため）。盗塁刺・牽制死は打球の処理ではない。
+    """
+    if entry.result.retires_batter:
+        return True
+    if entry.result is PlateAppearanceResult.FIELDERS_CHOICE:
+        return any(
+            advance.is_out and not advance.is_batter and not advance.reason.is_baserunning_out
+            for advance in entry.advances
+        )
+    return False
+
+
+def fielding_credits(entry: PlateAppearance) -> FieldingCredits:
+    """打球の処理経路を読んで、刺殺・補殺・併殺参加の位置を決める。
+
+    - **最後の位置が刺殺、それより前の各位置が補殺**（6-3 なら遊が補殺・一が刺殺。
+      外野フライ (8,) は刺殺だけ）。
+    - **併殺**（`is_double_play`）は刺殺が2つ付く。1つは最後の位置、もう1つは**最後から2番目の
+      位置**（6-4-3 は二、6-3 は遊。経路が1つだけの単独併殺 "3" は同じ位置に2つ）。
+      6-4-3 なら遊が補殺、二が刺殺＋補殺、一が刺殺になる。併殺に関わった全員に併殺参加が付く。
+    - **三振で経路が空なら捕手の刺殺**（公認野球規則 9.10）。入力させずに導く。
+    """
+    if not _made_fielded_out(entry):
+        return FieldingCredits()
+
+    path = entry.fielded_by
+    if not path and entry.result.is_strikeout:
+        path = (FieldingPosition.CATCHER,)
+    if not path:
+        return FieldingCredits()
+
+    putouts = [path[-1]]
+    if entry.is_double_play:
+        putouts.append(path[-2] if len(path) >= 2 else path[-1])
+    return FieldingCredits(
+        putouts=tuple(putouts),
+        assists=path[:-1],
+        double_play=path if entry.is_double_play else (),
+    )
+
+
+@dataclass(frozen=True)
+class _Tenure:
+    """1人の選手が、ある守備位置に就いていた期間。打席の通し番号で区切る。"""
+
+    player_id: int
+    position: FieldingPosition
+    from_sequence: int  # この番号の打席から（含む）
+    until_sequence: int | None  # この番号の打席の手前まで。None なら試合の最後まで
+
+    def covers(self, sequence: int) -> bool:
+        return self.from_sequence <= sequence and (self.until_sequence is None or sequence < self.until_sequence)
+
+
+def _tenures_by_side(game: Game) -> dict[bool, list[_Tenure]]:
+    """ラインアップから、攻撃側ごとに「誰がいつからいつまでどの守備位置に就いたか」を作る。
+
+    キーは「そのチームが裏に攻めるか」（`PlateAppearance.is_bottom` と同じ向き）。
+    チームは `GameBatting.team_id` から引く（打席からの推測はしない）。
+
+    打順の枠ごとに、在任は**入った打席（`entered_sequence`。スタメンは試合開始）から、同じ枠の
+    次の選手が入った打席の手前まで**。**入った時点が不明な途中出場は、その選手を飛ばす**。
+    次の選手の入った時点が不明なら、いつまで居たかも分からないので、前任者も飛ばす
+    （推測しない）。守備に就かない位置（代打・代走・指名打者）は期間を作らない。
+    """
+    slots: dict[tuple[int, int], list[GameBatting]] = {}
+    for batting in game.batting:
+        if batting.batting_order is not None:
+            slots.setdefault((batting.team_id, batting.batting_order), []).append(batting)
+
+    tenures: dict[bool, list[_Tenure]] = {False: [], True: []}
+    for (team_id, _order), group in slots.items():
+        group.sort(key=lambda row: row.slot_sequence)
+        for index, row in enumerate(group):
+            position = row.fielding_position
+            if position is None or not position.takes_the_field:
+                continue
+            start = 0 if row.slot_sequence == 0 else row.entered_sequence
+            if start is None:
+                continue
+            until: int | None = None
+            if index + 1 < len(group):
+                until = group[index + 1].entered_sequence
+                if until is None:
+                    continue
+            tenures[team_id == game.home_team_id].append(_Tenure(row.player_id, position, start, until))
+    return tenures
+
+
+def fielders_by_plate_appearance(game: Game) -> dict[int, dict[FieldingPosition, int]]:
+    """打席の通し番号 → その時点で守備側チームの各守備位置に就いている選手。
+
+    **位置を選手に解決する規則はここだけ**にある。刺殺・補殺・併殺参加は、
+    経路の位置（`fielded_by`）をこの結果で選手に引き直して付ける。
+
+    - 投手の位置は**その打席の `pitcher_id`**（指名打者制では投手が打順にいない）。
+    - 代打・代走・指名打者は守備に就かない。その位置を継ぐ守備交代が記録されていなければ、
+      その位置は空く。
+    - **解決できない位置は辞書に入れない。** 呼ぶ側は黙って飛ばす（例外にしない）。
+      入った時点が不明な選手の位置、同じ時点で2人以上が同じ位置にいる場合が当たる
+      （後勝ちで選ばない）。
+    """
+    tenures = _tenures_by_side(game)
+    alignments: dict[int, dict[FieldingPosition, int]] = {}
+    for entry in game.plate_appearances:
+        # 攻めている側の反対が守っている
+        holders: dict[FieldingPosition, set[int]] = {}
+        for tenure in tenures[not entry.is_bottom]:
+            if tenure.covers(entry.sequence):
+                holders.setdefault(tenure.position, set()).add(tenure.player_id)
+        alignment = {position: next(iter(ids)) for position, ids in holders.items() if len(ids) == 1}
+        alignment[FieldingPosition.PITCHER] = entry.pitcher_id
+        alignments[entry.sequence] = alignment
+    return alignments
+
+
+def fielding_lines_for(
+    game: Game, alignments: dict[int, dict[FieldingPosition, int]] | None = None
+) -> dict[int, FieldingLine]:
+    """1試合の守備成績を、守備に就いた全選手ぶん打席から導く。
+
+    守備機会が無くても、守備に就いていた選手は 0 の行で現れる（試合数に数えるため）。
+    打席の記録が無い試合では空。失策は `errors`（守備者の id）から数えるので、
+    経路の位置が解決できなくても失策は数える。
+    """
+    putouts: Counter[int] = Counter()
+    assists: Counter[int] = Counter()
+    errors: Counter[int] = Counter()
+    double_plays: Counter[int] = Counter()
+    present: set[int] = set()
+
+    if alignments is None:
+        alignments = fielders_by_plate_appearance(game)
+    for entry in game.plate_appearances:
+        alignment = alignments[entry.sequence]
+        present.update(alignment.values())
+        credits = fielding_credits(entry)
+        for position in credits.putouts:
+            if position in alignment:
+                putouts[alignment[position]] += 1
+        for position in credits.assists:
+            if position in alignment:
+                assists[alignment[position]] += 1
+        for player_id in {alignment[position] for position in credits.double_play if position in alignment}:
+            double_plays[player_id] += 1
+        for error in entry.errors:
+            errors[error.player_id] += 1
+            present.add(error.player_id)
+
+    return {
+        player_id: FieldingLine(
+            putouts=putouts[player_id],
+            assists=assists[player_id],
+            errors=errors[player_id],
+            double_plays_turned=double_plays[player_id],
+        )
+        for player_id in sorted(present)
+    }
+
+
+def fielding_line_for(game: Game, player_id: int) -> FieldingLine:
+    """1人の守備成績。守備に就かなかった選手は 0 の行。"""
+    return fielding_lines_for(game).get(player_id, FieldingLine())
+
+
+def record_derived_fielding(game: Game) -> None:
+    """守備成績を打席から導いて集約に載せる。ラインアップ（`game.batting`）を載せた後に呼ぶ。
+
+    保存する側（スコアブックの保存・投入コマンド・導き直し）が呼び忘れると、
+    集約の照合が弾く（打席があるのに守備成績が空の集約は保存できない）。
+    """
+    game.fielding = []
+    for player_id, line in fielding_lines_for(game).items():
+        game.record_fielding(player_id, line)
+
+
 def hits_by_inning(plate_appearances: Iterable[PlateAppearance], *, home: bool) -> dict[int, int]:
     """チームの回ごとの安打。スコアボードの H 欄の出典。
 
@@ -249,6 +448,7 @@ def ensure_lines_match_plate_appearances(game: Game) -> None:
     if not game.plate_appearances:
         return
 
+    game.ensure_lineup_consistent()
     for entry in game.batting:
         counted = batting_line_for(game.plate_appearances, entry.player_id)
         if entry.line != counted:
@@ -277,3 +477,42 @@ def ensure_lines_match_plate_appearances(game: Game) -> None:
     missing = {entry.batter_id for entry in game.plate_appearances} - recorded
     if recorded and missing:
         raise InvalidPlateAppearance(f"打席に立った選手の打撃成績がありません（選手id={sorted(missing)}）。")
+
+    _ensure_fielding_matches_plate_appearances(game)
+
+
+def _ensure_fielding_matches_plate_appearances(game: Game) -> None:
+    """守備成績も打席から導いた値と一致することを確かめる。
+
+    **打席があるのに守備成績が空の集約は弾く。** 呼び忘れたまま保存すると、既存の守備行が
+    全部消える（エラーにならない）。載せるなら**守備に就いた全員ぶん**が要る。1人でも欠けると、
+    その選手の試合数が通算から静かに落ちる。
+
+    失策の守備者が、その位置に就いている選手と食い違う記録も弾く（解決できない位置は比べない）。
+    """
+    alignments = fielders_by_plate_appearance(game)
+    for entry in game.plate_appearances:
+        for error in entry.errors:
+            holder = alignments[entry.sequence].get(error.position)
+            if holder is not None and holder != error.player_id:
+                half = "裏" if entry.is_bottom else "表"
+                raise InvalidGame(
+                    f"{entry.inning}回{half}の失策の守備者（選手id={error.player_id}）が、"
+                    f"{error.position.label}を守っている選手（選手id={holder}）と食い違っています。"
+                )
+
+    counted = fielding_lines_for(game, alignments)
+    if not game.fielding:
+        raise InvalidPlateAppearance("打席の記録がある試合には、守備成績（打席から導いた値）が要ります。")
+    for fielder in game.fielding:
+        expected = counted.get(fielder.player_id, FieldingLine())
+        if fielder.line != expected:
+            raise InvalidPlateAppearance(
+                f"守備成績が打席の記録と一致しません（選手id={fielder.player_id}）。"
+                f"打席から数え直すと 刺殺{expected.putouts}・補殺{expected.assists}・失策{expected.errors} です。"
+                "この試合は打席が出典なので、成績だけを書き換えることはできません。"
+            )
+
+    absent = set(counted) - {fielder.player_id for fielder in game.fielding}
+    if absent:
+        raise InvalidPlateAppearance(f"守備に就いた選手の守備成績がありません（選手id={sorted(absent)}）。")

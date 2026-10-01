@@ -95,6 +95,20 @@ class LineupSlotForm(forms.Form):
         help_text="0 がスタメン。1以上は同じ打順への途中出場。",
     )
     fielding_position = forms.ChoiceField(label="守備位置", choices=FIELDING_POSITION_CHOICES, required=False)
+    entered_inning = forms.IntegerField(
+        label="出場した回",
+        min_value=1,
+        max_value=MAX_INNINGS,
+        required=False,
+        help_text="途中出場の行だけ。守備固めなど、入った半回（回と表裏）。代打・代走は打席から導くので空欄でよい。",
+    )
+    entered_is_bottom = forms.BooleanField(label="出場したのは裏", required=False)
+    entered_batter = forms.IntegerField(
+        label="出場した打者番号",
+        min_value=1,
+        required=False,
+        help_text="その半回で何人目の打者から出場したか（1始まり）。半回の頭からなら 1。",
+    )
 
     def to_slot(self) -> LineupSlot:
         return LineupSlot(
@@ -103,6 +117,9 @@ class LineupSlotForm(forms.Form):
             batting_order=self.cleaned_data["batting_order"],
             slot_sequence=self.cleaned_data.get("slot_sequence") or 0,
             fielding_position=FieldingPosition.from_label(self.cleaned_data.get("fielding_position") or ""),
+            entered_inning=self.cleaned_data.get("entered_inning"),
+            entered_is_bottom=bool(self.cleaned_data.get("entered_is_bottom")),
+            entered_batter=self.cleaned_data.get("entered_batter") or 1,
         )
 
 

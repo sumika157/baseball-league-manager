@@ -300,6 +300,19 @@ class GameBattingLine(models.Model):
 
     game = models.ForeignKey(Game, on_delete=models.CASCADE, related_name="batting_lines", verbose_name="試合")
     player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="game_batting", verbose_name="選手")
+    team = models.ForeignKey(
+        Team,
+        on_delete=models.CASCADE,
+        related_name="game_batting_lines",
+        verbose_name="チーム",
+        help_text="試合のホームかビジター。守備位置を選手に引くのに使います。",
+    )
+    entered_sequence = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        verbose_name="出場した打席",
+        help_text="試合に入った最初の打席の通し番号。スタメンは空欄（試合開始から）。途中出場で空欄なら不明です。",
+    )
     # 打線での位置づけ。並びはこの3つで決まる（打順 → 交代の順）
     batting_order = models.IntegerField(
         null=True,
@@ -384,6 +397,32 @@ class GamePitchingLine(models.Model):
 
     def __str__(self) -> str:
         return f"{self.player.name} の投球成績"
+
+
+class GameFieldingLine(models.Model):
+    """1試合ぶんの守備成績。**打席から導いた値**で、通算成績の集計のために保存する。
+
+    出典は打席（打球の処理経路と失策の記録）で、打撃・投球の明細と同じく
+    集約が保存前に照合する。守備に就いた選手は、守備機会が無くても行がある
+    （守備の試合数を数えるため）。
+    """
+
+    game = models.ForeignKey(Game, on_delete=models.CASCADE, related_name="fielding_lines", verbose_name="試合")
+    player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="game_fielding", verbose_name="選手")
+    putouts = models.IntegerField(default=0, verbose_name="刺殺")
+    assists = models.IntegerField(default=0, verbose_name="補殺")
+    errors = models.IntegerField(default=0, verbose_name="失策")
+    double_plays_turned = models.IntegerField(default=0, verbose_name="併殺参加")
+
+    class Meta:
+        verbose_name = "守備成績"
+        verbose_name_plural = "守備成績"
+        constraints = [
+            models.UniqueConstraint(fields=["game", "player"], name="unique_game_fielding"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.player.name} の守備成績"
 
 
 class GamePlateAppearance(models.Model):
