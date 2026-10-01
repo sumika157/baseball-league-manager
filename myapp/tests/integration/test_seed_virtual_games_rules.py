@@ -108,14 +108,15 @@ class SeedGamesTest(SeedGamesBase):
                 if home == away - 1:
                     self.assertGreater(game.home_score, game.away_score)
 
-    def test_runs_batted_in_add_up_to_team_score(self):
+    def test_runs_batted_in_never_exceed_team_score(self):
+        """打点の合計は得点を超えない。失策・野選・暴投による得点は打点にならないので、等しいとは限らない。"""
         for game in self.games:
             rbi = defaultdict(int)
             for entry in game.batting:
                 rbi[self.team_of[entry.player_id]] += entry.line.runs_batted_in
             with self.subTest(game=str(game)):
-                self.assertEqual(rbi[game.home_team_id], game.home_score)
-                self.assertEqual(rbi[game.away_team_id], game.away_score)
+                self.assertLessEqual(rbi[game.home_team_id], game.home_score)
+                self.assertLessEqual(rbi[game.away_team_id], game.away_score)
 
     def test_pitching_mirrors_opponent_batting(self):
         """被安打・被本塁打・与四死球は相手打線の記録と一致し、相手が攻めた回ぶんのアウトを取る。"""
