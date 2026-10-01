@@ -3,6 +3,7 @@
 Django のテストランナー上で動くが、DB もモデルも一切使わない。
 """
 
+from dataclasses import fields
 from decimal import Decimal
 from unittest import TestCase
 
@@ -162,6 +163,32 @@ class BattingLineTest(TestCase):
     def test_ops_plus_without_league_average_is_zero(self):
         line = BattingLine(at_bats=4, singles=1)
         self.assertEqual(line.ops_plus(0.0), 0.0)
+
+
+class StatLineAdditionTest(TestCase):
+    """成績の足し算が、すべての項目を積み上げること。
+
+    __add__ が項目を手で列挙していた頃、打席から導く項目（得点・三振・盗塁・失点など）を
+    足し忘れ、月別・年度別・チーム成績でその項目だけ 0 になっていた。例外にならないので、
+    フィールドの一覧から機械的に突き合わせる。
+    """
+
+    def test_batting_line_sums_every_field(self):
+        # 打数は安打の合計（単打〜本塁打）を下回れないので多めにする
+        line = BattingLine(**{**{f.name: 1 for f in fields(BattingLine)}, "at_bats": 10})
+        total = BattingLine.total([line, line])
+
+        for field in fields(BattingLine):
+            self.assertEqual(getattr(total, field.name), getattr(line, field.name) * 2, field.name)
+
+    def test_pitching_line_sums_every_field(self):
+        counts = {f.name: 1 for f in fields(PitchingLine) if f.name != "innings"}
+        line = PitchingLine(innings=InningsPitched.from_notation("6.0"), **counts)
+        total = PitchingLine.total([line, line])
+
+        self.assertEqual(total.innings, InningsPitched.from_notation("12.0"))
+        for name in counts:
+            self.assertEqual(getattr(total, name), 2, name)
 
 
 class PitchingLineTest(TestCase):

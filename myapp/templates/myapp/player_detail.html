@@ -214,6 +214,7 @@
                 <th class="text-end">与四球</th>
                 <th class="text-end">与死球</th>
                 <th class="text-end">奪三振</th>
+                <th class="text-end">失点</th>
                 <th class="text-end">自責点</th>
                 <th class="text-end">防御率</th>
                 <th class="text-end">WHIP</th>
@@ -222,14 +223,21 @@
                 <th class="text-end">試合</th>
                 <th class="text-end">打席</th>
                 <th class="text-end">打数</th>
+                <th class="text-end">得点</th>
                 <th class="text-end">安打</th>
                 <th class="text-end">2B</th>
                 <th class="text-end">3B</th>
                 <th class="text-end">HR</th>
                 <th class="text-end">打点</th>
+                <th class="text-end">盗塁</th>
+                <th class="text-end">盗塁刺</th>
+                <th class="text-end">犠打</th>
                 <th class="text-end">四球</th>
+                <th class="text-end">故意四球</th>
                 <th class="text-end">死球</th>
                 <th class="text-end">犠飛</th>
+                <th class="text-end">三振</th>
+                <th class="text-end">併殺打</th>
                 <th class="text-end">打率</th>
                 <th class="text-end">出塁率</th>
                 <th class="text-end">長打率</th>
@@ -278,15 +286,23 @@
               <th class="text-end">試合</th>
               {% if player.is_pitcher %}
                 <th class="text-end">投球回</th>
+                <th class="text-end">失点</th>
                 <th class="text-end">自責点</th>
                 <th class="text-end">奪三振</th>
                 <th class="text-end">防御率</th>
                 <th class="text-end">WHIP</th>
               {% else %}
                 <th class="text-end">打数</th>
+                <th class="text-end">得点</th>
                 <th class="text-end">安打</th>
                 <th class="text-end">本塁打</th>
                 <th class="text-end">打点</th>
+                <th class="text-end">盗塁</th>
+                <th class="text-end">盗塁刺</th>
+                <th class="text-end">犠打</th>
+                <th class="text-end">故意四球</th>
+                <th class="text-end">三振</th>
+                <th class="text-end">併殺打</th>
                 <th class="text-end">打率</th>
                 <th class="text-end">OPS</th>
               {% endif %}
@@ -299,15 +315,23 @@
                 <td class="text-end stat-muted">{{ row.appearances }}</td>
                 {% if player.is_pitcher %}
                   <td class="text-end">{{ row.innings_pitched }}</td>
+                  <td class="text-end stat-muted">{{ row.runs_allowed }}</td>
                   <td class="text-end stat-muted">{{ row.earned_runs }}</td>
                   <td class="text-end stat-muted">{{ row.strikeouts }}</td>
                   <td class="text-end stat-key">{{ row.earned_run_average|floatformat:2 }}</td>
                   <td class="text-end">{{ row.whip|floatformat:2 }}</td>
                 {% else %}
                   <td class="text-end stat-muted">{{ row.at_bats }}</td>
+                  <td class="text-end stat-muted">{{ row.runs }}</td>
                   <td class="text-end stat-muted">{{ row.hits }}</td>
                   <td class="text-end stat-muted">{{ row.home_runs }}</td>
                   <td class="text-end stat-muted">{{ row.runs_batted_in }}</td>
+                  <td class="text-end stat-muted">{{ row.stolen_bases }}</td>
+                  <td class="text-end stat-muted">{{ row.caught_stealing }}</td>
+                  <td class="text-end stat-muted">{{ row.sacrifice_bunts }}</td>
+                  <td class="text-end stat-muted">{{ row.intentional_walks }}</td>
+                  <td class="text-end stat-muted">{{ row.strikeouts_batting }}</td>
+                  <td class="text-end stat-muted">{{ row.double_plays }}</td>
                   <td class="text-end stat-key">{{ row.batting_average|floatformat:3 }}</td>
                   <td class="text-end">{{ row.ops|floatformat:3 }}</td>
                 {% endif %}
@@ -347,15 +371,23 @@
             <th>対戦</th>
             {% if player.is_pitcher %}
               <th class="text-end">投球回</th>
+              <th class="text-end">失点</th>
               <th class="text-end">自責点</th>
               <th class="text-end">奪三振</th>
               {# 本人に付いた記録（勝・敗・Ｓ・Ｈ）。ボックススコアと同じ印 #}
               <th class="text-center">記録</th>
             {% else %}
               <th class="text-end">打数</th>
+              <th class="text-end">得点</th>
               <th class="text-end">安打</th>
               <th class="text-end">本塁打</th>
               <th class="text-end">打点</th>
+              <th class="text-end">盗塁</th>
+              <th class="text-end">盗塁刺</th>
+              <th class="text-end">犠打</th>
+              <th class="text-end">故意四球</th>
+              <th class="text-end">三振</th>
+              <th class="text-end">併殺打</th>
             {% endif %}
             <th></th>
           </tr>
@@ -367,14 +399,22 @@
               <td>{{ row.opponent_name }}</td>
               {% if player.is_pitcher %}
                 <td class="text-end">{{ row.innings_pitched }}</td>
+                <td class="text-end">{{ row.runs_allowed }}</td>
                 <td class="text-end">{{ row.earned_runs }}</td>
                 <td class="text-end">{{ row.strikeouts }}</td>
                 <td class="text-center stat-key">{{ row.decision|default:'—' }}</td>
               {% else %}
                 <td class="text-end">{{ row.at_bats }}</td>
+                <td class="text-end">{{ row.runs }}</td>
                 <td class="text-end">{{ row.hits }}</td>
                 <td class="text-end">{{ row.home_runs }}</td>
                 <td class="text-end">{{ row.runs_batted_in }}</td>
+                <td class="text-end">{{ row.stolen_bases }}</td>
+                <td class="text-end">{{ row.caught_stealing }}</td>
+                <td class="text-end">{{ row.sacrifice_bunts }}</td>
+                <td class="text-end">{{ row.intentional_walks }}</td>
+                <td class="text-end">{{ row.strikeouts_batting }}</td>
+                <td class="text-end">{{ row.double_plays }}</td>
               {% endif %}
               <td class="text-end">
                 <a href="{% url 'game_detail' row.game_id %}" class="btn btn-sm btn-outline-info">試合</a>

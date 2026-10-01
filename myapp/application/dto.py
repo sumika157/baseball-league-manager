@@ -191,8 +191,16 @@ class PlayerGameRow:
     hits: int = 0
     home_runs: int = 0
     runs_batted_in: int = 0
+    runs: int = 0
+    stolen_bases: int = 0
+    caught_stealing: int = 0
+    sacrifice_bunts: int = 0
+    intentional_walks: int = 0
+    strikeouts_batting: int = 0
+    double_plays: int = 0
     # 投球
     innings_pitched: str = "0.0"
+    runs_allowed: int = 0
     earned_runs: int = 0
     strikeouts: int = 0
     decision: str = ""  # 本人に付いた記録。ボックススコアと同じ印
@@ -219,6 +227,13 @@ class YearlyRow:
     walks: int = 0
     hit_by_pitch: int = 0
     sacrifice_flies: int = 0
+    runs: int = 0
+    stolen_bases: int = 0
+    caught_stealing: int = 0
+    sacrifice_bunts: int = 0
+    intentional_walks: int = 0
+    strikeouts_batting: int = 0
+    double_plays: int = 0
     batting_average: float = 0.0
     on_base_percentage: float = 0.0
     slugging_percentage: float = 0.0
@@ -236,6 +251,7 @@ class YearlyRow:
     walks_allowed: int = 0
     hit_by_pitch_allowed: int = 0
     strikeouts: int = 0
+    runs_allowed: int = 0
     earned_runs: int = 0
     earned_run_average: float = 0.0
     whip: float = 0.0
@@ -260,10 +276,18 @@ class MonthlyRow:
     hits: int = 0
     home_runs: int = 0
     runs_batted_in: int = 0
+    runs: int = 0
+    stolen_bases: int = 0
+    caught_stealing: int = 0
+    sacrifice_bunts: int = 0
+    intentional_walks: int = 0
+    strikeouts_batting: int = 0
+    double_plays: int = 0
     batting_average: float = 0.0
     ops: float = 0.0
     # 投球
     innings_pitched: str = "0.0"
+    runs_allowed: int = 0
     earned_runs: int = 0
     strikeouts: int = 0
     earned_run_average: float = 0.0
@@ -819,6 +843,15 @@ class PlayerDetail:
     hold_points: int = 0
     starts: int = 0
     is_captain: bool = False
+    # 打席の記録から導く項目。打者の三振は投手の strikeouts（奪三振）と別の事実なので名前を分ける
+    runs: int = 0
+    stolen_bases: int = 0
+    caught_stealing: int = 0
+    sacrifice_bunts: int = 0
+    intentional_walks: int = 0
+    strikeouts_batting: int = 0
+    double_plays: int = 0
+    runs_allowed: int = 0
 
 
 @dataclass(frozen=True)
