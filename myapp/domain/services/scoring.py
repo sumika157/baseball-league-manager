@@ -196,6 +196,32 @@ def errors_for(plate_appearances: Iterable[PlateAppearance], player_id: int) -> 
     return sum(1 for entry in plate_appearances for error in entry.errors if error.player_id == player_id)
 
 
+def hits_by_inning(plate_appearances: Iterable[PlateAppearance], *, home: bool) -> dict[int, int]:
+    """チームの回ごとの安打。スコアボードの H 欄の出典。
+
+    ホームは裏に、ビジターは表に打つ。打席が無い回は載せない。
+    """
+    counts: dict[int, int] = {}
+    for entry in plate_appearances:
+        if entry.is_bottom == home and entry.result.is_hit:
+            counts[entry.inning] = counts.get(entry.inning, 0) + 1
+    return counts
+
+
+def errors_by_inning(plate_appearances: Iterable[PlateAppearance], *, home: bool) -> dict[int, int]:
+    """チームの回ごとの失策。スコアボードの E 欄の出典。
+
+    **失策は守備側のチームに付く。** ホームが守るのは表なので、ホームの失策は
+    表の打席に記録された失策を数える（失策を犯したのが誰かではなく、どちらの
+    半回かで決まる。選手の所属チームを引き直さずに済む）。
+    """
+    counts: dict[int, int] = {}
+    for entry in plate_appearances:
+        if entry.is_bottom != home:
+            counts[entry.inning] = counts.get(entry.inning, 0) + len(entry.errors)
+    return counts
+
+
 # 打席から導ける投球成績の項目。勝敗・セーブ・ホールド・先発登板は打席からは
 # 決まらない（イニングスコアと継投から決まる別の関心事）ので照合しない。
 _PITCHING_FIELDS_FROM_PLATE_APPEARANCES = (
