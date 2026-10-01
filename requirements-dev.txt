@@ -6,6 +6,9 @@ playwright==1.62.0
 # 仮想の試合データ投入（seed_virtual_games）で確率分布から成績を引くのに使う。
 # 本番の実行には不要なので dev 側に置く
 numpy==2.2.6
+# テストのカバレッジ計測（make coverage）。依存パッケージは無い（pyproject.toml の設定は
+# Python 3.10 では tomli 経由で読む。tomli は下で固定済み）
+coverage==7.16.2
 
 # 上記の依存パッケージ（バージョン固定用）
 ast-serialize==0.8.0
