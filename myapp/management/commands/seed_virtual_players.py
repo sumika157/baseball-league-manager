@@ -1305,12 +1305,16 @@ class Command(BaseCommand):
         team_reports = []
 
         with transaction.atomic():
-            for team in Team.objects.all():
+            for team in Team.objects.select_related("league"):
                 active_stints = list(
                     PlayerStint.objects.filter(team=team, to_year__isnull=True).select_related("player")
                 )
                 existing_count = len(active_stints)
                 used_numbers = {s.number for s in active_stints}
+                # 外国人選手の登録枠（リーグが持つ。None は無制限）。ORM に直接書くため
+                # Team 集約の ensure_foreign_player_quota を通らないので、ここで同じ検査をする
+                foreign_limit = team.league.foreign_player_roster_limit
+                foreign_on_team = sum(1 for s in active_stints if s.player.is_foreign_player)
                 existing_by_position = {}
                 for s in active_stints:
                     existing_by_position[s.player.position] = existing_by_position.get(s.player.position, 0) + 1
@@ -1342,7 +1346,11 @@ class Command(BaseCommand):
                             break
 
                         is_foreign = random.random() < FOREIGN_PLAYER_RATIO
+                        if is_foreign and foreign_limit is not None and foreign_on_team >= foreign_limit:
+                            # 枠が埋まっていれば日本人選手にする
+                            is_foreign = False
                         if is_foreign:
+                            foreign_on_team += 1
                             name, name_kana, country, surname_romaji, given_romaji = make_foreign_name(used_names)
                             birthplace = country
                         else:

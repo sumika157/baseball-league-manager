@@ -38,8 +38,8 @@ pythonVersion = "3.10"
 exclude = ["myapp/migrations", "**/node_modules", "**/__pycache__", ".git"]
 
 # テストのカバレッジ計測（make coverage）。テストコード自身とマイグレーションは数えない。
-# データ投入・計測用の管理コマンド（seed_virtual_*・measure_pages）は現状テストが無く、
-# 除外せずに数えてある（除外すると「テストが無い」ことが数字から見えなくなるため）。
+# 管理コマンドや asgi.py・wsgi.py も除外せずに数える（除外すると「テストが無い」ことが
+# 数字から見えなくなるため）。
 [tool.coverage.run]
 source = ["myapp", "config"]
 omit = ["myapp/tests/*", "myapp/migrations/*"]
