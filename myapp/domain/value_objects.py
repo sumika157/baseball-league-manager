@@ -1048,6 +1048,42 @@ class Season:
 
 
 @dataclass(frozen=True)
+class GameHeader:
+    """試合の見出し。いつ・どこ（シーズン）で・どのチームどうしが戦ったか。
+
+    打席の記録から試合を組み立てる（`assemble_game`）ときの入力で、
+    **得点や成績は含めない**（打席から導く値を受け取ると、記録と食い違う得点を保存できてしまう）。
+    """
+
+    season: Season
+    played_on: date
+    home_team_id: int
+    away_team_id: int
+    # 保存済みの試合を上書きするときだけ。新規の試合は None
+    id: int | None = None
+
+
+@dataclass(frozen=True)
+class LineupEntry:
+    """打順の1枠。誰が何番でどこを守ったか。
+
+    打席の記録から試合を組み立てる（`assemble_game`）ときの入力。成績は含めない
+    （打席から導くため）。同じ打順に複数の選手が並ぶ場合は `slot_sequence` で区別する。
+
+    `entered_sequence` は途中出場の行だけ、その選手が試合に入った打席の通し番号。
+    **出場時刻は入力の読み替えを伴う**（画面は「何回の表・何人目」で指す）ので、
+    組み立てる側ではなく呼ぶ側が決めて渡す。スタメン・時刻が不明な行は None。
+    """
+
+    team_id: int
+    player_id: int
+    batting_order: int
+    slot_sequence: int
+    fielding_position: FieldingPosition | None
+    entered_sequence: int | None = None
+
+
+@dataclass(frozen=True)
 class LineScore:
     """イニングスコア。回ごとの得点。
 

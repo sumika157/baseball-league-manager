@@ -38,7 +38,7 @@
 """
 
 from collections import defaultdict
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import dataclass, field, fields
 from datetime import date, timedelta
 
 import numpy as np
@@ -47,7 +47,7 @@ from django.db import transaction
 
 from myapp.domain import services as domain_services
 from myapp.domain.entities import FieldingError, PlateAppearance, RunnerAdvance
-from myapp.domain.entities import Game as DomainGame
+from myapp.domain.exceptions import InvalidGame
 from myapp.domain.value_objects import (
     AdvanceReason,
     Base,
@@ -55,6 +55,8 @@ from myapp.domain.value_objects import (
     ErrorKind,
     FieldingLine,
     FieldingPosition,
+    GameHeader,
+    LineupEntry,
     PitchingLine,
     PlateAppearanceResult,
     Position,
@@ -564,42 +566,28 @@ class Command(BaseCommand):
 
         plate_appearances = self._simulate(sides, limit)
 
-        game = DomainGame(
+        header = GameHeader(
             season=Season(card["played_on"].year),
             played_on=card["played_on"],
             home_team_id=home.id,
             away_team_id=away.id,
-            home_score=sides[True].score,
-            away_score=sides[False].score,
-            plate_appearances=plate_appearances,
         )
-        game.line_score = game.derived_line_score()
-        # ORM へ直接書くコードは集約の検査を素通りするので、自分で同じ検査を行う
-        game.ensure_plate_appearances_consistent()
-        game.ensure_line_score_matches()
-
-        batting = self._batting_lines(sides, plate_appearances)
-        for entry in batting:
-            game.record_batting(
-                entry["player"].id,
-                entry["line"],
-                batting_order=entry["batting_order"],
-                slot_sequence=entry["slot_sequence"],
-                team_id=entry["team_id"],
-                entered_sequence=entry["entered_sequence"],
-                fielding_position=entry["fielding_position"],
+        # 得点・成績・勝敗は、スコアブックの保存と同じ組み立て（ドメイン）で打席から導く。
+        # 独自に書くと2つの実装がずれる
+        game = domain_services.assemble_game(header, self._lineup_entries(sides, plate_appearances), plate_appearances)
+        # ORM へ直接書くコードは集約の検査を素通りするので、自分で同じ検査を行う。
+        # シミュレーションが数えた得点と、打席から導いた得点が一致していること
+        if (game.home_score, game.away_score) != (sides[True].score, sides[False].score):
+            raise InvalidGame(
+                "打席から導いた得点がシミュレーションの得点と一致しません"
+                f"（ビジター {game.away_score}/{sides[False].score}、ホーム {game.home_score}/{sides[True].score}）。"
             )
-        pitching = self._pitching_lines(game, sides, plate_appearances)
-        # 守備成績は打席から導く。守備位置を選手に引くのにラインアップが要るので、打撃を載せた後に呼ぶ
-        domain_services.record_derived_fielding(game)
         # 明細と打席が食い違っていないこと。bulk_create は集約の検査を素通りする
         domain_services.ensure_lines_match_plate_appearances(game)
         return {
             "league_name": card["league"].name,
             "card": card,
             "game": game,
-            "batting": batting,
-            "pitching": pitching,
         }
 
     def _simulate(self, sides, limit):
@@ -1111,23 +1099,20 @@ class Command(BaseCommand):
         if target.occupies_base:
             occupied[target] = runner
 
-    # --- 明細（打席から導く） ---
+    # --- ラインアップ（成績は打席から導く。数えるのはドメインの `assemble_game`） ---
 
-    def _batting_lines(self, sides, plate_appearances):
-        """打撃成績を打席から導く。数えるのはドメインのサービスに任せる。"""
+    def _lineup_entries(self, sides, plate_appearances):
+        """打順の枠を、ドメインの組み立てに渡す形にする。"""
         return [
-            {
-                "player": entry.player,
-                "batting_order": entry.batting_order,
-                "slot_sequence": entry.slot_sequence,
-                "team_id": side.team.id,
+            LineupEntry(
+                team_id=side.team.id,
+                player_id=entry.player.id,
+                batting_order=entry.batting_order,
+                slot_sequence=entry.slot_sequence,
+                fielding_position=entry.fielding_position,
                 # 代打は初めて打席に立った打席から入る（守備に就く途中出場は、このコマンドでは作らない）
-                "entered_sequence": self._first_turn(plate_appearances, entry.player.id)
-                if entry.slot_sequence
-                else None,
-                "fielding_position": entry.fielding_position,
-                "line": domain_services.batting_line_for(plate_appearances, entry.player.id),
-            }
+                entered_sequence=self._first_turn(plate_appearances, entry.player.id) if entry.slot_sequence else None,
+            )
             for side in sides.values()
             for entry in side.appearances
         ]
@@ -1136,51 +1121,6 @@ class Command(BaseCommand):
     def _first_turn(plate_appearances, player_id):
         """選手が初めて打席に立った打席の通し番号（代打の出場時刻）。立たなければ None。"""
         return next((entry.sequence for entry in plate_appearances if entry.batter_id == player_id), None)
-
-    def _pitching_lines(self, game, sides, plate_appearances):
-        """投球成績を打席から導き、勝敗・セーブ・ホールドをドメインに決めさせる。
-
-        判定はイニングスコアと継投から一意に決まるので、手動入力と同じ
-        ドメインサービスに委ねる。ここで独自に書くと2つの実装がずれる。
-        """
-        team_of = {}
-        derived = {}
-        for side in sides.values():
-            for outing in side.outings:
-                # 打席を投手ごとに数え直すのは重いので1度だけ行う
-                derived[outing.player.id] = domain_services.pitching_line_for(plate_appearances, outing.player.id)
-                team_of[outing.player.id] = side.team.id
-                game.record_pitching(
-                    outing.player.id,
-                    derived[outing.player.id],
-                    appearance_order=outing.appearance_order,
-                    entered_inning=outing.entered_inning,
-                )
-
-        decisions = domain_services.pitching_decisions(game, team_of)
-        rows = []
-        for side in sides.values():
-            for outing in side.outings:
-                wins = decisions.wins_for(outing.player.id)
-                rows.append(
-                    {
-                        "player": outing.player,
-                        "appearance_order": outing.appearance_order,
-                        "entered_inning": outing.entered_inning,
-                        # **打席から数えた行に、継投で決まる記録だけを重ねる。**
-                        # 組み立て直すと、項目を増やしたときにここだけ古くなる
-                        "line": replace(
-                            derived[outing.player.id],
-                            starts=1 if outing.appearance_order == 1 else 0,
-                            wins=wins,
-                            losses=decisions.losses_for(outing.player.id),
-                            saves=decisions.saves_for(outing.player.id),
-                            holds=decisions.holds_for(outing.player.id),
-                            relief_wins=wins if outing.appearance_order > 1 else 0,
-                        ),
-                    }
-                )
-        return rows
 
     # --- 保存 ---
 
@@ -1198,8 +1138,8 @@ class Command(BaseCommand):
                 away_score=game.away_score,
             )
             game.id = row.id
-            batting_rows.extend(self._batting_orm_rows(row, record))
-            pitching_rows.extend(self._pitching_orm_rows(row, record))
+            batting_rows.extend(self._batting_orm_rows(row, game))
+            pitching_rows.extend(self._pitching_orm_rows(row, game))
             inning_rows.extend(self._inning_orm_rows(row, game))
             pa_rows.extend(self._plate_appearance_orm_rows(row, game))
             fielding_rows.extend(self._fielding_orm_rows(row, game))
@@ -1273,39 +1213,40 @@ class Command(BaseCommand):
             )
 
     @staticmethod
-    def _batting_orm_rows(row, record):
+    def _batting_orm_rows(row, game):
         """打撃成績の行。**項目は値オブジェクトから引く。**
 
         ここに項目名を並べると、`BattingLine` に足しても投入コマンドだけが古いまま
         になり、その項目が 0 のまま保存される（実際に起きた。例外にならないので
         画面の欄が空になるまで気づけない）。
         """
-        for entry in record["batting"]:
+        for entry in game.batting:
+            assert entry.fielding_position is not None, "投入する打順の枠には守備位置がある"
             yield GameBattingLine(
                 game=row,
-                player=entry["player"],
-                batting_order=entry["batting_order"],
-                slot_sequence=entry["slot_sequence"],
-                team_id=entry["team_id"],
-                entered_sequence=entry["entered_sequence"],
-                fielding_position=entry["fielding_position"].value,
-                **{f.name: getattr(entry["line"], f.name) for f in fields(BattingLine)},
+                player_id=entry.player_id,
+                batting_order=entry.batting_order,
+                slot_sequence=entry.slot_sequence,
+                team_id=entry.team_id,
+                entered_sequence=entry.entered_sequence,
+                fielding_position=entry.fielding_position.value,
+                **{f.name: getattr(entry.line, f.name) for f in fields(BattingLine)},
             )
 
     @staticmethod
-    def _pitching_orm_rows(row, record):
+    def _pitching_orm_rows(row, game):
         """投球成績の行。打撃と同じく項目は値オブジェクトから引く。
 
         投球回は野球表記（5.2 = 5回と2/3）に直して1列で持ち、先発登板と救援勝利は
         登板順から導くので列に持たない。この3つだけを除く。
         """
-        for entry in record["pitching"]:
-            line = entry["line"]
+        for entry in game.pitching:
+            line = entry.line
             yield GamePitchingLine(
                 game=row,
-                player=entry["player"],
-                appearance_order=entry["appearance_order"],
-                entered_inning=entry["entered_inning"],
+                player_id=entry.player_id,
+                appearance_order=entry.appearance_order,
+                entered_inning=entry.entered_inning,
                 innings_pitched=float(line.innings.to_notation()),
                 **{f.name: getattr(line, f.name) for f in fields(PitchingLine) if f.name not in PITCHING_NOT_STORED},
             )
@@ -1337,8 +1278,8 @@ class Command(BaseCommand):
         self.totals["plate_appearances"] += len(game.plate_appearances)
         self.totals["advances"] += sum(len(entry.advances) for entry in game.plate_appearances)
         self.totals["errors"] += sum(len(entry.errors) for entry in game.plate_appearances)
-        for entry in record["batting"]:
-            line = entry["line"]
+        for entry in game.batting:
+            line = entry.line
             self.totals["at_bats"] += line.at_bats
             self.totals["hits"] += line.hits
             self.totals["home_runs"] += line.home_runs
@@ -1347,8 +1288,8 @@ class Command(BaseCommand):
             self.totals["stolen_bases"] += line.stolen_bases
             self.totals["caught_stealing"] += line.caught_stealing
             self.totals["double_plays"] += line.double_plays
-        for entry in record["pitching"]:
-            line = entry["line"]
+        for entry in game.pitching:
+            line = entry.line
             self.totals["outs"] += line.innings.outs
             self.totals["earned_runs"] += line.earned_runs
             self.totals["runs_allowed"] += line.runs_allowed
