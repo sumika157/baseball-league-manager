@@ -31,3 +31,9 @@ docker-compose.yml
 .idea/
 .DS_Store
 README.md
+
+# フロントエンドの生成物（gitignore 済み。ソースはバインドマウントで渡るのでイメージに不要）。
+# node_modules/.bin のシンボリックリンクは Windows 側（U:）からのビルドで
+# 「invalid file request」になり、ビルドが止まる
+frontend/node_modules/
+myapp/static/myapp/dist/

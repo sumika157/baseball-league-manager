@@ -176,6 +176,7 @@ WSL のターミナルからリポジトリのルートで実行します（Wind
 make            # ターゲット一覧を表示（make help と同じ）
 make test       # フルスイート（t=myapp.tests.xxx で個別指定）
 make test-domain # domain 層のみ（DB 不要・最速）
+make coverage   # カバレッジ計測付きでテストを実行（t= で範囲指定可）
 make lint       # ruff check + ruff format --check + mypy（コミット前に必須）
 make format     # ruff format で整形（lint が整形漏れを指摘したとき）
 make frontend-build # React 画面のビルド（E2E テストの前提）
@@ -212,6 +213,12 @@ docker compose exec web python manage.py measure_pages
 # 既存の試合に守備成績（打席から導く）を付ける・導き直す（migrate の後に流す）
 docker compose exec web python manage.py rebuild_fielding_lines
 ```
+
+どちらのコマンドも ORM に直接書き込むため、集約の検査を通りません。代わりに集約と同じ
+規則を自前で守ります（在籍中の背番号の重複禁止、リーグの外国人登録枠・出場枠）。架空選手の
+約12%を外国人にしますが、登録枠を超えるぶんは日本人選手にします。投入結果がこれらの規則と
+スコアブックの辻褄（打点の合計＝得点、被安打＝相手の安打など）を満たすことは
+`tests/integration/test_seed_virtual_*.py` で確かめています。
 
 `seed_virtual_games` は**打席を1つずつ組み立て、成績はそこから導出します。**
 選手の能力だけを確率分布から引き（numpy）、あとは半回を3アウトまで進めるだけです。
@@ -1022,6 +1029,22 @@ docker compose exec -e DJANGO_SETTINGS_MODULE= web \
 docker compose exec web python manage.py test myapp.tests.integration
 docker compose exec web python manage.py test myapp.tests.e2e
 ```
+
+### カバレッジ
+
+```bash
+make coverage                            # フルスイート
+make coverage t=myapp.tests.integration  # 範囲を絞る
+```
+
+計測対象は `myapp/` と `config/`（テストコードとマイグレーションは除く）で、設定は
+[pyproject.toml](pyproject.toml) の `[tool.coverage.*]` にあります。結果は通っていない行のある
+ファイルだけを、カバレッジの低い順に未実行の行番号つきで表示します。計測データはコンテナの
+`/tmp` に書くので、作業ツリーには何も残りません。テストが1件でも失敗すると表示まで進まないので、
+worktree で E2E を含めて回すときは先に `make frontend-build WT=<名前>` を実行してください。
+
+管理コマンドや起動口（`asgi.py`・`wsgi.py`）も**あえて除外せずに数えています**（除外すると
+「テストが無い」ことが数字から見えなくなるため）。テストの無いファイルは 0% で表の先頭に並びます。
 
 ---
 
