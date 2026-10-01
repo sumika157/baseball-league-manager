@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import date
 from decimal import ROUND_DOWN, Decimal
 from enum import Enum
@@ -619,6 +619,16 @@ def _require_non_negative(name: str, value: Any) -> int:
     return number
 
 
+def _summed_fields(left: Any, right: Any) -> dict[str, Any]:
+    """成績の2行を項目ごとに足した値。
+
+    項目を手で列挙すると、項目を増やしたときに足し忘れても例外にならず、
+    通算・月別・チーム成績でその項目だけ 0 になる（P6b で増えた得点・三振・失点などで
+    実際に起きた）。dataclass のフィールドから引くので、項目の出典は値オブジェクトの定義だけになる。
+    """
+    return {f.name: getattr(left, f.name) + getattr(right, f.name) for f in fields(left)}
+
+
 @dataclass(frozen=True)
 class BattingLine:
     """打撃成績。打率・出塁率・長打率・OPS の算出責務を持つ。
@@ -759,17 +769,7 @@ class BattingLine:
         """
         if not isinstance(other, BattingLine):
             return NotImplemented
-        return BattingLine(
-            at_bats=self.at_bats + other.at_bats,
-            singles=self.singles + other.singles,
-            doubles=self.doubles + other.doubles,
-            triples=self.triples + other.triples,
-            home_runs=self.home_runs + other.home_runs,
-            runs_batted_in=self.runs_batted_in + other.runs_batted_in,
-            walks=self.walks + other.walks,
-            hit_by_pitch=self.hit_by_pitch + other.hit_by_pitch,
-            sacrifice_flies=self.sacrifice_flies + other.sacrifice_flies,
-        )
+        return BattingLine(**_summed_fields(self, other))
 
     @classmethod
     def total(cls, lines: Iterable[BattingLine]) -> BattingLine:
@@ -940,21 +940,7 @@ class PitchingLine:
         """試合ごとの成績を積み上げて通算にする。率は合算後に計算し直す。"""
         if not isinstance(other, PitchingLine):
             return NotImplemented
-        return PitchingLine(
-            innings=self.innings + other.innings,
-            wins=self.wins + other.wins,
-            losses=self.losses + other.losses,
-            saves=self.saves + other.saves,
-            earned_runs=self.earned_runs + other.earned_runs,
-            strikeouts=self.strikeouts + other.strikeouts,
-            hits_allowed=self.hits_allowed + other.hits_allowed,
-            walks_allowed=self.walks_allowed + other.walks_allowed,
-            home_runs_allowed=self.home_runs_allowed + other.home_runs_allowed,
-            hit_by_pitch_allowed=self.hit_by_pitch_allowed + other.hit_by_pitch_allowed,
-            holds=self.holds + other.holds,
-            starts=self.starts + other.starts,
-            relief_wins=self.relief_wins + other.relief_wins,
-        )
+        return PitchingLine(**_summed_fields(self, other))
 
     @classmethod
     def total(cls, lines: Iterable[PitchingLine]) -> PitchingLine:
