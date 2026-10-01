@@ -36,3 +36,15 @@ typeCheckingMode = "standard"
 pythonVersion = "3.10"
 # exclude を書くと pyright の既定の除外が置き換わるので、node_modules 等も明示する
 exclude = ["myapp/migrations", "**/node_modules", "**/__pycache__", ".git"]
+
+# テストのカバレッジ計測（make coverage）。テストコード自身とマイグレーションは数えない。
+# データ投入・計測用の管理コマンド（seed_virtual_*・measure_pages）は現状テストが無く、
+# 除外せずに数えてある（除外すると「テストが無い」ことが数字から見えなくなるため）。
+[tool.coverage.run]
+source = ["myapp", "config"]
+omit = ["myapp/tests/*", "myapp/migrations/*"]
+
+[tool.coverage.report]
+skip_covered = true
+show_missing = true
+sort = "Cover"

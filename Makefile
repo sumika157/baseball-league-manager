@@ -56,6 +56,16 @@ test-integration: ## integration 層のみ（リポジトリ往復・画面動�
 test-e2e: ## E2E のみ（Playwright 実ブラウザ・遅い）
 	$(EXEC) python manage.py test myapp.tests.e2e
 
+# 計測データ（.coverage）は作業ツリーに置かず /tmp に書く（CACHE_ENV と同じ理由: root 所有の
+# 生成物が worktree に残ると後始末できなくなる）。main と worktree で同時に回しても混ざらないよう
+# 対象ごとにファイルを分ける。対象範囲・表示形式は pyproject.toml の [tool.coverage.*] が出典。
+COVERAGE_EXEC := docker compose exec -w $(WORKDIR) $(CACHE_ENV) -e COVERAGE_FILE=/tmp/coverage-$(if $(WT),$(WT),main) web
+
+.PHONY: coverage
+coverage: ## カバレッジ計測付きでテストを実行し、ファイル別の未実行行を表示する（t= で範囲指定可）
+	$(COVERAGE_EXEC) python -m coverage run manage.py test $(t)
+	$(COVERAGE_EXEC) python -m coverage report
+
 # ---- フロントエンド ----
 # React 画面のビルドは frontend コンテナで行う（ホストに Node 環境は作らない）。
 # `make up` で watch ビルドも一緒に起動する。単発で成果物を作るときは frontend-build。
