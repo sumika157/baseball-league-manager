@@ -141,7 +141,7 @@
     </div>
   </div>
 
-  <div class="card mb-4">
+  <div class="card {% if box.fielding %}mb-3{% else %}mb-4{% endif %}">
     <div class="card-header">{{ box.team_name }} 投手</div>
     <div class="card-body p-0">
       {% if box.pitching %}
@@ -192,6 +192,45 @@
       {% endif %}
     </div>
   </div>
+
+  {% comment %}
+  守備成績。打席の記録から導いた値なので、記録の無い試合では出さない。
+  守備に就いた選手は、守備機会が無くても載る（打順の順、続けて打順にいない投手）。
+  {% endcomment %}
+  {% if box.fielding %}
+    <div class="card mb-4">
+      <div class="card-header">{{ box.team_name }} 守備</div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-hover boxscore-table mb-0">
+            <thead>
+              <tr>
+                <th class="text-center">位置</th>
+                <th>選手名</th>
+                <th class="text-end">刺殺</th>
+                <th class="text-end">補殺</th>
+                <th class="text-end">失策</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in box.fielding %}
+                <tr>
+                  <td class="text-center">{{ row.position_label|default:'—' }}</td>
+                  <td>
+                    <span class="jersey-number me-1">{{ row.number }}</span>
+                    <a href="{% url 'player_detail' row.team_id row.player_id %}" class="player-name">{{ row.player_name }}</a>
+                  </td>
+                  <td class="text-end">{{ row.putouts }}</td>
+                  <td class="text-end">{{ row.assists }}</td>
+                  <td class="text-end">{{ row.errors }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  {% endif %}
 {% empty %}
   <div class="card">
     <div class="empty-state">
@@ -204,5 +243,6 @@
   位置は守った場所（代打は「打」、代走は「走」）。一段下げた行は途中出場です。
   打率と防御率はこの試合の値ではなく通算の値です（1試合の率は標本が小さすぎて読めないため）。
   記録の「勝」「敗」「Ｓ」「Ｈ」は、イニングスコアと継投から日本プロ野球の規則で決まります。
+  守備の刺殺・補殺・失策は、打席の記録（打球の処理経路と失策）から導いた値です。
 </p>
 {% endblock %}

@@ -271,6 +271,50 @@
 {% endif %}
 
 {% comment %}
+守備成績。打席の記録（打球の処理経路と失策）から導いた値で、守備に就いた試合が
+無い選手には出さない。守備率は足した実数から計算し直した値。年度別はこのチームでの
+成績、通算は移籍前のチームも含む（打撃・投球の年度別成績と同じ）。
+列は _fielding_cells.html が唯一の出典。
+{% endcomment %}
+{% if profile.fielding %}
+  <div class="card mb-3">
+    <div class="card-header">守備成績</div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table mb-0">
+          <thead>
+            <tr>
+              <th>年度</th>
+              <th class="text-end">試合</th>
+              <th class="text-end">守備機会</th>
+              <th class="text-end">刺殺</th>
+              <th class="text-end">補殺</th>
+              <th class="text-end">失策</th>
+              <th class="text-end">併殺</th>
+              <th class="text-end">守備率</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in profile.fielding.years %}
+              <tr>
+                <td>{{ row.label }}</td>
+                {% include 'myapp/_fielding_cells.html' with row=row %}
+              </tr>
+            {% endfor %}
+            {% if profile.fielding.years|length > 1 or profile.career|length > 1 %}
+              <tr class="fw-semibold">
+                <td>{{ profile.fielding.career.label }}</td>
+                {% include 'myapp/_fielding_cells.html' with row=profile.fielding.career %}
+              </tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+{% endif %}
+
+{% comment %}
 月別成績。通算値だけでは調子の波が見えないため、期間で区切って並べる。
 率は月ごとの合計から計算し直した値（月々の率を平均したものではない）。
 {% endcomment %}

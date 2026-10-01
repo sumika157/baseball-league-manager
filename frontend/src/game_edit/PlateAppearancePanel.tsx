@@ -8,6 +8,7 @@ import type {
   AdvancePayload,
   GameEditPayload,
   HalfState,
+  LineupSlotPayload,
   PlateAppearancePayload,
   PlayerPayload,
 } from "./types";
@@ -17,6 +18,8 @@ interface Props {
   entry: PlateAppearancePayload;
   before: HalfState;
   nameOf: (playerId: number) => string;
+  /** この打順の枠に入っている選手（スタメンと途中出場）。打者を選び直せる。 */
+  batters: LineupSlotPayload[];
   pitchers: PlayerPayload[];
   fielders: PlayerPayload[];
   onChange: (entry: PlateAppearancePayload) => void;
@@ -30,6 +33,7 @@ export function PlateAppearancePanel({
   entry,
   before,
   nameOf,
+  batters,
   pitchers,
   fielders,
   onChange,
@@ -52,6 +56,20 @@ export function PlateAppearancePanel({
     });
   }
 
+  /** 打者を替える。打者自身の進塁（進塁前が打者席）の走者も合わせる。 */
+  function chooseBatter(playerId: number) {
+    const slot = batters.find((each) => each.player_id === playerId);
+    if (!slot) return;
+    onChange({
+      ...entry,
+      batter_id: slot.player_id,
+      slot_sequence: slot.slot_sequence,
+      advances: entry.advances.map((advance) =>
+        advance.from_base === BASE_BATTER ? { ...advance, runner_id: slot.player_id } : advance,
+      ),
+    });
+  }
+
   function updateAdvance(index: number, changes: Partial<AdvancePayload>) {
     const advances = entry.advances.map((advance, at) => (at === index ? { ...advance, ...changes } : advance));
     onChange({ ...entry, advances });
@@ -71,6 +89,26 @@ export function PlateAppearancePanel({
       </div>
       <div className="card-body">
         <div className="row g-3 mb-3">
+          {batters.length > 1 && (
+            <div className="col-md-4">
+              <label className="form-label" htmlFor="pa-batter">
+                打者
+              </label>
+              <select
+                id="pa-batter"
+                className="form-select"
+                value={entry.batter_id}
+                onChange={(event) => chooseBatter(Number(event.target.value))}
+              >
+                {batters.map((slot) => (
+                  <option key={slot.player_id} value={slot.player_id}>
+                    {nameOf(slot.player_id)}
+                    {slot.slot_sequence > 0 ? "（途中出場）" : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="col-md-4">
             <label className="form-label" htmlFor="pa-result">
               結果

@@ -18,8 +18,9 @@ from datetime import date
 
 from ..domain import services as domain_services
 from ..domain.entities import Game, PlateAppearance
+from ..domain.exceptions import DomainError, InvalidGame
 from ..domain.repositories import GameRepository, LeagueRepository, TeamRepository
-from ..domain.value_objects import Season, ensure_quota_not_exceeded
+from ..domain.value_objects import FieldingPosition, Season, ensure_quota_not_exceeded
 from .dto import LineupSlot
 
 
@@ -78,26 +79,93 @@ class GameRecordingService:
 
         self._record_batting(game, lineup)
         self._record_pitching(game)
+        self._record_fielding(game)
         team_of = self._team_of(game, lineup)
         self._apply_pitching_decisions(game, team_of)
         self._ensure_foreign_player_game_quota(game, team_of)
         return self._games.save(game)
 
-    @staticmethod
-    def _record_batting(game: Game, lineup: list[LineupSlot]) -> None:
+    def _record_batting(self, game: Game, lineup: list[LineupSlot]) -> None:
         """打順の枠ごとに打撃成績を打席から数えて載せる。
 
         打席が回らなかった枠も0の行として残す（守備には就いているため、
         ボックススコアからは消せない）。
+
+        途中出場の行には、いつ入ったか（`entered_sequence`）も載せる。守備位置を選手に引く
+        のに要る。守備固めのように打席から導けない出場だけ、入力された半回を使う。
         """
         for slot in lineup:
             game.record_batting(
                 slot.player_id,
                 domain_services.batting_line_for(game.plate_appearances, slot.player_id),
+                team_id=slot.team_id,
                 batting_order=slot.batting_order,
                 slot_sequence=slot.slot_sequence,
                 fielding_position=slot.fielding_position,
+                entered_sequence=self._entered_sequence(game, slot),
             )
+
+    def _entered_sequence(self, game: Game, slot: LineupSlot) -> int | None:
+        """途中出場の選手が試合に入った最初の打席の通し番号。スタメンは None（試合開始から）。
+
+        **要るかどうかはサーバーが決める**（入力欄の有無でクライアントに決めさせない）。
+
+        - 代打は初めて打席に立った打席、代走は代走を出した打席、投手は初めて投げた打席から導く。
+          入力された値は無視する（保存のたびに変わらないように）。該当する打席が無ければ不明（None）。
+        - 守備に就く途中出場（守備固めなど）は、入った半回の入力が要る。無ければ弾く。
+          入力は「何回・表か裏か・その半回の何人目の打者から」で、その打席の番号に読み替える。
+          代打からそのまま守備に就いた選手は、その代打の打席を指せばよい。
+        - 守備に就かない行（指名打者・守備位置の未記録）は要らない。
+        """
+        if slot.slot_sequence == 0:
+            return None
+
+        position = slot.fielding_position
+        if position is FieldingPosition.PINCH_RUNNER:
+            found = [
+                entry.sequence
+                for entry in game.plate_appearances
+                if any(sub.entering_runner_id == slot.player_id for sub in entry.substitutions)
+            ]
+            return min(found) if found else None
+        if position is FieldingPosition.PINCH_HITTER:
+            found = [entry.sequence for entry in game.plate_appearances if entry.batter_id == slot.player_id]
+            return min(found) if found else None
+        if position is FieldingPosition.PITCHER:
+            found = [entry.sequence for entry in game.plate_appearances if entry.pitcher_id == slot.player_id]
+            return min(found) if found else None
+        if position is None or not position.takes_the_field:
+            return None
+
+        if slot.entered_inning is None:
+            raise InvalidGame(
+                f"{self._player_name(slot)}の出場した回を入力してください"
+                "（代打からそのまま守備に就いた選手は、その代打の打席の回・表裏・打者番号を入力します）。"
+            )
+        half = sorted(
+            entry.sequence
+            for entry in game.plate_appearances
+            if entry.inning == slot.entered_inning and entry.is_bottom == slot.entered_is_bottom
+        )
+        label = "裏" if slot.entered_is_bottom else "表"
+        if not half:
+            raise InvalidGame(
+                f"{slot.entered_inning}回{label}には打席の記録がありません。{self._player_name(slot)}の"
+                "出場した半回を直してください。"
+            )
+        if not 1 <= slot.entered_batter <= len(half):
+            raise InvalidGame(
+                f"{slot.entered_inning}回{label}の打者は{len(half)}人です。{self._player_name(slot)}の"
+                f"出場した打者番号（{slot.entered_batter}）を直してください。"
+            )
+        return half[slot.entered_batter - 1]
+
+    def _player_name(self, slot: LineupSlot) -> str:
+        """エラーメッセージ用の選手名。引けなければ id。"""
+        try:
+            return self._teams.find_by_id(slot.team_id).find_player(slot.player_id).name
+        except DomainError:
+            return f"選手id={slot.player_id}"
 
     @staticmethod
     def _record_pitching(game: Game) -> None:
@@ -125,6 +193,15 @@ class GameRecordingService:
                     appearance_order=order,
                     entered_inning=first_seen[pitcher_id].inning,
                 )
+
+    @staticmethod
+    def _record_fielding(game: Game) -> None:
+        """守備成績を打席から導いて載せる。打撃の枠（ラインアップ）を載せた後に呼ぶ。
+
+        守備位置を選手に引くのにラインアップが要るため。守備に就いた選手は、
+        守備機会が無くても 0 の行になる（守備の試合数を数えるため）。
+        """
+        domain_services.record_derived_fielding(game)
 
     @staticmethod
     def _team_of(game: Game, lineup: list[LineupSlot]) -> dict[int, int]:

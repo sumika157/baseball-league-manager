@@ -21,6 +21,7 @@ from ..domain.entities import (
     FieldingError,
     Game,
     GameBatting,
+    GameFielding,
     GamePitching,
     League,
     PlateAppearance,
@@ -42,6 +43,7 @@ from ..domain.value_objects import (
     Base,
     BattingLine,
     ErrorKind,
+    FieldingLine,
     FieldingPosition,
     Handedness,
     InningsPitched,
@@ -72,6 +74,13 @@ _BATTING_FIELDS = (
     "stolen_bases",
     "caught_stealing",
     "double_plays",
+)
+
+_FIELDING_FIELDS = (
+    "putouts",
+    "assists",
+    "errors",
+    "double_plays_turned",
 )
 
 _PITCHING_COUNTS = (
@@ -444,7 +453,11 @@ class DjangoGameRepository:
 
     def find_by_id(self, game_id: int) -> Game:
         try:
-            row = self._with_details().prefetch_related(self._plate_appearance_prefetch()).get(id=game_id)
+            row = (
+                self._with_details()
+                .prefetch_related(self._plate_appearance_prefetch(), "fielding_lines")
+                .get(id=game_id)
+            )
         except orm_models.Game.DoesNotExist:
             raise GameNotFound(f"試合が見つかりません（id={game_id}）。") from None
         return self._to_domain(row, with_plate_appearances=True)
@@ -520,6 +533,8 @@ class DjangoGameRepository:
                     "batting_order": entry.batting_order,
                     "slot_sequence": entry.slot_sequence,
                     "fielding_position": (entry.fielding_position.value if entry.fielding_position else ""),
+                    "team_id": entry.team_id,
+                    "entered_sequence": entry.entered_sequence,
                 }
             )
             line_row, _ = orm_models.GameBattingLine.objects.update_or_create(
@@ -539,6 +554,7 @@ class DjangoGameRepository:
 
         self._save_line_score(row, game)
         self._save_plate_appearances(row, game)
+        self._save_fielding(row, game)
 
         # 集約から外された成績は削除する。上書きだけだと、いったん入力した
         # 選手を「出場していない」に戻せない
@@ -550,6 +566,28 @@ class DjangoGameRepository:
         ).delete()
 
         return game
+
+    @staticmethod
+    def _save_fielding(row: orm_models.Game, game: Game) -> None:
+        """守備成績を保存する。**打席を省いて読んだ集約では何もしない。**
+
+        守備成績は打席と一緒に読む（`find_by_id`）。省いて読んだ集約の `fielding` は空だが、
+        それは「守備が無い」ではない。空として扱うと、一覧のために読んだ試合を保存しただけで
+        守備成績が全部消える（打席と同じ罠）。
+        """
+        if not game.plate_appearances_loaded:
+            return
+
+        for entry in game.fielding:
+            fielding_row, _ = orm_models.GameFieldingLine.objects.update_or_create(
+                game=row,
+                player_id=entry.player_id,
+                defaults={f: getattr(entry.line, f) for f in _FIELDING_FIELDS},
+            )
+            entry.id = fielding_row.id
+        orm_models.GameFieldingLine.objects.filter(game=row).exclude(
+            player_id__in=[entry.player_id for entry in game.fielding]
+        ).delete()
 
     @staticmethod
     def _save_line_score(row: orm_models.Game, game: Game) -> None:
@@ -695,6 +733,17 @@ class DjangoGameRepository:
         ]
 
     @staticmethod
+    def _to_fielding(row: orm_models.Game) -> list[GameFielding]:
+        return [
+            GameFielding(
+                id=f.id,
+                player_id=f.player_id,
+                line=FieldingLine(**{name: getattr(f, name) for name in _FIELDING_FIELDS}),
+            )
+            for f in row.fielding_lines.all()
+        ]
+
+    @staticmethod
     def _to_line_score(row: orm_models.Game) -> LineScore:
         """行から回ごとの得点を組み立てる。抜けている回は 0 で埋める。"""
         halves: dict[bool, dict[int, int]] = {False: {}, True: {}}
@@ -725,6 +774,7 @@ class DjangoGameRepository:
             away_score=row.away_score,
             line_score=cls._to_line_score(row),
             plate_appearances=cls._to_plate_appearances(row) if with_plate_appearances else [],
+            fielding=cls._to_fielding(row) if with_plate_appearances else [],
             plate_appearances_loaded=with_plate_appearances,
         )
         game.batting = [
@@ -732,6 +782,8 @@ class DjangoGameRepository:
                 id=b.id,
                 player_id=b.player_id,
                 line=BattingLine(**{f: getattr(b, f) for f in _BATTING_FIELDS}),
+                team_id=b.team_id,
+                entered_sequence=b.entered_sequence,
                 batting_order=b.batting_order,
                 slot_sequence=b.slot_sequence,
                 fielding_position=FieldingPosition.from_label(b.fielding_position),

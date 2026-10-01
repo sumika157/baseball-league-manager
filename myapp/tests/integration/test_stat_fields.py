@@ -17,10 +17,14 @@ from dataclasses import fields
 from django.conf import settings
 from django.test import SimpleTestCase
 
-from myapp.domain.value_objects import Base, BattingLine, PitchingLine
+from myapp.application.dto import FieldingRow
+from myapp.domain.value_objects import Base, BattingLine, FieldingLine, PitchingLine
+from myapp.infrastructure import orm_models
+from myapp.infrastructure.queries import DjangoPlayerFieldingQuery
 from myapp.infrastructure.repositories import (
     _BATTING_FIELDS,
     _DERIVED_PITCHING_COUNTS,
+    _FIELDING_FIELDS,
     _PITCHING_COUNTS,
 )
 
@@ -62,6 +66,28 @@ class PitchingStatFieldsTest(SimpleTestCase):
         domain = {f.name for f in fields(PitchingLine)}
         persisted = {"innings", *_PITCHING_COUNTS, *_DERIVED_PITCHING_COUNTS}
         self.assertEqual(domain, persisted, "永続化の列挙が PitchingLine と違います")
+
+
+class FieldingStatFieldsTest(SimpleTestCase):
+    """守備のカウント項目は、値オブジェクトと永続化の列で同じであること。
+
+    守備成績は打席から導く値で、入力フォームも React も持たない。重複は値オブジェクト ↔
+    永続化（読み書きの列挙とテーブルの列）の2か所だけ。
+    """
+
+    def test_persistence_matches_the_line(self):
+        domain = {f.name for f in fields(FieldingLine)}
+        self.assertEqual(domain, set(_FIELDING_FIELDS), "永続化の列挙が FieldingLine と違います")
+
+    def test_the_read_query_and_the_row_cover_the_whole_line(self):
+        domain = {f.name for f in fields(FieldingLine)}
+        self.assertEqual(domain, set(DjangoPlayerFieldingQuery._SUMS), "参照クエリの集計が FieldingLine と違います")
+        self.assertLessEqual(domain, {f.name for f in fields(FieldingRow)}, "FieldingRow に足りない項目があります")
+
+    def test_table_columns_match_the_line(self):
+        columns = {f.name for f in orm_models.GameFieldingLine._meta.get_fields() if getattr(f, "column", None)}
+        columns -= {"id", "game", "player"}
+        self.assertEqual({f.name for f in fields(FieldingLine)}, columns, "テーブルの列が FieldingLine と違います")
 
 
 class BaseNumbersTest(SimpleTestCase):

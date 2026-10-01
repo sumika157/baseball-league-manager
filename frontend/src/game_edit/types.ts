@@ -50,6 +50,12 @@ export interface LineupSlotPayload {
   batting_order: number;
   slot_sequence: number;
   fielding_position: string;
+  /** 途中出場の行だけ。守備固めなど打席から導けない出場の、入った半回（回と、裏か）。
+   *  代打・代走は打席から決まるので、サーバーは null を返す。 */
+  entered_inning: number | null;
+  entered_is_bottom: boolean;
+  /** その半回の何人目の打者から出場したか（1始まり）。 */
+  entered_batter: number;
 }
 
 export interface TeamPayload {
@@ -116,6 +122,8 @@ export interface Vocabulary {
   error_kinds: string[];
   fielding_positions: string[];
   defensive_positions: string[];
+  /** 出場時刻を打席から導く位置（代打・代走・投手）。この位置の行には出場した半回を入力させない。 */
+  entry_derived_positions: string[];
 }
 
 export interface GameEditUrls {

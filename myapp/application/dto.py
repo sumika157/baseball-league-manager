@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..domain.value_objects import FieldingPosition
 
@@ -144,6 +144,20 @@ class GameLineScore:
 
 
 @dataclass(frozen=True)
+class GameFieldingRow:
+    """試合詳細に並べる、1選手ぶんの守備成績。守備に就いた選手は機会が無くても載る。"""
+
+    player_id: int
+    player_name: str
+    number: int
+    team_id: int
+    position_label: str
+    putouts: int = 0
+    assists: int = 0
+    errors: int = 0
+
+
+@dataclass(frozen=True)
 class GameTeamBox:
     """1チームぶんのボックススコア。"""
 
@@ -152,6 +166,8 @@ class GameTeamBox:
     score: int
     batting: list[GamePlayerRow]
     pitching: list[GamePlayerRow]
+    # 守備成績は打席から導く値なので、打席の記録が無い試合では空
+    fielding: list[GameFieldingRow] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -326,6 +342,28 @@ class TeamMonthlyRow:
 
 
 @dataclass(frozen=True)
+class FieldingRow:
+    """選手の守備成績1行（通算または1年度）。守備率は足した実数から計算し直した値。"""
+
+    label: str  # '通算' / '2026年'
+    games: int  # 守備に就いた試合数
+    total_chances: int
+    putouts: int
+    assists: int
+    errors: int
+    double_plays_turned: int
+    fielding_percentage: float
+
+
+@dataclass(frozen=True)
+class PlayerFielding:
+    """選手個人ページの守備成績。通算と年度別。"""
+
+    career: FieldingRow
+    years: list[FieldingRow]
+
+
+@dataclass(frozen=True)
 class CareerRow:
     """経歴の1行。どのチームにいつ在籍したか。"""
 
@@ -355,6 +393,8 @@ class PlayerProfile:
     years: list[YearlyRow] | None = None
     # 月別成績。調子の波は通算値では見えないため、期間で区切って並べる
     months: list[MonthlyRow] | None = None
+    # 守備成績。守備に就いた試合が1つも無ければ None（画面に出さない）
+    fielding: PlayerFielding | None = None
     # 選択されている月（MonthlyRow.key と同じ形式）と、その表示名
     selected_month: str = ""
     selected_month_label: str = ""
@@ -867,3 +907,9 @@ class LineupSlot:
     batting_order: int
     slot_sequence: int
     fielding_position: FieldingPosition | None
+    # 途中出場の行だけ。守備固めなど打席から導けない出場を、入った半回で指す
+    # （回と、その回の表か裏か）。応用層が半回の最初の打席の番号に読み替える。
+    entered_inning: int | None = None
+    entered_is_bottom: bool = False
+    # その半回で何人目の打者から（1始まり）。守備固めが半回の途中で入る場合に指す
+    entered_batter: int = 1

@@ -43,6 +43,8 @@ export function buildRequestBody(state: ScorebookState, payload: GameEditPayload
   const lineup: LineupRequestRow[] = [];
   for (const team of payload.teams) {
     for (const slot of state.lineups[team.team_id] ?? []) {
+      // 選手を選ぶ前の途中出場の下書きは送らない
+      if (slot.player_id <= 0) continue;
       lineup.push({ ...slot, team_id: team.team_id });
     }
   }

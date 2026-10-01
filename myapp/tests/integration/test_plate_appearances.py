@@ -14,7 +14,7 @@ from myapp.domain.entities import (
     RunnerSubstitution,
 )
 from myapp.domain.exceptions import InvalidPlateAppearance
-from myapp.domain.services import batting_line_for
+from myapp.domain.services import batting_line_for, record_derived_fielding
 from myapp.domain.value_objects import (
     AdvanceReason,
     Base,
@@ -134,6 +134,7 @@ class PlateAppearancePersistenceTest(BaseCase):
             plate_appearances=self._plate_appearances(),
         )
         game.ensure_plate_appearances_consistent()
+        record_derived_fielding(game)
         return self.repo.save(game)
 
     def test_the_record_survives_the_round_trip(self):
@@ -190,6 +191,7 @@ class PlateAppearancePersistenceTest(BaseCase):
 
         trimmed = self.repo.find_by_id(saved.id)
         trimmed.plate_appearances = trimmed.plate_appearances_in_order()[:2]
+        record_derived_fielding(trimmed)
         self.repo.save(trimmed)
 
         self.assertEqual(orm_models.GamePlateAppearance.objects.filter(game_id=saved.id).count(), 2)
@@ -221,7 +223,9 @@ class PlateAppearancePersistenceTest(BaseCase):
         saved = self._save_game()
 
         edited = self.repo.find_by_id(saved.id)
-        edited.record_batting(self.batters[0], BattingLine(at_bats=4, home_runs=3), batting_order=1)
+        edited.record_batting(
+            self.batters[0], BattingLine(at_bats=4, home_runs=3), batting_order=1, team_id=edited.home_team_id
+        )
 
         with self.assertRaises(InvalidPlateAppearance):
             self.repo.save(edited)
@@ -232,7 +236,12 @@ class PlateAppearancePersistenceTest(BaseCase):
 
         edited = self.repo.find_by_id(saved.id)
         for batter in {entry.batter_id for entry in edited.plate_appearances}:
-            edited.record_batting(batter, batting_line_for(edited.plate_appearances, batter), batting_order=1)
+            edited.record_batting(
+                batter,
+                batting_line_for(edited.plate_appearances, batter),
+                batting_order=1,
+                team_id=edited.home_team_id,
+            )
 
         self.repo.save(edited)
 

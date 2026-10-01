@@ -883,6 +883,14 @@ class GameBattingLineInline(admin.TabularInline):
     model = GameBattingLine
     extra = 0
     autocomplete_fields = ("player",)
+    # 守備成績（打席から導く値）の出典になる項目。管理画面で書き換えると、守備位置の解決が
+    # 打席の記録と食い違う。ラインアップはスコアブックの編集画面で直す。
+    # チームが必須なのでこの画面からは行を足せない（足すと必須のチームが空になる）
+    readonly_fields = ("team", "batting_order", "slot_sequence", "fielding_position", "entered_sequence")
+    can_delete = False
+
+    def has_add_permission(self, request, obj=None):
+        return False
 
 
 class GamePitchingLineInline(admin.TabularInline):

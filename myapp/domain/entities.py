@@ -29,6 +29,7 @@ from .value_objects import (
     Base,
     BattingLine,
     ErrorKind,
+    FieldingLine,
     FieldingPosition,
     JerseyNumber,
     LineScore,
@@ -406,18 +407,29 @@ class GameBatting:
 
     player_id: int
     line: BattingLine
+    # どちらのチームの選手か（試合のホームかビジター）。ラインアップの行にチームが無いと、
+    # 守備位置を選手に引くときに打席から推測するしかなくなる
+    team_id: int
     id: int | None = None
     # 打順（1〜9）。記録しない試合もあるため未設定を許す
     batting_order: int | None = None
     # 同じ打順の何番目か。0 がスタメンで、1以上は途中出場
     slot_sequence: int = 0
     fielding_position: FieldingPosition | None = None
+    # 試合に入った最初の打席の通し番号（`PlateAppearance.sequence`）。スタメンは試合開始からなので
+    # None。**途中出場の None は「不明」**で、守備の解決ではその選手もその位置も飛ばす（推測しない）。
+    entered_sequence: int | None = None
 
     def __post_init__(self) -> None:
         if self.batting_order is not None and not (1 <= self.batting_order <= 9):
             raise InvalidGame("打順は1〜9で入力してください。")
         if self.slot_sequence < 0:
             raise InvalidGame("交代の順に負の値は指定できません。")
+        if self.entered_sequence is not None:
+            if self.entered_sequence < 1:
+                raise InvalidGame("出場した打席の番号は1以上で入力してください。")
+            if self.slot_sequence == 0:
+                raise InvalidGame("スタメンに途中出場の打席は持てません（試合開始から出ています）。")
 
     @property
     def is_starter(self) -> bool:
@@ -458,6 +470,20 @@ class GamePitching:
     @property
     def is_starter(self) -> bool:
         return self.appearance_order == 1
+
+
+@dataclass
+class GameFielding:
+    """1試合ぶんの、ある選手の守備成績。
+
+    打撃・投球と違い、**打席の記録からしか作れない**（刺殺・補殺は打球の処理経路、
+    失策は失策の記録から導く）。通算成績の集計のために保存するが、出典は打席で、
+    集約が保存前に照合する（`ensure_lines_match_plate_appearances`）。
+    """
+
+    player_id: int
+    line: FieldingLine
+    id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -703,6 +729,9 @@ class Game:
     # 打席ごとの記録。スコアブックのマス目にあたり、記録があれば打撃・投球・守備成績と
     # イニングスコアはすべてここから導出できる。イニングスコアと同じく空でも試合は成立する
     plate_appearances: list[PlateAppearance] = field(default_factory=list)
+    # 守備成績。打席から導く値で、打席と一緒に読む（`plate_appearances_loaded` が False の
+    # 集約では空であって「守備が無い」ではない。保存しても触れない）
+    fielding: list[GameFielding] = field(default_factory=list)
     # 打席の記録を伴って読み込んだか。1試合あたり約280行になるため、一覧のために
     # まとめて読むときは打席を省く。**「省いた」と「記録が無い」は区別しなければならない**
     # （区別しないと、省いて読んだ集約を保存したときに記録済みの打席が全部消える）。
@@ -756,27 +785,31 @@ class Game:
         player_id: int,
         line: BattingLine,
         *,
+        team_id: int,
         batting_order: int | None = None,
         slot_sequence: int = 0,
         fielding_position: FieldingPosition | None = None,
+        entered_sequence: int | None = None,
     ) -> GameBatting:
         """選手の打撃成績を記録する。同じ選手が既にあれば上書きする。"""
-        for entry in self.batting:
-            if entry.player_id == player_id:
-                entry.line = line
-                entry.batting_order = batting_order
-                entry.slot_sequence = slot_sequence
-                entry.fielding_position = fielding_position
-                return entry
-        entry = GameBatting(
+        if team_id not in (self.home_team_id, self.away_team_id):
+            raise InvalidGame("打撃成績のチームは、試合のホームかビジターでなければなりません。")
+        candidate = GameBatting(
             player_id=player_id,
             line=line,
+            team_id=team_id,
             batting_order=batting_order,
             slot_sequence=slot_sequence,
             fielding_position=fielding_position,
+            entered_sequence=entered_sequence,
         )
-        self.batting.append(entry)
-        return entry
+        for index, entry in enumerate(self.batting):
+            if entry.player_id == player_id:
+                candidate.id = entry.id
+                self.batting[index] = candidate
+                return candidate
+        self.batting.append(candidate)
+        return candidate
 
     def record_pitching(
         self,
@@ -800,6 +833,16 @@ class Game:
             entered_inning=entered_inning,
         )
         self.pitching.append(entry)
+        return entry
+
+    def record_fielding(self, player_id: int, line: FieldingLine) -> GameFielding:
+        """選手の守備成績を記録する。同じ選手が既にあれば上書きする。"""
+        for entry in self.fielding:
+            if entry.player_id == player_id:
+                entry.line = line
+                return entry
+        entry = GameFielding(player_id=player_id, line=line)
+        self.fielding.append(entry)
         return entry
 
     def ensure_line_score_matches(self) -> None:
@@ -858,6 +901,47 @@ class Game:
         self._ensure_batting_order_cycles(ordered)
         self._replay_bases(ordered)
         self._ensure_derived_line_score_matches()
+
+    def ensure_lineup_consistent(self) -> None:
+        """ラインアップの出場時刻が、打席の記録と噛み合っていることを確かめる。
+
+        - 出場した打席は、記録された打席の範囲内にある。
+        - 同じ打順の枠では、後の選手ほど遅く入る（交代の順と時刻が逆転しない）。
+        """
+        last = max((entry.sequence for entry in self.plate_appearances), default=0)
+        slots: dict[tuple[int, int], list[GameBatting]] = {}
+        for entry in self.batting:
+            if entry.entered_sequence is not None and entry.entered_sequence > last:
+                raise InvalidGame(
+                    f"出場した打席（{entry.entered_sequence}）が記録された打席の範囲を超えています（選手id={entry.player_id}）。"
+                )
+            if entry.batting_order is not None:
+                slots.setdefault((entry.team_id, entry.batting_order), []).append(entry)
+
+        # 選手が打者・走者・投手・失策の守備者として最後に現れた打席
+        last_seen: dict[int, int] = {}
+        for plate_appearance in self.plate_appearances:
+            appeared = {plate_appearance.batter_id, plate_appearance.pitcher_id}
+            appeared.update(advance.runner_id for advance in plate_appearance.advances)
+            appeared.update(error.player_id for error in plate_appearance.errors)
+            for player_id in appeared:
+                last_seen[player_id] = max(last_seen.get(player_id, 0), plate_appearance.sequence)
+
+        for group in slots.values():
+            ordered = sorted(group, key=lambda e: e.slot_sequence)
+            known = [e.entered_sequence for e in ordered if e.entered_sequence]
+            if any(later <= earlier for earlier, later in zip(known, known[1:], strict=False)):
+                raise InvalidGame(
+                    f"{group[0].batting_order}番の途中出場の順序と、出場した打席の順序が食い違っています。"
+                )
+            # 後任が入った後に、前任者が現れる記録は成立しない（交代したのに打席や守備に残っている）
+            for index, former in enumerate(ordered):
+                later_entries = [e.entered_sequence for e in ordered[index + 1 :] if e.entered_sequence]
+                if later_entries and last_seen.get(former.player_id, 0) >= min(later_entries):
+                    raise InvalidGame(
+                        f"{group[0].batting_order}番の交代で、退いたはずの選手（選手id={former.player_id}）が"
+                        "後任の出場後にも打席や守備に現れています。"
+                    )
 
     @staticmethod
     def _ensure_sequences_are_contiguous(ordered: list[PlateAppearance]) -> None:
