@@ -176,6 +176,7 @@ WSL のターミナルからリポジトリのルートで実行します（Wind
 make            # ターゲット一覧を表示（make help と同じ）
 make test       # フルスイート（t=myapp.tests.xxx で個別指定）
 make test-domain # domain 層のみ（DB 不要・最速）
+make coverage   # カバレッジ計測付きでテストを実行（t= で範囲指定可）
 make lint       # ruff check + ruff format --check + mypy（コミット前に必須）
 make format     # ruff format で整形（lint が整形漏れを指摘したとき）
 make frontend-build # React 画面のビルド（E2E テストの前提）
@@ -937,6 +938,23 @@ docker compose exec -e DJANGO_SETTINGS_MODULE= web \
 docker compose exec web python manage.py test myapp.tests.integration
 docker compose exec web python manage.py test myapp.tests.e2e
 ```
+
+### カバレッジ
+
+```bash
+make coverage                            # フルスイート
+make coverage t=myapp.tests.integration  # 範囲を絞る
+```
+
+計測対象は `myapp/` と `config/`（テストコードとマイグレーションは除く）で、設定は
+[pyproject.toml](pyproject.toml) の `[tool.coverage.*]` にあります。結果は通っていない行のある
+ファイルだけを、カバレッジの低い順に未実行の行番号つきで表示します。計測データはコンテナの
+`/tmp` に書くので、作業ツリーには何も残りません。テストが1件でも失敗すると表示まで進まないので、
+worktree で E2E を含めて回すときは先に `make frontend-build WT=<名前>` を実行してください。
+
+データ投入・計測用の管理コマンド（`seed_virtual_*`・`measure_pages`）は現状テストが無いまま、
+**あえて除外せずに数えています**（除外すると「テストが無い」ことが数字から見えなくなるため）。全体の
+数字はこれらに引き下げられているので、アプリ本体の状況はファイル別の表で見てください。
 
 ---
 
