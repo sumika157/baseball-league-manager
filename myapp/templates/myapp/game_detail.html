@@ -42,6 +42,7 @@
               {% endfor %}
               <th class="text-center linescore-total">計</th>
               <th class="text-center">安</th>
+              <th class="text-center">失</th>
             </tr>
           </thead>
           <tbody>
@@ -52,6 +53,7 @@
               {% endfor %}
               <td class="text-center linescore-total">{{ detail.line_score.away_total }}</td>
               <td class="text-center stat-muted">{{ detail.line_score.away_hits }}</td>
+              <td class="text-center stat-muted">{{ detail.line_score.away_errors|default_if_none:'—' }}</td>
             </tr>
             <tr>
               <th>{{ detail.game.home_team_name }}</th>
@@ -60,6 +62,7 @@
               {% endfor %}
               <td class="text-center linescore-total">{{ detail.line_score.home_total }}</td>
               <td class="text-center stat-muted">{{ detail.line_score.home_hits }}</td>
+              <td class="text-center stat-muted">{{ detail.line_score.home_errors|default_if_none:'—' }}</td>
             </tr>
           </tbody>
         </table>
@@ -67,6 +70,44 @@
     </div>
   </div>
 {% endif %}
+
+{% comment %}
+スコアブック（読み取り専用）。打順 × 回のマス目で、編集画面と同じ並び。
+同じ回に同じ打順が2打席立つ（打者一巡）と、1つのマスに縦に並ぶ。
+{% endcomment %}
+{% for grid in detail.scorebook %}
+  <div class="card mb-3">
+    <div class="card-header">{{ grid.team_name }} スコアブック</div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm entry-table align-middle mb-0 scorebook-table">
+          <thead>
+            <tr>
+              <th scope="col" style="width: 3rem;">打順</th>
+              {% for inning in grid.innings %}
+                <th scope="col" class="text-center">{{ inning }}</th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in grid.rows %}
+              <tr>
+                <th scope="row" class="tabular-nums">{{ row.batting_order }}</th>
+                {% for cell in row.cells %}
+                  <td class="text-center">
+                    {% for mark in cell %}
+                      <span class="d-block" title="{{ mark.batter_name }}">{{ mark.result }}</span>
+                    {% endfor %}
+                  </td>
+                {% endfor %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+{% endfor %}
 
 {% comment %}
 チームごとのボックススコア。打順の順に並び、同じ打順の交代選手は
