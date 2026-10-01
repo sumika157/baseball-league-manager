@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..domain.value_objects import FieldingPosition
 
@@ -137,10 +137,41 @@ class GameLineScore:
     home_total: int
     away_hits: int
     home_hits: int
+    # 失策は打席の記録から数える。打席の無い試合は数えられないので None（画面は「—」）
+    away_errors: int | None = None
+    home_errors: int | None = None
 
     @property
     def has_columns(self) -> bool:
         return bool(self.columns)
+
+
+@dataclass(frozen=True)
+class ScorebookMark:
+    """スコアブックのマスに書く1打席。"""
+
+    result: str  # 結果の表記（`PlateAppearanceResult.label`）
+    batter_name: str
+
+
+@dataclass(frozen=True)
+class ScorebookRow:
+    """スコアブックの1行（打順1人ぶん）。cells は回の列と同じ順で、打席が無い回は空。
+
+    同じ打順が同じ回に2打席立つ（打者一巡）と、1つのマスに複数入る。
+    """
+
+    batting_order: int
+    cells: list[list[ScorebookMark]]
+
+
+@dataclass(frozen=True)
+class ScorebookGrid:
+    """1チームぶんのスコアブック（打順 × 回）。読み取り専用の表示用。"""
+
+    team_name: str
+    innings: list[int]
+    rows: list[ScorebookRow]
 
 
 @dataclass(frozen=True)
@@ -168,6 +199,8 @@ class GameDetail:
     line_score: GameLineScore | None = None
     away_box: GameTeamBox | None = None
     home_box: GameTeamBox | None = None
+    # ビジター → ホームの順。打席の記録が無い試合は空
+    scorebook: list[ScorebookGrid] = field(default_factory=list)
 
     @property
     def boxes(self) -> list[GameTeamBox]:

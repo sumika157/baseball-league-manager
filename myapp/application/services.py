@@ -62,6 +62,7 @@ from .dto import (
     YearlyRow,
 )
 from .queries import GameListQuery, TeamListQuery
+from .scorebook_view import build_scorebook_grids
 
 
 def _saved_id(value: int | None) -> int:
@@ -859,6 +860,11 @@ class TeamApplicationService:
             line_score=self._to_line_score(game, batting),
             away_box=self._to_team_box(game.away_team_id, names, batting, pitching, game),
             home_box=self._to_team_box(game.home_team_id, names, batting, pitching, game),
+            scorebook=build_scorebook_grids(
+                game,
+                names,
+                lambda player_id: players[player_id]["name"] if player_id in players else f"選手{player_id}",
+            ),
         )
 
     @staticmethod
@@ -896,6 +902,21 @@ class TeamApplicationService:
             home = str(score.runs_in(inning, home=True)) if inning <= len(score.home) else "X"
             columns.append(InningScoreColumn(inning=inning, away=away, home=home))
 
+        plate_appearances = game.plate_appearances
+        if plate_appearances:
+            # 安打・失策は打席が出典（打撃明細の合計とは照合済みで一致する）。
+            # 失策は守備側のチームに付くので、ホームの失策は表の打席から数える
+            return GameLineScore(
+                columns=columns,
+                away_total=score.away_total,
+                home_total=score.home_total,
+                away_hits=sum(domain_services.hits_by_inning(plate_appearances, home=False).values()),
+                home_hits=sum(domain_services.hits_by_inning(plate_appearances, home=True).values()),
+                away_errors=sum(domain_services.errors_by_inning(plate_appearances, home=False).values()),
+                home_errors=sum(domain_services.errors_by_inning(plate_appearances, home=True).values()),
+            )
+
+        # 古い記録（打席なし）の安打は打撃明細の合計。失策は数えられない
         def hits_of(team_id: int) -> int:
             return sum(row.hits for row in batting if row.team_id == team_id)
 
