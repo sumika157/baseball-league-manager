@@ -1,5 +1,7 @@
 """選手の画面。一覧・個人ページ・編集・検索。"""
 
+import re
+
 from django.contrib.auth.models import User
 from django.urls import reverse
 
@@ -14,10 +16,14 @@ from myapp.infrastructure.repositories import (
 )
 
 from ..helpers import (
+    build_scorebook,
     give_batting,
     give_pitching,
+    lineup_rows,
     login_as_manager,
     play_game,
+    post_game_scorebook,
+    register_lineup,
 )
 from .base import BaseCase
 
@@ -237,6 +243,140 @@ class PlayerDetailViewTest(BaseCase):
 
     def test_missing_player_returns_404(self):
         self.assertEqual(self.client.get(reverse("player_detail", args=[self.team.id, 9999])).status_code, 404)
+
+
+class PlayerDetailDerivedStatsTest(BaseCase):
+    """打席から導く項目（得点・盗塁・三振・失点など）が個人ページの各表に出ること。
+
+    年度別・月別・試合ごとの表は見出しと各行の列を別々のテンプレートに書くため、
+    片方だけ項目を足すと列が食い違う。例外にならず表がずれるだけなので、列数を突き合わせる。
+    """
+
+    BATTING = BattingLine(
+        at_bats=4,
+        singles=1,
+        runs=3,
+        stolen_bases=2,
+        caught_stealing=1,
+        sacrifice_bunts=1,
+        walks=1,
+        intentional_walks=1,
+        strikeouts=4,
+        double_plays=1,
+    )
+
+    def setUp(self):
+        super().setUp()
+        self.batter = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        self.pitcher = self.service.register_player(self.team.id, "佐藤", 18, "投手")
+        play_game(self.team, self.rival, day=1, batting={self.batter.id: self.BATTING})
+        # 別の月・別の年にも出場させ、通算行・複数の月の行が出る形にする
+        play_game(self.team, self.rival, month=5, day=1, batting={self.batter.id: BattingLine(at_bats=3, runs=1)})
+        play_game(self.team, self.rival, year=2027, day=1, batting={self.batter.id: BattingLine(at_bats=2, runs=1)})
+        pitching = PitchingLine(innings=InningsPitched.from_notation("6.0"), runs_allowed=4, earned_runs=3)
+        give_pitching(self.team, self.rival, self.pitcher.id, pitching, day=3)
+        give_pitching(self.team, self.rival, self.pitcher.id, pitching, year=2027, day=3)
+
+    def _url(self, player):
+        return reverse("player_detail", args=[self.team.id, player.id])
+
+    def _tables(self, player) -> list[tuple[int, list[int]]]:
+        """各表の (見出しの列数, 本体の各行の列数) を返す。"""
+        html = self.client.get(self._url(player)).content.decode()
+        tables = []
+        for table in re.findall(r"<table.*?</table>", html, flags=re.DOTALL):
+            head, body = table.split("</thead>")
+            rows = re.findall(r"<tr.*?</tr>", body, flags=re.DOTALL)
+            tables.append((len(re.findall(r"<th[ >]", head)), [len(re.findall(r"<td[ >]", row)) for row in rows]))
+        return tables
+
+    def test_batter_tables_keep_header_and_rows_aligned(self):
+        tables = self._tables(self.batter)
+
+        # 年度別・月別・試合ごとの3表
+        self.assertEqual(len(tables), 3)
+        for header_columns, row_columns in tables:
+            self.assertTrue(row_columns)
+            self.assertEqual(set(row_columns), {header_columns})
+
+    def test_pitcher_tables_keep_header_and_rows_aligned(self):
+        tables = self._tables(self.pitcher)
+
+        self.assertEqual(len(tables), 3)
+        for header_columns, row_columns in tables:
+            self.assertTrue(row_columns)
+            self.assertEqual(set(row_columns), {header_columns})
+
+    def test_batter_headings_are_shown(self):
+        body = self.client.get(self._url(self.batter)).content.decode()
+
+        for heading in ("得点", "盗塁", "盗塁刺", "犠打", "故意四球", "三振", "併殺打"):
+            self.assertIn(f">{heading}</th>", body)
+
+    def test_batter_values_reach_every_row_type(self):
+        profile = self.service.get_player_profile(self.team.id, self.batter.id, month="2026-04")
+        expected = {
+            "runs": 3,
+            "stolen_bases": 2,
+            "caught_stealing": 1,
+            "sacrifice_bunts": 1,
+            "intentional_walks": 1,
+            "strikeouts_batting": 4,
+            "double_plays": 1,
+        }
+
+        game = profile.games[0]
+        month = next(row for row in profile.months if row.key == "2026-04")
+        for name, value in expected.items():
+            self.assertEqual(getattr(game, name), value, f"試合ごと: {name}")
+            self.assertEqual(getattr(month, name), value, f"月別: {name}")
+            # 通算は5月と2027年の試合（得点1ずつ）も含む
+            self.assertEqual(getattr(profile.detail, name), value + 2 if name == "runs" else value, f"通算: {name}")
+        # 年度別（2026年）は5月ぶん（得点1）も含む
+        year = next(row for row in profile.years if row.label == "2026年")
+        self.assertEqual(year.runs, 4)
+        self.assertEqual(year.stolen_bases, 2)
+        self.assertEqual(year.strikeouts_batting, 4)
+
+    def test_pitcher_runs_allowed_reach_every_row_type(self):
+        profile = self.service.get_player_profile(self.team.id, self.pitcher.id)
+
+        self.assertEqual(profile.games[0].runs_allowed, 4)
+        self.assertEqual(profile.months[0].runs_allowed, 4)
+        self.assertEqual(profile.years[0].runs_allowed, 4)
+        self.assertEqual(profile.detail.runs_allowed, 8)
+        self.assertIn(">失点</th>", self.client.get(self._url(self.pitcher)).content.decode())
+
+    def test_strikeouts_counted_from_plate_appearances_are_shown(self):
+        """スコアブックの打席から導いた三振が、個人ページに出ること。"""
+        login_as_manager(self.client, self.team, self.rival)
+        game = play_game(self.team, self.rival, home_score=0, away_score=0, day=9)
+        home = register_lineup(self.service, self.team, prefix="ホーム", first_number=31)
+        away = register_lineup(self.service, self.rival, prefix="ビジター", first_number=41)
+        post_game_scorebook(
+            self.client,
+            game.id,
+            {
+                "year": 2026,
+                "played_on": "2026-04-09",
+                "home_team": self.team.id,
+                "away_team": self.rival.id,
+                "lineup": lineup_rows(self.team, home) + lineup_rows(self.rival, away),
+                "plate_appearances": build_scorebook(
+                    away=[0],
+                    home=[],
+                    away_batters=away,
+                    home_batters=home,
+                    away_pitchers={1: self.pitcher.id},
+                    home_pitchers={1: self.pitcher.id},
+                ),
+            },
+        )
+
+        profile = self.service.get_player_profile(self.rival.id, away[0], month="2026-04")
+
+        self.assertEqual(profile.detail.strikeouts_batting, 1)
+        self.assertEqual(profile.games[0].strikeouts_batting, 1)
 
 
 class PlayerProfileTest(BaseCase):
