@@ -53,6 +53,14 @@ class LeagueNotFound(DomainError):
     """指定されたリーグが存在しない。"""
 
 
+class WorldNotFound(DomainError):
+    """指定された世界が存在しない。"""
+
+
+class InvalidWorld(DomainError):
+    """世界として成立しない内容（名前が空、シードが範囲外など）。"""
+
+
 class InvalidProfile(DomainError):
     """プロフィールの値が不正（現実的でない身長など）。"""
 

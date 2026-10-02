@@ -19,6 +19,7 @@ from django.views.decorators.http import require_GET
 from django.views.generic import CreateView
 
 from ..application.game_recording import GameRecordingService
+from ..application.pennant_world import PennantWorldService, WorldRepositories
 from ..application.services import TeamApplicationService
 from ..domain.exceptions import (
     DomainError,
@@ -27,6 +28,7 @@ from ..domain.exceptions import (
     PlayerNotFound,
     TeamNotFound,
 )
+from ..domain.pennant.world import WorldScope
 from ..domain.value_objects import (
     AdvanceReason,
     Base,
@@ -46,6 +48,7 @@ from ..infrastructure.repositories import (
     DjangoGameRepository,
     DjangoLeagueRepository,
     DjangoTeamRepository,
+    DjangoWorldRepository,
 )
 from .forms import (
     FIELDED_BY_SEPARATOR,
@@ -79,7 +82,7 @@ def _requires_team_permission(request, *team_ids):
     """
     if not request.user.is_authenticated:
         return redirect_to_login(request.get_full_path())
-    if not DjangoTeamPermissionQuery().can_manage_any(request.user, team_ids):
+    if not build_permission_query().can_manage_any(request.user, team_ids):
         raise PermissionDenied("このチームを編集する権限がありません。")
     return None
 
@@ -90,14 +93,18 @@ def build_service() -> TeamApplicationService:
     組み立ては**この1か所だけ**にする（管理画面のテンプレートタグもテストも
     ここを呼ぶ）。呼ぶ側ごとに一部の依存だけを渡すと、使う画面によって
     落ちるサービスができてしまうため。
+
+    **実データの範囲に固定する。引数で範囲を切り替えない**（既定値で切り替える形にすると、
+    渡し忘れが「ペナントの画面に実データが出る」形で現れる）。
     """
+    scope = WorldScope.real()
     return TeamApplicationService(
-        teams=DjangoTeamRepository(),
-        team_list_query=DjangoTeamListQuery(),
-        games=DjangoGameRepository(),
-        leagues=DjangoLeagueRepository(),
-        game_list_query=DjangoGameListQuery(),
-        player_fielding_query=DjangoPlayerFieldingQuery(),
+        teams=DjangoTeamRepository(scope),
+        team_list_query=DjangoTeamListQuery(scope),
+        games=DjangoGameRepository(scope),
+        leagues=DjangoLeagueRepository(scope),
+        game_list_query=DjangoGameListQuery(scope),
+        player_fielding_query=DjangoPlayerFieldingQuery(scope),
     )
 
 
@@ -105,12 +112,42 @@ def build_recording_service() -> GameRecordingService:
     """スコアブックを保存するサービスを組み立てる。
 
     `build_service()` と同じく**組み立てはここだけ**にする。打席の記録は
-    チームの一覧も試合の一覧も要らないので、依存は3つで足りる。
+    チームの一覧も試合の一覧も要らないので、依存は3つで足りる。実データの範囲に固定する。
     """
+    scope = WorldScope.real()
     return GameRecordingService(
-        games=DjangoGameRepository(),
-        teams=DjangoTeamRepository(),
-        leagues=DjangoLeagueRepository(),
+        games=DjangoGameRepository(scope),
+        teams=DjangoTeamRepository(scope),
+        leagues=DjangoLeagueRepository(scope),
+    )
+
+
+def build_permission_query() -> DjangoTeamPermissionQuery:
+    """チームの編集権限の判定を組み立てる。実データの範囲に固定する。"""
+    return DjangoTeamPermissionQuery(WorldScope.real())
+
+
+def build_player_search_query() -> DjangoPlayerSearchQuery:
+    """選手検索を組み立てる。実データの範囲に固定する。"""
+    return DjangoPlayerSearchQuery(WorldScope.real())
+
+
+def _repositories_for(scope: WorldScope) -> WorldRepositories:
+    """世界の範囲でリポジトリを組み立てる。世界の作成が、写し先の世界に書くのに使う。"""
+    return WorldRepositories(leagues=DjangoLeagueRepository(scope), teams=DjangoTeamRepository(scope))
+
+
+def build_pennant_world_service() -> PennantWorldService:
+    """世界の作成・削除のサービスを組み立てる。
+
+    分岐元は**実データの範囲**で読み、写し先は世界の範囲のリポジトリ（生成器で受け取る）に書く。
+    """
+    scope = WorldScope.real()
+    return PennantWorldService(
+        real_leagues=DjangoLeagueRepository(scope),
+        real_teams=DjangoTeamRepository(scope),
+        worlds=DjangoWorldRepository(),
+        repositories_for=_repositories_for,
     )
 
 
@@ -226,7 +263,7 @@ def player_list(request, team_id):
             # 通算値では見えない調子の波を、月ごとに区切って出す
             "months": service.list_team_monthly_splits(team_id),
             # このチームの担当者（または管理ユーザー）だけが登録・編集の導線を見える
-            "can_edit_team": DjangoTeamPermissionQuery().can_manage(request.user, team_id),
+            "can_edit_team": build_permission_query().can_manage(request.user, team_id),
         },
     )
 
@@ -234,7 +271,7 @@ def player_list(request, team_id):
 def player_search(request):
     """選手を名前で探す。チームが増えると所属からはたどり着きにくいため。"""
     keyword = (request.GET.get("q") or "").strip()
-    results = DjangoPlayerSearchQuery().search(keyword) if keyword else []
+    results = build_player_search_query().search(keyword) if keyword else []
 
     return render(
         request,
@@ -353,7 +390,7 @@ def game_list(request):
             "selected_team_name": next((t.name for t in teams if t.id == team_id), ""),
             # 担当チームが1つも無ければ、押しても弾かれるだけの登録導線は見せない。
             # 判定はリーグの絞り込みに関係なく、全チームで行う
-            "can_create_game": DjangoTeamPermissionQuery().can_manage_any(request.user, [t.id for t in all_teams]),
+            "can_create_game": build_permission_query().can_manage_any(request.user, [t.id for t in all_teams]),
         },
     )
 
@@ -368,7 +405,7 @@ def game_create(request):
     if request.method == "POST" and form.is_valid():
         home_team_id = form.cleaned_data["home_team"]
         away_team_id = form.cleaned_data["away_team"]
-        if not DjangoTeamPermissionQuery().can_manage_any(request.user, (home_team_id, away_team_id)):
+        if not build_permission_query().can_manage_any(request.user, (home_team_id, away_team_id)):
             messages.error(request, "どちらのチームも担当していないため、この試合は登録できません。")
         else:
             try:
@@ -408,7 +445,7 @@ def game_edit(request, game_id):
         raise Http404("試合が見つかりません。") from None
 
     game, rosters = data["game"], data["rosters"]
-    if not DjangoTeamPermissionQuery().can_manage_any(request.user, (game.home_team_id, game.away_team_id)):
+    if not build_permission_query().can_manage_any(request.user, (game.home_team_id, game.away_team_id)):
         raise PermissionDenied("このチームを編集する権限がありません。")
 
     return render(
@@ -566,7 +603,7 @@ def game_detail(request, game_id):
     except GameNotFound:
         raise Http404("試合が見つかりません。") from None
 
-    can_edit = DjangoTeamPermissionQuery().can_manage_any(
+    can_edit = build_permission_query().can_manage_any(
         request.user, (detail.game.home_team_id, detail.game.away_team_id)
     )
     return render(request, "myapp/game_detail.html", {"detail": detail, "can_edit": can_edit})
@@ -589,7 +626,7 @@ def player_detail(request, team_id, player_id):
         {
             "profile": profile,
             "player": profile.detail,
-            "can_edit_team": DjangoTeamPermissionQuery().can_manage(request.user, team_id),
+            "can_edit_team": build_permission_query().can_manage(request.user, team_id),
         },
     )
 
@@ -604,7 +641,7 @@ def player_edit(request, team_id, player_id):
     except (TeamNotFound, PlayerNotFound):
         raise Http404("選手が見つかりません。") from None
 
-    if not DjangoTeamPermissionQuery().can_manage(request.user, team_id):
+    if not build_permission_query().can_manage(request.user, team_id):
         raise PermissionDenied("このチームを編集する権限がありません。")
 
     if request.method == "POST":

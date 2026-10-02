@@ -15,7 +15,6 @@ from django.urls import reverse
 from django.views.decorators.http import require_POST
 
 from ..domain.exceptions import DomainError, GameNotFound
-from ..infrastructure.queries import DjangoTeamPermissionQuery
 from .forms import (
     FieldingErrorForm,
     LineupSlotForm,
@@ -23,7 +22,7 @@ from .forms import (
     RunnerAdvanceForm,
     ScorebookGameForm,
 )
-from .views import _first_error, build_recording_service, build_service
+from .views import _first_error, build_permission_query, build_recording_service, build_service
 
 _MISSING = object()
 
@@ -123,7 +122,7 @@ def game_scorebook(request, game_id):
     except GameNotFound:
         return JsonResponse({"ok": False, "error": "試合が見つかりません。"}, status=404)
 
-    if not DjangoTeamPermissionQuery().can_manage_any(request.user, (game.home_team_id, game.away_team_id)):
+    if not build_permission_query().can_manage_any(request.user, (game.home_team_id, game.away_team_id)):
         return JsonResponse({"ok": False, "error": "このチームを編集する権限がありません。"}, status=403)
 
     lineup_data = _as_row_list(body, "lineup")

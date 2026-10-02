@@ -16,8 +16,10 @@ from django.db.models import BooleanField, Case, Count, Exists, OuterRef, Q, Que
 
 from ..application.dto import FieldingRow, GameRow, PlayerFielding, PlayerSearchRow, TeamSummary
 from ..domain.entities import Game, winning_team_id
+from ..domain.pennant.world import WorldScope
 from ..domain.value_objects import FieldingLine, Season
 from . import orm_models
+from .scoping import games_in, players_in, teams_in, world_condition
 
 
 def recorded_games_filter() -> Q:
@@ -53,8 +55,14 @@ class DjangoPlayerFieldingQuery:
     # 項目は値オブジェクトから引く。ここに並べると、項目を足したときに集計だけが古くなる
     _SUMS = {f.name: Sum(f.name) for f in fields(FieldingLine)}
 
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
     def for_player(self, player_id: int, team_id: int) -> PlayerFielding | None:
-        rows = orm_models.GameFieldingLine.objects.filter(player_id=player_id)
+        # 選手ごとに行が別なので範囲外の行は混ざらないが、他のクエリと同じく範囲で絞る
+        rows = orm_models.GameFieldingLine.objects.filter(
+            world_condition("game__home_team__league", self._scope), player_id=player_id
+        )
         total = rows.aggregate(games=Count("id"), **self._SUMS)
         if not total["games"]:
             return None
@@ -92,13 +100,19 @@ class DjangoPlayerSearchQuery:
 
     LIMIT = 50
 
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
     def search(self, keyword: str) -> list[PlayerSearchRow]:
         keyword = (keyword or "").strip()
         if not keyword:
             return []
 
+        # 世界ごとに選手の行が別で、複製した選手は元の選手と同じ名前を持つ。
+        # 名前だけで引くと2人ずつ出るので、範囲の選手に絞る
         rows = (
-            orm_models.Player.objects.filter(name__icontains=keyword)
+            players_in(self._scope)
+            .filter(name__icontains=keyword)
             .prefetch_related("stints__team__league")
             .order_by("name")[: self.LIMIT]
         )
@@ -130,7 +144,14 @@ class DjangoTeamPermissionQuery:
     （is_staff）以外は自分が担当するチームが関わる範囲だけ編集できるようにする。
     「担当者かどうか」は Team.managers という事実だけを見て決まるので、
     ドメインの業務ルールではなく、この参照専用クエリに置く。
+
+    **範囲（`WorldScope`）の外のチームは、管理ユーザーでも編集できない。** ペナントの球団は
+    実データの側から書けず、ペナントの書き込みは世界のオーナーで判定する（その判定は
+    ペナントの画面を作る段階で足す。それまでペナントの範囲は常に False）。
     """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
 
     def can_manage(self, user: User | AnonymousUser, team_id: int) -> bool:
         """指定チームを編集できるか。"""
@@ -143,9 +164,13 @@ class DjangoTeamPermissionQuery:
         """
         if not user.is_authenticated:
             return False
+        if self._scope.is_pennant:
+            return False
+
+        in_scope = teams_in(self._scope).filter(id__in=list(team_ids))
         if user.is_staff or user.is_superuser:
-            return True
-        return orm_models.Team.objects.filter(id__in=team_ids, managers=user).exists()
+            return in_scope.exists()
+        return in_scope.filter(managers=user).exists()
 
 
 class DjangoGameListQuery:
@@ -154,7 +179,12 @@ class DjangoGameListQuery:
     一覧に要るのは日付・チーム名・スコアだけなので、集約（Game）を組み立てない。
     集約経由だと1試合ごとに打撃・投球・イニングスコアの明細まで読むため、
     件数が増えると一覧が開かなくなる。
+
+    範囲（`WorldScope`）を必須で受け取り、読み出しはすべて SQL でその世界の試合に絞る。
     """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
 
     def _rows(
         self,
@@ -165,7 +195,7 @@ class DjangoGameListQuery:
         league_id: int | None = None,
     ) -> QuerySet[orm_models.Game]:
         """絞り込みは SQL 側で行う。取得後に Python で捨てると件数ぶん無駄になる。"""
-        rows = orm_models.Game.objects.select_related("home_team", "away_team")
+        rows = games_in(self._scope).select_related("home_team", "away_team")
         if year is not None:
             rows = rows.filter(year=year)
         if league_id is not None:
@@ -224,7 +254,7 @@ class DjangoGameListQuery:
         `Game.is_recorded` は自力で判定できない。記録済みかどうかは SQL で調べて
         `recorded_hint` に持たせる。順位・勝敗の集計はドメインサービスが未記録を数えない。
         """
-        rows = _with_recorded(orm_models.Game.objects.all())
+        rows = _with_recorded(games_in(self._scope))
         if year is not None:
             rows = rows.filter(year=year)
         return [
@@ -243,7 +273,7 @@ class DjangoGameListQuery:
 
     def list_seasons(self) -> list[int]:
         """試合のある年を新しい順に。"""
-        return sorted(orm_models.Game.objects.values_list("year", flat=True).distinct(), reverse=True)
+        return sorted(games_in(self._scope).values_list("year", flat=True).distinct(), reverse=True)
 
     def count_by_team(self, *, year: int | None = None) -> dict[int, int]:
         """チームid → 試合数。規定打席・規定投球回の基準になる。
@@ -252,7 +282,7 @@ class DjangoGameListQuery:
         足す（1試合は両チームの1試合として数える）。未記録の試合は数えない
         （規定打席・規定投球回は、実際に行われた試合の数で決まる）。
         """
-        rows = orm_models.Game.objects.filter(recorded_games_filter())
+        rows = games_in(self._scope).filter(recorded_games_filter())
         if year is not None:
             rows = rows.filter(year=year)
 
@@ -283,9 +313,13 @@ class DjangoGameListQuery:
 class DjangoTeamListQuery:
     """TeamListQuery の Django ORM 実装。チーム一覧に必要な値だけを取得する。"""
 
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
     def list_summaries(self) -> list[TeamSummary]:
         rows = (
-            orm_models.Team.objects.select_related("league", "home_stadium")
+            teams_in(self._scope)
+            .select_related("league", "home_stadium")
             # 在籍中＝退団年が空の在籍
             .annotate(active_player_count=Count("stints", filter=Q(stints__to_year__isnull=True)))
             # 管理画面で手動設定した表示順を既定にする

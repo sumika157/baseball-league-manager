@@ -950,3 +950,25 @@ class LineupSlot:
     entered_is_bottom: bool = False
     # その半回で何人目の打者から（1始まり）。守備固めが半回の途中で入る場合に指す
     entered_batter: int = 1
+
+
+@dataclass(frozen=True)
+class PennantWorldRow:
+    """ペナントの世界ひとつ。一覧や詳細に出す、作ったときに決まった事実。"""
+
+    id: int
+    name: str
+    seed: int
+    start_year: int
+    owner_id: int | None
+    managed_team_id: int | None
+
+
+@dataclass(frozen=True)
+class PennantWorldCreated:
+    """世界を作った結果。分岐で写した件数を添える。"""
+
+    world: PennantWorldRow
+    league_count: int
+    team_count: int
+    player_count: int

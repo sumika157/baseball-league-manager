@@ -36,8 +36,56 @@ BASE_CHOICES = [(base.value, base.label) for base in Base]
 FIELDED_BY_SEPARATOR = "-"
 
 
+class PennantWorld(models.Model):
+    """ペナントモードの世界（セーブデータ）。ペナント専用で、実データには現れない。
+
+    持つのは作ったときに決まる事実だけ。「今日」や「シーズン中か」は日程と試合から導く。
+    リーグがこの世界に属する（`League.world`）ことで、球団・選手・試合も世界に属する。
+    """
+
+    name = models.CharField(max_length=100, verbose_name="世界の名前")
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="pennant_worlds",
+        verbose_name="オーナー",
+        help_text="この世界を遊ぶユーザー。ペナントの書き込みはこの人だけに許します。",
+    )
+    seed = models.PositiveBigIntegerField(verbose_name="乱数のシード")
+    managed_team = models.ForeignKey(
+        "Team",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="managed_in_worlds",
+        verbose_name="受け持つ球団",
+    )
+    start_year = models.IntegerField(verbose_name="開幕年")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="作成日時")
+
+    class Meta:
+        verbose_name = "ペナントの世界"
+        verbose_name_plural = "ペナントの世界"
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self) -> str:
+        return self.name
+
+
 class League(models.Model):
-    name = models.CharField(max_length=50, unique=True, verbose_name="リーグ名")
+    name = models.CharField(max_length=50, verbose_name="リーグ名")
+    # 空なら実データ。実データとペナントの世界は、このリーグの帰属で分ける
+    world = models.ForeignKey(
+        PennantWorld,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="leagues",
+        verbose_name="世界",
+        help_text="空なら実データのリーグです。",
+    )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="登録日時")
     # 管理画面でドラッグして並べ替えた結果がここに入る
     display_order = models.PositiveIntegerField(default=0, verbose_name="表示順")
@@ -62,6 +110,14 @@ class League(models.Model):
         verbose_name_plural = "リーグ"
         # 手動の並び順を既定とし、未設定どうしは名前で安定させる
         ordering = ["display_order", "name"]
+        constraints = [
+            # リーグ名の一意性は世界の中で保つ。world が NULL のどうしは一意制約で
+            # 衝突しないため、条件を付けないと実データ側の一意性が消える
+            models.UniqueConstraint(
+                fields=["name"], condition=models.Q(world__isnull=True), name="unique_real_league_name"
+            ),
+            models.UniqueConstraint(fields=["world", "name"], name="unique_world_league_name"),
+        ]
 
     def __str__(self) -> str:
         return self.name

@@ -24,6 +24,7 @@ from .domain.entities import Captaincy as DomainCaptaincy
 from .domain.entities import Stint as DomainStint
 from .domain.entities import winning_team_id
 from .domain.exceptions import DomainError
+from .domain.pennant.world import WorldScope
 from .domain.value_objects import JerseyNumber, StadiumProfile, ensure_quota_not_exceeded
 from .domain.value_objects import Profile as DomainProfile
 from .infrastructure import orm_models
@@ -41,6 +42,7 @@ from .infrastructure.orm_models import (
     Team,
 )
 from .infrastructure.repositories import DjangoLeagueRepository, DjangoTeamRepository
+from .infrastructure.scoping import games_in, leagues_in, players_in, stints_in, teams_in
 
 # ヘッダーの文言
 admin.site.site_header = "Baseball Manager 管理"
@@ -87,6 +89,50 @@ def _ordered_app_list(self, request, app_label=None):
 _original_get_app_list = admin.site.get_app_list
 # AdminSite を継承した独自サイトに置き換えるほどではないため、メソッドを差し替える
 admin.site.get_app_list = types.MethodType(_ordered_app_list, admin.site)  # type: ignore[method-assign]
+
+# 管理画面で扱うのは**実データだけ**。ペナントの世界の行は、一覧にも・id を指定した編集画面にも・
+# 選択肢にも・フィルタにも出さない（手で直すと、世界の整合が実データの側から壊れるため）。
+# ペナント専用のモデル（PennantWorld）は管理画面に登録しない。
+_REAL = WorldScope.real()
+_REAL_QUERYSETS = {
+    orm_models.League: leagues_in,
+    orm_models.Team: teams_in,
+    orm_models.Player: players_in,
+    orm_models.PlayerStint: stints_in,
+    orm_models.Game: games_in,
+}
+
+
+def _real_queryset(model):
+    """そのモデルの、実データの行だけの QuerySet。世界を持たないモデル（球場など）は None。"""
+    scoped = _REAL_QUERYSETS.get(model)
+    return scoped(_REAL) if scoped is not None else None
+
+
+class RealDataOnlyMixin:
+    """一覧・編集画面・選択肢を、実データの行だけに絞る ModelAdmin / Inline の部品。"""
+
+    def get_queryset(self, request):
+        queryset = super().get_queryset(request)
+        scoped = _real_queryset(self.model)
+        return queryset if scoped is None else queryset.filter(pk__in=scoped.values("pk"))
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        # 選択肢（プルダウン・検索）にペナントの行を出さない
+        scoped = _real_queryset(db_field.remote_field.model)
+        if scoped is not None and "queryset" not in kwargs:
+            kwargs["queryset"] = scoped
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
+
+class RealDataRelatedFieldListFilter(admin.RelatedFieldListFilter):
+    """右側のフィルタの選択肢を、実データの行だけにする。"""
+
+    def field_choices(self, field, request, model_admin):
+        scoped = _real_queryset(field.remote_field.model)
+        limit = Q(pk__in=scoped.values("pk")) if scoped is not None else None
+        ordering = self.field_admin_ordering(field, request, model_admin)
+        return field.get_choices(include_blank=False, ordering=ordering, limit_choices_to=limit)
 
 
 class GroupedChangeList(ChangeList):
@@ -192,7 +238,7 @@ class TeamInlineForm(forms.ModelForm):
         widgets = {"display_order": forms.HiddenInput()}
 
 
-class TeamInline(admin.TabularInline):
+class TeamInline(RealDataOnlyMixin, admin.TabularInline):
     """リーグに所属するチーム。行をドラッグして表示順を並べ替えられる。"""
 
     model = Team
@@ -204,7 +250,7 @@ class TeamInline(admin.TabularInline):
 
 
 @admin.register(League)
-class LeagueAdmin(ManualOrderAdminMixin, admin.ModelAdmin):
+class LeagueAdmin(RealDataOnlyMixin, ManualOrderAdminMixin, admin.ModelAdmin):
     # display_order は行をドラッグすると書き換わる。数値そのものに意味は無いが、
     # JavaScript が動かない環境でも直接入力できるよう残してある
     list_display = ("name", "display_order", "teams_accordion", "created_at")
@@ -270,13 +316,13 @@ class LeagueAdmin(ManualOrderAdminMixin, admin.ModelAdmin):
 
 
 @admin.register(Team)
-class TeamAdmin(ManualOrderAdminMixin, admin.ModelAdmin):
+class TeamAdmin(RealDataOnlyMixin, ManualOrderAdminMixin, admin.ModelAdmin):
     # display_order は行をドラッグすると書き換わる。リーグ編集画面からだけでなく
     # この一覧でも並べ替えられるようにしてある
     list_display = ("name", "display_order", "home_stadium", "active_player_count", "game_count")
     list_display_links = ("name",)
     list_editable = ("display_order",)
-    list_filter = ("league",)
+    list_filter = (("league", RealDataRelatedFieldListFilter),)
     search_fields = ("name", "home_stadium__name")
     autocomplete_fields = ("home_stadium",)
     # 担当者はここで割り当てる。左右2ペインの選択肢の方が M2M の既定より選びやすい
@@ -393,9 +439,9 @@ class StadiumForm(DomainCheckedForm):
     """
 
     home_teams = forms.ModelMultipleChoiceField(
-        queryset=Team.objects.select_related("league").order_by(
-            "league__display_order", "league__name", "display_order", "name"
-        ),
+        queryset=teams_in(_REAL)
+        .select_related("league")
+        .order_by("league__display_order", "league__name", "display_order", "name"),
         required=False,
         label="本拠地とするチーム",
         help_text="ここで選ぶと、そのチームの本拠地がこの球場になります。"
@@ -410,7 +456,7 @@ class StadiumForm(DomainCheckedForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if self.instance.pk:
-            self.fields["home_teams"].initial = self.instance.home_teams.all()
+            self.fields["home_teams"].initial = teams_in(_REAL).filter(home_stadium=self.instance)
 
     def build_value_object(self, cleaned):
         return StadiumProfile(
@@ -423,7 +469,7 @@ class StadiumForm(DomainCheckedForm):
 
 
 @admin.register(Stadium)
-class StadiumAdmin(admin.ModelAdmin):
+class StadiumAdmin(RealDataOnlyMixin, admin.ModelAdmin):
     form = StadiumForm
     list_display = ("name", "city", "capacity", "surface", "roof", "opened_year", "home_team_names")
     search_fields = ("name", "city")
@@ -459,14 +505,16 @@ class StadiumAdmin(admin.ModelAdmin):
         行ごとに引くと N+1 になるため、どちらも副問い合わせでまとめる。
         本拠地が複数あるときは、チームの並びで先頭に来るものを代表とする。
         """
-        home_teams = orm_models.Team.objects.filter(home_stadium=OuterRef("pk")).order_by(
-            "league__display_order", "league__name", "display_order", "name"
+        home_teams = (
+            teams_in(_REAL)
+            .filter(home_stadium=OuterRef("pk"))
+            .order_by("league__display_order", "league__name", "display_order", "name")
         )
 
         return (
             super()
             .get_queryset(request)
-            .prefetch_related("home_teams")
+            .prefetch_related(Prefetch("home_teams", queryset=teams_in(_REAL)))
             .annotate(
                 home_league_order=Subquery(home_teams.values("league__display_order")[:1]),
                 home_league_name=Subquery(home_teams.values("league__name")[:1]),
@@ -493,10 +541,11 @@ class StadiumAdmin(admin.ModelAdmin):
         if selected is None:
             return
 
-        Team.objects.filter(home_stadium=stadium).exclude(pk__in=[team.pk for team in selected]).update(
+        # ペナントの球団の本拠地は、実データの球場の編集では変えない
+        teams_in(_REAL).filter(home_stadium=stadium).exclude(pk__in=[team.pk for team in selected]).update(
             home_stadium=None
         )
-        Team.objects.filter(pk__in=[team.pk for team in selected]).update(home_stadium=stadium)
+        teams_in(_REAL).filter(pk__in=[team.pk for team in selected]).update(home_stadium=stadium)
 
 
 class PlayerStintForm(forms.ModelForm):
@@ -580,8 +629,8 @@ class PlayerStintForm(forms.ModelForm):
         if already_here.exists():
             return  # 既にこのチームに在籍中（背番号の変更など）なら人数は増えない
 
-        domain_team = DjangoTeamRepository().find_by_id(team.id)
-        league = DjangoLeagueRepository().find_by_id(team.league_id)
+        domain_team = DjangoTeamRepository(_REAL).find_by_id(team.id)
+        league = DjangoLeagueRepository(_REAL).find_by_id(team.league_id)
         try:
             ensure_quota_not_exceeded(
                 domain_team.foreign_player_count + 1,
@@ -656,7 +705,7 @@ class PlayerStintFormSet(forms.BaseInlineFormSet):
             checked.append(current)
 
 
-class PlayerStintInline(admin.TabularInline):
+class PlayerStintInline(RealDataOnlyMixin, admin.TabularInline):
     """在籍。所属と背番号はここが出典で、移籍すると行が増える。"""
 
     model = PlayerStint
@@ -740,7 +789,7 @@ class CaptaincyFormSet(forms.BaseInlineFormSet):
             checked.append(current)
 
 
-class CaptaincyInline(admin.TabularInline):
+class CaptaincyInline(RealDataOnlyMixin, admin.TabularInline):
     """主将在任歴。在籍とは別軸の期間として管理する。"""
 
     model = Captaincy
@@ -785,18 +834,22 @@ class PlayerForm(DomainCheckedForm):
         if stint is None:
             return  # まだどこにも在籍していない選手は検査不要
 
-        team = DjangoTeamRepository().find_by_id(stint.team_id)
-        league = DjangoLeagueRepository().find_by_id(stint.team.league_id)
+        team = DjangoTeamRepository(_REAL).find_by_id(stint.team_id)
+        league = DjangoLeagueRepository(_REAL).find_by_id(stint.team.league_id)
         player = team.find_player(self.instance.id)
         player.profile = replace(player.profile, is_foreign_player=True)
         team.ensure_foreign_player_quota(league.foreign_player_roster_limit)
 
 
 @admin.register(Player)
-class PlayerAdmin(admin.ModelAdmin):
+class PlayerAdmin(RealDataOnlyMixin, admin.ModelAdmin):
     form = PlayerForm
     list_display = ("name", "position", "current_team", "current_number", "appearances")
-    list_filter = ("position", "stints__team__league", "stints__team")
+    list_filter = (
+        "position",
+        ("stints__team__league", RealDataRelatedFieldListFilter),
+        ("stints__team", RealDataRelatedFieldListFilter),
+    )
     search_fields = ("name", "name_kana", "back_name")
     ordering = ("name",)
     inlines = [PlayerStintInline, CaptaincyInline]
@@ -862,14 +915,14 @@ class PlayerAdmin(admin.ModelAdmin):
 
 
 @admin.register(PlayerStint)
-class PlayerStintAdmin(GroupedAdminMixin, admin.ModelAdmin):
+class PlayerStintAdmin(RealDataOnlyMixin, GroupedAdminMixin, admin.ModelAdmin):
     """在籍そのものの一覧。チームごとの名簿として使える。"""
 
     group_ordering = ("team__league__display_order", "team__league__name", "team__name")
 
     form = PlayerStintForm
     list_display = ("number", "player", "from_year", "to_year")
-    list_filter = ("team__league", "team")
+    list_filter = (("team__league", RealDataRelatedFieldListFilter), ("team", RealDataRelatedFieldListFilter))
     search_fields = ("player__name",)
     ordering = ("team__league__name", "team__name", "number")
     list_select_related = ("player", "team", "team__league")
@@ -925,7 +978,7 @@ class GameFieldingLineInline(DerivedLinesInline):
 
 
 @admin.register(Game)
-class GameAdmin(admin.ModelAdmin):
+class GameAdmin(RealDataOnlyMixin, admin.ModelAdmin):
     """試合。チームの勝敗も選手の通算成績も、すべてここから集計される。
 
     管理画面で直せるのは試合日・シーズンなどの基本情報だけ。得点・イニングスコア・
@@ -933,7 +986,7 @@ class GameAdmin(admin.ModelAdmin):
     """
 
     list_display = ("played_on", "year", "matchup", "score", "result")
-    list_filter = ("year", "home_team__league")
+    list_filter = ("year", ("home_team__league", RealDataRelatedFieldListFilter))
     date_hierarchy = "played_on"
     ordering = ("-played_on",)
     list_select_related = ("home_team", "away_team")

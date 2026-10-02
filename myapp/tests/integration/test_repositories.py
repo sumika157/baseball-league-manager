@@ -4,6 +4,7 @@ from myapp.domain.exceptions import (
     DuplicateJerseyNumber,
     InvalidGame,
 )
+from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import (
     BattingLine,
     InningsPitched,
@@ -30,7 +31,7 @@ class RepositoryRoundTripTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.repo = DjangoTeamRepository()
+        self.repo = DjangoTeamRepository(WorldScope.real())
 
     def test_save_and_reload_a_player(self):
         team = self.repo.find_by_id(self.team.id)
@@ -94,7 +95,7 @@ class GameRepositoryTest(BaseCase):
             batting={player.id: BattingLine(at_bats=4, singles=2, runs_batted_in=1)},
         )
 
-        reloaded = DjangoGameRepository().find_by_id(saved.id)
+        reloaded = DjangoGameRepository(WorldScope.real()).find_by_id(saved.id)
 
         self.assertEqual(reloaded.home_score, 5)
         self.assertEqual(reloaded.result_for(self.team.id), "win")
@@ -109,15 +110,15 @@ class GameRepositoryTest(BaseCase):
         play_game(self.team, self.rival, year=2025, day=1)
         play_game(self.team, self.rival, year=2026, day=1)
 
-        self.assertEqual(len(DjangoGameRepository().find_all(2026)), 1)
-        self.assertEqual(len(DjangoGameRepository().find_all()), 2)
+        self.assertEqual(len(DjangoGameRepository(WorldScope.real()).find_all(2026)), 1)
+        self.assertEqual(len(DjangoGameRepository(WorldScope.real()).find_all()), 2)
 
     def test_recording_the_same_player_twice_overwrites(self):
         player = self.service.register_player(self.team.id, "山田", 10, "内野手")
         game = play_game(self.team, self.rival, batting={player.id: BattingLine(at_bats=4, singles=1)})
         game.record_batting(player.id, BattingLine(at_bats=4, home_runs=2), team_id=game.home_team_id)
-        DjangoGameRepository().save(game)
+        DjangoGameRepository(WorldScope.real()).save(game)
 
         self.assertEqual(orm_models.GameBattingLine.objects.filter(game_id=game.id).count(), 1)
-        reloaded = DjangoGameRepository().find_by_id(game.id)
+        reloaded = DjangoGameRepository(WorldScope.real()).find_by_id(game.id)
         self.assertEqual(reloaded.batting[0].line.home_runs, 2)
