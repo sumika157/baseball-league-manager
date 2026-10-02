@@ -7,15 +7,15 @@
 （`BattingLine` など）が `PlateAppearance` を知らずに済むようにするため
 （`entities` が `value_objects` を import する向きを保つ）。
 
-勝敗・セーブ・ホールドはここでは決めない。イニングスコアと継投から決まる別の
-関心事で、`decisions` が担う。
+勝敗・セーブ・ホールドは導出の関数群ではなく、イニングスコアと継投から決まる別の
+関心事で、`decisions` が担う。それらを束ねて1試合を組み立てるのが `assemble_game`。
 """
 
 from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ..entities import Game, GameBatting, PlateAppearance
 from ..exceptions import InvalidGame, InvalidPlateAppearance
@@ -25,10 +25,13 @@ from ..value_objects import (
     BattingLine,
     FieldingLine,
     FieldingPosition,
+    GameHeader,
     InningsPitched,
+    LineupEntry,
     PitchingLine,
     PlateAppearanceResult,
 )
+from .decisions import pitching_decisions
 
 
 def _in_order(plate_appearances: Iterable[PlateAppearance]) -> list[PlateAppearance]:
@@ -516,3 +519,127 @@ def _ensure_fielding_matches_plate_appearances(game: Game) -> None:
     absent = set(counted) - {fielder.player_id for fielder in game.fielding}
     if absent:
         raise InvalidPlateAppearance(f"守備に就いた選手の守備成績がありません（選手id={sorted(absent)}）。")
+
+
+# --- 試合の組み立て ---------------------------------------------------------
+
+
+def team_of_players(
+    header: GameHeader, lineup: Iterable[LineupEntry], plate_appearances: Iterable[PlateAppearance]
+) -> dict[int, int]:
+    """選手 id → チーム id。
+
+    **スコアブック自身が答えを持っている** — 表の攻撃で打っているのはビジター、
+    投げているのはホーム。選手の索引を引き直す必要がない
+    （引くと全チームのロスターと通算成績を読むことになる）。
+    ラインアップの行はチームを持つので、打席に立たなかった選手もここで分かる。
+    """
+    team_of = {entry.player_id: entry.team_id for entry in lineup}
+    for plate_appearance in plate_appearances:
+        batting_team = header.home_team_id if plate_appearance.is_bottom else header.away_team_id
+        fielding_team = header.away_team_id if plate_appearance.is_bottom else header.home_team_id
+        team_of.setdefault(plate_appearance.batter_id, batting_team)
+        team_of[plate_appearance.pitcher_id] = fielding_team
+    return team_of
+
+
+def _record_pitching_from_plate_appearances(game: Game) -> None:
+    """投球成績を打席から数えて載せる。登板順と登板した回も打席から導く。
+
+    誰がいつ投げ始めたかは記録に書いてあるので、入力させない。**登板順は
+    チームごとに1から振る**（両チームの投手をまとめて数えると、相手の先発が
+    2番手になってしまう）。
+    """
+    first_seen: dict[int, PlateAppearance] = {}
+    for entry in game.plate_appearances_in_order():
+        first_seen.setdefault(entry.pitcher_id, entry)
+
+    by_team: dict[int, list[int]] = {}
+    for pitcher_id, entry in first_seen.items():
+        # 表の攻撃で投げているのはホーム、裏はビジター
+        team_id = game.away_team_id if entry.is_bottom else game.home_team_id
+        by_team.setdefault(team_id, []).append(pitcher_id)
+
+    for pitchers in by_team.values():
+        for order, pitcher_id in enumerate(pitchers, start=1):
+            game.record_pitching(
+                pitcher_id,
+                pitching_line_for(game.plate_appearances, pitcher_id),
+                appearance_order=order,
+                entered_inning=first_seen[pitcher_id].inning,
+            )
+
+
+def _apply_pitching_decisions(game: Game, team_of: dict[int, int]) -> None:
+    """勝敗・セーブ・ホールドをドメインの規則で決め、記録に反映する。
+
+    規則から一意に決まるものを手入力させると、記録どうしが食い違う。
+    """
+    if game.line_score.is_empty:
+        return
+
+    decisions = pitching_decisions(game, team_of)
+    for outing in game.pitching:
+        wins = decisions.wins_for(outing.player_id)
+        outing.line = replace(
+            outing.line,
+            wins=wins,
+            losses=decisions.losses_for(outing.player_id),
+            saves=decisions.saves_for(outing.player_id),
+            holds=decisions.holds_for(outing.player_id),
+            starts=1 if outing.appearance_order == 1 else 0,
+            relief_wins=wins if outing.appearance_order > 1 else 0,
+        )
+
+
+def assemble_game(
+    header: GameHeader,
+    lineup: Iterable[LineupEntry],
+    plate_appearances: Iterable[PlateAppearance],
+) -> Game:
+    """打席の記録とラインアップから、成績の揃った1試合を組み立てる。
+
+    手入力として受け取るのは、見出し・ラインアップ・打席だけ。残りはすべて打席から導く。
+
+    1. 得点とイニングスコア（`derived_line_score`）。スコアブックとして成立しているかも検算する
+    2. ラインアップの枠ごとに打撃成績（`batting_line_for`）。打席が回らなかった枠も0の行で残す
+    3. 初登板の順に投球成績（`pitching_line_for`）と登板順・登板した回
+    4. 守備成績（`record_derived_fielding`）。守備位置を選手に引くのにラインアップが要るので、3の後
+    5. 勝敗・セーブ・ホールド（`pitching_decisions`）
+
+    スコアブックの保存・仮想データの投入が、同じ関数を通る。勝敗・セーブ・ホールドが
+    経路によって食い違わないようにするため。**保存・永続化はしない**（組み立てるだけ）。
+    外国人選手の出場枠のように、他の集約（リーグ・チーム）を読む検査も呼ぶ側の仕事。
+    """
+    entries = list(lineup)
+    pas = list(plate_appearances)
+
+    game = Game(
+        id=header.id,
+        season=header.season,
+        played_on=header.played_on,
+        home_team_id=header.home_team_id,
+        away_team_id=header.away_team_id,
+        plate_appearances=pas,
+    )
+    # 得点とイニングスコアは打席から導く。手入力させない
+    game.line_score = game.derived_line_score()
+    game.home_score = game.line_score.home_total
+    game.away_score = game.line_score.away_total
+    # スコアブックとして成立しているか（打順の巡回・塁の再生・得点の一致）
+    game.ensure_plate_appearances_consistent()
+
+    for entry in entries:
+        game.record_batting(
+            entry.player_id,
+            batting_line_for(pas, entry.player_id),
+            team_id=entry.team_id,
+            batting_order=entry.batting_order,
+            slot_sequence=entry.slot_sequence,
+            fielding_position=entry.fielding_position,
+            entered_sequence=entry.entered_sequence,
+        )
+    _record_pitching_from_plate_appearances(game)
+    record_derived_fielding(game)
+    _apply_pitching_decisions(game, team_of_players(header, entries, pas))
+    return game

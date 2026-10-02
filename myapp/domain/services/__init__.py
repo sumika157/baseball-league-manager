@@ -8,7 +8,7 @@
 - sorting: 一覧の並べ替えキーと既定の向き
 - records: 試合からの集計（通算・順位表・対戦成績・年度別成績・月別成績）
 - decisions: 勝敗・セーブ・ホールドの導出（日本プロ野球の規則）
-- scoring: 打席の記録から1試合ぶんの成績を導く（打撃・投球・守備・失点・残塁）
+- scoring: 打席の記録から1試合ぶんの成績を導く（打撃・投球・守備・失点・残塁）と、試合の組み立て（assemble_game）
 """
 
 from .decisions import (
@@ -60,6 +60,7 @@ from .records import (
 from .scoring import (
     FieldingCredits,
     RunScored,
+    assemble_game,
     batting_line_for,
     earned_runs_for,
     ensure_lines_match_plate_appearances,
@@ -75,6 +76,7 @@ from .scoring import (
     record_derived_fielding,
     runs_allowed_for,
     runs_scored_in,
+    team_of_players,
 )
 from .sorting import (
     BATTER_SORT_KEYS,
@@ -154,4 +156,6 @@ __all__ = [
     "pitching_line_for",
     "runs_allowed_for",
     "runs_scored_in",
+    "assemble_game",
+    "team_of_players",
 ]
