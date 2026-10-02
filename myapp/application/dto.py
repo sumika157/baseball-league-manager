@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..domain.entities import Game
 from ..domain.value_objects import FieldingPosition
 
 
@@ -55,6 +56,48 @@ class GameRow:
             return "引分"
         name = self.home_team_name if self.winner_team_id == self.home_team_id else self.away_team_name
         return f"{name} の勝ち"
+
+
+@dataclass(frozen=True)
+class PlayerIndexEntry:
+    """試合詳細の組み立てで、選手 id から引く1人ぶんの情報。
+
+    ボックススコアに並べる参考値として、1試合の率は読めないため通算の率を持つ。
+    """
+
+    name: str
+    number: int
+    team_id: int
+    career_batting_average: float
+    career_earned_run_average: float
+
+
+@dataclass(frozen=True)
+class GameEditPlayer:
+    """試合の編集画面に並べる、ロスターの1選手。"""
+
+    id: int
+    name: str
+    number: int
+    position: str
+    is_pitcher: bool
+
+
+@dataclass(frozen=True)
+class GameEditRoster:
+    """試合の編集画面に並べる、1チームぶんのロスター。"""
+
+    team_id: int
+    team_name: str
+    players: list[GameEditPlayer]
+
+
+@dataclass(frozen=True)
+class GameEditData:
+    """試合の編集画面に必要な材料。成績や打順は試合（game）が持つので、ここには持たない。"""
+
+    game: Game
+    rosters: list[GameEditRoster]
 
 
 @dataclass(frozen=True)

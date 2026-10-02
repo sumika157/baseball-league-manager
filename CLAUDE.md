@@ -36,7 +36,7 @@
 - presentation（views）は application 経由で操作する。ORM モデルやリポジトリ実装を直接触らない。
 - **更新と参照を分ける**: 更新はリポジトリ経由で集約単位（`Team` / `Game`）に読み書きする。一覧表示などの参照は `infrastructure/queries.py` から直接 DTO を作る（集約を組み立てない）。参照クエリのインターフェースは `application/queries.py`（戻り値が DTO のため domain には置けない）。
 - **依存の組み立ては `presentation/views.py` の `build_service()`（`TeamApplicationService`）と `build_recording_service()`（スコアブックの保存を担う `GameRecordingService`）の2か所だけ。** どちらも依存を全部渡す（`tests/integration/test_wiring.py` が検査する）。呼ぶ側ごとに一部の依存だけを渡さない。渡し忘れが「開く画面によって落ちるサービス」になる（管理画面のテンプレートタグで実際に起きた）。テストも `tests/helpers.py` 経由でここを呼ぶ。
-- **層をまたぐ受け渡しに素の `dict` を使わない。** application が presentation に返す形は `application/dto.py` の dataclass にする。文字列キーの dict は綴りを間違えても静的検査が黙る。`get_game_edit_data` と `_player_index` は dict のまま残っているが、**新しく増やさない**。触ったついでに DTO へ寄せる。
+- **層をまたぐ受け渡しに素の `dict` を使わない。** application が presentation に返す形は `application/dto.py` の dataclass にする。文字列キーの dict は綴りを間違えても静的検査が黙る。試合詳細の選手の索引（`PlayerIndexEntry`）は DTO に寄せた。編集画面の材料（`GameEditData`）も DTO にしたが、**中にまだ `Game` 集約をそのまま包んでいる**（DTO が集約を持つ形は手本にしない。集約を外すのは #49）。新しく増やさない。
 - **`TeamApplicationService` は既に約50メソッド・1,500行**あり、チーム・選手・試合・リーグ・管理画面の概況を1クラスで抱えている。ここへ足す前に、対象ごとの別サービスに置けないか考える。分ける判断は選択肢としてユーザーに提示する。
 
 ## 同じ事実の出典を2つ作らない

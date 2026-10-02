@@ -31,6 +31,9 @@ from .dto import (
     Dashboard,
     DashboardLeague,
     GameDetail,
+    GameEditData,
+    GameEditPlayer,
+    GameEditRoster,
     GameFieldingRow,
     GameLineScore,
     GamePlayerRow,
@@ -54,6 +57,7 @@ from .dto import (
     PitcherRow,
     PlayerDetail,
     PlayerGameRow,
+    PlayerIndexEntry,
     PlayerProfile,
     RankingEntry,
     StandingRow,
@@ -804,10 +808,10 @@ class TeamApplicationService:
             batting.append(
                 GamePlayerRow(
                     player_id=entry.player_id,
-                    player_name=info["name"],
-                    number=info["number"],
-                    team_id=info["team_id"],
-                    team_name=names.get(info["team_id"], ""),
+                    player_name=info.name,
+                    number=info.number,
+                    team_id=info.team_id,
+                    team_name=names.get(info.team_id, ""),
                     at_bats=line.at_bats,
                     hits=line.hits,
                     home_runs=line.home_runs,
@@ -823,7 +827,7 @@ class TeamApplicationService:
                     stolen_bases=line.stolen_bases,
                     double_plays=line.double_plays,
                     strikeouts_batting=line.strikeouts,
-                    career_batting_average=info["batting_average"],
+                    career_batting_average=info.career_batting_average,
                     batting_order=entry.batting_order,
                     slot_sequence=entry.slot_sequence,
                     position_label=entry.position_label,
@@ -840,10 +844,10 @@ class TeamApplicationService:
             pitching.append(
                 GamePlayerRow(
                     player_id=outing.player_id,
-                    player_name=info["name"],
-                    number=info["number"],
-                    team_id=info["team_id"],
-                    team_name=names.get(info["team_id"], ""),
+                    player_name=info.name,
+                    number=info.number,
+                    team_id=info.team_id,
+                    team_name=names.get(info.team_id, ""),
                     innings_pitched=str(pitched.innings),
                     runs_allowed=pitched.runs_allowed,
                     earned_runs=pitched.earned_runs,
@@ -853,7 +857,7 @@ class TeamApplicationService:
                     hit_by_pitch_allowed=pitched.hit_by_pitch_allowed,
                     home_runs_allowed=pitched.home_runs_allowed,
                     earned_run_average=pitched.earned_run_average,
-                    career_earned_run_average=info["earned_run_average"],
+                    career_earned_run_average=info.career_earned_run_average,
                     appearance_order=outing.appearance_order,
                     decision=_decision_label(pitched),
                 )
@@ -871,12 +875,12 @@ class TeamApplicationService:
             scorebook=build_scorebook_grids(
                 game,
                 names,
-                lambda player_id: players[player_id]["name"] if player_id in players else f"選手{player_id}",
+                lambda player_id: players[player_id].name if player_id in players else f"選手{player_id}",
             ),
         )
 
     @staticmethod
-    def _to_fielding_rows(game: Game, players: dict[int, dict]) -> list[GameFieldingRow]:
+    def _to_fielding_rows(game: Game, players: dict[int, PlayerIndexEntry]) -> list[GameFieldingRow]:
         """守備成績の行。打順の順に並べ、続けて打順にいない投手（指名打者制）を登板順に並べる。
 
         位置はラインアップの守備位置。打順にいない投手は「投」。守備成績は打席から導いた値で、
@@ -906,9 +910,9 @@ class TeamApplicationService:
             rows.append(
                 GameFieldingRow(
                     player_id=player_id,
-                    player_name=info["name"],
-                    number=info["number"],
-                    team_id=info["team_id"],
+                    player_name=info.name,
+                    number=info.number,
+                    team_id=info.team_id,
                     position_label=label,
                     putouts=line.putouts,
                     assists=line.assists,
@@ -1147,47 +1151,36 @@ class TeamApplicationService:
 
     # --- 試合の登録 ---
 
-    def get_game_edit_data(self, game_id: int) -> dict:
+    def get_game_edit_data(self, game_id: int) -> GameEditData:
         """試合の編集画面に必要な材料をまとめて返す。
 
-        両チームのロスターと、既に入力されている成績を対応づける。
+        試合と、両チームの在籍中の選手（背番号順）。既に入力されている成績や打順は
+        試合（game）が持っているので、選手ごとには持たない。
         """
         game = self._games.find_by_id(game_id)
         names = self._team_names()
 
-        batting = {e.player_id: e.line for e in game.batting}
-        pitching = {e.player_id: e.line for e in game.pitching}
-        lineup = {e.player_id: (e.batting_order, e.slot_sequence, e.fielding_position) for e in game.batting}
-        entered = {e.player_id: e.entered_inning for e in game.pitching}
-
         rosters = []
         for team_id in (game.home_team_id, game.away_team_id):
             team = self._teams.find_by_id(team_id)
-            members = []
-            for player in sorted(team.active_players, key=lambda p: p.number.value):
-                player_id = _saved_id(player.id)
-                members.append(
-                    {
-                        "id": player_id,
-                        "name": player.name,
-                        "number": player.number.value,
-                        "position": player.position.label,
-                        "is_pitcher": player.is_pitcher,
-                        "batting": batting.get(player_id),
-                        "pitching": pitching.get(player_id),
-                        "lineup": lineup.get(player_id),
-                        "entered_inning": entered.get(player_id),
-                    }
-                )
             rosters.append(
-                {
-                    "team_id": team_id,
-                    "team_name": names.get(team_id, team.name),
-                    "players": members,
-                }
+                GameEditRoster(
+                    team_id=team_id,
+                    team_name=names.get(team_id, team.name),
+                    players=[
+                        GameEditPlayer(
+                            id=_saved_id(player.id),
+                            name=player.name,
+                            number=player.number.value,
+                            position=player.position.label,
+                            is_pitcher=player.is_pitcher,
+                        )
+                        for player in sorted(team.active_players, key=lambda p: p.number.value)
+                    ],
+                )
             )
 
-        return {"game": game, "rosters": rosters}
+        return GameEditData(game=game, rosters=rosters)
 
     def create_game(
         self,
@@ -1407,20 +1400,19 @@ class TeamApplicationService:
     def _team_names(self) -> dict[int, str]:
         return {_saved_id(t.id): t.name for t in self._teams.find_all()}
 
-    def _player_index(self) -> dict[int, dict]:
+    def _player_index(self) -> dict[int, PlayerIndexEntry]:
         """選手 id から名前・背番号・所属チーム・通算の率を引ける索引。"""
-        index: dict[int, dict] = {}
+        index: dict[int, PlayerIndexEntry] = {}
         for team in self._teams.find_all_with_roster():
             for player in team.players:
-                index[_saved_id(player.id)] = {
-                    "name": player.name,
-                    "number": player.number.value,
-                    "team_id": _saved_id(team.id),
-                    "is_foreign_player": player.profile.is_foreign_player,
+                index[_saved_id(player.id)] = PlayerIndexEntry(
+                    name=player.name,
+                    number=player.number.value,
+                    team_id=_saved_id(team.id),
                     # ボックススコアに並べる参考値。1試合の率は読めないため通算を出す
-                    "batting_average": player.batting.batting_average,
-                    "earned_run_average": player.pitching.earned_run_average,
-                }
+                    career_batting_average=player.batting.batting_average,
+                    career_earned_run_average=player.pitching.earned_run_average,
+                )
         return index
 
     @staticmethod
