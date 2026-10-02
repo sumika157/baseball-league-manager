@@ -13,12 +13,13 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from ..entities import Game
+from ..pennant.schedule import NPB_TEAMS_PER_LEAGUE, ScheduleRules
 from ..services.rankings import QUALIFYING_INNINGS_PER_GAME, QUALIFYING_PLATE_APPEARANCES_PER_GAME
 from ..value_objects import BattingLine, InningsPitched, PitchingLine
 
 OUTS_PER_INNING = InningsPitched.OUTS_PER_INNING
-# 1シーズンの試合数（NPB）。引分の目標帯は「1チームが年に何試合引き分けるか」で持つ
-SEASON_GAMES = 143
+# 1シーズンの試合数（NPB）。出典は日程の規則。引分の目標帯は「1チームが年に何試合引き分けるか」で持つ
+SEASON_GAMES = ScheduleRules().games_per_team(NPB_TEAMS_PER_LEAGUE)
 
 
 @dataclass(frozen=True)
@@ -144,7 +145,7 @@ class LevelTally:
             "caught_stealing": self.caught_stealing / team_games,
             "double_plays": self.double_plays / team_games,
             "runs_allowed": self.runs_allowed / team_games,
-            # 引分は試合ごとの割合。1チームが143試合で何回引き分けるかに直す
+            # 引分は試合ごとの割合。1チームが1シーズン（SEASON_GAMES 試合）で何回引き分けるかに直す
             "ties": self.ties / games * SEASON_GAMES,
         }
         return [LevelRow(key, LEVEL_TARGETS[key][0], value, LEVEL_TARGETS[key][1]) for key, value in values.items()]

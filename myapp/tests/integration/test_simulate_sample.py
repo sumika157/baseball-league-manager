@@ -12,6 +12,7 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase
 
+from myapp.domain.pennant.schedule import ScheduleRules
 from myapp.infrastructure import orm_models
 from myapp.management.commands import simulate_sample
 
@@ -61,8 +62,9 @@ class SimulateSampleTest(TestCase):
             run(games=0)
 
     def test_the_season_mode_prints_the_title_levels_too(self):
-        # 総当たり1周（66試合）に縮めて、数秒に収める。13周（858試合）の調整は手で回す
-        with patch.object(simulate_sample, "SEASON_ROUNDS", 1), self.assertNumQueries(0):
+        # 1カード1試合（1球団11試合・全66試合）の日程に縮めて、数秒に収める。143試合の調整は手で回す
+        small = ScheduleRules(intra_games=1, inter_games=1, series_length=1)
+        with patch.object(simulate_sample, "SEASON_RULES", small), self.assertNumQueries(0):
             output = run(season=True, seed=2)
         self.assertIn("1シーズン 66試合", output)
         self.assertIn("タイトル争いの水準", output)

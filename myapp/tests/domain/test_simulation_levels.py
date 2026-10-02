@@ -8,9 +8,11 @@
 from datetime import date, timedelta
 from unittest import TestCase
 
+from myapp.domain.pennant.schedule import NPB_TEAMS_PER_LEAGUE, ScheduleRules
 from myapp.domain.simulation.engine import simulate_game
 from myapp.domain.simulation.levels import (
     LEVEL_TARGETS,
+    SEASON_GAMES,
     TITLE_TARGETS,
     LevelRow,
     LevelTally,
@@ -82,6 +84,11 @@ class AverageLeagueLevelsTest(TestCase):
         tied = sum(1 for game in self.games if game.is_tie)
         row = next(row for row in self.tally.rows() if row.key == "ties")
         self.assertAlmostEqual(row.value, tied / GAMES * 143)
+
+    def test_the_season_length_comes_from_the_schedule_rules(self):
+        # 1シーズンの試合数の出典は日程の規則。ここで別に 143 を持たない
+        self.assertEqual(SEASON_GAMES, ScheduleRules().games_per_team(NPB_TEAMS_PER_LEAGUE))
+        self.assertEqual(SEASON_GAMES, 143)
 
     def test_the_tally_matches_a_hand_count(self):
         runs = sum(game.home_score + game.away_score for game in self.games)

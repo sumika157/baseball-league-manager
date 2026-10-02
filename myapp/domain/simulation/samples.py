@@ -111,7 +111,7 @@ def spread_club(
     return ClubRoster(team_id=team_id, name=name, batters=tuple(batters), pitchers=tuple(pitchers))
 
 
-def spread_league(rng: GameRandom, team_count: int = 12, **kwargs: float) -> Sequence[ClubRoster]:
+def spread_league(rng: GameRandom, team_count: int, **kwargs: float) -> Sequence[ClubRoster]:
     """能力を散らした球団を `team_count` 作る（球団 id は 1 から）。"""
     return [spread_club(rng, team_id, f"球団{team_id}", **kwargs) for team_id in range(1, team_count + 1)]
 

@@ -4,7 +4,8 @@
 
 - 既定: 能力50の2球団で N 試合を回し、1試合ぶんのボックススコアを文字で出して、水準の表を
   NPB の目標帯と並べて出す。基準値（`LeagueBaseline`）の調整に使う。
-- `--season`: 能力を散らした12球団で1シーズン（総当たり13周 = 858試合）を回し、水準の表に加えて
+- `--season`: 能力を散らした12球団（2リーグ6球団ずつ）で、ペナントと同じ日程（`generate_schedule`。
+  1球団143試合・全858試合）の1シーズンを回し、水準の表に加えて
   首位打者・本塁打王などのタイトルの水準を出す。β と能力の分布の調整に使う。
 
 同じ `--seed` なら同じ結果になる。
@@ -18,19 +19,20 @@ from datetime import date, timedelta
 from django.core.management.base import BaseCommand, CommandError
 
 from myapp.domain.entities import Game
+from myapp.domain.pennant.schedule import NPB_TEAMS_PER_LEAGUE, ScheduleRules, generate_schedule
 from myapp.domain.simulation.engine import SimulatedGame, simulate_game
 from myapp.domain.simulation.levels import LevelRow, LevelTally, SeasonTally
 from myapp.domain.simulation.manager import ClubRoster, PitchingHistory, choose_active_roster
 from myapp.domain.simulation.randomness import game_seed, make_random
-from myapp.domain.simulation.samples import average_club, round_robin_days, spread_league
+from myapp.domain.simulation.samples import average_club, spread_league
 
 DEFAULT_GAMES = 2000
 SAMPLE_YEAR = 2026
 SEASON_OPENING = date(SAMPLE_YEAR, 3, 29)
 # 外国人の登録枠（1軍に登録できる人数）。サンプルの選手は全員が日本人なので効かないが、選択の経路は通す
 FOREIGN_ROSTER_LIMIT = 4
-# 総当たり13周で、12球団が1チーム143試合（NPB と同じ）
-SEASON_ROUNDS = 13
+# `--season` の日程の規則。既定値は NPB と同じ（1球団143試合）
+SEASON_RULES = ScheduleRules()
 
 
 def format_box_score(simulated: SimulatedGame, home: ClubRoster, away: ClubRoster) -> str:
@@ -129,7 +131,11 @@ class Command(BaseCommand):
         parser.add_argument(
             "--season",
             action="store_true",
-            help="能力を散らした12球団で1シーズン（858試合）を回し、タイトルの水準も出す（--games は無視）",
+            help=(
+                f"能力を散らした{2 * NPB_TEAMS_PER_LEAGUE}球団で1シーズン"
+                f"（1球団{SEASON_RULES.games_per_team(NPB_TEAMS_PER_LEAGUE)}試合）を回し、"
+                "タイトルの水準も出す（--games は無視）"
+            ),
         )
 
     def handle(self, *args, **options):
@@ -169,27 +175,31 @@ class Command(BaseCommand):
 
     def _run_season(self, seed: int) -> None:
         rng = make_random(game_seed(seed, SAMPLE_YEAR, "league"))
-        rosters = {club.team_id: choose_active_roster(club, FOREIGN_ROSTER_LIMIT) for club in spread_league(rng, 12)}
+        clubs = spread_league(rng, 2 * NPB_TEAMS_PER_LEAGUE)
+        rosters = {club.team_id: choose_active_roster(club, FOREIGN_ROSTER_LIMIT) for club in clubs}
+        team_ids = list(rosters)
+        leagues = {1: team_ids[:NPB_TEAMS_PER_LEAGUE], 2: team_ids[NPB_TEAMS_PER_LEAGUE:]}
+        schedule_rng = make_random(game_seed(seed, SAMPLE_YEAR, "schedule"))
+        fixtures = generate_schedule(leagues, SEASON_RULES, SEASON_OPENING, schedule_rng)
         history = PitchingHistory()
         level = LevelTally()
-        titles = SeasonTally(team_games=SEASON_ROUNDS * (len(rosters) - 1))
-        count = 0
+        titles = SeasonTally(team_games=SEASON_RULES.games_per_team(NPB_TEAMS_PER_LEAGUE))
         started = time.perf_counter()
-        for day_index, day in enumerate(round_robin_days(list(rosters), SEASON_ROUNDS)):
-            for home_id, away_id in day:
-                game_rng = make_random(game_seed(seed, SAMPLE_YEAR, f"season-{day_index}-{home_id}"))
-                played = simulate_game(
-                    game_rng,
-                    rosters[home_id],
-                    rosters[away_id],
-                    played_on=SEASON_OPENING + timedelta(days=day_index),
-                    history=history,
-                )
-                level.add(played.game)
-                titles.add(played.game)
-                count += 1
+        for fixture in fixtures:
+            game_rng = make_random(game_seed(seed, SAMPLE_YEAR, f"season-{fixture.date}-{fixture.home_team_id}"))
+            played = simulate_game(
+                game_rng,
+                rosters[fixture.home_team_id],
+                rosters[fixture.visitor_team_id],
+                played_on=fixture.date,
+                history=history,
+            )
+            level.add(played.game)
+            titles.add(played.game)
+        count = len(fixtures)
         elapsed = time.perf_counter() - started
-        self._say(f"1シーズン {count}試合（能力を散らした12球団・シード{seed}）  {elapsed / count * 1000:.1f} ms/試合")
+        per_game = elapsed / count * 1000
+        self._say(f"1シーズン {count}試合（能力を散らした{len(rosters)}球団・シード{seed}）  {per_game:.1f} ms/試合")
         self._say(format_levels("リーグ全体の水準:", level.rows()))
         self._say()
         self._say(format_levels("タイトル争いの水準:", titles.rows()))
