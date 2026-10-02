@@ -5,8 +5,8 @@
 明細が打席と食い違った集約は、保存のときに集約が弾く
 （`ensure_lines_match_plate_appearances`）。
 
-打席を記録する前の古い試合（明細だけが保存されている）を、打席が空のまま保存して
-成績を消してしまわないよう、`_ensure_not_wiping_legacy_lines` で弾く。
+保存済みの記録（打席、または打席を記録する前の古い試合の明細）を、打席が空のまま
+保存して消してしまわないよう、`_ensure_not_wiping_recorded_game` で弾く。
 
 手入力として残るのは、試合日・対戦カード・ラインアップ・打席ごとの結果と走者の動きだけ。
 得点・イニングスコア・登板順・登板した回・勝敗・セーブ・ホールドは導出する。
@@ -62,7 +62,7 @@ class GameRecordingService:
         「記録と食い違う得点」を保存できてしまう。
         """
         current = self._games.find_by_id(game_id)
-        self._ensure_not_wiping_legacy_lines(current, plate_appearances)
+        self._ensure_not_wiping_recorded_game(current, plate_appearances)
 
         game = Game(
             id=current.id,
@@ -88,14 +88,20 @@ class GameRecordingService:
         return self._games.save(game)
 
     @staticmethod
-    def _ensure_not_wiping_legacy_lines(current: Game, plate_appearances: list[PlateAppearance]) -> None:
-        """打席の無い古い試合を、打席が空のまま保存して成績を消さないようにする。
+    def _ensure_not_wiping_recorded_game(current: Game, plate_appearances: list[PlateAppearance]) -> None:
+        """記録のある試合を、打席が空のまま保存して消さないようにする。
 
-        古い試合は打撃・投球の明細と得点だけが保存されていて、打席から導き直せない。
-        空の打席で上書きすると、明細も得点も0に置き換わって元に戻せない。
+        - 打席のある試合: 空の打席で上書きすると、打席も明細も得点も全部消える。
+          不具合のあるクライアントが空の配列を送っただけで黙って全消去になるのを防ぐ。
+        - 打席の無い古い試合（明細と得点だけが保存されている）: 打席から導き直せないので、
+          空の打席で上書きすると明細も得点も0に置き換わって元に戻せない。
+
+        打席も明細も無い新しい試合を空で保存するのは通す。
         """
-        if plate_appearances or current.plate_appearances:
+        if plate_appearances:
             return
+        if current.plate_appearances:
+            raise InvalidGame("打席がすべて取り除かれています。記録を全部消す場合は、試合ごと削除してください。")
         recorded = current.batting or current.pitching or current.home_score or current.away_score
         if recorded:
             raise InvalidGame(

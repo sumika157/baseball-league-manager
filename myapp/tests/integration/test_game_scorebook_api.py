@@ -251,9 +251,23 @@ class ScorebookApiTest(BaseCase):
 
         self.assertEqual(response.status_code, 200, response.content)
 
-    # --- 打席の無い古い試合 ---
+    # --- 記録のある試合を空の打席で上書きしない ---
+
+    def test_a_game_with_plate_appearances_is_not_wiped_by_an_empty_scorebook(self):
+        """不具合のあるクライアントが空の配列を送っても、記録が黙って全消去されない。"""
+        post_game_scorebook(self.client, self.game.id, self._payload())
+
+        response = post_game_scorebook(self.client, self.game.id, self._payload(lineup=[], plate_appearances=[]))
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("打席がすべて取り除かれています", response.json()["error"])
+        saved = DjangoGameRepository().find_by_id(self.game.id)
+        self.assertEqual(len(saved.plate_appearances), 8)
+        self.assertEqual((saved.away_score, saved.home_score), (1, 0))
+        self.assertTrue(orm_models.GameBattingLine.objects.filter(game_id=self.game.id).exists())
 
     def test_a_legacy_game_is_not_overwritten_by_an_empty_scorebook(self):
+        """打席を記録する前の試合（明細だけがある）を空の打席で保存すると、成績が消える。"""
         """打席を記録する前の試合（明細だけがある）を空の打席で保存すると、成績が消える。"""
         batter = self.away_batters[0]
         legacy = play_game(
