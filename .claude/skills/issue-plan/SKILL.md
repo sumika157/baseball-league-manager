@@ -111,7 +111,7 @@ $gh = "C:\Users\sumik\AppData\Local\Microsoft\WinGet\Packages\GitHub.cli_Microso
   git fetch origin <ブランチ>
   git worktree add -b <ブランチ> .claude/worktrees/<名前> origin/<ブランチ>
   ```
-  worktree が要らない場合は `git switch <ブランチ>` でよい。safe.directory の登録など worktree の後始末まで含めた手順は `CLAUDE.md` に従う。
+  worktree が要らない場合は `git switch <ブランチ>` でよい。safe.directory の登録から片付けまでの手順は `worktree` スキル。
 - epic は、統合ブランチ `epic/<機能>` を親 Issue に（`--base main`）、タスクブランチを段階の sub-issue に（`--base epic/<機能>`）紐づける。
 - 紐づいたかは `& $gh issue develop --list <番号>` で確かめる。
 - **既にブランチを切ってしまった場合**: `gh` からは既存のブランチを後から紐づけられない。PR の base が main なら本文の `Closes #N` でリンクするので
