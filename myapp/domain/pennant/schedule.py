@@ -29,6 +29,8 @@ from typing import Protocol, TypeVar
 from myapp.domain.exceptions import InvalidSchedule
 
 MONDAY = 0
+# NPB の1リーグの球団数。`ScheduleRules` の既定値はこの規模で1球団143試合になる
+NPB_TEAMS_PER_LEAGUE = 6
 _T = TypeVar("_T")
 _MAX_ATTEMPTS = 20
 

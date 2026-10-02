@@ -49,6 +49,7 @@ from myapp.domain import services as domain_services
 from myapp.domain.entities import FieldingError, PlateAppearance, RunnerAdvance
 from myapp.domain.exceptions import InvalidGame
 from myapp.domain.pennant.world import WorldScope
+from myapp.domain.simulation.levels import LevelTally
 from myapp.domain.value_objects import (
     AdvanceReason,
     Base,
@@ -377,7 +378,7 @@ class Command(BaseCommand):
             self._report_schedule(schedule)
             return
 
-        self.totals = defaultdict(int)
+        self.tally = LevelTally()
         with transaction.atomic():
             if options["replace"] and existing.exists():
                 removed = existing.count()
@@ -388,7 +389,7 @@ class Command(BaseCommand):
         self._say(
             self.style.SUCCESS(
                 f"{year}年 · {len(schedule)}試合を投入しました"
-                f"（打席 {self.totals['plate_appearances']}件 / 進塁 {self.totals['advances']}件）"
+                f"（打席 {self.tally.plate_appearances}件 / 進塁 {self.tally.advances}件）"
             )
         )
         self._report_schedule(schedule)
@@ -1275,29 +1276,8 @@ class Command(BaseCommand):
     # --- 報告 ---
 
     def _count(self, record):
-        """投入した水準を数える。NPB の値と並べて確認するために使う。"""
-        game = record["game"]
-        self.totals["games"] += 1
-        self.totals["runs"] += game.home_score + game.away_score
-        self.totals["plate_appearances"] += len(game.plate_appearances)
-        self.totals["advances"] += sum(len(entry.advances) for entry in game.plate_appearances)
-        self.totals["errors"] += sum(len(entry.errors) for entry in game.plate_appearances)
-        for entry in game.batting:
-            line = entry.line
-            self.totals["at_bats"] += line.at_bats
-            self.totals["hits"] += line.hits
-            self.totals["home_runs"] += line.home_runs
-            self.totals["walks"] += line.walks
-            self.totals["sacrifice_bunts"] += line.sacrifice_bunts
-            self.totals["stolen_bases"] += line.stolen_bases
-            self.totals["caught_stealing"] += line.caught_stealing
-            self.totals["double_plays"] += line.double_plays
-        for entry in game.pitching:
-            line = entry.line
-            self.totals["outs"] += line.innings.outs
-            self.totals["earned_runs"] += line.earned_runs
-            self.totals["runs_allowed"] += line.runs_allowed
-            self.totals["strikeouts"] += line.strikeouts
+        """投入した試合を水準に足す。NPB の値と並べて確認するために使う。"""
+        self.tally.add(record["game"])
 
     def _report_schedule(self, schedule):
         counts = defaultdict(int)
@@ -1307,27 +1287,10 @@ class Command(BaseCommand):
             self._say(f"  {league_name}: {count}試合")
 
     def _report_levels(self):
-        """リーグ全体の水準。NPB の目安と並べて、投入したデータの現実味を見る。"""
-        games = max(1, self.totals["games"])
-        at_bats = max(1, self.totals["at_bats"])
-        innings = max(1.0, self.totals["outs"] / OUTS_PER_INNING)
+        """リーグ全体の水準。NPB の目標帯と並べて、投入したデータの現実味を見る。
 
-        per_team_game = games * 2
-        rows = [
-            ("1試合平均得点", self.totals["runs"] / per_team_game, 3.9),
-            ("リーグ打率", self.totals["hits"] / at_bats, 0.255),
-            ("リーグ防御率", self.totals["earned_runs"] * 9 / innings, 3.50),
-            ("K/9", self.totals["strikeouts"] * 9 / innings, 7.5),
-            ("BB/9", self.totals["walks"] * 9 / innings, 2.7),
-            ("HR/9", self.totals["home_runs"] * 9 / innings, 0.9),
-            ("1試合の失策", self.totals["errors"] / games, 1.2),
-            # 打席から数えられるようになった項目。1チーム1試合あたりで見る
-            ("犠打", self.totals["sacrifice_bunts"] / per_team_game, 0.6),
-            ("盗塁", self.totals["stolen_bases"] / per_team_game, 0.55),
-            ("盗塁刺", self.totals["caught_stealing"] / per_team_game, 0.2),
-            ("併殺打", self.totals["double_plays"] / per_team_game, 0.7),
-            ("失点", self.totals["runs_allowed"] / per_team_game, 3.9),
-        ]
-        self._say("  リーグ全体の水準（括弧内は NPB の目安）:")
-        for label, value, target in rows:
-            self._say(f"    {label}: {value:.3f}（{target}）")
+        数え方と目標帯は `domain.simulation.levels` が唯一の出典（シミュレーションエンジンと共有する）。
+        """
+        self._say("  リーグ全体の水準（括弧内は NPB の目標帯）:")
+        for row in self.tally.rows():
+            self._say(f"    {row.label}: {row.value:.3f}（{row.target.low:g}〜{row.target.high:g}）")
