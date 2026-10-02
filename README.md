@@ -214,6 +214,26 @@ docker compose exec web python manage.py measure_pages
 docker compose exec web python manage.py rebuild_fielding_lines
 ```
 
+#### 打席の記録ができる前のデータがあるとき（main に入れた後の手順）
+
+打席の記録が無い古い試合（打席を記録する前に入れた試合）は、新しく加わった列（得点・三振・
+失点・守備成績など）が**未記録なのに 0 と表示されます**。スコアブック画面で直すにも、
+打席を入力し直さないと保存できません（打席が空のまま保存すると成績が消えるため、
+サーバーが弾きます）。仮想データは打席つきで作り直します。
+
+```bash
+# 1. マイグレーションを流す
+docker compose exec web python manage.py migrate
+
+# 2. シーズンごとに作り直す（そのシーズンの既存の試合を消して、打席つきで入れ直す）
+docker compose exec web python manage.py seed_virtual_games --seed 42 --replace --year 2026
+
+# 3. 守備成績を打席から導く
+docker compose exec web python manage.py rebuild_fielding_lines
+```
+
+作り直す前に `db.sqlite3` をコピーしてバックアップを取ってください（試合を消すため戻せません）。
+
 どちらのコマンドも ORM に直接書き込むため、集約の検査を通りません。代わりに集約と同じ
 規則を自前で守ります（在籍中の背番号の重複禁止、リーグの外国人登録枠・出場枠）。架空選手の
 約12%を外国人にしますが、登録枠を超えるぶんは日本人選手にします。投入結果がこれらの規則と
@@ -682,15 +702,17 @@ POST だけ権限を求めます（画面ごと `login_required` にすると閲
             →  選手の成績    →  通算成績      →  打率・OPS・防御率
 ```
 
-- 試合は管理画面の「試合」から登録します。1試合ぶんの打撃成績・投球成績も
-  そこでインラインで入力します
+- 試合の登録は `/games/new/`（対戦カードだけ。得点は受け取らず 0-0 で作ります）、記録は
+  スコアブック画面（`/games/<id>/edit/`）で行います。管理画面の「試合」は閲覧用で、
+  直せるのは試合日・シーズンなどの基本情報だけです（得点・イニングスコア・打撃/投球/守備の
+  明細は読み取り専用で、行の追加・削除もできません。スコアブックの照合を通らないため）
 - 選手編集画面では成績を変更できません。表示は集計結果で、直せるようにすると
   試合の明細と食い違うためです
 - 投球回の合計は「アウト数」で足します。`5.2 + 5.2` は `10.4` ではなく `11.1` です
 - 率（打率・OPS・防御率）は試合ごとの率を平均せず、合算した実数から計算し直します
 
 **さらにその試合の成績の出典は「打席」です。** 打数・安打・打点・投球回・失点は、
-1打席ずつの記録（結果・走者の進塁・失策）から導きます。1試合ぶんの打撃成績・投球成績・
+1打席ずつの記録（結果・走者の進塁・失策）から導きます。1試合ぶんの打撃成績・投球成績・守備成績・
 イニングスコアはその集計結果を保存したもので、**通算成績を集計するためだけに持っています**
 （自責点は走者ごとの経路を再生しないと出ず、SQL で集計できないため）。
 同じ事実が2か所にあることになるので、**保存の前に集約が照合します** — 打席から数え直した
@@ -739,8 +761,8 @@ POST だけ権限を求めます（画面ごと `login_required` にすると閲
 | --- | --- |
 | スコアボード | 回ごとの得点（延長も可）と、計・安・失 |
 | スコアブック | 打順 × 回のマス目に打席の結果を並べた読み取り専用の表（編集画面と同じ並び。打者一巡で同じ回に2打席立てば1マスに縦に並ぶ） |
-| 打撃 | 打順 → 位置 → 選手名 → 打率・打数・安打・打点・本塁打・二塁打・三塁打・四球・死球・犠飛 |
-| 投球 | 投げた順に、防御率・投球回・被安打・被本塁打・奪三振・与四球・与死球・自責点・記録 |
+| 打撃 | 打順 → 位置 → 選手名 → 打率・打数・得点・安打・打点・本塁打・二塁打・三塁打・四球・死球・三振・犠打・犠飛・盗塁・併殺打 |
+| 投球 | 投げた順に、防御率・投球回・被安打・被本塁打・奪三振・与四球・与死球・失点・自責点・記録 |
 | 守備 | 両チームごとに、守備に就いた野手と投手の位置・刺殺・補殺・失策（打席の記録が無い試合では出さない） |
 
 - **安打・失策は打席から数えます**（`hits_by_inning` / `errors_by_inning`）。失策は
@@ -930,14 +952,20 @@ MSYS_NO_PATHCONV=1 docker compose exec web python manage.py measure_pages --prof
 | インターフェース | 置き場所 | 実装 |
 | --- | --- | --- |
 | `TeamRepository` `GameRepository` `LeagueRepository` | [domain/repositories.py](myapp/domain/repositories.py) | `infrastructure/repositories.py` |
-| `TeamListQuery` `GameListQuery` | [application/queries.py](myapp/application/queries.py) | `infrastructure/queries.py` |
+| `TeamListQuery` `GameListQuery` `PlayerFieldingQuery` | [application/queries.py](myapp/application/queries.py) | `infrastructure/queries.py` |
 
 参照クエリだけドメイン層に置けないのは、戻り値が画面向けの DTO（`application/dto.py`）で、
 ドメイン層から参照できないためです。
 
-実装を差し込むのは [presentation/views.py](myapp/presentation/views.py) の `build_service()`
-**1か所だけ**です。管理画面のテンプレートタグもテストもここを呼びます。依存を省略可能にして
-呼ぶ側ごとに一部だけ渡すと、開く画面によって落ちるサービスができてしまうため、すべて必須です。
+実装を差し込むのは [presentation/views.py](myapp/presentation/views.py) の次の**2か所だけ**です。
+
+| 組み立て口 | 作るもの | 呼ぶ側 |
+| --- | --- | --- |
+| `build_service()` | `TeamApplicationService`（チーム・選手・試合・リーグの参照と更新） | 画面・管理画面のテンプレートタグ・テスト |
+| `build_recording_service()` | `GameRecordingService`（スコアブック＝打席の記録の保存。[application/game_recording.py](myapp/application/game_recording.py)） | スコアブックの保存 API・テスト |
+
+どちらも依存をすべて必須にして全部渡します。依存を省略可能にして呼ぶ側ごとに一部だけ渡すと、
+開く画面によって落ちるサービスができてしまうためです。
 
 実装がインターフェースを満たしているか、組み立てに欠けが無いかは
 [tests/integration/test_wiring.py](myapp/tests/integration/test_wiring.py) が機械的に検査します

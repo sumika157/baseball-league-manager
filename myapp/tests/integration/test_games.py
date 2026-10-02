@@ -267,8 +267,6 @@ class GameEntryTest(BaseCase):
                 "played_on": "2026-04-01",
                 "home_team": self.team.id,
                 "away_team": self.rival.id,
-                "home_score": "5",
-                "away_score": "3",
             },
         )
 
@@ -283,8 +281,29 @@ class GameEntryTest(BaseCase):
         response = self._create_game()
 
         game = orm_models.Game.objects.get()
-        self.assertEqual(game.home_score, 5)
+        self.assertEqual((game.home_score, game.away_score), (0, 0))
         self.assertRedirects(response, reverse("game_edit", args=[game.id]))
+
+    def test_the_form_has_no_score_inputs_and_a_posted_score_is_ignored(self):
+        """得点は打席から導く値。登録で手入力させると、記録と食い違う得点を作れてしまう。"""
+        page = self.client.get(reverse("game_create"))
+        self.assertNotContains(page, 'name="home_score"')
+        self.assertNotContains(page, 'name="away_score"')
+
+        self.client.post(
+            reverse("game_create"),
+            {
+                "year": "2026",
+                "played_on": "2026-04-01",
+                "home_team": self.team.id,
+                "away_team": self.rival.id,
+                "home_score": "5",
+                "away_score": "3",
+            },
+        )
+
+        game = orm_models.Game.objects.get()
+        self.assertEqual((game.home_score, game.away_score), (0, 0))
 
     def test_same_team_is_rejected_without_crashing(self):
         response = self.client.post(
@@ -294,8 +313,6 @@ class GameEntryTest(BaseCase):
                 "played_on": "2026-04-01",
                 "home_team": self.team.id,
                 "away_team": self.team.id,
-                "home_score": "0",
-                "away_score": "0",
             },
         )
 

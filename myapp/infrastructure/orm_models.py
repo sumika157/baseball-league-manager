@@ -443,9 +443,9 @@ class GamePlateAppearance(models.Model):
         verbose_name="ホームの攻撃",
         help_text="ビジターが表、ホームが裏に攻めます。",
     )
-    batter = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="plate_appearances", verbose_name="打者")
+    batter = models.ForeignKey(Player, on_delete=models.PROTECT, related_name="plate_appearances", verbose_name="打者")
     pitcher = models.ForeignKey(
-        Player, on_delete=models.CASCADE, related_name="plate_appearances_pitched", verbose_name="投手"
+        Player, on_delete=models.PROTECT, related_name="plate_appearances_pitched", verbose_name="投手"
     )
     batting_order = models.PositiveIntegerField(verbose_name="打順", help_text="1〜9。")
     slot_sequence = models.IntegerField(
@@ -484,7 +484,7 @@ class GameRunnerAdvance(models.Model):
     plate_appearance = models.ForeignKey(
         GamePlateAppearance, on_delete=models.CASCADE, related_name="advances", verbose_name="打席"
     )
-    runner = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="runner_advances", verbose_name="走者")
+    runner = models.ForeignKey(Player, on_delete=models.PROTECT, related_name="runner_advances", verbose_name="走者")
     from_base = models.IntegerField(choices=BASE_CHOICES, verbose_name="進塁前")
     to_base = models.IntegerField(choices=BASE_CHOICES, verbose_name="進塁後")
     reason = models.CharField(max_length=10, choices=ADVANCE_REASON_CHOICES, verbose_name="理由")
@@ -517,10 +517,10 @@ class GameRunnerSubstitution(models.Model):
     )
     base = models.IntegerField(choices=BASE_CHOICES, verbose_name="塁")
     leaving_runner = models.ForeignKey(
-        Player, on_delete=models.CASCADE, related_name="replaced_on_base", verbose_name="退く走者"
+        Player, on_delete=models.PROTECT, related_name="replaced_on_base", verbose_name="退く走者"
     )
     entering_runner = models.ForeignKey(
-        Player, on_delete=models.CASCADE, related_name="pinch_running", verbose_name="代走"
+        Player, on_delete=models.PROTECT, related_name="pinch_running", verbose_name="代走"
     )
 
     class Meta:
@@ -542,7 +542,7 @@ class GameFieldingError(models.Model):
     plate_appearance = models.ForeignKey(
         GamePlateAppearance, on_delete=models.CASCADE, related_name="errors", verbose_name="打席"
     )
-    player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="fielding_errors", verbose_name="守備者")
+    player = models.ForeignKey(Player, on_delete=models.PROTECT, related_name="fielding_errors", verbose_name="守備者")
     position = models.CharField(max_length=2, choices=FIELDING_POSITION_CHOICES, verbose_name="守備位置")
     kind = models.CharField(max_length=4, choices=ERROR_KIND_CHOICES, verbose_name="失策の種類")
 

@@ -1,11 +1,12 @@
 """スコアブック（打席の記録）の保存。
 
 試合の経過を打席単位で受け取り、**打撃・投球・イニングスコア・得点はすべてそこから
-導いて**保存する。手入力の成績を受け取る `TeamApplicationService.update_game` とは
-別の関心事なので、サービスを分けてある。
+導いて**保存する**。打撃・投球・守備の明細を直接書き換える入口は無い。
+明細が打席と食い違った集約は、保存のときに集約が弾く
+（`ensure_lines_match_plate_appearances`）。
 
-**同じ試合に両方を使わない。** 打席の記録がある試合は打席が出典で、明細だけを
-書き換えようとすると集約が弾く（`ensure_lines_match_plate_appearances`）。
+打席を記録する前の古い試合（明細だけが保存されている）を、打席が空のまま保存して
+成績を消してしまわないよう、`_ensure_not_wiping_legacy_lines` で弾く。
 
 手入力として残るのは、試合日・対戦カード・ラインアップ・打席ごとの結果と走者の動きだけ。
 得点・イニングスコア・登板順・登板した回・勝敗・セーブ・ホールドは導出する。
@@ -61,6 +62,7 @@ class GameRecordingService:
         「記録と食い違う得点」を保存できてしまう。
         """
         current = self._games.find_by_id(game_id)
+        self._ensure_not_wiping_legacy_lines(current, plate_appearances)
 
         game = Game(
             id=current.id,
@@ -84,6 +86,22 @@ class GameRecordingService:
         self._apply_pitching_decisions(game, team_of)
         self._ensure_foreign_player_game_quota(game, team_of)
         return self._games.save(game)
+
+    @staticmethod
+    def _ensure_not_wiping_legacy_lines(current: Game, plate_appearances: list[PlateAppearance]) -> None:
+        """打席の無い古い試合を、打席が空のまま保存して成績を消さないようにする。
+
+        古い試合は打撃・投球の明細と得点だけが保存されていて、打席から導き直せない。
+        空の打席で上書きすると、明細も得点も0に置き換わって元に戻せない。
+        """
+        if plate_appearances or current.plate_appearances:
+            return
+        recorded = current.batting or current.pitching or current.home_score or current.away_score
+        if recorded:
+            raise InvalidGame(
+                "この試合は打席の記録がない古い形式で保存されています。"
+                "打席を1つ以上入力してから保存してください（空のまま保存すると成績が消えます）。"
+            )
 
     def _record_batting(self, game: Game, lineup: list[LineupSlot]) -> None:
         """打順の枠ごとに打撃成績を打席から数えて載せる。
