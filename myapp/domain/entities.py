@@ -655,6 +655,21 @@ class PlateAppearance:
         return sum(1 for advance in self.advances if advance.is_out)
 
     @property
+    def runs_voided_if_third_out(self) -> int:
+        """この打席のアウトが半回の3つ目になる場合に、規則 5.08(a) で無効になる得点の数。
+
+        打席の中のアウトの前後は記録していないため、アウトがすべて「打者の打球での
+        アウト・封殺」のときだけ無効とみなす。走塁死・盗塁刺・牽制死（タイムプレー）が
+        1つでも混じるなら、それが3つ目のアウトだった可能性があり、得点を認める側に倒す
+        （誤って正しい記録を弾かないため）。盗塁・暴投・捕逸・ボークで還った走者は
+        別のプレイなので数えない。
+        """
+        reasons = [advance.reason for advance in self.advances if advance.is_out]
+        if not reasons or not all(reason.cancels_runs_when_third_out for reason in reasons):
+            return 0
+        return sum(1 for advance in self.advances if advance.has_scored and not advance.reason.happens_between_pitches)
+
+    @property
     def runs_scored(self) -> int:
         """この打席で本塁に達した走者の数。"""
         return sum(1 for advance in self.advances if advance.has_scored)
@@ -998,8 +1013,9 @@ class Game:
     def _replay_bases(ordered: list[PlateAppearance]) -> None:
         """塁の状態を打席順に再生し、走者とアウトの整合を確かめる。
 
-        検査するのは3点。同じ塁に2人の走者がいないこと、その塁にいない走者が
-        進んでいないこと、1つの半回のアウトが3を超えないこと。
+        検査するのは4点。同じ塁に2人の走者がいないこと、その塁にいない走者が
+        進んでいないこと、1つの半回のアウトが3を超えないこと、3つ目のアウトが
+        打者の打球でのアウトか封殺のときに、その打席で得点が入っていないこと。
         """
         occupied: dict[Base, int] = {}
         outs = 0
@@ -1036,6 +1052,11 @@ class Game:
             if outs > OUTS_PER_HALF_INNING:
                 raise InvalidPlateAppearance(
                     f"{entry.inning}回{half}のアウトが{outs}になっています（1つの半回は{OUTS_PER_HALF_INNING}まで）。"
+                )
+            if outs == OUTS_PER_HALF_INNING and entry.runs_voided_if_third_out > 0:
+                raise InvalidPlateAppearance(
+                    f"{where}: 3つ目のアウトが打者のアウトか封殺なので、この打席で本塁に達した走者の得点は"
+                    "記録できません（公認野球規則 5.08）。"
                 )
 
     def _ensure_derived_line_score_matches(self) -> None:

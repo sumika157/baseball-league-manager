@@ -461,6 +461,34 @@ class AdvanceReason(Enum):
         return self in (AdvanceReason.CAUGHT_STEALING, AdvanceReason.PICKED_OFF)
 
     @property
+    def happens_between_pitches(self) -> bool:
+        """打者の打球とは別のプレイ（投球の合間）で起きる進塁か。
+
+        盗塁・暴投・捕逸・ボークで本塁に達した走者は、その後に打者のアウトが
+        3つ目になっても得点が認められる（規則 5.08 が無効にするのは、3つ目のアウトと
+        同じプレイの間に還った走者だけ）。
+        """
+        return self in (
+            AdvanceReason.STOLEN_BASE,
+            AdvanceReason.WILD_PITCH,
+            AdvanceReason.PASSED_BALL,
+            AdvanceReason.BALK,
+        )
+
+    @property
+    def cancels_runs_when_third_out(self) -> bool:
+        """3つ目のアウトがこの理由のとき、その間に還った走者の得点は認められないか。
+
+        公認野球規則 5.08(a): 3アウト目が「打者走者が一塁に触れる前のアウト」または
+        「封殺」なら、そのプレイの間に本塁に達した走者の得点は記録しない。
+        打者が打球でそのままアウトになる（PUT_OUT: 三振・ゴロ・フライ・ライナー・邪飛・
+        犠打・犠飛）か、封殺（FORCE_OUT）がこれにあたる。
+        走塁死（THROWN_OUT）・盗塁刺・牽制死は、打者が一塁に達した後や打球と無関係に
+        起きる走者のアウト（タイムプレー）なので含めない。
+        """
+        return self in (AdvanceReason.PUT_OUT, AdvanceReason.FORCE_OUT)
+
+    @property
     def earns_run_batted_in(self) -> bool:
         """この理由で本塁に達したとき、打者に打点が付くか。
 
