@@ -1,6 +1,6 @@
 ---
 name: issue-plan
-description: 実装に着手する前に、実装計画を GitHub Issue に書く。「〜を実装して」「〜を直して」と頼まれてブランチを切る前、または「計画を Issue にして」「Issue を立てて」と頼まれたときに使う。Issue に紐づけたブランチの切り方（gh issue develop）、計画が変わったときの Issue の更新、PR と Issue のリンクとその確認も扱う。
+description: 実装に着手する前に、実装計画を GitHub Issue に書く。「〜を実装して」「〜を直して」と頼まれてブランチを切る前、または「計画を Issue にして」「Issue を立てて」と頼まれたときに使う。epic の親 Issue と段階ごとの sub-issue の作り方、Issue に紐づけたブランチの切り方（gh issue develop）、計画が変わったときの Issue の更新、PR と Issue のリンクとその確認も扱う。
 ---
 
 実装計画を GitHub Issue に残すワークフロー。規則の本体は `CLAUDE.md`「ブランチとコミット」。ここには進め方だけを書く。
@@ -26,9 +26,11 @@ $gh = "C:\Users\sumik\AppData\Local\Microsoft\WinGet\Packages\GitHub.cli_Microso
 - 新機能・仕様変更で設計判断が要るものは、先に `feature-designer` エージェントで設計し、その結論を下の雛形に要約する。
   バグ修正・既存パターンの踏襲なら自分で書いてよい。
 - 本文は**スクラッチパッドにファイルで書く**（`--body-file` で渡す。引用符と改行で壊れない）。リポジトリ内に置かない。
-- epic（`CLAUDE.md`「段階単体では main に入れられない機能」）の場合は、Issue には「なぜ・スコープ・段階の分け方」までを書き、
-  詳細設計と段階ごとの実測値は `docs/design/<機能>.md` に置いてリンクする。**同じ内容を両方に書かない。**
-  段階ごとのタスクは epic の Issue の手順チェックリストで追う（タスクごとに Issue を分けない）。
+- epic（`CLAUDE.md`「段階単体では main に入れられない機能」）は**親 Issue ＋ 段階ごとの sub-issue** にする（前例: #26 と #50〜#54）。
+  - 親: 「なぜ・スコープ・段階の分け方」と、段階の一覧（各行に sub-issue の番号）。
+  - 段階の sub-issue: その段階のなぜ・やること・完了条件。手順とテスト計画は着手時に書き足す。
+  - 詳細設計と段階ごとの実測値は `docs/design/<機能>.md` に置き、Issue からはリンクする。**同じ内容を Issue と設計書の両方に書かない。**
+  - 初期範囲から外した拡張は、epic の親ではなく別の親 Issue の sub-issue にする（前例: #55）。epic の親は main 入りで閉じるため。
 
 ### 雛形
 
@@ -76,6 +78,23 @@ $gh = "C:\Users\sumik\AppData\Local\Microsoft\WinGet\Packages\GitHub.cli_Microso
 - **「確認したいこと」がある場合はここで止めて回答を待つ。** 回答を受けたら本文に反映してから着手する
   （`CLAUDE.md` の「選択肢としてユーザーに提示する」判断はここで出す）。無ければそのまま実装に進んでよい。
 
+### sub-issue（親子）にする
+
+```powershell
+& $gh issue create --parent <親の番号> --title "..." --label <ラベル> --body-file "<パス>"   # 子として新しく作る
+& $gh issue edit <親の番号> --add-sub-issue <番号>,<番号>                                    # 既存の Issue を子にする（閉じた Issue も可）
+```
+
+確かめるときは Bash から叩く（PowerShell では `--jq` の `"\(...)"` が引数の分割で壊れる）:
+
+```bash
+"/c/Users/sumik/AppData/Local/Microsoft/WinGet/Packages/GitHub.cli_Microsoft.Winget.Source_8wekyb3d8bbwe/bin/gh.exe" \
+  api repos/sumika157/baseball-league-manager/issues/<親の番号>/sub_issues --jq '.[] | "\(.number) \(.state) \(.title)"'
+```
+
+複数の Issue を PowerShell の `foreach` で作るときは、ループ変数を他の変数と大文字小文字違いにしない
+（PowerShell は変数名の大文字小文字を区別しない。`foreach ($s in ...)` が `$S` を上書きして全件失敗した）。
+
 ## 4. Issue に紐づけてブランチを切る
 
 **ブランチは `git branch` / `git worktree add -b` で作らず、`gh issue develop` で作る。** Issue に紐づいたブランチ
@@ -93,8 +112,7 @@ $gh = "C:\Users\sumik\AppData\Local\Microsoft\WinGet\Packages\GitHub.cli_Microso
   git worktree add -b <ブランチ> .claude/worktrees/<名前> origin/<ブランチ>
   ```
   worktree が要らない場合は `git switch <ブランチ>` でよい。safe.directory の登録など worktree の後始末まで含めた手順は `CLAUDE.md` に従う。
-- epic は、統合ブランチ `epic/<機能>` も各タスクブランチも、同じ epic の Issue に紐づける（`--base main` で統合ブランチ、
-  `--base epic/<機能>` でタスクブランチ）。1つの Issue に複数のブランチを紐づけられる。
+- epic は、統合ブランチ `epic/<機能>` を親 Issue に（`--base main`）、タスクブランチを段階の sub-issue に（`--base epic/<機能>`）紐づける。
 - 紐づいたかは `& $gh issue develop --list <番号>` で確かめる。
 - **既にブランチを切ってしまった場合**: `gh` からは既存のブランチを後から紐づけられない。PR の base が main なら本文の `Closes #N` でリンクするので
   そのまま進めてよい。base が epic なら、push 前に `gh issue develop` で作り直したブランチへ cherry-pick して移す。
@@ -105,15 +123,15 @@ $gh = "C:\Users\sumik\AppData\Local\Microsoft\WinGet\Packages\GitHub.cli_Microso
   `& $gh issue edit <番号> --body-file "<パス>"`
 - **変えた理由はコメントに残す**（本文を直すだけだと、何がなぜ変わったか追えない）:
   `& $gh issue comment <番号> --body-file "<パス>"`
-- 手順のチェックボックスは、PR を出すときに本文を直して埋める（epic では段階のタスク PR を出すたび）。
+- 手順のチェックボックスは、PR を出すときに本文を直して埋める（epic の親の段階一覧は、段階の sub-issue を閉じるときに埋める。手順6）。
 
 ## 6. PR を Issue とリンクさせる
 
 **PR は必ず Issue とリンクさせる。** 手順4のブランチから出していれば自動でリンクする（epic のタスク PR では未検証。下で確かめる）。
 加えて本文の先頭に書く:
 
-- base が main の PR: `Closes #<番号>`（マージ時に Issue が自動で閉じる。epic を main へ入れる PR もこれ）
-- epic のタスク PR（base が `epic/…`）: `Refs #<番号>`。`Closes` を書いても base が main でないので Issue は閉じず、
+- base が main の PR: `Closes #<番号>`（マージ時に Issue が自動で閉じる。epic を main へ入れる PR は `Closes #<親>`）
+- epic のタスク PR（base が `epic/…`）: `Refs #<段階の sub-issue>`。`Closes` を書いても base が main でないので Issue は閉じず、
   キーワードだけではリンクもしない。リンクはブランチの紐づけで行う。
 
 **作ったら確かめる**（リンクしていなくてもエラーにならない）:
@@ -132,3 +150,6 @@ $gh = "C:\Users\sumik\AppData\Local\Microsoft\WinGet\Packages\GitHub.cli_Microso
 - セルフレビューの「読み手」観点で、PR の差分が Issue の計画と合っているか（やらないと書いたことをやっていないか、手順の漏れ）を確かめる。
   ずれていたら手順5で Issue 側を直すか、実装を計画に合わせる。
 - Issue を手で閉じない。マージはユーザーが行い、そのとき閉じる。
+- **例外: epic の段階の sub-issue は自動では閉じない**（base が main でないため）。次の段階に着手するとき、前の段階の PR が
+  マージ済みかを `& $gh pr view <PR番号> --json state` で確かめ、`MERGED` なら
+  `& $gh issue close <段階の番号> --comment "#<PR番号> で epic/<機能> に入った"` で閉じる。親 Issue の手順の行にもチェックを付ける。
