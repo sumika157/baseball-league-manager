@@ -10,7 +10,7 @@ ORM モデルとドメインオブジェクトの相互変換（マッピング�
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 from django.db import models, transaction
@@ -34,12 +34,17 @@ from ..domain.entities import (
 from ..domain.exceptions import (
     GameNotFound,
     InvalidPosition,
+    InvalidRatings,
+    InvalidWorld,
     LeagueNotFound,
+    PlayerNotFound,
     TeamNotFound,
     WorldNotFound,
 )
+from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.world import World, WorldScope
 from ..domain.services import ensure_lines_match_plate_appearances
+from ..domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings
 from ..domain.value_objects import (
     AdvanceReason,
     Base,
@@ -58,7 +63,7 @@ from ..domain.value_objects import (
     Season,
 )
 from . import orm_models
-from .scoping import games_in, leagues_in, players_in, teams_in, world_condition
+from .scoping import games_in, leagues_in, players_in, ratings_in, teams_in, world_condition
 
 _BATTING_FIELDS = (
     "at_bats",
@@ -893,6 +898,8 @@ class DjangoLeagueRepository:
 # したものと一致することを検査している（足したモデルを消し忘れると、そのテストが落ちる）。
 _GAME_ROUTE = "home_team__league"
 _WORLD_ROWS_CHILD_FIRST: tuple[tuple[type[models.Model], str], ...] = (
+    # 能力は選手の在籍をたどって世界が決まるので、在籍を消す前に消す
+    (orm_models.PennantPlayerRatings, "player__stints__team__league"),
     (orm_models.GameRunnerAdvance, f"plate_appearance__game__{_GAME_ROUTE}"),
     (orm_models.GameRunnerSubstitution, f"plate_appearance__game__{_GAME_ROUTE}"),
     (orm_models.GameFieldingError, f"plate_appearance__game__{_GAME_ROUTE}"),
@@ -906,6 +913,72 @@ _WORLD_ROWS_CHILD_FIRST: tuple[tuple[type[models.Model], str], ...] = (
     (orm_models.PlayerStint, "team__league"),
 )
 _PLAYER_DELETE_CHUNK = 500
+
+
+_RATING_COLUMNS = {
+    BatterRatings: tuple(BatterRatings.LABELS),
+    PitcherRatings: tuple(PitcherRatings.LABELS),
+}
+_RATINGS_CHUNK = 500
+
+
+class DjangoRatingsRepository:
+    """RatingsRepository の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る。
+
+    能力はペナント専用で、実データの範囲には書けない。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    @transaction.atomic
+    def add_all(self, ratings: Sequence[PlayerRatings]) -> None:
+        if self._scope.is_real:
+            raise InvalidWorld("能力はペナントの世界にだけ保存できます。")
+        player_ids = {item.player_id for item in ratings}
+        positions = dict(players_in(self._scope).filter(id__in=player_ids).values_list("id", "position"))
+        if missing := sorted(player_ids - positions.keys()):
+            raise PlayerNotFound(f"この世界に居ない選手の能力は保存できません（id={missing[0]}）。")
+        for item in ratings:
+            # 登録位置が投手の選手に投手の能力、それ以外に野手の能力。取り違えると、行はチェック制約を
+            # 通ってしまい（どちらの組も埋まっていれば通る）、シミュレーションで別の項目として読まれる
+            if Position.from_label(positions[item.player_id]).is_pitcher != item.is_pitcher:
+                kind = "投手" if item.is_pitcher else "野手"
+                raise InvalidRatings(f"登録位置と能力の種類が合いません（選手 id={item.player_id} に{kind}の能力）。")
+        keys = [(item.player_id, item.year) for item in ratings]
+        if len(set(keys)) != len(keys):
+            raise InvalidRatings("同じ選手・同じ年の能力が重複しています。")
+        years = {item.year for item in ratings}
+        if saved := ratings_in(self._scope).filter(player_id__in=player_ids, year__in=years).first():
+            raise InvalidRatings(f"すでに能力があります（選手 id={saved.player_id}・{saved.year}年）。")
+        orm_models.PennantPlayerRatings.objects.bulk_create(
+            [self._to_row(item) for item in ratings], batch_size=_RATINGS_CHUNK
+        )
+
+    def find_by_year(self, year: int) -> list[PlayerRatings]:
+        rows = ratings_in(self._scope).filter(year=year).order_by("player_id")
+        return [self._to_domain(row) for row in rows]
+
+    def find_by_player(self, player_id: int) -> list[PlayerRatings]:
+        rows = ratings_in(self._scope).filter(player_id=player_id).order_by("year")
+        return [self._to_domain(row) for row in rows]
+
+    @staticmethod
+    def _to_row(item: PlayerRatings) -> orm_models.PennantPlayerRatings:
+        values = {name: getattr(item.ratings, name) for name in _RATING_COLUMNS[type(item.ratings)]}
+        return orm_models.PennantPlayerRatings(
+            player_id=item.player_id, year=item.year, growth=item.ratings.growth.value, **values
+        )
+
+    @staticmethod
+    def _to_domain(row: orm_models.PennantPlayerRatings) -> PlayerRatings:
+        growth = GrowthType(row.growth)
+        ratings: BatterRatings | PitcherRatings
+        if row.contact is not None:
+            ratings = BatterRatings(**{name: getattr(row, name) for name in BatterRatings.LABELS}, growth=growth)
+        else:
+            ratings = PitcherRatings(**{name: getattr(row, name) for name in PitcherRatings.LABELS}, growth=growth)
+        return PlayerRatings(player_id=row.player_id, year=row.year, ratings=ratings)
 
 
 class DjangoWorldRepository:

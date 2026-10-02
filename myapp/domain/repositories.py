@@ -3,7 +3,7 @@
 ドメイン層は「永続化できる」ことだけを知り、それが Django ORM なのか
 他の手段なのかは知らない。実装は infrastructure 層に置く。
 
-**`TeamRepository` / `GameRepository` / `LeagueRepository` は、組み立てるときに
+**`TeamRepository` / `GameRepository` / `LeagueRepository` / `RatingsRepository` は、組み立てるときに
 `WorldScope` を必須で受け取る**（実装のコンストラクタの話で、このインターフェースには
 現れない）。読み出しはすべてその範囲に絞られ、範囲の外の id は「見つからない」になる。
 `WorldRepository` だけは世界そのものの台帳なので範囲を持たない。
@@ -11,9 +11,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
 from .entities import Game, League, Team
+from .pennant.ratings import PlayerRatings
 from .pennant.world import World
 
 
@@ -111,5 +113,29 @@ class WorldRepository(Protocol):
         ...
 
     def delete(self, world_id: int) -> None:
-        """世界と、その世界に属するリーグ・球団・選手・試合をすべて消す。無ければ WorldNotFound。"""
+        """世界と、その世界に属するリーグ・球団・選手・試合・能力をすべて消す。無ければ WorldNotFound。"""
+        ...
+
+
+@runtime_checkable
+class RatingsRepository(Protocol):
+    """世界の中の選手の能力。選手 × 年で1組。"""
+
+    def add_all(self, ratings: Sequence[PlayerRatings]) -> None:
+        """能力を一括で保存する（ある年の能力を足す）。
+
+        範囲の外の選手には書けない（PlayerNotFound）。次は InvalidRatings で、**何も書かない**:
+        登録位置と能力の種類が合わない（投手に野手の能力、またはその逆）、同じ選手 × 年が
+        渡した中で重複している・すでに保存済みである。
+        書き込みはまとめて行う（選手ごとに1回ずつ書かない）。ただし1回の SQL に載せる行数には
+        データベースの変数の上限があるので、約1,600人ぶんは数百行ずつの数回に分かれる。
+        """
+        ...
+
+    def find_by_year(self, year: int) -> list[PlayerRatings]:
+        """その年の、範囲の全選手の能力。選手の id の順。"""
+        ...
+
+    def find_by_player(self, player_id: int) -> list[PlayerRatings]:
+        """ひとりの選手の能力を、年の順に。範囲の外の選手や能力の無い選手は空。"""
         ...

@@ -11,10 +11,21 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
 from ..domain.entities import Game
+from ..domain.value_objects import FieldingLine
 from .dto import GameRow, PlayerFielding, TeamSummary
+
+
+@runtime_checkable
+class FieldingTotalsQuery(Protocol):
+    """選手の通算守備成績の参照（世界の作成時に、守備力の推定に使う）。"""
+
+    def totals_for(self, player_ids: Sequence[int]) -> dict[int, FieldingLine]:
+        """選手 id → 通算の守備成績。守備に就いた試合が無い選手は含めない。"""
+        ...
 
 
 @runtime_checkable

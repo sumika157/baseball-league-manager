@@ -10,6 +10,7 @@
 from django.conf import settings
 from django.db import models
 
+from ..domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings
 from ..domain.value_objects import (
     AdvanceReason,
     Base,
@@ -610,3 +611,73 @@ class GameFieldingError(models.Model):
 
     def __str__(self) -> str:
         return f"{self.player.name}（{self.position}）の{self.kind}"
+
+
+def _rating_field(label: str) -> models.PositiveSmallIntegerField:
+    """能力の1項目の列。項目名の表示は domain の `LABELS` が出典。野手と投手で片方は空。"""
+    return models.PositiveSmallIntegerField(null=True, blank=True, verbose_name=label)
+
+
+class PennantPlayerRatings(models.Model):
+    """ペナントの世界の、選手 × 年の能力。**入力**で、成績はここから生まれる結果。
+
+    野手は野手の5項目、投手は投手の4項目を持ち、もう片方は空。成長型は両方が持つ。
+    項目の列は domain の `BatterRatings` / `PitcherRatings` のフィールドが出典
+    （`tests/integration/test_pennant_ratings.py` が突き合わせる）。
+    ペナント専用だが、選手経由で世界に属す（選手の在籍をたどると世界が決まる）。
+    翌年の能力は新しい行として足すので、年ごとの推移が残る。
+    """
+
+    GROWTH_CHOICES = [(growth.value, growth.value) for growth in GrowthType]
+
+    player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="pennant_ratings", verbose_name="選手")
+    year = models.IntegerField(verbose_name="年度")
+    growth = models.CharField(max_length=4, choices=GROWTH_CHOICES, verbose_name="成長型")
+    contact = _rating_field(BatterRatings.LABELS["contact"])
+    power = _rating_field(BatterRatings.LABELS["power"])
+    eye = _rating_field(BatterRatings.LABELS["eye"])
+    speed = _rating_field(BatterRatings.LABELS["speed"])
+    fielding = _rating_field(BatterRatings.LABELS["fielding"])
+    stuff = _rating_field(PitcherRatings.LABELS["stuff"])
+    control = _rating_field(PitcherRatings.LABELS["control"])
+    home_run_avoidance = _rating_field(PitcherRatings.LABELS["home_run_avoidance"])
+    stamina = _rating_field(PitcherRatings.LABELS["stamina"])
+
+    class Meta:
+        verbose_name = "ペナントの能力"
+        verbose_name_plural = "ペナントの能力"
+        ordering = ["year", "player_id"]
+        constraints = [
+            models.UniqueConstraint(fields=["player", "year"], name="unique_pennant_ratings_player_year"),
+            # 野手の5項目がそろっているか、投手の4項目がそろっているか（混ざった行を作らない）
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        contact__isnull=False,
+                        power__isnull=False,
+                        eye__isnull=False,
+                        speed__isnull=False,
+                        fielding__isnull=False,
+                        stuff__isnull=True,
+                        control__isnull=True,
+                        home_run_avoidance__isnull=True,
+                        stamina__isnull=True,
+                    )
+                    | models.Q(
+                        contact__isnull=True,
+                        power__isnull=True,
+                        eye__isnull=True,
+                        speed__isnull=True,
+                        fielding__isnull=True,
+                        stuff__isnull=False,
+                        control__isnull=False,
+                        home_run_avoidance__isnull=False,
+                        stamina__isnull=False,
+                    )
+                ),
+                name="pennant_ratings_batter_or_pitcher",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.player.name} の{self.year}年の能力"

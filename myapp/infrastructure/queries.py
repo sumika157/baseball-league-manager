@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import fields
 from typing import Any
 
@@ -89,6 +89,35 @@ class DjangoPlayerFieldingQuery:
             **{f.name: getattr(line, f.name) for f in fields(FieldingLine)},
             fielding_percentage=line.fielding_percentage,
         )
+
+
+class DjangoFieldingTotalsQuery:
+    """FieldingTotalsQuery の Django ORM 実装。選手ごとの通算守備成績を、1回の SQL の集計で読む。"""
+
+    _SUMS = DjangoPlayerFieldingQuery._SUMS
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def totals_for(self, player_ids: Sequence[int]) -> dict[int, FieldingLine]:
+        if not player_ids:
+            return {}
+        # 範囲だけで絞って選手ごとに集計し、欲しい選手は集計後に選ぶ。選手の id の一覧（1,600人）を
+        # SQL に渡して範囲の JOIN と併せると、実行計画が崩れて 0.05 秒が 0.8 秒になった（実測）。
+        # 集計後の行は選手1人につき1行なので、Python で選んでも組み立てる量は変わらない
+        wanted = set(player_ids)
+        rows = (
+            orm_models.GameFieldingLine.objects.filter(world_condition("game__home_team__league", self._scope))
+            .values("player_id")
+            .annotate(**self._SUMS)
+        )
+        totals: dict[int, FieldingLine] = {}
+        for row in rows:
+            # values() の行から可変のキーで取り出すため、TypedDict の字面キー検査は効かない
+            sums: Mapping[str, Any] = row
+            if sums["player_id"] in wanted:
+                totals[sums["player_id"]] = FieldingLine(**{f.name: sums[f.name] or 0 for f in fields(FieldingLine)})
+        return totals
 
 
 class DjangoPlayerSearchQuery:

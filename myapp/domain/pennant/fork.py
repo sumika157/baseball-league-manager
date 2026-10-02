@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from ..entities import League, Team
+from ..entities import League, Player, Team
 
 
 def fork_league(source: League, *, display_order: int) -> League:
@@ -37,15 +37,21 @@ def fork_team(source: Team, *, league_id: int) -> Team:
     )
 
 
-def fork_roster(source: Team, target: Team, *, start_year: int) -> None:
+def fork_roster(source: Team, target: Team, *, start_year: int) -> list[tuple[Player, Player]]:
     """分岐元の現在の選手を、保存済みの空の球団へ加入させる。
 
     現在の在籍（退団年が空）のある選手だけを、開幕年に加入した形で写す。
     退団済みの選手・過去の在籍・主将の在任歴は写さない。
+
+    (分岐元の選手, 写した選手) の組を返す。写した選手の id は保存で決まるので、
+    能力の推定のように「元の成績」と「写した先」を結びつけたい呼び出し側がこの組を使う。
     """
+    copies: list[tuple[Player, Player]] = []
     for player in source.active_players:
         stint = source.current_stint(player)
         if stint is None:
             continue
         copy = target.add_player(player.name, stint.number, player.position, from_year=start_year)
         copy.profile = player.profile
+        copies.append((player, copy))
+    return copies
