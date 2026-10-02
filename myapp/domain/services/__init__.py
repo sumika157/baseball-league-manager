@@ -8,6 +8,7 @@
 - sorting: 一覧の並べ替えキーと既定の向き
 - records: 試合からの集計（通算・順位表・対戦成績・年度別成績・月別成績）
 - decisions: 勝敗・セーブ・ホールドの導出（日本プロ野球の規則）
+- scoring: 打席の記録から1試合ぶんの成績を導く（打撃・投球・守備・失点・残塁）と、試合の組み立て（assemble_game）
 """
 
 from .decisions import (
@@ -48,6 +49,7 @@ from .records import (
     monthly_splits,
     player_batting_total,
     player_pitching_total,
+    recorded_games,
     seasons_of,
     standings,
     team_batting,
@@ -55,6 +57,27 @@ from .records import (
     team_pitching,
     team_record,
     yearly_splits,
+)
+from .scoring import (
+    FieldingCredits,
+    RunScored,
+    assemble_game,
+    batting_line_for,
+    earned_runs_for,
+    ensure_lines_match_plate_appearances,
+    errors_by_inning,
+    errors_for,
+    fielders_by_plate_appearance,
+    fielding_credits,
+    fielding_line_for,
+    fielding_lines_for,
+    hits_by_inning,
+    left_on_base,
+    pitching_line_for,
+    record_derived_fielding,
+    runs_allowed_for,
+    runs_scored_in,
+    team_of_players,
 )
 from .sorting import (
     BATTER_SORT_KEYS,
@@ -102,6 +125,7 @@ __all__ = [
     "monthly_splits",
     "player_batting_total",
     "player_pitching_total",
+    "recorded_games",
     "seasons_of",
     "standings",
     "team_batting",
@@ -116,4 +140,24 @@ __all__ = [
     "STARTER_WIN_MINIMUM_OUTS",
     "PitchingDecisions",
     "pitching_decisions",
+    # scoring
+    "FieldingCredits",
+    "RunScored",
+    "batting_line_for",
+    "earned_runs_for",
+    "ensure_lines_match_plate_appearances",
+    "errors_by_inning",
+    "errors_for",
+    "fielders_by_plate_appearance",
+    "fielding_credits",
+    "fielding_line_for",
+    "fielding_lines_for",
+    "record_derived_fielding",
+    "hits_by_inning",
+    "left_on_base",
+    "pitching_line_for",
+    "runs_allowed_for",
+    "runs_scored_in",
+    "assemble_game",
+    "team_of_players",
 ]

@@ -6,7 +6,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from ..domain.value_objects import FieldingPosition
 
 
 @dataclass(frozen=True)
@@ -37,14 +39,18 @@ class GameRow:
     home_score: int
     away_score: int
     winner_team_id: int | None
+    # 未記録（打席も明細も無い）の試合は 0-0 でも引分ではない。判定の出典は `Game.is_recorded`
+    is_recorded: bool = True
 
     @property
     def result(self) -> str:
-        """'引分' または '<チーム名> の勝ち'。
+        """'未記録'・'引分'・'<チーム名> の勝ち' のいずれか。
 
         持っている値から決まるので、作る側ごとに組み立てない
         （勝者そのものはドメインの winning_team_id が唯一の出典）。
         """
+        if not self.is_recorded:
+            return "未記録"
         if self.winner_team_id is None:
             return "引分"
         name = self.home_team_name if self.winner_team_id == self.home_team_id else self.away_team_name
@@ -88,6 +94,14 @@ class GamePlayerRow:
     triples: int = 0
     hit_by_pitch: int = 0
     sacrifice_flies: int = 0
+    runs: int = 0
+    sacrifice_bunts: int = 0
+    stolen_bases: int = 0
+    double_plays: int = 0
+    # 打者の三振。投手の `strikeouts`（奪三振）とは別の事実なので名前を分ける
+    # （1つの DTO を打撃行と投球行の両方に使っているため）
+    strikeouts_batting: int = 0
+    runs_allowed: int = 0
     # 通算の率。ボックススコアの「打率」「防御率」は、その試合の率ではなく
     # 積み上がった率を参考として並べる（1試合の率は標本が小さすぎて読めない）
     career_batting_average: float = 0.0
@@ -127,10 +141,55 @@ class GameLineScore:
     home_total: int
     away_hits: int
     home_hits: int
+    # 失策は打席の記録から数える。打席の無い試合は数えられないので None（画面は「—」）
+    away_errors: int | None = None
+    home_errors: int | None = None
 
     @property
     def has_columns(self) -> bool:
         return bool(self.columns)
+
+
+@dataclass(frozen=True)
+class GameFieldingRow:
+    """試合詳細に並べる、1選手ぶんの守備成績。守備に就いた選手は機会が無くても載る。"""
+
+    player_id: int
+    player_name: str
+    number: int
+    team_id: int
+    position_label: str
+    putouts: int = 0
+    assists: int = 0
+    errors: int = 0
+
+
+@dataclass(frozen=True)
+class ScorebookMark:
+    """スコアブックのマスに書く1打席。"""
+
+    result: str  # 結果の表記（`PlateAppearanceResult.label`）
+    batter_name: str
+
+
+@dataclass(frozen=True)
+class ScorebookRow:
+    """スコアブックの1行（打順1人ぶん）。cells は回の列と同じ順で、打席が無い回は空。
+
+    同じ打順が同じ回に2打席立つ（打者一巡）と、1つのマスに複数入る。
+    """
+
+    batting_order: int
+    cells: list[list[ScorebookMark]]
+
+
+@dataclass(frozen=True)
+class ScorebookGrid:
+    """1チームぶんのスコアブック（打順 × 回）。読み取り専用の表示用。"""
+
+    team_name: str
+    innings: list[int]
+    rows: list[ScorebookRow]
 
 
 @dataclass(frozen=True)
@@ -142,6 +201,8 @@ class GameTeamBox:
     score: int
     batting: list[GamePlayerRow]
     pitching: list[GamePlayerRow]
+    # 守備成績は打席から導く値なので、打席の記録が無い試合では空
+    fielding: list[GameFieldingRow] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -158,6 +219,8 @@ class GameDetail:
     line_score: GameLineScore | None = None
     away_box: GameTeamBox | None = None
     home_box: GameTeamBox | None = None
+    # ビジター → ホームの順。打席の記録が無い試合は空
+    scorebook: list[ScorebookGrid] = field(default_factory=list)
 
     @property
     def boxes(self) -> list[GameTeamBox]:
@@ -181,8 +244,16 @@ class PlayerGameRow:
     hits: int = 0
     home_runs: int = 0
     runs_batted_in: int = 0
+    runs: int = 0
+    stolen_bases: int = 0
+    caught_stealing: int = 0
+    sacrifice_bunts: int = 0
+    intentional_walks: int = 0
+    strikeouts_batting: int = 0
+    double_plays: int = 0
     # 投球
     innings_pitched: str = "0.0"
+    runs_allowed: int = 0
     earned_runs: int = 0
     strikeouts: int = 0
     decision: str = ""  # 本人に付いた記録。ボックススコアと同じ印
@@ -209,6 +280,13 @@ class YearlyRow:
     walks: int = 0
     hit_by_pitch: int = 0
     sacrifice_flies: int = 0
+    runs: int = 0
+    stolen_bases: int = 0
+    caught_stealing: int = 0
+    sacrifice_bunts: int = 0
+    intentional_walks: int = 0
+    strikeouts_batting: int = 0
+    double_plays: int = 0
     batting_average: float = 0.0
     on_base_percentage: float = 0.0
     slugging_percentage: float = 0.0
@@ -226,6 +304,7 @@ class YearlyRow:
     walks_allowed: int = 0
     hit_by_pitch_allowed: int = 0
     strikeouts: int = 0
+    runs_allowed: int = 0
     earned_runs: int = 0
     earned_run_average: float = 0.0
     whip: float = 0.0
@@ -250,10 +329,18 @@ class MonthlyRow:
     hits: int = 0
     home_runs: int = 0
     runs_batted_in: int = 0
+    runs: int = 0
+    stolen_bases: int = 0
+    caught_stealing: int = 0
+    sacrifice_bunts: int = 0
+    intentional_walks: int = 0
+    strikeouts_batting: int = 0
+    double_plays: int = 0
     batting_average: float = 0.0
     ops: float = 0.0
     # 投球
     innings_pitched: str = "0.0"
+    runs_allowed: int = 0
     earned_runs: int = 0
     strikeouts: int = 0
     earned_run_average: float = 0.0
@@ -292,6 +379,28 @@ class TeamMonthlyRow:
 
 
 @dataclass(frozen=True)
+class FieldingRow:
+    """選手の守備成績1行（通算または1年度）。守備率は足した実数から計算し直した値。"""
+
+    label: str  # '通算' / '2026年'
+    games: int  # 守備に就いた試合数
+    total_chances: int
+    putouts: int
+    assists: int
+    errors: int
+    double_plays_turned: int
+    fielding_percentage: float
+
+
+@dataclass(frozen=True)
+class PlayerFielding:
+    """選手個人ページの守備成績。通算と年度別。"""
+
+    career: FieldingRow
+    years: list[FieldingRow]
+
+
+@dataclass(frozen=True)
 class CareerRow:
     """経歴の1行。どのチームにいつ在籍したか。"""
 
@@ -321,6 +430,8 @@ class PlayerProfile:
     years: list[YearlyRow] | None = None
     # 月別成績。調子の波は通算値では見えないため、期間で区切って並べる
     months: list[MonthlyRow] | None = None
+    # 守備成績。守備に就いた試合が1つも無ければ None（画面に出さない）
+    fielding: PlayerFielding | None = None
     # 選択されている月（MonthlyRow.key と同じ形式）と、その表示名
     selected_month: str = ""
     selected_month_label: str = ""
@@ -809,3 +920,33 @@ class PlayerDetail:
     hold_points: int = 0
     starts: int = 0
     is_captain: bool = False
+    # 打席の記録から導く項目。打者の三振は投手の strikeouts（奪三振）と別の事実なので名前を分ける
+    runs: int = 0
+    stolen_bases: int = 0
+    caught_stealing: int = 0
+    sacrifice_bunts: int = 0
+    intentional_walks: int = 0
+    strikeouts_batting: int = 0
+    double_plays: int = 0
+    runs_allowed: int = 0
+
+
+@dataclass(frozen=True)
+class LineupSlot:
+    """打順の1枠。誰が何番でどこを守ったか。
+
+    スコアブックの保存でプレゼンテーション層から受け取る。成績は含めない
+    （打席から導くため）。同じ打順に複数の選手が並ぶ場合は slot_sequence で区別する。
+    """
+
+    team_id: int
+    player_id: int
+    batting_order: int
+    slot_sequence: int
+    fielding_position: FieldingPosition | None
+    # 途中出場の行だけ。守備固めなど打席から導けない出場を、入った半回で指す
+    # （回と、その回の表か裏か）。応用層が半回の最初の打席の番号に読み替える。
+    entered_inning: int | None = None
+    entered_is_bottom: bool = False
+    # その半回で何人目の打者から（1始まり）。守備固めが半回の途中で入る場合に指す
+    entered_batter: int = 1

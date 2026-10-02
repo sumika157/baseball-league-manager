@@ -32,6 +32,10 @@ Thumbs.db
 .ruff_cache/
 .mypy_cache/
 
+# カバレッジ計測の結果（make coverage はコンテナの /tmp に書くが、直接実行したときの保険）
+.coverage
+.coverage.*
+
 # フロントエンド（依存とビルド成果物はコミットしない。package-lock.json はコミットする）
 frontend/node_modules/
 myapp/static/myapp/dist/

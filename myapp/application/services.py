@@ -16,15 +16,12 @@ from ..domain import services as domain_services
 from ..domain.entities import Game, Player, Stint, Team
 from ..domain.repositories import GameRepository, LeagueRepository, TeamRepository
 from ..domain.value_objects import (
-    BattingLine,
     FieldingPosition,
     JerseyNumber,
-    LineScore,
     PitchingLine,
     Position,
     Season,
     TeamRecord,
-    ensure_quota_not_exceeded,
     format_average,
 )
 from .dto import (
@@ -34,6 +31,7 @@ from .dto import (
     Dashboard,
     DashboardLeague,
     GameDetail,
+    GameFieldingRow,
     GameLineScore,
     GamePlayerRow,
     GameRow,
@@ -65,7 +63,8 @@ from .dto import (
     TitleDepartment,
     YearlyRow,
 )
-from .queries import GameListQuery, TeamListQuery
+from .queries import GameListQuery, PlayerFieldingQuery, TeamListQuery
+from .scorebook_view import build_scorebook_grids
 
 
 def _saved_id(value: int | None) -> int:
@@ -156,6 +155,7 @@ class TeamApplicationService:
         games: GameRepository,
         leagues: LeagueRepository,
         game_list_query: GameListQuery,
+        player_fielding_query: PlayerFieldingQuery,
     ) -> None:
         # 具象クラスではなくリポジトリ・参照クエリのインターフェースに依存する。
         # 省略可能にすると、一部だけ渡した半端なサービスが作れてしまい、呼ぶ経路に
@@ -164,6 +164,8 @@ class TeamApplicationService:
         # 一覧表示は集約を組み立てないリードモデルを使う
         self._team_list_query = team_list_query
         self._game_list_query = game_list_query
+        # 守備成績は選手ページで通算・年度別を合計で出すだけなので、集約を組み立てずに読む
+        self._player_fielding_query = player_fielding_query
         # 勝敗と通算成績の出典
         self._games = games
         # 順位はリーグの中で決まるため、リーグの一覧が要る
@@ -536,7 +538,8 @@ class TeamApplicationService:
         # そのシーズンの成績だけを持つ選手に組み替える。通算値のままでは
         # 別のシーズンの記録まで混ざってタイトルの対象にならない
         games_played: dict[int, int] = {}
-        for game in season_games:
+        # 規定の基準になる試合数に、未記録の試合は数えない
+        for game in domain_services.recorded_games(season_games):
             for team_id in (game.home_team_id, game.away_team_id):
                 games_played[team_id] = games_played.get(team_id, 0) + 1
 
@@ -815,6 +818,11 @@ class TeamApplicationService:
                     triples=line.triples,
                     hit_by_pitch=line.hit_by_pitch,
                     sacrifice_flies=line.sacrifice_flies,
+                    runs=line.runs,
+                    sacrifice_bunts=line.sacrifice_bunts,
+                    stolen_bases=line.stolen_bases,
+                    double_plays=line.double_plays,
+                    strikeouts_batting=line.strikeouts,
                     career_batting_average=info["batting_average"],
                     batting_order=entry.batting_order,
                     slot_sequence=entry.slot_sequence,
@@ -837,6 +845,7 @@ class TeamApplicationService:
                     team_id=info["team_id"],
                     team_name=names.get(info["team_id"], ""),
                     innings_pitched=str(pitched.innings),
+                    runs_allowed=pitched.runs_allowed,
                     earned_runs=pitched.earned_runs,
                     strikeouts=pitched.strikeouts,
                     hits_allowed=pitched.hits_allowed,
@@ -850,14 +859,63 @@ class TeamApplicationService:
                 )
             )
 
+        fielding = self._to_fielding_rows(game, players)
+
         return GameDetail(
             game=self._to_game_row(game, names),
             batting=batting,
             pitching=pitching,
             line_score=self._to_line_score(game, batting),
-            away_box=self._to_team_box(game.away_team_id, names, batting, pitching, game),
-            home_box=self._to_team_box(game.home_team_id, names, batting, pitching, game),
+            away_box=self._to_team_box(game.away_team_id, names, batting, pitching, fielding, game),
+            home_box=self._to_team_box(game.home_team_id, names, batting, pitching, fielding, game),
+            scorebook=build_scorebook_grids(
+                game,
+                names,
+                lambda player_id: players[player_id]["name"] if player_id in players else f"選手{player_id}",
+            ),
         )
+
+    @staticmethod
+    def _to_fielding_rows(game: Game, players: dict[int, dict]) -> list[GameFieldingRow]:
+        """守備成績の行。打順の順に並べ、続けて打順にいない投手（指名打者制）を登板順に並べる。
+
+        位置はラインアップの守備位置。打順にいない投手は「投」。守備成績は打席から導いた値で、
+        打席の記録が無い試合では行が無い。
+        """
+        by_player = {entry.player_id: entry.line for entry in game.fielding}
+        lineup = {entry.player_id: entry for entry in game.batting}
+        pitched = {outing.player_id for outing in game.pitching}
+
+        ordered = [entry.player_id for entry in game.batting_in_order() if entry.player_id in by_player]
+        ordered += [outing.player_id for outing in game.pitching_in_order() if outing.player_id not in ordered]
+        # 打席にも登板にも現れない守備者（失策だけが記録された選手など）は最後に
+        ordered += sorted(set(by_player) - set(ordered))
+
+        rows = []
+        for player_id in ordered:
+            info = players.get(player_id)
+            if info is None or player_id not in by_player:
+                continue
+            batting = lineup.get(player_id)
+            position = batting.fielding_position if batting else None
+            if position is not None and position.takes_the_field:
+                label = position.label
+            else:
+                label = FieldingPosition.PITCHER.label if player_id in pitched else ""
+            line = by_player[player_id]
+            rows.append(
+                GameFieldingRow(
+                    player_id=player_id,
+                    player_name=info["name"],
+                    number=info["number"],
+                    team_id=info["team_id"],
+                    position_label=label,
+                    putouts=line.putouts,
+                    assists=line.assists,
+                    errors=line.errors,
+                )
+            )
+        return rows
 
     @staticmethod
     def _to_team_box(
@@ -865,6 +923,7 @@ class TeamApplicationService:
         names: dict[int, str],
         batting: list[GamePlayerRow],
         pitching: list[GamePlayerRow],
+        fielding: list[GameFieldingRow],
         game: Game,
     ) -> GameTeamBox | None:
         """1チームぶんのボックススコア。並びは既に打順・登板順になっている。"""
@@ -878,6 +937,7 @@ class TeamApplicationService:
             score=(game.home_score if team_id == game.home_team_id else game.away_score),
             batting=rows,
             pitching=staff,
+            fielding=[row for row in fielding if row.team_id == team_id],
         )
 
     @staticmethod
@@ -894,6 +954,21 @@ class TeamApplicationService:
             home = str(score.runs_in(inning, home=True)) if inning <= len(score.home) else "X"
             columns.append(InningScoreColumn(inning=inning, away=away, home=home))
 
+        plate_appearances = game.plate_appearances
+        if plate_appearances:
+            # 安打・失策は打席が出典（打撃明細の合計とは照合済みで一致する）。
+            # 失策は守備側のチームに付くので、ホームの失策は表の打席から数える
+            return GameLineScore(
+                columns=columns,
+                away_total=score.away_total,
+                home_total=score.home_total,
+                away_hits=sum(domain_services.hits_by_inning(plate_appearances, home=False).values()),
+                home_hits=sum(domain_services.hits_by_inning(plate_appearances, home=True).values()),
+                away_errors=sum(domain_services.errors_by_inning(plate_appearances, home=False).values()),
+                home_errors=sum(domain_services.errors_by_inning(plate_appearances, home=True).values()),
+            )
+
+        # 古い記録（打席なし）の安打は打撃明細の合計。失策は数えられない
         def hits_of(team_id: int) -> int:
             return sum(row.hits for row in batting if row.team_id == team_id)
 
@@ -937,7 +1012,15 @@ class TeamApplicationService:
                     hits=batting.line.hits if batting else 0,
                     home_runs=batting.line.home_runs if batting else 0,
                     runs_batted_in=batting.line.runs_batted_in if batting else 0,
+                    runs=batting.line.runs if batting else 0,
+                    stolen_bases=batting.line.stolen_bases if batting else 0,
+                    caught_stealing=batting.line.caught_stealing if batting else 0,
+                    sacrifice_bunts=batting.line.sacrifice_bunts if batting else 0,
+                    intentional_walks=batting.line.intentional_walks if batting else 0,
+                    strikeouts_batting=batting.line.strikeouts if batting else 0,
+                    double_plays=batting.line.double_plays if batting else 0,
                     innings_pitched=str(pitching.line.innings) if pitching else "0.0",
+                    runs_allowed=pitching.line.runs_allowed if pitching else 0,
                     earned_runs=pitching.line.earned_runs if pitching else 0,
                     strikeouts=pitching.line.strikeouts if pitching else 0,
                     decision=_decision_label(pitching.line) if pitching else "",
@@ -959,6 +1042,7 @@ class TeamApplicationService:
             selected_month_label=selected.label if selected else "",
             years=[self._to_yearly_row(split) for split in domain_services.yearly_splits(team_games, player_id)],
             months=months,
+            fielding=self._player_fielding_query.for_player(player_id, team_id),
             career=[
                 CareerRow(
                     team_id=s.team_id,
@@ -1001,6 +1085,13 @@ class TeamApplicationService:
             walks=batting.walks,
             hit_by_pitch=batting.hit_by_pitch,
             sacrifice_flies=batting.sacrifice_flies,
+            runs=batting.runs,
+            stolen_bases=batting.stolen_bases,
+            caught_stealing=batting.caught_stealing,
+            sacrifice_bunts=batting.sacrifice_bunts,
+            intentional_walks=batting.intentional_walks,
+            strikeouts_batting=batting.strikeouts,
+            double_plays=batting.double_plays,
             batting_average=batting.batting_average,
             on_base_percentage=batting.on_base_percentage,
             slugging_percentage=batting.slugging_percentage,
@@ -1017,6 +1108,7 @@ class TeamApplicationService:
             walks_allowed=pitching.walks_allowed,
             hit_by_pitch_allowed=pitching.hit_by_pitch_allowed,
             strikeouts=pitching.strikeouts,
+            runs_allowed=pitching.runs_allowed,
             earned_runs=pitching.earned_runs,
             earned_run_average=pitching.earned_run_average,
             whip=pitching.whip,
@@ -1036,9 +1128,17 @@ class TeamApplicationService:
             hits=batting.hits,
             home_runs=batting.home_runs,
             runs_batted_in=batting.runs_batted_in,
+            runs=batting.runs,
+            stolen_bases=batting.stolen_bases,
+            caught_stealing=batting.caught_stealing,
+            sacrifice_bunts=batting.sacrifice_bunts,
+            intentional_walks=batting.intentional_walks,
+            strikeouts_batting=batting.strikeouts,
+            double_plays=batting.double_plays,
             batting_average=batting.batting_average,
             ops=batting.ops,
             innings_pitched=str(pitching.innings),
+            runs_allowed=pitching.runs_allowed,
             earned_runs=pitching.earned_runs,
             strikeouts=pitching.strikeouts,
             earned_run_average=pitching.earned_run_average,
@@ -1096,146 +1196,16 @@ class TeamApplicationService:
         played_on: date,
         home_team_id: int,
         away_team_id: int,
-        home_score: int,
-        away_score: int,
     ) -> Game:
-        """試合を作る。成績は後から入力する。"""
+        """試合を作る。得点は 0-0 で作る（打席から導く値で、スコアブックの保存で決まる）。成績も後から記録する。"""
         return self._games.save(
             Game(
                 season=Season(year),
                 played_on=played_on,
                 home_team_id=home_team_id,
                 away_team_id=away_team_id,
-                home_score=home_score,
-                away_score=away_score,
             )
         )
-
-    def update_game(
-        self,
-        game_id: int,
-        *,
-        year: int,
-        played_on: date,
-        home_team_id: int,
-        away_team_id: int,
-        home_score: int,
-        away_score: int,
-        batting: dict[int, BattingLine] | None = None,
-        pitching: dict[int, PitchingLine] | None = None,
-        lineup: dict[int, tuple[int | None, int, FieldingPosition | None]] | None = None,
-        staff: dict[int, int] | None = None,
-        line_score: LineScore | None = None,
-    ) -> Game:
-        """試合の基本情報と、出場選手の成績をまとめて更新する。
-
-        batting / pitching は {選手id: ライン}。渡された辞書に含まれない選手の
-        記録は取り消す（出場していない扱いに戻せるようにするため）。
-
-        lineup は {選手id: (打順, 交代の順, 守備位置)}、staff は {選手id: 登板した回}。
-        line_score があれば、勝敗・セーブ・ホールドは日本プロ野球の規則で導出して
-        上書きする。手入力させないのは、規則から一意に決まるものを人が入れると
-        記録どうしが食い違うため。
-        """
-        current = self._games.find_by_id(game_id)
-
-        game = Game(
-            id=current.id,
-            season=Season(year),
-            played_on=played_on,
-            home_team_id=home_team_id,
-            away_team_id=away_team_id,
-            home_score=home_score,
-            away_score=away_score,
-            line_score=line_score if line_score is not None else current.line_score,
-        )
-        game.ensure_line_score_matches()
-
-        batting = batting or {}
-        pitching = pitching or {}
-        lineup = lineup or {}
-        staff = staff or {}
-        for player_id, line in batting.items():
-            order, sequence, position = lineup.get(player_id, (None, 0, None))
-            game.record_batting(
-                player_id,
-                line,
-                batting_order=order,
-                slot_sequence=sequence,
-                fielding_position=position,
-            )
-        # 登板順は登板した回の順に振る。**チームごとに1から振る**（両チームの投手を
-        # まとめて数えると、相手の先発が2番手になってしまう）
-        entered = {pid: staff.get(pid, 1) for pid in pitching}
-        players = self._player_index()
-        # 選手索引に無い選手は team_id が None のまとまりに入る（現状の挙動を維持）
-        by_team: dict[int | None, list[int]] = {}
-        for player_id in sorted(entered, key=lambda pid: (entered[pid], pid)):
-            team_id = players.get(player_id, {}).get("team_id")
-            by_team.setdefault(team_id, []).append(player_id)
-
-        for ordered in by_team.values():
-            for order, player_id in enumerate(ordered, start=1):
-                game.record_pitching(
-                    player_id,
-                    pitching[player_id],
-                    appearance_order=order,
-                    entered_inning=entered[player_id],
-                )
-
-        self._ensure_foreign_player_game_quota(game, batting, pitching)
-        self._apply_pitching_decisions(game)
-        return self._games.save(game)
-
-    def _apply_pitching_decisions(self, game: Game) -> None:
-        """勝敗・セーブ・ホールドをドメインの規則で決め、記録に反映する。
-
-        イニングスコアが無い試合では判定できないので、そのまま残す。
-        """
-        if game.line_score.is_empty:
-            return
-
-        players = self._player_index()
-        team_of = {pid: info["team_id"] for pid, info in players.items()}
-        decisions = domain_services.pitching_decisions(game, team_of)
-
-        for entry in game.pitching:
-            line = entry.line
-            wins = decisions.wins_for(entry.player_id)
-            entry.line = replace(
-                line,
-                wins=wins,
-                losses=decisions.losses_for(entry.player_id),
-                saves=decisions.saves_for(entry.player_id),
-                holds=decisions.holds_for(entry.player_id),
-                starts=1 if entry.appearance_order == 1 else 0,
-                relief_wins=wins if entry.appearance_order > 1 else 0,
-            )
-
-    def _ensure_foreign_player_game_quota(self, game: Game, batting: dict, pitching: dict) -> None:
-        """1試合の出場選手（打撃または投球成績が記録される選手）のうち、
-        外国人選手がチームごとの上限を超えていないか確認する。
-
-        ホーム・ビジターはそれぞれ独立に判定する（合算しない）。
-        """
-        players = self._player_index()
-        names = self._team_names()
-        participant_ids = set(batting) | set(pitching)
-
-        for team_id in (game.home_team_id, game.away_team_id):
-            foreign_count = sum(
-                1
-                for pid in participant_ids
-                if players.get(pid, {}).get("team_id") == team_id and players[pid]["is_foreign_player"]
-            )
-            league_id = _saved_id(self._teams.find_by_id(team_id).league_id)
-            limit = self._leagues.find_by_id(league_id).foreign_player_game_limit
-            ensure_quota_not_exceeded(
-                foreign_count,
-                limit,
-                f"「{names.get(team_id, '')}」の外国人選手出場人数（{foreign_count}人）が"
-                f"上限（{limit}人）を超えています。",
-            )
 
     def get_admin_overview(self) -> AdminOverview:
         """管理画面トップ用の概況。
@@ -1466,7 +1436,9 @@ class TeamApplicationService:
             away_team_name=names.get(game.away_team_id, ""),
             home_score=game.home_score,
             away_score=game.away_score,
-            winner_team_id=game.winner_team_id,
+            # 未記録の試合は 0-0 でも引分ではないので、勝者も付けない
+            winner_team_id=game.winner_team_id if game.is_recorded else None,
+            is_recorded=game.is_recorded,
         )
 
     # --- DTO への詰め替え ---
@@ -1599,4 +1571,12 @@ class TeamApplicationService:
             holds=pitching.holds,
             hold_points=pitching.hold_points,
             starts=pitching.starts,
+            runs=batting.runs,
+            stolen_bases=batting.stolen_bases,
+            caught_stealing=batting.caught_stealing,
+            sacrifice_bunts=batting.sacrifice_bunts,
+            intentional_walks=batting.intentional_walks,
+            strikeouts_batting=batting.strikeouts,
+            double_plays=batting.double_plays,
+            runs_allowed=pitching.runs_allowed,
         )

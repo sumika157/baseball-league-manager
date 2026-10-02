@@ -46,15 +46,20 @@ class GameRepository(Protocol):
     """Game 集約の永続化。試合は2チームにまたがるため Team とは別の集約。"""
 
     def find_by_id(self, game_id: int) -> Game:
-        """打撃・投球・イニングスコアの明細込みで取得する。無ければ GameNotFound。"""
+        """打撃・投球・イニングスコア・打席の記録込みで取得する。無ければ GameNotFound。
+
+        打席まで読むのはこれだけ。1試合で約280行あり、まとめて読む用途に付けると
+        数十万行になるため、下の3つは打席を省いて読む（省いた集約は
+        `plate_appearances_loaded` が False になり、保存しても打席に触れない）。
+        """
         ...
 
     def find_all(self, year: int | None = None) -> list[Game]:
-        """全試合を取得する。年を渡すとそのシーズンだけ。"""
+        """全試合を取得する。年を渡すとそのシーズンだけ。打席は含まない。"""
         ...
 
     def find_by_team(self, team_id: int, year: int | None = None) -> list[Game]:
-        """そのチームが出場した試合を取得する（ホーム・ビジターの別を問わない）。"""
+        """そのチームが出場した試合を取得する（ホーム・ビジターの別を問わない）。打席は含まない。"""
         ...
 
     def find_between_teams(self, team_ids: set[int], year: int | None = None) -> list[Game]:

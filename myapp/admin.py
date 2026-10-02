@@ -31,6 +31,8 @@ from .infrastructure.orm_models import (
     Captaincy,
     Game,
     GameBattingLine,
+    GameFieldingLine,
+    GameInningScore,
     GamePitchingLine,
     League,
     Player,
@@ -877,32 +879,91 @@ class PlayerStintAdmin(GroupedAdminMixin, admin.ModelAdmin):
     group_by = staticmethod(lambda s: f"{s.team.league.name} · {s.team.name}")
 
 
-class GameBattingLineInline(admin.TabularInline):
-    """試合ごとの打撃成績。"""
+class DerivedLinesInline(admin.TabularInline):
+    """打席から導いた明細。閲覧だけで、追加・変更・削除はさせない。
+
+    管理画面はスコアブックの照合（`Game` 集約の保存前の検査）を通らない。ここで数字を
+    書き換えると、打席の記録と食い違ったまま保存されて集計がずれる。
+    記録はスコアブック画面（`/games/<id>/edit/`）で行う。
+    """
+
+    extra = 0
+    can_delete = False
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+class GameInningScoreInline(DerivedLinesInline):
+    """イニングスコア。打席から導いた値。"""
+
+    model = GameInningScore
+
+
+class GameBattingLineInline(DerivedLinesInline):
+    """試合ごとの打撃成績。打席から導いた値。"""
 
     model = GameBattingLine
-    extra = 0
-    autocomplete_fields = ("player",)
 
 
-class GamePitchingLineInline(admin.TabularInline):
-    """試合ごとの投球成績。"""
+class GamePitchingLineInline(DerivedLinesInline):
+    """試合ごとの投球成績。打席から導いた値。"""
 
     model = GamePitchingLine
-    extra = 0
-    autocomplete_fields = ("player",)
+
+
+class GameFieldingLineInline(DerivedLinesInline):
+    """試合ごとの守備成績。打席から導いた値。"""
+
+    model = GameFieldingLine
 
 
 @admin.register(Game)
 class GameAdmin(admin.ModelAdmin):
-    """試合。チームの勝敗も選手の通算成績も、すべてここから集計される。"""
+    """試合。チームの勝敗も選手の通算成績も、すべてここから集計される。
+
+    管理画面で直せるのは試合日・シーズンなどの基本情報だけ。得点・イニングスコア・
+    成績は打席から導く値なので閲覧のみ（スコアブック画面で記録する）。
+    """
 
     list_display = ("played_on", "year", "matchup", "score", "result")
     list_filter = ("year", "home_team__league")
     date_hierarchy = "played_on"
     ordering = ("-played_on",)
     list_select_related = ("home_team", "away_team")
-    inlines = [GameBattingLineInline, GamePitchingLineInline]
+    inlines = [GameInningScoreInline, GameBattingLineInline, GamePitchingLineInline, GameFieldingLineInline]
+    fieldsets = (
+        (
+            None,
+            {
+                "description": "試合の記録（打席・得点・成績）はスコアブック画面（試合詳細の「記録を編集」、"
+                "試合の登録は「試合を登録」）で行います。管理画面で直せるのは基本情報だけです。",
+                "fields": ("year", "played_on", "home_team", "away_team"),
+            },
+        ),
+        (
+            "得点（打席から導いた値）",
+            {
+                "description": "打席の記録から自動で決まるため、ここでは直せません。",
+                "fields": ("home_score", "away_score"),
+            },
+        ),
+    )
+    readonly_fields = ("home_score", "away_score")
+
+    def get_readonly_fields(self, request, obj=None):
+        """登録済みの試合は対戦カードも固定する。
+
+        明細はホーム・ビジターのどちらに属すかを持つので、後から入れ替えると食い違う。
+        """
+        fixed = super().get_readonly_fields(request, obj)
+        return (*fixed, "home_team", "away_team") if obj is not None else fixed
 
     @admin.display(description="対戦")
     def matchup(self, obj):

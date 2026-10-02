@@ -14,7 +14,16 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from ..domain.entities import Game
-from .dto import GameRow, TeamSummary
+from .dto import GameRow, PlayerFielding, TeamSummary
+
+
+@runtime_checkable
+class PlayerFieldingQuery(Protocol):
+    """選手の守備成績の参照。"""
+
+    def for_player(self, player_id: int, team_id: int) -> PlayerFielding | None:
+        """通算と、そのチームでの年度別。守備に就いた試合が1つも無ければ None。"""
+        ...
 
 
 @runtime_checkable

@@ -11,8 +11,12 @@ from django.conf import settings
 from django.db import models
 
 from ..domain.value_objects import (
+    AdvanceReason,
+    Base,
+    ErrorKind,
     FieldingPosition,
     Handedness,
+    PlateAppearanceResult,
     Position,
     StadiumProfile,
 )
@@ -21,6 +25,15 @@ from ..domain.value_objects import (
 POSITION_CHOICES = [(position.value, position.value) for position in Position]
 # 試合で就いた守備位置。登録位置（Position）とは別の概念
 FIELDING_POSITION_CHOICES = [(p.value, p.value) for p in FieldingPosition]
+# 打席まわりの選択肢も同じくドメインの値オブジェクトが出典。ここに文字列を
+# 並べ直すと、種別を増やしたときに片方だけ古いまま静かにずれる。
+PLATE_APPEARANCE_RESULT_CHOICES = [(r.value, r.value) for r in PlateAppearanceResult]
+ADVANCE_REASON_CHOICES = [(r.value, r.value) for r in AdvanceReason]
+ERROR_KIND_CHOICES = [(k.value, k.value) for k in ErrorKind]
+# 塁は順序そのものが意味を持つ（大小比較が「進んだか」）ため数値で持つ
+BASE_CHOICES = [(base.value, base.label) for base in Base]
+# 打球の処理経路（スコアブックの 6-3）は守備位置をこの記号で連ねて1列に持つ
+FIELDED_BY_SEPARATOR = "-"
 
 
 class League(models.Model):
@@ -287,6 +300,19 @@ class GameBattingLine(models.Model):
 
     game = models.ForeignKey(Game, on_delete=models.CASCADE, related_name="batting_lines", verbose_name="試合")
     player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="game_batting", verbose_name="選手")
+    team = models.ForeignKey(
+        Team,
+        on_delete=models.CASCADE,
+        related_name="game_batting_lines",
+        verbose_name="チーム",
+        help_text="試合のホームかビジター。守備位置を選手に引くのに使います。",
+    )
+    entered_sequence = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        verbose_name="出場した打席",
+        help_text="試合に入った最初の打席の通し番号。スタメンは空欄（試合開始から）。途中出場で空欄なら不明です。",
+    )
     # 打線での位置づけ。並びはこの3つで決まる（打順 → 交代の順）
     batting_order = models.IntegerField(
         null=True,
@@ -315,6 +341,14 @@ class GameBattingLine(models.Model):
     walks = models.IntegerField(default=0, verbose_name="四球")
     hit_by_pitch = models.IntegerField(default=0, verbose_name="死球")
     sacrifice_flies = models.IntegerField(default=0, verbose_name="犠飛")
+    # ここから下は打席の記録から導く項目。手入力していた頃は数えられなかった
+    runs = models.IntegerField(default=0, verbose_name="得点")
+    strikeouts = models.IntegerField(default=0, verbose_name="三振")
+    sacrifice_bunts = models.IntegerField(default=0, verbose_name="犠打")
+    intentional_walks = models.IntegerField(default=0, verbose_name="故意四球")
+    stolen_bases = models.IntegerField(default=0, verbose_name="盗塁")
+    caught_stealing = models.IntegerField(default=0, verbose_name="盗塁刺")
+    double_plays = models.IntegerField(default=0, verbose_name="併殺打")
 
     class Meta:
         verbose_name = "打撃成績"
@@ -344,6 +378,8 @@ class GamePitchingLine(models.Model):
     # 日本プロ野球の公式記録。セーブが記録される状況で登板し、
     # リードを保ったまま次の投手へ引き継いだ救援投手に付く
     holds = models.IntegerField(default=0, verbose_name="ホールド")
+    # 失点。自責点だけでは「失策絡みで失点したが自責点ではない」投手を評価できない
+    runs_allowed = models.IntegerField(default=0, verbose_name="失点")
     earned_runs = models.IntegerField(default=0, verbose_name="自責点")
     strikeouts = models.IntegerField(default=0, verbose_name="奪三振")
     hits_allowed = models.IntegerField(default=0, verbose_name="被安打")
@@ -361,3 +397,160 @@ class GamePitchingLine(models.Model):
 
     def __str__(self) -> str:
         return f"{self.player.name} の投球成績"
+
+
+class GameFieldingLine(models.Model):
+    """1試合ぶんの守備成績。**打席から導いた値**で、通算成績の集計のために保存する。
+
+    出典は打席（打球の処理経路と失策の記録）で、打撃・投球の明細と同じく
+    集約が保存前に照合する。守備に就いた選手は、守備機会が無くても行がある
+    （守備の試合数を数えるため）。
+    """
+
+    game = models.ForeignKey(Game, on_delete=models.CASCADE, related_name="fielding_lines", verbose_name="試合")
+    player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="game_fielding", verbose_name="選手")
+    putouts = models.IntegerField(default=0, verbose_name="刺殺")
+    assists = models.IntegerField(default=0, verbose_name="補殺")
+    errors = models.IntegerField(default=0, verbose_name="失策")
+    double_plays_turned = models.IntegerField(default=0, verbose_name="併殺参加")
+
+    class Meta:
+        verbose_name = "守備成績"
+        verbose_name_plural = "守備成績"
+        constraints = [
+            models.UniqueConstraint(fields=["game", "player"], name="unique_game_fielding"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.player.name} の守備成績"
+
+
+class GamePlateAppearance(models.Model):
+    """1打席。紙のスコアブックのマス目1つにあたる。
+
+    **数えた結果はここに持たない。** 打数・安打・打点・投球回・失点は、この行と
+    進塁（GameRunnerAdvance）から導出する。上の GameBattingLine / GamePitchingLine は
+    移行が終わるまで並存する導出値で、去就は実測して決める。
+    """
+
+    game = models.ForeignKey(Game, on_delete=models.CASCADE, related_name="plate_appearances", verbose_name="試合")
+    sequence = models.PositiveIntegerField(
+        verbose_name="打席の順番",
+        help_text="試合内の通し番号。1から欠けずに続きます。試合の時系列はこれだけで決まります。",
+    )
+    inning = models.PositiveIntegerField(verbose_name="回")
+    is_bottom = models.BooleanField(
+        verbose_name="ホームの攻撃",
+        help_text="ビジターが表、ホームが裏に攻めます。",
+    )
+    batter = models.ForeignKey(Player, on_delete=models.PROTECT, related_name="plate_appearances", verbose_name="打者")
+    pitcher = models.ForeignKey(
+        Player, on_delete=models.PROTECT, related_name="plate_appearances_pitched", verbose_name="投手"
+    )
+    batting_order = models.PositiveIntegerField(verbose_name="打順", help_text="1〜9。")
+    slot_sequence = models.IntegerField(
+        default=0,
+        verbose_name="交代の順",
+        help_text="0 がスタメン。1以上は同じ打順への途中出場です。",
+    )
+    result = models.CharField(max_length=10, choices=PLATE_APPEARANCE_RESULT_CHOICES, verbose_name="結果")
+    fielded_by = models.CharField(
+        max_length=30,
+        blank=True,
+        verbose_name="打球の処理",
+        help_text="守備位置を「-」で連ねます（遊ゴロ併殺なら 遊-二-一）。刺殺・補殺の出典です。",
+    )
+
+    class Meta:
+        verbose_name = "打席"
+        verbose_name_plural = "打席"
+        ordering = ["sequence"]
+        constraints = [
+            models.UniqueConstraint(fields=["game", "sequence"], name="unique_game_plate_appearance"),
+        ]
+
+    def __str__(self) -> str:
+        half = "裏" if self.is_bottom else "表"
+        return f"{self.inning}回{half} {self.batting_order}番 {self.result}"
+
+
+class GameRunnerAdvance(models.Model):
+    """打席の中で走者が動いた記録。打者自身も走者として記録する（進塁前は「打者席」）。
+
+    得点・打点・盗塁・残塁・自責点はすべてここから導く。**理由を持たない進塁は
+    作らない** — 失策で還った走者に打点が付いてしまう。
+    """
+
+    plate_appearance = models.ForeignKey(
+        GamePlateAppearance, on_delete=models.CASCADE, related_name="advances", verbose_name="打席"
+    )
+    runner = models.ForeignKey(Player, on_delete=models.PROTECT, related_name="runner_advances", verbose_name="走者")
+    from_base = models.IntegerField(choices=BASE_CHOICES, verbose_name="進塁前")
+    to_base = models.IntegerField(choices=BASE_CHOICES, verbose_name="進塁後")
+    reason = models.CharField(max_length=10, choices=ADVANCE_REASON_CHOICES, verbose_name="理由")
+    error_index = models.IntegerField(
+        null=True,
+        blank=True,
+        verbose_name="失策の位置",
+        help_text="失策に起因する進塁なら、同じ打席の何番目の失策か（0 から数えます）。",
+    )
+
+    class Meta:
+        verbose_name = "進塁"
+        verbose_name_plural = "進塁"
+        # 失策の位置と同じく、打席の中での並びを保つ（読み書きで順が変わらないように）
+        ordering = ["id"]
+
+    def __str__(self) -> str:
+        return f"{self.runner.name} {self.get_from_base_display()}→{self.get_to_base_display()}（{self.reason}）"
+
+
+class GameRunnerSubstitution(models.Model):
+    """代走。塁上の走者を別の選手に入れ替える。
+
+    交代は進塁ではないため GameRunnerAdvance では表せない。これが無いと塁の状態を
+    再生したときに「その塁にいない走者が進んだ」と誤って弾いてしまう。
+    """
+
+    plate_appearance = models.ForeignKey(
+        GamePlateAppearance, on_delete=models.CASCADE, related_name="substitutions", verbose_name="打席"
+    )
+    base = models.IntegerField(choices=BASE_CHOICES, verbose_name="塁")
+    leaving_runner = models.ForeignKey(
+        Player, on_delete=models.PROTECT, related_name="replaced_on_base", verbose_name="退く走者"
+    )
+    entering_runner = models.ForeignKey(
+        Player, on_delete=models.PROTECT, related_name="pinch_running", verbose_name="代走"
+    )
+
+    class Meta:
+        verbose_name = "代走"
+        verbose_name_plural = "代走"
+        ordering = ["id"]
+
+    def __str__(self) -> str:
+        return f"{self.get_base_display()} {self.leaving_runner.name}→{self.entering_runner.name}"
+
+
+class GameFieldingError(models.Model):
+    """失策。誰がどこで何をしたか。
+
+    自責点の判定（規則 9.16 の「失策が無かったものと仮定した再構成」）と守備成績の出典。
+    捕逸は公式記録では失策として数えないため、ここではなく進塁の理由として記録する。
+    """
+
+    plate_appearance = models.ForeignKey(
+        GamePlateAppearance, on_delete=models.CASCADE, related_name="errors", verbose_name="打席"
+    )
+    player = models.ForeignKey(Player, on_delete=models.PROTECT, related_name="fielding_errors", verbose_name="守備者")
+    position = models.CharField(max_length=2, choices=FIELDING_POSITION_CHOICES, verbose_name="守備位置")
+    kind = models.CharField(max_length=4, choices=ERROR_KIND_CHOICES, verbose_name="失策の種類")
+
+    class Meta:
+        verbose_name = "失策"
+        verbose_name_plural = "失策"
+        # 進塁の error_index がこの並び順を指すため、読み書きで順が変わってはいけない
+        ordering = ["id"]
+
+    def __str__(self) -> str:
+        return f"{self.player.name}（{self.position}）の{self.kind}"

@@ -1,29 +1,33 @@
-// 「試合の情報」カード。シーズン・試合日・ホーム得点・ビジター得点。
-// 得点はイニングスコアから自動計算できる間は読み取り専用にする（導出できるものは入力させない）。
+// 「試合の情報」カード。シーズン・試合日と、打席から導いた得点の表示。
+// 得点は入力欄ではない（導出できるものは入力させない）。確定はサーバーが行う。
 import type { Dispatch, SetStateAction } from "react";
-import type { DerivedScores } from "./transform";
-import type { GameEditFormState, RosterPayload } from "./types";
+import { deriveLineScore, totalRuns } from "./transform";
+import type { GameEditPayload, ScorebookState } from "./types";
 
 interface Props {
-  state: GameEditFormState;
-  setState: Dispatch<SetStateAction<GameEditFormState>>;
-  scores: DerivedScores;
-  homeRoster: RosterPayload | undefined;
-  awayRoster: RosterPayload | undefined;
+  state: ScorebookState;
+  setState: Dispatch<SetStateAction<ScorebookState>>;
+  payload: GameEditPayload;
 }
 
-export function GameInfoCard({ state, setState, scores, homeRoster, awayRoster }: Props) {
+export function GameInfoCard({ state, setState, payload }: Props) {
+  const score = deriveLineScore(state.plate_appearances);
+  const home = payload.teams.find((team) => team.is_home);
+  const away = payload.teams.find((team) => !team.is_home);
+
   return (
     <div className="card mb-3">
       <div className="card-header">試合の情報</div>
       <div className="card-body">
-        <div className="row g-3">
+        <div className="row g-3 align-items-end">
           <div className="col-md-3">
-            <label className="form-label">シーズン</label>
+            <label className="form-label" htmlFor="scorebook-year">
+              シーズン
+            </label>
             <input
+              id="scorebook-year"
               type="number"
               className="form-control"
-              aria-label="シーズン"
               value={state.year}
               onChange={(event) => {
                 const year = event.target.value;
@@ -33,11 +37,13 @@ export function GameInfoCard({ state, setState, scores, homeRoster, awayRoster }
             />
           </div>
           <div className="col-md-3">
-            <label className="form-label">試合日</label>
+            <label className="form-label" htmlFor="scorebook-played-on">
+              試合日
+            </label>
             <input
+              id="scorebook-played-on"
               type="date"
               className="form-control"
-              aria-label="試合日"
               value={state.played_on}
               onChange={(event) => {
                 const played_on = event.target.value;
@@ -46,37 +52,11 @@ export function GameInfoCard({ state, setState, scores, homeRoster, awayRoster }
               required
             />
           </div>
-          <div className="col-md-3">
-            <label className="form-label">{homeRoster?.team_name}（ホーム）</label>
-            <input
-              type="number"
-              className="form-control"
-              min={0}
-              aria-label="ホーム得点"
-              value={scores.home}
-              readOnly={scores.locked}
-              onChange={(event) => {
-                const home_score = event.target.value;
-                setState((current) => ({ ...current, home_score }));
-              }}
-              required
-            />
-          </div>
-          <div className="col-md-3">
-            <label className="form-label">{awayRoster?.team_name}（ビジター）</label>
-            <input
-              type="number"
-              className="form-control"
-              min={0}
-              aria-label="ビジター得点"
-              value={scores.away}
-              readOnly={scores.locked}
-              onChange={(event) => {
-                const away_score = event.target.value;
-                setState((current) => ({ ...current, away_score }));
-              }}
-              required
-            />
+          <div className="col-md-6">
+            <p className="form-label mb-1">得点（打席から導きます）</p>
+            <p className="mb-0 fs-4 tabular-nums" aria-label="導出した得点">
+              {away?.team_name} {totalRuns(score.away)} - {totalRuns(score.home)} {home?.team_name}
+            </p>
           </div>
         </div>
       </div>

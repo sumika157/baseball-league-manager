@@ -110,7 +110,7 @@
               {{ game.home_team_name }}
             </a>
           </td>
-          <td class="text-center stat-key">{{ game.home_score }} - {{ game.away_score }}</td>
+          <td class="text-center stat-key">{% if game.is_recorded %}{{ game.home_score }} - {{ game.away_score }}{% else %}—{% endif %}</td>
           <td>
             <a href="{% url 'player_list' game.away_team_id %}"
                class="player-name {% if game.winner_team_id == game.away_team_id %}stat-tier-high{% endif %}">

@@ -35,7 +35,7 @@
 - application は domain のインターフェース（`domain/repositories.py`）越しに永続化を使う。`infrastructure/orm_models.py` を直接 import しない。
 - presentation（views）は application 経由で操作する。ORM モデルやリポジトリ実装を直接触らない。
 - **更新と参照を分ける**: 更新はリポジトリ経由で集約単位（`Team` / `Game`）に読み書きする。一覧表示などの参照は `infrastructure/queries.py` から直接 DTO を作る（集約を組み立てない）。参照クエリのインターフェースは `application/queries.py`（戻り値が DTO のため domain には置けない）。
-- **依存の組み立ては `presentation/views.py` の `build_service()` だけ。** 呼ぶ側ごとに一部の依存だけを渡さない。渡し忘れが「開く画面によって落ちるサービス」になる（管理画面のテンプレートタグで実際に起きた）。テストも `tests/helpers.py` 経由でここを呼ぶ。
+- **依存の組み立ては `presentation/views.py` の `build_service()`（`TeamApplicationService`）と `build_recording_service()`（スコアブックの保存を担う `GameRecordingService`）の2か所だけ。** どちらも依存を全部渡す（`tests/integration/test_wiring.py` が検査する）。呼ぶ側ごとに一部の依存だけを渡さない。渡し忘れが「開く画面によって落ちるサービス」になる（管理画面のテンプレートタグで実際に起きた）。テストも `tests/helpers.py` 経由でここを呼ぶ。
 - **層をまたぐ受け渡しに素の `dict` を使わない。** application が presentation に返す形は `application/dto.py` の dataclass にする。文字列キーの dict は綴りを間違えても静的検査が黙る。`get_game_edit_data` と `_player_index` は dict のまま残っているが、**新しく増やさない**。触ったついでに DTO へ寄せる。
 - **`TeamApplicationService` は既に約50メソッド・1,500行**あり、チーム・選手・試合・リーグ・管理画面の概況を1クラスで抱えている。ここへ足す前に、対象ごとの別サービスに置けないか考える。分ける判断は選択肢としてユーザーに提示する。
 
@@ -45,7 +45,27 @@
 - **年齢は保持しない。** 生年月日から算出する。
 - 投球回の変換（`5.2` = 5回2/3 = 17アウト）は `InningsPitched` 値オブジェクトが唯一の出典。他の場所に再実装しない。率（打率・防御率など）は試合ごとの率を平均せず、合算した実数から計算し直す。
 - 選択肢の一覧（球場の屋根種別など）はドメインの値オブジェクトが唯一の出典。画面やモデルに複製しない。
-- **成績のカウント項目は値オブジェクト（`BattingLine` / `PitchingLine`）のフィールドが出典。** 永続化（`_BATTING_FIELDS`）・入力フォーム（`STAT_FIELDS`）・React（`frontend/src/game_edit/types.ts`）の列挙はそれに従う。TypeScript から Python を読めないためこの重複だけは消せないので、`tests/integration/test_stat_fields.py` が突き合わせる。**項目を増やすときはこの4か所を同じコミットで直す**（ずれても例外にならず、その項目だけ保存されない・入力欄が出ないという静かな不具合になる）。
+- **成績のカウント項目は値オブジェクト（`BattingLine` / `PitchingLine` / `FieldingLine`）のフィールドが出典。** 永続化（`infrastructure/repositories.py` の `_BATTING_FIELDS` など）とテーブルの列はそれに従う。成績を手入力する画面が無くなったので、入力フォームの列挙（`STAT_FIELDS`）も React の列挙も無い（`frontend/src/game_edit/types.ts` に残るのは塁の番号だけ）。値オブジェクト ↔ 永続化・参照クエリ・テーブルの列は `tests/integration/test_stat_fields.py` が突き合わせる。**項目を増やすときは値オブジェクト・永続化・参照クエリ（守備）・マイグレーションを同じコミットで直す**（ずれても例外にならず、その項目だけ保存されないという静かな不具合になる）。
+
+### 例外: 1試合の明細は打席の導出値だが、保存もする
+
+**試合の成績の出典は打席（`GamePlateAppearance`）。** `GameBattingLine` /
+`GamePitchingLine` / `GameFieldingLine` / `GameInningScore` はそこから導ける値だが、**通算成績の集計のために
+保存もしている**（この規則の唯一の例外）。理由は**自責点が SQL で集計できない**こと。
+自責点と失点は走者ごとに「誰が塁に出したか」「失策が絡んだか」を追う逐次再生でしか
+出せず、3,480試合を再生すると約68秒かかる（実測。経緯は README「打席を出典にした理由」）。
+
+同じ事実が2か所にあるので、**集約が照合する**:
+
+- `domain/services/scoring.py` の `ensure_lines_match_plate_appearances()` が、保存しようとしている
+  明細を打席から数え直した値と突き合わせる（`ensure_line_score_matches()` と同じ形）。
+- `DjangoGameRepository.save()` が保存前に必ず通す。`bulk_create` で直接書くコード
+  （`seed_virtual_games`）は素通りするので、自分で呼ぶ。
+- 照合しないのは勝敗・セーブ・ホールド・先発登板だけ（打席からは決まらず、イニングスコアと
+  継投から決まる別の関心事）。
+
+**この例外を他の項目に広げない。** 「集計が遅いから保存する」を一般化すると、通算成績も
+順位も保存する形に戻ってしまう。
 
 ## 不変条件は集約が守る
 
@@ -80,16 +100,53 @@ ORM に直接 `bulk_create` 等で書き込むコード（データ投入コマ�
 
 ## ブランチとコミット
 
+- **実装に着手する前に、実装計画を GitHub Issue に書く**（`issue-plan` スキル）。ブランチを切って PR を出す作業すべてが対象で、
+  省いてよいのは1行で説明しきれる変更（誤字・文言修正・依存の更新など）だけ。会話の中にしか無い計画は、
+  後から「何をやると決めて着手したか」「どこで変えたか」を追えないため。
+  - 計画にユーザーへの選択肢が含まれるときは、Issue を出して URL を提示したところで止め、回答を待ってから着手する。
+  - 実装中に計画が変わったら Issue 本文を最新に直し、変えた理由をコメントに残す。
+  - **PR は必ず Issue とリンクさせる。** ブランチは `gh issue develop <番号> --name <ブランチ> --base <基点>` で
+    Issue に紐づけて作る（base が main でない epic のタスク PR は、本文のキーワードだけではリンクしないため）。
+    本文には base が main なら `Closes #<番号>`、epic のタスク PR なら `Refs #<番号>` を書く。
+    PR を作ったらリンクしたかを確かめる（しなくてもエラーにならない。確かめ方は `issue-plan` スキル）。
+  - epic は Issue を1本だけ立て、段階ごとのタスクはその手順チェックリストで追う（タスクごとに Issue を立てない）。
+    詳細設計と段階ごとの実測値は従来どおり `docs/design/` に置き、Issue からはリンクするだけにする（同じ内容を両方に書かない）。
 - **タスクごとにブランチを切る。main に直接コミットしない。** 命名は `feature/` `fix/` `refactor/` `docs/` ＋ 英語の kebab-case（例: `feature/player-nationality`）。
 - **機能ごとにコミットする。** 複数の機能や無関係な修正を1つのコミットに混ぜない。逆に、1つの機能（実装＋テスト＋README更新）は1コミットにまとめる。
 - コミットメッセージは既存の履歴にならい日本語で書く。
-- 完了したら `git push -u origin <ブランチ>` し、**`gh pr create` で PR を作って URL を提示して終わる**。タイトルと本文は日本語。本文はファイルに書いて `--body-file` で渡す（引用符と改行で壊れない）。**マージはユーザーが GitHub 上で行う。こちらでマージしない。**
+- 完了したら**3周のセルフレビュー（下記）を済ませてから** `git push -u origin <ブランチ>` し、**`gh pr create` で PR を作って URL を提示して終わる**。タイトルと本文は日本語。本文はファイルに書いて `--body-file` で渡す（引用符と改行で壊れない）。**マージはユーザーが GitHub 上で行う。こちらでマージしない。**
 - `gh` は **Windows 側だけ**にある（winget の user スコープ。`sumika157` で認証済み）。**WSL には無い**ので `wsl -e` 経由では呼べない。既に開いているシェルの PATH には載っていないことがあるので、その場合は
   `C:\Users\sumik\AppData\Local\Microsoft\WinGet\Packages\GitHub.cli_Microsoft.Winget.Source_8wekyb3d8bbwe\bin\gh.exe` を直接叩く。
 - **`gh pr create` の前に `gh pr list --head <ブランチ> --state all` を見る。** push だけして URL を渡した時点で、
   **ユーザーがそれをクリックして先に PR を作っていることがある**。同じブランチで2本目を作るとスカッシュマージが
   差分ゼロになり、**main に空コミットが残る**（#1 と #2 で実際に起きた。エラーにならないので気づけない）。
 - **ブランチを切る前に `git log --oneline origin/main..main` を見る。** ローカル main が先行していたらユーザーに push を促す（worktree は origin/main を基点にするため、先行分が抜けたブランチができる）。
+
+### PR を出す前に3周セルフレビューする
+
+push の前に、**「レビュー → 改善」を3周繰り返す**。1周は、PR に載る差分の全体
+（`git diff origin/<base>...HEAD`。base は main か統合ブランチ）を下の**3つの観点すべて**で読み、
+見つけたものを直すところまで。次の周は直した後の差分を、また3観点すべてで読み直す
+（直しが新しい問題を生んでいないかを、どの観点でも確かめるため。観点を周ごとに1つずつ割り振らない）。
+差分が小さい・ドキュメントだけの PR でも周を省かない（その場合は短く済む）。
+
+- **正しさ**: 頼まれたことを過不足なく満たしているか。バグ・境界値・通っていない経路
+  （未ログイン・空データ・JSON のキー欠落など）。`/code-review` を使ってよい。
+- **規則**: このファイルと、触ったファイルに効く `.claude/rules/` に照らす（依存の向き・出典の一元化・
+  素の `dict`・文言の日本語・`# noqa` など）。domain・集約・リポジトリ・クエリに触れたら
+  `ddd-boundary-reviewer` エージェントを通す（2周目以降は、直しがそれらの層に及んだときにもう一度通す）。
+- **読み手**: PR 本文・コミットメッセージ・README が変更と合っているか。差分が Issue の計画と合っているか
+  （ずれたなら Issue 側を直したか）。再発防止テストの有無、
+  デバッグ出力・一時ファイル・無関係な変更の混入、コミットの粒度。
+
+- 直しは修正コミットを積まず、その機能のコミットに `git commit --amend` で含める（push 前なので書き換えてよい。
+  「1つの機能は1コミット」を崩さないため）。
+- 周の途中でコードを直したら、その周の終わりに `ruff check`・`ruff format --check`・`mypy`・テストを通し直す。
+- **終わる条件は「重要な指摘が残っていない」こと**（指摘ゼロまでは求めない）。重要＝バグ・データ消失・
+  このファイルの規則違反・頼まれたことの未達。言い回しや好みの範囲の指摘は、直さずに残してよい。
+  3周目で重要な指摘を直したときだけ、直した箇所をもう1周確かめる（直しっぱなしで出さない）。
+- PR 本文に「セルフレビュー」節を設け、周ごとに直したことを1行ずつ書く（無ければ「指摘なし」）。
+  直さずに残した軽微な指摘もここに書く。周を回したか・何を見送ったかを、後からユーザーが確かめられるようにするため。
 
 ### 並行して作業するときは worktree を使う
 
@@ -98,7 +155,8 @@ ORM に直接 `bulk_create` 等で書き込むコード（データ投入コマ�
 防げないので、作業ツリーごと分ける。
 
 - 次のいずれかに当てはまるなら worktree にする: ユーザーが並行作業だと言った / `git worktree list` に他の worktree がある / 未コミットの変更が自分のタスクと無関係。
-- 作成は `git worktree add -b <ブランチ> .claude/worktrees/<名前> origin/main`（`.claude/worktrees/` は gitignore 済み）。
+- 作成は、`gh issue develop` でリモートに作ったブランチを取ってきて
+  `git fetch origin <ブランチ>` → `git worktree add -b <ブランチ> .claude/worktrees/<名前> origin/<ブランチ>`（`.claude/worktrees/` は gitignore 済み）。
   **`EnterWorktree` ツールはこの構成では使えない**（U: 形式のパスは「メインの作業ツリー」と誤認され、
   UNC 形式は「UNC network path」として拒否される）。作った worktree に**セッションごと移ることはできない**ので、
   cwd は main の作業ツリーに置いたまま、Read / Write / Bash に worktree の絶対パスを明示して作業する。
@@ -145,8 +203,9 @@ ORM に直接 `bulk_create` 等で書き込むコード（データ投入コマ�
   タスク名は統合ブランチ名の接頭辞にせず、独立した短い名前にする（`feature/pa-persistence` など）。
 - **タスクの PR は base を統合ブランチにする。** `gh pr create --base epic/<機能>` を忘れると
   main が base になり、前の段階の差分まで含んだ PR ができる。
-- **worktree は origin/main を基点に作られる**ので、統合ブランチの上に乗せるには自分で作る:
-  `git worktree add -b <タスク> .claude/worktrees/<名前> epic/<機能>`
+- **タスクブランチは統合ブランチを基点に作る**: `gh issue develop <epic の Issue> --name <タスク> --base epic/<機能>` →
+  `git fetch origin <タスク>` → `git worktree add -b <タスク> .claude/worktrees/<名前> origin/<タスク>`
+  （統合ブランチ自体も `--base main` で同じ Issue に紐づけて作る）。
 - **統合ブランチは長生きするので、段階の区切りごとに main を取り込む**（`git merge origin/main`）。
   放っておくと最後に大きく衝突する。並行して別のタスクが main にマージされていく前提で動く。
 - 設計は `docs/design/<機能>.md` に置き、**段階ごとに実測値と決定を追記する**（次のセッションへの引き継ぎになる）。

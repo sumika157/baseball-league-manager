@@ -45,9 +45,12 @@ def _game(
         away_score=away_score,
     )
     for player_id, line in (batting or {}).items():
-        game.record_batting(player_id, line)
+        game.record_batting(player_id, line, team_id=game.home_team_id)
     for player_id, line in (pitching or {}).items():
         game.record_pitching(player_id, line)
+    if not game.is_recorded:
+        # 明細が1行でもあれば記録済み。中身は問わず、集計に数えられる試合にする
+        game.record_batting(0, BattingLine(), team_id=game.home_team_id)
     return game
 
 

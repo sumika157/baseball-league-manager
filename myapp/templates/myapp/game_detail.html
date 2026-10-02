@@ -14,7 +14,7 @@
 <div class="page-head">
   <h1 class="page-title">
     {{ detail.game.away_team_name }}
-    <span class="stat-muted">{{ detail.game.away_score }} - {{ detail.game.home_score }}</span>
+    <span class="stat-muted">{% if detail.game.is_recorded %}{{ detail.game.away_score }} - {{ detail.game.home_score }}{% else %}—{% endif %}</span>
     {{ detail.game.home_team_name }}
   </h1>
   <p class="page-subtitle">
@@ -42,6 +42,7 @@
               {% endfor %}
               <th class="text-center linescore-total">計</th>
               <th class="text-center">安</th>
+              <th class="text-center">失</th>
             </tr>
           </thead>
           <tbody>
@@ -52,6 +53,7 @@
               {% endfor %}
               <td class="text-center linescore-total">{{ detail.line_score.away_total }}</td>
               <td class="text-center stat-muted">{{ detail.line_score.away_hits }}</td>
+              <td class="text-center stat-muted">{{ detail.line_score.away_errors|default_if_none:'—' }}</td>
             </tr>
             <tr>
               <th>{{ detail.game.home_team_name }}</th>
@@ -60,6 +62,7 @@
               {% endfor %}
               <td class="text-center linescore-total">{{ detail.line_score.home_total }}</td>
               <td class="text-center stat-muted">{{ detail.line_score.home_hits }}</td>
+              <td class="text-center stat-muted">{{ detail.line_score.home_errors|default_if_none:'—' }}</td>
             </tr>
           </tbody>
         </table>
@@ -67,6 +70,44 @@
     </div>
   </div>
 {% endif %}
+
+{% comment %}
+スコアブック（読み取り専用）。打順 × 回のマス目で、編集画面と同じ並び。
+同じ回に同じ打順が2打席立つ（打者一巡）と、1つのマスに縦に並ぶ。
+{% endcomment %}
+{% for grid in detail.scorebook %}
+  <div class="card mb-3">
+    <div class="card-header">{{ grid.team_name }} スコアブック</div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm entry-table align-middle mb-0 scorebook-table">
+          <thead>
+            <tr>
+              <th scope="col" style="width: 3rem;">打順</th>
+              {% for inning in grid.innings %}
+                <th scope="col" class="text-center">{{ inning }}</th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in grid.rows %}
+              <tr>
+                <th scope="row" class="tabular-nums">{{ row.batting_order }}</th>
+                {% for cell in row.cells %}
+                  <td class="text-center">
+                    {% for mark in cell %}
+                      <span class="d-block" title="{{ mark.batter_name }}">{{ mark.result }}</span>
+                    {% endfor %}
+                  </td>
+                {% endfor %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+{% endfor %}
 
 {% comment %}
 チームごとのボックススコア。打順の順に並び、同じ打順の交代選手は
@@ -89,6 +130,7 @@
                 <th>選手名</th>
                 <th class="text-end">打率</th>
                 <th class="text-end">打数</th>
+                <th class="text-end">得点</th>
                 <th class="text-end">安打</th>
                 <th class="text-end">打点</th>
                 <th class="text-end">本塁打</th>
@@ -96,7 +138,11 @@
                 <th class="text-end">三塁打</th>
                 <th class="text-end">四球</th>
                 <th class="text-end">死球</th>
+                <th class="text-end">三振</th>
+                <th class="text-end">犠打</th>
                 <th class="text-end">犠飛</th>
+                <th class="text-end">盗塁</th>
+                <th class="text-end">併殺打</th>
               </tr>
             </thead>
             <tbody>
@@ -110,6 +156,7 @@
                   </td>
                   <td class="text-end stat-key">{{ row.career_batting_average|floatformat:3 }}</td>
                   <td class="text-end">{{ row.at_bats }}</td>
+                  <td class="text-end">{{ row.runs }}</td>
                   <td class="text-end">{{ row.hits }}</td>
                   <td class="text-end">{{ row.runs_batted_in }}</td>
                   <td class="text-end">{{ row.home_runs }}</td>
@@ -117,7 +164,11 @@
                   <td class="text-end stat-muted">{{ row.triples }}</td>
                   <td class="text-end stat-muted">{{ row.walks }}</td>
                   <td class="text-end stat-muted">{{ row.hit_by_pitch }}</td>
+                  <td class="text-end stat-muted">{{ row.strikeouts_batting }}</td>
+                  <td class="text-end stat-muted">{{ row.sacrifice_bunts }}</td>
                   <td class="text-end stat-muted">{{ row.sacrifice_flies }}</td>
+                  <td class="text-end stat-muted">{{ row.stolen_bases }}</td>
+                  <td class="text-end stat-muted">{{ row.double_plays }}</td>
                 </tr>
               {% endfor %}
             </tbody>
@@ -131,7 +182,7 @@
     </div>
   </div>
 
-  <div class="card mb-4">
+  <div class="card {% if box.fielding %}mb-3{% else %}mb-4{% endif %}">
     <div class="card-header">{{ box.team_name }} 投手</div>
     <div class="card-body p-0">
       {% if box.pitching %}
@@ -147,6 +198,7 @@
                 <th class="text-end">奪三振</th>
                 <th class="text-end">与四球</th>
                 <th class="text-end">与死球</th>
+                <th class="text-end">失点</th>
                 <th class="text-end">自責点</th>
                 <th class="text-center">記録</th>
               </tr>
@@ -166,6 +218,7 @@
                   <td class="text-end">{{ row.strikeouts }}</td>
                   <td class="text-end stat-muted">{{ row.walks_allowed }}</td>
                   <td class="text-end stat-muted">{{ row.hit_by_pitch_allowed }}</td>
+                  <td class="text-end">{{ row.runs_allowed }}</td>
                   <td class="text-end">{{ row.earned_runs }}</td>
                   <td class="text-center stat-key">{{ row.decision|default:'—' }}</td>
                 </tr>
@@ -180,6 +233,45 @@
       {% endif %}
     </div>
   </div>
+
+  {% comment %}
+  守備成績。打席の記録から導いた値なので、記録の無い試合では出さない。
+  守備に就いた選手は、守備機会が無くても載る（打順の順、続けて打順にいない投手）。
+  {% endcomment %}
+  {% if box.fielding %}
+    <div class="card mb-4">
+      <div class="card-header">{{ box.team_name }} 守備</div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-hover boxscore-table mb-0">
+            <thead>
+              <tr>
+                <th class="text-center">位置</th>
+                <th>選手名</th>
+                <th class="text-end">刺殺</th>
+                <th class="text-end">補殺</th>
+                <th class="text-end">失策</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in box.fielding %}
+                <tr>
+                  <td class="text-center">{{ row.position_label|default:'—' }}</td>
+                  <td>
+                    <span class="jersey-number me-1">{{ row.number }}</span>
+                    <a href="{% url 'player_detail' row.team_id row.player_id %}" class="player-name">{{ row.player_name }}</a>
+                  </td>
+                  <td class="text-end">{{ row.putouts }}</td>
+                  <td class="text-end">{{ row.assists }}</td>
+                  <td class="text-end">{{ row.errors }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  {% endif %}
 {% empty %}
   <div class="card">
     <div class="empty-state">
@@ -192,5 +284,6 @@
   位置は守った場所（代打は「打」、代走は「走」）。一段下げた行は途中出場です。
   打率と防御率はこの試合の値ではなく通算の値です（1試合の率は標本が小さすぎて読めないため）。
   記録の「勝」「敗」「Ｓ」「Ｈ」は、イニングスコアと継投から日本プロ野球の規則で決まります。
+  守備の刺殺・補殺・失策は、打席の記録（打球の処理経路と失策）から導いた値です。
 </p>
 {% endblock %}
