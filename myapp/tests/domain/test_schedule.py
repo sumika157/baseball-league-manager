@@ -2,8 +2,10 @@
 
 import datetime
 import random
+import time
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
+from itertools import combinations
 from unittest import TestCase
 
 from myapp.domain.exceptions import InvalidSchedule
@@ -12,6 +14,7 @@ from myapp.domain.pennant.schedule import (
     MonthDay,
     ScheduleRules,
     generate_schedule,
+    interleague_pairs,
     longest_streak,
 )
 
@@ -41,7 +44,7 @@ class ScheduleShapeTests(TestCase):
 
     def test_total_is_858_and_each_team_plays_143(self) -> None:
         self.assertEqual(858, len(self.fixtures))
-        self.assertEqual(143, self.rules.games_per_team(6))
+        self.assertEqual(143, self.rules.games_per_team)
         games: Counter[int] = Counter()
         for f in self.fixtures:
             games[f.home_team_id] += 1
@@ -180,20 +183,171 @@ class ScheduleReproducibilityTests(TestCase):
             self.assertEqual(2 * 858, len(seen))
 
 
-class ScheduleOtherSizesTests(TestCase):
-    def test_four_teams_per_league(self) -> None:
-        leagues = {1: [1, 2, 3, 4], 2: [5, 6, 7, 8]}
-        rules = ScheduleRules()
-        fixtures = generate_schedule(leagues, rules, START, random.Random(3))
-        self.assertEqual(8 * rules.games_per_team(4) // 2, len(fixtures))
-        games = Counter(t for f in fixtures for t in (f.home_team_id, f.visitor_team_id))
-        self.assertEqual({t: rules.games_per_team(4) for t in range(1, 9)}, dict(games))
+def _leagues(sizes: Sequence[int]) -> dict[int, list[int]]:
+    leagues: dict[int, list[int]] = {}
+    next_id = 1
+    for i, size in enumerate(sizes):
+        leagues[i + 1] = list(range(next_id, next_id + size))
+        next_id += size
+    return leagues
 
+
+class MultiLeagueTests(TestCase):
+    """1〜8リーグ・球団数の違うリーグでも成り立つ条件。"""
+
+    def _check(self, sizes: Sequence[int], seed: int = 1, season: int = 2026) -> list[Fixture]:
+        leagues = _leagues(sizes)
+        rules = ScheduleRules()
+        fixtures = generate_schedule(leagues, rules, START, random.Random(seed), season=season)
+        league_of = {t: lid for lid, teams in leagues.items() for t in teams}
+        opponents = set()
+        for a, b in interleague_pairs(list(leagues), season):
+            opponents.add(frozenset((a, b)))
+
+        games: Counter[int] = Counter()
+        seen: set[tuple[datetime.date, int]] = set()
+        for f in fixtures:
+            self.assertNotEqual(0, f.date.weekday())
+            for team in (f.home_team_id, f.visitor_team_id):
+                games[team] += 1
+                self.assertNotIn((f.date, team), seen)
+                seen.add((f.date, team))
+        self.assertEqual(dict.fromkeys(league_of, rules.games_per_team), dict(games))
+        self.assertEqual(sum(len(t) for t in leagues.values()) * rules.games_per_team // 2, len(fixtures))
+
+        cards = Counter(frozenset((f.home_team_id, f.visitor_team_id)) for f in fixtures)
+        home = Counter((f.home_team_id, f.visitor_team_id) for f in fixtures)
+        intra_by_league: defaultdict[int, set[int]] = defaultdict(set)
+        inter_hosts: defaultdict[frozenset[int], set[int]] = defaultdict(set)
+        for f in fixtures:
+            if league_of[f.home_team_id] != league_of[f.visitor_team_id]:
+                inter_hosts[frozenset((f.home_team_id, f.visitor_team_id))].add(f.home_team_id)
+        for a, b in combinations(league_of, 2):
+            card = frozenset((a, b))
+            la, lb = league_of[a], league_of[b]
+            if la == lb:
+                intra_by_league[la].add(cards[card])
+                # ホームの偏りは相手ごとに1以内
+                self.assertLessEqual(abs(home[(a, b)] - home[(b, a)]), 1, (a, b))
+            elif frozenset((la, lb)) in opponents:
+                self.assertEqual(3, cards[card], (a, b))
+                self.assertEqual(1, len(inter_hosts[card]), (a, b))  # 3連戦は同じ球場
+            else:
+                self.assertEqual(0, cards[card], (a, b))
+        for lid, counts in intra_by_league.items():
+            self.assertLessEqual(max(counts) - min(counts), 1, lid)  # 相手ごとに1試合差まで
+        self.assertLessEqual(longest_streak(fixtures), ScheduleRules().max_streak)
+        return fixtures
+
+    def test_one_league_has_no_interleague(self) -> None:
+        fixtures = self._check([6])
+        self.assertEqual(429, len(fixtures))
+        self.assertEqual(
+            {28, 29}, set(Counter(frozenset((f.home_team_id, f.visitor_team_id)) for f in fixtures).values())
+        )
+
+    def test_two_leagues_match_npb_format(self) -> None:
+        self.assertEqual(858, len(self._check([6, 6])))
+
+    def test_three_leagues(self) -> None:
+        self.assertEqual(1287, len(self._check([6, 6, 6])))
+
+    def test_four_to_seven_leagues(self) -> None:
+        for count in (4, 5, 6, 7):
+            self.assertEqual(count * 6 * 143 // 2, len(self._check([6] * count, season=2030 + count)), count)
+
+    def test_eight_leagues_of_six_teams(self) -> None:
+        started = time.perf_counter()
+        fixtures = self._check([6] * 8)
+        self.assertEqual(3432, len(fixtures))
+        self.assertLess(time.perf_counter() - started, 3.0)
+        # 交流戦 3 × 12 = 36、リーグ内 107 を5相手に 21〜22
+        intra = Counter(
+            frozenset((f.home_team_id, f.visitor_team_id))
+            for f in fixtures
+            if (f.home_team_id - 1) // 6 == (f.visitor_team_id - 1) // 6
+        )
+        self.assertEqual({21, 22}, set(intra.values()))
+
+    def test_leagues_of_different_size(self) -> None:
+        self._check([6, 4])
+        self._check([6, 4, 6], season=2027)
+
+    def test_leagues_with_odd_number_of_teams_get_byes(self) -> None:
+        self._check([5, 3])
+        self._check([7, 7], season=2028)
+
+    def test_all_seeds_hold(self) -> None:
+        for seed in range(10):
+            self._check([6] * 8, seed=seed, season=2026 + seed)
+
+    def test_same_random_gives_same_schedule(self) -> None:
+        leagues = _leagues([6] * 8)
+        first = generate_schedule(leagues, ScheduleRules(), START, random.Random(5), season=2026)
+        second = generate_schedule(leagues, ScheduleRules(), START, random.Random(5), season=2026)
+        self.assertEqual(first, second)
+
+    def test_season_changes_the_interleague_opponents(self) -> None:
+        leagues = _leagues([6] * 8)
+
+        def inter_cards(season: int) -> set[frozenset[int]]:
+            fixtures = generate_schedule(leagues, ScheduleRules(), START, random.Random(5), season=season)
+            return {
+                frozenset((f.home_team_id, f.visitor_team_id))
+                for f in fixtures
+                if (f.home_team_id - 1) // 6 != (f.visitor_team_id - 1) // 6
+            }
+
+        self.assertNotEqual(inter_cards(2026), inter_cards(2027))
+        self.assertEqual(
+            len(inter_cards(2026)), 8 * 6 * 6 * 2 // 2
+        )  # 各リーグが2リーグと当たる = 8 × 2 / 2 組 × 36 カード
+
+
+class InterleaguePairsTests(TestCase):
+    def test_pairs_are_symmetric_and_each_league_meets_at_most_two(self) -> None:
+        for count in range(1, 9):
+            ids = list(range(10, 10 + count))
+            for season in range(2026, 2036):
+                pairs = interleague_pairs(ids, season)
+                self.assertEqual(len(pairs), len(set(pairs)))
+                degree = Counter(x for pair in pairs for x in pair)
+                expected = min(2, count - 1)
+                self.assertEqual(dict.fromkeys(ids, expected) if expected else {}, dict(degree), (count, season))
+                for a, b in pairs:
+                    self.assertNotEqual(a, b)
+
+    def test_two_leagues_meet_every_year_and_one_league_never(self) -> None:
+        self.assertEqual([(1, 2)], interleague_pairs([2, 1], 2026))
+        self.assertEqual([], interleague_pairs([1], 2026))
+
+    def test_opponents_rotate_year_by_year(self) -> None:
+        for count in (4, 5, 6, 7, 8):
+            ids = list(range(1, count + 1))
+            years = [frozenset(interleague_pairs(ids, season)) for season in range(2026, 2026 + 6)]
+            self.assertGreater(len(set(years)), 1, count)
+            self.assertTrue(all(years[i] != years[i + 1] for i in range(5)), count)
+
+    def test_three_leagues_always_meet_everyone(self) -> None:
+        self.assertEqual({(1, 2), (1, 3), (2, 3)}, set(interleague_pairs([1, 2, 3], 2026)))
+
+
+class ScheduleOtherRulesTests(TestCase):
     def test_rules_values_are_respected(self) -> None:
-        rules = ScheduleRules(intra_games=4, inter_games=2, series_length=2, rest_weekday=1)
+        rules = ScheduleRules(games_per_team=40, inter_games=2, series_length=2, rest_weekday=1)
         fixtures = generate_schedule(LEAGUES, rules, START, random.Random(3))
-        self.assertEqual(12 * rules.games_per_team(6) // 2, len(fixtures))
+        self.assertEqual(12 * 40 // 2, len(fixtures))
         self.assertTrue(all(f.date.weekday() != 1 for f in fixtures))
+        games = Counter(t for f in fixtures for t in (f.home_team_id, f.visitor_team_id))
+        self.assertEqual(dict.fromkeys(LEAGUES[1] + LEAGUES[2], 40), dict(games))
+
+    def test_interleague_window_can_be_widened(self) -> None:
+        leagues = _leagues([6] * 8)
+        narrow = ScheduleRules(interleague_end=MonthDay(6, 30))
+        with self.assertRaisesRegex(InvalidSchedule, "交流戦"):
+            generate_schedule(leagues, narrow, START, random.Random(0))
+        wide = ScheduleRules(interleague_end=MonthDay(7, 31))
+        self.assertEqual(3432, len(generate_schedule(leagues, wide, START, random.Random(0))))
 
 
 class ScheduleInvalidInputTests(TestCase):
@@ -205,29 +359,30 @@ class ScheduleInvalidInputTests(TestCase):
     ) -> list[Fixture]:
         return generate_schedule(leagues, rules or ScheduleRules(), start, random.Random(0))
 
-    def test_odd_number_of_teams(self) -> None:
-        with self.assertRaisesRegex(InvalidSchedule, "偶数"):
-            self._generate({1: [1, 2, 3, 4, 5], 2: [6, 7, 8, 9, 10]})
-
-    def test_single_league(self) -> None:
-        with self.assertRaisesRegex(InvalidSchedule, "2リーグ"):
-            self._generate({1: [1, 2, 3, 4, 5, 6]})
-
-    def test_three_leagues(self) -> None:
-        with self.assertRaises(InvalidSchedule):
-            self._generate({1: [1, 2], 2: [3, 4], 3: [5, 6]})
-
-    def test_leagues_of_different_size(self) -> None:
-        with self.assertRaisesRegex(InvalidSchedule, "球団数が違う"):
-            self._generate({1: [1, 2, 3, 4], 2: [5, 6]})
+    def test_no_leagues(self) -> None:
+        with self.assertRaisesRegex(InvalidSchedule, "リーグ"):
+            self._generate({})
 
     def test_empty_league(self) -> None:
-        with self.assertRaises(InvalidSchedule):
-            self._generate({1: [], 2: []})
+        with self.assertRaisesRegex(InvalidSchedule, "球団のいない"):
+            self._generate({1: [], 2: [1, 2]})
 
     def test_duplicate_team(self) -> None:
         with self.assertRaisesRegex(InvalidSchedule, "重複"):
             self._generate({1: [1, 2], 2: [2, 3]})
+
+    def test_remainder_that_cannot_be_spread(self) -> None:
+        # 5球団だけのリーグは、リーグ内 143 試合を4相手に配ると余り3（奇数 × 奇数の正則グラフは無い）
+        with self.assertRaisesRegex(InvalidSchedule, "配れません"):
+            self._generate({1: [1, 2, 3, 4, 5]})
+
+    def test_single_team_league_cannot_fill_the_season(self) -> None:
+        with self.assertRaises(InvalidSchedule):
+            self._generate({1: [1]})
+
+    def test_interleague_larger_than_the_season(self) -> None:
+        with self.assertRaisesRegex(InvalidSchedule, "超えます"):
+            self._generate(LEAGUES, ScheduleRules(games_per_team=10))
 
     def test_opening_day_on_rest_weekday(self) -> None:
         with self.assertRaisesRegex(InvalidSchedule, "休み"):
@@ -244,6 +399,8 @@ class ScheduleInvalidInputTests(TestCase):
 
     def test_invalid_rules(self) -> None:
         with self.assertRaises(InvalidSchedule):
-            ScheduleRules(intra_games=0)
+            ScheduleRules(games_per_team=0)
         with self.assertRaises(InvalidSchedule):
             ScheduleRules(rest_weekday=7)
+        with self.assertRaises(InvalidSchedule):
+            ScheduleRules(series_length=1)
