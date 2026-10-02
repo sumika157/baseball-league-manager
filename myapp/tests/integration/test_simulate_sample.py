@@ -62,11 +62,12 @@ class SimulateSampleTest(TestCase):
             run(games=0)
 
     def test_the_season_mode_prints_the_title_levels_too(self):
-        # 1カード1試合（1球団11試合・全66試合）の日程に縮めて、数秒に収める。143試合の調整は手で回す
-        small = ScheduleRules(intra_games=1, inter_games=1, series_length=1)
+        # リーグ内は各相手2試合・交流戦は1試合（1球団16試合・全96試合）の日程に縮めて、数秒に収める。
+        # 143試合の調整は手で回す
+        small = ScheduleRules(games_per_team=16, inter_games=1, series_length=2)
         with patch.object(simulate_sample, "SEASON_RULES", small), self.assertNumQueries(0):
             output = run(season=True, seed=2)
-        self.assertIn("1シーズン 66試合", output)
+        self.assertIn("1シーズン 96試合", output)
         self.assertIn("タイトル争いの水準", output)
         self.assertIn("首位打者の打率", output)
         self.assertIn("本塁打王の本数", output)

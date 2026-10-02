@@ -13,13 +13,13 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from ..entities import Game
-from ..pennant.schedule import NPB_TEAMS_PER_LEAGUE, ScheduleRules
+from ..pennant.schedule import ScheduleRules
 from ..services.rankings import QUALIFYING_INNINGS_PER_GAME, QUALIFYING_PLATE_APPEARANCES_PER_GAME
 from ..value_objects import BattingLine, InningsPitched, PitchingLine
 
 OUTS_PER_INNING = InningsPitched.OUTS_PER_INNING
 # 1シーズンの試合数（NPB）。出典は日程の規則。引分の目標帯は「1チームが年に何試合引き分けるか」で持つ
-SEASON_GAMES = ScheduleRules().games_per_team(NPB_TEAMS_PER_LEAGUE)
+SEASON_GAMES = ScheduleRules().games_per_team
 
 
 @dataclass(frozen=True)

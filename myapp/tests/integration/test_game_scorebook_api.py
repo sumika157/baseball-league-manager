@@ -217,7 +217,7 @@ class ScorebookApiTest(BaseCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("5.08", response.json()["error"])
-        self.assertEqual(len(DjangoGameRepository().find_by_id(self.game.id).plate_appearances), 0)
+        self.assertEqual(len(DjangoGameRepository(WorldScope.real()).find_by_id(self.game.id).plate_appearances), 0)
 
     def test_someone_without_permission_cannot_save(self):
         self.client.logout()

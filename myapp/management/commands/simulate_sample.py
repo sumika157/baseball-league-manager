@@ -133,7 +133,7 @@ class Command(BaseCommand):
             action="store_true",
             help=(
                 f"能力を散らした{2 * NPB_TEAMS_PER_LEAGUE}球団で1シーズン"
-                f"（1球団{SEASON_RULES.games_per_team(NPB_TEAMS_PER_LEAGUE)}試合）を回し、"
+                f"（1球団{SEASON_RULES.games_per_team}試合）を回し、"
                 "タイトルの水準も出す（--games は無視）"
             ),
         )
@@ -183,7 +183,7 @@ class Command(BaseCommand):
         fixtures = generate_schedule(leagues, SEASON_RULES, SEASON_OPENING, schedule_rng)
         history = PitchingHistory()
         level = LevelTally()
-        titles = SeasonTally(team_games=SEASON_RULES.games_per_team(NPB_TEAMS_PER_LEAGUE))
+        titles = SeasonTally(team_games=SEASON_RULES.games_per_team)
         started = time.perf_counter()
         for fixture in fixtures:
             game_rng = make_random(game_seed(seed, SAMPLE_YEAR, f"season-{fixture.date}-{fixture.home_team_id}"))
