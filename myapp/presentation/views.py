@@ -18,8 +18,10 @@ from django.urls import reverse, reverse_lazy
 from django.views.decorators.http import require_GET
 from django.views.generic import CreateView
 
+from ..application.dto import GameEditRoster
 from ..application.game_recording import GameRecordingService
 from ..application.services import TeamApplicationService
+from ..domain.entities import Game
 from ..domain.exceptions import (
     DomainError,
     GameNotFound,
@@ -407,7 +409,7 @@ def game_edit(request, game_id):
     except GameNotFound:
         raise Http404("試合が見つかりません。") from None
 
-    game, rosters = data["game"], data["rosters"]
+    game, rosters = data.game, data.rosters
     if not DjangoTeamPermissionQuery().can_manage_any(request.user, (game.home_team_id, game.away_team_id)):
         raise PermissionDenied("このチームを編集する権限がありません。")
 
@@ -418,7 +420,7 @@ def game_edit(request, game_id):
     )
 
 
-def _game_edit_payload(request, game, rosters) -> dict:
+def _game_edit_payload(request, game: Game, rosters: list[GameEditRoster]) -> dict:
     """試合編集画面（React）に埋め込む初期データ。
 
     キーは保存 API（api_game_scorebook）のフォームのフィールド名と 1:1 の
@@ -437,15 +439,15 @@ def _game_edit_payload(request, game, rosters) -> dict:
         counts[half] = counts.get(half, 0) + 1
         located[entry.sequence] = (entry.inning, entry.is_bottom, counts[half])
     lineup = {}
-    for entry in game.batting:
-        position = entry.fielding_position
+    for slot in game.batting:
+        position = slot.fielding_position
         # 代打・代走・投手は入った時点を打席から導くので、入力欄には出さない（返して再保存すると、
         # 打席より前に入ったことになりうる）。守備固めなどは、保存した値を返して直せるようにする
         derived = position is not None and position.entry_is_derived
-        inning, is_bottom, batter = located.get(entry.entered_sequence or 0, (None, False, 1))
-        lineup[entry.player_id] = {
-            "batting_order": entry.batting_order,
-            "slot_sequence": entry.slot_sequence,
+        inning, is_bottom, batter = located.get(slot.entered_sequence or 0, (None, False, 1))
+        lineup[slot.player_id] = {
+            "batting_order": slot.batting_order,
+            "slot_sequence": slot.slot_sequence,
             "fielding_position": position.value if position else "",
             "entered_inning": None if derived else inning,
             "entered_is_bottom": False if derived else is_bottom,
@@ -463,24 +465,24 @@ def _game_edit_payload(request, game, rosters) -> dict:
         },
         "teams": [
             {
-                "team_id": roster["team_id"],
-                "team_name": roster["team_name"],
+                "team_id": roster.team_id,
+                "team_name": roster.team_name,
                 # rosters が home を先頭に返す前提に頼らず、試合の home_team_id と比べて決める
-                "is_home": roster["team_id"] == game.home_team_id,
+                "is_home": roster.team_id == game.home_team_id,
                 "players": [
                     {
-                        "id": player["id"],
-                        "name": player["name"],
-                        "number": player["number"],
-                        "position": player["position"],
-                        "is_pitcher": player["is_pitcher"],
+                        "id": player.id,
+                        "name": player.name,
+                        "number": player.number,
+                        "position": player.position,
+                        "is_pitcher": player.is_pitcher,
                     }
-                    for player in roster["players"]
+                    for player in roster.players
                 ],
                 "lineup": [
-                    dict(lineup[player["id"]], player_id=player["id"])
-                    for player in roster["players"]
-                    if lineup.get(player["id"], {}).get("batting_order") is not None
+                    dict(lineup[player.id], player_id=player.id)
+                    for player in roster.players
+                    if lineup.get(player.id, {}).get("batting_order") is not None
                 ],
             }
             for roster in rosters

@@ -119,7 +119,7 @@ def game_scorebook(request, game_id):
 
     service = build_service()
     try:
-        game = service.get_game_edit_data(game_id)["game"]
+        game = service.get_game_edit_data(game_id).game
     except GameNotFound:
         return JsonResponse({"ok": False, "error": "試合が見つかりません。"}, status=404)
 
