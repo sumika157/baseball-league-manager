@@ -5,6 +5,7 @@
 業務ルールそのものは DB を使わない `tests/domain/test_plate_appearances.py` にある。
 """
 
+from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import BattingLine, InningsPitched, PitchingLine
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
@@ -125,7 +126,7 @@ class ScorebookApiTest(BaseCase):
 
         self.assertEqual(response.status_code, 200, response.content)
         self.assertTrue(response.json()["ok"])
-        saved = DjangoGameRepository().find_by_id(self.game.id)
+        saved = DjangoGameRepository(WorldScope.real()).find_by_id(self.game.id)
         self.assertEqual((saved.away_score, saved.home_score), (1, 0))
         self.assertEqual(saved.line_score.away, (1,))
         self.assertEqual(saved.line_score.home, (0,))
@@ -261,7 +262,7 @@ class ScorebookApiTest(BaseCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("打席がすべて取り除かれています", response.json()["error"])
-        saved = DjangoGameRepository().find_by_id(self.game.id)
+        saved = DjangoGameRepository(WorldScope.real()).find_by_id(self.game.id)
         self.assertEqual(len(saved.plate_appearances), 8)
         self.assertEqual((saved.away_score, saved.home_score), (1, 0))
         self.assertTrue(orm_models.GameBattingLine.objects.filter(game_id=self.game.id).exists())
@@ -286,7 +287,7 @@ class ScorebookApiTest(BaseCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("古い形式", response.json()["error"])
-        saved = DjangoGameRepository().find_by_id(legacy.id)
+        saved = DjangoGameRepository(WorldScope.real()).find_by_id(legacy.id)
         self.assertEqual((saved.home_score, saved.away_score), (2, 3))
         self.assertEqual(saved.batting[0].line.at_bats, 4)
         self.assertEqual(len(saved.pitching), 1)
@@ -297,7 +298,7 @@ class ScorebookApiTest(BaseCase):
         保護と集計で「記録済み」の判定が食い違わないよう、どちらも `Game.is_recorded` を使う。
         """
         score_only = play_game(self.team, self.rival, home_score=4, away_score=2, day=3, recorded=False)
-        self.assertFalse(DjangoGameRepository().find_by_id(score_only.id).is_recorded)
+        self.assertFalse(DjangoGameRepository(WorldScope.real()).find_by_id(score_only.id).is_recorded)
 
         response = post_game_scorebook(
             self.client, score_only.id, self._payload(lineup=[], plate_appearances=[], played_on="2026-04-03")

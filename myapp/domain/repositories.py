@@ -2,6 +2,11 @@
 
 ドメイン層は「永続化できる」ことだけを知り、それが Django ORM なのか
 他の手段なのかは知らない。実装は infrastructure 層に置く。
+
+**`TeamRepository` / `GameRepository` / `LeagueRepository` は、組み立てるときに
+`WorldScope` を必須で受け取る**（実装のコンストラクタの話で、このインターフェースには
+現れない）。読み出しはすべてその範囲に絞られ、範囲の外の id は「見つからない」になる。
+`WorldRepository` だけは世界そのものの台帳なので範囲を持たない。
 """
 
 from __future__ import annotations
@@ -9,6 +14,7 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from .entities import Game, League, Team
+from .pennant.world import World
 
 
 @runtime_checkable
@@ -37,7 +43,7 @@ class TeamRepository(Protocol):
         ...
 
     def save(self, team: Team) -> Team:
-        """集約の変更内容を永続化する。"""
+        """集約の変更内容を永続化する。範囲の外のリーグ・チームには書けない。"""
         ...
 
 
@@ -71,7 +77,7 @@ class GameRepository(Protocol):
         ...
 
     def save(self, game: Game) -> Game:
-        """集約の変更内容を永続化する。"""
+        """集約の変更内容を永続化する。範囲の外のチームの試合には書けない。"""
         ...
 
 
@@ -82,3 +88,28 @@ class LeagueRepository(Protocol):
     def find_by_id(self, league_id: int) -> League: ...
 
     def find_all(self) -> list[League]: ...
+
+    def save(self, league: League) -> League:
+        """リーグを保存する。新しいリーグは範囲の世界に属する形で作られる。"""
+        ...
+
+
+@runtime_checkable
+class WorldRepository(Protocol):
+    """世界の台帳。世界そのものの出入りだけを扱い、範囲は持たない。"""
+
+    def find_by_id(self, world_id: int) -> World:
+        """無ければ WorldNotFound。"""
+        ...
+
+    def find_all(self) -> list[World]:
+        """新しく作った世界から順に。"""
+        ...
+
+    def save(self, world: World) -> World:
+        """世界を保存する。"""
+        ...
+
+    def delete(self, world_id: int) -> None:
+        """世界と、その世界に属するリーグ・球団・選手・試合をすべて消す。無ければ WorldNotFound。"""
+        ...

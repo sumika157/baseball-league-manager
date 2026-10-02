@@ -15,17 +15,24 @@ from django.db import transaction
 
 from myapp.domain import services as domain_services
 from myapp.domain.exceptions import DomainError
+from myapp.domain.pennant.world import WorldScope
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
+from myapp.infrastructure.scoping import games_in
 
 
 class Command(BaseCommand):
     help = "全試合の守備成績を、打席の記録から導き直して保存する"
 
     def handle(self, *args, **options):
-        repository = DjangoGameRepository()
+        # 対象は実データの試合だけ（ペナントの世界の試合は、その世界を進める側が導く）
+        scope = WorldScope.real()
+        repository = DjangoGameRepository(scope)
         game_ids = sorted(
-            orm_models.GamePlateAppearance.objects.order_by().values_list("game_id", flat=True).distinct()
+            orm_models.GamePlateAppearance.objects.filter(game__in=games_in(scope).values("pk"))
+            .order_by()
+            .values_list("game_id", flat=True)
+            .distinct()
         )
 
         rebuilt = 0

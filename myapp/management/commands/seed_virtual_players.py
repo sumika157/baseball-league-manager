@@ -20,8 +20,13 @@ from datetime import date
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
+from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import Handedness, Position
-from myapp.models import Player, PlayerStint, Team
+from myapp.infrastructure.scoping import players_in, stints_in, teams_in
+from myapp.models import Player, PlayerStint
+
+# 投入・補正の対象は実データだけ。ペナントの世界の球団・選手には触れない
+REAL_SCOPE = WorldScope.real()
 
 JAPANESE_PREFECTURES = [
     "北海道",
@@ -1297,7 +1302,7 @@ class Command(BaseCommand):
             return
 
         today = date.today()
-        used_names = set(Player.objects.values_list("name", flat=True))
+        used_names = set(players_in(REAL_SCOPE).values_list("name", flat=True))
 
         created_players = 0
         created_stints = 0
@@ -1305,7 +1310,7 @@ class Command(BaseCommand):
         team_reports = []
 
         with transaction.atomic():
-            for team in Team.objects.select_related("league"):
+            for team in teams_in(REAL_SCOPE).select_related("league"):
                 active_stints = list(
                     PlayerStint.objects.filter(team=team, to_year__isnull=True).select_related("player")
                 )
@@ -1484,7 +1489,7 @@ class Command(BaseCommand):
             Player.objects.bulk_update(stale, ["back_name"])
 
     def _refresh_schools(self, *, dry_run):
-        targets = list(Player.objects.filter(is_foreign_player=False).exclude(name__in=ORIGINAL_PLAYER_NAMES))
+        targets = list(players_in(REAL_SCOPE).filter(is_foreign_player=False).exclude(name__in=ORIGINAL_PLAYER_NAMES))
         to_update = []
         for player in targets:
             high_school, university, corporate_team, _debut_age = make_amateur_career(False, player.birthplace)
@@ -1503,8 +1508,8 @@ class Command(BaseCommand):
         )
 
     def _rename_existing(self, *, dry_run):
-        targets = Player.objects.filter(is_foreign_player=False).exclude(name__in=ORIGINAL_PLAYER_NAMES)
-        used_names = set(Player.objects.values_list("name", flat=True))
+        targets = players_in(REAL_SCOPE).filter(is_foreign_player=False).exclude(name__in=ORIGINAL_PLAYER_NAMES)
+        used_names = set(players_in(REAL_SCOPE).values_list("name", flat=True))
         renamed = 0
 
         with transaction.atomic():
@@ -1539,7 +1544,7 @@ class Command(BaseCommand):
         foreign_given_lookup = {kana: romaji for group in FOREIGN_GROUPS for kana, romaji in group["given"]}
         foreign_surname_lookup = {kana: romaji for group in FOREIGN_GROUPS for kana, romaji in group["surname"]}
 
-        players = list(Player.objects.all())
+        players = list(players_in(REAL_SCOPE))
         surname_romaji_by_id = {}
         given_romaji_by_id = {}
         name_kana_by_id = {}
@@ -1577,7 +1582,7 @@ class Command(BaseCommand):
             given_romaji_by_id[player.id] = given_romaji
 
         # チームごとに同姓を数え、背ネームを決める（在籍していない選手は苗字のみ）。
-        team_by_player_id = {s.player_id: s.team_id for s in PlayerStint.objects.filter(to_year__isnull=True)}
+        team_by_player_id = {s.player_id: s.team_id for s in stints_in(REAL_SCOPE).filter(to_year__isnull=True)}
         counts_by_team = defaultdict(Counter)
         for player_id, surname_romaji in surname_romaji_by_id.items():
             team_id = team_by_player_id.get(player_id)

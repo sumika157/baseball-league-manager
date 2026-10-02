@@ -10,6 +10,7 @@ from datetime import date
 
 from django.urls import reverse
 
+from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import BattingLine, InningsPitched, PitchingLine
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoGameListQuery
@@ -91,7 +92,9 @@ class UnrecordedGameTest(BaseCase):
         play_game(self.team, self.rival, day=2)
 
         self.assertEqual(self.service.get_team_totals(self.team.id).games, 1)
-        self.assertEqual(DjangoGameListQuery().count_by_team(year=2026), {self.team.id: 1, self.rival.id: 1})
+        self.assertEqual(
+            DjangoGameListQuery(WorldScope.real()).count_by_team(year=2026), {self.team.id: 1, self.rival.id: 1}
+        )
 
     def test_an_unrecorded_game_does_not_move_the_qualification_denominator(self):
         """規定打席は試合数で決まる。未記録の試合を数えると、規定に届く選手がいなくなる。"""
@@ -166,7 +169,7 @@ class UnrecordedGameTest(BaseCase):
     def test_no_winner_is_marked_on_an_unrecorded_game(self):
         self._register()
 
-        rows = DjangoGameListQuery().list_rows(year=2026)
+        rows = DjangoGameListQuery(WorldScope.real()).list_rows(year=2026)
 
         self.assertEqual([(row.is_recorded, row.winner_team_id) for row in rows], [(False, None)])
 
@@ -221,8 +224,8 @@ class RecordedConditionMatchesTheDomainTest(BaseCase):
         )
         cases["打席だけ"] = with_plate_appearance
 
-        repository = DjangoGameRepository()
-        query = DjangoGameListQuery()
+        repository = DjangoGameRepository(WorldScope.real())
+        query = DjangoGameListQuery(WorldScope.real())
         by_id_light = {game.id: game.is_recorded for game in query.list_for_standings()}
         by_id_row = {row.id: row.is_recorded for row in query.list_rows()}
 

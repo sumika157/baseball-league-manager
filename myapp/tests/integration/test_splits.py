@@ -5,6 +5,7 @@ from datetime import date
 from django.urls import reverse
 
 from myapp.domain.entities import Game
+from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import (
     BattingLine,
     Season,
@@ -108,7 +109,7 @@ class MonthlySplitViewTest(BaseCase):
             away_score=0,
         )
         game.record_batting(self.player.id, BattingLine(**line), team_id=game.home_team_id)
-        DjangoGameRepository().save(game)
+        DjangoGameRepository(WorldScope.real()).save(game)
 
     def _months(self, player_id=None):
         profile = self.service.get_player_profile(self.team.id, player_id or self.player.id)

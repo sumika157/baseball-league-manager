@@ -55,6 +55,8 @@ class League:
     # 外国人選手の枠。リーグごとにルールが異なりうるためここに持つ。None なら無制限
     foreign_player_roster_limit: int | None = None
     foreign_player_game_limit: int | None = None
+    # 並び順。管理画面で手動に並べ替える。分岐でも元の並びを保つために持つ
+    display_order: int = 0
 
     def __str__(self) -> str:
         return self.name

@@ -10,6 +10,7 @@ from io import StringIO
 
 from django.core.management import CommandError, call_command
 
+from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import Position
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
@@ -82,7 +83,7 @@ class SeedGamesTest(SeedGamesBase):
     def setUp(self) -> None:
         super().setUp()
         self.output = run()
-        self.games = DjangoGameRepository().find_all(YEAR)
+        self.games = DjangoGameRepository(WorldScope.real()).find_all(YEAR)
 
     def test_creates_round_robin_within_season(self):
         pairs = len(self.teams) * (len(self.teams) - 1) // 2

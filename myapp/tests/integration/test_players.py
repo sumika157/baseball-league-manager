@@ -5,6 +5,7 @@ import re
 from django.contrib.auth.models import User
 from django.urls import reverse
 
+from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import (
     BattingLine,
     InningsPitched,
@@ -394,7 +395,7 @@ class PlayerProfileTest(BaseCase):
             debut_year=2021,
         )
 
-        saved = DjangoTeamRepository().find_by_id(self.team.id).find_player(player.id)
+        saved = DjangoTeamRepository(WorldScope.real()).find_by_id(self.team.id).find_player(player.id)
 
         self.assertEqual(saved.profile.height_cm, 180)
         self.assertEqual(saved.profile.throws_bats, "右投左打")
@@ -402,7 +403,7 @@ class PlayerProfileTest(BaseCase):
 
     def test_profile_is_optional(self):
         player = self.service.register_player(self.team.id, "山田", 10, "内野手")
-        saved = DjangoTeamRepository().find_by_id(self.team.id).find_player(player.id)
+        saved = DjangoTeamRepository(WorldScope.real()).find_by_id(self.team.id).find_player(player.id)
 
         self.assertTrue(saved.profile.is_empty)
 
@@ -414,7 +415,7 @@ class PlayerProfileTest(BaseCase):
             corporate_team="○○重工",
         )
 
-        saved = DjangoTeamRepository().find_by_id(self.team.id).find_player(player.id)
+        saved = DjangoTeamRepository(WorldScope.real()).find_by_id(self.team.id).find_player(player.id)
 
         self.assertEqual(saved.profile.amateur_path, "甲子園高校 → 六大学 → ○○重工")
 

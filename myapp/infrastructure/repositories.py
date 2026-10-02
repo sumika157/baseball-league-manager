@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from django.db import transaction
+from django.db import models, transaction
 from django.db.models import Prefetch, Q, QuerySet, Sum
 
 from ..domain.entities import (
@@ -36,7 +36,9 @@ from ..domain.exceptions import (
     InvalidPosition,
     LeagueNotFound,
     TeamNotFound,
+    WorldNotFound,
 )
+from ..domain.pennant.world import World, WorldScope
 from ..domain.services import ensure_lines_match_plate_appearances
 from ..domain.value_objects import (
     AdvanceReason,
@@ -56,6 +58,7 @@ from ..domain.value_objects import (
     Season,
 )
 from . import orm_models
+from .scoping import games_in, leagues_in, players_in, teams_in, world_condition
 
 _BATTING_FIELDS = (
     "at_bats",
@@ -131,12 +134,20 @@ class _RosterData:
 
 
 class DjangoTeamRepository:
-    """TeamRepository の Django ORM 実装。"""
+    """TeamRepository の Django ORM 実装。
+
+    **範囲（`WorldScope`）を必須で受け取り**、読み出しはすべて SQL でその世界のチームに
+    絞る。範囲の外の id は「見つからない」になる。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
 
     def find_by_id(self, team_id: int) -> Team:
         try:
             row = (
-                orm_models.Team.objects.select_related("league")
+                teams_in(self._scope)
+                .select_related("league")
                 .prefetch_related(self._stints_prefetch())
                 .get(id=team_id)
             )
@@ -146,7 +157,7 @@ class DjangoTeamRepository:
         return self._to_domain(row, roster=_RosterData.for_players(s.player for s in row.stints.all()))
 
     def find_all(self) -> list[Team]:
-        rows = orm_models.Team.objects.select_related("league").order_by("display_order", "name")
+        rows = teams_in(self._scope).select_related("league").order_by("display_order", "name")
         return [self._to_domain(row) for row in rows]
 
     def find_all_with_roster(self) -> list[Team]:
@@ -160,11 +171,11 @@ class DjangoTeamRepository:
         """
         return self._with_rosters(self._roster_rows().filter(league_id=league_id))
 
-    @staticmethod
-    def _roster_rows() -> QuerySet[orm_models.Team]:
+    def _roster_rows(self) -> QuerySet[orm_models.Team]:
         return (
-            orm_models.Team.objects.select_related("league")
-            .prefetch_related(DjangoTeamRepository._stints_prefetch())
+            teams_in(self._scope)
+            .select_related("league")
+            .prefetch_related(self._stints_prefetch())
             .order_by("display_order", "name")
         )
 
@@ -192,7 +203,13 @@ class DjangoTeamRepository:
         """チームとロスターを永続化する。
 
         成績は試合側に持つため、ここでは書かない。
+        範囲の外のリーグ・チームには書けない（別の世界の球団を書き換えない）。
         """
+        if team.league_id is None or not leagues_in(self._scope).filter(id=team.league_id).exists():
+            raise LeagueNotFound(f"リーグが見つかりません（id={team.league_id}）。")
+        if team.id is not None and not teams_in(self._scope).filter(id=team.id).exists():
+            raise TeamNotFound(f"チームが見つかりません（id={team.id}）。")
+
         # id=None（未保存）なら update_or_create が新規作成に落ちる。この使い方は
         # 型スタブで表現できないため、このファイルの id 検索は ignore で明示する
         team_row, _ = orm_models.Team.objects.update_or_create(  # type: ignore[misc]
@@ -449,7 +466,13 @@ def _required_position(label: str) -> FieldingPosition:
 
 
 class DjangoGameRepository:
-    """GameRepository の Django ORM 実装。試合（Game 集約）の永続化。"""
+    """GameRepository の Django ORM 実装。試合（Game 集約）の永続化。
+
+    範囲（`WorldScope`）を必須で受け取り、読み出しはすべて SQL でその世界の試合に絞る。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
 
     def find_by_id(self, game_id: int) -> Game:
         try:
@@ -498,21 +521,21 @@ class DjangoGameRepository:
             rows = rows.filter(year=year)
         return [self._to_domain(row) for row in rows]
 
-    @staticmethod
-    def _with_details() -> QuerySet[orm_models.Game]:
-        """打撃・投球・イニングスコアの明細つきで読む。集約として扱うときに使う。
+    def _with_details(self) -> QuerySet[orm_models.Game]:
+        """打撃・投球・イニングスコアの明細つきで、範囲の試合を読む。集約として扱うときに使う。
 
         **打席は含めない。** 1試合で約280行あり、まとめて読む用途（リーグ集計など）で
         付けると数十万行を組み立てることになる。打席が要るのは1試合を編集するときだけで、
         そこは `find_by_id` が読む。
         """
-        return orm_models.Game.objects.prefetch_related("batting_lines", "pitching_lines", "inning_scores")
+        return games_in(self._scope).prefetch_related("batting_lines", "pitching_lines", "inning_scores")
 
     @transaction.atomic
     def save(self, game: Game) -> Game:
         # 打撃・投球の明細は打席から導ける値だが、通算成績の集計のために保存もしている。
         # 同じ事実を2か所に持つので、食い違ったまま保存されないよう集約に照合させる
         ensure_lines_match_plate_appearances(game)
+        self._ensure_in_scope(game)
         row, _ = orm_models.Game.objects.update_or_create(  # type: ignore[misc]
             id=game.id,
             defaults={
@@ -566,6 +589,14 @@ class DjangoGameRepository:
         ).delete()
 
         return game
+
+    def _ensure_in_scope(self, game: Game) -> None:
+        """範囲の外の試合・チームには書けない（別の世界の試合を書き換えない）。"""
+        team_ids = {game.home_team_id, game.away_team_id}
+        if teams_in(self._scope).filter(id__in=team_ids).count() != len(team_ids):
+            raise TeamNotFound("試合のチームが見つかりません。")
+        if game.id is not None and not games_in(self._scope).filter(id=game.id).exists():
+            raise GameNotFound(f"試合が見つかりません（id={game.id}）。")
 
     @staticmethod
     def _save_fielding(row: orm_models.Game, game: Game) -> None:
@@ -810,11 +841,14 @@ class DjangoGameRepository:
 
 
 class DjangoLeagueRepository:
-    """LeagueRepository の Django ORM 実装。"""
+    """LeagueRepository の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る。"""
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
 
     def find_by_id(self, league_id: int) -> League:
         try:
-            row = orm_models.League.objects.get(id=league_id)
+            row = leagues_in(self._scope).get(id=league_id)
         except orm_models.League.DoesNotExist:
             raise LeagueNotFound(f"リーグが見つかりません（id={league_id}）。") from None
         return self._to_domain(row)
@@ -822,7 +856,24 @@ class DjangoLeagueRepository:
     def find_all(self) -> list[League]:
         # 管理画面で手動設定した表示順を既定にする。順位表・ダッシュボードの
         # タブ・チーム一覧の並びが、この順に揃う
-        return [self._to_domain(row) for row in orm_models.League.objects.order_by("display_order", "name")]
+        return [self._to_domain(row) for row in leagues_in(self._scope).order_by("display_order", "name")]
+
+    def save(self, league: League) -> League:
+        """リーグを保存する。新しいリーグは範囲の世界に属する。範囲の外のリーグには書けない。"""
+        if league.id is not None and not leagues_in(self._scope).filter(id=league.id).exists():
+            raise LeagueNotFound(f"リーグが見つかりません（id={league.id}）。")
+        row, _ = orm_models.League.objects.update_or_create(  # type: ignore[misc]
+            id=league.id,
+            defaults={
+                "name": league.name,
+                "world_id": self._scope.world_id,
+                "display_order": league.display_order,
+                "foreign_player_roster_limit": league.foreign_player_roster_limit,
+                "foreign_player_game_limit": league.foreign_player_game_limit,
+            },
+        )
+        league.id = row.id
+        return league
 
     @staticmethod
     def _to_domain(row: orm_models.League) -> League:
@@ -831,4 +882,91 @@ class DjangoLeagueRepository:
             name=row.name,
             foreign_player_roster_limit=row.foreign_player_roster_limit,
             foreign_player_game_limit=row.foreign_player_game_limit,
+            display_order=row.display_order,
+        )
+
+
+# 世界に属する行を消す順（子から親へ）。(モデル, そのモデルから League へ至る道)。
+# 世界の削除は Django の CASCADE の collector に任せない。打席などは1シーズンで数十万行
+# あり、collector は消す行を Python に集めてしまうため。ここに挙げたモデルと、選手・球団・
+# リーグ・世界は、`tests/integration/test_world_isolation.py` の分類表が「世界に属する」と
+# したものと一致することを検査している（足したモデルを消し忘れると、そのテストが落ちる）。
+_GAME_ROUTE = "home_team__league"
+_WORLD_ROWS_CHILD_FIRST: tuple[tuple[type[models.Model], str], ...] = (
+    (orm_models.GameRunnerAdvance, f"plate_appearance__game__{_GAME_ROUTE}"),
+    (orm_models.GameRunnerSubstitution, f"plate_appearance__game__{_GAME_ROUTE}"),
+    (orm_models.GameFieldingError, f"plate_appearance__game__{_GAME_ROUTE}"),
+    (orm_models.GamePlateAppearance, f"game__{_GAME_ROUTE}"),
+    (orm_models.GameFieldingLine, f"game__{_GAME_ROUTE}"),
+    (orm_models.GameBattingLine, f"game__{_GAME_ROUTE}"),
+    (orm_models.GamePitchingLine, f"game__{_GAME_ROUTE}"),
+    (orm_models.GameInningScore, f"game__{_GAME_ROUTE}"),
+    (orm_models.Game, _GAME_ROUTE),
+    (orm_models.Captaincy, "team__league"),
+    (orm_models.PlayerStint, "team__league"),
+)
+_PLAYER_DELETE_CHUNK = 500
+
+
+class DjangoWorldRepository:
+    """WorldRepository の Django ORM 実装。世界の台帳で、範囲は持たない。"""
+
+    def find_by_id(self, world_id: int) -> World:
+        try:
+            row = orm_models.PennantWorld.objects.get(id=world_id)
+        except orm_models.PennantWorld.DoesNotExist:
+            raise WorldNotFound(f"世界が見つかりません（id={world_id}）。") from None
+        return self._to_domain(row)
+
+    def find_all(self) -> list[World]:
+        return [self._to_domain(row) for row in orm_models.PennantWorld.objects.all()]
+
+    def save(self, world: World) -> World:
+        row, _ = orm_models.PennantWorld.objects.update_or_create(  # type: ignore[misc]
+            id=world.id,
+            defaults={
+                "name": world.name,
+                "owner_id": world.owner_id,
+                "seed": world.seed,
+                "managed_team_id": world.managed_team_id,
+                "start_year": world.start_year,
+            },
+        )
+        world.id = row.id
+        return world
+
+    @transaction.atomic
+    def delete(self, world_id: int) -> None:
+        """世界と、属する行をすべて消す。子のテーブルから、範囲で絞って順に消す。"""
+        if not orm_models.PennantWorld.objects.filter(id=world_id).exists():
+            raise WorldNotFound(f"世界が見つかりません（id={world_id}）。")
+        scope = WorldScope.pennant(world_id)
+
+        # 選手は在籍をたどって世界が決まるので、在籍を消す前に控えておく
+        player_ids = list(players_in(scope).values_list("id", flat=True))
+
+        # 孫から順に消し終えているので、CASCADE や PROTECT の検査に頼らず行だけを消せる
+        # （_raw_delete は collector を通さない。Django の非公開 API だが、数十万行を
+        # Python に集めずに済ませる手段が他に無い）
+        for model, route in _WORLD_ROWS_CHILD_FIRST:
+            manager = model._default_manager
+            manager.filter(world_condition(route, scope))._raw_delete(manager.db)
+        for start in range(0, len(player_ids), _PLAYER_DELETE_CHUNK):
+            chunk = player_ids[start : start + _PLAYER_DELETE_CHUNK]
+            orm_models.Player.objects.filter(id__in=chunk)._raw_delete(orm_models.Player.objects.db)
+
+        # 球団・リーグ・世界は数が少ないので、通常の削除でよい（担当者や受け持ちの参照も外れる）
+        teams_in(scope).delete()
+        leagues_in(scope).delete()
+        orm_models.PennantWorld.objects.filter(id=world_id).delete()
+
+    @staticmethod
+    def _to_domain(row: orm_models.PennantWorld) -> World:
+        return World(
+            id=row.id,
+            name=row.name,
+            seed=row.seed,
+            start_year=row.start_year,
+            owner_id=row.owner_id,
+            managed_team_id=row.managed_team_id,
         )
