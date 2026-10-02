@@ -109,8 +109,10 @@ ORM に直接 `bulk_create` 等で書き込むコード（データ投入コマ�
     Issue に紐づけて作る（base が main でない epic のタスク PR は、本文のキーワードだけではリンクしないため）。
     本文には base が main なら `Closes #<番号>`、epic のタスク PR なら `Refs #<番号>` を書く。
     PR を作ったらリンクしたかを確かめる（しなくてもエラーにならない。確かめ方は `issue-plan` スキル）。
-  - epic は Issue を1本だけ立て、段階ごとのタスクはその手順チェックリストで追う（タスクごとに Issue を立てない）。
+  - **epic は親 Issue ＋ 段階ごとの sub-issue で追う**（前例: #26 と #50〜#54）。親には「なぜ・範囲・段階の分け方」、
+    sub-issue には段階ごとの実装計画を書く。統合ブランチは親に、タスクブランチは段階の sub-issue に紐づけて切る。
     詳細設計と段階ごとの実測値は従来どおり `docs/design/` に置き、Issue からはリンクするだけにする（同じ内容を両方に書かない）。
+  - 初期範囲から外した拡張は epic の親の子にせず、別の親 Issue にまとめる（前例: #55）。epic の親が閉じた後も未完了の子が残るため。
 - **タスクごとにブランチを切る。main に直接コミットしない。** 命名は `feature/` `fix/` `refactor/` `docs/` ＋ 英語の kebab-case（例: `feature/player-nationality`）。
 - **機能ごとにコミットする。** 複数の機能や無関係な修正を1つのコミットに混ぜない。逆に、1つの機能（実装＋テスト＋README更新）は1コミットにまとめる。
 - コミットメッセージは既存の履歴にならい日本語で書く。
@@ -203,9 +205,9 @@ push の前に、**「レビュー → 改善」を3周繰り返す**。1周は�
   タスク名は統合ブランチ名の接頭辞にせず、独立した短い名前にする（`feature/pa-persistence` など）。
 - **タスクの PR は base を統合ブランチにする。** `gh pr create --base epic/<機能>` を忘れると
   main が base になり、前の段階の差分まで含んだ PR ができる。
-- **タスクブランチは統合ブランチを基点に作る**: `gh issue develop <epic の Issue> --name <タスク> --base epic/<機能>` →
+- **タスクブランチは統合ブランチを基点に作る**: `gh issue develop <段階の sub-issue> --name <タスク> --base epic/<機能>` →
   `git fetch origin <タスク>` → `git worktree add -b <タスク> .claude/worktrees/<名前> origin/<タスク>`
-  （統合ブランチ自体も `--base main` で同じ Issue に紐づけて作る）。
+  （統合ブランチ自体は `--base main` で親 Issue に紐づけて作る）。
 - **統合ブランチは長生きするので、段階の区切りごとに main を取り込む**（`git merge origin/main`）。
   放っておくと最後に大きく衝突する。並行して別のタスクが main にマージされていく前提で動く。
 - 設計は `docs/design/<機能>.md` に置き、**段階ごとに実測値と決定を追記する**（次のセッションへの引き継ぎになる）。
