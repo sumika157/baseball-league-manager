@@ -7,15 +7,57 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from dataclasses import fields
+from typing import Any
 
 from django.contrib.auth.models import AnonymousUser, User
-from django.db.models import Count, Q, QuerySet
+from django.db.models import Count, Q, QuerySet, Sum
 
-from ..application.dto import GameRow, PlayerSearchRow, TeamSummary
+from ..application.dto import FieldingRow, GameRow, PlayerFielding, PlayerSearchRow, TeamSummary
 from ..domain.entities import Game, winning_team_id
-from ..domain.value_objects import Season
+from ..domain.value_objects import FieldingLine, Season
 from . import orm_models
+
+
+class DjangoPlayerFieldingQuery:
+    """PlayerFieldingQuery の Django ORM 実装。守備成績を SQL の集計で読む。
+
+    選手ページが要るのは通算と年度別の合計だけなので、試合（集約）も打席も組み立てない。
+    守備率は合計した実数から `FieldingLine` に計算させる（式の出典を1つに保つ）。
+    """
+
+    # 項目は値オブジェクトから引く。ここに並べると、項目を足したときに集計だけが古くなる
+    _SUMS = {f.name: Sum(f.name) for f in fields(FieldingLine)}
+
+    def for_player(self, player_id: int, team_id: int) -> PlayerFielding | None:
+        rows = orm_models.GameFieldingLine.objects.filter(player_id=player_id)
+        total = rows.aggregate(games=Count("id"), **self._SUMS)
+        if not total["games"]:
+            return None
+
+        # 年度別はこのチームでの成績（打撃・投球の年度別と同じ）。通算は移籍前も含む
+        yearly = (
+            rows.filter(Q(game__home_team_id=team_id) | Q(game__away_team_id=team_id))
+            .values("game__year")
+            .annotate(games=Count("id"), **self._SUMS)
+            .order_by("game__year")
+        )
+        return PlayerFielding(
+            career=self._row("通算", total),
+            years=[self._row(f"{entry['game__year']}年", entry) for entry in yearly],
+        )
+
+    @staticmethod
+    def _row(label: str, sums: Mapping[str, Any]) -> FieldingRow:
+        line = FieldingLine(**{f.name: sums[f.name] or 0 for f in fields(FieldingLine)})
+        return FieldingRow(
+            label=label,
+            games=sums["games"],
+            total_chances=line.total_chances,
+            **{f.name: getattr(line, f.name) for f in fields(FieldingLine)},
+            fielding_percentage=line.fielding_percentage,
+        )
 
 
 class DjangoPlayerSearchQuery:

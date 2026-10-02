@@ -1,10 +1,11 @@
 """試合編集画面（React）の保存 API。
 
-画面の描画は views.game_edit が担い、保存だけがここに来る。検証は既存の
-presentation/forms.py（GameForm・InningScoreForm・BattingEntryForm・
-PitchingEntryForm）を行単位でそのまま再利用し、業務ルール（被本塁打が
-被安打を超えない、勝敗・セーブ・ホールドの導出など）はドメイン層に任せる
-（検証・業務ルールの出典を増やさない）。
+画面の描画は views.game_edit が担い、保存だけがここに来る。検証は
+presentation/forms.py のフォームを行単位で使い、業務ルール（打順の巡回・塁の再生・
+勝敗の導出など）はドメイン層に任せる（検証・業務ルールの出典を増やさない）。
+
+**受け取るのは打席の記録だけ。** 成績を手入力で受け取っていた古い API は、
+入力画面をスコアブックに置き換えたときに消した。
 """
 
 import json
@@ -14,61 +15,15 @@ from django.urls import reverse
 from django.views.decorators.http import require_POST
 
 from ..domain.exceptions import DomainError, GameNotFound
-from ..domain.value_objects import BattingLine, InningsPitched, LineScore, PitchingLine
 from ..infrastructure.queries import DjangoTeamPermissionQuery
-from .forms import BattingEntryForm, GameForm, InningScoreForm, PitchingEntryForm
-from .views import _first_error, build_service
-
-
-def _collect_line_score(inning_forms) -> LineScore:
-    """イニングスコアを組み立てる。
-
-    表・裏それぞれ、入力がある最後の回までを行われた回とし、途中の空欄は
-    0とみなす（1回に得点が無ければ空欄のままにする人もいるため）。
-
-    行の並びではなく **inning の番号**で値を配置する。行の欠落・重複・
-    並び順の入れ替わりがあっても、回を取り違えて記録しない（例: 1・2・12回
-    しか送られなかった場合に12回の得点が3回目として記録される、といった
-    事故を避ける）。裏は表より長くならない（ホームが表より先に攻めることは
-    無いため、表の記録が無い回の裏だけが入力されても切り落とす）。
-    """
-    by_inning = {form.cleaned_data["inning"]: form.cleaned_data for form in inning_forms}
-
-    def _last_recorded(key: str) -> int:
-        return max((inning for inning, data in by_inning.items() if data.get(key) is not None), default=0)
-
-    away_through = _last_recorded("away")
-    home_through = min(_last_recorded("home"), away_through)
-    away = tuple((by_inning.get(inning, {}).get("away") or 0) for inning in range(1, away_through + 1))
-    home = tuple((by_inning.get(inning, {}).get("home") or 0) for inning in range(1, home_through + 1))
-    return LineScore(away=away, home=home)
-
-
-def _collect_batting(forms) -> tuple[dict, dict]:
-    """未入力の行は含めない。含めると出場していない選手の記録が残る。"""
-    lines: dict = {}
-    lineup: dict = {}
-    for form in forms:
-        if form.is_blank():
-            continue
-        player_id = form.cleaned_data["player_id"]
-        lines[player_id] = BattingLine(**form.counts())
-        lineup[player_id] = form.lineup()
-    return lines, lineup
-
-
-def _collect_pitching(forms) -> tuple[dict, dict]:
-    """未入力の行は含めない。含めると出場していない選手の記録が残る。"""
-    lines: dict = {}
-    staff: dict = {}
-    for form in forms:
-        if form.is_blank():
-            continue
-        player_id = form.cleaned_data["player_id"]
-        lines[player_id] = PitchingLine(innings=InningsPitched.from_notation(form.innings()), **form.counts())
-        staff[player_id] = form.entered()
-    return lines, staff
-
+from .forms import (
+    FieldingErrorForm,
+    LineupSlotForm,
+    PlateAppearanceForm,
+    RunnerAdvanceForm,
+    ScorebookGameForm,
+)
+from .views import _first_error, build_recording_service, build_service
 
 _MISSING = object()
 
@@ -77,9 +32,8 @@ def _as_row_list(body: dict, key: str) -> list | None:
     """body[key] がフォームの行データ（dict のリスト）として妥当なら返す。
 
     キー自体が無い場合は None を返す（不正なリクエストとして拒否する）。
-    update_game は「渡されなかった選手の記録・イニングスコアは取り消す」
-    仕様なので、キーの欠落を空リストと同じに扱うと、キーを1つ落としただけの
-    リクエストで既存の成績が全消去されてしまう。
+    保存は「渡されなかった打席・打順は取り消す」仕様なので、キーの欠落を空リストと
+    同じに扱うと、キーを1つ落としただけのリクエストで既存の記録が全消去されてしまう。
     """
     value = body.get(key, _MISSING)
     if value is _MISSING or not isinstance(value, list) or not all(isinstance(row, dict) for row in value):
@@ -87,9 +41,72 @@ def _as_row_list(body: dict, key: str) -> list | None:
     return value
 
 
+ENTRY_KEYS = ("entered_inning", "entered_is_bottom", "entered_batter")
+
+
+def _lineup_row_missing_entry_keys(rows: list) -> str | None:
+    """途中出場の行に、出場時刻のキーが揃っているか。揃っていなければエラー文を返す。
+
+    **キーの欠落と、明示的な未入力（null）は別物**。欠落を「未入力」と同じに扱うと、キーを
+    落としたクライアントの保存で、守備固めの出場時刻が黙って消える（既知の罠と同じ形）。
+    """
+    for row in rows:
+        try:
+            substitute = int(row.get("slot_sequence") or 0) >= 1
+        except (TypeError, ValueError):
+            continue  # 型の不正はフォームが弾く
+        missing = [key for key in ENTRY_KEYS if key not in row]
+        if substitute and missing:
+            return (
+                f"途中出場の行に出場時刻のキーがありません（選手id={row.get('player_id')}・{', '.join(missing)}）。"
+                "未入力は null で送ってください。"
+            )
+    return None
+
+
+def _collect_plate_appearances(rows: list) -> tuple[list, str | None]:
+    """打席の行を検証してドメインの打席に組み立てる。
+
+    進塁と失策は打席の中に入れ子で送られてくる。**行は位置ではなく打席ごとに
+    束ねる**（並びが変わっても走者の動きが別の打席に付かない）。
+    最初に見つけた誤りだけを返す（フォームと同じ扱い）。
+
+    **組み立ての途中でもドメインが弾く**（進塁の理由と到達の食い違いなど）。
+    ここで捕まえないと 500 になってしまうので、フォームの誤りと同じ扱いにする。
+    """
+    built = []
+    for row in rows:
+        form = PlateAppearanceForm(row)
+        advance_rows = row.get("advances")
+        error_rows = row.get("errors", [])
+        if not isinstance(advance_rows, list) or not isinstance(error_rows, list):
+            return [], "リクエストの形式が不正です。"
+
+        advance_forms = [RunnerAdvanceForm(entry) for entry in advance_rows]
+        error_forms = [FieldingErrorForm(entry) for entry in error_rows]
+        for each in (form, *advance_forms, *error_forms):
+            if not each.is_valid():
+                return [], _first_error(each)
+
+        try:
+            built.append(
+                form.to_plate_appearance(
+                    [advance.to_advance() for advance in advance_forms],
+                    [error.to_error() for error in error_forms],
+                )
+            )
+        except DomainError as error:
+            return [], str(error)
+    return built, None
+
+
 @require_POST
-def game_update(request, game_id):
-    """試合の基本情報と成績を保存する。成功したら試合詳細への遷移先を返す。"""
+def game_scorebook(request, game_id):
+    """スコアブック（打席の記録）を保存する。
+
+    得点・イニングスコア・登板順・勝敗は受け取らない。すべて打席から導く
+    （受け取ると「記録と食い違う得点」を保存できてしまう）。
+    """
     if not request.user.is_authenticated:
         return JsonResponse({"ok": False, "error": "ログインが必要です。再度ログインしてください。"}, status=403)
 
@@ -109,39 +126,36 @@ def game_update(request, game_id):
     if not DjangoTeamPermissionQuery().can_manage_any(request.user, (game.home_team_id, game.away_team_id)):
         return JsonResponse({"ok": False, "error": "このチームを編集する権限がありません。"}, status=403)
 
-    innings_data = _as_row_list(body, "innings")
-    batting_data = _as_row_list(body, "batting")
-    pitching_data = _as_row_list(body, "pitching")
-    if innings_data is None or batting_data is None or pitching_data is None:
+    lineup_data = _as_row_list(body, "lineup")
+    plate_appearance_data = _as_row_list(body, "plate_appearances")
+    if lineup_data is None or plate_appearance_data is None:
         return JsonResponse({"ok": False, "error": "リクエストの形式が不正です。"}, status=400)
 
-    game_form = GameForm(body)
-    inning_forms = [InningScoreForm(row) for row in innings_data]
-    batting_forms = [BattingEntryForm(row) for row in batting_data]
-    pitching_forms = [PitchingEntryForm(row) for row in pitching_data]
+    missing_entry = _lineup_row_missing_entry_keys(lineup_data)
+    if missing_entry is not None:
+        return JsonResponse({"ok": False, "error": missing_entry}, status=400)
 
-    for form in (game_form, *inning_forms, *batting_forms, *pitching_forms):
+    game_form = ScorebookGameForm(body)
+    lineup_forms = [LineupSlotForm(row) for row in lineup_data]
+    for form in (game_form, *lineup_forms):
         if not form.is_valid():
             return JsonResponse({"ok": False, "error": _first_error(form)}, status=400)
 
+    plate_appearances, error = _collect_plate_appearances(plate_appearance_data)
+    if error is not None:
+        return JsonResponse({"ok": False, "error": error}, status=400)
+
     try:
-        batting, lineup = _collect_batting(batting_forms)
-        pitching, staff = _collect_pitching(pitching_forms)
-        service.update_game(
+        build_recording_service().record_scorebook(
             game_id,
             year=game_form.cleaned_data["year"],
             played_on=game_form.cleaned_data["played_on"],
             home_team_id=game_form.cleaned_data["home_team"],
             away_team_id=game_form.cleaned_data["away_team"],
-            home_score=game_form.cleaned_data["home_score"],
-            away_score=game_form.cleaned_data["away_score"],
-            batting=batting,
-            pitching=pitching,
-            lineup=lineup,
-            staff=staff,
-            line_score=_collect_line_score(inning_forms),
+            lineup=[form.to_slot() for form in lineup_forms],
+            plate_appearances=plate_appearances,
         )
-    except DomainError as error:
-        return JsonResponse({"ok": False, "error": str(error)}, status=400)
+    except DomainError as error_raised:
+        return JsonResponse({"ok": False, "error": str(error_raised)}, status=400)
 
     return JsonResponse({"ok": True, "redirect_url": reverse("game_detail", args=[game_id])})

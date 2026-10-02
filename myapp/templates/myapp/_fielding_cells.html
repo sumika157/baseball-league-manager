@@ -1,0 +1,11 @@
+{% comment %}
+守備成績の実数を並べる列。年度別の各行と通算行で共有する（列の並びはここが唯一の出典）。
+渡すもの: row（FieldingRow）。見出しは player_detail.html の守備成績の表にある。
+{% endcomment %}
+<td class="text-end stat-muted">{{ row.games }}</td>
+<td class="text-end stat-muted">{{ row.total_chances }}</td>
+<td class="text-end">{{ row.putouts }}</td>
+<td class="text-end">{{ row.assists }}</td>
+<td class="text-end">{{ row.errors }}</td>
+<td class="text-end stat-muted">{{ row.double_plays_turned }}</td>
+<td class="text-end stat-key">{% if row.total_chances %}{{ row.fielding_percentage|floatformat:3 }}{% else %}—{% endif %}</td>

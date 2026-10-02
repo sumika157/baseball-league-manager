@@ -10,6 +10,7 @@ from inspect import signature
 
 from django.test import SimpleTestCase
 
+from myapp.application.game_recording import GameRecordingService
 from myapp.application.queries import GameListQuery, TeamListQuery
 from myapp.application.services import TeamApplicationService
 from myapp.domain.repositories import GameRepository, LeagueRepository, TeamRepository
@@ -19,7 +20,7 @@ from myapp.infrastructure.repositories import (
     DjangoLeagueRepository,
     DjangoTeamRepository,
 )
-from myapp.presentation.views import build_service
+from myapp.presentation.views import build_recording_service, build_service
 
 
 class ProtocolConformanceTest(SimpleTestCase):
@@ -49,8 +50,17 @@ class BuildServiceTest(SimpleTestCase):
         属性 `_teams` の対応を前提にする）。内部の控えは初期値が None を
         取りうるので、`vars()` を丸ごと見ない。
         """
-        service = build_service()
-        parameters = [name for name in signature(TeamApplicationService.__init__).parameters if name != "self"]
+        self._assert_wired(build_service(), TeamApplicationService)
+
+    def test_recording_service_dependencies_are_wired(self):
+        """スコアブックの保存サービスも同じ検査にかける。
+
+        組み立てが増えるたびに検査を書き忘れると、この形の事故だけが素通りする。
+        """
+        self._assert_wired(build_recording_service(), GameRecordingService)
+
+    def _assert_wired(self, service, cls):
+        parameters = [name for name in signature(cls.__init__).parameters if name != "self"]
         self.assertTrue(parameters, "依存が1つも宣言されていません")
 
         missing = [name for name in parameters if getattr(service, f"_{name}", None) is None]

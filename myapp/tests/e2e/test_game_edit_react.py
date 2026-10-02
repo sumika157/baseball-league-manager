@@ -1,8 +1,8 @@
 """試合編集画面（React）のE2Eテスト。
 
-イニングスコア・打撃・投球を入力して保存する主要導線を実ブラウザで確認する。
-入力検証や保存の分岐は integration 側（test_game_edit_api.py）で検証済みなので、
-ここでは JS が絡む部分（スコアの自動導出・保存からの画面遷移）に絞る。
+打順を決めて打席を1つ記録し、保存するまでの導線を実ブラウザで確認する。
+入力検証や保存の分岐は integration 側（test_game_scorebook_api.py）で検証済みなので、
+ここでは JS が絡む部分（結果を選ぶと進塁が既定値で埋まること・保存からの画面遷移）に絞る。
 """
 
 from pathlib import Path
@@ -37,9 +37,9 @@ class GameEditReactTest(PlaywrightTestCase):
         self.rival = orm_models.Team.objects.create(league=league, name="ビジターズ")
 
         service = build_service()
-        self.batter = service.register_player(self.team.id, "山田", 3, "内野手")
+        self.batter = service.register_player(self.rival.id, "山田", 3, "内野手")
+        self.home_batter = service.register_player(self.team.id, "鈴木", 5, "内野手")
         self.pitcher = service.register_player(self.team.id, "佐藤", 18, "投手")
-        self.opposing_pitcher = service.register_player(self.rival.id, "田中", 21, "投手")
 
         self.game = play_game(self.team, self.rival, home_score=0, away_score=0)
 
@@ -53,47 +53,34 @@ class GameEditReactTest(PlaywrightTestCase):
         self.page.locator('input[name="password"]').press("Enter")
         self.page.wait_for_url(f"{self.live_server_url}/")
 
-    def test_enter_and_save_a_full_box_score(self):
+    def test_record_a_plate_appearance_and_save(self):
         self._login()
         self.page.goto(self.live_server_url + reverse("game_edit", args=[self.game.id]))
 
-        # ビジターは9回すべて0点、ホームは初回に2点（リードして9回裏なし）。
-        # get_by_label は部分一致が既定で「1回表」が「11回表」にも当たるため exact 指定
-        for inning in range(1, 10):
-            self.page.get_by_label(f"{inning}回表", exact=True).fill("0")
-        self.page.get_by_label("1回裏", exact=True).fill("2")
-        for inning in range(2, 9):
-            self.page.get_by_label(f"{inning}回裏", exact=True).fill("0")
+        # 打順を決める。1回表はビジターの攻撃なので、そちらの1番が最初の打者になる
+        self.page.get_by_label("ビジターズ 1番の選手", exact=True).select_option(str(self.batter.id))
+        self.page.get_by_label("ビジターズ 1番の守備位置", exact=True).select_option("指")
+        self.page.get_by_label("ホームズ 1番の選手", exact=True).select_option(str(self.home_batter.id))
+        self.page.get_by_label("ホームズ 1番の守備位置", exact=True).select_option("指")
 
-        # 得点はイニングスコアから導出され、手入力できなくなる
-        home_score = self.page.get_by_label("ホーム得点", exact=True)
-        self.assertEqual(home_score.input_value(), "2")
-        self.assertTrue(home_score.get_attribute("readonly") is not None)
-        self.assertEqual(self.page.get_by_label("ビジター得点", exact=True).input_value(), "0")
+        self.page.get_by_role("button", name="次の打席を記録する").click()
 
-        # 打撃: 山田が4番・一塁で2安打2打点
-        self.page.get_by_label("山田 打順", exact=True).fill("4")
-        self.page.get_by_label("山田 守備位置", exact=True).select_option("一")
-        self.page.get_by_label("山田 打数", exact=True).fill("4")
-        self.page.get_by_label("山田 単打", exact=True).fill("2")
-        self.page.get_by_label("山田 打点", exact=True).fill("2")
+        # 結果を選ぶと進塁が既定値で埋まる。本塁打なら打者は本塁まで進む
+        self.page.get_by_label("結果", exact=True).select_option("本塁打")
+        self.page.get_by_label("投手", exact=True).select_option(str(self.pitcher.id))
+        self.assertEqual(self.page.get_by_label("山田の進塁後", exact=True).input_value(), "4")
 
-        # 投球: 佐藤が完投勝利、田中が完投で敗戦
-        self.page.get_by_label("佐藤 登板", exact=True).fill("1")
-        self.page.get_by_label("佐藤 投球回", exact=True).fill("9.0")
-        self.page.get_by_label("佐藤 奪三振", exact=True).fill("8")
-        self.page.get_by_label("田中 登板", exact=True).fill("1")
-        self.page.get_by_label("田中 投球回", exact=True).fill("8.0")
-        self.page.get_by_label("田中 自責点", exact=True).fill("2")
+        self.page.get_by_role("button", name="この打席を記録する").click()
+
+        # 得点も打席から導かれる（入力欄は無い）
+        self.assertIn("ビジターズ 1 - 0 ホームズ", self.page.get_by_label("導出した得点").inner_text())
 
         self.page.get_by_role("button", name="保存する").click()
         self.page.wait_for_url(f"{self.live_server_url}{reverse('game_detail', args=[self.game.id])}")
 
-        # 保存の中身はドメイン経由で永続化されている（勝敗はイニングスコアから導出）
-        line = orm_models.GamePitchingLine.objects.get(game_id=self.game.id, player_id=self.pitcher.id)
-        self.assertEqual(line.wins, 1)
-        loser = orm_models.GamePitchingLine.objects.get(game_id=self.game.id, player_id=self.opposing_pitcher.id)
-        self.assertEqual(loser.losses, 1)
+        # 保存の中身はドメイン経由で永続化されている（成績はすべて打席から導出）
+        saved = orm_models.Game.objects.get(id=self.game.id)
+        self.assertEqual((saved.away_score, saved.home_score), (1, 0))
+        self.assertEqual(orm_models.GamePlateAppearance.objects.filter(game_id=self.game.id).count(), 1)
         batting = orm_models.GameBattingLine.objects.get(game_id=self.game.id, player_id=self.batter.id)
-        self.assertEqual(batting.singles, 2)
-        self.assertEqual(batting.batting_order, 4)
+        self.assertEqual((batting.home_runs, batting.at_bats, batting.runs_batted_in), (1, 1, 1))

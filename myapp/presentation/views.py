@@ -18,6 +18,7 @@ from django.urls import reverse, reverse_lazy
 from django.views.decorators.http import require_GET
 from django.views.generic import CreateView
 
+from ..application.game_recording import GameRecordingService
 from ..application.services import TeamApplicationService
 from ..domain.exceptions import (
     DomainError,
@@ -26,9 +27,17 @@ from ..domain.exceptions import (
     PlayerNotFound,
     TeamNotFound,
 )
-from ..domain.value_objects import FieldingPosition, Position
+from ..domain.value_objects import (
+    AdvanceReason,
+    Base,
+    ErrorKind,
+    FieldingPosition,
+    PlateAppearanceResult,
+    Position,
+)
 from ..infrastructure.queries import (
     DjangoGameListQuery,
+    DjangoPlayerFieldingQuery,
     DjangoPlayerSearchQuery,
     DjangoTeamListQuery,
     DjangoTeamPermissionQuery,
@@ -39,10 +48,9 @@ from ..infrastructure.repositories import (
     DjangoTeamRepository,
 )
 from .forms import (
+    FIELDED_BY_SEPARATOR,
     MAX_INNINGS,
-    BattingEntryForm,
     GameForm,
-    PitchingEntryForm,
     PlayerRegistrationForm,
     PlayerUpdateForm,
 )
@@ -89,6 +97,20 @@ def build_service() -> TeamApplicationService:
         games=DjangoGameRepository(),
         leagues=DjangoLeagueRepository(),
         game_list_query=DjangoGameListQuery(),
+        player_fielding_query=DjangoPlayerFieldingQuery(),
+    )
+
+
+def build_recording_service() -> GameRecordingService:
+    """スコアブックを保存するサービスを組み立てる。
+
+    `build_service()` と同じく**組み立てはここだけ**にする。打席の記録は
+    チームの一覧も試合の一覧も要らないので、依存は3つで足りる。
+    """
+    return GameRecordingService(
+        games=DjangoGameRepository(),
+        teams=DjangoTeamRepository(),
+        leagues=DjangoLeagueRepository(),
     )
 
 
@@ -355,8 +377,6 @@ def game_create(request):
                     played_on=form.cleaned_data["played_on"],
                     home_team_id=home_team_id,
                     away_team_id=away_team_id,
-                    home_score=form.cleaned_data["home_score"],
-                    away_score=form.cleaned_data["away_score"],
                 )
             except DomainError as error:
                 messages.error(request, str(error))
@@ -401,19 +421,36 @@ def game_edit(request, game_id):
 def _game_edit_payload(request, game, rosters) -> dict:
     """試合編集画面（React）に埋め込む初期データ。
 
-    キーはフォーム（GameForm・InningScoreForm・BattingEntryForm・
-    PitchingEntryForm）のフィールド名と 1:1 の snake_case にし、保存 API
-    （api_game_update）に送り返すときにそのまま使える形にする。
-    """
-    innings = [
-        {
-            "inning": inning,
-            "away": (game.line_score.runs_in(inning, home=False) if inning <= len(game.line_score.away) else None),
-            "home": (game.line_score.runs_in(inning, home=True) if inning <= len(game.line_score.home) else None),
-        }
-        for inning in range(1, MAX_INNINGS + 1)
-    ]
+    キーは保存 API（api_game_scorebook）のフォームのフィールド名と 1:1 の
+    snake_case にし、送り返すときにそのまま使える形にする。
 
+    **打席の語彙（結果・進塁の理由・塁・失策の種類）と、既定の進塁の対応表も
+    ここに載せる。** TypeScript から Python の Enum は読めないので、画面側に
+    同じ表を書くとずれても例外にならず、選択肢や既定値だけが静かに古くなる。
+    払い出せば出典は1つのままになる。
+    """
+    # 保存済みの出場した打席を、入力と同じ（回・表裏・その半回の何人目）に戻す
+    located: dict[int, tuple[int, bool, int]] = {}
+    counts: dict[tuple[int, bool], int] = {}
+    for entry in game.plate_appearances_in_order():
+        half = (entry.inning, entry.is_bottom)
+        counts[half] = counts.get(half, 0) + 1
+        located[entry.sequence] = (entry.inning, entry.is_bottom, counts[half])
+    lineup = {}
+    for entry in game.batting:
+        position = entry.fielding_position
+        # 代打・代走・投手は入った時点を打席から導くので、入力欄には出さない（返して再保存すると、
+        # 打席より前に入ったことになりうる）。守備固めなどは、保存した値を返して直せるようにする
+        derived = position is not None and position.entry_is_derived
+        inning, is_bottom, batter = located.get(entry.entered_sequence or 0, (None, False, 1))
+        lineup[entry.player_id] = {
+            "batting_order": entry.batting_order,
+            "slot_sequence": entry.slot_sequence,
+            "fielding_position": position.value if position else "",
+            "entered_inning": None if derived else inning,
+            "entered_is_bottom": False if derived else is_bottom,
+            "entered_batter": 1 if derived else batter,
+        }
     return {
         "game": {
             "id": game.id,
@@ -424,60 +461,102 @@ def _game_edit_payload(request, game, rosters) -> dict:
             "home_score": game.home_score,
             "away_score": game.away_score,
         },
-        "innings": innings,
-        "rosters": [
+        "teams": [
             {
                 "team_id": roster["team_id"],
                 "team_name": roster["team_name"],
                 # rosters が home を先頭に返す前提に頼らず、試合の home_team_id と比べて決める
                 "is_home": roster["team_id"] == game.home_team_id,
-                "batters": [_batting_row(p) for p in roster["players"] if not p["is_pitcher"]],
-                "pitchers": [_pitching_row(p) for p in roster["players"] if p["is_pitcher"]],
+                "players": [
+                    {
+                        "id": player["id"],
+                        "name": player["name"],
+                        "number": player["number"],
+                        "position": player["position"],
+                        "is_pitcher": player["is_pitcher"],
+                    }
+                    for player in roster["players"]
+                ],
+                "lineup": [
+                    dict(lineup[player["id"]], player_id=player["id"])
+                    for player in roster["players"]
+                    if lineup.get(player["id"], {}).get("batting_order") is not None
+                ],
             }
             for roster in rosters
         ],
-        "fielding_positions": FieldingPosition.labels(),
+        "plate_appearances": [_plate_appearance_row(entry) for entry in game.plate_appearances_in_order()],
+        "vocabulary": _scorebook_vocabulary(),
         "max_innings": MAX_INNINGS,
         "urls": {
-            "save": reverse("api_game_update", args=[game.id]),
+            "save": reverse("api_game_scorebook", args=[game.id]),
             "detail": reverse("game_detail", args=[game.id]),
         },
         "csrf_token": get_token(request),
     }
 
 
-def _batting_row(player: dict) -> dict:
-    """打撃成績1人ぶん。line が無ければ各成績欄は None（未入力）にする。"""
-    line = player["batting"]
-    order, sequence, position = player["lineup"] or (None, None, None)
-    row = {
-        "player_id": player["id"],
-        "name": player["name"],
-        "number": player["number"],
-        "position": player["position"],
-        "batting_order": order,
-        "slot_sequence": sequence,
-        "fielding_position": position.value if position else "",
+def _plate_appearance_row(entry) -> dict:
+    """打席1つぶん。保存 API に送り返す形と同じにする。"""
+    return {
+        "sequence": entry.sequence,
+        "inning": entry.inning,
+        "is_bottom": entry.is_bottom,
+        "batter_id": entry.batter_id,
+        "pitcher_id": entry.pitcher_id,
+        "batting_order": entry.batting_order,
+        "slot_sequence": entry.slot_sequence,
+        "result": entry.result.value,
+        "fielded_by": FIELDED_BY_SEPARATOR.join(position.value for position in entry.fielded_by),
+        "advances": [
+            {
+                "runner_id": advance.runner_id,
+                "from_base": advance.from_base.value,
+                "to_base": advance.to_base.value,
+                "reason": advance.reason.value,
+                "error_index": advance.error_index,
+            }
+            for advance in entry.advances
+        ],
+        "errors": [
+            {"player_id": error.player_id, "position": error.position.value, "kind": error.kind.value}
+            for error in entry.errors
+        ],
     }
-    row.update({field: (getattr(line, field) if line is not None else None) for field in BattingEntryForm.STAT_FIELDS})
-    return row
 
 
-def _pitching_row(player: dict) -> dict:
-    """投球成績1人ぶん。line が無ければ各成績欄は None（未入力）にする。"""
-    line = player["pitching"]
-    row = {
-        "player_id": player["id"],
-        "name": player["name"],
-        "number": player["number"],
-        "position": player["position"],
-        "entered_inning": player["entered_inning"],
-        "innings_pitched": str(line.innings.to_notation()) if line is not None else None,
+def _scorebook_vocabulary() -> dict:
+    """打席の入力に要る語彙。すべてドメインの値オブジェクトから払い出す。
+
+    結果には「打者がどこまで進むか」「走者がどう動くか」の既定値も添える。
+    画面はこれを見て進塁を自動で埋めるので、対応表を持たなくて済む。
+    """
+    return {
+        "results": [
+            {
+                "label": result.value,
+                "retires_batter": result.retires_batter,
+                "is_hit": result.is_hit,
+                "counts_as_at_bat": result.counts_as_at_bat,
+                "requires_error": result is PlateAppearanceResult.REACHED_ON_ERROR,
+                "default_batter_base": result.default_batter_base.value,
+                "default_batter_reason": result.default_batter_reason.value,
+                "default_runner_advance": result.default_runner_advance.value,
+                "default_runner_reason": result.default_runner_reason.value,
+            }
+            for result in PlateAppearanceResult
+        ],
+        "reasons": [
+            {"label": reason.value, "is_out": reason.is_out, "earns_run_batted_in": reason.earns_run_batted_in}
+            for reason in AdvanceReason
+        ],
+        "bases": [{"value": base.value, "label": base.label} for base in Base],
+        "error_kinds": [kind.value for kind in ErrorKind],
+        "fielding_positions": FieldingPosition.labels(),
+        "defensive_positions": FieldingPosition.defensive_labels(),
+        # 出場時刻を打席から導く位置（代打・代走・投手）。画面は出場した半回の入力欄を出さない
+        "entry_derived_positions": [position.value for position in FieldingPosition if position.entry_is_derived],
     }
-    row.update(
-        {field: (getattr(line, field) if line is not None else None) for field in PitchingEntryForm.COUNT_FIELDS}
-    )
-    return row
 
 
 def game_detail(request, game_id):

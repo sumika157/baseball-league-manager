@@ -69,8 +69,8 @@ class GameRuleTest(TestCase):
 
     def test_recording_the_same_player_twice_overwrites(self):
         game = _game(5, 3)
-        game.record_batting(10, BattingLine(at_bats=4, singles=1))
-        game.record_batting(10, BattingLine(at_bats=4, home_runs=2))
+        game.record_batting(10, BattingLine(at_bats=4, singles=1), team_id=game.home_team_id)
+        game.record_batting(10, BattingLine(at_bats=4, home_runs=2), team_id=game.home_team_id)
 
         self.assertEqual(len(game.batting), 1)
         self.assertEqual(game.batting[0].line.home_runs, 2)
@@ -101,8 +101,8 @@ class TeamRecordFromGamesTest(TestCase):
 class PlayerTotalsTest(TestCase):
     def test_batting_totals_are_summed(self):
         g1, g2 = _game(5, 3, 1), _game(1, 4, 2)
-        g1.record_batting(10, BattingLine(at_bats=4, singles=2, home_runs=1))
-        g2.record_batting(10, BattingLine(at_bats=3, singles=1, walks=1))
+        g1.record_batting(10, BattingLine(at_bats=4, singles=2, home_runs=1), team_id=g1.home_team_id)
+        g2.record_batting(10, BattingLine(at_bats=3, singles=1, walks=1), team_id=g2.home_team_id)
 
         total = services.player_batting_total([g1, g2], 10)
 
@@ -113,8 +113,8 @@ class PlayerTotalsTest(TestCase):
     def test_rates_are_recomputed_not_averaged(self):
         """率は試合ごとの率の平均ではなく、合算した実数から計算し直す。"""
         g1, g2 = _game(5, 3, 1), _game(1, 4, 2)
-        g1.record_batting(10, BattingLine(at_bats=1, singles=1))  # 10割
-        g2.record_batting(10, BattingLine(at_bats=9, singles=0))  # 0割
+        g1.record_batting(10, BattingLine(at_bats=1, singles=1), team_id=g1.home_team_id)  # 10割
+        g2.record_batting(10, BattingLine(at_bats=9, singles=0), team_id=g2.home_team_id)  # 0割
 
         total = services.player_batting_total([g1, g2], 10)
 
@@ -136,8 +136,8 @@ class PlayerTotalsTest(TestCase):
 
     def test_other_players_are_ignored(self):
         game = _game(5, 3)
-        game.record_batting(10, BattingLine(at_bats=4, singles=2))
-        game.record_batting(11, BattingLine(at_bats=4, home_runs=1))
+        game.record_batting(10, BattingLine(at_bats=4, singles=2), team_id=game.home_team_id)
+        game.record_batting(11, BattingLine(at_bats=4, home_runs=1), team_id=game.home_team_id)
 
         total = services.player_batting_total([game], 10)
 

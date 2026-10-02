@@ -35,7 +35,7 @@
 - application は domain のインターフェース（`domain/repositories.py`）越しに永続化を使う。`infrastructure/orm_models.py` を直接 import しない。
 - presentation（views）は application 経由で操作する。ORM モデルやリポジトリ実装を直接触らない。
 - **更新と参照を分ける**: 更新はリポジトリ経由で集約単位（`Team` / `Game`）に読み書きする。一覧表示などの参照は `infrastructure/queries.py` から直接 DTO を作る（集約を組み立てない）。参照クエリのインターフェースは `application/queries.py`（戻り値が DTO のため domain には置けない）。
-- **依存の組み立ては `presentation/views.py` の `build_service()` だけ。** 呼ぶ側ごとに一部の依存だけを渡さない。渡し忘れが「開く画面によって落ちるサービス」になる（管理画面のテンプレートタグで実際に起きた）。テストも `tests/helpers.py` 経由でここを呼ぶ。
+- **依存の組み立ては `presentation/views.py` の `build_service()`（`TeamApplicationService`）と `build_recording_service()`（スコアブックの保存を担う `GameRecordingService`）の2か所だけ。** どちらも依存を全部渡す（`tests/integration/test_wiring.py` が検査する）。呼ぶ側ごとに一部の依存だけを渡さない。渡し忘れが「開く画面によって落ちるサービス」になる（管理画面のテンプレートタグで実際に起きた）。テストも `tests/helpers.py` 経由でここを呼ぶ。
 - **層をまたぐ受け渡しに素の `dict` を使わない。** application が presentation に返す形は `application/dto.py` の dataclass にする。文字列キーの dict は綴りを間違えても静的検査が黙る。`get_game_edit_data` と `_player_index` は dict のまま残っているが、**新しく増やさない**。触ったついでに DTO へ寄せる。
 - **`TeamApplicationService` は既に約50メソッド・1,500行**あり、チーム・選手・試合・リーグ・管理画面の概況を1クラスで抱えている。ここへ足す前に、対象ごとの別サービスに置けないか考える。分ける判断は選択肢としてユーザーに提示する。
 
@@ -45,7 +45,27 @@
 - **年齢は保持しない。** 生年月日から算出する。
 - 投球回の変換（`5.2` = 5回2/3 = 17アウト）は `InningsPitched` 値オブジェクトが唯一の出典。他の場所に再実装しない。率（打率・防御率など）は試合ごとの率を平均せず、合算した実数から計算し直す。
 - 選択肢の一覧（球場の屋根種別など）はドメインの値オブジェクトが唯一の出典。画面やモデルに複製しない。
-- **成績のカウント項目は値オブジェクト（`BattingLine` / `PitchingLine`）のフィールドが出典。** 永続化（`_BATTING_FIELDS`）・入力フォーム（`STAT_FIELDS`）・React（`frontend/src/game_edit/types.ts`）の列挙はそれに従う。TypeScript から Python を読めないためこの重複だけは消せないので、`tests/integration/test_stat_fields.py` が突き合わせる。**項目を増やすときはこの4か所を同じコミットで直す**（ずれても例外にならず、その項目だけ保存されない・入力欄が出ないという静かな不具合になる）。
+- **成績のカウント項目は値オブジェクト（`BattingLine` / `PitchingLine` / `FieldingLine`）のフィールドが出典。** 永続化（`infrastructure/repositories.py` の `_BATTING_FIELDS` など）とテーブルの列はそれに従う。成績を手入力する画面が無くなったので、入力フォームの列挙（`STAT_FIELDS`）も React の列挙も無い（`frontend/src/game_edit/types.ts` に残るのは塁の番号だけ）。値オブジェクト ↔ 永続化・参照クエリ・テーブルの列は `tests/integration/test_stat_fields.py` が突き合わせる。**項目を増やすときは値オブジェクト・永続化・参照クエリ（守備）・マイグレーションを同じコミットで直す**（ずれても例外にならず、その項目だけ保存されないという静かな不具合になる）。
+
+### 例外: 1試合の明細は打席の導出値だが、保存もする
+
+**試合の成績の出典は打席（`GamePlateAppearance`）。** `GameBattingLine` /
+`GamePitchingLine` / `GameFieldingLine` / `GameInningScore` はそこから導ける値だが、**通算成績の集計のために
+保存もしている**（この規則の唯一の例外）。理由は**自責点が SQL で集計できない**こと。
+自責点と失点は走者ごとに「誰が塁に出したか」「失策が絡んだか」を追う逐次再生でしか
+出せず、3,480試合を再生すると約68秒かかる（実測。経緯は README「打席を出典にした理由」）。
+
+同じ事実が2か所にあるので、**集約が照合する**:
+
+- `domain/services/scoring.py` の `ensure_lines_match_plate_appearances()` が、保存しようとしている
+  明細を打席から数え直した値と突き合わせる（`ensure_line_score_matches()` と同じ形）。
+- `DjangoGameRepository.save()` が保存前に必ず通す。`bulk_create` で直接書くコード
+  （`seed_virtual_games`）は素通りするので、自分で呼ぶ。
+- 照合しないのは勝敗・セーブ・ホールド・先発登板だけ（打席からは決まらず、イニングスコアと
+  継投から決まる別の関心事）。
+
+**この例外を他の項目に広げない。** 「集計が遅いから保存する」を一般化すると、通算成績も
+順位も保存する形に戻ってしまう。
 
 ## 不変条件は集約が守る
 

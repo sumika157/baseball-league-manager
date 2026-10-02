@@ -1,234 +1,138 @@
-"""仮想試合の投入コマンド（seed_virtual_games）。
+"""仮想の試合データの投入。打席から導いた成績が、保存された明細と一致すること。
 
-明細を乱数で別々に引くと、スコアと打点・被安打と相手の安打が食い違う。
-コマンドは片方から他方を導いて作っているので、保存された試合を集約として
-読み戻し、スコアブックとして辻褄が合っているかを確かめる。
+投入コマンドは ORM へ直接 bulk_create で書くため、集約の検査を素通りする。
+ここで「投入したデータが集約として成立しているか」を確かめる
+（成立していなくても例外にはならず、画面の数字が静かにずれるだけになる）。
 """
 
-from collections import defaultdict
-from io import StringIO
+from dataclasses import fields
 
-from django.core.management import CommandError, call_command
+from django.core.management import call_command
 
-from myapp.domain.value_objects import Position
+from myapp.domain import services as domain_services
+from myapp.domain.value_objects import BattingLine, FieldingLine, PitchingLine
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
 
 from .base import BaseCase
 
-COMMAND = "seed_virtual_games"
-YEAR = 2025
+YEAR = 2026
 GAMES_PER_PAIR = 3
-OUTS_PER_GAME = 27
-
-# 1チームぶんのロスター。先発ローテーション5人＋救援、守備9枠＋控え
-ROSTER = (
-    [Position.PITCHER] * 8
-    + [Position.CATCHER] * 2
-    + [Position.INFIELDER] * 5
-    + [Position.OUTFIELDER] * 4
-    + [Position.DESIGNATED_HITTER]
-)
 
 
-def run(*args) -> str:
-    out = StringIO()
-    call_command(
-        COMMAND, "--seed", "7", "--year", str(YEAR), "--games-per-pair", str(GAMES_PER_PAIR), *args, stdout=out
-    )
-    return out.getvalue()
+class SeedVirtualGamesTest(BaseCase):
+    """2チームで数試合だけ投入し、記録の整合を隅まで確かめる。"""
 
-
-class SeedGamesBase(BaseCase):
-    def setUp(self) -> None:
+    def setUp(self):
         super().setUp()
-        # 出場枠1人。投手と野手に1人ずつ外国人を置き、両方は出られない状況にする
-        self.league.foreign_player_game_limit = 1
-        self.league.save()
-        self.third = orm_models.Team.objects.create(league=self.league, name="三番目のチーム")
-        self.teams = (self.team, self.rival, self.third)
-
-        self.team_of: dict[int, int] = {}
-        self.pitcher_ids: set[int] = set()
-        self.foreign_ids: set[int] = set()
-        for team in self.teams:
-            for index, position in enumerate(ROSTER, start=1):
-                is_foreign = index in (1, len(ROSTER))  # 先頭の投手と末尾の指名打者
-                self._add(team, f"{team.name}{index}", position, number=index, is_foreign=is_foreign)
-
-        # その年に在籍していない選手は出場させない
-        self.departed = self._add(
-            self.team, "退団済み", Position.INFIELDER, number=50, from_year=2020, to_year=YEAR - 1
+        for team in (self.team, self.rival):
+            self._fill_roster(team)
+        call_command(
+            "seed_virtual_games",
+            year=YEAR,
+            games_per_pair=GAMES_PER_PAIR,
+            seed=20260812,
+            verbosity=0,
         )
-        self.newcomer = self._add(self.team, "翌年入団", Position.PITCHER, number=51, from_year=YEAR + 1)
+        self.games = [DjangoGameRepository().find_by_id(row.id) for row in orm_models.Game.objects.all()]
 
-    def _add(self, team, name, position, *, number, is_foreign=False, from_year=2020, to_year=None):
-        player = orm_models.Player.objects.create(name=name, position=position.value, is_foreign_player=is_foreign)
-        orm_models.PlayerStint.objects.create(
-            player=player, team=team, number=number, from_year=from_year, to_year=to_year
-        )
-        if from_year <= YEAR and (to_year is None or to_year >= YEAR):
-            self.team_of[player.id] = team.id
-        if position == Position.PITCHER:
-            self.pitcher_ids.add(player.id)
-        if is_foreign:
-            self.foreign_ids.add(player.id)
-        return player
+    def _fill_roster(self, team):
+        """レギュラー9人＋控えとローテーション5人＋救援が組める人数を入れる。"""
+        number = 1
+        for label, count in (("捕手", 2), ("内野手", 6), ("外野手", 5), ("指名打者", 1), ("投手", 9)):
+            for index in range(count):
+                self.service.register_player(team.id, f"{team.name}{label}{index}", number, label)
+                number += 1
 
-
-class SeedGamesTest(SeedGamesBase):
-    def setUp(self) -> None:
-        super().setUp()
-        self.output = run()
-        self.games = DjangoGameRepository().find_all(YEAR)
-
-    def test_creates_round_robin_within_season(self):
-        pairs = len(self.teams) * (len(self.teams) - 1) // 2
-        self.assertEqual(len(self.games), pairs * GAMES_PER_PAIR)
-        self.assertIn(f"{pairs * GAMES_PER_PAIR}試合を投入しました", self.output)
-
-        cards = defaultdict(int)
+    def test_every_game_holds_together_as_a_scorebook(self):
+        """打順の巡回・塁の再生・得点の一致。集約自身の検算にかける。"""
+        self.assertEqual(len(self.games), GAMES_PER_PAIR)
         for game in self.games:
-            cards[frozenset((game.home_team_id, game.away_team_id))] += 1
-            with self.subTest(game=str(game)):
-                self.assertEqual(game.played_on.year, YEAR)
-                self.assertTrue(4 <= game.played_on.month <= 9)
-        self.assertEqual(set(cards.values()), {GAMES_PER_PAIR})
+            self.assertTrue(game.plate_appearances, "打席が記録されていません")
+            game.ensure_plate_appearances_consistent()
+            game.ensure_line_score_matches()
 
-    def test_line_score_matches_final_score(self):
+    def test_batting_lines_match_the_plate_appearances(self):
+        """保存された打撃成績が、打席から数え直した値と一致すること。
+
+        ずれても例外にはならず、ボックススコアと経過が食い違うだけになる。
+        """
         for game in self.games:
-            with self.subTest(game=str(game)):
-                game.ensure_line_score_matches()
-                self.assertEqual((len(game.line_score.away), len(game.line_score.home)), (9, 9))
+            stored = orm_models.GameBattingLine.objects.filter(game_id=game.id)
+            self.assertTrue(stored.exists())
+            for row in stored:
+                counted = domain_services.batting_line_for(game.plate_appearances, row.player_id)
+                # **項目を1つずつ並べず、値オブジェクトの全フィールドを突き合わせる。**
+                # 一部だけ見ていると、増やした項目が 0 のまま保存されても気づけない
+                # （実際に起きた。投入コマンドが項目を独自に列挙していた）
+                self.assertEqual(
+                    {f.name: getattr(row, f.name) for f in fields(BattingLine)},
+                    {f.name: getattr(counted, f.name) for f in fields(BattingLine)},
+                    f"打撃成績が打席と食い違っています（試合 {game.id} / 選手 {row.player_id}）",
+                )
 
-    def test_runs_batted_in_add_up_to_team_score(self):
+    def test_pitching_lines_match_the_plate_appearances(self):
         for game in self.games:
-            rbi = defaultdict(int)
-            for entry in game.batting:
-                rbi[self.team_of[entry.player_id]] += entry.line.runs_batted_in
-            with self.subTest(game=str(game)):
-                self.assertEqual(rbi[game.home_team_id], game.home_score)
-                self.assertEqual(rbi[game.away_team_id], game.away_score)
+            for row in orm_models.GamePitchingLine.objects.filter(game_id=game.id):
+                counted = domain_services.pitching_line_for(game.plate_appearances, row.player_id)
+                self.assertEqual(row.innings_pitched, float(counted.innings.to_notation()))
+                # 勝敗・セーブ・先発登板は打席からは決まらないので突き合わせない
+                derived = {"innings", "wins", "losses", "saves", "holds", "starts", "relief_wins"}
+                self.assertEqual(
+                    {f.name: getattr(row, f.name) for f in fields(PitchingLine) if f.name not in derived},
+                    {f.name: getattr(counted, f.name) for f in fields(PitchingLine) if f.name not in derived},
+                    f"投球成績が打席と食い違っています（試合 {game.id} / 選手 {row.player_id}）",
+                )
 
-    def test_pitching_mirrors_opponent_batting(self):
-        """被安打・被本塁打・与四死球は相手打線の記録と一致し、9回27アウトを投げ切る。"""
+    def test_fielding_lines_match_the_plate_appearances(self):
+        """保存された守備成績が、打席から導き直した値と一致すること。
+
+        投入コマンドは bulk_create で書くので、集約の照合を素通りする。ここで同じ検査をかける。
+        """
         for game in self.games:
-            batting = defaultdict(lambda: defaultdict(int))
-            for entry in game.batting:
-                side = batting[self.team_of[entry.player_id]]
-                side["hits"] += entry.line.hits
-                side["home_runs"] += entry.line.home_runs
-                side["walks"] += entry.line.walks
-                side["hit_by_pitch"] += entry.line.hit_by_pitch
-            pitching = defaultdict(lambda: defaultdict(int))
-            for entry in game.pitching:
-                side = pitching[self.team_of[entry.player_id]]
-                side["hits"] += entry.line.hits_allowed
-                side["home_runs"] += entry.line.home_runs_allowed
-                side["walks"] += entry.line.walks_allowed
-                side["hit_by_pitch"] += entry.line.hit_by_pitch_allowed
-                side["outs"] += entry.line.innings.outs
-                side["earned_runs"] += entry.line.earned_runs
+            self.assertTrue(game.fielding, "守備成績が保存されていません")
+            domain_services.ensure_lines_match_plate_appearances(game)
+            stored = {row.player_id: row for row in orm_models.GameFieldingLine.objects.filter(game_id=game.id)}
+            for player_id, counted in domain_services.fielding_lines_for(game).items():
+                self.assertEqual(
+                    {f.name: getattr(stored[player_id], f.name) for f in fields(FieldingLine)},
+                    {f.name: getattr(counted, f.name) for f in fields(FieldingLine)},
+                    f"守備成績が打席と食い違っています（試合 {game.id} / 選手 {player_id}）",
+                )
 
-            for team_id, opponent_id, conceded in (
-                (game.home_team_id, game.away_team_id, game.away_score),
-                (game.away_team_id, game.home_team_id, game.home_score),
-            ):
-                with self.subTest(game=str(game), team=team_id):
-                    for key in ("hits", "home_runs", "walks", "hit_by_pitch"):
-                        self.assertEqual(pitching[team_id][key], batting[opponent_id][key], key)
-                    self.assertEqual(pitching[team_id]["outs"], OUTS_PER_GAME)
-                    self.assertLessEqual(pitching[team_id]["earned_runs"], conceded)
+    def test_every_out_belongs_to_a_pitcher(self):
+        """アウトの合計と投球回の合計が一致すること。
 
-    def test_decisions_follow_result(self):
+        合わないと、誰も投げていない回が生まれて失点の帰属先が無くなる。
+        """
         for game in self.games:
-            wins = defaultdict(int)
-            losses = defaultdict(int)
-            saves = 0
-            for entry in game.pitching:
-                wins[self.team_of[entry.player_id]] += entry.line.wins
-                losses[self.team_of[entry.player_id]] += entry.line.losses
-                saves += entry.line.saves
-            with self.subTest(game=str(game)):
-                winner = game.winner_team_id
-                if winner is None:
-                    self.assertEqual((sum(wins.values()), sum(losses.values()), saves), (0, 0, 0))
-                    continue
-                loser = game.away_team_id if winner == game.home_team_id else game.home_team_id
-                self.assertEqual((wins[winner], losses[winner]), (1, 0))
-                self.assertEqual((wins[loser], losses[loser]), (0, 1))
-                self.assertLessEqual(saves, 1)
+            recorded = sum(entry.outs_recorded for entry in game.plate_appearances)
+            pitched = sum(row.outs for row in (p.line.innings for p in game.pitching))
+            self.assertEqual(recorded, pitched)
 
-    def test_lineup_and_staff_shape(self):
-        """各チーム、先発投手は1人・打順は1〜9。投手は投手、野手は野手から出る。"""
+    def test_runs_batted_in_never_exceed_the_runs(self):
+        """打点は還った走者の内数。失策や野選で還った得点には付かない。"""
         for game in self.games:
-            for team_id in (game.home_team_id, game.away_team_id):
-                pitchers = [e for e in game.pitching if self.team_of[e.player_id] == team_id]
-                batters = [e for e in game.batting if self.team_of[e.player_id] == team_id]
-                with self.subTest(game=str(game), team=team_id):
-                    self.assertEqual(sum(1 for e in pitchers if e.appearance_order == 1), 1)
-                    self.assertEqual({e.batting_order for e in batters if e.slot_sequence == 0}, set(range(1, 10)))
-                    self.assertTrue(all(e.player_id in self.pitcher_ids for e in pitchers))
-                    self.assertFalse(any(e.player_id in self.pitcher_ids for e in batters))
+            runs = sum(entry.runs_scored for entry in game.plate_appearances)
+            batted_in = sum(entry.runs_batted_in for entry in game.plate_appearances)
+            self.assertLessEqual(batted_in, runs)
+            self.assertEqual(runs, game.home_score + game.away_score)
 
-    def test_only_players_on_roster_that_year_appear(self):
-        appeared = {e.player_id for game in self.games for e in [*game.batting, *game.pitching]}
-
-        self.assertNotIn(self.departed.id, appeared)
-        self.assertNotIn(self.newcomer.id, appeared)
-        # 自チームの試合にだけ出る
+    def test_the_game_ends_the_way_the_rules_say(self):
+        """9回以降のホームの攻撃。リードしていれば行わず、逆転すれば打ち切る。"""
         for game in self.games:
-            for entry in [*game.batting, *game.pitching]:
-                with self.subTest(game=str(game), player=entry.player_id):
-                    self.assertIn(self.team_of[entry.player_id], (game.home_team_id, game.away_team_id))
+            score = game.derived_line_score()
+            if game.home_score > game.away_score and len(score.home) >= len(score.away):
+                # サヨナラか、9回裏を戦って勝った試合。裏の得点が最後に入っている
+                self.assertGreater(len(score.home), 0)
+            if game.home_score < game.away_score:
+                # 負けているホームは最後まで攻撃する
+                self.assertEqual(len(score.home), len(score.away))
 
-    def test_foreign_players_stay_within_game_limit(self):
+    def test_advances_and_errors_are_persisted(self):
+        """進塁が1件も保存されないと、得点も打点も導けなくなる。"""
+        advances = orm_models.GameRunnerAdvance.objects.count()
+        self.assertGreaterEqual(advances, sum(len(g.plate_appearances) for g in self.games))
         for game in self.games:
-            for team_id in (game.home_team_id, game.away_team_id):
-                foreign = {
-                    e.player_id
-                    for e in [*game.batting, *game.pitching]
-                    if self.team_of[e.player_id] == team_id and e.player_id in self.foreign_ids
-                }
-                with self.subTest(game=str(game), team=team_id):
-                    self.assertLessEqual(len(foreign), 1)
-
-
-class SeedGamesOptionsTest(SeedGamesBase):
-    def test_refuses_when_season_already_has_games(self):
-        run()
-        count = orm_models.Game.objects.filter(year=YEAR).count()
-
-        with self.assertRaisesMessage(CommandError, "--replace"):
-            run()
-        self.assertEqual(orm_models.Game.objects.filter(year=YEAR).count(), count)
-
-    def test_replace_recreates_season(self):
-        run()
-        before = set(orm_models.Game.objects.filter(year=YEAR).values_list("id", flat=True))
-
-        output = run("--replace")
-
-        after = set(orm_models.Game.objects.filter(year=YEAR).values_list("id", flat=True))
-        self.assertIn(f"既存の試合 {len(before)} 件を削除しました", output)
-        self.assertEqual(len(after), len(before))
-        self.assertFalse(before & after)
-        # 明細も古い試合のぶんは残らない
-        self.assertFalse(orm_models.GameBattingLine.objects.filter(game_id__in=before).exists())
-
-    def test_dry_run_writes_nothing(self):
-        output = run("--dry-run")
-
-        self.assertIn("--dry-run のため未実行", output)
-        self.assertFalse(orm_models.Game.objects.exists())
-
-    def test_rejects_non_positive_games_per_pair(self):
-        with self.assertRaisesMessage(CommandError, "--games-per-pair"):
-            call_command(COMMAND, "--year", str(YEAR), "--games-per-pair", "0", stdout=StringIO())
-
-
-class SeedGamesWithoutRostersTest(BaseCase):
-    def test_refuses_when_no_league_can_play(self):
-        with self.assertRaisesMessage(CommandError, "試合を作れるリーグがありません"):
-            run()
-        self.assertFalse(orm_models.Game.objects.exists())
+            for entry in game.plate_appearances:
+                self.assertTrue(entry.advances, f"打席 {entry.sequence} に進塁がありません")

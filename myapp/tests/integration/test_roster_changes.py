@@ -3,12 +3,14 @@
 from django.contrib.auth.models import User
 from django.urls import reverse
 
+from myapp.application.dto import LineupSlot
 from myapp.domain.exceptions import (
     DuplicateJerseyNumber,
     ForeignPlayerQuotaExceeded,
 )
 from myapp.domain.value_objects import (
     BattingLine,
+    FieldingPosition,
 )
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import (
@@ -16,9 +18,13 @@ from myapp.infrastructure.repositories import (
 )
 
 from ..helpers import (
+    build_recording_service,
+    build_scorebook,
     give_batting,
     login_as_manager,
     play_game,
+    register_lineup,
+    to_plate_appearances,
 )
 from .base import BaseCase
 
@@ -163,24 +169,51 @@ class ForeignPlayerQuotaTest(BaseCase):
         self.assertIsNone(stint.to_year)
         self.assertEqual(stint.team_id, self.team.id)
 
-    def test_update_game_rejects_when_home_team_quota_exceeded(self):
+    def _record(self, game, *, foreign_batter, foreign_team):
+        """助っ人を打順の先頭に置いて、1回表だけのスコアブックを記録する。"""
+        away = register_lineup(self.service, self.rival, prefix="ビジター", first_number=61)
+        home = register_lineup(self.service, self.team, prefix="ホーム", first_number=71)
+        pitcher = self.service.register_player(self.team.id, "投手", 91, "投手")
+        (away if foreign_team is self.rival else home)[0] = foreign_batter
+
+        return build_recording_service().record_scorebook(
+            game.id,
+            year=2026,
+            played_on=game.played_on,
+            home_team_id=self.team.id,
+            away_team_id=self.rival.id,
+            lineup=[
+                LineupSlot(
+                    team_id=team.id,
+                    player_id=player_id,
+                    batting_order=order,
+                    slot_sequence=0,
+                    fielding_position=FieldingPosition.DESIGNATED_HITTER,
+                )
+                for team, ids in ((self.rival, away), (self.team, home))
+                for order, player_id in enumerate(ids, start=1)
+            ],
+            plate_appearances=to_plate_appearances(
+                build_scorebook(
+                    away=[0],
+                    home=[],
+                    away_batters=away,
+                    home_batters=home,
+                    away_pitchers={1: pitcher.id},
+                    home_pitchers={1: pitcher.id},
+                )
+            ),
+        )
+
+    def test_recording_rejects_when_home_team_quota_exceeded(self):
         orm_models.League.objects.filter(id=self.league.id).update(foreign_player_game_limit=0)
         game = play_game(self.team, self.rival)
 
         with self.assertRaises(ForeignPlayerQuotaExceeded):
-            self.service.update_game(
-                game.id,
-                year=2026,
-                played_on=game.played_on,
-                home_team_id=self.team.id,
-                away_team_id=self.rival.id,
-                home_score=1,
-                away_score=0,
-                batting={self.foreign.id: BattingLine(at_bats=1, singles=1)},
-            )
+            self._record(game, foreign_batter=self.foreign.id, foreign_team=self.team)
         self.assertEqual(orm_models.GameBattingLine.objects.count(), 0)
 
-    def test_update_game_rejects_when_away_team_quota_exceeded(self):
+    def test_recording_rejects_when_away_team_quota_exceeded(self):
         """ホーム・ビジターは独立に判定する。ホームに助っ人がいなくても、
         ビジター側の上限超過は検出される。"""
         rival_foreign = self.service.register_player(self.rival.id, "助っ人2", 51, "外野手")
@@ -189,51 +222,24 @@ class ForeignPlayerQuotaTest(BaseCase):
         game = play_game(self.team, self.rival)
 
         with self.assertRaises(ForeignPlayerQuotaExceeded):
-            self.service.update_game(
-                game.id,
-                year=2026,
-                played_on=game.played_on,
-                home_team_id=self.team.id,
-                away_team_id=self.rival.id,
-                home_score=1,
-                away_score=0,
-                batting={rival_foreign.id: BattingLine(at_bats=1, singles=1)},
-            )
+            self._record(game, foreign_batter=rival_foreign.id, foreign_team=self.rival)
 
-    def test_update_game_allows_exactly_at_the_game_limit(self):
+    def test_recording_allows_exactly_at_the_game_limit(self):
         orm_models.League.objects.filter(id=self.league.id).update(foreign_player_game_limit=1)
         game = play_game(self.team, self.rival)
 
-        self.service.update_game(
-            game.id,
-            year=2026,
-            played_on=game.played_on,
-            home_team_id=self.team.id,
-            away_team_id=self.rival.id,
-            home_score=1,
-            away_score=0,
-            batting={self.foreign.id: BattingLine(at_bats=1, singles=1)},
-        )  # 例外にならない
+        self._record(game, foreign_batter=self.foreign.id, foreign_team=self.team)  # 例外にならない
 
-        self.assertEqual(orm_models.GameBattingLine.objects.count(), 1)
+        self.assertTrue(orm_models.GameBattingLine.objects.filter(player_id=self.foreign.id).exists())
 
-    def test_update_game_with_no_limit_set_never_rejects(self):
+    def test_recording_with_no_limit_set_never_rejects(self):
         """空欄（無制限）はリーグの既定値（3人）とは別に、明示的に検証しておく。"""
         orm_models.League.objects.filter(id=self.league.id).update(foreign_player_game_limit=None)
         game = play_game(self.team, self.rival)
 
-        self.service.update_game(
-            game.id,
-            year=2026,
-            played_on=game.played_on,
-            home_team_id=self.team.id,
-            away_team_id=self.rival.id,
-            home_score=1,
-            away_score=0,
-            batting={self.foreign.id: BattingLine(at_bats=1, singles=1)},
-        )  # 例外にならない
+        self._record(game, foreign_batter=self.foreign.id, foreign_team=self.team)  # 例外にならない
 
-        self.assertEqual(orm_models.GameBattingLine.objects.count(), 1)
+        self.assertTrue(orm_models.GameBattingLine.objects.filter(player_id=self.foreign.id).exists())
 
 
 class CaptaincyApplicationTest(BaseCase):
