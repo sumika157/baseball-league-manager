@@ -3,6 +3,7 @@
 from django.contrib.auth.models import User
 from django.urls import reverse
 
+from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import (
     BattingLine,
 )
@@ -185,12 +186,12 @@ class LeagueOrderingTest(BaseCase):
         orm_models.Team.objects.create(league=self.first, name="Aチーム")
 
     def test_display_order_beats_name(self):
-        names = [lg.name for lg in DjangoLeagueRepository().find_all()]
+        names = [lg.name for lg in DjangoLeagueRepository(WorldScope.real()).find_all()]
         self.assertEqual(names, ["Zリーグ", "Aリーグ"])
 
     def test_same_order_falls_back_to_name(self):
         orm_models.League.objects.update(display_order=0)
-        names = [lg.name for lg in DjangoLeagueRepository().find_all()]
+        names = [lg.name for lg in DjangoLeagueRepository(WorldScope.real()).find_all()]
         self.assertEqual(names, ["Aリーグ", "Zリーグ"])
 
     def test_admin_list_is_ordered_and_editable(self):

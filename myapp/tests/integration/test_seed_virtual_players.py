@@ -12,6 +12,7 @@ from unittest import mock
 from django.core.management import call_command
 from django.test import SimpleTestCase
 
+from myapp.domain.pennant.world import WorldScope
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoTeamRepository
 from myapp.management.commands import seed_virtual_players
@@ -147,7 +148,7 @@ class SeedForeignPlayerQuotaTest(BaseCase):
                 foreign = [s for s in active_stints(team) if s.player.is_foreign_player]
                 self.assertEqual(len(foreign), 2)
                 # 集約自身の検査にも通る
-                DjangoTeamRepository().find_by_id(team.id).ensure_foreign_player_quota(2)
+                DjangoTeamRepository(WorldScope.real()).find_by_id(team.id).ensure_foreign_player_quota(2)
 
     def test_blank_limit_means_unlimited(self):
         self.league.foreign_player_roster_limit = None

@@ -223,6 +223,10 @@ docker compose exec web python manage.py simulate_sample --season --seed 1
 散らした12球団で1シーズン（858試合）を回し、首位打者・本塁打王などのタイトルの水準も出します。
 同じ `--seed` なら同じ結果になります。`seed_virtual_games` はまだこのエンジンを使っていません。
 
+これらの投入・補正コマンドと `measure_pages` が対象にするのは**実データだけ**です。ペナントの世界
+（[世界の分離](#世界ペナントモードのセーブデータの分離)）の球団・選手・試合には触れません
+（`--replace` もペナントの試合を消しません）。
+
 #### 打席の記録ができる前のデータがあるとき（main に入れた後の手順）
 
 打席の記録が無い古い試合（打席を記録する前に入れた試合）は、新しく加わった列（得点・三振・
@@ -462,6 +466,7 @@ presentation  →  application  →  domain  ←  infrastructure
 | `services/` | ドメインサービス。関心事ごとに `rankings`（規定とタイトル）・`sorting`（並べ替え）・`records`（試合からの集計）・`decisions`（勝敗・S・Hの導出）に分かれる |
 | `simulation/` | 試合シミュレーション（ペナントモードの土台）。能力値・基準値（NPB の水準）・odds ratio 法の確率・進塁・AI 監督・エンジン・水準の集計。Django にも numpy にも依存しない |
 | `repositories.py` | 永続化のインターフェース（実装は infrastructure） |
+| `pennant/` | ペナントモードの世界。`World`（セーブデータ）・`WorldScope`（読み書きする世界の範囲）・`fork_*`（実データのリーグを分岐する規則） |
 | `exceptions.py` | `DomainError` とその派生 |
 
 ### 指標
@@ -550,6 +555,8 @@ POST だけ権限を求めます（画面ごと `login_required` にすると閲
   ログイン済みで担当外なら 403 で拒否します
 - 「担当者かどうか」は `Team.managers` という事実だけで決まるので、業務ルールではなく
   参照専用クエリ（`DjangoTeamPermissionQuery`）に置いています
+- **ペナントの世界の球団は、管理ユーザーでも実データ側の画面から編集できません。**
+  この判定は範囲（`WorldScope`）を持ち、実データの範囲では世界の球団を「担当外」として扱います
 
 ### 並べ替え
 
@@ -978,21 +985,57 @@ MSYS_NO_PATHCONV=1 docker compose exec web python manage.py measure_pages --prof
 
 | インターフェース | 置き場所 | 実装 |
 | --- | --- | --- |
-| `TeamRepository` `GameRepository` `LeagueRepository` | [domain/repositories.py](myapp/domain/repositories.py) | `infrastructure/repositories.py` |
+| `TeamRepository` `GameRepository` `LeagueRepository` `WorldRepository` | [domain/repositories.py](myapp/domain/repositories.py) | `infrastructure/repositories.py` |
 | `TeamListQuery` `GameListQuery` `PlayerFieldingQuery` | [application/queries.py](myapp/application/queries.py) | `infrastructure/queries.py` |
 
 参照クエリだけドメイン層に置けないのは、戻り値が画面向けの DTO（`application/dto.py`）で、
 ドメイン層から参照できないためです。
 
-実装を差し込むのは [presentation/views.py](myapp/presentation/views.py) の次の**2か所だけ**です。
+実装を差し込むのは [presentation/views.py](myapp/presentation/views.py) の組み立て口**だけ**です。
 
 | 組み立て口 | 作るもの | 呼ぶ側 |
 | --- | --- | --- |
-| `build_service()` | `TeamApplicationService`（チーム・選手・試合・リーグの参照と更新） | 画面・管理画面のテンプレートタグ・テスト |
-| `build_recording_service()` | `GameRecordingService`（スコアブック＝打席の記録の保存。[application/game_recording.py](myapp/application/game_recording.py)） | スコアブックの保存 API・テスト |
+| `build_service()` | `TeamApplicationService`（チーム・選手・試合・リーグの参照と更新）。**実データの範囲に固定** | 画面・管理画面のテンプレートタグ・テスト |
+| `build_recording_service()` | `GameRecordingService`（スコアブック＝打席の記録の保存。[application/game_recording.py](myapp/application/game_recording.py)）。**実データの範囲に固定** | スコアブックの保存 API・テスト |
+| `build_permission_query()` `build_player_search_query()` | 編集権限の判定・選手検索。**実データの範囲に固定** | 画面・保存 API |
+| `build_pennant_world_service()` | `PennantWorldService`（世界の作成＝分岐・一覧・削除。[application/pennant_world.py](myapp/application/pennant_world.py)） | 管理コマンド `pennant_create` `pennant_delete` |
 
-どちらも依存をすべて必須にして全部渡します。依存を省略可能にして呼ぶ側ごとに一部だけ渡すと、
+どれも依存をすべて必須にして全部渡します。依存を省略可能にして呼ぶ側ごとに一部だけ渡すと、
 開く画面によって落ちるサービスができてしまうためです。
+
+### 世界（ペナントモードのセーブデータ）の分離
+
+ペナントモードは、実データのリーグを**分岐**した別の世界を作って遊びます。世界は実データと同じ
+テーブルを使い、**リーグが属する世界で分けます**（`League.world`。空なら実データ）。球団・選手・試合は
+リーグをたどって世界が決まるので、世界の出典はリーグの1か所だけです。
+
+- **範囲は `WorldScope`（`real()` / `pennant(世界のid)`）で表し、全リポジトリと参照クエリが
+  コンストラクタで必須の引数として受け取ります。** 既定値はありません（渡し忘れは型検査で落ちます）。
+  読み出しは `find_by_id` も含めてすべて SQL でその範囲に絞られ、範囲の外の id は
+  「見つからない」（404）になります。絞り方は [infrastructure/scoping.py](myapp/infrastructure/scoping.py) に集めています
+- `build_service()` などの既存の組み立て口は**実データの範囲に固定**で、引数を持ちません
+  （既定値で範囲を切り替える形にすると、渡し忘れが「ペナントの画面に実データが出る」形で現れるため）
+- 管理画面は実データだけを扱います（一覧・選択肢・フィルタ・id 指定の編集画面）。`PennantWorld` は登録しません
+- 球場は世界と実データで共有します
+- 分岐（`pennant_create`）で写すのは、リーグ・球団・選手のプロフィール・**現在の在籍だけ**（加入年は開幕年）です。
+  試合と過去の在籍・主将の在任歴は写しません。**分岐した後は同期しません**（別の世界の初期状態であって、
+  同じ事実の二重化ではないため）。保存は集約（`Team`）経由なので、背番号の一意性は集約が守ります
+- 世界の削除（`pennant_delete`）は、Django の CASCADE に任せず、子のテーブルから範囲で絞って消します
+  （打席などは1シーズンで数十万行あり、collector は消す行を Python に集めてしまうため）
+- `League.name` の一意性は世界の中で保ちます（実データ側と `(world, name)` の条件付き制約）。
+  世界の中のリーグは実データと同名でもよいため
+
+```bash
+# 実データのリーグ 1・2 を分岐して世界を作る（--managed-team で受け持つ球団を分岐元の球団 id で指せる）
+docker compose exec web python manage.py pennant_create --name "2026年ペナント" --league 1 --league 2 --year 2026
+
+# 世界を、属する行ごと消す（実データには触れない）
+docker compose exec web python manage.py pennant_delete --world 1
+```
+
+混ざっていないことは [tests/integration/test_world_isolation.py](myapp/tests/integration/test_world_isolation.py) が検査します
+（実データの主要画面に世界の名前が出ない・世界の id で実データの URL を開くと 404・管理画面に出ない・
+全モデルを「世界にどう属すか」で分類した表に未分類が無い）。
 
 実装がインターフェースを満たしているか、組み立てに欠けが無いかは
 [tests/integration/test_wiring.py](myapp/tests/integration/test_wiring.py) が機械的に検査します

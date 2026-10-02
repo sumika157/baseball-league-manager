@@ -48,6 +48,7 @@ from django.db import transaction
 from myapp.domain import services as domain_services
 from myapp.domain.entities import FieldingError, PlateAppearance, RunnerAdvance
 from myapp.domain.exceptions import InvalidGame
+from myapp.domain.pennant.world import WorldScope
 from myapp.domain.simulation.levels import LevelTally
 from myapp.domain.value_objects import (
     AdvanceReason,
@@ -63,6 +64,7 @@ from myapp.domain.value_objects import (
     Position,
     Season,
 )
+from myapp.infrastructure.scoping import games_in, leagues_in, world_condition
 from myapp.models import (
     Game,
     GameBattingLine,
@@ -72,7 +74,6 @@ from myapp.models import (
     GamePitchingLine,
     GamePlateAppearance,
     GameRunnerAdvance,
-    League,
     PlayerStint,
 )
 
@@ -355,7 +356,8 @@ class Command(BaseCommand):
         if per_pair < 1:
             raise CommandError("--games-per-pair は1以上を指定してください。")
 
-        existing = Game.objects.filter(year=year)
+        # 対象は実データだけ。ペナントの世界の試合は、--replace でも消さない
+        existing = games_in(WorldScope.real()).filter(year=year)
         if existing.exists() and not options["replace"]:
             raise CommandError(
                 f"{year}年の試合が既に {existing.count()} 件あります。"
@@ -406,7 +408,9 @@ class Command(BaseCommand):
         出場させると、経歴と成績が食い違う）。
         """
         rosters = defaultdict(lambda: {"batters": [], "pitchers": [], "foreign": set()})
-        stints = PlayerStint.objects.filter(from_year__lte=year).select_related("player", "team")
+        stints = PlayerStint.objects.filter(
+            world_condition("team__league", WorldScope.real()), from_year__lte=year
+        ).select_related("player", "team")
         for stint in stints:
             if stint.to_year is not None and stint.to_year < year:
                 continue
@@ -501,7 +505,7 @@ class Command(BaseCommand):
     def _schedule(self, year, per_pair, rosters):
         """組み合わせと試合日だけを決める。試合の中身はまだ作らない。"""
         schedule = []
-        for league in League.objects.prefetch_related("teams"):
+        for league in leagues_in(WorldScope.real()).prefetch_related("teams"):
             teams = [
                 team for team in league.teams.all() if rosters[team.id]["batters"] and rosters[team.id]["pitchers"]
             ]

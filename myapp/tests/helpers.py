@@ -11,6 +11,7 @@ from django.contrib.auth.models import User
 from django.urls import reverse
 
 from myapp.domain.entities import Game, PlateAppearance, RunnerAdvance
+from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import (
     AdvanceReason,
     Base,
@@ -186,6 +187,7 @@ def play_game(
     batting=None,
     pitching=None,
     recorded=True,
+    scope: WorldScope | None = None,
 ) -> Game:
     """試合を1件作って保存する。
 
@@ -195,6 +197,7 @@ def play_game(
     **既定は記録済みの試合**。明細を渡さないときは、どのロスターにも属さない選手の
     空の打撃行を1つ足す（明細が1行でもあれば記録済み。順位・勝敗・試合数に数えられる）。
     登録しただけの未記録の試合を作るときは recorded=False。
+    scope を渡すと、その世界の試合として保存する（ペナントの世界のチームを渡すときに要る。既定は実データ）。
     """
     game = Game(
         season=Season(year),
@@ -212,7 +215,7 @@ def play_game(
         placeholder = orm_models.Player.objects.create(name="記録用ダミー")
         game.record_batting(placeholder.id, BattingLine(), team_id=home_team.id)
 
-    return DjangoGameRepository().save(game)
+    return DjangoGameRepository(scope or WorldScope.real()).save(game)
 
 
 def _team_of(player_id, home_team, away_team) -> int:
