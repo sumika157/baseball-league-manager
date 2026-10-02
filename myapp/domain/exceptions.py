@@ -83,3 +83,7 @@ class InvalidCaptaincy(DomainError):
 
 class ForeignPlayerQuotaExceeded(DomainError):
     """外国人選手の人数が上限を超えている（登録枠・試合出場枠のどちらにも使う）。"""
+
+
+class InvalidSchedule(DomainError):
+    """日程が組めない（球団数が奇数・リーグが1つ・規則が成立しないなど）、または日程の指定が不正。"""
