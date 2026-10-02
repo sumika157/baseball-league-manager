@@ -1195,18 +1195,14 @@ class TeamApplicationService:
         played_on: date,
         home_team_id: int,
         away_team_id: int,
-        home_score: int,
-        away_score: int,
     ) -> Game:
-        """試合を作る。成績は後から入力する。"""
+        """試合を作る。得点は 0-0 で作る（打席から導く値で、スコアブックの保存で決まる）。成績も後から記録する。"""
         return self._games.save(
             Game(
                 season=Season(year),
                 played_on=played_on,
                 home_team_id=home_team_id,
                 away_team_id=away_team_id,
-                home_score=home_score,
-                away_score=away_score,
             )
         )
 

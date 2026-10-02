@@ -5,6 +5,7 @@
 業務ルールそのものは DB を使わない `tests/domain/test_plate_appearances.py` にある。
 """
 
+from myapp.domain.value_objects import BattingLine, InningsPitched, PitchingLine
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
 
@@ -247,5 +248,48 @@ class ScorebookApiTest(BaseCase):
 
     def test_starters_do_not_need_the_keys(self):
         response = post_game_scorebook(self.client, self.game.id, self._payload())
+
+        self.assertEqual(response.status_code, 200, response.content)
+
+    # --- 打席の無い古い試合 ---
+
+    def test_a_legacy_game_is_not_overwritten_by_an_empty_scorebook(self):
+        """打席を記録する前の試合（明細だけがある）を空の打席で保存すると、成績が消える。"""
+        batter = self.away_batters[0]
+        legacy = play_game(
+            self.team,
+            self.rival,
+            home_score=2,
+            away_score=3,
+            day=2,
+            batting={batter: BattingLine(at_bats=4, singles=2)},
+            pitching={self.home_pitcher: PitchingLine(innings=InningsPitched.from_notation("9.0"), earned_runs=3)},
+        )
+
+        response = post_game_scorebook(
+            self.client, legacy.id, self._payload(lineup=[], plate_appearances=[], played_on="2026-04-02")
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("古い形式", response.json()["error"])
+        saved = DjangoGameRepository().find_by_id(legacy.id)
+        self.assertEqual((saved.home_score, saved.away_score), (2, 3))
+        self.assertEqual(saved.batting[0].line.at_bats, 4)
+        self.assertEqual(len(saved.pitching), 1)
+
+    def test_a_legacy_game_with_only_a_score_is_not_overwritten_either(self):
+        legacy = play_game(self.team, self.rival, home_score=4, away_score=2, day=3)
+
+        response = post_game_scorebook(
+            self.client, legacy.id, self._payload(lineup=[], plate_appearances=[], played_on="2026-04-03")
+        )
+
+        self.assertEqual(response.status_code, 400)
+        saved = DjangoGameRepository().find_by_id(legacy.id)
+        self.assertEqual((saved.home_score, saved.away_score), (4, 2))
+
+    def test_a_new_game_without_lines_can_be_saved_empty(self):
+        """打席も明細も無い試合を空で保存するのは従来どおり通る。"""
+        response = post_game_scorebook(self.client, self.game.id, self._payload(lineup=[], plate_appearances=[]))
 
         self.assertEqual(response.status_code, 200, response.content)

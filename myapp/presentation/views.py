@@ -377,8 +377,6 @@ def game_create(request):
                     played_on=form.cleaned_data["played_on"],
                     home_team_id=home_team_id,
                     away_team_id=away_team_id,
-                    home_score=form.cleaned_data["home_score"],
-                    away_score=form.cleaned_data["away_score"],
                 )
             except DomainError as error:
                 messages.error(request, str(error))

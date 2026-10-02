@@ -197,8 +197,6 @@ class TeamManagerPermissionTest(BaseCase):
                 "played_on": "2026-04-02",
                 "home_team": self.team.id,
                 "away_team": self.rival.id,
-                "home_score": "1",
-                "away_score": "0",
             },
             follow=True,
         )

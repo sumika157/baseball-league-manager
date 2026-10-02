@@ -45,6 +45,7 @@ class PlayerUpdateForm(PlayerRegistrationForm):
 class GameForm(forms.Form):
     """試合の基本情報。
 
+    得点は受け取らない（打席から導く値。登録時は 0-0 で作り、スコアブックの保存で決まる）。
     対戦カードの妥当性（同一チーム同士でないか）はドメインが判定するので、
     ここでは型と必須だけを見る。
     """
@@ -53,8 +54,6 @@ class GameForm(forms.Form):
     played_on = forms.DateField(label="試合日", widget=forms.DateInput(attrs={"type": "date"}))
     home_team = forms.IntegerField(label="ホーム", widget=forms.HiddenInput)
     away_team = forms.IntegerField(label="ビジター", widget=forms.HiddenInput)
-    home_score = forms.IntegerField(label="ホーム得点", min_value=0, initial=0)
-    away_score = forms.IntegerField(label="ビジター得点", min_value=0, initial=0)
 
 
 # 打席まわりの選択肢は、どれもドメインの値オブジェクトが唯一の出典。
