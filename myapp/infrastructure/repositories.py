@@ -14,7 +14,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from django.db import transaction
-from django.db.models import Prefetch, Q, QuerySet, Sum
+from django.db.models import Count, Prefetch, Q, QuerySet, Sum
 
 from ..domain.entities import (
     Captaincy,
@@ -123,8 +123,8 @@ class _RosterData:
         player_ids = list(players)
         return cls(
             players=players,
-            batting=_batting_totals(player_ids),
-            pitching=_pitching_totals(player_ids),
+            batting=batting_totals(player_ids),
+            pitching=pitching_totals(player_ids),
             careers=_careers_of(player_ids),
             captaincies=_captaincies_of(player_ids),
         )
@@ -377,56 +377,69 @@ def _profile_of(row: orm_models.Player) -> Profile:
     )
 
 
-def _batting_totals(player_ids: list[int]) -> dict[int, BattingLine]:
-    """選手ごとの通算打撃成績を SQL の集計で求める。"""
-    if not player_ids:
+def batting_totals(player_ids: list[int] | None = None, *, games: Q | None = None) -> dict[int, BattingLine]:
+    """選手ごとの打撃成績を SQL の集計で求める。
+
+    既定は通算。`games` に試合の条件（`game__year=2026` など、明細の行から見た条件）を
+    渡すと、その試合だけの成績になる（タイトルのようにシーズンで区切る用途）。
+    `player_ids` が None なら全選手（IN 句に何千件も並べずに済む）。空なら何も読まない。
+    """
+    if player_ids is not None and not player_ids:
         return {}
-    rows = (
-        orm_models.GameBattingLine.objects.filter(player_id__in=player_ids)
-        .values("player_id")
-        .annotate(**{f: Sum(f) for f in _BATTING_FIELDS})
-    )
+    rows = orm_models.GameBattingLine.objects.all()
+    if player_ids is not None:
+        rows = rows.filter(player_id__in=player_ids)
+    if games is not None:
+        rows = rows.filter(games)
+    totals = rows.values("player_id").annotate(**{f: Sum(f) for f in _BATTING_FIELDS})
     # values() の行から可変のキーで取り出すため、TypedDict の字面キー検査は効かない
-    return {r["player_id"]: BattingLine(**{f: r[f] or 0 for f in _BATTING_FIELDS}) for r in rows}  # type: ignore[literal-required]
+    return {r["player_id"]: BattingLine(**{f: r[f] or 0 for f in _BATTING_FIELDS}) for r in totals}  # type: ignore[literal-required]
 
 
-def _pitching_totals(player_ids: list[int]) -> dict[int, PitchingLine]:
-    """選手ごとの通算投球成績を求める。
+def pitching_totals(player_ids: list[int] | None = None, *, games: Q | None = None) -> dict[int, PitchingLine]:
+    """選手ごとの投球成績を求める。引数の意味は `batting_totals` と同じ。
 
     投球回だけは 5.2 が「5回と2/3」を意味する特殊な表記のため、単純な合計では
-    正しくない（5.2 + 5.2 は 10.4 ではなく 11.1）。明細を取り出して
-    InningsPitched に足し合わせさせる。
+    正しくない（5.2 + 5.2 は 10.4 ではなく 11.1）。表記ごとに集計した行を取り出して
+    InningsPitched に足し合わせさせる（換算は InningsPitched だけが持つ）。
+
+    登板1回ごとに読むと数万行を Python で足すことになる。現れる表記は数十通りなので、
+    SQL で（選手, 表記）ごとに集計してから足す。先発登板数と救援勝利は登板順から導く
+    項目なので、同じ集計の中で条件つきに数える。
     """
-    if not player_ids:
+    if player_ids is not None and not player_ids:
         return {}
+    rows = orm_models.GamePitchingLine.objects.all()
+    if player_ids is not None:
+        rows = rows.filter(player_id__in=player_ids)
+    if games is not None:
+        rows = rows.filter(games)
 
-    counts = (
-        orm_models.GamePitchingLine.objects.filter(player_id__in=player_ids)
-        .values("player_id")
-        .annotate(**{f: Sum(f) for f in _PITCHING_COUNTS})
-    )
-    innings: dict[int, InningsPitched] = {}
-    # 先発登板数と救援勝利は登板順から導く。SQL の集計では表しにくいので
-    # 明細を1度読んで数える（投球回の合計も同じ明細から取る）
-    derived: dict[int, dict[str, int]] = {}
-    for player_id, notation, order, wins in orm_models.GamePitchingLine.objects.filter(
-        player_id__in=player_ids
-    ).values_list("player_id", "innings_pitched", "appearance_order", "wins"):
-        innings[player_id] = innings.get(player_id, InningsPitched.zero()) + InningsPitched.from_notation(notation)
-        entry = derived.setdefault(player_id, {"starts": 0, "relief_wins": 0})
-        if order <= 1:
-            entry["starts"] += 1
-        else:
-            entry["relief_wins"] += wins
-
-    return {
-        r["player_id"]: PitchingLine(
-            innings=innings.get(r["player_id"], InningsPitched.zero()),
-            **{f: r[f] or 0 for f in _PITCHING_COUNTS},  # type: ignore[literal-required]
-            **derived.get(r["player_id"], {}),
+    grouped = (
+        rows.values("player_id", "innings_pitched")
+        .annotate(
+            lines=Count("id"),
+            starts=Count("id", filter=Q(appearance_order__lte=1)),
+            relief_wins=Sum("wins", filter=Q(appearance_order__gt=1)),
+            **{f: Sum(f) for f in _PITCHING_COUNTS},
         )
-        for r in counts
-    }
+        .order_by()
+    )
+
+    innings: dict[int, InningsPitched] = {}
+    sums: dict[int, dict[str, int]] = {}
+    for r in grouped:
+        player_id = r["player_id"]
+        # 同じ表記の行が r["lines"] 件ぶんまとまっている
+        innings[player_id] = innings.get(player_id, InningsPitched.zero()) + InningsPitched.from_notation(
+            r["innings_pitched"]
+        ).times(r["lines"])
+        entry = sums.setdefault(player_id, dict.fromkeys((*_PITCHING_COUNTS, *_DERIVED_PITCHING_COUNTS), 0))
+        for name in entry:
+            entry[name] += r[name] or 0  # type: ignore[literal-required]
+
+    # entry は項目名 → 値の辞書を展開するため、引数ごとの型検査は効かない
+    return {player_id: PitchingLine(innings=innings[player_id], **entry) for player_id, entry in sums.items()}  # type: ignore[arg-type]
 
 
 def _to_fielded_by(value: str) -> tuple[FieldingPosition, ...]:

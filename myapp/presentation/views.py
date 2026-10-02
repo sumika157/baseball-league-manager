@@ -41,6 +41,7 @@ from ..infrastructure.queries import (
     DjangoGameListQuery,
     DjangoPlayerFieldingQuery,
     DjangoPlayerSearchQuery,
+    DjangoPlayerStatsQuery,
     DjangoTeamListQuery,
     DjangoTeamPermissionQuery,
 )
@@ -100,6 +101,7 @@ def build_service() -> TeamApplicationService:
         leagues=DjangoLeagueRepository(),
         game_list_query=DjangoGameListQuery(),
         player_fielding_query=DjangoPlayerFieldingQuery(),
+        player_stats_query=DjangoPlayerStatsQuery(),
     )
 
 

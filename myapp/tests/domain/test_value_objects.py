@@ -99,6 +99,11 @@ class InningsPitchedTest(TestCase):
     def test_as_innings_is_a_real_number(self):
         self.assertAlmostEqual(InningsPitched.from_notation("5.2").as_innings, 17 / 3)
 
+    def test_times_repeats_the_same_innings(self):
+        """集計済みの行（同じ表記 × 件数）を足し合わせる。5.2 を2回で 11.1（10.4 ではない）。"""
+        self.assertEqual(str(InningsPitched.from_notation("5.2").times(2)), "11.1")
+        self.assertEqual(InningsPitched.from_notation("5.2").times(0), InningsPitched.zero())
+
 
 class BattingLineTest(TestCase):
     def test_hits_is_the_sum_of_hit_types(self):

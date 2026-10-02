@@ -9,7 +9,25 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..domain.entities import Game
-from ..domain.value_objects import FieldingPosition
+from ..domain.value_objects import BattingLine, FieldingPosition, PitchingLine, Position
+
+
+@dataclass(frozen=True)
+class ActivePlayerStats:
+    """在籍中の選手1人と、その成績。ランキング・タイトルの材料。
+
+    チーム（集約）を組み立てずに、順位づけに要る値だけを読み出す。
+    成績が通算かシーズンかは、読んだ参照クエリの側で決まる。
+    """
+
+    player_id: int
+    name: str
+    number: int
+    position: Position
+    team_id: int
+    team_name: str
+    batting: BattingLine
+    pitching: PitchingLine
 
 
 @dataclass(frozen=True)
