@@ -1030,7 +1030,8 @@ class Command(BaseCommand):
         """ゴロアウト。一塁に走者がいれば併殺になることがある。"""
         if Base.FIRST in occupied and outs < OUTS_PER_INNING - 1 and self.rng.random() < DOUBLE_PLAY_RATIO:
             self._put_out(advances, occupied, Base.FIRST, R.FORCE_OUT)
-        elif self.rng.random() < ADVANCE_ON_GROUND_OUT_RATIO:
+        elif self.rng.random() < ADVANCE_ON_GROUND_OUT_RATIO and outs < OUTS_PER_INNING - 1:
+            # 2アウトでは打者のアウトが3つ目になり、走者が還っても得点にならない（規則 5.08）
             self._advance_all(advances, occupied, R.BATTED_BALL)
         self._batter_to(advances, batter_id, Base.OUT, R.PUT_OUT, occupied)
 
