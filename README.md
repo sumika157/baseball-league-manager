@@ -944,15 +944,16 @@ POST だけ権限を求めます（画面ごと `login_required` にすると閲
 | リーグ詳細 | 4,604ms / 297クエリ | 57ms / 5クエリ | 順位と対戦成績のために全試合の明細とロスターを読んでいた |
 | 順位表 | 4,163ms / 295クエリ | 83ms / 3クエリ | 同上 |
 | 選手一覧 | 4,580ms / 330クエリ | 257ms / 41クエリ | リーグ平均のために全48チームのロスターを読んでいた |
-| ダッシュボード | 4,864ms / 298クエリ | 426ms / 13クエリ | ロスターをチームごとに引き直していた（N+1） |
+| ダッシュボード | 4,864ms / 298クエリ | 380ms / 10クエリ | ロスターをチームごとに引き直していた（N+1）。のちにチーム集約を全部組み立てていたのもやめ、選手の成績を参照クエリで集計 |
 | リーグ成績 | 1,094ms / 581クエリ | 114ms / 15クエリ | 同上 |
-| リーグタイトル | 5,003ms / 295クエリ | 701ms / 13クエリ | リーグ内の対戦を Python で絞っていた |
+| リーグタイトル | 5,003ms / 295クエリ | 135ms / 6クエリ | リーグ内の対戦を Python で絞っていた。のちにチーム集約と1シーズンぶんの試合の明細を組み立てていたのもやめた（950ms → 135ms） |
 
 判断の基準は3つです。
 
 - **参照では集約を組み立てない**（順位・対戦成績・試合数は得点と対戦カードだけで決まる）
 - **絞り込みと集計は SQL 側で行う**（`count_by_team` / `find_between_teams` /
-  `find_by_league_with_roster`）
+  `find_by_league_with_roster`。ランキングとタイトルの選手の成績は `PlayerStatsQuery` が集計する。
+  投球回は（選手, 表記）ごとに集計してから `InningsPitched` で足すので、登板1回ごとには読まない）
 - **マッピングの中で関連を引き直さない**（`_RosterData` に選手をまとめて渡す）
 
 計測は専用コマンドで繰り返せます。**SQL 時間だけを見ても遅さには気づけません**
@@ -972,7 +973,7 @@ MSYS_NO_PATHCONV=1 docker compose exec web python manage.py measure_pages --prof
 | インターフェース | 置き場所 | 実装 |
 | --- | --- | --- |
 | `TeamRepository` `GameRepository` `LeagueRepository` | [domain/repositories.py](myapp/domain/repositories.py) | `infrastructure/repositories.py` |
-| `TeamListQuery` `GameListQuery` `PlayerFieldingQuery` | [application/queries.py](myapp/application/queries.py) | `infrastructure/queries.py` |
+| `TeamListQuery` `GameListQuery` `PlayerFieldingQuery` `PlayerStatsQuery` | [application/queries.py](myapp/application/queries.py) | `infrastructure/queries.py` |
 
 参照クエリだけドメイン層に置けないのは、戻り値が画面向けの DTO（`application/dto.py`）で、
 ドメイン層から参照できないためです。

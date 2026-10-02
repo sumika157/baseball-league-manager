@@ -650,6 +650,10 @@ class InningsPitched:
             return NotImplemented
         return InningsPitched(outs=self.outs + other.outs)
 
+    def times(self, count: int) -> InningsPitched:
+        """同じ投球回を count 回ぶん積み上げたもの。集計済みの行（表記 × 件数）を足し合わせるのに使う。"""
+        return InningsPitched(outs=self.outs * count)
+
     def __str__(self) -> str:
         return f"{self.to_notation():.1f}"
 
