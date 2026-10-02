@@ -198,6 +198,26 @@ class ScorebookApiTest(BaseCase):
 
         self.assertEqual(response.status_code, 400)
 
+    def test_a_run_on_the_play_that_makes_the_third_out_by_the_batter_is_rejected(self):
+        """2アウトのゴロで三塁走者が還った記録は、得点にならない（規則 5.08）。"""
+        away = self.away_batters
+        entries = self._plate_appearances()
+        entries[2] = self._pa(3, 3, away[2], "空振り三振", [self._advance(away[2], BATTER, OUT, "アウト")])
+        entries[3] = self._pa(4, 4, away[3], "空振り三振", [self._advance(away[3], BATTER, OUT, "アウト")])
+        entries[4] = self._pa(
+            5,
+            5,
+            away[4],
+            "ゴロアウト",
+            [self._advance(away[4], BATTER, OUT, "アウト"), self._advance(away[0], THIRD, HOME)],
+        )
+
+        response = post_game_scorebook(self.client, self.game.id, self._payload(plate_appearances=entries))
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("5.08", response.json()["error"])
+        self.assertEqual(len(DjangoGameRepository().find_by_id(self.game.id).plate_appearances), 0)
+
     def test_someone_without_permission_cannot_save(self):
         self.client.logout()
         login_as_manager(self.client, username="stranger")
