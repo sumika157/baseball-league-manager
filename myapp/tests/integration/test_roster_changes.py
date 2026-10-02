@@ -207,7 +207,7 @@ class ForeignPlayerQuotaTest(BaseCase):
 
     def test_recording_rejects_when_home_team_quota_exceeded(self):
         orm_models.League.objects.filter(id=self.league.id).update(foreign_player_game_limit=0)
-        game = play_game(self.team, self.rival)
+        game = play_game(self.team, self.rival, recorded=False)
 
         with self.assertRaises(ForeignPlayerQuotaExceeded):
             self._record(game, foreign_batter=self.foreign.id, foreign_team=self.team)
@@ -219,14 +219,14 @@ class ForeignPlayerQuotaTest(BaseCase):
         rival_foreign = self.service.register_player(self.rival.id, "助っ人2", 51, "外野手")
         orm_models.Player.objects.filter(id=rival_foreign.id).update(is_foreign_player=True)
         orm_models.League.objects.filter(id=self.league.id).update(foreign_player_game_limit=0)
-        game = play_game(self.team, self.rival)
+        game = play_game(self.team, self.rival, recorded=False)
 
         with self.assertRaises(ForeignPlayerQuotaExceeded):
             self._record(game, foreign_batter=rival_foreign.id, foreign_team=self.rival)
 
     def test_recording_allows_exactly_at_the_game_limit(self):
         orm_models.League.objects.filter(id=self.league.id).update(foreign_player_game_limit=1)
-        game = play_game(self.team, self.rival)
+        game = play_game(self.team, self.rival, recorded=False)
 
         self._record(game, foreign_batter=self.foreign.id, foreign_team=self.team)  # 例外にならない
 
@@ -235,7 +235,7 @@ class ForeignPlayerQuotaTest(BaseCase):
     def test_recording_with_no_limit_set_never_rejects(self):
         """空欄（無制限）はリーグの既定値（3人）とは別に、明示的に検証しておく。"""
         orm_models.League.objects.filter(id=self.league.id).update(foreign_player_game_limit=None)
-        game = play_game(self.team, self.rival)
+        game = play_game(self.team, self.rival, recorded=False)
 
         self._record(game, foreign_batter=self.foreign.id, foreign_team=self.team)  # 例外にならない
 

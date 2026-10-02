@@ -538,7 +538,8 @@ class TeamApplicationService:
         # そのシーズンの成績だけを持つ選手に組み替える。通算値のままでは
         # 別のシーズンの記録まで混ざってタイトルの対象にならない
         games_played: dict[int, int] = {}
-        for game in season_games:
+        # 規定の基準になる試合数に、未記録の試合は数えない
+        for game in domain_services.recorded_games(season_games):
             for team_id in (game.home_team_id, game.away_team_id):
                 games_played[team_id] = games_played.get(team_id, 0) + 1
 
@@ -1435,7 +1436,9 @@ class TeamApplicationService:
             away_team_name=names.get(game.away_team_id, ""),
             home_score=game.home_score,
             away_score=game.away_score,
-            winner_team_id=game.winner_team_id,
+            # 未記録の試合は 0-0 でも引分ではないので、勝者も付けない
+            winner_team_id=game.winner_team_id if game.is_recorded else None,
+            is_recorded=game.is_recorded,
         )
 
     # --- DTO への詰め替え ---

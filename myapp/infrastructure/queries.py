@@ -12,12 +12,35 @@ from dataclasses import fields
 from typing import Any
 
 from django.contrib.auth.models import AnonymousUser, User
-from django.db.models import Count, Q, QuerySet, Sum
+from django.db.models import BooleanField, Case, Count, Exists, OuterRef, Q, QuerySet, Sum, Value, When
 
 from ..application.dto import FieldingRow, GameRow, PlayerFielding, PlayerSearchRow, TeamSummary
 from ..domain.entities import Game, winning_team_id
 from ..domain.value_objects import FieldingLine, Season
 from . import orm_models
+
+
+def recorded_games_filter() -> Q:
+    """記録済みの試合の条件。`Game.is_recorded`（domain/entities.py）を SQL で書いたもの。
+
+    打席も打撃・投球の明細も無い試合が「未記録」。その否定がこの条件。意味の出典は
+    `Game.is_recorded` で、ここは SQL 側の写し（食い違わないことを
+    `tests/integration/test_unrecorded_games.py` が突き合わせる）。
+    """
+    return (
+        Q(Exists(orm_models.GameBattingLine.objects.filter(game_id=OuterRef("pk"))))
+        | Q(Exists(orm_models.GamePitchingLine.objects.filter(game_id=OuterRef("pk"))))
+        | Q(Exists(orm_models.GamePlateAppearance.objects.filter(game_id=OuterRef("pk"))))
+    )
+
+
+def _with_recorded(rows: QuerySet[orm_models.Game]) -> QuerySet[orm_models.Game]:
+    """各試合に、記録済みかどうか（`recorded`）を付ける。"""
+    return rows.annotate(
+        recorded=Case(
+            When(recorded_games_filter(), then=Value(True)), default=Value(False), output_field=BooleanField()
+        )
+    )
 
 
 class DjangoPlayerFieldingQuery:
@@ -163,7 +186,9 @@ class DjangoGameListQuery:
         month: int | None = None,
         league_id: int | None = None,
     ) -> list[GameRow]:
-        rows = self._rows(year=year, team_id=team_id, month=month, league_id=league_id).order_by("-played_on", "-id")
+        rows = _with_recorded(
+            self._rows(year=year, team_id=team_id, month=month, league_id=league_id).order_by("-played_on", "-id")
+        )
         return [
             GameRow(
                 id=row.id,
@@ -175,8 +200,14 @@ class DjangoGameListQuery:
                 away_team_name=row.away_team.name,
                 home_score=row.home_score,
                 away_score=row.away_score,
-                # 勝敗の判定はドメインの関数が唯一の出典。結果の文言は GameRow が持つ
-                winner_team_id=winning_team_id(row.home_team_id, row.away_team_id, row.home_score, row.away_score),
+                # 勝敗の判定はドメインの関数が唯一の出典。結果の文言は GameRow が持つ。
+                # 未記録の試合は 0-0 でも引分ではないので、勝者も付けない
+                winner_team_id=(
+                    winning_team_id(row.home_team_id, row.away_team_id, row.home_score, row.away_score)
+                    if row.recorded  # type: ignore[attr-defined]  # annotate(recorded) で足した属性
+                    else None
+                ),
+                is_recorded=row.recorded,  # type: ignore[attr-defined]  # annotate(recorded) で足した属性
             )
             for row in rows
         ]
@@ -188,12 +219,17 @@ class DjangoGameListQuery:
         要らない。リポジトリの find_all() は集約として明細まで揃えるため、
         順位表のためだけに呼ぶと件数ぶん無駄になる（3480試合で3.5秒かかった）。
         戻り値は成績を持たない Game なので、順位・勝敗の集計にだけ使う。
+
+        **未記録の試合も返す**（直近の試合の表示に要る）。ただし明細を読まないので
+        `Game.is_recorded` は自力で判定できない。記録済みかどうかは SQL で調べて
+        `recorded_hint` に持たせる。順位・勝敗の集計はドメインサービスが未記録を数えない。
         """
-        rows = orm_models.Game.objects.all()
+        rows = _with_recorded(orm_models.Game.objects.all())
         if year is not None:
             rows = rows.filter(year=year)
         return [
             Game(
+                recorded_hint=row.recorded,  # type: ignore[attr-defined]  # annotate(recorded) で足した属性
                 id=row.id,
                 season=Season(row.year),
                 played_on=row.played_on,
@@ -213,9 +249,10 @@ class DjangoGameListQuery:
         """チームid → 試合数。規定打席・規定投球回の基準になる。
 
         数えるだけなので試合を1件も組み立てない。ホームとビジターで別に数えて
-        足す（1試合は両チームの1試合として数える）。
+        足す（1試合は両チームの1試合として数える）。未記録の試合は数えない
+        （規定打席・規定投球回は、実際に行われた試合の数で決まる）。
         """
-        rows = orm_models.Game.objects.all()
+        rows = orm_models.Game.objects.filter(recorded_games_filter())
         if year is not None:
             rows = rows.filter(year=year)
 

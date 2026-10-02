@@ -16,8 +16,9 @@ from myapp.domain.value_objects import (
 HOME, AWAY = 1, 2
 
 
-def _game(home_score, away_score, day=1, season=2026, home=HOME, away=AWAY) -> Game:
-    return Game(
+def _game(home_score, away_score, day=1, season=2026, home=HOME, away=AWAY, *, recorded=True) -> Game:
+    """試合を作る。既定は記録済み（集計に数えられる）。未記録を試すときは recorded=False。"""
+    game = Game(
         season=Season(season),
         played_on=date(season, 4, day),
         home_team_id=home,
@@ -25,6 +26,10 @@ def _game(home_score, away_score, day=1, season=2026, home=HOME, away=AWAY) -> G
         home_score=home_score,
         away_score=away_score,
     )
+    if recorded:
+        # 明細が1行でもあれば記録済み（中身は問わない）
+        game.record_batting(0, BattingLine(), team_id=home)
+    return game
 
 
 class GameRuleTest(TestCase):
@@ -68,7 +73,7 @@ class GameRuleTest(TestCase):
             game.result_for(999)
 
     def test_recording_the_same_player_twice_overwrites(self):
-        game = _game(5, 3)
+        game = _game(5, 3, recorded=False)
         game.record_batting(10, BattingLine(at_bats=4, singles=1), team_id=game.home_team_id)
         game.record_batting(10, BattingLine(at_bats=4, home_runs=2), team_id=game.home_team_id)
 

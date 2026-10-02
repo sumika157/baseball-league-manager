@@ -14,7 +14,7 @@
 <div class="page-head">
   <h1 class="page-title">
     {{ detail.game.away_team_name }}
-    <span class="stat-muted">{{ detail.game.away_score }} - {{ detail.game.home_score }}</span>
+    <span class="stat-muted">{% if detail.game.is_recorded %}{{ detail.game.away_score }} - {{ detail.game.home_score }}{% else %}—{% endif %}</span>
     {{ detail.game.home_team_name }}
   </h1>
   <p class="page-subtitle">
