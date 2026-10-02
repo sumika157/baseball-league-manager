@@ -1,6 +1,6 @@
 ---
 name: issue-plan
-description: 実装に着手する前に、実装計画を GitHub Issue に書く。「〜を実装して」「〜を直して」と頼まれてブランチを切る前、または「計画を Issue にして」「Issue を立てて」と頼まれたときに使う。計画が変わったときの Issue の更新と、PR との紐づけ（Closes #N）も扱う。
+description: 実装に着手する前に、実装計画を GitHub Issue に書く。「〜を実装して」「〜を直して」と頼まれてブランチを切る前、または「計画を Issue にして」「Issue を立てて」と頼まれたときに使う。Issue に紐づけたブランチの切り方（gh issue develop）、計画が変わったときの Issue の更新、PR と Issue のリンクとその確認も扱う。
 ---
 
 実装計画を GitHub Issue に残すワークフロー。規則の本体は `CLAUDE.md`「ブランチとコミット」。ここには進め方だけを書く。
@@ -9,7 +9,7 @@ description: 実装に着手する前に、実装計画を GitHub Issue に書�
 
 - **ブランチを切って PR を出す作業は、着手前に Issue を立てる。**
 - 省いてよいのは、1行で説明しきれる変更だけ（誤字・文言修正・依存の更新など）。迷ったら立てる。
-- ユーザーが既存の Issue を指して頼んだ場合は新しく立てない。その Issue の計画を読み、足りなければ本文を補う（手順4）。
+- ユーザーが既存の Issue を指して頼んだ場合は新しく立てない。その Issue の計画を読み、足りなければ本文を補う（手順5）。
 
 ## 1. 重複を確かめる
 
@@ -76,7 +76,30 @@ $gh = "C:\Users\sumik\AppData\Local\Microsoft\WinGet\Packages\GitHub.cli_Microso
 - **「確認したいこと」がある場合はここで止めて回答を待つ。** 回答を受けたら本文に反映してから着手する
   （`CLAUDE.md` の「選択肢としてユーザーに提示する」判断はここで出す）。無ければそのまま実装に進んでよい。
 
-## 4. 実装中に計画が変わったら
+## 4. Issue に紐づけてブランチを切る
+
+**ブランチは `git branch` / `git worktree add -b` で作らず、`gh issue develop` で作る。** Issue に紐づいたブランチ
+（Issue の「Development」欄に載る）になり、そこから出した PR は自動で Issue とリンクする（GitHub Docs「Creating a branch for an issue」）。
+本文の `Closes #N` は、base が main でない PR（epic のタスク）では無視され、リンクもしない（GitHub Docs「Linking a pull request to an issue」）。
+ただし、Issue に紐づけたブランチから出した PR の base が main でない場合もリンクするのかは、ドキュメントに書かれておらず未検証。手順6で確かめる。
+
+```powershell
+& $gh issue develop <番号> --name <ブランチ> --base <基点>   # 基点は main か epic/<機能>
+```
+
+- このコマンドはリモートにブランチを作るだけ。手元へは取ってきて worktree にする（Bash から）:
+  ```bash
+  git fetch origin <ブランチ>
+  git worktree add -b <ブランチ> .claude/worktrees/<名前> origin/<ブランチ>
+  ```
+  worktree が要らない場合は `git switch <ブランチ>` でよい。safe.directory の登録など worktree の後始末まで含めた手順は `CLAUDE.md` に従う。
+- epic は、統合ブランチ `epic/<機能>` も各タスクブランチも、同じ epic の Issue に紐づける（`--base main` で統合ブランチ、
+  `--base epic/<機能>` でタスクブランチ）。1つの Issue に複数のブランチを紐づけられる。
+- 紐づいたかは `& $gh issue develop --list <番号>` で確かめる。
+- **既にブランチを切ってしまった場合**: `gh` からは既存のブランチを後から紐づけられない。PR の base が main なら本文の `Closes #N` でリンクするので
+  そのまま進めてよい。base が epic なら、push 前に `gh issue develop` で作り直したブランチへ cherry-pick して移す。
+
+## 5. 実装中に計画が変わったら
 
 - Issue 本文を書き直す（本文が常に最新の計画であるようにする）:
   `& $gh issue edit <番号> --body-file "<パス>"`
@@ -84,11 +107,28 @@ $gh = "C:\Users\sumik\AppData\Local\Microsoft\WinGet\Packages\GitHub.cli_Microso
   `& $gh issue comment <番号> --body-file "<パス>"`
 - 手順のチェックボックスは、PR を出すときに本文を直して埋める（epic では段階のタスク PR を出すたび）。
 
-## 5. PR と紐づける
+## 6. PR を Issue とリンクさせる
 
-- タスクの PR 本文の先頭に `Closes #<番号>` を書く（マージ時に Issue が自動で閉じる）。
-- epic のタスク PR（base が `epic/…`）は `Closes` ではなく `Refs #<番号>` にする。base が main でないと自動では閉じないうえ、
-  epic が終わる前に閉じてしまうと計画を追えなくなる。epic を main へ入れる PR で `Closes #<番号>` にする。
+**PR は必ず Issue とリンクさせる。** 手順4のブランチから出していれば自動でリンクする（epic のタスク PR では未検証。下で確かめる）。
+加えて本文の先頭に書く:
+
+- base が main の PR: `Closes #<番号>`（マージ時に Issue が自動で閉じる。epic を main へ入れる PR もこれ）
+- epic のタスク PR（base が `epic/…`）: `Refs #<番号>`。`Closes` を書いても base が main でないので Issue は閉じず、
+  キーワードだけではリンクもしない。リンクはブランチの紐づけで行う。
+
+**作ったら確かめる**（リンクしていなくてもエラーにならない）:
+
+```powershell
+& $gh pr view <PR番号> --json closingIssuesReferences --jq '[.closingIssuesReferences[].number]'   # base が main: Issue 番号が出る
+& $gh issue develop --list <Issue番号>                                                            # ブランチが Issue に紐づいているか
+```
+
+- base が main の PR は、1行目に Issue 番号が出ればよい。出なければ本文のキーワードの綴り（`Closes #N`）を見直し、
+  `& $gh pr edit <PR番号> --body-file "<パス>"` で本文を直す。
+- epic のタスク PR は、2行目でブランチの紐づけを確かめたうえで、**Issue のページの「Development」欄に PR が載っているかを
+  ユーザーに見てもらう**（コマンドで確かめる方法を確立していない）。載っていなければ、Issue のページのサイドバーから
+  PR を手で紐づけてもらう。最初の epic タスク PR で結果が分かったら、このスキルの「未検証」の記述を直す。
+
 - セルフレビューの「読み手」観点で、PR の差分が Issue の計画と合っているか（やらないと書いたことをやっていないか、手順の漏れ）を確かめる。
-  ずれていたら手順4で Issue 側を直すか、実装を計画に合わせる。
+  ずれていたら手順5で Issue 側を直すか、実装を計画に合わせる。
 - Issue を手で閉じない。マージはユーザーが行い、そのとき閉じる。

@@ -85,7 +85,10 @@ ORM に直接 `bulk_create` 等で書き込むコード（データ投入コマ�
   後から「何をやると決めて着手したか」「どこで変えたか」を追えないため。
   - 計画にユーザーへの選択肢が含まれるときは、Issue を出して URL を提示したところで止め、回答を待ってから着手する。
   - 実装中に計画が変わったら Issue 本文を最新に直し、変えた理由をコメントに残す。
-  - PR 本文に `Closes #<番号>` を書く（epic のタスク PR は `Refs #<番号>`。epic を main へ入れる PR で `Closes`）。
+  - **PR は必ず Issue とリンクさせる。** ブランチは `gh issue develop <番号> --name <ブランチ> --base <基点>` で
+    Issue に紐づけて作る（base が main でない epic のタスク PR は、本文のキーワードだけではリンクしないため）。
+    本文には base が main なら `Closes #<番号>`、epic のタスク PR なら `Refs #<番号>` を書く。
+    PR を作ったらリンクしたかを確かめる（しなくてもエラーにならない。確かめ方は `issue-plan` スキル）。
   - epic は Issue を1本だけ立て、段階ごとのタスクはその手順チェックリストで追う（タスクごとに Issue を立てない）。
     詳細設計と段階ごとの実測値は従来どおり `docs/design/` に置き、Issue からはリンクするだけにする（同じ内容を両方に書かない）。
 - **タスクごとにブランチを切る。main に直接コミットしない。** 命名は `feature/` `fix/` `refactor/` `docs/` ＋ 英語の kebab-case（例: `feature/player-nationality`）。
@@ -132,7 +135,8 @@ push の前に、**「レビュー → 改善」を3周繰り返す**。1周は�
 防げないので、作業ツリーごと分ける。
 
 - 次のいずれかに当てはまるなら worktree にする: ユーザーが並行作業だと言った / `git worktree list` に他の worktree がある / 未コミットの変更が自分のタスクと無関係。
-- 作成は `git worktree add -b <ブランチ> .claude/worktrees/<名前> origin/main`（`.claude/worktrees/` は gitignore 済み）。
+- 作成は、`gh issue develop` でリモートに作ったブランチを取ってきて
+  `git fetch origin <ブランチ>` → `git worktree add -b <ブランチ> .claude/worktrees/<名前> origin/<ブランチ>`（`.claude/worktrees/` は gitignore 済み）。
   **`EnterWorktree` ツールはこの構成では使えない**（U: 形式のパスは「メインの作業ツリー」と誤認され、
   UNC 形式は「UNC network path」として拒否される）。作った worktree に**セッションごと移ることはできない**ので、
   cwd は main の作業ツリーに置いたまま、Read / Write / Bash に worktree の絶対パスを明示して作業する。
@@ -179,8 +183,9 @@ push の前に、**「レビュー → 改善」を3周繰り返す**。1周は�
   タスク名は統合ブランチ名の接頭辞にせず、独立した短い名前にする（`feature/pa-persistence` など）。
 - **タスクの PR は base を統合ブランチにする。** `gh pr create --base epic/<機能>` を忘れると
   main が base になり、前の段階の差分まで含んだ PR ができる。
-- **worktree は origin/main を基点に作られる**ので、統合ブランチの上に乗せるには自分で作る:
-  `git worktree add -b <タスク> .claude/worktrees/<名前> epic/<機能>`
+- **タスクブランチは統合ブランチを基点に作る**: `gh issue develop <epic の Issue> --name <タスク> --base epic/<機能>` →
+  `git fetch origin <タスク>` → `git worktree add -b <タスク> .claude/worktrees/<名前> origin/<タスク>`
+  （統合ブランチ自体も `--base main` で同じ Issue に紐づけて作る）。
 - **統合ブランチは長生きするので、段階の区切りごとに main を取り込む**（`git merge origin/main`）。
   放っておくと最後に大きく衝突する。並行して別のタスクが main にマージされていく前提で動く。
 - 設計は `docs/design/<機能>.md` に置き、**段階ごとに実測値と決定を追記する**（次のセッションへの引き継ぎになる）。
