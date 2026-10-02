@@ -39,14 +39,18 @@ class GameRow:
     home_score: int
     away_score: int
     winner_team_id: int | None
+    # 未記録（打席も明細も無い）の試合は 0-0 でも引分ではない。判定の出典は `Game.is_recorded`
+    is_recorded: bool = True
 
     @property
     def result(self) -> str:
-        """'引分' または '<チーム名> の勝ち'。
+        """'未記録'・'引分'・'<チーム名> の勝ち' のいずれか。
 
         持っている値から決まるので、作る側ごとに組み立てない
         （勝者そのものはドメインの winning_team_id が唯一の出典）。
         """
+        if not self.is_recorded:
+            return "未記録"
         if self.winner_team_id is None:
             return "引分"
         name = self.home_team_name if self.winner_team_id == self.home_team_id else self.away_team_name

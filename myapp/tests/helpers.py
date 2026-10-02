@@ -185,11 +185,16 @@ def play_game(
     day=1,
     batting=None,
     pitching=None,
+    recorded=True,
 ) -> Game:
     """試合を1件作って保存する。
 
     batting / pitching は {選手id: ライン} の辞書。
     月別成績のように試合日をずらしたい場合は month も指定する。
+
+    **既定は記録済みの試合**。明細を渡さないときは、どのロスターにも属さない選手の
+    空の打撃行を1つ足す（明細が1行でもあれば記録済み。順位・勝敗・試合数に数えられる）。
+    登録しただけの未記録の試合を作るときは recorded=False。
     """
     game = Game(
         season=Season(year),
@@ -203,6 +208,9 @@ def play_game(
         game.record_batting(player_id, line, team_id=_team_of(player_id, home_team, away_team))
     for player_id, line in (pitching or {}).items():
         game.record_pitching(player_id, line)
+    if recorded and not game.is_recorded:
+        placeholder = orm_models.Player.objects.create(name="記録用ダミー")
+        game.record_batting(placeholder.id, BattingLine(), team_id=home_team.id)
 
     return DjangoGameRepository().save(game)
 

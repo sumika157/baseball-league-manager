@@ -22,7 +22,7 @@ class ScorebookApiTest(BaseCase):
     def setUp(self):
         super().setUp()
         login_as_manager(self.client, self.team, self.rival)
-        self.game = play_game(self.team, self.rival, home_score=0, away_score=0)
+        self.game = play_game(self.team, self.rival, home_score=0, away_score=0, recorded=False)
         self.home_pitcher = self._register(self.team, "ホーム先発", 11, "投手")
         self.away_pitcher = self._register(self.rival, "ビジター先発", 12, "投手")
         self.away_batters = [self._register(self.rival, f"ビジター{i}", 20 + i, "内野手") for i in range(1, 6)]
@@ -291,16 +291,19 @@ class ScorebookApiTest(BaseCase):
         self.assertEqual(saved.batting[0].line.at_bats, 4)
         self.assertEqual(len(saved.pitching), 1)
 
-    def test_a_legacy_game_with_only_a_score_is_not_overwritten_either(self):
-        legacy = play_game(self.team, self.rival, home_score=4, away_score=2, day=3)
+    def test_a_game_with_only_a_score_is_unrecorded_and_can_be_saved_empty(self):
+        """得点だけの試合は未記録（集計に数えない）なので、空で保存するのを弾かない。
+
+        保護と集計で「記録済み」の判定が食い違わないよう、どちらも `Game.is_recorded` を使う。
+        """
+        score_only = play_game(self.team, self.rival, home_score=4, away_score=2, day=3, recorded=False)
+        self.assertFalse(DjangoGameRepository().find_by_id(score_only.id).is_recorded)
 
         response = post_game_scorebook(
-            self.client, legacy.id, self._payload(lineup=[], plate_appearances=[], played_on="2026-04-03")
+            self.client, score_only.id, self._payload(lineup=[], plate_appearances=[], played_on="2026-04-03")
         )
 
-        self.assertEqual(response.status_code, 400)
-        saved = DjangoGameRepository().find_by_id(legacy.id)
-        self.assertEqual((saved.home_score, saved.away_score), (4, 2))
+        self.assertEqual(response.status_code, 200, response.content)
 
     def test_a_new_game_without_lines_can_be_saved_empty(self):
         """打席も明細も無い試合を空で保存するのは従来どおり通る。"""

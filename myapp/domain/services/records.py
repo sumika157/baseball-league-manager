@@ -27,15 +27,25 @@ class StandingRow:
         return self.rank == 1
 
 
+def recorded_games(games: list[Game]) -> list[Game]:
+    """記録済みの試合だけ。勝敗・順位・対戦成績・月別成績は未記録の試合を数えない。
+
+    未記録の試合（登録しただけ）は 0-0 で入っているが、引分ではない。
+    判定は `Game.is_recorded` が唯一の出典。
+    """
+    return [game for game in games if game.is_recorded]
+
+
 def team_record(games: list[Game], team_id: int) -> TeamRecord:
     """試合の一覧からチームの勝敗を集計する。
 
     勝敗は試合が唯一の出典であり、手入力の値は持たない。
-    渡す games は対象シーズンに絞り込んだものを想定する。
+    渡す games は対象シーズンに絞り込んだものを想定する。未記録の試合は数えない。
     """
     wins = losses = ties = 0
     for game in games:
-        if not game.involves(team_id):
+        # 自分の試合だけ判定する（全試合に is_recorded を呼ぶと、チーム数ぶん無駄に回る）
+        if not game.involves(team_id) or not game.is_recorded:
             continue
         result = game.result_for(team_id)
         if result == "win":
@@ -96,8 +106,8 @@ def fip_constant(league_pitching: PitchingLine) -> float:
 
 
 def seasons_of(games: list[Game]) -> list[Season]:
-    """試合が登録されているシーズンを新しい順に返す。"""
-    return sorted({game.season for game in games}, key=lambda s: s.year, reverse=True)
+    """記録済みの試合があるシーズンを新しい順に返す（順位表の年の選択肢になる）。"""
+    return sorted({game.season for game in recorded_games(games)}, key=lambda s: s.year, reverse=True)
 
 
 def standings(teams: list[Team], games: list[Game]) -> list[StandingRow]:
@@ -106,13 +116,15 @@ def standings(teams: list[Team], games: list[Game]) -> list[StandingRow]:
     順位は勝率の高い順で決まる。勝率が同じなら同順位として扱う。
     そのシーズンに1試合も無いチームは順位表に載せない
     （0勝0敗として並べると、未実施なのか全敗なのか区別できなくなる）。
+    未記録の試合は1試合として数えない。
     """
+    played = recorded_games(games)
     entries = []
     for team in teams:
         # 未保存（id が無い）のチームは試合を持てないので載らない
-        if team.id is None or not any(g.involves(team.id) for g in games):
+        if team.id is None or not any(g.involves(team.id) for g in played):
             continue
-        entries.append((team.id, team.name, team_record(games, team.id)))
+        entries.append((team.id, team.name, team_record(played, team.id)))
 
     entries.sort(key=lambda e: (-e[2].winning_percentage, -e[2].wins, e[1]))
 
@@ -258,7 +270,7 @@ def team_monthly_splits(games: list[Game], team_id: int, member_ids: set[int]) -
     試合のあった月だけを返す（選手の月別成績と同じ規則）。
     """
     buckets: dict[tuple[int, int], list[Game]] = {}
-    for game in games:
+    for game in recorded_games(games):
         if not game.involves(team_id):
             continue
         key = (game.played_on.year, game.played_on.month)

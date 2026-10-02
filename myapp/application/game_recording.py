@@ -96,14 +96,15 @@ class GameRecordingService:
         - 打席の無い古い試合（明細と得点だけが保存されている）: 打席から導き直せないので、
           空の打席で上書きすると明細も得点も0に置き換わって元に戻せない。
 
-        打席も明細も無い新しい試合を空で保存するのは通す。
+        未記録の試合（`Game.is_recorded` が偽。打席も明細も無い）を空で保存するのは通す。
+        記録済みかどうかの判定は `Game.is_recorded` だけを使い、ここで別の条件を書かない
+        （得点だけが入った試合は未記録として集計から外れるので、ここでも未記録として扱う）。
         """
         if plate_appearances:
             return
         if current.plate_appearances:
             raise InvalidGame("打席がすべて取り除かれています。記録を全部消す場合は、試合ごと削除してください。")
-        recorded = current.batting or current.pitching or current.home_score or current.away_score
-        if recorded:
+        if current.is_recorded:
             raise InvalidGame(
                 "この試合は打席の記録がない古い形式で保存されています。"
                 "打席を1つ以上入力してから保存してください（空のまま保存すると成績が消えます）。"

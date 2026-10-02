@@ -102,7 +102,7 @@
                 <a href="{% url 'game_detail' game.id %}">
                   <span class="tile-list-main">
                     <span class="tile-list-title">
-                      {{ game.home_team_name }} {{ game.home_score }} - {{ game.away_score }} {{ game.away_team_name }}
+                      {{ game.home_team_name }} {% if game.is_recorded %}{{ game.home_score }} - {{ game.away_score }}{% else %}—{% endif %} {{ game.away_team_name }}
                     </span>
                     <span class="tile-list-sub">{{ game.played_on|date:"Y/m/d" }} · {{ game.result }}</span>
                   </span>

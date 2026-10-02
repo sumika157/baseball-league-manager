@@ -737,6 +737,10 @@ class Game:
     # （区別しないと、省いて読んだ集約を保存したときに記録済みの打席が全部消える）。
     # 記録は打席入力の画面だけが書き換えるので、省いて読んだ集約の保存は打席に触れない。
     plate_appearances_loaded: bool = True
+    # 記録済みかを外から教える値。明細を読まずに作った集約（順位表用の一覧）は、
+    # 明細が空でも「未記録」とは限らない。その場合に限り、参照クエリが答えを持ち込む。
+    # None なら `is_recorded` が明細から判定する
+    recorded_hint: bool | None = None
 
     def __post_init__(self) -> None:
         if self.home_team_id == self.away_team_id:
@@ -751,6 +755,22 @@ class Game:
 
     def __str__(self) -> str:
         return f"{self.played_on} {self.home_score}-{self.away_score}"
+
+    @property
+    def is_recorded(self) -> bool:
+        """記録済みの試合か。**未記録かどうかの唯一の出典。**
+
+        未記録とは、打席も打撃・投球の明細も無い試合（登録しただけで、スコアブックを
+        まだ保存していない）。得点は0-0で入っているが、0-0で終わった試合ではなく
+        「まだ何も分かっていない」ので、勝敗・引分・試合数・順位に数えない。
+
+        打席の記録を持たない古い試合（明細だけがある）は記録済みとして数える。
+        参照クエリは SQL で同じ意味の条件を書く
+        （`infrastructure/queries.py` の `recorded_games_filter`。突き合わせるテストがある）。
+        """
+        if self.recorded_hint is not None:
+            return self.recorded_hint
+        return bool(self.plate_appearances or self.batting or self.pitching)
 
     @property
     def is_tie(self) -> bool:
