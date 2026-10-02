@@ -83,3 +83,11 @@ class InvalidCaptaincy(DomainError):
 
 class ForeignPlayerQuotaExceeded(DomainError):
     """外国人選手の人数が上限を超えている（登録枠・試合出場枠のどちらにも使う）。"""
+
+
+class InvalidRatings(DomainError):
+    """能力値として許されない値（1〜100 の整数でない、など）。"""
+
+
+class InvalidRoster(DomainError):
+    """シミュレーションを行えないロスター（打順を組める野手がいない、投手がいない、など）。"""

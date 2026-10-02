@@ -212,7 +212,16 @@ docker compose exec web python manage.py measure_pages
 
 # 既存の試合に守備成績（打席から導く）を付ける・導き直す（migrate の後に流す）
 docker compose exec web python manage.py rebuild_fielding_lines
+
+# 試合シミュレーションエンジン（ペナントモードの土台）を回して水準を確かめる（DB には書かない）
+docker compose exec web python manage.py simulate_sample --games 2000 --seed 1
+docker compose exec web python manage.py simulate_sample --season --seed 1
 ```
+
+`simulate_sample` は `myapp/domain/simulation/` の確認と調整の道具です。能力50の2球団で N 試合を回して
+1試合ぶんのボックススコアを文字で出し、水準の表を NPB の目標帯と並べて出します。`--season` は能力を
+散らした12球団で1シーズン（858試合）を回し、首位打者・本塁打王などのタイトルの水準も出します。
+同じ `--seed` なら同じ結果になります。`seed_virtual_games` はまだこのエンジンを使っていません。
 
 #### 打席の記録ができる前のデータがあるとき（main に入れた後の手順）
 
@@ -451,6 +460,7 @@ presentation  →  application  →  domain  ←  infrastructure
 | `value_objects.py` | `Position` `JerseyNumber` `InningsPitched` `BattingLine` `PitchingLine` `Season` `TeamRecord` |
 | `entities.py` | `Team`・`Game`（いずれも集約ルート）・`Player`・`League` |
 | `services/` | ドメインサービス。関心事ごとに `rankings`（規定とタイトル）・`sorting`（並べ替え）・`records`（試合からの集計）・`decisions`（勝敗・S・Hの導出）に分かれる |
+| `simulation/` | 試合シミュレーション（ペナントモードの土台）。能力値・基準値（NPB の水準）・odds ratio 法の確率・進塁・AI 監督・エンジン・水準の集計。Django にも numpy にも依存しない |
 | `repositories.py` | 永続化のインターフェース（実装は infrastructure） |
 | `exceptions.py` | `DomainError` とその派生 |
 
