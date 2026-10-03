@@ -113,6 +113,11 @@ ORM に直接 `bulk_create` 等で書き込むコード（データ投入コマ�
     sub-issue には段階ごとの実装計画を書く。統合ブランチは親に、タスクブランチは段階の sub-issue に紐づけて切る。
     詳細設計と段階ごとの実測値は従来どおり `docs/design/` に置き、Issue からはリンクするだけにする（同じ内容を両方に書かない）。
   - 初期範囲から外した拡張は epic の親の子にせず、別の親 Issue にまとめる（前例: #55）。epic の親が閉じた後も未完了の子が残るため。
+  - **Issue の状態は GitHub Projects（[Baseball League Manager](https://github.com/users/sumika157/projects/2)）で追う。**
+    Issue の作成（未着手）とクローズ（完了）は Project の組み込みワークフローが動かすが、**作業中とレビュー待ちは自動では動かない**ので、
+    ブランチを切ったら「作業中」、PR を作ったら「レビュー待ち」にする（コマンドと ID は `issue-plan` スキルの手順4）。
+    載せるのは Issue だけで PR は載せない（同じ作業のカードが2枚になるため）。epic ごとの表示は親 Issue（sub-issue）でまとめる。
+    **Project は状態だけを持つ。** 何を・なぜ・どの順でやるかは `docs/ROADMAP.md` と Issue に書き、Project に独自の項目を足さない（同じ内容を両方に書かない）。
 - **タスクごとにブランチを切る。main に直接コミットしない。** 命名は `feature/` `fix/` `refactor/` `docs/` ＋ 英語の kebab-case（例: `feature/player-nationality`）。
 - **機能ごとにコミットする。** 複数の機能や無関係な修正を1つのコミットに混ぜない。逆に、1つの機能（実装＋テスト＋ドキュメント更新）は1コミットにまとめる。
 - コミットメッセージは既存の履歴にならい日本語で書く。

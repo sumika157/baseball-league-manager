@@ -82,6 +82,10 @@ Closes #<Issue番号>          ← base が epic なら Refs #<段階の sub-iss
 
 タイトルはコミットの1行目と同じ調子（「〜した」）。
 
+PR を作ったら、Issue（epic のタスクなら段階の sub-issue）を Project で「レビュー待ち」（選択肢の ID `2d63e9ec`）にする。
+コマンドと ID は `issue-plan` の手順4「Project の状態を『作業中』にする」と同じで、選択肢の ID だけを替える。
+マージされて Issue が閉じれば、組み込みのワークフローが「完了」に動かす（epic の段階の sub-issue は手順5で閉じたときに動く）。
+
 ## 4. リンクを確かめる
 
 ```powershell
