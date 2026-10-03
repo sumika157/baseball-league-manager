@@ -26,7 +26,7 @@ $gh = "C:\Users\sumik\AppData\Local\Microsoft\WinGet\Packages\GitHub.cli_Microso
 | --- | --- |
 | 正しさ | 差分を読む。コードの変更なら `/code-review` を使ってよい |
 | 規則 | `CLAUDE.md` と、触ったファイルに効く `.claude/rules/`。domain・集約・リポジトリ・クエリに触れたら `ddd-boundary-reviewer` エージェント |
-| 読み手 | Issue の計画（`& $gh issue view <番号>`）・コミットメッセージ・README・PR 本文の下書き。デバッグ出力・一時ファイル・無関係な変更の混入 |
+| 読み手 | Issue の計画（`& $gh issue view <番号>`）・コミットメッセージ・README・`docs/wiki/`・PR 本文の下書き。デバッグ出力・一時ファイル・無関係な変更の混入 |
 
 - 直しは `git commit --amend` で機能のコミットに含める（push 前なので書き換えてよい）。
 - 周の途中でコードを直したら、その周の終わりに lint とテストを通し直す（worktree なら `worktree` スキルの手順2。`-w` を忘れない）。

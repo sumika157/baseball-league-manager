@@ -36,6 +36,6 @@ model: sonnet
 ## 4. 仕上げ
 
 - 集約・層境界・不変条件に触れた変更は `ddd-boundary-reviewer` エージェントでレビューし、指摘があれば `fix-review` スキルで直す。
-- README の該当節を更新する。docs/design/ のドキュメントが完了したら README へ吸収して削除する。
+- `docs/wiki/` の該当ページを更新する。docs/design/ のドキュメントが完了したら `docs/wiki/` へ吸収して削除する。
 - 機能ごとに1コミット・日本語メッセージで、Issue に紐づけたブランチにコミットする（main に直接コミットしない）。
   終わったら `open-pr` スキルで3周セルフレビューを済ませて PR を出す。

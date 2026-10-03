@@ -59,7 +59,7 @@ $gh = "C:\Users\sumik\AppData\Local\Microsoft\WinGet\Packages\GitHub.cli_Microso
 
 ## ドキュメント更新
 
-（README のどの節を直すか。無ければ「なし」と理由）
+（`docs/wiki/` のどのページ・README のどの節を直すか。無ければ「なし」と理由）
 
 ## 確認したいこと
 
