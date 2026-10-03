@@ -1,0 +1,36 @@
+{% comment %}
+世界の表（一覧の「あなたの世界」「ほかの人の世界」で共通）。rows（PennantWorldListRow）を渡す。
+オーナーは出さない（一覧は誰にでも見せる）。
+{% endcomment %}
+<div class="table-responsive">
+  <table class="table table-hover">
+    <thead>
+      <tr>
+        <th>世界</th>
+        <th>自軍</th>
+        <th>年度・状態</th>
+        <th class="text-end">順位</th>
+        <th class="text-end">勝-敗-分</th>
+        <th class="text-end">ゲーム差</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+        <tr>
+          <td><a href="{% url 'pennant_world' row.context.world_id %}" class="player-name">{{ row.context.name }}</a></td>
+          <td>{% if row.context.managed_team_name %}{{ row.context.managed_team_name }}{% else %}<span class="stat-muted">—</span>{% endif %}</td>
+          <td class="stat-muted">{{ row.season_year }}年 · {{ row.context.phase.value }}</td>
+          {% if row.own_standing %}
+            <td class="text-end stat-key">{{ row.own_standing.rank }}位</td>
+            <td class="text-end">{{ row.own_standing.wins }}-{{ row.own_standing.losses }}-{{ row.own_standing.ties }}</td>
+            <td class="text-end stat-muted">{{ row.own_standing.games_behind }}</td>
+          {% else %}
+            <td class="text-end stat-muted">—</td>
+            <td class="text-end stat-muted">—</td>
+            <td class="text-end stat-muted">—</td>
+          {% endif %}
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

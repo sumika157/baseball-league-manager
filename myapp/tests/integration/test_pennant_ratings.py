@@ -340,6 +340,8 @@ class ForkedRatingsTest(BaseCase):
             real_fielding=DjangoFieldingTotalsQuery(REAL),
             worlds=DjangoWorldRepository(),
             repositories_for=factory,
+            atomic=transaction.atomic,
+            ensure_schedule=lambda world_id: False,
         )
         worlds_before = orm_models.PennantWorld.objects.count()
 

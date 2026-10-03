@@ -4,8 +4,9 @@
 成績の計算も背番号の重複判定もここには無い（ドメイン層にある）。
 """
 
+import secrets
 from collections.abc import Callable
-from datetime import date
+from datetime import date, timedelta
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -22,12 +23,14 @@ from django.views.generic import CreateView
 
 from ..application.dto import GameEditData, GameEditPlateAppearance, WorldContext
 from ..application.game_recording import GameRecordingService
+from ..application.pennant_home import PennantHomeService
 from ..application.pennant_season import PennantSeasonService
 from ..application.pennant_view import PennantWorldViewService
 from ..application.pennant_world import PennantWorldService, WorldRepositories
 from ..application.queries import SimulationContextQuery
 from ..application.services import TeamApplicationService
 from ..domain.exceptions import (
+    AlreadyAdvanced,
     DomainError,
     GameNotFound,
     InvalidWorld,
@@ -36,7 +39,8 @@ from ..domain.exceptions import (
     TeamNotFound,
     WorldNotFound,
 )
-from ..domain.pennant.season import world_today
+from ..domain.pennant.schedule import AdvanceTarget
+from ..domain.pennant.season import MAX_GAMES_PER_ADVANCE, SCREEN_ADVANCE_TARGETS, world_today
 from ..domain.pennant.world import WorldScope
 from ..domain.value_objects import (
     AdvanceReason,
@@ -49,6 +53,7 @@ from ..domain.value_objects import (
 from ..infrastructure.queries import (
     DjangoFieldingTotalsQuery,
     DjangoGameListQuery,
+    DjangoPennantActivityQuery,
     DjangoPlayerFieldingQuery,
     DjangoPlayerSearchQuery,
     DjangoPlayerStatsQuery,
@@ -69,6 +74,7 @@ from .forms import (
     FIELDED_BY_SEPARATOR,
     MAX_INNINGS,
     GameForm,
+    PennantWorldForm,
     PlayerRegistrationForm,
     PlayerUpdateForm,
 )
@@ -213,6 +219,8 @@ def build_pennant_world_service() -> PennantWorldService:
         real_fielding=DjangoFieldingTotalsQuery(scope),
         worlds=DjangoWorldRepository(),
         repositories_for=_repositories_for,
+        atomic=transaction.atomic,
+        ensure_schedule=lambda world_id: build_pennant_season_service(world_id).ensure_schedule(),
     )
 
 
@@ -237,6 +245,50 @@ def build_pennant_season_service(world_id: int) -> PennantSeasonService:
     )
 
 
+def build_pennant_home_service(world_id: int) -> PennantHomeService:
+    """GM ホームの材料を作るサービスを組み立てる。
+
+    順位・主力・タイトルは世界の範囲の `TeamApplicationService`（`build_world_view_service`）に任せ、
+    試合の一覧・日程・期間の見どころの参照は、すべて渡された世界の範囲で作る。
+    世界の id が正しくなければ InvalidWorld。
+    """
+    scope = WorldScope.pennant(world_id)
+    return PennantHomeService(
+        teams=build_world_view_service(world_id),
+        games=DjangoGameListQuery(scope),
+        game_records=DjangoGameRepository(scope),
+        fixtures=DjangoFixtureRepository(scope),
+        worlds=DjangoWorldRepository(),
+        activity=DjangoPennantActivityQuery(scope),
+    )
+
+
+def _world_context(world_id: int) -> WorldContext:
+    """世界の見出し。存在しない・id が正しくない世界は 404。"""
+    try:
+        return build_pennant_world_view().get_context(world_id)
+    except (WorldNotFound, InvalidWorld):
+        raise Http404("世界が見つかりません。") from None
+
+
+def _is_owner(request, world: WorldContext) -> bool:
+    """ログインしている人が、その世界のオーナーか。書き込みの導線を出す・操作を通すかの判定に使う。"""
+    return request.user.is_authenticated and world.owner_id is not None and world.owner_id == request.user.id
+
+
+def _requires_world_owner(request, world: WorldContext):
+    """世界のオーナーでなければ拒否する。未ログインはログインへ、ほかの人は 403。
+
+    実データの担当者の判定（`_requires_team_permission`）とは別で、管理ユーザーでも世界のオーナーでなければ通さない
+    （世界は遊ぶ人のセーブデータで、管理ユーザーの権限は世界に及ばない）。
+    """
+    if not request.user.is_authenticated:
+        return redirect_to_login(request.get_full_path())
+    if not _is_owner(request, world):
+        raise PermissionDenied("この世界のオーナーではありません。")
+    return None
+
+
 def _scope(world_id: int | None) -> tuple[TeamApplicationService, WorldContext | None]:
     """画面が読む範囲。URL に世界の id が無ければ実データ、あればその世界（無ければ 404）。
 
@@ -245,10 +297,7 @@ def _scope(world_id: int | None) -> tuple[TeamApplicationService, WorldContext |
     """
     if world_id is None:
         return build_service(), None
-    try:
-        world = build_pennant_world_view().get_context(world_id)
-    except (WorldNotFound, InvalidWorld):
-        raise Http404("世界が見つかりません。") from None
+    world = _world_context(world_id)
     return build_world_view_service(world_id), world
 
 
@@ -262,15 +311,160 @@ def _render(request, template: str, context: dict, world: WorldContext | None):
     return render(request, template, {**context, "world": world})
 
 
+def _parse_date(value: str | None) -> date | None:
+    """URL の日付。読めなければ None（エラーにしない）。"""
+    try:
+        return date.fromisoformat(value) if value else None
+    except ValueError:
+        return None
+
+
+def _next_season_year() -> int:
+    """世界の開幕年の既定。実データの最新シーズンの翌年（試合が無ければ今年）。"""
+    latest = build_service().latest_game_year()
+    return latest + 1 if latest is not None else date.today().year
+
+
 def pennant_index(request):
-    """ペナントの世界の一覧。読み取り専用で、誰でも開ける。オーナーは出さない。"""
-    return render(request, "pennant/world_list.html", {"rows": build_pennant_world_view().list_rows()})
+    """ペナントの世界の一覧と作成。一覧は誰でも、作成（POST）はログインが必要。
+
+    世界の一覧は「あなたの世界」と「ほかの人の世界」に分け、オーナーの名前は出さない。
+    作成フォームはログインしている人にだけ出す（上限に達していれば理由を出す）。
+    """
+    if request.method not in ("GET", "HEAD", "POST"):
+        return HttpResponseNotAllowed(["GET", "HEAD", "POST"])
+    if request.method == "POST":
+        denied = _requires_login(request)
+        if denied is not None:
+            return denied
+
+    views = build_pennant_world_view()
+    form = None
+    if request.user.is_authenticated:
+        form_args = {"groups": build_service().list_teams_by_league().rows, "default_year": _next_season_year()}
+        form = (
+            PennantWorldForm(request.POST, **form_args) if request.method == "POST" else PennantWorldForm(**form_args)
+        )
+        if request.method == "POST" and form.is_valid():
+            created = _create_world(request, form)
+            if created is not None:
+                return redirect("pennant_world", world_id=created)
+
+    return render(
+        request,
+        "pennant/world_list.html",
+        {"worlds": views.list_worlds(request.user.id if request.user.is_authenticated else None), "form": form},
+    )
+
+
+def _create_world(request, form: PennantWorldForm) -> int | None:
+    """検証済みのフォームから世界を作る。作れたらその id、作れなければ理由を messages に出して None。
+
+    世界の作成と日程の生成は1つのトランザクション（`create_world_with_schedule`）で、失敗したら何も残らない。
+    """
+    data = form.cleaned_data
+    seed = data["seed"]
+    try:
+        created = build_pennant_world_service().create_world_with_schedule(
+            name=data["name"],
+            owner_id=request.user.id,
+            source_league_ids=[int(league) for league in data["leagues"]],
+            start_year=data["start_year"],
+            seed=seed if seed is not None else secrets.randbelow(2**31),
+            managed_source_team_id=int(data["managed_team"]),
+        )
+    except DomainError as error:
+        messages.error(request, str(error))
+        return None
+    messages.success(
+        request, f"世界「{created.world.name}」を作りました（{created.team_count}球団・{created.player_count}選手）。"
+    )
+    return _saved_world_id(created.world.id)
+
+
+def _saved_world_id(world_id: int | None) -> int:
+    assert world_id is not None, "保存した世界には id がある"
+    return world_id
 
 
 def pennant_world(request, world_id):
-    """世界の入口。GM ホームができるまでは、順位表へ案内するだけ。"""
-    _scope(world_id)
-    return redirect("pennant_standings", world_id=world_id)
+    """GM ホーム。自軍の位置・結果のまとめ・進める・次の試合・順位表・主力・タイトル争い。
+
+    読むだけの画面なので誰でも開ける。「進める」と削除の導線はオーナーにだけ出す。
+    `?since=<日付>` は進める前の今日（結果のまとめの起点）。読めない・未来の値はまとめを出さない。
+    """
+    world = _world_context(world_id)
+    is_owner = _is_owner(request, world)
+    league = request.GET.get("league")
+    home = build_pennant_home_service(world_id).get_home(
+        world,
+        since=_parse_date(request.GET.get("since")),
+        league_id=int(league) if league and league.isdigit() else None,
+        include_advance=is_owner,
+    )
+    return _render(request, "pennant/home.html", {"home": home, "is_owner": is_owner}, world)
+
+
+def pennant_advance(request, world_id):
+    """世界を進める。POST だけで、オーナーだけが使える（GET はホームへ戻す）。
+
+    進めたあとは `?since=<進める前の今日>` つきでホームへ戻る（結果は URL に残るので、再読み込みしても消えない）。
+    `expected_today` がずれていたら進めない（二重送信や、別の画面で先に進めたときに、さらに進めてしまわない）。
+    """
+    world = _world_context(world_id)
+    home_url = reverse("pennant_world", args=[world_id])
+    if request.method != "POST":
+        return redirect(home_url)
+    denied = _requires_world_owner(request, world)
+    if denied is not None:
+        return denied
+
+    try:
+        target = AdvanceTarget(request.POST.get("target", ""))
+    except ValueError:
+        target = None
+    if target not in SCREEN_ADVANCE_TARGETS:
+        messages.error(request, "その進め方はできません。")
+        return redirect(home_url)
+
+    # 画面を開いたときの「今日」（まだ試合が無ければ空）。読めない値は、どの今日とも一致しない日付にする
+    sent = request.POST.get("expected_today", "")
+    expected_today = None if sent == "" else (_parse_date(sent) or date.min)
+    try:
+        report = build_pennant_season_service(world_id).advance(
+            target, max_games=MAX_GAMES_PER_ADVANCE, expected_today=expected_today
+        )
+    except AlreadyAdvanced as error:
+        messages.warning(request, str(error))
+        return redirect(home_url)
+    except DomainError as error:
+        messages.error(request, str(error))
+        return redirect(home_url)
+    if not report.games:
+        messages.info(request, "進める試合がありません。")
+        return redirect(home_url)
+
+    # まだ1試合も無かった世界は、最初の試合日の前日を起点にする
+    since = world.today if world.today is not None else report.played_dates[0] - timedelta(days=1)
+    messages.success(request, f"{report.games}試合を進めました。")
+    return redirect(f"{home_url}?since={since.isoformat()}")
+
+
+def pennant_delete(request, world_id):
+    """世界の削除の確認。GET も POST もオーナーだけ。削除したら世界の一覧へ戻る。"""
+    world = _world_context(world_id)
+    if request.method not in ("GET", "HEAD", "POST"):
+        return HttpResponseNotAllowed(["GET", "HEAD", "POST"])
+    denied = _requires_world_owner(request, world)
+    if denied is not None:
+        return denied
+
+    if request.method == "POST":
+        build_pennant_world_service().delete_world(world_id)
+        messages.success(request, f"世界「{world.name}」を削除しました。")
+        return redirect("pennant_index")
+    deletion = build_pennant_home_service(world_id).get_deletion(world)
+    return _render(request, "pennant/world_delete.html", {"deletion": deletion}, world)
 
 
 def dashboard(request):

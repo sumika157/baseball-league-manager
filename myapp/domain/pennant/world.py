@@ -19,6 +19,11 @@ from ..value_objects import Season
 MAX_NAME_LENGTH = 100
 # 乱数のシード。永続化先（64ビット符号つき整数）に収まる範囲
 MAX_SEED = 2**63 - 1
+# 世界の元にできる実データのリーグの数（8リーグ48球団で1シーズン約3,400試合）
+MAX_SOURCE_LEAGUES = 8
+# 1人のオーナーが持てる世界の数。1世界10シーズンで約190万行（8リーグなら約760万行）になるため、
+# 無制限にするとデータベースがオーナー1人に占められる（設計書の判断15）
+MAX_WORLDS_PER_OWNER = 5
 
 
 @dataclass(frozen=True)

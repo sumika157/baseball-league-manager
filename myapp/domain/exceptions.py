@@ -101,5 +101,9 @@ class InvalidRoster(DomainError):
     """シミュレーションを行えないロスター（打順を組める野手がいない、投手がいない、など）。"""
 
 
+class AlreadyAdvanced(DomainError):
+    """画面を開いたときから世界が進んでいる（二重送信や、別の画面で先に進めた場合）。"""
+
+
 class InvalidSchedule(DomainError):
     """日程が組めない（球団数が奇数・リーグが1つ・規則が成立しないなど）、または日程の指定が不正。"""

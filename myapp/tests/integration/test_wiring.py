@@ -16,12 +16,14 @@ from inspect import Parameter, signature
 from django.test import SimpleTestCase
 
 from myapp.application.game_recording import GameRecordingService
+from myapp.application.pennant_home import PennantHomeService
 from myapp.application.pennant_season import PennantSeasonService
 from myapp.application.pennant_view import PennantWorldViewService
 from myapp.application.pennant_world import PennantWorldService
 from myapp.application.queries import (
     FieldingTotalsQuery,
     GameListQuery,
+    PennantActivityQuery,
     SimulationContextQuery,
     TeamListQuery,
     WorldSummaryQuery,
@@ -41,6 +43,7 @@ from myapp.infrastructure import queries, repositories
 from myapp.infrastructure.queries import (
     DjangoFieldingTotalsQuery,
     DjangoGameListQuery,
+    DjangoPennantActivityQuery,
     DjangoSimulationContextQuery,
     DjangoTeamListQuery,
     DjangoWorldSummaryQuery,
@@ -54,6 +57,7 @@ from myapp.infrastructure.repositories import (
     DjangoWorldRepository,
 )
 from myapp.presentation.views import (
+    build_pennant_home_service,
     build_pennant_season_service,
     build_pennant_world_service,
     build_pennant_world_view,
@@ -82,6 +86,7 @@ class ProtocolConformanceTest(SimpleTestCase):
         (DjangoFieldingTotalsQuery(REAL), FieldingTotalsQuery),
         (DjangoTeamListQuery(REAL), TeamListQuery),
         (DjangoGameListQuery(REAL), GameListQuery),
+        (DjangoPennantActivityQuery(REAL), PennantActivityQuery),
         (DjangoWorldSummaryQuery(), WorldSummaryQuery),
     ]
 
@@ -148,6 +153,9 @@ class BuildServiceTest(SimpleTestCase):
     def test_world_view_service_dependencies_are_wired(self):
         """世界の範囲の参照サービスも、実データ用と同じ検査にかける（依存は実データ用と同じ全部）。"""
         self._assert_wired(build_world_view_service(7), TeamApplicationService)
+
+    def test_pennant_home_service_dependencies_are_wired(self):
+        self._assert_wired(build_pennant_home_service(7), PennantHomeService)
 
     def test_pennant_world_view_dependencies_are_wired(self):
         self._assert_wired(build_pennant_world_view(), PennantWorldViewService)
@@ -271,3 +279,27 @@ class PennantSeasonScopeTest(SimpleTestCase):
         from django.db import transaction
 
         self.assertIs(build_pennant_season_service(7)._atomic, transaction.atomic)
+        # 世界の作成と日程の生成を1つにする（失敗したら世界を残さない）のも、本物のトランザクション
+        self.assertIs(build_pennant_world_service()._atomic, transaction.atomic)
+
+
+class PennantHomeScopeTest(SimpleTestCase):
+    """GM ホームの材料は、渡された世界の範囲だけを読む（世界の台帳だけが範囲を持たない）。"""
+
+    SCOPED = ("_games", "_game_records", "_fixtures", "_activity")
+
+    def test_every_dependency_is_fixed_to_the_given_world(self):
+        service = build_pennant_home_service(7)
+        for name in self.SCOPED:
+            with self.subTest(dependency=name):
+                self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
+        self.assertEqual(service._teams._games._scope, WorldScope.pennant(7), "順位・主力も世界の範囲のサービス")
+        self.assertIsInstance(service._worlds, DjangoWorldRepository)
+
+    def test_a_different_world_gets_a_different_scope(self):
+        self.assertEqual(build_pennant_home_service(8)._activity._scope, WorldScope.pennant(8))
+
+    def test_the_real_data_cannot_be_read_as_a_home(self):
+        for bad in (0, -1, True):
+            with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
+                build_pennant_home_service(bad)
