@@ -4,6 +4,8 @@ description: docs/ROADMAP.md（実装ロードマップ）の更新・追記を�
 ---
 
 `docs/ROADMAP.md` はこのプロジェクトの実装計画で、Wiki（`docs/wiki/`）と並ぶ一次ドキュメント。
+Issue ごとの状態（未着手・作業中・レビュー待ち・完了）は GitHub Projects が持つ。ROADMAP には Issue 単位の状態を書き写さず、
+フェーズの状態（✅ 完了・進行中）と「何を・なぜ・どの順で」だけを書く。
 更新の際は既存の形式を必ず守る。
 
 ## ROADMAP.md の形式

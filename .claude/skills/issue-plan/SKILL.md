@@ -117,6 +117,35 @@ $gh = "C:\Users\sumik\AppData\Local\Microsoft\WinGet\Packages\GitHub.cli_Microso
 - **既にブランチを切ってしまった場合**: `gh` からは既存のブランチを後から紐づけられない。PR の base が main なら本文の `Closes #N` でリンクするので
   そのまま進めてよい。base が epic なら、push 前に `gh issue develop` で作り直したブランチへ cherry-pick して移す。
 
+### Project の状態を「作業中」にする
+
+ブランチを切ったら、その Issue を Project（[Baseball League Manager](https://github.com/users/sumika157/projects/2)）で「作業中」にする。
+epic は、統合ブランチを切ったら親 Issue を、タスクブランチを切ったら段階の sub-issue を動かす。
+未着手と完了は組み込みのワークフローが動かすが、作業中とレビュー待ちは自動では動かない（`open-pr` の手順3でレビュー待ちにする）。
+
+Bash から叩く（PowerShell では `--jq` の引用符が壊れる）:
+
+```bash
+G="/c/Users/sumik/AppData/Local/Microsoft/WinGet/Packages/GitHub.cli_Microsoft.Winget.Source_8wekyb3d8bbwe/bin/gh.exe"
+# item-add は載っていれば既存の項目を返すので、自動追加より前の Issue でもこれで項目 ID が取れる
+id=$("$G" project item-add 2 --owner sumika157 --url https://github.com/sumika157/baseball-league-manager/issues/<番号> --format json --jq .id)
+"$G" project item-edit --project-id PVT_kwHOBKao884Bljiv --id "$id" \
+  --field-id PVTSSF_lAHOBKao884BljivzhkP9rA --single-select-option-id <選択肢の ID>
+```
+
+| 状態 | 選択肢の ID | 誰が動かすか |
+| --- | --- | --- |
+| 未着手 | `92e26a15` | 組み込みワークフロー（Issue の作成時に自動で追加） |
+| 作業中 | `9247cb3f` | ここで動かす |
+| レビュー待ち | `2d63e9ec` | `open-pr` の手順3 |
+| 完了 | `f8af4a11` | 組み込みワークフロー（Issue のクローズ時） |
+
+- **Project・フィールド・選択肢の ID の出典はこの表だけ。** 選択肢を作り直すと ID が変わるので、そのときはここを直す
+  （`"$G" project field-list 2 --owner sumika157 --format json` で確かめられる）。
+- 載せるのは Issue だけ。PR は載せない（同じ作業のカードが2枚になる）。
+- 親 Issue を載せると、組み込みの「Auto-add sub-issues to project」が **sub-issue も自動で載せる。閉じた sub-issue も入る**
+  （状態が空か未着手で入る）。親を載せたら閉じた子を「完了」に直す（実際に #26 で #27・#50 が入った）。
+
 ## 5. 実装中に計画が変わったら
 
 - Issue 本文を書き直す（本文が常に最新の計画であるようにする）:
