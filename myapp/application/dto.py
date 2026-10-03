@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 
+from ..domain.pennant.season import SeasonPhase
 from ..domain.value_objects import BattingLine, FieldingPosition, PitchingLine, Position
 
 
@@ -1182,3 +1183,61 @@ class AdvanceReport:
     def season_finished(self) -> bool:
         """日程をすべて消化したか。日程を作った直後（試合のない開幕前）は終わっていない。"""
         return self.remaining_fixtures == 0 and self.today is not None
+
+
+@dataclass(frozen=True)
+class WorldContext:
+    """世界ひとつの「いま」。世界バーの表示と、共有テンプレートの URL の引き方（`scoped_url`）に使う。
+
+    今日・局面は保存した値ではなく、試合と日程から導いた値（`domain/pennant/season.py`）。
+    """
+
+    world_id: int
+    name: str
+    phase: SeasonPhase
+    # 最後に試合をした日。まだ試合が無ければ None
+    today: date | None
+    # 受け持つ球団（まだ決めていなければ None と空の名前）
+    managed_team_id: int | None
+    managed_team_name: str
+    # 世界バーの「成績」「タイトル」の行き先のリーグ。受け持つ球団のリーグ、無ければ先頭のリーグ
+    default_league_id: int | None
+
+
+@dataclass(frozen=True)
+class WorldSummary:
+    """世界ひとつの見出しの材料。世界の台帳・試合・日程から、まとめて読んだ値（集約は組み立てない）。"""
+
+    world_id: int
+    name: str
+    start_year: int
+    managed_team_id: int | None
+    managed_team_name: str
+    # 受け持つ球団のリーグ、無ければ世界の先頭のリーグ（リーグが無ければ None）
+    default_league_id: int | None
+    # 最後に試合をした日。まだ無ければ None
+    last_played_on: date | None
+    # 未消化の対戦が残っているか
+    has_pending_fixtures: bool
+
+
+@dataclass(frozen=True)
+class OwnStanding:
+    """受け持つ球団の、いまの順位と成績（世界の一覧の1行に出す）。"""
+
+    rank: int
+    wins: int
+    losses: int
+    ties: int
+    games_behind: str
+
+
+@dataclass(frozen=True)
+class PennantWorldListRow:
+    """世界の一覧の1行。オーナーは載せない（一覧は誰にでも見せるため）。"""
+
+    context: WorldContext
+    # 開幕年（まだ試合が無いとき）か、最後に試合をした年
+    season_year: int
+    # 受け持つ球団が決まっていて、順位表に載っているときだけ
+    own_standing: OwnStanding | None

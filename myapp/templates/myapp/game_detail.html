@@ -1,15 +1,16 @@
 {% extends 'myapp/base.html' %}
+{% load scoped %}
 
 {% block title %}{{ detail.game.played_on|date:"Y/m/d" }} の試合 - Baseball Manager{% endblock %}
 
 {% block content %}
 <nav aria-label="breadcrumb">
   <ol class="breadcrumb">
-    <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>
-    <li class="breadcrumb-item"><a href="{% url 'game_list' %}">試合</a></li>
+    {% if world %}{% include 'pennant/_crumbs.html' %}{% else %}<li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>{% endif %}
+    <li class="breadcrumb-item"><a href="{% scoped_url 'game_list' %}">試合</a></li>
     <li class="breadcrumb-item active">{{ detail.game.played_on|date:"Y/m/d" }}</li>
   </ol>
-</nav>
+</nav>{% if world %}{% include 'pennant/_world_bar.html' %}{% endif %}
 
 <div class="page-head">
   <h1 class="page-title">
@@ -18,7 +19,7 @@
     {{ detail.game.home_team_name }}
   </h1>
   <p class="page-subtitle">
-    {{ detail.game.played_on|date:"Y年n月j日" }}（{{ detail.game.year }}年シーズン） · {{ detail.game.result }}
+    {{ detail.game.played_on|date:"Y年n月j日" }}（{{ detail.game.year }}年シーズン） · {{ detail.game.result }}{% if world %} · シミュレーション{% endif %}
   </p>
   {% if can_edit %}
     <a href="{% url 'game_edit' detail.game.id %}" class="btn btn-secondary mt-2">記録を編集</a>
@@ -152,7 +153,7 @@
                   <td class="text-center">{{ row.position_label|default:'—' }}</td>
                   <td>
                     <span class="jersey-number me-1">{{ row.number }}</span>
-                    <a href="{% url 'player_detail' row.team_id row.player_id %}" class="player-name">{{ row.player_name }}</a>
+                    <a href="{% scoped_url 'player_detail' row.team_id row.player_id %}" class="player-name">{{ row.player_name }}</a>
                   </td>
                   <td class="text-end stat-key">{{ row.career_batting_average|floatformat:3 }}</td>
                   <td class="text-end">{{ row.at_bats }}</td>
@@ -208,7 +209,7 @@
                 <tr>
                   <td>
                     <span class="jersey-number me-1">{{ row.number }}</span>
-                    <a href="{% url 'player_detail' row.team_id row.player_id %}" class="player-name">{{ row.player_name }}</a>
+                    <a href="{% scoped_url 'player_detail' row.team_id row.player_id %}" class="player-name">{{ row.player_name }}</a>
                     {% if row.appearance_order == 1 %}<span class="badge bg-secondary ms-1">先発</span>{% endif %}
                   </td>
                   <td class="text-end stat-key">{{ row.career_earned_run_average|floatformat:2 }}</td>
@@ -259,7 +260,7 @@
                   <td class="text-center">{{ row.position_label|default:'—' }}</td>
                   <td>
                     <span class="jersey-number me-1">{{ row.number }}</span>
-                    <a href="{% url 'player_detail' row.team_id row.player_id %}" class="player-name">{{ row.player_name }}</a>
+                    <a href="{% scoped_url 'player_detail' row.team_id row.player_id %}" class="player-name">{{ row.player_name }}</a>
                   </td>
                   <td class="text-end">{{ row.putouts }}</td>
                   <td class="text-end">{{ row.assists }}</td>

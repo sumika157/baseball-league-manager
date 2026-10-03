@@ -1,14 +1,15 @@
 {% extends 'myapp/base.html' %}
+{% load scoped %}
 
 {% block title %}{{ standings.year }}年 順位表 - Baseball Manager{% endblock %}
 
 {% block content %}
 <nav aria-label="breadcrumb">
   <ol class="breadcrumb">
-    <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>
+    {% if world %}{% include 'pennant/_crumbs.html' %}{% else %}<li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>{% endif %}
     <li class="breadcrumb-item active">順位表</li>
   </ol>
-</nav>
+</nav>{% if world %}{% include 'pennant/_world_bar.html' %}{% endif %}
 
 <div class="page-head">
   <h1 class="page-title">順位表</h1>
@@ -21,25 +22,25 @@
   <div class="segmented">
     {% for year in standings.available_years %}
       <a class="segmented-item {% if year == standings.year %}is-active{% endif %}"
-         href="{% url 'standings_by_year' year %}">{{ year }}年</a>
+         href="{% scoped_url 'standings_by_year' year %}">{{ year }}年</a>
     {% endfor %}
   </div>
 
   {% for league in standings.leagues %}
     <div class="d-flex justify-content-between align-items-center mb-2 mt-4">
       <h2 class="h6 mb-0">{{ league.league_name }}</h2>
-      <a href="{% url 'league_detail' league.league_id %}" style="font-size: 0.875rem;">リーグの詳細 →</a>
+      <a href="{% scoped_url 'league_detail' league.league_id %}" style="font-size: 0.875rem;">リーグの詳細 →</a>
     </div>
     {% include 'myapp/_standings_table.html' with rows=league.rows sortable=True %}
   {% empty %}
     <div class="card">
-      <div class="empty-state">{{ standings.year }}年の試合が登録されていません。</div>
+      <div class="empty-state">{% if world %}まだ試合が行われていません。ホームから進めると結果がここに出ます。{% else %}{{ standings.year }}年の試合が登録されていません。{% endif %}</div>
     </div>
   {% endfor %}
 {% else %}
   <div class="card">
     <div class="empty-state">
-      試合がまだ登録されていません。管理画面の「試合」から登録すると、勝敗と順位が集計されます。
+      {% if world %}まだ試合が行われていません。ホームから進めると結果がここに出ます。{% else %}試合がまだ登録されていません。管理画面の「試合」から登録すると、勝敗と順位が集計されます。{% endif %}
     </div>
   </div>
 {% endif %}

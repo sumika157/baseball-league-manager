@@ -1,16 +1,16 @@
 {% extends "myapp/base.html" %}
-{% load sorting %}
+{% load sorting scoped %}
 
 {% block title %}{{ stats.league_name }} 成績一覧 - Baseball Manager{% endblock %}
 
 {% block content %}
 <nav aria-label="breadcrumb">
   <ol class="breadcrumb">
-    <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>
-    <li class="breadcrumb-item"><a href="{% url 'league_detail' stats.league_id %}">{{ stats.league_name }}</a></li>
+    {% if world %}{% include 'pennant/_crumbs.html' %}{% else %}<li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>{% endif %}
+    <li class="breadcrumb-item"><a href="{% scoped_url 'league_detail' stats.league_id %}">{{ stats.league_name }}</a></li>
     <li class="breadcrumb-item active">成績一覧</li>
   </ol>
-</nav>
+</nav>{% if world %}{% include 'pennant/_world_bar.html' %}{% endif %}
 
 <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
   <div class="page-head">
@@ -20,7 +20,7 @@
       見出しを押すと並べ替えられます。シーズンごとの上位者はタイトルへ。
     </p>
   </div>
-  <a href="{% url 'league_titles' stats.league_id %}" class="btn btn-secondary">タイトル</a>
+  <a href="{% scoped_url 'league_titles' stats.league_id %}" class="btn btn-secondary">タイトル</a>
 </div>
 
 {# 野手／投手の切替。選手一覧と同じ操作感に揃える #}
@@ -88,11 +88,11 @@
       {% for row in players %}
       <tr>
         <td>
-          <a href="{% url 'player_detail' row.team_id row.player.id %}" class="player-name">{{ row.player.name }}</a>
+          <a href="{% scoped_url 'player_detail' row.team_id row.player.id %}" class="player-name">{{ row.player.name }}</a>
           <span class="badge bg-secondary ms-1">{{ row.player.position }}</span>
         </td>
         <td>
-          <a href="{% url 'player_list' row.team_id %}" class="stat-muted">{{ row.team_name }}</a>
+          <a href="{% scoped_url 'player_list' row.team_id %}" class="stat-muted">{{ row.team_name }}</a>
         </td>
 
         {% if pos_mode == 'pitcher' %}

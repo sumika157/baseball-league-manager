@@ -199,6 +199,7 @@ class TeamApplicationService:
         game_list_query: GameListQuery,
         player_fielding_query: PlayerFieldingQuery,
         player_stats_query: PlayerStatsQuery,
+        today: Callable[[], date],
     ) -> None:
         # 具象クラスではなくリポジトリ・参照クエリのインターフェースに依存する。
         # 省略可能にすると、一部だけ渡した半端なサービスが作れてしまい、呼ぶ経路に
@@ -215,6 +216,8 @@ class TeamApplicationService:
         self._games = games
         # 順位はリーグの中で決まるため、リーグの一覧が要る
         self._leagues = leagues
+        # 年齢の基準日。実データは暦の今日、ペナントの世界はその世界の「今日」（組み立ての1か所が渡す）
+        self._today = today
         # リーグの基準値（FIP 定数・OPS+/ERA+ の平均）は何度も引くため覚えておく
         self._league_contexts: dict[int, _LeagueContext] = {}
 
@@ -383,8 +386,11 @@ class TeamApplicationService:
         players, key, desc = domain_services.sort_batters(batters, sort, descending)
         captain = team.current_captain
         context = self._league_context(team.league_id)
+        today = self._today()
         return Listing(
-            rows=[self._to_batter_row(p, is_captain=p is captain, league_context=context) for p in players],
+            rows=[
+                self._to_batter_row(p, is_captain=p is captain, league_context=context, today=today) for p in players
+            ],
             sort=key,
             descending=desc,
         )
@@ -395,8 +401,11 @@ class TeamApplicationService:
         players, key, desc = domain_services.sort_pitchers(pitchers, sort, descending)
         captain = team.current_captain
         context = self._league_context(team.league_id)
+        today = self._today()
         return Listing(
-            rows=[self._to_pitcher_row(p, is_captain=p is captain, league_context=context) for p in players],
+            rows=[
+                self._to_pitcher_row(p, is_captain=p is captain, league_context=context, today=today) for p in players
+            ],
             sort=key,
             descending=desc,
         )
@@ -438,6 +447,32 @@ class TeamApplicationService:
         target = Season(year) if year is not None else seasons[0]
         season_games = [g for g in all_games if g.season == target]
 
+        leagues = self._league_standings(teams, season_games, sort, descending)
+
+        return Standings(
+            year=target.year,
+            leagues=leagues,
+            available_years=[s.year for s in seasons],
+            sort=sort if sort in self.STANDING_SORT_KEYS else "rank",
+            descending=bool(descending) if sort in self.STANDING_SORT_KEYS else False,
+        )
+
+    def get_league_standings(self, year: int) -> list[LeagueStandings]:
+        """指定シーズンのリーグ別の順位だけを返す。**その年の試合だけを SQL で絞って読む。**
+
+        年の選択肢（`get_standings` の `available_years`）が要らない呼び出し（世界の一覧の自軍の順位）用。
+        全シーズンの試合を組み立てない。
+        """
+        games = self._game_list_query.list_for_standings(year=year)
+        return self._league_standings(self._teams.find_all(), games, None, None)
+
+    def _league_standings(
+        self,
+        teams: list[Team],
+        season_games: list[Game],
+        sort: str | None,
+        descending: bool | None,
+    ) -> list[LeagueStandings]:
         leagues = []
         for league in self._leagues.find_all():
             members = [t for t in teams if t.league_id == league.id]
@@ -451,14 +486,7 @@ class TeamApplicationService:
                     rows=self._to_standing_rows(rows, sort, descending),
                 )
             )
-
-        return Standings(
-            year=target.year,
-            leagues=leagues,
-            available_years=[s.year for s in seasons],
-            sort=sort if sort in self.STANDING_SORT_KEYS else "rank",
-            descending=bool(descending) if sort in self.STANDING_SORT_KEYS else False,
-        )
+        return leagues
 
     def _to_standing_rows(
         self, rows: list[domain_services.StandingRow], sort: str | None, descending: bool | None
@@ -707,6 +735,7 @@ class TeamApplicationService:
         sorter = domain_services.sort_pitchers if pitchers else domain_services.sort_batters
         ordered, key, desc = sorter(reaching if qualified else members, sort, descending)
         to_row = self._to_pitcher_row if pitchers else self._to_batter_row
+        today = self._today()
 
         rows = []
         for player in ordered:
@@ -715,7 +744,7 @@ class TeamApplicationService:
                 LeaguePlayerRow(
                     team_id=team_id,
                     team_name=team_name,
-                    player=to_row(player, is_captain=id(player) in captains, league_context=context),
+                    player=to_row(player, is_captain=id(player) in captains, league_context=context, today=today),
                 )
             )
 
@@ -1067,7 +1096,7 @@ class TeamApplicationService:
                 )
                 for s in player.career
             ],
-            age=profile.age(date.today()),
+            age=profile.age(self._today()),
             name_kana=profile.name_kana,
             back_name=profile.back_name,
             throws_bats=profile.throws_bats,
@@ -1464,6 +1493,7 @@ class TeamApplicationService:
         *,
         is_captain: bool = False,
         league_context: _LeagueContext = _EMPTY_LEAGUE_CONTEXT,
+        today: date,
     ) -> BatterRow:
         assert player.id is not None, "一覧に載る選手は保存済み"
         line = player.batting
@@ -1492,7 +1522,7 @@ class TeamApplicationService:
             throws_bats=profile.throws_bats,
             height_cm=profile.height_cm,
             weight_kg=profile.weight_kg,
-            age=profile.age(date.today()),
+            age=profile.age(today),
         )
 
     @staticmethod
@@ -1501,6 +1531,7 @@ class TeamApplicationService:
         *,
         is_captain: bool = False,
         league_context: _LeagueContext = _EMPTY_LEAGUE_CONTEXT,
+        today: date,
     ) -> PitcherRow:
         assert player.id is not None, "一覧に載る選手は保存済み"
         line = player.pitching
@@ -1531,7 +1562,7 @@ class TeamApplicationService:
             throws_bats=profile.throws_bats,
             height_cm=profile.height_cm,
             weight_kg=profile.weight_kg,
-            age=profile.age(date.today()),
+            age=profile.age(today),
         )
 
     @staticmethod

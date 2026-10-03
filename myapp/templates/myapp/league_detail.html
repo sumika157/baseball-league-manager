@@ -1,15 +1,16 @@
 {% extends 'myapp/base.html' %}
+{% load scoped %}
 
 {% block title %}{{ league.name }} - Baseball Manager{% endblock %}
 
 {% block content %}
 <nav aria-label="breadcrumb">
   <ol class="breadcrumb">
-    <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>
-    <li class="breadcrumb-item"><a href="{% url 'standings' %}">順位表</a></li>
+    {% if world %}{% include 'pennant/_crumbs.html' %}{% else %}<li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>{% endif %}
+    <li class="breadcrumb-item"><a href="{% scoped_url 'standings' %}">順位表</a></li>
     <li class="breadcrumb-item active">{{ league.name }}</li>
   </ol>
-</nav>
+</nav>{% if world %}{% include 'pennant/_world_bar.html' %}{% endif %}
 
 <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
   <div class="page-head">
@@ -20,9 +21,9 @@
     </p>
   </div>
   <div class="d-flex gap-2">
-    <a href="{% url 'league_stats' league.id %}" class="btn btn-secondary">成績一覧</a>
+    <a href="{% scoped_url 'league_stats' league.id %}" class="btn btn-secondary">成績一覧</a>
     {% if league.available_years %}
-      <a href="{% url 'league_titles_by_year' league.id league.year %}" class="btn btn-secondary">タイトル</a>
+      <a href="{% scoped_url 'league_titles_by_year' league.id league.year %}" class="btn btn-secondary">タイトル</a>
     {% endif %}
   </div>
 </div>
@@ -31,7 +32,7 @@
   <div class="segmented">
     {% for year in league.available_years %}
       <a class="segmented-item {% if year == league.year %}is-active{% endif %}"
-         href="{% url 'league_detail_by_year' league.id year %}">{{ year }}年</a>
+         href="{% scoped_url 'league_detail_by_year' league.id year %}">{{ year }}年</a>
     {% endfor %}
   </div>
 {% endif %}
@@ -44,7 +45,7 @@
     {% else %}
       <div class="card">
         <div class="empty-state">
-          このリーグの試合がまだ登録されていません。
+          {% if world %}まだ試合が行われていません。ホームから進めると結果がここに出ます。{% else %}このリーグの試合がまだ登録されていません。{% endif %}
         </div>
       </div>
     {% endif %}
@@ -72,7 +73,7 @@
                 {% for row in league.matchups.rows %}
                   <tr>
                     <td>
-                      <a href="{% url 'player_list' row.team_id %}" class="player-name">{{ row.team_name }}</a>
+                      <a href="{% scoped_url 'player_list' row.team_id %}" class="player-name">{{ row.team_name }}</a>
                     </td>
                     {% for cell in row.cells %}
                       <td class="text-center {% if cell.is_self %}matchup-self{% elif cell.is_winning %}matchup-winning{% elif cell.is_losing %}matchup-losing{% endif %}">
@@ -99,7 +100,7 @@
           <ul class="tile-list">
             {% for game in league.recent_games %}
               <li>
-                <a href="{% url 'game_detail' game.id %}">
+                <a href="{% scoped_url 'game_detail' game.id %}">
                   <span class="tile-list-main">
                     <span class="tile-list-title">
                       {{ game.home_team_name }} {% if game.is_recorded %}{{ game.home_score }} - {{ game.away_score }}{% else %}—{% endif %} {{ game.away_team_name }}
@@ -128,7 +129,7 @@
           <ul class="tile-list">
             {% for team in league.teams %}
               <li>
-                <a href="{% url 'player_list' team.id %}">
+                <a href="{% scoped_url 'player_list' team.id %}">
                   <span class="tile-list-main">
                     <span class="tile-list-title">{{ team.name }}</span>
                     {% if team.city %}<span class="tile-list-sub">{{ team.city }}</span>{% endif %}

@@ -1,16 +1,16 @@
 {% extends "myapp/base.html" %}
-{% load sorting %}
+{% load sorting scoped %}
 
 {% block title %}{{ team_name }} - Baseball Manager{% endblock %}
 
 {% block content %}
 <nav aria-label="breadcrumb">
   <ol class="breadcrumb">
-    <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>
-    <li class="breadcrumb-item"><a href="{% url 'team_list' %}">チーム一覧</a></li>
+    {% if world %}{% include 'pennant/_crumbs.html' %}{% else %}<li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>{% endif %}
+    <li class="breadcrumb-item"><a href="{% scoped_url 'team_list' %}">チーム一覧</a></li>
     <li class="breadcrumb-item active">{{ team_name }}</li>
   </ol>
-</nav>
+</nav>{% if world %}{% include 'pennant/_world_bar.html' %}{% endif %}
 
 <div class="page-head">
   <h1 class="page-title">{{ team_name }}</h1>
@@ -142,7 +142,7 @@
       <tr>
         <td><span class="jersey-number">{{ player.number }}</span></td>
         <td>
-          <a href="{% url 'player_detail' team_id player.id %}" class="player-name">{{ player.name }}</a>
+          <a href="{% scoped_url 'player_detail' team_id player.id %}" class="player-name">{{ player.name }}</a>
           <span class="badge bg-secondary ms-1">{{ player.position }}</span>
           {% if player.is_captain %}<span class="badge bg-warning text-dark ms-1">主将</span>{% endif %}
           {% if player.is_foreign_player %}<span class="badge bg-info text-dark ms-1">外国人</span>{% endif %}
