@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from datetime import date
+from typing import Any
 
 from django.db import models, transaction
 from django.db.models import Count, Prefetch, Q, QuerySet, Sum
@@ -33,8 +35,10 @@ from ..domain.entities import (
 )
 from ..domain.exceptions import (
     GameNotFound,
+    InvalidGame,
     InvalidPosition,
     InvalidRatings,
+    InvalidSchedule,
     InvalidWorld,
     LeagueNotFound,
     PlayerNotFound,
@@ -42,6 +46,7 @@ from ..domain.exceptions import (
     WorldNotFound,
 )
 from ..domain.pennant.ratings import PlayerRatings
+from ..domain.pennant.schedule import Fixture
 from ..domain.pennant.world import World, WorldScope
 from ..domain.services import ensure_lines_match_plate_appearances
 from ..domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings
@@ -63,7 +68,7 @@ from ..domain.value_objects import (
     Season,
 )
 from . import orm_models
-from .scoping import games_in, leagues_in, players_in, ratings_in, teams_in, world_condition
+from .scoping import fixtures_in, games_in, leagues_in, players_in, ratings_in, teams_in, world_condition
 
 _BATTING_FIELDS = (
     "at_bats",
@@ -483,6 +488,34 @@ def _required_position(label: str) -> FieldingPosition:
     return position
 
 
+def _batting_values(entry: GameBatting) -> dict[str, Any]:
+    """打撃成績1行の列の値（試合と選手の指定を除く）。`save()` と `add_all()` が同じ写し方を使う。"""
+    values: dict[str, Any] = {f: getattr(entry.line, f) for f in _BATTING_FIELDS}
+    values.update(
+        {
+            "batting_order": entry.batting_order,
+            "slot_sequence": entry.slot_sequence,
+            "fielding_position": (entry.fielding_position.value if entry.fielding_position else ""),
+            "team_id": entry.team_id,
+            "entered_sequence": entry.entered_sequence,
+        }
+    )
+    return values
+
+
+def _pitching_values(entry: GamePitching) -> dict[str, Any]:
+    """投球成績1行の列の値（試合と選手の指定を除く）。"""
+    values: dict[str, Any] = {f: getattr(entry.line, f) for f in _PITCHING_COUNTS}
+    values["innings_pitched"] = float(entry.line.innings.to_notation())
+    values["appearance_order"] = entry.appearance_order
+    values["entered_inning"] = entry.entered_inning
+    return values
+
+
+# 1回の一括書き込みにまとめる試合数。メモリと、1つの SQL に載せる行数を抑える
+_ADD_ALL_CHUNK = 100
+
+
 class DjangoGameRepository:
     """GameRepository の Django ORM 実装。試合（Game 集約）の永続化。
 
@@ -568,28 +601,14 @@ class DjangoGameRepository:
         game.id = row.id
 
         for entry in game.batting:
-            defaults = {f: getattr(entry.line, f) for f in _BATTING_FIELDS}
-            defaults.update(
-                {
-                    "batting_order": entry.batting_order,
-                    "slot_sequence": entry.slot_sequence,
-                    "fielding_position": (entry.fielding_position.value if entry.fielding_position else ""),
-                    "team_id": entry.team_id,
-                    "entered_sequence": entry.entered_sequence,
-                }
-            )
             line_row, _ = orm_models.GameBattingLine.objects.update_or_create(
-                game=row, player_id=entry.player_id, defaults=defaults
+                game=row, player_id=entry.player_id, defaults=_batting_values(entry)
             )
             entry.id = line_row.id
 
         for pitching_entry in game.pitching:
-            defaults = {f: getattr(pitching_entry.line, f) for f in _PITCHING_COUNTS}
-            defaults["innings_pitched"] = float(pitching_entry.line.innings.to_notation())
-            defaults["appearance_order"] = pitching_entry.appearance_order
-            defaults["entered_inning"] = pitching_entry.entered_inning
             pitching_row, _ = orm_models.GamePitchingLine.objects.update_or_create(
-                game=row, player_id=pitching_entry.player_id, defaults=defaults
+                game=row, player_id=pitching_entry.player_id, defaults=_pitching_values(pitching_entry)
             )
             pitching_entry.id = pitching_row.id
 
@@ -608,11 +627,79 @@ class DjangoGameRepository:
 
         return game
 
-    def _ensure_in_scope(self, game: Game) -> None:
-        """範囲の外の試合・チームには書けない（別の世界の試合を書き換えない）。"""
-        team_ids = {game.home_team_id, game.away_team_id}
+    @transaction.atomic
+    def add_all(self, games: Sequence[Game]) -> None:
+        """新しい試合を種類ごとの一括書き込みで保存する。検査は `save()` と同じで、書く前に全試合ぶん済ませる。"""
+        for game in games:
+            if game.id is not None:
+                raise InvalidGame("保存済みの試合は add_all では書けません（更新は save を使います）。")
+            # `save()` と同じ照合。食い違ったまま保存されないよう、集約に確かめさせる
+            ensure_lines_match_plate_appearances(game)
+        self._ensure_teams_in_scope({team_id for game in games for team_id in (game.home_team_id, game.away_team_id)})
+
+        for start in range(0, len(games), _ADD_ALL_CHUNK):
+            self._insert_new(games[start : start + _ADD_ALL_CHUNK])
+
+    @classmethod
+    def _insert_new(cls, games: Sequence[Game]) -> None:
+        """新しい試合を、試合の行から明細・イニングスコア・打席まで種類ごとに bulk_create する。"""
+        rows = orm_models.Game.objects.bulk_create(
+            [
+                orm_models.Game(
+                    year=game.season.year,
+                    played_on=game.played_on,
+                    home_team_id=game.home_team_id,
+                    away_team_id=game.away_team_id,
+                    home_score=game.home_score,
+                    away_score=game.away_score,
+                )
+                for game in games
+            ]
+        )
+        # 主キーを返さない DB（SQLite 3.35 未満）では、行と集約を対応づけられない
+        if any(row.pk is None for row in rows):
+            raise RuntimeError("bulk_create が主キーを返さない DB には対応していません。")
+        for game, row in zip(games, rows, strict=True):
+            game.id = row.pk
+
+        batting_rows: list[orm_models.GameBattingLine] = []
+        pitching_rows: list[orm_models.GamePitchingLine] = []
+        fielding_rows: list[orm_models.GameFieldingLine] = []
+        inning_rows: list[orm_models.GameInningScore] = []
+        for game, row in zip(games, rows, strict=True):
+            batting_rows.extend(
+                orm_models.GameBattingLine(game_id=row.pk, player_id=entry.player_id, **_batting_values(entry))
+                for entry in game.batting
+            )
+            pitching_rows.extend(
+                orm_models.GamePitchingLine(game_id=row.pk, player_id=entry.player_id, **_pitching_values(entry))
+                for entry in game.pitching
+            )
+            fielding_rows.extend(
+                orm_models.GameFieldingLine(
+                    game_id=row.pk, player_id=entry.player_id, **{f: getattr(entry.line, f) for f in _FIELDING_FIELDS}
+                )
+                for entry in game.fielding
+            )
+            inning_rows.extend(
+                orm_models.GameInningScore(game_id=row.pk, inning=inning, is_home=is_home, runs=values[inning - 1])
+                for inning in range(1, game.line_score.innings + 1)
+                for is_home, values in ((False, game.line_score.away), (True, game.line_score.home))
+                if inning <= len(values)
+            )
+        orm_models.GameBattingLine.objects.bulk_create(batting_rows)
+        orm_models.GamePitchingLine.objects.bulk_create(pitching_rows)
+        orm_models.GameFieldingLine.objects.bulk_create(fielding_rows)
+        orm_models.GameInningScore.objects.bulk_create(inning_rows)
+        cls._create_plate_appearances(list(zip(games, rows, strict=True)))
+
+    def _ensure_teams_in_scope(self, team_ids: set[int]) -> None:
         if teams_in(self._scope).filter(id__in=team_ids).count() != len(team_ids):
             raise TeamNotFound("試合のチームが見つかりません。")
+
+    def _ensure_in_scope(self, game: Game) -> None:
+        """範囲の外の試合・チームには書けない（別の世界の試合を書き換えない）。"""
+        self._ensure_teams_in_scope({game.home_team_id, game.away_team_id})
         if game.id is not None and not games_in(self._scope).filter(id=game.id).exists():
             raise GameNotFound(f"試合が見つかりません（id={game.id}）。")
 
@@ -671,67 +758,82 @@ class DjangoGameRepository:
             return
 
         orm_models.GamePlateAppearance.objects.filter(game=row).delete()
-        ordered = game.plate_appearances_in_order()
-        if not ordered:
+        cls._create_plate_appearances([(game, row)])
+
+    @staticmethod
+    def _create_plate_appearances(items: Sequence[tuple[Game, orm_models.Game]]) -> None:
+        """打席・進塁・代走・失策を、試合をまたいで種類ごとに bulk_create する。
+
+        (集約, 保存済みの試合の行) の組を渡す。保存した打席の id は集約の打席に入る。
+        """
+        entries: list[PlateAppearance] = []
+        plate_rows: list[orm_models.GamePlateAppearance] = []
+        for game, row in items:
+            for entry in game.plate_appearances_in_order():
+                entries.append(entry)
+                plate_rows.append(
+                    orm_models.GamePlateAppearance(
+                        game_id=row.pk,
+                        sequence=entry.sequence,
+                        inning=entry.inning,
+                        is_bottom=entry.is_bottom,
+                        batter_id=entry.batter_id,
+                        pitcher_id=entry.pitcher_id,
+                        batting_order=entry.batting_order,
+                        slot_sequence=entry.slot_sequence,
+                        result=entry.result.value,
+                        fielded_by=_from_fielded_by(entry.fielded_by),
+                    )
+                )
+        if not plate_rows:
             return
 
-        orm_models.GamePlateAppearance.objects.bulk_create(
-            [
-                orm_models.GamePlateAppearance(
-                    game=row,
-                    sequence=entry.sequence,
-                    inning=entry.inning,
-                    is_bottom=entry.is_bottom,
-                    batter_id=entry.batter_id,
-                    pitcher_id=entry.pitcher_id,
-                    batting_order=entry.batting_order,
-                    slot_sequence=entry.slot_sequence,
-                    result=entry.result.value,
-                    fielded_by=_from_fielded_by(entry.fielded_by),
-                )
-                for entry in ordered
-            ]
-        )
-        # bulk_create が主キーを返すかは DB に依存するため、読み直して対応づける
-        saved = {r.sequence: r for r in orm_models.GamePlateAppearance.objects.filter(game=row)}
-        for entry in ordered:
-            entry.id = saved[entry.sequence].id
+        saved = orm_models.GamePlateAppearance.objects.bulk_create(plate_rows)
+        if any(r.pk is None for r in saved):
+            # bulk_create が主キーを返すかは DB に依存するため、返さないときは読み直して対応づける
+            by_key = {
+                (r.game_id, r.sequence): r
+                for r in orm_models.GamePlateAppearance.objects.filter(game_id__in={row.pk for _, row in items})
+            }
+            saved = [by_key[(r.game_id, r.sequence)] for r in plate_rows]
+        for entry, plate_row in zip(entries, saved, strict=True):
+            entry.id = plate_row.pk
 
         orm_models.GameRunnerAdvance.objects.bulk_create(
             [
                 orm_models.GameRunnerAdvance(
-                    plate_appearance=saved[entry.sequence],
+                    plate_appearance_id=plate_row.pk,
                     runner_id=advance.runner_id,
                     from_base=advance.from_base.value,
                     to_base=advance.to_base.value,
                     reason=advance.reason.value,
                     error_index=advance.error_index,
                 )
-                for entry in ordered
+                for entry, plate_row in zip(entries, saved, strict=True)
                 for advance in entry.advances
             ]
         )
         orm_models.GameRunnerSubstitution.objects.bulk_create(
             [
                 orm_models.GameRunnerSubstitution(
-                    plate_appearance=saved[entry.sequence],
+                    plate_appearance_id=plate_row.pk,
                     base=substitution.base.value,
                     leaving_runner_id=substitution.leaving_runner_id,
                     entering_runner_id=substitution.entering_runner_id,
                 )
-                for entry in ordered
+                for entry, plate_row in zip(entries, saved, strict=True)
                 for substitution in entry.substitutions
             ]
         )
         orm_models.GameFieldingError.objects.bulk_create(
             [
                 orm_models.GameFieldingError(
-                    plate_appearance=saved[entry.sequence],
+                    plate_appearance_id=plate_row.pk,
                     player_id=error.player_id,
                     position=error.position.value,
                     kind=error.kind.value,
                 )
-                for entry in ordered
+                for entry, plate_row in zip(entries, saved, strict=True)
                 for error in entry.errors
             ]
         )
@@ -913,6 +1015,7 @@ _GAME_ROUTE = "home_team__league"
 _WORLD_ROWS_CHILD_FIRST: tuple[tuple[type[models.Model], str], ...] = (
     # 能力は選手の在籍をたどって世界が決まるので、在籍を消す前に消す
     (orm_models.PennantPlayerRatings, "player__stints__team__league"),
+    (orm_models.PennantFixture, "home_team__league"),
     (orm_models.GameRunnerAdvance, f"plate_appearance__game__{_GAME_ROUTE}"),
     (orm_models.GameRunnerSubstitution, f"plate_appearance__game__{_GAME_ROUTE}"),
     (orm_models.GameFieldingError, f"plate_appearance__game__{_GAME_ROUTE}"),
@@ -933,6 +1036,7 @@ _RATING_COLUMNS = {
     PitcherRatings: tuple(PitcherRatings.LABELS),
 }
 _RATINGS_CHUNK = 500
+_FIXTURE_CHUNK = 500
 
 
 class DjangoRatingsRepository:
@@ -992,6 +1096,69 @@ class DjangoRatingsRepository:
         else:
             ratings = PitcherRatings(**{name: getattr(row, name) for name in PitcherRatings.LABELS}, growth=growth)
         return PlayerRatings(player_id=row.player_id, year=row.year, ratings=ratings)
+
+
+class DjangoFixtureRepository:
+    """FixtureRepository の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る。
+
+    日程はペナント専用で、実データの範囲には書けない。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    @transaction.atomic
+    def add_all(self, fixtures: Sequence[Fixture]) -> None:
+        if self._scope.is_real:
+            raise InvalidWorld("日程はペナントの世界にだけ保存できます。")
+        team_ids = {team_id for f in fixtures for team_id in (f.home_team_id, f.visitor_team_id)}
+        if teams_in(self._scope).filter(id__in=team_ids).count() != len(team_ids):
+            raise TeamNotFound("日程の球団がこの世界に見つかりません。")
+        keys = {self._key(f) for f in fixtures}
+        if len(keys) != len(fixtures):
+            raise InvalidSchedule("同じ日の同じ対戦が重複しています。")
+        saved = fixtures_in(self._scope).filter(date__in={f.date for f in fixtures})
+        if any(
+            (day, home, visitor) in keys
+            for day, home, visitor in saved.values_list("date", "home_team_id", "visitor_team_id")
+        ):
+            raise InvalidSchedule("同じ日の同じ対戦がすでに保存されています。")
+        orm_models.PennantFixture.objects.bulk_create(
+            [
+                orm_models.PennantFixture(date=f.date, home_team_id=f.home_team_id, visitor_team_id=f.visitor_team_id)
+                for f in fixtures
+            ],
+            batch_size=_FIXTURE_CHUNK,
+        )
+
+    def find_all(self) -> list[Fixture]:
+        rows = (
+            fixtures_in(self._scope)
+            .order_by("date", "home_team_id")
+            .values_list("date", "home_team_id", "visitor_team_id")
+        )
+        return [Fixture(date=day, home_team_id=home, visitor_team_id=visitor) for day, home, visitor in rows]
+
+    @transaction.atomic
+    def remove(self, fixtures: Sequence[Fixture]) -> None:
+        by_date: dict[date, list[Fixture]] = {}
+        for fixture in fixtures:
+            by_date.setdefault(fixture.date, []).append(fixture)
+        removed = 0
+        for day, items in by_date.items():
+            # 1日に組まれる試合は多くても数十なので、式が大きくなりすぎない
+            condition = Q()
+            for fixture in items:
+                condition |= Q(home_team_id=fixture.home_team_id, visitor_team_id=fixture.visitor_team_id)
+            deleted, _ = fixtures_in(self._scope).filter(date=day).filter(condition).delete()
+            removed += deleted
+        if removed != len(fixtures):
+            # 例外で、この呼び出しの削除はすべて取り消される
+            raise InvalidSchedule("すでに消化された対戦が含まれています。")
+
+    @staticmethod
+    def _key(fixture: Fixture) -> tuple[date, int, int]:
+        return (fixture.date, fixture.home_team_id, fixture.visitor_team_id)
 
 
 class DjangoWorldRepository:

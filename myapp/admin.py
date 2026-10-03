@@ -92,7 +92,7 @@ admin.site.get_app_list = types.MethodType(_ordered_app_list, admin.site)  # typ
 
 # 管理画面で扱うのは**実データだけ**。ペナントの世界の行は、一覧にも・id を指定した編集画面にも・
 # 選択肢にも・フィルタにも出さない（手で直すと、世界の整合が実データの側から壊れるため）。
-# ペナント専用のモデル（PennantWorld・PennantPlayerRatings）は管理画面に登録しない
+# ペナント専用のモデル（PennantWorld・PennantPlayerRatings・PennantFixture）は管理画面に登録しない
 # （手で直すと、能力と成績・日程の整合が壊れるため）。
 _REAL = WorldScope.real()
 _REAL_QUERYSETS = {

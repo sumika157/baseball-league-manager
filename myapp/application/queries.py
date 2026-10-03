@@ -12,11 +12,12 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import date
 from typing import Protocol, runtime_checkable
 
 from ..domain.entities import Game
 from ..domain.value_objects import FieldingLine
-from .dto import ActivePlayerStats, GameRow, PlayerFielding, TeamSummary
+from .dto import ActivePlayerStats, GameRow, PlayerFielding, SimulationContext, TeamSummary
 
 
 @runtime_checkable
@@ -46,6 +47,30 @@ class FieldingTotalsQuery(Protocol):
 
     def totals_for(self, player_ids: Sequence[int]) -> dict[int, FieldingLine]:
         """選手 id → 通算の守備成績。守備に就いた試合が無い選手は含めない。"""
+        ...
+
+
+@runtime_checkable
+class SimulationContextQuery(Protocol):
+    """日を進めるのに要る世界の状態の参照（ペナントの進行が使う）。
+
+    球団・選手・直近の登板を、集約（`Team` / `Game`）を組み立てずにまとめて読む。
+    **1回の「進める」で1度だけ読み**、その後の登板は呼び出し側がメモリで足していく。
+    能力はここに含めない（`RatingsRepository` が出典）。
+    """
+
+    def last_played_on(self) -> date | None:
+        """世界の「今日」。消化した最後の試合日で、まだ1試合も無ければ None。"""
+        ...
+
+    def load(self, *, before: date) -> SimulationContext:
+        """`before` より前の試合から導ける状態を読む。
+
+        - 球団と、その現在の選手（登録位置・外国人かどうか）と、リーグの外国人の枠
+        - 投手ごとの直近の先発の日（`before` より前のすべての試合から。期間を切ると、
+          まとめて進めるか1日ずつ進めるかで「中何日か」の答えが変わる）
+        - `before` の直前の数日の登板（連投の判断。数日あれば足りる）
+        """
         ...
 
 

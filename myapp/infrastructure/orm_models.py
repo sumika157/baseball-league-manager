@@ -681,3 +681,33 @@ class PennantPlayerRatings(models.Model):
 
     def __str__(self) -> str:
         return f"{self.player.name} の{self.year}年の能力"
+
+
+class PennantFixture(models.Model):
+    """ペナントの世界の、未消化の対戦。消化したら `Game` を作ってこの行を消す。
+
+    **試合のあとまで残さない**（日付と対戦カードの出典が `Game` とここの2つになるため）。
+    世界の列は持たない。ホームの球団のリーグで世界が決まる（試合と同じ。世界の出典はリーグの1か所）。
+    「今日」やシーズン中かは保存せず、この表と試合から導く。
+    """
+
+    date = models.DateField(db_index=True, verbose_name="試合日")
+    home_team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="home_fixtures", verbose_name="ホーム")
+    visitor_team = models.ForeignKey(
+        Team, on_delete=models.CASCADE, related_name="visitor_fixtures", verbose_name="ビジター"
+    )
+
+    class Meta:
+        verbose_name = "ペナントの日程"
+        verbose_name_plural = "ペナントの日程"
+        ordering = ["date", "home_team_id"]
+        constraints = [
+            models.UniqueConstraint(fields=["date", "home_team", "visitor_team"], name="unique_pennant_fixture"),
+            models.CheckConstraint(
+                condition=~models.Q(home_team=models.F("visitor_team")),
+                name="pennant_fixture_teams_differ",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.date} {self.home_team.name} 対 {self.visitor_team.name}"
