@@ -56,9 +56,11 @@ urlpatterns = [
         name="player_edit",
     ),
     path("accounts/signup/", views.SignUpView.as_view(), name="signup"),
-    # --- ペナントの世界（読み取り専用。編集・登録の URL は作らない） ---
+    # --- ペナントの世界（参照は誰でも。作成・進める・削除はログイン／オーナー。選手・試合の編集の URL は作らない） ---
     path("pennant/", views.pennant_index, name="pennant_index"),
     path("pennant/<int:world_id>/", views.pennant_world, name="pennant_world"),
+    _pennant("advance/", views.pennant_advance, "advance"),
+    _pennant("delete/", views.pennant_delete, "delete"),
     _pennant("standings/", views.standings, "standings"),
     _pennant("standings/<int:year>/", views.standings, "standings_by_year"),
     _pennant("league/<int:league_id>/", views.league_detail, "league_detail"),

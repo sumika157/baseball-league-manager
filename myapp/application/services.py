@@ -41,7 +41,6 @@ from .dto import (
     GameRow,
     GameTeamBox,
     GameTeamIds,
-    InningScoreColumn,
     LeagueDetail,
     LeagueOption,
     LeaguePlayerRow,
@@ -71,7 +70,7 @@ from .dto import (
 )
 from .game_edit import build_header, build_lineup_slots, build_plate_appearances
 from .queries import GameListQuery, PlayerFieldingQuery, PlayerStatsQuery, TeamListQuery
-from .scorebook_view import build_scorebook_grids
+from .scorebook_view import build_line_score, build_scorebook_grids
 
 
 def _saved_id(value: int | None) -> int:
@@ -457,13 +456,16 @@ class TeamApplicationService:
             descending=bool(descending) if sort in self.STANDING_SORT_KEYS else False,
         )
 
-    def get_league_standings(self, year: int) -> list[LeagueStandings]:
+    def get_league_standings(self, year: int, *, through: date | None = None) -> list[LeagueStandings]:
         """指定シーズンのリーグ別の順位だけを返す。**その年の試合だけを SQL で絞って読む。**
 
         年の選択肢（`get_standings` の `available_years`）が要らない呼び出し（世界の一覧の自軍の順位）用。
-        全シーズンの試合を組み立てない。
+        全シーズンの試合を組み立てない。`through` を渡すと、その日までの試合だけで順位を作る
+        （ペナントの「進める前の順位」を出すのに使う）。
         """
         games = self._game_list_query.list_for_standings(year=year)
+        if through is not None:
+            games = [game for game in games if game.played_on <= through]
         return self._league_standings(self._teams.find_all(), games, None, None)
 
     def _league_standings(
@@ -985,42 +987,7 @@ class TeamApplicationService:
     @staticmethod
     def _to_line_score(game: Game, batting: list[GamePlayerRow]) -> GameLineScore | None:
         """スコアボード。回ごとの得点が記録されていなければ出さない。"""
-        score = game.line_score
-        if score.is_empty:
-            return None
-
-        columns = []
-        for inning in range(1, score.innings + 1):
-            away = str(score.runs_in(inning, home=False))
-            # ホームが最終回を攻めずに終わった場合は 'X' を置く（記録の慣例）
-            home = str(score.runs_in(inning, home=True)) if inning <= len(score.home) else "X"
-            columns.append(InningScoreColumn(inning=inning, away=away, home=home))
-
-        plate_appearances = game.plate_appearances
-        if plate_appearances:
-            # 安打・失策は打席が出典（打撃明細の合計とは照合済みで一致する）。
-            # 失策は守備側のチームに付くので、ホームの失策は表の打席から数える
-            return GameLineScore(
-                columns=columns,
-                away_total=score.away_total,
-                home_total=score.home_total,
-                away_hits=sum(domain_services.hits_by_inning(plate_appearances, home=False).values()),
-                home_hits=sum(domain_services.hits_by_inning(plate_appearances, home=True).values()),
-                away_errors=sum(domain_services.errors_by_inning(plate_appearances, home=False).values()),
-                home_errors=sum(domain_services.errors_by_inning(plate_appearances, home=True).values()),
-            )
-
-        # 古い記録（打席なし）の安打は打撃明細の合計。失策は数えられない
-        def hits_of(team_id: int) -> int:
-            return sum(row.hits for row in batting if row.team_id == team_id)
-
-        return GameLineScore(
-            columns=columns,
-            away_total=score.away_total,
-            home_total=score.home_total,
-            away_hits=hits_of(game.away_team_id),
-            home_hits=hits_of(game.home_team_id),
-        )
+        return build_line_score(game, lambda team_id: sum(row.hits for row in batting if row.team_id == team_id))
 
     def get_player_profile(self, team_id: int, player_id: int, *, month: str | None = None) -> PlayerProfile:
         """選手個人ページ。キャリア通算・年度別・月別と、選んだ月の試合ごとの成績。

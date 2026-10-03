@@ -105,5 +105,9 @@ class InvalidClubPlan(DomainError):
     """球団の編成（1軍登録・オーダー・ローテーション・抑え）として成立しない上書き。"""
 
 
+class AlreadyAdvanced(DomainError):
+    """画面を開いたときから世界が進んでいる（二重送信や、別の画面で先に進めた場合）。"""
+
+
 class InvalidSchedule(DomainError):
     """日程が組めない（球団数が奇数・リーグが1つ・規則が成立しないなど）、または日程の指定が不正。"""

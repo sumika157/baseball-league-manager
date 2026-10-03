@@ -1,7 +1,14 @@
 import datetime
 import unittest
 
-from myapp.domain.pennant.season import SeasonPhase, season_phase, world_today
+from myapp.domain.pennant.season import (
+    MAX_GAMES_PER_ADVANCE,
+    MAX_SUMMARY_DAYS,
+    SeasonPhase,
+    season_phase,
+    summary_period,
+    world_today,
+)
 
 
 class SeasonPhaseTest(unittest.TestCase):
@@ -29,3 +36,30 @@ class WorldTodayTest(unittest.TestCase):
         today = world_today(2026, None)
         self.assertEqual(today.year, 2026)
         self.assertEqual(today.weekday(), 4, "開幕日は金曜")
+
+
+class SummaryPeriodTest(unittest.TestCase):
+    TODAY = datetime.date(2026, 6, 30)
+
+    def test_the_period_is_after_since_through_today(self):
+        self.assertEqual(
+            summary_period(datetime.date(2026, 6, 20), self.TODAY), (datetime.date(2026, 6, 20), self.TODAY)
+        )
+
+    def test_a_long_period_is_rounded_to_a_month(self):
+        start, end = summary_period(datetime.date(2026, 3, 1), self.TODAY)
+
+        self.assertEqual((end - start).days, MAX_SUMMARY_DAYS)
+
+    def test_a_missing_since_or_a_world_without_games_shows_nothing(self):
+        self.assertIsNone(summary_period(None, self.TODAY))
+        self.assertIsNone(summary_period(datetime.date(2026, 6, 1), None))
+
+    def test_since_today_or_later_shows_nothing(self):
+        """今日と同じ日や未来の日は、エラーにせずまとめを出さない。"""
+        self.assertIsNone(summary_period(self.TODAY, self.TODAY))
+        self.assertIsNone(summary_period(self.TODAY + datetime.timedelta(days=1), self.TODAY))
+
+    def test_the_limit_of_one_advance_fits_a_week_of_eight_leagues(self):
+        """8リーグの1週間（138〜144試合）が収まる。"""
+        self.assertGreaterEqual(MAX_GAMES_PER_ADVANCE, 144)

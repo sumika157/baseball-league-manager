@@ -558,3 +558,13 @@ class BoxScoreColumnsTest(BaseCase):
         rows = self.client.get(reverse("game_detail", args=[self.game.id])).context["detail"].home_box.pitching
 
         self.assertEqual(rows[0].runs_allowed, 2)
+
+
+class SeasonListTest(BaseCase):
+    def test_a_season_is_listed_once_however_many_games_it_has(self):
+        """試合のある年は1回ずつ返す（既定の並びの列が DISTINCT に混ざり、試合の数だけ同じ年が返っていた）。"""
+        for day in (1, 2, 3):
+            play_game(self.team, self.rival, home_score=1, away_score=0, day=day)
+        play_game(self.team, self.rival, home_score=1, away_score=0, year=2025)
+
+        self.assertEqual(self.service.list_game_seasons(), [2026, 2025])

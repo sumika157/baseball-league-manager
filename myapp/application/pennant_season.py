@@ -22,9 +22,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from datetime import date
+from types import EllipsisType
 
 from ..domain.entities import Game
-from ..domain.exceptions import InvalidRoster
+from ..domain.exceptions import AlreadyAdvanced, InvalidRoster, InvalidSchedule
 from ..domain.pennant.club_plan import ClubLimits, ResolvedClub, resolve_club, strictest_game_limit
 from ..domain.pennant.schedule import (
     AdvanceTarget,
@@ -119,18 +120,33 @@ class PennantSeasonService:
             self._fixtures.add_all(schedule)
         return True
 
-    def advance(self, target: AdvanceTarget) -> AdvanceReport:
+    def advance(
+        self,
+        target: AdvanceTarget,
+        *,
+        max_games: int | None = None,
+        expected_today: date | None | EllipsisType = ...,
+    ) -> AdvanceReport:
         """日程を `target` の分だけ進める。未消化の対戦ごとに試合を作って保存し、その対戦を消す。
 
         日程がまだ無い世界は、先に開幕年の日程を作る。未消化が無ければ何もせず、空の結果を返す。
         試合ができなくなる世界（打順を組む野手がいない球団など）は InvalidRoster で、書き出し済みの日は
         そのまま残る（日の区切りで書き出すので、「今日」が中途半端にならない。まだ書き出していない
         直近の日（最大 `FLUSH_EVERY_GAMES` 試合ぶん）は捨てられ、次に進めるときに同じ結果で作り直される）。
+
+        `max_games` を渡すと、今回の範囲の試合数がそれを超えるときは何も作らずに InvalidSchedule にする
+        （画面から進めるときの上限。管理コマンドは渡さない）。
+
+        `expected_today` を渡すと、世界の今日（消化した最後の試合日。まだ無ければ None）がそれと違うときは
+        何も作らずに AlreadyAdvanced にする（画面を開いたあとに別の操作で進んだ世界を、さらに進めない。
+        管理コマンドは渡さない）。
         """
         world = self._worlds.find_by_id(self._world_id)
+        last_played = self._context_query.last_played_on()
+        if expected_today is not ... and expected_today != last_played:
+            raise AlreadyAdvanced("既に進んでいます。最新の状態を表示しました。")
         created = self.ensure_schedule()
         pending = self._fixtures.find_all()
-        last_played = self._context_query.last_played_on()
         dates = dates_to_play(
             pending, last_played if last_played is not None else date.min, target, world.managed_team_id
         )
@@ -138,6 +154,14 @@ class PennantSeasonService:
             return AdvanceReport(
                 played_dates=(), games=0, today=last_played, remaining_fixtures=len(pending), schedule_created=created
             )
+        if max_games is not None:
+            days = set(dates)
+            wanted = sum(1 for fixture in pending if fixture.date in days)
+            if wanted > max_games:
+                # 1回で作る試合が多すぎると応答が返らない。何も作らずに断る
+                raise InvalidSchedule(
+                    f"一度に進められるのは{max_games}試合までです（この範囲は{wanted}試合あります）。"
+                )
 
         played, notices = self._play(world, pending, dates)
         return AdvanceReport(

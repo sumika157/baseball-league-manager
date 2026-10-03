@@ -1217,6 +1217,8 @@ class WorldContext:
     managed_team_name: str
     # 世界バーの「成績」「タイトル」の行き先のリーグ。受け持つ球団のリーグ、無ければ先頭のリーグ
     default_league_id: int | None
+    # 世界のオーナー（書き込みを許す人）。画面には名前を出さず、操作の権限の判定だけに使う
+    owner_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -1234,6 +1236,7 @@ class WorldSummary:
     last_played_on: date | None
     # 未消化の対戦が残っているか
     has_pending_fixtures: bool
+    owner_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -1312,3 +1315,249 @@ class ClubPlanNotice:
 
     section: PlanSection
     reason: str
+
+
+# --- ペナントの GM ホーム（P4b） ---
+
+
+@dataclass(frozen=True)
+class PennantWorldList:
+    """世界の一覧。ログインしている人の世界と、ほかの人の世界に分ける。オーナーの名前は載せない。"""
+
+    mine: list[PennantWorldListRow]
+    others: list[PennantWorldListRow]
+    # 1人が持てる世界の数（上限に達したら作成フォームを出さない）
+    world_limit: int
+
+    @property
+    def at_limit(self) -> bool:
+        return len(self.mine) >= self.world_limit
+
+
+@dataclass(frozen=True)
+class OwnTeamSummary:
+    """自軍の帯。順位・成績・勢い・残り試合。"""
+
+    team_id: int
+    team_name: str
+    league_name: str
+    phase: SeasonPhase
+    # 試合がまだ無ければ順位は付かない
+    rank: int | None
+    wins: int
+    losses: int
+    ties: int
+    winning_percentage: str
+    # 首位は「—」
+    games_behind: str
+    games_played: int
+    remaining_games: int
+    # 直近10試合の成績（「6勝4敗」）と連続（「3連勝」）。試合が無ければ空
+    last_ten: str
+    streak: str
+    # 開幕前だけ。日程の最初の日（日程がまだ無ければ既定の開幕日）
+    opening_date: date | None
+
+    @property
+    def is_leader(self) -> bool:
+        """首位か。domain の `StandingRow.is_leader` と同じ定義（1位）で、表示用の「ゲーム差」の表記には頼らない。"""
+        return self.rank == 1
+
+    @property
+    def is_before_opening(self) -> bool:
+        return self.phase is SeasonPhase.BEFORE_OPENING
+
+    @property
+    def is_finished(self) -> bool:
+        return self.phase is SeasonPhase.FINISHED
+
+
+@dataclass(frozen=True)
+class UpcomingGame:
+    """自軍の未消化の試合。"""
+
+    played_on: date
+    opponent_team_id: int
+    opponent_name: str
+    is_home: bool
+
+
+@dataclass(frozen=True)
+class AdvanceOption:
+    """「進める」のボタン1つ。終わる日付と試合数は日程から事前に導く（日程がまだ無ければ None）。"""
+
+    # `AdvanceTarget` の値（フォームで送る文字列）
+    target: str
+    label: str
+    end_date: date | None
+    games: int | None
+
+
+@dataclass(frozen=True)
+class GameNote:
+    """1試合の見どころ。責任投手と本塁打。"""
+
+    game_id: int
+    winning_pitcher: str
+    losing_pitcher: str
+    save_pitcher: str
+    home_runs: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class PeriodBatting:
+    """ある期間の、選手1人の打撃の合計。"""
+
+    player_id: int
+    name: str
+    # 期間の合計。安打・打率などは BattingLine が出典（内訳から導く）
+    batting: BattingLine
+
+
+@dataclass(frozen=True)
+class PeriodPitching:
+    """ある期間の、選手1人の投球の合計。"""
+
+    player_id: int
+    name: str
+    wins: int
+    losses: int
+    saves: int
+
+
+@dataclass(frozen=True)
+class OwnGameResult:
+    """自軍の1試合の結果（自軍から見た表記）。"""
+
+    game_id: int
+    played_on: date
+    opponent_name: str
+    is_home: bool
+    # 「○」「●」「△」
+    outcome: str
+    own_score: int
+    opponent_score: int
+    winning_pitcher: str = ""
+    losing_pitcher: str = ""
+    save_pitcher: str = ""
+    home_runs: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PeriodBatter:
+    """期間の活躍（打者）。"""
+
+    player_id: int
+    name: str
+    batting_average: str
+    hits: int
+    at_bats: int
+    home_runs: int
+    runs_batted_in: int
+
+
+@dataclass(frozen=True)
+class AdvanceSummary:
+    """「進めた結果」のまとめ。`since` より後から `until` までの試合。"""
+
+    since: date
+    until: date
+    wins: int
+    losses: int
+    ties: int
+    # 期間の前と後の順位・首位との差。期間の前に試合が無ければ順位は None
+    rank_before: int | None
+    rank_after: int | None
+    games_behind_before: str
+    games_behind_after: str
+    own_games: list[OwnGameResult]
+    # 自軍の試合がちょうど1つのときだけ、そのスコアボード
+    line_score_game: GameRow | None
+    line_score: GameLineScore | None
+    batters: list[PeriodBatter]
+    pitchers: list[PeriodPitching]
+    # 自軍以外の試合（新しい順。多いときは先頭から `other_games_omitted` を除いた分だけ）
+    other_games: list[GameRow]
+    other_games_omitted: int
+
+
+@dataclass(frozen=True)
+class KeyBatterRow:
+    """主力打者の1行。"""
+
+    player_id: int
+    name: str
+    batting_average: float
+    home_runs: int
+    runs_batted_in: int
+    ops: float
+    # 直近15日の打率。打数が無ければ空
+    recent_average: str
+
+
+@dataclass(frozen=True)
+class KeyPitcherRow:
+    """投手陣の1行。"""
+
+    player_id: int
+    name: str
+    wins: int
+    losses: int
+    saves: int
+    innings_pitched: str
+    earned_run_average: float
+    starts: int
+
+
+@dataclass(frozen=True)
+class TitleRaceRow:
+    """タイトル争い。自軍の選手が上位にいる部門。"""
+
+    department: str
+    rank: int
+    player_id: int
+    player_name: str
+    value: str
+    leader_name: str
+    leader_value: str
+
+
+@dataclass(frozen=True)
+class HomeStandings:
+    """ホームの順位表。自軍のリーグを最初に出し、ほかのリーグは選んで切り替える。"""
+
+    year: int
+    # 切り替えの選択肢（試合のあるリーグ。自軍のリーグが先頭）
+    leagues: list[LeagueOption]
+    selected: LeagueStandings | None
+
+
+@dataclass(frozen=True)
+class PennantHome:
+    """GM ホームの材料。状態は保存せず、日程と試合から導く。"""
+
+    world: WorldContext
+    own: OwnTeamSummary | None
+    # 自軍の今後の日程（先頭が次の試合）
+    upcoming: list[UpcomingGame]
+    advance_options: list[AdvanceOption]
+    # 二重送信の検出に使う「いまの今日」（日付、まだ試合が無ければ空）
+    expected_today: str
+    summary: AdvanceSummary | None
+    standings: HomeStandings
+    batters: list[KeyBatterRow]
+    pitchers: list[KeyPitcherRow]
+    titles: list[TitleRaceRow]
+
+    @property
+    def season_finished(self) -> bool:
+        return self.world.phase is SeasonPhase.FINISHED
+
+
+@dataclass(frozen=True)
+class WorldDeletion:
+    """世界の削除の確認に出す、消えるものの規模。"""
+
+    world: WorldContext
+    season_count: int
+    game_count: int

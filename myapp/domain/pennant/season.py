@@ -9,7 +9,16 @@ from __future__ import annotations
 import datetime
 from enum import Enum
 
-from .schedule import ScheduleRules, default_opening_day
+from .schedule import AdvanceTarget, ScheduleRules, default_opening_day
+
+# 画面の1回の「進める」で作ってよい試合数の上限。8リーグの1週間（約140試合）が収まる大きさで、
+# 静かな環境で約4秒、負荷時でも約10秒（設計書 12.「P3b の詳細」）
+MAX_GAMES_PER_ADVANCE = 150
+# 画面から進められる範囲（ボタンの並び順）。「月末まで」「シーズン終了まで」は1回の上限を超えうるので出さない。
+# 画面に出す選択肢も、受け付ける範囲も、ここが唯一の出典
+SCREEN_ADVANCE_TARGETS = (AdvanceTarget.DAY, AdvanceTarget.NEXT_MANAGED_GAME, AdvanceTarget.WEEK)
+# 「進めた結果」のまとめに載せる期間の上限（日）。長く進めても、読める量に丸める
+MAX_SUMMARY_DAYS = 31
 
 
 class SeasonPhase(Enum):
@@ -39,3 +48,17 @@ def world_today(start_year: int, last_played_on: datetime.date | None) -> dateti
     if last_played_on is not None:
         return last_played_on
     return default_opening_day(start_year, ScheduleRules())
+
+
+def summary_period(
+    since: datetime.date | None, today: datetime.date | None
+) -> tuple[datetime.date, datetime.date] | None:
+    """「進めた結果」のまとめの期間（`since` より後から `today` まで）。出さないときは None。
+
+    `since` は URL から来る値なので信用しない。無い・今日以後（未来や、まだ進めていない日）は
+    エラーにせずまとめを出さない。期間が長すぎるときは `MAX_SUMMARY_DAYS` 日に丸める。
+    返す開始日は「この日**より後**の試合を数える」基準の日（その日の試合は含まない）。
+    """
+    if since is None or today is None or since >= today:
+        return None
+    return max(since, today - datetime.timedelta(days=MAX_SUMMARY_DAYS)), today

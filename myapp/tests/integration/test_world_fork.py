@@ -326,6 +326,8 @@ class ForkOptionsTest(BaseCase):
             real_fielding=DjangoFieldingTotalsQuery(REAL),
             worlds=DjangoWorldRepository(),
             repositories_for=factory,  # type: ignore[arg-type]
+            atomic=transaction.atomic,
+            ensure_schedule=lambda world_id: False,
         )
 
         with self.assertRaises(RuntimeError):

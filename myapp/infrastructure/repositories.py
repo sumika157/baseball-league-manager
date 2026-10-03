@@ -1270,6 +1270,9 @@ class DjangoWorldRepository:
     def find_all(self) -> list[World]:
         return [self._to_domain(row) for row in orm_models.PennantWorld.objects.all()]
 
+    def count_by_owner(self, owner_id: int) -> int:
+        return orm_models.PennantWorld.objects.filter(owner_id=owner_id).count()
+
     def save(self, world: World) -> World:
         row, _ = orm_models.PennantWorld.objects.update_or_create(  # type: ignore[misc]
             id=world.id,
