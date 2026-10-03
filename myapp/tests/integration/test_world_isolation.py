@@ -12,6 +12,7 @@
 
 import json
 import re
+from datetime import date
 
 from django.apps import apps
 from django.contrib.auth.models import User
@@ -553,6 +554,33 @@ class PennantScreensStayInTheWorldTest(WorldCase):
         self.client.force_login(User.objects.create_superuser("root", password="x"))
 
         self._assert_stays_in(self.world_id, self.world_urls())
+
+    def test_the_owner_screens_stay_in_the_world(self):
+        """オーナーにだけ出る導線（進める・削除）と、結果のまとめのリンクも、世界の中に留まる。"""
+        owner = User.objects.create_user("gm", password="x")
+        orm_models.PennantWorld.objects.filter(id=self.world_id).update(
+            owner_id=owner.id, managed_team_id=self.pennant_team.id
+        )
+        orm_models.PennantFixture.objects.create(
+            date=date(YEAR, 4, 3), home_team=self.pennant_team, visitor_team=self.pennant_rival
+        )
+        self.client.force_login(owner)
+        urls = [
+            reverse("pennant_world", args=[self.world_id]),
+            reverse("pennant_world", args=[self.world_id]) + f"?since={YEAR}-04-01",
+            reverse("pennant_delete", args=[self.world_id]),
+        ]
+
+        self._assert_stays_in(self.world_id, urls)
+        prefix = f"/pennant/{self.world_id}/"
+        for url in urls:
+            content = self.client.get(url).content.decode()
+            for action in re.findall(r'<form [^>]*action="([^"]*)"', content):
+                allowed = action.startswith((prefix, *HEADER_PREFIXES)) or action in HEADER_PAGES
+                self.assertTrue(allowed, f"{url} のフォーム {action} が世界の外へ出ています")
+        home = self.client.get(urls[1]).content.decode()
+        self.assertIn(f'action="/pennant/{self.world_id}/advance/"', home, "オーナーには進めるフォームが出る")
+        self.assertIn(f"/pennant/{self.world_id}/games/{self.pennant_game_id}/", home, "結果のまとめから試合詳細へ")
 
     def test_the_links_really_are_collected(self):
         """リンクを拾えていなければ、上の検査は何も確かめていない。"""

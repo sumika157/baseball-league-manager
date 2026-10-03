@@ -121,6 +121,10 @@ class WorldRepository(Protocol):
         """新しく作った世界から順に。"""
         ...
 
+    def count_by_owner(self, owner_id: int) -> int:
+        """そのユーザーがオーナーの世界の数。世界の数の上限の検査に使う（世界を組み立てずに数える）。"""
+        ...
+
     def save(self, world: World) -> World:
         """世界を保存する。"""
         ...

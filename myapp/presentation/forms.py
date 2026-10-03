@@ -5,11 +5,15 @@
 アプリケーション層には検証済みの値だけを渡す。
 """
 
+from collections.abc import Sequence
+from typing import cast
+
 from django import forms
 
-from ..application.dto import LineupSlot
+from ..application.dto import LeagueTeams, LineupSlot
 from ..domain.entities import FieldingError, PlateAppearance, RunnerAdvance
 from ..domain.exceptions import InvalidPosition
+from ..domain.pennant.world import MAX_NAME_LENGTH, MAX_SEED, MAX_SOURCE_LEAGUES
 from ..domain.value_objects import (
     AdvanceReason,
     Base,
@@ -217,3 +221,52 @@ class PlateAppearanceForm(forms.Form):
             advances=advances,
             errors=errors,
         )
+
+
+class PennantWorldForm(forms.Form):
+    """ペナントの世界の作成。元にするリーグ（1〜8）と、受け持つ球団（必須）を選ぶ。
+
+    選択肢は実データのリーグ・球団（`groups`）から作る。リーグの数の上限と、受け持つ球団が
+    選んだリーグの球団であることはここで確かめる（世界の作成も同じ規則で弾く）。
+    """
+
+    name = forms.CharField(
+        label="世界の名前", max_length=MAX_NAME_LENGTH, widget=forms.TextInput(attrs={"class": "form-control"})
+    )
+    leagues = forms.MultipleChoiceField(
+        label="元にするリーグ", widget=forms.CheckboxSelectMultiple(attrs={"class": "form-check-input"})
+    )
+    managed_team = forms.ChoiceField(label="受け持つ球団", widget=forms.Select(attrs={"class": "form-select"}))
+    start_year = forms.IntegerField(
+        label="開幕年", min_value=1900, max_value=2100, widget=forms.NumberInput(attrs={"class": "form-control"})
+    )
+    seed = forms.IntegerField(
+        label="乱数のシード",
+        required=False,
+        min_value=0,
+        max_value=MAX_SEED,
+        widget=forms.NumberInput(attrs={"class": "form-control"}),
+    )
+
+    def __init__(self, *args, groups: Sequence[LeagueTeams], default_year: int, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._league_of_team = {str(team.id): str(group.league_id) for group in groups for team in group.teams}
+        # 宣言した項目は、フォームの作成時に項目の複製（`self.fields`）に置き換わる。複製の側に選択肢を入れる
+        self._leagues_field = cast(forms.MultipleChoiceField, self.fields["leagues"])
+        self._team_field = cast(forms.ChoiceField, self.fields["managed_team"])
+        self._leagues_field.choices = [(str(group.league_id), group.league_name) for group in groups]
+        # リーグごとの <optgroup>。受け持つ球団は必須なので、先頭の空の選択肢は選べない
+        self._team_field.choices = [("", "選んでください")] + [
+            (group.league_name, [(str(team.id), team.name) for team in group.teams]) for group in groups
+        ]
+        self.fields["start_year"].initial = default_year
+
+    def clean(self):
+        cleaned = super().clean()
+        leagues = cleaned.get("leagues") or []
+        if len(leagues) > MAX_SOURCE_LEAGUES:
+            self.add_error("leagues", f"元にするリーグは{MAX_SOURCE_LEAGUES}つまで選べます。")
+        team = cleaned.get("managed_team")
+        if team and leagues and self._league_of_team.get(team) not in leagues:
+            self.add_error("managed_team", "受け持つ球団は、選んだリーグの球団から選んでください。")
+        return cleaned

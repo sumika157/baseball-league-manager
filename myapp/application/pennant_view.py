@@ -11,9 +11,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import date
 
 from ..domain.pennant.season import season_phase
-from .dto import OwnStanding, PennantWorldListRow, WorldContext, WorldSummary
+from ..domain.pennant.world import MAX_WORLDS_PER_OWNER
+from .dto import OwnStanding, PennantWorldList, PennantWorldListRow, WorldContext, WorldSummary
 from .queries import WorldSummaryQuery
 from .services import TeamApplicationService
 
@@ -30,6 +32,7 @@ def _context_of(summary: WorldSummary) -> WorldContext:
         managed_team_id=summary.managed_team_id,
         managed_team_name=summary.managed_team_name,
         default_league_id=summary.default_league_id,
+        owner_id=summary.owner_id,
     )
 
 
@@ -52,6 +55,20 @@ class PennantWorldViewService:
     def list_rows(self) -> list[PennantWorldListRow]:
         """世界の一覧の行。新しく作った世界から順に。順位は、受け持つ球団のいまのシーズンのもの。"""
         return [self._row_of(summary) for summary in self._summaries.list_all()]
+
+    def list_worlds(self, viewer_id: int | None) -> PennantWorldList:
+        """世界の一覧を、`viewer_id` の世界（オーナーが本人）とほかの人の世界に分ける。
+
+        どちらも最後に進めた日が新しい順（まだ進めていない世界は後ろ）。`viewer_id` が None
+        （未ログイン）なら、自分の世界は無い。オーナーのいない世界（コマンドで作った世界）は
+        ほかの人の世界。
+        """
+        rows = sorted(
+            self.list_rows(), key=lambda row: (row.context.today or date.min, row.context.world_id), reverse=True
+        )
+        mine = [row for row in rows if viewer_id is not None and row.context.owner_id == viewer_id]
+        others = [row for row in rows if row not in mine]
+        return PennantWorldList(mine=mine, others=others, world_limit=MAX_WORLDS_PER_OWNER)
 
     def _row_of(self, summary: WorldSummary) -> PennantWorldListRow:
         context = _context_of(summary)

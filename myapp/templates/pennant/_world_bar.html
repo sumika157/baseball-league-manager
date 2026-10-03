@@ -1,7 +1,7 @@
 {% comment %}
 世界バー。いまペナントの中にいることを、世界の全画面で示す。パンくずの下に置く。
 1行目は世界の名前と「いま」（今日・局面・受け持つ球団）、2行目は世界の中の移動。
-「ホーム」は P4b で GM ホームになるまで順位表へ案内する。「編成」は P5 で足す。
+「ホーム」は GM ホーム（P4b）。「編成」は P5 で足す。
 成績とタイトルはリーグごとの画面なので、受け持つ球団のリーグ（無ければ先頭のリーグ）へ向ける。
 {% endcomment %}
 {% with name=request.resolver_match.url_name %}
@@ -14,7 +14,7 @@
     </span>
   </div>
   <div class="segmented mb-0">
-    <a class="segmented-item" href="{% url 'pennant_world' world.world_id %}">ホーム</a>
+    <a class="segmented-item {% if name == 'pennant_world' or name == 'pennant_delete' %}is-active{% endif %}" href="{% url 'pennant_world' world.world_id %}">ホーム</a>
     <a class="segmented-item {% if name == 'pennant_standings' or name == 'pennant_standings_by_year' or name == 'pennant_league_detail' or name == 'pennant_league_detail_by_year' %}is-active{% endif %}"
        href="{% url 'pennant_standings' world.world_id %}">順位表</a>
     <a class="segmented-item {% if name == 'pennant_game_list' or name == 'pennant_game_detail' %}is-active{% endif %}"

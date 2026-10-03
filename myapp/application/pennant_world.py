@@ -19,9 +19,10 @@ from ..domain.exceptions import InvalidWorld, TeamNotFound
 from ..domain.pennant.fork import fork_league, fork_roster, fork_team
 from ..domain.pennant.initial_ratings import career_record, estimate_initial_ratings
 from ..domain.pennant.ratings import PlayerRatings
-from ..domain.pennant.world import World, WorldScope
+from ..domain.pennant.world import MAX_SOURCE_LEAGUES, MAX_WORLDS_PER_OWNER, World, WorldScope
 from ..domain.repositories import LeagueRepository, RatingsRepository, TeamRepository, WorldRepository
 from .dto import PennantWorldCreated, PennantWorldRow
+from .pennant_season import AtomicBlock
 from .queries import FieldingTotalsQuery
 
 
@@ -83,6 +84,8 @@ class PennantWorldService:
         real_fielding: FieldingTotalsQuery,
         worlds: WorldRepository,
         repositories_for: WorldRepositoryFactory,
+        atomic: AtomicBlock,
+        ensure_schedule: Callable[[int], bool],
     ) -> None:
         # 実データ範囲のリポジトリと参照クエリ。分岐元を読むだけで、書き込みには使わない
         self._real_leagues = real_leagues
@@ -90,6 +93,9 @@ class PennantWorldService:
         self._real_fielding = real_fielding
         self._worlds = worlds
         self._repositories_for = repositories_for
+        # 世界の作成と日程の生成を1つにまとめるトランザクションと、世界の id から日程を作る関数（組み立て口が渡す）
+        self._atomic = atomic
+        self._ensure_schedule = ensure_schedule
 
     def list_worlds(self) -> list[PennantWorldRow]:
         return [_row(world) for world in self._worlds.find_all()]
@@ -122,6 +128,12 @@ class PennantWorldService:
         league_ids = list(dict.fromkeys(source_league_ids))
         if not league_ids:
             raise InvalidWorld("分岐元のリーグを1つ以上選んでください。")
+        if len(league_ids) > MAX_SOURCE_LEAGUES:
+            raise InvalidWorld(f"分岐元のリーグは{MAX_SOURCE_LEAGUES}つまで選べます。")
+        if owner_id is not None and self._worlds.count_by_owner(owner_id) >= MAX_WORLDS_PER_OWNER:
+            raise InvalidWorld(
+                f"作れる世界は1人{MAX_WORLDS_PER_OWNER}つまでです。不要な世界を削除してから作ってください。"
+            )
         # 検査を先に済ませる（世界を作ってから失敗すると、消す手間が増える）
         world = World(name=name, seed=seed, start_year=start_year, owner_id=owner_id)
         source = self.load_source(league_ids)
@@ -138,6 +150,33 @@ class PennantWorldService:
             with suppress(Exception):
                 self._worlds.delete(_saved_id(world.id))
             raise
+
+    def create_world_with_schedule(
+        self,
+        *,
+        name: str,
+        owner_id: int | None,
+        source_league_ids: Sequence[int],
+        start_year: int,
+        seed: int,
+        managed_source_team_id: int | None = None,
+    ) -> PennantWorldCreated:
+        """世界を作り、開幕年の日程まで作る。**同じトランザクション**で行い、日程が組めなければ世界も残さない。
+
+        日程まで揃えるのは、開幕前の GM ホームが「進める範囲と試合数」を出せるようにするため
+        （画面から作る世界はこちらを使う。コマンドは `create_world` で、日程は最初の「進める」で作る）。
+        """
+        with self._atomic():
+            created = self.create_world(
+                name=name,
+                owner_id=owner_id,
+                source_league_ids=source_league_ids,
+                start_year=start_year,
+                seed=seed,
+                managed_source_team_id=managed_source_team_id,
+            )
+            self._ensure_schedule(_saved_id(created.world.id))
+        return created
 
     def _fork(
         self,

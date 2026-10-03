@@ -1,0 +1,20 @@
+{% load scoped %}
+{% comment %}
+試合のタイル一覧（日付・対戦・結果・詳細へのリンク）。ダッシュボード・リーグ画面・ペナントのホームで使う。
+games（GameRow の並び）を渡す。詳細へのリンクは世界の中なら世界の URL になる（scoped_url）。
+{% endcomment %}
+<ul class="tile-list">
+  {% for game in games %}
+    <li>
+      <a href="{% scoped_url 'game_detail' game.id %}">
+        <span class="tile-list-main">
+          <span class="tile-list-title">
+            {{ game.home_team_name }} {% if game.is_recorded %}{{ game.home_score }} - {{ game.away_score }}{% else %}—{% endif %} {{ game.away_team_name }}
+          </span>
+          <span class="tile-list-sub">{{ game.played_on|date:"Y/m/d" }} · {{ game.result }}</span>
+        </span>
+        <span class="tile-arrow">→</span>
+      </a>
+    </li>
+  {% endfor %}
+</ul>

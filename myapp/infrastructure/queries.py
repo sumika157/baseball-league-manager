@@ -20,8 +20,11 @@ from django.db.models import BooleanField, Case, Count, Exists, Max, OuterRef, Q
 from ..application.dto import (
     ActivePlayerStats,
     FieldingRow,
+    GameNote,
     GameRow,
     LastStart,
+    PeriodBatting,
+    PeriodPitching,
     PitchingOuting,
     PlayerFielding,
     PlayerSearchRow,
@@ -377,6 +380,8 @@ class DjangoGameListQuery:
         team_id: int | None = None,
         month: int | None = None,
         league_id: int | None = None,
+        after: date | None = None,
+        through: date | None = None,
     ) -> QuerySet[orm_models.Game]:
         """絞り込みは SQL 側で行う。取得後に Python で捨てると件数ぶん無駄になる。"""
         rows = games_in(self._scope).select_related("home_team", "away_team")
@@ -390,6 +395,10 @@ class DjangoGameListQuery:
             rows = rows.filter(Q(home_team_id=team_id) | Q(away_team_id=team_id))
         if month is not None:
             rows = rows.filter(played_on__month=month)
+        if after is not None:
+            rows = rows.filter(played_on__gt=after)
+        if through is not None:
+            rows = rows.filter(played_on__lte=through)
         return rows
 
     def list_rows(
@@ -399,9 +408,13 @@ class DjangoGameListQuery:
         team_id: int | None = None,
         month: int | None = None,
         league_id: int | None = None,
+        after: date | None = None,
+        through: date | None = None,
     ) -> list[GameRow]:
         rows = _with_recorded(
-            self._rows(year=year, team_id=team_id, month=month, league_id=league_id).order_by("-played_on", "-id")
+            self._rows(
+                year=year, team_id=team_id, month=month, league_id=league_id, after=after, through=through
+            ).order_by("-played_on", "-id")
         )
         return [
             GameRow(
@@ -457,7 +470,9 @@ class DjangoGameListQuery:
 
     def list_seasons(self) -> list[int]:
         """試合のある年を新しい順に。"""
-        return sorted(games_in(self._scope).values_list("year", flat=True).distinct(), reverse=True)
+        # order_by() で既定の並び（試合日・id）を外す。外さないと、並びの列まで DISTINCT の対象になり、
+        # 試合の数だけ同じ年が返る
+        return sorted(games_in(self._scope).order_by().values_list("year", flat=True).distinct(), reverse=True)
 
     def count_by_team(self, *, year: int | None = None) -> dict[int, int]:
         """チームid → 試合数。規定打席・規定投球回の基準になる。
@@ -492,6 +507,96 @@ class DjangoGameListQuery:
         """最新シーズン。一覧の既定に使う。"""
         seasons = self.list_seasons()
         return seasons[0] if seasons else None
+
+
+class DjangoPennantActivityQuery:
+    """PennantActivityQuery の Django ORM 実装。期間の見どころを、明細の SQL 集計で読む。
+
+    読む行は範囲（`WorldScope`）の中の、対象の試合・球団・期間に絞る。集約は組み立てない。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def game_notes(self, game_ids: Sequence[int]) -> dict[int, GameNote]:
+        ids = list(game_ids)
+        if not ids:
+            return {}
+        in_scope = world_condition("game__home_team__league", self._scope)
+        decided: dict[int, dict[str, str]] = {}
+        pitching = (
+            orm_models.GamePitchingLine.objects.filter(in_scope, game_id__in=ids)
+            .filter(Q(wins__gt=0) | Q(losses__gt=0) | Q(saves__gt=0))
+            .order_by("game_id", "appearance_order")
+            .values_list("game_id", "player__name", "wins", "losses", "saves")
+        )
+        for game_id, name, wins, losses, saves in pitching:
+            entry = decided.setdefault(game_id, {})
+            if wins:
+                entry["win"] = name
+            if losses:
+                entry["loss"] = name
+            if saves:
+                entry["save"] = name
+
+        hitters: dict[int, list[str]] = {}
+        batting = (
+            orm_models.GameBattingLine.objects.filter(in_scope, game_id__in=ids, home_runs__gt=0)
+            .order_by("game_id", "team_id", "batting_order", "slot_sequence")
+            .values_list("game_id", "player__name", "home_runs")
+        )
+        for game_id, name, home_runs in batting:
+            hitters.setdefault(game_id, []).append(name if home_runs == 1 else f"{name}（{home_runs}本）")
+
+        return {
+            game_id: GameNote(
+                game_id=game_id,
+                winning_pitcher=decided.get(game_id, {}).get("win", ""),
+                losing_pitcher=decided.get(game_id, {}).get("loss", ""),
+                save_pitcher=decided.get(game_id, {}).get("save", ""),
+                home_runs=tuple(hitters.get(game_id, ())),
+            )
+            for game_id in sorted(decided.keys() | hitters.keys())
+        }
+
+    def batting_between(self, team_id: int, *, after: date, through: date) -> list[PeriodBatting]:
+        # 合計と率は BattingLine が出典。ここは内訳（打数・単打・二塁打…）を選手ごとに足すだけ
+        games = (
+            world_condition("game__home_team__league", self._scope)
+            & Q(team_id=team_id)
+            & Q(game__played_on__gt=after, game__played_on__lte=through)
+        )
+        totals = batting_totals(games=games)
+        names = dict(orm_models.Player.objects.filter(id__in=list(totals)).values_list("id", "name"))
+        return [
+            PeriodBatting(player_id=player_id, name=names[player_id], batting=line)
+            for player_id, line in sorted(totals.items())
+        ]
+
+    def pitching_between(self, team_id: int, *, after: date, through: date) -> list[PeriodPitching]:
+        rows = (
+            orm_models.GamePitchingLine.objects.filter(
+                world_condition("game__home_team__league", self._scope),
+                game__played_on__gt=after,
+                game__played_on__lte=through,
+                # 投球の明細は球団を持たない。在籍中の球団で引く（世界の選手の在籍は1つ）
+                player__stints__team_id=team_id,
+                player__stints__to_year__isnull=True,
+            )
+            .values("player_id", "player__name")
+            .annotate(wins=Sum("wins"), losses=Sum("losses"), saves=Sum("saves"))
+            .order_by("player_id")
+        )
+        return [
+            PeriodPitching(
+                player_id=row["player_id"],
+                name=row["player__name"],
+                wins=row["wins"] or 0,
+                losses=row["losses"] or 0,
+                saves=row["saves"] or 0,
+            )
+            for row in rows
+        ]
 
 
 class DjangoTeamListQuery:
@@ -566,6 +671,7 @@ class DjangoWorldSummaryQuery:
                 ),
                 last_played_on=last_played.get(row.id),
                 has_pending_fixtures=row.id in with_fixtures,
+                owner_id=row.owner_id,
             )
             for row in rows
         ]
