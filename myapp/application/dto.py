@@ -7,8 +7,27 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 
-from ..domain.value_objects import FieldingPosition
+from ..domain.value_objects import BattingLine, FieldingPosition, PitchingLine, Position
+
+
+@dataclass(frozen=True)
+class ActivePlayerStats:
+    """在籍中の選手1人と、その成績。ランキング・タイトルの材料。
+
+    チーム（集約）を組み立てずに、順位づけに要る値だけを読み出す。
+    成績が通算かシーズンかは、読んだ参照クエリの側で決まる。
+    """
+
+    player_id: int
+    name: str
+    number: int
+    position: Position
+    team_id: int
+    team_name: str
+    batting: BattingLine
+    pitching: PitchingLine
 
 
 @dataclass(frozen=True)
@@ -55,6 +74,126 @@ class GameRow:
             return "引分"
         name = self.home_team_name if self.winner_team_id == self.home_team_id else self.away_team_name
         return f"{name} の勝ち"
+
+
+@dataclass(frozen=True)
+class PlayerIndexEntry:
+    """試合詳細の組み立てで、選手 id から引く1人ぶんの情報。
+
+    ボックススコアに並べる参考値として、1試合の率は読めないため通算の率を持つ。
+    """
+
+    name: str
+    number: int
+    team_id: int
+    career_batting_average: float
+    career_earned_run_average: float
+
+
+@dataclass(frozen=True)
+class GameEditPlayer:
+    """試合の編集画面に並べる、ロスターの1選手。"""
+
+    id: int
+    name: str
+    number: int
+    position: str
+    is_pitcher: bool
+
+
+@dataclass(frozen=True)
+class GameEditLineupSlot:
+    """試合の編集画面に並べる、打順の1行。
+
+    出場時点は「何回・表裏・その半回の何人目」で持つ（保存済みの値を入力と同じ形に戻したもの）。
+    代打・代走・投手は出場時点を打席から導くので、ここは None・False・1 の既定にしてある。
+    """
+
+    player_id: int
+    batting_order: int
+    slot_sequence: int
+    fielding_position: str  # 守備位置の表記。無ければ空
+    entered_inning: int | None
+    entered_is_bottom: bool
+    entered_batter: int
+
+
+@dataclass(frozen=True)
+class GameEditRoster:
+    """試合の編集画面に並べる、1チームぶんのロスターと、その試合の打順。"""
+
+    team_id: int
+    team_name: str
+    is_home: bool
+    players: list[GameEditPlayer]
+    lineup: list[GameEditLineupSlot]
+
+
+@dataclass(frozen=True)
+class GameEditHeader:
+    """試合の編集画面に出す試合の基本項目。得点は打席から導いた値で読み取り専用。"""
+
+    id: int
+    year: int
+    played_on: date
+    home_team_id: int
+    away_team_id: int
+    home_score: int
+    away_score: int
+
+
+@dataclass(frozen=True)
+class GameEditRunnerAdvance:
+    """編集画面の打席に付く、走者の進塁1つ。"""
+
+    runner_id: int
+    from_base: int
+    to_base: int
+    reason: str
+    error_index: int | None
+
+
+@dataclass(frozen=True)
+class GameEditError:
+    """編集画面の打席に付く、失策1つ。"""
+
+    player_id: int
+    position: str
+    kind: str
+
+
+@dataclass(frozen=True)
+class GameEditPlateAppearance:
+    """編集画面に並べる打席1つ。保存 API に送り返す形と同じ粒度。"""
+
+    sequence: int
+    inning: int
+    is_bottom: bool
+    batter_id: int
+    pitcher_id: int
+    batting_order: int
+    slot_sequence: int
+    result: str
+    fielded_by: tuple[str, ...]  # 守備位置の表記を、打球を処理した順に
+    advances: list[GameEditRunnerAdvance]
+    errors: list[GameEditError]
+
+
+@dataclass(frozen=True)
+class GameEditData:
+    """試合の編集画面に必要な材料。打順と打席は、表示用の値に詰め替えて持つ（集約は持たない）。"""
+
+    header: GameEditHeader
+    rosters: list[GameEditRoster]
+    plate_appearances: list[GameEditPlateAppearance]
+
+
+@dataclass(frozen=True)
+class GameTeamIds:
+    """試合の両チームの id。権限の確認のように、ロスターまでは要らない用途に使う。"""
+
+    home_team_id: int
+    away_team_id: int
 
 
 @dataclass(frozen=True)

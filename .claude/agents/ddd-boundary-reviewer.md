@@ -55,6 +55,15 @@ presentation  →  application  →  domain  ←  infrastructure
 ### 5. パフォーマンス上の既知の罠
 - `prefetch_related('a__b')` のような多段リレーションを新設・変更していないか確認する。中間テーブルが1000件を超えるとSQLiteで `Expression tree is too large` になるため、`Prefetch(..., queryset=...select_related(...))` でJOINにまとめる必要がある（[[sqlite-prefetch-related-expression-depth]] 参照。既存の回避例は `myapp/infrastructure/repositories.py` の `DjangoTeamRepository`）。
 
+### 6. 組み立てと受け渡し（CLAUDE.md「アーキテクチャ規則」）
+- **依存の組み立ては `presentation/views.py` の `build_service()` だけ**。サービスやリポジトリを別の場所（テンプレートタグ・管理画面・
+  管理コマンド・テスト）で個別に組み立てていないか。テストは `tests/helpers.py` 経由で `build_service()` を呼ぶ。
+  呼ぶ側ごとに一部の依存だけを渡すと、開く画面によって落ちるサービスになる（管理画面のテンプレートタグで実際に起きた）。
+- **層をまたぐ受け渡しに素の `dict` を新しく使っていないか**。application が presentation に返す形は `application/dto.py` の
+  dataclass にする（文字列キーの dict は綴りを間違えても静的検査が黙る）。既存の dict を触った変更なら、DTO へ寄せる余地を指摘してよい。
+- **`TeamApplicationService` にメソッドを足していないか**（`application/services.py`。約50メソッド・1,500行）。足しているなら、
+  対象ごとの別サービス（`game_recording.py` が前例）に置けないかを指摘する。分けるかどうかはユーザーが決めるので、「分ける案」として出す。
+
 ## 進め方
 
 1. `git diff` または対象ファイルを読み、変更範囲を把握する。

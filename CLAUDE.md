@@ -36,7 +36,7 @@
 - presentation（views）は application 経由で操作する。ORM モデルやリポジトリ実装を直接触らない。
 - **更新と参照を分ける**: 更新はリポジトリ経由で集約単位（`Team` / `Game`）に読み書きする。一覧表示などの参照は `infrastructure/queries.py` から直接 DTO を作る（集約を組み立てない）。参照クエリのインターフェースは `application/queries.py`（戻り値が DTO のため domain には置けない）。
 - **依存の組み立ては `presentation/views.py` の `build_service()`（`TeamApplicationService`）と `build_recording_service()`（スコアブックの保存を担う `GameRecordingService`）の2か所だけ。** どちらも依存を全部渡す（`tests/integration/test_wiring.py` が検査する）。呼ぶ側ごとに一部の依存だけを渡さない。渡し忘れが「開く画面によって落ちるサービス」になる（管理画面のテンプレートタグで実際に起きた）。テストも `tests/helpers.py` 経由でここを呼ぶ。
-- **層をまたぐ受け渡しに素の `dict` を使わない。** application が presentation に返す形は `application/dto.py` の dataclass にする。文字列キーの dict は綴りを間違えても静的検査が黙る。`get_game_edit_data` と `_player_index` は dict のまま残っているが、**新しく増やさない**。触ったついでに DTO へ寄せる。
+- **層をまたぐ受け渡しに素の `dict` を使わない。** application が presentation に返す形は `application/dto.py` の dataclass にする。文字列キーの dict は綴りを間違えても静的検査が黙る。試合詳細の選手の索引（`PlayerIndexEntry`）は DTO に寄せた。編集画面の材料（`GameEditData`）も DTO に寄せた。集約は持たず、出場時点の読み戻しのような集約からの取り出しは `application/game_edit.py` が担い、presentation は DTO を JSON に写すだけにしてある（DTO に集約を包ませない）。
 - **`TeamApplicationService` は既に約50メソッド・1,500行**あり、チーム・選手・試合・リーグ・管理画面の概況を1クラスで抱えている。ここへ足す前に、対象ごとの別サービスに置けないか考える。分ける判断は選択肢としてユーザーに提示する。
 
 ## 同じ事実の出典を2つ作らない
@@ -109,12 +109,14 @@ ORM に直接 `bulk_create` 等で書き込むコード（データ投入コマ�
     Issue に紐づけて作る（base が main でない epic のタスク PR は、本文のキーワードだけではリンクしないため）。
     本文には base が main なら `Closes #<番号>`、epic のタスク PR なら `Refs #<番号>` を書く。
     PR を作ったらリンクしたかを確かめる（しなくてもエラーにならない。確かめ方は `issue-plan` スキル）。
-  - epic は Issue を1本だけ立て、段階ごとのタスクはその手順チェックリストで追う（タスクごとに Issue を立てない）。
+  - **epic は親 Issue ＋ 段階ごとの sub-issue で追う**（前例: #26 と #50〜#54）。親には「なぜ・範囲・段階の分け方」、
+    sub-issue には段階ごとの実装計画を書く。統合ブランチは親に、タスクブランチは段階の sub-issue に紐づけて切る。
     詳細設計と段階ごとの実測値は従来どおり `docs/design/` に置き、Issue からはリンクするだけにする（同じ内容を両方に書かない）。
+  - 初期範囲から外した拡張は epic の親の子にせず、別の親 Issue にまとめる（前例: #55）。epic の親が閉じた後も未完了の子が残るため。
 - **タスクごとにブランチを切る。main に直接コミットしない。** 命名は `feature/` `fix/` `refactor/` `docs/` ＋ 英語の kebab-case（例: `feature/player-nationality`）。
 - **機能ごとにコミットする。** 複数の機能や無関係な修正を1つのコミットに混ぜない。逆に、1つの機能（実装＋テスト＋README更新）は1コミットにまとめる。
 - コミットメッセージは既存の履歴にならい日本語で書く。
-- 完了したら**3周のセルフレビュー（下記）を済ませてから** `git push -u origin <ブランチ>` し、**`gh pr create` で PR を作って URL を提示して終わる**。タイトルと本文は日本語。本文はファイルに書いて `--body-file` で渡す（引用符と改行で壊れない）。**マージはユーザーが GitHub 上で行う。こちらでマージしない。**
+- 完了したら**3周のセルフレビュー（下記）を済ませてから** `git push -u origin <ブランチ>` し、**`gh pr create` で PR を作って URL を提示して終わる**。タイトルと本文は日本語。本文はファイルに書いて `--body-file` で渡す（引用符と改行で壊れない）。**マージはユーザーが GitHub 上で行う。こちらでマージしない。** 手順は `open-pr` スキル。
 - `gh` は **Windows 側だけ**にある（winget の user スコープ。`sumika157` で認証済み）。**WSL には無い**ので `wsl -e` 経由では呼べない。既に開いているシェルの PATH には載っていないことがあるので、その場合は
   `C:\Users\sumik\AppData\Local\Microsoft\WinGet\Packages\GitHub.cli_Microsoft.Winget.Source_8wekyb3d8bbwe\bin\gh.exe` を直接叩く。
 - **`gh pr create` の前に `gh pr list --head <ブランチ> --state all` を見る。** push だけして URL を渡した時点で、
@@ -149,6 +151,8 @@ push の前に、**「レビュー → 改善」を3周繰り返す**。1周は�
   直さずに残した軽微な指摘もここに書く。周を回したか・何を見送ったかを、後からユーザーが確かめられるようにするため。
 
 ### 並行して作業するときは worktree を使う
+
+手順（作成・中での検査とテスト・片付けのコマンド）は `worktree` スキル。ここには使う条件と罠の理由を置く。
 
 `.git/index` は単一ファイルで、git はコマンド単位でしかロックしない。同じ作業ツリーで別セッションが `git add` すると、
 **自分のステージ内容ではなく相手の変更が自分のコミットメッセージで確定する**（実際に起きた）。ブランチを分けるだけでは
@@ -203,9 +207,9 @@ push の前に、**「レビュー → 改善」を3周繰り返す**。1周は�
   タスク名は統合ブランチ名の接頭辞にせず、独立した短い名前にする（`feature/pa-persistence` など）。
 - **タスクの PR は base を統合ブランチにする。** `gh pr create --base epic/<機能>` を忘れると
   main が base になり、前の段階の差分まで含んだ PR ができる。
-- **タスクブランチは統合ブランチを基点に作る**: `gh issue develop <epic の Issue> --name <タスク> --base epic/<機能>` →
+- **タスクブランチは統合ブランチを基点に作る**: `gh issue develop <段階の sub-issue> --name <タスク> --base epic/<機能>` →
   `git fetch origin <タスク>` → `git worktree add -b <タスク> .claude/worktrees/<名前> origin/<タスク>`
-  （統合ブランチ自体も `--base main` で同じ Issue に紐づけて作る）。
+  （統合ブランチ自体は `--base main` で親 Issue に紐づけて作る）。
 - **統合ブランチは長生きするので、段階の区切りごとに main を取り込む**（`git merge origin/main`）。
   放っておくと最後に大きく衝突する。並行して別のタスクが main にマージされていく前提で動く。
 - 設計は `docs/design/<機能>.md` に置き、**段階ごとに実測値と決定を追記する**（次のセッションへの引き継ぎになる）。

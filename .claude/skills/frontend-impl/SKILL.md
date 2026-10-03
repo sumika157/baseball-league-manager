@@ -39,11 +39,13 @@ model: sonnet
 
 ## 4. 検証
 
-- React を触ったら `make frontend-check`（tsc --noEmit）と `make frontend-build` を通す。
+- React を触ったら `frontend-check`（tsc --noEmit）と `frontend-build` を通す。どちらもコンテナを新しく作る操作で、`make` は WSL 側にしか無いので、
+  Claude Code からは `wsl -e bash -c "cd /home/sumika/work/develop/my_django_project && make frontend-check"` のように WSL 経由で呼ぶ（worktree なら末尾に `WT=<名前>`）。
 - テンプレートの描画・API の動作は `tests/integration/`、JS・CSS が絡む実ブラウザ確認だけ `tests/e2e/`（ビルド済みアセットが前提）。実行方法は `run-tests` スキル参照。
-- Python 側（views・api・forms）も触ったら `make lint` とフルスイートを通す。
+- Python 側（views・api・forms）も触ったら lint とフルスイートを通す（コマンドは CLAUDE.md。worktree なら `worktree` スキルの手順2）。
 
 ## 5. 仕上げ
 
 - README の画面構成の節を更新する。docs/design/ のドキュメントが完了したら README へ吸収して削除する。
-- コミットはユーザーに求められたときだけ。機能ごとに1コミット・日本語メッセージ・main に直接。
+- 機能ごとに1コミット・日本語メッセージで、Issue に紐づけたブランチにコミットする（main に直接コミットしない）。
+  終わったら `open-pr` スキルで3周セルフレビューを済ませて PR を出す。

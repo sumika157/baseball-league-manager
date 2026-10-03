@@ -16,7 +16,28 @@ from typing import Protocol, runtime_checkable
 
 from ..domain.entities import Game
 from ..domain.value_objects import FieldingLine
-from .dto import GameRow, PlayerFielding, TeamSummary
+from .dto import ActivePlayerStats, GameRow, PlayerFielding, TeamSummary
+
+
+@runtime_checkable
+class PlayerStatsQuery(Protocol):
+    """在籍中の選手の成績の参照。ランキング・タイトルの材料。
+
+    チーム（集約）を経由すると、順位づけに要らない経歴・主将歴・プロフィールまで
+    組み立てる。ここでは成績を SQL で集計して、選手ごとの DTO にして返す。
+    """
+
+    def list_career(self) -> list[ActivePlayerStats]:
+        """全チームの在籍中の選手と、その通算成績。チームの表示順、背番号順。"""
+        ...
+
+    def list_season(self, league_id: int, year: int) -> list[ActivePlayerStats]:
+        """そのリーグで在籍中の選手と、そのシーズンの成績。
+
+        成績に数えるのは、リーグのチームどうしの試合だけ（リーグをまたぐ対戦は数えない）。
+        チームの表示順、背番号順。
+        """
+        ...
 
 
 @runtime_checkable

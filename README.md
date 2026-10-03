@@ -270,15 +270,16 @@ docker compose exec web python manage.py rebuild_fielding_lines
 といった配分の工夫が必要でしたが、**打席を先に作れば整合は自動的に取れます**
 （打点は還った走者を数えるだけ、被安打は投げた打席の安打を数えるだけ）。
 
-出てくる数字はNPBの水準に合わせてあります（投入の最後に実測値が表示されます）。
+出てくる数字はNPBの水準に合わせてあります（投入の最後に実測値が表示されます。
+下の表は `--seed 42`。シードを変えると1試合平均得点は 3.8〜3.9 台でばらつきます）。
 
 | 指標 | 投入されるデータ | NPBの目安 |
 | --- | --- | --- |
-| 1試合平均得点 | 3.91 | 3.8〜4.0 |
-| リーグ打率 | .251 | .250〜.260 |
-| リーグ防御率 | 3.59 | 3.40〜3.60 |
-| K/9 / BB/9 | 7.48 / 2.73 | 7.0〜8.0 / 2.5〜3.0 |
-| HR/9 / 1試合の失策 | 0.90 / 1.28 | 0.9前後 / 1.2前後 |
+| 1試合平均得点 | 3.89 | 3.8〜4.0 |
+| リーグ打率 | .254 | .250〜.260 |
+| リーグ防御率 | 3.60 | 3.40〜3.60 |
+| K/9 / BB/9 | 7.45 / 2.66 | 7.0〜8.0 / 2.5〜3.0 |
+| HR/9 / 1試合の失策 | 0.89 / 1.26 | 0.9前後 / 1.2前後 |
 | 首位打者 / 本塁打王 | .350前後 / 30〜40本 | 同程度 |
 | 先発の投球回 / 抑えのセーブ | 170回前後 / 30前後 | 同程度 |
 
@@ -962,15 +963,16 @@ POST だけ権限を求めます（画面ごと `login_required` にすると閲
 | リーグ詳細 | 4,604ms / 297クエリ | 57ms / 5クエリ | 順位と対戦成績のために全試合の明細とロスターを読んでいた |
 | 順位表 | 4,163ms / 295クエリ | 83ms / 3クエリ | 同上 |
 | 選手一覧 | 4,580ms / 330クエリ | 257ms / 41クエリ | リーグ平均のために全48チームのロスターを読んでいた |
-| ダッシュボード | 4,864ms / 298クエリ | 426ms / 13クエリ | ロスターをチームごとに引き直していた（N+1） |
+| ダッシュボード | 4,864ms / 298クエリ | 380ms / 10クエリ | ロスターをチームごとに引き直していた（N+1）。のちにチーム集約を全部組み立てていたのもやめ、選手の成績を参照クエリで集計 |
 | リーグ成績 | 1,094ms / 581クエリ | 114ms / 15クエリ | 同上 |
-| リーグタイトル | 5,003ms / 295クエリ | 701ms / 13クエリ | リーグ内の対戦を Python で絞っていた |
+| リーグタイトル | 5,003ms / 295クエリ | 135ms / 6クエリ | リーグ内の対戦を Python で絞っていた。のちにチーム集約と1シーズンぶんの試合の明細を組み立てていたのもやめた（950ms → 135ms） |
 
 判断の基準は3つです。
 
 - **参照では集約を組み立てない**（順位・対戦成績・試合数は得点と対戦カードだけで決まる）
 - **絞り込みと集計は SQL 側で行う**（`count_by_team` / `find_between_teams` /
-  `find_by_league_with_roster`）
+  `find_by_league_with_roster`。ランキングとタイトルの選手の成績は `PlayerStatsQuery` が集計する。
+  投球回は（選手, 表記）ごとに集計してから `InningsPitched` で足すので、登板1回ごとには読まない）
 - **マッピングの中で関連を引き直さない**（`_RosterData` に選手をまとめて渡す）
 
 計測は専用コマンドで繰り返せます。**SQL 時間だけを見ても遅さには気づけません**
@@ -990,7 +992,7 @@ MSYS_NO_PATHCONV=1 docker compose exec web python manage.py measure_pages --prof
 | インターフェース | 置き場所 | 実装 |
 | --- | --- | --- |
 | `TeamRepository` `GameRepository` `LeagueRepository` `WorldRepository` | [domain/repositories.py](myapp/domain/repositories.py) | `infrastructure/repositories.py` |
-| `TeamListQuery` `GameListQuery` `PlayerFieldingQuery` | [application/queries.py](myapp/application/queries.py) | `infrastructure/queries.py` |
+| `TeamListQuery` `GameListQuery` `PlayerFieldingQuery` `PlayerStatsQuery` | [application/queries.py](myapp/application/queries.py) | `infrastructure/queries.py` |
 
 参照クエリだけドメイン層に置けないのは、戻り値が画面向けの DTO（`application/dto.py`）で、
 ドメイン層から参照できないためです。

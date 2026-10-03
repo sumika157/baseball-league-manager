@@ -23,16 +23,19 @@ model: sonnet
 `domain → application → infrastructure → presentation` の順に書く（依存規則・各層の責務は CLAUDE.md「アーキテクチャ規則」）。
 
 - 更新は集約（`Team` / `Game`）+ リポジトリ経由、参照は `infrastructure/queries.py` で DTO 直行。どちらの経路かを最初に決める。
-- domain を書いたら、その時点で `make test-domain`（Django 設定なし・DB 不要・数秒）を回して業務ルールを固めてから外側へ進む。
+- domain を書いたら、その時点で domain 層だけのテスト（Django 設定なし・DB 不要・数秒。コマンドは CLAUDE.md）を回して業務ルールを固めてから外側へ進む。
 - マイグレーションはスキーマ変更と `RunPython`（backfill）を別ファイルに分ける。適用済み（コミット済み）のマイグレーションは編集しない。
 
 ## 3. テストと検証
 
 - 実装と同時にテストを書く: 業務ルールは `tests/domain/`（Django 非依存）、画面・永続化・フォームは `tests/integration/`。実行方法は `run-tests` スキル参照。
-- 最後にフルスイート（`make test`）と `make lint`（コミット前の必須ゲート。中身は Makefile が出典）を通す。
+- 最後にフルスイートと lint（`ruff check`・`ruff format --check`・`mypy`。コミット前の必須ゲート）を通す。コマンドは CLAUDE.md、
+  worktree で作業しているなら `worktree` スキルの手順2（`-w` を忘れると main のコードを検査してしまう）。
+  `make` は WSL 側にしか無いので、Claude Code からは `docker compose exec` を直接叩く。
 
 ## 4. 仕上げ
 
 - 集約・層境界・不変条件に触れた変更は `ddd-boundary-reviewer` エージェントでレビューし、指摘があれば `fix-review` スキルで直す。
 - README の該当節を更新する。docs/design/ のドキュメントが完了したら README へ吸収して削除する。
-- コミットはユーザーに求められたときだけ。機能ごとに1コミット・日本語メッセージ・main に直接。
+- 機能ごとに1コミット・日本語メッセージで、Issue に紐づけたブランチにコミットする（main に直接コミットしない）。
+  終わったら `open-pr` スキルで3周セルフレビューを済ませて PR を出す。

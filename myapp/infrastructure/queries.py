@@ -14,11 +14,12 @@ from typing import Any
 from django.contrib.auth.models import AnonymousUser, User
 from django.db.models import BooleanField, Case, Count, Exists, OuterRef, Q, QuerySet, Sum, Value, When
 
-from ..application.dto import FieldingRow, GameRow, PlayerFielding, PlayerSearchRow, TeamSummary
+from ..application.dto import ActivePlayerStats, FieldingRow, GameRow, PlayerFielding, PlayerSearchRow, TeamSummary
 from ..domain.entities import Game, winning_team_id
 from ..domain.pennant.world import WorldScope
-from ..domain.value_objects import FieldingLine, Season
+from ..domain.value_objects import BattingLine, FieldingLine, PitchingLine, Position, Season
 from . import orm_models
+from .repositories import batting_totals, pitching_totals
 from .scoping import games_in, players_in, teams_in, world_condition
 
 
@@ -118,6 +119,67 @@ class DjangoFieldingTotalsQuery:
             if sums["player_id"] in wanted:
                 totals[sums["player_id"]] = FieldingLine(**{f.name: sums[f.name] or 0 for f in fields(FieldingLine)})
         return totals
+
+
+class DjangoPlayerStatsQuery:
+    """PlayerStatsQuery の Django ORM 実装。
+
+    ランキング・タイトルに要るのは、在籍中の選手の名前・守備位置・所属と成績だけ。
+    チーム集約を全部組み立てると経歴・主将歴・プロフィールまで作ることになり、
+    その Python 側の時間が応答の大半を占めていた。成績は SQL で集計し、選手ごとに1つの
+    DTO にする（集計の式は `repositories.batting_totals` / `pitching_totals` が出典）。
+
+    在籍も成績も世界の範囲（`WorldScope`）で絞る。選手は世界ごとに別の行なので、範囲の外の
+    明細は数えても結果は変わらないが、集計する行を範囲の中に限って読む量を抑える。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def list_career(self) -> list[ActivePlayerStats]:
+        stints = self._active_stints()
+        # 範囲の中の全選手の通算を1度に集計する（在籍外の選手の分も出るが、引かないだけ）
+        games = world_condition("game__home_team__league", self._scope)
+        return self._rows(stints, batting_totals(games=games), pitching_totals(games=games))
+
+    def list_season(self, league_id: int, year: int) -> list[ActivePlayerStats]:
+        stints = self._active_stints().filter(team__league_id=league_id)
+        player_ids = [stint.player_id for stint in stints]
+        # リーグのチームどうしの試合だけ。明細の行から見た試合の条件で絞る
+        games = Q(game__year=year, game__home_team__league_id=league_id, game__away_team__league_id=league_id)
+        return self._rows(
+            stints,
+            batting_totals(player_ids, games=games),
+            pitching_totals(player_ids, games=games),
+        )
+
+    def _active_stints(self) -> QuerySet[orm_models.PlayerStint]:
+        """範囲の中で在籍中＝退団年が空の在籍。チームの表示順、背番号順（ランキングの同値の並びに効く）。"""
+        return (
+            orm_models.PlayerStint.objects.filter(world_condition("team__league", self._scope), to_year__isnull=True)
+            .select_related("player", "team")
+            .order_by("team__display_order", "team__name", "number", "id")
+        )
+
+    @staticmethod
+    def _rows(
+        stints: Iterable[orm_models.PlayerStint],
+        batting: Mapping[int, BattingLine],
+        pitching: Mapping[int, PitchingLine],
+    ) -> list[ActivePlayerStats]:
+        return [
+            ActivePlayerStats(
+                player_id=stint.player_id,
+                name=stint.player.name,
+                number=stint.number,
+                position=Position.from_label(stint.player.position),
+                team_id=stint.team_id,
+                team_name=stint.team.name,
+                batting=batting.get(stint.player_id, BattingLine()),
+                pitching=pitching.get(stint.player_id, PitchingLine()),
+            )
+            for stint in stints
+        ]
 
 
 class DjangoPlayerSearchQuery:
