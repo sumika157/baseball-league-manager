@@ -46,6 +46,11 @@ def games_in(scope: WorldScope) -> QuerySet[orm_models.Game]:
     return orm_models.Game.objects.filter(world_condition("home_team__league", scope))
 
 
+def ratings_in(scope: WorldScope) -> QuerySet[orm_models.PennantPlayerRatings]:
+    """範囲の選手の能力。能力は選手の行に付くので、範囲の選手で絞る。"""
+    return orm_models.PennantPlayerRatings.objects.filter(player_id__in=players_in(scope).values("id"))
+
+
 def players_in(scope: WorldScope) -> QuerySet[orm_models.Player]:
     """範囲に属する選手。ペナントの選手は、その世界の球団に在籍の行がある選手。
 

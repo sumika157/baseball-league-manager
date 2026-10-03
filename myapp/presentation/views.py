@@ -38,6 +38,7 @@ from ..domain.value_objects import (
     Position,
 )
 from ..infrastructure.queries import (
+    DjangoFieldingTotalsQuery,
     DjangoGameListQuery,
     DjangoPlayerFieldingQuery,
     DjangoPlayerSearchQuery,
@@ -47,6 +48,7 @@ from ..infrastructure.queries import (
 from ..infrastructure.repositories import (
     DjangoGameRepository,
     DjangoLeagueRepository,
+    DjangoRatingsRepository,
     DjangoTeamRepository,
     DjangoWorldRepository,
 )
@@ -134,7 +136,11 @@ def build_player_search_query() -> DjangoPlayerSearchQuery:
 
 def _repositories_for(scope: WorldScope) -> WorldRepositories:
     """世界の範囲でリポジトリを組み立てる。世界の作成が、写し先の世界に書くのに使う。"""
-    return WorldRepositories(leagues=DjangoLeagueRepository(scope), teams=DjangoTeamRepository(scope))
+    return WorldRepositories(
+        leagues=DjangoLeagueRepository(scope),
+        teams=DjangoTeamRepository(scope),
+        ratings=DjangoRatingsRepository(scope),
+    )
 
 
 def build_pennant_world_service() -> PennantWorldService:
@@ -146,6 +152,7 @@ def build_pennant_world_service() -> PennantWorldService:
     return PennantWorldService(
         real_leagues=DjangoLeagueRepository(scope),
         real_teams=DjangoTeamRepository(scope),
+        real_fielding=DjangoFieldingTotalsQuery(scope),
         worlds=DjangoWorldRepository(),
         repositories_for=_repositories_for,
     )

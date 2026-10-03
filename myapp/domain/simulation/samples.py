@@ -23,6 +23,16 @@ _PITCHER_COUNT = 19
 # 球団の中の選手の番号は、球団 id × 100 + 番号（野手は 1〜、投手は 51〜）
 _PITCHER_OFFSET = 50
 
+# 能力の分布（平均・標準偏差）。**調整（P1）で決めた分布の唯一の出典**。タイトルの水準（首位打者・本塁打王など）が
+# 目標帯に入るよう調整してあり、実成績から推定した能力の散らばりもこれに合わせる（`spread.py`）。
+# 平均が 50 でなく 50 を下回るのは、球団の全員（2軍の控えを含む）の平均で、1軍の平均が 50 だから。
+BATTER_MEAN = 44.5
+PITCHER_MEAN = 45.0
+BATTER_SD = 8.5
+PITCHER_SD = 8.0
+# 野手の項目ごとの平均のずれ（打撃の3項目だけ。走力は 0）
+BATTER_ITEM_OFFSET = {"contact": 1.0, "power": -1.0, "eye": -1.0, "speed": 0.0}
+
 
 def average_club(team_id: int, name: str | None = None, rating: int = 50) -> ClubRoster:
     """全員の能力が同じ球団（既定は50）。"""
@@ -59,10 +69,10 @@ def spread_club(
     team_id: int,
     name: str,
     *,
-    batter_mean: float = 44.5,
-    pitcher_mean: float = 45.0,
-    sd: float = 8.5,
-    pitcher_sd: float = 8.0,
+    batter_mean: float = BATTER_MEAN,
+    pitcher_mean: float = PITCHER_MEAN,
+    sd: float = BATTER_SD,
+    pitcher_sd: float = PITCHER_SD,
 ) -> ClubRoster:
     """能力を散らした球団。野手・投手とも平均 `*_mean`、標準偏差 `sd` で、項目どうしは弱く相関する。
 
@@ -76,10 +86,10 @@ def spread_club(
         field_bias = {Position.CATCHER: 4.0, Position.INFIELDER: 2.0, Position.OUTFIELDER: 0.0}.get(position, -8.0)
         bat_bias = 3.0 if position is Position.DESIGNATED_HITTER else 0.0
         ratings = BatterRatings(
-            contact=_rating(rng, batter_mean + bat_bias + 1.0, sd, talent, shared_weight),
-            power=_rating(rng, batter_mean + bat_bias - 1.0, sd, talent, shared_weight),
-            eye=_rating(rng, batter_mean - 1.0, sd, talent, shared_weight),
-            speed=_rating(rng, batter_mean, sd, normal(rng), 0.0),
+            contact=_rating(rng, batter_mean + bat_bias + BATTER_ITEM_OFFSET["contact"], sd, talent, shared_weight),
+            power=_rating(rng, batter_mean + bat_bias + BATTER_ITEM_OFFSET["power"], sd, talent, shared_weight),
+            eye=_rating(rng, batter_mean + BATTER_ITEM_OFFSET["eye"], sd, talent, shared_weight),
+            speed=_rating(rng, batter_mean + BATTER_ITEM_OFFSET["speed"], sd, normal(rng), 0.0),
             fielding=_rating(rng, batter_mean + field_bias, sd, normal(rng), 0.0),
             growth=GrowthType.NORMAL,
         )

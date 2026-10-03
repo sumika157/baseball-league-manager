@@ -79,5 +79,5 @@ class Command(BaseCommand):
         )
         self.stdout.write(
             f"リーグ {created.league_count} / 球団 {created.team_count} / 選手 {created.player_count}人"
-            f"　所要 {elapsed:.2f}秒"
+            f"（初期能力 {created.rating_count}人ぶん）　所要 {elapsed:.2f}秒"
         )

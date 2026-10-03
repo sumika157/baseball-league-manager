@@ -16,15 +16,22 @@ from django.test import SimpleTestCase
 
 from myapp.application.game_recording import GameRecordingService
 from myapp.application.pennant_world import PennantWorldService
-from myapp.application.queries import GameListQuery, TeamListQuery
+from myapp.application.queries import FieldingTotalsQuery, GameListQuery, TeamListQuery
 from myapp.application.services import TeamApplicationService
 from myapp.domain.pennant.world import WorldScope
-from myapp.domain.repositories import GameRepository, LeagueRepository, TeamRepository, WorldRepository
+from myapp.domain.repositories import (
+    GameRepository,
+    LeagueRepository,
+    RatingsRepository,
+    TeamRepository,
+    WorldRepository,
+)
 from myapp.infrastructure import queries, repositories
-from myapp.infrastructure.queries import DjangoGameListQuery, DjangoTeamListQuery
+from myapp.infrastructure.queries import DjangoFieldingTotalsQuery, DjangoGameListQuery, DjangoTeamListQuery
 from myapp.infrastructure.repositories import (
     DjangoGameRepository,
     DjangoLeagueRepository,
+    DjangoRatingsRepository,
     DjangoTeamRepository,
     DjangoWorldRepository,
 )
@@ -48,6 +55,8 @@ class ProtocolConformanceTest(SimpleTestCase):
         (DjangoGameRepository(REAL), GameRepository),
         (DjangoLeagueRepository(REAL), LeagueRepository),
         (DjangoWorldRepository(), WorldRepository),
+        (DjangoRatingsRepository(REAL), RatingsRepository),
+        (DjangoFieldingTotalsQuery(REAL), FieldingTotalsQuery),
         (DjangoTeamListQuery(REAL), TeamListQuery),
         (DjangoGameListQuery(REAL), GameListQuery),
     ]
@@ -152,9 +161,11 @@ class RealScopeTest(SimpleTestCase):
         service = build_pennant_world_service()
         self.assertEqual(service._real_leagues._scope, REAL)
         self.assertEqual(service._real_teams._scope, REAL)
+        self.assertEqual(service._real_fielding._scope, REAL, "守備成績も分岐元（実データ）から読む")
 
     def test_pennant_world_service_writes_to_the_given_world(self):
         """写し先のリポジトリは、渡された世界の範囲で組み立てられる。"""
         repositories_ = build_pennant_world_service()._repositories_for(WorldScope.pennant(7))
         self.assertEqual(repositories_.leagues._scope, WorldScope.pennant(7))
         self.assertEqual(repositories_.teams._scope, WorldScope.pennant(7))
+        self.assertEqual(repositories_.ratings._scope, WorldScope.pennant(7))

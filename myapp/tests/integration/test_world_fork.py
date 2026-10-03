@@ -18,7 +18,13 @@ from myapp.application.pennant_world import PennantWorldService, WorldRepositori
 from myapp.domain.exceptions import InvalidSeason, InvalidWorld, LeagueNotFound, TeamNotFound, WorldNotFound
 from myapp.domain.pennant.world import World, WorldScope
 from myapp.infrastructure import orm_models
-from myapp.infrastructure.repositories import DjangoLeagueRepository, DjangoTeamRepository, DjangoWorldRepository
+from myapp.infrastructure.queries import DjangoFieldingTotalsQuery
+from myapp.infrastructure.repositories import (
+    DjangoLeagueRepository,
+    DjangoRatingsRepository,
+    DjangoTeamRepository,
+    DjangoWorldRepository,
+)
 from myapp.presentation.views import build_pennant_world_service
 
 from ..helpers import play_game
@@ -309,12 +315,15 @@ class ForkOptionsTest(BaseCase):
 
         def factory(scope):
             return WorldRepositories(
-                leagues=DjangoLeagueRepository(scope), teams=FailingTeams(DjangoTeamRepository(scope))
+                leagues=DjangoLeagueRepository(scope),
+                teams=FailingTeams(DjangoTeamRepository(scope)),
+                ratings=DjangoRatingsRepository(scope),
             )
 
         service = PennantWorldService(
             real_leagues=DjangoLeagueRepository(REAL),
             real_teams=DjangoTeamRepository(REAL),
+            real_fielding=DjangoFieldingTotalsQuery(REAL),
             worlds=DjangoWorldRepository(),
             repositories_for=factory,  # type: ignore[arg-type]
         )
@@ -328,6 +337,7 @@ class ForkOptionsTest(BaseCase):
         self.assertEqual(orm_models.League.objects.filter(world__isnull=False).count(), 0)
         self.assertEqual(orm_models.Team.objects.exclude(league__world__isnull=True).count(), 0)
         self.assertEqual(orm_models.Player.objects.filter(name="選手").count(), 1, "実データの選手だけが残る")
+        self.assertEqual(orm_models.PennantPlayerRatings.objects.count(), 0)
 
 
 class WorldRepositoryTest(TestCase):
@@ -382,6 +392,7 @@ class DeleteWorldTest(WorldCase):
             self.assertGreater(counts[name], 0, name)
         for name in ("GamePlateAppearance", "GameRunnerAdvance", "GameInningScore", "GameFieldingLine"):
             self.assertGreater(counts[name], 0, name)
+        self.assertGreater(counts["PennantPlayerRatings"], 0, "能力の行も世界に属す")
 
     def test_deleting_removes_every_row_of_the_world(self):
         build_pennant_world_service().delete_world(self.world_id)

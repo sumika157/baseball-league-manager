@@ -972,3 +972,5 @@ class PennantWorldCreated:
     league_count: int
     team_count: int
     player_count: int
+    # 初期能力を保存した選手の数（分岐した選手全員ぶん）
+    rating_count: int

@@ -16,6 +16,7 @@ from typing import TypeVar
 
 from ..entities import FieldingError
 from ..value_objects import ErrorKind, FieldingPosition, PlateAppearanceResult
+from .odds import RATING_UNIT
 from .randomness import GameRandom, weighted_index
 from .ratings import AVERAGE_RATING
 
@@ -96,7 +97,7 @@ _FOUL_FLY_OUT: list[tuple[FieldingPosition, float]] = [
     (FP.SHORTSTOP, 0.05),
 ]
 
-# 失策を犯す守備者の重み。守備力が低い守備者ほど選ばれやすい（`_ERROR_SKILL_BETA`）
+# 失策を犯す守備者の重み。守備力が低い守備者ほど選ばれやすい（`ERROR_SKILL_BETA`）
 _ERROR_POSITIONS: dict[FieldingPosition, float] = {
     FP.SHORTSTOP: 0.22,
     FP.THIRD_BASE: 0.17,
@@ -108,7 +109,7 @@ _ERROR_POSITIONS: dict[FieldingPosition, float] = {
     FP.CENTER_FIELD: 0.08,
     FP.RIGHT_FIELD: 0.09,
 }
-_ERROR_SKILL_BETA = -0.6
+ERROR_SKILL_BETA = -0.6
 _OUTFIELD = (FP.LEFT_FIELD, FP.CENTER_FIELD, FP.RIGHT_FIELD)
 _INFIELD_ERROR_KINDS = [(ErrorKind.FIELDING, 0.44), (ErrorKind.THROWING, 0.56)]
 _OUTFIELD_ERROR_KINDS = [(ErrorKind.FIELDING, 0.30), (ErrorKind.THROWING, 0.20), (ErrorKind.DROPPED_FLY, 0.50)]
@@ -173,7 +174,7 @@ def draw_error(rng: GameRandom, fielders: Sequence[tuple[FieldingPosition, int, 
     """
     candidates = [item for item in fielders if item[0] in _ERROR_POSITIONS]
     weights = [
-        _ERROR_POSITIONS[position] * math.exp(_ERROR_SKILL_BETA * (rating - AVERAGE_RATING) / 15.0)
+        _ERROR_POSITIONS[position] * math.exp(ERROR_SKILL_BETA * (rating - AVERAGE_RATING) / RATING_UNIT)
         for position, _, rating in candidates
     ]
     position, player_id, _ = candidates[weighted_index(rng, weights)]
