@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from django.db.models import Exists, OuterRef, Q, QuerySet
 
 from ..domain.pennant.world import WorldScope
@@ -27,6 +29,27 @@ def world_condition(path: str, scope: WorldScope) -> Q:
     if scope.is_real:
         return Q(**{f"{prefix}world__isnull": True})
     return Q(**{f"{prefix}world_id": scope.world_id})
+
+
+def world_condition_in(path: str, world_ids: Sequence[int]) -> Q:
+    """`world_condition` の、世界の id の集まり版（ペナントの世界だけ。実データは含まない）。
+
+    世界の台帳のように、複数の世界をまとめて読む参照が使う。`path` の意味は `world_condition` と同じ。
+    """
+    prefix = f"{path}__" if path else ""
+    return Q(**{f"{prefix}world_id__in": list(world_ids)})
+
+
+def leagues_in_worlds(world_ids: Sequence[int]) -> QuerySet[orm_models.League]:
+    return orm_models.League.objects.filter(world_condition_in("", world_ids))
+
+
+def games_in_worlds(world_ids: Sequence[int]) -> QuerySet[orm_models.Game]:
+    return orm_models.Game.objects.filter(world_condition_in("home_team__league", world_ids))
+
+
+def fixtures_in_worlds(world_ids: Sequence[int]) -> QuerySet[orm_models.PennantFixture]:
+    return orm_models.PennantFixture.objects.filter(world_condition_in("home_team__league", world_ids))
 
 
 def leagues_in(scope: WorldScope) -> QuerySet[orm_models.League]:

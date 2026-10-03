@@ -17,7 +17,7 @@ from typing import Protocol, runtime_checkable
 
 from ..domain.entities import Game
 from ..domain.value_objects import FieldingLine
-from .dto import ActivePlayerStats, GameRow, PlayerFielding, SimulationContext, TeamSummary
+from .dto import ActivePlayerStats, GameRow, PlayerFielding, SimulationContext, TeamSummary, WorldSummary
 
 
 @runtime_checkable
@@ -71,6 +71,22 @@ class SimulationContextQuery(Protocol):
           まとめて進めるか1日ずつ進めるかで「中何日か」の答えが変わる）
         - `before` の直前の数日の登板（連投の判断。数日あれば足りる）
         """
+        ...
+
+
+@runtime_checkable
+class WorldSummaryQuery(Protocol):
+    """世界の見出し（今日・局面の材料・受け持つ球団）の参照。世界の台帳そのものなので範囲は持たない。
+
+    **世界の数にかかわらず、一定のクエリ数でまとめて読む**（世界ごとにサービスを組み立てて読み直さない）。
+    """
+
+    def get(self, world_id: int) -> WorldSummary:
+        """無ければ WorldNotFound。"""
+        ...
+
+    def list_all(self) -> list[WorldSummary]:
+        """新しく作った世界から順に。"""
         ...
 
 

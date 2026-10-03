@@ -4,6 +4,7 @@
 成績の計算も背番号の重複判定もここには無い（ドメイン層にある）。
 """
 
+from collections.abc import Callable
 from datetime import date
 
 from django.contrib import messages
@@ -12,25 +13,30 @@ from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.views import redirect_to_login
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
-from django.http import Http404
+from django.http import Http404, HttpResponseNotAllowed
 from django.middleware.csrf import get_token
 from django.shortcuts import redirect, render
 from django.urls import reverse, reverse_lazy
 from django.views.decorators.http import require_GET
 from django.views.generic import CreateView
 
-from ..application.dto import GameEditData, GameEditPlateAppearance
+from ..application.dto import GameEditData, GameEditPlateAppearance, WorldContext
 from ..application.game_recording import GameRecordingService
 from ..application.pennant_season import PennantSeasonService
+from ..application.pennant_view import PennantWorldViewService
 from ..application.pennant_world import PennantWorldService, WorldRepositories
+from ..application.queries import SimulationContextQuery
 from ..application.services import TeamApplicationService
 from ..domain.exceptions import (
     DomainError,
     GameNotFound,
+    InvalidWorld,
     LeagueNotFound,
     PlayerNotFound,
     TeamNotFound,
+    WorldNotFound,
 )
+from ..domain.pennant.season import world_today
 from ..domain.pennant.world import WorldScope
 from ..domain.value_objects import (
     AdvanceReason,
@@ -49,6 +55,7 @@ from ..infrastructure.queries import (
     DjangoSimulationContextQuery,
     DjangoTeamListQuery,
     DjangoTeamPermissionQuery,
+    DjangoWorldSummaryQuery,
 )
 from ..infrastructure.repositories import (
     DjangoFixtureRepository,
@@ -114,6 +121,50 @@ def build_service() -> TeamApplicationService:
         game_list_query=DjangoGameListQuery(scope),
         player_fielding_query=DjangoPlayerFieldingQuery(scope),
         player_stats_query=DjangoPlayerStatsQuery(scope),
+        today=date.today,
+    )
+
+
+def build_world_view_service(world_id: int) -> TeamApplicationService:
+    """ペナントの世界ひとつの画面（順位・試合・選手）を読むサービスを組み立てる。
+
+    `build_service()` と同じ `TeamApplicationService` を、**世界の範囲で**組み立てる。依存は
+    `build_service()` と同じ全部を、すべて渡された世界の範囲で作る（範囲の外の球団・試合には触れない）。
+    年齢の基準日は暦の今日ではなく、その世界の「今日」（最後に試合をした日。まだ無ければ開幕日）。
+    世界の id が正しくなければ InvalidWorld。存在しない世界は、年齢を数えるときに WorldNotFound。
+    """
+    scope = WorldScope.pennant(world_id)
+    return TeamApplicationService(
+        teams=DjangoTeamRepository(scope),
+        team_list_query=DjangoTeamListQuery(scope),
+        games=DjangoGameRepository(scope),
+        leagues=DjangoLeagueRepository(scope),
+        game_list_query=DjangoGameListQuery(scope),
+        player_fielding_query=DjangoPlayerFieldingQuery(scope),
+        player_stats_query=DjangoPlayerStatsQuery(scope),
+        today=_world_clock(world_id, DjangoSimulationContextQuery(scope)),
+    )
+
+
+def _world_clock(world_id: int, context_query: SimulationContextQuery) -> Callable[[], date]:
+    """その世界の「今日」を返す関数。呼ばれるたびに読み直す（進めた後に古い日付を返さない）。"""
+    worlds = DjangoWorldRepository()
+
+    def today() -> date:
+        return world_today(worlds.find_by_id(world_id).start_year, context_query.last_played_on())
+
+    return today
+
+
+def build_pennant_world_view() -> PennantWorldViewService:
+    """世界の見出し（世界バー・世界の一覧）を作るサービスを組み立てる。
+
+    見出しの材料は世界の台帳を読む参照クエリ（範囲を持たない）が一定のクエリ数でまとめて読む。
+    自軍の順位だけは、世界の範囲のサービス（`build_world_view_service`）に任せる。
+    """
+    return PennantWorldViewService(
+        summaries=DjangoWorldSummaryQuery(),
+        standings_for=build_world_view_service,
     )
 
 
@@ -186,6 +237,42 @@ def build_pennant_season_service(world_id: int) -> PennantSeasonService:
     )
 
 
+def _scope(world_id: int | None) -> tuple[TeamApplicationService, WorldContext | None]:
+    """画面が読む範囲。URL に世界の id が無ければ実データ、あればその世界（無ければ 404）。
+
+    実データの画面とペナントの画面は同じビューとテンプレートを使う。違いは、読むサービスの範囲と、
+    テンプレートに渡す世界（`world`。リンクの引き方・世界バー・文言の差し替えの合図）だけ。
+    """
+    if world_id is None:
+        return build_service(), None
+    try:
+        world = build_pennant_world_view().get_context(world_id)
+    except (WorldNotFound, InvalidWorld):
+        raise Http404("世界が見つかりません。") from None
+    return build_world_view_service(world_id), world
+
+
+def _own_team_id(world: WorldContext | None) -> int | None:
+    """順位表で「自軍」の印を付ける球団。実データには自軍が無い。"""
+    return world.managed_team_id if world is not None else None
+
+
+def _render(request, template: str, context: dict, world: WorldContext | None):
+    """世界の範囲の画面なら `world` を添えて描画する。実データでは `world` は None。"""
+    return render(request, template, {**context, "world": world})
+
+
+def pennant_index(request):
+    """ペナントの世界の一覧。読み取り専用で、誰でも開ける。オーナーは出さない。"""
+    return render(request, "pennant/world_list.html", {"rows": build_pennant_world_view().list_rows()})
+
+
+def pennant_world(request, world_id):
+    """世界の入口。GM ホームができるまでは、順位表へ案内するだけ。"""
+    _scope(world_id)
+    return redirect("pennant_standings", world_id=world_id)
+
+
 def dashboard(request):
     """ホーム画面。リーグ全体の概況と各種ランキングを表示する。"""
     return render(request, "myapp/dashboard.html", {"board": build_service().get_dashboard()})
@@ -202,11 +289,12 @@ def _sort_params(request):
     return sort, descending
 
 
-def team_list(request):
+def team_list(request, world_id=None):
     """チーム一覧。"""
+    service, world = _scope(world_id)
     sort, descending = _sort_params(request)
-    listing = build_service().list_teams_by_league(sort=sort, descending=descending)
-    return render(
+    listing = service.list_teams_by_league(sort=sort, descending=descending)
+    return _render(
         request,
         "myapp/team_list.html",
         {
@@ -216,31 +304,38 @@ def team_list(request):
             "current_sort": listing.sort,
             "current_descending": listing.descending,
         },
+        world,
     )
 
 
-def standings(request, year=None):
+def standings(request, year=None, world_id=None):
     """年別の順位表。年を指定しない場合は最新シーズン。"""
+    service, world = _scope(world_id)
     sort, descending = _sort_params(request)
     try:
-        board = build_service().get_standings(year, sort=sort, descending=descending)
+        board = service.get_standings(year, sort=sort, descending=descending)
     except DomainError as error:
         raise Http404(str(error)) from error
 
-    return render(
+    return _render(
         request,
         "myapp/standings.html",
         {
             "standings": board,
             "current_sort": board.sort,
             "current_descending": board.descending,
+            "highlight_team_id": _own_team_id(world),
         },
+        world,
     )
 
 
-def player_list(request, team_id):
+def player_list(request, team_id, world_id=None):
     """選手一覧。野手／投手モードを切り替えて表示する。"""
-    service = build_service()
+    service, world = _scope(world_id)
+    if world is not None and request.method not in ("GET", "HEAD"):
+        # ペナントの世界の選手は、画面から登録・編集しない
+        return HttpResponseNotAllowed(["GET", "HEAD"])
 
     try:
         team_name = service.get_team_name(team_id)
@@ -281,7 +376,7 @@ def player_list(request, team_id):
         else service.list_batters(team_id, sort=sort, descending=descending)
     )
 
-    return render(
+    return _render(
         request,
         "myapp/player_list.html",
         {
@@ -298,8 +393,9 @@ def player_list(request, team_id):
             # 通算値では見えない調子の波を、月ごとに区切って出す
             "months": service.list_team_monthly_splits(team_id),
             # このチームの担当者（または管理ユーザー）だけが登録・編集の導線を見える
-            "can_edit_team": build_permission_query().can_manage(request.user, team_id),
+            "can_edit_team": world is None and build_permission_query().can_manage(request.user, team_id),
         },
+        world,
     )
 
 
@@ -319,37 +415,45 @@ def player_search(request):
     )
 
 
-def league_detail(request, league_id, year=None):
+def league_detail(request, league_id, year=None, world_id=None):
     """リーグ画面。所属チーム・順位表・直近の試合。"""
+    service, world = _scope(world_id)
     try:
-        detail = build_service().get_league_detail(league_id, year)
+        detail = service.get_league_detail(league_id, year)
     except LeagueNotFound:
         raise Http404("リーグが見つかりません。") from None
 
-    return render(request, "myapp/league_detail.html", {"league": detail})
+    return _render(
+        request,
+        "myapp/league_detail.html",
+        {"league": detail, "highlight_team_id": _own_team_id(world)},
+        world,
+    )
 
 
-def league_titles(request, league_id, year=None):
+def league_titles(request, league_id, year=None, world_id=None):
     """リーグのタイトル一覧。部門別の上位者をシーズンで区切って並べる。"""
+    service, world = _scope(world_id)
     try:
-        titles = build_service().get_league_titles(league_id, year)
+        titles = service.get_league_titles(league_id, year)
     except LeagueNotFound:
         raise Http404("リーグが見つかりません。") from None
     except DomainError as error:
         raise Http404(str(error)) from error
 
-    return render(request, "myapp/league_titles.html", {"titles": titles})
+    return _render(request, "myapp/league_titles.html", {"titles": titles}, world)
 
 
-def league_stats(request, league_id):
+def league_stats(request, league_id, world_id=None):
     """リーグの成績一覧。所属する全選手の通算成績を並べ替えて見る。"""
     pos_mode = PITCHER_MODE if request.GET.get("pos") == PITCHER_MODE else BATTER_MODE
     # 規定の絞り込み。指定が無い・読めない値なら全員（並べ替えのキーと同じ扱い）
     qualified = request.GET.get("qualified") == "1"
     sort, descending = _sort_params(request)
 
+    service, world = _scope(world_id)
     try:
-        stats = build_service().get_league_stats(
+        stats = service.get_league_stats(
             league_id,
             pitchers=pos_mode == PITCHER_MODE,
             qualified=qualified,
@@ -359,7 +463,7 @@ def league_stats(request, league_id):
     except LeagueNotFound:
         raise Http404("リーグが見つかりません。") from None
 
-    return render(
+    return _render(
         request,
         "myapp/league_stats.html",
         {
@@ -369,16 +473,17 @@ def league_stats(request, league_id):
             "current_sort": stats.listing.sort,
             "current_descending": stats.listing.descending,
         },
+        world,
     )
 
 
-def game_list(request):
+def game_list(request, world_id=None):
     """試合一覧。シーズン・月・リーグ・チームで絞り込める。
 
     全件を一度に描くと件数ぶん重くなるため、指定が無ければ最新シーズンの
     最後に試合があった月を見せる。
     """
-    service = build_service()
+    service, world = _scope(world_id)
 
     def _int(name):
         value = request.GET.get(name)
@@ -407,7 +512,7 @@ def game_list(request):
     listing = service.list_games(year=year, team_id=team_id, month=month, league_id=league_id)
     leagues = service.list_leagues()
 
-    return render(
+    return _render(
         request,
         "myapp/game_list.html",
         {
@@ -425,8 +530,10 @@ def game_list(request):
             "selected_team_name": next((t.name for t in teams if t.id == team_id), ""),
             # 担当チームが1つも無ければ、押しても弾かれるだけの登録導線は見せない。
             # 判定はリーグの絞り込みに関係なく、全チームで行う
-            "can_create_game": build_permission_query().can_manage_any(request.user, [t.id for t in all_teams]),
+            "can_create_game": world is None
+            and build_permission_query().can_manage_any(request.user, [t.id for t in all_teams]),
         },
+        world,
     )
 
 
@@ -615,38 +722,42 @@ def _scorebook_vocabulary() -> dict:
     }
 
 
-def game_detail(request, game_id):
+def game_detail(request, game_id, world_id=None):
     """試合詳細。その試合の出場選手の成績を並べる。"""
+    service, world = _scope(world_id)
     try:
-        detail = build_service().get_game_detail(game_id)
+        detail = service.get_game_detail(game_id)
     except GameNotFound:
         raise Http404("試合が見つかりません。") from None
 
-    can_edit = build_permission_query().can_manage_any(
+    # シミュレーションの試合は手で直さない
+    can_edit = world is None and build_permission_query().can_manage_any(
         request.user, (detail.game.home_team_id, detail.game.away_team_id)
     )
-    return render(request, "myapp/game_detail.html", {"detail": detail, "can_edit": can_edit})
+    return _render(request, "myapp/game_detail.html", {"detail": detail, "can_edit": can_edit}, world)
 
 
-def player_detail(request, team_id, player_id):
+def player_detail(request, team_id, player_id, world_id=None):
     """選手の個人ページ。通算・年度別・月別の成績と、選んだ月の試合ごとの記録。
 
     月の指定（`?month=2026-04`）が不正なら application 側が最新の月に落とす。
     ここでは弾かず、そのまま渡す（並べ替えのキーと同じ扱い）。
     """
+    service, world = _scope(world_id)
     try:
-        profile = build_service().get_player_profile(team_id, player_id, month=request.GET.get("month"))
+        profile = service.get_player_profile(team_id, player_id, month=request.GET.get("month"))
     except (TeamNotFound, PlayerNotFound):
         raise Http404("選手が見つかりません。") from None
 
-    return render(
+    return _render(
         request,
         "myapp/player_detail.html",
         {
             "profile": profile,
             "player": profile.detail,
-            "can_edit_team": build_permission_query().can_manage(request.user, team_id),
+            "can_edit_team": world is None and build_permission_query().can_manage(request.user, team_id),
         },
+        world,
     )
 
 

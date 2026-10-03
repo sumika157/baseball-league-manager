@@ -8,6 +8,8 @@
 
 from datetime import date
 
+from django.urls import reverse
+
 from myapp.application.dto import LineupSlot
 from myapp.application.game_recording import GameRecordingService
 from myapp.domain.entities import Game
@@ -134,3 +136,31 @@ class WorldCase(BaseCase):
         )
         self.pennant_game_id = saved.id
         self.pennant_home_batters = home_batters
+
+    def world_urls(self, world_id=None) -> list[str]:
+        """世界の範囲の参照画面の URL をすべて（世界の id を省けば、この世界）。"""
+        world_id = self.world_id if world_id is None else world_id
+        team = orm_models.Team.objects.filter(league__world_id=world_id).order_by("id").first()
+        assert team is not None
+        league = team.league
+        stint = orm_models.PlayerStint.objects.filter(team=team).order_by("number").first()
+        assert stint is not None
+        player_id = stint.player_id
+        game = orm_models.Game.objects.filter(home_team__league__world_id=world_id).first()
+        urls = [
+            reverse("pennant_world", args=[world_id]),
+            reverse("pennant_standings", args=[world_id]),
+            reverse("pennant_standings_by_year", args=[world_id, YEAR]),
+            reverse("pennant_league_detail", args=[world_id, league.id]),
+            reverse("pennant_league_detail_by_year", args=[world_id, league.id, YEAR]),
+            reverse("pennant_league_titles", args=[world_id, league.id]),
+            reverse("pennant_league_titles_by_year", args=[world_id, league.id, YEAR]),
+            reverse("pennant_league_stats", args=[world_id, league.id]),
+            reverse("pennant_team_list", args=[world_id]),
+            reverse("pennant_game_list", args=[world_id]),
+            reverse("pennant_player_list", args=[world_id, team.id]),
+            reverse("pennant_player_detail", args=[world_id, team.id, player_id]),
+        ]
+        if game is not None:
+            urls.append(reverse("pennant_game_detail", args=[world_id, game.id]))
+        return urls

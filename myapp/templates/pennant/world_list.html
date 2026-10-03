@@ -1,0 +1,61 @@
+{% extends 'myapp/base.html' %}
+
+{% block title %}ペナント - Baseball Manager{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>
+    <li class="breadcrumb-item active">ペナント</li>
+  </ol>
+</nav>
+
+<div class="page-head">
+  <h1 class="page-title">ペナント</h1>
+  <p class="page-subtitle">
+    実データのリーグを元に作った別の世界です。ここでの試合と成績は実データに混ざりません。
+  </p>
+</div>
+
+{% comment %}
+オーナーは出さない（一覧は誰にでも見せる）。世界の作成と削除は後の段階で足す。
+{% endcomment %}
+<div class="table-responsive">
+  <table class="table table-hover">
+    <thead>
+      <tr>
+        <th>世界</th>
+        <th>自軍</th>
+        <th>年度・状態</th>
+        <th class="text-end">順位</th>
+        <th class="text-end">勝-敗-分</th>
+        <th class="text-end">ゲーム差</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+        <tr>
+          <td><a href="{% url 'pennant_world' row.context.world_id %}" class="player-name">{{ row.context.name }}</a></td>
+          <td>{% if row.context.managed_team_name %}{{ row.context.managed_team_name }}{% else %}<span class="stat-muted">—</span>{% endif %}</td>
+          <td class="stat-muted">{{ row.season_year }}年 · {{ row.context.phase.value }}</td>
+          {% if row.own_standing %}
+            <td class="text-end stat-key">{{ row.own_standing.rank }}位</td>
+            <td class="text-end">{{ row.own_standing.wins }}-{{ row.own_standing.losses }}-{{ row.own_standing.ties }}</td>
+            <td class="text-end stat-muted">{{ row.own_standing.games_behind }}</td>
+          {% else %}
+            <td class="text-end stat-muted">—</td>
+            <td class="text-end stat-muted">—</td>
+            <td class="text-end stat-muted">—</td>
+          {% endif %}
+        </tr>
+      {% empty %}
+        <tr>
+          <td colspan="6">
+            <div class="empty-state">まだ世界がありません。</div>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

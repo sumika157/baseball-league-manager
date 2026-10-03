@@ -2,6 +2,15 @@ from django.urls import path
 
 from .presentation import api, views
 
+
+def _pennant(route: str, view, name: str):
+    """ペナントの世界の範囲の画面。実データの同名の画面と同じビューを、世界の id つきで開く。
+
+    URL 名は `pennant_<実データの名前>`。共有テンプレートは `{% scoped_url %}` がこの名前を引く。
+    """
+    return path(f"pennant/<int:world_id>/{route}", view, name=f"pennant_{name}")
+
+
 urlpatterns = [
     path("", views.dashboard, name="dashboard"),
     path("teams/", views.team_list, name="team_list"),
@@ -47,4 +56,19 @@ urlpatterns = [
         name="player_edit",
     ),
     path("accounts/signup/", views.SignUpView.as_view(), name="signup"),
+    # --- ペナントの世界（読み取り専用。編集・登録の URL は作らない） ---
+    path("pennant/", views.pennant_index, name="pennant_index"),
+    path("pennant/<int:world_id>/", views.pennant_world, name="pennant_world"),
+    _pennant("standings/", views.standings, "standings"),
+    _pennant("standings/<int:year>/", views.standings, "standings_by_year"),
+    _pennant("league/<int:league_id>/", views.league_detail, "league_detail"),
+    _pennant("league/<int:league_id>/<int:year>/", views.league_detail, "league_detail_by_year"),
+    _pennant("league/<int:league_id>/titles/", views.league_titles, "league_titles"),
+    _pennant("league/<int:league_id>/titles/<int:year>/", views.league_titles, "league_titles_by_year"),
+    _pennant("league/<int:league_id>/stats/", views.league_stats, "league_stats"),
+    _pennant("teams/", views.team_list, "team_list"),
+    _pennant("games/", views.game_list, "game_list"),
+    _pennant("games/<int:game_id>/", views.game_detail, "game_detail"),
+    _pennant("team/<int:team_id>/", views.player_list, "player_list"),
+    _pennant("team/<int:team_id>/player/<int:player_id>/", views.player_detail, "player_detail"),
 ]

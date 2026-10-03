@@ -1,0 +1,32 @@
+{% comment %}
+世界バー。いまペナントの中にいることを、世界の全画面で示す。パンくずの下に置く。
+1行目は世界の名前と「いま」（今日・局面・受け持つ球団）、2行目は世界の中の移動。
+「ホーム」は P4b で GM ホームになるまで順位表へ案内する。「編成」は P5 で足す。
+成績とタイトルはリーグごとの画面なので、受け持つ球団のリーグ（無ければ先頭のリーグ）へ向ける。
+{% endcomment %}
+{% with name=request.resolver_match.url_name %}
+<div class="mb-3">
+  <div class="d-flex align-items-center flex-wrap gap-2 mb-2">
+    <span class="badge bg-primary">ペナント</span>
+    <span class="fw-semibold">{{ world.name }}</span>
+    <span class="stat-muted">
+      {% if world.today %}{{ world.today|date:"Y年n月j日" }}時点 · {% endif %}{{ world.phase.value }}{% if world.managed_team_name %} · 自軍 {{ world.managed_team_name }}{% endif %}
+    </span>
+  </div>
+  <div class="segmented mb-0">
+    <a class="segmented-item" href="{% url 'pennant_world' world.world_id %}">ホーム</a>
+    <a class="segmented-item {% if name == 'pennant_standings' or name == 'pennant_standings_by_year' or name == 'pennant_league_detail' or name == 'pennant_league_detail_by_year' %}is-active{% endif %}"
+       href="{% url 'pennant_standings' world.world_id %}">順位表</a>
+    <a class="segmented-item {% if name == 'pennant_game_list' or name == 'pennant_game_detail' %}is-active{% endif %}"
+       href="{% url 'pennant_game_list' world.world_id %}">試合</a>
+    {% if world.default_league_id %}
+      <a class="segmented-item {% if name == 'pennant_league_stats' %}is-active{% endif %}"
+         href="{% url 'pennant_league_stats' world.world_id world.default_league_id %}">成績</a>
+      <a class="segmented-item {% if name == 'pennant_league_titles' or name == 'pennant_league_titles_by_year' %}is-active{% endif %}"
+         href="{% url 'pennant_league_titles' world.world_id world.default_league_id %}">タイトル</a>
+    {% endif %}
+    <a class="segmented-item {% if name == 'pennant_team_list' or name == 'pennant_player_list' or name == 'pennant_player_detail' %}is-active{% endif %}"
+       href="{% url 'pennant_team_list' world.world_id %}">球団</a>
+  </div>
+</div>
+{% endwith %}

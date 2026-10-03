@@ -11,6 +11,7 @@
 """
 
 import json
+import re
 
 from django.apps import apps
 from django.contrib.auth.models import User
@@ -33,7 +34,11 @@ from myapp.infrastructure.repositories import (
     DjangoTeamRepository,
 )
 from myapp.management.commands.measure_pages import Command as MeasurePages
-from myapp.presentation.views import build_permission_query, build_player_search_query
+from myapp.presentation.views import (
+    build_pennant_world_service,
+    build_permission_query,
+    build_player_search_query,
+)
 
 from ..helpers import post_game_scorebook
 from .world_case import (
@@ -516,3 +521,99 @@ class ModelClassificationTest(SimpleTestCase):
         } - individually
         self.assertEqual(deleted, expected, "世界の削除が、世界に属すモデルと食い違っています")
         self.assertTrue(deleted <= set(models))
+
+
+# ペナントの画面のリンクが向いてよい、世界の外の行き先（ヘッダーの出口）
+HEADER_PAGES = ("/", "/players/", "/pennant/")
+HEADER_PREFIXES = ("/accounts/", "/admin/")
+
+
+class PennantScreensStayInTheWorldTest(WorldCase):
+    """ペナントの全画面のリンクが、世界の外（実データの画面）に出ない。"""
+
+    def _hrefs(self, url):
+        content = self.client.get(url, follow=True).content.decode()
+        return re.findall(r'<a [^>]*href="([^"]*)"', content)
+
+    def _assert_stays_in(self, world_id, urls):
+        prefix = f"/pennant/{world_id}/"
+        for url in urls:
+            for href in self._hrefs(url):
+                # "?" と "#" は今の画面の中の切り替え（並べ替え・絞り込み・月の選択）
+                allowed = href.startswith((prefix, "?", "#", *HEADER_PREFIXES)) or href in HEADER_PAGES
+                self.assertTrue(allowed, f"{url} のリンク {href} が世界の外へ出ています")
+
+    def test_links_in_every_screen_stay_in_the_world(self):
+        urls = self.world_urls()
+        self.assertGreaterEqual(len(urls), 13)
+        self._assert_stays_in(self.world_id, urls)
+
+    def test_links_stay_in_the_world_for_a_staff_user_too(self):
+        """管理画面へのリンクが出るユーザーでも、それ以外は世界の中に留まる。"""
+        self.client.force_login(User.objects.create_superuser("root", password="x"))
+
+        self._assert_stays_in(self.world_id, self.world_urls())
+
+    def test_the_links_really_are_collected(self):
+        """リンクを拾えていなければ、上の検査は何も確かめていない。"""
+        hrefs = self._hrefs(reverse("pennant_standings", args=[self.world_id]))
+
+        self.assertTrue(any(href.startswith(f"/pennant/{self.world_id}/team/") for href in hrefs))
+
+
+class OtherIdsAreNotFoundInAWorldTest(WorldCase):
+    """世界の URL に、実データや別の世界の id を組み合わせても開かない。"""
+
+    def setUp(self):
+        super().setUp()
+        other = build_pennant_world_service().create_world(
+            name="別の世界", owner_id=None, source_league_ids=[self.league.id], start_year=YEAR + 1, seed=2
+        )
+        self.other_id = other.world.id
+        self.other_team = orm_models.Team.objects.filter(league__world_id=self.other_id).first()
+        self.other_league = self.other_team.league
+        self.other_player = orm_models.PlayerStint.objects.filter(team=self.other_team).first().player_id
+
+    def test_real_data_ids_are_404_in_a_world(self):
+        real_player = orm_models.PlayerStint.objects.filter(team=self.team).first().player_id
+        w = self.world_id
+        urls = [
+            reverse("pennant_player_list", args=[w, self.team.id]),
+            reverse("pennant_player_detail", args=[w, self.team.id, real_player]),
+            reverse("pennant_league_detail", args=[w, self.league.id]),
+            reverse("pennant_league_titles", args=[w, self.league.id]),
+            reverse("pennant_league_stats", args=[w, self.league.id]),
+            reverse("pennant_game_detail", args=[w, self.real_game.id]),
+        ]
+        for url in urls:
+            with self.subTest(url=url):
+                self.assertEqual(self.client.get(url).status_code, 404)
+
+    def test_another_worlds_ids_are_404(self):
+        w = self.world_id
+        urls = [
+            reverse("pennant_player_list", args=[w, self.other_team.id]),
+            reverse("pennant_player_detail", args=[w, self.other_team.id, self.other_player]),
+            reverse("pennant_league_detail", args=[w, self.other_league.id]),
+            reverse("pennant_league_stats", args=[w, self.other_league.id]),
+        ]
+        for url in urls:
+            with self.subTest(url=url):
+                self.assertEqual(self.client.get(url).status_code, 404)
+
+    def test_a_player_of_this_world_is_not_opened_under_another_team(self):
+        """球団と選手の組み合わせが世界の中で合っていても、別の世界の球団の下では開かない。"""
+        player = self.pennant_players(self.pennant_team)[0]
+
+        url = reverse("pennant_player_detail", args=[self.other_id, self.pennant_team.id, player])
+
+        self.assertEqual(self.client.get(url).status_code, 404)
+
+    def test_the_same_screen_in_the_other_world_shows_only_its_own_data(self):
+        """同じ名前の球団がある2つの世界（目印は片方だけ）で、目印が混ざらない。"""
+        content = self.client.get(reverse("pennant_standings", args=[self.other_id])).content.decode()
+
+        self.assertNotIn(PENNANT_TEAM, content)
+        for url in self.world_urls(self.other_id):
+            with self.subTest(url=url):
+                self.assertNotIn(PENNANT_TEAM, self.client.get(url, follow=True).content.decode())

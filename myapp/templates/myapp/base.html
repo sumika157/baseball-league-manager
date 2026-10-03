@@ -24,6 +24,8 @@
         </form>
 
         <div class="app-nav-user">
+          {# ペナント（実データとは別の世界）への入口。閲覧は誰でもできるので、ログインしていなくても出す #}
+          <a href="{% url 'pennant_index' %}" class="nav-admin-link">ペナント</a>
           {% if user.is_authenticated %}
             {# is_staff が管理画面へ入れる条件そのものなので、それを表示条件にする #}
             {% if user.is_staff %}

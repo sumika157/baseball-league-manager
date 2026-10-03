@@ -10,14 +10,22 @@ application/queries.py）だけに依存し、実装は組み立ての1か所（
 """
 
 import inspect
+from datetime import date
 from inspect import Parameter, signature
 
 from django.test import SimpleTestCase
 
 from myapp.application.game_recording import GameRecordingService
 from myapp.application.pennant_season import PennantSeasonService
+from myapp.application.pennant_view import PennantWorldViewService
 from myapp.application.pennant_world import PennantWorldService
-from myapp.application.queries import FieldingTotalsQuery, GameListQuery, SimulationContextQuery, TeamListQuery
+from myapp.application.queries import (
+    FieldingTotalsQuery,
+    GameListQuery,
+    SimulationContextQuery,
+    TeamListQuery,
+    WorldSummaryQuery,
+)
 from myapp.application.services import TeamApplicationService
 from myapp.domain.exceptions import InvalidWorld
 from myapp.domain.pennant.world import WorldScope
@@ -35,6 +43,7 @@ from myapp.infrastructure.queries import (
     DjangoGameListQuery,
     DjangoSimulationContextQuery,
     DjangoTeamListQuery,
+    DjangoWorldSummaryQuery,
 )
 from myapp.infrastructure.repositories import (
     DjangoFixtureRepository,
@@ -47,16 +56,18 @@ from myapp.infrastructure.repositories import (
 from myapp.presentation.views import (
     build_pennant_season_service,
     build_pennant_world_service,
+    build_pennant_world_view,
     build_permission_query,
     build_player_search_query,
     build_recording_service,
     build_service,
+    build_world_view_service,
 )
 
 REAL = WorldScope.real()
 
 # 世界そのものの台帳なので、範囲を持たない
-UNSCOPED = {DjangoWorldRepository}
+UNSCOPED = {DjangoWorldRepository, DjangoWorldSummaryQuery}
 
 
 class ProtocolConformanceTest(SimpleTestCase):
@@ -71,6 +82,7 @@ class ProtocolConformanceTest(SimpleTestCase):
         (DjangoFieldingTotalsQuery(REAL), FieldingTotalsQuery),
         (DjangoTeamListQuery(REAL), TeamListQuery),
         (DjangoGameListQuery(REAL), GameListQuery),
+        (DjangoWorldSummaryQuery(), WorldSummaryQuery),
     ]
 
     def test_implementations_satisfy_interfaces(self):
@@ -133,6 +145,13 @@ class BuildServiceTest(SimpleTestCase):
     def test_pennant_season_service_dependencies_are_wired(self):
         self._assert_wired(build_pennant_season_service(7), PennantSeasonService)
 
+    def test_world_view_service_dependencies_are_wired(self):
+        """世界の範囲の参照サービスも、実データ用と同じ検査にかける（依存は実データ用と同じ全部）。"""
+        self._assert_wired(build_world_view_service(7), TeamApplicationService)
+
+    def test_pennant_world_view_dependencies_are_wired(self):
+        self._assert_wired(build_pennant_world_view(), PennantWorldViewService)
+
     def _assert_wired(self, service, cls):
         parameters = [name for name in signature(cls.__init__).parameters if name != "self"]
         self.assertTrue(parameters, "依存が1つも宣言されていません")
@@ -144,6 +163,47 @@ class BuildServiceTest(SimpleTestCase):
         """依存を省略したサービスは作れないこと。"""
         with self.assertRaises(TypeError):
             TeamApplicationService(teams=DjangoTeamRepository(REAL))  # type: ignore[call-arg]
+
+
+class WorldViewScopeTest(SimpleTestCase):
+    """世界の画面を読むサービスは、渡された世界の範囲だけを読む。"""
+
+    SCOPED = (
+        "_teams",
+        "_team_list_query",
+        "_games",
+        "_leagues",
+        "_game_list_query",
+        "_player_fielding_query",
+        "_player_stats_query",
+    )
+
+    def test_every_dependency_is_fixed_to_the_given_world(self):
+        service = build_world_view_service(7)
+        for name in self.SCOPED:
+            with self.subTest(dependency=name):
+                self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
+
+    def test_it_has_the_same_dependencies_as_the_real_one(self):
+        """実データ用と同じ依存の組。片方だけに足して、世界の画面だけが落ちる形にしない。"""
+        for name in self.SCOPED:
+            with self.subTest(dependency=name):
+                self.assertTrue(hasattr(build_service(), name))
+
+    def test_the_real_data_uses_the_calendar_today(self):
+        self.assertEqual(build_service()._today, date.today)
+
+    def test_the_real_data_cannot_be_viewed_as_a_world(self):
+        for bad in (0, -1, True):
+            with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
+                build_world_view_service(bad)
+
+    def test_the_header_view_takes_no_world_and_reads_each_worlds_standings_in_its_own_scope(self):
+        """見出しは世界の台帳から読み、自軍の順位だけ世界の範囲のサービスで読む。"""
+        view = build_pennant_world_view()
+        self.assertEqual(list(signature(build_pennant_world_view).parameters), [])
+        self.assertEqual(view._standings_for(7)._games._scope, WorldScope.pennant(7))
+        self.assertEqual(view._standings_for(8)._games._scope, WorldScope.pennant(8))
 
 
 class RealScopeTest(SimpleTestCase):

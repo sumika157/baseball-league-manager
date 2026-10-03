@@ -1,15 +1,16 @@
 {% extends 'myapp/base.html' %}
+{% load scoped %}
 
 {% block title %}{{ titles.league_name }} タイトル - Baseball Manager{% endblock %}
 
 {% block content %}
 <nav aria-label="breadcrumb">
   <ol class="breadcrumb">
-    <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>
-    <li class="breadcrumb-item"><a href="{% url 'league_detail' titles.league_id %}">{{ titles.league_name }}</a></li>
+    {% if world %}{% include 'pennant/_crumbs.html' %}{% else %}<li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>{% endif %}
+    <li class="breadcrumb-item"><a href="{% scoped_url 'league_detail' titles.league_id %}">{{ titles.league_name }}</a></li>
     <li class="breadcrumb-item active">タイトル</li>
   </ol>
-</nav>
+</nav>{% if world %}{% include 'pennant/_world_bar.html' %}{% endif %}
 
 <div class="page-head">
   <h1 class="page-title">{{ titles.league_name }} タイトル</h1>
@@ -23,7 +24,7 @@
   <div class="segmented">
     {% for year in titles.available_years %}
       <a class="segmented-item {% if year == titles.year %}is-active{% endif %}"
-         href="{% url 'league_titles_by_year' titles.league_id year %}">{{ year }}年</a>
+         href="{% scoped_url 'league_titles_by_year' titles.league_id year %}">{{ year }}年</a>
     {% endfor %}
   </div>
 {% endif %}
@@ -47,7 +48,7 @@
                     <tr>
                       <td style="width: 2.5rem;" class="stat-muted">{{ entry.rank }}</td>
                       <td>
-                        <a href="{% url 'player_detail' entry.team_id entry.player_id %}" class="player-name">{{ entry.player_name }}</a>
+                        <a href="{% scoped_url 'player_detail' entry.team_id entry.player_id %}" class="player-name">{{ entry.player_name }}</a>
                         <div class="stat-muted" style="font-size: 0.75rem;">{{ entry.team_name }}</div>
                       </td>
                       <td class="text-end stat-key">{{ entry.value }}</td>
@@ -68,7 +69,7 @@
 {% else %}
   <div class="card">
     <div class="empty-state">
-      このリーグの試合がまだ登録されていません。
+      {% if world %}まだ試合が行われていません。ホームから進めると結果がここに出ます。{% else %}このリーグの試合がまだ登録されていません。{% endif %}
     </div>
   </div>
 {% endif %}

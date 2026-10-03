@@ -8,7 +8,8 @@ from django.urls import reverse
 class HeaderNavigationTest(TestCase):
     """ヘッダーの導線が権限に応じて出し分けられること。"""
 
-    ADMIN_LINK = 'class="nav-admin-link"'
+    # 「ペナント」の入口も同じ見た目（nav-admin-link）なので、管理画面へのリンクで見分ける
+    ADMIN_LINK = 'href="/admin/" class="nav-admin-link"'
 
     def setUp(self):
         self.staff = User.objects.create_user(username="staff", password="x", is_staff=True)

@@ -29,14 +29,25 @@ from ..application.dto import (
     SimulationPlayer,
     SimulationTeam,
     TeamSummary,
+    WorldSummary,
 )
 from ..domain.entities import Game, winning_team_id
+from ..domain.exceptions import WorldNotFound
 from ..domain.pennant.world import WorldScope
 from ..domain.simulation.manager import MAX_CONSECUTIVE_DAYS
 from ..domain.value_objects import BattingLine, FieldingLine, PitchingLine, Position, Season
 from . import orm_models
 from .repositories import batting_totals, pitching_totals
-from .scoping import games_in, players_in, stints_in, teams_in, world_condition
+from .scoping import (
+    fixtures_in_worlds,
+    games_in,
+    games_in_worlds,
+    leagues_in_worlds,
+    players_in,
+    stints_in,
+    teams_in,
+    world_condition,
+)
 
 
 def recorded_games_filter() -> Q:
@@ -508,6 +519,53 @@ class DjangoTeamListQuery:
                 stadium_name=row.home_stadium.name if row.home_stadium else "",
                 # 所在地は球場から取る。チーム側には持たせない
                 city=row.home_stadium.city if row.home_stadium else "",
+            )
+            for row in rows
+        ]
+
+
+class DjangoWorldSummaryQuery:
+    """WorldSummaryQuery の Django ORM 実装。世界の台帳そのものなので、範囲は持たない。
+
+    世界の数にかかわらず、一定のクエリ数（世界・最後の試合日・未消化の有無・リーグの4本）で読む。
+    """
+
+    def get(self, world_id: int) -> WorldSummary:
+        rows = self._read(orm_models.PennantWorld.objects.filter(id=world_id))
+        if not rows:
+            raise WorldNotFound(f"世界が見つかりません（id={world_id}）。")
+        return rows[0]
+
+    def list_all(self) -> list[WorldSummary]:
+        return self._read(orm_models.PennantWorld.objects.all())
+
+    @staticmethod
+    def _read(worlds: QuerySet[orm_models.PennantWorld]) -> list[WorldSummary]:
+        rows = list(worlds.select_related("managed_team"))
+        ids = [row.id for row in rows]
+        # order_by() で既定の並びを外す（外さないと、並びの列が GROUP BY に入って世界ごとにまとまらない）
+        last_played = dict(
+            games_in_worlds(ids).order_by().values_list("home_team__league__world_id").annotate(last=Max("played_on"))
+        )
+        with_fixtures = set(
+            fixtures_in_worlds(ids).order_by().values_list("home_team__league__world_id", flat=True).distinct()
+        )
+        first_league: dict[int, int] = {}
+        leagues = leagues_in_worlds(ids).order_by("display_order", "name").values_list("world_id", "id")
+        for world_id, league_id in leagues:
+            first_league.setdefault(world_id, league_id)
+        return [
+            WorldSummary(
+                world_id=row.id,
+                name=row.name,
+                start_year=row.start_year,
+                managed_team_id=row.managed_team_id,
+                managed_team_name=row.managed_team.name if row.managed_team is not None else "",
+                default_league_id=(
+                    row.managed_team.league_id if row.managed_team is not None else first_league.get(row.id)
+                ),
+                last_played_on=last_played.get(row.id),
+                has_pending_fixtures=row.id in with_fixtures,
             )
             for row in rows
         ]
