@@ -101,5 +101,9 @@ class InvalidRoster(DomainError):
     """シミュレーションを行えないロスター（打順を組める野手がいない、投手がいない、など）。"""
 
 
+class InvalidClubPlan(DomainError):
+    """球団の編成（1軍登録・オーダー・ローテーション・抑え）として成立しない上書き。"""
+
+
 class InvalidSchedule(DomainError):
     """日程が組めない（球団数が奇数・リーグが1つ・規則が成立しないなど）、または日程の指定が不正。"""

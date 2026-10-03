@@ -15,6 +15,7 @@ from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
 from .entities import Game, League, Team
+from .pennant.club_plan import ClubPlan
 from .pennant.ratings import PlayerRatings
 from .pennant.schedule import Fixture
 from .pennant.world import World
@@ -179,4 +180,29 @@ class RatingsRepository(Protocol):
 
     def find_by_player(self, player_id: int) -> list[PlayerRatings]:
         """ひとりの選手の能力を、年の順に。範囲の外の選手や能力の無い選手は空。"""
+        ...
+
+
+@runtime_checkable
+class ClubPlanRepository(Protocol):
+    """球団の編成の上書き（`ClubPlan`）。球団ごとに1つで、自動の区画は持たない。
+
+    ペナントの世界にだけ置ける（実データには編成の概念が無い）。
+    """
+
+    def find_all(self) -> list[ClubPlan]:
+        """範囲の、上書きを持つ球団の編成。すべて自動の球団は含まない。球団の id の順。"""
+        ...
+
+    def find_by_team(self, team_id: int) -> ClubPlan:
+        """その球団の編成。上書きが無ければ、すべて自動の編成を返す。範囲の外の球団は TeamNotFound。"""
+        ...
+
+    def save(self, plan: ClubPlan) -> ClubPlan:
+        """編成を保存する（区画ごとに丸ごと置き換える）。すべて自動なら保存済みの行を消す。
+
+        範囲の外の球団には書けない（TeamNotFound）。実データの範囲には書けない（InvalidWorld）。
+        球団に在籍していない選手が入っていても保存は止めない（在籍は変わるので、使える
+        かどうかは進めるときに `resolve_club` が判断する）。範囲の外の選手だけは書けない（PlayerNotFound）。
+        """
         ...

@@ -9,7 +9,8 @@
   （進めた順序や回数に依存しない。`randomness.game_seed`）
 - 疲労（先発の間隔・連投）は保存せず、直近の登板から導く。まとめて進めるときは、読んだ登板に
   その場で作った試合の登板を足していく
-- 1軍登録・スタメン・継投は能力だけから決まる AI 監督（編成の上書きは P5）
+- 1軍登録・スタメン・継投は、能力と GM の編成の上書き（`ClubPlan`）だけから決まる。上書きが使えない区画は
+  その区画だけ自動に落とし、理由を `AdvanceReport.plan_notices` で返す（例外で止めない）
 
 試合は日の区切りで、`FLUSH_EVERY_GAMES` 試合ごとにまとめて保存する（メモリに溜める量の上限）。
 **日の途中では切らない**。残りの対戦が「今日」より前になり、進められなくなるため。
@@ -24,6 +25,7 @@ from datetime import date
 
 from ..domain.entities import Game
 from ..domain.exceptions import InvalidRoster
+from ..domain.pennant.club_plan import ClubLimits, ResolvedClub, resolve_club, strictest_game_limit
 from ..domain.pennant.schedule import (
     AdvanceTarget,
     Fixture,
@@ -34,6 +36,7 @@ from ..domain.pennant.schedule import (
 )
 from ..domain.pennant.world import World
 from ..domain.repositories import (
+    ClubPlanRepository,
     FixtureRepository,
     GameRepository,
     LeagueRepository,
@@ -42,10 +45,10 @@ from ..domain.repositories import (
     WorldRepository,
 )
 from ..domain.simulation.engine import simulate_game
-from ..domain.simulation.manager import ClubRoster, PitchingHistory, SimBatter, SimPitcher, choose_active_roster
+from ..domain.simulation.manager import ClubRoster, PitchingHistory, SimBatter, SimPitcher
 from ..domain.simulation.randomness import game_seed, make_random
 from ..domain.simulation.ratings import BatterRatings, PitcherRatings
-from .dto import AdvanceReport, SimulationContext, SimulationTeam
+from .dto import AdvanceReport, PlanNotice, SimulationContext, SimulationTeam
 from .queries import SimulationContextQuery
 
 # メモリに溜める試合数の上限（`seed_virtual_games` の `FLUSH_EVERY_GAMES` に倣う）
@@ -74,6 +77,7 @@ class PennantSeasonService:
         games: GameRepository,
         fixtures: FixtureRepository,
         ratings: RatingsRepository,
+        plans: ClubPlanRepository,
         context_query: SimulationContextQuery,
         atomic: AtomicBlock,
     ) -> None:
@@ -84,6 +88,7 @@ class PennantSeasonService:
         self._games = games
         self._fixtures = fixtures
         self._ratings = ratings
+        self._plans = plans
         self._context_query = context_query
         self._atomic = atomic
 
@@ -134,31 +139,41 @@ class PennantSeasonService:
                 played_dates=(), games=0, today=last_played, remaining_fixtures=len(pending), schedule_created=created
             )
 
-        played = self._play(world, pending, dates)
+        played, notices = self._play(world, pending, dates)
         return AdvanceReport(
             played_dates=tuple(dates),
             games=played,
             today=dates[-1],
             remaining_fixtures=len(pending) - played,
             schedule_created=created,
+            plan_notices=notices,
         )
 
     # --- 内部 ---
 
-    def _play(self, world: World, pending: list[Fixture], dates: list[date]) -> int:
-        """`dates` の日の対戦をシミュレーションして保存し、作った試合数を返す。"""
+    def _play(self, world: World, pending: list[Fixture], dates: list[date]) -> tuple[int, tuple[PlanNotice, ...]]:
+        """`dates` の日の対戦をシミュレーションして保存し、作った試合数と、自動に落ちた編成の知らせを返す。"""
         context = self._context_query.load(before=dates[0])
         history = _pitching_history(context)
         teams = {team.team_id: team for team in context.teams}
         pools = self._pools(context, dates[0].year)
-        rosters: dict[int, ClubRoster] = {}
+        plans = {plan.team_id: plan for plan in self._plans.find_all()}
+        clubs: dict[int, ResolvedClub] = {}
+        notices: list[PlanNotice] = []
+        game_limit = strictest_game_limit(team.foreign_game_limit for team in context.teams)
 
-        def roster_of(team_id: int) -> ClubRoster:
-            # 1軍登録は能力だけから決まるので、1回の「進める」の間は変わらない。日ごとに選び直さない
-            if team_id not in rosters:
+        def club_of(team_id: int, day: date) -> ResolvedClub:
+            # 1軍登録・オーダー・投手陣は、能力と GM の上書きだけから決まるので、1回の「進める」の間は
+            # 変わらない。日ごとに選び直さない（上書きが使えない理由も、球団ごとに最初の日の1回だけ知らせる）
+            if team_id not in clubs:
                 team = teams[team_id]
-                rosters[team_id] = choose_active_roster(pools[team_id], team.foreign_roster_limit)
-            return rosters[team_id]
+                limits = ClubLimits(foreign_roster_limit=team.foreign_roster_limit, foreign_game_limit=game_limit)
+                clubs[team_id] = resolve_club(plans.get(team_id), pools[team_id], limits)
+                notices.extend(
+                    PlanNotice(team_id, team.name, day, fallback.section, fallback.reason)
+                    for fallback in clubs[team_id].fallbacks
+                )
+            return clubs[team_id]
 
         by_date: dict[date, list[Fixture]] = {}
         for fixture in pending:
@@ -169,7 +184,9 @@ class PennantSeasonService:
         total = 0
         for day in dates:
             for fixture in by_date[day]:
-                home, away = roster_of(fixture.home_team_id), roster_of(fixture.visitor_team_id)
+                home_club = club_of(fixture.home_team_id, day)
+                away_club = club_of(fixture.visitor_team_id, day)
+                home, away = home_club.roster, away_club.roster
                 rng = make_random(
                     game_seed(
                         world.seed, day.year, f"{day.isoformat()}:{fixture.home_team_id}:{fixture.visitor_team_id}"
@@ -184,6 +201,8 @@ class PennantSeasonService:
                         history=history,
                         # リーグをまたぐ交流戦は、ホーム球団のリーグの枠で行う
                         foreign_game_limit=teams[fixture.home_team_id].foreign_game_limit,
+                        home_orders=home_club.orders,
+                        away_orders=away_club.orders,
                     )
                 except InvalidRoster as error:
                     raise InvalidRoster(f"{day} {home.name} 対 {away.name}: {error}") from error
@@ -193,7 +212,7 @@ class PennantSeasonService:
             if len(games) >= FLUSH_EVERY_GAMES:
                 total += self._flush(games, consumed)
                 games, consumed = [], []
-        return total + self._flush(games, consumed)
+        return total + self._flush(games, consumed), tuple(notices)
 
     def _flush(self, games: list[Game], consumed: list[Fixture]) -> int:
         """試合を保存し、消化した対戦を消す。同じトランザクションで行う。"""
@@ -209,10 +228,10 @@ class PennantSeasonService:
     def _pools(self, context: SimulationContext, year: int) -> dict[int, ClubRoster]:
         """球団ごとの登録候補。能力（その年のもの）が無い選手は出られない。"""
         ratings = {item.player_id: item.ratings for item in self._ratings.find_by_year(year)}
-        return {team.team_id: _pool(team, ratings) for team in context.teams}
+        return {team.team_id: pool_of(team, ratings) for team in context.teams}
 
 
-def _pool(team: SimulationTeam, ratings: dict[int, BatterRatings | PitcherRatings]) -> ClubRoster:
+def pool_of(team: SimulationTeam, ratings: dict[int, BatterRatings | PitcherRatings]) -> ClubRoster:
     batters: list[SimBatter] = []
     pitchers: list[SimPitcher] = []
     for player in team.players:

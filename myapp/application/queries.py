@@ -17,7 +17,15 @@ from typing import Protocol, runtime_checkable
 
 from ..domain.entities import Game
 from ..domain.value_objects import FieldingLine
-from .dto import ActivePlayerStats, GameRow, PlayerFielding, SimulationContext, TeamSummary, WorldSummary
+from .dto import (
+    ActivePlayerStats,
+    GameRow,
+    PlayerFielding,
+    SimulationContext,
+    SimulationTeam,
+    TeamSummary,
+    WorldSummary,
+)
 
 
 @runtime_checkable
@@ -61,6 +69,10 @@ class SimulationContextQuery(Protocol):
 
     def last_played_on(self) -> date | None:
         """世界の「今日」。消化した最後の試合日で、まだ1試合も無ければ None。"""
+        ...
+
+    def teams(self) -> tuple[SimulationTeam, ...]:
+        """球団と、その現在の選手と、リーグの外国人の枠だけ（直近の登板は読まない。編成の画面が使う）。"""
         ...
 
     def load(self, *, before: date) -> SimulationContext:

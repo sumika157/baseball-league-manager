@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -150,6 +150,17 @@ class PitchingStaff:
         return ((self.closer,) if self.closer else ()) + self.setup + self.middle
 
 
+@dataclass(frozen=True)
+class ClubOrders:
+    """GM が決めた編成の上書き。`None` の区画は AI 監督が決める（`ClubPlan` から当てはめる）。
+
+    `lineup` の選手は `ClubRoster.batters` の中から選んだものに限る（呼ぶ側が検査する）。
+    """
+
+    lineup: tuple[LineupSlot, ...] | None = None
+    staff: PitchingStaff | None = None
+
+
 @dataclass
 class ForeignQuota:
     """外国人選手の出場枠。1試合にそのチームで出られる外国人選手の上限（None なら無制限）。"""
@@ -259,6 +270,19 @@ def choose_active_roster(pool: ClubRoster, foreign_roster_limit: int | None = No
         name=pool.name,
         batters=tuple(sorted(chosen_batters, key=regular_value, reverse=True)),
         pitchers=tuple(sorted(chosen_pitchers, key=_pitcher_roster_value, reverse=True)),
+    )
+
+
+def register_players(pool: ClubRoster, player_ids: Collection[int]) -> ClubRoster:
+    """登録候補から、`player_ids` の選手だけを1軍にする（GM が決めた登録。並びは自動の登録と同じ良い順）。"""
+    chosen = set(player_ids)
+    return ClubRoster(
+        team_id=pool.team_id,
+        name=pool.name,
+        batters=tuple(sorted((b for b in pool.batters if b.player_id in chosen), key=regular_value, reverse=True)),
+        pitchers=tuple(
+            sorted((p for p in pool.pitchers if p.player_id in chosen), key=_pitcher_roster_value, reverse=True)
+        ),
     )
 
 
@@ -405,22 +429,39 @@ def _batting_order(slots: list[LineupSlot]) -> list[LineupSlot]:
 # --- 投手陣 ---
 
 
-def plan_pitching_staff(pitchers: Sequence[SimPitcher]) -> PitchingStaff:
-    """ローテーション6人と、抑え・中継ぎの序列を決める。"""
+def plan_pitching_staff(
+    pitchers: Sequence[SimPitcher],
+    *,
+    rotation: Sequence[SimPitcher] | None = None,
+    closer: SimPitcher | None = None,
+) -> PitchingStaff:
+    """ローテーション6人と、抑え・中継ぎの序列を決める。
+
+    `rotation` / `closer` を渡すと、その区画は渡された投手で固定し、残りを AI が決める
+    （`ClubPlan` の上書き）。渡さなければ全部 AI が決める。固定した抑えはローテーションから外す。
+    """
     if not pitchers:
         raise InvalidRoster("投手がいません。")
-    by_starter = sorted(pitchers, key=lambda p: p.ratings.starter_value, reverse=True)
-    rotation = tuple(by_starter[:ROTATION_SIZE])
+    closer_id = closer.player_id if closer is not None else None
+    if rotation is None:
+        by_starter = sorted(
+            (p for p in pitchers if p.player_id != closer_id), key=lambda p: p.ratings.starter_value, reverse=True
+        )
+        rotation = by_starter[:ROTATION_SIZE]
     in_rotation = {p.player_id for p in rotation}
     relievers = sorted(
-        (p for p in pitchers if p.player_id not in in_rotation), key=lambda p: p.ratings.pitching_value, reverse=True
+        (p for p in pitchers if p.player_id not in in_rotation and p.player_id != closer_id),
+        key=lambda p: p.ratings.pitching_value,
+        reverse=True,
     )
-    closer = relievers[0] if relievers else None
+    if closer is None:
+        closer = relievers[0] if relievers else None
+        relievers = relievers[1:]
     return PitchingStaff(
-        rotation=rotation,
+        rotation=tuple(rotation),
         closer=closer,
-        setup=tuple(relievers[1 : 1 + SETUP_PITCHERS]),
-        middle=tuple(relievers[1 + SETUP_PITCHERS :]),
+        setup=tuple(relievers[:SETUP_PITCHERS]),
+        middle=tuple(relievers[SETUP_PITCHERS:]),
     )
 
 

@@ -15,6 +15,7 @@ from inspect import Parameter, signature
 
 from django.test import SimpleTestCase
 
+from myapp.application.club_management import ClubManagementService
 from myapp.application.game_recording import GameRecordingService
 from myapp.application.pennant_season import PennantSeasonService
 from myapp.application.pennant_view import PennantWorldViewService
@@ -30,6 +31,7 @@ from myapp.application.services import TeamApplicationService
 from myapp.domain.exceptions import InvalidWorld
 from myapp.domain.pennant.world import WorldScope
 from myapp.domain.repositories import (
+    ClubPlanRepository,
     FixtureRepository,
     GameRepository,
     LeagueRepository,
@@ -46,6 +48,7 @@ from myapp.infrastructure.queries import (
     DjangoWorldSummaryQuery,
 )
 from myapp.infrastructure.repositories import (
+    DjangoClubPlanRepository,
     DjangoFixtureRepository,
     DjangoGameRepository,
     DjangoLeagueRepository,
@@ -54,6 +57,7 @@ from myapp.infrastructure.repositories import (
     DjangoWorldRepository,
 )
 from myapp.presentation.views import (
+    build_club_service,
     build_pennant_season_service,
     build_pennant_world_service,
     build_pennant_world_view,
@@ -78,6 +82,7 @@ class ProtocolConformanceTest(SimpleTestCase):
         (DjangoWorldRepository(), WorldRepository),
         (DjangoRatingsRepository(REAL), RatingsRepository),
         (DjangoFixtureRepository(REAL), FixtureRepository),
+        (DjangoClubPlanRepository(REAL), ClubPlanRepository),
         (DjangoSimulationContextQuery(REAL), SimulationContextQuery),
         (DjangoFieldingTotalsQuery(REAL), FieldingTotalsQuery),
         (DjangoTeamListQuery(REAL), TeamListQuery),
@@ -151,6 +156,9 @@ class BuildServiceTest(SimpleTestCase):
 
     def test_pennant_world_view_dependencies_are_wired(self):
         self._assert_wired(build_pennant_world_view(), PennantWorldViewService)
+
+    def test_club_service_dependencies_are_wired(self):
+        self._assert_wired(build_club_service(7), ClubManagementService)
 
     def _assert_wired(self, service, cls):
         parameters = [name for name in signature(cls.__init__).parameters if name != "self"]
@@ -249,7 +257,7 @@ class RealScopeTest(SimpleTestCase):
 class PennantSeasonScopeTest(SimpleTestCase):
     """シーズン進行は、渡された世界の範囲だけを読み書きする。"""
 
-    SCOPED = ("_leagues", "_teams", "_games", "_fixtures", "_ratings", "_context_query")
+    SCOPED = ("_leagues", "_teams", "_games", "_fixtures", "_ratings", "_plans", "_context_query")
 
     def test_every_dependency_is_fixed_to_the_given_world(self):
         service = build_pennant_season_service(7)
@@ -271,3 +279,24 @@ class PennantSeasonScopeTest(SimpleTestCase):
         from django.db import transaction
 
         self.assertIs(build_pennant_season_service(7)._atomic, transaction.atomic)
+
+
+class ClubServiceScopeTest(SimpleTestCase):
+    """編成の管理は、渡された世界の範囲だけを読み書きする。"""
+
+    SCOPED = ("_plans", "_ratings", "_fixtures", "_context_query")
+
+    def test_every_dependency_is_fixed_to_the_given_world(self):
+        service = build_club_service(7)
+        self.assertEqual(service._world_id, 7)
+        for name in self.SCOPED:
+            with self.subTest(dependency=name):
+                self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
+
+    def test_a_different_world_gets_a_different_scope(self):
+        self.assertEqual(build_club_service(8)._plans._scope, WorldScope.pennant(8))
+
+    def test_the_real_data_has_no_club_service(self):
+        for bad in (0, -1, True):
+            with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
+                build_club_service(bad)

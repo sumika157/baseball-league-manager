@@ -165,33 +165,6 @@ class DjangoSimulationContextQuery:
         return games_in(self._scope).aggregate(last=Max("played_on"))["last"]
 
     def load(self, *, before: date) -> SimulationContext:
-        players: dict[int, list[SimulationPlayer]] = {}
-        stints = (
-            stints_in(self._scope)
-            .filter(to_year__isnull=True)
-            .order_by("team_id", "number", "player_id")
-            .values_list("team_id", "player_id", "player__name", "player__position", "player__is_foreign_player")
-        )
-        for team_id, player_id, name, position, is_foreign in stints:
-            players.setdefault(team_id, []).append(
-                SimulationPlayer(
-                    player_id=player_id, name=name, position=Position.from_label(position), is_foreign=is_foreign
-                )
-            )
-
-        teams = tuple(
-            SimulationTeam(
-                team_id=team_id,
-                name=name,
-                foreign_roster_limit=roster_limit,
-                foreign_game_limit=game_limit,
-                players=tuple(players.get(team_id, ())),
-            )
-            for team_id, name, roster_limit, game_limit in teams_in(self._scope)
-            .order_by("id")
-            .values_list("id", "name", "league__foreign_player_roster_limit", "league__foreign_player_game_limit")
-        )
-
         lines = orm_models.GamePitchingLine.objects.filter(
             world_condition("game__home_team__league", self._scope), game__played_on__lt=before
         )
@@ -211,7 +184,35 @@ class DjangoSimulationContextQuery:
             for _, group in groupby(recent.values_list("game_id", "game__played_on", "player_id"), key=itemgetter(0))
             for rows in [list(group)]
         )
-        return SimulationContext(teams=teams, last_starts=last_starts, recent_outings=recent_outings)
+        return SimulationContext(teams=self.teams(), last_starts=last_starts, recent_outings=recent_outings)
+
+    def teams(self) -> tuple[SimulationTeam, ...]:
+        players: dict[int, list[SimulationPlayer]] = {}
+        stints = (
+            stints_in(self._scope)
+            .filter(to_year__isnull=True)
+            .order_by("team_id", "number", "player_id")
+            .values_list("team_id", "player_id", "player__name", "player__position", "player__is_foreign_player")
+        )
+        for team_id, player_id, name, position, is_foreign in stints:
+            players.setdefault(team_id, []).append(
+                SimulationPlayer(
+                    player_id=player_id, name=name, position=Position.from_label(position), is_foreign=is_foreign
+                )
+            )
+
+        return tuple(
+            SimulationTeam(
+                team_id=team_id,
+                name=name,
+                foreign_roster_limit=roster_limit,
+                foreign_game_limit=game_limit,
+                players=tuple(players.get(team_id, ())),
+            )
+            for team_id, name, roster_limit, game_limit in teams_in(self._scope)
+            .order_by("id")
+            .values_list("id", "name", "league__foreign_player_roster_limit", "league__foreign_player_game_limit")
+        )
 
 
 class DjangoPlayerStatsQuery:

@@ -711,3 +711,70 @@ class PennantFixture(models.Model):
 
     def __str__(self) -> str:
         return f"{self.date} {self.home_team.name} 対 {self.visitor_team.name}"
+
+
+class PennantClubPlan(models.Model):
+    """ペナントの球団の編成の上書き。球団ごとに1つ。自動の区画は行を持たない。
+
+    持つのは**選手の id だけ**（`PennantClubPlanEntry`）。抑えはこの行が持つ。
+    世界の列は持たない。球団のリーグで世界が決まる（日程・試合と同じ）。
+    すべて自動の球団は行を持たない（持つ意味が無いので、保存のときに消す）。
+    """
+
+    team = models.OneToOneField(Team, on_delete=models.CASCADE, related_name="club_plan", verbose_name="球団")
+    closer = models.ForeignKey(
+        Player,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        verbose_name="抑え",
+        help_text="空なら自動（AI 監督が決める）。",
+    )
+
+    class Meta:
+        verbose_name = "ペナントの編成"
+        verbose_name_plural = "ペナントの編成"
+        ordering = ["team_id"]
+
+    def __str__(self) -> str:
+        return f"{self.team.name}の編成"
+
+
+class PennantClubPlanEntry(models.Model):
+    """編成の上書きの1行。1軍登録・オーダー・ローテーションの選手を、区画と順で持つ。
+
+    区画の行が1つも無ければ、その区画は自動。オーダーの行だけが守備位置を持つ。
+    """
+
+    ACTIVE = "active"
+    LINEUP = "lineup"
+    ROTATION = "rotation"
+    SECTION_CHOICES = [(ACTIVE, "1軍登録"), (LINEUP, "オーダー"), (ROTATION, "ローテーション")]
+
+    plan = models.ForeignKey(PennantClubPlan, on_delete=models.CASCADE, related_name="entries", verbose_name="編成")
+    section = models.CharField(max_length=10, choices=SECTION_CHOICES, verbose_name="区画")
+    # 区画の中の順（オーダーなら打順、ローテーションなら先発の序列）。1から
+    order = models.PositiveSmallIntegerField(verbose_name="順")
+    player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="+", verbose_name="選手")
+    fielding_position = models.CharField(
+        max_length=2, choices=FIELDING_POSITION_CHOICES, blank=True, default="", verbose_name="守備位置"
+    )
+
+    class Meta:
+        verbose_name = "ペナントの編成の行"
+        verbose_name_plural = "ペナントの編成の行"
+        ordering = ["plan_id", "section", "order"]
+        constraints = [
+            models.UniqueConstraint(fields=["plan", "section", "player"], name="unique_pennant_plan_entry_player"),
+            models.UniqueConstraint(fields=["plan", "section", "order"], name="unique_pennant_plan_entry_order"),
+            # 守備位置を持つのはオーダーだけ
+            models.CheckConstraint(
+                condition=models.Q(section="lineup", fielding_position__gt="")
+                | (~models.Q(section="lineup") & models.Q(fielding_position="")),
+                name="pennant_plan_entry_position_only_in_lineup",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.plan} {self.get_section_display()} {self.order}"
