@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
 
@@ -34,8 +35,10 @@ from .baserunning import DEFAULT_RULES, BaserunningRules, build_advances
 from .fielding import draw_error, fielded_path, team_defense
 from .manager import (
     LINEUP_SIZE,
+    ClubOrders,
     ClubRoster,
     ForeignQuota,
+    LineupSlot,
     PinchHitSituation,
     PitchingHistory,
     PitchingStaff,
@@ -140,6 +143,8 @@ def simulate_game(
     played_on: date,
     history: PitchingHistory | None = None,
     foreign_game_limit: int | None = None,
+    home_orders: ClubOrders | None = None,
+    away_orders: ClubOrders | None = None,
     baseline: LeagueBaseline = NPB,
     sensitivity: RatingSensitivity = DEFAULT_SENSITIVITY,
     rules: BaserunningRules = DEFAULT_RULES,
@@ -149,12 +154,15 @@ def simulate_game(
     `home` / `away` は1軍に登録された選手だけを入れた `ClubRoster`。先発は `history`（直近の登板の
     記録）から中5日を空けて決め、試合が終わったらその日の登板を `history` に書き足す。
     `history` を渡さなければ、疲労を考えない（毎回、最も良い先発が投げる）。
+
+    `home_orders` / `away_orders` は GM の編成の上書き（オーダー・投手陣）。渡さなければ（または
+    区画が `None` なら）AI 監督が決めるので、渡さないときの結果は上書きを知らない版と同じ。
     """
     engine = _Engine(rng, baseline, sensitivity, rules)
     history = history if history is not None else PitchingHistory()
     sides = {
-        True: engine.make_side(home, True, played_on, history, foreign_game_limit),
-        False: engine.make_side(away, False, played_on, history, foreign_game_limit),
+        True: engine.make_side(home, True, played_on, history, foreign_game_limit, home_orders),
+        False: engine.make_side(away, False, played_on, history, foreign_game_limit, away_orders),
     }
     plate_appearances = engine.play(sides, played_on, history)
 
@@ -198,19 +206,27 @@ class _Engine:
         played_on: date,
         history: PitchingHistory,
         foreign_game_limit: int | None,
+        orders: ClubOrders | None = None,
     ) -> _Side:
-        staff = plan_pitching_staff(roster.pitchers)
+        staff = orders.staff if orders and orders.staff else plan_pitching_staff(roster.pitchers)
         quota = ForeignQuota(limit=foreign_game_limit)
-        starter = choose_starter(staff, history, played_on, quota)
-        quota.register(starter.is_foreign)
-
-        lineup = choose_lineup(roster.batters, quota)
+        if orders is not None and orders.lineup is not None:
+            # 決めたオーダーの外国人を先に数え、その枠で先発を選ぶ（先発が枠を押し出さないように）
+            lineup: Sequence[LineupSlot] = orders.lineup
+            for item in lineup:
+                quota.register(item.batter.is_foreign)
+            starter = choose_starter(staff, history, played_on, quota)
+            quota.register(starter.is_foreign)
+        else:
+            starter = choose_starter(staff, history, played_on, quota)
+            quota.register(starter.is_foreign)
+            lineup = choose_lineup(roster.batters, quota)
+            for item in lineup:
+                quota.register(item.batter.is_foreign)
         slots = [
             _Slot(batter=item.batter, position=item.position, batting_order=order, slot_sequence=0)
             for order, item in enumerate(lineup, start=1)
         ]
-        for slot in slots:
-            quota.register(slot.batter.is_foreign)
         started = {slot.batter.player_id for slot in slots}
 
         side = _Side(

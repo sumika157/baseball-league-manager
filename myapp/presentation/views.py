@@ -20,6 +20,7 @@ from django.urls import reverse, reverse_lazy
 from django.views.decorators.http import require_GET
 from django.views.generic import CreateView
 
+from ..application.club_management import ClubManagementService
 from ..application.dto import GameEditData, GameEditPlateAppearance, WorldContext
 from ..application.game_recording import GameRecordingService
 from ..application.pennant_season import PennantSeasonService
@@ -58,6 +59,7 @@ from ..infrastructure.queries import (
     DjangoWorldSummaryQuery,
 )
 from ..infrastructure.repositories import (
+    DjangoClubPlanRepository,
     DjangoFixtureRepository,
     DjangoGameRepository,
     DjangoLeagueRepository,
@@ -232,6 +234,7 @@ def build_pennant_season_service(world_id: int) -> PennantSeasonService:
         games=DjangoGameRepository(scope),
         fixtures=DjangoFixtureRepository(scope),
         ratings=DjangoRatingsRepository(scope),
+        plans=DjangoClubPlanRepository(scope),
         context_query=DjangoSimulationContextQuery(scope),
         atomic=transaction.atomic,
     )
@@ -271,6 +274,23 @@ def pennant_world(request, world_id):
     """世界の入口。GM ホームができるまでは、順位表へ案内するだけ。"""
     _scope(world_id)
     return redirect("pennant_standings", world_id=world_id)
+
+
+def build_club_service(world_id: int) -> ClubManagementService:
+    """ペナントの世界ひとつの、球団の編成を管理するサービスを組み立てる。
+
+    `build_pennant_season_service()` と同じく、**リポジトリと参照クエリはすべて渡された世界の範囲で作る**
+    （他の世界の球団の編成は、読めも書けもしない）。世界の id が正しくなければ InvalidWorld。
+    """
+    scope = WorldScope.pennant(world_id)
+    return ClubManagementService(
+        world_id=world_id,
+        worlds=DjangoWorldRepository(),
+        plans=DjangoClubPlanRepository(scope),
+        ratings=DjangoRatingsRepository(scope),
+        fixtures=DjangoFixtureRepository(scope),
+        context_query=DjangoSimulationContextQuery(scope),
+    )
 
 
 def dashboard(request):

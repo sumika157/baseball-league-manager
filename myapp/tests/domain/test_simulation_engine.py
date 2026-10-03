@@ -19,7 +19,15 @@ from myapp.domain.services import (
     fielders_by_plate_appearance,
 )
 from myapp.domain.simulation.engine import MAX_INNINGS, SimulatedGame, simulate_game
-from myapp.domain.simulation.manager import PitchingHistory, choose_active_roster
+from myapp.domain.simulation.manager import (
+    ClubOrders,
+    ForeignQuota,
+    LineupSlot,
+    PitchingHistory,
+    choose_active_roster,
+    choose_lineup,
+    plan_pitching_staff,
+)
 from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.samples import average_club, round_robin_days, spread_league
 from myapp.domain.value_objects import FieldingPosition, PlateAppearanceResult
@@ -406,3 +414,105 @@ class ThirdOutTest(TestCase):
                     checked += 1
                     self.assertEqual(entry.runs_scored, 0, f"{entry} {entry.result.label}")
         self.assertGreater(checked, 500)
+
+
+class OrdersTest(TestCase):
+    """GM の編成の上書き（`ClubOrders`）。渡さなければ今までと同じ結果になる。"""
+
+    def setUp(self):
+        self.home = choose_active_roster(average_club(1))
+        self.away = choose_active_roster(average_club(2))
+
+    def starters(self, played: SimulatedGame, roster) -> list[int]:
+        ids = {p.player_id for p in roster.pitchers}
+        return [o.player_id for o in played.game.pitching if o.player_id in ids and o.appearance_order == 1]
+
+    def test_without_orders_the_result_is_the_same(self):
+        """上書きを渡さない・空の上書きを渡す・区画を None にする、のどれでも同じ打席列。"""
+        for seed in (1, 2, 3):
+            plain = _play(seed, self.home, self.away)
+            for orders in (ClubOrders(), None):
+                with self.subTest(seed=seed, orders=orders):
+                    again = _play(seed, self.home, self.away, home_orders=orders, away_orders=orders)
+                    self.assertEqual(plain.plate_appearances, again.plate_appearances)
+                    self.assertEqual(plain.lineup, again.lineup)
+
+    def test_a_manual_lineup_bats_in_the_given_order_at_the_given_positions(self):
+        auto = choose_lineup(self.home.batters, ForeignQuota())
+        reversed_order = tuple(reversed(auto))
+
+        played = _play(5, self.home, self.away, home_orders=ClubOrders(lineup=reversed_order))
+
+        starting = [e for e in played.lineup if e.team_id == self.home.team_id and e.slot_sequence == 0]
+        self.assertEqual(
+            [(e.batting_order, e.player_id, e.fielding_position) for e in starting],
+            [(order, s.batter.player_id, s.position) for order, s in enumerate(reversed_order, start=1)],
+        )
+        # 1回表の先頭打者は、ビジターの1番。1回裏の先頭打者は、ホームの上書きした1番
+        first_home = next(p for p in played.plate_appearances if p.is_bottom)
+        self.assertEqual(first_home.batter_id, reversed_order[0].batter.player_id)
+        self.assertEqual(
+            {e.player_id for e in played.lineup if e.team_id == self.away.team_id and e.slot_sequence == 0},
+            {s.batter.player_id for s in choose_lineup(self.away.batters, ForeignQuota())},
+            "上書きしていない側は自動のまま",
+        )
+
+    def test_a_manual_rotation_decides_the_starter(self):
+        weakest = max(self.home.pitchers, key=lambda p: p.player_id)
+        staff = plan_pitching_staff(self.home.pitchers, rotation=[weakest])
+
+        played = _play(5, self.home, self.away, home_orders=ClubOrders(staff=staff))
+
+        self.assertEqual(self.starters(played, self.home), [weakest.player_id])
+        ensure_lines_match_plate_appearances(played.game)
+
+    def test_the_manual_rotation_is_rested_like_the_automatic_one(self):
+        """手動のローテーションでも、中5日は守る（空いた先発がいなければ、休養の長い投手）。"""
+        pair = sorted(self.home.pitchers, key=lambda p: p.player_id)[:2]
+        staff = plan_pitching_staff(self.home.pitchers, rotation=pair)
+        history = PitchingHistory()
+        order: list[int] = []
+        for offset in range(4):
+            played = _play(
+                9 + offset,
+                self.home,
+                self.away,
+                day=OPENING_DAY + timedelta(days=offset * 3),
+                history=history,
+                home_orders=ClubOrders(staff=staff),
+            )
+            order.extend(self.starters(played, self.home))
+        self.assertEqual(order, [pair[0].player_id, pair[1].player_id, pair[0].player_id, pair[1].player_id])
+
+    def test_a_manual_closer_is_the_one_called_in_a_save_situation(self):
+        closer = max(self.home.pitchers, key=lambda p: p.player_id)
+        staff = plan_pitching_staff(self.home.pitchers, closer=closer)
+        self.assertEqual(staff.closer, closer)
+        self.assertNotIn(closer, staff.rotation)
+        # 自動の抑えは、別の投手
+        self.assertNotEqual(plan_pitching_staff(self.home.pitchers).closer, closer)
+        home_ids = {p.player_id for p in self.home.pitchers}
+        saves: Counter[int] = Counter()
+        for seed in range(40):
+            played = _play(seed, self.home, self.away, home_orders=ClubOrders(staff=staff))
+            saves.update(o.player_id for o in played.game.pitching if o.line.saves and o.player_id in home_ids)
+        self.assertTrue(saves, "セーブのつく試合が1つはある")
+        self.assertEqual(saves.most_common(1)[0][0], closer.player_id)
+
+    def test_a_manual_lineup_with_foreign_players_keeps_the_game_limit(self):
+        """上書きのオーダーに外国人が並ぶときも、その枠で先発を選ぶ（枠を超えない）。"""
+        roster = choose_active_roster(average_club(3))
+        starters_in_lineup = {s.batter.player_id for s in choose_lineup(roster.batters, ForeignQuota())}
+        foreign = set(sorted(starters_in_lineup)[:4])
+        marked = replace(
+            roster,
+            batters=tuple(replace(b, is_foreign=b.player_id in foreign) for b in roster.batters),
+            pitchers=tuple(replace(p, is_foreign=index < 3) for index, p in enumerate(roster.pitchers)),
+        )
+        lineup = tuple(LineupSlot(s.batter, s.position) for s in choose_lineup(marked.batters, ForeignQuota()))
+        self.assertEqual(sum(s.batter.is_foreign for s in lineup), 4)
+        played = _play(11, marked, self.away, foreign_game_limit=4, home_orders=ClubOrders(lineup=lineup))
+
+        [starter_id] = self.starters(played, marked)
+        starter = next(p for p in marked.pitchers if p.player_id == starter_id)
+        self.assertFalse(starter.is_foreign, "オーダーの外国人で枠が埋まっているので、外国人の投手は先発しない")

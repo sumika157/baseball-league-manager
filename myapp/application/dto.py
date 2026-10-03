@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 
+from ..domain.pennant.club_plan import PlanSection
 from ..domain.pennant.season import SeasonPhase
 from ..domain.value_objects import BattingLine, FieldingPosition, PitchingLine, Position
 
@@ -1166,6 +1167,18 @@ class SimulationContext:
 
 
 @dataclass(frozen=True)
+class PlanNotice:
+    """編成の上書きが使えず、その区画を自動で進めたことの知らせ（ホームで出す）。"""
+
+    team_id: int
+    team_name: str
+    # 自動に落ちた最初の日（この「進める」の中では、その球団の最初の試合日）
+    on: date
+    section: PlanSection
+    reason: str
+
+
+@dataclass(frozen=True)
 class AdvanceReport:
     """世界を進めた結果。"""
 
@@ -1178,6 +1191,8 @@ class AdvanceReport:
     remaining_fixtures: int
     # この呼び出しで、その年の日程を初めて作ったか
     schedule_created: bool
+    # 編成の上書きが使えず自動で進めた区画（球団ごと・区画ごとに1つ。空なら上書きはすべて効いた）
+    plan_notices: tuple[PlanNotice, ...] = ()
 
     @property
     def season_finished(self) -> bool:
@@ -1241,3 +1256,59 @@ class PennantWorldListRow:
     season_year: int
     # 受け持つ球団が決まっていて、順位表に載っているときだけ
     own_standing: OwnStanding | None
+
+
+@dataclass(frozen=True)
+class ClubPlayerRow:
+    """編成の画面に並べる、球団の選手1人（能力のある選手だけ）。"""
+
+    player_id: int
+    name: str
+    position: Position
+    is_foreign: bool
+    is_active: bool
+
+
+@dataclass(frozen=True)
+class ClubLineupRow:
+    """オーダーの1枠。"""
+
+    batting_order: int
+    player_id: int
+    name: str
+    position: FieldingPosition
+
+
+@dataclass(frozen=True)
+class ClubPlanView:
+    """球団の編成。**いま進めたときに使われる形**（手動が有効なら手動、無効なら自動）と、区画ごとの手動かどうか。
+
+    `*_is_manual` が False の区画は、AI 監督の自動編成（提案）をそのまま映している。手動の区画で
+    使えなくなっているものは区画が手動のまま（GM が自動に戻すまで）で、`notices` に理由が入り、
+    中身はその日に使われる自動に落ちた形になる（設計書 6.3 の「無効になった上書き」）。
+    自動のスタメンは先発の外国人を出場枠に数えない目安で、外国人の投手が先発する日は実際の試合と違いうる
+    （先発は日ごとの疲労で決まるため、画面では決めない）。出場枠は世界のリーグで最も厳しい値で数えるので、
+    自リーグの枠が緩い世界では、自リーグの試合の実際のスタメンと外国人の人数が違いうる。
+    """
+
+    team_id: int
+    team_name: str
+    year: int
+    players: tuple[ClubPlayerRow, ...]
+    active_ids: tuple[int, ...]
+    lineup: tuple[ClubLineupRow, ...]
+    rotation_ids: tuple[int, ...]
+    closer_id: int | None
+    active_is_manual: bool
+    lineup_is_manual: bool
+    rotation_is_manual: bool
+    closer_is_manual: bool
+    notices: tuple[ClubPlanNotice, ...] = ()
+
+
+@dataclass(frozen=True)
+class ClubPlanNotice:
+    """編成の上書きが使えない理由（`ClubPlanView` に添える。日付は持たない）。"""
+
+    section: PlanSection
+    reason: str

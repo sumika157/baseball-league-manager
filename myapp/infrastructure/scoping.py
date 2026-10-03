@@ -92,3 +92,8 @@ def players_in(scope: WorldScope) -> QuerySet[orm_models.Player]:
         return orm_models.Player.objects.filter(Exists(in_world))
     in_pennant = orm_models.PlayerStint.objects.filter(player_id=OuterRef("pk"), team__league__world__isnull=False)
     return orm_models.Player.objects.filter(~Exists(in_pennant))
+
+
+def club_plans_in(scope: WorldScope) -> QuerySet[orm_models.PennantClubPlan]:
+    """範囲の球団の編成。日程・試合と同じく、球団のリーグで世界が決まる。"""
+    return orm_models.PennantClubPlan.objects.filter(world_condition("team__league", scope))

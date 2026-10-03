@@ -45,6 +45,7 @@ from ..domain.exceptions import (
     TeamNotFound,
     WorldNotFound,
 )
+from ..domain.pennant.club_plan import ClubPlan, LineupChoice
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.schedule import Fixture
 from ..domain.pennant.world import World, WorldScope
@@ -68,7 +69,16 @@ from ..domain.value_objects import (
     Season,
 )
 from . import orm_models
-from .scoping import fixtures_in, games_in, leagues_in, players_in, ratings_in, teams_in, world_condition
+from .scoping import (
+    club_plans_in,
+    fixtures_in,
+    games_in,
+    leagues_in,
+    players_in,
+    ratings_in,
+    teams_in,
+    world_condition,
+)
 
 _BATTING_FIELDS = (
     "at_bats",
@@ -1014,6 +1024,9 @@ class DjangoLeagueRepository:
 _GAME_ROUTE = "home_team__league"
 _WORLD_ROWS_CHILD_FIRST: tuple[tuple[type[models.Model], str], ...] = (
     # 能力は選手の在籍をたどって世界が決まるので、在籍を消す前に消す
+    # 編成は選手を指すので、選手を消す前に消す（行から先に）
+    (orm_models.PennantClubPlanEntry, "plan__team__league"),
+    (orm_models.PennantClubPlan, "team__league"),
     (orm_models.PennantPlayerRatings, "player__stints__team__league"),
     (orm_models.PennantFixture, "home_team__league"),
     (orm_models.GameRunnerAdvance, f"plate_appearance__game__{_GAME_ROUTE}"),
@@ -1159,6 +1172,89 @@ class DjangoFixtureRepository:
     @staticmethod
     def _key(fixture: Fixture) -> tuple[date, int, int]:
         return (fixture.date, fixture.home_team_id, fixture.visitor_team_id)
+
+
+class DjangoClubPlanRepository:
+    """ClubPlanRepository の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る。
+
+    編成はペナント専用で、実データの範囲には書けない。他の世界の球団の編成は、読めも書けもしない。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def find_all(self) -> list[ClubPlan]:
+        rows = club_plans_in(self._scope).prefetch_related("entries").order_by("team_id")
+        return [self._to_domain(row) for row in rows]
+
+    def find_by_team(self, team_id: int) -> ClubPlan:
+        if not teams_in(self._scope).filter(id=team_id).exists():
+            raise TeamNotFound(f"球団が見つかりません（id={team_id}）。")
+        row = club_plans_in(self._scope).prefetch_related("entries").filter(team_id=team_id).first()
+        return ClubPlan(team_id=team_id) if row is None else self._to_domain(row)
+
+    @transaction.atomic
+    def save(self, plan: ClubPlan) -> ClubPlan:
+        if self._scope.is_real:
+            raise InvalidWorld("編成はペナントの世界にだけ保存できます。")
+        if not teams_in(self._scope).filter(id=plan.team_id).exists():
+            raise TeamNotFound(f"球団が見つかりません（id={plan.team_id}）。")
+        player_ids = {c.player_id for c in plan.lineup or ()}
+        player_ids |= set(plan.active_ids or ()) | set(plan.rotation or ())
+        if plan.closer_id is not None:
+            player_ids.add(plan.closer_id)
+        known = set(players_in(self._scope).filter(id__in=player_ids).values_list("id", flat=True))
+        if missing := sorted(player_ids - known):
+            raise PlayerNotFound(f"この世界に居ない選手は編成に入れられません（id={missing[0]}）。")
+
+        if plan.is_empty:
+            club_plans_in(self._scope).filter(team_id=plan.team_id).delete()
+            return plan
+        row, _ = orm_models.PennantClubPlan.objects.update_or_create(  # type: ignore[misc]
+            team_id=plan.team_id, defaults={"closer_id": plan.closer_id}
+        )
+        row.entries.all().delete()
+        entries = orm_models.PennantClubPlanEntry
+        rows = [
+            entries(plan=row, section=entries.ACTIVE, order=order, player_id=player_id)
+            for order, player_id in enumerate(plan.active_ids or (), start=1)
+        ]
+        rows += [
+            entries(
+                plan=row,
+                section=entries.LINEUP,
+                order=order,
+                player_id=choice.player_id,
+                fielding_position=choice.position.value,
+            )
+            for order, choice in enumerate(plan.lineup or (), start=1)
+        ]
+        rows += [
+            entries(plan=row, section=entries.ROTATION, order=order, player_id=player_id)
+            for order, player_id in enumerate(plan.rotation or (), start=1)
+        ]
+        entries.objects.bulk_create(rows)
+        return plan
+
+    @staticmethod
+    def _to_domain(row: orm_models.PennantClubPlan) -> ClubPlan:
+        entries = sorted(row.entries.all(), key=lambda e: (e.section, e.order))
+        section = orm_models.PennantClubPlanEntry
+        active = tuple(e.player_id for e in entries if e.section == section.ACTIVE)
+        lineup = tuple(
+            LineupChoice(e.player_id, FieldingPosition(e.fielding_position))
+            for e in entries
+            if e.section == section.LINEUP
+        )
+        rotation = tuple(e.player_id for e in entries if e.section == section.ROTATION)
+        # 区画の行が1つも無ければ自動
+        return ClubPlan(
+            team_id=row.team_id,
+            active_ids=active or None,
+            lineup=lineup or None,
+            rotation=rotation or None,
+            closer_id=row.closer_id,
+        )
 
 
 class DjangoWorldRepository:
