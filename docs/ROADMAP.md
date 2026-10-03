@@ -142,12 +142,11 @@
 - ✅ **権限管理（チーム担当者制）**。現状はログインすれば誰でも全チームの選手・試合を
   編集できる。チームに「担当者」を割り当て、担当者は自チームが関わる範囲だけ
   編集できるようにする。管理者（Django の管理ユーザー）は変わらず全権を持つ
-- ⬜ 本番構成（PostgreSQL、gunicorn、静的ファイル配信）
+- ✅ 本番構成（gunicorn・WhiteNoise・Caddy・SQLite の WAL。AWS Lightsail の VM 1台＋docker compose。手順は Wiki「本番公開」）。PostgreSQL は後回し
 - ⬜ CI（GitHub Actions でテスト実行）
-- ⬜ バックアップ手順
+- ✅ バックアップ手順（`backup_db` コマンドと cron・S3・復元。Wiki「本番公開」）
 
-本番構成・CI・バックアップは、実際に本番公開する段になってから着手する。
-現状は Docker + SQLite でのローカル運用が前提で、公開先が決まっていないため。
+本番構成とバックアップは、一般公開に向けて用意した（Issue #76）。CI は別に扱う。
 
 ---
 
