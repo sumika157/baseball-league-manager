@@ -20,7 +20,7 @@ class LeagueBaseline:
     hit_by_pitch: float = 0.010
     walk: float = 0.074  # 故意四球を含む
     strikeout: float = 0.190
-    home_run: float = 0.025
+    home_run: float = 0.024
     # 犠打・犠飛が先に落ちる打席の見込み割合。三振・本塁打を段の確率に直すためだけに使う
     sacrifice: float = 0.021
 

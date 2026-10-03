@@ -35,15 +35,15 @@ class RatingSensitivity:
 
     # 打者
     contact_strikeout: float = -0.35  # ミートが高いほど三振しにくい
-    contact_in_play_hit: float = 0.12  # ミートが高いほどインプレーが安打になりやすい
+    contact_in_play_hit: float = 0.14  # ミートが高いほどインプレーが安打になりやすい
     power_home_run: float = 0.55
     power_double: float = 0.20  # 長打の割合
     eye_walk: float = 0.40
     speed_triple: float = 0.50
     # 投手
-    stuff_strikeout: float = 0.40
-    control_walk: float = -0.35  # 制球が高いほど四球を出さない
-    avoidance_home_run: float = -0.30  # 一発回避が高いほど本塁打を打たれない
+    stuff_strikeout: float = 0.32
+    control_walk: float = -0.30  # 制球が高いほど四球を出さない
+    avoidance_home_run: float = -0.15  # 一発回避が高いほど本塁打を打たれない
     # 守備（守備側の守備位置で重みをつけた平均を使う）
     fielding_in_play_hit: float = -0.10
     fielding_error: float = -0.30

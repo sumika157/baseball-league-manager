@@ -432,6 +432,8 @@ def _estimate_stamina(line: PitchingLine, faced: int, stability: StabilityPoints
     """先発の割合で事前の平均を決め、先発の投げた長さがあれば寄せる。
 
     `manager.STARTER_BATTERS` の逆: 先発の受け持ち = 24 + 0.22 × (スタミナ − 50) 人。
+    エンジンは抑える力の項（`STARTER_BATTERS_PER_PITCHING_VALUE`）も足すが、ここでは逆にしない。
+    エースの1登板が実データより長くなるのは承知の近似（最多投球回の水準を保つため。設計書 12. の #63）。
     """
     if faced == 0:
         return float(UNKNOWN_STAMINA)
