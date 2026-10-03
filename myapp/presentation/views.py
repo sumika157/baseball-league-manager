@@ -11,6 +11,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.views import redirect_to_login
 from django.core.exceptions import PermissionDenied
+from django.db import transaction
 from django.http import Http404
 from django.middleware.csrf import get_token
 from django.shortcuts import redirect, render
@@ -20,6 +21,7 @@ from django.views.generic import CreateView
 
 from ..application.dto import GameEditData, GameEditPlateAppearance
 from ..application.game_recording import GameRecordingService
+from ..application.pennant_season import PennantSeasonService
 from ..application.pennant_world import PennantWorldService, WorldRepositories
 from ..application.services import TeamApplicationService
 from ..domain.exceptions import (
@@ -44,10 +46,12 @@ from ..infrastructure.queries import (
     DjangoPlayerFieldingQuery,
     DjangoPlayerSearchQuery,
     DjangoPlayerStatsQuery,
+    DjangoSimulationContextQuery,
     DjangoTeamListQuery,
     DjangoTeamPermissionQuery,
 )
 from ..infrastructure.repositories import (
+    DjangoFixtureRepository,
     DjangoGameRepository,
     DjangoLeagueRepository,
     DjangoRatingsRepository,
@@ -158,6 +162,27 @@ def build_pennant_world_service() -> PennantWorldService:
         real_fielding=DjangoFieldingTotalsQuery(scope),
         worlds=DjangoWorldRepository(),
         repositories_for=_repositories_for,
+    )
+
+
+def build_pennant_season_service(world_id: int) -> PennantSeasonService:
+    """ペナントの世界ひとつのシーズン進行サービスを組み立てる。
+
+    **リポジトリと参照クエリは、すべて渡された世界の範囲で作る**（範囲の外の球団・試合・日程には触れない）。
+    保存と消化済みの対戦の削除を1つにまとめるトランザクションは、ここで渡す（application は Django を知らない）。
+    世界の id が正しくなければ InvalidWorld、存在しなければ使うときに WorldNotFound。
+    """
+    scope = WorldScope.pennant(world_id)
+    return PennantSeasonService(
+        world_id=world_id,
+        worlds=DjangoWorldRepository(),
+        leagues=DjangoLeagueRepository(scope),
+        teams=DjangoTeamRepository(scope),
+        games=DjangoGameRepository(scope),
+        fixtures=DjangoFixtureRepository(scope),
+        ratings=DjangoRatingsRepository(scope),
+        context_query=DjangoSimulationContextQuery(scope),
+        atomic=transaction.atomic,
     )
 
 

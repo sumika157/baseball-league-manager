@@ -36,6 +36,7 @@ from typing import Protocol, TypeVar
 from myapp.domain.exceptions import InvalidSchedule
 
 MONDAY = 0
+FRIDAY = 4
 # NPB の1リーグの球団数。`ScheduleRules` の既定値はこの規模で1球団143試合になる
 NPB_TEAMS_PER_LEAGUE = 6
 _T = TypeVar("_T")
@@ -127,6 +128,19 @@ def generate_schedule(
         if longest_streak(fixtures) <= rules.max_streak:
             return fixtures
     raise InvalidSchedule("連続ホーム・連続ビジターの上限を守る日程が組めませんでした。")
+
+
+def default_opening_day(year: int, rules: ScheduleRules) -> datetime.date:
+    """開幕日の既定。3月25日以降で最初の金曜日（NPB は3月最終週の金曜に開幕する）。
+
+    休みの曜日（既定は月曜）に当たる規則なら、翌日にずらす。
+    """
+    day = datetime.date(year, 3, 25)
+    while day.weekday() != FRIDAY:
+        day += datetime.timedelta(days=1)
+    while day.weekday() == rules.rest_weekday:
+        day += datetime.timedelta(days=1)
+    return day
 
 
 def longest_streak(fixtures: Sequence[Fixture]) -> int:

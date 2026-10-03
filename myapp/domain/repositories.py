@@ -3,8 +3,8 @@
 ドメイン層は「永続化できる」ことだけを知り、それが Django ORM なのか
 他の手段なのかは知らない。実装は infrastructure 層に置く。
 
-**`TeamRepository` / `GameRepository` / `LeagueRepository` / `RatingsRepository` は、組み立てるときに
-`WorldScope` を必須で受け取る**（実装のコンストラクタの話で、このインターフェースには
+**`TeamRepository` / `GameRepository` / `LeagueRepository` / `RatingsRepository` / `FixtureRepository` は、
+組み立てるときに `WorldScope` を必須で受け取る**（実装のコンストラクタの話で、このインターフェースには
 現れない）。読み出しはすべてその範囲に絞られ、範囲の外の id は「見つからない」になる。
 `WorldRepository` だけは世界そのものの台帳なので範囲を持たない。
 """
@@ -16,6 +16,7 @@ from typing import Protocol, runtime_checkable
 
 from .entities import Game, League, Team
 from .pennant.ratings import PlayerRatings
+from .pennant.schedule import Fixture
 from .pennant.world import World
 
 
@@ -82,6 +83,18 @@ class GameRepository(Protocol):
         """集約の変更内容を永続化する。範囲の外のチームの試合には書けない。"""
         ...
 
+    def add_all(self, games: Sequence[Game]) -> None:
+        """新しい試合をまとめて保存する（保存した試合の id は集約に入る）。
+
+        `save()` と同じ検査を通す（明細と打席の照合 = `ensure_lines_match_plate_appearances`、
+        範囲の外のチームには書けない）。**検査は書き込みの前に全試合ぶん済ませる**ので、
+        1試合でも通らなければ何も書かない。すでに保存した試合（id がある）は渡せない
+        （InvalidGame。更新は `save()`）。新しい集約だけが対象なので、打席を読んだかどうか
+        （`plate_appearances_loaded`）は見ない。1試合ごとに `save()` するより桁違いに速い
+        （1試合あたり約50回の update_or_create を、種類ごとの一括書き込みにする）。
+        """
+        ...
+
 
 @runtime_checkable
 class LeagueRepository(Protocol):
@@ -114,6 +127,34 @@ class WorldRepository(Protocol):
 
     def delete(self, world_id: int) -> None:
         """世界と、その世界に属するリーグ・球団・選手・試合・能力をすべて消す。無ければ WorldNotFound。"""
+        ...
+
+
+@runtime_checkable
+class FixtureRepository(Protocol):
+    """世界の未消化の対戦（日程）。消化したら `Game` を作って消す。
+
+    **試合のあとまで残さない**（日付と対戦カードの出典が `Game` と2つになるため）。
+    ペナントの世界にだけ置ける（実データには日程の概念が無い）。
+    """
+
+    def add_all(self, fixtures: Sequence[Fixture]) -> None:
+        """日程を一括で保存する。範囲の外の球団の対戦は書けない（TeamNotFound）。
+
+        同じ日・同じ対戦がすでにある、または渡した中で重複しているときは InvalidSchedule で、何も書かない。
+        """
+        ...
+
+    def find_all(self) -> list[Fixture]:
+        """範囲の未消化の対戦を、日付の順（同じ日はホームの id の順）に。"""
+        ...
+
+    def remove(self, fixtures: Sequence[Fixture]) -> None:
+        """消化した対戦を消す。
+
+        渡した対戦のどれかが無い（すでに消化されている）ときは InvalidSchedule で、何も消さない。
+        同じ日程を二重に消化して、同じ対戦の試合が2つできるのを防ぐ。
+        """
         ...
 
 

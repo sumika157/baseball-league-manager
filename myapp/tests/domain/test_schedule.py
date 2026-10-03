@@ -13,6 +13,7 @@ from myapp.domain.pennant.schedule import (
     Fixture,
     MonthDay,
     ScheduleRules,
+    default_opening_day,
     generate_schedule,
     interleague_pairs,
     longest_streak,
@@ -404,3 +405,27 @@ class ScheduleInvalidInputTests(TestCase):
             ScheduleRules(rest_weekday=7)
         with self.assertRaises(InvalidSchedule):
             ScheduleRules(series_length=1)
+
+
+class DefaultOpeningDayTests(TestCase):
+    def test_is_the_first_friday_on_or_after_march_25(self) -> None:
+        # 2026-03-27 は金曜（NPB の2026年開幕と同じ日）
+        self.assertEqual(default_opening_day(2026, ScheduleRules()), datetime.date(2026, 3, 27))
+        # 3/25 以降で最初の金曜。3/26 が金曜ならその日
+        self.assertEqual(default_opening_day(2027, ScheduleRules()), datetime.date(2027, 3, 26))
+        self.assertEqual(default_opening_day(2030, ScheduleRules()), datetime.date(2030, 3, 29))
+
+    def test_is_always_a_friday_in_late_march(self) -> None:
+        for year in range(2000, 2100):
+            day = default_opening_day(year, ScheduleRules())
+            self.assertEqual(day.weekday(), 4, year)
+            self.assertEqual(day.month, 3, year)
+            self.assertGreaterEqual(day.day, 25, year)
+
+    def test_moves_off_the_rest_weekday(self) -> None:
+        rules = ScheduleRules(rest_weekday=4)
+
+        day = default_opening_day(2026, rules)
+
+        self.assertEqual(day, datetime.date(2026, 3, 28))
+        self.assertNotEqual(day.weekday(), rules.rest_weekday)

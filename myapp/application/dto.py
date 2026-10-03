@@ -1113,3 +1113,72 @@ class PennantWorldCreated:
     player_count: int
     # 初期能力を保存した選手の数（分岐した選手全員ぶん）
     rating_count: int
+
+
+@dataclass(frozen=True)
+class SimulationPlayer:
+    """シミュレーションに出る候補の選手1人（球団に現在在籍している選手）。能力は含まない。"""
+
+    player_id: int
+    name: str
+    position: Position
+    is_foreign: bool
+
+
+@dataclass(frozen=True)
+class SimulationTeam:
+    """シミュレーションに出る球団ひとつ。外国人の枠は所属リーグの値。"""
+
+    team_id: int
+    name: str
+    foreign_roster_limit: int | None
+    foreign_game_limit: int | None
+    players: tuple[SimulationPlayer, ...]
+
+
+@dataclass(frozen=True)
+class LastStart:
+    """投手の、直近の先発の日。先発の間隔（中5日）を導く材料。"""
+
+    pitcher_id: int
+    played_on: date
+
+
+@dataclass(frozen=True)
+class PitchingOuting:
+    """1試合の登板の記録。投げた投手を登板順に並べる（先頭が先発）。連投を導く材料。"""
+
+    played_on: date
+    pitcher_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class SimulationContext:
+    """日を進めるのに要る、世界の今の状態（集約を組み立てずに読んだもの）。
+
+    疲労は保存しない。直近の登板（`last_starts`・`recent_outings`）から導く。
+    """
+
+    teams: tuple[SimulationTeam, ...]
+    last_starts: tuple[LastStart, ...]
+    recent_outings: tuple[PitchingOuting, ...]
+
+
+@dataclass(frozen=True)
+class AdvanceReport:
+    """世界を進めた結果。"""
+
+    # 今回の「進める」で試合をした日（日付順）
+    played_dates: tuple[date, ...]
+    games: int
+    # 進めた後の「今日」（消化した最後の試合日）。まだ1試合もしていなければ None
+    today: date | None
+    # 進めた後に残っている未消化の対戦の数
+    remaining_fixtures: int
+    # この呼び出しで、その年の日程を初めて作ったか
+    schedule_created: bool
+
+    @property
+    def season_finished(self) -> bool:
+        """日程をすべて消化したか。日程を作った直後（試合のない開幕前）は終わっていない。"""
+        return self.remaining_fixtures == 0 and self.today is not None

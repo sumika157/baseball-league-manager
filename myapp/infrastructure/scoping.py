@@ -46,6 +46,11 @@ def games_in(scope: WorldScope) -> QuerySet[orm_models.Game]:
     return orm_models.Game.objects.filter(world_condition("home_team__league", scope))
 
 
+def fixtures_in(scope: WorldScope) -> QuerySet[orm_models.PennantFixture]:
+    """範囲の未消化の対戦。試合と同じく、ホームの球団のリーグで世界が決まる。"""
+    return orm_models.PennantFixture.objects.filter(world_condition("home_team__league", scope))
+
+
 def ratings_in(scope: WorldScope) -> QuerySet[orm_models.PennantPlayerRatings]:
     """範囲の選手の能力。能力は選手の行に付くので、範囲の選手で絞る。"""
     return orm_models.PennantPlayerRatings.objects.filter(player_id__in=players_in(scope).values("id"))

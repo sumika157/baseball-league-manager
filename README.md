@@ -468,7 +468,7 @@ presentation  →  application  →  domain  ←  infrastructure
 | `services/` | ドメインサービス。関心事ごとに `rankings`（規定とタイトル）・`sorting`（並べ替え）・`records`（試合からの集計）・`decisions`（勝敗・S・Hの導出）に分かれる |
 | `simulation/` | 試合シミュレーション（ペナントモードの土台）。能力値・基準値（NPB の水準）・odds ratio 法の確率・進塁・AI 監督・エンジン・水準の集計。Django にも numpy にも依存しない |
 | `repositories.py` | 永続化のインターフェース（実装は infrastructure） |
-| `pennant/` | ペナントモードの世界。`World`（セーブデータ）・`WorldScope`（読み書きする世界の範囲）・`fork_*`（実データのリーグを分岐する規則） |
+| `pennant/` | ペナントモードの世界。`World`（セーブデータ）・`WorldScope`（読み書きする世界の範囲）・`fork_*`（実データのリーグを分岐する規則）・`schedule`（日程の生成・未消化の対戦 `Fixture`・進める範囲 `AdvanceTarget`） |
 | `exceptions.py` | `DomainError` とその派生 |
 
 ### 指標
@@ -1005,6 +1005,7 @@ MSYS_NO_PATHCONV=1 docker compose exec web python manage.py measure_pages --prof
 | `build_recording_service()` | `GameRecordingService`（スコアブック＝打席の記録の保存。[application/game_recording.py](myapp/application/game_recording.py)）。**実データの範囲に固定** | スコアブックの保存 API・テスト |
 | `build_permission_query()` `build_player_search_query()` | 編集権限の判定・選手検索。**実データの範囲に固定** | 画面・保存 API |
 | `build_pennant_world_service()` | `PennantWorldService`（世界の作成＝分岐・一覧・削除。[application/pennant_world.py](myapp/application/pennant_world.py)） | 管理コマンド `pennant_create` `pennant_delete` |
+| `build_pennant_season_service(world_id)` | `PennantSeasonService`（日程の生成・日を進める。[application/pennant_season.py](myapp/application/pennant_season.py)）。**リポジトリと参照クエリはすべて渡された世界の範囲**。保存と日程の削除を1つにするトランザクションもここで渡す | 管理コマンド `pennant_advance` |
 
 どれも依存をすべて必須にして全部渡します。依存を省略可能にして呼ぶ側ごとに一部だけ渡すと、
 開く画面によって落ちるサービスができてしまうためです。
@@ -1035,9 +1036,25 @@ MSYS_NO_PATHCONV=1 docker compose exec web python manage.py measure_pages --prof
 # 実データのリーグ 1・2 を分岐して世界を作る（--managed-team で受け持つ球団を分岐元の球団 id で指せる）
 docker compose exec web python manage.py pennant_create --name "2026年ペナント" --league 1 --league 2 --year 2026
 
+# シーズンを進める（日程が無ければ、先に開幕年の日程を作る）。--to は day / week / next-game / month / season-end
+docker compose exec web python manage.py pennant_advance --world 1 --to week
+
 # 世界を、属する行ごと消す（実データには触れない）
 docker compose exec web python manage.py pennant_delete --world 1
 ```
+
+#### シーズンの進め方
+
+- **進行の状態は保存しません。** 「今日」は消化した最後の試合日、シーズン中かは未消化の対戦（`PennantFixture`）が
+  残っているか、で日程と試合から導きます。未消化の対戦だけを持ち、**消化したら `Game` を作って対戦を消します**
+  （試合のあとまで残すと、日付と対戦カードの出典が2つになるため）。保存と削除は同じトランザクションです
+- **1日ずつ進めても1週間まとめて進めても、同じシーズンになります。** 試合ごとの乱数は
+  `blake2b(世界のシード, 年, 日付とホーム・ビジターの球団 id)` から作り、疲労（先発の間隔・連投）は
+  保存せず直近の登板（`SimulationContextQuery`）から導きます。1軍登録・スタメン・継投は AI 監督が決めます
+- 試合は `GameRepository.add_all`（新規の試合の一括保存。`save()` と同じ集約の照合を、書く前に全試合ぶん通す）で
+  200試合ごと、**日の区切りで**書き出します（日の途中で切ると、残りの対戦が「今日」より前になり進められなくなる）
+- 日程は世界のシードから作るので、同じ世界ならいつ作っても同じです。作るのは「日程も試合もまだ無い世界」の
+  最初の「進める」のときだけで、シーズンを終えた世界に作り足しません
 
 混ざっていないことは [tests/integration/test_world_isolation.py](myapp/tests/integration/test_world_isolation.py) が検査します
 （実データの主要画面に世界の名前が出ない・世界の id で実データの URL を開くと 404・管理画面に出ない・

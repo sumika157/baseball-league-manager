@@ -9,18 +9,34 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import fields
+from datetime import date, timedelta
+from itertools import groupby
+from operator import itemgetter
 from typing import Any
 
 from django.contrib.auth.models import AnonymousUser, User
-from django.db.models import BooleanField, Case, Count, Exists, OuterRef, Q, QuerySet, Sum, Value, When
+from django.db.models import BooleanField, Case, Count, Exists, Max, OuterRef, Q, QuerySet, Sum, Value, When
 
-from ..application.dto import ActivePlayerStats, FieldingRow, GameRow, PlayerFielding, PlayerSearchRow, TeamSummary
+from ..application.dto import (
+    ActivePlayerStats,
+    FieldingRow,
+    GameRow,
+    LastStart,
+    PitchingOuting,
+    PlayerFielding,
+    PlayerSearchRow,
+    SimulationContext,
+    SimulationPlayer,
+    SimulationTeam,
+    TeamSummary,
+)
 from ..domain.entities import Game, winning_team_id
 from ..domain.pennant.world import WorldScope
+from ..domain.simulation.manager import MAX_CONSECUTIVE_DAYS
 from ..domain.value_objects import BattingLine, FieldingLine, PitchingLine, Position, Season
 from . import orm_models
 from .repositories import batting_totals, pitching_totals
-from .scoping import games_in, players_in, teams_in, world_condition
+from .scoping import games_in, players_in, stints_in, teams_in, world_condition
 
 
 def recorded_games_filter() -> Q:
@@ -119,6 +135,72 @@ class DjangoFieldingTotalsQuery:
             if sums["player_id"] in wanted:
                 totals[sums["player_id"]] = FieldingLine(**{f.name: sums[f.name] or 0 for f in fields(FieldingLine)})
         return totals
+
+
+class DjangoSimulationContextQuery:
+    """SimulationContextQuery の Django ORM 実装。球団・選手・直近の登板を、集約を組み立てずに読む。
+
+    読むのは**範囲の現在の状態だけ**で、クエリは5本（球団・選手・最後の試合日・直近の先発・直近の登板）。
+    打席や明細の全件は読まない。
+    """
+
+    # 連投の判断に要る日数は MAX_CONSECUTIVE_DAYS（3連投は禁止）。余裕を1日足す
+    RECENT_DAYS = MAX_CONSECUTIVE_DAYS + 1
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def last_played_on(self) -> date | None:
+        return games_in(self._scope).aggregate(last=Max("played_on"))["last"]
+
+    def load(self, *, before: date) -> SimulationContext:
+        players: dict[int, list[SimulationPlayer]] = {}
+        stints = (
+            stints_in(self._scope)
+            .filter(to_year__isnull=True)
+            .order_by("team_id", "number", "player_id")
+            .values_list("team_id", "player_id", "player__name", "player__position", "player__is_foreign_player")
+        )
+        for team_id, player_id, name, position, is_foreign in stints:
+            players.setdefault(team_id, []).append(
+                SimulationPlayer(
+                    player_id=player_id, name=name, position=Position.from_label(position), is_foreign=is_foreign
+                )
+            )
+
+        teams = tuple(
+            SimulationTeam(
+                team_id=team_id,
+                name=name,
+                foreign_roster_limit=roster_limit,
+                foreign_game_limit=game_limit,
+                players=tuple(players.get(team_id, ())),
+            )
+            for team_id, name, roster_limit, game_limit in teams_in(self._scope)
+            .order_by("id")
+            .values_list("id", "name", "league__foreign_player_roster_limit", "league__foreign_player_game_limit")
+        )
+
+        lines = orm_models.GamePitchingLine.objects.filter(
+            world_condition("game__home_team__league", self._scope), game__played_on__lt=before
+        )
+        last_starts = tuple(
+            LastStart(pitcher_id=pitcher_id, played_on=last)
+            for pitcher_id, last in lines.filter(appearance_order__lte=1)
+            .values_list("player_id")
+            .annotate(last=Max("game__played_on"))
+            .order_by("player_id")
+        )
+
+        recent = lines.filter(game__played_on__gte=before - timedelta(days=self.RECENT_DAYS)).order_by(
+            "game_id", "appearance_order", "player_id"
+        )
+        recent_outings = tuple(
+            PitchingOuting(played_on=rows[0][1], pitcher_ids=tuple(row[2] for row in rows))
+            for _, group in groupby(recent.values_list("game_id", "game__played_on", "player_id"), key=itemgetter(0))
+            for rows in [list(group)]
+        )
+        return SimulationContext(teams=teams, last_starts=last_starts, recent_outings=recent_outings)
 
 
 class DjangoPlayerStatsQuery:

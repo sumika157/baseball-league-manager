@@ -15,11 +15,14 @@ from inspect import Parameter, signature
 from django.test import SimpleTestCase
 
 from myapp.application.game_recording import GameRecordingService
+from myapp.application.pennant_season import PennantSeasonService
 from myapp.application.pennant_world import PennantWorldService
-from myapp.application.queries import FieldingTotalsQuery, GameListQuery, TeamListQuery
+from myapp.application.queries import FieldingTotalsQuery, GameListQuery, SimulationContextQuery, TeamListQuery
 from myapp.application.services import TeamApplicationService
+from myapp.domain.exceptions import InvalidWorld
 from myapp.domain.pennant.world import WorldScope
 from myapp.domain.repositories import (
+    FixtureRepository,
     GameRepository,
     LeagueRepository,
     RatingsRepository,
@@ -27,8 +30,14 @@ from myapp.domain.repositories import (
     WorldRepository,
 )
 from myapp.infrastructure import queries, repositories
-from myapp.infrastructure.queries import DjangoFieldingTotalsQuery, DjangoGameListQuery, DjangoTeamListQuery
+from myapp.infrastructure.queries import (
+    DjangoFieldingTotalsQuery,
+    DjangoGameListQuery,
+    DjangoSimulationContextQuery,
+    DjangoTeamListQuery,
+)
 from myapp.infrastructure.repositories import (
+    DjangoFixtureRepository,
     DjangoGameRepository,
     DjangoLeagueRepository,
     DjangoRatingsRepository,
@@ -36,6 +45,7 @@ from myapp.infrastructure.repositories import (
     DjangoWorldRepository,
 )
 from myapp.presentation.views import (
+    build_pennant_season_service,
     build_pennant_world_service,
     build_permission_query,
     build_player_search_query,
@@ -56,6 +66,8 @@ class ProtocolConformanceTest(SimpleTestCase):
         (DjangoLeagueRepository(REAL), LeagueRepository),
         (DjangoWorldRepository(), WorldRepository),
         (DjangoRatingsRepository(REAL), RatingsRepository),
+        (DjangoFixtureRepository(REAL), FixtureRepository),
+        (DjangoSimulationContextQuery(REAL), SimulationContextQuery),
         (DjangoFieldingTotalsQuery(REAL), FieldingTotalsQuery),
         (DjangoTeamListQuery(REAL), TeamListQuery),
         (DjangoGameListQuery(REAL), GameListQuery),
@@ -118,6 +130,9 @@ class BuildServiceTest(SimpleTestCase):
     def test_pennant_world_service_dependencies_are_wired(self):
         self._assert_wired(build_pennant_world_service(), PennantWorldService)
 
+    def test_pennant_season_service_dependencies_are_wired(self):
+        self._assert_wired(build_pennant_season_service(7), PennantSeasonService)
+
     def _assert_wired(self, service, cls):
         parameters = [name for name in signature(cls.__init__).parameters if name != "self"]
         self.assertTrue(parameters, "依存が1つも宣言されていません")
@@ -169,3 +184,30 @@ class RealScopeTest(SimpleTestCase):
         self.assertEqual(repositories_.leagues._scope, WorldScope.pennant(7))
         self.assertEqual(repositories_.teams._scope, WorldScope.pennant(7))
         self.assertEqual(repositories_.ratings._scope, WorldScope.pennant(7))
+
+
+class PennantSeasonScopeTest(SimpleTestCase):
+    """シーズン進行は、渡された世界の範囲だけを読み書きする。"""
+
+    SCOPED = ("_leagues", "_teams", "_games", "_fixtures", "_ratings", "_context_query")
+
+    def test_every_dependency_is_fixed_to_the_given_world(self):
+        service = build_pennant_season_service(7)
+        self.assertEqual(service._world_id, 7)
+        for name in self.SCOPED:
+            with self.subTest(dependency=name):
+                self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
+
+    def test_a_different_world_gets_a_different_scope(self):
+        self.assertEqual(build_pennant_season_service(8)._games._scope, WorldScope.pennant(8))
+
+    def test_the_real_data_cannot_be_advanced(self):
+        """世界の id は必須で、実データを指す形（0・負・None・真偽値）は弾く。"""
+        for bad in (0, -1, True):
+            with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
+                build_pennant_season_service(bad)
+
+    def test_the_transaction_is_the_database_transaction(self):
+        from django.db import transaction
+
+        self.assertIs(build_pennant_season_service(7)._atomic, transaction.atomic)
