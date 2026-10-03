@@ -177,19 +177,21 @@ DOUBLE_PLAY_RATIO = 0.40
 # ゴロアウトで走者が1つ進む確率（併殺にならなかった場合）。
 # **ここは得点に強く効く。** 三塁走者はゴロが転がるたびに還ってしまうので、
 # 高くすると1試合平均得点がNPBの水準を大きく超える。
-ADVANCE_ON_GROUND_OUT_RATIO = 0.18
+ADVANCE_ON_GROUND_OUT_RATIO = 0.21
 
 # 盗塁。**打者が打球を放たない打席（四死球・三振）でだけ試みる。**
 # 打球が飛ぶ打席に混ぜると、走塁のアウトが打球の処理と同じ打席に並んでしまう。
 STEAL_ATTEMPT_RATIO = 0.55
 STEAL_SUCCESS_RATIO = 0.72
 
+# 規則 5.08（3つ目のアウトが打者や封殺の打席の得点は認めない）で得点が約0.1減ったので、
+# 進塁の4つの値（ゴロ 0.18、下の3つ 0.20 / 0.48 / 0.33）を引き上げて目安（3.9）に戻してある。
 # 単打・二塁打での走者の進み方。**1試合平均得点はここでほぼ決まる。**
 # 打率・四球・本塁打を水準に合わせてもなお得点が多い場合は、走者を還す効率が
 # 高すぎるということなので、打撃の指標ではなくここを下げる。
-EXTRA_BASE_ON_SINGLE_FROM_FIRST = 0.20
-SCORE_ON_SINGLE_FROM_SECOND = 0.48
-SCORE_ON_DOUBLE_FROM_FIRST = 0.33
+EXTRA_BASE_ON_SINGLE_FROM_FIRST = 0.28
+SCORE_ON_SINGLE_FROM_SECOND = 0.65
+SCORE_ON_DOUBLE_FROM_FIRST = 0.45
 
 # 失策の種類の内訳（捕球・送球・落球）。
 ERROR_KIND_WEIGHTS = {ErrorKind.FIELDING: 0.35, ErrorKind.THROWING: 0.45, ErrorKind.DROPPED_FLY: 0.20}
