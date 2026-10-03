@@ -1,0 +1,56 @@
+# 本番用の compose（開発用は docker-compose.yml）。使い方は Wiki「本番公開」。
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# .env に DJANGO_SECRET_KEY・SITE_DOMAIN・DJANGO_ALLOWED_HOSTS・DJANGO_CSRF_TRUSTED_ORIGINS を書く
+# （.env.example の「本番」の節）。
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    image: baseball-prod
+    container_name: baseball-web
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # 本番では必ず無効（.env に DJANGO_DEBUG=True が残っていても上書きする）
+      DJANGO_DEBUG: "False"
+      # Caddy の裏の HTTPS として扱う設定。値はドメインに依存しないのでここに固定する
+      DJANGO_BEHIND_PROXY: "True"
+      DJANGO_SSL_REDIRECT: "True"
+      DJANGO_SECURE_COOKIES: "True"
+      DJANGO_HSTS_SECONDS: "31536000"
+    volumes:
+      # DB（WAL の -wal・-shm も同じディレクトリに作られる）
+      - db:/data
+      # backup_db の出力先（ホストのこのディレクトリ。書き込めるよう uid 10001 に chown しておく。
+      # Wiki「本番公開」）。DB のボリュームと分けるのは、ボリュームごと失ったときに写しも失わないため
+      - ./backups:/backups
+    # 8000 は公開しない（Caddy からだけ届く）
+    expose:
+      - "8000"
+
+  caddy:
+    image: caddy:2
+    container_name: baseball-caddy
+    restart: unless-stopped
+    depends_on:
+      - web
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?.env に SITE_DOMAIN を設定してください}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # 証明書と ACME のアカウント。消すと再取得になり、発行の回数制限に当たることがある
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  db:
+  caddy_data:
+  caddy_config:

@@ -12,12 +12,23 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 
 import os
 from pathlib import Path
+from typing import Any
 
 from django.contrib.messages import constants as messages
 from django.core.exceptions import ImproperlyConfigured
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+def env_bool(name: str) -> bool:
+    """環境変数を真偽値として読む。未設定は False（本番の値は明示したときだけ効かせる）。"""
+    return os.environ.get(name, "False").lower() in ("1", "true", "yes")
+
+
+def env_list(name: str) -> list[str]:
+    """カンマ区切りの環境変数をリストにする。未設定は空リスト。"""
+    return [item.strip() for item in os.environ.get(name, "").split(",") if item.strip()]
 
 
 # Quick-start development settings - unsuitable for production
@@ -33,7 +44,7 @@ if not SECRET_KEY:
 
 # SECURITY WARNING: don't run with debug turned on in production!
 # 明示的に有効化しない限り False（安全側に倒す）
-DEBUG = os.environ.get("DJANGO_DEBUG", "False").lower() in ("1", "true", "yes")
+DEBUG = env_bool("DJANGO_DEBUG")
 
 # カンマ区切りで指定する（例: DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,[::1]）
 #
@@ -72,6 +83,13 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
+# 本番の静的ファイル配信（DJANGO_PRODUCTION_STATIC=True のときだけ有効）。
+# 開発・テストでは runserver と staticfiles が配信するので入れない（入れると
+# staticfiles/ が無いという警告が出る。テストは collectstatic も通さない）。
+PRODUCTION_STATIC = env_bool("DJANGO_PRODUCTION_STATIC")
+if PRODUCTION_STATIC:
+    MIDDLEWARE.insert(1, "whitenoise.middleware.WhiteNoiseMiddleware")
+
 ROOT_URLCONF = "config.urls"
 
 TEMPLATES = [
@@ -95,12 +113,24 @@ WSGI_APPLICATION = "config.wsgi.application"
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-DATABASES = {
+# 本番はボリューム上に置くため、パスを環境変数で変えられるようにする。
+DATABASES: dict[str, dict[str, Any]] = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+        "NAME": Path(os.environ.get("DJANGO_DB_PATH") or BASE_DIR / "db.sqlite3"),
     }
 }
+
+# 本番（DJANGO_SQLITE_WAL=True）の SQLite 設定。公開すると読み手と書き手が同時に来るため、
+# WAL（読み取りが書き込みを待たない）、書き込みトランザクションを最初から取る IMMEDIATE
+# （途中で昇格して "database is locked" になるのを避ける）、ロックの待ちを20秒にする。
+# 開発・テストの動作は変えない。
+if env_bool("DJANGO_SQLITE_WAL"):
+    DATABASES["default"]["OPTIONS"] = {
+        "transaction_mode": "IMMEDIATE",
+        "timeout": 20,
+        "init_command": "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
+    }
 
 
 # Password validation
@@ -138,6 +168,48 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = "static/"
+# collectstatic の出力先（gitignore 済み）。本番イメージはビルド時にここへ集める
+STATIC_ROOT = BASE_DIR / "staticfiles"
+
+if PRODUCTION_STATIC:
+    # ファイル名にハッシュを付けて長期キャッシュできるようにし、gzip / brotli でも配信する。
+    # manifest に無いファイルは例外になるので、collectstatic を通さないテストでは使わない
+    STORAGES = {
+        "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+        "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
+    }
+
+# HTTPS の終端（Caddy）の裏で動かすときの設定。いずれも環境変数を明示したときだけ効く。
+# Caddy は X-Forwarded-Proto を付けて渡すので、これで HTTPS のリクエストだと判定できる
+if env_bool("DJANGO_BEHIND_PROXY"):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+CSRF_TRUSTED_ORIGINS = env_list("DJANGO_CSRF_TRUSTED_ORIGINS")  # 例: https://example.com
+SECURE_SSL_REDIRECT = env_bool("DJANGO_SSL_REDIRECT")
+SESSION_COOKIE_SECURE = env_bool("DJANGO_SECURE_COOKIES")
+CSRF_COOKIE_SECURE = env_bool("DJANGO_SECURE_COOKIES")
+# HSTS（秒）。0 は出さない。出すときはサブドメインとプリロードも付ける
+SECURE_HSTS_SECONDS = int(os.environ.get("DJANGO_HSTS_SECONDS") or 0)
+SECURE_HSTS_INCLUDE_SUBDOMAINS = SECURE_HSTS_SECONDS > 0
+SECURE_HSTS_PRELOAD = SECURE_HSTS_SECONDS > 0
+
+# ログを標準出力へ出す（DJANGO_LOG_TO_STDOUT=True のとき。docker compose logs で読める）。
+# 開発・テストでは 404 などの警告でテスト出力が汚れるので入れない。
+# 404 などはアクセスログ（gunicorn）に残るので、django.request は500系だけ出す
+if env_bool("DJANGO_LOG_TO_STDOUT"):
+    LOGGING = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "plain": {"format": "%(asctime)s %(levelname)s %(name)s %(message)s"},
+        },
+        "handlers": {
+            "console": {"class": "logging.StreamHandler", "formatter": "plain"},
+        },
+        "root": {"handlers": ["console"], "level": "WARNING"},
+        "loggers": {
+            "django.request": {"level": "ERROR"},
+        },
+    }
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field

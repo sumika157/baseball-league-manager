@@ -1,5 +1,9 @@
 # 直接依存
 Django==5.2.10
+# 本番の配信。gunicorn は Dockerfile.prod の起動コマンド、WhiteNoise は静的ファイルの配信。
+# どちらも依存パッケージは無い
+gunicorn==26.2.0
+whitenoise==6.12.0
 
 # Django の依存パッケージ（バージョン固定用）
 asgiref==3.11.0

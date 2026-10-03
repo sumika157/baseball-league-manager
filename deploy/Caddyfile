@@ -1,0 +1,8 @@
+# 本番の HTTPS の終端。ドメインは環境変数 SITE_DOMAIN（.env）で渡す。
+# Let's Encrypt の証明書は自動で取得・更新される（80 と 443 を開けておくこと）。
+# HTTP は自動で HTTPS へ転送される。X-Forwarded-Proto は Caddy が付けるので、
+# Django 側は DJANGO_BEHIND_PROXY=True でそれを信用する。
+{$SITE_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy web:8000
+}
