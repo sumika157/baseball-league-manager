@@ -1,0 +1,863 @@
+{
+  "game": {
+    "id": "GAME",
+    "year": 2026,
+    "played_on": "2026-04-01",
+    "home_team": "HOME_TEAM",
+    "away_team": "AWAY_TEAM",
+    "home_score": 0,
+    "away_score": 0
+  },
+  "teams": [
+    {
+      "team_id": "HOME_TEAM",
+      "team_name": "テストチーム",
+      "is_home": true,
+      "players": [
+        {
+          "id": "ホーム先発",
+          "name": "ホーム先発",
+          "number": 11,
+          "position": "投手",
+          "is_pitcher": true
+        },
+        {
+          "id": "ホーム1",
+          "name": "ホーム1",
+          "number": 31,
+          "position": "内野手",
+          "is_pitcher": false
+        },
+        {
+          "id": "ホーム2",
+          "name": "ホーム2",
+          "number": 32,
+          "position": "内野手",
+          "is_pitcher": false
+        },
+        {
+          "id": "ホーム3",
+          "name": "ホーム3",
+          "number": 33,
+          "position": "内野手",
+          "is_pitcher": false
+        },
+        {
+          "id": "ホーム4",
+          "name": "ホーム4",
+          "number": 34,
+          "position": "内野手",
+          "is_pitcher": false
+        },
+        {
+          "id": "ホーム5",
+          "name": "ホーム5",
+          "number": 35,
+          "position": "内野手",
+          "is_pitcher": false
+        },
+        {
+          "id": "ホーム6",
+          "name": "ホーム6",
+          "number": 36,
+          "position": "内野手",
+          "is_pitcher": false
+        },
+        {
+          "id": "ホーム7",
+          "name": "ホーム7",
+          "number": 37,
+          "position": "内野手",
+          "is_pitcher": false
+        },
+        {
+          "id": "ホーム8",
+          "name": "ホーム8",
+          "number": 38,
+          "position": "内野手",
+          "is_pitcher": false
+        },
+        {
+          "id": "ホーム9",
+          "name": "ホーム9",
+          "number": 39,
+          "position": "内野手",
+          "is_pitcher": false
+        },
+        {
+          "id": "ホーム代打",
+          "name": "ホーム代打",
+          "number": 77,
+          "position": "内野手",
+          "is_pitcher": false
+        },
+        {
+          "id": "ホーム守備固め",
+          "name": "ホーム守備固め",
+          "number": 78,
+          "position": "捕手",
+          "is_pitcher": false
+        },
+        {
+          "id": "ホーム救援",
+          "name": "ホーム救援",
+          "number": 79,
+          "position": "投手",
+          "is_pitcher": true
+        }
+      ],
+      "lineup": [
+        {
+          "batting_order": 1,
+          "slot_sequence": 0,
+          "fielding_position": "遊",
+          "entered_inning": null,
+          "entered_is_bottom": false,
+          "entered_batter": 1,
+          "player_id": "ホーム1"
+        },
+        {
+          "batting_order": 2,
+          "slot_sequence": 0,
+          "fielding_position": "二",
+          "entered_inning": null,
+          "entered_is_bottom": false,
+          "entered_batter": 1,
+          "player_id": "ホーム2"
+        },
+        {
+          "batting_order": 3,
+          "slot_sequence": 0,
+          "fielding_position": "一",
+          "entered_inning": null,
+          "entered_is_bottom": false,
+          "entered_batter": 1,
+          "player_id": "ホーム3"
+        },
+        {
+          "batting_order": 4,
+          "slot_sequence": 0,
+          "fielding_position": "三",
+          "entered_inning": null,
+          "entered_is_bottom": false,
+          "entered_batter": 1,
+          "player_id": "ホーム4"
+        },
+        {
+          "batting_order": 5,
+          "slot_sequence": 0,
+          "fielding_position": "左",
+          "entered_inning": null,
+          "entered_is_bottom": false,
+          "entered_batter": 1,
+          "player_id": "ホーム5"
+        },
+        {
+          "batting_order": 6,
+          "slot_sequence": 0,
+          "fielding_position": "中",
+          "entered_inning": null,
+          "entered_is_bottom": false,
+          "entered_batter": 1,
+          "player_id": "ホーム6"
+        },
+        {
+          "batting_order": 7,
+          "slot_sequence": 0,
+          "fielding_position": "右",
+          "entered_inning": null,
+          "entered_is_bottom": false,
+          "entered_batter": 1,
+          "player_id": "ホーム7"
+        },
+        {
+          "batting_order": 8,
+          "slot_sequence": 0,
+          "fielding_position": "捕",
+          "entered_inning": null,
+          "entered_is_bottom": false,
+          "entered_batter": 1,
+          "player_id": "ホーム8"
+        },
+        {
+          "batting_order": 9,
+          "slot_sequence": 0,
+          "fielding_position": "指",
+          "entered_inning": null,
+          "entered_is_bottom": false,
+          "entered_batter": 1,
+          "player_id": "ホーム9"
+        },
+        {
+          "batting_order": 8,
+          "slot_sequence": 1,
+          "fielding_position": "打",
+          "entered_inning": null,
+          "entered_is_bottom": false,
+          "entered_batter": 1,
+          "player_id": "ホーム代打"
+        },
+        {
+          "batting_order": 8,
+          "slot_sequence": 2,
+          "fielding_position": "捕",
+          "entered_inning": 4,
+          "entered_is_bottom": false,
+          "entered_batter": 2,
+          "player_id": "ホーム守備固め"
+        },
+        {
+          "batting_order": 9,
+          "slot_sequence": 1,
+          "fielding_position": "投",
+          "entered_inning": null,
+          "entered_is_bottom": false,
+          "entered_batter": 1,
+          "player_id": "ホーム救援"
+        }
+      ]
+    },
+    {
+      "team_id": "AWAY_TEAM",
+      "team_name": "相手チーム",
+      "is_home": false,
+      "players": [
+        {
+          "id": "ビジター先発",
+          "name": "ビジター先発",
+          "number": 12,
+          "position": "投手",
+          "is_pitcher": true
+        },
+        {
+          "id": "ビジター1",
+          "name": "ビジター1",
+          "number": 51,
+          "position": "内野手",
+          "is_pitcher": false
+        },
+        {
+          "id": "ビジター2",
+          "name": "ビジター2",
+          "number": 52,
+          "position": "内野手",
+          "is_pitcher": false
+        },
+        {
+          "id": "ビジター3",
+          "name": "ビジター3",
+          "number": 53,
+          "position": "内野手",
+          "is_pitcher": false
+        },
+        {
+          "id": "ビジター4",
+          "name": "ビジター4",
+          "number": 54,
+          "position": "内野手",
+          "is_pitcher": false
+        },
+        {
+          "id": "ビジター5",
+          "name": "ビジター5",
+          "number": 55,
+          "position": "内野手",
+          "is_pitcher": false
+        },
+        {
+          "id": "ビジター6",
+          "name": "ビジター6",
+          "number": 56,
+          "position": "内野手",
+          "is_pitcher": false
+        },
+        {
+          "id": "ビジター7",
+          "name": "ビジター7",
+          "number": 57,
+          "position": "内野手",
+          "is_pitcher": false
+        },
+        {
+          "id": "ビジター8",
+          "name": "ビジター8",
+          "number": 58,
+          "position": "内野手",
+          "is_pitcher": false
+        },
+        {
+          "id": "ビジター9",
+          "name": "ビジター9",
+          "number": 59,
+          "position": "内野手",
+          "is_pitcher": false
+        }
+      ],
+      "lineup": [
+        {
+          "batting_order": 1,
+          "slot_sequence": 0,
+          "fielding_position": "遊",
+          "entered_inning": null,
+          "entered_is_bottom": false,
+          "entered_batter": 1,
+          "player_id": "ビジター1"
+        },
+        {
+          "batting_order": 2,
+          "slot_sequence": 0,
+          "fielding_position": "二",
+          "entered_inning": null,
+          "entered_is_bottom": false,
+          "entered_batter": 1,
+          "player_id": "ビジター2"
+        },
+        {
+          "batting_order": 3,
+          "slot_sequence": 0,
+          "fielding_position": "一",
+          "entered_inning": null,
+          "entered_is_bottom": false,
+          "entered_batter": 1,
+          "player_id": "ビジター3"
+        },
+        {
+          "batting_order": 4,
+          "slot_sequence": 0,
+          "fielding_position": "三",
+          "entered_inning": null,
+          "entered_is_bottom": false,
+          "entered_batter": 1,
+          "player_id": "ビジター4"
+        },
+        {
+          "batting_order": 5,
+          "slot_sequence": 0,
+          "fielding_position": "左",
+          "entered_inning": null,
+          "entered_is_bottom": false,
+          "entered_batter": 1,
+          "player_id": "ビジター5"
+        },
+        {
+          "batting_order": 6,
+          "slot_sequence": 0,
+          "fielding_position": "中",
+          "entered_inning": null,
+          "entered_is_bottom": false,
+          "entered_batter": 1,
+          "player_id": "ビジター6"
+        },
+        {
+          "batting_order": 7,
+          "slot_sequence": 0,
+          "fielding_position": "右",
+          "entered_inning": null,
+          "entered_is_bottom": false,
+          "entered_batter": 1,
+          "player_id": "ビジター7"
+        },
+        {
+          "batting_order": 8,
+          "slot_sequence": 0,
+          "fielding_position": "捕",
+          "entered_inning": null,
+          "entered_is_bottom": false,
+          "entered_batter": 1,
+          "player_id": "ビジター8"
+        },
+        {
+          "batting_order": 9,
+          "slot_sequence": 0,
+          "fielding_position": "指",
+          "entered_inning": null,
+          "entered_is_bottom": false,
+          "entered_batter": 1,
+          "player_id": "ビジター9"
+        }
+      ]
+    }
+  ],
+  "plate_appearances": [
+    {
+      "sequence": 1,
+      "inning": 1,
+      "is_bottom": false,
+      "batter_id": "ビジター1",
+      "pitcher_id": "ホーム先発",
+      "batting_order": 1,
+      "slot_sequence": 0,
+      "result": "ゴロアウト",
+      "fielded_by": "遊-一",
+      "advances": [
+        {
+          "runner_id": "ビジター1",
+          "from_base": 0,
+          "to_base": -1,
+          "reason": "アウト",
+          "error_index": null
+        }
+      ],
+      "errors": []
+    },
+    {
+      "sequence": 2,
+      "inning": 1,
+      "is_bottom": false,
+      "batter_id": "ビジター2",
+      "pitcher_id": "ホーム先発",
+      "batting_order": 2,
+      "slot_sequence": 0,
+      "result": "空振り三振",
+      "fielded_by": "",
+      "advances": [
+        {
+          "runner_id": "ビジター2",
+          "from_base": 0,
+          "to_base": -1,
+          "reason": "アウト",
+          "error_index": null
+        }
+      ],
+      "errors": []
+    },
+    {
+      "sequence": 3,
+      "inning": 1,
+      "is_bottom": false,
+      "batter_id": "ビジター3",
+      "pitcher_id": "ホーム先発",
+      "batting_order": 3,
+      "slot_sequence": 0,
+      "result": "フライアウト",
+      "fielded_by": "中",
+      "advances": [
+        {
+          "runner_id": "ビジター3",
+          "from_base": 0,
+          "to_base": -1,
+          "reason": "アウト",
+          "error_index": null
+        }
+      ],
+      "errors": []
+    },
+    {
+      "sequence": 4,
+      "inning": 1,
+      "is_bottom": true,
+      "batter_id": "ホーム1",
+      "pitcher_id": "ビジター先発",
+      "batting_order": 1,
+      "slot_sequence": 0,
+      "result": "空振り三振",
+      "fielded_by": "",
+      "advances": [
+        {
+          "runner_id": "ホーム1",
+          "from_base": 0,
+          "to_base": -1,
+          "reason": "アウト",
+          "error_index": null
+        }
+      ],
+      "errors": []
+    },
+    {
+      "sequence": 5,
+      "inning": 1,
+      "is_bottom": true,
+      "batter_id": "ホーム2",
+      "pitcher_id": "ビジター先発",
+      "batting_order": 2,
+      "slot_sequence": 0,
+      "result": "空振り三振",
+      "fielded_by": "",
+      "advances": [
+        {
+          "runner_id": "ホーム2",
+          "from_base": 0,
+          "to_base": -1,
+          "reason": "アウト",
+          "error_index": null
+        }
+      ],
+      "errors": []
+    },
+    {
+      "sequence": 6,
+      "inning": 1,
+      "is_bottom": true,
+      "batter_id": "ホーム3",
+      "pitcher_id": "ビジター先発",
+      "batting_order": 3,
+      "slot_sequence": 0,
+      "result": "空振り三振",
+      "fielded_by": "",
+      "advances": [
+        {
+          "runner_id": "ホーム3",
+          "from_base": 0,
+          "to_base": -1,
+          "reason": "アウト",
+          "error_index": null
+        }
+      ],
+      "errors": []
+    },
+    {
+      "sequence": 7,
+      "inning": 2,
+      "is_bottom": false,
+      "batter_id": "ビジター4",
+      "pitcher_id": "ホーム先発",
+      "batting_order": 4,
+      "slot_sequence": 0,
+      "result": "単打",
+      "fielded_by": "",
+      "advances": [
+        {
+          "runner_id": "ビジター4",
+          "from_base": 0,
+          "to_base": 1,
+          "reason": "打撃",
+          "error_index": null
+        }
+      ],
+      "errors": []
+    },
+    {
+      "sequence": 8,
+      "inning": 2,
+      "is_bottom": false,
+      "batter_id": "ビジター5",
+      "pitcher_id": "ホーム先発",
+      "batting_order": 5,
+      "slot_sequence": 0,
+      "result": "ゴロアウト",
+      "fielded_by": "遊-二-一",
+      "advances": [
+        {
+          "runner_id": "ビジター5",
+          "from_base": 0,
+          "to_base": -1,
+          "reason": "アウト",
+          "error_index": null
+        },
+        {
+          "runner_id": "ビジター4",
+          "from_base": 1,
+          "to_base": -1,
+          "reason": "封殺",
+          "error_index": null
+        }
+      ],
+      "errors": []
+    },
+    {
+      "sequence": 9,
+      "inning": 2,
+      "is_bottom": false,
+      "batter_id": "ビジター6",
+      "pitcher_id": "ホーム先発",
+      "batting_order": 6,
+      "slot_sequence": 0,
+      "result": "ゴロアウト",
+      "fielded_by": "三-一",
+      "advances": [
+        {
+          "runner_id": "ビジター6",
+          "from_base": 0,
+          "to_base": -1,
+          "reason": "アウト",
+          "error_index": null
+        }
+      ],
+      "errors": []
+    },
+    {
+      "sequence": 10,
+      "inning": 2,
+      "is_bottom": true,
+      "batter_id": "ホーム4",
+      "pitcher_id": "ビジター先発",
+      "batting_order": 4,
+      "slot_sequence": 0,
+      "result": "空振り三振",
+      "fielded_by": "",
+      "advances": [
+        {
+          "runner_id": "ホーム4",
+          "from_base": 0,
+          "to_base": -1,
+          "reason": "アウト",
+          "error_index": null
+        }
+      ],
+      "errors": []
+    },
+    {
+      "sequence": 11,
+      "inning": 2,
+      "is_bottom": true,
+      "batter_id": "ホーム5",
+      "pitcher_id": "ビジター先発",
+      "batting_order": 5,
+      "slot_sequence": 0,
+      "result": "空振り三振",
+      "fielded_by": "",
+      "advances": [
+        {
+          "runner_id": "ホーム5",
+          "from_base": 0,
+          "to_base": -1,
+          "reason": "アウト",
+          "error_index": null
+        }
+      ],
+      "errors": []
+    },
+    {
+      "sequence": 12,
+      "inning": 2,
+      "is_bottom": true,
+      "batter_id": "ホーム6",
+      "pitcher_id": "ビジター先発",
+      "batting_order": 6,
+      "slot_sequence": 0,
+      "result": "空振り三振",
+      "fielded_by": "",
+      "advances": [
+        {
+          "runner_id": "ホーム6",
+          "from_base": 0,
+          "to_base": -1,
+          "reason": "アウト",
+          "error_index": null
+        }
+      ],
+      "errors": []
+    },
+    {
+      "sequence": 13,
+      "inning": 3,
+      "is_bottom": false,
+      "batter_id": "ビジター7",
+      "pitcher_id": "ホーム先発",
+      "batting_order": 7,
+      "slot_sequence": 0,
+      "result": "失策出塁",
+      "fielded_by": "",
+      "advances": [
+        {
+          "runner_id": "ビジター7",
+          "from_base": 0,
+          "to_base": 1,
+          "reason": "失策",
+          "error_index": null
+        }
+      ],
+      "errors": [
+        {
+          "player_id": "ホーム2",
+          "position": "二",
+          "kind": "送球"
+        }
+      ]
+    },
+    {
+      "sequence": 14,
+      "inning": 3,
+      "is_bottom": false,
+      "batter_id": "ビジター8",
+      "pitcher_id": "ホーム先発",
+      "batting_order": 8,
+      "slot_sequence": 0,
+      "result": "見逃し三振",
+      "fielded_by": "",
+      "advances": [
+        {
+          "runner_id": "ビジター8",
+          "from_base": 0,
+          "to_base": -1,
+          "reason": "アウト",
+          "error_index": null
+        }
+      ],
+      "errors": []
+    },
+    {
+      "sequence": 15,
+      "inning": 3,
+      "is_bottom": false,
+      "batter_id": "ビジター9",
+      "pitcher_id": "ホーム先発",
+      "batting_order": 9,
+      "slot_sequence": 0,
+      "result": "空振り三振",
+      "fielded_by": "",
+      "advances": [
+        {
+          "runner_id": "ビジター9",
+          "from_base": 0,
+          "to_base": -1,
+          "reason": "アウト",
+          "error_index": null
+        }
+      ],
+      "errors": []
+    },
+    {
+      "sequence": 16,
+      "inning": 3,
+      "is_bottom": false,
+      "batter_id": "ビジター1",
+      "pitcher_id": "ホーム先発",
+      "batting_order": 1,
+      "slot_sequence": 0,
+      "result": "空振り三振",
+      "fielded_by": "",
+      "advances": [
+        {
+          "runner_id": "ビジター1",
+          "from_base": 0,
+          "to_base": -1,
+          "reason": "アウト",
+          "error_index": null
+        }
+      ],
+      "errors": []
+    },
+    {
+      "sequence": 17,
+      "inning": 3,
+      "is_bottom": true,
+      "batter_id": "ホーム7",
+      "pitcher_id": "ビジター先発",
+      "batting_order": 7,
+      "slot_sequence": 0,
+      "result": "空振り三振",
+      "fielded_by": "",
+      "advances": [
+        {
+          "runner_id": "ホーム7",
+          "from_base": 0,
+          "to_base": -1,
+          "reason": "アウト",
+          "error_index": null
+        }
+      ],
+      "errors": []
+    },
+    {
+      "sequence": 18,
+      "inning": 3,
+      "is_bottom": true,
+      "batter_id": "ホーム代打",
+      "pitcher_id": "ビジター先発",
+      "batting_order": 8,
+      "slot_sequence": 1,
+      "result": "空振り三振",
+      "fielded_by": "",
+      "advances": [
+        {
+          "runner_id": "ホーム代打",
+          "from_base": 0,
+          "to_base": -1,
+          "reason": "アウト",
+          "error_index": null
+        }
+      ],
+      "errors": []
+    },
+    {
+      "sequence": 19,
+      "inning": 3,
+      "is_bottom": true,
+      "batter_id": "ホーム9",
+      "pitcher_id": "ビジター先発",
+      "batting_order": 9,
+      "slot_sequence": 0,
+      "result": "空振り三振",
+      "fielded_by": "",
+      "advances": [
+        {
+          "runner_id": "ホーム9",
+          "from_base": 0,
+          "to_base": -1,
+          "reason": "アウト",
+          "error_index": null
+        }
+      ],
+      "errors": []
+    },
+    {
+      "sequence": 20,
+      "inning": 4,
+      "is_bottom": false,
+      "batter_id": "ビジター2",
+      "pitcher_id": "ホーム救援",
+      "batting_order": 2,
+      "slot_sequence": 0,
+      "result": "空振り三振",
+      "fielded_by": "",
+      "advances": [
+        {
+          "runner_id": "ビジター2",
+          "from_base": 0,
+          "to_base": -1,
+          "reason": "アウト",
+          "error_index": null
+        }
+      ],
+      "errors": []
+    },
+    {
+      "sequence": 21,
+      "inning": 4,
+      "is_bottom": false,
+      "batter_id": "ビジター3",
+      "pitcher_id": "ホーム救援",
+      "batting_order": 3,
+      "slot_sequence": 0,
+      "result": "空振り三振",
+      "fielded_by": "",
+      "advances": [
+        {
+          "runner_id": "ビジター3",
+          "from_base": 0,
+          "to_base": -1,
+          "reason": "アウト",
+          "error_index": null
+        }
+      ],
+      "errors": []
+    },
+    {
+      "sequence": 22,
+      "inning": 4,
+      "is_bottom": false,
+      "batter_id": "ビジター4",
+      "pitcher_id": "ホーム救援",
+      "batting_order": 4,
+      "slot_sequence": 0,
+      "result": "空振り三振",
+      "fielded_by": "",
+      "advances": [
+        {
+          "runner_id": "ビジター4",
+          "from_base": 0,
+          "to_base": -1,
+          "reason": "アウト",
+          "error_index": null
+        }
+      ],
+      "errors": []
+    }
+  ],
+  "max_innings": 12,
+  "urls": {
+    "save": "/api/games/GAME/scorebook/",
+    "detail": "/games/GAME/"
+  }
+}

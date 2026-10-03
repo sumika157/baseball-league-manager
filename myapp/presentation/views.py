@@ -18,10 +18,9 @@ from django.urls import reverse, reverse_lazy
 from django.views.decorators.http import require_GET
 from django.views.generic import CreateView
 
-from ..application.dto import GameEditRoster
+from ..application.dto import GameEditData, GameEditPlateAppearance
 from ..application.game_recording import GameRecordingService
 from ..application.services import TeamApplicationService
-from ..domain.entities import Game
 from ..domain.exceptions import (
     DomainError,
     GameNotFound,
@@ -411,18 +410,18 @@ def game_edit(request, game_id):
     except GameNotFound:
         raise Http404("試合が見つかりません。") from None
 
-    game, rosters = data.game, data.rosters
-    if not DjangoTeamPermissionQuery().can_manage_any(request.user, (game.home_team_id, game.away_team_id)):
+    header = data.header
+    if not DjangoTeamPermissionQuery().can_manage_any(request.user, (header.home_team_id, header.away_team_id)):
         raise PermissionDenied("このチームを編集する権限がありません。")
 
     return render(
         request,
         "myapp/game_edit.html",
-        {"game": game, "payload": _game_edit_payload(request, game, rosters)},
+        {"game": header, "payload": _game_edit_payload(request, data)},
     )
 
 
-def _game_edit_payload(request, game: Game, rosters: list[GameEditRoster]) -> dict:
+def _game_edit_payload(request, data: GameEditData) -> dict:
     """試合編集画面（React）に埋め込む初期データ。
 
     キーは保存 API（api_game_scorebook）のフォームのフィールド名と 1:1 の
@@ -433,32 +432,11 @@ def _game_edit_payload(request, game: Game, rosters: list[GameEditRoster]) -> di
     同じ表を書くとずれても例外にならず、選択肢や既定値だけが静かに古くなる。
     払い出せば出典は1つのままになる。
     """
-    # 保存済みの出場した打席を、入力と同じ（回・表裏・その半回の何人目）に戻す
-    located: dict[int, tuple[int, bool, int]] = {}
-    counts: dict[tuple[int, bool], int] = {}
-    for entry in game.plate_appearances_in_order():
-        half = (entry.inning, entry.is_bottom)
-        counts[half] = counts.get(half, 0) + 1
-        located[entry.sequence] = (entry.inning, entry.is_bottom, counts[half])
-    lineup = {}
-    for slot in game.batting:
-        position = slot.fielding_position
-        # 代打・代走・投手は入った時点を打席から導くので、入力欄には出さない（返して再保存すると、
-        # 打席より前に入ったことになりうる）。守備固めなどは、保存した値を返して直せるようにする
-        derived = position is not None and position.entry_is_derived
-        inning, is_bottom, batter = located.get(slot.entered_sequence or 0, (None, False, 1))
-        lineup[slot.player_id] = {
-            "batting_order": slot.batting_order,
-            "slot_sequence": slot.slot_sequence,
-            "fielding_position": position.value if position else "",
-            "entered_inning": None if derived else inning,
-            "entered_is_bottom": False if derived else is_bottom,
-            "entered_batter": 1 if derived else batter,
-        }
+    game = data.header
     return {
         "game": {
             "id": game.id,
-            "year": game.season.year,
+            "year": game.year,
             "played_on": game.played_on.isoformat(),
             "home_team": game.home_team_id,
             "away_team": game.away_team_id,
@@ -469,8 +447,7 @@ def _game_edit_payload(request, game: Game, rosters: list[GameEditRoster]) -> di
             {
                 "team_id": roster.team_id,
                 "team_name": roster.team_name,
-                # rosters が home を先頭に返す前提に頼らず、試合の home_team_id と比べて決める
-                "is_home": roster.team_id == game.home_team_id,
+                "is_home": roster.is_home,
                 "players": [
                     {
                         "id": player.id,
@@ -482,14 +459,21 @@ def _game_edit_payload(request, game: Game, rosters: list[GameEditRoster]) -> di
                     for player in roster.players
                 ],
                 "lineup": [
-                    dict(lineup[player.id], player_id=player.id)
-                    for player in roster.players
-                    if lineup.get(player.id, {}).get("batting_order") is not None
+                    {
+                        "batting_order": slot.batting_order,
+                        "slot_sequence": slot.slot_sequence,
+                        "fielding_position": slot.fielding_position,
+                        "entered_inning": slot.entered_inning,
+                        "entered_is_bottom": slot.entered_is_bottom,
+                        "entered_batter": slot.entered_batter,
+                        "player_id": slot.player_id,
+                    }
+                    for slot in roster.lineup
                 ],
             }
-            for roster in rosters
+            for roster in data.rosters
         ],
-        "plate_appearances": [_plate_appearance_row(entry) for entry in game.plate_appearances_in_order()],
+        "plate_appearances": [_plate_appearance_row(entry) for entry in data.plate_appearances],
         "vocabulary": _scorebook_vocabulary(),
         "max_innings": MAX_INNINGS,
         "urls": {
@@ -500,7 +484,7 @@ def _game_edit_payload(request, game: Game, rosters: list[GameEditRoster]) -> di
     }
 
 
-def _plate_appearance_row(entry) -> dict:
+def _plate_appearance_row(entry: GameEditPlateAppearance) -> dict:
     """打席1つぶん。保存 API に送り返す形と同じにする。"""
     return {
         "sequence": entry.sequence,
@@ -510,21 +494,20 @@ def _plate_appearance_row(entry) -> dict:
         "pitcher_id": entry.pitcher_id,
         "batting_order": entry.batting_order,
         "slot_sequence": entry.slot_sequence,
-        "result": entry.result.value,
-        "fielded_by": FIELDED_BY_SEPARATOR.join(position.value for position in entry.fielded_by),
+        "result": entry.result,
+        "fielded_by": FIELDED_BY_SEPARATOR.join(entry.fielded_by),
         "advances": [
             {
                 "runner_id": advance.runner_id,
-                "from_base": advance.from_base.value,
-                "to_base": advance.to_base.value,
-                "reason": advance.reason.value,
+                "from_base": advance.from_base,
+                "to_base": advance.to_base,
+                "reason": advance.reason,
                 "error_index": advance.error_index,
             }
             for advance in entry.advances
         ],
         "errors": [
-            {"player_id": error.player_id, "position": error.position.value, "kind": error.kind.value}
-            for error in entry.errors
+            {"player_id": error.player_id, "position": error.position, "kind": error.kind} for error in entry.errors
         ],
     }
 

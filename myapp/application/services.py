@@ -40,6 +40,7 @@ from .dto import (
     GamePlayerRow,
     GameRow,
     GameTeamBox,
+    GameTeamIds,
     InningScoreColumn,
     LeagueDetail,
     LeagueOption,
@@ -68,6 +69,7 @@ from .dto import (
     TitleDepartment,
     YearlyRow,
 )
+from .game_edit import build_header, build_lineup_slots, build_plate_appearances
 from .queries import GameListQuery, PlayerFieldingQuery, PlayerStatsQuery, TeamListQuery
 from .scorebook_view import build_scorebook_grids
 
@@ -1158,36 +1160,50 @@ class TeamApplicationService:
 
     # --- 試合の登録 ---
 
+    def get_game_team_ids(self, game_id: int) -> GameTeamIds:
+        """試合の両チームの id だけを返す。権限の確認など、ロスターまで要らないとき用。"""
+        game = self._games.find_by_id(game_id)
+        return GameTeamIds(home_team_id=game.home_team_id, away_team_id=game.away_team_id)
+
     def get_game_edit_data(self, game_id: int) -> GameEditData:
         """試合の編集画面に必要な材料をまとめて返す。
 
-        試合と、両チームの在籍中の選手（背番号順）。既に入力されている成績や打順は
-        試合（game）が持っているので、選手ごとには持たない。
+        試合の基本項目と、両チームの在籍中の選手（背番号順）・その試合の打順、打席。
+        集約（`Game`）は外に出さず、画面が使う値の DTO に詰め替える。
         """
         game = self._games.find_by_id(game_id)
         names = self._team_names()
+        slots = build_lineup_slots(game)
 
         rosters = []
         for team_id in (game.home_team_id, game.away_team_id):
             team = self._teams.find_by_id(team_id)
+            players = [
+                GameEditPlayer(
+                    id=_saved_id(player.id),
+                    name=player.name,
+                    number=player.number.value,
+                    position=player.position.label,
+                    is_pitcher=player.is_pitcher,
+                )
+                for player in sorted(team.active_players, key=lambda p: p.number.value)
+            ]
             rosters.append(
                 GameEditRoster(
                     team_id=team_id,
                     team_name=names.get(team_id, team.name),
-                    players=[
-                        GameEditPlayer(
-                            id=_saved_id(player.id),
-                            name=player.name,
-                            number=player.number.value,
-                            position=player.position.label,
-                            is_pitcher=player.is_pitcher,
-                        )
-                        for player in sorted(team.active_players, key=lambda p: p.number.value)
-                    ],
+                    # rosters が home を先頭に返す前提に頼らず、試合の home_team_id と比べて決める
+                    is_home=team_id == game.home_team_id,
+                    players=players,
+                    lineup=[slots[player.id] for player in players if player.id in slots],
                 )
             )
 
-        return GameEditData(game=game, rosters=rosters)
+        return GameEditData(
+            header=build_header(game_id, game),
+            rosters=rosters,
+            plate_appearances=build_plate_appearances(game),
+        )
 
     def create_game(
         self,

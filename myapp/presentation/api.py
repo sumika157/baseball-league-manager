@@ -119,11 +119,11 @@ def game_scorebook(request, game_id):
 
     service = build_service()
     try:
-        game = service.get_game_edit_data(game_id).game
+        team_ids = service.get_game_team_ids(game_id)
     except GameNotFound:
         return JsonResponse({"ok": False, "error": "試合が見つかりません。"}, status=404)
 
-    if not DjangoTeamPermissionQuery().can_manage_any(request.user, (game.home_team_id, game.away_team_id)):
+    if not DjangoTeamPermissionQuery().can_manage_any(request.user, (team_ids.home_team_id, team_ids.away_team_id)):
         return JsonResponse({"ok": False, "error": "このチームを編集する権限がありません。"}, status=403)
 
     lineup_data = _as_row_list(body, "lineup")
