@@ -15,6 +15,7 @@ from myapp.domain.simulation.manager import (
     ACTIVE_ROSTER_SIZE,
     MAX_PINCH_HITTERS,
     MIN_DAYS_BETWEEN_STARTS,
+    STARTER_BATTERS,
     ClubRoster,
     ForeignQuota,
     PinchHitSituation,
@@ -30,7 +31,9 @@ from myapp.domain.simulation.manager import (
     pick_reliever,
     plan_pitching_staff,
     plays_position,
+    reliever_batter_target,
     should_change_pitcher,
+    starter_batter_target,
 )
 from myapp.domain.simulation.randomness import make_random
 from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings
@@ -458,6 +461,38 @@ class ChangePitcherTest(TestCase):
     def test_a_reliever_who_allows_three_runs_is_changed_at_once(self):
         self.assertTrue(self.change(is_starter=False, faced=2, target=4, runs_allowed=3, at_inning_start=False))
         self.assertFalse(self.change(is_starter=False, faced=2, target=4, runs_allowed=2, at_inning_start=False))
+
+
+class BatterTargetTest(TestCase):
+    """受け持ちの目安。エースには長く任せ、救援は1回を投げ切れる人数にする。"""
+
+    SAMPLES = 400
+
+    def mean_starter_target(self, **ratings) -> float:
+        rng = make_random(7)
+        starter = pitcher(1, **ratings)
+        return sum(starter_batter_target(rng, starter) for _ in range(self.SAMPLES)) / self.SAMPLES
+
+    def test_a_starter_with_a_higher_pitching_value_is_left_in_longer(self):
+        strong = self.mean_starter_target(stuff=70, control=70, home_run_avoidance=70)
+        average = self.mean_starter_target()
+        weak = self.mean_starter_target(stuff=30, control=30, home_run_avoidance=30)
+        self.assertGreater(strong, average + 4)
+        self.assertGreater(average, weak + 4)
+
+    def test_an_average_starter_is_left_in_for_the_baseline_number_of_batters(self):
+        self.assertAlmostEqual(self.mean_starter_target(), STARTER_BATTERS, delta=0.6)
+
+    def test_stamina_still_lengthens_the_outing(self):
+        self.assertGreater(self.mean_starter_target(stamina=80), self.mean_starter_target(stamina=20) + 8)
+
+    def test_a_reliever_is_left_in_for_about_one_inning(self):
+        """3アウトを取るのに要る打者はおよそ4.4人。目安が小さいと、抑えが回の途中で代わって、セーブがつかなくなる。"""
+        rng = make_random(7)
+        relief = pitcher(2)
+        mean = sum(reliever_batter_target(rng, relief) for _ in range(self.SAMPLES)) / self.SAMPLES
+        self.assertGreaterEqual(mean, 4.0)
+        self.assertLessEqual(mean, 5.0)
 
 
 class PinchHitTest(TestCase):

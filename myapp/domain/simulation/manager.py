@@ -5,7 +5,7 @@
 | 1軍登録 | 能力順に29人。捕手2人以上・投手14人（足りなければ減らす）。外国人は登録枠の範囲で |
 | スタメン | 総合値の順に守備の枠を埋め、守備力の高い順に重要な位置へ。DH は残りの最強打者。打順は出塁→長打の定型 |
 | ローテーション | 先発6人。前回の先発から中5日以上空ける |
-| 継投 | スタミナから受け持ちの目安を決め、失点が嵩めば早めに代える。抑えはセーブの状況で出す |
+| 継投 | スタミナと抑える力から受け持ちの目安を決め、失点が嵩めば早めに代える。抑えはセーブの状況で出す |
 | 救援の連投 | 3連投はさせない |
 | 代打 | 7回以降・負けている・控えに明確に上の打者がいる、が揃えば。1試合2人まで |
 | 外国人の出場枠 | リーグの上限（`foreign_player_game_limit`）を守る |
@@ -52,8 +52,11 @@ SETUP_PITCHERS = 2
 # 先発・救援が受け持つ打者数の目安（スタミナ50のとき）と、スタミナ1点あたりの増減、ばらつき
 STARTER_BATTERS = 24.0
 STARTER_BATTERS_PER_STAMINA = 0.22
+# 抑える力（`pitching_value`）が50を上回る先発には、1点あたりこの人数ぶん長く任せる（エースは長く投げさせる）
+STARTER_BATTERS_PER_PITCHING_VALUE = 0.45
 STARTER_BATTERS_SD = 3.0
-RELIEVER_BATTERS = 3.6
+# 救援は1回（3アウトに約4.4人）を投げ切れる人数。これより少ないと、抑えが回の途中で代わってセーブがつかない
+RELIEVER_BATTERS = 4.4
 RELIEVER_BATTERS_PER_STAMINA = 0.04
 RELIEVER_BATTERS_SD = 0.9
 # 交代のしきい値を超えても、回の途中ではこの人数ぶん待つ（回の区切りで代えたい）
@@ -474,8 +477,12 @@ def available_relievers(
 
 
 def starter_batter_target(rng: GameRandom, pitcher: SimPitcher) -> int:
-    """先発が受け持つ打者数の目安。スタミナで決まり、試合ごとにばらつく。"""
-    mean = STARTER_BATTERS + STARTER_BATTERS_PER_STAMINA * (pitcher.ratings.stamina - 50)
+    """先発が受け持つ打者数の目安。スタミナと抑える力で決まり、試合ごとにばらつく。"""
+    mean = (
+        STARTER_BATTERS
+        + STARTER_BATTERS_PER_STAMINA * (pitcher.ratings.stamina - 50)
+        + STARTER_BATTERS_PER_PITCHING_VALUE * (pitcher.ratings.pitching_value - 50)
+    )
     return max(12, round(normal(rng, mean, STARTER_BATTERS_SD)))
 
 
