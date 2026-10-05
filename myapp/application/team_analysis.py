@@ -28,12 +28,30 @@ from .dto import (
     PitcherUsage,
     TeamAnalysis,
     TeamAnalysisFacts,
+    UsageBox,
+    UsagePlayer,
 )
 from .queries import TeamAnalysisQuery, TeamListQuery
 
 DEPTH_TAB = "depth"
-# 起用マップ・成績一覧・FA を足すときはここに並べる
-TABS = [AnalysisTab(key=DEPTH_TAB, label="デプス表")]
+USAGE_TAB = "usage"
+# 成績一覧・FA を足すときはここに並べる
+TABS = [AnalysisTab(key=DEPTH_TAB, label="デプス表"), AnalysisTab(key=USAGE_TAB, label="起用マップ")]
+
+# 起用マップの箱をダイヤモンドのどこに置くか（CSS の `usage-box-<キー>`）。表示の関心なのでここに持つ。
+# 守備位置の一覧そのものはドメイン（`usage_map_positions`）が出典で、足りない位置があればテストが落ちる
+USAGE_AREAS: dict[FieldingPosition, str] = {
+    FieldingPosition.PITCHER: "pitcher",
+    FieldingPosition.CATCHER: "catcher",
+    FieldingPosition.FIRST_BASE: "first",
+    FieldingPosition.SECOND_BASE: "second",
+    FieldingPosition.THIRD_BASE: "third",
+    FieldingPosition.SHORTSTOP: "short",
+    FieldingPosition.LEFT_FIELD: "left",
+    FieldingPosition.CENTER_FIELD: "center",
+    FieldingPosition.RIGHT_FIELD: "right",
+    FieldingPosition.DESIGNATED_HITTER: "dh",
+}
 
 
 class TeamAnalysisService:
@@ -82,7 +100,47 @@ class TeamAnalysisService:
             average_age_pitchers=domain_services.average_age(pitcher_ages),
             average_age_fielders=domain_services.average_age(fielder_ages),
             average_age_all=domain_services.average_age([*pitcher_ages, *fielder_ages]),
+            usage_boxes=self._usage_boxes(facts),
         )
+
+    @staticmethod
+    def _usage_boxes(facts: TeamAnalysisFacts) -> list[UsageBox]:
+        """守備位置ごとの起用マップ。箱の中は先発数・出場数・背番号の順。
+
+        投手の箱は投球明細の先発登板から数える（打撃明細に「投」が出るのは指名打者制を使わない試合だけ。
+        そこから数えると二重になるので、打撃明細の「投」は使わない）。
+        """
+        roster = {row.player_id: row for row in facts.roster}
+        counts: dict[FieldingPosition, list[UsagePlayer]] = defaultdict(list)
+
+        def add(position: FieldingPosition, player_id: int, starts: int, games: int) -> None:
+            row = roster.get(player_id)
+            if row is not None and games > 0:
+                counts[position].append(
+                    UsagePlayer(player_id=player_id, name=row.name, number=row.number, starts=starts, games=games)
+                )
+
+        for pitching in facts.pitcher_usage:
+            add(FieldingPosition.PITCHER, pitching.player_id, pitching.starts, pitching.games)
+        for usage in facts.fielder_usage:
+            if usage.position is not None and usage.position is not FieldingPosition.PITCHER:
+                add(usage.position, usage.player_id, usage.starts, usage.games)
+
+        boxes: list[UsageBox] = []
+        for position in domain_services.usage_map_positions():
+            players = sorted(
+                counts.get(position, []), key=lambda p: domain_services.depth_order(p.starts, p.games, p.number)
+            )
+            shown = domain_services.usage_visible_count(len(players))
+            boxes.append(
+                UsageBox(
+                    label=position.label,
+                    area=USAGE_AREAS[position],
+                    players=players[:shown],
+                    hidden_count=len(players) - shown,
+                )
+            )
+        return boxes
 
     @staticmethod
     def _depth(

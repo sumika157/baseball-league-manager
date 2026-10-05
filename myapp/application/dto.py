@@ -1208,6 +1208,31 @@ class DepthTable:
 
 
 @dataclass(frozen=True)
+class UsagePlayer:
+    """起用マップの箱に並べる選手1人。その守備位置での先発数と出場数（投手は先発登板数と登板数）。"""
+
+    player_id: int
+    name: str
+    number: int
+    starts: int
+    games: int
+
+
+@dataclass(frozen=True)
+class UsageBox:
+    """起用マップの守備位置1つ分の箱。
+
+    area はダイヤモンド上の置き場所のキー（CSS のクラス名の一部）。
+    players は出す選手だけで、省いた人数は hidden_count。
+    """
+
+    label: str
+    area: str
+    players: list[UsagePlayer]
+    hidden_count: int = 0
+
+
+@dataclass(frozen=True)
 class AgeBandRow:
     """年齢構成の1行。"""
 
@@ -1234,3 +1259,4 @@ class TeamAnalysis:
     average_age_pitchers: float | None
     average_age_fielders: float | None
     average_age_all: float | None
+    usage_boxes: list[UsageBox]

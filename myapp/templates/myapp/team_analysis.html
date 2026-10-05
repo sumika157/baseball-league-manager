@@ -53,7 +53,7 @@
   <p class="text-muted">このチームにはまだ試合の記録がありません。在籍だけから編成を表示しています。</p>
 {% endif %}
 
-{# タブ。今はデプス表だけで、起用マップ・成績一覧・FA を足していく #}
+{# タブ。成績一覧・FA を足していく #}
 <div class="segmented ms-2">
   {% for tab in analysis.tabs %}
     <a class="segmented-item {% if tab.key == analysis.tab %}is-active{% endif %}"
@@ -117,6 +117,37 @@
     選手ごとの成績は <a href="{% url 'player_list' analysis.team_id %}">{{ analysis.team_name }}の選手一覧</a>
     （通算成績。この年だけの成績ではありません）で見られます。
   </p>
+{% elif analysis.tab == 'usage' %}
+  {% comment %}
+    守備位置ごとの先発出場数。箱の置き場所は area のクラス（theme.css のダイヤモンド）で決め、
+    位置の名前と並びはビューが渡す usage_boxes に従う（テンプレートに位置を並べない）。
+  {% endcomment %}
+  <h2 class="h6 mb-2">守備位置ごとの起用</h2>
+  <p class="page-subtitle mb-2" style="font-size: 0.8125rem;">
+    {{ analysis.year }}年に各守備位置で先発した選手。選手名の横は 先発数 / 出場数。
+    「投」は先発登板の数。各位置は先発の多い順に上位だけを表示し、残りは人数だけを示します。
+  </p>
+  <div class="usage-map mb-4">
+    {% for box in analysis.usage_boxes %}
+    <section class="usage-box usage-box-{{ box.area }}">
+      <h3 class="usage-box-title">{{ box.label }}</h3>
+      {% if box.players %}
+        <ul class="list-unstyled mb-0">
+          {% for player in box.players %}
+          <li>
+            <span class="jersey-number">{{ player.number }}</span>
+            <a href="{% url 'player_detail' analysis.team_id player.player_id %}" class="player-name">{{ player.name }}</a>
+            <span class="stat-muted tabular-nums text-nowrap">{{ player.starts }} / {{ player.games }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+        {% if box.hidden_count %}<div class="stat-muted">ほか{{ box.hidden_count }}名</div>{% endif %}
+      {% else %}
+        <span class="stat-muted">—</span>
+      {% endif %}
+    </section>
+    {% endfor %}
+  </div>
 {% endif %}
 {% endif %}
 {% endblock %}

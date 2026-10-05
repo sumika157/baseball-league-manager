@@ -148,3 +148,24 @@ class DepthOrderTest(unittest.TestCase):
         players = [(5, 20, 11), (10, 10, 99), (5, 30, 7), (5, 30, 3)]
         ordered = sorted(players, key=lambda p: ra.depth_order(*p))
         self.assertEqual(ordered, [(10, 10, 99), (5, 30, 3), (5, 30, 7), (5, 20, 11)])
+
+
+class UsageMapTest(unittest.TestCase):
+    def test_positions_are_pitcher_and_the_fielding_groups_in_declaration_order(self):
+        self.assertEqual(
+            ra.usage_map_positions(),
+            (FP.PITCHER, FP.CATCHER, FP.FIRST_BASE, FP.SECOND_BASE, FP.THIRD_BASE, FP.SHORTSTOP)
+            + (FP.LEFT_FIELD, FP.CENTER_FIELD, FP.RIGHT_FIELD, FP.DESIGNATED_HITTER),
+        )
+
+    def test_substitute_only_positions_have_no_box(self):
+        positions = ra.usage_map_positions()
+        self.assertNotIn(FP.PINCH_HITTER, positions)
+        self.assertNotIn(FP.PINCH_RUNNER, positions)
+
+    def test_box_shows_up_to_the_cap(self):
+        cap = ra.MAX_PLAYERS_IN_BOX
+        self.assertEqual(ra.usage_visible_count(0), 0)
+        self.assertEqual(ra.usage_visible_count(1), 1)
+        self.assertEqual(ra.usage_visible_count(cap), cap)
+        self.assertEqual(ra.usage_visible_count(cap + 4), cap)

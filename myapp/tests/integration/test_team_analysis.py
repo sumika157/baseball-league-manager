@@ -7,7 +7,10 @@ from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
+from myapp.application.team_analysis import USAGE_AREAS
 from myapp.domain.entities import Game
+from myapp.domain.services import usage_map_positions
+from myapp.domain.services.roster_analysis import MAX_PLAYERS_IN_BOX
 from myapp.domain.value_objects import BattingLine, FieldingPosition, PitchingLine, Season
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
@@ -210,3 +213,109 @@ class AnalysisLinksTest(TestCase):
     def test_team_page_links_to_its_analysis(self):
         response = self.client.get(reverse("player_list", args=[self.team.id]))
         self.assertContains(response, f'href="{reverse("team_analysis", args=[self.team.id])}"')
+
+
+class TeamUsageMapTest(AnalysisCase):
+    def setUp(self):
+        super().setUp()
+        self.regular = self.player(self.team, "正遊撃手", 6, "内野手", bats="右")
+        self.backup = self.player(self.team, "控え遊撃手", 7, "内野手", bats="右")
+        self.dh = self.player(self.team, "指名打者", 9, "外野手", bats="左")
+        self.ace = self.player(self.team, "エース", 18, "投手", throws="右")
+        self.long_man = self.player(self.team, "中継ぎ", 20, "投手", throws="右")
+        self.rival_ss = self.player(self.rival, "相手遊撃手", 6, "内野手")
+        for day in (1, 2):
+            self.game(
+                self.team,
+                self.rival,
+                day=day,
+                batting=[
+                    (self.regular, self.team, "遊", 0),
+                    (self.dh, self.team, "指", 0),
+                    (self.rival_ss, self.rival, "遊", 0),
+                ],
+                pitching=[(self.ace, 1), (self.long_man, 2)],
+            )
+        # 3試合目は控えが遊撃に途中から入る
+        self.game(
+            self.team,
+            self.rival,
+            day=3,
+            batting=[(self.regular, self.team, "打", 0), (self.backup, self.team, "遊", 1)],
+            pitching=[(self.ace, 1)],
+        )
+
+    def boxes(self, **kwargs):
+        analysis = build_team_analysis_service().get_analysis(self.team.id, year=2026, tab="usage", **kwargs)
+        return {box.label: box for box in analysis.usage_boxes}
+
+    def triples(self, box):
+        return [(p.name, p.starts, p.games) for p in box.players]
+
+    def test_tab_is_shown_and_listed(self):
+        response = self.client.get(reverse("team_analysis", args=[self.team.id]), {"tab": "usage"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["analysis"].tab, "usage")
+        self.assertEqual([t.key for t in response.context["analysis"].tabs], ["depth", "usage"])
+        self.assertContains(response, "正遊撃手")
+        self.assertContains(response, "usage-box-short")
+
+    def test_boxes_follow_the_domain_positions(self):
+        analysis = build_team_analysis_service().get_analysis(self.team.id, year=2026, tab="usage")
+        self.assertEqual(
+            [box.label for box in analysis.usage_boxes],
+            [position.label for position in usage_map_positions()],
+        )
+        self.assertEqual(set(USAGE_AREAS), set(usage_map_positions()))
+
+    def test_starts_and_substitute_appearances_are_told_apart(self):
+        # 正遊撃手は遊で2先発（3試合目は代打で先発）。控えは遊で途中出場だけ
+        self.assertEqual(self.triples(self.boxes()["遊"]), [("正遊撃手", 2, 2), ("控え遊撃手", 0, 1)])
+
+    def test_designated_hitter_has_its_own_box(self):
+        self.assertEqual(self.triples(self.boxes()["指"]), [("指名打者", 2, 2)])
+
+    def test_pitcher_box_counts_starting_appearances_from_pitching_lines(self):
+        box = self.boxes()["投"]
+        self.assertEqual(self.triples(box), [("エース", 3, 3), ("中継ぎ", 0, 2)])
+
+    def test_batting_line_with_pitcher_position_is_not_double_counted(self):
+        self.game(self.team, self.rival, day=4, batting=[(self.ace, self.team, "投", 0)], pitching=[(self.ace, 1)])
+        self.assertEqual(self.triples(self.boxes()["投"])[0], ("エース", 4, 4))
+
+    def test_opposing_players_are_not_counted(self):
+        names = [p.name for box in self.boxes().values() for p in box.players]
+        self.assertNotIn("相手遊撃手", names)
+
+    def test_other_years_are_not_counted(self):
+        self.game(self.team, self.rival, year=2025, batting=[(self.regular, self.team, "遊", 0)])
+        self.assertEqual(self.triples(self.boxes()["遊"])[0], ("正遊撃手", 2, 2))
+
+    def test_unused_position_is_an_empty_box(self):
+        box = self.boxes()["捕"]
+        self.assertEqual((box.players, box.hidden_count), ([], 0))
+
+    def test_players_beyond_the_cap_are_hidden(self):
+        extras = MAX_PLAYERS_IN_BOX + 2
+        for number in range(40, 40 + extras):
+            extra = self.player(self.team, f"控え{number}", number, "内野手")
+            self.game(self.team, self.rival, day=number - 30, batting=[(extra, self.team, "二", 0)])
+        box = self.boxes()["二"]
+        total = len(box.players) + box.hidden_count
+        self.assertGreaterEqual(total, extras)
+        self.assertEqual(len(box.players), MAX_PLAYERS_IN_BOX)
+        self.assertEqual(box.hidden_count, total - MAX_PLAYERS_IN_BOX)
+        # 先発の多い順に並べてから切るので、残るのは先発数の上位
+        self.assertEqual([p.starts for p in box.players], sorted((p.starts for p in box.players), reverse=True))
+
+    def test_query_count_does_not_grow_with_roster(self):
+        def count():
+            with CaptureQueriesContext(connection) as captured:
+                build_team_analysis_service().get_analysis(self.team.id, year=2026, tab="usage")
+            return len(captured)
+
+        before = count()
+        for number in range(50, 80):
+            player_id = self.player(self.team, f"控え{number}", number, "内野手")
+            self.game(self.team, self.rival, day=number % 28 + 1, batting=[(player_id, self.team, "三", 0)])
+        self.assertEqual(count(), before)
