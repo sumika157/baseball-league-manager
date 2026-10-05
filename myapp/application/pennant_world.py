@@ -19,7 +19,15 @@ from ..domain.exceptions import InvalidWorld, TeamNotFound
 from ..domain.pennant.fork import fork_league, fork_roster, fork_team
 from ..domain.pennant.initial_ratings import career_record, estimate_initial_ratings
 from ..domain.pennant.ratings import PlayerRatings
-from ..domain.pennant.world import MAX_SOURCE_LEAGUES, MAX_WORLDS_PER_OWNER, World, WorldScope
+from ..domain.pennant.world import (
+    MAX_SEASONS_PER_WORLD,
+    MAX_SOURCE_LEAGUES,
+    MAX_START_YEAR,
+    MAX_WORLDS_PER_OWNER,
+    World,
+    WorldScope,
+    earliest_start_year,
+)
 from ..domain.repositories import LeagueRepository, RatingsRepository, TeamRepository, WorldRepository
 from .dto import PennantWorldCreated, PennantWorldRow
 from .pennant_season import AtomicBlock
@@ -137,6 +145,15 @@ class PennantWorldService:
         # 検査を先に済ませる（世界を作ってから失敗すると、消す手間が増える）
         world = World(name=name, seed=seed, start_year=start_year, owner_id=owner_id)
         source = self.load_source(league_ids)
+        if world.start_year > MAX_START_YEAR:
+            raise InvalidWorld(
+                f"開幕年は{MAX_START_YEAR}年までにしてください（{MAX_SEASONS_PER_WORLD}シーズン遊べる年が必要です）。"
+            )
+        earliest = earliest_start_year(player.profile.birth_date for player in source.active_players)
+        if world.start_year < earliest:
+            raise InvalidWorld(
+                f"開幕年は{earliest}年以降にしてください（選んだリーグに、それより後に生まれた選手がいます）。"
+            )
         if managed_source_team_id is not None and not any(
             team.id == managed_source_team_id for teams in source.rosters for team in teams
         ):

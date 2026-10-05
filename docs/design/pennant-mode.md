@@ -1710,3 +1710,15 @@ domain に、シーズンを締める計算（引退 → ドラフト → 加齢
 - 画面は `build_pennant_offseason_service(world_id).close_season(expected_year=…)` と `close_option()` を使う。`AlreadyClosed` は「既に締めています」を `messages` に出してオフの結果へ（設計 6.）
 - オフの結果ページの材料（引退した選手・新人・能力の変化）は保存していない。「Y+1 の在籍の加入」「Y の退団」「Y と Y+1 の能力」から `OffseasonQuery` で導く
 - 画面の応答が締める前より遅くなっていないかを先に測る（上記）
+
+
+### #103 の詳細（開幕年の範囲と、年齢を数えられない選手）
+
+- **範囲の出典は `domain/pennant/world.py`**。上限は `MAX_START_YEAR = Season.MAX_YEAR − MAX_SEASONS_PER_WORLD + 1`（2091。9年目を締めても `Season` の範囲に収まる）で、`PennantWorldService.create_world` が検査する（日本語の `InvalidWorld`）。**`World` の生成には入れない**（`DjangoWorldRepository` が保存済みの世界の復元にも使うため、2092年以降の行が1つあるだけで世界の一覧が誰にでも 500 になる。将来 `MAX_SEASONS_PER_WORLD` を増やしても同じ）。`World` が見るのは `Season` の範囲だけで、上限と下限は作るときだけ検査する。
+  フォームの min/max は `Season.MIN_YEAR` と `MAX_START_YEAR` から作る（数字を書かない）
+- **下限は「実データの最新年＋1」にしなかった**。年は生年月日と矛盾しないことが目的で、最新年は試合の有無で動き、選んだリーグの選手にも依らない。
+  代わりに `earliest_start_year(生年月日の列)`（domain）を出典にし、`PennantWorldService.create_world` が分岐元の現役選手の生年月日を渡して `World` を作る前に検査する（最も遅い生年の翌年。生年月日の無い選手は数えない）。
+  下限はリーグの選択に依るので、フォームの min には載せず、送信後の画面のエラー（「開幕年は○年以降にしてください」）で知らせる
+- **`Profile.age_or_none(as_of)` を足した**。`age` は生年月日より前の日付で `InvalidProfile` を投げる（据え置き）。画面に出す年齢（球団の画面・選手ページ・GM ホーム・能力の表）は `age_or_none` で、数えられなければ年齢なし（画面は「—」、または項目を出さない（選手ページ））。
+  `age_at_season_start` も同じ関数に寄せた。範囲外の年を検査していても、データの修正で生年月日が後になった世界は残りうるので、画面の側も落とさない
+- **実データの画面にも同じ経路はある**が、実データの「今日」は現実の今日で、生年月日が未来の選手を入れない限り起きない（`Profile` は生年月日を今日と突き合わせない）。同じ `age_or_none` を通るので、起きても落ちない。実データ側の入力検査は別に扱う

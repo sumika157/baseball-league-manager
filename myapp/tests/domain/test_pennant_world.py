@@ -1,12 +1,20 @@
 """世界・世界の範囲・分岐の業務ルール（DB 不要・Django 非依存）。"""
 
 import unittest
+from datetime import date
 
 from myapp.domain.entities import League, Team
 from myapp.domain.exceptions import DuplicateJerseyNumber, InvalidSeason, InvalidWorld
 from myapp.domain.pennant.fork import fork_league, fork_roster, fork_team
-from myapp.domain.pennant.world import MAX_SEED, World, WorldScope
-from myapp.domain.value_objects import JerseyNumber, Position, Profile
+from myapp.domain.pennant.world import (
+    MAX_SEASONS_PER_WORLD,
+    MAX_SEED,
+    MAX_START_YEAR,
+    World,
+    WorldScope,
+    earliest_start_year,
+)
+from myapp.domain.value_objects import JerseyNumber, Position, Profile, Season
 
 
 class WorldScopeTest(unittest.TestCase):
@@ -80,6 +88,25 @@ class WorldTest(unittest.TestCase):
     def test_the_start_year_must_be_a_season(self):
         with self.assertRaises(InvalidSeason):
             World(name="世界", seed=1, start_year=1800)
+
+    def test_the_latest_start_year_leaves_room_for_every_season(self):
+        """上限の年に作った世界の最後のシーズンも `Season` の範囲に収まる。"""
+        self.assertEqual(MAX_START_YEAR, Season.MAX_YEAR - MAX_SEASONS_PER_WORLD + 1)
+
+        world = World(name="世界", seed=1, start_year=MAX_START_YEAR)
+
+        self.assertEqual(Season(world.start_year + MAX_SEASONS_PER_WORLD - 1).year, Season.MAX_YEAR)
+
+    def test_a_world_itself_only_checks_the_season_range(self):
+        """上限は作成の経路が検査する。保存済みの世界の復元（World の生成）を止めない。"""
+        self.assertEqual(World(name="世界", seed=1, start_year=Season.MAX_YEAR).start_year, Season.MAX_YEAR)
+
+    def test_the_earliest_start_year_follows_the_latest_birth(self):
+        self.assertEqual(earliest_start_year([date(1990, 5, 1), date(2004, 12, 31), None]), 2005)
+
+    def test_the_earliest_start_year_is_the_first_season_without_births(self):
+        self.assertEqual(earliest_start_year([]), Season.MIN_YEAR)
+        self.assertEqual(earliest_start_year([None]), Season.MIN_YEAR)
 
     def test_an_unsaved_world_has_no_scope(self):
         with self.assertRaises(InvalidWorld):

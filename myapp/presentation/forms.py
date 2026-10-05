@@ -13,7 +13,7 @@ from django import forms
 from ..application.dto import LeagueTeams, LineupSlot
 from ..domain.entities import FieldingError, PlateAppearance, RunnerAdvance
 from ..domain.exceptions import InvalidPosition
-from ..domain.pennant.world import MAX_NAME_LENGTH, MAX_SEED, MAX_SOURCE_LEAGUES
+from ..domain.pennant.world import MAX_NAME_LENGTH, MAX_SEED, MAX_SOURCE_LEAGUES, MAX_START_YEAR
 from ..domain.value_objects import (
     AdvanceReason,
     Base,
@@ -21,6 +21,7 @@ from ..domain.value_objects import (
     FieldingPosition,
     PlateAppearanceResult,
     Position,
+    Season,
 )
 
 POSITION_CHOICES = [(position.value, position.value) for position in Position]
@@ -238,7 +239,10 @@ class PennantWorldForm(forms.Form):
     )
     managed_team = forms.ChoiceField(label="受け持つ球団", widget=forms.Select(attrs={"class": "form-select"}))
     start_year = forms.IntegerField(
-        label="開幕年", min_value=1900, max_value=2100, widget=forms.NumberInput(attrs={"class": "form-control"})
+        label="開幕年",
+        min_value=Season.MIN_YEAR,
+        max_value=MAX_START_YEAR,
+        widget=forms.NumberInput(attrs={"class": "form-control"}),
     )
     seed = forms.IntegerField(
         label="乱数のシード",
