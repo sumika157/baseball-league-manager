@@ -27,6 +27,7 @@ from myapp.infrastructure.queries import (
     DjangoGameListQuery,
     DjangoPlayerFieldingQuery,
     DjangoPlayerSearchQuery,
+    DjangoPlayerStatsQuery,
     DjangoTeamListQuery,
     DjangoTeamPermissionQuery,
 )
@@ -264,6 +265,54 @@ class PennantIdsAreNotFoundFromRealUrlsTest(WorldCase):
                 self.assertEqual(listing.latest_year(), YEAR)
                 self.assertEqual(set(listing.count_by_team()), own)
                 self.assertEqual(listing.list_months(), [4])
+
+    def test_the_season_stats_reads_are_limited_to_their_scope(self):
+        """年と在籍の期間で引く新しい読み口も、両方の範囲で開いて、取り違えが無いことを見る。"""
+        real_league, pennant_league = self.league.id, self.pennant_league.id
+        for scope, own_team, other_team, own_league, other_league in (
+            (REAL, self.team.id, self.pennant_team.id, real_league, pennant_league),
+            (self.scope, self.pennant_team.id, self.team.id, pennant_league, real_league),
+        ):
+            with self.subTest(scope=str(scope)):
+                stats, listing = DjangoPlayerStatsQuery(scope), DjangoGameListQuery(scope)
+                own_players = set(
+                    orm_models.PlayerStint.objects.filter(team_id=own_team).values_list("player_id", flat=True)
+                )
+                for year in (None, YEAR):
+                    everyone = {row.player_id for row in stats.list_roster(year=year)}
+                    self.assertTrue(own_players <= everyone)
+                    self.assertTrue(
+                        {row.team_id for row in stats.list_roster(year=year)}
+                        <= {own_team, *self._teams_of(own_league)}
+                    )
+                    self.assertEqual(
+                        {row.player_id for row in stats.list_roster(year=year, team_id=own_team)}, own_players
+                    )
+                    self.assertEqual(stats.list_roster(year=year, team_id=other_team), [])
+                    self.assertEqual(stats.list_roster(year=year, league_id=other_league), [])
+                    self.assertTrue(stats.list_roster(year=year, league_id=own_league))
+                self.assertEqual(stats.list_season(other_league, YEAR), [])
+
+                self.assertEqual(listing.list_seasons(league_id=own_league, recorded_only=True), [YEAR])
+                self.assertEqual(listing.list_seasons(league_id=other_league, recorded_only=True), [])
+                # 打撃の明細を持つ選手を明示して選ぶ（並びに頼ると、明細の無い選手を引いて誤って落ちる）
+                player = (
+                    orm_models.GameBattingLine.objects.filter(team_id=own_team, player_id__in=own_players)
+                    .order_by("player_id")
+                    .values_list("player_id", flat=True)
+                    .first()
+                )
+                assert player is not None
+                self.assertTrue(listing.list_for_player(own_team, player))
+                # 相手の範囲の球団と選手で引いても何も返らない（範囲で絞らなければ相手の試合が出る）
+                other_player = orm_models.PlayerStint.objects.filter(team_id=other_team).values_list(
+                    "player_id", flat=True
+                )[0]
+                self.assertEqual(listing.list_for_player(other_team, other_player), [])
+
+    @staticmethod
+    def _teams_of(league_id: int) -> set[int]:
+        return set(orm_models.Team.objects.filter(league_id=league_id).values_list("id", flat=True))
 
     def test_by_league_reads_do_not_cross_over(self):
         self.assertEqual(

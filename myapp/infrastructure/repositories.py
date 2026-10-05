@@ -308,7 +308,7 @@ class DjangoTeamRepository:
                         number=stint.number,
                         position=Position.from_label(p.position),
                         is_active=here is not None,
-                        profile=_profile_of(p),
+                        profile=profile_of(p),
                         batting=roster.batting.get(player_id, BattingLine()),
                         pitching=roster.pitching.get(player_id, PitchingLine()),
                         career=career,
@@ -395,7 +395,7 @@ def _profile_defaults(profile: Profile) -> dict:
     }
 
 
-def _profile_of(row: orm_models.Player) -> Profile:
+def profile_of(row: orm_models.Player) -> Profile:
     return Profile(
         birth_date=row.birth_date,
         throws=Handedness.from_label(row.throws),
@@ -595,6 +595,8 @@ class DjangoGameRepository:
     def save(self, game: Game) -> Game:
         # 打撃・投球の明細は打席から導ける値だが、通算成績の集計のために保存もしている。
         # 同じ事実を2か所に持つので、食い違ったまま保存されないよう集約に照合させる
+        if game.read_only:
+            raise InvalidGame("参照専用に読んだ試合は保存できません（読んでいない明細が消えます）。")
         ensure_lines_match_plate_appearances(game)
         self._ensure_in_scope(game)
         row, _ = orm_models.Game.objects.update_or_create(  # type: ignore[misc]
@@ -938,36 +940,40 @@ class DjangoGameRepository:
             fielding=cls._to_fielding(row) if with_plate_appearances else [],
             plate_appearances_loaded=with_plate_appearances,
         )
-        game.batting = [
-            GameBatting(
-                id=b.id,
-                player_id=b.player_id,
-                line=BattingLine(**{f: getattr(b, f) for f in _BATTING_FIELDS}),
-                team_id=b.team_id,
-                entered_sequence=b.entered_sequence,
-                batting_order=b.batting_order,
-                slot_sequence=b.slot_sequence,
-                fielding_position=FieldingPosition.from_label(b.fielding_position),
-            )
-            for b in row.batting_lines.all()
-        ]
-        game.pitching = [
-            GamePitching(
-                id=p.id,
-                player_id=p.player_id,
-                line=PitchingLine(
-                    innings=InningsPitched.from_notation(p.innings_pitched),
-                    **{f: getattr(p, f) for f in _PITCHING_COUNTS},
-                    # 1試合の行なので、先発なら1、救援での勝利ならその勝利数
-                    starts=1 if p.appearance_order <= 1 else 0,
-                    relief_wins=p.wins if p.appearance_order > 1 else 0,
-                ),
-                appearance_order=p.appearance_order,
-                entered_inning=p.entered_inning,
-            )
-            for p in row.pitching_lines.all()
-        ]
+        game.batting = [game_batting_of(b) for b in row.batting_lines.all()]
+        game.pitching = [game_pitching_of(p) for p in row.pitching_lines.all()]
         return game
+
+
+def game_batting_of(row: orm_models.GameBattingLine) -> GameBatting:
+    """打撃の明細の行を、試合の中の1人ぶんの打撃にする。"""
+    return GameBatting(
+        id=row.id,
+        player_id=row.player_id,
+        line=BattingLine(**{f: getattr(row, f) for f in _BATTING_FIELDS}),
+        team_id=row.team_id,
+        entered_sequence=row.entered_sequence,
+        batting_order=row.batting_order,
+        slot_sequence=row.slot_sequence,
+        fielding_position=FieldingPosition.from_label(row.fielding_position),
+    )
+
+
+def game_pitching_of(row: orm_models.GamePitchingLine) -> GamePitching:
+    """投球の明細の行を、試合の中の1人ぶんの投球にする。"""
+    return GamePitching(
+        id=row.id,
+        player_id=row.player_id,
+        line=PitchingLine(
+            innings=InningsPitched.from_notation(row.innings_pitched),
+            **{f: getattr(row, f) for f in _PITCHING_COUNTS},
+            # 1試合の行なので、先発なら1、救援での勝利ならその勝利数
+            starts=1 if row.appearance_order <= 1 else 0,
+            relief_wins=row.wins if row.appearance_order > 1 else 0,
+        ),
+        appearance_order=row.appearance_order,
+        entered_inning=row.entered_inning,
+    )
 
 
 class DjangoLeagueRepository:

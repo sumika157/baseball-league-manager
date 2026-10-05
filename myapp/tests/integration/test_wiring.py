@@ -346,7 +346,7 @@ class ClubServiceScopeTest(SimpleTestCase):
 class PennantRatingsScopeTest(SimpleTestCase):
     """能力の表示は、渡された世界の範囲だけを読む。"""
 
-    SCOPED = ("_teams", "_ratings", "_fixtures", "_context_query")
+    SCOPED = ("_stats", "_ratings", "_fixtures", "_context_query")
 
     def test_every_dependency_is_fixed_to_the_given_world(self):
         service = build_pennant_ratings_service(7)

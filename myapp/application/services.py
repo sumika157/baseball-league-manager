@@ -14,6 +14,7 @@ from django.db import transaction
 
 from ..domain import services as domain_services
 from ..domain.entities import Game, Player, Stint, Team
+from ..domain.exceptions import TeamNotFound
 from ..domain.repositories import GameRepository, LeagueRepository, TeamRepository
 from ..domain.value_objects import (
     FieldingPosition,
@@ -69,6 +70,7 @@ from .dto import (
     YearlyRow,
 )
 from .game_edit import build_header, build_lineup_slots, build_plate_appearances
+from .player_stats_view import stats_player
 from .queries import GameListQuery, PlayerFieldingQuery, PlayerStatsQuery, TeamListQuery
 from .scorebook_view import build_line_score, build_scorebook_grids
 
@@ -89,20 +91,6 @@ def _saved_id(value: int | None) -> int:
 ValueFormatter = Callable[[float], str]
 # ランキング1部門ぶんを DTO に詰める関数。ダッシュボードとタイトル一覧で形が同じ
 ToEntries = Callable[[list[domain_services.RankedPlayer], ValueFormatter], list[RankingEntry]]
-
-
-def _ranking_player(row: ActivePlayerStats) -> Player:
-    """順位づけに渡す選手。ランキングの規則（規定・並び順）はドメインの関数が持つので、
-    それが受け取る形（Player）にだけ合わせる。経歴などは順位づけに使わないので持たせない。
-    """
-    return Player(
-        id=row.player_id,
-        name=row.name,
-        number=JerseyNumber(row.number),
-        position=row.position,
-        batting=row.batting,
-        pitching=row.pitching,
-    )
 
 
 def _to_ranking_entries(
@@ -218,7 +206,7 @@ class TeamApplicationService:
         # 年齢の基準日。実データは暦の今日、ペナントの世界はその世界の「今日」（組み立ての1か所が渡す）
         self._today = today
         # リーグの基準値（FIP 定数・OPS+/ERA+ の平均）は何度も引くため覚えておく
-        self._league_contexts: dict[int, _LeagueContext] = {}
+        self._league_contexts: dict[tuple[int, int | None], _LeagueContext] = {}
 
     # --- 参照系 ---
 
@@ -277,7 +265,7 @@ class TeamApplicationService:
         league_of_team = {_saved_id(team.id): _saved_id(team.league_id) for team in teams}
 
         stats_rows = self._player_stats_query.list_career()
-        all_players = [_ranking_player(row) for row in stats_rows]
+        all_players = [stats_player(row) for row in stats_rows]
         team_of = {row.player_id: (row.team_id, row.team_name) for row in stats_rows}
 
         def to_entries(ranked: list[domain_services.RankedPlayer], formatter: ValueFormatter) -> list[RankingEntry]:
@@ -377,33 +365,52 @@ class TeamApplicationService:
         return [self._to_game_row(g, names) for g in latest]
 
     def get_team_name(self, team_id: int) -> str:
-        return self._teams.find_by_id(team_id).name
+        """球団の名前。画面が球団の存在を確かめるのにも使うので、ロスターと成績を読まない（一覧用の読み方で探す）。"""
+        for team in self._teams.find_all():
+            if team.id == team_id:
+                return team.name
+        raise TeamNotFound(f"チームが見つかりません（id={team_id}）。")
 
-    def list_batters(self, team_id: int, *, sort: str | None = None, descending: bool | None = None) -> Listing:
-        team = self._teams.find_by_id(team_id)
-        batters = [p for p in team.active_players if not p.is_pitcher]
-        players, key, desc = domain_services.sort_batters(batters, sort, descending)
-        captain = team.current_captain
-        context = self._league_context(team.league_id)
+    def _roster(self, team_id: int, year: int | None) -> tuple[list[ActivePlayerStats], list[Player], set[int]]:
+        """球団の選手の一覧の材料。参照クエリから直接読み、集約（`Team`）を組み立てない。
+
+        `year` が None なら在籍中の選手の通算成績、年を渡せばその年に在籍した選手のその年の成績。
+        戻り値は (読んだ行, 一覧に渡す選手, 主将の選手 id)。
+        """
+        rows = self._player_stats_query.list_roster(year=year, team_id=team_id, with_profile=True)
+        return rows, [stats_player(row) for row in rows], {row.player_id for row in rows if row.is_captain}
+
+    def list_batters(
+        self, team_id: int, *, sort: str | None = None, descending: bool | None = None, year: int | None = None
+    ) -> Listing:
+        """球団の野手の成績の一覧。`year` を渡すとその年の成績（ペナントの「今季」）、省くと通算。"""
+        rows, players, captain_ids = self._roster(team_id, year)
+        batters = [p for p in players if not p.is_pitcher]
+        ordered, key, desc = domain_services.sort_batters(batters, sort, descending)
+        context = self._league_context(rows[0].league_id if rows else None, year)
         today = self._today()
         return Listing(
             rows=[
-                self._to_batter_row(p, is_captain=p is captain, league_context=context, today=today) for p in players
+                self._to_batter_row(p, is_captain=p.id in captain_ids, league_context=context, today=today)
+                for p in ordered
             ],
             sort=key,
             descending=desc,
         )
 
-    def list_pitchers(self, team_id: int, *, sort: str | None = None, descending: bool | None = None) -> Listing:
-        team = self._teams.find_by_id(team_id)
-        pitchers = [p for p in team.active_players if p.is_pitcher]
-        players, key, desc = domain_services.sort_pitchers(pitchers, sort, descending)
-        captain = team.current_captain
-        context = self._league_context(team.league_id)
+    def list_pitchers(
+        self, team_id: int, *, sort: str | None = None, descending: bool | None = None, year: int | None = None
+    ) -> Listing:
+        """球団の投手の成績の一覧。`year` の意味は `list_batters` と同じ。"""
+        rows, players, captain_ids = self._roster(team_id, year)
+        pitchers = [p for p in players if p.is_pitcher]
+        ordered, key, desc = domain_services.sort_pitchers(pitchers, sort, descending)
+        context = self._league_context(rows[0].league_id if rows else None, year)
         today = self._today()
         return Listing(
             rows=[
-                self._to_pitcher_row(p, is_captain=p is captain, league_context=context, today=today) for p in players
+                self._to_pitcher_row(p, is_captain=p.id in captain_ids, league_context=context, today=today)
+                for p in ordered
             ],
             sort=key,
             descending=desc,
@@ -437,21 +444,21 @@ class TeamApplicationService:
         （どちらも件数ぶん重くなるだけで、順位には影響しない）。
         """
         teams = self._teams.find_all()
-        all_games = self._game_list_query.list_for_standings()
-        seasons = domain_services.seasons_of(all_games)
+        # 年の選択肢は SQL で調べ、試合は対象の年だけ読む（全シーズンの試合を `Game` として組み立てない）
+        seasons = self._game_list_query.list_seasons(recorded_only=True)
 
         if not seasons:
             return Standings(year=year or 0, leagues=[], available_years=[])
 
-        target = Season(year) if year is not None else seasons[0]
-        season_games = [g for g in all_games if g.season == target]
+        target_year = Season(year).year if year is not None else seasons[0]
+        season_games = self._game_list_query.list_for_standings(year=target_year)
 
         leagues = self._league_standings(teams, season_games, sort, descending)
 
         return Standings(
-            year=target.year,
+            year=target_year,
             leagues=leagues,
-            available_years=[s.year for s in seasons],
+            available_years=seasons,
             sort=sort if sort in self.STANDING_SORT_KEYS else "rank",
             descending=bool(descending) if sort in self.STANDING_SORT_KEYS else False,
         )
@@ -576,19 +583,17 @@ class TeamApplicationService:
         ダッシュボードのランキングは通算成績だが、タイトルはシーズンごとに
         争われるので、こちらは対象シーズンの試合だけから成績を積み直す。
 
-        **チームも試合も集約として組み立てない。** どの年が選べるか・規定の基準になる
-        試合数は明細を読まない一覧で決め、選手の成績は参照クエリが対象シーズンの
-        明細だけを SQL で集計する（集約を経由すると、経歴や数万行の明細まで
-        組み立てて、応答の大半がそこで消えた）。
+        **成績に数える試合は、その年のすべての試合（リーグをまたぐ交流戦も含む。NPB と同じ）。**
+        規定（規定打席・規定投球回）の基準になる試合数も、同じく交流戦を含む球団の試合数。
+        対象の選手は、その年に球団に在籍していた選手（引退した選手も、在籍していた年のタイトルには残る）。
+
+        **チームも試合も集約として組み立てない。** どの年が選べるかは SQL（`list_seasons`）で、
+        規定の基準になる試合数は SQL の集計（`count_by_team`）で決め、選手の成績は参照クエリが
+        対象シーズンの明細だけを SQL で集計する（集約を経由すると、経歴や数万行の明細まで
+        組み立てて、応答の大半がそこで消えた。全シーズンの試合を `Game` として読むこともしない）。
         """
         league = self._leagues.find_by_id(league_id)
-        member_ids = {_saved_id(t.id) for t in self._teams.find_all() if t.league_id == league_id}
-
-        def in_league(game: Game) -> bool:
-            return game.home_team_id in member_ids and game.away_team_id in member_ids
-
-        league_games = [g for g in self._game_list_query.list_for_standings() if in_league(g)]
-        seasons = domain_services.seasons_of(league_games)
+        seasons = self._game_list_query.list_seasons(league_id=league_id, recorded_only=True)
 
         if not seasons:
             return LeagueTitles(
@@ -599,26 +604,23 @@ class TeamApplicationService:
                 departments=[],
             )
 
-        target = Season(year) if year is not None else seasons[0]
+        target_year = Season(year).year if year is not None else seasons[0]
 
-        # 規定の基準になる試合数に、未記録の試合は数えない
-        games_played: dict[int, int] = {}
-        for game in domain_services.recorded_games([g for g in league_games if g.season == target]):
-            for team_id in (game.home_team_id, game.away_team_id):
-                games_played[team_id] = games_played.get(team_id, 0) + 1
+        # 規定の基準になる試合数。未記録の試合は数えない（`count_by_team` が記録済みだけを数える）
+        games_played = self._team_game_counts(target_year)
 
         # そのシーズンの成績だけを持つ選手を参照クエリに作らせる。通算値のままでは
         # 別のシーズンの記録まで混ざってタイトルの対象にならない
-        stats_rows = self._player_stats_query.list_season(league_id, target.year)
-        players = [_ranking_player(row) for row in stats_rows]
+        stats_rows = self._player_stats_query.list_season(league_id, target_year)
+        players = [stats_player(row) for row in stats_rows]
         team_of = {row.player_id: (row.team_id, row.team_name) for row in stats_rows}
         team_games = {row.player_id: games_played.get(row.team_id, 0) for row in stats_rows}
 
         return LeagueTitles(
             league_id=_saved_id(league.id),
             league_name=league.name,
-            year=target.year,
-            available_years=[s.year for s in seasons],
+            year=target_year,
+            available_years=seasons,
             departments=self._title_departments(players, team_of, team_games, leaders),
         )
 
@@ -695,12 +697,13 @@ class TeamApplicationService:
         qualified: bool = False,
         sort: str | None = None,
         descending: bool | None = None,
+        year: int | None = None,
     ) -> LeagueStats:
-        """リーグの成績一覧。所属する全選手の通算成績を1つの表に並べる。
+        """リーグの成績一覧。所属する全選手の成績を1つの表に並べる。
 
-        ダッシュボードのランキング（通算の上位だけ）から全体を確認しに来る
-        場所なので、こちらも通算で揃える。並べ替えの規則はドメイン側にあり、
-        不正なキーは既定の並びに落ちる。
+        既定（`year` を省く）はダッシュボードのランキング（通算の上位だけ）から全体を確認しに来る
+        場所なので通算で揃える。ペナントの世界は `year` を渡して、その年の成績（今季）も見せる。
+        並べ替えの規則はドメイン側にあり、不正なキーは既定の並びに落ちる。
 
         qualified を立てると規定（規定打席・規定投球回）に到達した選手だけに
         絞る。規定の条件はドメインサービスが持つ（タイトルの対象と同じ規則で、
@@ -708,25 +711,25 @@ class TeamApplicationService:
         到達した人数と全体の人数はどちらの状態でも返す。
         """
         league = self._leagues.find_by_id(league_id)
-        teams = self._teams.find_by_league_with_roster(league_id)
-        context = self._league_context(league_id)
+        # 集約（Team）を組み立てず、参照クエリがリーグの選手と成績をまとめて読む
+        all_rows = self._player_stats_query.list_roster(year=year, league_id=league_id, with_profile=True)
+        context = self._league_context(league_id, year, rows=all_rows)
 
         members: list[Player] = []
         home_of: dict[int, tuple[int, str]] = {}
         captains: set[int] = set()
         # 規定は所属チームの試合数で決まるため、選手ごとに引けるようにしておく
-        games_played = self._team_game_counts()
+        games_played = self._team_game_counts(year)
         team_games: dict[int, int] = {}
-        for team in teams:
-            captain = team.current_captain
-            for player in team.active_players:
-                if player.is_pitcher != pitchers:
-                    continue
-                members.append(player)
-                home_of[id(player)] = (_saved_id(team.id), team.name)
-                team_games[_saved_id(player.id)] = games_played.get(_saved_id(team.id), 0)
-                if player is captain:
-                    captains.add(id(player))
+        for row in all_rows:
+            if row.position.is_pitcher != pitchers:
+                continue
+            player = stats_player(row)
+            members.append(player)
+            home_of[id(player)] = (row.team_id, row.team_name)
+            team_games[row.player_id] = games_played.get(row.team_id, 0)
+            if row.is_captain:
+                captains.add(id(player))
 
         reaching = (
             domain_services.qualified_pitchers(members, team_games=team_games)
@@ -997,9 +1000,12 @@ class TeamApplicationService:
         出場していない月を指定された場合は最新の月に落とす（並べ替えのキーと
         同じ扱いで、エラーにはしない）。
         """
-        detail = self.get_player_detail(team_id, player_id)
+        # 球団の集約を読むのは1度だけ（詳細の通算と、経歴・プロフィールの両方をここから作る）
+        team = self._teams.find_by_id(team_id)
+        player = team.find_player(player_id)
+        detail = self._to_detail(team, player, self._league_context(team.league_id))
         names = self._team_names()
-        team_games = self._games.find_by_team(team_id)
+        team_games = self._game_list_query.list_for_player(team_id, player_id)
 
         # 月ごとに束ねてから選んだ月だけを取り出す。行の側で日付を見て絞ると、
         # 表示用の DTO（played_on の型を問わない）に日付の解釈を持ち込むことになる
@@ -1040,7 +1046,6 @@ class TeamApplicationService:
         selected = next((row for row in months if row.key == month), months[-1] if months else None)
         rows = by_month.get(selected.key, []) if selected else []
 
-        player = self._teams.find_by_id(team_id).find_player(player_id)
         profile = player.profile
 
         return PlayerProfile(
@@ -1350,13 +1355,13 @@ class TeamApplicationService:
         """
         return self._game_list_query.count_by_team(year=year)
 
-    def get_team_totals(self, team_id: int) -> TeamTotals:
-        """チームの打撃・投球の合計と、そこから求めた指標。"""
-        team = self._teams.find_by_id(team_id)
-        active = team.active_players
+    def get_team_totals(self, team_id: int, year: int | None = None) -> TeamTotals:
+        """チームの打撃・投球の合計と、そこから求めた指標。`year` を渡すとその年の成績と試合数。"""
+        rows = self._player_stats_query.list_roster(year=year, team_id=team_id)
+        active = [stats_player(row) for row in rows]
         batting = domain_services.team_batting(active)
         pitching = domain_services.team_pitching(active)
-        games = self._team_game_counts().get(team_id, 0)
+        games = self._team_game_counts(year).get(team_id, 0)
 
         return TeamTotals(
             games=games,
@@ -1372,13 +1377,18 @@ class TeamApplicationService:
             innings_pitched=str(pitching.innings),
             required_plate_appearances=domain_services.required_plate_appearances(games),
             required_innings=f"{domain_services.required_outs(games) / 3:.1f}",
-            fip=pitching.fip(self._league_context(team.league_id).fip_constant),
+            fip=pitching.fip(self._league_context(rows[0].league_id if rows else None, year).fip_constant),
         )
 
-    def list_team_monthly_splits(self, team_id: int) -> list[TeamMonthlyRow]:
-        """チームの月別成績。個人の月別成績と対になる、チーム単位の推移。"""
-        team = self._teams.find_by_id(team_id)
-        member_ids = {_saved_id(p.id) for p in team.players}
+    def list_team_monthly_splits(self, team_id: int, year: int | None = None) -> list[TeamMonthlyRow]:
+        """チームの月別成績。個人の月別成績と対になる、チーム単位の推移。
+
+        `year` を渡すと、その年の試合だけを読む（全シーズンの試合の明細を組み立てない）。
+        """
+        if year is None:
+            member_ids = {_saved_id(p.id) for p in self._teams.find_by_id(team_id).players}
+        else:
+            member_ids = {row.player_id for row in self._player_stats_query.list_roster(year=year, team_id=team_id)}
 
         return [
             TeamMonthlyRow(
@@ -1393,28 +1403,36 @@ class TeamApplicationService:
                 whip=split.pitching.whip,
                 strikeouts=split.pitching.strikeouts,
             )
-            for split in domain_services.team_monthly_splits(self._games.find_by_team(team_id), team_id, member_ids)
+            for split in domain_services.team_monthly_splits(
+                self._games.find_by_team(team_id, year=year), team_id, member_ids
+            )
         ]
 
-    def _league_context(self, league_id: int | None) -> _LeagueContext:
+    def _league_context(
+        self, league_id: int | None, year: int | None = None, *, rows: list[ActivePlayerStats] | None = None
+    ) -> _LeagueContext:
         """そのリーグの基準値。リーグ全体の成績から決まるので、リーグを
         知らなければ求められない（未登板と同じ、全て0の基準値を返す）。
+
+        `year` を渡すと、その年の成績から求める（ペナントの「今季」の表の基準）。省くと在籍中の選手の通算。
+        リーグの選手の行を既に読んでいれば `rows` で渡す（読み直さない）。
         """
         if league_id is None:
             return _EMPTY_LEAGUE_CONTEXT
-        if league_id not in self._league_contexts:
-            # 基準はそのリーグの中だけで決まる。他リーグのチームは読まない
-            members = [
-                player for team in self._teams.find_by_league_with_roster(league_id) for player in team.active_players
-            ]
+        key = (league_id, year)
+        if key not in self._league_contexts:
+            # 基準はそのリーグの中だけで決まる。他リーグのチームは読まない。集約は組み立てず、SQL の集計で読む
+            if rows is None:
+                rows = self._player_stats_query.list_roster(year=year, league_id=league_id)
+            members = [stats_player(row) for row in rows]
             batting = domain_services.team_batting(members)
             pitching = domain_services.team_pitching(members)
-            self._league_contexts[league_id] = _LeagueContext(
+            self._league_contexts[key] = _LeagueContext(
                 fip_constant=domain_services.fip_constant(pitching),
                 average_ops=batting.ops,
                 average_era=pitching.earned_run_average,
             )
-        return self._league_contexts[league_id]
+        return self._league_contexts[key]
 
     def _team_names(self) -> dict[int, str]:
         return {_saved_id(t.id): t.name for t in self._teams.find_all()}

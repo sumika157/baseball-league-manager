@@ -34,10 +34,14 @@ from .dto import (
 
 @runtime_checkable
 class PlayerStatsQuery(Protocol):
-    """在籍中の選手の成績の参照。ランキング・タイトルの材料。
+    """球団に在籍する選手の成績の参照。ランキング・タイトル・選手の一覧の材料。
 
     チーム（集約）を経由すると、順位づけに要らない経歴・主将歴・プロフィールまで
     組み立てる。ここでは成績を SQL で集計して、選手ごとの DTO にして返す。
+
+    **在籍は年と期間で引く**: 年 Y に在籍していたのは `from_year <= Y かつ (to_year が空 または Y <= to_year)`
+    の選手（`to_year` は最後に在籍した年で、その年を含む）。引退した選手も、在籍していた年のタイトルや成績に残る。
+    `year` が None なら「いま在籍中」（退団年が空）の選手の通算成績。
     """
 
     def list_career(self) -> list[ActivePlayerStats]:
@@ -45,10 +49,26 @@ class PlayerStatsQuery(Protocol):
         ...
 
     def list_season(self, league_id: int, year: int) -> list[ActivePlayerStats]:
-        """そのリーグで在籍中の選手と、そのシーズンの成績。
+        """そのリーグに `year` に在籍していた選手と、その年の成績。
 
-        成績に数えるのは、リーグのチームどうしの試合だけ（リーグをまたぐ対戦は数えない）。
+        成績に数えるのは、その年の**すべての試合**（リーグをまたぐ交流戦も含む。NPB のタイトルと同じ）。
         チームの表示順、背番号順。
+        """
+        ...
+
+    def list_roster(
+        self,
+        *,
+        year: int | None,
+        team_id: int | None = None,
+        league_id: int | None = None,
+        with_profile: bool = False,
+    ) -> list[ActivePlayerStats]:
+        """球団（`team_id`）またはリーグ（`league_id`）の選手と成績。どちらも None なら世界の全選手。
+
+        `year` が None なら在籍中の選手の通算成績、年を渡せばその年に在籍していた選手のその年の成績
+        （`list_season` と同じ数え方）。球団を指定したときだけ、主将かどうか（`is_captain`）を読む。
+        `with_profile` を立てたときだけ、年齢などの材料（`profile`）を読む（タイトルには要らない）。
         """
         ...
 
@@ -145,8 +165,17 @@ class GameListQuery(Protocol):
         """順位表の計算に渡す試合。成績の明細は持たない。"""
         ...
 
-    def list_seasons(self) -> list[int]:
-        """試合のある年を新しい順に返す。"""
+    def list_for_player(self, team_id: int, player_id: int) -> list[Game]:
+        """そのチームの試合のうち、選手が出場した試合。その選手の打撃・投球の明細だけを持つ（参照専用）。試合日の古い順。"""
+        ...
+
+    def list_seasons(self, *, league_id: int | None = None, recorded_only: bool = False) -> list[int]:
+        """試合のある年を新しい順に返す。
+
+        `league_id` を渡すと、そのリーグのチームが出た試合のある年だけ。
+        `recorded_only` を立てると記録済みの試合だけを数える
+        （タイトルや順位表の年の選択肢。未記録の試合しか無い年は選べない）。全シーズンの試合を組み立てずに年を知るためのもの。
+        """
         ...
 
     def count_by_team(self, *, year: int | None = None) -> dict[int, int]:

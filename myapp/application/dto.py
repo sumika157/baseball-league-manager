@@ -12,15 +12,16 @@ from datetime import date
 from ..domain.pennant.club_plan import PlanSection
 from ..domain.pennant.season import SeasonPhase
 from ..domain.simulation.ratings import RatingEmphasis
-from ..domain.value_objects import BattingLine, FieldingPosition, PitchingLine, Position
+from ..domain.value_objects import BattingLine, FieldingPosition, PitchingLine, Position, Profile
 
 
 @dataclass(frozen=True)
 class ActivePlayerStats:
-    """在籍中の選手1人と、その成績。ランキング・タイトルの材料。
+    """球団に在籍する選手1人と、その成績。ランキング・タイトル・選手の一覧の材料。
 
-    チーム（集約）を組み立てずに、順位づけに要る値だけを読み出す。
-    成績が通算かシーズンかは、読んだ参照クエリの側で決まる。
+    チーム（集約）を組み立てずに、順位づけと一覧に要る値だけを読み出す。
+    在籍の範囲（いま在籍中か、ある年に在籍していたか）と、成績が通算かその年かは、
+    読んだ参照クエリの側で決まる（`PlayerStatsQuery`）。
     """
 
     player_id: int
@@ -29,8 +30,14 @@ class ActivePlayerStats:
     position: Position
     team_id: int
     team_name: str
+    # 球団のリーグ（リーグの基準値を引くのに使う）
+    league_id: int
     batting: BattingLine
     pitching: PitchingLine
+    # 一覧の年齢・身長などの材料と、外国人かどうか（順位づけには使わない）
+    profile: Profile = field(default_factory=Profile)
+    # その範囲で主将だったか（球団の一覧のときだけ読む。それ以外は False）
+    is_captain: bool = False
 
 
 @dataclass(frozen=True)

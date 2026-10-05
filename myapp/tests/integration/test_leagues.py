@@ -262,6 +262,8 @@ class LeagueTitlesViewTest(BaseCase):
         self.assertEqual(departments["saves"].leader.value, "1")
 
     def test_departments_are_scoped_to_the_season(self):
+        # 2025年の試合に出るのは、2025年から在籍している選手（在籍の期間で引く）
+        orm_models.PlayerStint.objects.filter(player_id=self.slugger.id).update(from_year=2025)
         give_batting(
             self.team,
             self.rival,
