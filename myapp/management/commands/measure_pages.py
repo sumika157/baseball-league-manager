@@ -100,6 +100,7 @@ class Command(BaseCommand):
             ("リーグタイトル", f"/league/{league.id}/titles/"),
             ("試合一覧", "/games/"),
             ("試合詳細", f"/games/{game.id}/"),
+            ("戦力分析", f"/team/{team_id}/analysis/"),
         ]
 
     def _profile(self, url: str) -> None:

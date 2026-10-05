@@ -1,0 +1,47 @@
+{% comment %}
+デプス表の1枚（投手側または野手側）。行が区分、列が左右。
+table は DepthTable、row_head は左端の見出し。
+{% endcomment %}
+<div class="table-responsive mb-4">
+  <table class="table depth-table">
+    <thead>
+      <tr>
+        <th>{{ row_head }}</th>
+        <th class="text-end">人数</th>
+        {% for column in table.columns %}<th>{{ column }}</th>{% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in table.rows %}
+      <tr>
+        <th scope="row">{{ row.label }}</th>
+        <td class="text-end tabular-nums">{{ row.count }}</td>
+        {% for cell in row.cells %}
+        <td>
+          {% if cell.players %}
+            <div class="stat-muted tabular-nums mb-1">{{ cell.count }}名</div>
+            <ul class="depth-list list-unstyled mb-0">
+              {% for player in cell.players %}
+              <li>
+                <span class="jersey-number">{{ player.number }}</span>
+                <a href="{% url 'player_detail' analysis.team_id player.player_id %}" class="player-name">{{ player.name }}</a>
+                {% if player.is_foreign_player %}<span class="badge bg-info text-dark">外国人</span>{% endif %}
+                <span class="stat-muted tabular-nums">
+                  {% if player.age is not None %}{{ player.age }}歳{% endif %}
+                  {% if player.games %}
+                    {{ player.position_label }} {{ player.games }}({{ player.starts }})
+                  {% endif %}
+                </span>
+              </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <span class="stat-muted">—</span>
+          {% endif %}
+        </td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

@@ -14,9 +14,28 @@ from typing import Any
 from django.contrib.auth.models import AnonymousUser, User
 from django.db.models import BooleanField, Case, Count, Exists, OuterRef, Q, QuerySet, Sum, Value, When
 
-from ..application.dto import ActivePlayerStats, FieldingRow, GameRow, PlayerFielding, PlayerSearchRow, TeamSummary
+from ..application.dto import (
+    ActivePlayerStats,
+    AnalysisRosterRow,
+    FielderUsage,
+    FieldingRow,
+    GameRow,
+    PitcherUsage,
+    PlayerFielding,
+    PlayerSearchRow,
+    TeamAnalysisFacts,
+    TeamSummary,
+)
 from ..domain.entities import Game, winning_team_id
-from ..domain.value_objects import BattingLine, FieldingLine, PitchingLine, Position, Season
+from ..domain.value_objects import (
+    BattingLine,
+    FieldingLine,
+    FieldingPosition,
+    Handedness,
+    PitchingLine,
+    Position,
+    Season,
+)
 from . import orm_models
 from .repositories import batting_totals, pitching_totals
 
@@ -360,3 +379,88 @@ class DjangoTeamListQuery:
             )
             for row in rows
         ]
+
+
+class DjangoTeamAnalysisQuery:
+    """TeamAnalysisQuery の Django ORM 実装。戦力分析の材料を固定本数のクエリで集める。
+
+    クエリは在籍・野手の出場・投手の登板の3本（年の一覧は別に1本）で、選手の数に
+    比例しない。集約を組み立てず、数えるだけなので明細の行も Python に持ち込まない。
+    """
+
+    def list_years(self, team_id: int) -> list[int]:
+        # 試合数の数え方（count_by_team）と同じく、記録済みの試合だけ。登録しただけの試合は編成に効かない
+        rows = orm_models.Game.objects.filter(recorded_games_filter()).filter(
+            Q(home_team_id=team_id) | Q(away_team_id=team_id)
+        )
+        # 既定の並び（試合日）が DISTINCT に混ざらないよう order_by() で外す
+        return sorted(set(rows.order_by().values_list("year", flat=True)), reverse=True)
+
+    def load(self, team_id: int, year: int) -> TeamAnalysisFacts:
+        # 在籍の期間の意味は Stint.covers と同じ（加入年 <= 年 かつ 退団年が空か 年 <= 退団年）
+        stints = (
+            orm_models.PlayerStint.objects.filter(team_id=team_id, from_year__lte=year)
+            .filter(Q(to_year__isnull=True) | Q(to_year__gte=year))
+            .select_related("player")
+            .order_by("number", "id")
+        )
+        roster: list[AnalysisRosterRow] = []
+        seen: set[int] = set()
+        for stint in stints:
+            if stint.player_id in seen:
+                continue
+            seen.add(stint.player_id)
+            player = stint.player
+            roster.append(
+                AnalysisRosterRow(
+                    player_id=player.id,
+                    name=player.name,
+                    number=stint.number,
+                    position=Position.from_label(player.position),
+                    birth_date=player.birth_date,
+                    throws=Handedness.from_label(player.throws),
+                    bats=Handedness.from_label(player.bats),
+                    is_foreign_player=player.is_foreign_player,
+                )
+            )
+        player_ids = list(seen)
+        if not player_ids:
+            return TeamAnalysisFacts(roster=[], fielder_usage=[], pitcher_usage=[])
+
+        # 野手: 明細の行がチームを持つので、そのチームの出場だけを数える。
+        # スタメンの意味は GameBatting.is_starter（交代の順が0）と同じ
+        fielder_rows = (
+            orm_models.GameBattingLine.objects.filter(team_id=team_id, game__year=year, player_id__in=player_ids)
+            .values("player_id", "fielding_position")
+            .annotate(games=Count("id"), starts=Count("id", filter=Q(slot_sequence=0)))
+            .order_by()
+        )
+        # 投手: 投球の明細はチームを持たない。そのチームの試合（ホームかビジター）で、
+        # その年に在籍した選手の登板を数える近似（`DjangoPlayerFieldingQuery` の年度別と同じ）。
+        # 先発の意味は pitching_totals と同じ（登板順が1以下）
+        pitcher_rows = (
+            orm_models.GamePitchingLine.objects.filter(
+                Q(game__home_team_id=team_id) | Q(game__away_team_id=team_id),
+                game__year=year,
+                player_id__in=player_ids,
+            )
+            .values("player_id")
+            .annotate(games=Count("id"), starts=Count("id", filter=Q(appearance_order__lte=1)))
+            .order_by()
+        )
+        return TeamAnalysisFacts(
+            roster=roster,
+            fielder_usage=[
+                FielderUsage(
+                    player_id=row["player_id"],
+                    position=FieldingPosition.from_label(row["fielding_position"]),
+                    games=row["games"],
+                    starts=row["starts"],
+                )
+                for row in fielder_rows
+            ],
+            pitcher_usage=[
+                PitcherUsage(player_id=row["player_id"], games=row["games"], starts=row["starts"])
+                for row in pitcher_rows
+            ],
+        )

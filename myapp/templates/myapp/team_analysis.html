@@ -1,0 +1,122 @@
+{% extends "myapp/base.html" %}
+
+{% block title %}{% if analysis %}{{ analysis.team_name }}の戦力分析{% else %}戦力分析{% endif %} - Baseball Manager{% endblock %}
+
+{% block content %}
+{% if not analysis %}
+  <nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+      <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>
+      <li class="breadcrumb-item active">戦力分析</li>
+    </ol>
+  </nav>
+  <div class="page-head">
+    <h1 class="page-title">戦力分析</h1>
+  </div>
+  <p class="text-muted">チームがまだ登録されていないため、戦力分析を表示できません。</p>
+{% else %}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>
+    <li class="breadcrumb-item"><a href="{% url 'team_list' %}">チーム一覧</a></li>
+    <li class="breadcrumb-item"><a href="{% url 'player_list' analysis.team_id %}">{{ analysis.team_name }}</a></li>
+    <li class="breadcrumb-item active">戦力分析</li>
+  </ol>
+</nav>
+
+<div class="page-head">
+  <h1 class="page-title">{{ analysis.team_name }}の戦力分析</h1>
+  <p class="page-subtitle">{{ analysis.year }}年の編成 · 投手 {{ analysis.pitchers.count }}名 · 野手 {{ analysis.fielders.count }}名</p>
+</div>
+
+{# 球団の切り替え。JS なしで動くよう GET フォームにし、年度は引き継ぐ #}
+<form method="get" action="{% url 'analysis_index' %}" class="d-flex flex-wrap align-items-center gap-2 mb-3">
+  <label for="analysis-team" class="form-label mb-0">球団</label>
+  <select id="analysis-team" name="team" class="form-select form-select-sm w-auto">
+    {% for option in analysis.teams %}
+      <option value="{{ option.id }}" {% if option.id == analysis.team_id %}selected{% endif %}>{{ option.name }}（{{ option.league_name }}）</option>
+    {% endfor %}
+  </select>
+  <input type="hidden" name="year" value="{{ analysis.year }}" />
+  <input type="hidden" name="tab" value="{{ analysis.tab }}" />
+  <button type="submit" class="btn btn-sm btn-outline-secondary">切り替え</button>
+</form>
+
+{% if analysis.years %}
+  <div class="segmented segmented-scroll">
+    {% for year in analysis.years %}
+      <a class="segmented-item {% if year == analysis.year %}is-active{% endif %}"
+         href="?year={{ year }}&amp;tab={{ analysis.tab }}">{{ year }}年</a>
+    {% endfor %}
+  </div>
+{% else %}
+  <p class="text-muted">このチームにはまだ試合の記録がありません。在籍だけから編成を表示しています。</p>
+{% endif %}
+
+{# タブ。今はデプス表だけで、起用マップ・成績一覧・FA を足していく #}
+<div class="segmented ms-2">
+  {% for tab in analysis.tabs %}
+    <a class="segmented-item {% if tab.key == analysis.tab %}is-active{% endif %}"
+       href="?year={{ analysis.year }}&amp;tab={{ tab.key }}">{{ tab.label }}</a>
+  {% endfor %}
+</div>
+
+{% if analysis.tab == 'depth' %}
+  {% comment %}
+    投手の数字は「登板数(先発数)」、野手は「主な守備位置 出場数(先発数)」。
+    投手かどうかは登録位置で決める。登板・出場はこのチームの試合だけを数える。
+  {% endcomment %}
+  <h2 class="h6 mb-2">投手 <span class="text-muted">{{ analysis.pitchers.count }}名</span></h2>
+  <p class="page-subtitle mb-2" style="font-size: 0.8125rem;">
+    先発は登板のうち半分以上が先発の投手、それ未満が救援。選手名の横は 登板数(先発数)。
+  </p>
+  {% include "myapp/_depth_table.html" with table=analysis.pitchers row_head="役割" %}
+
+  <h2 class="h6 mb-2 mt-4">野手 <span class="text-muted">{{ analysis.fielders.count }}名</span></h2>
+  <p class="page-subtitle mb-2" style="font-size: 0.8125rem;">
+    区分は先発が最多の守備位置（先発が無ければ出場が最多）で決める。選手名の横は 主な守備位置 出場数(先発数)。
+  </p>
+  {% include "myapp/_depth_table.html" with table=analysis.fielders row_head="守備" %}
+
+  <h2 class="h6 mb-2 mt-4">年齢構成</h2>
+  <p class="page-subtitle mb-2" style="font-size: 0.8125rem;">{{ analysis.year }}年4月1日時点の満年齢。</p>
+  <div class="table-responsive mb-4">
+    <table class="table table-hover tabular-nums">
+      <thead>
+        <tr>
+          <th>年齢</th>
+          <th class="text-end">投手</th>
+          <th class="text-end">野手</th>
+          <th class="text-end">計</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in analysis.age_rows %}
+        <tr>
+          <td>{{ row.band }}</td>
+          <td class="text-end">{{ row.pitchers }}</td>
+          <td class="text-end">{{ row.fielders }}</td>
+          <td class="text-end">{{ row.total }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="4" class="text-center text-muted py-4">この年に在籍した選手がいません。</td></tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr class="fw-semibold">
+          <td>平均年齢</td>
+          <td class="text-end">{{ analysis.average_age_pitchers|floatformat:1|default:"—" }}</td>
+          <td class="text-end">{{ analysis.average_age_fielders|floatformat:1|default:"—" }}</td>
+          <td class="text-end">{{ analysis.average_age_all|floatformat:1|default:"—" }}</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+
+  <p class="page-subtitle" style="font-size: 0.8125rem;">
+    選手ごとの成績は <a href="{% url 'player_list' analysis.team_id %}">{{ analysis.team_name }}の選手一覧</a>
+    （通算成績。この年だけの成績ではありません）で見られます。
+  </p>
+{% endif %}
+{% endif %}
+{% endblock %}

@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from ..domain.entities import Game
-from .dto import ActivePlayerStats, GameRow, PlayerFielding, TeamSummary
+from .dto import ActivePlayerStats, GameRow, PlayerFielding, TeamAnalysisFacts, TeamSummary
 
 
 @runtime_checkable
@@ -91,4 +91,21 @@ class GameListQuery(Protocol):
 
     def latest_year(self) -> int | None:
         """最新シーズン。試合が1件も無ければ None。"""
+        ...
+
+
+@runtime_checkable
+class TeamAnalysisQuery(Protocol):
+    """戦力分析（球団×年度の編成）の参照。
+
+    在籍と試合の明細を SQL で集計して材料だけを返す。区分けの規則は
+    ドメイン層（`domain/services/roster_analysis.py`）にあり、ここは数えるだけ。
+    """
+
+    def list_years(self, team_id: int) -> list[int]:
+        """そのチームの記録済みの試合がある年を新しい順に返す。"""
+        ...
+
+    def load(self, team_id: int, year: int) -> TeamAnalysisFacts:
+        """その年にそのチームへ在籍していた選手と、その年の出場・登板の数。"""
         ...

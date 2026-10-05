@@ -17,6 +17,7 @@
   <p class="page-subtitle">
     {% if pos_mode == 'pitcher' %}投手成績{% else %}野手成績{% endif %}
     · {{ players|length }}名
+    · <a href="{% url 'team_analysis' team_id %}">戦力分析</a>
   </p>
 </div>
 

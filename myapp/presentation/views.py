@@ -5,6 +5,7 @@
 """
 
 from datetime import date
+from urllib.parse import urlencode
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -21,6 +22,7 @@ from django.views.generic import CreateView
 from ..application.dto import GameEditData, GameEditPlateAppearance
 from ..application.game_recording import GameRecordingService
 from ..application.services import TeamApplicationService
+from ..application.team_analysis import TeamAnalysisService
 from ..domain.exceptions import (
     DomainError,
     GameNotFound,
@@ -41,6 +43,7 @@ from ..infrastructure.queries import (
     DjangoPlayerFieldingQuery,
     DjangoPlayerSearchQuery,
     DjangoPlayerStatsQuery,
+    DjangoTeamAnalysisQuery,
     DjangoTeamListQuery,
     DjangoTeamPermissionQuery,
 )
@@ -114,6 +117,18 @@ def build_recording_service() -> GameRecordingService:
         games=DjangoGameRepository(),
         teams=DjangoTeamRepository(),
         leagues=DjangoLeagueRepository(),
+    )
+
+
+def build_team_analysis_service() -> TeamAnalysisService:
+    """戦力分析のサービスを組み立てる。
+
+    `build_service()` と同じく**組み立てはここだけ**にする。依存は2つで足りるが、
+    呼ぶ側ごとに一部だけ渡さず、必ずここを通す。
+    """
+    return TeamAnalysisService(
+        team_list_query=DjangoTeamListQuery(),
+        analysis_query=DjangoTeamAnalysisQuery(),
     )
 
 
@@ -660,3 +675,39 @@ class SignUpView(CreateView):
     form_class = UserCreationForm
     template_name = "registration/signup.html"
     success_url = reverse_lazy("login")
+
+
+def _int_param(request, name):
+    """URL の整数パラメータ。無い・読めない値は None（不正値はエラーにせず既定に落とす）。"""
+    value = request.GET.get(name)
+    return int(value) if value and value.isdigit() else None
+
+
+@require_GET
+def analysis_index(request):
+    """戦力分析の入口。球団を選んでいればその球団、無ければ表示順で先頭の球団へ移る。
+
+    球団の切り替えフォーム（JS なしの GET）がここへ `team` と `year` を送る。
+    """
+    service = build_team_analysis_service()
+    team_id = _int_param(request, "team")
+    if team_id is None or not service.has_team(team_id):
+        team_id = service.first_team_id()
+    if team_id is None:
+        return render(request, "myapp/team_analysis.html", {"analysis": None})
+
+    query = {name: request.GET[name] for name in ("year", "tab") if request.GET.get(name)}
+    url = reverse("team_analysis", args=[team_id])
+    return redirect(f"{url}?{urlencode(query)}" if query else url)
+
+
+@require_GET
+def team_analysis(request, team_id):
+    """球団×年度の戦力分析。閲覧だけで、書き込みの導線は無い。"""
+    try:
+        analysis = build_team_analysis_service().get_analysis(
+            team_id, year=_int_param(request, "year"), tab=request.GET.get("tab")
+        )
+    except TeamNotFound:
+        raise Http404("チームが見つかりません。") from None
+    return render(request, "myapp/team_analysis.html", {"analysis": analysis})
