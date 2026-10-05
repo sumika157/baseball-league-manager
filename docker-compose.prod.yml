@@ -1,6 +1,7 @@
 # 本番用の compose（開発用は docker-compose.yml）。使い方は Wiki「本番公開」。
 #
-#   docker compose -f docker-compose.prod.yml up -d --build
+#   docker compose -f docker-compose.prod.yml pull && docker compose -f docker-compose.prod.yml up -d   # CI が置いた GHCR のイメージを使う
+#   docker compose -f docker-compose.prod.yml up -d --build   # VM でビルドする
 #
 # .env に DJANGO_SECRET_KEY・DJANGO_ALLOWED_HOSTS・DJANGO_CSRF_TRUSTED_ORIGINS・CLOUDFLARE_TUNNEL_TOKEN を書く
 # （.env.example の「本番」の節）。
@@ -20,7 +21,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.prod
-    image: baseball-prod
+    # CI が main への push ごとに GHCR へ置く（.github/workflows/ci.yml）。`up -d --build` なら手元のビルドにこの名前が付く
+    image: ghcr.io/sumika157/baseball-league-manager:latest
     container_name: baseball-web
     restart: unless-stopped
     logging: *default-logging
