@@ -78,21 +78,10 @@ def spread_club(
 
     先発向きの投手（スタミナが高い）と救援向きを分けて作る。
     """
-    shared_weight = 0.5
     batters = []
     for number, position in enumerate(_BATTER_POSITIONS, start=1):
-        talent = normal(rng)
-        # 守備位置による傾向: 捕手・遊撃は守備が高め、指名打者は打撃が高めで守備が低い
-        field_bias = {Position.CATCHER: 4.0, Position.INFIELDER: 2.0, Position.OUTFIELDER: 0.0}.get(position, -8.0)
-        bat_bias = 3.0 if position is Position.DESIGNATED_HITTER else 0.0
-        ratings = BatterRatings(
-            contact=_rating(rng, batter_mean + bat_bias + BATTER_ITEM_OFFSET["contact"], sd, talent, shared_weight),
-            power=_rating(rng, batter_mean + bat_bias + BATTER_ITEM_OFFSET["power"], sd, talent, shared_weight),
-            eye=_rating(rng, batter_mean + BATTER_ITEM_OFFSET["eye"], sd, talent, shared_weight),
-            speed=_rating(rng, batter_mean + BATTER_ITEM_OFFSET["speed"], sd, normal(rng), 0.0),
-            fielding=_rating(rng, batter_mean + field_bias, sd, normal(rng), 0.0),
-            growth=GrowthType.NORMAL,
-        )
+        ratings = draw_ratings(rng, mean=batter_mean, sd=sd, position=position)
+        assert isinstance(ratings, BatterRatings)
         batters.append(
             SimBatter(
                 player_id=team_id * 100 + number,
@@ -104,21 +93,57 @@ def spread_club(
 
     pitchers = []
     for number in range(1, _PITCHER_COUNT + 1):
-        talent = normal(rng)
         starter_type = number <= 8
+        ratings = draw_ratings(
+            rng,
+            mean=pitcher_mean,
+            sd=pitcher_sd,
+            position=Position.PITCHER,
+            stamina_mean=62.0 if starter_type else 38.0,
+            stamina_sd=10.0,
+        )
+        assert isinstance(ratings, PitcherRatings)
         pitchers.append(
-            SimPitcher(
-                player_id=team_id * 100 + _PITCHER_OFFSET + number,
-                name=f"{name}投手{number}",
-                ratings=PitcherRatings(
-                    stuff=_rating(rng, pitcher_mean, pitcher_sd, talent, shared_weight),
-                    control=_rating(rng, pitcher_mean, pitcher_sd, talent, shared_weight),
-                    home_run_avoidance=_rating(rng, pitcher_mean, pitcher_sd, talent, shared_weight),
-                    stamina=_rating(rng, 62.0 if starter_type else 38.0, 10.0, normal(rng), 0.0),
-                ),
-            )
+            SimPitcher(player_id=team_id * 100 + _PITCHER_OFFSET + number, name=f"{name}投手{number}", ratings=ratings)
         )
     return ClubRoster(team_id=team_id, name=name, batters=tuple(batters), pitchers=tuple(pitchers))
+
+
+def draw_ratings(
+    rng: GameRandom,
+    *,
+    mean: float,
+    sd: float,
+    position: Position,
+    stamina_mean: float = 50.0,
+    stamina_sd: float = 10.0,
+) -> BatterRatings | PitcherRatings:
+    """ひとりぶんの能力を引く。項目どうしは弱く相関し、守備位置の傾向を持つ。成長型は普通。
+
+    `mean` は能力の平均（野手は打撃の3項目に `BATTER_ITEM_OFFSET` を足し、守備力は位置の傾向を足す）。
+    `spread_club`（調整用の球団）と自動ドラフト（新人）が同じ引き方を通る。**ずれの数字をここ以外に書かない**。
+    投手のスタミナだけ別に決める（先発向きか救援向きかは呼び出し側の関心事）。
+    """
+    shared_weight = 0.5
+    talent = normal(rng)
+    if position.is_pitcher:
+        return PitcherRatings(
+            stuff=_rating(rng, mean, sd, talent, shared_weight),
+            control=_rating(rng, mean, sd, talent, shared_weight),
+            home_run_avoidance=_rating(rng, mean, sd, talent, shared_weight),
+            stamina=_rating(rng, stamina_mean, stamina_sd, normal(rng), 0.0),
+        )
+    # 守備位置による傾向: 捕手・内野手は守備が高め、指名打者は打撃が高めで守備が低い
+    field_bias = {Position.CATCHER: 4.0, Position.INFIELDER: 2.0, Position.OUTFIELDER: 0.0}.get(position, -8.0)
+    bat_bias = 3.0 if position is Position.DESIGNATED_HITTER else 0.0
+    return BatterRatings(
+        contact=_rating(rng, mean + bat_bias + BATTER_ITEM_OFFSET["contact"], sd, talent, shared_weight),
+        power=_rating(rng, mean + bat_bias + BATTER_ITEM_OFFSET["power"], sd, talent, shared_weight),
+        eye=_rating(rng, mean + BATTER_ITEM_OFFSET["eye"], sd, talent, shared_weight),
+        speed=_rating(rng, mean + BATTER_ITEM_OFFSET["speed"], sd, normal(rng), 0.0),
+        fielding=_rating(rng, mean + field_bias, sd, normal(rng), 0.0),
+        growth=GrowthType.NORMAL,
+    )
 
 
 def spread_league(rng: GameRandom, team_count: int, **kwargs: float) -> Sequence[ClubRoster]:

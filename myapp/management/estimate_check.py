@@ -13,14 +13,13 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Iterable, Sequence
-from datetime import date
 from statistics import mean, pstdev
 
 from myapp.application.pennant_world import ForkSource, PennantWorldService
 from myapp.domain.entities import Team
 from myapp.domain.exceptions import DomainError
 from myapp.domain.pennant.ratings import PlayerRatings
-from myapp.domain.pennant.schedule import ScheduleRules, generate_schedule
+from myapp.domain.pennant.schedule import ScheduleRules, default_opening_day, generate_schedule
 from myapp.domain.simulation.engine import simulate_game
 from myapp.domain.simulation.levels import SeasonTally
 from myapp.domain.simulation.manager import ClubRoster, PitchingHistory, SimBatter, SimPitcher, choose_active_roster
@@ -30,7 +29,6 @@ from myapp.domain.value_objects import BattingLine, InningsPitched, PitchingLine
 from myapp.presentation.views import build_pennant_world_service
 
 OUTS_PER_INNING = InningsPitched.OUTS_PER_INNING
-SEASON_START = (3, 29)
 # 外国人の登録枠が空欄（無制限）のリーグで使う上限。分岐元がすでに超えていても動かすため
 DEFAULT_FOREIGN_ROSTER_LIMIT = 4
 
@@ -85,7 +83,7 @@ def format_distribution(ratings: Iterable[PlayerRatings]) -> str:
 # --- 水準の比較 ------------------------------------------------------------------------
 
 
-_LEVEL_LABELS = {
+LEVEL_LABELS = {
     "runs_allowed": "失点（9回あたり）",
     "batting_average": "打率",
     "era": "防御率",
@@ -138,7 +136,7 @@ def league_titles(
     return {row.label: row.value for row in tally.rows()}
 
 
-def _average_titles(per_league: list[dict[str, float]]) -> dict[str, float]:
+def average_titles(per_league: list[dict[str, float]]) -> dict[str, float]:
     return {label: mean(titles[label] for titles in per_league) for label in per_league[0]}
 
 
@@ -196,10 +194,20 @@ def simulate_season(
         _id(league.id): [_id(team.id) for team in teams]
         for league, teams in zip(source.leagues, source.rosters, strict=True)
     }
+    return play_season(rosters, leagues, seed=seed, year=year)
+
+
+def play_season(
+    rosters: dict[int, ClubRoster], leagues: dict[int, list[int]], *, seed: int, year: int
+) -> tuple[dict[int, BattingLine], dict[int, PitchingLine], int, int]:
+    """球団の1軍の登録（`choose_active_roster` を通した後）で1シーズンを回す。
+
+    (選手ごとの打撃, 投球, 試合数, 1球団の試合数)。複数シーズンの確認（`multi_season_check.py`）もここを通る。
+    """
     rules = ScheduleRules()
     schedule_rng = make_random(game_seed(seed, year, "schedule-check"))
     try:
-        fixtures = generate_schedule(leagues, rules, date(year, *SEASON_START), schedule_rng)
+        fixtures = generate_schedule(leagues, rules, default_opening_day(year, rules), schedule_rng)
     except DomainError as error:
         raise ValueError(f"日程を組めません: {error}") from error
 
@@ -244,7 +252,7 @@ def run_check(league_ids: Sequence[int], *, seed: int, year: int, say: Callable[
             summarize(real_batting.values(), real_pitching.values()),
             summarize(batting.values(), pitching.values()),
             "リーグ全体の水準:",
-            _LEVEL_LABELS,
+            LEVEL_LABELS,
         )
     )
     say("")
@@ -257,8 +265,8 @@ def run_check(league_ids: Sequence[int], *, seed: int, year: int, say: Callable[
     labels = {label: label for label in real_titles[0]}
     say(
         format_comparison(
-            _average_titles(real_titles),
-            _average_titles(simulated_titles),
+            average_titles(real_titles),
+            average_titles(simulated_titles),
             f"タイトル争い（{len(source.leagues)}リーグの平均）:",
             labels,
         )

@@ -6,6 +6,9 @@
   NPB の目標帯と並べて出す。基準値（`LeagueBaseline`）の調整に使う。
 - `--from-real-leagues`: 実データのリーグから初期能力を推定し（世界の作成と同じ推定）、その能力で
   1シーズンを回して、元の成績の水準・タイトル争いと並べる。推定した能力の分布も出す。
+- `--from-real-leagues ... --seasons N`: 上に加えて、シーズンの間にオフ（成長・衰え・引退・自動ドラフト。
+  `plan_offseason`）をメモリで回し、N シーズンを続ける。シーズンごとに水準の表・タイトル・年齢と能力の分布・
+  入れ替わり・錨の補正を出す。オフの規則（曲線・引退の倍率）の確認に使う。DB には書かない。
 - `--season`: 能力を散らした12球団（2リーグ6球団ずつ）で、ペナントと同じ日程（`generate_schedule`。
   1球団143試合・全858試合）の1シーズンを回し、水準の表に加えて
   首位打者・本塁打王などのタイトルの水準を出す。β と能力の分布の調整に使う。
@@ -29,6 +32,7 @@ from myapp.domain.simulation.manager import ClubRoster, PitchingHistory, choose_
 from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.samples import average_club, spread_league
 from myapp.management.estimate_check import run_check
+from myapp.management.multi_season_check import run_seasons
 
 DEFAULT_GAMES = 2000
 SAMPLE_YEAR = 2026
@@ -153,11 +157,27 @@ class Command(BaseCommand):
             ),
         )
         parser.add_argument(
+            "--seasons",
+            type=int,
+            default=None,
+            help=(
+                "--from-real-leagues と組んで、N シーズンを続ける（シーズンの間にオフを挟む）。"
+                "分布の推移を読む。DB には書かない"
+            ),
+        )
+        parser.add_argument(
             "--year", type=int, default=SAMPLE_YEAR, help=f"--from-real-leagues の開幕年（既定 {SAMPLE_YEAR}）"
         )
 
     def handle(self, *args, **options):
         seed = options["seed"]
+        if options["seasons"] is not None:
+            if not options["from_real_leagues"]:
+                raise CommandError("--seasons は --from-real-leagues と一緒に指定してください。")
+            if options["seasons"] < 1:
+                raise CommandError("--seasons は1以上を指定してください。")
+            self._run_seasons(seed, options["from_real_leagues"], options["year"], options["seasons"])
+            return
         if options["from_real_leagues"]:
             self._run_estimate_check(seed, options["from_real_leagues"], options["year"])
             return
@@ -193,6 +213,12 @@ class Command(BaseCommand):
         elapsed = time.perf_counter() - started
         self._say(f"{games}試合（能力50の2球団・シード{seed}）  {elapsed / games * 1000:.1f} ms/試合")
         self._say(format_levels("リーグ全体の水準:", tally.rows()))
+
+    def _run_seasons(self, seed: int, league_ids: list[int], year: int, seasons: int) -> None:
+        try:
+            run_seasons(league_ids, seasons=seasons, seed=seed, year=year, say=self._say)
+        except (DomainError, ValueError) as error:
+            raise CommandError(str(error)) from error
 
     def _run_estimate_check(self, seed: int, league_ids: list[int], year: int) -> None:
         try:
