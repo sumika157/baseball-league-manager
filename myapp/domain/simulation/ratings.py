@@ -43,6 +43,15 @@ class GrowthType(Enum):
         return self.value
 
 
+class RatingEmphasis(Enum):
+    """区分の目立たせ方。**どの区分をどう目立たせるかの唯一の出典**で、画面に境目の区分や数値を書かない。"""
+
+    HIGH = "high"  # 強調（S・A）
+    MID = "mid"  # やや強調（B・C）
+    NONE = "none"  # 目立たせない（D）
+    MUTED = "muted"  # 控えめ（E〜G）
+
+
 class RatingGrade(Enum):
     """能力の区分（S〜G）。**区分の境目の唯一の出典**で、画面に表を複製しない。"""
 
@@ -64,6 +73,11 @@ class RatingGrade(Enum):
         """この区分に入る最小の値。G は下限なし（1）。"""
         return _GRADE_FLOORS[self]
 
+    @property
+    def emphasis(self) -> RatingEmphasis:
+        """画面での目立たせ方。S・A は強調、B・C はやや強調、D は無し、E〜G は控えめ。"""
+        return _GRADE_EMPHASIS[self]
+
     @classmethod
     def from_value(cls, value: int) -> RatingGrade:
         """能力値から区分を引く。S（90〜）A（80〜）B（70〜）C（60〜）D（50〜）E（40〜）F（20〜）G（〜19）。"""
@@ -83,6 +97,18 @@ _GRADE_FLOORS = {
     RatingGrade.E: 40,
     RatingGrade.F: 20,
     RatingGrade.G: RATING_MIN,
+}
+
+
+_GRADE_EMPHASIS = {
+    RatingGrade.S: RatingEmphasis.HIGH,
+    RatingGrade.A: RatingEmphasis.HIGH,
+    RatingGrade.B: RatingEmphasis.MID,
+    RatingGrade.C: RatingEmphasis.MID,
+    RatingGrade.D: RatingEmphasis.NONE,
+    RatingGrade.E: RatingEmphasis.MUTED,
+    RatingGrade.F: RatingEmphasis.MUTED,
+    RatingGrade.G: RatingEmphasis.MUTED,
 }
 
 

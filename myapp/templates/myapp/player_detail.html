@@ -121,7 +121,30 @@
       OPS+ はリーグ平均 OPS を100とした指数で、得点環境の違うリーグ・シーズンでも比べられます。
     {% endif %}
   </p>
-</details>
+</details>{% if ratings_card %}
+{% comment %}
+ペナントの世界の選手だけ。区分（S〜G）と強調は domain の RatingGrade が決めた値を受け取って出すだけで、
+境目の数値はここに書かない。成長型は隠し値なので出さない。
+{% endcomment %}
+<div class="card mb-3">
+  <div class="card-header">能力（{{ ratings_card.year }}年度）</div>
+  <div class="card-body">
+    <div class="row g-2">
+      {% for cell in ratings_card.cells %}{% include 'myapp/_stat_readout.html' with label=cell.label rating=cell %}{% endfor %}
+    </div>
+    <details class="mt-3">
+      <summary class="page-subtitle mb-0" style="font-size: 0.8125rem; cursor: pointer;">能力の見方</summary>
+      <p class="page-subtitle mt-2 mb-0" style="font-size: 0.8125rem;">
+        能力は S から G までの区分で示し、右の数値が 1〜100 の実際の値です。50 が1軍の平均で、シミュレーションはこの値だけで結果を決めます。
+        {% if ratings_card.is_pitcher %}
+          球威は奪三振の多さ、制球は与四球の少なさ、一発回避は被本塁打の少なさに効きます。スタミナは先発として長いイニングを投げる力と、救援の連投のしやすさに効きます。
+        {% else %}
+          ミートは三振の少なさと安打の出やすさ、パワーは本塁打と長打の多さ、選球眼は四球の多さ、走力は盗塁と余分な進塁、守備力は失策の少なさに効きます。
+        {% endif %}
+      </p>
+    </details>
+  </div>
+</div>{% endif %}
 
 <div class="row g-3 mb-3">
   {% if profile.has_profile %}

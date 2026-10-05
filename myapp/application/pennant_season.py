@@ -180,6 +180,9 @@ class PennantSeasonService:
         context = self._context_query.load(before=dates[0])
         history = _pitching_history(context)
         teams = {team.team_id: team for team in context.teams}
+        # 能力を引く年。`dates[0]` は最後の試合日より後の未消化の最初の日。消化した日程は試合の保存と
+        # 同じトランザクションで消えるので、日程の最初の日（`FixtureRepository.first_date`）と同じになり、
+        # domain の `ratings_year`（編成・表示が使う規則）と一致する
         pools = self._pools(context, dates[0].year)
         plans = {plan.team_id: plan for plan in self._plans.find_all()}
         clubs: dict[int, ResolvedClub] = {}

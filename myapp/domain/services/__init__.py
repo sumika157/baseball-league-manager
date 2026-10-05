@@ -80,12 +80,19 @@ from .scoring import (
     team_of_players,
 )
 from .sorting import (
+    BATTER_RATING_SORT_KEYS,
     BATTER_SORT_KEYS,
     DEFAULT_BATTER_SORT,
     DEFAULT_PITCHER_SORT,
+    DEFAULT_RATING_SORT,
+    PITCHER_RATING_SORT_KEYS,
     PITCHER_SORT_KEYS,
+    RatedBatter,
+    RatedPitcher,
     sort_batters,
     sort_pitchers,
+    sort_rated_batters,
+    sort_rated_pitchers,
 )
 
 __all__ = [
@@ -109,9 +116,16 @@ __all__ = [
     "BATTER_SORT_KEYS",
     "DEFAULT_BATTER_SORT",
     "DEFAULT_PITCHER_SORT",
+    "BATTER_RATING_SORT_KEYS",
+    "DEFAULT_RATING_SORT",
+    "PITCHER_RATING_SORT_KEYS",
     "PITCHER_SORT_KEYS",
+    "RatedBatter",
+    "RatedPitcher",
     "sort_batters",
     "sort_pitchers",
+    "sort_rated_batters",
+    "sort_rated_pitchers",
     # records
     "MatchupRow",
     "MonthlySplit",

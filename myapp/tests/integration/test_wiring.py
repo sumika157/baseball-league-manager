@@ -18,6 +18,7 @@ from django.test import SimpleTestCase
 from myapp.application.club_management import ClubManagementService
 from myapp.application.game_recording import GameRecordingService
 from myapp.application.pennant_home import PennantHomeService
+from myapp.application.pennant_ratings import PennantRatingsViewService
 from myapp.application.pennant_season import PennantSeasonService
 from myapp.application.pennant_view import PennantWorldViewService
 from myapp.application.pennant_world import PennantWorldService
@@ -62,6 +63,7 @@ from myapp.infrastructure.repositories import (
 from myapp.presentation.views import (
     build_club_service,
     build_pennant_home_service,
+    build_pennant_ratings_service,
     build_pennant_season_service,
     build_pennant_world_service,
     build_pennant_world_view,
@@ -167,6 +169,9 @@ class BuildServiceTest(SimpleTestCase):
 
     def test_club_service_dependencies_are_wired(self):
         self._assert_wired(build_club_service(7), ClubManagementService)
+
+    def test_pennant_ratings_service_dependencies_are_wired(self):
+        self._assert_wired(build_pennant_ratings_service(7), PennantRatingsViewService)
 
     def _assert_wired(self, service, cls):
         parameters = [name for name in signature(cls.__init__).parameters if name != "self"]
@@ -332,3 +337,23 @@ class ClubServiceScopeTest(SimpleTestCase):
         for bad in (0, -1, True):
             with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
                 build_club_service(bad)
+
+
+class PennantRatingsScopeTest(SimpleTestCase):
+    """能力の表示は、渡された世界の範囲だけを読む。"""
+
+    SCOPED = ("_teams", "_ratings", "_fixtures", "_context_query")
+
+    def test_every_dependency_is_fixed_to_the_given_world(self):
+        service = build_pennant_ratings_service(7)
+        for name in self.SCOPED:
+            with self.subTest(dependency=name):
+                self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
+
+    def test_a_different_world_gets_a_different_scope(self):
+        self.assertEqual(build_pennant_ratings_service(8)._ratings._scope, WorldScope.pennant(8))
+
+    def test_the_real_data_has_no_ratings_service(self):
+        for bad in (0, -1, True):
+            with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
+                build_pennant_ratings_service(bad)
