@@ -328,6 +328,213 @@
 
 上書きの中身が無効になったら（登録を抹消した選手がオーダーにいる、など）、その日は自動に落とし、ホームで知らせます。エラーで進行を止めません。不正なソートキーを既定の並びに落とす規則と同じ扱いです。
 
+### 3.6 オフ（P6）
+
+> **案（2026-10-05）。** 11. の判断19〜29（と6の再確認）は**ユーザーの回答待ち**。回答が出たら、この節の推奨を確定に書き換える。
+
+#### なぜ
+
+1シーズンで終わると、育成や世代交代という GM の楽しみがありません。シーズンを締めると、選手が成長・衰え・引退し、自動ドラフトで新人が入ります。そこまでを1つの操作にまとめて、翌年へ続けられるようにします。オフは状態として持たず、在籍・能力・日程から導きます。
+
+#### やること / やらないこと
+
+| やること | |
+| --- | --- |
+| シーズンを締める操作（1トランザクション） | 引退 → ドラフト → 翌年の能力 → 編成の後始末 → 翌年の日程 |
+| 年齢による成長・衰え | 成長型（早熟・普通・晩成）と項目ごとの差 |
+| 引退 | 年齢・能力・出場機会・外国人かどうかで決まる。在籍を閉じる |
+| 自動ドラフト | 各球団2〜8人。ロスターは34人を目安に補充する。外国人も枠の内側で補充する |
+| 名前・プロフィールの生成を domain に切り出す | `seed_virtual_players` と共有する |
+| シーズン数の上限 | 1世界10シーズン（判断24） |
+| 画面 | GM ホームの「シーズンを締める」、オフの結果のページ、選手ページの能力の推移 |
+
+| やらないこと | 理由 |
+| --- | --- |
+| GM による引退の引き止め・ドラフトの指名 | 締める前に「オフの準備」という段階（候補の保存・GM の選択待ち）が要り、進行の状態が1つ増える。初期範囲は自動だけにする（判断19・20。拡張は #55） |
+| トレード・FA・年俸・育成枠・契約年数 | 2. のとおり（#40）。退団の経路は「引退」だけ |
+| 2軍の成績に基づく成長 | 2軍の試合が無い（2.）。成長は年齢・成長型・乱数で決める |
+| 成長の結果やオフの結果の保存 | 締める前後の能力・在籍から導ける。保存すると出典が2つになる |
+| ポストシーズン・表彰（新人王など） | 2. のとおり |
+
+#### 1. シーズンを締める操作
+
+##### いつ出せるか（保存せず導く）
+
+3.4 の「進行の状態は持たない」の表を次に置き換えます。日程と試合だけでは「翌年の開幕前」と「シーズン中」を見分けられないので、**最後の試合の年と、次の対戦の年を比べます**。
+
+| 状態 | 導き方 |
+| --- | --- |
+| いまの年度 | 次の対戦の年。無ければ最後に試合をした年。どちらも無ければ開幕年。P4c の `ratings_year` と同じ規則で、**唯一の出典として共有する**（P6a で `season_year` に改名するか、`ratings_year` をそのまま呼ぶ） |
+| 開幕前 | 未消化の対戦があり、試合が無いか、最後の試合がその年より前 |
+| シーズン中 | 未消化の対戦があり、最後の試合がその年 |
+| シーズン終了（オフ） | 未消化が無く、試合がある |
+| Y年を締めたか | **Y+1 の能力の行がある**（締める処理だけが作る。消えない事実なので、後から読む「オフの結果」の判定にも使う） |
+| 今日 | 消化した最後の試合日（P4a のまま）。締めた後、翌年の開幕前は前年の最終日が今日になる |
+| 最終シーズンか | `いまの年度 − 開幕年 + 1 == MAX_SEASONS_PER_WORLD` |
+
+- 締められるのは「シーズン終了」で、かつ最終シーズンでないとき。
+- 局面の関数は `season_phase(*, last_played_on, next_fixture_on)` に変える。`WorldSummary.has_pending_fixtures` は `next_fixture_on: date | None` に置き換える（世界ごとの最小の対戦日を GROUP BY の1クエリで読む）。**今の `season_phase(has_played, fixtures_pending)` と GM ホームの `year = world.today.year` は年をまたぐことを想定しておらず、直さないと締めた直後に「シーズン中」・前年の年度と出る（P6b で直す）**
+
+##### 処理の順序
+
+`PennantOffseasonService.close_season(*, expected_year)`。締める年 Y は最後の試合の年。
+
+1. **検査**（書く前）: 未消化の対戦が残っている → `SeasonNotFinished`。次の対戦が Y+1、または Y+1 の能力がある → `AlreadyClosed`。`expected_year`（画面の hidden）が Y と違う → `AlreadyClosed`。最終シーズン → `SeasonLimitReached`。メッセージは日本語（例「2027年のシーズンは既に締めています。」）
+2. **読む**: 全球団の `Team` 集約（`find_all_with_roster()`。在籍の変更は集約で行う）、Y の能力（`find_by_year(Y)`）、Y の出場機会（新しい参照クエリ。打席数とアウト数）、リーグの外国人枠、編成の上書き（`ClubPlanRepository.find_all()`）
+3. **計算する**（domain の純粋な関数 `plan_offseason(...)`。DB に触れない）: 引退を決める → 球団ごとの新人を決める（人数・登録位置・外国人・名前・背番号・プロフィール・能力）→ 残る選手の能力を1年ぶん進める → 残る選手と新人をまとめて項目ごとに分布の錨をかける
+4. **書く**（1つの `atomic`。組み立て口が `transaction.atomic` を渡す）: 球団ごとに `team.retire_player(player, year=Y)` → `team.add_player(name, number, position, from_year=Y+1)` ＋プロフィール → 外国人を足した球団だけ `team.ensure_foreign_player_quota(limit)` → `teams.save(team)`。`ratings.add_all(残る選手と新人の Y+1)`。引退した選手を含む編成の区画を自動に戻して保存（判断26）。`fixtures.add_all(season_schedule(..., year=Y+1))`
+5. **返す**: `SeasonClosed`（年・引退した人数・新人の人数・自軍で自動に戻した区画）
+
+- 引退を先に行い、在籍を Y で閉じてから新人を Y+1 から加入させる（引退した選手の背番号を新人へ渡せ、期間の重なる同番号にならない。`Team._ensure_number_is_available` は現在の在籍だけを見る）
+- **年を省略した `retire_player()` / `add_player()` を呼ばない**（省くと現実の今日の年が入る。3.2 の既存の罠）
+
+##### 1トランザクション・二重実行の防止
+
+途中で失敗したら何も残さない。計算は書く前に全部済ませる。
+
+| 経路 | 防ぎ方 |
+| --- | --- |
+| 二重送信・戻るボタン | hidden の `expected_year`。ずれていれば何もせず「既に締めています」を `messages` に出し、オフの結果へ |
+| 同時に2回 | 検査はトランザクションの中で読み直す。すり抜けても Y+1 の能力の一意制約（`unique_pennant_ratings_player_year`）で後から来た方が失敗し、新人や在籍の変更ごと巻き戻る。**この一意制約が最後の砦**なので外さない |
+| コマンドと画面 | 同じサービス（管理コマンド `pennant_close_season --world <id>`） |
+
+##### 所要時間の見積り（P6b で実測して 12. に書く）
+
+| 処理 | 2リーグ 12球団 約400人 | 8リーグ 48球団 約1,600人 | 根拠 |
+| --- | --- | --- | --- |
+| 集約の読み込み | 0.3〜0.5秒 | 1〜2秒 | 世界の作成（3.0秒） |
+| 計算（引退・ドラフト・能力・錨） | 0.05秒 | 0.2秒以内 | 推定と散らばりの調整が 1,619人で 0.14秒（P2b） |
+| `Team` の保存 | 0.5〜1秒 | 2〜3秒 | 世界の作成の保存部分 |
+| 能力の一括保存（約1,800行） | 0.05秒 | 0.15秒 | P2b の `add_all` |
+| 日程の生成と保存 | 0.03秒 | 0.13秒 | P4b の実測 |
+| **合計** | **1〜1.5秒** | **4〜6秒** | |
+
+シーズンを重ねると、引退した選手も集約に読み込まれ `save()` が全選手を書き直すので遅くなる（8リーグ10シーズン目で約2倍の見込み）。P6b で1回目と3回目を測り、8リーグで10秒を超えたら (a) `save()` に差分検出を足す、(b) 締める処理用に通算成績を集計しないロスターの読み方を足す、を選択肢として出す（実測してから決める）。世界の球団の画面も同じ理由で遅くなりうるので、3シーズン回した世界で測る。
+
+#### 2. 年齢と、成長・衰えの規則
+
+##### 年齢
+
+- **締める年 Y の4月1日時点の満年齢**で Y→Y+1 の変化を決める。既存の `initial_ratings.age_at_season_start(profile, Y)` を共有する。年齢は保持しない
+- **生年月日の無い選手**: domain に `estimated_birth_date(profile, start_year) -> date`（入団年があれば「入団年 − 22 年の7月1日」、無ければ「開幕年 − 27 年の7月1日」。乱数なし）。分岐（`fork_roster`）で空なら補い、補う前に作った世界のために締める処理でも補う
+
+##### 年齢曲線（普通型の、1年あたりの変化の期待値。単位は能力の点。標準偏差は約8.5点）
+
+| 年齢 a | 〜19 | 20〜21 | 22〜23 | 24〜25 | 26〜27 | 28〜29 | 30〜31 | 32〜33 | 34〜35 | 36〜37 | 38〜 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 変化 b(a) | +4.0 | +3.5 | +2.5 | +1.5 | +0.5 | 0 | −1.0 | −2.0 | −3.0 | −4.0 | −5.0 |
+
+**成長型**: 早熟は `b(a + 2)` で伸び（正の値）を 1.25 倍、晩成は `b(a − 2)` で伸びを 0.8 倍。
+
+**項目ごとの差**（曲線を `b(a − s)` で読み、伸びを g 倍、衰えを d 倍）:
+
+| 項目 | s | g | d | 傾向 |
+| --- | --- | --- | --- | --- |
+| ミート | 0 | 1.0 | 1.0 | 基準 |
+| パワー | +1 | 1.0 | 0.9 | 頂点がやや遅い |
+| 選球眼 | +3 | 0.7 | 0.5 | 遅くまで伸び、衰えはゆるい |
+| 走力 | −3 | 0.8 | 1.4 | 最も早く衰える |
+| 守備力 | −1 | 1.0 | 1.1 | 走力の次に早い |
+| 球威 | −2 | 1.0 | 1.3 | 球速は早く落ちる |
+| 制球 | +2 | 0.8 | 0.6 | 遅くまで伸びる |
+| 一発回避 | 0 | 1.0 | 1.0 | 基準 |
+| スタミナ | 0 | 0.5 | 0.8 | 動きが小さい |
+
+- 乱数は選手ごとの共通のぶれ N(0, 1.2) と項目ごとのぶれ N(0, 1.5) の和（`randomness.normal`。`random()` だけを使う）。75 以上の項目は伸びを 0.5 倍。四捨五入して 1〜100 に収める。成長型は変えず翌年の行に写す
+- **乱数の種**: `game_seed(世界のシード, Y+1, f"aging-{選手の id}")`。世界の中の選手の id で引く（分岐元の id は使わない。成長型だけが分岐元の id で引くのは、作成時に世界の id がまだ無いため）
+
+##### 水準の錨（判断25）
+
+成長・衰えを1年ぶん進めた後、**残る選手と新人の全員を母集団にして `spread.spread_ratings()` をそのままかける**（項目ごと・野手 / 投手ごとに平均と標準偏差を `samples.py` の目標＝野手 44.5 / 8.5、投手 45.0 / 8.0 に戻す。スタミナは対象外、30人未満の区分は触らない）。
+
+- 能力の尺度は「50 = 1軍の平均」という相対の定義で、エンジンはこの分布の上で調整してある。曲線だけで毎年保つのは難しく、毎年のぶれは標準偏差を年4%ほど広げる
+- 一次式なので順位は変わらない。錨の補正の大きさを P6a の母集団のテストで ±1点以内に収まることを確かめ、収まらなければ曲線を直す（錨で大きな歪みを隠さない）
+
+##### 年齢分布を3シーズン保つための根拠
+
+開発用 DB の現役 1,619人は平均年齢 27.8歳・標準偏差 3.8・最年長 41歳、35歳以上 3.5%、22歳以下 7.5%。年齢の平均が保たれる条件は `入れ替わりの割合 × (引退の平均年齢 − 新人の平均年齢) ≈ 1歳`。新人の平均約22歳・引退の平均約31歳で、**入れ替わりは約10.5%**（1球団34人で年3〜4人、8リーグで年約180人）。下の引退の表を開発用 DB の年齢分布にかけると入れ替わり 8.4%・引退の平均 31.3歳（外国人の乗数込みで約9.5%）。P6a の母集団のテストで全体の倍率を 10〜12% に合わせる。
+
+#### 3. 引退の規則
+
+`retirement_chance(*, age, value, playing_time, is_foreign, seasons_in_world) -> float` に、乱数（`game_seed(シード, Y, f"retire-{id}")` の `random()` 1回）を当てる。
+
+| 年齢 a | 〜23 | 24〜26 | 27〜29 | 30〜32 | 33〜34 | 35〜36 | 37〜38 | 39〜40 | 41〜 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 基本の確率 | 1% | 3% | 6% | 11% | 22% | 38% | 55% | 75% | 100% |
+
+| 乗数 | 値 |
+| --- | --- |
+| 能力（総合値 v。野手は `batting_value`、投手は `pitching_value`。捕手は守備力と打撃の大きい方） | `exp(−0.10 × (v − 45))` を 0.3〜3.0 に収める |
+| 出場機会（Y の1軍） | 主力（300打席以上、または 240アウト以上）は 0.5 倍。出場なしで 25歳以上は 1.5 倍 |
+| 外国人 | 2.0 倍（画面の表記は「退団」） |
+| 入団2年以内で24歳以下 | 0.3 倍 |
+| 上限 | 0.95（41歳以上の強制を除く） |
+
+- 出場機会は Y の試合の明細を SQL で集計した値（`SeasonPlayingTimeQuery.for_year(Y)`）
+- **在籍の閉じ方**: `Team.retire_player(player, year=Y)`（在籍の退団年が Y、`Player.is_active` が偽、主将なら解任。既存の集約の規則）。引退した選手は世界に残る（閉じた在籍で世界に属す）
+- 人数の下限（捕手が足りない等）は引退の側では見ない。ドラフトが補う
+
+#### 4. 自動ドラフト
+
+- 1球団の目安は **34人**（`ROSTER_TARGET`。仮想データの平均 33.7人）。新人の数は `clamp(34 − 残った人数, 2, 8)`。40人（`MAX_ROSTER`）を超えない
+- 登録位置: 残った構成を `largest_remainder(34, POSITION_RATIOS)` の目標と比べ、不足の大きい位置から埋める。最低限 投手15・捕手3・内野手6・外野手5
+- 外国人: 目標 `min(リーグの登録枠, 4)` 人。不足を年2人まで新人の枠から外国人にする。**登録枠に達している球団には足さない**（分岐元の枠超過は是正しない）。外国人は捕手にしない
+- 新人の年齢と能力（錨の前、Y の尺度。標準偏差 6）: 高校（日本人の30%・18歳・平均35）、大学（50%・22歳・40）、社会人（20%・23〜26歳・43）、外国人（補充枠・25〜31歳・50）。項目の偏りは `samples.py` の項目のずれと守備位置の傾向を使い、`samples.spread_club` の引き方を公開の `draw_ratings(rng, *, mean, sd, position)` に切り出して共有する。投手のスタミナは先発型 55% を N(55, 8)、救援型を N(36, 8)。成長型は既存の `draw_growth_type`。新人の質は球団の順位によらず同じ（判断21）
+- 背番号: 引退の後の現在の在籍が使っていない 1〜99 から乱数で。尽きたら 100〜999。検査は `Team.add_player()` に任せる
+- **名前とプロフィールの生成を domain に切り出す**（`myapp/domain/virtual_players/`。Django を import しない）: `pools.py`（姓名・外国人・出身地・学校のプール。seed から移す）、`generator.py`（`pick(rng, items)`＝`rng.random()` だけを使う選択、`japanese_name` / `foreign_name`（`used_names` を避ける）、`amateur_career`、`birth_date_for`、`physique`、`handedness`、`back_name`、`largest_remainder`）、定数（`POSITION_RATIOS`＝キーは `Position`・`PHYSIQUE_RANGES`・`FOREIGN_PLAYER_RATIO`・`MIN_ROSTER`・`MAX_ROSTER`）。`seed_virtual_players` はこれを import する（**同じ `--seed` で作られる名前は変わる**。開発用 DB は作り直さないので実害はないが PR に書く。`test_seed_virtual_players.py` の `mock.patch.object` のパッチ先は domain に直す）
+- 名前の重複は世界の全選手（引退した選手を含む）を `used_names` にして避ける。背ネームは、その球団の現在の選手と苗字が重なる新人だけ「頭文字.苗字」（既存の選手のプロフィールは書き換えない）
+- 新人のプロフィール: 生年月日・投打・身長と体重・出身地・入団年 = Y+1・学校・国籍・よみがな・背ネーム・外国人フラグ。乱数は球団ごとに `game_seed(シード, Y+1, f"draft-{球団の id}")`、球団の id の順に処理
+- **編成の手動の区画（判断26）**: 引退した選手を含む区画だけ、締めるときに自動に戻し、`SeasonClosed` とオフの結果で知らせる（今の規則のままだと、永久に戻らない理由で翌シーズン中ずっと注意が出続ける）。domain に `ClubPlan.release(player_ids) -> tuple[ClubPlan, tuple[PlanSection, ...]]`
+
+#### 5. 翌年の能力・日程・シーズン数の上限・世界の削除
+
+- **翌年の能力**: 残る選手と新人の Y+1 の行を `RatingsRepository.add_all` の1回で足す。引退した選手には作らない。Y 以前の行は残す（年ごとの推移）。Y の能力が無い選手は Y+1 も作らず件数を知らせる（例外で止めない）
+- **翌年の日程**: domain に `season_schedule(leagues, *, world_seed, year, rules=ScheduleRules()) -> list[Fixture]`（開幕日は `default_opening_day(year)`、乱数は `game_seed(シード, year, "schedule")`）。`ensure_schedule()`（開幕年）と締める処理（Y+1）が同じ関数を通る
+- **シーズン数の上限**: `MAX_SEASONS_PER_WORLD = 10`（`domain/pennant/world.py`）。10年目のシーズンは締められない（`SeasonLimitReached`）。画面にはボタンを出さず理由を出す
+- **世界の削除**: 変更なし（引退した選手も閉じた在籍で世界に属し、能力の行も選手から消える）。締めた世界の削除テストを1本足す
+
+#### 6. 画面
+
+| URL | 画面 | GET | POST | 段階 |
+| --- | --- | --- | --- | --- |
+| `/pennant/<w>/season/close/` | シーズンを締める | 無し（ホームへ） | オーナーだけ | P6c |
+| `/pennant/<w>/offseason/<year>/` | Y年のオフの結果 | 誰でも。締めていない年は 404 | 無し | P6c |
+| `/pennant/<w>/team/<id>/player/<id>/` | 選手ページに「能力の推移」 | 誰でも | 無し | P6c |
+
+- **GM ホーム**: シーズン終了でオーナーだけに、進めるボタンと同じ場所に「シーズンを締める」（「引退・ドラフト（各球団2〜8人）・成長と衰えを済ませ、2028年の日程を作ります。元に戻せません。」。hidden の `expected_year`）。進めるボタンとは局面で分かれ、同時には出ない。最終シーズンは `alert-secondary` で理由。締めた後の開幕前は、自軍の帯に「開幕まで N 日」と前年の順位、「2027年のオフの結果」へのリンク。締めたら `messages` に「2027年のシーズンを締めました（引退 N人・新人 N人）。」を出してオフの結果へ
+- **オフの結果**（スポーツナビの「戦力外・引退」「ドラフト指名」の一覧の形）: 見出し「2027年オフ（2028年シーズンへ）」、自軍（引退・新人・自動に戻した区画・全選手の能力の変化を差の大きい順）、引退・退団（`?league=` で切り替え）、新人（球団・背番号・選手・年齢・位置・経路・能力の要約）、成長と衰えの大きかった選手（上位10人ずつ）。列ソートなし。既存の CSS だけ
+- **選手ページの能力の推移**: P4c の能力のカードの下に、年度・年齢・球団・各項目（「B 74」）・総合の表。引退した選手は最後の年に「（最終年）」
+
+#### 7. 層ごとの変更
+
+- **domain**: `virtual_players/`（新）、`pennant/aging.py`（`expected_change`・`age_ratings`）、`pennant/retirement.py`（`PlayingTime`・`retirement_chance`・`MAX_PLAYING_AGE = 41`）、`pennant/draft.py`（`ROSTER_TARGET` など・`DraftRoute`＝経路の選択肢の唯一の出典・`Draftee`・`draft_class`）、`pennant/offseason.py`（`plan_offseason`・`rating_change`）、`pennant/season.py`（新しい `season_phase`・`season_year`・`closing_year`）、`pennant/world.py`（`MAX_SEASONS_PER_WORLD`）、`pennant/schedule.py`（`season_schedule`）、`pennant/club_plan.py`（`ClubPlan.release`）、`pennant/fork.py`（生年月日の補完）、`simulation/samples.py`（`draw_ratings` を公開）、`exceptions.py`（`SeasonNotFinished`・`AlreadyClosed`・`SeasonLimitReached`）。既存の集約は変更なし
+- **application**: `pennant_offseason.py`（新。`PennantOffseasonService`＝更新。**`PennantSeasonService` には足さない**、判断29）、`pennant_offseason_view.py`（新。`OffseasonViewService`＝参照だけ）、`pennant_season.py`（`ensure_schedule` を `season_schedule` 経由に）、`pennant_home.py`・`pennant_view.py`（年度を `season_year`、局面を新しい `season_phase`）、`queries.py`（`SeasonPlayingTimeQuery`・`OffseasonQuery`・`WorldSummary.next_fixture_on`）、`dto.py`（`SeasonClosed`・`SeasonCloseOption`・`OffseasonSummary` など）
+- **infrastructure**: `DjangoSeasonPlayingTimeQuery`・`DjangoOffseasonQuery`（集計か `values()`。新しい多段の prefetch は作らない）、`pennant_close_season` コマンド（新）、`simulate_sample --seasons N`（DB に書かず、シーズンの間に `plan_offseason` をメモリで回す）、`seed_virtual_players`（domain から import）。リポジトリは変更なし
+- **presentation**: `build_pennant_offseason_service(world_id)`・`build_offseason_view_service(world_id)`（`test_wiring` に足す）、ビュー `pennant_close_season`（POST）・`pennant_offseason`（GET）、テンプレート `pennant/_season_close.html`・`pennant/offseason.html`・`_ratings_history.html`
+
+#### 8. データとマイグレーション
+
+- **マイグレーションは無し。** 締めたか・引退・新人・成長は、在籍・プロフィール・能力の行から導く
+- `origin_player_id`（判断6）は P6 でも持たない
+- 1シーズンで増える行（8リーグ）: 選手と在籍が約180ずつ・能力が約1,800・日程が3,432（消化で消える）
+- P6 の前に作った世界も締められる
+
+#### 9. テスト計画
+
+- **domain**: `test_virtual_players.py`（同じ乱数で同じ名前・重複しない・`random()` 以外を呼ばない）、`test_aging.py`（年齢の数え方・成長型の順序・項目ごとの衰えの速さ・上限・錨の後の分布と順位）、`test_retirement.py`（41歳は必ず・単調性・外国人2倍・若手の保護・上限）、`test_draft.py`（人数・位置の補充と最低限・外国人の枠・背番号・経路ごとの年齢）、**`test_offseason_population.py`**（合成した48球団 × 34人を10年回し、平均年齢 27〜29・標準偏差 3.3〜4.5・35歳以上 2〜8%・22歳以下 5〜15%・入れ替わり 9〜13%・人数 28〜40・錨の補正 ±1点以内。1秒以内。3シーズンの検査の代わり）、`test_pennant_season.py`・`test_club_plan.py`・`test_schedule.py` の拡張
+- **integration**: `test_pennant_offseason.py`（締めた後の在籍・背番号・能力・日程・局面、2回目は何も増えない、未消化・`expected_year`・最終シーズン、手動の区画、外国人の枠、途中の失敗で何も残らない、同じ結果の再現、削除）、`test_pennant_advance.py`（締めた後に1日進めると新人が出られる）、`test_pennant_offseason_screens.py`、`test_world_isolation.py`・`test_wiring.py` の拡張、`test_seed_virtual_players.py` のパッチ先
+- **3シーズン回して確かめる**（手動の計測。12. に記録）: `simulate_sample --from-real-leagues 1 2 --seasons 3`（2リーグで約30秒、8リーグで約3分）と、開発用 DB のコピーで作成 → シーズン終了まで進める → 締める を3回
+
+#### 10. 見送り・縮小の選択肢
+
+| 案 | 内容 | 失うもの | 再開の条件 |
+| --- | --- | --- | --- |
+| 縮小: 成長なし | 引退とドラフトだけ | 育成の楽しみ | 推奨しない |
+| 縮小: 画面なし | 締めるのは管理コマンドだけ（P6c を省く） | ブラウザだけで翌年へ進めない | — |
+| 見送り: GM の引き止め・指名・ウェーバー・育成枠 | 判断19〜21 | GM の介入の幅 | 自動のオフを数シーズン遊んで「自分で選びたい」と言われたら（#55） |
+| 見送り: 支配下70人 | 判断22 | 2軍の層 | 2軍の試合を入れる段階 |
+| 見送り: シーズン数の上限の緩和 | 判断24 | 長期の世界 | 10シーズン回した世界の実測に余裕があれば |
+
 ---
 
 ## 4. 層ごとの変更
@@ -713,7 +920,9 @@ P2 の前後（同じ DB）で `measure_pages` を測ります。P3 で1シー�
 | **P3** | `feature/pennant-schedule` | `generate_schedule`、`Fixture`、`PennantSeasonService.advance`、`GameRepository.add_all`、`SimulationContextQuery`、`pennant_advance` コマンド | コマンドで1シーズンを最後まで回せる。858試合の所要時間と、1日・1週間の所要時間を記録して画面の上限を決める。世界の順位・タイトルが NPB らしい | domain の schedule、integration の advance | `PennantFixture` |
 | **P4** | `feature/pennant-screens` | 6. の画面（世界の一覧・作成、GM ホーム、進める、世界の範囲の参照画面） | ブラウザで世界を作ってシーズンを進め、順位とボックススコアを読める | integration の screens、e2e のスモーク | なし |
 | **P5** | `feature/club-plan` | `ClubPlan`・`ClubManagementService`・編成画面（自動と手動は排他） | GM が1軍とオーダーを変えると、翌日の試合に反映される | domain の club_plan、integration の club_screen | `PennantClubPlan` ほか |
-| **P6** | `feature/pennant-offseason` | シーズンを締める（成長・衰え・引退・自動ドラフト・翌年の能力・翌年の日程）。新人の名前の生成を `seed_virtual_players` から共有できる形に切り出す | 3シーズン続けて回しても、年齢の分布と水準が崩れない | domain の aging、integration の締め処理 | （`origin_player_id` を採るなら） |
+| **P6a** | `feature/offseason-rules` | domain の `virtual_players/`（seed から切り出す。seed は import に変える）・`aging`・`retirement`・`draft`・`offseason`（`plan_offseason`）・`samples.draw_ratings`・`estimated_birth_date`（分岐で補う）。`simulate_sample --seasons N` | **`simulate_sample --from-real-leagues 1 2 --seasons 3` で3シーズンの水準・年齢・能力の分布を読める**。母集団のテストが10年で帯の内側に入る。seed のテストが通る。曲線・引退の倍率の最終値を 12. に記録する | domain の virtual_players・aging・retirement・draft・offseason_population、integration の seed_virtual_players | なし |
+| **P6b** | `feature/season-close` | `PennantOffseasonService.close_season`・`season_schedule`・新しい `season_phase` / `season_year`（ホーム・世界バー・世界の一覧・編成の年度）・`ClubPlan.release`・`SeasonPlayingTimeQuery`・`MAX_SEASONS_PER_WORLD`・`pennant_close_season` コマンド・`build_pennant_offseason_service` | **コマンドで「1シーズン進める → 締める」を3回繰り返せる**。世界バーとホームが翌年の開幕前を正しく出す（ボタンはまだ無い）。締める時間を2リーグと8リーグ、1回目と3回目で測って 12. に記録する（8リーグで10秒以内でなければ 3.6 の (a)(b) を選択肢として出す） | domain の season・club_plan・schedule、integration の pennant_offseason・advance（拡張）・wiring | なし |
+| **P6c** | `feature/offseason-screens` | ホームの「シーズンを締める」・POST のビュー・オフの結果のページ・選手ページの能力の推移・開幕前の前年の順位とリンク・最終シーズンの表示・`OffseasonViewService`・`OffseasonQuery`・Wiki | **ブラウザだけで「締める → 結果を読む → 翌年を1日進める」が回る**。リンクが世界の外に出ない | integration の offseason_screens・world_isolation（拡張）・wiring | なし |
 | （任意） | `feature/seed-on-engine` | `seed_virtual_games` をエンジンに寄せ、確率モデルの実装を1つにする（実データの全再生成を伴う） | 実データの水準の表が P6b と同等 | 既存の `test_seed_virtual_games.py` | なし |
 
 各段階は実装・テスト・ドキュメントを1コミットにまとめます。PR の base は `epic/pennant-mode`（P0 だけ main）です。段階の区切りごとに `git merge origin/main` で main を取り込みます。
@@ -742,6 +951,18 @@ P2 の前後（同じ DB）で `measure_pages` を測ります。P3 で1シー�
 | 16 | CLAUDE.md への規則の追加 | 8. の2項目を足す / 足さない | 足す |
 | 17 | seed をエンジンに寄せる | 寄せる（全再生成を伴う）/ 2つの確率モデルを並べて残す | 寄せる（最後の任意の段階で） |
 | 18 | 初期範囲 | P1〜P6 / 縮小1（〜P4）/ 縮小2（〜P5） | **P1〜P6**（判断1が A のため） |
+| 6（再確認） | 分岐元への参照（`origin_player_id`） | 持つ / 持たない | **持たない**（P6 でも不要。成長の乱数は世界の中の id で引く） |
+| 19 | 引退を GM が引き止められるか | A 自動だけ / B 自軍の選手を引き止め・引退勧告できる | **A**（B は締める前に候補の保存と GM の選択待ちの段階が要る。#55 で足せる） |
+| 20 | ドラフト | A 自動だけ / B 自軍だけ GM が候補から指名 | **A**（B は候補の生成・保存・指名の画面で P6 が倍になる） |
+| 21 | 新人の質と前年の順位 | A 均等 / B 順位の逆順に良い新人（ウェーバー風） | **A**（まず均等で戦力の偏りを見る。B は後から足せる） |
+| 22 | 新人の数とロスター | A 34人に戻すよう2〜8人 / B 毎年4人固定 / C NPB 並みの支配下70人 | **A**（人数が収束し年齢の平均も保てる。C は行数も時間も倍で2軍の試合が無い） |
+| 23 | 外国人の補充 | A 枠の内側で4人を目安に年2人まで / B 補充しない | **A**（外国人は退団しやすく、B だと数年でいなくなる） |
+| 24 | 1世界のシーズン数の上限 | A 10シーズン / B 試合数の予算（2リーグ40・8リーグ10）/ C 無制限 | **A**（判断15の見積りに合う。実測で余裕があれば上げる） |
+| 25 | 能力の水準の錨 | A 毎年、平均と標準偏差を目標に戻す / B 平均だけ / C 錨なし | **A**（尺度は相対で、エンジンはこの分布で調整してある。順位は保たれる） |
+| 26 | 引退した選手を含む手動の区画 | A その区画だけ自動に戻して知らせる / B 手動のまま / C 締めたら全区画を自動に戻す | **A**（B は注意が1年中出続け、C は GM の選んだ編成まで消す） |
+| 27 | オフの結果の見せ方 | A 専用ページ / B ホームの上部 | **A**（引退・新人・成長の3つの表で量が多い。過去の年も開ける） |
+| 28 | 締める前の確認 | A ボタン1つ＋「元に戻せません」 / B 確認画面 | **A**（「進める」と同じ前向きの一方通行。二重送信は `expected_year` で防ぐ） |
+| 29 | 締める処理の置き場所 | A 新しい `PennantOffseasonService` / B `PennantSeasonService` に足す | **A**（進行は試合の生成、締めるのは集約の書き換えで依存も検査も違う） |
 
 ---
 
