@@ -199,7 +199,8 @@
       </tr>
       {% empty %}
       <tr>
-        <td colspan="12">
+        {# 見出しの列数に揃える（共通5列＋野手13列／投手16列、担当者には編集列が1つ足される） #}
+        <td colspan="{% if pos_mode == 'pitcher' %}{% if can_edit_team %}22{% else %}21{% endif %}{% else %}{% if can_edit_team %}19{% else %}18{% endif %}{% endif %}">
           <div class="empty-state">
             {% if pos_mode == 'pitcher' %}投手{% else %}野手{% endif %}がまだ登録されていません。
           </div>
