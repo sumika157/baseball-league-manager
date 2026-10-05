@@ -1184,6 +1184,8 @@ class PlanNotice:
     on: date
     section: PlanSection
     reason: str
+    # False なら区画は自動に落とさず、効かない理由を知らせるだけ
+    falls_back: bool = True
 
 
 @dataclass(frozen=True)
@@ -1338,6 +1340,8 @@ class ClubLimitsView:
     foreign_game_limit: int | None
     lineup_size: int
     rotation_size: int
+    min_rotation_size: int
+    min_active_pitchers: int
     # オーダーで選べる守備位置（画面に出す順）
     lineup_positions: tuple[FieldingPosition, ...]
 
@@ -1359,6 +1363,8 @@ class ClubPlanNotice:
 
     section: PlanSection
     reason: str
+    # False なら区画は自動に落とさず、効かない理由を知らせるだけ
+    falls_back: bool = True
 
 
 # --- ペナントの編成画面（P5b） ---

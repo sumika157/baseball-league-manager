@@ -20,6 +20,7 @@ from myapp.application.dto import PitchingOuting, SimulationContext
 from myapp.domain.pennant.club_plan import LineupChoice
 from myapp.domain.pennant.schedule import AdvanceTarget
 from myapp.domain.pennant.world import WorldScope
+from myapp.domain.simulation.manager import MIN_ACTIVE_PITCHERS, MIN_ROTATION_SIZE
 from myapp.domain.value_objects import FieldingPosition
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoClubPlanRepository, DjangoFixtureRepository
@@ -239,8 +240,8 @@ class RoundTripTest(ClubScreenCase):
     def test_rotation_round_trip(self):
         self.client.force_login(self.owner)
         self.post("rotation", "manual")
-        chosen = list(reversed(self.view().rotation_ids))[:3]
-        fields = {f"rotation_{order}": (chosen[order - 1] if order <= 3 else "") for order in range(1, 7)}
+        chosen = list(reversed(self.view().rotation_ids))[:5]
+        fields = {f"rotation_{order}": (chosen[order - 1] if order <= 5 else "") for order in range(1, 7)}
 
         self.assertRedirects(self.post("rotation", "save", **fields), self.club_url("pitching"))
 
@@ -331,8 +332,22 @@ class InvalidInputTest(ClubScreenCase):
         response = self.post("rotation", "save", **{f"rotation_{order}": "" for order in range(1, 7)})
 
         self.assertEqual(response.status_code, 400)
-        self.assertIn("1人もいません", response.content.decode())
+        self.assertIn("5人以上", response.content.decode())
         self.assertEqual(self.view().rotation_ids, saved)
+
+    def test_a_rotation_below_the_minimum_is_refused_and_keeps_the_input(self):
+        self.client.force_login(self.owner)
+        self.post("rotation", "manual")
+        saved = self.view().rotation_ids
+        chosen = list(reversed(saved))[:4]
+        fields = {f"rotation_{order}": (chosen[order - 1] if order <= 4 else "") for order in range(1, 7)}
+
+        response = self.post("rotation", "save", **fields)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("5人以上", response.content.decode())
+        self.assertEqual(self.view().rotation_ids, saved, "保存されない")
+        self.assertEqual([s.player_id for s in response.context["rotation_slots"] if s.player_id], chosen)
 
     def test_a_closer_that_is_not_a_pitcher_is_refused(self):
         self.client.force_login(self.owner)
@@ -469,6 +484,87 @@ class NoticesTest(ClubScreenCase):
         self.assertLess(content.index("plan-notices"), content.index("進める</div>"))
 
 
+class AdvisoryNoticeTest(ClubScreenCase):
+    """外国人の抑えが出場枠で投げられない注意は、区画を自動に落とさない。画面は「自動編成になります」と言わない。"""
+
+    def setup_blocked_foreign_closer(self):
+        view = self.view()
+        self.service.set_lineup(self.home_a.id, [LineupChoice(r.player_id, r.position) for r in view.lineup])
+        closer = view.bullpen_ids[-1]
+        self.service.set_closer(self.home_a.id, closer)
+        orm_models.Player.objects.filter(id__in=[*(r.player_id for r in view.lineup[:3]), closer]).update(
+            is_foreign_player=True
+        )
+        orm_models.League.objects.filter(world_id=self.world_a).update(
+            foreign_player_roster_limit=None, foreign_player_game_limit=3
+        )
+
+    def test_the_club_tab_says_the_closer_stays_manual(self):
+        self.setup_blocked_foreign_closer()
+
+        content = self.get_as_owner("pitching").content.decode()
+
+        self.assertIn("外国人の抑え", content)
+        self.assertIn("投げられません", content)
+        self.assertIn("外国人でない投手を抑えに手動で指定するか", content, "直し方を添える")
+        self.assertNotIn("自動編成になります", content)
+        self.assertTrue(self.view().closer_is_manual, "区画は手動のまま")
+        self.assertFalse(self.view().notices[0].falls_back)
+
+    def test_the_home_does_not_say_the_closer_becomes_automatic(self):
+        self.setup_blocked_foreign_closer()
+
+        self.client.force_login(self.owner)
+        content = self.client.get(self.home_url()).content.decode()
+
+        self.assertIn('id="plan-notices"', content)
+        self.assertIn("外国人の抑え", content)
+        self.assertNotIn("自動編成になります", content)
+
+    def test_a_section_that_really_falls_back_still_says_so(self):
+        view = self.view()
+        self.service.set_lineup(self.home_a.id, [LineupChoice(r.player_id, r.position) for r in view.lineup])
+        self.service.set_active_roster(
+            self.home_a.id, [pid for pid in view.active_ids if pid != view.lineup[3].player_id]
+        )
+
+        self.client.force_login(self.owner)
+        content = self.client.get(self.home_url()).content.decode()
+
+        self.assertIn("いま進めると自動編成になります", content)
+
+
+class ThinSquadTest(ClubScreenCase):
+    """在籍選手でも守備位置を埋められない球団は、選手層の不足として案内する（AI の選び方の問題とは分ける）。"""
+
+    def remove_the_outfielders(self):
+        ids = orm_models.PlayerStint.objects.filter(team=self.home_a).values_list("player_id", flat=True)
+        orm_models.Player.objects.filter(id__in=ids, position="外野手").update(position="内野手")
+
+    def test_starting_a_manual_lineup_explains_the_thin_squad(self):
+        self.client.force_login(self.owner)
+        self.remove_the_outfielders()
+
+        response = self.post("lineup", "manual")
+
+        self.assertEqual(response.status_code, 400)
+        content = response.content.decode()
+        self.assertIn("この球団には", content)
+        self.assertIn("守れる野手がいません", content)
+        self.assertIn("選手層", content)
+        self.assertTrue(self.plan().is_empty)
+
+    def test_starting_a_manual_active_roster_explains_the_thin_squad(self):
+        self.client.force_login(self.owner)
+        self.remove_the_outfielders()
+
+        response = self.post("active", "manual")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("選手層", response.content.decode())
+        self.assertTrue(self.plan().is_empty)
+
+
 class LimitsAndCountsTest(ClubScreenCase):
     def test_the_counts_and_the_limits_come_from_the_domain(self):
         view = self.view()
@@ -480,6 +576,20 @@ class LimitsAndCountsTest(ClubScreenCase):
         self.assertGreaterEqual(view.counts.catchers, 1)
         self.assertEqual(view.limits.lineup_size, 9)
         self.assertEqual(len(view.limits.lineup_positions), 9)
+
+    def test_the_minimums_come_from_the_domain_and_are_shown(self):
+        self.client.force_login(self.owner)
+        self.service.set_rotation(self.home_a.id, self.view().rotation_ids)
+
+        active = self.client.get(self.club_url("active")).content.decode()
+        pitching = self.client.get(self.club_url("pitching")).content.decode()
+
+        limits = self.view().limits
+        self.assertEqual(
+            (limits.min_rotation_size, limits.min_active_pitchers), (MIN_ROTATION_SIZE, MIN_ACTIVE_PITCHERS)
+        )
+        self.assertIn(f"投手（{MIN_ACTIVE_PITCHERS}人以上）", active)
+        self.assertIn(f"{MIN_ROTATION_SIZE}〜{limits.rotation_size}人を選びます", pitching)
 
     def set_foreign_limit(self, limit):
         orm_models.League.objects.filter(id=self.home_a.league_id).update(foreign_player_roster_limit=limit)
@@ -574,7 +684,7 @@ class SavedOverridesAreTheStartingPointTest(ClubScreenCase):
 
     def test_an_unusable_rotation_and_active_roster_open_with_the_saved_values(self):
         view = self.view()
-        rotation = list(view.rotation_ids[:3])
+        rotation = list(view.rotation_ids[:5])
         self.service.set_rotation(self.home_a.id, rotation)
         kept = [pid for pid in view.active_ids if pid != rotation[0]]
         self.service.set_active_roster(self.home_a.id, kept)

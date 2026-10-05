@@ -16,9 +16,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from typing import TypeVar
 
 from ..exceptions import InvalidRoster
 from ..services.decisions import SAVE_LEAD_LIMIT
@@ -33,6 +34,8 @@ ACTIVE_PITCHERS = 14
 MIN_ACTIVE_CATCHERS = 2
 LINEUP_SIZE = 9
 ROTATION_SIZE = 6
+# 手動のローテーションの下限（AI の6人より1人少ない5人まで。これを割ると同じ先発に登板が偏りすぎる）
+MIN_ROTATION_SIZE = ROTATION_SIZE - 1
 # 前回の先発から空ける日数。「中5日」は間に5日挟む＝6日後の登板
 MIN_DAYS_BETWEEN_STARTS = 6
 # 前の2日続けて投げた投手は、3連投になるので投げさせない
@@ -51,6 +54,8 @@ BULLPEN_DECAY = 0.85
 # 大差（この点差以上）の試合は、序列の低い投手で消化する
 BLOWOUT_LEAD = 5
 SETUP_PITCHERS = 2
+# 1軍の投手の下限。ローテーションの下限・抑え1人・セットアップを賄える人数
+MIN_ACTIVE_PITCHERS = MIN_ROTATION_SIZE + 1 + SETUP_PITCHERS
 
 # 先発・救援が受け持つ打者数の目安（スタミナ50のとき）と、スタミナ1点あたりの増減、ばらつき
 STARTER_BATTERS = 24.0
@@ -98,6 +103,21 @@ _PLAYABLE: dict[Position, frozenset[FieldingPosition]] = {
     Position.OUTFIELDER: frozenset({FP.LEFT_FIELD, FP.CENTER_FIELD, FP.RIGHT_FIELD}),
     Position.DESIGNATED_HITTER: frozenset({FP.FIRST_BASE, FP.LEFT_FIELD, FP.RIGHT_FIELD}),
 }
+
+
+# 守備に就く8つの枠（指名打者は誰でも就けるので含めない）
+FIELD_SLOTS: tuple[FieldingPosition, ...] = (
+    FP.CATCHER,
+    FP.FIRST_BASE,
+    FP.SECOND_BASE,
+    FP.THIRD_BASE,
+    FP.SHORTSTOP,
+    FP.LEFT_FIELD,
+    FP.CENTER_FIELD,
+    FP.RIGHT_FIELD,
+)
+
+T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -235,11 +255,60 @@ def regular_value(batter: SimBatter) -> float:
     return (1.0 - weight) * batter.ratings.batting_value + weight * batter.ratings.fielding
 
 
-def plays_position(batter: SimBatter, position: FieldingPosition) -> bool:
-    """その選手の登録位置が、守備位置に就ける位置か（指名打者の枠は誰でも就ける）。"""
+def can_play(registered: Position, position: FieldingPosition) -> bool:
+    """登録位置の選手が、守備位置に就ける位置か（指名打者の枠は誰でも就ける）。AI と GM の編成で共通の規則。"""
     if position is FP.DESIGNATED_HITTER:
         return True
-    return position in _PLAYABLE[batter.position]
+    return position in _PLAYABLE.get(registered, frozenset())
+
+
+def assign_fielders(
+    players: Sequence[T],
+    position_of: Callable[[T], Position],
+    *,
+    keep: Mapping[FieldingPosition, T] | None = None,
+) -> dict[FieldingPosition, T]:
+    """守備の8つの枠に、`can_play` で就ける選手を割り当てる（最大の割り当て）。
+
+    `keep` は今の割り当て。就ける位置にいる選手は最初にそこへ置き、割り当ての無い選手だけを
+    増加路で足す（動くのは必要な人だけ）。就ける選手のいない枠は結果に入らない。
+    """
+    owners: dict[FieldingPosition, T] = {}
+    for slot, player in (keep or {}).items():
+        if slot in FIELD_SLOTS and slot not in owners and can_play(position_of(player), slot):
+            owners[slot] = player
+
+    def place(player: T, seen: set[FieldingPosition]) -> bool:
+        # 先に空いている位置を探す（座っている選手を動かすのは、空きが無いときだけ）
+        for slot in FIELD_SLOTS:
+            if slot not in owners and can_play(position_of(player), slot):
+                owners[slot] = player
+                return True
+        for slot in FIELD_SLOTS:
+            if slot in seen or not can_play(position_of(player), slot):
+                continue
+            seen.add(slot)
+            if place(owners[slot], seen):
+                owners[slot] = player
+                return True
+        return False
+
+    seated = list(owners.values())
+    for player in players:
+        if not any(player is other for other in seated):
+            place(player, set())
+    return owners
+
+
+def unfilled_slot(batters: Sequence[SimBatter]) -> FieldingPosition | None:
+    """野手では埋められない守備の枠（最初のひとつ）。全部埋められれば None。"""
+    owners = assign_fielders(batters, lambda b: b.position)
+    return next((slot for slot in FIELD_SLOTS if slot not in owners), None)
+
+
+def plays_position(batter: SimBatter, position: FieldingPosition) -> bool:
+    """その選手の登録位置が、守備位置に就ける位置か（指名打者の枠は誰でも就ける）。"""
+    return can_play(batter.position, position)
 
 
 # --- 1軍登録 ---
@@ -270,7 +339,9 @@ def choose_active_roster(pool: ClubRoster, foreign_roster_limit: int | None = No
         chosen_pitchers, chosen_batters = _within_foreign_roster(
             chosen_pitchers, chosen_batters, pitchers_by_value, batters_by_value, foreign_roster_limit
         )
-    chosen_batters = _with_minimum_catchers(chosen_batters, batters_by_value, foreign_roster_limit)
+    foreign_pitchers = sum(p.is_foreign for p in chosen_pitchers)
+    chosen_batters = _with_minimum_catchers(chosen_batters, batters_by_value, foreign_roster_limit, foreign_pitchers)
+    chosen_batters = _with_fielding_coverage(chosen_batters, batters_by_value, foreign_roster_limit, foreign_pitchers)
 
     return ClubRoster(
         team_id=pool.team_id,
@@ -332,15 +403,19 @@ def _within_foreign_roster(
 
 
 def _with_minimum_catchers(
-    batters: list[SimBatter], batters_by_value: list[SimBatter], foreign_roster_limit: int | None
+    batters: list[SimBatter],
+    batters_by_value: list[SimBatter],
+    foreign_roster_limit: int | None,
+    foreign_pitchers: int = 0,
 ) -> list[SimBatter]:
     """捕手が足りなければ、控えの捕手を入れて、捕手でない最も低い野手と替える。
 
-    外国人の登録枠を超えないように、外国人の捕手は枠に空きがあるときだけ入れる。
+    外国人の登録枠（1軍全体。投手を含む）を超えないように、外国人の捕手は枠に空きがあるときだけ入れる。
+    `foreign_pitchers` は1軍に入れる外国人の投手の数。
     """
     batters = list(batters)
     while sum(b.position is Position.CATCHER for b in batters) < MIN_ACTIVE_CATCHERS:
-        foreign_now = sum(b.is_foreign for b in batters)
+        foreign_now = sum(b.is_foreign for b in batters) + foreign_pitchers
         spare = next(
             (
                 b
@@ -356,6 +431,47 @@ def _with_minimum_catchers(
             break
         batters.remove(min(replaceable, key=regular_value))
         batters.append(spare)
+    return batters
+
+
+def _with_fielding_coverage(
+    batters: list[SimBatter],
+    batters_by_value: list[SimBatter],
+    foreign_roster_limit: int | None,
+    foreign_pitchers: int = 0,
+) -> list[SimBatter]:
+    """守備の8つの枠を野手で埋められなければ、足りない位置を守れる控えを入れて、替えても埋まる数が増える野手と替える。
+
+    能力順に選ぶと、外野手が少ないときなどに手動のオーダー（登録位置が就ける位置だけ）を組めない1軍になる。
+    埋まっている1軍は変えない。在籍選手を全員入れても埋まらないときは、今の結果のまま。
+    外国人の登録枠は1軍全体（投手を含む）で数える。
+    """
+    batters = list(batters)
+
+    def covered(group: list[SimBatter]) -> int:
+        return len(assign_fielders(group, lambda b: b.position))
+
+    while covered(batters) < len(FIELD_SLOTS):
+        base = covered(batters)
+        swapped = False
+        for spare in (b for b in batters_by_value if b not in batters):
+            for out in sorted(batters, key=regular_value):
+                trial = [b for b in batters if b is not out] + [spare]
+                foreign = sum(b.is_foreign for b in trial) + foreign_pitchers
+                if foreign_roster_limit is not None and foreign > foreign_roster_limit:
+                    continue
+                if sum(b.position is Position.CATCHER for b in trial) < min(
+                    MIN_ACTIVE_CATCHERS, sum(b.position is Position.CATCHER for b in batters)
+                ):
+                    continue
+                if covered(trial) > base:
+                    batters = trial
+                    swapped = True
+                    break
+            if swapped:
+                break
+        if not swapped:
+            break
     return batters
 
 

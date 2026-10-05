@@ -92,6 +92,11 @@ class FieldingPosition(Enum):
         return self.value
 
     @property
+    def full_name(self) -> str:
+        """文中に出す名前（「遊」ではなく「遊撃手」）。1文字のラベルは表の見出し用。"""
+        return _FIELDING_FULL_NAMES[self]
+
+    @property
     def is_substitute_only(self) -> bool:
         """守備に就かず、代打・代走としてのみ出場したか。"""
         return self in (FieldingPosition.PINCH_HITTER, FieldingPosition.PINCH_RUNNER)
@@ -133,6 +138,21 @@ class FieldingPosition(Enum):
         """守備に就く位置だけ。スタメンの選択肢に使う。"""
         return [item.value for item in cls if not item.is_substitute_only]
 
+
+_FIELDING_FULL_NAMES = {
+    FieldingPosition.PITCHER: "投手",
+    FieldingPosition.CATCHER: "捕手",
+    FieldingPosition.FIRST_BASE: "一塁手",
+    FieldingPosition.SECOND_BASE: "二塁手",
+    FieldingPosition.THIRD_BASE: "三塁手",
+    FieldingPosition.SHORTSTOP: "遊撃手",
+    FieldingPosition.LEFT_FIELD: "左翼手",
+    FieldingPosition.CENTER_FIELD: "中堅手",
+    FieldingPosition.RIGHT_FIELD: "右翼手",
+    FieldingPosition.DESIGNATED_HITTER: "指名打者",
+    FieldingPosition.PINCH_HITTER: "代打",
+    FieldingPosition.PINCH_RUNNER: "代走",
+}
 
 # Base の値は塁の順序そのもの（大小比較が「進んだか」の判定になる）ため数値にしてある。
 # 表示用の名前は数値から引く。

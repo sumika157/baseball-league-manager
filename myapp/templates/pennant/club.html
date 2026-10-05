@@ -34,7 +34,7 @@
   {% endif %}
 
   {% for notice in tab_notices %}
-    <div class="alert alert-warning">「{{ notice.section }}」の上書きが使えないため、進めるとこの区画は自動編成になります。理由: {{ notice.reason }}</div>
+    <div class="alert alert-warning">{% if notice.falls_back %}「{{ notice.section }}」の上書きが使えないため、進めるとこの区画は自動編成になります。理由: {% else %}「{{ notice.section }}」: {% endif %}{{ notice.reason }}</div>
   {% endfor %}
   {% if error %}
     <div class="alert alert-danger">{{ error }}</div>

@@ -77,7 +77,7 @@ class RepositoryTest(ClubPlanCase):
         proposal = service.propose(self.home_a.id)
         lineup = list(reversed(self.lineup_of(proposal)))
         service.set_lineup(self.home_a.id, lineup)
-        service.set_rotation(self.home_a.id, list(proposal.rotation_ids[:3]))
+        service.set_rotation(self.home_a.id, list(proposal.rotation_ids[:5]))
         pitcher_ids = [pid for pid in proposal.active_ids if pid not in proposal.rotation_ids]
         service.set_closer(self.home_a.id, pitcher_ids[-1])
         service.set_active_roster(self.home_a.id, list(proposal.active_ids))
@@ -85,7 +85,7 @@ class RepositoryTest(ClubPlanCase):
         plan = DjangoClubPlanRepository(WorldScope.pennant(self.world_a)).find_by_team(self.home_a.id)
 
         self.assertEqual(plan.lineup, tuple(lineup))
-        self.assertEqual(plan.rotation, tuple(proposal.rotation_ids[:3]))
+        self.assertEqual(plan.rotation, tuple(proposal.rotation_ids[:5]))
         self.assertEqual(plan.closer_id, pitcher_ids[-1])
         self.assertEqual(set(plan.active_ids or ()), set(proposal.active_ids))
 
@@ -101,7 +101,7 @@ class RepositoryTest(ClubPlanCase):
         service = self.service_a
         proposal = service.propose(self.home_a.id)
         service.set_lineup(self.home_a.id, self.lineup_of(proposal))
-        service.set_rotation(self.home_a.id, [proposal.rotation_ids[0]])
+        service.set_rotation(self.home_a.id, list(proposal.rotation_ids[:5]))
         self.assertEqual(orm_models.PennantClubPlan.objects.count(), 1)
 
         for section in PlanSection:
@@ -113,13 +113,13 @@ class RepositoryTest(ClubPlanCase):
     def test_saving_again_replaces_the_sections(self):
         service = self.service_a
         proposal = service.propose(self.home_a.id)
-        service.set_rotation(self.home_a.id, list(proposal.rotation_ids[:4]))
-        service.set_rotation(self.home_a.id, list(proposal.rotation_ids[:2]))
+        service.set_rotation(self.home_a.id, list(proposal.rotation_ids[:6]))
+        service.set_rotation(self.home_a.id, list(proposal.rotation_ids[:5]))
 
         plan = DjangoClubPlanRepository(WorldScope.pennant(self.world_a)).find_by_team(self.home_a.id)
 
-        self.assertEqual(plan.rotation, tuple(proposal.rotation_ids[:2]))
-        self.assertEqual(orm_models.PennantClubPlanEntry.objects.filter(section="rotation").count(), 2)
+        self.assertEqual(plan.rotation, tuple(proposal.rotation_ids[:5]))
+        self.assertEqual(orm_models.PennantClubPlanEntry.objects.filter(section="rotation").count(), 5)
 
 
 class ScopeTest(ClubPlanCase):
@@ -163,7 +163,7 @@ class ScopeTest(ClubPlanCase):
         proposal = self.service_a.propose(self.home_a.id)
         self.service_a.set_lineup(self.home_a.id, self.lineup_of(proposal))
         self.service_a.set_closer(self.home_a.id, proposal.closer_id)
-        self.service_b.set_rotation(self.home_b.id, list(self.service_b.propose(self.home_b.id).rotation_ids[:2]))
+        self.service_b.set_rotation(self.home_b.id, list(self.service_b.propose(self.home_b.id).rotation_ids[:5]))
 
         DjangoWorldRepository().delete(self.world_a)
 
@@ -263,14 +263,14 @@ class AdvanceWithPlanTest(ClubPlanCase):
 
     def test_a_manual_rotation_decides_the_starter(self):
         proposal = self.service_a.propose(self.home_a.id)
-        pair = list(reversed(proposal.rotation_ids))[:2]  # 自動なら先発しない順の投手
+        pair = list(reversed(proposal.rotation_ids))[:5]  # 自動なら先発しない順の投手
         self.service_a.set_rotation(self.home_a.id, pair)
 
         report = self.week()
 
         starters = self.starters_of(self.home_a, report.games)
         names = [self._name(pid) for pid in pair]
-        self.assertEqual(set(starters), set(names), "手動のローテーションの投手だけが先発する")
+        self.assertEqual(set(starters), set(names), "手動のローテーションの投手だけが、全員先発する")
         self.assertEqual(starters[0], names[0])
 
     def test_a_manual_closer_is_used(self):
@@ -321,7 +321,7 @@ class AdvanceWithPlanTest(ClubPlanCase):
     def test_the_sections_that_are_still_valid_keep_working_when_one_falls_back(self):
         proposal = self.service_a.propose(self.home_a.id)
         self.service_a.set_lineup(self.home_a.id, self.lineup_of(proposal))
-        pair = list(reversed(proposal.rotation_ids))[:2]
+        pair = list(reversed(proposal.rotation_ids))[:5]
         self.service_a.set_rotation(self.home_a.id, pair)
         kept = [pid for pid in proposal.active_ids if pid != proposal.lineup[3].player_id]
         self.service_a.set_active_roster(self.home_a.id, kept)
@@ -346,7 +346,7 @@ class ReplayWithPlanTest(ClubPlanCase):
     def manual_plan(self):
         proposal = self.service_a.propose(self.home_a.id)
         self.service_a.set_lineup(self.home_a.id, list(reversed(self.lineup_of(proposal))))
-        self.service_a.set_rotation(self.home_a.id, list(reversed(proposal.rotation_ids))[:3])
+        self.service_a.set_rotation(self.home_a.id, list(reversed(proposal.rotation_ids))[:5])
 
     def test_a_day_at_a_time_and_a_week_at_once_give_the_same_games_with_a_plan(self):
         """上書きがあっても、まとめて進めるか1日ずつ進めるかで結果は変わらない（編成は世界の状態で決まる）。"""

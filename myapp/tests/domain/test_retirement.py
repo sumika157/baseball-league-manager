@@ -15,10 +15,10 @@ def chance(
     value: float = 45.0,
     playing_time: PlayingTime = REGULAR_BATTER,
     is_foreign: bool = False,
-    seasons_in_world: int = 10,
+    seasons_as_pro: int = 10,
 ) -> float:
     return retirement_chance(
-        age=age, value=value, playing_time=playing_time, is_foreign=is_foreign, seasons_in_world=seasons_in_world
+        age=age, value=value, playing_time=playing_time, is_foreign=is_foreign, seasons_as_pro=seasons_as_pro
     )
 
 
@@ -58,11 +58,11 @@ class RetirementChanceTest(unittest.TestCase):
         self.assertEqual(chance(age=age, playing_time=PlayingTime()), chance(age=age))
 
     def test_recent_young_players_are_protected(self) -> None:
-        self.assertAlmostEqual(chance(age=22, seasons_in_world=1), chance(age=22) * retirement.ROOKIE_FACTOR)
-        self.assertAlmostEqual(chance(age=22, seasons_in_world=2), chance(age=22) * retirement.ROOKIE_FACTOR)
-        self.assertEqual(chance(age=22, seasons_in_world=3), chance(age=22))
+        self.assertAlmostEqual(chance(age=22, seasons_as_pro=1), chance(age=22) * retirement.ROOKIE_FACTOR)
+        self.assertAlmostEqual(chance(age=22, seasons_as_pro=2), chance(age=22) * retirement.ROOKIE_FACTOR)
+        self.assertEqual(chance(age=22, seasons_as_pro=3), chance(age=22))
         # 25歳を過ぎれば入団直後でも守られない
-        self.assertEqual(chance(age=25, seasons_in_world=1), chance(age=25))
+        self.assertEqual(chance(age=25, seasons_as_pro=1), chance(age=25))
 
     def test_capped_below_certainty(self) -> None:
         worst = chance(age=40, value=0.0, playing_time=PlayingTime(), is_foreign=True)
