@@ -23,6 +23,8 @@
                  placeholder="選手を探す" aria-label="選手を探す" />
         </form>
 
+        <a href="{% url 'analysis_index' %}" class="nav-analysis-link">戦力分析</a>
+
         <div class="app-nav-user">
           {% if user.is_authenticated %}
             {# is_staff が管理画面へ入れる条件そのものなので、それを表示条件にする #}

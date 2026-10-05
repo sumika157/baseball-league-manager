@@ -11,16 +11,17 @@ from inspect import signature
 from django.test import SimpleTestCase
 
 from myapp.application.game_recording import GameRecordingService
-from myapp.application.queries import GameListQuery, TeamListQuery
+from myapp.application.queries import GameListQuery, TeamAnalysisQuery, TeamListQuery
 from myapp.application.services import TeamApplicationService
+from myapp.application.team_analysis import TeamAnalysisService
 from myapp.domain.repositories import GameRepository, LeagueRepository, TeamRepository
-from myapp.infrastructure.queries import DjangoGameListQuery, DjangoTeamListQuery
+from myapp.infrastructure.queries import DjangoGameListQuery, DjangoTeamAnalysisQuery, DjangoTeamListQuery
 from myapp.infrastructure.repositories import (
     DjangoGameRepository,
     DjangoLeagueRepository,
     DjangoTeamRepository,
 )
-from myapp.presentation.views import build_recording_service, build_service
+from myapp.presentation.views import build_recording_service, build_service, build_team_analysis_service
 
 
 class ProtocolConformanceTest(SimpleTestCase):
@@ -30,6 +31,7 @@ class ProtocolConformanceTest(SimpleTestCase):
         (DjangoLeagueRepository, LeagueRepository),
         (DjangoTeamListQuery, TeamListQuery),
         (DjangoGameListQuery, GameListQuery),
+        (DjangoTeamAnalysisQuery, TeamAnalysisQuery),
     ]
 
     def test_implementations_satisfy_interfaces(self):
@@ -58,6 +60,10 @@ class BuildServiceTest(SimpleTestCase):
         組み立てが増えるたびに検査を書き忘れると、この形の事故だけが素通りする。
         """
         self._assert_wired(build_recording_service(), GameRecordingService)
+
+    def test_team_analysis_service_dependencies_are_wired(self):
+        """戦力分析のサービスも同じ検査にかける（組み立て口は build_*() 関数だけ）。"""
+        self._assert_wired(build_team_analysis_service(), TeamAnalysisService)
 
     def _assert_wired(self, service, cls):
         parameters = [name for name in signature(cls.__init__).parameters if name != "self"]

@@ -9,6 +9,7 @@
 - records: 試合からの集計（通算・順位表・対戦成績・年度別成績・月別成績）
 - decisions: 勝敗・セーブ・ホールドの導出（日本プロ野球の規則）
 - scoring: 打席の記録から1試合ぶんの成績を導く（打撃・投球・守備・失点・残塁）と、試合の組み立て（assemble_game）
+- roster_analysis: 戦力分析（デプス表の区分・主な守備位置・年齢の帯）の判定規則
 """
 
 from .decisions import (
@@ -57,6 +58,21 @@ from .records import (
     team_pitching,
     team_record,
     yearly_splits,
+)
+from .roster_analysis import (
+    MAX_AGE_BAND,
+    MIN_AGE_BAND,
+    AgeBandCount,
+    FielderGroup,
+    PitcherRole,
+    age_band,
+    age_distribution,
+    average_age,
+    depth_order,
+    hand_columns,
+    hand_label,
+    hand_of,
+    primary_position,
 )
 from .scoring import (
     FieldingCredits,
@@ -162,4 +178,18 @@ __all__ = [
     "runs_scored_in",
     "assemble_game",
     "team_of_players",
+    # roster_analysis
+    "MAX_AGE_BAND",
+    "MIN_AGE_BAND",
+    "AgeBandCount",
+    "FielderGroup",
+    "PitcherRole",
+    "age_band",
+    "age_distribution",
+    "average_age",
+    "depth_order",
+    "hand_columns",
+    "hand_label",
+    "hand_of",
+    "primary_position",
 ]
