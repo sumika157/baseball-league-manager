@@ -11,7 +11,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 
-from ..value_objects import FieldingPosition, Handedness, Profile
+from ..value_objects import FieldingPosition, Handedness, Position, Profile
 
 # 年齢の帯の両端。範囲の外は「18歳以下」「40歳以上」にまとめる
 MIN_AGE_BAND = 18
@@ -148,6 +148,86 @@ def usage_visible_count(total: int) -> int:
     控えが1〜2試合ずつ先発しただけでも全員並べると、箱が長くなって主な起用が読めなくなるため上限を置く。
     """
     return min(total, MAX_PLAYERS_IN_BOX)
+
+
+class ColorAxis(Enum):
+    """戦力分析で選手を何で色分けするか。軸の語彙と既定（左右）はここが唯一の出典。
+
+    色分けはページ全体（デプス表・起用マップ・入退団）で同じ規則・同じ色にする。
+    """
+
+    HAND = "hand"
+    NATURAL = "natural"
+
+    @property
+    def label(self) -> str:
+        return _COLOR_AXIS_LABELS[self]
+
+    @classmethod
+    def parse(cls, key: str | None) -> ColorAxis:
+        """画面の `?color=` の値から軸を決める。不正・未指定は左右。"""
+        for axis in cls:
+            if axis.value == key:
+                return axis
+        return cls.HAND
+
+
+_COLOR_AXIS_LABELS = {
+    ColorAxis.HAND: "左右",
+    ColorAxis.NATURAL: "本職",
+}
+
+
+@dataclass(frozen=True)
+class ColorCategory:
+    """色分けの区分1つ。key は CSS のクラス名の一部、mark は色に頼らないための短い印（無ければ空）。"""
+
+    key: str
+    label: str
+    mark: str = ""
+
+
+# 判定に使う守備位置が無いときの区分。色も印も付けない
+NEUTRAL_CATEGORY = ColorCategory("neutral", "対象外")
+
+_HAND_CATEGORIES: dict[Handedness | None, ColorCategory] = {
+    Handedness.LEFT: ColorCategory("hand-left", "左", "左"),
+    Handedness.BOTH: ColorCategory("hand-both", "両", "両"),
+    Handedness.RIGHT: ColorCategory("hand-right", "右", "右"),
+    None: ColorCategory("hand-unknown", "不明", "？"),
+}
+_NATURAL_CATEGORIES = (ColorCategory("natural-yes", "本職"), ColorCategory("natural-no", "本職外", "他"))
+
+
+def color_categories(axis: ColorAxis) -> tuple[ColorCategory, ...]:
+    """軸の区分の一覧（対象外を除く）。凡例の並び順。"""
+    if axis is ColorAxis.HAND:
+        return tuple(_HAND_CATEGORIES.values())
+    return _NATURAL_CATEGORIES
+
+
+def color_category(
+    axis: ColorAxis,
+    *,
+    registered: Position,
+    profile: Profile,
+    fielding_position: FieldingPosition | None,
+) -> ColorCategory:
+    """選手が軸 axis のどの区分に入るか。ページのどの場所でもこの1つの関数で決める。
+
+    場所ごとに渡すのは「どの守備位置で見るか」だけ。左右は、守備位置があればそれが投のとき、
+    無ければ登録位置が投手のときに投げる手で見て、それ以外は打席で見る。
+    - fielding_position: 本職かどうかを見る守備位置（起用マップは箱の位置、デプス表は主な守備位置）。
+      守備位置が無い（登板なし・守備出場なし・入退団の表）ときは None で、本職の軸では対象外
+    """
+    if axis is ColorAxis.HAND:
+        is_pitcher = (
+            registered.is_pitcher if fielding_position is None else fielding_position is FieldingPosition.PITCHER
+        )
+        return _HAND_CATEGORIES[hand_of(profile, is_pitcher=is_pitcher)]
+    if fielding_position is None:
+        return NEUTRAL_CATEGORY
+    return _NATURAL_CATEGORIES[0 if registered.is_natural_at(fielding_position) else 1]
 
 
 def age_band(age: int | None) -> str:

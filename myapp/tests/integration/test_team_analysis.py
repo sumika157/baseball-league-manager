@@ -1,7 +1,10 @@
 """戦力分析ページ（球団×年度のデプス表・年齢構成）。"""
 
+import pathlib
+import re
 from datetime import date
 
+from django.conf import settings
 from django.db import connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
@@ -9,7 +12,7 @@ from django.urls import reverse
 
 from myapp.application.team_analysis import USAGE_AREAS
 from myapp.domain.entities import Game
-from myapp.domain.services import usage_map_positions
+from myapp.domain.services import NEUTRAL_CATEGORY, ColorAxis, color_categories, usage_map_positions
 from myapp.domain.services.roster_analysis import MAX_PLAYERS_IN_BOX
 from myapp.domain.value_objects import BattingLine, FieldingPosition, PitchingLine, Season
 from myapp.infrastructure import orm_models
@@ -415,3 +418,136 @@ class TeamMovesTest(AnalysisCase):
             self.stint(self.team, player_id, number, 2026)
             self.move(self.team, f"退団{number}", number + 100, 2020, 2026)
         self.assertEqual(count(), before)
+
+
+class TeamColorTest(AnalysisCase):
+    """色分け（`?color=`）。デプス表・起用マップ・入退団で同じ規則・同じ色になる。"""
+
+    def setUp(self):
+        super().setUp()
+        self.ace = self.player(self.team, "左腕エース", 18, "投手", throws="左", bats="右")
+        self.setup_man = self.player(self.team, "右の中継ぎ", 20, "投手", throws="右", bats="右")
+        self.shortstop = self.player(self.team, "本職遊撃手", 6, "内野手", throws="右", bats="左")
+        self.misfit = self.player(self.team, "外野を守る内野手", 8, "内野手", throws="右", bats="右")
+        self.bench = self.player(self.team, "守備なし", 99, "内野手", bats="両")
+        self.rookie = self.player(self.team, "新人投手", 30, "投手", throws="左", from_year=2026)
+        self.game(
+            self.team,
+            self.rival,
+            batting=[(self.shortstop, self.team, "遊", 0), (self.misfit, self.team, "左", 0)],
+            pitching=[(self.ace, 1), (self.setup_man, 2)],
+        )
+
+    def analysis(self, color=None, tab=None):
+        return build_team_analysis_service().get_analysis(self.team.id, year=2026, tab=tab, color=color)
+
+    def usage_tones(self, analysis):
+        return {p.name: p.tone.key for box in analysis.usage_boxes for p in box.players}
+
+    def depth_tones(self, analysis):
+        tables = (analysis.pitchers, analysis.fielders)
+        return {p.name: p.tone.key for t in tables for r in t.rows for c in r.cells for p in c.players}
+
+    def legend(self, analysis):
+        return {item.category.label: item.count for item in analysis.legend}
+
+    def test_default_is_hand_and_invalid_values_fall_back(self):
+        for color in (None, "", "bogus", "foreign"):
+            with self.subTest(color=color):
+                analysis = self.analysis(color=color)
+                self.assertEqual(analysis.color, "hand")
+                self.assertEqual([o.key for o in analysis.color_options], ["hand", "natural"])
+
+    def test_hand_axis_in_usage_map_uses_throwing_arm_in_pitcher_box_and_batting_side_otherwise(self):
+        tones = self.usage_tones(self.analysis(tab="usage"))
+        self.assertEqual(tones["左腕エース"], "hand-left")
+        self.assertEqual(tones["右の中継ぎ"], "hand-right")
+        self.assertEqual(tones["本職遊撃手"], "hand-left")
+        self.assertEqual(tones["外野を守る内野手"], "hand-right")
+
+    def test_natural_axis_in_usage_map(self):
+        analysis = self.analysis(color="natural", tab="usage")
+        tones = self.usage_tones(analysis)
+        self.assertEqual(tones["左腕エース"], "natural-yes")
+        self.assertEqual(tones["本職遊撃手"], "natural-yes")
+        self.assertEqual(tones["外野を守る内野手"], "natural-no")
+        self.assertEqual(self.legend(analysis), {"本職": 3, "本職外": 1})
+
+    def test_hand_legend_lists_every_category_with_counts(self):
+        analysis = self.analysis(tab="usage")
+        self.assertEqual(self.legend(analysis), {"左": 2, "両": 0, "右": 2, "不明": 0})
+        self.assertEqual([i.category.mark for i in analysis.legend], ["左", "両", "右", "？"])
+
+    def test_same_player_gets_the_same_tone_in_depth_table_and_usage_map(self):
+        for color in ("hand", "natural"):
+            with self.subTest(color=color):
+                depth = self.depth_tones(self.analysis(color=color))
+                usage = self.usage_tones(self.analysis(color=color, tab="usage"))
+                for name, key in usage.items():
+                    self.assertEqual(depth[name], key, name)
+
+    def test_depth_table_natural_axis_is_neutral_without_a_main_position(self):
+        tones = self.depth_tones(self.analysis(color="natural"))
+        # 守備出場なしの野手・登板なしの投手は主な守備位置が無い
+        self.assertEqual(tones["守備なし"], "neutral")
+        self.assertEqual(tones["新人投手"], "neutral")
+        self.assertEqual(tones["左腕エース"], "natural-yes")
+        self.assertEqual(tones["外野を守る内野手"], "natural-no")
+
+    def test_depth_table_hand_axis_follows_the_table(self):
+        tones = self.depth_tones(self.analysis())
+        self.assertEqual(tones["左腕エース"], "hand-left")  # 投手の表は投げる手
+        self.assertEqual(tones["守備なし"], "hand-both")  # 野手の表は打席
+
+    def test_moves_are_colored_by_hand_but_neutral_for_natural(self):
+        joiners = {row.name: row.tone.key for row in self.analysis().joiners}
+        self.assertEqual(joiners["新人投手"], "hand-left")
+        natural = {row.name: row.tone.key for row in self.analysis(color="natural").joiners}
+        self.assertEqual(set(natural.values()), {"neutral"})
+
+    def test_page_carries_the_axis_to_year_tab_team_links(self):
+        response = self.client.get(reverse("team_analysis", args=[self.team.id]), {"year": 2026, "color": "natural"})
+        self.assertContains(response, 'name="color" value="natural"')
+        self.assertContains(response, "tab=usage&amp;color=natural")
+        self.assertContains(response, "year=2026&amp;tab=depth&amp;color=natural")
+        self.assertContains(response, "player-tone-natural-yes")
+
+    def test_invalid_color_page_uses_hand_in_links(self):
+        response = self.client.get(reverse("team_analysis", args=[self.team.id]), {"color": "x"})
+        self.assertContains(response, 'name="color" value="hand"')
+
+    def test_analysis_index_redirect_keeps_color(self):
+        response = self.client.get(reverse("analysis_index"), {"team": self.team.id, "color": "natural"})
+        self.assertEqual(response["Location"], f"{reverse('team_analysis', args=[self.team.id])}?color=natural")
+
+    def test_query_count_does_not_depend_on_the_axis(self):
+        def count(color):
+            with CaptureQueriesContext(connection) as captured:
+                self.analysis(color=color, tab="usage")
+            return len(captured)
+
+        self.assertEqual(count("hand"), count("natural"))
+
+    def test_depth_tab_legend_counts_the_moves_tables_too(self):
+        # 入退団の表も同じページで色が付くので、凡例の人数に含める（画面に出る色は必ず凡例に載る）
+        analysis = self.analysis()
+        shown = [
+            p.tone.key
+            for t in (analysis.pitchers, analysis.fielders)
+            for r in t.rows
+            for c in r.cells
+            for p in c.players
+        ]
+        shown += [row.tone.key for row in (*analysis.joiners, *analysis.leavers)]
+        self.assertGreater(len(analysis.joiners), 0)
+        self.assertEqual(sum(item.count for item in analysis.legend), len(shown))
+        # 入退団の表は本職の軸では対象外。デプス表に対象外が無くても、入退団に出れば凡例に載る
+        natural = self.analysis(color="natural")
+        self.assertIn("対象外", [item.category.label for item in natural.legend])
+
+    def test_every_tone_key_has_a_css_class(self):
+        css = (pathlib.Path(settings.BASE_DIR) / "myapp/static/myapp/css/theme.css").read_text(encoding="utf-8")
+        keys = {c.key for axis in ColorAxis for c in color_categories(axis)} | {NEUTRAL_CATEGORY.key}
+        for key in keys:
+            with self.subTest(key=key):
+                self.assertRegex(css, rf"\.player-tone-{re.escape(key)}\b")

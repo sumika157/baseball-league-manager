@@ -36,6 +36,23 @@
   --app-negative-soft: #fef2f2;
 
   /* 影。輪郭を強調せず、面をわずかに浮かせる程度にとどめる */
+  /* 戦力分析の色分け（左右・本職）。区分ごとに濃い色（印・見本）と薄い色（行の地）を持つ。文字は常に濃い色のまま */
+  --app-tone-a: #1d4ed8;
+  --app-tone-a-soft: #dbeafe;
+  --app-tone-b: #6d28d9;
+  --app-tone-b-soft: #ede9fe;
+  --app-tone-c: #b45309;
+  --app-tone-c-soft: #fef3c7;
+  --app-tone-d: #4b5563;
+  --app-tone-d-soft: #e5e7eb;
+
+  /* 野球場の背景（起用マップ） */
+  --app-field-grass: #5a9e55;
+  --app-field-grass-dark: #468a47;
+  --app-field-dirt: #c99a6b;
+  --app-field-base: #ffffff;
+  --app-field-box: rgba(255, 255, 255, 0.88);
+
   --app-shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.04);
   --app-shadow: 0 1px 3px rgba(16, 24, 40, 0.06), 0 1px 2px rgba(16, 24, 40, 0.04);
   --app-shadow-lg: 0 8px 24px rgba(16, 24, 40, 0.08);
@@ -1037,9 +1054,87 @@ main.container {
 }
 
 /* ------------------------------------------------------------------
+   戦力分析の色分け（デプス表・起用マップ・入退団で共通）
+   区分のキーは player-tone-<キー>。ドメインの ColorCategory が出典
+   ------------------------------------------------------------------ */
+.player-tone-hand-left,
+.player-tone-natural-yes { --tone: var(--app-tone-a); --tone-soft: var(--app-tone-a-soft); }
+.player-tone-hand-both { --tone: var(--app-tone-b); --tone-soft: var(--app-tone-b-soft); }
+.player-tone-hand-right,
+.player-tone-natural-no { --tone: var(--app-tone-c); --tone-soft: var(--app-tone-c-soft); }
+.player-tone-hand-unknown { --tone: var(--app-tone-d); --tone-soft: var(--app-tone-d-soft); }
+.player-tone-neutral { --tone: var(--app-border-strong); --tone-soft: transparent; }
+
+.player-tone {
+  border-left: 4px solid var(--tone);
+  background: var(--tone-soft);
+  border-radius: var(--app-radius-sm);
+  padding-left: 0.4rem;
+}
+
+td.player-tone {
+  border-radius: 0;
+}
+
+.tone-mark {
+  display: inline-block;
+  min-width: 1.25rem;
+  padding: 0 0.3rem;
+  border-radius: var(--app-radius-sm);
+  background: var(--tone, var(--app-tone-d));
+  color: #fff;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1.25rem;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.tone-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+}
+
+.tone-bar .segmented {
+  margin-bottom: 0;
+}
+
+.tone-bar-label {
+  font-size: 0.8125rem;
+  color: var(--app-text-muted);
+}
+
+.tone-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  font-size: 0.8125rem;
+}
+
+.tone-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.tone-swatch {
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 3px;
+  background: var(--tone-soft);
+  border: 1px solid var(--tone);
+  border-left-width: 4px;
+}
+
+/* ------------------------------------------------------------------
    戦力分析の起用マップ（守備位置の箱をダイヤモンドの形に並べる）
    ------------------------------------------------------------------ */
 .usage-map {
+  position: relative;
+  isolation: isolate;
   display: grid;
   gap: 0.75rem;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -1058,6 +1153,52 @@ main.container {
   padding: 0.5rem 0.75rem;
   font-size: 0.875rem;
   min-width: 0;
+}
+
+/* 野球場の背景。広い画面だけ（狭い画面は縦に積むので描かない）。画像は使わず CSS だけで描く */
+@media (min-width: 768px) {
+  .usage-map {
+    padding: 1rem 1.5rem 1.25rem;
+    border-radius: 50% 50% var(--app-radius) var(--app-radius) / 36% 36% var(--app-radius) var(--app-radius);
+    background: radial-gradient(
+      ellipse 70% 130% at 50% 100%,
+      var(--app-field-grass) 0 62%,
+      var(--app-field-grass-dark) 100%
+    );
+  }
+
+  /* 内野の土（ダイヤモンド） */
+  .usage-map::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    inset: 28% 9% 3% 9%;
+    background: var(--app-field-dirt);
+    clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+  }
+
+  /* 本塁と一・二・三塁のベース */
+  .usage-map::after {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    inset: 28% 9% 3% 9%;
+    background:
+      linear-gradient(var(--app-field-base), var(--app-field-base)) 50% 0 / 14px 14px no-repeat,
+      linear-gradient(var(--app-field-base), var(--app-field-base)) 0 50% / 14px 14px no-repeat,
+      linear-gradient(var(--app-field-base), var(--app-field-base)) 100% 50% / 14px 14px no-repeat,
+      linear-gradient(var(--app-field-base), var(--app-field-base)) 50% 100% / 14px 14px no-repeat;
+  }
+
+  /* 左右の外野手を少し下げ、外野の弧に沿わせる */
+  .usage-box-left,
+  .usage-box-right {
+    margin-top: 1.5rem;
+  }
+
+  .usage-box {
+    background: var(--app-field-box);
+  }
 }
 
 .usage-box-title {

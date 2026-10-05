@@ -5,7 +5,7 @@ from datetime import date
 
 from myapp.domain.services import roster_analysis as ra
 from myapp.domain.value_objects import FieldingPosition as FP
-from myapp.domain.value_objects import Handedness, Profile, Season
+from myapp.domain.value_objects import Handedness, Position, Profile, Season
 
 
 class PitcherRoleTest(unittest.TestCase):
@@ -286,3 +286,85 @@ class MoveJudgementTest(unittest.TestCase):
                 (ra.MoveKind.REJOINED, 1),
             ],
         )
+
+
+class NaturalPositionTest(unittest.TestCase):
+    def test_every_fielding_position_is_natural_for_exactly_one_registered_position(self):
+        """守備位置（代打・代走を除く）が、ちょうど1つの登録位置の本職になること。"""
+        for position in FP:
+            if position.is_substitute_only:
+                continue
+            with self.subTest(position=position):
+                owners = [registered for registered in Position if registered.is_natural_at(position)]
+                self.assertEqual(len(owners), 1)
+
+    def test_substitutes_belong_to_nobody(self):
+        for position in (FP.PINCH_HITTER, FP.PINCH_RUNNER):
+            self.assertFalse(any(registered.is_natural_at(position) for registered in Position))
+
+    def test_mapping(self):
+        self.assertTrue(Position.PITCHER.is_natural_at(FP.PITCHER))
+        self.assertTrue(Position.CATCHER.is_natural_at(FP.CATCHER))
+        for position in (FP.FIRST_BASE, FP.SECOND_BASE, FP.THIRD_BASE, FP.SHORTSTOP):
+            self.assertTrue(Position.INFIELDER.is_natural_at(position))
+        for position in (FP.LEFT_FIELD, FP.CENTER_FIELD, FP.RIGHT_FIELD):
+            self.assertTrue(Position.OUTFIELDER.is_natural_at(position))
+        self.assertTrue(Position.DESIGNATED_HITTER.is_natural_at(FP.DESIGNATED_HITTER))
+        self.assertFalse(Position.INFIELDER.is_natural_at(FP.LEFT_FIELD))
+
+
+class ColorAxisTest(unittest.TestCase):
+    def test_parse_falls_back_to_hand(self):
+        self.assertIs(ra.ColorAxis.parse("natural"), ra.ColorAxis.NATURAL)
+        self.assertIs(ra.ColorAxis.parse("hand"), ra.ColorAxis.HAND)
+        for key in (None, "", "unknown", "foreign"):
+            with self.subTest(key=key):
+                self.assertIs(ra.ColorAxis.parse(key), ra.ColorAxis.HAND)
+
+    def test_axes_are_hand_and_natural_only(self):
+        self.assertEqual([axis.value for axis in ra.ColorAxis], ["hand", "natural"])
+
+
+class ColorCategoryTest(unittest.TestCase):
+    def category(self, axis, *, registered=Position.INFIELDER, throws=None, bats=None, at=None):
+        return ra.color_category(
+            axis,
+            registered=registered,
+            profile=Profile(throws=throws, bats=bats),
+            fielding_position=at,
+        )
+
+    def test_hand_uses_throwing_arm_for_the_pitching_position_and_batting_side_for_others(self):
+        both = {"throws": Handedness.LEFT, "bats": Handedness.RIGHT}
+        cases = [
+            # (登録位置, 守備位置, 期待)
+            (Position.PITCHER, None, "hand-left"),  # 守備位置なしで登録が投手 → 投げる手
+            (Position.INFIELDER, None, "hand-right"),  # 守備位置なしで登録が野手 → 打席
+            (Position.INFIELDER, FP.PITCHER, "hand-left"),  # 守備位置が投 → 投げる手
+            (Position.PITCHER, FP.DESIGNATED_HITTER, "hand-right"),  # 野手の位置 → 打席
+            (Position.INFIELDER, FP.SHORTSTOP, "hand-right"),
+        ]
+        for registered, at, expected in cases:
+            with self.subTest(registered=registered, at=at):
+                self.assertEqual(self.category(ra.ColorAxis.HAND, registered=registered, at=at, **both).key, expected)
+
+    def test_hand_both_and_unknown(self):
+        self.assertEqual(self.category(ra.ColorAxis.HAND, bats=Handedness.BOTH).key, "hand-both")
+        unknown = self.category(ra.ColorAxis.HAND)
+        self.assertEqual((unknown.key, unknown.label), ("hand-unknown", "不明"))
+
+    def test_natural_compares_registered_position_with_the_fielding_position(self):
+        yes = self.category(ra.ColorAxis.NATURAL, registered=Position.INFIELDER, at=FP.SHORTSTOP)
+        no = self.category(ra.ColorAxis.NATURAL, registered=Position.INFIELDER, at=FP.LEFT_FIELD)
+        self.assertEqual((yes.key, yes.mark), ("natural-yes", ""))
+        self.assertEqual((no.key, no.mark), ("natural-no", "他"))
+
+    def test_natural_without_a_fielding_position_is_neutral(self):
+        self.assertIs(self.category(ra.ColorAxis.NATURAL, at=None), ra.NEUTRAL_CATEGORY)
+
+    def test_categories_do_not_include_neutral_and_keys_are_unique(self):
+        keys = []
+        for axis in ra.ColorAxis:
+            keys += [c.key for c in ra.color_categories(axis)]
+        self.assertEqual(len(keys), len(set(keys)))
+        self.assertNotIn(ra.NEUTRAL_CATEGORY.key, keys)

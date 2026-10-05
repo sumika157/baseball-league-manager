@@ -422,6 +422,8 @@ class DjangoTeamAnalysisQuery:
                 position=Position.from_label(stint.player.position),
                 from_year=stint.from_year,
                 to_year=stint.to_year,
+                throws=Handedness.from_label(stint.player.throws),
+                bats=Handedness.from_label(stint.player.bats),
             )
             for stint in own
         ]

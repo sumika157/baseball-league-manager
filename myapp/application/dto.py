@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 
+from ..domain.services.roster_analysis import NEUTRAL_CATEGORY, ColorCategory
 from ..domain.value_objects import BattingLine, FieldingPosition, Handedness, PitchingLine, Position
 
 
@@ -1148,6 +1149,8 @@ class MoveStintRow:
     position: Position
     from_year: int
     to_year: int | None
+    throws: Handedness | None = None
+    bats: Handedness | None = None
 
 
 @dataclass(frozen=True)
@@ -1206,6 +1209,7 @@ class DepthPlayer:
     games: int
     starts: int
     position_label: str = ""
+    tone: ColorCategory = NEUTRAL_CATEGORY
 
 
 @dataclass(frozen=True)
@@ -1253,6 +1257,23 @@ class UsagePlayer:
     number: int
     starts: int
     games: int
+    tone: ColorCategory = NEUTRAL_CATEGORY
+
+
+@dataclass(frozen=True)
+class ColorLegendItem:
+    """色分けの凡例1項目。区分と、いま画面に出ている選手の人数。"""
+
+    category: ColorCategory
+    count: int
+
+
+@dataclass(frozen=True)
+class ColorOption:
+    """色分けの軸の選択肢。"""
+
+    key: str
+    label: str
 
 
 @dataclass(frozen=True)
@@ -1289,6 +1310,7 @@ class MoveRow:
     position_label: str
     kind_label: str
     other_team_name: str = ""
+    tone: ColorCategory = NEUTRAL_CATEGORY
 
 
 @dataclass(frozen=True)
@@ -1309,5 +1331,8 @@ class TeamAnalysis:
     average_age_fielders: float | None
     average_age_all: float | None
     usage_boxes: list[UsageBox]
+    color: str
+    color_options: list[ColorOption]
+    legend: list[ColorLegendItem]
     joiners: list[MoveRow]
     leavers: list[MoveRow]

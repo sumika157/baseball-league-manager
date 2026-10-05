@@ -29,7 +29,7 @@
   <p class="page-subtitle">{{ analysis.year }}年の編成 · 投手 {{ analysis.pitchers.count }}名 · 野手 {{ analysis.fielders.count }}名</p>
 </div>
 
-{# 球団の切り替え。JS なしで動くよう GET フォームにし、年度は引き継ぐ #}
+{# 球団の切り替え。JS なしで動くよう GET フォームにし、年度・タブ・色分けは引き継ぐ #}
 <form method="get" action="{% url 'analysis_index' %}" class="d-flex flex-wrap align-items-center gap-2 mb-3">
   <label for="analysis-team" class="form-label mb-0">球団</label>
   <select id="analysis-team" name="team" class="form-select form-select-sm w-auto">
@@ -39,6 +39,7 @@
   </select>
   <input type="hidden" name="year" value="{{ analysis.year }}" />
   <input type="hidden" name="tab" value="{{ analysis.tab }}" />
+  <input type="hidden" name="color" value="{{ analysis.color }}" />
   <button type="submit" class="btn btn-sm btn-outline-secondary">切り替え</button>
 </form>
 
@@ -46,7 +47,7 @@
   <div class="segmented segmented-scroll">
     {% for year in analysis.years %}
       <a class="segmented-item {% if year == analysis.year %}is-active{% endif %}"
-         href="?year={{ year }}&amp;tab={{ analysis.tab }}">{{ year }}年</a>
+         href="?year={{ year }}&amp;tab={{ analysis.tab }}&amp;color={{ analysis.color }}">{{ year }}年</a>
     {% endfor %}
   </div>
 {% else %}
@@ -57,8 +58,31 @@
 <div class="segmented ms-2">
   {% for tab in analysis.tabs %}
     <a class="segmented-item {% if tab.key == analysis.tab %}is-active{% endif %}"
-       href="?year={{ analysis.year }}&amp;tab={{ tab.key }}">{{ tab.label }}</a>
+       href="?year={{ analysis.year }}&amp;tab={{ tab.key }}&amp;color={{ analysis.color }}">{{ tab.label }}</a>
   {% endfor %}
+</div>
+
+{% comment %}
+  色分け。ページ全体（デプス表・起用マップ・入退団）で同じ規則・同じ色。軸の語彙と振り分けはドメイン（ColorAxis・color_category）が決める。
+  色だけに頼らないよう、凡例に区分の名前と人数を出し、選手の横に短い印を添える。
+{% endcomment %}
+<div class="tone-bar mt-3 mb-3">
+  <span class="tone-bar-label">色分け</span>
+  <div class="segmented">
+    {% for option in analysis.color_options %}
+      <a class="segmented-item {% if option.key == analysis.color %}is-active{% endif %}"
+         href="?year={{ analysis.year }}&amp;tab={{ analysis.tab }}&amp;color={{ option.key }}">{{ option.label }}</a>
+    {% endfor %}
+  </div>
+  <ul class="tone-legend list-unstyled mb-0" aria-label="色分けの凡例">
+    {% for item in analysis.legend %}
+    <li class="tone-legend-item player-tone-{{ item.category.key }}">
+      <span class="tone-swatch" aria-hidden="true"></span>
+      {{ item.category.label }}{% if item.category.mark %}<span class="tone-mark">{{ item.category.mark }}</span>{% endif %}
+      <span class="stat-muted tabular-nums">{{ item.count }}名</span>
+    </li>
+    {% endfor %}
+  </ul>
 </div>
 
 {% if analysis.tab == 'depth' %}
@@ -139,7 +163,7 @@
             {% for row in analysis.joiners %}
             <tr>
               <td><span class="jersey-number">{{ row.number }}</span></td>
-              <td><a href="{% url 'player_detail' analysis.team_id row.player_id %}" class="player-name">{{ row.name }}</a></td>
+              <td class="player-tone player-tone-{{ row.tone.key }}"><a href="{% url 'player_detail' analysis.team_id row.player_id %}" class="player-name">{{ row.name }}</a>{% if row.tone.mark %}<span class="tone-mark">{{ row.tone.mark }}</span>{% endif %}</td>
               <td>{{ row.position_label }}</td>
               <td>{{ row.kind_label }}</td>
               <td>{{ row.other_team_name|default:"—" }}</td>
@@ -168,7 +192,7 @@
             {% for row in analysis.leavers %}
             <tr>
               <td><span class="jersey-number">{{ row.number }}</span></td>
-              <td><a href="{% url 'player_detail' analysis.team_id row.player_id %}" class="player-name">{{ row.name }}</a></td>
+              <td class="player-tone player-tone-{{ row.tone.key }}"><a href="{% url 'player_detail' analysis.team_id row.player_id %}" class="player-name">{{ row.name }}</a>{% if row.tone.mark %}<span class="tone-mark">{{ row.tone.mark }}</span>{% endif %}</td>
               <td>{{ row.position_label }}</td>
               <td>{{ row.kind_label }}</td>
               <td>{{ row.other_team_name|default:"—" }}</td>
@@ -203,9 +227,10 @@
       {% if box.players %}
         <ul class="list-unstyled mb-0">
           {% for player in box.players %}
-          <li>
+          <li class="player-tone player-tone-{{ player.tone.key }}">
             <span class="jersey-number">{{ player.number }}</span>
             <a href="{% url 'player_detail' analysis.team_id player.player_id %}" class="player-name">{{ player.name }}</a>
+            {% if player.tone.mark %}<span class="tone-mark">{{ player.tone.mark }}</span>{% endif %}
             <span class="stat-muted tabular-nums text-nowrap">{{ player.starts }} / {{ player.games }}</span>
           </li>
           {% endfor %}
