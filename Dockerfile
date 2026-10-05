@@ -1,5 +1,5 @@
-# 開発用イメージ（Python は WSL 上の venv と同じ 3.10 系に合わせています）
-FROM python:3.10-slim
+# 開発用イメージ（Python 3.13。本番の Dockerfile.prod と同じ版にそろえる）
+FROM python:3.13-slim
 
 # .pyc を作らない / ログを即座に出力する
 ENV PYTHONDONTWRITEBYTECODE=1 \
