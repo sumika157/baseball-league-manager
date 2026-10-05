@@ -169,3 +169,120 @@ class UsageMapTest(unittest.TestCase):
         self.assertEqual(ra.usage_visible_count(1), 1)
         self.assertEqual(ra.usage_visible_count(cap), cap)
         self.assertEqual(ra.usage_visible_count(cap + 4), cap)
+
+
+class MoveJudgementTest(unittest.TestCase):
+    """入退団の区分。チームは A=1・B=2。同じ年に始まる在籍は、その年に終わった方が先、最後は stint_id の順。"""
+
+    A, B = 1, 2
+
+    @staticmethod
+    def span(stint_id, team_id, from_year, to_year=None):
+        return ra.StintSpan(stint_id, team_id, from_year, to_year)
+
+    def test_first_stint_is_a_new_signing(self):
+        own = self.span(1, self.A, 2026)
+        judgement = ra.judge_join(own, [own])
+        self.assertEqual((judgement.kind, judgement.other_team_id), (ra.MoveKind.NEW_SIGNING, None))
+
+    def test_joining_after_another_team_is_a_transfer_with_the_previous_team(self):
+        before = self.span(1, self.B, 2020, 2025)
+        own = self.span(2, self.A, 2026)
+        judgement = ra.judge_join(own, [before, own])
+        self.assertEqual((judgement.kind, judgement.other_team_id), (ra.MoveKind.TRANSFER, self.B))
+
+    def test_previous_team_is_the_immediately_preceding_stint(self):
+        first = self.span(1, 3, 2018, 2019)
+        second = self.span(2, self.B, 2020, 2025)
+        own = self.span(3, self.A, 2026)
+        self.assertEqual(ra.judge_join(own, [first, second, own]).other_team_id, self.B)
+
+    def test_coming_back_to_the_same_team_is_a_rejoin(self):
+        before = self.span(1, self.A, 2018, 2020)
+        own = self.span(2, self.A, 2024)
+        judgement = ra.judge_join(own, [before, own])
+        self.assertEqual((judgement.kind, judgement.other_team_id), (ra.MoveKind.REJOINED, None))
+
+    def test_later_stints_do_not_make_a_join_a_transfer(self):
+        own = self.span(1, self.A, 2026, 2026)
+        after = self.span(2, self.B, 2027)
+        self.assertIs(ra.judge_join(own, [own, after]).kind, ra.MoveKind.NEW_SIGNING)
+
+    def test_mid_season_move_is_a_transfer_on_both_sides(self):
+        left = self.span(1, self.A, 2020, 2026)
+        joined = self.span(2, self.B, 2026)
+        self.assertEqual(ra.judge_join(joined, [left, joined]), ra.MoveJudgement(ra.MoveKind.TRANSFER, self.A))
+        self.assertEqual(ra.judge_leave(left, [left, joined]), ra.MoveJudgement(ra.MoveKind.TRANSFER, self.B))
+
+    def test_leaving_with_no_following_stint_is_a_departure(self):
+        own = self.span(1, self.A, 2020, 2026)
+        self.assertEqual(ra.judge_leave(own, [own]), ra.MoveJudgement(ra.MoveKind.DEPARTED))
+
+    def test_next_year_start_at_another_team_is_a_transfer_but_two_years_later_is_not(self):
+        own = self.span(1, self.A, 2020, 2026)
+        cases = [(2026, ra.MoveKind.TRANSFER), (2027, ra.MoveKind.TRANSFER), (2028, ra.MoveKind.DEPARTED)]
+        for from_year, expected in cases:
+            with self.subTest(from_year=from_year):
+                other = self.span(2, self.B, from_year)
+                self.assertIs(ra.judge_leave(own, [own, other]).kind, expected)
+
+    def test_following_stint_at_the_same_team_is_not_a_transfer(self):
+        own = self.span(1, self.A, 2020, 2026)
+        again = self.span(2, self.A, 2027)
+        self.assertIs(ra.judge_leave(own, [own, again]).kind, ra.MoveKind.DEPARTED)
+
+    def test_earlier_stints_do_not_make_a_leave_a_transfer(self):
+        earlier = self.span(1, self.B, 2015, 2019)
+        own = self.span(2, self.A, 2020, 2026)
+        self.assertIs(ra.judge_leave(own, [earlier, own]).kind, ra.MoveKind.DEPARTED)
+
+    def test_same_year_stints_are_ordered_by_id(self):
+        first = self.span(1, self.A, 2026, 2026)
+        second = self.span(2, self.B, 2026)
+        self.assertEqual(ra.judge_leave(first, [first, second]).other_team_id, self.B)
+        self.assertEqual(ra.judge_join(second, [first, second]).other_team_id, self.A)
+
+    def test_same_year_stint_that_ended_comes_first_even_if_registered_later(self):
+        """シーズン途中の移籍の経歴を後から足しても（移籍元の id が大きくても）、移籍元を先とみなす。"""
+        joined = self.span(1, self.B, 2026)
+        left = self.span(2, self.A, 2026, 2026)
+        self.assertEqual(ra.judge_join(joined, [joined, left]), ra.MoveJudgement(ra.MoveKind.TRANSFER, self.A))
+        self.assertEqual(ra.judge_leave(left, [joined, left]), ra.MoveJudgement(ra.MoveKind.TRANSFER, self.B))
+
+    def test_join_and_leave_use_the_same_window_for_a_transfer(self):
+        """間が1年以上空いた別球団からの加入は、退団側と同じく移籍とみなさない（同じ動きを両側で同じ区分にする）。"""
+        # (前の球団を退団した年, 加入側の区分, 退団側の区分)。加入は2026年
+        cases = [
+            (2025, ra.MoveKind.TRANSFER, ra.MoveKind.TRANSFER),
+            (2024, ra.MoveKind.NEW_SIGNING, ra.MoveKind.DEPARTED),
+        ]
+        for left_year, join_kind, leave_kind in cases:
+            with self.subTest(left_year=left_year):
+                before = self.span(1, self.B, 2018, left_year)
+                own = self.span(2, self.A, 2026)
+                self.assertIs(ra.judge_join(own, [before, own]).kind, join_kind)
+                self.assertIs(ra.judge_leave(before, [before, own]).kind, leave_kind)
+
+    def test_duplicate_stints_in_the_same_team_and_year_do_not_raise(self):
+        one = self.span(1, self.A, 2026, 2026)
+        two = self.span(2, self.A, 2026, 2026)
+        self.assertIs(ra.judge_join(two, [one, two]).kind, ra.MoveKind.REJOINED)
+        self.assertIs(ra.judge_leave(one, [one, two]).kind, ra.MoveKind.DEPARTED)
+
+    def test_order_is_kind_then_number(self):
+        rows = [
+            (ra.MoveKind.REJOINED, 1),
+            (ra.MoveKind.TRANSFER, 30),
+            (ra.MoveKind.NEW_SIGNING, 99),
+            (ra.MoveKind.TRANSFER, 5),
+        ]
+        rows.sort(key=lambda r: ra.move_order(*r))
+        self.assertEqual(
+            rows,
+            [
+                (ra.MoveKind.NEW_SIGNING, 99),
+                (ra.MoveKind.TRANSFER, 5),
+                (ra.MoveKind.TRANSFER, 30),
+                (ra.MoveKind.REJOINED, 1),
+            ],
+        )

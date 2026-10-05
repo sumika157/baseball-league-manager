@@ -210,3 +210,87 @@ def average_age(ages: Iterable[int | None]) -> float | None:
     """平均年齢。帯ではなく実際の年齢の合計から求める。年齢が分かる人がいなければ None。"""
     known = [age for age in ages if age is not None]
     return sum(known) / len(known) if known else None
+
+
+class MoveKind(Enum):
+    """入退団の区分。語彙と並び（宣言順）はここが唯一の出典。
+
+    加入は新入団・移籍・再入団、退団は移籍・退団のどれか。
+    """
+
+    NEW_SIGNING = "新入団"
+    TRANSFER = "移籍"
+    REJOINED = "再入団"
+    DEPARTED = "退団"
+
+
+@dataclass(frozen=True)
+class StintSpan:
+    """判定に使う在籍1件。to_year は最後に在籍した年（含む）で、空なら在籍中。"""
+
+    stint_id: int
+    team_id: int
+    from_year: int
+    to_year: int | None
+
+    @property
+    def order_key(self) -> tuple[int, bool, int, int]:
+        """在籍の前後を決める並び。始まった年。同じ年なら、その年のうちに終わった在籍を先に置く
+        （シーズン途中の移籍で、移籍元を先にするため。登録した順＝id に頼ると、経歴を後から足したときに逆になる）。
+        最後の決め手は id。
+        """
+        return (self.from_year, self.to_year is None, self.to_year or 0, self.stint_id)
+
+
+@dataclass(frozen=True)
+class MoveJudgement:
+    """入退団の判定結果。other_team_id は移籍のときの前所属（加入）または移籍先（退団）。"""
+
+    kind: MoveKind
+    other_team_id: int | None = None
+
+
+def _is_consecutive(before: StintSpan, after: StintSpan) -> bool:
+    """before の後に間を空けず after が始まったか（同じ年か翌年）。加入と退団で同じ窓を使い、
+    同じ動きが球団によって移籍にも退団にも見える食い違いを防ぐ。
+    before が終わっていない（重なっている）ときも続いているとみなす。
+    """
+    return before.to_year is None or after.from_year <= before.to_year + 1
+
+
+def judge_join(own: StintSpan, stints: Iterable[StintSpan]) -> MoveJudgement:
+    """加入の区分。stints はその選手の全在籍（own を含んでよい）。
+
+    直前の在籍（自分を除く）が同じチームなら再入団。別のチームで、間を空けず（前年までに終わって）
+    続いていれば移籍（その球団が前所属）。それ以外（在籍が無い・間が空いた）は新入団。
+    """
+    earlier = [s for s in stints if s.stint_id != own.stint_id and s.order_key < own.order_key]
+    if not earlier:
+        return MoveJudgement(MoveKind.NEW_SIGNING)
+    previous = max(earlier, key=lambda s: s.order_key)
+    if previous.team_id == own.team_id:
+        return MoveJudgement(MoveKind.REJOINED)
+    if _is_consecutive(previous, own):
+        return MoveJudgement(MoveKind.TRANSFER, previous.team_id)
+    return MoveJudgement(MoveKind.NEW_SIGNING)
+
+
+def judge_leave(own: StintSpan, stints: Iterable[StintSpan]) -> MoveJudgement:
+    """退団の区分。own は退団年（to_year）を持つ在籍。
+
+    この在籍の後に間を空けず（同じ年か翌年から）始まる在籍があり、それが別のチームなら移籍（移籍先）。
+    それ以外は退団（引退・自由契約などは在籍からは区別できない）。
+    """
+    later = [
+        s for s in stints if s.stint_id != own.stint_id and s.order_key > own.order_key and _is_consecutive(own, s)
+    ]
+    if later:
+        following = min(later, key=lambda s: s.order_key)
+        if following.team_id != own.team_id:
+            return MoveJudgement(MoveKind.TRANSFER, following.team_id)
+    return MoveJudgement(MoveKind.DEPARTED)
+
+
+def move_order(kind: MoveKind, number: int) -> tuple[int, int]:
+    """入退団の表の並び。区分（宣言順）、背番号順。"""
+    return (list(MoveKind).index(kind), number)
