@@ -13,6 +13,7 @@ from ..domain.exceptions import InvalidPosition
 from ..domain.value_objects import (
     AdvanceReason,
     Base,
+    ContractStatus,
     ErrorKind,
     FieldingPosition,
     PlateAppearanceResult,
@@ -26,8 +27,11 @@ FIELDING_POSITION_CHOICES = [("", "—")] + [(p.value, p.value) for p in Fieldin
 MAX_INNINGS = 12
 
 
-class PlayerRegistrationForm(forms.Form):
-    """新入団選手の登録。"""
+class PlayerUpdateForm(forms.Form):
+    """選手情報の更新。基本情報の項目は登録時と同じ（契約区分を除く）。
+
+    契約区分は更新では変えない（昇格でしか変わらない）ので、欄を持たない。
+    """
 
     name = forms.CharField(label="選手名", max_length=100)
     number = forms.IntegerField(label="背番号", min_value=0, max_value=999)
@@ -38,8 +42,19 @@ class PlayerRegistrationForm(forms.Form):
     )
 
 
-class PlayerUpdateForm(PlayerRegistrationForm):
-    """選手情報の更新。基本情報の項目は登録時と同じ。"""
+class PlayerRegistrationForm(PlayerUpdateForm):
+    """新入団選手の登録。基本情報に加えて、加入時の契約区分を選ぶ。"""
+
+    # 選択肢はドメインの ContractStatus が唯一の出典。省略時は支配下
+    contract = forms.ChoiceField(
+        label="契約区分",
+        choices=[(label, label) for label in ContractStatus.labels()],
+        initial=ContractStatus.REGISTERED.value,
+        required=False,
+    )
+
+    def clean_contract(self) -> str:
+        return self.cleaned_data.get("contract") or ContractStatus.REGISTERED.value
 
 
 class GameForm(forms.Form):

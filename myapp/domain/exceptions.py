@@ -83,3 +83,14 @@ class InvalidCaptaincy(DomainError):
 
 class ForeignPlayerQuotaExceeded(DomainError):
     """外国人選手の人数が上限を超えている（登録枠・試合出場枠のどちらにも使う）。"""
+
+
+class InvalidContract(DomainError):
+    """契約区分（支配下／育成）として成立しない内容。
+
+    区分と背番号の食い違い、昇格の年が在籍期間の外、育成でない選手の昇格など。
+    """
+
+
+class RegisteredPlayerLimitExceeded(DomainError):
+    """支配下選手の人数が上限を超えている。"""

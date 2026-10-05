@@ -12,6 +12,7 @@ from django.test import SimpleTestCase
 
 from myapp.application.game_recording import GameRecordingService
 from myapp.application.queries import GameListQuery, TeamAnalysisQuery, TeamListQuery
+from myapp.application.roster import RosterService
 from myapp.application.services import TeamApplicationService
 from myapp.application.team_analysis import TeamAnalysisService
 from myapp.domain.repositories import GameRepository, LeagueRepository, TeamRepository
@@ -21,7 +22,12 @@ from myapp.infrastructure.repositories import (
     DjangoLeagueRepository,
     DjangoTeamRepository,
 )
-from myapp.presentation.views import build_recording_service, build_service, build_team_analysis_service
+from myapp.presentation.views import (
+    build_recording_service,
+    build_roster_service,
+    build_service,
+    build_team_analysis_service,
+)
 
 
 class ProtocolConformanceTest(SimpleTestCase):
@@ -64,6 +70,10 @@ class BuildServiceTest(SimpleTestCase):
     def test_team_analysis_service_dependencies_are_wired(self):
         """戦力分析のサービスも同じ検査にかける（組み立て口は build_*() 関数だけ）。"""
         self._assert_wired(build_team_analysis_service(), TeamAnalysisService)
+
+    def test_roster_service_dependencies_are_wired(self):
+        """契約区分（昇格）のサービスも同じ検査にかける（組み立て口は build_*() 関数だけ）。"""
+        self._assert_wired(build_roster_service(), RosterService)
 
     def _assert_wired(self, service, cls):
         parameters = [name for name in signature(cls.__init__).parameters if name != "self"]

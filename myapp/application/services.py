@@ -16,6 +16,7 @@ from ..domain import services as domain_services
 from ..domain.entities import Game, Player, Stint, Team
 from ..domain.repositories import GameRepository, LeagueRepository, TeamRepository
 from ..domain.value_objects import (
+    ContractStatus,
     FieldingPosition,
     JerseyNumber,
     PitchingLine,
@@ -84,6 +85,11 @@ def _saved_id(value: int | None) -> int:
     """
     assert value is not None, "リポジトリから読んだ集約は保存済み"
     return value
+
+
+def _is_developmental(team: Team, player: Player) -> bool:
+    """このチームで今、育成契約の選手か。画面の「育成」バッジの出典。"""
+    return team.contract_of(player) is ContractStatus.DEVELOPMENTAL
 
 
 # ランキングの値を画面の書式に直す関数（_as_average など）
@@ -386,7 +392,12 @@ class TeamApplicationService:
         captain = team.current_captain
         context = self._league_context(team.league_id)
         return Listing(
-            rows=[self._to_batter_row(p, is_captain=p is captain, league_context=context) for p in players],
+            rows=[
+                self._to_batter_row(
+                    p, is_captain=p is captain, league_context=context, is_developmental=_is_developmental(team, p)
+                )
+                for p in players
+            ],
             sort=key,
             descending=desc,
         )
@@ -400,7 +411,12 @@ class TeamApplicationService:
         captain = team.current_captain
         context = self._league_context(team.league_id)
         return Listing(
-            rows=[self._to_pitcher_row(p, is_captain=p is captain, league_context=context) for p in players],
+            rows=[
+                self._to_pitcher_row(
+                    p, is_captain=p is captain, league_context=context, is_developmental=_is_developmental(team, p)
+                )
+                for p in players
+            ],
             sort=key,
             descending=desc,
         )
@@ -1298,13 +1314,26 @@ class TeamApplicationService:
 
     # --- 更新系 ---
 
-    def register_player(self, team_id: int, name: str, number: int, position_label: str) -> Player:
-        """新しい選手をロスターに加える。"""
+    def register_player(
+        self,
+        team_id: int,
+        name: str,
+        number: int,
+        position_label: str,
+        contract_label: str = ContractStatus.REGISTERED.value,
+    ) -> Player:
+        """新しい選手をロスターに加える。契約区分は既定で支配下。"""
         team = self._teams.find_by_id(team_id)
+        contract = ContractStatus.from_label(contract_label)
+        if contract is ContractStatus.REGISTERED:
+            # 育成の追加は支配下を増やさないので、上限は見ない
+            league = self._leagues.find_by_id(_saved_id(team.league_id))
+            team.ensure_room_for_registered(league.registered_player_limit)
         player = team.add_player(
             name=name,
             number=JerseyNumber(number),
             position=Position.from_label(position_label),
+            contract=contract,
         )
         self._teams.save(team)
         return player
@@ -1341,11 +1370,15 @@ class TeamApplicationService:
         to_team_id: int,
         number: int,
         year: int | None = None,
+        contract_label: str | None = None,
     ) -> None:
         """選手を移籍させる。元の在籍を閉じ、移籍先で新しい在籍を開く。
 
         成績は選手に紐づくため移籍しても失われない。経歴として
         「いつどのチームに居たか」が残る。
+
+        移籍先での契約区分は、指定が無ければ移籍元での今の区分を引き継ぐ
+        （育成選手は育成のまま移る）。背番号は新しい区分に合うものにする。
 
         検査がすべて終わってから保存する。途中で拒否された場合に、元チームだけ
         退団済みで移籍先には入らない、という中途半端な状態を残さないため。
@@ -1354,23 +1387,32 @@ class TeamApplicationService:
 
         source = self._teams.find_by_id(from_team_id)
         player = source.find_player(player_id)
+        contract = (
+            ContractStatus.from_label(contract_label)
+            if contract_label is not None
+            else source.contract_of(player) or ContractStatus.REGISTERED
+        )
         source.retire_player(player, season)
 
         destination = self._teams.find_by_id(to_team_id)
+        contract.ensure_number_fits(JerseyNumber(number))
         destination._ensure_number_is_available(JerseyNumber(number))
+        league = self._leagues.find_by_id(_saved_id(destination.league_id))
+        if contract is ContractStatus.REGISTERED:
+            destination.ensure_room_for_registered(league.registered_player_limit)
         player.career.append(
             Stint(
                 team_id=to_team_id,
                 team_name=destination.name,
                 number=JerseyNumber(number),
                 from_year=season,
+                signed_as=contract,
             )
         )
         player.number = JerseyNumber(number)
         player.is_active = True
         destination.players.append(player)
 
-        league = self._leagues.find_by_id(_saved_id(destination.league_id))
         destination.ensure_foreign_player_quota(league.foreign_player_roster_limit)
 
         self._teams.save(source)
@@ -1510,6 +1552,7 @@ class TeamApplicationService:
         player: Player,
         *,
         is_captain: bool = False,
+        is_developmental: bool = False,
         league_context: _LeagueContext = _EMPTY_LEAGUE_CONTEXT,
     ) -> BatterRow:
         assert player.id is not None, "一覧に載る選手は保存済み"
@@ -1535,6 +1578,7 @@ class TeamApplicationService:
             slugging_percentage=line.slugging_percentage,
             ops_plus=line.ops_plus(league_context.average_ops),
             is_captain=is_captain,
+            is_developmental=is_developmental,
             is_foreign_player=profile.is_foreign_player,
             throws_bats=profile.throws_bats,
             height_cm=profile.height_cm,
@@ -1547,6 +1591,7 @@ class TeamApplicationService:
         player: Player,
         *,
         is_captain: bool = False,
+        is_developmental: bool = False,
         league_context: _LeagueContext = _EMPTY_LEAGUE_CONTEXT,
     ) -> PitcherRow:
         assert player.id is not None, "一覧に載る選手は保存済み"
@@ -1574,6 +1619,7 @@ class TeamApplicationService:
             home_runs_allowed=line.home_runs_allowed,
             hit_by_pitch_allowed=line.hit_by_pitch_allowed,
             is_captain=is_captain,
+            is_developmental=is_developmental,
             is_foreign_player=profile.is_foreign_player,
             throws_bats=profile.throws_bats,
             height_cm=profile.height_cm,
@@ -1597,6 +1643,7 @@ class TeamApplicationService:
             position=player.position.label,
             is_pitcher=player.is_pitcher,
             is_captain=team.current_captain is player,
+            is_developmental=_is_developmental(team, player),
             at_bats=batting.at_bats,
             singles=batting.singles,
             plate_appearances=batting.plate_appearances,

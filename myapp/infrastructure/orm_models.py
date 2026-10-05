@@ -11,8 +11,10 @@ from django.conf import settings
 from django.db import models
 
 from ..domain.value_objects import (
+    DEFAULT_REGISTERED_PLAYER_LIMIT,
     AdvanceReason,
     Base,
+    ContractStatus,
     ErrorKind,
     FieldingPosition,
     Handedness,
@@ -23,6 +25,8 @@ from ..domain.value_objects import (
 
 # 守備位置の選択肢はドメインの Position を唯一の出典とする。
 POSITION_CHOICES = [(position.value, position.value) for position in Position]
+# 契約区分（支配下/育成）の選択肢もドメインの ContractStatus が唯一の出典
+CONTRACT_STATUS_CHOICES = [(status.value, status.value) for status in ContractStatus]
 # 試合で就いた守備位置。登録位置（Position）とは別の概念
 FIELDING_POSITION_CHOICES = [(p.value, p.value) for p in FieldingPosition]
 # 打席まわりの選択肢も同じくドメインの値オブジェクトが出典。ここに文字列を
@@ -54,6 +58,13 @@ class League(models.Model):
         default=3,
         verbose_name="外国人選手出場枠",
         help_text="1試合に出場できる外国人選手の上限人数。空欄なら無制限。",
+    )
+    registered_player_limit = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        default=DEFAULT_REGISTERED_PLAYER_LIMIT,
+        verbose_name="支配下選手登録枠",
+        help_text="登録できる支配下選手の上限人数（育成は数えません）。空欄なら無制限。",
     )
 
     class Meta:
@@ -196,6 +207,25 @@ class PlayerStint(models.Model):
         blank=True,
         verbose_name="退団年",
         help_text="空欄なら現在も在籍しています。",
+    )
+    signed_as = models.CharField(
+        max_length=10,
+        choices=CONTRACT_STATUS_CHOICES,
+        default=ContractStatus.REGISTERED.value,
+        verbose_name="加入時の契約区分",
+        help_text="支配下または育成。育成の背番号は100以上、支配下は99以下です。",
+    )
+    promoted_year = models.IntegerField(
+        null=True,
+        blank=True,
+        verbose_name="支配下登録年",
+        help_text="育成から支配下に上がった年。育成で加入し、まだ上がっていなければ空欄。",
+    )
+    number_before_promotion = models.IntegerField(
+        null=True,
+        blank=True,
+        verbose_name="昇格前の背番号",
+        help_text="育成から支配下に上がる前の背番号（100以上）。支配下登録年を入れたときは必須です。",
     )
 
     class Meta:

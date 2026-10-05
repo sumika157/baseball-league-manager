@@ -18,16 +18,20 @@ from .exceptions import (
     DuplicateCaptain,
     DuplicateJerseyNumber,
     InvalidCaptaincy,
+    InvalidContract,
     InvalidGame,
     InvalidPlateAppearance,
     InvalidStint,
     PlayerNotEligibleForCaptaincy,
     PlayerNotFound,
+    RegisteredPlayerLimitExceeded,
 )
 from .value_objects import (
+    DEFAULT_REGISTERED_PLAYER_LIMIT,
     AdvanceReason,
     Base,
     BattingLine,
+    ContractStatus,
     ErrorKind,
     FieldingLine,
     FieldingPosition,
@@ -55,6 +59,8 @@ class League:
     # 外国人選手の枠。リーグごとにルールが異なりうるためここに持つ。None なら無制限
     foreign_player_roster_limit: int | None = None
     foreign_player_game_limit: int | None = None
+    # 支配下選手の登録上限。NPB は70人。None なら無制限
+    registered_player_limit: int | None = DEFAULT_REGISTERED_PLAYER_LIMIT
 
     def __str__(self) -> str:
         return self.name
@@ -85,6 +91,12 @@ class Stint:
     """在籍。ある選手が、あるチームに、いつからいつまで在籍したか。
 
     背番号も在籍ごとに持つ。移籍で変わるため選手そのものには持たせない。
+
+    契約区分（支配下／育成）も在籍ごとの事実で、試合からは導けない入力の値。
+    加入時の区分（signed_as）と、育成から支配下に上がった年（promoted_year）で持ち、
+    ある年の区分は contract_in(year) で導く。背番号は昇格で変わるため、
+    number は常に最新の区分に合う番号で、昇格前（育成だった間）の番号は
+    number_before_promotion に残す（年ごとの番号は number_in(year)）。
     """
 
     team_id: int
@@ -93,6 +105,11 @@ class Stint:
     to_year: int | None = None
     id: int | None = None
     team_name: str = ""
+    signed_as: ContractStatus = ContractStatus.REGISTERED
+    promoted_year: int | None = None
+    # 昇格する前（育成だった間）の背番号。昇格していなければ None。
+    # 昇格で number が支配下の番号に変わるので、育成だった年の番号はここに残す
+    number_before_promotion: JerseyNumber | None = None
 
     def __post_init__(self) -> None:
         self.from_year = Season(self.from_year).year
@@ -100,6 +117,15 @@ class Stint:
             self.to_year = Season(self.to_year).year
             if self.to_year < self.from_year:
                 raise InvalidStint("退団年が加入年より前になっています。")
+        if self.promoted_year is not None:
+            self.promoted_year = Season(self.promoted_year).year
+            self._ensure_promotion_year_is_valid(self.promoted_year)
+            # 昇格した記録には、昇格前の番号を必ず添える（過去の昇格を手入力する場合も同じ）。
+            # 無いと、育成だった年に誰がどの番号を着けていたか分からなくなる
+            if self.number_before_promotion is None:
+                raise InvalidContract("支配下登録の年を入れるときは、昇格前の背番号も入力してください。")
+        elif self.number_before_promotion is not None:
+            raise InvalidContract("昇格前の背番号は、支配下登録の年があるときだけ設定できます。")
 
     def __str__(self) -> str:
         return f"{self.from_year}〜{self.to_year or '現在'}"
@@ -107,6 +133,82 @@ class Stint:
     @property
     def is_current(self) -> bool:
         return self.to_year is None
+
+    def _ensure_promotion_year_is_valid(self, year: int) -> None:
+        if self.signed_as is not ContractStatus.DEVELOPMENTAL:
+            raise InvalidContract("支配下で加入した選手に、支配下登録の年は設定できません。")
+        if year < self.from_year:
+            raise InvalidContract("支配下登録の年が加入年より前になっています。")
+        if self.to_year is not None and year > self.to_year:
+            raise InvalidContract("支配下登録の年が退団年より後になっています。")
+
+    def contract_in(self, year: int) -> ContractStatus:
+        """その年の契約区分。育成で加入し、その年までに昇格していれば支配下。"""
+        if self.signed_as is ContractStatus.REGISTERED:
+            return ContractStatus.REGISTERED
+        if self.promoted_year is not None and self.promoted_year <= year:
+            return ContractStatus.REGISTERED
+        return ContractStatus.DEVELOPMENTAL
+
+    @property
+    def contract_now(self) -> ContractStatus:
+        """今（在籍の最後の時点）の契約区分。昇格していれば支配下。"""
+        if self.signed_as is ContractStatus.DEVELOPMENTAL and self.promoted_year is None:
+            return ContractStatus.DEVELOPMENTAL
+        return ContractStatus.REGISTERED
+
+    def ensure_number_matches_contract(self) -> None:
+        """背番号が区分に合うか。管理画面など、集約を通さない書き込みからも呼ぶ。
+
+        今の番号は今の区分に、昇格前の番号は育成に合っていること。
+        """
+        self.contract_now.ensure_number_fits(self.number)
+        if self.number_before_promotion is not None:
+            ContractStatus.DEVELOPMENTAL.ensure_number_fits(self.number_before_promotion)
+
+    def number_in(self, year: int) -> JerseyNumber:
+        """その年の背番号。昇格より前の年は昇格前の番号、それ以降は今の番号。"""
+        if self.promoted_year is not None and self.number_before_promotion is not None and year < self.promoted_year:
+            return self.number_before_promotion
+        return self.number
+
+    def number_periods(self) -> list[tuple[JerseyNumber, int, int | None]]:
+        """背番号ごとの期間（番号・開始年・終了年）。終了年が None なら現在も。
+
+        昇格した在籍は「昇格前の期間×昇格前の番号」と「昇格後の期間×今の番号」の2つに分かれる。
+        昇格の年に加入した（昇格前の期間が空の）ときは後者だけ。
+        """
+        if self.promoted_year is None or self.number_before_promotion is None:
+            return [(self.number, self.from_year, self.to_year)]
+        periods = [(self.number, self.promoted_year, self.to_year)]
+        if self.promoted_year > self.from_year:
+            periods.insert(0, (self.number_before_promotion, self.from_year, self.promoted_year - 1))
+        return periods
+
+    def shared_number(self, other: Stint) -> JerseyNumber | None:
+        """期間が重なる同じ背番号があれば、その番号。他人の在籍との照合（同じチーム内）に使う。"""
+        for number, start, end in self.number_periods():
+            for other_number, other_start, other_end in other.number_periods():
+                if number != other_number:
+                    continue
+                if (other_end is None or start <= other_end) and (end is None or other_start <= end):
+                    return number
+        return None
+
+    def ensure_promotable(self) -> None:
+        """今が育成か。昇格できるかの判定と文言はここが唯一の出典。"""
+        if self.contract_now is not ContractStatus.DEVELOPMENTAL:
+            raise InvalidContract("育成選手ではないため、支配下登録にはできません。")
+
+    def promote(self, year: int, number: JerseyNumber) -> None:
+        """育成から支配下に上げる。背番号は支配下の番号に変わる。"""
+        self.ensure_promotable()
+        season = Season(year).year
+        self._ensure_promotion_year_is_valid(season)
+        ContractStatus.REGISTERED.ensure_number_fits(number)
+        self.promoted_year = season
+        self.number_before_promotion = self.number
+        self.number = number
 
     def covers(self, year: int) -> bool:
         return self.from_year <= year and (self.to_year is None or year <= self.to_year)
@@ -273,9 +375,21 @@ class Team:
 
     # --- ロスターの変更（不変条件を守る） ---
 
-    def add_player(self, name: str, number: JerseyNumber, position: Position, from_year: int | None = None) -> Player:
-        """選手を加入させる。背番号が在籍中の選手と重複する場合は拒否する。"""
+    def add_player(
+        self,
+        name: str,
+        number: JerseyNumber,
+        position: Position,
+        from_year: int | None = None,
+        contract: ContractStatus = ContractStatus.REGISTERED,
+    ) -> Player:
+        """選手を加入させる。背番号が在籍中の選手と重複する場合や、契約区分に合わない場合は拒否する。
+
+        支配下の上限は集約からは見えない（リーグが持つ）ので、呼び出し側が
+        支配下で加えるなら、加える前に ensure_room_for_registered で検査する。
+        """
         assert self.id is not None, "ロスターの変更は保存済みのチームに対して行う"
+        contract.ensure_number_fits(number)
         self._ensure_number_is_available(number)
 
         player = Player(name=(name or "").strip(), number=number, position=position)
@@ -290,20 +404,59 @@ class Team:
                 number=number,
                 from_year=from_year if from_year is not None else date.today().year,
                 team_name=self.name,
+                signed_as=contract,
             )
         ]
         self.players.append(player)
         return player
 
     def change_player_number(self, player: Player, number: JerseyNumber) -> None:
-        """背番号を変更する。在籍中の他の選手と重複する場合は拒否する。"""
+        """背番号を変更する。在籍中の他の選手と重複する場合や、今の契約区分に合わない場合は拒否する。"""
         if player.number == number:
             return
-        self._ensure_number_is_available(number, excluding=player)
-        player.number = number
         current = self.current_stint(player)
         if current is not None:
+            current.contract_now.ensure_number_fits(number)
+        self._ensure_number_is_available(number, excluding=player)
+        player.number = number
+        if current is not None:
             current.number = number
+
+    def ensure_promotable(self, player_id: int) -> None:
+        """在籍中の育成選手か。昇格できない選手なら、その理由の例外を投げる。
+
+        支配下の上限など他の検査より先に呼ぶ（理由を取り違えて案内しないため）。
+        """
+        self._promotable_stint(player_id)
+
+    def _promotable_stint(self, player_id: int) -> Stint:
+        """昇格の対象の在籍（在籍中の育成選手）。そうでなければ理由の例外を投げる。"""
+        player = self.find_player(player_id)
+        current = self.current_stint(player)
+        if current is None:
+            raise InvalidContract(f"「{self.name}」に在籍していない選手は支配下登録にできません。")
+        current.ensure_promotable()
+        return current
+
+    def promote_player(self, player_id: int, number: JerseyNumber, year: int | None = None) -> Player:
+        """育成選手を支配下に上げる。背番号は支配下の番号（99以下）に変わる。
+
+        在籍中の育成選手だけが対象。支配下の上限は呼び出し側が
+        ensure_room_for_registered で昇格の前に検査する（add_player と同じ）。
+        その前に ensure_promotable で、昇格できる選手かを見ておく。
+        """
+        current = self._promotable_stint(player_id)
+        player = self.find_player(player_id)
+        # 新しい背番号が支配下の番号か・昇格の年が妥当かは Stint.promote が検査する。重複はここで見る
+        self._ensure_number_is_available(number, excluding=player)
+        current.promote(year if year is not None else date.today().year, number)
+        player.number = number
+        return player
+
+    def contract_of(self, player: Player) -> ContractStatus | None:
+        """このチームでの今の契約区分。在籍していなければ None。"""
+        current = self.current_stint(player)
+        return current.contract_now if current is not None else None
 
     def current_stint(self, player: Player) -> Stint | None:
         """このチームでの現在の在籍。"""
@@ -394,6 +547,27 @@ class Team:
             self.foreign_player_count,
             limit,
             f"「{self.name}」の外国人選手登録数が上限（{limit}人）を超えています。",
+        )
+
+    # --- 支配下の上限 ---
+
+    @property
+    def registered_player_count(self) -> int:
+        """在籍中で、今の区分が支配下の選手の数。育成は数えない。"""
+        return sum(1 for p in self.active_players if self.contract_of(p) is ContractStatus.REGISTERED)
+
+    def ensure_room_for_registered(self, limit: int | None) -> None:
+        """支配下の選手が1人増えても上限を超えないか確認する。
+
+        支配下が増える操作（支配下での選手追加・支配下としての移籍受け入れ・昇格）の
+        **前**に呼ぶ。育成の追加は支配下を増やさないので呼ばない。
+        メッセージの出典はここだけ（管理画面も application もこれを呼ぶ）。
+        """
+        ensure_quota_not_exceeded(
+            self.registered_player_count + 1,
+            limit,
+            f"「{self.name}」の支配下選手登録数が上限（{limit}人）を超えています。",
+            RegisteredPlayerLimitExceeded,
         )
 
 

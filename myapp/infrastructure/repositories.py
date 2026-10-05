@@ -42,6 +42,7 @@ from ..domain.value_objects import (
     AdvanceReason,
     Base,
     BattingLine,
+    ContractStatus,
     ErrorKind,
     FieldingLine,
     FieldingPosition,
@@ -227,6 +228,11 @@ class DjangoTeamRepository:
                         "number": stint.number.value,
                         "from_year": stint.from_year,
                         "to_year": stint.to_year,
+                        "signed_as": stint.signed_as.value,
+                        "promoted_year": stint.promoted_year,
+                        "number_before_promotion": (
+                            stint.number_before_promotion.value if stint.number_before_promotion is not None else None
+                        ),
                     },
                 )
                 stint.id = stint_row.id
@@ -310,6 +316,11 @@ def _careers_of(player_ids: list[int]) -> dict[int, list[Stint]]:
                 number=JerseyNumber(row.number),
                 from_year=row.from_year,
                 to_year=row.to_year,
+                signed_as=ContractStatus.from_label(row.signed_as),
+                promoted_year=row.promoted_year,
+                number_before_promotion=(
+                    JerseyNumber(row.number_before_promotion) if row.number_before_promotion is not None else None
+                ),
             )
         )
     return careers
@@ -844,4 +855,5 @@ class DjangoLeagueRepository:
             name=row.name,
             foreign_player_roster_limit=row.foreign_player_roster_limit,
             foreign_player_game_limit=row.foreign_player_game_limit,
+            registered_player_limit=row.registered_player_limit,
         )
