@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from datetime import date
 
 from myapp.domain.entities import Team
@@ -15,7 +16,7 @@ from myapp.domain.pennant.offseason import (
     retirement_value,
 )
 from myapp.domain.pennant.ratings import PlayerRatings
-from myapp.domain.pennant.retirement import MAX_PLAYING_AGE, PlayingTime
+from myapp.domain.pennant.retirement import MAX_PLAYING_AGE, ROOKIE_FACTOR, PlayingTime, retirement_chance
 from myapp.domain.simulation.randomness import game_uniform
 from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings
 from myapp.domain.value_objects import JerseyNumber, Position, Profile
@@ -159,6 +160,39 @@ class HelperTest(unittest.TestCase):
         self.assertEqual(value, game_uniform(1, 2027, "retire-5"))
         self.assertTrue(0.0 <= value < 1.0)
         self.assertNotEqual(value, game_uniform(1, 2027, "retire-6"))
+
+
+class RookieProtectionTest(unittest.TestCase):
+    """若手の保護（入団2年以内）は、入団年（`debut_year`）から数える。分岐した選手の在籍の開始年は一律に開幕年。"""
+
+    def test_the_entered_year_is_the_debut_year_when_known(self) -> None:
+        forked = replace(player(1), joined_year=START_YEAR, profile=Profile(debut_year=2018))
+        self.assertEqual(forked.entered_year, 2018)
+
+    def test_the_entered_year_falls_back_to_the_start_of_the_stint(self) -> None:
+        self.assertEqual(replace(player(1), joined_year=2020, profile=Profile()).entered_year, 2020)
+
+    def test_a_forked_veteran_is_not_protected_as_a_rookie(self) -> None:
+        """入団2021年の23歳の選手が、分岐した年（在籍の開始年 = 開幕年）を理由に保護されない。"""
+        born = date(2003, 7, 1)  # YEAR の4月1日で23歳
+        veteran = replace(
+            player(1, born=born), joined_year=START_YEAR, profile=Profile(birth_date=born, debut_year=2021)
+        )
+        rookie = replace(
+            player(2, born=born), joined_year=START_YEAR, profile=Profile(birth_date=born, debut_year=YEAR)
+        )
+        self.assertEqual((veteran.seasons_as_pro(YEAR), rookie.seasons_as_pro(YEAR)), (7, 1))
+        chances = [
+            retirement_chance(
+                age=23,
+                value=45.0,
+                playing_time=PlayingTime(plate_appearances=400),
+                is_foreign=False,
+                seasons_as_pro=target.seasons_as_pro(YEAR),
+            )
+            for target in (veteran, rookie)
+        ]
+        self.assertAlmostEqual(chances[0], chances[1] / ROOKIE_FACTOR)
 
 
 if __name__ == "__main__":

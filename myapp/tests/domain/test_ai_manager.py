@@ -4,6 +4,7 @@
 継投（抑えはセーブの状況で）、救援の連投（3連投禁止）、代打の条件、外国人の出場枠。
 """
 
+from dataclasses import replace
 from datetime import date, timedelta
 from typing import Any
 from unittest import TestCase
@@ -22,6 +23,7 @@ from myapp.domain.simulation.manager import (
     PitchingHistory,
     SimBatter,
     SimPitcher,
+    assign_fielders,
     available_relievers,
     choose_active_roster,
     choose_lineup,
@@ -31,9 +33,11 @@ from myapp.domain.simulation.manager import (
     pick_reliever,
     plan_pitching_staff,
     plays_position,
+    regular_value,
     reliever_batter_target,
     should_change_pitcher,
     starter_batter_target,
+    unfilled_slot,
 )
 from myapp.domain.simulation.randomness import make_random
 from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings
@@ -127,6 +131,102 @@ class ActiveRosterTest(TestCase):
         pool = full_pool(foreign_ids=(4, 5, 6, 7, 8))
         active = choose_active_roster(pool, foreign_roster_limit=None)
         self.assertEqual(sum(b.is_foreign for b in active.batters), 5)
+
+    def fielders_pool(self, outfielders: int) -> ClubRoster:
+        """外野手がいちばん弱く、能力順に選ぶと外野を守れる人数が1軍に入らない候補。"""
+        positions = [Position.CATCHER] * 3 + [Position.INFIELDER] * 12 + [Position.OUTFIELDER] * outfielders
+        batters = tuple(
+            batter(
+                number,
+                position,
+                contact=70 - number,
+                power=70 - number,
+                eye=70 - number,
+                speed=70 - number,
+                fielding=70 - number,
+            )
+            for number, position in enumerate(positions, start=1)
+        )
+        return ClubRoster(1, "層が偏った球団", batters, tuple(pitcher(100 + n) for n in range(1, 20)))
+
+    def test_the_active_roster_can_always_field_the_eight_positions_when_the_squad_can(self):
+        pool = self.fielders_pool(outfielders=5)
+        by_value = sorted(pool.batters, key=regular_value, reverse=True)[:15]
+        self.assertIsNotNone(unfilled_slot(by_value), "能力順のままだと外野を守れる人数が入らない（前提）")
+
+        active = choose_active_roster(pool)
+
+        self.assertIsNone(unfilled_slot(active.batters))
+        self.assertEqual(len(active.batters) + len(active.pitchers), ACTIVE_ROSTER_SIZE)
+        self.assertGreaterEqual(sum(b.position is Position.CATCHER for b in active.batters), 2)
+
+    def test_the_coverage_swap_respects_the_foreign_registration_limit(self):
+        pool = self.fielders_pool(outfielders=5)
+        foreign_outfielders = {b.player_id for b in pool.batters if b.position is Position.OUTFIELDER}
+        pool = ClubRoster(
+            1,
+            pool.name,
+            tuple(replace(b, is_foreign=b.player_id in foreign_outfielders) for b in pool.batters),
+            pool.pitchers,
+        )
+
+        active = choose_active_roster(pool, foreign_roster_limit=1)
+
+        self.assertLessEqual(sum(b.is_foreign for b in (*active.batters, *active.pitchers)), 1)
+
+    def test_the_foreign_registration_limit_counts_the_foreign_pitchers_too(self):
+        """外国人の登録枠は1軍全体（投手を含む）。補充（守備位置・捕手）が、投手の外国人ぶんを忘れて枠を破らない。"""
+        pool = self.fielders_pool(outfielders=5)
+        outfielders = {b.player_id for b in pool.batters if b.position is Position.OUTFIELDER}
+        foreign_pitchers = {101, 102}
+        pool = ClubRoster(
+            1,
+            pool.name,
+            tuple(replace(b, is_foreign=b.player_id in outfielders) for b in pool.batters),
+            tuple(replace(p, is_foreign=p.player_id in foreign_pitchers) for p in pool.pitchers),
+        )
+
+        active = choose_active_roster(pool, foreign_roster_limit=3)
+
+        self.assertLessEqual(sum(p.is_foreign for p in (*active.batters, *active.pitchers)), 3)
+
+    def test_the_catcher_minimum_counts_the_foreign_pitchers_too(self):
+        pool = full_pool(foreign_ids=(1, 2, 101, 102))  # 捕手3人のうち強い2人と、強い投手2人が外国人
+
+        active = choose_active_roster(pool, foreign_roster_limit=2)
+
+        self.assertLessEqual(sum(p.is_foreign for p in (*active.batters, *active.pitchers)), 2)
+
+    def test_fielders_who_already_stand_correctly_do_not_move_for_a_newcomer(self):
+        """空いている位置があるのに、座っている選手を玉突きで動かさない。"""
+        first, second, third_ss = batter(1), batter(2), batter(3)
+        wrong = batter(4, Position.OUTFIELDER)  # 三塁に置かれた外野手（誤り）
+        designated = batter(5)  # 内野手として登録された、指名打者の枠の選手
+        keep = {FP.FIRST_BASE: first, FP.SECOND_BASE: second, FP.THIRD_BASE: wrong, FP.SHORTSTOP: third_ss}
+
+        owners = assign_fielders([first, second, wrong, third_ss, designated], lambda b: b.position, keep=keep)
+
+        self.assertIs(owners[FP.FIRST_BASE], first)
+        self.assertIs(owners[FP.SECOND_BASE], second)
+        self.assertIs(owners[FP.SHORTSTOP], third_ss)
+        self.assertIs(owners[FP.THIRD_BASE], designated)
+        self.assertIn(wrong, owners.values())
+
+    def test_a_squad_that_cannot_field_the_positions_keeps_the_plain_result(self):
+        pool = self.fielders_pool(outfielders=2)  # 外野手が2人しかいない球団
+
+        active = choose_active_roster(pool)
+
+        self.assertIsNotNone(unfilled_slot(active.batters))
+        self.assertEqual(len(active.batters) + len(active.pitchers), ACTIVE_ROSTER_SIZE)
+
+    def test_a_pool_that_already_covers_the_positions_is_registered_as_before(self):
+        pool = full_pool()
+        active = choose_active_roster(pool)
+        expected = sorted(pool.batters, key=regular_value, reverse=True)
+        catchers = [b for b in expected if b.position is Position.CATCHER][:2]
+        rest = [b for b in expected if b not in catchers][: 15 - 2]
+        self.assertEqual({b.player_id for b in active.batters}, {b.player_id for b in (*catchers, *rest)})
 
     def test_a_small_pool_registers_everyone(self):
         pool = ClubRoster(

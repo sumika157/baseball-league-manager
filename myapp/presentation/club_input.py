@@ -86,6 +86,8 @@ class NoticeLink:
     section: str
     reason: str
     tab: str
+    # False なら区画は自動に落ちず、効かない理由を知らせるだけ
+    falls_back: bool = True
 
 
 def tab_of(value: str | None) -> str:

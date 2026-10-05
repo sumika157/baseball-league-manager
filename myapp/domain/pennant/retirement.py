@@ -66,12 +66,12 @@ class PlayingTime:
 
 
 def retirement_chance(
-    *, age: int, value: float, playing_time: PlayingTime, is_foreign: bool, seasons_in_world: int
+    *, age: int, value: float, playing_time: PlayingTime, is_foreign: bool, seasons_as_pro: int
 ) -> float:
     """引退する確率（0〜1）。`MAX_PLAYING_AGE` 以上は必ず 1。
 
     `value` は能力の総合値（野手は打撃の総合値、投手は抑える力。捕手は守備力と打撃の大きい方）。
-    `seasons_in_world` は、その年を含めて世界の球団にいた年数。
+    `seasons_as_pro` は、その年を含めてプロにいた年数（入団年から数える。無ければ在籍の開始年から）。
     """
     if age >= MAX_PLAYING_AGE:
         return 1.0
@@ -84,6 +84,6 @@ def retirement_chance(
         chance *= IDLE_FACTOR
     if is_foreign:
         chance *= FOREIGN_FACTOR
-    if seasons_in_world <= ROOKIE_SEASONS and age <= ROOKIE_MAX_AGE:
+    if seasons_as_pro <= ROOKIE_SEASONS and age <= ROOKIE_MAX_AGE:
         chance *= ROOKIE_FACTOR
     return min(MAX_CHANCE, chance)

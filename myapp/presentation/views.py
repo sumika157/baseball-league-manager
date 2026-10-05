@@ -51,7 +51,7 @@ from ..domain.exceptions import (
     TeamNotFound,
     WorldNotFound,
 )
-from ..domain.pennant.club_plan import LineupChoice, PlanSection
+from ..domain.pennant.club_plan import PlanSection
 from ..domain.pennant.schedule import AdvanceTarget
 from ..domain.pennant.season import MAX_GAMES_PER_ADVANCE, SCREEN_ADVANCE_TARGETS, world_today
 from ..domain.pennant.world import WorldScope
@@ -497,7 +497,10 @@ def _plan_notices(world: WorldContext) -> list[NoticeLink]:
         view = build_club_service(world.world_id).view(world.managed_team_id)
     except DomainError:
         return []
-    return [NoticeLink(notice.section.value, notice.reason, TAB_OF_SECTION[notice.section]) for notice in view.notices]
+    return [
+        NoticeLink(notice.section.value, notice.reason, TAB_OF_SECTION[notice.section], notice.falls_back)
+        for notice in view.notices
+    ]
 
 
 def pennant_advance(request, world_id):
@@ -655,9 +658,9 @@ def _start_manual(service: ClubManagementService, current: ClubPlanView, section
     """区画を、いま映している自動編成の形を初期値にして手動にする。"""
     team_id = current.team_id
     if section is PlanSection.ACTIVE:
-        service.set_active_roster(team_id, current.active_ids)
+        service.start_manual_active(team_id)
     elif section is PlanSection.LINEUP:
-        service.set_lineup(team_id, [LineupChoice(row.player_id, row.position) for row in current.lineup])
+        service.start_manual_lineup(team_id)
     elif section is PlanSection.ROTATION:
         service.set_rotation(team_id, current.rotation_ids)
     elif current.closer_id is not None:
@@ -725,7 +728,7 @@ def _render_club(request, world: WorldContext, tab: str, *, state: ClubFormState
         club=view,
         error=state.error if state is not None else None,
         tab_notices=[
-            NoticeLink(notice.section.value, notice.reason, TAB_OF_SECTION[notice.section])
+            NoticeLink(notice.section.value, notice.reason, TAB_OF_SECTION[notice.section], notice.falls_back)
             for notice in view.notices
             if TAB_OF_SECTION[notice.section] == tab
         ],

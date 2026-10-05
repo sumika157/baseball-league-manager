@@ -10,7 +10,7 @@
       <form method="post" action="{% url 'pennant_club' world.world_id %}">
         {% csrf_token %}
         <input type="hidden" name="section" value="rotation">
-        <div class="stat-muted mb-2" style="font-size: 0.8125rem;">先発の序列順に、{{ club.limits.rotation_size }}人まで選べます（空の枠は使いません）。</div>
+        <div class="stat-muted mb-2" style="font-size: 0.8125rem;">先発の序列順に、{{ club.limits.min_rotation_size }}〜{{ club.limits.rotation_size }}人を選びます（空の枠は使いません）。</div>
         <div class="table-responsive">
           <table class="table mb-3">
             <tbody>

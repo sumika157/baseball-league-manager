@@ -188,7 +188,7 @@ class PennantSeasonService:
                 limits = ClubLimits(foreign_roster_limit=team.foreign_roster_limit, foreign_game_limit=game_limit)
                 clubs[team_id] = resolve_club(plans.get(team_id), pools[team_id], limits)
                 notices.extend(
-                    PlanNotice(team_id, team.name, day, fallback.section, fallback.reason)
+                    PlanNotice(team_id, team.name, day, fallback.section, fallback.reason, fallback.falls_back)
                     for fallback in clubs[team_id].fallbacks
                 )
             return clubs[team_id]

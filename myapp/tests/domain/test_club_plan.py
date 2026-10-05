@@ -12,27 +12,41 @@ from unittest import TestCase
 
 from myapp.domain.exceptions import DomainError, ForeignPlayerQuotaExceeded, InvalidClubPlan, InvalidRoster
 from myapp.domain.pennant.club_plan import (
+    LINEUP_POSITION_ORDER,
+    LINEUP_POSITIONS,
     ClubLimits,
+    ClubMember,
     ClubPlan,
     LineupChoice,
     PlanSection,
+    arrange_lineup,
     members_of,
     resolve_club,
     strictest_game_limit,
+    unfilled_position,
 )
 from myapp.domain.simulation.manager import (
+    MIN_ACTIVE_PITCHERS,
+    MIN_ROTATION_SIZE,
+    ROTATION_SIZE,
     ClubRoster,
     ForeignQuota,
+    can_play,
     choose_active_roster,
     choose_lineup,
     plan_pitching_staff,
 )
-from myapp.domain.value_objects import FieldingPosition
+from myapp.domain.value_objects import FieldingPosition, Position
 
 from .test_ai_manager import full_pool
 
 FP = FieldingPosition
 LIMITS = ClubLimits()
+# 手動のローテーション（下限の5人。1軍にいる投手）
+ROTATION = [110, 111, 112, 113, 114]
+# 守備位置の枠を満たす野手9人（捕1・内4・外3・指名打者1）と、もう1人（外野手）
+NINE = [1, 4, 5, 6, 7, 12, 13, 14, 19]
+TEN = [*NINE, 15]
 
 
 def ids(roster):
@@ -90,7 +104,7 @@ class ActiveRosterInvariantTest(ClubPlanCase):
         with self.assertRaisesRegex(InvalidClubPlan, "野手9人以上"):
             self.plan.set_active(pitchers_only[:14], roster=self.members, limits=LIMITS)
         batters_only = [pid for pid in self.members if pid <= 100]
-        with self.assertRaisesRegex(InvalidClubPlan, "投手1人以上"):
+        with self.assertRaisesRegex(InvalidClubPlan, r"投手\d+人以上"):
             self.plan.set_active(batters_only[:15], roster=self.members, limits=LIMITS)
 
 
@@ -156,52 +170,52 @@ class LineupInvariantTest(ClubPlanCase):
 
 class PitchingInvariantTest(ClubPlanCase):
     def test_a_valid_rotation_and_closer_are_kept(self):
-        self.plan.set_rotation([105, 101, 102], roster=self.members, active_ids=self.active)
-        self.plan.set_closer(103, roster=self.members, active_ids=self.active)
-        self.assertEqual(self.plan.rotation, (105, 101, 102))
-        self.assertEqual(self.plan.closer_id, 103)
+        self.plan.set_rotation([105, 101, 102, 103, 104], roster=self.members, active_ids=self.active)
+        self.plan.set_closer(106, roster=self.members, active_ids=self.active)
+        self.assertEqual(self.plan.rotation, (105, 101, 102, 103, 104))
+        self.assertEqual(self.plan.closer_id, 106)
 
     def test_the_rotation_has_at_most_six(self):
         with self.assertRaisesRegex(InvalidClubPlan, "6人まで"):
             self.plan.set_rotation(range(101, 108), roster=self.members, active_ids=self.active)
-        with self.assertRaisesRegex(InvalidClubPlan, "1人もいません"):
+        with self.assertRaisesRegex(InvalidClubPlan, "5人以上"):
             self.plan.set_rotation([], roster=self.members, active_ids=self.active)
 
     def test_a_batter_cannot_be_in_the_rotation(self):
         with self.assertRaisesRegex(InvalidClubPlan, "投手だけ"):
-            self.plan.set_rotation([101, 1], roster=self.members, active_ids=self.active)
+            self.plan.set_rotation([101, 102, 103, 104, 1], roster=self.members, active_ids=self.active)
 
     def test_a_pitcher_outside_the_active_roster_is_refused(self):
         benched = next(pid for pid in self.members if pid > 100 and pid not in self.active)
         with self.assertRaisesRegex(InvalidClubPlan, "1軍に登録されていない"):
-            self.plan.set_rotation([101, benched], roster=self.members, active_ids=self.active)
+            self.plan.set_rotation([101, 102, 103, 104, benched], roster=self.members, active_ids=self.active)
         with self.assertRaisesRegex(InvalidClubPlan, "1軍に登録されていない"):
             self.plan.set_closer(benched, roster=self.members, active_ids=self.active)
 
     def test_a_duplicate_in_the_rotation_is_refused(self):
         with self.assertRaisesRegex(InvalidClubPlan, "重複"):
-            self.plan.set_rotation([101, 101], roster=self.members, active_ids=self.active)
+            self.plan.set_rotation([101, 101, 102, 103, 104], roster=self.members, active_ids=self.active)
 
     def test_a_batter_cannot_close(self):
         with self.assertRaisesRegex(InvalidClubPlan, "投手だけ"):
             self.plan.set_closer(1, roster=self.members, active_ids=self.active)
 
     def test_the_closer_and_the_rotation_cannot_share_a_pitcher(self):
-        self.plan.set_rotation([101, 102], roster=self.members, active_ids=self.active)
+        self.plan.set_rotation(range(101, 106), roster=self.members, active_ids=self.active)
         with self.assertRaisesRegex(InvalidClubPlan, "抑えにできません"):
             self.plan.set_closer(101, roster=self.members, active_ids=self.active)
         other = ClubPlan(team_id=1)
         other.set_closer(101, roster=self.members, active_ids=self.active)
         with self.assertRaisesRegex(InvalidClubPlan, "ローテーションに入れられません"):
-            other.set_rotation([101, 102], roster=self.members, active_ids=self.active)
+            other.set_rotation(range(101, 106), roster=self.members, active_ids=self.active)
 
 
 class ClearTest(ClubPlanCase):
     def test_clearing_a_section_returns_it_to_automatic(self):
         self.plan.set_active(sorted(self.active), roster=self.members, limits=LIMITS)
         self.set_lineup(self.auto_lineup())
-        self.plan.set_rotation([101], roster=self.members, active_ids=self.active)
-        self.plan.set_closer(102, roster=self.members, active_ids=self.active)
+        self.plan.set_rotation(range(101, 106), roster=self.members, active_ids=self.active)
+        self.plan.set_closer(106, roster=self.members, active_ids=self.active)
         self.assertFalse(self.plan.is_empty)
 
         self.plan.clear_active()
@@ -327,21 +341,21 @@ class ResolveTest(ClubPlanCase):
         self.assertIsNone(resolved.orders.staff, "オーダーだけ手動なら、投手陣は自動")
 
     def test_a_manual_rotation_and_closer_build_the_staff(self):
-        self.plan.set_rotation([110, 111], roster=self.members, active_ids=self.active | {110, 111})
+        self.plan.set_rotation(ROTATION, roster=self.members, active_ids=self.active)
         self.plan.set_closer(101, roster=self.members, active_ids=self.active)
 
         resolved = resolve_club(self.plan, self.pool, LIMITS)
 
         assert resolved.orders is not None and resolved.orders.staff is not None
         staff = resolved.orders.staff
-        self.assertEqual([p.player_id for p in staff.rotation], [110, 111])
+        self.assertEqual([p.player_id for p in staff.rotation], ROTATION)
         assert staff.closer is not None
         self.assertEqual(staff.closer.player_id, 101)
         # 残りの投手は、自動と同じ規則（抑える力の順）で救援に回る
         relievers = [p.player_id for p in staff.bullpen]
         self.assertEqual(len(relievers), len(set(relievers)))
         self.assertNotIn(110, relievers)
-        self.assertEqual(set(relievers) | {110, 111}, {p.player_id for p in resolved.roster.pitchers})
+        self.assertEqual(set(relievers) | set(ROTATION), {p.player_id for p in resolved.roster.pitchers})
 
     def test_a_manual_closer_alone_leaves_the_rotation_automatic_without_the_closer(self):
         best_starter = plan_pitching_staff(self.auto.pitchers).rotation[0].player_id
@@ -377,7 +391,7 @@ class ResolveTest(ClubPlanCase):
         self.plan.lineup = tuple(
             self.auto_lineup()[:5]
         )  # 保存された値は検査を通っていない（ロスターが変わった後など）
-        self.plan.set_rotation([110, 111], roster=self.members, active_ids=self.active | {110, 111})
+        self.plan.set_rotation(ROTATION, roster=self.members, active_ids=self.active)
 
         resolved = resolve_club(self.plan, self.pool, LIMITS)
 
@@ -385,7 +399,7 @@ class ResolveTest(ClubPlanCase):
         assert resolved.orders is not None
         self.assertIsNone(resolved.orders.lineup)
         assert resolved.orders.staff is not None
-        self.assertEqual([p.player_id for p in resolved.orders.staff.rotation], [110, 111])
+        self.assertEqual([p.player_id for p in resolved.orders.staff.rotation], ROTATION)
 
     def test_an_unusable_registration_falls_back_to_the_ai_registration(self):
         self.plan.active_ids = tuple(range(1, 40))  # 29人を超える・球団にいない選手を含む
@@ -405,14 +419,14 @@ class ResolveTest(ClubPlanCase):
         self.assertIsNone(resolved.orders)
 
     def test_a_closer_who_is_also_in_the_rotation_falls_back_only_for_the_closer(self):
-        self.plan.rotation = (101, 102)
+        self.plan.rotation = (101, 102, 103, 104, 105)
         self.plan.closer_id = 101
 
         resolved = resolve_club(self.plan, self.pool, LIMITS)
 
         self.assertEqual([f.section for f in resolved.fallbacks], [PlanSection.CLOSER])
         assert resolved.orders is not None and resolved.orders.staff is not None
-        self.assertEqual([p.player_id for p in resolved.orders.staff.rotation], [101, 102])
+        self.assertEqual([p.player_id for p in resolved.orders.staff.rotation], [101, 102, 103, 104, 105])
 
     def test_resolving_never_raises_for_a_broken_plan(self):
         broken = ClubPlan(
@@ -437,14 +451,14 @@ class PlanThatWouldStopTheSeasonTest(ClubPlanCase):
         members = members_of(full_pool(foreign_ids={4, 5, 6, 7}))
         limits = ClubLimits(foreign_roster_limit=5, foreign_game_limit=3)
         with self.assertRaisesRegex(ForeignPlayerQuotaExceeded, "スタメン9人を組めません"):
-            self.plan.set_active([*range(1, 10), *range(101, 111)], roster=members, limits=limits)
-        self.plan.set_active([*range(1, 11), *range(101, 111)], roster=members, limits=limits)
+            self.plan.set_active([*NINE, *range(101, 111)], roster=members, limits=limits)
+        self.plan.set_active([*TEN, *range(101, 111)], roster=members, limits=limits)
 
     def test_a_foreign_pitcher_who_may_start_takes_one_game_slot(self):
         members = members_of(full_pool(foreign_ids={4, 5, 6, 7, 101}))
         limits = ClubLimits(foreign_roster_limit=5, foreign_game_limit=3)
         with self.assertRaisesRegex(ForeignPlayerQuotaExceeded, "スタメン9人を組めません"):
-            self.plan.set_active([*range(1, 11), *range(101, 111)], roster=members, limits=limits)
+            self.plan.set_active([*TEN, *range(101, 111)], roster=members, limits=limits)
 
     def test_a_roster_without_a_catcher_is_refused(self):
         with self.assertRaisesRegex(InvalidClubPlan, "捕手"):
@@ -452,31 +466,35 @@ class PlanThatWouldStopTheSeasonTest(ClubPlanCase):
 
     def test_the_only_active_pitcher_cannot_be_the_closer(self):
         active = [*range(1, 10), 101]
-        self.plan.set_active(active, roster=self.members, limits=LIMITS)
         with self.assertRaisesRegex(InvalidClubPlan, "先発できる"):
             self.plan.set_closer(101, roster=self.members, active_ids=active)
 
-    def test_a_closer_that_would_empty_the_rotation_falls_back(self):
+    def test_a_registration_with_too_few_pitchers_falls_back(self):
         plan = ClubPlan(team_id=1, active_ids=(*range(1, 10), 101), closer_id=101)
         resolved = resolve_club(plan, self.pool, LIMITS)
-        self.assertEqual([f.section for f in resolved.fallbacks], [PlanSection.CLOSER])
-        staff = plan_pitching_staff(resolved.roster.pitchers)
-        self.assertEqual([p.player_id for p in staff.rotation], [101], "抑えを外さず、唯一の投手が先発できる")
+        # 投手が下限に満たない1軍登録は使えない（保存済みの古い上書き）ので、AI の1軍に戻る
+        self.assertEqual([f.section for f in resolved.fallbacks], [PlanSection.ACTIVE])
+        self.assertEqual(resolved.roster, self.auto)
 
     def test_a_full_foreign_lineup_with_an_all_foreign_rotation_falls_back(self):
         lineup = self.auto_lineup()
         foreign = {choice.player_id for choice in lineup[:3]}
-        pool = full_pool(foreign_ids={*foreign, 101, 102})
+        pool = full_pool(foreign_ids={*foreign, 101, 102, 103, 104, 105})
         limits = ClubLimits(foreign_game_limit=3)
 
-        blocked = resolve_club(ClubPlan(team_id=1, lineup=tuple(lineup), rotation=(101, 102)), pool, limits)
+        blocked = resolve_club(
+            ClubPlan(team_id=1, lineup=tuple(lineup), rotation=(101, 102, 103, 104, 105)), pool, limits
+        )
         self.assertEqual([f.section for f in blocked.fallbacks], [PlanSection.LINEUP])
         self.assertIn("先発を立てられません", blocked.fallbacks[0].reason)
         assert blocked.orders is not None
         self.assertIsNone(blocked.orders.lineup)
 
-        kept = resolve_club(ClubPlan(team_id=1, lineup=tuple(lineup), rotation=(101, 103)), pool, limits)
-        self.assertEqual(kept.fallbacks, ())
+        kept = resolve_club(
+            ClubPlan(team_id=1, lineup=tuple(lineup), rotation=(101, 102, 103, 104, 106)), pool, limits
+        )
+        # オーダーは生きる（外国人の抑えが投げられない注意は別。下のテストで見る）
+        self.assertNotIn(PlanSection.LINEUP, [f.section for f in kept.fallbacks])
         assert kept.orders is not None and kept.orders.lineup is not None
         self.assertEqual([s.batter.player_id for s in kept.orders.lineup], [c.player_id for c in lineup])
 
@@ -485,7 +503,7 @@ class PlanThatWouldStopTheSeasonTest(ClubPlanCase):
         self.assertEqual(strictest_game_limit([4, None, 3]), 3)
         self.assertIsNone(strictest_game_limit([None, None]))
         members = members_of(full_pool(foreign_ids={4, 5, 6, 7}))
-        roster = [*range(1, 10), *range(101, 111)]
+        roster = [*NINE, *range(101, 111)]
         self.plan.set_active(roster, roster=members, limits=ClubLimits(foreign_game_limit=4))
         with self.assertRaises(ForeignPlayerQuotaExceeded):
             self.plan.set_active(
@@ -501,3 +519,252 @@ class PlanThatWouldStopTheSeasonTest(ClubPlanCase):
             resolve_club(ClubPlan(team_id=1, lineup=tuple(lineup)), pool, ClubLimits(foreign_game_limit=3))
         except InvalidRoster as error:  # pragma: no cover - 失敗したときに理由を読めるように
             self.fail(f"投手のいない球団でも、当てはめは例外にしない（試合を組めないのはエンジンが知らせる）: {error}")
+
+
+class WeakerManualPlanIsRefusedTest(ClubPlanCase):
+    """手動の編成にも AI と同じ検査を当てる（ローテの下限・投手の下限・守備位置・外国人の抑え）。"""
+
+    def test_a_rotation_below_the_minimum_is_refused(self):
+        for size in (1, 4):
+            with self.assertRaisesRegex(InvalidClubPlan, f"{MIN_ROTATION_SIZE}人以上"):
+                self.plan.set_rotation(range(101, 101 + size), roster=self.members, active_ids=self.active)
+        self.assertIsNone(self.plan.rotation, "弾かれた上書きは入らない")
+        self.plan.set_rotation(range(101, 101 + MIN_ROTATION_SIZE), roster=self.members, active_ids=self.active)
+
+    def test_the_minimum_rotation_is_one_less_than_the_ai_rotation(self):
+        """下限は AI のローテーションの人数と同じ出典から導く（別の数を持たない）。"""
+        self.assertEqual(MIN_ROTATION_SIZE, ROTATION_SIZE - 1)
+
+    def test_an_active_roster_with_too_few_pitchers_is_refused(self):
+        batters = list(range(1, 1 + 29 - MIN_ACTIVE_PITCHERS + 1))
+        pitchers = list(range(101, 101 + MIN_ACTIVE_PITCHERS - 1))
+        with self.assertRaisesRegex(InvalidClubPlan, f"投手{MIN_ACTIVE_PITCHERS}人以上"):
+            self.plan.set_active([*batters[:15], *pitchers], roster=self.members, limits=LIMITS)
+        self.plan.set_active(
+            [*batters[:15], *range(101, 101 + MIN_ACTIVE_PITCHERS)], roster=self.members, limits=LIMITS
+        )
+
+    def test_a_player_cannot_play_a_position_his_registration_does_not_allow(self):
+        choices = self.auto_lineup()
+        shortstop = next(i for i, c in enumerate(choices) if c.position is FP.SHORTSTOP)
+        outfielder = next(pid for pid in self.active if 12 <= pid <= 18 and pid not in {c.player_id for c in choices})
+        choices[shortstop] = LineupChoice(outfielder, FP.SHORTSTOP)
+        with self.assertRaisesRegex(InvalidClubPlan, "遊撃手を守れません"):
+            self.set_lineup(choices)
+
+    def test_a_catcher_cannot_play_the_field(self):
+        choices = self.auto_lineup()
+        first_base = next(i for i, c in enumerate(choices) if c.position is FP.FIRST_BASE)
+        spare_catcher = next(pid for pid in self.active if pid <= 3 and pid not in {c.player_id for c in choices})
+        choices[first_base] = LineupChoice(spare_catcher, FP.FIRST_BASE)
+        with self.assertRaisesRegex(InvalidClubPlan, "一塁手を守れません"):
+            self.set_lineup(choices)
+
+    def test_anyone_can_be_the_designated_hitter_and_this_pools_ai_lineup_is_accepted(self):
+        choices = self.auto_lineup()
+        self.set_lineup(choices)  # この登録候補では、AI のオーダーも手動の規則を満たす（一般には満たさないことがある）
+        dh = next(i for i, c in enumerate(choices) if c.position is FP.DESIGNATED_HITTER)
+        spare_catcher = next(pid for pid in self.active if pid <= 3 and pid not in {c.player_id for c in choices})
+        choices[dh] = LineupChoice(spare_catcher, FP.DESIGNATED_HITTER)
+        self.set_lineup(choices)
+
+    def test_a_foreign_closer_that_cannot_pitch_in_the_game_limit_is_noted(self):
+        lineup = self.auto_lineup()
+        foreign_batters = {choice.player_id for choice in lineup[:3]}
+        pool = full_pool(foreign_ids={*foreign_batters, 101})
+        limits = ClubLimits(foreign_game_limit=3)
+        plan = ClubPlan(team_id=1, lineup=tuple(lineup), closer_id=101)
+
+        resolved = resolve_club(plan, pool, limits)
+
+        self.assertEqual([f.section for f in resolved.fallbacks], [PlanSection.CLOSER])
+        self.assertIn("外国人の抑え", resolved.fallbacks[0].reason)
+        self.assertIn("投げられません", resolved.fallbacks[0].reason)
+        assert resolved.orders is not None and resolved.orders.staff is not None
+        assert resolved.orders.staff.closer is not None
+        self.assertEqual(resolved.orders.staff.closer.player_id, 101, "上書きは外さず、知らせるだけ")
+        assert resolved.orders.lineup is not None, "オーダーは自動に落とさない"
+
+    def test_a_domestic_closer_or_a_free_game_slot_is_not_noted(self):
+        lineup = self.auto_lineup()
+        foreign_batters = {choice.player_id for choice in lineup[:3]}
+        pool = full_pool(foreign_ids={*foreign_batters, 101})
+        domestic = resolve_club(
+            ClubPlan(team_id=1, lineup=tuple(lineup), closer_id=102), pool, ClubLimits(foreign_game_limit=3)
+        )
+        self.assertEqual(domestic.fallbacks, ())
+        room = resolve_club(
+            ClubPlan(team_id=1, lineup=tuple(lineup), closer_id=101), pool, ClubLimits(foreign_game_limit=4)
+        )
+        self.assertEqual(room.fallbacks, ())
+
+    def test_a_saved_short_rotation_falls_back_to_automatic_with_a_reason(self):
+        """下限を設ける前に保存された手動の編成は、その区画だけ自動に戻して理由を返す。"""
+        plan = ClubPlan(team_id=1, rotation=(101, 102), closer_id=103)
+
+        resolved = resolve_club(plan, self.pool, LIMITS)
+
+        self.assertEqual([f.section for f in resolved.fallbacks], [PlanSection.ROTATION])
+        self.assertIn(f"{MIN_ROTATION_SIZE}人以上", resolved.fallbacks[0].reason)
+        assert resolved.orders is not None and resolved.orders.staff is not None
+        self.assertEqual(len(resolved.orders.staff.rotation), ROTATION_SIZE, "ローテーションは AI が決める")
+        assert resolved.orders.staff.closer is not None
+        self.assertEqual(resolved.orders.staff.closer.player_id, 103, "抑えの上書きは生きる")
+
+    def test_a_saved_lineup_with_a_wrong_position_falls_back(self):
+        choices = self.auto_lineup()
+        shortstop = next(i for i, c in enumerate(choices) if c.position is FP.SHORTSTOP)
+        outfielder = next(pid for pid in self.active if 12 <= pid <= 18 and pid not in {c.player_id for c in choices})
+        choices[shortstop] = LineupChoice(outfielder, FP.SHORTSTOP)
+
+        resolved = resolve_club(ClubPlan(team_id=1, lineup=tuple(choices)), self.pool, LIMITS)
+
+        self.assertEqual([f.section for f in resolved.fallbacks], [PlanSection.LINEUP])
+        self.assertIn("守れません", resolved.fallbacks[0].reason)
+
+
+class FieldingPositionsInTheActiveRosterTest(ClubPlanCase):
+    """1軍登録の段階で、守備位置（捕1・内4・外3）を野手で埋められることを保証する（手動のオーダーが組めない行き止まりを作らない）。"""
+
+    def test_an_active_roster_without_enough_outfielders_is_refused(self):
+        no_outfield = [1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12]  # 外野手が1人だけ
+        with self.assertRaisesRegex(InvalidClubPlan, "守れる野手がいない"):
+            self.plan.set_active([*no_outfield, *range(101, 109)], roster=self.members, limits=LIMITS)
+        self.plan.set_active([*NINE, *range(101, 109)], roster=self.members, limits=LIMITS)
+
+    def test_the_designated_hitter_registration_can_fill_first_base_and_the_corners(self):
+        # 指名打者の登録（19・20）は一塁・左翼・右翼に就ける。外野手2人 + 指名打者の登録で外野の3枠を満たす
+        batters = [1, 4, 5, 6, 7, 12, 13, 19, 20]
+        self.plan.set_active([*batters, *range(101, 109)], roster=self.members, limits=LIMITS)
+
+    def test_the_gap_is_named(self):
+        self.assertEqual(
+            unfilled_position(m for pid, m in self.members.items() if pid in {1, 4, 5, 6, 7}), FP.LEFT_FIELD
+        )
+        self.assertIsNone(unfilled_position(self.members[pid] for pid in NINE))
+
+    def nine_choices(self):
+        return [LineupChoice(pid, pos) for pid, pos in zip(NINE, LINEUP_POSITION_ORDER, strict=True)]
+
+    def test_arrange_lineup_reassigns_only_when_needed(self):
+        choices = self.nine_choices()
+        self.assertEqual(arrange_lineup(choices, self.members), choices, "すでに就ける位置ならそのまま")
+        wrong = [
+            LineupChoice(c.player_id, FP.DESIGNATED_HITTER if c.position is FP.SHORTSTOP else c.position)
+            for c in choices
+        ]
+        wrong[-1] = LineupChoice(wrong[-1].player_id, FP.SHORTSTOP)  # 指名打者の登録が遊撃
+        fitted = arrange_lineup(wrong, self.members)
+        assert fitted is not None
+        self.assertEqual([c.player_id for c in fitted], NINE, "選手と打順は変えない")
+        for choice in fitted:
+            self.assertTrue(can_play(self.members[choice.player_id].position, choice.position))
+        self.assertEqual({c.position for c in fitted}, LINEUP_POSITIONS)
+
+    def test_arrange_lineup_does_not_move_players_who_already_stand_correctly(self):
+        choices = self.nine_choices()
+        # 捕手(1) と 一塁(4) を入れ替えた誤りだけを直す。ほかの7人は動かさない
+        wrong = [LineupChoice(c.player_id, c.position) for c in choices]
+        wrong[0], wrong[1] = LineupChoice(1, FP.FIRST_BASE), LineupChoice(4, FP.CATCHER)
+
+        fitted = arrange_lineup(wrong, self.members)
+
+        assert fitted is not None
+        self.assertEqual({c.player_id: c.position for c in fitted[2:]}, {c.player_id: c.position for c in choices[2:]})
+        self.assertEqual(fitted[0], LineupChoice(1, FP.CATCHER))
+        self.assertEqual(fitted[1].player_id, 4)
+        self.assertTrue(can_play(self.members[4].position, fitted[1].position))
+
+    def test_arrange_lineup_gives_up_when_the_nine_and_the_bench_cannot_cover_the_field(self):
+        no_outfield = [1, 4, 5, 6, 7, 8, 9, 10, 11]
+        choices = [LineupChoice(pid, pos) for pid, pos in zip(no_outfield, LINEUP_POSITION_ORDER, strict=True)]
+        self.assertIsNone(arrange_lineup(choices, self.members))
+
+    def test_arrange_lineup_brings_in_a_bench_player_for_a_missing_position(self):
+        no_outfield = [1, 4, 5, 6, 7, 8, 9, 10, 11]
+        choices = [LineupChoice(pid, pos) for pid, pos in zip(no_outfield, LINEUP_POSITION_ORDER, strict=True)]
+        bench = [self.members[pid] for pid in (12, 13, 14)]
+
+        fitted = arrange_lineup(choices, self.members, bench=bench)
+
+        assert fitted is not None
+        self.assertEqual({c.position for c in fitted}, LINEUP_POSITIONS)
+        self.assertTrue({12, 13, 14} <= {c.player_id for c in fitted}, "外野の3枠を控えが埋める")
+        for choice in fitted:
+            self.assertTrue(can_play(self.members[choice.player_id].position, choice.position))
+
+    def test_arrange_lineup_brings_in_a_bench_player_who_cannot_play_the_first_gap_directly(self):
+        """空いた位置を直接守れない控えでも、入れ替えて割り当てが増えるならよい（誰かが動いて空きを埋める）。"""
+        kinds = {
+            **dict.fromkeys((1, 2, 3), Position.CATCHER),
+            **dict.fromkeys((4, 5, 9), Position.INFIELDER),
+            **dict.fromkeys((7, 8, 10), Position.OUTFIELDER),
+            6: Position.DESIGNATED_HITTER,
+        }
+        roster = {pid: ClubMember(pid, f"選手{pid}", kind) for pid, kind in kinds.items()}
+        nine = [1, 4, 5, 9, 7, 8, 10, 2, 3]  # 内野手が3人しかおらず遊撃が空く。控えの指名打者登録は遊撃を直接守れない
+        choices = [LineupChoice(pid, pos) for pid, pos in zip(nine, LINEUP_POSITION_ORDER, strict=True)]
+
+        fitted = arrange_lineup(choices, roster, bench=[roster[6]])
+
+        assert fitted is not None
+        self.assertIn(6, [c.player_id for c in fitted])
+        self.assertEqual({c.position for c in fitted}, LINEUP_POSITIONS)
+        for choice in fitted:
+            self.assertTrue(can_play(roster[choice.player_id].position, choice.position))
+
+    def test_arrange_lineup_succeeds_without_foreigners_even_with_a_game_limit(self):
+        """出場枠が原因でないとき（外国人がいない）は、枠があっても組める。"""
+        no_outfield = [1, 4, 5, 6, 7, 8, 9, 10, 11]
+        choices = [LineupChoice(pid, pos) for pid, pos in zip(no_outfield, LINEUP_POSITION_ORDER, strict=True)]
+        bench = [self.members[pid] for pid in (12, 13, 14)]
+
+        self.assertIsNotNone(arrange_lineup(choices, self.members, bench=bench, foreign_game_limit=0))
+
+    def test_arrange_lineup_respects_the_foreign_game_limit_when_bringing_in_the_bench(self):
+        members = members_of(full_pool(foreign_ids={12, 13, 14}))
+        roster = dict(members)
+        no_outfield = [1, 4, 5, 6, 7, 8, 9, 10, 11]
+        choices = [LineupChoice(pid, pos) for pid, pos in zip(no_outfield, LINEUP_POSITION_ORDER, strict=True)]
+        bench = [roster[pid] for pid in (12, 13, 14)]
+
+        self.assertIsNone(arrange_lineup(choices, roster, bench=bench, foreign_game_limit=2), "外野3人が全員外国人")
+        self.assertIsNotNone(arrange_lineup(choices, roster, bench=bench, foreign_game_limit=3))
+
+
+class NoticeKindTest(ClubPlanCase):
+    def test_a_fallback_says_it_fell_back_and_a_closer_advisory_does_not(self):
+        lineup = self.auto_lineup()
+        foreign_batters = {choice.player_id for choice in lineup[:3]}
+        pool = full_pool(foreign_ids={*foreign_batters, 101})
+        limits = ClubLimits(foreign_game_limit=3)
+
+        manual = resolve_club(ClubPlan(team_id=1, lineup=tuple(lineup), closer_id=101), pool, limits)
+        auto = resolve_club(
+            ClubPlan(team_id=1, lineup=tuple(lineup)),
+            full_pool(foreign_ids={*foreign_batters, *range(107, 120)}),
+            limits,
+        )
+        fell = resolve_club(ClubPlan(team_id=1, rotation=(101, 102)), pool, limits)
+
+        (advice,) = manual.fallbacks
+        self.assertFalse(advice.falls_back)
+        self.assertIn("手動で指定した", advice.reason)
+        self.assertIn("手動で指定するか", advice.reason, "直し方を添える")
+        self.assertTrue(all(not f.falls_back for f in auto.fallbacks if f.section is PlanSection.CLOSER))
+        self.assertTrue(any("自動で選ばれた" in f.reason for f in auto.fallbacks))
+        self.assertTrue(all(f.falls_back for f in fell.fallbacks))
+
+    def test_a_closer_with_no_other_starter_is_dropped_to_automatic(self):
+        """抑えのほかに先発できる投手がいない（登録候補の投手が1人）とき、抑えの上書きは自動に落ちる。"""
+        from myapp.domain.simulation.manager import ClubRoster
+
+        pool = full_pool()
+        lone = ClubRoster(pool.team_id, pool.name, pool.batters, pool.pitchers[:1])
+        lone_id = lone.pitchers[0].player_id
+
+        resolved = resolve_club(ClubPlan(team_id=1, closer_id=lone_id), lone, LIMITS)
+
+        self.assertEqual([f.section for f in resolved.fallbacks], [PlanSection.CLOSER])
+        self.assertTrue(resolved.fallbacks[0].falls_back)
+        self.assertIn("先発できる", resolved.fallbacks[0].reason)

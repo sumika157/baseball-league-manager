@@ -243,7 +243,10 @@ class PennantOffseasonService:
 def _offseason_player(
     team: Team, player: Player, ratings: Mapping[int, PlayerRatings], playing: Mapping[int, PlayingTime], *, year: int
 ) -> OffseasonPlayer:
-    """締める年の現役の選手。現在の在籍の開始年が「入団年」（引退の確率の、入団2年以内の保護に使う）。"""
+    """締める年の現役の選手。`joined_year` は現在の在籍の開始年（分岐した選手は一律に開幕年）。
+
+    引退の確率の「入団2年以内」の保護は、`profile.debut_year`（入団年）を優先して数える（`OffseasonPlayer.entered_year`）。
+    """
     player_id = _saved_id(player.id)
     stint = team.current_stint(player)
     joined = year if stint is None else stint.from_year
