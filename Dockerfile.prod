@@ -12,7 +12,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # --- 2段目: 本番の Python イメージ（requirements.txt だけ。開発用の依存は入れない） ---
-FROM python:3.10-slim
+FROM python:3.13-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

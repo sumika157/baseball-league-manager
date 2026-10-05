@@ -14,7 +14,7 @@
 | OS | Windows 11 + WSL2 (Ubuntu) |
 | Docker | 25.0.2 |
 | Docker Compose | v2.24.3 |
-| Python | 3.10（コンテナ内） |
+| Python | 3.13（コンテナ内） |
 | Django | 5.2.10 |
 | Node.js | 22（`frontend` コンテナ内。ホストには不要） |
 | React / Vite | 19 / 6（`frontend/package.json` で完全固定） |
