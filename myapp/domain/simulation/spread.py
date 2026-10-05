@@ -36,15 +36,24 @@ _BATTER_ITEMS = ("contact", "power", "eye", "speed", "fielding")
 _PITCHER_ITEMS = ("stuff", "control", "home_run_avoidance")
 
 
-def _rescale(values: Sequence[int], target_mean: float, target_sd: float) -> list[int]:
+def target_mean(name: str, *, pitcher: bool) -> float:
+    """項目の目標の平均。**錨の目標の出典**（`samples.py` の分布）。"""
+    return PITCHER_MEAN if pitcher else BATTER_MEAN + BATTER_ITEM_OFFSET.get(name, 0.0)
+
+
+def target_sd(*, pitcher: bool) -> float:
+    """項目の目標の標準偏差。"""
+    return PITCHER_SD if pitcher else BATTER_SD
+
+
+def rescale(values: Sequence[int], goal_mean: float, goal_sd: float) -> list[int]:
     """順位を保ったまま、平均と標準偏差を目標に写す。母集団に差が無ければ（標準偏差 0）そのまま。"""
     spread = pstdev(values)
     if spread == 0.0:
         return list(values)
     center = fmean(values)
     return [
-        min(RATING_MAX, max(RATING_MIN, round(target_mean + target_sd * (value - center) / spread)))
-        for value in values
+        min(RATING_MAX, max(RATING_MIN, round(goal_mean + goal_sd * (value - center) / spread))) for value in values
     ]
 
 
@@ -54,8 +63,9 @@ def spread_batter_ratings(ratings: Sequence[BatterRatings]) -> list[BatterRating
         return list(ratings)
 
     def column(name: str) -> list[int]:
-        mean = BATTER_MEAN + BATTER_ITEM_OFFSET.get(name, 0.0)
-        return _rescale([getattr(item, name) for item in ratings], mean, BATTER_SD)
+        return rescale(
+            [getattr(item, name) for item in ratings], target_mean(name, pitcher=False), target_sd(pitcher=False)
+        )
 
     contact, power, eye, speed, fielding = (column(name) for name in _BATTER_ITEMS)
     return [
@@ -72,7 +82,9 @@ def spread_pitcher_ratings(ratings: Sequence[PitcherRatings]) -> list[PitcherRat
         return list(ratings)
 
     def column(name: str) -> list[int]:
-        return _rescale([getattr(item, name) for item in ratings], PITCHER_MEAN, PITCHER_SD)
+        return rescale(
+            [getattr(item, name) for item in ratings], target_mean(name, pitcher=True), target_sd(pitcher=True)
+        )
 
     stuff, control, avoidance = (column(name) for name in _PITCHER_ITEMS)
     return [

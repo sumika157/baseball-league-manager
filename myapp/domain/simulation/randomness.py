@@ -36,6 +36,15 @@ def game_seed(world_seed: int, year: int, key: str) -> int:
     return int.from_bytes(digest, "big")
 
 
+def game_uniform(world_seed: int, year: int, key: str) -> float:
+    """世界のシード・年・識別から、その用途だけの 0 以上 1 未満の実数を1つ作る。
+
+    `random()` を1回だけ使う判定（引退するか、など）を、乱数源を作らずに引く（選手ごとに乱数源を作る
+    と、数万人 × 数年で時間の大半を食う）。`game_seed` と同じく、どの環境・どの実行でも同じ値になる。
+    """
+    return (game_seed(world_seed, year, key) >> 11) / 2.0**53  # 上位 53 ビット。1.0 にはならない
+
+
 def make_random(seed: int) -> random.Random:
     """シードから乱数源を作る。整数のシードは版をまたいで同じ列になる。"""
     return random.Random(seed)

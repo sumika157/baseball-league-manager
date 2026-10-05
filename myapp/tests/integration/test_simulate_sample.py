@@ -12,8 +12,10 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase
 
+from myapp.domain.pennant.offseason import AnchorCorrection, OffseasonPlan
 from myapp.domain.pennant.schedule import ScheduleRules
 from myapp.infrastructure import orm_models
+from myapp.management import estimate_check, multi_season_check
 from myapp.management.commands import simulate_sample
 
 TIMING_LINE = re.compile(r"[\d.]+ ms/試合")
@@ -82,3 +84,57 @@ class BoxScoreFormatTest(TestCase):
 
 def _is_model(value) -> bool:
     return isinstance(value, type) and hasattr(value, "objects") and hasattr(value, "_meta")
+
+
+class SimulateSampleSeasonsTest(TestCase):
+    """`--from-real-leagues … --seasons N`: シーズンの間にオフを挟んで続ける。DB には書かない。"""
+
+    # 1球団16試合・全96試合の日程に縮めて数秒に収める（143試合の確認は手で回す）
+    SMALL = ScheduleRules(games_per_team=16, inter_games=1, series_length=2)
+
+    def setUp(self):
+        self.leagues = [orm_models.League.objects.create(name=f"リーグ{i}") for i in (1, 2)]
+        for league in self.leagues:
+            for number in range(6):
+                orm_models.Team.objects.create(league=league, name=f"{league.name}の{number}")
+        call_command("seed_virtual_players", "--seed", "1", stdout=StringIO())
+
+    def counts(self) -> dict[str, int]:
+        return {model.__name__: model.objects.count() for model in orm_models.__dict__.values() if _is_model(model)}
+
+    def run_seasons(self, seasons: int) -> str:
+        ids = [league.id for league in self.leagues]
+        with (
+            patch.object(estimate_check, "ScheduleRules", lambda: self.SMALL),
+            patch.object(multi_season_check, "ScheduleRules", lambda: self.SMALL),
+        ):
+            return run(from_real_leagues=ids, seasons=seasons, seed=1)
+
+    def test_two_seasons_run_through_the_offseason_without_writing(self):
+        before = self.counts()
+        output = self.run_seasons(2)
+        self.assertEqual(self.counts(), before)
+        self.assertIn("1シーズン目", output)
+        self.assertIn("2シーズン目", output)
+        self.assertIn("2026年のオフ", output)
+        self.assertIn("引退", output)
+        self.assertIn("新人", output)
+        self.assertIn("錨の補正", output)
+
+    def test_seasons_need_real_leagues(self):
+        with self.assertRaises(CommandError):
+            run(seasons=2)
+
+    def test_zero_seasons_is_rejected(self):
+        with self.assertRaises(CommandError):
+            run(from_real_leagues=[self.leagues[0].id], seasons=0)
+
+
+class FormatOffseasonTest(TestCase):
+    def test_empty_plan_does_not_crash(self):
+        """引退者も残る選手もいない計画でも、要約を作れる（平均や最大を取る相手が空）。"""
+        plan = OffseasonPlan(
+            year=2026, retired=(), retained=(), draftees=(), without_ratings=(), anchor=AnchorCorrection()
+        )
+        text = multi_season_check.format_offseason(plan, [], 2026)
+        self.assertIn("引退 0人", text)

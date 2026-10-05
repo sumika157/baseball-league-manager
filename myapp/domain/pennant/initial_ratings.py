@@ -33,7 +33,7 @@ from .ratings import PlayerRatings
 SEASON_START_MONTH = 4
 
 # 能力の高さ（総合値）を、成長型の傾きに使う尺度にする（10 点 = 1）
-_STRENGTH_UNIT = 10.0
+STRENGTH_UNIT = 10.0
 
 
 def age_at_season_start(profile: Profile, year: int) -> int | None:
@@ -101,7 +101,7 @@ def _with_growth(
     record: CareerRecord, ratings: BatterRatings | PitcherRatings, *, seed: int, year: int
 ) -> PlayerRatings:
     value = ratings.pitching_value if isinstance(ratings, PitcherRatings) else ratings.batting_value
-    strength = (value - AVERAGE_RATING) / _STRENGTH_UNIT
+    strength = (value - AVERAGE_RATING) / STRENGTH_UNIT
     key = record.player_id if record.seed_player_id is None else record.seed_player_id
     rng = make_random(game_seed(seed, year, f"growth-{key}"))
     growth = draw_growth_type(rng, age=record.age, strength=strength)
