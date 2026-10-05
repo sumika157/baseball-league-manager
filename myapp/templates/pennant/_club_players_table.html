@@ -1,0 +1,30 @@
+{% comment %}
+1軍登録の選手の表。editing が真のときだけ、先頭にチェックボックスの列を出す（呼び出し元が保存のフォームで囲む）。
+{% endcomment %}
+{% load scoped %}
+<div class="table-responsive">
+  <table class="table table-hover tabular-nums">
+    <thead>
+      <tr>
+        {% if editing %}<th style="width: 3rem;">1軍</th>{% endif %}
+        <th>選手</th>
+        <th>登録位置</th>
+        <th>外国人</th>
+        <th>区分</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in club.players %}
+        <tr>
+          {% if editing %}
+            <td><input type="checkbox" class="form-check-input" name="active" value="{{ row.player_id }}" aria-label="{{ row.name }}を1軍に登録する" {% if row.player_id in active_checked %}checked{% endif %}></td>
+          {% endif %}
+          <td><a href="{% scoped_url 'player_detail' club.team_id row.player_id %}" class="player-name">{{ row.name }}</a></td>
+          <td>{{ row.position.value }}</td>
+          <td>{% if row.is_foreign %}<span class="badge bg-secondary">外国人</span>{% endif %}</td>
+          <td>{% if row.is_active %}1軍{% else %}<span class="stat-muted">2軍</span>{% endif %}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

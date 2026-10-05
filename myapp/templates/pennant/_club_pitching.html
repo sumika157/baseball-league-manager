@@ -1,0 +1,119 @@
+{% comment %}
+編成の「投手陣」タブ。ローテーション・抑え（それぞれ自動か手動）と、救援陣（読み取り専用。中継ぎの起用はいつも自動）。
+疲労は保存せず、直近の登板から導いた値（usage）を出す。
+{% endcomment %}
+{% load scoped %}
+<div class="card mb-4" id="club-rotation" data-mode="{% if club.rotation_is_manual %}manual{% else %}auto{% endif %}">
+  {% include 'pennant/_club_section_head.html' with title="先発ローテーション" token="rotation" manual=club.rotation_is_manual %}
+  <div class="card-body">
+    {% if is_owner and club.rotation_is_manual %}
+      <form method="post" action="{% url 'pennant_club' world.world_id %}">
+        {% csrf_token %}
+        <input type="hidden" name="section" value="rotation">
+        <div class="stat-muted mb-2" style="font-size: 0.8125rem;">先発の序列順に、{{ club.limits.rotation_size }}人まで選べます（空の枠は使いません）。</div>
+        <div class="table-responsive">
+          <table class="table mb-3">
+            <tbody>
+              {% for slot in rotation_slots %}
+                <tr>
+                  <td class="stat-key" style="width: 4rem;">{{ slot.order }}</td>
+                  <td>
+                    <select name="rotation_{{ slot.order }}" class="form-select form-select-sm" aria-label="先発{{ slot.order }}番手">
+                      <option value="">—</option>
+                      {% for row in pitcher_candidates %}
+                        <option value="{{ row.player_id }}" {% if slot.player_id == row.player_id %}selected{% endif %}>{{ row.label }}</option>
+                      {% endfor %}
+                    </select>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div class="d-flex gap-2">
+          <button type="submit" name="action" value="save" class="btn btn-primary">保存する</button>
+          <button type="submit" form="club-reset-rotation" name="action" value="auto" class="btn btn-secondary">自動に戻す</button>
+        </div>
+      </form>
+      {% include 'pennant/_club_reset_form.html' with token="rotation" %}
+    {% elif usage.rotation %}
+      <div class="table-responsive">
+        <table class="table tabular-nums mb-0">
+          <thead>
+            <tr><th style="width: 4rem;">順</th><th>投手</th>{% if usage.next_game_on %}<th class="text-end">前回の先発から</th>{% endif %}</tr>
+          </thead>
+          <tbody>
+            {% for row in usage.rotation %}
+              <tr>
+                <td class="stat-key">{{ forloop.counter }}</td>
+                <td><a href="{% scoped_url 'player_detail' club.team_id row.player_id %}" class="player-name">{{ row.name }}</a>{% if row.is_foreign %} <span class="badge bg-secondary">外国人</span>{% endif %}</td>
+                {% if usage.next_game_on %}<td class="text-end">{% if row.days_since_start is None %}—{% else %}{{ row.days_since_start }}日{% endif %}</td>{% endif %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="stat-muted mb-0">ローテーションを組める投手がいません。</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card mb-4" id="club-closer" data-mode="{% if club.closer_is_manual %}manual{% else %}auto{% endif %}">
+  {% include 'pennant/_club_section_head.html' with title="抑え" token="closer" manual=club.closer_is_manual %}
+  <div class="card-body">
+    {% if is_owner and club.closer_is_manual %}
+      <form method="post" action="{% url 'pennant_club' world.world_id %}">
+        {% csrf_token %}
+        <input type="hidden" name="section" value="closer">
+        <div class="mb-3">
+          <select name="closer" class="form-select" aria-label="抑えの投手" style="max-width: 20rem;">
+            <option value="">—</option>
+            {% for row in pitcher_candidates %}
+              <option value="{{ row.player_id }}" {% if closer_selected == row.player_id %}selected{% endif %}>{{ row.label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="d-flex gap-2">
+          <button type="submit" name="action" value="save" class="btn btn-primary">保存する</button>
+          <button type="submit" form="club-reset-closer" name="action" value="auto" class="btn btn-secondary">自動に戻す</button>
+        </div>
+      </form>
+      {% include 'pennant/_club_reset_form.html' with token="closer" %}
+    {% elif usage.closer %}
+      <a href="{% scoped_url 'player_detail' club.team_id usage.closer.player_id %}" class="player-name">{{ usage.closer.name }}</a>
+    {% else %}
+      <p class="stat-muted mb-0">抑えの投手がいません。</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card mb-4" id="club-bullpen">
+  <div class="card-header">救援陣（起用はいつも自動）</div>
+  <div class="card-body p-0">
+    {% if usage.closer or usage.bullpen %}
+      <div class="table-responsive">
+        <table class="table tabular-nums mb-0">
+          <thead>
+            <tr>
+              <th>投手</th>
+              {% if usage.next_game_on %}
+                {% for day in usage.recent_days %}<th class="text-center">{{ day|date:"n/j" }}</th>{% endfor %}
+                <th class="text-center">{{ usage.next_game_on|date:"n月j日" }}の試合</th>
+              {% endif %}
+            </tr>
+          </thead>
+          <tbody>
+            {% if usage.closer %}{% include 'pennant/_club_bullpen_row.html' with row=usage.closer role="抑え" %}{% endif %}
+            {% for row in usage.bullpen %}{% include 'pennant/_club_bullpen_row.html' with row=row role="" %}{% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="stat-muted p-3 mb-0">救援陣がいません。</p>
+    {% endif %}
+  </div>
+</div>
+{% if not usage.next_game_on %}
+  <p class="stat-muted" style="font-size: 0.8125rem;">日程が残っていないため、登板の状態は出していません。</p>
+{% endif %}

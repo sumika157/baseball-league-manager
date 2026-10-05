@@ -37,6 +37,9 @@ ROTATION_SIZE = 6
 MIN_DAYS_BETWEEN_STARTS = 6
 # 前の2日続けて投げた投手は、3連投になるので投げさせない
 MAX_CONSECUTIVE_DAYS = 2
+# 連投の判断に要る直近の日数（MAX_CONSECUTIVE_DAYS に余裕を1日足す）。
+# 直近の登板を読む側と、画面に出す側の出典
+RECENT_PITCHING_DAYS = MAX_CONSECUTIVE_DAYS + 1
 PINCH_HITTER_FROM_INNING = 7
 # 抑えが登板できる回（セーブがつく状況は9回から）
 CLOSER_FROM_INNING = 9
@@ -217,6 +220,10 @@ class PitchingHistory:
             count += 1
             day -= timedelta(days=1)
         return count
+
+    def can_pitch_on(self, pitcher_id: int, today: date) -> bool:
+        """今日、連投の上限に達していないか（直前の `MAX_CONSECUTIVE_DAYS` 日続けて投げていれば投げさせない）。"""
+        return self.consecutive_days_before(pitcher_id, today) < MAX_CONSECUTIVE_DAYS
 
 
 # --- 値 ---
@@ -508,7 +515,7 @@ def available_relievers(
         return (
             pitcher.player_id not in used_ids
             and quota.allows(pitcher.is_foreign)
-            and history.consecutive_days_before(pitcher.player_id, today) < MAX_CONSECUTIVE_DAYS
+            and history.can_pitch_on(pitcher.player_id, today)
         )
 
     if staff.bullpen:

@@ -20,6 +20,7 @@ from django.test import SimpleTestCase
 from django.urls import reverse
 
 from myapp.domain.exceptions import GameNotFound, LeagueNotFound, TeamNotFound
+from myapp.domain.pennant.club_plan import ClubPlan, LineupChoice
 from myapp.domain.pennant.world import WorldScope
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import (
@@ -30,12 +31,14 @@ from myapp.infrastructure.queries import (
     DjangoTeamPermissionQuery,
 )
 from myapp.infrastructure.repositories import (
+    DjangoClubPlanRepository,
     DjangoGameRepository,
     DjangoLeagueRepository,
     DjangoTeamRepository,
 )
 from myapp.management.commands.measure_pages import Command as MeasurePages
 from myapp.presentation.views import (
+    build_club_service,
     build_pennant_world_service,
     build_permission_query,
     build_player_search_query,
@@ -585,6 +588,38 @@ class PennantScreensStayInTheWorldTest(WorldCase):
         home = self.client.get(urls[1]).content.decode()
         self.assertIn(f'action="/pennant/{self.world_id}/advance/"', home, "オーナーには進めるフォームが出る")
         self.assertIn(f"/pennant/{self.world_id}/games/{self.pennant_game_id}/", home, "結果のまとめから試合詳細へ")
+
+    def test_the_club_screens_stay_in_the_world_with_every_section_manual(self):
+        """編成の編集欄・保存・自動に戻すのフォームの宛先と、リンクが、世界の中に留まる（オーナーにだけ出る導線）。"""
+        owner = User.objects.create_user("gm", password="x")
+        orm_models.PennantWorld.objects.filter(id=self.world_id).update(
+            owner_id=owner.id, managed_team_id=self.pennant_team.id
+        )
+        view = build_club_service(self.world_id).view(self.pennant_team.id)
+        # この世界の選手では検査を通らない（捕手がいない）ので、保存だけを直接行って全区画を手動にする
+        DjangoClubPlanRepository(WorldScope.pennant(self.world_id)).save(
+            ClubPlan(
+                team_id=self.pennant_team.id,
+                active_ids=view.active_ids,
+                lineup=tuple(LineupChoice(row.player_id, row.position) for row in view.lineup) or None,
+                rotation=view.rotation_ids,
+                closer_id=view.closer_id,
+            )
+        )
+        self.client.force_login(owner)
+        urls = [
+            reverse("pennant_club", args=[self.world_id]) + f"?tab={tab}" for tab in ("active", "lineup", "pitching")
+        ]
+
+        self._assert_stays_in(self.world_id, urls)
+        prefix = f"/pennant/{self.world_id}/"
+        for url in urls:
+            content = self.client.get(url).content.decode()
+            actions = re.findall(r'<form [^>]*action="([^"]*)"', content)
+            self.assertIn(f"{prefix}club/", actions, "編成のフォームが出ている")
+            for action in actions:
+                allowed = action.startswith((prefix, *HEADER_PREFIXES)) or action in HEADER_PAGES
+                self.assertTrue(allowed, f"{url} のフォーム {action} が世界の外へ出ています")
 
     def test_the_links_really_are_collected(self):
         """リンクを拾えていなければ、上の検査は何も確かめていない。"""

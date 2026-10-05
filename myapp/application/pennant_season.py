@@ -178,7 +178,7 @@ class PennantSeasonService:
     def _play(self, world: World, pending: list[Fixture], dates: list[date]) -> tuple[int, tuple[PlanNotice, ...]]:
         """`dates` の日の対戦をシミュレーションして保存し、作った試合数と、自動に落ちた編成の知らせを返す。"""
         context = self._context_query.load(before=dates[0])
-        history = _pitching_history(context)
+        history = pitching_history(context)
         teams = {team.team_id: team for team in context.teams}
         # 能力を引く年。`dates[0]` は最後の試合日より後の未消化の最初の日。消化した日程は試合の保存と
         # 同じトランザクションで消えるので、日程の最初の日（`FixtureRepository.first_date`）と同じになり、
@@ -271,7 +271,7 @@ def pool_of(team: SimulationTeam, ratings: dict[int, BatterRatings | PitcherRati
     return ClubRoster(team_id=team.team_id, name=team.name, batters=tuple(batters), pitchers=tuple(pitchers))
 
 
-def _pitching_history(context: SimulationContext) -> PitchingHistory:
+def pitching_history(context: SimulationContext) -> PitchingHistory:
     """読んだ直近の登板から、疲労を導くための記録を作る。"""
     history = PitchingHistory()
     for start in context.last_starts:

@@ -13,7 +13,7 @@
 {% comment %}
 GM ホーム。上から、自軍の位置 → 進めた結果 → 進める → 次の試合 → 順位表 → 主力 → タイトル争い → 削除。
 状態は保存せず、日程と試合から導いた値（PennantHome）を並べるだけ。
-「注意」（編成の指定が無効になった日など）は編成の画面（P5）ができてから足す。
+「注意」は、編成の上書きが使えず、いま進めると自動編成に落ちる区画（オーナーにだけ出す。自軍の帯の直後）。
 {% endcomment %}
 {% with own=home.own summary=home.summary %}
 
@@ -66,6 +66,18 @@ GM ホーム。上から、自軍の位置 → 進めた結果 → 進める →
   </div>
 {% else %}
   <div class="alert alert-secondary">この世界には、受け持つ球団が決まっていません。</div>
+{% endif %}
+
+{% if is_owner and plan_notices %}
+  <div class="alert alert-warning" id="plan-notices">
+    <div class="fw-semibold mb-1">注意: 編成の上書きが使えません</div>
+    <ul class="mb-1">
+      {% for notice in plan_notices %}
+        <li>「{{ notice.section }}」は、いま進めると自動編成になります。理由: {{ notice.reason }}
+          <a href="{% url 'pennant_club' world.world_id %}?tab={{ notice.tab }}" class="alert-link">編成を開く</a></li>
+      {% endfor %}
+    </ul>
+  </div>
 {% endif %}
 
 {% if summary %}

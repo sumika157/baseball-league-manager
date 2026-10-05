@@ -1,0 +1,71 @@
+{% comment %}
+編成の「オーダー」タブ。打順ごとに守備位置と選手を選ぶ（JavaScript は使わない）。
+自動のあいだは提案の読み取り専用の表、手動のあいだ（オーナーだけ）は行ごとの select。
+守備位置の選択肢と人数は domain から DTO（club.limits）で受け取る。
+{% endcomment %}
+{% load scoped %}
+<div class="card mb-4" id="club-lineup" data-mode="{% if club.lineup_is_manual %}manual{% else %}auto{% endif %}">
+  {% include 'pennant/_club_section_head.html' with title="オーダー" token="lineup" manual=club.lineup_is_manual %}
+  <div class="card-body">
+    {% if is_owner and club.lineup_is_manual %}
+      <form method="post" action="{% url 'pennant_club' world.world_id %}">
+        {% csrf_token %}
+        <input type="hidden" name="section" value="lineup">
+        <div class="table-responsive">
+          <table class="table mb-3">
+            <thead>
+              <tr><th style="width: 4rem;">打順</th><th style="width: 8rem;">守備</th><th>選手</th></tr>
+            </thead>
+            <tbody>
+              {% for slot in lineup_slots %}
+                <tr>
+                  <td class="stat-key">{{ slot.order }}</td>
+                  <td>
+                    <select name="lineup_position_{{ slot.order }}" class="form-select form-select-sm" aria-label="{{ slot.order }}番の守備位置">
+                      <option value="">—</option>
+                      {% for position in club.limits.lineup_positions %}
+                        <option value="{{ position.value }}" {% if slot.position == position %}selected{% endif %}>{{ position.value }}</option>
+                      {% endfor %}
+                    </select>
+                  </td>
+                  <td>
+                    <select name="lineup_player_{{ slot.order }}" class="form-select form-select-sm" aria-label="{{ slot.order }}番の選手">
+                      <option value="">—</option>
+                      {% for row in batter_candidates %}
+                        <option value="{{ row.player_id }}" {% if slot.player_id == row.player_id %}selected{% endif %}>{{ row.label }}</option>
+                      {% endfor %}
+                    </select>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div class="d-flex gap-2">
+          <button type="submit" name="action" value="save" class="btn btn-primary">保存する</button>
+          <button type="submit" form="club-reset-lineup" name="action" value="auto" class="btn btn-secondary">自動に戻す</button>
+        </div>
+      </form>
+      {% include 'pennant/_club_reset_form.html' with token="lineup" %}
+    {% elif club.lineup %}
+      <div class="table-responsive">
+        <table class="table tabular-nums mb-0">
+          <thead>
+            <tr><th style="width: 4rem;">打順</th><th style="width: 8rem;">守備</th><th>選手</th></tr>
+          </thead>
+          <tbody>
+            {% for row in club.lineup %}
+              <tr>
+                <td class="stat-key">{{ row.batting_order }}</td>
+                <td>{{ row.position.value }}</td>
+                <td><a href="{% scoped_url 'player_detail' club.team_id row.player_id %}" class="player-name">{{ row.name }}</a></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="stat-muted mb-0">オーダーを組める野手がいません。</p>
+    {% endif %}
+  </div>
+</div>

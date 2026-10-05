@@ -1303,6 +1303,17 @@ class ClubPlanView:
     lineup: tuple[ClubLineupRow, ...]
     rotation_ids: tuple[int, ...]
     closer_id: int | None
+    # 抑えとローテーションを除く救援陣（セットアップ、中継ぎの順）
+    bullpen_ids: tuple[int, ...]
+    limits: ClubLimitsView
+    counts: ClubRosterCounts
+    # 保存済みの上書き（None は自動）。上の欄は「いま進めたときに使われる形」で、使えない上書きは自動に落ちた値になる。
+    # 手動の区画の編集欄の初期値は、こちらから作る
+    # （解決後の値から作ると、保存したときに GM の上書きが AI の形で置き換わる）
+    saved_active_ids: tuple[int, ...] | None
+    saved_lineup: tuple[ClubLineupRow, ...] | None
+    saved_rotation_ids: tuple[int, ...] | None
+    saved_closer_id: int | None
     active_is_manual: bool
     lineup_is_manual: bool
     rotation_is_manual: bool
@@ -1311,11 +1322,66 @@ class ClubPlanView:
 
 
 @dataclass(frozen=True)
+class ClubLimitsView:
+    """編成の枠（画面に出す上限と、選択肢。数は domain が出典で、テンプレートには書かない）。None は制限なし。"""
+
+    active_size: int
+    foreign_roster_limit: int | None
+    foreign_game_limit: int | None
+    lineup_size: int
+    rotation_size: int
+    # オーダーで選べる守備位置（画面に出す順）
+    lineup_positions: tuple[FieldingPosition, ...]
+
+
+@dataclass(frozen=True)
+class ClubRosterCounts:
+    """いまの 1軍の内訳（登録の画面の上部に出す）。"""
+
+    total: int
+    batters: int
+    pitchers: int
+    catchers: int
+    foreign: int
+
+
+@dataclass(frozen=True)
 class ClubPlanNotice:
     """編成の上書きが使えない理由（`ClubPlanView` に添える。日付は持たない）。"""
 
     section: PlanSection
     reason: str
+
+
+# --- ペナントの編成画面（P5b） ---
+
+
+@dataclass(frozen=True)
+class ClubPitcherUsage:
+    """投手1人の、次の試合日に向けた状態。保存せず、直近の登板から導く。"""
+
+    player_id: int
+    name: str
+    is_foreign: bool
+    # 次の試合日の直近3日に投げたか（古い日から）
+    pitched_recently: tuple[bool, ...]
+    # 前回の先発から何日経っているか（次の試合日の時点。先発の記録が無ければ None）
+    days_since_start: int | None
+    # 次の試合日に投げられるか（連投の上限に達していないか）
+    can_pitch: bool
+
+
+@dataclass(frozen=True)
+class ClubPitchingUsage:
+    """投手陣の状態（編成の「投手陣」タブに出す）。次の試合日が無ければ、状態は既定（投げられる）で返す。"""
+
+    # 受け持つ球団の次の試合日（日程が残っていなければ None）
+    next_game_on: date | None
+    # `pitched_recently` の日付（古い日から）
+    recent_days: tuple[date, ...]
+    rotation: tuple[ClubPitcherUsage, ...]
+    closer: ClubPitcherUsage | None
+    bullpen: tuple[ClubPitcherUsage, ...]
 
 
 # --- ペナントの GM ホーム（P4b） ---

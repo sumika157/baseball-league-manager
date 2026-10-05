@@ -1156,8 +1156,11 @@ class DjangoFixtureRepository:
         )
         return [Fixture(date=day, home_team_id=home, visitor_team_id=visitor) for day, home, visitor in rows]
 
-    def first_date(self) -> date | None:
-        return fixtures_in(self._scope).aggregate(first=Min("date"))["first"]
+    def first_date(self, team_id: int | None = None) -> date | None:
+        fixtures = fixtures_in(self._scope)
+        if team_id is not None:
+            fixtures = fixtures.filter(Q(home_team_id=team_id) | Q(visitor_team_id=team_id))
+        return fixtures.aggregate(first=Min("date"))["first"]
 
     @transaction.atomic
     def remove(self, fixtures: Sequence[Fixture]) -> None:

@@ -23,6 +23,7 @@ from django.views.generic import CreateView
 
 from ..application.club_management import ClubManagementService
 from ..application.dto import (
+    ClubPlanView,
     GameEditData,
     GameEditPlateAppearance,
     Listing,
@@ -49,6 +50,7 @@ from ..domain.exceptions import (
     TeamNotFound,
     WorldNotFound,
 )
+from ..domain.pennant.club_plan import LineupChoice, PlanSection
 from ..domain.pennant.schedule import AdvanceTarget
 from ..domain.pennant.season import MAX_GAMES_PER_ADVANCE, SCREEN_ADVANCE_TARGETS, world_today
 from ..domain.pennant.world import WorldScope
@@ -80,6 +82,25 @@ from ..infrastructure.repositories import (
     DjangoRatingsRepository,
     DjangoTeamRepository,
     DjangoWorldRepository,
+)
+from .club_input import (
+    ACTION_AUTO,
+    ACTION_MANUAL,
+    ACTIONS,
+    SECTIONS,
+    TAB_OF_SECTION,
+    ClubFormState,
+    ClubInputError,
+    LineupSlotInput,
+    NoticeLink,
+    RotationSlotInput,
+    failed_state,
+    parse_active,
+    parse_closer,
+    parse_lineup,
+    parse_rotation,
+    player_option,
+    tab_of,
 )
 from .forms import (
     FIELDED_BY_SEPARATOR,
@@ -434,7 +455,26 @@ def pennant_world(request, world_id):
         league_id=int(league) if league and league.isdigit() else None,
         include_advance=is_owner,
     )
-    return _render(request, "pennant/home.html", {"home": home, "is_owner": is_owner}, world)
+    return _render(
+        request,
+        "pennant/home.html",
+        {"home": home, "is_owner": is_owner, "plan_notices": _plan_notices(world) if is_owner else []},
+        world,
+    )
+
+
+def _plan_notices(world: WorldContext) -> list[NoticeLink]:
+    """いま進めたら自動に落ちる区画と理由（ホームの「注意」）。受け持つ球団の編成を読むだけで、保存はしない。
+
+    編成を読めない世界（受け持つ球団が無い・球団が見つからない）では注意を出さない。ホームを開けなくしないため。
+    """
+    if world.managed_team_id is None:
+        return []
+    try:
+        view = build_club_service(world.world_id).view(world.managed_team_id)
+    except DomainError:
+        return []
+    return [NoticeLink(notice.section.value, notice.reason, TAB_OF_SECTION[notice.section]) for notice in view.notices]
 
 
 def pennant_advance(request, world_id):
@@ -514,6 +554,167 @@ def build_club_service(world_id: int) -> ClubManagementService:
         fixtures=DjangoFixtureRepository(scope),
         context_query=DjangoSimulationContextQuery(scope),
     )
+
+
+def pennant_club(request, world_id):
+    """編成。1軍登録・オーダー・投手陣の3タブ（`?tab=`）。受け持つ球団の編成を、区画ごとに自動か手動のどちらかで見せる。
+
+    GET は誰でも（読み取り専用）、POST はオーナーだけ（未ログインはログインへ、ほかの人は 403）。
+    POST は区画ごとに「手動にする」「保存する」「自動に戻す」を受け、成功したら同じタブへ戻る
+    （再読み込みで二重に送らない）。
+    失敗したら保存せず、入力を残してメッセージつきで再表示する。
+    """
+    world = _world_context(world_id)
+    if request.method not in ("GET", "HEAD", "POST"):
+        return HttpResponseNotAllowed(["GET", "HEAD", "POST"])
+    if request.method == "POST":
+        denied = _requires_world_owner(request, world)
+        if denied is not None:
+            return denied
+        return _post_club(request, world)
+    return _render_club(request, world, tab_of(request.GET.get("tab")))
+
+
+def _post_club(request, world: WorldContext):
+    club_url = reverse("pennant_club", args=[world.world_id])
+    team_id = world.managed_team_id
+    if team_id is None:
+        messages.error(request, "この世界には、受け持つ球団が決まっていません。")
+        return redirect(club_url)
+    section = SECTIONS.get(request.POST.get("section", ""))
+    action = request.POST.get("action", "")
+    if section is None or action not in ACTIONS:
+        messages.error(request, "その操作はできません。")
+        return redirect(club_url)
+
+    service = build_club_service(world.world_id)
+    try:
+        current = service.view(team_id)
+    except DomainError as error:
+        messages.error(request, str(error))
+        return redirect(club_url)
+    tab_url = f"{club_url}?tab={TAB_OF_SECTION[section]}"
+    try:
+        if action == ACTION_AUTO:
+            service.reset(team_id, section)
+            messages.success(request, f"{section.value}を自動編成に戻しました。")
+        elif action == ACTION_MANUAL:
+            if _is_manual(current, section):
+                messages.info(request, f"{section.value}は、すでに手動です。")
+            else:
+                _start_manual(service, current, section)
+                messages.success(request, f"{section.value}を手動にしました。")
+        else:
+            _save_section(service, request.POST, current, section)
+            messages.success(request, f"{section.value}を保存しました。")
+    except (ClubInputError, DomainError) as error:
+        state = failed_state(
+            request.POST,
+            section,
+            str(error),
+            lineup_size=current.limits.lineup_size,
+            rotation_size=current.limits.rotation_size,
+        )
+        return _render_club(request, world, TAB_OF_SECTION[section], state=state, status=400)
+    return redirect(tab_url)
+
+
+def _is_manual(view: ClubPlanView, section: PlanSection) -> bool:
+    return {
+        PlanSection.ACTIVE: view.active_is_manual,
+        PlanSection.LINEUP: view.lineup_is_manual,
+        PlanSection.ROTATION: view.rotation_is_manual,
+        PlanSection.CLOSER: view.closer_is_manual,
+    }[section]
+
+
+def _start_manual(service: ClubManagementService, current: ClubPlanView, section: PlanSection) -> None:
+    """区画を、いま映している自動編成の形を初期値にして手動にする。"""
+    team_id = current.team_id
+    if section is PlanSection.ACTIVE:
+        service.set_active_roster(team_id, current.active_ids)
+    elif section is PlanSection.LINEUP:
+        service.set_lineup(team_id, [LineupChoice(row.player_id, row.position) for row in current.lineup])
+    elif section is PlanSection.ROTATION:
+        service.set_rotation(team_id, current.rotation_ids)
+    elif current.closer_id is not None:
+        service.set_closer(team_id, current.closer_id)
+    else:
+        raise ClubInputError("抑えにできる投手がいません。")
+
+
+def _save_section(service: ClubManagementService, post, current: ClubPlanView, section: PlanSection) -> None:
+    team_id = current.team_id
+    if section is PlanSection.ACTIVE:
+        service.set_active_roster(team_id, parse_active(post, current))
+    elif section is PlanSection.LINEUP:
+        service.set_lineup(team_id, parse_lineup(post, current.limits.lineup_size))
+    elif section is PlanSection.ROTATION:
+        service.set_rotation(team_id, parse_rotation(post, current.limits.rotation_size))
+    else:
+        service.set_closer(team_id, parse_closer(post))
+
+
+def _render_club(request, world: WorldContext, tab: str, *, state: ClubFormState | None = None, status: int = 200):
+    """編成の画面を描く。`state` があるときは、保存に失敗した入力を残して出す。
+
+    手動の区画の編集欄の初期値は、**保存済みの上書き**から作る（使えなくなって自動に落ちた区画も、
+    GM が決めた形のまま出す。解決後の値から作ると、保存したときに上書きが AI の形で置き換わる）。
+    """
+    context: dict = {"is_owner": _is_owner(request, world), "tab": tab, "club": None, "club_error": None}
+    if world.managed_team_id is None:
+        return render(request, "pennant/club.html", {**context, "world": world}, status=status)
+    service = build_club_service(world.world_id)
+    try:
+        view = service.view(world.managed_team_id)
+    except DomainError as error:
+        # 受け持つ球団が見つからないなど。画面を落とさず理由を出す（ホームの注意と同じ扱い）
+        context["club_error"] = str(error)
+        return render(request, "pennant/club.html", {**context, "world": world}, status=status)
+    limits = view.limits
+
+    # 保存済みの上書き（あれば）→ 無ければ、いま進めたときに使われる形
+    saved_lineup = view.saved_lineup if view.saved_lineup is not None else view.lineup
+    lineup = state.lineup if state is not None else None
+    if lineup is None:
+        lineup = [LineupSlotInput(row.batting_order, row.player_id, row.position) for row in saved_lineup]
+        lineup += [LineupSlotInput(order, None, None) for order in range(len(lineup) + 1, limits.lineup_size + 1)]
+    rotation = state.rotation if state is not None else None
+    if rotation is None:
+        ids: list[int | None] = list(
+            view.saved_rotation_ids if view.saved_rotation_ids is not None else view.rotation_ids
+        )
+        ids += [None] * (limits.rotation_size - len(ids))
+        rotation = [RotationSlotInput(order, player_id) for order, player_id in enumerate(ids, start=1)]
+    checked = state.active_checked if state is not None else None
+    if checked is None:
+        checked = frozenset(view.saved_active_ids if view.saved_active_ids is not None else view.active_ids)
+    closer = state.closer_id if state is not None else None
+    if closer is None:
+        closer = view.saved_closer_id if view.saved_closer_id is not None else view.closer_id
+
+    # 選択肢は1軍の選手。保存済みの上書きに入っている1軍外の選手も、印を付けて残す（保存時にドメインが弾く）
+    kept = {slot.player_id for slot in lineup} | {slot.player_id for slot in rotation} | {closer}
+    batters = [row for row in view.players if not row.position.is_pitcher and (row.is_active or row.player_id in kept)]
+    pitchers = [row for row in view.players if row.position.is_pitcher and (row.is_active or row.player_id in kept)]
+
+    context.update(
+        club=view,
+        error=state.error if state is not None else None,
+        tab_notices=[
+            NoticeLink(notice.section.value, notice.reason, TAB_OF_SECTION[notice.section])
+            for notice in view.notices
+            if TAB_OF_SECTION[notice.section] == tab
+        ],
+        active_checked=checked,
+        batter_candidates=[player_option(row) for row in batters],
+        pitcher_candidates=[player_option(row) for row in pitchers],
+        lineup_slots=lineup,
+        rotation_slots=rotation,
+        closer_selected=closer,
+        usage=service.pitching_usage(view) if tab == "pitching" else None,
+    )
+    return render(request, "pennant/club.html", {**context, "world": world}, status=status)
 
 
 def dashboard(request):

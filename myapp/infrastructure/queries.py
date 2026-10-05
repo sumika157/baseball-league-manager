@@ -37,7 +37,7 @@ from ..application.dto import (
 from ..domain.entities import Game, winning_team_id
 from ..domain.exceptions import WorldNotFound
 from ..domain.pennant.world import WorldScope
-from ..domain.simulation.manager import MAX_CONSECUTIVE_DAYS
+from ..domain.simulation.manager import RECENT_PITCHING_DAYS
 from ..domain.value_objects import BattingLine, FieldingLine, PitchingLine, Position, Season
 from . import orm_models
 from .repositories import batting_totals, pitching_totals
@@ -158,9 +158,6 @@ class DjangoSimulationContextQuery:
     打席や明細の全件は読まない。
     """
 
-    # 連投の判断に要る日数は MAX_CONSECUTIVE_DAYS（3連投は禁止）。余裕を1日足す
-    RECENT_DAYS = MAX_CONSECUTIVE_DAYS + 1
-
     def __init__(self, scope: WorldScope) -> None:
         self._scope = scope
 
@@ -179,7 +176,7 @@ class DjangoSimulationContextQuery:
             .order_by("player_id")
         )
 
-        recent = lines.filter(game__played_on__gte=before - timedelta(days=self.RECENT_DAYS)).order_by(
+        recent = lines.filter(game__played_on__gte=before - timedelta(days=RECENT_PITCHING_DAYS)).order_by(
             "game_id", "appearance_order", "player_id"
         )
         recent_outings = tuple(

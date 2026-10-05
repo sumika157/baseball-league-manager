@@ -1,0 +1,51 @@
+{% extends 'myapp/base.html' %}
+
+{% block title %}編成 - {{ world.name }} - ペナント - Baseball Manager{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb">
+    {% include 'pennant/_crumbs.html' %}
+    <li class="breadcrumb-item active">編成</li>
+  </ol>
+</nav>{% include 'pennant/_world_bar.html' %}
+
+{% comment %}
+編成。区画（1軍登録・オーダー・ローテーション・抑え）ごとに、自動か手動のどちらかの状態だけを持つ。
+自動のときは提案の読み取り専用の表と「手動にする」、手動のときは編集欄と「保存する」「自動に戻す」。
+書き込みの導線はオーナーにだけ出す。
+{% endcomment %}
+<div class="page-head">
+  <h1 class="page-title">編成</h1>
+  {% if club %}<p class="page-subtitle">{{ club.team_name }} · {{ club.year }}年</p>{% endif %}
+</div>
+
+{% if not club %}
+  <div class="alert alert-secondary">{% if club_error %}編成を読めません。{{ club_error }}{% else %}この世界には、受け持つ球団が決まっていません。{% endif %}</div>
+{% else %}
+  <div class="segmented mb-3">
+    <a class="segmented-item {% if tab == 'active' %}is-active{% endif %}" href="?tab=active">1軍登録（{{ club.counts.total }}/{{ club.limits.active_size }}）</a>
+    <a class="segmented-item {% if tab == 'lineup' %}is-active{% endif %}" href="?tab=lineup">オーダー</a>
+    <a class="segmented-item {% if tab == 'pitching' %}is-active{% endif %}" href="?tab=pitching">投手陣</a>
+  </div>
+
+  {% if not is_owner %}
+    <p class="stat-muted" style="font-size: 0.8125rem;">編成を変えられるのは、この世界のオーナーだけです。</p>
+  {% endif %}
+
+  {% for notice in tab_notices %}
+    <div class="alert alert-warning">「{{ notice.section }}」の上書きが使えないため、進めるとこの区画は自動編成になります。理由: {{ notice.reason }}</div>
+  {% endfor %}
+  {% if error %}
+    <div class="alert alert-danger">{{ error }}</div>
+  {% endif %}
+
+  {% if tab == 'lineup' %}
+    {% include 'pennant/_club_lineup.html' %}
+  {% elif tab == 'pitching' %}
+    {% include 'pennant/_club_pitching.html' %}
+  {% else %}
+    {% include 'pennant/_club_active.html' %}
+  {% endif %}
+{% endif %}
+{% endblock %}
