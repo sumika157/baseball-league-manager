@@ -15,7 +15,7 @@
 <div class="page-head">
   <h1 class="page-title">{{ team_name }}</h1>
   <p class="page-subtitle">
-    {% if pos_mode == 'pitcher' %}投手{% else %}野手{% endif %}{% if ratings_table %}能力{% else %}成績{% endif %}
+    {% if pos_mode == 'pitcher' %}投手{% else %}野手{% endif %}{% if ratings_table %}能力{% else %}成績{% endif %}{% if stats_year %}（{{ stats_year }}年）{% endif %}
     · {{ players|length }}名
   </p>
 </div>
@@ -89,6 +89,11 @@
 <div class="segmented ms-2">
   <a class="segmented-item {% if not ratings_table %}is-active{% endif %}" href="{% query_with view='' sort='' dir='' %}">成績</a>
   <a class="segmented-item {% if ratings_table %}is-active{% endif %}" href="{% query_with view='ratings' sort='' dir='' %}">能力</a>
+</div>
+{# 成績の期間。今季（世界のいまの年度）と通算を切り替える。年を挟んだ並びのまま見比べられるよう、並べ替えは保つ #}
+<div class="segmented ms-2">
+  <a class="segmented-item {% if stats_year %}is-active{% endif %}" href="{% query_with period='' %}">今季</a>
+  <a class="segmented-item {% if not stats_year %}is-active{% endif %}" href="{% query_with period='career' %}">通算</a>
 </div>
 {% endif %}
 

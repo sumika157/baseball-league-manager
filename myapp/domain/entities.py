@@ -758,6 +758,9 @@ class Game:
     # 明細が空でも「未記録」とは限らない。その場合に限り、参照クエリが答えを持ち込む。
     # None なら `is_recorded` が明細から判定する
     recorded_hint: bool | None = None
+    # 参照専用に、明細の一部だけ（または全く）読んだ集約か。**保存すると読んでいない明細が消える**ので、
+    # リポジトリの save は拒否する（順位表用の一覧と、選手ページ用の「その選手の明細だけ」の試合が立てる）
+    read_only: bool = False
 
     def __post_init__(self) -> None:
         if self.home_team_id == self.away_team_id:

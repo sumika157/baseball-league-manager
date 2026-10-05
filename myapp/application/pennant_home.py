@@ -114,7 +114,7 @@ class PennantHomeService:
             summary=self._summary(world, since, year, standings, own_games, names),
             standings=self._home_standings(standings, year, own_league_id, league_id, world.default_league_id),
             batters=self._key_batters(world) if own_id is not None else [],
-            pitchers=self._key_pitchers(own_id) if own_id is not None else [],
+            pitchers=self._key_pitchers(own_id, year) if own_id is not None else [],
             titles=self._title_race(own_id, own_league_id, year),
         )
 
@@ -344,7 +344,11 @@ class PennantHomeService:
 
     def _key_batters(self, world: WorldContext) -> list[KeyBatterRow]:
         own_id = _saved_id(world.managed_team_id)
-        rows = [row for row in self._teams.list_batters(own_id, sort="ops", descending=True).rows if row.at_bats]
+        rows = [
+            row
+            for row in self._teams.list_batters(own_id, sort="ops", descending=True, year=world.season_year).rows
+            if row.at_bats
+        ]
         recent: dict[int, PeriodBatting] = {}
         if world.today is not None:
             recent = {
@@ -366,12 +370,12 @@ class PennantHomeService:
             for row in rows[:KEY_PLAYERS]
         ]
 
-    def _key_pitchers(self, own_id: int | None) -> list[KeyPitcherRow]:
+    def _key_pitchers(self, own_id: int | None, year: int) -> list[KeyPitcherRow]:
         if own_id is None:
             return []
         rows = [
             row
-            for row in self._teams.list_pitchers(own_id, sort="innings", descending=True).rows
+            for row in self._teams.list_pitchers(own_id, sort="innings", descending=True, year=year).rows
             if row.starts or InningsPitched.from_notation(row.innings_pitched).outs
         ]
         return [

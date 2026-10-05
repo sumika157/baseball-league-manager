@@ -117,6 +117,19 @@ BATTER_MODE = "batter"
 PITCHER_MODE = "pitcher"
 # 球団の画面の「成績｜能力」の切り替え（?view=ratings）。能力はペナントの世界だけ
 RATINGS_VIEW = "ratings"
+# 成績の期間の切り替え（?period=career）。ペナントの世界は既定が「今季」で、通算に切り替えられる
+CAREER_PERIOD = "career"
+
+
+def _stats_year(request, world: WorldContext | None) -> int | None:
+    """成績に数える年。None は通算。
+
+    実データは常に通算（今季という区切りを持たない）。ペナントの世界は既定が今季（世界のいまの年度）で、
+    `?period=career` のときだけ通算にする。
+    """
+    if world is None or request.GET.get("period") == CAREER_PERIOD:
+        return None
+    return world.season_year
 
 
 def _requires_login(request):
@@ -222,7 +235,7 @@ def build_pennant_ratings_service(world_id: int) -> PennantRatingsViewService:
         worlds=DjangoWorldRepository(),
         fixtures=DjangoFixtureRepository(scope),
         context_query=DjangoSimulationContextQuery(scope),
-        teams=DjangoTeamRepository(scope),
+        stats=DjangoPlayerStatsQuery(scope),
         ratings=DjangoRatingsRepository(scope),
         today=_world_clock(world_id, DjangoSimulationContextQuery(scope)),
     )
@@ -839,22 +852,24 @@ def player_list(request, team_id, world_id=None):
     sort, descending = _sort_params(request)
     ratings_table: RatingsTable | None = None
     listing: Listing | None = None
+    # ペナントの世界は今季の成績が既定（?period=career で通算）。実データは通算のまま
+    stats_year = _stats_year(request, world)
     if world is not None and request.GET.get("view") == RATINGS_VIEW:
         # 能力の表。並べ替えのキーは成績の表と別（不正なキーは domain が背番号順に落とす）
         ratings_table = build_pennant_ratings_service(world.world_id).get_table(
-            team_id, pitchers=pos_mode == PITCHER_MODE, sort=sort, descending=descending
+            team_id, pitchers=pos_mode == PITCHER_MODE, sort=sort, descending=descending, stats_year=stats_year
         )
         rows, current_sort, current_descending = ratings_table.rows, ratings_table.sort, ratings_table.descending
         months: list[TeamMonthlyRow] = []
     else:
         listing = (
-            service.list_pitchers(team_id, sort=sort, descending=descending)
+            service.list_pitchers(team_id, sort=sort, descending=descending, year=stats_year)
             if pos_mode == PITCHER_MODE
-            else service.list_batters(team_id, sort=sort, descending=descending)
+            else service.list_batters(team_id, sort=sort, descending=descending, year=stats_year)
         )
         rows, current_sort, current_descending = listing.rows, listing.sort, listing.descending
         # 通算値では見えない調子の波を、月ごとに区切って出す
-        months = service.list_team_monthly_splits(team_id)
+        months = service.list_team_monthly_splits(team_id, stats_year)
 
     return _render(
         request,
@@ -862,7 +877,8 @@ def player_list(request, team_id, world_id=None):
         {
             "team_id": team_id,
             "team_name": team_name,
-            "totals": service.get_team_totals(team_id),
+            "totals": service.get_team_totals(team_id, stats_year),
+            "stats_year": stats_year,
             "listing": listing,
             "ratings_table": ratings_table,
             "players": rows,
@@ -932,6 +948,7 @@ def league_stats(request, league_id, world_id=None):
     sort, descending = _sort_params(request)
 
     service, world = _scope(world_id)
+    stats_year = _stats_year(request, world)
     try:
         stats = service.get_league_stats(
             league_id,
@@ -939,6 +956,7 @@ def league_stats(request, league_id, world_id=None):
             qualified=qualified,
             sort=sort,
             descending=descending,
+            year=stats_year,
         )
     except LeagueNotFound:
         raise Http404("リーグが見つかりません。") from None
@@ -948,6 +966,7 @@ def league_stats(request, league_id, world_id=None):
         "myapp/league_stats.html",
         {
             "stats": stats,
+            "stats_year": stats_year,
             "players": stats.listing.rows,
             "pos_mode": pos_mode,
             "current_sort": stats.listing.sort,

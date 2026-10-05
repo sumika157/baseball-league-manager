@@ -17,10 +17,11 @@ from ..domain import services as domain_services
 from ..domain.entities import Player
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.season import ratings_year
-from ..domain.repositories import FixtureRepository, RatingsRepository, TeamRepository, WorldRepository
+from ..domain.repositories import FixtureRepository, RatingsRepository, WorldRepository
 from ..domain.simulation.ratings import BatterRatings, PitcherRatings, RatingGrade
 from .dto import PlayerRatingsCard, RatingCell, RatingColumn, RatingsRow, RatingsTable
-from .queries import SimulationContextQuery
+from .player_stats_view import stats_player
+from .queries import PlayerStatsQuery, SimulationContextQuery
 
 
 def _cells_of(ratings: BatterRatings | PitcherRatings) -> tuple[RatingCell, ...]:
@@ -47,7 +48,7 @@ class PennantRatingsViewService:
         worlds: WorldRepository,
         fixtures: FixtureRepository,
         context_query: SimulationContextQuery,
-        teams: TeamRepository,
+        stats: PlayerStatsQuery,
         ratings: RatingsRepository,
         today: Callable[[], date],
     ) -> None:
@@ -55,7 +56,7 @@ class PennantRatingsViewService:
         self._worlds = worlds
         self._fixtures = fixtures
         self._context_query = context_query
-        self._teams = teams
+        self._stats = stats
         self._ratings = ratings
         self._today = today
 
@@ -82,14 +83,19 @@ class PennantRatingsViewService:
         pitchers: bool,
         sort: str | None = None,
         descending: bool | None = None,
+        stats_year: int | None = None,
     ) -> RatingsTable:
-        """球団の1軍の野手（または投手）の能力の表。無ければ TeamNotFound。
+        """球団の1軍の野手（または投手）の能力の表。
 
         能力は球団の選手ぶんを**1回のクエリで**読む（選手ごとに引かない）。その年の能力が無い選手は「—」。
         並べ替えのキーと既定の向きは domain（不正なキーは背番号順に落ちる）。
+
+        表の打率・OPS・防御率と、表に載せる選手は `stats_year` で決まる（その年に球団に在籍した選手のその年の成績）。
+        省くと在籍中の選手の通算。球団の選手は参照クエリが読む（集約を組み立てず、全シーズンの明細を積み直さない）。
+        球団が無い（または世界の外の）ときは、選手が空の表になる（画面は球団の存在を先に確かめる）。
         """
-        team = self._teams.find_by_id(team_id)
-        members = [p for p in team.active_players if p.is_pitcher == pitchers]
+        rows = self._stats.list_roster(year=stats_year, team_id=team_id, with_profile=True)
+        members = [stats_player(row) for row in rows if row.position.is_pitcher == pitchers]
         year = self.current_year()
         by_player = {
             item.player_id: item

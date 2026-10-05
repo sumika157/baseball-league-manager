@@ -4,13 +4,16 @@ from datetime import date
 
 from django.urls import reverse
 
+from myapp.domain import services as domain_services
 from myapp.domain.entities import Game
+from myapp.domain.exceptions import InvalidGame
 from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import (
     BattingLine,
     Season,
 )
 from myapp.infrastructure import orm_models
+from myapp.infrastructure.queries import DjangoGameListQuery
 from myapp.infrastructure.repositories import (
     DjangoGameRepository,
 )
@@ -353,3 +356,47 @@ class TeamMonthlySplitViewTest(BaseCase):
     def test_team_without_games_has_no_months(self):
         self.assertEqual(self.service.list_team_monthly_splits(self.team.id), [])
         self.assertNotContains(self.client.get(self.url), "月別成績")
+
+
+class PlayerGamesQueryTest(BaseCase):
+    """選手ページの年度別・月別は、選手の明細だけを持つ試合から求める。チームの試合を全部組み立てた場合と同じ値になる。"""
+
+    def setUp(self):
+        super().setUp()
+        self.slugger = self.service.register_player(self.team.id, "大砲", 3, "内野手")
+        self.bench = self.service.register_player(self.team.id, "控え", 4, "内野手")
+        play_game(
+            self.team, self.rival, year=2025, month=4, batting={self.slugger.id: BattingLine(at_bats=4, singles=1)}
+        )
+        play_game(
+            self.team,
+            self.rival,
+            year=2026,
+            month=5,
+            batting={self.slugger.id: BattingLine(at_bats=3, home_runs=1), self.bench.id: BattingLine(at_bats=2)},
+        )
+        play_game(self.team, self.rival, year=2026, month=6, batting={self.bench.id: BattingLine(at_bats=1)})
+
+    def test_only_the_games_the_player_appeared_in_come_with_only_his_lines(self):
+        games = DjangoGameListQuery(WorldScope.real()).list_for_player(self.team.id, self.slugger.id)
+
+        self.assertEqual([game.season.year for game in games], [2025, 2026])
+        self.assertTrue(all([e.player_id for e in game.batting] == [self.slugger.id] for game in games))
+
+    def test_the_profile_is_the_same_as_when_every_game_of_the_team_is_read(self):
+        full = DjangoGameRepository(WorldScope.real()).find_by_team(self.team.id)
+        profile = self.service.get_player_profile(self.team.id, self.slugger.id)
+
+        years = domain_services.yearly_splits(full, self.slugger.id)
+        self.assertEqual(
+            [(row.label, row.at_bats, row.home_runs) for row in profile.years],
+            [(y.label, y.batting.at_bats, y.batting.home_runs) for y in years],
+        )
+        self.assertEqual(profile.appearances, 2)
+
+    def test_a_read_only_game_cannot_be_saved(self):
+        """選手の明細だけを持つ試合を保存すると、他の明細が消える。リポジトリは拒否する。"""
+        game = DjangoGameListQuery(WorldScope.real()).list_for_player(self.team.id, self.slugger.id)[0]
+
+        with self.assertRaises(InvalidGame):
+            DjangoGameRepository(WorldScope.real()).save(game)

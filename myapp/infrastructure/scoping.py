@@ -97,3 +97,15 @@ def players_in(scope: WorldScope) -> QuerySet[orm_models.Player]:
 def club_plans_in(scope: WorldScope) -> QuerySet[orm_models.PennantClubPlan]:
     """範囲の球団の編成。日程・試合と同じく、球団のリーグで世界が決まる。"""
     return orm_models.PennantClubPlan.objects.filter(world_condition("team__league", scope))
+
+
+def period_covering(year: int | None) -> Q:
+    """在籍・主将の期間が `year` を含む条件（`from_year <= year かつ (to_year が空 または year <= to_year)`）。
+
+    判定の出典は domain の `Stint.covers()` で、これはその SQL 側の写し（食い違わないことを
+    `tests/integration/test_player_stats_query.py` の `PeriodCoveringMatchesTheDomainTest` が
+    境界値で突き合わせる）。`year` が None なら「いま在籍中」（退団年が空）。
+    """
+    if year is None:
+        return Q(to_year__isnull=True)
+    return Q(from_year__lte=year) & (Q(to_year__isnull=True) | Q(to_year__gte=year))
