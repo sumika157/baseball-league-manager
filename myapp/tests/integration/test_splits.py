@@ -255,10 +255,10 @@ class PlayerGameMonthTabTest(BaseCase):
         self.assertEqual(profile.selected_month, "2026-05")
         self.assertEqual([r.played_on.month for r in profile.games], [5])
 
-    def test_selected_month_shows_only_that_month_newest_first(self):
+    def test_selected_month_shows_only_that_month_oldest_first(self):
         profile = self._profile("2026-04")
 
-        self.assertEqual([r.played_on.day for r in profile.games], [2, 1])
+        self.assertEqual([r.played_on.day for r in profile.games], [1, 2])
 
     def test_unknown_month_falls_back_to_the_latest(self):
         """不正な指定はエラーにせず既定に落とす（並べ替えのキーと同じ扱い）。"""

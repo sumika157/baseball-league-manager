@@ -183,11 +183,12 @@ class PlayerDetailViewTest(BaseCase):
         self.assertEqual(profile.detail.at_bats, 10)
         self.assertAlmostEqual(profile.detail.batting_average, 0.3)
 
-    def test_lists_each_game_newest_first(self):
+    def test_lists_each_game_oldest_first(self):
+        """1か月ぶんの表なので、月の頭から追えるように試合日の昇順に並べる。"""
         profile = self.service.get_player_profile(self.team.id, self.player.id)
 
         self.assertEqual(profile.appearances, 2)
-        self.assertEqual([r.played_on.day for r in profile.games], [2, 1])
+        self.assertEqual([r.played_on.day for r in profile.games], [1, 2])
 
     def test_batter_rows_have_no_decision(self):
         """個人ページはその選手の働きを見る場所。野手にチームの勝敗は出さない。"""
