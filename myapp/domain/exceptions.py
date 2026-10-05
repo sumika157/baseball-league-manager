@@ -111,3 +111,15 @@ class AlreadyAdvanced(DomainError):
 
 class InvalidSchedule(DomainError):
     """日程が組めない（球団数が奇数・リーグが1つ・規則が成立しないなど）、または日程の指定が不正。"""
+
+
+class SeasonNotFinished(DomainError):
+    """シーズンがまだ終わっていない（未消化の対戦が残っている、または試合を一度もしていない）ので締められない。"""
+
+
+class AlreadyClosed(DomainError):
+    """そのシーズンは既に締めている（二重送信や、別の画面で先に締めた場合）。"""
+
+
+class SeasonLimitReached(DomainError):
+    """世界のシーズン数の上限に達していて、これ以上締められない。"""
