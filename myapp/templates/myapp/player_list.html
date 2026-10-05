@@ -87,7 +87,8 @@
 </div>
 
 <div class="table-responsive mb-4">
-  <table class="table table-hover">
+  {# 列が多いので折り返さず横スクロールさせる（theme.css の roster-table） #}
+  <table class="table table-hover roster-table">
     <thead>
       {% comment %}
         見出しを押すと並べ替わる。現在の並びは current_sort / current_descending で
