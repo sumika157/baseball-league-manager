@@ -11,11 +11,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import date
 from typing import Protocol, runtime_checkable
 
 from ..domain.entities import Game
+from ..domain.pennant.retirement import PlayingTime
 from ..domain.value_objects import FieldingLine
 from .dto import (
     ActivePlayerStats,
@@ -180,4 +181,16 @@ class PennantActivityQuery(Protocol):
 
     def pitching_between(self, team_id: int, *, after: date, through: date) -> list[PeriodPitching]:
         """同じ期間の、球団の投手ごとの勝・敗・セーブ。登板の無い選手は含めない。"""
+        ...
+
+
+@runtime_checkable
+class SeasonPlayingTimeQuery(Protocol):
+    """世界のその年の出場機会の参照。シーズンを締めるときの引退の材料。
+
+    打席数と投球のアウト数を、選手ごとに SQL で集計する（集約は組み立てない）。
+    """
+
+    def for_year(self, year: int) -> Mapping[int, PlayingTime]:
+        """その年に打席に立った・投げた選手の出場機会。どちらも無い選手は含めない。"""
         ...

@@ -15,7 +15,7 @@ from operator import itemgetter
 from typing import Any
 
 from django.contrib.auth.models import AnonymousUser, User
-from django.db.models import BooleanField, Case, Count, Exists, Max, OuterRef, Q, QuerySet, Sum, Value, When
+from django.db.models import BooleanField, Case, Count, Exists, Max, Min, OuterRef, Q, QuerySet, Sum, Value, When
 
 from ..application.dto import (
     ActivePlayerStats,
@@ -36,6 +36,7 @@ from ..application.dto import (
 )
 from ..domain.entities import Game, winning_team_id
 from ..domain.exceptions import WorldNotFound
+from ..domain.pennant.retirement import PlayingTime
 from ..domain.pennant.world import WorldScope
 from ..domain.simulation.manager import RECENT_PITCHING_DAYS
 from ..domain.value_objects import BattingLine, FieldingLine, PitchingLine, Position, Season
@@ -630,7 +631,7 @@ class DjangoTeamListQuery:
 class DjangoWorldSummaryQuery:
     """WorldSummaryQuery の Django ORM 実装。世界の台帳そのものなので、範囲は持たない。
 
-    世界の数にかかわらず、一定のクエリ数（世界・最後の試合日・未消化の有無・リーグの4本）で読む。
+    世界の数にかかわらず、一定のクエリ数（世界・最後の試合日・次の対戦の日・リーグの4本）で読む。
     """
 
     def get(self, world_id: int) -> WorldSummary:
@@ -650,8 +651,8 @@ class DjangoWorldSummaryQuery:
         last_played = dict(
             games_in_worlds(ids).order_by().values_list("home_team__league__world_id").annotate(last=Max("played_on"))
         )
-        with_fixtures = set(
-            fixtures_in_worlds(ids).order_by().values_list("home_team__league__world_id", flat=True).distinct()
+        next_fixture = dict(
+            fixtures_in_worlds(ids).order_by().values_list("home_team__league__world_id").annotate(first=Min("date"))
         )
         first_league: dict[int, int] = {}
         leagues = leagues_in_worlds(ids).order_by("display_order", "name").values_list("world_id", "id")
@@ -668,8 +669,29 @@ class DjangoWorldSummaryQuery:
                     row.managed_team.league_id if row.managed_team is not None else first_league.get(row.id)
                 ),
                 last_played_on=last_played.get(row.id),
-                has_pending_fixtures=row.id in with_fixtures,
+                next_fixture_on=next_fixture.get(row.id),
                 owner_id=row.owner_id,
             )
             for row in rows
         ]
+
+
+class DjangoSeasonPlayingTimeQuery:
+    """SeasonPlayingTimeQuery の Django ORM 実装。範囲（`WorldScope`）の中の、その年の試合だけを数える。
+
+    打席数は打撃の集計（`batting_totals`。`BattingLine.plate_appearances` が出典で、打撃妨害・走塁妨害は
+    含まない）から、アウト数は投球回の集計（`pitching_totals`。5.2 = 17アウトの換算は
+    `InningsPitched` が出典）から取る。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def for_year(self, year: int) -> dict[int, PlayingTime]:
+        games = world_condition("game__home_team__league", self._scope) & Q(game__year=year)
+        appearances = {player_id: line.plate_appearances for player_id, line in batting_totals(games=games).items()}
+        outs = {player_id: line.innings.outs for player_id, line in pitching_totals(games=games).items()}
+        return {
+            player_id: PlayingTime(plate_appearances=appearances.get(player_id, 0), outs=outs.get(player_id, 0))
+            for player_id in sorted(appearances.keys() | outs.keys())
+        }

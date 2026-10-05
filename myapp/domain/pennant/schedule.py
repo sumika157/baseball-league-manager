@@ -34,6 +34,7 @@ from itertools import combinations, islice
 from typing import Protocol, TypeVar
 
 from myapp.domain.exceptions import InvalidSchedule
+from myapp.domain.simulation.randomness import game_seed, make_random
 
 MONDAY = 0
 FRIDAY = 4
@@ -141,6 +142,28 @@ def default_opening_day(year: int, rules: ScheduleRules) -> datetime.date:
     while day.weekday() == rules.rest_weekday:
         day += datetime.timedelta(days=1)
     return day
+
+
+def season_schedule(
+    leagues: Mapping[int, Sequence[int]],
+    *,
+    world_seed: int,
+    year: int,
+    rules: ScheduleRules | None = None,
+) -> list[Fixture]:
+    """その年の1シーズン分の日程。開幕年の日程も、締めたあとの翌年の日程も、この関数で作る。
+
+    開幕日は `default_opening_day(year)`、乱数は `game_seed(世界のシード, year, "schedule")`。
+    同じ世界・同じ年なら、いつ作っても同じ日程になる。
+    """
+    rules = rules if rules is not None else ScheduleRules()
+    return generate_schedule(
+        leagues,
+        rules,
+        default_opening_day(year, rules),
+        make_random(game_seed(world_seed, year, "schedule")),
+        season=year,
+    )
 
 
 def longest_streak(fixtures: Sequence[Fixture]) -> int:

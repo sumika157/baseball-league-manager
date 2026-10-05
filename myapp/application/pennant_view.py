@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import date
 
-from ..domain.pennant.season import season_phase
+from ..domain.pennant.season import season_phase, season_year
 from ..domain.pennant.world import MAX_WORLDS_PER_OWNER
 from .dto import OwnStanding, PennantWorldList, PennantWorldListRow, WorldContext, WorldSummary
 from .queries import WorldSummaryQuery
@@ -24,9 +24,11 @@ def _context_of(summary: WorldSummary) -> WorldContext:
     return WorldContext(
         world_id=summary.world_id,
         name=summary.name,
-        phase=season_phase(
-            has_played=summary.last_played_on is not None,
-            fixtures_pending=summary.has_pending_fixtures,
+        phase=season_phase(last_played_on=summary.last_played_on, next_fixture_on=summary.next_fixture_on),
+        season_year=season_year(
+            next_fixture_on=summary.next_fixture_on,
+            last_played_on=summary.last_played_on,
+            start_year=summary.start_year,
         ),
         today=summary.last_played_on,
         managed_team_id=summary.managed_team_id,
@@ -72,15 +74,14 @@ class PennantWorldViewService:
 
     def _row_of(self, summary: WorldSummary) -> PennantWorldListRow:
         context = _context_of(summary)
-        season_year = context.today.year if context.today is not None else summary.start_year
         return PennantWorldListRow(
             context=context,
-            season_year=season_year,
-            own_standing=self._own_standing(context, season_year),
+            own_standing=self._own_standing(context, context.season_year),
         )
 
     def _own_standing(self, context: WorldContext, year: int) -> OwnStanding | None:
-        if context.managed_team_id is None or context.today is None:
+        # 試合の無い年（締めた直後の翌年の開幕前）は、順位を出さない
+        if context.managed_team_id is None or context.today is None or context.today.year != year:
             return None
         for league in self._standings_for(context.world_id).get_league_standings(year):
             for row in league.rows:

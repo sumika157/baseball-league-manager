@@ -10,7 +10,7 @@
     <span class="badge bg-primary">ペナント</span>
     <span class="fw-semibold">{{ world.name }}</span>
     <span class="stat-muted">
-      {% if world.today %}{{ world.today|date:"Y年n月j日" }}時点 · {% endif %}{{ world.phase.value }}{% if world.managed_team_name %} · 自軍 {{ world.managed_team_name }}{% endif %}
+      {% if world.today %}{{ world.today|date:"Y年n月j日" }}時点 · {% endif %}{{ world.season_year }}年 · {{ world.phase.value }}{% if world.managed_team_name %} · 自軍 {{ world.managed_team_name }}{% endif %}
     </span>
   </div>
   <div class="segmented mb-0">

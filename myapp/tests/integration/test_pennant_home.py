@@ -367,6 +367,7 @@ class AdvanceOptionsTest(SimpleTestCase):
             world_id=1,
             name="世界",
             phase=SeasonPhase.IN_SEASON,
+            season_year=2026,
             today=today,
             managed_team_id=managed,
             managed_team_name="自軍",

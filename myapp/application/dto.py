@@ -1211,6 +1211,9 @@ class WorldContext:
     world_id: int
     name: str
     phase: SeasonPhase
+    # いまの年度（次の対戦の年、無ければ最後に試合をした年、どちらも無ければ開幕年。domain の `season_year`）。
+    # 締めた直後は、まだ試合の無い翌年（today は前年の最終日のまま）
+    season_year: int
     # 最後に試合をした日。まだ試合が無ければ None
     today: date | None
     # 受け持つ球団（まだ決めていなければ None と空の名前）
@@ -1235,8 +1238,8 @@ class WorldSummary:
     default_league_id: int | None
     # 最後に試合をした日。まだ無ければ None
     last_played_on: date | None
-    # 未消化の対戦が残っているか
-    has_pending_fixtures: bool
+    # 次の対戦の日（未消化の対戦の最小の日）。残っていなければ None
+    next_fixture_on: date | None
     owner_id: int | None = None
 
 
@@ -1256,8 +1259,6 @@ class PennantWorldListRow:
     """世界の一覧の1行。オーナーは載せない（一覧は誰にでも見せるため）。"""
 
     context: WorldContext
-    # 開幕年（まだ試合が無いとき）か、最後に試合をした年
-    season_year: int
     # 受け持つ球団が決まっていて、順位表に載っているときだけ
     own_standing: OwnStanding | None
 
