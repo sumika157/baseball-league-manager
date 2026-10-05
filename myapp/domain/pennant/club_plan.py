@@ -47,20 +47,19 @@ from ..value_objects import FieldingPosition, Position
 
 FP = FieldingPosition
 
-# オーダーが満たす守備位置（8つの守備と指名打者）
-LINEUP_POSITIONS: frozenset[FieldingPosition] = frozenset(
-    {
-        FP.CATCHER,
-        FP.FIRST_BASE,
-        FP.SECOND_BASE,
-        FP.THIRD_BASE,
-        FP.SHORTSTOP,
-        FP.LEFT_FIELD,
-        FP.CENTER_FIELD,
-        FP.RIGHT_FIELD,
-        FP.DESIGNATED_HITTER,
-    }
+# オーダーが満たす守備位置（8つの守備と指名打者）。並びは画面に出す順（捕から指名打者まで）
+LINEUP_POSITION_ORDER: tuple[FieldingPosition, ...] = (
+    FP.CATCHER,
+    FP.FIRST_BASE,
+    FP.SECOND_BASE,
+    FP.THIRD_BASE,
+    FP.SHORTSTOP,
+    FP.LEFT_FIELD,
+    FP.CENTER_FIELD,
+    FP.RIGHT_FIELD,
+    FP.DESIGNATED_HITTER,
 )
+LINEUP_POSITIONS: frozenset[FieldingPosition] = frozenset(LINEUP_POSITION_ORDER)
 MIN_ACTIVE_BATTERS = LINEUP_SIZE
 MIN_ACTIVE_PITCHERS = 1
 

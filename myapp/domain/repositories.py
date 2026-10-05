@@ -155,8 +155,11 @@ class FixtureRepository(Protocol):
         """範囲の未消化の対戦を、日付の順（同じ日はホームの id の順）に。"""
         ...
 
-    def first_date(self) -> date | None:
-        """範囲の未消化の対戦のうち最初の日。無ければ None。日程を全件読まずに「次の試合の年」を知るため。"""
+    def first_date(self, team_id: int | None = None) -> date | None:
+        """範囲の未消化の対戦のうち最初の日。無ければ None。日程を全件読まずに「次の試合」を知るため。
+
+        `team_id` を渡すと、その球団がホームかビジターの対戦のうち最初の日（自軍が休みの日は数えない）。
+        """
         ...
 
     def remove(self, fixtures: Sequence[Fixture]) -> None:

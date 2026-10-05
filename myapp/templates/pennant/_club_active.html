@@ -1,0 +1,26 @@
+{% comment %}
+編成の「1軍登録」タブ。1軍の内訳と、選手の一覧。自動のあいだは読み取り専用、手動のあいだ（オーナーだけ）はチェックボックス。
+チェックボックスは外すと何も送られないので、表示した全選手の id を shown で送り、いまの在籍と突き合わせる。
+上限の数は domain から DTO（club.limits）で受け取り、ここには書かない。
+{% endcomment %}
+<div class="card mb-4" id="club-active" data-mode="{% if club.active_is_manual %}manual{% else %}auto{% endif %}">
+  {% include 'pennant/_club_section_head.html' with title="1軍登録" token="active" manual=club.active_is_manual %}
+  <div class="card-body">
+    {% include 'pennant/_club_counts.html' %}
+    {% if is_owner and club.active_is_manual %}
+      <form method="post" action="{% url 'pennant_club' world.world_id %}">
+        {% csrf_token %}
+        <input type="hidden" name="section" value="active">
+        {% for row in club.players %}<input type="hidden" name="shown" value="{{ row.player_id }}">{% endfor %}
+        {% include 'pennant/_club_players_table.html' with editing=True %}
+        <div class="d-flex gap-2">
+          <button type="submit" name="action" value="save" class="btn btn-primary">保存する</button>
+          <button type="submit" form="club-reset-active" name="action" value="auto" class="btn btn-secondary">自動に戻す</button>
+        </div>
+      </form>
+      {% include 'pennant/_club_reset_form.html' with token="active" %}
+    {% else %}
+      {% include 'pennant/_club_players_table.html' with editing=False %}
+    {% endif %}
+  </div>
+</div>

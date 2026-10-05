@@ -61,6 +61,7 @@ urlpatterns = [
     path("pennant/<int:world_id>/", views.pennant_world, name="pennant_world"),
     _pennant("advance/", views.pennant_advance, "advance"),
     _pennant("delete/", views.pennant_delete, "delete"),
+    _pennant("club/", views.pennant_club, "club"),
     _pennant("standings/", views.standings, "standings"),
     _pennant("standings/<int:year>/", views.standings, "standings_by_year"),
     _pennant("league/<int:league_id>/", views.league_detail, "league_detail"),

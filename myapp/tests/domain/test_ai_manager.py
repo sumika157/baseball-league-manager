@@ -593,3 +593,24 @@ class ForeignQuotaTest(TestCase):
         quota = ForeignQuota(limit=2, used=1)
         self.assertTrue(quota.allows(True))
         self.assertFalse(quota.allows(True, extra=1))
+
+
+class CanPitchOnTest(TestCase):
+    """連投の上限は PitchingHistory が持つ（救援の選択と画面が同じ述語を使う）。"""
+
+    def test_two_straight_days_before_means_no_pitching_today(self):
+        history = PitchingHistory()
+        history.record(TODAY - timedelta(days=2), [1])
+        history.record(TODAY - timedelta(days=1), [1])
+        history.record(TODAY - timedelta(days=1), [2])
+
+        self.assertFalse(history.can_pitch_on(1, TODAY))
+        self.assertTrue(history.can_pitch_on(2, TODAY))
+        self.assertTrue(history.can_pitch_on(3, TODAY), "投げていない投手は投げられる")
+
+    def test_a_gap_day_resets_the_streak(self):
+        history = PitchingHistory()
+        history.record(TODAY - timedelta(days=3), [1])
+        history.record(TODAY - timedelta(days=2), [1])
+
+        self.assertTrue(history.can_pitch_on(1, TODAY))

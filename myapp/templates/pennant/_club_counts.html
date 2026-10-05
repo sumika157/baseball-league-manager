@@ -1,0 +1,23 @@
+{% comment %}1軍の内訳。club（ClubPlanView）の limits と counts を出す。上限の数は domain が出典。{% endcomment %}
+<div class="stat-strip mb-3">
+  <div class="stat-cell">
+    <div class="stat-value">{{ club.counts.total }}/{{ club.limits.active_size }}</div>
+    <div class="stat-label">1軍</div>
+  </div>
+  <div class="stat-cell">
+    <div class="stat-value">{{ club.counts.batters }}</div>
+    <div class="stat-label">野手</div>
+  </div>
+  <div class="stat-cell">
+    <div class="stat-value">{{ club.counts.pitchers }}</div>
+    <div class="stat-label">投手</div>
+  </div>
+  <div class="stat-cell">
+    <div class="stat-value">{{ club.counts.catchers }}</div>
+    <div class="stat-label">捕手</div>
+  </div>
+  <div class="stat-cell">
+    <div class="stat-value">{{ club.counts.foreign }}/{% if club.limits.foreign_roster_limit is None %}無制限{% else %}{{ club.limits.foreign_roster_limit }}{% endif %}</div>
+    <div class="stat-label">外国人</div>
+  </div>
+</div>
