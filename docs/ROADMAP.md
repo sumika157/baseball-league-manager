@@ -142,12 +142,11 @@
 - ✅ **権限管理（チーム担当者制）**。現状はログインすれば誰でも全チームの選手・試合を
   編集できる。チームに「担当者」を割り当て、担当者は自チームが関わる範囲だけ
   編集できるようにする。管理者（Django の管理ユーザー）は変わらず全権を持つ
-- ⬜ 本番構成（PostgreSQL、gunicorn、静的ファイル配信）
-- ⬜ CI（GitHub Actions でテスト実行）
-- ⬜ バックアップ手順
+- ✅ 本番構成（gunicorn・WhiteNoise・Cloudflare Tunnel・SQLite の WAL。AWS Lightsail の VM 1台＋docker compose。手順は Wiki「本番公開」）。PostgreSQL は後回し
+- ⬜ CI（GitHub Actions でテスト実行。#88）
+- ✅ バックアップ手順（`backup_db` コマンドと cron・Cloudflare R2・復元。Wiki「本番公開」）
 
-本番構成・CI・バックアップは、実際に本番公開する段になってから着手する。
-現状は Docker + SQLite でのローカル運用が前提で、公開先が決まっていないため。
+本番構成とバックアップは、一般公開に向けて用意した（Issue #76）。CI は別に扱う。
 
 ---
 
@@ -226,7 +225,9 @@
 全データの上に「ワークスペース」という区切りを足し、持ち主がその中で全権を持つ形にする。
 設計は `docs/design/workspaces.md`、親 Issue は #74。
 
-- ⬜ 本番構成（W0、#76）。公開先は AWS Lightsail の VM 1台＋docker compose、DB は当面 SQLite。フェーズ5 の本番構成とバックアップはここで片付ける
+- ✅ 本番構成（W0、#76）。公開先は AWS Lightsail の VM 1台＋docker compose、入口は Cloudflare Tunnel、DB は当面 SQLite。フェーズ5 の本番構成とバックアップはここで片付けた
+- ⬜ CI（#88）。テストを GitHub Actions で流し、本番イメージを GHCR に置く
+- ⬜ 本番の構成を Terraform で作る（#89）。手で作る手順を置き換える
 - ⬜ データをワークスペースに属させ、範囲で絞る（W1）
 - ⬜ ワークスペースを URL（`/w/<key>/`）で開き、ワークスペースの権限で判定する。公開/非公開を切り替えられる（W2）
 - ⬜ リーグ・チーム・球場をサイトの画面で登録する（W3）。一般の利用者には管理画面を渡せないため

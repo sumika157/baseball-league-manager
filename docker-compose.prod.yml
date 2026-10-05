@@ -1,0 +1,52 @@
+# 本番用の compose（開発用は docker-compose.yml）。使い方は Wiki「本番公開」。
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# .env に DJANGO_SECRET_KEY・DJANGO_ALLOWED_HOSTS・DJANGO_CSRF_TRUSTED_ORIGINS・CLOUDFLARE_TUNNEL_TOKEN を書く
+# （.env.example の「本番」の節）。
+#
+# 入口は Cloudflare Tunnel。cloudflared が VM の内側から Cloudflare へ接続しに行くので、
+# VM のポート 80/443 は開けない（HTTPS と証明書は Cloudflare が受け持つ）。
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    image: baseball-prod
+    container_name: baseball-web
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # 本番では必ず無効（.env に DJANGO_DEBUG=True が残っていても上書きする）
+      DJANGO_DEBUG: "False"
+      # Cloudflare の裏の HTTPS として扱う設定。値はドメインに依存しないのでここに固定する
+      DJANGO_BEHIND_PROXY: "True"
+      DJANGO_SSL_REDIRECT: "True"
+      DJANGO_SECURE_COOKIES: "True"
+      DJANGO_HSTS_SECONDS: "31536000"
+    volumes:
+      # DB（WAL の -wal・-shm も同じディレクトリに作られる）
+      - db:/data
+      # backup_db の出力先（ホストのこのディレクトリ。書き込めるよう uid 10001 に chown しておく。
+      # Wiki「本番公開」）。DB のボリュームと分けるのは、ボリュームごと失ったときに写しも失わないため
+      - ./backups:/backups
+    # 8000 はホストに公開しない（同じネットワークの cloudflared からだけ届く）
+    expose:
+      - "8000"
+
+  cloudflared:
+    image: cloudflare/cloudflared:2026.9.3
+    container_name: baseball-cloudflared
+    restart: unless-stopped
+    depends_on:
+      - web
+    # 公開するホスト名と転送先（http://web:8000）は Cloudflare のダッシュボードでトンネルに設定する。
+    # 版は compose で固定するので、cloudflared 自身の自動更新は切る
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?.env に CLOUDFLARE_TUNNEL_TOKEN を設定してください}
+
+volumes:
+  db:

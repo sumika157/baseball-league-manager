@@ -11,6 +11,8 @@ __pycache__/
 # データベースはイメージに焼き込まず、ボリュームマウントで渡す
 db.sqlite3
 db.sqlite3-journal
+db.sqlite3-wal
+db.sqlite3-shm
 
 # 秘密情報はイメージに焼き込まず、env_file で渡す
 .env
@@ -37,3 +39,8 @@ README.md
 # 「invalid file request」になり、ビルドが止まる
 frontend/node_modules/
 myapp/static/myapp/dist/
+
+# collectstatic の出力先（イメージ内で作るので持ち込まない）
+staticfiles/
+# 本番 VM の backup_db の出力先
+backups/
