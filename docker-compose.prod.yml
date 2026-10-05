@@ -8,6 +8,13 @@
 # 入口は Cloudflare Tunnel。cloudflared が VM の内側から Cloudflare へ接続しに行くので、
 # VM のポート 80/443 は開けない（HTTPS と証明書は Cloudflare が受け持つ）。
 
+# ログは無制限にたまるとディスクを埋め、SQLite の書き込みも含めて全部止まるので、サービスごとに上限を付ける
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   web:
     build:
@@ -16,6 +23,7 @@ services:
     image: baseball-prod
     container_name: baseball-web
     restart: unless-stopped
+    logging: *default-logging
     env_file:
       - .env
     environment:
@@ -40,6 +48,7 @@ services:
     image: cloudflare/cloudflared:2026.9.3
     container_name: baseball-cloudflared
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - web
     # 公開するホスト名と転送先（http://web:8000）は Cloudflare のダッシュボードでトンネルに設定する。
