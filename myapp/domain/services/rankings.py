@@ -40,6 +40,10 @@ def _rank(entries: list[tuple[Player, float]], limit: int | None) -> list[Ranked
 QUALIFYING_PLATE_APPEARANCES_PER_GAME = 3.1
 QUALIFYING_INNINGS_PER_GAME = 1.0
 
+# 最高勝率の対象になる勝利数。NPB の規則（13勝以上）にならう。
+# 規定投球回ではなく勝利数で絞るので、救援投手でも13勝すれば対象になる。
+WINNING_PERCENTAGE_MINIMUM_WINS = 13
+
 
 def required_plate_appearances(team_games: int) -> int:
     """規定打席。端数は切り上げる。"""
@@ -120,6 +124,36 @@ def leaders_by_batting_average(
     return _rank(entries, limit)
 
 
+def leaders_by_on_base_percentage(
+    players: list[Player],
+    *,
+    limit: int | None = 5,
+    team_games: dict[int, int] | None = None,
+    minimum_at_bats: int = 1,
+) -> list[RankedPlayer]:
+    """出塁率の高い順。首位打者と同じく規定打席に達した選手のみ。"""
+    entries = [
+        (p, p.batting.on_base_percentage)
+        for p in qualified_batters(players, team_games=team_games, minimum_at_bats=minimum_at_bats)
+    ]
+    entries.sort(key=lambda e: (-e[1], e[0].name))
+    return _rank(entries, limit)
+
+
+def leaders_by_hits(players: list[Player], *, limit: int | None = 5) -> list[RankedPlayer]:
+    """安打の多い順。本数そのものが記録なので規定を設けない。"""
+    entries = [(p, float(p.batting.hits)) for p in players if not p.is_pitcher and p.batting.hits > 0]
+    entries.sort(key=lambda e: (-e[1], e[0].name))
+    return _rank(entries, limit)
+
+
+def leaders_by_stolen_bases(players: list[Player], *, limit: int | None = 5) -> list[RankedPlayer]:
+    """盗塁の多い順。本数そのものが記録なので規定を設けない。"""
+    entries = [(p, float(p.batting.stolen_bases)) for p in players if not p.is_pitcher and p.batting.stolen_bases > 0]
+    entries.sort(key=lambda e: (-e[1], e[0].name))
+    return _rank(entries, limit)
+
+
 def leaders_by_home_runs(players: list[Player], *, limit: int | None = 5) -> list[RankedPlayer]:
     """本塁打の多い順。本数そのものが記録なので打数の規定は設けない。"""
     entries = [(p, float(p.batting.home_runs)) for p in players if not p.is_pitcher and p.batting.home_runs > 0]
@@ -165,5 +199,27 @@ def leaders_by_wins(players: list[Player], *, limit: int | None = 5) -> list[Ran
 def leaders_by_saves(players: list[Player], *, limit: int | None = 5) -> list[RankedPlayer]:
     """セーブの多い順。勝利と同じく数そのものが記録なので規定を設けない。"""
     entries = [(p, float(p.pitching.saves)) for p in players if p.is_pitcher and p.pitching.saves > 0]
+    entries.sort(key=lambda e: (-e[1], e[0].name))
+    return _rank(entries, limit)
+
+
+def leaders_by_hold_points(players: list[Player], *, limit: int | None = 5) -> list[RankedPlayer]:
+    """HP（ホールド＋救援勝利）の多い順。最優秀中継ぎ投手の基準。セーブと同じく規定を設けない。"""
+    entries = [(p, float(p.pitching.hold_points)) for p in players if p.is_pitcher and p.pitching.hold_points > 0]
+    entries.sort(key=lambda e: (-e[1], e[0].name))
+    return _rank(entries, limit)
+
+
+def leaders_by_winning_percentage(players: list[Player], *, limit: int | None = 5) -> list[RankedPlayer]:
+    """勝率の高い順。13勝以上の投手のみ（WINNING_PERCENTAGE_MINIMUM_WINS）。
+
+    勝率は1勝0敗でも10割になるため、率の部門として対象を絞る。NPB の最高勝率は
+    規定投球回ではなく勝利数で絞るので、qualified_pitchers は使わない。
+    """
+    entries = [
+        (p, p.pitching.winning_percentage)
+        for p in players
+        if p.is_pitcher and p.pitching.wins >= WINNING_PERCENTAGE_MINIMUM_WINS
+    ]
     entries.sort(key=lambda e: (-e[1], e[0].name))
     return _rank(entries, limit)

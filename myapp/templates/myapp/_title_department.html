@@ -1,0 +1,33 @@
+{# タイトル1部門のカード。department（TitleDepartment）を渡す #}
+<div class="col-md-6 col-xl-4">
+  <div class="card h-100">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>{{ department.label }}</span>
+      {% if department.note %}
+        <span class="stat-muted" style="font-size: 0.75rem;">{{ department.note }}</span>
+      {% endif %}
+    </div>
+    <div class="card-body p-0">
+      {% if department.entries %}
+        <table class="table table-hover mb-0">
+          <tbody>
+            {% for entry in department.entries %}
+              <tr>
+                <td style="width: 2.5rem;" class="stat-muted">{{ entry.rank }}</td>
+                <td>
+                  <a href="{% url 'player_detail' entry.team_id entry.player_id %}" class="player-name">{{ entry.player_name }}</a>
+                  <div class="stat-muted" style="font-size: 0.75rem;">{{ entry.team_name }}</div>
+                </td>
+                <td class="text-end stat-key">{{ entry.value }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <div class="empty-state" style="padding: 1.75rem 1rem; font-size: 0.8125rem;">
+          {% if department.note %}条件を満たす選手がいません{% else %}記録がありません{% endif %}
+        </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
