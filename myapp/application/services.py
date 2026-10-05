@@ -544,8 +544,8 @@ class TeamApplicationService:
             matchups=matchups,
         )
 
-    def get_league_titles(self, league_id: int, year: int | None = None, *, leaders: int = 10) -> LeagueTitles:
-        """リーグのタイトル一覧。シーズンで区切った部門別の上位者。
+    def get_league_titles(self, league_id: int, year: int | None = None, *, leaders: int = 3) -> LeagueTitles:
+        """リーグのタイトル一覧。シーズンで区切った部門別の上位者（既定は各部門3人まで）。
 
         ダッシュボードのランキングは通算成績だが、タイトルはシーズンごとに
         争われるので、こちらは対象シーズンの試合だけから成績を積み直す。
@@ -603,16 +603,19 @@ class TeamApplicationService:
         team_games: dict[int, int],
         leaders: int,
     ) -> list[TitleDepartment]:
-        """部門ごとの上位者。
+        """部門ごとの上位者。NPB のタイトルのうち、成績だけで決まる部門をすべて並べる。
 
-        率の部門（打率・防御率）は規定に達した選手だけを対象にする。
-        本数そのものが記録になる部門（本塁打・打点・奪三振）は規定を設けない。
+        率の部門（打率・出塁率・防御率）は規定に達した選手だけ、最高勝率は13勝以上の
+        投手だけを対象にする（条件はドメインの順位づけが持つ）。本数そのものが記録になる
+        部門（本塁打・打点・安打・盗塁・勝利・奪三振・セーブ・HP）は規定を設けない。
+        投票や選考で決まる賞（MVP・新人王など）は成績からは決まらないので出さない。
         """
 
         def to_entries(ranked: list[domain_services.RankedPlayer], formatter: ValueFormatter) -> list[RankingEntry]:
             return _to_ranking_entries(ranked, team_of, formatter)
 
         return [
+            # 打撃
             TitleDepartment(
                 key="average",
                 label="首位打者",
@@ -636,6 +639,26 @@ class TeamApplicationService:
                 ),
             ),
             TitleDepartment(
+                key="hits",
+                label="最多安打",
+                entries=to_entries(domain_services.leaders_by_hits(players, limit=leaders), _as_count),
+            ),
+            TitleDepartment(
+                key="stolen_bases",
+                label="盗塁王",
+                entries=to_entries(domain_services.leaders_by_stolen_bases(players, limit=leaders), _as_count),
+            ),
+            TitleDepartment(
+                key="obp",
+                label="最高出塁率",
+                note="規定打席以上",
+                entries=to_entries(
+                    domain_services.leaders_by_on_base_percentage(players, limit=leaders, team_games=team_games),
+                    _as_average,
+                ),
+            ),
+            # 投手
+            TitleDepartment(
                 key="era",
                 label="最優秀防御率",
                 note="規定投球回以上",
@@ -643,21 +666,41 @@ class TeamApplicationService:
                     domain_services.leaders_by_era(players, limit=leaders, team_games=team_games),
                     _as_rate,
                 ),
+                is_pitching=True,
             ),
             TitleDepartment(
                 key="wins",
                 label="最多勝利",
                 entries=to_entries(domain_services.leaders_by_wins(players, limit=leaders), _as_count),
+                is_pitching=True,
             ),
             TitleDepartment(
-                key="saves",
-                label="最多セーブ",
-                entries=to_entries(domain_services.leaders_by_saves(players, limit=leaders), _as_count),
+                key="winning_percentage",
+                label="最高勝率",
+                note=f"{domain_services.WINNING_PERCENTAGE_MINIMUM_WINS}勝以上",
+                entries=to_entries(
+                    domain_services.leaders_by_winning_percentage(players, limit=leaders),
+                    _as_average,
+                ),
+                is_pitching=True,
             ),
             TitleDepartment(
                 key="strikeouts",
                 label="最多奪三振",
                 entries=to_entries(domain_services.leaders_by_strikeouts(players, limit=leaders), _as_count),
+                is_pitching=True,
+            ),
+            TitleDepartment(
+                key="saves",
+                label="最多セーブ",
+                entries=to_entries(domain_services.leaders_by_saves(players, limit=leaders), _as_count),
+                is_pitching=True,
+            ),
+            TitleDepartment(
+                key="hold_points",
+                label="最優秀中継ぎ投手",
+                entries=to_entries(domain_services.leaders_by_hold_points(players, limit=leaders), _as_count),
+                is_pitching=True,
             ),
         ]
 

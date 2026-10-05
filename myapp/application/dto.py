@@ -799,6 +799,7 @@ class TitleDepartment:
     label: str
     note: str = ""  # '規定打席以上' など。率の部門だけ付く
     entries: list[RankingEntry] | None = None
+    is_pitching: bool = False  # 投手の部門。画面で打撃と投手を分けて並べるため
 
     @property
     def leader(self) -> RankingEntry | None:
@@ -823,6 +824,14 @@ class LeagueTitles:
     @property
     def has_any(self) -> bool:
         return any(d.entries for d in self.departments)
+
+    @property
+    def batting_departments(self) -> list[TitleDepartment]:
+        return [d for d in self.departments if not d.is_pitching]
+
+    @property
+    def pitching_departments(self) -> list[TitleDepartment]:
+        return [d for d in self.departments if d.is_pitching]
 
 
 @dataclass(frozen=True)

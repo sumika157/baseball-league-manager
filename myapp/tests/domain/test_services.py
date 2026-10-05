@@ -99,6 +99,58 @@ class BattingLeaderTest(TestCase):
         self.assertEqual([r.player.name for r in result], ["打った"])
         self.assertEqual(result[0].value, 2.0)
 
+    def test_hit_ranking_counts_every_kind_of_hit(self):
+        """最多安打は単打も長打も1本として数える。"""
+        sluggers = _batter("長打", 1, at_bats=20, home_runs=3, doubles=1)
+        singles = _batter("単打", 2, at_bats=20, singles=5)
+        hitless = _batter("無安打", 3, at_bats=20)
+
+        result = services.leaders_by_hits([sluggers, singles, hitless])
+
+        self.assertEqual([r.player.name for r in result], ["単打", "長打"])
+        self.assertEqual(result[0].value, 5.0)
+
+    def test_stolen_base_ranking_excludes_zero(self):
+        runner = _batter("俊足", 1, at_bats=10, singles=3, stolen_bases=4)
+        slow = _batter("鈍足", 2, at_bats=10, singles=3)
+
+        result = services.leaders_by_stolen_bases([slow, runner])
+
+        self.assertEqual([r.player.name for r in result], ["俊足"])
+        self.assertEqual(result[0].value, 4.0)
+
+    def test_counting_batting_titles_exclude_pitchers(self):
+        """投手の打撃成績は打撃タイトルに入れない（本塁打・打点と同じ）。"""
+        pitcher = Player(
+            name="投手",
+            number=JerseyNumber(11),
+            position=Position.PITCHER,
+            id=11,
+            batting=BattingLine(at_bats=10, singles=5, stolen_bases=2),
+        )
+
+        self.assertEqual(services.leaders_by_hits([pitcher]), [])
+        self.assertEqual(services.leaders_by_stolen_bases([pitcher]), [])
+
+    def test_on_base_percentage_ranking_counts_walks(self):
+        """打率が同じでも四球の多い選手が上に来る。"""
+        patient = _batter("選球眼", 1, at_bats=10, singles=3, walks=5)
+        free = _batter("早打ち", 2, at_bats=10, singles=3)
+
+        result = services.leaders_by_on_base_percentage([free, patient])
+
+        self.assertEqual([r.player.name for r in result], ["選球眼", "早打ち"])
+        self.assertAlmostEqual(result[0].value, 8 / 15)
+
+    def test_on_base_percentage_requires_qualifying_plate_appearances(self):
+        """首位打者と同じく規定打席未満は除く。1打席1四球で出塁率10割の選手を首位にしない。"""
+        regular = _batter("規定到達", 1, at_bats=30, singles=9, walks=2)
+        part_timer = _batter("代打", 2, walks=1)
+
+        result = services.leaders_by_on_base_percentage([regular, part_timer], team_games={1: 10, 2: 10})
+
+        self.assertEqual([r.player.name for r in result], ["規定到達"])
+
 
 class PitchingLeaderTest(TestCase):
     def test_sorted_by_lowest_era(self):
@@ -161,6 +213,36 @@ class PitchingLeaderTest(TestCase):
 
         self.assertEqual([r.player.name for r in result], ["守護神", "勝ちパターン"])
         self.assertEqual(result[0].value, 30.0)
+
+    def test_hold_point_ranking_counts_relief_wins(self):
+        """最優秀中継ぎは HP（ホールド＋救援勝利）で決まる。ホールドだけで並べない。"""
+        holder = _pitcher("ホールド型", 40, holds=20)
+        winner = _pitcher("救援勝利型", 41, holds=15, wins=8, relief_wins=8)
+        starter = _pitcher("先発", 42, wins=10)
+
+        result = services.leaders_by_hold_points([holder, starter, winner])
+
+        self.assertEqual([r.player.name for r in result], ["救援勝利型", "ホールド型"])
+        self.assertEqual(result[0].value, 23.0)
+
+    def test_winning_percentage_requires_thirteen_wins(self):
+        """最高勝率は13勝以上が対象。12勝0敗の10割でも載らない。"""
+        unbeaten = _pitcher("無敗", 11, wins=12)
+        ace = _pitcher("エース", 18, wins=13, losses=4)
+
+        result = services.leaders_by_winning_percentage([unbeaten, ace])
+
+        self.assertEqual(services.WINNING_PERCENTAGE_MINIMUM_WINS, 13)
+        self.assertEqual([r.player.name for r in result], ["エース"])
+        self.assertAlmostEqual(result[0].value, 13 / 17)
+
+    def test_winning_percentage_ranking_sorted_by_rate_not_wins(self):
+        many = _pitcher("多勝", 11, wins=18, losses=8)
+        efficient = _pitcher("高勝率", 18, wins=14, losses=2)
+
+        result = services.leaders_by_winning_percentage([many, efficient])
+
+        self.assertEqual([r.player.name for r in result], ["高勝率", "多勝"])
 
     def test_batters_are_not_in_win_or_save_rankings(self):
         batter = _batter("野手", 1, at_bats=10, singles=3)

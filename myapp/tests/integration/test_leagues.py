@@ -311,8 +311,49 @@ class LeagueTitlesViewTest(BaseCase):
 
         response = self.client.get(self.url)
 
-        for label in ["首位打者", "本塁打王", "打点王", "最優秀防御率", "最多勝利", "最多セーブ", "最多奪三振"]:
+        for label in [
+            "打撃部門",
+            "首位打者",
+            "本塁打王",
+            "打点王",
+            "最多安打",
+            "盗塁王",
+            "最高出塁率",
+            "投手部門",
+            "最優秀防御率",
+            "最多勝利",
+            "最高勝率",
+            "最多奪三振",
+            "最多セーブ",
+            "最優秀中継ぎ投手",
+        ]:
             self.assertContains(response, label)
+        self.assertContains(response, "13勝以上")
+
+    def test_every_stat_title_is_listed_batting_then_pitching(self):
+        """NPB のタイトルのうち成績だけで決まる12部門を、打撃6・投手6の順に並べる。"""
+        play_game(self.team, self.rival)
+
+        titles = self.service.get_league_titles(self.league.id)
+
+        self.assertEqual(
+            [d.key for d in titles.batting_departments],
+            ["average", "home_runs", "rbi", "hits", "stolen_bases", "obp"],
+        )
+        self.assertEqual(
+            [d.key for d in titles.pitching_departments],
+            ["era", "wins", "winning_percentage", "strikeouts", "saves", "hold_points"],
+        )
+        self.assertEqual(titles.departments, titles.batting_departments + titles.pitching_departments)
+
+    def test_each_department_lists_the_top_three(self):
+        for number in range(4, 9):
+            player = self.service.register_player(self.team.id, f"打者{number}", number, "外野手")
+            give_batting(self.team, self.rival, player.id, BattingLine(at_bats=10, singles=number), day=number)
+
+        entries = self._departments()["hits"].entries
+
+        self.assertEqual([e.player_name for e in entries], ["打者8", "打者7", "打者6"])
 
     def test_page_without_games_says_so(self):
         response = self.client.get(self.url)

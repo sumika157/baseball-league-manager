@@ -225,6 +225,19 @@ class PitchingLineTest(TestCase):
         # 死球は分子に含めない
         self.assertAlmostEqual(line.walks_per_nine, 3.0)
 
+    def test_winning_percentage(self):
+        # 13勝4敗 → 13 ÷ 17。チームの勝率と同じく勝敗だけが分母
+        line = PitchingLine(innings=InningsPitched.from_notation("150.0"), wins=13, losses=4)
+        self.assertAlmostEqual(line.winning_percentage, 13 / 17)
+
+    def test_winning_percentage_without_losses_is_one(self):
+        line = PitchingLine(innings=InningsPitched.from_notation("150.0"), wins=13)
+        self.assertAlmostEqual(line.winning_percentage, 1.0)
+
+    def test_winning_percentage_without_decisions_is_zero(self):
+        line = PitchingLine(innings=InningsPitched.from_notation("10.0"))
+        self.assertEqual(line.winning_percentage, 0.0)
+
     def test_fip_base(self):
         # 9回で被本塁打1・与四球2・与死球1・奪三振9
         # → (13×1 + 3×3 − 2×9) ÷ 9 = 4 ÷ 9

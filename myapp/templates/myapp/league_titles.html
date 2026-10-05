@@ -15,7 +15,7 @@
   <h1 class="page-title">{{ titles.league_name }} タイトル</h1>
   <p class="page-subtitle">
     {% if titles.year %}{{ titles.year }}年シーズン · {% endif %}
-    部門別の上位者。率の部門は規定に到達した選手だけを対象にします。
+    成績だけで決まるタイトルの部門別の上位3人。率の部門は、各部門の右上に書いた条件を満たす選手だけを対象にします。
   </p>
 </div>
 
@@ -29,40 +29,17 @@
 {% endif %}
 
 {% if titles.has_any %}
+  <h2 class="h6 mb-2">打撃部門</h2>
+  <div class="row g-3 mb-4">
+    {% for department in titles.batting_departments %}
+      {% include 'myapp/_title_department.html' %}
+    {% endfor %}
+  </div>
+
+  <h2 class="h6 mb-2">投手部門</h2>
   <div class="row g-3">
-    {% for department in titles.departments %}
-      <div class="col-md-6">
-        <div class="card h-100">
-          <div class="card-header d-flex justify-content-between align-items-center">
-            <span>{{ department.label }}</span>
-            {% if department.note %}
-              <span class="stat-muted" style="font-size: 0.75rem;">{{ department.note }}</span>
-            {% endif %}
-          </div>
-          <div class="card-body p-0">
-            {% if department.entries %}
-              <table class="table table-hover mb-0">
-                <tbody>
-                  {% for entry in department.entries %}
-                    <tr>
-                      <td style="width: 2.5rem;" class="stat-muted">{{ entry.rank }}</td>
-                      <td>
-                        <a href="{% url 'player_detail' entry.team_id entry.player_id %}" class="player-name">{{ entry.player_name }}</a>
-                        <div class="stat-muted" style="font-size: 0.75rem;">{{ entry.team_name }}</div>
-                      </td>
-                      <td class="text-end stat-key">{{ entry.value }}</td>
-                    </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            {% else %}
-              <div class="empty-state" style="padding: 1.75rem 1rem; font-size: 0.8125rem;">
-                {% if department.note %}規定に到達した選手がいません{% else %}記録がありません{% endif %}
-              </div>
-            {% endif %}
-          </div>
-        </div>
-      </div>
+    {% for department in titles.pitching_departments %}
+      {% include 'myapp/_title_department.html' %}
     {% endfor %}
   </div>
 {% else %}

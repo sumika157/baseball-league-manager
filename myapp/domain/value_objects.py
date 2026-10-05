@@ -973,6 +973,14 @@ class PitchingLine:
         """
         return self.holds + self.relief_wins
 
+    @property
+    def winning_percentage(self) -> float:
+        """勝率。チームの勝率と同じく 勝 ÷ (勝 + 敗) で、勝敗が無ければ 0。"""
+        decisions = self.wins + self.losses
+        if decisions == 0:
+            return 0.0
+        return self.wins / decisions
+
     def era_plus(self, league_era: float) -> float:
         """ERA+。リーグ平均防御率 ÷ 自身の防御率 × 100。高いほど良い（FIP と逆）。
 
