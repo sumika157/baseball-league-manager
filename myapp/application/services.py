@@ -1008,8 +1008,8 @@ class TeamApplicationService:
         # 月ごとに束ねてから選んだ月だけを取り出す。行の側で日付を見て絞ると、
         # 表示用の DTO（played_on の型を問わない）に日付の解釈を持ち込むことになる
         by_month: dict[str, list[PlayerGameRow]] = {}
-        # 新しい試合から順に詰める（表示も新しい順。並べ替えを DTO 側でやり直さない）
-        for game in sorted(team_games, key=lambda g: (g.played_on, _saved_id(g.id)), reverse=True):
+        # 古い試合から順に詰める（表示も試合日の昇順。月の頭から追えるように。並べ替えを DTO 側でやり直さない）
+        for game in sorted(team_games, key=lambda g: (g.played_on, _saved_id(g.id))):
             batting = next((e for e in game.batting if e.player_id == player_id), None)
             pitching = next((e for e in game.pitching if e.player_id == player_id), None)
             if batting is None and pitching is None:
