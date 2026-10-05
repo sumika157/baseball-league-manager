@@ -1693,3 +1693,37 @@ class RatingsTable:
     rows: tuple[RatingsRow, ...]
     sort: str
     descending: bool
+
+
+@dataclass(frozen=True)
+class SeasonClosed:
+    """シーズンを締めた結果。"""
+
+    # 締めた年と、これから始まる年
+    year: int
+    next_year: int
+    retired_count: int
+    # 新人の人数と、そのうち外国人の人数
+    draftee_count: int
+    foreign_draftee_count: int
+    # 翌年の能力を作らなかった選手の数（締める年の能力が無かった選手）
+    without_ratings_count: int
+    # 引退した選手を含んでいたため、自動に戻した編成の区画。受け持つ球団のぶん（無ければ空）
+    released_sections: tuple[PlanSection, ...]
+    # 自動に戻した球団の数（受け持ち以外も含む）
+    released_club_count: int
+    # 翌年の日程の試合数
+    fixture_count: int
+
+
+@dataclass(frozen=True)
+class SeasonCloseOption:
+    """「シーズンを締める」の出せる状態。画面が、ボタンを出すか理由を出すかを決める材料。"""
+
+    # 締める年（最後に試合をした年）。まだ試合をしていなければ None
+    year: int | None
+    # 締めた後の年。締められないときも、年が分かれば入れる
+    next_year: int | None
+    can_close: bool
+    # 締められない理由（締められるときは空）
+    reason: str = ""

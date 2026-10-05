@@ -34,6 +34,7 @@ from ..application.dto import (
 )
 from ..application.game_recording import GameRecordingService
 from ..application.pennant_home import PennantHomeService
+from ..application.pennant_offseason import PennantOffseasonService
 from ..application.pennant_ratings import PennantRatingsViewService
 from ..application.pennant_season import PennantSeasonService
 from ..application.pennant_view import PennantWorldViewService
@@ -69,6 +70,7 @@ from ..infrastructure.queries import (
     DjangoPlayerFieldingQuery,
     DjangoPlayerSearchQuery,
     DjangoPlayerStatsQuery,
+    DjangoSeasonPlayingTimeQuery,
     DjangoSimulationContextQuery,
     DjangoTeamListQuery,
     DjangoTeamPermissionQuery,
@@ -294,6 +296,28 @@ def build_pennant_season_service(world_id: int) -> PennantSeasonService:
         ratings=DjangoRatingsRepository(scope),
         plans=DjangoClubPlanRepository(scope),
         context_query=DjangoSimulationContextQuery(scope),
+        atomic=transaction.atomic,
+    )
+
+
+def build_pennant_offseason_service(world_id: int) -> PennantOffseasonService:
+    """ペナントの世界ひとつのオフ（シーズンを締める）サービスを組み立てる。
+
+    **リポジトリと参照クエリは、すべて渡された世界の範囲で作る。** 引退・新人・翌年の能力・日程・編成の
+    後始末を1つのトランザクションにまとめるので、`transaction.atomic` もここで渡す。
+    世界の id が正しくなければ InvalidWorld、存在しなければ使うときに WorldNotFound。
+    """
+    scope = WorldScope.pennant(world_id)
+    return PennantOffseasonService(
+        world_id=world_id,
+        worlds=DjangoWorldRepository(),
+        leagues=DjangoLeagueRepository(scope),
+        teams=DjangoTeamRepository(scope),
+        fixtures=DjangoFixtureRepository(scope),
+        ratings=DjangoRatingsRepository(scope),
+        plans=DjangoClubPlanRepository(scope),
+        context_query=DjangoSimulationContextQuery(scope),
+        playing_time=DjangoSeasonPlayingTimeQuery(scope),
         atomic=transaction.atomic,
     )
 

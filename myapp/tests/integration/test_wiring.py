@@ -18,6 +18,7 @@ from django.test import SimpleTestCase
 from myapp.application.club_management import ClubManagementService
 from myapp.application.game_recording import GameRecordingService
 from myapp.application.pennant_home import PennantHomeService
+from myapp.application.pennant_offseason import PennantOffseasonService
 from myapp.application.pennant_ratings import PennantRatingsViewService
 from myapp.application.pennant_season import PennantSeasonService
 from myapp.application.pennant_view import PennantWorldViewService
@@ -63,6 +64,7 @@ from myapp.infrastructure.repositories import (
 from myapp.presentation.views import (
     build_club_service,
     build_pennant_home_service,
+    build_pennant_offseason_service,
     build_pennant_ratings_service,
     build_pennant_season_service,
     build_pennant_world_service,
@@ -156,6 +158,9 @@ class BuildServiceTest(SimpleTestCase):
 
     def test_pennant_season_service_dependencies_are_wired(self):
         self._assert_wired(build_pennant_season_service(7), PennantSeasonService)
+
+    def test_pennant_offseason_service_dependencies_are_wired(self):
+        self._assert_wired(build_pennant_offseason_service(7), PennantOffseasonService)
 
     def test_world_view_service_dependencies_are_wired(self):
         """世界の範囲の参照サービスも、実データ用と同じ検査にかける（依存は実データ用と同じ全部）。"""
