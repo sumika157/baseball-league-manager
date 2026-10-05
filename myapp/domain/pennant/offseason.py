@@ -43,11 +43,24 @@ class OffseasonPlayer:
     position: Position
     profile: Profile
     number: int
-    # 現在の在籍の開始年
+    # 現在の在籍の開始年（分岐した選手は一律に開幕年。入団年は entered_year）
     joined_year: int
     # Y の能力。無い選手は翌年の能力も作らない
     ratings: PlayerRatings | None
     playing_time: PlayingTime = PlayingTime()
+
+    @property
+    def entered_year(self) -> int:
+        """プロ入りの年。入団年（`debut_year`）があればそれ、無ければ現在の在籍の開始年。
+
+        分岐した選手の在籍の開始年は一律に開幕年になる。若手の保護（入団2年以内）を在籍の開始年で数えると、
+        実際の経歴にかかわらず最初の2シーズン保護されてしまうので、入団年を優先する。
+        """
+        return self.profile.debut_year if self.profile.debut_year is not None else self.joined_year
+
+    def seasons_as_pro(self, year: int) -> int:
+        """`year` を含めてプロにいた年数（1以上）。若手の保護の判定に使う。"""
+        return max(1, year - self.entered_year + 1)
 
 
 @dataclass(frozen=True)
@@ -139,7 +152,7 @@ def decide_retirements(
                 value=retirement_value(player.position, None if player.ratings is None else player.ratings.ratings),
                 playing_time=player.playing_time,
                 is_foreign=player.profile.is_foreign_player,
-                seasons_in_world=max(1, year - player.joined_year + 1),
+                seasons_as_pro=player.seasons_as_pro(year),
             )
             if game_uniform(world_seed, year, f"retire-{player.player_id}") < chance:
                 retired.append(player.player_id)

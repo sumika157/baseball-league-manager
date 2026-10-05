@@ -70,10 +70,10 @@ GM ホーム。上から、自軍の位置 → 進めた結果 → 進める →
 
 {% if is_owner and plan_notices %}
   <div class="alert alert-warning" id="plan-notices">
-    <div class="fw-semibold mb-1">注意: 編成の上書きが使えません</div>
+    <div class="fw-semibold mb-1">注意: 編成を見直してください</div>
     <ul class="mb-1">
       {% for notice in plan_notices %}
-        <li>「{{ notice.section }}」は、いま進めると自動編成になります。理由: {{ notice.reason }}
+        <li>{% if notice.falls_back %}「{{ notice.section }}」は、いま進めると自動編成になります。理由: {% else %}「{{ notice.section }}」: {% endif %}{{ notice.reason }}
           <a href="{% url 'pennant_club' world.world_id %}?tab={{ notice.tab }}" class="alert-link">編成を開く</a></li>
       {% endfor %}
     </ul>

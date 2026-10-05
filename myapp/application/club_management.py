@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import date, timedelta
 
-from ..domain.exceptions import InvalidRoster, TeamNotFound
+from ..domain.exceptions import InvalidClubPlan, InvalidRoster, TeamNotFound
 from ..domain.pennant.club_plan import (
     LINEUP_POSITION_ORDER,
     ClubLimits,
@@ -22,14 +22,19 @@ from ..domain.pennant.club_plan import (
     ClubPlan,
     LineupChoice,
     PlanSection,
+    ResolvedClub,
+    arrange_lineup,
     members_of,
     resolve_club,
     strictest_game_limit,
+    unfilled_position,
 )
 from ..domain.pennant.season import ratings_year
 from ..domain.repositories import ClubPlanRepository, FixtureRepository, RatingsRepository, WorldRepository
 from ..domain.simulation.manager import (
     LINEUP_SIZE,
+    MIN_ACTIVE_PITCHERS,
+    MIN_ROTATION_SIZE,
     RECENT_PITCHING_DAYS,
     ROTATION_SIZE,
     ClubRoster,
@@ -145,6 +150,63 @@ class ClubManagementService:
         self._plans.save(plan)
         return situation.view(plan)
 
+    def start_manual_active(self, team_id: int) -> ClubPlanView:
+        """いま映している自動の1軍登録を初期値にして、1軍登録を手動にする。
+
+        この球団の在籍選手では守備位置（捕1・内4・外3）を埋められないときは、選手層の不足として理由を返す
+        （AI の選び方の問題とは分ける）。
+        """
+        situation = self._situation(team_id)
+        plan = self._plans.find_by_team(team_id)
+        self._ensure_squad_covers_field(situation)
+        resolved = resolve_club(plan, situation.pool, situation.limits)
+        view = situation.view(plan, resolved)
+        plan.set_active(view.active_ids, roster=situation.members, limits=situation.limits)
+        self._plans.save(plan)
+        return situation.view(plan)
+
+    def start_manual_lineup(self, team_id: int) -> ClubPlanView:
+        """いま映している自動のオーダーを初期値にして、オーダーを手動にする。
+
+        AI のオーダーは空いた枠を位置を問わず埋めるので、手動の規則（登録位置が就ける位置だけ）を
+        満たさないことがある。選手と打順はそのままに守備位置を割り直し、それでも足りなければ1軍の控えから
+        入れ替える（外国人は出場枠まで）。組めないときは理由を返す（汎用の検査エラーにしない）。
+        """
+        situation = self._situation(team_id)
+        plan = self._plans.find_by_team(team_id)
+        self._ensure_squad_covers_field(situation)
+        resolved = resolve_club(plan, situation.pool, situation.limits)
+        proposed = [LineupChoice(row.player_id, row.position) for row in situation.view(plan, resolved).lineup]
+        bench = [situation.members[b.player_id] for b in resolved.roster.batters]
+        fitted = arrange_lineup(
+            proposed, situation.members, bench=bench, foreign_game_limit=situation.limits.foreign_game_limit
+        )
+        if fitted is None:
+            gap = unfilled_position(bench)
+            if gap is not None:
+                raise InvalidClubPlan(
+                    f"1軍に{gap.full_name}を守れる野手が足りないため、手動のオーダーを組めません。1軍登録を見直してください。"
+                )
+            if arrange_lineup(proposed, situation.members, bench=bench) is not None:
+                raise InvalidClubPlan(
+                    "外国人選手の出場枠の範囲では、守備位置を満たすオーダーを組めません。1軍登録を見直してください。"
+                )
+            raise InvalidClubPlan(
+                "自動のオーダーと1軍の控えでは、守備位置を満たすオーダーを組めません。1軍登録を見直してください。"
+            )
+        active_ids = {b.player_id for b in resolved.roster.batters} | {p.player_id for p in resolved.roster.pitchers}
+        plan.set_lineup(fitted, roster=situation.members, active_ids=active_ids, limits=situation.limits)
+        self._plans.save(plan)
+        return situation.view(plan)
+
+    @staticmethod
+    def _ensure_squad_covers_field(situation: _Situation) -> None:
+        gap = unfilled_position(situation.members.values())
+        if gap is not None:
+            raise InvalidClubPlan(
+                f"この球団には{gap.full_name}を守れる野手がいません（選手層が足りないため、手動の編成は組めません）。"
+            )
+
     def set_rotation(self, team_id: int, player_ids: Sequence[int]) -> ClubPlanView:
         """ローテーションを手動にする（先発の序列順）。1軍の投手でなければ DomainError。"""
         situation = self._situation(team_id)
@@ -220,8 +282,10 @@ class _Situation:
         roster = resolve_club(plan, self.pool, self.limits).roster
         return {b.player_id for b in roster.batters} | {p.player_id for p in roster.pitchers}
 
-    def view(self, plan: ClubPlan) -> ClubPlanView:
-        resolved = resolve_club(plan, self.pool, self.limits)
+    def view(self, plan: ClubPlan, resolved: ResolvedClub | None = None) -> ClubPlanView:
+        """`resolved` は、同じ `plan` を `resolve_club` した結果（渡せば解決し直さない）。"""
+        if resolved is None:
+            resolved = resolve_club(plan, self.pool, self.limits)
         roster = resolved.roster
         active_ids = {b.player_id for b in roster.batters} | {p.player_id for p in roster.pitchers}
 
@@ -264,6 +328,8 @@ class _Situation:
                 foreign_game_limit=self.limits.foreign_game_limit,
                 lineup_size=LINEUP_SIZE,
                 rotation_size=ROTATION_SIZE,
+                min_rotation_size=MIN_ROTATION_SIZE,
+                min_active_pitchers=MIN_ACTIVE_PITCHERS,
                 lineup_positions=LINEUP_POSITION_ORDER,
             ),
             counts=ClubRosterCounts(
@@ -293,5 +359,5 @@ class _Situation:
             lineup_is_manual=plan.lineup is not None,
             rotation_is_manual=plan.rotation is not None,
             closer_is_manual=plan.closer_id is not None,
-            notices=tuple(ClubPlanNotice(f.section, f.reason) for f in resolved.fallbacks),
+            notices=tuple(ClubPlanNotice(f.section, f.reason, f.falls_back) for f in resolved.fallbacks),
         )

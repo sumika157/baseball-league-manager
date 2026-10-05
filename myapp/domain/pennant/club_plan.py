@@ -9,11 +9,13 @@
 
 不変条件（上書きを**決めるとき**に検査する。`set_*`）:
 
-- 1軍登録は29人まで。外国人はリーグの登録枠まで。球団の選手だけ。打順を組める野手9人と投手1人以上・捕手1人以上。
+- 1軍登録は29人まで。外国人はリーグの登録枠まで。球団の選手だけ。
+  打順を組める野手9人・捕手1人以上・投手は下限（`MIN_ACTIVE_PITCHERS`）以上。
   外国人の出場枠の中で自動のスタメン9人を組めること（外国人の投手が先発する分の枠も見込む）
-- オーダーは1軍から9人。重複なし。守備位置が9つ（捕・一・二・三・遊・左・中・右・指）をすべて満たす。
+- オーダーは1軍から9人。重複なし。守備位置が9つ（捕・一・二・三・遊・左・中・右・指）をすべて満たし、
+  各選手は登録位置が就ける位置だけ（AI と同じ規則）。
   捕手の枠は登録位置が捕手の選手。外国人は試合の出場枠まで
-- ローテーションは1軍の投手（重複なし・6人まで）
+- ローテーションは1軍の投手（重複なし・`MIN_ROTATION_SIZE` 人以上 `ROTATION_SIZE` 人まで）
 - 抑えは1軍の投手で、手動のローテーションの中にいない。ほかに先発できる1軍の投手がいる
 
 オーダーの外国人が出場枠を使い切り、ローテーションが外国人だけのときは、その日のオーダーを自動に落とす
@@ -33,12 +35,17 @@ from enum import Enum
 from ..exceptions import DomainError, ForeignPlayerQuotaExceeded, InvalidClubPlan
 from ..simulation.manager import (
     ACTIVE_ROSTER_SIZE,
+    FIELD_SLOTS,
     LINEUP_SIZE,
+    MIN_ACTIVE_PITCHERS,
+    MIN_ROTATION_SIZE,
     ROTATION_SIZE,
     ClubOrders,
     ClubRoster,
     LineupSlot,
     SimPitcher,
+    assign_fielders,
+    can_play,
     choose_active_roster,
     plan_pitching_staff,
     register_players,
@@ -61,7 +68,6 @@ LINEUP_POSITION_ORDER: tuple[FieldingPosition, ...] = (
 )
 LINEUP_POSITIONS: frozenset[FieldingPosition] = frozenset(LINEUP_POSITION_ORDER)
 MIN_ACTIVE_BATTERS = LINEUP_SIZE
-MIN_ACTIVE_PITCHERS = 1
 
 
 class PlanSection(Enum):
@@ -107,10 +113,15 @@ class LineupChoice:
 
 @dataclass(frozen=True)
 class PlanFallback:
-    """上書きが使えず、その区画を自動に落としたこと。理由は画面にそのまま出せる日本語。"""
+    """編成についての知らせ。理由は画面にそのまま出せる日本語。
+
+    `falls_back` が True なら、上書きが使えず**その区画を自動に落とした**こと。False なら区画は落とさず、
+    上書きが（あるいは自動の編成が）思ったとおりに効かないことの注意だけ（外国人の抑えが出場枠で投げられない）。"""
 
     section: PlanSection
     reason: str
+    # False なら区画は自動に落とさず、手動のまま残して効かない理由を知らせるだけ（外国人の抑え）
+    falls_back: bool = True
 
 
 @dataclass(frozen=True)
@@ -139,6 +150,67 @@ def members_of(pool: ClubRoster) -> dict[int, ClubMember]:
         {p.player_id: ClubMember(p.player_id, p.name, Position.PITCHER, p.is_foreign) for p in pool.pitchers}
     )
     return members
+
+
+# --- 守備位置の割り当て ---
+
+
+def unfilled_position(members: Iterable[ClubMember]) -> FieldingPosition | None:
+    """野手では埋められない守備位置（捕・一・二・三・遊・左・中・右）。全部埋められれば None。"""
+    owners = assign_fielders([m for m in members if not m.is_pitcher], _position_of)
+    return next((slot for slot in FIELD_SLOTS if slot not in owners), None)
+
+
+def _position_of(member: ClubMember) -> Position:
+    return member.position
+
+
+def arrange_lineup(
+    choices: Sequence[LineupChoice],
+    roster: dict[int, ClubMember],
+    *,
+    bench: Sequence[ClubMember] = (),
+    foreign_game_limit: int | None = None,
+) -> list[LineupChoice] | None:
+    """全員が登録位置の就ける位置になるよう、オーダーの守備位置を割り直す。組めなければ None。
+
+    すでに全員が就けているなら、そのまま返す。就けない選手がいるときは、正しい位置にいる選手は動かさず、
+    割り当ての無い選手だけを増加路で動かす。それでも埋まらない位置があれば、控え（`bench`。良い順）から
+    その位置に就ける選手を、割り当ての無い選手（打順の後ろから）と入れ替える。外国人は出場枠まで。
+    自動のオーダーから手動を始めるとき、AI のオーダーが位置の外の選手を含む場合に使う
+    （AI は空いた枠を位置を問わず埋める）。
+    """
+    players = [roster[c.player_id] for c in choices]
+    if all(can_play(m.position, c.position) for m, c in zip(players, choices, strict=True)):
+        return list(choices)
+    owners = assign_fielders(
+        players,
+        _position_of,
+        keep={c.position: m for c, m in zip(choices, players, strict=True) if c.position is not FP.DESIGNATED_HITTER},
+    )
+    spares = [b for b in bench if b.player_id not in {m.player_id for m in players} and not b.is_pitcher]
+    while len(owners) < len(FIELD_SLOTS):
+        seated = {m.player_id for m in owners.values()}
+        unseated = [i for i, m in enumerate(players) if m.player_id not in seated]
+        swap = None
+        for spare in spares:
+            for index in reversed(unseated):
+                trial = [*players[:index], spare, *players[index + 1 :]]
+                if foreign_game_limit is not None and sum(m.is_foreign for m in trial) > foreign_game_limit:
+                    continue
+                # 空いた位置を直接守れなくても、入れ替えて割り当てが増えるならよい（誰かが動いて空きを埋める）
+                trial_owners = assign_fielders(trial, _position_of, keep=owners)
+                if len(trial_owners) > len(owners):
+                    swap = (spare, trial, trial_owners)
+                    break
+            if swap is not None:
+                break
+        if swap is None:
+            return None
+        spare, players, owners = swap
+        spares.remove(spare)
+    slot_of = {m.player_id: slot for slot, m in owners.items()}
+    return [LineupChoice(m.player_id, slot_of.get(m.player_id, FP.DESIGNATED_HITTER)) for m in players]
 
 
 # --- 検査 ---
@@ -174,6 +246,12 @@ def check_active(player_ids: Sequence[int], roster: dict[int, ClubMember], limit
         )
     if not any(m.position is Position.CATCHER for m in members):
         raise InvalidClubPlan("1軍には捕手が1人以上要ります。")
+    gap = unfilled_position(members)
+    if gap is not None:
+        raise InvalidClubPlan(
+            f"1軍に{gap.full_name}を守れる野手がいないため、オーダーを組めません。"
+            "捕手・内野手・外野手を守備位置ぶん（捕1・内4・外3）そろえてください。"
+        )
     foreign = sum(m.is_foreign for m in members)
     if limits.foreign_roster_limit is not None and foreign > limits.foreign_roster_limit:
         raise ForeignPlayerQuotaExceeded(
@@ -214,6 +292,10 @@ def check_lineup(
     for choice, member in zip(choices, members, strict=True):
         if choice.position is FP.CATCHER and member.position is not Position.CATCHER:
             raise InvalidClubPlan(f"捕手の枠には、登録位置が捕手の選手だけ入れられます（{_label(member)}）。")
+        if not can_play(member.position, choice.position):
+            raise InvalidClubPlan(
+                f"{_label(member)}は、登録位置が{member.position.value}なので{choice.position.full_name}を守れません。"
+            )
     foreign = sum(m.is_foreign for m in members)
     if limits.foreign_game_limit is not None and foreign > limits.foreign_game_limit:
         raise ForeignPlayerQuotaExceeded(
@@ -228,8 +310,11 @@ def check_rotation(
     closer_id: int | None = None,
 ) -> None:
     """ローテーションとして成立するか。成立しなければ DomainError。"""
-    if not player_ids:
-        raise InvalidClubPlan("ローテーションの投手が1人もいません。")
+    if len(player_ids) < MIN_ROTATION_SIZE:
+        raise InvalidClubPlan(
+            f"ローテーションは{MIN_ROTATION_SIZE}人以上必要です（{len(player_ids)}人）。"
+            "少ない人数で回すと、先発の登板が偏りすぎます。"
+        )
     if len(player_ids) > ROTATION_SIZE:
         raise InvalidClubPlan(f"ローテーションは{ROTATION_SIZE}人までです（{len(player_ids)}人）。")
     for member in _members_of_ids(player_ids, roster, "ローテーション"):
@@ -415,8 +500,9 @@ def resolve_club(plan: ClubPlan | None, pool: ClubRoster, limits: ClubLimits) ->
     # 枠の中で先発を立てられない（エンジンはオーダーを先に枠に数える）。その日はオーダーを自動に落とす
     if lineup is not None and limits.foreign_game_limit is not None and roster.pitchers:
         lineup_foreign = sum(slot.batter.is_foreign for slot in lineup)
-        starters = staff.rotation if staff is not None else plan_pitching_staff(roster.pitchers).rotation
-        if lineup_foreign >= limits.foreign_game_limit and all(p.is_foreign for p in starters):
+        effective = staff if staff is not None else plan_pitching_staff(roster.pitchers)
+        full = lineup_foreign >= limits.foreign_game_limit
+        if full and all(p.is_foreign for p in effective.rotation):
             fallbacks.append(
                 PlanFallback(
                     PlanSection.LINEUP,
@@ -425,5 +511,18 @@ def resolve_club(plan: ClubPlan | None, pool: ClubRoster, limits: ClubLimits) ->
                 )
             )
             lineup = None
+        elif full and effective.closer is not None and effective.closer.is_foreign:
+            # オーダーが枠を使い切ると、外国人の抑えは1年中投げられない（黙って投げなくなる）。
+            # 区画は外さず（自動の抑えも外国人になりうる）、GM に知らせるだけにする
+            source = "手動で指定した" if closer is not None else "自動で選ばれた"
+            fallbacks.append(
+                PlanFallback(
+                    PlanSection.CLOSER,
+                    f"オーダーの外国人選手が出場枠（{limits.foreign_game_limit}人）いっぱいなので、"
+                    f"{source}外国人の抑え（{effective.closer.name}）は投げられません。"
+                    "外国人でない投手を抑えに手動で指定するか、オーダーの外国人を減らしてください。",
+                    falls_back=False,
+                )
+            )
     orders = ClubOrders(lineup=lineup, staff=staff) if lineup is not None or staff is not None else None
     return ResolvedClub(roster=roster, orders=orders, fallbacks=tuple(fallbacks))
