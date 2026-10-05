@@ -1296,6 +1296,17 @@ class Profile:
         had_birthday = (as_of.month, as_of.day) >= (self.birth_date.month, self.birth_date.day)
         return as_of.year - self.birth_date.year - (0 if had_birthday else 1)
 
+    def age_or_none(self, as_of: date) -> int | None:
+        """画面に出す年齢。生年月日が無い、またはその日より後に生まれたことになる場合は None。
+
+        世界の「今日」は開幕日で、生年月日より前の年に開幕した世界では年齢が数えられない。
+        そのとき画面を落とさず「年齢なし」として扱う（`age` は例外を投げる）。
+        """
+        try:
+            return self.age(as_of)
+        except InvalidProfile:
+            return None
+
     @property
     def throws_bats(self) -> str:
         """「右投左打」のような表記。片方でも欠けていれば空。"""

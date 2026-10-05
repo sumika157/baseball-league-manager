@@ -11,7 +11,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import date
 
 from ..exceptions import InvalidWorld
 from ..value_objects import Season
@@ -26,6 +28,19 @@ MAX_SOURCE_LEAGUES = 8
 MAX_WORLDS_PER_OWNER = 5
 # 1つの世界で遊べるシーズン数の上限（開幕年を1シーズン目と数える）。最後のシーズンは締められない
 MAX_SEASONS_PER_WORLD = 10
+# 開幕年の上限。最後のシーズン（開幕年 + 上限 − 1）が `Season` の範囲に収まる年。
+# **世界を作るときだけ**検査する（保存済みの世界を読み戻せなくしないため）
+MAX_START_YEAR = Season.MAX_YEAR - MAX_SEASONS_PER_WORLD + 1
+
+
+def earliest_start_year(birth_dates: Iterable[date | None]) -> int:
+    """分岐元の選手の生年月日と矛盾しない、いちばん早い開幕年。
+
+    開幕年に生まれた選手は開幕日にまだ年齢を数えられないので、最も遅い生年の翌年を下限にする
+    （開幕日が年のいつでも成り立つ保守的な値）。生年月日が無い選手は数えない。
+    """
+    years = [birth.year + 1 for birth in birth_dates if birth is not None]
+    return max([Season.MIN_YEAR, *years])
 
 
 @dataclass(frozen=True)

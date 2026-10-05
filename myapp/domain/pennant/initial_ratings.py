@@ -13,7 +13,6 @@ from collections.abc import Mapping, Sequence
 from datetime import date
 
 from ..entities import Player
-from ..exceptions import InvalidProfile
 from ..simulation.baseline import NPB, LeagueBaseline
 from ..simulation.estimate import (
     CareerRecord,
@@ -41,10 +40,7 @@ def age_at_season_start(profile: Profile, year: int) -> int | None:
 
     年齢は保持せず生年月日から求める。現実の今日ではなく、**世界の年**を渡す。
     """
-    try:
-        return profile.age(date(year, SEASON_START_MONTH, 1))
-    except InvalidProfile:
-        return None
+    return profile.age_or_none(date(year, SEASON_START_MONTH, 1))
 
 
 def estimate_initial_ratings(

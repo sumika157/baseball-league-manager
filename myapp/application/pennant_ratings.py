@@ -175,7 +175,7 @@ def _row(
         name=player.name,
         position=player.position.label,
         is_foreign_player=player.profile.is_foreign_player,
-        age=player.profile.age(today),
+        age=player.profile.age_or_none(today),
         cells=_cells_of(ratings) if ratings is not None else (),
         batting_average=batting_average,
         ops=ops,

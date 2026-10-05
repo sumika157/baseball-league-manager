@@ -1063,7 +1063,7 @@ class TeamApplicationService:
                 )
                 for s in player.career
             ],
-            age=profile.age(self._today()),
+            age=profile.age_or_none(self._today()),
             name_kana=profile.name_kana,
             back_name=profile.back_name,
             throws_bats=profile.throws_bats,
@@ -1489,7 +1489,7 @@ class TeamApplicationService:
             throws_bats=profile.throws_bats,
             height_cm=profile.height_cm,
             weight_kg=profile.weight_kg,
-            age=profile.age(today),
+            age=profile.age_or_none(today),
         )
 
     @staticmethod
@@ -1529,7 +1529,7 @@ class TeamApplicationService:
             throws_bats=profile.throws_bats,
             height_cm=profile.height_cm,
             weight_kg=profile.weight_kg,
-            age=profile.age(today),
+            age=profile.age_or_none(today),
         )
 
     @staticmethod
