@@ -170,6 +170,12 @@ main.container {
   transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
+/* ヘッダーで右のログイン欄と詰まらないよう、検索欄と同じだけ空ける */
+.nav-analysis-link {
+  margin-right: 1rem;
+  white-space: nowrap;
+}
+
 .nav-admin-link:hover,
 .nav-analysis-link:hover {
   background-color: var(--app-accent-soft);
@@ -1028,4 +1034,62 @@ main.container {
 .depth-list li {
   padding: 0.15rem 0;
   font-size: 0.875rem;
+}
+
+/* ------------------------------------------------------------------
+   戦力分析の起用マップ（守備位置の箱をダイヤモンドの形に並べる）
+   ------------------------------------------------------------------ */
+.usage-map {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-areas:
+    "left   left   center center right"
+    ".      short  .      second ."
+    "third  third  pitcher first first"
+    "dh     .      catcher .      .";
+}
+
+.usage-box {
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius);
+  box-shadow: var(--app-shadow-sm);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  min-width: 0;
+}
+
+.usage-box-title {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--app-text-muted);
+  margin: 0 0 0.25rem;
+}
+
+.usage-box li {
+  padding: 0.1rem 0;
+}
+
+.usage-box-left { grid-area: left; }
+.usage-box-center { grid-area: center; }
+.usage-box-right { grid-area: right; }
+.usage-box-short { grid-area: short; }
+.usage-box-second { grid-area: second; }
+.usage-box-third { grid-area: third; }
+.usage-box-pitcher { grid-area: pitcher; }
+.usage-box-first { grid-area: first; }
+.usage-box-catcher { grid-area: catcher; }
+.usage-box-dh { grid-area: dh; }
+
+/* 狭い画面ではダイヤモンドをやめて縦に積む */
+@media (max-width: 767.98px) {
+  .usage-map {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: none;
+  }
+
+  .usage-box {
+    grid-area: auto;
+  }
 }

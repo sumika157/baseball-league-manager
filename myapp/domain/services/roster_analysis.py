@@ -128,6 +128,28 @@ def depth_order(starts: int, games: int, number: int) -> tuple[int, int, int]:
     return (-starts, -games, number)
 
 
+# 起用マップの箱1つに出す人数の上限（先発ローテーション6人が収まる数）。残りは「ほか n 名」にまとめる
+MAX_PLAYERS_IN_BOX = 6
+
+
+def usage_map_positions() -> tuple[FieldingPosition, ...]:
+    """起用マップに箱を作る守備位置。投手と、野手の区分に入る位置（捕〜右・指名打者）。
+
+    宣言順。野手の側は区分の対応から導く（区分を増減したときに箱がずれないように）。
+    """
+    fielder_positions = {position for group in FielderGroup for position in group.positions}
+    return tuple(p for p in FieldingPosition if p is FieldingPosition.PITCHER or p in fielder_positions)
+
+
+def usage_visible_count(total: int) -> int:
+    """起用マップの箱に出す人数。上位 `MAX_PLAYERS_IN_BOX` 人まで。
+
+    箱の中は先発数の多い順（`depth_order`）に並べてあるので、先頭から数えた人数がそのまま出す人になる。
+    控えが1〜2試合ずつ先発しただけでも全員並べると、箱が長くなって主な起用が読めなくなるため上限を置く。
+    """
+    return min(total, MAX_PLAYERS_IN_BOX)
+
+
 def age_band(age: int | None) -> str:
     """年齢の帯。18歳以下・19〜39歳は1歳刻み・40歳以上。年齢が不明なら「不明」。"""
     if age is None:

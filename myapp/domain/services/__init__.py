@@ -79,6 +79,8 @@ from .roster_analysis import (
     hand_label,
     hand_of,
     primary_position,
+    usage_map_positions,
+    usage_visible_count,
 )
 from .scoring import (
     FieldingCredits,
@@ -204,4 +206,6 @@ __all__ = [
     "hand_label",
     "hand_of",
     "primary_position",
+    "usage_map_positions",
+    "usage_visible_count",
 ]
