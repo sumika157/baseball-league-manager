@@ -13,7 +13,7 @@ from datetime import date
 
 from ..domain import services as domain_services
 from ..domain.exceptions import TeamNotFound
-from ..domain.services import FielderGroup, PitcherRole
+from ..domain.services import FielderGroup, MoveJudgement, MoveKind, PitcherRole, StintSpan
 from ..domain.value_objects import FieldingPosition, Handedness, Profile, Season
 from .dto import (
     AgeBandRow,
@@ -25,6 +25,8 @@ from .dto import (
     DepthRow,
     DepthTable,
     FielderUsage,
+    MoveRow,
+    MoveStintRow,
     PitcherUsage,
     TeamAnalysis,
     TeamAnalysisFacts,
@@ -83,6 +85,7 @@ class TeamAnalysisService:
         facts = self._analysis_query.load(team_id, chosen)
 
         pitchers, fielders, pitcher_ages, fielder_ages = self._depth(facts, Season(chosen))
+        joiners, leavers = self._moves(facts, chosen)
         return TeamAnalysis(
             team_id=team.id,
             team_name=team.name,
@@ -101,7 +104,49 @@ class TeamAnalysisService:
             average_age_fielders=domain_services.average_age(fielder_ages),
             average_age_all=domain_services.average_age([*pitcher_ages, *fielder_ages]),
             usage_boxes=self._usage_boxes(facts),
+            joiners=joiners,
+            leavers=leavers,
         )
+
+    @staticmethod
+    def _moves(facts: TeamAnalysisFacts, year: int) -> tuple[list[MoveRow], list[MoveRow]]:
+        """その年の加入と退団。在籍から区分を導き、区分→背番号の順に並べる。"""
+        spans: dict[int, list[StintSpan]] = defaultdict(list)
+        team_names: dict[int, str] = {}
+        for related in facts.related_stints:
+            spans[related.player_id].append(
+                StintSpan(related.stint_id, related.team_id, related.from_year, related.to_year)
+            )
+            team_names[related.team_id] = related.team_name
+
+        def row(move: MoveStintRow, judgement: MoveJudgement) -> MoveRow:
+            other = team_names.get(judgement.other_team_id, "") if judgement.other_team_id is not None else ""
+            return MoveRow(
+                player_id=move.player_id,
+                name=move.name,
+                number=move.number,
+                position_label=move.position.label,
+                kind_label=judgement.kind.value,
+                other_team_name=other,
+            )
+
+        joined: list[tuple[MoveKind, MoveRow]] = []
+        left: list[tuple[MoveKind, MoveRow]] = []
+        for move in facts.moves:
+            own = StintSpan(move.stint_id, move.team_id, move.from_year, move.to_year)
+            stints = spans.get(move.player_id, [])
+            if move.from_year == year:
+                judgement = domain_services.judge_join(own, stints)
+                joined.append((judgement.kind, row(move, judgement)))
+            if move.to_year == year:
+                judgement = domain_services.judge_leave(own, stints)
+                left.append((judgement.kind, row(move, judgement)))
+
+        def ordered(entries: list[tuple[MoveKind, MoveRow]]) -> list[MoveRow]:
+            entries.sort(key=lambda e: domain_services.move_order(e[0], e[1].number))
+            return [moved for _, moved in entries]
+
+        return ordered(joined), ordered(left)
 
     @staticmethod
     def _usage_boxes(facts: TeamAnalysisFacts) -> list[UsageBox]:

@@ -1137,12 +1137,40 @@ class PitcherUsage:
 
 
 @dataclass(frozen=True)
+class MoveStintRow:
+    """入退団の材料。そのチームで加入年か退団年がその年の在籍1件と、その選手の登録。"""
+
+    stint_id: int
+    team_id: int
+    player_id: int
+    name: str
+    number: int
+    position: Position
+    from_year: int
+    to_year: int | None
+
+
+@dataclass(frozen=True)
+class RelatedStint:
+    """入退団の判定に使う、選手の在籍1件（他のチームを含む）。チーム名は前所属・移籍先の表示用。"""
+
+    stint_id: int
+    player_id: int
+    team_id: int
+    team_name: str
+    from_year: int
+    to_year: int | None
+
+
+@dataclass(frozen=True)
 class TeamAnalysisFacts:
     """戦力分析の材料一式。参照クエリが SQL で集めた事実で、区分けはアプリケーション層が行う。"""
 
     roster: list[AnalysisRosterRow]
     fielder_usage: list[FielderUsage]
     pitcher_usage: list[PitcherUsage]
+    moves: list[MoveStintRow]
+    related_stints: list[RelatedStint]
 
 
 @dataclass(frozen=True)
@@ -1252,6 +1280,18 @@ class AgeBandRow:
 
 
 @dataclass(frozen=True)
+class MoveRow:
+    """入退団の表の1行。kind_label は区分、other_team_name は移籍のときの前所属（加入）か移籍先（退団）。"""
+
+    player_id: int
+    name: str
+    number: int
+    position_label: str
+    kind_label: str
+    other_team_name: str = ""
+
+
+@dataclass(frozen=True)
 class TeamAnalysis:
     """戦力分析ページの中身。"""
 
@@ -1269,3 +1309,5 @@ class TeamAnalysis:
     average_age_fielders: float | None
     average_age_all: float | None
     usage_boxes: list[UsageBox]
+    joiners: list[MoveRow]
+    leavers: list[MoveRow]

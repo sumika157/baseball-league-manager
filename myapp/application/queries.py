@@ -107,5 +107,5 @@ class TeamAnalysisQuery(Protocol):
         ...
 
     def load(self, team_id: int, year: int) -> TeamAnalysisFacts:
-        """その年にそのチームへ在籍していた選手と、その年の出場・登板の数。"""
+        """その年にそのチームへ在籍していた選手と、その年の出場・登板の数、入退団の材料（在籍）。"""
         ...

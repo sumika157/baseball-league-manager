@@ -113,6 +113,75 @@
     </table>
   </div>
 
+  {% comment %}
+    入退団は在籍（加入年・退団年）から導く。区分と並びはドメイン（MoveKind）が決め、ビューが渡す。
+    退団年はそのチームでの最後の年（含む）なので、退団した年に在籍表には載っている。
+  {% endcomment %}
+  <h2 class="h6 mb-2">入退団</h2>
+  <p class="page-subtitle mb-2" style="font-size: 0.8125rem;">
+    {{ analysis.year }}年に加入した選手と退団した選手。区分は在籍の記録から導きます（引退と自由契約は区別できません）。
+  </p>
+  <div class="row g-3 mb-4">
+    <div class="col-12 col-lg-6">
+      <h3 class="h6 mb-2">加入 <span class="text-muted">{{ analysis.joiners|length }}名</span></h3>
+      <div class="table-responsive">
+        <table class="table table-hover tabular-nums">
+          <thead>
+            <tr>
+              <th>背番号</th>
+              <th>選手</th>
+              <th>登録位置</th>
+              <th>区分</th>
+              <th>前所属</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in analysis.joiners %}
+            <tr>
+              <td><span class="jersey-number">{{ row.number }}</span></td>
+              <td><a href="{% url 'player_detail' analysis.team_id row.player_id %}" class="player-name">{{ row.name }}</a></td>
+              <td>{{ row.position_label }}</td>
+              <td>{{ row.kind_label }}</td>
+              <td>{{ row.other_team_name|default:"—" }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="5" class="text-center text-muted py-4">この年の加入はありません。</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="col-12 col-lg-6">
+      <h3 class="h6 mb-2">退団 <span class="text-muted">{{ analysis.leavers|length }}名</span></h3>
+      <div class="table-responsive">
+        <table class="table table-hover tabular-nums">
+          <thead>
+            <tr>
+              <th>背番号</th>
+              <th>選手</th>
+              <th>登録位置</th>
+              <th>区分</th>
+              <th>移籍先</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in analysis.leavers %}
+            <tr>
+              <td><span class="jersey-number">{{ row.number }}</span></td>
+              <td><a href="{% url 'player_detail' analysis.team_id row.player_id %}" class="player-name">{{ row.name }}</a></td>
+              <td>{{ row.position_label }}</td>
+              <td>{{ row.kind_label }}</td>
+              <td>{{ row.other_team_name|default:"—" }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="5" class="text-center text-muted py-4">この年の退団はありません。</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <p class="page-subtitle" style="font-size: 0.8125rem;">
     選手ごとの成績は <a href="{% url 'player_list' analysis.team_id %}">{{ analysis.team_name }}の選手一覧</a>
     （通算成績。この年だけの成績ではありません）で見られます。
