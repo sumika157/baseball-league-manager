@@ -103,6 +103,8 @@ class Command(BaseCommand):
             ("リーグタイトル", f"/league/{league.id}/titles/"),
             ("試合一覧", "/games/"),
             ("試合詳細", f"/games/{game.id}/"),
+            ("戦力分析", f"/team/{team_id}/analysis/"),
+            ("戦力分析（起用マップ）", f"/team/{team_id}/analysis/?tab=usage"),
         ]
 
     def _profile(self, url: str) -> None:

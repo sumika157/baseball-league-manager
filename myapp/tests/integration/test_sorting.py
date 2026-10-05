@@ -6,6 +6,8 @@ from django.urls import reverse
 from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import (
     BattingLine,
+    InningsPitched,
+    PitchingLine,
 )
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import (
@@ -37,8 +39,27 @@ class SortingViewTest(BaseCase):
         listing = self.client.get(f"{self.url}{query}").context["listing"]
         return [r.name for r in listing.rows]
 
-    def test_default_order_is_ops(self):
-        self.assertEqual(self._names(), ["多打", "少打"])
+    def test_default_order_is_jersey_number(self):
+        """名簿として開く画面なので、初期表示は OPS ではなく背番号の小さい順。"""
+        self.assertEqual(self._names(), ["少打", "多打"])
+        self.assertEqual(self.client.get(self.url).context["listing"].sort, "number")
+
+    def test_pitcher_default_order_is_jersey_number(self):
+        """投手も防御率ではなく背番号順。防御率の良い投手が背番号で後ろにいても入れ替わらない。"""
+        bad = self.service.register_player(self.team.id, "炎上", 11, "投手")
+        good = self.service.register_player(self.team.id, "好投", 18, "投手")
+        play_game(
+            self.team,
+            self.rival,
+            pitching={
+                bad.id: PitchingLine(innings=InningsPitched.from_notation("3.0"), earned_runs=6),
+                good.id: PitchingLine(innings=InningsPitched.from_notation("6.0"), earned_runs=0),
+            },
+        )
+        self.assertEqual(self._names("?pos=pitcher"), ["炎上", "好投"])
+
+    def test_ops_order_is_still_available(self):
+        self.assertEqual(self._names("?sort=ops"), ["多打", "少打"])
 
     def test_sort_by_home_runs_ascending(self):
         self.assertEqual(self._names("?sort=home_runs&dir=asc"), ["少打", "多打"])
@@ -49,7 +70,7 @@ class SortingViewTest(BaseCase):
     def test_invalid_sort_key_does_not_break_the_page(self):
         response = self.client.get(f"{self.url}?sort=../../etc/passwd")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.context["listing"].sort, "ops")
+        self.assertEqual(response.context["listing"].sort, "number")
 
     def test_sort_link_keeps_other_query_params(self):
         body = self.client.get(f"{self.url}?pos=pitcher").content.decode()

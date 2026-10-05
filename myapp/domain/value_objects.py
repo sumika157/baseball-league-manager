@@ -993,6 +993,14 @@ class PitchingLine:
         """
         return self.holds + self.relief_wins
 
+    @property
+    def winning_percentage(self) -> float:
+        """勝率。チームの勝率と同じく 勝 ÷ (勝 + 敗) で、勝敗が無ければ 0。"""
+        decisions = self.wins + self.losses
+        if decisions == 0:
+            return 0.0
+        return self.wins / decisions
+
     def era_plus(self, league_era: float) -> float:
         """ERA+。リーグ平均防御率 ÷ 自身の防御率 × 100。高いほど良い（FIP と逆）。
 
@@ -1097,6 +1105,11 @@ class Season:
 
     def __str__(self) -> str:
         return f"{self.year}年"
+
+    @property
+    def age_reference_date(self) -> date:
+        """年齢を数える基準日。その年の4月1日（開幕前後で選手の年齢をそろえる）。"""
+        return date(self.year, 4, 1)
 
 
 @dataclass(frozen=True)
@@ -1326,6 +1339,16 @@ class Profile:
             return self.age(as_of)
         except InvalidProfile:
             return None
+
+    def age_in(self, season: Season) -> int | None:
+        """そのシーズンの基準日（4月1日）時点の満年齢。
+
+        生年月日が未設定、または基準日より後に生まれている（データの誤り）ときは None。
+        一覧の集計を例外で止めないため、`age()` と違って例外にしない。
+        """
+        if self.birth_date is None or season.age_reference_date < self.birth_date:
+            return None
+        return self.age(season.age_reference_date)
 
     @property
     def throws_bats(self) -> str:

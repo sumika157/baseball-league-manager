@@ -12,7 +12,14 @@ from datetime import date
 from ..domain.pennant.club_plan import PlanSection
 from ..domain.pennant.season import SeasonPhase
 from ..domain.simulation.ratings import RatingEmphasis
-from ..domain.value_objects import BattingLine, FieldingPosition, PitchingLine, Position, Profile
+from ..domain.value_objects import (
+    BattingLine,
+    FieldingPosition,
+    Handedness,
+    PitchingLine,
+    Position,
+    Profile,
+)
 
 
 @dataclass(frozen=True)
@@ -809,6 +816,7 @@ class TitleDepartment:
     label: str
     note: str = ""  # '規定打席以上' など。率の部門だけ付く
     entries: list[RankingEntry] | None = None
+    is_pitching: bool = False  # 投手の部門。画面で打撃と投手を分けて並べるため
 
     @property
     def leader(self) -> RankingEntry | None:
@@ -833,6 +841,14 @@ class LeagueTitles:
     @property
     def has_any(self) -> bool:
         return any(d.entries for d in self.departments)
+
+    @property
+    def batting_departments(self) -> list[TitleDepartment]:
+        return [d for d in self.departments if not d.is_pitching]
+
+    @property
+    def pitching_departments(self) -> list[TitleDepartment]:
+        return [d for d in self.departments if d.is_pitching]
 
 
 @dataclass(frozen=True)
@@ -1740,3 +1756,174 @@ class SeasonCloseOption:
     can_close: bool
     # 締められない理由（締められるときは空）
     reason: str = ""
+
+
+# --- 戦力分析（球団×年度の編成） ---
+
+
+@dataclass(frozen=True)
+class AnalysisRosterRow:
+    """戦力分析の材料。その年に在籍していた選手1人。生年月日と利きは値のまま持つ。"""
+
+    player_id: int
+    name: str
+    number: int
+    position: Position
+    birth_date: date | None
+    throws: Handedness | None
+    bats: Handedness | None
+    is_foreign_player: bool
+
+
+@dataclass(frozen=True)
+class FielderUsage:
+    """野手の守備位置ごとの出場数と先発数（その年・そのチーム）。位置が空なら None。"""
+
+    player_id: int
+    position: FieldingPosition | None
+    games: int
+    starts: int
+
+
+@dataclass(frozen=True)
+class PitcherUsage:
+    """投手の登板数と先発数（その年・そのチームの試合）。"""
+
+    player_id: int
+    games: int
+    starts: int
+
+
+@dataclass(frozen=True)
+class TeamAnalysisFacts:
+    """戦力分析の材料一式。参照クエリが SQL で集めた事実で、区分けはアプリケーション層が行う。"""
+
+    roster: list[AnalysisRosterRow]
+    fielder_usage: list[FielderUsage]
+    pitcher_usage: list[PitcherUsage]
+
+
+@dataclass(frozen=True)
+class AnalysisTeamOption:
+    """球団の切り替えの選択肢。"""
+
+    id: int
+    name: str
+    league_name: str
+
+
+@dataclass(frozen=True)
+class AnalysisTab:
+    """戦力分析のタブ。"""
+
+    key: str
+    label: str
+
+
+@dataclass(frozen=True)
+class DepthPlayer:
+    """デプス表に並べる選手1人。
+
+    投手は登板数と先発数、野手は主な守備位置での出場数と先発数。
+    守備出場なしの野手は位置が空で、代打・代走を含む全体の出場数を持つ。
+    """
+
+    player_id: int
+    name: str
+    number: int
+    age: int | None
+    is_foreign_player: bool
+    games: int
+    starts: int
+    position_label: str = ""
+
+
+@dataclass(frozen=True)
+class DepthCell:
+    """デプス表の1マス（区分×左右）。"""
+
+    hand_label: str
+    players: list[DepthPlayer]
+
+    @property
+    def count(self) -> int:
+        return len(self.players)
+
+
+@dataclass(frozen=True)
+class DepthRow:
+    """デプス表の1行（先発・捕手など）。cells は表の左右の列と同じ並び。"""
+
+    label: str
+    cells: list[DepthCell]
+
+    @property
+    def count(self) -> int:
+        return sum(cell.count for cell in self.cells)
+
+
+@dataclass(frozen=True)
+class DepthTable:
+    """投手側または野手側のデプス表。"""
+
+    columns: list[str]
+    rows: list[DepthRow]
+
+    @property
+    def count(self) -> int:
+        return sum(row.count for row in self.rows)
+
+
+@dataclass(frozen=True)
+class UsagePlayer:
+    """起用マップの箱に並べる選手1人。その守備位置での先発数と出場数（投手は先発登板数と登板数）。"""
+
+    player_id: int
+    name: str
+    number: int
+    starts: int
+    games: int
+
+
+@dataclass(frozen=True)
+class UsageBox:
+    """起用マップの守備位置1つ分の箱。
+
+    area はダイヤモンド上の置き場所のキー（CSS のクラス名の一部）。
+    players は出す選手だけで、省いた人数は hidden_count。
+    """
+
+    label: str
+    area: str
+    players: list[UsagePlayer]
+    hidden_count: int = 0
+
+
+@dataclass(frozen=True)
+class AgeBandRow:
+    """年齢構成の1行。"""
+
+    band: str
+    pitchers: int
+    fielders: int
+    total: int
+
+
+@dataclass(frozen=True)
+class TeamAnalysis:
+    """戦力分析ページの中身。"""
+
+    team_id: int
+    team_name: str
+    year: int
+    years: list[int]
+    tab: str
+    tabs: list[AnalysisTab]
+    teams: list[AnalysisTeamOption]
+    pitchers: DepthTable
+    fielders: DepthTable
+    age_rows: list[AgeBandRow]
+    average_age_pitchers: float | None
+    average_age_fielders: float | None
+    average_age_all: float | None
+    usage_boxes: list[UsageBox]

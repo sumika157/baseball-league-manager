@@ -28,10 +28,12 @@ from myapp.application.queries import (
     GameListQuery,
     PennantActivityQuery,
     SimulationContextQuery,
+    TeamAnalysisQuery,
     TeamListQuery,
     WorldSummaryQuery,
 )
 from myapp.application.services import TeamApplicationService
+from myapp.application.team_analysis import TeamAnalysisService
 from myapp.domain.exceptions import InvalidWorld
 from myapp.domain.pennant.world import WorldScope
 from myapp.domain.repositories import (
@@ -49,6 +51,7 @@ from myapp.infrastructure.queries import (
     DjangoGameListQuery,
     DjangoPennantActivityQuery,
     DjangoSimulationContextQuery,
+    DjangoTeamAnalysisQuery,
     DjangoTeamListQuery,
     DjangoWorldSummaryQuery,
 )
@@ -73,6 +76,7 @@ from myapp.presentation.views import (
     build_player_search_query,
     build_recording_service,
     build_service,
+    build_team_analysis_service,
     build_world_view_service,
 )
 
@@ -95,6 +99,7 @@ class ProtocolConformanceTest(SimpleTestCase):
         (DjangoFieldingTotalsQuery(REAL), FieldingTotalsQuery),
         (DjangoTeamListQuery(REAL), TeamListQuery),
         (DjangoGameListQuery(REAL), GameListQuery),
+        (DjangoTeamAnalysisQuery(REAL), TeamAnalysisQuery),
         (DjangoPennantActivityQuery(REAL), PennantActivityQuery),
         (DjangoWorldSummaryQuery(), WorldSummaryQuery),
     ]
@@ -178,6 +183,10 @@ class BuildServiceTest(SimpleTestCase):
     def test_pennant_ratings_service_dependencies_are_wired(self):
         self._assert_wired(build_pennant_ratings_service(7), PennantRatingsViewService)
 
+    def test_team_analysis_service_dependencies_are_wired(self):
+        """戦力分析のサービスも同じ検査にかける（組み立て口は build_*() 関数だけ）。"""
+        self._assert_wired(build_team_analysis_service(), TeamAnalysisService)
+
     def _assert_wired(self, service, cls):
         parameters = [name for name in signature(cls.__init__).parameters if name != "self"]
         self.assertTrue(parameters, "依存が1つも宣言されていません")
@@ -247,13 +256,25 @@ class RealScopeTest(SimpleTestCase):
             with self.subTest(dependency=name):
                 self.assertEqual(getattr(service, name)._scope, REAL)
 
+    def test_build_team_analysis_service_is_fixed_to_the_real_scope(self):
+        service = build_team_analysis_service()
+        for name in ("_team_list_query", "_analysis_query"):
+            with self.subTest(dependency=name):
+                self.assertEqual(getattr(service, name)._scope, REAL)
+
     def test_queries_built_for_views_are_fixed_to_the_real_scope(self):
         self.assertEqual(build_permission_query()._scope, REAL)
         self.assertEqual(build_player_search_query()._scope, REAL)
 
     def test_build_functions_take_no_scope(self):
         """範囲を引数に取る形にしない（既定値で切り替えると、渡し忘れが混入になる）。"""
-        for build in (build_service, build_recording_service, build_permission_query, build_player_search_query):
+        for build in (
+            build_service,
+            build_recording_service,
+            build_team_analysis_service,
+            build_permission_query,
+            build_player_search_query,
+        ):
             with self.subTest(build=build.__name__):
                 self.assertEqual(list(signature(build).parameters), [])
 

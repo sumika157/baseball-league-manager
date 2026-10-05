@@ -16,10 +16,20 @@ Including another URLconf
 """
 
 from django.contrib import admin
+from django.contrib.auth import views as auth_views
 from django.urls import include, path
 
 urlpatterns = [
     path("admin/", admin.site.urls),  # 管理者画面（今見ているもの）
     path("", include("myapp.urls")),  # あなたの作ったアプリのホーム画面
-    path("accounts/", include("django.contrib.auth.urls")),
+    # django.contrib.auth.urls はまるごと読み込まない。パスワード再設定の画面まで公開されてしまうため
+    # （メールを送らない方針で、送信を試みて 500 になる）。URL 名は auth.urls と同じにしてある
+    path("accounts/login/", auth_views.LoginView.as_view(), name="login"),
+    path("accounts/logout/", auth_views.LogoutView.as_view(), name="logout"),
+    path("accounts/password_change/", auth_views.PasswordChangeView.as_view(), name="password_change"),
+    path(
+        "accounts/password_change/done/",
+        auth_views.PasswordChangeDoneView.as_view(),
+        name="password_change_done",
+    ),
 ]

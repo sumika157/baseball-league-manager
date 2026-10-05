@@ -7,7 +7,7 @@ playwright==1.62.0
 # 本番の実行には不要なので dev 側に置く
 numpy==2.2.6
 # テストのカバレッジ計測（make coverage）。依存パッケージは無い（pyproject.toml の設定は
-# Python 3.10 では tomli 経由で読む。tomli は下で固定済み）
+# 標準ライブラリの tomllib で読む）
 coverage==7.16.2
 
 # 上記の依存パッケージ（バージョン固定用）
@@ -18,5 +18,4 @@ librt==0.15.0
 mypy-extensions==1.1.0
 pathspec==1.1.1
 pyee==13.0.1
-tomli==2.4.1
 types-pyyaml==6.0.12.20260724

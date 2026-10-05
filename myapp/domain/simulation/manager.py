@@ -19,7 +19,6 @@ from __future__ import annotations
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import TypeVar
 
 from ..exceptions import InvalidRoster
 from ..services.decisions import SAVE_LEAD_LIMIT
@@ -116,8 +115,6 @@ FIELD_SLOTS: tuple[FieldingPosition, ...] = (
     FP.CENTER_FIELD,
     FP.RIGHT_FIELD,
 )
-
-T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -262,7 +259,7 @@ def can_play(registered: Position, position: FieldingPosition) -> bool:
     return position in _PLAYABLE.get(registered, frozenset())
 
 
-def assign_fielders(
+def assign_fielders[T](
     players: Sequence[T],
     position_of: Callable[[T], Position],
     *,

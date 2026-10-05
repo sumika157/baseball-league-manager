@@ -1,6 +1,7 @@
 # 本番用の compose（開発用は docker-compose.yml）。使い方は Wiki「本番公開」。
 #
-#   docker compose -f docker-compose.prod.yml up -d --build
+#   docker compose -f docker-compose.prod.yml pull && docker compose -f docker-compose.prod.yml up -d   # CI が置いた GHCR のイメージを使う
+#   docker compose -f docker-compose.prod.yml up -d --build   # VM でビルドする
 #
 # .env に DJANGO_SECRET_KEY・DJANGO_ALLOWED_HOSTS・DJANGO_CSRF_TRUSTED_ORIGINS・CLOUDFLARE_TUNNEL_TOKEN を書く
 # （.env.example の「本番」の節）。
@@ -8,14 +9,23 @@
 # 入口は Cloudflare Tunnel。cloudflared が VM の内側から Cloudflare へ接続しに行くので、
 # VM のポート 80/443 は開けない（HTTPS と証明書は Cloudflare が受け持つ）。
 
+# ログは無制限にたまるとディスクを埋め、SQLite の書き込みも含めて全部止まるので、サービスごとに上限を付ける
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   web:
     build:
       context: .
       dockerfile: Dockerfile.prod
-    image: baseball-prod
+    # CI が main への push ごとに GHCR へ置く（.github/workflows/ci.yml）。`up -d --build` なら手元のビルドにこの名前が付く
+    image: ghcr.io/sumika157/baseball-league-manager:latest
     container_name: baseball-web
     restart: unless-stopped
+    logging: *default-logging
     env_file:
       - .env
     environment:
@@ -40,6 +50,7 @@ services:
     image: cloudflare/cloudflared:2026.9.3
     container_name: baseball-cloudflared
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - web
     # 公開するホスト名と転送先（http://web:8000）は Cloudflare のダッシュボードでトンネルに設定する。

@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from typing import TypeVar
 
 from ..entities import FieldingError
 from ..value_objects import ErrorKind, FieldingPosition, PlateAppearanceResult
@@ -24,7 +23,6 @@ FP = FieldingPosition
 P = PlateAppearanceResult
 
 Path = tuple[FieldingPosition, ...]
-T = TypeVar("T")
 
 # (経路, 重み)。経路の長さは処理にかかわった人数。
 _GROUND_OUT_FIRST: list[tuple[Path, float]] = [
@@ -127,7 +125,7 @@ DEFENSE_WEIGHTS: dict[FieldingPosition, float] = {
 }
 
 
-def _pick(rng: GameRandom, options: Sequence[tuple[T, float]]) -> T:
+def _pick[T](rng: GameRandom, options: Sequence[tuple[T, float]]) -> T:
     return options[weighted_index(rng, [weight for _, weight in options])][0]
 
 

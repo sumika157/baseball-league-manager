@@ -31,7 +31,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from itertools import combinations, islice
-from typing import Protocol, TypeVar
+from typing import Protocol
 
 from myapp.domain.exceptions import InvalidSchedule
 from myapp.domain.simulation.randomness import game_seed, make_random
@@ -40,7 +40,6 @@ MONDAY = 0
 FRIDAY = 4
 # NPB の1リーグの球団数。`ScheduleRules` の既定値はこの規模で1球団143試合になる
 NPB_TEAMS_PER_LEAGUE = 6
-_T = TypeVar("_T")
 _MAX_ATTEMPTS = 20
 
 
@@ -298,14 +297,14 @@ def _validated_leagues(
     return teams
 
 
-def _shuffle(items: list[_T], rng: RandomSource) -> None:
+def _shuffle[T](items: list[T], rng: RandomSource) -> None:
     """Fisher-Yates。使う乱数は random() だけ。"""
     for i in range(len(items) - 1, 0, -1):
         j = min(int(rng.random() * (i + 1)), i)
         items[i], items[j] = items[j], items[i]
 
 
-def _pick(options: Sequence[_T], rng: RandomSource) -> _T:
+def _pick[T](options: Sequence[T], rng: RandomSource) -> T:
     return options[min(int(rng.random() * len(options)), len(options) - 1)]
 
 

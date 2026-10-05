@@ -14,14 +14,11 @@ from __future__ import annotations
 from collections.abc import Mapping, MutableSet, Sequence
 from datetime import date
 from enum import Enum
-from typing import NamedTuple, TypeVar
+from typing import NamedTuple
 
 from ..simulation.randomness import GameRandom, weighted_index
 from ..value_objects import Handedness, Position
 from . import pools
-
-_T = TypeVar("_T")
-_K = TypeVar("_K")
 
 # MLBの40人ロースター構成をおおまかに参考にした比率。合計は 0.9875 で、端数は最大剰余法が配る。
 POSITION_RATIOS: dict[Position, float] = {
@@ -110,7 +107,7 @@ class AmateurCareer(NamedTuple):
     path: AmateurPath | None = None
 
 
-def pick(rng: GameRandom, items: Sequence[_T]) -> _T:
+def pick[T](rng: GameRandom, items: Sequence[T]) -> T:
     """一様に1つ選ぶ。`random()` を1回だけ使う。"""
     return items[min(len(items) - 1, int(rng.random() * len(items)))]
 
@@ -120,7 +117,7 @@ def randint(rng: GameRandom, low: int, high: int) -> int:
     return low + min(high - low, int(rng.random() * (high - low + 1)))
 
 
-def largest_remainder(total: int, ratios: Mapping[_K, float]) -> dict[_K, int]:
+def largest_remainder[K](total: int, ratios: Mapping[K, float]) -> dict[K, int]:
     """比率にしたがって total を整数配分する（最大剰余法）。"""
     raw = {key: total * ratio for key, ratio in ratios.items()}
     floored = {key: int(value) for key, value in raw.items()}

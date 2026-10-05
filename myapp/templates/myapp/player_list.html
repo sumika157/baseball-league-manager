@@ -17,6 +17,8 @@
   <p class="page-subtitle">
     {% if pos_mode == 'pitcher' %}投手{% else %}野手{% endif %}{% if ratings_table %}能力{% else %}成績{% endif %}{% if stats_year %}（{{ stats_year }}年）{% endif %}
     · {{ players|length }}名
+    {# 戦力分析は実データの画面だけ（ペナントの世界の球団には無い） #}
+    {% if not world %}· <a href="{% url 'team_analysis' team_id %}">戦力分析</a>{% endif %}
   </p>
 </div>
 
@@ -98,7 +100,8 @@
 {% endif %}
 
 {% if ratings_table %}{% include 'myapp/_ratings_table.html' with table=ratings_table %}{% else %}<div class="table-responsive mb-4">
-  <table class="table table-hover">
+  {# 列が多いので折り返さず横スクロールさせる（theme.css の roster-table） #}
+  <table class="table table-hover roster-table">
     <thead>
       {% comment %}
         見出しを押すと並べ替わる。現在の並びは current_sort / current_descending で
@@ -209,7 +212,8 @@
       </tr>
       {% empty %}
       <tr>
-        <td colspan="12">
+        {# 見出しの列数に揃える（共通5列＋野手13列／投手16列、担当者には編集列が1つ足される） #}
+        <td colspan="{% if pos_mode == 'pitcher' %}{% if can_edit_team %}22{% else %}21{% endif %}{% else %}{% if can_edit_team %}19{% else %}18{% endif %}{% endif %}">
           <div class="empty-state">
             {% if pos_mode == 'pitcher' %}投手{% else %}野手{% endif %}がまだ登録されていません。
           </div>

@@ -386,7 +386,9 @@ class TeamApplicationService:
         """球団の野手の成績の一覧。`year` を渡すとその年の成績（ペナントの「今季」）、省くと通算。"""
         rows, players, captain_ids = self._roster(team_id, year)
         batters = [p for p in players if not p.is_pitcher]
-        ordered, key, desc = domain_services.sort_batters(batters, sort, descending)
+        ordered, key, desc = domain_services.sort_batters(
+            batters, sort, descending, default_key=domain_services.DEFAULT_ROSTER_SORT
+        )
         context = self._league_context(rows[0].league_id if rows else None, year)
         today = self._today()
         return Listing(
@@ -404,7 +406,9 @@ class TeamApplicationService:
         """球団の投手の成績の一覧。`year` の意味は `list_batters` と同じ。"""
         rows, players, captain_ids = self._roster(team_id, year)
         pitchers = [p for p in players if p.is_pitcher]
-        ordered, key, desc = domain_services.sort_pitchers(pitchers, sort, descending)
+        ordered, key, desc = domain_services.sort_pitchers(
+            pitchers, sort, descending, default_key=domain_services.DEFAULT_ROSTER_SORT
+        )
         context = self._league_context(rows[0].league_id if rows else None, year)
         today = self._today()
         return Listing(
@@ -577,8 +581,8 @@ class TeamApplicationService:
             matchups=matchups,
         )
 
-    def get_league_titles(self, league_id: int, year: int | None = None, *, leaders: int = 10) -> LeagueTitles:
-        """リーグのタイトル一覧。シーズンで区切った部門別の上位者。
+    def get_league_titles(self, league_id: int, year: int | None = None, *, leaders: int = 3) -> LeagueTitles:
+        """リーグのタイトル一覧。シーズンで区切った部門別の上位者（既定は各部門3人まで）。
 
         ダッシュボードのランキングは通算成績だが、タイトルはシーズンごとに
         争われるので、こちらは対象シーズンの試合だけから成績を積み直す。
@@ -631,16 +635,19 @@ class TeamApplicationService:
         team_games: dict[int, int],
         leaders: int,
     ) -> list[TitleDepartment]:
-        """部門ごとの上位者。
+        """部門ごとの上位者。NPB のタイトルのうち、成績だけで決まる部門をすべて並べる。
 
-        率の部門（打率・防御率）は規定に達した選手だけを対象にする。
-        本数そのものが記録になる部門（本塁打・打点・奪三振）は規定を設けない。
+        率の部門（打率・出塁率・防御率）は規定に達した選手だけ、最高勝率は13勝以上の
+        投手だけを対象にする（条件はドメインの順位づけが持つ）。本数そのものが記録になる
+        部門（本塁打・打点・安打・盗塁・勝利・奪三振・セーブ・HP）は規定を設けない。
+        投票や選考で決まる賞（MVP・新人王など）は成績からは決まらないので出さない。
         """
 
         def to_entries(ranked: list[domain_services.RankedPlayer], formatter: ValueFormatter) -> list[RankingEntry]:
             return _to_ranking_entries(ranked, team_of, formatter)
 
         return [
+            # 打撃
             TitleDepartment(
                 key="average",
                 label="首位打者",
@@ -664,6 +671,26 @@ class TeamApplicationService:
                 ),
             ),
             TitleDepartment(
+                key="hits",
+                label="最多安打",
+                entries=to_entries(domain_services.leaders_by_hits(players, limit=leaders), _as_count),
+            ),
+            TitleDepartment(
+                key="stolen_bases",
+                label="盗塁王",
+                entries=to_entries(domain_services.leaders_by_stolen_bases(players, limit=leaders), _as_count),
+            ),
+            TitleDepartment(
+                key="obp",
+                label="最高出塁率",
+                note="規定打席以上",
+                entries=to_entries(
+                    domain_services.leaders_by_on_base_percentage(players, limit=leaders, team_games=team_games),
+                    _as_average,
+                ),
+            ),
+            # 投手
+            TitleDepartment(
                 key="era",
                 label="最優秀防御率",
                 note="規定投球回以上",
@@ -671,21 +698,41 @@ class TeamApplicationService:
                     domain_services.leaders_by_era(players, limit=leaders, team_games=team_games),
                     _as_rate,
                 ),
+                is_pitching=True,
             ),
             TitleDepartment(
                 key="wins",
                 label="最多勝利",
                 entries=to_entries(domain_services.leaders_by_wins(players, limit=leaders), _as_count),
+                is_pitching=True,
             ),
             TitleDepartment(
-                key="saves",
-                label="最多セーブ",
-                entries=to_entries(domain_services.leaders_by_saves(players, limit=leaders), _as_count),
+                key="winning_percentage",
+                label="最高勝率",
+                note=f"{domain_services.WINNING_PERCENTAGE_MINIMUM_WINS}勝以上",
+                entries=to_entries(
+                    domain_services.leaders_by_winning_percentage(players, limit=leaders),
+                    _as_average,
+                ),
+                is_pitching=True,
             ),
             TitleDepartment(
                 key="strikeouts",
                 label="最多奪三振",
                 entries=to_entries(domain_services.leaders_by_strikeouts(players, limit=leaders), _as_count),
+                is_pitching=True,
+            ),
+            TitleDepartment(
+                key="saves",
+                label="最多セーブ",
+                entries=to_entries(domain_services.leaders_by_saves(players, limit=leaders), _as_count),
+                is_pitching=True,
+            ),
+            TitleDepartment(
+                key="hold_points",
+                label="最優秀中継ぎ投手",
+                entries=to_entries(domain_services.leaders_by_hold_points(players, limit=leaders), _as_count),
+                is_pitching=True,
             ),
         ]
 
@@ -1010,8 +1057,8 @@ class TeamApplicationService:
         # 月ごとに束ねてから選んだ月だけを取り出す。行の側で日付を見て絞ると、
         # 表示用の DTO（played_on の型を問わない）に日付の解釈を持ち込むことになる
         by_month: dict[str, list[PlayerGameRow]] = {}
-        # 新しい試合から順に詰める（表示も新しい順。並べ替えを DTO 側でやり直さない）
-        for game in sorted(team_games, key=lambda g: (g.played_on, _saved_id(g.id)), reverse=True):
+        # 古い試合から順に詰める（表示も試合日の昇順。月の頭から追えるように。並べ替えを DTO 側でやり直さない）
+        for game in sorted(team_games, key=lambda g: (g.played_on, _saved_id(g.id))):
             batting = next((e for e in game.batting if e.player_id == player_id), None)
             pitching = next((e for e in game.pitching if e.player_id == player_id), None)
             if batting is None and pitching is None:

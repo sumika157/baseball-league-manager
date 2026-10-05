@@ -28,6 +28,7 @@ from myapp.infrastructure.queries import (
     DjangoPlayerFieldingQuery,
     DjangoPlayerSearchQuery,
     DjangoPlayerStatsQuery,
+    DjangoTeamAnalysisQuery,
     DjangoTeamListQuery,
     DjangoTeamPermissionQuery,
 )
@@ -170,6 +171,7 @@ class PennantIdsAreNotFoundFromRealUrlsTest(WorldCase):
             reverse("league_detail_by_year", args=[self.pennant_league.id, YEAR]),
             reverse("league_titles", args=[self.pennant_league.id]),
             reverse("league_stats", args=[self.pennant_league.id]),
+            reverse("team_analysis", args=[self.pennant_team.id]),
             reverse("game_detail", args=[self.pennant_game_id]),
             reverse("game_edit", args=[self.pennant_game_id]),
         ]
@@ -321,6 +323,19 @@ class PennantIdsAreNotFoundFromRealUrlsTest(WorldCase):
         self.assertEqual(
             [t.id for t in DjangoTeamRepository(self.scope).find_by_league_with_roster(self.league.id)], []
         )
+
+    def test_the_team_analysis_query_is_limited_to_its_scope(self):
+        """戦力分析の読み口も、範囲の外の球団の在籍と試合を読まない。"""
+        for scope, own, other in (
+            (REAL, self.team.id, self.pennant_team.id),
+            (self.scope, self.pennant_team.id, self.team.id),
+        ):
+            with self.subTest(scope=str(scope)):
+                query = DjangoTeamAnalysisQuery(scope)
+                self.assertEqual(query.list_years(own), [YEAR])
+                self.assertTrue(query.load(own, YEAR).roster)
+                self.assertEqual(query.list_years(other), [])
+                self.assertEqual(query.load(other, YEAR).roster, [])
 
     def test_the_fielding_query_is_limited_to_its_scope(self):
         line = orm_models.GameFieldingLine.objects.filter(game_id=self.pennant_game_id).first()

@@ -12,7 +12,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # --- 2段目: 本番の Python イメージ（requirements.txt だけ。開発用の依存は入れない） ---
-FROM python:3.10-slim
+FROM python:3.13-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -47,5 +47,6 @@ ENTRYPOINT ["/app/deploy/entrypoint.sh"]
 # 同期ワーカー2本・タイムアウト60秒（1GB の VM でメモリに余裕を残すため）。
 # SQLite は書き込みが直列なので、増やしても書き込みは速くならない。
 # アクセスログは標準出力へ（docker compose logs で読める）。制御用ソケット（gunicorn 26 の既定）は
-# ホームの無い利用者では作れずエラーになり、使わないので切る
-CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "2", "--timeout", "60", "--access-logfile", "-", "--no-control-socket"]
+# ホームの無い利用者では作れずエラーになり、使わないので切る。
+# アクセスログの先頭は、既定の %(h)s（接続元＝cloudflared の IP）ではなく CF-Connecting-IP（利用者の IP）にする
+CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "2", "--timeout", "60", "--access-logfile", "-", "--access-logformat", "%({cf-connecting-ip}i)s %(l)s %(u)s %(t)s \"%(r)s\" %(s)s %(b)s \"%(f)s\" \"%(a)s\"", "--no-control-socket"]

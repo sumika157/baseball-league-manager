@@ -58,6 +58,51 @@ class PlayerListViewTest(BaseCase):
         self.assertEqual(self.client.get(reverse("player_list", args=[9999])).status_code, 404)
 
 
+class PlayerListColumnsTest(BaseCase):
+    """選手一覧の表の各行が、見出しと同じ列数にまたがること。
+
+    空の行の colspan が 12 のまま残り、列を足した表の途中で切れていた（#131）。
+    列数は野手／投手と編集列の有無で変わるので、4通りすべてで突き合わせる。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.url = reverse("player_list", args=[self.team.id])
+
+    def _columns(self, pos) -> tuple[int, list[int]]:
+        """選手の表の (見出しの列数, 本体の各行がまたがる列数) を返す。"""
+        html = self.client.get(f"{self.url}?pos={pos}").content.decode()
+        table = re.search(r'<table class="[^"]*roster-table.*?</table>', html, flags=re.DOTALL)
+        assert table is not None
+        head, body = table.group(0).split("</thead>")
+        spans = []
+        for row in re.findall(r"<tr.*?</tr>", body, flags=re.DOTALL):
+            cells = re.findall(r'<td(?:[^>]*colspan="(\d+)")?[^>]*>', row)
+            spans.append(sum(int(span or 1) for span in cells))
+        return len(re.findall(r"<th[ >]", head)), spans
+
+    def _assert_aligned(self):
+        for pos in ("batter", "pitcher"):
+            with self.subTest(pos=pos):
+                header_columns, row_spans = self._columns(pos)
+                self.assertTrue(row_spans)
+                self.assertEqual(set(row_spans), {header_columns})
+
+    def test_empty_row_spans_all_columns_for_visitors(self):
+        self._assert_aligned()
+
+    def test_empty_row_spans_all_columns_for_managers(self):
+        """担当者には編集列が足されるので、空の行もその分だけ広くまたがる。"""
+        login_as_manager(self.client, self.team)
+        self._assert_aligned()
+
+    def test_player_rows_match_the_header(self):
+        self.service.register_player(self.team.id, "山田", 10, "内野手")
+        self.service.register_player(self.team.id, "佐藤", 18, "投手")
+        login_as_manager(self.client, self.team)
+        self._assert_aligned()
+
+
 class PlayerEditViewTest(BaseCase):
     def setUp(self):
         super().setUp()
@@ -184,11 +229,12 @@ class PlayerDetailViewTest(BaseCase):
         self.assertEqual(profile.detail.at_bats, 10)
         self.assertAlmostEqual(profile.detail.batting_average, 0.3)
 
-    def test_lists_each_game_newest_first(self):
+    def test_lists_each_game_oldest_first(self):
+        """1か月ぶんの表なので、月の頭から追えるように試合日の昇順に並べる。"""
         profile = self.service.get_player_profile(self.team.id, self.player.id)
 
         self.assertEqual(profile.appearances, 2)
-        self.assertEqual([r.played_on.day for r in profile.games], [2, 1])
+        self.assertEqual([r.played_on.day for r in profile.games], [1, 2])
 
     def test_batter_rows_have_no_decision(self):
         """個人ページはその選手の働きを見る場所。野手にチームの勝敗は出さない。"""

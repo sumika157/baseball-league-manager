@@ -1,5 +1,5 @@
 [tool.ruff]
-target-version = "py310"
+target-version = "py313"
 line-length = 119
 exclude = ["myapp/migrations"]
 
@@ -12,7 +12,7 @@ exclude = ["myapp/migrations"]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RET", "PIE", "PERF", "FURB", "LOG", "T20"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.13"
 plugins = ["mypy_django_plugin.main"]
 ignore_missing_imports = true
 exclude = ["myapp/migrations"]
@@ -33,7 +33,7 @@ django_settings_module = "config.settings"
 # この節がある限り settings.json の python.analysis.* は無視される。
 [tool.pyright]
 typeCheckingMode = "standard"
-pythonVersion = "3.10"
+pythonVersion = "3.13"
 # exclude を書くと pyright の既定の除外が置き換わるので、node_modules 等も明示する
 exclude = ["myapp/migrations", "**/node_modules", "**/__pycache__", ".git"]
 

@@ -35,7 +35,7 @@
 - application は domain のインターフェース（`domain/repositories.py`）越しに永続化を使う。`infrastructure/orm_models.py` を直接 import しない。
 - presentation（views）は application 経由で操作する。ORM モデルやリポジトリ実装を直接触らない。
 - **更新と参照を分ける**: 更新はリポジトリ経由で集約単位（`Team` / `Game`）に読み書きする。一覧表示などの参照は `infrastructure/queries.py` から直接 DTO を作る（集約を組み立てない）。参照クエリのインターフェースは `application/queries.py`（戻り値が DTO のため domain には置けない）。
-- **依存の組み立ては `presentation/views.py` の `build_*()` 関数だけ。** 実データの `build_service()`（`TeamApplicationService`）・`build_recording_service()`（スコアブックの保存を担う `GameRecordingService`）と、ペナントの `build_pennant_world_service()`・`build_pennant_season_service(world_id)`（世界の範囲に固定して組み立てる）がある。どれも依存を全部渡す（`tests/integration/test_wiring.py` が検査する）。管理コマンドもここから取る。呼ぶ側ごとに一部の依存だけを渡さない。渡し忘れが「開く画面によって落ちるサービス」になる（管理画面のテンプレートタグで実際に起きた）。テストも `tests/helpers.py` 経由でここを呼ぶ。
+- **依存の組み立ては `presentation/views.py` の `build_*()` 関数だけ。** 実データの `build_service()`（`TeamApplicationService`）・`build_recording_service()`（スコアブックの保存を担う `GameRecordingService`）・`build_team_analysis_service()`（戦力分析の `TeamAnalysisService`）と、ペナントの `build_pennant_world_service()`・`build_pennant_season_service(world_id)`（世界の範囲に固定して組み立てる）がある。サービスを増やすときは組み立て口もここに足す。どれも依存を全部渡す（`tests/integration/test_wiring.py` が検査する）。管理コマンドもここから取る。呼ぶ側ごとに一部の依存だけを渡さない。渡し忘れが「開く画面によって落ちるサービス」になる（管理画面のテンプレートタグで実際に起きた）。テストも `tests/helpers.py` 経由でここを呼ぶ。
 - **層をまたぐ受け渡しに素の `dict` を使わない。** application が presentation に返す形は `application/dto.py` の dataclass にする。文字列キーの dict は綴りを間違えても静的検査が黙る。試合詳細の選手の索引（`PlayerIndexEntry`）は DTO に寄せた。編集画面の材料（`GameEditData`）も DTO に寄せた。集約は持たず、出場時点の読み戻しのような集約からの取り出しは `application/game_edit.py` が担い、presentation は DTO を JSON に写すだけにしてある（DTO に集約を包ませない）。
 - **`TeamApplicationService` は既に約50メソッド・1,500行**あり、チーム・選手・試合・リーグ・管理画面の概況を1クラスで抱えている。ここへ足す前に、対象ごとの別サービスに置けないか考える。分ける判断は選択肢としてユーザーに提示する。
 
@@ -77,6 +77,13 @@ ORM に直接 `bulk_create` 等で書き込むコード（データ投入コマ�
 - **テストは層ごとのディレクトリに置く**: 業務ルールは `tests/domain/`（DB 不要・Django 非依存）、画面の動作・リポジトリの往復・フォーム検証は `tests/integration/`、実ブラウザでの確認だけ `tests/e2e/`。
 - **バグを修正したら、同じコミットに再発防止テストを添える**（前例: テンプレートのコメント漏れを検査する `tests/integration/test_templates.py`）。どの層のバグかに応じて上記の置き場所に従う。
 - コミット前に `ruff check .`・`ruff format --check .`・`mypy .` を通す（いずれもコンテナ内。整形漏れは `ruff format .` で直す。WSL からは `make lint` が同じ3つを実行する）。ルールの設定は `pyproject.toml` が唯一の出典。**`# noqa` で黙らせる前に指摘のとおり直す**（それでも黙らせるなら理由をコメントに残す）。
+- **CI（`.github/workflows/ci.yml`）が、PR（宛先は問わない）と main・`epic/` への push で lint・型検査・React のビルド・フルテストを流す。**
+  手元と CI の分担は次のとおり（CI は1回約4分半で、手元のフルテスト約1分半より遅い。直しては確かめる繰り返しは手元で行う）。
+  1. 実装中とセルフレビューの各周の終わりは、lint と、触った範囲のテスト（層・画面）を手元で流す。
+  2. push の前に1回、手元でフルテストを流す。
+  3. PR を作ったら CI の結果を待ち、**通ったのを確かめてからマージを頼む**。落ちたら直して push し直す。
+  4. 並行した PR を続けてマージすると、単独では通っても組み合わせで壊れることがある（#32 と #37 で実際に起きた）。
+     マージの後は、**main・epic への push で走った CI の結果を確かめる**（手で先端のフルテストを流す代わり）。落ちていたら次の作業より先に直す。
 
 ## UI・設計方針
 
@@ -121,7 +128,7 @@ ORM に直接 `bulk_create` 等で書き込むコード（データ投入コマ�
 - **タスクごとにブランチを切る。main に直接コミットしない。** 命名は `feature/` `fix/` `refactor/` `docs/` ＋ 英語の kebab-case（例: `feature/player-nationality`）。
 - **機能ごとにコミットする。** 複数の機能や無関係な修正を1つのコミットに混ぜない。逆に、1つの機能（実装＋テスト＋ドキュメント更新）は1コミットにまとめる。
 - コミットメッセージは既存の履歴にならい日本語で書く。
-- 完了したら**3周のセルフレビュー（下記）を済ませてから** `git push -u origin <ブランチ>` し、**`gh pr create` で PR を作って URL を提示して終わる**。タイトルと本文は日本語。本文はファイルに書いて `--body-file` で渡す（引用符と改行で壊れない）。**マージはユーザーが GitHub 上で行う。こちらでマージしない。** 手順は `open-pr` スキル。
+- 完了したら**3周のセルフレビュー（下記）を済ませてから** `git push -u origin <ブランチ>` し、**`gh pr create` で PR を作り、CI の結果を確かめてから URL を提示して終わる**（落ちていたら直してから。CI は「テストと品質のゲート」）。タイトルと本文は日本語。本文はファイルに書いて `--body-file` で渡す（引用符と改行で壊れない）。**マージはユーザーが GitHub 上で行う。こちらでマージしない。** 手順は `open-pr` スキル。
 - `gh` は **Windows 側だけ**にある（winget の user スコープ。`sumika157` で認証済み）。**WSL には無い**ので `wsl -e` 経由では呼べない。既に開いているシェルの PATH には載っていないことがあるので、その場合は
   `C:\Users\sumik\AppData\Local\Microsoft\WinGet\Packages\GitHub.cli_Microsoft.Winget.Source_8wekyb3d8bbwe\bin\gh.exe` を直接叩く。
 - **`gh pr create` の前に `gh pr list --head <ブランチ> --state all` を見る。** push だけして URL を渡した時点で、
@@ -148,7 +155,8 @@ push の前に、**「レビュー → 改善」を3周繰り返す**。1周は�
 
 - 直しは修正コミットを積まず、その機能のコミットに `git commit --amend` で含める（push 前なので書き換えてよい。
   「1つの機能は1コミット」を崩さないため）。
-- 周の途中でコードを直したら、その周の終わりに `ruff check`・`ruff format --check`・`mypy`・テストを通し直す。
+- 周の途中でコードを直したら、その周の終わりに `ruff check`・`ruff format --check`・`mypy` と、直した範囲のテストを通し直す。
+  フルテストは最後の周の後、push の前に1回流す（「テストと品質のゲート」の手元と CI の分担）。
 - **終わる条件は「重要な指摘が残っていない」こと**（指摘ゼロまでは求めない）。重要＝バグ・データ消失・
   このファイルの規則違反・頼まれたことの未達。言い回しや好みの範囲の指摘は、直さずに残してよい。
   3周目で重要な指摘を直したときだけ、直した箇所をもう1周確かめる（直しっぱなしで出さない）。

@@ -9,6 +9,7 @@
 - records: 試合からの集計（通算・順位表・対戦成績・年度別成績・月別成績）
 - decisions: 勝敗・セーブ・ホールドの導出（日本プロ野球の規則）
 - scoring: 打席の記録から1試合ぶんの成績を導く（打撃・投球・守備・失点・残塁）と、試合の組み立て（assemble_game）
+- roster_analysis: 戦力分析（デプス表の区分・主な守備位置・年齢の帯）の判定規則
 """
 
 from .decisions import (
@@ -22,14 +23,20 @@ from .decisions import (
 from .rankings import (
     QUALIFYING_INNINGS_PER_GAME,
     QUALIFYING_PLATE_APPEARANCES_PER_GAME,
+    WINNING_PERCENTAGE_MINIMUM_WINS,
     RankedPlayer,
     leaders_by_batting_average,
     leaders_by_era,
+    leaders_by_hits,
+    leaders_by_hold_points,
     leaders_by_home_runs,
+    leaders_by_on_base_percentage,
     leaders_by_ops,
     leaders_by_runs_batted_in,
     leaders_by_saves,
+    leaders_by_stolen_bases,
     leaders_by_strikeouts,
+    leaders_by_winning_percentage,
     leaders_by_wins,
     qualified_batters,
     qualified_pitchers,
@@ -58,6 +65,23 @@ from .records import (
     team_record,
     yearly_splits,
 )
+from .roster_analysis import (
+    MAX_AGE_BAND,
+    MIN_AGE_BAND,
+    AgeBandCount,
+    FielderGroup,
+    PitcherRole,
+    age_band,
+    age_distribution,
+    average_age,
+    depth_order,
+    hand_columns,
+    hand_label,
+    hand_of,
+    primary_position,
+    usage_map_positions,
+    usage_visible_count,
+)
 from .scoring import (
     FieldingCredits,
     RunScored,
@@ -85,6 +109,7 @@ from .sorting import (
     DEFAULT_BATTER_SORT,
     DEFAULT_PITCHER_SORT,
     DEFAULT_RATING_SORT,
+    DEFAULT_ROSTER_SORT,
     PITCHER_RATING_SORT_KEYS,
     PITCHER_SORT_KEYS,
     RatedBatter,
@@ -99,14 +124,20 @@ __all__ = [
     # rankings
     "QUALIFYING_INNINGS_PER_GAME",
     "QUALIFYING_PLATE_APPEARANCES_PER_GAME",
+    "WINNING_PERCENTAGE_MINIMUM_WINS",
     "RankedPlayer",
     "leaders_by_batting_average",
     "leaders_by_era",
+    "leaders_by_hits",
+    "leaders_by_hold_points",
     "leaders_by_home_runs",
+    "leaders_by_on_base_percentage",
     "leaders_by_ops",
     "leaders_by_runs_batted_in",
     "leaders_by_saves",
+    "leaders_by_stolen_bases",
     "leaders_by_strikeouts",
+    "leaders_by_winning_percentage",
     "leaders_by_wins",
     "qualified_batters",
     "qualified_pitchers",
@@ -118,6 +149,7 @@ __all__ = [
     "DEFAULT_PITCHER_SORT",
     "BATTER_RATING_SORT_KEYS",
     "DEFAULT_RATING_SORT",
+    "DEFAULT_ROSTER_SORT",
     "PITCHER_RATING_SORT_KEYS",
     "PITCHER_SORT_KEYS",
     "RatedBatter",
@@ -174,4 +206,20 @@ __all__ = [
     "runs_scored_in",
     "assemble_game",
     "team_of_players",
+    # roster_analysis
+    "MAX_AGE_BAND",
+    "MIN_AGE_BAND",
+    "AgeBandCount",
+    "FielderGroup",
+    "PitcherRole",
+    "age_band",
+    "age_distribution",
+    "average_age",
+    "depth_order",
+    "hand_columns",
+    "hand_label",
+    "hand_of",
+    "primary_position",
+    "usage_map_positions",
+    "usage_visible_count",
 ]
