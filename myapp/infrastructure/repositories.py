@@ -16,7 +16,7 @@ from datetime import date
 from typing import Any
 
 from django.db import models, transaction
-from django.db.models import Count, Prefetch, Q, QuerySet, Sum
+from django.db.models import Count, Min, Prefetch, Q, QuerySet, Sum
 
 from ..domain.entities import (
     Captaincy,
@@ -1093,6 +1093,10 @@ class DjangoRatingsRepository:
         rows = ratings_in(self._scope).filter(player_id=player_id).order_by("year")
         return [self._to_domain(row) for row in rows]
 
+    def find_by_players(self, player_ids: Sequence[int], year: int) -> list[PlayerRatings]:
+        rows = ratings_in(self._scope).filter(player_id__in=list(player_ids), year=year).order_by("player_id")
+        return [self._to_domain(row) for row in rows]
+
     @staticmethod
     def _to_row(item: PlayerRatings) -> orm_models.PennantPlayerRatings:
         values = {name: getattr(item.ratings, name) for name in _RATING_COLUMNS[type(item.ratings)]}
@@ -1151,6 +1155,9 @@ class DjangoFixtureRepository:
             .values_list("date", "home_team_id", "visitor_team_id")
         )
         return [Fixture(date=day, home_team_id=home, visitor_team_id=visitor) for day, home, visitor in rows]
+
+    def first_date(self) -> date | None:
+        return fixtures_in(self._scope).aggregate(first=Min("date"))["first"]
 
     @transaction.atomic
     def remove(self, fixtures: Sequence[Fixture]) -> None:

@@ -24,6 +24,7 @@ from ..domain.pennant.club_plan import (
     resolve_club,
     strictest_game_limit,
 )
+from ..domain.pennant.season import ratings_year
 from ..domain.repositories import ClubPlanRepository, FixtureRepository, RatingsRepository, WorldRepository
 from ..domain.simulation.manager import ClubRoster, ForeignQuota, choose_lineup, plan_pitching_staff
 from .dto import ClubLineupRow, ClubPlanNotice, ClubPlanView, ClubPlayerRow
@@ -135,14 +136,12 @@ class ClubManagementService:
         return _Situation(team.team_id, team.name, year, pool, limits)
 
     def _current_year(self) -> int:
-        """次に試合をする年（能力を引く年）。日程が残っていればその最初の日、無ければ最後に試合をした年。"""
-        pending = self._fixtures.find_all()
-        if pending:
-            return pending[0].date.year
-        last_played = self._context_query.last_played_on()
-        if last_played is not None:
-            return last_played.year
-        return self._worlds.find_by_id(self._world_id).start_year
+        """次に試合をする年（能力を引く年）。規則は domain の `ratings_year`（表示・日を進める処理と共通）。"""
+        return ratings_year(
+            next_game_on=self._fixtures.first_date(),
+            last_played_on=self._context_query.last_played_on(),
+            start_year=self._worlds.find_by_id(self._world_id).start_year,
+        )
 
 
 class _Situation:

@@ -22,9 +22,18 @@ from django.views.decorators.http import require_GET
 from django.views.generic import CreateView
 
 from ..application.club_management import ClubManagementService
-from ..application.dto import GameEditData, GameEditPlateAppearance, WorldContext
+from ..application.dto import (
+    GameEditData,
+    GameEditPlateAppearance,
+    Listing,
+    PlayerRatingsCard,
+    RatingsTable,
+    TeamMonthlyRow,
+    WorldContext,
+)
 from ..application.game_recording import GameRecordingService
 from ..application.pennant_home import PennantHomeService
+from ..application.pennant_ratings import PennantRatingsViewService
 from ..application.pennant_season import PennantSeasonService
 from ..application.pennant_view import PennantWorldViewService
 from ..application.pennant_world import PennantWorldService, WorldRepositories
@@ -83,6 +92,8 @@ from .forms import (
 
 BATTER_MODE = "batter"
 PITCHER_MODE = "pitcher"
+# 球団の画面の「成績｜能力」の切り替え（?view=ratings）。能力はペナントの世界だけ
+RATINGS_VIEW = "ratings"
 
 
 def _requires_login(request):
@@ -173,6 +184,24 @@ def build_pennant_world_view() -> PennantWorldViewService:
     return PennantWorldViewService(
         summaries=DjangoWorldSummaryQuery(),
         standings_for=build_world_view_service,
+    )
+
+
+def build_pennant_ratings_service(world_id: int) -> PennantRatingsViewService:
+    """ペナントの世界ひとつの、能力の表示（選手ページのカード・球団の能力の表）を作るサービスを組み立てる。
+
+    球団と能力は**渡された世界の範囲で**読む。年齢の基準日は `build_world_view_service` と同じ世界の「今日」。
+    世界の id が正しくなければ InvalidWorld。
+    """
+    scope = WorldScope.pennant(world_id)
+    return PennantRatingsViewService(
+        world_id=world_id,
+        worlds=DjangoWorldRepository(),
+        fixtures=DjangoFixtureRepository(scope),
+        context_query=DjangoSimulationContextQuery(scope),
+        teams=DjangoTeamRepository(scope),
+        ratings=DjangoRatingsRepository(scope),
+        today=_world_clock(world_id, DjangoSimulationContextQuery(scope)),
     )
 
 
@@ -584,11 +613,24 @@ def player_list(request, team_id, world_id=None):
 
     pos_mode = PITCHER_MODE if request.GET.get("pos") == PITCHER_MODE else BATTER_MODE
     sort, descending = _sort_params(request)
-    listing = (
-        service.list_pitchers(team_id, sort=sort, descending=descending)
-        if pos_mode == PITCHER_MODE
-        else service.list_batters(team_id, sort=sort, descending=descending)
-    )
+    ratings_table: RatingsTable | None = None
+    listing: Listing | None = None
+    if world is not None and request.GET.get("view") == RATINGS_VIEW:
+        # 能力の表。並べ替えのキーは成績の表と別（不正なキーは domain が背番号順に落とす）
+        ratings_table = build_pennant_ratings_service(world.world_id).get_table(
+            team_id, pitchers=pos_mode == PITCHER_MODE, sort=sort, descending=descending
+        )
+        rows, current_sort, current_descending = ratings_table.rows, ratings_table.sort, ratings_table.descending
+        months: list[TeamMonthlyRow] = []
+    else:
+        listing = (
+            service.list_pitchers(team_id, sort=sort, descending=descending)
+            if pos_mode == PITCHER_MODE
+            else service.list_batters(team_id, sort=sort, descending=descending)
+        )
+        rows, current_sort, current_descending = listing.rows, listing.sort, listing.descending
+        # 通算値では見えない調子の波を、月ごとに区切って出す
+        months = service.list_team_monthly_splits(team_id)
 
     return _render(
         request,
@@ -598,14 +640,14 @@ def player_list(request, team_id, world_id=None):
             "team_name": team_name,
             "totals": service.get_team_totals(team_id),
             "listing": listing,
-            "players": listing.rows,
+            "ratings_table": ratings_table,
+            "players": rows,
             "pos_mode": pos_mode,
             "form": form,
             "positions": Position.labels(),
-            "current_sort": listing.sort,
-            "current_descending": listing.descending,
-            # 通算値では見えない調子の波を、月ごとに区切って出す
-            "months": service.list_team_monthly_splits(team_id),
+            "current_sort": current_sort,
+            "current_descending": current_descending,
+            "months": months,
             # このチームの担当者（または管理ユーザー）だけが登録・編集の導線を見える
             "can_edit_team": world is None and build_permission_query().can_manage(request.user, team_id),
         },
@@ -951,6 +993,13 @@ def game_detail(request, game_id, world_id=None):
     return _render(request, "myapp/game_detail.html", {"detail": detail, "can_edit": can_edit}, world)
 
 
+def _ratings_card(world: WorldContext | None, player_id: int) -> PlayerRatingsCard | None:
+    """選手ページの能力のカード。能力はペナントの世界の選手だけで、実データの選手には出さない。"""
+    if world is None:
+        return None
+    return build_pennant_ratings_service(world.world_id).get_card(player_id)
+
+
 def player_detail(request, team_id, player_id, world_id=None):
     """選手の個人ページ。通算・年度別・月別の成績と、選んだ月の試合ごとの記録。
 
@@ -969,6 +1018,7 @@ def player_detail(request, team_id, player_id, world_id=None):
         {
             "profile": profile,
             "player": profile.detail,
+            "ratings_card": _ratings_card(world, player_id),
             "can_edit_team": world is None and build_permission_query().can_manage(request.user, team_id),
         },
         world,

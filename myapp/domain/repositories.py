@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import date
 from typing import Protocol, runtime_checkable
 
 from .entities import Game, League, Team
@@ -154,6 +155,10 @@ class FixtureRepository(Protocol):
         """範囲の未消化の対戦を、日付の順（同じ日はホームの id の順）に。"""
         ...
 
+    def first_date(self) -> date | None:
+        """範囲の未消化の対戦のうち最初の日。無ければ None。日程を全件読まずに「次の試合の年」を知るため。"""
+        ...
+
     def remove(self, fixtures: Sequence[Fixture]) -> None:
         """消化した対戦を消す。
 
@@ -184,6 +189,14 @@ class RatingsRepository(Protocol):
 
     def find_by_player(self, player_id: int) -> list[PlayerRatings]:
         """ひとりの選手の能力を、年の順に。範囲の外の選手や能力の無い選手は空。"""
+        ...
+
+    def find_by_players(self, player_ids: Sequence[int], year: int) -> list[PlayerRatings]:
+        """指定した選手たちの、その年の能力。選手の id の順。範囲の外の選手や、その年の能力が無い選手は含まれない。
+
+        球団の表のように、選手の数が決まっている画面が、範囲の全選手を読まずに済ませるため。
+        選手ごとにクエリを投げず、1回でまとめて読む。
+        """
         ...
 
 

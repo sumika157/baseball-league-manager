@@ -15,7 +15,7 @@
 <div class="page-head">
   <h1 class="page-title">{{ team_name }}</h1>
   <p class="page-subtitle">
-    {% if pos_mode == 'pitcher' %}投手成績{% else %}野手成績{% endif %}
+    {% if pos_mode == 'pitcher' %}投手{% else %}野手{% endif %}{% if ratings_table %}能力{% else %}成績{% endif %}
     · {{ players|length }}名
   </p>
 </div>
@@ -82,11 +82,17 @@
 
 {# 野手／投手の切替。Bootstrap の nav-pills よりセグメント風の方が締まる #}
 <div class="segmented">
-  <a class="segmented-item {% if pos_mode == 'batter' %}is-active{% endif %}" href="?pos=batter">野手</a>
-  <a class="segmented-item {% if pos_mode == 'pitcher' %}is-active{% endif %}" href="?pos=pitcher">投手</a>
+  <a class="segmented-item {% if pos_mode == 'batter' %}is-active{% endif %}" href="{% if world %}{% query_with pos='batter' sort='' dir='' %}{% else %}?pos=batter{% endif %}">野手</a>
+  <a class="segmented-item {% if pos_mode == 'pitcher' %}is-active{% endif %}" href="{% if world %}{% query_with pos='pitcher' sort='' dir='' %}{% else %}?pos=pitcher{% endif %}">投手</a>
+</div>{% if world %}
+{# ペナントの世界だけ。成績の表と能力の表を切り替える（並べ替えのキーが違うので、切り替えたら並びは既定に戻す） #}
+<div class="segmented ms-2">
+  <a class="segmented-item {% if not ratings_table %}is-active{% endif %}" href="{% query_with view='' sort='' dir='' %}">成績</a>
+  <a class="segmented-item {% if ratings_table %}is-active{% endif %}" href="{% query_with view='ratings' sort='' dir='' %}">能力</a>
 </div>
+{% endif %}
 
-<div class="table-responsive mb-4">
+{% if ratings_table %}{% include 'myapp/_ratings_table.html' with table=ratings_table %}{% else %}<div class="table-responsive mb-4">
   <table class="table table-hover">
     <thead>
       {% comment %}
@@ -207,7 +213,7 @@
       {% endfor %}
     </tbody>
   </table>
-</div>
+</div>{% endif %}
 
 {% comment %}
 チームの月別成績。個人の月別成績と対になる、チーム単位の推移。

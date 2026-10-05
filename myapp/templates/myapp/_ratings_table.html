@@ -1,0 +1,56 @@
+{% load sorting scoped %}
+{% comment %}
+球団の能力の表（ペナントの世界だけ）。列の項目名と並べ替えのキーは table.columns が持つ（domain が出典）。
+能力が無い選手は列ごとに「—」を出す。
+{% endcomment %}
+<div class="table-responsive mb-2">
+  <table class="table table-hover">
+    <thead>
+      <tr>
+        {% sort_header 'number' '背番号' 'start' False %}
+        {% sort_header 'name' '選手名' 'start' False %}
+        <th class="text-end">年齢</th>
+        {% for column in table.columns %}{% sort_header column.key column.label 'end' %}{% endfor %}
+        {% if table.is_pitcher %}
+          {% sort_header 'era' '防御率' 'end' False %}
+          {% sort_header 'innings' '投球回' 'end' %}
+        {% else %}
+          {% sort_header 'average' '打率' 'end' %}
+          {% sort_header 'ops' 'OPS' 'end' %}
+        {% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in table.rows %}
+      <tr>
+        <td><span class="jersey-number">{{ row.number }}</span></td>
+        <td>
+          <a href="{% scoped_url 'player_detail' team_id row.id %}" class="player-name">{{ row.name }}</a>
+          <span class="badge bg-secondary ms-1">{{ row.position }}</span>
+          {% if row.is_foreign_player %}<span class="badge bg-info text-dark ms-1">外国人</span>{% endif %}
+        </td>
+        <td class="text-end stat-muted">{{ row.age|default:'—' }}</td>
+        {% for cell in row.cells %}
+          <td class="text-end">{% include 'myapp/_rating_grade.html' with rating=cell %}</td>
+        {% empty %}
+          {% for column in table.columns %}<td class="text-end stat-muted">—</td>{% endfor %}
+        {% endfor %}
+        {% if table.is_pitcher %}
+          <td class="text-end stat-key">{{ row.earned_run_average|floatformat:2 }}</td>
+          <td class="text-end stat-muted">{{ row.innings_pitched }}</td>
+        {% else %}
+          <td class="text-end stat-key">{{ row.batting_average|floatformat:3 }}</td>
+          <td class="text-end">{{ row.ops|floatformat:3 }}</td>
+        {% endif %}
+      </tr>
+      {% empty %}
+      <tr>
+        <td colspan="{{ table.columns|length|add:5 }}">{# 背番号・選手名・年齢・打率（防御率）・OPS（投球回）の5列＋能力の列 #}
+          <div class="empty-state">{% if table.is_pitcher %}投手{% else %}野手{% endif %}がまだ登録されていません。</div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if table.year %}<p class="stat-muted mb-4" style="font-size: 0.8125rem;">能力は{{ table.year }}年度のものです。区分と数値の見方は選手ページの「能力の見方」にあります。</p>{% else %}<div class="mb-4"></div>{% endif %}

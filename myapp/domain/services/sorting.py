@@ -8,10 +8,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Collection
+from dataclasses import dataclass
 from typing import Any
 
 from ..entities import Player
+from ..simulation.ratings import BatterRatings, PitcherRatings
 
 # 並べ替えキー → (選手から比較する値を取り出す関数, 既定の向き)。
 # 取り出す値は指標ごとに数値・文字列が混ざるため Any にしてある。
@@ -113,3 +115,93 @@ def sort_pitchers(
         return ordered, key, descending
 
     return _ordered(players, getter, descending), key, descending
+
+
+# --- 能力の表（ペナントの球団の画面） ---
+#
+# 成績の表と同じ形（キー → (取り出す関数, 既定の向き)）。能力は大きいほど良いので大きい順が既定。
+# 既定の並びは背番号順（成績の表の既定は OPS・防御率だが、能力の表は選手を探すのが主な使い方）。
+
+
+@dataclass(frozen=True)
+class RatedBatter:
+    """能力の表の1行の野手。能力が無い選手（まだ能力を持たない）は ratings が None。"""
+
+    player: Player
+    ratings: BatterRatings | None
+
+
+@dataclass(frozen=True)
+class RatedPitcher:
+    """能力の表の1行の投手。能力が無い選手は ratings が None。"""
+
+    player: Player
+    ratings: PitcherRatings | None
+
+
+def _rating_getter(name: str) -> Callable[[Any], int]:
+    return lambda rated: getattr(rated.ratings, name)
+
+
+# 能力の項目名は `BatterRatings.LABELS` / `PitcherRatings.LABELS` が出典なので、そこから作る
+BATTER_RATING_SORT_KEYS: dict[str, tuple[Callable[[RatedBatter], Any], bool]] = {
+    "number": (lambda r: r.player.number.value, False),
+    "name": (lambda r: r.player.name, False),
+    **{name: (_rating_getter(name), True) for name in BatterRatings.LABELS},
+    "average": (lambda r: r.player.batting.batting_average, True),
+    "ops": (lambda r: r.player.batting.ops, True),
+}
+
+PITCHER_RATING_SORT_KEYS: dict[str, tuple[Callable[[RatedPitcher], Any], bool]] = {
+    "number": (lambda r: r.player.number.value, False),
+    "name": (lambda r: r.player.name, False),
+    **{name: (_rating_getter(name), True) for name in PitcherRatings.LABELS},
+    "era": (lambda r: r.player.pitching.earned_run_average, False),
+    "innings": (lambda r: r.player.pitching.innings.outs, True),
+}
+
+DEFAULT_RATING_SORT = "number"
+
+
+def _sort_rated(
+    items: list[Any],
+    keys: dict[str, tuple[Callable[[Any], Any], bool]],
+    rating_names: Collection[str],
+    key: str | None,
+    descending: bool | None,
+) -> tuple[list[Any], str, bool]:
+    """能力の表を並べ替える。不正なキーは背番号順に落とす。
+
+    能力で並べるとき、能力の無い選手は向きによらず末尾に回す（0 とみなして上位や下位に寄せない）。
+    未登板の投手の防御率も同じ理由で末尾。同値は背番号の小さい順で安定させる。
+    """
+    key, descending = _resolve(keys, key, descending, DEFAULT_RATING_SORT)
+    getter = keys[key][0]
+    ordered = sorted(items, key=lambda item: item.player.number.value)
+
+    def placeable(item: Any) -> bool:
+        if key in rating_names:
+            return item.ratings is not None
+        if key in _RATE_PITCHER_KEYS:
+            return item.player.pitching.innings.outs > 0
+        return True
+
+    placed = [item for item in ordered if placeable(item)]
+    rest = [item for item in ordered if not placeable(item)]
+    # reverse=True でも、同値の並び（背番号順）は崩れない
+    placed.sort(key=getter, reverse=descending)
+    return placed + rest, key, descending
+
+
+def sort_rated_batters(
+    items: list[RatedBatter], key: str | None = None, descending: bool | None = None
+) -> tuple[list[RatedBatter], str, bool]:
+    """野手の能力の表を並べ替える。key が未指定・不正なら背番号の小さい順。"""
+    return _sort_rated(items, BATTER_RATING_SORT_KEYS, BatterRatings.LABELS, key, descending)
+
+
+def sort_rated_pitchers(
+    items: list[RatedPitcher], key: str | None = None, descending: bool | None = None
+) -> tuple[list[RatedPitcher], str, bool]:
+    """投手の能力の表を並べ替える。key が未指定・不正なら背番号の小さい順。"""
+    return _sort_rated(items, PITCHER_RATING_SORT_KEYS, PitcherRatings.LABELS, key, descending)

@@ -62,3 +62,17 @@ def summary_period(
     if since is None or today is None or since >= today:
         return None
     return max(since, today - datetime.timedelta(days=MAX_SUMMARY_DAYS)), today
+
+
+def ratings_year(*, next_game_on: datetime.date | None, last_played_on: datetime.date | None, start_year: int) -> int:
+    """試合と編成と画面が使う能力の年。**能力を引く年の唯一の出典**。
+
+    日程が残っていればその最初の日の年（次に試合をする年）、無ければ最後に試合をした年、
+    まだ試合が無ければ開幕年。シミュレーション（日を進める）・編成・能力の表示が同じ年を使い、
+    翌年の能力ができても（P6）、画面に出る能力と試合で使われる能力が食い違わないようにする。
+    """
+    if next_game_on is not None:
+        return next_game_on.year
+    if last_played_on is not None:
+        return last_played_on.year
+    return start_year

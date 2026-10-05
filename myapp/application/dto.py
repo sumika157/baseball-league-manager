@@ -11,6 +11,7 @@ from datetime import date
 
 from ..domain.pennant.club_plan import PlanSection
 from ..domain.pennant.season import SeasonPhase
+from ..domain.simulation.ratings import RatingEmphasis
 from ..domain.value_objects import BattingLine, FieldingPosition, PitchingLine, Position
 
 
@@ -1561,3 +1562,67 @@ class WorldDeletion:
     world: WorldContext
     season_count: int
     game_count: int
+
+
+# --- ペナントの能力の表示（P4c） ---
+
+
+@dataclass(frozen=True)
+class RatingCell:
+    """能力ひとつぶんの表示。「B 74」の区分と数値。
+
+    区分の境目と目立たせ方は domain の `RatingGrade` が出典で、ここは写すだけ。
+    """
+
+    key: str  # 項目の識別子（並べ替えのキーと同じ）
+    label: str  # ミート・球威など
+    value: int
+    grade: str  # S〜G
+    emphasis: RatingEmphasis
+
+
+@dataclass(frozen=True)
+class PlayerRatingsCard:
+    """選手ページの「能力（年度）」カード。成長型は隠し値なので持たない。"""
+
+    year: int
+    is_pitcher: bool
+    cells: tuple[RatingCell, ...]
+
+
+@dataclass(frozen=True)
+class RatingColumn:
+    """能力の表の1列。key は並べ替えのキー。"""
+
+    key: str
+    label: str
+
+
+@dataclass(frozen=True)
+class RatingsRow:
+    """球団の能力の表の1行。能力がまだ無い選手は cells が空（画面では「—」）。"""
+
+    id: int
+    number: int
+    name: str
+    position: str
+    is_foreign_player: bool
+    age: int | None
+    cells: tuple[RatingCell, ...]
+    # 野手: 打率・OPS。投手: 防御率（average の位置）・投球回
+    batting_average: float = 0.0
+    ops: float = 0.0
+    earned_run_average: float = 0.0
+    innings_pitched: str = ""
+
+
+@dataclass(frozen=True)
+class RatingsTable:
+    """球団の能力の表（野手か投手のどちらか）。sort / descending は実際に使った並び。"""
+
+    is_pitcher: bool
+    year: int  # 能力の年度（試合・編成と同じ規則で決めた年）
+    columns: tuple[RatingColumn, ...]
+    rows: tuple[RatingsRow, ...]
+    sort: str
+    descending: bool
