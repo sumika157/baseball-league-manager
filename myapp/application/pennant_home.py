@@ -17,7 +17,7 @@ from datetime import date, timedelta
 from ..domain.pennant.form import Outcome, outcome_for, recent_form
 from ..domain.pennant.schedule import AdvanceTarget, Fixture, ScheduleRules, dates_to_play, default_opening_day
 from ..domain.pennant.season import MAX_GAMES_PER_ADVANCE, SCREEN_ADVANCE_TARGETS, SeasonPhase, summary_period
-from ..domain.repositories import FixtureRepository, GameRepository, WorldRepository
+from ..domain.repositories import FixtureRepository, GameRepository
 from ..domain.value_objects import InningsPitched, format_average
 from .dto import (
     AdvanceOption,
@@ -77,7 +77,6 @@ class PennantHomeService:
         games: GameListQuery,
         game_records: GameRepository,
         fixtures: FixtureRepository,
-        worlds: WorldRepository,
         activity: PennantActivityQuery,
     ) -> None:
         self._teams = teams
@@ -85,7 +84,6 @@ class PennantHomeService:
         # 自軍の1試合のスコアボードを作るときだけ、試合を集約として1つ読む
         self._game_records = game_records
         self._fixtures = fixtures
-        self._worlds = worlds
         self._activity = activity
 
     def get_home(
@@ -96,7 +94,7 @@ class PennantHomeService:
         `include_advance` は「進める」の選択肢を作るか（オーナーにしか出さないので、他の人には読まない）。
         受け持つ球団が無い世界でも開ける（自軍に関する区画が空になる）。
         """
-        year = world.today.year if world.today is not None else self._worlds.find_by_id(world.world_id).start_year
+        year = world.season_year
         pending = self._fixtures.find_all()
         own_id = world.managed_team_id
         own_games = self._games.list_rows(year=year, team_id=own_id) if own_id is not None else []

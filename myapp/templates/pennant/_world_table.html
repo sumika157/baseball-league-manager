@@ -19,7 +19,7 @@
         <tr>
           <td><a href="{% url 'pennant_world' row.context.world_id %}" class="player-name">{{ row.context.name }}</a></td>
           <td>{% if row.context.managed_team_name %}{{ row.context.managed_team_name }}{% else %}<span class="stat-muted">—</span>{% endif %}</td>
-          <td class="stat-muted">{{ row.season_year }}年 · {{ row.context.phase.value }}</td>
+          <td class="stat-muted">{{ row.context.season_year }}年 · {{ row.context.phase.value }}</td>
           {% if row.own_standing %}
             <td class="text-end stat-key">{{ row.own_standing.rank }}位</td>
             <td class="text-end">{{ row.own_standing.wins }}-{{ row.own_standing.losses }}-{{ row.own_standing.ties }}</td>

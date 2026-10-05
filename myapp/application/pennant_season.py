@@ -30,10 +30,8 @@ from ..domain.pennant.club_plan import ClubLimits, ResolvedClub, resolve_club, s
 from ..domain.pennant.schedule import (
     AdvanceTarget,
     Fixture,
-    ScheduleRules,
     dates_to_play,
-    default_opening_day,
-    generate_schedule,
+    season_schedule,
 )
 from ..domain.pennant.world import World
 from ..domain.repositories import (
@@ -108,14 +106,7 @@ class PennantSeasonService:
             _saved_id(league.id): sorted(_saved_id(team.id) for team in teams if team.league_id == league.id)
             for league in self._leagues.find_all()
         }
-        rules = ScheduleRules()
-        schedule = generate_schedule(
-            leagues,
-            rules,
-            default_opening_day(world.start_year, rules),
-            make_random(game_seed(world.seed, world.start_year, "schedule")),
-            season=world.start_year,
-        )
+        schedule = season_schedule(leagues, world_seed=world.seed, year=world.start_year)
         with self._atomic():
             self._fixtures.add_all(schedule)
         return True

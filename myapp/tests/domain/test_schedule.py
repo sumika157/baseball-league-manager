@@ -17,7 +17,9 @@ from myapp.domain.pennant.schedule import (
     generate_schedule,
     interleague_pairs,
     longest_streak,
+    season_schedule,
 )
+from myapp.domain.simulation.randomness import game_seed, make_random
 
 LEAGUES = {1: [1, 2, 3, 4, 5, 6], 2: [11, 12, 13, 14, 15, 16]}
 START = datetime.date(2026, 3, 27)  # 金曜
@@ -429,3 +431,48 @@ class DefaultOpeningDayTests(TestCase):
 
         self.assertEqual(day, datetime.date(2026, 3, 28))
         self.assertNotEqual(day.weekday(), rules.rest_weekday)
+
+
+class SeasonScheduleTests(TestCase):
+    """年ごとの日程。開幕年も翌年も同じ関数で作る。"""
+
+    @staticmethod
+    def _pairings(fixtures: list[Fixture]) -> list[tuple[int, int]]:
+        return [(f.home_team_id, f.visitor_team_id) for f in fixtures]
+
+    def test_the_same_world_and_year_give_the_same_schedule(self) -> None:
+        self.assertEqual(
+            season_schedule(LEAGUES, world_seed=5, year=2026), season_schedule(LEAGUES, world_seed=5, year=2026)
+        )
+
+    def test_each_year_gets_its_own_schedule(self) -> None:
+        first = season_schedule(LEAGUES, world_seed=5, year=2026)
+        second = season_schedule(LEAGUES, world_seed=5, year=2027)
+
+        self.assertEqual(len(first), len(second))
+        self.assertTrue(all(f.date.year == 2026 for f in first))
+        self.assertTrue(all(f.date.year == 2027 for f in second))
+        self.assertNotEqual(self._pairings(first), self._pairings(second))
+
+    def test_a_different_world_seed_gives_a_different_schedule(self) -> None:
+        self.assertNotEqual(
+            season_schedule(LEAGUES, world_seed=5, year=2026), season_schedule(LEAGUES, world_seed=6, year=2026)
+        )
+
+    def test_it_opens_on_the_default_opening_day(self) -> None:
+        fixtures = season_schedule(LEAGUES, world_seed=5, year=2027)
+
+        self.assertEqual(min(f.date for f in fixtures), default_opening_day(2027, ScheduleRules()))
+
+    def test_the_opening_year_is_what_generate_schedule_made_before(self) -> None:
+        """開幕年の日程は、これまでの作り方（開幕日・シード・年）と同じ。同じシードの世界は同じ日程のまま。"""
+        rules = ScheduleRules()
+        expected = generate_schedule(
+            LEAGUES,
+            rules,
+            default_opening_day(2026, rules),
+            make_random(game_seed(5, 2026, "schedule")),
+            season=2026,
+        )
+
+        self.assertEqual(season_schedule(LEAGUES, world_seed=5, year=2026), expected)

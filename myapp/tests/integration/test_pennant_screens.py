@@ -239,7 +239,7 @@ class WorldSummaryQueryTest(WorldCase):
         self.assertEqual(summary.managed_team_name, PENNANT_TEAM)
         self.assertEqual(summary.default_league_id, self.pennant_league.id)
         self.assertEqual(summary.last_played_on, date(YEAR, 4, 2))
-        self.assertTrue(summary.has_pending_fixtures)
+        self.assertEqual(summary.next_fixture_on, date(YEAR, 4, 3))
 
     def test_other_worlds_and_real_data_are_not_picked_up(self):
         """実データと別の世界に、より遅い試合と未消化の対戦があっても、この世界の見出しには入らない。"""
@@ -258,10 +258,10 @@ class WorldSummaryQueryTest(WorldCase):
         summary = DjangoWorldSummaryQuery().get(self.world_id)
 
         self.assertEqual(summary.last_played_on, date(YEAR, 4, 2))
-        self.assertFalse(summary.has_pending_fixtures)
+        self.assertIsNone(summary.next_fixture_on)
         listed = {s.world_id: s for s in DjangoWorldSummaryQuery().list_all()}
         self.assertEqual(listed[other].last_played_on, late)
-        self.assertTrue(listed[other].has_pending_fixtures)
+        self.assertEqual(listed[other].next_fixture_on, late)
 
     def test_an_unknown_world_is_not_found(self):
         with self.assertRaises(WorldNotFound):

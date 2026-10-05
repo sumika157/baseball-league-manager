@@ -16,6 +16,7 @@ WORLD = WorldContext(
     world_id=7,
     name="目印の世界",
     phase=SeasonPhase.IN_SEASON,
+    season_year=2026,
     today=None,
     managed_team_id=None,
     managed_team_name="",

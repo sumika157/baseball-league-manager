@@ -320,6 +320,42 @@ class ClubPlan:
     def clear_closer(self) -> None:
         self.closer_id = None
 
+    def release(self, player_ids: Collection[int]) -> tuple[ClubPlan, tuple[PlanSection, ...]]:
+        """`player_ids`（引退した選手など）を含む区画を自動に戻した編成と、戻した区画を返す。
+
+        **1軍登録を戻すときは、それに依存するオーダー・ローテーション・抑えも戻す**（1軍登録だけが
+        自動に戻ると、残りの手動の区画が AI の1軍に照らして使えなくなり、注意が出続けるため）。
+        戻した区画はすべて返す（知らせるため）。この編成自体は変えない。
+        """
+        gone = set(player_ids)
+        has_gone = {
+            PlanSection.ACTIVE: self.active_ids is not None and bool(gone.intersection(self.active_ids)),
+            PlanSection.LINEUP: self.lineup is not None and any(choice.player_id in gone for choice in self.lineup),
+            PlanSection.ROTATION: self.rotation is not None and bool(gone.intersection(self.rotation)),
+            PlanSection.CLOSER: self.closer_id is not None and self.closer_id in gone,
+        }
+        releasing_active = has_gone[PlanSection.ACTIVE]
+        # 戻すのは、退団者を含む区画と、1軍登録を戻すときに手動で残っている区画
+        manual = {
+            PlanSection.ACTIVE: self.active_ids is not None,
+            PlanSection.LINEUP: self.lineup is not None,
+            PlanSection.ROTATION: self.rotation is not None,
+            PlanSection.CLOSER: self.closer_id is not None,
+        }
+        released = tuple(
+            section for section in PlanSection if manual[section] and (has_gone[section] or releasing_active)
+        )
+        return (
+            ClubPlan(
+                self.team_id,
+                None if PlanSection.ACTIVE in released else self.active_ids,
+                None if PlanSection.LINEUP in released else self.lineup,
+                None if PlanSection.ROTATION in released else self.rotation,
+                None if PlanSection.CLOSER in released else self.closer_id,
+            ),
+            released,
+        )
+
 
 # --- その日の編成に当てはめる ---
 

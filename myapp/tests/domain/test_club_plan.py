@@ -212,6 +212,92 @@ class ClearTest(ClubPlanCase):
         self.assertTrue(self.plan.is_empty)
 
 
+class ReleaseTest(ClubPlanCase):
+    """引退した選手を含む区画だけを自動に戻す（シーズンを締めるとき）。"""
+
+    def full_plan(self) -> ClubPlan:
+        plan = ClubPlan(team_id=1)
+        plan.set_active(sorted(self.active), roster=self.members, limits=LIMITS)
+        self.set_lineup(self.auto_lineup(), plan)
+        starters = sorted(p.player_id for p in self.auto.pitchers)
+        plan.set_rotation(starters[:5], roster=self.members, active_ids=self.active)
+        plan.set_closer(starters[5], roster=self.members, active_ids=self.active)
+        return plan
+
+    def test_a_retired_player_only_in_the_active_roster_releases_every_section(self):
+        """1軍登録を戻すときは、依存するオーダー・ローテーション・抑えも戻す。"""
+        plan = self.full_plan()
+        assert plan.active_ids is not None and plan.lineup and plan.rotation
+        in_use = {c.player_id for c in plan.lineup} | set(plan.rotation) | {plan.closer_id}
+        retired = next(i for i in plan.active_ids if i not in in_use)
+
+        released, sections = plan.release([retired])
+
+        self.assertEqual(sections, tuple(PlanSection))
+        self.assertTrue(released.is_empty)
+
+    def test_a_retired_starter_releases_the_rotation_and_the_active_roster_and_what_depends_on_it(self):
+        plan = self.full_plan()
+        assert plan.rotation is not None
+
+        released, sections = plan.release([plan.rotation[0]])
+
+        self.assertEqual(sections, tuple(PlanSection))
+        self.assertTrue(released.is_empty)
+
+    def test_only_a_retired_lineup_player_outside_the_active_roster_releases_only_the_lineup(self):
+        plan = self.full_plan()
+        assert plan.lineup is not None
+        # 1軍登録の外の選手がオーダーにいる（登録が変わった後に残った上書き）状況を作る
+        outsider = plan.lineup[0].player_id
+        plan.active_ids = tuple(i for i in plan.active_ids or () if i != outsider)
+
+        released, sections = plan.release([outsider])
+
+        self.assertEqual(sections, (PlanSection.LINEUP,))
+        self.assertIsNone(released.lineup)
+        self.assertEqual(released.active_ids, plan.active_ids)
+        self.assertEqual(released.rotation, plan.rotation)
+        self.assertEqual(released.closer_id, plan.closer_id)
+
+    def test_a_retired_closer_releases_only_the_closer(self):
+        plan = self.full_plan()
+        assert plan.closer_id is not None
+        # 抑えは1軍の投手だが、ローテーションには入らない。1軍登録からは外れた選手だけにして区画を絞る
+        plan.active_ids = tuple(i for i in plan.active_ids or () if i != plan.closer_id)
+
+        released, sections = plan.release([plan.closer_id])
+
+        self.assertEqual(sections, (PlanSection.CLOSER,))
+        self.assertIsNone(released.closer_id)
+        self.assertEqual(released.active_ids, plan.active_ids)
+        self.assertEqual(released.rotation, plan.rotation)
+        self.assertEqual(released.lineup, plan.lineup)
+
+    def test_nobody_in_the_plan_changes_nothing(self):
+        plan = self.full_plan()
+
+        released, sections = plan.release([99999])
+
+        self.assertEqual(sections, ())
+        self.assertEqual(released, plan)
+
+    def test_the_original_plan_is_not_changed(self):
+        plan = self.full_plan()
+        before = (plan.active_ids, plan.lineup, plan.rotation, plan.closer_id)
+        assert plan.rotation is not None
+
+        plan.release(plan.rotation)
+
+        self.assertEqual((plan.active_ids, plan.lineup, plan.rotation, plan.closer_id), before)
+
+    def test_an_automatic_plan_has_nothing_to_release(self):
+        released, sections = ClubPlan(team_id=1).release([1, 2, 3])
+
+        self.assertEqual(sections, ())
+        self.assertTrue(released.is_empty)
+
+
 class ResolveTest(ClubPlanCase):
     def test_without_a_plan_everything_is_automatic(self):
         for plan in (None, ClubPlan(team_id=1)):

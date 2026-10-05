@@ -10,6 +10,7 @@ import datetime
 from enum import Enum
 
 from .schedule import AdvanceTarget, ScheduleRules, default_opening_day
+from .world import MAX_SEASONS_PER_WORLD
 
 # 画面の1回の「進める」で作ってよい試合数の上限。8リーグの1週間（約140試合）が収まる大きさで、
 # 静かな環境で約4秒、負荷時でも約10秒（設計書 12.「P3b の詳細」）
@@ -29,14 +30,19 @@ class SeasonPhase(Enum):
     FINISHED = "シーズン終了"
 
 
-def season_phase(*, has_played: bool, fixtures_pending: bool) -> SeasonPhase:
-    """試合を消化したか、未消化の対戦が残っているかから局面を決める。
+def season_phase(*, last_played_on: datetime.date | None, next_fixture_on: datetime.date | None) -> SeasonPhase:
+    """最後に試合をした日と、次の対戦の日から局面を決める（年をまたいで使える。設計書 3.6）。
 
-    試合がまだ無ければ、日程を作る前でも作った後でも開幕前。試合があって対戦が尽きていれば終了。
+    - 試合がまだ無ければ、日程を作る前でも作った後でも開幕前
+    - 試合があって対戦が尽きていれば終了（オフ）
+    - 対戦が残っていて、次の対戦が最後の試合より後の年なら、翌年の開幕前（締めた直後など）
+    - それ以外はシーズン中
     """
-    if not has_played:
+    if last_played_on is None:
         return SeasonPhase.BEFORE_OPENING
-    return SeasonPhase.IN_SEASON if fixtures_pending else SeasonPhase.FINISHED
+    if next_fixture_on is None:
+        return SeasonPhase.FINISHED
+    return SeasonPhase.BEFORE_OPENING if next_fixture_on.year > last_played_on.year else SeasonPhase.IN_SEASON
 
 
 def world_today(start_year: int, last_played_on: datetime.date | None) -> datetime.date:
@@ -76,3 +82,18 @@ def ratings_year(*, next_game_on: datetime.date | None, last_played_on: datetime
     if last_played_on is not None:
         return last_played_on.year
     return start_year
+
+
+def season_year(
+    *, next_fixture_on: datetime.date | None, last_played_on: datetime.date | None, start_year: int
+) -> int:
+    """世界の「いまの年度」。画面（GM ホーム・世界バー・一覧）が出す年。
+
+    能力を引く年と同じ規則なので `ratings_year` をそのまま呼ぶ（年の決め方を2つに増やさない）。
+    """
+    return ratings_year(next_game_on=next_fixture_on, last_played_on=last_played_on, start_year=start_year)
+
+
+def is_final_season(*, current_year: int, start_year: int) -> bool:
+    """いまの年度が世界の最後のシーズン（`MAX_SEASONS_PER_WORLD` 番目）か。最後のシーズンは締められない。"""
+    return current_year - start_year + 1 >= MAX_SEASONS_PER_WORLD

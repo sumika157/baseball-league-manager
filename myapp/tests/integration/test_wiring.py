@@ -297,7 +297,7 @@ class PennantSeasonScopeTest(SimpleTestCase):
 
 
 class PennantHomeScopeTest(SimpleTestCase):
-    """GM ホームの材料は、渡された世界の範囲だけを読む（世界の台帳だけが範囲を持たない）。"""
+    """GM ホームの材料は、渡された世界の範囲だけを読む。"""
 
     SCOPED = ("_games", "_game_records", "_fixtures", "_activity")
 
@@ -307,7 +307,6 @@ class PennantHomeScopeTest(SimpleTestCase):
             with self.subTest(dependency=name):
                 self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
         self.assertEqual(service._teams._games._scope, WorldScope.pennant(7), "順位・主力も世界の範囲のサービス")
-        self.assertIsInstance(service._worlds, DjangoWorldRepository)
 
     def test_a_different_world_gets_a_different_scope(self):
         self.assertEqual(build_pennant_home_service(8)._activity._scope, WorldScope.pennant(8))

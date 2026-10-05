@@ -311,7 +311,6 @@ def build_pennant_home_service(world_id: int) -> PennantHomeService:
         games=DjangoGameListQuery(scope),
         game_records=DjangoGameRepository(scope),
         fixtures=DjangoFixtureRepository(scope),
-        worlds=DjangoWorldRepository(),
         activity=DjangoPennantActivityQuery(scope),
     )
 
