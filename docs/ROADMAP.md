@@ -162,10 +162,10 @@
   編集できる。チームに「担当者」を割り当て、担当者は自チームが関わる範囲だけ
   編集できるようにする。管理者（Django の管理ユーザー）は変わらず全権を持つ
 - ✅ 本番構成（gunicorn・WhiteNoise・Cloudflare Tunnel・SQLite の WAL。AWS Lightsail の VM 1台＋docker compose。手順は Wiki「本番公開」）。PostgreSQL は後回し
-- ⬜ CI（GitHub Actions でテスト実行。#88）
+- ✅ CI（GitHub Actions でテスト実行・本番イメージを GHCR へ。#88。Wiki「テストと品質」）
 - ✅ バックアップ手順（`backup_db` コマンドと cron・Cloudflare R2・復元。Wiki「本番公開」）
 
-本番構成とバックアップは、一般公開に向けて用意した（Issue #76）。CI は別に扱う。
+本番構成とバックアップは、一般公開に向けて用意した（Issue #76）。CI は #88 で入れた。
 
 ---
 
@@ -298,7 +298,7 @@ GM として編成してシーズンを見守るゲーム（プロスピのペ�
 設計は `docs/design/workspaces.md`、親 Issue は #74。
 
 - ✅ 本番構成（W0、#76）。公開先は AWS Lightsail の VM 1台＋docker compose、入口は Cloudflare Tunnel、DB は当面 SQLite。フェーズ5 の本番構成とバックアップはここで片付けた
-- ⬜ CI（#88）。テストを GitHub Actions で流し、本番イメージを GHCR に置く
+- ✅ CI（#88）。テストを GitHub Actions で流し、本番イメージを GHCR に置く
 - ⬜ 本番の構成を Terraform で作る（#89）。手で作る手順を置き換える
 - ⬜ データをワークスペースに属させ、範囲で絞る（W1）
 - ⬜ ワークスペースを URL（`/w/<key>/`）で開き、ワークスペースの権限で判定する。公開/非公開を切り替えられる（W2）
