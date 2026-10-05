@@ -97,21 +97,7 @@
     <div class="card">
       <div class="card-body p-0">
         {% if league.recent_games %}
-          <ul class="tile-list">
-            {% for game in league.recent_games %}
-              <li>
-                <a href="{% scoped_url 'game_detail' game.id %}">
-                  <span class="tile-list-main">
-                    <span class="tile-list-title">
-                      {{ game.home_team_name }} {% if game.is_recorded %}{{ game.home_score }} - {{ game.away_score }}{% else %}—{% endif %} {{ game.away_team_name }}
-                    </span>
-                    <span class="tile-list-sub">{{ game.played_on|date:"Y/m/d" }} · {{ game.result }}</span>
-                  </span>
-                  <span class="tile-arrow">→</span>
-                </a>
-              </li>
-            {% endfor %}
-          </ul>
+          {% include 'myapp/_game_tiles.html' with games=league.recent_games %}
         {% else %}
           <div class="empty-state" style="padding: 2rem 1rem; font-size: 0.875rem;">
             試合がありません。

@@ -1,0 +1,364 @@
+{% extends 'myapp/base.html' %}
+{% load scoped %}
+
+{% block title %}{{ world.name }} - ペナント - Baseball Manager{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb">
+    {% include 'pennant/_crumbs.html' %}
+  </ol>
+</nav>{% include 'pennant/_world_bar.html' %}
+
+{% comment %}
+GM ホーム。上から、自軍の位置 → 進めた結果 → 進める → 次の試合 → 順位表 → 主力 → タイトル争い → 削除。
+状態は保存せず、日程と試合から導いた値（PennantHome）を並べるだけ。
+「注意」（編成の指定が無効になった日など）は編成の画面（P5）ができてから足す。
+{% endcomment %}
+{% with own=home.own summary=home.summary %}
+
+<div class="page-head">
+  <h1 class="page-title">GM ホーム</h1>
+  <p class="page-subtitle">{{ world.name }}{% if own %} · {{ own.team_name }}（{{ own.league_name }}）{% endif %}</p>
+</div>
+
+{% if own %}
+  <div class="stat-strip">
+    {% if own.is_before_opening %}
+      <div class="stat-cell">
+        <div class="stat-value">{{ own.opening_date|date:"n月j日" }}</div>
+        <div class="stat-label">開幕日</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-value">{{ own.remaining_games }}</div>
+        <div class="stat-label">{% if own.remaining_games %}試合{% else %}試合（日程は最初に進めたときに作られます）{% endif %}</div>
+      </div>
+    {% else %}
+      <div class="stat-cell">
+        <div class="stat-value">{% if own.rank %}{{ own.rank }}位{% else %}—{% endif %}</div>
+        <div class="stat-label">{% if own.is_finished %}最終順位{% else %}順位{% endif %}</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-value">{{ own.wins }}-{{ own.losses }}-{{ own.ties }}</div>
+        <div class="stat-label">勝-敗-分</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-value">{{ own.winning_percentage|default:"—" }}</div>
+        <div class="stat-label">勝率</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-value">{% if own.is_leader %}首位{% else %}{{ own.games_behind|default:"—" }}{% endif %}</div>
+        <div class="stat-label">首位との差</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-value">{{ own.last_ten|default:"—" }}</div>
+        <div class="stat-label">直近10試合</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-value">{{ own.streak|default:"—" }}</div>
+        <div class="stat-label">連続</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-value">{% if own.is_finished %}終了{% else %}{{ own.remaining_games }}{% endif %}</div>
+        <div class="stat-label">{% if own.is_finished %}シーズン{% else %}残り試合{% endif %}</div>
+      </div>
+    {% endif %}
+  </div>
+{% else %}
+  <div class="alert alert-secondary">この世界には、受け持つ球団が決まっていません。</div>
+{% endif %}
+
+{% if summary %}
+  <div class="card mb-4" id="result">
+    <div class="card-header">進めた結果（{{ summary.since|date:"n月j日" }}の翌日〜{{ summary.until|date:"n月j日" }}）</div>
+    <div class="card-body">
+      <p class="mb-2">
+        <span class="stat-key">{{ summary.wins }}勝{{ summary.losses }}敗{% if summary.ties %}{{ summary.ties }}分{% endif %}</span>
+        {% if summary.rank_after %}
+          <span class="stat-muted ms-2">順位</span>
+          {% if summary.rank_before %}{{ summary.rank_before }}位 → {% endif %}<span class="stat-key">{{ summary.rank_after }}位</span>
+          <span class="stat-muted ms-2">首位との差</span>
+          {% if summary.games_behind_before %}{{ summary.games_behind_before }} → {% endif %}<span class="stat-key">{{ summary.games_behind_after }}</span>
+        {% endif %}
+      </p>
+
+      {% if summary.own_games %}
+        <div class="table-responsive">
+          <table class="table table-hover">
+            <thead>
+              <tr>
+                <th>日付</th>
+                <th>相手</th>
+                <th class="text-center">結果</th>
+                <th class="text-end">スコア</th>
+                <th>勝</th>
+                <th>敗</th>
+                <th>S</th>
+                <th>本塁打</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for game in summary.own_games %}
+                <tr>
+                  <td class="stat-muted">{{ game.played_on|date:"n月j日" }}</td>
+                  <td>{% if game.is_home %}vs{% else %}＠{% endif %} {{ game.opponent_name }}</td>
+                  <td class="text-center stat-key">{{ game.outcome }}</td>
+                  <td class="text-end">{{ game.own_score }}-{{ game.opponent_score }}</td>
+                  <td>{{ game.winning_pitcher }}</td>
+                  <td>{{ game.losing_pitcher }}</td>
+                  <td>{{ game.save_pitcher }}</td>
+                  <td class="stat-muted">{{ game.home_runs|join:"、" }}</td>
+                  <td class="text-end"><a href="{% scoped_url 'game_detail' game.game_id %}" class="card-header-link">詳細</a></td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="stat-muted">この期間、自軍の試合はありませんでした。</p>
+      {% endif %}
+
+      {% if summary.line_score %}
+        {% include 'myapp/_line_score.html' with line_score=summary.line_score game=summary.line_score_game %}
+      {% endif %}
+
+      {% if summary.batters or summary.pitchers %}
+        <div class="row g-3 mt-1">
+          {% if summary.batters %}
+            <div class="col-md-6">
+              <div class="stat-muted mb-1" style="font-size: 0.8125rem;">期間の活躍（打者）</div>
+              <table class="table table-sm mb-0">
+                <tbody>
+                  {% for batter in summary.batters %}
+                    <tr>
+                      <td><a href="{% scoped_url 'player_detail' own.team_id batter.player_id %}" class="player-name">{{ batter.name }}</a></td>
+                      <td class="text-end stat-key">{{ batter.batting_average }}</td>
+                      <td class="text-end stat-muted">{{ batter.at_bats }}打数{{ batter.hits }}安打</td>
+                      <td class="text-end">{{ batter.home_runs }}本</td>
+                      <td class="text-end">{{ batter.runs_batted_in }}打点</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% endif %}
+          {% if summary.pitchers %}
+            <div class="col-md-6">
+              <div class="stat-muted mb-1" style="font-size: 0.8125rem;">期間の活躍（投手）</div>
+              <table class="table table-sm mb-0">
+                <tbody>
+                  {% for pitcher in summary.pitchers %}
+                    <tr>
+                      <td><a href="{% scoped_url 'player_detail' own.team_id pitcher.player_id %}" class="player-name">{{ pitcher.name }}</a></td>
+                      <td class="text-end">{{ pitcher.wins }}勝</td>
+                      <td class="text-end">{{ pitcher.saves }}S</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% endif %}
+        </div>
+      {% endif %}
+
+      {% if summary.other_games %}
+        <details class="mt-3">
+          <summary>ほかの試合（{{ summary.other_games|length }}{% if summary.other_games_omitted %}＋{{ summary.other_games_omitted }}{% endif %}試合）</summary>
+          <div class="card mt-2">
+            {% include 'myapp/_game_tiles.html' with games=summary.other_games %}
+          </div>
+          {% if summary.other_games_omitted %}
+            <p class="stat-muted mt-2 mb-0" style="font-size: 0.8125rem;">新しい順に{{ summary.other_games|length }}試合までを載せています。残りは<a href="{% scoped_url 'game_list' %}">試合一覧</a>で読めます。</p>
+          {% endif %}
+        </details>
+      {% endif %}
+    </div>
+  </div>
+{% endif %}
+
+{% if is_owner %}
+  <div class="card mb-4">
+    <div class="card-header">進める</div>
+    <div class="card-body">
+      {% if home.advance_options %}
+        <form method="post" action="{% url 'pennant_advance' world.world_id %}">
+          {% csrf_token %}
+          <input type="hidden" name="expected_today" value="{{ home.expected_today }}">
+          {% for option in home.advance_options %}
+            <div class="d-flex align-items-center flex-wrap gap-3 {% if not forloop.last %}mb-2{% endif %}">
+              <button type="submit" name="target" value="{{ option.target }}" class="btn {% if forloop.first %}btn-primary{% else %}btn-secondary{% endif %}">{{ option.label }}</button>
+              {% if option.end_date %}
+                <span class="stat-muted">{{ option.end_date|date:"n月j日（D）" }}まで · {{ option.games }}試合</span>
+              {% endif %}
+            </div>
+          {% endfor %}
+        </form>
+      {% elif home.season_finished %}
+        <p class="stat-muted mb-0">シーズンは終了しました。</p>
+      {% else %}
+        <p class="stat-muted mb-0">進められる試合がありません。</p>
+      {% endif %}
+    </div>
+  </div>
+{% endif %}
+
+{% if home.upcoming %}
+  <div class="card mb-4">
+    <div class="card-header">次の試合</div>
+    <div class="card-body p-0">
+      <table class="table table-hover mb-0">
+        <tbody>
+          {% for game in home.upcoming %}
+            <tr {% if forloop.first %}class="fw-semibold"{% endif %}>
+              <td class="stat-muted" style="width: 9rem;">{{ game.played_on|date:"n月j日（D）" }}</td>
+              <td style="width: 5rem;">{% if game.is_home %}ホーム{% else %}ビジター{% endif %}</td>
+              <td>vs <a href="{% scoped_url 'player_list' game.opponent_team_id %}" class="player-name">{{ game.opponent_name }}</a></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endif %}
+
+<div class="card mb-4">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span>順位表（{{ home.standings.year }}年）</span>
+    <a href="{% scoped_url 'standings' %}" class="card-header-link">順位表を見る</a>
+  </div>
+  {% if home.standings.leagues|length > 1 %}
+    {% comment %}リーグは8つまである。タブではなく選択欄で切り替える（JavaScript は使わず、押して切り替える）。{% endcomment %}
+    <form method="get" class="d-flex gap-2 p-3 pb-0" action="{% url 'pennant_world' world.world_id %}">
+      <select name="league" class="form-select form-select-sm" aria-label="リーグ" style="max-width: 16rem;">
+        {% for league in home.standings.leagues %}
+          <option value="{{ league.id }}" {% if league.id == home.standings.selected.league_id %}selected{% endif %}>{{ league.name }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="btn btn-secondary btn-sm">表示</button>
+    </form>
+  {% endif %}
+  <div class="card-body p-0">
+    {% if home.standings.selected %}
+      {% if home.standings.leagues|length == 1 %}<div class="px-3 pt-3 stat-muted">{{ home.standings.selected.league_name }}</div>{% endif %}
+      {% include 'myapp/_standings_table.html' with rows=home.standings.selected.rows highlight_team_id=world.managed_team_id %}
+    {% else %}
+      <div class="empty-state">まだ試合が行われていません。</div>
+    {% endif %}
+  </div>
+</div>
+
+{% if home.batters or home.pitchers %}
+  <div class="row g-3 mb-4">
+    <div class="col-lg-6">
+      <div class="card h-100">
+        <div class="card-header">主力打者（OPS 上位）</div>
+        <div class="card-body p-0">
+          {% if home.batters %}
+            <table class="table table-hover mb-0">
+              <thead>
+                <tr>
+                  <th>選手</th>
+                  <th class="text-end">打率</th>
+                  <th class="text-end">本</th>
+                  <th class="text-end">打点</th>
+                  <th class="text-end">OPS</th>
+                  <th class="text-end">直近15日</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for batter in home.batters %}
+                  <tr>
+                    <td><a href="{% scoped_url 'player_detail' own.team_id batter.player_id %}" class="player-name">{{ batter.name }}</a></td>
+                    <td class="text-end stat-key">{{ batter.batting_average|floatformat:3 }}</td>
+                    <td class="text-end">{{ batter.home_runs }}</td>
+                    <td class="text-end">{{ batter.runs_batted_in }}</td>
+                    <td class="text-end">{{ batter.ops|floatformat:3 }}</td>
+                    <td class="text-end stat-muted">{{ batter.recent_average|default:"—" }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% else %}
+            <div class="empty-state">まだ打席がありません。</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="card h-100">
+        <div class="card-header">投手陣（投球回の多い順）</div>
+        <div class="card-body p-0">
+          {% if home.pitchers %}
+            <table class="table table-hover mb-0">
+              <thead>
+                <tr>
+                  <th>選手</th>
+                  <th class="text-end">勝-敗</th>
+                  <th class="text-end">S</th>
+                  <th class="text-end">投球回</th>
+                  <th class="text-end">防御率</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for pitcher in home.pitchers %}
+                  <tr>
+                    <td><a href="{% scoped_url 'player_detail' own.team_id pitcher.player_id %}" class="player-name">{{ pitcher.name }}</a></td>
+                    <td class="text-end">{{ pitcher.wins }}-{{ pitcher.losses }}</td>
+                    <td class="text-end">{{ pitcher.saves }}</td>
+                    <td class="text-end">{{ pitcher.innings_pitched }}</td>
+                    <td class="text-end stat-key">{{ pitcher.earned_run_average|floatformat:2 }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% else %}
+            <div class="empty-state">まだ登板がありません。</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+{% endif %}
+
+{% if home.titles %}
+  <div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>タイトル争い（自軍の選手が5位以内の部門）</span>
+      {% if world.default_league_id %}
+        <a href="{% scoped_url 'league_titles' world.default_league_id %}" class="card-header-link">タイトル一覧</a>
+      {% endif %}
+    </div>
+    <div class="card-body p-0">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>部門</th>
+            <th class="text-end">順位</th>
+            <th>選手</th>
+            <th class="text-end">値</th>
+            <th>首位</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in home.titles %}
+            <tr>
+              <td>{{ row.department }}</td>
+              <td class="text-end">{{ row.rank }}位</td>
+              <td><a href="{% scoped_url 'player_detail' own.team_id row.player_id %}" class="player-name">{{ row.player_name }}</a></td>
+              <td class="text-end stat-key">{{ row.value }}</td>
+              <td class="stat-muted">{% if row.rank == 1 %}—{% else %}{{ row.leader_name }}（{{ row.leader_value }}）{% endif %}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endif %}
+
+{% if is_owner %}
+  <p class="text-end mt-4"><a href="{% url 'pennant_delete' world.world_id %}" class="btn-link-quiet">この世界を削除する</a></p>
+{% endif %}
+
+{% endwith %}
+{% endblock %}

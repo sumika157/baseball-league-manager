@@ -40,10 +40,12 @@ class WorldScreensOpenTest(WorldCase):
             with self.subTest(url=url):
                 self.assertEqual(self.client.get(url, follow=True).status_code, 200, url)
 
-    def test_the_world_entry_leads_to_the_standings(self):
+    def test_the_world_entry_is_the_gm_home(self):
+        """世界の入口は GM ホーム（P4a の間は順位表への案内だった）。"""
         response = self.client.get(reverse("pennant_world", args=[self.world_id]))
 
-        self.assertRedirects(response, reverse("pennant_standings", args=[self.world_id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("GM ホーム", response.content.decode())
 
     def test_screens_show_the_world_not_the_real_data(self):
         standings = self.client.get(reverse("pennant_standings", args=[self.world_id])).content.decode()
@@ -196,12 +198,13 @@ class WorldListTest(WorldCase):
         self.assertIn("1位", content)
         self.assertIn("1-0-0", content)
 
-    def test_the_list_has_no_create_form(self):
+    def test_the_create_form_is_for_a_logged_in_user_only(self):
+        anonymous = self.client.get(reverse("pennant_index")).content.decode()
         self.client.force_login(self.owner)
+        logged_in = self.client.get(reverse("pennant_index")).content.decode()
 
-        content = self.client.get(reverse("pennant_index")).content.decode()
-
-        self.assertNotIn('method="post"', content.split("</header>")[1])
+        self.assertNotIn('name="leagues"', anonymous)
+        self.assertIn('name="leagues"', logged_in)
 
     def test_the_header_links_to_pennant_for_everyone(self):
         anonymous = self.client.get(reverse("standings")).content.decode()

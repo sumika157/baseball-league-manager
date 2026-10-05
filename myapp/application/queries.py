@@ -19,7 +19,10 @@ from ..domain.entities import Game
 from ..domain.value_objects import FieldingLine
 from .dto import (
     ActivePlayerStats,
+    GameNote,
     GameRow,
+    PeriodBatting,
+    PeriodPitching,
     PlayerFielding,
     SimulationContext,
     SimulationTeam,
@@ -131,8 +134,10 @@ class GameListQuery(Protocol):
         team_id: int | None = None,
         month: int | None = None,
         league_id: int | None = None,
+        after: date | None = None,
+        through: date | None = None,
     ) -> list[GameRow]:
-        """絞り込んだ試合を新しい順に返す。"""
+        """絞り込んだ試合を新しい順に返す。`after` より後、`through` 以前の試合に絞れる。"""
         ...
 
     def list_for_standings(self, *, year: int | None = None) -> list[Game]:
@@ -155,4 +160,24 @@ class GameListQuery(Protocol):
 
     def latest_year(self) -> int | None:
         """最新シーズン。試合が1件も無ければ None。"""
+        ...
+
+
+@runtime_checkable
+class PennantActivityQuery(Protocol):
+    """GM ホームの「進めた結果」に要る、期間の見どころの参照（責任投手・本塁打・期間の成績）。
+
+    試合の明細（打撃・投球）を SQL で集計するだけで、集約（`Game`）は組み立てない。
+    """
+
+    def game_notes(self, game_ids: Sequence[int]) -> dict[int, GameNote]:
+        """試合ごとの責任投手（勝・敗・セーブ）と本塁打を打った選手。明細の無い試合は含めない。"""
+        ...
+
+    def batting_between(self, team_id: int, *, after: date, through: date) -> list[PeriodBatting]:
+        """`after` より後、`through` 以前の、球団の打者ごとの打撃の合計。出場の無い選手は含めない。"""
+        ...
+
+    def pitching_between(self, team_id: int, *, after: date, through: date) -> list[PeriodPitching]:
+        """同じ期間の、球団の投手ごとの勝・敗・セーブ。登板の無い選手は含めない。"""
         ...

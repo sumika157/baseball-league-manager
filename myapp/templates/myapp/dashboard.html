@@ -157,21 +157,7 @@ Bootstrap のタブ機能を使うので、独自の JavaScript は書かない�
                   {# 見ているリーグのタブから移るので、日程もそのリーグに絞って開く #}
                   <a href="{% url 'game_list' %}?league={{ league.league_id }}" class="card-header-link">試合一覧</a>
                 </div>
-                <ul class="tile-list">
-                  {% for game in league.recent_games %}
-                    <li>
-                      <a href="{% url 'game_detail' game.id %}">
-                        <span class="tile-list-main">
-                          <span class="tile-list-title">
-                            {{ game.home_team_name }} {% if game.is_recorded %}{{ game.home_score }} - {{ game.away_score }}{% else %}—{% endif %} {{ game.away_team_name }}
-                          </span>
-                          <span class="tile-list-sub">{{ game.played_on|date:"Y/m/d" }} · {{ game.result }}</span>
-                        </span>
-                        <span class="tile-arrow">→</span>
-                      </a>
-                    </li>
-                  {% endfor %}
-                </ul>
+                {% include 'myapp/_game_tiles.html' with games=league.recent_games %}
               </div>
             {% endif %}
           </div>
