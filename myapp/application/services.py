@@ -380,7 +380,9 @@ class TeamApplicationService:
     def list_batters(self, team_id: int, *, sort: str | None = None, descending: bool | None = None) -> Listing:
         team = self._teams.find_by_id(team_id)
         batters = [p for p in team.active_players if not p.is_pitcher]
-        players, key, desc = domain_services.sort_batters(batters, sort, descending)
+        players, key, desc = domain_services.sort_batters(
+            batters, sort, descending, default_key=domain_services.DEFAULT_ROSTER_SORT
+        )
         captain = team.current_captain
         context = self._league_context(team.league_id)
         return Listing(
@@ -392,7 +394,9 @@ class TeamApplicationService:
     def list_pitchers(self, team_id: int, *, sort: str | None = None, descending: bool | None = None) -> Listing:
         team = self._teams.find_by_id(team_id)
         pitchers = [p for p in team.active_players if p.is_pitcher]
-        players, key, desc = domain_services.sort_pitchers(pitchers, sort, descending)
+        players, key, desc = domain_services.sort_pitchers(
+            pitchers, sort, descending, default_key=domain_services.DEFAULT_ROSTER_SORT
+        )
         captain = team.current_captain
         context = self._league_context(team.league_id)
         return Listing(

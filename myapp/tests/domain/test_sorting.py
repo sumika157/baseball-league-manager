@@ -72,6 +72,17 @@ class BatterSortTest(TestCase):
         self.assertEqual(key, "ops")
         self.assertEqual([p.name for p in players], ["多", "少"])
 
+    def test_roster_default_is_jersey_number_ascending(self):
+        """名簿の既定を渡すと、未指定でも不正なキーでも背番号の小さい順に落ちる。"""
+        for key in (None, "drop table"):
+            with self.subTest(key=key):
+                players, used, desc = services.sort_batters(
+                    self.players[::-1], key, default_key=services.DEFAULT_ROSTER_SORT
+                )
+                self.assertEqual(used, "number")
+                self.assertFalse(desc)
+                self.assertEqual([p.number.value for p in players], [1, 2])
+
     def test_ties_are_broken_by_jersey_number(self):
         same = [
             _batter("B", 20, at_bats=10, singles=3),
@@ -133,6 +144,17 @@ class PitcherSortTest(TestCase):
         _, key, _ = services.sort_pitchers(self.players, "nope")
         self.assertEqual(key, "era")
 
+    def test_roster_default_is_jersey_number_ascending(self):
+        """防御率の良い投手が背番号で後ろにいても、名簿の既定なら背番号順になる。"""
+        for key in (None, "nope"):
+            with self.subTest(key=key):
+                players, used, desc = services.sort_pitchers(
+                    self.players, key, default_key=services.DEFAULT_ROSTER_SORT
+                )
+                self.assertEqual(used, "number")
+                self.assertFalse(desc)
+                self.assertEqual([p.name for p in players], ["炎上", "好投"])
+
 
 class SortKeyCatalogTest(TestCase):
     def test_every_key_declares_a_default_direction(self):
@@ -149,3 +171,5 @@ class SortKeyCatalogTest(TestCase):
     def test_defaults_exist_in_the_catalog(self):
         self.assertIn(services.DEFAULT_BATTER_SORT, services.BATTER_SORT_KEYS)
         self.assertIn(services.DEFAULT_PITCHER_SORT, services.PITCHER_SORT_KEYS)
+        self.assertIn(services.DEFAULT_ROSTER_SORT, services.BATTER_SORT_KEYS)
+        self.assertIn(services.DEFAULT_ROSTER_SORT, services.PITCHER_SORT_KEYS)

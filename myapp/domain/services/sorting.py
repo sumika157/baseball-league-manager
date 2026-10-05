@@ -60,6 +60,10 @@ PITCHER_SORT_KEYS: SortKeys = {
 DEFAULT_BATTER_SORT = "ops"
 DEFAULT_PITCHER_SORT = "era"
 
+# チームの選手一覧（名簿）の既定。成績を比べる画面ではなく選手を探す画面なので、
+# 指標ではなく背番号の小さい順にする。野手・投手で共通のキー。
+DEFAULT_ROSTER_SORT = "number"
+
 
 # 率で並べる指標。未登板だと 0 になり、実力と無関係に上位や下位へ寄るため、
 # これらで並べるときは未登板を常に末尾へ回す。
@@ -87,22 +91,28 @@ def _ordered(players: list[Player], getter: Callable[[Player], Any], descending:
 
 
 def sort_batters(
-    players: list[Player], key: str | None = None, descending: bool | None = None
+    players: list[Player],
+    key: str | None = None,
+    descending: bool | None = None,
+    default_key: str = DEFAULT_BATTER_SORT,
 ) -> tuple[list[Player], str, bool]:
-    """野手を並べ替える。key が未指定・不正なら OPS の高い順。
+    """野手を並べ替える。key が未指定・不正なら default_key（既定は OPS の高い順）。
 
     戻り値は (並べ替え後, 実際に使ったキー, 向き)。画面側で見出しの表示を
     合わせるため、採用されたキーと向きも返す。
     """
-    key, descending = _resolve(BATTER_SORT_KEYS, key, descending, DEFAULT_BATTER_SORT)
+    key, descending = _resolve(BATTER_SORT_KEYS, key, descending, default_key)
     return _ordered(players, BATTER_SORT_KEYS[key][0], descending), key, descending
 
 
 def sort_pitchers(
-    players: list[Player], key: str | None = None, descending: bool | None = None
+    players: list[Player],
+    key: str | None = None,
+    descending: bool | None = None,
+    default_key: str = DEFAULT_PITCHER_SORT,
 ) -> tuple[list[Player], str, bool]:
-    """投手を並べ替える。key が未指定・不正なら防御率の低い順。"""
-    key, descending = _resolve(PITCHER_SORT_KEYS, key, descending, DEFAULT_PITCHER_SORT)
+    """投手を並べ替える。key が未指定・不正なら default_key（既定は防御率の低い順）。"""
+    key, descending = _resolve(PITCHER_SORT_KEYS, key, descending, default_key)
     getter = PITCHER_SORT_KEYS[key][0]
 
     if key in _RATE_PITCHER_KEYS:
