@@ -71,7 +71,7 @@
           <div class="mt-2">
             <label for="{{ form.seed.id_for_label }}" class="form-label">{{ form.seed.label }}</label>
             {{ form.seed }}
-            <div class="stat-muted mt-1" style="font-size: 0.8125rem;">空欄なら自動で決めます。同じシードなら、同じ世界を作り直せます。</div>
+            <div class="stat-muted mt-1" style="font-size: 0.8125rem;">空欄なら自動で決めます。同じシードなら、同じ初期能力と日程になります（試合の結果まで同じにはなりません）。</div>
             {% include 'pennant/_field_errors.html' with errors=form.seed.errors %}
           </div>
         </details>
