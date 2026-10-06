@@ -19,6 +19,7 @@ from django.db.models import Count, Prefetch, Q, QuerySet, Sum
 from ..domain.entities import (
     Captaincy,
     FieldingError,
+    FreeAgentDeclaration,
     Game,
     GameBatting,
     GameFielding,
@@ -39,12 +40,15 @@ from ..domain.exceptions import (
 )
 from ..domain.services import ensure_lines_match_plate_appearances
 from ..domain.value_objects import (
+    AcquisitionRoute,
     AdvanceReason,
     Base,
     BattingLine,
+    ContractStatus,
     ErrorKind,
     FieldingLine,
     FieldingPosition,
+    FreeAgencyKind,
     Handedness,
     InningsPitched,
     JerseyNumber,
@@ -116,6 +120,7 @@ class _RosterData:
     pitching: dict[int, PitchingLine]
     careers: dict[int, list[Stint]]
     captaincies: dict[int, list[Captaincy]]
+    declarations: dict[int, list[FreeAgentDeclaration]]
 
     @classmethod
     def for_players(cls, rows: Iterable[orm_models.Player]) -> _RosterData:
@@ -127,6 +132,7 @@ class _RosterData:
             pitching=pitching_totals(player_ids),
             careers=_careers_of(player_ids),
             captaincies=_captaincies_of(player_ids),
+            declarations=_declarations_of(player_ids),
         )
 
 
@@ -219,6 +225,7 @@ class DjangoTeamRepository:
 
             # 在籍が所属と背番号の出典。選手側には持たせない
             for stint in player.career:
+                acquired_via = stint.acquired_via.value if stint.acquired_via is not None else None
                 stint_row, _ = orm_models.PlayerStint.objects.update_or_create(  # type: ignore[misc]
                     id=stint.id,
                     defaults={
@@ -227,9 +234,30 @@ class DjangoTeamRepository:
                         "number": stint.number.value,
                         "from_year": stint.from_year,
                         "to_year": stint.to_year,
+                        "signed_as": stint.signed_as.value,
+                        "promoted_year": stint.promoted_year,
+                        "number_before_promotion": (
+                            stint.number_before_promotion.value if stint.number_before_promotion is not None else None
+                        ),
+                        "acquired_via": acquired_via,
                     },
                 )
                 stint.id = stint_row.id
+
+            # FA 宣言。在籍・主将と同じく upsert だけで、持っていない宣言は消さない。
+            # 消すのは、選手が取り消したと記録した宣言（removed_declaration_ids）だけ。
+            # 同じ年に取り消して宣言し直しても重複しないよう、消してから書く
+            if player.removed_declaration_ids:
+                orm_models.PlayerFreeAgentDeclaration.objects.filter(
+                    player=row, id__in=player.removed_declaration_ids
+                ).delete()
+                player.removed_declaration_ids.clear()
+            for declaration in player.fa_declarations:
+                declaration_row, _ = orm_models.PlayerFreeAgentDeclaration.objects.update_or_create(  # type: ignore[misc]
+                    id=declaration.id,
+                    defaults={"player": row, "year": declaration.year, "kind": declaration.kind.value},
+                )
+                declaration.id = declaration_row.id
 
             for captaincy in player.captaincies:
                 captaincy_row, _ = orm_models.Captaincy.objects.update_or_create(  # type: ignore[misc]
@@ -276,6 +304,7 @@ class DjangoTeamRepository:
                         pitching=roster.pitching.get(player_id, PitchingLine()),
                         career=career,
                         captaincies=roster.captaincies.get(player_id, []),
+                        fa_declarations=roster.declarations.get(player_id, []),
                     )
                 )
             players.sort(key=lambda p: p.number.value)
@@ -310,9 +339,30 @@ def _careers_of(player_ids: list[int]) -> dict[int, list[Stint]]:
                 number=JerseyNumber(row.number),
                 from_year=row.from_year,
                 to_year=row.to_year,
+                signed_as=ContractStatus.from_label(row.signed_as),
+                promoted_year=row.promoted_year,
+                number_before_promotion=(
+                    JerseyNumber(row.number_before_promotion) if row.number_before_promotion is not None else None
+                ),
+                # 空（None・空文字）は不明
+                acquired_via=AcquisitionRoute.from_label(row.acquired_via) if row.acquired_via else None,
             )
         )
     return careers
+
+
+def _declarations_of(player_ids: list[int]) -> dict[int, list[FreeAgentDeclaration]]:
+    """選手ごとの FA 宣言。新しい順に並べる。_careers_of と同じく選手 id の集合で1本のクエリにする。"""
+    if not player_ids:
+        return {}
+
+    declarations: dict[int, list[FreeAgentDeclaration]] = {}
+    rows = orm_models.PlayerFreeAgentDeclaration.objects.filter(player_id__in=player_ids).order_by("-year", "-id")
+    for row in rows:
+        declarations.setdefault(row.player_id, []).append(
+            FreeAgentDeclaration(id=row.id, year=row.year, kind=FreeAgencyKind.from_label(row.kind))
+        )
+    return declarations
 
 
 def _captaincies_of(player_ids: list[int]) -> dict[int, list[Captaincy]]:
@@ -844,4 +894,5 @@ class DjangoLeagueRepository:
             name=row.name,
             foreign_player_roster_limit=row.foreign_player_roster_limit,
             foreign_player_game_limit=row.foreign_player_game_limit,
+            registered_player_limit=row.registered_player_limit,
         )

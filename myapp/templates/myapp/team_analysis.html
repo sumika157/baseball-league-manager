@@ -26,7 +26,8 @@
 
 <div class="page-head">
   <h1 class="page-title">{{ analysis.team_name }}の戦力分析</h1>
-  <p class="page-subtitle">{{ analysis.year }}年の編成 · 投手 {{ analysis.pitchers.count }}名 · 野手 {{ analysis.fielders.count }}名</p>
+  <p class="page-subtitle">{{ analysis.year }}年の編成 · 投手 {{ analysis.pitchers.count }}名 · 野手 {{ analysis.fielders.count }}名 ·
+    支配下 {{ analysis.registered_count }}{% if analysis.registered_limit is not None %} / {{ analysis.registered_limit }}{% endif %}名 · 育成 {{ analysis.developmental_count }}名</p>
 </div>
 
 {# 球団の切り替え。JS なしで動くよう GET フォームにし、年度・タブ・色分けは引き継ぐ #}
@@ -54,7 +55,7 @@
   <p class="text-muted">このチームにはまだ試合の記録がありません。在籍だけから編成を表示しています。</p>
 {% endif %}
 
-{# タブ。成績一覧・FA を足していく #}
+{# タブ。成績一覧を足していく #}
 <div class="segmented ms-2">
   {% for tab in analysis.tabs %}
     <a class="segmented-item {% if tab.key == analysis.tab %}is-active{% endif %}"
@@ -90,13 +91,14 @@
     投手の数字は「登板数(先発数)」、野手は「主な守備位置 出場数(先発数)」。
     投手かどうかは登録位置で決める。登板・出場はこのチームの試合だけを数える。
   {% endcomment %}
-  <h2 class="h6 mb-2">投手 <span class="text-muted">{{ analysis.pitchers.count }}名</span></h2>
+  <h2 class="h6 mb-2">投手 <span class="text-muted">{{ analysis.pitchers.count }}名（支配下 {{ analysis.pitchers.registered_count }} · 育成 {{ analysis.pitchers.developmental_count }}）</span></h2>
   <p class="page-subtitle mb-2" style="font-size: 0.8125rem;">
     先発は登板のうち半分以上が先発の投手、それ未満が救援。選手名の横は 登板数(先発数)。
+    支配下・育成と背番号は、その年のものです。
   </p>
   {% include "myapp/_depth_table.html" with table=analysis.pitchers row_head="役割" %}
 
-  <h2 class="h6 mb-2 mt-4">野手 <span class="text-muted">{{ analysis.fielders.count }}名</span></h2>
+  <h2 class="h6 mb-2 mt-4">野手 <span class="text-muted">{{ analysis.fielders.count }}名（支配下 {{ analysis.fielders.registered_count }} · 育成 {{ analysis.fielders.developmental_count }}）</span></h2>
   <p class="page-subtitle mb-2" style="font-size: 0.8125rem;">
     区分は先発が最多の守備位置（先発が無ければ出場が最多）で決める。選手名の横は 主な守備位置 出場数(先発数)。
   </p>
@@ -144,6 +146,7 @@
   <h2 class="h6 mb-2">入退団</h2>
   <p class="page-subtitle mb-2" style="font-size: 0.8125rem;">
     {{ analysis.year }}年に加入した選手と退団した選手。区分は在籍の記録から導きます（引退と自由契約は区別できません）。
+    経路は入団時に記録した値で、記録が無ければ「—」です。FA を宣言して移籍した選手には退団の区分の横に「FA」を出します。
   </p>
   <div class="row g-3 mb-4">
     <div class="col-12 col-lg-6">
@@ -157,19 +160,21 @@
               <th>登録位置</th>
               <th>区分</th>
               <th>前所属</th>
+              <th>経路</th>
             </tr>
           </thead>
           <tbody>
             {% for row in analysis.joiners %}
             <tr>
               <td><span class="jersey-number">{{ row.number }}</span></td>
-              <td class="player-tone player-tone-{{ row.tone.key }}"><a href="{% url 'player_detail' analysis.team_id row.player_id %}" class="player-name">{{ row.name }}</a>{% if row.tone.mark %}<span class="tone-mark">{{ row.tone.mark }}</span>{% endif %}</td>
+              <td class="player-tone player-tone-{{ row.tone.key }}"><a href="{% url 'player_detail' analysis.team_id row.player_id %}" class="player-name">{{ row.name }}</a>{% if row.tone.mark %}<span class="tone-mark">{{ row.tone.mark }}</span>{% endif %}{% if row.is_developmental %} <span class="badge bg-primary">育成</span>{% endif %}</td>
               <td>{{ row.position_label }}</td>
               <td>{{ row.kind_label }}</td>
               <td>{{ row.other_team_name|default:"—" }}</td>
+              <td>{{ row.acquired_via_label|default:"—" }}</td>
             </tr>
             {% empty %}
-            <tr><td colspan="5" class="text-center text-muted py-4">この年の加入はありません。</td></tr>
+            <tr><td colspan="6" class="text-center text-muted py-4">この年の加入はありません。</td></tr>
             {% endfor %}
           </tbody>
         </table>
@@ -192,9 +197,9 @@
             {% for row in analysis.leavers %}
             <tr>
               <td><span class="jersey-number">{{ row.number }}</span></td>
-              <td class="player-tone player-tone-{{ row.tone.key }}"><a href="{% url 'player_detail' analysis.team_id row.player_id %}" class="player-name">{{ row.name }}</a>{% if row.tone.mark %}<span class="tone-mark">{{ row.tone.mark }}</span>{% endif %}</td>
+              <td class="player-tone player-tone-{{ row.tone.key }}"><a href="{% url 'player_detail' analysis.team_id row.player_id %}" class="player-name">{{ row.name }}</a>{% if row.tone.mark %}<span class="tone-mark">{{ row.tone.mark }}</span>{% endif %}{% if row.is_developmental %} <span class="badge bg-primary">育成</span>{% endif %}</td>
               <td>{{ row.position_label }}</td>
-              <td>{{ row.kind_label }}</td>
+              <td>{{ row.kind_label }}{% if row.fa_label %} <span class="badge bg-secondary">{{ row.fa_label }}</span>{% endif %}</td>
               <td>{{ row.other_team_name|default:"—" }}</td>
             </tr>
             {% empty %}
@@ -241,6 +246,47 @@
       {% endif %}
     </section>
     {% endfor %}
+  </div>
+{% elif analysis.tab == 'fa' %}
+  {% comment %}
+    FA 権の見込み。規則と並びはドメイン（free_agency）が決める。登録日数は保存せず、試合の出場から推定する。
+  {% endcomment %}
+  <h2 class="h6 mb-2">FA 取得の見込み</h2>
+  <p class="page-subtitle mb-2" style="font-size: 0.8125rem;">
+    {{ analysis.year }}年に在籍した選手。<strong>登録日数は試合への出場（初出場〜最終出場）から推定した値です</strong>
+    （育成だった年と試合に出ていない年は0日。{{ analysis.service_days_per_season }}日で1シーズン、{{ analysis.service_days_per_season }}日に満たない年は合算）。
+    {% if analysis.records_from_year %}試合の記録は{{ analysis.records_from_year }}年からで、それより前の年は数えられません。入団がそれより前の選手は、取得済みでなければ「不明」です。{% else %}試合の記録がまだありません。{% endif %}
+    並びは取得済み、取得が近い順（国内FA）です。
+  </p>
+  <div class="table-responsive mb-4">
+    <table class="table table-hover tabular-nums">
+      <thead>
+        <tr>
+          <th>背番号</th>
+          <th>選手</th>
+          <th>学歴</th>
+          <th class="text-end">入団年</th>
+          <th class="text-end">数えたシーズン（推定）</th>
+          <th>国内FA</th>
+          <th>海外FA</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in analysis.fa_rows %}
+        <tr>
+          <td><span class="jersey-number">{{ row.number }}</span></td>
+          <td class="player-tone player-tone-{{ row.tone.key }}"><a href="{% url 'player_detail' analysis.team_id row.player_id %}" class="player-name">{{ row.name }}</a>{% if row.tone.mark %}<span class="tone-mark">{{ row.tone.mark }}</span>{% endif %}{% if row.is_developmental %} <span class="badge bg-primary">育成</span>{% endif %}</td>
+          <td>{{ row.education_label }}</td>
+          <td class="text-end">{% if row.debut_year %}{{ row.debut_year }}年{% else %}—{% endif %}</td>
+          <td class="text-end">{% if row.seasons is None %}—{% else %}{{ row.seasons }}シーズン{% if row.remainder_days %}＋{{ row.remainder_days }}日{% endif %}{% if row.includes_estimate %}<span class="stat-muted">（推定）</span>{% endif %}{% endif %}</td>
+          <td{% if row.is_domestic_acquired %} class="fw-semibold"{% endif %}>{{ row.domestic_label }}</td>
+          <td{% if row.is_overseas_acquired %} class="fw-semibold"{% endif %}>{{ row.overseas_label }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="7" class="text-center text-muted py-4">この年に在籍した選手がいません。</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
 {% endif %}
 {% endif %}

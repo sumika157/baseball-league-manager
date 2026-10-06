@@ -259,7 +259,7 @@ class TeamUsageMapTest(AnalysisCase):
         response = self.client.get(reverse("team_analysis", args=[self.team.id]), {"tab": "usage"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context["analysis"].tab, "usage")
-        self.assertEqual([t.key for t in response.context["analysis"].tabs], ["depth", "usage"])
+        self.assertEqual([t.key for t in response.context["analysis"].tabs], ["depth", "usage", "fa"])
         self.assertContains(response, "正遊撃手")
         self.assertContains(response, "usage-box-short")
 
@@ -416,7 +416,8 @@ class TeamMovesTest(AnalysisCase):
         for number in range(60, 80):
             player_id = self.move(self.rival, f"移籍{number}", number, 2020, 2025)
             self.stint(self.team, player_id, number, 2026)
-            self.move(self.team, f"退団{number}", number + 100, 2020, 2026)
+            # 支配下の背番号は99以下（#126）。移籍組の 60〜79 と重ならない 80〜99 を使う
+            self.move(self.team, f"退団{number}", number + 20, 2020, 2026)
         self.assertEqual(count(), before)
 
 

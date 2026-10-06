@@ -10,6 +10,7 @@ from myapp.domain.value_objects import (
     JerseyNumber,
     PitchingLine,
     Position,
+    RosterLimits,
 )
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import (
@@ -34,7 +35,7 @@ class RepositoryRoundTripTest(BaseCase):
 
     def test_save_and_reload_a_player(self):
         team = self.repo.find_by_id(self.team.id)
-        player = team.add_player("山田", JerseyNumber(10), Position.INFIELDER)
+        player = team.add_player("山田", JerseyNumber(10), Position.INFIELDER, limits=RosterLimits.UNLIMITED)
         self.repo.save(team)
 
         saved = self.repo.find_by_id(self.team.id).find_player(player.id)
@@ -75,12 +76,12 @@ class RepositoryRoundTripTest(BaseCase):
 
     def test_duplicate_number_is_rejected_on_the_aggregate(self):
         team = self.repo.find_by_id(self.team.id)
-        team.add_player("山田", JerseyNumber(10), Position.INFIELDER)
+        team.add_player("山田", JerseyNumber(10), Position.INFIELDER, limits=RosterLimits.UNLIMITED)
         self.repo.save(team)
 
         reloaded = self.repo.find_by_id(self.team.id)
         with self.assertRaises(DuplicateJerseyNumber):
-            reloaded.add_player("田中", JerseyNumber(10), Position.OUTFIELDER)
+            reloaded.add_player("田中", JerseyNumber(10), Position.OUTFIELDER, limits=RosterLimits.UNLIMITED)
 
 
 class GameRepositoryTest(BaseCase):

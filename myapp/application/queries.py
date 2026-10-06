@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from ..domain.entities import Game
-from .dto import ActivePlayerStats, GameRow, PlayerFielding, TeamAnalysisFacts, TeamSummary
+from .dto import ActivePlayerStats, GameRow, PlayerFielding, ServiceHistory, TeamAnalysisFacts, TeamSummary
 
 
 @runtime_checkable
@@ -108,4 +108,8 @@ class TeamAnalysisQuery(Protocol):
 
     def load(self, team_id: int, year: int) -> TeamAnalysisFacts:
         """その年にそのチームへ在籍していた選手と、その年の出場・登板の数、入退団の材料（在籍）。"""
+        ...
+
+    def load_service_history(self, player_ids: list[int], year: int) -> ServiceHistory:
+        """FA 取得タブの材料。選手の year 年までの年ごとの初出場〜最終出場と、全在籍の契約。固定本数。"""
         ...
