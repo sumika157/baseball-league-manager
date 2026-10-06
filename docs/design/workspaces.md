@@ -395,9 +395,9 @@ W3 を W4 より先にするのは、W4 を先にすると、中身を入れら�
 上の構成は、最終的には Terraform で作り直せるようにする（2026-10-05 ユーザーの要望）。それまでは Wiki「本番公開」の手順で手で作る。
 
 - 対象: Lightsail のインスタンスとポートの設定、Cloudflare のトンネルと転送の設定・DNS・ゾーンの設定・R2・Turnstile。VM の初期設定は cloud-init で行う
-- やらない: ドメインの購入と、CI からの `apply`
+- やらない: ドメインの購入、CI からの `apply`、アプリの更新（デプロイ）。Terraform は初回の起動までを担う
 - 前提: W0（#76）と CI（#88。VM は GHCR のイメージを pull する）の後
-- 未決（#89 で確認中）: state の置き場（推奨は R2）、Terraform がどこまで作るか（推奨はインフラと VM の初期設定まで。アプリの秘密は state と起動スクリプトに入れない）
+- 決定（2026-10-05）: state の置き場は Cloudflare R2（非公開バケット。state のバケットだけは手で作る）。Terraform は**アプリの起動まで全部**作る（VM の初期設定は cloud-init、`.env` は Terraform が SSH で書く。秘密を cloud-init に入れないため。`DJANGO_SECRET_KEY` も Terraform が生成する）。秘密が残るのは state だけ。ドメイン・アカウント・API トークンは手作業。実装は `infra/`、手順は Wiki「本番公開」（実機では未確認）
 
 ### PostgreSQL へ移る条件
 

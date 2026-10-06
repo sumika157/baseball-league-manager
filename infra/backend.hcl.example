@@ -1,0 +1,29 @@
+# cp backend.hcl.example backend.hcl して埋める（backend.hcl は gitignore 済み）。
+# 使い方: make tf ARGS="init -backend-config=backend.hcl"
+
+bucket = "baseball-tfstate"
+key    = "production/terraform.tfstate"
+
+# <アカウントID> は Cloudflare ダッシュボードの R2 の画面に出ている
+endpoints = {
+  s3 = "https://<アカウントID>.r2.cloudflarestorage.com"
+}
+
+region = "auto"
+
+# state のバケットに書ける R2 の API トークンのキー。AWS_ACCESS_KEY_ID などの環境変数は Lightsail 用に空けておくため、ここに書く
+# （backend.hcl は gitignore 済み。.terraform/ にも写されるので、リポジトリの外へ持ち出さない）
+access_key = "<R2 のアクセスキー ID>"
+secret_key = "<R2 のシークレット>"
+
+# R2 は AWS ではないので、AWS 向けの検査を切る（Cloudflare のドキュメントの指定どおり）
+skip_credentials_validation = true
+skip_metadata_api_check     = true
+skip_region_validation      = true
+skip_requesting_account_id  = true
+skip_s3_checksum            = true
+use_path_style              = true
+
+# state のロック（S3 の条件付き書き込みを使う）。R2 は PutObject の If-None-Match に対応しているが、
+# 実機では未確認。init や plan がロックで失敗したら false にする（1人で使うなら実害は小さい）
+use_lockfile = true
