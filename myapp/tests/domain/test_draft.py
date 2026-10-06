@@ -10,7 +10,7 @@ from datetime import date
 from myapp.domain.pennant import draft
 from myapp.domain.pennant.draft import DraftRoute, DraftTeam, draft_class, draftee_count
 from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings
-from myapp.domain.value_objects import Position
+from myapp.domain.value_objects import Position, Profile
 from myapp.domain.virtual_players import generator
 from myapp.domain.virtual_players.generator import AmateurPath
 
@@ -197,6 +197,21 @@ class NameTest(unittest.TestCase):
         taken = rookies[0].profile.back_name.split(".")[-1]
         again = run(team(surnames={taken: 1}), seed=3, used=set())
         self.assertIn(".", again[0].profile.back_name)
+
+
+class RouteFromProfileTest(unittest.TestCase):
+    """経路は保存していないので、プロフィールから導く（画面がオフの結果を読むときに使う）。"""
+
+    def test_each_route_is_derived_from_the_career(self) -> None:
+        self.assertIs(DraftRoute.of_profile(Profile(is_foreign_player=True)), DraftRoute.FOREIGN)
+        self.assertIs(DraftRoute.of_profile(Profile(high_school="A高")), DraftRoute.HIGH_SCHOOL)
+        self.assertIs(DraftRoute.of_profile(Profile(high_school="A高", university="B大")), DraftRoute.UNIVERSITY)
+        self.assertIs(DraftRoute.of_profile(Profile(high_school="A高", corporate_team="C社")), DraftRoute.CORPORATE)
+
+    def test_the_route_of_every_drafted_rookie_matches_the_drawn_route(self) -> None:
+        for seed in range(30):
+            for rookie in run(team(), seed=seed, used=set()):
+                self.assertIs(DraftRoute.of_profile(rookie.profile), rookie.route)
 
 
 class DeterminismTest(unittest.TestCase):

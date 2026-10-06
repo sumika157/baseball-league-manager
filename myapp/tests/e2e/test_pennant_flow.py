@@ -10,7 +10,9 @@ import re
 
 from django.contrib.auth.models import User
 
+from myapp.domain.pennant.schedule import AdvanceTarget
 from myapp.infrastructure import orm_models
+from myapp.presentation.views import build_pennant_season_service
 
 from ..helpers import build_service
 from ..integration.test_pennant_advance import register_club
@@ -84,3 +86,36 @@ class PennantFlowTest(PlaywrightTestCase):
 
         # 実データには試合が増えていない
         self.assertEqual(orm_models.Game.objects.filter(home_team__league__world__isnull=True).count(), 0)
+
+    def test_close_the_season_read_the_result_and_start_the_next_year(self):
+        self._login()
+        self.page.goto(self.live_server_url + "/pennant/")
+        self.page.fill('input[name="name"]', "オフの世界")
+        self.page.check('input[name="leagues"]')
+        self.page.select_option('select[name="managed_team"]', label="ホームズ")
+        self.page.click('button:has-text("世界を作る")')
+        self.page.wait_for_url(re.compile(r"/pennant/\d+/$"))
+        world_id = int(re.search(r"/pennant/(\d+)/", self.page.url).group(1))
+
+        # 1シーズンの進行はサービスで済ませる（画面で143試合ぶんを押さない）。締める操作から画面で確かめる
+        build_pennant_season_service(world_id).advance(AdvanceTarget.SEASON_END)
+        self.page.reload()
+        self.assertEqual(self.page.locator('button:has-text("1日進める")').count(), 0, "終了後は進めない")
+
+        # 締める。確認はボタン1つ（文言で「元に戻せません」を伝える）
+        self.assertIn("元に戻せません", self.page.content())
+        self.page.click('button:has-text("のシーズンを締める")')
+        self.page.wait_for_url(re.compile(r"/offseason/\d+/$"))
+        self.assertIn("シーズンを締めました", self.page.content())
+        self.assertIn("オフ（", self.page.locator("h1").inner_text())
+        self._assert_links_stay_in_the_world(world_id)
+
+        # ホームに戻ると、前年の順位とオフの結果へのリンクが出て、翌年を1日進められる
+        self.page.click('.segmented a:has-text("ホーム")')
+        self.page.wait_for_url(re.compile(rf"/pennant/{world_id}/$"))
+        self.assertIn("年の最終順位", self.page.content())
+        self.assertIn("のオフの結果", self.page.content())
+        self.page.click('button:has-text("1日進める")')
+        self.page.wait_for_url(re.compile(r"\?since="))
+        self.assertIn("進めた結果", self.page.content())
+        self._assert_links_stay_in_the_world(world_id)

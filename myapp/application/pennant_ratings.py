@@ -15,13 +15,23 @@ from datetime import date
 
 from ..domain import services as domain_services
 from ..domain.entities import Player
+from ..domain.pennant.initial_ratings import age_at_season_start
+from ..domain.pennant.offseason import overall_value
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.season import ratings_year
 from ..domain.repositories import FixtureRepository, RatingsRepository, WorldRepository
-from ..domain.simulation.ratings import BatterRatings, PitcherRatings, RatingGrade
-from .dto import PlayerRatingsCard, RatingCell, RatingColumn, RatingsRow, RatingsTable
+from ..domain.simulation.ratings import RATING_MAX, RATING_MIN, BatterRatings, PitcherRatings, RatingGrade
+from .dto import (
+    PlayerRatingsCard,
+    PlayerRatingsHistory,
+    RatingCell,
+    RatingColumn,
+    RatingsHistoryRow,
+    RatingsRow,
+    RatingsTable,
+)
 from .player_stats_view import stats_player
-from .queries import PlayerStatsQuery, SimulationContextQuery
+from .queries import PlayerStatsQuery, RatingsHistoryQuery, SimulationContextQuery
 
 
 def _cells_of(ratings: BatterRatings | PitcherRatings) -> tuple[RatingCell, ...]:
@@ -32,6 +42,13 @@ def _cells_of(ratings: BatterRatings | PitcherRatings) -> tuple[RatingCell, ...]
         grade = RatingGrade.from_value(value)
         cells.append(RatingCell(key=key, label=label, value=value, grade=grade.label, emphasis=grade.emphasis))
     return tuple(cells)
+
+
+def overall_cell(ratings: BatterRatings | PitcherRatings) -> RatingCell:
+    """能力の総合（野手は打撃、投手は抑える力。出典は domain の `overall_value`）を、区分つきの表示にする。"""
+    value = max(RATING_MIN, min(RATING_MAX, round(overall_value(ratings))))
+    grade = RatingGrade.from_value(value)
+    return RatingCell(key="overall", label="総合", value=value, grade=grade.label, emphasis=grade.emphasis)
 
 
 class PennantRatingsViewService:
@@ -50,6 +67,7 @@ class PennantRatingsViewService:
         context_query: SimulationContextQuery,
         stats: PlayerStatsQuery,
         ratings: RatingsRepository,
+        history: RatingsHistoryQuery,
         today: Callable[[], date],
     ) -> None:
         self._world_id = world_id
@@ -58,6 +76,7 @@ class PennantRatingsViewService:
         self._context_query = context_query
         self._stats = stats
         self._ratings = ratings
+        self._history = history
         self._today = today
 
     def current_year(self) -> int:
@@ -75,6 +94,36 @@ class PennantRatingsViewService:
             return None
         item = found[0]
         return PlayerRatingsCard(year=item.year, is_pitcher=item.is_pitcher, cells=_cells_of(item.ratings))
+
+    def get_history(self, player_id: int) -> PlayerRatingsHistory | None:
+        """選手の能力の推移（古い年から）。範囲の外の選手や、能力が一つも無い選手は None。
+
+        球団の集約は読まず、選手・在籍・能力の小さな参照クエリで作る。年齢はその年の開幕時点（数えられなければ None）。
+        引退した選手は、最後に在籍した年の行に印を付ける。
+        """
+        facts = self._history.for_player(player_id)
+        if facts is None or not facts.ratings:
+            return None
+        retired_after = None
+        if facts.spans and all(span.to_year is not None for span in facts.spans):
+            retired_after = max(span.to_year for span in facts.spans if span.to_year is not None)
+        rows = []
+        for item in facts.ratings:
+            span = next(
+                (s for s in facts.spans if s.from_year <= item.year and (s.to_year is None or item.year <= s.to_year)),
+                None,
+            )
+            rows.append(
+                RatingsHistoryRow(
+                    year=item.year,
+                    age=age_at_season_start(facts.profile, item.year),
+                    team_name=span.team_name if span is not None else "",
+                    cells=_cells_of(item.ratings),
+                    overall=overall_cell(item.ratings),
+                    is_final_year=retired_after == item.year,
+                )
+            )
+        return PlayerRatingsHistory(rows=tuple(rows))
 
     def get_table(
         self,

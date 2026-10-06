@@ -74,6 +74,20 @@ class DraftRoute(Enum):
         """
         return cls.FOREIGN if path is None else cls[path.name]
 
+    @classmethod
+    def of_profile(cls, profile: Profile) -> DraftRoute:
+        """新人のプロフィールから経路を導く（経路は保存していない。画面がオフの結果を読むときに使う）。
+
+        外国人は外国人。日本人は、経歴のいちばん後ろの段階（社会人 > 大学 > 高校）が経路。
+        """
+        if profile.is_foreign_player:
+            return cls.FOREIGN
+        if profile.corporate_team:
+            return cls.CORPORATE
+        if profile.university:
+            return cls.UNIVERSITY
+        return cls.HIGH_SCHOOL
+
 
 _RATING_MEAN = {
     DraftRoute.HIGH_SCHOOL: 35.0,

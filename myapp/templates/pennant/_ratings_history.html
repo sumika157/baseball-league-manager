@@ -1,0 +1,33 @@
+{% comment %}
+選手ページの「能力の推移」。年度ごとの能力（区分と値）と総合。ratings_history は PlayerRatingsHistory。
+引退した選手は、最後の年に「（最終年）」を付ける。
+{% endcomment %}
+<div class="card mb-3">
+  <div class="card-header">能力の推移</div>
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>年度</th>
+            <th class="text-end">年齢</th>
+            <th>球団</th>
+            {% for cell in ratings_history.rows.0.cells %}<th>{{ cell.label }}</th>{% endfor %}
+            <th>総合</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in ratings_history.rows %}
+            <tr>
+              <td>{{ row.year }}年{% if row.is_final_year %}<span class="stat-muted">（最終年）</span>{% endif %}</td>
+              <td class="text-end">{{ row.age|default_if_none:"—" }}</td>
+              <td>{{ row.team_name }}</td>
+              {% for cell in row.cells %}<td>{% include 'myapp/_rating_grade.html' with rating=cell %}</td>{% endfor %}
+              <td>{% include 'myapp/_rating_grade.html' with rating=row.overall %}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>

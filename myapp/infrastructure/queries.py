@@ -25,16 +25,21 @@ from ..application.dto import (
     GameNote,
     GameRow,
     LastStart,
+    LeagueOption,
+    OffseasonFacts,
+    OffseasonPlayerFact,
     PeriodBatting,
     PeriodPitching,
     PitcherUsage,
     PitchingOuting,
     PlayerFielding,
     PlayerSearchRow,
+    RatingsHistoryFacts,
     SimulationContext,
     SimulationPlayer,
     SimulationTeam,
     TeamAnalysisFacts,
+    TeamSpan,
     TeamSummary,
     WorldSummary,
 )
@@ -43,6 +48,7 @@ from ..domain.exceptions import WorldNotFound
 from ..domain.pennant.retirement import PlayingTime
 from ..domain.pennant.world import WorldScope
 from ..domain.simulation.manager import RECENT_PITCHING_DAYS
+from ..domain.simulation.ratings import BatterRatings, PitcherRatings
 from ..domain.value_objects import (
     BattingLine,
     FieldingLine,
@@ -54,14 +60,23 @@ from ..domain.value_objects import (
     Season,
 )
 from . import orm_models
-from .repositories import batting_totals, game_batting_of, game_pitching_of, pitching_totals, profile_of
+from .repositories import (
+    DjangoRatingsRepository,
+    batting_totals,
+    game_batting_of,
+    game_pitching_of,
+    pitching_totals,
+    profile_of,
+)
 from .scoping import (
     fixtures_in_worlds,
     games_in,
     games_in_worlds,
+    leagues_in,
     leagues_in_worlds,
     period_covering,
     players_in,
+    ratings_in,
     stints_in,
     teams_in,
     world_condition,
@@ -796,6 +811,116 @@ class DjangoSeasonPlayingTimeQuery:
             player_id: PlayingTime(plate_appearances=appearances.get(player_id, 0), outs=outs.get(player_id, 0))
             for player_id in sorted(appearances.keys() | outs.keys())
         }
+
+
+_OFFSEASON_STINT_FIELDS = (
+    "player_id",
+    "player__name",
+    "player__position",
+    "player__birth_date",
+    "player__is_foreign_player",
+    "player__high_school",
+    "player__university",
+    "player__corporate_team",
+    "player__debut_year",
+    "team_id",
+    "team__name",
+    "team__league_id",
+    "number",
+)
+
+
+class DjangoOffseasonQuery:
+    """OffseasonQuery の Django ORM 実装。範囲（`WorldScope`）の在籍と能力を `values()` で読む（集約は組み立てない）。
+
+    能力の行は `DjangoRatingsRepository`（能力の行 ↔ 値オブジェクトの変換の出典）で読む。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def has_ratings(self, year: int) -> bool:
+        return ratings_in(self._scope).filter(year=year).exists()
+
+    def facts(self, year: int) -> OffseasonFacts:
+        ratings = DjangoRatingsRepository(self._scope)
+        before = {item.player_id: item.ratings for item in ratings.find_by_year(year)}
+        after = {item.player_id: item.ratings for item in ratings.find_by_year(year + 1)}
+
+        def players(rows: Iterable[dict[str, Any]]) -> tuple[OffseasonPlayerFact, ...]:
+            return tuple(self._fact(row, before, after) for row in rows)
+
+        stints = stints_in(self._scope).order_by("team_id", "number")
+        retired = stints.filter(to_year=year).values(*_OFFSEASON_STINT_FIELDS)
+        rookies = stints.filter(from_year=year + 1).values(*_OFFSEASON_STINT_FIELDS)
+        # 翌年も在籍し、前の年から居た選手（新人を除く）。両方の能力がある選手だけが能力の変化を持つ
+        staying = stints.filter(period_covering(year + 1), from_year__lte=year).values(*_OFFSEASON_STINT_FIELDS)
+        leagues = leagues_in(self._scope).order_by("id").values_list("id", "name")
+        return OffseasonFacts(
+            leagues=tuple(LeagueOption(id=league_id, name=name) for league_id, name in leagues),
+            retired=players(retired),
+            rookies=players(rookies),
+            retained=tuple(fact for fact in players(staying) if fact.before and fact.after),
+        )
+
+    @staticmethod
+    def _fact(
+        row: dict[str, Any],
+        before: Mapping[int, BatterRatings | PitcherRatings],
+        after: Mapping[int, BatterRatings | PitcherRatings],
+    ) -> OffseasonPlayerFact:
+        player_id = row["player_id"]
+        return OffseasonPlayerFact(
+            player_id=player_id,
+            name=row["player__name"],
+            position=Position.from_label(row["player__position"]),
+            team_id=row["team_id"],
+            team_name=row["team__name"],
+            league_id=row["team__league_id"],
+            number=row["number"],
+            profile=Profile(
+                birth_date=row["player__birth_date"],
+                debut_year=row["player__debut_year"],
+                high_school=row["player__high_school"],
+                university=row["player__university"],
+                corporate_team=row["player__corporate_team"],
+                is_foreign_player=row["player__is_foreign_player"],
+            ),
+            before=before.get(player_id),
+            after=after.get(player_id),
+        )
+
+
+class DjangoRatingsHistoryQuery:
+    """RatingsHistoryQuery の Django ORM 実装。選手・在籍・能力の3本のクエリだけで読む。"""
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def for_player(self, player_id: int) -> RatingsHistoryFacts | None:
+        player = (
+            players_in(self._scope)
+            .filter(id=player_id)
+            .values("birth_date", "is_foreign_player", "debut_year")
+            .first()
+        )
+        if player is None:
+            return None
+        spans = (
+            stints_in(self._scope)
+            .filter(player_id=player_id)
+            .order_by("from_year")
+            .values_list("team_id", "team__name", "from_year", "to_year")
+        )
+        return RatingsHistoryFacts(
+            profile=Profile(
+                birth_date=player["birth_date"],
+                debut_year=player["debut_year"],
+                is_foreign_player=player["is_foreign_player"],
+            ),
+            spans=tuple(TeamSpan(team_id, name, from_year, to_year) for team_id, name, from_year, to_year in spans),
+            ratings=tuple(DjangoRatingsRepository(self._scope).find_by_player(player_id)),
+        )
 
 
 class DjangoTeamAnalysisQuery:

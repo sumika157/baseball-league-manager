@@ -22,9 +22,11 @@ from .dto import (
     ActivePlayerStats,
     GameNote,
     GameRow,
+    OffseasonFacts,
     PeriodBatting,
     PeriodPitching,
     PlayerFielding,
+    RatingsHistoryFacts,
     SimulationContext,
     SimulationTeam,
     TeamAnalysisFacts,
@@ -223,6 +225,34 @@ class SeasonPlayingTimeQuery(Protocol):
 
     def for_year(self, year: int) -> Mapping[int, PlayingTime]:
         """その年に打席に立った・投げた選手の出場機会。どちらも無い選手は含めない。"""
+        ...
+
+
+@runtime_checkable
+class OffseasonQuery(Protocol):
+    """世界のオフの結果の参照。締める処理は結果を保存しないので、在籍・プロフィール・能力から導く。
+
+    - 締めた年 Y: 翌年 Y+1 の能力の行がある（開幕年より前を除く。domain の `is_season_closed`）
+    - 引退・退団: 在籍の退団年が Y
+    - 新人: 在籍の加入年が Y+1
+    - 残った選手: Y と Y+1 の両方の能力がある
+    """
+
+    def has_ratings(self, year: int) -> bool:
+        """その年の能力の行があるか。「締めたか」の判定は domain の `is_season_closed` が持つ（これはその材料）。"""
+        ...
+
+    def facts(self, year: int) -> OffseasonFacts:
+        """Y 年のオフの材料。集約は組み立てず、SQL で読む。"""
+        ...
+
+
+@runtime_checkable
+class RatingsHistoryQuery(Protocol):
+    """選手ひとりの能力の推移の参照（選手ページ）。球団の集約を読まず、小さな3本のクエリで読む。"""
+
+    def for_player(self, player_id: int) -> RatingsHistoryFacts | None:
+        """範囲の外の選手は None。能力の無い選手は、能力が空の材料を返す。"""
         ...
 
 

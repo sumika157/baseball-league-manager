@@ -10,8 +10,9 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from ..domain.pennant.club_plan import PlanSection
+from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.season import SeasonPhase
-from ..domain.simulation.ratings import RatingEmphasis
+from ..domain.simulation.ratings import BatterRatings, PitcherRatings, RatingEmphasis
 from ..domain.value_objects import (
     BattingLine,
     FieldingPosition,
@@ -1454,6 +1455,10 @@ class OwnTeamSummary:
     streak: str
     # 開幕前だけ。日程の最初の日（日程がまだ無ければ既定の開幕日）
     opening_date: date | None
+    # 締めた後の開幕前だけ。前年の最終順位と成績（「80勝60敗3分」）。前年の順位が無ければ None と空
+    previous_year: int | None = None
+    previous_rank: int | None = None
+    previous_record: str = ""
 
     @property
     def is_leader(self) -> bool:
@@ -1645,6 +1650,9 @@ class PennantHome:
     batters: list[KeyBatterRow]
     pitchers: list[KeyPitcherRow]
     titles: list[TitleRaceRow]
+    # 順位表・主力・タイトルの年。締めた後の開幕前は前年（今季の成績がまだ無いため）
+    stats_year: int
+    shows_previous_season: bool
 
     @property
     def season_finished(self) -> bool:
@@ -1756,6 +1764,157 @@ class SeasonCloseOption:
     can_close: bool
     # 締められない理由（締められるときは空）
     reason: str = ""
+
+
+# --- オフの結果と能力の推移（P6c） ---
+
+
+@dataclass(frozen=True)
+class OffseasonPlayerFact:
+    """オフの結果の材料になる選手ひとり。在籍・プロフィール・締める年と翌年の能力から読んだ値（保存した結果ではない）。
+
+    `before` は締める年の能力、`after` は翌年の能力。引退した選手は `after` が、新人は `before` が無い。
+    """
+
+    player_id: int
+    name: str
+    position: Position
+    team_id: int
+    team_name: str
+    league_id: int
+    number: int
+    profile: Profile
+    before: BatterRatings | PitcherRatings | None
+    after: BatterRatings | PitcherRatings | None
+
+
+@dataclass(frozen=True)
+class OffseasonFacts:
+    """締めた年の、世界全体のオフの材料（引退・退団した選手、新人、残る選手）。"""
+
+    leagues: tuple[LeagueOption, ...]
+    retired: tuple[OffseasonPlayerFact, ...]
+    rookies: tuple[OffseasonPlayerFact, ...]
+    # 締める年と翌年の両方の能力がある、残った選手
+    retained: tuple[OffseasonPlayerFact, ...]
+
+
+@dataclass(frozen=True)
+class OffseasonRetiredRow:
+    """オフの結果の「引退・退団」の1行。"""
+
+    player_id: int
+    name: str
+    team_id: int
+    team_name: str
+    number: int
+    position: str
+    # 締める年の開幕時点の満年齢
+    age: int | None
+    # 外国人は「退団」、日本人は「引退」
+    leaving: str
+    # 締める年の総合（能力が無い選手は None）
+    rating: RatingCell | None
+
+
+@dataclass(frozen=True)
+class OffseasonRookieRow:
+    """オフの結果の「新人」の1行。"""
+
+    player_id: int
+    name: str
+    team_id: int
+    team_name: str
+    number: int
+    position: str
+    # 翌年の開幕時点の満年齢
+    age: int | None
+    # 高校・大学・社会人・外国人
+    route: str
+    rating: RatingCell | None
+
+
+@dataclass(frozen=True)
+class OffseasonChangeRow:
+    """オフの結果の「能力の変化」の1行。総合（野手は打撃、投手は抑える力）の、締める年から翌年への変化。"""
+
+    player_id: int
+    name: str
+    team_id: int
+    team_name: str
+    position: str
+    # 翌年の開幕時点の満年齢
+    age: int | None
+    before: RatingCell
+    after: RatingCell
+    # 「+2.3」のように符号つき
+    delta_label: str
+    delta: float
+
+
+@dataclass(frozen=True)
+class OffseasonSummary:
+    """Y年オフの結果ページの材料。"""
+
+    year: int
+    next_year: int
+    own_team_id: int | None
+    own_team_name: str
+    own_retired: tuple[OffseasonRetiredRow, ...]
+    own_rookies: tuple[OffseasonRookieRow, ...]
+    # 自軍の残った選手の全員。差の大きい順
+    own_changes: tuple[OffseasonChangeRow, ...]
+    leagues: tuple[LeagueOption, ...]
+    selected_league_id: int | None
+    # 選んだリーグの引退・退団と新人
+    retired: tuple[OffseasonRetiredRow, ...]
+    rookies: tuple[OffseasonRookieRow, ...]
+    # 世界全体の人数
+    retired_total: int
+    rookie_total: int
+    # 成長と衰えの大きかった選手（世界全体の上位）
+    risers: tuple[OffseasonChangeRow, ...]
+    decliners: tuple[OffseasonChangeRow, ...]
+
+
+@dataclass(frozen=True)
+class TeamSpan:
+    """選手の在籍ひとつぶん（加入年〜退団年。退団年が空なら現在も在籍）。"""
+
+    team_id: int
+    team_name: str
+    from_year: int
+    to_year: int | None
+
+
+@dataclass(frozen=True)
+class RatingsHistoryFacts:
+    """選手ひとりの能力の推移の材料。年ごとの能力と、在籍・生年月日。"""
+
+    profile: Profile
+    spans: tuple[TeamSpan, ...]
+    ratings: tuple[PlayerRatings, ...]
+
+
+@dataclass(frozen=True)
+class RatingsHistoryRow:
+    """能力の推移の1行（1年ぶん）。"""
+
+    year: int
+    # その年の開幕時点の満年齢
+    age: int | None
+    team_name: str
+    cells: tuple[RatingCell, ...]
+    overall: RatingCell
+    # 引退した選手の最後の年
+    is_final_year: bool
+
+
+@dataclass(frozen=True)
+class PlayerRatingsHistory:
+    """選手ページの「能力の推移」。古い年から。"""
+
+    rows: tuple[RatingsHistoryRow, ...]
 
 
 # --- 戦力分析（球団×年度の編成） ---

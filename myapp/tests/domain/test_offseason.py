@@ -11,6 +11,7 @@ from myapp.domain.pennant.fork import estimated_birth_date, fork_roster, with_bi
 from myapp.domain.pennant.offseason import (
     OffseasonClub,
     OffseasonPlayer,
+    overall_value,
     plan_offseason,
     rating_change,
     retirement_value,
@@ -144,6 +145,12 @@ class HelperTest(unittest.TestCase):
             rating_change(BatterRatings(50, 50, 50, 50, 50), BatterRatings(60, 50, 50, 50, 50)), 3.4
         )
         self.assertAlmostEqual(rating_change(PitcherRatings(50, 50, 50, 50), PitcherRatings(50, 60, 50, 50)), 3.5)
+
+    def test_overall_value_is_batting_for_batters_and_pitching_for_pitchers(self) -> None:
+        batter = BatterRatings(60, 50, 50, 50, 90)
+        pitcher = PitcherRatings(60, 50, 50, 90)
+        self.assertEqual(overall_value(batter), batter.batting_value, "守備力は総合に入れない")
+        self.assertEqual(overall_value(pitcher), pitcher.pitching_value, "スタミナは総合に入れない")
 
     def test_rating_change_rejects_mixed_kinds(self) -> None:
         with self.assertRaises(ValueError):

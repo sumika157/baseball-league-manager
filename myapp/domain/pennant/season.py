@@ -97,3 +97,22 @@ def season_year(
 def is_final_season(*, current_year: int, start_year: int) -> bool:
     """いまの年度が世界の最後のシーズン（`MAX_SEASONS_PER_WORLD` 番目）か。最後のシーズンは締められない。"""
     return current_year - start_year + 1 >= MAX_SEASONS_PER_WORLD
+
+
+def is_season_closed(*, year: int, start_year: int, next_year_ratings_exist: bool) -> bool:
+    """`year` 年のシーズンを締めたか。**「締めたか」の唯一の出典**（二重実行の検査とオフの結果の画面が使う）。
+
+    締める処理だけが翌年（`year + 1`）の能力を作る。世界の作成は開幕年の能力を作るので、
+    開幕年より前の年（`year + 1` が開幕年）は、翌年の能力があっても締めた年ではない。
+    """
+    return year >= start_year and next_year_ratings_exist
+
+
+def stats_year(*, phase: SeasonPhase, last_played_on: datetime.date | None, current_year: int) -> int:
+    """GM ホームの順位表・主力・タイトルに出す年。
+
+    締めた後の開幕前は、翌年の成績がまだ無いので前年（最後に試合をした年）。それ以外はいまの年度。
+    """
+    if phase is SeasonPhase.BEFORE_OPENING and last_played_on is not None:
+        return last_played_on.year
+    return current_year

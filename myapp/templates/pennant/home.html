@@ -11,7 +11,7 @@
 </nav>{% include 'pennant/_world_bar.html' %}
 
 {% comment %}
-GM ホーム。上から、自軍の位置 → 進めた結果 → 進める → 次の試合 → 順位表 → 主力 → タイトル争い → 削除。
+GM ホーム。上から、自軍の位置 → 進めた結果 → 進める（シーズン終了なら「締める」。同時には出さない） → 次の試合 → 順位表 → 主力 → タイトル争い → 削除。
 状態は保存せず、日程と試合から導いた値（PennantHome）を並べるだけ。
 「注意」は、編成の上書きが使えず、いま進めると自動編成に落ちる区画（オーナーにだけ出す。自軍の帯の直後）。
 {% endcomment %}
@@ -33,6 +33,12 @@ GM ホーム。上から、自軍の位置 → 進めた結果 → 進める →
         <div class="stat-value">{{ own.remaining_games }}</div>
         <div class="stat-label">{% if own.remaining_games %}試合{% else %}試合（日程は最初に進めたときに作られます）{% endif %}</div>
       </div>
+      {% if own.previous_year %}
+      <div class="stat-cell">
+        <div class="stat-value">{{ own.previous_rank }}位</div>
+        <div class="stat-label">{{ own.previous_year }}年の最終順位（{{ own.previous_record }}）</div>
+      </div>
+      {% endif %}
     {% else %}
       <div class="stat-cell">
         <div class="stat-value">{% if own.rank %}{{ own.rank }}位{% else %}—{% endif %}</div>
@@ -66,6 +72,10 @@ GM ホーム。上から、自軍の位置 → 進めた結果 → 進める →
   </div>
 {% else %}
   <div class="alert alert-secondary">この世界には、受け持つ球団が決まっていません。</div>
+{% endif %}
+
+{% if home.shows_previous_season %}
+  <p class="mb-3"><a href="{% url 'pennant_offseason' world.world_id home.stats_year %}">{{ home.stats_year }}年のオフの結果（引退・新人・能力の変化）を見る</a></p>
 {% endif %}
 
 {% if is_owner and plan_notices %}
@@ -189,7 +199,9 @@ GM ホーム。上から、自軍の位置 → 進めた結果 → 進める →
   </div>
 {% endif %}
 
-{% if is_owner %}
+{% if is_owner and home.season_finished %}
+  {% include 'pennant/_season_close.html' %}
+{% elif is_owner %}
   <div class="card mb-4">
     <div class="card-header">進める</div>
     <div class="card-body">
@@ -206,8 +218,6 @@ GM ホーム。上から、自軍の位置 → 進めた結果 → 進める →
             </div>
           {% endfor %}
         </form>
-      {% elif home.season_finished %}
-        <p class="stat-muted mb-0">シーズンは終了しました。</p>
       {% else %}
         <p class="stat-muted mb-0">進められる試合がありません。</p>
       {% endif %}
@@ -264,7 +274,7 @@ GM ホーム。上から、自軍の位置 → 進めた結果 → 進める →
   <div class="row g-3 mb-4">
     <div class="col-lg-6">
       <div class="card h-100">
-        <div class="card-header">主力打者（OPS 上位）</div>
+        <div class="card-header">主力打者（OPS 上位{% if home.shows_previous_season %}・{{ home.stats_year }}年{% endif %}）</div>
         <div class="card-body p-0">
           {% if home.batters %}
             <table class="table table-hover mb-0">
@@ -299,7 +309,7 @@ GM ホーム。上から、自軍の位置 → 進めた結果 → 進める →
     </div>
     <div class="col-lg-6">
       <div class="card h-100">
-        <div class="card-header">投手陣（投球回の多い順）</div>
+        <div class="card-header">投手陣（投球回の多い順{% if home.shows_previous_season %}・{{ home.stats_year }}年{% endif %}）</div>
         <div class="card-body p-0">
           {% if home.pitchers %}
             <table class="table table-hover mb-0">
@@ -336,9 +346,9 @@ GM ホーム。上から、自軍の位置 → 進めた結果 → 進める →
 {% if home.titles %}
   <div class="card mb-4">
     <div class="card-header d-flex justify-content-between align-items-center">
-      <span>タイトル争い（自軍の選手が5位以内の部門）</span>
+      <span>{% if home.shows_previous_season %}{{ home.stats_year }}年のタイトル{% else %}タイトル争い{% endif %}（自軍の選手が5位以内の部門）</span>
       {% if world.default_league_id %}
-        <a href="{% scoped_url 'league_titles' world.default_league_id %}" class="card-header-link">タイトル一覧</a>
+        <a href="{% if home.shows_previous_season %}{% scoped_url 'league_titles_by_year' world.default_league_id home.stats_year %}{% else %}{% scoped_url 'league_titles' world.default_league_id %}{% endif %}" class="card-header-link">タイトル一覧</a>
       {% endif %}
     </div>
     <div class="card-body p-0">

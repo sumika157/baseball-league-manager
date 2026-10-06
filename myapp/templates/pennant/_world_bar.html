@@ -14,7 +14,7 @@
     </span>
   </div>
   <div class="segmented mb-0">
-    <a class="segmented-item {% if name == 'pennant_world' or name == 'pennant_delete' %}is-active{% endif %}" href="{% url 'pennant_world' world.world_id %}">ホーム</a>
+    <a class="segmented-item {% if name == 'pennant_world' or name == 'pennant_delete' or name == 'pennant_offseason' %}is-active{% endif %}" href="{% url 'pennant_world' world.world_id %}">ホーム</a>
     <a class="segmented-item {% if name == 'pennant_standings' or name == 'pennant_standings_by_year' or name == 'pennant_league_detail' or name == 'pennant_league_detail_by_year' %}is-active{% endif %}"
        href="{% url 'pennant_standings' world.world_id %}">順位表</a>
     <a class="segmented-item {% if name == 'pennant_game_list' or name == 'pennant_game_detail' %}is-active{% endif %}"
