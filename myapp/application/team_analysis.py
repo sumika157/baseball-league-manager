@@ -13,18 +13,22 @@ from datetime import date
 
 from ..domain import services as domain_services
 from ..domain.exceptions import TeamNotFound
-from ..domain.services import FielderGroup, PitcherRole
-from ..domain.value_objects import FieldingPosition, Handedness, Profile, Season
+from ..domain.services import ColorAxis, ColorCategory, FielderGroup, MoveJudgement, MoveKind, PitcherRole, StintSpan
+from ..domain.value_objects import FieldingPosition, Handedness, Position, Profile, Season
 from .dto import (
     AgeBandRow,
     AnalysisRosterRow,
     AnalysisTab,
     AnalysisTeamOption,
+    ColorLegendItem,
+    ColorOption,
     DepthCell,
     DepthPlayer,
     DepthRow,
     DepthTable,
     FielderUsage,
+    MoveRow,
+    MoveStintRow,
     PitcherUsage,
     TeamAnalysis,
     TeamAnalysisFacts,
@@ -67,11 +71,13 @@ class TeamAnalysisService:
     def has_team(self, team_id: int) -> bool:
         return any(summary.id == team_id for summary in self._team_list_query.list_summaries())
 
-    def get_analysis(self, team_id: int, *, year: int | None = None, tab: str | None = None) -> TeamAnalysis:
+    def get_analysis(
+        self, team_id: int, *, year: int | None = None, tab: str | None = None, color: str | None = None
+    ) -> TeamAnalysis:
         """球団×年度の戦力分析。
 
         年が不正（試合の無い年）なら最新の年に落とす。試合が1つも無いチームは今日の年。
-        タブが不正ならデプス表。チームが無ければ `TeamNotFound`。
+        タブが不正ならデプス表、色分けの軸が不正なら左右。チームが無ければ `TeamNotFound`。
         """
         summaries = self._team_list_query.list_summaries()
         team = next((summary for summary in summaries if summary.id == team_id), None)
@@ -82,13 +88,32 @@ class TeamAnalysisService:
         chosen = year if year in years else (years[0] if years else date.today().year)
         facts = self._analysis_query.load(team_id, chosen)
 
-        pitchers, fielders, pitcher_ages, fielder_ages = self._depth(facts, Season(chosen))
+        axis = ColorAxis.parse(color)
+        chosen_tab = tab if tab in {t.key for t in TABS} else DEPTH_TAB
+        pitchers, fielders, pitcher_ages, fielder_ages = self._depth(facts, Season(chosen), axis)
+        joiners, leavers = self._moves(facts, chosen, axis)
+        usage_boxes = self._usage_boxes(facts, axis)
+        # 凡例の人数は、いまのタブで色が付いて並んでいる選手。デプス表のタブは入退団の表も同じページに出るので含める
+        shown = (
+            [p.tone for box in usage_boxes for p in box.players]
+            if chosen_tab == USAGE_TAB
+            else [
+                *(
+                    p.tone
+                    for table in (pitchers, fielders)
+                    for row in table.rows
+                    for cell in row.cells
+                    for p in cell.players
+                ),
+                *(row.tone for row in (*joiners, *leavers)),
+            ]
+        )
         return TeamAnalysis(
             team_id=team.id,
             team_name=team.name,
             year=chosen,
             years=years,
-            tab=tab if tab in {t.key for t in TABS} else DEPTH_TAB,
+            tab=chosen_tab,
             tabs=TABS,
             teams=[AnalysisTeamOption(id=s.id, name=s.name, league_name=s.league_name) for s in summaries],
             pitchers=pitchers,
@@ -100,11 +125,64 @@ class TeamAnalysisService:
             average_age_pitchers=domain_services.average_age(pitcher_ages),
             average_age_fielders=domain_services.average_age(fielder_ages),
             average_age_all=domain_services.average_age([*pitcher_ages, *fielder_ages]),
-            usage_boxes=self._usage_boxes(facts),
+            usage_boxes=usage_boxes,
+            color=axis.value,
+            color_options=[ColorOption(key=a.value, label=a.label) for a in ColorAxis],
+            legend=_legend(axis, shown),
+            joiners=joiners,
+            leavers=leavers,
         )
 
     @staticmethod
-    def _usage_boxes(facts: TeamAnalysisFacts) -> list[UsageBox]:
+    def _moves(facts: TeamAnalysisFacts, year: int, axis: ColorAxis) -> tuple[list[MoveRow], list[MoveRow]]:
+        """その年の加入と退団。在籍から区分を導き、区分→背番号の順に並べる。"""
+        spans: dict[int, list[StintSpan]] = defaultdict(list)
+        team_names: dict[int, str] = {}
+        for related in facts.related_stints:
+            spans[related.player_id].append(
+                StintSpan(related.stint_id, related.team_id, related.from_year, related.to_year)
+            )
+            team_names[related.team_id] = related.team_name
+
+        def row(move: MoveStintRow, judgement: MoveJudgement) -> MoveRow:
+            other = team_names.get(judgement.other_team_id, "") if judgement.other_team_id is not None else ""
+            return MoveRow(
+                player_id=move.player_id,
+                name=move.name,
+                number=move.number,
+                position_label=move.position.label,
+                kind_label=judgement.kind.value,
+                other_team_name=other,
+                # 入退団の表には守備位置が無いので、本職の軸では対象外になる
+                tone=_tone(
+                    axis,
+                    registered=move.position,
+                    throws=move.throws,
+                    bats=move.bats,
+                    fielding_position=None,
+                ),
+            )
+
+        joined: list[tuple[MoveKind, MoveRow]] = []
+        left: list[tuple[MoveKind, MoveRow]] = []
+        for move in facts.moves:
+            own = StintSpan(move.stint_id, move.team_id, move.from_year, move.to_year)
+            stints = spans.get(move.player_id, [])
+            if move.from_year == year:
+                judgement = domain_services.judge_join(own, stints)
+                joined.append((judgement.kind, row(move, judgement)))
+            if move.to_year == year:
+                judgement = domain_services.judge_leave(own, stints)
+                left.append((judgement.kind, row(move, judgement)))
+
+        def ordered(entries: list[tuple[MoveKind, MoveRow]]) -> list[MoveRow]:
+            entries.sort(key=lambda e: domain_services.move_order(e[0], e[1].number))
+            return [moved for _, moved in entries]
+
+        return ordered(joined), ordered(left)
+
+    @staticmethod
+    def _usage_boxes(facts: TeamAnalysisFacts, axis: ColorAxis) -> list[UsageBox]:
         """守備位置ごとの起用マップ。箱の中は先発数・出場数・背番号の順。
 
         投手の箱は投球明細の先発登板から数える（打撃明細に「投」が出るのは指名打者制を使わない試合だけ。
@@ -116,8 +194,17 @@ class TeamAnalysisService:
         def add(position: FieldingPosition, player_id: int, starts: int, games: int) -> None:
             row = roster.get(player_id)
             if row is not None and games > 0:
+                tone = _tone(
+                    axis,
+                    registered=row.position,
+                    throws=row.throws,
+                    bats=row.bats,
+                    fielding_position=position,
+                )
                 counts[position].append(
-                    UsagePlayer(player_id=player_id, name=row.name, number=row.number, starts=starts, games=games)
+                    UsagePlayer(
+                        player_id=player_id, name=row.name, number=row.number, starts=starts, games=games, tone=tone
+                    )
                 )
 
         for pitching in facts.pitcher_usage:
@@ -144,7 +231,7 @@ class TeamAnalysisService:
 
     @staticmethod
     def _depth(
-        facts: TeamAnalysisFacts, season: Season
+        facts: TeamAnalysisFacts, season: Season, axis: ColorAxis
     ) -> tuple[DepthTable, DepthTable, list[int | None], list[int | None]]:
         """投手側・野手側のデプス表と、それぞれの年齢の並び。"""
         # 投手かどうかは登録位置で決める。登録が投手でない選手が投げても野手側に置く
@@ -160,7 +247,7 @@ class TeamAnalysisService:
             rows=pitcher_rows,
             is_pitcher=True,
             labels=[role.value for role in PitcherRole],
-            classify=lambda row: _pitcher_entry(row, pitcher_usage.get(row.player_id), age_of(row)),
+            classify=lambda row: _pitcher_entry(row, pitcher_usage.get(row.player_id), age_of(row), axis),
         )
 
         by_player: dict[int, list[FielderUsage]] = defaultdict(list)
@@ -170,7 +257,7 @@ class TeamAnalysisService:
             rows=fielder_rows,
             is_pitcher=False,
             labels=[group.value for group in FielderGroup],
-            classify=lambda row: _fielder_entry(row, by_player.get(row.player_id, []), age_of(row)),
+            classify=lambda row: _fielder_entry(row, by_player.get(row.player_id, []), age_of(row), axis),
         )
         return (
             pitcher_table,
@@ -180,7 +267,39 @@ class TeamAnalysisService:
         )
 
 
-def _pitcher_entry(row: AnalysisRosterRow, usage: PitcherUsage | None, age: int | None) -> tuple[str, DepthPlayer]:
+def _tone(
+    axis: ColorAxis,
+    *,
+    registered: Position,
+    throws: Handedness | None,
+    bats: Handedness | None,
+    fielding_position: FieldingPosition | None,
+) -> ColorCategory:
+    """選手の色分けの区分。振り分けの規則はドメインの `color_category` 1つで、ここは材料を渡すだけ。"""
+    return domain_services.color_category(
+        axis,
+        registered=registered,
+        profile=Profile(throws=throws, bats=bats),
+        fielding_position=fielding_position,
+    )
+
+
+def _legend(axis: ColorAxis, tones: list[ColorCategory]) -> list[ColorLegendItem]:
+    """凡例。軸の区分を並べ、画面に出ている選手の人数を添える。対象外は該当者がいるときだけ。"""
+    items = [
+        ColorLegendItem(category=c, count=sum(1 for t in tones if t.key == c.key))
+        for c in domain_services.color_categories(axis)
+    ]
+    neutral = domain_services.NEUTRAL_CATEGORY
+    count = sum(1 for t in tones if t.key == neutral.key)
+    if count:
+        items.append(ColorLegendItem(category=neutral, count=count))
+    return items
+
+
+def _pitcher_entry(
+    row: AnalysisRosterRow, usage: PitcherUsage | None, age: int | None, axis: ColorAxis
+) -> tuple[str, DepthPlayer]:
     games, starts = (usage.games, usage.starts) if usage else (0, 0)
     player = DepthPlayer(
         player_id=row.player_id,
@@ -190,11 +309,20 @@ def _pitcher_entry(row: AnalysisRosterRow, usage: PitcherUsage | None, age: int 
         is_foreign_player=row.is_foreign_player,
         games=games,
         starts=starts,
+        tone=_tone(
+            axis,
+            registered=row.position,
+            throws=row.throws,
+            bats=row.bats,
+            fielding_position=FieldingPosition.PITCHER if games > 0 else None,
+        ),
     )
     return PitcherRole.of(games, starts).value, player
 
 
-def _fielder_entry(row: AnalysisRosterRow, usages: list[FielderUsage], age: int | None) -> tuple[str, DepthPlayer]:
+def _fielder_entry(
+    row: AnalysisRosterRow, usages: list[FielderUsage], age: int | None, axis: ColorAxis
+) -> tuple[str, DepthPlayer]:
     starts_by: dict[FieldingPosition, int] = {}
     games_by: dict[FieldingPosition, int] = {}
     for usage in usages:
@@ -217,6 +345,13 @@ def _fielder_entry(row: AnalysisRosterRow, usages: list[FielderUsage], age: int 
         games=games,
         starts=starts,
         position_label=label,
+        tone=_tone(
+            axis,
+            registered=row.position,
+            throws=row.throws,
+            bats=row.bats,
+            fielding_position=position,
+        ),
     )
     return FielderGroup.of(position).value, player
 

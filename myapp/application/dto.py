@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 
+from ..domain.services.roster_analysis import NEUTRAL_CATEGORY, ColorCategory
 from ..domain.value_objects import BattingLine, FieldingPosition, Handedness, PitchingLine, Position
 
 
@@ -1143,12 +1144,42 @@ class PitcherUsage:
 
 
 @dataclass(frozen=True)
+class MoveStintRow:
+    """入退団の材料。そのチームで加入年か退団年がその年の在籍1件と、その選手の登録。"""
+
+    stint_id: int
+    team_id: int
+    player_id: int
+    name: str
+    number: int
+    position: Position
+    from_year: int
+    to_year: int | None
+    throws: Handedness | None = None
+    bats: Handedness | None = None
+
+
+@dataclass(frozen=True)
+class RelatedStint:
+    """入退団の判定に使う、選手の在籍1件（他のチームを含む）。チーム名は前所属・移籍先の表示用。"""
+
+    stint_id: int
+    player_id: int
+    team_id: int
+    team_name: str
+    from_year: int
+    to_year: int | None
+
+
+@dataclass(frozen=True)
 class TeamAnalysisFacts:
     """戦力分析の材料一式。参照クエリが SQL で集めた事実で、区分けはアプリケーション層が行う。"""
 
     roster: list[AnalysisRosterRow]
     fielder_usage: list[FielderUsage]
     pitcher_usage: list[PitcherUsage]
+    moves: list[MoveStintRow]
+    related_stints: list[RelatedStint]
 
 
 @dataclass(frozen=True)
@@ -1184,6 +1215,7 @@ class DepthPlayer:
     games: int
     starts: int
     position_label: str = ""
+    tone: ColorCategory = NEUTRAL_CATEGORY
 
 
 @dataclass(frozen=True)
@@ -1231,6 +1263,23 @@ class UsagePlayer:
     number: int
     starts: int
     games: int
+    tone: ColorCategory = NEUTRAL_CATEGORY
+
+
+@dataclass(frozen=True)
+class ColorLegendItem:
+    """色分けの凡例1項目。区分と、いま画面に出ている選手の人数。"""
+
+    category: ColorCategory
+    count: int
+
+
+@dataclass(frozen=True)
+class ColorOption:
+    """色分けの軸の選択肢。"""
+
+    key: str
+    label: str
 
 
 @dataclass(frozen=True)
@@ -1258,6 +1307,19 @@ class AgeBandRow:
 
 
 @dataclass(frozen=True)
+class MoveRow:
+    """入退団の表の1行。kind_label は区分、other_team_name は移籍のときの前所属（加入）か移籍先（退団）。"""
+
+    player_id: int
+    name: str
+    number: int
+    position_label: str
+    kind_label: str
+    other_team_name: str = ""
+    tone: ColorCategory = NEUTRAL_CATEGORY
+
+
+@dataclass(frozen=True)
 class TeamAnalysis:
     """戦力分析ページの中身。"""
 
@@ -1275,3 +1337,8 @@ class TeamAnalysis:
     average_age_fielders: float | None
     average_age_all: float | None
     usage_boxes: list[UsageBox]
+    color: str
+    color_options: list[ColorOption]
+    legend: list[ColorLegendItem]
+    joiners: list[MoveRow]
+    leavers: list[MoveRow]

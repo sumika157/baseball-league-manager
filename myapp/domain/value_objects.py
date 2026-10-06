@@ -52,6 +52,18 @@ class Position(Enum):
         """投手成績で評価すべきポジションか。"""
         return self is Position.PITCHER
 
+    @property
+    def natural_positions(self) -> tuple[FieldingPosition, ...]:
+        """この登録位置の本職にあたる守備位置。守備位置との対応はここが唯一の出典。
+
+        内野手は一・二・三・遊、外野手は左・中・右。代打・代走は守備位置ではないので、どの登録位置の本職でもない。
+        """
+        return _NATURAL_POSITIONS[self]
+
+    def is_natural_at(self, position: FieldingPosition) -> bool:
+        """守備位置 position が、この登録位置の本職か。"""
+        return position in self.natural_positions
+
     @classmethod
     def from_label(cls, label: str) -> Position:
         for position in cls:
@@ -179,6 +191,19 @@ class FieldingPosition(Enum):
         """守備に就く位置だけ。スタメンの選択肢に使う。"""
         return [item.value for item in cls if not item.is_substitute_only]
 
+
+_NATURAL_POSITIONS: dict[Position, tuple[FieldingPosition, ...]] = {
+    Position.PITCHER: (FieldingPosition.PITCHER,),
+    Position.CATCHER: (FieldingPosition.CATCHER,),
+    Position.INFIELDER: (
+        FieldingPosition.FIRST_BASE,
+        FieldingPosition.SECOND_BASE,
+        FieldingPosition.THIRD_BASE,
+        FieldingPosition.SHORTSTOP,
+    ),
+    Position.OUTFIELDER: (FieldingPosition.LEFT_FIELD, FieldingPosition.CENTER_FIELD, FieldingPosition.RIGHT_FIELD),
+    Position.DESIGNATED_HITTER: (FieldingPosition.DESIGNATED_HITTER,),
+}
 
 # Base の値は塁の順序そのもの（大小比較が「進んだか」の判定になる）ため数値にしてある。
 # 表示用の名前は数値から引く。

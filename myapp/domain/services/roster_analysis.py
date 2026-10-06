@@ -11,7 +11,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 
-from ..value_objects import FieldingPosition, Handedness, Profile
+from ..value_objects import FieldingPosition, Handedness, Position, Profile
 
 # 年齢の帯の両端。範囲の外は「18歳以下」「40歳以上」にまとめる
 MIN_AGE_BAND = 18
@@ -150,6 +150,86 @@ def usage_visible_count(total: int) -> int:
     return min(total, MAX_PLAYERS_IN_BOX)
 
 
+class ColorAxis(Enum):
+    """戦力分析で選手を何で色分けするか。軸の語彙と既定（左右）はここが唯一の出典。
+
+    色分けはページ全体（デプス表・起用マップ・入退団）で同じ規則・同じ色にする。
+    """
+
+    HAND = "hand"
+    NATURAL = "natural"
+
+    @property
+    def label(self) -> str:
+        return _COLOR_AXIS_LABELS[self]
+
+    @classmethod
+    def parse(cls, key: str | None) -> ColorAxis:
+        """画面の `?color=` の値から軸を決める。不正・未指定は左右。"""
+        for axis in cls:
+            if axis.value == key:
+                return axis
+        return cls.HAND
+
+
+_COLOR_AXIS_LABELS = {
+    ColorAxis.HAND: "左右",
+    ColorAxis.NATURAL: "本職",
+}
+
+
+@dataclass(frozen=True)
+class ColorCategory:
+    """色分けの区分1つ。key は CSS のクラス名の一部、mark は色に頼らないための短い印（無ければ空）。"""
+
+    key: str
+    label: str
+    mark: str = ""
+
+
+# 判定に使う守備位置が無いときの区分。色も印も付けない
+NEUTRAL_CATEGORY = ColorCategory("neutral", "対象外")
+
+_HAND_CATEGORIES: dict[Handedness | None, ColorCategory] = {
+    Handedness.LEFT: ColorCategory("hand-left", "左", "左"),
+    Handedness.BOTH: ColorCategory("hand-both", "両", "両"),
+    Handedness.RIGHT: ColorCategory("hand-right", "右", "右"),
+    None: ColorCategory("hand-unknown", "不明", "？"),
+}
+_NATURAL_CATEGORIES = (ColorCategory("natural-yes", "本職"), ColorCategory("natural-no", "本職外", "他"))
+
+
+def color_categories(axis: ColorAxis) -> tuple[ColorCategory, ...]:
+    """軸の区分の一覧（対象外を除く）。凡例の並び順。"""
+    if axis is ColorAxis.HAND:
+        return tuple(_HAND_CATEGORIES.values())
+    return _NATURAL_CATEGORIES
+
+
+def color_category(
+    axis: ColorAxis,
+    *,
+    registered: Position,
+    profile: Profile,
+    fielding_position: FieldingPosition | None,
+) -> ColorCategory:
+    """選手が軸 axis のどの区分に入るか。ページのどの場所でもこの1つの関数で決める。
+
+    場所ごとに渡すのは「どの守備位置で見るか」だけ。左右は、守備位置があればそれが投のとき、
+    無ければ登録位置が投手のときに投げる手で見て、それ以外は打席で見る。
+    - fielding_position: 本職かどうかを見る守備位置（起用マップは箱の位置、デプス表は主な守備位置）。
+      守備位置が無い（登板なし・守備出場なし・入退団の表）ときは None で、本職の軸では対象外
+    """
+    if axis is ColorAxis.HAND:
+        is_pitcher = (
+            registered.is_pitcher if fielding_position is None else fielding_position is FieldingPosition.PITCHER
+        )
+        return _HAND_CATEGORIES[hand_of(profile, is_pitcher=is_pitcher)]
+    if fielding_position is None:
+        return NEUTRAL_CATEGORY
+    return _NATURAL_CATEGORIES[0 if registered.is_natural_at(fielding_position) else 1]
+
+
 def age_band(age: int | None) -> str:
     """年齢の帯。18歳以下・19〜39歳は1歳刻み・40歳以上。年齢が不明なら「不明」。"""
     if age is None:
@@ -210,3 +290,87 @@ def average_age(ages: Iterable[int | None]) -> float | None:
     """平均年齢。帯ではなく実際の年齢の合計から求める。年齢が分かる人がいなければ None。"""
     known = [age for age in ages if age is not None]
     return sum(known) / len(known) if known else None
+
+
+class MoveKind(Enum):
+    """入退団の区分。語彙と並び（宣言順）はここが唯一の出典。
+
+    加入は新入団・移籍・再入団、退団は移籍・退団のどれか。
+    """
+
+    NEW_SIGNING = "新入団"
+    TRANSFER = "移籍"
+    REJOINED = "再入団"
+    DEPARTED = "退団"
+
+
+@dataclass(frozen=True)
+class StintSpan:
+    """判定に使う在籍1件。to_year は最後に在籍した年（含む）で、空なら在籍中。"""
+
+    stint_id: int
+    team_id: int
+    from_year: int
+    to_year: int | None
+
+    @property
+    def order_key(self) -> tuple[int, bool, int, int]:
+        """在籍の前後を決める並び。始まった年。同じ年なら、その年のうちに終わった在籍を先に置く
+        （シーズン途中の移籍で、移籍元を先にするため。登録した順＝id に頼ると、経歴を後から足したときに逆になる）。
+        最後の決め手は id。
+        """
+        return (self.from_year, self.to_year is None, self.to_year or 0, self.stint_id)
+
+
+@dataclass(frozen=True)
+class MoveJudgement:
+    """入退団の判定結果。other_team_id は移籍のときの前所属（加入）または移籍先（退団）。"""
+
+    kind: MoveKind
+    other_team_id: int | None = None
+
+
+def _is_consecutive(before: StintSpan, after: StintSpan) -> bool:
+    """before の後に間を空けず after が始まったか（同じ年か翌年）。加入と退団で同じ窓を使い、
+    同じ動きが球団によって移籍にも退団にも見える食い違いを防ぐ。
+    before が終わっていない（重なっている）ときも続いているとみなす。
+    """
+    return before.to_year is None or after.from_year <= before.to_year + 1
+
+
+def judge_join(own: StintSpan, stints: Iterable[StintSpan]) -> MoveJudgement:
+    """加入の区分。stints はその選手の全在籍（own を含んでよい）。
+
+    直前の在籍（自分を除く）が同じチームなら再入団。別のチームで、間を空けず（前年までに終わって）
+    続いていれば移籍（その球団が前所属）。それ以外（在籍が無い・間が空いた）は新入団。
+    """
+    earlier = [s for s in stints if s.stint_id != own.stint_id and s.order_key < own.order_key]
+    if not earlier:
+        return MoveJudgement(MoveKind.NEW_SIGNING)
+    previous = max(earlier, key=lambda s: s.order_key)
+    if previous.team_id == own.team_id:
+        return MoveJudgement(MoveKind.REJOINED)
+    if _is_consecutive(previous, own):
+        return MoveJudgement(MoveKind.TRANSFER, previous.team_id)
+    return MoveJudgement(MoveKind.NEW_SIGNING)
+
+
+def judge_leave(own: StintSpan, stints: Iterable[StintSpan]) -> MoveJudgement:
+    """退団の区分。own は退団年（to_year）を持つ在籍。
+
+    この在籍の後に間を空けず（同じ年か翌年から）始まる在籍があり、それが別のチームなら移籍（移籍先）。
+    それ以外は退団（引退・自由契約などは在籍からは区別できない）。
+    """
+    later = [
+        s for s in stints if s.stint_id != own.stint_id and s.order_key > own.order_key and _is_consecutive(own, s)
+    ]
+    if later:
+        following = min(later, key=lambda s: s.order_key)
+        if following.team_id != own.team_id:
+            return MoveJudgement(MoveKind.TRANSFER, following.team_id)
+    return MoveJudgement(MoveKind.DEPARTED)
+
+
+def move_order(kind: MoveKind, number: int) -> tuple[int, int]:
+    """入退団の表の並び。区分（宣言順）、背番号順。"""
+    return (list(MoveKind).index(kind), number)

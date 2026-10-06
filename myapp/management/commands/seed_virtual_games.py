@@ -214,26 +214,10 @@ DEFAULT_GAMES_PER_PAIR = 29
 FLUSH_EVERY_GAMES = 200
 
 # 守備の並び。捕手・内野4・外野3・指名打者で9人。登録位置からこの順に埋める。
-DEFENSIVE_SLOTS = (
-    (Position.CATCHER, (FieldingPosition.CATCHER,)),
-    (
-        Position.INFIELDER,
-        (
-            FieldingPosition.FIRST_BASE,
-            FieldingPosition.SECOND_BASE,
-            FieldingPosition.THIRD_BASE,
-            FieldingPosition.SHORTSTOP,
-        ),
-    ),
-    (
-        Position.OUTFIELDER,
-        (
-            FieldingPosition.LEFT_FIELD,
-            FieldingPosition.CENTER_FIELD,
-            FieldingPosition.RIGHT_FIELD,
-        ),
-    ),
-    (Position.DESIGNATED_HITTER, (FieldingPosition.DESIGNATED_HITTER,)),
+# 位置ごとの守備位置は登録位置の本職（`Position.natural_positions`）から作る（対応の出典を1つにするため）。
+DEFENSIVE_SLOTS = tuple(
+    (position, position.natural_positions)
+    for position in (Position.CATCHER, Position.INFIELDER, Position.OUTFIELDER, Position.DESIGNATED_HITTER)
 )
 
 P = PlateAppearanceResult

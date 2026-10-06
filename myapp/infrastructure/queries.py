@@ -20,9 +20,11 @@ from ..application.dto import (
     FielderUsage,
     FieldingRow,
     GameRow,
+    MoveStintRow,
     PitcherUsage,
     PlayerFielding,
     PlayerSearchRow,
+    RelatedStint,
     TeamAnalysisFacts,
     TeamSummary,
 )
@@ -384,7 +386,7 @@ class DjangoTeamListQuery:
 class DjangoTeamAnalysisQuery:
     """TeamAnalysisQuery の Django ORM 実装。戦力分析の材料を固定本数のクエリで集める。
 
-    クエリは在籍・野手の出場・投手の登板の3本（年の一覧は別に1本）で、選手の数に
+    クエリは在籍・野手の出場・投手の登板・入退団の在籍2本の5本（年の一覧は別に1本）で、選手の数に
     比例しない。集約を組み立てず、数えるだけなので明細の行も Python に持ち込まない。
     """
 
@@ -395,6 +397,50 @@ class DjangoTeamAnalysisQuery:
         )
         # 既定の並び（試合日）が DISTINCT に混ざらないよう order_by() で外す
         return sorted(set(rows.order_by().values_list("year", flat=True)), reverse=True)
+
+    @staticmethod
+    def _moves(team_id: int, year: int) -> tuple[list[MoveStintRow], list[RelatedStint]]:
+        """入退団の材料。そのチームで加入年か退団年が year の在籍と、その選手の全在籍（他のチームを含む）。
+
+        2本のクエリで済み、選手の数に比例しない。
+        """
+        own = list(
+            orm_models.PlayerStint.objects.filter(team_id=team_id)
+            .filter(Q(from_year=year) | Q(to_year=year))
+            .select_related("player")
+            .order_by("number", "id")
+        )
+        if not own:
+            return [], []
+        moves = [
+            MoveStintRow(
+                stint_id=stint.id,
+                team_id=stint.team_id,
+                player_id=stint.player_id,
+                name=stint.player.name,
+                number=stint.number,
+                position=Position.from_label(stint.player.position),
+                from_year=stint.from_year,
+                to_year=stint.to_year,
+                throws=Handedness.from_label(stint.player.throws),
+                bats=Handedness.from_label(stint.player.bats),
+            )
+            for stint in own
+        ]
+        related = [
+            RelatedStint(
+                stint_id=stint.id,
+                player_id=stint.player_id,
+                team_id=stint.team_id,
+                team_name=stint.team.name,
+                from_year=stint.from_year,
+                to_year=stint.to_year,
+            )
+            for stint in orm_models.PlayerStint.objects.filter(player_id__in={s.player_id for s in own})
+            .select_related("team")
+            .order_by("from_year", "id")
+        ]
+        return moves, related
 
     def load(self, team_id: int, year: int) -> TeamAnalysisFacts:
         # 在籍の期間の意味は Stint.covers と同じ（加入年 <= 年 かつ 退団年が空か 年 <= 退団年）
@@ -425,7 +471,7 @@ class DjangoTeamAnalysisQuery:
             )
         player_ids = list(seen)
         if not player_ids:
-            return TeamAnalysisFacts(roster=[], fielder_usage=[], pitcher_usage=[])
+            return TeamAnalysisFacts(roster=[], fielder_usage=[], pitcher_usage=[], moves=[], related_stints=[])
 
         # 野手: 明細の行がチームを持つので、そのチームの出場だけを数える。
         # スタメンの意味は GameBatting.is_starter（交代の順が0）と同じ
@@ -448,6 +494,7 @@ class DjangoTeamAnalysisQuery:
             .annotate(games=Count("id"), starts=Count("id", filter=Q(appearance_order__lte=1)))
             .order_by()
         )
+        moves, related = self._moves(team_id, year)
         return TeamAnalysisFacts(
             roster=roster,
             fielder_usage=[
@@ -463,4 +510,6 @@ class DjangoTeamAnalysisQuery:
                 PitcherUsage(player_id=row["player_id"], games=row["games"], starts=row["starts"])
                 for row in pitcher_rows
             ],
+            moves=moves,
+            related_stints=related,
         )

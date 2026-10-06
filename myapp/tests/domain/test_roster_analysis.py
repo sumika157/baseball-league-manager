@@ -5,7 +5,7 @@ from datetime import date
 
 from myapp.domain.services import roster_analysis as ra
 from myapp.domain.value_objects import FieldingPosition as FP
-from myapp.domain.value_objects import Handedness, Profile, Season
+from myapp.domain.value_objects import Handedness, Position, Profile, Season
 
 
 class PitcherRoleTest(unittest.TestCase):
@@ -169,3 +169,202 @@ class UsageMapTest(unittest.TestCase):
         self.assertEqual(ra.usage_visible_count(1), 1)
         self.assertEqual(ra.usage_visible_count(cap), cap)
         self.assertEqual(ra.usage_visible_count(cap + 4), cap)
+
+
+class MoveJudgementTest(unittest.TestCase):
+    """入退団の区分。チームは A=1・B=2。同じ年に始まる在籍は、その年に終わった方が先、最後は stint_id の順。"""
+
+    A, B = 1, 2
+
+    @staticmethod
+    def span(stint_id, team_id, from_year, to_year=None):
+        return ra.StintSpan(stint_id, team_id, from_year, to_year)
+
+    def test_first_stint_is_a_new_signing(self):
+        own = self.span(1, self.A, 2026)
+        judgement = ra.judge_join(own, [own])
+        self.assertEqual((judgement.kind, judgement.other_team_id), (ra.MoveKind.NEW_SIGNING, None))
+
+    def test_joining_after_another_team_is_a_transfer_with_the_previous_team(self):
+        before = self.span(1, self.B, 2020, 2025)
+        own = self.span(2, self.A, 2026)
+        judgement = ra.judge_join(own, [before, own])
+        self.assertEqual((judgement.kind, judgement.other_team_id), (ra.MoveKind.TRANSFER, self.B))
+
+    def test_previous_team_is_the_immediately_preceding_stint(self):
+        first = self.span(1, 3, 2018, 2019)
+        second = self.span(2, self.B, 2020, 2025)
+        own = self.span(3, self.A, 2026)
+        self.assertEqual(ra.judge_join(own, [first, second, own]).other_team_id, self.B)
+
+    def test_coming_back_to_the_same_team_is_a_rejoin(self):
+        before = self.span(1, self.A, 2018, 2020)
+        own = self.span(2, self.A, 2024)
+        judgement = ra.judge_join(own, [before, own])
+        self.assertEqual((judgement.kind, judgement.other_team_id), (ra.MoveKind.REJOINED, None))
+
+    def test_later_stints_do_not_make_a_join_a_transfer(self):
+        own = self.span(1, self.A, 2026, 2026)
+        after = self.span(2, self.B, 2027)
+        self.assertIs(ra.judge_join(own, [own, after]).kind, ra.MoveKind.NEW_SIGNING)
+
+    def test_mid_season_move_is_a_transfer_on_both_sides(self):
+        left = self.span(1, self.A, 2020, 2026)
+        joined = self.span(2, self.B, 2026)
+        self.assertEqual(ra.judge_join(joined, [left, joined]), ra.MoveJudgement(ra.MoveKind.TRANSFER, self.A))
+        self.assertEqual(ra.judge_leave(left, [left, joined]), ra.MoveJudgement(ra.MoveKind.TRANSFER, self.B))
+
+    def test_leaving_with_no_following_stint_is_a_departure(self):
+        own = self.span(1, self.A, 2020, 2026)
+        self.assertEqual(ra.judge_leave(own, [own]), ra.MoveJudgement(ra.MoveKind.DEPARTED))
+
+    def test_next_year_start_at_another_team_is_a_transfer_but_two_years_later_is_not(self):
+        own = self.span(1, self.A, 2020, 2026)
+        cases = [(2026, ra.MoveKind.TRANSFER), (2027, ra.MoveKind.TRANSFER), (2028, ra.MoveKind.DEPARTED)]
+        for from_year, expected in cases:
+            with self.subTest(from_year=from_year):
+                other = self.span(2, self.B, from_year)
+                self.assertIs(ra.judge_leave(own, [own, other]).kind, expected)
+
+    def test_following_stint_at_the_same_team_is_not_a_transfer(self):
+        own = self.span(1, self.A, 2020, 2026)
+        again = self.span(2, self.A, 2027)
+        self.assertIs(ra.judge_leave(own, [own, again]).kind, ra.MoveKind.DEPARTED)
+
+    def test_earlier_stints_do_not_make_a_leave_a_transfer(self):
+        earlier = self.span(1, self.B, 2015, 2019)
+        own = self.span(2, self.A, 2020, 2026)
+        self.assertIs(ra.judge_leave(own, [earlier, own]).kind, ra.MoveKind.DEPARTED)
+
+    def test_same_year_stints_are_ordered_by_id(self):
+        first = self.span(1, self.A, 2026, 2026)
+        second = self.span(2, self.B, 2026)
+        self.assertEqual(ra.judge_leave(first, [first, second]).other_team_id, self.B)
+        self.assertEqual(ra.judge_join(second, [first, second]).other_team_id, self.A)
+
+    def test_same_year_stint_that_ended_comes_first_even_if_registered_later(self):
+        """シーズン途中の移籍の経歴を後から足しても（移籍元の id が大きくても）、移籍元を先とみなす。"""
+        joined = self.span(1, self.B, 2026)
+        left = self.span(2, self.A, 2026, 2026)
+        self.assertEqual(ra.judge_join(joined, [joined, left]), ra.MoveJudgement(ra.MoveKind.TRANSFER, self.A))
+        self.assertEqual(ra.judge_leave(left, [joined, left]), ra.MoveJudgement(ra.MoveKind.TRANSFER, self.B))
+
+    def test_join_and_leave_use_the_same_window_for_a_transfer(self):
+        """間が1年以上空いた別球団からの加入は、退団側と同じく移籍とみなさない（同じ動きを両側で同じ区分にする）。"""
+        # (前の球団を退団した年, 加入側の区分, 退団側の区分)。加入は2026年
+        cases = [
+            (2025, ra.MoveKind.TRANSFER, ra.MoveKind.TRANSFER),
+            (2024, ra.MoveKind.NEW_SIGNING, ra.MoveKind.DEPARTED),
+        ]
+        for left_year, join_kind, leave_kind in cases:
+            with self.subTest(left_year=left_year):
+                before = self.span(1, self.B, 2018, left_year)
+                own = self.span(2, self.A, 2026)
+                self.assertIs(ra.judge_join(own, [before, own]).kind, join_kind)
+                self.assertIs(ra.judge_leave(before, [before, own]).kind, leave_kind)
+
+    def test_duplicate_stints_in_the_same_team_and_year_do_not_raise(self):
+        one = self.span(1, self.A, 2026, 2026)
+        two = self.span(2, self.A, 2026, 2026)
+        self.assertIs(ra.judge_join(two, [one, two]).kind, ra.MoveKind.REJOINED)
+        self.assertIs(ra.judge_leave(one, [one, two]).kind, ra.MoveKind.DEPARTED)
+
+    def test_order_is_kind_then_number(self):
+        rows = [
+            (ra.MoveKind.REJOINED, 1),
+            (ra.MoveKind.TRANSFER, 30),
+            (ra.MoveKind.NEW_SIGNING, 99),
+            (ra.MoveKind.TRANSFER, 5),
+        ]
+        rows.sort(key=lambda r: ra.move_order(*r))
+        self.assertEqual(
+            rows,
+            [
+                (ra.MoveKind.NEW_SIGNING, 99),
+                (ra.MoveKind.TRANSFER, 5),
+                (ra.MoveKind.TRANSFER, 30),
+                (ra.MoveKind.REJOINED, 1),
+            ],
+        )
+
+
+class NaturalPositionTest(unittest.TestCase):
+    def test_every_fielding_position_is_natural_for_exactly_one_registered_position(self):
+        """守備位置（代打・代走を除く）が、ちょうど1つの登録位置の本職になること。"""
+        for position in FP:
+            if position.is_substitute_only:
+                continue
+            with self.subTest(position=position):
+                owners = [registered for registered in Position if registered.is_natural_at(position)]
+                self.assertEqual(len(owners), 1)
+
+    def test_substitutes_belong_to_nobody(self):
+        for position in (FP.PINCH_HITTER, FP.PINCH_RUNNER):
+            self.assertFalse(any(registered.is_natural_at(position) for registered in Position))
+
+    def test_mapping(self):
+        self.assertTrue(Position.PITCHER.is_natural_at(FP.PITCHER))
+        self.assertTrue(Position.CATCHER.is_natural_at(FP.CATCHER))
+        for position in (FP.FIRST_BASE, FP.SECOND_BASE, FP.THIRD_BASE, FP.SHORTSTOP):
+            self.assertTrue(Position.INFIELDER.is_natural_at(position))
+        for position in (FP.LEFT_FIELD, FP.CENTER_FIELD, FP.RIGHT_FIELD):
+            self.assertTrue(Position.OUTFIELDER.is_natural_at(position))
+        self.assertTrue(Position.DESIGNATED_HITTER.is_natural_at(FP.DESIGNATED_HITTER))
+        self.assertFalse(Position.INFIELDER.is_natural_at(FP.LEFT_FIELD))
+
+
+class ColorAxisTest(unittest.TestCase):
+    def test_parse_falls_back_to_hand(self):
+        self.assertIs(ra.ColorAxis.parse("natural"), ra.ColorAxis.NATURAL)
+        self.assertIs(ra.ColorAxis.parse("hand"), ra.ColorAxis.HAND)
+        for key in (None, "", "unknown", "foreign"):
+            with self.subTest(key=key):
+                self.assertIs(ra.ColorAxis.parse(key), ra.ColorAxis.HAND)
+
+    def test_axes_are_hand_and_natural_only(self):
+        self.assertEqual([axis.value for axis in ra.ColorAxis], ["hand", "natural"])
+
+
+class ColorCategoryTest(unittest.TestCase):
+    def category(self, axis, *, registered=Position.INFIELDER, throws=None, bats=None, at=None):
+        return ra.color_category(
+            axis,
+            registered=registered,
+            profile=Profile(throws=throws, bats=bats),
+            fielding_position=at,
+        )
+
+    def test_hand_uses_throwing_arm_for_the_pitching_position_and_batting_side_for_others(self):
+        both = {"throws": Handedness.LEFT, "bats": Handedness.RIGHT}
+        cases = [
+            # (登録位置, 守備位置, 期待)
+            (Position.PITCHER, None, "hand-left"),  # 守備位置なしで登録が投手 → 投げる手
+            (Position.INFIELDER, None, "hand-right"),  # 守備位置なしで登録が野手 → 打席
+            (Position.INFIELDER, FP.PITCHER, "hand-left"),  # 守備位置が投 → 投げる手
+            (Position.PITCHER, FP.DESIGNATED_HITTER, "hand-right"),  # 野手の位置 → 打席
+            (Position.INFIELDER, FP.SHORTSTOP, "hand-right"),
+        ]
+        for registered, at, expected in cases:
+            with self.subTest(registered=registered, at=at):
+                self.assertEqual(self.category(ra.ColorAxis.HAND, registered=registered, at=at, **both).key, expected)
+
+    def test_hand_both_and_unknown(self):
+        self.assertEqual(self.category(ra.ColorAxis.HAND, bats=Handedness.BOTH).key, "hand-both")
+        unknown = self.category(ra.ColorAxis.HAND)
+        self.assertEqual((unknown.key, unknown.label), ("hand-unknown", "不明"))
+
+    def test_natural_compares_registered_position_with_the_fielding_position(self):
+        yes = self.category(ra.ColorAxis.NATURAL, registered=Position.INFIELDER, at=FP.SHORTSTOP)
+        no = self.category(ra.ColorAxis.NATURAL, registered=Position.INFIELDER, at=FP.LEFT_FIELD)
+        self.assertEqual((yes.key, yes.mark), ("natural-yes", ""))
+        self.assertEqual((no.key, no.mark), ("natural-no", "他"))
+
+    def test_natural_without_a_fielding_position_is_neutral(self):
+        self.assertIs(self.category(ra.ColorAxis.NATURAL, at=None), ra.NEUTRAL_CATEGORY)
+
+    def test_categories_do_not_include_neutral_and_keys_are_unique(self):
+        keys = []
+        for axis in ra.ColorAxis:
+            keys += [c.key for c in ra.color_categories(axis)]
+        self.assertEqual(len(keys), len(set(keys)))
+        self.assertNotIn(ra.NEUTRAL_CATEGORY.key, keys)
