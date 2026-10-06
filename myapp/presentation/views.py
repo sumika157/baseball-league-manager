@@ -29,6 +29,7 @@ from ..application.dto import (
     GameEditPlateAppearance,
     Listing,
     PlayerRatingsCard,
+    PlayerRatingsHistory,
     RatingsTable,
     TeamMonthlyRow,
     WorldContext,
@@ -36,6 +37,7 @@ from ..application.dto import (
 from ..application.game_recording import GameRecordingService
 from ..application.pennant_home import PennantHomeService
 from ..application.pennant_offseason import PennantOffseasonService
+from ..application.pennant_offseason_view import OffseasonViewService
 from ..application.pennant_ratings import PennantRatingsViewService
 from ..application.pennant_season import PennantSeasonService
 from ..application.pennant_view import PennantWorldViewService
@@ -45,6 +47,7 @@ from ..application.services import TeamApplicationService
 from ..application.team_analysis import TeamAnalysisService
 from ..domain.exceptions import (
     AlreadyAdvanced,
+    AlreadyClosed,
     DomainError,
     GameNotFound,
     InvalidWorld,
@@ -54,8 +57,9 @@ from ..domain.exceptions import (
     WorldNotFound,
 )
 from ..domain.pennant.club_plan import PlanSection
+from ..domain.pennant.draft import MAX_DRAFTEES, MIN_DRAFTEES
 from ..domain.pennant.schedule import AdvanceTarget
-from ..domain.pennant.season import MAX_GAMES_PER_ADVANCE, SCREEN_ADVANCE_TARGETS, world_today
+from ..domain.pennant.season import MAX_GAMES_PER_ADVANCE, SCREEN_ADVANCE_TARGETS, SeasonPhase, world_today
 from ..domain.pennant.world import WorldScope
 from ..domain.value_objects import (
     AdvanceReason,
@@ -68,10 +72,12 @@ from ..domain.value_objects import (
 from ..infrastructure.queries import (
     DjangoFieldingTotalsQuery,
     DjangoGameListQuery,
+    DjangoOffseasonQuery,
     DjangoPennantActivityQuery,
     DjangoPlayerFieldingQuery,
     DjangoPlayerSearchQuery,
     DjangoPlayerStatsQuery,
+    DjangoRatingsHistoryQuery,
     DjangoSeasonPlayingTimeQuery,
     DjangoSimulationContextQuery,
     DjangoTeamAnalysisQuery,
@@ -240,6 +246,7 @@ def build_pennant_ratings_service(world_id: int) -> PennantRatingsViewService:
         context_query=DjangoSimulationContextQuery(scope),
         stats=DjangoPlayerStatsQuery(scope),
         ratings=DjangoRatingsRepository(scope),
+        history=DjangoRatingsHistoryQuery(scope),
         today=_world_clock(world_id, DjangoSimulationContextQuery(scope)),
     )
 
@@ -349,6 +356,16 @@ def build_pennant_offseason_service(world_id: int) -> PennantOffseasonService:
         context_query=DjangoSimulationContextQuery(scope),
         playing_time=DjangoSeasonPlayingTimeQuery(scope),
         atomic=transaction.atomic,
+    )
+
+
+def build_offseason_view_service(world_id: int) -> OffseasonViewService:
+    """オフの結果（Y年オフ）を読むサービスを組み立てる。読むだけ。参照クエリは渡された世界の範囲で作る。
+
+    世界の id が正しくなければ InvalidWorld。
+    """
+    return OffseasonViewService(
+        worlds=DjangoWorldRepository(), offseason=DjangoOffseasonQuery(WorldScope.pennant(world_id))
     )
 
 
@@ -508,10 +525,22 @@ def pennant_world(request, world_id):
         league_id=int(league) if league and league.isdigit() else None,
         include_advance=is_owner,
     )
+    # 「シーズンを締める」はシーズン終了のオーナーにだけ出す（締められない理由も、ここで添える）
+    close_option = (
+        build_pennant_offseason_service(world_id).close_option()
+        if is_owner and world.phase is SeasonPhase.FINISHED
+        else None
+    )
     return _render(
         request,
         "pennant/home.html",
-        {"home": home, "is_owner": is_owner, "plan_notices": _plan_notices(world) if is_owner else []},
+        {
+            "home": home,
+            "is_owner": is_owner,
+            "plan_notices": _plan_notices(world) if is_owner else [],
+            "close_option": close_option,
+            "draftees_range": (MIN_DRAFTEES, MAX_DRAFTEES),
+        },
         world,
     )
 
@@ -576,6 +605,66 @@ def pennant_advance(request, world_id):
     since = world.today if world.today is not None else report.played_dates[0] - timedelta(days=1)
     messages.success(request, f"{report.games}試合を進めました。")
     return redirect(f"{home_url}?since={since.isoformat()}")
+
+
+def pennant_close_season(request, world_id):
+    """シーズンを締める。POST だけで、オーナーだけが使える（GET はホームへ戻す）。
+
+    締めたら「<年>年のシーズンを締めました」を出してオフの結果へ。元に戻せないので、
+    `expected_year`（画面を開いたときの年）がずれていたら何もしない（二重送信や、別の画面で先に締めたときに、
+    さらに次の年を締めてしまわない）。`expected_year` の欠落は「検査なし」にせず弾く。
+    """
+    world = _world_context(world_id)
+    home_url = reverse("pennant_world", args=[world_id])
+    if request.method != "POST":
+        return redirect(home_url)
+    denied = _requires_world_owner(request, world)
+    if denied is not None:
+        return denied
+
+    sent = request.POST.get("expected_year", "")
+    if not sent.isdigit():
+        messages.error(request, "画面が古いか、送信が正しくありません。開き直してからもう一度お試しください。")
+        return redirect(home_url)
+    expected_year = int(sent)
+
+    try:
+        result = build_pennant_offseason_service(world_id).close_season(expected_year=expected_year)
+    except AlreadyClosed as error:
+        messages.warning(request, str(error))
+        # 締めていると確かめられた年（error.year）のオフの結果へ。確かめられないとき（年度のずれなど）はホームへ
+        if error.year is not None:
+            return redirect("pennant_offseason", world_id=world_id, year=error.year)
+        return redirect(home_url)
+    except DomainError as error:
+        messages.error(request, str(error))
+        return redirect(home_url)
+
+    messages.success(
+        request,
+        f"{result.year}年のシーズンを締めました（引退 {result.retired_count}人・新人 {result.draftee_count}人）。",
+    )
+    if result.released_sections:
+        labels = "・".join(section.value for section in result.released_sections)
+        messages.warning(request, f"引退した選手を含んでいたため、自軍の編成（{labels}）を自動に戻しました。")
+    if result.without_ratings_count:
+        messages.info(request, f"能力の無い選手 {result.without_ratings_count}人は、翌年の能力を作りませんでした。")
+    return redirect("pennant_offseason", world_id=world_id, year=result.year)
+
+
+def pennant_offseason(request, world_id, year):
+    """Y年オフの結果。読むだけの画面なので誰でも開ける。締めていない年・範囲外の年は 404。
+
+    `?league=<id>` は引退・退団と新人を見るリーグ（無効な値は自軍のリーグに落とす）。
+    """
+    world = _world_context(world_id)
+    league = request.GET.get("league", "")
+    summary = build_offseason_view_service(world_id).get_summary(
+        world, year, league_id=int(league) if league.isdigit() else None
+    )
+    if summary is None:
+        raise Http404("その年のオフの結果は、まだありません。")
+    return _render(request, "pennant/offseason.html", {"summary": summary}, world)
 
 
 def pennant_delete(request, world_id):
@@ -1263,6 +1352,13 @@ def _ratings_card(world: WorldContext | None, player_id: int) -> PlayerRatingsCa
     return build_pennant_ratings_service(world.world_id).get_card(player_id)
 
 
+def _ratings_history(world: WorldContext | None, player_id: int) -> PlayerRatingsHistory | None:
+    """選手ページの能力の推移。能力と同じく、ペナントの世界の選手だけ。"""
+    if world is None:
+        return None
+    return build_pennant_ratings_service(world.world_id).get_history(player_id)
+
+
 def player_detail(request, team_id, player_id, world_id=None):
     """選手の個人ページ。通算・年度別・月別の成績と、選んだ月の試合ごとの記録。
 
@@ -1282,6 +1378,7 @@ def player_detail(request, team_id, player_id, world_id=None):
             "profile": profile,
             "player": profile.detail,
             "ratings_card": _ratings_card(world, player_id),
+            "ratings_history": _ratings_history(world, player_id),
             "can_edit_team": world is None and build_permission_query().can_manage(request.user, team_id),
         },
         world,

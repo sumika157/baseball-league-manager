@@ -17,6 +17,7 @@ from datetime import date, timedelta
 from ..domain.pennant.form import Outcome, outcome_for, recent_form
 from ..domain.pennant.schedule import AdvanceTarget, Fixture, ScheduleRules, dates_to_play, default_opening_day
 from ..domain.pennant.season import MAX_GAMES_PER_ADVANCE, SCREEN_ADVANCE_TARGETS, SeasonPhase, summary_period
+from ..domain.pennant.season import stats_year as stats_year_of
 from ..domain.repositories import FixtureRepository, GameRepository
 from ..domain.value_objects import InningsPitched, format_average
 from .dto import (
@@ -98,13 +99,15 @@ class PennantHomeService:
         pending = self._fixtures.find_all()
         own_id = world.managed_team_id
         own_games = self._games.list_rows(year=year, team_id=own_id) if own_id is not None else []
-        standings = self._teams.get_league_standings(year)
+        # 締めた後の開幕前は、今季の成績がまだ無い。順位表・主力・タイトルは前年の最終のものを見せる
+        stats_year = stats_year_of(phase=world.phase, last_played_on=world.today, current_year=world.season_year)
+        standings = self._teams.get_league_standings(stats_year)
         team_rows = self._teams.list_teams().rows
         team_leagues = {team.id: (team.league_id, team.league_name) for team in team_rows}
         names = {team.id: team.name for team in team_rows}
 
         own_league_id = team_leagues[own_id][0] if own_id is not None and own_id in team_leagues else None
-        own = self._own_summary(world, standings, own_games, pending, team_leagues, year)
+        own = self._own_summary(world, standings, own_games, pending, team_leagues, year, stats_year)
         return PennantHome(
             world=world,
             own=own,
@@ -112,10 +115,12 @@ class PennantHomeService:
             advance_options=self._advance_options(world, pending) if include_advance else [],
             expected_today=world.today.isoformat() if world.today is not None else "",
             summary=self._summary(world, since, year, standings, own_games, names),
-            standings=self._home_standings(standings, year, own_league_id, league_id, world.default_league_id),
-            batters=self._key_batters(world) if own_id is not None else [],
-            pitchers=self._key_pitchers(own_id, year) if own_id is not None else [],
-            titles=self._title_race(own_id, own_league_id, year),
+            standings=self._home_standings(standings, stats_year, own_league_id, league_id, world.default_league_id),
+            batters=self._key_batters(world, stats_year) if own_id is not None else [],
+            pitchers=self._key_pitchers(own_id, stats_year) if own_id is not None else [],
+            titles=self._title_race(own_id, own_league_id, stats_year),
+            stats_year=stats_year,
+            shows_previous_season=stats_year != year,
         )
 
     def get_deletion(self, world: WorldContext) -> WorldDeletion:
@@ -136,11 +141,15 @@ class PennantHomeService:
         pending: list[Fixture],
         team_leagues: dict[int, tuple[int, str]],
         year: int,
+        stats_year: int,
     ) -> OwnTeamSummary | None:
         own_id = world.managed_team_id
         if own_id is None or own_id not in team_leagues:
             return None
         row = _find_row(standings, own_id)
+        # `standings` は stats_year の順位。前年のものなら、いまの年度の欄には使わず「前年の順位」に回す
+        previous = row if stats_year != year else None
+        current = None if stats_year != year else row
         form = recent_form([_outcome(own_id, game) for game in own_games if game.is_recorded])
         opening: date | None = None
         if world.phase is SeasonPhase.BEFORE_OPENING:
@@ -150,17 +159,24 @@ class PennantHomeService:
             team_name=world.managed_team_name,
             league_name=team_leagues[own_id][1],
             phase=world.phase,
-            rank=row.rank if row is not None else None,
-            wins=row.wins if row is not None else 0,
-            losses=row.losses if row is not None else 0,
-            ties=row.ties if row is not None else 0,
-            winning_percentage=row.winning_percentage if row is not None else "",
-            games_behind=row.games_behind if row is not None else "",
-            games_played=row.games_played if row is not None else 0,
+            rank=current.rank if current is not None else None,
+            wins=current.wins if current is not None else 0,
+            losses=current.losses if current is not None else 0,
+            ties=current.ties if current is not None else 0,
+            winning_percentage=current.winning_percentage if current is not None else "",
+            games_behind=current.games_behind if current is not None else "",
+            games_played=current.games_played if current is not None else 0,
             remaining_games=sum(1 for fixture in pending if fixture.involves(own_id)),
             last_ten=form.record if own_games else "",
             streak=form.streak_label,
             opening_date=opening,
+            previous_year=stats_year if previous is not None else None,
+            previous_rank=previous.rank if previous is not None else None,
+            previous_record=(
+                f"{previous.wins}勝{previous.losses}敗" + (f"{previous.ties}分" if previous.ties else "")
+                if previous is not None
+                else ""
+            ),
         )
 
     # --- 次の試合・進める ---
@@ -342,12 +358,10 @@ class PennantHomeService:
             selected=selected,
         )
 
-    def _key_batters(self, world: WorldContext) -> list[KeyBatterRow]:
+    def _key_batters(self, world: WorldContext, year: int) -> list[KeyBatterRow]:
         own_id = _saved_id(world.managed_team_id)
         rows = [
-            row
-            for row in self._teams.list_batters(own_id, sort="ops", descending=True, year=world.season_year).rows
-            if row.at_bats
+            row for row in self._teams.list_batters(own_id, sort="ops", descending=True, year=year).rows if row.at_bats
         ]
         recent: dict[int, PeriodBatting] = {}
         if world.today is not None:

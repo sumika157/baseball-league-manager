@@ -19,6 +19,7 @@ from myapp.application.club_management import ClubManagementService
 from myapp.application.game_recording import GameRecordingService
 from myapp.application.pennant_home import PennantHomeService
 from myapp.application.pennant_offseason import PennantOffseasonService
+from myapp.application.pennant_offseason_view import OffseasonViewService
 from myapp.application.pennant_ratings import PennantRatingsViewService
 from myapp.application.pennant_season import PennantSeasonService
 from myapp.application.pennant_view import PennantWorldViewService
@@ -26,7 +27,9 @@ from myapp.application.pennant_world import PennantWorldService
 from myapp.application.queries import (
     FieldingTotalsQuery,
     GameListQuery,
+    OffseasonQuery,
     PennantActivityQuery,
+    RatingsHistoryQuery,
     SimulationContextQuery,
     TeamAnalysisQuery,
     TeamListQuery,
@@ -49,7 +52,9 @@ from myapp.infrastructure import queries, repositories
 from myapp.infrastructure.queries import (
     DjangoFieldingTotalsQuery,
     DjangoGameListQuery,
+    DjangoOffseasonQuery,
     DjangoPennantActivityQuery,
+    DjangoRatingsHistoryQuery,
     DjangoSimulationContextQuery,
     DjangoTeamAnalysisQuery,
     DjangoTeamListQuery,
@@ -66,6 +71,7 @@ from myapp.infrastructure.repositories import (
 )
 from myapp.presentation.views import (
     build_club_service,
+    build_offseason_view_service,
     build_pennant_home_service,
     build_pennant_offseason_service,
     build_pennant_ratings_service,
@@ -102,6 +108,8 @@ class ProtocolConformanceTest(SimpleTestCase):
         (DjangoTeamAnalysisQuery(REAL), TeamAnalysisQuery),
         (DjangoPennantActivityQuery(REAL), PennantActivityQuery),
         (DjangoWorldSummaryQuery(), WorldSummaryQuery),
+        (DjangoOffseasonQuery(REAL), OffseasonQuery),
+        (DjangoRatingsHistoryQuery(REAL), RatingsHistoryQuery),
     ]
 
     def test_implementations_satisfy_interfaces(self):
@@ -367,7 +375,7 @@ class ClubServiceScopeTest(SimpleTestCase):
 class PennantRatingsScopeTest(SimpleTestCase):
     """能力の表示は、渡された世界の範囲だけを読む。"""
 
-    SCOPED = ("_stats", "_ratings", "_fixtures", "_context_query")
+    SCOPED = ("_stats", "_ratings", "_history", "_fixtures", "_context_query")
 
     def test_every_dependency_is_fixed_to_the_given_world(self):
         service = build_pennant_ratings_service(7)
@@ -382,3 +390,20 @@ class PennantRatingsScopeTest(SimpleTestCase):
         for bad in (0, -1, True):
             with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
                 build_pennant_ratings_service(bad)
+
+
+class OffseasonViewScopeTest(SimpleTestCase):
+    """オフの結果の参照は、渡された世界の範囲だけを読む。"""
+
+    def test_dependencies_are_wired_and_fixed_to_the_given_world(self):
+        service = build_offseason_view_service(7)
+        self.assertIsInstance(service, OffseasonViewService)
+        self.assertEqual(service._offseason._scope, WorldScope.pennant(7))
+
+    def test_a_different_world_gets_a_different_scope(self):
+        self.assertEqual(build_offseason_view_service(8)._offseason._scope, WorldScope.pennant(8))
+
+    def test_the_real_data_has_no_offseason(self):
+        for bad in (0, -1, True):
+            with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
+                build_offseason_view_service(bad)

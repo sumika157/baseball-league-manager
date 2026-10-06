@@ -23,7 +23,7 @@ from ..domain.pennant.offseason import OffseasonClub, OffseasonPlan, OffseasonPl
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.retirement import PlayingTime
 from ..domain.pennant.schedule import season_schedule
-from ..domain.pennant.season import SeasonPhase, is_final_season, season_phase, season_year
+from ..domain.pennant.season import SeasonPhase, is_final_season, is_season_closed, season_phase, season_year
 from ..domain.pennant.world import World
 from ..domain.repositories import (
     ClubPlanRepository,
@@ -103,8 +103,12 @@ class PennantOffseasonService:
         with self._atomic():
             world = self._worlds.find_by_id(self._world_id)
             year = self._check(world, expected_year=expected_year)
-            if self._ratings.find_by_year(year + 1):
-                raise AlreadyClosed(f"{year}年のシーズンは既に締めています。")
+            if is_season_closed(
+                year=year,
+                start_year=world.start_year,
+                next_year_ratings_exist=bool(self._ratings.find_by_year(year + 1)),
+            ):
+                raise AlreadyClosed(f"{year}年のシーズンは既に締めています。", year=year)
             return self._close(world, year)
 
     # --- 検査 ---
@@ -120,7 +124,7 @@ class PennantOffseasonService:
         if last_played is None:
             raise SeasonNotFinished("まだ試合をしていないので、シーズンを締められません。")
         if phase is SeasonPhase.BEFORE_OPENING:
-            raise AlreadyClosed(f"{last_played.year}年のシーズンは既に締めています。")
+            raise AlreadyClosed(f"{last_played.year}年のシーズンは既に締めています。", year=last_played.year)
         if phase is SeasonPhase.IN_SEASON:
             raise SeasonNotFinished(
                 f"{last_played.year}年のシーズンはまだ終わっていません（未消化の試合があります）。"
@@ -128,7 +132,7 @@ class PennantOffseasonService:
         year = season_year(next_fixture_on=next_fixture, last_played_on=last_played, start_year=world.start_year)
         if expected_year is not None and expected_year != year:
             if world.start_year <= expected_year < year:
-                raise AlreadyClosed(f"{expected_year}年のシーズンは既に締めています。")
+                raise AlreadyClosed(f"{expected_year}年のシーズンは既に締めています。", year=expected_year)
             raise AlreadyClosed("表示している年度と世界の年度が違います。開き直してください。")
         if is_final_season(current_year=year, start_year=world.start_year):
             raise SeasonLimitReached("この世界のシーズン数の上限に達しているので、これ以上は締められません。")

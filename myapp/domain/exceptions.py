@@ -118,7 +118,14 @@ class SeasonNotFinished(DomainError):
 
 
 class AlreadyClosed(DomainError):
-    """そのシーズンは既に締めている（二重送信や、別の画面で先に締めた場合）。"""
+    """そのシーズンは既に締めている（二重送信や、別の画面で先に締めた場合）。
+
+    `year` は、締めていると確かめられた年（画面がオフの結果へ案内する行き先）。確かめられないときは None。
+    """
+
+    def __init__(self, message: str, *, year: int | None = None) -> None:
+        super().__init__(message)
+        self.year = year
 
 
 class SeasonLimitReached(DomainError):

@@ -6,9 +6,11 @@ from myapp.domain.pennant.season import (
     MAX_SUMMARY_DAYS,
     SeasonPhase,
     is_final_season,
+    is_season_closed,
     ratings_year,
     season_phase,
     season_year,
+    stats_year,
     summary_period,
     world_today,
 )
@@ -120,3 +122,26 @@ class SummaryPeriodTest(unittest.TestCase):
     def test_the_limit_of_one_advance_fits_a_week_of_eight_leagues(self):
         """8リーグの1週間（138〜144試合）が収まる。"""
         self.assertGreaterEqual(MAX_GAMES_PER_ADVANCE, 144)
+
+
+class SeasonClosedTest(unittest.TestCase):
+    def test_closed_needs_the_next_years_ratings_and_a_year_from_the_opening_year(self):
+        self.assertTrue(is_season_closed(year=2026, start_year=2026, next_year_ratings_exist=True))
+        self.assertFalse(is_season_closed(year=2026, start_year=2026, next_year_ratings_exist=False))
+        # 世界の作成は開幕年の能力を作る。開幕年より前の年は、翌年（開幕年）の能力があっても締めた年ではない
+        self.assertFalse(is_season_closed(year=2025, start_year=2026, next_year_ratings_exist=True))
+
+
+class StatsYearTest(unittest.TestCase):
+    LAST = datetime.date(2026, 9, 9)
+
+    def test_before_the_opening_after_a_close_it_is_the_year_just_played(self):
+        self.assertEqual(
+            stats_year(phase=SeasonPhase.BEFORE_OPENING, last_played_on=self.LAST, current_year=2027), 2026
+        )
+
+    def test_before_the_first_opening_and_in_other_phases_it_is_the_current_year(self):
+        self.assertEqual(stats_year(phase=SeasonPhase.BEFORE_OPENING, last_played_on=None, current_year=2026), 2026)
+        for phase in (SeasonPhase.IN_SEASON, SeasonPhase.FINISHED):
+            with self.subTest(phase=phase):
+                self.assertEqual(stats_year(phase=phase, last_played_on=self.LAST, current_year=2026), 2026)

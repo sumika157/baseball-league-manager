@@ -1,0 +1,20 @@
+{% comment %}
+「シーズンを締める」のカード。シーズン終了のオーナーにだけ出し、「進める」のカードとは同時に出さない（home.html が出し分ける）。
+締められない理由（最終シーズン）は、押しても弾かれるだけのボタンを出さずに文で知らせる。
+文言の人数は domain の MIN_DRAFTEES / MAX_DRAFTEES（ビューが渡す draftees_range）。
+{% endcomment %}
+<div class="card mb-4" id="season-close">
+  <div class="card-header">シーズンを締める</div>
+  <div class="card-body">
+    {% if close_option.can_close %}
+      <p class="mb-3">引退・ドラフト（各球団{{ draftees_range.0 }}〜{{ draftees_range.1 }}人）・成長と衰えを済ませ、{{ close_option.next_year }}年の日程を作ります。元に戻せません。</p>
+      <form method="post" action="{% url 'pennant_close_season' world.world_id %}">
+        {% csrf_token %}
+        <input type="hidden" name="expected_year" value="{{ close_option.year }}">
+        <button type="submit" class="btn btn-primary">{{ close_option.year }}年のシーズンを締める</button>
+      </form>
+    {% else %}
+      <div class="alert alert-secondary mb-0">{{ close_option.reason|default:"シーズンを締められません。" }}</div>
+    {% endif %}
+  </div>
+</div>

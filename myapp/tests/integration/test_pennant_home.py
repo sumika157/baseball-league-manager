@@ -135,7 +135,8 @@ class HomeScreenTest(HomeCase):
 
         content = self.client.get(self.home_url()).content.decode()
 
-        self.assertIn("シーズンは終了しました", content)
+        # シーズン終了のオーナーには「進める」の代わりに「シーズンを締める」のカードを出す（同時には出さない）
+        self.assertIn("シーズンを締める", content)
         self.assertIn("最終順位", content)
         self.assertNotIn("1日進める", content)
 

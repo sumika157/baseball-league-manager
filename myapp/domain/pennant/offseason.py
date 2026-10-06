@@ -114,24 +114,27 @@ class OffseasonPlan:
     anchor: AnchorCorrection
 
 
+def overall_value(ratings: Ratings) -> float:
+    """能力の総合値。野手は打撃（`batting_value`）、投手は抑える力（`pitching_value`）。画面の「総合」の出典。"""
+    if isinstance(ratings, PitcherRatings):
+        return ratings.pitching_value
+    return ratings.batting_value
+
+
 def rating_change(before: Ratings, after: Ratings) -> float:
-    """能力の変化。総合値（野手は打撃、投手は抑える力）の差。画面の「能力の変化」の出典。"""
-    if isinstance(before, PitcherRatings) and isinstance(after, PitcherRatings):
-        return after.pitching_value - before.pitching_value
-    if isinstance(before, BatterRatings) and isinstance(after, BatterRatings):
-        return after.batting_value - before.batting_value
-    raise ValueError("野手と投手の能力は比べられません。")
+    """能力の変化。総合値（`overall_value`）の差。画面の「能力の変化」の出典。"""
+    if isinstance(before, PitcherRatings) != isinstance(after, PitcherRatings):
+        raise ValueError("野手と投手の能力は比べられません。")
+    return overall_value(after) - overall_value(before)
 
 
 def retirement_value(position: Position, ratings: Ratings | None) -> float:
     """引退の確率に使う総合値。野手は打撃、投手は抑える力。捕手は守備力と打撃の大きい方。"""
     if ratings is None:
         return _NEUTRAL_VALUE
-    if isinstance(ratings, PitcherRatings):
-        return ratings.pitching_value
-    if position is Position.CATCHER:
+    if isinstance(ratings, BatterRatings) and position is Position.CATCHER:
         return max(float(ratings.fielding), ratings.batting_value)
-    return ratings.batting_value
+    return overall_value(ratings)
 
 
 def player_age(profile: Profile, year: int, *, start_year: int) -> int:
