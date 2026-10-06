@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date
 
@@ -1249,6 +1250,13 @@ class WorldContext:
     default_league_id: int | None
     # 世界のオーナー（書き込みを許す人）。画面には名前を出さず、操作の権限の判定だけに使う
     owner_id: int | None = None
+    # 最終シーズン（`MAX_SEASONS_PER_WORLD` 番目）か。最後まで終えた世界に「終了」の印を出す（#104）
+    is_final_season: bool = False
+
+    @property
+    def is_over(self) -> bool:
+        """最終シーズンを終えた世界か（これ以上は締められず、進めるものも無い）。"""
+        return self.is_final_season and self.phase is SeasonPhase.FINISHED
 
 
 @dataclass(frozen=True)
@@ -1267,6 +1275,8 @@ class WorldSummary:
     # 次の対戦の日（未消化の対戦の最小の日）。残っていなければ None
     next_fixture_on: date | None
     owner_id: int | None = None
+    # 球団ごとの未消化の試合数（優勝争いの残り試合。日程の残っていない球団は載らない）
+    remaining_by_team: Mapping[int, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -1287,6 +1297,8 @@ class PennantWorldListRow:
     context: WorldContext
     # 受け持つ球団が決まっていて、順位表に載っているときだけ
     own_standing: OwnStanding | None
+    # 優勝の確定・マジック（#104）。確定でもマジック点灯でもなければ None
+    race: OwnRace | None = None
 
 
 @dataclass(frozen=True)
@@ -1459,6 +1471,8 @@ class OwnTeamSummary:
     previous_year: int | None = None
     previous_rank: int | None = None
     previous_record: str = ""
+    # 優勝争い（#104）。シーズン中・終了で、確定でもマジック点灯でもなければ None
+    race: OwnRace | None = None
 
     @property
     def is_leader(self) -> bool:
@@ -1653,6 +1667,8 @@ class PennantHome:
     # 順位表・主力・タイトルの年。締めた後の開幕前は前年（今季の成績がまだ無いため）
     stats_year: int
     shows_previous_season: bool
+    # 最終シーズンを終えた世界の通算（#104）。終えていなければ None
+    finale: WorldFinale | None = None
 
     @property
     def season_finished(self) -> bool:
@@ -2126,3 +2142,43 @@ class ClubPlayerDetail:
     cells: tuple[RatingCell, ...]
     batting: ClubBattingStat | None
     pitching: ClubPitchingStat | None
+
+
+# --- 優勝争い（#104） ---
+
+
+@dataclass(frozen=True)
+class OwnRace:
+    """自軍の優勝争い。順位と残り試合から導いた値で、保存しない（domain の `pennant_race`）。"""
+
+    # 残りがどう転んでも単独で首位になる（優勝の確定）
+    clinched: bool
+    # 優勝までのマジック（点灯しているときだけ。確定なら None）
+    magic: int | None
+
+    @property
+    def label(self) -> str:
+        return "優勝確定" if self.clinched else f"マジック{self.magic}"
+
+
+@dataclass(frozen=True)
+class FinaleSeason:
+    """終えた世界の、自軍の1シーズンの結果。"""
+
+    year: int
+    rank: int
+    record: str  # 「80勝60敗3分」
+    is_champion: bool
+
+
+@dataclass(frozen=True)
+class WorldFinale:
+    """最終シーズンまで終えた世界の、自軍の通算。年度ごとの順位と、勝敗・優勝回数の合計。"""
+
+    seasons: list[FinaleSeason]
+    wins: int
+    losses: int
+    ties: int
+    titles: int
+    # 通算の勝敗（「170勝113敗3分」）。画面で組み立てない
+    record: str

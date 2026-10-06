@@ -230,6 +230,7 @@ def build_pennant_world_view() -> PennantWorldViewService:
     return PennantWorldViewService(
         summaries=DjangoWorldSummaryQuery(),
         standings_for=build_world_view_service,
+        games_for=lambda world_id: DjangoGameListQuery(WorldScope.pennant(world_id)),
     )
 
 
@@ -384,6 +385,8 @@ def build_pennant_home_service(world_id: int) -> PennantHomeService:
         game_records=DjangoGameRepository(scope),
         fixtures=DjangoFixtureRepository(scope),
         activity=DjangoPennantActivityQuery(scope),
+        team_records=DjangoTeamRepository(scope),
+        leagues=DjangoLeagueRepository(scope),
     )
 
 
@@ -526,10 +529,11 @@ def pennant_world(request, world_id):
         league_id=int(league) if league and league.isdigit() else None,
         include_advance=is_owner,
     )
-    # 「シーズンを締める」はシーズン終了のオーナーにだけ出す（締められない理由も、ここで添える）
+    # 「シーズンを締める」はシーズン終了のオーナーにだけ出す。最終シーズンを終えた世界は締められないので、
+    # 締めるカードの代わりに「世界の終了」（ホームの `finale`）を出す（終了の情報を1か所にする）
     close_option = (
         build_pennant_offseason_service(world_id).close_option()
-        if is_owner and world.phase is SeasonPhase.FINISHED
+        if is_owner and world.phase is SeasonPhase.FINISHED and not world.is_over
         else None
     )
     return _render(

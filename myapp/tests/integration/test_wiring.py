@@ -252,6 +252,9 @@ class WorldViewScopeTest(SimpleTestCase):
         self.assertEqual(list(signature(build_pennant_world_view).parameters), [])
         self.assertEqual(view._standings_for(7)._games._scope, WorldScope.pennant(7))
         self.assertEqual(view._standings_for(8)._games._scope, WorldScope.pennant(8))
+        # 同率の決着に使う試合も、世界ごとの範囲で読む
+        self.assertEqual(view._games_for(7)._scope, WorldScope.pennant(7))
+        self.assertEqual(view._games_for(8)._scope, WorldScope.pennant(8))
 
 
 class RealScopeTest(SimpleTestCase):
@@ -338,7 +341,7 @@ class PennantSeasonScopeTest(SimpleTestCase):
 class PennantHomeScopeTest(SimpleTestCase):
     """GM ホームの材料は、渡された世界の範囲だけを読む。"""
 
-    SCOPED = ("_games", "_game_records", "_fixtures", "_activity")
+    SCOPED = ("_games", "_game_records", "_fixtures", "_activity", "_team_records", "_leagues")
 
     def test_every_dependency_is_fixed_to_the_given_world(self):
         service = build_pennant_home_service(7)

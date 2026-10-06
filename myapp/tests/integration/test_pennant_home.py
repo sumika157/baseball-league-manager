@@ -286,7 +286,7 @@ class AdvanceTest(HomeCase):
         self.assertEqual(self.games_in(), 1)
 
     def test_targets_the_screen_does_not_offer_are_refused(self):
-        for target in ("month_end", "season_end", "nonsense", ""):
+        for target in ("season_end", "nonsense", ""):
             with self.subTest(target=target):
                 response = self.post_advance(target)
 
@@ -393,7 +393,9 @@ class AdvanceOptionsTest(SimpleTestCase):
         """自軍が毎日試合をするなら、「次の自軍の試合まで」は「1日」と同じ範囲になる。"""
         options = self.options(self.fixtures(10), today=date(2026, 3, 31))
 
-        self.assertEqual([option.target for option in options], ["day", "week"])
+        self.assertEqual(
+            [option.target for option in options], ["day", "week", "month_end"], "上限まで（全部）は月末までと同じ範囲"
+        )
 
     def test_the_next_own_game_is_offered_when_it_differs_from_a_day(self):
         fixtures = [

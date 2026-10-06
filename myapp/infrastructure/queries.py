@@ -747,7 +747,7 @@ class DjangoTeamListQuery:
 class DjangoWorldSummaryQuery:
     """WorldSummaryQuery の Django ORM 実装。世界の台帳そのものなので、範囲は持たない。
 
-    世界の数にかかわらず、一定のクエリ数（世界・最後の試合日・次の対戦の日・リーグの4本）で読む。
+    世界の数にかかわらず、一定のクエリ数（世界・最後の試合日・次の対戦の日・リーグの4本。一覧は球団ごとの残り試合の2本が加わる）で読む。
     """
 
     def get(self, world_id: int) -> WorldSummary:
@@ -757,10 +757,10 @@ class DjangoWorldSummaryQuery:
         return rows[0]
 
     def list_all(self) -> list[WorldSummary]:
-        return self._read(orm_models.PennantWorld.objects.all())
+        return self._read(orm_models.PennantWorld.objects.all(), with_remaining=True)
 
     @staticmethod
-    def _read(worlds: QuerySet[orm_models.PennantWorld]) -> list[WorldSummary]:
+    def _read(worlds: QuerySet[orm_models.PennantWorld], *, with_remaining: bool = False) -> list[WorldSummary]:
         rows = list(worlds.select_related("managed_team"))
         ids = [row.id for row in rows]
         # order_by() で既定の並びを外す（外さないと、並びの列が GROUP BY に入って世界ごとにまとまらない）
@@ -770,6 +770,16 @@ class DjangoWorldSummaryQuery:
         next_fixture = dict(
             fixtures_in_worlds(ids).order_by().values_list("home_team__league__world_id").annotate(first=Min("date"))
         )
+        # 球団ごとの未消化の試合数（優勝争いの残り試合）。ホームとビジターを別々に数えて足す。
+        # 世界の一覧だけが使うので、1つの世界を読む `get` では読まない
+        remaining: dict[int, dict[int, int]] = {}
+        if with_remaining:
+            fixtures = fixtures_in_worlds(ids).order_by()
+            for side in ("home_team", "visitor_team"):
+                counted = fixtures.values_list("home_team__league__world_id", side).annotate(count=Count("id"))
+                for world_id, team_id, count in counted:
+                    teams = remaining.setdefault(world_id, {})
+                    teams[team_id] = teams.get(team_id, 0) + count
         first_league: dict[int, int] = {}
         leagues = leagues_in_worlds(ids).order_by("display_order", "name").values_list("world_id", "id")
         for world_id, league_id in leagues:
@@ -787,6 +797,7 @@ class DjangoWorldSummaryQuery:
                 last_played_on=last_played.get(row.id),
                 next_fixture_on=next_fixture.get(row.id),
                 owner_id=row.owner_id,
+                remaining_by_team=remaining.get(row.id, {}),
             )
             for row in rows
         ]

@@ -73,6 +73,7 @@ from .game_edit import build_header, build_lineup_slots, build_plate_appearances
 from .player_stats_view import stats_player
 from .queries import GameListQuery, PlayerFieldingQuery, PlayerStatsQuery, TeamListQuery
 from .scorebook_view import build_line_score, build_scorebook_grids
+from .standings import league_standings, standing_row_of
 
 
 def _saved_id(value: int | None) -> int:
@@ -486,20 +487,17 @@ class TeamApplicationService:
         sort: str | None,
         descending: bool | None,
     ) -> list[LeagueStandings]:
-        leagues = []
-        for league in self._leagues.find_all():
-            members = [t for t in teams if t.league_id == league.id]
-            rows = domain_services.standings(members, season_games)
-            if not rows:
-                continue
-            leagues.append(
-                LeagueStandings(
-                    league_id=_saved_id(league.id),
-                    league_name=league.name,
-                    rows=self._to_standing_rows(rows, sort, descending),
-                )
+        leagues = league_standings(teams, self._leagues.find_all(), season_games)
+        if sort not in self.STANDING_SORT_KEYS:
+            return leagues
+        return [
+            LeagueStandings(
+                league_id=league.league_id,
+                league_name=league.league_name,
+                rows=self._sorted_standing_rows(league.rows, sort, descending),
             )
-        return leagues
+            for league in leagues
+        ]
 
     def _to_standing_rows(
         self, rows: list[domain_services.StandingRow], sort: str | None, descending: bool | None
@@ -509,27 +507,17 @@ class TeamApplicationService:
         並べ替えても rank の値は動かさない。順位は勝率で決まっているため。
         """
 
-        display_rows = [
-            StandingRow(
-                rank=row.rank,
-                team_id=row.team_id,
-                team_name=row.team_name,
-                wins=row.record.wins,
-                losses=row.record.losses,
-                ties=row.record.ties,
-                games_played=row.record.games_played,
-                winning_percentage=format_average(row.record.winning_percentage),
-                games_behind="—" if row.is_leader else f"{row.games_behind:.1f}",
-            )
-            for row in rows
-        ]
+        display_rows = [standing_row_of(row) for row in rows]
+        return self._sorted_standing_rows(display_rows, sort, descending)
 
+    def _sorted_standing_rows(
+        self, rows: list[StandingRow], sort: str | None, descending: bool | None
+    ) -> list[StandingRow]:
         if sort in self.STANDING_SORT_KEYS:
             getter, default_desc = self.STANDING_SORT_KEYS[sort]
             desc = default_desc if descending is None else bool(descending)
-            display_rows = sorted(display_rows, key=getter, reverse=desc)
-
-        return display_rows
+            return sorted(rows, key=getter, reverse=desc)
+        return rows
 
     def get_league_detail(self, league_id: int, year: int | None = None) -> LeagueDetail:
         """リーグ画面。所属チーム・順位表・直近の試合をまとめて返す。
