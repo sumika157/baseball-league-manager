@@ -32,7 +32,7 @@ from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass
 from enum import Enum
 
-from ..exceptions import DomainError, ForeignPlayerQuotaExceeded, InvalidClubPlan
+from ..exceptions import DomainError, ForeignPlayerQuotaExceeded, InvalidClubPlan, InvalidWorld
 from ..simulation.manager import (
     ACTIVE_ROSTER_SIZE,
     FIELD_SLOTS,
@@ -157,7 +157,11 @@ def members_of(pool: ClubRoster) -> dict[int, ClubMember]:
 
 def unfilled_position(members: Iterable[ClubMember]) -> FieldingPosition | None:
     """野手では埋められない守備位置（捕・一・二・三・遊・左・中・右）。全部埋められれば None。"""
-    owners = assign_fielders([m for m in members if not m.is_pitcher], _position_of)
+    return _unfilled_slot_of([m.position for m in members if not m.is_pitcher])
+
+
+def _unfilled_slot_of(batter_positions: Sequence[Position]) -> FieldingPosition | None:
+    owners = assign_fielders(batter_positions, lambda position: position)
     return next((slot for slot in FIELD_SLOTS if slot not in owners), None)
 
 
@@ -232,36 +236,78 @@ def _members_of_ids(player_ids: Sequence[int], roster: dict[int, ClubMember], wh
     return [roster[player_id] for player_id in player_ids]
 
 
+def playable_shortfall(positions: Iterable[Position], *, subject: str = "1軍") -> str | None:
+    """この登録位置の選手たちで試合を組めるか。組めなければ理由（日本語）、組めれば None。
+
+    **試合を組める最小の条件の唯一の出典。** 手動の1軍登録の検査（`check_active`）と、世界の作成での
+    名簿の検査（`ensure_roster_playable`）が同じ規則を通る。野手 `MIN_ACTIVE_BATTERS` 人以上・
+    捕手1人以上・投手 `MIN_ACTIVE_PITCHERS` 人以上・守備の8枠（捕・一・二・三・遊・左・中・右）を
+    `can_play` で埋められること。`subject` は文中で数えている対象（1軍登録か、在籍選手か）。
+    """
+    registered = list(positions)
+    pitchers = sum(position.is_pitcher for position in registered)
+    batters = len(registered) - pitchers
+    if batters < MIN_ACTIVE_BATTERS or pitchers < MIN_ACTIVE_PITCHERS:
+        return (
+            f"{subject}には野手{MIN_ACTIVE_BATTERS}人以上と投手{MIN_ACTIVE_PITCHERS}人以上が要ります"
+            f"（野手{batters}人・投手{pitchers}人）。"
+        )
+    if Position.CATCHER not in registered:
+        return f"{subject}には捕手が1人以上要ります。"
+    gap = _unfilled_slot_of([position for position in registered if not position.is_pitcher])
+    if gap is not None:
+        return (
+            f"{subject}に{gap.full_name}を守れる野手がいないため、オーダーを組めません。"
+            "捕手・内野手・外野手を守備位置ぶん（捕1・内4・外3）そろえてください。"
+        )
+    return None
+
+
+def lineup_capacity(members: Sequence[ClubMember], foreign_game_limit: int) -> int:
+    """外国人の出場枠の中で、スタメンに入れる野手の人数。
+
+    外国人の投手が先発すると枠が1つ減るので、その分も見込む（自動のスタメンは出場枠の中で組む）。
+    `LINEUP_SIZE` に満たなければ、自動のスタメンを組めず進行が止まる（`choose_lineup` が InvalidRoster）。
+    """
+    reserved = 1 if any(m.is_pitcher and m.is_foreign for m in members) else 0
+    foreign_batters = sum(m.is_foreign and not m.is_pitcher for m in members)
+    batters = sum(not m.is_pitcher for m in members)
+    return batters - foreign_batters + min(foreign_batters, max(0, foreign_game_limit - reserved))
+
+
+def ensure_roster_playable(team_name: str, members: Sequence[ClubMember], *, foreign_game_limit: int | None) -> None:
+    """球団の在籍選手で試合を組めること。組めなければ InvalidWorld（世界の作成で、名簿の足りない球団を弾く）。
+
+    `foreign_game_limit` は世界のリーグで最も厳しい出場枠（`strictest_game_limit`。交流戦はどのリーグとも当たる）。
+    外国人が多くて枠の中でスタメンを組めない名簿も弾く。
+    """
+    shortfall = playable_shortfall((m.position for m in members), subject="在籍選手")
+    if shortfall is not None:
+        raise InvalidWorld(f"{team_name}は、試合を組める名簿ではありません。{shortfall}")
+    if foreign_game_limit is not None:
+        playable = lineup_capacity(members, foreign_game_limit)
+        if playable < LINEUP_SIZE:
+            raise InvalidWorld(
+                f"{team_name}は、試合を組める名簿ではありません。外国人選手の出場は1試合{foreign_game_limit}人までなので、"
+                f"スタメン{LINEUP_SIZE}人を組めません（組めるのは{playable}人）。外国人でない野手が足りません。"
+            )
+
+
 def check_active(player_ids: Sequence[int], roster: dict[int, ClubMember], limits: ClubLimits) -> None:
     """1軍登録として成立するか。成立しなければ DomainError。"""
     members = _members_of_ids(player_ids, roster, "1軍登録")
     if len(members) > limits.active_size:
         raise InvalidClubPlan(f"1軍登録は{limits.active_size}人までです（{len(members)}人）。")
-    pitchers = sum(m.is_pitcher for m in members)
-    batters = len(members) - pitchers
-    if batters < MIN_ACTIVE_BATTERS or pitchers < MIN_ACTIVE_PITCHERS:
-        raise InvalidClubPlan(
-            f"1軍には野手{MIN_ACTIVE_BATTERS}人以上と投手{MIN_ACTIVE_PITCHERS}人以上が要ります"
-            f"（野手{batters}人・投手{pitchers}人）。"
-        )
-    if not any(m.position is Position.CATCHER for m in members):
-        raise InvalidClubPlan("1軍には捕手が1人以上要ります。")
-    gap = unfilled_position(members)
-    if gap is not None:
-        raise InvalidClubPlan(
-            f"1軍に{gap.full_name}を守れる野手がいないため、オーダーを組めません。"
-            "捕手・内野手・外野手を守備位置ぶん（捕1・内4・外3）そろえてください。"
-        )
+    shortfall = playable_shortfall(m.position for m in members)
+    if shortfall is not None:
+        raise InvalidClubPlan(shortfall)
     foreign = sum(m.is_foreign for m in members)
     if limits.foreign_roster_limit is not None and foreign > limits.foreign_roster_limit:
         raise ForeignPlayerQuotaExceeded(
             f"外国人選手の1軍登録は{limits.foreign_roster_limit}人までです（{foreign}人）。"
         )
     if limits.foreign_game_limit is not None:
-        # 自動のスタメンは出場枠の中で組む。外国人の投手が先発すると枠が1つ減るので、その分も見込む
-        reserved = 1 if any(m.is_pitcher and m.is_foreign for m in members) else 0
-        foreign_batters = sum(m.is_foreign and not m.is_pitcher for m in members)
-        playable = batters - foreign_batters + min(foreign_batters, max(0, limits.foreign_game_limit - reserved))
+        playable = lineup_capacity(members, limits.foreign_game_limit)
         if playable < LINEUP_SIZE:
             raise ForeignPlayerQuotaExceeded(
                 f"外国人選手の出場は1試合{limits.foreign_game_limit}人までなので、この1軍ではスタメン{LINEUP_SIZE}人を"

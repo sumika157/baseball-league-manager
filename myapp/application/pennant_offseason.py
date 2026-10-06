@@ -6,23 +6,37 @@
 締めたかどうかは保存しない。「次の対戦が翌年にある」「翌年の能力がある」という事実から導く
 （`PennantSeasonService` の進行と同じく、状態を持たない）。
 
-処理は「検査 → 読む → 計算する（`plan_offseason`。DB に触れない）→ 書く」。検査と読み書きは**すべて
-1つのトランザクションの中**で行う。同時に2回呼ばれても、翌年の能力の一意制約（選手 × 年）で後から来た方が
+処理は「検査 → 読む → 計算する（`plan_offseason`。DB に触れない）→ 書く」。
+**読む・計算するはトランザクションの外**で行い
+（本番の SQLite は書き手が1つで、中にいる間は他の書き込みを止める。8リーグの10シーズン目で 6秒）、
+**中では、最後の試合日と次の対戦の日が読み込みの前と変わっていないこと・翌年の能力が無いことを読み直してから書く**。
+変わっていたら（外で計算している間に別のリクエストが締めた・進めた）、書かずに既存の例外
+（`AlreadyClosed` / `SeasonNotFinished`）で断る。編成（`ClubPlan`）は GM が保存しうるので、書く直前に中で読む。
+
+**前提: 世界の `Team` 集約に書くのは、世界の作成とこの処理だけ。** 外で読んだ `Team` を中でそのまま
+`save()` して安全なのは、この前提による（`save()` は集約の全体を書き直すので、読んだあとに別の書き込みが
+あれば上書きして失う）。念のため、在籍の目印（`TeamRepository.roster_signature()`。行数・現在在籍の人数・
+最大の id）も読み込みの前後で比べ、変わっていれば書かずに断る。
+**世界の中で選手を書く操作を足すなら、その操作が `_state()` に現れるか、ここで中に読み直すこと。**
+
+同時に2回呼ばれても、翌年の能力の一意制約（選手 × 年）で後から来た方が
 失敗し、新人や在籍の変更ごと巻き戻る（`add_all` が保存前に既存の能力を検査して `InvalidRatings` を出し、
 それもすり抜けたら DB の一意制約）。**この2段が最後の砦**。
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import date
 
 from ..domain.entities import Player, Team
 from ..domain.exceptions import AlreadyClosed, SeasonLimitReached, SeasonNotFinished
 from ..domain.pennant.club_plan import PlanSection
-from ..domain.pennant.offseason import OffseasonClub, OffseasonPlan, OffseasonPlayer, plan_offseason
+from ..domain.pennant.offseason import Draftee, OffseasonClub, OffseasonPlan, OffseasonPlayer, plan_offseason
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.retirement import PlayingTime
-from ..domain.pennant.schedule import season_schedule
+from ..domain.pennant.schedule import Fixture, season_schedule
 from ..domain.pennant.season import SeasonPhase, is_final_season, is_season_closed, season_phase, season_year
 from ..domain.pennant.world import World
 from ..domain.repositories import (
@@ -43,6 +57,25 @@ def _saved_id(value: int | None) -> int:
     """保存済みの集約から取り出す id。永続化された後は必ず値がある。"""
     assert value is not None, "保存済みの集約には id がある"
     return value
+
+
+@dataclass
+class _RosterChange:
+    """メモリの上で引退・新人を反映した球団（保存はまだ）。`added` と `draftees` は同じ並び。"""
+
+    team: Team
+    added: list[Player]
+    draftees: list[Draftee]
+
+
+@dataclass
+class _PreparedClose:
+    """トランザクションの外で読んで計算した、締める処理の書く内容。"""
+
+    plan: OffseasonPlan
+    changes: list[_RosterChange]
+    schedule: Sequence[Fixture]
+    year: int
 
 
 class PennantOffseasonService:
@@ -100,16 +133,34 @@ class PennantOffseasonService:
         引退した選手の在籍は Y で閉じ、新人は Y+1 から加入する。**年を省略した在籍の操作は呼ばない**
         （省くと現実の今日の年が入る）。
         """
+        # 読み込みと計算（1〜6秒）は、書き込みトランザクションの外で済ませる。本番の SQLite は書き手が1つで、
+        # トランザクションの中にいる間は他の書き込みを止めるため。中では状態が変わっていないことだけを確かめ、書く
+        world = self._worlds.find_by_id(self._world_id)
+        state = self._state()
+        year = self._check(world, expected_year=expected_year)
+        self._ensure_not_closed(world, year)
+        prepared = self._prepare(world, year)
         with self._atomic():
-            world = self._worlds.find_by_id(self._world_id)
-            year = self._check(world, expected_year=expected_year)
-            if is_season_closed(
-                year=year,
-                start_year=world.start_year,
-                next_year_ratings_exist=bool(self._ratings.find_by_year(year + 1)),
-            ):
-                raise AlreadyClosed(f"{year}年のシーズンは既に締めています。", year=year)
-            return self._close(world, year)
+            if self._state() != state:
+                # 計算している間に、別のリクエストが進めた・締めた。古い読み込みを書かない。
+                # いまの状態で検査し直し、それぞれの理由（未消化・既に締めた）で断る
+                world = self._worlds.find_by_id(self._world_id)
+                self._ensure_not_closed(world, self._check(world, expected_year=expected_year))
+                raise AlreadyClosed("計算している間に世界の状態が変わりました。開き直してください。")
+            self._ensure_not_closed(world, year)
+            return self._commit(world, prepared)
+
+    def _state(self) -> tuple[date | None, date | None, tuple[int, int, int]]:
+        """締められるかを決める事実（最後に試合をした日・次の対戦の日・在籍の目印）。読み込みの前後で比べる。"""
+        return self._context_query.last_played_on(), self._fixtures.first_date(), self._teams.roster_signature()
+
+    def _ensure_not_closed(self, world: World, year: int) -> None:
+        if is_season_closed(
+            year=year,
+            start_year=world.start_year,
+            next_year_ratings_exist=bool(self._ratings.find_by_year(year + 1)),
+        ):
+            raise AlreadyClosed(f"{year}年のシーズンは既に締めています。", year=year)
 
     # --- 検査 ---
 
@@ -138,9 +189,10 @@ class PennantOffseasonService:
             raise SeasonLimitReached("この世界のシーズン数の上限に達しているので、これ以上は締められません。")
         return year
 
-    # --- 読む・計算する・書く ---
+    # --- 読む・計算する（トランザクションの外）→ 書く（中） ---
 
-    def _close(self, world: World, year: int) -> SeasonClosed:
+    def _prepare(self, world: World, year: int) -> _PreparedClose:
+        """読んで計算し、集約の変更（引退・新人）をメモリの上で済ませる。DB には何も書かない。"""
         teams = self._teams.find_all_with_roster()
         limits = {league.id: league.foreign_player_roster_limit for league in self._leagues.find_all()}
         ratings_by_player = {item.player_id: item for item in self._ratings.find_by_year(year)}
@@ -164,43 +216,53 @@ class PennantOffseasonService:
             start_year=world.start_year,
             used_names={player.name for team in teams for player in team.players},
         )
-
-        rookie_ratings = self._write_rosters(teams, plan, limits, year)
-        retained = [change.after for change in plan.retained]
-        self._ratings.add_all([*retained, *rookie_ratings])
-
-        released, released_clubs = self._release_plans(teams, plan, world)
-
-        next_year = year + 1
+        changes = self._apply_roster_changes(teams, plan, limits, year)
         schedule = season_schedule(
             {
                 league_id: sorted(_saved_id(team.id) for team in teams if team.league_id == league_id)
                 for league_id in sorted({team.league_id for team in teams if team.league_id is not None})
             },
             world_seed=world.seed,
-            year=next_year,
+            year=year + 1,
         )
-        self._fixtures.add_all(schedule)
+        return _PreparedClose(plan=plan, changes=changes, schedule=schedule, year=year)
+
+    def _commit(self, world: World, prepared: _PreparedClose) -> SeasonClosed:
+        """計算済みの変更を書く（トランザクションの中。SQL を流すだけにする）。"""
+        plan, year = prepared.plan, prepared.year
+        rookie_ratings: list[PlayerRatings] = []
+        for change in prepared.changes:
+            self._teams.save(change.team)
+            # 保存すると新人に id が入る。その id で翌年の能力と結びつける
+            rookie_ratings.extend(
+                PlayerRatings(player_id=_saved_id(player.id), year=year + 1, ratings=draftee.ratings)
+                for player, draftee in zip(change.added, change.draftees, strict=True)
+            )
+        retained = [change.after for change in plan.retained]
+        self._ratings.add_all([*retained, *rookie_ratings])
+
+        released, released_clubs = self._release_plans(plan, world)
+        self._fixtures.add_all(prepared.schedule)
 
         return SeasonClosed(
             year=year,
-            next_year=next_year,
+            next_year=year + 1,
             retired_count=len(plan.retired),
             draftee_count=len(plan.draftees),
             foreign_draftee_count=sum(1 for draftee in plan.draftees if draftee.is_foreign),
             without_ratings_count=len(plan.without_ratings),
             released_sections=released,
             released_club_count=released_clubs,
-            fixture_count=len(schedule),
+            fixture_count=len(prepared.schedule),
         )
 
-    def _write_rosters(
+    def _apply_roster_changes(
         self, teams: list[Team], plan: OffseasonPlan, limits: dict[int | None, int | None], year: int
-    ) -> list[PlayerRatings]:
-        """引退と新人を集約の操作で書く。保存後の id で、新人と能力を結びつけて返す（翌年の能力）。"""
+    ) -> list[_RosterChange]:
+        """引退と新人を集約の操作でメモリの上に反映する（保存は `_commit`）。変わった球団だけ返す。"""
         retired = set(plan.retired)
         next_year = year + 1
-        rookie_ratings: list[PlayerRatings] = []
+        changes: list[_RosterChange] = []
         for team in teams:
             team_id = _saved_id(team.id)
             leaving = [player for player in team.active_players if player.id in retired]
@@ -219,16 +281,10 @@ class PennantOffseasonService:
                 added.append(player)
             if any(draftee.is_foreign for draftee in draftees):
                 team.ensure_foreign_player_quota(limits.get(team.league_id))
-            self._teams.save(team)
-            rookie_ratings.extend(
-                PlayerRatings(player_id=_saved_id(player.id), year=next_year, ratings=draftee.ratings)
-                for player, draftee in zip(added, draftees, strict=True)
-            )
-        return rookie_ratings
+            changes.append(_RosterChange(team=team, added=added, draftees=draftees))
+        return changes
 
-    def _release_plans(
-        self, teams: list[Team], plan: OffseasonPlan, world: World
-    ) -> tuple[tuple[PlanSection, ...], int]:
+    def _release_plans(self, plan: OffseasonPlan, world: World) -> tuple[tuple[PlanSection, ...], int]:
         """引退した選手を含む編成の区画を自動に戻して保存する（判断26）。受け持つ球団のぶんの区画と、戻した球団の数。"""
         retired = set(plan.retired)
         own_sections: tuple[PlanSection, ...] = ()

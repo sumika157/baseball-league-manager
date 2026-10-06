@@ -12,6 +12,7 @@ from django.urls import reverse
 
 from myapp.domain.entities import Game, PlateAppearance, RunnerAdvance
 from myapp.domain.pennant.world import WorldScope
+from myapp.domain.simulation.manager import MIN_ACTIVE_PITCHERS
 from myapp.domain.value_objects import (
     AdvanceReason,
     Base,
@@ -41,6 +42,20 @@ def register_lineup(service, team, *, prefix, first_number=1) -> list[int]:
         service.register_player(team.id, f"{prefix}{order}", first_number + order - 1, "内野手").id
         for order in range(1, LINEUP_SIZE + 1)
     ]
+
+
+# 試合を組める名簿に足りない分を補う選手（捕手1・内野手5・外野手3で野手9人、投手は下限ぶん）
+PLAYABLE_SUPPORT = ("捕手", *("内野手",) * 5, *("外野手",) * 3, *("投手",) * MIN_ACTIVE_PITCHERS)
+
+
+def register_playable_support(service, team, *, first_number=60, prefix="補充") -> None:
+    """いまの選手に足して、試合を組める名簿にする（`PLAYABLE_SUPPORT` を登録する）。
+
+    世界の作成は、試合を組めない名簿の球団を弾く。世界を作るテストが、名簿の中身とは関係なく
+    世界を作れるようにする。背番号は `first_number` から連番（既存の選手と重ならない番号を渡す）。
+    """
+    for offset, position in enumerate(PLAYABLE_SUPPORT):
+        service.register_player(team.id, f"{prefix}{offset + 1}", first_number + offset, position)
 
 
 def lineup_rows(team, player_ids, *, fielding_position="指") -> list[dict]:
