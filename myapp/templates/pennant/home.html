@@ -56,6 +56,12 @@ GM ホーム。上から、自軍の位置 → 進めた結果 → 進める（�
         <div class="stat-value">{% if own.is_leader %}首位{% else %}{{ own.games_behind|default:"—" }}{% endif %}</div>
         <div class="stat-label">首位との差</div>
       </div>
+      {% if own.race %}
+      <div class="stat-cell">
+        <div class="stat-value">{{ own.race.label }}</div>
+        <div class="stat-label">優勝争い</div>
+      </div>
+      {% endif %}
       <div class="stat-cell">
         <div class="stat-value">{{ own.last_ten|default:"—" }}</div>
         <div class="stat-label">直近10試合</div>
@@ -72,6 +78,10 @@ GM ホーム。上から、自軍の位置 → 進めた結果 → 進める（�
   </div>
 {% else %}
   <div class="alert alert-secondary">この世界には、受け持つ球団が決まっていません。</div>
+{% endif %}
+
+{% if home.finale %}
+  {% include 'pennant/_finale.html' with finale=home.finale %}
 {% endif %}
 
 {% if home.shows_previous_season %}
@@ -200,7 +210,8 @@ GM ホーム。上から、自軍の位置 → 進めた結果 → 進める（�
 {% endif %}
 
 {% if is_owner and home.season_finished %}
-  {% include 'pennant/_season_close.html' %}
+  {% comment %}最終シーズンを終えた世界は締められない。締めるカードの代わりに「世界の終了」を出す（そのとき close_option は無い）。{% endcomment %}
+  {% if close_option %}{% include 'pennant/_season_close.html' %}{% endif %}
 {% elif is_owner %}
   <div class="card mb-4">
     <div class="card-header">進める</div>

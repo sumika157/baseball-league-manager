@@ -2,7 +2,7 @@
 
 import datetime
 from collections.abc import Sequence
-from unittest import TestCase
+from unittest import TestCase, mock
 
 from myapp.domain.exceptions import InvalidSchedule
 from myapp.domain.pennant.schedule import AdvanceTarget, Fixture, dates_to_play
@@ -95,3 +95,49 @@ class DatesToPlayTests(TestCase):
         shuffled = list(reversed(FIXTURES))
         result = self._dates(AdvanceTarget.SEASON_END, fixtures=shuffled)
         self.assertEqual(sorted(set(result)), result)
+
+
+class LimitTargetTests(TestCase):
+    """「上限まで」: 試合数が上限を超えない、日の区切りで止まる最大の範囲。"""
+
+    def _fixtures(self, per_day: Sequence[int]) -> list[Fixture]:
+        return [Fixture(_d(4, 1 + day), 10 + n, 100 + n) for day, count in enumerate(per_day) for n in range(count)]
+
+    def test_stops_on_the_last_day_that_keeps_within_the_limit(self) -> None:
+        # 1日3試合 × 5日。上限 8 なら2日（6試合）。3日目で 9 になるので含めない
+        with mock.patch("myapp.domain.pennant.schedule.MAX_GAMES_PER_ADVANCE", 8):
+            dates = dates_to_play(self._fixtures([3] * 5), TODAY, AdvanceTarget.LIMIT, MINE)
+
+        self.assertEqual([_d(4, 1), _d(4, 2)], dates)
+
+    def test_a_range_exactly_at_the_limit_is_included(self) -> None:
+        with mock.patch("myapp.domain.pennant.schedule.MAX_GAMES_PER_ADVANCE", 9):
+            dates = dates_to_play(self._fixtures([3] * 5), TODAY, AdvanceTarget.LIMIT, MINE)
+
+        self.assertEqual([_d(4, 1), _d(4, 2), _d(4, 3)], dates)
+
+    def test_a_first_day_over_the_limit_is_still_returned(self) -> None:
+        """日の途中では止まらない。最初の日が上限を超えても、その日を返す（断るのは呼ぶ側）。"""
+        with mock.patch("myapp.domain.pennant.schedule.MAX_GAMES_PER_ADVANCE", 2):
+            dates = dates_to_play(self._fixtures([3, 1]), TODAY, AdvanceTarget.LIMIT, MINE)
+
+        self.assertEqual([_d(4, 1)], dates)
+
+    def test_the_rest_of_the_season_when_it_fits(self) -> None:
+        dates = dates_to_play(FIXTURES, TODAY, AdvanceTarget.LIMIT, MINE)
+
+        self.assertEqual(sorted({f.date for f in FIXTURES}), dates)
+
+    def test_only_games_after_today_count(self) -> None:
+        with mock.patch("myapp.domain.pennant.schedule.MAX_GAMES_PER_ADVANCE", 3):
+            dates = dates_to_play(self._fixtures([3, 3, 3]), _d(4, 1), AdvanceTarget.LIMIT, MINE)
+
+        self.assertEqual([_d(4, 2)], dates)
+
+    def test_the_default_limit_is_the_screen_limit(self) -> None:
+        """上限の値の出典は MAX_GAMES_PER_ADVANCE ひとつ（画面が断る上限と同じ）。"""
+        fixtures = self._fixtures([1] * 28)
+        fixtures += [Fixture(_d(5, 1 + day), 10, 100) for day in range(30)]
+        dates = dates_to_play(fixtures, TODAY, AdvanceTarget.LIMIT, MINE)
+
+        self.assertEqual(len(fixtures), len(dates), "上限（150）に収まる1日1試合は全部")

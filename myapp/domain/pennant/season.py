@@ -9,15 +9,21 @@ from __future__ import annotations
 import datetime
 from enum import Enum
 
+from .schedule import MAX_GAMES_PER_ADVANCE as MAX_GAMES_PER_ADVANCE
 from .schedule import AdvanceTarget, ScheduleRules, default_opening_day
 from .world import MAX_SEASONS_PER_WORLD
 
-# 画面の1回の「進める」で作ってよい試合数の上限。8リーグの1週間（約140試合）が収まる大きさで、
-# 静かな環境で約4秒、負荷時でも約10秒（設計書 12.「P3b の詳細」）
-MAX_GAMES_PER_ADVANCE = 150
-# 画面から進められる範囲（ボタンの並び順）。「月末まで」「シーズン終了まで」は1回の上限を超えうるので出さない。
+# 画面から進められる範囲（ボタンの並び順。判断8: 目立つのは先頭の「1日」）。
+# 1回の上限（`MAX_GAMES_PER_ADVANCE`。schedule.py が出典）を超える範囲は、件数が多い世界では選択肢から隠れる
+# （「月末まで」「上限まで」。「シーズン終了まで」は画面に出さない）。
 # 画面に出す選択肢も、受け付ける範囲も、ここが唯一の出典
-SCREEN_ADVANCE_TARGETS = (AdvanceTarget.DAY, AdvanceTarget.NEXT_MANAGED_GAME, AdvanceTarget.WEEK)
+SCREEN_ADVANCE_TARGETS = (
+    AdvanceTarget.DAY,
+    AdvanceTarget.NEXT_MANAGED_GAME,
+    AdvanceTarget.WEEK,
+    AdvanceTarget.MONTH_END,
+    AdvanceTarget.LIMIT,
+)
 # 「進めた結果」のまとめに載せる期間の上限（日）。長く進めても、読める量に丸める
 MAX_SUMMARY_DAYS = 31
 

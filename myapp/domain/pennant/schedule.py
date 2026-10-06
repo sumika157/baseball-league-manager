@@ -185,6 +185,12 @@ def longest_streak(fixtures: Sequence[Fixture]) -> int:
 # --- 進める範囲 -------------------------------------------------------------
 
 
+# 画面の1回の「進める」で作ってよい試合数の上限。8リーグの1週間（約140試合）が収まる大きさで、
+# 静かな環境で約4秒、負荷時でも約10秒（設計書 12.「P3b の詳細」）。「上限まで」の範囲もこれで決める
+# （`domain/pennant/season.py` からも使えるように再公開している）
+MAX_GAMES_PER_ADVANCE = 150
+
+
 class AdvanceTarget(Enum):
     """シーズンをどこまで進めるか。"""
 
@@ -192,6 +198,7 @@ class AdvanceTarget(Enum):
     WEEK = "week"  # 次に試合がある日から7日間
     NEXT_MANAGED_GAME = "next_managed_game"  # 自軍の次の試合の日まで（その日を含む。自軍の未消化が無ければ残り全部）
     MONTH_END = "month_end"  # 次に試合がある日の月の末まで
+    LIMIT = "limit"  # 試合数が `MAX_GAMES_PER_ADVANCE` を超えない、日の区切りで止まる最大の範囲
     SEASON_END = "season_end"  # 未消化の日程をすべて
 
 
@@ -218,6 +225,20 @@ def dates_to_play(
         return [d for d in upcoming if d <= limit]
     if target is AdvanceTarget.MONTH_END:
         return [d for d in upcoming if (d.year, d.month) == (first.year, first.month)]
+    if target is AdvanceTarget.LIMIT:
+        # 日の途中では止まらない。最初の日だけで上限を超えるときも、その日は含める（呼ぶ側が上限で断る）
+        per_day: dict[datetime.date, int] = {}
+        for fixture in fixtures:
+            if fixture.date > today:
+                per_day[fixture.date] = per_day.get(fixture.date, 0) + 1
+        chosen: list[datetime.date] = []
+        games = 0
+        for day in upcoming:
+            games += per_day[day]
+            if chosen and games > MAX_GAMES_PER_ADVANCE:
+                break
+            chosen.append(day)
+        return chosen
     if target is AdvanceTarget.NEXT_MANAGED_GAME:
         if managed_team_id is None:
             raise InvalidSchedule("自軍が指定されていません。")

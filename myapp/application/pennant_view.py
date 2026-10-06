@@ -13,28 +13,29 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import date
 
-from ..domain.pennant.season import season_phase, season_year
+from ..domain.pennant.season import is_final_season, season_phase, season_year
 from ..domain.pennant.world import MAX_WORLDS_PER_OWNER
-from .dto import OwnStanding, PennantWorldList, PennantWorldListRow, WorldContext, WorldSummary
-from .queries import WorldSummaryQuery
+from .dto import OwnRace, OwnStanding, PennantWorldList, PennantWorldListRow, WorldContext, WorldSummary
+from .pennant_race import own_race, tiebreak_for
+from .queries import GameListQuery, WorldSummaryQuery
 from .services import TeamApplicationService
 
 
 def _context_of(summary: WorldSummary) -> WorldContext:
+    year = season_year(
+        next_fixture_on=summary.next_fixture_on, last_played_on=summary.last_played_on, start_year=summary.start_year
+    )
     return WorldContext(
         world_id=summary.world_id,
         name=summary.name,
         phase=season_phase(last_played_on=summary.last_played_on, next_fixture_on=summary.next_fixture_on),
-        season_year=season_year(
-            next_fixture_on=summary.next_fixture_on,
-            last_played_on=summary.last_played_on,
-            start_year=summary.start_year,
-        ),
+        season_year=year,
         today=summary.last_played_on,
         managed_team_id=summary.managed_team_id,
         managed_team_name=summary.managed_team_name,
         default_league_id=summary.default_league_id,
         owner_id=summary.owner_id,
+        is_final_season=is_final_season(current_year=year, start_year=summary.start_year),
     )
 
 
@@ -46,9 +47,11 @@ class PennantWorldViewService:
         *,
         summaries: WorldSummaryQuery,
         standings_for: Callable[[int], TeamApplicationService],
+        games_for: Callable[[int], GameListQuery],
     ) -> None:
         self._summaries = summaries
         self._standings_for = standings_for
+        self._games_for = games_for
 
     def get_context(self, world_id: int) -> WorldContext:
         """無ければ WorldNotFound。"""
@@ -74,23 +77,28 @@ class PennantWorldViewService:
 
     def _row_of(self, summary: WorldSummary) -> PennantWorldListRow:
         context = _context_of(summary)
-        return PennantWorldListRow(
-            context=context,
-            own_standing=self._own_standing(context, context.season_year),
-        )
+        standing, race = self._own_standing(context, summary)
+        return PennantWorldListRow(context=context, own_standing=standing, race=race)
 
-    def _own_standing(self, context: WorldContext, year: int) -> OwnStanding | None:
+    def _own_standing(self, context: WorldContext, summary: WorldSummary) -> tuple[OwnStanding | None, OwnRace | None]:
+        """受け持つ球団のいまの順位と、優勝の確定・マジック。順位が無い（試合の無い年など）ときは (None, None)。"""
+        year = context.season_year
         # 試合の無い年（締めた直後の翌年の開幕前）は、順位を出さない
         if context.managed_team_id is None or context.today is None or context.today.year != year:
-            return None
-        for league in self._standings_for(context.world_id).get_league_standings(year):
+            return None, None
+        teams = self._standings_for(context.world_id)
+        standings = teams.get_league_standings(year)
+        for league in standings:
             for row in league.rows:
                 if row.team_id == context.managed_team_id:
-                    return OwnStanding(
+                    standing = OwnStanding(
                         rank=row.rank,
                         wins=row.wins,
                         losses=row.losses,
                         ties=row.ties,
                         games_behind=row.games_behind,
                     )
-        return None
+                    tiebreak = tiebreak_for(year, games=self._games_for(context.world_id), teams=teams)
+                    race = own_race(standings, summary.remaining_by_team, context.managed_team_id, tiebreak)
+                    return standing, race
+        return None, None
