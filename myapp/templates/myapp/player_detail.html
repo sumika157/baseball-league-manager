@@ -168,7 +168,7 @@
                       {{ row.team_name }}
                       {% if row.is_current %}<span class="badge bg-primary ms-1">在籍中</span>{% endif %}
                     </span>
-                    <span class="tile-list-sub">{{ row.period }}</span>
+                    <span class="tile-list-sub">{{ row.period }}{% if row.acquired_via_label %} · {{ row.acquired_via_label }}で入団{% endif %}</span>
                   </span>
                   <span class="tile-list-meta">#{{ row.number }}</span>
                 </a>
@@ -178,6 +178,20 @@
         {% else %}
           <div class="empty-state" style="padding: 2rem 1rem; font-size: 0.875rem;">
             在籍の記録がありません。
+          </div>
+        {% endif %}
+        {% comment %}
+          FA 宣言。残留か移籍かは保存した値ではなく、在籍から導いた結果。
+        {% endcomment %}
+        {% if player.fa_declarations %}
+          <div class="px-3 py-2 border-top">
+            <div class="stat-readout-label mb-1">FA 宣言</div>
+            <ul class="list-unstyled mb-0 tabular-nums">
+              {% for declaration in player.fa_declarations %}
+                <li>{{ declaration.year }}年 {{ declaration.kind_label }}FA
+                  <span class="badge {% if declaration.is_moved %}bg-secondary{% else %}bg-light text-dark border{% endif %} ms-1">{{ declaration.outcome_label }}</span></li>
+              {% endfor %}
+            </ul>
           </div>
         {% endif %}
       </div>

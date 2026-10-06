@@ -3,7 +3,8 @@ from dataclasses import replace
 from typing import ClassVar
 
 from django import forms
-from django.contrib import admin
+from django.contrib import admin, messages
+from django.contrib.admin.actions import delete_selected
 from django.contrib.admin.views.main import ORDER_VAR, ChangeList
 from django.contrib.admin.widgets import FilteredSelectMultiple
 from django.db.models import (
@@ -21,10 +22,18 @@ from django.urls import reverse
 from django.utils.html import format_html, format_html_join
 
 from .domain.entities import Captaincy as DomainCaptaincy
+from .domain.entities import FreeAgentDeclaration as DomainFreeAgentDeclaration
 from .domain.entities import Stint as DomainStint
-from .domain.entities import winning_team_id
+from .domain.entities import ensure_declarations_valid, ensure_free_agent_acquisitions, winning_team_id
 from .domain.exceptions import DomainError
-from .domain.value_objects import ContractStatus, JerseyNumber, StadiumProfile, ensure_quota_not_exceeded
+from .domain.value_objects import (
+    AcquisitionRoute,
+    ContractStatus,
+    FreeAgencyKind,
+    JerseyNumber,
+    StadiumProfile,
+    ensure_quota_not_exceeded,
+)
 from .domain.value_objects import Profile as DomainProfile
 from .infrastructure import orm_models
 from .infrastructure.orm_models import (
@@ -36,6 +45,7 @@ from .infrastructure.orm_models import (
     GamePitchingLine,
     League,
     Player,
+    PlayerFreeAgentDeclaration,
     PlayerStint,
     Stadium,
     Team,
@@ -526,9 +536,35 @@ def _to_domain_stint(row: PlayerStint) -> DomainStint:
             signed_as=ContractStatus.from_label(row.signed_as),
             promoted_year=row.promoted_year,
             number_before_promotion=_jersey_or_none(row.number_before_promotion),
+            acquired_via=AcquisitionRoute.from_label(row.acquired_via) if row.acquired_via else None,
         )
     except DomainError as error:
         raise forms.ValidationError(f"保存済みの在籍（{row.player.name}）が不正です: {error}") from None
+
+
+def _domain_declarations_of(player, *, excluding_pk=None) -> list[DomainFreeAgentDeclaration]:
+    """保存済みの FA 宣言をドメインの宣言にする。"""
+    rows = PlayerFreeAgentDeclaration.objects.filter(player=player)
+    if excluding_pk is not None:
+        rows = rows.exclude(pk=excluding_pk)
+    return [DomainFreeAgentDeclaration(year=d.year, kind=FreeAgencyKind.from_label(d.kind)) for d in rows]
+
+
+def _domain_stints_of(player, *, excluding_pk=None) -> list[DomainStint]:
+    """保存済みの在籍をドメインの在籍にする。"""
+    rows = PlayerStint.objects.filter(player=player).select_related("player")
+    if excluding_pk is not None:
+        rows = rows.exclude(pk=excluding_pk)
+    return [_to_domain_stint(row) for row in rows]
+
+
+def ensure_player_free_agency_consistent(stints, declarations, name="") -> None:
+    """在籍と FA 宣言の全体の整合（宣言の不変条件と、経路 FA の根拠）。ドメインの規則に任せ、入力エラーに直す。"""
+    try:
+        ensure_declarations_valid(stints, declarations, name)
+        ensure_free_agent_acquisitions(stints, declarations, name)
+    except DomainError as error:
+        raise forms.ValidationError(str(error)) from None
 
 
 class PlayerStintForm(forms.ModelForm):
@@ -538,6 +574,10 @@ class PlayerStintForm(forms.ModelForm):
     選手が同時に2人」といった状態を作れてしまう。判定そのものはドメインの
     Stint に任せ、ここでは既存の在籍と突き合わせるだけにする。
     """
+
+    # 選手の管理画面のインラインでは、送信後の在籍と宣言の全体をフォームセット側が検査する
+    # （保存済みの宣言と突き合わせると、同じ送信での宣言の削除・追加を見落とす）。単独の在籍の管理画面では False
+    checked_with_declarations = False
 
     class Meta:
         model = PlayerStint
@@ -553,6 +593,10 @@ class PlayerStintForm(forms.ModelForm):
 
     def clean_signed_as(self):
         return self.cleaned_data.get("signed_as") or ContractStatus.REGISTERED.value
+
+    def clean_acquired_via(self):
+        # 空欄は不明（None）。推測で埋めない
+        return self.cleaned_data.get("acquired_via") or None
 
     def clean(self):
         cleaned = super().clean()
@@ -573,6 +617,9 @@ class PlayerStintForm(forms.ModelForm):
                 signed_as=ContractStatus.from_label(cleaned.get("signed_as") or ContractStatus.REGISTERED.value),
                 promoted_year=cleaned.get("promoted_year"),
                 number_before_promotion=_jersey_or_none(cleaned.get("number_before_promotion")),
+                acquired_via=AcquisitionRoute.from_label(cleaned["acquired_via"])
+                if cleaned.get("acquired_via")
+                else None,
             )
             # 区分と背番号の食い違い（育成は100以上・支配下は99以下）はドメインに判定させる
             candidate.ensure_number_matches_contract()
@@ -602,9 +649,22 @@ class PlayerStintForm(forms.ModelForm):
                     f"使用しています。期間が重なる同じ背番号は登録できません。"
                 )
 
+        self._ensure_free_agency_consistent(candidate, player)
         self._ensure_foreign_player_quota(cleaned, team, player)
         self._ensure_registered_limit(team, candidate)
         return cleaned
+
+    def _ensure_free_agency_consistent(self, candidate, player):
+        """この在籍を保存した後の、その選手の在籍と保存済みの FA 宣言の整合（経路 FA の根拠・宣言した年の在籍）。
+
+        期間の短縮や経路の変更で、宣言や FA 入団の根拠が崩れるのを保存前に弾く。判定はドメインの関数。
+        """
+        if self.checked_with_declarations or player is None or not player.pk:
+            return
+        others = _domain_stints_of(player, excluding_pk=self.instance.pk)
+        ensure_player_free_agency_consistent(
+            [*others, candidate], _domain_declarations_of(player), f"「{player.name}」"
+        )
 
     def _ensure_registered_limit(self, team, candidate):
         """支配下の選手が新たにこのチームの人数に加わる場合、上限を超えないか確認する。
@@ -694,6 +754,38 @@ class PlayerStintFormSet(forms.BaseInlineFormSet):
     移籍先の在籍が同じ年を共有するのが普通のため。
     """
 
+    def _construct_form(self, i, **kwargs):
+        form = super()._construct_form(i, **kwargs)
+        # 宣言との整合は、選手の管理画面の FA 宣言のフォームセットが送信後の全体で検査する
+        form.checked_with_declarations = True
+        return form
+
+    def submitted_stints(self) -> list[DomainStint]:
+        """送信された在籍（削除する行・空の行を除く）をドメインの在籍にしたもの。検証済みであること。"""
+        stints = []
+        for form in self.forms:
+            data = getattr(form, "cleaned_data", None)
+            if not data or data.get("DELETE"):
+                continue
+            team, number, from_year = data.get("team"), data.get("number"), data.get("from_year")
+            if not (team and number is not None and from_year is not None):
+                continue
+            stints.append(
+                DomainStint(
+                    team_id=team.id,
+                    number=JerseyNumber(number),
+                    from_year=from_year,
+                    to_year=data.get("to_year"),
+                    signed_as=ContractStatus.from_label(data.get("signed_as") or ContractStatus.REGISTERED.value),
+                    promoted_year=data.get("promoted_year"),
+                    number_before_promotion=_jersey_or_none(data.get("number_before_promotion")),
+                    acquired_via=AcquisitionRoute.from_label(data["acquired_via"])
+                    if data.get("acquired_via")
+                    else None,
+                )
+            )
+        return stints
+
     def clean(self):
         super().clean()
         if any(self.errors):
@@ -734,10 +826,99 @@ class PlayerStintInline(admin.TabularInline):
     form = PlayerStintForm
     formset = PlayerStintFormSet
     extra = 0
-    fields = ("team", "number", "from_year", "to_year", "signed_as", "promoted_year", "number_before_promotion")
+    fields = (
+        "team",
+        "number",
+        "from_year",
+        "to_year",
+        "signed_as",
+        "promoted_year",
+        "number_before_promotion",
+        "acquired_via",
+    )
     ordering = ("-from_year",)
     autocomplete_fields = ("team",)
     verbose_name_plural = "在籍（経歴）"
+
+
+class FreeAgentDeclarationForm(forms.ModelForm):
+    """FA 宣言の入力検証。判定はドメインの `ensure_declarations_valid` に任せる。
+
+    同じ年に2回・宣言した年にどこにも在籍していない、を弾く（管理画面はドメインを経由しないため）。
+    選手の管理画面のインラインでは、送信後の在籍と宣言の全体をフォームセットが検査するので、
+    ここでは見ない（保存済みの在籍と突き合わせると、同じ送信での在籍の追加・削除を見落とす）。
+    """
+
+    checked_with_stints = False
+
+    class Meta:
+        model = PlayerFreeAgentDeclaration
+        fields = "__all__"
+
+    def clean(self):
+        cleaned = super().clean()
+        player, year, kind = cleaned.get("player"), cleaned.get("year"), cleaned.get("kind")
+        if self.checked_with_stints or player is None or not player.pk or year is None or not kind:
+            return cleaned
+
+        declarations = [
+            *_domain_declarations_of(player, excluding_pk=self.instance.pk),
+            DomainFreeAgentDeclaration(year=year, kind=FreeAgencyKind.from_label(kind)),
+        ]
+        try:
+            ensure_declarations_valid(_domain_stints_of(player), declarations, f"「{player.name}」")
+        except DomainError as error:
+            raise forms.ValidationError(str(error)) from None
+        return cleaned
+
+
+class FreeAgentDeclarationFormSet(forms.BaseInlineFormSet):
+    """FA 宣言の行を、**送信後の在籍と宣言の全体**でまとめて検査する（H2）。
+
+    宣言の削除・年の変更・在籍の削除や期間の短縮は、1行ずつの検証や保存済みの値との突き合わせでは
+    見えない（削除する行は検証から外れる）。`PlayerAdmin` が在籍のフォームセットをつなぐので、
+    削除する行を除き変更後の値から選手を組み立て、ドメインの規則（宣言した年に在籍がある・経路 FA の根拠）で見る。
+    """
+
+    stint_formset = None
+
+    def link_stints(self, stint_formset) -> None:
+        """在籍のフォームセットをつなぐ。つないだら、1行ずつの在籍との突き合わせはフォームセットが引き受ける。"""
+        self.stint_formset = stint_formset
+        for form in self.forms:
+            form.checked_with_stints = True  # type: ignore[attr-defined]  # FreeAgentDeclarationForm の属性
+
+    def clean(self):
+        super().clean()
+        stint_formset = self.stint_formset
+        if stint_formset is None or any(self.errors):
+            return
+        # 在籍側に入力エラーがあれば、そちらを先に直してもらう（検証済みの値が無い）
+        if not stint_formset.is_valid():
+            return
+
+        declarations = []
+        for form in self.forms:
+            data = getattr(form, "cleaned_data", None)
+            if not data or data.get("DELETE") or data.get("year") is None or not data.get("kind"):
+                continue
+            declarations.append(
+                DomainFreeAgentDeclaration(year=data["year"], kind=FreeAgencyKind.from_label(data["kind"]))
+            )
+        name = f"「{self.instance.name}」" if self.instance.pk else ""
+        ensure_player_free_agency_consistent(stint_formset.submitted_stints(), declarations, name)
+
+
+class FreeAgentDeclarationInline(admin.TabularInline):
+    """FA 宣言。結果（残留・移籍）は在籍から導くので入力しない。"""
+
+    model = PlayerFreeAgentDeclaration
+    form = FreeAgentDeclarationForm
+    formset = FreeAgentDeclarationFormSet
+    extra = 0
+    fields = ("year", "kind")
+    ordering = ("-year",)
+    verbose_name_plural = "FA 宣言"
 
 
 class CaptaincyForm(forms.ModelForm):
@@ -870,7 +1051,7 @@ class PlayerAdmin(admin.ModelAdmin):
     list_filter = ("position", "stints__team__league", "stints__team")
     search_fields = ("name", "name_kana", "back_name")
     ordering = ("name",)
-    inlines = [PlayerStintInline, CaptaincyInline]
+    inlines = [PlayerStintInline, FreeAgentDeclarationInline, CaptaincyInline]
 
     fieldsets = (
         (
@@ -905,6 +1086,18 @@ class PlayerAdmin(admin.ModelAdmin):
         ),
     )
 
+    def _create_formsets(self, request, obj, change):
+        """在籍と FA 宣言のフォームセットをつなぐ。
+
+        宣言の検査は、送信後の在籍の全体を見る必要がある（宣言の削除・在籍の削除や短縮が互いの根拠を壊すため）。
+        """
+        formsets, inline_instances = super()._create_formsets(request, obj, change)
+        stints = next((fs for fs in formsets if fs.model is PlayerStint), None)
+        for formset in formsets:
+            if isinstance(formset, FreeAgentDeclarationFormSet) and stints is not None:
+                formset.link_stints(stints)
+        return formsets, inline_instances
+
     @admin.display(description="現在の所属")
     def current_team(self, obj):
         stint = self._current(obj)
@@ -932,6 +1125,23 @@ class PlayerAdmin(admin.ModelAdmin):
         return super().get_queryset(request).prefetch_related("stints__team")
 
 
+def _delete_selected_unless_blocked(modeladmin, request, queryset):
+    """一括削除。消せない在籍（FA 宣言・FA 入団の根拠）が含まれていれば、理由だけを出して何も消さない。"""
+    blocked = [
+        f"{stint}: {reason}"
+        for stint in queryset.select_related("player")
+        if (reason := modeladmin.deletion_blocker(stint))
+    ]
+    if blocked:
+        modeladmin.message_user(
+            request, "削除できない在籍が含まれているため、何も削除しませんでした。", level=messages.ERROR
+        )
+        for line in blocked:
+            modeladmin.message_user(request, line, level=messages.ERROR)
+        return None
+    return delete_selected(modeladmin, request, queryset)
+
+
 @admin.register(PlayerStint)
 class PlayerStintAdmin(GroupedAdminMixin, admin.ModelAdmin):
     """在籍そのものの一覧。チームごとの名簿として使える。"""
@@ -948,6 +1158,32 @@ class PlayerStintAdmin(GroupedAdminMixin, admin.ModelAdmin):
 
     # 行をチームごとに区切る
     group_by = staticmethod(lambda s: f"{s.team.league.name} · {s.team.name}")
+
+    @staticmethod
+    def deletion_blocker(obj) -> str:
+        """この在籍を消すと FA 宣言（宣言した年の在籍）か FA 入団の根拠が崩れるなら、その理由。消せるなら空文字。"""
+        try:
+            ensure_player_free_agency_consistent(
+                _domain_stints_of(obj.player, excluding_pk=obj.pk),
+                _domain_declarations_of(obj.player),
+                f"「{obj.player.name}」",
+            )
+        except forms.ValidationError as error:
+            return str(error.message)
+        return ""
+
+    def has_delete_permission(self, request, obj=None):
+        # 消せない在籍は、削除の導線（ボタンと削除画面）ごと出さない（拒否したのに「削除しました」と出るのを避ける）
+        if obj is not None and self.deletion_blocker(obj):
+            return False
+        return super().has_delete_permission(request, obj)
+
+    def get_actions(self, request):
+        actions = super().get_actions(request)
+        if "delete_selected" in actions:
+            _, name, description = actions["delete_selected"]
+            actions["delete_selected"] = (_delete_selected_unless_blocked, name, description)
+        return actions
 
 
 class DerivedLinesInline(admin.TabularInline):

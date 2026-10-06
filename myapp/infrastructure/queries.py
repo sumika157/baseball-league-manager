@@ -19,6 +19,7 @@ from ..application.dto import (
     ActivePlayerStats,
     AnalysisRosterRow,
     ContractFacts,
+    DeclarationFact,
     FielderUsage,
     FieldingRow,
     GameRow,
@@ -35,10 +36,12 @@ from ..application.dto import (
 )
 from ..domain.entities import Game, winning_team_id
 from ..domain.value_objects import (
+    AcquisitionRoute,
     BattingLine,
     ContractStatus,
     FieldingLine,
     FieldingPosition,
+    FreeAgencyKind,
     Handedness,
     PitchingLine,
     Position,
@@ -415,10 +418,10 @@ class DjangoTeamAnalysisQuery:
         return sorted(set(rows.order_by().values_list("year", flat=True)), reverse=True)
 
     @staticmethod
-    def _moves(team_id: int, year: int) -> tuple[list[MoveStintRow], list[RelatedStint]]:
-        """入退団の材料。そのチームで加入年か退団年が year の在籍と、その選手の全在籍（他のチームを含む）。
+    def _moves(team_id: int, year: int) -> tuple[list[MoveStintRow], list[RelatedStint], list[DeclarationFact]]:
+        """入退団の材料。そのチームで加入年か退団年が year の在籍と、その選手の全在籍（他のチームを含む）、FA 宣言。
 
-        2本のクエリで済み、選手の数に比例しない。
+        3本のクエリで済み、選手の数に比例しない。
         """
         own = list(
             orm_models.PlayerStint.objects.filter(team_id=team_id)
@@ -427,7 +430,7 @@ class DjangoTeamAnalysisQuery:
             .order_by("number", "id")
         )
         if not own:
-            return [], []
+            return [], [], []
         moves = [
             MoveStintRow(
                 stint_id=stint.id,
@@ -440,9 +443,11 @@ class DjangoTeamAnalysisQuery:
                 to_year=stint.to_year,
                 throws=Handedness.from_label(stint.player.throws),
                 bats=Handedness.from_label(stint.player.bats),
+                acquired_via=AcquisitionRoute.from_label(stint.acquired_via) if stint.acquired_via else None,
             )
             for stint in own
         ]
+        player_ids = {s.player_id for s in own}
         related = [
             RelatedStint(
                 stint_id=stint.id,
@@ -451,12 +456,19 @@ class DjangoTeamAnalysisQuery:
                 team_name=stint.team.name,
                 from_year=stint.from_year,
                 to_year=stint.to_year,
+                acquired_via=AcquisitionRoute.from_label(stint.acquired_via) if stint.acquired_via else None,
             )
-            for stint in orm_models.PlayerStint.objects.filter(player_id__in={s.player_id for s in own})
+            for stint in orm_models.PlayerStint.objects.filter(player_id__in=player_ids)
             .select_related("team")
             .order_by("from_year", "id")
         ]
-        return moves, related
+        declarations = [
+            DeclarationFact(player_id=row.player_id, year=row.year, kind=FreeAgencyKind.from_label(row.kind))
+            for row in orm_models.PlayerFreeAgentDeclaration.objects.filter(player_id__in=player_ids).order_by(
+                "year", "id"
+            )
+        ]
+        return moves, related, declarations
 
     def load_service_history(self, player_ids: list[int], year: int) -> ServiceHistory:
         """FA 取得タブの材料。打撃・投球の明細で、選手×年の試合日の最小・最大を集める（2本）。
@@ -488,6 +500,12 @@ class DjangoTeamAnalysisQuery:
             )
             for stint in orm_models.PlayerStint.objects.filter(player_id__in=player_ids, from_year__lte=year)
         ]
+        declarations = [
+            DeclarationFact(player_id=row.player_id, year=row.year, kind=FreeAgencyKind.from_label(row.kind))
+            for row in orm_models.PlayerFreeAgentDeclaration.objects.filter(
+                player_id__in=player_ids, year__lte=year
+            ).order_by("player_id", "year")
+        ]
         recorded = orm_models.Game.objects.filter(recorded_games_filter()).order_by().aggregate(first=Min("year"))
         return ServiceHistory(
             spans=[
@@ -495,6 +513,7 @@ class DjangoTeamAnalysisQuery:
                 for (player_id, span_year), (first, last) in spans.items()
             ],
             stints=stints,
+            declarations=declarations,
             records_from_year=recorded["first"],
         )
 
@@ -556,7 +575,7 @@ class DjangoTeamAnalysisQuery:
             .annotate(games=Count("id"), starts=Count("id", filter=Q(appearance_order__lte=1)))
             .order_by()
         )
-        moves, related = self._moves(team_id, year)
+        moves, related, declarations = self._moves(team_id, year)
         return TeamAnalysisFacts(
             roster=roster,
             fielder_usage=[
@@ -574,5 +593,6 @@ class DjangoTeamAnalysisQuery:
             ],
             moves=moves,
             related_stints=related,
+            declarations=declarations,
             registered_limit=registered_limit,
         )

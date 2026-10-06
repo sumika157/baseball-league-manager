@@ -92,5 +92,13 @@ class InvalidContract(DomainError):
     """
 
 
+class InvalidAcquisition(DomainError):
+    """入団の経路として成立しない内容（育成ドラフトなのに支配下で加入、FA なのに宣言が無いなど）。"""
+
+
+class InvalidFreeAgentDeclaration(DomainError):
+    """FA 宣言として成立しない内容（同じ年に2回、宣言した年にどこにも在籍していないなど）。"""
+
+
 class RegisteredPlayerLimitExceeded(DomainError):
     """支配下選手の人数が上限を超えている。"""

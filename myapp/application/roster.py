@@ -1,7 +1,7 @@
-"""ロスターの契約（支配下／育成）に関するアプリケーションサービス。
+"""ロスターの契約（支配下／育成）と FA 宣言に関するアプリケーションサービス。
 
 `TeamApplicationService` は既に約50メソッドを抱えているため、契約区分まわりの新しい操作
-（昇格）は対象ごとの別サービスに置く。選手の登録・移籍に区分の引数を足す変更は、
+（昇格・FA 宣言）は対象ごとの別サービスに置く。選手の登録・移籍に区分の引数を足す変更は、
 既存のメソッドのほうで受ける。
 """
 
@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import date
 
 from ..domain.repositories import LeagueRepository, TeamRepository
-from ..domain.value_objects import JerseyNumber
+from ..domain.value_objects import FreeAgencyKind, JerseyNumber
 
 
 class RosterService:
@@ -30,4 +30,19 @@ class RosterService:
         league = self._leagues.find_by_id(team.league_id)
         team.ensure_room_for_registered(league.registered_player_limit)
         team.promote_player(player_id, JerseyNumber(number), year if year is not None else date.today().year)
+        self._teams.save(team)
+
+    def declare_free_agency(self, team_id: int, player_id: int, year: int, kind_label: str) -> None:
+        """選手の FA 宣言を記録する。残留か移籍かは保存しない（在籍から導く）。
+
+        同じ年に2回、宣言した年にどこにも在籍していない選手は拒否する（ドメインの検査）。
+        """
+        team = self._teams.find_by_id(team_id)
+        team.declare_free_agency(player_id, year, FreeAgencyKind.from_label(kind_label))
+        self._teams.save(team)
+
+    def remove_free_agency_declaration(self, team_id: int, player_id: int, year: int) -> None:
+        """選手の FA 宣言を取り消す。FA での入団の根拠になっている宣言は取り消せない。"""
+        team = self._teams.find_by_id(team_id)
+        team.remove_free_agency_declaration(player_id, year)
         self._teams.save(team)
