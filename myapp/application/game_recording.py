@@ -18,7 +18,7 @@ from __future__ import annotations
 from datetime import date
 
 from ..domain import services as domain_services
-from ..domain.entities import Game, PlateAppearance
+from ..domain.entities import Game, PlateAppearance, Team
 from ..domain.exceptions import DomainError, InvalidGame
 from ..domain.repositories import GameRepository, LeagueRepository, TeamRepository
 from ..domain.value_objects import FieldingPosition, GameHeader, LineupEntry, Season, ensure_quota_not_exceeded
@@ -85,9 +85,11 @@ class GameRecordingService:
 
         # 得点・イニングスコア・打撃・投球・守備・勝敗は、ドメインが打席から導く
         game = domain_services.assemble_game(header, entries, plate_appearances)
-        self._ensure_foreign_player_game_quota(
-            game, domain_services.team_of_players(header, entries, game.plate_appearances)
-        )
+        team_of = domain_services.team_of_players(header, entries, game.plate_appearances)
+        # 対戦する2チームのロスターは1回だけ読み、出場の検査で使い回す（集約の組み立ては重いため）
+        teams = [self._teams.find_by_id(team_id) for team_id in (game.home_team_id, game.away_team_id)]
+        self._ensure_foreign_player_game_quota(teams, team_of)
+        self._ensure_no_developmental_players(game, teams, team_of)
         return self._games.save(game)
 
     @staticmethod
@@ -175,14 +177,14 @@ class GameRecordingService:
         except DomainError:
             return f"選手id={slot.player_id}"
 
-    def _ensure_foreign_player_game_quota(self, game: Game, team_of: dict[int, int]) -> None:
+    def _ensure_foreign_player_game_quota(self, teams: list[Team], team_of: dict[int, int]) -> None:
         """出場した外国人選手がチームごとの上限を超えていないか確認する。
 
         ホーム・ビジターはそれぞれ独立に判定する（合算しない）。読むのは対戦する
         2チームのロスターだけ（全チームの索引を作ると通算成績まで付いてくる）。
         """
-        for team_id in (game.home_team_id, game.away_team_id):
-            team = self._teams.find_by_id(team_id)
+        for team in teams:
+            team_id = _saved_id(team.id)
             foreign_ids = {player.id for player in team.players if player.profile.is_foreign_player}
             count = sum(1 for player_id, owner in team_of.items() if owner == team_id and player_id in foreign_ids)
             limit = self._leagues.find_by_id(_saved_id(team.league_id)).foreign_player_game_limit
@@ -190,4 +192,16 @@ class GameRecordingService:
                 count,
                 limit,
                 f"「{team.name}」の外国人選手出場人数（{count}人）が上限（{limit}人）を超えています。",
+            )
+
+    @staticmethod
+    def _ensure_no_developmental_players(game: Game, teams: list[Team], team_of: dict[int, int]) -> None:
+        """その試合の年に育成の選手が出場していないか確認する（打席・登板・守備・ラインアップのどれでも）。
+
+        判定は `Stint.contract_in(年)`（チームの在籍）が出典。昇格した年の試合なら出られる。
+        """
+        for team in teams:
+            team_id = _saved_id(team.id)
+            team.ensure_not_developmental_in(
+                [player_id for player_id, owner in team_of.items() if owner == team_id], game.season.year
             )

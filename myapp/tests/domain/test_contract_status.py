@@ -2,7 +2,7 @@
 
 from unittest import TestCase
 
-from myapp.domain.entities import Stint, Team
+from myapp.domain.entities import Stint, Team, jersey_number_in
 from myapp.domain.exceptions import (
     DuplicateJerseyNumber,
     InvalidContract,
@@ -333,3 +333,62 @@ class EnsurePromotableTest(TestCase):
         player.id = 7
 
         self.team.ensure_promotable(7)  # 例外にならない
+
+
+class InYearTest(TestCase):
+    """年ごとの区分・背番号の出典。`Stint` も参照クエリの材料もこれを呼ぶ。"""
+
+    def test_in_year_matches_the_stint(self):
+        stint = Stint(
+            team_id=1,
+            number=JerseyNumber(30),
+            from_year=2024,
+            signed_as=DEVELOPMENTAL,
+            promoted_year=2026,
+            number_before_promotion=JerseyNumber(120),
+        )
+        for year in (2024, 2025, 2026, 2027):
+            with self.subTest(year=year):
+                self.assertIs(ContractStatus.in_year(DEVELOPMENTAL, 2026, year), stint.contract_in(year))
+
+    def test_the_promotion_year_is_registered_and_the_year_before_is_developmental(self):
+        self.assertIs(ContractStatus.in_year(DEVELOPMENTAL, 2026, 2025), DEVELOPMENTAL)
+        self.assertIs(ContractStatus.in_year(DEVELOPMENTAL, 2026, 2026), REGISTERED)
+        self.assertIs(ContractStatus.in_year(DEVELOPMENTAL, None, 2030), DEVELOPMENTAL)
+        self.assertIs(ContractStatus.in_year(REGISTERED, None, 2000), REGISTERED)
+
+    def test_the_number_changes_in_the_promotion_year(self):
+        now, before = JerseyNumber(30), JerseyNumber(120)
+
+        self.assertEqual(jersey_number_in(now, 2026, before, 2025), before)
+        self.assertEqual(jersey_number_in(now, 2026, before, 2026), now)
+        self.assertEqual(jersey_number_in(now, None, None, 2020), now)
+
+
+class TeamContractInYearTest(TestCase):
+    def setUp(self):
+        self.team = Team(name="テストチーム", id=1, league_id=1)
+        self.trainee = self.team.add_player(
+            "育成", JerseyNumber(120), Position.PITCHER, from_year=2024, contract=DEVELOPMENTAL
+        )
+        self.trainee.id = 7
+        self.regular = self.team.add_player("支配下", JerseyNumber(10), Position.PITCHER, from_year=2024)
+        self.regular.id = 8
+
+    def test_contract_in_follows_the_stint_of_this_team(self):
+        self.assertIs(self.team.contract_in(self.trainee, 2025), DEVELOPMENTAL)
+        self.assertIs(self.team.contract_in(self.regular, 2025), REGISTERED)
+
+    def test_a_year_outside_the_stint_has_no_contract(self):
+        self.assertIsNone(self.team.contract_in(self.trainee, 2023))
+
+    def test_the_year_of_promotion_can_play_and_the_year_before_cannot(self):
+        self.team.promote_player(7, JerseyNumber(30), 2026)
+
+        self.team.ensure_not_developmental_in([7, 8], 2026)
+        with self.assertRaisesRegex(InvalidContract, "育成選手の「育成」"):
+            self.team.ensure_not_developmental_in([7], 2025)
+
+    def test_players_not_in_the_list_are_not_checked(self):
+        self.team.ensure_not_developmental_in([8], 2025)
+        self.team.ensure_not_developmental_in([999], 2025)

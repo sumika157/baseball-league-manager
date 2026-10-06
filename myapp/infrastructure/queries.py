@@ -17,6 +17,7 @@ from django.db.models import BooleanField, Case, Count, Exists, OuterRef, Q, Que
 from ..application.dto import (
     ActivePlayerStats,
     AnalysisRosterRow,
+    ContractFacts,
     FielderUsage,
     FieldingRow,
     GameRow,
@@ -31,6 +32,7 @@ from ..application.dto import (
 from ..domain.entities import Game, winning_team_id
 from ..domain.value_objects import (
     BattingLine,
+    ContractStatus,
     FieldingLine,
     FieldingPosition,
     Handedness,
@@ -383,6 +385,16 @@ class DjangoTeamListQuery:
         ]
 
 
+def _contract_facts(stint: orm_models.PlayerStint) -> ContractFacts:
+    """在籍の契約の事実（加入時の区分・昇格した年・昇格前の番号）。年ごとの導出はドメインが行う。"""
+    return ContractFacts(
+        number=stint.number,
+        signed_as=ContractStatus.from_label(stint.signed_as),
+        promoted_year=stint.promoted_year,
+        number_before_promotion=stint.number_before_promotion,
+    )
+
+
 class DjangoTeamAnalysisQuery:
     """TeamAnalysisQuery の Django ORM 実装。戦力分析の材料を固定本数のクエリで集める。
 
@@ -418,7 +430,7 @@ class DjangoTeamAnalysisQuery:
                 team_id=stint.team_id,
                 player_id=stint.player_id,
                 name=stint.player.name,
-                number=stint.number,
+                contract=_contract_facts(stint),
                 position=Position.from_label(stint.player.position),
                 from_year=stint.from_year,
                 to_year=stint.to_year,
@@ -447,21 +459,23 @@ class DjangoTeamAnalysisQuery:
         stints = (
             orm_models.PlayerStint.objects.filter(team_id=team_id, from_year__lte=year)
             .filter(Q(to_year__isnull=True) | Q(to_year__gte=year))
-            .select_related("player")
+            .select_related("player", "team__league")
             .order_by("number", "id")
         )
         roster: list[AnalysisRosterRow] = []
+        registered_limit: int | None = None
         seen: set[int] = set()
         for stint in stints:
             if stint.player_id in seen:
                 continue
             seen.add(stint.player_id)
             player = stint.player
+            registered_limit = stint.team.league.registered_player_limit
             roster.append(
                 AnalysisRosterRow(
                     player_id=player.id,
                     name=player.name,
-                    number=stint.number,
+                    contract=_contract_facts(stint),
                     position=Position.from_label(player.position),
                     birth_date=player.birth_date,
                     throws=Handedness.from_label(player.throws),
@@ -512,4 +526,5 @@ class DjangoTeamAnalysisQuery:
             ],
             moves=moves,
             related_stints=related,
+            registered_limit=registered_limit,
         )

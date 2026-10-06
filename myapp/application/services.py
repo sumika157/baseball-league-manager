@@ -1250,6 +1250,9 @@ class TeamApplicationService:
                     is_pitcher=player.is_pitcher,
                 )
                 for player in sorted(team.active_players, key=lambda p: p.number.value)
+                # 育成選手は試合に出られないので候補に出さない（保存で弾かれるだけの導線になる）。
+                # ただし既にこの試合に出ている選手は残す（過去のデータで、外すと打順・打席の表示が壊れる）
+                if player.id in slots or team.contract_in(player, game.season.year) is not ContractStatus.DEVELOPMENTAL
             ]
             rosters.append(
                 GameEditRoster(

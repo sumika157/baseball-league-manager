@@ -1,6 +1,6 @@
 # 設計: 支配下／育成の契約区分と、FA・獲得経路
 
-> 状態: 段階 E1（#126）実装済み。epic [#125](https://github.com/sumika157/baseball-league-manager/issues/125)、全体の親 [#114](https://github.com/sumika157/baseball-league-manager/issues/114)。
+> 状態: 段階 E1（#126）・E2（#127）実装済み。epic [#125](https://github.com/sumika157/baseball-league-manager/issues/125)、全体の親 [#114](https://github.com/sumika157/baseball-league-manager/issues/114)。
 > 統合ブランチは `epic/roster-contracts`。段階ごとの実測値と決定は末尾の「段階ごとの記録」に追記し、epic を main に入れるときに Wiki（`docs/wiki/`）へ吸収して削除する。
 
 ## 1. なぜ
@@ -105,3 +105,27 @@
 - 宿題（L1、[#145](https://github.com/sumika157/baseball-league-manager/issues/145)）: 移籍の受け入れで「区分と背番号の照合」をしているのが application（`TeamApplicationService.transfer_player`）になっている。`Team.accept_transfer(player, number, year, contract)` に寄せ、受け入れの検査（背番号の重複・区分・支配下の余地）を集約に集める案。ペナント epic の `fork_roster` と合わせて整理する。
 - 宿題: 支配下の上限を守るのが呼び出し側任せになっている（`ensure_room_for_registered` を呼び忘れた経路は黙って超える）。上限を引数で受けて集約の中で検査する形に、#145 と一緒に寄せる。
 - 宿題: `promote_player` の year 引数で過去の年を渡すと、ドメインは今在籍中の番号しか見ないので、管理画面の期間照合と食い違いうる。今は画面から年を渡す経路が無い。
+
+### E2（#127）
+
+- 決定: **その年の区分・背番号の出典を1つにした。** `Stint.contract_in` / `Stint.number_in` の中身を、在籍の値だけで判定できる関数
+  （`ContractStatus.in_year(signed_as, promoted_year, year)`・`entities.jersey_number_in(...)`）に切り出し、`Stint` もそれを呼ぶ。
+  参照クエリは在籍の値（`ContractFacts`: 最新の背番号・加入時の区分・昇格年・昇格前の番号）をそのまま DTO に載せ、年ごとの導出は
+  application がこの2つの関数で行う（`Stint` を組み立て直さない・application に別の判定を書かない）。
+- 決定: デプス表・入退団・起用マップの背番号は `number_in(年)`。入退団の表には育成バッジを足した（起用マップは育成が出場できないので足さない）。
+- 決定: 人数の数え方は `DepthPlayer.is_developmental` から DTO の property（行・表・チーム全体）が数える。テンプレートでは数えない。
+  リーグの支配下の上限は、在籍を読む既存のクエリに `select_related("team__league")` を足して取る（**クエリ数は増えない**。
+  在籍が1人もいない年は上限を読まず None で、見出しは「/ 70」を出さない）。
+- 決定: 育成選手の出場拒否は `GameRecordingService._ensure_no_developmental_players`（外国人の出場枠と同じ場所・同じ流儀）。
+  出場した選手（ラインアップ・打席の打者と投手）を `team_of_players` でチームに振り、`Team.ensure_not_developmental_in(選手, 年)`
+  （試合の年に育成なら `InvalidContract`、選手名つき）。その年にそのチームに在籍していない選手は対象にしない。
+  同じ年に在籍が複数あるときは、1つでも支配下なら支配下として通す。
+- 決定: 編集画面の候補（`get_game_edit_data`）は、その試合の年に育成の選手を外す。**ただし、すでにその試合のラインアップにいる選手は残す**
+  （区分を持つ前に出場した過去の試合で、外すと打順・打席の表示が壊れるため）。
+- 宿題（`seed_virtual_games`）: 在籍している選手をそのまま出場させ、**区分を見ない**（`bulk_create` で書くので集約の検査も素通りする）。
+  今の仮想データは全員が支配下だが、0039 の backfill は「背番号100以上は育成」に直すので、`seed_virtual_players` が作った3桁の選手
+  （上の宿題）は、開発 DB では育成扱いになり、試合に出た記録を持つ育成選手になりうる。epic を main に入れるとき、seed 側で育成の選手を
+  出場させない（または検査を通す）ようにする。ペナントの epic が seed を大きく変えているので、E2 では触っていない。
+- 見送り: 管理画面や過去データで、すでに試合に出た選手を後から「育成」に直す操作は止めていない（試合の記録は保存し直さない限り検査されない）。
+- 実測: 戦力分析のクエリ数は E1 と同じ（選手を20人足しても増えない）ことをテストで確認した。`measure_pages` は E1 と同じ理由
+  （マイグレーション未適用の開発 DB）で流していない。

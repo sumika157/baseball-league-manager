@@ -1048,6 +1048,17 @@ main.container {
   min-width: 13rem;
 }
 
+/* 人数の列は数字だけなので、選手のマスと同じ最小幅を取らせない（左右の列が押し潰されるため） */
+.depth-table .depth-count {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.depth-count-breakdown {
+  font-size: 0.75rem;
+  font-weight: normal;
+}
+
 .depth-list li {
   padding: 0.15rem 0;
   font-size: 0.875rem;

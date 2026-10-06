@@ -14,7 +14,7 @@ from datetime import date
 from ..domain import services as domain_services
 from ..domain.exceptions import TeamNotFound
 from ..domain.services import ColorAxis, ColorCategory, FielderGroup, MoveJudgement, MoveKind, PitcherRole, StintSpan
-from ..domain.value_objects import FieldingPosition, Handedness, Position, Profile, Season
+from ..domain.value_objects import ContractStatus, FieldingPosition, Handedness, Position, Profile, Season
 from .dto import (
     AgeBandRow,
     AnalysisRosterRow,
@@ -92,7 +92,7 @@ class TeamAnalysisService:
         chosen_tab = tab if tab in {t.key for t in TABS} else DEPTH_TAB
         pitchers, fielders, pitcher_ages, fielder_ages = self._depth(facts, Season(chosen), axis)
         joiners, leavers = self._moves(facts, chosen, axis)
-        usage_boxes = self._usage_boxes(facts, axis)
+        usage_boxes = self._usage_boxes(facts, chosen, axis)
         # 凡例の人数は、いまのタブで色が付いて並んでいる選手。デプス表のタブは入退団の表も同じページに出るので含める
         shown = (
             [p.tone for box in usage_boxes for p in box.players]
@@ -131,6 +131,7 @@ class TeamAnalysisService:
             legend=_legend(axis, shown),
             joiners=joiners,
             leavers=leavers,
+            registered_limit=facts.registered_limit,
         )
 
     @staticmethod
@@ -149,9 +150,10 @@ class TeamAnalysisService:
             return MoveRow(
                 player_id=move.player_id,
                 name=move.name,
-                number=move.number,
+                number=move.contract.number_in(year),
                 position_label=move.position.label,
                 kind_label=judgement.kind.value,
+                is_developmental=move.contract.contract_in(year) is ContractStatus.DEVELOPMENTAL,
                 other_team_name=other,
                 # 入退団の表には守備位置が無いので、本職の軸では対象外になる
                 tone=_tone(
@@ -182,7 +184,7 @@ class TeamAnalysisService:
         return ordered(joined), ordered(left)
 
     @staticmethod
-    def _usage_boxes(facts: TeamAnalysisFacts, axis: ColorAxis) -> list[UsageBox]:
+    def _usage_boxes(facts: TeamAnalysisFacts, year: int, axis: ColorAxis) -> list[UsageBox]:
         """守備位置ごとの起用マップ。箱の中は先発数・出場数・背番号の順。
 
         投手の箱は投球明細の先発登板から数える（打撃明細に「投」が出るのは指名打者制を使わない試合だけ。
@@ -203,7 +205,12 @@ class TeamAnalysisService:
                 )
                 counts[position].append(
                     UsagePlayer(
-                        player_id=player_id, name=row.name, number=row.number, starts=starts, games=games, tone=tone
+                        player_id=player_id,
+                        name=row.name,
+                        number=row.contract.number_in(year),
+                        starts=starts,
+                        games=games,
+                        tone=tone,
                     )
                 )
 
@@ -247,7 +254,7 @@ class TeamAnalysisService:
             rows=pitcher_rows,
             is_pitcher=True,
             labels=[role.value for role in PitcherRole],
-            classify=lambda row: _pitcher_entry(row, pitcher_usage.get(row.player_id), age_of(row), axis),
+            classify=lambda row: _pitcher_entry(row, pitcher_usage.get(row.player_id), age_of(row), season.year, axis),
         )
 
         by_player: dict[int, list[FielderUsage]] = defaultdict(list)
@@ -257,7 +264,7 @@ class TeamAnalysisService:
             rows=fielder_rows,
             is_pitcher=False,
             labels=[group.value for group in FielderGroup],
-            classify=lambda row: _fielder_entry(row, by_player.get(row.player_id, []), age_of(row), axis),
+            classify=lambda row: _fielder_entry(row, by_player.get(row.player_id, []), age_of(row), season.year, axis),
         )
         return (
             pitcher_table,
@@ -298,15 +305,16 @@ def _legend(axis: ColorAxis, tones: list[ColorCategory]) -> list[ColorLegendItem
 
 
 def _pitcher_entry(
-    row: AnalysisRosterRow, usage: PitcherUsage | None, age: int | None, axis: ColorAxis
+    row: AnalysisRosterRow, usage: PitcherUsage | None, age: int | None, year: int, axis: ColorAxis
 ) -> tuple[str, DepthPlayer]:
     games, starts = (usage.games, usage.starts) if usage else (0, 0)
     player = DepthPlayer(
         player_id=row.player_id,
         name=row.name,
-        number=row.number,
+        number=row.contract.number_in(year),
         age=age,
         is_foreign_player=row.is_foreign_player,
+        is_developmental=row.contract.contract_in(year) is ContractStatus.DEVELOPMENTAL,
         games=games,
         starts=starts,
         tone=_tone(
@@ -321,7 +329,7 @@ def _pitcher_entry(
 
 
 def _fielder_entry(
-    row: AnalysisRosterRow, usages: list[FielderUsage], age: int | None, axis: ColorAxis
+    row: AnalysisRosterRow, usages: list[FielderUsage], age: int | None, year: int, axis: ColorAxis
 ) -> tuple[str, DepthPlayer]:
     starts_by: dict[FieldingPosition, int] = {}
     games_by: dict[FieldingPosition, int] = {}
@@ -339,9 +347,10 @@ def _fielder_entry(
     player = DepthPlayer(
         player_id=row.player_id,
         name=row.name,
-        number=row.number,
+        number=row.contract.number_in(year),
         age=age,
         is_foreign_player=row.is_foreign_player,
+        is_developmental=row.contract.contract_in(year) is ContractStatus.DEVELOPMENTAL,
         games=games,
         starts=starts,
         position_label=label,
