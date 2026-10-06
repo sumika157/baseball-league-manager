@@ -182,10 +182,8 @@ class Stint:
 
     @property
     def contract_now(self) -> ContractStatus:
-        """今（在籍の最後の時点）の契約区分。昇格していれば支配下。"""
-        if self.signed_as is ContractStatus.DEVELOPMENTAL and self.promoted_year is None:
-            return ContractStatus.DEVELOPMENTAL
-        return ContractStatus.REGISTERED
+        """今（在籍の最後の時点）の契約区分。昇格していれば支配下（判定の出典は `ContractStatus.now`）。"""
+        return ContractStatus.now(self.signed_as, self.promoted_year)
 
     def ensure_number_matches_contract(self) -> None:
         """背番号が区分に合うか。管理画面など、集約を通さない書き込みからも呼ぶ。

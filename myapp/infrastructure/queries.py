@@ -230,21 +230,32 @@ class DjangoSimulationContextQuery:
     def teams(self) -> tuple[SimulationTeam, ...]:
         players: dict[int, list[SimulationPlayer]] = {}
         # 育成選手は試合に出られない（実データのスコアブックと同じ不変条件）ので、候補に入れない。
-        # 今の区分が育成＝育成で加入して昇格していない（`Stint.contract_now` と同じ）
+        # 今の区分が育成＝育成で加入して昇格していない。判定の出典は domain の `ContractStatus.now` で、
+        # ここは母集団を SQL で絞るための写し（`_contract_at` は domain を呼ぶ）
         stints = (
             stints_in(self._scope)
             .filter(to_year__isnull=True)
             .exclude(signed_as=ContractStatus.DEVELOPMENTAL.value, promoted_year__isnull=True)
             .values_list(
-                "team_id", "number", "player_id", "player__name", "player__position", "player__is_foreign_player"
+                "team_id",
+                "number",
+                "player_id",
+                "player__name",
+                "player__position",
+                "player__is_foreign_player",
+                "player__throws",
             )
         )
         # 背番号は文字列の列なので SQL では背番号順に並べられない。Python で `JerseyNumber.sort_key` の順にする
         ordered = sorted(stints, key=lambda row: (row[0], JerseyNumber(row[1]).sort_key, row[2]))
-        for team_id, _, player_id, name, position, is_foreign in ordered:
+        for team_id, _, player_id, name, position, is_foreign, throws in ordered:
             players.setdefault(team_id, []).append(
                 SimulationPlayer(
-                    player_id=player_id, name=name, position=Position.from_label(position), is_foreign=is_foreign
+                    player_id=player_id,
+                    name=name,
+                    position=Position.from_label(position),
+                    is_foreign=is_foreign,
+                    throws=Handedness.from_label(throws),
                 )
             )
 
@@ -365,13 +376,13 @@ class DjangoPlayerStatsQuery:
 
 
 def _contract_at(stint: orm_models.PlayerStint, year: int | None) -> ContractStatus:
-    """在籍のその年の契約区分。`year` が None なら今（在籍の最後の時点。`Stint.contract_now` と同じ）。
+    """在籍のその年の契約区分。`year` が None なら今（在籍の最後の時点）。
 
-    年ごとの導出は domain（`ContractStatus.in_year`）が出典。今の区分は、昇格していれば支配下。
+    導出は domain が出典（今は `ContractStatus.now`、年ごとは `ContractStatus.in_year`）。
     """
     signed_as = ContractStatus.from_label(stint.signed_as)
     if year is None:
-        return ContractStatus.REGISTERED if stint.promoted_year is not None else signed_as
+        return ContractStatus.now(signed_as, stint.promoted_year)
     return ContractStatus.in_year(signed_as, stint.promoted_year, year)
 
 

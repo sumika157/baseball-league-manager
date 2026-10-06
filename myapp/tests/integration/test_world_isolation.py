@@ -336,6 +336,23 @@ class PennantIdsAreNotFoundFromRealUrlsTest(WorldCase):
                 self.assertTrue(query.load(own, YEAR).roster)
                 self.assertEqual(query.list_years(other), [])
                 self.assertEqual(query.load(other, YEAR).roster, [])
+                # 入退団（加入年が YEAR の在籍）も範囲の中の球団だけ
+                self.assertTrue(query.load(own, YEAR).moves)
+                self.assertEqual(query.load(other, YEAR).moves, [])
+
+    def test_the_service_history_is_limited_to_its_scope(self):
+        """FA 取得タブの材料（出場の期間・在籍の契約）も、範囲の外の選手の行を読まない。"""
+        real_ids = list(orm_models.PlayerStint.objects.filter(team=self.team).values_list("player_id", flat=True))
+        world_ids = self.pennant_players(self.pennant_team)
+        for scope, own, other in ((REAL, real_ids, world_ids), (self.scope, world_ids, real_ids)):
+            with self.subTest(scope=str(scope)):
+                query = DjangoTeamAnalysisQuery(scope)
+                mine = query.load_service_history(own, YEAR)
+                self.assertTrue(mine.spans)
+                self.assertTrue(mine.stints)
+                theirs = query.load_service_history(other, YEAR)
+                self.assertEqual(theirs.spans, [])
+                self.assertEqual(theirs.stints, [])
 
     def test_the_fielding_query_is_limited_to_its_scope(self):
         line = orm_models.GameFieldingLine.objects.filter(game_id=self.pennant_game_id).first()

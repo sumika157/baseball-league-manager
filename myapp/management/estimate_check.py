@@ -173,7 +173,14 @@ def _club(team: Team, ratings: dict[int, PlayerRatings]) -> ClubRoster:
             pitchers.append(SimPitcher(_id(player.id), player.name, rating, player.profile.is_foreign_player))
         elif isinstance(rating, BatterRatings):
             batters.append(
-                SimBatter(_id(player.id), player.name, player.position, rating, player.profile.is_foreign_player)
+                SimBatter(
+                    _id(player.id),
+                    player.name,
+                    player.position,
+                    rating,
+                    player.profile.is_foreign_player,
+                    throws=player.profile.throws,
+                )
             )
     return ClubRoster(team_id=_id(team.id), name=team.name, batters=tuple(batters), pitchers=tuple(pitchers))
 

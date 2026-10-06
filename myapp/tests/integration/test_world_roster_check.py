@@ -81,6 +81,36 @@ class RosterCheckTest(TestCase):
 
         self._assert_nothing_left()
 
+    def test_developmental_players_do_not_count(self):
+        """育成選手は試合に出られず、進める処理の候補にも入らない。育成の捕手しかいない球団は弾く
+        （支配下の野手が8人になる）。"""
+        register_playable_support(self.service, self.short)
+        catchers = orm_models.PlayerStint.objects.filter(team=self.short, player__position="捕手")
+        self.assertTrue(catchers.exists(), "前提: 捕手がいる")
+        for offset, stint in enumerate(catchers):
+            orm_models.PlayerStint.objects.filter(id=stint.id).update(signed_as="育成", number=str(150 + offset))
+
+        with self.assertRaises(InvalidWorld) as raised:
+            self._create()
+
+        self.assertIn("足りない球団", str(raised.exception))
+        self.assertIn("野手8人", str(raised.exception), "育成の捕手は野手に数えない")
+        self._assert_nothing_left()
+
+    def test_a_promoted_player_counts(self):
+        """育成から昇格した選手は今は支配下なので数える。"""
+        register_playable_support(self.service, self.short)
+        catchers = orm_models.PlayerStint.objects.filter(team=self.short, player__position="捕手")
+        for offset, stint in enumerate(catchers):
+            orm_models.PlayerStint.objects.filter(id=stint.id).update(
+                signed_as="育成", promoted_year=START - 5, number_before_promotion=str(150 + offset)
+            )
+        orm_models.PlayerStint.objects.filter(team=self.short).update(from_year=START - 6)
+
+        created = self._create()
+
+        self.assertEqual(created.team_count, 2)
+
     def test_every_team_with_a_playable_roster_makes_a_world(self):
         register_playable_support(self.service, self.short)
 

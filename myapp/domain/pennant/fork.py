@@ -82,6 +82,7 @@ def fork_roster(source: Team, target: Team, *, start_year: int) -> list[tuple[Pl
         # 契約区分（支配下/育成）は今の区分を写す（育成の3桁の背番号を、支配下として写せない）。
         # 入団の経路は写さない（写した在籍は開幕年の加入で、分岐元の経路の事実ではない。FA なら宣言も要る）。
         # 支配下の上限は外国人枠と同じく検査しない（分岐元の状態をそのまま写す）
+        # 区分は今の区分（contract_now）で写すので、開幕年が過去でもその年の区分ではなく今の区分になる
         copy = target.add_player(
             player.name,
             stint.number,

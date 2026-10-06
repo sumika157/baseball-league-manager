@@ -231,10 +231,16 @@ def physique(rng: GameRandom, position: Position) -> tuple[int, int]:
     return randint(rng, *height_range), randint(rng, *weight_range)
 
 
+# 左投げの比率。捕手と二・三・遊を守る内野手は右投げだけ（`FieldingPosition.allows_left_handed_thrower`）。
+# 内野手の左投げは一塁手として使う前提で少数（NPB の内野手の1割弱）
+_LEFT_THROW_RATIO = {Position.CATCHER: 0.0, Position.INFIELDER: 0.07}
+_DEFAULT_LEFT_THROW_RATIO = 0.25
+
+
 def handedness(rng: GameRandom, position: Position) -> tuple[Handedness, Handedness]:
-    """(投, 打)。捕手は右投げが多い。"""
-    right_ratio = 0.92 if position is Position.CATCHER else 0.75
-    throws = Handedness.RIGHT if rng.random() < right_ratio else Handedness.LEFT
+    """(投, 打)。捕手は全員右投げ、内野手の左投げは少数（一塁手にだけ就ける）。外野手・投手は4人に1人が左投げ。"""
+    left_ratio = _LEFT_THROW_RATIO.get(position, _DEFAULT_LEFT_THROW_RATIO)
+    throws = Handedness.LEFT if rng.random() < left_ratio else Handedness.RIGHT
     hands = (Handedness.RIGHT, Handedness.LEFT, Handedness.BOTH)
     bats = hands[weighted_index(rng, [55, 30, 15])]
     return throws, bats

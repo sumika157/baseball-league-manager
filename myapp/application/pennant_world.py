@@ -30,6 +30,7 @@ from ..domain.pennant.world import (
     earliest_start_year,
 )
 from ..domain.repositories import LeagueRepository, RatingsRepository, TeamRepository, WorldRepository
+from ..domain.value_objects import ContractStatus
 from .dto import PennantWorldCreated, PennantWorldRow
 from .pennant_season import AtomicBlock
 from .queries import FieldingTotalsQuery
@@ -163,11 +164,14 @@ class PennantWorldService:
         # 試合を組めない名簿の球団があると、進行が永久に止まる。世界を作る前に弾く。外国人の出場枠は、
         # 世界のリーグで最も厳しい枠で見る（交流戦はどのリーグとも当たる。進める処理と同じ）
         game_limit = strictest_game_limit(league.foreign_player_game_limit for league in source.leagues)
+        # 育成選手は試合に出られず、進める処理の候補にも入らない（`SimulationContextQuery`）ので、
+        # 今の区分が支配下の選手だけで組めるかを見る
         for teams in source.rosters:
             for team in teams:
                 members = [
                     ClubMember(_saved_id(player.id), player.name, player.position, player.profile.is_foreign_player)
                     for player in team.active_players
+                    if team.contract_of(player) is ContractStatus.REGISTERED
                 ]
                 ensure_roster_playable(team.name, members, foreign_game_limit=game_limit)
         if managed_source_team_id is not None and not any(

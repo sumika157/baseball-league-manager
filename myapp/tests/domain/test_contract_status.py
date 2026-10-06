@@ -389,6 +389,12 @@ class InYearTest(TestCase):
         self.assertIs(ContractStatus.in_year(DEVELOPMENTAL, None, 2030), DEVELOPMENTAL)
         self.assertIs(ContractStatus.in_year(REGISTERED, None, 2000), REGISTERED)
 
+    def test_now_is_developmental_only_until_promoted(self):
+        """今の区分の出典（`Stint.contract_now` と参照クエリが呼ぶ）。"""
+        self.assertIs(ContractStatus.now(DEVELOPMENTAL, None), DEVELOPMENTAL)
+        self.assertIs(ContractStatus.now(DEVELOPMENTAL, 2026), REGISTERED)
+        self.assertIs(ContractStatus.now(REGISTERED, None), REGISTERED)
+
     def test_the_number_changes_in_the_promotion_year(self):
         now, before = JerseyNumber("30"), JerseyNumber("120")
 

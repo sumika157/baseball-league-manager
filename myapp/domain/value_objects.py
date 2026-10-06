@@ -130,6 +130,16 @@ class ContractStatus(Enum):
             )
 
     @classmethod
+    def now(cls, signed_as: ContractStatus, promoted_year: int | None) -> ContractStatus:
+        """今（在籍の最後の時点）の契約区分。**出典はここだけ**（`Stint.contract_now` も参照クエリもこれを呼ぶ）。
+
+        育成で加入して、まだ昇格していなければ育成。それ以外（支配下で加入・昇格済み）は支配下。
+        """
+        if signed_as is cls.DEVELOPMENTAL and promoted_year is None:
+            return cls.DEVELOPMENTAL
+        return cls.REGISTERED
+
+    @classmethod
     def in_year(cls, signed_as: ContractStatus, promoted_year: int | None, year: int) -> ContractStatus:
         """その年の契約区分。**出典はここだけ**（`Stint.contract_in` も参照クエリの材料もこれを呼ぶ）。
 
@@ -319,6 +329,20 @@ class FieldingPosition(Enum):
         return _FIELDING_FULL_NAMES[self]
 
     @property
+    def allows_left_handed_thrower(self) -> bool:
+        """左投げの選手が就ける守備位置か。**「左投げは捕・二・三・遊に就かない」規則の唯一の出典。**
+
+        NPB では捕手・二塁手・三塁手・遊撃手に左投げはほぼいない（左投げの内野手は一塁手だけ）。
+        仮想データの生成と AI の編成はこの規則に従う。手入力の試合の記録と GM の手動の編成には
+        かけない（現実にも極めてまれな起用があるため）。投手・一塁・外野・指名打者は就ける。
+        """
+        return self not in _RIGHT_THROWER_POSITIONS
+
+    def suits_thrower(self, throws: Handedness | None) -> bool:
+        """投げる手から見て、この守備位置に就かせてよいか。投げる手が不明（None）なら制限しない。"""
+        return throws is not Handedness.LEFT or self.allows_left_handed_thrower
+
+    @property
     def is_substitute_only(self) -> bool:
         """守備に就かず、代打・代走としてのみ出場したか。"""
         return self in (FieldingPosition.PINCH_HITTER, FieldingPosition.PINCH_RUNNER)
@@ -360,6 +384,16 @@ class FieldingPosition(Enum):
         """守備に就く位置だけ。スタメンの選択肢に使う。"""
         return [item.value for item in cls if not item.is_substitute_only]
 
+
+# 左投げが就かない守備位置（`FieldingPosition.allows_left_handed_thrower` が参照する）
+_RIGHT_THROWER_POSITIONS = frozenset(
+    {
+        FieldingPosition.CATCHER,
+        FieldingPosition.SECOND_BASE,
+        FieldingPosition.THIRD_BASE,
+        FieldingPosition.SHORTSTOP,
+    }
+)
 
 _FIELDING_FULL_NAMES = {
     FieldingPosition.PITCHER: "投手",
