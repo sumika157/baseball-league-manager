@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 from django.http import QueryDict
 
-from ..application.dto import ClubPlanView, ClubPlayerRow
+from ..application.dto import ClubPlanView, ClubPlayerDetail
 from ..domain.exceptions import DomainError
 from ..domain.pennant.club_plan import LINEUP_POSITIONS, LineupChoice, PlanSection
 from ..domain.value_objects import FieldingPosition
@@ -74,8 +74,14 @@ class PlayerOption:
     label: str
 
 
-def player_option(row: ClubPlayerRow) -> PlayerOption:
+def player_option(detail: ClubPlayerDetail) -> PlayerOption:
+    """選手の選択肢。選ぶ材料として、能力の総合と年齢を添える（能力・生年月日が無ければ省く）。"""
+    row = detail.player
     notes = [row.position.value] + (["外国人"] if row.is_foreign else []) + ([] if row.is_active else ["1軍外"])
+    if detail.overall is not None:
+        notes.append(f"総合{detail.overall.grade} {detail.overall.value}")
+    if detail.age is not None:
+        notes.append(f"{detail.age}歳")
     return PlayerOption(row.player_id, f"{row.name}（{'・'.join(notes)}）")
 
 

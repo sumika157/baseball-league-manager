@@ -35,6 +35,7 @@ from ..application.dto import (
     WorldContext,
 )
 from ..application.game_recording import GameRecordingService
+from ..application.pennant_club_details import ClubDetailsService
 from ..application.pennant_home import PennantHomeService
 from ..application.pennant_offseason import PennantOffseasonService
 from ..application.pennant_offseason_view import OffseasonViewService
@@ -701,6 +702,20 @@ def build_club_service(world_id: int) -> ClubManagementService:
     )
 
 
+def build_club_details_service(world_id: int) -> ClubDetailsService:
+    """編成画面の選手の詳細（年齢・能力の要約・今季の成績）を作るサービスを組み立てる。
+
+    参照クエリとリポジトリは**渡された世界の範囲で**作る。年齢の基準日は世界の「今日」。
+    世界の id が正しくなければ InvalidWorld。
+    """
+    scope = WorldScope.pennant(world_id)
+    return ClubDetailsService(
+        stats=DjangoPlayerStatsQuery(scope),
+        ratings=DjangoRatingsRepository(scope),
+        today=_world_clock(world_id, DjangoSimulationContextQuery(scope)),
+    )
+
+
 def pennant_club(request, world_id):
     """編成。1軍登録・オーダー・投手陣の3タブ（`?tab=`）。受け持つ球団の編成を、区画ごとに自動か手動のどちらかで見せる。
 
@@ -840,11 +855,17 @@ def _render_club(request, world: WorldContext, tab: str, *, state: ClubFormState
 
     # 選択肢は1軍の選手。保存済みの上書きに入っている1軍外の選手も、印を付けて残す（保存時にドメインが弾く）
     kept = {slot.player_id for slot in lineup} | {slot.player_id for slot in rotation} | {closer}
-    batters = [row for row in view.players if not row.position.is_pitcher and (row.is_active or row.player_id in kept)]
-    pitchers = [row for row in view.players if row.position.is_pitcher and (row.is_active or row.player_id in kept)]
+    details = build_club_details_service(world.world_id).details(world.managed_team_id, view.year, view.players)
+    batters = [
+        d for d in details if not d.player.position.is_pitcher and (d.player.is_active or d.player.player_id in kept)
+    ]
+    pitchers = [
+        d for d in details if d.player.position.is_pitcher and (d.player.is_active or d.player.player_id in kept)
+    ]
 
     context.update(
         club=view,
+        club_players=details,
         error=state.error if state is not None else None,
         tab_notices=[
             NoticeLink(notice.section.value, notice.reason, TAB_OF_SECTION[notice.section], notice.falls_back)
@@ -985,6 +1006,7 @@ def player_list(request, team_id, world_id=None):
         "myapp/player_list.html",
         {
             "team_id": team_id,
+            "reserve_ids": _reserve_player_ids(world, team_id),
             "team_name": team_name,
             "totals": service.get_team_totals(team_id, stats_year),
             "stats_year": stats_year,
@@ -1002,6 +1024,19 @@ def player_list(request, team_id, world_id=None):
         },
         world,
     )
+
+
+def _reserve_player_ids(world: WorldContext | None, team_id: int) -> frozenset[int]:
+    """ペナントの世界の球団の、いま在籍していて1軍に使われない選手（「2軍」の印を付ける）。実データは空で印を出さない。
+
+    出典は編成（`ClubManagementService`）の1軍で、画面ごとに別の判定を持たない。球団が読めないときも印は出さない。
+    """
+    if world is None:
+        return frozenset()
+    try:
+        return build_club_service(world.world_id).reserve_player_ids(team_id)
+    except DomainError:
+        return frozenset()
 
 
 def player_search(request):

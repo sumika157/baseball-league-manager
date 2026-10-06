@@ -2086,3 +2086,43 @@ class TeamAnalysis:
     average_age_fielders: float | None
     average_age_all: float | None
     usage_boxes: list[UsageBox]
+
+
+# --- 編成画面の選手の詳細（#102） ---
+
+
+@dataclass(frozen=True)
+class ClubBattingStat:
+    """編成画面に出す、野手の今季の成績。"""
+
+    plate_appearances: int
+    batting_average: float
+    home_runs: int
+    runs_batted_in: int
+    ops: float
+
+
+@dataclass(frozen=True)
+class ClubPitchingStat:
+    """編成画面に出す、投手の今季の成績。"""
+
+    innings_pitched: str
+    earned_run_average: float
+    wins: int
+    losses: int
+    saves: int
+
+
+@dataclass(frozen=True)
+class ClubPlayerDetail:
+    """編成画面の選手1人の、選ぶ材料（年齢・能力の要約・今季の成績）。
+
+    `overall` と `cells` は能力が無い選手では None / 空（画面では「—」）。成績は出場が無ければ None。
+    """
+
+    player: ClubPlayerRow
+    age: int | None
+    overall: RatingCell | None
+    cells: tuple[RatingCell, ...]
+    batting: ClubBattingStat | None
+    pitching: ClubPitchingStat | None

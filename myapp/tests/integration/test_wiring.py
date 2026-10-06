@@ -17,6 +17,7 @@ from django.test import SimpleTestCase
 
 from myapp.application.club_management import ClubManagementService
 from myapp.application.game_recording import GameRecordingService
+from myapp.application.pennant_club_details import ClubDetailsService
 from myapp.application.pennant_home import PennantHomeService
 from myapp.application.pennant_offseason import PennantOffseasonService
 from myapp.application.pennant_offseason_view import OffseasonViewService
@@ -70,6 +71,7 @@ from myapp.infrastructure.repositories import (
     DjangoWorldRepository,
 )
 from myapp.presentation.views import (
+    build_club_details_service,
     build_club_service,
     build_offseason_view_service,
     build_pennant_home_service,
@@ -187,6 +189,9 @@ class BuildServiceTest(SimpleTestCase):
 
     def test_club_service_dependencies_are_wired(self):
         self._assert_wired(build_club_service(7), ClubManagementService)
+
+    def test_club_details_service_dependencies_are_wired(self):
+        self._assert_wired(build_club_details_service(7), ClubDetailsService)
 
     def test_pennant_ratings_service_dependencies_are_wired(self):
         self._assert_wired(build_pennant_ratings_service(7), PennantRatingsViewService)
@@ -370,6 +375,23 @@ class ClubServiceScopeTest(SimpleTestCase):
         for bad in (0, -1, True):
             with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
                 build_club_service(bad)
+
+
+class ClubDetailsScopeTest(SimpleTestCase):
+    """編成画面の詳細は、渡された世界の範囲だけを読む。"""
+
+    SCOPED = ("_stats", "_ratings")
+
+    def test_every_dependency_is_fixed_to_the_given_world(self):
+        service = build_club_details_service(7)
+        for name in self.SCOPED:
+            with self.subTest(dependency=name):
+                self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
+
+    def test_the_real_data_has_no_club_details_service(self):
+        for bad in (0, -1, True):
+            with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
+                build_club_details_service(bad)
 
 
 class PennantRatingsScopeTest(SimpleTestCase):

@@ -89,6 +89,15 @@ class ClubManagementService:
         situation = self._situation(team_id)
         return situation.view(self._plans.find_by_team(team_id))
 
+    def reserve_player_ids(self, team_id: int) -> frozenset[int]:
+        """いま在籍していて、進めたときに1軍に使われない選手の id（球団の画面の「2軍」の印の出典）。
+
+        1軍は `view()` と同じ（`resolve_club` の結果）。受け持たない球団でも、その球団の（AI が決める）1軍で判定する。
+        能力の無い選手は1軍に使われないので含まれる。退団・引退した選手（もう在籍していない）は含まれない。
+        """
+        situation = self._situation(team_id)
+        return situation.on_team_ids - situation.active_ids(self._plans.find_by_team(team_id))
+
     def propose(self, team_id: int) -> ClubPlanView:
         """AI 監督の自動編成（上書きを無視した提案）。保存はしない。"""
         return self._situation(team_id).view(ClubPlan(team_id=team_id))
@@ -255,7 +264,9 @@ class ClubManagementService:
             foreign_roster_limit=team.foreign_roster_limit,
             foreign_game_limit=strictest_game_limit(t.foreign_game_limit for t in teams),
         )
-        return _Situation(team.team_id, team.name, year, pool, limits)
+        return _Situation(
+            team.team_id, team.name, year, pool, limits, frozenset(player.player_id for player in team.players)
+        )
 
     def _current_year(self) -> int:
         """次に試合をする年（能力を引く年）。規則は domain の `ratings_year`（表示・日を進める処理と共通）。"""
@@ -269,25 +280,38 @@ class ClubManagementService:
 class _Situation:
     """ある球団の、いまの登録候補と枠。編成の検査と、画面の材料の組み立てに使う。"""
 
-    def __init__(self, team_id: int, team_name: str, year: int, pool: ClubRoster, limits: ClubLimits) -> None:
+    def __init__(
+        self,
+        team_id: int,
+        team_name: str,
+        year: int,
+        pool: ClubRoster,
+        limits: ClubLimits,
+        on_team_ids: frozenset[int],
+    ) -> None:
         self.team_id = team_id
         self.team_name = team_name
         self.year = year
         self.pool = pool
         self.limits = limits
         self.members: dict[int, ClubMember] = members_of(pool)
+        # いま在籍している選手（能力の有無によらない）。1軍に使われるのはこのうち能力のある人だけ
+        self.on_team_ids = on_team_ids
+
+    @staticmethod
+    def _ids_of(roster: ClubRoster) -> set[int]:
+        return {b.player_id for b in roster.batters} | {p.player_id for p in roster.pitchers}
 
     def active_ids(self, plan: ClubPlan) -> set[int]:
         """いま 1軍にいる選手（1軍登録が自動か、使えない手動なら AI が選んだ人）。"""
-        roster = resolve_club(plan, self.pool, self.limits).roster
-        return {b.player_id for b in roster.batters} | {p.player_id for p in roster.pitchers}
+        return self._ids_of(resolve_club(plan, self.pool, self.limits).roster)
 
     def view(self, plan: ClubPlan, resolved: ResolvedClub | None = None) -> ClubPlanView:
         """`resolved` は、同じ `plan` を `resolve_club` した結果（渡せば解決し直さない）。"""
         if resolved is None:
             resolved = resolve_club(plan, self.pool, self.limits)
         roster = resolved.roster
-        active_ids = {b.player_id for b in roster.batters} | {p.player_id for p in roster.pitchers}
+        active_ids = self._ids_of(roster)
 
         orders = resolved.orders
         if orders is not None and orders.lineup is not None:

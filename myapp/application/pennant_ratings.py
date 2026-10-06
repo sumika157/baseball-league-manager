@@ -34,7 +34,7 @@ from .player_stats_view import stats_player
 from .queries import PlayerStatsQuery, RatingsHistoryQuery, SimulationContextQuery
 
 
-def _cells_of(ratings: BatterRatings | PitcherRatings) -> tuple[RatingCell, ...]:
+def rating_cells(ratings: BatterRatings | PitcherRatings) -> tuple[RatingCell, ...]:
     """能力の項目を、`LABELS` の並び（画面に出す順）で区分つきの表示にする。"""
     cells = []
     for key, label in ratings.LABELS.items():
@@ -93,7 +93,7 @@ class PennantRatingsViewService:
         if not found:
             return None
         item = found[0]
-        return PlayerRatingsCard(year=item.year, is_pitcher=item.is_pitcher, cells=_cells_of(item.ratings))
+        return PlayerRatingsCard(year=item.year, is_pitcher=item.is_pitcher, cells=rating_cells(item.ratings))
 
     def get_history(self, player_id: int) -> PlayerRatingsHistory | None:
         """選手の能力の推移（古い年から）。範囲の外の選手や、能力が一つも無い選手は None。
@@ -118,7 +118,7 @@ class PennantRatingsViewService:
                     year=item.year,
                     age=age_at_season_start(facts.profile, item.year),
                     team_name=span.team_name if span is not None else "",
-                    cells=_cells_of(item.ratings),
+                    cells=rating_cells(item.ratings),
                     overall=overall_cell(item.ratings),
                     is_final_year=retired_after == item.year,
                 )
@@ -231,7 +231,7 @@ def _row(
         position=player.position.label,
         is_foreign_player=player.profile.is_foreign_player,
         age=player.profile.age_or_none(today),
-        cells=_cells_of(ratings) if ratings is not None else (),
+        cells=rating_cells(ratings) if ratings is not None else (),
         batting_average=batting_average,
         ops=ops,
         earned_run_average=earned_run_average,
