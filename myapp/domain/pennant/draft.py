@@ -45,8 +45,8 @@ STARTER_STAMINA = (55.0, 8.0)
 RELIEVER_STAMINA = (36.0, 8.0)
 # 外国人の新人の年齢（満年齢）の範囲
 FOREIGN_AGE_RANGE = (25, 31)
-# 背番号は 1〜99 から選び、尽きたら 100〜999
-_NUMBER_POOLS = (range(1, 100), range(100, 1000))
+# 背番号（表記）。新人は支配下なので 1〜99 から選び、尽きたら 0・00（育成の3桁は使わない）
+_NUMBER_POOLS = (tuple(str(number) for number in range(1, 100)), ("0", "00"))
 
 
 class DraftRoute(Enum):
@@ -107,7 +107,7 @@ class DraftTeam:
     # リーグの外国人の登録枠。None は無制限
     foreign_limit: int | None
     # 引退の後の現在の在籍が使っている背番号
-    used_numbers: frozenset[int]
+    used_numbers: frozenset[str]
     # 現在の選手の背ネームの苗字（ローマ字）ごとの人数。同じ苗字の新人に頭文字を付けるため
     surname_counts: Mapping[str, int]
 
@@ -123,7 +123,7 @@ class Draftee:
     team_id: int
     route: DraftRoute
     position: Position
-    number: int
+    number: str
     name: str
     profile: Profile
     ratings: BatterRatings | PitcherRatings
@@ -139,7 +139,7 @@ class _Pending:
 
     route: DraftRoute
     position: Position
-    number: int
+    number: str
     name: str
     surname_romaji: str
     given_romaji: str
@@ -182,14 +182,14 @@ def _foreign_picks(positions: list[Position], count: int) -> set[int]:
     return set(eligible[len(eligible) - min(count, len(eligible)) :])
 
 
-def _draw_number(rng: GameRandom, used: set[int]) -> int:
+def _draw_number(rng: GameRandom, used: set[str]) -> str:
     for pool in _NUMBER_POOLS:
         available = [number for number in pool if number not in used]
         if available:
             number = generator.pick(rng, available)
             used.add(number)
             return number
-    raise ValueError("背番号が尽きました")  # 1〜999 が全部埋まる球団は無い
+    raise ValueError("背番号が尽きました")  # 00・0〜99 が全部埋まる球団は無い（支配下の上限は70人）
 
 
 def _draw_rookie_ratings(rng: GameRandom, route: DraftRoute, position: Position) -> BatterRatings | PitcherRatings:
@@ -206,7 +206,7 @@ def _draw_rookie_ratings(rng: GameRandom, route: DraftRoute, position: Position)
 
 
 def _draw_rookie(
-    rng: GameRandom, position: Position, *, foreign: bool, year: int, number: int, used_names: MutableSet[str]
+    rng: GameRandom, position: Position, *, foreign: bool, year: int, number: str, used_names: MutableSet[str]
 ) -> _Pending:
     """新人ひとりぶんの名前・プロフィール・能力。乱数は名前 → 経歴 → 生年月日 → 体格 → 能力 → 成長型の順。"""
     if foreign:

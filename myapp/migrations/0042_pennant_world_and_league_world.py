@@ -8,7 +8,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('myapp', '0037_protect_players_in_plate_appearances'),
+        ('myapp', '0041_jersey_number_as_text'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 

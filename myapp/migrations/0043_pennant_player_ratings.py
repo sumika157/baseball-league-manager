@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('myapp', '0038_pennant_world_and_league_world'),
+        ('myapp', '0042_pennant_world_and_league_world'),
     ]
 
     operations = [

@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('myapp', '0040_pennant_fixture'),
+        ('myapp', '0044_pennant_fixture'),
     ]
 
     operations = [

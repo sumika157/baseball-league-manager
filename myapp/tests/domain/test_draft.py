@@ -32,7 +32,7 @@ def team(
     *,
     foreign: int = 0,
     limit: int | None = 4,
-    numbers: frozenset[int] = frozenset(),
+    numbers: frozenset[str] = frozenset(),
     surnames: dict[str, int] | None = None,
 ) -> DraftTeam:
     default = generator.largest_remainder(draft.ROSTER_TARGET - 4, generator.POSITION_RATIOS)
@@ -118,15 +118,17 @@ class ForeignTest(unittest.TestCase):
 
 class NumberTest(unittest.TestCase):
     def test_numbers_avoid_current_roster_and_each_other(self) -> None:
-        taken = frozenset(range(1, 99))
+        taken = frozenset(str(number) for number in range(1, 90))
         for rookie in run(team(numbers=taken)):
             self.assertNotIn(rookie.number, taken)
         numbers = [rookie.number for rookie in run(team(), seed=5)]
         self.assertEqual(len(numbers), len(set(numbers)))
 
-    def test_falls_back_to_three_digits_when_one_to_ninety_nine_are_full(self) -> None:
-        for rookie in run(team(numbers=frozenset(range(1, 100)))):
-            self.assertTrue(100 <= rookie.number <= 999)
+    def test_falls_back_to_zero_and_double_zero_when_one_to_ninety_nine_are_full(self) -> None:
+        """新人は支配下なので、育成の3桁の背番号には落とさない（尽きたら 0・00）。"""
+        rookies = run(team(numbers=frozenset(str(number) for number in range(1, 98))))
+        self.assertEqual(len(rookies), 4, "前提: 新人は4人")
+        self.assertEqual({rookie.number for rookie in rookies}, {"98", "99", "0", "00"})
 
 
 class ProfileTest(unittest.TestCase):

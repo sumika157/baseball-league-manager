@@ -14,7 +14,9 @@ from myapp.domain.pennant.world import (
     WorldScope,
     earliest_start_year,
 )
-from myapp.domain.value_objects import JerseyNumber, Position, Profile, Season
+from myapp.domain.value_objects import ContractStatus, JerseyNumber, Position, Profile, RosterLimits, Season
+
+UNLIMITED = RosterLimits.UNLIMITED
 
 
 class WorldScopeTest(unittest.TestCase):
@@ -119,11 +121,11 @@ class WorldTest(unittest.TestCase):
 def _source_team() -> Team:
     """分岐元の球団。現在の選手2人と、退団済みの選手1人（過去の在籍のみ）がいる。"""
     team = Team(name="東京", league_id=1, home_stadium_id=7, id=10, display_order=2)
-    first = team.add_player("山田", JerseyNumber(1), Position.INFIELDER, from_year=2018)
+    first = team.add_player("山田", JerseyNumber("1"), Position.INFIELDER, from_year=2018, limits=UNLIMITED)
     first.profile = Profile(birth_date=None, is_foreign_player=False, birthplace="東京都", debut_year=2018)
-    second = team.add_player("スミス", JerseyNumber(99), Position.PITCHER, from_year=2020)
+    second = team.add_player("スミス", JerseyNumber("99"), Position.PITCHER, from_year=2020, limits=UNLIMITED)
     second.profile = Profile(is_foreign_player=True, nationality="米国")
-    gone = team.add_player("引退", JerseyNumber(5), Position.OUTFIELDER, from_year=2010)
+    gone = team.add_player("引退", JerseyNumber("5"), Position.OUTFIELDER, from_year=2010, limits=UNLIMITED)
     team.retire_player(gone, year=2020)
     team.appoint_captain(first, year=2024)
     return team
@@ -134,14 +136,27 @@ class ForkTest(unittest.TestCase):
         self.source = _source_team()
 
     def test_fork_league_copies_the_rules_but_not_the_id(self):
-        league = League(name="セ", id=3, foreign_player_roster_limit=4, foreign_player_game_limit=2, display_order=5)
+        league = League(
+            name="セ",
+            id=3,
+            foreign_player_roster_limit=4,
+            foreign_player_game_limit=2,
+            display_order=5,
+            registered_player_limit=65,
+        )
 
         copy = fork_league(league, display_order=1)
 
         self.assertIsNone(copy.id)
         self.assertEqual(
-            (copy.name, copy.foreign_player_roster_limit, copy.foreign_player_game_limit, copy.display_order),
-            ("セ", 4, 2, 1),
+            (
+                copy.name,
+                copy.foreign_player_roster_limit,
+                copy.foreign_player_game_limit,
+                copy.display_order,
+                copy.registered_player_limit,
+            ),
+            ("セ", 4, 2, 1, 65),
         )
 
     def test_fork_team_copies_the_stadium_and_order_but_starts_empty(self):
@@ -182,11 +197,11 @@ class ForkTest(unittest.TestCase):
         fork_roster(self.source, target, start_year=2026)
 
         by_name = {p.name: p for p in target.players}
-        self.assertEqual(by_name["山田"].number, JerseyNumber(1))
+        self.assertEqual(by_name["山田"].number, JerseyNumber("1"))
         self.assertEqual(by_name["山田"].position, Position.INFIELDER)
         self.assertEqual(by_name["山田"].profile.birthplace, "東京都")
         self.assertEqual(by_name["山田"].profile.debut_year, 2018)
-        self.assertEqual(by_name["スミス"].number, JerseyNumber(99))
+        self.assertEqual(by_name["スミス"].number, JerseyNumber("99"))
         self.assertTrue(by_name["スミス"].profile.is_foreign_player)
 
     def test_captaincy_is_not_copied(self):
@@ -212,7 +227,7 @@ class ForkTest(unittest.TestCase):
         """名簿は集約の操作で作るので、背番号の重複は集約が弾く（検査を書き直していない）。"""
         source = _source_team()
         # 分岐元の側が壊れていた場合（同じ背番号が2人）でも、写し先の集約が弾く
-        source.players[1].career[0].number = JerseyNumber(1)
+        source.players[1].career[0].number = JerseyNumber("1")
         target = fork_team(source, league_id=99)
         target.id = 20
 
@@ -223,7 +238,9 @@ class ForkTest(unittest.TestCase):
         """枠を超えている分岐元も、そのまま写す（スナップショット）。"""
         source = Team(name="多国籍", league_id=1, id=11)
         for number in range(1, 8):
-            player = source.add_player(f"外国人{number}", JerseyNumber(number), Position.PITCHER, from_year=2020)
+            player = source.add_player(
+                f"外国人{number}", JerseyNumber(str(number)), Position.PITCHER, from_year=2020, limits=UNLIMITED
+            )
             player.profile = Profile(is_foreign_player=True)
         target = fork_team(source, league_id=99)
         target.id = 21
@@ -231,6 +248,38 @@ class ForkTest(unittest.TestCase):
         fork_roster(source, target, start_year=2026)
 
         self.assertEqual(target.foreign_player_count, 7)
+
+    def test_the_contract_status_is_copied(self):
+        """育成選手は育成のまま写す（育成の3桁の背番号を、支配下としては写せない）。昇格した選手は支配下。"""
+        source = Team(name="育成あり", league_id=1, id=12)
+        source.add_player(
+            "育成",
+            JerseyNumber("120"),
+            Position.PITCHER,
+            from_year=2024,
+            contract=ContractStatus.DEVELOPMENTAL,
+            limits=UNLIMITED,
+        )
+        promoted = source.add_player(
+            "昇格",
+            JerseyNumber("121"),
+            Position.INFIELDER,
+            from_year=2023,
+            contract=ContractStatus.DEVELOPMENTAL,
+            limits=UNLIMITED,
+        )
+        promoted.id = 2
+        source.promote_player(2, JerseyNumber("40"), 2025, limits=UNLIMITED)
+        target = fork_team(source, league_id=99)
+        target.id = 22
+
+        fork_roster(source, target, start_year=2026)
+
+        by_name = {p.name: p for p in target.players}
+        self.assertIs(target.contract_of(by_name["育成"]), ContractStatus.DEVELOPMENTAL)
+        self.assertEqual(by_name["育成"].number, JerseyNumber("120"))
+        self.assertIs(target.contract_of(by_name["昇格"]), ContractStatus.REGISTERED)
+        self.assertEqual(by_name["昇格"].number, JerseyNumber("40"))
 
 
 if __name__ == "__main__":

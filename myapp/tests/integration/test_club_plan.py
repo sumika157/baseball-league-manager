@@ -20,6 +20,7 @@ from myapp.domain.exceptions import (
 from myapp.domain.pennant.club_plan import ClubPlan, LineupChoice, PlanSection
 from myapp.domain.pennant.schedule import AdvanceTarget
 from myapp.domain.pennant.world import WorldScope
+from myapp.domain.value_objects import JerseyNumber
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoClubPlanRepository
 from myapp.presentation.views import build_club_service
@@ -32,7 +33,11 @@ def team_of(world_id: int, name: str) -> orm_models.Team:
 
 
 def players_of(team: orm_models.Team) -> list[orm_models.Player]:
-    stints = orm_models.PlayerStint.objects.filter(team=team).select_related("player").order_by("number")
+    # 背番号は文字列の列なので、SQL ではなく背番号順（`JerseyNumber.sort_key`）で並べる
+    stints = sorted(
+        orm_models.PlayerStint.objects.filter(team=team).select_related("player"),
+        key=lambda s: (JerseyNumber(s.number).sort_key, s.id),
+    )
     return [stint.player for stint in stints]
 
 

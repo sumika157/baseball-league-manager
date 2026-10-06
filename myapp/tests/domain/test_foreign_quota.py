@@ -5,7 +5,7 @@ from unittest import TestCase
 
 from myapp.domain.entities import Team
 from myapp.domain.exceptions import ForeignPlayerQuotaExceeded
-from myapp.domain.value_objects import JerseyNumber, Position, ensure_quota_not_exceeded
+from myapp.domain.value_objects import JerseyNumber, Position, RosterLimits, ensure_quota_not_exceeded
 
 
 def _make_foreign(player):
@@ -30,7 +30,9 @@ class TeamForeignPlayerQuotaTest(TestCase):
         self.team = Team(name="テストチーム", id=1, league_id=1)
 
     def _add_foreign(self, name, number, from_year=2026):
-        player = self.team.add_player(name, JerseyNumber(number), Position.INFIELDER, from_year=from_year)
+        player = self.team.add_player(
+            name, JerseyNumber(number), Position.INFIELDER, from_year=from_year, limits=RosterLimits.UNLIMITED
+        )
         return _make_foreign(player)
 
     def test_quota_is_ignored_when_no_limit_set(self):
@@ -53,7 +55,9 @@ class TeamForeignPlayerQuotaTest(TestCase):
             self.team.ensure_foreign_player_quota(1)
 
     def test_non_foreign_players_do_not_count(self):
-        self.team.add_player("日本人", JerseyNumber(10), Position.INFIELDER, from_year=2026)
+        self.team.add_player(
+            "日本人", JerseyNumber("10"), Position.INFIELDER, from_year=2026, limits=RosterLimits.UNLIMITED
+        )
         self._add_foreign("外国人1", 11)
 
         self.assertEqual(self.team.foreign_player_count, 1)

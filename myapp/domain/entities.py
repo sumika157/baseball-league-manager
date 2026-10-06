@@ -11,35 +11,49 @@ Captaincy は Stint とロジック（is_current/overlaps/close）が同型だ�
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import date
 
 from .exceptions import (
     DuplicateCaptain,
     DuplicateJerseyNumber,
+    InvalidAcquisition,
     InvalidCaptaincy,
+    InvalidContract,
+    InvalidFreeAgentDeclaration,
     InvalidGame,
     InvalidPlateAppearance,
     InvalidStint,
     PlayerNotEligibleForCaptaincy,
     PlayerNotFound,
+    RegisteredPlayerLimitExceeded,
 )
 from .value_objects import (
+    DEFAULT_REGISTERED_PLAYER_LIMIT,
+    AcquisitionRoute,
     AdvanceReason,
     Base,
     BattingLine,
+    ContractStatus,
     ErrorKind,
     FieldingLine,
     FieldingPosition,
+    FreeAgencyKind,
+    FreeAgencyOutcome,
     JerseyNumber,
     LineScore,
     PitchingLine,
     PlateAppearanceResult,
     Position,
     Profile,
+    RosterLimits,
     Season,
     StadiumProfile,
+    StintPeriod,
     ensure_quota_not_exceeded,
+    fa_destinations,
+    free_agency_outcome,
 )
 
 OUTS_PER_HALF_INNING = 3
@@ -57,9 +71,16 @@ class League:
     foreign_player_game_limit: int | None = None
     # 並び順。管理画面で手動に並べ替える。分岐でも元の並びを保つために持つ
     display_order: int = 0
+    # 支配下選手の登録上限。NPB は70人。None なら無制限
+    registered_player_limit: int | None = DEFAULT_REGISTERED_PLAYER_LIMIT
 
     def __str__(self) -> str:
         return self.name
+
+    @property
+    def roster_limits(self) -> RosterLimits:
+        """ロスターの人数の上限。`Team` の追加・移籍の受け入れ・昇格に渡す。"""
+        return RosterLimits(registered=self.registered_player_limit, foreign=self.foreign_player_roster_limit)
 
 
 @dataclass
@@ -82,11 +103,29 @@ class Stadium:
         return self.profile.city
 
 
+def jersey_number_in(
+    number: JerseyNumber, promoted_year: int | None, number_before_promotion: JerseyNumber | None, year: int
+) -> JerseyNumber:
+    """その年の背番号。**出典はここだけ**（`Stint.number_in` も参照クエリの材料もこれを呼ぶ）。
+
+    昇格より前の年は昇格前の番号、それ以降は今の番号。
+    """
+    if promoted_year is not None and number_before_promotion is not None and year < promoted_year:
+        return number_before_promotion
+    return number
+
+
 @dataclass
 class Stint:
     """在籍。ある選手が、あるチームに、いつからいつまで在籍したか。
 
     背番号も在籍ごとに持つ。移籍で変わるため選手そのものには持たせない。
+
+    契約区分（支配下／育成）も在籍ごとの事実で、試合からは導けない入力の値。
+    加入時の区分（signed_as）と、育成から支配下に上がった年（promoted_year）で持ち、
+    ある年の区分は contract_in(year) で導く。背番号は昇格で変わるため、
+    number は常に最新の区分に合う番号で、昇格前（育成だった間）の番号は
+    number_before_promotion に残す（年ごとの番号は number_in(year)）。
     """
 
     team_id: int
@@ -95,13 +134,32 @@ class Stint:
     to_year: int | None = None
     id: int | None = None
     team_name: str = ""
+    signed_as: ContractStatus = ContractStatus.REGISTERED
+    promoted_year: int | None = None
+    # 昇格する前（育成だった間）の背番号。昇格していなければ None。
+    # 昇格で number が支配下の番号に変わるので、育成だった年の番号はここに残す
+    number_before_promotion: JerseyNumber | None = None
+    # 入団の経路。None は不明（推測で埋めない）。既定値つきなので、経路を知らない呼び出し元は壊れない
+    acquired_via: AcquisitionRoute | None = None
 
     def __post_init__(self) -> None:
         self.from_year = Season(self.from_year).year
+        if self.acquired_via is not None:
+            # 経路と加入時の区分の食い違い（育成ドラフトなのに支配下など）を弾く
+            self.acquired_via.ensure_fits_contract(self.signed_as)
         if self.to_year is not None:
             self.to_year = Season(self.to_year).year
             if self.to_year < self.from_year:
                 raise InvalidStint("退団年が加入年より前になっています。")
+        if self.promoted_year is not None:
+            self.promoted_year = Season(self.promoted_year).year
+            self._ensure_promotion_year_is_valid(self.promoted_year)
+            # 昇格した記録には、昇格前の番号を必ず添える（過去の昇格を手入力する場合も同じ）。
+            # 無いと、育成だった年に誰がどの番号を着けていたか分からなくなる
+            if self.number_before_promotion is None:
+                raise InvalidContract("支配下登録の年を入れるときは、昇格前の背番号も入力してください。")
+        elif self.number_before_promotion is not None:
+            raise InvalidContract("昇格前の背番号は、支配下登録の年があるときだけ設定できます。")
 
     def __str__(self) -> str:
         return f"{self.from_year}〜{self.to_year or '現在'}"
@@ -110,8 +168,85 @@ class Stint:
     def is_current(self) -> bool:
         return self.to_year is None
 
+    def _ensure_promotion_year_is_valid(self, year: int) -> None:
+        if self.signed_as is not ContractStatus.DEVELOPMENTAL:
+            raise InvalidContract("支配下で加入した選手に、支配下登録の年は設定できません。")
+        if year < self.from_year:
+            raise InvalidContract("支配下登録の年が加入年より前になっています。")
+        if self.to_year is not None and year > self.to_year:
+            raise InvalidContract("支配下登録の年が退団年より後になっています。")
+
+    def contract_in(self, year: int) -> ContractStatus:
+        """その年の契約区分。育成で加入し、その年までに昇格していれば支配下。"""
+        return ContractStatus.in_year(self.signed_as, self.promoted_year, year)
+
+    @property
+    def contract_now(self) -> ContractStatus:
+        """今（在籍の最後の時点）の契約区分。昇格していれば支配下。"""
+        if self.signed_as is ContractStatus.DEVELOPMENTAL and self.promoted_year is None:
+            return ContractStatus.DEVELOPMENTAL
+        return ContractStatus.REGISTERED
+
+    def ensure_number_matches_contract(self) -> None:
+        """背番号が区分に合うか。管理画面など、集約を通さない書き込みからも呼ぶ。
+
+        今の番号は今の区分に、昇格前の番号は育成に合っていること。
+        """
+        self.contract_now.ensure_number_fits(self.number)
+        if self.number_before_promotion is not None:
+            ContractStatus.DEVELOPMENTAL.ensure_number_fits(self.number_before_promotion)
+
+    def number_in(self, year: int) -> JerseyNumber:
+        """その年の背番号。昇格より前の年は昇格前の番号、それ以降は今の番号。"""
+        return jersey_number_in(self.number, self.promoted_year, self.number_before_promotion, year)
+
+    def number_periods(self) -> list[tuple[JerseyNumber, int, int | None]]:
+        """背番号ごとの期間（番号・開始年・終了年）。終了年が None なら現在も。
+
+        昇格した在籍は「昇格前の期間×昇格前の番号」と「昇格後の期間×今の番号」の2つに分かれる。
+        昇格の年に加入した（昇格前の期間が空の）ときは後者だけ。
+        """
+        if self.promoted_year is None or self.number_before_promotion is None:
+            return [(self.number, self.from_year, self.to_year)]
+        periods = [(self.number, self.promoted_year, self.to_year)]
+        if self.promoted_year > self.from_year:
+            periods.insert(0, (self.number_before_promotion, self.from_year, self.promoted_year - 1))
+        return periods
+
+    def shared_number(self, other: Stint) -> JerseyNumber | None:
+        """期間が重なる同じ背番号があれば、その番号。他人の在籍との照合（同じチーム内）に使う。"""
+        for number, start, end in self.number_periods():
+            for other_number, other_start, other_end in other.number_periods():
+                if number != other_number:
+                    continue
+                if (other_end is None or start <= other_end) and (end is None or other_start <= end):
+                    return number
+        return None
+
+    def ensure_promotable(self) -> None:
+        """今が育成か。昇格できるかの判定と文言はここが唯一の出典。"""
+        if self.contract_now is not ContractStatus.DEVELOPMENTAL:
+            raise InvalidContract("育成選手ではないため、支配下登録にはできません。")
+
+    def promote(self, year: int, number: JerseyNumber) -> None:
+        """育成から支配下に上げる。背番号は支配下の番号に変わる。"""
+        self.ensure_promotable()
+        season = Season(year).year
+        self._ensure_promotion_year_is_valid(season)
+        ContractStatus.REGISTERED.ensure_number_fits(number)
+        self.promoted_year = season
+        self.number_before_promotion = self.number
+        self.number = number
+
     def covers(self, year: int) -> bool:
         return self.from_year <= year and (self.to_year is None or year <= self.to_year)
+
+    @property
+    def period(self) -> StintPeriod:
+        """期間だけを取り出したもの（FA の結果の導出に使う）。"""
+        return StintPeriod(
+            team_id=self.team_id, from_year=self.from_year, to_year=self.to_year, acquired_via=self.acquired_via
+        )
 
     def overlaps(self, other: Stint) -> bool:
         """期間が重なるか。片方でも在籍中（to_year が空）なら無限として扱う。"""
@@ -126,6 +261,84 @@ class Stint:
         if season < self.from_year:
             raise InvalidStint("加入年より前の年で退団にはできません。")
         self.to_year = season
+
+
+@dataclass
+class FreeAgentDeclaration:
+    """FA 宣言。ある年に、国内か海外かで FA の権利を行使すると宣言した記録。
+
+    **宣言の結果（残留か移籍か）は持たない。** 在籍から導ける事実なので、
+    `declaration_outcome` が毎回導く（保存すると在籍と食い違いうる）。
+    宣言が `Player`（`Team` 集約の内部）の持ち物なのは、生涯を通じた選手の事実で、
+    移籍しても付いて回るため。
+    """
+
+    year: int
+    kind: FreeAgencyKind
+    id: int | None = None
+
+    def __post_init__(self) -> None:
+        self.year = Season(self.year).year
+
+    def __str__(self) -> str:
+        return f"{self.year}年 {self.kind.label}FA"
+
+
+def declaration_outcome(declaration: FreeAgentDeclaration, career: Iterable[Stint]) -> FreeAgencyOutcome:
+    """宣言の結果（残留か移籍か）を、選手の在籍から導く。規則の出典は `fa_destinations`。"""
+    return free_agency_outcome(declaration.year, (stint.period for stint in career))
+
+
+def fa_destination_stints(declaration: FreeAgentDeclaration, career: Iterable[Stint]) -> list[Stint]:
+    """宣言の移籍先の在籍（加入年の早い順）。判定の出典は `fa_destinations`（ここは在籍に引き直すだけ）。"""
+    pairs = [(stint.period, stint) for stint in career]
+    found = fa_destinations(declaration.year, (period for period, _ in pairs))
+    # 期間は在籍から作った別の値なので、同じものを同一性で引く
+    return [stint for period in found for candidate, stint in pairs if candidate is period]
+
+
+def ensure_free_agent_acquisitions(
+    career: Iterable[Stint], declarations: Iterable[FreeAgentDeclaration], name: str = ""
+) -> None:
+    """経路が FA の在籍は、どれかの FA 宣言の**移籍先として導かれる在籍**であること。
+
+    宣言の翌年までの別の球団への加入で、経路が FA か不明のものが移籍先になる（`fa_destinations`）。
+    経路が不明の在籍は検査しない（宣言して移籍したのに経路が不明、は許す。不明は推測しない）。
+    同じ球団で在籍を結び直しただけの在籍や、宣言の年に移籍先の在籍しか無い選手は、FA 入団にできない。
+    """
+    stints, declared = list(career), list(declarations)
+    destinations = [stint for d in declared for stint in fa_destination_stints(d, stints)]
+    for stint in stints:
+        if stint.acquired_via is AcquisitionRoute.FREE_AGENT and not any(stint is d for d in destinations):
+            raise InvalidAcquisition(
+                f"{name + 'は' if name else ''}{stint.from_year}年に FA で入団したことになっていますが、"
+                f"その年の前年に、別の球団から FA を宣言した記録がありません"
+                f"（FA 宣言と、宣言した球団の在籍が先に要ります）。"
+            )
+
+
+def ensure_declarations_valid(
+    career: Iterable[Stint], declarations: Iterable[FreeAgentDeclaration], name: str = ""
+) -> None:
+    """FA 宣言の不変条件。同じ年に1回だけ、宣言した年にどこかの球団に在籍していること。
+
+    宣言を足すときだけでなく、在籍の削除・期間の短縮で後から破れないかを見るときにも使う
+    （管理画面が、送信後の在籍と宣言の全体に対して呼ぶ）。
+    """
+    stints = list(career)
+    prefix = f"{name}は" if name else ""
+    seen: set[int] = set()
+    for declaration in declarations:
+        if declaration.year in seen:
+            raise InvalidFreeAgentDeclaration(f"{prefix}{declaration.year}年にすでに FA を宣言しています。")
+        seen.add(declaration.year)
+        # 「今年まで」のような時計による制限は置かない（ペナントの世界は実際の年より先へ進むため）。
+        # 未来の年の宣言は在籍が続いている限り認め、退団・移籍で在籍を閉じるときに
+        # Player.ensure_free_agency_consistent が「どの在籍にも覆われない宣言」を拒否する
+        if not any(stint.covers(declaration.year) for stint in stints):
+            raise InvalidFreeAgentDeclaration(
+                f"{prefix}{declaration.year}年にどの球団にも在籍していないため、FA を宣言できません。"
+            )
 
 
 @dataclass
@@ -192,9 +405,66 @@ class Player:
     career: list[Stint] = field(default_factory=list)
     # 主将在任歴。career と同様、生涯を通じた経歴として選手自身が持つ
     captaincies: list[Captaincy] = field(default_factory=list)
+    # FA 宣言。移籍しても付いて回る選手の事実なので在籍（球団ごと）ではなく選手が持つ。
+    # 結果（残留・移籍）は持たず、在籍から導く（outcome_of）
+    fa_declarations: list[FreeAgentDeclaration] = field(default_factory=list)
+    # 取り消した（保存済みの）宣言の id。リポジトリはこれだけを消す。
+    # 宣言を読み込まずに組み立てた Player で保存しても、既存の宣言は消えない（在籍・主将と同じ upsert だけの保存）
+    removed_declaration_ids: list[int] = field(default_factory=list)
 
     def __str__(self) -> str:
         return f"{self.number} {self.name} ({self.position.label})"
+
+    # --- FA 宣言 ---
+
+    def declaration_in(self, year: int) -> FreeAgentDeclaration | None:
+        return next((d for d in self.fa_declarations if d.year == year), None)
+
+    def outcome_of(self, declaration: FreeAgentDeclaration) -> FreeAgencyOutcome:
+        """宣言の結果。在籍から導く（保存しない）。"""
+        return declaration_outcome(declaration, self.career)
+
+    def declare_free_agency(self, year: int, kind: FreeAgencyKind) -> FreeAgentDeclaration:
+        """FA を宣言する。同じ年に宣言できるのは1回だけで、その年にどこかの球団に在籍している必要がある。
+
+        宣言した年に権利を取得している見込みか（登録日数）は、ここでは見ない（FA 権の計算を足すときに入れる）。
+        """
+        declaration = FreeAgentDeclaration(year=year, kind=kind)
+        ensure_declarations_valid(self.career, [*self.fa_declarations, declaration], f"「{self.name}」")
+        self.fa_declarations.append(declaration)
+        return declaration
+
+    def remove_free_agency_declaration(self, year: int) -> None:
+        """FA 宣言を取り消す。その宣言を根拠にした「FA で入団」の在籍があれば、取り消せない。"""
+        declaration = self.declaration_in(year)
+        if declaration is None:
+            raise InvalidFreeAgentDeclaration(f"「{self.name}」に{year}年の FA 宣言はありません。")
+        self.fa_declarations.remove(declaration)
+        try:
+            self.ensure_acquisitions_declared()
+        except InvalidAcquisition:
+            self.fa_declarations.append(declaration)
+            raise InvalidFreeAgentDeclaration(
+                f"{year}年の FA 宣言は、FA での入団（経路が FA の在籍）の根拠になっているため取り消せません。"
+            ) from None
+        # 保存済みの宣言なら、リポジトリが消すのはこの id だけ（持っていない宣言は消さない）
+        if declaration.id is not None:
+            self.removed_declaration_ids.append(declaration.id)
+
+    def ensure_acquisitions_declared(self) -> None:
+        """経路が FA の在籍は、どれかの宣言の移籍先として導かれる在籍か（`ensure_free_agent_acquisitions`）。
+
+        在籍を足す・宣言を取り消すときに、集約や application から呼ぶ。
+        """
+        ensure_free_agent_acquisitions(self.career, self.fa_declarations, f"「{self.name}」")
+
+    def ensure_free_agency_consistent(self) -> None:
+        """宣言の不変条件（同じ年1回・宣言した年の在籍）と、経路 FA の整合の両方。
+
+        在籍を閉じる・足す操作のあとに呼ぶ（退団や、宣言より前の年を指定した移籍で、どの在籍にも覆われない宣言が残らないように）。
+        """
+        ensure_declarations_valid(self.career, self.fa_declarations, f"「{self.name}」")
+        self.ensure_acquisitions_declared()
 
     @property
     def is_pitcher(self) -> bool:
@@ -275,9 +545,31 @@ class Team:
 
     # --- ロスターの変更（不変条件を守る） ---
 
-    def add_player(self, name: str, number: JerseyNumber, position: Position, from_year: int | None = None) -> Player:
-        """選手を加入させる。背番号が在籍中の選手と重複する場合は拒否する。"""
+    def add_player(
+        self,
+        name: str,
+        number: JerseyNumber,
+        position: Position,
+        from_year: int | None = None,
+        contract: ContractStatus = ContractStatus.REGISTERED,
+        acquired_via: AcquisitionRoute | None = None,
+        *,
+        limits: RosterLimits,
+    ) -> Player:
+        """選手を加入させる。背番号が在籍中の選手と重複する場合や、契約区分に合わない場合は拒否する。
+
+        入団の経路は任意（None は不明）。経路が契約区分と食い違うときや、FA での入団（新しい選手には
+        FA 宣言が無い）は拒否する。
+
+        支配下で加えるときは、支配下の上限（`limits`）も**ここで**検査する（呼び忘れて黙って超えないように）。
+        `limits` は省略できない。検査しないなら `RosterLimits.UNLIMITED` を明示する。
+        外国人枠は、新しい選手は外国人ではない（登録後に管理画面で国籍フラグを立てる）ので、人数が増えず見ない。
+        """
         assert self.id is not None, "ロスターの変更は保存済みのチームに対して行う"
+        if contract is ContractStatus.REGISTERED:
+            # 育成の追加は支配下を増やさないので、上限は見ない
+            self.ensure_room_for_registered(limits.registered)
+        contract.ensure_number_fits(number)
         self._ensure_number_is_available(number)
 
         player = Player(name=(name or "").strip(), number=number, position=position)
@@ -292,20 +584,143 @@ class Team:
                 number=number,
                 from_year=from_year if from_year is not None else date.today().year,
                 team_name=self.name,
+                signed_as=contract,
+                acquired_via=acquired_via,
             )
         ]
+        player.ensure_acquisitions_declared()
         self.players.append(player)
         return player
 
+    def declare_free_agency(self, player_id: int, year: int, kind: FreeAgencyKind) -> FreeAgentDeclaration:
+        """選手の FA 宣言を記録する。同じ年に2回・在籍の無い年の宣言は拒否する（検査は `Player` が行う）。"""
+        return self.find_player(player_id).declare_free_agency(year, kind)
+
+    def remove_free_agency_declaration(self, player_id: int, year: int) -> None:
+        """選手の FA 宣言を取り消す。FA での入団の根拠になっている宣言は取り消せない。"""
+        self.find_player(player_id).remove_free_agency_declaration(year)
+
     def change_player_number(self, player: Player, number: JerseyNumber) -> None:
-        """背番号を変更する。在籍中の他の選手と重複する場合は拒否する。"""
+        """背番号を変更する。在籍中の他の選手と重複する場合や、今の契約区分に合わない場合は拒否する。"""
         if player.number == number:
             return
-        self._ensure_number_is_available(number, excluding=player)
-        player.number = number
         current = self.current_stint(player)
         if current is not None:
+            current.contract_now.ensure_number_fits(number)
+        self._ensure_number_is_available(number, excluding=player)
+        player.number = number
+        if current is not None:
             current.number = number
+
+    def ensure_promotable(self, player_id: int) -> None:
+        """在籍中の育成選手か。昇格できない選手なら、その理由の例外を投げる。
+
+        `promote_player` は中でこれと同じ検査（`_promotable_stint`）を支配下の上限より先に行う
+        （理由を取り違えて案内しないため）。画面で昇格の導線を出すかを決めるときなど、昇格の前に確かめたいときに使う。
+        """
+        self._promotable_stint(player_id)
+
+    def _promotable_stint(self, player_id: int) -> Stint:
+        """昇格の対象の在籍（在籍中の育成選手）。そうでなければ理由の例外を投げる。"""
+        player = self.find_player(player_id)
+        current = self.current_stint(player)
+        if current is None:
+            raise InvalidContract(f"「{self.name}」に在籍していない選手は支配下登録にできません。")
+        current.ensure_promotable()
+        return current
+
+    def promote_player(
+        self, player_id: int, number: JerseyNumber, year: int | None = None, *, limits: RosterLimits
+    ) -> Player:
+        """育成選手を支配下に上げる。背番号は支配下の番号（99以下）に変わる。
+
+        在籍中の育成選手だけが対象で、昇格できるかを先に見る（理由を取り違えて案内しないため）。
+        昇格は支配下を1人増やすので、支配下の上限（`limits`）を**ここで**常に検査する。
+        """
+        current = self._promotable_stint(player_id)
+        self.ensure_room_for_registered(limits.registered)
+        player = self.find_player(player_id)
+        # 新しい背番号が支配下の番号か・昇格の年が妥当かは Stint.promote が検査する。重複はここで見る
+        self._ensure_number_is_available(number, excluding=player)
+        current.promote(year if year is not None else date.today().year, number)
+        player.number = number
+        return player
+
+    def accept_transfer(
+        self,
+        player: Player,
+        number: JerseyNumber,
+        year: int,
+        contract: ContractStatus,
+        acquired_via: AcquisitionRoute | None = None,
+        *,
+        limits: RosterLimits,
+    ) -> Stint:
+        """他のチームから移籍してきた選手を受け入れ、このチームの新しい在籍を開く。
+
+        移籍元の退団（`retire_player`）は呼び出し側が先に行う。ここで次を検査する。
+        背番号・区分・支配下の上限で拒否したときは何も変えない。FA の整合と外国人の登録枠は、選手を足した後の
+        ロスターで検査するので、そこで拒否したときは集約も選手も途中まで変わっている。**呼び出し側は例外のとき
+        保存しない**（例外を握りつぶして続けない）。
+        - 背番号が在籍中の選手と重複しないこと・契約区分に合うこと
+        - 支配下で受け入れるなら、支配下の上限（`limits`）に収まること
+        - 経路と区分の整合・経路が FA の在籍の根拠（`Player.ensure_free_agency_consistent`）
+        - 外国人選手の登録枠（`limits`）に収まること
+        `limits` は省略できない。検査しないなら `RosterLimits.UNLIMITED` を明示する。
+        """
+        assert self.id is not None, "ロスターの変更は保存済みのチームに対して行う"
+        contract.ensure_number_fits(number)
+        self._ensure_number_is_available(number)
+        if contract is ContractStatus.REGISTERED:
+            self.ensure_room_for_registered(limits.registered)
+        stint = Stint(
+            team_id=self.id,
+            team_name=self.name,
+            number=number,
+            from_year=year,
+            signed_as=contract,
+            acquired_via=acquired_via,
+        )
+        player.career.append(stint)
+        # 経路が FA なのに宣言が無い、宣言した年に在籍が無い、を保存の前に弾く
+        player.ensure_free_agency_consistent()
+        player.number = number
+        player.is_active = True
+        self.players.append(player)
+        self.ensure_foreign_player_quota(limits.foreign)
+        return stint
+
+    def contract_of(self, player: Player) -> ContractStatus | None:
+        """このチームでの今の契約区分。在籍していなければ None。"""
+        current = self.current_stint(player)
+        return current.contract_now if current is not None else None
+
+    def contract_in(self, player: Player, year: int) -> ContractStatus | None:
+        """このチームでのその年の契約区分。その年にこのチームに在籍していなければ None。
+
+        同じチームの在籍は年が重ならないよう集約が検査するので、通常は1つ。検査を素通りしたデータ（bulk_create など）で
+        同じ年に在籍が複数あるときへの備えとして、1つでも支配下なら支配下とする
+        （出場を止めるのは、その年ずっと育成だった選手だけにするため）。
+        """
+        statuses = [
+            stint.contract_in(year) for stint in player.career if stint.team_id == self.id and stint.covers(year)
+        ]
+        if not statuses:
+            return None
+        return ContractStatus.REGISTERED if ContractStatus.REGISTERED in statuses else ContractStatus.DEVELOPMENTAL
+
+    def ensure_not_developmental_in(self, player_ids: Iterable[int], year: int) -> None:
+        """指定した選手のうち、その年に育成の選手がいれば拒否する（育成選手は試合に出られない）。
+
+        在籍の無い選手 id（別チームの選手・データの不整合）は対象にしない。
+        """
+        wanted = set(player_ids)
+        for player in self.players:
+            if player.id in wanted and self.contract_in(player, year) is ContractStatus.DEVELOPMENTAL:
+                raise InvalidContract(
+                    f"育成選手の「{player.name}」は{year}年の試合に出場できません"
+                    "（支配下に登録されている選手だけが出場できます）。"
+                )
 
     def current_stint(self, player: Player) -> Stint | None:
         """このチームでの現在の在籍。"""
@@ -320,6 +735,8 @@ class Team:
         current = self.current_stint(player)
         if current is not None:
             current.close(year if year is not None else date.today().year)
+        # 閉じたことで、宣言した年にどの在籍にも覆われなくなる宣言が無いか
+        player.ensure_free_agency_consistent()
         # 在籍していないのに主将、という両立しない状態を残さない
         self.remove_captain(player, year)
 
@@ -388,14 +805,35 @@ class Team:
     def ensure_foreign_player_quota(self, limit: int | None) -> None:
         """現在のロスターが外国人枠の上限を超えていないか確認する。
 
-        呼び出し側は、検査したい変更（選手追加・移籍受け入れ・国籍フラグ変更）を
-        保存前の roster に反映してから呼ぶ。超えていれば例外を投げ、
-        呼び出し元のサービスがそれ以降の保存処理を止める。
+        `accept_transfer`（`limits.foreign`）は、受け入れの検査としてこれを集約の中で呼ぶ。
+        管理画面のように集約の操作を通らない書き込み（国籍フラグの変更）は、検査したい変更を
+        保存前の roster に反映してから自分で呼ぶ。超えていれば例外を投げ、保存処理を止める。
         """
         ensure_quota_not_exceeded(
             self.foreign_player_count,
             limit,
             f"「{self.name}」の外国人選手登録数が上限（{limit}人）を超えています。",
+        )
+
+    # --- 支配下の上限 ---
+
+    @property
+    def registered_player_count(self) -> int:
+        """在籍中で、今の区分が支配下の選手の数。育成は数えない。"""
+        return sum(1 for p in self.active_players if self.contract_of(p) is ContractStatus.REGISTERED)
+
+    def ensure_room_for_registered(self, limit: int | None) -> None:
+        """支配下の選手が1人増えても上限を超えないか確認する。
+
+        支配下が増える操作（支配下での選手追加・支配下としての移籍受け入れ・昇格）が、`add_player`・
+        `accept_transfer`・`promote_player` の中で**増える前に**呼ぶ（育成の追加は支配下が増えないので呼ばない）。
+        管理画面のように集約の操作を通らない書き込みは自分で呼ぶ。判定とメッセージの出典はここだけ。
+        """
+        ensure_quota_not_exceeded(
+            self.registered_player_count + 1,
+            limit,
+            f"「{self.name}」の支配下選手登録数が上限（{limit}人）を超えています。",
+            RegisteredPlayerLimitExceeded,
         )
 
 

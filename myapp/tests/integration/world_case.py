@@ -14,7 +14,7 @@ from myapp.application.dto import LineupSlot
 from myapp.application.game_recording import GameRecordingService
 from myapp.domain.entities import Game
 from myapp.domain.pennant.world import WorldScope
-from myapp.domain.value_objects import BattingLine, FieldingPosition, Season
+from myapp.domain.value_objects import BattingLine, FieldingPosition, JerseyNumber, Season
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository, DjangoLeagueRepository, DjangoTeamRepository
 from myapp.presentation.views import build_pennant_world_service
@@ -81,7 +81,10 @@ class WorldCase(BaseCase):
 
     def pennant_players(self, team) -> list[int]:
         """その球団の選手の id を背番号順に。"""
-        stints = orm_models.PlayerStint.objects.filter(team=team).order_by("number")
+        # 背番号は文字列の列なので、SQL ではなく背番号順（`JerseyNumber.sort_key`）で並べる
+        stints = sorted(
+            orm_models.PlayerStint.objects.filter(team=team), key=lambda s: (JerseyNumber(s.number).sort_key, s.id)
+        )
         return [stint.player_id for stint in stints]
 
     def _play_a_game_in_the_world(self) -> None:
@@ -144,7 +147,9 @@ class WorldCase(BaseCase):
         team = orm_models.Team.objects.filter(league__world_id=world_id).order_by("id").first()
         assert team is not None
         league = team.league
-        stint = orm_models.PlayerStint.objects.filter(team=team).order_by("number").first()
+        stint = min(
+            orm_models.PlayerStint.objects.filter(team=team), key=lambda s: (JerseyNumber(s.number).sort_key, s.id)
+        )
         assert stint is not None
         player_id = stint.player_id
         game = orm_models.Game.objects.filter(home_team__league__world_id=world_id).first()

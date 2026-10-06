@@ -20,21 +20,28 @@ from django.db.models import BooleanField, Case, Count, Exists, Max, Min, OuterR
 from ..application.dto import (
     ActivePlayerStats,
     AnalysisRosterRow,
+    ContractFacts,
+    DeclarationFact,
     FielderUsage,
     FieldingRow,
     GameNote,
     GameRow,
     LastStart,
     LeagueOption,
+    MoveStintRow,
     OffseasonFacts,
     OffseasonPlayerFact,
     PeriodBatting,
     PeriodPitching,
     PitcherUsage,
     PitchingOuting,
+    PlayerContractStint,
     PlayerFielding,
     PlayerSearchRow,
+    PlayerYearSpan,
     RatingsHistoryFacts,
+    RelatedStint,
+    ServiceHistory,
     SimulationContext,
     SimulationPlayer,
     SimulationTeam,
@@ -43,17 +50,21 @@ from ..application.dto import (
     TeamSummary,
     WorldSummary,
 )
-from ..domain.entities import Game, winning_team_id
+from ..domain.entities import Game, jersey_number_in, winning_team_id
 from ..domain.exceptions import WorldNotFound
 from ..domain.pennant.retirement import PlayingTime
 from ..domain.pennant.world import WorldScope
 from ..domain.simulation.manager import RECENT_PITCHING_DAYS
 from ..domain.simulation.ratings import BatterRatings, PitcherRatings
 from ..domain.value_objects import (
+    AcquisitionRoute,
     BattingLine,
+    ContractStatus,
     FieldingLine,
     FieldingPosition,
+    FreeAgencyKind,
     Handedness,
+    JerseyNumber,
     PitchingLine,
     Position,
     Profile,
@@ -218,13 +229,19 @@ class DjangoSimulationContextQuery:
 
     def teams(self) -> tuple[SimulationTeam, ...]:
         players: dict[int, list[SimulationPlayer]] = {}
+        # 育成選手は試合に出られない（実データのスコアブックと同じ不変条件）ので、候補に入れない。
+        # 今の区分が育成＝育成で加入して昇格していない（`Stint.contract_now` と同じ）
         stints = (
             stints_in(self._scope)
             .filter(to_year__isnull=True)
-            .order_by("team_id", "number", "player_id")
-            .values_list("team_id", "player_id", "player__name", "player__position", "player__is_foreign_player")
+            .exclude(signed_as=ContractStatus.DEVELOPMENTAL.value, promoted_year__isnull=True)
+            .values_list(
+                "team_id", "number", "player_id", "player__name", "player__position", "player__is_foreign_player"
+            )
         )
-        for team_id, player_id, name, position, is_foreign in stints:
+        # 背番号は文字列の列なので SQL では背番号順に並べられない。Python で `JerseyNumber.sort_key` の順にする
+        ordered = sorted(stints, key=lambda row: (row[0], JerseyNumber(row[1]).sort_key, row[2]))
+        for team_id, _, player_id, name, position, is_foreign in ordered:
             players.setdefault(team_id, []).append(
                 SimulationPlayer(
                     player_id=player_id, name=name, position=Position.from_label(position), is_foreign=is_foreign
@@ -284,8 +301,11 @@ class DjangoPlayerStatsQuery:
             stints = stints.filter(team_id=team_id)
         if league_id is not None:
             stints = stints.filter(team__league_id=league_id)
-        rows = list(
-            stints.select_related("player", "team").order_by("team__display_order", "team__name", "number", "id")
+        # 背番号は文字列の列なので SQL では背番号順に並べられない（「10」が「2」より前に来る）。
+        # 球団までを SQL で並べ、背番号順（`JerseyNumber.sort_key`）は Python で並べ直す
+        rows = sorted(
+            stints.select_related("player", "team").order_by("team__display_order", "team__name", "id"),
+            key=lambda s: (s.team.display_order, s.team.name, JerseyNumber(s.number).sort_key, s.id),
         )
         if year is not None:
             rows = self._one_per_player(rows)
@@ -306,7 +326,7 @@ class DjangoPlayerStatsQuery:
             ActivePlayerStats(
                 player_id=row.player_id,
                 name=row.player.name,
-                number=row.number,
+                number=_number_at(row, year),
                 position=Position.from_label(row.player.position),
                 team_id=row.team_id,
                 team_name=row.team.name,
@@ -315,6 +335,7 @@ class DjangoPlayerStatsQuery:
                 pitching=pitching.get(row.player_id, PitchingLine()),
                 profile=profile_of(row.player) if with_profile else Profile(),
                 is_captain=row.player_id in captains,
+                is_developmental=_contract_at(row, year) is ContractStatus.DEVELOPMENTAL,
             )
             for row in rows
         ]
@@ -341,6 +362,30 @@ class DjangoPlayerStatsQuery:
         """その球団でその範囲に主将だった選手の id。"""
         rows = orm_models.Captaincy.objects.filter(period_covering(year), team_id=team_id)
         return frozenset(rows.values_list("player_id", flat=True))
+
+
+def _contract_at(stint: orm_models.PlayerStint, year: int | None) -> ContractStatus:
+    """在籍のその年の契約区分。`year` が None なら今（在籍の最後の時点。`Stint.contract_now` と同じ）。
+
+    年ごとの導出は domain（`ContractStatus.in_year`）が出典。今の区分は、昇格していれば支配下。
+    """
+    signed_as = ContractStatus.from_label(stint.signed_as)
+    if year is None:
+        return ContractStatus.REGISTERED if stint.promoted_year is not None else signed_as
+    return ContractStatus.in_year(signed_as, stint.promoted_year, year)
+
+
+def _number_at(stint: orm_models.PlayerStint, year: int | None) -> str:
+    """在籍のその年の背番号（表記）。`year` が None なら今の番号。昇格の前の年は昇格前の番号（出典は domain）。"""
+    if year is None:
+        return stint.number
+    before = stint.number_before_promotion
+    return jersey_number_in(
+        JerseyNumber(stint.number),
+        stint.promoted_year,
+        JerseyNumber(before) if before is not None else None,
+        year,
+    ).value
 
 
 def _recency(stint: orm_models.PlayerStint) -> tuple[bool, int, int]:
@@ -859,9 +904,13 @@ class DjangoOffseasonQuery:
         after = {item.player_id: item.ratings for item in ratings.find_by_year(year + 1)}
 
         def players(rows: Iterable[dict[str, Any]]) -> tuple[OffseasonPlayerFact, ...]:
-            return tuple(self._fact(row, before, after) for row in rows)
+            # 球団ごとに背番号順。背番号は文字列の列なので SQL では並べられず、`JerseyNumber.sort_key` で並べる
+            ordered = sorted(
+                rows, key=lambda row: (row["team_id"], JerseyNumber(row["number"]).sort_key, row["player_id"])
+            )
+            return tuple(self._fact(row, before, after) for row in ordered)
 
-        stints = stints_in(self._scope).order_by("team_id", "number")
+        stints = stints_in(self._scope)
         retired = stints.filter(to_year=year).values(*_OFFSEASON_STINT_FIELDS)
         rookies = stints.filter(from_year=year + 1).values(*_OFFSEASON_STINT_FIELDS)
         # 翌年も在籍し、前の年から居た選手（新人を除く）。両方の能力がある選手だけが能力の変化を持つ
@@ -934,10 +983,20 @@ class DjangoRatingsHistoryQuery:
         )
 
 
+def _contract_facts(stint: orm_models.PlayerStint) -> ContractFacts:
+    """在籍の契約の事実（加入時の区分・昇格した年・昇格前の番号）。年ごとの導出はドメインが行う。"""
+    return ContractFacts(
+        number=stint.number,
+        signed_as=ContractStatus.from_label(stint.signed_as),
+        promoted_year=stint.promoted_year,
+        number_before_promotion=stint.number_before_promotion,
+    )
+
+
 class DjangoTeamAnalysisQuery:
     """TeamAnalysisQuery の Django ORM 実装。戦力分析の材料を固定本数のクエリで集める。
 
-    クエリは在籍・野手の出場・投手の登板の3本（年の一覧は別に1本）で、選手の数に
+    クエリは在籍・野手の出場・投手の登板・入退団の在籍2本の5本（年の一覧は別に1本）で、選手の数に
     比例しない。集約を組み立てず、数えるだけなので明細の行も Python に持ち込まない。
     在籍と試合は範囲（`WorldScope`）の中だけを読む（明細はその球団・その選手で絞るので範囲の外に出ない）。
     """
@@ -955,36 +1014,151 @@ class DjangoTeamAnalysisQuery:
         # 既定の並び（試合日）が DISTINCT に混ざらないよう order_by() で外す
         return sorted(set(rows.order_by().values_list("year", flat=True)), reverse=True)
 
+    def _moves(self, team_id: int, year: int) -> tuple[list[MoveStintRow], list[RelatedStint], list[DeclarationFact]]:
+        """入退団の材料。そのチームで加入年か退団年が year の在籍と、その選手の全在籍（他のチームを含む）、FA 宣言。
+
+        3本のクエリで済み、選手の数に比例しない。
+        """
+        own = sorted(
+            stints_in(self._scope)
+            .filter(team_id=team_id)
+            .filter(Q(from_year=year) | Q(to_year=year))
+            .select_related("player")
+            .order_by("id"),
+            key=lambda s: (JerseyNumber(s.number).sort_key, s.id),
+        )
+        if not own:
+            return [], [], []
+        moves = [
+            MoveStintRow(
+                stint_id=stint.id,
+                team_id=stint.team_id,
+                player_id=stint.player_id,
+                name=stint.player.name,
+                contract=_contract_facts(stint),
+                position=Position.from_label(stint.player.position),
+                from_year=stint.from_year,
+                to_year=stint.to_year,
+                throws=Handedness.from_label(stint.player.throws),
+                bats=Handedness.from_label(stint.player.bats),
+                acquired_via=AcquisitionRoute.from_label(stint.acquired_via) if stint.acquired_via else None,
+            )
+            for stint in own
+        ]
+        player_ids = {s.player_id for s in own}
+        related = [
+            RelatedStint(
+                stint_id=stint.id,
+                player_id=stint.player_id,
+                team_id=stint.team_id,
+                team_name=stint.team.name,
+                from_year=stint.from_year,
+                to_year=stint.to_year,
+                acquired_via=AcquisitionRoute.from_label(stint.acquired_via) if stint.acquired_via else None,
+            )
+            for stint in stints_in(self._scope)
+            .filter(player_id__in=player_ids)
+            .select_related("team")
+            .order_by("from_year", "id")
+        ]
+        declarations = [
+            DeclarationFact(player_id=row.player_id, year=row.year, kind=FreeAgencyKind.from_label(row.kind))
+            for row in orm_models.PlayerFreeAgentDeclaration.objects.filter(player_id__in=player_ids).order_by(
+                "year", "id"
+            )
+        ]
+        return moves, related, declarations
+
+    def load_service_history(self, player_ids: list[int], year: int) -> ServiceHistory:
+        """FA 取得タブの材料。打撃・投球の明細で、選手×年の試合日の最小・最大を集める（2本）。
+
+        チームは問わない（FA 権は選手のキャリア通算）。在籍の契約は1本、記録のある最初の年は1本で、
+        選手の数に比例しない。
+        """
+        spans: dict[tuple[int, int], tuple[date, date]] = {}
+        for lines in (orm_models.GameBattingLine.objects, orm_models.GamePitchingLine.objects):
+            rows = (
+                lines.filter(
+                    world_condition("game__home_team__league", self._scope),
+                    player_id__in=player_ids,
+                    game__year__lte=year,
+                )
+                .values("player_id", "game__year")
+                .annotate(first=Min("game__played_on"), last=Max("game__played_on"))
+                .order_by()
+            )
+            for row in rows:
+                key = (row["player_id"], row["game__year"])
+                known = spans.get(key)
+                spans[key] = (
+                    min(row["first"], known[0]) if known else row["first"],
+                    max(row["last"], known[1]) if known else row["last"],
+                )
+        stints = [
+            PlayerContractStint(
+                player_id=stint.player_id,
+                from_year=stint.from_year,
+                to_year=stint.to_year,
+                contract=_contract_facts(stint),
+            )
+            for stint in stints_in(self._scope).filter(player_id__in=player_ids, from_year__lte=year)
+        ]
+        declarations = [
+            DeclarationFact(player_id=row.player_id, year=row.year, kind=FreeAgencyKind.from_label(row.kind))
+            for row in orm_models.PlayerFreeAgentDeclaration.objects.filter(
+                player_id__in=player_ids, year__lte=year
+            ).order_by("player_id", "year")
+        ]
+        recorded = games_in(self._scope).filter(recorded_games_filter()).order_by().aggregate(first=Min("year"))
+        return ServiceHistory(
+            spans=[
+                PlayerYearSpan(player_id=player_id, year=span_year, first_on=first, last_on=last)
+                for (player_id, span_year), (first, last) in spans.items()
+            ],
+            stints=stints,
+            declarations=declarations,
+            records_from_year=recorded["first"],
+        )
+
     def load(self, team_id: int, year: int) -> TeamAnalysisFacts:
         # 在籍の期間の意味は Stint.covers と同じ（`period_covering` がその SQL 側の写し）
-        stints = (
+        # 同じ選手の在籍が複数ある年は背番号の小さい方（`JerseyNumber.sort_key`）を採る。背番号は文字列の列で、
+        # SQL では背番号順に並べられないので Python で並べる
+        stints = sorted(
             stints_in(self._scope)
             .filter(period_covering(year), team_id=team_id)
-            .select_related("player")
-            .order_by("number", "id")
+            .select_related("player", "team__league")
+            .order_by("id"),
+            key=lambda s: (JerseyNumber(s.number).sort_key, s.id),
         )
         roster: list[AnalysisRosterRow] = []
+        registered_limit: int | None = None
         seen: set[int] = set()
         for stint in stints:
             if stint.player_id in seen:
                 continue
             seen.add(stint.player_id)
             player = stint.player
+            registered_limit = stint.team.league.registered_player_limit
             roster.append(
                 AnalysisRosterRow(
                     player_id=player.id,
                     name=player.name,
-                    number=stint.number,
+                    contract=_contract_facts(stint),
                     position=Position.from_label(player.position),
                     birth_date=player.birth_date,
                     throws=Handedness.from_label(player.throws),
                     bats=Handedness.from_label(player.bats),
                     is_foreign_player=player.is_foreign_player,
+                    debut_year=player.debut_year,
+                    high_school=player.high_school,
+                    university=player.university,
+                    corporate_team=player.corporate_team,
                 )
             )
         player_ids = list(seen)
         if not player_ids:
-            return TeamAnalysisFacts(roster=[], fielder_usage=[], pitcher_usage=[])
+            return TeamAnalysisFacts(roster=[], fielder_usage=[], pitcher_usage=[], moves=[], related_stints=[])
 
         # 野手: 明細の行がチームを持つので、そのチームの出場だけを数える。
         # スタメンの意味は GameBatting.is_starter（交代の順が0）と同じ
@@ -1007,6 +1181,7 @@ class DjangoTeamAnalysisQuery:
             .annotate(games=Count("id"), starts=Count("id", filter=Q(appearance_order__lte=1)))
             .order_by()
         )
+        moves, related, declarations = self._moves(team_id, year)
         return TeamAnalysisFacts(
             roster=roster,
             fielder_usage=[
@@ -1022,4 +1197,8 @@ class DjangoTeamAnalysisQuery:
                 PitcherUsage(player_id=row["player_id"], games=row["games"], starts=row["starts"])
                 for row in pitcher_rows
             ],
+            moves=moves,
+            related_stints=related,
+            declarations=declarations,
+            registered_limit=registered_limit,
         )

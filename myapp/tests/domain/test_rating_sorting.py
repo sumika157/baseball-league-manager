@@ -9,14 +9,14 @@ from myapp.domain.value_objects import InningsPitched, JerseyNumber, PitchingLin
 
 
 def _batter(number: int, ratings: BatterRatings | None) -> services.RatedBatter:
-    player = Player(name=f"野手{number}", number=JerseyNumber(number), position=Position.INFIELDER, id=number)
+    player = Player(name=f"野手{number}", number=JerseyNumber(str(number)), position=Position.INFIELDER, id=number)
     return services.RatedBatter(player, ratings)
 
 
 def _pitcher(number: int, ratings: PitcherRatings | None, outs: int = 27) -> services.RatedPitcher:
     player = Player(
         name=f"投手{number}",
-        number=JerseyNumber(number),
+        number=JerseyNumber(str(number)),
         position=Position.PITCHER,
         id=number,
         pitching=PitchingLine(innings=InningsPitched(outs=outs)),
@@ -25,7 +25,8 @@ def _pitcher(number: int, ratings: PitcherRatings | None, outs: int = 27) -> ser
 
 
 def _numbers(rated) -> list[int]:
-    return [item.player.number.value for item in rated]
+    """背番号の並び（数値の並びのキー。00 は -1）。"""
+    return [item.player.number.sort_key for item in rated]
 
 
 class RatingEmphasisTest(TestCase):

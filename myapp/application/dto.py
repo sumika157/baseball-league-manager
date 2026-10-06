@@ -10,14 +10,21 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date
 
+from ..domain.entities import jersey_number_in
 from ..domain.pennant.club_plan import PlanSection
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.season import SeasonPhase
+from ..domain.services.free_agency import SERVICE_DAYS_PER_SEASON
+from ..domain.services.roster_analysis import NEUTRAL_CATEGORY, ColorCategory
 from ..domain.simulation.ratings import BatterRatings, PitcherRatings, RatingEmphasis
 from ..domain.value_objects import (
+    AcquisitionRoute,
     BattingLine,
+    ContractStatus,
     FieldingPosition,
+    FreeAgencyKind,
     Handedness,
+    JerseyNumber,
     PitchingLine,
     Position,
     Profile,
@@ -35,7 +42,7 @@ class ActivePlayerStats:
 
     player_id: int
     name: str
-    number: int
+    number: str
     position: Position
     team_id: int
     team_name: str
@@ -47,6 +54,8 @@ class ActivePlayerStats:
     profile: Profile = field(default_factory=Profile)
     # その範囲で主将だったか（球団の一覧のときだけ読む。それ以外は False）
     is_captain: bool = False
+    # その範囲（在籍中なら今、年を渡せばその年）で育成契約だったか。一覧の「育成」の印の出典
+    is_developmental: bool = False
 
 
 @dataclass(frozen=True)
@@ -103,7 +112,7 @@ class PlayerIndexEntry:
     """
 
     name: str
-    number: int
+    number: str
     team_id: int
     career_batting_average: float
     career_earned_run_average: float
@@ -115,7 +124,7 @@ class GameEditPlayer:
 
     id: int
     name: str
-    number: int
+    number: str
     position: str
     is_pitcher: bool
 
@@ -221,7 +230,7 @@ class GamePlayerRow:
 
     player_id: int
     player_name: str
-    number: int
+    number: str
     team_id: int
     team_name: str
     # 打撃
@@ -314,7 +323,7 @@ class GameFieldingRow:
 
     player_id: int
     player_name: str
-    number: int
+    number: str
     team_id: int
     position_label: str
     putouts: int = 0
@@ -564,10 +573,12 @@ class CareerRow:
 
     team_id: int
     team_name: str
-    number: int
+    number: str
     from_year: int
     to_year: int | None
     is_current: bool
+    # 入団の経路。不明は空文字
+    acquired_via_label: str = ""
 
     @property
     def period(self) -> str:
@@ -650,7 +661,7 @@ class PlayerSearchRow:
     team_id: int | None
     team_name: str
     league_name: str
-    number: int | None
+    number: str | None
     is_active: bool
 
 
@@ -975,7 +986,7 @@ class BatterRow:
 
     id: int
     name: str
-    number: int
+    number: str
     position: str
     at_bats: int
     hits: int
@@ -993,6 +1004,8 @@ class BatterRow:
     # リーグ平均を100とした指数。得点環境の違うリーグ・シーズンでも比べられる
     ops_plus: float = 0.0
     is_captain: bool = False
+    # 今の契約区分が育成か。選手名の横の印に使う
+    is_developmental: bool = False
     is_foreign_player: bool = False
     throws_bats: str = ""
     height_cm: int | None = None
@@ -1006,7 +1019,7 @@ class PitcherRow:
 
     id: int
     name: str
-    number: int
+    number: str
     position: str
     innings_pitched: str
     wins: int
@@ -1028,11 +1041,23 @@ class PitcherRow:
     home_runs_allowed: int = 0
     hit_by_pitch_allowed: int = 0
     is_captain: bool = False
+    # 今の契約区分が育成か。選手名の横の印に使う
+    is_developmental: bool = False
     is_foreign_player: bool = False
     throws_bats: str = ""
     height_cm: int | None = None
     weight_kg: int | None = None
     age: int | None = None
+
+
+@dataclass(frozen=True)
+class FreeAgentDeclarationRow:
+    """FA 宣言の1行。結果（残留・移籍）は在籍から導いた値で、保存したものではない。"""
+
+    year: int
+    kind_label: str
+    outcome_label: str
+    is_moved: bool
 
 
 @dataclass(frozen=True)
@@ -1042,7 +1067,7 @@ class PlayerDetail:
     id: int
     team_id: int
     name: str
-    number: int
+    number: str
     position: str
     is_pitcher: bool
     # 打撃
@@ -1087,6 +1112,8 @@ class PlayerDetail:
     hold_points: int = 0
     starts: int = 0
     is_captain: bool = False
+    # 今の契約区分が育成か。選手名の横の印に使う
+    is_developmental: bool = False
     # 打席の記録から導く項目。打者の三振は投手の strikeouts（奪三振）と別の事実なので名前を分ける
     runs: int = 0
     stolen_bases: int = 0
@@ -1096,6 +1123,8 @@ class PlayerDetail:
     strikeouts_batting: int = 0
     double_plays: int = 0
     runs_allowed: int = 0
+    # FA 宣言（新しい年が先）。編集画面の追加・削除と個人ページの表示に使う
+    fa_declarations: list[FreeAgentDeclarationRow] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -1723,12 +1752,14 @@ class RatingsRow:
     """球団の能力の表の1行。能力がまだ無い選手は cells が空（画面では「—」）。"""
 
     id: int
-    number: int
+    number: str
     name: str
     position: str
     is_foreign_player: bool
     age: int | None
     cells: tuple[RatingCell, ...]
+    # 育成契約か（一覧の「育成」の印）
+    is_developmental: bool = False
     # 野手: 打率・OPS。投手: 防御率（average の位置）・投球回
     batting_average: float = 0.0
     ops: float = 0.0
@@ -1937,17 +1968,75 @@ class PlayerRatingsHistory:
 
 
 @dataclass(frozen=True)
+class ContractFacts:
+    """在籍の契約の事実。その年の区分・背番号を導く材料を、在籍の値のまま持つ。
+
+    number は最新の背番号（昇格後）。年ごとの値はドメインの `ContractStatus.in_year`・
+    `jersey_number_in` で導く（ここに判定を書かない）。
+    """
+
+    number: str
+    signed_as: ContractStatus
+    promoted_year: int | None
+    number_before_promotion: str | None
+
+    def contract_in(self, year: int) -> ContractStatus:
+        return ContractStatus.in_year(self.signed_as, self.promoted_year, year)
+
+    def number_in(self, year: int) -> str:
+        before = None if self.number_before_promotion is None else JerseyNumber(self.number_before_promotion)
+        return jersey_number_in(JerseyNumber(self.number), self.promoted_year, before, year).value
+
+
+@dataclass(frozen=True)
 class AnalysisRosterRow:
     """戦力分析の材料。その年に在籍していた選手1人。生年月日と利きは値のまま持つ。"""
 
     player_id: int
     name: str
-    number: int
+    contract: ContractFacts
     position: Position
     birth_date: date | None
     throws: Handedness | None
     bats: Handedness | None
     is_foreign_player: bool
+    # FA 取得の見込み（学歴の区分と入団年）の材料
+    debut_year: int | None = None
+    high_school: str = ""
+    university: str = ""
+    corporate_team: str = ""
+
+
+@dataclass(frozen=True)
+class PlayerYearSpan:
+    """選手のその年の初出場日と最終出場日（打撃・投球の明細の試合日。どのチームでの出場も含む）。"""
+
+    player_id: int
+    year: int
+    first_on: date
+    last_on: date
+
+
+@dataclass(frozen=True)
+class PlayerContractStint:
+    """選手の在籍1件の契約の事実（どのチームの在籍も含む）。育成だった年を導く材料。"""
+
+    player_id: int
+    from_year: int
+    to_year: int | None
+    contract: ContractFacts
+
+
+@dataclass(frozen=True)
+class ServiceHistory:
+    """FA 取得の見込みの材料。在籍選手の、表示年までの年ごとの出場の幅と在籍の契約。"""
+
+    spans: list[PlayerYearSpan]
+    stints: list[PlayerContractStint]
+    # 在籍選手の FA 宣言（表示年まで）。宣言の翌年から数え直す（再取得）ために使う
+    declarations: list[DeclarationFact]
+    # 試合の記録がある最初の年（これより前の年は数えられない）。記録が無ければ None
+    records_from_year: int | None = None
 
 
 @dataclass(frozen=True)
@@ -1970,12 +2059,59 @@ class PitcherUsage:
 
 
 @dataclass(frozen=True)
+class MoveStintRow:
+    """入退団の材料。そのチームで加入年か退団年がその年の在籍1件と、その選手の登録。"""
+
+    stint_id: int
+    team_id: int
+    player_id: int
+    name: str
+    contract: ContractFacts
+    position: Position
+    from_year: int
+    to_year: int | None
+    throws: Handedness | None = None
+    bats: Handedness | None = None
+    # 入団の経路。None は不明
+    acquired_via: AcquisitionRoute | None = None
+
+
+@dataclass(frozen=True)
+class DeclarationFact:
+    """入退団の判定に使う、選手の FA 宣言1件。結果（残留・移籍）は持たず、在籍から導く。"""
+
+    player_id: int
+    year: int
+    kind: FreeAgencyKind
+
+
+@dataclass(frozen=True)
+class RelatedStint:
+    """入退団の判定に使う、選手の在籍1件（他のチームを含む）。チーム名は前所属・移籍先の表示用。"""
+
+    stint_id: int
+    player_id: int
+    team_id: int
+    team_name: str
+    from_year: int
+    to_year: int | None
+    # 入団の経路。FA の移籍先かどうかの判定に使う
+    acquired_via: AcquisitionRoute | None = None
+
+
+@dataclass(frozen=True)
 class TeamAnalysisFacts:
     """戦力分析の材料一式。参照クエリが SQL で集めた事実で、区分けはアプリケーション層が行う。"""
 
     roster: list[AnalysisRosterRow]
     fielder_usage: list[FielderUsage]
     pitcher_usage: list[PitcherUsage]
+    moves: list[MoveStintRow]
+    related_stints: list[RelatedStint]
+    # 入退団の対象の選手の FA 宣言（退団の表で「FA で移籍」を導く）
+    declarations: list[DeclarationFact] = field(default_factory=list)
+    # リーグの支配下の上限。None は無制限（在籍が1人もいないときは読まないので None）
+    registered_limit: int | None = None
 
 
 @dataclass(frozen=True)
@@ -2005,12 +2141,15 @@ class DepthPlayer:
 
     player_id: int
     name: str
-    number: int
+    number: str
     age: int | None
     is_foreign_player: bool
     games: int
     starts: int
     position_label: str = ""
+    tone: ColorCategory = NEUTRAL_CATEGORY
+    # その年に育成の選手か
+    is_developmental: bool = False
 
 
 @dataclass(frozen=True)
@@ -2024,6 +2163,14 @@ class DepthCell:
     def count(self) -> int:
         return len(self.players)
 
+    @property
+    def developmental_count(self) -> int:
+        return sum(1 for player in self.players if player.is_developmental)
+
+    @property
+    def registered_count(self) -> int:
+        return self.count - self.developmental_count
+
 
 @dataclass(frozen=True)
 class DepthRow:
@@ -2035,6 +2182,14 @@ class DepthRow:
     @property
     def count(self) -> int:
         return sum(cell.count for cell in self.cells)
+
+    @property
+    def registered_count(self) -> int:
+        return sum(cell.registered_count for cell in self.cells)
+
+    @property
+    def developmental_count(self) -> int:
+        return sum(cell.developmental_count for cell in self.cells)
 
 
 @dataclass(frozen=True)
@@ -2048,6 +2203,14 @@ class DepthTable:
     def count(self) -> int:
         return sum(row.count for row in self.rows)
 
+    @property
+    def registered_count(self) -> int:
+        return sum(row.registered_count for row in self.rows)
+
+    @property
+    def developmental_count(self) -> int:
+        return sum(row.developmental_count for row in self.rows)
+
 
 @dataclass(frozen=True)
 class UsagePlayer:
@@ -2055,9 +2218,26 @@ class UsagePlayer:
 
     player_id: int
     name: str
-    number: int
+    number: str
     starts: int
     games: int
+    tone: ColorCategory = NEUTRAL_CATEGORY
+
+
+@dataclass(frozen=True)
+class ColorLegendItem:
+    """色分けの凡例1項目。区分と、いま画面に出ている選手の人数。"""
+
+    category: ColorCategory
+    count: int
+
+
+@dataclass(frozen=True)
+class ColorOption:
+    """色分けの軸の選択肢。"""
+
+    key: str
+    label: str
 
 
 @dataclass(frozen=True)
@@ -2085,6 +2265,45 @@ class AgeBandRow:
 
 
 @dataclass(frozen=True)
+class MoveRow:
+    """入退団の表の1行。kind_label は区分、other_team_name は移籍のときの前所属（加入）か移籍先（退団）。"""
+
+    player_id: int
+    name: str
+    number: str
+    position_label: str
+    kind_label: str
+    other_team_name: str = ""
+    tone: ColorCategory = NEUTRAL_CATEGORY
+    is_developmental: bool = False
+    # 加入の表の入団の経路。不明は空文字
+    acquired_via_label: str = ""
+    # 退団の表で、その年に FA を宣言して別球団へ移った選手の印（「国内FA」「海外FA」）。それ以外は空文字
+    fa_label: str = ""
+
+
+@dataclass(frozen=True)
+class FaRow:
+    """FA 取得タブの1行。表示年の在籍選手1人。"""
+
+    player_id: int
+    name: str
+    number: str
+    education_label: str
+    debut_year: int | None
+    # 数えたシーズン数と持ち越しの日数。入団年が分からないときは None
+    seasons: int | None
+    remainder_days: int
+    includes_estimate: bool
+    domestic_label: str
+    overseas_label: str
+    is_domestic_acquired: bool = False
+    is_overseas_acquired: bool = False
+    tone: ColorCategory = NEUTRAL_CATEGORY
+    is_developmental: bool = False
+
+
+@dataclass(frozen=True)
 class TeamAnalysis:
     """戦力分析ページの中身。"""
 
@@ -2102,6 +2321,26 @@ class TeamAnalysis:
     average_age_fielders: float | None
     average_age_all: float | None
     usage_boxes: list[UsageBox]
+    color: str
+    color_options: list[ColorOption]
+    legend: list[ColorLegendItem]
+    joiners: list[MoveRow]
+    leavers: list[MoveRow]
+    # リーグの支配下の上限（None は無制限）。チーム全体の支配下・育成の人数は下の property
+    registered_limit: int | None = None
+    # FA 取得タブの行（タブが FA のときだけ作る）。records_from_year は試合の記録がある最初の年
+    fa_rows: list[FaRow] = field(default_factory=list)
+    records_from_year: int | None = None
+    # 1シーズンと数える登録日数（ドメインの出典 SERVICE_DAYS_PER_SEASON）。説明文に出す
+    service_days_per_season: int = SERVICE_DAYS_PER_SEASON
+
+    @property
+    def registered_count(self) -> int:
+        return self.pitchers.registered_count + self.fielders.registered_count
+
+    @property
+    def developmental_count(self) -> int:
+        return self.pitchers.developmental_count + self.fielders.developmental_count
 
 
 # --- 編成画面の選手の詳細（#102） ---

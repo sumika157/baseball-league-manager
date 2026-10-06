@@ -47,7 +47,7 @@ class Member:
     team_id: int
     position: Position
     profile: Profile
-    number: int
+    number: str
     joined_year: int
     ratings: PlayerRatings
 
@@ -84,7 +84,7 @@ def make_population(seed: int = 1) -> list[Member]:
                     team_id=team_id,
                     position=position,
                     profile=profile,
-                    number=number,
+                    number=str(number),
                     joined_year=profile.debut_year,
                     ratings=PlayerRatings(player_id=player_id, year=START_YEAR, ratings=ratings),
                 )

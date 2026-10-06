@@ -11,7 +11,7 @@ from django.db import transaction
 from myapp.domain.exceptions import AlreadyClosed, SeasonNotFinished
 from myapp.domain.pennant.schedule import AdvanceTarget
 from myapp.domain.pennant.world import WorldScope
-from myapp.domain.value_objects import JerseyNumber, Position
+from myapp.domain.value_objects import JerseyNumber, Position, RosterLimits
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoTeamRepository
 from myapp.presentation.views import build_pennant_offseason_service, build_pennant_season_service
@@ -76,7 +76,9 @@ class CloseRaceTest(ClosedSeasonCase):
         def add_a_player():
             repository = DjangoTeamRepository(WorldScope.pennant(self.world_a))
             team = repository.find_all_with_roster()[0]
-            team.add_player("途中加入", JerseyNumber(99), Position.PITCHER, from_year=YEAR)
+            team.add_player(
+                "途中加入", JerseyNumber("99"), Position.PITCHER, from_year=YEAR, limits=RosterLimits.UNLIMITED
+            )
             repository.save(team)
 
         service = self._service_with_rival(add_a_player)

@@ -20,7 +20,7 @@ from myapp.domain.pennant.ratings import PlayerRatings
 from myapp.domain.pennant.retirement import MAX_PLAYING_AGE, ROOKIE_FACTOR, PlayingTime, retirement_chance
 from myapp.domain.simulation.randomness import game_uniform
 from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings
-from myapp.domain.value_objects import JerseyNumber, Position, Profile
+from myapp.domain.value_objects import JerseyNumber, Position, Profile, RosterLimits
 
 YEAR = 2027
 START_YEAR = 2026
@@ -39,7 +39,7 @@ def player(
         player_id=player_id,
         position=position,
         profile=Profile(birth_date=born, is_foreign_player=foreign, back_name=f"NAME{player_id}"),
-        number=player_id,
+        number=str(player_id),
         joined_year=2020,
         ratings=PlayerRatings(player_id, YEAR, rating) if ratings else None,
         playing_time=PlayingTime(plate_appearances=400),
@@ -68,7 +68,9 @@ class EstimatedBirthDateTest(unittest.TestCase):
 
     def test_fork_fills_the_birth_date_without_touching_the_source(self) -> None:
         source = Team(name="元", league_id=1, id=1)
-        original = source.add_player("田中太郎", JerseyNumber(1), Position.PITCHER, from_year=2020)
+        original = source.add_player(
+            "田中太郎", JerseyNumber("1"), Position.PITCHER, from_year=2020, limits=RosterLimits.UNLIMITED
+        )
         original.profile = Profile(debut_year=2020, throws=None)
         target = Team(name="先", league_id=2, id=2)
         ((_, copy),) = fork_roster(source, target, start_year=2026)

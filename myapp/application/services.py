@@ -13,11 +13,14 @@ from datetime import date
 from django.db import transaction
 
 from ..domain import services as domain_services
-from ..domain.entities import Game, Player, Stint, Team
+from ..domain.entities import Game, Player, Team
 from ..domain.exceptions import TeamNotFound
 from ..domain.repositories import GameRepository, LeagueRepository, TeamRepository
 from ..domain.value_objects import (
+    AcquisitionRoute,
+    ContractStatus,
     FieldingPosition,
+    FreeAgencyOutcome,
     JerseyNumber,
     PitchingLine,
     Position,
@@ -32,6 +35,7 @@ from .dto import (
     CareerRow,
     Dashboard,
     DashboardLeague,
+    FreeAgentDeclarationRow,
     GameDetail,
     GameEditData,
     GameEditPlayer,
@@ -86,6 +90,11 @@ def _saved_id(value: int | None) -> int:
     """
     assert value is not None, "リポジトリから読んだ集約は保存済み"
     return value
+
+
+def _is_developmental(team: Team, player: Player) -> bool:
+    """このチームで今、育成契約の選手か。画面の「育成」バッジの出典。"""
+    return team.contract_of(player) is ContractStatus.DEVELOPMENTAL
 
 
 # ランキングの値を画面の書式に直す関数（_as_average など）
@@ -372,20 +381,27 @@ class TeamApplicationService:
                 return team.name
         raise TeamNotFound(f"チームが見つかりません（id={team_id}）。")
 
-    def _roster(self, team_id: int, year: int | None) -> tuple[list[ActivePlayerStats], list[Player], set[int]]:
+    def _roster(
+        self, team_id: int, year: int | None
+    ) -> tuple[list[ActivePlayerStats], list[Player], set[int], set[int]]:
         """球団の選手の一覧の材料。参照クエリから直接読み、集約（`Team`）を組み立てない。
 
         `year` が None なら在籍中の選手の通算成績、年を渡せばその年に在籍した選手のその年の成績。
-        戻り値は (読んだ行, 一覧に渡す選手, 主将の選手 id)。
+        戻り値は (読んだ行, 一覧に渡す選手, 主将の選手 id, 育成の選手 id)。
         """
         rows = self._player_stats_query.list_roster(year=year, team_id=team_id, with_profile=True)
-        return rows, [stats_player(row) for row in rows], {row.player_id for row in rows if row.is_captain}
+        return (
+            rows,
+            [stats_player(row) for row in rows],
+            {row.player_id for row in rows if row.is_captain},
+            {row.player_id for row in rows if row.is_developmental},
+        )
 
     def list_batters(
         self, team_id: int, *, sort: str | None = None, descending: bool | None = None, year: int | None = None
     ) -> Listing:
         """球団の野手の成績の一覧。`year` を渡すとその年の成績（ペナントの「今季」）、省くと通算。"""
-        rows, players, captain_ids = self._roster(team_id, year)
+        rows, players, captain_ids, developmental_ids = self._roster(team_id, year)
         batters = [p for p in players if not p.is_pitcher]
         ordered, key, desc = domain_services.sort_batters(
             batters, sort, descending, default_key=domain_services.DEFAULT_ROSTER_SORT
@@ -394,7 +410,13 @@ class TeamApplicationService:
         today = self._today()
         return Listing(
             rows=[
-                self._to_batter_row(p, is_captain=p.id in captain_ids, league_context=context, today=today)
+                self._to_batter_row(
+                    p,
+                    is_captain=p.id in captain_ids,
+                    is_developmental=p.id in developmental_ids,
+                    league_context=context,
+                    today=today,
+                )
                 for p in ordered
             ],
             sort=key,
@@ -405,7 +427,7 @@ class TeamApplicationService:
         self, team_id: int, *, sort: str | None = None, descending: bool | None = None, year: int | None = None
     ) -> Listing:
         """球団の投手の成績の一覧。`year` の意味は `list_batters` と同じ。"""
-        rows, players, captain_ids = self._roster(team_id, year)
+        rows, players, captain_ids, developmental_ids = self._roster(team_id, year)
         pitchers = [p for p in players if p.is_pitcher]
         ordered, key, desc = domain_services.sort_pitchers(
             pitchers, sort, descending, default_key=domain_services.DEFAULT_ROSTER_SORT
@@ -414,7 +436,13 @@ class TeamApplicationService:
         today = self._today()
         return Listing(
             rows=[
-                self._to_pitcher_row(p, is_captain=p.id in captain_ids, league_context=context, today=today)
+                self._to_pitcher_row(
+                    p,
+                    is_captain=p.id in captain_ids,
+                    is_developmental=p.id in developmental_ids,
+                    league_context=context,
+                    today=today,
+                )
                 for p in ordered
             ],
             sort=key,
@@ -1100,6 +1128,7 @@ class TeamApplicationService:
                     from_year=s.from_year,
                     to_year=s.to_year,
                     is_current=s.is_current,
+                    acquired_via_label=s.acquired_via.label if s.acquired_via is not None else "",
                 )
                 for s in player.career
             ],
@@ -1222,7 +1251,10 @@ class TeamApplicationService:
                     position=player.position.label,
                     is_pitcher=player.is_pitcher,
                 )
-                for player in sorted(team.active_players, key=lambda p: p.number.value)
+                for player in sorted(team.active_players, key=lambda p: p.number.sort_key)
+                # 育成選手は試合に出られないので候補に出さない（保存で弾かれるだけの導線になる）。
+                # ただし既にこの試合に出ている選手は残す（過去のデータで、外すと打順・打席の表示が壊れる）
+                if player.id in slots or team.contract_in(player, game.season.year) is not ContractStatus.DEVELOPMENTAL
             ]
             rosters.append(
                 GameEditRoster(
@@ -1287,18 +1319,33 @@ class TeamApplicationService:
 
     # --- 更新系 ---
 
-    def register_player(self, team_id: int, name: str, number: int, position_label: str) -> Player:
-        """新しい選手をロスターに加える。"""
+    def register_player(
+        self,
+        team_id: int,
+        name: str,
+        number: str,
+        position_label: str,
+        contract_label: str = ContractStatus.REGISTERED.value,
+        acquired_via_label: str | None = None,
+    ) -> Player:
+        """新しい選手をロスターに加える。契約区分は既定で支配下。入団の経路は既定で不明。"""
         team = self._teams.find_by_id(team_id)
+        contract = ContractStatus.from_label(contract_label)
+        acquired_via = AcquisitionRoute.from_label(acquired_via_label) if acquired_via_label else None
+        league = self._leagues.find_by_id(_saved_id(team.league_id))
+        # 支配下の上限は集約（add_player）が検査する
         player = team.add_player(
             name=name,
             number=JerseyNumber(number),
             position=Position.from_label(position_label),
+            contract=contract,
+            acquired_via=acquired_via,
+            limits=league.roster_limits,
         )
         self._teams.save(team)
         return player
 
-    def update_player(self, team_id: int, player_id: int, *, name: str, number: int, position_label: str) -> Player:
+    def update_player(self, team_id: int, player_id: int, *, name: str, number: str, position_label: str) -> Player:
         """選手の基本情報を更新する。
 
         成績は試合から集計するため、ここでは扱わない。
@@ -1328,13 +1375,21 @@ class TeamApplicationService:
         *,
         from_team_id: int,
         to_team_id: int,
-        number: int,
+        number: str,
         year: int | None = None,
+        contract_label: str | None = None,
+        acquired_via_label: str | None = None,
     ) -> None:
         """選手を移籍させる。元の在籍を閉じ、移籍先で新しい在籍を開く。
 
+        入団の経路（移籍先の在籍に付く）は既定で不明。FA を指定するときは、加入年の前年の
+        FA 宣言が先に要る（オフの FA 移籍は、宣言の翌年を加入年として記録する）。
+
         成績は選手に紐づくため移籍しても失われない。経歴として
         「いつどのチームに居たか」が残る。
+
+        移籍先での契約区分は、指定が無ければ移籍元での今の区分を引き継ぐ
+        （育成選手は育成のまま移る）。背番号は新しい区分に合うものにする。
 
         検査がすべて終わってから保存する。途中で拒否された場合に、元チームだけ
         退団済みで移籍先には入らない、という中途半端な状態を残さないため。
@@ -1343,24 +1398,24 @@ class TeamApplicationService:
 
         source = self._teams.find_by_id(from_team_id)
         player = source.find_player(player_id)
+        contract = (
+            ContractStatus.from_label(contract_label)
+            if contract_label is not None
+            else source.contract_of(player) or ContractStatus.REGISTERED
+        )
         source.retire_player(player, season)
 
         destination = self._teams.find_by_id(to_team_id)
-        destination._ensure_number_is_available(JerseyNumber(number))
-        player.career.append(
-            Stint(
-                team_id=to_team_id,
-                team_name=destination.name,
-                number=JerseyNumber(number),
-                from_year=season,
-            )
-        )
-        player.number = JerseyNumber(number)
-        player.is_active = True
-        destination.players.append(player)
-
         league = self._leagues.find_by_id(_saved_id(destination.league_id))
-        destination.ensure_foreign_player_quota(league.foreign_player_roster_limit)
+        # 背番号・区分・支配下の上限・経路と FA 宣言・外国人枠の検査は、移籍先の集約が行う
+        destination.accept_transfer(
+            player,
+            JerseyNumber(number),
+            season,
+            contract,
+            AcquisitionRoute.from_label(acquired_via_label) if acquired_via_label else None,
+            limits=league.roster_limits,
+        )
 
         self._teams.save(source)
         self._teams.save(destination)
@@ -1512,6 +1567,7 @@ class TeamApplicationService:
         player: Player,
         *,
         is_captain: bool = False,
+        is_developmental: bool = False,
         league_context: _LeagueContext = _EMPTY_LEAGUE_CONTEXT,
         today: date,
     ) -> BatterRow:
@@ -1538,6 +1594,7 @@ class TeamApplicationService:
             slugging_percentage=line.slugging_percentage,
             ops_plus=line.ops_plus(league_context.average_ops),
             is_captain=is_captain,
+            is_developmental=is_developmental,
             is_foreign_player=profile.is_foreign_player,
             throws_bats=profile.throws_bats,
             height_cm=profile.height_cm,
@@ -1550,6 +1607,7 @@ class TeamApplicationService:
         player: Player,
         *,
         is_captain: bool = False,
+        is_developmental: bool = False,
         league_context: _LeagueContext = _EMPTY_LEAGUE_CONTEXT,
         today: date,
     ) -> PitcherRow:
@@ -1578,6 +1636,7 @@ class TeamApplicationService:
             home_runs_allowed=line.home_runs_allowed,
             hit_by_pitch_allowed=line.hit_by_pitch_allowed,
             is_captain=is_captain,
+            is_developmental=is_developmental,
             is_foreign_player=profile.is_foreign_player,
             throws_bats=profile.throws_bats,
             height_cm=profile.height_cm,
@@ -1601,6 +1660,7 @@ class TeamApplicationService:
             position=player.position.label,
             is_pitcher=player.is_pitcher,
             is_captain=team.current_captain is player,
+            is_developmental=_is_developmental(team, player),
             at_bats=batting.at_bats,
             singles=batting.singles,
             plate_appearances=batting.plate_appearances,
@@ -1645,4 +1705,14 @@ class TeamApplicationService:
             strikeouts_batting=batting.strikeouts,
             double_plays=batting.double_plays,
             runs_allowed=pitching.runs_allowed,
+            fa_declarations=[
+                FreeAgentDeclarationRow(
+                    year=declaration.year,
+                    kind_label=declaration.kind.label,
+                    outcome_label=outcome.value,
+                    is_moved=outcome is FreeAgencyOutcome.MOVED,
+                )
+                for declaration in sorted(player.fa_declarations, key=lambda d: -d.year)
+                for outcome in [player.outcome_of(declaration)]
+            ],
         )

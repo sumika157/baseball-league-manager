@@ -12,10 +12,14 @@ from django.db import models
 
 from ..domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings
 from ..domain.value_objects import (
+    DEFAULT_REGISTERED_PLAYER_LIMIT,
+    AcquisitionRoute,
     AdvanceReason,
     Base,
+    ContractStatus,
     ErrorKind,
     FieldingPosition,
+    FreeAgencyKind,
     Handedness,
     PlateAppearanceResult,
     Position,
@@ -24,6 +28,11 @@ from ..domain.value_objects import (
 
 # 守備位置の選択肢はドメインの Position を唯一の出典とする。
 POSITION_CHOICES = [(position.value, position.value) for position in Position]
+# 契約区分（支配下/育成）の選択肢もドメインの ContractStatus が唯一の出典
+CONTRACT_STATUS_CHOICES = [(status.value, status.value) for status in ContractStatus]
+# 入団の経路・FA 宣言の種別の選択肢もドメインの値オブジェクトが唯一の出典
+ACQUISITION_ROUTE_CHOICES = [(route.value, route.value) for route in AcquisitionRoute]
+FREE_AGENCY_KIND_CHOICES = [(kind.value, kind.value) for kind in FreeAgencyKind]
 # 試合で就いた守備位置。登録位置（Position）とは別の概念
 FIELDING_POSITION_CHOICES = [(p.value, p.value) for p in FieldingPosition]
 # 打席まわりの選択肢も同じくドメインの値オブジェクトが出典。ここに文字列を
@@ -103,6 +112,13 @@ class League(models.Model):
         default=3,
         verbose_name="外国人選手出場枠",
         help_text="1試合に出場できる外国人選手の上限人数。空欄なら無制限。",
+    )
+    registered_player_limit = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        default=DEFAULT_REGISTERED_PLAYER_LIMIT,
+        verbose_name="支配下選手登録枠",
+        help_text="登録できる支配下選手の上限人数（育成は数えません）。空欄なら無制限。",
     )
 
     class Meta:
@@ -246,7 +262,9 @@ class PlayerStint(models.Model):
 
     player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="stints", verbose_name="選手")
     team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="stints", verbose_name="チーム")
-    number = models.IntegerField(verbose_name="背番号")
+    number = models.CharField(
+        max_length=3, verbose_name="背番号", help_text="0・00・1〜999。「0」と「00」は別の番号です。"
+    )
     from_year = models.IntegerField(verbose_name="加入年")
     to_year = models.IntegerField(
         null=True,
@@ -254,11 +272,43 @@ class PlayerStint(models.Model):
         verbose_name="退団年",
         help_text="空欄なら現在も在籍しています。",
     )
+    signed_as = models.CharField(
+        max_length=10,
+        choices=CONTRACT_STATUS_CHOICES,
+        default=ContractStatus.REGISTERED.value,
+        verbose_name="加入時の契約区分",
+        help_text="支配下または育成。育成の背番号は3桁（100以上）、支配下は00・0〜99です。",
+    )
+    promoted_year = models.IntegerField(
+        null=True,
+        blank=True,
+        verbose_name="支配下登録年",
+        help_text="育成から支配下に上がった年。育成で加入し、まだ上がっていなければ空欄。",
+    )
+    number_before_promotion = models.CharField(
+        max_length=3,
+        null=True,
+        blank=True,
+        verbose_name="昇格前の背番号",
+        help_text="育成から支配下に上がる前の背番号（3桁・100以上）。支配下登録年を入れたときは必須です。",
+    )
+    acquired_via = models.CharField(
+        max_length=20,
+        choices=ACQUISITION_ROUTE_CHOICES,
+        null=True,
+        blank=True,
+        verbose_name="入団の経路",
+        help_text=(
+            "この在籍にどう加わったか。空欄は不明です（推測では埋めません）。"
+            "育成ドラフトは育成、ドラフトは支配下で加入した在籍だけ選べます。"
+            "FA は、加入年の前年の FA 宣言が必要です（オフの FA 移籍は宣言の翌年に加入として記録します）。"
+        ),
+    )
 
     class Meta:
         verbose_name = "在籍"
         verbose_name_plural = "在籍"
-        ordering = ["-from_year", "number"]
+        ordering = ["-from_year", "id"]
         constraints = [
             # 同じチームに同じ年から二重に加入することはない
             models.UniqueConstraint(fields=["player", "team", "from_year"], name="unique_player_team_from"),
@@ -267,6 +317,37 @@ class PlayerStint(models.Model):
     def __str__(self) -> str:
         end = self.to_year or "現在"
         return f"{self.player.name} / {self.team.name} ({self.from_year}〜{end})"
+
+
+class PlayerFreeAgentDeclaration(models.Model):
+    """FA 宣言。選手がある年に国内か海外かで FA を宣言した記録。
+
+    宣言の結果（残留か移籍か）は持たない。在籍から導けるため、持つと食い違いうる。
+    """
+
+    player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="fa_declarations", verbose_name="選手")
+    year = models.IntegerField(
+        verbose_name="宣言した年", help_text="宣言した年に、どこかの球団に在籍している必要があります。"
+    )
+    kind = models.CharField(
+        max_length=10,
+        choices=FREE_AGENCY_KIND_CHOICES,
+        default=FreeAgencyKind.DOMESTIC.value,
+        verbose_name="種別",
+        help_text="国内 FA か海外 FA か。残留したか移籍したかは在籍から導くので入力しません。",
+    )
+
+    class Meta:
+        verbose_name = "FA 宣言"
+        verbose_name_plural = "FA 宣言"
+        ordering = ["-year"]
+        constraints = [
+            # 同じ年に宣言できるのは1回だけ
+            models.UniqueConstraint(fields=["player", "year"], name="unique_fa_declaration_player_year"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.player.name} / {self.year}年 {self.kind}FA"
 
 
 class Captaincy(models.Model):

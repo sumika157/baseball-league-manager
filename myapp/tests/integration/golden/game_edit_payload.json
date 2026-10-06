@@ -17,91 +17,91 @@
         {
           "id": "ホーム先発",
           "name": "ホーム先発",
-          "number": 11,
+          "number": "11",
           "position": "投手",
           "is_pitcher": true
         },
         {
           "id": "ホーム1",
           "name": "ホーム1",
-          "number": 31,
+          "number": "31",
           "position": "内野手",
           "is_pitcher": false
         },
         {
           "id": "ホーム2",
           "name": "ホーム2",
-          "number": 32,
+          "number": "32",
           "position": "内野手",
           "is_pitcher": false
         },
         {
           "id": "ホーム3",
           "name": "ホーム3",
-          "number": 33,
+          "number": "33",
           "position": "内野手",
           "is_pitcher": false
         },
         {
           "id": "ホーム4",
           "name": "ホーム4",
-          "number": 34,
+          "number": "34",
           "position": "内野手",
           "is_pitcher": false
         },
         {
           "id": "ホーム5",
           "name": "ホーム5",
-          "number": 35,
+          "number": "35",
           "position": "内野手",
           "is_pitcher": false
         },
         {
           "id": "ホーム6",
           "name": "ホーム6",
-          "number": 36,
+          "number": "36",
           "position": "内野手",
           "is_pitcher": false
         },
         {
           "id": "ホーム7",
           "name": "ホーム7",
-          "number": 37,
+          "number": "37",
           "position": "内野手",
           "is_pitcher": false
         },
         {
           "id": "ホーム8",
           "name": "ホーム8",
-          "number": 38,
+          "number": "38",
           "position": "内野手",
           "is_pitcher": false
         },
         {
           "id": "ホーム9",
           "name": "ホーム9",
-          "number": 39,
+          "number": "39",
           "position": "内野手",
           "is_pitcher": false
         },
         {
           "id": "ホーム代打",
           "name": "ホーム代打",
-          "number": 77,
+          "number": "77",
           "position": "内野手",
           "is_pitcher": false
         },
         {
           "id": "ホーム守備固め",
           "name": "ホーム守備固め",
-          "number": 78,
+          "number": "78",
           "position": "捕手",
           "is_pitcher": false
         },
         {
           "id": "ホーム救援",
           "name": "ホーム救援",
-          "number": 79,
+          "number": "79",
           "position": "投手",
           "is_pitcher": true
         }
@@ -225,70 +225,70 @@
         {
           "id": "ビジター先発",
           "name": "ビジター先発",
-          "number": 12,
+          "number": "12",
           "position": "投手",
           "is_pitcher": true
         },
         {
           "id": "ビジター1",
           "name": "ビジター1",
-          "number": 51,
+          "number": "51",
           "position": "内野手",
           "is_pitcher": false
         },
         {
           "id": "ビジター2",
           "name": "ビジター2",
-          "number": 52,
+          "number": "52",
           "position": "内野手",
           "is_pitcher": false
         },
         {
           "id": "ビジター3",
           "name": "ビジター3",
-          "number": 53,
+          "number": "53",
           "position": "内野手",
           "is_pitcher": false
         },
         {
           "id": "ビジター4",
           "name": "ビジター4",
-          "number": 54,
+          "number": "54",
           "position": "内野手",
           "is_pitcher": false
         },
         {
           "id": "ビジター5",
           "name": "ビジター5",
-          "number": 55,
+          "number": "55",
           "position": "内野手",
           "is_pitcher": false
         },
         {
           "id": "ビジター6",
           "name": "ビジター6",
-          "number": 56,
+          "number": "56",
           "position": "内野手",
           "is_pitcher": false
         },
         {
           "id": "ビジター7",
           "name": "ビジター7",
-          "number": 57,
+          "number": "57",
           "position": "内野手",
           "is_pitcher": false
         },
         {
           "id": "ビジター8",
           "name": "ビジター8",
-          "number": 58,
+          "number": "58",
           "position": "内野手",
           "is_pitcher": false
         },
         {
           "id": "ビジター9",
           "name": "ビジター9",
-          "number": 59,
+          "number": "59",
           "position": "内野手",
           "is_pitcher": false
         }

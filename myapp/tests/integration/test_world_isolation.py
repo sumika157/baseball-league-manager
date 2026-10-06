@@ -509,6 +509,7 @@ CLASSIFICATION: dict[str, tuple[str, str | None]] = {
     "Captaincy": (LEAGUE, "team__league__world"),
     "Player": (PLAYER, "stints__team__league__world"),
     "PennantPlayerRatings": (PLAYER, "player__stints__team__league__world"),
+    "PlayerFreeAgentDeclaration": (PLAYER, "player__stints__team__league__world"),
     "PennantFixture": (LEAGUE, "home_team__league__world"),
     "PennantClubPlan": (LEAGUE, "team__league__world"),
     "PennantClubPlanEntry": (LEAGUE, "plan__team__league__world"),

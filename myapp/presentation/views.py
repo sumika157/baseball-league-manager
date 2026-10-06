@@ -44,6 +44,7 @@ from ..application.pennant_season import PennantSeasonService
 from ..application.pennant_view import PennantWorldViewService
 from ..application.pennant_world import PennantWorldService, WorldRepositories
 from ..application.queries import SimulationContextQuery
+from ..application.roster import RosterService
 from ..application.services import TeamApplicationService
 from ..application.team_analysis import TeamAnalysisService
 from ..domain.exceptions import (
@@ -65,8 +66,10 @@ from ..domain.pennant.world import WorldScope
 from ..domain.value_objects import (
     AdvanceReason,
     Base,
+    ContractStatus,
     ErrorKind,
     FieldingPosition,
+    FreeAgencyKind,
     PlateAppearanceResult,
     Position,
 )
@@ -278,6 +281,20 @@ def build_team_analysis_service() -> TeamAnalysisService:
     return TeamAnalysisService(
         team_list_query=DjangoTeamListQuery(scope),
         analysis_query=DjangoTeamAnalysisQuery(scope),
+    )
+
+
+def build_roster_service() -> RosterService:
+    """契約区分（昇格）と FA 宣言のサービスを組み立てる。
+
+    `build_service()` と同じく**組み立てはここだけ**にする。呼ぶ側ごとに
+    一部の依存だけを渡さず、必ずここを通す。実データの範囲に固定する
+    （管理画面の操作で、ペナントの世界の球団には触れない）。
+    """
+    scope = WorldScope.real()
+    return RosterService(
+        teams=DjangoTeamRepository(scope),
+        leagues=DjangoLeagueRepository(scope),
     )
 
 
@@ -972,6 +989,7 @@ def player_list(request, team_id, world_id=None):
                     name=form.cleaned_data["name"],
                     number=form.cleaned_data["number"],
                     position_label=form.cleaned_data["position"],
+                    contract_label=form.cleaned_data["contract"],
                 )
             except DomainError as error:
                 messages.error(request, str(error))
@@ -1020,6 +1038,7 @@ def player_list(request, team_id, world_id=None):
             "pos_mode": pos_mode,
             "form": form,
             "positions": Position.labels(),
+            "contracts": ContractStatus.labels(),
             "current_sort": current_sort,
             "current_descending": current_descending,
             "months": months,
@@ -1453,6 +1472,22 @@ def player_edit(request, team_id, player_id):
                 messages.success(request, f"{detail.name} 選手を主将に指名しました。")
             return redirect(reverse("player_edit", args=[team_id, player_id]))
 
+        if "promote" in request.POST:
+            # 支配下登録は新しい背番号が要るので、フォームの欄を自分で読む。表記の検証はドメインが行う
+            new_number = request.POST.get("promote_number", "").strip()
+            try:
+                build_roster_service().promote_player(team_id, player_id, new_number)
+            except DomainError as error:
+                messages.error(request, str(error))
+            else:
+                messages.success(request, f"{detail.name} 選手を支配下登録にしました（背番号 {new_number}）。")
+            return redirect(reverse("player_edit", args=[team_id, player_id]))
+
+        if "declare_fa" in request.POST or "remove_fa" in request.POST:
+            # FA 宣言の追加・取り消しも、フォームの検証を通さず押されたボタンで判断する
+            _handle_free_agency(request, team_id, player_id, detail.name)
+            return redirect(reverse("player_edit", args=[team_id, player_id]))
+
         if "remove_captain" in request.POST:
             service.remove_captain(team_id, player_id)
             messages.success(request, f"{detail.name} 選手の主将を解任しました。")
@@ -1485,8 +1520,29 @@ def player_edit(request, team_id, player_id):
         {
             "player": detail,
             "positions": Position.labels(),
+            # FA 宣言の入力。種別の選択肢はドメインの FreeAgencyKind が出典
+            "fa_kinds": FreeAgencyKind.labels(),
+            "current_year": date.today().year,
         },
     )
+
+
+def _handle_free_agency(request, team_id, player_id, player_name) -> None:
+    """選手の編集画面の FA 宣言の追加・取り消し。結果はメッセージで知らせる。"""
+    roster = build_roster_service()
+    try:
+        if "remove_fa" in request.POST:
+            year = int(request.POST.get("remove_fa", ""))
+            roster.remove_free_agency_declaration(team_id, player_id, year)
+            messages.success(request, f"{player_name} 選手の{year}年の FA 宣言を取り消しました。")
+        else:
+            year = int(request.POST.get("fa_year", ""))
+            roster.declare_free_agency(team_id, player_id, year, request.POST.get("fa_kind", ""))
+            messages.success(request, f"{player_name} 選手の{year}年の FA 宣言を記録しました。")
+    except ValueError:
+        messages.error(request, "FA を宣言した年を数値で入力してください。")
+    except DomainError as error:
+        messages.error(request, str(error))
 
 
 def _first_error(form) -> str:
@@ -1524,7 +1580,7 @@ def analysis_index(request):
     if team_id is None:
         return render(request, "myapp/team_analysis.html", {"analysis": None})
 
-    query = {name: request.GET[name] for name in ("year", "tab") if request.GET.get(name)}
+    query = {name: request.GET[name] for name in ("year", "tab", "color") if request.GET.get(name)}
     url = reverse("team_analysis", args=[team_id])
     return redirect(f"{url}?{urlencode(query)}" if query else url)
 
@@ -1534,7 +1590,7 @@ def team_analysis(request, team_id):
     """球団×年度の戦力分析。閲覧だけで、書き込みの導線は無い。"""
     try:
         analysis = build_team_analysis_service().get_analysis(
-            team_id, year=_int_param(request, "year"), tab=request.GET.get("tab")
+            team_id, year=_int_param(request, "year"), tab=request.GET.get("tab"), color=request.GET.get("color")
         )
     except TeamNotFound:
         raise Http404("チームが見つかりません。") from None

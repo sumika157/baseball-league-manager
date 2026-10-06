@@ -47,7 +47,7 @@ from ..domain.repositories import (
     TeamRepository,
     WorldRepository,
 )
-from ..domain.value_objects import JerseyNumber
+from ..domain.value_objects import JerseyNumber, RosterLimits
 from .dto import SeasonClosed, SeasonCloseOption
 from .pennant_season import AtomicBlock
 from .queries import SeasonPlayingTimeQuery, SimulationContextQuery
@@ -274,8 +274,14 @@ class PennantOffseasonService:
                 team.retire_player(player, year=year)
             added: list[Player] = []
             for draftee in draftees:
+                # 新人は支配下で入る。支配下の上限（リーグの登録枠）はここでは検査しない（締める処理を
+                # 名簿の都合で止めない。人数は `draftee_count` が抑える）。外国人枠は下で検査する
                 player = team.add_player(
-                    draftee.name, JerseyNumber(draftee.number), draftee.position, from_year=next_year
+                    draftee.name,
+                    JerseyNumber(draftee.number),
+                    draftee.position,
+                    from_year=next_year,
+                    limits=RosterLimits.UNLIMITED,
                 )
                 player.profile = draftee.profile
                 added.append(player)

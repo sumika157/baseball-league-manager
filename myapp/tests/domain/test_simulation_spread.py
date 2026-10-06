@@ -205,7 +205,7 @@ class EstimatedPopulationIsSpreadTest(TestCase):
 
 class CareerRecordTest(TestCase):
     def _player(self, **kwargs) -> Player:
-        defaults = {"name": "選手", "number": JerseyNumber(7), "position": Position.INFIELDER, "id": 41}
+        defaults = {"name": "選手", "number": JerseyNumber("7"), "position": Position.INFIELDER, "id": 41}
         return Player(**{**defaults, **kwargs})
 
     def test_the_record_is_made_from_the_source_player(self):

@@ -39,7 +39,7 @@ export interface GamePayload {
 export interface PlayerPayload {
   id: number;
   name: string;
-  number: number;
+  number: string;
   position: string;
   is_pitcher: boolean;
 }

@@ -145,6 +145,7 @@ class PennantRatingsViewService:
         """
         rows = self._stats.list_roster(year=stats_year, team_id=team_id, with_profile=True)
         members = [stats_player(row) for row in rows if row.position.is_pitcher == pitchers]
+        developmental = frozenset(row.player_id for row in rows if row.is_developmental)
         year = self.current_year()
         by_player = {
             item.player_id: item
@@ -152,13 +153,14 @@ class PennantRatingsViewService:
         }
         today = self._today()
         if pitchers:
-            return self._pitcher_table(members, by_player, today, year, sort, descending)
-        return self._batter_table(members, by_player, today, year, sort, descending)
+            return self._pitcher_table(members, by_player, developmental, today, year, sort, descending)
+        return self._batter_table(members, by_player, developmental, today, year, sort, descending)
 
     def _batter_table(
         self,
         members: list[Player],
         by_player: Mapping[int, PlayerRatings],
+        developmental: frozenset[int],
         today: date,
         year: int,
         sort: str | None,
@@ -171,6 +173,7 @@ class PennantRatingsViewService:
                 item.player,
                 today,
                 item.ratings,
+                is_developmental=item.player.id in developmental,
                 batting_average=item.player.batting.batting_average,
                 ops=item.player.batting.ops,
             )
@@ -182,6 +185,7 @@ class PennantRatingsViewService:
         self,
         members: list[Player],
         by_player: Mapping[int, PlayerRatings],
+        developmental: frozenset[int],
         today: date,
         year: int,
         sort: str | None,
@@ -194,6 +198,7 @@ class PennantRatingsViewService:
                 item.player,
                 today,
                 item.ratings,
+                is_developmental=item.player.id in developmental,
                 earned_run_average=item.player.pitching.earned_run_average,
                 innings_pitched=str(item.player.pitching.innings),
             )
@@ -218,6 +223,7 @@ def _row(
     today: date,
     ratings: BatterRatings | PitcherRatings | None,
     *,
+    is_developmental: bool = False,
     batting_average: float = 0.0,
     ops: float = 0.0,
     earned_run_average: float = 0.0,
@@ -231,6 +237,7 @@ def _row(
         position=player.position.label,
         is_foreign_player=player.profile.is_foreign_player,
         age=player.profile.age_or_none(today),
+        is_developmental=is_developmental,
         cells=rating_cells(ratings) if ratings is not None else (),
         batting_average=batting_average,
         ops=ops,

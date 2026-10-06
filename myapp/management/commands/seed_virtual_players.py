@@ -132,7 +132,7 @@ class Command(BaseCommand):
                 diff = to_add - sum(add_by_position.values())
                 add_by_position[Position.INFIELDER] += diff
 
-                available_numbers = [n for n in range(1, 100) if n not in used_numbers]
+                available_numbers = [n for n in ["00", "0", *map(str, range(1, 100))] if n not in used_numbers]
                 rng.shuffle(available_numbers)
 
                 new_players = []
@@ -166,7 +166,7 @@ class Command(BaseCommand):
                         height_cm, weight_kg = generator.physique(rng, position)
 
                         if not available_numbers:
-                            available_numbers = [n for n in range(100, 1000) if n not in used_numbers]
+                            available_numbers = [n for n in map(str, range(100, 1000)) if n not in used_numbers]
                             rng.shuffle(available_numbers)
                         number = available_numbers.pop()
                         used_numbers.add(number)

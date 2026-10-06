@@ -7,7 +7,7 @@ table は DepthTable、row_head は左端の見出し。
     <thead>
       <tr>
         <th>{{ row_head }}</th>
-        <th class="text-end">人数</th>
+        <th class="text-end depth-count">人数</th>
         {% for column in table.columns %}<th>{{ column }}</th>{% endfor %}
       </tr>
     </thead>
@@ -15,16 +15,21 @@ table は DepthTable、row_head は左端の見出し。
       {% for row in table.rows %}
       <tr>
         <th scope="row">{{ row.label }}</th>
-        <td class="text-end tabular-nums">{{ row.count }}</td>
+        <td class="text-end tabular-nums depth-count">
+          {{ row.count }}
+          <div class="stat-muted depth-count-breakdown">支配下 {{ row.registered_count }}・育成 {{ row.developmental_count }}</div>
+        </td>
         {% for cell in row.cells %}
         <td>
           {% if cell.players %}
             <div class="stat-muted tabular-nums mb-1">{{ cell.count }}名</div>
             <ul class="depth-list list-unstyled mb-0">
               {% for player in cell.players %}
-              <li>
+              <li class="player-tone player-tone-{{ player.tone.key }}">
                 <span class="jersey-number">{{ player.number }}</span>
                 <a href="{% url 'player_detail' analysis.team_id player.player_id %}" class="player-name">{{ player.name }}</a>
+                {% if player.tone.mark %}<span class="tone-mark">{{ player.tone.mark }}</span>{% endif %}
+                {% if player.is_developmental %}<span class="badge bg-primary">育成</span>{% endif %}
                 {% if player.is_foreign_player %}<span class="badge bg-info text-dark">外国人</span>{% endif %}
                 <span class="stat-muted tabular-nums">
                   {% if player.age is not None %}{{ player.age }}歳{% endif %}
@@ -43,5 +48,15 @@ table は DepthTable、row_head は左端の見出し。
       </tr>
       {% endfor %}
     </tbody>
+    <tfoot>
+      <tr class="fw-semibold">
+        <th scope="row">合計</th>
+        <td class="text-end tabular-nums depth-count">
+          {{ table.count }}
+          <div class="stat-muted depth-count-breakdown">支配下 {{ table.registered_count }}・育成 {{ table.developmental_count }}</div>
+        </td>
+        <td colspan="{{ table.columns|length }}"></td>
+      </tr>
+    </tfoot>
   </table>
 </div>

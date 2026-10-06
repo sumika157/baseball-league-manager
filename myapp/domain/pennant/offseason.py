@@ -42,7 +42,8 @@ class OffseasonPlayer:
     player_id: int
     position: Position
     profile: Profile
-    number: int
+    # 背番号の表記（「00」と「0」は別の番号）
+    number: str
     # 現在の在籍の開始年（分岐した選手は一律に開幕年。入団年は entered_year）
     joined_year: int
     # Y の能力。無い選手は翌年の能力も作らない

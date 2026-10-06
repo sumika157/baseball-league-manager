@@ -18,7 +18,7 @@ from myapp.application.pennant_world import PennantWorldService, WorldRepositori
 from myapp.domain.exceptions import InvalidSeason, InvalidWorld, LeagueNotFound, TeamNotFound, WorldNotFound
 from myapp.domain.pennant.world import World, WorldScope
 from myapp.infrastructure import orm_models
-from myapp.infrastructure.queries import DjangoFieldingTotalsQuery
+from myapp.infrastructure.queries import DjangoFieldingTotalsQuery, DjangoSimulationContextQuery
 from myapp.infrastructure.repositories import (
     DjangoLeagueRepository,
     DjangoRatingsRepository,
@@ -30,7 +30,7 @@ from myapp.presentation.views import build_pennant_world_service
 from ..helpers import play_game
 from .base import BaseCase
 from .test_world_isolation import CLASSIFICATION, GAME, LEAGUE, PLAYER
-from .world_case import PENNANT_LEAGUE, PENNANT_TEAM, WorldCase
+from .world_case import PENNANT_LEAGUE, PENNANT_TEAM, YEAR, WorldCase
 
 START = 2030
 REAL = WorldScope.real()
@@ -141,7 +141,7 @@ class ForkTest(BaseCase):
     def test_jersey_numbers_and_positions_are_copied(self):
         stint = orm_models.PlayerStint.objects.get(team=self.copied_team, player__name="投手")
 
-        self.assertEqual(stint.number, 18)
+        self.assertEqual(stint.number, "18")
         self.assertEqual(stint.player.position, "投手")
 
     def test_the_profile_is_copied(self):
@@ -199,7 +199,7 @@ class ForkTest(BaseCase):
         self.assertEqual({t.name for t in teams}, {self.team.name, self.rival.name})
         mine = next(t for t in teams if t.name == self.team.name)
         self.assertEqual(sorted(p.name for p in mine.active_players), ["主将", "投手"])
-        self.assertEqual(sorted(p.number.value for p in mine.active_players), [10, 18])
+        self.assertEqual(sorted(p.number.value for p in mine.active_players), ["10", "18"])
         self.assertTrue(all(p.career[0].from_year == START for p in mine.players))
         self.assertEqual([league.name for league in DjangoLeagueRepository(scope).find_all()], [self.league.name])
 
@@ -216,6 +216,43 @@ class ForkTest(BaseCase):
         other = self._fork(name="別の世界")
 
         self.assertEqual(orm_models.League.objects.filter(world_id=other.world.id, name=self.league.name).count(), 1)
+
+
+class ForkContractTest(BaseCase):
+    """分岐は契約区分（支配下/育成）とリーグの支配下の上限も写す。育成選手はシミュレーションに出ない。"""
+
+    def setUp(self):
+        super().setUp()
+        self.skip_roster_check()
+        self.service.register_player(self.team.id, "支配下", "18", "投手")
+        self.service.register_player(self.team.id, "育成", "120", "投手", contract_label="育成")
+        orm_models.League.objects.filter(id=self.league.id).update(registered_player_limit=65)
+        self.created = build_pennant_world_service().create_world(
+            name="契約", owner_id=None, source_league_ids=[self.league.id], start_year=START, seed=7
+        )
+        self.world_id = self.created.world.id
+
+    def test_the_contract_status_and_the_number_are_copied(self):
+        stint = orm_models.PlayerStint.objects.get(team__league__world_id=self.world_id, player__name="育成")
+
+        self.assertEqual((stint.signed_as, stint.number), ("育成", "120"))
+        self.assertEqual(
+            orm_models.PlayerStint.objects.get(team__league__world_id=self.world_id, player__name="支配下").signed_as,
+            "支配下",
+        )
+
+    def test_the_registered_player_limit_of_the_league_is_copied(self):
+        league = orm_models.League.objects.get(world_id=self.world_id)
+
+        self.assertEqual(league.registered_player_limit, 65)
+
+    def test_a_developmental_player_is_not_a_simulation_candidate(self):
+        """育成選手は試合に出られない（実データのスコアブックと同じ）。1軍の候補にも試合にも入らない。"""
+        teams = DjangoSimulationContextQuery(WorldScope.pennant(self.world_id)).teams()
+
+        names = {player.name for team in teams for player in team.players}
+        self.assertIn("支配下", names)
+        self.assertNotIn("育成", names)
 
 
 class ForkOptionsTest(BaseCase):
@@ -404,6 +441,15 @@ class DeleteWorldTest(WorldCase):
         for name, count in self._rows_in_world().items():
             self.assertEqual(count, 0, f"{name} に世界の行が残っています")
         self.assertFalse(orm_models.PennantWorld.objects.filter(id=self.world_id).exists())
+
+    def test_deleting_removes_the_fa_declarations_of_the_world_players(self):
+        """FA 宣言は選手を指す。選手の行を直接消すので、宣言を先に消していないと外部キーで落ちるか、宣言が残る。"""
+        player_id = self.pennant_players(self.pennant_team)[0]
+        orm_models.PlayerFreeAgentDeclaration.objects.create(player_id=player_id, year=YEAR, kind="国内")
+
+        build_pennant_world_service().delete_world(self.world_id)
+
+        self.assertFalse(orm_models.PlayerFreeAgentDeclaration.objects.filter(player_id=player_id).exists())
 
     def test_deleting_leaves_the_real_data_alone(self):
         before = _real_counts()

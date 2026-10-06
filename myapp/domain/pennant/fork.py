@@ -8,7 +8,7 @@
 独立させるため。
 
 名簿は `Team.add_player()` で作る。背番号の重複は集約が自分で弾くので、
-ここで検査を書き直さない。外国人枠は検査しない（分岐元がすでに超えていても、
+ここで検査を書き直さない。外国人枠と支配下の上限は検査しない（分岐元がすでに超えていても、
 それを写すのが「スナップショット」であって、枠の是正は別の仕事）。
 """
 
@@ -18,7 +18,7 @@ from dataclasses import replace
 from datetime import date
 
 from ..entities import League, Player, Team
-from ..value_objects import Profile
+from ..value_objects import Profile, RosterLimits
 
 # 生年月日の推定（乱数なし）。入団年があれば入団年の22年前、無ければ開幕年の27年前の7月1日
 ESTIMATED_DEBUT_AGE = 22
@@ -49,6 +49,7 @@ def fork_league(source: League, *, display_order: int) -> League:
         name=source.name,
         foreign_player_roster_limit=source.foreign_player_roster_limit,
         foreign_player_game_limit=source.foreign_player_game_limit,
+        registered_player_limit=source.registered_player_limit,
         display_order=display_order,
     )
 
@@ -78,7 +79,17 @@ def fork_roster(source: Team, target: Team, *, start_year: int) -> list[tuple[Pl
         stint = source.current_stint(player)
         if stint is None:
             continue
-        copy = target.add_player(player.name, stint.number, player.position, from_year=start_year)
+        # 契約区分（支配下/育成）は今の区分を写す（育成の3桁の背番号を、支配下として写せない）。
+        # 入団の経路は写さない（写した在籍は開幕年の加入で、分岐元の経路の事実ではない。FA なら宣言も要る）。
+        # 支配下の上限は外国人枠と同じく検査しない（分岐元の状態をそのまま写す）
+        copy = target.add_player(
+            player.name,
+            stint.number,
+            player.position,
+            from_year=start_year,
+            contract=stint.contract_now,
+            limits=RosterLimits.UNLIMITED,
+        )
         copy.profile = with_birth_date(player.profile, start_year)
         copies.append((player, copy))
     return copies

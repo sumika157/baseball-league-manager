@@ -51,7 +51,7 @@ class TransferTest(BaseCase):
         self.assertEqual(stints[0].team_id, self.team.id)
         self.assertEqual(stints[0].to_year, 2026)
         self.assertEqual(stints[1].team_id, self.rival.id)
-        self.assertEqual(stints[1].number, 7)
+        self.assertEqual(stints[1].number, "7")
         self.assertIsNone(stints[1].to_year)
 
     def test_player_appears_on_the_new_roster_only(self):

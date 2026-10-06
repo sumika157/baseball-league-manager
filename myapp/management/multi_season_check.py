@@ -52,7 +52,7 @@ class Member:
     name: str
     position: Position
     profile: Profile
-    number: int
+    number: str
     joined_year: int
     ratings: PlayerRatings
 

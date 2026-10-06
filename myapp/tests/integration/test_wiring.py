@@ -36,6 +36,7 @@ from myapp.application.queries import (
     TeamListQuery,
     WorldSummaryQuery,
 )
+from myapp.application.roster import RosterService
 from myapp.application.services import TeamApplicationService
 from myapp.application.team_analysis import TeamAnalysisService
 from myapp.domain.exceptions import InvalidWorld
@@ -83,6 +84,7 @@ from myapp.presentation.views import (
     build_permission_query,
     build_player_search_query,
     build_recording_service,
+    build_roster_service,
     build_service,
     build_team_analysis_service,
     build_world_view_service,
@@ -200,6 +202,10 @@ class BuildServiceTest(SimpleTestCase):
         """戦力分析のサービスも同じ検査にかける（組み立て口は build_*() 関数だけ）。"""
         self._assert_wired(build_team_analysis_service(), TeamAnalysisService)
 
+    def test_roster_service_dependencies_are_wired(self):
+        """契約区分（昇格）のサービスも同じ検査にかける（組み立て口は build_*() 関数だけ）。"""
+        self._assert_wired(build_roster_service(), RosterService)
+
     def _assert_wired(self, service, cls):
         parameters = [name for name in signature(cls.__init__).parameters if name != "self"]
         self.assertTrue(parameters, "依存が1つも宣言されていません")
@@ -278,6 +284,13 @@ class RealScopeTest(SimpleTestCase):
             with self.subTest(dependency=name):
                 self.assertEqual(getattr(service, name)._scope, REAL)
 
+    def test_build_roster_service_is_fixed_to_the_real_scope(self):
+        """昇格・FA 宣言は実データの管理画面の操作。ペナントの世界の球団には触れない。"""
+        service = build_roster_service()
+        for name in ("_teams", "_leagues"):
+            with self.subTest(dependency=name):
+                self.assertEqual(getattr(service, name)._scope, REAL)
+
     def test_queries_built_for_views_are_fixed_to_the_real_scope(self):
         self.assertEqual(build_permission_query()._scope, REAL)
         self.assertEqual(build_player_search_query()._scope, REAL)
@@ -288,6 +301,7 @@ class RealScopeTest(SimpleTestCase):
             build_service,
             build_recording_service,
             build_team_analysis_service,
+            build_roster_service,
             build_permission_query,
             build_player_search_query,
         ):
