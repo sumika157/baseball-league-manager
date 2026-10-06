@@ -696,7 +696,7 @@ def analysis_index(request):
     if team_id is None:
         return render(request, "myapp/team_analysis.html", {"analysis": None})
 
-    query = {name: request.GET[name] for name in ("year", "tab") if request.GET.get(name)}
+    query = {name: request.GET[name] for name in ("year", "tab", "color") if request.GET.get(name)}
     url = reverse("team_analysis", args=[team_id])
     return redirect(f"{url}?{urlencode(query)}" if query else url)
 
@@ -706,7 +706,7 @@ def team_analysis(request, team_id):
     """球団×年度の戦力分析。閲覧だけで、書き込みの導線は無い。"""
     try:
         analysis = build_team_analysis_service().get_analysis(
-            team_id, year=_int_param(request, "year"), tab=request.GET.get("tab")
+            team_id, year=_int_param(request, "year"), tab=request.GET.get("tab"), color=request.GET.get("color")
         )
     except TeamNotFound:
         raise Http404("チームが見つかりません。") from None

@@ -22,9 +22,10 @@ table は DepthTable、row_head は左端の見出し。
             <div class="stat-muted tabular-nums mb-1">{{ cell.count }}名</div>
             <ul class="depth-list list-unstyled mb-0">
               {% for player in cell.players %}
-              <li>
+              <li class="player-tone player-tone-{{ player.tone.key }}">
                 <span class="jersey-number">{{ player.number }}</span>
                 <a href="{% url 'player_detail' analysis.team_id player.player_id %}" class="player-name">{{ player.name }}</a>
+                {% if player.tone.mark %}<span class="tone-mark">{{ player.tone.mark }}</span>{% endif %}
                 {% if player.is_foreign_player %}<span class="badge bg-info text-dark">外国人</span>{% endif %}
                 <span class="stat-muted tabular-nums">
                   {% if player.age is not None %}{{ player.age }}歳{% endif %}
