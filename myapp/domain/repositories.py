@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import date
 from typing import Protocol, runtime_checkable
 
@@ -28,6 +28,13 @@ class TeamRepository(Protocol):
 
     def find_by_id(self, team_id: int) -> Team:
         """ロスター込みでチームを取得する。存在しなければ TeamNotFound。"""
+        ...
+
+    def roster_signature(self) -> tuple[int, int, int]:
+        """範囲の在籍の目印（行数・現在在籍の人数・最大の id）。加入・退団があれば変わる。
+
+        外で読んだ名簿が、書く前に変わっていないかを確かめるのに使う（クエリ1本）。
+        """
         ...
 
     def find_all(self) -> list[Team]:
@@ -94,6 +101,16 @@ class GameRepository(Protocol):
         （InvalidGame。更新は `save()`）。新しい集約だけが対象なので、打席を読んだかどうか
         （`plate_appearances_loaded`）は見ない。1試合ごとに `save()` するより桁違いに速い
         （1試合あたり約50回の update_or_create を、種類ごとの一括書き込みにする）。
+        """
+        ...
+
+    def prepare_add_all(self, games: Sequence[Game]) -> Callable[[], None]:
+        """`add_all` の書く前の仕事（検査と行の組み立て）だけを済ませ、書き込みの関数を返す。
+
+        書き込みトランザクションの外で呼び、返った関数だけをトランザクションの中で呼ぶ
+        （書き込みロックを持つ時間を、SQL を流す間だけにする）。検査は `add_all` と同じで、
+        通らなければここで例外になり何も書かない。返した関数を呼ばなければ何も書かれない。
+        **返した関数は1回だけ呼ぶ**（呼ぶと試合に id が入る）。失敗したら、`prepare_add_all` からやり直す。
         """
         ...
 

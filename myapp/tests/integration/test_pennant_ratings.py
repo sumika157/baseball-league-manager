@@ -238,6 +238,7 @@ class ForkedRatingsTest(BaseCase):
 
     def setUp(self):
         super().setUp()
+        self.skip_roster_check()
         service = self.service
         self.slugger = service.register_player(self.team.id, "強打者", 3, "外野手")
         self.rookie = service.register_player(self.team.id, "新人", 4, "外野手")
@@ -362,6 +363,7 @@ class SameMaterialTest(BaseCase):
 
     def setUp(self):
         super().setUp()
+        self.skip_roster_check()
         service = self.service
         self.runner = service.register_player(self.team.id, "走者", 5, "外野手")
         self.slugger = service.register_player(self.team.id, "強打者", 3, "外野手")
@@ -433,6 +435,7 @@ class ForkedSpreadTest(BaseCase):
 
     def setUp(self):
         super().setUp()
+        self.skip_roster_check()
         self.names = []
         for index in range(MIN_POPULATION + 5):
             player = self.service.register_player(self.team.id, f"野手{index}", 20 + index, "外野手")
@@ -471,6 +474,7 @@ class ForkedSpreadTest(BaseCase):
 class FieldingTotalsQueryTest(BaseCase):
     def setUp(self):
         super().setUp()
+        self.skip_roster_check()
         self.shortstop = self.service.register_player(self.team.id, "遊撃手", 6, "内野手")
         self.bench = self.service.register_player(self.team.id, "控え", 7, "内野手")
         first = give_batting(self.team, self.rival, self.shortstop.id, BattingLine(at_bats=4), day=1)

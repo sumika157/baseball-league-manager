@@ -1,6 +1,6 @@
 """実データのリーグを分岐して、ペナントの世界（セーブデータ）を作る。
 
-    docker compose exec web python manage.py pennant_create --name "2026年ペナント" --league 1 --league 2 --year 2026
+    docker compose exec web python manage.py pennant_create --name "2026年" --league 1 --league 2 --managed-team 1
 
 写すのはリーグ・球団・選手・**現在の在籍だけ**（加入年は開幕年）。試合と過去の在籍は写さず、
 球場は共有する。実データには何も書かない。作った世界は実データの画面・集計・管理画面に現れない。
@@ -42,9 +42,9 @@ class Command(BaseCommand):
         parser.add_argument(
             "--managed-team",
             type=int,
-            default=None,
+            required=True,
             metavar="ID",
-            help="受け持つ球団。分岐元の実データの球団 id で指す（後で決めてもよい）",
+            help="受け持つ球団。分岐元の実データの球団 id で指す（受け持ちの無い世界は作らない）",
         )
 
     def handle(self, *args: Any, **options: Any) -> None:

@@ -57,6 +57,7 @@ class ForkTest(BaseCase):
 
     def setUp(self):
         super().setUp()
+        self.skip_roster_check()
         self.captain = self.service.register_player(self.team.id, "主将", 10, "内野手")
         self.pitcher = self.service.register_player(self.team.id, "投手", 18, "投手")
         self.retired = self.service.register_player(self.team.id, "退団", 5, "外野手")
@@ -220,6 +221,7 @@ class ForkTest(BaseCase):
 class ForkOptionsTest(BaseCase):
     def setUp(self):
         super().setUp()
+        self.skip_roster_check()
         self.service_ = build_pennant_world_service()
         self.service.register_player(self.team.id, "選手", 1, "内野手")
         self.second_league = orm_models.League.objects.create(name="第二リーグ", display_order=1)
@@ -453,11 +455,15 @@ class DeleteWorldTest(WorldCase):
 class PennantCommandsTest(BaseCase):
     def setUp(self):
         super().setUp()
+        self.skip_roster_check()
         self.service.register_player(self.team.id, "選手", 1, "内野手")
 
     def _create(self, *args):
         out = StringIO()
-        call_command("pennant_create", "--name", "コマンド", "--league", str(self.league.id), *args, stdout=out)
+        managed = [] if "--managed-team" in args else ["--managed-team", str(self.team.id)]
+        call_command(
+            "pennant_create", "--name", "コマンド", "--league", str(self.league.id), *managed, *args, stdout=out
+        )
         return out.getvalue()
 
     def test_pennant_create_makes_a_world_and_reports_it(self):
@@ -482,6 +488,14 @@ class PennantCommandsTest(BaseCase):
         self.assertEqual(world.owner.username, "gm")
         self.assertEqual(world.managed_team.name, self.team.name)
 
+    def test_pennant_create_requires_a_managed_team(self):
+        """受け持ちの無い世界はコマンドでも作らない（画面では作成時に必須。同じにする）。"""
+        with self.assertRaises(CommandError) as raised:
+            call_command("pennant_create", "--name", "x", "--league", str(self.league.id), stdout=StringIO())
+
+        self.assertIn("--managed-team", str(raised.exception))
+        self.assertEqual(orm_models.PennantWorld.objects.count(), 0)
+
     def test_pennant_create_rejects_an_unknown_owner(self):
         with self.assertRaises(CommandError):
             self._create("--owner", "いない人")
@@ -490,7 +504,7 @@ class PennantCommandsTest(BaseCase):
 
     def test_pennant_create_reports_a_domain_error_as_a_command_error(self):
         with self.assertRaises(CommandError) as raised:
-            call_command("pennant_create", "--name", "x", "--league", "9999", stdout=StringIO())
+            call_command("pennant_create", "--name", "x", "--league", "9999", "--managed-team", "1", stdout=StringIO())
 
         self.assertIn("リーグが見つかりません", str(raised.exception))
 

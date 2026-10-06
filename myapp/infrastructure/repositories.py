@@ -10,13 +10,13 @@ ORM モデルとドメインオブジェクトの相互変換（マッピング�
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
 from django.db import models, transaction
-from django.db.models import Count, Min, Prefetch, Q, QuerySet, Sum
+from django.db.models import Count, Max, Min, Prefetch, Q, QuerySet, Sum
 
 from ..domain.entities import (
     Captaincy,
@@ -76,6 +76,7 @@ from .scoping import (
     leagues_in,
     players_in,
     ratings_in,
+    stints_in,
     teams_in,
     world_condition,
 )
@@ -175,6 +176,16 @@ class DjangoTeamRepository:
             raise TeamNotFound(f"チームが見つかりません（id={team_id}）。") from None
 
         return self._to_domain(row, roster=_RosterData.for_players(s.player for s in row.stints.all()))
+
+    def roster_signature(self) -> tuple[int, int, int]:
+        """範囲の在籍の目印（在籍の行数・現在在籍の人数・最大の id）。クエリ1本。
+
+        選手の加入・退団・新しい選手の登録があれば変わる。外で読んだ名簿が、書く前に変わっていないかの確認に使う。
+        """
+        values = stints_in(self._scope).aggregate(
+            total=Count("id"), active=Count("id", filter=Q(to_year__isnull=True)), newest=Max("id")
+        )
+        return (values["total"], values["active"], values["newest"] or 0)
 
     def find_all(self) -> list[Team]:
         rows = teams_in(self._scope).select_related("league").order_by("display_order", "name")
@@ -522,6 +533,133 @@ def _pitching_values(entry: GamePitching) -> dict[str, Any]:
     return values
 
 
+@dataclass
+class _PlateRows:
+    """1試合の打席と、打席に属する進塁・代走・失策の行（まだ保存しない）。
+
+    試合の行や打席の行の主キーが決まる前に組み立てておくため、親の id（`game_id` など）は
+    書く直前に入れる。打席ごとの子の行は `rows` と同じ並びで持つ。
+    """
+
+    entries: list[PlateAppearance]
+    rows: list[orm_models.GamePlateAppearance]
+    advances: list[list[orm_models.GameRunnerAdvance]]
+    substitutions: list[list[orm_models.GameRunnerSubstitution]]
+    errors: list[list[orm_models.GameFieldingError]]
+
+    @classmethod
+    def build(cls, game: Game) -> _PlateRows:
+        entries = list(game.plate_appearances_in_order())
+        return cls(
+            entries=entries,
+            rows=[
+                orm_models.GamePlateAppearance(
+                    sequence=entry.sequence,
+                    inning=entry.inning,
+                    is_bottom=entry.is_bottom,
+                    batter_id=entry.batter_id,
+                    pitcher_id=entry.pitcher_id,
+                    batting_order=entry.batting_order,
+                    slot_sequence=entry.slot_sequence,
+                    result=entry.result.value,
+                    fielded_by=_from_fielded_by(entry.fielded_by),
+                )
+                for entry in entries
+            ],
+            advances=[
+                [
+                    orm_models.GameRunnerAdvance(
+                        runner_id=advance.runner_id,
+                        from_base=advance.from_base.value,
+                        to_base=advance.to_base.value,
+                        reason=advance.reason.value,
+                        error_index=advance.error_index,
+                    )
+                    for advance in entry.advances
+                ]
+                for entry in entries
+            ],
+            substitutions=[
+                [
+                    orm_models.GameRunnerSubstitution(
+                        base=substitution.base.value,
+                        leaving_runner_id=substitution.leaving_runner_id,
+                        entering_runner_id=substitution.entering_runner_id,
+                    )
+                    for substitution in entry.substitutions
+                ]
+                for entry in entries
+            ],
+            errors=[
+                [
+                    orm_models.GameFieldingError(
+                        player_id=error.player_id, position=error.position.value, kind=error.kind.value
+                    )
+                    for error in entry.errors
+                ]
+                for entry in entries
+            ],
+        )
+
+
+@dataclass
+class _NewGame:
+    """新しい試合1つぶんの行（まだ保存しない）。`add_all` の書く前の仕事で組み立てる。"""
+
+    game: Game
+    row: orm_models.Game
+    batting: list[orm_models.GameBattingLine]
+    pitching: list[orm_models.GamePitchingLine]
+    fielding: list[orm_models.GameFieldingLine]
+    innings: list[orm_models.GameInningScore]
+    plate: _PlateRows
+
+    @classmethod
+    def build(cls, game: Game) -> _NewGame:
+        return cls(
+            game=game,
+            row=orm_models.Game(
+                year=game.season.year,
+                played_on=game.played_on,
+                home_team_id=game.home_team_id,
+                away_team_id=game.away_team_id,
+                home_score=game.home_score,
+                away_score=game.away_score,
+            ),
+            batting=[orm_models.GameBattingLine(player_id=e.player_id, **_batting_values(e)) for e in game.batting],
+            pitching=[
+                orm_models.GamePitchingLine(player_id=e.player_id, **_pitching_values(e)) for e in game.pitching
+            ],
+            fielding=[
+                orm_models.GameFieldingLine(player_id=e.player_id, **{f: getattr(e.line, f) for f in _FIELDING_FIELDS})
+                for e in game.fielding
+            ],
+            innings=[
+                orm_models.GameInningScore(inning=inning, is_home=is_home, runs=values[inning - 1])
+                for inning in range(1, game.line_score.innings + 1)
+                for is_home, values in ((False, game.line_score.away), (True, game.line_score.home))
+                if inning <= len(values)
+            ],
+            plate=_PlateRows.build(game),
+        )
+
+
+def _bind_game(rows: Iterable[Any], game_id: int | None) -> None:
+    """組み立て済みの行に、保存で決まった試合の主キーを入れる。"""
+    for row in rows:
+        row.game_id = game_id
+
+
+def _bind_plates(grouped: Sequence[Sequence[Any]], plate_rows: Sequence[Any]) -> list[Any]:
+    """打席ごとの子の行（進塁・代走・失策）に、保存で決まった打席の主キーを入れて、1つの並びにする。"""
+    children: list[Any] = []
+    for plate_row, rows in zip(plate_rows, grouped, strict=True):
+        for child in rows:
+            child.plate_appearance_id = plate_row.pk
+        children.extend(rows)
+    return children
+
+
 # 1回の一括書き込みにまとめる試合数。メモリと、1つの SQL に載せる行数を抑える
 _ADD_ALL_CHUNK = 100
 
@@ -639,9 +777,18 @@ class DjangoGameRepository:
 
         return game
 
-    @transaction.atomic
     def add_all(self, games: Sequence[Game]) -> None:
         """新しい試合を種類ごとの一括書き込みで保存する。検査は `save()` と同じで、書く前に全試合ぶん済ませる。"""
+        with transaction.atomic():
+            self.prepare_add_all(games)()
+
+    def prepare_add_all(self, games: Sequence[Game]) -> Callable[[], None]:
+        """`add_all` の、書く前の仕事（検査と行の組み立て）だけを済ませ、書き込みの関数を返す。
+
+        検査と組み立ては CPU の仕事で、DB に触れない（範囲の確認の読み取りだけ）。呼び手が書き込み
+        トランザクションの外で済ませ、返った関数だけをトランザクションの中で呼べば、書き込みロックを
+        持つのは SQL を流す間だけになる。返す関数を呼ばなければ何も書かれない。
+        """
         for game in games:
             if game.id is not None:
                 raise InvalidGame("保存済みの試合は add_all では書けません（更新は save を使います）。")
@@ -649,61 +796,38 @@ class DjangoGameRepository:
             ensure_lines_match_plate_appearances(game)
         self._ensure_teams_in_scope({team_id for game in games for team_id in (game.home_team_id, game.away_team_id)})
 
-        for start in range(0, len(games), _ADD_ALL_CHUNK):
-            self._insert_new(games[start : start + _ADD_ALL_CHUNK])
+        prepared = [_NewGame.build(game) for game in games]
+
+        def write() -> None:
+            for start in range(0, len(prepared), _ADD_ALL_CHUNK):
+                self._insert_new(prepared[start : start + _ADD_ALL_CHUNK])
+
+        return write
 
     @classmethod
-    def _insert_new(cls, games: Sequence[Game]) -> None:
-        """新しい試合を、試合の行から明細・イニングスコア・打席まで種類ごとに bulk_create する。"""
-        rows = orm_models.Game.objects.bulk_create(
-            [
-                orm_models.Game(
-                    year=game.season.year,
-                    played_on=game.played_on,
-                    home_team_id=game.home_team_id,
-                    away_team_id=game.away_team_id,
-                    home_score=game.home_score,
-                    away_score=game.away_score,
-                )
-                for game in games
-            ]
-        )
+    def _insert_new(cls, items: Sequence[_NewGame]) -> None:
+        """組み立て済みの試合を、試合の行から明細・イニングスコア・打席まで種類ごとに bulk_create する。"""
+        rows = orm_models.Game.objects.bulk_create([item.row for item in items])
         # 主キーを返さない DB（SQLite 3.35 未満）では、行と集約を対応づけられない
         if any(row.pk is None for row in rows):
             raise RuntimeError("bulk_create が主キーを返さない DB には対応していません。")
-        for game, row in zip(games, rows, strict=True):
-            game.id = row.pk
-
         batting_rows: list[orm_models.GameBattingLine] = []
         pitching_rows: list[orm_models.GamePitchingLine] = []
         fielding_rows: list[orm_models.GameFieldingLine] = []
         inning_rows: list[orm_models.GameInningScore] = []
-        for game, row in zip(games, rows, strict=True):
-            batting_rows.extend(
-                orm_models.GameBattingLine(game_id=row.pk, player_id=entry.player_id, **_batting_values(entry))
-                for entry in game.batting
-            )
-            pitching_rows.extend(
-                orm_models.GamePitchingLine(game_id=row.pk, player_id=entry.player_id, **_pitching_values(entry))
-                for entry in game.pitching
-            )
-            fielding_rows.extend(
-                orm_models.GameFieldingLine(
-                    game_id=row.pk, player_id=entry.player_id, **{f: getattr(entry.line, f) for f in _FIELDING_FIELDS}
-                )
-                for entry in game.fielding
-            )
-            inning_rows.extend(
-                orm_models.GameInningScore(game_id=row.pk, inning=inning, is_home=is_home, runs=values[inning - 1])
-                for inning in range(1, game.line_score.innings + 1)
-                for is_home, values in ((False, game.line_score.away), (True, game.line_score.home))
-                if inning <= len(values)
-            )
+        for item, row in zip(items, rows, strict=True):
+            item.game.id = row.pk
+            for lines in (item.batting, item.pitching, item.fielding, item.innings):
+                _bind_game(lines, row.pk)
+            batting_rows.extend(item.batting)
+            pitching_rows.extend(item.pitching)
+            fielding_rows.extend(item.fielding)
+            inning_rows.extend(item.innings)
         orm_models.GameBattingLine.objects.bulk_create(batting_rows)
         orm_models.GamePitchingLine.objects.bulk_create(pitching_rows)
         orm_models.GameFieldingLine.objects.bulk_create(fielding_rows)
         orm_models.GameInningScore.objects.bulk_create(inning_rows)
-        cls._create_plate_appearances(list(zip(games, rows, strict=True)))
+        cls._create_plate_appearances([(item.plate, row) for item, row in zip(items, rows, strict=True)])
 
     def _ensure_teams_in_scope(self, team_ids: set[int]) -> None:
         if teams_in(self._scope).filter(id__in=team_ids).count() != len(team_ids):
@@ -770,33 +894,27 @@ class DjangoGameRepository:
             return
 
         orm_models.GamePlateAppearance.objects.filter(game=row).delete()
-        cls._create_plate_appearances([(game, row)])
+        cls._create_plate_appearances([(_PlateRows.build(game), row)])
 
     @staticmethod
-    def _create_plate_appearances(items: Sequence[tuple[Game, orm_models.Game]]) -> None:
+    def _create_plate_appearances(items: Sequence[tuple[_PlateRows, orm_models.Game]]) -> None:
         """打席・進塁・代走・失策を、試合をまたいで種類ごとに bulk_create する。
 
-        (集約, 保存済みの試合の行) の組を渡す。保存した打席の id は集約の打席に入る。
+        (組み立て済みの打席の行, 保存済みの試合の行) の組を渡す。保存した打席の id は集約の打席に入る。
         """
         entries: list[PlateAppearance] = []
         plate_rows: list[orm_models.GamePlateAppearance] = []
-        for game, row in items:
-            for entry in game.plate_appearances_in_order():
-                entries.append(entry)
-                plate_rows.append(
-                    orm_models.GamePlateAppearance(
-                        game_id=row.pk,
-                        sequence=entry.sequence,
-                        inning=entry.inning,
-                        is_bottom=entry.is_bottom,
-                        batter_id=entry.batter_id,
-                        pitcher_id=entry.pitcher_id,
-                        batting_order=entry.batting_order,
-                        slot_sequence=entry.slot_sequence,
-                        result=entry.result.value,
-                        fielded_by=_from_fielded_by(entry.fielded_by),
-                    )
-                )
+        advance_rows: list[list[orm_models.GameRunnerAdvance]] = []
+        substitution_rows: list[list[orm_models.GameRunnerSubstitution]] = []
+        error_rows: list[list[orm_models.GameFieldingError]] = []
+        for plate, row in items:
+            for plate_row in plate.rows:
+                plate_row.game_id = row.pk
+            entries.extend(plate.entries)
+            plate_rows.extend(plate.rows)
+            advance_rows.extend(plate.advances)
+            substitution_rows.extend(plate.substitutions)
+            error_rows.extend(plate.errors)
         if not plate_rows:
             return
 
@@ -811,44 +929,9 @@ class DjangoGameRepository:
         for entry, plate_row in zip(entries, saved, strict=True):
             entry.id = plate_row.pk
 
-        orm_models.GameRunnerAdvance.objects.bulk_create(
-            [
-                orm_models.GameRunnerAdvance(
-                    plate_appearance_id=plate_row.pk,
-                    runner_id=advance.runner_id,
-                    from_base=advance.from_base.value,
-                    to_base=advance.to_base.value,
-                    reason=advance.reason.value,
-                    error_index=advance.error_index,
-                )
-                for entry, plate_row in zip(entries, saved, strict=True)
-                for advance in entry.advances
-            ]
-        )
-        orm_models.GameRunnerSubstitution.objects.bulk_create(
-            [
-                orm_models.GameRunnerSubstitution(
-                    plate_appearance_id=plate_row.pk,
-                    base=substitution.base.value,
-                    leaving_runner_id=substitution.leaving_runner_id,
-                    entering_runner_id=substitution.entering_runner_id,
-                )
-                for entry, plate_row in zip(entries, saved, strict=True)
-                for substitution in entry.substitutions
-            ]
-        )
-        orm_models.GameFieldingError.objects.bulk_create(
-            [
-                orm_models.GameFieldingError(
-                    plate_appearance_id=plate_row.pk,
-                    player_id=error.player_id,
-                    position=error.position.value,
-                    kind=error.kind.value,
-                )
-                for entry, plate_row in zip(entries, saved, strict=True)
-                for error in entry.errors
-            ]
-        )
+        orm_models.GameRunnerAdvance.objects.bulk_create(_bind_plates(advance_rows, saved))
+        orm_models.GameRunnerSubstitution.objects.bulk_create(_bind_plates(substitution_rows, saved))
+        orm_models.GameFieldingError.objects.bulk_create(_bind_plates(error_rows, saved))
 
     @staticmethod
     def _to_plate_appearances(row: orm_models.Game) -> list[PlateAppearance]:

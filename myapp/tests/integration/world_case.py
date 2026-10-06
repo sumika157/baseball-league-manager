@@ -35,6 +35,7 @@ class WorldCase(BaseCase):
 
     def setUp(self):
         super().setUp()
+        self.skip_roster_check()
         # --- 実データ。各チームに打者9人と投手1人、記録済みの試合を1つ ---
         self.real_batters = register_lineup(self.service, self.team, prefix="実打者", first_number=1)
         self.real_rivals = register_lineup(self.service, self.rival, prefix="実相手", first_number=1)

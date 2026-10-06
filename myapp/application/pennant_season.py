@@ -233,14 +233,20 @@ class PennantSeasonService:
         return total + self._flush(games, consumed), tuple(notices)
 
     def _flush(self, games: list[Game], consumed: list[Fixture]) -> int:
-        """試合を保存し、消化した対戦を消す。同じトランザクションで行う。"""
+        """試合を保存し、消化した対戦を消す。同じトランザクションで行う。
+
+        試合の検査と行の組み立ては**トランザクションの外**で済ませる（CPU の仕事で、書き込みロックを
+        持つ必要が無い。本番の SQLite は書き手が1つで、`BEGIN IMMEDIATE` から他の書き込みを止める）。
+        ロックを持つのは、対戦を消す SQL と行を書く SQL を流す間だけ。
+        """
         if not games:
             return 0
+        write = self._games.prepare_add_all(games)
         with self._atomic():
             # 先に消す。すでに消化された対戦があれば InvalidSchedule で、試合を書かずに止まる
             # （同じ世界を同時に進めて、同じ対戦の試合が2つできるのを防ぐ）
             self._fixtures.remove(consumed)
-            self._games.add_all(games)
+            write()
         return len(games)
 
     def _pools(self, context: SimulationContext, year: int) -> dict[int, ClubRoster]:
