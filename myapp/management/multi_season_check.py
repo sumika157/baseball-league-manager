@@ -114,7 +114,11 @@ def rosters_of(
         if isinstance(rating, PitcherRatings):
             pitchers[member.team_id].append(SimPitcher(member.player_id, member.name, rating, foreign))
         else:
-            batters[member.team_id].append(SimBatter(member.player_id, member.name, member.position, rating, foreign))
+            batters[member.team_id].append(
+                SimBatter(
+                    member.player_id, member.name, member.position, rating, foreign, throws=member.profile.throws
+                )
+            )
     rosters = {}
     leagues: dict[int, list[int]] = {}
     for team_id, team in teams.items():

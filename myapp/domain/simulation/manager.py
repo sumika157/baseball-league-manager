@@ -22,7 +22,7 @@ from datetime import date, timedelta
 
 from ..exceptions import InvalidRoster
 from ..services.decisions import SAVE_LEAD_LIMIT
-from ..value_objects import FieldingPosition, Position
+from ..value_objects import FieldingPosition, Handedness, Position
 from .randomness import GameRandom, normal, weighted_index
 from .ratings import BatterRatings, PitcherRatings
 
@@ -126,6 +126,8 @@ class SimBatter:
     position: Position
     ratings: BatterRatings
     is_foreign: bool = False
+    # 投げる手。AI の守備位置の割り振りが、左投げを捕・二・三・遊に就かせないために見る（不明なら制限しない）
+    throws: Handedness | None = field(kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -304,8 +306,11 @@ def unfilled_slot(batters: Sequence[SimBatter]) -> FieldingPosition | None:
 
 
 def plays_position(batter: SimBatter, position: FieldingPosition) -> bool:
-    """その選手の登録位置が、守備位置に就ける位置か（指名打者の枠は誰でも就ける）。"""
-    return can_play(batter.position, position)
+    """AI の起用で、その選手を守備位置に就かせてよいか。登録位置が就ける位置で、投げる手も合うこと。
+
+    指名打者の枠は誰でも就ける。手動の編成（`can_play`）は投げる手を見ない。
+    """
+    return can_play(batter.position, position) and position.suits_thrower(batter.throws)
 
 
 # --- 1軍登録 ---
@@ -483,6 +488,15 @@ def choose_lineup(batters: Sequence[SimBatter], quota: ForeignQuota) -> list[Lin
     2. 枠が空いたら（外野手が足りないなど）、残りの打撃の良い選手のうち守備力の高い順に空きへ回す。
     3. 指名打者は、残りの最強打者。
     4. 打順は 1・2番が出塁、3番が総合、4・5番が長打、残りは総合の順。
+
+    **左投げは捕・二・三・遊に置かない**（`FieldingPosition.allows_left_handed_thrower`）。
+    - 手順1: 左投げの就ける枠（一塁など）の数を超える左投げは枠の候補から外し、座れる選手だけを座らせる。
+      外れた選手は、残りの選手として手順2・3に回る。
+    - 手順2: 空いた枠に、投げる手の合う選手を守備力の順に当てる。合う選手が足りない枠があれば、
+      外国人の出場枠の数え方を戻して、枠ごとに選び直す（左投げの就けない枠を先に。座れなかった選手に
+      出場枠を使わせない）。
+    - **規則を曲げるのは、出場枠の範囲に投げる手の合う選手がもう1人もいないときだけ**
+      （枠が埋まらないと試合が組めず、ペナントの進行が止まるため）。
     """
     if len(batters) < LINEUP_SIZE:
         raise InvalidRoster(f"打順を組むには野手が{LINEUP_SIZE}人要ります（{len(batters)}人）。")
@@ -505,26 +519,88 @@ def choose_lineup(batters: Sequence[SimBatter], quota: ForeignQuota) -> list[Lin
     chosen: dict[FieldingPosition, SimBatter] = {}
     used: set[int] = set()
     for registered, slots in _CLASS_SLOTS:
-        pool = sorted(
-            (b for b in batters if b.position is registered and b.player_id not in used),
-            key=regular_value,
-            reverse=True,
+        pool = _without_unseatable_lefties(
+            sorted(
+                (b for b in batters if b.position is registered and b.player_id not in used),
+                key=regular_value,
+                reverse=True,
+            ),
+            slots,
         )
         group = take(pool, len(slots))
         used.update(b.player_id for b in group)
-        chosen.update(zip(slots, sorted(group, key=lambda b: -b.ratings.fielding), strict=False))
+        seated, _ = _seat(sorted(group, key=lambda b: -b.ratings.fielding), slots)
+        chosen.update(seated)
 
+    # 登録位置に合う枠で左投げを座らせられなかった分は、空いた枠として下で埋め直す。
+    # 座れなかった選手は枠から外れるだけで、残りの選手（rest）として一塁・指名打者などに回る
+    seated_ids = {b.player_id for b in chosen.values()}
+    used = {player_id for player_id in used if player_id in seated_ids}
     open_slots = [slot for slot in _FILL_PRIORITY if slot not in chosen]
     rest = sorted((b for b in batters if b.player_id not in used), key=lambda b: -b.ratings.batting_value)
+    foreign_before_fill = foreign_left
     extra = take(rest, len(open_slots) + 1)
     if len(extra) < len(open_slots) + 1:
         raise InvalidRoster("外国人の出場枠の範囲では、打順を組める野手が足りません。")
     designated_hitter = extra[0]
     fillers = sorted(extra[1:], key=lambda b: -b.ratings.fielding)
-    chosen.update(zip(open_slots, fillers, strict=True))
+    filled, _ = _seat(fillers, open_slots)
+    if len(filled) < len(open_slots):
+        # 投げる手の合う選手が足りない枠がある（左投げしか残っていない）。外国人の出場枠の数え方を
+        # 戻して、枠ごとに選び直す（座れなかった選手に枠を使わせない）
+        foreign_left = foreign_before_fill
+        pool = list(rest)
+
+        def claim(candidates: list[SimBatter]) -> SimBatter | None:
+            for candidate in candidates:
+                if take([candidate], 1):
+                    pool.remove(candidate)
+                    return candidate
+            return None
+
+        filled = {}
+        for slot in sorted(open_slots, key=lambda s: s.allows_left_handed_thrower):  # 左投げの就けない枠を先に
+            by_fielding = sorted(pool, key=lambda b: -b.ratings.fielding)
+            pick = claim([b for b in by_fielding if slot.suits_thrower(b.throws)]) or claim(by_fielding)
+            if pick is None:
+                raise InvalidRoster("外国人の出場枠の範囲では、打順を組める野手が足りません。")
+            filled[slot] = pick
+        picked_dh = claim(sorted(pool, key=lambda b: -b.ratings.batting_value))
+        if picked_dh is None:
+            raise InvalidRoster("外国人の出場枠の範囲では、打順を組める野手が足りません。")
+        designated_hitter = picked_dh
+    chosen.update(filled)
     chosen[FP.DESIGNATED_HITTER] = designated_hitter
 
     return _batting_order([LineupSlot(batter, position) for position, batter in chosen.items()])
+
+
+def _without_unseatable_lefties(pool: list[SimBatter], slots: Sequence[FieldingPosition]) -> list[SimBatter]:
+    """左投げが就ける枠（`allows_left_handed_thrower`）の数を超える左投げを、候補から外す（並びは保つ）。
+
+    外した選手は枠に入れないだけで、残りの選手として一塁・指名打者などに回る。
+    """
+    capacity = sum(slot.allows_left_handed_thrower for slot in slots)
+    kept: list[SimBatter] = []
+    for batter in pool:
+        if batter.throws is Handedness.LEFT and capacity <= sum(b.throws is Handedness.LEFT for b in kept):
+            continue
+        kept.append(batter)
+    return kept
+
+
+def _seat(
+    players: Sequence[SimBatter], slots: Sequence[FieldingPosition]
+) -> tuple[dict[FieldingPosition, SimBatter], list[SimBatter]]:
+    """枠の順に、残っている選手のうち先頭の（投げる手の合う）選手を座らせる。座れなかった選手も返す。"""
+    remaining = list(players)
+    seated: dict[FieldingPosition, SimBatter] = {}
+    for slot in slots:
+        pick = next((b for b in remaining if slot.suits_thrower(b.throws)), None)
+        if pick is not None:
+            seated[slot] = pick
+            remaining.remove(pick)
+    return seated, remaining
 
 
 def _batting_order(slots: list[LineupSlot]) -> list[LineupSlot]:
@@ -787,6 +863,6 @@ def choose_pinch_hitter(situation: PinchHitSituation) -> PinchHit | None:
         )
         if replacement is not None:
             return PinchHit(candidate, FP.PINCH_HITTER, replacement)
-        if situation.position is not FP.CATCHER:
+        if situation.position is not FP.CATCHER and situation.position.suits_thrower(candidate.throws):
             return PinchHit(candidate, situation.position)  # 守備位置は慣れないが、そのまま守る
     return None

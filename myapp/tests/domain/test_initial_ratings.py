@@ -194,7 +194,9 @@ def _with_estimates(pool: dict[int, ClubRoster], estimated: list[PlayerRatings])
         for hitter in club.batters:
             ratings = by_player[hitter.player_id]
             assert isinstance(ratings, BatterRatings)
-            batters.append(SimBatter(hitter.player_id, hitter.name, hitter.position, ratings, hitter.is_foreign))
+            batters.append(
+                SimBatter(hitter.player_id, hitter.name, hitter.position, ratings, hitter.is_foreign, throws=None)
+            )
         pitchers = []
         for thrower in club.pitchers:
             ratings = by_player[thrower.player_id]

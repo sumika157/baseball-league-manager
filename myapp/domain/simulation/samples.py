@@ -43,6 +43,7 @@ def average_club(team_id: int, name: str | None = None, rating: int = 50) -> Clu
             name=f"{club_name}野手{number}",
             position=position,
             ratings=BatterRatings(rating, rating, rating, rating, rating),
+            throws=None,
         )
         for number, position in enumerate(_BATTER_POSITIONS, start=1)
     )
@@ -88,6 +89,7 @@ def spread_club(
                 name=f"{name}野手{number}",
                 position=position,
                 ratings=ratings,
+                throws=None,
             )
         )
 

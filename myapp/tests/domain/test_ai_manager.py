@@ -48,7 +48,7 @@ TODAY = date(2026, 6, 10)
 
 
 def batter(player_id, position=Position.INFIELDER, *, foreign=False, **ratings) -> SimBatter:
-    return SimBatter(player_id, f"野手{player_id}", position, BatterRatings(**ratings), foreign)
+    return SimBatter(player_id, f"野手{player_id}", position, BatterRatings(**ratings), foreign, throws=None)
 
 
 def pitcher(player_id, *, foreign=False, **ratings) -> SimPitcher:

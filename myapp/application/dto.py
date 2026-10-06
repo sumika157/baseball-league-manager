@@ -1151,6 +1151,8 @@ class SimulationPlayer:
     name: str
     position: Position
     is_foreign: bool
+    # 投げる手。AI の守備位置の割り振りが見る（未設定は None）
+    throws: Handedness | None
 
 
 @dataclass(frozen=True)
