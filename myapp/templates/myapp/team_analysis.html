@@ -26,7 +26,8 @@
 
 <div class="page-head">
   <h1 class="page-title">{{ analysis.team_name }}の戦力分析</h1>
-  <p class="page-subtitle">{{ analysis.year }}年の編成 · 投手 {{ analysis.pitchers.count }}名 · 野手 {{ analysis.fielders.count }}名</p>
+  <p class="page-subtitle">{{ analysis.year }}年の編成 · 投手 {{ analysis.pitchers.count }}名 · 野手 {{ analysis.fielders.count }}名 ·
+    支配下 {{ analysis.registered_count }}{% if analysis.registered_limit is not None %} / {{ analysis.registered_limit }}{% endif %}名 · 育成 {{ analysis.developmental_count }}名</p>
 </div>
 
 {# 球団の切り替え。JS なしで動くよう GET フォームにし、年度・タブ・色分けは引き継ぐ #}
@@ -90,13 +91,14 @@
     投手の数字は「登板数(先発数)」、野手は「主な守備位置 出場数(先発数)」。
     投手かどうかは登録位置で決める。登板・出場はこのチームの試合だけを数える。
   {% endcomment %}
-  <h2 class="h6 mb-2">投手 <span class="text-muted">{{ analysis.pitchers.count }}名</span></h2>
+  <h2 class="h6 mb-2">投手 <span class="text-muted">{{ analysis.pitchers.count }}名（支配下 {{ analysis.pitchers.registered_count }} · 育成 {{ analysis.pitchers.developmental_count }}）</span></h2>
   <p class="page-subtitle mb-2" style="font-size: 0.8125rem;">
     先発は登板のうち半分以上が先発の投手、それ未満が救援。選手名の横は 登板数(先発数)。
+    支配下・育成と背番号は、その年のものです。
   </p>
   {% include "myapp/_depth_table.html" with table=analysis.pitchers row_head="役割" %}
 
-  <h2 class="h6 mb-2 mt-4">野手 <span class="text-muted">{{ analysis.fielders.count }}名</span></h2>
+  <h2 class="h6 mb-2 mt-4">野手 <span class="text-muted">{{ analysis.fielders.count }}名（支配下 {{ analysis.fielders.registered_count }} · 育成 {{ analysis.fielders.developmental_count }}）</span></h2>
   <p class="page-subtitle mb-2" style="font-size: 0.8125rem;">
     区分は先発が最多の守備位置（先発が無ければ出場が最多）で決める。選手名の横は 主な守備位置 出場数(先発数)。
   </p>
@@ -163,7 +165,7 @@
             {% for row in analysis.joiners %}
             <tr>
               <td><span class="jersey-number">{{ row.number }}</span></td>
-              <td class="player-tone player-tone-{{ row.tone.key }}"><a href="{% url 'player_detail' analysis.team_id row.player_id %}" class="player-name">{{ row.name }}</a>{% if row.tone.mark %}<span class="tone-mark">{{ row.tone.mark }}</span>{% endif %}</td>
+              <td class="player-tone player-tone-{{ row.tone.key }}"><a href="{% url 'player_detail' analysis.team_id row.player_id %}" class="player-name">{{ row.name }}</a>{% if row.tone.mark %}<span class="tone-mark">{{ row.tone.mark }}</span>{% endif %}{% if row.is_developmental %} <span class="badge bg-primary">育成</span>{% endif %}</td>
               <td>{{ row.position_label }}</td>
               <td>{{ row.kind_label }}</td>
               <td>{{ row.other_team_name|default:"—" }}</td>
@@ -192,7 +194,7 @@
             {% for row in analysis.leavers %}
             <tr>
               <td><span class="jersey-number">{{ row.number }}</span></td>
-              <td class="player-tone player-tone-{{ row.tone.key }}"><a href="{% url 'player_detail' analysis.team_id row.player_id %}" class="player-name">{{ row.name }}</a>{% if row.tone.mark %}<span class="tone-mark">{{ row.tone.mark }}</span>{% endif %}</td>
+              <td class="player-tone player-tone-{{ row.tone.key }}"><a href="{% url 'player_detail' analysis.team_id row.player_id %}" class="player-name">{{ row.name }}</a>{% if row.tone.mark %}<span class="tone-mark">{{ row.tone.mark }}</span>{% endif %}{% if row.is_developmental %} <span class="badge bg-primary">育成</span>{% endif %}</td>
               <td>{{ row.position_label }}</td>
               <td>{{ row.kind_label }}</td>
               <td>{{ row.other_team_name|default:"—" }}</td>

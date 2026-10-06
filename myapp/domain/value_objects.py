@@ -109,6 +109,18 @@ class ContractStatus(Enum):
             )
 
     @classmethod
+    def in_year(cls, signed_as: ContractStatus, promoted_year: int | None, year: int) -> ContractStatus:
+        """その年の契約区分。**出典はここだけ**（`Stint.contract_in` も参照クエリの材料もこれを呼ぶ）。
+
+        支配下で加入していれば支配下。育成で加入し、その年までに昇格していれば支配下、それ以外は育成。
+        """
+        if signed_as is cls.REGISTERED:
+            return cls.REGISTERED
+        if promoted_year is not None and promoted_year <= year:
+            return cls.REGISTERED
+        return cls.DEVELOPMENTAL
+
+    @classmethod
     def from_label(cls, label: str) -> ContractStatus:
         for status in cls:
             if status.value == label:

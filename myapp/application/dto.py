@@ -9,8 +9,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 
+from ..domain.entities import jersey_number_in
 from ..domain.services.roster_analysis import NEUTRAL_CATEGORY, ColorCategory
-from ..domain.value_objects import BattingLine, FieldingPosition, Handedness, PitchingLine, Position
+from ..domain.value_objects import (
+    BattingLine,
+    ContractStatus,
+    FieldingPosition,
+    Handedness,
+    JerseyNumber,
+    PitchingLine,
+    Position,
+)
 
 
 @dataclass(frozen=True)
@@ -1111,12 +1120,33 @@ class LineupSlot:
 
 
 @dataclass(frozen=True)
+class ContractFacts:
+    """在籍の契約の事実。その年の区分・背番号を導く材料を、在籍の値のまま持つ。
+
+    number は最新の背番号（昇格後）。年ごとの値はドメインの `ContractStatus.in_year`・
+    `jersey_number_in` で導く（ここに判定を書かない）。
+    """
+
+    number: int
+    signed_as: ContractStatus
+    promoted_year: int | None
+    number_before_promotion: int | None
+
+    def contract_in(self, year: int) -> ContractStatus:
+        return ContractStatus.in_year(self.signed_as, self.promoted_year, year)
+
+    def number_in(self, year: int) -> int:
+        before = None if self.number_before_promotion is None else JerseyNumber(self.number_before_promotion)
+        return jersey_number_in(JerseyNumber(self.number), self.promoted_year, before, year).value
+
+
+@dataclass(frozen=True)
 class AnalysisRosterRow:
     """戦力分析の材料。その年に在籍していた選手1人。生年月日と利きは値のまま持つ。"""
 
     player_id: int
     name: str
-    number: int
+    contract: ContractFacts
     position: Position
     birth_date: date | None
     throws: Handedness | None
@@ -1151,7 +1181,7 @@ class MoveStintRow:
     team_id: int
     player_id: int
     name: str
-    number: int
+    contract: ContractFacts
     position: Position
     from_year: int
     to_year: int | None
@@ -1180,6 +1210,8 @@ class TeamAnalysisFacts:
     pitcher_usage: list[PitcherUsage]
     moves: list[MoveStintRow]
     related_stints: list[RelatedStint]
+    # リーグの支配下の上限。None は無制限（在籍が1人もいないときは読まないので None）
+    registered_limit: int | None = None
 
 
 @dataclass(frozen=True)
@@ -1216,6 +1248,8 @@ class DepthPlayer:
     starts: int
     position_label: str = ""
     tone: ColorCategory = NEUTRAL_CATEGORY
+    # その年に育成の選手か
+    is_developmental: bool = False
 
 
 @dataclass(frozen=True)
@@ -1229,6 +1263,14 @@ class DepthCell:
     def count(self) -> int:
         return len(self.players)
 
+    @property
+    def developmental_count(self) -> int:
+        return sum(1 for player in self.players if player.is_developmental)
+
+    @property
+    def registered_count(self) -> int:
+        return self.count - self.developmental_count
+
 
 @dataclass(frozen=True)
 class DepthRow:
@@ -1241,6 +1283,14 @@ class DepthRow:
     def count(self) -> int:
         return sum(cell.count for cell in self.cells)
 
+    @property
+    def registered_count(self) -> int:
+        return sum(cell.registered_count for cell in self.cells)
+
+    @property
+    def developmental_count(self) -> int:
+        return sum(cell.developmental_count for cell in self.cells)
+
 
 @dataclass(frozen=True)
 class DepthTable:
@@ -1252,6 +1302,14 @@ class DepthTable:
     @property
     def count(self) -> int:
         return sum(row.count for row in self.rows)
+
+    @property
+    def registered_count(self) -> int:
+        return sum(row.registered_count for row in self.rows)
+
+    @property
+    def developmental_count(self) -> int:
+        return sum(row.developmental_count for row in self.rows)
 
 
 @dataclass(frozen=True)
@@ -1317,6 +1375,7 @@ class MoveRow:
     kind_label: str
     other_team_name: str = ""
     tone: ColorCategory = NEUTRAL_CATEGORY
+    is_developmental: bool = False
 
 
 @dataclass(frozen=True)
@@ -1342,3 +1401,13 @@ class TeamAnalysis:
     legend: list[ColorLegendItem]
     joiners: list[MoveRow]
     leavers: list[MoveRow]
+    # リーグの支配下の上限（None は無制限）。チーム全体の支配下・育成の人数は下の property
+    registered_limit: int | None = None
+
+    @property
+    def registered_count(self) -> int:
+        return self.pitchers.registered_count + self.fielders.registered_count
+
+    @property
+    def developmental_count(self) -> int:
+        return self.pitchers.developmental_count + self.fielders.developmental_count

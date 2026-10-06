@@ -11,6 +11,7 @@ Captaincy は Stint とロジック（is_current/overlaps/close）が同型だ�
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import date
 
@@ -86,6 +87,18 @@ class Stadium:
         return self.profile.city
 
 
+def jersey_number_in(
+    number: JerseyNumber, promoted_year: int | None, number_before_promotion: JerseyNumber | None, year: int
+) -> JerseyNumber:
+    """その年の背番号。**出典はここだけ**（`Stint.number_in` も参照クエリの材料もこれを呼ぶ）。
+
+    昇格より前の年は昇格前の番号、それ以降は今の番号。
+    """
+    if promoted_year is not None and number_before_promotion is not None and year < promoted_year:
+        return number_before_promotion
+    return number
+
+
 @dataclass
 class Stint:
     """在籍。ある選手が、あるチームに、いつからいつまで在籍したか。
@@ -144,11 +157,7 @@ class Stint:
 
     def contract_in(self, year: int) -> ContractStatus:
         """その年の契約区分。育成で加入し、その年までに昇格していれば支配下。"""
-        if self.signed_as is ContractStatus.REGISTERED:
-            return ContractStatus.REGISTERED
-        if self.promoted_year is not None and self.promoted_year <= year:
-            return ContractStatus.REGISTERED
-        return ContractStatus.DEVELOPMENTAL
+        return ContractStatus.in_year(self.signed_as, self.promoted_year, year)
 
     @property
     def contract_now(self) -> ContractStatus:
@@ -168,9 +177,7 @@ class Stint:
 
     def number_in(self, year: int) -> JerseyNumber:
         """その年の背番号。昇格より前の年は昇格前の番号、それ以降は今の番号。"""
-        if self.promoted_year is not None and self.number_before_promotion is not None and year < self.promoted_year:
-            return self.number_before_promotion
-        return self.number
+        return jersey_number_in(self.number, self.promoted_year, self.number_before_promotion, year)
 
     def number_periods(self) -> list[tuple[JerseyNumber, int, int | None]]:
         """背番号ごとの期間（番号・開始年・終了年）。終了年が None なら現在も。
@@ -457,6 +464,33 @@ class Team:
         """このチームでの今の契約区分。在籍していなければ None。"""
         current = self.current_stint(player)
         return current.contract_now if current is not None else None
+
+    def contract_in(self, player: Player, year: int) -> ContractStatus | None:
+        """このチームでのその年の契約区分。その年にこのチームに在籍していなければ None。
+
+        同じチームの在籍は年が重ならないよう集約が検査するので、通常は1つ。検査を素通りしたデータ（bulk_create など）で
+        同じ年に在籍が複数あるときへの備えとして、1つでも支配下なら支配下とする
+        （出場を止めるのは、その年ずっと育成だった選手だけにするため）。
+        """
+        statuses = [
+            stint.contract_in(year) for stint in player.career if stint.team_id == self.id and stint.covers(year)
+        ]
+        if not statuses:
+            return None
+        return ContractStatus.REGISTERED if ContractStatus.REGISTERED in statuses else ContractStatus.DEVELOPMENTAL
+
+    def ensure_not_developmental_in(self, player_ids: Iterable[int], year: int) -> None:
+        """指定した選手のうち、その年に育成の選手がいれば拒否する（育成選手は試合に出られない）。
+
+        在籍の無い選手 id（別チームの選手・データの不整合）は対象にしない。
+        """
+        wanted = set(player_ids)
+        for player in self.players:
+            if player.id in wanted and self.contract_in(player, year) is ContractStatus.DEVELOPMENTAL:
+                raise InvalidContract(
+                    f"育成選手の「{player.name}」は{year}年の試合に出場できません"
+                    "（支配下に登録されている選手だけが出場できます）。"
+                )
 
     def current_stint(self, player: Player) -> Stint | None:
         """このチームでの現在の在籍。"""
