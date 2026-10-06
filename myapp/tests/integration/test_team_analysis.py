@@ -259,7 +259,7 @@ class TeamUsageMapTest(AnalysisCase):
         response = self.client.get(reverse("team_analysis", args=[self.team.id]), {"tab": "usage"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context["analysis"].tab, "usage")
-        self.assertEqual([t.key for t in response.context["analysis"].tabs], ["depth", "usage"])
+        self.assertEqual([t.key for t in response.context["analysis"].tabs], ["depth", "usage", "fa"])
         self.assertContains(response, "正遊撃手")
         self.assertContains(response, "usage-box-short")
 

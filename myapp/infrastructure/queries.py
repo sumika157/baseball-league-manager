@@ -9,10 +9,11 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import fields
+from datetime import date
 from typing import Any
 
 from django.contrib.auth.models import AnonymousUser, User
-from django.db.models import BooleanField, Case, Count, Exists, OuterRef, Q, QuerySet, Sum, Value, When
+from django.db.models import BooleanField, Case, Count, Exists, Max, Min, OuterRef, Q, QuerySet, Sum, Value, When
 
 from ..application.dto import (
     ActivePlayerStats,
@@ -23,9 +24,12 @@ from ..application.dto import (
     GameRow,
     MoveStintRow,
     PitcherUsage,
+    PlayerContractStint,
     PlayerFielding,
     PlayerSearchRow,
+    PlayerYearSpan,
     RelatedStint,
+    ServiceHistory,
     TeamAnalysisFacts,
     TeamSummary,
 )
@@ -454,6 +458,46 @@ class DjangoTeamAnalysisQuery:
         ]
         return moves, related
 
+    def load_service_history(self, player_ids: list[int], year: int) -> ServiceHistory:
+        """FA 取得タブの材料。打撃・投球の明細で、選手×年の試合日の最小・最大を集める（2本）。
+
+        チームは問わない（FA 権は選手のキャリア通算）。在籍の契約は1本、記録のある最初の年は1本で、
+        選手の数に比例しない。
+        """
+        spans: dict[tuple[int, int], tuple[date, date]] = {}
+        for lines in (orm_models.GameBattingLine.objects, orm_models.GamePitchingLine.objects):
+            rows = (
+                lines.filter(player_id__in=player_ids, game__year__lte=year)
+                .values("player_id", "game__year")
+                .annotate(first=Min("game__played_on"), last=Max("game__played_on"))
+                .order_by()
+            )
+            for row in rows:
+                key = (row["player_id"], row["game__year"])
+                known = spans.get(key)
+                spans[key] = (
+                    min(row["first"], known[0]) if known else row["first"],
+                    max(row["last"], known[1]) if known else row["last"],
+                )
+        stints = [
+            PlayerContractStint(
+                player_id=stint.player_id,
+                from_year=stint.from_year,
+                to_year=stint.to_year,
+                contract=_contract_facts(stint),
+            )
+            for stint in orm_models.PlayerStint.objects.filter(player_id__in=player_ids, from_year__lte=year)
+        ]
+        recorded = orm_models.Game.objects.filter(recorded_games_filter()).order_by().aggregate(first=Min("year"))
+        return ServiceHistory(
+            spans=[
+                PlayerYearSpan(player_id=player_id, year=span_year, first_on=first, last_on=last)
+                for (player_id, span_year), (first, last) in spans.items()
+            ],
+            stints=stints,
+            records_from_year=recorded["first"],
+        )
+
     def load(self, team_id: int, year: int) -> TeamAnalysisFacts:
         # 在籍の期間の意味は Stint.covers と同じ（加入年 <= 年 かつ 退団年が空か 年 <= 退団年）
         stints = (
@@ -481,6 +525,10 @@ class DjangoTeamAnalysisQuery:
                     throws=Handedness.from_label(player.throws),
                     bats=Handedness.from_label(player.bats),
                     is_foreign_player=player.is_foreign_player,
+                    debut_year=player.debut_year,
+                    high_school=player.high_school,
+                    university=player.university,
+                    corporate_team=player.corporate_team,
                 )
             )
         player_ids = list(seen)
