@@ -13,7 +13,7 @@ from datetime import date
 from decimal import ROUND_DOWN, Decimal
 from enum import Enum
 from functools import lru_cache
-from typing import Any
+from typing import Any, ClassVar
 
 from .exceptions import (
     DomainError,
@@ -82,6 +82,24 @@ class Position(Enum):
 DEVELOPMENTAL_MIN_NUMBER = 100
 # 支配下選手の登録上限の既定値（NPB は70人）。League と永続化の既定値はこれを参照する
 DEFAULT_REGISTERED_PLAYER_LIMIT = 70
+
+
+@dataclass(frozen=True)
+class RosterLimits:
+    """ロスターの人数の上限（支配下の登録上限・外国人選手の登録枠）。リーグが持ち、集約の操作に渡す。
+
+    集約（`Team`）はリーグを知らないので、上限は操作の引数で受ける。**省略できない引数**にしてあるのは、
+    省略時の既定を「検査しない」にすると、呼び出しを足したときに検査が黙って素通りするため。
+    検査しない場合は `RosterLimits.UNLIMITED` を明示する（None は無制限）。
+    """
+
+    registered: int | None
+    foreign: int | None
+
+    UNLIMITED: ClassVar[RosterLimits]
+
+
+RosterLimits.UNLIMITED = RosterLimits(registered=None, foreign=None)
 
 
 class ContractStatus(Enum):

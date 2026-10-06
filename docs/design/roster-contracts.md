@@ -102,8 +102,8 @@
 - 決定: 管理画面の上限検査は、いま登録しようとしている行だけを数える（同じ送信に複数の新規行があっても合算しない）。
 - 実測: `measure_pages` は、マイグレーション未適用の開発 DB では新しい列が無く落ちるため E1 では実行していない。epic の統合前に、適用後の DB で実測する。
 - 見送り（M3）: 外国人の登録枠は**育成も含めて数える**（Issue #114 の決定 E5）。E2 で育成選手の出場を拒否すれば出場枠側とは自然に合う。登録枠から育成を外すかは別 Issue で決める。
-- 宿題（L1、[#145](https://github.com/sumika157/baseball-league-manager/issues/145)）: 移籍の受け入れで「区分と背番号の照合」をしているのが application（`TeamApplicationService.transfer_player`）になっている。`Team.accept_transfer(player, number, year, contract)` に寄せ、受け入れの検査（背番号の重複・区分・支配下の余地）を集約に集める案。ペナント epic の `fork_roster` と合わせて整理する。
-- 宿題: 支配下の上限を守るのが呼び出し側任せになっている（`ensure_room_for_registered` を呼び忘れた経路は黙って超える）。上限を引数で受けて集約の中で検査する形に、#145 と一緒に寄せる。
+- 済み（L1、[#145](https://github.com/sumika157/baseball-league-manager/issues/145)）: 移籍の受け入れを `Team.accept_transfer` に寄せた（下の「#145」）。
+- 済み（#145）: 支配下の上限を守るのが呼び出し側任せだった件は、上限を操作の引数で受けて集約の中で検査する形にした（下の「#145」）。
 - 宿題: `promote_player` の year 引数で過去の年を渡すと、ドメインは今在籍中の番号しか見ないので、管理画面の期間照合と食い違いうる。今は画面から年を渡す経路が無い。
 
 ### E2（#127）
@@ -195,3 +195,22 @@
 - 決定: 在籍の削除を拒否するときは、`PlayerStintAdmin.has_delete_permission(request, obj)` で削除の導線ごと出さない。一括削除の action は、消せない在籍が含まれていればエラーだけを出して何も消さない。
 - 宿題（範囲外）: チームの削除は在籍が CASCADE で消え、宣言や FA 入団の根拠が崩れる（`TeamAdmin` の削除は今回の検査を通らない）。
 - 記録: 経路が不明の在籍も移籍先にするので、「宣言して残留 → 翌年に経路不明でトレード」は FA 移籍と判定される（在籍の期間だけでは区別できない近似）。
+
+### #145（移籍の受け入れと上限の検査を集約に寄せた）
+
+リファクタで、振る舞いは変えていない。
+
+- 決定: `Team.accept_transfer(player, number, year, contract, acquired_via=None, *, limits)` を足した。在籍の追加（`Stint` の組み立てと `player.career` への追加）と、受け入れの検査を集約に集めた。
+  順序は従来のまま（背番号と区分 → 背番号の重複 → 支配下の上限（支配下で受けるときだけ）→ 在籍の追加 → `Player.ensure_free_agency_consistent()`（経路と区分・FA の根拠）→ 外国人の登録枠）。
+  `transfer_player` は、移籍元の `retire_player` と移籍先の `accept_transfer` を呼び、**検査がすべて終わってから**両方を保存するだけになった（application が `Stint` を組み立てず、集約の private を呼ばない）。
+- 決定: **上限は省略できないキーワード引数 `limits: RosterLimits`** で受ける（`add_player`・`accept_transfer`・`promote_player`）。省略時の既定を「検査しない」にすると、
+  呼び出しを足したときに検査が黙って素通りするため。検査しない呼び出し（テストなど）は `RosterLimits.UNLIMITED` を**明示**する。
+  `RosterLimits(registered, foreign)` は値オブジェクト（`value_objects.py`）で、リーグが `League.roster_limits` で渡す。
+- 決定: 支配下の上限は `add_player`（支配下のとき）・`accept_transfer`（支配下のとき）・`promote_player`（常に）の**中で**検査する。
+  外国人の登録枠は `accept_transfer` の中（受け入れた後の人数）。`add_player` は新しい選手が外国人ではない（国籍フラグは登録後に管理画面で立てる）ので人数が増えず、外国人枠は見ない
+  （従来も見ていない。見ると、すでに枠を超えている既存のチームに誰も登録できなくなる）。
+- 決定: `ensure_room_for_registered(limit)`・`ensure_foreign_player_quota(limit)` は、判定とメッセージの**出典**として残す。集約の操作の中から呼ぶほか、
+  集約の操作を通らない管理画面（在籍フォームの上限、選手の国籍フラグ）が同じメソッドを呼ぶ。application（登録・移籍・昇格）の事前呼び出しは消した（残すと二重になる）。
+- 宿題（ペナント epic #26 を統合するとき）: `fork_roster` など `Team.add_player` / `promote_player` / `accept_transfer` を呼ぶ箇所は、`limits` が省略できないので統合時に**コンパイル（型検査）とテストで落ちる**。
+  複製した世界のロスターに上限を掛けるなら `league.roster_limits` を、複製元をそのまま写すだけなら `RosterLimits.UNLIMITED` を明示して渡す（どちらかを決めて書く）。
+  ドラフトで入団した選手を足す呼び出しは、上限を掛けるのが自然（支配下の上限・育成ドラフトは育成）。

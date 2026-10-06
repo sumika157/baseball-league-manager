@@ -13,7 +13,7 @@ from datetime import date
 from django.db import transaction
 
 from ..domain import services as domain_services
-from ..domain.entities import Game, Player, Stint, Team
+from ..domain.entities import Game, Player, Team
 from ..domain.repositories import GameRepository, LeagueRepository, TeamRepository
 from ..domain.value_objects import (
     AcquisitionRoute,
@@ -1334,16 +1334,15 @@ class TeamApplicationService:
         team = self._teams.find_by_id(team_id)
         contract = ContractStatus.from_label(contract_label)
         acquired_via = AcquisitionRoute.from_label(acquired_via_label) if acquired_via_label else None
-        if contract is ContractStatus.REGISTERED:
-            # 育成の追加は支配下を増やさないので、上限は見ない
-            league = self._leagues.find_by_id(_saved_id(team.league_id))
-            team.ensure_room_for_registered(league.registered_player_limit)
+        league = self._leagues.find_by_id(_saved_id(team.league_id))
+        # 支配下の上限は集約（add_player）が検査する
         player = team.add_player(
             name=name,
             number=JerseyNumber(number),
             position=Position.from_label(position_label),
             contract=contract,
             acquired_via=acquired_via,
+            limits=league.roster_limits,
         )
         self._teams.save(team)
         return player
@@ -1409,28 +1408,16 @@ class TeamApplicationService:
         source.retire_player(player, season)
 
         destination = self._teams.find_by_id(to_team_id)
-        contract.ensure_number_fits(JerseyNumber(number))
-        destination._ensure_number_is_available(JerseyNumber(number))
         league = self._leagues.find_by_id(_saved_id(destination.league_id))
-        if contract is ContractStatus.REGISTERED:
-            destination.ensure_room_for_registered(league.registered_player_limit)
-        player.career.append(
-            Stint(
-                team_id=to_team_id,
-                team_name=destination.name,
-                number=JerseyNumber(number),
-                from_year=season,
-                signed_as=contract,
-                acquired_via=AcquisitionRoute.from_label(acquired_via_label) if acquired_via_label else None,
-            )
+        # 背番号・区分・支配下の上限・経路と FA 宣言・外国人枠の検査は、移籍先の集約が行う
+        destination.accept_transfer(
+            player,
+            JerseyNumber(number),
+            season,
+            contract,
+            AcquisitionRoute.from_label(acquired_via_label) if acquired_via_label else None,
+            limits=league.roster_limits,
         )
-        # 経路が FA なのに宣言が無い、を保存の前に弾く
-        player.ensure_free_agency_consistent()
-        player.number = JerseyNumber(number)
-        player.is_active = True
-        destination.players.append(player)
-
-        destination.ensure_foreign_player_quota(league.foreign_player_roster_limit)
 
         self._teams.save(source)
         self._teams.save(destination)

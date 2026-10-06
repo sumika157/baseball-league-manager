@@ -12,6 +12,7 @@ from myapp.domain.value_objects import (
     FreeAgencyOutcome,
     JerseyNumber,
     Position,
+    RosterLimits,
     StintPeriod,
     fa_destinations,
     fa_origin,
@@ -235,19 +236,33 @@ class AcquisitionAndDeclarationTest(TestCase):
         team = Team(name="A", id=1)
 
         with self.assertRaises(InvalidAcquisition):
-            team.add_player("新人", JerseyNumber(10), Position.PITCHER, 2025, acquired_via=AcquisitionRoute.FREE_AGENT)
+            team.add_player(
+                "新人",
+                JerseyNumber(10),
+                Position.PITCHER,
+                2025,
+                acquired_via=AcquisitionRoute.FREE_AGENT,
+                limits=RosterLimits.UNLIMITED,
+            )
         self.assertEqual(team.players, [])
 
     def test_a_route_is_carried_onto_the_first_stint(self):
         team = Team(name="A", id=1)
 
-        added = team.add_player("新人", JerseyNumber(10), Position.PITCHER, 2025, acquired_via=AcquisitionRoute.DRAFT)
+        added = team.add_player(
+            "新人",
+            JerseyNumber(10),
+            Position.PITCHER,
+            2025,
+            acquired_via=AcquisitionRoute.DRAFT,
+            limits=RosterLimits.UNLIMITED,
+        )
 
         self.assertIs(added.career[0].acquired_via, AcquisitionRoute.DRAFT)
 
     def test_the_team_declares_and_removes_for_its_player(self):
         team = Team(name="A", id=1)
-        added = team.add_player("新人", JerseyNumber(10), Position.PITCHER, 2025)
+        added = team.add_player("新人", JerseyNumber(10), Position.PITCHER, 2025, limits=RosterLimits.UNLIMITED)
         added.id = 5
 
         team.declare_free_agency(5, 2025, DOMESTIC)
@@ -337,7 +352,9 @@ class ConsistencyAfterClosingStintsTest(TestCase):
     def team_with_declared_player():
         this_year = date.today().year
         team = Team(name="A", id=1)
-        added = team.add_player("新人", JerseyNumber(10), Position.PITCHER, this_year - 3)
+        added = team.add_player(
+            "新人", JerseyNumber(10), Position.PITCHER, this_year - 3, limits=RosterLimits.UNLIMITED
+        )
         added.id = 5
         team.declare_free_agency(5, this_year, DOMESTIC)
         return team, added, this_year
@@ -359,7 +376,7 @@ class ConsistencyAfterClosingStintsTest(TestCase):
         """時計（今日の年）では制限しない（ペナントの世界は実際の年より先へ進む）。在籍が続く限り先の年も宣言でき、
         その年より前に在籍を閉じる退団は「どの在籍にも覆われない宣言」になるので拒否する。"""
         team = Team(name="A", id=1)
-        added = team.add_player("新人", JerseyNumber(10), Position.PITCHER, 2020)
+        added = team.add_player("新人", JerseyNumber(10), Position.PITCHER, 2020, limits=RosterLimits.UNLIMITED)
         ahead = date.today().year + 3
         added.declare_free_agency(ahead, DOMESTIC)
 

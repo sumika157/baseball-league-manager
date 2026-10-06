@@ -47,6 +47,7 @@ from .value_objects import (
     PlateAppearanceResult,
     Position,
     Profile,
+    RosterLimits,
     Season,
     StadiumProfile,
     StintPeriod,
@@ -73,6 +74,11 @@ class League:
 
     def __str__(self) -> str:
         return self.name
+
+    @property
+    def roster_limits(self) -> RosterLimits:
+        """ロスターの人数の上限。`Team` の追加・移籍の受け入れ・昇格に渡す。"""
+        return RosterLimits(registered=self.registered_player_limit, foreign=self.foreign_player_roster_limit)
 
 
 @dataclass
@@ -545,16 +551,22 @@ class Team:
         from_year: int | None = None,
         contract: ContractStatus = ContractStatus.REGISTERED,
         acquired_via: AcquisitionRoute | None = None,
+        *,
+        limits: RosterLimits,
     ) -> Player:
         """選手を加入させる。背番号が在籍中の選手と重複する場合や、契約区分に合わない場合は拒否する。
 
         入団の経路は任意（None は不明）。経路が契約区分と食い違うときや、FA での入団（新しい選手には
         FA 宣言が無い）は拒否する。
 
-        支配下の上限は集約からは見えない（リーグが持つ）ので、呼び出し側が
-        支配下で加えるなら、加える前に ensure_room_for_registered で検査する。
+        支配下で加えるときは、支配下の上限（`limits`）も**ここで**検査する（呼び忘れて黙って超えないように）。
+        `limits` は省略できない。検査しないなら `RosterLimits.UNLIMITED` を明示する。
+        外国人枠は、新しい選手は外国人ではない（登録後に管理画面で国籍フラグを立てる）ので、人数が増えず見ない。
         """
         assert self.id is not None, "ロスターの変更は保存済みのチームに対して行う"
+        if contract is ContractStatus.REGISTERED:
+            # 育成の追加は支配下を増やさないので、上限は見ない
+            self.ensure_room_for_registered(limits.registered)
         contract.ensure_number_fits(number)
         self._ensure_number_is_available(number)
 
@@ -601,7 +613,8 @@ class Team:
     def ensure_promotable(self, player_id: int) -> None:
         """在籍中の育成選手か。昇格できない選手なら、その理由の例外を投げる。
 
-        支配下の上限など他の検査より先に呼ぶ（理由を取り違えて案内しないため）。
+        `promote_player` は中でこれと同じ検査（`_promotable_stint`）を支配下の上限より先に行う
+        （理由を取り違えて案内しないため）。画面で昇格の導線を出すかを決めるときなど、昇格の前に確かめたいときに使う。
         """
         self._promotable_stint(player_id)
 
@@ -614,20 +627,66 @@ class Team:
         current.ensure_promotable()
         return current
 
-    def promote_player(self, player_id: int, number: JerseyNumber, year: int | None = None) -> Player:
+    def promote_player(
+        self, player_id: int, number: JerseyNumber, year: int | None = None, *, limits: RosterLimits
+    ) -> Player:
         """育成選手を支配下に上げる。背番号は支配下の番号（99以下）に変わる。
 
-        在籍中の育成選手だけが対象。支配下の上限は呼び出し側が
-        ensure_room_for_registered で昇格の前に検査する（add_player と同じ）。
-        その前に ensure_promotable で、昇格できる選手かを見ておく。
+        在籍中の育成選手だけが対象で、昇格できるかを先に見る（理由を取り違えて案内しないため）。
+        昇格は支配下を1人増やすので、支配下の上限（`limits`）を**ここで**常に検査する。
         """
         current = self._promotable_stint(player_id)
+        self.ensure_room_for_registered(limits.registered)
         player = self.find_player(player_id)
         # 新しい背番号が支配下の番号か・昇格の年が妥当かは Stint.promote が検査する。重複はここで見る
         self._ensure_number_is_available(number, excluding=player)
         current.promote(year if year is not None else date.today().year, number)
         player.number = number
         return player
+
+    def accept_transfer(
+        self,
+        player: Player,
+        number: JerseyNumber,
+        year: int,
+        contract: ContractStatus,
+        acquired_via: AcquisitionRoute | None = None,
+        *,
+        limits: RosterLimits,
+    ) -> Stint:
+        """他のチームから移籍してきた選手を受け入れ、このチームの新しい在籍を開く。
+
+        移籍元の退団（`retire_player`）は呼び出し側が先に行う。ここで次を検査する。
+        背番号・区分・支配下の上限で拒否したときは何も変えない。FA の整合と外国人の登録枠は、選手を足した後の
+        ロスターで検査するので、そこで拒否したときは集約も選手も途中まで変わっている。**呼び出し側は例外のとき
+        保存しない**（例外を握りつぶして続けない）。
+        - 背番号が在籍中の選手と重複しないこと・契約区分に合うこと
+        - 支配下で受け入れるなら、支配下の上限（`limits`）に収まること
+        - 経路と区分の整合・経路が FA の在籍の根拠（`Player.ensure_free_agency_consistent`）
+        - 外国人選手の登録枠（`limits`）に収まること
+        `limits` は省略できない。検査しないなら `RosterLimits.UNLIMITED` を明示する。
+        """
+        assert self.id is not None, "ロスターの変更は保存済みのチームに対して行う"
+        contract.ensure_number_fits(number)
+        self._ensure_number_is_available(number)
+        if contract is ContractStatus.REGISTERED:
+            self.ensure_room_for_registered(limits.registered)
+        stint = Stint(
+            team_id=self.id,
+            team_name=self.name,
+            number=number,
+            from_year=year,
+            signed_as=contract,
+            acquired_via=acquired_via,
+        )
+        player.career.append(stint)
+        # 経路が FA なのに宣言が無い、宣言した年に在籍が無い、を保存の前に弾く
+        player.ensure_free_agency_consistent()
+        player.number = number
+        player.is_active = True
+        self.players.append(player)
+        self.ensure_foreign_player_quota(limits.foreign)
+        return stint
 
     def contract_of(self, player: Player) -> ContractStatus | None:
         """このチームでの今の契約区分。在籍していなければ None。"""
@@ -744,9 +803,9 @@ class Team:
     def ensure_foreign_player_quota(self, limit: int | None) -> None:
         """現在のロスターが外国人枠の上限を超えていないか確認する。
 
-        呼び出し側は、検査したい変更（選手追加・移籍受け入れ・国籍フラグ変更）を
-        保存前の roster に反映してから呼ぶ。超えていれば例外を投げ、
-        呼び出し元のサービスがそれ以降の保存処理を止める。
+        `accept_transfer`（`limits.foreign`）は、受け入れの検査としてこれを集約の中で呼ぶ。
+        管理画面のように集約の操作を通らない書き込み（国籍フラグの変更）は、検査したい変更を
+        保存前の roster に反映してから自分で呼ぶ。超えていれば例外を投げ、保存処理を止める。
         """
         ensure_quota_not_exceeded(
             self.foreign_player_count,
@@ -764,9 +823,9 @@ class Team:
     def ensure_room_for_registered(self, limit: int | None) -> None:
         """支配下の選手が1人増えても上限を超えないか確認する。
 
-        支配下が増える操作（支配下での選手追加・支配下としての移籍受け入れ・昇格）の
-        **前**に呼ぶ。育成の追加は支配下を増やさないので呼ばない。
-        メッセージの出典はここだけ（管理画面も application もこれを呼ぶ）。
+        支配下が増える操作（支配下での選手追加・支配下としての移籍受け入れ・昇格）が、`add_player`・
+        `accept_transfer`・`promote_player` の中で**増える前に**呼ぶ（育成の追加は支配下が増えないので呼ばない）。
+        管理画面のように集約の操作を通らない書き込みは自分で呼ぶ。判定とメッセージの出典はここだけ。
         """
         ensure_quota_not_exceeded(
             self.registered_player_count + 1,

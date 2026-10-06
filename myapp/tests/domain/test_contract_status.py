@@ -8,7 +8,7 @@ from myapp.domain.exceptions import (
     InvalidContract,
     RegisteredPlayerLimitExceeded,
 )
-from myapp.domain.value_objects import ContractStatus, JerseyNumber, Position
+from myapp.domain.value_objects import ContractStatus, JerseyNumber, Position, RosterLimits
 
 REGISTERED = ContractStatus.REGISTERED
 DEVELOPMENTAL = ContractStatus.DEVELOPMENTAL
@@ -103,7 +103,12 @@ class TeamContractTest(TestCase):
 
     def _add(self, name, number, contract=REGISTERED, from_year=2026):
         return self.team.add_player(
-            name, JerseyNumber(number), Position.INFIELDER, from_year=from_year, contract=contract
+            name,
+            JerseyNumber(number),
+            Position.INFIELDER,
+            from_year=from_year,
+            contract=contract,
+            limits=RosterLimits.UNLIMITED,
         )
 
     # --- 背番号と区分 ---
@@ -142,7 +147,7 @@ class TeamContractTest(TestCase):
         player = self._add("育成", 100, DEVELOPMENTAL, from_year=2024)
 
         player.id = 7
-        self.team.promote_player(7, JerseyNumber(25), 2026)
+        self.team.promote_player(7, JerseyNumber(25), 2026, limits=RosterLimits.UNLIMITED)
 
         stint = self.team.current_stint(player)
         self.assertIs(self.team.contract_of(player), REGISTERED)
@@ -156,7 +161,7 @@ class TeamContractTest(TestCase):
         player.id = 7
 
         with self.assertRaises(InvalidContract):
-            self.team.promote_player(7, JerseyNumber(150), 2026)
+            self.team.promote_player(7, JerseyNumber(150), 2026, limits=RosterLimits.UNLIMITED)
 
         self.assertIs(self.team.contract_of(player), DEVELOPMENTAL)
         self.assertEqual(player.number, JerseyNumber(100))
@@ -167,21 +172,21 @@ class TeamContractTest(TestCase):
         self._add("先輩", 25)
 
         with self.assertRaises(DuplicateJerseyNumber):
-            self.team.promote_player(7, JerseyNumber(25), 2026)
+            self.team.promote_player(7, JerseyNumber(25), 2026, limits=RosterLimits.UNLIMITED)
 
     def test_registered_player_cannot_be_promoted(self):
         player = self._add("支配下", 10)
         player.id = 7
 
         with self.assertRaises(InvalidContract):
-            self.team.promote_player(7, JerseyNumber(11), 2026)
+            self.team.promote_player(7, JerseyNumber(11), 2026, limits=RosterLimits.UNLIMITED)
 
     def test_promotion_before_joining_is_rejected(self):
         player = self._add("育成", 100, DEVELOPMENTAL, from_year=2026)
         player.id = 7
 
         with self.assertRaises(InvalidContract):
-            self.team.promote_player(7, JerseyNumber(25), 2025)
+            self.team.promote_player(7, JerseyNumber(25), 2025, limits=RosterLimits.UNLIMITED)
 
     def test_a_player_who_has_left_cannot_be_promoted(self):
         player = self._add("育成", 100, DEVELOPMENTAL)
@@ -189,7 +194,7 @@ class TeamContractTest(TestCase):
         self.team.retire_player(player, 2026)
 
         with self.assertRaises(InvalidContract):
-            self.team.promote_player(7, JerseyNumber(25), 2026)
+            self.team.promote_player(7, JerseyNumber(25), 2026, limits=RosterLimits.UNLIMITED)
 
     # --- 昇格前の背番号 ---
 
@@ -197,7 +202,7 @@ class TeamContractTest(TestCase):
         player = self._add("育成", 100, DEVELOPMENTAL, from_year=2024)
         player.id = 7
 
-        self.team.promote_player(7, JerseyNumber(25), 2026)
+        self.team.promote_player(7, JerseyNumber(25), 2026, limits=RosterLimits.UNLIMITED)
 
         stint = self.team.current_stint(player)
         self.assertEqual(stint.number_before_promotion, JerseyNumber(100))
@@ -245,7 +250,7 @@ class TeamContractTest(TestCase):
         player.id = 7
         self.team.ensure_room_for_registered(2)  # 育成は数えないので昇格の余地がある
 
-        self.team.promote_player(7, JerseyNumber(25), 2026)
+        self.team.promote_player(7, JerseyNumber(25), 2026, limits=RosterLimits.UNLIMITED)
 
         with self.assertRaises(RegisteredPlayerLimitExceeded):
             self.team.ensure_room_for_registered(2)
@@ -320,7 +325,9 @@ class EnsurePromotableTest(TestCase):
         self.team = Team(name="テストチーム", id=1, league_id=1)
 
     def test_a_registered_player_is_not_promotable(self):
-        player = self.team.add_player("支配下", JerseyNumber(10), Position.INFIELDER, from_year=2026)
+        player = self.team.add_player(
+            "支配下", JerseyNumber(10), Position.INFIELDER, from_year=2026, limits=RosterLimits.UNLIMITED
+        )
         player.id = 7
 
         with self.assertRaisesRegex(InvalidContract, "育成選手ではない"):
@@ -328,7 +335,12 @@ class EnsurePromotableTest(TestCase):
 
     def test_a_developmental_player_is_promotable(self):
         player = self.team.add_player(
-            "育成", JerseyNumber(100), Position.INFIELDER, from_year=2026, contract=DEVELOPMENTAL
+            "育成",
+            JerseyNumber(100),
+            Position.INFIELDER,
+            from_year=2026,
+            contract=DEVELOPMENTAL,
+            limits=RosterLimits.UNLIMITED,
         )
         player.id = 7
 
@@ -369,10 +381,17 @@ class TeamContractInYearTest(TestCase):
     def setUp(self):
         self.team = Team(name="テストチーム", id=1, league_id=1)
         self.trainee = self.team.add_player(
-            "育成", JerseyNumber(120), Position.PITCHER, from_year=2024, contract=DEVELOPMENTAL
+            "育成",
+            JerseyNumber(120),
+            Position.PITCHER,
+            from_year=2024,
+            contract=DEVELOPMENTAL,
+            limits=RosterLimits.UNLIMITED,
         )
         self.trainee.id = 7
-        self.regular = self.team.add_player("支配下", JerseyNumber(10), Position.PITCHER, from_year=2024)
+        self.regular = self.team.add_player(
+            "支配下", JerseyNumber(10), Position.PITCHER, from_year=2024, limits=RosterLimits.UNLIMITED
+        )
         self.regular.id = 8
 
     def test_contract_in_follows_the_stint_of_this_team(self):
@@ -383,7 +402,7 @@ class TeamContractInYearTest(TestCase):
         self.assertIsNone(self.team.contract_in(self.trainee, 2023))
 
     def test_the_year_of_promotion_can_play_and_the_year_before_cannot(self):
-        self.team.promote_player(7, JerseyNumber(30), 2026)
+        self.team.promote_player(7, JerseyNumber(30), 2026, limits=RosterLimits.UNLIMITED)
 
         self.team.ensure_not_developmental_in([7, 8], 2026)
         with self.assertRaisesRegex(InvalidContract, "育成選手の「育成」"):
