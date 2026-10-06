@@ -974,6 +974,8 @@ class BatterRow:
     # リーグ平均を100とした指数。得点環境の違うリーグ・シーズンでも比べられる
     ops_plus: float = 0.0
     is_captain: bool = False
+    # 今の契約区分が育成か。選手名の横の印に使う
+    is_developmental: bool = False
     is_foreign_player: bool = False
     throws_bats: str = ""
     height_cm: int | None = None
@@ -1009,6 +1011,8 @@ class PitcherRow:
     home_runs_allowed: int = 0
     hit_by_pitch_allowed: int = 0
     is_captain: bool = False
+    # 今の契約区分が育成か。選手名の横の印に使う
+    is_developmental: bool = False
     is_foreign_player: bool = False
     throws_bats: str = ""
     height_cm: int | None = None
@@ -1068,6 +1072,8 @@ class PlayerDetail:
     hold_points: int = 0
     starts: int = 0
     is_captain: bool = False
+    # 今の契約区分が育成か。選手名の横の印に使う
+    is_developmental: bool = False
     # 打席の記録から導く項目。打者の三振は投手の strikeouts（奪三振）と別の事実なので名前を分ける
     runs: int = 0
     stolen_bases: int = 0

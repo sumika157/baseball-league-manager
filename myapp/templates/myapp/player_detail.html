@@ -26,6 +26,7 @@
       {# 選手一覧と同じ印。本人のページでも肩書きと枠が分かるようにする #}
       {% if player.is_captain %}<span class="badge bg-warning text-dark ms-1">主将</span>{% endif %}
       {% if profile.is_foreign_player %}<span class="badge bg-info text-dark ms-1">外国人</span>{% endif %}
+      {% if player.is_developmental %}<span class="badge bg-primary ms-1">育成</span>{% endif %}
     </h1>
     <p class="page-subtitle">
       {% if profile.back_name %}<span class="back-name">{{ profile.back_name }}</span> · {% endif %}{{ player.position }} · 出場 {{ profile.appearances }}試合

@@ -16,7 +16,9 @@ from functools import lru_cache
 from typing import Any
 
 from .exceptions import (
+    DomainError,
     ForeignPlayerQuotaExceeded,
+    InvalidContract,
     InvalidInningsPitched,
     InvalidJerseyNumber,
     InvalidPlateAppearance,
@@ -60,6 +62,50 @@ class Position(Enum):
     @classmethod
     def labels(cls) -> list[str]:
         return [position.value for position in cls]
+
+
+# 育成選手の背番号はこの値以上（3桁）。支配下はこれより小さい（2桁以下）
+DEVELOPMENTAL_MIN_NUMBER = 100
+# 支配下選手の登録上限の既定値（NPB は70人）。League と永続化の既定値はこれを参照する
+DEFAULT_REGISTERED_PLAYER_LIMIT = 70
+
+
+class ContractStatus(Enum):
+    """契約区分。支配下登録か育成か。
+
+    選択肢（画面の選択・永続化の choices）はこの Enum を唯一の出典とする。
+    背番号は育成が3桁（100以上）、支配下が2桁以下（99以下）。
+    """
+
+    REGISTERED = "支配下"
+    DEVELOPMENTAL = "育成"
+
+    @property
+    def label(self) -> str:
+        return self.value
+
+    def ensure_number_fits(self, number: JerseyNumber) -> None:
+        """背番号がこの区分に合うか。育成は100以上、支配下は99以下。"""
+        is_three_digit = number.value >= DEVELOPMENTAL_MIN_NUMBER
+        if self is ContractStatus.DEVELOPMENTAL and not is_three_digit:
+            raise InvalidContract(
+                f"育成選手の背番号は{DEVELOPMENTAL_MIN_NUMBER}以上にしてください（背番号 {number}）。"
+            )
+        if self is ContractStatus.REGISTERED and is_three_digit:
+            raise InvalidContract(
+                f"支配下選手の背番号は{DEVELOPMENTAL_MIN_NUMBER - 1}以下にしてください（背番号 {number}）。"
+            )
+
+    @classmethod
+    def from_label(cls, label: str) -> ContractStatus:
+        for status in cls:
+            if status.value == label:
+                return status
+        raise InvalidContract(f"「{label}」は契約区分として認識できません。")
+
+    @classmethod
+    def labels(cls) -> list[str]:
+        return [status.value for status in cls]
 
 
 class FieldingPosition(Enum):
@@ -1416,10 +1462,16 @@ def format_average(value: float) -> str:
     return f"{value:.3f}".lstrip("0") if value < 1 else f"{value:.3f}"
 
 
-def ensure_quota_not_exceeded(count: int, limit: int | None, message: str) -> None:
+def ensure_quota_not_exceeded(
+    count: int,
+    limit: int | None,
+    message: str,
+    error: type[DomainError] = ForeignPlayerQuotaExceeded,
+) -> None:
     """人数が上限を超えていないか確認する。limit が None なら無制限。
 
-    外国人選手の登録枠・試合出場枠のどちらも、この同じ規則で判定する。
+    外国人選手の登録枠・試合出場枠、支配下選手の上限のいずれも、この同じ規則で判定する。
+    超えたときの例外は error で選ぶ（既定は外国人枠）。
     """
     if limit is not None and count > limit:
-        raise ForeignPlayerQuotaExceeded(message)
+        raise error(message)

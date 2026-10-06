@@ -25,6 +25,7 @@ from myapp.infrastructure.repositories import DjangoGameRepository
 # テストも画面と同じ組み立て（presentation/views.py）を使い、ここから再輸出する。
 # テスト専用の組み立てを別に持つと、依存が食い違ってもテストでは気づけない
 from myapp.presentation.views import build_recording_service as build_recording_service
+from myapp.presentation.views import build_roster_service as build_roster_service
 from myapp.presentation.views import build_service as build_service
 from myapp.presentation.views import build_team_analysis_service as build_team_analysis_service
 

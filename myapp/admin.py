@@ -24,7 +24,7 @@ from .domain.entities import Captaincy as DomainCaptaincy
 from .domain.entities import Stint as DomainStint
 from .domain.entities import winning_team_id
 from .domain.exceptions import DomainError
-from .domain.value_objects import JerseyNumber, StadiumProfile, ensure_quota_not_exceeded
+from .domain.value_objects import ContractStatus, JerseyNumber, StadiumProfile, ensure_quota_not_exceeded
 from .domain.value_objects import Profile as DomainProfile
 from .infrastructure import orm_models
 from .infrastructure.orm_models import (
@@ -221,6 +221,13 @@ class LeagueAdmin(ManualOrderAdminMixin, admin.ModelAdmin):
             {
                 "description": "空欄なら無制限として扱います。",
                 "fields": ("foreign_player_roster_limit", "foreign_player_game_limit"),
+            },
+        ),
+        (
+            "支配下枠",
+            {
+                "description": "空欄なら無制限として扱います。育成選手は数えません。",
+                "fields": ("registered_player_limit",),
             },
         ),
     )
@@ -499,6 +506,31 @@ class StadiumAdmin(admin.ModelAdmin):
         Team.objects.filter(pk__in=[team.pk for team in selected]).update(home_stadium=stadium)
 
 
+def _jersey_or_none(value):
+    """入力された背番号を値オブジェクトにする。空欄なら None。"""
+    return JerseyNumber(value) if value is not None else None
+
+
+def _to_domain_stint(row: PlayerStint) -> DomainStint:
+    """保存済みの在籍をドメインの在籍にする。
+
+    保存済みの行が不正（管理画面を通さずに書かれた区分違いなど）でも画面を落とさず、
+    他の検査と同じく入力エラーとして知らせる。
+    """
+    try:
+        return DomainStint(
+            team_id=row.team_id,
+            number=JerseyNumber(row.number),
+            from_year=row.from_year,
+            to_year=row.to_year,
+            signed_as=ContractStatus.from_label(row.signed_as),
+            promoted_year=row.promoted_year,
+            number_before_promotion=_jersey_or_none(row.number_before_promotion),
+        )
+    except DomainError as error:
+        raise forms.ValidationError(f"保存済みの在籍（{row.player.name}）が不正です: {error}") from None
+
+
 class PlayerStintForm(forms.ModelForm):
     """在籍の入力検証。
 
@@ -516,6 +548,11 @@ class PlayerStintForm(forms.ModelForm):
         # 入団年で埋められるので、入力そのものは必須にしない
         self.fields["from_year"].required = False
         self.fields["from_year"].help_text = "空欄なら選手の入団年を使います。"
+        # 空欄なら支配下として扱う（モデルの既定と同じ）
+        self.fields["signed_as"].required = False
+
+    def clean_signed_as(self):
+        return self.cleaned_data.get("signed_as") or ContractStatus.REGISTERED.value
 
     def clean(self):
         cleaned = super().clean()
@@ -533,11 +570,20 @@ class PlayerStintForm(forms.ModelForm):
                 number=JerseyNumber(number),
                 from_year=from_year,
                 to_year=cleaned.get("to_year"),
+                signed_as=ContractStatus.from_label(cleaned.get("signed_as") or ContractStatus.REGISTERED.value),
+                promoted_year=cleaned.get("promoted_year"),
+                number_before_promotion=_jersey_or_none(cleaned.get("number_before_promotion")),
             )
+            # 区分と背番号の食い違い（育成は100以上・支配下は99以下）はドメインに判定させる
+            candidate.ensure_number_matches_contract()
         except DomainError as error:
             raise forms.ValidationError(str(error)) from None
 
-        others = PlayerStint.objects.filter(team=team, number=number).select_related("player")
+        # 昇格した在籍は2つの番号を持つので、どちらかが一致する他人の在籍を候補にする
+        numbers = [n.value for n, _, _ in candidate.number_periods()]
+        others = PlayerStint.objects.filter(
+            Q(number__in=numbers) | Q(number_before_promotion__in=numbers), team=team
+        ).select_related("player")
         if self.instance.pk:
             others = others.exclude(pk=self.instance.pk)
         # 選手の新規登録では、在籍と一緒に送られてくる選手がまだ保存されていない。
@@ -548,20 +594,45 @@ class PlayerStintForm(forms.ModelForm):
             others = others.exclude(player=player)
 
         for other in others:
-            existing = DomainStint(
-                team_id=other.team_id,
-                number=JerseyNumber(other.number),
-                from_year=other.from_year,
-                to_year=other.to_year,
-            )
-            if candidate.overlaps(existing):
+            existing = _to_domain_stint(other)
+            shared = candidate.shared_number(existing)
+            if shared is not None:
                 raise forms.ValidationError(
-                    f"背番号 {number} は {other.player.name} が {existing} に"
+                    f"背番号 {shared} は {other.player.name} が {existing} に"
                     f"使用しています。期間が重なる同じ背番号は登録できません。"
                 )
 
         self._ensure_foreign_player_quota(cleaned, team, player)
+        self._ensure_registered_limit(team, candidate)
         return cleaned
+
+    def _ensure_registered_limit(self, team, candidate):
+        """支配下の選手が新たにこのチームの人数に加わる場合、上限を超えないか確認する。
+
+        育成のまま・退団済みの在籍は数えない。既に支配下として数えられている在籍の
+        編集（背番号の変更など）は人数が増えないので通す。育成からの昇格は増える。
+        """
+        if not candidate.is_current or candidate.contract_now is not ContractStatus.REGISTERED:
+            return
+
+        if self.instance.pk:
+            stored = PlayerStint.objects.filter(pk=self.instance.pk).first()
+            counted = (
+                stored is not None
+                and stored.team_id == team.id
+                and stored.to_year is None
+                and _to_domain_stint(stored).contract_now is ContractStatus.REGISTERED
+            )
+            if counted:
+                return  # 既に支配下として数えられている
+
+        domain_team = DjangoTeamRepository().find_by_id(team.id)
+        league = DjangoLeagueRepository().find_by_id(team.league_id)
+        try:
+            # 判定とメッセージはドメイン（Team）の出典を使う
+            domain_team.ensure_room_for_registered(league.registered_player_limit)
+        except DomainError as error:
+            raise forms.ValidationError(str(error)) from None
 
     def _ensure_foreign_player_quota(self, cleaned, team, player):
         """外国人選手が新たにこのチームに加わる（在籍を開始する）場合、枠を超えないか確認する。
@@ -663,7 +734,7 @@ class PlayerStintInline(admin.TabularInline):
     form = PlayerStintForm
     formset = PlayerStintFormSet
     extra = 0
-    fields = ("team", "number", "from_year", "to_year")
+    fields = ("team", "number", "from_year", "to_year", "signed_as", "promoted_year", "number_before_promotion")
     ordering = ("-from_year",)
     autocomplete_fields = ("team",)
     verbose_name_plural = "在籍（経歴）"

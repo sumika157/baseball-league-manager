@@ -21,6 +21,7 @@ from django.views.generic import CreateView
 
 from ..application.dto import GameEditData, GameEditPlateAppearance
 from ..application.game_recording import GameRecordingService
+from ..application.roster import RosterService
 from ..application.services import TeamApplicationService
 from ..application.team_analysis import TeamAnalysisService
 from ..domain.exceptions import (
@@ -33,6 +34,7 @@ from ..domain.exceptions import (
 from ..domain.value_objects import (
     AdvanceReason,
     Base,
+    ContractStatus,
     ErrorKind,
     FieldingPosition,
     PlateAppearanceResult,
@@ -132,6 +134,18 @@ def build_team_analysis_service() -> TeamAnalysisService:
     )
 
 
+def build_roster_service() -> RosterService:
+    """契約区分（昇格）のサービスを組み立てる。
+
+    `build_service()` と同じく**組み立てはここだけ**にする。呼ぶ側ごとに
+    一部の依存だけを渡さず、必ずここを通す。
+    """
+    return RosterService(
+        teams=DjangoTeamRepository(),
+        leagues=DjangoLeagueRepository(),
+    )
+
+
 def dashboard(request):
     """ホーム画面。リーグ全体の概況と各種ランキングを表示する。"""
     return render(request, "myapp/dashboard.html", {"board": build_service().get_dashboard()})
@@ -209,6 +223,7 @@ def player_list(request, team_id):
                     name=form.cleaned_data["name"],
                     number=form.cleaned_data["number"],
                     position_label=form.cleaned_data["position"],
+                    contract_label=form.cleaned_data["contract"],
                 )
             except DomainError as error:
                 messages.error(request, str(error))
@@ -239,6 +254,7 @@ def player_list(request, team_id):
             "pos_mode": pos_mode,
             "form": form,
             "positions": Position.labels(),
+            "contracts": ContractStatus.labels(),
             "current_sort": listing.sort,
             "current_descending": listing.descending,
             # 通算値では見えない調子の波を、月ごとに区切って出す
@@ -623,6 +639,21 @@ def player_edit(request, team_id, player_id):
                 messages.error(request, str(error))
             else:
                 messages.success(request, f"{detail.name} 選手を主将に指名しました。")
+            return redirect(reverse("player_edit", args=[team_id, player_id]))
+
+        if "promote" in request.POST:
+            # 支配下登録は新しい背番号が要るので、フォームの数値欄を自分で読む
+            try:
+                new_number = int(request.POST.get("promote_number", ""))
+            except ValueError:
+                messages.error(request, "支配下登録の背番号を数値で入力してください。")
+            else:
+                try:
+                    build_roster_service().promote_player(team_id, player_id, new_number)
+                except DomainError as error:
+                    messages.error(request, str(error))
+                else:
+                    messages.success(request, f"{detail.name} 選手を支配下登録にしました（背番号 {new_number}）。")
             return redirect(reverse("player_edit", args=[team_id, player_id]))
 
         if "remove_captain" in request.POST:
