@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from ..domain.entities import jersey_number_in
+from ..domain.services.free_agency import SERVICE_DAYS_PER_SEASON
 from ..domain.services.roster_analysis import NEUTRAL_CATEGORY, ColorCategory
 from ..domain.value_objects import (
     BattingLine,
@@ -1152,6 +1153,41 @@ class AnalysisRosterRow:
     throws: Handedness | None
     bats: Handedness | None
     is_foreign_player: bool
+    # FA 取得の見込み（学歴の区分と入団年）の材料
+    debut_year: int | None = None
+    high_school: str = ""
+    university: str = ""
+    corporate_team: str = ""
+
+
+@dataclass(frozen=True)
+class PlayerYearSpan:
+    """選手のその年の初出場日と最終出場日（打撃・投球の明細の試合日。どのチームでの出場も含む）。"""
+
+    player_id: int
+    year: int
+    first_on: date
+    last_on: date
+
+
+@dataclass(frozen=True)
+class PlayerContractStint:
+    """選手の在籍1件の契約の事実（どのチームの在籍も含む）。育成だった年を導く材料。"""
+
+    player_id: int
+    from_year: int
+    to_year: int | None
+    contract: ContractFacts
+
+
+@dataclass(frozen=True)
+class ServiceHistory:
+    """FA 取得の見込みの材料。在籍選手の、表示年までの年ごとの出場の幅と在籍の契約。"""
+
+    spans: list[PlayerYearSpan]
+    stints: list[PlayerContractStint]
+    # 試合の記録がある最初の年（これより前の年は数えられない）。記録が無ければ None
+    records_from_year: int | None = None
 
 
 @dataclass(frozen=True)
@@ -1379,6 +1415,27 @@ class MoveRow:
 
 
 @dataclass(frozen=True)
+class FaRow:
+    """FA 取得タブの1行。表示年の在籍選手1人。"""
+
+    player_id: int
+    name: str
+    number: int
+    education_label: str
+    debut_year: int | None
+    # 数えたシーズン数と持ち越しの日数。入団年が分からないときは None
+    seasons: int | None
+    remainder_days: int
+    includes_estimate: bool
+    domestic_label: str
+    overseas_label: str
+    is_domestic_acquired: bool = False
+    is_overseas_acquired: bool = False
+    tone: ColorCategory = NEUTRAL_CATEGORY
+    is_developmental: bool = False
+
+
+@dataclass(frozen=True)
 class TeamAnalysis:
     """戦力分析ページの中身。"""
 
@@ -1403,6 +1460,11 @@ class TeamAnalysis:
     leavers: list[MoveRow]
     # リーグの支配下の上限（None は無制限）。チーム全体の支配下・育成の人数は下の property
     registered_limit: int | None = None
+    # FA 取得タブの行（タブが FA のときだけ作る）。records_from_year は試合の記録がある最初の年
+    fa_rows: list[FaRow] = field(default_factory=list)
+    records_from_year: int | None = None
+    # 1シーズンと数える登録日数（ドメインの出典 SERVICE_DAYS_PER_SEASON）。説明文に出す
+    service_days_per_season: int = SERVICE_DAYS_PER_SEASON
 
     @property
     def registered_count(self) -> int:

@@ -55,7 +55,7 @@
   <p class="text-muted">このチームにはまだ試合の記録がありません。在籍だけから編成を表示しています。</p>
 {% endif %}
 
-{# タブ。成績一覧・FA を足していく #}
+{# タブ。成績一覧を足していく #}
 <div class="segmented ms-2">
   {% for tab in analysis.tabs %}
     <a class="segmented-item {% if tab.key == analysis.tab %}is-active{% endif %}"
@@ -243,6 +243,47 @@
       {% endif %}
     </section>
     {% endfor %}
+  </div>
+{% elif analysis.tab == 'fa' %}
+  {% comment %}
+    FA 権の見込み。規則と並びはドメイン（free_agency）が決める。登録日数は保存せず、試合の出場から推定する。
+  {% endcomment %}
+  <h2 class="h6 mb-2">FA 取得の見込み</h2>
+  <p class="page-subtitle mb-2" style="font-size: 0.8125rem;">
+    {{ analysis.year }}年に在籍した選手。<strong>登録日数は試合への出場（初出場〜最終出場）から推定した値です</strong>
+    （育成だった年と試合に出ていない年は0日。{{ analysis.service_days_per_season }}日で1シーズン、{{ analysis.service_days_per_season }}日に満たない年は合算）。
+    {% if analysis.records_from_year %}試合の記録は{{ analysis.records_from_year }}年からで、それより前の年は数えられません。入団がそれより前の選手は、取得済みでなければ「不明」です。{% else %}試合の記録がまだありません。{% endif %}
+    並びは取得済み、取得が近い順（国内FA）です。
+  </p>
+  <div class="table-responsive mb-4">
+    <table class="table table-hover tabular-nums">
+      <thead>
+        <tr>
+          <th>背番号</th>
+          <th>選手</th>
+          <th>学歴</th>
+          <th class="text-end">入団年</th>
+          <th class="text-end">数えたシーズン（推定）</th>
+          <th>国内FA</th>
+          <th>海外FA</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in analysis.fa_rows %}
+        <tr>
+          <td><span class="jersey-number">{{ row.number }}</span></td>
+          <td class="player-tone player-tone-{{ row.tone.key }}"><a href="{% url 'player_detail' analysis.team_id row.player_id %}" class="player-name">{{ row.name }}</a>{% if row.tone.mark %}<span class="tone-mark">{{ row.tone.mark }}</span>{% endif %}{% if row.is_developmental %} <span class="badge bg-primary">育成</span>{% endif %}</td>
+          <td>{{ row.education_label }}</td>
+          <td class="text-end">{% if row.debut_year %}{{ row.debut_year }}年{% else %}—{% endif %}</td>
+          <td class="text-end">{% if row.seasons is None %}—{% else %}{{ row.seasons }}シーズン{% if row.remainder_days %}＋{{ row.remainder_days }}日{% endif %}{% if row.includes_estimate %}<span class="stat-muted">（推定）</span>{% endif %}{% endif %}</td>
+          <td{% if row.is_domestic_acquired %} class="fw-semibold"{% endif %}>{{ row.domestic_label }}</td>
+          <td{% if row.is_overseas_acquired %} class="fw-semibold"{% endif %}>{{ row.overseas_label }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="7" class="text-center text-muted py-4">この年に在籍した選手がいません。</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
 {% endif %}
 {% endif %}
