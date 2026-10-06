@@ -27,21 +27,25 @@ class ContractStatusTest(TestCase):
             ContractStatus.from_label("契約外")
 
     def test_developmental_needs_three_digits_and_registered_needs_two(self):
-        DEVELOPMENTAL.ensure_number_fits(JerseyNumber(100))
-        REGISTERED.ensure_number_fits(JerseyNumber(99))
+        DEVELOPMENTAL.ensure_number_fits(JerseyNumber("100"))
+        REGISTERED.ensure_number_fits(JerseyNumber("99"))
+        REGISTERED.ensure_number_fits(JerseyNumber("00"))
+        REGISTERED.ensure_number_fits(JerseyNumber("0"))
         with self.assertRaises(InvalidContract):
-            DEVELOPMENTAL.ensure_number_fits(JerseyNumber(99))
+            DEVELOPMENTAL.ensure_number_fits(JerseyNumber("00"))
         with self.assertRaises(InvalidContract):
-            REGISTERED.ensure_number_fits(JerseyNumber(100))
+            DEVELOPMENTAL.ensure_number_fits(JerseyNumber("99"))
+        with self.assertRaises(InvalidContract):
+            REGISTERED.ensure_number_fits(JerseyNumber("100"))
 
 
 class StintContractTest(TestCase):
     def _stint(self, **kwargs):
-        defaults = {"team_id": 1, "number": JerseyNumber(120), "from_year": 2024, "signed_as": DEVELOPMENTAL}
+        defaults = {"team_id": 1, "number": JerseyNumber("120"), "from_year": 2024, "signed_as": DEVELOPMENTAL}
         return Stint(**{**defaults, **kwargs})
 
     def test_registered_signing_is_always_registered(self):
-        stint = self._stint(number=JerseyNumber(10), signed_as=REGISTERED)
+        stint = self._stint(number=JerseyNumber("10"), signed_as=REGISTERED)
 
         self.assertIs(stint.contract_in(2020), REGISTERED)
         self.assertIs(stint.contract_now, REGISTERED)
@@ -53,7 +57,7 @@ class StintContractTest(TestCase):
         self.assertIs(stint.contract_now, DEVELOPMENTAL)
 
     def test_the_year_of_promotion_is_registered_and_the_year_before_is_not(self):
-        stint = self._stint(number=JerseyNumber(30), promoted_year=2026, number_before_promotion=JerseyNumber(120))
+        stint = self._stint(number=JerseyNumber("30"), promoted_year=2026, number_before_promotion=JerseyNumber("120"))
 
         self.assertIs(stint.contract_in(2025), DEVELOPMENTAL)
         self.assertIs(stint.contract_in(2026), REGISTERED)
@@ -62,15 +66,15 @@ class StintContractTest(TestCase):
 
     def test_promotion_year_before_joining_is_rejected(self):
         with self.assertRaises(InvalidContract):
-            self._stint(promoted_year=2023, number_before_promotion=JerseyNumber(120))
+            self._stint(promoted_year=2023, number_before_promotion=JerseyNumber("120"))
 
     def test_promotion_year_after_leaving_is_rejected(self):
         with self.assertRaises(InvalidContract):
-            self._stint(to_year=2025, promoted_year=2026, number_before_promotion=JerseyNumber(120))
+            self._stint(to_year=2025, promoted_year=2026, number_before_promotion=JerseyNumber("120"))
 
     def test_promotion_year_is_allowed_up_to_the_leaving_year(self):
         stint = self._stint(
-            number=JerseyNumber(30), to_year=2026, promoted_year=2026, number_before_promotion=JerseyNumber(120)
+            number=JerseyNumber("30"), to_year=2026, promoted_year=2026, number_before_promotion=JerseyNumber("120")
         )
 
         self.assertIs(stint.contract_in(2026), REGISTERED)
@@ -78,22 +82,22 @@ class StintContractTest(TestCase):
     def test_registered_signing_cannot_have_a_promotion_year(self):
         with self.assertRaises(InvalidContract):
             self._stint(
-                number=JerseyNumber(10),
+                number=JerseyNumber("10"),
                 signed_as=REGISTERED,
                 promoted_year=2025,
-                number_before_promotion=JerseyNumber(120),
+                number_before_promotion=JerseyNumber("120"),
             )
 
     def test_number_must_match_the_current_contract(self):
         self._stint().ensure_number_matches_contract()
         self._stint(
-            number=JerseyNumber(30), promoted_year=2025, number_before_promotion=JerseyNumber(120)
+            number=JerseyNumber("30"), promoted_year=2025, number_before_promotion=JerseyNumber("120")
         ).ensure_number_matches_contract()
         with self.assertRaises(InvalidContract):
-            self._stint(number=JerseyNumber(30)).ensure_number_matches_contract()
+            self._stint(number=JerseyNumber("30")).ensure_number_matches_contract()
         with self.assertRaises(InvalidContract):
             self._stint(
-                number=JerseyNumber(120), promoted_year=2025, number_before_promotion=JerseyNumber(120)
+                number=JerseyNumber("120"), promoted_year=2025, number_before_promotion=JerseyNumber("120")
             ).ensure_number_matches_contract()
 
 
@@ -112,6 +116,22 @@ class TeamContractTest(TestCase):
         )
 
     # --- 背番号と区分 ---
+
+    def test_zero_and_double_zero_can_both_be_on_the_same_team(self):
+        zero = self._add("ゼロ", "0")
+        double_zero = self._add("ダブルゼロ", "00")
+
+        self.assertEqual((zero.number.value, double_zero.number.value), ("0", "00"))
+        with self.assertRaises(DuplicateJerseyNumber):
+            self._add("重複", "00")
+        with self.assertRaises(DuplicateJerseyNumber):
+            self._add("重複", "0")
+
+    def test_double_zero_is_a_registered_number_and_100_is_developmental(self):
+        self.assertIs(self.team.contract_of(self._add("支配下", "00")), REGISTERED)
+        self.assertIs(self.team.contract_of(self._add("育成", "100", DEVELOPMENTAL)), DEVELOPMENTAL)
+        with self.assertRaises(InvalidContract):
+            self._add("育成の00", "00", DEVELOPMENTAL)
 
     def test_add_player_defaults_to_registered(self):
         player = self._add("山田", 10)
@@ -135,11 +155,11 @@ class TeamContractTest(TestCase):
         developmental = self._add("育成", 100, DEVELOPMENTAL)
         registered = self._add("支配下", 10)
 
-        self.team.change_player_number(developmental, JerseyNumber(101))
+        self.team.change_player_number(developmental, JerseyNumber("101"))
         with self.assertRaises(InvalidContract):
-            self.team.change_player_number(developmental, JerseyNumber(11))
+            self.team.change_player_number(developmental, JerseyNumber("11"))
         with self.assertRaises(InvalidContract):
-            self.team.change_player_number(registered, JerseyNumber(110))
+            self.team.change_player_number(registered, JerseyNumber("110"))
 
     # --- 昇格 ---
 
@@ -147,12 +167,12 @@ class TeamContractTest(TestCase):
         player = self._add("育成", 100, DEVELOPMENTAL, from_year=2024)
 
         player.id = 7
-        self.team.promote_player(7, JerseyNumber(25), 2026, limits=RosterLimits.UNLIMITED)
+        self.team.promote_player(7, JerseyNumber("25"), 2026, limits=RosterLimits.UNLIMITED)
 
         stint = self.team.current_stint(player)
         self.assertIs(self.team.contract_of(player), REGISTERED)
-        self.assertEqual(player.number, JerseyNumber(25))
-        self.assertEqual(stint.number, JerseyNumber(25))
+        self.assertEqual(player.number, JerseyNumber("25"))
+        self.assertEqual(stint.number, JerseyNumber("25"))
         self.assertEqual(stint.promoted_year, 2026)
         self.assertIs(stint.contract_in(2025), DEVELOPMENTAL)
 
@@ -161,10 +181,10 @@ class TeamContractTest(TestCase):
         player.id = 7
 
         with self.assertRaises(InvalidContract):
-            self.team.promote_player(7, JerseyNumber(150), 2026, limits=RosterLimits.UNLIMITED)
+            self.team.promote_player(7, JerseyNumber("150"), 2026, limits=RosterLimits.UNLIMITED)
 
         self.assertIs(self.team.contract_of(player), DEVELOPMENTAL)
-        self.assertEqual(player.number, JerseyNumber(100))
+        self.assertEqual(player.number, JerseyNumber("100"))
 
     def test_promotion_to_a_number_in_use_is_rejected(self):
         player = self._add("育成", 100, DEVELOPMENTAL)
@@ -172,21 +192,21 @@ class TeamContractTest(TestCase):
         self._add("先輩", 25)
 
         with self.assertRaises(DuplicateJerseyNumber):
-            self.team.promote_player(7, JerseyNumber(25), 2026, limits=RosterLimits.UNLIMITED)
+            self.team.promote_player(7, JerseyNumber("25"), 2026, limits=RosterLimits.UNLIMITED)
 
     def test_registered_player_cannot_be_promoted(self):
         player = self._add("支配下", 10)
         player.id = 7
 
         with self.assertRaises(InvalidContract):
-            self.team.promote_player(7, JerseyNumber(11), 2026, limits=RosterLimits.UNLIMITED)
+            self.team.promote_player(7, JerseyNumber("11"), 2026, limits=RosterLimits.UNLIMITED)
 
     def test_promotion_before_joining_is_rejected(self):
         player = self._add("育成", 100, DEVELOPMENTAL, from_year=2026)
         player.id = 7
 
         with self.assertRaises(InvalidContract):
-            self.team.promote_player(7, JerseyNumber(25), 2025, limits=RosterLimits.UNLIMITED)
+            self.team.promote_player(7, JerseyNumber("25"), 2025, limits=RosterLimits.UNLIMITED)
 
     def test_a_player_who_has_left_cannot_be_promoted(self):
         player = self._add("育成", 100, DEVELOPMENTAL)
@@ -194,7 +214,7 @@ class TeamContractTest(TestCase):
         self.team.retire_player(player, 2026)
 
         with self.assertRaises(InvalidContract):
-            self.team.promote_player(7, JerseyNumber(25), 2026, limits=RosterLimits.UNLIMITED)
+            self.team.promote_player(7, JerseyNumber("25"), 2026, limits=RosterLimits.UNLIMITED)
 
     # --- 昇格前の背番号 ---
 
@@ -202,12 +222,12 @@ class TeamContractTest(TestCase):
         player = self._add("育成", 100, DEVELOPMENTAL, from_year=2024)
         player.id = 7
 
-        self.team.promote_player(7, JerseyNumber(25), 2026, limits=RosterLimits.UNLIMITED)
+        self.team.promote_player(7, JerseyNumber("25"), 2026, limits=RosterLimits.UNLIMITED)
 
         stint = self.team.current_stint(player)
-        self.assertEqual(stint.number_before_promotion, JerseyNumber(100))
-        self.assertEqual(stint.number_in(2025), JerseyNumber(100))
-        self.assertEqual(stint.number_in(2026), JerseyNumber(25))
+        self.assertEqual(stint.number_before_promotion, JerseyNumber("100"))
+        self.assertEqual(stint.number_in(2025), JerseyNumber("100"))
+        self.assertEqual(stint.number_in(2026), JerseyNumber("25"))
 
     # --- 支配下の上限（支配下が1人増えるときの検査） ---
 
@@ -250,7 +270,7 @@ class TeamContractTest(TestCase):
         player.id = 7
         self.team.ensure_room_for_registered(2)  # 育成は数えないので昇格の余地がある
 
-        self.team.promote_player(7, JerseyNumber(25), 2026, limits=RosterLimits.UNLIMITED)
+        self.team.promote_player(7, JerseyNumber("25"), 2026, limits=RosterLimits.UNLIMITED)
 
         with self.assertRaises(RegisteredPlayerLimitExceeded):
             self.team.ensure_room_for_registered(2)
@@ -261,11 +281,11 @@ class StintNumberPeriodsTest(TestCase):
     def _promoted(self, **kwargs):
         defaults = {
             "team_id": 1,
-            "number": JerseyNumber(50),
+            "number": JerseyNumber("50"),
             "from_year": 2020,
             "signed_as": DEVELOPMENTAL,
             "promoted_year": 2025,
-            "number_before_promotion": JerseyNumber(120),
+            "number_before_promotion": JerseyNumber("120"),
         }
         return Stint(**{**defaults, **kwargs})
 
@@ -275,49 +295,49 @@ class StintNumberPeriodsTest(TestCase):
 
     def test_the_number_before_needs_a_promotion_year(self):
         with self.assertRaises(InvalidContract):
-            Stint(team_id=1, number=JerseyNumber(120), from_year=2020, signed_as=DEVELOPMENTAL,
-                  number_before_promotion=JerseyNumber(110))  # fmt: skip
+            Stint(team_id=1, number=JerseyNumber("120"), from_year=2020, signed_as=DEVELOPMENTAL,
+                  number_before_promotion=JerseyNumber("110"))  # fmt: skip
 
     def test_the_number_before_must_be_a_developmental_number(self):
         with self.assertRaises(InvalidContract):
-            self._promoted(number_before_promotion=JerseyNumber(60)).ensure_number_matches_contract()
+            self._promoted(number_before_promotion=JerseyNumber("60")).ensure_number_matches_contract()
 
     def test_number_in_switches_at_the_promotion_year(self):
         stint = self._promoted()
 
-        self.assertEqual(stint.number_in(2024), JerseyNumber(120))
-        self.assertEqual(stint.number_in(2025), JerseyNumber(50))
+        self.assertEqual(stint.number_in(2024), JerseyNumber("120"))
+        self.assertEqual(stint.number_in(2025), JerseyNumber("50"))
 
     def test_a_stint_without_promotion_has_one_period(self):
-        stint = Stint(team_id=1, number=JerseyNumber(50), from_year=2020, to_year=2022)
+        stint = Stint(team_id=1, number=JerseyNumber("50"), from_year=2020, to_year=2022)
 
-        self.assertEqual(stint.number_periods(), [(JerseyNumber(50), 2020, 2022)])
-        self.assertEqual(stint.number_in(2021), JerseyNumber(50))
+        self.assertEqual(stint.number_periods(), [(JerseyNumber("50"), 2020, 2022)])
+        self.assertEqual(stint.number_in(2021), JerseyNumber("50"))
 
     def test_a_promoted_stint_has_two_periods(self):
         self.assertEqual(
             self._promoted().number_periods(),
-            [(JerseyNumber(120), 2020, 2024), (JerseyNumber(50), 2025, None)],
+            [(JerseyNumber("120"), 2020, 2024), (JerseyNumber("50"), 2025, None)],
         )
 
     def test_promotion_in_the_joining_year_has_no_period_before(self):
-        self.assertEqual(self._promoted(promoted_year=2020).number_periods(), [(JerseyNumber(50), 2020, None)])
+        self.assertEqual(self._promoted(promoted_year=2020).number_periods(), [(JerseyNumber("50"), 2020, None)])
 
     def test_the_number_worn_before_promotion_does_not_clash_with_a_later_wearer(self):
         # 2015〜2023 に 50 を着けた人がいても、2025 に 50 で昇格した選手と期間が重ならない
-        earlier = Stint(team_id=1, number=JerseyNumber(50), from_year=2015, to_year=2023)
+        earlier = Stint(team_id=1, number=JerseyNumber("50"), from_year=2015, to_year=2023)
 
         self.assertIsNone(self._promoted().shared_number(earlier))
 
     def test_the_number_worn_before_promotion_clashes_when_periods_overlap(self):
-        other = Stint(team_id=1, number=JerseyNumber(120), from_year=2022, to_year=2023)
+        other = Stint(team_id=1, number=JerseyNumber("120"), from_year=2022, to_year=2023)
 
-        self.assertEqual(self._promoted().shared_number(other), JerseyNumber(120))
+        self.assertEqual(self._promoted().shared_number(other), JerseyNumber("120"))
 
     def test_the_new_number_clashes_with_a_current_wearer(self):
-        other = Stint(team_id=1, number=JerseyNumber(50), from_year=2024)
+        other = Stint(team_id=1, number=JerseyNumber("50"), from_year=2024)
 
-        self.assertEqual(self._promoted().shared_number(other), JerseyNumber(50))
+        self.assertEqual(self._promoted().shared_number(other), JerseyNumber("50"))
 
 
 class EnsurePromotableTest(TestCase):
@@ -326,7 +346,7 @@ class EnsurePromotableTest(TestCase):
 
     def test_a_registered_player_is_not_promotable(self):
         player = self.team.add_player(
-            "支配下", JerseyNumber(10), Position.INFIELDER, from_year=2026, limits=RosterLimits.UNLIMITED
+            "支配下", JerseyNumber("10"), Position.INFIELDER, from_year=2026, limits=RosterLimits.UNLIMITED
         )
         player.id = 7
 
@@ -336,7 +356,7 @@ class EnsurePromotableTest(TestCase):
     def test_a_developmental_player_is_promotable(self):
         player = self.team.add_player(
             "育成",
-            JerseyNumber(100),
+            JerseyNumber("100"),
             Position.INFIELDER,
             from_year=2026,
             contract=DEVELOPMENTAL,
@@ -353,11 +373,11 @@ class InYearTest(TestCase):
     def test_in_year_matches_the_stint(self):
         stint = Stint(
             team_id=1,
-            number=JerseyNumber(30),
+            number=JerseyNumber("30"),
             from_year=2024,
             signed_as=DEVELOPMENTAL,
             promoted_year=2026,
-            number_before_promotion=JerseyNumber(120),
+            number_before_promotion=JerseyNumber("120"),
         )
         for year in (2024, 2025, 2026, 2027):
             with self.subTest(year=year):
@@ -370,7 +390,7 @@ class InYearTest(TestCase):
         self.assertIs(ContractStatus.in_year(REGISTERED, None, 2000), REGISTERED)
 
     def test_the_number_changes_in_the_promotion_year(self):
-        now, before = JerseyNumber(30), JerseyNumber(120)
+        now, before = JerseyNumber("30"), JerseyNumber("120")
 
         self.assertEqual(jersey_number_in(now, 2026, before, 2025), before)
         self.assertEqual(jersey_number_in(now, 2026, before, 2026), now)
@@ -382,7 +402,7 @@ class TeamContractInYearTest(TestCase):
         self.team = Team(name="テストチーム", id=1, league_id=1)
         self.trainee = self.team.add_player(
             "育成",
-            JerseyNumber(120),
+            JerseyNumber("120"),
             Position.PITCHER,
             from_year=2024,
             contract=DEVELOPMENTAL,
@@ -390,7 +410,7 @@ class TeamContractInYearTest(TestCase):
         )
         self.trainee.id = 7
         self.regular = self.team.add_player(
-            "支配下", JerseyNumber(10), Position.PITCHER, from_year=2024, limits=RosterLimits.UNLIMITED
+            "支配下", JerseyNumber("10"), Position.PITCHER, from_year=2024, limits=RosterLimits.UNLIMITED
         )
         self.regular.id = 8
 
@@ -402,7 +422,7 @@ class TeamContractInYearTest(TestCase):
         self.assertIsNone(self.team.contract_in(self.trainee, 2023))
 
     def test_the_year_of_promotion_can_play_and_the_year_before_cannot(self):
-        self.team.promote_player(7, JerseyNumber(30), 2026, limits=RosterLimits.UNLIMITED)
+        self.team.promote_player(7, JerseyNumber("30"), 2026, limits=RosterLimits.UNLIMITED)
 
         self.team.ensure_not_developmental_in([7, 8], 2026)
         with self.assertRaisesRegex(InvalidContract, "育成選手の「育成」"):

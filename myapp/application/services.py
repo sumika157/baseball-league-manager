@@ -1253,7 +1253,7 @@ class TeamApplicationService:
                     position=player.position.label,
                     is_pitcher=player.is_pitcher,
                 )
-                for player in sorted(team.active_players, key=lambda p: p.number.value)
+                for player in sorted(team.active_players, key=lambda p: p.number.sort_key)
                 # 育成選手は試合に出られないので候補に出さない（保存で弾かれるだけの導線になる）。
                 # ただし既にこの試合に出ている選手は残す（過去のデータで、外すと打順・打席の表示が壊れる）
                 if player.id in slots or team.contract_in(player, game.season.year) is not ContractStatus.DEVELOPMENTAL
@@ -1325,7 +1325,7 @@ class TeamApplicationService:
         self,
         team_id: int,
         name: str,
-        number: int,
+        number: str,
         position_label: str,
         contract_label: str = ContractStatus.REGISTERED.value,
         acquired_via_label: str | None = None,
@@ -1347,7 +1347,7 @@ class TeamApplicationService:
         self._teams.save(team)
         return player
 
-    def update_player(self, team_id: int, player_id: int, *, name: str, number: int, position_label: str) -> Player:
+    def update_player(self, team_id: int, player_id: int, *, name: str, number: str, position_label: str) -> Player:
         """選手の基本情報を更新する。
 
         成績は試合から集計するため、ここでは扱わない。
@@ -1377,7 +1377,7 @@ class TeamApplicationService:
         *,
         from_team_id: int,
         to_team_id: int,
-        number: int,
+        number: str,
         year: int | None = None,
         contract_label: str | None = None,
         acquired_via_label: str | None = None,

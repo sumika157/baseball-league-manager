@@ -18,7 +18,7 @@ class RosterService:
         self._teams = teams
         self._leagues = leagues
 
-    def promote_player(self, team_id: int, player_id: int, number: int, year: int | None = None) -> None:
+    def promote_player(self, team_id: int, player_id: int, number: str, year: int | None = None) -> None:
         """育成選手を支配下に上げ、背番号を新しい番号に変える。
 
         昇格は支配下を1人増やすので、常に上限を検査する。検査に落ちたら保存しない。

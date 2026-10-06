@@ -37,7 +37,7 @@ class PlayerStatsQueryTest(BaseCase):
         row = self._by_name(self.query.list_career())["大砲"]
 
         self.assertEqual((row.batting.at_bats, row.batting.home_runs), (9, 3))
-        self.assertEqual((row.team_id, row.team_name, row.number), (self.team.id, "テストチーム", 3))
+        self.assertEqual((row.team_id, row.team_name, row.number), (self.team.id, "テストチーム", "3"))
 
     def test_season_counts_only_that_year(self):
         give_batting(self.team, self.rival, self.slugger.id, BattingLine(at_bats=4, home_runs=1), year=2025)
@@ -85,11 +85,15 @@ class PlayerStatsQueryTest(BaseCase):
         self.service.register_player(self.rival.id, "相手の1番", 1, "内野手")
         self.service.register_player(self.team.id, "自軍の1番", 1, "内野手")
 
+        for number in ["10", "2", "0", "00"]:
+            self.service.register_player(self.team.id, f"自軍の{number}番", number, "内野手")
+
         rows = self.query.list_career()
 
+        # 背番号は文字列の列。SQL の文字列順（「10」が「2」より前）にならず、00 → 0 → 1 → 2 → 3 → 10 → 18 の順
         self.assertEqual(
             [(row.team_name, row.number) for row in rows],
-            sorted((row.team_name, row.number) for row in rows),
+            [("テストチーム", n) for n in ["00", "0", "1", "2", "3", "10", "18"]] + [("相手チーム", "1")],
         )
 
     def test_pitching_matches_the_totals_computed_from_games(self):

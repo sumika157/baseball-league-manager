@@ -35,13 +35,13 @@ class RepositoryRoundTripTest(BaseCase):
 
     def test_save_and_reload_a_player(self):
         team = self.repo.find_by_id(self.team.id)
-        player = team.add_player("山田", JerseyNumber(10), Position.INFIELDER, limits=RosterLimits.UNLIMITED)
+        player = team.add_player("山田", JerseyNumber("10"), Position.INFIELDER, limits=RosterLimits.UNLIMITED)
         self.repo.save(team)
 
         saved = self.repo.find_by_id(self.team.id).find_player(player.id)
 
         self.assertEqual(saved.name, "山田")
-        self.assertEqual(saved.number.value, 10)
+        self.assertEqual(saved.number.value, "10")
         self.assertEqual(saved.position, Position.INFIELDER)
 
     def test_batting_totals_come_from_games(self):
@@ -76,12 +76,12 @@ class RepositoryRoundTripTest(BaseCase):
 
     def test_duplicate_number_is_rejected_on_the_aggregate(self):
         team = self.repo.find_by_id(self.team.id)
-        team.add_player("山田", JerseyNumber(10), Position.INFIELDER, limits=RosterLimits.UNLIMITED)
+        team.add_player("山田", JerseyNumber("10"), Position.INFIELDER, limits=RosterLimits.UNLIMITED)
         self.repo.save(team)
 
         reloaded = self.repo.find_by_id(self.team.id)
         with self.assertRaises(DuplicateJerseyNumber):
-            reloaded.add_player("田中", JerseyNumber(10), Position.OUTFIELDER, limits=RosterLimits.UNLIMITED)
+            reloaded.add_player("田中", JerseyNumber("10"), Position.OUTFIELDER, limits=RosterLimits.UNLIMITED)
 
 
 class GameRepositoryTest(BaseCase):

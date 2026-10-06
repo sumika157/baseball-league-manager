@@ -123,7 +123,7 @@ class BattingLeaderTest(TestCase):
         """投手の打撃成績は打撃タイトルに入れない（本塁打・打点と同じ）。"""
         pitcher = Player(
             name="投手",
-            number=JerseyNumber(11),
+            number=JerseyNumber("11"),
             position=Position.PITCHER,
             id=11,
             batting=BattingLine(at_bats=10, singles=5, stolen_bases=2),

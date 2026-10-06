@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass, fields
 from datetime import date
@@ -117,15 +118,15 @@ class ContractStatus(Enum):
         return self.value
 
     def ensure_number_fits(self, number: JerseyNumber) -> None:
-        """背番号がこの区分に合うか。育成は100以上、支配下は99以下。"""
-        is_three_digit = number.value >= DEVELOPMENTAL_MIN_NUMBER
+        """背番号がこの区分に合うか。育成は3桁（100以上）、支配下は2桁以下（00・0〜99）。"""
+        is_three_digit = number.is_three_digit
         if self is ContractStatus.DEVELOPMENTAL and not is_three_digit:
             raise InvalidContract(
                 f"育成選手の背番号は{DEVELOPMENTAL_MIN_NUMBER}以上にしてください（背番号 {number}）。"
             )
         if self is ContractStatus.REGISTERED and is_three_digit:
             raise InvalidContract(
-                f"支配下選手の背番号は{DEVELOPMENTAL_MIN_NUMBER - 1}以下にしてください（背番号 {number}）。"
+                f"支配下選手の背番号は00・0〜{DEVELOPMENTAL_MIN_NUMBER - 1}にしてください（背番号 {number}）。"
             )
 
     @classmethod
@@ -769,33 +770,48 @@ class ErrorKind(Enum):
         return [item.value for item in cls]
 
 
+_JERSEY_PATTERN = re.compile(r"0|00|[1-9][0-9]{0,2}")
+
+
 @dataclass(frozen=True)
 class JerseyNumber:
-    """背番号。
+    """背番号。**表記の文字列で持つ**（NPB と同じく「0」と「00」は別の番号）。
 
-    日本の球団では育成選手が3桁を用いるため 0〜999 を許容する。
+    受け付けるのは「0」「00」「1」〜「999」。前ゼロは「00」だけで、「01」などは認めない。
+    3桁（100〜999）は育成選手が用いる。int で渡されたときは文字列に直す（int は「00」を表せない
+    ので、「00」が「0」に化ける経路にはならない）。
     """
 
-    value: int
+    value: str
 
-    MIN = 0
-    MAX = 999
+    DOUBLE_ZERO = "00"
 
     def __post_init__(self) -> None:
-        try:
-            number = int(self.value)
-        except (TypeError, ValueError):
-            raise InvalidJerseyNumber("背番号は数値で入力してください。") from None
+        raw = self.value
+        if isinstance(raw, int) and not isinstance(raw, bool):
+            raw = str(raw)
+        if not isinstance(raw, str):
+            raise InvalidJerseyNumber("背番号は数字で入力してください。")
+        text = raw.strip()
+        if not _JERSEY_PATTERN.fullmatch(text):
+            raise InvalidJerseyNumber(
+                "背番号は 0・00・1〜999 の数字で入力してください（「01」のような前ゼロは使えません）。"
+            )
+        if text != self.value:
+            object.__setattr__(self, "value", text)
 
-        if number != self.value:
-            # int() を通した結果と食い違う場合（'10' や 10.5 など）は正規化して差し替える
-            object.__setattr__(self, "value", number)
+    @property
+    def sort_key(self) -> int:
+        """背番号順の並びのキー。**並びの出典はここだけ**: 00 → 0 → 1 → 2 … → 99 → 100 …"""
+        return -1 if self.value == self.DOUBLE_ZERO else int(self.value)
 
-        if not (self.MIN <= number <= self.MAX):
-            raise InvalidJerseyNumber(f"背番号は {self.MIN}〜{self.MAX} の範囲で入力してください。")
+    @property
+    def is_three_digit(self) -> bool:
+        """3桁の背番号か（育成選手の番号帯）。判定は数値でなく表記の桁数で行う。"""
+        return len(self.value) == 3
 
     def __str__(self) -> str:
-        return str(self.value)
+        return self.value
 
 
 _OUTS_PER_INNING = 3

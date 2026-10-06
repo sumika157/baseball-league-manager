@@ -18,6 +18,7 @@ from ..domain.value_objects import (
     ContractStatus,
     FieldingPosition,
     Handedness,
+    JerseyNumber,
     Position,
     Profile,
     Season,
@@ -228,7 +229,7 @@ class TeamAnalysisService:
                 ),
                 is_developmental=player.contract.contract_in(year) is ContractStatus.DEVELOPMENTAL,
             )
-            rows.append(((*domain_services.fa_order(outlook), number), row))
+            rows.append(((*domain_services.fa_order(outlook), JerseyNumber(number).sort_key), row))
         rows.sort(key=lambda entry: entry[0])
         return [row for _, row in rows]
 

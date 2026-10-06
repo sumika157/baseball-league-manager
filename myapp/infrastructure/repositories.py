@@ -307,7 +307,7 @@ class DjangoTeamRepository:
                         fa_declarations=roster.declarations.get(player_id, []),
                     )
                 )
-            players.sort(key=lambda p: p.number.value)
+            players.sort(key=lambda p: p.number.sort_key)
 
         return Team(
             id=row.id,

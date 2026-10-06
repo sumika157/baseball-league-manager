@@ -5,17 +5,20 @@
 アプリケーション層には検証済みの値だけを渡す。
 """
 
+from typing import Any
+
 from django import forms
 
 from ..application.dto import LineupSlot
 from ..domain.entities import FieldingError, PlateAppearance, RunnerAdvance
-from ..domain.exceptions import InvalidPosition
+from ..domain.exceptions import InvalidJerseyNumber, InvalidPosition
 from ..domain.value_objects import (
     AdvanceReason,
     Base,
     ContractStatus,
     ErrorKind,
     FieldingPosition,
+    JerseyNumber,
     PlateAppearanceResult,
     Position,
 )
@@ -27,6 +30,24 @@ FIELDING_POSITION_CHOICES = [("", "—")] + [(p.value, p.value) for p in Fieldin
 MAX_INNINGS = 12
 
 
+class JerseyNumberField(forms.CharField):
+    """背番号の入力欄。表記のまま（「00」を「0」にしない）ドメインの `JerseyNumber` で検証する。
+
+    受け付ける範囲と文言はドメインが唯一の出典で、ここには書かない。
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        # 入力欄はテンプレートが書くので、ここにウィジェットの属性（入力の目安の pattern）は持たない
+        super().__init__(max_length=3, strip=True, **kwargs)
+
+    def clean(self, value: Any) -> str:
+        text = super().clean(value)
+        try:
+            return JerseyNumber(text).value
+        except InvalidJerseyNumber as error:
+            raise forms.ValidationError(str(error)) from error
+
+
 class PlayerUpdateForm(forms.Form):
     """選手情報の更新。基本情報の項目は登録時と同じ（契約区分を除く）。
 
@@ -34,7 +55,7 @@ class PlayerUpdateForm(forms.Form):
     """
 
     name = forms.CharField(label="選手名", max_length=100)
-    number = forms.IntegerField(label="背番号", min_value=0, max_value=999)
+    number = JerseyNumberField(label="背番号")
     position = forms.ChoiceField(
         label="守備位置",
         choices=POSITION_CHOICES,

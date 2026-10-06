@@ -35,7 +35,7 @@ class ActivePlayerStats:
 
     player_id: int
     name: str
-    number: int
+    number: str
     position: Position
     team_id: int
     team_name: str
@@ -97,7 +97,7 @@ class PlayerIndexEntry:
     """
 
     name: str
-    number: int
+    number: str
     team_id: int
     career_batting_average: float
     career_earned_run_average: float
@@ -109,7 +109,7 @@ class GameEditPlayer:
 
     id: int
     name: str
-    number: int
+    number: str
     position: str
     is_pitcher: bool
 
@@ -215,7 +215,7 @@ class GamePlayerRow:
 
     player_id: int
     player_name: str
-    number: int
+    number: str
     team_id: int
     team_name: str
     # 打撃
@@ -308,7 +308,7 @@ class GameFieldingRow:
 
     player_id: int
     player_name: str
-    number: int
+    number: str
     team_id: int
     position_label: str
     putouts: int = 0
@@ -558,7 +558,7 @@ class CareerRow:
 
     team_id: int
     team_name: str
-    number: int
+    number: str
     from_year: int
     to_year: int | None
     is_current: bool
@@ -646,7 +646,7 @@ class PlayerSearchRow:
     team_id: int | None
     team_name: str
     league_name: str
-    number: int | None
+    number: str | None
     is_active: bool
 
 
@@ -971,7 +971,7 @@ class BatterRow:
 
     id: int
     name: str
-    number: int
+    number: str
     position: str
     at_bats: int
     hits: int
@@ -1004,7 +1004,7 @@ class PitcherRow:
 
     id: int
     name: str
-    number: int
+    number: str
     position: str
     innings_pitched: str
     wins: int
@@ -1052,7 +1052,7 @@ class PlayerDetail:
     id: int
     team_id: int
     name: str
-    number: int
+    number: str
     position: str
     is_pitcher: bool
     # 打撃
@@ -1144,15 +1144,15 @@ class ContractFacts:
     `jersey_number_in` で導く（ここに判定を書かない）。
     """
 
-    number: int
+    number: str
     signed_as: ContractStatus
     promoted_year: int | None
-    number_before_promotion: int | None
+    number_before_promotion: str | None
 
     def contract_in(self, year: int) -> ContractStatus:
         return ContractStatus.in_year(self.signed_as, self.promoted_year, year)
 
-    def number_in(self, year: int) -> int:
+    def number_in(self, year: int) -> str:
         before = None if self.number_before_promotion is None else JerseyNumber(self.number_before_promotion)
         return jersey_number_in(JerseyNumber(self.number), self.promoted_year, before, year).value
 
@@ -1310,7 +1310,7 @@ class DepthPlayer:
 
     player_id: int
     name: str
-    number: int
+    number: str
     age: int | None
     is_foreign_player: bool
     games: int
@@ -1387,7 +1387,7 @@ class UsagePlayer:
 
     player_id: int
     name: str
-    number: int
+    number: str
     starts: int
     games: int
     tone: ColorCategory = NEUTRAL_CATEGORY
@@ -1439,7 +1439,7 @@ class MoveRow:
 
     player_id: int
     name: str
-    number: int
+    number: str
     position_label: str
     kind_label: str
     other_team_name: str = ""
@@ -1457,7 +1457,7 @@ class FaRow:
 
     player_id: int
     name: str
-    number: int
+    number: str
     education_label: str
     debut_year: int | None
     # 数えたシーズン数と持ち越しの日数。入団年が分からないときは None

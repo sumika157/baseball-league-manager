@@ -643,18 +643,14 @@ def player_edit(request, team_id, player_id):
             return redirect(reverse("player_edit", args=[team_id, player_id]))
 
         if "promote" in request.POST:
-            # 支配下登録は新しい背番号が要るので、フォームの数値欄を自分で読む
+            # 支配下登録は新しい背番号が要るので、フォームの欄を自分で読む。表記の検証はドメインが行う
+            new_number = request.POST.get("promote_number", "").strip()
             try:
-                new_number = int(request.POST.get("promote_number", ""))
-            except ValueError:
-                messages.error(request, "支配下登録の背番号を数値で入力してください。")
+                build_roster_service().promote_player(team_id, player_id, new_number)
+            except DomainError as error:
+                messages.error(request, str(error))
             else:
-                try:
-                    build_roster_service().promote_player(team_id, player_id, new_number)
-                except DomainError as error:
-                    messages.error(request, str(error))
-                else:
-                    messages.success(request, f"{detail.name} 選手を支配下登録にしました（背番号 {new_number}）。")
+                messages.success(request, f"{detail.name} 選手を支配下登録にしました（背番号 {new_number}）。")
             return redirect(reverse("player_edit", args=[team_id, player_id]))
 
         if "declare_fa" in request.POST or "remove_fa" in request.POST:

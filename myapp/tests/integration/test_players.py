@@ -133,7 +133,7 @@ class PlayerEditViewTest(BaseCase):
 
         detail = self.service.get_player_detail(self.team.id, player.id)
         self.assertEqual(detail.name, "山田太郎")
-        self.assertEqual(detail.number, 11)
+        self.assertEqual(detail.number, "11")
         self.assertEqual(detail.position, "外野手")
 
     def test_stats_are_shown_but_not_editable(self):
@@ -186,7 +186,7 @@ class PlayerEditViewTest(BaseCase):
             },
         )
 
-        self.assertEqual(self.service.get_player_detail(self.team.id, tanaka.id).number, 11)
+        self.assertEqual(self.service.get_player_detail(self.team.id, tanaka.id).number, "11")
 
     def test_missing_player_returns_404(self):
         self.assertEqual(self.client.get(self._url(9999)).status_code, 404)
@@ -608,7 +608,7 @@ class PlayerSearchTest(BaseCase):
 
         self.assertEqual(row.team_name, "相手チーム")
         self.assertEqual(row.league_name, "テストリーグ")
-        self.assertEqual(row.number, 7)
+        self.assertEqual(row.number, "7")
         self.assertTrue(row.is_active)
 
     def test_retired_players_are_found(self):
@@ -632,7 +632,7 @@ class PlayerSearchTest(BaseCase):
         row = self._search("山田太郎")[0]
 
         self.assertEqual(row.team_name, "相手チーム")
-        self.assertEqual(row.number, 99)
+        self.assertEqual(row.number, "99")
 
     def test_no_match(self):
         response = self.client.get(f"{self.url}?q=存在しない名前")

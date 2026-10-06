@@ -145,9 +145,12 @@ class HandTest(unittest.TestCase):
 
 class DepthOrderTest(unittest.TestCase):
     def test_starts_then_games_then_number(self):
-        players = [(5, 20, 11), (10, 10, 99), (5, 30, 7), (5, 30, 3)]
+        players = [(5, 20, "11"), (10, 10, "99"), (5, 30, "7"), (5, 30, "3"), (5, 30, "00"), (5, 30, "0")]
         ordered = sorted(players, key=lambda p: ra.depth_order(*p))
-        self.assertEqual(ordered, [(10, 10, 99), (5, 30, 3), (5, 30, 7), (5, 20, 11)])
+        self.assertEqual(
+            ordered,
+            [(10, 10, "99"), (5, 30, "00"), (5, 30, "0"), (5, 30, "3"), (5, 30, "7"), (5, 20, "11")],
+        )
 
 
 class UsageMapTest(unittest.TestCase):
@@ -271,19 +274,19 @@ class MoveJudgementTest(unittest.TestCase):
 
     def test_order_is_kind_then_number(self):
         rows = [
-            (ra.MoveKind.REJOINED, 1),
-            (ra.MoveKind.TRANSFER, 30),
-            (ra.MoveKind.NEW_SIGNING, 99),
-            (ra.MoveKind.TRANSFER, 5),
+            (ra.MoveKind.REJOINED, "1"),
+            (ra.MoveKind.TRANSFER, "30"),
+            (ra.MoveKind.NEW_SIGNING, "99"),
+            (ra.MoveKind.TRANSFER, "5"),
         ]
         rows.sort(key=lambda r: ra.move_order(*r))
         self.assertEqual(
             rows,
             [
-                (ra.MoveKind.NEW_SIGNING, 99),
-                (ra.MoveKind.TRANSFER, 5),
-                (ra.MoveKind.TRANSFER, 30),
-                (ra.MoveKind.REJOINED, 1),
+                (ra.MoveKind.NEW_SIGNING, "99"),
+                (ra.MoveKind.TRANSFER, "5"),
+                (ra.MoveKind.TRANSFER, "30"),
+                (ra.MoveKind.REJOINED, "1"),
             ],
         )
 
