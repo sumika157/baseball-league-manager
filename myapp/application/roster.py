@@ -24,12 +24,15 @@ class RosterService:
         昇格は支配下を1人増やすので、常に上限を検査する。検査に落ちたら保存しない。
         """
         team = self._teams.find_by_id(team_id)
-        # 上限より先に、昇格できる選手か（在籍中の育成選手か）を見る。理由を取り違えて案内しない
-        team.ensure_promotable(player_id)
         assert team.league_id is not None, "リポジトリから読んだチームはリーグに属する"
         league = self._leagues.find_by_id(team.league_id)
-        team.ensure_room_for_registered(league.registered_player_limit)
-        team.promote_player(player_id, JerseyNumber(number), year if year is not None else date.today().year)
+        # 昇格できる選手か・上限（この順。理由を取り違えて案内しない）・背番号の検査は集約が行う
+        team.promote_player(
+            player_id,
+            JerseyNumber(number),
+            year if year is not None else date.today().year,
+            limits=league.roster_limits,
+        )
         self._teams.save(team)
 
     def declare_free_agency(self, team_id: int, player_id: int, year: int, kind_label: str) -> None:
