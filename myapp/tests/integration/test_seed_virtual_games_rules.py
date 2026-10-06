@@ -7,14 +7,16 @@
 
 from collections import defaultdict
 from io import StringIO
+from types import SimpleNamespace
 
 from django.core.management import CommandError, call_command
+from django.test import SimpleTestCase
 
 from myapp.domain.pennant.world import WorldScope
-from myapp.domain.value_objects import Position
+from myapp.domain.value_objects import FieldingPosition, Position
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
-from myapp.management.commands.seed_virtual_games import MAX_INNINGS
+from myapp.management.commands.seed_virtual_games import MAX_INNINGS, Command, _Side
 
 from .base import BaseCase
 
@@ -247,3 +249,135 @@ class SeedGamesWithoutRostersTest(BaseCase):
         with self.assertRaisesMessage(CommandError, "試合を作れるリーグがありません"):
             run()
         self.assertFalse(orm_models.Game.objects.exists())
+
+
+class SeedGamesLeftHandersTest(SeedGamesBase):
+    """左投げの内野手・捕手を多く置いても、先発・途中出場の捕・二・三・遊に就かない（#158）。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        # 捕手2人のうち1人、内野手5人のうち3人を左投げにする（右投げの内野手は2人しかいない）
+        for team in self.teams:
+            players = orm_models.Player.objects.filter(stints__team=team)
+            catcher = players.filter(position=Position.CATCHER.value).order_by("id").first()
+            assert catcher is not None
+            orm_models.Player.objects.filter(id=catcher.id).update(throws="左")
+            infielder_ids = list(
+                players.filter(position=Position.INFIELDER.value, stints__to_year__isnull=True)
+                .order_by("id")
+                .values_list("id", flat=True)[:3]
+            )
+            orm_models.Player.objects.filter(id__in=infielder_ids).update(throws="左")
+        run()
+        self.games = DjangoGameRepository(WorldScope.real()).find_all(YEAR)
+
+    def test_no_left_hander_takes_catcher_second_third_or_short(self) -> None:
+        left_ids = set(orm_models.Player.objects.filter(throws="左").values_list("id", flat=True))
+        restricted = {
+            FieldingPosition.CATCHER,
+            FieldingPosition.SECOND_BASE,
+            FieldingPosition.THIRD_BASE,
+            FieldingPosition.SHORTSTOP,
+        }
+        self.assertTrue(self.games)
+        checked = 0
+        for game in self.games:
+            for entry in game.batting:
+                if entry.fielding_position in restricted:
+                    checked += 1
+                    self.assertNotIn(entry.player_id, left_ids, str(game))
+        self.assertGreater(checked, 0)
+
+    def test_every_team_starts_eight_fielders_and_one_designated_hitter(self) -> None:
+        """先発は8つの守備位置と指名打者1人を重複なく埋める（指名打者が2人で守備位置が空く形を作らない）。"""
+        expected = {FieldingPosition(label) for label in "捕一二三遊左中右指"}
+        checked = 0
+        for game in self.games:
+            for team_id in (game.home_team_id, game.away_team_id):
+                starters = [
+                    e.fielding_position
+                    for e in game.batting
+                    if self.team_of[e.player_id] == team_id and e.slot_sequence == 0
+                ]
+                with self.subTest(game=str(game), team=team_id):
+                    self.assertEqual(len(starters), 9)
+                    self.assertEqual(set(starters), expected)
+                checked += 1
+        self.assertGreater(checked, 0)
+
+
+def _player(player_id: int, position: Position, throws: str) -> SimpleNamespace:
+    return SimpleNamespace(id=player_id, position=position.value, throws=throws)
+
+
+class DefensiveAlignmentTest(SimpleTestCase):
+    """守備位置の割り振り（#158）。行き場の無い左投げが何人いても、9枠を重複なく埋める。"""
+
+    def lefty_heavy(self) -> list[SimpleNamespace]:
+        # 捕右・内左左左右右・外右右右（遊撃を守れる右投げが足りない）
+        return [
+            _player(1, Position.CATCHER, "右"),
+            *(_player(n, Position.INFIELDER, "左") for n in (2, 3, 4)),
+            *(_player(n, Position.INFIELDER, "右") for n in (5, 6)),
+            *(_player(n, Position.OUTFIELDER, "右") for n in (7, 8, 9)),
+        ]
+
+    def test_slots_are_filled_without_duplicates_even_when_the_rule_must_bend(self) -> None:
+        regulars = self.lefty_heavy()
+        positions, starters, bench = Command._defensive_alignment(regulars, [])
+        self.assertEqual(
+            sorted(positions.values(), key=lambda p: p.value),
+            sorted((FieldingPosition(label) for label in "捕一二三遊左中右指"), key=lambda p: p.value),
+        )
+        self.assertEqual(len(positions), 9)
+        self.assertEqual(starters, regulars)
+        self.assertEqual(bench, [])
+
+    def test_a_right_handed_reserve_takes_the_open_slot_before_the_rule_bends(self) -> None:
+        regulars = self.lefty_heavy()
+        reserves = [_player(10, Position.OUTFIELDER, "右"), _player(11, Position.INFIELDER, "右")]
+        positions, starters, bench = Command._defensive_alignment(regulars, reserves)
+        self.assertEqual(len(set(positions.values())), 9)
+        restricted = {
+            FieldingPosition.CATCHER,
+            FieldingPosition.SECOND_BASE,
+            FieldingPosition.THIRD_BASE,
+            FieldingPosition.SHORTSTOP,
+        }
+        for player in starters:
+            if positions[player.id] in restricted:
+                self.assertEqual(player.throws, "右", player.id)
+        self.assertEqual({p.id for p in starters} | {p.id for p in bench}, {p.id for p in [*regulars, *reserves]})
+        self.assertEqual(len(starters), 9)
+
+    def test_without_left_handers_nothing_changes(self) -> None:
+        regulars = [_player(n, Position.INFIELDER, "右") for n in (2, 3, 4, 5)] + [
+            _player(1, Position.CATCHER, "右"),
+            *(_player(n, Position.OUTFIELDER, "右") for n in (7, 8, 9)),
+            _player(6, Position.DESIGNATED_HITTER, "右"),
+        ]
+        positions, starters, _ = Command._defensive_alignment(regulars, [])
+        self.assertEqual(len(set(positions.values())), 9)
+        self.assertEqual(starters, regulars)
+
+
+class WithinQuotaTest(SimpleTestCase):
+    """外国人の出場枠が先で、投げる手は次（#158）。"""
+
+    def side(self, foreign_ids: set[int], used: int) -> _Side:
+        return _Side(team=None, roster={"foreign": foreign_ids}, is_home=True, foreign_used=used)
+
+    def test_a_reserve_that_suits_the_position_is_preferred(self) -> None:
+        wanted = _player(1, Position.INFIELDER, "右")
+        left = _player(2, Position.INFIELDER, "左")
+        right = _player(3, Position.INFIELDER, "右")
+        side = self.side({1}, used=1)
+        chosen = Command._within_quota(side, wanted, [left, right], 1, FieldingPosition.SHORTSTOP)
+        self.assertEqual(chosen.id, 3)
+
+    def test_the_quota_wins_over_the_throwing_hand(self) -> None:
+        wanted = _player(1, Position.INFIELDER, "右")
+        left = _player(2, Position.INFIELDER, "左")
+        side = self.side({1}, used=1)
+        chosen = Command._within_quota(side, wanted, [left], 1, FieldingPosition.SHORTSTOP)
+        self.assertEqual(chosen.id, 2)

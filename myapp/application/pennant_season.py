@@ -264,7 +264,11 @@ def pool_of(team: SimulationTeam, ratings: dict[int, BatterRatings | PitcherRati
         if isinstance(ability, PitcherRatings):
             pitchers.append(SimPitcher(player.player_id, player.name, ability, player.is_foreign))
         elif isinstance(ability, BatterRatings):
-            batters.append(SimBatter(player.player_id, player.name, player.position, ability, player.is_foreign))
+            batters.append(
+                SimBatter(
+                    player.player_id, player.name, player.position, ability, player.is_foreign, throws=player.throws
+                )
+            )
     return ClubRoster(team_id=team.team_id, name=team.name, batters=tuple(batters), pitchers=tuple(pitchers))
 
 

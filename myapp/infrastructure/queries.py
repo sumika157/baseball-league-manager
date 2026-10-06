@@ -222,12 +222,23 @@ class DjangoSimulationContextQuery:
             stints_in(self._scope)
             .filter(to_year__isnull=True)
             .order_by("team_id", "number", "player_id")
-            .values_list("team_id", "player_id", "player__name", "player__position", "player__is_foreign_player")
+            .values_list(
+                "team_id",
+                "player_id",
+                "player__name",
+                "player__position",
+                "player__is_foreign_player",
+                "player__throws",
+            )
         )
-        for team_id, player_id, name, position, is_foreign in stints:
+        for team_id, player_id, name, position, is_foreign, throws in stints:
             players.setdefault(team_id, []).append(
                 SimulationPlayer(
-                    player_id=player_id, name=name, position=Position.from_label(position), is_foreign=is_foreign
+                    player_id=player_id,
+                    name=name,
+                    position=Position.from_label(position),
+                    is_foreign=is_foreign,
+                    throws=Handedness.from_label(throws),
                 )
             )
 
