@@ -28,6 +28,7 @@
           <a href="{% scoped_url 'player_detail' team_id row.id %}" class="player-name">{{ row.name }}</a>
           <span class="badge bg-secondary ms-1">{{ row.position }}</span>
           {% if row.is_foreign_player %}<span class="badge bg-info text-dark ms-1">外国人</span>{% endif %}
+          {% if row.id in reserve_ids %}<span class="badge bg-secondary ms-1">2軍</span>{% endif %}
         </td>
         <td class="text-end stat-muted">{{ row.age|default:'—' }}</td>
         {% for cell in row.cells %}

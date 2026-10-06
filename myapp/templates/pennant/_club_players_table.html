@@ -1,5 +1,7 @@
 {% comment %}
 1軍登録の選手の表。editing が真のときだけ、先頭にチェックボックスの列を出す（呼び出し元が保存のフォームで囲む）。
+選ぶ材料として、年齢・能力の要約（総合と各項目の区分）・今季の成績を並べる。club_players は選手ごとの詳細（ClubPlayerDetail）。
+区分と目立たせ方は DTO（RatingCell）が持つので、ここには境目の数値を書かない。
 {% endcomment %}
 {% load scoped %}
 <div class="table-responsive">
@@ -11,10 +13,14 @@
         <th>登録位置</th>
         <th>外国人</th>
         <th>区分</th>
+        <th class="text-end">年齢</th>
+        <th>能力</th>
+        <th>今季の成績</th>
       </tr>
     </thead>
     <tbody>
-      {% for row in club.players %}
+      {% for detail in club_players %}
+        {% with row=detail.player %}
         <tr>
           {% if editing %}
             <td><input type="checkbox" class="form-check-input" name="active" value="{{ row.player_id }}" aria-label="{{ row.name }}を1軍に登録する" {% if row.player_id in active_checked %}checked{% endif %}></td>
@@ -23,7 +29,26 @@
           <td>{{ row.position.value }}</td>
           <td>{% if row.is_foreign %}<span class="badge bg-secondary">外国人</span>{% endif %}</td>
           <td>{% if row.is_active %}1軍{% else %}<span class="stat-muted">2軍</span>{% endif %}</td>
+          <td class="text-end stat-muted">{{ detail.age|default:'—' }}</td>
+          <td>
+            {% if detail.overall %}
+              <div>{{ detail.overall.label }} {% include 'myapp/_rating_grade.html' with rating=detail.overall %}</div>
+              <div class="stat-muted" style="font-size: 0.8125rem;">
+                {% for cell in detail.cells %}{{ cell.label }} {% include 'myapp/_rating_grade.html' with rating=cell %}{% if not forloop.last %} · {% endif %}{% endfor %}
+              </div>
+            {% else %}<span class="stat-muted">—</span>{% endif %}
+          </td>
+          <td>
+            {% if detail.batting %}
+              <span class="stat-key">{{ detail.batting.batting_average|floatformat:3 }}</span>
+              <span class="stat-muted">{{ detail.batting.home_runs }}本 {{ detail.batting.runs_batted_in }}点 OPS {{ detail.batting.ops|floatformat:3 }}</span>
+            {% elif detail.pitching %}
+              <span class="stat-key">{{ detail.pitching.earned_run_average|floatformat:2 }}</span>
+              <span class="stat-muted">{{ detail.pitching.innings_pitched }}回 {{ detail.pitching.wins }}勝{{ detail.pitching.losses }}敗 {{ detail.pitching.saves }}S</span>
+            {% else %}<span class="stat-muted">—</span>{% endif %}
+          </td>
         </tr>
+        {% endwith %}
       {% endfor %}
     </tbody>
   </table>

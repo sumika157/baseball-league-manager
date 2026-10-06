@@ -160,6 +160,7 @@
           <span class="badge bg-secondary ms-1">{{ player.position }}</span>
           {% if player.is_captain %}<span class="badge bg-warning text-dark ms-1">主将</span>{% endif %}
           {% if player.is_foreign_player %}<span class="badge bg-info text-dark ms-1">外国人</span>{% endif %}
+          {% if player.id in reserve_ids %}<span class="badge bg-secondary ms-1">2軍</span>{% endif %}
         </td>
         <td class="stat-muted">{{ player.throws_bats|default:'—' }}</td>
         <td class="text-end stat-muted">
