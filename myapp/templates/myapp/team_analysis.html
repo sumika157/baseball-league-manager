@@ -146,6 +146,7 @@
   <h2 class="h6 mb-2">入退団</h2>
   <p class="page-subtitle mb-2" style="font-size: 0.8125rem;">
     {{ analysis.year }}年に加入した選手と退団した選手。区分は在籍の記録から導きます（引退と自由契約は区別できません）。
+    経路は入団時に記録した値で、記録が無ければ「—」です。FA を宣言して移籍した選手には退団の区分の横に「FA」を出します。
   </p>
   <div class="row g-3 mb-4">
     <div class="col-12 col-lg-6">
@@ -159,6 +160,7 @@
               <th>登録位置</th>
               <th>区分</th>
               <th>前所属</th>
+              <th>経路</th>
             </tr>
           </thead>
           <tbody>
@@ -169,9 +171,10 @@
               <td>{{ row.position_label }}</td>
               <td>{{ row.kind_label }}</td>
               <td>{{ row.other_team_name|default:"—" }}</td>
+              <td>{{ row.acquired_via_label|default:"—" }}</td>
             </tr>
             {% empty %}
-            <tr><td colspan="5" class="text-center text-muted py-4">この年の加入はありません。</td></tr>
+            <tr><td colspan="6" class="text-center text-muted py-4">この年の加入はありません。</td></tr>
             {% endfor %}
           </tbody>
         </table>
@@ -196,7 +199,7 @@
               <td><span class="jersey-number">{{ row.number }}</span></td>
               <td class="player-tone player-tone-{{ row.tone.key }}"><a href="{% url 'player_detail' analysis.team_id row.player_id %}" class="player-name">{{ row.name }}</a>{% if row.tone.mark %}<span class="tone-mark">{{ row.tone.mark }}</span>{% endif %}{% if row.is_developmental %} <span class="badge bg-primary">育成</span>{% endif %}</td>
               <td>{{ row.position_label }}</td>
-              <td>{{ row.kind_label }}</td>
+              <td>{{ row.kind_label }}{% if row.fa_label %} <span class="badge bg-secondary">{{ row.fa_label }}</span>{% endif %}</td>
               <td>{{ row.other_team_name|default:"—" }}</td>
             </tr>
             {% empty %}

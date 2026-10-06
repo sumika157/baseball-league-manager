@@ -13,9 +13,11 @@ from ..domain.entities import jersey_number_in
 from ..domain.services.free_agency import SERVICE_DAYS_PER_SEASON
 from ..domain.services.roster_analysis import NEUTRAL_CATEGORY, ColorCategory
 from ..domain.value_objects import (
+    AcquisitionRoute,
     BattingLine,
     ContractStatus,
     FieldingPosition,
+    FreeAgencyKind,
     Handedness,
     JerseyNumber,
     PitchingLine,
@@ -560,6 +562,8 @@ class CareerRow:
     from_year: int
     to_year: int | None
     is_current: bool
+    # 入団の経路。不明は空文字
+    acquired_via_label: str = ""
 
     @property
     def period(self) -> str:
@@ -1032,6 +1036,16 @@ class PitcherRow:
 
 
 @dataclass(frozen=True)
+class FreeAgentDeclarationRow:
+    """FA 宣言の1行。結果（残留・移籍）は在籍から導いた値で、保存したものではない。"""
+
+    year: int
+    kind_label: str
+    outcome_label: str
+    is_moved: bool
+
+
+@dataclass(frozen=True)
 class PlayerDetail:
     """選手編集画面で使う詳細。"""
 
@@ -1094,6 +1108,8 @@ class PlayerDetail:
     strikeouts_batting: int = 0
     double_plays: int = 0
     runs_allowed: int = 0
+    # FA 宣言（新しい年が先）。編集画面の追加・削除と個人ページの表示に使う
+    fa_declarations: list[FreeAgentDeclarationRow] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -1186,6 +1202,8 @@ class ServiceHistory:
 
     spans: list[PlayerYearSpan]
     stints: list[PlayerContractStint]
+    # 在籍選手の FA 宣言（表示年まで）。宣言の翌年から数え直す（再取得）ために使う
+    declarations: list[DeclarationFact]
     # 試合の記録がある最初の年（これより前の年は数えられない）。記録が無ければ None
     records_from_year: int | None = None
 
@@ -1223,6 +1241,17 @@ class MoveStintRow:
     to_year: int | None
     throws: Handedness | None = None
     bats: Handedness | None = None
+    # 入団の経路。None は不明
+    acquired_via: AcquisitionRoute | None = None
+
+
+@dataclass(frozen=True)
+class DeclarationFact:
+    """入退団の判定に使う、選手の FA 宣言1件。結果（残留・移籍）は持たず、在籍から導く。"""
+
+    player_id: int
+    year: int
+    kind: FreeAgencyKind
 
 
 @dataclass(frozen=True)
@@ -1235,6 +1264,8 @@ class RelatedStint:
     team_name: str
     from_year: int
     to_year: int | None
+    # 入団の経路。FA の移籍先かどうかの判定に使う
+    acquired_via: AcquisitionRoute | None = None
 
 
 @dataclass(frozen=True)
@@ -1246,6 +1277,8 @@ class TeamAnalysisFacts:
     pitcher_usage: list[PitcherUsage]
     moves: list[MoveStintRow]
     related_stints: list[RelatedStint]
+    # 入退団の対象の選手の FA 宣言（退団の表で「FA で移籍」を導く）
+    declarations: list[DeclarationFact] = field(default_factory=list)
     # リーグの支配下の上限。None は無制限（在籍が1人もいないときは読まないので None）
     registered_limit: int | None = None
 
@@ -1412,6 +1445,10 @@ class MoveRow:
     other_team_name: str = ""
     tone: ColorCategory = NEUTRAL_CATEGORY
     is_developmental: bool = False
+    # 加入の表の入団の経路。不明は空文字
+    acquired_via_label: str = ""
+    # 退団の表で、その年に FA を宣言して別球団へ移った選手の印（「国内FA」「海外FA」）。それ以外は空文字
+    fa_label: str = ""
 
 
 @dataclass(frozen=True)

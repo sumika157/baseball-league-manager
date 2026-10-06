@@ -14,7 +14,17 @@ from datetime import date
 from ..domain import services as domain_services
 from ..domain.exceptions import TeamNotFound
 from ..domain.services import ColorAxis, ColorCategory, FielderGroup, MoveJudgement, MoveKind, PitcherRole, StintSpan
-from ..domain.value_objects import ContractStatus, FieldingPosition, Handedness, Position, Profile, Season
+from ..domain.value_objects import (
+    ContractStatus,
+    FieldingPosition,
+    Handedness,
+    Position,
+    Profile,
+    Season,
+    StintPeriod,
+    fa_destinations,
+    fa_origin,
+)
 from .dto import (
     AgeBandRow,
     AnalysisRosterRow,
@@ -22,6 +32,7 @@ from .dto import (
     AnalysisTeamOption,
     ColorLegendItem,
     ColorOption,
+    DeclarationFact,
     DepthCell,
     DepthPlayer,
     DepthRow,
@@ -156,13 +167,16 @@ class TeamAnalysisService:
         """FA 取得タブの行。表示年の在籍選手ごとに、年ごとの登録日数（推定）からFA権の見込みを出す。
 
         登録日数は年ごとの初出場〜最終出場の日数で、育成だった年と試合の無い年は0日。
-        FA 宣言（F1）はまだ無いので、宣言の年の一覧は常に空で渡す。
+        FA 宣言（F1）は表示年までのものを渡し、最後の宣言の翌年から数え直す（再取得）。
         """
         if history is None:
             return []
         stints: dict[int, list[PlayerContractStint]] = defaultdict(list)
         for stint in history.stints:
             stints[stint.player_id].append(stint)
+        declared_years: dict[int, list[int]] = defaultdict(list)
+        for declaration in history.declarations:
+            declared_years[declaration.player_id].append(declaration.year)
         days: dict[int, dict[int, int]] = defaultdict(dict)
         for span in history.spans:
             days[span.player_id][span.year] = domain_services.estimated_service_days(span.first_on, span.last_on)
@@ -187,7 +201,7 @@ class TeamAnalysisService:
                 days_by_year=by_year,
                 through_year=year,
                 records_from_year=records_from,
-                declared_years=[],
+                declared_years=declared_years[player.player_id],
                 developmental_years=developmental_years,
             )
             number = player.contract.number_in(year)
@@ -228,8 +242,32 @@ class TeamAnalysisService:
                 StintSpan(related.stint_id, related.team_id, related.from_year, related.to_year)
             )
             team_names[related.team_id] = related.team_name
+        # 選手ごとの在籍の期間（経路つき）と FA 宣言。結果（残留・移籍）は保存せず、ドメインの規則で導く
+        periods: dict[int, list[StintPeriod]] = defaultdict(list)
+        for related in facts.related_stints:
+            periods[related.player_id].append(
+                StintPeriod(related.team_id, related.from_year, related.to_year, related.acquired_via)
+            )
+        declared: dict[int, list[DeclarationFact]] = defaultdict(list)
+        for declaration in facts.declarations:
+            declared[declaration.player_id].append(declaration)
 
-        def row(move: MoveStintRow, judgement: MoveJudgement) -> MoveRow:
+        def fa_label(move: MoveStintRow) -> str:
+            """この退団が、FA を宣言した球団の在籍（起点）の終わりで、移籍先があれば「国内FA」「海外FA」。
+
+            宣言の年は退団年とは限らない（翌年に移籍先の在籍が始まる）ので、宣言ごとに起点を見る。
+            判定はドメインの `fa_origin`・`fa_destinations` で、入退団の区分とは別に宣言から導く。
+            """
+            own = StintPeriod(move.team_id, move.from_year, move.to_year, move.acquired_via)
+            player_periods = periods.get(move.player_id, [])
+            for declaration in sorted(declared.get(move.player_id, []), key=lambda d: -d.year):
+                if fa_origin(declaration.year, player_periods) == own and fa_destinations(
+                    declaration.year, player_periods
+                ):
+                    return f"{declaration.kind.label}FA"
+            return ""
+
+        def row(move: MoveStintRow, judgement: MoveJudgement, *, leaving: bool) -> MoveRow:
             other = team_names.get(judgement.other_team_id, "") if judgement.other_team_id is not None else ""
             return MoveRow(
                 player_id=move.player_id,
@@ -239,6 +277,8 @@ class TeamAnalysisService:
                 kind_label=judgement.kind.value,
                 is_developmental=move.contract.contract_in(year) is ContractStatus.DEVELOPMENTAL,
                 other_team_name=other,
+                acquired_via_label=move.acquired_via.label if move.acquired_via is not None and not leaving else "",
+                fa_label=fa_label(move) if leaving else "",
                 # 入退団の表には守備位置が無いので、本職の軸では対象外になる
                 tone=_tone(
                     axis,
@@ -256,10 +296,10 @@ class TeamAnalysisService:
             stints = spans.get(move.player_id, [])
             if move.from_year == year:
                 judgement = domain_services.judge_join(own, stints)
-                joined.append((judgement.kind, row(move, judgement)))
+                joined.append((judgement.kind, row(move, judgement, leaving=False)))
             if move.to_year == year:
                 judgement = domain_services.judge_leave(own, stints)
-                left.append((judgement.kind, row(move, judgement)))
+                left.append((judgement.kind, row(move, judgement, leaving=True)))
 
         def ordered(entries: list[tuple[MoveKind, MoveRow]]) -> list[MoveRow]:
             entries.sort(key=lambda e: domain_services.move_order(e[0], e[1].number))

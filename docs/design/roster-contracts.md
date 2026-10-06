@@ -1,6 +1,6 @@
 # 設計: 支配下／育成の契約区分と、FA・獲得経路
 
-> 状態: 段階 E1（#126）・E2（#127）実装済み。epic [#125](https://github.com/sumika157/baseball-league-manager/issues/125)、全体の親 [#114](https://github.com/sumika157/baseball-league-manager/issues/114)。
+> 状態: 段階 E1（#126）・E2（#127）・F1（#128）実装済み。epic [#125](https://github.com/sumika157/baseball-league-manager/issues/125)、全体の親 [#114](https://github.com/sumika157/baseball-league-manager/issues/114)。
 > 統合ブランチは `epic/roster-contracts`。段階ごとの実測値と決定は末尾の「段階ごとの記録」に追記し、epic を main に入れるときに Wiki（`docs/wiki/`）へ吸収して削除する。
 
 ## 1. なぜ
@@ -130,6 +130,41 @@
 - 実測: 戦力分析のクエリ数は E1 と同じ（選手を20人足しても増えない）ことをテストで確認した。`measure_pages` は E1 と同じ理由
   （マイグレーション未適用の開発 DB）で流していない。
 
+### F1（#128）
+
+- 決定: **入団の経路 `AcquisitionRoute`**（ドラフト／育成ドラフト／FA／トレード／自由契約からの獲得／新外国人／その他）と、`Stint.acquired_via`（None は不明）。
+  既定値つきなので `fork_roster` などの既存の呼び出しは壊れない。backfill はしない（既存の在籍は全件 null＝不明。推測しない）。
+- 決定: **経路と加入時の区分の整合**を `Stint.__post_init__` で検査する（`AcquisitionRoute.ensure_fits_contract`）。育成ドラフトは育成、ドラフトは支配下。
+  ほかの経路は縛らない（FA・トレードで育成選手が動くことはあるため）。背番号と区分の検査と違って `__post_init__` に置けたのは、経路を持たない既存の行（None）は検査されないため。
+- 決定: **FA 宣言 `FreeAgentDeclaration(year, kind, id)`** は `Player.fa_declarations`（`Team` 集約の内部）。同じ年に1回・宣言した年にどこかの球団に在籍、を `Player.declare_free_agency` が検査する。
+  取り消しは `remove_free_agency_declaration`（FA での入団の根拠になっている宣言は取り消せない）。`Team.declare_free_agency` / `remove_free_agency_declaration` は選手を引いて委譲するだけ。
+- 決定: **宣言の結果（残留・移籍）は保存しない。** 出典は `value_objects.free_agency_outcome(year, periods)`。在籍の期間だけ（`StintPeriod`: チーム・加入年・退団年）を見る関数にして、
+  集約の `Stint`（`declaration_outcome(declaration, career)`・`Player.outcome_of`）からも、参照クエリの行（戦力分析の入退団）からも同じ規則で呼べるようにした。
+  規則（レビュー後に1つへ統一した。**出典は `fa_origin` / `fa_destinations` だけ**）: 起点＝宣言の年を含む在籍のうち、その年の終わりに在籍していたもの（無ければその年に終わった在籍で最後に始まったもの）。
+  移籍先＝起点の後に始まる別の球団の在籍で、加入年が宣言の翌年、経路が FA か不明のもの。移籍先があれば移籍、無ければ残留。経路がトレードの在籍は移籍先にしない（宣言残留のあとのトレード）。
+  `StintPeriod` は経路（`acquired_via`）も持つ。この規則の帰結として、**同じ年のシーズン途中に A→B に移ってから B で宣言した選手の起点は B**（残留）で、
+  移籍先の加入年は宣言の**翌年だけ**（オフの FA 移籍は「宣言の翌年に加入」で記録する。同じ年は起点が移籍先になるので通らない）。
+- 決定: **経路 FA と宣言の整合** は `ensure_free_agent_acquisitions(career, declarations)`（`Player.ensure_acquisitions_declared()` が呼ぶ）。
+  経路が FA の在籍は、どれかの宣言の `fa_destinations` に入っていること（経路が不明の在籍は検査しない）。同じ球団の結び直し・宣言した球団の在籍が無い在籍は FA 入団にできない。
+  宣言側の不変条件（同じ年1回・宣言した年に在籍）は `ensure_declarations_valid`。どちらも在籍と宣言の列を受ける関数なので、集約の外（管理画面）から送信後の全体にも使える。
+  呼ぶ場所は `Team.add_player`・`TeamApplicationService.transfer_player`（保存の前）・宣言の取り消し・管理画面（下）。
+- 決定（H2）: 管理画面は、選手の画面で `PlayerAdmin._create_formsets` が在籍と FA 宣言のフォームセットをつなぎ、`FreeAgentDeclarationFormSet.clean` が
+  **削除する行を除き、変更後の値**から在籍と宣言の全体を組み立てて上の2つを呼ぶ（入力エラーとして返す）。インラインの1行ずつの検査は、つないだときは見ない。
+  単独の在籍の管理画面（`PlayerStintAdmin`）は、保存済みの他の在籍・宣言と突き合わせ、削除（`delete_model`・一括削除）は消せない在籍を残してメッセージで知らせる。
+- 決定: 永続化は `PlayerStint.acquired_via`（null 可）と新しいテーブル `PlayerFreeAgentDeclaration`（`unique(player, year)`）、マイグレーション 0040。
+  読み込みは `_careers_of` と同じく選手 id の集合で1本（`_declarations_of`。多段の prefetch は使わない）。保存は在籍・主将と同じ upsert だけで、消すのは `Player.removed_declaration_ids`（取り消した保存済みの宣言の id）だけ（宣言を読み込まずに組み立てた選手で保存しても、既存の宣言は消えない）。
+- 決定: 入力は、選手の編集画面（そのチームの担当者だけ。昇格と同じく `RosterService`）と管理画面（在籍に経路、選手に FA 宣言のインライン）。
+  編集画面の FA 宣言は**別の `<form>`**にした（取り消しのボタンが先にあると、Enter で誤って取り消しが送られるため）。
+- 決定: 戦力分析の入退団は、加入の表に「経路」の列、退団の表に「国内FA」「海外FA」の印（その年に宣言して別球団へ移った選手だけ）。入退団のクエリは2本から3本（宣言を足した。選手数には比例しない）。
+  宣言残留はデプス表の選手名の横には出さない（在籍が続くだけで、表の目的は編成の把握のため。出すなら F2 の FA タブで）。
+- 決定: 登録フォーム（選手一覧）には経路の欄を足していない。登録の時点で FA は常に拒否される（新しい選手に宣言が無い）ので、選べる経路が少ない。サービス（`register_player`）は受け取れる。
+- 宿題（F2）: 宣言した年に **FA 権を取得している見込みか**（登録日数）の検査は、F2 が FA 権の計算を足してから `declare_free_agency` に入れる。
+  F2 が使う入口は `FreeAgentDeclaration(year, kind)`・`Player.fa_declarations`・`declaration_outcome` / `free_agency_outcome`。
+- 宿題: `Stint` の経路・区分の整合は、保存済みの行を読むときには検査しない（管理画面で後から区分だけ変えると食い違いうる。次に在籍を保存し直すときに管理画面が弾く）。
+- 宿題: `fork_roster`（ペナント epic）が経路と宣言を写すか。写さないなら、複製した世界の選手は経路が不明で宣言なしになる。
+- 宿題（L3）: 経路と区分の整合の検査は `Stint.__post_init__` にあり、読み込み時にも走る。将来 `bulk_create` で在籍を書く投入コマンドは、
+  保存前に同じ検査（`AcquisitionRoute.ensure_fits_contract`・`ensure_free_agent_acquisitions`）を自分で行うこと。
+
 ### F2（#129）
 
 - 決定: 規則は新規 `domain/services/free_agency.py`（定数・`EducationPath`・`service_seasons`・`fa_outlook`・`fa_order`）。**宣言の年の一覧は引数 `declared_years` で受ける**純粋関数。
@@ -153,5 +188,10 @@
 - 決定: 材料は `TeamAnalysisQuery.load_service_history`（FA タブのときだけ呼ぶ。打撃・投球の明細の選手×年の min/max の2本・在籍1本・記録の最初の年1本の計4本で、選手数に比例しない）。
   ほかのタブのクエリ数は増えない。並びは国内FAで、取得済み → 残りが少ない順 → 上限つきの不明 → 不明。
 - **宿題（G #130）**: ペナントの世界の中にシーズンを置く段階で、記録の最初の年を世界ごとに分ける（`ServiceHistory.records_from_year` の取り方）。
-- **宿題（F1 が入った後）**: `application/team_analysis.py` の `_fa_rows` が `declared_years=[]` を渡している。`Player.fa_declarations` の年を渡す配線と、
-  入団の経路（FA で入団した選手の扱い）を足す。宣言を渡すと、取得済みだった選手が「あとn シーズン」に戻る。種別を区別するならドメインの引数を `(年, 種別)` に変える。
+- 済み（F1 #128 で配線）: `_fa_rows` は、参照クエリ（`load_service_history`）が読む表示年までの FA 宣言の年を `declared_years` に渡す（1本足した。選手数に比例しない）。
+  残る宿題: 入団の経路と、
+  FA で入団した選手の扱い（今は宣言の年だけを見る）。種別（国内／海外）は区別せず、宣言の翌年から国内・海外とも4シーズン。区別するならドメインの引数を `(年, 種別)` に変える。
+- 決定（再レビュー）: FA の移籍先の加入年は**宣言の翌年だけ**にそろえた。宣言できる年は時計（今日の年）では制限しない（ペナントの世界は実際の年より先へ進むため。セルフレビューで「今年まで」の規則を外した）。在籍を閉じる操作（`Team.retire_player`・`transfer_player` の保存前）のあとに `Player.ensure_free_agency_consistent()`（宣言の不変条件＋経路 FA の整合）を呼ぶ。
+- 決定: 在籍の削除を拒否するときは、`PlayerStintAdmin.has_delete_permission(request, obj)` で削除の導線ごと出さない。一括削除の action は、消せない在籍が含まれていればエラーだけを出して何も消さない。
+- 宿題（範囲外）: チームの削除は在籍が CASCADE で消え、宣言や FA 入団の根拠が崩れる（`TeamAdmin` の削除は今回の検査を通らない）。
+- 記録: 経路が不明の在籍も移籍先にするので、「宣言して残留 → 翌年に経路不明でトレード」は FA 移籍と判定される（在籍の期間だけでは区別できない近似）。

@@ -55,6 +55,17 @@ class TeamFaTabTest(AnalysisCase):
         self.assertEqual(veteran.overseas_label, "取得済み（2026年）")
         self.assertTrue(veteran.includes_estimate)
 
+    def test_declaration_restarts_the_count_for_reacquisition(self):
+        """FA 宣言の翌年から数え直し、4シーズンで再び取得する（2022年に宣言 → 2023〜2026年の4シーズン）。"""
+        orm_models.PlayerFreeAgentDeclaration.objects.create(player_id=self.veteran, year=2022, kind="国内")
+        veteran = self.rows()["ベテラン"]
+        self.assertEqual(veteran.seasons, 4)
+        self.assertEqual(veteran.domestic_label, "取得済み（2026年）")
+
+    def test_declaration_after_the_shown_year_is_ignored(self):
+        orm_models.PlayerFreeAgentDeclaration.objects.create(player_id=self.veteran, year=2027, kind="国内")
+        self.assertEqual(self.rows()["ベテラン"].domestic_label, "取得済み（2025年）")
+
     def test_days_are_estimated_from_first_to_last_appearance(self):
         # 初出場から最終出場までが145日未満の年は、日数を合算して数える（4/1〜5/20 は50日）
         short = self.person("短い年", 20, debut=2025, high_school="E高", from_year=2025)

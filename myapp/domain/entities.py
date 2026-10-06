@@ -18,8 +18,10 @@ from datetime import date
 from .exceptions import (
     DuplicateCaptain,
     DuplicateJerseyNumber,
+    InvalidAcquisition,
     InvalidCaptaincy,
     InvalidContract,
+    InvalidFreeAgentDeclaration,
     InvalidGame,
     InvalidPlateAppearance,
     InvalidStint,
@@ -29,6 +31,7 @@ from .exceptions import (
 )
 from .value_objects import (
     DEFAULT_REGISTERED_PLAYER_LIMIT,
+    AcquisitionRoute,
     AdvanceReason,
     Base,
     BattingLine,
@@ -36,6 +39,8 @@ from .value_objects import (
     ErrorKind,
     FieldingLine,
     FieldingPosition,
+    FreeAgencyKind,
+    FreeAgencyOutcome,
     JerseyNumber,
     LineScore,
     PitchingLine,
@@ -44,7 +49,10 @@ from .value_objects import (
     Profile,
     Season,
     StadiumProfile,
+    StintPeriod,
     ensure_quota_not_exceeded,
+    fa_destinations,
+    free_agency_outcome,
 )
 
 OUTS_PER_HALF_INNING = 3
@@ -123,9 +131,14 @@ class Stint:
     # 昇格する前（育成だった間）の背番号。昇格していなければ None。
     # 昇格で number が支配下の番号に変わるので、育成だった年の番号はここに残す
     number_before_promotion: JerseyNumber | None = None
+    # 入団の経路。None は不明（推測で埋めない）。既定値つきなので、経路を知らない呼び出し元は壊れない
+    acquired_via: AcquisitionRoute | None = None
 
     def __post_init__(self) -> None:
         self.from_year = Season(self.from_year).year
+        if self.acquired_via is not None:
+            # 経路と加入時の区分の食い違い（育成ドラフトなのに支配下など）を弾く
+            self.acquired_via.ensure_fits_contract(self.signed_as)
         if self.to_year is not None:
             self.to_year = Season(self.to_year).year
             if self.to_year < self.from_year:
@@ -220,6 +233,13 @@ class Stint:
     def covers(self, year: int) -> bool:
         return self.from_year <= year and (self.to_year is None or year <= self.to_year)
 
+    @property
+    def period(self) -> StintPeriod:
+        """期間だけを取り出したもの（FA の結果の導出に使う）。"""
+        return StintPeriod(
+            team_id=self.team_id, from_year=self.from_year, to_year=self.to_year, acquired_via=self.acquired_via
+        )
+
     def overlaps(self, other: Stint) -> bool:
         """期間が重なるか。片方でも在籍中（to_year が空）なら無限として扱う。"""
         end, other_end = self.to_year, other.to_year
@@ -233,6 +253,84 @@ class Stint:
         if season < self.from_year:
             raise InvalidStint("加入年より前の年で退団にはできません。")
         self.to_year = season
+
+
+@dataclass
+class FreeAgentDeclaration:
+    """FA 宣言。ある年に、国内か海外かで FA の権利を行使すると宣言した記録。
+
+    **宣言の結果（残留か移籍か）は持たない。** 在籍から導ける事実なので、
+    `declaration_outcome` が毎回導く（保存すると在籍と食い違いうる）。
+    宣言が `Player`（`Team` 集約の内部）の持ち物なのは、生涯を通じた選手の事実で、
+    移籍しても付いて回るため。
+    """
+
+    year: int
+    kind: FreeAgencyKind
+    id: int | None = None
+
+    def __post_init__(self) -> None:
+        self.year = Season(self.year).year
+
+    def __str__(self) -> str:
+        return f"{self.year}年 {self.kind.label}FA"
+
+
+def declaration_outcome(declaration: FreeAgentDeclaration, career: Iterable[Stint]) -> FreeAgencyOutcome:
+    """宣言の結果（残留か移籍か）を、選手の在籍から導く。規則の出典は `fa_destinations`。"""
+    return free_agency_outcome(declaration.year, (stint.period for stint in career))
+
+
+def fa_destination_stints(declaration: FreeAgentDeclaration, career: Iterable[Stint]) -> list[Stint]:
+    """宣言の移籍先の在籍（加入年の早い順）。判定の出典は `fa_destinations`（ここは在籍に引き直すだけ）。"""
+    pairs = [(stint.period, stint) for stint in career]
+    found = fa_destinations(declaration.year, (period for period, _ in pairs))
+    # 期間は在籍から作った別の値なので、同じものを同一性で引く
+    return [stint for period in found for candidate, stint in pairs if candidate is period]
+
+
+def ensure_free_agent_acquisitions(
+    career: Iterable[Stint], declarations: Iterable[FreeAgentDeclaration], name: str = ""
+) -> None:
+    """経路が FA の在籍は、どれかの FA 宣言の**移籍先として導かれる在籍**であること。
+
+    宣言の翌年までの別の球団への加入で、経路が FA か不明のものが移籍先になる（`fa_destinations`）。
+    経路が不明の在籍は検査しない（宣言して移籍したのに経路が不明、は許す。不明は推測しない）。
+    同じ球団で在籍を結び直しただけの在籍や、宣言の年に移籍先の在籍しか無い選手は、FA 入団にできない。
+    """
+    stints, declared = list(career), list(declarations)
+    destinations = [stint for d in declared for stint in fa_destination_stints(d, stints)]
+    for stint in stints:
+        if stint.acquired_via is AcquisitionRoute.FREE_AGENT and not any(stint is d for d in destinations):
+            raise InvalidAcquisition(
+                f"{name + 'は' if name else ''}{stint.from_year}年に FA で入団したことになっていますが、"
+                f"その年の前年に、別の球団から FA を宣言した記録がありません"
+                f"（FA 宣言と、宣言した球団の在籍が先に要ります）。"
+            )
+
+
+def ensure_declarations_valid(
+    career: Iterable[Stint], declarations: Iterable[FreeAgentDeclaration], name: str = ""
+) -> None:
+    """FA 宣言の不変条件。同じ年に1回だけ、宣言した年にどこかの球団に在籍していること。
+
+    宣言を足すときだけでなく、在籍の削除・期間の短縮で後から破れないかを見るときにも使う
+    （管理画面が、送信後の在籍と宣言の全体に対して呼ぶ）。
+    """
+    stints = list(career)
+    prefix = f"{name}は" if name else ""
+    seen: set[int] = set()
+    for declaration in declarations:
+        if declaration.year in seen:
+            raise InvalidFreeAgentDeclaration(f"{prefix}{declaration.year}年にすでに FA を宣言しています。")
+        seen.add(declaration.year)
+        # 「今年まで」のような時計による制限は置かない（ペナントの世界は実際の年より先へ進むため）。
+        # 未来の年の宣言は在籍が続いている限り認め、退団・移籍で在籍を閉じるときに
+        # Player.ensure_free_agency_consistent が「どの在籍にも覆われない宣言」を拒否する
+        if not any(stint.covers(declaration.year) for stint in stints):
+            raise InvalidFreeAgentDeclaration(
+                f"{prefix}{declaration.year}年にどの球団にも在籍していないため、FA を宣言できません。"
+            )
 
 
 @dataclass
@@ -299,9 +397,66 @@ class Player:
     career: list[Stint] = field(default_factory=list)
     # 主将在任歴。career と同様、生涯を通じた経歴として選手自身が持つ
     captaincies: list[Captaincy] = field(default_factory=list)
+    # FA 宣言。移籍しても付いて回る選手の事実なので在籍（球団ごと）ではなく選手が持つ。
+    # 結果（残留・移籍）は持たず、在籍から導く（outcome_of）
+    fa_declarations: list[FreeAgentDeclaration] = field(default_factory=list)
+    # 取り消した（保存済みの）宣言の id。リポジトリはこれだけを消す。
+    # 宣言を読み込まずに組み立てた Player で保存しても、既存の宣言は消えない（在籍・主将と同じ upsert だけの保存）
+    removed_declaration_ids: list[int] = field(default_factory=list)
 
     def __str__(self) -> str:
         return f"{self.number} {self.name} ({self.position.label})"
+
+    # --- FA 宣言 ---
+
+    def declaration_in(self, year: int) -> FreeAgentDeclaration | None:
+        return next((d for d in self.fa_declarations if d.year == year), None)
+
+    def outcome_of(self, declaration: FreeAgentDeclaration) -> FreeAgencyOutcome:
+        """宣言の結果。在籍から導く（保存しない）。"""
+        return declaration_outcome(declaration, self.career)
+
+    def declare_free_agency(self, year: int, kind: FreeAgencyKind) -> FreeAgentDeclaration:
+        """FA を宣言する。同じ年に宣言できるのは1回だけで、その年にどこかの球団に在籍している必要がある。
+
+        宣言した年に権利を取得している見込みか（登録日数）は、ここでは見ない（FA 権の計算を足すときに入れる）。
+        """
+        declaration = FreeAgentDeclaration(year=year, kind=kind)
+        ensure_declarations_valid(self.career, [*self.fa_declarations, declaration], f"「{self.name}」")
+        self.fa_declarations.append(declaration)
+        return declaration
+
+    def remove_free_agency_declaration(self, year: int) -> None:
+        """FA 宣言を取り消す。その宣言を根拠にした「FA で入団」の在籍があれば、取り消せない。"""
+        declaration = self.declaration_in(year)
+        if declaration is None:
+            raise InvalidFreeAgentDeclaration(f"「{self.name}」に{year}年の FA 宣言はありません。")
+        self.fa_declarations.remove(declaration)
+        try:
+            self.ensure_acquisitions_declared()
+        except InvalidAcquisition:
+            self.fa_declarations.append(declaration)
+            raise InvalidFreeAgentDeclaration(
+                f"{year}年の FA 宣言は、FA での入団（経路が FA の在籍）の根拠になっているため取り消せません。"
+            ) from None
+        # 保存済みの宣言なら、リポジトリが消すのはこの id だけ（持っていない宣言は消さない）
+        if declaration.id is not None:
+            self.removed_declaration_ids.append(declaration.id)
+
+    def ensure_acquisitions_declared(self) -> None:
+        """経路が FA の在籍は、どれかの宣言の移籍先として導かれる在籍か（`ensure_free_agent_acquisitions`）。
+
+        在籍を足す・宣言を取り消すときに、集約や application から呼ぶ。
+        """
+        ensure_free_agent_acquisitions(self.career, self.fa_declarations, f"「{self.name}」")
+
+    def ensure_free_agency_consistent(self) -> None:
+        """宣言の不変条件（同じ年1回・宣言した年の在籍）と、経路 FA の整合の両方。
+
+        在籍を閉じる・足す操作のあとに呼ぶ（退団や、宣言より前の年を指定した移籍で、どの在籍にも覆われない宣言が残らないように）。
+        """
+        ensure_declarations_valid(self.career, self.fa_declarations, f"「{self.name}」")
+        self.ensure_acquisitions_declared()
 
     @property
     def is_pitcher(self) -> bool:
@@ -389,8 +544,12 @@ class Team:
         position: Position,
         from_year: int | None = None,
         contract: ContractStatus = ContractStatus.REGISTERED,
+        acquired_via: AcquisitionRoute | None = None,
     ) -> Player:
         """選手を加入させる。背番号が在籍中の選手と重複する場合や、契約区分に合わない場合は拒否する。
+
+        入団の経路は任意（None は不明）。経路が契約区分と食い違うときや、FA での入団（新しい選手には
+        FA 宣言が無い）は拒否する。
 
         支配下の上限は集約からは見えない（リーグが持つ）ので、呼び出し側が
         支配下で加えるなら、加える前に ensure_room_for_registered で検査する。
@@ -412,10 +571,20 @@ class Team:
                 from_year=from_year if from_year is not None else date.today().year,
                 team_name=self.name,
                 signed_as=contract,
+                acquired_via=acquired_via,
             )
         ]
+        player.ensure_acquisitions_declared()
         self.players.append(player)
         return player
+
+    def declare_free_agency(self, player_id: int, year: int, kind: FreeAgencyKind) -> FreeAgentDeclaration:
+        """選手の FA 宣言を記録する。同じ年に2回・在籍の無い年の宣言は拒否する（検査は `Player` が行う）。"""
+        return self.find_player(player_id).declare_free_agency(year, kind)
+
+    def remove_free_agency_declaration(self, player_id: int, year: int) -> None:
+        """選手の FA 宣言を取り消す。FA での入団の根拠になっている宣言は取り消せない。"""
+        self.find_player(player_id).remove_free_agency_declaration(year)
 
     def change_player_number(self, player: Player, number: JerseyNumber) -> None:
         """背番号を変更する。在籍中の他の選手と重複する場合や、今の契約区分に合わない場合は拒否する。"""
@@ -505,6 +674,8 @@ class Team:
         current = self.current_stint(player)
         if current is not None:
             current.close(year if year is not None else date.today().year)
+        # 閉じたことで、宣言した年にどの在籍にも覆われなくなる宣言が無いか
+        player.ensure_free_agency_consistent()
         # 在籍していないのに主将、という両立しない状態を残さない
         self.remove_captain(player, year)
 

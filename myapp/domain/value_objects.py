@@ -18,7 +18,9 @@ from typing import Any
 from .exceptions import (
     DomainError,
     ForeignPlayerQuotaExceeded,
+    InvalidAcquisition,
     InvalidContract,
+    InvalidFreeAgentDeclaration,
     InvalidInningsPitched,
     InvalidJerseyNumber,
     InvalidPlateAppearance,
@@ -130,6 +132,137 @@ class ContractStatus(Enum):
     @classmethod
     def labels(cls) -> list[str]:
         return [status.value for status in cls]
+
+
+class AcquisitionRoute(Enum):
+    """入団の経路。その在籍にどう加わったか。
+
+    選択肢（画面の選択・永続化の choices）はこの Enum を唯一の出典とする。
+    不明は値ではなく None（推測で埋めない）で表す。
+    """
+
+    DRAFT = "ドラフト"
+    DEVELOPMENTAL_DRAFT = "育成ドラフト"
+    FREE_AGENT = "FA"
+    TRADE = "トレード"
+    RELEASED_SIGNING = "自由契約からの獲得"
+    NEW_FOREIGN = "新外国人"
+    OTHER = "その他"
+
+    @property
+    def label(self) -> str:
+        return self.value
+
+    def ensure_fits_contract(self, signed_as: ContractStatus) -> None:
+        """加入時の区分と食い違わないか。育成ドラフトは育成、ドラフトは支配下で入る。
+
+        ほかの経路は区分を縛らない（FA やトレードで育成選手が動くこともある）。
+        """
+        if self is AcquisitionRoute.DEVELOPMENTAL_DRAFT and signed_as is not ContractStatus.DEVELOPMENTAL:
+            raise InvalidAcquisition("育成ドラフトで入団した選手は、加入時の区分が育成になります。")
+        if self is AcquisitionRoute.DRAFT and signed_as is not ContractStatus.REGISTERED:
+            raise InvalidAcquisition(
+                "ドラフトで入団した選手は、加入時の区分が支配下になります（育成は「育成ドラフト」）。"
+            )
+
+    @classmethod
+    def from_label(cls, label: str) -> AcquisitionRoute:
+        for route in cls:
+            if route.value == label:
+                return route
+        raise InvalidAcquisition(f"「{label}」は入団の経路として認識できません。")
+
+    @classmethod
+    def labels(cls) -> list[str]:
+        return [route.value for route in cls]
+
+
+class FreeAgencyKind(Enum):
+    """FA 宣言の種別。国内 FA か海外 FA か。"""
+
+    DOMESTIC = "国内"
+    OVERSEAS = "海外"
+
+    @property
+    def label(self) -> str:
+        return self.value
+
+    @classmethod
+    def from_label(cls, label: str) -> FreeAgencyKind:
+        for kind in cls:
+            if kind.value == label:
+                return kind
+        raise InvalidFreeAgentDeclaration(f"「{label}」は FA 宣言の種別として認識できません。")
+
+    @classmethod
+    def labels(cls) -> list[str]:
+        return [kind.value for kind in cls]
+
+
+class FreeAgencyOutcome(Enum):
+    """FA 宣言の結果。**保存せず**、在籍から導く（`free_agency_outcome`）。"""
+
+    STAYED = "残留"
+    MOVED = "移籍"
+
+
+@dataclass(frozen=True)
+class StintPeriod:
+    """在籍の期間だけを取り出したもの（チーム・加入年・退団年）。
+
+    FA の結果の導出は、集約の `Stint` でも参照クエリの行でも同じ規則で行いたいので、
+    両方から作れるこの最小の形を入口にする。to_year が空なら在籍中。
+    acquired_via は、FA の移籍先かどうか（経路が FA か不明のものだけ）の判定に使う。
+    """
+
+    team_id: int
+    from_year: int
+    to_year: int | None = None
+    acquired_via: AcquisitionRoute | None = None
+
+    def covers(self, year: int) -> bool:
+        return self.from_year <= year and (self.to_year is None or year <= self.to_year)
+
+
+def fa_origin(year: int, periods: Iterable[StintPeriod]) -> StintPeriod | None:
+    """year に FA を宣言した球団の在籍（起点）。宣言の年に在籍が無ければ None。
+
+    宣言の年を含む在籍のうち、**その年の終わりに在籍していたもの**（その年に終わっていない在籍）を優先し、
+    無ければその年に終わった在籍のうち最後に始まったもの。シーズン途中のトレードの後に宣言したなら、
+    移籍先の球団が起点になる。
+    """
+    covering = [p for p in periods if p.covers(year)]
+    if not covering:
+        return None
+    still = [p for p in covering if p.to_year is None or p.to_year > year]
+    return max(still or covering, key=lambda p: p.from_year)
+
+
+def fa_destinations(year: int, periods: Iterable[StintPeriod]) -> list[StintPeriod]:
+    """year の FA 宣言の移籍先の在籍（加入年の早い順）。**宣言の結果と FA 入団の整合の出典はここだけ**。
+
+    起点（`fa_origin`）の後に始まる**別の球団**の在籍で、加入年が宣言の翌年、かつ
+    **経路が FA か不明（None）**のもの。経路がトレードなど FA 以外の在籍は、宣言の結果とは見なさない
+    （宣言して残留したあとのトレードを、FA 移籍にしないため）。2年以上あとの加入も見ない。
+    """
+    stints = list(periods)
+    origin = fa_origin(year, stints)
+    if origin is None:
+        return []
+    found = [
+        p
+        for p in stints
+        if p.team_id != origin.team_id
+        and p.from_year > origin.from_year
+        and p.from_year == year + 1
+        and p.acquired_via in (None, AcquisitionRoute.FREE_AGENT)
+    ]
+    return sorted(found, key=lambda p: p.from_year)
+
+
+def free_agency_outcome(year: int, periods: Iterable[StintPeriod]) -> FreeAgencyOutcome:
+    """year に FA を宣言した選手の結果。移籍先があれば移籍、無ければ残留（保存しない。出典は `fa_destinations`）。"""
+    return FreeAgencyOutcome.MOVED if fa_destinations(year, periods) else FreeAgencyOutcome.STAYED
 
 
 class FieldingPosition(Enum):

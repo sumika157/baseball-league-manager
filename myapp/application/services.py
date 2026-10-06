@@ -16,8 +16,10 @@ from ..domain import services as domain_services
 from ..domain.entities import Game, Player, Stint, Team
 from ..domain.repositories import GameRepository, LeagueRepository, TeamRepository
 from ..domain.value_objects import (
+    AcquisitionRoute,
     ContractStatus,
     FieldingPosition,
+    FreeAgencyOutcome,
     JerseyNumber,
     PitchingLine,
     Position,
@@ -32,6 +34,7 @@ from .dto import (
     CareerRow,
     Dashboard,
     DashboardLeague,
+    FreeAgentDeclarationRow,
     GameDetail,
     GameEditData,
     GameEditPlayer,
@@ -1127,6 +1130,7 @@ class TeamApplicationService:
                     from_year=s.from_year,
                     to_year=s.to_year,
                     is_current=s.is_current,
+                    acquired_via_label=s.acquired_via.label if s.acquired_via is not None else "",
                 )
                 for s in player.career
             ],
@@ -1324,10 +1328,12 @@ class TeamApplicationService:
         number: int,
         position_label: str,
         contract_label: str = ContractStatus.REGISTERED.value,
+        acquired_via_label: str | None = None,
     ) -> Player:
-        """新しい選手をロスターに加える。契約区分は既定で支配下。"""
+        """新しい選手をロスターに加える。契約区分は既定で支配下。入団の経路は既定で不明。"""
         team = self._teams.find_by_id(team_id)
         contract = ContractStatus.from_label(contract_label)
+        acquired_via = AcquisitionRoute.from_label(acquired_via_label) if acquired_via_label else None
         if contract is ContractStatus.REGISTERED:
             # 育成の追加は支配下を増やさないので、上限は見ない
             league = self._leagues.find_by_id(_saved_id(team.league_id))
@@ -1337,6 +1343,7 @@ class TeamApplicationService:
             number=JerseyNumber(number),
             position=Position.from_label(position_label),
             contract=contract,
+            acquired_via=acquired_via,
         )
         self._teams.save(team)
         return player
@@ -1374,8 +1381,12 @@ class TeamApplicationService:
         number: int,
         year: int | None = None,
         contract_label: str | None = None,
+        acquired_via_label: str | None = None,
     ) -> None:
         """選手を移籍させる。元の在籍を閉じ、移籍先で新しい在籍を開く。
+
+        入団の経路（移籍先の在籍に付く）は既定で不明。FA を指定するときは、加入年の前年の
+        FA 宣言が先に要る（オフの FA 移籍は、宣言の翌年を加入年として記録する）。
 
         成績は選手に紐づくため移籍しても失われない。経歴として
         「いつどのチームに居たか」が残る。
@@ -1410,8 +1421,11 @@ class TeamApplicationService:
                 number=JerseyNumber(number),
                 from_year=season,
                 signed_as=contract,
+                acquired_via=AcquisitionRoute.from_label(acquired_via_label) if acquired_via_label else None,
             )
         )
+        # 経路が FA なのに宣言が無い、を保存の前に弾く
+        player.ensure_free_agency_consistent()
         player.number = JerseyNumber(number)
         player.is_active = True
         destination.players.append(player)
@@ -1691,4 +1705,14 @@ class TeamApplicationService:
             strikeouts_batting=batting.strikeouts,
             double_plays=batting.double_plays,
             runs_allowed=pitching.runs_allowed,
+            fa_declarations=[
+                FreeAgentDeclarationRow(
+                    year=declaration.year,
+                    kind_label=declaration.kind.label,
+                    outcome_label=outcome.value,
+                    is_moved=outcome is FreeAgencyOutcome.MOVED,
+                )
+                for declaration in sorted(player.fa_declarations, key=lambda d: -d.year)
+                for outcome in [player.outcome_of(declaration)]
+            ],
         )

@@ -37,6 +37,7 @@ from ..domain.value_objects import (
     ContractStatus,
     ErrorKind,
     FieldingPosition,
+    FreeAgencyKind,
     PlateAppearanceResult,
     Position,
 )
@@ -656,6 +657,11 @@ def player_edit(request, team_id, player_id):
                     messages.success(request, f"{detail.name} 選手を支配下登録にしました（背番号 {new_number}）。")
             return redirect(reverse("player_edit", args=[team_id, player_id]))
 
+        if "declare_fa" in request.POST or "remove_fa" in request.POST:
+            # FA 宣言の追加・取り消しも、フォームの検証を通さず押されたボタンで判断する
+            _handle_free_agency(request, team_id, player_id, detail.name)
+            return redirect(reverse("player_edit", args=[team_id, player_id]))
+
         if "remove_captain" in request.POST:
             service.remove_captain(team_id, player_id)
             messages.success(request, f"{detail.name} 選手の主将を解任しました。")
@@ -688,8 +694,29 @@ def player_edit(request, team_id, player_id):
         {
             "player": detail,
             "positions": Position.labels(),
+            # FA 宣言の入力。種別の選択肢はドメインの FreeAgencyKind が出典
+            "fa_kinds": FreeAgencyKind.labels(),
+            "current_year": date.today().year,
         },
     )
+
+
+def _handle_free_agency(request, team_id, player_id, player_name) -> None:
+    """選手の編集画面の FA 宣言の追加・取り消し。結果はメッセージで知らせる。"""
+    roster = build_roster_service()
+    try:
+        if "remove_fa" in request.POST:
+            year = int(request.POST.get("remove_fa", ""))
+            roster.remove_free_agency_declaration(team_id, player_id, year)
+            messages.success(request, f"{player_name} 選手の{year}年の FA 宣言を取り消しました。")
+        else:
+            year = int(request.POST.get("fa_year", ""))
+            roster.declare_free_agency(team_id, player_id, year, request.POST.get("fa_kind", ""))
+            messages.success(request, f"{player_name} 選手の{year}年の FA 宣言を記録しました。")
+    except ValueError:
+        messages.error(request, "FA を宣言した年を数値で入力してください。")
+    except DomainError as error:
+        messages.error(request, str(error))
 
 
 def _first_error(form) -> str:
