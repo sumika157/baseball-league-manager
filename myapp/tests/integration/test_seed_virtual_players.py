@@ -60,7 +60,7 @@ class SeedRosterTest(BaseCase):
         self.original.refresh_from_db()
         self.assertEqual(self.original.name, "藤井健吾")
         stint = orm_models.PlayerStint.objects.get(player=self.original)
-        self.assertEqual((stint.team_id, stint.number, stint.to_year), (self.team.id, 10, None))
+        self.assertEqual((stint.team_id, stint.number, stint.to_year), (self.team.id, "10", None))
 
     def test_jersey_numbers_are_unique_among_active_players(self):
         run()
@@ -69,7 +69,7 @@ class SeedRosterTest(BaseCase):
             numbers = [s.number for s in active_stints(team)]
             with self.subTest(team=team.name):
                 self.assertEqual(len(numbers), len(set(numbers)))
-                self.assertTrue(all(0 <= n <= 999 for n in numbers))
+                self.assertTrue(all(0 <= int(n) <= 999 for n in numbers))
 
     def test_profile_is_consistent_with_birth_date_and_stint(self):
         run()

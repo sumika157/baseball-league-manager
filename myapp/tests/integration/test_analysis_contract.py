@@ -48,8 +48,8 @@ class DepthContractTest(AnalysisCase):
         before = self.analysis(year=2025)
         after = self.analysis(year=2026)
 
-        self.assertEqual(self.find(before.pitchers, "昇格した投手").number, 120)
-        self.assertEqual(self.find(after.pitchers, "昇格した投手").number, 30)
+        self.assertEqual(self.find(before.pitchers, "昇格した投手").number, "120")
+        self.assertEqual(self.find(after.pitchers, "昇格した投手").number, "30")
 
     def test_counts_per_row_and_table(self):
         analysis = self.analysis(year=2025)
@@ -107,7 +107,7 @@ class DepthContractTest(AnalysisCase):
         analysis = self.analysis(year=2025, tab="usage")
 
         numbers = {p.name: p.number for box in analysis.usage_boxes for p in box.players}
-        self.assertEqual(numbers["昇格した投手"], 120)
+        self.assertEqual(numbers["昇格した投手"], "120")
 
     def test_moves_use_the_number_of_the_year_and_the_badge(self):
         # 昇格した投手は2024年に加入。2024年の入退団の表では昇格前の番号・育成のバッジ
@@ -115,7 +115,7 @@ class DepthContractTest(AnalysisCase):
         joined = self.analysis(year=2024).joiners
 
         row = next(r for r in joined if r.name == "昇格した投手")
-        self.assertEqual(row.number, 120)
+        self.assertEqual(row.number, "120")
         self.assertTrue(row.is_developmental)
 
     def test_query_count_does_not_depend_on_the_contracts(self):

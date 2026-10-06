@@ -56,7 +56,7 @@ class TeamForeignPlayerQuotaTest(TestCase):
 
     def test_non_foreign_players_do_not_count(self):
         self.team.add_player(
-            "日本人", JerseyNumber(10), Position.INFIELDER, from_year=2026, limits=RosterLimits.UNLIMITED
+            "日本人", JerseyNumber("10"), Position.INFIELDER, from_year=2026, limits=RosterLimits.UNLIMITED
         )
         self._add_foreign("外国人1", 11)
 

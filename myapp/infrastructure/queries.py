@@ -43,6 +43,7 @@ from ..domain.value_objects import (
     FieldingPosition,
     FreeAgencyKind,
     Handedness,
+    JerseyNumber,
     PitchingLine,
     Position,
     Season,
@@ -129,7 +130,7 @@ class DjangoPlayerStatsQuery:
         return self._rows(stints, batting_totals(), pitching_totals())
 
     def list_season(self, league_id: int, year: int) -> list[ActivePlayerStats]:
-        stints = self._active_stints().filter(team__league_id=league_id)
+        stints = self._active_stints(league_id)
         player_ids = [stint.player_id for stint in stints]
         # リーグのチームどうしの試合だけ。明細の行から見た試合の条件で絞る
         games = Q(game__year=year, game__home_team__league_id=league_id, game__away_team__league_id=league_id)
@@ -140,12 +141,18 @@ class DjangoPlayerStatsQuery:
         )
 
     @staticmethod
-    def _active_stints() -> QuerySet[orm_models.PlayerStint]:
-        """在籍中＝退団年が空の在籍。チームの表示順、背番号順（ランキングの同値の並びに効く）。"""
-        return (
-            orm_models.PlayerStint.objects.filter(to_year__isnull=True)
-            .select_related("player", "team")
-            .order_by("team__display_order", "team__name", "number", "id")
+    def _active_stints(league_id: int | None = None) -> list[orm_models.PlayerStint]:
+        """在籍中＝退団年が空の在籍。チームの表示順、背番号順（ランキングの同値の並びに効く）。
+
+        背番号は文字列の列なので SQL では背番号順に並べられない（「10」が「2」より前に来る）。
+        チームまでを SQL で並べ、背番号順（`JerseyNumber.sort_key`）は Python で並べ直す。
+        """
+        rows = orm_models.PlayerStint.objects.filter(to_year__isnull=True).select_related("player", "team")
+        if league_id is not None:
+            rows = rows.filter(team__league_id=league_id)
+        return sorted(
+            rows.order_by("team__display_order", "team__name", "id"),
+            key=lambda s: (s.team.display_order, s.team.name, JerseyNumber(s.number).sort_key, s.id),
         )
 
     @staticmethod
@@ -423,11 +430,12 @@ class DjangoTeamAnalysisQuery:
 
         3本のクエリで済み、選手の数に比例しない。
         """
-        own = list(
+        own = sorted(
             orm_models.PlayerStint.objects.filter(team_id=team_id)
             .filter(Q(from_year=year) | Q(to_year=year))
             .select_related("player")
-            .order_by("number", "id")
+            .order_by("id"),
+            key=lambda s: (JerseyNumber(s.number).sort_key, s.id),
         )
         if not own:
             return [], [], []
@@ -519,11 +527,14 @@ class DjangoTeamAnalysisQuery:
 
     def load(self, team_id: int, year: int) -> TeamAnalysisFacts:
         # 在籍の期間の意味は Stint.covers と同じ（加入年 <= 年 かつ 退団年が空か 年 <= 退団年）
-        stints = (
+        # 同じ選手の在籍が複数ある年は背番号の小さい方（`JerseyNumber.sort_key`）を採る。背番号は文字列の列で、
+        # SQL では背番号順に並べられないので Python で並べる
+        stints = sorted(
             orm_models.PlayerStint.objects.filter(team_id=team_id, from_year__lte=year)
             .filter(Q(to_year__isnull=True) | Q(to_year__gte=year))
             .select_related("player", "team__league")
-            .order_by("number", "id")
+            .order_by("id"),
+            key=lambda s: (JerseyNumber(s.number).sort_key, s.id),
         )
         roster: list[AnalysisRosterRow] = []
         registered_limit: int | None = None

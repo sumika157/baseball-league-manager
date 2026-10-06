@@ -74,7 +74,7 @@
         </div>
         <div class="col-md-3">
           <label class="form-label">背番号</label>
-          <input type="number" name="number" class="form-control" value="{{ player.number }}" min="0" max="999" required />
+          <input type="text" name="number" class="form-control" value="{{ player.number }}" inputmode="numeric" pattern="0|00|[1-9][0-9]{0,2}" maxlength="3" title="0・00・1〜999（「0」と「00」は別の番号です）" required />
         </div>
         <div class="col-md-3">
           <label class="form-label">守備位置</label>
@@ -140,12 +140,12 @@
     <div class="card-header">契約区分: 育成</div>
     <div class="card-body">
       <p class="page-subtitle mb-3" style="font-size: 0.8125rem;">
-        支配下登録にすると、背番号は支配下の番号（99以下）に変わります。
+        支配下登録にすると、背番号は支配下の番号（00・0〜99）に変わります。
       </p>
       <div class="row g-2 align-items-end">
         <div class="col-md-3">
           <label class="form-label">新しい背番号</label>
-          <input type="number" name="promote_number" class="form-control" min="0" max="99" />
+          <input type="text" name="promote_number" class="form-control" inputmode="numeric" pattern="0|00|[1-9][0-9]{0,1}" maxlength="2" title="支配下の背番号（00・0〜99）" />
         </div>
         <div class="col-md-3">
           <button type="submit" name="promote" value="1" class="btn btn-outline-secondary"

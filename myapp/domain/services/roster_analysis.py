@@ -11,7 +11,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 
-from ..value_objects import FieldingPosition, Handedness, Position, Profile
+from ..value_objects import FieldingPosition, Handedness, JerseyNumber, Position, Profile
 
 # 年齢の帯の両端。範囲の外は「18歳以下」「40歳以上」にまとめる
 MIN_AGE_BAND = 18
@@ -123,9 +123,9 @@ def hand_columns(hands: Iterable[Handedness | None], *, is_pitcher: bool) -> lis
     return columns
 
 
-def depth_order(starts: int, games: int, number: int) -> tuple[int, int, int]:
-    """区分の中の並び。先発数の多い順、出場数の多い順、背番号順。"""
-    return (-starts, -games, number)
+def depth_order(starts: int, games: int, number: str) -> tuple[int, int, int]:
+    """区分の中の並び。先発数の多い順、出場数の多い順、背番号順（00 → 0 → 1 …。`JerseyNumber.sort_key`）。"""
+    return (-starts, -games, JerseyNumber(number).sort_key)
 
 
 # 起用マップの箱1つに出す人数の上限（先発ローテーション6人が収まる数）。残りは「ほか n 名」にまとめる
@@ -371,6 +371,6 @@ def judge_leave(own: StintSpan, stints: Iterable[StintSpan]) -> MoveJudgement:
     return MoveJudgement(MoveKind.DEPARTED)
 
 
-def move_order(kind: MoveKind, number: int) -> tuple[int, int]:
-    """入退団の表の並び。区分（宣言順）、背番号順。"""
-    return (list(MoveKind).index(kind), number)
+def move_order(kind: MoveKind, number: str) -> tuple[int, int]:
+    """入退団の表の並び。区分（宣言順）、背番号順（00 → 0 → 1 …。`JerseyNumber.sort_key`）。"""
+    return (list(MoveKind).index(kind), JerseyNumber(number).sort_key)

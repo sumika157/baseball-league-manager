@@ -18,7 +18,7 @@ from ..entities import Player
 SortKeys = dict[str, tuple[Callable[[Player], Any], bool]]
 
 BATTER_SORT_KEYS: SortKeys = {
-    "number": (lambda p: p.number.value, False),
+    "number": (lambda p: p.number.sort_key, False),
     "name": (lambda p: p.name, False),
     "average": (lambda p: p.batting.batting_average, True),
     "hits": (lambda p: p.batting.hits, True),
@@ -35,7 +35,7 @@ BATTER_SORT_KEYS: SortKeys = {
 }
 
 PITCHER_SORT_KEYS: SortKeys = {
-    "number": (lambda p: p.number.value, False),
+    "number": (lambda p: p.number.sort_key, False),
     "name": (lambda p: p.name, False),
     "innings": (lambda p: p.pitching.innings.outs, True),
     "era": (lambda p: p.pitching.earned_run_average, False),
@@ -85,7 +85,7 @@ def _ordered(players: list[Player], getter: Callable[[Player], Any], descending:
     背番号まで逆順になってしまうため、背番号で並べてから指標で並べ直す。
     Python のソートは安定なので、この順序なら背番号は常に昇順に保たれる。
     """
-    ordered = sorted(players, key=lambda p: p.number.value)
+    ordered = sorted(players, key=lambda p: p.number.sort_key)
     ordered.sort(key=getter, reverse=descending)
     return ordered
 
@@ -119,7 +119,7 @@ def sort_pitchers(
         pitched = [p for p in players if p.pitching.innings.outs > 0]
         unpitched = [p for p in players if p.pitching.innings.outs == 0]
         ordered = _ordered(pitched, getter, descending)
-        ordered += sorted(unpitched, key=lambda p: p.number.value)
+        ordered += sorted(unpitched, key=lambda p: p.number.sort_key)
         return ordered, key, descending
 
     return _ordered(players, getter, descending), key, descending

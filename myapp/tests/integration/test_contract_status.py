@@ -26,11 +26,11 @@ class ContractRepositoryTest(BaseCase):
         stint = team.current_stint(team.find_player(player.id))
         self.assertIs(stint.signed_as, ContractStatus.DEVELOPMENTAL)
         self.assertEqual(stint.promoted_year, 2026)
-        self.assertEqual(stint.number_before_promotion.value, 120)
-        self.assertEqual(stint.number.value, 30)
+        self.assertEqual(stint.number_before_promotion.value, "120")
+        self.assertEqual(stint.number.value, "30")
         row = orm_models.PlayerStint.objects.get(id=stint.id)
         self.assertEqual((row.signed_as, row.promoted_year), ("育成", 2026))
-        self.assertEqual(row.number_before_promotion, 120)
+        self.assertEqual(row.number_before_promotion, "120")
 
     def test_league_limit_round_trips(self):
         self.assertEqual(DjangoLeagueRepository().find_by_id(self.league.id).registered_player_limit, 70)
@@ -107,7 +107,7 @@ class ContractServiceTest(BaseCase):
             build_roster_service().promote_player(self.team.id, player.id, 30)
 
         stint = orm_models.PlayerStint.objects.get(player_id=player.id)
-        self.assertEqual((stint.number, stint.promoted_year), (120, None))
+        self.assertEqual((stint.number, stint.promoted_year), ("120", None))
 
     def _fill_the_limit(self, team):
         """上限ちょうどまで支配下を入れる（上限は1）。"""
@@ -150,7 +150,7 @@ class ContractServiceTest(BaseCase):
         build_roster_service().promote_player(self.team.id, player.id, 30, year=2026)
 
         row = orm_models.PlayerStint.objects.get(player_id=player.id)
-        self.assertEqual((row.number, row.number_before_promotion), (30, 120))
+        self.assertEqual((row.number, row.number_before_promotion), ("30", "120"))
 
 
 class ContractScreenTest(BaseCase):
@@ -179,7 +179,7 @@ class ContractScreenTest(BaseCase):
         )
 
         stint = orm_models.PlayerStint.objects.get(player__name="新人育成")
-        self.assertEqual((stint.signed_as, stint.number), ("育成", 130))
+        self.assertEqual((stint.signed_as, stint.number), ("育成", "130"))
 
     def test_registering_without_a_contract_means_registered(self):
         login_as_manager(self.client, self.team)
@@ -228,7 +228,7 @@ class ContractScreenTest(BaseCase):
 
         self.assertRedirects(response, self.edit_url)
         stint = orm_models.PlayerStint.objects.get(player_id=self.developmental.id)
-        self.assertEqual(stint.number, 35)
+        self.assertEqual(stint.number, "35")
         self.assertIsNotNone(stint.promoted_year)
         self.assertNotContains(self.client.get(self.edit_url), "支配下登録する")
 
@@ -237,7 +237,7 @@ class ContractScreenTest(BaseCase):
 
         response = self.client.post(self.edit_url, {"promote": "1", "promote_number": "135"}, follow=True)
 
-        self.assertContains(response, "支配下選手の背番号は99以下")
+        self.assertContains(response, "支配下選手の背番号は00・0〜99")
         self.assertIsNone(orm_models.PlayerStint.objects.get(player_id=self.developmental.id).promoted_year)
 
     def test_promoting_without_a_number_shows_an_error(self):
@@ -245,7 +245,7 @@ class ContractScreenTest(BaseCase):
 
         response = self.client.post(self.edit_url, {"promote": "1", "promote_number": ""}, follow=True)
 
-        self.assertContains(response, "背番号を数値で入力してください")
+        self.assertContains(response, "背番号は 0・00・1〜999 の数字で入力してください")
 
     def test_other_teams_manager_cannot_promote(self):
         login_as_manager(self.client, self.rival)
@@ -298,7 +298,7 @@ class AdminContractValidationTest(BaseCase):
     def test_registered_with_a_three_digit_number_is_rejected(self):
         response = self._add(number="150")
 
-        self.assertContains(response, "支配下選手の背番号は99以下")
+        self.assertContains(response, "支配下選手の背番号は00・0〜99")
         self.assertEqual(self._count(), 0)
 
     def test_matching_developmental_stint_is_saved(self):
@@ -360,7 +360,7 @@ class AdminContractValidationTest(BaseCase):
         )
 
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(orm_models.PlayerStint.objects.get(id=stint.id).number, 12)
+        self.assertEqual(orm_models.PlayerStint.objects.get(id=stint.id).number, "12")
 
     def test_promoting_in_the_admin_over_the_limit_is_rejected(self):
         orm_models.League.objects.filter(id=self.league.id).update(registered_player_limit=2)

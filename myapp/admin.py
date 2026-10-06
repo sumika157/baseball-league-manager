@@ -8,6 +8,7 @@ from django.contrib.admin.actions import delete_selected
 from django.contrib.admin.views.main import ORDER_VAR, ChangeList
 from django.contrib.admin.widgets import FilteredSelectMultiple
 from django.db.models import (
+    Case,
     Count,
     F,
     IntegerField,
@@ -15,8 +16,10 @@ from django.db.models import (
     Prefetch,
     Q,
     Subquery,
+    Value,
+    When,
 )
-from django.db.models.functions import Coalesce
+from django.db.models.functions import Cast, Coalesce
 from django.http import HttpResponseRedirect
 from django.urls import reverse
 from django.utils.html import format_html, format_html_join
@@ -518,7 +521,17 @@ class StadiumAdmin(admin.ModelAdmin):
 
 def _jersey_or_none(value):
     """入力された背番号を値オブジェクトにする。空欄なら None。"""
-    return JerseyNumber(value) if value is not None else None
+    return JerseyNumber(value) if value not in (None, "") else None
+
+
+def _clean_jersey(value):
+    """背番号の欄の検証。表記のまま（「00」は「00」）ドメインの `JerseyNumber` に判定させる。空欄は None。"""
+    if value in (None, ""):
+        return None
+    try:
+        return JerseyNumber(value).value
+    except DomainError as error:
+        raise forms.ValidationError(str(error)) from None
 
 
 def _to_domain_stint(row: PlayerStint) -> DomainStint:
@@ -591,6 +604,12 @@ class PlayerStintForm(forms.ModelForm):
         # 空欄なら支配下として扱う（モデルの既定と同じ）
         self.fields["signed_as"].required = False
 
+    def clean_number(self):
+        return _clean_jersey(self.cleaned_data.get("number"))
+
+    def clean_number_before_promotion(self):
+        return _clean_jersey(self.cleaned_data.get("number_before_promotion"))
+
     def clean_signed_as(self):
         return self.cleaned_data.get("signed_as") or ContractStatus.REGISTERED.value
 
@@ -621,7 +640,7 @@ class PlayerStintForm(forms.ModelForm):
                 if cleaned.get("acquired_via")
                 else None,
             )
-            # 区分と背番号の食い違い（育成は100以上・支配下は99以下）はドメインに判定させる
+            # 区分と背番号の食い違い（支配下は 00・0〜99、育成は3桁の 100〜999）はドメインに判定させる
             candidate.ensure_number_matches_contract()
         except DomainError as error:
             raise forms.ValidationError(str(error)) from None
@@ -1149,15 +1168,38 @@ class PlayerStintAdmin(GroupedAdminMixin, admin.ModelAdmin):
     group_ordering = ("team__league__display_order", "team__league__name", "team__name")
 
     form = PlayerStintForm
-    list_display = ("number", "player", "from_year", "to_year")
+    list_display = ("number_label", "player", "from_year", "to_year")
     list_filter = ("team__league", "team")
     search_fields = ("player__name",)
-    ordering = ("team__league__name", "team__name", "number")
+    # 背番号は文字列の列なので、そのままでは「10」が「2」より前に来る。数値に直した並びのキーを足す
+    # （00 → 0 → 1 …。出典は `JerseyNumber.sort_key`。食い違わないことを test_admin が確かめる）
+    # （注釈は `ordering` の検査に通らないので get_ordering で返す）
     list_select_related = ("player", "team", "team__league")
     autocomplete_fields = ("player", "team")
 
     # 行をチームごとに区切る
     group_by = staticmethod(lambda s: f"{s.team.league.name} · {s.team.name}")
+
+    def get_ordering(self, request):
+        return ("team__league__name", "team__name", "number_order")
+
+    def get_queryset(self, request):
+        # 親の get_queryset は並び（注釈の前に評価される）を付けてしまうので、注釈を付けてから並べる
+        return (
+            self.model._default_manager.get_queryset()
+            .annotate(
+                number_order=Case(
+                    When(number=JerseyNumber.DOUBLE_ZERO, then=Value(-1)),
+                    default=Cast("number", IntegerField()),
+                    output_field=IntegerField(),
+                )
+            )
+            .order_by(*self.get_ordering(request))
+        )
+
+    @admin.display(description="背番号", ordering="number_order")
+    def number_label(self, obj):
+        return obj.number
 
     @staticmethod
     def deletion_blocker(obj) -> str:

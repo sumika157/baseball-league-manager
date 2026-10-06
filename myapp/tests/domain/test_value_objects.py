@@ -42,25 +42,47 @@ class PositionTest(TestCase):
 
 class JerseyNumberTest(TestCase):
     def test_accepts_valid_numbers(self):
-        self.assertEqual(JerseyNumber(0).value, 0)
-        self.assertEqual(JerseyNumber(999).value, 999)
+        for text in ["0", "00", "7", "99", "100", "999"]:
+            with self.subTest(text=text):
+                self.assertEqual(JerseyNumber(text).value, text)
 
-    def test_string_is_normalised(self):
-        self.assertEqual(JerseyNumber("18").value, 18)
+    def test_zero_and_double_zero_are_different_numbers(self):
+        self.assertNotEqual(JerseyNumber("0"), JerseyNumber("00"))
+        self.assertEqual(str(JerseyNumber("00")), "00")
 
-    def test_rejects_out_of_range(self):
-        with self.assertRaises(InvalidJerseyNumber):
-            JerseyNumber(1000)
-        with self.assertRaises(InvalidJerseyNumber):
-            JerseyNumber(-1)
+    def test_rejects_leading_zeros_other_than_double_zero(self):
+        for text in ["01", "007", "000", "0000"]:
+            with self.subTest(text=text), self.assertRaises(InvalidJerseyNumber):
+                JerseyNumber(text)
 
-    def test_rejects_non_numeric(self):
-        with self.assertRaises(InvalidJerseyNumber):
-            JerseyNumber("背番号")
+    def test_rejects_out_of_range_and_malformed(self):
+        for value in ["1000", "-1", "", "a", "背番号", "1.5", " ", "１２"]:
+            with self.subTest(value=value), self.assertRaises(InvalidJerseyNumber):
+                JerseyNumber(value)
+        for value in [-1, 1000, None, 1.5, True]:
+            with self.subTest(value=value), self.assertRaises(InvalidJerseyNumber):
+                JerseyNumber(value)
+
+    def test_int_is_turned_into_text_and_never_becomes_double_zero(self):
+        self.assertEqual(JerseyNumber(0).value, "0")
+        self.assertEqual(JerseyNumber(18).value, "18")
+
+    def test_surrounding_spaces_are_trimmed(self):
+        self.assertEqual(JerseyNumber(" 18 ").value, "18")
+
+    def test_sort_key_orders_double_zero_then_zero_then_numerically(self):
+        texts = ["100", "99", "10", "9", "1", "0", "00", "2"]
+        ordered = sorted(texts, key=lambda t: JerseyNumber(t).sort_key)
+        self.assertEqual(ordered, ["00", "0", "1", "2", "9", "10", "99", "100"])
+
+    def test_three_digit_is_decided_by_notation(self):
+        self.assertFalse(JerseyNumber("00").is_three_digit)
+        self.assertFalse(JerseyNumber("99").is_three_digit)
+        self.assertTrue(JerseyNumber("100").is_three_digit)
 
     def test_equality_is_by_value(self):
-        self.assertEqual(JerseyNumber(10), JerseyNumber(10))
-        self.assertNotEqual(JerseyNumber(10), JerseyNumber(11))
+        self.assertEqual(JerseyNumber("10"), JerseyNumber("10"))
+        self.assertNotEqual(JerseyNumber("10"), JerseyNumber("11"))
 
 
 class InningsPitchedTest(TestCase):

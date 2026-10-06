@@ -81,7 +81,22 @@ class BatterSortTest(TestCase):
                 )
                 self.assertEqual(used, "number")
                 self.assertFalse(desc)
-                self.assertEqual([p.number.value for p in players], [1, 2])
+                self.assertEqual([p.number.value for p in players], ["1", "2"])
+
+    def test_jersey_number_order_is_double_zero_zero_then_numeric_not_text(self):
+        """背番号順は 00 → 0 → 1 → 2 → 10 → 100。文字列順（「10」が「2」より前）にならない。"""
+        players = [
+            Player(
+                name=f"選手{text}",
+                number=JerseyNumber(text),
+                position=Position.INFIELDER,
+                id=index,
+                batting=BattingLine(),
+            )
+            for index, text in enumerate(["100", "10", "2", "0", "00", "1"], start=1)
+        ]
+        ordered, _, _ = services.sort_batters(players, "number")
+        self.assertEqual([p.number.value for p in ordered], ["00", "0", "1", "2", "10", "100"])
 
     def test_ties_are_broken_by_jersey_number(self):
         same = [
@@ -89,7 +104,7 @@ class BatterSortTest(TestCase):
             _batter("A", 10, at_bats=10, singles=3),
         ]
         players, _, _ = services.sort_batters(same, "average")
-        self.assertEqual([p.number.value for p in players], [10, 20])
+        self.assertEqual([p.number.value for p in players], ["10", "20"])
 
 
 class PitcherSortTest(TestCase):

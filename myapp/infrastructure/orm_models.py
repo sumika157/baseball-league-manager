@@ -205,7 +205,9 @@ class PlayerStint(models.Model):
 
     player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="stints", verbose_name="選手")
     team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="stints", verbose_name="チーム")
-    number = models.IntegerField(verbose_name="背番号")
+    number = models.CharField(
+        max_length=3, verbose_name="背番号", help_text="0・00・1〜999。「0」と「00」は別の番号です。"
+    )
     from_year = models.IntegerField(verbose_name="加入年")
     to_year = models.IntegerField(
         null=True,
@@ -218,7 +220,7 @@ class PlayerStint(models.Model):
         choices=CONTRACT_STATUS_CHOICES,
         default=ContractStatus.REGISTERED.value,
         verbose_name="加入時の契約区分",
-        help_text="支配下または育成。育成の背番号は100以上、支配下は99以下です。",
+        help_text="支配下または育成。育成の背番号は3桁（100以上）、支配下は00・0〜99です。",
     )
     promoted_year = models.IntegerField(
         null=True,
@@ -226,11 +228,12 @@ class PlayerStint(models.Model):
         verbose_name="支配下登録年",
         help_text="育成から支配下に上がった年。育成で加入し、まだ上がっていなければ空欄。",
     )
-    number_before_promotion = models.IntegerField(
+    number_before_promotion = models.CharField(
+        max_length=3,
         null=True,
         blank=True,
         verbose_name="昇格前の背番号",
-        help_text="育成から支配下に上がる前の背番号（100以上）。支配下登録年を入れたときは必須です。",
+        help_text="育成から支配下に上がる前の背番号（3桁・100以上）。支配下登録年を入れたときは必須です。",
     )
     acquired_via = models.CharField(
         max_length=20,
@@ -248,7 +251,7 @@ class PlayerStint(models.Model):
     class Meta:
         verbose_name = "在籍"
         verbose_name_plural = "在籍"
-        ordering = ["-from_year", "number"]
+        ordering = ["-from_year", "id"]
         constraints = [
             # 同じチームに同じ年から二重に加入することはない
             models.UniqueConstraint(fields=["player", "team", "from_year"], name="unique_player_team_from"),

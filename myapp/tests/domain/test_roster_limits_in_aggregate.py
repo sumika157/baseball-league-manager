@@ -48,22 +48,22 @@ class AddPlayerChecksTheLimitTest(TestCase):
 
     def setUp(self):
         self.team = Team(name="A", id=1, league_id=1)
-        self.team.add_player("先客", JerseyNumber(5), Position.PITCHER, 2026, limits=UNLIMITED)
+        self.team.add_player("先客", JerseyNumber("5"), Position.PITCHER, 2026, limits=UNLIMITED)
 
     def test_a_registered_player_is_refused_at_the_limit(self):
         with self.assertRaises(RegisteredPlayerLimitExceeded):
-            self.team.add_player("新人", JerseyNumber(6), Position.PITCHER, 2026, limits=limits(registered=1))
+            self.team.add_player("新人", JerseyNumber("6"), Position.PITCHER, 2026, limits=limits(registered=1))
         self.assertEqual(len(self.team.players), 1)
 
     def test_a_developmental_player_is_accepted_at_the_limit(self):
         self.team.add_player(
-            "育成", JerseyNumber(120), Position.PITCHER, 2026, contract=DEVELOPMENTAL, limits=limits(registered=1)
+            "育成", JerseyNumber("120"), Position.PITCHER, 2026, contract=DEVELOPMENTAL, limits=limits(registered=1)
         )
 
         self.assertEqual(len(self.team.players), 2)
 
     def test_unlimited_accepts(self):
-        self.team.add_player("新人", JerseyNumber(6), Position.PITCHER, 2026, limits=UNLIMITED)
+        self.team.add_player("新人", JerseyNumber("6"), Position.PITCHER, 2026, limits=UNLIMITED)
 
         self.assertEqual(len(self.team.players), 2)
 
@@ -71,14 +71,14 @@ class AddPlayerChecksTheLimitTest(TestCase):
 class PromoteChecksTheLimitTest(TestCase):
     def test_promotion_is_refused_at_the_limit_without_a_prior_check(self):
         team = Team(name="A", id=1, league_id=1)
-        team.add_player("先客", JerseyNumber(5), Position.PITCHER, 2026, limits=UNLIMITED)
+        team.add_player("先客", JerseyNumber("5"), Position.PITCHER, 2026, limits=UNLIMITED)
         trainee = team.add_player(
-            "育成", JerseyNumber(120), Position.PITCHER, 2026, contract=DEVELOPMENTAL, limits=UNLIMITED
+            "育成", JerseyNumber("120"), Position.PITCHER, 2026, contract=DEVELOPMENTAL, limits=UNLIMITED
         )
         trainee.id = 9
 
         with self.assertRaises(RegisteredPlayerLimitExceeded):
-            team.promote_player(9, JerseyNumber(30), 2026, limits=limits(registered=1))
+            team.promote_player(9, JerseyNumber("30"), 2026, limits=limits(registered=1))
 
         self.assertIs(team.contract_of(trainee), DEVELOPMENTAL)
 
@@ -89,7 +89,7 @@ class AcceptTransferTest(TestCase):
     def setUp(self):
         self.source = Team(name="元", id=1, league_id=1)
         self.destination = Team(name="先", id=2, league_id=1)
-        self.player = self.source.add_player("山田", JerseyNumber(10), Position.INFIELDER, 2020, limits=UNLIMITED)
+        self.player = self.source.add_player("山田", JerseyNumber("10"), Position.INFIELDER, 2020, limits=UNLIMITED)
         self.player.id = 5
         self.source.retire_player(self.player, 2025)
 
@@ -100,14 +100,16 @@ class AcceptTransferTest(TestCase):
         self.accept(via=AcquisitionRoute.TRADE)
 
         stint = self.destination.current_stint(self.player)
-        self.assertEqual((stint.from_year, stint.number.value, stint.acquired_via), (2026, 7, AcquisitionRoute.TRADE))
+        self.assertEqual(
+            (stint.from_year, stint.number.value, stint.acquired_via), (2026, "7", AcquisitionRoute.TRADE)
+        )
         self.assertTrue(self.player.is_active)
-        self.assertEqual(self.player.number.value, 7)
+        self.assertEqual(self.player.number.value, "7")
         self.assertIn(self.player, self.destination.players)
         self.assertEqual(len(self.player.career), 2)
 
     def test_a_duplicate_number_is_refused(self):
-        self.destination.add_player("先客", JerseyNumber(7), Position.PITCHER, 2020, limits=UNLIMITED)
+        self.destination.add_player("先客", JerseyNumber("7"), Position.PITCHER, 2020, limits=UNLIMITED)
 
         with self.assertRaises(DuplicateJerseyNumber):
             self.accept(number=7)
@@ -119,7 +121,7 @@ class AcceptTransferTest(TestCase):
             self.accept(number=150, contract=REGISTERED)
 
     def test_the_registered_limit_is_checked_for_a_registered_signing_only(self):
-        self.destination.add_player("先客", JerseyNumber(5), Position.PITCHER, 2020, limits=UNLIMITED)
+        self.destination.add_player("先客", JerseyNumber("5"), Position.PITCHER, 2020, limits=UNLIMITED)
 
         with self.assertRaises(RegisteredPlayerLimitExceeded):
             self.accept(lim=limits(registered=1))
@@ -147,7 +149,7 @@ class AcceptTransferTest(TestCase):
             self.accept(number=150, contract=DEVELOPMENTAL, via=AcquisitionRoute.DRAFT)
 
     def test_a_declaration_the_stints_no_longer_cover_is_refused(self):
-        other = Player(name="宣言", number=JerseyNumber(11), position=Position.PITCHER)
+        other = Player(name="宣言", number=JerseyNumber("11"), position=Position.PITCHER)
         other.career = []
         other.fa_declarations.append(FreeAgentDeclaration(2024, FreeAgencyKind.DOMESTIC))
 

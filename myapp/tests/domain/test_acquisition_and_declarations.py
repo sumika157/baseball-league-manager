@@ -26,14 +26,18 @@ MOVED = FreeAgencyOutcome.MOVED
 
 def stint(team_id=1, from_year=2020, to_year=None, **kwargs):
     return Stint(
-        team_id=team_id, number=kwargs.pop("number", JerseyNumber(10)), from_year=from_year, to_year=to_year, **kwargs
+        team_id=team_id,
+        number=kwargs.pop("number", JerseyNumber("10")),
+        from_year=from_year,
+        to_year=to_year,
+        **kwargs,
     )
 
 
 def player(*career, declarations=()):
     return Player(
         name="山田",
-        number=JerseyNumber(10),
+        number=JerseyNumber("10"),
         position=Position.INFIELDER,
         career=list(career),
         fa_declarations=list(declarations),
@@ -59,18 +63,18 @@ class AcquisitionRouteTest(TestCase):
         route = AcquisitionRoute.DEVELOPMENTAL_DRAFT
         with self.assertRaises(InvalidAcquisition):
             stint(acquired_via=route)  # 既定の区分は支配下
-        stint(acquired_via=route, number=JerseyNumber(120), signed_as=ContractStatus.DEVELOPMENTAL)
+        stint(acquired_via=route, number=JerseyNumber("120"), signed_as=ContractStatus.DEVELOPMENTAL)
 
     def test_draft_requires_a_registered_contract(self):
         with self.assertRaises(InvalidAcquisition):
             stint(
-                acquired_via=AcquisitionRoute.DRAFT, number=JerseyNumber(120), signed_as=ContractStatus.DEVELOPMENTAL
+                acquired_via=AcquisitionRoute.DRAFT, number=JerseyNumber("120"), signed_as=ContractStatus.DEVELOPMENTAL
             )
         stint(acquired_via=AcquisitionRoute.DRAFT)
 
     def test_other_routes_do_not_constrain_the_contract(self):
         for route in (AcquisitionRoute.FREE_AGENT, AcquisitionRoute.TRADE, AcquisitionRoute.NEW_FOREIGN):
-            stint(acquired_via=route, number=JerseyNumber(120), signed_as=ContractStatus.DEVELOPMENTAL)
+            stint(acquired_via=route, number=JerseyNumber("120"), signed_as=ContractStatus.DEVELOPMENTAL)
             stint(acquired_via=route)
 
 
@@ -238,7 +242,7 @@ class AcquisitionAndDeclarationTest(TestCase):
         with self.assertRaises(InvalidAcquisition):
             team.add_player(
                 "新人",
-                JerseyNumber(10),
+                JerseyNumber("10"),
                 Position.PITCHER,
                 2025,
                 acquired_via=AcquisitionRoute.FREE_AGENT,
@@ -251,7 +255,7 @@ class AcquisitionAndDeclarationTest(TestCase):
 
         added = team.add_player(
             "新人",
-            JerseyNumber(10),
+            JerseyNumber("10"),
             Position.PITCHER,
             2025,
             acquired_via=AcquisitionRoute.DRAFT,
@@ -262,7 +266,7 @@ class AcquisitionAndDeclarationTest(TestCase):
 
     def test_the_team_declares_and_removes_for_its_player(self):
         team = Team(name="A", id=1)
-        added = team.add_player("新人", JerseyNumber(10), Position.PITCHER, 2025, limits=RosterLimits.UNLIMITED)
+        added = team.add_player("新人", JerseyNumber("10"), Position.PITCHER, 2025, limits=RosterLimits.UNLIMITED)
         added.id = 5
 
         team.declare_free_agency(5, 2025, DOMESTIC)
@@ -353,7 +357,7 @@ class ConsistencyAfterClosingStintsTest(TestCase):
         this_year = date.today().year
         team = Team(name="A", id=1)
         added = team.add_player(
-            "新人", JerseyNumber(10), Position.PITCHER, this_year - 3, limits=RosterLimits.UNLIMITED
+            "新人", JerseyNumber("10"), Position.PITCHER, this_year - 3, limits=RosterLimits.UNLIMITED
         )
         added.id = 5
         team.declare_free_agency(5, this_year, DOMESTIC)
@@ -376,7 +380,7 @@ class ConsistencyAfterClosingStintsTest(TestCase):
         """時計（今日の年）では制限しない（ペナントの世界は実際の年より先へ進む）。在籍が続く限り先の年も宣言でき、
         その年より前に在籍を閉じる退団は「どの在籍にも覆われない宣言」になるので拒否する。"""
         team = Team(name="A", id=1)
-        added = team.add_player("新人", JerseyNumber(10), Position.PITCHER, 2020, limits=RosterLimits.UNLIMITED)
+        added = team.add_player("新人", JerseyNumber("10"), Position.PITCHER, 2020, limits=RosterLimits.UNLIMITED)
         ahead = date.today().year + 3
         added.declare_free_agency(ahead, DOMESTIC)
 

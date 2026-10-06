@@ -16,7 +16,7 @@ from django.urls import reverse
 
 from myapp.application.dto import LineupSlot
 from myapp.domain.entities import PlateAppearance, RunnerAdvance
-from myapp.domain.value_objects import AdvanceReason, Base, FieldingPosition, PlateAppearanceResult
+from myapp.domain.value_objects import AdvanceReason, Base, FieldingPosition, JerseyNumber, PlateAppearanceResult
 
 from ..helpers import login_as_manager
 from .test_fielding import FieldingTestBase
@@ -129,8 +129,9 @@ class GameEditPayloadTest(FieldingTestBase):
         self.assertEqual(payload["plate_appearances"], [])
         self.assertEqual([team["lineup"] for team in payload["teams"]], [[], []])
         self.assertEqual((payload["game"]["home_score"], payload["game"]["away_score"]), (0, 0))
-        # 両チームとも在籍中の選手は背番号順に並ぶ
+        # 両チームとも在籍中の選手は背番号順に並ぶ。背番号は表記の文字列なので、文字列の順ではなく
+        # ドメインの並び（00 → 0 → 1 → … → 10）で比べる（文字列の順だと「10」が「2」より前に来る）
         for team in payload["teams"]:
             numbers = [player["number"] for player in team["players"]]
-            self.assertEqual(numbers, sorted(numbers))
+            self.assertEqual(numbers, sorted(numbers, key=lambda n: JerseyNumber(n).sort_key))
         self.assertEqual([team["is_home"] for team in payload["teams"]], [True, False])

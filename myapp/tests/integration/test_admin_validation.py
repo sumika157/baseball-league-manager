@@ -454,7 +454,7 @@ class AdminPlayerWithStintsTest(BaseCase):
         stints = self._created().stints.order_by("from_year")
         self.assertEqual(
             [(s.team_id, s.number, s.from_year, s.to_year) for s in stints],
-            [(self.past.id, 18, 2018, 2021), (self.team.id, 11, 2022, None)],
+            [(self.past.id, "18", 2018, 2021), (self.team.id, "11", 2022, None)],
         )
 
     def test_mid_season_transfer_is_allowed(self):

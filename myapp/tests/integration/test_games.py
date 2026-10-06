@@ -487,6 +487,7 @@ class BoxScoreEntryTest(BaseCase):
         payload = response.context["payload"]
         players = [p for team in payload["teams"] for p in team["players"]]
         self.assertTrue(players)
+        self.assertTrue(all(isinstance(p["number"], str) for p in players), "背番号は表記の文字列で渡す")
         for player in players:
             self.assertEqual(set(player), {"id", "name", "number", "position", "is_pitcher"})
         # 代わりに打席の語彙が載る（画面側に同じ表を持たせないため）
