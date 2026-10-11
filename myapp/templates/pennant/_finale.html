@@ -1,0 +1,35 @@
+{% comment %}
+最終シーズンまで終えた世界の「終了」のカード。finale（WorldFinale）を渡す。年度ごとの自軍の順位と通算。
+読むだけの表示で、保存した値ではない（順位表から導いた値）。
+{% endcomment %}
+<div class="card mb-4" id="world-finale">
+  <div class="card-header">世界の終了（{{ finale.seasons|length }}シーズン）</div>
+  <div class="card-body">
+    <p class="mb-3">
+      通算 <span class="stat-key">{{ finale.record }}</span>
+      <span class="stat-muted ms-2">優勝</span> <span class="stat-key">{{ finale.titles }}回</span>
+    </p>
+    <div class="table-responsive">
+      <table class="table table-sm mb-0">
+        <thead>
+          <tr>
+            <th>年</th>
+            <th class="text-end">順位</th>
+            <th class="text-end">成績</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for season in finale.seasons %}
+            <tr>
+              <td>{{ season.year }}年</td>
+              <td class="text-end stat-key">{{ season.rank }}位</td>
+              <td class="text-end">{{ season.record }}</td>
+              <td>{% if season.is_champion %}優勝{% endif %}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>

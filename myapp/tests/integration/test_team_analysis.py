@@ -12,6 +12,7 @@ from django.urls import reverse
 
 from myapp.application.team_analysis import USAGE_AREAS
 from myapp.domain.entities import Game
+from myapp.domain.pennant.world import WorldScope
 from myapp.domain.services import NEUTRAL_CATEGORY, ColorAxis, color_categories, usage_map_positions
 from myapp.domain.services.roster_analysis import MAX_PLAYERS_IN_BOX
 from myapp.domain.value_objects import BattingLine, FieldingPosition, PitchingLine, Season
@@ -54,7 +55,7 @@ class AnalysisCase(BaseCase):
             )
         for player_id, order in pitching:
             game.record_pitching(player_id, PitchingLine(), appearance_order=order)
-        return DjangoGameRepository().save(game)
+        return DjangoGameRepository(WorldScope.real()).save(game)
 
     @staticmethod
     def names(table):

@@ -1,15 +1,16 @@
 {% extends 'myapp/base.html' %}
+{% load scoped %}
 
 {% block title %}{{ detail.game.played_on|date:"Y/m/d" }} の試合 - Baseball Manager{% endblock %}
 
 {% block content %}
 <nav aria-label="breadcrumb">
   <ol class="breadcrumb">
-    <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>
-    <li class="breadcrumb-item"><a href="{% url 'game_list' %}">試合</a></li>
+    {% if world %}{% include 'pennant/_crumbs.html' %}{% else %}<li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>{% endif %}
+    <li class="breadcrumb-item"><a href="{% scoped_url 'game_list' %}">試合</a></li>
     <li class="breadcrumb-item active">{{ detail.game.played_on|date:"Y/m/d" }}</li>
   </ol>
-</nav>
+</nav>{% if world %}{% include 'pennant/_world_bar.html' %}{% endif %}
 
 <div class="page-head">
   <h1 class="page-title">
@@ -18,7 +19,7 @@
     {{ detail.game.home_team_name }}
   </h1>
   <p class="page-subtitle">
-    {{ detail.game.played_on|date:"Y年n月j日" }}（{{ detail.game.year }}年シーズン） · {{ detail.game.result }}
+    {{ detail.game.played_on|date:"Y年n月j日" }}（{{ detail.game.year }}年シーズン） · {{ detail.game.result }}{% if world %} · シミュレーション{% endif %}
   </p>
   {% if can_edit %}
     <a href="{% url 'game_edit' detail.game.id %}" class="btn btn-secondary mt-2">記録を編集</a>
@@ -30,45 +31,7 @@
 ホームが最終回を攻めずに終わった場合は「X」が入る。
 {% endcomment %}
 {% if detail.line_score.has_columns %}
-  <div class="card mb-3">
-    <div class="card-body p-0">
-      <div class="table-responsive">
-        <table class="table linescore-table mb-0">
-          <thead>
-            <tr>
-              <th></th>
-              {% for column in detail.line_score.columns %}
-                <th class="text-center">{{ column.inning }}</th>
-              {% endfor %}
-              <th class="text-center linescore-total">計</th>
-              <th class="text-center">安</th>
-              <th class="text-center">失</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <th>{{ detail.game.away_team_name }}</th>
-              {% for column in detail.line_score.columns %}
-                <td class="text-center">{{ column.away }}</td>
-              {% endfor %}
-              <td class="text-center linescore-total">{{ detail.line_score.away_total }}</td>
-              <td class="text-center stat-muted">{{ detail.line_score.away_hits }}</td>
-              <td class="text-center stat-muted">{{ detail.line_score.away_errors|default_if_none:'—' }}</td>
-            </tr>
-            <tr>
-              <th>{{ detail.game.home_team_name }}</th>
-              {% for column in detail.line_score.columns %}
-                <td class="text-center">{{ column.home }}</td>
-              {% endfor %}
-              <td class="text-center linescore-total">{{ detail.line_score.home_total }}</td>
-              <td class="text-center stat-muted">{{ detail.line_score.home_hits }}</td>
-              <td class="text-center stat-muted">{{ detail.line_score.home_errors|default_if_none:'—' }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </div>
+  {% include 'myapp/_line_score.html' with line_score=detail.line_score game=detail.game %}
 {% endif %}
 
 {% comment %}
@@ -152,7 +115,7 @@
                   <td class="text-center">{{ row.position_label|default:'—' }}</td>
                   <td>
                     <span class="jersey-number me-1">{{ row.number }}</span>
-                    <a href="{% url 'player_detail' row.team_id row.player_id %}" class="player-name">{{ row.player_name }}</a>
+                    <a href="{% scoped_url 'player_detail' row.team_id row.player_id %}" class="player-name">{{ row.player_name }}</a>
                   </td>
                   <td class="text-end stat-key">{{ row.career_batting_average|floatformat:3 }}</td>
                   <td class="text-end">{{ row.at_bats }}</td>
@@ -208,7 +171,7 @@
                 <tr>
                   <td>
                     <span class="jersey-number me-1">{{ row.number }}</span>
-                    <a href="{% url 'player_detail' row.team_id row.player_id %}" class="player-name">{{ row.player_name }}</a>
+                    <a href="{% scoped_url 'player_detail' row.team_id row.player_id %}" class="player-name">{{ row.player_name }}</a>
                     {% if row.appearance_order == 1 %}<span class="badge bg-secondary ms-1">先発</span>{% endif %}
                   </td>
                   <td class="text-end stat-key">{{ row.career_earned_run_average|floatformat:2 }}</td>
@@ -259,7 +222,7 @@
                   <td class="text-center">{{ row.position_label|default:'—' }}</td>
                   <td>
                     <span class="jersey-number me-1">{{ row.number }}</span>
-                    <a href="{% url 'player_detail' row.team_id row.player_id %}" class="player-name">{{ row.player_name }}</a>
+                    <a href="{% scoped_url 'player_detail' row.team_id row.player_id %}" class="player-name">{{ row.player_name }}</a>
                   </td>
                   <td class="text-end">{{ row.putouts }}</td>
                   <td class="text-end">{{ row.assists }}</td>

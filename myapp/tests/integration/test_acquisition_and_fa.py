@@ -9,12 +9,15 @@ from django.urls import reverse
 
 from myapp.admin import FreeAgentDeclarationForm
 from myapp.domain.exceptions import InvalidAcquisition, InvalidFreeAgentDeclaration
+from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import AcquisitionRoute, FreeAgencyKind
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoTeamRepository
 
 from ..helpers import build_roster_service, build_team_analysis_service, login_as_manager
 from .base import BaseCase
+
+REAL = WorldScope.real()
 
 THIS_YEAR = date.today().year
 DEVELOPMENTAL = "育成"
@@ -24,7 +27,7 @@ class RouteRepositoryTest(BaseCase):
     def test_route_round_trips(self):
         player = self.service.register_player(self.team.id, "山田", 10, "内野手", acquired_via_label="ドラフト")
 
-        stint = DjangoTeamRepository().find_by_id(self.team.id).current_stint(player)
+        stint = DjangoTeamRepository(REAL).find_by_id(self.team.id).current_stint(player)
 
         self.assertIs(stint.acquired_via, AcquisitionRoute.DRAFT)
         self.assertEqual(orm_models.PlayerStint.objects.get(player_id=player.id).acquired_via, "ドラフト")
@@ -32,7 +35,7 @@ class RouteRepositoryTest(BaseCase):
     def test_unknown_route_is_stored_as_null_and_read_back_as_none(self):
         player = self.service.register_player(self.team.id, "山田", 10, "内野手")
 
-        stint = DjangoTeamRepository().find_by_id(self.team.id).current_stint(player)
+        stint = DjangoTeamRepository(REAL).find_by_id(self.team.id).current_stint(player)
 
         self.assertIsNone(stint.acquired_via)
         self.assertIsNone(orm_models.PlayerStint.objects.get(player_id=player.id).acquired_via)
@@ -101,7 +104,7 @@ class RouteRepositoryTest(BaseCase):
 
         self.assertEqual(orm_models.PlayerStint.objects.get(player_id=player.id, team=self.rival).acquired_via, "FA")
         # 宣言は選手が持つので、移籍したあとの球団から読んでも残っている
-        moved = DjangoTeamRepository().find_by_id(self.rival.id).find_player(player.id)
+        moved = DjangoTeamRepository(REAL).find_by_id(self.rival.id).find_player(player.id)
         self.assertEqual([d.year for d in moved.fa_declarations], [THIS_YEAR])
 
 
@@ -119,7 +122,7 @@ class DeclarationRepositoryTest(BaseCase):
 
         rows = self._declarations()
         self.assertEqual([(r.year, r.kind) for r in rows], [(THIS_YEAR, "海外")])
-        loaded = DjangoTeamRepository().find_by_id(self.team.id).find_player(self.player.id)
+        loaded = DjangoTeamRepository(REAL).find_by_id(self.team.id).find_player(self.player.id)
         self.assertEqual([(d.year, d.kind) for d in loaded.fa_declarations], [(THIS_YEAR, FreeAgencyKind.OVERSEAS)])
 
     def test_saving_again_does_not_duplicate(self):
@@ -163,7 +166,7 @@ class DeclarationRepositoryTest(BaseCase):
     def test_loading_a_roster_does_not_query_per_player(self):
         def count():
             with CaptureQueriesContext(connection) as captured:
-                DjangoTeamRepository().find_by_id(self.team.id)
+                DjangoTeamRepository(REAL).find_by_id(self.team.id)
             return len(captured)
 
         before = count()
@@ -442,7 +445,7 @@ class MovesDisplayTest(BaseCase):
             away_score=0,
         )
         game.record_pitching(starter.id, PitchingLine(), appearance_order=1)
-        DjangoGameRepository().save(game)
+        DjangoGameRepository(REAL).save(game)
 
     def test_joiners_carry_the_route_and_unknown_is_empty(self):
         self._player(self.team, "ドラフト組", 20, self.YEAR, route="ドラフト")

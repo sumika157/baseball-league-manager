@@ -130,6 +130,16 @@ class ContractStatus(Enum):
             )
 
     @classmethod
+    def now(cls, signed_as: ContractStatus, promoted_year: int | None) -> ContractStatus:
+        """今（在籍の最後の時点）の契約区分。**出典はここだけ**（`Stint.contract_now` も参照クエリもこれを呼ぶ）。
+
+        育成で加入して、まだ昇格していなければ育成。それ以外（支配下で加入・昇格済み）は支配下。
+        """
+        if signed_as is cls.DEVELOPMENTAL and promoted_year is None:
+            return cls.DEVELOPMENTAL
+        return cls.REGISTERED
+
+    @classmethod
     def in_year(cls, signed_as: ContractStatus, promoted_year: int | None, year: int) -> ContractStatus:
         """その年の契約区分。**出典はここだけ**（`Stint.contract_in` も参照クエリの材料もこれを呼ぶ）。
 
@@ -314,6 +324,25 @@ class FieldingPosition(Enum):
         return self.value
 
     @property
+    def full_name(self) -> str:
+        """文中に出す名前（「遊」ではなく「遊撃手」）。1文字のラベルは表の見出し用。"""
+        return _FIELDING_FULL_NAMES[self]
+
+    @property
+    def allows_left_handed_thrower(self) -> bool:
+        """左投げの選手が就ける守備位置か。**「左投げは捕・二・三・遊に就かない」規則の唯一の出典。**
+
+        NPB では捕手・二塁手・三塁手・遊撃手に左投げはほぼいない（左投げの内野手は一塁手だけ）。
+        仮想データの生成と AI の編成はこの規則に従う。手入力の試合の記録と GM の手動の編成には
+        かけない（現実にも極めてまれな起用があるため）。投手・一塁・外野・指名打者は就ける。
+        """
+        return self not in _RIGHT_THROWER_POSITIONS
+
+    def suits_thrower(self, throws: Handedness | None) -> bool:
+        """投げる手から見て、この守備位置に就かせてよいか。投げる手が不明（None）なら制限しない。"""
+        return throws is not Handedness.LEFT or self.allows_left_handed_thrower
+
+    @property
     def is_substitute_only(self) -> bool:
         """守備に就かず、代打・代走としてのみ出場したか。"""
         return self in (FieldingPosition.PINCH_HITTER, FieldingPosition.PINCH_RUNNER)
@@ -355,6 +384,31 @@ class FieldingPosition(Enum):
         """守備に就く位置だけ。スタメンの選択肢に使う。"""
         return [item.value for item in cls if not item.is_substitute_only]
 
+
+# 左投げが就かない守備位置（`FieldingPosition.allows_left_handed_thrower` が参照する）
+_RIGHT_THROWER_POSITIONS = frozenset(
+    {
+        FieldingPosition.CATCHER,
+        FieldingPosition.SECOND_BASE,
+        FieldingPosition.THIRD_BASE,
+        FieldingPosition.SHORTSTOP,
+    }
+)
+
+_FIELDING_FULL_NAMES = {
+    FieldingPosition.PITCHER: "投手",
+    FieldingPosition.CATCHER: "捕手",
+    FieldingPosition.FIRST_BASE: "一塁手",
+    FieldingPosition.SECOND_BASE: "二塁手",
+    FieldingPosition.THIRD_BASE: "三塁手",
+    FieldingPosition.SHORTSTOP: "遊撃手",
+    FieldingPosition.LEFT_FIELD: "左翼手",
+    FieldingPosition.CENTER_FIELD: "中堅手",
+    FieldingPosition.RIGHT_FIELD: "右翼手",
+    FieldingPosition.DESIGNATED_HITTER: "指名打者",
+    FieldingPosition.PINCH_HITTER: "代打",
+    FieldingPosition.PINCH_RUNNER: "代走",
+}
 
 _NATURAL_POSITIONS: dict[Position, tuple[FieldingPosition, ...]] = {
     Position.PITCHER: (FieldingPosition.PITCHER,),
@@ -1558,6 +1612,17 @@ class Profile:
             raise InvalidProfile("生年月日より前の日付では年齢を求められません。")
         had_birthday = (as_of.month, as_of.day) >= (self.birth_date.month, self.birth_date.day)
         return as_of.year - self.birth_date.year - (0 if had_birthday else 1)
+
+    def age_or_none(self, as_of: date) -> int | None:
+        """画面に出す年齢。生年月日が無い、またはその日より後に生まれたことになる場合は None。
+
+        世界の「今日」は開幕日で、生年月日より前の年に開幕した世界では年齢が数えられない。
+        そのとき画面を落とさず「年齢なし」として扱う（`age` は例外を投げる）。
+        """
+        try:
+            return self.age(as_of)
+        except InvalidProfile:
+            return None
 
     def age_in(self, season: Season) -> int | None:
         """そのシーズンの基準日（4月1日）時点の満年齢。

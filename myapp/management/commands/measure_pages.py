@@ -23,7 +23,8 @@ from django.db import connection
 from django.test import Client
 from django.test.utils import CaptureQueriesContext
 
-from myapp.infrastructure import orm_models
+from myapp.domain.pennant.world import WorldScope
+from myapp.infrastructure.scoping import games_in, leagues_in, stints_in
 
 # 応答時間の目安。超えたら印を付ける（絶対の基準ではなく、気づくための線）
 SLOW_MS = 500
@@ -79,9 +80,11 @@ class Command(BaseCommand):
     @staticmethod
     def _targets() -> list[tuple[str, str]]:
         """実在する id を拾って測る URL を組む。"""
-        stint = orm_models.PlayerStint.objects.select_related("player", "team").first()
-        game = orm_models.Game.objects.order_by("-played_on").first()
-        league = orm_models.League.objects.filter(teams__isnull=False).first()
+        # ペナントの世界の行を拾うと、実データの画面を測ったことにならない
+        scope = WorldScope.real()
+        stint = stints_in(scope).select_related("player", "team").first()
+        game = games_in(scope).order_by("-played_on").first()
+        league = leagues_in(scope).filter(teams__isnull=False).first()
         if stint is None or game is None or league is None:
             return []
 

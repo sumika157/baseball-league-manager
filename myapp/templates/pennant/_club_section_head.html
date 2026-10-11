@@ -1,0 +1,18 @@
+{% comment %}
+編成の区画の見出し。いまの状態（自動編成か手動）を示し、自動のときだけ「手動にする」を置く。
+手動のときの操作（保存する・自動に戻す）は区画の本体に置く。両方を同じ区画に並べない。
+受け取るもの: title（区画の名前）、token（区画を指す名前）、manual（手動か）。is_owner と world は呼び出し元の文脈。
+{% endcomment %}
+<div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+  <span>
+    {{ title }}
+    {% if manual %}<span class="badge bg-primary ms-2">手動</span>{% else %}<span class="badge bg-secondary ms-2">自動編成</span>{% endif %}
+  </span>
+  {% if is_owner and not manual %}
+    <form method="post" action="{% url 'pennant_club' world.world_id %}" class="m-0">
+      {% csrf_token %}
+      <input type="hidden" name="section" value="{{ token }}">
+      <button type="submit" name="action" value="manual" class="btn btn-secondary btn-sm">手動にする</button>
+    </form>
+  {% endif %}
+</div>

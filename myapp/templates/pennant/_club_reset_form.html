@@ -1,0 +1,8 @@
+{% comment %}
+区画を自動に戻すフォーム（本体は空。ボタンは form 属性でこのフォームを指して、保存のフォームの外から送る）。
+受け取るもの: token（区画を指す名前）。
+{% endcomment %}
+<form method="post" id="club-reset-{{ token }}" action="{% url 'pennant_club' world.world_id %}" class="d-none">
+  {% csrf_token %}
+  <input type="hidden" name="section" value="{{ token }}">
+</form>

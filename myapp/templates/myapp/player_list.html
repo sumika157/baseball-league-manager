@@ -1,23 +1,24 @@
 {% extends "myapp/base.html" %}
-{% load sorting %}
+{% load sorting scoped %}
 
 {% block title %}{{ team_name }} - Baseball Manager{% endblock %}
 
 {% block content %}
 <nav aria-label="breadcrumb">
   <ol class="breadcrumb">
-    <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>
-    <li class="breadcrumb-item"><a href="{% url 'team_list' %}">チーム一覧</a></li>
+    {% if world %}{% include 'pennant/_crumbs.html' %}{% else %}<li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>{% endif %}
+    <li class="breadcrumb-item"><a href="{% scoped_url 'team_list' %}">チーム一覧</a></li>
     <li class="breadcrumb-item active">{{ team_name }}</li>
   </ol>
-</nav>
+</nav>{% if world %}{% include 'pennant/_world_bar.html' %}{% endif %}
 
 <div class="page-head">
   <h1 class="page-title">{{ team_name }}</h1>
   <p class="page-subtitle">
-    {% if pos_mode == 'pitcher' %}投手成績{% else %}野手成績{% endif %}
+    {% if pos_mode == 'pitcher' %}投手{% else %}野手{% endif %}{% if ratings_table %}能力{% else %}成績{% endif %}{% if stats_year %}（{{ stats_year }}年）{% endif %}
     · {{ players|length }}名
-    · <a href="{% url 'team_analysis' team_id %}">戦力分析</a>
+    {# 戦力分析は実データの画面だけ（ペナントの世界の球団には無い） #}
+    {% if not world %}· <a href="{% url 'team_analysis' team_id %}">戦力分析</a>{% endif %}
   </p>
 </div>
 
@@ -83,11 +84,22 @@
 
 {# 野手／投手の切替。Bootstrap の nav-pills よりセグメント風の方が締まる #}
 <div class="segmented">
-  <a class="segmented-item {% if pos_mode == 'batter' %}is-active{% endif %}" href="?pos=batter">野手</a>
-  <a class="segmented-item {% if pos_mode == 'pitcher' %}is-active{% endif %}" href="?pos=pitcher">投手</a>
+  <a class="segmented-item {% if pos_mode == 'batter' %}is-active{% endif %}" href="{% if world %}{% query_with pos='batter' sort='' dir='' %}{% else %}?pos=batter{% endif %}">野手</a>
+  <a class="segmented-item {% if pos_mode == 'pitcher' %}is-active{% endif %}" href="{% if world %}{% query_with pos='pitcher' sort='' dir='' %}{% else %}?pos=pitcher{% endif %}">投手</a>
+</div>{% if world %}
+{# ペナントの世界だけ。成績の表と能力の表を切り替える（並べ替えのキーが違うので、切り替えたら並びは既定に戻す） #}
+<div class="segmented ms-2">
+  <a class="segmented-item {% if not ratings_table %}is-active{% endif %}" href="{% query_with view='' sort='' dir='' %}">成績</a>
+  <a class="segmented-item {% if ratings_table %}is-active{% endif %}" href="{% query_with view='ratings' sort='' dir='' %}">能力</a>
 </div>
+{# 成績の期間。今季（世界のいまの年度）と通算を切り替える。年を挟んだ並びのまま見比べられるよう、並べ替えは保つ #}
+<div class="segmented ms-2">
+  <a class="segmented-item {% if stats_year %}is-active{% endif %}" href="{% query_with period='' %}">今季</a>
+  <a class="segmented-item {% if not stats_year %}is-active{% endif %}" href="{% query_with period='career' %}">通算</a>
+</div>
+{% endif %}
 
-<div class="table-responsive mb-4">
+{% if ratings_table %}{% include 'myapp/_ratings_table.html' with table=ratings_table %}{% else %}<div class="table-responsive mb-4">
   {# 列が多いので折り返さず横スクロールさせる（theme.css の roster-table） #}
   <table class="table table-hover roster-table">
     <thead>
@@ -144,11 +156,12 @@
       <tr>
         <td><span class="jersey-number">{{ player.number }}</span></td>
         <td>
-          <a href="{% url 'player_detail' team_id player.id %}" class="player-name">{{ player.name }}</a>
+          <a href="{% scoped_url 'player_detail' team_id player.id %}" class="player-name">{{ player.name }}</a>
           <span class="badge bg-secondary ms-1">{{ player.position }}</span>
           {% if player.is_captain %}<span class="badge bg-warning text-dark ms-1">主将</span>{% endif %}
           {% if player.is_foreign_player %}<span class="badge bg-info text-dark ms-1">外国人</span>{% endif %}
           {% if player.is_developmental %}<span class="badge bg-primary ms-1">育成</span>{% endif %}
+          {% if player.id in reserve_ids %}<span class="badge bg-secondary ms-1">2軍</span>{% endif %}
         </td>
         <td class="stat-muted">{{ player.throws_bats|default:'—' }}</td>
         <td class="text-end stat-muted">
@@ -211,7 +224,7 @@
       {% endfor %}
     </tbody>
   </table>
-</div>
+</div>{% endif %}
 
 {% comment %}
 チームの月別成績。個人の月別成績と対になる、チーム単位の推移。

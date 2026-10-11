@@ -1,0 +1,29 @@
+{% load scoped %}{% comment %}オフの結果の「引退・退団」の表。rows は OffseasonRetiredRow。{% endcomment %}
+<div class="table-responsive">
+  <table class="table table-hover mb-0">
+    <thead>
+      <tr>
+        {% if show_team %}<th>球団</th>{% endif %}
+        <th class="text-end">背番号</th>
+        <th>選手</th>
+        <th>位置</th>
+        <th class="text-end">年齢</th>
+        <th>区分</th>
+        <th>最終年の総合</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+        <tr>
+          {% if show_team %}<td>{{ row.team_name }}</td>{% endif %}
+          <td class="text-end stat-muted">{{ row.number }}</td>
+          <td><a href="{% scoped_url 'player_detail' row.team_id row.player_id %}" class="player-name">{{ row.name }}</a></td>
+          <td>{{ row.position }}</td>
+          <td class="text-end">{{ row.age|default_if_none:"—" }}</td>
+          <td>{{ row.leaving }}</td>
+          <td>{% if row.rating %}{% include 'myapp/_rating_grade.html' with rating=row.rating %}{% else %}—{% endif %}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

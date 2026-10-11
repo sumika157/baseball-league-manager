@@ -69,6 +69,8 @@ class League:
     # 外国人選手の枠。リーグごとにルールが異なりうるためここに持つ。None なら無制限
     foreign_player_roster_limit: int | None = None
     foreign_player_game_limit: int | None = None
+    # 並び順。管理画面で手動に並べ替える。分岐でも元の並びを保つために持つ
+    display_order: int = 0
     # 支配下選手の登録上限。NPB は70人。None なら無制限
     registered_player_limit: int | None = DEFAULT_REGISTERED_PLAYER_LIMIT
 
@@ -180,10 +182,8 @@ class Stint:
 
     @property
     def contract_now(self) -> ContractStatus:
-        """今（在籍の最後の時点）の契約区分。昇格していれば支配下。"""
-        if self.signed_as is ContractStatus.DEVELOPMENTAL and self.promoted_year is None:
-            return ContractStatus.DEVELOPMENTAL
-        return ContractStatus.REGISTERED
+        """今（在籍の最後の時点）の契約区分。昇格していれば支配下（判定の出典は `ContractStatus.now`）。"""
+        return ContractStatus.now(self.signed_as, self.promoted_year)
 
     def ensure_number_matches_contract(self) -> None:
         """背番号が区分に合うか。管理画面など、集約を通さない書き込みからも呼ぶ。
@@ -1194,6 +1194,9 @@ class Game:
     # 明細が空でも「未記録」とは限らない。その場合に限り、参照クエリが答えを持ち込む。
     # None なら `is_recorded` が明細から判定する
     recorded_hint: bool | None = None
+    # 参照専用に、明細の一部だけ（または全く）読んだ集約か。**保存すると読んでいない明細が消える**ので、
+    # リポジトリの save は拒否する（順位表用の一覧と、選手ページ用の「その選手の明細だけ」の試合が立てる）
+    read_only: bool = False
 
     def __post_init__(self) -> None:
         if self.home_team_id == self.away_team_id:

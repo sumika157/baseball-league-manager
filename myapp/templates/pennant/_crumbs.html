@@ -1,0 +1,5 @@
+{% comment %}
+ペナントの世界の画面のパンくずの起点。実データの「ダッシュボード」の代わりに置く。
+{% endcomment %}
+<li class="breadcrumb-item"><a href="{% url 'pennant_index' %}">ペナント</a></li>
+<li class="breadcrumb-item"><a href="{% url 'pennant_world' world.world_id %}">{{ world.name }}</a></li>

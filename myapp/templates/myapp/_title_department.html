@@ -1,4 +1,5 @@
-{# タイトル1部門のカード。department（TitleDepartment）を渡す #}
+{# タイトル1部門のカード。department（TitleDepartment）を渡す。選手へのリンクは実データとペナントの世界で引き分ける #}
+{% load scoped %}
 <div class="col-md-6 col-xl-4">
   <div class="card h-100">
     <div class="card-header d-flex justify-content-between align-items-center">
@@ -15,7 +16,7 @@
               <tr>
                 <td style="width: 2.5rem;" class="stat-muted">{{ entry.rank }}</td>
                 <td>
-                  <a href="{% url 'player_detail' entry.team_id entry.player_id %}" class="player-name">{{ entry.player_name }}</a>
+                  <a href="{% scoped_url 'player_detail' entry.team_id entry.player_id %}" class="player-name">{{ entry.player_name }}</a>
                   <div class="stat-muted" style="font-size: 0.75rem;">{{ entry.team_name }}</div>
                 </td>
                 <td class="text-end stat-key">{{ entry.value }}</td>

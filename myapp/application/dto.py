@@ -6,12 +6,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date
 
 from ..domain.entities import jersey_number_in
+from ..domain.pennant.club_plan import PlanSection
+from ..domain.pennant.ratings import PlayerRatings
+from ..domain.pennant.season import SeasonPhase
 from ..domain.services.free_agency import SERVICE_DAYS_PER_SEASON
 from ..domain.services.roster_analysis import NEUTRAL_CATEGORY, ColorCategory
+from ..domain.simulation.ratings import BatterRatings, PitcherRatings, RatingEmphasis
 from ..domain.value_objects import (
     AcquisitionRoute,
     BattingLine,
@@ -22,15 +27,17 @@ from ..domain.value_objects import (
     JerseyNumber,
     PitchingLine,
     Position,
+    Profile,
 )
 
 
 @dataclass(frozen=True)
 class ActivePlayerStats:
-    """在籍中の選手1人と、その成績。ランキング・タイトルの材料。
+    """球団に在籍する選手1人と、その成績。ランキング・タイトル・選手の一覧の材料。
 
-    チーム（集約）を組み立てずに、順位づけに要る値だけを読み出す。
-    成績が通算かシーズンかは、読んだ参照クエリの側で決まる。
+    チーム（集約）を組み立てずに、順位づけと一覧に要る値だけを読み出す。
+    在籍の範囲（いま在籍中か、ある年に在籍していたか）と、成績が通算かその年かは、
+    読んだ参照クエリの側で決まる（`PlayerStatsQuery`）。
     """
 
     player_id: int
@@ -39,8 +46,16 @@ class ActivePlayerStats:
     position: Position
     team_id: int
     team_name: str
+    # 球団のリーグ（リーグの基準値を引くのに使う）
+    league_id: int
     batting: BattingLine
     pitching: PitchingLine
+    # 一覧の年齢・身長などの材料と、外国人かどうか（順位づけには使わない）
+    profile: Profile = field(default_factory=Profile)
+    # その範囲で主将だったか（球団の一覧のときだけ読む。それ以外は False）
+    is_captain: bool = False
+    # その範囲（在籍中なら今、年を渡せばその年）で育成契約だったか。一覧の「育成」の印の出典
+    is_developmental: bool = False
 
 
 @dataclass(frozen=True)
@@ -834,8 +849,8 @@ class LeaguePlayerRow:
 class LeagueStats:
     """リーグの成績一覧。所属する全選手の通算成績を1つの表で見る。
 
-    ダッシュボードのランキングは通算の上位だけを出す。ここはその続きとして
-    全員を並べる場所。シーズンで区切った部門別の上位者はタイトル一覧が担う。
+    全員を並べる場所。シーズンで区切った部門別の上位者はタイトル一覧が担い、
+    ダッシュボードはその首位だけを出す。
     """
 
     league_id: int
@@ -1099,6 +1114,824 @@ class LineupSlot:
     entered_is_bottom: bool = False
     # その半回で何人目の打者から（1始まり）。守備固めが半回の途中で入る場合に指す
     entered_batter: int = 1
+
+
+@dataclass(frozen=True)
+class PennantWorldRow:
+    """ペナントの世界ひとつ。一覧や詳細に出す、作ったときに決まった事実。"""
+
+    id: int
+    name: str
+    seed: int
+    start_year: int
+    owner_id: int | None
+    managed_team_id: int | None
+
+
+@dataclass(frozen=True)
+class PennantWorldCreated:
+    """世界を作った結果。分岐で写した件数を添える。"""
+
+    world: PennantWorldRow
+    league_count: int
+    team_count: int
+    player_count: int
+    # 初期能力を保存した選手の数（分岐した選手全員ぶん）
+    rating_count: int
+
+
+@dataclass(frozen=True)
+class SimulationPlayer:
+    """シミュレーションに出る候補の選手1人（球団に現在在籍している選手）。能力は含まない。"""
+
+    player_id: int
+    name: str
+    position: Position
+    is_foreign: bool
+    # 投げる手。AI の守備位置の割り振りが見る（未設定は None）
+    throws: Handedness | None
+
+
+@dataclass(frozen=True)
+class SimulationTeam:
+    """シミュレーションに出る球団ひとつ。外国人の枠は所属リーグの値。"""
+
+    team_id: int
+    name: str
+    foreign_roster_limit: int | None
+    foreign_game_limit: int | None
+    players: tuple[SimulationPlayer, ...]
+
+
+@dataclass(frozen=True)
+class LastStart:
+    """投手の、直近の先発の日。先発の間隔（中5日）を導く材料。"""
+
+    pitcher_id: int
+    played_on: date
+
+
+@dataclass(frozen=True)
+class PitchingOuting:
+    """1試合の登板の記録。投げた投手を登板順に並べる（先頭が先発）。連投を導く材料。"""
+
+    played_on: date
+    pitcher_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class SimulationContext:
+    """日を進めるのに要る、世界の今の状態（集約を組み立てずに読んだもの）。
+
+    疲労は保存しない。直近の登板（`last_starts`・`recent_outings`）から導く。
+    """
+
+    teams: tuple[SimulationTeam, ...]
+    last_starts: tuple[LastStart, ...]
+    recent_outings: tuple[PitchingOuting, ...]
+
+
+@dataclass(frozen=True)
+class PlanNotice:
+    """編成の上書きが使えず、その区画を自動で進めたことの知らせ（ホームで出す）。"""
+
+    team_id: int
+    team_name: str
+    # 自動に落ちた最初の日（この「進める」の中では、その球団の最初の試合日）
+    on: date
+    section: PlanSection
+    reason: str
+    # False なら区画は自動に落とさず、効かない理由を知らせるだけ
+    falls_back: bool = True
+
+
+@dataclass(frozen=True)
+class AdvanceReport:
+    """世界を進めた結果。"""
+
+    # 今回の「進める」で試合をした日（日付順）
+    played_dates: tuple[date, ...]
+    games: int
+    # 進めた後の「今日」（消化した最後の試合日）。まだ1試合もしていなければ None
+    today: date | None
+    # 進めた後に残っている未消化の対戦の数
+    remaining_fixtures: int
+    # この呼び出しで、その年の日程を初めて作ったか
+    schedule_created: bool
+    # 編成の上書きが使えず自動で進めた区画（球団ごと・区画ごとに1つ。空なら上書きはすべて効いた）
+    plan_notices: tuple[PlanNotice, ...] = ()
+
+    @property
+    def season_finished(self) -> bool:
+        """日程をすべて消化したか。日程を作った直後（試合のない開幕前）は終わっていない。"""
+        return self.remaining_fixtures == 0 and self.today is not None
+
+
+@dataclass(frozen=True)
+class WorldContext:
+    """世界ひとつの「いま」。世界バーの表示と、共有テンプレートの URL の引き方（`scoped_url`）に使う。
+
+    今日・局面は保存した値ではなく、試合と日程から導いた値（`domain/pennant/season.py`）。
+    """
+
+    world_id: int
+    name: str
+    phase: SeasonPhase
+    # いまの年度（次の対戦の年、無ければ最後に試合をした年、どちらも無ければ開幕年。domain の `season_year`）。
+    # 締めた直後は、まだ試合の無い翌年（today は前年の最終日のまま）
+    season_year: int
+    # 最後に試合をした日。まだ試合が無ければ None
+    today: date | None
+    # 受け持つ球団（まだ決めていなければ None と空の名前）
+    managed_team_id: int | None
+    managed_team_name: str
+    # 世界バーの「成績」「タイトル」の行き先のリーグ。受け持つ球団のリーグ、無ければ先頭のリーグ
+    default_league_id: int | None
+    # 世界のオーナー（書き込みを許す人）。画面には名前を出さず、操作の権限の判定だけに使う
+    owner_id: int | None = None
+    # 最終シーズン（`MAX_SEASONS_PER_WORLD` 番目）か。最後まで終えた世界に「終了」の印を出す（#104）
+    is_final_season: bool = False
+
+    @property
+    def is_over(self) -> bool:
+        """最終シーズンを終えた世界か（これ以上は締められず、進めるものも無い）。"""
+        return self.is_final_season and self.phase is SeasonPhase.FINISHED
+
+
+@dataclass(frozen=True)
+class WorldSummary:
+    """世界ひとつの見出しの材料。世界の台帳・試合・日程から、まとめて読んだ値（集約は組み立てない）。"""
+
+    world_id: int
+    name: str
+    start_year: int
+    managed_team_id: int | None
+    managed_team_name: str
+    # 受け持つ球団のリーグ、無ければ世界の先頭のリーグ（リーグが無ければ None）
+    default_league_id: int | None
+    # 最後に試合をした日。まだ無ければ None
+    last_played_on: date | None
+    # 次の対戦の日（未消化の対戦の最小の日）。残っていなければ None
+    next_fixture_on: date | None
+    owner_id: int | None = None
+    # 球団ごとの未消化の試合数（優勝争いの残り試合。日程の残っていない球団は載らない）
+    remaining_by_team: Mapping[int, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class OwnStanding:
+    """受け持つ球団の、いまの順位と成績（世界の一覧の1行に出す）。"""
+
+    rank: int
+    wins: int
+    losses: int
+    ties: int
+    games_behind: str
+
+
+@dataclass(frozen=True)
+class PennantWorldListRow:
+    """世界の一覧の1行。オーナーは載せない（一覧は誰にでも見せるため）。"""
+
+    context: WorldContext
+    # 受け持つ球団が決まっていて、順位表に載っているときだけ
+    own_standing: OwnStanding | None
+    # 優勝の確定・マジック（#104）。確定でもマジック点灯でもなければ None
+    race: OwnRace | None = None
+
+
+@dataclass(frozen=True)
+class ClubPlayerRow:
+    """編成の画面に並べる、球団の選手1人（能力のある選手だけ）。"""
+
+    player_id: int
+    name: str
+    position: Position
+    is_foreign: bool
+    is_active: bool
+
+
+@dataclass(frozen=True)
+class ClubLineupRow:
+    """オーダーの1枠。"""
+
+    batting_order: int
+    player_id: int
+    name: str
+    position: FieldingPosition
+
+
+@dataclass(frozen=True)
+class ClubPlanView:
+    """球団の編成。**いま進めたときに使われる形**（手動が有効なら手動、無効なら自動）と、区画ごとの手動かどうか。
+
+    `*_is_manual` が False の区画は、AI 監督の自動編成（提案）をそのまま映している。手動の区画で
+    使えなくなっているものは区画が手動のまま（GM が自動に戻すまで）で、`notices` に理由が入り、
+    中身はその日に使われる自動に落ちた形になる（Wiki「ペナントモードの仕組み」の「編成」）。
+    自動のスタメンは先発の外国人を出場枠に数えない目安で、外国人の投手が先発する日は実際の試合と違いうる
+    （先発は日ごとの疲労で決まるため、画面では決めない）。出場枠は世界のリーグで最も厳しい値で数えるので、
+    自リーグの枠が緩い世界では、自リーグの試合の実際のスタメンと外国人の人数が違いうる。
+    """
+
+    team_id: int
+    team_name: str
+    year: int
+    players: tuple[ClubPlayerRow, ...]
+    active_ids: tuple[int, ...]
+    lineup: tuple[ClubLineupRow, ...]
+    rotation_ids: tuple[int, ...]
+    closer_id: int | None
+    # 抑えとローテーションを除く救援陣（セットアップ、中継ぎの順）
+    bullpen_ids: tuple[int, ...]
+    limits: ClubLimitsView
+    counts: ClubRosterCounts
+    # 保存済みの上書き（None は自動）。上の欄は「いま進めたときに使われる形」で、使えない上書きは自動に落ちた値になる。
+    # 手動の区画の編集欄の初期値は、こちらから作る
+    # （解決後の値から作ると、保存したときに GM の上書きが AI の形で置き換わる）
+    saved_active_ids: tuple[int, ...] | None
+    saved_lineup: tuple[ClubLineupRow, ...] | None
+    saved_rotation_ids: tuple[int, ...] | None
+    saved_closer_id: int | None
+    active_is_manual: bool
+    lineup_is_manual: bool
+    rotation_is_manual: bool
+    closer_is_manual: bool
+    notices: tuple[ClubPlanNotice, ...] = ()
+
+
+@dataclass(frozen=True)
+class ClubLimitsView:
+    """編成の枠（画面に出す上限と、選択肢。数は domain が出典で、テンプレートには書かない）。None は制限なし。"""
+
+    active_size: int
+    foreign_roster_limit: int | None
+    foreign_game_limit: int | None
+    lineup_size: int
+    rotation_size: int
+    min_rotation_size: int
+    min_active_pitchers: int
+    # オーダーで選べる守備位置（画面に出す順）
+    lineup_positions: tuple[FieldingPosition, ...]
+
+
+@dataclass(frozen=True)
+class ClubRosterCounts:
+    """いまの 1軍の内訳（登録の画面の上部に出す）。"""
+
+    total: int
+    batters: int
+    pitchers: int
+    catchers: int
+    foreign: int
+
+
+@dataclass(frozen=True)
+class ClubPlanNotice:
+    """編成の上書きが使えない理由（`ClubPlanView` に添える。日付は持たない）。"""
+
+    section: PlanSection
+    reason: str
+    # False なら区画は自動に落とさず、効かない理由を知らせるだけ
+    falls_back: bool = True
+
+
+# --- ペナントの編成画面（P5b） ---
+
+
+@dataclass(frozen=True)
+class ClubPitcherUsage:
+    """投手1人の、次の試合日に向けた状態。保存せず、直近の登板から導く。"""
+
+    player_id: int
+    name: str
+    is_foreign: bool
+    # 次の試合日の直近3日に投げたか（古い日から）
+    pitched_recently: tuple[bool, ...]
+    # 前回の先発から何日経っているか（次の試合日の時点。先発の記録が無ければ None）
+    days_since_start: int | None
+    # 次の試合日に投げられるか（連投の上限に達していないか）
+    can_pitch: bool
+
+
+@dataclass(frozen=True)
+class ClubPitchingUsage:
+    """投手陣の状態（編成の「投手陣」タブに出す）。次の試合日が無ければ、状態は既定（投げられる）で返す。"""
+
+    # 受け持つ球団の次の試合日（日程が残っていなければ None）
+    next_game_on: date | None
+    # `pitched_recently` の日付（古い日から）
+    recent_days: tuple[date, ...]
+    rotation: tuple[ClubPitcherUsage, ...]
+    closer: ClubPitcherUsage | None
+    bullpen: tuple[ClubPitcherUsage, ...]
+
+
+# --- ペナントの GM ホーム（P4b） ---
+
+
+@dataclass(frozen=True)
+class PennantWorldList:
+    """世界の一覧。ログインしている人の世界と、ほかの人の世界に分ける。オーナーの名前は載せない。"""
+
+    mine: list[PennantWorldListRow]
+    others: list[PennantWorldListRow]
+    # 1人が持てる世界の数（上限に達したら作成フォームを出さない）
+    world_limit: int
+
+    @property
+    def at_limit(self) -> bool:
+        return len(self.mine) >= self.world_limit
+
+
+@dataclass(frozen=True)
+class OwnTeamSummary:
+    """自軍の帯。順位・成績・勢い・残り試合。"""
+
+    team_id: int
+    team_name: str
+    league_name: str
+    phase: SeasonPhase
+    # 試合がまだ無ければ順位は付かない
+    rank: int | None
+    wins: int
+    losses: int
+    ties: int
+    winning_percentage: str
+    # 首位は「—」
+    games_behind: str
+    games_played: int
+    remaining_games: int
+    # 直近10試合の成績（「6勝4敗」）と連続（「3連勝」）。試合が無ければ空
+    last_ten: str
+    streak: str
+    # 開幕前だけ。日程の最初の日（日程がまだ無ければ既定の開幕日）
+    opening_date: date | None
+    # 締めた後の開幕前だけ。前年の最終順位と成績（「80勝60敗3分」）。前年の順位が無ければ None と空
+    previous_year: int | None = None
+    previous_rank: int | None = None
+    previous_record: str = ""
+    # 優勝争い（#104）。シーズン中・終了で、確定でもマジック点灯でもなければ None
+    race: OwnRace | None = None
+
+    @property
+    def is_leader(self) -> bool:
+        """首位か。domain の `StandingRow.is_leader` と同じ定義（1位）で、表示用の「ゲーム差」の表記には頼らない。"""
+        return self.rank == 1
+
+    @property
+    def is_before_opening(self) -> bool:
+        return self.phase is SeasonPhase.BEFORE_OPENING
+
+    @property
+    def is_finished(self) -> bool:
+        return self.phase is SeasonPhase.FINISHED
+
+
+@dataclass(frozen=True)
+class UpcomingGame:
+    """自軍の未消化の試合。"""
+
+    played_on: date
+    opponent_team_id: int
+    opponent_name: str
+    is_home: bool
+
+
+@dataclass(frozen=True)
+class AdvanceOption:
+    """「進める」のボタン1つ。終わる日付と試合数は日程から事前に導く（日程がまだ無ければ None）。"""
+
+    # `AdvanceTarget` の値（フォームで送る文字列）
+    target: str
+    label: str
+    end_date: date | None
+    games: int | None
+
+
+@dataclass(frozen=True)
+class GameNote:
+    """1試合の見どころ。責任投手と本塁打。"""
+
+    game_id: int
+    winning_pitcher: str
+    losing_pitcher: str
+    save_pitcher: str
+    home_runs: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class PeriodBatting:
+    """ある期間の、選手1人の打撃の合計。"""
+
+    player_id: int
+    name: str
+    # 期間の合計。安打・打率などは BattingLine が出典（内訳から導く）
+    batting: BattingLine
+
+
+@dataclass(frozen=True)
+class PeriodPitching:
+    """ある期間の、選手1人の投球の合計。"""
+
+    player_id: int
+    name: str
+    wins: int
+    losses: int
+    saves: int
+
+
+@dataclass(frozen=True)
+class OwnGameResult:
+    """自軍の1試合の結果（自軍から見た表記）。"""
+
+    game_id: int
+    played_on: date
+    opponent_name: str
+    is_home: bool
+    # 「○」「●」「△」
+    outcome: str
+    own_score: int
+    opponent_score: int
+    winning_pitcher: str = ""
+    losing_pitcher: str = ""
+    save_pitcher: str = ""
+    home_runs: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PeriodBatter:
+    """期間の活躍（打者）。"""
+
+    player_id: int
+    name: str
+    batting_average: str
+    hits: int
+    at_bats: int
+    home_runs: int
+    runs_batted_in: int
+
+
+@dataclass(frozen=True)
+class AdvanceSummary:
+    """「進めた結果」のまとめ。`since` より後から `until` までの試合。"""
+
+    since: date
+    until: date
+    wins: int
+    losses: int
+    ties: int
+    # 期間の前と後の順位・首位との差。期間の前に試合が無ければ順位は None
+    rank_before: int | None
+    rank_after: int | None
+    games_behind_before: str
+    games_behind_after: str
+    own_games: list[OwnGameResult]
+    # 自軍の試合がちょうど1つのときだけ、そのスコアボード
+    line_score_game: GameRow | None
+    line_score: GameLineScore | None
+    batters: list[PeriodBatter]
+    pitchers: list[PeriodPitching]
+    # 自軍以外の試合（新しい順。多いときは先頭から `other_games_omitted` を除いた分だけ）
+    other_games: list[GameRow]
+    other_games_omitted: int
+
+
+@dataclass(frozen=True)
+class KeyBatterRow:
+    """主力打者の1行。"""
+
+    player_id: int
+    name: str
+    batting_average: float
+    home_runs: int
+    runs_batted_in: int
+    ops: float
+    # 直近15日の打率。打数が無ければ空
+    recent_average: str
+
+
+@dataclass(frozen=True)
+class KeyPitcherRow:
+    """投手陣の1行。"""
+
+    player_id: int
+    name: str
+    wins: int
+    losses: int
+    saves: int
+    innings_pitched: str
+    earned_run_average: float
+    starts: int
+
+
+@dataclass(frozen=True)
+class TitleRaceRow:
+    """タイトル争い。自軍の選手が上位にいる部門。"""
+
+    department: str
+    rank: int
+    player_id: int
+    player_name: str
+    value: str
+    leader_name: str
+    leader_value: str
+
+
+@dataclass(frozen=True)
+class HomeStandings:
+    """ホームの順位表。自軍のリーグを最初に出し、ほかのリーグは選んで切り替える。"""
+
+    year: int
+    # 切り替えの選択肢（試合のあるリーグ。自軍のリーグが先頭）
+    leagues: list[LeagueOption]
+    selected: LeagueStandings | None
+
+
+@dataclass(frozen=True)
+class PennantHome:
+    """GM ホームの材料。状態は保存せず、日程と試合から導く。"""
+
+    world: WorldContext
+    own: OwnTeamSummary | None
+    # 自軍の今後の日程（先頭が次の試合）
+    upcoming: list[UpcomingGame]
+    advance_options: list[AdvanceOption]
+    # 二重送信の検出に使う「いまの今日」（日付、まだ試合が無ければ空）
+    expected_today: str
+    summary: AdvanceSummary | None
+    standings: HomeStandings
+    batters: list[KeyBatterRow]
+    pitchers: list[KeyPitcherRow]
+    titles: list[TitleRaceRow]
+    # 順位表・主力・タイトルの年。締めた後の開幕前は前年（今季の成績がまだ無いため）
+    stats_year: int
+    shows_previous_season: bool
+    # 最終シーズンを終えた世界の通算（#104）。終えていなければ None
+    finale: WorldFinale | None = None
+
+    @property
+    def season_finished(self) -> bool:
+        return self.world.phase is SeasonPhase.FINISHED
+
+
+@dataclass(frozen=True)
+class WorldDeletion:
+    """世界の削除の確認に出す、消えるものの規模。"""
+
+    world: WorldContext
+    season_count: int
+    game_count: int
+
+
+# --- ペナントの能力の表示（P4c） ---
+
+
+@dataclass(frozen=True)
+class RatingCell:
+    """能力ひとつぶんの表示。「B 74」の区分と数値。
+
+    区分の境目と目立たせ方は domain の `RatingGrade` が出典で、ここは写すだけ。
+    """
+
+    key: str  # 項目の識別子（並べ替えのキーと同じ）
+    label: str  # ミート・球威など
+    value: int
+    grade: str  # S〜G
+    emphasis: RatingEmphasis
+
+
+@dataclass(frozen=True)
+class PlayerRatingsCard:
+    """選手ページの「能力（年度）」カード。成長型は隠し値なので持たない。"""
+
+    year: int
+    is_pitcher: bool
+    cells: tuple[RatingCell, ...]
+
+
+@dataclass(frozen=True)
+class RatingColumn:
+    """能力の表の1列。key は並べ替えのキー。"""
+
+    key: str
+    label: str
+
+
+@dataclass(frozen=True)
+class RatingsRow:
+    """球団の能力の表の1行。能力がまだ無い選手は cells が空（画面では「—」）。"""
+
+    id: int
+    number: str
+    name: str
+    position: str
+    is_foreign_player: bool
+    age: int | None
+    cells: tuple[RatingCell, ...]
+    # 育成契約か（一覧の「育成」の印）
+    is_developmental: bool = False
+    # 野手: 打率・OPS。投手: 防御率（average の位置）・投球回
+    batting_average: float = 0.0
+    ops: float = 0.0
+    earned_run_average: float = 0.0
+    innings_pitched: str = ""
+
+
+@dataclass(frozen=True)
+class RatingsTable:
+    """球団の能力の表（野手か投手のどちらか）。sort / descending は実際に使った並び。"""
+
+    is_pitcher: bool
+    year: int  # 能力の年度（試合・編成と同じ規則で決めた年）
+    columns: tuple[RatingColumn, ...]
+    rows: tuple[RatingsRow, ...]
+    sort: str
+    descending: bool
+
+
+@dataclass(frozen=True)
+class SeasonClosed:
+    """シーズンを締めた結果。"""
+
+    # 締めた年と、これから始まる年
+    year: int
+    next_year: int
+    retired_count: int
+    # 新人の人数と、そのうち外国人の人数
+    draftee_count: int
+    foreign_draftee_count: int
+    # 翌年の能力を作らなかった選手の数（締める年の能力が無かった選手）
+    without_ratings_count: int
+    # 引退した選手を含んでいたため、自動に戻した編成の区画。受け持つ球団のぶん（無ければ空）
+    released_sections: tuple[PlanSection, ...]
+    # 自動に戻した球団の数（受け持ち以外も含む）
+    released_club_count: int
+    # 翌年の日程の試合数
+    fixture_count: int
+
+
+@dataclass(frozen=True)
+class SeasonCloseOption:
+    """「シーズンを締める」の出せる状態。画面が、ボタンを出すか理由を出すかを決める材料。"""
+
+    # 締める年（最後に試合をした年）。まだ試合をしていなければ None
+    year: int | None
+    # 締めた後の年。締められないときも、年が分かれば入れる
+    next_year: int | None
+    can_close: bool
+    # 締められない理由（締められるときは空）
+    reason: str = ""
+
+
+# --- オフの結果と能力の推移（P6c） ---
+
+
+@dataclass(frozen=True)
+class OffseasonPlayerFact:
+    """オフの結果の材料になる選手ひとり。在籍・プロフィール・締める年と翌年の能力から読んだ値（保存した結果ではない）。
+
+    `before` は締める年の能力、`after` は翌年の能力。引退した選手は `after` が、新人は `before` が無い。
+    """
+
+    player_id: int
+    name: str
+    position: Position
+    team_id: int
+    team_name: str
+    league_id: int
+    number: int
+    profile: Profile
+    before: BatterRatings | PitcherRatings | None
+    after: BatterRatings | PitcherRatings | None
+
+
+@dataclass(frozen=True)
+class OffseasonFacts:
+    """締めた年の、世界全体のオフの材料（引退・退団した選手、新人、残る選手）。"""
+
+    leagues: tuple[LeagueOption, ...]
+    retired: tuple[OffseasonPlayerFact, ...]
+    rookies: tuple[OffseasonPlayerFact, ...]
+    # 締める年と翌年の両方の能力がある、残った選手
+    retained: tuple[OffseasonPlayerFact, ...]
+
+
+@dataclass(frozen=True)
+class OffseasonRetiredRow:
+    """オフの結果の「引退・退団」の1行。"""
+
+    player_id: int
+    name: str
+    team_id: int
+    team_name: str
+    number: int
+    position: str
+    # 締める年の開幕時点の満年齢
+    age: int | None
+    # 外国人は「退団」、日本人は「引退」
+    leaving: str
+    # 締める年の総合（能力が無い選手は None）
+    rating: RatingCell | None
+
+
+@dataclass(frozen=True)
+class OffseasonRookieRow:
+    """オフの結果の「新人」の1行。"""
+
+    player_id: int
+    name: str
+    team_id: int
+    team_name: str
+    number: int
+    position: str
+    # 翌年の開幕時点の満年齢
+    age: int | None
+    # 高校・大学・社会人・外国人
+    route: str
+    rating: RatingCell | None
+
+
+@dataclass(frozen=True)
+class OffseasonChangeRow:
+    """オフの結果の「能力の変化」の1行。総合（野手は打撃、投手は抑える力）の、締める年から翌年への変化。"""
+
+    player_id: int
+    name: str
+    team_id: int
+    team_name: str
+    position: str
+    # 翌年の開幕時点の満年齢
+    age: int | None
+    before: RatingCell
+    after: RatingCell
+    # 「+2.3」のように符号つき
+    delta_label: str
+    delta: float
+
+
+@dataclass(frozen=True)
+class OffseasonSummary:
+    """Y年オフの結果ページの材料。"""
+
+    year: int
+    next_year: int
+    own_team_id: int | None
+    own_team_name: str
+    own_retired: tuple[OffseasonRetiredRow, ...]
+    own_rookies: tuple[OffseasonRookieRow, ...]
+    # 自軍の残った選手の全員。差の大きい順
+    own_changes: tuple[OffseasonChangeRow, ...]
+    leagues: tuple[LeagueOption, ...]
+    selected_league_id: int | None
+    # 選んだリーグの引退・退団と新人
+    retired: tuple[OffseasonRetiredRow, ...]
+    rookies: tuple[OffseasonRookieRow, ...]
+    # 世界全体の人数
+    retired_total: int
+    rookie_total: int
+    # 成長と衰えの大きかった選手（世界全体の上位）
+    risers: tuple[OffseasonChangeRow, ...]
+    decliners: tuple[OffseasonChangeRow, ...]
+
+
+@dataclass(frozen=True)
+class TeamSpan:
+    """選手の在籍ひとつぶん（加入年〜退団年。退団年が空なら現在も在籍）。"""
+
+    team_id: int
+    team_name: str
+    from_year: int
+    to_year: int | None
+
+
+@dataclass(frozen=True)
+class RatingsHistoryFacts:
+    """選手ひとりの能力の推移の材料。年ごとの能力と、在籍・生年月日。"""
+
+    profile: Profile
+    spans: tuple[TeamSpan, ...]
+    ratings: tuple[PlayerRatings, ...]
+
+
+@dataclass(frozen=True)
+class RatingsHistoryRow:
+    """能力の推移の1行（1年ぶん）。"""
+
+    year: int
+    # その年の開幕時点の満年齢
+    age: int | None
+    team_name: str
+    cells: tuple[RatingCell, ...]
+    overall: RatingCell
+    # 引退した選手の最後の年
+    is_final_year: bool
+
+
+@dataclass(frozen=True)
+class PlayerRatingsHistory:
+    """選手ページの「能力の推移」。古い年から。"""
+
+    rows: tuple[RatingsHistoryRow, ...]
 
 
 # --- 戦力分析（球団×年度の編成） ---
@@ -1478,3 +2311,83 @@ class TeamAnalysis:
     @property
     def developmental_count(self) -> int:
         return self.pitchers.developmental_count + self.fielders.developmental_count
+
+
+# --- 編成画面の選手の詳細（#102） ---
+
+
+@dataclass(frozen=True)
+class ClubBattingStat:
+    """編成画面に出す、野手の今季の成績。"""
+
+    plate_appearances: int
+    batting_average: float
+    home_runs: int
+    runs_batted_in: int
+    ops: float
+
+
+@dataclass(frozen=True)
+class ClubPitchingStat:
+    """編成画面に出す、投手の今季の成績。"""
+
+    innings_pitched: str
+    earned_run_average: float
+    wins: int
+    losses: int
+    saves: int
+
+
+@dataclass(frozen=True)
+class ClubPlayerDetail:
+    """編成画面の選手1人の、選ぶ材料（年齢・能力の要約・今季の成績）。
+
+    `overall` と `cells` は能力が無い選手では None / 空（画面では「—」）。成績は出場が無ければ None。
+    """
+
+    player: ClubPlayerRow
+    age: int | None
+    overall: RatingCell | None
+    cells: tuple[RatingCell, ...]
+    batting: ClubBattingStat | None
+    pitching: ClubPitchingStat | None
+
+
+# --- 優勝争い（#104） ---
+
+
+@dataclass(frozen=True)
+class OwnRace:
+    """自軍の優勝争い。順位と残り試合から導いた値で、保存しない（domain の `pennant_race`）。"""
+
+    # 残りがどう転んでも単独で首位になる（優勝の確定）
+    clinched: bool
+    # 優勝までのマジック（点灯しているときだけ。確定なら None）
+    magic: int | None
+
+    @property
+    def label(self) -> str:
+        return "優勝確定" if self.clinched else f"マジック{self.magic}"
+
+
+@dataclass(frozen=True)
+class FinaleSeason:
+    """終えた世界の、自軍の1シーズンの結果。"""
+
+    year: int
+    rank: int
+    record: str  # 「80勝60敗3分」
+    is_champion: bool
+
+
+@dataclass(frozen=True)
+class WorldFinale:
+    """最終シーズンまで終えた世界の、自軍の通算。年度ごとの順位と、勝敗・優勝回数の合計。"""
+
+    seasons: list[FinaleSeason]
+    wins: int
+    losses: int
+    ties: int
+    titles: int
+    # 通算の勝敗（「170勝113敗3分」）。画面で組み立てない
+    record: str

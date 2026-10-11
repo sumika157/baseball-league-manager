@@ -53,6 +53,14 @@ class LeagueNotFound(DomainError):
     """指定されたリーグが存在しない。"""
 
 
+class WorldNotFound(DomainError):
+    """指定された世界が存在しない。"""
+
+
+class InvalidWorld(DomainError):
+    """世界として成立しない内容（名前が空、シードが範囲外など）。"""
+
+
 class InvalidProfile(DomainError):
     """プロフィールの値が不正（現実的でない身長など）。"""
 
@@ -83,6 +91,45 @@ class InvalidCaptaincy(DomainError):
 
 class ForeignPlayerQuotaExceeded(DomainError):
     """外国人選手の人数が上限を超えている（登録枠・試合出場枠のどちらにも使う）。"""
+
+
+class InvalidRatings(DomainError):
+    """能力値として許されない値（1〜100 の整数でない、など）。"""
+
+
+class InvalidRoster(DomainError):
+    """シミュレーションを行えないロスター（打順を組める野手がいない、投手がいない、など）。"""
+
+
+class InvalidClubPlan(DomainError):
+    """球団の編成（1軍登録・オーダー・ローテーション・抑え）として成立しない上書き。"""
+
+
+class AlreadyAdvanced(DomainError):
+    """画面を開いたときから世界が進んでいる（二重送信や、別の画面で先に進めた場合）。"""
+
+
+class InvalidSchedule(DomainError):
+    """日程が組めない（球団数が奇数・リーグが1つ・規則が成立しないなど）、または日程の指定が不正。"""
+
+
+class SeasonNotFinished(DomainError):
+    """シーズンがまだ終わっていない（未消化の対戦が残っている、または試合を一度もしていない）ので締められない。"""
+
+
+class AlreadyClosed(DomainError):
+    """そのシーズンは既に締めている（二重送信や、別の画面で先に締めた場合）。
+
+    `year` は、締めていると確かめられた年（画面がオフの結果へ案内する行き先）。確かめられないときは None。
+    """
+
+    def __init__(self, message: str, *, year: int | None = None) -> None:
+        super().__init__(message)
+        self.year = year
+
+
+class SeasonLimitReached(DomainError):
+    """世界のシーズン数の上限に達していて、これ以上締められない。"""
 
 
 class InvalidContract(DomainError):

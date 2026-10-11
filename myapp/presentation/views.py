@@ -4,7 +4,9 @@
 成績の計算も背番号の重複判定もここには無い（ドメイン層にある）。
 """
 
-from datetime import date
+import secrets
+from collections.abc import Callable
+from datetime import date, timedelta
 from urllib.parse import urlencode
 
 from django.contrib import messages
@@ -12,25 +14,55 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.views import redirect_to_login
 from django.core.exceptions import PermissionDenied
-from django.http import Http404
+from django.db import transaction
+from django.http import Http404, HttpResponseNotAllowed
 from django.middleware.csrf import get_token
 from django.shortcuts import redirect, render
 from django.urls import reverse, reverse_lazy
 from django.views.decorators.http import require_GET
 from django.views.generic import CreateView
 
-from ..application.dto import GameEditData, GameEditPlateAppearance
+from ..application.club_management import ClubManagementService
+from ..application.dto import (
+    ClubPlanView,
+    GameEditData,
+    GameEditPlateAppearance,
+    Listing,
+    PlayerRatingsCard,
+    PlayerRatingsHistory,
+    RatingsTable,
+    TeamMonthlyRow,
+    WorldContext,
+)
 from ..application.game_recording import GameRecordingService
+from ..application.pennant_club_details import ClubDetailsService
+from ..application.pennant_home import PennantHomeService
+from ..application.pennant_offseason import PennantOffseasonService
+from ..application.pennant_offseason_view import OffseasonViewService
+from ..application.pennant_ratings import PennantRatingsViewService
+from ..application.pennant_season import PennantSeasonService
+from ..application.pennant_view import PennantWorldViewService
+from ..application.pennant_world import PennantWorldService, WorldRepositories
+from ..application.queries import SimulationContextQuery
 from ..application.roster import RosterService
 from ..application.services import TeamApplicationService
 from ..application.team_analysis import TeamAnalysisService
 from ..domain.exceptions import (
+    AlreadyAdvanced,
+    AlreadyClosed,
     DomainError,
     GameNotFound,
+    InvalidWorld,
     LeagueNotFound,
     PlayerNotFound,
     TeamNotFound,
+    WorldNotFound,
 )
+from ..domain.pennant.club_plan import PlanSection
+from ..domain.pennant.roster import OPENING_REGISTERED_BAND
+from ..domain.pennant.schedule import AdvanceTarget
+from ..domain.pennant.season import MAX_GAMES_PER_ADVANCE, SCREEN_ADVANCE_TARGETS, SeasonPhase, world_today
+from ..domain.pennant.world import WorldScope
 from ..domain.value_objects import (
     AdvanceReason,
     Base,
@@ -42,29 +74,75 @@ from ..domain.value_objects import (
     Position,
 )
 from ..infrastructure.queries import (
+    DjangoFieldingTotalsQuery,
     DjangoGameListQuery,
+    DjangoOffseasonQuery,
+    DjangoPennantActivityQuery,
     DjangoPlayerFieldingQuery,
     DjangoPlayerSearchQuery,
     DjangoPlayerStatsQuery,
+    DjangoRatingsHistoryQuery,
+    DjangoSeasonPlayingTimeQuery,
+    DjangoSimulationContextQuery,
     DjangoTeamAnalysisQuery,
     DjangoTeamListQuery,
     DjangoTeamPermissionQuery,
+    DjangoWorldSummaryQuery,
 )
 from ..infrastructure.repositories import (
+    DjangoClubPlanRepository,
+    DjangoFixtureRepository,
     DjangoGameRepository,
     DjangoLeagueRepository,
+    DjangoRatingsRepository,
     DjangoTeamRepository,
+    DjangoWorldRepository,
+)
+from .club_input import (
+    ACTION_AUTO,
+    ACTION_MANUAL,
+    ACTIONS,
+    SECTIONS,
+    TAB_OF_SECTION,
+    ClubFormState,
+    ClubInputError,
+    LineupSlotInput,
+    NoticeLink,
+    RotationSlotInput,
+    failed_state,
+    parse_active,
+    parse_closer,
+    parse_lineup,
+    parse_rotation,
+    player_option,
+    tab_of,
 )
 from .forms import (
     FIELDED_BY_SEPARATOR,
     MAX_INNINGS,
     GameForm,
+    PennantWorldForm,
     PlayerRegistrationForm,
     PlayerUpdateForm,
 )
 
 BATTER_MODE = "batter"
 PITCHER_MODE = "pitcher"
+# 球団の画面の「成績｜能力」の切り替え（?view=ratings）。能力はペナントの世界だけ
+RATINGS_VIEW = "ratings"
+# 成績の期間の切り替え（?period=career）。ペナントの世界は既定が「今季」で、通算に切り替えられる
+CAREER_PERIOD = "career"
+
+
+def _stats_year(request, world: WorldContext | None) -> int | None:
+    """成績に数える年。None は通算。
+
+    実データは常に通算（今季という区切りを持たない）。ペナントの世界は既定が今季（世界のいまの年度）で、
+    `?period=career` のときだけ通算にする。
+    """
+    if world is None or request.GET.get("period") == CAREER_PERIOD:
+        return None
+    return world.season_year
 
 
 def _requires_login(request):
@@ -87,7 +165,7 @@ def _requires_team_permission(request, *team_ids):
     """
     if not request.user.is_authenticated:
         return redirect_to_login(request.get_full_path())
-    if not DjangoTeamPermissionQuery().can_manage_any(request.user, team_ids):
+    if not build_permission_query().can_manage_any(request.user, team_ids):
         raise PermissionDenied("このチームを編集する権限がありません。")
     return None
 
@@ -98,15 +176,83 @@ def build_service() -> TeamApplicationService:
     組み立ては**この1か所だけ**にする（管理画面のテンプレートタグもテストも
     ここを呼ぶ）。呼ぶ側ごとに一部の依存だけを渡すと、使う画面によって
     落ちるサービスができてしまうため。
+
+    **実データの範囲に固定する。引数で範囲を切り替えない**（既定値で切り替える形にすると、
+    渡し忘れが「ペナントの画面に実データが出る」形で現れる）。
     """
+    scope = WorldScope.real()
     return TeamApplicationService(
-        teams=DjangoTeamRepository(),
-        team_list_query=DjangoTeamListQuery(),
-        games=DjangoGameRepository(),
-        leagues=DjangoLeagueRepository(),
-        game_list_query=DjangoGameListQuery(),
-        player_fielding_query=DjangoPlayerFieldingQuery(),
-        player_stats_query=DjangoPlayerStatsQuery(),
+        teams=DjangoTeamRepository(scope),
+        team_list_query=DjangoTeamListQuery(scope),
+        games=DjangoGameRepository(scope),
+        leagues=DjangoLeagueRepository(scope),
+        game_list_query=DjangoGameListQuery(scope),
+        player_fielding_query=DjangoPlayerFieldingQuery(scope),
+        player_stats_query=DjangoPlayerStatsQuery(scope),
+        today=date.today,
+    )
+
+
+def build_world_view_service(world_id: int) -> TeamApplicationService:
+    """ペナントの世界ひとつの画面（順位・試合・選手）を読むサービスを組み立てる。
+
+    `build_service()` と同じ `TeamApplicationService` を、**世界の範囲で**組み立てる。依存は
+    `build_service()` と同じ全部を、すべて渡された世界の範囲で作る（範囲の外の球団・試合には触れない）。
+    年齢の基準日は暦の今日ではなく、その世界の「今日」（最後に試合をした日。まだ無ければ開幕日）。
+    世界の id が正しくなければ InvalidWorld。存在しない世界は、年齢を数えるときに WorldNotFound。
+    """
+    scope = WorldScope.pennant(world_id)
+    return TeamApplicationService(
+        teams=DjangoTeamRepository(scope),
+        team_list_query=DjangoTeamListQuery(scope),
+        games=DjangoGameRepository(scope),
+        leagues=DjangoLeagueRepository(scope),
+        game_list_query=DjangoGameListQuery(scope),
+        player_fielding_query=DjangoPlayerFieldingQuery(scope),
+        player_stats_query=DjangoPlayerStatsQuery(scope),
+        today=_world_clock(world_id, DjangoSimulationContextQuery(scope)),
+    )
+
+
+def _world_clock(world_id: int, context_query: SimulationContextQuery) -> Callable[[], date]:
+    """その世界の「今日」を返す関数。呼ばれるたびに読み直す（進めた後に古い日付を返さない）。"""
+    worlds = DjangoWorldRepository()
+
+    def today() -> date:
+        return world_today(worlds.find_by_id(world_id).start_year, context_query.last_played_on())
+
+    return today
+
+
+def build_pennant_world_view() -> PennantWorldViewService:
+    """世界の見出し（世界バー・世界の一覧）を作るサービスを組み立てる。
+
+    見出しの材料は世界の台帳を読む参照クエリ（範囲を持たない）が一定のクエリ数でまとめて読む。
+    自軍の順位だけは、世界の範囲のサービス（`build_world_view_service`）に任せる。
+    """
+    return PennantWorldViewService(
+        summaries=DjangoWorldSummaryQuery(),
+        standings_for=build_world_view_service,
+        games_for=lambda world_id: DjangoGameListQuery(WorldScope.pennant(world_id)),
+    )
+
+
+def build_pennant_ratings_service(world_id: int) -> PennantRatingsViewService:
+    """ペナントの世界ひとつの、能力の表示（選手ページのカード・球団の能力の表）を作るサービスを組み立てる。
+
+    球団と能力は**渡された世界の範囲で**読む。年齢の基準日は `build_world_view_service` と同じ世界の「今日」。
+    世界の id が正しくなければ InvalidWorld。
+    """
+    scope = WorldScope.pennant(world_id)
+    return PennantRatingsViewService(
+        world_id=world_id,
+        worlds=DjangoWorldRepository(),
+        fixtures=DjangoFixtureRepository(scope),
+        context_query=DjangoSimulationContextQuery(scope),
+        stats=DjangoPlayerStatsQuery(scope),
+        ratings=DjangoRatingsRepository(scope),
+        history=DjangoRatingsHistoryQuery(scope),
+        today=_world_clock(world_id, DjangoSimulationContextQuery(scope)),
     )
 
 
@@ -114,12 +260,13 @@ def build_recording_service() -> GameRecordingService:
     """スコアブックを保存するサービスを組み立てる。
 
     `build_service()` と同じく**組み立てはここだけ**にする。打席の記録は
-    チームの一覧も試合の一覧も要らないので、依存は3つで足りる。
+    チームの一覧も試合の一覧も要らないので、依存は3つで足りる。実データの範囲に固定する。
     """
+    scope = WorldScope.real()
     return GameRecordingService(
-        games=DjangoGameRepository(),
-        teams=DjangoTeamRepository(),
-        leagues=DjangoLeagueRepository(),
+        games=DjangoGameRepository(scope),
+        teams=DjangoTeamRepository(scope),
+        leagues=DjangoLeagueRepository(scope),
     )
 
 
@@ -127,24 +274,634 @@ def build_team_analysis_service() -> TeamAnalysisService:
     """戦力分析のサービスを組み立てる。
 
     `build_service()` と同じく**組み立てはここだけ**にする。依存は2つで足りるが、
-    呼ぶ側ごとに一部だけ渡さず、必ずここを通す。
+    呼ぶ側ごとに一部だけ渡さず、必ずここを通す。実データの範囲に固定する
+    （ペナントの世界の球団を指されても、球団が見つからない扱いになる）。
     """
+    scope = WorldScope.real()
     return TeamAnalysisService(
-        team_list_query=DjangoTeamListQuery(),
-        analysis_query=DjangoTeamAnalysisQuery(),
+        team_list_query=DjangoTeamListQuery(scope),
+        analysis_query=DjangoTeamAnalysisQuery(scope),
     )
 
 
 def build_roster_service() -> RosterService:
-    """契約区分（昇格）のサービスを組み立てる。
+    """契約区分（昇格）と FA 宣言のサービスを組み立てる。
 
     `build_service()` と同じく**組み立てはここだけ**にする。呼ぶ側ごとに
-    一部の依存だけを渡さず、必ずここを通す。
+    一部の依存だけを渡さず、必ずここを通す。実データの範囲に固定する
+    （管理画面の操作で、ペナントの世界の球団には触れない）。
     """
+    scope = WorldScope.real()
     return RosterService(
-        teams=DjangoTeamRepository(),
-        leagues=DjangoLeagueRepository(),
+        teams=DjangoTeamRepository(scope),
+        leagues=DjangoLeagueRepository(scope),
     )
+
+
+def build_permission_query() -> DjangoTeamPermissionQuery:
+    """チームの編集権限の判定を組み立てる。実データの範囲に固定する。"""
+    return DjangoTeamPermissionQuery(WorldScope.real())
+
+
+def build_player_search_query() -> DjangoPlayerSearchQuery:
+    """選手検索を組み立てる。実データの範囲に固定する。"""
+    return DjangoPlayerSearchQuery(WorldScope.real())
+
+
+def _repositories_for(scope: WorldScope) -> WorldRepositories:
+    """世界の範囲でリポジトリを組み立てる。世界の作成が、写し先の世界に書くのに使う。"""
+    return WorldRepositories(
+        leagues=DjangoLeagueRepository(scope),
+        teams=DjangoTeamRepository(scope),
+        ratings=DjangoRatingsRepository(scope),
+    )
+
+
+def build_pennant_world_service() -> PennantWorldService:
+    """世界の作成・削除のサービスを組み立てる。
+
+    分岐元は**実データの範囲**で読み、写し先は世界の範囲のリポジトリ（生成器で受け取る）に書く。
+    """
+    scope = WorldScope.real()
+    return PennantWorldService(
+        real_leagues=DjangoLeagueRepository(scope),
+        real_teams=DjangoTeamRepository(scope),
+        real_fielding=DjangoFieldingTotalsQuery(scope),
+        worlds=DjangoWorldRepository(),
+        repositories_for=_repositories_for,
+        atomic=transaction.atomic,
+        ensure_schedule=lambda world_id: build_pennant_season_service(world_id).ensure_schedule(),
+    )
+
+
+def build_pennant_season_service(world_id: int) -> PennantSeasonService:
+    """ペナントの世界ひとつのシーズン進行サービスを組み立てる。
+
+    **リポジトリと参照クエリは、すべて渡された世界の範囲で作る**（範囲の外の球団・試合・日程には触れない）。
+    保存と消化済みの対戦の削除を1つにまとめるトランザクションは、ここで渡す（application は Django を知らない）。
+    世界の id が正しくなければ InvalidWorld、存在しなければ使うときに WorldNotFound。
+    """
+    scope = WorldScope.pennant(world_id)
+    return PennantSeasonService(
+        world_id=world_id,
+        worlds=DjangoWorldRepository(),
+        leagues=DjangoLeagueRepository(scope),
+        teams=DjangoTeamRepository(scope),
+        games=DjangoGameRepository(scope),
+        fixtures=DjangoFixtureRepository(scope),
+        ratings=DjangoRatingsRepository(scope),
+        plans=DjangoClubPlanRepository(scope),
+        context_query=DjangoSimulationContextQuery(scope),
+        atomic=transaction.atomic,
+    )
+
+
+def build_pennant_offseason_service(world_id: int) -> PennantOffseasonService:
+    """ペナントの世界ひとつのオフ（シーズンを締める）サービスを組み立てる。
+
+    **リポジトリと参照クエリは、すべて渡された世界の範囲で作る。** 引退・新人・翌年の能力・日程・編成の
+    後始末を1つのトランザクションにまとめるので、`transaction.atomic` もここで渡す。
+    世界の id が正しくなければ InvalidWorld、存在しなければ使うときに WorldNotFound。
+    """
+    scope = WorldScope.pennant(world_id)
+    return PennantOffseasonService(
+        world_id=world_id,
+        worlds=DjangoWorldRepository(),
+        leagues=DjangoLeagueRepository(scope),
+        teams=DjangoTeamRepository(scope),
+        fixtures=DjangoFixtureRepository(scope),
+        ratings=DjangoRatingsRepository(scope),
+        plans=DjangoClubPlanRepository(scope),
+        context_query=DjangoSimulationContextQuery(scope),
+        playing_time=DjangoSeasonPlayingTimeQuery(scope),
+        atomic=transaction.atomic,
+    )
+
+
+def build_offseason_view_service(world_id: int) -> OffseasonViewService:
+    """オフの結果（Y年オフ）を読むサービスを組み立てる。読むだけ。参照クエリは渡された世界の範囲で作る。
+
+    世界の id が正しくなければ InvalidWorld。
+    """
+    return OffseasonViewService(
+        worlds=DjangoWorldRepository(), offseason=DjangoOffseasonQuery(WorldScope.pennant(world_id))
+    )
+
+
+def build_pennant_home_service(world_id: int) -> PennantHomeService:
+    """GM ホームの材料を作るサービスを組み立てる。
+
+    順位・主力・タイトルは世界の範囲の `TeamApplicationService`（`build_world_view_service`）に任せ、
+    試合の一覧・日程・期間の見どころの参照は、すべて渡された世界の範囲で作る。
+    世界の id が正しくなければ InvalidWorld。
+    """
+    scope = WorldScope.pennant(world_id)
+    return PennantHomeService(
+        teams=build_world_view_service(world_id),
+        games=DjangoGameListQuery(scope),
+        game_records=DjangoGameRepository(scope),
+        fixtures=DjangoFixtureRepository(scope),
+        activity=DjangoPennantActivityQuery(scope),
+        team_records=DjangoTeamRepository(scope),
+        leagues=DjangoLeagueRepository(scope),
+    )
+
+
+def _world_context(world_id: int) -> WorldContext:
+    """世界の見出し。存在しない・id が正しくない世界は 404。"""
+    try:
+        return build_pennant_world_view().get_context(world_id)
+    except (WorldNotFound, InvalidWorld):
+        raise Http404("世界が見つかりません。") from None
+
+
+def _is_owner(request, world: WorldContext) -> bool:
+    """ログインしている人が、その世界のオーナーか。書き込みの導線を出す・操作を通すかの判定に使う。"""
+    return request.user.is_authenticated and world.owner_id is not None and world.owner_id == request.user.id
+
+
+def _requires_world_owner(request, world: WorldContext):
+    """世界のオーナーでなければ拒否する。未ログインはログインへ、ほかの人は 403。
+
+    実データの担当者の判定（`_requires_team_permission`）とは別で、管理ユーザーでも世界のオーナーでなければ通さない
+    （世界は遊ぶ人のセーブデータで、管理ユーザーの権限は世界に及ばない）。
+    """
+    if not request.user.is_authenticated:
+        return redirect_to_login(request.get_full_path())
+    if not _is_owner(request, world):
+        raise PermissionDenied("この世界のオーナーではありません。")
+    return None
+
+
+def _scope(world_id: int | None) -> tuple[TeamApplicationService, WorldContext | None]:
+    """画面が読む範囲。URL に世界の id が無ければ実データ、あればその世界（無ければ 404）。
+
+    実データの画面とペナントの画面は同じビューとテンプレートを使う。違いは、読むサービスの範囲と、
+    テンプレートに渡す世界（`world`。リンクの引き方・世界バー・文言の差し替えの合図）だけ。
+    """
+    if world_id is None:
+        return build_service(), None
+    world = _world_context(world_id)
+    return build_world_view_service(world_id), world
+
+
+def _own_team_id(world: WorldContext | None) -> int | None:
+    """順位表で「自軍」の印を付ける球団。実データには自軍が無い。"""
+    return world.managed_team_id if world is not None else None
+
+
+def _render(request, template: str, context: dict, world: WorldContext | None):
+    """世界の範囲の画面なら `world` を添えて描画する。実データでは `world` は None。"""
+    return render(request, template, {**context, "world": world})
+
+
+def _parse_date(value: str | None) -> date | None:
+    """URL の日付。読めなければ None（エラーにしない）。"""
+    try:
+        return date.fromisoformat(value) if value else None
+    except ValueError:
+        return None
+
+
+def _next_season_year() -> int:
+    """世界の開幕年の既定。実データの最新シーズンの翌年（試合が無ければ今年）。"""
+    latest = build_service().latest_game_year()
+    return latest + 1 if latest is not None else date.today().year
+
+
+def pennant_index(request):
+    """ペナントの世界の一覧と作成。一覧は誰でも、作成（POST）はログインが必要。
+
+    世界の一覧は「あなたの世界」と「ほかの人の世界」に分け、オーナーの名前は出さない。
+    作成フォームはログインしている人にだけ出す（上限に達していれば理由を出す）。
+    """
+    if request.method not in ("GET", "HEAD", "POST"):
+        return HttpResponseNotAllowed(["GET", "HEAD", "POST"])
+    if request.method == "POST":
+        denied = _requires_login(request)
+        if denied is not None:
+            return denied
+
+    views = build_pennant_world_view()
+    form = None
+    if request.user.is_authenticated:
+        form_args = {"groups": build_service().list_teams_by_league().rows, "default_year": _next_season_year()}
+        form = (
+            PennantWorldForm(request.POST, **form_args) if request.method == "POST" else PennantWorldForm(**form_args)
+        )
+        if request.method == "POST" and form.is_valid():
+            created = _create_world(request, form)
+            if created is not None:
+                return redirect("pennant_world", world_id=created)
+
+    return render(
+        request,
+        "pennant/world_list.html",
+        {"worlds": views.list_worlds(request.user.id if request.user.is_authenticated else None), "form": form},
+    )
+
+
+def _create_world(request, form: PennantWorldForm) -> int | None:
+    """検証済みのフォームから世界を作る。作れたらその id、作れなければ理由を messages に出して None。
+
+    世界の作成と日程の生成は1つのトランザクション（`create_world_with_schedule`）で、失敗したら何も残らない。
+    """
+    data = form.cleaned_data
+    seed = data["seed"]
+    try:
+        created = build_pennant_world_service().create_world_with_schedule(
+            name=data["name"],
+            owner_id=request.user.id,
+            source_league_ids=[int(league) for league in data["leagues"]],
+            start_year=data["start_year"],
+            seed=seed if seed is not None else secrets.randbelow(2**31),
+            managed_source_team_id=int(data["managed_team"]),
+        )
+    except DomainError as error:
+        messages.error(request, str(error))
+        return None
+    messages.success(
+        request, f"世界「{created.world.name}」を作りました（{created.team_count}球団・{created.player_count}選手）。"
+    )
+    return _saved_world_id(created.world.id)
+
+
+def _saved_world_id(world_id: int | None) -> int:
+    assert world_id is not None, "保存した世界には id がある"
+    return world_id
+
+
+def pennant_world(request, world_id):
+    """GM ホーム。自軍の位置・結果のまとめ・進める・次の試合・順位表・主力・タイトル争い。
+
+    読むだけの画面なので誰でも開ける。「進める」と削除の導線はオーナーにだけ出す。
+    `?since=<日付>` は進める前の今日（結果のまとめの起点）。読めない・未来の値はまとめを出さない。
+    """
+    world = _world_context(world_id)
+    is_owner = _is_owner(request, world)
+    league = request.GET.get("league")
+    home = build_pennant_home_service(world_id).get_home(
+        world,
+        since=_parse_date(request.GET.get("since")),
+        league_id=int(league) if league and league.isdigit() else None,
+        include_advance=is_owner,
+    )
+    # 「シーズンを締める」はシーズン終了のオーナーにだけ出す。最終シーズンを終えた世界は締められないので、
+    # 締めるカードの代わりに「世界の終了」（ホームの `finale`）を出す（終了の情報を1か所にする）
+    close_option = (
+        build_pennant_offseason_service(world_id).close_option()
+        if is_owner and world.phase is SeasonPhase.FINISHED and not world.is_over
+        else None
+    )
+    return _render(
+        request,
+        "pennant/home.html",
+        {
+            "home": home,
+            "is_owner": is_owner,
+            "plan_notices": _plan_notices(world) if is_owner else [],
+            "close_option": close_option,
+            "registered_band": OPENING_REGISTERED_BAND,
+        },
+        world,
+    )
+
+
+def _plan_notices(world: WorldContext) -> list[NoticeLink]:
+    """いま進めたら自動に落ちる区画と理由（ホームの「注意」）。受け持つ球団の編成を読むだけで、保存はしない。
+
+    編成を読めない世界（受け持つ球団が無い・球団が見つからない）では注意を出さない。ホームを開けなくしないため。
+    """
+    if world.managed_team_id is None:
+        return []
+    try:
+        view = build_club_service(world.world_id).view(world.managed_team_id)
+    except DomainError:
+        return []
+    return [
+        NoticeLink(notice.section.value, notice.reason, TAB_OF_SECTION[notice.section], notice.falls_back)
+        for notice in view.notices
+    ]
+
+
+def pennant_advance(request, world_id):
+    """世界を進める。POST だけで、オーナーだけが使える（GET はホームへ戻す）。
+
+    進めたあとは `?since=<進める前の今日>` つきでホームへ戻る（結果は URL に残るので、再読み込みしても消えない）。
+    `expected_today` がずれていたら進めない（二重送信や、別の画面で先に進めたときに、さらに進めてしまわない）。
+    """
+    world = _world_context(world_id)
+    home_url = reverse("pennant_world", args=[world_id])
+    if request.method != "POST":
+        return redirect(home_url)
+    denied = _requires_world_owner(request, world)
+    if denied is not None:
+        return denied
+
+    try:
+        target = AdvanceTarget(request.POST.get("target", ""))
+    except ValueError:
+        target = None
+    if target not in SCREEN_ADVANCE_TARGETS:
+        messages.error(request, "その進め方はできません。")
+        return redirect(home_url)
+
+    # 画面を開いたときの「今日」（まだ試合が無ければ空）。読めない値は、どの今日とも一致しない日付にする
+    sent = request.POST.get("expected_today", "")
+    expected_today = None if sent == "" else (_parse_date(sent) or date.min)
+    try:
+        report = build_pennant_season_service(world_id).advance(
+            target, max_games=MAX_GAMES_PER_ADVANCE, expected_today=expected_today
+        )
+    except AlreadyAdvanced as error:
+        messages.warning(request, str(error))
+        return redirect(home_url)
+    except DomainError as error:
+        messages.error(request, str(error))
+        return redirect(home_url)
+    if not report.games:
+        messages.info(request, "進める試合がありません。")
+        return redirect(home_url)
+
+    # まだ1試合も無かった世界は、最初の試合日の前日を起点にする
+    since = world.today if world.today is not None else report.played_dates[0] - timedelta(days=1)
+    messages.success(request, f"{report.games}試合を進めました。")
+    return redirect(f"{home_url}?since={since.isoformat()}")
+
+
+def pennant_close_season(request, world_id):
+    """シーズンを締める。POST だけで、オーナーだけが使える（GET はホームへ戻す）。
+
+    締めたら「<年>年のシーズンを締めました」を出してオフの結果へ。元に戻せないので、
+    `expected_year`（画面を開いたときの年）がずれていたら何もしない（二重送信や、別の画面で先に締めたときに、
+    さらに次の年を締めてしまわない）。`expected_year` の欠落は「検査なし」にせず弾く。
+    """
+    world = _world_context(world_id)
+    home_url = reverse("pennant_world", args=[world_id])
+    if request.method != "POST":
+        return redirect(home_url)
+    denied = _requires_world_owner(request, world)
+    if denied is not None:
+        return denied
+
+    sent = request.POST.get("expected_year", "")
+    if not sent.isdigit():
+        messages.error(request, "画面が古いか、送信が正しくありません。開き直してからもう一度お試しください。")
+        return redirect(home_url)
+    expected_year = int(sent)
+
+    try:
+        result = build_pennant_offseason_service(world_id).close_season(expected_year=expected_year)
+    except AlreadyClosed as error:
+        messages.warning(request, str(error))
+        # 締めていると確かめられた年（error.year）のオフの結果へ。確かめられないとき（年度のずれなど）はホームへ
+        if error.year is not None:
+            return redirect("pennant_offseason", world_id=world_id, year=error.year)
+        return redirect(home_url)
+    except DomainError as error:
+        messages.error(request, str(error))
+        return redirect(home_url)
+
+    messages.success(
+        request,
+        f"{result.year}年のシーズンを締めました（引退 {result.retired_count}人・新人 {result.draftee_count}人）。",
+    )
+    if result.released_sections:
+        labels = "・".join(section.value for section in result.released_sections)
+        messages.warning(request, f"引退した選手を含んでいたため、自軍の編成（{labels}）を自動に戻しました。")
+    if result.without_ratings_count:
+        messages.info(request, f"能力の無い選手 {result.without_ratings_count}人は、翌年の能力を作りませんでした。")
+    return redirect("pennant_offseason", world_id=world_id, year=result.year)
+
+
+def pennant_offseason(request, world_id, year):
+    """Y年オフの結果。読むだけの画面なので誰でも開ける。締めていない年・範囲外の年は 404。
+
+    `?league=<id>` は引退・退団と新人を見るリーグ（無効な値は自軍のリーグに落とす）。
+    """
+    world = _world_context(world_id)
+    league = request.GET.get("league", "")
+    summary = build_offseason_view_service(world_id).get_summary(
+        world, year, league_id=int(league) if league.isdigit() else None
+    )
+    if summary is None:
+        raise Http404("その年のオフの結果は、まだありません。")
+    return _render(request, "pennant/offseason.html", {"summary": summary}, world)
+
+
+def pennant_delete(request, world_id):
+    """世界の削除の確認。GET も POST もオーナーだけ。削除したら世界の一覧へ戻る。"""
+    world = _world_context(world_id)
+    if request.method not in ("GET", "HEAD", "POST"):
+        return HttpResponseNotAllowed(["GET", "HEAD", "POST"])
+    denied = _requires_world_owner(request, world)
+    if denied is not None:
+        return denied
+
+    if request.method == "POST":
+        build_pennant_world_service().delete_world(world_id)
+        messages.success(request, f"世界「{world.name}」を削除しました。")
+        return redirect("pennant_index")
+    deletion = build_pennant_home_service(world_id).get_deletion(world)
+    return _render(request, "pennant/world_delete.html", {"deletion": deletion}, world)
+
+
+def build_club_service(world_id: int) -> ClubManagementService:
+    """ペナントの世界ひとつの、球団の編成を管理するサービスを組み立てる。
+
+    `build_pennant_season_service()` と同じく、**リポジトリと参照クエリはすべて渡された世界の範囲で作る**
+    （他の世界の球団の編成は、読めも書けもしない）。世界の id が正しくなければ InvalidWorld。
+    """
+    scope = WorldScope.pennant(world_id)
+    return ClubManagementService(
+        world_id=world_id,
+        worlds=DjangoWorldRepository(),
+        plans=DjangoClubPlanRepository(scope),
+        ratings=DjangoRatingsRepository(scope),
+        fixtures=DjangoFixtureRepository(scope),
+        context_query=DjangoSimulationContextQuery(scope),
+    )
+
+
+def build_club_details_service(world_id: int) -> ClubDetailsService:
+    """編成画面の選手の詳細（年齢・能力の要約・今季の成績）を作るサービスを組み立てる。
+
+    参照クエリとリポジトリは**渡された世界の範囲で**作る。年齢の基準日は世界の「今日」。
+    世界の id が正しくなければ InvalidWorld。
+    """
+    scope = WorldScope.pennant(world_id)
+    return ClubDetailsService(
+        stats=DjangoPlayerStatsQuery(scope),
+        ratings=DjangoRatingsRepository(scope),
+        today=_world_clock(world_id, DjangoSimulationContextQuery(scope)),
+    )
+
+
+def pennant_club(request, world_id):
+    """編成。1軍登録・オーダー・投手陣の3タブ（`?tab=`）。受け持つ球団の編成を、区画ごとに自動か手動のどちらかで見せる。
+
+    GET は誰でも（読み取り専用）、POST はオーナーだけ（未ログインはログインへ、ほかの人は 403）。
+    POST は区画ごとに「手動にする」「保存する」「自動に戻す」を受け、成功したら同じタブへ戻る
+    （再読み込みで二重に送らない）。
+    失敗したら保存せず、入力を残してメッセージつきで再表示する。
+    """
+    world = _world_context(world_id)
+    if request.method not in ("GET", "HEAD", "POST"):
+        return HttpResponseNotAllowed(["GET", "HEAD", "POST"])
+    if request.method == "POST":
+        denied = _requires_world_owner(request, world)
+        if denied is not None:
+            return denied
+        return _post_club(request, world)
+    return _render_club(request, world, tab_of(request.GET.get("tab")))
+
+
+def _post_club(request, world: WorldContext):
+    club_url = reverse("pennant_club", args=[world.world_id])
+    team_id = world.managed_team_id
+    if team_id is None:
+        messages.error(request, "この世界には、受け持つ球団が決まっていません。")
+        return redirect(club_url)
+    section = SECTIONS.get(request.POST.get("section", ""))
+    action = request.POST.get("action", "")
+    if section is None or action not in ACTIONS:
+        messages.error(request, "その操作はできません。")
+        return redirect(club_url)
+
+    service = build_club_service(world.world_id)
+    try:
+        current = service.view(team_id)
+    except DomainError as error:
+        messages.error(request, str(error))
+        return redirect(club_url)
+    tab_url = f"{club_url}?tab={TAB_OF_SECTION[section]}"
+    try:
+        if action == ACTION_AUTO:
+            service.reset(team_id, section)
+            messages.success(request, f"{section.value}を自動編成に戻しました。")
+        elif action == ACTION_MANUAL:
+            if _is_manual(current, section):
+                messages.info(request, f"{section.value}は、すでに手動です。")
+            else:
+                _start_manual(service, current, section)
+                messages.success(request, f"{section.value}を手動にしました。")
+        else:
+            _save_section(service, request.POST, current, section)
+            messages.success(request, f"{section.value}を保存しました。")
+    except (ClubInputError, DomainError) as error:
+        state = failed_state(
+            request.POST,
+            section,
+            str(error),
+            lineup_size=current.limits.lineup_size,
+            rotation_size=current.limits.rotation_size,
+        )
+        return _render_club(request, world, TAB_OF_SECTION[section], state=state, status=400)
+    return redirect(tab_url)
+
+
+def _is_manual(view: ClubPlanView, section: PlanSection) -> bool:
+    return {
+        PlanSection.ACTIVE: view.active_is_manual,
+        PlanSection.LINEUP: view.lineup_is_manual,
+        PlanSection.ROTATION: view.rotation_is_manual,
+        PlanSection.CLOSER: view.closer_is_manual,
+    }[section]
+
+
+def _start_manual(service: ClubManagementService, current: ClubPlanView, section: PlanSection) -> None:
+    """区画を、いま映している自動編成の形を初期値にして手動にする。"""
+    team_id = current.team_id
+    if section is PlanSection.ACTIVE:
+        service.start_manual_active(team_id)
+    elif section is PlanSection.LINEUP:
+        service.start_manual_lineup(team_id)
+    elif section is PlanSection.ROTATION:
+        service.set_rotation(team_id, current.rotation_ids)
+    elif current.closer_id is not None:
+        service.set_closer(team_id, current.closer_id)
+    else:
+        raise ClubInputError("抑えにできる投手がいません。")
+
+
+def _save_section(service: ClubManagementService, post, current: ClubPlanView, section: PlanSection) -> None:
+    team_id = current.team_id
+    if section is PlanSection.ACTIVE:
+        service.set_active_roster(team_id, parse_active(post, current))
+    elif section is PlanSection.LINEUP:
+        service.set_lineup(team_id, parse_lineup(post, current.limits.lineup_size))
+    elif section is PlanSection.ROTATION:
+        service.set_rotation(team_id, parse_rotation(post, current.limits.rotation_size))
+    else:
+        service.set_closer(team_id, parse_closer(post))
+
+
+def _render_club(request, world: WorldContext, tab: str, *, state: ClubFormState | None = None, status: int = 200):
+    """編成の画面を描く。`state` があるときは、保存に失敗した入力を残して出す。
+
+    手動の区画の編集欄の初期値は、**保存済みの上書き**から作る（使えなくなって自動に落ちた区画も、
+    GM が決めた形のまま出す。解決後の値から作ると、保存したときに上書きが AI の形で置き換わる）。
+    """
+    context: dict = {"is_owner": _is_owner(request, world), "tab": tab, "club": None, "club_error": None}
+    if world.managed_team_id is None:
+        return render(request, "pennant/club.html", {**context, "world": world}, status=status)
+    service = build_club_service(world.world_id)
+    try:
+        view = service.view(world.managed_team_id)
+    except DomainError as error:
+        # 受け持つ球団が見つからないなど。画面を落とさず理由を出す（ホームの注意と同じ扱い）
+        context["club_error"] = str(error)
+        return render(request, "pennant/club.html", {**context, "world": world}, status=status)
+    limits = view.limits
+
+    # 保存済みの上書き（あれば）→ 無ければ、いま進めたときに使われる形
+    saved_lineup = view.saved_lineup if view.saved_lineup is not None else view.lineup
+    lineup = state.lineup if state is not None else None
+    if lineup is None:
+        lineup = [LineupSlotInput(row.batting_order, row.player_id, row.position) for row in saved_lineup]
+        lineup += [LineupSlotInput(order, None, None) for order in range(len(lineup) + 1, limits.lineup_size + 1)]
+    rotation = state.rotation if state is not None else None
+    if rotation is None:
+        ids: list[int | None] = list(
+            view.saved_rotation_ids if view.saved_rotation_ids is not None else view.rotation_ids
+        )
+        ids += [None] * (limits.rotation_size - len(ids))
+        rotation = [RotationSlotInput(order, player_id) for order, player_id in enumerate(ids, start=1)]
+    checked = state.active_checked if state is not None else None
+    if checked is None:
+        checked = frozenset(view.saved_active_ids if view.saved_active_ids is not None else view.active_ids)
+    closer = state.closer_id if state is not None else None
+    if closer is None:
+        closer = view.saved_closer_id if view.saved_closer_id is not None else view.closer_id
+
+    # 選択肢は1軍の選手。保存済みの上書きに入っている1軍外の選手も、印を付けて残す（保存時にドメインが弾く）
+    kept = {slot.player_id for slot in lineup} | {slot.player_id for slot in rotation} | {closer}
+    details = build_club_details_service(world.world_id).details(world.managed_team_id, view.year, view.players)
+    batters = [
+        d for d in details if not d.player.position.is_pitcher and (d.player.is_active or d.player.player_id in kept)
+    ]
+    pitchers = [
+        d for d in details if d.player.position.is_pitcher and (d.player.is_active or d.player.player_id in kept)
+    ]
+
+    context.update(
+        club=view,
+        club_players=details,
+        error=state.error if state is not None else None,
+        tab_notices=[
+            NoticeLink(notice.section.value, notice.reason, TAB_OF_SECTION[notice.section], notice.falls_back)
+            for notice in view.notices
+            if TAB_OF_SECTION[notice.section] == tab
+        ],
+        active_checked=checked,
+        batter_candidates=[player_option(row) for row in batters],
+        pitcher_candidates=[player_option(row) for row in pitchers],
+        lineup_slots=lineup,
+        rotation_slots=rotation,
+        closer_selected=closer,
+        usage=service.pitching_usage(view) if tab == "pitching" else None,
+    )
+    return render(request, "pennant/club.html", {**context, "world": world}, status=status)
 
 
 def dashboard(request):
@@ -163,11 +920,12 @@ def _sort_params(request):
     return sort, descending
 
 
-def team_list(request):
+def team_list(request, world_id=None):
     """チーム一覧。"""
+    service, world = _scope(world_id)
     sort, descending = _sort_params(request)
-    listing = build_service().list_teams_by_league(sort=sort, descending=descending)
-    return render(
+    listing = service.list_teams_by_league(sort=sort, descending=descending)
+    return _render(
         request,
         "myapp/team_list.html",
         {
@@ -177,31 +935,38 @@ def team_list(request):
             "current_sort": listing.sort,
             "current_descending": listing.descending,
         },
+        world,
     )
 
 
-def standings(request, year=None):
+def standings(request, year=None, world_id=None):
     """年別の順位表。年を指定しない場合は最新シーズン。"""
+    service, world = _scope(world_id)
     sort, descending = _sort_params(request)
     try:
-        board = build_service().get_standings(year, sort=sort, descending=descending)
+        board = service.get_standings(year, sort=sort, descending=descending)
     except DomainError as error:
         raise Http404(str(error)) from error
 
-    return render(
+    return _render(
         request,
         "myapp/standings.html",
         {
             "standings": board,
             "current_sort": board.sort,
             "current_descending": board.descending,
+            "highlight_team_id": _own_team_id(world),
         },
+        world,
     )
 
 
-def player_list(request, team_id):
+def player_list(request, team_id, world_id=None):
     """選手一覧。野手／投手モードを切り替えて表示する。"""
-    service = build_service()
+    service, world = _scope(world_id)
+    if world is not None and request.method not in ("GET", "HEAD"):
+        # ペナントの世界の選手は、画面から登録・編集しない
+        return HttpResponseNotAllowed(["GET", "HEAD"])
 
     try:
         team_name = service.get_team_name(team_id)
@@ -237,39 +1002,70 @@ def player_list(request, team_id):
 
     pos_mode = PITCHER_MODE if request.GET.get("pos") == PITCHER_MODE else BATTER_MODE
     sort, descending = _sort_params(request)
-    listing = (
-        service.list_pitchers(team_id, sort=sort, descending=descending)
-        if pos_mode == PITCHER_MODE
-        else service.list_batters(team_id, sort=sort, descending=descending)
-    )
+    ratings_table: RatingsTable | None = None
+    listing: Listing | None = None
+    # ペナントの世界は今季の成績が既定（?period=career で通算）。実データは通算のまま
+    stats_year = _stats_year(request, world)
+    if world is not None and request.GET.get("view") == RATINGS_VIEW:
+        # 能力の表。並べ替えのキーは成績の表と別（不正なキーは domain が背番号順に落とす）
+        ratings_table = build_pennant_ratings_service(world.world_id).get_table(
+            team_id, pitchers=pos_mode == PITCHER_MODE, sort=sort, descending=descending, stats_year=stats_year
+        )
+        rows, current_sort, current_descending = ratings_table.rows, ratings_table.sort, ratings_table.descending
+        months: list[TeamMonthlyRow] = []
+    else:
+        listing = (
+            service.list_pitchers(team_id, sort=sort, descending=descending, year=stats_year)
+            if pos_mode == PITCHER_MODE
+            else service.list_batters(team_id, sort=sort, descending=descending, year=stats_year)
+        )
+        rows, current_sort, current_descending = listing.rows, listing.sort, listing.descending
+        # 通算値では見えない調子の波を、月ごとに区切って出す
+        months = service.list_team_monthly_splits(team_id, stats_year)
 
-    return render(
+    return _render(
         request,
         "myapp/player_list.html",
         {
             "team_id": team_id,
+            "reserve_ids": _reserve_player_ids(world, team_id),
             "team_name": team_name,
-            "totals": service.get_team_totals(team_id),
+            "totals": service.get_team_totals(team_id, stats_year),
+            "stats_year": stats_year,
             "listing": listing,
-            "players": listing.rows,
+            "ratings_table": ratings_table,
+            "players": rows,
             "pos_mode": pos_mode,
             "form": form,
             "positions": Position.labels(),
             "contracts": ContractStatus.labels(),
-            "current_sort": listing.sort,
-            "current_descending": listing.descending,
-            # 通算値では見えない調子の波を、月ごとに区切って出す
-            "months": service.list_team_monthly_splits(team_id),
+            "current_sort": current_sort,
+            "current_descending": current_descending,
+            "months": months,
             # このチームの担当者（または管理ユーザー）だけが登録・編集の導線を見える
-            "can_edit_team": DjangoTeamPermissionQuery().can_manage(request.user, team_id),
+            "can_edit_team": world is None and build_permission_query().can_manage(request.user, team_id),
         },
+        world,
     )
+
+
+def _reserve_player_ids(world: WorldContext | None, team_id: int) -> frozenset[int]:
+    """ペナントの世界の球団の、いま在籍していて1軍に使われない選手（「2軍」の印を付ける）。実データは空で印を出さない。
+
+    出典は編成（`ClubManagementService`）の1軍で、画面ごとに別の判定を持たない。球団が読めないときも印は出さない。
+    """
+    if world is None:
+        return frozenset()
+    try:
+        return build_club_service(world.world_id).reserve_player_ids(team_id)
+    except DomainError:
+        return frozenset()
 
 
 def player_search(request):
     """選手を名前で探す。チームが増えると所属からはたどり着きにくいため。"""
     keyword = (request.GET.get("q") or "").strip()
-    results = DjangoPlayerSearchQuery().search(keyword) if keyword else []
+    results = build_player_search_query().search(keyword) if keyword else []
 
     return render(
         request,
@@ -282,66 +1078,78 @@ def player_search(request):
     )
 
 
-def league_detail(request, league_id, year=None):
+def league_detail(request, league_id, year=None, world_id=None):
     """リーグ画面。所属チーム・順位表・直近の試合。"""
+    service, world = _scope(world_id)
     try:
-        detail = build_service().get_league_detail(league_id, year)
+        detail = service.get_league_detail(league_id, year)
     except LeagueNotFound:
         raise Http404("リーグが見つかりません。") from None
 
-    return render(request, "myapp/league_detail.html", {"league": detail})
+    return _render(
+        request,
+        "myapp/league_detail.html",
+        {"league": detail, "highlight_team_id": _own_team_id(world)},
+        world,
+    )
 
 
-def league_titles(request, league_id, year=None):
+def league_titles(request, league_id, year=None, world_id=None):
     """リーグのタイトル一覧。部門別の上位者をシーズンで区切って並べる。"""
+    service, world = _scope(world_id)
     try:
-        titles = build_service().get_league_titles(league_id, year)
+        titles = service.get_league_titles(league_id, year)
     except LeagueNotFound:
         raise Http404("リーグが見つかりません。") from None
     except DomainError as error:
         raise Http404(str(error)) from error
 
-    return render(request, "myapp/league_titles.html", {"titles": titles})
+    return _render(request, "myapp/league_titles.html", {"titles": titles}, world)
 
 
-def league_stats(request, league_id):
+def league_stats(request, league_id, world_id=None):
     """リーグの成績一覧。所属する全選手の通算成績を並べ替えて見る。"""
     pos_mode = PITCHER_MODE if request.GET.get("pos") == PITCHER_MODE else BATTER_MODE
     # 規定の絞り込み。指定が無い・読めない値なら全員（並べ替えのキーと同じ扱い）
     qualified = request.GET.get("qualified") == "1"
     sort, descending = _sort_params(request)
 
+    service, world = _scope(world_id)
+    stats_year = _stats_year(request, world)
     try:
-        stats = build_service().get_league_stats(
+        stats = service.get_league_stats(
             league_id,
             pitchers=pos_mode == PITCHER_MODE,
             qualified=qualified,
             sort=sort,
             descending=descending,
+            year=stats_year,
         )
     except LeagueNotFound:
         raise Http404("リーグが見つかりません。") from None
 
-    return render(
+    return _render(
         request,
         "myapp/league_stats.html",
         {
             "stats": stats,
+            "stats_year": stats_year,
             "players": stats.listing.rows,
             "pos_mode": pos_mode,
             "current_sort": stats.listing.sort,
             "current_descending": stats.listing.descending,
         },
+        world,
     )
 
 
-def game_list(request):
+def game_list(request, world_id=None):
     """試合一覧。シーズン・月・リーグ・チームで絞り込める。
 
     全件を一度に描くと件数ぶん重くなるため、指定が無ければ最新シーズンの
     最後に試合があった月を見せる。
     """
-    service = build_service()
+    service, world = _scope(world_id)
 
     def _int(name):
         value = request.GET.get(name)
@@ -370,7 +1178,7 @@ def game_list(request):
     listing = service.list_games(year=year, team_id=team_id, month=month, league_id=league_id)
     leagues = service.list_leagues()
 
-    return render(
+    return _render(
         request,
         "myapp/game_list.html",
         {
@@ -388,8 +1196,10 @@ def game_list(request):
             "selected_team_name": next((t.name for t in teams if t.id == team_id), ""),
             # 担当チームが1つも無ければ、押しても弾かれるだけの登録導線は見せない。
             # 判定はリーグの絞り込みに関係なく、全チームで行う
-            "can_create_game": DjangoTeamPermissionQuery().can_manage_any(request.user, [t.id for t in all_teams]),
+            "can_create_game": world is None
+            and build_permission_query().can_manage_any(request.user, [t.id for t in all_teams]),
         },
+        world,
     )
 
 
@@ -403,7 +1213,7 @@ def game_create(request):
     if request.method == "POST" and form.is_valid():
         home_team_id = form.cleaned_data["home_team"]
         away_team_id = form.cleaned_data["away_team"]
-        if not DjangoTeamPermissionQuery().can_manage_any(request.user, (home_team_id, away_team_id)):
+        if not build_permission_query().can_manage_any(request.user, (home_team_id, away_team_id)):
             messages.error(request, "どちらのチームも担当していないため、この試合は登録できません。")
         else:
             try:
@@ -443,7 +1253,7 @@ def game_edit(request, game_id):
         raise Http404("試合が見つかりません。") from None
 
     header = data.header
-    if not DjangoTeamPermissionQuery().can_manage_any(request.user, (header.home_team_id, header.away_team_id)):
+    if not build_permission_query().can_manage_any(request.user, (header.home_team_id, header.away_team_id)):
         raise PermissionDenied("このチームを編集する権限がありません。")
 
     return render(
@@ -578,38 +1388,58 @@ def _scorebook_vocabulary() -> dict:
     }
 
 
-def game_detail(request, game_id):
+def game_detail(request, game_id, world_id=None):
     """試合詳細。その試合の出場選手の成績を並べる。"""
+    service, world = _scope(world_id)
     try:
-        detail = build_service().get_game_detail(game_id)
+        detail = service.get_game_detail(game_id)
     except GameNotFound:
         raise Http404("試合が見つかりません。") from None
 
-    can_edit = DjangoTeamPermissionQuery().can_manage_any(
+    # シミュレーションの試合は手で直さない
+    can_edit = world is None and build_permission_query().can_manage_any(
         request.user, (detail.game.home_team_id, detail.game.away_team_id)
     )
-    return render(request, "myapp/game_detail.html", {"detail": detail, "can_edit": can_edit})
+    return _render(request, "myapp/game_detail.html", {"detail": detail, "can_edit": can_edit}, world)
 
 
-def player_detail(request, team_id, player_id):
+def _ratings_card(world: WorldContext | None, player_id: int) -> PlayerRatingsCard | None:
+    """選手ページの能力のカード。能力はペナントの世界の選手だけで、実データの選手には出さない。"""
+    if world is None:
+        return None
+    return build_pennant_ratings_service(world.world_id).get_card(player_id)
+
+
+def _ratings_history(world: WorldContext | None, player_id: int) -> PlayerRatingsHistory | None:
+    """選手ページの能力の推移。能力と同じく、ペナントの世界の選手だけ。"""
+    if world is None:
+        return None
+    return build_pennant_ratings_service(world.world_id).get_history(player_id)
+
+
+def player_detail(request, team_id, player_id, world_id=None):
     """選手の個人ページ。通算・年度別・月別の成績と、選んだ月の試合ごとの記録。
 
     月の指定（`?month=2026-04`）が不正なら application 側が最新の月に落とす。
     ここでは弾かず、そのまま渡す（並べ替えのキーと同じ扱い）。
     """
+    service, world = _scope(world_id)
     try:
-        profile = build_service().get_player_profile(team_id, player_id, month=request.GET.get("month"))
+        profile = service.get_player_profile(team_id, player_id, month=request.GET.get("month"))
     except (TeamNotFound, PlayerNotFound):
         raise Http404("選手が見つかりません。") from None
 
-    return render(
+    return _render(
         request,
         "myapp/player_detail.html",
         {
             "profile": profile,
             "player": profile.detail,
-            "can_edit_team": DjangoTeamPermissionQuery().can_manage(request.user, team_id),
+            "ratings_card": _ratings_card(world, player_id),
+            "ratings_history": _ratings_history(world, player_id),
+            "can_edit_team": world is None and build_permission_query().can_manage(request.user, team_id),
         },
+        world,
     )
 
 
@@ -623,7 +1453,7 @@ def player_edit(request, team_id, player_id):
     except (TeamNotFound, PlayerNotFound):
         raise Http404("選手が見つかりません。") from None
 
-    if not DjangoTeamPermissionQuery().can_manage(request.user, team_id):
+    if not build_permission_query().can_manage(request.user, team_id):
         raise PermissionDenied("このチームを編集する権限がありません。")
 
     if request.method == "POST":

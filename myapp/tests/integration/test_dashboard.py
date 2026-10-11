@@ -127,6 +127,50 @@ class DashboardLeadersTest(BaseCase):
                 expected = titles[department.key].leader
                 self.assertEqual(department.leader, expected)
 
+    def test_leaders_count_interleague_games_like_the_titles_page(self):
+        """交流戦も数える（タイトル画面と同じ）。成績にも、率の部門の規定の基準になる試合数にも。
+
+        自軍はリーグ内1試合・交流戦2試合で3試合。規定打席 9.3・規定投球回 3 になり、
+        リーグ内の1試合だけに出た選手（4打席・2回）は規定に届かない。試合数をリーグ内の
+        対戦だけで数えると（1試合）この選手が規定に届いて首位になり、タイトル画面とずれる。
+        """
+        other = orm_models.League.objects.create(name="別リーグ")
+        x = orm_models.Team.objects.create(league=other, name="Xチーム")
+        regular = self.service.register_player(self.team.id, "常連", 3, "内野手")
+        spot = self.service.register_player(self.team.id, "代打", 4, "内野手")
+        starter = self.service.register_player(self.team.id, "先発", 18, "投手")
+        spot_pitcher = self.service.register_player(self.team.id, "谷間", 19, "投手")
+        play_game(
+            self.team,
+            self.rival,
+            day=1,
+            batting={
+                regular.id: BattingLine(at_bats=4, singles=2),
+                spot.id: BattingLine(at_bats=4, singles=4),
+            },
+            pitching={
+                starter.id: PitchingLine(innings=InningsPitched.from_notation("7.0"), earned_runs=1),
+                spot_pitcher.id: PitchingLine(innings=InningsPitched.from_notation("2.0")),
+            },
+        )
+        for day in (2, 3):
+            play_game(
+                self.team,
+                x,
+                day=day,
+                batting={regular.id: BattingLine(at_bats=4, singles=2)},
+                pitching={starter.id: PitchingLine(innings=InningsPitched.from_notation("9.0"), earned_runs=1)},
+            )
+
+        league = next(g for g in self.service.get_dashboard().leagues if g.league_id == self.league.id)
+        titles = {d.key: d for d in self.service.get_league_titles(self.league.id).departments}
+
+        self.assertEqual(_leader(league, "average").player_name, "常連")
+        self.assertEqual(_leader(league, "era").player_name, "先発")
+        for department in league.leaders:
+            with self.subTest(key=department.key):
+                self.assertEqual(department.leader, titles[department.key].leader)
+
     def test_leaders_are_split_by_league(self):
         """タイトルはリーグの中で争われる。他リーグの選手と比べない。"""
         other = orm_models.League.objects.create(name="別リーグ")

@@ -1,7 +1,7 @@
-{# 編集できない成績値の表示。player_edit.html から label / value を渡して使う #}
+{# 編集できない成績値の表示。player_edit.html から label / value を渡して使う。能力のマスは rating（RatingCell）を渡す #}
 <div class="col-6 col-md-3">
   <div class="stat-readout">
     <span class="stat-readout-label">{{ label }}</span>
-    <span class="stat-readout-value">{{ value }}</span>
+    <span class="stat-readout-value">{% if rating %}{% include "myapp/_rating_grade.html" with rating=rating %}{% else %}{{ value }}{% endif %}</span>
   </div>
 </div>

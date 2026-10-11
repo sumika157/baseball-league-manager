@@ -1,0 +1,13 @@
+{% comment %}救援陣の1行。row（ClubPitcherUsage）、role（抑えなら「抑え」）。usage と club は呼び出し元の文脈。{% endcomment %}
+{% load scoped %}
+<tr>
+  <td>
+    <a href="{% scoped_url 'player_detail' club.team_id row.player_id %}" class="player-name">{{ row.name }}</a>
+    {% if role %}<span class="badge bg-primary">{{ role }}</span>{% endif %}
+    {% if row.is_foreign %}<span class="badge bg-secondary">外国人</span>{% endif %}
+  </td>
+  {% if usage.next_game_on %}
+    {% for pitched in row.pitched_recently %}<td class="text-center">{% if pitched %}登板{% else %}<span class="stat-muted">—</span>{% endif %}</td>{% endfor %}
+    <td class="text-center">{% if row.can_pitch %}投げられる{% else %}<span class="stat-muted">連投のため休み</span>{% endif %}</td>
+  {% endif %}
+</tr>

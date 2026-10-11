@@ -11,24 +11,47 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+from datetime import date
 from typing import Protocol, runtime_checkable
 
 from ..domain.entities import Game
-from .dto import ActivePlayerStats, GameRow, PlayerFielding, ServiceHistory, TeamAnalysisFacts, TeamSummary
+from ..domain.pennant.retirement import PlayingTime
+from ..domain.value_objects import FieldingLine
+from .dto import (
+    ActivePlayerStats,
+    GameNote,
+    GameRow,
+    OffseasonFacts,
+    PeriodBatting,
+    PeriodPitching,
+    PlayerFielding,
+    RatingsHistoryFacts,
+    ServiceHistory,
+    SimulationContext,
+    SimulationTeam,
+    TeamAnalysisFacts,
+    TeamSummary,
+    WorldSummary,
+)
 
 
 @runtime_checkable
 class PlayerStatsQuery(Protocol):
-    """在籍中の選手の成績の参照。ランキング・タイトルの材料。
+    """球団に在籍する選手の成績の参照。ランキング・タイトル・選手の一覧の材料。
 
     チーム（集約）を経由すると、順位づけに要らない経歴・主将歴・プロフィールまで
     組み立てる。ここでは成績を SQL で集計して、選手ごとの DTO にして返す。
+
+    **在籍は年と期間で引く**: 年 Y に在籍していたのは `from_year <= Y かつ (to_year が空 または Y <= to_year)`
+    の選手（`to_year` は最後に在籍した年で、その年を含む）。引退した選手も、在籍していた年のタイトルや成績に残る。
+    `year` が None なら「いま在籍中」（退団年が空）の選手の通算成績。
     """
 
     def list_season(self, league_id: int, year: int) -> list[ActivePlayerStats]:
-        """そのリーグで在籍中の選手と、そのシーズンの成績。
+        """そのリーグに `year` に在籍していた選手と、その年の成績。
 
-        成績に数えるのは、リーグのチームどうしの試合だけ（リーグをまたぐ対戦は数えない）。
+        成績に数えるのは、その年の**すべての試合**（リーグをまたぐ交流戦も含む。NPB のタイトルと同じ）。
         チームの表示順、背番号順。
         """
         ...
@@ -36,9 +59,78 @@ class PlayerStatsQuery(Protocol):
     def list_season_by_league(self, year: int) -> dict[int, list[ActivePlayerStats]]:
         """全リーグぶんの `list_season(league_id, year)` を一度に。キーはリーグid。
 
-        リーグごとの中身は `list_season` と同じ（そのリーグで在籍中の選手と、リーグ内の対戦だけの成績）。
-        在籍中の選手がいないリーグはキーに現れない。
+        リーグごとの中身は `list_season` と同じ（そのリーグに `year` に在籍していた選手と、交流戦も含む
+        その年の成績）。読むのは範囲（`WorldScope`）の中だけ。在籍していた選手がいないリーグはキーに現れない。
         """
+        ...
+
+    def list_roster(
+        self,
+        *,
+        year: int | None,
+        team_id: int | None = None,
+        league_id: int | None = None,
+        with_profile: bool = False,
+    ) -> list[ActivePlayerStats]:
+        """球団（`team_id`）またはリーグ（`league_id`）の選手と成績。どちらも None なら世界の全選手。
+
+        `year` が None なら在籍中の選手の通算成績、年を渡せばその年に在籍していた選手のその年の成績
+        （`list_season` と同じ数え方）。球団を指定したときだけ、主将かどうか（`is_captain`）を読む。
+        `with_profile` を立てたときだけ、年齢などの材料（`profile`）を読む（タイトルには要らない）。
+        """
+        ...
+
+
+@runtime_checkable
+class FieldingTotalsQuery(Protocol):
+    """選手の通算守備成績の参照（世界の作成時に、守備力の推定に使う）。"""
+
+    def totals_for(self, player_ids: Sequence[int]) -> dict[int, FieldingLine]:
+        """選手 id → 通算の守備成績。守備に就いた試合が無い選手は含めない。"""
+        ...
+
+
+@runtime_checkable
+class SimulationContextQuery(Protocol):
+    """日を進めるのに要る世界の状態の参照（ペナントの進行が使う）。
+
+    球団・選手・直近の登板を、集約（`Team` / `Game`）を組み立てずにまとめて読む。
+    **1回の「進める」で1度だけ読み**、その後の登板は呼び出し側がメモリで足していく。
+    能力はここに含めない（`RatingsRepository` が出典）。
+    """
+
+    def last_played_on(self) -> date | None:
+        """世界の「今日」。消化した最後の試合日で、まだ1試合も無ければ None。"""
+        ...
+
+    def teams(self) -> tuple[SimulationTeam, ...]:
+        """球団と、その現在の選手と、リーグの外国人の枠だけ（直近の登板は読まない。編成の画面が使う）。"""
+        ...
+
+    def load(self, *, before: date) -> SimulationContext:
+        """`before` より前の試合から導ける状態を読む。
+
+        - 球団と、その現在の選手（登録位置・外国人かどうか）と、リーグの外国人の枠
+        - 投手ごとの直近の先発の日（`before` より前のすべての試合から。期間を切ると、
+          まとめて進めるか1日ずつ進めるかで「中何日か」の答えが変わる）
+        - `before` の直前の数日の登板（連投の判断。数日あれば足りる）
+        """
+        ...
+
+
+@runtime_checkable
+class WorldSummaryQuery(Protocol):
+    """世界の見出し（今日・局面の材料・受け持つ球団）の参照。世界の台帳そのものなので範囲は持たない。
+
+    **世界の数にかかわらず、一定のクエリ数でまとめて読む**（世界ごとにサービスを組み立てて読み直さない）。
+    """
+
+    def get(self, world_id: int) -> WorldSummary:
+        """無ければ WorldNotFound。"""
+        ...
+
+    def list_all(self) -> list[WorldSummary]:
+        """新しく作った世界から順に。"""
         ...
 
 
@@ -71,16 +163,27 @@ class GameListQuery(Protocol):
         team_id: int | None = None,
         month: int | None = None,
         league_id: int | None = None,
+        after: date | None = None,
+        through: date | None = None,
     ) -> list[GameRow]:
-        """絞り込んだ試合を新しい順に返す。"""
+        """絞り込んだ試合を新しい順に返す。`after` より後、`through` 以前の試合に絞れる。"""
         ...
 
     def list_for_standings(self, *, year: int | None = None) -> list[Game]:
         """順位表の計算に渡す試合。成績の明細は持たない。"""
         ...
 
-    def list_seasons(self) -> list[int]:
-        """試合のある年を新しい順に返す。"""
+    def list_for_player(self, team_id: int, player_id: int) -> list[Game]:
+        """そのチームの試合のうち、選手が出場した試合。その選手の打撃・投球の明細だけを持つ（参照専用）。試合日の古い順。"""
+        ...
+
+    def list_seasons(self, *, league_id: int | None = None, recorded_only: bool = False) -> list[int]:
+        """試合のある年を新しい順に返す。
+
+        `league_id` を渡すと、そのリーグのチームが出た試合のある年だけ。
+        `recorded_only` を立てると記録済みの試合だけを数える
+        （タイトルや順位表の年の選択肢。未記録の試合しか無い年は選べない）。全シーズンの試合を組み立てずに年を知るためのもの。
+        """
         ...
 
     def count_by_team(self, *, year: int | None = None) -> dict[int, int]:
@@ -95,6 +198,66 @@ class GameListQuery(Protocol):
 
     def latest_year(self) -> int | None:
         """最新シーズン。試合が1件も無ければ None。"""
+        ...
+
+
+@runtime_checkable
+class PennantActivityQuery(Protocol):
+    """GM ホームの「進めた結果」に要る、期間の見どころの参照（責任投手・本塁打・期間の成績）。
+
+    試合の明細（打撃・投球）を SQL で集計するだけで、集約（`Game`）は組み立てない。
+    """
+
+    def game_notes(self, game_ids: Sequence[int]) -> dict[int, GameNote]:
+        """試合ごとの責任投手（勝・敗・セーブ）と本塁打を打った選手。明細の無い試合は含めない。"""
+        ...
+
+    def batting_between(self, team_id: int, *, after: date, through: date) -> list[PeriodBatting]:
+        """`after` より後、`through` 以前の、球団の打者ごとの打撃の合計。出場の無い選手は含めない。"""
+        ...
+
+    def pitching_between(self, team_id: int, *, after: date, through: date) -> list[PeriodPitching]:
+        """同じ期間の、球団の投手ごとの勝・敗・セーブ。登板の無い選手は含めない。"""
+        ...
+
+
+@runtime_checkable
+class SeasonPlayingTimeQuery(Protocol):
+    """世界のその年の出場機会の参照。シーズンを締めるときの引退の材料。
+
+    打席数と投球のアウト数を、選手ごとに SQL で集計する（集約は組み立てない）。
+    """
+
+    def for_year(self, year: int) -> Mapping[int, PlayingTime]:
+        """その年に打席に立った・投げた選手の出場機会。どちらも無い選手は含めない。"""
+        ...
+
+
+@runtime_checkable
+class OffseasonQuery(Protocol):
+    """世界のオフの結果の参照。締める処理は結果を保存しないので、在籍・プロフィール・能力から導く。
+
+    - 締めた年 Y: 翌年 Y+1 の能力の行がある（開幕年より前を除く。domain の `is_season_closed`）
+    - 引退・退団: 在籍の退団年が Y
+    - 新人: 在籍の加入年が Y+1
+    - 残った選手: Y と Y+1 の両方の能力がある
+    """
+
+    def has_ratings(self, year: int) -> bool:
+        """その年の能力の行があるか。「締めたか」の判定は domain の `is_season_closed` が持つ（これはその材料）。"""
+        ...
+
+    def facts(self, year: int) -> OffseasonFacts:
+        """Y 年のオフの材料。集約は組み立てず、SQL で読む。"""
+        ...
+
+
+@runtime_checkable
+class RatingsHistoryQuery(Protocol):
+    """選手ひとりの能力の推移の参照（選手ページ）。球団の集約を読まず、小さな3本のクエリで読む。"""
+
+    def for_player(self, player_id: int) -> RatingsHistoryFacts | None:
+        """範囲の外の選手は None。能力の無い選手は、能力が空の材料を返す。"""
         ...
 
 

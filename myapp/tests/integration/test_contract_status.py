@@ -7,12 +7,15 @@ from django.contrib.auth.models import User
 from django.urls import reverse
 
 from myapp.domain.exceptions import InvalidContract, RegisteredPlayerLimitExceeded
+from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import ContractStatus
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoLeagueRepository, DjangoTeamRepository
 
 from ..helpers import build_roster_service, login_as_manager
 from .base import BaseCase
+
+REAL = WorldScope.real()
 
 DEVELOPMENTAL = ContractStatus.DEVELOPMENTAL.value
 
@@ -22,7 +25,7 @@ class ContractRepositoryTest(BaseCase):
         player = self.service.register_player(self.team.id, "育成", 120, "投手", contract_label=DEVELOPMENTAL)
         build_roster_service().promote_player(self.team.id, player.id, 30, year=2026)
 
-        team = DjangoTeamRepository().find_by_id(self.team.id)
+        team = DjangoTeamRepository(REAL).find_by_id(self.team.id)
         stint = team.current_stint(team.find_player(player.id))
         self.assertIs(stint.signed_as, ContractStatus.DEVELOPMENTAL)
         self.assertEqual(stint.promoted_year, 2026)
@@ -33,11 +36,11 @@ class ContractRepositoryTest(BaseCase):
         self.assertEqual(row.number_before_promotion, "120")
 
     def test_league_limit_round_trips(self):
-        self.assertEqual(DjangoLeagueRepository().find_by_id(self.league.id).registered_player_limit, 70)
+        self.assertEqual(DjangoLeagueRepository(REAL).find_by_id(self.league.id).registered_player_limit, 70)
 
         orm_models.League.objects.filter(id=self.league.id).update(registered_player_limit=None)
 
-        self.assertIsNone(DjangoLeagueRepository().find_by_id(self.league.id).registered_player_limit)
+        self.assertIsNone(DjangoLeagueRepository(REAL).find_by_id(self.league.id).registered_player_limit)
 
 
 class ContractBackfillTest(BaseCase):

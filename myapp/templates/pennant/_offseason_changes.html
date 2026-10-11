@@ -1,0 +1,29 @@
+{% load scoped %}{% comment %}オフの結果の「能力の変化」の表。rows は OffseasonChangeRow。{% endcomment %}
+<div class="table-responsive">
+  <table class="table table-hover mb-0">
+    <thead>
+      <tr>
+        {% if show_team %}<th>球団</th>{% endif %}
+        <th>選手</th>
+        <th>位置</th>
+        <th class="text-end">年齢</th>
+        <th>総合（前）</th>
+        <th>総合（後）</th>
+        <th class="text-end">変化</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+        <tr>
+          {% if show_team %}<td>{{ row.team_name }}</td>{% endif %}
+          <td><a href="{% scoped_url 'player_detail' row.team_id row.player_id %}" class="player-name">{{ row.name }}</a></td>
+          <td>{{ row.position }}</td>
+          <td class="text-end">{{ row.age|default_if_none:"—" }}</td>
+          <td>{% include 'myapp/_rating_grade.html' with rating=row.before %}</td>
+          <td>{% include 'myapp/_rating_grade.html' with rating=row.after %}</td>
+          <td class="text-end stat-key">{{ row.delta_label }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

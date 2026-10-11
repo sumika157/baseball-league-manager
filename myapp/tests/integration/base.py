@@ -5,6 +5,8 @@
 helpers の play_game / give_batting / give_pitching で試合を作る。
 """
 
+from unittest.mock import patch
+
 from django.test import TestCase
 
 from myapp.infrastructure import orm_models
@@ -21,3 +23,14 @@ class BaseCase(TestCase):
         self.team = orm_models.Team.objects.create(league=self.league, name="テストチーム", home_stadium=self.stadium)
         self.rival = orm_models.Team.objects.create(league=self.league, name="相手チーム")
         self.service = build_service()
+
+    def skip_roster_check(self) -> None:
+        """世界の作成の名簿の検査を外す。
+
+        世界の作成は、試合を組めない名簿の球団を弾く（`test_world_roster_check.py`）。分岐の中身や世界の画面を
+        小さな名簿で確かめるテストは、選手を足さずに済むよう、検査だけを外す（足すと選手の数を数える
+        アサーションがずれる）。
+        """
+        patcher = patch("myapp.application.pennant_world.ensure_roster_playable")
+        patcher.start()
+        self.addCleanup(patcher.stop)

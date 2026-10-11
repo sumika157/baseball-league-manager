@@ -153,8 +153,8 @@ class LeagueDetailTest(BaseCase):
 class LeagueTitlesViewTest(BaseCase):
     """リーグのタイトル一覧（フェーズ4）。
 
-    ダッシュボードのランキングは通算成績だが、タイトルはシーズンごとに
-    争われるので、対象シーズンの試合だけから成績を積み直す。
+    タイトルはシーズンごとに争われるので、対象シーズンの試合だけから成績を積み直す
+    （ダッシュボードの部門の首位も同じ集計から取る）。
     """
 
     def setUp(self):
@@ -262,6 +262,8 @@ class LeagueTitlesViewTest(BaseCase):
         self.assertEqual(departments["saves"].leader.value, "1")
 
     def test_departments_are_scoped_to_the_season(self):
+        # 2025年の試合に出るのは、2025年から在籍している選手（在籍の期間で引く）
+        orm_models.PlayerStint.objects.filter(player_id=self.slugger.id).update(from_year=2025)
         give_batting(
             self.team,
             self.rival,

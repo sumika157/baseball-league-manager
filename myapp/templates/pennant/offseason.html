@@ -1,0 +1,125 @@
+{% extends 'myapp/base.html' %}
+{% load scoped %}
+
+{% block title %}{{ summary.year }}年オフ - {{ world.name }} - ペナント - Baseball Manager{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb">
+    {% include 'pennant/_crumbs.html' %}
+    <li class="breadcrumb-item active" aria-current="page">{{ summary.year }}年オフ</li>
+  </ol>
+</nav>{% include 'pennant/_world_bar.html' %}
+
+{% comment %}
+オフの結果。締める処理は結果を保存しないので、在籍・能力から導いた値（OffseasonSummary）を並べるだけ。
+上から、自軍（引退・新人・能力の変化）→ リーグ別の引退・退団と新人 → 成長と衰えの大きかった選手。
+年齢は、引退・退団は締めた年、新人と残った選手は翌年の開幕時点。能力は S〜G の区分と総合値（野手は打撃、投手は抑える力）。
+{% endcomment %}
+<div class="page-head">
+  <h1 class="page-title">{{ summary.year }}年オフ（{{ summary.next_year }}年シーズンへ）</h1>
+  <p class="page-subtitle">引退・退団 {{ summary.retired_total }}人 · 新人 {{ summary.rookie_total }}人。年齢は、引退・退団は{{ summary.year }}年、新人と残った選手は{{ summary.next_year }}年の開幕時点です。</p>
+</div>
+
+{% if summary.own_team_id %}
+  <h2 class="h5 mb-3">自軍（{{ summary.own_team_name }}）</h2>
+  <div class="row g-3 mb-4">
+    <div class="col-lg-6">
+      <div class="card h-100">
+        <div class="card-header">引退・退団（{{ summary.own_retired|length }}人）</div>
+        <div class="card-body p-0">
+          {% if summary.own_retired %}
+            {% include 'pennant/_offseason_retired.html' with rows=summary.own_retired show_team=False %}
+          {% else %}
+            <div class="empty-state">引退・退団した選手はいません。</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="card h-100">
+        <div class="card-header">新人（{{ summary.own_rookies|length }}人）</div>
+        <div class="card-body p-0">
+          {% if summary.own_rookies %}
+            {% include 'pennant/_offseason_rookies.html' with rows=summary.own_rookies show_team=False %}
+          {% else %}
+            <div class="empty-state">新人はいません。</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card mb-4">
+    <div class="card-header">能力の変化（残った選手。差の大きい順）</div>
+    <div class="card-body p-0">
+      {% if summary.own_changes %}
+        {% include 'pennant/_offseason_changes.html' with rows=summary.own_changes show_team=False %}
+      {% else %}
+        <div class="empty-state">能力の変化を比べられる選手がいません。</div>
+      {% endif %}
+    </div>
+  </div>
+{% endif %}
+
+<h2 class="h5 mb-3">リーグ別の引退・退団と新人</h2>
+{% if summary.leagues|length > 1 %}
+  <form method="get" class="d-flex gap-2 mb-3" action="{% url 'pennant_offseason' world.world_id summary.year %}">
+    <select name="league" class="form-select form-select-sm" aria-label="リーグ" style="max-width: 16rem;">
+      {% for league in summary.leagues %}
+        <option value="{{ league.id }}" {% if league.id == summary.selected_league_id %}selected{% endif %}>{{ league.name }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="btn btn-secondary btn-sm">表示</button>
+  </form>
+{% endif %}
+
+<div class="card mb-4">
+  <div class="card-header">引退・退団（{{ summary.retired|length }}人）</div>
+  <div class="card-body p-0">
+    {% if summary.retired %}
+      {% include 'pennant/_offseason_retired.html' with rows=summary.retired show_team=True %}
+    {% else %}
+      <div class="empty-state">このリーグに引退・退団した選手はいません。</div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header">新人（{{ summary.rookies|length }}人）</div>
+  <div class="card-body p-0">
+    {% if summary.rookies %}
+      {% include 'pennant/_offseason_rookies.html' with rows=summary.rookies show_team=True %}
+    {% else %}
+      <div class="empty-state">このリーグに新人はいません。</div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-xl-6">
+    <div class="card h-100">
+      <div class="card-header">成長の大きかった選手（上位）</div>
+      <div class="card-body p-0">
+        {% if summary.risers %}
+          {% include 'pennant/_offseason_changes.html' with rows=summary.risers show_team=True %}
+        {% else %}
+          <div class="empty-state">能力が伸びた選手はいません。</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  <div class="col-xl-6">
+    <div class="card h-100">
+      <div class="card-header">衰えの大きかった選手（上位）</div>
+      <div class="card-body p-0">
+        {% if summary.decliners %}
+          {% include 'pennant/_offseason_changes.html' with rows=summary.decliners show_team=True %}
+        {% else %}
+          <div class="empty-state">能力が落ちた選手はいません。</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

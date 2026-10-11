@@ -1,0 +1,4 @@
+{% comment %}フォームの項目1つぶんのエラー。errors を渡す。{% endcomment %}
+{% for error in errors %}
+  <div class="text-danger" style="font-size: 0.8125rem;">{{ error }}</div>
+{% endfor %}

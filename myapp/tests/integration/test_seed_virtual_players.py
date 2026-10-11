@@ -12,10 +12,12 @@ from unittest import mock
 from django.core.management import call_command
 from django.test import SimpleTestCase
 
+from myapp.domain.pennant.world import WorldScope
+from myapp.domain.virtual_players import generator
+from myapp.domain.virtual_players.generator import MAX_ROSTER, MIN_ROSTER
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoTeamRepository
-from myapp.management.commands import seed_virtual_players
-from myapp.management.commands.seed_virtual_players import MAX_ROSTER, MIN_ROSTER, ORIGINAL_PLAYER_READINGS
+from myapp.management.commands.seed_virtual_players import ORIGINAL_PLAYER_READINGS
 
 from .base import BaseCase
 
@@ -90,7 +92,7 @@ class SeedRosterTest(BaseCase):
                 self.assertTrue(player.name_kana)
 
     def test_foreign_players_carry_nationality_and_no_japanese_amateur_career(self):
-        with mock.patch.object(seed_virtual_players, "FOREIGN_PLAYER_RATIO", 0.5):
+        with mock.patch.object(generator, "FOREIGN_PLAYER_RATIO", 0.5):
             run()
 
         new_players = [s.player for s in active_stints(self.team) if s.player != self.original]
@@ -139,7 +141,7 @@ class SeedForeignPlayerQuotaTest(BaseCase):
         add_player(self.team, "マイケル・ジョンソン", number=1, is_foreign=True)
 
         # 全員を外国人として抽選させ、枠だけが歯止めになる状況を作る
-        with mock.patch.object(seed_virtual_players, "FOREIGN_PLAYER_RATIO", 1.0):
+        with mock.patch.object(generator, "FOREIGN_PLAYER_RATIO", 1.0):
             run()
 
         for team in (self.team, self.rival):
@@ -147,13 +149,13 @@ class SeedForeignPlayerQuotaTest(BaseCase):
                 foreign = [s for s in active_stints(team) if s.player.is_foreign_player]
                 self.assertEqual(len(foreign), 2)
                 # 集約自身の検査にも通る
-                DjangoTeamRepository().find_by_id(team.id).ensure_foreign_player_quota(2)
+                DjangoTeamRepository(WorldScope.real()).find_by_id(team.id).ensure_foreign_player_quota(2)
 
     def test_blank_limit_means_unlimited(self):
         self.league.foreign_player_roster_limit = None
         self.league.save()
 
-        with mock.patch.object(seed_virtual_players, "FOREIGN_PLAYER_RATIO", 1.0):
+        with mock.patch.object(generator, "FOREIGN_PLAYER_RATIO", 1.0):
             run()
 
         self.assertTrue(all(s.player.is_foreign_player for s in active_stints(self.team)))
@@ -248,7 +250,7 @@ class RefreshSchoolsTest(BaseCase):
         virtual = add_player(self.team, "佐藤翔太", number=12, birthplace="北海道")
 
         # 私立を引かせない
-        with mock.patch.object(seed_virtual_players, "PRIVATE_HIGH_SCHOOL_RATIO", 0.0):
+        with mock.patch.object(generator, "PRIVATE_HIGH_SCHOOL_RATIO", 0.0):
             run("--refresh-schools")
 
         virtual.refresh_from_db()
@@ -260,9 +262,9 @@ class LargestRemainderTest(SimpleTestCase):
     """ポジションの人数配分（最大剰余法）は合計を崩さない。"""
 
     def test_allocation_sums_to_total(self):
-        ratios = seed_virtual_players.POSITION_RATIOS
+        ratios = generator.POSITION_RATIOS
         for total in range(MIN_ROSTER, MAX_ROSTER + 1):
             with self.subTest(total=total):
-                allocation = seed_virtual_players.largest_remainder(total, ratios)
+                allocation = generator.largest_remainder(total, ratios)
                 self.assertEqual(sum(allocation.values()), total)
                 self.assertEqual(Counter(allocation.keys()), Counter(ratios.keys()))

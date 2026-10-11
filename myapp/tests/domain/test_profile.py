@@ -49,6 +49,13 @@ class ProfileTest(TestCase):
         self.assertEqual(profile.age(date(2026, 1, 1)), 26)
         self.assertEqual(profile.age(date(2027, 1, 1)), 27)
 
+    def test_age_or_none_does_not_raise_before_birth(self):
+        profile = Profile(birth_date=date(2000, 5, 5))
+
+        self.assertIsNone(profile.age_or_none(date(1999, 1, 1)))
+        self.assertEqual(profile.age_or_none(date(2026, 5, 5)), 26)
+        self.assertIsNone(Profile().age_or_none(date(2026, 5, 5)))
+
     def test_age_before_birth_is_rejected(self):
         profile = Profile(birth_date=date(2000, 1, 1))
         with self.assertRaises(InvalidProfile):

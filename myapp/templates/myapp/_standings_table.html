@@ -1,6 +1,7 @@
-{% load sorting %}
+{% load sorting scoped %}
 {% comment %}
 順位表のテーブル1つぶん。rows と、並べ替えを有効にするかの sortable を渡す。
+ペナントの世界では highlight_team_id（受け持つ球団）を渡すと、その行に「自軍」の印が付く。
 リーグ画面と順位表ページの両方から使う。
 {% endcomment %}
 <div class="table-responsive">
@@ -32,7 +33,7 @@
         <tr>
           <td><span class="jersey-number">{{ row.rank }}</span></td>
           <td>
-            <a href="{% url 'player_list' row.team_id %}" class="player-name">{{ row.team_name }}</a>
+            <a href="{% scoped_url 'player_list' row.team_id %}" class="player-name{% if highlight_team_id and row.team_id == highlight_team_id %} fw-semibold{% endif %}">{{ row.team_name }}</a>{% if highlight_team_id and row.team_id == highlight_team_id %} <span class="badge bg-primary">自軍</span>{% endif %}
           </td>
           <td class="text-end stat-muted">{{ row.games_played }}</td>
           <td class="text-end">{{ row.wins }}</td>

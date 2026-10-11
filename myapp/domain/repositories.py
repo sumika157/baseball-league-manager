@@ -2,13 +2,24 @@
 
 ドメイン層は「永続化できる」ことだけを知り、それが Django ORM なのか
 他の手段なのかは知らない。実装は infrastructure 層に置く。
+
+**`TeamRepository` / `GameRepository` / `LeagueRepository` / `RatingsRepository` / `FixtureRepository` は、
+組み立てるときに `WorldScope` を必須で受け取る**（実装のコンストラクタの話で、このインターフェースには
+現れない）。読み出しはすべてその範囲に絞られ、範囲の外の id は「見つからない」になる。
+`WorldRepository` だけは世界そのものの台帳なので範囲を持たない。
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
+from datetime import date
 from typing import Protocol, runtime_checkable
 
 from .entities import Game, League, Team
+from .pennant.club_plan import ClubPlan
+from .pennant.ratings import PlayerRatings
+from .pennant.schedule import Fixture
+from .pennant.world import World
 
 
 @runtime_checkable
@@ -17,6 +28,13 @@ class TeamRepository(Protocol):
 
     def find_by_id(self, team_id: int) -> Team:
         """ロスター込みでチームを取得する。存在しなければ TeamNotFound。"""
+        ...
+
+    def roster_signature(self) -> tuple[int, int, int]:
+        """範囲の在籍の目印（行数・現在在籍の人数・最大の id）。加入・退団があれば変わる。
+
+        外で読んだ名簿が、書く前に変わっていないかを確かめるのに使う（クエリ1本）。
+        """
         ...
 
     def find_all(self) -> list[Team]:
@@ -37,7 +55,7 @@ class TeamRepository(Protocol):
         ...
 
     def save(self, team: Team) -> Team:
-        """集約の変更内容を永続化する。"""
+        """集約の変更内容を永続化する。範囲の外のリーグ・チームには書けない。"""
         ...
 
 
@@ -71,7 +89,29 @@ class GameRepository(Protocol):
         ...
 
     def save(self, game: Game) -> Game:
-        """集約の変更内容を永続化する。"""
+        """集約の変更内容を永続化する。範囲の外のチームの試合には書けない。"""
+        ...
+
+    def add_all(self, games: Sequence[Game]) -> None:
+        """新しい試合をまとめて保存する（保存した試合の id は集約に入る）。
+
+        `save()` と同じ検査を通す（明細と打席の照合 = `ensure_lines_match_plate_appearances`、
+        範囲の外のチームには書けない）。**検査は書き込みの前に全試合ぶん済ませる**ので、
+        1試合でも通らなければ何も書かない。すでに保存した試合（id がある）は渡せない
+        （InvalidGame。更新は `save()`）。新しい集約だけが対象なので、打席を読んだかどうか
+        （`plate_appearances_loaded`）は見ない。1試合ごとに `save()` するより桁違いに速い
+        （1試合あたり約50回の update_or_create を、種類ごとの一括書き込みにする）。
+        """
+        ...
+
+    def prepare_add_all(self, games: Sequence[Game]) -> Callable[[], None]:
+        """`add_all` の書く前の仕事（検査と行の組み立て）だけを済ませ、書き込みの関数を返す。
+
+        書き込みトランザクションの外で呼び、返った関数だけをトランザクションの中で呼ぶ
+        （書き込みロックを持つ時間を、SQL を流す間だけにする）。検査は `add_all` と同じで、
+        通らなければここで例外になり何も書かない。返した関数を呼ばなければ何も書かれない。
+        **返した関数は1回だけ呼ぶ**（呼ぶと試合に id が入る）。失敗したら、`prepare_add_all` からやり直す。
+        """
         ...
 
 
@@ -82,3 +122,124 @@ class LeagueRepository(Protocol):
     def find_by_id(self, league_id: int) -> League: ...
 
     def find_all(self) -> list[League]: ...
+
+    def save(self, league: League) -> League:
+        """リーグを保存する。新しいリーグは範囲の世界に属する形で作られる。"""
+        ...
+
+
+@runtime_checkable
+class WorldRepository(Protocol):
+    """世界の台帳。世界そのものの出入りだけを扱い、範囲は持たない。"""
+
+    def find_by_id(self, world_id: int) -> World:
+        """無ければ WorldNotFound。"""
+        ...
+
+    def find_all(self) -> list[World]:
+        """新しく作った世界から順に。"""
+        ...
+
+    def count_by_owner(self, owner_id: int) -> int:
+        """そのユーザーがオーナーの世界の数。世界の数の上限の検査に使う（世界を組み立てずに数える）。"""
+        ...
+
+    def save(self, world: World) -> World:
+        """世界を保存する。"""
+        ...
+
+    def delete(self, world_id: int) -> None:
+        """世界と、その世界に属するリーグ・球団・選手・試合・能力をすべて消す。無ければ WorldNotFound。"""
+        ...
+
+
+@runtime_checkable
+class FixtureRepository(Protocol):
+    """世界の未消化の対戦（日程）。消化したら `Game` を作って消す。
+
+    **試合のあとまで残さない**（日付と対戦カードの出典が `Game` と2つになるため）。
+    ペナントの世界にだけ置ける（実データには日程の概念が無い）。
+    """
+
+    def add_all(self, fixtures: Sequence[Fixture]) -> None:
+        """日程を一括で保存する。範囲の外の球団の対戦は書けない（TeamNotFound）。
+
+        同じ日・同じ対戦がすでにある、または渡した中で重複しているときは InvalidSchedule で、何も書かない。
+        """
+        ...
+
+    def find_all(self) -> list[Fixture]:
+        """範囲の未消化の対戦を、日付の順（同じ日はホームの id の順）に。"""
+        ...
+
+    def first_date(self, team_id: int | None = None) -> date | None:
+        """範囲の未消化の対戦のうち最初の日。無ければ None。日程を全件読まずに「次の試合」を知るため。
+
+        `team_id` を渡すと、その球団がホームかビジターの対戦のうち最初の日（自軍が休みの日は数えない）。
+        """
+        ...
+
+    def remove(self, fixtures: Sequence[Fixture]) -> None:
+        """消化した対戦を消す。
+
+        渡した対戦のどれかが無い（すでに消化されている）ときは InvalidSchedule で、何も消さない。
+        同じ日程を二重に消化して、同じ対戦の試合が2つできるのを防ぐ。
+        """
+        ...
+
+
+@runtime_checkable
+class RatingsRepository(Protocol):
+    """世界の中の選手の能力。選手 × 年で1組。"""
+
+    def add_all(self, ratings: Sequence[PlayerRatings]) -> None:
+        """能力を一括で保存する（ある年の能力を足す）。
+
+        範囲の外の選手には書けない（PlayerNotFound）。次は InvalidRatings で、**何も書かない**:
+        登録位置と能力の種類が合わない（投手に野手の能力、またはその逆）、同じ選手 × 年が
+        渡した中で重複している・すでに保存済みである。
+        書き込みはまとめて行う（選手ごとに1回ずつ書かない）。ただし1回の SQL に載せる行数には
+        データベースの変数の上限があるので、約1,600人ぶんは数百行ずつの数回に分かれる。
+        """
+        ...
+
+    def find_by_year(self, year: int) -> list[PlayerRatings]:
+        """その年の、範囲の全選手の能力。選手の id の順。"""
+        ...
+
+    def find_by_player(self, player_id: int) -> list[PlayerRatings]:
+        """ひとりの選手の能力を、年の順に。範囲の外の選手や能力の無い選手は空。"""
+        ...
+
+    def find_by_players(self, player_ids: Sequence[int], year: int) -> list[PlayerRatings]:
+        """指定した選手たちの、その年の能力。選手の id の順。範囲の外の選手や、その年の能力が無い選手は含まれない。
+
+        球団の表のように、選手の数が決まっている画面が、範囲の全選手を読まずに済ませるため。
+        選手ごとにクエリを投げず、1回でまとめて読む。
+        """
+        ...
+
+
+@runtime_checkable
+class ClubPlanRepository(Protocol):
+    """球団の編成の上書き（`ClubPlan`）。球団ごとに1つで、自動の区画は持たない。
+
+    ペナントの世界にだけ置ける（実データには編成の概念が無い）。
+    """
+
+    def find_all(self) -> list[ClubPlan]:
+        """範囲の、上書きを持つ球団の編成。すべて自動の球団は含まない。球団の id の順。"""
+        ...
+
+    def find_by_team(self, team_id: int) -> ClubPlan:
+        """その球団の編成。上書きが無ければ、すべて自動の編成を返す。範囲の外の球団は TeamNotFound。"""
+        ...
+
+    def save(self, plan: ClubPlan) -> ClubPlan:
+        """編成を保存する（区画ごとに丸ごと置き換える）。すべて自動なら保存済みの行を消す。
+
+        範囲の外の球団には書けない（TeamNotFound）。実データの範囲には書けない（InvalidWorld）。
+        球団に在籍していない選手が入っていても保存は止めない（在籍は変わるので、使える
+        かどうかは進めるときに `resolve_club` が判断する）。範囲の外の選手だけは書けない（PlayerNotFound）。
+        """
+        ...

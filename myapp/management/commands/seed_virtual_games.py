@@ -48,6 +48,8 @@ from django.db import transaction
 from myapp.domain import services as domain_services
 from myapp.domain.entities import FieldingError, PlateAppearance, RunnerAdvance
 from myapp.domain.exceptions import InvalidGame
+from myapp.domain.pennant.world import WorldScope
+from myapp.domain.simulation.levels import LevelTally
 from myapp.domain.value_objects import (
     AdvanceReason,
     Base,
@@ -56,12 +58,14 @@ from myapp.domain.value_objects import (
     FieldingLine,
     FieldingPosition,
     GameHeader,
+    Handedness,
     LineupEntry,
     PitchingLine,
     PlateAppearanceResult,
     Position,
     Season,
 )
+from myapp.infrastructure.scoping import games_in, leagues_in, world_condition
 from myapp.models import (
     Game,
     GameBattingLine,
@@ -71,7 +75,6 @@ from myapp.models import (
     GamePitchingLine,
     GamePlateAppearance,
     GameRunnerAdvance,
-    League,
     PlayerStint,
 )
 
@@ -253,6 +256,11 @@ def _expected_ops(talent):
     return (contact + walk) + contact * bases_per_hit
 
 
+def _suits(player, position):
+    """選手の投げる手から見て、その守備位置に就かせてよいか（左投げは捕・二・三・遊に就かない）。"""
+    return position.suits_thrower(Handedness.from_label(player.throws))
+
+
 def _forced_bases(occupied):
     """打者が一塁を与えられたときに、押し出される走者の塁。
 
@@ -340,7 +348,8 @@ class Command(BaseCommand):
         if per_pair < 1:
             raise CommandError("--games-per-pair は1以上を指定してください。")
 
-        existing = Game.objects.filter(year=year)
+        # 対象は実データだけ。ペナントの世界の試合は、--replace でも消さない
+        existing = games_in(WorldScope.real()).filter(year=year)
         if existing.exists() and not options["replace"]:
             raise CommandError(
                 f"{year}年の試合が既に {existing.count()} 件あります。"
@@ -361,7 +370,7 @@ class Command(BaseCommand):
             self._report_schedule(schedule)
             return
 
-        self.totals = defaultdict(int)
+        self.tally = LevelTally()
         with transaction.atomic():
             if options["replace"] and existing.exists():
                 removed = existing.count()
@@ -372,7 +381,7 @@ class Command(BaseCommand):
         self._say(
             self.style.SUCCESS(
                 f"{year}年 · {len(schedule)}試合を投入しました"
-                f"（打席 {self.totals['plate_appearances']}件 / 進塁 {self.totals['advances']}件）"
+                f"（打席 {self.tally.plate_appearances}件 / 進塁 {self.tally.advances}件）"
             )
         )
         self._report_schedule(schedule)
@@ -391,7 +400,9 @@ class Command(BaseCommand):
         出場させると、経歴と成績が食い違う）。
         """
         rosters = defaultdict(lambda: {"batters": [], "pitchers": [], "foreign": set()})
-        stints = PlayerStint.objects.filter(from_year__lte=year).select_related("player", "team")
+        stints = PlayerStint.objects.filter(
+            world_condition("team__league", WorldScope.real()), from_year__lte=year
+        ).select_related("player", "team")
         for stint in stints:
             if stint.to_year is not None and stint.to_year < year:
                 continue
@@ -426,10 +437,11 @@ class Command(BaseCommand):
             batters = [batters[index] for index in order]
 
         roster["batting_talent"] = talents
-        roster["regulars"] = batters[:LINEUP_SIZE]
-        roster["bench"] = batters[LINEUP_SIZE:]
-        roster["bench_weights"] = _depth_weights(len(roster["bench"]), BENCH_DECAY)
-        roster["positions"] = self._defensive_alignment(roster["regulars"])
+        positions, regulars, bench = self._defensive_alignment(batters[:LINEUP_SIZE], batters[LINEUP_SIZE:])
+        roster["positions"] = positions
+        roster["regulars"] = regulars
+        roster["bench"] = bench
+        roster["bench_weights"] = _depth_weights(len(bench), BENCH_DECAY)
 
         pitchers = roster["pitchers"]
         skills = self._pitcher_talents(pitchers)
@@ -441,29 +453,56 @@ class Command(BaseCommand):
         roster["bullpen"] = pitchers[ROTATION_SIZE:] or roster["rotation"]
 
     @staticmethod
-    def _defensive_alignment(regulars):
-        """スタメンの守備位置を決める。登録位置に合う枠から順に埋める。
+    def _defensive_alignment(regulars, bench=()):
+        """スタメンの守備位置を決める。登録位置に合う枠から順に埋める。(守備位置, スタメン, 控え) を返す。
 
-        捕手・内野4・外野3・指名打者の9枠を、登録位置が合う選手で埋める。
-        枠が埋まらない場合（外野手が足りないなど）は指名打者に回す。
-        指名打者の枠も埋まっていれば守備位置なしとする。
+        捕手・内野4・外野3・指名打者の9枠を、登録位置が合う選手で**重複なく**埋める。
+        枠が埋まらない場合（外野手が足りないなど）は、余った枠に回す。
+
+        **左投げは捕・二・三・遊に就かせない**（`FieldingPosition.allows_left_handed_thrower`）。
+        左投げを先に座らせて一塁・外野などの就ける枠を確保し、座れなかった選手は余った枠のうち
+        就ける枠（指名打者を含む）へ回す。それでも行き場の無い選手が残り、守備位置の枠が空いたままに
+        なるときは、控え（`bench`）から投げる手の合う選手をその枠のスタメンに入れ、座れなかった選手を
+        控えに回す（指名打者を2人にしない）。**控えにも合う選手がいないときだけ**、規則を曲げて
+        左投げを就かせる（AI の `choose_lineup` と同じ。枠が空いたままだと守備の記録が消えるため）。
         """
         available = {slot: list(slots) for slot, slots in DEFENSIVE_SLOTS}
         assigned = {}
         leftovers = []
 
-        for player in regulars:
+        # 左投げを先に座らせる（右投げに一塁を取られると、左投げの内野手の行き場が無くなる）
+        for player in sorted(regulars, key=lambda p: Handedness.from_label(p.throws) is not Handedness.LEFT):
             registered = Position.from_label(player.position)
-            slots = available.get(registered)
-            if slots:
-                assigned[player.id] = slots.pop(0)
+            slots = available.get(registered, [])
+            slot = next((s for s in slots if _suits(player, s)), None)
+            if slot is not None:
+                slots.remove(slot)
+                assigned[player.id] = slot
             else:
                 leftovers.append(player)
 
-        spare = [slot for slots in available.values() for slot in slots]
+        unseated = []
         for player in leftovers:
-            assigned[player.id] = spare.pop(0) if spare else FieldingPosition.DESIGNATED_HITTER
-        return assigned
+            spare = [slot for slots in available.values() for slot in slots if _suits(player, slot)]
+            if spare:
+                slot = spare[0]
+                next(slots for slots in available.values() if slot in slots).remove(slot)
+                assigned[player.id] = slot
+            else:
+                unseated.append(player)
+
+        starters = list(regulars)
+        reserves = list(bench)
+        open_slots = [slot for slots in available.values() for slot in slots]
+        for player, slot in zip(unseated, open_slots, strict=False):
+            replacement = next((b for b in reserves if _suits(b, slot)), None)
+            if replacement is None:
+                assigned[player.id] = slot  # 規則を曲げる（投げる手の合う選手がもういない）
+                continue
+            reserves[reserves.index(replacement)] = player
+            starters[starters.index(player)] = replacement
+            assigned[replacement.id] = slot
+        return assigned, starters, reserves
 
     def _batter_talents(self, batters):
         """打率・長打力・四球率を相関つきで引く。player_id → (3,) の配列。"""
@@ -486,7 +525,7 @@ class Command(BaseCommand):
     def _schedule(self, year, per_pair, rosters):
         """組み合わせと試合日だけを決める。試合の中身はまだ作らない。"""
         schedule = []
-        for league in League.objects.prefetch_related("teams"):
+        for league in leagues_in(WorldScope.real()).prefetch_related("teams"):
             teams = [
                 team for team in league.teams.all() if rosters[team.id]["batters"] and rosters[team.id]["pitchers"]
             ]
@@ -641,14 +680,20 @@ class Command(BaseCommand):
         swap = self.rng.random(len(roster["regulars"])) < BENCH_RATIO
 
         for order, (regular, replaced) in enumerate(zip(roster["regulars"], swap, strict=True), start=1):
+            # 控えが先発する場合はレギュラーの守備位置を引き継ぐので、控えもその位置に就ける選手に限る
+            inherited = roster["positions"].get(regular.id) or FieldingPosition.DESIGNATED_HITTER
             player = regular
             if replaced and bench:
                 picked = bench[self.rng.choice(len(bench), p=roster["bench_weights"])]
-                if picked.id not in side.used_player_ids and self._quota_allows(side, picked, limit):
+                if (
+                    picked.id not in side.used_player_ids
+                    and self._quota_allows(side, picked, limit)
+                    and _suits(picked, inherited)
+                ):
                     player = picked
             if player.id in side.used_player_ids:
                 player = regular
-            player = self._within_quota(side, player, bench, limit)
+            player = self._within_quota(side, player, bench, limit, inherited)
             entry = _Batter(
                 player=player,
                 batting_order=order,
@@ -661,17 +706,19 @@ class Command(BaseCommand):
             self._join(side, entry)
 
     @classmethod
-    def _within_quota(cls, side, wanted, alternatives, limit):
+    def _within_quota(cls, side, wanted, alternatives, limit, position=None):
         """外国人枠に収まる選手を返す。収まらなければ控えから代わりを探す。
 
         代わりが見つからないロスター（外国人ばかりのチーム）では、そのまま返す。
+        `position` を渡すと、2段で探す。まずその守備位置に就ける選手（投げる手が合う）、
+        いなければ外国人枠だけを満たす選手（このとき投げる手の規則は曲げる。外国人枠はリーグの規則で、
+        破ると保存した試合が検査に通らないため）。
         """
         if cls._quota_allows(side, wanted, limit):
             return wanted
-        for other in alternatives:
-            if other.id not in side.used_player_ids and cls._quota_allows(side, other, limit):
-                return other
-        return wanted
+        usable = [o for o in alternatives if o.id not in side.used_player_ids and cls._quota_allows(side, o, limit)]
+        suited = [o for o in usable if position is None or _suits(o, position)]
+        return (suited or usable or [wanted])[0]
 
     def _next_batter(self, side, inning, limit):
         """次の打者。打順は1〜9を巡回する（スコアブックを横に読む性質そのもの）。"""
@@ -1258,29 +1305,8 @@ class Command(BaseCommand):
     # --- 報告 ---
 
     def _count(self, record):
-        """投入した水準を数える。NPB の値と並べて確認するために使う。"""
-        game = record["game"]
-        self.totals["games"] += 1
-        self.totals["runs"] += game.home_score + game.away_score
-        self.totals["plate_appearances"] += len(game.plate_appearances)
-        self.totals["advances"] += sum(len(entry.advances) for entry in game.plate_appearances)
-        self.totals["errors"] += sum(len(entry.errors) for entry in game.plate_appearances)
-        for entry in game.batting:
-            line = entry.line
-            self.totals["at_bats"] += line.at_bats
-            self.totals["hits"] += line.hits
-            self.totals["home_runs"] += line.home_runs
-            self.totals["walks"] += line.walks
-            self.totals["sacrifice_bunts"] += line.sacrifice_bunts
-            self.totals["stolen_bases"] += line.stolen_bases
-            self.totals["caught_stealing"] += line.caught_stealing
-            self.totals["double_plays"] += line.double_plays
-        for entry in game.pitching:
-            line = entry.line
-            self.totals["outs"] += line.innings.outs
-            self.totals["earned_runs"] += line.earned_runs
-            self.totals["runs_allowed"] += line.runs_allowed
-            self.totals["strikeouts"] += line.strikeouts
+        """投入した試合を水準に足す。NPB の値と並べて確認するために使う。"""
+        self.tally.add(record["game"])
 
     def _report_schedule(self, schedule):
         counts = defaultdict(int)
@@ -1290,27 +1316,10 @@ class Command(BaseCommand):
             self._say(f"  {league_name}: {count}試合")
 
     def _report_levels(self):
-        """リーグ全体の水準。NPB の目安と並べて、投入したデータの現実味を見る。"""
-        games = max(1, self.totals["games"])
-        at_bats = max(1, self.totals["at_bats"])
-        innings = max(1.0, self.totals["outs"] / OUTS_PER_INNING)
+        """リーグ全体の水準。NPB の目標帯と並べて、投入したデータの現実味を見る。
 
-        per_team_game = games * 2
-        rows = [
-            ("1試合平均得点", self.totals["runs"] / per_team_game, 3.9),
-            ("リーグ打率", self.totals["hits"] / at_bats, 0.255),
-            ("リーグ防御率", self.totals["earned_runs"] * 9 / innings, 3.50),
-            ("K/9", self.totals["strikeouts"] * 9 / innings, 7.5),
-            ("BB/9", self.totals["walks"] * 9 / innings, 2.7),
-            ("HR/9", self.totals["home_runs"] * 9 / innings, 0.9),
-            ("1試合の失策", self.totals["errors"] / games, 1.2),
-            # 打席から数えられるようになった項目。1チーム1試合あたりで見る
-            ("犠打", self.totals["sacrifice_bunts"] / per_team_game, 0.6),
-            ("盗塁", self.totals["stolen_bases"] / per_team_game, 0.55),
-            ("盗塁刺", self.totals["caught_stealing"] / per_team_game, 0.2),
-            ("併殺打", self.totals["double_plays"] / per_team_game, 0.7),
-            ("失点", self.totals["runs_allowed"] / per_team_game, 3.9),
-        ]
-        self._say("  リーグ全体の水準（括弧内は NPB の目安）:")
-        for label, value, target in rows:
-            self._say(f"    {label}: {value:.3f}（{target}）")
+        数え方と目標帯は `domain.simulation.levels` が唯一の出典（シミュレーションエンジンと共有する）。
+        """
+        self._say("  リーグ全体の水準（括弧内は NPB の目標帯）:")
+        for row in self.tally.rows():
+            self._say(f"    {row.label}: {row.value:.3f}（{row.target.low:g}〜{row.target.high:g}）")

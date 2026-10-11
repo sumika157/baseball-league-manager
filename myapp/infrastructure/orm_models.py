@@ -10,6 +10,7 @@
 from django.conf import settings
 from django.db import models
 
+from ..domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings
 from ..domain.value_objects import (
     DEFAULT_REGISTERED_PLAYER_LIMIT,
     AcquisitionRoute,
@@ -45,8 +46,56 @@ BASE_CHOICES = [(base.value, base.label) for base in Base]
 FIELDED_BY_SEPARATOR = "-"
 
 
+class PennantWorld(models.Model):
+    """ペナントモードの世界（セーブデータ）。ペナント専用で、実データには現れない。
+
+    持つのは作ったときに決まる事実だけ。「今日」や「シーズン中か」は日程と試合から導く。
+    リーグがこの世界に属する（`League.world`）ことで、球団・選手・試合も世界に属する。
+    """
+
+    name = models.CharField(max_length=100, verbose_name="世界の名前")
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="pennant_worlds",
+        verbose_name="オーナー",
+        help_text="この世界を遊ぶユーザー。ペナントの書き込みはこの人だけに許します。",
+    )
+    seed = models.PositiveBigIntegerField(verbose_name="乱数のシード")
+    managed_team = models.ForeignKey(
+        "Team",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="managed_in_worlds",
+        verbose_name="受け持つ球団",
+    )
+    start_year = models.IntegerField(verbose_name="開幕年")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="作成日時")
+
+    class Meta:
+        verbose_name = "ペナントの世界"
+        verbose_name_plural = "ペナントの世界"
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self) -> str:
+        return self.name
+
+
 class League(models.Model):
-    name = models.CharField(max_length=50, unique=True, verbose_name="リーグ名")
+    name = models.CharField(max_length=50, verbose_name="リーグ名")
+    # 空なら実データ。実データとペナントの世界は、このリーグの帰属で分ける
+    world = models.ForeignKey(
+        PennantWorld,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="leagues",
+        verbose_name="世界",
+        help_text="空なら実データのリーグです。",
+    )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="登録日時")
     # 管理画面でドラッグして並べ替えた結果がここに入る
     display_order = models.PositiveIntegerField(default=0, verbose_name="表示順")
@@ -78,6 +127,14 @@ class League(models.Model):
         verbose_name_plural = "リーグ"
         # 手動の並び順を既定とし、未設定どうしは名前で安定させる
         ordering = ["display_order", "name"]
+        constraints = [
+            # リーグ名の一意性は世界の中で保つ。world が NULL のどうしは一意制約で
+            # 衝突しないため、条件を付けないと実データ側の一意性が消える
+            models.UniqueConstraint(
+                fields=["name"], condition=models.Q(world__isnull=True), name="unique_real_league_name"
+            ),
+            models.UniqueConstraint(fields=["world", "name"], name="unique_world_league_name"),
+        ]
 
     def __str__(self) -> str:
         return self.name
@@ -635,3 +692,170 @@ class GameFieldingError(models.Model):
 
     def __str__(self) -> str:
         return f"{self.player.name}（{self.position}）の{self.kind}"
+
+
+def _rating_field(label: str) -> models.PositiveSmallIntegerField:
+    """能力の1項目の列。項目名の表示は domain の `LABELS` が出典。野手と投手で片方は空。"""
+    return models.PositiveSmallIntegerField(null=True, blank=True, verbose_name=label)
+
+
+class PennantPlayerRatings(models.Model):
+    """ペナントの世界の、選手 × 年の能力。**入力**で、成績はここから生まれる結果。
+
+    野手は野手の5項目、投手は投手の4項目を持ち、もう片方は空。成長型は両方が持つ。
+    項目の列は domain の `BatterRatings` / `PitcherRatings` のフィールドが出典
+    （`tests/integration/test_pennant_ratings.py` が突き合わせる）。
+    ペナント専用だが、選手経由で世界に属す（選手の在籍をたどると世界が決まる）。
+    翌年の能力は新しい行として足すので、年ごとの推移が残る。
+    """
+
+    GROWTH_CHOICES = [(growth.value, growth.value) for growth in GrowthType]
+
+    player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="pennant_ratings", verbose_name="選手")
+    year = models.IntegerField(verbose_name="年度")
+    growth = models.CharField(max_length=4, choices=GROWTH_CHOICES, verbose_name="成長型")
+    contact = _rating_field(BatterRatings.LABELS["contact"])
+    power = _rating_field(BatterRatings.LABELS["power"])
+    eye = _rating_field(BatterRatings.LABELS["eye"])
+    speed = _rating_field(BatterRatings.LABELS["speed"])
+    fielding = _rating_field(BatterRatings.LABELS["fielding"])
+    stuff = _rating_field(PitcherRatings.LABELS["stuff"])
+    control = _rating_field(PitcherRatings.LABELS["control"])
+    home_run_avoidance = _rating_field(PitcherRatings.LABELS["home_run_avoidance"])
+    stamina = _rating_field(PitcherRatings.LABELS["stamina"])
+
+    class Meta:
+        verbose_name = "ペナントの能力"
+        verbose_name_plural = "ペナントの能力"
+        ordering = ["year", "player_id"]
+        constraints = [
+            models.UniqueConstraint(fields=["player", "year"], name="unique_pennant_ratings_player_year"),
+            # 野手の5項目がそろっているか、投手の4項目がそろっているか（混ざった行を作らない）
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        contact__isnull=False,
+                        power__isnull=False,
+                        eye__isnull=False,
+                        speed__isnull=False,
+                        fielding__isnull=False,
+                        stuff__isnull=True,
+                        control__isnull=True,
+                        home_run_avoidance__isnull=True,
+                        stamina__isnull=True,
+                    )
+                    | models.Q(
+                        contact__isnull=True,
+                        power__isnull=True,
+                        eye__isnull=True,
+                        speed__isnull=True,
+                        fielding__isnull=True,
+                        stuff__isnull=False,
+                        control__isnull=False,
+                        home_run_avoidance__isnull=False,
+                        stamina__isnull=False,
+                    )
+                ),
+                name="pennant_ratings_batter_or_pitcher",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.player.name} の{self.year}年の能力"
+
+
+class PennantFixture(models.Model):
+    """ペナントの世界の、未消化の対戦。消化したら `Game` を作ってこの行を消す。
+
+    **試合のあとまで残さない**（日付と対戦カードの出典が `Game` とここの2つになるため）。
+    世界の列は持たない。ホームの球団のリーグで世界が決まる（試合と同じ。世界の出典はリーグの1か所）。
+    「今日」やシーズン中かは保存せず、この表と試合から導く。
+    """
+
+    date = models.DateField(db_index=True, verbose_name="試合日")
+    home_team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="home_fixtures", verbose_name="ホーム")
+    visitor_team = models.ForeignKey(
+        Team, on_delete=models.CASCADE, related_name="visitor_fixtures", verbose_name="ビジター"
+    )
+
+    class Meta:
+        verbose_name = "ペナントの日程"
+        verbose_name_plural = "ペナントの日程"
+        ordering = ["date", "home_team_id"]
+        constraints = [
+            models.UniqueConstraint(fields=["date", "home_team", "visitor_team"], name="unique_pennant_fixture"),
+            models.CheckConstraint(
+                condition=~models.Q(home_team=models.F("visitor_team")),
+                name="pennant_fixture_teams_differ",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.date} {self.home_team.name} 対 {self.visitor_team.name}"
+
+
+class PennantClubPlan(models.Model):
+    """ペナントの球団の編成の上書き。球団ごとに1つ。自動の区画は行を持たない。
+
+    持つのは**選手の id だけ**（`PennantClubPlanEntry`）。抑えはこの行が持つ。
+    世界の列は持たない。球団のリーグで世界が決まる（日程・試合と同じ）。
+    すべて自動の球団は行を持たない（持つ意味が無いので、保存のときに消す）。
+    """
+
+    team = models.OneToOneField(Team, on_delete=models.CASCADE, related_name="club_plan", verbose_name="球団")
+    closer = models.ForeignKey(
+        Player,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        verbose_name="抑え",
+        help_text="空なら自動（AI 監督が決める）。",
+    )
+
+    class Meta:
+        verbose_name = "ペナントの編成"
+        verbose_name_plural = "ペナントの編成"
+        ordering = ["team_id"]
+
+    def __str__(self) -> str:
+        return f"{self.team.name}の編成"
+
+
+class PennantClubPlanEntry(models.Model):
+    """編成の上書きの1行。1軍登録・オーダー・ローテーションの選手を、区画と順で持つ。
+
+    区画の行が1つも無ければ、その区画は自動。オーダーの行だけが守備位置を持つ。
+    """
+
+    ACTIVE = "active"
+    LINEUP = "lineup"
+    ROTATION = "rotation"
+    SECTION_CHOICES = [(ACTIVE, "1軍登録"), (LINEUP, "オーダー"), (ROTATION, "ローテーション")]
+
+    plan = models.ForeignKey(PennantClubPlan, on_delete=models.CASCADE, related_name="entries", verbose_name="編成")
+    section = models.CharField(max_length=10, choices=SECTION_CHOICES, verbose_name="区画")
+    # 区画の中の順（オーダーなら打順、ローテーションなら先発の序列）。1から
+    order = models.PositiveSmallIntegerField(verbose_name="順")
+    player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="+", verbose_name="選手")
+    fielding_position = models.CharField(
+        max_length=2, choices=FIELDING_POSITION_CHOICES, blank=True, default="", verbose_name="守備位置"
+    )
+
+    class Meta:
+        verbose_name = "ペナントの編成の行"
+        verbose_name_plural = "ペナントの編成の行"
+        ordering = ["plan_id", "section", "order"]
+        constraints = [
+            models.UniqueConstraint(fields=["plan", "section", "player"], name="unique_pennant_plan_entry_player"),
+            models.UniqueConstraint(fields=["plan", "section", "order"], name="unique_pennant_plan_entry_order"),
+            # 守備位置を持つのはオーダーだけ
+            models.CheckConstraint(
+                condition=models.Q(section="lineup", fielding_position__gt="")
+                | (~models.Q(section="lineup") & models.Q(fielding_position="")),
+                name="pennant_plan_entry_position_only_in_lineup",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.plan} {self.get_section_display()} {self.order}"

@@ -1,0 +1,43 @@
+{% comment %}
+スコアボード1試合ぶん（カードごと）。試合詳細とペナントのホームで使う。
+line_score（GameLineScore）と game（試合の行。チーム名を引く）を渡す。
+出力の空白を変えないため、コメントの直後から本体を始め、末尾に改行を置かない。
+{% endcomment %}<div class="card mb-3">
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table linescore-table mb-0">
+          <thead>
+            <tr>
+              <th></th>
+              {% for column in line_score.columns %}
+                <th class="text-center">{{ column.inning }}</th>
+              {% endfor %}
+              <th class="text-center linescore-total">計</th>
+              <th class="text-center">安</th>
+              <th class="text-center">失</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th>{{ game.away_team_name }}</th>
+              {% for column in line_score.columns %}
+                <td class="text-center">{{ column.away }}</td>
+              {% endfor %}
+              <td class="text-center linescore-total">{{ line_score.away_total }}</td>
+              <td class="text-center stat-muted">{{ line_score.away_hits }}</td>
+              <td class="text-center stat-muted">{{ line_score.away_errors|default_if_none:'—' }}</td>
+            </tr>
+            <tr>
+              <th>{{ game.home_team_name }}</th>
+              {% for column in line_score.columns %}
+                <td class="text-center">{{ column.home }}</td>
+              {% endfor %}
+              <td class="text-center linescore-total">{{ line_score.home_total }}</td>
+              <td class="text-center stat-muted">{{ line_score.home_hits }}</td>
+              <td class="text-center stat-muted">{{ line_score.home_errors|default_if_none:'—' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>

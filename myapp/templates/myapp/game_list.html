@@ -1,14 +1,15 @@
 {% extends 'myapp/base.html' %}
+{% load scoped %}
 
 {% block title %}試合一覧 - Baseball Manager{% endblock %}
 
 {% block content %}
 <nav aria-label="breadcrumb">
   <ol class="breadcrumb">
-    <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>
+    {% if world %}{% include 'pennant/_crumbs.html' %}{% else %}<li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>{% endif %}
     <li class="breadcrumb-item active">試合</li>
   </ol>
-</nav>
+</nav>{% if world %}{% include 'pennant/_world_bar.html' %}{% endif %}
 
 <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
   <div class="page-head mb-0">
@@ -20,9 +21,9 @@
     <p class="page-subtitle">
       {% if selected_year %}{{ selected_year }}年{% endif %}{% if selected_month %}{{ selected_month }}月{% endif %}{% if selected_league_name %} · {{ selected_league_name }}{% endif %}{% if selected_team_name %} · {{ selected_team_name }}{% endif %} · {{ games|length }}件
     </p>
-    <p class="page-subtitle">
+    {% if not world %}<p class="page-subtitle">
       ここに登録された結果から、チームの勝敗と選手の通算成績が集計されます。
-    </p>
+    </p>{% endif %}
   </div>
   {% if can_create_game %}
     <a href="{% url 'game_create' %}" class="btn btn-primary">試合を登録</a>
@@ -56,7 +57,7 @@
           <button type="submit" class="btn btn-primary w-100">絞り込む</button>
         </div>
         <div class="col-md-2">
-          <a href="{% url 'game_list' %}" class="btn btn-secondary w-100">解除</a>
+          <a href="{% scoped_url 'game_list' %}" class="btn btn-secondary w-100">解除</a>
         </div>
       </div>
     </div>
@@ -105,28 +106,28 @@
         <tr>
           <td class="stat-muted">{{ game.played_on|date:"Y/m/d" }}</td>
           <td>
-            <a href="{% url 'player_list' game.home_team_id %}"
+            <a href="{% scoped_url 'player_list' game.home_team_id %}"
                class="player-name {% if game.winner_team_id == game.home_team_id %}stat-tier-high{% endif %}">
               {{ game.home_team_name }}
             </a>
           </td>
           <td class="text-center stat-key">{% if game.is_recorded %}{{ game.home_score }} - {{ game.away_score }}{% else %}—{% endif %}</td>
           <td>
-            <a href="{% url 'player_list' game.away_team_id %}"
+            <a href="{% scoped_url 'player_list' game.away_team_id %}"
                class="player-name {% if game.winner_team_id == game.away_team_id %}stat-tier-high{% endif %}">
               {{ game.away_team_name }}
             </a>
           </td>
           <td class="stat-muted">{{ game.result }}</td>
           <td class="text-end">
-            <a href="{% url 'game_detail' game.id %}" class="btn btn-sm btn-outline-info">詳細</a>
+            <a href="{% scoped_url 'game_detail' game.id %}" class="btn btn-sm btn-outline-info">詳細</a>
           </td>
         </tr>
       {% empty %}
         <tr>
           <td colspan="6">
             <div class="empty-state">
-              該当する試合がありません。管理画面の「試合」から登録してください。
+              {% if world %}まだ試合が行われていません。ホームから進めると結果がここに出ます。{% else %}該当する試合がありません。管理画面の「試合」から登録してください。{% endif %}
             </div>
           </td>
         </tr>
