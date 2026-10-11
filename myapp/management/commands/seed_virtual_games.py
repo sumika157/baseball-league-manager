@@ -91,8 +91,9 @@ MAX_INNINGS = 12
 
 # 先発が受け持つ回。残りは救援で分ける。
 STARTER_INNINGS = (5, 7)
-# 救援が受け持つアウト数。
-RELIEVER_OUTS = (2, 5)
+# 救援が受け持つアウト数。短くすると1試合に投げる投手が増え（2〜5 では1チーム4.7人）、
+# 中継ぎが年90登板を超える。実際は1チーム1試合4人前後、中継ぎの最多は年70登板前後。
+RELIEVER_OUTS = (3, 6)
 # 交代が回の途中で起きる確率。受け持ちを3の倍数から外すことで表す
 # （これが無いと投球回が常に X.0 になり、5.2 のような表記が出てこない）。
 MID_INNING_CHANGE_RATIO = 0.40
@@ -112,8 +113,10 @@ ROTATION_SIZE = 5
 
 # 控え・救援の序列の減衰率。控えの出番を全員に均等に散らすと、1人あたり30打数
 # 程度しか回らず、打率10割に近い「小さな標本の極端な率」が一覧の上位を占める。
+# 救援は抑えとセットアッパーが別枠なので、残りの中継ぎにはなだらかに散らす
+# （0.85 では序列の上位の中継ぎが年90登板を超えた）。
 BENCH_DECAY = 0.80
-BULLPEN_DECAY = 0.85
+BULLPEN_DECAY = 0.90
 
 # 抑えが最終回を任される割合。序列1位を専任にしないとセーブが数人に分散し、
 # 「抑えが年30セーブ」という実際の形にならない。
@@ -122,6 +125,16 @@ BULLPEN_DECAY = 0.85
 # 勝っている接戦（3点差以内）ではほぼ出て、それ以外の試合ではまれに出る。
 CLOSER_USAGE_IN_SAVE_SITUATION = 0.88
 CLOSER_USAGE_OTHERWISE = 0.10
+
+# 勝ちパターン。救援の序列1位が抑え（9回）、2位がセットアッパー（8回）。
+# **回の頭から1イニングを任せる。** 前の投手の受け持ちが尽きたときだけ代えると、
+# 9回の途中から最後の投手が出てきてアウト3つに届かず、セーブが付かない
+# （勝ち試合の3割近くがこれで落ちていた）。抑えも8回の中継ぎに続投されて出番を失う。
+SETUP_INNING = 8
+# セットアッパーが8回を任される割合。リードしている接戦（ホールドの付く状況）ではほぼ出て、
+# 同点でも半分ほど出る（実際のセットアッパーは同点の8回にも投げ、年60登板前後になる）。
+SETUP_USAGE_IN_HOLD_SITUATION = 0.85
+SETUP_USAGE_WHEN_TIED = 0.50
 
 # --- 打者の能力 ---
 # 順に「1打数あたりの安打確率」「安打のうち本塁打の割合」「1打席あたりの四球率」。
@@ -641,6 +654,7 @@ class Command(BaseCommand):
         batting, fielding = sides[is_bottom], sides[not is_bottom]
         occupied: dict = {}
         outs = 0
+        self._maybe_send_in_late_relief(fielding, sides, inning, limit)
 
         while outs < OUTS_PER_INNING:
             self._maybe_change_pitcher(fielding, sides, inning, limit)
@@ -786,7 +800,7 @@ class Command(BaseCommand):
         innings = int(self.rng.integers(*STARTER_INNINGS, endpoint=True))
         self._add_outing(side, starter, inning=1, target_outs=innings * OUTS_PER_INNING)
 
-    def _add_outing(self, side, player, inning, target_outs):
+    def _add_outing(self, side, player, inning, target_outs, *, shave=True):
         side.outings.append(
             _Outing(
                 player=player,
@@ -794,7 +808,7 @@ class Command(BaseCommand):
                 entered_inning=inning,
                 skill=side.roster["pitching_talent"][player.id],
                 # 交代を回の途中でも起こす。3の倍数のままだと投球回が常に X.0 になる
-                target_outs=max(1, target_outs - self._mid_inning_shave()),
+                target_outs=max(1, target_outs - (self._mid_inning_shave() if shave else 0)),
             )
         )
         side.used_player_ids.add(player.id)
@@ -818,6 +832,30 @@ class Command(BaseCommand):
             return
         self._add_outing(side, nxt, inning, int(self.rng.integers(*RELIEVER_OUTS, endpoint=True)))
 
+    def _maybe_send_in_late_relief(self, side, sides, inning, limit):
+        """回の頭に、勝ちパターンの投手（9回以降は抑え、8回はセットアッパー）を送る。
+
+        前の投手の受け持ちが残っていても代える。受け持ちは1イニングで、回の途中の交代を掛けない
+        （途中で降りると、抑えはアウト3つに届かずセーブを逃す）。
+        """
+        lead = side.score - sides[not side.is_home].score
+        bullpen = side.roster["bullpen"]
+        if inning >= INNINGS_PER_GAME:
+            pitcher = bullpen[0]
+            usage = CLOSER_USAGE_IN_SAVE_SITUATION if 0 < lead <= SAVE_LEAD_LIMIT else 0.0
+        elif inning == SETUP_INNING and len(bullpen) > 1:
+            pitcher = bullpen[1]
+            if 0 < lead <= SAVE_LEAD_LIMIT:
+                usage = SETUP_USAGE_IN_HOLD_SITUATION
+            else:
+                usage = SETUP_USAGE_WHEN_TIED if lead == 0 else 0.0
+        else:
+            return
+        if pitcher.id in side.used_player_ids or not self._quota_allows(side, pitcher, limit):
+            return
+        if self.rng.random() < usage:
+            self._add_outing(side, pitcher, inning, OUTS_PER_INNING, shave=False)
+
     def _pick_reliever(self, side, inning, lead, limit):
         """次に投げる救援。最終回の接戦は抑えが締める。
 
@@ -838,9 +876,10 @@ class Command(BaseCommand):
             if self.rng.random() < usage:
                 return closer
 
-        # 抑えは中継ぎの候補には入れない。候補に残すと序列1位ゆえ中継ぎとしても
+        # 抑えとセットアッパーは中継ぎの候補には入れない。候補に残すと序列の上位ゆえ中継ぎとしても
         # 頻繁に選ばれ、投球回が実際の抑えの倍を超えてしまう
-        pool = [p for p in bullpen if p is not closer] or bullpen
+        late = {p.id for p in side.roster["bullpen"][:2]}
+        pool = [p for p in bullpen if p.id not in late] or bullpen
         return pool[int(self.rng.choice(len(pool), p=_depth_weights(len(pool), BULLPEN_DECAY)))]
 
     # --- 1打席 ---
