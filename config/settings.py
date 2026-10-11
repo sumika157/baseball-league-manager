@@ -132,6 +132,9 @@ if env_bool("DJANGO_SQLITE_WAL"):
         "init_command": "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
     }
 
+# テストランナー。標準に「所要時間の長いテストクラスの一覧」（--slowest-classes N）を足したもの。
+TEST_RUNNER = "myapp.tests.runner.TimingDiscoverRunner"
+
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators

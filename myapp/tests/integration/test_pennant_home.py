@@ -21,9 +21,9 @@ from myapp.domain.exceptions import AlreadyAdvanced, InvalidSchedule
 from myapp.domain.pennant.schedule import AdvanceTarget, Fixture
 from myapp.domain.pennant.season import SCREEN_ADVANCE_TARGETS, SeasonPhase, summary_period
 from myapp.infrastructure import orm_models
-from myapp.presentation.views import build_pennant_season_service
+from myapp.presentation.views import build_pennant_season_service, build_world_view_service
 
-from .test_pennant_advance import SEASON_GAMES, SeasonCase
+from .test_pennant_advance import SEASON_GAMES, YEAR, SeasonCase
 
 
 class HomeCase(SeasonCase):
@@ -58,6 +58,44 @@ class HomeCase(SeasonCase):
     def start_season(self) -> None:
         """日程だけ作る（まだ1試合も進めない）。"""
         build_pennant_season_service(self.world_a).ensure_schedule()
+
+
+class FinishedSeasonCase(HomeCase):
+    """世界Aの1シーズンを終えたところから始める（シーズンはクラスで1回だけ回す）。`leader` は首位の球団。"""
+
+    leader: int
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        build_pennant_season_service(cls.world_a).advance(AdvanceTarget.SEASON_END)
+        (league,) = build_world_view_service(cls.world_a).get_league_standings(YEAR)
+        first, second = league.rows[:2]
+        # 球団2つで同率なら、優勝の印を確かめるテストにこの世界は使えない
+        assert (first.wins, first.losses) != (second.wins, second.losses), "同率の世界は使えない"
+        cls.leader = first.team_id
+
+
+class FinishedSeasonHomeTest(FinishedSeasonCase):
+    def test_the_finished_season_offers_nothing_to_advance(self):
+        self.client.force_login(self.owner)
+
+        content = self.client.get(self.home_url()).content.decode()
+
+        # シーズン終了のオーナーには「進める」の代わりに「シーズンを締める」のカードを出す（同時には出さない）
+        self.assertIn("シーズンを締める", content)
+        self.assertIn("最終順位", content)
+        self.assertNotIn("1日進める", content)
+
+    def test_a_finished_season_says_there_is_nothing_to_advance(self):
+        self.client.force_login(self.owner)
+        today = build_pennant_season_service(self.world_a)._context_query.last_played_on()
+        before = self.games_in()
+
+        response = self.post_advance("day", expected=today.isoformat())
+
+        self.assertEqual(self.games_in(), before)
+        self.assertEqual(self.last_message(response), "進める試合がありません。")
 
 
 class HomeScreenTest(HomeCase):
@@ -127,18 +165,6 @@ class HomeScreenTest(HomeCase):
         self.assertIn("ライバル球団", content)
         self.assertEqual(content.count("自軍</span>"), 1, "順位表の自軍の行")
         self.assertIn("直近10試合", content)
-
-    def test_the_finished_season_offers_nothing_to_advance(self):
-        self.start_season()
-        build_pennant_season_service(self.world_a).advance(AdvanceTarget.SEASON_END)
-        self.client.force_login(self.owner)
-
-        content = self.client.get(self.home_url()).content.decode()
-
-        # シーズン終了のオーナーには「進める」の代わりに「シーズンを締める」のカードを出す（同時には出さない）
-        self.assertIn("シーズンを締める", content)
-        self.assertIn("最終順位", content)
-        self.assertNotIn("1日進める", content)
 
     def test_the_standings_switch_is_shown_only_when_there_are_several_leagues(self):
         self.start_season()
@@ -293,16 +319,6 @@ class AdvanceTest(HomeCase):
                 self.assertRedirects(response, self.home_url(), fetch_redirect_response=False)
                 self.assertEqual(self.last_message(response), "その進め方はできません。")
         self.assertEqual(self.games_in(), 0)
-
-    def test_a_finished_season_says_there_is_nothing_to_advance(self):
-        build_pennant_season_service(self.world_a).advance(AdvanceTarget.SEASON_END)
-        today = build_pennant_season_service(self.world_a)._context_query.last_played_on()
-        before = self.games_in()
-
-        response = self.post_advance("day", expected=today.isoformat())
-
-        self.assertEqual(self.games_in(), before)
-        self.assertEqual(self.last_message(response), "進める試合がありません。")
 
     def test_the_limit_on_one_advance_is_kept(self):
         """1回の上限を超える範囲は、何も作らずに断る（画面の応答が返らなくなる前に）。"""

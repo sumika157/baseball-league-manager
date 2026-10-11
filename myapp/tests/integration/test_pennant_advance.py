@@ -31,6 +31,8 @@ from myapp.infrastructure.queries import DjangoGameListQuery, DjangoSimulationCo
 from myapp.infrastructure.repositories import DjangoFixtureRepository, DjangoGameRepository
 from myapp.presentation.views import build_pennant_season_service, build_pennant_world_service, build_service
 
+from ..helpers import register_players
+
 YEAR = 2026
 SEASON_GAMES = 143
 BATTER_POSITIONS = ["捕手"] * 2 + ["内野手"] * 5 + ["外野手"] * 4 + ["指名打者"]
@@ -38,11 +40,20 @@ PITCHERS = 11
 
 
 def register_club(service, team, prefix):
-    """野手12人と投手11人。名前は世界の中で一意にする（世界どうしを名前で突き合わせる）。"""
-    for number, position in enumerate(BATTER_POSITIONS, start=1):
-        service.register_player(team.id, f"{prefix}野手{number}", number, position)
-    for number in range(1, PITCHERS + 1):
-        service.register_player(team.id, f"{prefix}投手{number}", 20 + number, "投手")
+    """野手12人と投手11人。名前は世界の中で一意にする（世界どうしを名前で突き合わせる）。
+
+    `service` は使わない（呼び出し側の形を変えないため受け取る。登録は `register_players` でまとめて行う）。
+    """
+    register_players(
+        team,
+        [
+            *(
+                (f"{prefix}野手{number}", number, position)
+                for number, position in enumerate(BATTER_POSITIONS, start=1)
+            ),
+            *((f"{prefix}投手{number}", 20 + number, "投手") for number in range(1, PITCHERS + 1)),
+        ],
+    )
 
 
 class SeasonCase(TestCase):
@@ -207,16 +218,6 @@ class AdvanceTest(SeasonCase):
                 wins = sum(p.line.wins for p in loaded.pitching)
                 self.assertEqual(wins, 0 if loaded.home_score == loaded.away_score else 1, "引分以外は勝ち投手が1人")
 
-    def test_advancing_a_finished_season_does_nothing(self):
-        self.advance(self.world_a, AdvanceTarget.SEASON_END)
-
-        report = self.advance(self.world_a, AdvanceTarget.DAY)
-
-        self.assertEqual((report.games, report.played_dates), (0, ()))
-        self.assertTrue(report.season_finished)
-        self.assertEqual(len(self.games_of(self.world_a)), SEASON_GAMES, "試合を作り足さない")
-        self.assertEqual(self.fixtures_of(self.world_a), [], "日程を作り足さない")
-
     def test_an_unknown_world_is_not_found(self):
         with self.assertRaises(WorldNotFound):
             self.advance(self.world_a + 1000, AdvanceTarget.DAY)
@@ -237,9 +238,18 @@ class AdvanceTest(SeasonCase):
         self.assertTrue(all(f.date.month != 3 for f in self.fixtures_of(self.world_a)))
 
 
-class SeasonEndTest(SeasonCase):
+class FinishedSeasonTest(SeasonCase):
+    """世界Aをシーズン終了まで一度に進めたところ（シーズンはクラスで1回だけ回す）。"""
+
+    season_end: AdvanceReport
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.season_end = cls.advance(cls.world_a, AdvanceTarget.SEASON_END)
+
     def test_playing_to_the_end_empties_the_fixtures_and_every_team_plays_143(self):
-        report = self.advance(self.world_a, AdvanceTarget.SEASON_END)
+        report = self.season_end
 
         self.assertEqual(self.fixtures_of(self.world_a), [])
         self.assertTrue(report.season_finished)
@@ -248,6 +258,29 @@ class SeasonEndTest(SeasonCase):
         counts = DjangoGameListQuery(WorldScope.pennant(self.world_a)).count_by_team(year=YEAR)
         self.assertEqual(set(counts.values()), {SEASON_GAMES})
         self.assertEqual(len(counts), 2)
+
+    def test_advancing_a_finished_season_does_nothing(self):
+        report = self.advance(self.world_a, AdvanceTarget.DAY)
+
+        self.assertEqual((report.games, report.played_dates), (0, ()))
+        self.assertTrue(report.season_finished)
+        self.assertEqual(len(self.games_of(self.world_a)), SEASON_GAMES, "試合を作り足さない")
+        self.assertEqual(self.fixtures_of(self.world_a), [], "日程を作り足さない")
+
+    def test_no_reliever_pitches_three_days_in_a_row(self):
+        days_by_pitcher = defaultdict(set)
+        for line in orm_models.GamePitchingLine.objects.filter(
+            game__home_team__league__world_id=self.world_a
+        ).select_related("game"):
+            days_by_pitcher[line.player_id].add(line.game.played_on)
+        for pitcher_id, days in days_by_pitcher.items():
+            for day in days:
+                run = {day + timedelta(days=offset) for offset in range(3)}
+                self.assertFalse(run <= days, (pitcher_id, day))
+
+
+class DerivedFromGamesTest(SeasonCase):
+    """世界の今日と先発の疲労は保存せず、行った試合から導く（進め方をまたいでも崩れない）。"""
 
     def test_the_world_today_is_derived_from_the_games(self):
         report = self.advance(self.world_a, AdvanceTarget.WEEK)
@@ -273,33 +306,29 @@ class SeasonEndTest(SeasonCase):
             gaps = [(later - earlier).days for earlier, later in zip(days, days[1:], strict=False)]
             self.assertTrue(all(gap >= 6 for gap in gaps), (pitcher_id, days))
 
-    def test_no_reliever_pitches_three_days_in_a_row(self):
-        self.advance(self.world_a, AdvanceTarget.SEASON_END)
-
-        days_by_pitcher = defaultdict(set)
-        for line in orm_models.GamePitchingLine.objects.filter(
-            game__home_team__league__world_id=self.world_a
-        ).select_related("game"):
-            days_by_pitcher[line.player_id].add(line.game.played_on)
-        for pitcher_id, days in days_by_pitcher.items():
-            for day in days:
-                run = {day + timedelta(days=offset) for offset in range(3)}
-                self.assertFalse(run <= days, (pitcher_id, day))
-
 
 class ReproducibilityTest(SeasonCase):
     """1日ずつ進めても1週間まとめて進めても、同じシーズンになる。
 
     試合ごとの乱数は世界のシード・年・日付と対戦の球団 id から作る。球団の id は世界ごとに違うので、
     **同じ世界**を巻き戻して（セーブポイント）別の進め方で進め直し、結果を突き合わせる。
+    比べる基準の「シーズン終了まで一度に進めた結果」は、クラスで1回だけ作る（`whole_season`）。
     """
 
-    def replay(self, world_id, run, *, until=None):
+    whole_season: tuple[list, list]
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.whole_season = cls.replay(cls.world_a, lambda: cls.advance(cls.world_a, AdvanceTarget.SEASON_END))
+
+    @classmethod
+    def replay(cls, world_id, run, *, until=None):
         """`run` で世界を進めた結果を取り、世界を元に戻す。"""
         savepoint = transaction.savepoint()
         try:
             run()
-            return self.snapshot(world_id, until=until)
+            return cls.snapshot(world_id, until=until)
         finally:
             transaction.savepoint_rollback(savepoint)
 
@@ -337,7 +366,7 @@ class ReproducibilityTest(SeasonCase):
                 if self.advance(self.world_a, AdvanceTarget.WEEK).season_finished:
                     return
 
-        whole = self.replay(self.world_a, lambda: self.advance(self.world_a, AdvanceTarget.SEASON_END))
+        whole = self.whole_season
         by_weeks = self.replay(self.world_a, weeks)
 
         self.assertEqual(len({row[0] for row in whole[0]}), 143, "1日1試合なので143日")
@@ -350,9 +379,7 @@ class ReproducibilityTest(SeasonCase):
             with mock.patch("myapp.application.pennant_season.FLUSH_EVERY_GAMES", 10):
                 self.advance(self.world_a, AdvanceTarget.SEASON_END)
 
-        whole = self.replay(self.world_a, lambda: self.advance(self.world_a, AdvanceTarget.SEASON_END))
-
-        self.assertEqual(whole, self.replay(self.world_a, small_chunks))
+        self.assertEqual(self.whole_season, self.replay(self.world_a, small_chunks))
 
     def test_a_different_seed_gives_a_different_season(self):
         def with_seed(seed):

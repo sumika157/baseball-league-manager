@@ -31,7 +31,7 @@ from myapp.presentation.views import (
 )
 
 from .test_pennant_advance import SEASON_GAMES, YEAR
-from .test_pennant_home import HomeCase
+from .test_pennant_home import FinishedSeasonCase, HomeCase
 
 
 def _row(team_id: int, wins: int, losses: int) -> StandingRow:
@@ -132,38 +132,7 @@ class OptionsTest(SimpleTestCase):
         self.assertEqual((options["limit"].games, options["limit"].end_date), (144, date(2026, 4, 9)))
 
 
-class RaceBandTest(HomeCase):
-    def finish_season(self) -> int:
-        """1シーズン終えて、首位の球団の id を返す（球団2つで同率なら、この世界は使えない）。"""
-        self.start_season()
-        build_pennant_season_service(self.world_a).advance(AdvanceTarget.SEASON_END)
-        (league,) = build_world_view_service(self.world_a).get_league_standings(YEAR)
-        first, second = league.rows[:2]
-        self.assertNotEqual((first.wins, first.losses), (second.wins, second.losses), "同率の世界は使えない")
-        return first.team_id
-
-    def test_the_champion_sees_the_clinched_band_on_the_home_and_the_list(self):
-        leader = self.finish_season()
-        orm_models.PennantWorld.objects.filter(id=self.world_a).update(managed_team_id=leader)
-
-        home = self.client.get(self.home_url()).content.decode()
-        index = self.client.get(reverse("pennant_index")).content.decode()
-
-        self.assertIn("優勝確定", home)
-        self.assertIn("優勝争い", home)
-        self.assertIn("優勝確定", index)
-
-    def test_the_runner_up_sees_no_band(self):
-        leader = self.finish_season()
-        runner_up = orm_models.Team.objects.filter(league__world_id=self.world_a).exclude(id=leader)[0]
-        orm_models.PennantWorld.objects.filter(id=self.world_a).update(managed_team_id=runner_up.id)
-
-        home = self.client.get(self.home_url()).content.decode()
-        index = self.client.get(reverse("pennant_index")).content.decode()
-
-        self.assertNotIn("優勝争い", home)
-        self.assertNotIn("優勝確定", index)
-
+class RaceBandBeforeTheEndTest(HomeCase):
     def test_no_band_early_in_the_season_or_before_opening(self):
         before = self.client.get(self.home_url()).content.decode()
         self.start_season()
@@ -174,8 +143,44 @@ class RaceBandTest(HomeCase):
         self.assertNotIn("優勝争い", before)
         self.assertNotIn("優勝争い", early)
 
+    def test_the_world_list_summary_query_count_does_not_grow_with_the_number_of_worlds(self):
+        self.start_season()
+        with CaptureQueriesContext(connection) as before:
+            DjangoWorldSummaryQuery().list_all()
+        self._create_world("世界D", seed=9)
+        self._create_world("世界E", seed=10)
+        with CaptureQueriesContext(connection) as after:
+            rows = DjangoWorldSummaryQuery().list_all()
+
+        self.assertGreaterEqual(len(rows), 5)
+        self.assertEqual(len(before), len(after))
+
+
+class RaceBandTest(FinishedSeasonCase):
+    def test_the_champion_sees_the_clinched_band_on_the_home_and_the_list(self):
+        leader = self.leader
+        orm_models.PennantWorld.objects.filter(id=self.world_a).update(managed_team_id=leader)
+
+        home = self.client.get(self.home_url()).content.decode()
+        index = self.client.get(reverse("pennant_index")).content.decode()
+
+        self.assertIn("優勝確定", home)
+        self.assertIn("優勝争い", home)
+        self.assertIn("優勝確定", index)
+
+    def test_the_runner_up_sees_no_band(self):
+        leader = self.leader
+        runner_up = orm_models.Team.objects.filter(league__world_id=self.world_a).exclude(id=leader)[0]
+        orm_models.PennantWorld.objects.filter(id=self.world_a).update(managed_team_id=runner_up.id)
+
+        home = self.client.get(self.home_url()).content.decode()
+        index = self.client.get(reverse("pennant_index")).content.decode()
+
+        self.assertNotIn("優勝争い", home)
+        self.assertNotIn("優勝確定", index)
+
     def test_the_final_season_shows_the_end_and_the_totals(self):
-        leader = self.finish_season()
+        leader = self.leader
         orm_models.PennantWorld.objects.filter(id=self.world_a).update(managed_team_id=leader)
 
         with mock.patch("myapp.application.pennant_view.is_final_season", return_value=True):
@@ -189,7 +194,6 @@ class RaceBandTest(HomeCase):
 
     def test_the_yearly_standings_of_the_finale_match_the_standings_screen(self):
         """世界の終了の通算が読む年ごとの順位は、順位表と同じ規則（domain の standings）から出る。"""
-        self.finish_season()
         service = build_pennant_home_service(self.world_a)
 
         (mine,) = service._standings_by_year([YEAR])[YEAR]
@@ -202,7 +206,7 @@ class RaceBandTest(HomeCase):
         self.assertEqual(service._standings_by_year([YEAR - 1]), {YEAR - 1: []}, "試合の無い年は空")
 
     def test_two_seasons_add_up_in_the_finale_and_the_second_year_reads_the_first_years_final_rank(self):
-        leader = self.finish_season()
+        leader = self.leader
         orm_models.PennantWorld.objects.filter(id=self.world_a).update(managed_team_id=leader)
         build_pennant_offseason_service(self.world_a).close_season()
         build_pennant_season_service(self.world_a).advance(AdvanceTarget.SEASON_END)
@@ -230,7 +234,7 @@ class RaceBandTest(HomeCase):
         self.assertEqual(tiebreak.previous_rank(), last_years, "2年目の前年の順位は1年目の最終順位")
 
     def test_the_end_replaces_the_close_card_for_the_owner(self):
-        leader = self.finish_season()
+        leader = self.leader
         orm_models.PennantWorld.objects.filter(id=self.world_a).update(managed_team_id=leader)
         self.client.force_login(self.owner)
 
@@ -243,21 +247,7 @@ class RaceBandTest(HomeCase):
         self.assertIn("世界の終了", over)
         self.assertNotIn("のシーズンを締める", over, "終了の情報は1か所（締めるカードは出さない）")
 
-    def test_the_world_list_summary_query_count_does_not_grow_with_the_number_of_worlds(self):
-        self.start_season()
-        with CaptureQueriesContext(connection) as before:
-            DjangoWorldSummaryQuery().list_all()
-        self._create_world("世界D", seed=9)
-        self._create_world("世界E", seed=10)
-        with CaptureQueriesContext(connection) as after:
-            rows = DjangoWorldSummaryQuery().list_all()
-
-        self.assertGreaterEqual(len(rows), 5)
-        self.assertEqual(len(before), len(after))
-
     def test_the_finale_is_not_shown_before_the_final_season_ends(self):
-        self.finish_season()
-
         home = self.client.get(self.home_url()).content.decode()
         index = self.client.get(reverse("pennant_index")).content.decode()
 
