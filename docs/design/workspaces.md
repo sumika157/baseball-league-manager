@@ -1,8 +1,8 @@
 # 設計: ワークスペース（マルチテナント化）と一般公開
 
-> 状態: 設計確定（コードは未着手）。親 Issue [#74](https://github.com/sumika157/baseball-league-manager/issues/74)、子 Issue は #75（この設計書）・#76〜#82（段階 W0〜W6。W1 は #77 の W1a と #172 の W1b に分ける。9.）。
-> 2026-10-07 に `epic/pennant-mode` の最新（P6 と #95〜#104 まで入っている）と main の現状に照合して直した（3.1）。ペナント epic の残りは #167 と main 入りだけ。
-> 着手はペナントモード（#26）を P6 まで終えて main に入れた後。W0（本番構成）だけは epic の外で先に main へ入れる。
+> 状態: 設計確定（W1a の T1＝domain だけ着手）。親 Issue [#74](https://github.com/sumika157/baseball-league-manager/issues/74)、子 Issue は #75（この設計書）・#76〜#82（段階 W0〜W6。W1 は #77 の W1a と #172 の W1b に分ける。9.）。
+> 2026-10-11 に main（dd5d44b）と照合して直した（3.1）。ペナントの epic（#26）は #185 で main に入った。
+> 着手はペナントモード（#26）を P6 まで終えて main に入れた後（済み）。W0（本番構成）だけは epic の外で先に main へ入れる。
 > 段階ごとの実測値と決定はこのファイルの「14. 段階ごとの記録」に追記し、`epic/workspaces` を main に入れるときに Wiki へ吸収して削除する。
 
 ## 0. 名前
@@ -55,32 +55,32 @@
 
 ### 3.1 ペナントの「世界」との関係
 
-#### 統合ブランチ `epic/pennant-mode` で確かめた事実（2026-10-07 時点。epic は 65a4715、main 取り込み中の worktree も参照。着手時に #167 と main 入りの変更を確かめ直す）
+#### epic の基点 9994290（main dd5d44b ＋ #193）で確かめた事実（2026-10-11 時点。ペナントの epic は #185 で入った。#184 は main に入った（c666b34）ので T3 の前提は満たされ、epic は T3 の前に main を取り込む。#168 が入ると変わる）
 
 | 項目 | 現状 | 根拠 |
 | --- | --- | --- |
 | 世界の出典 | `League.world`（FK。null なら実データ） | `orm_models.py` の `League.world` |
-| `League` の一意制約 | `world IS NULL` のときの `name`（`unique_real_league_name`）と `(world, name)`（`unique_world_league_name`）。作るのは `0042_pennant_world_and_league_world.py`（main 取り込み後の番号） | `orm_models.py:118` 付近 |
+| `League` の一意制約 | `world IS NULL` のときの `name`（`unique_real_league_name`）と `(world, name)`（`unique_world_league_name`）。作るのは `0042_pennant_world_and_league_world.py` | `orm_models.py` の `League.Meta` |
 | `WorldScope` の形 | `WorldScope(world_id: int \| None)`、`real()`・`pennant(world_id)`、既定値なし。frozen dataclass で `is_real`・`is_pennant`・`__str__` を持つ。`World.scope` が `pennant(id)` を返す | `domain/pennant/world.py:47-77`、`:112-116` |
-| `WorldScope` を作る箇所 | 本番コード25か所（views 16・`admin.py:98` の `_REAL`・`DjangoWorldRepository.delete`・`World.scope`・管理コマンド6）。テスト約130 | `git grep` |
+| `WorldScope` を作る箇所 | 本番コード26か所（views 17・`admin.py:111` の `_REAL`・`DjangoWorldRepository.delete`・`World.scope`・管理コマンド6）。テスト134（#184 が `tests/helpers.py` に1つ足す） | `git grep` |
 | `scoping` の関数 | `leagues_in`・`teams_in`・`stints_in`・`games_in`・`fixtures_in`・`ratings_in`・`players_in`・`club_plans_in`（P5a）。台帳用に `world_condition(path, scope)`・`world_condition_in(path, world_ids)`・`leagues_in_worlds`・`games_in_worlds`・`fixtures_in_worlds`。範囲ではないが同じファイルに `period_covering(year)`（#95） | `scoping.py:22,34,43,47,51,97,102` |
 | 選手は世界の列を持たない | 在籍をたどって決まる。ただし実データ側は**否定形**（ペナントの球団に在籍したことが無い選手）で、在籍の無い選手も実データに含まれる（管理画面から隠さないため）。開発 DB の在籍の無い選手は0人 | `scoping.py:82-94` |
 | 球場 | 世界をまたいで共有し、ペナントは読むだけ（分類 `SHARED`）。ただし `DjangoTeamRepository.save` は `home_stadium_id` を範囲で検査せずに書く | `repositories.py:233-251` |
 | 書き込みの判定 | `PennantWorld.owner`（`_is_owner`・`_requires_world_owner`）。owner は `SET_NULL`。世界の上限は1人5つ（`MAX_WORLDS_PER_OWNER=5`、`count_by_owner`）、シーズンは `MAX_SEASONS_PER_WORLD=10` | `views.py:401,406`、`world.py:28-30` |
 | 世界の一覧 | 誰でも見られる。台帳は範囲を持たない設計で、`test_wiring.py:94` の `UNSCOPED = {DjangoWorldRepository, DjangoWorldSummaryQuery}` で検査から外してある。`find_all`・`list_all` は全世界を読む | `repositories.py:1359-`、`queries.py:758-` |
-| 組み立て口 | 16個（下表）。`build_world_view_service(world_id)` は P4a で入った | `views.py:170-709` |
-| `scoped_url` | 入っている。context の `world` が無ければ `reverse(name)`、あれば `reverse("pennant_" + name, (world_id, *args))`。テンプレートで `{% scoped_url %}` 54か所、素の `{% url %}` 97か所 | `templatetags/scoped.py:17-22`、`urls.py` の `_pennant()` |
-| マイグレーション | main は `0041_jersey_number_as_text` まで。epic は main 取り込みで `0042〜0045` に振り直し中。**ワークスペースは 0046 から始まる見込み**（着手時に確かめ直す） | `myapp/migrations/` |
+| 組み立て口 | 17個（下表。#193 で `build_world_team_analysis_service(world_id)` が入った）。`build_world_view_service(world_id)` は P4a で入った | `views.py` |
+| `scoped_url` | 入っている。context の `world` が無ければ `reverse(name)`、あれば `reverse("pennant_" + name, (world_id, *args))`。テンプレートで `{% scoped_url %}` 54か所、素の `{% url %}` 97か所（#130 などで変わっている。W2 の着手時に数え直す） | `templatetags/scoped.py:17-22`、`urls.py` の `_pennant()` |
+| マイグレーション | main は `0045_pennant_club_plan` まで。#168 が `0046_playerstint_left_via` を取るので、**ワークスペースは 0047 から始まる**（#168 を取り込んだ後に番号を確かめる） | `myapp/migrations/` |
 
-組み立て口（16個）の範囲の受け方:
+組み立て口（17個）の範囲の受け方:
 
 | 範囲の受け方 | 組み立て口 |
 | --- | --- |
 | 実データに固定 | `build_service`・`build_recording_service`・`build_team_analysis_service`・`build_roster_service`・`build_permission_query`・`build_player_search_query`・`build_pennant_world_service`（分岐元が実データ） |
-| `world_id` を受け取る | `build_world_view_service`・`build_pennant_ratings_service`・`build_pennant_season_service`・`build_pennant_offseason_service`・`build_offseason_view_service`・`build_pennant_home_service`・`build_club_service`・`build_club_details_service` |
+| `world_id` を受け取る | `build_world_view_service`・`build_world_team_analysis_service`・`build_pennant_ratings_service`・`build_pennant_season_service`・`build_pennant_offseason_service`・`build_offseason_view_service`・`build_pennant_home_service`・`build_club_service`・`build_club_details_service` |
 | 範囲を持たない | `build_pennant_world_view` |
 
-補助は `_repositories_for(scope)` と `_world_clock(world_id, ...)`。`_scope(world_id)`（`views.py:419`）が共有ビューの範囲を決める唯一の分岐点で、`test_wiring.py` は全組み立て口を検査している。
+補助は `_repositories_for(scope)` と `_world_clock(world_id, ...)`。範囲の分岐点は `_scope(world_id)`（`views.py:461`）が共有ビューの範囲を決める1か所と、#193 で入った戦力分析用の `_analysis_scope(world_id)`（`views.py:304`）の2か所（唯一ではない。W1b で数え直す）。`test_wiring.py` は全組み立て口を検査している。
 
 #### 比べた案
 
@@ -130,6 +130,8 @@
 | 戦力分析のペナント版（#130、ロードマップ フェーズ4.6 の G） | W6 の前後で URL の作り方が変わる。9. の並び順の注記 |
 
 ### 3.2 新しいドメインの型（`myapp/domain/workspace.py`。Django は import しない）
+
+W1a（T1）で入れるのは `Visibility` と `Workspace` の最小形（`id`・`key`・`name`・`owner_id`・`visibility`。名前と key の検査、key を作る関数）、例外は `InvalidWorkspace` だけ。`Invitation`・`InvitedRole`・`InvalidInvitation` と、その永続化（`WorkspaceInvitation` の表）は **W4 で作る**（決定 2026-10-11。W1a では書く人も読む人もいない表になり、役割の choices とチームの M2M を先に固めることになるため）。残りも後の段階で足す。
 
 | 型 | 種類 | 内容 |
 | --- | --- | --- |
@@ -190,8 +192,8 @@
 ### domain
 
 - `domain/workspace.py`（新規。3.2）
-- `domain/pennant/world.py`: `WorldScope(workspace_id, world_id)`、`World.workspace_id`
-- `domain/repositories.py`: `WorkspaceRepository`（`find_by_key` / `find_by_id` / `save` / `delete`）・`InvitationRepository`・範囲つきの `StadiumRepository` を Protocol で足す
+- `domain/pennant/world.py`: `WorldScope(workspace_id, world_id)`（W1b）、`World.workspace_id: int | None = None`（W1a。保存時に埋まり、W1b で範囲から渡す）
+- `domain/repositories.py`: `WorkspaceRepository`（`find_by_key` / `find_by_id` / `save` / `delete`）・`InvitationRepository`（W4）・範囲つきの `StadiumRepository` を Protocol で足す
 - `domain/sample/`（新規）: 見本の組み立て。能力は `domain/simulation/samples.py`、試合は `domain/simulation/engine.py` と `assemble_game` を使う
 - 既存の `Team` / `Game` / 値オブジェクト / 集計は変更しない
 
@@ -216,17 +218,18 @@
 - `repositories.py` / `queries.py`: epic で `WorldScope` を通した箇所はそのまま使う。追加は球場とメンバーの経路だけ。
 - `DjangoTeamPermissionQuery` は `DjangoWorkspaceAccessQuery` に置き換える。1回の要求で読むのは、ワークスペースの行・編集者の行の有無・担当チームの id で、**多くて3クエリ**。判定は domain の `WorkspaceAccess` に任せる。
 - `admin.py`: 管理画面は運営者専用にする。
-  - 全モデルにワークスペースの列と絞り込みを足す。
-  - 外部キーの選択肢は、編集中の行と同じワークスペースのものに限る。
-  - 今ある `_REAL` 定数（`admin.py:98`）と `RealDataOnlyMixin`（`_REAL_QUERYSETS`）は、「全ワークスペースの実データを読む」前提に変わる。`DjangoTeamRepository(_REAL)`・`DjangoLeagueRepository(_REAL)` を直接作っている箇所（TeamAdmin・在籍の検査）は、行のワークスペースから範囲を作る。一覧は 3.1 の管理画面専用の関数で読む（Q4）。
+  - 管理画面に登録されているのは League・Team・Stadium・Player・PlayerStint・Game の6モデルだけ（ペナントのモデルは登録しない方針のまま）。一覧にワークスペースの列と絞り込みを足す（League・Stadium は直属、Team・PlayerStint・Game はリーグ経由、Player は在籍経由）。
+  - **`Workspace` 自体も登録する**（空の DB で運営者が最初の1つを作る手段。`WorkspaceEditor` はインライン）。W1a の T7。
+  - 外部キーの選択肢は、編集中の行と同じワークスペースのものに限る。**追加画面では行のワークスペースがまだ決まっていないので選択肢を絞れない**。そこで `clean()` でも「同じワークスペースか」を検査し、範囲をまたぐ組み合わせはフォームのエラーにする（選択肢を絞るのは導線、検査が本体）。
+  - 今ある `_REAL` 定数（`admin.py:111`）と `RealDataOnlyMixin`（`_REAL_QUERYSETS`）は、「全ワークスペースの実データを読む」前提に変わる。`DjangoTeamRepository(_REAL)`・`DjangoLeagueRepository(_REAL)` を直接作っている箇所（TeamAdmin・在籍の検査）は、行のワークスペースから範囲を作る。一覧は 3.1 の管理画面専用の関数で読む（Q4）。
   - ダッシュボードのテンプレートタグ `admin_overview` は、範囲を必須にすると呼べなくなる。そこで運営向けの概況（ワークスペース数・ユーザー数・行数の多いワークスペース）に置き換える。
 - 管理コマンド: `seed_virtual_players` / `seed_virtual_games` / `measure_pages` / `rebuild_fielding_lines` / `pennant_create`（分岐元のリーグを選ぶ側）は `--workspace <key>` を必須にする。`pennant_advance` / `pennant_close_season` / `pennant_delete` は `--world` から世界のワークスペースを導く。`simulate_sample`・`backup_db` は対象外。
 
 ### presentation
 
 - `views.py`:
-  - 今ある16個の組み立て口（3.1 の表）は、すべて範囲（またはワークスペースの id）を必須の引数にする（既定値は無し）。ペナント用は「台帳で世界を引いてから `WorldScope.pennant(ws, w)` を作る」補助を1つ置く。
-  - 範囲の分岐は `_scope(world_id)` の1か所のまま。W1 の間は一時関数（例 `_legacy_workspace_id()`。id が最小のワークスペース、無ければ 404）で今の URL を唯一のワークスペースに解決し、W2 で消す（決定 2026-10-07 Q2）。`templatetags/admin_overview.py` も W1 ではこの一時関数の範囲で呼ぶ。
+  - 今ある17個の組み立て口（3.1 の表）は、すべて範囲（またはワークスペースの id）を必須の引数にする（既定値は無し）。ペナント用は「台帳で世界を引いてから `WorldScope.pennant(ws, w)` を作る」補助を1つ置く。
+  - 範囲の分岐は `_scope(world_id)` と `_analysis_scope(world_id)` の2か所（W1b で1か所にまとめられるか見る）。W1 の間は一時関数（id が最小のワークスペース、無ければ日本語の例外）で今の URL を唯一のワークスペースに解決し、W2 で消す（決定 2026-10-07 Q2）。**一時関数は views ではなく infrastructure に置く**（`infrastructure/workspaces.py` の `legacy_workspace_id()`。W1a の書き込み経路＝リポジトリでも要るため。W1b の views もこれを使い、別の実装を置かない）。`templatetags/admin_overview.py` も W1 ではこの一時関数の範囲で呼ぶ。
   - P4a の `build_world_view_service(world_id)` は、W1b で `build_service(WorldScope.pennant(ws, w))` に吸収するか、引数を `scope` にそろえる。
   - 新しい組み立て口として `build_workspace_service()` / `build_league_setup_service(scope)` / `build_workspace_access_query()` を足す。`test_wiring.py` がすべてを検査する。
 - ワークスペースを解決するデコレータ `@workspace_view(write=...)` を作る。
@@ -245,16 +248,18 @@
 
 ## 5. データとマイグレーション
 
-ペナントの epic を main に入れた後で作る（epic にも複数のマイグレーションがあり、並行して作ると番号が衝突するため）。番号は仮に N とする。2026-10-07 時点では main が `0041` まで、epic が main 取り込みで `0042〜0045` に振り直し中なので、**N は 0046 の見込み**（着手時に確かめ直す）。
+ペナントの epic を main に入れた後で作る（epic にも複数のマイグレーションがあり、並行して作ると番号が衝突するため）。番号は仮に N とする。2026-10-11 時点で main は `0045` まで、#168 が `0046_playerstint_left_via` を取るので、**N は 0047**（#168 を epic に取り込んだ後に確かめる）。
 
 | ファイル | 種類 | 内容 |
 | --- | --- | --- |
-| `00N_workspace` | スキーマ | `Workspace`（`key` は一意。10文字のランダムな英小文字と数字）・`name`・`owner`（PROTECT）・`visibility`（choices は `Visibility` から）・`created_at`。`WorkspaceEditor`（workspace と user の組で一意）。`WorkspaceInvitation`（`token_digest` は一意、role、teams の M2M、`expires_at`、`created_by`）。`League.workspace`・`Stadium.workspace`・`PennantWorld.workspace` を **null 可**で足す |
+| `00N_workspace` | スキーマ | `Workspace`（`key` は一意。10文字のランダムな英小文字と数字）・`name`・`owner`（PROTECT）・`visibility`（choices は `Visibility` から）・`created_at`。`WorkspaceEditor`（workspace と user の組で一意）。`League.workspace`・`Stadium.workspace`・`PennantWorld.workspace` を **null 可・`on_delete=PROTECT`** で足す（ワークスペースの削除は範囲で絞った削除で行い、Django の CASCADE の collector には任せない）。`WorkspaceInvitation`（`token_digest` は一意、role、teams の M2M、`expires_at`、`created_by`）は **W4 で作る**（決定 2026-10-11。W4 でマイグレーションが1本増える） |
 | `00N+1_backfill_default_workspace` | データ移行 | リーグ・球場・世界の行が1つでもあれば、ワークスペースを1つ作る。公開にする。持ち主は id が最も小さい superuser（いなければ staff。どちらもいなければ「先に createsuperuser を」という日本語の例外で止める）。**ほかの staff は `WorkspaceEditor` にする**（今の全権を失わせないため）。`world IS NULL` のリーグ・全球場・全世界をこのワークスペースに付ける。逆方向の処理も書く |
 | `00N+2_workspace_constraints` | スキーマ | `Stadium.workspace` と `PennantWorld.workspace` を null 不可にする。`Stadium.name` の `unique=True` を外し、`UniqueConstraint(workspace, name)` にする。League は epic の `name WHERE world IS NULL`（`unique_real_league_name`）を外して `UniqueConstraint(workspace, name)` にする（`(world, name)` は残す）。CheckConstraint で、`workspace` と `world` のちょうど片方だけを持つようにする |
 
 - **既存データへの影響:** 更新するのはリーグ・球場・世界の数十行だけ。試合と明細（約87万行・64MB）には触らない（範囲はリーグからたどるため）。
-- 開発 DB の件数（2026-10-07 時点。リーグ8・球場21・チーム48・選手1,619・在籍の無い選手0・`Team.managers` 0行・ユーザー3人のうち staff 2・superuser 2）は、#155（仮想データの作り直し）の後に変わるので、着手時に測り直す。
+- 開発 DB の件数（2026-10-11 時点。実データのリーグ8・ペナントのリーグ0・球場21・世界0・チーム48・選手1,619・在籍の無い選手0・`Team.managers` 0行・ユーザー3人のうち staff 2・superuser 2）は、#175（仮想データの作り直し。#155 は閉じた）の後に変わるので、着手時に測り直す。
+- **分岐で作る世界のワークスペース（W1a）:** `World` は `workspace_id: int | None = None` を持つが、W1a の範囲（`WorldScope`）はワークスペースを運ばない。そこで `DjangoWorldRepository.save` が、`workspace_id` が None なら `legacy_workspace_id()` を入れる。W1b で `PennantWorldService` が範囲のワークスペースを渡す形に替える。ペナントの世界のリーグ自身は `workspace` を持たない（`world` からたどる）。
+- テスト側の直接作成は `League.objects.create` が46か所・23ファイル（e2e 4ファイルを含む）、`Stadium.objects.create` が9か所・4ファイル、`PennantWorld.objects.create` が1か所。T3 でテスト補助に寄せる。
 - 世界の owner のうち staff でない人は、backfill では編集者にならない（今の開発 DB に該当者はいない見込み）。本番に移すときに該当者がいれば、扱いを決める。
 - League と Stadium の表は SQLite の制約変更で作り直しになるが、行数が少ないので問題ない。
 - `Team.managers` の既存の行は、移したワークスペースのチーム担当としてそのまま残る。
@@ -309,22 +314,22 @@
 | `test_workspace_isolation.py`（**中心**） | URL の解決器から `/w/<key>/` 以下の全パターンを**列挙**し、分類表に無い URL があれば落とす（画面を足したときの検査漏れを防ぐ）。目印の名前を付けたワークスペース A・B を用意して、次を確かめる。(1) A の key の下で B の id を開くと 404。(2) A の画面の HTML に B の目印が出ない。(3) 非公開の B は、未ログインならログインへ、部外者なら 404。(4) すべての POST を他人のワークスペースに送っても、DB の行数と内容が変わらない。(5) A の key の下で B の世界 id を開くと 404。(6) 選手検索に B の選手が出ない。(7) 中の画面のリンクがすべて `/w/<key>/` で始まる |
 | `test_cross_workspace_ids.py` | フォームと JSON に他所の id を混ぜる経路（試合登録の `home_team`・スコアブック API の選手 id・チーム編集の球場・移籍先・担当の割り当て・契約区分の昇格と FA 宣言の POST・戦力分析の `?team=`）。すべて拒否され、何も保存されない |
 | `test_workspace_permissions.py` | 役割ごとに、書き込みの導線が出る／出ない。POST が通る／403。未ログインならログインへ |
-| `test_workspace_service.py` | 作成（見本あり・なし）、上限、削除で全行が消えて他のワークスペースの行は残ること、招待の受諾と除名（除名すると担当も外れる） |
+| `test_workspace_service.py`（W4 で作る） | 作成（見本あり・なし）、上限、削除で全行が消えて他のワークスペースの行は残ること、招待の受諾と除名（除名すると担当も外れる） |
 | `test_league_setup_screens.py` | 作成・編集・空のときだけ削除できること。名前の一意がワークスペースの中だけで効くこと |
 | `test_world_isolation.py` の `ModelClassificationTest`（epic の `CLASSIFICATION` を拡張。独立したファイルは作らない） | myapp の全モデルを、範囲のたどり方で分類する。分類に漏れがあれば落とす。分類表は下の表 |
-| `test_workspace_migration.py` | データのある DB ではワークスペースが1つでき、全リーグ・球場・世界が付き、staff が編集者になる。空の DB では何もできない |
+| `test_workspace_migration.py`（`test_jersey_number.py` の `MigrationToTextTest` に倣う） | データのある DB ではワークスペースが1つでき、**実データのリーグ**（ペナントのリーグは除く）・全球場・全世界が付く。持ち主は最小 id の superuser（いなければ staff）、ほかの staff は編集者、staff でない人は編集者にならない。どちらもいなければ日本語の例外で止まる。空の DB では何もできない。逆方向で元に戻る |
 | `test_admin.py`（拡張） | 管理画面の外部キーの選択肢が、同じワークスペースのものに限られる。在籍の無い選手が管理画面の一覧に出る（Q4） |
 | `test_seed_commands_scope.py`（拡張） | `--workspace` が必須で、ほかのワークスペースに触れない。`pennant_create --workspace` が他所のリーグを分岐元にできない |
-| `test_wiring.py`（拡張） | 16個＋新しい `build_*` のすべてと、範囲が必須であること。`ScopeIsRequiredTest` を「`scope` か `workspace_id` が必須」に広げ、`UNSCOPED` を空にする。管理画面専用の関数を `admin.py` 以外が import していないこと（Q4） |
+| `test_wiring.py`（拡張） | 17個＋新しい `build_*` のすべてと、範囲が必須であること。`ScopeIsRequiredTest` を「`scope` か `workspace_id` が必須」に広げ、`UNSCOPED` を空にする。管理画面専用の関数を `admin.py` 以外が import していないこと（Q4） |
 
 #### 分類表（`ModelClassificationTest`）
 
-今ある表は「世界の表」の列のとおり。ワークスペースでは「League までの道」＋「League → Workspace の2経路」の形にし、今の道の末尾 `__world` を除いた道を共通にして League だけを特別扱いする。
+今ある表（main の `test_world_isolation.py` の `CLASSIFICATION`）は「世界の表」の列のとおり。ワークスペースでは「League までの道」＋「League → Workspace の2経路」の形にし、今の道の末尾 `__world` を除いた道を共通にして League だけを特別扱いする。
 
 | モデル | 世界の表（今） | ワークスペースでの分類 | 道 |
 | --- | --- | --- | --- |
 | `Workspace`（新） | — | 全体（自身） | — |
-| `WorkspaceEditor`・`WorkspaceInvitation`（新） | — | メンバー | `workspace` |
+| `WorkspaceEditor`（新。`WorkspaceInvitation` は W4 で足す） | — | メンバー | `workspace` |
 | `PennantWorld` | ペナント専用 | 世界経由（直属） | `workspace` |
 | `Stadium` | 共有 | ワークスペース直属 | `workspace` |
 | `League` | リーグ経由 | 2経路（実データは `workspace`、ペナントは `world__workspace`。CheckConstraint で片方だけ） | — |
@@ -335,6 +340,7 @@
 | `Team.managers` の中間表 | 対象外（`get_models()` に出ない） | メンバーだが表には載らない | — |
 
 - `Stadium` は今「共有＝世界を指さない」と検査されている（`test_shared_models_do_not_point_into_a_world`）。ワークスペースでは直属に変わるので、この検査も直す。
+- 球場の扱いに関わる既存のテストも、球場がワークスペース直属になっても意味が通るかを見直す: `test_the_stadium_is_shared`（実データの画面）と `test_editing_a_stadium_does_not_detach_the_world_teams`（管理画面）。
 - 在籍経由の3つは「選手の在籍はすべて同じワークスペースにある」が前提で、DB では強制できない（3.3）。
 
 ### e2e（スモーク1本）
@@ -373,23 +379,23 @@ W0 はどちらにも依存しないので、先に main に入れる（#76）�
 | 段階 | Issue | 内容 | 確認できること |
 | --- | --- | --- | --- |
 | W0 | #76（main に直接） | gunicorn・Cloudflare Tunnel・本番の settings（SQLite の `transaction_mode="IMMEDIATE"`、`init_command` で WAL と `synchronous=NORMAL`、`timeout` 20秒）、セキュリティ系の設定、静的ファイル、バックアップ | 本番相当の構成で今のアプリが動く |
-| W1a | #77 | データの帰属。`domain/workspace.py`（`Visibility`・`Workspace` の最小形）、ORM の `Workspace`・`WorkspaceEditor`・`WorkspaceInvitation`、5. のマイグレーション3本、書き込み経路が新しい列を埋める、管理画面の絞り込み、テスト補助、分類表の新しい形。**範囲の型はまだ変えない** | 単独でフルテストが通る。実データの範囲は今のまま `world IS NULL` で動く。データのある DB ではワークスペースが1つでき、全リーグ・球場・世界が付く |
-| W1b | [#172](https://github.com/sumika157/baseball-league-manager/issues/172) | 範囲の一般化。`WorldScope(workspace, world)`、`scoping` の書き換え（`players_in` の肯定形・`stadiums_in`・管理画面専用の関数）、世界の台帳の絞り込み、本拠地の検査、組み立て口16個を範囲必須に、管理画面と管理コマンドの `--workspace`。**URL はまだ変えない**（今の URL は一時関数で唯一のワークスペースに解決する） | 範囲で組み立てたサービスがもう一方のワークスペースの行を返さない。`UNSCOPED` が空。同じ DB で `measure_pages` が前後で変わらない |
+| W1a | #77 | データの帰属。`domain/workspace.py`（`Visibility`・`Workspace` の最小形）、ORM の `Workspace`・`WorkspaceEditor`（`WorkspaceInvitation` は W4）、5. のマイグレーション3本（0047〜0049）、書き込み経路が新しい列を埋める（分岐で作る世界を含む。5.）、管理画面の絞り込みと `Workspace` の登録、テスト補助、分類表の新しい形。**範囲の型はまだ変えない**。タスク PR 7本（T1〜T7）に分けて `epic/workspaces` に入れる | 単独でフルテストが通る。実データの範囲は今のまま `world IS NULL` で動く。データのある DB ではワークスペースが1つでき、実データのリーグ・球場・世界が付く |
+| W1b | [#172](https://github.com/sumika157/baseball-league-manager/issues/172) | 範囲の一般化。`WorldScope(workspace, world)`、`scoping` の書き換え（`players_in` の肯定形・`stadiums_in`・管理画面専用の関数）、世界の台帳の絞り込み、本拠地の検査、組み立て口17個を範囲必須に、管理画面と管理コマンドの `--workspace`。**URL はまだ変えない**（今の URL は一時関数で唯一のワークスペースに解決する） | 範囲で組み立てたサービスがもう一方のワークスペースの行を返さない。`UNSCOPED` が空。同じ DB で `measure_pages` が前後で変わらない |
 | W2 | #78 | `/w/<key>/`、`@workspace_view`、`WorkspaceAccess` と参照クエリ、`is_staff` の特権の廃止、`scoped_url` の一般化、公開・非公開、`/` の一覧、全 URL の漏れの検査 | 移したデータを `/w/<key>/` で読める。非公開にすると未ログインでは見えない |
 | W3 | #79 | リーグ・チーム・球場の登録画面、選手のプロフィール欄の編集、`LeagueSetupService` | 持ち主がブラウザだけでリーグを一から作れる |
-| W4 | #80 | `WorkspaceService`: 作成（空）・設定・削除・上限・メンバー・招待・ヘッダーの切り替え | 2人目を招待して一緒に編集できる |
+| W4 | #80 | `WorkspaceService`: 作成（空）・設定・削除・上限・メンバー・招待（`Invitation`・`InvitedRole` と `WorkspaceInvitation` の表・マイグレーションはここで作る）・ヘッダーの切り替え | 2人目を招待して一緒に編集できる |
 | W5 | #81 | 見本の生成（3.6） | 作成直後から順位表とボックススコアが見える。作成の所要時間を記録する |
 | W6 | #82 | ペナントを `/w/<key>/pennant/` へ移し、権限をワークスペースに合わせる（3.1） | ペナントがワークスペースの中で動く |
 | 仕上げ | #74 | 多数のワークスペースでの実測（10.）、Wiki への吸収、main へのマージ、デプロイ | — |
 
-W1 を W1a と W1b に分けるのは、データの帰属（スキーマとデータ移行）と範囲の型の変更（本番25か所・テスト約130か所の呼び出しの直し）を別々に単独で通せるようにするため（決定 2026-10-07 Q1）。各段階の詳しい手順とテスト計画は Issue に書き、ここには要約だけを置く（#77・#172）。
+W1 を W1a と W1b に分けるのは、データの帰属（スキーマとデータ移行）と範囲の型の変更（本番26か所・テスト134か所の呼び出しの直し）を別々に単独で通せるようにするため（決定 2026-10-07 Q1）。各段階の詳しい手順とテスト計画は Issue に書き、ここには要約だけを置く（#77・#172）。
 
 W3 を W4 より先にするのは、W4 を先にすると、中身を入れられない空のワークスペースが一時的にできてしまうため。
 
 #### 並び順の注記（2026-10-07）
 
-- **#155（仮想データの作り直し。ペナントと支配下が main に入った後）**: 開発 DB の件数が変わる。#155 の後に W1 を始めるなら、`measure_pages` の比較の基準はその DB で取る。
-- **戦力分析 G（#130。ペナントの世界の中へ）**: W6 の前後で URL の作り方が変わる。どちらが先かは W6 の着手時に決める。
+- **#175（仮想データの作り直し。#155 は閉じてここに移った）**: 開発 DB の件数が変わる。#175 の後に W1b を始めるなら、`measure_pages` の比較の基準はその DB で取る。
+- **戦力分析のペナント版（#130）**: #193 で main に入った。W6 の前後で URL の作り方が変わる点は残る（組み立て口が1つ増え、範囲の分岐点も `_analysis_scope` が加わった。3.1）。
 
 ## 10. パフォーマンスへの影響
 
@@ -398,7 +404,7 @@ W3 を W4 より先にするのは、W4 を先にすると、中身を入れら�
 | 実データの画面 | 範囲の結合の深さは epic と同じ（Game → Team → League）。条件が `world IS NULL` から `workspace_id = X` に変わるだけで、FK の索引が効く | W1 の前後で、同じ DB に対して `measure_pages --workspace <key>` |
 | 1回の要求ごとの権限の解決 | 多くて +3 クエリ | `measure_pages` のクエリ数 |
 | 選手検索 | `Exists(在籍 → チーム → リーグ.workspace)`。epic と同じ形 | 同上 |
-| 87万行・64MB の数字 | #155（仮想データの作り直し）の後に変わる | W1 の着手時に測り直す |
+| 87万行・64MB の数字 | #175（仮想データの作り直し）の後に変わる | W1 の着手時に測り直す |
 | **ワークスペースが多い状態** | 大きい表（打席・進塁）を全体で走査していないか。今の87万行は、1つの範囲の中の数字にすぎない | W6 の後、見本つきのワークスペースを200個作った DB（約 +180万行）で `measure_pages` と `--profile` を流す。SQL の時間ではなく、応答時間とクエリ数を見る |
 | 見本の作成 | 約1〜1.5秒（36試合） | W5 で実測 |
 | **SQLite の書き込みロック** | 書き込みは DB 全体で1本しか通らない。ペナントの「1週間進める」（2リーグで約1秒、8リーグで約3秒。負荷時は 8〜11秒。#100 の後は1回の書き込みロックが最長約1〜2秒）や見本の作成のあいだ、ほかの全ユーザーの書き込みが待たされる | 待ち時間（`timeout`）を20秒にする。ペナントは1回に進める量を抑える（画面から進めるのは150試合まで）。書き込みは `FLUSH_EVERY_GAMES`（200試合）ごとの短いトランザクションに分け、画面の1回の「進める」は複数のトランザクションになる（1日ごとにコミットするのではない）。検査と行の組み立ては `atomic` の外で済ませ、中は対戦を消して書くだけにする。シーズンを締める処理も外で計算し、中で読み直して書く（詳細は Wiki「ペナントモードの仕組み」の「書き込みとロック」）。gunicorn は同期ワーカー2〜3、タイムアウト60秒 |
@@ -423,7 +429,7 @@ W3 を W4 より先にするのは、W4 を先にすると、中身を入れら�
 | Q4 | 見本の規模 | 1リーグ6チーム・各25人・約36試合。作成時の既定はオン |
 | Q5 | 共同編集するワークスペースでのペナントの世界 | 進める・編成するのは世界の作成者。持ち主は削除もできる |
 | Q6 | サイトの登録画面の範囲 | リーグ・チーム・球場の作成と編集、選手のプロフィール欄（過去の在籍と主将の在任歴の編集は後回し） |
-| — | 数値 | 1人が持てるワークスペースは3、招待の期限は7日、key は10文字のランダムな英小文字と数字 |
+| — | 数値 | 1人が持てるワークスペースは3、招待の期限は7日、key は10文字のランダムな英小文字と数字、ワークスペースの名前は100文字まで（`domain/workspace.py` の `MAX_NAME_LENGTH`。T2 の ORM の `max_length` はこの定数を import し、100 を直書きしない） |
 | — | 公開先 | 当面は AWS 想定。最も安い構成にする（14.）。DB は当面 SQLite（2026-10-05） |
 
 ### 決定事項（2026-10-07 ユーザー。W1 着手前の照合で。番号は上の表と別に振る）
@@ -434,6 +440,13 @@ W3 を W4 より先にするのは、W4 を先にすると、中身を入れら�
 | Q2 | W1 の間の今の URL | 一時関数（例 `_legacy_workspace_id()`。id が最小のワークスペース、無ければ 404）で唯一のワークスペースに解決する。W2 で消す |
 | Q3 | 世界の台帳 | W1b でワークスペースで絞り、`test_wiring.py` の `UNSCOPED` を空にする。画面（`/pennant/`）は W6 まで変えない |
 | Q4 | 管理画面の範囲 | 管理画面だけは全ワークスペースの実データを読んでよい例外。`scoping` に管理画面専用の関数を1つ置き（全ワークスペースの実データ＋在籍の無い選手）、`admin.py` 以外が import していないことをテストで縛る |
+
+### 決定事項（2026-10-11 ユーザー。W1a の計画の見直しで）
+
+| # | 判断 | 決定 |
+| --- | --- | --- |
+| R1 | epic を切る時期 | 今切り、T1（domain だけ）から始める。T2 は #168（`0046`）が main に入って epic に取り込んだ後、T3 は #184 の後 |
+| R2 | 招待の表（`WorkspaceInvitation`）を作る段階 | W4 で作る。W1a では作らない（5.・9.） |
 
 ## 13. 公開先と費用
 
@@ -498,3 +511,9 @@ W3 を W4 より先にするのは、W4 を先にすると、中身を入れら�
 ## 14. 段階ごとの記録
 
 （段階を終えるごとに、実測値と、実装中に決めたことを追記する）
+
+### W1a（#77）
+
+- 決定（2026-10-11）: `legacy_workspace_id()` は `infrastructure/workspaces.py` に置く（views には置かない）。W1a のリポジトリの書き込み経路と W1b の views が同じ関数を使い、W2 で消す。
+- 決定（2026-10-11）: 招待の表（`WorkspaceInvitation`）と `Invitation`・`InvitedRole` は W4 で作る。
+- T1（`feature/workspace-domain`）: `domain/workspace.py`（`Visibility`・`Workspace`・key の生成と検査）、`InvalidWorkspace`、`World.workspace_id` を入れた。ORM・マイグレーションは T2 以降。

@@ -65,6 +65,10 @@ class WorldTest(unittest.TestCase):
         self.assertEqual(world.owner_id, 5)
         self.assertIsNone(world.managed_team_id)
 
+    def test_the_workspace_is_optional_and_kept_when_given(self):
+        self.assertIsNone(World(name="世界", seed=0, start_year=2026).workspace_id)
+        self.assertEqual(World(name="世界", seed=0, start_year=2026, workspace_id=3).workspace_id, 3)
+
     def test_the_managed_team_and_owner_may_be_decided_later(self):
         world = World(name="世界", seed=0, start_year=2026)
 
