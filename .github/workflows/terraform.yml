@@ -1,0 +1,40 @@
+# infra/（Terraform）の整形と構文の検査。backend には接続しない（認証情報も要らない）。apply は CI から行わない。
+# infra/ が変わったときだけ流すため、ci.yml から分けてある（ジョブ単位でパスを絞るより、ワークフロー単位の paths で済む）
+name: Terraform
+
+on:
+  pull_request:
+    paths:
+      - "infra/**"
+      - ".github/workflows/terraform.yml"
+  push:
+    branches: [main, "epic/**"]
+    paths:
+      - "infra/**"
+      - ".github/workflows/terraform.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: terraform fmt -check
+        run: |
+          docker run --rm -v "$PWD/infra:/infra" -w /infra hashicorp/terraform:1.16.5 fmt -check -recursive
+
+      # イメージの入口は terraform なので、引数はサブコマンドから渡す（sh -c は使えない）。
+      # init が infra/.terraform/ にプロバイダを置き、次の validate がそれを使う
+      - name: terraform validate
+        run: |
+          docker run --rm -v "$PWD/infra:/infra" -w /infra hashicorp/terraform:1.16.5 init -backend=false -input=false
+          docker run --rm -v "$PWD/infra:/infra" -w /infra hashicorp/terraform:1.16.5 validate
