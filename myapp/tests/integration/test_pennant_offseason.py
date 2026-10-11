@@ -98,7 +98,7 @@ class CloseSeasonTest(ClosedSeasonCase):
         self.assertEqual(active_stints(self.world_a, to_year=YEAR).count(), result.retired_count)
         rookies = active_stints(self.world_a).filter(from_year=YEAR + 1)
         self.assertEqual(rookies.count(), result.draftee_count)
-        self.assertGreaterEqual(result.draftee_count, 2 * 2, "各球団2人以上")
+        self.assertGreaterEqual(result.draftee_count, 2 * 2, "前提: 各球団23人で帯の下なので、どの球団も指名する")
         self.assertFalse(active_stints(self.world_a).filter(from_year__gt=YEAR + 1).exists())
         for player in orm_models.Player.objects.filter(stints__in=rookies):
             self.assertTrue(player.birth_date, f"{player.name} のプロフィールが入っている")

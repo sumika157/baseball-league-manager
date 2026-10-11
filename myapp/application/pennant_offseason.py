@@ -47,7 +47,7 @@ from ..domain.repositories import (
     TeamRepository,
     WorldRepository,
 )
-from ..domain.value_objects import JerseyNumber, RosterLimits
+from ..domain.value_objects import ContractStatus, JerseyNumber, RosterLimits
 from .dto import SeasonClosed, SeasonCloseOption
 from .pennant_season import AtomicBlock
 from .queries import SeasonPlayingTimeQuery, SimulationContextQuery
@@ -194,14 +194,15 @@ class PennantOffseasonService:
     def _prepare(self, world: World, year: int) -> _PreparedClose:
         """読んで計算し、集約の変更（引退・新人）をメモリの上で済ませる。DB には何も書かない。"""
         teams = self._teams.find_all_with_roster()
-        limits = {league.id: league.foreign_player_roster_limit for league in self._leagues.find_all()}
+        limits = {league.id: league.roster_limits for league in self._leagues.find_all()}
         ratings_by_player = {item.player_id: item for item in self._ratings.find_by_year(year)}
         playing = self._playing_time.for_year(year)
 
         clubs = [
             OffseasonClub(
                 team_id=_saved_id(team.id),
-                foreign_roster_limit=limits.get(team.league_id),
+                foreign_roster_limit=_limits_of(team, limits).foreign,
+                registered_player_limit=_limits_of(team, limits).registered,
                 players=tuple(
                     _offseason_player(team, player, ratings_by_player, playing, year=year)
                     for player in team.active_players
@@ -257,7 +258,7 @@ class PennantOffseasonService:
         )
 
     def _apply_roster_changes(
-        self, teams: list[Team], plan: OffseasonPlan, limits: dict[int | None, int | None], year: int
+        self, teams: list[Team], plan: OffseasonPlan, limits: Mapping[int | None, RosterLimits], year: int
     ) -> list[_RosterChange]:
         """引退と新人を集約の操作でメモリの上に反映する（保存は `_commit`）。変わった球団だけ返す。"""
         retired = set(plan.retired)
@@ -273,20 +274,24 @@ class PennantOffseasonService:
             for player in leaving:
                 team.retire_player(player, year=year)
             added: list[Player] = []
+            team_limits = _limits_of(team, limits)
             for draftee in draftees:
-                # 新人は支配下で入る。支配下の上限（リーグの登録枠）はここでは検査しない（締める処理を
-                # 名簿の都合で止めない。人数は `draftee_count` が抑える）。外国人枠は下で検査する
+                # 新人は支配下で入り、入団の経路（ドラフト / 新外国人）を記録する。支配下の上限は集約が検査する
+                # （人数は domain の `draftee_count` が上限を超えないように決めるので、ここでは失敗しない）。
+                # 外国人枠は国籍（プロフィール）を入れた後に、下でまとめて検査する
                 player = team.add_player(
                     draftee.name,
                     JerseyNumber(draftee.number),
                     draftee.position,
                     from_year=next_year,
-                    limits=RosterLimits.UNLIMITED,
+                    contract=ContractStatus.REGISTERED,
+                    acquired_via=draftee.acquisition_route,
+                    limits=team_limits,
                 )
                 player.profile = draftee.profile
                 added.append(player)
             if any(draftee.is_foreign for draftee in draftees):
-                team.ensure_foreign_player_quota(limits.get(team.league_id))
+                team.ensure_foreign_player_quota(team_limits.foreign)
             changes.append(_RosterChange(team=team, added=added, draftees=draftees))
         return changes
 
@@ -323,5 +328,13 @@ def _offseason_player(
         number=player.number.value,
         joined_year=joined,
         ratings=ratings.get(player_id),
+        # 今の区分は集約の判定（`Team.contract_of`＝`Stint.contract_now`）をそのまま渡す。支配下の上限の検査
+        # （`Team.registered_player_count`）と同じ判定なので、domain の指名数が上限を超えない
+        contract=team.contract_of(player),
         playing_time=playing.get(player_id, PlayingTime()),
     )
+
+
+def _limits_of(team: Team, limits: Mapping[int | None, RosterLimits]) -> RosterLimits:
+    """球団のリーグの人数の上限。リーグが見つからなければ無制限（世界の球団はどれもリーグに属す）。"""
+    return limits.get(team.league_id, RosterLimits.UNLIMITED)

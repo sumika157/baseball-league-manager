@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import unittest
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import date
 
 from myapp.domain.entities import Team
+from myapp.domain.pennant import draft
 from myapp.domain.pennant.fork import estimated_birth_date, fork_roster, with_birth_date
 from myapp.domain.pennant.offseason import (
     OffseasonClub,
+    OffseasonPlan,
     OffseasonPlayer,
     overall_value,
     plan_offseason,
@@ -18,9 +21,10 @@ from myapp.domain.pennant.offseason import (
 )
 from myapp.domain.pennant.ratings import PlayerRatings
 from myapp.domain.pennant.retirement import MAX_PLAYING_AGE, ROOKIE_FACTOR, PlayingTime, retirement_chance
+from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND
 from myapp.domain.simulation.randomness import game_uniform
 from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings
-from myapp.domain.value_objects import JerseyNumber, Position, Profile, RosterLimits
+from myapp.domain.value_objects import AcquisitionRoute, ContractStatus, JerseyNumber, Position, Profile, RosterLimits
 
 YEAR = 2027
 START_YEAR = 2026
@@ -33,6 +37,7 @@ def player(
     position: Position = Position.INFIELDER,
     ratings: bool = True,
     foreign: bool = False,
+    contract: ContractStatus = ContractStatus.REGISTERED,
 ) -> OffseasonPlayer:
     rating = PitcherRatings() if position.is_pitcher else BatterRatings()
     return OffseasonPlayer(
@@ -42,12 +47,15 @@ def player(
         number=str(player_id),
         joined_year=2020,
         ratings=PlayerRatings(player_id, YEAR, rating) if ratings else None,
+        contract=contract,
         playing_time=PlayingTime(plate_appearances=400),
     )
 
 
-def club(*players: OffseasonPlayer, team_id: int = 1) -> OffseasonClub:
-    return OffseasonClub(team_id=team_id, foreign_roster_limit=4, players=players)
+def club(*players: OffseasonPlayer, team_id: int = 1, registered_limit: int | None = 70) -> OffseasonClub:
+    return OffseasonClub(
+        team_id=team_id, foreign_roster_limit=4, registered_player_limit=registered_limit, players=players
+    )
 
 
 def plan(clubs: list[OffseasonClub], seed: int = 1):
@@ -114,7 +122,7 @@ class PlanTest(unittest.TestCase):
         result = plan(clubs)
         for team_id, members in ((1, range(1, 31)), (2, range(101, 131))):
             draftees = [d for d in result.draftees if d.team_id == team_id]
-            self.assertTrue(2 <= len(draftees) <= 8)
+            self.assertEqual(len(draftees), draft.MAX_DRAFTEES, "支配下30人以下は1年の上限まで")
             stay = {m for m in members if m not in result.retired}
             numbers = [d.number for d in draftees]
             self.assertEqual(len(numbers), len(set(numbers)))
@@ -139,6 +147,59 @@ class PlanTest(unittest.TestCase):
             [club(*(player(i) for i in range(1, 41)), *(player(i, position=Position.PITCHER) for i in range(41, 81)))]
         )
         self.assertGreaterEqual(result.anchor.mean_shift, 0.0)
+
+
+class RegisteredOnlyDraftTest(unittest.TestCase):
+    """ドラフトの指名数と位置の補充は、支配下だけで数える（育成は試合に出られない。#167）。"""
+
+    @staticmethod
+    def developmental(player_id: int, position: Position = Position.INFIELDER) -> OffseasonPlayer:
+        return player(player_id, position=position, contract=ContractStatus.DEVELOPMENTAL)
+
+    @staticmethod
+    def remaining_registered(result: OffseasonPlan, players: Sequence[OffseasonPlayer]) -> int:
+        return sum(1 for p in players if p.is_registered and p.player_id not in result.retired)
+
+    def test_developmental_players_do_not_count_toward_the_number_of_draftees(self) -> None:
+        """支配下55人＋育成11人: 育成を数えると開幕前の帯の上端（66人）に達して0人になるが、支配下だけで数える。"""
+        players = [*(player(i) for i in range(1, 56)), *(self.developmental(i) for i in range(101, 112))]
+        result = plan([club(*players)])
+        registered = self.remaining_registered(result, players)
+        self.assertEqual(len(result.draftees), draft.draftee_count(registered, registered_limit=70))
+        self.assertGreater(len(result.draftees), 0)
+
+    def test_a_developmental_catcher_does_not_fill_the_catcher_need(self) -> None:
+        players = [
+            *(player(i, position=Position.PITCHER) for i in range(1, 31)),
+            *(player(i, position=Position.INFIELDER) for i in range(31, 46)),
+            *(player(i, position=Position.OUTFIELDER) for i in range(46, 56)),
+            *(self.developmental(i, Position.CATCHER) for i in range(101, 106)),
+        ]
+        result = plan([club(*players)])
+        self.assertIn(Position.CATCHER, {d.position for d in result.draftees})
+
+    def test_the_league_limit_of_registered_players_is_not_exceeded(self) -> None:
+        players = [player(i) for i in range(1, 41)]
+        result = plan([club(*players, registered_limit=42)])
+        registered = self.remaining_registered(result, players)
+        self.assertEqual(len(result.draftees), draft.draftee_count(registered, registered_limit=42))
+        self.assertLessEqual(registered + len(result.draftees), 42)
+
+    def test_a_club_over_the_band_gets_no_draftee(self) -> None:
+        """実データから写した支配下が多い球団（帯の上端を超える）は、引退で減っても上端までしか迎えない。"""
+        players = [player(i, born=date(2002, 7, 1)) for i in range(1, 76)]
+        result = plan([club(*players, registered_limit=None)])
+        remaining = self.remaining_registered(result, players)
+        self.assertGreater(remaining, OPENING_REGISTERED_BAND.high, "前提: 引退の後も上端を超える")
+        self.assertEqual(result.draftees, ())
+
+    def test_rookies_join_as_draft_or_new_foreign_player(self) -> None:
+        result = plan([club(*(player(i) for i in range(1, 31)))])
+        self.assertTrue(result.draftees)
+        for draftee in result.draftees:
+            expected = AcquisitionRoute.NEW_FOREIGN if draftee.is_foreign else AcquisitionRoute.DRAFT
+            self.assertIs(draftee.acquisition_route, expected)
+        self.assertTrue(any(d.is_foreign for d in result.draftees), "前提: 外国人の新人がいる")
 
 
 class HelperTest(unittest.TestCase):

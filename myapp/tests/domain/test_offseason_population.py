@@ -1,37 +1,49 @@
-"""オフを10年回した母集団の分布（合成した 48 球団 × 34 人）。
+"""オフを10年回した母集団の分布（合成した球団）。
 
 曲線・引退・ドラフトの個々の規則は `test_aging` / `test_retirement` / `test_draft` が見る。ここは
 **組み合わせたときに分布が保たれるか**を見る。年齢の平均が保たれる条件は
 `入れ替わりの割合 × (引退の平均年齢 − 新人の平均年齢) ≈ 1歳` で、どれかの倍率を変えると崩れる。
 曲線や倍率を直したら、このテストで帯の内側に入ることを確かめる（3シーズンの実測の代わり）。
 
-帯のうち、錨の補正（1 点以内）と平均年齢の下限（27 歳）は、シード 1 の実測に近い値で、規則の小さな変更でも落ちうる
-（平均年齢はシード 1 で 27.05 まで下がる）。落ちたら、曲線の誤りか、シードの揺れ（別のシードでも落ちるか）かを
-切り分ける。設計書 12.「P6a の詳細」に最終値とシード 2〜4 の範囲がある。
+2つの場面を見る（#167 で開幕前の支配下の帯を 62〜66人にしてから）:
+- **定常状態**（48 球団 × 64 人から）: 年齢・入れ替わり・錨・人数が帯の中に保たれる
+- **帯に追いつく途中**（12 球団 × 34 人から。実データから分岐した球団の人数）: 人数が上端を超えずに帯へ届く
+
+帯のうち、錨の補正（3年目から 1 点以内）は、シード 1 の実測に近い値で、規則の小さな変更でも落ちうる。
+落ちたら、曲線の誤りか、シードの揺れ（別のシードでも落ちるか）かを切り分ける。設計書 12.「P6a の詳細」と
+「#167 の詳細」に最終値とシード 2〜4 の範囲がある。
 """
 
 from __future__ import annotations
 
 import time
 import unittest
+from collections import Counter
 from dataclasses import dataclass, replace
 from datetime import date
 from statistics import fmean, pstdev
 
-from myapp.domain.pennant.draft import ROSTER_TARGET
+from myapp.domain.pennant.draft import MAX_DRAFTEES
 from myapp.domain.pennant.offseason import OffseasonClub, OffseasonPlan, OffseasonPlayer, plan_offseason
 from myapp.domain.pennant.ratings import PlayerRatings
 from myapp.domain.pennant.retirement import PlayingTime
+from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND
 from myapp.domain.simulation.randomness import GameRandom, make_random, normal
 from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings
 from myapp.domain.simulation.samples import BATTER_MEAN, BATTER_SD, PITCHER_MEAN, PITCHER_SD, draw_ratings
-from myapp.domain.value_objects import Position, Profile
+from myapp.domain.value_objects import ContractStatus, Position, Profile
 from myapp.domain.virtual_players import generator
 
 START_YEAR = 2026
 TEAMS = 48
 YEARS = 10
 LEAGUE_FOREIGN_LIMIT = 4
+LEAGUE_REGISTERED_LIMIT = 70
+# 実データから分岐した球団の支配下の人数（開発用 DB の平均 約34人）と、帯の中の人数（定常状態から始める）
+INITIAL_ROSTER = 34
+STEADY_ROSTER = 64
+# 帯に追いつく途中を見るときの球団数（人数の推移だけを見るので少なくてよい）
+GROWTH_TEAMS = 12
 # 試合で使う人数（1軍の野手は打順9人、投手は先発6人）
 REGULAR_BATTERS = 9
 PART_TIME_BATTERS = 3
@@ -57,15 +69,15 @@ def _age_distribution(rng: GameRandom) -> int:
     return max(19, min(40, round(normal(rng, 27.8, 3.8))))
 
 
-def make_population(seed: int = 1) -> list[Member]:
+def make_population(seed: int = 1, roster_size: int = INITIAL_ROSTER, teams: int = TEAMS) -> list[Member]:
     rng = make_random(seed)
     members: list[Member] = []
     positions = [
         position
-        for position, count in generator.largest_remainder(ROSTER_TARGET, generator.POSITION_RATIOS).items()
+        for position, count in generator.largest_remainder(roster_size, generator.POSITION_RATIOS).items()
         for _ in range(count)
     ]
-    for team_id in range(1, TEAMS + 1):
+    for team_id in range(1, teams + 1):
         for number, position in enumerate(positions, start=1):
             age = _age_distribution(rng)
             is_foreign = rng.random() < generator.FOREIGN_PLAYER_RATIO
@@ -140,6 +152,7 @@ def run_year(members: list[Member], year: int, *, world_seed: int = 1) -> tuple[
             OffseasonClub(
                 team_id=team_id,
                 foreign_roster_limit=LEAGUE_FOREIGN_LIMIT,
+                registered_player_limit=LEAGUE_REGISTERED_LIMIT,
                 players=tuple(
                     OffseasonPlayer(
                         player_id=m.player_id,
@@ -148,6 +161,7 @@ def run_year(members: list[Member], year: int, *, world_seed: int = 1) -> tuple[
                         number=m.number,
                         joined_year=m.joined_year,
                         ratings=m.ratings,
+                        contract=ContractStatus.REGISTERED,
                         playing_time=playing.get(m.player_id, PlayingTime()),
                     )
                     for m in team_members
@@ -186,6 +200,9 @@ class YearStats:
     turnover: float
     min_roster: int
     max_roster: int
+    mean_roster: float
+    # 1球団が1年に迎えた新人の最大
+    max_draftees: int
     anchor_mean_shift: float
     anchor_sd_shift: float
     stamina_mean: float
@@ -211,6 +228,8 @@ def stats(members: list[Member], plan: OffseasonPlan, before: int) -> YearStats:
         turnover=len(plan.retired) / before,
         min_roster=min(sizes.values()),
         max_roster=max(sizes.values()),
+        mean_roster=fmean(sizes.values()),
+        max_draftees=max(Counter(draftee.team_id for draftee in plan.draftees).values(), default=0),
         anchor_mean_shift=plan.anchor.mean_shift,
         anchor_sd_shift=plan.anchor.sd_shift,
         stamina_mean=fmean(staminas),
@@ -218,8 +237,10 @@ def stats(members: list[Member], plan: OffseasonPlan, before: int) -> YearStats:
     )
 
 
-def run_years(seed: int = 1, years: int = YEARS) -> list[YearStats]:
-    members = make_population(seed)
+def run_years(
+    seed: int = 1, years: int = YEARS, *, roster_size: int = INITIAL_ROSTER, teams: int = TEAMS
+) -> list[YearStats]:
+    members = make_population(seed, roster_size, teams)
     result = []
     for year in range(START_YEAR, START_YEAR + years):
         before = len(members)
@@ -229,7 +250,7 @@ def run_years(seed: int = 1, years: int = YEARS) -> list[YearStats]:
 
 
 class OffseasonPopulationTest(unittest.TestCase):
-    """合成した 48 球団 × 34 人を 10 年回して、分布が帯の内側に保たれる。"""
+    """合成した 48 球団 × 64 人（開幕前の支配下の帯の中）を 10 年回して、分布が帯の内側に保たれる。"""
 
     years: list[YearStats]
     elapsed: float
@@ -237,52 +258,109 @@ class OffseasonPopulationTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         started = time.perf_counter()
-        cls.years = run_years()
+        cls.years = run_years(roster_size=STEADY_ROSTER)
         cls.elapsed = time.perf_counter() - started
 
     def test_runs_in_reasonable_time(self) -> None:
-        """10年ぶんの計算（1,632人 × 10年）。実測は約1秒。遅い環境で落ちないよう余裕を持たせる。"""
-        self.assertLess(self.elapsed, 3.0)
+        """10年ぶんの計算（約3,000人 × 10年）。実測は約1.4秒。遅い環境で落ちないよう余裕を持たせる。"""
+        self.assertLess(self.elapsed, 4.0)
 
     def test_age_distribution_is_kept(self) -> None:
-        """設計書の帯からの変更: 標準偏差の上限 4.5 → 4.8、22歳以下 5〜15% → 5〜20%。
+        """設計書の帯からの変更: 標準偏差の上限 4.5 → 4.8、22歳以下 5〜15% → 5〜22%、平均年齢の下限 27 → 26、
+        35歳以上の下限 2% → 1.5%。
 
-        高校卒（18歳）を日本人の新人の30%入れる規則の定常状態は、22歳以下が約17%・標準偏差が約4.5になる
-        （設計書 12.「P6a の詳細」）。平均年齢は 27〜29 歳に保たれる。
+        高校卒（18歳）を日本人の新人の30%入れる規則の定常状態は、22歳以下が約17〜20%・標準偏差が約4.5になる
+        （設計書 12.「P6a の詳細」）。支配下が約64人になると（#167）、1軍に出ない選手（25歳以上は引退しやすい）が
+        増えるぶん若くなり、平均年齢は 26.6〜27.6 歳（シード 1〜4）。
         """
         for stat in self.years:
             with self.subTest(year=stat.year):
-                self.assertTrue(27.0 <= stat.mean_age <= 29.0, stat.mean_age)
+                self.assertTrue(26.0 <= stat.mean_age <= 29.0, stat.mean_age)
                 self.assertTrue(3.3 <= stat.sd_age <= 4.8, stat.sd_age)
-                self.assertTrue(0.02 <= stat.share_35_plus <= 0.08, stat.share_35_plus)
-                self.assertTrue(0.05 <= stat.share_22_minus <= 0.20, stat.share_22_minus)
+                self.assertTrue(0.015 <= stat.share_35_plus <= 0.08, stat.share_35_plus)
+                self.assertTrue(0.05 <= stat.share_22_minus <= 0.22, stat.share_22_minus)
 
     def test_turnover_is_about_a_tenth(self) -> None:
+        """入れ替わりの割合。支配下約64人で、引退・退団は1球団 約6〜7人（シード 1〜4 で 8.6〜12.2%）。"""
         for stat in self.years:
             with self.subTest(year=stat.year):
-                self.assertTrue(0.09 <= stat.turnover <= 0.13, stat.turnover)
+                self.assertTrue(0.08 <= stat.turnover <= 0.13, stat.turnover)
 
-    def test_roster_sizes_stay_in_range(self) -> None:
+    def test_opening_rosters_stay_in_the_band(self) -> None:
+        """開幕前の支配下は上端（66人）を超えず、平均は帯の中。引退が多い年の球団だけ下端を割る（1年の上限10人）。"""
+        band = OPENING_REGISTERED_BAND
         for stat in self.years:
             with self.subTest(year=stat.year):
-                self.assertTrue(stat.min_roster >= 28 and stat.max_roster <= 40, (stat.min_roster, stat.max_roster))
+                self.assertLessEqual(stat.max_roster, band.high)
+                self.assertTrue(band.low <= stat.mean_roster <= band.high, stat.mean_roster)
+                self.assertGreaterEqual(stat.min_roster, band.low - 7)
+                self.assertLessEqual(stat.max_draftees, MAX_DRAFTEES)
 
     def test_anchor_correction_is_within_one_point(self) -> None:
-        """錨の前の分布が目標から1点以上ずれるなら、曲線が合っていない（錨で歪みを隠さない）。"""
-        for stat in self.years:
+        """錨の前の分布が目標から1点以上ずれるなら、曲線が合っていない（錨で歪みを隠さない）。
+
+        合成の初期母集団は能力が年齢と無関係で、曲線と釣り合うまで2〜3年かかる。最初の2年は 1.5 点まで許す。
+        """
+        for index, stat in enumerate(self.years):
+            limit = 1.5 if index < 2 else 1.0
             with self.subTest(year=stat.year):
-                self.assertLessEqual(stat.anchor_mean_shift, 1.0)
+                self.assertLessEqual(stat.anchor_mean_shift, limit)
                 self.assertLessEqual(stat.anchor_sd_shift, 1.0)
 
     def test_stamina_distribution_is_kept(self) -> None:
-        """スタミナは錨（spread）の対象外なので、別に平均と標準偏差を保つ（合成の初期は 50.4 / 9.9）。"""
+        """スタミナは錨（spread）の対象外なので、別に平均と標準偏差を保つ（合成の初期は約 50 / 10）。"""
         for stat in self.years:
             with self.subTest(year=stat.year):
                 self.assertTrue(47.0 <= stat.stamina_mean <= 54.0, stat.stamina_mean)
                 self.assertTrue(8.0 <= stat.stamina_sd <= 12.0, stat.stamina_sd)
 
     def test_same_seed_gives_same_result(self) -> None:
-        self.assertEqual(run_years(years=3), self.years[:3])
+        self.assertEqual(run_years(years=3, roster_size=STEADY_ROSTER), self.years[:3])
+
+
+class RosterGrowthTest(unittest.TestCase):
+    """実データから分岐した球団（支配下 約34人）が、上端を超えずに開幕前の帯（62〜66人）へ届く。
+
+    1年に迎えるのは10人まで（`MAX_DRAFTEES`）なので、引退を差し引いて年に約6人ずつ増え、6回目のオフで全球団が帯に入る
+    （シード 1〜4 とも 2031年を締めた後。設計書 12.「#167 の詳細」）。
+    """
+
+    years: list[YearStats]
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.years = run_years(roster_size=INITIAL_ROSTER, teams=GROWTH_TEAMS)
+
+    def test_rosters_grow_without_passing_the_upper_end(self) -> None:
+        for stat in self.years:
+            with self.subTest(year=stat.year):
+                self.assertLessEqual(stat.max_roster, OPENING_REGISTERED_BAND.high)
+                self.assertLessEqual(stat.max_draftees, MAX_DRAFTEES)
+        means = [stat.mean_roster for stat in self.years]
+        self.assertEqual(means[:5], sorted(means[:5]), "帯に届くまでは毎年増える")
+
+    def test_every_club_reaches_the_band(self) -> None:
+        reached = [stat.year for stat in self.years if stat.min_roster >= OPENING_REGISTERED_BAND.low]
+        self.assertTrue(reached, "10回のオフのうちに全球団が帯に入る")
+        self.assertLessEqual(reached[0], START_YEAR + 5)
+        for stat in self.years:
+            if stat.year >= reached[0]:
+                with self.subTest(year=stat.year):
+                    self.assertTrue(OPENING_REGISTERED_BAND.low <= stat.mean_roster, stat.mean_roster)
+
+    def test_age_and_anchor_stay_within_loose_bands_while_catching_up(self) -> None:
+        """追いつく途中は新人の割合が高く、若く偏る。定常状態より緩い帯で、崩れすぎていないことだけを見る。
+
+        実測（シード 1〜4）は平均年齢 25.4〜27.0・22歳以下 13〜30%・35歳以上 1.3〜3.7%・錨の平均のずれ 最大 2.06 点。
+        """
+        for stat in self.years:
+            with self.subTest(year=stat.year):
+                self.assertTrue(25.0 <= stat.mean_age <= 29.0, stat.mean_age)
+                self.assertTrue(3.3 <= stat.sd_age <= 5.2, stat.sd_age)
+                self.assertTrue(0.01 <= stat.share_35_plus <= 0.08, stat.share_35_plus)
+                self.assertTrue(0.05 <= stat.share_22_minus <= 0.32, stat.share_22_minus)
+                self.assertLessEqual(stat.anchor_mean_shift, 2.5)
+                self.assertLessEqual(stat.anchor_sd_shift, 1.0)
 
 
 if __name__ == "__main__":

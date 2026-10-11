@@ -9,6 +9,7 @@ from datetime import date
 
 from myapp.domain.pennant import draft
 from myapp.domain.pennant.draft import DraftRoute, DraftTeam, draft_class, draftee_count
+from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND, RegisteredBand
 from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings
 from myapp.domain.value_objects import Position, Profile
 from myapp.domain.virtual_players import generator
@@ -34,8 +35,12 @@ def team(
     limit: int | None = 4,
     numbers: frozenset[str] = frozenset(),
     surnames: dict[str, int] | None = None,
+    registered_limit: int | None = 70,
 ) -> DraftTeam:
-    default = generator.largest_remainder(draft.ROSTER_TARGET - 4, generator.POSITION_RATIOS)
+    # 帯の中（開幕前の帯の上端 − 通常の人数 − 1 = 59人）。新人は通常の人数（6人）
+    default = generator.largest_remainder(
+        OPENING_REGISTERED_BAND.high - draft.USUAL_DRAFTEES - 1, generator.POSITION_RATIOS
+    )
     return DraftTeam(
         team_id=1,
         position_counts=default if counts is None else counts,
@@ -43,6 +48,7 @@ def team(
         foreign_limit=limit,
         used_numbers=numbers,
         surname_counts=surnames or {},
+        registered_limit=registered_limit,
     )
 
 
@@ -51,18 +57,59 @@ def run(target: DraftTeam, seed: int = 1, used: set[str] | None = None) -> tuple
 
 
 class CountTest(unittest.TestCase):
-    def test_refills_toward_the_target_between_two_and_eight(self) -> None:
-        self.assertEqual(draftee_count(34), draft.MIN_DRAFTEES)
-        self.assertEqual(draftee_count(31), 3)
-        self.assertEqual(draftee_count(20), draft.MAX_DRAFTEES)
+    """指名数は、引退・退団の後の支配下の人数から、開幕前の支配下が帯（62〜66人）に入るように決める（#167）。"""
 
-    def test_never_exceeds_the_roster_limit(self) -> None:
-        self.assertEqual(draftee_count(39), 1)
-        self.assertEqual(draftee_count(generator.MAX_ROSTER), 0)
-        self.assertEqual(draftee_count(45), 0)
+    def test_the_band_and_the_yearly_numbers(self) -> None:
+        """帯の出典は roster.OPENING_REGISTERED_BAND だけ。値が変わったら設計書 12.「#167 の詳細」の実測を取り直す。"""
+        self.assertEqual(OPENING_REGISTERED_BAND, RegisteredBand(low=62, high=66))
+        self.assertEqual((draft.USUAL_DRAFTEES, draft.MAX_DRAFTEES), (6, 10))
+
+    def test_a_club_inside_the_band_gets_the_usual_number_up_to_the_upper_end(self) -> None:
+        self.assertEqual(draftee_count(56, registered_limit=None), draft.USUAL_DRAFTEES)  # 62人（下端ちょうど）
+        self.assertEqual(draftee_count(60, registered_limit=None), draft.USUAL_DRAFTEES)  # 66人（上端ちょうど）
+        self.assertEqual(draftee_count(61, registered_limit=None), 5)
+        self.assertEqual(draftee_count(65, registered_limit=None), 1)
+
+    def test_a_club_below_the_band_catches_up_to_the_lower_end_within_the_yearly_maximum(self) -> None:
+        self.assertEqual(draftee_count(54, registered_limit=None), 8)  # 62人（下端）
+        self.assertEqual(draftee_count(52, registered_limit=None), draft.MAX_DRAFTEES)
+        self.assertEqual(draftee_count(34, registered_limit=None), draft.MAX_DRAFTEES)
+        self.assertEqual(draftee_count(0, registered_limit=None), draft.MAX_DRAFTEES)
+
+    def test_a_club_at_or_over_the_upper_end_gets_no_draftee(self) -> None:
+        self.assertEqual(draftee_count(66, registered_limit=None), 0)
+        self.assertEqual(draftee_count(67, registered_limit=None), 0)
+        self.assertEqual(draftee_count(80, registered_limit=None), 0, "上限で失敗させない（負の人数にもしない）")
+
+    def test_never_exceeds_the_league_limit_of_registered_players(self) -> None:
+        self.assertEqual(draftee_count(40, registered_limit=42), 2)
+        self.assertEqual(draftee_count(58, registered_limit=62), 4)
+        self.assertEqual(draftee_count(62, registered_limit=62), 0)
+        self.assertEqual(draftee_count(75, registered_limit=70), 0, "実データから写した上限超えの球団")
+        self.assertEqual(draftee_count(56, registered_limit=70), draft.USUAL_DRAFTEES, "上限が帯より上なら帯で決まる")
+        self.assertEqual(draftee_count(56, registered_limit=None), draft.USUAL_DRAFTEES)
+
+    def test_the_draft_fills_what_other_acquisitions_leave(self) -> None:
+        """ほかの獲得手段（未実装）で埋まる見込みを除いた残りを、ドラフトが埋める。"""
+        # 56人として数える
+        self.assertEqual(draftee_count(52, registered_limit=None, expected_other=4), draft.USUAL_DRAFTEES)
+        self.assertEqual(draftee_count(60, registered_limit=None, expected_other=4), 2)  # 上端66人まで残り2人
+        self.assertEqual(draftee_count(60, registered_limit=None, expected_other=8), 0)
 
     def test_draft_matches_the_count(self) -> None:
-        self.assertEqual(len(run(team())), 4)
+        self.assertEqual(len(run(team())), draft.USUAL_DRAFTEES)
+        self.assertEqual(len(run(team(registered_limit=61))), 61 - 59)
+
+
+class RegisteredBandTest(unittest.TestCase):
+    def test_gap_to_the_band(self) -> None:
+        band = RegisteredBand(low=62, high=66)
+        self.assertEqual((band.gap(58, limit=None).shortfall, band.gap(58, limit=None).vacancy), (4, 8))
+        self.assertEqual((band.gap(64, limit=None).shortfall, band.gap(64, limit=None).vacancy), (0, 2))
+        self.assertEqual((band.gap(70, limit=None).shortfall, band.gap(70, limit=None).vacancy), (0, 0))
+        # 上限が帯より低いときは上限が天井。不足は空きを超えない
+        self.assertEqual((band.gap(58, limit=60).shortfall, band.gap(58, limit=60).vacancy), (2, 2))
+        self.assertEqual(band.gap(58, limit=None, expected=3).vacancy, 5)
 
 
 class PositionTest(unittest.TestCase):
@@ -78,6 +125,13 @@ class PositionTest(unittest.TestCase):
         counts = {Position.PITCHER: 20, Position.CATCHER: 4, Position.INFIELDER: 3, Position.OUTFIELDER: 3}
         chosen = Counter(rookie.position for rookie in run(team(counts)))
         self.assertEqual(chosen[Position.PITCHER], 0)
+
+    def test_the_target_composition_follows_the_size_after_the_draft(self) -> None:
+        """目標の構成は指名後の支配下の人数（ここでは64人）で割り振る。足りない投手6人だけを補う。"""
+        counts = dict(generator.largest_remainder(64, generator.POSITION_RATIOS))
+        counts[Position.PITCHER] -= draft.USUAL_DRAFTEES
+        chosen = Counter(rookie.position for rookie in run(team(counts)))
+        self.assertEqual(chosen, Counter({Position.PITCHER: draft.USUAL_DRAFTEES}))
 
     def test_pitchers_get_pitcher_ratings(self) -> None:
         for rookie in run(team({Position.INFIELDER: 20})):
@@ -126,7 +180,8 @@ class NumberTest(unittest.TestCase):
 
     def test_falls_back_to_zero_and_double_zero_when_one_to_ninety_nine_are_full(self) -> None:
         """新人は支配下なので、育成の3桁の背番号には落とさない（尽きたら 0・00）。"""
-        rookies = run(team(numbers=frozenset(str(number) for number in range(1, 98))))
+        # 支配下59人・リーグの上限63人で、新人は4人
+        rookies = run(team(numbers=frozenset(str(number) for number in range(1, 98)), registered_limit=63))
         self.assertEqual(len(rookies), 4, "前提: 新人は4人")
         self.assertEqual({rookie.number for rookie in rookies}, {"98", "99", "0", "00"})
 

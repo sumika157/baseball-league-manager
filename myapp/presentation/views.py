@@ -59,7 +59,7 @@ from ..domain.exceptions import (
     WorldNotFound,
 )
 from ..domain.pennant.club_plan import PlanSection
-from ..domain.pennant.draft import MAX_DRAFTEES, MIN_DRAFTEES
+from ..domain.pennant.roster import OPENING_REGISTERED_BAND
 from ..domain.pennant.schedule import AdvanceTarget
 from ..domain.pennant.season import MAX_GAMES_PER_ADVANCE, SCREEN_ADVANCE_TARGETS, SeasonPhase, world_today
 from ..domain.pennant.world import WorldScope
@@ -561,7 +561,7 @@ def pennant_world(request, world_id):
             "is_owner": is_owner,
             "plan_notices": _plan_notices(world) if is_owner else [],
             "close_option": close_option,
-            "draftees_range": (MIN_DRAFTEES, MAX_DRAFTEES),
+            "registered_band": OPENING_REGISTERED_BAND,
         },
         world,
     )

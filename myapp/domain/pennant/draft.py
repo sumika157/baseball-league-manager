@@ -1,7 +1,9 @@
 """自動ドラフト。引退のあと、球団ごとに新人を決める。**純粋な関数**で、DB にも Django にも触れない。
 
-人数は「1球団 34 人に戻す」ように 2〜8 人（40 人を超えない）。登録位置は目標の構成との差の大きい
-位置から埋め、外国人は登録枠の内側で年に2人まで補う。新人の質は球団の順位によらず同じ。
+人数は、引退・退団の後の**支配下**の人数から、開幕前の支配下が帯（`roster.OPENING_REGISTERED_BAND`。62〜66人）に
+入るように決める（育成は数えない。`draftee_count`）。登録位置は支配下の構成と目標の構成との差の大きい位置から埋め、
+外国人は登録枠の内側で年に2人まで補う。新人の質は球団の順位によらず同じ。
+新人は支配下で入り、入団の経路は日本人が「ドラフト」、外国人が「新外国人」（`Draftee.acquisition_route`）。
 能力は水準の錨の**前**の値（`offseason.py` が残る選手とまとめて錨をかける）。
 名前とプロフィールの生成は `virtual_players/generator.py`（実データへの投入と同じ関数）。
 """
@@ -17,15 +19,18 @@ from ..simulation.estimate import draw_growth_type, with_growth
 from ..simulation.randomness import GameRandom
 from ..simulation.ratings import AVERAGE_RATING, BatterRatings, PitcherRatings
 from ..simulation.samples import draw_ratings
-from ..value_objects import Position, Profile
+from ..value_objects import AcquisitionRoute, Position, Profile
 from ..virtual_players import generator
 from ..virtual_players.generator import AmateurPath
 from .initial_ratings import SEASON_START_MONTH, STRENGTH_UNIT
+from .roster import OPENING_REGISTERED_BAND
 
-# 1球団の人数の目安。新人は「ここに戻す」人数（2〜8人）で、MAX_ROSTER を超えない
-ROSTER_TARGET = 34
-MIN_DRAFTEES = 2
-MAX_DRAFTEES = 8
+# 帯（開幕前の支配下）の出典は `roster.OPENING_REGISTERED_BAND`。ここは指名の人数の決め方だけを持つ
+# 帯に入る範囲の中で、ふだん迎える新人の数（NPB の本指名は1球団平均約6人）。帯の中の引退・退団（約6〜7人）とつり合う
+USUAL_DRAFTEES = 6
+# 1年に迎える新人の上限。帯の下の球団（実データから分岐した球団は支配下が約34人）が帯に追いつく速さ。
+# 一度に埋めると、新人（平均約22歳・能力は平均より低い）が母集団の半分近くになり、年齢の分布と水準の錨が崩れる
+MAX_DRAFTEES = 10
 # 位置ごとの最低人数（これを下回る位置を先に埋める）
 MIN_BY_POSITION = {
     Position.PITCHER: 15,
@@ -102,7 +107,9 @@ class DraftTeam:
     """ドラフトの前の球団の状態（引退の後）。"""
 
     team_id: int
+    # 今の区分が支配下の選手の、位置ごとの人数（育成は数えない。試合に出られず、指名数と位置の補充に効かせない）
     position_counts: Mapping[Position, int]
+    # 外国人の人数。集約の外国人枠の検査（`Team.foreign_player_count`）と同じく、育成も数える
     foreign_count: int
     # リーグの外国人の登録枠。None は無制限
     foreign_limit: int | None
@@ -110,9 +117,12 @@ class DraftTeam:
     used_numbers: frozenset[str]
     # 現在の選手の背ネームの苗字（ローマ字）ごとの人数。同じ苗字の新人に頭文字を付けるため
     surname_counts: Mapping[str, int]
+    # リーグの支配下の上限。None は無制限
+    registered_limit: int | None
 
     @property
-    def roster_size(self) -> int:
+    def registered_count(self) -> int:
+        """支配下の人数（引退・退団の後）。"""
         return sum(self.position_counts.values())
 
 
@@ -132,6 +142,11 @@ class Draftee:
     def is_foreign(self) -> bool:
         return self.route is DraftRoute.FOREIGN
 
+    @property
+    def acquisition_route(self) -> AcquisitionRoute:
+        """在籍に記録する入団の経路。日本人はドラフト、外国人は新外国人（新人はどちらも支配下で入る）。"""
+        return AcquisitionRoute.NEW_FOREIGN if self.is_foreign else AcquisitionRoute.DRAFT
+
 
 @dataclass(frozen=True)
 class _Pending:
@@ -147,10 +162,19 @@ class _Pending:
     ratings: BatterRatings | PitcherRatings
 
 
-def draftee_count(roster_size: int) -> int:
-    """新人の人数。34人に戻すよう 2〜8 人で、40人を超えない。"""
-    wanted = min(MAX_DRAFTEES, max(MIN_DRAFTEES, ROSTER_TARGET - roster_size))
-    return max(0, min(wanted, generator.MAX_ROSTER - roster_size))
+def draftee_count(registered: int, *, registered_limit: int | None, expected_other: int = 0) -> int:
+    """新人の人数。`registered` は引退・退団の後の支配下の人数（育成は数えない）。
+
+    開幕前の支配下が帯（`OPENING_REGISTERED_BAND`）に入る範囲で、ふだんは `USUAL_DRAFTEES` 人。
+    下端に届かないなら届く人数まで増やす（1年に `MAX_DRAFTEES` 人まで）。上端とリーグの支配下の上限
+    （`registered_limit`）は超えない。既に達している・超えている球団は0人（戦力外が無いので減らす手段は無い。
+    締める処理は上限で失敗させない）。
+
+    `expected_other` は、ほかの獲得手段（戦力外・外国人の獲得・トレード・昇格。どれも未実装）で埋まる見込みの人数。
+    ドラフトはその残りを埋める。いまは手段が無いので常に 0。
+    """
+    gap = OPENING_REGISTERED_BAND.gap(registered, limit=registered_limit, expected=expected_other)
+    return min(max(USUAL_DRAFTEES, gap.shortfall), MAX_DRAFTEES, gap.vacancy)
 
 
 def foreign_count_to_add(team: DraftTeam, draftees: int) -> int:
@@ -160,8 +184,11 @@ def foreign_count_to_add(team: DraftTeam, draftees: int) -> int:
 
 
 def choose_positions(team: DraftTeam, count: int) -> list[Position]:
-    """新人の登録位置。最低人数に足りない位置を先に、そのあとは目標の構成との差が大きい位置から。"""
-    targets = generator.largest_remainder(ROSTER_TARGET, generator.POSITION_RATIOS)
+    """新人の登録位置。最低人数に足りない位置を先に、そのあとは目標の構成との差が大きい位置から。
+
+    数えるのは支配下だけ（`DraftTeam.position_counts`）。目標の構成は、指名の後の支配下の人数を位置の割合で割り振ったもの。
+    """
+    targets = generator.largest_remainder(team.registered_count + count, generator.POSITION_RATIOS)
     counts = {position: team.position_counts.get(position, 0) for position in generator.POSITION_RATIOS}
     order = list(generator.POSITION_RATIOS)
     chosen: list[Position] = []
@@ -189,7 +216,7 @@ def _draw_number(rng: GameRandom, used: set[str]) -> str:
             number = generator.pick(rng, available)
             used.add(number)
             return number
-    raise ValueError("背番号が尽きました")  # 00・0〜99 が全部埋まる球団は無い（支配下の上限は70人）
+    raise ValueError("背番号が尽きました")  # 00・0〜99 が埋まる球団は無い（新人を迎えるのは支配下66人未満）
 
 
 def _draw_rookie_ratings(rng: GameRandom, route: DraftRoute, position: Position) -> BatterRatings | PitcherRatings:
@@ -255,7 +282,7 @@ def draft_class(rng: GameRandom, team: DraftTeam, *, year: int, used_names: Muta
     `used_names` は世界の全選手（引退した選手を含む）の名前で、新人の名前を足していく。
     乱数は `rng` から、背番号 → 指名の順（1人ずつ）に引く。
     """
-    count = draftee_count(team.roster_size)
+    count = draftee_count(team.registered_count, registered_limit=team.registered_limit)
     positions = choose_positions(team, count)
     foreign_indexes = _foreign_picks(positions, foreign_count_to_add(team, count))
     used_numbers = set(team.used_numbers)

@@ -21,7 +21,7 @@ from math import sqrt
 from ..simulation.randomness import game_seed, game_uniform, make_random
 from ..simulation.ratings import BatterRatings, PitcherRatings
 from ..simulation.spread import MIN_POPULATION, rescale, spread_ratings, target_mean, target_sd
-from ..value_objects import Position, Profile
+from ..value_objects import ContractStatus, Position, Profile
 from .aging import age_ratings
 from .draft import Draftee, DraftTeam, draft_class
 from .fork import ESTIMATED_AGE_AT_START, with_birth_date
@@ -48,7 +48,14 @@ class OffseasonPlayer:
     joined_year: int
     # Y の能力。無い選手は翌年の能力も作らない
     ratings: PlayerRatings | None
+    # 今の契約区分（集約の `Team.contract_of`＝`Stint.contract_now` の値を渡す。ここで判定し直さない）。
+    # 在籍が無ければ None。ドラフトの指名数と位置の補充は支配下だけで数える（育成は試合に出られない）
+    contract: ContractStatus | None
     playing_time: PlayingTime = PlayingTime()
+
+    @property
+    def is_registered(self) -> bool:
+        return self.contract is ContractStatus.REGISTERED
 
     @property
     def entered_year(self) -> int:
@@ -71,6 +78,8 @@ class OffseasonClub:
     team_id: int
     # リーグの外国人の登録枠。None は無制限
     foreign_roster_limit: int | None
+    # リーグの支配下の上限（NPB は70人）。None は無制限。ドラフトはこれを超えない人数にする
+    registered_player_limit: int | None
     players: tuple[OffseasonPlayer, ...]
 
 
@@ -164,14 +173,19 @@ def decide_retirements(
 
 
 def _draft_team(club: OffseasonClub, remaining: Sequence[OffseasonPlayer]) -> DraftTeam:
+    """引退の後の球団。人数と位置は支配下だけで数える（育成の捕手がいても、支配下の捕手が足りなければ補う）。
+
+    外国人の人数・背番号・苗字は育成も含める（外国人枠の検査・背番号の重複・背ネームは区分によらない）。
+    """
     surnames = Counter(player.profile.back_name.split(".")[-1] for player in remaining if player.profile.back_name)
     return DraftTeam(
         team_id=club.team_id,
-        position_counts=dict(Counter(player.position for player in remaining)),
+        position_counts=dict(Counter(player.position for player in remaining if player.is_registered)),
         foreign_count=sum(1 for player in remaining if player.profile.is_foreign_player),
         foreign_limit=club.foreign_roster_limit,
         used_numbers=frozenset(player.number for player in remaining),
         surname_counts=dict(surnames),
+        registered_limit=club.registered_player_limit,
     )
 
 
