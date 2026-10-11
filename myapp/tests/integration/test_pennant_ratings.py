@@ -5,7 +5,7 @@
 """
 
 from dataclasses import fields
-from statistics import pstdev
+from statistics import fmean, pstdev
 
 from django.db import IntegrityError, connection, transaction
 from django.test import SimpleTestCase
@@ -17,7 +17,7 @@ from myapp.domain.pennant.ratings import PlayerRatings
 from myapp.domain.pennant.world import WorldScope
 from myapp.domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings
 from myapp.domain.simulation.samples import BATTER_SD
-from myapp.domain.simulation.spread import MIN_POPULATION
+from myapp.domain.simulation.spread import MIN_POPULATION, target_mean
 from myapp.domain.value_objects import BattingLine, InningsPitched, PitchingLine
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoFieldingTotalsQuery
@@ -30,7 +30,7 @@ from myapp.infrastructure.repositories import (
 from myapp.management.estimate_check import estimate_from_source
 from myapp.presentation.views import build_pennant_world_service
 
-from ..helpers import give_batting, give_pitching
+from ..helpers import give_batting, give_pitching, play_game
 from .base import BaseCase
 from .world_case import YEAR, WorldCase
 
@@ -431,7 +431,7 @@ class SameMaterialTest(BaseCase):
 
 
 class ForkedSpreadTest(BaseCase):
-    """能力の散らばりの調整が、世界の作成を通る（母集団は世界に写す選手全員）。"""
+    """能力の散らばりの調整が、世界の作成を通る（母集団は世界に写す選手のうち成績のある選手）。"""
 
     def setUp(self):
         super().setUp()
@@ -440,35 +440,42 @@ class ForkedSpreadTest(BaseCase):
         for index in range(MIN_POPULATION + 5):
             player = self.service.register_player(self.team.id, f"野手{index}", 20 + index, "外野手")
             self.names.append(player.name)
-            if index < 10:
-                give_batting(
-                    self.team,
-                    self.rival,
-                    player.id,
-                    BattingLine(
-                        at_bats=450,
-                        singles=90 + index,
-                        home_runs=4 + 3 * index,
-                        walks=30 + 4 * index,
-                        strikeouts=140 - 8 * index,
-                    ),
-                    day=index + 1,
-                )
+            step = index % 10
+            line = BattingLine(
+                at_bats=450,
+                singles=90 + step,
+                home_runs=4 + 3 * step,
+                walks=30 + 4 * step,
+                strikeouts=140 - 8 * step,
+            )
+            play_game(self.team, self.rival, month=4 + index // 28, day=index % 28 + 1, batting={player.id: line})
+        # 成績の無い選手（2軍の層）は散らばりの調整の母集団に入れない（入れると標準偏差が縮む。#175）
+        for index in range(20):
+            self.service.register_player(self.team.id, f"2軍{index}", 60 + index, "外野手")
 
     def test_the_standard_deviation_of_the_world_matches_the_target(self):
         created = build_pennant_world_service().create_world(
             name="散らばり", owner_id=None, source_league_ids=[self.league.id], start_year=START, seed=3
         )
+        # 成績のある選手（写した先）だけを測る。2軍の層を母集団に入れる退行があると、成績のある選手の
+        # 平均が目標より上がり、標準偏差も目標から外れる
+        with_record = set(
+            orm_models.Player.objects.filter(
+                stints__team__league__world_id=created.world.id, name__in=self.names
+            ).values_list("id", flat=True)
+        )
         ratings = [
             item.ratings
             for item in DjangoRatingsRepository(WorldScope.pennant(created.world.id)).find_by_year(START)
-            if isinstance(item.ratings, BatterRatings)
+            if isinstance(item.ratings, BatterRatings) and item.player_id in with_record
         ]
 
+        self.assertEqual(len(ratings), len(self.names))
         for name in ("contact", "power", "eye"):
+            values = [getattr(r, name) for r in ratings]
             with self.subTest(item=name):
-                self.assertGreaterEqual(len(ratings), MIN_POPULATION)
-                self.assertAlmostEqual(pstdev(getattr(r, name) for r in ratings), BATTER_SD, delta=0.8)
+                self.assertAlmostEqual(pstdev(values), BATTER_SD, delta=0.5)
+                self.assertAlmostEqual(fmean(values), target_mean(name, pitcher=False), delta=0.5)
 
 
 class FieldingTotalsQueryTest(BaseCase):

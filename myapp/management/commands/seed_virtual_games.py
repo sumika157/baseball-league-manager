@@ -54,6 +54,7 @@ from myapp.domain.value_objects import (
     AdvanceReason,
     Base,
     BattingLine,
+    ContractStatus,
     ErrorKind,
     FieldingLine,
     FieldingPosition,
@@ -410,7 +411,8 @@ class Command(BaseCommand):
         """チームごとの在籍中の選手を、投手と野手に分けて集める。
 
         その年に在籍している選手だけを対象にする（加入前・退団後の選手を
-        出場させると、経歴と成績が食い違う）。
+        出場させると、経歴と成績が食い違う）。その年に育成の選手も外す（育成は1軍の試合に出られない。
+        ペナントの進行が候補から外すのと同じ）。
         """
         rosters = defaultdict(lambda: {"batters": [], "pitchers": [], "foreign": set()})
         stints = PlayerStint.objects.filter(
@@ -418,6 +420,9 @@ class Command(BaseCommand):
         ).select_related("player", "team")
         for stint in stints:
             if stint.to_year is not None and stint.to_year < year:
+                continue
+            contract = ContractStatus.in_year(ContractStatus.from_label(stint.signed_as), stint.promoted_year, year)
+            if contract is ContractStatus.DEVELOPMENTAL:
                 continue
             entry = rosters[stint.team_id]
             if stint.player.position == Position.PITCHER.value:

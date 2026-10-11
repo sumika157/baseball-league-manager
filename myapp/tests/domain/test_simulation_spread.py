@@ -8,7 +8,8 @@ from statistics import fmean, pstdev
 from unittest import TestCase
 
 from myapp.domain.entities import Player
-from myapp.domain.pennant.initial_ratings import career_record, estimate_initial_ratings
+from myapp.domain.pennant.initial_ratings import career_record, estimate_initial_ratings, has_record
+from myapp.domain.pennant.prospects import FARM_GAP, PROSPECT_RATING_SD, farm_rating_mean
 from myapp.domain.simulation.estimate import CareerRecord, LeagueNorms, estimate_batter_ratings
 from myapp.domain.simulation.randomness import make_random, normal
 from myapp.domain.simulation.ratings import RATING_MAX, RATING_MIN, BatterRatings, GrowthType, PitcherRatings
@@ -18,6 +19,7 @@ from myapp.domain.simulation.spread import (
     spread_batter_ratings,
     spread_pitcher_ratings,
     spread_ratings,
+    target_mean,
 )
 from myapp.domain.value_objects import BattingLine, FieldingLine, InningsPitched, JerseyNumber, PitchingLine, Position
 
@@ -164,43 +166,84 @@ def _regular(player_id: int, index: int) -> CareerRecord:
 
 
 class EstimatedPopulationIsSpreadTest(TestCase):
-    """推定の入口（`estimate_initial_ratings`）が、母集団を見渡して散らばりを合わせる。"""
+    """推定の入口（`estimate_initial_ratings`）は、成績のある選手だけを見渡して散らばりを合わせる。
+
+    成績の無い選手は2軍の層として分布（`prospects.py`）から引く。以前は全員を母集団にしていたため、
+    成績の無い選手が増えると（支配下 60人台＋育成の実データで約6割）同じ事前の値に並んで標準偏差が縮み、
+    成績のある選手が大きく押し上げられた（失点 4.66・本塁打王 62本。#175）。
+    """
 
     def setUp(self):
-        regulars = [_regular(i, i) for i in range(1, 201)]
-        bench = [CareerRecord(1000 + i, Position.OUTFIELDER) for i in range(100)]
-        self.records = [*regulars, *bench]
-        self.result = estimate_initial_ratings(self.records, seed=1, year=2027)
+        self.regulars_in = [_regular(i, i) for i in range(1, 201)]
+        self.farm_in = [CareerRecord(1000 + i, Position.OUTFIELDER) for i in range(300)]
+        self.result = estimate_initial_ratings([*self.regulars_in, *self.farm_in], seed=1, year=2027)
         self.regulars = [item.ratings for item in self.result[:200]]
-        self.bench = [item.ratings for item in self.result[200:]]
+        self.farm = [item.ratings for item in self.result[200:]]
 
-    def test_the_standard_deviation_reaches_the_target(self):
-        everyone = [item.ratings for item in self.result]
+    def test_the_standard_deviation_reaches_the_target_among_players_with_a_record(self):
         for name in ("contact", "power", "eye"):
             with self.subTest(item=name):
-                self.assertAlmostEqual(pstdev(getattr(r, name) for r in everyone), BATTER_SD, delta=0.8)
+                self.assertAlmostEqual(pstdev(getattr(r, name) for r in self.regulars), BATTER_SD, delta=0.8)
 
-    def test_players_without_a_record_do_not_become_strong(self):
-        """出場の無い選手は、推定で平均より低いところに寄せてある。散らばりを広げても、主力の平均より上にならない。"""
+    def test_players_with_a_record_do_not_move_when_players_without_one_are_added(self):
+        """成績の無い選手を何人足しても、成績のある選手の能力は変わらない（母集団に入れない）。"""
+        alone = estimate_initial_ratings(self.regulars_in, seed=1, year=2027)
+        self.assertEqual([item.ratings for item in alone], self.regulars)
+
+    def test_players_without_a_record_are_drawn_as_the_farm_layer(self):
+        """全員が同じ値に並ばず散らばり、平均は2軍の層の平均（錨の尺度で、成績のある選手の平均より低い）のあたり。"""
         for name in ("contact", "power", "eye"):
-            regular_mean = fmean(getattr(r, name) for r in self.regulars)
+            values = [getattr(r, name) for r in self.farm]
+            expected = farm_rating_mean(Position.OUTFIELDER) + BATTER_ITEM_OFFSET[name]
             with self.subTest(item=name):
-                self.assertLess(max(getattr(r, name) for r in self.bench), regular_mean)
+                self.assertAlmostEqual(fmean(values), expected, delta=1.0)
+                self.assertAlmostEqual(pstdev(values), PROSPECT_RATING_SD, delta=1.0)
+                self.assertLess(fmean(values), fmean(getattr(r, name) for r in self.regulars))
+                self.assertLess(pstdev(values), pstdev(getattr(r, name) for r in self.regulars))
 
-    def test_the_order_of_the_raw_estimate_is_kept(self):
-        records = [
-            *(_regular(i, i) for i in range(1, 201)),
-            *(CareerRecord(1000 + i, Position.OUTFIELDER) for i in range(100)),
-        ]
-        norms = LeagueNorms.of(records)
-        raw = [estimate_batter_ratings(r.batting, r.fielding, r.position, norms) for r in records]
-        everyone = [item.ratings for item in self.result]
+    def test_the_farm_layer_sits_just_below_the_anchor_target(self):
+        """2軍の層の平均は、錨の目標の平均（成績のある選手が写る平均）から `FARM_GAP` だけ低い。尺度は錨の1つ。"""
+        for position, pitcher in ((Position.OUTFIELDER, False), (Position.PITCHER, True)):
+            with self.subTest(position=position):
+                self.assertGreater(FARM_GAP, 0)
+                self.assertEqual(farm_rating_mean(position), target_mean("speed", pitcher=pitcher) - FARM_GAP)
+
+    def test_the_farm_layer_is_reproducible_with_the_same_seed(self):
+        again = estimate_initial_ratings([*self.regulars_in, *self.farm_in], seed=1, year=2027)
+        other = estimate_initial_ratings([*self.regulars_in, *self.farm_in], seed=2, year=2027)
+
+        self.assertEqual(again, self.result)
+        self.assertNotEqual([item.ratings for item in other[200:]], self.farm)
+        # 選手ごとの種なので、並べる順を変えても同じ選手は同じ能力
+        reversed_result = estimate_initial_ratings([*reversed(self.farm_in), *self.regulars_in], seed=1, year=2027)
+        by_id = {item.player_id: item for item in reversed_result}
+        self.assertEqual([by_id[item.player_id] for item in self.result], self.result)
+
+    def test_pitchers_without_a_record_are_drawn_too(self):
+        pitchers = [CareerRecord(2000 + i, Position.PITCHER) for i in range(50)]
+        result = estimate_initial_ratings(pitchers, seed=1, year=2027)
+
+        stuff = [item.ratings.stuff for item in result if isinstance(item.ratings, PitcherRatings)]
+        self.assertEqual(len(stuff), 50)
+        self.assertGreater(len(set(stuff)), 5)
+
+    def test_the_order_of_the_raw_estimate_is_kept_among_players_with_a_record(self):
+        norms = LeagueNorms.of([*self.regulars_in, *self.farm_in])
+        raw = [estimate_batter_ratings(r.batting, r.fielding, r.position, norms) for r in self.regulars_in]
 
         for name in ("contact", "power", "eye"):
-            pairs = sorted(zip(raw, everyone, strict=True), key=lambda pair: getattr(pair[0], name))
+            pairs = sorted(zip(raw, self.regulars, strict=True), key=lambda pair: getattr(pair[0], name))
             mapped = [getattr(after, name) for _, after in pairs]
             with self.subTest(item=name):
                 self.assertEqual(mapped, sorted(mapped))
+
+    def test_has_record_looks_at_the_role_of_the_registered_position(self):
+        self.assertTrue(has_record(_regular(1, 1)))
+        self.assertFalse(has_record(CareerRecord(1, Position.OUTFIELDER)))
+        pitched = PitchingLine(innings=InningsPitched(outs=3))
+        self.assertTrue(has_record(CareerRecord(2, Position.PITCHER, pitching=pitched)))
+        # 投手は打席があっても、投げていなければ成績の無い選手
+        self.assertFalse(has_record(CareerRecord(3, Position.PITCHER, batting=BattingLine(at_bats=3))))
 
 
 class CareerRecordTest(TestCase):

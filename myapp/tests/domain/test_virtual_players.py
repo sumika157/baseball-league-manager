@@ -6,6 +6,7 @@ import random
 import unittest
 from datetime import date
 
+from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND
 from myapp.domain.value_objects import Handedness, Position, Profile
 from myapp.domain.virtual_players import generator, pools
 from myapp.domain.virtual_players.generator import AmateurPath
@@ -122,9 +123,34 @@ class AllocationTest(unittest.TestCase):
         self.assertLessEqual(sum(generator.POSITION_RATIOS.values()), 1.0)
 
     def test_largest_remainder_keeps_the_total(self) -> None:
-        for total in range(generator.MIN_ROSTER, generator.MAX_ROSTER + 1):
+        # 投入が配る人数（育成の範囲〜支配下の帯の上端）
+        for total in range(generator.DEVELOPMENTAL_RANGE[0], OPENING_REGISTERED_BAND.high + 1):
             allocation = generator.largest_remainder(total, generator.POSITION_RATIOS)
             self.assertEqual(sum(allocation.values()), total)
+
+    def test_additions_fill_the_gap_to_the_target(self) -> None:
+        cases = [
+            {},
+            {Position.PITCHER: 15, Position.INFIELDER: 8, Position.OUTFIELDER: 6, Position.CATCHER: 2},
+            # 既存が偏っている（投手だけ多い）
+            {Position.PITCHER: 40, Position.CATCHER: 1},
+        ]
+        for existing in cases:
+            for target in (OPENING_REGISTERED_BAND.low, OPENING_REGISTERED_BAND.high):
+                with self.subTest(existing=existing, target=target):
+                    adds = generator.additions_by_position(target, existing)
+                    self.assertEqual(sum(adds.values()), target - sum(existing.values()))
+                    self.assertTrue(all(count >= 0 for count in adds.values()))
+
+    def test_additions_are_zero_when_the_team_is_already_full(self) -> None:
+        adds = generator.additions_by_position(10, {Position.PITCHER: 12})
+        self.assertEqual(sum(adds.values()), 0)
+
+    def test_additions_follow_the_ratios_from_scratch(self) -> None:
+        total = OPENING_REGISTERED_BAND.high
+        self.assertEqual(
+            generator.additions_by_position(total, {}), generator.largest_remainder(total, generator.POSITION_RATIOS)
+        )
 
 
 if __name__ == "__main__":
