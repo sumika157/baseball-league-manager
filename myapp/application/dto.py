@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 
@@ -979,6 +979,8 @@ class BatterRow:
     height_cm: int | None = None
     weight_kg: int | None = None
     age: int | None = None
+    # 戦力分析の成績一覧だけが付ける、色分けの区分（選手一覧では None で色を付けない）
+    tone: ColorCategory | None = None
 
 
 @dataclass(frozen=True)
@@ -1016,6 +1018,8 @@ class PitcherRow:
     height_cm: int | None = None
     weight_kg: int | None = None
     age: int | None = None
+    # 戦力分析の成績一覧だけが付ける、色分けの区分（選手一覧では None で色を付けない）
+    tone: ColorCategory | None = None
 
 
 @dataclass(frozen=True)
@@ -2203,6 +2207,22 @@ class ColorLegendItem:
 
 
 @dataclass(frozen=True)
+class TeamStatsTab:
+    """戦力分析の成績一覧タブの表。行ごとに色分けの区分を付けてあり、凡例は表に出ている行で数えた値。"""
+
+    rows: Sequence[BatterRow | PitcherRow]
+    legend: list[ColorLegendItem]
+
+
+@dataclass(frozen=True)
+class PlayerTone:
+    """選手と、いまの色分けの軸での区分。成績一覧のように別の経路で作る表の選手名に、同じ色を付けるのに使う。"""
+
+    player_id: int
+    tone: ColorCategory
+
+
+@dataclass(frozen=True)
 class ColorOption:
     """色分けの軸の選択肢。"""
 
@@ -2298,6 +2318,8 @@ class TeamAnalysis:
     leavers: list[MoveRow]
     # リーグの支配下の上限（None は無制限）。チーム全体の支配下・育成の人数は下の property
     registered_limit: int | None = None
+    # その年の在籍選手（デプス表に載る全員）の区分。成績一覧のタブが選手名に色を付けるのに使う
+    roster_tones: list[PlayerTone] = field(default_factory=list)
     # FA 取得タブの行（タブが FA のときだけ作る）。records_from_year は試合の記録がある最初の年
     fa_rows: list[FaRow] = field(default_factory=list)
     records_from_year: int | None = None

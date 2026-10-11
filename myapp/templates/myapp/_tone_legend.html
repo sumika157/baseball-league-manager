@@ -1,0 +1,10 @@
+{# 色分けの凡例。items は ColorLegendItem の並び（区分の名前と、いま画面に出ている選手の人数） #}
+<ul class="tone-legend list-unstyled mb-0" aria-label="色分けの凡例">
+  {% for item in items %}
+  <li class="tone-legend-item player-tone-{{ item.category.key }}">
+    <span class="tone-swatch" aria-hidden="true"></span>
+    {{ item.category.label }}{% if item.category.mark %}<span class="tone-mark">{{ item.category.mark }}</span>{% endif %}
+    <span class="stat-muted tabular-nums">{{ item.count }}名</span>
+  </li>
+  {% endfor %}
+</ul>

@@ -8,7 +8,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from dataclasses import replace
 from datetime import date
 
 from ..domain import services as domain_services
@@ -31,6 +32,7 @@ from .dto import (
     AnalysisRosterRow,
     AnalysisTab,
     AnalysisTeamOption,
+    BatterRow,
     ColorLegendItem,
     ColorOption,
     DeclarationFact,
@@ -42,11 +44,14 @@ from .dto import (
     FielderUsage,
     MoveRow,
     MoveStintRow,
+    PitcherRow,
     PitcherUsage,
     PlayerContractStint,
+    PlayerTone,
     ServiceHistory,
     TeamAnalysis,
     TeamAnalysisFacts,
+    TeamStatsTab,
     UsageBox,
     UsagePlayer,
 )
@@ -55,10 +60,12 @@ from .queries import TeamAnalysisQuery, TeamListQuery
 DEPTH_TAB = "depth"
 USAGE_TAB = "usage"
 FA_TAB = "fa"
+STATS_TAB = "stats"
 TABS = [
     AnalysisTab(key=DEPTH_TAB, label="デプス表"),
     AnalysisTab(key=USAGE_TAB, label="起用マップ"),
     AnalysisTab(key=FA_TAB, label="FA取得"),
+    AnalysisTab(key=STATS_TAB, label="成績一覧"),
 ]
 
 # 起用マップの箱をダイヤモンドのどこに置くか（CSS の `usage-box-<キー>`）。表示の関心なのでここに持つ。
@@ -86,6 +93,19 @@ class TeamAnalysisService:
         """チームの表示順で先頭のチーム。1つも無ければ None。"""
         summaries = self._team_list_query.list_summaries()
         return summaries[0].id if summaries else None
+
+    @staticmethod
+    def stats_tab(analysis: TeamAnalysis, rows: Sequence[BatterRow | PitcherRow]) -> TeamStatsTab:
+        """成績一覧のタブの材料。各行にページ全体の色分けの区分を付け、凡例は表に出ている行で数える。
+
+        区分はデプス表の区分（`analysis.roster_tones`）を使い回す。デプス表に載らない選手は対象外。
+        """
+        tones = {entry.player_id: entry.tone for entry in analysis.roster_tones}
+        shown = [replace(row, tone=tones.get(row.id, domain_services.NEUTRAL_CATEGORY)) for row in rows]
+        return TeamStatsTab(
+            rows=shown,
+            legend=_legend(ColorAxis.parse(analysis.color), [row.tone for row in shown if row.tone is not None]),
+        )
 
     def has_team(self, team_id: int) -> bool:
         return any(summary.id == team_id for summary in self._team_list_query.list_summaries())
@@ -156,6 +176,7 @@ class TeamAnalysisService:
             color=axis.value,
             color_options=[ColorOption(key=a.value, label=a.label) for a in ColorAxis],
             legend=_legend(axis, shown),
+            roster_tones=_roster_tones(pitchers, fielders),
             joiners=joiners,
             leavers=leavers,
             registered_limit=facts.registered_limit,
@@ -420,6 +441,17 @@ def _is_developmental_year(stints: list[PlayerContractStint], year: int) -> bool
     """その年に在籍があり、そのすべてが育成か。在籍が無い年は育成とは言えないので False。"""
     covering = [s for s in stints if s.from_year <= year and (s.to_year is None or year <= s.to_year)]
     return bool(covering) and all(s.contract.contract_in(year) is ContractStatus.DEVELOPMENTAL for s in covering)
+
+
+def _roster_tones(*tables: DepthTable) -> list[PlayerTone]:
+    """デプス表に載る選手全員の区分（同じ選手は1回）。"""
+    seen: dict[int, PlayerTone] = {}
+    for table in tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for player in cell.players:
+                    seen.setdefault(player.player_id, PlayerTone(player.player_id, player.tone))
+    return list(seen.values())
 
 
 def _legend(axis: ColorAxis, tones: list[ColorCategory]) -> list[ColorLegendItem]:

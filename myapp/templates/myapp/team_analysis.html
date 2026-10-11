@@ -1,4 +1,5 @@
 {% extends "myapp/base.html" %}
+{% load sorting %}
 
 {% block title %}{% if analysis %}{{ analysis.team_name }}の戦力分析{% else %}戦力分析{% endif %} - Baseball Manager{% endblock %}
 
@@ -41,6 +42,11 @@
   <input type="hidden" name="year" value="{{ analysis.year }}" />
   <input type="hidden" name="tab" value="{{ analysis.tab }}" />
   <input type="hidden" name="color" value="{{ analysis.color }}" />
+  {% if analysis.tab == 'stats' %}
+    <input type="hidden" name="pos" value="{{ pos_mode }}" />
+    <input type="hidden" name="sort" value="{{ current_sort }}" />
+    <input type="hidden" name="dir" value="{% if current_descending %}desc{% else %}asc{% endif %}" />
+  {% endif %}
   <button type="submit" class="btn btn-sm btn-outline-secondary">切り替え</button>
 </form>
 
@@ -48,14 +54,14 @@
   <div class="segmented segmented-scroll">
     {% for year in analysis.years %}
       <a class="segmented-item {% if year == analysis.year %}is-active{% endif %}"
-         href="?year={{ year }}&amp;tab={{ analysis.tab }}&amp;color={{ analysis.color }}">{{ year }}年</a>
+         href="?year={{ year }}&amp;tab={{ analysis.tab }}&amp;color={{ analysis.color }}{% if analysis.tab == 'stats' %}&amp;pos={{ pos_mode }}&amp;sort={{ current_sort }}&amp;dir={% if current_descending %}desc{% else %}asc{% endif %}{% endif %}">{{ year }}年</a>
     {% endfor %}
   </div>
 {% else %}
   <p class="text-muted">このチームにはまだ試合の記録がありません。在籍だけから編成を表示しています。</p>
 {% endif %}
 
-{# タブ。成績一覧を足していく #}
+{# タブ #}
 <div class="segmented ms-2">
   {% for tab in analysis.tabs %}
     <a class="segmented-item {% if tab.key == analysis.tab %}is-active{% endif %}"
@@ -64,7 +70,7 @@
 </div>
 
 {% comment %}
-  色分け。ページ全体（デプス表・起用マップ・入退団）で同じ規則・同じ色。軸の語彙と振り分けはドメイン（ColorAxis・color_category）が決める。
+  色分け。ページ全体（デプス表・起用マップ・入退団・FA 取得・成績一覧）で同じ規則・同じ色。軸の語彙と振り分けはドメイン（ColorAxis・color_category）が決める。
   色だけに頼らないよう、凡例に区分の名前と人数を出し、選手の横に短い印を添える。
 {% endcomment %}
 <div class="tone-bar mt-3 mb-3">
@@ -75,15 +81,8 @@
          href="?year={{ analysis.year }}&amp;tab={{ analysis.tab }}&amp;color={{ option.key }}">{{ option.label }}</a>
     {% endfor %}
   </div>
-  <ul class="tone-legend list-unstyled mb-0" aria-label="色分けの凡例">
-    {% for item in analysis.legend %}
-    <li class="tone-legend-item player-tone-{{ item.category.key }}">
-      <span class="tone-swatch" aria-hidden="true"></span>
-      {{ item.category.label }}{% if item.category.mark %}<span class="tone-mark">{{ item.category.mark }}</span>{% endif %}
-      <span class="stat-muted tabular-nums">{{ item.count }}名</span>
-    </li>
-    {% endfor %}
-  </ul>
+  {# 凡例の人数は、いまのタブで色が付いて並んでいる選手（成績一覧は表の行。空でも凡例は表の人数の0で出す） #}
+  {% if analysis.tab == 'stats' %}{% include 'myapp/_tone_legend.html' with items=stats.legend %}{% else %}{% include 'myapp/_tone_legend.html' with items=analysis.legend %}{% endif %}
 </div>
 
 {% if analysis.tab == 'depth' %}
@@ -212,8 +211,7 @@
   </div>
 
   <p class="page-subtitle" style="font-size: 0.8125rem;">
-    選手ごとの成績は <a href="{% url 'player_list' analysis.team_id %}">{{ analysis.team_name }}の選手一覧</a>
-    （通算成績。この年だけの成績ではありません）で見られます。
+    選手ごとの{{ analysis.year }}年の成績は、上の「成績一覧」のタブで見られます（<a href="{% url 'player_list' analysis.team_id %}">{{ analysis.team_name }}の選手一覧</a>は、いま在籍する選手の通算成績です）。
   </p>
 {% elif analysis.tab == 'usage' %}
   {% comment %}
@@ -288,6 +286,28 @@
       </tbody>
     </table>
   </div>
+{% elif analysis.tab == 'stats' %}
+  {% comment %}
+    その年に在籍した選手のその年の成績。表は選手一覧と同じ部品（_roster_stats_table.html）で、率は合算した実数から計算し直した値。
+    選手名の色はページ全体の色分けと同じ（区分はデプス表の区分を使い回し、デプス表に載らない選手は「対象外」）。凡例の人数はこの表に出ている選手。
+  {% endcomment %}
+  <h2 class="h6 mb-2 mt-3">{{ analysis.year }}年の成績 <span class="text-muted">{% if pos_mode == 'pitcher' %}投手{% else %}野手{% endif %} {{ players|length }}名</span></h2>
+  <div class="segmented mb-2">
+    <a class="segmented-item {% if pos_mode == 'batter' %}is-active{% endif %}" href="{% query_with pos='batter' sort='' dir='' %}">野手</a>
+    <a class="segmented-item {% if pos_mode == 'pitcher' %}is-active{% endif %}" href="{% query_with pos='pitcher' sort='' dir='' %}">投手</a>
+  </div>
+  <p class="page-subtitle mb-2" style="font-size: 0.8125rem;">
+    {{ analysis.year }}年にこのチームに在籍した選手（年の途中で退団した選手を含む）の、{{ analysis.year }}年の成績です。
+    成績は、その年の試合をすべて数えます。年の途中で別のチームから移ってきた選手は、移る前と後のどちらのチームの一覧にも載り、
+    成績はどちらにも両方のチームでの試合を合わせた値です。見出しを押すと並べ替わります。
+    {% if pos_mode == 'pitcher' %}
+      FIP は本塁打・四死球・奪三振だけで投球内容を測り、リーグの得点環境に合わせて防御率と同じ尺度に直した指標
+      · ERA+ はリーグ平均防御率を100とした指数（大きいほど良い） · HP はホールド＋救援勝利
+    {% else %}
+      IsoP は長打率 − 打率で、長打力だけを取り出した指標 · OPS+ はリーグ平均 OPS を100とした指数
+    {% endif %}
+  </p>
+  {% include 'myapp/_roster_stats_table.html' %}
 {% endif %}
 {% endif %}
 {% endblock %}

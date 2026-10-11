@@ -46,7 +46,7 @@ from ..application.pennant_world import PennantWorldService, WorldRepositories
 from ..application.queries import SimulationContextQuery
 from ..application.roster import RosterService
 from ..application.services import TeamApplicationService
-from ..application.team_analysis import TeamAnalysisService
+from ..application.team_analysis import STATS_TAB, TeamAnalysisService
 from ..domain.exceptions import (
     AlreadyAdvanced,
     AlreadyClosed,
@@ -1580,7 +1580,9 @@ def analysis_index(request):
     if team_id is None:
         return render(request, "myapp/team_analysis.html", {"analysis": None})
 
-    query = {name: request.GET[name] for name in ("year", "tab", "color") if request.GET.get(name)}
+    query = {
+        name: request.GET[name] for name in ("year", "tab", "color", "pos", "sort", "dir") if request.GET.get(name)
+    }
     url = reverse("team_analysis", args=[team_id])
     return redirect(f"{url}?{urlencode(query)}" if query else url)
 
@@ -1594,4 +1596,27 @@ def team_analysis(request, team_id):
         )
     except TeamNotFound:
         raise Http404("チームが見つかりません。") from None
-    return render(request, "myapp/team_analysis.html", {"analysis": analysis})
+    context: dict[str, object] = {"analysis": analysis}
+    if analysis.tab == STATS_TAB:
+        # 成績一覧のタブだけ、その年に在籍した選手のその年の成績を読む（ほかのタブのクエリ数を増やさない）。
+        # 表の材料は選手一覧と同じ `TeamApplicationService`。戦力分析のサービスにチームの表は持たせない
+        pos_mode = PITCHER_MODE if request.GET.get("pos") == PITCHER_MODE else BATTER_MODE
+        sort, descending = _sort_params(request)
+        stats = build_service()
+        listing = (
+            stats.list_pitchers(team_id, sort=sort, descending=descending, year=analysis.year)
+            if pos_mode == PITCHER_MODE
+            else stats.list_batters(team_id, sort=sort, descending=descending, year=analysis.year)
+        )
+        stats_tab = build_team_analysis_service().stats_tab(analysis, listing.rows)
+        context.update(
+            {
+                "stats": stats_tab,
+                "players": stats_tab.rows,
+                "pos_mode": pos_mode,
+                "team_id": team_id,
+                "current_sort": listing.sort,
+                "current_descending": listing.descending,
+            }
+        )
+    return render(request, "myapp/team_analysis.html", context)
