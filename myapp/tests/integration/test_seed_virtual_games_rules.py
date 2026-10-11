@@ -9,6 +9,7 @@ from collections import defaultdict
 from io import StringIO
 from types import SimpleNamespace
 
+import numpy as np
 from django.core.management import CommandError, call_command
 from django.test import SimpleTestCase
 
@@ -16,7 +17,7 @@ from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import FieldingPosition, Position
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
-from myapp.management.commands.seed_virtual_games import MAX_INNINGS, Command, _Side
+from myapp.management.commands.seed_virtual_games import MAX_INNINGS, Command, _Outing, _Side
 
 from .base import BaseCase
 
@@ -209,6 +210,72 @@ class SeedGamesTest(SeedGamesBase):
                 }
                 with self.subTest(game=str(game), team=team_id):
                     self.assertLessEqual(len(foreign), 1)
+
+
+class _AlwaysRng:
+    """`random()` が常に0を返す乱数。割合で決まる起用を必ず起こす。"""
+
+    def random(self) -> float:
+        return 0.0
+
+
+class LateReliefTest(SimpleTestCase):
+    """継投の勝ちパターン。回の頭に、抑え（9回以降）とセットアッパー（8回）へ代える。
+
+    以前は前の投手の受け持ちが尽きたときにしか代えず、9回の途中から出た投手がアウト3つに
+    届かずセーブを逃し、抑えも8回の中継ぎに続投されて出番を失っていた
+    （セーブの付く試合が全体の15%、最多が年11セーブ）。
+    """
+
+    def setUp(self) -> None:
+        self.starter, self.closer, self.setup, *self.middle = (SimpleNamespace(id=i) for i in range(1, 7))
+        self.command = Command()
+        self.command.rng = _AlwaysRng()
+
+    def _sides(self, *, lead: int) -> dict[bool, _Side]:
+        roster = {
+            "bullpen": [self.closer, self.setup, *self.middle],
+            "foreign": set(),
+            "pitching_talent": defaultdict(lambda: 1.0),
+        }
+        fielding = _Side(team=None, roster=roster, is_home=True, score=lead)
+        # 中継ぎが投げている途中。受け持ちはまだ残っている
+        fielding.outings.append(
+            _Outing(player=self.middle[0], appearance_order=2, entered_inning=7, skill=1.0, target_outs=6, outs=3)
+        )
+        fielding.used_player_ids = {self.starter.id, self.middle[0].id}
+        return {True: fielding, False: _Side(team=None, roster=roster, is_home=False)}
+
+    def _start_inning(self, inning: int, *, lead: int) -> _Side:
+        sides = self._sides(lead=lead)
+        self.command._maybe_send_in_late_relief(sides[True], sides, inning, None)
+        return sides[True]
+
+    def test_closer_takes_the_ninth_from_its_start_in_a_save_situation(self):
+        side = self._start_inning(9, lead=2)
+
+        self.assertIs(side.pitcher.player, self.closer)
+        self.assertEqual(side.pitcher.entered_inning, 9)
+        # 回の途中で降ろさない。アウト3つに届かないとセーブが付かない
+        self.assertEqual(side.pitcher.target_outs, OUTS_PER_INNING)
+
+    def test_setup_takes_the_eighth_when_leading_or_tied(self):
+        for lead in (1, 0):
+            with self.subTest(lead=lead):
+                self.assertIs(self._start_inning(8, lead=lead).pitcher.player, self.setup)
+
+    def test_no_change_outside_late_innings_or_close_leads(self):
+        for inning, lead in ((9, 4), (9, 0), (9, -1), (8, -1), (7, 1)):
+            with self.subTest(inning=inning, lead=lead):
+                self.assertIs(self._start_inning(inning, lead=lead).pitcher.player, self.middle[0])
+
+    def test_late_relievers_are_not_used_as_middle_relief(self):
+        self.command.rng = np.random.default_rng(7)
+        sides = self._sides(lead=1)
+        picked = {self.command._pick_reliever(sides[True], 6, 1, None).id for _ in range(200)}
+
+        self.assertNotIn(self.closer.id, picked)
+        self.assertNotIn(self.setup.id, picked)
 
 
 class SeedGamesOptionsTest(SeedGamesBase):
