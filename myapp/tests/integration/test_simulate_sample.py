@@ -14,9 +14,11 @@ from django.test import TestCase
 
 from myapp.domain.pennant.offseason import AnchorCorrection, OffseasonPlan
 from myapp.domain.pennant.schedule import ScheduleRules
+from myapp.domain.value_objects import ContractStatus
 from myapp.infrastructure import orm_models
 from myapp.management import estimate_check, multi_season_check
 from myapp.management.commands import simulate_sample
+from myapp.presentation.views import build_pennant_world_service
 
 TIMING_LINE = re.compile(r"[\d.]+ ms/試合")
 
@@ -128,6 +130,32 @@ class SimulateSampleSeasonsTest(TestCase):
     def test_zero_seasons_is_rejected(self):
         with self.assertRaises(CommandError):
             run(from_real_leagues=[self.leagues[0].id], seasons=0)
+
+
+class EstimateCheckClubTest(TestCase):
+    """`--from-real-leagues` の1シーズンの確認は、育成を1軍の候補に入れない（世界の進行と同じ）。
+
+    以前は在籍者全員を候補にしていた。投入（`seed_virtual_players`）が育成を作るようになったので、
+    そのままだと育成が試合に出て、世界の作成と水準が食い違う。
+    """
+
+    def test_developmental_players_are_not_candidates(self):
+        league = orm_models.League.objects.create(name="リーグ")
+        for number in range(2):
+            orm_models.Team.objects.create(league=league, name=f"球団{number}")
+        call_command("seed_virtual_players", "--seed", "1", stdout=StringIO())
+        service = build_pennant_world_service()
+        source = service.load_source([league.id])
+        ratings = estimate_check.estimate_from_source(service, source, seed=1, year=2026)
+
+        for team in source.rosters[0]:
+            club = estimate_check._club(team, ratings)
+            candidates = {member.player_id for member in [*club.batters, *club.pitchers]}
+            developmental = {p.id for p in team.active_players if team.contract_of(p) is ContractStatus.DEVELOPMENTAL}
+            with self.subTest(team=team.name):
+                self.assertTrue(developmental)
+                self.assertFalse(candidates & developmental)
+                self.assertEqual(len(candidates), len(team.active_players) - len(developmental))
 
 
 class FormatOffseasonTest(TestCase):

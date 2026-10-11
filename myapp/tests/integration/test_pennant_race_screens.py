@@ -138,6 +138,11 @@ class RaceBandBeforeTheEndTest(HomeCase):
         self.start_season()
         for _ in range(3):
             build_pennant_season_service(self.world_a).advance(AdvanceTarget.DAY)
+        # 単独首位は残りを全勝すれば必ず首位なので、「マジックが残り試合以内なら点灯」の規則（race.py）どおり
+        # 序盤でも点灯する（球団3つでも 3勝0敗でマジック139）。
+        # 結果に依存しないよう、首位でない（または並んでいる）側から見る
+        (league,) = build_world_view_service(self.world_a).get_league_standings(YEAR)
+        orm_models.PennantWorld.objects.filter(id=self.world_a).update(managed_team_id=league.rows[-1].team_id)
         early = self.client.get(self.home_url()).content.decode()
 
         self.assertNotIn("優勝争い", before)

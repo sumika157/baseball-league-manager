@@ -18,17 +18,17 @@ from enum import Enum
 from ..simulation.estimate import draw_growth_type, with_growth
 from ..simulation.randomness import GameRandom
 from ..simulation.ratings import AVERAGE_RATING, BatterRatings, PitcherRatings
-from ..simulation.samples import draw_ratings
 from ..value_objects import AcquisitionRoute, Position, Profile
 from ..virtual_players import generator
 from ..virtual_players.generator import AmateurPath
 from .initial_ratings import SEASON_START_MONTH, STRENGTH_UNIT
+from .prospects import draw_prospect_ratings
 from .roster import OPENING_REGISTERED_BAND
 
 # 帯（開幕前の支配下）の出典は `roster.OPENING_REGISTERED_BAND`。ここは指名の人数の決め方だけを持つ
 # 帯に入る範囲の中で、ふだん迎える新人の数（NPB の本指名は1球団平均約6人）。帯の中の引退・退団（約6〜7人）とつり合う
 USUAL_DRAFTEES = 6
-# 1年に迎える新人の上限。帯の下の球団（実データから分岐した球団は支配下が約34人）が帯に追いつく速さ。
+# 1年に迎える新人の上限。帯の下の球団（以前の実データから分岐した球団は支配下が約34人だった）が帯に追いつく速さ。
 # 一度に埋めると、新人（平均約22歳・能力は平均より低い）が母集団の半分近くになり、年齢の分布と水準の錨が崩れる
 MAX_DRAFTEES = 10
 # 位置ごとの最低人数（これを下回る位置を先に埋める）
@@ -42,12 +42,8 @@ MIN_BY_POSITION = {
 FOREIGN_TARGET = 4
 MAX_FOREIGN_PER_DRAFT = 2
 
-# 新人の能力の標準偏差。平均は経路ごと（`DraftRoute.rating_mean`）
-ROOKIE_RATING_SD = 6.0
-# 投手のスタミナ: 先発型の割合と、型ごとの（平均, 標準偏差）
-STARTER_TYPE_RATIO = 0.55
-STARTER_STAMINA = (55.0, 8.0)
-RELIEVER_STAMINA = (36.0, 8.0)
+# 新人の能力の平均は経路ごと（`DraftRoute.rating_mean`）。標準偏差とスタミナの分布は `prospects.py`
+# （世界の作成で成績の無い選手＝2軍の層と同じ引き方）
 # 外国人の新人の年齢（満年齢）の範囲
 FOREIGN_AGE_RANGE = (25, 31)
 # 背番号（表記）。新人は支配下なので 1〜99 から選び、尽きたら 0・00（育成の3桁は使わない）
@@ -220,16 +216,7 @@ def _draw_number(rng: GameRandom, used: set[str]) -> str:
 
 
 def _draw_rookie_ratings(rng: GameRandom, route: DraftRoute, position: Position) -> BatterRatings | PitcherRatings:
-    starter = rng.random() < STARTER_TYPE_RATIO
-    stamina_mean, stamina_sd = STARTER_STAMINA if starter else RELIEVER_STAMINA
-    return draw_ratings(
-        rng,
-        mean=route.rating_mean,
-        sd=ROOKIE_RATING_SD,
-        position=position,
-        stamina_mean=stamina_mean,
-        stamina_sd=stamina_sd,
-    )
+    return draw_prospect_ratings(rng, mean=route.rating_mean, position=position)
 
 
 def _draw_rookie(

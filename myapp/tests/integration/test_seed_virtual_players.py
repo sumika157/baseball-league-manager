@@ -10,13 +10,17 @@ from io import StringIO
 from unittest import mock
 
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import SimpleTestCase
 
+from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND, RegisteredBand
 from myapp.domain.pennant.world import WorldScope
+from myapp.domain.value_objects import AcquisitionRoute, ContractStatus
 from myapp.domain.virtual_players import generator
-from myapp.domain.virtual_players.generator import MAX_ROSTER, MIN_ROSTER
+from myapp.domain.virtual_players.generator import DEVELOPMENTAL_RANGE
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoTeamRepository
+from myapp.management.commands import seed_virtual_players
 from myapp.management.commands.seed_virtual_players import ORIGINAL_PLAYER_READINGS
 
 from .base import BaseCase
@@ -45,6 +49,17 @@ def active_stints(team) -> list[orm_models.PlayerStint]:
     return list(orm_models.PlayerStint.objects.filter(team=team, to_year__isnull=True).select_related("player"))
 
 
+def contract_of(stint: orm_models.PlayerStint) -> ContractStatus:
+    return ContractStatus.now(ContractStatus.from_label(stint.signed_as), stint.promoted_year)
+
+
+def split_by_contract(team) -> tuple[list[orm_models.PlayerStint], list[orm_models.PlayerStint]]:
+    """(支配下, 育成) の在籍。"""
+    stints = active_stints(team)
+    registered = [s for s in stints if contract_of(s) is ContractStatus.REGISTERED]
+    return registered, [s for s in stints if s not in registered]
+
+
 class SeedRosterTest(BaseCase):
     """新規投入（オプションなし）。"""
 
@@ -52,17 +67,21 @@ class SeedRosterTest(BaseCase):
         super().setUp()
         self.original = add_player(self.team, "藤井健吾", number=10)
 
-    def test_fills_each_team_within_roster_range_and_keeps_existing(self):
+    def test_fills_each_team_within_the_bands_and_keeps_existing(self):
         run()
 
         for team in (self.team, self.rival):
+            registered, developmental = split_by_contract(team)
             with self.subTest(team=team.name):
-                self.assertTrue(MIN_ROSTER <= len(active_stints(team)) <= MAX_ROSTER)
+                # 支配下はペナントの開幕前の帯（出典を共有する）、育成は投入の範囲
+                self.assertTrue(OPENING_REGISTERED_BAND.low <= len(registered) <= OPENING_REGISTERED_BAND.high)
+                self.assertTrue(DEVELOPMENTAL_RANGE[0] <= len(developmental) <= DEVELOPMENTAL_RANGE[1])
         # 既存の選手と在籍には手を付けない（追加専用）
         self.original.refresh_from_db()
         self.assertEqual(self.original.name, "藤井健吾")
         stint = orm_models.PlayerStint.objects.get(player=self.original)
         self.assertEqual((stint.team_id, stint.number, stint.to_year), (self.team.id, "10", None))
+        self.assertIsNone(stint.acquired_via)
 
     def test_jersey_numbers_are_unique_among_active_players(self):
         run()
@@ -72,6 +91,71 @@ class SeedRosterTest(BaseCase):
             with self.subTest(team=team.name):
                 self.assertEqual(len(numbers), len(set(numbers)))
                 self.assertTrue(all(0 <= int(n) <= 999 for n in numbers))
+
+    def test_numbers_and_routes_follow_the_contract(self):
+        """支配下は 00・0〜99、育成は3桁。経路は作った経路（区分と食い違わない）。
+
+        以前は支配下の番号が尽きると 100〜999 を支配下に配っていた（契約区分の規則に反する）。
+        """
+        run()
+
+        for team in (self.team, self.rival):
+            registered, developmental = split_by_contract(team)
+            for stint in registered:
+                if stint.player == self.original:
+                    continue
+                with self.subTest(team=team.name, number=stint.number):
+                    self.assertLess(int(stint.number), 100)
+                    expected = (
+                        AcquisitionRoute.NEW_FOREIGN if stint.player.is_foreign_player else AcquisitionRoute.DRAFT
+                    )
+                    self.assertEqual(stint.acquired_via, expected.value)
+            for stint in developmental:
+                with self.subTest(team=team.name, number=stint.number):
+                    self.assertGreaterEqual(int(stint.number), 100)
+                    self.assertEqual(stint.signed_as, ContractStatus.DEVELOPMENTAL.value)
+                    self.assertIsNone(stint.promoted_year)
+                    self.assertEqual(stint.acquired_via, AcquisitionRoute.DEVELOPMENTAL_DRAFT.value)
+                    # 助っ人は支配下だけ（外国人登録枠は育成も数えるので、枠を支配下に回す）
+                    self.assertFalse(stint.player.is_foreign_player)
+            # 集約として読み戻しても区分の規則に通る
+            DjangoTeamRepository(WorldScope.real()).find_by_id(team.id)
+
+    def test_registered_stays_within_the_league_limit(self):
+        self.league.registered_player_limit = 40
+        self.league.save()
+
+        run()
+
+        for team in (self.team, self.rival):
+            registered, developmental = split_by_contract(team)
+            with self.subTest(team=team.name):
+                self.assertEqual(len(registered), 40)
+                self.assertTrue(developmental)
+
+    def test_stops_when_registered_numbers_run_out(self):
+        """支配下の番号（101個）より多く要るときは、3桁を配らずに止める（何も書かない）。"""
+        self.league.registered_player_limit = None
+        self.league.save()
+
+        with (
+            mock.patch.object(seed_virtual_players, "OPENING_REGISTERED_BAND", RegisteredBand(low=110, high=110)),
+            self.assertRaisesMessage(CommandError, "支配下の背番号が足りません"),
+        ):
+            run()
+
+        self.assertEqual(orm_models.Player.objects.count(), 1)
+
+    def test_running_again_stays_within_the_bands(self):
+        """埋まった球団に流し直しても、帯を超えて足さない（今のデータに追加で埋める運用）。"""
+        run()
+        run("--seed", "2")
+
+        for team in (self.team, self.rival):
+            registered, developmental = split_by_contract(team)
+            with self.subTest(team=team.name):
+                self.assertTrue(OPENING_REGISTERED_BAND.low <= len(registered) <= OPENING_REGISTERED_BAND.high)
+                self.assertTrue(DEVELOPMENTAL_RANGE[0] <= len(developmental) <= DEVELOPMENTAL_RANGE[1])
 
     def test_profile_is_consistent_with_birth_date_and_stint(self):
         run()
@@ -158,7 +242,74 @@ class SeedForeignPlayerQuotaTest(BaseCase):
         with mock.patch.object(generator, "FOREIGN_PLAYER_RATIO", 1.0):
             run()
 
-        self.assertTrue(all(s.player.is_foreign_player for s in active_stints(self.team)))
+        registered, _ = split_by_contract(self.team)
+        self.assertTrue(all(s.player.is_foreign_player for s in registered))
+
+    def test_developmental_foreigners_count_toward_the_limit(self):
+        """外国人登録枠は育成も数える（集約の `Team.foreign_player_count` と同じ）。"""
+        self.league.foreign_player_roster_limit = 2
+        self.league.save()
+        player = orm_models.Player.objects.create(name="育成の助っ人", is_foreign_player=True, nationality="キューバ")
+        orm_models.PlayerStint.objects.create(
+            player=player, team=self.team, number="150", from_year=2024, signed_as=ContractStatus.DEVELOPMENTAL.value
+        )
+
+        with mock.patch.object(generator, "FOREIGN_PLAYER_RATIO", 1.0):
+            run()
+
+        foreign = [s for s in active_stints(self.team) if s.player.is_foreign_player]
+        self.assertEqual(len(foreign), 2)
+        DjangoTeamRepository(WorldScope.real()).find_by_id(self.team.id).ensure_foreign_player_quota(2)
+
+
+class SeedAlreadyOverTheLimitTest(BaseCase):
+    """投入前から上限を超えている球団は、減らさず（追加専用）、その区分は足さずに理由を出す。"""
+
+    def test_reports_and_adds_nothing_to_an_over_limit_section(self):
+        self.league.registered_player_limit = 2
+        self.league.foreign_player_roster_limit = 1
+        self.league.save()
+        for number, is_foreign in ((1, True), (2, True), (3, False)):
+            add_player(self.team, f"既存{number}", number=number, is_foreign=is_foreign)
+
+        output = run()
+
+        self.assertIn(f"{self.team.name}: 支配下が既に上限（2人）を超えています（3人）", output)
+        self.assertIn(f"{self.team.name}: 外国人が既に上限（1人）を超えています（2人）", output)
+        registered, developmental = split_by_contract(self.team)
+        self.assertEqual(len(registered), 3)
+        self.assertTrue(developmental, "育成は上限の外なので足す")
+        self.assertEqual(sum(1 for s in active_stints(self.team) if s.player.is_foreign_player), 2)
+        # 超えていない球団は黙って埋まる
+        self.assertNotIn(f"{self.rival.name}: 支配下が既に上限", output)
+
+
+class SeedReproducibleTest(BaseCase):
+    def test_the_same_seed_gives_the_same_players(self):
+        def snapshot():
+            return sorted(
+                (
+                    s.team_id,
+                    s.player.name,
+                    s.number,
+                    s.signed_as,
+                    s.acquired_via,
+                    s.player.position,
+                    s.player.birth_date,
+                    s.player.is_foreign_player,
+                    s.player.back_name,
+                )
+                for team in (self.team, self.rival)
+                for s in active_stints(team)
+            )
+
+        run()
+        first = snapshot()
+        orm_models.Player.objects.all().delete()
+
+        run()
+
+        self.assertEqual(snapshot(), first)
 
 
 class RenameExistingTest(BaseCase):
@@ -263,7 +414,7 @@ class LargestRemainderTest(SimpleTestCase):
 
     def test_allocation_sums_to_total(self):
         ratios = generator.POSITION_RATIOS
-        for total in range(MIN_ROSTER, MAX_ROSTER + 1):
+        for total in range(DEVELOPMENTAL_RANGE[0], OPENING_REGISTERED_BAND.high + 1):
             with self.subTest(total=total):
                 allocation = generator.largest_remainder(total, ratios)
                 self.assertEqual(sum(allocation.values()), total)

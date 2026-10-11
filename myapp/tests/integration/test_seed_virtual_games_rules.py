@@ -14,7 +14,7 @@ from django.core.management import CommandError, call_command
 from django.test import SimpleTestCase
 
 from myapp.domain.pennant.world import WorldScope
-from myapp.domain.value_objects import FieldingPosition, Position
+from myapp.domain.value_objects import ContractStatus, FieldingPosition, Position
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
 from myapp.management.commands.seed_virtual_games import LINEUP_SIZE, MAX_INNINGS, Command, _Outing, _Side
@@ -67,19 +67,67 @@ class SeedGamesBase(BaseCase):
             self.team, "退団済み", Position.INFIELDER, number=50, from_year=2020, to_year=YEAR - 1
         )
         self.newcomer = self._add(self.team, "翌年入団", Position.PITCHER, number=51, from_year=YEAR + 1)
+        # その年に育成の選手は1軍の試合に出さない
+        self.developmental = self._add(
+            self.team, "育成", Position.CATCHER, number=150, contract=ContractStatus.DEVELOPMENTAL
+        )
 
-    def _add(self, team, name, position, *, number, is_foreign=False, from_year=2020, to_year=None):
+    def _add(
+        self,
+        team,
+        name,
+        position,
+        *,
+        number,
+        is_foreign=False,
+        from_year=2020,
+        to_year=None,
+        contract=ContractStatus.REGISTERED,
+        promoted_year=None,
+    ):
         player = orm_models.Player.objects.create(name=name, position=position.value, is_foreign_player=is_foreign)
         orm_models.PlayerStint.objects.create(
-            player=player, team=team, number=number, from_year=from_year, to_year=to_year
+            player=player,
+            team=team,
+            number=number,
+            from_year=from_year,
+            to_year=to_year,
+            signed_as=contract.value,
+            promoted_year=promoted_year,
         )
-        if from_year <= YEAR and (to_year is None or to_year >= YEAR):
+        on_roster = from_year <= YEAR and (to_year is None or to_year >= YEAR)
+        if on_roster and ContractStatus.in_year(contract, promoted_year, YEAR) is ContractStatus.REGISTERED:
             self.team_of[player.id] = team.id
         if position == Position.PITCHER:
             self.pitcher_ids.add(player.id)
         if is_foreign:
             self.foreign_ids.add(player.id)
         return player
+
+
+class SeedGamesRosterTest(SeedGamesBase):
+    """試合の候補（`_rosters`）は、その年に支配下の選手だけ。
+
+    以前は契約区分を見ずに在籍者全員を候補にしていたため、育成の選手が1軍の試合に出うる形だった。
+    """
+
+    def test_developmental_players_are_left_out_until_promoted(self):
+        promoted = self._add(
+            self.team,
+            "今年昇格",
+            Position.PITCHER,
+            number=53,
+            contract=ContractStatus.DEVELOPMENTAL,
+            promoted_year=YEAR,
+        )
+        command = Command()
+        command.rng = np.random.default_rng(1)
+
+        roster = command._rosters(YEAR)[self.team.id]
+
+        candidates = {p.id for p in [*roster["batters"], *roster["pitchers"]]}
+        self.assertNotIn(self.developmental.id, candidates)
+        self.assertIn(promoted.id, candidates)
 
 
 class SeedGamesTest(SeedGamesBase):
@@ -194,6 +242,7 @@ class SeedGamesTest(SeedGamesBase):
 
         self.assertNotIn(self.departed.id, appeared)
         self.assertNotIn(self.newcomer.id, appeared)
+        self.assertNotIn(self.developmental.id, appeared)
         # 自チームの試合にだけ出る
         for game in self.games:
             for entry in [*game.batting, *game.pitching]:
