@@ -21,7 +21,7 @@ from ..helpers import (
     lineup_rows,
     login_as_manager,
     play_game,
-    post_game_scorebook,
+    post_game_scorebook_day_unrecorded,
     register_lineup,
 )
 from .base import BaseCase
@@ -42,7 +42,7 @@ class UnrecordedGameTest(BaseCase):
     def _save_scorebook(self, game, *, away_runs=3, home_runs=1):
         batters = register_lineup(self.service, self.team, prefix="打者", first_number=51)
         rivals = register_lineup(self.service, self.rival, prefix="相手", first_number=61)
-        return post_game_scorebook(
+        return post_game_scorebook_day_unrecorded(
             self.client,
             game.id,
             {

@@ -62,6 +62,7 @@ from ..domain.value_objects import (
     FieldingLine,
     FieldingPosition,
     FreeAgencyKind,
+    GameTimes,
     Handedness,
     InningsPitched,
     JerseyNumber,
@@ -698,6 +699,34 @@ class _PlateRows:
         )
 
 
+def _game_day_values(game: Game) -> dict[str, Any]:
+    """試合の開始・終了・中断・観客数の列の値。**3か所（`save`・`_NewGame.build`・`_to_domain`）で同じ対応を使う。**
+
+    `_to_domain` で写し忘れると、一覧用に読んだ集約を保存したときに記録済みの値が消える
+    （`update_or_create` は defaults を全部書く）。
+    """
+    times = game.times
+    return {
+        "start_time": times.start if times else None,
+        "end_time": times.end if times else None,
+        "ends_next_day": times.ends_next_day if times else False,
+        "interruption_minutes": times.interruption_minutes if times else 0,
+        "attendance": game.attendance,
+    }
+
+
+def _times_of(row: orm_models.Game) -> GameTimes | None:
+    """行から `GameTimes` を組み立てる。開始と終了が揃っているときだけ（片方だけの行は未記録として扱う）。"""
+    if row.start_time is None or row.end_time is None:
+        return None
+    return GameTimes(
+        start=row.start_time,
+        end=row.end_time,
+        ends_next_day=row.ends_next_day,
+        interruption_minutes=row.interruption_minutes,
+    )
+
+
 @dataclass
 class _NewGame:
     """新しい試合1つぶんの行（まだ保存しない）。`add_all` の書く前の仕事で組み立てる。"""
@@ -721,6 +750,7 @@ class _NewGame:
                 away_team_id=game.away_team_id,
                 home_score=game.home_score,
                 away_score=game.away_score,
+                **_game_day_values(game),
             ),
             batting=[orm_models.GameBattingLine(player_id=e.player_id, **_batting_values(e)) for e in game.batting],
             pitching=[
@@ -842,6 +872,7 @@ class DjangoGameRepository:
                 "away_team_id": game.away_team_id,
                 "home_score": game.home_score,
                 "away_score": game.away_score,
+                **_game_day_values(game),
             },
         )
         game.id = row.id
@@ -1118,6 +1149,8 @@ class DjangoGameRepository:
             plate_appearances=cls._to_plate_appearances(row) if with_plate_appearances else [],
             fielding=cls._to_fielding(row) if with_plate_appearances else [],
             plate_appearances_loaded=with_plate_appearances,
+            times=_times_of(row),
+            attendance=row.attendance,
         )
         game.batting = [game_batting_of(b) for b in row.batting_lines.all()]
         game.pitching = [game_pitching_of(p) for p in row.pitching_lines.all()]

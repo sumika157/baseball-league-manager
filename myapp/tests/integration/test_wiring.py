@@ -28,6 +28,7 @@ from myapp.application.pennant_world import PennantWorldService
 from myapp.application.queries import (
     FieldingTotalsQuery,
     GameListQuery,
+    HomeStadiumQuery,
     OffseasonQuery,
     PennantActivityQuery,
     RatingsHistoryQuery,
@@ -54,6 +55,7 @@ from myapp.infrastructure import queries, repositories
 from myapp.infrastructure.queries import (
     DjangoFieldingTotalsQuery,
     DjangoGameListQuery,
+    DjangoHomeStadiumQuery,
     DjangoOffseasonQuery,
     DjangoPennantActivityQuery,
     DjangoRatingsHistoryQuery,
@@ -115,6 +117,7 @@ class ProtocolConformanceTest(SimpleTestCase):
         (DjangoWorldSummaryQuery(), WorldSummaryQuery),
         (DjangoOffseasonQuery(REAL), OffseasonQuery),
         (DjangoRatingsHistoryQuery(REAL), RatingsHistoryQuery),
+        (DjangoHomeStadiumQuery(REAL), HomeStadiumQuery),
     ]
 
     def test_implementations_satisfy_interfaces(self):
@@ -290,7 +293,7 @@ class RealScopeTest(SimpleTestCase):
 
     def test_build_recording_service_is_fixed_to_the_real_scope(self):
         service = build_recording_service()
-        for name in ("_games", "_teams", "_leagues"):
+        for name in ("_games", "_teams", "_leagues", "_home_stadiums"):
             with self.subTest(dependency=name):
                 self.assertEqual(getattr(service, name)._scope, REAL)
 

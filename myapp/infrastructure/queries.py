@@ -26,6 +26,7 @@ from ..application.dto import (
     FieldingRow,
     GameNote,
     GameRow,
+    HomeStadium,
     LastStart,
     LeagueOption,
     MoveStintRow,
@@ -845,6 +846,19 @@ class DjangoTeamListQuery:
             )
             for row in rows
         ]
+
+
+class DjangoHomeStadiumQuery:
+    """HomeStadiumQuery の Django ORM 実装。範囲（`WorldScope`）の中の球団だけを引く。"""
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def home_stadium_of(self, team_id: int) -> HomeStadium | None:
+        row = teams_in(self._scope).select_related("home_stadium").filter(id=team_id).first()
+        if row is None or row.home_stadium is None:
+            return None
+        return HomeStadium(name=row.home_stadium.name, capacity=row.home_stadium.capacity)
 
 
 class DjangoWorldSummaryQuery:

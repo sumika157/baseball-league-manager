@@ -20,6 +20,7 @@ from .dto import (
 
 def build_header(game_id: int, game: Game) -> GameEditHeader:
     """試合の基本項目。得点は打席から導かれた値で、画面では読み取り専用。"""
+    times = game.times
     return GameEditHeader(
         id=game_id,
         year=game.season.year,
@@ -28,6 +29,11 @@ def build_header(game_id: int, game: Game) -> GameEditHeader:
         away_team_id=game.away_team_id,
         home_score=game.home_score,
         away_score=game.away_score,
+        start_time=times.start_text if times else "",
+        end_time=times.end_text if times else "",
+        ends_next_day=times.ends_next_day if times else False,
+        interruption_minutes=times.interruption_minutes if times else None,
+        attendance=game.attendance,
     )
 
 

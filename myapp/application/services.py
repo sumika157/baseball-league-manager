@@ -26,6 +26,7 @@ from ..domain.value_objects import (
     Position,
     Season,
     TeamRecord,
+    attendance_label,
     format_average,
 )
 from .dto import (
@@ -1009,6 +1010,7 @@ class TeamApplicationService:
             )
 
         fielding = self._to_fielding_rows(game, players)
+        times = game.times
 
         return GameDetail(
             game=self._to_game_row(game, names),
@@ -1022,6 +1024,11 @@ class TeamApplicationService:
                 names,
                 lambda player_id: players[player_id].name if player_id in players else f"選手{player_id}",
             ),
+            start_label=times.start_text if times else "",
+            end_label=times.end_label if times else "",
+            duration_label=times.duration_label if times else "",
+            interruption_label=times.interruption_label if times else "",
+            attendance_label=attendance_label(game.attendance) if game.attendance is not None else "",
         )
 
     @staticmethod

@@ -6,7 +6,12 @@
     "home_team": "HOME_TEAM",
     "away_team": "AWAY_TEAM",
     "home_score": 0,
-    "away_score": 0
+    "away_score": 0,
+    "start_time": "",
+    "end_time": "",
+    "ends_next_day": false,
+    "interruption_minutes": null,
+    "attendance": null
   },
   "teams": [
     {

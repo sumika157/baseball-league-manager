@@ -204,6 +204,8 @@ class ForeignPlayerQuotaTest(BaseCase):
                     home_pitchers={1: pitcher.id},
                 )
             ),
+            times=None,
+            attendance=None,
         )
 
     def test_recording_rejects_when_home_team_quota_exceeded(self):

@@ -174,6 +174,28 @@ class GameEditHeader:
     away_team_id: int
     home_score: int
     away_score: int
+    # 開始・終了は時:分の形（未記録は空文字）。画面の入力欄にそのまま入る
+    start_time: str = ""
+    end_time: str = ""
+    ends_next_day: bool = False
+    interruption_minutes: int | None = None
+    attendance: int | None = None
+
+
+@dataclass(frozen=True)
+class ScorebookSaved:
+    """スコアブックを保存した結果。保存は済んでいて、`warnings` は見直してほしい内容（保存は止めない）。"""
+
+    game_id: int
+    warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class HomeStadium:
+    """球団の本拠地の球場。観客数が収容人数を超えていないかの照合に使う。"""
+
+    name: str
+    capacity: int | None
 
 
 @dataclass(frozen=True)
@@ -394,6 +416,24 @@ class GameDetail:
     home_box: GameTeamBox | None = None
     # ビジター → ホームの順。打席の記録が無い試合は空
     scorebook: list[ScorebookGrid] = field(default_factory=list)
+    # 見出しの下に出す値。未記録の項目は空文字（出さない）。表示の形は `GameTimes` が出典
+    start_label: str = ""
+    end_label: str = ""
+    duration_label: str = ""
+    interruption_label: str = ""
+    attendance_label: str = ""
+
+    @property
+    def header_items(self) -> list[str]:
+        """見出しの下に並べる項目（例 `開始 18:19`）。記録されている項目だけ。"""
+        pairs = (
+            ("開始", self.start_label),
+            ("終了", self.end_label),
+            ("試合時間", self.duration_label),
+            ("中断", self.interruption_label),
+            ("観客", self.attendance_label),
+        )
+        return [f"{name} {value}" for name, value in pairs if value]
 
     @property
     def boxes(self) -> list[GameTeamBox]:

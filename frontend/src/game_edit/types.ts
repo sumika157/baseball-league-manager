@@ -34,6 +34,12 @@ export interface GamePayload {
   away_team: number;
   home_score: number;
   away_score: number;
+  /** 開始・終了は「時:分」。未記録は空文字。 */
+  start_time: string;
+  end_time: string;
+  ends_next_day: boolean;
+  interruption_minutes: number | null;
+  attendance: number | null;
 }
 
 export interface PlayerPayload {
@@ -149,6 +155,12 @@ export interface GameEditPayload {
 export interface ScorebookState {
   year: string;
   played_on: string;
+  /** 開始・終了の時刻と観客数は入力の文字列のまま持ち、型の変換はサーバーのフォームに任せる。 */
+  start_time: string;
+  end_time: string;
+  ends_next_day: boolean;
+  interruption_minutes: string;
+  attendance: string;
   /** チーム id → 打順の枠。 */
   lineups: Record<number, LineupSlotPayload[]>;
   plate_appearances: PlateAppearancePayload[];
@@ -174,10 +186,18 @@ export interface ScorebookRequest {
   played_on: string;
   home_team: number;
   away_team: number;
+  /** 5つのキーは**常に送る**（欠落は400）。未記録は空文字。 */
+  start_time: string;
+  end_time: string;
+  ends_next_day: boolean;
+  interruption_minutes: string;
+  attendance: string;
   lineup: LineupRequestRow[];
   plate_appearances: PlateAppearancePayload[];
 }
 
 export interface GameUpdateSuccess {
   redirect_url: string;
+  /** 保存は済んでいて、見直してほしい内容（例: 観客数が収容人数を超えている）。無ければ空。 */
+  warnings: string[];
 }

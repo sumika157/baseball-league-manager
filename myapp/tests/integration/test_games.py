@@ -16,7 +16,7 @@ from ..helpers import (
     lineup_rows,
     login_as_manager,
     play_game,
-    post_game_scorebook,
+    post_game_scorebook_day_unrecorded,
     register_lineup,
 )
 from .base import BaseCase
@@ -336,7 +336,7 @@ class GameEntryTest(BaseCase):
         game = orm_models.Game.objects.get()
         batters = register_lineup(self.service, self.team, prefix="打者", first_number=51)
         rivals = register_lineup(self.service, self.rival, prefix="相手", first_number=61)
-        post_game_scorebook(
+        post_game_scorebook_day_unrecorded(
             self.client,
             game.id,
             {
@@ -411,7 +411,7 @@ class BoxScoreEntryTest(BaseCase):
         return orm_models.GamePitchingLine.objects.get(game_id=self.game.id, player_id=player.id)
 
     def test_decisions_are_derived_from_the_line_score(self):
-        post_game_scorebook(self.client, self.game.id, self._payload())
+        post_game_scorebook_day_unrecorded(self.client, self.game.id, self._payload())
 
         self.assertEqual(self._line_of(self.starter).wins, 1)
         self.assertEqual(self._line_of(self.loser).losses, 1)
@@ -419,20 +419,22 @@ class BoxScoreEntryTest(BaseCase):
         self.assertEqual(self._line_of(self.middle).holds, 1)
 
     def test_the_winner_does_not_also_get_a_save(self):
-        post_game_scorebook(self.client, self.game.id, self._payload())
+        post_game_scorebook_day_unrecorded(self.client, self.game.id, self._payload())
 
         self.assertEqual(self._line_of(self.starter).saves, 0)
         self.assertEqual(self._line_of(self.closer).wins, 0)
 
     def test_a_large_lead_yields_no_save(self):
         """5点差で登板した抑えにはセーブが付かない（1回だけの登板では）。"""
-        post_game_scorebook(self.client, self.game.id, self._payload(home_runs=(5, 0, 0, 0, 0, 0, 0, 0, 0)))
+        post_game_scorebook_day_unrecorded(
+            self.client, self.game.id, self._payload(home_runs=(5, 0, 0, 0, 0, 0, 0, 0, 0))
+        )
 
         self.assertEqual(self._line_of(self.closer).saves, 0)
         self.assertEqual(self._line_of(self.starter).wins, 1)
 
     def test_lineup_is_saved_and_shown_in_the_box_score(self):
-        post_game_scorebook(self.client, self.game.id, self._payload())
+        post_game_scorebook_day_unrecorded(self.client, self.game.id, self._payload())
 
         line = orm_models.GameBattingLine.objects.get(game_id=self.game.id, player_id=self.home_batters[3])
         self.assertEqual(line.batting_order, 4)
@@ -443,7 +445,7 @@ class BoxScoreEntryTest(BaseCase):
 
     def test_appearance_order_follows_the_first_plate_appearance(self):
         """登板順は入力しない。打席の記録から「誰が先に投げたか」で決まる。"""
-        post_game_scorebook(self.client, self.game.id, self._payload())
+        post_game_scorebook_day_unrecorded(self.client, self.game.id, self._payload())
 
         orders = {
             self._line_of(p).player_id: self._line_of(p).appearance_order
@@ -454,14 +456,14 @@ class BoxScoreEntryTest(BaseCase):
         self.assertEqual(orders[self.closer.id], 3)
 
     def test_hold_points_accumulate_for_the_reliever(self):
-        post_game_scorebook(self.client, self.game.id, self._payload())
+        post_game_scorebook_day_unrecorded(self.client, self.game.id, self._payload())
 
         detail = self.service.get_player_detail(self.team.id, self.middle.id)
         self.assertEqual(detail.holds, 1)
         self.assertEqual(detail.hold_points, 1)
 
     def test_line_score_is_shown_on_the_detail_page(self):
-        post_game_scorebook(self.client, self.game.id, self._payload())
+        post_game_scorebook_day_unrecorded(self.client, self.game.id, self._payload())
 
         response = self.client.get(reverse("game_detail", args=[self.game.id]))
 
@@ -502,7 +504,7 @@ class BoxScoreColumnsTest(BaseCase):
         self.away_batters = register_lineup(self.service, self.rival, prefix="ビジター", first_number=41)
         self.game = play_game(self.team, self.rival, home_score=0, away_score=0)
 
-        post_game_scorebook(
+        post_game_scorebook_day_unrecorded(
             self.client,
             self.game.id,
             {

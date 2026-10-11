@@ -41,6 +41,7 @@ from .value_objects import (
     FieldingPosition,
     FreeAgencyKind,
     FreeAgencyOutcome,
+    GameTimes,
     JerseyNumber,
     LineScore,
     PitchingLine,
@@ -1197,10 +1198,23 @@ class Game:
     # 参照専用に、明細の一部だけ（または全く）読んだ集約か。**保存すると読んでいない明細が消える**ので、
     # リポジトリの save は拒否する（順位表用の一覧と、選手ページ用の「その選手の明細だけ」の試合が立てる）
     read_only: bool = False
+    # 開始・終了の時刻と中断時間。打席からは導けない手入力の事実なので `Game` が持つ
+    # （成績の明細を保存する例外とは別物）。無ければ未記録。**`is_recorded` には効かせない**
+    times: GameTimes | None = None
+    # 観客数（公式入場者数）。同じく手入力の事実で、未記録は None
+    attendance: int | None = None
 
     def __post_init__(self) -> None:
         if self.home_team_id == self.away_team_id:
             raise InvalidGame("同じチーム同士の試合は登録できません。")
+        if self.attendance is not None:
+            try:
+                attendance = int(self.attendance)
+            except (TypeError, ValueError):
+                raise InvalidGame("観客数は数値で入力してください。") from None
+            if attendance < 0:
+                raise InvalidGame("観客数に負の値は入力できません。")
+            self.attendance = attendance
         for label, value in (("ホームの得点", self.home_score), ("ビジターの得点", self.away_score)):
             try:
                 score = int(value)

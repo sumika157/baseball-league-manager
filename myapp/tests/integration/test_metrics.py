@@ -16,7 +16,7 @@ from ..helpers import (
     lineup_rows,
     login_as_manager,
     play_game,
-    post_game_scorebook,
+    post_game_scorebook_day_unrecorded,
     register_lineup,
 )
 from .base import BaseCase
@@ -217,7 +217,7 @@ class AdvancedMetricsTest(BaseCase):
         batters = register_lineup(self.service, self.rival, prefix="相手打者", first_number=71)
         home_batters = register_lineup(self.service, self.team, prefix="自軍打者", first_number=81)
 
-        post_game_scorebook(
+        post_game_scorebook_day_unrecorded(
             self.client,
             game.id,
             {
