@@ -13,7 +13,8 @@ from .schedule import MAX_GAMES_PER_ADVANCE as MAX_GAMES_PER_ADVANCE
 from .schedule import AdvanceTarget, ScheduleRules, default_opening_day
 from .world import MAX_SEASONS_PER_WORLD
 
-# 画面から進められる範囲（ボタンの並び順。判断8: 目立つのは先頭の「1日」）。
+# 画面から進められる範囲（ボタンの並び順。画面の判断8: 目立つのは先頭の「1日」。
+# Wiki「ペナントモードの仕組み」の「決めたこと」）。
 # 1回の上限（`MAX_GAMES_PER_ADVANCE`。schedule.py が出典）を超える範囲は、件数が多い世界では選択肢から隠れる
 # （「月末まで」「上限まで」。「シーズン終了まで」は画面に出さない）。
 # 画面に出す選択肢も、受け付ける範囲も、ここが唯一の出典
@@ -37,7 +38,7 @@ class SeasonPhase(Enum):
 
 
 def season_phase(*, last_played_on: datetime.date | None, next_fixture_on: datetime.date | None) -> SeasonPhase:
-    """最後に試合をした日と、次の対戦の日から局面を決める（年をまたいで使える。設計書 3.6）。
+    """最後に試合をした日と、次の対戦の日から局面を決める（年をまたいで使える。Wiki「ペナントモードの仕組み」の「進行の状態は持たない」）。
 
     - 試合がまだ無ければ、日程を作る前でも作った後でも開幕前
     - 試合があって対戦が尽きていれば終了（オフ）

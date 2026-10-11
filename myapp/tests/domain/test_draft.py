@@ -60,7 +60,10 @@ class CountTest(unittest.TestCase):
     """指名数は、引退・退団の後の支配下の人数から、開幕前の支配下が帯（62〜66人）に入るように決める（#167）。"""
 
     def test_the_band_and_the_yearly_numbers(self) -> None:
-        """帯の出典は roster.OPENING_REGISTERED_BAND だけ。値が変わったら設計書 12.「#167 の詳細」の実測を取り直す。"""
+        """帯の出典は roster.OPENING_REGISTERED_BAND だけ。
+
+        値が変わったら Wiki「ペナントモードの仕組み」の「実測値」（#167）を取り直す。
+        """
         self.assertEqual(OPENING_REGISTERED_BAND, RegisteredBand(low=62, high=66))
         self.assertEqual((draft.USUAL_DRAFTEES, draft.MAX_DRAFTEES), (6, 10))
 
