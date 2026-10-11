@@ -1215,6 +1215,8 @@ class SimulationTeam:
     foreign_roster_limit: int | None
     foreign_game_limit: int | None
     players: tuple[SimulationPlayer, ...]
+    # 本拠地の収容人数。本拠地が無い・未設定なら None（ホーム試合の観客数を作らない）
+    stadium_capacity: int | None
 
 
 @dataclass(frozen=True)

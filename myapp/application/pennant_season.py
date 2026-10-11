@@ -44,6 +44,7 @@ from ..domain.repositories import (
     WorldRepository,
 )
 from ..domain.simulation.engine import simulate_game
+from ..domain.simulation.game_day import simulated_attendance, simulated_times
 from ..domain.simulation.manager import ClubRoster, PitchingHistory, SimBatter, SimPitcher
 from ..domain.simulation.randomness import game_seed, make_random
 from ..domain.simulation.ratings import BatterRatings, PitcherRatings
@@ -224,6 +225,19 @@ class PennantSeasonService:
                     )
                 except InvalidRoster as error:
                     raise InvalidRoster(f"{day} {home.name} 対 {away.name}: {error}") from error
+                # 時刻と観客数は、打席を進めた乱数とは別の乱数源（用途の接尾辞付き）で作る。
+                # 試合の結果（得点・打席）と「まとめて進める」「1日ずつ進める」の一致を変えない
+                day_rng = make_random(
+                    game_seed(
+                        world.seed,
+                        day.year,
+                        f"{day.isoformat()}:{fixture.home_team_id}:{fixture.visitor_team_id}:game-day",
+                    )
+                )
+                simulated.game.times = simulated_times(simulated.game, day_rng)
+                simulated.game.attendance = simulated_attendance(
+                    teams[fixture.home_team_id].stadium_capacity, day, day_rng
+                )
                 games.append(simulated.game)
                 consumed.append(fixture)
             # 日の途中では書き出さない（残りの対戦が「今日」より前になり、進められなくなる）
