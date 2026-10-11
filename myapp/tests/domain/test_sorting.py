@@ -188,3 +188,30 @@ class SortKeyCatalogTest(TestCase):
         self.assertIn(services.DEFAULT_PITCHER_SORT, services.PITCHER_SORT_KEYS)
         self.assertIn(services.DEFAULT_ROSTER_SORT, services.BATTER_SORT_KEYS)
         self.assertIn(services.DEFAULT_ROSTER_SORT, services.PITCHER_SORT_KEYS)
+
+
+class PlayedCountSortTest(TestCase):
+    """出場試合数・登板数は Player に無いので、選手 id → 数の引き当てを渡して並べる。"""
+
+    def test_batters_sort_by_games_most_first(self):
+        players = [_batter("少", 1), _batter("多", 2)]
+
+        ordered, key, desc = services.sort_batters(players, "games", games={1: 3, 2: 10})
+
+        self.assertEqual((key, desc), ("games", True))
+        self.assertEqual([p.name for p in ordered], ["多", "少"])
+
+    def test_pitchers_sort_by_appearances_most_first(self):
+        players = [_pitcher("少", 11), _pitcher("多", 18)]
+
+        ordered, key, desc = services.sort_pitchers(players, "appearances", appearances={11: 1, 18: 40})
+
+        self.assertEqual((key, desc), ("appearances", True))
+        self.assertEqual([p.name for p in ordered], ["多", "少"])
+
+    def test_without_counts_the_key_falls_back_to_the_default(self):
+        """数を読んでいない呼び出しでは、キーを指定されても既定の並びに落ちる（エラーにしない）。"""
+        _, batter_key, _ = services.sort_batters([_batter("一", 1)], "games")
+        _, pitcher_key, _ = services.sort_pitchers([_pitcher("一", 11)], "appearances")
+
+        self.assertEqual((batter_key, pitcher_key), ("ops", "era"))

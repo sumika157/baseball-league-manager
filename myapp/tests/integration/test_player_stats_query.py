@@ -121,6 +121,54 @@ class PlayerStatsQueryTest(BaseCase):
                 player.name,
             )
 
+    def test_games_and_appearances_count_the_lines_in_the_same_range_as_the_stats(self):
+        """出場試合数は打席の無い途中出場も1試合、登板数は投球の明細の数。成績と同じ範囲（通算・その年）で数える。"""
+        give_batting(self.team, self.rival, self.slugger.id, BattingLine(at_bats=4, singles=1), year=2025)
+        give_batting(self.team, self.rival, self.slugger.id, BattingLine(at_bats=4, singles=1), year=2026)
+        give_batting(self.team, self.rival, self.slugger.id, BattingLine(), year=2026, day=2)
+        give_pitching(self.team, self.rival, self.ace.id, PitchingLine(innings=InningsPitched.from_notation("1.0")))
+        give_pitching(
+            self.team, self.rival, self.ace.id, PitchingLine(innings=InningsPitched.from_notation("2.0")), day=2
+        )
+        orm_models.PlayerStint.objects.update(from_year=2025)
+
+        career = self._by_name(self.query.list_roster(year=None, team_id=self.team.id, with_games=True))
+        season = self._by_name(self.query.list_roster(year=2026, team_id=self.team.id, with_games=True))
+        league = self._by_name(self.query.list_roster(year=2026, league_id=self.league.id, with_games=True))
+        world = self._by_name(self.query.list_roster(year=2026, with_games=True))
+
+        self.assertEqual((career["大砲"].games, career["大砲"].appearances), (3, 0))
+        for rows in (season, league, world):
+            self.assertEqual((rows["大砲"].games, rows["大砲"].appearances), (2, 0))
+            self.assertEqual((rows["エース"].games, rows["エース"].appearances), (2, 2))
+
+    def test_games_are_not_counted_unless_asked(self):
+        """タイトル（ダッシュボード）は試合数を使わないので数えない。読んでいない値は 0 ではなく None。"""
+        give_batting(self.team, self.rival, self.slugger.id, BattingLine(at_bats=4, singles=1))
+
+        for rows in (
+            self.query.list_roster(year=None, team_id=self.team.id),
+            self.query.list_season(self.league.id, 2026),
+            self.query.list_season_by_league(2026)[self.league.id],
+        ):
+            self.assertEqual({(row.games, row.appearances) for row in rows}, {(None, None)})
+
+    def test_games_count_a_game_where_he_only_pitched_once(self):
+        """出場の定義は `appeared_in`（打撃か投球のどちらかに明細）。投げただけの試合も、打って投げた試合も1試合。"""
+        line = PitchingLine(innings=InningsPitched.from_notation("1.0"))
+        give_pitching(self.team, self.rival, self.slugger.id, line)
+        play_game(
+            self.team,
+            self.rival,
+            day=2,
+            batting={self.slugger.id: BattingLine(at_bats=1)},
+            pitching={self.slugger.id: line},
+        )
+
+        row = self._by_name(self.query.list_roster(year=None, team_id=self.team.id, with_games=True))["大砲"]
+
+        self.assertEqual((row.games, row.appearances), (2, 2))
+
     def test_the_roster_of_a_year_reads_that_years_stats(self):
         give_batting(self.team, self.rival, self.slugger.id, BattingLine(at_bats=4, home_runs=1), year=2025)
         give_batting(self.team, self.rival, self.slugger.id, BattingLine(at_bats=5, home_runs=2), year=2026)

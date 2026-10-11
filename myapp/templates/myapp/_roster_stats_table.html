@@ -23,6 +23,7 @@
         <th class="text-end">身長/体重</th>
         <th class="text-end">年齢</th>
         {% if pos_mode == 'pitcher' %}
+          {% sort_header 'appearances' '登板' 'end' %}
           {% sort_header 'innings' '投球回' 'end' %}
           {% sort_header 'era' '防御率' 'end' False %}
           {% sort_header 'starts' '先発' 'end' %}
@@ -41,6 +42,7 @@
           {% sort_header 'home_runs_allowed' '被本塁打' 'end' %}
           {% sort_header 'hit_by_pitch_allowed' '与死球' 'end' %}
         {% else %}
+          {% sort_header 'games' '試合' 'end' %}
           {% sort_header 'average' '打率' 'end' %}
           {% sort_header 'hits' '安打' 'end' %}
           {% sort_header 'doubles' '2B' 'end' %}
@@ -81,6 +83,7 @@
         <td class="text-end stat-muted">{{ player.age|default:'—' }}</td>
 
         {% if pos_mode == 'pitcher' %}
+          <td class="text-end stat-muted">{{ player.appearances }}</td>
           <td class="text-end stat-muted">{{ player.innings_pitched }}</td>
           <td class="text-end stat-key">{{ player.earned_run_average|floatformat:2 }}</td>
           <td class="text-end stat-muted">{{ player.starts }}</td>
@@ -98,6 +101,7 @@
           <td class="text-end stat-muted">{{ player.home_runs_allowed }}</td>
           <td class="text-end stat-muted">{{ player.hit_by_pitch_allowed }}</td>
         {% else %}
+          <td class="text-end stat-muted">{{ player.games }}</td>
           <td class="text-end stat-key">{{ player.batting_average|floatformat:3 }}</td>
           <td class="text-end stat-muted">{{ player.hits }}</td>
           <td class="text-end stat-muted">{{ player.doubles }}</td>
@@ -123,8 +127,8 @@
       </tr>
       {% empty %}
       <tr>
-        {# 見出しの列数に揃える（共通5列＋野手13列／投手16列、担当者には編集列が1つ足される） #}
-        <td colspan="{% if pos_mode == 'pitcher' %}{% if can_edit_team %}22{% else %}21{% endif %}{% else %}{% if can_edit_team %}19{% else %}18{% endif %}{% endif %}">
+        {# 見出しの列数に揃える（共通5列＋野手14列／投手17列、担当者には編集列が1つ足される） #}
+        <td colspan="{% if pos_mode == 'pitcher' %}{% if can_edit_team %}23{% else %}22{% endif %}{% else %}{% if can_edit_team %}20{% else %}19{% endif %}{% endif %}">
           <div class="empty-state">
             {% if pos_mode == 'pitcher' %}投手{% else %}野手{% endif %}がまだ登録されていません。
           </div>
