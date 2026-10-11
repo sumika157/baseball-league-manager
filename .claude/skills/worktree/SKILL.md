@@ -91,3 +91,8 @@ git branch -D <ブランチ>                          # スカッシュマージ
 - `git worktree remove --force` は中途半端に成功することがある（追跡ファイルだけ消えて登録が残る）。使ったら
   `git worktree list` と `ls .claude/worktrees/` で残骸が無いことを確かめ、登録だけ残っていたら `git worktree prune`。
 - **他のセッションの worktree は消さない。** `git worktree list` には並行中の作業も並ぶ。自分が作ったものだけを片付ける。
+- 片付け忘れは、タスクスケジューラが1時間ごとに走らせる `scripts/cleanup.ps1` が拾う（PR がマージ済みかクローズ済みで、
+  HEAD が PR の先端と一致し、未コミットの変更が無いものだけを消す。`safe.directory` の登録も外す。条件は Wiki「開発環境」）。
+  そのため**マージ済みの worktree は、手で消さなくても1時間以内に消えうる。** マージ後に続きをやるなら、
+  その worktree を使い回さず新しいブランチと worktree を切る（マージ済みのブランチに積んで push しても
+  main には届かず、エラーにもならない）。何が消えたかは `%LOCALAPPDATA%\baseball-cleanup\cleanup.log`。
