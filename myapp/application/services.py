@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 
 from django.db import transaction
@@ -49,7 +49,6 @@ from .dto import (
     LeagueDetail,
     LeagueOption,
     LeaguePlayerRow,
-    LeagueRankings,
     LeagueStandings,
     LeagueStats,
     LeagueTeams,
@@ -97,8 +96,11 @@ def _is_developmental(team: Team, player: Player) -> bool:
 
 # ランキングの値を画面の書式に直す関数（_as_average など）
 ValueFormatter = Callable[[float], str]
-# ランキング1部門ぶんを DTO に詰める関数。ダッシュボードとタイトル一覧で形が同じ
-ToEntries = Callable[[list[domain_services.RankedPlayer], ValueFormatter], list[RankingEntry]]
+# ダッシュボードに首位だけを出す部門。NPB の個人成績ページの主要部門（打率・本塁打・打点・
+# 防御率・勝利・セーブ）にならう。残りの部門と上位3人・過去の年はタイトル画面が受け持つ
+DASHBOARD_TITLE_KEYS = ("average", "home_runs", "rbi", "era", "wins", "saves")
+# タイトル画面に出す各部門の人数
+TITLE_LEADERS = 3
 
 
 def _ranking_player(row: ActivePlayerStats) -> Player:
@@ -271,91 +273,97 @@ class TeamApplicationService:
 
         return Listing(rows=groups, sort=listing.sort, descending=listing.descending)
 
-    def get_dashboard(self, *, leaders: int = 5) -> Dashboard:
-        """ホーム画面の概況と、リーグごとのランキング・順位表を組み立てる。
+    def get_dashboard(self) -> Dashboard:
+        """ホーム画面。全リーグの最新シーズンを1画面に並べる。
 
-        順位づけの規則そのものはドメインサービスに委ね、ここでは
-        集約をまたいで選手を集め、DTO に詰め替えるだけにとどめる。
+        リーグごとに順位表と主な部門の首位、それに全リーグの最新の試合日の結果。
+        1リーグを掘り下げるのはリーグ画面、部門の上位3人と過去の年はタイトル画面が
+        受け持つので、ここでは要約にとどめる。部門の首位はタイトル画面と同じ
+        シーズン集計から取る（通算で別の数字を出すと、同じ部門名で値が食い違う）。
         """
-        # 概況に要るのはチームの名前と所属リーグだけ。ロスターは作らない。選手の成績は
-        # 参照クエリが SQL で集計する（チーム集約を全部組み立てると応答の大半がそこで消える）
+        # チームは名前と所属リーグだけ使う。ロスターは作らない（成績は参照クエリが SQL で集計する）
         teams = self._teams.find_all()
         team_name_by_id = {_saved_id(team.id): team.name for team in teams}
-        league_of_team = {_saved_id(team.id): _saved_id(team.league_id) for team in teams}
-
-        stats_rows = self._player_stats_query.list_career()
-        all_players = [_ranking_player(row) for row in stats_rows]
-        team_of = {row.player_id: (row.team_id, row.team_name) for row in stats_rows}
-
-        def to_entries(ranked: list[domain_services.RankedPlayer], formatter: ValueFormatter) -> list[RankingEntry]:
-            return _to_ranking_entries(ranked, team_of, formatter)
-
-        # 規定打席・規定投球回は所属チームの試合数で決まる
-        games_played = self._team_game_counts()
-        team_games = {row.player_id: games_played.get(row.team_id, 0) for row in stats_rows}
 
         # 順位表は得点だけで決まるので、明細を読まない一覧を使う
         # （集約の find_all() を呼ぶと全試合の打撃・投球まで読み込む）
         all_games = self._game_list_query.list_for_standings()
         teams_by_league = {group.league_id: group.teams for group in self.list_teams_by_league().rows}
 
+        # 選手のシーズン成績は年ごとに全リーグぶんをまとめて読む（リーグごとに読むとリーグ数ぶんのクエリになる）。
+        # 最新シーズンはリーグごとに決まるが、ふつうはどのリーグも同じ年なので1回で済む
+        season_stats: dict[int, dict[int, list[ActivePlayerStats]]] = {}
+
+        def stats_of(league_id: int, year: int) -> list[ActivePlayerStats]:
+            if year not in season_stats:
+                season_stats[year] = self._player_stats_query.list_season_by_league(year)
+            return season_stats[year].get(league_id, [])
+
         leagues = []
         for league in self._leagues.find_all():
             league_id = _saved_id(league.id)
             league_teams = [t for t in teams if t.league_id == league_id]
             if not league_teams:
-                # チームの無いリーグは切り替えても何も出せないので、タブを作らない
+                # チームの無いリーグは何も出せないので、カードを作らない
                 continue
-            members = [p for p in all_players if league_of_team[team_of[_saved_id(p.id)][0]] == league_id]
-            # 順位表も直近の試合も「そのリーグ内の対戦」だけを見るので、絞り込みは1回で済ませる
+            # 順位表も部門の首位も「そのリーグ内の対戦」だけを見るので、絞り込みは1回で済ませる
             member_ids = {t.id for t in league_teams}
             league_games = [g for g in all_games if g.home_team_id in member_ids and g.away_team_id in member_ids]
             standings_rows, standings_year = self._latest_standings(league_teams, league_games)
+            leaders: list[TitleDepartment] = []
+            if standings_year is not None:
+                # 順位表と同じシーズン。タイトル画面と同じ人数で順位づけてから1位だけを残す。
+                # 1人で切ると、同率の首位が名前順の1人だけになり、タイトル画面と見え方が食い違う
+                departments = self._season_titles(
+                    league_games, Season(standings_year), stats_of(league_id, standings_year), leaders=TITLE_LEADERS
+                )
+                leaders = [
+                    replace(d, entries=[e for e in d.entries or [] if e.rank == 1])
+                    for d in departments
+                    if d.key in DASHBOARD_TITLE_KEYS
+                ]
             leagues.append(
                 DashboardLeague(
                     league_id=league_id,
                     league_name=league.name,
-                    rankings=self._league_rankings(members, leaders, team_games, to_entries),
                     standings=standings_rows,
                     standings_year=standings_year,
                     teams=teams_by_league.get(league_id, []),
-                    recent_games=self._recent_games(league_games, team_name_by_id),
+                    leaders=leaders,
                 )
             )
 
+        league_order = {league.league_id: index for index, league in enumerate(leagues)}
+        league_of_team = {_saved_id(team.id): _saved_id(team.league_id) for team in teams}
         return Dashboard(
-            league_count=len({team.league_id for team in teams}),
-            team_count=len(teams),
-            batter_count=sum(1 for p in all_players if not p.is_pitcher),
-            pitcher_count=sum(1 for p in all_players if p.is_pitcher),
             leagues=leagues,
+            latest_results=self._latest_results(all_games, team_name_by_id, league_of_team, league_order),
         )
 
-    @staticmethod
-    def _league_rankings(
-        members: list[Player], leaders: int, team_games: dict[int, int], to_entries: ToEntries
-    ) -> LeagueRankings:
-        """1リーグぶんのランキング。members はそのリーグで在籍中の選手。
+    def _latest_results(
+        self,
+        games: list[Game],
+        names: dict[int, str],
+        league_of_team: dict[int, int],
+        league_order: dict[int, int],
+    ) -> list[GameRow]:
+        """全リーグの、最新の試合日の結果。リーグの並び順に並べる。
 
-        タイトルはリーグの中で争われるので、他リーグの選手と同じ表に並べない。
-        部門は NPB の個人成績ページにならい、打者は打率・本塁打・打点、
-        投手は防御率・勝利・セーブを出す。
+        件数で切ると、同じ日の試合の一部のリーグだけが残る（1日に全リーグで十数試合ある）。
+        日で切れば、その日の全リーグの結果がそろう。結果を出す場所なので未記録の試合は除く
+        （登録しただけの先の日付の試合で、行われた試合が押し出されないように）。
         """
-        return LeagueRankings(
-            average_leaders=to_entries(
-                domain_services.leaders_by_batting_average(members, limit=leaders, team_games=team_games),
-                _as_average,
-            ),
-            # 本塁打・打点・勝利・セーブは数そのものが記録なので規定を設けない
-            home_run_leaders=to_entries(domain_services.leaders_by_home_runs(members, limit=leaders), _as_count),
-            rbi_leaders=to_entries(domain_services.leaders_by_runs_batted_in(members, limit=leaders), _as_count),
-            era_leaders=to_entries(
-                domain_services.leaders_by_era(members, limit=leaders, team_games=team_games),
-                _as_rate,
-            ),
-            win_leaders=to_entries(domain_services.leaders_by_wins(members, limit=leaders), _as_count),
-            save_leaders=to_entries(domain_services.leaders_by_saves(members, limit=leaders), _as_count),
-        )
+        recorded = domain_services.recorded_games(games)
+        if not recorded:
+            return []
+
+        latest = max(g.played_on for g in recorded)
+
+        def order(game: Game) -> tuple[int, int]:
+            # リーグをまたぐ対戦はホーム側のリーグに並べる。カードの無いリーグ（チームが無い）は末尾に回す
+            return league_order.get(league_of_team.get(game.home_team_id, -1), len(league_order)), game.id or 0
+
+        return [self._to_game_row(g, names) for g in sorted((g for g in recorded if g.played_on == latest), key=order)]
 
     def _latest_standings(
         self, league_teams: list[Team], league_games: list[Game]
@@ -373,15 +381,6 @@ class TeamApplicationService:
         latest = seasons[0]
         rows = domain_services.standings(league_teams, [g for g in league_games if g.season == latest])
         return self._to_standing_rows(rows, None, None), latest.year
-
-    def _recent_games(self, league_games: list[Game], names: dict[int, str], *, limit: int = 5) -> list[GameRow]:
-        """1リーグぶんの直近の試合。新しい順。
-
-        順位表と同じ league_games から作るので、試合を読み直さない。
-        概況なので件数を絞り、さかのぼるのは試合一覧が受け持つ。
-        """
-        latest = sorted(league_games, key=lambda g: (g.played_on, g.id or 0), reverse=True)[:limit]
-        return [self._to_game_row(g, names) for g in latest]
 
     def get_team_name(self, team_id: int) -> str:
         return self._teams.find_by_id(team_id).name
@@ -563,16 +562,14 @@ class TeamApplicationService:
             matchups=matchups,
         )
 
-    def get_league_titles(self, league_id: int, year: int | None = None, *, leaders: int = 3) -> LeagueTitles:
+    def get_league_titles(
+        self, league_id: int, year: int | None = None, *, leaders: int = TITLE_LEADERS
+    ) -> LeagueTitles:
         """リーグのタイトル一覧。シーズンで区切った部門別の上位者（既定は各部門3人まで）。
 
-        ダッシュボードのランキングは通算成績だが、タイトルはシーズンごとに
-        争われるので、こちらは対象シーズンの試合だけから成績を積み直す。
-
-        **チームも試合も集約として組み立てない。** どの年が選べるか・規定の基準になる
-        試合数は明細を読まない一覧で決め、選手の成績は参照クエリが対象シーズンの
-        明細だけを SQL で集計する（集約を経由すると、経歴や数万行の明細まで
-        組み立てて、応答の大半がそこで消えた）。
+        **チームも試合も集約として組み立てない。** どの年が選べるかは明細を読まない
+        一覧で決める（集約を経由すると、経歴や数万行の明細まで組み立てて、
+        応答の大半がそこで消えた）。
         """
         league = self._leagues.find_by_id(league_id)
         member_ids = {_saved_id(t.id) for t in self._teams.find_all() if t.league_id == league_id}
@@ -594,26 +591,43 @@ class TeamApplicationService:
 
         target = Season(year) if year is not None else seasons[0]
 
+        return LeagueTitles(
+            league_id=_saved_id(league.id),
+            league_name=league.name,
+            year=target.year,
+            available_years=[s.year for s in seasons],
+            # そのシーズンの成績だけを持つ選手を参照クエリに作らせる。通算値のままでは
+            # 別のシーズンの記録まで混ざってタイトルの対象にならない
+            departments=self._season_titles(
+                league_games, target, self._player_stats_query.list_season(league_id, target.year), leaders=leaders
+            ),
+        )
+
+    @classmethod
+    def _season_titles(
+        cls,
+        league_games: list[Game],
+        target: Season,
+        stats_rows: list[ActivePlayerStats],
+        *,
+        leaders: int,
+    ) -> list[TitleDepartment]:
+        """1リーグ×1シーズンの部門別の上位者。タイトル画面とダッシュボードの部門の首位の出典。
+
+        league_games はそのリーグ内の対戦だけに絞った、明細を持たない一覧（絞り込みは呼ぶ側が行う）。
+        stats_rows はそのリーグ・そのシーズンの選手の成績（`PlayerStatsQuery.list_season` の形）。
+        タイトルはシーズンごとに争われるので、対象シーズンの試合だけから成績を積み直す。
+        """
         # 規定の基準になる試合数に、未記録の試合は数えない
         games_played: dict[int, int] = {}
         for game in domain_services.recorded_games([g for g in league_games if g.season == target]):
             for team_id in (game.home_team_id, game.away_team_id):
                 games_played[team_id] = games_played.get(team_id, 0) + 1
 
-        # そのシーズンの成績だけを持つ選手を参照クエリに作らせる。通算値のままでは
-        # 別のシーズンの記録まで混ざってタイトルの対象にならない
-        stats_rows = self._player_stats_query.list_season(league_id, target.year)
         players = [_ranking_player(row) for row in stats_rows]
         team_of = {row.player_id: (row.team_id, row.team_name) for row in stats_rows}
         team_games = {row.player_id: games_played.get(row.team_id, 0) for row in stats_rows}
-
-        return LeagueTitles(
-            league_id=_saved_id(league.id),
-            league_name=league.name,
-            year=target.year,
-            available_years=[s.year for s in seasons],
-            departments=self._title_departments(players, team_of, team_games, leaders),
-        )
+        return cls._title_departments(players, team_of, team_games, leaders)
 
     @staticmethod
     def _title_departments(

@@ -25,15 +25,19 @@ class PlayerStatsQuery(Protocol):
     組み立てる。ここでは成績を SQL で集計して、選手ごとの DTO にして返す。
     """
 
-    def list_career(self) -> list[ActivePlayerStats]:
-        """全チームの在籍中の選手と、その通算成績。チームの表示順、背番号順。"""
-        ...
-
     def list_season(self, league_id: int, year: int) -> list[ActivePlayerStats]:
         """そのリーグで在籍中の選手と、そのシーズンの成績。
 
         成績に数えるのは、リーグのチームどうしの試合だけ（リーグをまたぐ対戦は数えない）。
         チームの表示順、背番号順。
+        """
+        ...
+
+    def list_season_by_league(self, year: int) -> dict[int, list[ActivePlayerStats]]:
+        """全リーグぶんの `list_season(league_id, year)` を一度に。キーはリーグid。
+
+        リーグごとの中身は `list_season` と同じ（そのリーグで在籍中の選手と、リーグ内の対戦だけの成績）。
+        在籍中の選手がいないリーグはキーに現れない。
         """
         ...
 

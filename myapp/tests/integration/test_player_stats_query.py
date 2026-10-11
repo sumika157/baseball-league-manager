@@ -30,15 +30,6 @@ class PlayerStatsQueryTest(BaseCase):
     def _by_name(self, rows):
         return {row.name: row for row in rows}
 
-    def test_career_sums_every_season(self):
-        give_batting(self.team, self.rival, self.slugger.id, BattingLine(at_bats=4, home_runs=1), year=2025)
-        give_batting(self.team, self.rival, self.slugger.id, BattingLine(at_bats=5, home_runs=2), year=2026)
-
-        row = self._by_name(self.query.list_career())["大砲"]
-
-        self.assertEqual((row.batting.at_bats, row.batting.home_runs), (9, 3))
-        self.assertEqual((row.team_id, row.team_name, row.number), (self.team.id, "テストチーム", "3"))
-
     def test_season_counts_only_that_year(self):
         give_batting(self.team, self.rival, self.slugger.id, BattingLine(at_bats=4, home_runs=1), year=2025)
         give_batting(self.team, self.rival, self.slugger.id, BattingLine(at_bats=5, home_runs=2), year=2026)
@@ -67,15 +58,53 @@ class PlayerStatsQueryTest(BaseCase):
 
         self.assertEqual(names, {"大砲", "エース"})
 
+    def test_season_by_league_matches_season_of_each_league(self):
+        """全リーグを1回で読んでも、リーグごとに読んだのと同じ中身になる。
+
+        他リーグとの対戦・別の年の試合・投球回の表記の足し算（5.2 + 5.2 = 11.1）を混ぜて確かめる。
+        """
+        other = orm_models.League.objects.create(name="別リーグ")
+        x = orm_models.Team.objects.create(league=other, name="Xチーム")
+        y = orm_models.Team.objects.create(league=other, name="Yチーム")
+        there = self.service.register_player(x.id, "別リーグ選手", 7, "内野手")
+        their_ace = self.service.register_player(y.id, "別リーグ投手", 11, "投手")
+        give_batting(self.team, self.rival, self.slugger.id, BattingLine(at_bats=4, home_runs=1))
+        give_batting(self.team, x, self.slugger.id, BattingLine(at_bats=6, home_runs=5), day=2)
+        give_batting(x, y, there.id, BattingLine(at_bats=5, home_runs=2), day=3)
+        give_batting(x, y, there.id, BattingLine(at_bats=10, home_runs=9), year=2025)
+        for day in (4, 5):
+            play_game(
+                self.team,
+                self.rival,
+                day=day,
+                pitching={self.ace.id: PitchingLine(innings=InningsPitched.from_notation("5.2"), wins=1)},
+            )
+            play_game(
+                x,
+                y,
+                day=day,
+                pitching={their_ace.id: PitchingLine(innings=InningsPitched.from_notation("5.2"), losses=1)},
+            )
+
+        by_league = self.query.list_season_by_league(2026)
+
+        for league_id in (self.league.id, other.id):
+            with self.subTest(league=league_id):
+                self.assertEqual(by_league[league_id], self.query.list_season(league_id, 2026))
+        self.assertEqual(self._by_name(by_league[self.league.id])["大砲"].batting.home_runs, 1)
+        self.assertEqual(
+            self._by_name(by_league[other.id])["別リーグ投手"].pitching.innings, InningsPitched.from_notation("11.1")
+        )
+
     def test_players_who_left_the_team_are_excluded(self):
         self.service.retire_player(self.team.id, self.slugger.id, 2026)
 
-        names = {row.name for row in self.query.list_career()}
+        names = {row.name for row in self.query.list_season(self.league.id, 2026)}
 
         self.assertEqual(names, {"エース"})
 
     def test_player_without_games_has_zero_stats(self):
-        row = self._by_name(self.query.list_career())["エース"]
+        row = self._by_name(self.query.list_season(self.league.id, 2026))["エース"]
 
         self.assertEqual(row.batting, BattingLine())
         self.assertEqual(row.pitching, PitchingLine())
@@ -88,7 +117,7 @@ class PlayerStatsQueryTest(BaseCase):
         for number in ["10", "2", "0", "00"]:
             self.service.register_player(self.team.id, f"自軍の{number}番", number, "内野手")
 
-        rows = self.query.list_career()
+        rows = self.query.list_season(self.league.id, 2026)
 
         # 背番号は文字列の列。SQL の文字列順（「10」が「2」より前）にならず、00 → 0 → 1 → 2 → 3 → 10 → 18 の順
         self.assertEqual(
@@ -119,7 +148,7 @@ class PlayerStatsQueryTest(BaseCase):
         )
         games = DjangoGameRepository().find_all()
 
-        rows = self._by_name(self.query.list_career())
+        rows = self._by_name(self.query.list_season(self.league.id, 2026))
 
         for player in (self.ace, relief):
             self.assertEqual(
@@ -154,7 +183,7 @@ class RankingScreensDoNotBuildAggregatesTest(BaseCase):
 
         board = self.service.get_dashboard()
 
-        self.assertEqual(board.leagues[0].rankings.home_run_leaders[0].player_name, "大砲")
+        self.assertEqual(next(d for d in board.leagues[0].leaders if d.key == "home_runs").leader.player_name, "大砲")
 
     def test_league_titles_read_without_aggregates(self):
         self._forbid_aggregates()
