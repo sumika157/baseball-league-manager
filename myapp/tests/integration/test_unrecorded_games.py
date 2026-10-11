@@ -173,17 +173,26 @@ class UnrecordedGameTest(BaseCase):
 
         self.assertEqual([(row.is_recorded, row.winner_team_id) for row in rows], [(False, None)])
 
-    def test_the_league_page_and_dashboard_say_unrecorded_in_recent_games(self):
+    def test_the_league_page_says_unrecorded_in_recent_games(self):
         play_game(self.team, self.rival, home_score=4, away_score=1, day=1)
         self._register(day=2)
 
-        league = self.client.get(reverse("league_detail", args=[self.league.id]))
-        dashboard = self.client.get(reverse("dashboard"))
+        response = self.client.get(reverse("league_detail", args=[self.league.id]))
 
-        for response in (league, dashboard):
-            self.assertContains(response, "未記録")
-            self.assertNotContains(response, "0 - 0")
-            self.assertNotContains(response, "引分")
+        self.assertContains(response, "未記録")
+        self.assertNotContains(response, "0 - 0")
+        self.assertNotContains(response, "引分")
+
+    def test_the_dashboard_results_leave_out_unrecorded_games(self):
+        """ダッシュボードは結果を出す場所なので、登録しただけの試合は載せない（0-0 の引分に見せない）。"""
+        play_game(self.team, self.rival, home_score=4, away_score=1, day=1)
+        self._register(day=2)
+
+        response = self.client.get(reverse("dashboard"))
+
+        self.assertContains(response, "4 - 1")
+        self.assertNotContains(response, "0 - 0")
+        self.assertNotContains(response, "引分")
 
 
 class RecordedConditionMatchesTheDomainTest(BaseCase):

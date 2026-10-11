@@ -294,6 +294,10 @@ class PennantIdsAreNotFoundFromRealUrlsTest(WorldCase):
                     self.assertEqual(stats.list_roster(year=year, league_id=other_league), [])
                     self.assertTrue(stats.list_roster(year=year, league_id=own_league))
                 self.assertEqual(stats.list_season(other_league, YEAR), [])
+                # 全リーグをまとめて読む口（ダッシュボード）も、範囲の中のリーグだけを返す
+                by_league = stats.list_season_by_league(YEAR)
+                self.assertNotIn(other_league, by_league)
+                self.assertEqual(by_league[own_league], stats.list_season(own_league, YEAR))
 
                 self.assertEqual(listing.list_seasons(league_id=own_league, recorded_only=True), [YEAR])
                 self.assertEqual(listing.list_seasons(league_id=other_league, recorded_only=True), [])

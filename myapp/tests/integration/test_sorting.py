@@ -237,6 +237,6 @@ class LeagueOrderingTest(BaseCase):
         names = [g.league_name for g in self.service.list_teams_by_league().rows]
         self.assertEqual(names, ["Zリーグ", "Aリーグ"])
 
-    def test_order_is_reflected_in_dashboard_tabs(self):
+    def test_order_is_reflected_in_the_dashboard(self):
         names = [g.league_name for g in self.service.get_dashboard().leagues]
         self.assertEqual(names, ["Zリーグ", "Aリーグ"])

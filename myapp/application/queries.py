@@ -48,15 +48,19 @@ class PlayerStatsQuery(Protocol):
     `year` が None なら「いま在籍中」（退団年が空）の選手の通算成績。
     """
 
-    def list_career(self) -> list[ActivePlayerStats]:
-        """全チームの在籍中の選手と、その通算成績。チームの表示順、背番号順。"""
-        ...
-
     def list_season(self, league_id: int, year: int) -> list[ActivePlayerStats]:
         """そのリーグに `year` に在籍していた選手と、その年の成績。
 
         成績に数えるのは、その年の**すべての試合**（リーグをまたぐ交流戦も含む。NPB のタイトルと同じ）。
         チームの表示順、背番号順。
+        """
+        ...
+
+    def list_season_by_league(self, year: int) -> dict[int, list[ActivePlayerStats]]:
+        """全リーグぶんの `list_season(league_id, year)` を一度に。キーはリーグid。
+
+        リーグごとの中身は `list_season` と同じ（そのリーグに `year` に在籍していた選手と、交流戦も含む
+        その年の成績）。読むのは範囲（`WorldScope`）の中だけ。在籍していた選手がいないリーグはキーに現れない。
         """
         ...
 

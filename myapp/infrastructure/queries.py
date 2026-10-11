@@ -292,11 +292,26 @@ class DjangoPlayerStatsQuery:
     def __init__(self, scope: WorldScope) -> None:
         self._scope = scope
 
-    def list_career(self) -> list[ActivePlayerStats]:
-        return self.list_roster(year=None)
-
     def list_season(self, league_id: int, year: int) -> list[ActivePlayerStats]:
         return self.list_roster(year=year, league_id=league_id)
+
+    def list_season_by_league(self, year: int) -> dict[int, list[ActivePlayerStats]]:
+        """プロトコルの `list_season_by_league`。在籍と成績を範囲の中から1回ずつ読み、リーグで分ける。
+
+        リーグごとに `list_season` を呼ぶと、リーグの数×3回のクエリになる。成績は選手ごとにその年の
+        全試合（交流戦を含む）を数えるので、リーグで分けて集計する必要はない。年の途中でリーグを
+        移った選手は、`list_season` と同じく両方のリーグに出る（同じ年の在籍を1つにするのはリーグの中で）。
+        """
+        by_league: dict[int, list[orm_models.PlayerStint]] = {}
+        for row in self._ordered(self._stints(year)):
+            by_league.setdefault(row.team.league_id, []).append(row)
+        games = Q(game__year=year) & world_condition("game__home_team__league", self._scope)
+        batting = batting_totals(games=games)
+        pitching = pitching_totals(games=games)
+        return {
+            league_id: self._to_stats(self._one_per_player(members), year, batting, pitching)
+            for league_id, members in by_league.items()
+        }
 
     def list_roster(
         self,
@@ -312,12 +327,7 @@ class DjangoPlayerStatsQuery:
             stints = stints.filter(team_id=team_id)
         if league_id is not None:
             stints = stints.filter(team__league_id=league_id)
-        # 背番号は文字列の列なので SQL では背番号順に並べられない（「10」が「2」より前に来る）。
-        # 球団までを SQL で並べ、背番号順（`JerseyNumber.sort_key`）は Python で並べ直す
-        rows = sorted(
-            stints.select_related("player", "team").order_by("team__display_order", "team__name", "id"),
-            key=lambda s: (s.team.display_order, s.team.name, JerseyNumber(s.number).sort_key, s.id),
-        )
+        rows = self._ordered(stints)
         if year is not None:
             rows = self._one_per_player(rows)
 
@@ -333,6 +343,31 @@ class DjangoPlayerStatsQuery:
             pitching = pitching_totals(player_ids, games=games or None)
 
         captains = self._captains(team_id, year) if team_id is not None else frozenset()
+        return self._to_stats(rows, year, batting, pitching, captains=captains, with_profile=with_profile)
+
+    @staticmethod
+    def _ordered(stints: QuerySet[orm_models.PlayerStint]) -> list[orm_models.PlayerStint]:
+        """球団の表示順、背番号順に並べた在籍（ランキングの同値の並びに効く）。
+
+        背番号は文字列の列なので SQL では背番号順に並べられない（「10」が「2」より前に来る）。
+        球団までを SQL で並べ、背番号順（`JerseyNumber.sort_key`）は Python で並べ直す。
+        """
+        return sorted(
+            stints.select_related("player", "team").order_by("team__display_order", "team__name", "id"),
+            key=lambda s: (s.team.display_order, s.team.name, JerseyNumber(s.number).sort_key, s.id),
+        )
+
+    @staticmethod
+    def _to_stats(
+        rows: list[orm_models.PlayerStint],
+        year: int | None,
+        batting: dict[int, BattingLine],
+        pitching: dict[int, PitchingLine],
+        *,
+        captains: frozenset[int] = frozenset(),
+        with_profile: bool = False,
+    ) -> list[ActivePlayerStats]:
+        """在籍の行と集計した成績を、選手ごとの DTO にする。"""
         return [
             ActivePlayerStats(
                 player_id=row.player_id,

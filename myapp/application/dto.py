@@ -666,34 +666,6 @@ class PlayerSearchRow:
 
 
 @dataclass(frozen=True)
-class LeagueRankings:
-    """1リーグぶんの各種ランキング。
-
-    打撃・投手のタイトルはリーグの中で争われるため、リーグをまたいで
-    1つの表にはしない。部門は NPB の個人成績ページにならい、
-    打者は打率・本塁打・打点、投手は防御率・勝利・セーブを出す。
-    """
-
-    average_leaders: list[RankingEntry]
-    home_run_leaders: list[RankingEntry]
-    rbi_leaders: list[RankingEntry]
-    era_leaders: list[RankingEntry]
-    win_leaders: list[RankingEntry]
-    save_leaders: list[RankingEntry]
-
-    @property
-    def has_any(self) -> bool:
-        return bool(
-            self.average_leaders
-            or self.home_run_leaders
-            or self.rbi_leaders
-            or self.era_leaders
-            or self.win_leaders
-            or self.save_leaders
-        )
-
-
-@dataclass(frozen=True)
 class TeamTotals:
     """チームの合計成績と、そこから求めた指標。
 
@@ -841,8 +813,8 @@ class TitleDepartment:
 class LeagueTitles:
     """リーグのタイトル一覧。
 
-    ダッシュボードのランキングは全体の概況で、通算成績を並べる。こちらは
-    シーズンで区切り、部門を掘り下げて確認する場所として役割を分ける。
+    1リーグ×1シーズンの部門別の上位者。ダッシュボードは同じ集計から主な部門の
+    首位だけを出し、上位3人・全部門・過去の年はここが受け持つ。
     """
 
     league_id: int
@@ -877,8 +849,8 @@ class LeaguePlayerRow:
 class LeagueStats:
     """リーグの成績一覧。所属する全選手の通算成績を1つの表で見る。
 
-    ダッシュボードのランキングは通算の上位だけを出す。ここはその続きとして
-    全員を並べる場所。シーズンで区切った部門別の上位者はタイトル一覧が担う。
+    全員を並べる場所。シーズンで区切った部門別の上位者はタイトル一覧が担い、
+    ダッシュボードはその首位だけを出す。
     """
 
     league_id: int
@@ -939,40 +911,36 @@ class RankingEntry:
 
 @dataclass(frozen=True)
 class DashboardLeague:
-    """ダッシュボードの1リーグぶんのまとまり。
+    """ダッシュボードの1リーグぶんのカード。最新シーズンの要約。
 
-    ランキングと順位表を1本のタブで切り替えるため、リーグ単位でまとめて持つ。
-    タブバーを内容ごとに分けると、左右で別のリーグが表示される状態が
-    生まれてしまう。順位表は最新シーズンのもの。
+    順位表と主な部門の首位だけを持つ。1リーグを掘り下げるのはリーグ画面、
+    部門の上位3人と過去の年はタイトル画面が受け持つ。
     """
 
     league_id: int
     league_name: str
-    rankings: LeagueRankings
     standings: list[StandingRow]
     standings_year: int | None
     # 順位表と同じチームの並びなので画面には並べない。1試合も行われておらず
     # 順位表を作れないリーグで、順位表の代わりに出すためだけに持つ
     teams: list[TeamSummary]
-    # 直近の試合（新しい順）。順位表が「どこが強いか」を示すのに対して、
-    # 「いま何が起きているか」を示す。さかのぼるのは試合一覧が受け持つ
-    recent_games: list[GameRow]
+    # 主な部門の首位（順位表と同じシーズン）。出典はタイトル画面と同じ集計で、
+    # 各部門の entries は1位の選手だけ（同率なら全員）
+    leaders: list[TitleDepartment]
+
+    @property
+    def has_leaders(self) -> bool:
+        return any(d.entries for d in self.leaders)
 
 
 @dataclass(frozen=True)
 class Dashboard:
-    """ホーム画面（ダッシュボード）に表示する内容。"""
+    """ホーム画面（ダッシュボード）に表示する内容。全リーグを1画面に並べる。"""
 
-    league_count: int
-    team_count: int
-    batter_count: int
-    pitcher_count: int
     # タイトルも順位もリーグの中で争われるので、内容はリーグごとに持つ
     leagues: list[DashboardLeague]
-
-    @property
-    def player_count(self) -> int:
-        return self.batter_count + self.pitcher_count
+    # 全リーグの、最新の試合日の結果。リーグの並び順。「いま何が起きているか」を示す
+    latest_results: list[GameRow]
 
     @property
     def teams(self) -> list[TeamSummary]:

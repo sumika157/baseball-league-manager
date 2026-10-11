@@ -905,7 +905,7 @@ def _render_club(request, world: WorldContext, tab: str, *, state: ClubFormState
 
 
 def dashboard(request):
-    """ホーム画面。リーグ全体の概況と各種ランキングを表示する。"""
+    """ホーム画面。全リーグの最新シーズンの順位表・部門の首位と、最新の試合日の結果。"""
     return render(request, "myapp/dashboard.html", {"board": build_service().get_dashboard()})
 
 
