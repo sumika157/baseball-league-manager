@@ -17,7 +17,7 @@ from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import FieldingPosition, Position
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
-from myapp.management.commands.seed_virtual_games import MAX_INNINGS, Command, _Outing, _Side
+from myapp.management.commands.seed_virtual_games import LINEUP_SIZE, MAX_INNINGS, Command, _Outing, _Side
 
 from .base import BaseCase
 
@@ -375,6 +375,49 @@ class SeedGamesLeftHandersTest(SeedGamesBase):
 
 def _player(player_id: int, position: Position, throws: str) -> SimpleNamespace:
     return SimpleNamespace(id=player_id, position=position.value, throws=throws)
+
+
+class ForeignStarterTest(SimpleTestCase):
+    """外国人の先発が投げる日は、外国人の野手が控えに回る（#191）。
+
+    以前は打順を先に組んでいたため、外国人の野手で出場枠が尽きると外国人の先発が投げられず、
+    毎回ローテーションの1番手が代わりに先発していた（年70試合に先発する投手が出た）。
+    """
+
+    FOREIGN_PITCHER, RELIEVER, FOREIGN_BATTER, RESERVE = 1, 2, 101, 110
+
+    def test_the_foreign_starter_pitches_and_a_foreign_batter_sits(self) -> None:
+        regulars = [
+            _player(self.FOREIGN_BATTER, Position.OUTFIELDER, "右"),
+            *(_player(n, Position.INFIELDER, "右") for n in range(102, 110)),
+        ]
+        starter = _player(self.FOREIGN_PITCHER, Position.PITCHER, "右")
+        positions = {
+            player.id: FieldingPosition(label) for player, label in zip(regulars, "右捕一二三遊左中指", strict=True)
+        }
+        roster = {
+            "regulars": regulars,
+            "bench": [_player(self.RESERVE, Position.OUTFIELDER, "右")],
+            "bench_weights": np.array([1.0]),
+            "positions": positions,
+            "batting_talent": defaultdict(lambda: np.array([0.25, 0.08, 0.07])),
+            "rotation": [starter],
+            "bullpen": [_player(self.RELIEVER, Position.PITCHER, "右")],
+            "pitching_talent": defaultdict(lambda: 1.0),
+            "foreign": {self.FOREIGN_PITCHER, self.FOREIGN_BATTER},
+        }
+        command = Command()
+        command.rng = np.random.default_rng(0)
+        side = _Side(team=None, roster=roster, is_home=True)
+
+        command._take_field(side, 0, 1)
+
+        self.assertIs(side.pitcher.player, starter)
+        batters = {entry.player.id for entry in side.lineup}
+        self.assertNotIn(self.FOREIGN_BATTER, batters)
+        self.assertIn(self.RESERVE, batters)
+        self.assertEqual(len(side.lineup), LINEUP_SIZE)
+        self.assertEqual(side.foreign_used, 1)
 
 
 class DefensiveAlignmentTest(SimpleTestCase):

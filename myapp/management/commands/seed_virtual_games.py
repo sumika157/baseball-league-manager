@@ -597,8 +597,7 @@ class Command(BaseCommand):
         sides = {}
         for team, is_home in ((home, True), (away, False)):
             side = _Side(team=team, roster=rosters[team.id], is_home=is_home)
-            self._set_lineup(side, limit)
-            self._take_mound(side, starts[team.id], limit)
+            self._take_field(side, starts[team.id], limit)
             starts[team.id] += 1
             sides[is_home] = side
 
@@ -679,6 +678,17 @@ class Command(BaseCommand):
                 return
 
     # --- 出場選手 ---
+
+    def _take_field(self, side, start_index, limit):
+        """1チームの出場選手を揃える。**先発を先に決めてから打順を組む。**
+
+        外国人の出場枠は先に入った選手から埋まる。打順を先に組むと、外国人の野手で枠が尽きた日に
+        外国人の先発が投げられず、毎回同じ投手（ローテーションの1番手）が代わりに先発する
+        （年70試合に先発する投手が出た）。先発を先に決めれば、打順の側で外国人の野手が
+        控えと入れ替わる（実際のチームと同じ起用）。
+        """
+        self._take_mound(side, start_index, limit)
+        self._set_lineup(side, limit)
 
     def _set_lineup(self, side, limit):
         """打順を決める。レギュラーを基本にし、一部を控えと入れ替える。
