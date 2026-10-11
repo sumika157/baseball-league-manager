@@ -46,3 +46,11 @@ myapp/static/myapp/dist/
 
 # git worktree（タスクごとの並行作業。CLAUDE.md「ブランチと worktree」参照）
 .claude/worktrees/
+
+# Terraform（infra/）。ロックファイル（.terraform.lock.hcl）はコミットする
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.*
+infra/*.tfvars
+!infra/terraform.tfvars.example
+infra/backend.hcl

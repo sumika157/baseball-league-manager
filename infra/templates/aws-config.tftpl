@@ -1,0 +1,5 @@
+[profile r2]
+region = auto
+# AWS CLI v2 の既定のチェックサムを R2 が受け付けないことがあるので、必要なときだけにする
+request_checksum_calculation = when_required
+response_checksum_validation = when_required

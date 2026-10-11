@@ -143,3 +143,24 @@ bash: ## web コンテナの bash を開く
 .PHONY: superuser
 superuser: ## 管理ユーザーを作成する
 	$(EXEC) python manage.py createsuperuser
+
+# ---- Terraform（infra/。本番の構成。手順は Wiki「本番公開」）----
+# WSL のターミナルから使う。認証は環境変数（AWS_ACCESS_KEY_ID・AWS_SECRET_ACCESS_KEY・CLOUDFLARE_API_TOKEN）か、
+# WSL の ~/.aws のプロファイル（AWS_PROFILE を渡す。~/.aws は読み取り専用でマウントし、無ければマウントしない）。
+# state の R2 のキーは環境変数ではなく infra/backend.hcl に書く（AWS_* と衝突するため）。
+# SSH の秘密鍵は ~/.ssh を /ssh に読み取り専用でマウントする（infra の ssh_private_key_path は /ssh/<ファイル名>）。
+TF_IMAGE := hashicorp/terraform:1.16.5
+# ~/.aws がシンボリックリンクのこともある（Windows 側の .aws を指す環境など）ので、実体のパスに解決して渡す
+TF_AWS_DIR := $(shell readlink -f "$(HOME)/.aws" 2>/dev/null)
+TF_MOUNTS := $(if $(wildcard $(TF_AWS_DIR)),-v "$(TF_AWS_DIR)":/aws:ro) $(if $(wildcard $(HOME)/.ssh),-v "$(HOME)/.ssh":/ssh:ro)
+# 手元の利用者で動かす（root で動かすと infra/.terraform/ とロックファイルが root 所有で作業ツリーに残り、消せなくなる）。
+# HOME が無い利用者になるので、HOME は /tmp にし、AWS の設定ファイルの場所は環境変数で /aws を指す。
+# 端末から呼んだときだけ -t を付ける（apply の確認入力に要る。スクリプトや CI から呼ぶと -t は失敗する）
+TF_USER := --user $(shell id -u):$(shell id -g) -e HOME=/tmp \
+  -e AWS_CONFIG_FILE=/aws/config -e AWS_SHARED_CREDENTIALS_FILE=/aws/credentials
+
+.PHONY: tf
+tf: ## Terraform を実行する（例: make tf ARGS="plan"。infra/ で動く）
+	docker run --rm -i $$([ -t 0 ] && echo -t) $(TF_USER) -v "$(CURDIR)/infra":/infra $(TF_MOUNTS) -w /infra \
+	  -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN -e AWS_PROFILE -e CLOUDFLARE_API_TOKEN \
+	  $(TF_IMAGE) $(ARGS)

@@ -1,0 +1,16 @@
+# cp terraform.tfvars.example terraform.tfvars して埋める（terraform.tfvars は gitignore 済み）。
+# 秘密（API トークン・R2 のキー）はここに書かず、環境変数で渡す（Wiki「本番公開」）。
+
+cloudflare_account_id = "<Cloudflare のアカウント ID>"
+zone_name             = "example.com"
+# hostname            = "baseball.example.com"   # 省略するとゾーンの名前（example.com）で公開する
+admin_emails          = ["you@example.com"]      # /admin/ に入れる人
+
+ssh_public_key       = "ssh-ed25519 AAAA... you@host"
+ssh_private_key_path = "/ssh/id_ed25519"          # make tf はコンテナの /ssh に ~/.ssh を置く
+# terraform apply を流す場所の IP を必ず含める（起動のために SSH で入る）
+admin_ssh_cidrs      = ["203.0.113.10/32"]
+
+# 回数制限・バックアップの保持日数・Lightsail のプランなどは variables.tf の既定値でよければ省略する
+# backup_retention_days = 30
+# bundle_id             = "micro_3_0"

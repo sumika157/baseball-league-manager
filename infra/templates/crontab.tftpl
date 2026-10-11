@@ -1,0 +1,5 @@
+# Terraform が置いたもの（infra/templates/crontab.tftpl）。手で足した行は Terraform の再実行で消える
+# cron の既定の PATH（/usr/bin:/bin）には AWS CLI v2（/usr/local/bin/aws）が無いので足す
+PATH=/usr/local/bin:/usr/bin:/bin
+15 3 * * * cd ${app_dir} && docker compose -f docker-compose.prod.yml exec -T web python manage.py backup_db /backups --keep 14 >> /home/ubuntu/backup.log 2>&1
+30 3 * * * aws s3 sync ${app_dir}/backups s3://${bucket}/baseball-backups/ --profile r2 --endpoint-url https://${account_id}.r2.cloudflarestorage.com >> /home/ubuntu/backup.log 2>&1
