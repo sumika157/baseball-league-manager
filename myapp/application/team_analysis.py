@@ -85,9 +85,13 @@ USAGE_AREAS: dict[FieldingPosition, str] = {
 
 
 class TeamAnalysisService:
-    def __init__(self, team_list_query: TeamListQuery, analysis_query: TeamAnalysisQuery) -> None:
+    def __init__(
+        self, team_list_query: TeamListQuery, analysis_query: TeamAnalysisQuery, today: Callable[[], date]
+    ) -> None:
         self._team_list_query = team_list_query
         self._analysis_query = analysis_query
+        # 試合の無い球団の既定の年に使う「今日」。実データは暦の今日、ペナントの世界はその世界の今日
+        self._today = today
 
     def first_team_id(self) -> int | None:
         """チームの表示順で先頭のチーム。1つも無ければ None。"""
@@ -115,7 +119,7 @@ class TeamAnalysisService:
     ) -> TeamAnalysis:
         """球団×年度の戦力分析。
 
-        年が不正（試合の無い年）なら最新の年に落とす。試合が1つも無いチームは今日の年。
+        年が不正（試合の無い年）なら最新の年に落とす。試合が1つも無いチームは（実データでは暦の、ペナントの世界ではその世界の）今日の年。
         タブが不正ならデプス表、色分けの軸が不正なら左右。チームが無ければ `TeamNotFound`。
         """
         summaries = self._team_list_query.list_summaries()
@@ -124,7 +128,7 @@ class TeamAnalysisService:
             raise TeamNotFound("チームが見つかりません。")
 
         years = self._analysis_query.list_years(team_id)
-        chosen = year if year in years else (years[0] if years else date.today().year)
+        chosen = year if year in years else (years[0] if years else self._today().year)
         facts = self._analysis_query.load(team_id, chosen)
 
         axis = ColorAxis.parse(color)

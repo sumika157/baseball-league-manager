@@ -1,5 +1,5 @@
 {% extends "myapp/base.html" %}
-{% load sorting %}
+{% load sorting scoped %}
 
 {% block title %}{% if analysis %}{{ analysis.team_name }}の戦力分析{% else %}戦力分析{% endif %} - Baseball Manager{% endblock %}
 
@@ -7,7 +7,7 @@
 {% if not analysis %}
   <nav aria-label="breadcrumb">
     <ol class="breadcrumb">
-      <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>
+      {% if world %}{% include 'pennant/_crumbs.html' %}{% else %}<li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>{% endif %}
       <li class="breadcrumb-item active">戦力分析</li>
     </ol>
   </nav>
@@ -18,12 +18,12 @@
 {% else %}
 <nav aria-label="breadcrumb">
   <ol class="breadcrumb">
-    <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>
-    <li class="breadcrumb-item"><a href="{% url 'team_list' %}">チーム一覧</a></li>
-    <li class="breadcrumb-item"><a href="{% url 'player_list' analysis.team_id %}">{{ analysis.team_name }}</a></li>
+    {% if world %}{% include 'pennant/_crumbs.html' %}{% else %}<li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>{% endif %}
+    <li class="breadcrumb-item"><a href="{% scoped_url 'team_list' %}">チーム一覧</a></li>
+    <li class="breadcrumb-item"><a href="{% scoped_url 'player_list' analysis.team_id %}">{{ analysis.team_name }}</a></li>
     <li class="breadcrumb-item active">戦力分析</li>
   </ol>
-</nav>
+</nav>{% if world %}{% include 'pennant/_world_bar.html' %}{% endif %}
 
 <div class="page-head">
   <h1 class="page-title">{{ analysis.team_name }}の戦力分析</h1>
@@ -32,7 +32,7 @@
 </div>
 
 {# 球団の切り替え。JS なしで動くよう GET フォームにし、年度・タブ・色分けは引き継ぐ #}
-<form method="get" action="{% url 'analysis_index' %}" class="d-flex flex-wrap align-items-center gap-2 mb-3">
+<form method="get" action="{% scoped_url 'analysis_index' %}" class="d-flex flex-wrap align-items-center gap-2 mb-3">
   <label for="analysis-team" class="form-label mb-0">球団</label>
   <select id="analysis-team" name="team" class="form-select form-select-sm w-auto">
     {% for option in analysis.teams %}
@@ -166,7 +166,7 @@
             {% for row in analysis.joiners %}
             <tr>
               <td><span class="jersey-number">{{ row.number }}</span></td>
-              <td class="player-tone player-tone-{{ row.tone.key }}"><a href="{% url 'player_detail' analysis.team_id row.player_id %}" class="player-name">{{ row.name }}</a>{% if row.tone.mark %}<span class="tone-mark">{{ row.tone.mark }}</span>{% endif %}{% if row.is_developmental %} <span class="badge bg-primary">育成</span>{% endif %}</td>
+              <td class="player-tone player-tone-{{ row.tone.key }}"><a href="{% scoped_url 'player_detail' analysis.team_id row.player_id %}" class="player-name">{{ row.name }}</a>{% if row.tone.mark %}<span class="tone-mark">{{ row.tone.mark }}</span>{% endif %}{% if row.is_developmental %} <span class="badge bg-primary">育成</span>{% endif %}</td>
               <td>{{ row.position_label }}</td>
               <td>{{ row.kind_label }}</td>
               <td>{{ row.other_team_name|default:"—" }}</td>
@@ -196,7 +196,7 @@
             {% for row in analysis.leavers %}
             <tr>
               <td><span class="jersey-number">{{ row.number }}</span></td>
-              <td class="player-tone player-tone-{{ row.tone.key }}"><a href="{% url 'player_detail' analysis.team_id row.player_id %}" class="player-name">{{ row.name }}</a>{% if row.tone.mark %}<span class="tone-mark">{{ row.tone.mark }}</span>{% endif %}{% if row.is_developmental %} <span class="badge bg-primary">育成</span>{% endif %}</td>
+              <td class="player-tone player-tone-{{ row.tone.key }}"><a href="{% scoped_url 'player_detail' analysis.team_id row.player_id %}" class="player-name">{{ row.name }}</a>{% if row.tone.mark %}<span class="tone-mark">{{ row.tone.mark }}</span>{% endif %}{% if row.is_developmental %} <span class="badge bg-primary">育成</span>{% endif %}</td>
               <td>{{ row.position_label }}</td>
               <td>{{ row.kind_label }}{% if row.fa_label %} <span class="badge bg-secondary">{{ row.fa_label }}</span>{% endif %}</td>
               <td>{{ row.other_team_name|default:"—" }}</td>
@@ -211,7 +211,7 @@
   </div>
 
   <p class="page-subtitle" style="font-size: 0.8125rem;">
-    選手ごとの{{ analysis.year }}年の成績は、上の「成績一覧」のタブで見られます（<a href="{% url 'player_list' analysis.team_id %}">{{ analysis.team_name }}の選手一覧</a>は、いま在籍する選手の通算成績です）。
+    選手ごとの{{ analysis.year }}年の成績は、上の「成績一覧」のタブで見られます（<a href="{% scoped_url 'player_list' analysis.team_id %}">{{ analysis.team_name }}の選手一覧</a>は、いま在籍する選手の通算成績です）。
   </p>
 {% elif analysis.tab == 'usage' %}
   {% comment %}
@@ -232,7 +232,7 @@
           {% for player in box.players %}
           <li class="player-tone player-tone-{{ player.tone.key }}">
             <span class="jersey-number">{{ player.number }}</span>
-            <a href="{% url 'player_detail' analysis.team_id player.player_id %}" class="player-name">{{ player.name }}</a>
+            <a href="{% scoped_url 'player_detail' analysis.team_id player.player_id %}" class="player-name">{{ player.name }}</a>
             {% if player.tone.mark %}<span class="tone-mark">{{ player.tone.mark }}</span>{% endif %}
             <span class="stat-muted tabular-nums text-nowrap">{{ player.starts }} / {{ player.games }}</span>
           </li>
@@ -273,7 +273,7 @@
         {% for row in analysis.fa_rows %}
         <tr>
           <td><span class="jersey-number">{{ row.number }}</span></td>
-          <td class="player-tone player-tone-{{ row.tone.key }}"><a href="{% url 'player_detail' analysis.team_id row.player_id %}" class="player-name">{{ row.name }}</a>{% if row.tone.mark %}<span class="tone-mark">{{ row.tone.mark }}</span>{% endif %}{% if row.is_developmental %} <span class="badge bg-primary">育成</span>{% endif %}</td>
+          <td class="player-tone player-tone-{{ row.tone.key }}"><a href="{% scoped_url 'player_detail' analysis.team_id row.player_id %}" class="player-name">{{ row.name }}</a>{% if row.tone.mark %}<span class="tone-mark">{{ row.tone.mark }}</span>{% endif %}{% if row.is_developmental %} <span class="badge bg-primary">育成</span>{% endif %}</td>
           <td>{{ row.education_label }}</td>
           <td class="text-end">{% if row.debut_year %}{{ row.debut_year }}年{% else %}—{% endif %}</td>
           <td class="text-end">{% if row.seasons is None %}—{% else %}{{ row.seasons }}シーズン{% if row.remainder_days %}＋{{ row.remainder_days }}日{% endif %}{% if row.includes_estimate %}<span class="stat-muted">（推定）</span>{% endif %}{% endif %}</td>

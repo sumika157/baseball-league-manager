@@ -167,6 +167,12 @@ class WorldCase(BaseCase):
             *(reverse("pennant_club", args=[world_id]) + f"?tab={tab}" for tab in ("active", "lineup", "pitching")),
             reverse("pennant_player_list", args=[world_id, team.id]),
             reverse("pennant_player_detail", args=[world_id, team.id, player_id]),
+            reverse("pennant_analysis_index", args=[world_id]),
+            *(
+                reverse("pennant_team_analysis", args=[world_id, team.id]) + f"?tab={tab}"
+                for tab in ("depth", "usage", "fa", "stats")
+            ),
+            reverse("pennant_team_analysis", args=[world_id, team.id]) + "?tab=stats&pos=pitcher",
         ]
         if game is not None:
             urls.append(reverse("pennant_game_detail", args=[world_id, game.id]))
