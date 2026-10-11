@@ -27,7 +27,7 @@ from myapp.domain.pennant.retirement import PlayingTime
 from myapp.domain.pennant.schedule import ScheduleRules
 from myapp.domain.simulation.manager import ClubRoster, SimBatter, SimPitcher, choose_active_roster
 from myapp.domain.simulation.ratings import PitcherRatings
-from myapp.domain.value_objects import BattingLine, PitchingLine, Position, Profile
+from myapp.domain.value_objects import BattingLine, ContractStatus, PitchingLine, Position, Profile
 from myapp.management.estimate_check import (
     DEFAULT_FOREIGN_ROSTER_LIMIT,
     LEVEL_LABELS,
@@ -55,6 +55,8 @@ class Member:
     number: str
     joined_year: int
     ratings: PlayerRatings
+    # 今の契約区分（分岐元の `Stint.contract_now`。新人は支配下）。育成は1軍の候補に入れない
+    contract: ContractStatus
 
 
 @dataclass(frozen=True)
@@ -63,6 +65,7 @@ class TeamInfo:
     league_id: int
     name: str
     foreign_limit: int | None
+    registered_limit: int | None
 
 
 def _id(value: int | None) -> int:
@@ -79,7 +82,13 @@ def initial_members(
     names: set[str] = set()
     for league, league_teams in zip(source.leagues, source.rosters, strict=True):
         for team in league_teams:
-            teams[_id(team.id)] = TeamInfo(_id(team.id), _id(league.id), team.name, league.foreign_player_roster_limit)
+            teams[_id(team.id)] = TeamInfo(
+                _id(team.id),
+                _id(league.id),
+                team.name,
+                league.foreign_player_roster_limit,
+                league.registered_player_limit,
+            )
             for player in team.active_players:
                 stint = team.current_stint(player)
                 assert stint is not None
@@ -94,6 +103,7 @@ def initial_members(
                         number=stint.number.value,
                         joined_year=year,
                         ratings=ratings[_id(player.id)],
+                        contract=stint.contract_now,
                     )
                 )
     for league_teams in source.rosters:
@@ -109,6 +119,8 @@ def rosters_of(
     batters: dict[int, list[SimBatter]] = {team_id: [] for team_id in teams}
     pitchers: dict[int, list[SimPitcher]] = {team_id: [] for team_id in teams}
     for member in members:
+        if member.contract is ContractStatus.DEVELOPMENTAL:
+            continue
         rating = member.ratings.ratings
         foreign = member.profile.is_foreign_player
         if isinstance(rating, PitcherRatings):
@@ -154,11 +166,17 @@ def offseason_clubs(
                 number=member.number,
                 joined_year=member.joined_year,
                 ratings=member.ratings,
+                contract=member.contract,
                 playing_time=_playing_time(batting, pitching, member.player_id),
             )
         )
     return [
-        OffseasonClub(team_id=team_id, foreign_roster_limit=team.foreign_limit, players=tuple(by_team[team_id]))
+        OffseasonClub(
+            team_id=team_id,
+            foreign_roster_limit=team.foreign_limit,
+            registered_player_limit=team.registered_limit,
+            players=tuple(by_team[team_id]),
+        )
         for team_id, team in teams.items()
     ]
 
@@ -185,6 +203,7 @@ def apply_plan(members: Sequence[Member], plan: OffseasonPlan) -> list[Member]:
                 number=draftee.number,
                 joined_year=plan.year + 1,
                 ratings=PlayerRatings(player_id, plan.year + 1, draftee.ratings),
+                contract=ContractStatus.REGISTERED,
             )
         )
     return kept
