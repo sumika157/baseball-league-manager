@@ -50,6 +50,12 @@ class ActivePlayerStats:
     league_id: int
     batting: BattingLine
     pitching: PitchingLine
+    # 出場試合数（打撃か投球に明細がある試合。打席の無い途中出場も含む。定義は `appeared_in`）と登板数。
+    # 成績と同じ範囲で数えた値で、成績の値オブジェクトには持たせない
+    # （明細の行数から数える値。守備成績の試合数と同じ扱い）。
+    # 一覧の列にだけ使うので、`list_roster(with_games=True)` で読んだときだけ入る（読んでいなければ None）
+    games: int | None = None
+    appearances: int | None = None
     # 一覧の年齢・身長などの材料と、外国人かどうか（順位づけには使わない）
     profile: Profile = field(default_factory=Profile)
     # その範囲で主将だったか（球団の一覧のときだけ読む。それ以外は False）
@@ -965,6 +971,8 @@ class BatterRow:
     batting_average: float
     on_base_percentage: float
     ops: float
+    # 出場試合数（`ActivePlayerStats.games`）
+    games: int = 0
     isolated_power: float = 0.0
     walks: int = 0
     sacrifice_flies: int = 0
@@ -998,6 +1006,8 @@ class PitcherRow:
     earned_run_average: float
     whip: float
     strikeouts_per_nine: float
+    # 登板数（`ActivePlayerStats.appearances`）
+    appearances: int = 0
     walks_per_nine: float = 0.0
     # FIP はリーグの定数を足して仕上げるため、リーグを知る側で計算して渡す
     fip: float = 0.0

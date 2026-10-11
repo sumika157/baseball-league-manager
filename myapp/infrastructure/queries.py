@@ -75,6 +75,7 @@ from .repositories import (
     DjangoRatingsRepository,
     batting_totals,
     game_batting_of,
+    game_counts,
     game_pitching_of,
     pitching_totals,
     profile_of,
@@ -320,8 +321,10 @@ class DjangoPlayerStatsQuery:
         team_id: int | None = None,
         league_id: int | None = None,
         with_profile: bool = False,
+        with_games: bool = False,
     ) -> list[ActivePlayerStats]:
-        """プロトコルの `list_roster`。`with_profile` を立てると年齢などの材料も読む（タイトルには要らない）。"""
+        """プロトコルの `list_roster`。`with_profile` を立てると年齢などの材料も、`with_games` を立てると
+        出場試合数と登板数も読む（どちらもタイトルには要らない）。"""
         stints = self._stints(year)
         if team_id is not None:
             stints = stints.filter(team_id=team_id)
@@ -337,13 +340,15 @@ class DjangoPlayerStatsQuery:
             games &= world_condition("game__home_team__league", self._scope)
             batting = batting_totals(games=games)
             pitching = pitching_totals(games=games)
+            counts = game_counts(games=games) if with_games else None
         else:
             player_ids = [row.player_id for row in rows]
             batting = batting_totals(player_ids, games=games or None)
             pitching = pitching_totals(player_ids, games=games or None)
+            counts = game_counts(player_ids, games=games or None) if with_games else None
 
         captains = self._captains(team_id, year) if team_id is not None else frozenset()
-        return self._to_stats(rows, year, batting, pitching, captains=captains, with_profile=with_profile)
+        return self._to_stats(rows, year, batting, pitching, counts, captains=captains, with_profile=with_profile)
 
     @staticmethod
     def _ordered(stints: QuerySet[orm_models.PlayerStint]) -> list[orm_models.PlayerStint]:
@@ -363,11 +368,16 @@ class DjangoPlayerStatsQuery:
         year: int | None,
         batting: dict[int, BattingLine],
         pitching: dict[int, PitchingLine],
+        counts: tuple[dict[int, int], dict[int, int]] | None = None,
         *,
         captains: frozenset[int] = frozenset(),
         with_profile: bool = False,
     ) -> list[ActivePlayerStats]:
-        """在籍の行と集計した成績を、選手ごとの DTO にする。"""
+        """在籍の行と集計した成績を、選手ごとの DTO にする。
+
+        `counts` は `game_counts` の (出場試合数, 登板数)。数えていなければ None で、DTO の数も None にする。
+        """
+        played, pitched = counts if counts is not None else (None, None)
         return [
             ActivePlayerStats(
                 player_id=row.player_id,
@@ -379,6 +389,8 @@ class DjangoPlayerStatsQuery:
                 league_id=row.team.league_id,
                 batting=batting.get(row.player_id, BattingLine()),
                 pitching=pitching.get(row.player_id, PitchingLine()),
+                games=played.get(row.player_id, 0) if played is not None else None,
+                appearances=pitched.get(row.player_id, 0) if pitched is not None else None,
                 profile=profile_of(row.player) if with_profile else Profile(),
                 is_captain=row.player_id in captains,
                 is_developmental=_contract_at(row, year) is ContractStatus.DEVELOPMENTAL,

@@ -71,12 +71,14 @@ class PlayerStatsQuery(Protocol):
         team_id: int | None = None,
         league_id: int | None = None,
         with_profile: bool = False,
+        with_games: bool = False,
     ) -> list[ActivePlayerStats]:
         """球団（`team_id`）またはリーグ（`league_id`）の選手と成績。どちらも None なら世界の全選手。
 
         `year` が None なら在籍中の選手の通算成績、年を渡せばその年に在籍していた選手のその年の成績
         （`list_season` と同じ数え方）。球団を指定したときだけ、主将かどうか（`is_captain`）を読む。
         `with_profile` を立てたときだけ、年齢などの材料（`profile`）を読む（タイトルには要らない）。
+        `with_games` を立てたときだけ、出場試合数と登板数（`games` / `appearances`）を数える（一覧の列に使う）。
         """
         ...
 
