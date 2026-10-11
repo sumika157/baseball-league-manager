@@ -1,4 +1,4 @@
-{% load static %}
+{% load static scoped %}
 <!DOCTYPE html>
 <html lang="ja">
   <head>
@@ -23,8 +23,8 @@
                  placeholder="選手を探す" aria-label="選手を探す" />
         </form>
 
-        {# 戦力分析は実データの画面だけ。ペナントの世界の中では出さない（世界の画面のリンクは世界の中に留める） #}
-        {% if not world %}<a href="{% url 'analysis_index' %}" class="nav-analysis-link">戦力分析</a>{% endif %}
+        {# 戦力分析。ペナントの世界の中では、その世界の戦力分析へ向ける（世界の画面のリンクは世界の中に留める） #}
+        <a href="{% scoped_url 'analysis_index' %}" class="nav-analysis-link">戦力分析</a>
 
         <div class="app-nav-user">
           {# ペナント（実データとは別の世界）への入口。閲覧は誰でもできるので、ログインしていなくても出す #}

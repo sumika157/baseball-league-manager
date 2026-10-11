@@ -77,5 +77,7 @@ urlpatterns = [
     _pennant("games/", views.game_list, "game_list"),
     _pennant("games/<int:game_id>/", views.game_detail, "game_detail"),
     _pennant("team/<int:team_id>/", views.player_list, "player_list"),
+    _pennant("analysis/", views.analysis_index, "analysis_index"),
+    _pennant("team/<int:team_id>/analysis/", views.team_analysis, "team_analysis"),
     _pennant("team/<int:team_id>/player/<int:player_id>/", views.player_detail, "player_detail"),
 ]

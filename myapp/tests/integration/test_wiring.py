@@ -87,6 +87,7 @@ from myapp.presentation.views import (
     build_roster_service,
     build_service,
     build_team_analysis_service,
+    build_world_team_analysis_service,
     build_world_view_service,
 )
 
@@ -202,6 +203,9 @@ class BuildServiceTest(SimpleTestCase):
         """戦力分析のサービスも同じ検査にかける（組み立て口は build_*() 関数だけ）。"""
         self._assert_wired(build_team_analysis_service(), TeamAnalysisService)
 
+    def test_world_team_analysis_service_dependencies_are_wired(self):
+        self._assert_wired(build_world_team_analysis_service(7), TeamAnalysisService)
+
     def test_roster_service_dependencies_are_wired(self):
         """契約区分（昇格）のサービスも同じ検査にかける（組み立て口は build_*() 関数だけ）。"""
         self._assert_wired(build_roster_service(), RosterService)
@@ -251,6 +255,18 @@ class WorldViewScopeTest(SimpleTestCase):
         for bad in (0, -1, True):
             with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
                 build_world_view_service(bad)
+
+    def test_the_world_analysis_is_fixed_to_its_world_and_uses_the_worlds_today(self):
+        """戦力分析も、世界の範囲だけを読み、試合の無い球団の既定の年は世界の今日から取る。"""
+        service = build_world_team_analysis_service(7)
+        for name in ("_team_list_query", "_analysis_query"):
+            with self.subTest(dependency=name):
+                self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
+        self.assertIsNot(service._today, date.today)
+        self.assertEqual(build_team_analysis_service()._today, date.today)
+        for bad in (0, -1, True):
+            with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
+                build_world_team_analysis_service(bad)
 
     def test_the_header_view_takes_no_world_and_reads_each_worlds_standings_in_its_own_scope(self):
         """見出しは世界の台帳から読み、自軍の順位だけ世界の範囲のサービスで読む。"""

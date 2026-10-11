@@ -273,15 +273,40 @@ def build_recording_service() -> GameRecordingService:
 def build_team_analysis_service() -> TeamAnalysisService:
     """戦力分析のサービスを組み立てる。
 
-    `build_service()` と同じく**組み立てはここだけ**にする。依存は2つで足りるが、
-    呼ぶ側ごとに一部だけ渡さず、必ずここを通す。実データの範囲に固定する
+    `build_service()` と同じく**組み立てはここだけ**にする。依存は全部渡し、呼ぶ側ごとに
+    一部だけ渡さず、必ずここを通す。実データの範囲に固定する
     （ペナントの世界の球団を指されても、球団が見つからない扱いになる）。
+    試合の無い球団の既定の年は暦の今日。
     """
     scope = WorldScope.real()
     return TeamAnalysisService(
         team_list_query=DjangoTeamListQuery(scope),
         analysis_query=DjangoTeamAnalysisQuery(scope),
+        today=date.today,
     )
+
+
+def build_world_team_analysis_service(world_id: int) -> TeamAnalysisService:
+    """ペナントの世界ひとつの戦力分析のサービスを組み立てる。
+
+    `build_team_analysis_service()` と同じ依存を、すべて世界の範囲で作る。FA 取得の「試合の記録のある
+    最初の年」もこの範囲の試合から取るので、実データの古い年に引きずられない。試合の無い球団の
+    既定の年は、暦の今日ではなくその世界の「今日」の年。
+    """
+    scope = WorldScope.pennant(world_id)
+    return TeamAnalysisService(
+        team_list_query=DjangoTeamListQuery(scope),
+        analysis_query=DjangoTeamAnalysisQuery(scope),
+        today=_world_clock(world_id, DjangoSimulationContextQuery(scope)),
+    )
+
+
+def _analysis_scope(world_id: int | None) -> tuple[TeamAnalysisService, TeamApplicationService, WorldContext | None]:
+    """戦力分析の画面が読む範囲。世界が無ければ実データ、あればその世界（無ければ 404）。"""
+    if world_id is None:
+        return build_team_analysis_service(), build_service(), None
+    world = _world_context(world_id)
+    return build_world_team_analysis_service(world_id), build_world_view_service(world_id), world
 
 
 def build_roster_service() -> RosterService:
@@ -1568,30 +1593,34 @@ def _int_param(request, name):
 
 
 @require_GET
-def analysis_index(request):
+def analysis_index(request, world_id=None):
     """戦力分析の入口。球団を選んでいればその球団、無ければ表示順で先頭の球団へ移る。
 
     球団の切り替えフォーム（JS なしの GET）がここへ `team` と `year` を送る。
     """
-    service = build_team_analysis_service()
+    service, _, world = _analysis_scope(world_id)
     team_id = _int_param(request, "team")
     if team_id is None or not service.has_team(team_id):
         team_id = service.first_team_id()
     if team_id is None:
-        return render(request, "myapp/team_analysis.html", {"analysis": None})
+        return _render(request, "myapp/team_analysis.html", {"analysis": None}, world)
 
     query = {
         name: request.GET[name] for name in ("year", "tab", "color", "pos", "sort", "dir") if request.GET.get(name)
     }
-    url = reverse("team_analysis", args=[team_id])
+    if world is None:
+        url = reverse("team_analysis", args=[team_id])
+    else:
+        url = reverse("pennant_team_analysis", args=[world.world_id, team_id])
     return redirect(f"{url}?{urlencode(query)}" if query else url)
 
 
 @require_GET
-def team_analysis(request, team_id):
+def team_analysis(request, team_id, world_id=None):
     """球団×年度の戦力分析。閲覧だけで、書き込みの導線は無い。"""
+    analysis_service, stats, world = _analysis_scope(world_id)
     try:
-        analysis = build_team_analysis_service().get_analysis(
+        analysis = analysis_service.get_analysis(
             team_id, year=_int_param(request, "year"), tab=request.GET.get("tab"), color=request.GET.get("color")
         )
     except TeamNotFound:
@@ -1602,13 +1631,12 @@ def team_analysis(request, team_id):
         # 表の材料は選手一覧と同じ `TeamApplicationService`。戦力分析のサービスにチームの表は持たせない
         pos_mode = PITCHER_MODE if request.GET.get("pos") == PITCHER_MODE else BATTER_MODE
         sort, descending = _sort_params(request)
-        stats = build_service()
         listing = (
             stats.list_pitchers(team_id, sort=sort, descending=descending, year=analysis.year)
             if pos_mode == PITCHER_MODE
             else stats.list_batters(team_id, sort=sort, descending=descending, year=analysis.year)
         )
-        stats_tab = build_team_analysis_service().stats_tab(analysis, listing.rows)
+        stats_tab = analysis_service.stats_tab(analysis, listing.rows)
         context.update(
             {
                 "stats": stats_tab,
@@ -1619,4 +1647,4 @@ def team_analysis(request, team_id):
                 "current_descending": listing.descending,
             }
         )
-    return render(request, "myapp/team_analysis.html", context)
+    return _render(request, "myapp/team_analysis.html", context, world)

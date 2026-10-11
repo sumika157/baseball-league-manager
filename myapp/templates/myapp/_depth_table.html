@@ -2,6 +2,7 @@
 デプス表の1枚（投手側または野手側）。行が区分、列が左右。
 table は DepthTable、row_head は左端の見出し。
 {% endcomment %}
+{% load scoped %}
 <div class="table-responsive mb-4">
   <table class="table depth-table">
     <thead>
@@ -27,7 +28,7 @@ table は DepthTable、row_head は左端の見出し。
               {% for player in cell.players %}
               <li class="player-tone player-tone-{{ player.tone.key }}">
                 <span class="jersey-number">{{ player.number }}</span>
-                <a href="{% url 'player_detail' analysis.team_id player.player_id %}" class="player-name">{{ player.name }}</a>
+                <a href="{% scoped_url 'player_detail' analysis.team_id player.player_id %}" class="player-name">{{ player.name }}</a>
                 {% if player.tone.mark %}<span class="tone-mark">{{ player.tone.mark }}</span>{% endif %}
                 {% if player.is_developmental %}<span class="badge bg-primary">育成</span>{% endif %}
                 {% if player.is_foreign_player %}<span class="badge bg-info text-dark">外国人</span>{% endif %}
