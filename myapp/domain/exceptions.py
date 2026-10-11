@@ -61,6 +61,10 @@ class InvalidWorld(DomainError):
     """世界として成立しない内容（名前が空、シードが範囲外など）。"""
 
 
+class InvalidWorkspace(DomainError):
+    """ワークスペースとして成立しない内容（名前が空、key の形が違うなど）。"""
+
+
 class InvalidProfile(DomainError):
     """プロフィールの値が不正（現実的でない身長など）。"""
 
