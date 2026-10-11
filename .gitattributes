@@ -2,3 +2,4 @@
 Makefile text eol=lf
 deploy/entrypoint.sh text eol=lf
 infra/templates/* text eol=lf
+scripts/*.sh text eol=lf
