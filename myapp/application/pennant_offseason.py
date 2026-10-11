@@ -296,7 +296,7 @@ class PennantOffseasonService:
         return changes
 
     def _release_plans(self, plan: OffseasonPlan, world: World) -> tuple[tuple[PlanSection, ...], int]:
-        """引退した選手を含む編成の区画を自動に戻して保存する（判断26）。受け持つ球団のぶんの区画と、戻した球団の数。"""
+        """引退した選手を含む編成の区画を自動に戻して保存する（判断26。Wiki「ペナントモードの仕組み」の「決めたこと」）。受け持つ球団のぶんの区画と、戻した球団の数。"""
         retired = set(plan.retired)
         own_sections: tuple[PlanSection, ...] = ()
         clubs = 0

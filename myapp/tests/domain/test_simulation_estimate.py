@@ -152,7 +152,7 @@ class BatterShrinkageTest(TestCase):
         self.assertGreater(small.power, 50)
 
     def test_the_stability_point_is_where_the_sample_and_the_prior_weigh_the_same(self):
-        """安定する機会数 k で、実際の率と寄せ先の率が半々になる（設計書 3.2 の定義）。"""
+        """安定する機会数 k で、実際の率と寄せ先の率が半々になる（Wiki「ペナントモードの仕組み」の「能力と推定」）。"""
         k = 17000.0  # 丸めの影響が出ないように大きくしてある（k の値そのものは関係ない）
         observed = 2 * NPB.home_run_given_not_strikeout  # 基準値の2倍の率で、ちょうど k 回の機会
 
