@@ -1,7 +1,8 @@
 """シーズンを締めた後の支配下の人数と、新人の入団経路（#167）。
 
 世界は `test_pennant_offseason.py` と同じ（球団2つ・各23人、シーズン終了まで進めた世界A）。引退は乱数で決まるので、
-人数を突き合わせるテストは `decide_retirements` を差し替えて誰も引退させない。
+人数を突き合わせるテストは `decide_retirements` と `decide_releases` を差し替えて誰も引退・戦力外にしない
+（戦力外の規則は `test_pennant_release.py`）。
 """
 
 from unittest import mock
@@ -15,7 +16,7 @@ from myapp.infrastructure.repositories import DjangoTeamRepository
 from myapp.presentation.views import build_pennant_season_service
 
 from .test_pennant_advance import YEAR
-from .test_pennant_offseason import DECIDE_RETIREMENTS, ClosedSeasonCase, active_stints
+from .test_pennant_offseason import DECIDE_RELEASES, DECIDE_RETIREMENTS, ClosedSeasonCase, active_stints
 
 
 class RegisteredRosterAfterCloseTest(ClosedSeasonCase):
@@ -34,7 +35,7 @@ class RegisteredRosterAfterCloseTest(ClosedSeasonCase):
         before = self.registered_counts()
         limit = self.league().registered_player_limit
 
-        with mock.patch(DECIDE_RETIREMENTS, return_value=()):
+        with mock.patch(DECIDE_RETIREMENTS, return_value=()), mock.patch(DECIDE_RELEASES, return_value=()):
             self.close()
 
         after = self.registered_counts()
@@ -75,7 +76,7 @@ class RegisteredRosterAfterCloseTest(ClosedSeasonCase):
         league.registered_player_limit = registered + 3
         league.save()
 
-        with mock.patch(DECIDE_RETIREMENTS, return_value=()):
+        with mock.patch(DECIDE_RETIREMENTS, return_value=()), mock.patch(DECIDE_RELEASES, return_value=()):
             self.close()
 
         self.assertEqual(self.rookies_of(team_id).count(), 3)
@@ -89,7 +90,7 @@ class RegisteredRosterAfterCloseTest(ClosedSeasonCase):
         league.save()
         self.assertTrue(all(count > 20 for count in before.values()), "前提: どの球団も上限を超えている")
 
-        with mock.patch(DECIDE_RETIREMENTS, return_value=()):
+        with mock.patch(DECIDE_RETIREMENTS, return_value=()), mock.patch(DECIDE_RELEASES, return_value=()):
             result = self.close()
 
         self.assertEqual(result.draftee_count, 0)

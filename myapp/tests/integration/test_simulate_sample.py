@@ -162,7 +162,14 @@ class FormatOffseasonTest(TestCase):
     def test_empty_plan_does_not_crash(self):
         """引退者も残る選手もいない計画でも、要約を作れる（平均や最大を取る相手が空）。"""
         plan = OffseasonPlan(
-            year=2026, retired=(), retained=(), draftees=(), without_ratings=(), anchor=AnchorCorrection()
+            year=2026,
+            retired=(),
+            released=(),
+            retained=(),
+            draftees=(),
+            without_ratings=(),
+            anchor=AnchorCorrection(),
         )
         text = multi_season_check.format_offseason(plan, [], 2026)
         self.assertIn("引退 0人", text)
+        self.assertIn("戦力外 0人", text)

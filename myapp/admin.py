@@ -647,7 +647,9 @@ class PlayerStintForm(forms.ModelForm):
 
     class Meta:
         model = PlayerStint
-        fields = "__all__"
+        # 退団の経路はペナントの締める処理だけが書く（実データの管理画面には出さない。#168）。
+        # 出すと、在籍中の在籍に経路を付ける保存がドメインの検査（`Stint`）を通らずに入り、集約が読めなくなる
+        exclude = ("left_via",)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

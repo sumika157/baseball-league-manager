@@ -17,6 +17,7 @@ from ..domain.value_objects import (
     AdvanceReason,
     Base,
     ContractStatus,
+    DepartureRoute,
     ErrorKind,
     FieldingPosition,
     FreeAgencyKind,
@@ -32,6 +33,7 @@ POSITION_CHOICES = [(position.value, position.value) for position in Position]
 CONTRACT_STATUS_CHOICES = [(status.value, status.value) for status in ContractStatus]
 # 入団の経路・FA 宣言の種別の選択肢もドメインの値オブジェクトが唯一の出典
 ACQUISITION_ROUTE_CHOICES = [(route.value, route.value) for route in AcquisitionRoute]
+DEPARTURE_ROUTE_CHOICES = [(route.value, route.value) for route in DepartureRoute]
 FREE_AGENCY_KIND_CHOICES = [(kind.value, kind.value) for kind in FreeAgencyKind]
 # 試合で就いた守備位置。登録位置（Position）とは別の概念
 FIELDING_POSITION_CHOICES = [(p.value, p.value) for p in FieldingPosition]
@@ -304,6 +306,14 @@ class PlayerStint(models.Model):
             "FA は、加入年の前年の FA 宣言が必要です（オフの FA 移籍は宣言の翌年に加入として記録します）。"
         ),
     )
+    left_via = models.CharField(
+        max_length=10,
+        choices=DEPARTURE_ROUTE_CHOICES,
+        null=True,
+        blank=True,
+        verbose_name="退団の経路",
+        help_text="この在籍からどう離れたか（引退・戦力外）。空欄は不明か在籍中です。在籍中の在籍には設定できません。",
+    )
 
     class Meta:
         verbose_name = "在籍"
@@ -312,6 +322,11 @@ class PlayerStint(models.Model):
         constraints = [
             # 同じチームに同じ年から二重に加入することはない
             models.UniqueConstraint(fields=["player", "team", "from_year"], name="unique_player_team_from"),
+            # 在籍中の在籍は退団の経路を持てない（集約の `Stint` と同じ不変条件。集約を通らない書き込みの最後の砦）
+            models.CheckConstraint(
+                condition=models.Q(left_via__isnull=True) | models.Q(to_year__isnull=False),
+                name="stint_left_via_only_when_closed",
+            ),
         ]
 
     def __str__(self) -> str:

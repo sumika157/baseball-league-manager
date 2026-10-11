@@ -183,10 +183,10 @@ def offseason_clubs(
 
 def apply_plan(members: Sequence[Member], plan: OffseasonPlan) -> list[Member]:
     """計画を適用した翌年の現役。新人の id は既存の最大 + 1 から振る。"""
-    retired = set(plan.retired)
+    leaving = set(plan.retired) | set(plan.released)
     after = {change.player_id: change.after for change in plan.retained}
     kept = [
-        replace(m, ratings=after[m.player_id]) for m in members if m.player_id not in retired and m.player_id in after
+        replace(m, ratings=after[m.player_id]) for m in members if m.player_id not in leaving and m.player_id in after
     ]
     league_of = {m.team_id: m.league_id for m in members}
     next_id = max(m.player_id for m in members) + 1
@@ -237,6 +237,10 @@ def format_offseason(plan: OffseasonPlan, members: Sequence[Member], year: int) 
         age for player_id in plan.retired if (age := age_at_season_start(by_id[player_id].profile, year)) is not None
     ]
     foreign_retired = sum(1 for player_id in plan.retired if by_id[player_id].profile.is_foreign_player)
+    released_ages = [
+        age for player_id in plan.released if (age := age_at_season_start(by_id[player_id].profile, year)) is not None
+    ]
+    foreign_released = sum(1 for player_id in plan.released if by_id[player_id].profile.is_foreign_player)
     deltas = [change.delta for change in plan.retained]
     routes: dict[str, int] = {}
     for draftee in plan.draftees:
@@ -244,8 +248,9 @@ def format_offseason(plan: OffseasonPlan, members: Sequence[Member], year: int) 
     return "\n".join(
         [
             f"  引退 {len(plan.retired)}人（うち外国人 {foreign_retired}人・平均 {_mean(ages):.1f}歳）  "
+            f"戦力外 {len(plan.released)}人（うち外国人 {foreign_released}人・平均 {_mean(released_ages):.1f}歳）  "
             f"新人 {len(plan.draftees)}人（{'・'.join(f'{k} {v}' for k, v in routes.items())}）  "
-            f"入れ替わり {len(plan.retired) / max(1, len(members)):.1%}",
+            f"入れ替わり {(len(plan.retired) + len(plan.released)) / max(1, len(members)):.1%}",
             f"  能力の変化（総合値）平均 {_mean(deltas):+.2f}・標準偏差 {pstdev(deltas) if deltas else 0.0:.2f}・"
             f"最大 {max(deltas, default=0.0):+.1f}・最小 {min(deltas, default=0.0):+.1f}",
             f"  錨の補正（前の分布の目標からのずれ）平均 最大 {plan.anchor.mean_shift:.2f} 点"

@@ -1,6 +1,6 @@
 """ペナントの世界の「Y年オフの結果」を読む。読むだけで、書き込みはしない。
 
-締める処理（`PennantOffseasonService`）は結果を保存しない。引退・退団した選手、新人、残った選手の能力の変化は、
+締める処理（`PennantOffseasonService`）は結果を保存しない。引退・退団・戦力外の選手、新人、残った選手の能力の変化は、
 在籍・プロフィール・能力の行から `OffseasonQuery` が導く。ここはその材料を画面向けの行にするだけで、
 集約（`Team`）は組み立てない。
 
@@ -14,7 +14,7 @@ from ..domain.pennant.initial_ratings import age_at_season_start
 from ..domain.pennant.offseason import rating_change
 from ..domain.pennant.season import is_season_closed
 from ..domain.repositories import WorldRepository
-from ..domain.value_objects import Season
+from ..domain.value_objects import DepartureRoute, Season
 from .dto import (
     LeagueOption,
     OffseasonChangeRow,
@@ -42,7 +42,7 @@ class OffseasonViewService:
     def get_summary(self, world: WorldContext, year: int, *, league_id: int | None = None) -> OffseasonSummary | None:
         """Y 年のオフの結果。Y 年を締めていない（範囲外・まだ締めていない年も）なら None。
 
-        `league_id` は引退・退団と新人の絞り込み。無効な値は、世界の既定のリーグ（無ければ先頭）に落とす。
+        `league_id` は引退・退団・戦力外と新人の絞り込み。無効な値は、世界の既定のリーグ（無ければ先頭）に落とす。
         """
         if not Season.MIN_YEAR <= year < Season.MAX_YEAR or not is_season_closed(
             year=year,
@@ -72,6 +72,7 @@ class OffseasonViewService:
             retired=tuple(row for fact, row in zip(facts.retired, retired, strict=True) if fact.league_id == selected),
             rookies=tuple(row for fact, row in zip(facts.rookies, rookies, strict=True) if fact.league_id == selected),
             retired_total=len(retired),
+            released_total=sum(1 for fact in facts.retired if fact.left_via is DepartureRoute.RELEASED),
             rookie_total=len(rookies),
             risers=tuple([row for row in changes if row.delta > 0][:TOP_CHANGES]),
             decliners=tuple(
@@ -98,7 +99,7 @@ class OffseasonViewService:
             number=fact.number,
             position=fact.position.label,
             age=age_at_season_start(fact.profile, year),
-            leaving="退団" if fact.profile.is_foreign_player else "引退",
+            leaving=_leaving_label(fact),
             rating=overall_cell(fact.before) if fact.before is not None else None,
         )
 
@@ -136,3 +137,10 @@ class OffseasonViewService:
 
 def _first(leagues: tuple[LeagueOption, ...]) -> int | None:
     return leagues[0].id if leagues else None
+
+
+def _leaving_label(fact: OffseasonPlayerFact) -> str:
+    """オフの結果の区分の表記。戦力外は「戦力外」。ほか（引退・経路が不明な旧データ）は、外国人が「退団」、日本人が「引退」。"""
+    if fact.left_via is DepartureRoute.RELEASED:
+        return DepartureRoute.RELEASED.label
+    return "退団" if fact.profile.is_foreign_player else DepartureRoute.RETIRED.label

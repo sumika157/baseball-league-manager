@@ -30,6 +30,7 @@ from .exceptions import (
     InvalidProfile,
     InvalidSeason,
     InvalidStatValue,
+    InvalidStint,
 )
 
 
@@ -205,6 +206,29 @@ class AcquisitionRoute(Enum):
     @classmethod
     def labels(cls) -> list[str]:
         return [route.value for route in cls]
+
+
+class DepartureRoute(Enum):
+    """退団の経路。その在籍からどう離れたか（入団の経路 `AcquisitionRoute` と対になる）。
+
+    選択肢（永続化の choices）はこの Enum を唯一の出典とする。不明は値ではなく None で表す
+    （実データと、経路を記録する前に閉じた在籍は不明のまま。推測で埋めない）。
+    トレード・FA での退団は #40 で足す。
+    """
+
+    RETIRED = "引退"
+    RELEASED = "戦力外"
+
+    @property
+    def label(self) -> str:
+        return self.value
+
+    @classmethod
+    def from_label(cls, label: str) -> DepartureRoute:
+        for route in cls:
+            if route.value == label:
+                return route
+        raise InvalidStint(f"「{label}」は退団の経路として認識できません。")
 
 
 class FreeAgencyKind(Enum):

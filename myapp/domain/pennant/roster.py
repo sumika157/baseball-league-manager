@@ -2,9 +2,9 @@
 
 シーズンを締めた後（翌年の開幕前）の支配下は、獲得手段すべての結果としてこの帯に入るようにする
 （NPB の支配下は上限70人で、各球団60人台で開幕を迎えるのが普通）。いまの獲得手段はドラフトだけなので、
-ドラフト（`draft.draftee_count`）が帯までの不足・空きを埋める。戦力外（#168）・外国人の獲得（#169）・
-トレード（#40）・育成の昇格（#170）を足すときは、その手段で埋まる見込みを `expected` に渡し、
-ドラフトはその残りを埋める（帯の数字を手段ごとに持たない）。
+ドラフト（`draft.draftee_count`）が帯までの不足・空きを埋める。戦力外（`release.py`）は、ふだんの新人を
+迎える空きができるまで外す人数を `excess` から導く。外国人の獲得（#169）・トレード（#40）・育成の昇格（#170）を
+足すときは、その手段で埋まる見込みを `expected` に渡し、ドラフトはその残りを埋める（帯の数字を手段ごとに持たない）。
 """
 
 from __future__ import annotations
@@ -28,9 +28,20 @@ class RegisteredBand:
         帯の上端（または上限）に達している・超えている球団は、不足も空きも 0（減らす手段は帯の外の話）。
         """
         after = registered + expected
-        ceiling = self.high if limit is None else min(self.high, limit)
-        vacancy = max(0, ceiling - after)
+        vacancy = max(0, self.ceiling(limit) - after)
         return RosterGap(shortfall=min(vacancy, max(0, self.low - after)), vacancy=vacancy)
+
+    def excess(self, registered: int, *, limit: int | None, expected: int = 0) -> int:
+        """`registered` 人の球団が、`expected` 人を迎えたときに天井（上端か上限の低い方）を超える人数。
+
+        戦力外（`release.py`）が外す人数の出典。`expected` に迎えたい人数（ふだんの新人）を渡すと、
+        その空きを作るまでの人数になる。天井は `gap` と同じ（`excess > 0` なら `gap` の空きは 0）。
+        """
+        return max(0, registered + expected - self.ceiling(limit))
+
+    def ceiling(self, limit: int | None) -> int:
+        """人数の天井。帯の上端と、リーグの支配下の上限（None は無制限）の低い方。"""
+        return self.high if limit is None else min(self.high, limit)
 
 
 @dataclass(frozen=True)

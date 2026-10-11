@@ -146,8 +146,10 @@ class ForeignTest(unittest.TestCase):
     def foreign_count(self, target: DraftTeam) -> int:
         return sum(rookie.is_foreign for rookie in run(target))
 
-    def test_adds_up_to_two_foreign_players_per_year(self) -> None:
-        self.assertEqual(self.foreign_count(team(foreign=0, limit=None)), draft.MAX_FOREIGN_PER_DRAFT)
+    def test_adds_foreign_players_up_to_the_target(self) -> None:
+        """戦力外で外した外国人を同じオフに埋めるので、年2人の上限は無い（#168。2026-10-12 ユーザー決定）。"""
+        self.assertEqual(self.foreign_count(team(foreign=0, limit=None)), draft.FOREIGN_TARGET)
+        self.assertEqual(self.foreign_count(team(foreign=1, limit=None)), 3)
         self.assertEqual(self.foreign_count(team(foreign=3, limit=None)), 1)
         self.assertEqual(self.foreign_count(team(foreign=4, limit=None)), 0)
 

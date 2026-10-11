@@ -2,6 +2,7 @@
 
 from django.contrib.auth.models import User
 
+from myapp.admin import PlayerStintForm, PlayerStintInline
 from myapp.infrastructure import orm_models
 
 from .base import BaseCase
@@ -494,3 +495,26 @@ class AdminPlayerWithStintsTest(BaseCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "期間が重なる同じ背番号は登録できません")
         self.assertIsNone(self._created())
+
+
+class AdminStintDepartureRouteTest(BaseCase):
+    """退団の経路（#168）は管理画面に出さない。出すと在籍中の在籍に経路を付ける保存がドメインの検査を通らずに入り、
+    その選手のチームの集約が読めなくなる（再発防止）。"""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.admin = User.objects.create_superuser(username="root", password="x")
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(self.admin)
+
+    def test_the_stint_form_has_no_departure_route(self):
+        self.assertNotIn("left_via", PlayerStintForm().fields)
+        self.assertNotIn("left_via", PlayerStintInline.fields)
+
+    def test_the_stint_admin_page_does_not_render_it(self):
+        content = self.client.get("/admin/myapp/playerstint/add/").content.decode()
+        self.assertIn('name="number"', content)
+        self.assertNotIn('name="left_via"', content)

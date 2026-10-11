@@ -41,6 +41,7 @@ from myapp.presentation.views import (
 from .test_pennant_advance import SEASON_GAMES, YEAR, SeasonCase
 
 DECIDE_RETIREMENTS = "myapp.domain.pennant.offseason.decide_retirements"
+DECIDE_RELEASES = "myapp.domain.pennant.offseason.decide_releases"
 
 
 def active_stints(world_id: int, *, to_year=None):
@@ -265,12 +266,12 @@ class ClubPlanReleaseTest(ClosedSeasonCase):
             )
         )
 
-        with mock.patch(DECIDE_RETIREMENTS, return_value=(retiring,)):
+        with mock.patch(DECIDE_RETIREMENTS, return_value=(retiring,)), mock.patch(DECIDE_RELEASES, return_value=()):
             result = self.close()
 
         # 1軍登録を戻すと、依存するオーダー・ローテーション・抑えも戻る
-        self.assertEqual(set(result.released_sections), set(PlanSection))
-        self.assertEqual(result.released_club_count, 1)
+        self.assertEqual(set(result.reverted_sections), set(PlanSection))
+        self.assertEqual(result.reverted_club_count, 1)
         self.assertEqual(self.plan_repository().find_all(), [])
 
     def test_only_the_section_with_a_retired_player_returns(self):
@@ -279,10 +280,10 @@ class ClubPlanReleaseTest(ClosedSeasonCase):
         retiring, others = players[0], players[1:]
         self.plan_repository().save(ClubPlan(team_id, active_ids=tuple(others), rotation=(retiring, others[0])))
 
-        with mock.patch(DECIDE_RETIREMENTS, return_value=(retiring,)):
+        with mock.patch(DECIDE_RETIREMENTS, return_value=(retiring,)), mock.patch(DECIDE_RELEASES, return_value=()):
             result = self.close()
 
-        self.assertEqual(result.released_sections, (PlanSection.ROTATION,))
+        self.assertEqual(result.reverted_sections, (PlanSection.ROTATION,))
         (saved,) = self.plan_repository().find_all()
         self.assertEqual(saved.active_ids, tuple(others), "退団者を含まない区画は手動のまま")
         self.assertIsNone(saved.rotation)
@@ -293,10 +294,10 @@ class ClubPlanReleaseTest(ClosedSeasonCase):
         plan = ClubPlan(team_id, active_ids=tuple(players[1:]))
         self.plan_repository().save(plan)
 
-        with mock.patch(DECIDE_RETIREMENTS, return_value=(players[0],)):
+        with mock.patch(DECIDE_RETIREMENTS, return_value=(players[0],)), mock.patch(DECIDE_RELEASES, return_value=()):
             result = self.close()
 
-        self.assertEqual(result.released_sections, ())
+        self.assertEqual(result.reverted_sections, ())
         self.assertEqual(self.plan_repository().find_all(), [plan])
 
 
@@ -411,6 +412,8 @@ class DoubleCloseTest(ClosedSeasonCase):
             mock.patch.object(service, "_check", return_value=YEAR),
             mock.patch.object(service._ratings, "find_by_year", side_effect=blind_to_next_year),
             mock.patch(DECIDE_RETIREMENTS, return_value=(players[0],)),
+            # 戦力外も外さない（翌年に入った新人の外国人を、締めた年で閉じようとして別の検査で落ちるため）
+            mock.patch(DECIDE_RELEASES, return_value=()),
             self.assertRaises(InvalidRatings),
         ):
             service.close_season()

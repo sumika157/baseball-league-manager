@@ -2,7 +2,7 @@
 
 人数は、引退・退団の後の**支配下**の人数から、開幕前の支配下が帯（`roster.OPENING_REGISTERED_BAND`。62〜66人）に
 入るように決める（育成は数えない。`draftee_count`）。登録位置は支配下の構成と目標の構成との差の大きい位置から埋め、
-外国人は登録枠の内側で年に2人まで補う。新人の質は球団の順位によらず同じ。
+外国人は登録枠の内側で目標（4人）まで補う（戦力外で外した外国人の入れ替え。#168）。新人の質は球団の順位によらず同じ。
 新人は支配下で入り、入団の経路は日本人が「ドラフト」、外国人が「新外国人」（`Draftee.acquisition_route`）。
 能力は水準の錨の**前**の値（`offseason.py` が残る選手とまとめて錨をかける）。
 名前とプロフィールの生成は `virtual_players/generator.py`（実データへの投入と同じ関数）。
@@ -22,7 +22,7 @@ from ..value_objects import AcquisitionRoute, Position, Profile
 from ..virtual_players import generator
 from ..virtual_players.generator import AmateurPath
 from .initial_ratings import SEASON_START_MONTH, STRENGTH_UNIT
-from .prospects import draw_prospect_ratings
+from .prospects import draw_prospect_ratings, expected_prospect_ratings
 from .roster import OPENING_REGISTERED_BAND
 
 # 帯（開幕前の支配下）の出典は `roster.OPENING_REGISTERED_BAND`。ここは指名の人数の決め方だけを持つ
@@ -38,9 +38,9 @@ MIN_BY_POSITION = {
     Position.INFIELDER: 6,
     Position.OUTFIELDER: 5,
 }
-# 外国人の目標（リーグの登録枠が小さければ枠まで）と、1回のドラフトで足す上限
+# 外国人の目標（リーグの登録枠が小さければ枠まで）。1回のドラフトで目標まで足す（#168 で年2人の上限をやめた。
+# 外す外国人は戦力外が新しく迎える外国人の見込みと比べて決めるので、外した人数を同じオフに埋める）
 FOREIGN_TARGET = 4
-MAX_FOREIGN_PER_DRAFT = 2
 
 # 新人の能力の平均は経路ごと（`DraftRoute.rating_mean`）。標準偏差とスタミナの分布は `prospects.py`
 # （世界の作成で成績の無い選手＝2軍の層と同じ引き方）
@@ -163,20 +163,36 @@ def draftee_count(registered: int, *, registered_limit: int | None, expected_oth
 
     開幕前の支配下が帯（`OPENING_REGISTERED_BAND`）に入る範囲で、ふだんは `USUAL_DRAFTEES` 人。
     下端に届かないなら届く人数まで増やす（1年に `MAX_DRAFTEES` 人まで）。上端とリーグの支配下の上限
-    （`registered_limit`）は超えない。既に達している・超えている球団は0人（戦力外が無いので減らす手段は無い。
-    締める処理は上限で失敗させない）。
+    （`registered_limit`）は超えない。既に達している・超えている球団は0人（締める処理は上限で失敗させない）。
+    ふつうは、その前の戦力外（`release.py`）が `USUAL_DRAFTEES` 人を迎える空きを作っている。
 
-    `expected_other` は、ほかの獲得手段（戦力外・外国人の獲得・トレード・昇格。どれも未実装）で埋まる見込みの人数。
+    `expected_other` は、ほかの獲得手段（外国人の獲得・トレード・昇格。どれも未実装）で埋まる見込みの人数。
     ドラフトはその残りを埋める。いまは手段が無いので常に 0。
     """
     gap = OPENING_REGISTERED_BAND.gap(registered, limit=registered_limit, expected=expected_other)
     return min(max(USUAL_DRAFTEES, gap.shortfall), MAX_DRAFTEES, gap.vacancy)
 
 
+def foreign_target(foreign_limit: int | None) -> int:
+    """球団の外国人の目標人数。リーグの登録枠（None は無制限）が小さければ枠まで。
+
+    ドラフトが外国人を足す数の出典。
+    """
+    return FOREIGN_TARGET if foreign_limit is None else min(FOREIGN_TARGET, foreign_limit)
+
+
 def foreign_count_to_add(team: DraftTeam, draftees: int) -> int:
     """外国人にする新人の数。登録枠に達している球団には足さない。"""
-    target = FOREIGN_TARGET if team.foreign_limit is None else min(FOREIGN_TARGET, team.foreign_limit)
-    return max(0, min(target - team.foreign_count, MAX_FOREIGN_PER_DRAFT, draftees))
+    return max(0, min(foreign_target(team.foreign_limit) - team.foreign_count, draftees))
+
+
+def expected_rookie_ratings(route: DraftRoute, position: Position) -> BatterRatings | PitcherRatings:
+    """経路 `route` の新人に見込める能力（ぶれを除いた平均。錨の前の尺度）。
+
+    戦力外が、今の外国人と新しく迎える外国人を比べるのに使う。分布の出典は新人を引く
+    `_draw_rookie_ratings`（経路ごとの平均 `DraftRoute.rating_mean` と `prospects.draw_prospect_ratings`）。
+    """
+    return expected_prospect_ratings(mean=route.rating_mean, position=position)
 
 
 def choose_positions(team: DraftTeam, count: int) -> list[Position]:

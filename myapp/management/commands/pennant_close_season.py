@@ -35,13 +35,14 @@ class Command(BaseCommand):
         self.stdout.write(
             self.style.SUCCESS(
                 f"{result.year}年のシーズンを締めました（引退 {result.retired_count}人・"
+                f"戦力外 {result.released_count}人・"
                 f"新人 {result.draftee_count}人（うち外国人 {result.foreign_draftee_count}人））　所要 {elapsed:.2f}秒"
             )
         )
         self.stdout.write(f"{result.next_year}年の日程を作りました（{result.fixture_count}試合）")
         if result.without_ratings_count:
             self.stdout.write(f"能力の無い選手 {result.without_ratings_count}人は、翌年の能力を作りませんでした")
-        if result.released_club_count:
-            labels = "・".join(section.value for section in result.released_sections)
-            own = f"（受け持ちの球団: {labels}）" if result.released_sections else ""
-            self.stdout.write(f"引退した選手を含む編成を自動に戻した球団: {result.released_club_count}球団{own}")
+        if result.reverted_club_count:
+            labels = "・".join(section.value for section in result.reverted_sections)
+            own = f"（受け持ちの球団: {labels}）" if result.reverted_sections else ""
+            self.stdout.write(f"引退・戦力外の選手を含む編成を自動に戻した球団: {result.reverted_club_count}球団{own}")

@@ -61,6 +61,7 @@ from ..domain.value_objects import (
     AcquisitionRoute,
     BattingLine,
     ContractStatus,
+    DepartureRoute,
     FieldingLine,
     FieldingPosition,
     FreeAgencyKind,
@@ -962,6 +963,7 @@ _OFFSEASON_STINT_FIELDS = (
     "team__name",
     "team__league_id",
     "number",
+    "left_via",
 )
 
 
@@ -1027,6 +1029,8 @@ class DjangoOffseasonQuery:
             ),
             before=before.get(player_id),
             after=after.get(player_id),
+            # 空（None・空文字）は不明（経路を記録する前に締めた年・実データ）
+            left_via=DepartureRoute.from_label(row["left_via"]) if row["left_via"] else None,
         )
 
 

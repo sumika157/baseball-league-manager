@@ -21,6 +21,7 @@ from ..domain.value_objects import (
     AcquisitionRoute,
     BattingLine,
     ContractStatus,
+    DepartureRoute,
     FieldingPosition,
     FreeAgencyKind,
     Handedness,
@@ -1813,15 +1814,17 @@ class SeasonClosed:
     year: int
     next_year: int
     retired_count: int
+    # AI の戦力外の人数（引退した選手を含まない）
+    released_count: int
     # 新人の人数と、そのうち外国人の人数
     draftee_count: int
     foreign_draftee_count: int
     # 翌年の能力を作らなかった選手の数（締める年の能力が無かった選手）
     without_ratings_count: int
-    # 引退した選手を含んでいたため、自動に戻した編成の区画。受け持つ球団のぶん（無ければ空）
-    released_sections: tuple[PlanSection, ...]
+    # 引退・戦力外の選手を含んでいたため、自動に戻した編成の区画。受け持つ球団のぶん（無ければ空）
+    reverted_sections: tuple[PlanSection, ...]
     # 自動に戻した球団の数（受け持ち以外も含む）
-    released_club_count: int
+    reverted_club_count: int
     # 翌年の日程の試合数
     fixture_count: int
 
@@ -1859,11 +1862,13 @@ class OffseasonPlayerFact:
     profile: Profile
     before: BatterRatings | PitcherRatings | None
     after: BatterRatings | PitcherRatings | None
+    # 在籍の退団の経路（引退・戦力外）。None は不明（経路を記録する前に締めた年）か、退団していない
+    left_via: DepartureRoute | None = None
 
 
 @dataclass(frozen=True)
 class OffseasonFacts:
-    """締めた年の、世界全体のオフの材料（引退・退団した選手、新人、残る選手）。"""
+    """締めた年の、世界全体のオフの材料（引退・退団・戦力外の選手、新人、残る選手）。"""
 
     leagues: tuple[LeagueOption, ...]
     retired: tuple[OffseasonPlayerFact, ...]
@@ -1874,7 +1879,7 @@ class OffseasonFacts:
 
 @dataclass(frozen=True)
 class OffseasonRetiredRow:
-    """オフの結果の「引退・退団」の1行。"""
+    """オフの結果の「引退・退団・戦力外」の1行。"""
 
     player_id: int
     name: str
@@ -1884,7 +1889,7 @@ class OffseasonRetiredRow:
     position: str
     # 締める年の開幕時点の満年齢
     age: int | None
-    # 外国人は「退団」、日本人は「引退」
+    # 退団の経路が戦力外なら「戦力外」。ほか（引退・経路が不明）は外国人が「退団」、日本人が「引退」
     leaving: str
     # 締める年の総合（能力が無い選手は None）
     rating: RatingCell | None
@@ -1939,11 +1944,12 @@ class OffseasonSummary:
     own_changes: tuple[OffseasonChangeRow, ...]
     leagues: tuple[LeagueOption, ...]
     selected_league_id: int | None
-    # 選んだリーグの引退・退団と新人
+    # 選んだリーグの引退・退団・戦力外と新人
     retired: tuple[OffseasonRetiredRow, ...]
     rookies: tuple[OffseasonRookieRow, ...]
-    # 世界全体の人数
+    # 世界全体の人数（引退・退団・戦力外の合計と、そのうち戦力外。新人）
     retired_total: int
+    released_total: int
     rookie_total: int
     # 成長と衰えの大きかった選手（世界全体の上位）
     risers: tuple[OffseasonChangeRow, ...]
