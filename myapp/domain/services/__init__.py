@@ -115,6 +115,7 @@ from .scoring import (
     FieldingCredits,
     RunScored,
     assemble_game,
+    attendance_warnings,
     batting_line_for,
     earned_runs_for,
     ensure_lines_match_plate_appearances,
@@ -234,6 +235,7 @@ __all__ = [
     "runs_allowed_for",
     "runs_scored_in",
     "assemble_game",
+    "attendance_warnings",
     "team_of_players",
     # free_agency
     "COLLEGE_RULE_FROM_DRAFT_YEAR",

@@ -23,7 +23,7 @@ from ..helpers import (
     lineup_rows,
     login_as_manager,
     play_game,
-    post_game_scorebook,
+    post_game_scorebook_day_unrecorded,
     register_lineup,
 )
 from .base import BaseCase
@@ -400,7 +400,7 @@ class PlayerDetailDerivedStatsTest(BaseCase):
         game = play_game(self.team, self.rival, home_score=0, away_score=0, day=9)
         home = register_lineup(self.service, self.team, prefix="ホーム", first_number=31)
         away = register_lineup(self.service, self.rival, prefix="ビジター", first_number=41)
-        post_game_scorebook(
+        post_game_scorebook_day_unrecorded(
             self.client,
             game.id,
             {

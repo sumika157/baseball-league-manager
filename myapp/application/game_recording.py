@@ -21,8 +21,17 @@ from ..domain import services as domain_services
 from ..domain.entities import Game, PlateAppearance, Team
 from ..domain.exceptions import DomainError, InvalidGame
 from ..domain.repositories import GameRepository, LeagueRepository, TeamRepository
-from ..domain.value_objects import FieldingPosition, GameHeader, LineupEntry, Season, ensure_quota_not_exceeded
-from .dto import LineupSlot
+from ..domain.value_objects import (
+    FieldingPosition,
+    GameHeader,
+    GameTimes,
+    LineupEntry,
+    RecordWarning,
+    Season,
+    ensure_quota_not_exceeded,
+)
+from .dto import LineupSlot, ScorebookSaved
+from .queries import HomeStadiumQuery
 
 
 def _saved_id(value: int | None) -> int:
@@ -40,10 +49,12 @@ class GameRecordingService:
         games: GameRepository,
         teams: TeamRepository,
         leagues: LeagueRepository,
+        home_stadiums: HomeStadiumQuery,
     ) -> None:
         self._games = games
         self._teams = teams
         self._leagues = leagues
+        self._home_stadiums = home_stadiums
 
     def record_scorebook(
         self,
@@ -55,11 +66,18 @@ class GameRecordingService:
         away_team_id: int,
         lineup: list[LineupSlot],
         plate_appearances: list[PlateAppearance],
-    ) -> Game:
+        times: GameTimes | None,
+        attendance: int | None,
+    ) -> ScorebookSaved:
         """打席の記録で試合を上書きする。成績は打席から導く。
 
         得点を引数で受け取らないのは、打席から導ける値だから。受け取ると
-        「記録と食い違う得点」を保存できてしまう。
+        「記録と食い違う得点」を保存できてしまう。開始・終了の時刻と観客数は
+        打席から導けない手入力の事実なので受け取る（`None` は未記録。上書きで消える）。
+        **既定値は持たない**: 省略を「未記録」と同じに扱うと、渡し忘れた呼び出しの保存で記録済みの値が消える。
+
+        観客数が本拠地の収容人数を超えていても保存する。見直してほしい内容は
+        戻り値の `warnings` で返す（保存は止めない）。
         """
         current = self._games.find_by_id(game_id)
         self._ensure_not_wiping_recorded_game(current, plate_appearances)
@@ -70,6 +88,8 @@ class GameRecordingService:
             played_on=played_on,
             home_team_id=home_team_id,
             away_team_id=away_team_id,
+            times=times,
+            attendance=attendance,
         )
         entries = [
             LineupEntry(
@@ -90,7 +110,24 @@ class GameRecordingService:
         teams = [self._teams.find_by_id(team_id) for team_id in (game.home_team_id, game.away_team_id)]
         self._ensure_foreign_player_game_quota(teams, team_of)
         self._ensure_no_developmental_players(game, teams, team_of)
-        return self._games.save(game)
+        saved = self._games.save(game)
+        warnings = self.attendance_warnings_for(saved.home_team_id, saved.attendance)
+        return ScorebookSaved(game_id=_saved_id(saved.id), warnings=tuple(warning.message for warning in warnings))
+
+    def attendance_warnings_for(self, home_team_id: int, attendance: int | None) -> list[RecordWarning]:
+        """観客数が、ホーム球団の今の本拠地の収容人数を超えていないか。
+
+        **警告の経路はここだけ**（保存 API も管理画面も通る）。
+
+        他の表を読むので application の仕事（外国人の出場枠の検査と同じ置き場所）。
+        球場を引くのは観客数があるときだけ。
+        """
+        if attendance is None:
+            return []
+        stadium = self._home_stadiums.home_stadium_of(home_team_id)
+        if stadium is None:
+            return []
+        return list(domain_services.attendance_warnings(attendance, stadium.name, stadium.capacity))
 
     @staticmethod
     def _ensure_not_wiping_recorded_game(current: Game, plate_appearances: list[PlateAppearance]) -> None:

@@ -206,13 +206,32 @@ def to_plate_appearances(rows) -> list[PlateAppearance]:
     ]
 
 
+# 保存 API が必ず受け取る5つのキー（開始・終了・翌日・中断・観客数）の「未記録」。キーの欠落は 400 になる
+GAME_DAY_UNRECORDED = {
+    "start_time": "",
+    "end_time": "",
+    "ends_next_day": False,
+    "interruption_minutes": "",
+    "attendance": "",
+}
+
+
 def post_game_scorebook(client, game_id, payload):
-    """スコアブックの保存 API（api_game_scorebook）に JSON で POST する。"""
+    """スコアブックの保存 API（api_game_scorebook）に、payload をそのまま JSON で POST する（補わない）。"""
     return client.post(
         reverse("api_game_scorebook", args=[game_id]),
         data=json.dumps(payload),
         content_type="application/json",
     )
+
+
+def post_game_scorebook_day_unrecorded(client, game_id, payload):
+    """`post_game_scorebook` に、開始・終了・翌日・中断・観客数の5キーを「未記録」で補って POST する。
+
+    試合の時刻を試さないテストが毎回5つ書かずに済むように。**補っていることが呼び出しの名前に出る**
+    （キーの欠落そのものを試すテストは `post_game_scorebook` を使う）。payload に5キーがあればそちらが優先。
+    """
+    return post_game_scorebook(client, game_id, {**GAME_DAY_UNRECORDED, **payload})
 
 
 def login_as_manager(client, *teams, username="manager") -> User:

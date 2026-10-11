@@ -34,6 +34,7 @@ from .domain.value_objects import (
     AcquisitionRoute,
     ContractStatus,
     FreeAgencyKind,
+    GameTimes,
     JerseyNumber,
     StadiumProfile,
     ensure_quota_not_exceeded,
@@ -56,6 +57,7 @@ from .infrastructure.orm_models import (
 )
 from .infrastructure.repositories import DjangoLeagueRepository, DjangoTeamRepository
 from .infrastructure.scoping import games_in, leagues_in, players_in, stints_in, teams_in
+from .presentation.views import build_recording_service
 
 # ヘッダーの文言
 admin.site.site_header = "Baseball Manager 管理"
@@ -1329,6 +1331,34 @@ class GameFieldingLineInline(DerivedLinesInline):
     model = GameFieldingLine
 
 
+class GameForm(DomainCheckedForm):
+    """試合の編集。開始・終了の時刻と中断は、ドメインの `GameTimes` に検査させる。
+
+    片方だけの時刻・終了が開始より前などの規則は値オブジェクトが唯一の出典で、ここには書かない。
+    """
+
+    class Meta:
+        model = Game
+        fields = "__all__"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # 空欄は0分（中断なし）。モデルの既定値がそのまま入る
+        self.fields["interruption_minutes"].required = False
+
+    def clean_interruption_minutes(self):
+        # 空欄は0分。None のまま保存すると NOT NULL 制約で落ちる
+        return self.cleaned_data.get("interruption_minutes") or 0
+
+    def build_value_object(self, cleaned):
+        return GameTimes.from_inputs(
+            cleaned.get("start_time"),
+            cleaned.get("end_time"),
+            cleaned.get("ends_next_day", False),
+            cleaned.get("interruption_minutes"),
+        )
+
+
 @admin.register(Game)
 class GameAdmin(RealDataOnlyMixin, admin.ModelAdmin):
     """試合。チームの勝敗も選手の通算成績も、すべてここから集計される。
@@ -1337,6 +1367,7 @@ class GameAdmin(RealDataOnlyMixin, admin.ModelAdmin):
     成績は打席から導く値なので閲覧のみ（スコアブック画面で記録する）。
     """
 
+    form = GameForm
     list_display = ("played_on", "year", "matchup", "score", "result")
     list_filter = ("year", ("home_team__league", RealDataRelatedFieldListFilter))
     date_hierarchy = "played_on"
@@ -1348,8 +1379,19 @@ class GameAdmin(RealDataOnlyMixin, admin.ModelAdmin):
             None,
             {
                 "description": "試合の記録（打席・得点・成績）はスコアブック画面（試合詳細の「記録を編集」、"
-                "試合の登録は「試合を登録」）で行います。管理画面で直せるのは基本情報だけです。",
-                "fields": ("year", "played_on", "home_team", "away_team"),
+                "試合の登録は「試合を登録」）で行います。管理画面で直せるのは基本情報だけです。"
+                "試合時間は「終了 − 開始 − 中断」から自動で決まります。",
+                "fields": (
+                    "year",
+                    "played_on",
+                    "home_team",
+                    "away_team",
+                    "start_time",
+                    "end_time",
+                    "ends_next_day",
+                    "interruption_minutes",
+                    "attendance",
+                ),
             },
         ),
         (
@@ -1361,6 +1403,12 @@ class GameAdmin(RealDataOnlyMixin, admin.ModelAdmin):
         ),
     )
     readonly_fields = ("home_score", "away_score")
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        # 観客数が本拠地の収容人数を超えていても保存は止めず、見直しを促す（警告の経路は保存 API と同じ）
+        for warning in build_recording_service().attendance_warnings_for(obj.home_team_id, obj.attendance):
+            self.message_user(request, warning.message, level=messages.WARNING)
 
     def get_readonly_fields(self, request, obj=None):
         """登録済みの試合は対戦カードも固定する。

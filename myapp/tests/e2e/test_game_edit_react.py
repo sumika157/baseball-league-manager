@@ -84,3 +84,45 @@ class GameEditReactTest(PlaywrightTestCase):
         self.assertEqual(orm_models.GamePlateAppearance.objects.filter(game_id=self.game.id).count(), 1)
         batting = orm_models.GameBattingLine.objects.get(game_id=self.game.id, player_id=self.batter.id)
         self.assertEqual((batting.home_runs, batting.at_bats, batting.runs_batted_in), (1, 1, 1))
+
+    def _record_a_home_run(self):
+        """打順を決めて本塁打を1つ記録する（保存はしない）。"""
+        self._login()
+        self.page.goto(self.live_server_url + reverse("game_edit", args=[self.game.id]))
+        self.page.get_by_label("ビジターズ 1番の選手", exact=True).select_option(str(self.batter.id))
+        self.page.get_by_label("ビジターズ 1番の守備位置", exact=True).select_option("指")
+        self.page.get_by_label("ホームズ 1番の選手", exact=True).select_option(str(self.home_batter.id))
+        self.page.get_by_label("ホームズ 1番の守備位置", exact=True).select_option("指")
+        self.page.get_by_role("button", name="次の打席を記録する").click()
+        self.page.get_by_label("結果", exact=True).select_option("本塁打")
+        self.page.get_by_label("投手", exact=True).select_option(str(self.pitcher.id))
+        self.page.get_by_role("button", name="この打席を記録する").click()
+
+    def test_times_and_attendance_are_saved_and_shown_on_the_detail(self):
+        self._record_a_home_run()
+
+        self.page.get_by_label("開始時刻").fill("18:19")
+        self.page.get_by_label("終了時刻").fill("21:09")
+        self.page.get_by_label("観客数").fill("42071")
+        self.page.get_by_role("button", name="保存する").click()
+        self.page.wait_for_url(f"{self.live_server_url}{reverse('game_detail', args=[self.game.id])}")
+
+        items = self.page.get_by_test_id("game-day-items").inner_text()
+        self.assertEqual(items, "開始 18:19 ◇ 終了 21:09 ◇ 試合時間 2時間50分 ◇ 観客 42,071人")
+
+    def test_an_attendance_over_the_capacity_warns_and_stays_on_the_page(self):
+        stadium = orm_models.Stadium.objects.create(name="小さな球場", capacity=1000)
+        orm_models.Team.objects.filter(id=self.team.id).update(home_stadium=stadium)
+        self._record_a_home_run()
+
+        self.page.get_by_label("観客数").fill("5000")
+        self.page.get_by_role("button", name="保存する").click()
+
+        warnings = self.page.get_by_test_id("save-warnings")
+        warnings.wait_for()
+        self.assertIn("保存しました。", warnings.inner_text())
+        self.assertIn("5,000人", warnings.inner_text())
+        self.assertIn("収容人数（1,000人）", warnings.inner_text())
+        self.assertIn(reverse("game_edit", args=[self.game.id]), self.page.url)
+        # 保存は済んでいる
+        self.assertEqual(orm_models.Game.objects.get(id=self.game.id).attendance, 5000)

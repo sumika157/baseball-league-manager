@@ -9,10 +9,11 @@ from collections.abc import Sequence
 from typing import Any, cast
 
 from django import forms
+from django.core.exceptions import ValidationError
 
 from ..application.dto import LeagueTeams, LineupSlot
 from ..domain.entities import FieldingError, PlateAppearance, RunnerAdvance
-from ..domain.exceptions import InvalidJerseyNumber, InvalidPosition
+from ..domain.exceptions import DomainError, InvalidJerseyNumber, InvalidPosition
 from ..domain.pennant.world import MAX_NAME_LENGTH, MAX_SEED, MAX_SOURCE_LEAGUES, MAX_START_YEAR
 from ..domain.value_objects import (
     AdvanceReason,
@@ -20,6 +21,7 @@ from ..domain.value_objects import (
     ContractStatus,
     ErrorKind,
     FieldingPosition,
+    GameTimes,
     JerseyNumber,
     PlateAppearanceResult,
     Position,
@@ -117,6 +119,39 @@ class ScorebookGameForm(forms.Form):
     played_on = forms.DateField(label="試合日", widget=forms.DateInput(attrs={"type": "date"}))
     home_team = forms.IntegerField(label="ホーム", widget=forms.HiddenInput)
     away_team = forms.IntegerField(label="ビジター", widget=forms.HiddenInput)
+    # 打席からは導けない手入力の事実。空は未記録（キーが無いのはここでなく API が弾く）
+    start_time = forms.TimeField(label="開始時刻", required=False)
+    end_time = forms.TimeField(label="終了時刻", required=False)
+    ends_next_day = forms.BooleanField(label="終了が翌日", required=False)
+    interruption_minutes = forms.IntegerField(label="中断時間（分）", min_value=0, required=False)
+    attendance = forms.IntegerField(label="観客数", min_value=0, required=False)
+
+    def to_times(self) -> GameTimes | None:
+        """開始・終了・翌日・中断から `GameTimes` を組み立てる。両方空なら未記録（None）。
+
+        規則（終了は開始より後、中断は長さより短い、など）はドメインが唯一の出典で、
+        ここは `DomainError` を `ValidationError` に訳すだけ。
+        """
+        data = self.cleaned_data
+        try:
+            return GameTimes.from_inputs(
+                data.get("start_time"),
+                data.get("end_time"),
+                data.get("ends_next_day", False),
+                data.get("interruption_minutes"),
+            )
+        except DomainError as error:
+            raise ValidationError(str(error)) from None
+
+    def clean(self) -> dict[str, Any]:
+        cleaned = super().clean() or {}
+        # 時刻や数の型が不正なら、先にそのエラーを出す（ここでは重ねない）
+        if not any(name in self.errors for name in ("start_time", "end_time", "interruption_minutes")):
+            try:
+                cleaned["times"] = self.to_times()
+            except ValidationError as error:
+                self.add_error("end_time", error)
+        return cleaned
 
 
 class LineupSlotForm(forms.Form):

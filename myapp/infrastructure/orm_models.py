@@ -388,6 +388,17 @@ class Game(models.Model):
     away_team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="away_games", verbose_name="ビジター")
     home_score = models.PositiveIntegerField(default=0, verbose_name="ホーム得点")
     away_score = models.PositiveIntegerField(default=0, verbose_name="ビジター得点")
+    # 試合の開始・終了時刻（試合日の現地の時刻）・中断・観客数。打席からは導けない手入力の事実
+    # （試合時間は持たない。`GameTimes` が終了 − 開始 − 中断で導く）。集計しないので索引は付けない
+    start_time = models.TimeField(null=True, blank=True, verbose_name="開始時刻")
+    end_time = models.TimeField(null=True, blank=True, verbose_name="終了時刻")
+    ends_next_day = models.BooleanField(default=False, verbose_name="終了が翌日")
+    interruption_minutes = models.PositiveIntegerField(
+        default=0,
+        verbose_name="中断時間（分）",
+        help_text="雨天・停電などの中断。試合時間から差し引きます。",
+    )
+    attendance = models.PositiveIntegerField(null=True, blank=True, verbose_name="観客数")
 
     class Meta:
         verbose_name = "試合"

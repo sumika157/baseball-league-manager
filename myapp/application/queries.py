@@ -22,6 +22,7 @@ from .dto import (
     ActivePlayerStats,
     GameNote,
     GameRow,
+    HomeStadium,
     OffseasonFacts,
     PeriodBatting,
     PeriodPitching,
@@ -142,6 +143,18 @@ class PlayerFieldingQuery(Protocol):
 
     def for_player(self, player_id: int, team_id: int) -> PlayerFielding | None:
         """通算と、そのチームでの年度別。守備に就いた試合が1つも無ければ None。"""
+        ...
+
+
+@runtime_checkable
+class HomeStadiumQuery(Protocol):
+    """球団の本拠地の球場の参照。観客数が収容人数を超えていないかの照合の材料。
+
+    球場のリポジトリは無く、`Team` 集約は球場の id しか持たないので、参照クエリで引く。
+    """
+
+    def home_stadium_of(self, team_id: int) -> HomeStadium | None:
+        """球団の本拠地の名前と収容人数。本拠地が無い（または球団が範囲に無い）なら None。"""
         ...
 
 

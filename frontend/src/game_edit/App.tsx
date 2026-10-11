@@ -21,17 +21,26 @@ export function App({ payload }: Props) {
   const [state, setState] = useState<ScorebookState>(() => buildInitialState(payload));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // 保存は済んだが警告がある（試合詳細へは移らず、見直せるようにここに留める）
+  const [saved, setSaved] = useState<string[] | null>(null);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSaving(true);
     setError(null);
+    setSaved(null);
 
     const body = buildRequestBody(state, payload);
     const result = await postJson<GameUpdateSuccess>(payload.urls.save, payload.csrf_token, body);
 
     if (result.ok) {
-      window.location.assign(result.redirect_url);
+      if (result.warnings.length === 0) {
+        window.location.assign(result.redirect_url);
+        return;
+      }
+      setSaved(result.warnings);
+      setSaving(false);
+      window.scrollTo({ top: 0 });
       return;
     }
 
@@ -45,6 +54,20 @@ export function App({ payload }: Props) {
       {error && (
         <div className="alert alert-danger" role="alert">
           {error}
+        </div>
+      )}
+
+      {saved && (
+        <div className="alert alert-warning" role="alert" data-testid="save-warnings">
+          <p className="mb-1">保存しました。次の点を確かめてください。</p>
+          <ul className="mb-2">
+            {saved.map((message) => (
+              <li key={message}>{message}</li>
+            ))}
+          </ul>
+          <p className="mb-0">
+            直す場合は直してもう一度保存してください。<a href={payload.urls.detail}>試合詳細へ</a>
+          </p>
         </div>
       )}
 

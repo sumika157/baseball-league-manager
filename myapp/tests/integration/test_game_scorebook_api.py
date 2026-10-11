@@ -5,12 +5,14 @@
 業務ルールそのものは DB を使わない `tests/domain/test_plate_appearances.py` にある。
 """
 
+from datetime import time
+
 from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import BattingLine, InningsPitched, PitchingLine
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
 
-from ..helpers import login_as_manager, play_game, post_game_scorebook
+from ..helpers import GAME_DAY_UNRECORDED, login_as_manager, play_game, post_game_scorebook
 from .base import BaseCase
 
 # 塁の値（ドメインの Base と同じ）。API は数値で受け取る
@@ -114,6 +116,7 @@ class ScorebookApiTest(BaseCase):
             "away_team": self.rival.id,
             "lineup": self._lineup(),
             "plate_appearances": self._plate_appearances(),
+            **GAME_DAY_UNRECORDED,
         }
         payload.update(overrides)
         return payload
@@ -331,3 +334,105 @@ class ScorebookApiTest(BaseCase):
         response = post_game_scorebook(self.client, self.game.id, self._payload(lineup=[], plate_appearances=[]))
 
         self.assertEqual(response.status_code, 200, response.content)
+
+    # --- 開始・終了・中断・観客数（#44） ---
+
+    def _saved(self):
+        return DjangoGameRepository(WorldScope.real()).find_by_id(self.game.id)
+
+    def _day(self, **overrides):
+        values = {
+            "start_time": "18:19",
+            "end_time": "21:09",
+            "ends_next_day": False,
+            "interruption_minutes": "",
+            "attendance": 30000,
+        }
+        values.update(overrides)
+        return self._payload(**values)
+
+    def test_the_times_and_the_attendance_are_saved(self):
+        response = post_game_scorebook(
+            self.client, self.game.id, self._day(interruption_minutes=25, attendance="42071")
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        saved = self._saved()
+        assert saved.times is not None
+        self.assertEqual((saved.times.start, saved.times.end), (time(18, 19), time(21, 9)))
+        self.assertEqual(saved.times.net_minutes, 145)
+        self.assertEqual(saved.attendance, 42071)
+        self.assertEqual(response.json()["warnings"], [])
+
+    def test_empty_values_return_the_game_to_unrecorded(self):
+        post_game_scorebook(self.client, self.game.id, self._day())
+
+        response = post_game_scorebook(
+            self.client, self.game.id, self._day(start_time="", end_time=None, attendance=None)
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        saved = self._saved()
+        self.assertIsNone(saved.times)
+        self.assertIsNone(saved.attendance)
+
+    def test_a_missing_day_key_is_rejected_and_the_saved_values_remain(self):
+        """キーの欠落を「未入力」と同じに扱わない（キーを落としたクライアントの保存で記録済みの値が消えるため）。"""
+        post_game_scorebook(self.client, self.game.id, self._day())
+
+        for key in ("start_time", "end_time", "ends_next_day", "interruption_minutes", "attendance"):
+            with self.subTest(key=key):
+                payload = self._payload(**GAME_DAY_UNRECORDED)
+                del payload[key]
+                response = post_game_scorebook(self.client, self.game.id, payload)
+
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.json()["error"], "リクエストの形式が不正です。")
+                self.assertEqual(self._saved().attendance, 30000)
+
+    def test_a_start_without_an_end_is_rejected(self):
+        response = post_game_scorebook(self.client, self.game.id, self._day(end_time=""))
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("開始時刻と終了時刻は両方入力してください", response.json()["error"])
+
+    def test_an_end_before_the_start_is_rejected(self):
+        response = post_game_scorebook(self.client, self.game.id, self._day(start_time="21:00", end_time="18:00"))
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("終了時刻は開始時刻より後", response.json()["error"])
+
+    def test_an_interruption_without_times_is_rejected(self):
+        response = post_game_scorebook(
+            self.client, self.game.id, self._day(start_time="", end_time="", interruption_minutes=10)
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_an_attendance_over_the_home_capacity_is_saved_with_one_warning(self):
+        orm_models.Stadium.objects.filter(id=self.stadium.id).update(capacity=40000)
+
+        response = post_game_scorebook(self.client, self.game.id, self._day(attendance=50000))
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(self._saved().attendance, 50000)
+        warnings = response.json()["warnings"]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("50,000人", warnings[0])
+        self.assertIn("テスト球場", warnings[0])
+
+    def test_a_home_team_without_a_stadium_gives_no_warning(self):
+        orm_models.Team.objects.filter(id=self.team.id).update(home_stadium=None)
+
+        response = post_game_scorebook(self.client, self.game.id, self._day(attendance=999999))
+
+        self.assertEqual(response.json()["warnings"], [])
+
+    def test_a_home_stadium_without_a_capacity_gives_no_warning_and_saves(self):
+        orm_models.Stadium.objects.filter(id=self.stadium.id).update(capacity=None)
+
+        response = post_game_scorebook(self.client, self.game.id, self._day(attendance=999999))
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["warnings"], [])
+        self.assertEqual(self._saved().attendance, 999999)

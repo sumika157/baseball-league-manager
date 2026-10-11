@@ -34,6 +34,11 @@ export function buildInitialState(payload: GameEditPayload): ScorebookState {
   return {
     year: String(payload.game.year),
     played_on: payload.game.played_on,
+    start_time: payload.game.start_time,
+    end_time: payload.game.end_time,
+    ends_next_day: payload.game.ends_next_day,
+    interruption_minutes: payload.game.interruption_minutes === null ? "" : String(payload.game.interruption_minutes),
+    attendance: payload.game.attendance === null ? "" : String(payload.game.attendance),
     lineups,
     plate_appearances: [...payload.plate_appearances].sort((a, b) => a.sequence - b.sequence),
   };
@@ -53,6 +58,11 @@ export function buildRequestBody(state: ScorebookState, payload: GameEditPayload
     played_on: state.played_on,
     home_team: payload.game.home_team,
     away_team: payload.game.away_team,
+    start_time: state.start_time,
+    end_time: state.end_time,
+    ends_next_day: state.ends_next_day,
+    interruption_minutes: state.interruption_minutes,
+    attendance: state.attendance,
     lineup,
     plate_appearances: state.plate_appearances,
   };

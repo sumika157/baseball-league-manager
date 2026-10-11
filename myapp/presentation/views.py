@@ -76,6 +76,7 @@ from ..domain.value_objects import (
 from ..infrastructure.queries import (
     DjangoFieldingTotalsQuery,
     DjangoGameListQuery,
+    DjangoHomeStadiumQuery,
     DjangoOffseasonQuery,
     DjangoPennantActivityQuery,
     DjangoPlayerFieldingQuery,
@@ -260,13 +261,14 @@ def build_recording_service() -> GameRecordingService:
     """スコアブックを保存するサービスを組み立てる。
 
     `build_service()` と同じく**組み立てはここだけ**にする。打席の記録は
-    チームの一覧も試合の一覧も要らないので、依存は3つで足りる。実データの範囲に固定する。
+    チームの一覧も試合の一覧も要らないので、依存は4つ（試合・チーム・リーグ・本拠地の球場）で足りる。実データの範囲に固定する。
     """
     scope = WorldScope.real()
     return GameRecordingService(
         games=DjangoGameRepository(scope),
         teams=DjangoTeamRepository(scope),
         leagues=DjangoLeagueRepository(scope),
+        home_stadiums=DjangoHomeStadiumQuery(scope),
     )
 
 
@@ -1309,6 +1311,12 @@ def _game_edit_payload(request, data: GameEditData) -> dict:
             "away_team": game.away_team_id,
             "home_score": game.home_score,
             "away_score": game.away_score,
+            # 手入力の事実。時刻は時:分の文字列、未記録は空文字・null
+            "start_time": game.start_time,
+            "end_time": game.end_time,
+            "ends_next_day": game.ends_next_day,
+            "interruption_minutes": game.interruption_minutes,
+            "attendance": game.attendance,
         },
         "teams": [
             {

@@ -65,6 +65,8 @@ class GameEditPayloadTest(FieldingTestBase):
             away_team_id=self.rival.id,
             lineup=slots,
             plate_appearances=[*entries, *extra],
+            times=None,
+            attendance=None,
         )
 
     def _snapshot(self, payload: dict) -> dict:

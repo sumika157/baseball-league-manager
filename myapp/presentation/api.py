@@ -40,6 +40,8 @@ def _as_row_list(body: dict, key: str) -> list | None:
     return value
 
 
+# 開始・終了時刻・翌日・中断・観客数。未記録は空文字か null で送らせ、キーの欠落は弾く
+GAME_DAY_KEYS = ("start_time", "end_time", "ends_next_day", "interruption_minutes", "attendance")
 ENTRY_KEYS = ("entered_inning", "entered_is_bottom", "entered_batter")
 
 
@@ -134,6 +136,10 @@ def game_scorebook(request, game_id):
     if missing_entry is not None:
         return JsonResponse({"ok": False, "error": missing_entry}, status=400)
 
+    if any(key not in body for key in GAME_DAY_KEYS):
+        # キーの欠落を「未入力」と同じに扱うと、キーを落としたクライアントの保存で記録済みの値が消える
+        return JsonResponse({"ok": False, "error": "リクエストの形式が不正です。"}, status=400)
+
     game_form = ScorebookGameForm(body)
     lineup_forms = [LineupSlotForm(row) for row in lineup_data]
     for form in (game_form, *lineup_forms):
@@ -145,7 +151,7 @@ def game_scorebook(request, game_id):
         return JsonResponse({"ok": False, "error": error}, status=400)
 
     try:
-        build_recording_service().record_scorebook(
+        saved = build_recording_service().record_scorebook(
             game_id,
             year=game_form.cleaned_data["year"],
             played_on=game_form.cleaned_data["played_on"],
@@ -153,8 +159,17 @@ def game_scorebook(request, game_id):
             away_team_id=game_form.cleaned_data["away_team"],
             lineup=[form.to_slot() for form in lineup_forms],
             plate_appearances=plate_appearances,
+            times=game_form.cleaned_data["times"],
+            attendance=game_form.cleaned_data["attendance"],
         )
     except DomainError as error_raised:
         return JsonResponse({"ok": False, "error": str(error_raised)}, status=400)
 
-    return JsonResponse({"ok": True, "redirect_url": reverse("game_detail", args=[game_id])})
+    return JsonResponse(
+        {
+            "ok": True,
+            "redirect_url": reverse("game_detail", args=[game_id]),
+            # 保存は済んでいる。見直してほしい内容（例: 観客数が収容人数を超えている）。無ければ空の配列
+            "warnings": list(saved.warnings),
+        }
+    )

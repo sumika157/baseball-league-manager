@@ -17,6 +17,7 @@ from myapp.domain.entities import Game, Player
 from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import BattingLine, FieldingPosition, JerseyNumber, Season
 from myapp.infrastructure import orm_models
+from myapp.infrastructure.queries import DjangoHomeStadiumQuery
 from myapp.infrastructure.repositories import DjangoGameRepository, DjangoLeagueRepository, DjangoTeamRepository
 from myapp.presentation.views import build_pennant_world_service
 
@@ -150,6 +151,7 @@ class WorldCase(BaseCase):
             games=games,
             teams=DjangoTeamRepository(cls.scope),
             leagues=DjangoLeagueRepository(cls.scope),
+            home_stadiums=DjangoHomeStadiumQuery(cls.scope),
         )
         assert empty.id is not None
         saved = recording.record_scorebook(
@@ -169,8 +171,10 @@ class WorldCase(BaseCase):
                     home_pitchers={1: home_pitcher},
                 )
             ),
+            times=None,
+            attendance=None,
         )
-        cls.pennant_game_id = saved.id
+        cls.pennant_game_id = saved.game_id
         cls.pennant_home_batters = home_batters
 
     def world_urls(self, world_id=None) -> list[str]:
