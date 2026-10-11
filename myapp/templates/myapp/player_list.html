@@ -17,7 +17,7 @@
   <p class="page-subtitle">
     {% if pos_mode == 'pitcher' %}投手{% else %}野手{% endif %}{% if ratings_table %}能力{% else %}成績{% endif %}{% if stats_year %}（{{ stats_year }}年）{% endif %}
     · {{ players|length }}名
-    · <a href="{% scoped_url 'team_analysis' team_id %}">戦力分析</a>
+    · <a href="{% scoped_url 'team_analysis' team_id %}">戦力分析</a>{% if world %} · <a href="{% url 'pennant_team_history' world.world_id team_id %}">球団史</a>{% endif %}
   </p>
 </div>
 

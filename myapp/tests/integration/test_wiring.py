@@ -18,6 +18,7 @@ from django.test import SimpleTestCase
 from myapp.application.club_management import ClubManagementService
 from myapp.application.game_recording import GameRecordingService
 from myapp.application.pennant_club_details import ClubDetailsService
+from myapp.application.pennant_history import PennantHistoryService
 from myapp.application.pennant_home import PennantHomeService
 from myapp.application.pennant_offseason import PennantOffseasonService
 from myapp.application.pennant_offseason_view import OffseasonViewService
@@ -77,6 +78,7 @@ from myapp.presentation.views import (
     build_club_details_service,
     build_club_service,
     build_offseason_view_service,
+    build_pennant_history_service,
     build_pennant_home_service,
     build_pennant_offseason_service,
     build_pennant_ratings_service,
@@ -189,6 +191,9 @@ class BuildServiceTest(SimpleTestCase):
 
     def test_pennant_home_service_dependencies_are_wired(self):
         self._assert_wired(build_pennant_home_service(7), PennantHomeService)
+
+    def test_pennant_history_service_dependencies_are_wired(self):
+        self._assert_wired(build_pennant_history_service(7), PennantHistoryService)
 
     def test_pennant_world_view_dependencies_are_wired(self):
         self._assert_wired(build_pennant_world_view(), PennantWorldViewService)
@@ -390,6 +395,27 @@ class PennantHomeScopeTest(SimpleTestCase):
         for bad in (0, -1, True):
             with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
                 build_pennant_home_service(bad)
+
+
+class PennantHistoryScopeTest(SimpleTestCase):
+    """歴代の記録と球団史は、渡された世界の範囲だけを読む。"""
+
+    SCOPED = ("_games", "_team_records", "_leagues")
+
+    def test_every_dependency_is_fixed_to_the_given_world(self):
+        service = build_pennant_history_service(7)
+        for name in self.SCOPED:
+            with self.subTest(dependency=name):
+                self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
+        self.assertEqual(service._teams._games._scope, WorldScope.pennant(7), "順位・タイトルも世界の範囲のサービス")
+
+    def test_a_different_world_gets_a_different_scope(self):
+        self.assertEqual(build_pennant_history_service(8)._games._scope, WorldScope.pennant(8))
+
+    def test_the_real_data_cannot_be_read_as_a_history(self):
+        for bad in (0, -1, True):
+            with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
+                build_pennant_history_service(bad)
 
 
 class ClubServiceScopeTest(SimpleTestCase):

@@ -1,0 +1,4 @@
+{% comment %}
+歴代の記録のタイトルの1年ぶんのセル（TitleHolderCell の並び）。受賞者が無い部門は「—」。
+{% endcomment %}
+{% load scoped %}{% for cell in cells %}<td>{% for holder in cell.holders %}<div><a href="{% scoped_url 'player_detail' holder.team_id holder.player_id %}">{{ holder.player_name }}</a> <span class="stat-muted tabular-nums">{{ holder.value }}</span></div>{% empty %}<span class="stat-muted">—</span>{% endfor %}</td>{% endfor %}

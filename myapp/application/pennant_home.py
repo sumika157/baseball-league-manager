@@ -43,11 +43,11 @@ from .dto import (
     WorldDeletion,
     WorldFinale,
 )
-from .pennant_race import own_race, remaining_by_team, tiebreak_for
+from .pennant_race import final_standings, own_race, remaining_by_team, team_order, tiebreak_for
 from .queries import GameListQuery, PennantActivityQuery
 from .scorebook_view import build_line_score
 from .services import TeamApplicationService
-from .standings import league_standings
+from .standings import record_label
 
 # 今後の日程に出す件数
 UPCOMING_GAMES = 5
@@ -67,11 +67,6 @@ _LABELS = {
     AdvanceTarget.MONTH_END: "月末まで進める",
     AdvanceTarget.LIMIT: "上限まで進める",
 }
-
-
-def _record_label(wins: int, losses: int, ties: int) -> str:
-    """「80勝60敗3分」（引分が無ければ「80勝60敗」）。"""
-    return f"{wins}勝{losses}敗" + (f"{ties}分" if ties else "")
 
 
 def _saved_id(value: int | None) -> int:
@@ -137,7 +132,7 @@ class PennantHomeService:
             titles=self._title_race(own_id, own_league_id, stats_year),
             stats_year=stats_year,
             shows_previous_season=stats_year != year,
-            finale=self._finale(world, stats_year, standings),
+            finale=self._finale(world),
         )
 
     def get_deletion(self, world: WorldContext) -> WorldDeletion:
@@ -190,7 +185,7 @@ class PennantHomeService:
             previous_year=stats_year if previous is not None else None,
             previous_rank=previous.rank if previous is not None else None,
             previous_record=(
-                _record_label(previous.wins, previous.losses, previous.ties) if previous is not None else ""
+                record_label(previous.wins, previous.losses, previous.ties) if previous is not None else ""
             ),
             race=(
                 own_race(
@@ -204,35 +199,37 @@ class PennantHomeService:
             ),
         )
 
-    def _finale(self, world: WorldContext, latest_year: int, latest: list[LeagueStandings]) -> WorldFinale | None:
+    def _finale(self, world: WorldContext) -> WorldFinale | None:
         """最終シーズンを終えた世界の、自軍の年度ごとの順位と通算。終えていない世界・受け持つ球団が無い世界は None。
 
-        `latest` は最後の年（`latest_year`）の順位で、ホームが読んだものを使う（二重に読まない）。
-        ほかの年は `_standings_by_year` が球団とリーグを1回だけ読み、年ごとに試合だけを読む。
+        年ごとの最終順位と優勝は `final_standings`（歴代の記録・球団史と同じ関数。優勝の決め方は domain の
+        `league_champion`）から取る。球団とリーグは1回だけ読み、年ごとにその年の試合だけを読む。
         終えた世界だけが読む（最大 `MAX_SEASONS_PER_WORLD` 年ぶん）。
-        優勝は、その年の最終順位で単独の首位か、同率なら規定（domain の `season_champion`）で決まった球団。
         自軍が載らない年（その年に試合の無い球団）は読み飛ばす。
         """
         own_id = world.managed_team_id
         if own_id is None or not world.is_over:
             return None
-        years = sorted(self._games.list_seasons(recorded_only=True))
-        by_year = self._standings_by_year([year for year in years if year != latest_year])
-        by_year[latest_year] = latest
+        finals = final_standings(
+            self._games.list_seasons(recorded_only=True),
+            teams=self._team_records.find_all(),
+            leagues=self._leagues.find_all(),
+            games_of=lambda year: self._games.list_for_standings(year=year),
+            order=team_order(self._teams),
+        )
         seasons: list[FinaleSeason] = []
         wins = losses = ties = 0
-        for year in years:
-            standings = by_year[year]
-            row = _find_row(standings, own_id)
-            if row is None:
+        for final in finals:
+            result = final.result_of(own_id)
+            if result is None:
                 continue
-            race = own_race(standings, {}, own_id, tiebreak_for(year, games=self._games, teams=self._teams))
+            row, is_champion = result
             seasons.append(
                 FinaleSeason(
-                    year=year,
+                    year=final.year,
                     rank=row.rank,
-                    record=_record_label(row.wins, row.losses, row.ties),
-                    is_champion=race is not None and race.clinched,
+                    record=record_label(row.wins, row.losses, row.ties),
+                    is_champion=is_champion,
                 )
             )
             wins += row.wins
@@ -244,22 +241,8 @@ class PennantHomeService:
             losses=losses,
             ties=ties,
             titles=sum(1 for s in seasons if s.is_champion),
-            record=_record_label(wins, losses, ties),
+            record=record_label(wins, losses, ties),
         )
-
-    def _standings_by_year(self, years: list[int]) -> dict[int, list[LeagueStandings]]:
-        """複数の年のリーグ別の順位。球団とリーグは1回だけ読み、年ごとにその年の試合だけを読む。
-
-        順位表の組み立ては `application/standings.py` の `league_standings`（順位の規則は domain の `standings`）。
-        行の写しも `application/standings.py` の `standing_row_of`（`TeamApplicationService` と同じ関数）。
-        """
-        teams = self._team_records.find_all()
-        leagues = self._leagues.find_all()
-        result: dict[int, list[LeagueStandings]] = {}
-        for year in years:
-            games = self._games.list_for_standings(year=year)
-            result[year] = league_standings(teams, leagues, games)
-        return result
 
     # --- 次の試合・進める ---
 
