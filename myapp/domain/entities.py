@@ -36,6 +36,7 @@ from .value_objects import (
     Base,
     BattingLine,
     ContractStatus,
+    DepartureRoute,
     ErrorKind,
     FieldingLine,
     FieldingPosition,
@@ -142,6 +143,8 @@ class Stint:
     number_before_promotion: JerseyNumber | None = None
     # 入団の経路。None は不明（推測で埋めない）。既定値つきなので、経路を知らない呼び出し元は壊れない
     acquired_via: AcquisitionRoute | None = None
+    # 退団の経路（引退・戦力外）。None は不明か在籍中。在籍中の在籍は経路を持てない
+    left_via: DepartureRoute | None = None
 
     def __post_init__(self) -> None:
         self.from_year = Season(self.from_year).year
@@ -152,6 +155,8 @@ class Stint:
             self.to_year = Season(self.to_year).year
             if self.to_year < self.from_year:
                 raise InvalidStint("退団年が加入年より前になっています。")
+        elif self.left_via is not None:
+            raise InvalidStint("在籍中の在籍に退団の経路は設定できません。")
         if self.promoted_year is not None:
             self.promoted_year = Season(self.promoted_year).year
             self._ensure_promotion_year_is_valid(self.promoted_year)
@@ -254,12 +259,13 @@ class Stint:
         other_starts_before_end = end is None or other.from_year <= end
         return starts_before_other_ends and other_starts_before_end
 
-    def close(self, year: int) -> None:
-        """退団させる。"""
+    def close(self, year: int, left_via: DepartureRoute | None = None) -> None:
+        """退団させる。`left_via` は退団の経路（None は記録しない＝不明）。"""
         season = Season(year).year
         if season < self.from_year:
             raise InvalidStint("加入年より前の年で退団にはできません。")
         self.to_year = season
+        self.left_via = left_via
 
 
 @dataclass
@@ -728,16 +734,30 @@ class Team:
                 return stint
         return None
 
-    def retire_player(self, player: Player, year: int | None = None) -> None:
-        """退団させる。在籍期間を閉じることで、背番号が空く。"""
+    def retire_player(
+        self, player: Player, year: int | None = None, *, left_via: DepartureRoute | None = None
+    ) -> None:
+        """退団させる。在籍期間を閉じることで、背番号が空く。
+
+        `left_via` は退団の経路（引退・戦力外）。省くと記録しない（不明）。
+        """
         player.retire()
         current = self.current_stint(player)
         if current is not None:
-            current.close(year if year is not None else date.today().year)
+            current.close(year if year is not None else date.today().year, left_via)
         # 閉じたことで、宣言した年にどの在籍にも覆われなくなる宣言が無いか
         player.ensure_free_agency_consistent()
         # 在籍していないのに主将、という両立しない状態を残さない
         self.remove_captain(player, year)
+
+    def release_player(self, player: Player, *, year: int) -> None:
+        """戦力外にする。在籍を `year` で閉じ、退団の経路を「戦力外」と記録する（背番号・主将・FA は退団と同じ）。
+
+        年は必須（省くと現実の今日の年が入る退団と違い、世界の年で閉じるため）。在籍していない選手は外せない。
+        """
+        if self.current_stint(player) is None:
+            raise InvalidStint(f"「{player.name}」は「{self.name}」に在籍していないため、戦力外にできません。")
+        self.retire_player(player, year, left_via=DepartureRoute.RELEASED)
 
     def _ensure_number_is_available(self, number: JerseyNumber, excluding: Player | None = None) -> None:
         """在籍期間が重なる選手どうしで背番号が重複しないことを確かめる。

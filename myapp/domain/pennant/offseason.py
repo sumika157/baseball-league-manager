@@ -1,6 +1,6 @@
 """シーズンを締めるときの計算。**純粋な関数**で、DB にも Django にも触れない。
 
-    引退を決める → 球団ごとの新人を決める → 残る選手の能力を1年ぶん進める
+    引退を決める → 球団ごとに戦力外（`release.py`）と新人を決める → 残る選手の能力を1年ぶん進める
     → 残る選手と新人をまとめて、項目ごとに水準の錨をかける
 
 結果は `OffseasonPlan`（何を書くかの計画）。書くのは呼び出し側（application）で、ここは読み取った
@@ -21,66 +21,19 @@ from math import sqrt
 from ..simulation.randomness import game_seed, game_uniform, make_random
 from ..simulation.ratings import BatterRatings, PitcherRatings
 from ..simulation.spread import MIN_POPULATION, rescale, spread_ratings, target_mean, target_sd
-from ..value_objects import ContractStatus, Position, Profile
 from .aging import age_ratings
 from .draft import Draftee, DraftTeam, draft_class
-from .fork import ESTIMATED_AGE_AT_START, with_birth_date
-from .initial_ratings import age_at_season_start
+from .offseason_player import (
+    OffseasonClub,
+    OffseasonPlayer,
+    Ratings,
+    overall_value,
+    player_age,
+    retirement_value,
+)
 from .ratings import PlayerRatings
-from .retirement import PlayingTime, retirement_chance
-
-# 能力を持たない選手の総合値（引退の確率に効かない値）
-_NEUTRAL_VALUE = 45.0
-
-Ratings = BatterRatings | PitcherRatings
-
-
-@dataclass(frozen=True)
-class OffseasonPlayer:
-    """締める年 Y の現役の選手。"""
-
-    player_id: int
-    position: Position
-    profile: Profile
-    # 背番号の表記（「00」と「0」は別の番号）
-    number: str
-    # 現在の在籍の開始年（分岐した選手は一律に開幕年。入団年は entered_year）
-    joined_year: int
-    # Y の能力。無い選手は翌年の能力も作らない
-    ratings: PlayerRatings | None
-    # 今の契約区分（集約の `Team.contract_of`＝`Stint.contract_now` の値を渡す。ここで判定し直さない）。
-    # 在籍が無ければ None。ドラフトの指名数と位置の補充は支配下だけで数える（育成は試合に出られない）
-    contract: ContractStatus | None
-    playing_time: PlayingTime = PlayingTime()
-
-    @property
-    def is_registered(self) -> bool:
-        return self.contract is ContractStatus.REGISTERED
-
-    @property
-    def entered_year(self) -> int:
-        """プロ入りの年。入団年（`debut_year`）があればそれ、無ければ現在の在籍の開始年。
-
-        分岐した選手の在籍の開始年は一律に開幕年になる。若手の保護（入団2年以内）を在籍の開始年で数えると、
-        実際の経歴にかかわらず最初の2シーズン保護されてしまうので、入団年を優先する。
-        """
-        return self.profile.debut_year if self.profile.debut_year is not None else self.joined_year
-
-    def seasons_as_pro(self, year: int) -> int:
-        """`year` を含めてプロにいた年数（1以上）。若手の保護の判定に使う。"""
-        return max(1, year - self.entered_year + 1)
-
-
-@dataclass(frozen=True)
-class OffseasonClub:
-    """締める年 Y の球団。"""
-
-    team_id: int
-    # リーグの外国人の登録枠。None は無制限
-    foreign_roster_limit: int | None
-    # リーグの支配下の上限（NPB は70人）。None は無制限。ドラフトはこれを超えない人数にする
-    registered_player_limit: int | None
-    players: tuple[OffseasonPlayer, ...]
+from .release import decide_releases
+from .retirement import retirement_chance
 
 
 @dataclass(frozen=True)
@@ -116,6 +69,8 @@ class OffseasonPlan:
 
     year: int
     retired: tuple[int, ...]
+    # AI の戦力外（`release.py`）。引退した選手は含まない。翌年の能力を作らず、錨の母集団にも入れない
+    released: tuple[int, ...]
     retained: tuple[RatingChange, ...]
     # 新人。能力は錨をかけた後の値
     draftees: tuple[Draftee, ...]
@@ -124,33 +79,11 @@ class OffseasonPlan:
     anchor: AnchorCorrection
 
 
-def overall_value(ratings: Ratings) -> float:
-    """能力の総合値。野手は打撃（`batting_value`）、投手は抑える力（`pitching_value`）。画面の「総合」の出典。"""
-    if isinstance(ratings, PitcherRatings):
-        return ratings.pitching_value
-    return ratings.batting_value
-
-
 def rating_change(before: Ratings, after: Ratings) -> float:
     """能力の変化。総合値（`overall_value`）の差。画面の「能力の変化」の出典。"""
     if isinstance(before, PitcherRatings) != isinstance(after, PitcherRatings):
         raise ValueError("野手と投手の能力は比べられません。")
     return overall_value(after) - overall_value(before)
-
-
-def retirement_value(position: Position, ratings: Ratings | None) -> float:
-    """引退の確率に使う総合値。野手は打撃、投手は抑える力。捕手は守備力と打撃の大きい方。"""
-    if ratings is None:
-        return _NEUTRAL_VALUE
-    if isinstance(ratings, BatterRatings) and position is Position.CATCHER:
-        return max(float(ratings.fielding), ratings.batting_value)
-    return overall_value(ratings)
-
-
-def player_age(profile: Profile, year: int, *, start_year: int) -> int:
-    """締める年 Y の4月1日時点の満年齢。生年月日が空なら推定で補って数える。"""
-    age = age_at_season_start(with_birth_date(profile, start_year), year)
-    return ESTIMATED_AGE_AT_START if age is None else age
 
 
 def decide_retirements(
@@ -173,7 +106,7 @@ def decide_retirements(
 
 
 def _draft_team(club: OffseasonClub, remaining: Sequence[OffseasonPlayer]) -> DraftTeam:
-    """引退の後の球団。人数と位置は支配下だけで数える（育成の捕手がいても、支配下の捕手が足りなければ補う）。
+    """引退・戦力外の後の球団。人数と位置は支配下だけで数える（育成の捕手がいても、支配下の捕手が足りなければ補う）。
 
     外国人の人数・背番号・苗字は育成も含める（外国人枠の検査・背番号の重複・背ネームは区分によらない）。
     """
@@ -272,8 +205,13 @@ def plan_offseason(
     names = set(used_names)
     drafted: list[Draftee] = []
     survivors: list[OffseasonPlayer] = []
+    released: list[int] = []
     for club in ordered:
         remaining = [player for player in club.players if player.player_id not in retired]
+        # 戦力外は引退の後・ドラフトの前。ドラフトは戦力外の後の人数で数える
+        leaving = set(decide_releases(club, remaining, year=year, start_year=start_year))
+        released.extend(sorted(leaving))
+        remaining = [player for player in remaining if player.player_id not in leaving]
         survivors.extend(remaining)
         rng = make_random(game_seed(world_seed, year + 1, f"draft-{club.team_id}"))
         drafted.extend(draft_class(rng, _draft_team(club, remaining), year=year, used_names=names))
@@ -306,6 +244,7 @@ def plan_offseason(
     return OffseasonPlan(
         year=year,
         retired=tuple(sorted(retired)),
+        released=tuple(sorted(released)),
         retained=retained,
         draftees=draftees,
         without_ratings=tuple(without_ratings),

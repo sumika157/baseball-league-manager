@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from ..simulation.randomness import GameRandom
 from ..simulation.ratings import BatterRatings, PitcherRatings
-from ..simulation.samples import BATTER_MEAN, PITCHER_MEAN, draw_ratings
+from ..simulation.samples import BATTER_MEAN, PITCHER_MEAN, draw_ratings, mean_ratings
 from ..value_objects import Position
 
 # 能力の標準偏差（平均は呼び出し側が渡す）。錨の目標（`samples.BATTER_SD` 8.5 / `PITCHER_SD` 8.0）より狭い
@@ -46,3 +46,13 @@ def draw_prospect_ratings(rng: GameRandom, *, mean: float, position: Position) -
         stamina_mean=stamina_mean,
         stamina_sd=stamina_sd,
     )
+
+
+def expected_prospect_ratings(*, mean: float, position: Position) -> BatterRatings | PitcherRatings:
+    """`draw_prospect_ratings` が引く能力の、項目ごとの平均（ぶれを除いた値）。戦力外が新人の見込みと比べるのに使う。
+
+    項目のずれは `samples.mean_ratings`（`draw_ratings` と同じ出典）。スタミナは先発型と救援型の平均の加重平均
+    （総合値に入らないので見込みの比べ方には効かない）。
+    """
+    stamina = STARTER_TYPE_RATIO * STARTER_STAMINA[0] + (1 - STARTER_TYPE_RATIO) * RELIEVER_STAMINA[0]
+    return mean_ratings(mean=mean, position=position, stamina_mean=stamina)

@@ -708,11 +708,12 @@ def pennant_close_season(request, world_id):
 
     messages.success(
         request,
-        f"{result.year}年のシーズンを締めました（引退 {result.retired_count}人・新人 {result.draftee_count}人）。",
+        f"{result.year}年のシーズンを締めました"
+        f"（引退 {result.retired_count}人・戦力外 {result.released_count}人・新人 {result.draftee_count}人）。",
     )
-    if result.released_sections:
-        labels = "・".join(section.value for section in result.released_sections)
-        messages.warning(request, f"引退した選手を含んでいたため、自軍の編成（{labels}）を自動に戻しました。")
+    if result.reverted_sections:
+        labels = "・".join(section.value for section in result.reverted_sections)
+        messages.warning(request, f"引退・戦力外の選手を含んでいたため、自軍の編成（{labels}）を自動に戻しました。")
     if result.without_ratings_count:
         messages.info(request, f"能力の無い選手 {result.without_ratings_count}人は、翌年の能力を作りませんでした。")
     return redirect("pennant_offseason", world_id=world_id, year=result.year)

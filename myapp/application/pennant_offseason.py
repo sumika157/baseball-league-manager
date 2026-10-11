@@ -1,4 +1,4 @@
-"""ペナントのシーズンを締める（オフ）。引退・ドラフト・成長と衰え・編成の後始末・翌年の日程を、1つの操作にまとめる。
+"""ペナントのシーズンを締める（オフ）。引退・戦力外・ドラフト・成長と衰え・編成の後始末・翌年の日程を、1つの操作にまとめる。
 
 **進行（`PennantSeasonService`）には足さない。** 進行は試合を作って保存する処理で、こちらは集約（`Team`）の
 書き換えと能力・日程の一括保存で、依存も検査も違う。
@@ -47,7 +47,7 @@ from ..domain.repositories import (
     TeamRepository,
     WorldRepository,
 )
-from ..domain.value_objects import ContractStatus, JerseyNumber, RosterLimits
+from ..domain.value_objects import ContractStatus, DepartureRoute, JerseyNumber, RosterLimits
 from .dto import SeasonClosed, SeasonCloseOption
 from .pennant_season import AtomicBlock
 from .queries import SeasonPlayingTimeQuery, SimulationContextQuery
@@ -61,7 +61,7 @@ def _saved_id(value: int | None) -> int:
 
 @dataclass
 class _RosterChange:
-    """メモリの上で引退・新人を反映した球団（保存はまだ）。`added` と `draftees` は同じ並び。"""
+    """メモリの上で引退・戦力外・新人を反映した球団（保存はまだ）。`added` と `draftees` は同じ並び。"""
 
     team: Team
     added: list[Player]
@@ -130,7 +130,8 @@ class PennantOffseasonService:
         - 世界の最後のシーズン → `SeasonLimitReached`
 
         どれも何も書かない。書き込みの途中で失敗したときも何も残さない（1つのトランザクション）。
-        引退した選手の在籍は Y で閉じ、新人は Y+1 から加入する。**年を省略した在籍の操作は呼ばない**
+        引退・戦力外の選手の在籍は Y で閉じ（退団の経路を記録する）、新人は Y+1 から加入する。
+        **年を省略した在籍の操作は呼ばない**
         （省くと現実の今日の年が入る）。
         """
         # 読み込みと計算（1〜6秒）は、書き込みトランザクションの外で済ませる。本番の SQLite は書き手が1つで、
@@ -192,7 +193,7 @@ class PennantOffseasonService:
     # --- 読む・計算する（トランザクションの外）→ 書く（中） ---
 
     def _prepare(self, world: World, year: int) -> _PreparedClose:
-        """読んで計算し、集約の変更（引退・新人）をメモリの上で済ませる。DB には何も書かない。"""
+        """読んで計算し、集約の変更（引退・戦力外・新人）をメモリの上で済ませる。DB には何も書かない。"""
         teams = self._teams.find_all_with_roster()
         limits = {league.id: league.roster_limits for league in self._leagues.find_all()}
         ratings_by_player = {item.player_id: item for item in self._ratings.find_by_year(year)}
@@ -242,37 +243,42 @@ class PennantOffseasonService:
         retained = [change.after for change in plan.retained]
         self._ratings.add_all([*retained, *rookie_ratings])
 
-        released, released_clubs = self._release_plans(plan, world)
+        reverted, reverted_clubs = self._revert_plans(plan, world)
         self._fixtures.add_all(prepared.schedule)
 
         return SeasonClosed(
             year=year,
             next_year=year + 1,
             retired_count=len(plan.retired),
+            released_count=len(plan.released),
             draftee_count=len(plan.draftees),
             foreign_draftee_count=sum(1 for draftee in plan.draftees if draftee.is_foreign),
             without_ratings_count=len(plan.without_ratings),
-            released_sections=released,
-            released_club_count=released_clubs,
+            reverted_sections=reverted,
+            reverted_club_count=reverted_clubs,
             fixture_count=len(prepared.schedule),
         )
 
     def _apply_roster_changes(
         self, teams: list[Team], plan: OffseasonPlan, limits: Mapping[int | None, RosterLimits], year: int
     ) -> list[_RosterChange]:
-        """引退と新人を集約の操作でメモリの上に反映する（保存は `_commit`）。変わった球団だけ返す。"""
+        """引退・戦力外と新人を集約の操作でメモリの上に反映する（保存は `_commit`）。変わった球団だけ返す。"""
         retired = set(plan.retired)
+        released = set(plan.released)
         next_year = year + 1
         changes: list[_RosterChange] = []
         for team in teams:
             team_id = _saved_id(team.id)
-            leaving = [player for player in team.active_players if player.id in retired]
+            retiring = [player for player in team.active_players if player.id in retired]
+            releasing = [player for player in team.active_players if player.id in released]
             draftees = [draftee for draftee in plan.draftees if draftee.team_id == team_id]
-            if not leaving and not draftees:
+            if not retiring and not releasing and not draftees:
                 continue
-            # 引退を先に済ませ、在籍を Y で閉じる（引退した選手の背番号を新人へ渡せる）
-            for player in leaving:
-                team.retire_player(player, year=year)
+            # 引退と戦力外を先に済ませ、在籍を Y で閉じて退団の経路を記録する（空いた背番号を新人へ渡せる）
+            for player in retiring:
+                team.retire_player(player, year=year, left_via=DepartureRoute.RETIRED)
+            for player in releasing:
+                team.release_player(player, year=year)
             added: list[Player] = []
             team_limits = _limits_of(team, limits)
             for draftee in draftees:
@@ -295,16 +301,16 @@ class PennantOffseasonService:
             changes.append(_RosterChange(team=team, added=added, draftees=draftees))
         return changes
 
-    def _release_plans(self, plan: OffseasonPlan, world: World) -> tuple[tuple[PlanSection, ...], int]:
-        """引退した選手を含む編成の区画を自動に戻して保存する（判断26。Wiki「ペナントモードの仕組み」の「決めたこと」）。受け持つ球団のぶんの区画と、戻した球団の数。"""
-        retired = set(plan.retired)
+    def _revert_plans(self, plan: OffseasonPlan, world: World) -> tuple[tuple[PlanSection, ...], int]:
+        """引退・戦力外の選手を含む編成の区画を自動に戻して保存する（判断26。Wiki「ペナントモードの仕組み」の「決めたこと」）。受け持つ球団のぶんの区画と、戻した球団の数。"""
+        leaving = set(plan.retired) | set(plan.released)
         own_sections: tuple[PlanSection, ...] = ()
         clubs = 0
         for club_plan in self._plans.find_all():
-            released_plan, sections = club_plan.release(retired)
+            reverted_plan, sections = club_plan.revert(leaving)
             if not sections:
                 continue
-            self._plans.save(released_plan)
+            self._plans.save(reverted_plan)
             clubs += 1
             if club_plan.team_id == world.managed_team_id:
                 own_sections = sections

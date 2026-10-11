@@ -451,7 +451,7 @@ class ClubPlan:
     def clear_closer(self) -> None:
         self.closer_id = None
 
-    def release(self, player_ids: Collection[int]) -> tuple[ClubPlan, tuple[PlanSection, ...]]:
+    def revert(self, player_ids: Collection[int]) -> tuple[ClubPlan, tuple[PlanSection, ...]]:
         """`player_ids`（引退した選手など）を含む区画を自動に戻した編成と、戻した区画を返す。
 
         **1軍登録を戻すときは、それに依存するオーダー・ローテーション・抑えも戻す**（1軍登録だけが
@@ -465,7 +465,7 @@ class ClubPlan:
             PlanSection.ROTATION: self.rotation is not None and bool(gone.intersection(self.rotation)),
             PlanSection.CLOSER: self.closer_id is not None and self.closer_id in gone,
         }
-        releasing_active = has_gone[PlanSection.ACTIVE]
+        reverting_active = has_gone[PlanSection.ACTIVE]
         # 戻すのは、退団者を含む区画と、1軍登録を戻すときに手動で残っている区画
         manual = {
             PlanSection.ACTIVE: self.active_ids is not None,
@@ -474,7 +474,7 @@ class ClubPlan:
             PlanSection.CLOSER: self.closer_id is not None,
         }
         released = tuple(
-            section for section in PlanSection if manual[section] and (has_gone[section] or releasing_active)
+            section for section in PlanSection if manual[section] and (has_gone[section] or reverting_active)
         )
         return (
             ClubPlan(

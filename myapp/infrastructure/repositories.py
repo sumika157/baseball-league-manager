@@ -58,6 +58,7 @@ from ..domain.value_objects import (
     Base,
     BattingLine,
     ContractStatus,
+    DepartureRoute,
     ErrorKind,
     FieldingLine,
     FieldingPosition,
@@ -289,6 +290,7 @@ class DjangoTeamRepository:
                             stint.number_before_promotion.value if stint.number_before_promotion is not None else None
                         ),
                         "acquired_via": acquired_via,
+                        "left_via": stint.left_via.value if stint.left_via is not None else None,
                     },
                 )
                 stint.id = stint_row.id
@@ -395,6 +397,7 @@ def _careers_of(player_ids: list[int]) -> dict[int, list[Stint]]:
                 ),
                 # 空（None・空文字）は不明
                 acquired_via=AcquisitionRoute.from_label(row.acquired_via) if row.acquired_via else None,
+                left_via=DepartureRoute.from_label(row.left_via) if row.left_via else None,
             )
         )
     return careers
