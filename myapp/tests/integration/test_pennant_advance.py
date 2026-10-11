@@ -37,6 +37,7 @@ YEAR = 2026
 SEASON_GAMES = 143
 BATTER_POSITIONS = ["捕手"] * 2 + ["内野手"] * 5 + ["外野手"] * 4 + ["指名打者"]
 PITCHERS = 11
+STADIUM_CAPACITY = 40000
 
 
 def register_club(service, team, prefix):
@@ -70,7 +71,7 @@ class SeasonCase(TestCase):
     def setUpTestData(cls):
         league = orm_models.League.objects.create(name="進行リーグ")
         cls.league_id = league.id
-        stadium = orm_models.Stadium.objects.create(name="進行球場", city="東京")
+        stadium = orm_models.Stadium.objects.create(name="進行球場", city="東京", capacity=STADIUM_CAPACITY)
         cls.home = orm_models.Team.objects.create(league=league, name="ホーム球団", home_stadium=stadium)
         cls.rival = orm_models.Team.objects.create(league=league, name="ライバル球団")
         service = build_service()
@@ -142,7 +143,23 @@ class SeasonCase(TestCase):
                 "earned_runs",
             )
         )
-        return list(plate_appearances), list(pitching)
+        # 試合の開始・終了の時刻と観客数も、進め方で変わらないことを突き合わせる
+        game_days = (
+            orm_models.Game.objects.filter(home_team__league__world_id=world_id)
+            .order_by("played_on", "home_team__name")
+            .values_list(
+                "played_on",
+                "home_team__name",
+                "start_time",
+                "end_time",
+                "ends_next_day",
+                "interruption_minutes",
+                "attendance",
+            )
+        )
+        if until is not None:
+            game_days = game_days.filter(played_on__lte=until)
+        return list(plate_appearances), list(pitching), list(game_days)
 
     @staticmethod
     def advance(world_id, target) -> AdvanceReport:
@@ -217,6 +234,29 @@ class AdvanceTest(SeasonCase):
                 self.assertEqual(loaded.line_score.away_total, loaded.away_score)
                 wins = sum(p.line.wins for p in loaded.pitching)
                 self.assertEqual(wins, 0 if loaded.home_score == loaded.away_score else 1, "引分以外は勝ち投手が1人")
+
+    def test_a_simulated_game_has_times_and_attendance(self):
+        """進めた試合には開始・終了の時刻と観客数が付く。観客数は収容人数を超えない。"""
+        self.advance(self.world_a, AdvanceTarget.MONTH_END)
+
+        games = self.games_of(self.world_a)
+        names = {t.id: t.name for t in orm_models.Team.objects.filter(league__world_id=self.world_a)}
+        home_games = rival_games = 0
+        for game in games:
+            with self.subTest(day=game.played_on):
+                self.assertIsNotNone(game.times)
+                self.assertEqual(game.times.start.hour, 14 if game.played_on.weekday() >= 5 else 18)
+                self.assertEqual(game.times.interruption_minutes, 0)
+                self.assertGreater(game.times.net_minutes, 90)
+                if names[game.home_team_id] == "ホーム球団":
+                    home_games += 1
+                    self.assertIsNotNone(game.attendance)
+                    self.assertLessEqual(game.attendance, STADIUM_CAPACITY)
+                else:
+                    rival_games += 1
+                    self.assertIsNone(game.attendance, "本拠地の無い球団のホーム試合は観客数を作らない")
+        self.assertGreater(home_games, 0)
+        self.assertGreater(rival_games, 0)
 
     def test_an_unknown_world_is_not_found(self):
         with self.assertRaises(WorldNotFound):
@@ -343,6 +383,21 @@ class ReproducibilityTest(SeasonCase):
         one_by_one = self.replay(self.world_a, self.days(played))
 
         self.assertEqual(week, one_by_one)
+
+    def test_game_day_does_not_change_the_outcome(self):
+        """時刻と観客数は別の乱数源で作るので、作らなくても試合の結果（打席・投手成績）は変わらない。"""
+        with_game_day = self.replay(self.world_a, lambda: self.advance(self.world_a, AdvanceTarget.WEEK))
+
+        with (
+            mock.patch("myapp.application.pennant_season.simulated_times", return_value=None),
+            mock.patch("myapp.application.pennant_season.simulated_attendance", return_value=None),
+        ):
+            without = self.replay(self.world_a, lambda: self.advance(self.world_a, AdvanceTarget.WEEK))
+
+        self.assertGreater(len(with_game_day[0]), 0)
+        self.assertTrue(all(row[2] is not None for row in with_game_day[2]))
+        self.assertTrue(all(row[2] is None for row in without[2]))
+        self.assertEqual(with_game_day[:2], without[:2])
 
     def test_a_month_equals_weeks(self):
         last_day = None

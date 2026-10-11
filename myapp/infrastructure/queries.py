@@ -268,10 +268,17 @@ class DjangoSimulationContextQuery:
                 foreign_roster_limit=roster_limit,
                 foreign_game_limit=game_limit,
                 players=tuple(players.get(team_id, ())),
+                stadium_capacity=capacity,
             )
-            for team_id, name, roster_limit, game_limit in teams_in(self._scope)
+            for team_id, name, roster_limit, game_limit, capacity in teams_in(self._scope)
             .order_by("id")
-            .values_list("id", "name", "league__foreign_player_roster_limit", "league__foreign_player_game_limit")
+            .values_list(
+                "id",
+                "name",
+                "league__foreign_player_roster_limit",
+                "league__foreign_player_game_limit",
+                "home_stadium__capacity",
+            )
         )
 
 

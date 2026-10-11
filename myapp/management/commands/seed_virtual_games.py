@@ -49,6 +49,7 @@ from myapp.domain import services as domain_services
 from myapp.domain.entities import FieldingError, PlateAppearance, RunnerAdvance
 from myapp.domain.exceptions import InvalidGame
 from myapp.domain.pennant.world import WorldScope
+from myapp.domain.simulation.game_day import simulated_attendance, simulated_times
 from myapp.domain.simulation.levels import LevelTally
 from myapp.domain.value_objects import (
     AdvanceReason,
@@ -77,6 +78,7 @@ from myapp.models import (
     GamePlateAppearance,
     GameRunnerAdvance,
     PlayerStint,
+    Team,
 )
 
 # --- 現実的な数値に寄せるための調整値 ---
@@ -354,6 +356,9 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         self.rng = np.random.default_rng(options["seed"])
+        # 時刻と観客数の乱数は、打席を進める `self.rng` とは別の列にする（同じ列から引くと、
+        # 以降の試合の中身がすべてずれる）。`--seed` があればそこから派生させ、再現できるようにする
+        self.day_rng = np.random.default_rng(None if options["seed"] is None else [options["seed"], 1])
         # 投入の経過と水準は verbosity に従う（テストから呼ぶと大量に流れるため）
         self.quiet = options["verbosity"] < 1
 
@@ -586,13 +591,26 @@ class Command(BaseCommand):
         # 先発の順番はチームごとに持ち回る（ローテーション）
         starts = defaultdict(int)
         buffered = []
+        # 本拠地の収容人数は球団ごとに最初に1回まとめて引く（試合ごとに引くと N+1 になる）
+        capacities = dict(
+            Team.objects.filter(id__in={card["home"].id for card in schedule}).values_list(
+                "id", "home_stadium__capacity"
+            )
+        )
         for card in schedule:
-            buffered.append(self._play(card, rosters, starts))
+            record = self._play(card, rosters, starts)
+            self._stamp_game_day(record["game"], capacities.get(card["home"].id))
+            buffered.append(record)
             if len(buffered) >= FLUSH_EVERY_GAMES:
                 self._save(year, buffered)
                 buffered = []
         if buffered:
             self._save(year, buffered)
+
+    def _stamp_game_day(self, game, capacity):
+        """開始・終了の時刻と観客数を作って試合に入れる（モデルはドメインの `game_day` が出典）。"""
+        game.times = simulated_times(game, self.day_rng)
+        game.attendance = simulated_attendance(capacity, game.played_on, self.day_rng)
 
     def _play(self, card, rosters, starts):
         """1試合を打席単位で進めて、保存に必要なものをまとめて返す。"""
@@ -1224,6 +1242,11 @@ class Command(BaseCommand):
                 away_team=record["card"]["away"],
                 home_score=game.home_score,
                 away_score=game.away_score,
+                start_time=game.times.start if game.times else None,
+                end_time=game.times.end if game.times else None,
+                ends_next_day=game.times.ends_next_day if game.times else False,
+                interruption_minutes=game.times.interruption_minutes if game.times else 0,
+                attendance=game.attendance,
             )
             game.id = row.id
             batting_rows.extend(self._batting_orm_rows(row, game))
