@@ -13,7 +13,7 @@ from datetime import date
 from typing import Any
 
 from django.contrib.auth.models import AnonymousUser, User
-from django.db.models import BooleanField, Case, Count, Exists, Max, Min, OuterRef, Q, QuerySet, Sum, Value, When
+from django.db.models import BooleanField, Case, Count, Exists, F, Max, Min, OuterRef, Q, QuerySet, Sum, Value, When
 
 from ..application.dto import (
     ActivePlayerStats,
@@ -49,7 +49,7 @@ from ..domain.value_objects import (
     Season,
 )
 from . import orm_models
-from .repositories import batting_totals, pitching_totals
+from .repositories import batting_totals, batting_totals_by_league, pitching_totals, pitching_totals_by_league
 
 
 def recorded_games_filter() -> Q:
@@ -124,11 +124,6 @@ class DjangoPlayerStatsQuery:
     DTO にする（集計の式は `repositories.batting_totals` / `pitching_totals` が出典）。
     """
 
-    def list_career(self) -> list[ActivePlayerStats]:
-        stints = self._active_stints()
-        # 全選手の通算を1度に集計する（在籍外の選手の分も出るが、引かないだけ）
-        return self._rows(stints, batting_totals(), pitching_totals())
-
     def list_season(self, league_id: int, year: int) -> list[ActivePlayerStats]:
         stints = self._active_stints(league_id)
         player_ids = [stint.player_id for stint in stints]
@@ -139,6 +134,26 @@ class DjangoPlayerStatsQuery:
             batting_totals(player_ids, games=games),
             pitching_totals(player_ids, games=games),
         )
+
+    def list_season_by_league(self, year: int) -> dict[int, list[ActivePlayerStats]]:
+        stints = self._active_stints()
+        # リーグ内の対戦だけ（ホームとビジターが同じリーグ）を、ホーム側のリーグで分けて1回で集計する。
+        # リーグごとに list_season を呼ぶと、リーグの数×3回のクエリになる
+        games = Q(game__year=year, game__home_team__league_id=F("game__away_team__league_id"))
+        batting = batting_totals_by_league(games=games)
+        pitching = pitching_totals_by_league(games=games)
+
+        by_league: dict[int, list[orm_models.PlayerStint]] = {}
+        for stint in stints:
+            by_league.setdefault(stint.team.league_id, []).append(stint)
+        return {
+            league_id: self._rows(
+                members,
+                {player_id: line for (player_id, lg), line in batting.items() if lg == league_id},
+                {player_id: line for (player_id, lg), line in pitching.items() if lg == league_id},
+            )
+            for league_id, members in by_league.items()
+        }
 
     @staticmethod
     def _active_stints(league_id: int | None = None) -> list[orm_models.PlayerStint]:

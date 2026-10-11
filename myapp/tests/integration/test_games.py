@@ -127,16 +127,8 @@ class GameViewTest(BaseCase):
                 rows = self.client.get(f"{reverse('game_list')}?league={league.id}").context["games"]
                 self.assertIn(6, [r.played_on.day for r in rows])
 
-    def test_dashboard_game_link_carries_the_league(self):
-        """ダッシュボードのリーグタブから移ると、そのリーグの日程が開く。"""
-        play_game(self.team, self.rival, day=2)
-
-        body = self.client.get(reverse("dashboard")).content.decode()
-
-        self.assertIn(f"{reverse('game_list')}?league={self.league.id}", body)
-
     def test_league_tabs_are_shown_with_an_all_option(self):
-        """リーグはダッシュボードと同じくタブで切り替える。"""
+        """リーグはタブで切り替える。"""
         other_league = orm_models.League.objects.create(name="別リーグ")
 
         body = self.client.get(reverse("game_list")).content.decode()

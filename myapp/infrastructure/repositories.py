@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Any
 
 from django.db import transaction
 from django.db.models import Count, Prefetch, Q, QuerySet, Sum
@@ -427,6 +428,10 @@ def _profile_of(row: orm_models.Player) -> Profile:
     )
 
 
+# 試合のホーム側チームのリーグ（明細の行から見た経路）。リーグごとに分けて集計するときの単位
+_HOME_LEAGUE = "game__home_team__league_id"
+
+
 def batting_totals(player_ids: list[int] | None = None, *, games: Q | None = None) -> dict[int, BattingLine]:
     """選手ごとの打撃成績を SQL の集計で求める。
 
@@ -434,6 +439,22 @@ def batting_totals(player_ids: list[int] | None = None, *, games: Q | None = Non
     渡すと、その試合だけの成績になる（タイトルのようにシーズンで区切る用途）。
     `player_ids` が None なら全選手（IN 句に何千件も並べずに済む）。空なら何も読まない。
     """
+    return {player_id: line for (player_id, _), line in _batting_totals(player_ids, games, group=None).items()}
+
+
+def batting_totals_by_league(*, games: Q) -> dict[tuple[int, int], BattingLine]:
+    """（選手id, 試合のホーム側のリーグid）ごとの打撃成績。全リーグぶんを1回の集計で求める。
+
+    `games` にリーグ内の対戦だけ（ホームとビジターが同じリーグ）の条件を渡すと、
+    リーグごとに `batting_totals(games=そのリーグ内の対戦)` を呼んだのと同じ値になる。
+    """
+    return _batting_totals(None, games, group=_HOME_LEAGUE)
+
+
+def _batting_totals(
+    player_ids: list[int] | None, games: Q | None, *, group: str | None
+) -> dict[tuple[int, Any], BattingLine]:
+    """キーは（選手id, group の値）。group が None なら2つ目は None（選手ごと）。"""
     if player_ids is not None and not player_ids:
         return {}
     rows = orm_models.GameBattingLine.objects.all()
@@ -441,9 +462,15 @@ def batting_totals(player_ids: list[int] | None = None, *, games: Q | None = Non
         rows = rows.filter(player_id__in=player_ids)
     if games is not None:
         rows = rows.filter(games)
-    totals = rows.values("player_id").annotate(**{f: Sum(f) for f in _BATTING_FIELDS})
+    keys = ("player_id",) if group is None else ("player_id", group)
+    totals = rows.values(*keys).annotate(**{f: Sum(f) for f in _BATTING_FIELDS}).order_by()
     # values() の行から可変のキーで取り出すため、TypedDict の字面キー検査は効かない
-    return {r["player_id"]: BattingLine(**{f: r[f] or 0 for f in _BATTING_FIELDS}) for r in totals}  # type: ignore[literal-required]
+    return {
+        (r["player_id"], r[group] if group is not None else None): BattingLine(
+            **{f: r[f] or 0 for f in _BATTING_FIELDS}
+        )  # type: ignore[literal-required]
+        for r in totals
+    }
 
 
 def pitching_totals(player_ids: list[int] | None = None, *, games: Q | None = None) -> dict[int, PitchingLine]:
@@ -457,6 +484,18 @@ def pitching_totals(player_ids: list[int] | None = None, *, games: Q | None = No
     SQL で（選手, 表記）ごとに集計してから足す。先発登板数と救援勝利は登板順から導く
     項目なので、同じ集計の中で条件つきに数える。
     """
+    return {player_id: line for (player_id, _), line in _pitching_totals(player_ids, games, group=None).items()}
+
+
+def pitching_totals_by_league(*, games: Q) -> dict[tuple[int, int], PitchingLine]:
+    """（選手id, 試合のホーム側のリーグid）ごとの投球成績。意味は `batting_totals_by_league` と同じ。"""
+    return _pitching_totals(None, games, group=_HOME_LEAGUE)
+
+
+def _pitching_totals(
+    player_ids: list[int] | None, games: Q | None, *, group: str | None
+) -> dict[tuple[int, Any], PitchingLine]:
+    """キーは（選手id, group の値）。group が None なら2つ目は None（選手ごと）。"""
     if player_ids is not None and not player_ids:
         return {}
     rows = orm_models.GamePitchingLine.objects.all()
@@ -465,8 +504,9 @@ def pitching_totals(player_ids: list[int] | None = None, *, games: Q | None = No
     if games is not None:
         rows = rows.filter(games)
 
+    keys = ("player_id", "innings_pitched") if group is None else ("player_id", group, "innings_pitched")
     grouped = (
-        rows.values("player_id", "innings_pitched")
+        rows.values(*keys)
         .annotate(
             lines=Count("id"),
             starts=Count("id", filter=Q(appearance_order__lte=1)),
@@ -476,20 +516,20 @@ def pitching_totals(player_ids: list[int] | None = None, *, games: Q | None = No
         .order_by()
     )
 
-    innings: dict[int, InningsPitched] = {}
-    sums: dict[int, dict[str, int]] = {}
+    innings: dict[tuple[int, Any], InningsPitched] = {}
+    sums: dict[tuple[int, Any], dict[str, int]] = {}
     for r in grouped:
-        player_id = r["player_id"]
+        key = (r["player_id"], r[group] if group is not None else None)  # type: ignore[literal-required]
         # 同じ表記の行が r["lines"] 件ぶんまとまっている
-        innings[player_id] = innings.get(player_id, InningsPitched.zero()) + InningsPitched.from_notation(
+        innings[key] = innings.get(key, InningsPitched.zero()) + InningsPitched.from_notation(
             r["innings_pitched"]
         ).times(r["lines"])
-        entry = sums.setdefault(player_id, dict.fromkeys((*_PITCHING_COUNTS, *_DERIVED_PITCHING_COUNTS), 0))
+        entry = sums.setdefault(key, dict.fromkeys((*_PITCHING_COUNTS, *_DERIVED_PITCHING_COUNTS), 0))
         for name in entry:
             entry[name] += r[name] or 0  # type: ignore[literal-required]
 
     # entry は項目名 → 値の辞書を展開するため、引数ごとの型検査は効かない
-    return {player_id: PitchingLine(innings=innings[player_id], **entry) for player_id, entry in sums.items()}  # type: ignore[arg-type]
+    return {key: PitchingLine(innings=innings[key], **entry) for key, entry in sums.items()}  # type: ignore[arg-type]
 
 
 def _to_fielded_by(value: str) -> tuple[FieldingPosition, ...]:
