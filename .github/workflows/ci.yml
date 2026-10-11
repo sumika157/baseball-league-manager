@@ -83,12 +83,19 @@ jobs:
           docker run --rm -v "$PWD:/app" -w /app/frontend node:22-bookworm-slim \
             sh -c "npm ci && npm run build && npm run typecheck"
 
-      # e2e（Playwright の Chromium）を含むフルスイート。shm は compose と同じく広げる
-      - name: テスト（domain・integration・e2e）
+      # フルスイートは Makefile の test と同じく2回に分ける。domain + integration は並列（CPU の数だけ子プロセス）
+      - name: テスト（domain・integration。並列）
+        run: |
+          # shellcheck disable=SC2086  # CACHE_ENV・RUN_ENV は複数の引数に分けて渡す
+          docker run --rm -v "$PWD:/app" -w /app $CACHE_ENV $RUN_ENV \
+            baseball-dev python manage.py test myapp.tests.domain myapp.tests.integration --parallel auto
+
+      # e2e（Playwright の Chromium）は直列。shm は compose と同じく広げる
+      - name: テスト（e2e）
         run: |
           # shellcheck disable=SC2086  # CACHE_ENV・RUN_ENV は複数の引数に分けて渡す
           docker run --rm --shm-size=1g -v "$PWD:/app" -w /app $CACHE_ENV $RUN_ENV \
-            baseball-dev python manage.py test
+            baseball-dev python manage.py test myapp.tests.e2e
 
   # 本番イメージ。main への push と手動実行だけ。PR では動かさない（fork の PR に packages 権限を渡さないため）
   publish:

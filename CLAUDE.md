@@ -22,7 +22,9 @@
 - **すべてのコマンドは Docker コンテナ経由**で実行する（`docker compose exec web python manage.py ...`）。ホストに Python 環境は無い。
 - リポジトリの実体は WSL2 内。Windows からは `U:\` 経由で見えるが、**実行中コンテナへの操作（`exec` / `logs` / `ps`）は Windows 側から直接叩ける**。`wsl -e bash -c` で包まない。
 - ただし**コンテナを新規作成する操作（`docker compose up` / `run`）だけは WSL 側から実行する**。Windows 側から作るとバインドマウントが実体と切り離され、空マウントや容量 127MB の幽霊ディスク（書き込みが実リポジトリに届かない・`ENOSPC` で死ぬ）になる。
-- テスト: `docker compose exec web python manage.py test`（フル）。domain 層のみなら
+- テスト（フル）は2回に分ける: `docker compose exec web python manage.py test myapp.tests.domain myapp.tests.integration --parallel 4` と
+  `docker compose exec web python manage.py test myapp.tests.e2e`（WSL からは `make test` が同じ2つ）。**並列数は `auto` にしない**
+  （コンテナは他のエージェントと共有で、CPU の数＝20本にしたら Docker のエンジンが応答しなくなった。#184）。domain 層のみなら
   `docker compose exec -e DJANGO_SETTINGS_MODULE= web python -m unittest discover -s myapp/tests/domain -t .`（DB 不要・最速）。
 - `.env` の値に `$` を含めない（Docker Compose が変数展開して壊す。エラーにならず気づけない）。
 - `requirements.txt`・`requirements-dev.txt` は**間接依存まで `==` でバージョン固定**する（現状の方針を維持）。どちらかを変更したら `docker compose build --no-cache` でイメージの再ビルドが必要。
@@ -79,7 +81,7 @@ ORM に直接 `bulk_create` 等で書き込むコード（データ投入コマ�
 - **バグを修正したら、同じコミットに再発防止テストを添える**（前例: テンプレートのコメント漏れを検査する `tests/integration/test_templates.py`）。どの層のバグかに応じて上記の置き場所に従う。
 - コミット前に `ruff check .`・`ruff format --check .`・`mypy .` を通す（いずれもコンテナ内。整形漏れは `ruff format .` で直す。WSL からは `make lint` が同じ3つを実行する）。ルールの設定は `pyproject.toml` が唯一の出典。**`# noqa` で黙らせる前に指摘のとおり直す**（それでも黙らせるなら理由をコメントに残す）。
 - **CI（`.github/workflows/ci.yml`）が、PR（宛先は問わない）と main・`epic/` への push で lint・型検査・React のビルド・フルテストを流す。**
-  手元と CI の分担は次のとおり（手元のフルテストは直列で約4分（2026-10 の実測・#184）。CI はイメージのビルドが加わるぶん手元より遅い。直しては確かめる繰り返しは手元で行う）。
+  手元と CI の分担は次のとおり（手元のフルテストは domain + integration を4本の並列で約1分半、e2e を足して約2分（2026-10 の実測・#184）。CI はイメージのビルドが加わるぶん手元より遅い。直しては確かめる繰り返しは手元で行う）。
   1. 実装中とセルフレビューの各周の終わりは、lint と、触った範囲のテスト（層・画面）を手元で流す。
   2. push の前に1回、手元でフルテストを流す。
   3. PR を作ったら CI の結果を待ち、**通ったのを確かめてからマージを頼む**。落ちたら直して push し直す。
