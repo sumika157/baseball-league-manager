@@ -11,7 +11,7 @@ from django.core.management import call_command
 
 from myapp.infrastructure import orm_models
 
-from ..helpers import play_game
+from ..helpers import play_game, register_players
 from .world_case import YEAR, WorldCase
 
 
@@ -37,11 +37,16 @@ class SeedScopeCase(WorldCase):
         super().setUp()
         # 試合の投入に要る人数（レギュラー9人と控え、先発ローテーションと救援）まで増やす
         for team, first in ((self.team, 30), (self.rival, 30)):
-            number = first
-            for label, count in (("捕手", 2), ("外野手", 5), ("投手", 8)):
-                for index in range(count):
-                    self.service.register_player(team.id, f"{team.name}追加{label}{index}", number, label)
-                    number += 1
+            labels = [
+                (label, index) for label, count in (("捕手", 2), ("外野手", 5), ("投手", 8)) for index in range(count)
+            ]
+            register_players(
+                team,
+                [
+                    (f"{team.name}追加{label}{index}", number, label)
+                    for number, (label, index) in enumerate(labels, start=first)
+                ],
+            )
         # 読みを付与するモードが拾う名前（実在の選手の読みを持つ名前）の選手を、世界に1人置く。
         # 絞り込みが漏れていれば、この選手によみがなが付く
         orm_models.Player.objects.filter(id=self.pennant_players(self.pennant_team)[0]).update(name="藤井健吾")
