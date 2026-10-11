@@ -40,17 +40,29 @@ where: ## どの作業ツリーを対象にしているか表示する（worktre
 
 # ---- テスト ----
 
+# フルスイートは2回に分ける。domain + integration は PARALLEL 本の子プロセスで並列、
+# e2e は直列（並列にすると Chromium が重なってかえって遅い）。t= を付けたときは指定どおり1回・直列で流す
+# （--slowest-classes で測るときも直列にする。並列では測れない）。
+# PARALLEL を auto（CPU の数）にしないのは、手元では複数のエージェントが同じコンテナでテストを流すため。
+# CPU 20 個の機械で auto（20本）にしたとき、他のテストと重なって Docker のエンジンが応答しなくなった（#184）。
+PARALLEL ?= 4
+
 .PHONY: test
-test: ## フルスイート（domain + integration + e2e。t=myapp.tests.xxx で個別指定）
+test: ## フルスイート（domain + integration は並列・e2e は直列。t=myapp.tests.xxx で個別指定、PARALLEL=8 で並列数）
+ifeq (,$(t))
+	$(EXEC) python manage.py test myapp.tests.domain myapp.tests.integration --parallel $(PARALLEL)
+	$(EXEC) python manage.py test myapp.tests.e2e
+else
 	$(EXEC) python manage.py test $(t)
+endif
 
 .PHONY: test-domain
 test-domain: ## domain 層のみ（Django 設定なし・DB 不要・最速）
 	docker compose exec -w $(WORKDIR) $(CACHE_ENV) -e DJANGO_SETTINGS_MODULE= web python -m unittest discover -s myapp/tests/domain -t .
 
 .PHONY: test-integration
-test-integration: ## integration 層のみ（リポジトリ往復・画面動作・テンプレート検査）
-	$(EXEC) python manage.py test myapp.tests.integration
+test-integration: ## integration 層のみ（リポジトリ往復・画面動作・テンプレート検査。並列）
+	$(EXEC) python manage.py test myapp.tests.integration --parallel $(PARALLEL)
 
 .PHONY: test-e2e
 test-e2e: ## E2E のみ（Playwright 実ブラウザ・遅い）

@@ -257,12 +257,14 @@ class OffseasonPopulationTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        started = time.perf_counter()
+        # 壁時計ではなくこのプロセスの CPU 時間で測る。並列実行やほかのエージェントのテストと重なると、
+        # CPU を待たされた時間が入って壁時計では 30 秒を超えたことがある（#184）
+        started = time.process_time()
         cls.years = run_years(roster_size=STEADY_ROSTER)
-        cls.elapsed = time.perf_counter() - started
+        cls.elapsed = time.process_time() - started
 
     def test_runs_in_reasonable_time(self) -> None:
-        """10年ぶんの計算（約3,000人 × 10年）。実測は約1.4秒。遅い環境で落ちないよう余裕を持たせる。"""
+        """10年ぶんの計算（約3,000人 × 10年）の CPU 時間。実測は約1.4秒。遅い環境で落ちないよう余裕を持たせる。"""
         self.assertLess(self.elapsed, 4.0)
 
     def test_age_distribution_is_kept(self) -> None:

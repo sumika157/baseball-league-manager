@@ -28,7 +28,11 @@ docker compose ps
 | 「E2Eだけ」「ブラウザテストだけ」 | 下記 §4 |
 | ファイル・テストケース名の指定あり | 下記 §3 |
 
-フルスイートには `tests/e2e/`（Playwright 実ブラウザ）も含まれ、そのぶん遅い。
+フルスイートは CLAUDE.md のとおり2回に分ける（domain + integration を `--parallel 4`、e2e を直列）。
+並列数は `auto` にしない（コンテナは他のエージェントと共有で、20本にしたら Docker のエンジンが応答しなくなった）。
+並列で落ちたのに `TypeError: cannot pickle 'traceback' object` しか出ないときは、イメージに `tblib` が無い（古い）。
+どれが落ちたかは、`--parallel` を外して直列で流し直せば分かる。
+`--slowest-classes` で遅いクラスを測るときも直列で流す。
 
 ## 3. 一部だけ実行する
 
