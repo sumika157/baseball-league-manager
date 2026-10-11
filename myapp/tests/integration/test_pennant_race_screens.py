@@ -16,7 +16,15 @@ from django.urls import reverse
 
 from myapp.application.dto import LeagueStandings, StandingRow, WorldContext
 from myapp.application.pennant_home import _LABELS, PennantHomeService
-from myapp.application.pennant_race import ChampionTiebreak, own_race, remaining_by_team, tiebreak_for
+from myapp.application.pennant_race import (
+    ChampionTiebreak,
+    SeasonFinal,
+    final_standings,
+    own_race,
+    remaining_by_team,
+    team_order,
+    tiebreak_for,
+)
 from myapp.domain.pennant.schedule import AdvanceTarget, Fixture
 from myapp.domain.pennant.season import SCREEN_ADVANCE_TARGETS, SeasonPhase
 from myapp.domain.pennant.world import WorldScope
@@ -45,6 +53,17 @@ def _row(team_id: int, wins: int, losses: int) -> StandingRow:
         games_played=wins + losses,
         winning_percentage="",
         games_behind="",
+    )
+
+
+def _finals_of(service: PennantHomeService, view, years: list[int]) -> list[SeasonFinal]:
+    """世界の終了が通るのと同じ `final_standings` を、同じ材料（球団・リーグ・年ごとの試合）で呼ぶ。"""
+    return final_standings(
+        years,
+        teams=service._team_records.find_all(),
+        leagues=service._leagues.find_all(),
+        games_of=lambda year: service._games.list_for_standings(year=year),
+        order=team_order(view),
     )
 
 
@@ -201,14 +220,17 @@ class RaceBandTest(FinishedSeasonCase):
         """世界の終了の通算が読む年ごとの順位は、順位表と同じ規則（domain の standings）から出る。"""
         service = build_pennant_home_service(self.world_a)
 
-        (mine,) = service._standings_by_year([YEAR])[YEAR]
-        (shown,) = build_world_view_service(self.world_a).get_league_standings(YEAR)
+        view = build_world_view_service(self.world_a)
+
+        ((final,),) = [f.standings for f in _finals_of(service, view, [YEAR])]
+        (shown,) = view.get_league_standings(YEAR)
 
         def key(row):
             return (row.rank, row.team_id, row.wins, row.losses, row.ties)
 
-        self.assertEqual([key(r) for r in mine.rows], [key(r) for r in shown.rows])
-        self.assertEqual(service._standings_by_year([YEAR - 1]), {YEAR - 1: []}, "試合の無い年は空")
+        self.assertEqual([key(r) for r in final.rows], [key(r) for r in shown.rows])
+        (empty,) = _finals_of(service, view, [YEAR - 1])
+        self.assertEqual((empty.standings, dict(empty.champions)), ([], {}), "試合の無い年は空")
 
     def test_two_seasons_add_up_in_the_finale_and_the_second_year_reads_the_first_years_final_rank(self):
         leader = self.leader
@@ -223,7 +245,7 @@ class RaceBandTest(FinishedSeasonCase):
             context = build_pennant_world_view().get_context(self.world_a)
             home = home_service.get_home(context, include_advance=False)
 
-        both = home_service._standings_by_year([YEAR, YEAR + 1])
+        both = {f.year: f.standings for f in _finals_of(home_service, view, [YEAR, YEAR + 1])}
         for year in (YEAR, YEAR + 1):
             (shown,) = view.get_league_standings(year)
             (mine,) = both[year]
@@ -372,38 +394,33 @@ class FinaleTest(SimpleTestCase):
     """終了した世界の通算。年ごとの順位表から、自軍の成績と優勝を足し上げる。"""
 
     class Teams:
-        def __init__(self, by_year):
-            self.by_year = by_year
-
-        def get_league_standings(self, year):
-            return self.by_year.get(year, [])
-
         def list_teams(self):
             return SimpleNamespace(rows=[SimpleNamespace(id=1), SimpleNamespace(id=2)])
 
     class Games:
-        def __init__(self, years, results=()):
-            self.years = years
-            self.results = results
+        def __init__(self, results_by_year):
+            self.results_by_year = results_by_year
 
         def list_seasons(self, **kwargs):
-            return sorted(self.years, reverse=True)
+            return sorted(self.results_by_year, reverse=True)
 
-        def list_rows(self, **kwargs):
+        def list_for_standings(self, *, year):
             return [
-                SimpleNamespace(is_recorded=True, winner_team_id=winner, home_team_id=winner, away_team_id=loser)
-                for winner, loser in self.results
+                SimpleNamespace(
+                    year=year, is_recorded=True, winner_team_id=winner, home_team_id=winner, away_team_id=loser
+                )
+                for winner, loser in self.results_by_year[year]
             ]
 
-    def service(self, teams, games):
+    def service(self, games):
         return PennantHomeService(
-            teams=teams,
+            teams=self.Teams(),
             games=games,
             game_records=None,
             fixtures=None,
             activity=None,
-            team_records=None,
-            leagues=None,
+            team_records=SimpleNamespace(find_all=list),
+            leagues=SimpleNamespace(find_all=list),
         )
 
     def league(self, *rows):
@@ -434,29 +451,26 @@ class FinaleTest(SimpleTestCase):
                 StandingRow(1, 1, "球団1", 80, 63, 0, 143, "", ""), StandingRow(1, 2, "球団2", 80, 63, 0, 143, "", "")
             ),
         }
-        teams = self.Teams(by_year)
-        games = self.Games([2026, 2027, 2028], results=[(1, 2), (1, 2), (2, 1)])
-        service = self.service(teams, games)
-        asked = []
+        games = self.Games({2026: [(1, 2)], 2027: [(2, 1)], 2028: [(1, 2), (1, 2), (2, 1)]})
+        service = self.service(games)
 
-        def standings_by_year(years):
-            asked.append(list(years))
-            return {year: by_year[year] for year in years}
+        with mock.patch(
+            "myapp.application.pennant_race.league_standings",
+            lambda teams, leagues, year_games: by_year[year_games[0].year],
+        ):
+            finale = service._finale(self.world())
 
-        with mock.patch.object(service, "_standings_by_year", standings_by_year):
-            finale = service._finale(self.world(), 2028, by_year[2028])
-
+        assert finale is not None
         self.assertEqual([s.year for s in finale.seasons], [2026, 2028])
         self.assertEqual([s.is_champion for s in finale.seasons], [True, True])
         self.assertEqual((finale.wins, finale.losses, finale.ties, finale.titles), (170, 113, 3, 2))
         self.assertEqual([s.record for s in finale.seasons], ["90勝50敗3分", "80勝63敗"])
-        self.assertEqual(asked, [[2026, 2027]], "最後の年はホームが読んだ順位を使い、二重に読まない")
 
     def test_a_world_that_is_not_over_has_no_finale(self):
-        service = self.service(self.Teams({}), self.Games([]))
+        service = self.service(self.Games({}))
         world = replace(self.world(), is_final_season=False)
 
-        self.assertIsNone(service._finale(world, 2028, []))
+        self.assertIsNone(service._finale(world))
 
 
 class PreviousRankTest(SimpleTestCase):

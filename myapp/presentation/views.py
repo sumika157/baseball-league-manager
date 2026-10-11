@@ -19,7 +19,7 @@ from django.http import Http404, HttpResponseNotAllowed
 from django.middleware.csrf import get_token
 from django.shortcuts import redirect, render
 from django.urls import reverse, reverse_lazy
-from django.views.decorators.http import require_GET
+from django.views.decorators.http import require_GET, require_safe
 from django.views.generic import CreateView
 
 from ..application.club_management import ClubManagementService
@@ -36,6 +36,7 @@ from ..application.dto import (
 )
 from ..application.game_recording import GameRecordingService
 from ..application.pennant_club_details import ClubDetailsService
+from ..application.pennant_history import PennantHistoryService
 from ..application.pennant_home import PennantHomeService
 from ..application.pennant_offseason import PennantOffseasonService
 from ..application.pennant_offseason_view import OffseasonViewService
@@ -434,6 +435,22 @@ def build_pennant_home_service(world_id: int) -> PennantHomeService:
     )
 
 
+def build_pennant_history_service(world_id: int) -> PennantHistoryService:
+    """歴代の記録と球団史の材料を作るサービスを組み立てる。読むだけ。
+
+    順位・タイトルは世界の範囲の `TeamApplicationService`（`build_world_view_service`）に任せ、
+    試合の一覧・球団・リーグの参照は、すべて渡された世界の範囲で作る。
+    世界の id が正しくなければ InvalidWorld。
+    """
+    scope = WorldScope.pennant(world_id)
+    return PennantHistoryService(
+        teams=build_world_view_service(world_id),
+        games=DjangoGameListQuery(scope),
+        team_records=DjangoTeamRepository(scope),
+        leagues=DjangoLeagueRepository(scope),
+    )
+
+
 def _world_context(world_id: int) -> WorldContext:
     """世界の見出し。存在しない・id が正しくない世界は 404。"""
     try:
@@ -714,6 +731,31 @@ def pennant_offseason(request, world_id, year):
     if summary is None:
         raise Http404("その年のオフの結果は、まだありません。")
     return _render(request, "pennant/offseason.html", {"summary": summary}, world)
+
+
+@require_safe
+def pennant_history(request, world_id):
+    """歴代の記録。各リーグの年ごとの優勝と、選んだリーグ（`?league=`）のタイトル受賞者。読むだけで誰でも開ける。
+
+    載せるのは終わったシーズンだけ。無効なリーグの指定は既定のリーグに落とす。
+    """
+    world = _world_context(world_id)
+    league = request.GET.get("league", "")
+    history = build_pennant_history_service(world_id).get_world_history(
+        world, league_id=int(league) if league.isdecimal() else None
+    )
+    return _render(request, "pennant/history.html", {"history": history}, world)
+
+
+@require_safe
+def pennant_team_history(request, world_id, team_id):
+    """球団史。どの球団でも開ける。年ごとの順位・勝敗・優勝と、その球団の選手が取ったタイトル。"""
+    world = _world_context(world_id)
+    try:
+        history = build_pennant_history_service(world_id).get_club_history(world, team_id)
+    except TeamNotFound:
+        raise Http404("球団が見つかりません。") from None
+    return _render(request, "pennant/team_history.html", {"history": history}, world)
 
 
 def pennant_delete(request, world_id):

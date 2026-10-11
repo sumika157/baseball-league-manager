@@ -2465,3 +2465,95 @@ class WorldFinale:
     titles: int
     # 通算の勝敗（「170勝113敗3分」）。画面で組み立てない
     record: str
+
+
+# --- 歴代の記録・球団史（#105）。保存せず、終わったシーズンの順位とタイトルから導く ---
+
+
+@dataclass(frozen=True)
+class LeagueChampionCell:
+    """歴代の「リーグ優勝」の表の1マス（ある年のあるリーグ）。試合の無かったリーグは球団が無い。"""
+
+    league_id: int
+    team_id: int | None
+    team_name: str
+    record: str  # 「80勝60敗3分」。球団が無ければ空
+    is_own: bool
+
+
+@dataclass(frozen=True)
+class TitleColumn:
+    """タイトルの表の列見出し。部門の並びと名前は `get_league_titles` の部門が出典。"""
+
+    key: str
+    label: str
+    note: str  # 「規定打席以上」など。率の部門だけ
+
+
+@dataclass(frozen=True)
+class TitleHolderCell:
+    """タイトルの表の1マス（ある年のある部門）。同率首位は全員（部門の上位で切った人数まで）。"""
+
+    department_key: str
+    holders: list[RankingEntry]
+
+
+@dataclass(frozen=True)
+class WorldHistoryYear:
+    """歴代の記録の1年。各リーグの優勝と、選んだリーグのタイトル受賞者。"""
+
+    year: int
+    champions: list[LeagueChampionCell]  # `WorldHistory.leagues` と同じ並び
+    batting: list[TitleHolderCell]  # `WorldHistory.batting_columns` と同じ並び
+    pitching: list[TitleHolderCell]  # `WorldHistory.pitching_columns` と同じ並び
+
+
+@dataclass(frozen=True)
+class WorldHistory:
+    """歴代の記録。終わったシーズンだけを古い順に並べる。"""
+
+    leagues: list[LeagueOption]
+    selected_league_id: int | None
+    selected_league_name: str
+    batting_columns: list[TitleColumn]
+    pitching_columns: list[TitleColumn]
+    years: list[WorldHistoryYear]
+
+
+@dataclass(frozen=True)
+class ClubTitle:
+    """球団史に載せる、その球団の選手が取ったタイトル。"""
+
+    label: str
+    player_id: int
+    player_name: str
+    team_id: int
+    value: str
+
+
+@dataclass(frozen=True)
+class ClubHistorySeason:
+    """球団史の1年。最終順位・勝敗・優勝と、その年に球団の選手が取ったタイトル。"""
+
+    year: int
+    rank: int
+    team_count: int  # リーグの球団数
+    wins: int
+    losses: int
+    ties: int
+    winning_percentage: str
+    games_behind: str
+    is_champion: bool
+    titles: list[ClubTitle]
+
+
+@dataclass(frozen=True)
+class ClubHistory:
+    """球団史。終わったシーズンだけ。通算の勝敗と優勝回数を添える。"""
+
+    team_id: int
+    team_name: str
+    league_name: str
+    seasons: list[ClubHistorySeason]
+    record: str  # 通算の勝敗（「170勝113敗3分」）
+    titles: int  # リーグ優勝の回数

@@ -81,7 +81,7 @@ GM ホーム。上から、自軍の位置 → 進めた結果 → 進める（�
 {% endif %}
 
 {% if home.finale %}
-  {% include 'pennant/_finale.html' with finale=home.finale %}
+  {% include 'pennant/_finale.html' with finale=home.finale own_team_id=world.managed_team_id %}
 {% endif %}
 
 {% if home.shows_previous_season %}

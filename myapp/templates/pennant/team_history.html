@@ -1,0 +1,71 @@
+{% extends 'myapp/base.html' %}
+{% load scoped %}
+
+{% block title %}{{ history.team_name }} 球団史 - {{ world.name }} - ペナント - Baseball Manager{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb">
+    {% include 'pennant/_crumbs.html' %}
+    <li class="breadcrumb-item"><a href="{% scoped_url 'player_list' history.team_id %}">{{ history.team_name }}</a></li>
+    <li class="breadcrumb-item active" aria-current="page">球団史</li>
+  </ol>
+</nav>{% include 'pennant/_world_bar.html' %}
+
+{% comment %}
+球団史。終わったシーズンだけ。年ごとの最終順位・勝敗・優勝と、その年に球団の選手が取ったタイトル。
+保存した値ではなく、順位表とタイトルの集計から導いた値（世界の終了と同じ関数を通る）。
+{% endcomment %}
+<div class="page-head">
+  <h1 class="page-title">{{ history.team_name }} 球団史</h1>
+  <p class="page-subtitle">{{ history.league_name }} · 終わったシーズンだけを載せます。</p>
+</div>
+
+{% if history.seasons %}
+  <p class="mb-3">
+    通算 <span class="stat-key">{{ history.record }}</span>
+    <span class="stat-muted ms-2">優勝</span> <span class="stat-key">{{ history.titles }}回</span>
+  </p>
+  <div class="card mb-4">
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead>
+            <tr>
+              <th>年</th>
+              <th class="text-end">順位</th>
+              <th class="text-end">勝</th>
+              <th class="text-end">敗</th>
+              <th class="text-end">分</th>
+              <th class="text-end">勝率</th>
+              <th class="text-end">差</th>
+              <th></th>
+              <th>タイトル</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for season in history.seasons %}
+              <tr>
+                <td class="tabular-nums"><a href="{% url 'pennant_standings_by_year' world.world_id season.year %}">{{ season.year }}年</a></td>
+                <td class="text-end tabular-nums stat-key">{{ season.rank }}位<span class="stat-muted fw-normal">/{{ season.team_count }}</span></td>
+                <td class="text-end tabular-nums">{{ season.wins }}</td>
+                <td class="text-end tabular-nums">{{ season.losses }}</td>
+                <td class="text-end tabular-nums">{{ season.ties }}</td>
+                <td class="text-end tabular-nums">{{ season.winning_percentage }}</td>
+                <td class="text-end tabular-nums">{{ season.games_behind }}</td>
+                <td>{% if season.is_champion %}<span class="badge bg-primary">優勝</span>{% endif %}</td>
+                <td>{% for title in season.titles %}{% if not forloop.first %} · {% endif %}{{ title.label }}（<a href="{% scoped_url 'player_detail' title.team_id title.player_id %}">{{ title.player_name }}</a> {{ title.value }}）{% empty %}<span class="stat-muted">—</span>{% endfor %}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+{% else %}
+  <div class="card">
+    <div class="empty-state">まだ終わったシーズンがありません。シーズンを終えると、ここに年ごとの成績が並びます。</div>
+  </div>
+{% endif %}
+<p><a href="{% url 'pennant_history' world.world_id %}">歴代の記録を見る →</a></p>
+{% endblock %}

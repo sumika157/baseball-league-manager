@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import datetime
+from collections.abc import Iterable
 from enum import Enum
 
 from .schedule import MAX_GAMES_PER_ADVANCE as MAX_GAMES_PER_ADVANCE
@@ -123,3 +124,16 @@ def stats_year(*, phase: SeasonPhase, last_played_on: datetime.date | None, curr
     if phase is SeasonPhase.BEFORE_OPENING and last_played_on is not None:
         return last_played_on.year
     return current_year
+
+
+def completed_years(recorded_years: Iterable[int], *, phase: SeasonPhase, current_year: int) -> list[int]:
+    """終わったシーズンの年（古い順）。歴代の記録と球団史に載せる範囲（優勝もタイトルも確定した年）。
+
+    `current_year`（いまの年度）より前の年は終わっている。いまの年度は、局面がシーズン終了のときだけ含める。
+    締めた後の開幕前は年度が翌年に進むので、締めた年は前者に入る。試合の記録が無い年は出ない。
+    """
+    return sorted(
+        year
+        for year in set(recorded_years)
+        if year < current_year or (year == current_year and phase is SeasonPhase.FINISHED)
+    )

@@ -8,6 +8,7 @@
     <p class="mb-3">
       通算 <span class="stat-key">{{ finale.record }}</span>
       <span class="stat-muted ms-2">優勝</span> <span class="stat-key">{{ finale.titles }}回</span>
+      {% if own_team_id %}<a class="ms-3" href="{% url 'pennant_team_history' world.world_id own_team_id %}">球団史を見る →</a>{% endif %}
     </p>
     <div class="table-responsive">
       <table class="table table-sm mb-0">

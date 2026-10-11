@@ -1,0 +1,22 @@
+{% comment %}
+歴代の記録のタイトルの表（打撃か投手か）。history（WorldHistory）・columns（TitleColumn の並び）・is_batting を渡す。
+行は年、列は部門（部門の並びと名前は get_league_titles が出典）。同率首位は全員を並べる。
+{% endcomment %}
+<div class="table-responsive">
+  <table class="table table-sm mb-0">
+    <thead>
+      <tr>
+        <th>年</th>
+        {% for column in columns %}<th>{{ column.label }}{% if column.note %}<br><span class="stat-muted fw-normal">{{ column.note }}</span>{% endif %}</th>{% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for year in history.years %}
+        <tr>
+          <td class="tabular-nums">{{ year.year }}年</td>
+          {% if is_batting %}{% include 'pennant/_history_title_cells.html' with cells=year.batting %}{% else %}{% include 'pennant/_history_title_cells.html' with cells=year.pitching %}{% endif %}
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

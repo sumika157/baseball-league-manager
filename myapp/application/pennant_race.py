@@ -2,6 +2,8 @@
 
 規則は domain の `pennant_race`（途中の確定・マジック）と `season_champion`（終了時の同率の決着）が
 唯一の出典で、ここは順位表（`StandingRow`）を読み替えるだけ。世界の一覧と GM ホームが同じ読み替えを使う。保存はしない。
+終わったシーズンの年ごとの最終順位と優勝（`final_standings`。優勝の決め方は domain の `league_champion`）も、
+世界の終了・歴代の記録・球団史が同じ関数を通る。
 """
 
 from __future__ import annotations
@@ -10,11 +12,13 @@ from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
-from ..domain.pennant.race import RaceTeam, pennant_race, season_champion
+from ..domain.entities import Game, League, Team
+from ..domain.pennant.race import RaceTeam, final_ranks, league_champion, pennant_race, season_champion
 from ..domain.pennant.schedule import Fixture
 from .dto import LeagueStandings, OwnRace, StandingRow
 from .queries import GameListQuery
 from .services import TeamApplicationService
+from .standings import league_standings
 
 
 @dataclass(frozen=True)
@@ -27,6 +31,11 @@ class ChampionTiebreak:
     previous_rank: Callable[[], Mapping[int, int]]
     # 球団の並び順
     order: Callable[[], Sequence[int]]
+
+
+def team_order(teams: TeamApplicationService) -> list[int]:
+    """球団の並び順（同率の決着の最後の基準）。"""
+    return [team.id for team in teams.list_teams().rows]
 
 
 def tiebreak_for(year: int, *, games: GameListQuery, teams: TeamApplicationService) -> ChampionTiebreak:
@@ -45,17 +54,19 @@ def tiebreak_for(year: int, *, games: GameListQuery, teams: TeamApplicationServi
         ranks: dict[int, int] = {}
         last_year = tiebreak_for(year - 1, games=games, teams=teams)
         for league in teams.get_league_standings(year - 1):
-            leaders = [row.team_id for row in league.rows if row.rank == 1]
-            champion = None
-            if len(leaders) > 1:
-                champion = season_champion(leaders, last_year.results(), last_year.previous_rank(), last_year.order())
-            for row in league.rows:
-                is_runner_up = champion is not None and row.team_id in leaders and row.team_id != champion
-                ranks[row.team_id] = 2 if is_runner_up else row.rank
+            league_ranks = {row.team_id: row.rank for row in league.rows}
+            # 同率首位が無ければ、前々年の順位や試合は読まない
+            tied = sum(1 for rank in league_ranks.values() if rank == 1) > 1
+            champion = (
+                league_champion(league_ranks, last_year.results(), last_year.previous_rank(), last_year.order())
+                if tied
+                else None
+            )
+            ranks.update(final_ranks(league_ranks, champion))
         return ranks
 
     def order() -> list[int]:
-        return [team.id for team in teams.list_teams().rows]
+        return team_order(teams)
 
     return ChampionTiebreak(results=results, previous_rank=previous_rank, order=order)
 
@@ -112,3 +123,65 @@ def remaining_by_team(fixtures: Iterable[Fixture]) -> dict[int, int]:
         counts[fixture.home_team_id] += 1
         counts[fixture.visitor_team_id] += 1
     return dict(counts)
+
+
+@dataclass(frozen=True)
+class SeasonFinal:
+    """1シーズンの最終結果。リーグ別の最終順位と、リーグごとの優勝球団。"""
+
+    year: int
+    standings: list[LeagueStandings]
+    # リーグ id -> 優勝した球団 id（順位表の無いリーグは載らない）
+    champions: Mapping[int, int]
+
+    def league_of(self, team_id: int) -> LeagueStandings | None:
+        """球団が載っているリーグの順位表。その年に試合の無い球団（順位表に載らない）は None。"""
+        return next((league for league in self.standings if any(row.team_id == team_id for row in league.rows)), None)
+
+    def result_of(self, team_id: int) -> tuple[StandingRow, bool] | None:
+        """球団の最終順位の行と、優勝したか。その年に試合の無い球団は None。"""
+        league = self.league_of(team_id)
+        if league is None:
+            return None
+        row = next(row for row in league.rows if row.team_id == team_id)
+        return row, self.champions.get(league.league_id) == team_id
+
+
+def final_standings(
+    years: Iterable[int],
+    *,
+    teams: Sequence[Team],
+    leagues: Sequence[League],
+    games_of: Callable[[int], list[Game]],
+    order: Sequence[int],
+) -> list[SeasonFinal]:
+    """年ごとの最終順位と優勝。**世界の終了・歴代の記録・球団史が同じ関数を通る**。
+
+    優勝の決め方は domain の `league_champion`。年は古い順に処理し、前年の最終順位
+    （同率首位は規定で決めた優勝を1位にしたもの。domain の `final_ranks`）を次の年の同率の決着に渡す。
+    前年が `years` に無ければ、前年の順位は無いものとする（開幕年と同じ）。
+    同率の決着に使う対戦結果は、その年に読んだ試合から作る（クエリを足さない）。
+    """
+    seasons: list[SeasonFinal] = []
+    previous_year: int | None = None
+    previous_ranks: dict[int, int] = {}
+    for year in sorted(set(years)):
+        games = games_of(year)
+        standings = league_standings(teams, leagues, games)
+        results = [
+            (game.winner_team_id, game.away_team_id if game.winner_team_id == game.home_team_id else game.home_team_id)
+            for game in games
+            if game.is_recorded and game.winner_team_id is not None
+        ]
+        before = previous_ranks if previous_year == year - 1 else {}
+        champions: dict[int, int] = {}
+        ranks: dict[int, int] = {}
+        for league in standings:
+            league_ranks = {row.team_id: row.rank for row in league.rows}
+            champion = league_champion(league_ranks, results, before, order)
+            if champion is not None:
+                champions[league.league_id] = champion
+            ranks.update(final_ranks(league_ranks, champion))
+        seasons.append(SeasonFinal(year=year, standings=standings, champions=champions))
+        previous_year, previous_ranks = year, ranks
+    return seasons
