@@ -31,7 +31,12 @@ from ..domain.pennant.club_plan import (
 )
 from ..domain.pennant.season import ratings_year
 from ..domain.repositories import ClubPlanRepository, FixtureRepository, RatingsRepository, WorldRepository
-from ..domain.simulation.fatigue import FATIGUE_WINDOW_DAYS, PitchingHistory
+from ..domain.simulation.fatigue import (
+    FATIGUE_WINDOW_DAYS,
+    FatigueLevel,
+    PitchingHistory,
+    pregame_fatigue_points,
+)
 from ..domain.simulation.manager import (
     LINEUP_SIZE,
     MIN_ACTIVE_PITCHERS,
@@ -103,10 +108,11 @@ class ClubManagementService:
         return self._situation(team_id).view(ClubPlan(team_id=team_id))
 
     def pitching_usage(self, view: ClubPlanView) -> ClubPitchingUsage:
-        """投手陣の状態（直近の登板・前回の先発・次の試合日に投げられるか）。`view` は `view()` の結果。
+        """投手陣の状態（直近の登板・前回の先発・次の試合日に投げられるか・疲労の区分）。`view` は `view()` の結果。
 
         次の試合日は受け持つ球団の未消化の対戦の最初の日。疲労は保存せず、直近の登板から導く
-        （進めるときと同じ `PitchingHistory`）。日程が残っていなければ、状態は既定で返す。
+        （進めるときと同じ `PitchingHistory`）。疲労の区分はエンジンと同じ式（`pregame_fatigue_points`）で、
+        ローテーションは先発したら、抑えと救援陣は救援で投げたらの区分。日程が残っていなければ、状態は既定で返す。
         """
         team_id = view.team_id
         next_game_on = self._fixtures.first_date(team_id)
@@ -126,28 +132,31 @@ class ClubManagementService:
             }
         players = {row.player_id: row for row in view.players}
 
-        def usage_of(player_id: int) -> ClubPitcherUsage:
+        def usage_of(player_id: int, *, as_starter: bool) -> ClubPitcherUsage:
             row = players[player_id]
             if next_game_on is None:
-                return ClubPitcherUsage(player_id, row.name, row.is_foreign, (), None, True)
+                return ClubPitcherUsage(player_id, row.name, row.is_foreign, (), None, True, FatigueLevel.NONE)
+            # 投手陣に並ぶのは能力のある投手だけ（`view` の材料）。念のため無ければ平均で数える
+            stamina = staminas.get(player_id, AVERAGE_RATING)
+            points = pregame_fatigue_points(
+                history.workload(player_id, next_game_on), as_starter=as_starter, stamina=stamina
+            )
             return ClubPitcherUsage(
                 player_id=player_id,
                 name=row.name,
                 is_foreign=row.is_foreign,
                 pitched_recently=tuple(history.pitched_on(player_id, day) for day in recent_days),
                 days_since_start=history.days_since_start(player_id, next_game_on),
-                # 投手陣に並ぶのは能力のある投手だけ（`view` の材料）。念のため無ければ平均で数える
-                can_pitch=history.can_pitch_on(
-                    player_id, next_game_on, stamina=staminas.get(player_id, AVERAGE_RATING)
-                ),
+                can_pitch=history.can_pitch_on(player_id, next_game_on, stamina=stamina),
+                fatigue=FatigueLevel.from_points(points),
             )
 
         return ClubPitchingUsage(
             next_game_on=next_game_on,
             recent_days=recent_days,
-            rotation=tuple(usage_of(player_id) for player_id in view.rotation_ids),
-            closer=usage_of(view.closer_id) if view.closer_id is not None else None,
-            bullpen=tuple(usage_of(player_id) for player_id in view.bullpen_ids),
+            rotation=tuple(usage_of(player_id, as_starter=True) for player_id in view.rotation_ids),
+            closer=usage_of(view.closer_id, as_starter=False) if view.closer_id is not None else None,
+            bullpen=tuple(usage_of(player_id, as_starter=False) for player_id in view.bullpen_ids),
         )
 
     # --- 上書きする ---
