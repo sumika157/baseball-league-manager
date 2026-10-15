@@ -42,6 +42,10 @@ if not SECRET_KEY:
         "環境変数 DJANGO_SECRET_KEY が設定されていません。.env.example をコピーして .env を作成してください。"
     )
 
+# 鍵を替えるときの旧い鍵（カンマ区切り）。署名の検証だけに使われるので、全員をログアウトさせずに替えられる。
+# 手順は Wiki「本番公開」の「秘密鍵の入れ替え」
+SECRET_KEY_FALLBACKS = env_list("DJANGO_SECRET_KEY_FALLBACKS")
+
 # SECURITY WARNING: don't run with debug turned on in production!
 # 明示的に有効化しない限り False（安全側に倒す）
 DEBUG = env_bool("DJANGO_DEBUG")
@@ -187,6 +191,8 @@ if PRODUCTION_STATIC:
 if env_bool("DJANGO_BEHIND_PROXY"):
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 CSRF_TRUSTED_ORIGINS = env_list("DJANGO_CSRF_TRUSTED_ORIGINS")  # 例: https://example.com
+# CSRF の検査に落ちたときの画面。/api/ には日本語の JSON、それ以外は 403.html を返す
+CSRF_FAILURE_VIEW = "myapp.presentation.csrf.csrf_failure"
 SECURE_SSL_REDIRECT = env_bool("DJANGO_SSL_REDIRECT")
 SESSION_COOKIE_SECURE = env_bool("DJANGO_SECURE_COOKIES")
 CSRF_COOKIE_SECURE = env_bool("DJANGO_SECURE_COOKIES")
