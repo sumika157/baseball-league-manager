@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date
-from typing import Any
+from typing import Any, Protocol
 
 from django.db import models, transaction
 from django.db.models import Count, Exists, Max, Min, OuterRef, Prefetch, Q, QuerySet, Sum
@@ -243,6 +243,11 @@ class DjangoTeamRepository:
 
         成績は試合側に持つため、ここでは書かない。
         範囲の外のリーグ・チームには書けない（別の世界の球団を書き換えない）。
+
+        **選手・在籍・FA 宣言・主将は、保存する時点の DB の行と比べて変わった行だけを書く**（`_write_changed`。#176）。
+        全員を書き直すと、シーズンを締める処理が引退した選手まで含めて約1.3万行（8リーグの9シーズン目）を書き、その間ずっと書き込みロックを持っていた。
+        保存した後の DB の状態は全員を書き直す形と同じで、持っていない行は消さない（upsert だけ）。
+        比べる相手は読み込んだ時点の写しではなく今の行なので、同じ選手を2つの集約で続けて保存する移籍も書き漏らさない。
         """
         if team.league_id is None or not leagues_in(self._scope).filter(id=team.league_id).exists():
             raise LeagueNotFound(f"リーグが見つかりません（id={team.league_id}）。")
@@ -262,66 +267,41 @@ class DjangoTeamRepository:
         )
         team.id = team_row.id
 
-        for player in team.players:
-            row, _ = orm_models.Player.objects.update_or_create(  # type: ignore[misc]
-                id=player.id,
-                defaults={
-                    "name": player.name,
-                    "position": player.position.value,
-                    **_profile_defaults(player.profile),
-                },
-            )
-            player.id = row.id
+        # 選手 → 在籍・FA 宣言・主将の順。子の行は、新しい選手の id が決まってから作る
+        players = team.players
+        _write_changed(orm_models.Player, [(player, _player_values(player)) for player in players])
 
-            # 在籍が所属と背番号の出典。選手側には持たせない
-            for stint in player.career:
-                acquired_via = stint.acquired_via.value if stint.acquired_via is not None else None
-                stint_row, _ = orm_models.PlayerStint.objects.update_or_create(  # type: ignore[misc]
-                    id=stint.id,
-                    defaults={
-                        "player": row,
-                        "team_id": stint.team_id,
-                        "number": stint.number.value,
-                        "from_year": stint.from_year,
-                        "to_year": stint.to_year,
-                        "signed_as": stint.signed_as.value,
-                        "promoted_year": stint.promoted_year,
-                        "number_before_promotion": (
-                            stint.number_before_promotion.value if stint.number_before_promotion is not None else None
-                        ),
-                        "acquired_via": acquired_via,
-                        "left_via": stint.left_via.value if stint.left_via is not None else None,
-                    },
-                )
-                stint.id = stint_row.id
-
-            # FA 宣言。在籍・主将と同じく upsert だけで、持っていない宣言は消さない。
-            # 消すのは、選手が取り消したと記録した宣言（removed_declaration_ids）だけ。
-            # 同じ年に取り消して宣言し直しても重複しないよう、消してから書く
+        # FA 宣言。在籍・主将と同じく upsert だけで、持っていない宣言は消さない。
+        # 消すのは、選手が取り消したと記録した宣言（removed_declaration_ids）だけ。
+        # 同じ年に取り消して宣言し直しても重複しないよう、消してから書く
+        for player in players:
             if player.removed_declaration_ids:
                 orm_models.PlayerFreeAgentDeclaration.objects.filter(
-                    player=row, id__in=player.removed_declaration_ids
+                    player_id=_saved(player.id), id__in=player.removed_declaration_ids
                 ).delete()
                 player.removed_declaration_ids.clear()
-            for declaration in player.fa_declarations:
-                declaration_row, _ = orm_models.PlayerFreeAgentDeclaration.objects.update_or_create(  # type: ignore[misc]
-                    id=declaration.id,
-                    defaults={"player": row, "year": declaration.year, "kind": declaration.kind.value},
-                )
-                declaration.id = declaration_row.id
 
-            for captaincy in player.captaincies:
-                captaincy_row, _ = orm_models.Captaincy.objects.update_or_create(  # type: ignore[misc]
-                    id=captaincy.id,
-                    defaults={
-                        "player": row,
-                        "team_id": captaincy.team_id,
-                        "from_year": captaincy.from_year,
-                        "to_year": captaincy.to_year,
-                    },
-                )
-                captaincy.id = captaincy_row.id
-
+        # 在籍が所属と背番号の出典。選手側には持たせない
+        _write_changed(
+            orm_models.PlayerStint,
+            [(stint, _stint_values(stint, _saved(player.id))) for player in players for stint in player.career],
+        )
+        _write_changed(
+            orm_models.PlayerFreeAgentDeclaration,
+            [
+                (declaration, _declaration_values(declaration, _saved(player.id)))
+                for player in players
+                for declaration in player.fa_declarations
+            ],
+        )
+        _write_changed(
+            orm_models.Captaincy,
+            [
+                (captaincy, _captaincy_values(captaincy, _saved(player.id)))
+                for player in players
+                for captaincy in player.captaincies
+            ],
+        )
         return team
 
     # --- 内部処理 ---
@@ -439,6 +419,116 @@ def _captaincies_of(player_ids: list[int]) -> dict[int, list[Captaincy]]:
             )
         )
     return captaincies
+
+
+class _HasId(Protocol):
+    """保存すると id が入るドメインのオブジェクト（選手・在籍・FA 宣言・主将）。"""
+
+    id: int | None
+
+
+# 変わり方ごとの UPDATE をこの数まで出す。超えたら `bulk_update` の1文にまとめる
+_GROUPED_UPDATE_LIMIT = 20
+# 一括更新の1文に入れる行の数。`CASE WHEN id=… THEN …` の式が長くなりすぎないように
+# （SQLite の式木の上限。CLAUDE.md の「既知の罠」）
+_BULK_UPDATE_BATCH = 200
+
+
+def _write_changed(model: type[models.Model], items: Sequence[tuple[_HasId, dict[str, Any]]]) -> None:
+    """ドメインのオブジェクトと書く値の組を、**今の行と比べて変わったものだけ**書く。新しい行の id は入れ戻す。
+
+    - id のある行は、今の値を1本のクエリで読んで比べ、違う行の違う列だけを書く
+    - id の無い行は `bulk_create` する（SQLite 3.35 以降は主キーが返る）
+    - id があるのに行が無いときは、その id のまま作る（`update_or_create` と同じ意味）
+
+    変わった行は「変わり方」（変わった列と新しい値の組）でまとめ、同じ変わり方の行を
+    `UPDATE … WHERE id IN (…)` の1文で書く。シーズンを締める処理では、1球団の変わった行は
+    「引退で閉じる」「戦力外で閉じる」の2通りしかない。`bulk_update` の `CASE WHEN` は行 × 列ぶんの
+    式を組み立てるので、それより速い。変わり方が多いとき（`_GROUPED_UPDATE_LIMIT` 超）だけ `bulk_update` にする。
+
+    **比べる列は書く値の dict のキーそのもの**。書く列と比べる列を別に並べると、比べ忘れた列だけが
+    保存されない静かな不具合になるため。値の正規化の違い（例: 空文字と None）は「違う」と見なして
+    書くだけなので、正しさは崩れない（書く行が増えるだけ）。
+
+    **前提: `items` の対象（ドメインのオブジェクト）は重複しない。** id が None の同じオブジェクトが2回あると、
+    2行 INSERT される（変更前の `update_or_create` は1回目で id が入るので冪等だった）。集約は在籍・宣言・主将を
+    選手ごとに1度ずつ持つので、`save()` から渡す範囲では起きない。
+    """
+    if not items:
+        return
+    fields = list(items[0][1])
+    ids = [target.id for target, _ in items if target.id is not None]
+    # 辞書にするだけなので、モデルの既定の並び（Meta.ordering）は外す
+    rows = model._default_manager.filter(id__in=ids).order_by().values("id", *fields)
+    current = {row.pop("id"): row for row in rows}
+
+    # ORM の行は作る分だけ作る（変わっていない行まで作ると、それだけで人数に比例する時間がかかる）
+    changes: dict[tuple[tuple[str, Any], ...], list[int]] = {}
+    created: list[tuple[_HasId, models.Model]] = []
+    for target, values in items:
+        if target.id is None or target.id not in current:
+            created.append((target, model(id=target.id, **values)))
+            continue
+        now = current[target.id]
+        if now != values:
+            change = tuple((field, value) for field, value in values.items() if now[field] != value)
+            changes.setdefault(change, []).append(target.id)
+    if len(changes) <= _GROUPED_UPDATE_LIMIT:
+        for change, row_ids in changes.items():
+            model._default_manager.filter(id__in=row_ids).update(**dict(change))
+    else:
+        changed_fields = list(dict.fromkeys(field for change in changes for field, _ in change))
+        changed_ids = {row_id for row_ids in changes.values() for row_id in row_ids}
+        changed_rows = [model(id=target.id, **values) for target, values in items if target.id in changed_ids]
+        model._default_manager.bulk_update(changed_rows, changed_fields, batch_size=_BULK_UPDATE_BATCH)
+    if created:
+        model._default_manager.bulk_create([row for _, row in created])
+        for target, row in created:
+            target.id = row.pk
+
+
+def _saved(value: int | None) -> int:
+    """保存した直後の行の id。`_write_changed` を通った後は必ず値がある。"""
+    assert value is not None, "保存した行には id がある"
+    return value
+
+
+def _player_values(player: Player) -> dict[str, Any]:
+    """選手の行に書く値。比べる列もこのキーで決まる（`_write_changed`）。"""
+    return {"name": player.name, "position": player.position.value, **_profile_defaults(player.profile)}
+
+
+def _stint_values(stint: Stint, player_id: int) -> dict[str, Any]:
+    """在籍の行に書く値。比べる列もこのキーで決まる（`_write_changed`）。"""
+    return {
+        "player_id": player_id,
+        "team_id": stint.team_id,
+        "number": stint.number.value,
+        "from_year": stint.from_year,
+        "to_year": stint.to_year,
+        "signed_as": stint.signed_as.value,
+        "promoted_year": stint.promoted_year,
+        "number_before_promotion": (
+            stint.number_before_promotion.value if stint.number_before_promotion is not None else None
+        ),
+        "acquired_via": stint.acquired_via.value if stint.acquired_via is not None else None,
+        "left_via": stint.left_via.value if stint.left_via is not None else None,
+    }
+
+
+def _declaration_values(declaration: FreeAgentDeclaration, player_id: int) -> dict[str, Any]:
+    """FA 宣言の行に書く値。比べる列もこのキーで決まる（`_write_changed`）。"""
+    return {"player_id": player_id, "year": declaration.year, "kind": declaration.kind.value}
+
+
+def _captaincy_values(captaincy: Captaincy, player_id: int) -> dict[str, Any]:
+    """主将在任の行に書く値。比べる列もこのキーで決まる（`_write_changed`）。"""
+    return {
+        "player_id": player_id,
+        "team_id": captaincy.team_id,
+        "from_year": captaincy.from_year,
+        "to_year": captaincy.to_year,
+    }
 
 
 def _profile_defaults(profile: Profile) -> dict:
