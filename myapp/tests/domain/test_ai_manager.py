@@ -11,16 +11,15 @@ from unittest import TestCase
 
 from myapp.domain.exceptions import InvalidRoster
 from myapp.domain.services import SAVE_LEAD_LIMIT
+from myapp.domain.simulation.fatigue import MIN_DAYS_BETWEEN_STARTS, PitchingHistory
 from myapp.domain.simulation.manager import (
     ACTIVE_PITCHERS,
     ACTIVE_ROSTER_SIZE,
     MAX_PINCH_HITTERS,
-    MIN_DAYS_BETWEEN_STARTS,
     STARTER_BATTERS,
     ClubRoster,
     ForeignQuota,
     PinchHitSituation,
-    PitchingHistory,
     SimBatter,
     SimPitcher,
     assign_fielders,

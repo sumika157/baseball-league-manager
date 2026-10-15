@@ -21,8 +21,9 @@ from myapp.domain.exceptions import DomainError
 from myapp.domain.pennant.ratings import PlayerRatings
 from myapp.domain.pennant.schedule import ScheduleRules, default_opening_day, generate_schedule
 from myapp.domain.simulation.engine import simulate_game
-from myapp.domain.simulation.levels import SeasonTally
-from myapp.domain.simulation.manager import ClubRoster, PitchingHistory, SimBatter, SimPitcher, choose_active_roster
+from myapp.domain.simulation.fatigue import PitchingHistory
+from myapp.domain.simulation.levels import SeasonTally, UsageRow, UsageTally
+from myapp.domain.simulation.manager import ClubRoster, SimBatter, SimPitcher, choose_active_roster
 from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings, RatingGrade
 from myapp.domain.value_objects import BattingLine, ContractStatus, InningsPitched, PitchingLine
@@ -152,6 +153,15 @@ def _format_value(label: str, value: float) -> str:
     return f"{value:.2f}"
 
 
+def format_usage(rows: list[UsageRow], title: str = "投手の起用と疲労（#97。目標帯なし）:") -> str:
+    """起用の表。割合は小数点以下3桁、それ以外は2桁。"""
+    lines = [title]
+    for row in rows:
+        digits = 3 if "割合" in row.label else 2
+        lines.append(f"  {_pad(row.label, 34)}{row.value:>10.{digits}f}")
+    return "\n".join(lines)
+
+
 def format_comparison(real: dict[str, float], simulated: dict[str, float], title: str, labels: dict[str, str]) -> str:
     lines = [title, f"  {_pad('', 24)}{'実データ':>12}{'推定能力で':>12}"]
     for key, label in labels.items():
@@ -189,7 +199,12 @@ def _club(team: Team, ratings: dict[int, PlayerRatings]) -> ClubRoster:
 
 
 def simulate_season(
-    source: ForkSource, ratings: dict[int, PlayerRatings], *, seed: int, year: int
+    source: ForkSource,
+    ratings: dict[int, PlayerRatings],
+    *,
+    seed: int,
+    year: int,
+    usage: UsageTally | None = None,
 ) -> tuple[dict[int, BattingLine], dict[int, PitchingLine], int, int]:
     """推定した能力で1シーズンを回す。(選手ごとの打撃, 投球, 試合数, 1球団の試合数)。"""
     rosters = {}
@@ -204,15 +219,21 @@ def simulate_season(
         _id(league.id): [_id(team.id) for team in teams]
         for league, teams in zip(source.leagues, source.rosters, strict=True)
     }
-    return play_season(rosters, leagues, seed=seed, year=year)
+    return play_season(rosters, leagues, seed=seed, year=year, usage=usage)
 
 
 def play_season(
-    rosters: dict[int, ClubRoster], leagues: dict[int, list[int]], *, seed: int, year: int
+    rosters: dict[int, ClubRoster],
+    leagues: dict[int, list[int]],
+    *,
+    seed: int,
+    year: int,
+    usage: UsageTally | None = None,
 ) -> tuple[dict[int, BattingLine], dict[int, PitchingLine], int, int]:
     """球団の1軍の登録（`choose_active_roster` を通した後）で1シーズンを回す。
 
     (選手ごとの打撃, 投球, 試合数, 1球団の試合数)。複数シーズンの確認（`multi_season_check.py`）もここを通る。
+    `usage` を渡すと、投手の起用と疲労（`UsageTally`）も数える。
     """
     rules = ScheduleRules()
     schedule_rng = make_random(game_seed(seed, year, "schedule-check"))
@@ -233,6 +254,8 @@ def play_season(
             history=history,
         )
         season.add(played.game)
+        if usage is not None:
+            usage.add(played)
     return season.batting, season.pitching, len(fixtures), rules.games_per_team
 
 
@@ -253,8 +276,11 @@ def run_check(league_ids: Sequence[int], *, seed: int, year: int, say: Callable[
     real_pitching = {_id(p.id): p.pitching for p in players}
     say("推定した能力で1シーズンを回します（時間がかかります）...")
     started = time.perf_counter()
-    batting, pitching, games, team_games = simulate_season(source, ratings, seed=seed, year=year)
+    usage = UsageTally()
+    batting, pitching, games, team_games = simulate_season(source, ratings, seed=seed, year=year, usage=usage)
     say(f"{games} 試合  {(time.perf_counter() - started) / games * 1000:.1f} ms/試合")
+    say("")
+    say(format_usage(usage.rows()))
     say("")
 
     say(

@@ -25,6 +25,7 @@ from myapp.domain.pennant.offseason import OffseasonClub, OffseasonPlan, Offseas
 from myapp.domain.pennant.ratings import PlayerRatings
 from myapp.domain.pennant.retirement import PlayingTime
 from myapp.domain.pennant.schedule import ScheduleRules
+from myapp.domain.simulation.levels import UsageTally
 from myapp.domain.simulation.manager import ClubRoster, SimBatter, SimPitcher, choose_active_roster
 from myapp.domain.simulation.ratings import PitcherRatings
 from myapp.domain.value_objects import BattingLine, ContractStatus, PitchingLine, Position, Profile
@@ -35,6 +36,7 @@ from myapp.management.estimate_check import (
     estimate_from_source,
     format_comparison,
     format_distribution,
+    format_usage,
     league_titles,
     play_season,
     summarize,
@@ -283,8 +285,10 @@ def run_seasons(league_ids: Sequence[int], *, seasons: int, seed: int, year: int
         say("")
         rosters, leagues = rosters_of(members, teams)
         started = time.perf_counter()
-        batting, pitching, games, team_games = play_season(rosters, leagues, seed=seed, year=current)
+        usage = UsageTally()
+        batting, pitching, games, team_games = play_season(rosters, leagues, seed=seed, year=current, usage=usage)
         say(f"{games}試合  {(time.perf_counter() - started) / games * 1000:.1f} ms/試合")
+        say(format_usage(usage.rows()))
         say(format_comparison(real, summarize(batting.values(), pitching.values()), "リーグ全体の水準:", LEVEL_LABELS))
         say("")
         simulated_titles = []

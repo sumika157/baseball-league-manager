@@ -6,11 +6,12 @@
 | スタメン | 総合値の順に守備の枠を埋め、守備力の高い順に重要な位置へ。DH は残りの最強打者。打順は出塁→長打の定型 |
 | ローテーション | 先発6人。前回の先発から中5日以上空ける |
 | 継投 | スタミナと抑える力から受け持ちの目安を決め、失点が嵩めば早めに代える。抑えはセーブの状況で出す |
-| 救援の連投 | 3連投はさせない |
+| 救援の連投 | 3連投はさせない（上限は `fatigue.PitchingHistory.can_pitch_on`） |
 | 代打 | 7回以降・負けている・控えに明確に上の打者がいる、が揃えば。1試合2人まで |
 | 外国人の出場枠 | リーグの上限（`foreign_player_game_limit`）を守る |
 
-**疲労は保存しない。** 直近の登板の記録（`PitchingHistory`）から導く。
+**疲労は保存しない。** 直近の登板の記録（`fatigue.PitchingHistory`）から導く。
+疲労が率に効くのはエンジン（`fatigue.py`）。
 乱数は呼び出し側から受け取る（`random()` だけを使う）。
 """
 
@@ -23,6 +24,7 @@ from datetime import date, timedelta
 from ..exceptions import InvalidRoster
 from ..services.decisions import SAVE_LEAD_LIMIT
 from ..value_objects import FieldingPosition, Handedness, Position
+from .fatigue import MID_INNING_GRACE, MIN_DAYS_BETWEEN_STARTS, PitchingHistory
 from .randomness import GameRandom, normal, weighted_index
 from .ratings import BatterRatings, PitcherRatings
 
@@ -35,13 +37,6 @@ LINEUP_SIZE = 9
 ROTATION_SIZE = 6
 # 手動のローテーションの下限（AI の6人より1人少ない5人まで。これを割ると同じ先発に登板が偏りすぎる）
 MIN_ROTATION_SIZE = ROTATION_SIZE - 1
-# 前回の先発から空ける日数。「中5日」は間に5日挟む＝6日後の登板
-MIN_DAYS_BETWEEN_STARTS = 6
-# 前の2日続けて投げた投手は、3連投になるので投げさせない
-MAX_CONSECUTIVE_DAYS = 2
-# 連投の判断に要る直近の日数（MAX_CONSECUTIVE_DAYS に余裕を1日足す）。
-# 直近の登板を読む側と、画面に出す側の出典
-RECENT_PITCHING_DAYS = MAX_CONSECUTIVE_DAYS + 1
 PINCH_HITTER_FROM_INNING = 7
 # 抑えが登板できる回（セーブがつく状況は9回から）
 CLOSER_FROM_INNING = 9
@@ -66,8 +61,6 @@ STARTER_BATTERS_SD = 3.0
 RELIEVER_BATTERS = 4.4
 RELIEVER_BATTERS_PER_STAMINA = 0.04
 RELIEVER_BATTERS_SD = 0.9
-# 交代のしきい値を超えても、回の途中ではこの人数ぶん待つ（回の区切りで代えたい）
-MID_INNING_GRACE = 2
 STARTER_KNOCKOUT_RUNS = 5
 RELIEVER_KNOCKOUT_RUNS = 3
 
@@ -203,46 +196,6 @@ class ForeignQuota:
     def register(self, is_foreign: bool) -> None:
         if is_foreign:
             self.used += 1
-
-
-class PitchingHistory:
-    """直近の登板の記録。疲労はここから導く（保存する状態は持たない）。"""
-
-    def __init__(self) -> None:
-        self._pitched: dict[int, set[date]] = {}
-        self._last_start: dict[int, date] = {}
-
-    def record(self, played_on: date, pitcher_ids: Sequence[int]) -> None:
-        """その日の登板を記録する。先頭が先発。"""
-        for pitcher_id in pitcher_ids:
-            self._pitched.setdefault(pitcher_id, set()).add(played_on)
-        if pitcher_ids:
-            # 日付の順に記録するとは限らない。いちばん新しい先発を覚える
-            self._last_start[pitcher_ids[0]] = max(played_on, self._last_start.get(pitcher_ids[0], played_on))
-
-    def days_since_start(self, pitcher_id: int, today: date) -> int | None:
-        """前回の先発から何日経ったか。先発の記録が無ければ None。"""
-        last = self._last_start.get(pitcher_id)
-        return None if last is None else (today - last).days
-
-    def pitched_on(self, pitcher_id: int, day: date) -> bool:
-        return day in self._pitched.get(pitcher_id, ())
-
-    def consecutive_days_before(self, pitcher_id: int, today: date) -> int:
-        """今日の前日から遡って、何日続けて投げているか。"""
-        days = self._pitched.get(pitcher_id)
-        if not days:
-            return 0
-        count = 0
-        day = today - timedelta(days=1)
-        while day in days:
-            count += 1
-            day -= timedelta(days=1)
-        return count
-
-    def can_pitch_on(self, pitcher_id: int, today: date) -> bool:
-        """今日、連投の上限に達していないか（直前の `MAX_CONSECUTIVE_DAYS` 日続けて投げていれば投げさせない）。"""
-        return self.consecutive_days_before(pitcher_id, today) < MAX_CONSECUTIVE_DAYS
 
 
 # --- 値 ---

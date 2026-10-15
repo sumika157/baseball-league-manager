@@ -19,11 +19,11 @@ from myapp.domain.services import (
     fielders_by_plate_appearance,
 )
 from myapp.domain.simulation.engine import MAX_INNINGS, SimulatedGame, simulate_game
+from myapp.domain.simulation.fatigue import PitchingHistory
 from myapp.domain.simulation.manager import (
     ClubOrders,
     ForeignQuota,
     LineupSlot,
-    PitchingHistory,
     choose_active_roster,
     choose_lineup,
     plan_pitching_staff,

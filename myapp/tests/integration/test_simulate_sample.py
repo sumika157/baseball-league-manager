@@ -46,6 +46,8 @@ class SimulateSampleTest(TestCase):
         self.assertIn("1チーム1試合の得点", output)
         self.assertIn("目標 3.8〜4", output)
         self.assertIn("ms/試合", output)
+        self.assertIn("投手の起用と疲労", output)
+        self.assertIn("中4日以下の先発の割合", output)
 
     def test_the_box_score_reads_like_a_score_sheet(self):
         output = run(games=1, seed=3)
@@ -75,6 +77,7 @@ class SimulateSampleTest(TestCase):
         self.assertIn("タイトル争いの水準", output)
         self.assertIn("首位打者の打率", output)
         self.assertIn("本塁打王の本数", output)
+        self.assertIn("目安を超えた続投の打者", output)
 
 
 class BoxScoreFormatTest(TestCase):
@@ -122,6 +125,7 @@ class SimulateSampleSeasonsTest(TestCase):
         self.assertIn("引退", output)
         self.assertIn("新人", output)
         self.assertIn("錨の補正", output)
+        self.assertIn("3連投（延べ）", output)
 
     def test_seasons_need_real_leagues(self):
         with self.assertRaises(CommandError):

@@ -10,6 +10,9 @@
 
 1打席の判定の順は「死球 → 四球 → 犠打・犠飛 → 三振 → 本塁打 → インプレー（安打 → 長打の内訳、
 凡打 → 失策出塁・野選・ゴロ・フライ・ライナー・邪飛）」。各段の確率は `odds.matchup()`。
+
+**投手の疲労**（先発の休養不足・目安を超えた続投）は、能力を目減りさせてから `matchup()` に渡す（`fatigue.py`）。
+疲労は保存せず、`PitchingHistory` とその登板の対戦打者数から導く。
 """
 
 from __future__ import annotations
@@ -32,6 +35,14 @@ from ..value_objects import (
 )
 from .baseline import NPB, LeagueBaseline
 from .baserunning import DEFAULT_RULES, BaserunningRules, build_advances
+from .fatigue import (
+    MAX_FATIGUE_POINTS,
+    PitcherWorkload,
+    PitchingHistory,
+    fatigued,
+    in_game_fatigue_points,
+    pregame_fatigue_points,
+)
 from .fielding import draw_error, fielded_path, team_defense
 from .manager import (
     LINEUP_SIZE,
@@ -40,7 +51,6 @@ from .manager import (
     ForeignQuota,
     LineupSlot,
     PinchHitSituation,
-    PitchingHistory,
     PitchingStaff,
     SimBatter,
     SimPitcher,
@@ -84,10 +94,46 @@ class _Mound:
     """マウンドに上がっている投手の、この登板の状態。"""
 
     pitcher: SimPitcher
-    target: int  # 受け持つ打者数の目安
+    target: int  # 受け持つ打者数の目安（ブルペンが尽きると延ばす）
     is_starter: bool
+    workload: PitcherWorkload
+    fatigue_before: int = 0  # 登板前の疲労点
     faced: int = 0
     runs: int = 0
+    # 当初の目安。試合中の疲労はこれで数える（延ばした目安で数えると、続投の疲労が消える）
+    planned_target: int = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.planned_target = self.target
+
+    @property
+    def fatigue(self) -> int:
+        """次の打者と対戦するときの疲労点（登板前＋試合中。上限で頭打ち）。"""
+        return min(MAX_FATIGUE_POINTS, self.fatigue_before + in_game_fatigue_points(self.faced, self.planned_target))
+
+    def outing(self, team_id: int) -> Outing:
+        return Outing(
+            team_id=team_id,
+            pitcher_id=self.pitcher.player_id,
+            is_starter=self.is_starter,
+            workload=self.workload,
+            fatigue_before=self.fatigue_before,
+            planned_target=self.planned_target,
+            faced=self.faced,
+        )
+
+
+@dataclass(frozen=True)
+class Outing:
+    """1登板の負荷（測定用。保存しない）。`UsageTally` が起用の偏りを数える。"""
+
+    team_id: int
+    pitcher_id: int
+    is_starter: bool
+    workload: PitcherWorkload
+    fatigue_before: int
+    planned_target: int
+    faced: int
 
 
 @dataclass
@@ -129,6 +175,9 @@ class SimulatedGame:
     lineup: list[LineupEntry]
     # 選手 id → 名前。ボックススコアを文字で出すためのもの
     names: dict[int, str]
+    # 測定用（保存しない）: 登板ごとの負荷（ビジター、ホームの順に登板順）と、打席ごとの投手の疲労点（打席と同じ並び）
+    outings: list[Outing] = field(default_factory=list)
+    pitcher_fatigue: list[int] = field(default_factory=list)
 
     @property
     def innings_played(self) -> int:
@@ -153,7 +202,7 @@ def simulate_game(
 
     `home` / `away` は1軍に登録された選手だけを入れた `ClubRoster`。先発は `history`（直近の登板の
     記録）から中5日を空けて決め、試合が終わったらその日の登板を `history` に書き足す。
-    `history` を渡さなければ、疲労を考えない（毎回、最も良い先発が投げる）。
+    `history` を渡さなければ、先発の休養の疲労を考えない（毎回、最も良い先発が投げる）。
 
     `home_orders` / `away_orders` は GM の編成の上書き（オーダー・投手陣）。渡さなければ（または
     区画が `None` なら）AI 監督が決めるので、渡さないときの結果は上書きを知らない版と同じ。
@@ -185,7 +234,14 @@ def simulate_game(
     history.record(played_on, [m.pitcher.player_id for m in sides[True].mounds])
     names = {b.player_id: b.name for r in (home, away) for b in r.batters}
     names.update({p.player_id: p.name for r in (home, away) for p in r.pitchers})
-    return SimulatedGame(game=game, plate_appearances=plate_appearances, lineup=lineup, names=names)
+    return SimulatedGame(
+        game=game,
+        plate_appearances=plate_appearances,
+        lineup=lineup,
+        names=names,
+        outings=[m.outing(side.team_id) for side in (sides[False], sides[True]) for m in side.mounds],
+        pitcher_fatigue=engine.pitcher_fatigue,
+    )
 
 
 class _Engine:
@@ -196,6 +252,8 @@ class _Engine:
         self.baseline = baseline
         self.sensitivity = sensitivity
         self.rules = rules
+        # 打席ごとの投手の疲労点（測定用）
+        self.pitcher_fatigue: list[int] = []
 
     # --- 試合の準備 ---
 
@@ -248,7 +306,16 @@ class _Engine:
             )
             for slot in slots
         ]
-        side.mounds.append(_Mound(starter, starter_batter_target(self.rng, starter), is_starter=True))
+        workload = history.workload(starter.player_id, played_on)
+        side.mounds.append(
+            _Mound(
+                starter,
+                starter_batter_target(self.rng, starter),
+                is_starter=True,
+                workload=workload,
+                fatigue_before=pregame_fatigue_points(workload, as_starter=True),
+            )
+        )
         side.used_pitchers.add(starter.player_id)
         return side
 
@@ -389,7 +456,16 @@ class _Engine:
             return
         fielding.quota.register(chosen.is_foreign)
         fielding.used_pitchers.add(chosen.player_id)
-        fielding.mounds.append(_Mound(chosen, reliever_batter_target(self.rng, chosen), is_starter=False))
+        workload = history.workload(chosen.player_id, played_on)
+        fielding.mounds.append(
+            _Mound(
+                chosen,
+                reliever_batter_target(self.rng, chosen),
+                is_starter=False,
+                workload=workload,
+                fatigue_before=pregame_fatigue_points(workload, as_starter=False),
+            )
+        )
 
     # --- 打順 ---
 
@@ -471,7 +547,12 @@ class _Engine:
     ) -> PlateAppearance:
         """1打席ぶんの記録を作り、塁の状態を進める。"""
         pitcher = fielding.mound.pitcher
-        odds = matchup(slot.batter.ratings, pitcher.ratings, fielding.defense, self.baseline, self.sensitivity)
+        # 疲労は能力の目減りとして効かせる（率の式は matchup のまま）。SimPitcher は差し替えない
+        fatigue = fielding.mound.fatigue
+        self.pitcher_fatigue.append(fatigue)
+        odds = matchup(
+            slot.batter.ratings, fatigued(pitcher.ratings, fatigue), fielding.defense, self.baseline, self.sensitivity
+        )
         result = self._draw_result(odds, occupied, outs)
         batter_id = slot.batter.player_id
 

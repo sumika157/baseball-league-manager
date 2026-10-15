@@ -31,15 +31,14 @@ from ..domain.pennant.club_plan import (
 )
 from ..domain.pennant.season import ratings_year
 from ..domain.repositories import ClubPlanRepository, FixtureRepository, RatingsRepository, WorldRepository
+from ..domain.simulation.fatigue import RECENT_PITCHING_DAYS, PitchingHistory
 from ..domain.simulation.manager import (
     LINEUP_SIZE,
     MIN_ACTIVE_PITCHERS,
     MIN_ROTATION_SIZE,
-    RECENT_PITCHING_DAYS,
     ROTATION_SIZE,
     ClubRoster,
     ForeignQuota,
-    PitchingHistory,
     choose_lineup,
     plan_pitching_staff,
 )
