@@ -253,6 +253,24 @@ class WorldViewScopeTest(SimpleTestCase):
             with self.subTest(dependency=name):
                 self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
 
+    # ロスターの更新（年を省くと現実の今日の年が入るものを含む）。参照のサービスには置かない
+    ROSTER_UPDATES = (
+        "register_player",
+        "update_player",
+        "retire_player",
+        "transfer_player",
+        "appoint_captain",
+        "remove_captain",
+    )
+
+    def test_it_cannot_update_the_roster(self):
+        """世界の画面を読む組み立てからは、ロスターの更新を呼べない（更新は `RosterService` だけが持つ）。"""
+        service = build_world_view_service(7)
+        for name in self.ROSTER_UPDATES:
+            with self.subTest(method=name):
+                self.assertFalse(hasattr(service, name))
+                self.assertTrue(callable(getattr(RosterService, name)))
+
     def test_it_has_the_same_dependencies_as_the_real_one(self):
         """実データ用と同じ依存の組。片方だけに足して、世界の画面だけが落ちる形にしない。"""
         for name in self.SCOPED:

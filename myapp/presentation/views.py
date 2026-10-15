@@ -1155,7 +1155,7 @@ def player_list(request, team_id, world_id=None):
         form = PlayerRegistrationForm(request.POST)
         if form.is_valid():
             try:
-                service.register_player(
+                build_roster_service().register_player(
                     team_id=team_id,
                     name=form.cleaned_data["name"],
                     number=form.cleaned_data["number"],
@@ -1636,13 +1636,13 @@ def player_edit(request, team_id, player_id):
     if request.method == "POST":
         # 退団・主将の指名/解任はフォームの検証を通さず、押されたボタンで判断する
         if "retire" in request.POST:
-            service.retire_player(team_id, player_id)
+            build_roster_service().retire_player(team_id, player_id)
             messages.success(request, f"{detail.name} 選手を退団にしました。")
             return redirect(reverse("player_list", args=[team_id]))
 
         if "appoint_captain" in request.POST:
             try:
-                service.appoint_captain(team_id, player_id)
+                build_roster_service().appoint_captain(team_id, player_id)
             except DomainError as error:
                 messages.error(request, str(error))
             else:
@@ -1666,14 +1666,14 @@ def player_edit(request, team_id, player_id):
             return redirect(reverse("player_edit", args=[team_id, player_id]))
 
         if "remove_captain" in request.POST:
-            service.remove_captain(team_id, player_id)
+            build_roster_service().remove_captain(team_id, player_id)
             messages.success(request, f"{detail.name} 選手の主将を解任しました。")
             return redirect(reverse("player_edit", args=[team_id, player_id]))
 
         base_form = PlayerUpdateForm(request.POST)
         if base_form.is_valid():
             try:
-                service.update_player(
+                build_roster_service().update_player(
                     team_id=team_id,
                     player_id=player_id,
                     name=base_form.cleaned_data["name"],

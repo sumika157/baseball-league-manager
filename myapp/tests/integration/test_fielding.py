@@ -68,7 +68,7 @@ class FieldingTestBase(BaseCase):
         self.game = play_game(self.team, self.rival, home_score=0, away_score=0)
 
     def _player(self, team, name, number, position) -> int:
-        return self.service.register_player(team.id, name, number, position).id
+        return self.roster.register_player(team.id, name, number, position).id
 
     def _lineup(self) -> list[LineupSlot]:
         return [

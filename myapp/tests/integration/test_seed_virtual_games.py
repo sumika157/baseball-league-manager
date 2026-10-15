@@ -44,7 +44,7 @@ class SeedVirtualGamesTest(BaseCase):
         number = 1
         for label, count in (("捕手", 2), ("内野手", 6), ("外野手", 5), ("指名打者", 1), ("投手", 9)):
             for index in range(count):
-                self.service.register_player(team.id, f"{team.name}{label}{index}", number, label)
+                self.roster.register_player(team.id, f"{team.name}{label}{index}", number, label)
                 number += 1
 
     def test_every_game_holds_together_as_a_scorebook(self):

@@ -8,7 +8,7 @@ from django.test import TestCase
 
 from myapp.domain.exceptions import InvalidWorld
 from myapp.infrastructure import orm_models
-from myapp.presentation.views import build_pennant_world_service, build_service
+from myapp.presentation.views import build_pennant_world_service, build_roster_service
 
 from ..helpers import register_playable_support
 
@@ -20,8 +20,8 @@ class RosterCheckTest(TestCase):
         self.league = orm_models.League.objects.create(name="検査リーグ")
         self.home = orm_models.Team.objects.create(league=self.league, name="十分な球団")
         self.short = orm_models.Team.objects.create(league=self.league, name="足りない球団")
-        self.service = build_service()
-        register_playable_support(self.service, self.home)
+        self.roster = build_roster_service()
+        register_playable_support(self.roster, self.home)
 
     def _create(self, **overrides):
         arguments = {
@@ -40,7 +40,7 @@ class RosterCheckTest(TestCase):
         self.assertEqual(orm_models.PennantPlayerRatings.objects.count(), 0)
 
     def test_a_league_with_a_short_roster_cannot_make_a_world(self):
-        register_playable_support(self.service, self.short)
+        register_playable_support(self.roster, self.short)
         orm_models.PlayerStint.objects.filter(team=self.short, player__position="投手").delete()
 
         with self.assertRaises(InvalidWorld) as raised:
@@ -71,10 +71,10 @@ class RosterCheckTest(TestCase):
 
     def test_retired_players_do_not_count(self):
         """数えるのは現在在籍の選手だけ（世界に写されるのと同じ範囲）。"""
-        register_playable_support(self.service, self.short)
+        register_playable_support(self.roster, self.short)
         pitcher = orm_models.Player.objects.filter(stints__team=self.short, position="投手").first()
         assert pitcher is not None
-        self.service.retire_player(self.short.id, pitcher.id)
+        self.roster.retire_player(self.short.id, pitcher.id)
 
         with self.assertRaises(InvalidWorld):
             self._create()
@@ -84,7 +84,7 @@ class RosterCheckTest(TestCase):
     def test_developmental_players_do_not_count(self):
         """育成選手は試合に出られず、進める処理の候補にも入らない。育成の捕手しかいない球団は弾く
         （支配下の野手が8人になる）。"""
-        register_playable_support(self.service, self.short)
+        register_playable_support(self.roster, self.short)
         catchers = orm_models.PlayerStint.objects.filter(team=self.short, player__position="捕手")
         self.assertTrue(catchers.exists(), "前提: 捕手がいる")
         for offset, stint in enumerate(catchers):
@@ -99,7 +99,7 @@ class RosterCheckTest(TestCase):
 
     def test_a_promoted_player_counts(self):
         """育成から昇格した選手は今は支配下なので数える。"""
-        register_playable_support(self.service, self.short)
+        register_playable_support(self.roster, self.short)
         catchers = orm_models.PlayerStint.objects.filter(team=self.short, player__position="捕手")
         for offset, stint in enumerate(catchers):
             orm_models.PlayerStint.objects.filter(id=stint.id).update(
@@ -112,7 +112,7 @@ class RosterCheckTest(TestCase):
         self.assertEqual(created.team_count, 2)
 
     def test_every_team_with_a_playable_roster_makes_a_world(self):
-        register_playable_support(self.service, self.short)
+        register_playable_support(self.roster, self.short)
 
         created = self._create()
 
@@ -121,7 +121,7 @@ class RosterCheckTest(TestCase):
 
     def test_too_many_foreigners_for_the_game_limit_cannot_make_a_world(self):
         """野手が9人ちょうどで出場枠を超える外国人がいると、自動のスタメンを組めず進行が止まる。"""
-        register_playable_support(self.service, self.short)
+        register_playable_support(self.roster, self.short)
         orm_models.League.objects.filter(id=self.league.id).update(foreign_player_game_limit=2)
         batters = orm_models.Player.objects.filter(stints__team=self.short).exclude(position="投手")
         orm_models.Player.objects.filter(id__in=list(batters.values_list("id", flat=True)[:3])).update(
@@ -136,7 +136,7 @@ class RosterCheckTest(TestCase):
         self._assert_nothing_left()
 
     def test_the_same_roster_passes_when_the_league_has_no_game_limit(self):
-        register_playable_support(self.service, self.short)
+        register_playable_support(self.roster, self.short)
         batters = orm_models.Player.objects.filter(stints__team=self.short).exclude(position="投手")
         orm_models.Player.objects.filter(id__in=list(batters.values_list("id", flat=True)[:3])).update(
             is_foreign_player=True
@@ -148,10 +148,10 @@ class RosterCheckTest(TestCase):
 
     def test_the_strictest_game_limit_of_the_chosen_leagues_applies_to_every_team(self):
         """出場枠の無いリーグの球団も、一緒に選んだリーグの厳しい枠で見る（交流戦はどのリーグとも当たる）。"""
-        register_playable_support(self.service, self.short)
+        register_playable_support(self.roster, self.short)
         strict = orm_models.League.objects.create(name="厳しいリーグ", foreign_player_game_limit=2)
         strict_team = orm_models.Team.objects.create(league=strict, name="厳しい球団")
-        register_playable_support(self.service, strict_team)
+        register_playable_support(self.roster, strict_team)
         batters = orm_models.Player.objects.filter(stints__team=self.short).exclude(position="投手")
         orm_models.Player.objects.filter(id__in=list(batters.values_list("id", flat=True)[:3])).update(
             is_foreign_player=True

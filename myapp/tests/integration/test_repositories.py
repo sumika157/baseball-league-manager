@@ -46,7 +46,7 @@ class RepositoryRoundTripTest(BaseCase):
         self.assertEqual(saved.position, Position.INFIELDER)
 
     def test_batting_totals_come_from_games(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         give_batting(self.team, self.rival, player.id, BattingLine(at_bats=4, singles=2), day=1)
         give_batting(self.team, self.rival, player.id, BattingLine(at_bats=3, home_runs=1), day=2)
 
@@ -57,7 +57,7 @@ class RepositoryRoundTripTest(BaseCase):
 
     def test_innings_are_added_as_outs_not_decimals(self):
         """5.2 + 5.2 は 10.4 ではなく 11.1。"""
-        player = self.service.register_player(self.team.id, "佐藤", 18, "投手")
+        player = self.roster.register_player(self.team.id, "佐藤", 18, "投手")
         line = PitchingLine(innings=InningsPitched.from_notation("5.2"), earned_runs=1)
         give_pitching(self.team, self.rival, player.id, line, day=1)
         give_pitching(self.team, self.rival, player.id, line, day=2)
@@ -69,7 +69,7 @@ class RepositoryRoundTripTest(BaseCase):
         self.assertEqual(saved.pitching.earned_runs, 2)
 
     def test_player_without_games_has_empty_stats(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         saved = self.repo.find_by_id(self.team.id).find_player(player.id)
 
         self.assertEqual(saved.batting.at_bats, 0)
@@ -87,7 +87,7 @@ class RepositoryRoundTripTest(BaseCase):
 
 class GameRepositoryTest(BaseCase):
     def test_round_trip(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         saved = play_game(
             self.team,
             self.rival,
@@ -115,7 +115,7 @@ class GameRepositoryTest(BaseCase):
         self.assertEqual(len(DjangoGameRepository(WorldScope.real()).find_all()), 2)
 
     def test_recording_the_same_player_twice_overwrites(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         game = play_game(self.team, self.rival, batting={player.id: BattingLine(at_bats=4, singles=1)})
         game.record_batting(player.id, BattingLine(at_bats=4, home_runs=2), team_id=game.home_team_id)
         DjangoGameRepository(WorldScope.real()).save(game)

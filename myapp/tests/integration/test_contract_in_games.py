@@ -29,8 +29,8 @@ class _RecordingCase(BaseCase):
     def setUp(self):
         super().setUp()
         login_as_manager(self.client, self.team, self.rival)
-        self.pitcher = self.service.register_player(self.team.id, "佐藤", 18, "投手")
-        self.rival_pitcher = self.service.register_player(self.rival.id, "相手投手", 19, "投手")
+        self.pitcher = self.roster.register_player(self.team.id, "佐藤", 18, "投手")
+        self.rival_pitcher = self.roster.register_player(self.rival.id, "相手投手", 19, "投手")
         self.home = register_lineup(self.service, self.team, prefix="ホーム", first_number=31)
         self.away = register_lineup(self.service, self.rival, prefix="ビジター", first_number=61)
         self.game = play_game(self.team, self.rival, home_score=0, away_score=0)
@@ -38,7 +38,7 @@ class _RecordingCase(BaseCase):
     def developmental(self, name, position, number=120, *, team=None, from_year=2020):
         """育成で登録した選手。加入年は過去にしておく（試合の年に在籍している）。"""
         team = team or self.team
-        player = self.service.register_player(team.id, name, number, position, contract_label=DEVELOPMENTAL)
+        player = self.roster.register_player(team.id, name, number, position, contract_label=DEVELOPMENTAL)
         orm_models.PlayerStint.objects.filter(player_id=player.id).update(from_year=from_year)
         return player
 
