@@ -41,6 +41,9 @@ paths:
 - `prefetch_related` を書いたら、**マッピングが本当にそれを使っているか**を確かめる。
   `row.stints.all()` ではなく `PlayerStint.objects.filter(team=row)` と書くと、
   prefetch は無駄になり N+1 に戻る（実際にそうなっていた）。
+- **集約の保存で、変わっていない行まで書き直さない。** 今の行を1本で読んで比べ、違う行だけ
+  `bulk_update`、新しい行は `bulk_create` にする（前例: `DjangoTeamRepository.save()` の `_write_changed`。
+  全員の `update_or_create` はシーズンを締める処理で約1.3万行・ロック 9秒だった。#176）。
 - SQLite の多段 prefetch は関連1000件超で `Expression tree is too large` になる。
   `Prefetch(..., queryset=...select_related(...))` で JOIN にまとめる。
 
