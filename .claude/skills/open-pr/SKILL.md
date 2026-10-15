@@ -121,6 +121,10 @@ PR を作ると CI（`.github/workflows/ci.yml`）が走る（初回は数分）
 テストに影響しないパスだけの PR では、`changes` ジョブだけが動き、`test` はスキップ（必須のチェックとしては成功扱い）になる。
 `infra/` に触れていれば `terraform.yml` の検査も流れる。自動マージを予約していれば、`test` が通った時点でマージされる。
 
+**マージを待つ間に、ほかの PR が先に入って自分の PR がコンフリクトすることがある**（自動マージは止まったまま待つ）。
+`& $gh pr view <PR番号> --json mergeable` が `CONFLICTING` になったら、`resolve-conflicts` スキルで直す（#267）。
+取りこぼしたものは、1時間ごとの見回り（`scripts/resolve_conflicts.ps1`）が拾う。
+
 ```powershell
 & $gh pr checks <PR番号> --watch --fail-fast   # 失敗したら終了コードが 0 以外になる
 ```
