@@ -25,8 +25,8 @@ class PlayerStatsQueryTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.query = DjangoPlayerStatsQuery(WorldScope.real())
-        self.slugger = self.service.register_player(self.team.id, "大砲", 3, "内野手")
-        self.ace = self.service.register_player(self.team.id, "エース", 18, "投手")
+        self.slugger = self.roster.register_player(self.team.id, "大砲", 3, "内野手")
+        self.ace = self.roster.register_player(self.team.id, "エース", 18, "投手")
 
     def _by_name(self, rows):
         return {row.name: row for row in rows}
@@ -54,7 +54,7 @@ class PlayerStatsQueryTest(BaseCase):
         """退団した選手は、在籍していた年の成績に残る（`to_year` が空の在籍だけを引くと消える）。"""
         give_batting(self.team, self.rival, self.slugger.id, BattingLine(at_bats=4, home_runs=3), year=2025)
         orm_models.PlayerStint.objects.filter(player_id=self.slugger.id).update(from_year=2024)
-        self.service.retire_player(self.team.id, self.slugger.id, 2025)
+        self.roster.retire_player(self.team.id, self.slugger.id, 2025)
 
         in_last_year = self._by_name(self.query.list_season(self.league.id, 2025))
         in_the_year_before = self._by_name(self.query.list_season(self.league.id, 2024))
@@ -72,7 +72,7 @@ class PlayerStatsQueryTest(BaseCase):
 
     def test_a_player_who_moved_within_the_year_is_listed_once_on_his_last_team(self):
         give_batting(self.team, self.rival, self.slugger.id, BattingLine(at_bats=4, home_runs=2), year=2026)
-        self.service.transfer_player(
+        self.roster.transfer_player(
             self.slugger.id, from_team_id=self.team.id, to_team_id=self.rival.id, number=5, year=2026
         )
 
@@ -81,7 +81,7 @@ class PlayerStatsQueryTest(BaseCase):
         self.assertEqual([(row.team_id, row.batting.home_runs) for row in rows], [(self.rival.id, 2)])
 
     def test_the_roster_reads_a_team_with_profile_and_captain(self):
-        self.service.appoint_captain(self.team.id, self.slugger.id)
+        self.roster.appoint_captain(self.team.id, self.slugger.id)
 
         rows = self.query.list_roster(year=None, team_id=self.team.id, with_profile=True)
         without = self.query.list_roster(year=None, team_id=self.team.id)
@@ -98,7 +98,7 @@ class PlayerStatsQueryTest(BaseCase):
         give_pitching(
             self.team, self.rival, self.ace.id, PitchingLine(innings=InningsPitched.from_notation("6.1"), wins=1)
         )
-        self.service.appoint_captain(self.team.id, self.ace.id)
+        self.roster.appoint_captain(self.team.id, self.ace.id)
         team = DjangoTeamRepository(WorldScope.real()).find_by_id(self.team.id)
 
         rows = {
@@ -183,7 +183,7 @@ class PlayerStatsQueryTest(BaseCase):
     def test_season_lists_only_the_league_players(self):
         other = orm_models.League.objects.create(name="別リーグ")
         outsider = orm_models.Team.objects.create(league=other, name="別チーム")
-        self.service.register_player(outsider.id, "他リーグ選手", 1, "内野手")
+        self.roster.register_player(outsider.id, "他リーグ選手", 1, "内野手")
 
         names = {row.name for row in self.query.list_season(self.league.id, 2026)}
 
@@ -198,11 +198,11 @@ class PlayerStatsQueryTest(BaseCase):
         other = orm_models.League.objects.create(name="別リーグ")
         x = orm_models.Team.objects.create(league=other, name="Xチーム")
         y = orm_models.Team.objects.create(league=other, name="Yチーム")
-        there = self.service.register_player(x.id, "別リーグ選手", 7, "内野手")
-        their_ace = self.service.register_player(y.id, "別リーグ投手", 11, "投手")
-        mover = self.service.register_player(self.team.id, "移籍組", 9, "外野手")
+        there = self.roster.register_player(x.id, "別リーグ選手", 7, "内野手")
+        their_ace = self.roster.register_player(y.id, "別リーグ投手", 11, "投手")
+        mover = self.roster.register_player(self.team.id, "移籍組", 9, "外野手")
         give_batting(self.team, self.rival, mover.id, BattingLine(at_bats=3, home_runs=1), day=6)
-        self.service.transfer_player(mover.id, from_team_id=self.team.id, to_team_id=x.id, number=9, year=2026)
+        self.roster.transfer_player(mover.id, from_team_id=self.team.id, to_team_id=x.id, number=9, year=2026)
         give_batting(self.team, self.rival, self.slugger.id, BattingLine(at_bats=4, home_runs=1))
         give_batting(self.team, x, self.slugger.id, BattingLine(at_bats=6, home_runs=5), day=2)
         give_batting(x, y, there.id, BattingLine(at_bats=5, home_runs=2), day=3)
@@ -235,7 +235,7 @@ class PlayerStatsQueryTest(BaseCase):
 
     def test_players_who_left_the_team_are_excluded(self):
         """いま在籍中の一覧（年を渡さない）には、退団した選手は出ない（退団した年の成績には残る）。"""
-        self.service.retire_player(self.team.id, self.slugger.id, 2026)
+        self.roster.retire_player(self.team.id, self.slugger.id, 2026)
 
         names = {row.name for row in self.query.list_roster(year=None)}
 
@@ -250,11 +250,11 @@ class PlayerStatsQueryTest(BaseCase):
 
     def test_rows_follow_team_order_then_jersey_number(self):
         """同値のときの並びはこの順に決まる（ランキングの表示が変わらないように）。"""
-        self.service.register_player(self.rival.id, "相手の1番", 1, "内野手")
-        self.service.register_player(self.team.id, "自軍の1番", 1, "内野手")
+        self.roster.register_player(self.rival.id, "相手の1番", 1, "内野手")
+        self.roster.register_player(self.team.id, "自軍の1番", 1, "内野手")
 
         for number in ["10", "2", "0", "00"]:
-            self.service.register_player(self.team.id, f"自軍の{number}番", number, "内野手")
+            self.roster.register_player(self.team.id, f"自軍の{number}番", number, "内野手")
 
         rows = self.query.list_season(self.league.id, 2026)
 
@@ -269,7 +269,7 @@ class PlayerStatsQueryTest(BaseCase):
 
         投球回は 5.2 + 5.2 = 11.1（アウト数で足す）。先発登板数と救援勝利は登板順から導く。
         """
-        relief = self.service.register_player(self.team.id, "救援", 41, "投手")
+        relief = self.roster.register_player(self.team.id, "救援", 41, "投手")
         play_game(
             self.team,
             self.rival,
@@ -301,7 +301,7 @@ class RankingScreensDoNotBuildAggregatesTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.player = self.service.register_player(self.team.id, "大砲", 3, "内野手")
+        self.player = self.roster.register_player(self.team.id, "大砲", 3, "内野手")
         give_batting(self.team, self.rival, self.player.id, BattingLine(at_bats=10, home_runs=2))
 
     def _forbid_aggregates(self):
@@ -360,7 +360,7 @@ class RankingScreensDoNotBuildAggregatesTest(BaseCase):
 
         for index in range(5):
             team = orm_models.Team.objects.create(league=self.league, name=f"増えたチーム{index}")
-            added = self.service.register_player(team.id, f"選手{index}", 1, "投手")
+            added = self.roster.register_player(team.id, f"選手{index}", 1, "投手")
             play_game(team, self.rival, pitching={added.id: PitchingLine(innings=InningsPitched.from_notation("9.0"))})
 
         self.assertEqual(count(self.service.get_dashboard), dashboard_before)

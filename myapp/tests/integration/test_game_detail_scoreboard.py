@@ -38,8 +38,8 @@ class _DetailCase(BaseCase):
     def setUp(self):
         super().setUp()
         login_as_manager(self.client, self.team, self.rival)
-        self.pitcher = self.service.register_player(self.team.id, "佐藤", 18, "投手")
-        self.rival_pitcher = self.service.register_player(self.rival.id, "相手投手", 19, "投手")
+        self.pitcher = self.roster.register_player(self.team.id, "佐藤", 18, "投手")
+        self.rival_pitcher = self.roster.register_player(self.rival.id, "相手投手", 19, "投手")
         self.home = register_lineup(self.service, self.team, prefix="ホーム", first_number=31)
         self.away = register_lineup(self.service, self.rival, prefix="ビジター", first_number=61)
         self.game = play_game(self.team, self.rival, home_score=0, away_score=0)
@@ -122,7 +122,7 @@ class GameDetailScoreboardTest(_DetailCase):
 
     def test_a_game_without_plate_appearances_does_not_break_the_page(self):
         """古い記録: 打席が無ければ安打は打撃明細から、失策は「—」。"""
-        batter = self.service.register_player(self.team.id, "旧記録", 99, "内野手")
+        batter = self.roster.register_player(self.team.id, "旧記録", 99, "内野手")
         old = Game(
             season=Season(2026),
             played_on=date(2026, 4, 2),

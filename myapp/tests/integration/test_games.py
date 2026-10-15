@@ -27,8 +27,8 @@ class GameViewTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.batter = self.service.register_player(self.team.id, "山田", 10, "内野手")
-        self.pitcher = self.service.register_player(self.team.id, "佐藤", 18, "投手")
+        self.batter = self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        self.pitcher = self.roster.register_player(self.team.id, "佐藤", 18, "投手")
         self.game = play_game(
             self.team,
             self.rival,
@@ -248,8 +248,8 @@ class GameEntryTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.user = login_as_manager(self.client, self.team, username="scorer")
-        self.batter = self.service.register_player(self.team.id, "山田", 10, "内野手")
-        self.pitcher = self.service.register_player(self.team.id, "佐藤", 18, "投手")
+        self.batter = self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        self.pitcher = self.roster.register_player(self.team.id, "佐藤", 18, "投手")
 
     def _create_game(self):
         return self.client.post(
@@ -376,10 +376,10 @@ class BoxScoreEntryTest(BaseCase):
     def setUp(self):
         super().setUp()
         login_as_manager(self.client, self.team, self.rival)
-        self.starter = self.service.register_player(self.team.id, "先発", 11, "投手")
-        self.middle = self.service.register_player(self.team.id, "中継ぎ", 12, "投手")
-        self.closer = self.service.register_player(self.team.id, "抑え", 13, "投手")
-        self.loser = self.service.register_player(self.rival.id, "相手先発", 21, "投手")
+        self.starter = self.roster.register_player(self.team.id, "先発", 11, "投手")
+        self.middle = self.roster.register_player(self.team.id, "中継ぎ", 12, "投手")
+        self.closer = self.roster.register_player(self.team.id, "抑え", 13, "投手")
+        self.loser = self.roster.register_player(self.rival.id, "相手先発", 21, "投手")
         self.home_batters = register_lineup(self.service, self.team, prefix="ホーム", first_number=31)
         self.away_batters = register_lineup(self.service, self.rival, prefix="ビジター", first_number=41)
         self.game = play_game(self.team, self.rival, home_score=0, away_score=0)
@@ -498,8 +498,8 @@ class BoxScoreColumnsTest(BaseCase):
     def setUp(self):
         super().setUp()
         login_as_manager(self.client, self.team, self.rival)
-        self.pitcher = self.service.register_player(self.team.id, "先発", 11, "投手")
-        self.rival_pitcher = self.service.register_player(self.rival.id, "相手先発", 21, "投手")
+        self.pitcher = self.roster.register_player(self.team.id, "先発", 11, "投手")
+        self.rival_pitcher = self.roster.register_player(self.rival.id, "相手先発", 21, "投手")
         self.home_batters = register_lineup(self.service, self.team, prefix="ホーム", first_number=31)
         self.away_batters = register_lineup(self.service, self.rival, prefix="ビジター", first_number=41)
         self.game = play_game(self.team, self.rival, home_score=0, away_score=0)

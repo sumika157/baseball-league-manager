@@ -35,10 +35,10 @@ class TransferTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
 
     def test_transfer_closes_the_old_stint_and_opens_a_new_one(self):
-        self.service.transfer_player(
+        self.roster.transfer_player(
             self.player.id,
             from_team_id=self.team.id,
             to_team_id=self.rival.id,
@@ -55,7 +55,7 @@ class TransferTest(BaseCase):
         self.assertIsNone(stints[1].to_year)
 
     def test_player_appears_on_the_new_roster_only(self):
-        self.service.transfer_player(
+        self.roster.transfer_player(
             self.player.id,
             from_team_id=self.team.id,
             to_team_id=self.rival.id,
@@ -70,7 +70,7 @@ class TransferTest(BaseCase):
         """成績は選手に紐づくので、移籍しても失われない。"""
         give_batting(self.team, self.rival, self.player.id, BattingLine(at_bats=10, singles=3))
 
-        self.service.transfer_player(
+        self.roster.transfer_player(
             self.player.id,
             from_team_id=self.team.id,
             to_team_id=self.rival.id,
@@ -82,7 +82,7 @@ class TransferTest(BaseCase):
         self.assertEqual(detail.at_bats, 10)
 
     def test_the_old_number_becomes_available(self):
-        self.service.transfer_player(
+        self.roster.transfer_player(
             self.player.id,
             from_team_id=self.team.id,
             to_team_id=self.rival.id,
@@ -91,14 +91,14 @@ class TransferTest(BaseCase):
         )
 
         # 空いた10番を別の選手が使える
-        self.service.register_player(self.team.id, "田中", 10, "外野手")
+        self.roster.register_player(self.team.id, "田中", 10, "外野手")
         self.assertEqual([r.name for r in self.service.list_batters(self.team.id).rows], ["田中"])
 
     def test_number_in_use_at_the_destination_is_rejected(self):
-        self.service.register_player(self.rival.id, "先客", 7, "外野手")
+        self.roster.register_player(self.rival.id, "先客", 7, "外野手")
 
         with self.assertRaises(DuplicateJerseyNumber):
-            self.service.transfer_player(
+            self.roster.transfer_player(
                 self.player.id,
                 from_team_id=self.team.id,
                 to_team_id=self.rival.id,
@@ -107,7 +107,7 @@ class TransferTest(BaseCase):
             )
 
     def test_career_is_visible_on_the_team_aggregate(self):
-        self.service.transfer_player(
+        self.roster.transfer_player(
             self.player.id,
             from_team_id=self.team.id,
             to_team_id=self.rival.id,
@@ -129,10 +129,10 @@ class TransferTest(BaseCase):
 
     def test_failed_transfer_leaves_the_source_team_untouched(self):
         """検査に失敗したら、元チームの退団も取り消されること（部分的な保存を残さない）。"""
-        self.service.register_player(self.rival.id, "先客", 7, "外野手")
+        self.roster.register_player(self.rival.id, "先客", 7, "外野手")
 
         with self.assertRaises(DuplicateJerseyNumber):
-            self.service.transfer_player(
+            self.roster.transfer_player(
                 self.player.id,
                 from_team_id=self.team.id,
                 to_team_id=self.rival.id,
@@ -150,14 +150,14 @@ class ForeignPlayerQuotaTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.foreign = self.service.register_player(self.team.id, "助っ人", 50, "外野手")
+        self.foreign = self.roster.register_player(self.team.id, "助っ人", 50, "外野手")
         orm_models.Player.objects.filter(id=self.foreign.id).update(is_foreign_player=True)
 
     def test_transfer_rejects_when_destination_quota_exceeded(self):
         orm_models.League.objects.filter(id=self.league.id).update(foreign_player_roster_limit=0)
 
         with self.assertRaises(ForeignPlayerQuotaExceeded):
-            self.service.transfer_player(
+            self.roster.transfer_player(
                 self.foreign.id,
                 from_team_id=self.team.id,
                 to_team_id=self.rival.id,
@@ -174,7 +174,7 @@ class ForeignPlayerQuotaTest(BaseCase):
         """助っ人を打順の先頭に置いて、1回表だけのスコアブックを記録する。"""
         away = register_lineup(self.service, self.rival, prefix="ビジター", first_number=61)
         home = register_lineup(self.service, self.team, prefix="ホーム", first_number=71)
-        pitcher = self.service.register_player(self.team.id, "投手", 91, "投手")
+        pitcher = self.roster.register_player(self.team.id, "投手", 91, "投手")
         (away if foreign_team is self.rival else home)[0] = foreign_batter
 
         return build_recording_service().record_scorebook(
@@ -219,7 +219,7 @@ class ForeignPlayerQuotaTest(BaseCase):
     def test_recording_rejects_when_away_team_quota_exceeded(self):
         """ホーム・ビジターは独立に判定する。ホームに助っ人がいなくても、
         ビジター側の上限超過は検出される。"""
-        rival_foreign = self.service.register_player(self.rival.id, "助っ人2", 51, "外野手")
+        rival_foreign = self.roster.register_player(self.rival.id, "助っ人2", 51, "外野手")
         orm_models.Player.objects.filter(id=rival_foreign.id).update(is_foreign_player=True)
         orm_models.League.objects.filter(id=self.league.id).update(foreign_player_game_limit=0)
         game = play_game(self.team, self.rival, recorded=False)
@@ -250,15 +250,15 @@ class CaptaincyApplicationTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
 
     def test_appoint_and_remove_round_trip_through_the_database(self):
-        self.service.appoint_captain(self.team.id, self.player.id, 2026)
+        self.roster.appoint_captain(self.team.id, self.player.id, 2026)
 
         team = DjangoTeamRepository(WorldScope.real()).find_by_id(self.team.id)
         self.assertEqual(team.current_captain.id, self.player.id)
 
-        self.service.remove_captain(self.team.id, self.player.id, 2027)
+        self.roster.remove_captain(self.team.id, self.player.id, 2027)
 
         team = DjangoTeamRepository(WorldScope.real()).find_by_id(self.team.id)
         self.assertIsNone(team.current_captain)
@@ -276,8 +276,8 @@ class CaptaincyApplicationTest(BaseCase):
         self.assertEqual(team.current_captain.id, self.player.id)
 
     def test_player_edit_shows_duplicate_captain_error(self):
-        other = self.service.register_player(self.team.id, "田中", 11, "外野手")
-        self.service.appoint_captain(self.team.id, other.id)
+        other = self.roster.register_player(self.team.id, "田中", 11, "外野手")
+        self.roster.appoint_captain(self.team.id, other.id)
         login_as_manager(self.client, self.team, username="u")
 
         response = self.client.post(

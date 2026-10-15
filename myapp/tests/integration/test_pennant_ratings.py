@@ -239,12 +239,12 @@ class ForkedRatingsTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.skip_roster_check()
-        service = self.service
-        self.slugger = service.register_player(self.team.id, "強打者", 3, "外野手")
-        self.rookie = service.register_player(self.team.id, "新人", 4, "外野手")
-        self.ace = service.register_player(self.team.id, "エース", 18, "投手")
-        self.novice_pitcher = service.register_player(self.team.id, "控え投手", 19, "投手")
-        self.rival_player = service.register_player(self.rival.id, "相手の選手", 3, "内野手")
+        roster = self.roster
+        self.slugger = roster.register_player(self.team.id, "強打者", 3, "外野手")
+        self.rookie = roster.register_player(self.team.id, "新人", 4, "外野手")
+        self.ace = roster.register_player(self.team.id, "エース", 18, "投手")
+        self.novice_pitcher = roster.register_player(self.team.id, "控え投手", 19, "投手")
+        self.rival_player = roster.register_player(self.rival.id, "相手の選手", 3, "内野手")
         # 強打者: 本塁打が多く、四球も多い。エース: 奪三振が多く、四球が少なく、先発で長く投げる
         give_batting(
             self.team,
@@ -364,12 +364,12 @@ class SameMaterialTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.skip_roster_check()
-        service = self.service
-        self.runner = service.register_player(self.team.id, "走者", 5, "外野手")
-        self.slugger = service.register_player(self.team.id, "強打者", 3, "外野手")
-        self.ace = service.register_player(self.team.id, "エース", 18, "投手")
+        roster = self.roster
+        self.runner = roster.register_player(self.team.id, "走者", 5, "外野手")
+        self.slugger = roster.register_player(self.team.id, "強打者", 3, "外野手")
+        self.ace = roster.register_player(self.team.id, "エース", 18, "投手")
         # 退団した選手が大量に盗塁していた。世界には写されないので、目印（リーグの盗塁の水準）にも入らない
-        self.retired = service.register_player(self.rival.id, "退団した走者", 9, "外野手")
+        self.retired = roster.register_player(self.rival.id, "退団した走者", 9, "外野手")
         give_batting(
             self.team,
             self.rival,
@@ -397,7 +397,7 @@ class SameMaterialTest(BaseCase):
             PitchingLine(innings=_innings(150), strikeouts=170, hits_allowed=120, walks_allowed=35, starts=25),
             day=4,
         )
-        service.retire_player(self.rival.id, self.retired.id)
+        roster.retire_player(self.rival.id, self.retired.id)
 
     def test_the_world_and_the_check_give_the_same_ratings(self):
         world = build_pennant_world_service().create_world(
@@ -438,7 +438,7 @@ class ForkedSpreadTest(BaseCase):
         self.skip_roster_check()
         self.names = []
         for index in range(MIN_POPULATION + 5):
-            player = self.service.register_player(self.team.id, f"野手{index}", 20 + index, "外野手")
+            player = self.roster.register_player(self.team.id, f"野手{index}", 20 + index, "外野手")
             self.names.append(player.name)
             step = index % 10
             line = BattingLine(
@@ -451,7 +451,7 @@ class ForkedSpreadTest(BaseCase):
             play_game(self.team, self.rival, month=4 + index // 28, day=index % 28 + 1, batting={player.id: line})
         # 成績の無い選手（2軍の層）は散らばりの調整の母集団に入れない（入れると標準偏差が縮む。#175）
         for index in range(20):
-            self.service.register_player(self.team.id, f"2軍{index}", 60 + index, "外野手")
+            self.roster.register_player(self.team.id, f"2軍{index}", 60 + index, "外野手")
 
     def test_the_standard_deviation_of_the_world_matches_the_target(self):
         created = build_pennant_world_service().create_world(
@@ -482,8 +482,8 @@ class FieldingTotalsQueryTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.skip_roster_check()
-        self.shortstop = self.service.register_player(self.team.id, "遊撃手", 6, "内野手")
-        self.bench = self.service.register_player(self.team.id, "控え", 7, "内野手")
+        self.shortstop = self.roster.register_player(self.team.id, "遊撃手", 6, "内野手")
+        self.bench = self.roster.register_player(self.team.id, "控え", 7, "内野手")
         first = give_batting(self.team, self.rival, self.shortstop.id, BattingLine(at_bats=4), day=1)
         second = give_batting(self.team, self.rival, self.shortstop.id, BattingLine(at_bats=4), day=2)
         for game, (putouts, assists, errors) in ((first, (2, 4, 1)), (second, (1, 3, 0))):
