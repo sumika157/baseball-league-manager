@@ -20,6 +20,7 @@ from myapp.domain.value_objects import (
     ErrorKind,
     FieldingLine,
     FieldingPosition,
+    GameStage,
     PlateAppearanceResult,
     Season,
 )
@@ -107,6 +108,7 @@ def _game(book: _Book, *, extra=(), lineup=None) -> Game:
         played_on=date(2026, 4, 1),
         home_team_id=HOME,
         away_team_id=AWAY,
+        stage=GameStage.REGULAR,
         plate_appearances=list(book.entries),
     )
     for order, (player, position) in enumerate(lineup or HOME_LINEUP, start=1):
@@ -390,6 +392,7 @@ class FielderResolutionTest(TestCase):
             played_on=date(2026, 4, 1),
             home_team_id=HOME,
             away_team_id=AWAY,
+            stage=GameStage.REGULAR,
             plate_appearances=book.entries,
         )
         self.assertEqual(services.fielders_by_plate_appearance(game)[sequence], {FP.PITCHER: RELIEVER})

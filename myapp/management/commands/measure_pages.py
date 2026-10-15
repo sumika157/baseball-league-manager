@@ -24,7 +24,7 @@ from django.test import Client
 from django.test.utils import CaptureQueriesContext
 
 from myapp.domain.pennant.world import WorldScope
-from myapp.infrastructure.scoping import games_in, leagues_in, stints_in
+from myapp.infrastructure.scoping import StageFilter, games_in, leagues_in, stints_in
 
 # 応答時間の目安。超えたら印を付ける（絶対の基準ではなく、気づくための線）
 SLOW_MS = 500
@@ -83,7 +83,7 @@ class Command(BaseCommand):
         # ペナントの世界の行を拾うと、実データの画面を測ったことにならない
         scope = WorldScope.real()
         stint = stints_in(scope).select_related("player", "team").first()
-        game = games_in(scope).order_by("-played_on").first()
+        game = games_in(scope, stages=StageFilter.ALL_STAGES).order_by("-played_on").first()
         league = leagues_in(scope).filter(teams__isnull=False).first()
         if stint is None or game is None or league is None:
             return []

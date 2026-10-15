@@ -11,6 +11,7 @@ from django.test.utils import CaptureQueriesContext
 
 from myapp.domain.exceptions import InvalidGame
 from myapp.domain.pennant.schedule import AdvanceTarget
+from myapp.domain.value_objects import GameStage
 from myapp.presentation.views import build_pennant_season_service
 
 from .test_pennant_advance import SeasonCase
@@ -92,6 +93,9 @@ class RowsDoNotChangeTest(SeasonCase):
                 {(e.player_id, e.line) for e in read.fielding}, {(e.player_id, e.line) for e in game.fielding}
             )
             self.assertEqual(read.line_score, game.line_score)
+            # 公式戦の日程を進めた試合は公式戦（区分の書き込みと読み戻しは test_postseason_isolation.py）
+            self.assertIs(read.stage, GameStage.REGULAR)
+            self.assertIs(read.stage, game.stage)
 
 
 class LockScopeTest(SeasonCase):

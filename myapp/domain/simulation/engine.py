@@ -29,6 +29,7 @@ from ..value_objects import (
     Base,
     FieldingPosition,
     GameHeader,
+    GameStage,
     InningsPitched,
     LineupEntry,
     PlateAppearanceResult,
@@ -221,6 +222,8 @@ def simulate_game(
         played_on=played_on,
         home_team_id=home.team_id,
         away_team_id=away.team_id,
+        # 公式戦の日程を消化する（ポストシーズンの試合は S3 で区分を引数にして作る）
+        stage=GameStage.REGULAR,
     )
     lineup = [entry for side in sides.values() for entry in side.entries]
     game = assemble_game(header, lineup, plate_appearances)

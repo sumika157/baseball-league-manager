@@ -60,6 +60,7 @@ from myapp.domain.value_objects import (
     FieldingLine,
     FieldingPosition,
     GameHeader,
+    GameStage,
     Handedness,
     LineupEntry,
     PitchingLine,
@@ -67,7 +68,7 @@ from myapp.domain.value_objects import (
     Position,
     Season,
 )
-from myapp.infrastructure.scoping import games_in, leagues_in, world_condition
+from myapp.infrastructure.scoping import StageFilter, games_in, leagues_in, world_condition
 from myapp.models import (
     Game,
     GameBattingLine,
@@ -368,7 +369,7 @@ class Command(BaseCommand):
             raise CommandError("--games-per-pair は1以上を指定してください。")
 
         # 対象は実データだけ。ペナントの世界の試合は、--replace でも消さない
-        existing = games_in(WorldScope.real()).filter(year=year)
+        existing = games_in(WorldScope.real(), stages=StageFilter.ALL_STAGES).filter(year=year)
         if existing.exists() and not options["replace"]:
             raise CommandError(
                 f"{year}年の試合が既に {existing.count()} 件あります。"
@@ -631,6 +632,8 @@ class Command(BaseCommand):
             played_on=card["played_on"],
             home_team_id=home.id,
             away_team_id=away.id,
+            # 仮想データは実データの試合なので、常に公式戦
+            stage=GameStage.REGULAR,
         )
         # 得点・成績・勝敗は、スコアブックの保存と同じ組み立て（ドメイン）で打席から導く。
         # 独自に書くと2つの実装がずれる
@@ -1247,6 +1250,7 @@ class Command(BaseCommand):
                 ends_next_day=game.times.ends_next_day if game.times else False,
                 interruption_minutes=game.times.interruption_minutes if game.times else 0,
                 attendance=game.attendance,
+                stage=game.stage.value,
             )
             game.id = row.id
             batting_rows.extend(self._batting_orm_rows(row, game))

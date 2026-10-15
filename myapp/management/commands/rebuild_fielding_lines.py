@@ -18,7 +18,7 @@ from myapp.domain.exceptions import DomainError
 from myapp.domain.pennant.world import WorldScope
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
-from myapp.infrastructure.scoping import games_in
+from myapp.infrastructure.scoping import StageFilter, games_in
 
 
 class Command(BaseCommand):
@@ -29,7 +29,9 @@ class Command(BaseCommand):
         scope = WorldScope.real()
         repository = DjangoGameRepository(scope)
         game_ids = sorted(
-            orm_models.GamePlateAppearance.objects.filter(game__in=games_in(scope).values("pk"))
+            orm_models.GamePlateAppearance.objects.filter(
+                game__in=games_in(scope, stages=StageFilter.ALL_STAGES).values("pk")
+            )
             .order_by()
             .values_list("game_id", flat=True)
             .distinct()

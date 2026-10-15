@@ -21,6 +21,7 @@ from ..domain.value_objects import (
     ContractStatus,
     FieldingPosition,
     FreeAgencyOutcome,
+    GameStage,
     JerseyNumber,
     PitchingLine,
     Position,
@@ -1334,6 +1335,8 @@ class TeamApplicationService:
                 played_on=played_on,
                 home_team_id=home_team_id,
                 away_team_id=away_team_id,
+                # 実データの試合は常に公式戦（スコアブックに区分の入力は無い）
+                stage=GameStage.REGULAR,
             )
         )
 

@@ -169,7 +169,7 @@ class TeamListQuery(Protocol):
 
 @runtime_checkable
 class GameListQuery(Protocol):
-    """試合一覧の参照。"""
+    """試合一覧の参照。**公式戦だけを返す**（ポストシーズンの試合は含まない。どのメソッドも同じ）。"""
 
     def list_rows(
         self,
@@ -181,19 +181,22 @@ class GameListQuery(Protocol):
         after: date | None = None,
         through: date | None = None,
     ) -> list[GameRow]:
-        """絞り込んだ試合を新しい順に返す。`after` より後、`through` 以前の試合に絞れる。"""
+        """絞り込んだ公式戦を新しい順に返す（ポストシーズンを含まない）。`after` より後、`through` 以前に絞れる。"""
         ...
 
     def list_for_standings(self, *, year: int | None = None) -> list[Game]:
-        """順位表の計算に渡す試合。成績の明細は持たない。"""
+        """順位表の計算に渡す試合（公式戦だけ。ポストシーズンを含まない）。成績の明細は持たない。"""
         ...
 
     def list_for_player(self, team_id: int, player_id: int) -> list[Game]:
-        """そのチームの試合のうち、選手が出場した試合。その選手の打撃・投球の明細だけを持つ（参照専用）。試合日の古い順。"""
+        """そのチームの公式戦のうち、選手が出場した試合（ポストシーズンを含まない）。
+
+        その選手の打撃・投球の明細だけを持つ（参照専用）。試合日の古い順。
+        """
         ...
 
     def list_seasons(self, *, league_id: int | None = None, recorded_only: bool = False) -> list[int]:
-        """試合のある年を新しい順に返す。
+        """公式戦のある年を新しい順に返す（ポストシーズンの試合だけの年は含まない）。
 
         `league_id` を渡すと、そのリーグのチームが出た試合のある年だけ。
         `recorded_only` を立てると記録済みの試合だけを数える
@@ -202,17 +205,17 @@ class GameListQuery(Protocol):
         ...
 
     def count_by_team(self, *, year: int | None = None) -> dict[int, int]:
-        """チームid → 試合数。ホーム・ビジターの両方を数える。"""
+        """チームid → 公式戦の試合数（ポストシーズンを含まない）。ホーム・ビジターの両方を数える。"""
         ...
 
     def list_months(
         self, *, year: int | None = None, team_id: int | None = None, league_id: int | None = None
     ) -> list[int]:
-        """その絞り込みで試合がある月を昇順に返す。"""
+        """その絞り込みで公式戦がある月を昇順に返す（ポストシーズンを含まない）。"""
         ...
 
     def latest_year(self) -> int | None:
-        """最新シーズン。試合が1件も無ければ None。"""
+        """最新シーズン（公式戦のある年）。試合が1件も無ければ None。"""
         ...
 
 

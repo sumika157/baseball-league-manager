@@ -18,6 +18,7 @@ from myapp.domain.value_objects import (
     BattingLine,
     ErrorKind,
     FieldingPosition,
+    GameStage,
     InningsPitched,
     PitchingLine,
     PlateAppearanceResult,
@@ -76,6 +77,7 @@ def _game(plate_appearances, *, home_score=0, away_score=0) -> Game:
         played_on=date(2026, 4, 1),
         home_team_id=HOME,
         away_team_id=AWAY,
+        stage=GameStage.REGULAR,
         home_score=home_score,
         away_score=away_score,
         plate_appearances=list(plate_appearances),
@@ -638,6 +640,7 @@ class LinesMatchPlateAppearancesTest(TestCase):
             played_on=date(2026, 4, 1),
             home_team_id=HOME,
             away_team_id=AWAY,
+            stage=GameStage.REGULAR,
         )
         game.record_batting(1, BattingLine(at_bats=4, singles=2), team_id=game.home_team_id)
 
