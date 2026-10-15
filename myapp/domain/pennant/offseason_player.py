@@ -35,9 +35,9 @@ Ratings = BatterRatings | PitcherRatings
 
 @dataclass(frozen=True)
 class TrackRecord:
-    """選手の実績（その球団での在籍年数・生え抜きと、世界の中の通算成績（全球団））。戦力外の「実績の加点」（`release.track_record_credit`）の材料。
+    """選手の実績（その球団での在籍年数・生え抜きと、世界の中の通算成績・タイトルの数（全球団））。戦力外の「実績の加点」（`release.track_record_credit`）の材料。
 
-    在籍・世界の試合・主将から呼び出し側が導いて渡す値で、**保存しない**。世界の中の事実だけを数える
+    在籍・世界の試合・主将・表彰から呼び出し側が導いて渡す値で、**これ自体は保存しない**。世界の中の事実だけを数える
     （分岐で写すのは現在の在籍だけなので、分岐した選手の分岐前の経歴と成績は数えない）。
     """
 
@@ -51,6 +51,8 @@ class TrackRecord:
     wins: int = 0
     saves: int = 0
     holds: int = 0
+    # 世界の中で取ったタイトルの数（締めた年までの表彰と、いま締める年の受賞。同率の受賞も1つ。`awards.py`）
+    titles: int = 0
     # いまの主将
     is_captain: bool = False
 
@@ -64,8 +66,9 @@ class TrackRecord:
         batting: BattingLine,
         pitching: PitchingLine,
         is_captain: bool,
+        titles: int,
     ) -> TrackRecord:
-        """在籍（`career`。選手の全在籍）と世界の通算成績から、実績を導く。
+        """在籍（`career`。選手の全在籍）と世界の通算成績・タイトルの数から、実績を導く。
 
         成績は世界の中の通算（全球団の試合。いまは世界に移籍が無いので、その球団の分と同じ）、
         在籍年数と生え抜きは球団 `team_id` での事実。
@@ -91,6 +94,7 @@ class TrackRecord:
             saves=pitching.saves,
             holds=pitching.holds,
             is_captain=is_captain,
+            titles=titles,
         )
 
 

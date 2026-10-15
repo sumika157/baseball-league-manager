@@ -16,6 +16,10 @@
 （変わっていたら断る）。指名を決める操作（`set_releases` など）もこのサービスが持つ
 （締められるかの検査 `_check` を1か所に保つ）。
 
+締める年のタイトル受賞者は**表彰として保存する**（#248。CLAUDE.md の「集計を保存しない」の例外）。受賞者は外で
+タイトルの画面と同じ集計から導き（`pennant_awards.derive_awards`。8リーグで 0.6〜2.9秒）、中では書くだけ。
+戦力外の実績の加点に使うタイトルの数は、締めた年までの表彰と、いま導いた締める年の受賞を足す（過去の年を導き直さない）。
+
 **前提: 世界の `Team` 集約に書くのは、世界の作成とこの処理だけ。** 外で読んだ `Team` を中でそのまま
 `save()` して安全なのは、この前提による（`save()` は変わった行だけを書くが、比べる相手は今の DB なので、
 読んだあとに別の書き込みがあれば、集約の古い値が「違う」として書かれ、その書き込みを上書きして失う）。念のため、在籍の目印（`TeamRepository.roster_signature()`。行数・現在在籍の人数・
@@ -29,12 +33,14 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 
 from ..domain.entities import Player, Team
 from ..domain.exceptions import AlreadyClosed, SeasonLimitReached, SeasonNotFinished, TeamNotFound
+from ..domain.pennant.awards import Award, title_counts
 from ..domain.pennant.club_plan import ClubMember, PlanSection
 from ..domain.pennant.offseason import Draftee, OffseasonClub, OffseasonPlan, OffseasonPlayer, plan_offseason
 from ..domain.pennant.offseason_player import TrackRecord
@@ -45,6 +51,7 @@ from ..domain.pennant.schedule import Fixture, season_schedule
 from ..domain.pennant.season import SeasonPhase, is_final_season, is_season_closed, season_phase, season_year
 from ..domain.pennant.world import World
 from ..domain.repositories import (
+    AwardRepository,
     ClubPlanRepository,
     FixtureRepository,
     LeagueRepository,
@@ -55,8 +62,10 @@ from ..domain.repositories import (
 )
 from ..domain.value_objects import ContractStatus, DepartureRoute, ForeignPlayerRules, JerseyNumber, RosterLimits
 from .dto import ReleasePlanView, ReleasePlayerRow, SeasonClosed, SeasonCloseOption, SimulationTeam
+from .pennant_awards import derive_awards
 from .pennant_season import AtomicBlock
 from .queries import SeasonPlayingTimeQuery, SimulationContextQuery
+from .services import TeamApplicationService
 
 
 def _saved_id(value: int | None) -> int:
@@ -82,6 +91,8 @@ class _PreparedClose:
     changes: list[_RosterChange]
     schedule: Sequence[Fixture]
     year: int
+    # 締める年のタイトル受賞者（表彰として書く。ロックの外で導いた値）
+    awards: list[Award]
 
 
 class PennantOffseasonService:
@@ -98,6 +109,8 @@ class PennantOffseasonService:
         ratings: RatingsRepository,
         plans: ClubPlanRepository,
         releases: ReleasePlanRepository,
+        awards: AwardRepository,
+        titles: TeamApplicationService,
         context_query: SimulationContextQuery,
         playing_time: SeasonPlayingTimeQuery,
         atomic: AtomicBlock,
@@ -110,6 +123,9 @@ class PennantOffseasonService:
         self._ratings = ratings
         self._plans = plans
         self._releases = releases
+        self._awards = awards
+        # タイトルの受賞者を導く（世界の範囲の、タイトルの画面と同じサービス）
+        self._titles = titles
         self._context_query = context_query
         self._playing_time = playing_time
         self._atomic = atomic
@@ -186,6 +202,43 @@ class PennantOffseasonService:
             next_year_ratings_exist=bool(self._ratings.find_by_year(year + 1)),
         ):
             raise AlreadyClosed(f"{year}年のシーズンは既に締めています。", year=year)
+
+    # --- 表彰の記録の補い（#248 より前に締めた世界） ---
+
+    def record_missing_awards(self) -> list[int]:
+        """締めた年のうち表彰の無い年の受賞者を、締める処理と同じ関数で導いて書く。書いた年（古い順）を返す。
+
+        表彰を記録するようになる前（#248 より前）に締めた世界のためのもの。締めていない年には書かない
+        （締めていない年は画面が試合から導く）。何度呼んでも同じ（表彰のある年は飛ばす）。
+        導くのは書き込みのトランザクションの外、書くのは中（締める処理と同じ）。
+        """
+        years = self.missing_award_years()
+        if not years:
+            return []
+        league_ids = [_saved_id(league.id) for league in self._leagues.find_all()]
+        awards = [award for year in years for award in derive_awards(self._titles, year, league_ids)]
+        with self._atomic():
+            # 同じ年を2度書かない（外で導いている間に別の呼び出しが書いた年は、`add_all` が断る）
+            self._awards.add_all(awards)
+        return years
+
+    def missing_award_years(self) -> list[int]:
+        """締めた年のうち、表彰の無い年（古い順）。何も書かない（`pennant_record_awards --check` が一覧する）。"""
+        world = self._worlds.find_by_id(self._world_id)
+        last_played = self._context_query.last_played_on()
+        if last_played is None:
+            return []
+        recorded = self._awards.recorded_years()
+        return [
+            year
+            for year in range(world.start_year, last_played.year + 1)
+            if year not in recorded
+            and is_season_closed(
+                year=year,
+                start_year=world.start_year,
+                next_year_ratings_exist=bool(self._ratings.find_by_year(year + 1)),
+            )
+        ]
 
     # --- 戦力外の指名（受け持つ球団だけ。シーズン終了で締められるときだけ） ---
 
@@ -305,6 +358,10 @@ class PennantOffseasonService:
         ratings_by_player = {item.player_id: item for item in self._ratings.find_by_year(year)}
         playing = self._playing_time.for_year(year)
         manual = self._manual_releases(world, year)
+        # 締める年のタイトル受賞者（表彰として書く）。画面と同じ集計で、リーグごとに1回（8リーグで0.6〜2.9秒）
+        awards = derive_awards(self._titles, year, [_saved_id(league.id) for league in leagues])
+        # 実績の加点の材料: 締めた年までの表彰の数と、いま締める年の受賞の数（過去の年を導き直さない）
+        titles = title_counts(awards) + Counter(self._awards.count_by_player())
 
         clubs = [
             OffseasonClub(
@@ -312,7 +369,7 @@ class PennantOffseasonService:
                 foreign_rules=foreign.get(team.league_id, ForeignPlayerRules.UNLIMITED),
                 registered_player_limit=_limits_of(team, limits).registered,
                 players=tuple(
-                    _offseason_player(team, player, ratings_by_player, playing, year=year)
+                    _offseason_player(team, player, ratings_by_player, playing, titles, year=year)
                     for player in team.active_players
                 ),
             )
@@ -335,7 +392,7 @@ class PennantOffseasonService:
             world_seed=world.seed,
             year=year + 1,
         )
-        return _PreparedClose(plan=plan, changes=changes, schedule=schedule, year=year)
+        return _PreparedClose(plan=plan, changes=changes, schedule=schedule, year=year, awards=awards)
 
     def _commit(self, world: World, prepared: _PreparedClose) -> SeasonClosed:
         """計算済みの変更を書く（トランザクションの中。SQL を流すだけにする）。"""
@@ -355,6 +412,8 @@ class PennantOffseasonService:
         # 戦力外の指名は使い終わった（締める年の違う指名も、使わずに消す）。事実は在籍の退団の経路に残る
         self._releases.delete_all()
         self._fixtures.add_all(prepared.schedule)
+        # 締める年のタイトル受賞者を表彰として書く（導いたのはロックの外。#248）
+        self._awards.add_all(prepared.awards)
 
         return SeasonClosed(
             year=year,
@@ -426,7 +485,13 @@ class PennantOffseasonService:
 
 
 def _offseason_player(
-    team: Team, player: Player, ratings: Mapping[int, PlayerRatings], playing: Mapping[int, PlayingTime], *, year: int
+    team: Team,
+    player: Player,
+    ratings: Mapping[int, PlayerRatings],
+    playing: Mapping[int, PlayingTime],
+    titles: Mapping[int, int],
+    *,
+    year: int,
 ) -> OffseasonPlayer:
     """締める年の現役の選手。`joined_year` は現在の在籍の開始年（分岐した選手は一律に開幕年）。
 
@@ -454,6 +519,7 @@ def _offseason_player(
             batting=player.batting,
             pitching=player.pitching,
             is_captain=team.current_captain is player,
+            titles=titles.get(player_id, 0),
         ),
     )
 

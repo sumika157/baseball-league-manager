@@ -24,6 +24,7 @@ from django.views.generic import CreateView
 
 from ..application.club_management import ClubManagementService
 from ..application.dto import (
+    AwardRow,
     ClubPlanView,
     GameEditData,
     GameEditPlateAppearance,
@@ -77,6 +78,7 @@ from ..domain.value_objects import (
     Position,
 )
 from ..infrastructure.queries import (
+    DjangoAwardQuery,
     DjangoFieldingTotalsQuery,
     DjangoGameListQuery,
     DjangoHomeStadiumQuery,
@@ -94,6 +96,7 @@ from ..infrastructure.queries import (
     DjangoWorldSummaryQuery,
 )
 from ..infrastructure.repositories import (
+    DjangoAwardRepository,
     DjangoClubPlanRepository,
     DjangoFixtureRepository,
     DjangoGameRepository,
@@ -411,6 +414,8 @@ def build_pennant_offseason_service(world_id: int) -> PennantOffseasonService:
         ratings=DjangoRatingsRepository(scope),
         plans=DjangoClubPlanRepository(scope),
         releases=DjangoReleasePlanRepository(scope),
+        awards=DjangoAwardRepository(scope),
+        titles=build_world_view_service(world_id),
         context_query=DjangoSimulationContextQuery(scope),
         playing_time=DjangoSeasonPlayingTimeQuery(scope),
         atomic=transaction.atomic,
@@ -459,6 +464,7 @@ def build_pennant_history_service(world_id: int) -> PennantHistoryService:
         games=DjangoGameListQuery(scope),
         team_records=DjangoTeamRepository(scope),
         leagues=DjangoLeagueRepository(scope),
+        awards=DjangoAwardQuery(scope),
     )
 
 
@@ -1592,6 +1598,15 @@ def _ratings_history(world: WorldContext | None, player_id: int) -> PlayerRating
     return build_pennant_ratings_service(world.world_id).get_history(player_id)
 
 
+def _player_awards(world: WorldContext | None, team_id: int, player_id: int, played_years: set[int]) -> list[AwardRow]:
+    """選手ページの「獲得タイトル」。表彰はペナントの世界だけで、実データの選手には出さない（実データは保存しない）。"""
+    if world is None:
+        return []
+    return build_pennant_history_service(world.world_id).get_player_awards(
+        world, team_id, player_id, played_years=played_years
+    )
+
+
 def player_detail(request, team_id, player_id, world_id=None):
     """選手の個人ページ。通算・年度別・月別の成績と、選んだ月の試合ごとの記録。
 
@@ -1612,6 +1627,7 @@ def player_detail(request, team_id, player_id, world_id=None):
             "player": profile.detail,
             "ratings_card": _ratings_card(world, player_id),
             "ratings_history": _ratings_history(world, player_id),
+            "awards": _player_awards(world, team_id, player_id, {row.year for row in profile.years or []}),
             "can_edit_team": world is None and build_permission_query().can_manage(request.user, team_id),
         },
         world,

@@ -11,10 +11,12 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from ..domain.entities import jersey_number_in
+from ..domain.pennant.awards import Award
 from ..domain.pennant.club_plan import PlanSection
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.season import SeasonPhase
 from ..domain.services.free_agency import SERVICE_DAYS_PER_SEASON
+from ..domain.services.rankings import Title
 from ..domain.services.roster_analysis import NEUTRAL_CATEGORY, ColorCategory
 from ..domain.simulation.ratings import BatterRatings, PitcherRatings, RatingEmphasis
 from ..domain.value_objects import (
@@ -484,6 +486,8 @@ class YearlyRow:
 
     label: str  # '2026年'
     appearances: int
+    # シーズンの年（ラベルから年を切り出さない。選手ページの「獲得タイトル」が出場した年に使う）
+    year: int = 0
     # 打撃
     plate_appearances: int = 0
     at_bats: int = 0
@@ -2595,3 +2599,52 @@ class ClubHistory:
     seasons: list[ClubHistorySeason]
     record: str  # 通算の勝敗（「170勝113敗3分」）
     titles: int  # リーグ優勝の回数
+
+
+@dataclass(frozen=True)
+class AwardRow:
+    """タイトル受賞の1行（部門の1位。同率は1人ずつ）。歴代の記録・球団史・選手ページの材料。
+
+    締めた年は表彰（`PennantAward`）から、終わったが締めていない年は試合から導いた値（`pennant_awards.derive_award_rows`）から作る。
+    どちらも同じ形にして、画面は出どころを区別しない。
+    """
+
+    year: int
+    league_id: int
+    title: Title
+    player_id: int
+    player_name: str
+    team_id: int
+    team_name: str
+    value: str  # 記録の表記（「.345」「42」）
+
+    @property
+    def label(self) -> str:
+        return self.title.label
+
+    @property
+    def sort_key(self) -> tuple[int, int, str]:
+        """並び: 年 → 部門（`Title` の定義順）→ 選手名（同率の1位はタイトルの画面と同じ名前順）。"""
+        return (self.year, self.title.order, self.player_name)
+
+    def entry(self) -> RankingEntry:
+        """タイトルの表の1マスに置く形（順位は1位）。"""
+        return RankingEntry(
+            rank=1,
+            player_id=self.player_id,
+            player_name=self.player_name,
+            team_id=self.team_id,
+            team_name=self.team_name,
+            value=self.value,
+        )
+
+    def award(self) -> Award:
+        """保存する表彰（名前は持たない）。"""
+        return Award(
+            year=self.year,
+            league_id=self.league_id,
+            title=self.title,
+            player_id=self.player_id,
+            team_id=self.team_id,
+            value=self.value,
+        )
