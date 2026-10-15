@@ -24,6 +24,10 @@ git は main の作業ツリー（`U:\home\sumika\work\develop\my_django_project
 
 - `state` が `OPEN`、`isDraft` が false、`mergeable` が `CONFLICTING` のときだけ続ける。`UNKNOWN` は GitHub が計算中なので、少し置いて見直す。
 - フォークからの PR（`isCrossRepository`）は対象外。
+- **持ち主のセッションが作業中なら手を出さない**（自分の PR を自分で直すときは除く。#270）。`git worktree list` でそのブランチを開いている
+  worktree があり、push していないコミットがある（`git -C <その worktree> rev-list --count origin/<head>..HEAD` が 1 以上）か、
+  HEAD やファイルが直近30分のうちに動いているなら、持ち主が載せ直しの途中かもしれない。割り込むと持ち主の push が弾かれて二度手間になるので、
+  何もせずに終わる（まだコンフリクトしていれば、次の見回りが見直す）。
 
 ## 2. 一時的な作業場所で取り込む
 
