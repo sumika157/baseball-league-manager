@@ -4,24 +4,15 @@
 # 手元と同じ環境で流すため、検査もテストも開発用 Dockerfile のイメージの中で動かす（CLAUDE.md の「すべてのコマンドは Docker 経由」）。
 name: CI
 
-# paths-ignore は「テストに影響しないパス」の唯一の出典（CLAUDE.md の手元の手順もここを見る）。
-# 差分がこれに収まる PR・push ではワークフローごと流さない（docs だけの変更が main に入っても、イメージの中身は変わらないので publish も要らない）。
-# テストが読むファイル（Makefile など）は入れない。一覧は pull_request に1回だけ書き、push は YAML のアンカーで同じものを指す。Terraform の検査は terraform.yml
+# ワークフローは毎回動かし、テストに影響しない変更だけのときは test ジョブをスキップする（下の changes ジョブ）。
+# トリガーの paths-ignore で流さないと、必須のチェック test が報告されず、自動マージがいつまでも待つため（#244）。
+# スキップされたジョブは、必須のチェックとしては成功扱いになる。Terraform の検査は terraform.yml
 on:
   pull_request:
-    paths-ignore: &unaffected-by-tests
-      - "docs/**"
-      - "**/*.md"
-      - ".claude/**"
-      - "infra/**"
-      - "scripts/**"
-      - ".github/workflows/wiki-sync.yml"
-      - ".github/workflows/terraform.yml"
   # main と epic の統合ブランチの先端を流す（並行した PR を続けてマージすると、単独では通っても組み合わせで壊れることがあるため）。
   # publish は main だけ（下の if）
   push:
     branches: [main, "epic/**"]
-    paths-ignore: *unaffected-by-tests
   # ブランチで本番イメージのビルドと push を試すため（このときはコミットのハッシュのタグだけ付く）
   workflow_dispatch:
 
@@ -38,7 +29,72 @@ env:
   IMAGE: ghcr.io/sumika157/baseball-league-manager
 
 jobs:
+  # 変更されたファイルがテストに影響するかを決める。UNAFFECTED_BY_TESTS は「テストに影響しないパス」の唯一の出典
+  # （CLAUDE.md と open-pr スキルの手元の手順もここを見る）。テストが読むファイル（Makefile など）は入れない。
+  # パターンは bash の [[ == ]] の形（* は / も含めて一致する）。手動実行と、比べる相手が無い push は常にテストする
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: テストに影響する変更があるか
+        id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          UNAFFECTED_BY_TESTS: |
+            docs/*
+            *.md
+            .claude/*
+            infra/*
+            scripts/*.ps1
+            scripts/*.sh
+            .github/workflows/wiki-sync.yml
+            .github/workflows/terraform.yml
+        run: |
+          case "$EVENT" in
+            pull_request) base="$PR_BASE" ;;
+            push) base="$PUSH_BEFORE" ;;
+            *) base="" ;;
+          esac
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            echo "比べる相手が無いので、テストする"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # force push の後などで比べる相手が無いときは、差分を出せないのでテストする（黙って飛ばさない）
+          if ! files=$(git diff --name-only "$base"...HEAD); then
+            echo "差分を出せないので、テストする"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          code=false
+          while IFS= read -r file; do
+            [ -n "$file" ] || continue
+            unaffected=false
+            while IFS= read -r pattern; do
+              # shellcheck disable=SC2053  # パターンとして一致させる
+              if [ -n "$pattern" ] && [[ "$file" == $pattern ]]; then
+                unaffected=true
+                break
+              fi
+            done <<< "$UNAFFECTED_BY_TESTS"
+            if [ "$unaffected" = false ]; then
+              echo "テストに影響する: $file"
+              code=true
+            fi
+          done <<< "$files"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
   test:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:

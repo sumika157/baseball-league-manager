@@ -1,9 +1,9 @@
 ---
 name: open-pr
-description: 実装を終えたブランチを、セルフレビューを済ませてから push し、Issue とリンクした PR を作って URL を提示する。「PR を出して」「PR にして」と頼まれたとき、または実装が終わって CLAUDE.md の流れで PR を出す段になったときに使う。PR を作った後の Issue の更新（チェック・epic の段階の sub-issue を閉じる）も扱う。
+description: 実装を終えたブランチを、セルフレビューを済ませてから push し、Issue とリンクした PR を作って自動マージを予約し、マージ後の確認と片付けまで行う。「PR を出して」「PR にして」と頼まれたとき、または実装が終わって CLAUDE.md の流れで PR を出す段になったときに使う。PR を作った後の Issue の更新（チェック・epic の段階の sub-issue を閉じる）も扱う。
 ---
 
-PR を出すまでの手順。**規則（セルフレビューの周数・観点・終わる条件・コミットの粒度・マージはユーザーが行う）は
+PR を出すまでの手順。**規則（セルフレビューの周数・観点・終わる条件・コミットの粒度・自動マージにしない例外）は
 `CLAUDE.md`「ブランチとコミット」が出典**で、ここには順番とコマンドだけを書く。Issue の書き方とリンクの仕組みは `issue-plan` スキル。
 
 以下、PowerShell の例は毎回この行から始める（PowerShell ツールは呼び出しごとに変数が消える）:
@@ -31,8 +31,8 @@ $gh = "C:\Users\sumik\AppData\Local\Microsoft\WinGet\Packages\GitHub.cli_Microso
 - 直しは `git commit --amend` で機能のコミットに含める（push 前なので書き換えてよい）。
 - 周の途中でコードを直したら、その周の終わりに lint と、直した範囲のテストを通し直す（worktree なら `worktree` スキルの手順2。`-w` を忘れない）。
 - 最後の周の後、push の前に1回フルテストを流す（手元と CI の分担は `CLAUDE.md`「テストと品質のゲート」）。
-  差分が `.github/workflows/ci.yml` の `paths-ignore` に収まるなら流さない（CI も流れない）。
-  `git diff --name-only origin/<base>...HEAD` を `paths-ignore` と見比べて決め、省いたことを PR 本文の「確認したこと」に書く。
+  差分がテストに影響しないパスだけなら流さない（CI も `test` をスキップする）。
+  `git diff --name-only origin/<base>...HEAD` を `ci.yml` の `changes` ジョブの `UNAFFECTED_BY_TESTS` と見比べて決め、省いたことを PR 本文の「確認したこと」に書く。
 - 周ごとに「何を直したか」を1行ずつメモしておく（手順3の「セルフレビュー」節に貼る）。
 - 計画からずれたら Issue 本文を直し、理由をコメントに残す（`issue-plan` の手順5）。
 
@@ -90,6 +90,18 @@ Closes #<Issue番号>          ← base が epic なら Refs #<段階の sub-iss
 
 タイトルはコミットの1行目と同じ調子（「〜した」）。
 
+PR を作ったら、**自動マージを予約する**（CI の `test` が通るとスカッシュマージされる）:
+
+```powershell
+& $gh pr merge <PR番号> --auto --squash
+```
+
+- **予約しない PR**（`CLAUDE.md`「ブランチとコミット」の例外: `infra/` に触れる・epic を main に入れる・データの全再生成）は、ここを飛ばし、
+  手順7で URL を提示してユーザーのマージを待つ。
+- 予約は、マージ先に必須のチェックがあるブランチ（main・`epic/**`。リポジトリのルールセット）でだけ行う。必須のチェックが無いブランチに
+  `--auto` を付けると、CI を待たずにすぐマージされる。
+- `--auto` の無い `gh pr merge` は使わない（ユーザーの判断を代わりに下さない。手元のフックも止める）。
+
 PR を作ったら、Issue（epic のタスクなら段階の sub-issue）を Project で「レビュー待ち」（選択肢の ID `2d63e9ec`）にする。
 コマンドと ID は `issue-plan` の手順4「Project の状態を『作業中』にする」と同じで、選択肢の ID だけを替える。
 マージされて Issue が閉じれば、組み込みのワークフローが「完了」に動かす（epic の段階の sub-issue は手順6で閉じたときに動く）。
@@ -106,8 +118,8 @@ PR を作ったら、Issue（epic のタスクなら段階の sub-issue）を Pr
 ## 5. CI の結果を確かめる
 
 PR を作ると CI（`.github/workflows/ci.yml`）が走る（初回は数分）。終わるまで待って結果を見る。待つあいだに手順6を進めてよい。
-差分が `ci.yml` の `paths-ignore` に収まる PR では CI のテストが流れない。`infra/` に触れていれば `terraform.yml` の検査だけが流れるので、
-それを待つ。何も流れない PR は `gh pr checks` が「no checks reported」になるので、この手順を省く。
+テストに影響しないパスだけの PR では、`changes` ジョブだけが動き、`test` はスキップ（必須のチェックとしては成功扱い）になる。
+`infra/` に触れていれば `terraform.yml` の検査も流れる。自動マージを予約していれば、`test` が通った時点でマージされる。
 
 ```powershell
 & $gh pr checks <PR番号> --watch --fail-fast   # 失敗したら終了コードが 0 以外になる
@@ -116,7 +128,8 @@ PR を作ると CI（`.github/workflows/ci.yml`）が走る（初回は数分）
 - 落ちたら、Actions のログ（`& $gh run view <実行ID> --log-failed`）で原因を見て直し、amend して `git push --force-with-lease` で push し直す
   （PR が OPEN のうちは、1つの機能を1コミットに保つためにこうする。下の確認を先に）。
 - **PR を出した後にブランチへ追記する（amend＋force-push・本文の編集）ときは、その直前に `& $gh pr view <PR番号> --json state` が `OPEN` かを確かめ、`MERGED` なら止まる。**
-  ユーザーは PR を見るとすぐマージすることがあり、マージ済みのブランチへの push も本文の編集もエラーにならないまま main に届かない（#83 と #132 で実際に起きた）。
+  自動マージは CI が通った瞬間にマージするので、追記の前に済んでいることがある。マージ済みのブランチへの push も本文の編集もエラーにならないまま main に届かない（#83 と #132 で実際に起きた）。
+  CI が通った後に直したいことに気づいたら、先に `& $gh pr merge <PR番号> --disable-auto` で予約を外してから直す。
   マージ済みなら、追記は main から切った新しいブランチ（と Issue）で出し直す。
 - PR の本文の「確認したこと」に、CI が通ったこと（実行の URL）を書き足す。
 
@@ -127,11 +140,12 @@ PR を作ると CI（`.github/workflows/ci.yml`）が走る（初回は数分）
 
 ## 7. 報告して終わる
 
-PR の URL と CI の結果を提示して終わる。**マージはしない**（ユーザーが GitHub 上で行う）。
-
-マージされたら:
-- worktree を片付ける（`worktree` スキルの手順4）。
+自動マージを予約した PR は、マージされるまで待ってから（`& $gh pr view <PR番号> --json state` が `MERGED`）:
 - **base（main・epic）への push で走った CI の結果を確かめる**（`& $gh run list --branch <base> --limit 3`）。
   並行した PR の組み合わせで先端が壊れていないかは、これで分かる（手で先端のフルテストを流す代わり）。落ちていたら次の作業より先に直す。
-  `paths-ignore` に収まる PR のマージでは CI が流れず、一覧には前の実行が出るだけなので確かめなくてよい
+  テストに影響しないパスだけの PR では `test` がスキップされるので確かめなくてよい
   （`infra/` に触れていれば `--workflow terraform.yml` で Terraform の検査を確かめる）。
+- worktree を片付ける（`worktree` スキルの手順4）。
+- PR の URL と結果を報告する。CLAUDE.md を変えた PR は、規則の変更点を1行ずつ示す。画面を変えた PR は、プレビューの URL も示す。
+
+予約しなかった（例外の）PR は、PR の URL と CI の結果を提示して終わる。マージはユーザーが GitHub 上で行い、マージされたら上と同じ確認と片付けをする。
