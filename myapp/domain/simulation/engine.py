@@ -11,7 +11,8 @@
 1打席の判定の順は「死球 → 四球 → 犠打・犠飛 → 三振 → 本塁打 → インプレー（安打 → 長打の内訳、
 凡打 → 失策出塁・野選・ゴロ・フライ・ライナー・邪飛）」。各段の確率は `odds.matchup()`。
 
-**投手の疲労**（先発の休養不足・目安を超えた続投）は、能力を目減りさせてから `matchup()` に渡す（`fatigue.py`）。
+**投手の疲労**（先発の休養不足・救援の連投と詰まった登板・目安を超えた続投）は、
+能力を目減りさせてから `matchup()` に渡す（`fatigue.py`）。
 疲労は保存せず、`PitchingHistory` とその登板の対戦打者数から導く。
 """
 
@@ -202,7 +203,7 @@ def simulate_game(
 
     `home` / `away` は1軍に登録された選手だけを入れた `ClubRoster`。先発は `history`（直近の登板の
     記録）から中5日を空けて決め、試合が終わったらその日の登板を `history` に書き足す。
-    `history` を渡さなければ、先発の休養の疲労を考えない（毎回、最も良い先発が投げる）。
+    `history` を渡さなければ、直近の登板の疲労（先発の休養・救援の連投）を考えない（毎回、最も良い先発が投げる）。
 
     `home_orders` / `away_orders` は GM の編成の上書き（オーダー・投手陣）。渡さなければ（または
     区画が `None` なら）AI 監督が決めるので、渡さないときの結果は上書きを知らない版と同じ。
@@ -313,7 +314,7 @@ class _Engine:
                 starter_batter_target(self.rng, starter),
                 is_starter=True,
                 workload=workload,
-                fatigue_before=pregame_fatigue_points(workload, as_starter=True),
+                fatigue_before=pregame_fatigue_points(workload, as_starter=True, stamina=starter.ratings.stamina),
             )
         )
         side.used_pitchers.add(starter.player_id)
@@ -463,7 +464,7 @@ class _Engine:
                 reliever_batter_target(self.rng, chosen),
                 is_starter=False,
                 workload=workload,
-                fatigue_before=pregame_fatigue_points(workload, as_starter=False),
+                fatigue_before=pregame_fatigue_points(workload, as_starter=False, stamina=chosen.ratings.stamina),
             )
         )
 

@@ -26,6 +26,7 @@ from myapp.domain.exceptions import (
 )
 from myapp.domain.pennant.schedule import AdvanceTarget, Fixture
 from myapp.domain.pennant.world import WorldScope
+from myapp.domain.simulation.fatigue import max_consecutive_days
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoGameListQuery, DjangoSimulationContextQuery
 from myapp.infrastructure.repositories import DjangoFixtureRepository, DjangoGameRepository
@@ -307,16 +308,23 @@ class FinishedSeasonTest(SeasonCase):
         self.assertEqual(len(self.games_of(self.world_a)), SEASON_GAMES, "試合を作り足さない")
         self.assertEqual(self.fixtures_of(self.world_a), [], "日程を作り足さない")
 
-    def test_no_reliever_pitches_three_days_in_a_row(self):
+    def test_no_reliever_pitches_past_the_consecutive_day_limit_of_their_stamina(self):
+        """2連投まで。スタミナ55以上だけが3連投目も投げられる（進めるときに読む能力の年で数える）。"""
         days_by_pitcher = defaultdict(set)
         for line in orm_models.GamePitchingLine.objects.filter(
             game__home_team__league__world_id=self.world_a
         ).select_related("game"):
             days_by_pitcher[line.player_id].add(line.game.played_on)
+        stamina = dict(
+            orm_models.PennantPlayerRatings.objects.filter(player_id__in=days_by_pitcher, year=YEAR).values_list(
+                "player_id", "stamina"
+            )
+        )
         for pitcher_id, days in days_by_pitcher.items():
+            limit = max_consecutive_days(stamina[pitcher_id])
             for day in days:
-                run = {day + timedelta(days=offset) for offset in range(3)}
-                self.assertFalse(run <= days, (pitcher_id, day))
+                run = {day + timedelta(days=offset) for offset in range(limit + 1)}
+                self.assertFalse(run <= days, (pitcher_id, day, limit))
 
 
 class DerivedFromGamesTest(SeasonCase):

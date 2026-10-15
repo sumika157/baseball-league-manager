@@ -9,10 +9,12 @@ from datetime import date, timedelta
 from unittest import TestCase
 
 from myapp.domain.pennant.schedule import ScheduleRules
+from myapp.domain.services.rankings import QUALIFYING_INNINGS_PER_GAME
 from myapp.domain.simulation.engine import simulate_game
 from myapp.domain.simulation.fatigue import PitchingHistory
 from myapp.domain.simulation.levels import (
     LEVEL_TARGETS,
+    OUTS_PER_INNING,
     SEASON_GAMES,
     TITLE_TARGETS,
     LevelRow,
@@ -23,6 +25,7 @@ from myapp.domain.simulation.levels import (
 from myapp.domain.simulation.manager import choose_active_roster
 from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.samples import average_club
+from myapp.domain.value_objects import PitchingLine
 
 GAMES = 400
 OPENING_DAY = date(2026, 4, 1)
@@ -151,4 +154,14 @@ class SeasonTallyTest(TestCase):
         self.assertEqual(rows["save_title"], max(saves.values()))
         self.assertGreater(rows["batting_title"], 0.0)
         self.assertGreater(rows["innings_leader"], 0.0)
-        self.assertGreater(rows["era_title"], 0.0)
+        # 最優秀防御率は規定（1試合ぶん＝1回。team_games=1）に達した投手の最小。自責点0の救援がいれば 0.00 になりうる
+        totals: dict[int, PitchingLine] = {}
+        for game in played_games:
+            for outing in game.pitching:
+                totals[outing.player_id] = totals.get(outing.player_id, PitchingLine()) + outing.line
+        qualified = [
+            line.earned_run_average
+            for line in totals.values()
+            if line.innings.outs >= QUALIFYING_INNINGS_PER_GAME * OUTS_PER_INNING
+        ]
+        self.assertEqual(rows["era_title"], min(qualified))

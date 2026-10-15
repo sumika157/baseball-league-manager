@@ -31,7 +31,7 @@ from ..domain.pennant.club_plan import (
 )
 from ..domain.pennant.season import ratings_year
 from ..domain.repositories import ClubPlanRepository, FixtureRepository, RatingsRepository, WorldRepository
-from ..domain.simulation.fatigue import RECENT_PITCHING_DAYS, PitchingHistory
+from ..domain.simulation.fatigue import FATIGUE_WINDOW_DAYS, PitchingHistory
 from ..domain.simulation.manager import (
     LINEUP_SIZE,
     MIN_ACTIVE_PITCHERS,
@@ -42,6 +42,7 @@ from ..domain.simulation.manager import (
     choose_lineup,
     plan_pitching_staff,
 )
+from ..domain.simulation.ratings import AVERAGE_RATING, PitcherRatings
 from ..domain.value_objects import Position
 from .dto import (
     ClubLimitsView,
@@ -111,10 +112,18 @@ class ClubManagementService:
         next_game_on = self._fixtures.first_date(team_id)
         history = PitchingHistory()
         recent_days: tuple[date, ...] = ()
+        staminas: dict[int, int] = {}
         if next_game_on is not None:
             # 進めるときと同じ手順で、直近の登板から疲労の記録を作る（手順を書き写さない）
             history = pitching_history(self._context_query.load(before=next_game_on))
-            recent_days = tuple(next_game_on - timedelta(days=ago) for ago in range(RECENT_PITCHING_DAYS, 0, -1))
+            recent_days = tuple(next_game_on - timedelta(days=ago) for ago in range(FATIGUE_WINDOW_DAYS, 0, -1))
+            # 連投の上限はスタミナで決まる（進めるときと同じ能力。投手陣の顔ぶれだけ読む）
+            pitcher_ids = [*view.rotation_ids, *view.bullpen_ids, *([view.closer_id] if view.closer_id else [])]
+            staminas = {
+                item.player_id: item.ratings.stamina
+                for item in self._ratings.find_by_players(pitcher_ids, view.year)
+                if isinstance(item.ratings, PitcherRatings)
+            }
         players = {row.player_id: row for row in view.players}
 
         def usage_of(player_id: int) -> ClubPitcherUsage:
@@ -127,7 +136,10 @@ class ClubManagementService:
                 is_foreign=row.is_foreign,
                 pitched_recently=tuple(history.pitched_on(player_id, day) for day in recent_days),
                 days_since_start=history.days_since_start(player_id, next_game_on),
-                can_pitch=history.can_pitch_on(player_id, next_game_on),
+                # 投手陣に並ぶのは能力のある投手だけ（`view` の材料）。念のため無ければ平均で数える
+                can_pitch=history.can_pitch_on(
+                    player_id, next_game_on, stamina=staminas.get(player_id, AVERAGE_RATING)
+                ),
             )
 
         return ClubPitchingUsage(

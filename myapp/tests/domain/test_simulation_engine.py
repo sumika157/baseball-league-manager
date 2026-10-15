@@ -19,7 +19,7 @@ from myapp.domain.services import (
     fielders_by_plate_appearance,
 )
 from myapp.domain.simulation.engine import MAX_INNINGS, SimulatedGame, simulate_game
-from myapp.domain.simulation.fatigue import PitchingHistory
+from myapp.domain.simulation.fatigue import PitchingHistory, max_consecutive_days
 from myapp.domain.simulation.manager import (
     ClubOrders,
     ForeignQuota,
@@ -320,15 +320,18 @@ class SimulatedGamesTest(TestCase):
                 self.assertGreaterEqual((later - earlier).days, 6, f"{player_id}: {days}")
         self.assertGreaterEqual(len(starts), 6 * len(self.rosters) - 6)
 
-    def test_no_reliever_pitches_three_days_in_a_row(self):
+    def test_no_reliever_pitches_past_the_consecutive_day_limit_of_their_stamina(self):
+        """2連投まで。スタミナ55以上だけが3連投目も投げられる（4連投は誰もしない）。"""
+        stamina = {p.player_id: p.ratings.stamina for r in self.rosters.values() for p in r.pitchers}
         pitched: dict[int, set[date]] = defaultdict(set)
         for played in self.games:
             for outing in played.game.pitching:
                 pitched[outing.player_id].add(played.game.played_on)
         for player_id, days in pitched.items():
+            limit = max_consecutive_days(stamina[player_id])
             for day in days:
-                run = {day + timedelta(days=offset) for offset in range(3)}
-                self.assertFalse(run <= days, f"{player_id} が{day}から3連投している")
+                run = {day + timedelta(days=offset) for offset in range(limit + 1)}
+                self.assertFalse(run <= days, f"{player_id} が{day}から{limit + 1}連投している")
 
     def test_the_closer_collects_most_of_the_saves(self):
         saves: Counter[int] = Counter()
