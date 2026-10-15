@@ -49,6 +49,7 @@ from myapp.domain.repositories import (
     GameRepository,
     LeagueRepository,
     RatingsRepository,
+    ReleasePlanRepository,
     TeamRepository,
     WorldRepository,
 )
@@ -71,6 +72,7 @@ from myapp.infrastructure.repositories import (
     DjangoGameRepository,
     DjangoLeagueRepository,
     DjangoRatingsRepository,
+    DjangoReleasePlanRepository,
     DjangoTeamRepository,
     DjangoWorldRepository,
 )
@@ -110,6 +112,7 @@ class ProtocolConformanceTest(SimpleTestCase):
         (DjangoRatingsRepository(REAL), RatingsRepository),
         (DjangoFixtureRepository(REAL), FixtureRepository),
         (DjangoClubPlanRepository(REAL), ClubPlanRepository),
+        (DjangoReleasePlanRepository(REAL), ReleasePlanRepository),
         (DjangoSimulationContextQuery(REAL), SimulationContextQuery),
         (DjangoFieldingTotalsQuery(REAL), FieldingTotalsQuery),
         (DjangoTeamListQuery(REAL), TeamListQuery),
@@ -416,6 +419,24 @@ class PennantHistoryScopeTest(SimpleTestCase):
         for bad in (0, -1, True):
             with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
                 build_pennant_history_service(bad)
+
+
+class PennantOffseasonScopeTest(SimpleTestCase):
+    """シーズンを締める処理と戦力外の指名は、渡された世界の範囲だけを読み書きする。"""
+
+    SCOPED = ("_leagues", "_teams", "_fixtures", "_ratings", "_plans", "_releases", "_context_query", "_playing_time")
+
+    def test_every_dependency_is_fixed_to_the_given_world(self):
+        service = build_pennant_offseason_service(7)
+        self.assertEqual(service._world_id, 7)
+        for name in self.SCOPED:
+            with self.subTest(dependency=name):
+                self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
+
+    def test_the_real_data_cannot_be_closed(self):
+        for bad in (0, -1, True):
+            with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
+                build_pennant_offseason_service(bad)
 
 
 class ClubServiceScopeTest(SimpleTestCase):

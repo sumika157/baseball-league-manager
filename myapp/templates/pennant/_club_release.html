@@ -1,0 +1,50 @@
+{% comment %}
+編成の「戦力外」タブ。シーズン終了で締められるときだけ出る（ビューが release を渡す）。
+自動のあいだは説明と「手動で選ぶ」、手動のあいだ（オーナーだけ）は支配下の表とチェックボックス・「保存する」「自動に戻す」。両方を同時に出さない。
+チェックボックスは外すと何も送られないので、表示した全選手の id を shown で送り、いまの支配下と突き合わせる。
+どのフォームも、画面を開いたときの締める年（expected_year）を送る（締めた後の古い画面から、次の年の指名を作らない）。
+「手動（N人）」の N は保存した指名の件数（締めるときに引退の抽選で除かれる選手も数える）。
+{% endcomment %}
+<div class="card mb-4" id="club-release" data-mode="{% if release.is_manual %}manual{% else %}auto{% endif %}">
+  <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span>
+      {{ release.year }}年オフの戦力外
+      {% if release.is_manual %}<span class="badge bg-primary ms-2">手動（{{ release.chosen_ids|length }}人）</span>{% else %}<span class="badge bg-secondary ms-2">自動</span>{% endif %}
+    </span>
+    {% if is_owner and not release.is_manual %}
+      <form method="post" action="{% url 'pennant_club' world.world_id %}" class="m-0">
+        {% csrf_token %}
+        <input type="hidden" name="section" value="release">
+        <input type="hidden" name="expected_year" value="{{ release.year }}">
+        <button type="submit" name="action" value="manual" class="btn btn-secondary btn-sm">手動で選ぶ</button>
+      </form>
+    {% endif %}
+  </div>
+  <div class="card-body">
+    {% if release.is_manual %}
+      <p class="mb-3">シーズンを締めるときに、選んだ選手だけを戦力外にします（主力や入団1年目も外せます）。選んだ選手が引退したときは、引退として記録します。新人は、残った支配下の人数に合わせてドラフトが迎えます。</p>
+    {% else %}
+      <p class="mb-3">シーズンを締めるときに、ほかの球団と同じ規則で決めます。新人を迎える空きができるまで、その年の主力と入団1年目を除く支配下から、残す価値（能力・若さ・実績）の低い順に外します。外国人は、新しく迎える外国人の見込みを下回れば入れ替えます。</p>
+    {% endif %}
+    {% if is_owner and release.is_manual %}
+      <form method="post" action="{% url 'pennant_club' world.world_id %}">
+        {% csrf_token %}
+        <input type="hidden" name="section" value="release">
+        <input type="hidden" name="expected_year" value="{{ release.year }}">
+        {% for row in release.players %}<input type="hidden" name="shown" value="{{ row.player_id }}">{% endfor %}
+        {% include 'pennant/_club_release_table.html' with editing=True %}
+        <div class="d-flex gap-2">
+          <button type="submit" name="action" value="save" class="btn btn-primary">保存する</button>
+          <button type="submit" form="club-reset-release" name="action" value="auto" class="btn btn-secondary">自動に戻す</button>
+        </div>
+      </form>
+      <form method="post" id="club-reset-release" action="{% url 'pennant_club' world.world_id %}" class="d-none">
+        {% csrf_token %}
+        <input type="hidden" name="section" value="release">
+        <input type="hidden" name="expected_year" value="{{ release.year }}">
+      </form>
+    {% else %}
+      {% include 'pennant/_club_release_table.html' with editing=False %}
+    {% endif %}
+  </div>
+</div>

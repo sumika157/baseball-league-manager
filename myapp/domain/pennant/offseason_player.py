@@ -8,10 +8,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
+from ..entities import Stint
 from ..simulation.ratings import BatterRatings, PitcherRatings
-from ..value_objects import ContractStatus, Position, Profile
+from ..value_objects import AcquisitionRoute, BattingLine, ContractStatus, PitchingLine, Position, Profile
 from .fork import ESTIMATED_AGE_AT_START, with_birth_date
 from .initial_ratings import age_at_season_start
 from .ratings import PlayerRatings
@@ -21,6 +23,70 @@ from .retirement import PlayingTime
 _NEUTRAL_VALUE = 45.0
 
 Ratings = BatterRatings | PitcherRatings
+
+
+@dataclass(frozen=True)
+class TrackRecord:
+    """選手の実績（その球団での在籍年数・生え抜きと、世界の中の通算成績（全球団））。戦力外の「実績の加点」（`release.track_record_credit`）の材料。
+
+    在籍・世界の試合・主将から呼び出し側が導いて渡す値で、**保存しない**。世界の中の事実だけを数える
+    （分岐で写すのは現在の在籍だけなので、分岐した選手の分岐前の経歴と成績は数えない）。
+    """
+
+    # 生え抜き（その球団にドラフト・育成ドラフトで入り、ほかの球団に在籍したことがない）
+    homegrown: bool = False
+    # その球団に在籍した年数（締める年を含む）
+    seasons: int = 0
+    # 世界の通算（締める年まで）
+    hits: int = 0
+    home_runs: int = 0
+    wins: int = 0
+    saves: int = 0
+    holds: int = 0
+    # いまの主将
+    is_captain: bool = False
+
+    @classmethod
+    def of(
+        cls,
+        *,
+        team_id: int,
+        career: Sequence[Stint],
+        year: int,
+        batting: BattingLine,
+        pitching: PitchingLine,
+        is_captain: bool,
+    ) -> TrackRecord:
+        """在籍（`career`。選手の全在籍）と世界の通算成績から、実績を導く。
+
+        成績は世界の中の通算（全球団の試合。いまは世界に移籍が無いので、その球団の分と同じ）、
+        在籍年数と生え抜きは球団 `team_id` での事実。
+
+        在籍年数は、その球団の在籍が覆う年（締める年 `year` まで）の数。生え抜きは、最初の在籍がその球団への
+        ドラフト・育成ドラフトでの入団で、ほかの球団に在籍したことがない選手（入団の経路が不明な在籍は生え抜きと見なさない）。
+        """
+        own = [stint for stint in career if stint.team_id == team_id and stint.from_year <= year]
+        seasons = sum(min(year, stint.to_year or year) - stint.from_year + 1 for stint in own)
+        first = min(career, key=lambda stint: stint.from_year, default=None)
+        homegrown = (
+            first is not None
+            and first.team_id == team_id
+            and first.acquired_via in _HOMEGROWN_ROUTES
+            and all(stint.team_id == team_id for stint in career)
+        )
+        return cls(
+            homegrown=homegrown,
+            seasons=seasons,
+            hits=batting.hits,
+            home_runs=batting.home_runs,
+            wins=pitching.wins,
+            saves=pitching.saves,
+            holds=pitching.holds,
+            is_captain=is_captain,
+        )
+
+
+_HOMEGROWN_ROUTES = frozenset({AcquisitionRoute.DRAFT, AcquisitionRoute.DEVELOPMENTAL_DRAFT})
 
 
 @dataclass(frozen=True)
@@ -40,6 +106,8 @@ class OffseasonPlayer:
     # 在籍が無ければ None。ドラフトの指名数と位置の補充は支配下だけで数える（育成は試合に出られない）
     contract: ContractStatus | None
     playing_time: PlayingTime = PlayingTime()
+    # その球団での実績（戦力外で外されにくくするだけ。試合の成績には効かない）
+    track_record: TrackRecord = TrackRecord()
 
     @property
     def is_registered(self) -> bool:
