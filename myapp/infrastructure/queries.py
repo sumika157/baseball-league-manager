@@ -26,6 +26,7 @@ from ..application.dto import (
     FieldingRow,
     GameNote,
     GameRow,
+    HomeStadium,
     LastStart,
     LeagueOption,
     MoveStintRow,
@@ -60,6 +61,7 @@ from ..domain.value_objects import (
     AcquisitionRoute,
     BattingLine,
     ContractStatus,
+    DepartureRoute,
     FieldingLine,
     FieldingPosition,
     FreeAgencyKind,
@@ -75,6 +77,7 @@ from .repositories import (
     DjangoRatingsRepository,
     batting_totals,
     game_batting_of,
+    game_counts,
     game_pitching_of,
     pitching_totals,
     profile_of,
@@ -266,10 +269,17 @@ class DjangoSimulationContextQuery:
                 foreign_roster_limit=roster_limit,
                 foreign_game_limit=game_limit,
                 players=tuple(players.get(team_id, ())),
+                stadium_capacity=capacity,
             )
-            for team_id, name, roster_limit, game_limit in teams_in(self._scope)
+            for team_id, name, roster_limit, game_limit, capacity in teams_in(self._scope)
             .order_by("id")
-            .values_list("id", "name", "league__foreign_player_roster_limit", "league__foreign_player_game_limit")
+            .values_list(
+                "id",
+                "name",
+                "league__foreign_player_roster_limit",
+                "league__foreign_player_game_limit",
+                "home_stadium__capacity",
+            )
         )
 
 
@@ -320,8 +330,10 @@ class DjangoPlayerStatsQuery:
         team_id: int | None = None,
         league_id: int | None = None,
         with_profile: bool = False,
+        with_games: bool = False,
     ) -> list[ActivePlayerStats]:
-        """プロトコルの `list_roster`。`with_profile` を立てると年齢などの材料も読む（タイトルには要らない）。"""
+        """プロトコルの `list_roster`。`with_profile` を立てると年齢などの材料も、`with_games` を立てると
+        出場試合数と登板数も読む（どちらもタイトルには要らない）。"""
         stints = self._stints(year)
         if team_id is not None:
             stints = stints.filter(team_id=team_id)
@@ -337,13 +349,15 @@ class DjangoPlayerStatsQuery:
             games &= world_condition("game__home_team__league", self._scope)
             batting = batting_totals(games=games)
             pitching = pitching_totals(games=games)
+            counts = game_counts(games=games) if with_games else None
         else:
             player_ids = [row.player_id for row in rows]
             batting = batting_totals(player_ids, games=games or None)
             pitching = pitching_totals(player_ids, games=games or None)
+            counts = game_counts(player_ids, games=games or None) if with_games else None
 
         captains = self._captains(team_id, year) if team_id is not None else frozenset()
-        return self._to_stats(rows, year, batting, pitching, captains=captains, with_profile=with_profile)
+        return self._to_stats(rows, year, batting, pitching, counts, captains=captains, with_profile=with_profile)
 
     @staticmethod
     def _ordered(stints: QuerySet[orm_models.PlayerStint]) -> list[orm_models.PlayerStint]:
@@ -363,11 +377,16 @@ class DjangoPlayerStatsQuery:
         year: int | None,
         batting: dict[int, BattingLine],
         pitching: dict[int, PitchingLine],
+        counts: tuple[dict[int, int], dict[int, int]] | None = None,
         *,
         captains: frozenset[int] = frozenset(),
         with_profile: bool = False,
     ) -> list[ActivePlayerStats]:
-        """在籍の行と集計した成績を、選手ごとの DTO にする。"""
+        """在籍の行と集計した成績を、選手ごとの DTO にする。
+
+        `counts` は `game_counts` の (出場試合数, 登板数)。数えていなければ None で、DTO の数も None にする。
+        """
+        played, pitched = counts if counts is not None else (None, None)
         return [
             ActivePlayerStats(
                 player_id=row.player_id,
@@ -379,6 +398,8 @@ class DjangoPlayerStatsQuery:
                 league_id=row.team.league_id,
                 batting=batting.get(row.player_id, BattingLine()),
                 pitching=pitching.get(row.player_id, PitchingLine()),
+                games=played.get(row.player_id, 0) if played is not None else None,
+                appearances=pitched.get(row.player_id, 0) if pitched is not None else None,
                 profile=profile_of(row.player) if with_profile else Profile(),
                 is_captain=row.player_id in captains,
                 is_developmental=_contract_at(row, year) is ContractStatus.DEVELOPMENTAL,
@@ -835,6 +856,19 @@ class DjangoTeamListQuery:
         ]
 
 
+class DjangoHomeStadiumQuery:
+    """HomeStadiumQuery の Django ORM 実装。範囲（`WorldScope`）の中の球団だけを引く。"""
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def home_stadium_of(self, team_id: int) -> HomeStadium | None:
+        row = teams_in(self._scope).select_related("home_stadium").filter(id=team_id).first()
+        if row is None or row.home_stadium is None:
+            return None
+        return HomeStadium(name=row.home_stadium.name, capacity=row.home_stadium.capacity)
+
+
 class DjangoWorldSummaryQuery:
     """WorldSummaryQuery の Django ORM 実装。世界の台帳そのものなので、範囲は持たない。
 
@@ -929,6 +963,7 @@ _OFFSEASON_STINT_FIELDS = (
     "team__name",
     "team__league_id",
     "number",
+    "left_via",
 )
 
 
@@ -994,6 +1029,8 @@ class DjangoOffseasonQuery:
             ),
             before=before.get(player_id),
             after=after.get(player_id),
+            # 空（None・空文字）は不明（経路を記録する前に締めた年・実データ）
+            left_via=DepartureRoute.from_label(row["left_via"]) if row["left_via"] else None,
         )
 
 

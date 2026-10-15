@@ -21,6 +21,7 @@ from ..domain.value_objects import (
     AcquisitionRoute,
     BattingLine,
     ContractStatus,
+    DepartureRoute,
     FieldingPosition,
     FreeAgencyKind,
     Handedness,
@@ -50,6 +51,12 @@ class ActivePlayerStats:
     league_id: int
     batting: BattingLine
     pitching: PitchingLine
+    # 出場試合数（打撃か投球に明細がある試合。打席の無い途中出場も含む。定義は `appeared_in`）と登板数。
+    # 成績と同じ範囲で数えた値で、成績の値オブジェクトには持たせない
+    # （明細の行数から数える値。守備成績の試合数と同じ扱い）。
+    # 一覧の列にだけ使うので、`list_roster(with_games=True)` で読んだときだけ入る（読んでいなければ None）
+    games: int | None = None
+    appearances: int | None = None
     # 一覧の年齢・身長などの材料と、外国人かどうか（順位づけには使わない）
     profile: Profile = field(default_factory=Profile)
     # その範囲で主将だったか（球団の一覧のときだけ読む。それ以外は False）
@@ -168,6 +175,28 @@ class GameEditHeader:
     away_team_id: int
     home_score: int
     away_score: int
+    # 開始・終了は時:分の形（未記録は空文字）。画面の入力欄にそのまま入る
+    start_time: str = ""
+    end_time: str = ""
+    ends_next_day: bool = False
+    interruption_minutes: int | None = None
+    attendance: int | None = None
+
+
+@dataclass(frozen=True)
+class ScorebookSaved:
+    """スコアブックを保存した結果。保存は済んでいて、`warnings` は見直してほしい内容（保存は止めない）。"""
+
+    game_id: int
+    warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class HomeStadium:
+    """球団の本拠地の球場。観客数が収容人数を超えていないかの照合に使う。"""
+
+    name: str
+    capacity: int | None
 
 
 @dataclass(frozen=True)
@@ -388,6 +417,24 @@ class GameDetail:
     home_box: GameTeamBox | None = None
     # ビジター → ホームの順。打席の記録が無い試合は空
     scorebook: list[ScorebookGrid] = field(default_factory=list)
+    # 見出しの下に出す値。未記録の項目は空文字（出さない）。表示の形は `GameTimes` が出典
+    start_label: str = ""
+    end_label: str = ""
+    duration_label: str = ""
+    interruption_label: str = ""
+    attendance_label: str = ""
+
+    @property
+    def header_items(self) -> list[str]:
+        """見出しの下に並べる項目（例 `開始 18:19`）。記録されている項目だけ。"""
+        pairs = (
+            ("開始", self.start_label),
+            ("終了", self.end_label),
+            ("試合時間", self.duration_label),
+            ("中断", self.interruption_label),
+            ("観客", self.attendance_label),
+        )
+        return [f"{name} {value}" for name, value in pairs if value]
 
     @property
     def boxes(self) -> list[GameTeamBox]:
@@ -965,6 +1012,8 @@ class BatterRow:
     batting_average: float
     on_base_percentage: float
     ops: float
+    # 出場試合数（`ActivePlayerStats.games`）
+    games: int = 0
     isolated_power: float = 0.0
     walks: int = 0
     sacrifice_flies: int = 0
@@ -998,6 +1047,8 @@ class PitcherRow:
     earned_run_average: float
     whip: float
     strikeouts_per_nine: float
+    # 登板数（`ActivePlayerStats.appearances`）
+    appearances: int = 0
     walks_per_nine: float = 0.0
     # FIP はリーグの定数を足して仕上げるため、リーグを知る側で計算して渡す
     fip: float = 0.0
@@ -1165,6 +1216,8 @@ class SimulationTeam:
     foreign_roster_limit: int | None
     foreign_game_limit: int | None
     players: tuple[SimulationPlayer, ...]
+    # 本拠地の収容人数。本拠地が無い・未設定なら None（ホーム試合の観客数を作らない）
+    stadium_capacity: int | None
 
 
 @dataclass(frozen=True)
@@ -1761,15 +1814,17 @@ class SeasonClosed:
     year: int
     next_year: int
     retired_count: int
+    # AI の戦力外の人数（引退した選手を含まない）
+    released_count: int
     # 新人の人数と、そのうち外国人の人数
     draftee_count: int
     foreign_draftee_count: int
     # 翌年の能力を作らなかった選手の数（締める年の能力が無かった選手）
     without_ratings_count: int
-    # 引退した選手を含んでいたため、自動に戻した編成の区画。受け持つ球団のぶん（無ければ空）
-    released_sections: tuple[PlanSection, ...]
+    # 引退・戦力外の選手を含んでいたため、自動に戻した編成の区画。受け持つ球団のぶん（無ければ空）
+    reverted_sections: tuple[PlanSection, ...]
     # 自動に戻した球団の数（受け持ち以外も含む）
-    released_club_count: int
+    reverted_club_count: int
     # 翌年の日程の試合数
     fixture_count: int
 
@@ -1807,11 +1862,13 @@ class OffseasonPlayerFact:
     profile: Profile
     before: BatterRatings | PitcherRatings | None
     after: BatterRatings | PitcherRatings | None
+    # 在籍の退団の経路（引退・戦力外）。None は不明（経路を記録する前に締めた年）か、退団していない
+    left_via: DepartureRoute | None = None
 
 
 @dataclass(frozen=True)
 class OffseasonFacts:
-    """締めた年の、世界全体のオフの材料（引退・退団した選手、新人、残る選手）。"""
+    """締めた年の、世界全体のオフの材料（引退・退団・戦力外の選手、新人、残る選手）。"""
 
     leagues: tuple[LeagueOption, ...]
     retired: tuple[OffseasonPlayerFact, ...]
@@ -1822,7 +1879,7 @@ class OffseasonFacts:
 
 @dataclass(frozen=True)
 class OffseasonRetiredRow:
-    """オフの結果の「引退・退団」の1行。"""
+    """オフの結果の「引退・退団・戦力外」の1行。"""
 
     player_id: int
     name: str
@@ -1832,7 +1889,7 @@ class OffseasonRetiredRow:
     position: str
     # 締める年の開幕時点の満年齢
     age: int | None
-    # 外国人は「退団」、日本人は「引退」
+    # 退団の経路が戦力外なら「戦力外」。ほか（引退・経路が不明）は外国人が「退団」、日本人が「引退」
     leaving: str
     # 締める年の総合（能力が無い選手は None）
     rating: RatingCell | None
@@ -1887,11 +1944,12 @@ class OffseasonSummary:
     own_changes: tuple[OffseasonChangeRow, ...]
     leagues: tuple[LeagueOption, ...]
     selected_league_id: int | None
-    # 選んだリーグの引退・退団と新人
+    # 選んだリーグの引退・退団・戦力外と新人
     retired: tuple[OffseasonRetiredRow, ...]
     rookies: tuple[OffseasonRookieRow, ...]
-    # 世界全体の人数
+    # 世界全体の人数（引退・退団・戦力外の合計と、そのうち戦力外。新人）
     retired_total: int
+    released_total: int
     rookie_total: int
     # 成長と衰えの大きかった選手（世界全体の上位）
     risers: tuple[OffseasonChangeRow, ...]
@@ -2413,3 +2471,95 @@ class WorldFinale:
     titles: int
     # 通算の勝敗（「170勝113敗3分」）。画面で組み立てない
     record: str
+
+
+# --- 歴代の記録・球団史（#105）。保存せず、終わったシーズンの順位とタイトルから導く ---
+
+
+@dataclass(frozen=True)
+class LeagueChampionCell:
+    """歴代の「リーグ優勝」の表の1マス（ある年のあるリーグ）。試合の無かったリーグは球団が無い。"""
+
+    league_id: int
+    team_id: int | None
+    team_name: str
+    record: str  # 「80勝60敗3分」。球団が無ければ空
+    is_own: bool
+
+
+@dataclass(frozen=True)
+class TitleColumn:
+    """タイトルの表の列見出し。部門の並びと名前は `get_league_titles` の部門が出典。"""
+
+    key: str
+    label: str
+    note: str  # 「規定打席以上」など。率の部門だけ
+
+
+@dataclass(frozen=True)
+class TitleHolderCell:
+    """タイトルの表の1マス（ある年のある部門）。同率首位は全員（部門の上位で切った人数まで）。"""
+
+    department_key: str
+    holders: list[RankingEntry]
+
+
+@dataclass(frozen=True)
+class WorldHistoryYear:
+    """歴代の記録の1年。各リーグの優勝と、選んだリーグのタイトル受賞者。"""
+
+    year: int
+    champions: list[LeagueChampionCell]  # `WorldHistory.leagues` と同じ並び
+    batting: list[TitleHolderCell]  # `WorldHistory.batting_columns` と同じ並び
+    pitching: list[TitleHolderCell]  # `WorldHistory.pitching_columns` と同じ並び
+
+
+@dataclass(frozen=True)
+class WorldHistory:
+    """歴代の記録。終わったシーズンだけを古い順に並べる。"""
+
+    leagues: list[LeagueOption]
+    selected_league_id: int | None
+    selected_league_name: str
+    batting_columns: list[TitleColumn]
+    pitching_columns: list[TitleColumn]
+    years: list[WorldHistoryYear]
+
+
+@dataclass(frozen=True)
+class ClubTitle:
+    """球団史に載せる、その球団の選手が取ったタイトル。"""
+
+    label: str
+    player_id: int
+    player_name: str
+    team_id: int
+    value: str
+
+
+@dataclass(frozen=True)
+class ClubHistorySeason:
+    """球団史の1年。最終順位・勝敗・優勝と、その年に球団の選手が取ったタイトル。"""
+
+    year: int
+    rank: int
+    team_count: int  # リーグの球団数
+    wins: int
+    losses: int
+    ties: int
+    winning_percentage: str
+    games_behind: str
+    is_champion: bool
+    titles: list[ClubTitle]
+
+
+@dataclass(frozen=True)
+class ClubHistory:
+    """球団史。終わったシーズンだけ。通算の勝敗と優勝回数を添える。"""
+
+    team_id: int
+    team_name: str
+    league_name: str
+    seasons: list[ClubHistorySeason]
+    record: str  # 通算の勝敗（「170勝113敗3分」）
+    titles: int  # リーグ優勝の回数

@@ -1,0 +1,86 @@
+{% extends 'myapp/base.html' %}
+{% load scoped %}
+
+{% block title %}歴代の記録 - {{ world.name }} - ペナント - Baseball Manager{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb">
+    {% include 'pennant/_crumbs.html' %}
+    <li class="breadcrumb-item active" aria-current="page">歴代の記録</li>
+  </ol>
+</nav>{% include 'pennant/_world_bar.html' %}
+
+{% comment %}
+歴代の記録。終わったシーズンだけを古い順に並べる（保存した値ではなく、順位表とタイトルの集計から導いた値）。
+上が各リーグの優勝、下が選んだリーグのタイトルの受賞者（成績だけで決まる部門。同率首位は全員）。
+{% endcomment %}
+<div class="page-head">
+  <h1 class="page-title">歴代の記録</h1>
+  <p class="page-subtitle">終わったシーズンだけを載せます。いまのシーズンは優勝もタイトルも決まっていないので、ホームで確かめてください。</p>
+</div>
+
+{% if history.years %}
+  <div class="card mb-4">
+    <div class="card-header">リーグ優勝</div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead>
+            <tr>
+              <th>年</th>
+              {% for league in history.leagues %}<th>{{ league.name }}</th>{% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for year in history.years %}
+              <tr>
+                <td class="tabular-nums">{{ year.year }}年</td>
+                {% for cell in year.champions %}
+                  <td>
+                    {% if cell.team_id %}
+                      <a href="{% url 'pennant_team_history' world.world_id cell.team_id %}">{{ cell.team_name }}</a>{% if cell.is_own %} <span class="badge bg-primary">自軍</span>{% endif %}
+                      <span class="stat-muted tabular-nums">{{ cell.record }}</span>
+                    {% else %}
+                      <span class="stat-muted">—</span>
+                    {% endif %}
+                  </td>
+                {% endfor %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="h5 mb-3">タイトルの受賞者{% if history.selected_league_name %}（{{ history.selected_league_name }}）{% endif %}</h2>
+  {% if history.leagues|length > 1 %}
+    <form method="get" class="d-flex gap-2 mb-3" action="{% url 'pennant_history' world.world_id %}">
+      <select name="league" class="form-select form-select-sm" aria-label="リーグ" style="max-width: 16rem;">
+        {% for league in history.leagues %}
+          <option value="{{ league.id }}" {% if league.id == history.selected_league_id %}selected{% endif %}>{{ league.name }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="btn btn-secondary btn-sm">表示</button>
+    </form>
+  {% endif %}
+
+  <div class="card mb-4">
+    <div class="card-header">打撃部門</div>
+    <div class="card-body p-0">
+      {% include 'pennant/_history_titles.html' with columns=history.batting_columns is_batting=True %}
+    </div>
+  </div>
+  <div class="card mb-4">
+    <div class="card-header">投手部門</div>
+    <div class="card-body p-0">
+      {% include 'pennant/_history_titles.html' with columns=history.pitching_columns is_batting=False %}
+    </div>
+  </div>
+{% else %}
+  <div class="card">
+    <div class="empty-state">まだ終わったシーズンがありません。シーズンを終えると、ここに優勝とタイトルが並びます。</div>
+  </div>
+{% endif %}
+{% endblock %}

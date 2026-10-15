@@ -46,7 +46,7 @@ from myapp.presentation.views import (
     build_player_search_query,
 )
 
-from ..helpers import post_game_scorebook
+from ..helpers import post_game_scorebook_day_unrecorded
 from .world_case import (
     PENNANT_LEAGUE,
     PENNANT_PLAYER_PREFIX,
@@ -186,7 +186,7 @@ class PennantIdsAreNotFoundFromRealUrlsTest(WorldCase):
         self.assertEqual(self.client.get(url).status_code, 404)
 
     def test_the_scorebook_api_does_not_save_a_pennant_game(self):
-        response = post_game_scorebook(
+        response = post_game_scorebook_day_unrecorded(
             self.client,
             self.pennant_game_id,
             {

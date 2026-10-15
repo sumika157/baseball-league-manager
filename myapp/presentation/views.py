@@ -19,7 +19,7 @@ from django.http import Http404, HttpResponseNotAllowed
 from django.middleware.csrf import get_token
 from django.shortcuts import redirect, render
 from django.urls import reverse, reverse_lazy
-from django.views.decorators.http import require_GET
+from django.views.decorators.http import require_GET, require_safe
 from django.views.generic import CreateView
 
 from ..application.club_management import ClubManagementService
@@ -36,6 +36,7 @@ from ..application.dto import (
 )
 from ..application.game_recording import GameRecordingService
 from ..application.pennant_club_details import ClubDetailsService
+from ..application.pennant_history import PennantHistoryService
 from ..application.pennant_home import PennantHomeService
 from ..application.pennant_offseason import PennantOffseasonService
 from ..application.pennant_offseason_view import OffseasonViewService
@@ -76,6 +77,7 @@ from ..domain.value_objects import (
 from ..infrastructure.queries import (
     DjangoFieldingTotalsQuery,
     DjangoGameListQuery,
+    DjangoHomeStadiumQuery,
     DjangoOffseasonQuery,
     DjangoPennantActivityQuery,
     DjangoPlayerFieldingQuery,
@@ -260,13 +262,14 @@ def build_recording_service() -> GameRecordingService:
     """スコアブックを保存するサービスを組み立てる。
 
     `build_service()` と同じく**組み立てはここだけ**にする。打席の記録は
-    チームの一覧も試合の一覧も要らないので、依存は3つで足りる。実データの範囲に固定する。
+    チームの一覧も試合の一覧も要らないので、依存は4つ（試合・チーム・リーグ・本拠地の球場）で足りる。実データの範囲に固定する。
     """
     scope = WorldScope.real()
     return GameRecordingService(
         games=DjangoGameRepository(scope),
         teams=DjangoTeamRepository(scope),
         leagues=DjangoLeagueRepository(scope),
+        home_stadiums=DjangoHomeStadiumQuery(scope),
     )
 
 
@@ -427,6 +430,22 @@ def build_pennant_home_service(world_id: int) -> PennantHomeService:
         game_records=DjangoGameRepository(scope),
         fixtures=DjangoFixtureRepository(scope),
         activity=DjangoPennantActivityQuery(scope),
+        team_records=DjangoTeamRepository(scope),
+        leagues=DjangoLeagueRepository(scope),
+    )
+
+
+def build_pennant_history_service(world_id: int) -> PennantHistoryService:
+    """歴代の記録と球団史の材料を作るサービスを組み立てる。読むだけ。
+
+    順位・タイトルは世界の範囲の `TeamApplicationService`（`build_world_view_service`）に任せ、
+    試合の一覧・球団・リーグの参照は、すべて渡された世界の範囲で作る。
+    世界の id が正しくなければ InvalidWorld。
+    """
+    scope = WorldScope.pennant(world_id)
+    return PennantHistoryService(
+        teams=build_world_view_service(world_id),
+        games=DjangoGameListQuery(scope),
         team_records=DjangoTeamRepository(scope),
         leagues=DjangoLeagueRepository(scope),
     )
@@ -689,11 +708,12 @@ def pennant_close_season(request, world_id):
 
     messages.success(
         request,
-        f"{result.year}年のシーズンを締めました（引退 {result.retired_count}人・新人 {result.draftee_count}人）。",
+        f"{result.year}年のシーズンを締めました"
+        f"（引退 {result.retired_count}人・戦力外 {result.released_count}人・新人 {result.draftee_count}人）。",
     )
-    if result.released_sections:
-        labels = "・".join(section.value for section in result.released_sections)
-        messages.warning(request, f"引退した選手を含んでいたため、自軍の編成（{labels}）を自動に戻しました。")
+    if result.reverted_sections:
+        labels = "・".join(section.value for section in result.reverted_sections)
+        messages.warning(request, f"引退・戦力外の選手を含んでいたため、自軍の編成（{labels}）を自動に戻しました。")
     if result.without_ratings_count:
         messages.info(request, f"能力の無い選手 {result.without_ratings_count}人は、翌年の能力を作りませんでした。")
     return redirect("pennant_offseason", world_id=world_id, year=result.year)
@@ -712,6 +732,31 @@ def pennant_offseason(request, world_id, year):
     if summary is None:
         raise Http404("その年のオフの結果は、まだありません。")
     return _render(request, "pennant/offseason.html", {"summary": summary}, world)
+
+
+@require_safe
+def pennant_history(request, world_id):
+    """歴代の記録。各リーグの年ごとの優勝と、選んだリーグ（`?league=`）のタイトル受賞者。読むだけで誰でも開ける。
+
+    載せるのは終わったシーズンだけ。無効なリーグの指定は既定のリーグに落とす。
+    """
+    world = _world_context(world_id)
+    league = request.GET.get("league", "")
+    history = build_pennant_history_service(world_id).get_world_history(
+        world, league_id=int(league) if league.isdecimal() else None
+    )
+    return _render(request, "pennant/history.html", {"history": history}, world)
+
+
+@require_safe
+def pennant_team_history(request, world_id, team_id):
+    """球団史。どの球団でも開ける。年ごとの順位・勝敗・優勝と、その球団の選手が取ったタイトル。"""
+    world = _world_context(world_id)
+    try:
+        history = build_pennant_history_service(world_id).get_club_history(world, team_id)
+    except TeamNotFound:
+        raise Http404("球団が見つかりません。") from None
+    return _render(request, "pennant/team_history.html", {"history": history}, world)
 
 
 def pennant_delete(request, world_id):
@@ -1309,6 +1354,12 @@ def _game_edit_payload(request, data: GameEditData) -> dict:
             "away_team": game.away_team_id,
             "home_score": game.home_score,
             "away_score": game.away_score,
+            # 手入力の事実。時刻は時:分の文字列、未記録は空文字・null
+            "start_time": game.start_time,
+            "end_time": game.end_time,
+            "ends_next_day": game.ends_next_day,
+            "interruption_minutes": game.interruption_minutes,
+            "attendance": game.attendance,
         },
         "teams": [
             {

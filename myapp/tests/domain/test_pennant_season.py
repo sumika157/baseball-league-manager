@@ -5,6 +5,7 @@ from myapp.domain.pennant.season import (
     MAX_GAMES_PER_ADVANCE,
     MAX_SUMMARY_DAYS,
     SeasonPhase,
+    completed_years,
     is_final_season,
     is_season_closed,
     ratings_year,
@@ -145,3 +146,29 @@ class StatsYearTest(unittest.TestCase):
         for phase in (SeasonPhase.IN_SEASON, SeasonPhase.FINISHED):
             with self.subTest(phase=phase):
                 self.assertEqual(stats_year(phase=phase, last_played_on=self.LAST, current_year=2026), 2026)
+
+
+class CompletedYearsTest(unittest.TestCase):
+    """歴代の記録と球団史に載せる、終わったシーズンの年。"""
+
+    def test_the_current_year_is_not_included_while_the_season_is_going(self) -> None:
+        for phase in (SeasonPhase.IN_SEASON, SeasonPhase.BEFORE_OPENING):
+            with self.subTest(phase=phase):
+                self.assertEqual([2026], completed_years([2026, 2027], phase=phase, current_year=2027))
+
+    def test_the_current_year_is_included_when_the_season_is_finished(self) -> None:
+        self.assertEqual([2026, 2027], completed_years([2027, 2026], phase=SeasonPhase.FINISHED, current_year=2027))
+
+    def test_the_year_closed_is_included_before_the_next_opening(self) -> None:
+        """締めた後の開幕前は、年度が翌年に進む。締めた年は「いまより前の年」に入る。"""
+        self.assertEqual(
+            [2026, 2027], completed_years([2026, 2027], phase=SeasonPhase.BEFORE_OPENING, current_year=2028)
+        )
+
+    def test_a_year_without_games_is_not_listed_and_duplicates_are_folded(self) -> None:
+        self.assertEqual(
+            [2026, 2028], completed_years([2028, 2026, 2026], phase=SeasonPhase.FINISHED, current_year=2029)
+        )
+
+    def test_nothing_is_complete_before_the_first_game(self) -> None:
+        self.assertEqual([], completed_years([], phase=SeasonPhase.BEFORE_OPENING, current_year=2026))

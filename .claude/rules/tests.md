@@ -12,3 +12,7 @@ paths:
 - 結合テストの共通の土台は `tests/integration/base.py` の `BaseCase`（リーグ・球場・チーム2つ・組み立て済みのサービス）。テスト専用のサービス組み立てを作らず、`tests/helpers.py` が再輸出する `build_service()` を使う。
 - 成績を持たせたい場合は `tests/helpers.py` の `play_game` / `give_batting` / `give_pitching` で試合を作る（成績は試合から集計されるため、選手に直接持たせられない）。
 - ソースの整合性を機械的に見るテストは `SimpleTestCase`（DB 不要）で書く。前例: `test_templates.py`（コメント記法）・`test_wiring.py`（依存の組み立て）・`test_stat_fields.py`（成績項目の列挙）。
+- **重い準備（選手の登録・世界の分岐・シーズンを回す）はクラスで1回（`setUpTestData`）にする。** テストごとの変更は `TestCase` が巻き戻す。
+  同じシーズンを回すテストは同じクラスに集める（前例: `FinishedSeasonCase`・`FinishedSeasonTest`）。選手を何人も登録するときは
+  `helpers.register_players` でまとめる（1人ずつのサービス呼び出しは人数の2乗で遅い。登録そのものを確かめるテストは除く）。
+  遅くなったら `manage.py test --slowest-classes 20` で所要時間の長いクラスを見る（#184）。

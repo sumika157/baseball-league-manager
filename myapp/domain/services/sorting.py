@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -59,6 +59,11 @@ PITCHER_SORT_KEYS: SortKeys = {
     "hit_by_pitch_allowed": (lambda p: p.pitching.hit_by_pitch_allowed, True),
 }
 
+# 出場試合数（野手）と登板数（投手）。成績の値オブジェクトではなく明細の行数から数える値なので
+# `Player` からは引けず、並べ替えのときに選手 id → 数の引き当てとして渡す（`sort_batters` の `games`）
+BATTER_GAMES_SORT = "games"
+PITCHER_APPEARANCES_SORT = "appearances"
+
 DEFAULT_BATTER_SORT = "ops"
 DEFAULT_PITCHER_SORT = "era"
 
@@ -92,19 +97,32 @@ def _ordered(players: list[Player], getter: Callable[[Player], Any], descending:
     return ordered
 
 
+def _with_counts(keys: SortKeys, name: str, counts: Mapping[int, int] | None) -> SortKeys:
+    """キー表に、選手 id から引く数（出場試合数・登板数）のキーを足したもの。多い順が既定。
+
+    引き当てを渡さない呼び出し（数を読んでいない画面）ではキーを足さないので、指定されても既定の並びに落ちる。
+    """
+    if counts is None:
+        return keys
+    return {**keys, name: (lambda p: counts.get(p.id or 0, 0), True)}
+
+
 def sort_batters(
     players: list[Player],
     key: str | None = None,
     descending: bool | None = None,
     default_key: str = DEFAULT_BATTER_SORT,
+    games: Mapping[int, int] | None = None,
 ) -> tuple[list[Player], str, bool]:
     """野手を並べ替える。key が未指定・不正なら default_key（既定は OPS の高い順）。
 
+    `games` は選手 id → 出場試合数。渡すと `BATTER_GAMES_SORT` で並べられる。
     戻り値は (並べ替え後, 実際に使ったキー, 向き)。画面側で見出しの表示を
     合わせるため、採用されたキーと向きも返す。
     """
-    key, descending = _resolve(BATTER_SORT_KEYS, key, descending, default_key)
-    return _ordered(players, BATTER_SORT_KEYS[key][0], descending), key, descending
+    keys = _with_counts(BATTER_SORT_KEYS, BATTER_GAMES_SORT, games)
+    key, descending = _resolve(keys, key, descending, default_key)
+    return _ordered(players, keys[key][0], descending), key, descending
 
 
 def sort_pitchers(
@@ -112,10 +130,15 @@ def sort_pitchers(
     key: str | None = None,
     descending: bool | None = None,
     default_key: str = DEFAULT_PITCHER_SORT,
+    appearances: Mapping[int, int] | None = None,
 ) -> tuple[list[Player], str, bool]:
-    """投手を並べ替える。key が未指定・不正なら default_key（既定は防御率の低い順）。"""
-    key, descending = _resolve(PITCHER_SORT_KEYS, key, descending, default_key)
-    getter = PITCHER_SORT_KEYS[key][0]
+    """投手を並べ替える。key が未指定・不正なら default_key（既定は防御率の低い順）。
+
+    `appearances` は選手 id → 登板数。渡すと `PITCHER_APPEARANCES_SORT` で並べられる。
+    """
+    keys = _with_counts(PITCHER_SORT_KEYS, PITCHER_APPEARANCES_SORT, appearances)
+    key, descending = _resolve(keys, key, descending, default_key)
+    getter = keys[key][0]
 
     if key in _RATE_PITCHER_KEYS:
         pitched = [p for p in players if p.pitching.innings.outs > 0]

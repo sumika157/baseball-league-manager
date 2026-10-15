@@ -29,6 +29,8 @@
        href="{% url 'pennant_team_list' world.world_id %}">球団</a>
     <a class="segmented-item {% if name == 'pennant_club' %}is-active{% endif %}"
        href="{% url 'pennant_club' world.world_id %}">編成</a>
+    <a class="segmented-item {% if name == 'pennant_history' or name == 'pennant_team_history' %}is-active{% endif %}"
+       href="{% url 'pennant_history' world.world_id %}">歴代</a>
   </div>
 </div>
 {% endwith %}

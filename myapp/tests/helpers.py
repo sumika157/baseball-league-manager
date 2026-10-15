@@ -17,12 +17,14 @@ from myapp.domain.value_objects import (
     AdvanceReason,
     Base,
     BattingLine,
+    JerseyNumber,
     PitchingLine,
     PlateAppearanceResult,
+    Position,
     Season,
 )
 from myapp.infrastructure import orm_models
-from myapp.infrastructure.repositories import DjangoGameRepository
+from myapp.infrastructure.repositories import DjangoGameRepository, DjangoLeagueRepository, DjangoTeamRepository
 
 # テストも画面と同じ組み立て（presentation/views.py）を使い、ここから再輸出する。
 # テスト専用の組み立てを別に持つと、依存が食い違ってもテストでは気づけない
@@ -34,15 +36,43 @@ from myapp.presentation.views import build_team_analysis_service as build_team_a
 LINEUP_SIZE = 9
 
 
+def register_players(team, rows) -> list[int]:
+    """実データのチームに選手をまとめて登録して id を返す。rows は (名前, 背番号, 守備位置の表示名) の並び。
+
+    `TeamApplicationService.register_player` を人数ぶん呼ぶのと同じ結果になる（集約の `add_player` が
+    背番号の重複・支配下の上限を検査する）。違いは、集約の読み込みと保存を1回にまとめること。
+    保存はロスター全員を書き直すので、1人ずつ登録すると人数の2乗で遅くなる（23人で約1.3秒）。
+    登録そのものを確かめるテストは、これを使わずサービスを呼ぶ。
+    """
+    scope = WorldScope.real()
+    teams = DjangoTeamRepository(scope)
+    aggregate = teams.find_by_id(team.id)
+    assert aggregate.league_id is not None
+    limits = DjangoLeagueRepository(scope).find_by_id(aggregate.league_id).roster_limits
+    players = [
+        aggregate.add_player(
+            name=name,
+            number=JerseyNumber(number),
+            position=Position.from_label(position_label),
+            limits=limits,
+        )
+        for name, number, position_label in rows
+    ]
+    teams.save(aggregate)
+    ids = [player.id for player in players]
+    assert all(player_id is not None for player_id in ids), "保存で id が付く"
+    return [player_id for player_id in ids if player_id is not None]
+
+
 def register_lineup(service, team, *, prefix, first_number=1) -> list[int]:
     """打順9人ぶんの選手を登録して id を返す。
 
     打順は1〜9を巡回する決まりなので、1試合を通して記録するには9人必要になる。
+    `service` は使わない（呼び出し側の形を変えないため受け取る。登録は `register_players` でまとめて行う）。
     """
-    return [
-        service.register_player(team.id, f"{prefix}{order}", first_number + order - 1, "内野手").id
-        for order in range(1, LINEUP_SIZE + 1)
-    ]
+    return register_players(
+        team, [(f"{prefix}{order}", first_number + order - 1, "内野手") for order in range(1, LINEUP_SIZE + 1)]
+    )
 
 
 # 試合を組める名簿に足りない分を補う選手（捕手1・内野手5・外野手3で野手9人、投手は下限ぶん）
@@ -54,9 +84,15 @@ def register_playable_support(service, team, *, first_number=60, prefix="補充"
 
     世界の作成は、試合を組めない名簿の球団を弾く。世界を作るテストが、名簿の中身とは関係なく
     世界を作れるようにする。背番号は `first_number` から連番（既存の選手と重ならない番号を渡す）。
+    `service` は使わない（`register_lineup` と同じ理由）。
     """
-    for offset, position in enumerate(PLAYABLE_SUPPORT):
-        service.register_player(team.id, f"{prefix}{offset + 1}", first_number + offset, position)
+    register_players(
+        team,
+        [
+            (f"{prefix}{offset + 1}", first_number + offset, position)
+            for offset, position in enumerate(PLAYABLE_SUPPORT)
+        ],
+    )
 
 
 def lineup_rows(team, player_ids, *, fielding_position="指") -> list[dict]:
@@ -170,13 +206,32 @@ def to_plate_appearances(rows) -> list[PlateAppearance]:
     ]
 
 
+# 保存 API が必ず受け取る5つのキー（開始・終了・翌日・中断・観客数）の「未記録」。キーの欠落は 400 になる
+GAME_DAY_UNRECORDED = {
+    "start_time": "",
+    "end_time": "",
+    "ends_next_day": False,
+    "interruption_minutes": "",
+    "attendance": "",
+}
+
+
 def post_game_scorebook(client, game_id, payload):
-    """スコアブックの保存 API（api_game_scorebook）に JSON で POST する。"""
+    """スコアブックの保存 API（api_game_scorebook）に、payload をそのまま JSON で POST する（補わない）。"""
     return client.post(
         reverse("api_game_scorebook", args=[game_id]),
         data=json.dumps(payload),
         content_type="application/json",
     )
+
+
+def post_game_scorebook_day_unrecorded(client, game_id, payload):
+    """`post_game_scorebook` に、開始・終了・翌日・中断・観客数の5キーを「未記録」で補って POST する。
+
+    試合の時刻を試さないテストが毎回5つ書かずに済むように。**補っていることが呼び出しの名前に出る**
+    （キーの欠落そのものを試すテストは `post_game_scorebook` を使う）。payload に5キーがあればそちらが優先。
+    """
+    return post_game_scorebook(client, game_id, {**GAME_DAY_UNRECORDED, **payload})
 
 
 def login_as_manager(client, *teams, username="manager") -> User:

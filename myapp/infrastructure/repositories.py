@@ -16,7 +16,7 @@ from datetime import date
 from typing import Any
 
 from django.db import models, transaction
-from django.db.models import Count, Max, Min, Prefetch, Q, QuerySet, Sum
+from django.db.models import Count, Exists, Max, Min, OuterRef, Prefetch, Q, QuerySet, Sum
 
 from ..domain.entities import (
     Captaincy,
@@ -58,10 +58,12 @@ from ..domain.value_objects import (
     Base,
     BattingLine,
     ContractStatus,
+    DepartureRoute,
     ErrorKind,
     FieldingLine,
     FieldingPosition,
     FreeAgencyKind,
+    GameTimes,
     Handedness,
     InningsPitched,
     JerseyNumber,
@@ -288,6 +290,7 @@ class DjangoTeamRepository:
                             stint.number_before_promotion.value if stint.number_before_promotion is not None else None
                         ),
                         "acquired_via": acquired_via,
+                        "left_via": stint.left_via.value if stint.left_via is not None else None,
                     },
                 )
                 stint.id = stint_row.id
@@ -394,6 +397,7 @@ def _careers_of(player_ids: list[int]) -> dict[int, list[Stint]]:
                 ),
                 # 空（None・空文字）は不明
                 acquired_via=AcquisitionRoute.from_label(row.acquired_via) if row.acquired_via else None,
+                left_via=DepartureRoute.from_label(row.left_via) if row.left_via else None,
             )
         )
     return careers
@@ -492,6 +496,52 @@ def batting_totals(player_ids: list[int] | None = None, *, games: Q | None = Non
     totals = rows.values("player_id").annotate(**{f: Sum(f) for f in _BATTING_FIELDS})
     # values() の行から可変のキーで取り出すため、TypedDict の字面キー検査は効かない
     return {r["player_id"]: BattingLine(**{f: r[f] or 0 for f in _BATTING_FIELDS}) for r in totals}  # type: ignore[literal-required]
+
+
+def game_counts(
+    player_ids: list[int] | None = None, *, games: Q | None = None
+) -> tuple[dict[int, int], dict[int, int]]:
+    """選手ごとの (出場試合数, 登板数)。引数の意味は `batting_totals` と同じ。
+
+    出場試合数は、打撃か投球のどちらかに明細がある試合の数（打席が無い途中出場も含む）。
+    「出場した」の定義は `domain.services.appeared_in` が出典で、ここはそれを SQL で数え直したもの
+    （打撃の明細がある試合 ＋ 打撃の明細が無く投げただけの試合）。登板数は投球の明細がある試合の数。
+    成績の値オブジェクトには持たせない（守備成績の試合数と同じく、明細の行数から数える値）。
+    数の無い選手はキーに現れない。
+    """
+    if player_ids is not None and not player_ids:
+        return {}, {}
+
+    def narrowed(rows: QuerySet[Any]) -> QuerySet[Any]:
+        if player_ids is not None:
+            rows = rows.filter(player_id__in=player_ids)
+        return rows if games is None else rows.filter(games)
+
+    batted = {
+        r["player_id"]: r["n"]
+        for r in narrowed(orm_models.GameBattingLine.objects.all())
+        .values("player_id")
+        .annotate(n=Count("game_id", distinct=True))
+        .order_by()
+    }
+    # 登板と、そのうち打撃の明細が無い（投げただけの）試合を1回の集計で数える
+    same_game_batting = orm_models.GameBattingLine.objects.filter(
+        game_id=OuterRef("game_id"), player_id=OuterRef("player_id")
+    )
+    pitching = (
+        narrowed(orm_models.GamePitchingLine.objects.all())
+        .annotate(batted=Exists(same_game_batting))
+        .values("player_id")
+        .annotate(n=Count("game_id", distinct=True), alone=Count("game_id", distinct=True, filter=Q(batted=False)))
+        .order_by()
+    )
+    pitched: dict[int, int] = {}
+    played = dict(batted)
+    for r in pitching:
+        pitched[r["player_id"]] = r["n"]
+        if r["alone"]:
+            played[r["player_id"]] = played.get(r["player_id"], 0) + r["alone"]
+    return played, pitched
 
 
 def pitching_totals(player_ids: list[int] | None = None, *, games: Q | None = None) -> dict[int, PitchingLine]:
@@ -652,6 +702,34 @@ class _PlateRows:
         )
 
 
+def _game_day_values(game: Game) -> dict[str, Any]:
+    """試合の開始・終了・中断・観客数の列の値。**3か所（`save`・`_NewGame.build`・`_to_domain`）で同じ対応を使う。**
+
+    `_to_domain` で写し忘れると、一覧用に読んだ集約を保存したときに記録済みの値が消える
+    （`update_or_create` は defaults を全部書く）。
+    """
+    times = game.times
+    return {
+        "start_time": times.start if times else None,
+        "end_time": times.end if times else None,
+        "ends_next_day": times.ends_next_day if times else False,
+        "interruption_minutes": times.interruption_minutes if times else 0,
+        "attendance": game.attendance,
+    }
+
+
+def _times_of(row: orm_models.Game) -> GameTimes | None:
+    """行から `GameTimes` を組み立てる。開始と終了が揃っているときだけ（片方だけの行は未記録として扱う）。"""
+    if row.start_time is None or row.end_time is None:
+        return None
+    return GameTimes(
+        start=row.start_time,
+        end=row.end_time,
+        ends_next_day=row.ends_next_day,
+        interruption_minutes=row.interruption_minutes,
+    )
+
+
 @dataclass
 class _NewGame:
     """新しい試合1つぶんの行（まだ保存しない）。`add_all` の書く前の仕事で組み立てる。"""
@@ -675,6 +753,7 @@ class _NewGame:
                 away_team_id=game.away_team_id,
                 home_score=game.home_score,
                 away_score=game.away_score,
+                **_game_day_values(game),
             ),
             batting=[orm_models.GameBattingLine(player_id=e.player_id, **_batting_values(e)) for e in game.batting],
             pitching=[
@@ -796,6 +875,7 @@ class DjangoGameRepository:
                 "away_team_id": game.away_team_id,
                 "home_score": game.home_score,
                 "away_score": game.away_score,
+                **_game_day_values(game),
             },
         )
         game.id = row.id
@@ -1072,6 +1152,8 @@ class DjangoGameRepository:
             plate_appearances=cls._to_plate_appearances(row) if with_plate_appearances else [],
             fielding=cls._to_fielding(row) if with_plate_appearances else [],
             plate_appearances_loaded=with_plate_appearances,
+            times=_times_of(row),
+            attendance=row.attendance,
         )
         game.batting = [game_batting_of(b) for b in row.batting_lines.all()]
         game.pitching = [game_pitching_of(p) for p in row.pitching_lines.all()]

@@ -3,6 +3,9 @@
 リーグ・球場・チーム2つと、組み立て済みのサービスを用意する。
 成績は試合の記録から集計されるため、成績を持たせたい場合は
 helpers の play_game / give_batting / give_pitching で試合を作る。
+
+リーグ・球場・チームはクラスで1回だけ作る（`setUpTestData`）。テストの中で書き換えても、`TestCase` が
+テストごとにトランザクションで巻き戻し、属性（`self.team` など）もテストごとに写しが渡る。
 """
 
 from unittest.mock import patch
@@ -15,13 +18,24 @@ from ..helpers import (
     build_service,
 )
 
+# 世界の作成の名簿の検査（`skip_roster_check` が外すもの）
+ROSTER_CHECK = "myapp.application.pennant_world.ensure_roster_playable"
+
 
 class BaseCase(TestCase):
+    league: orm_models.League
+    stadium: orm_models.Stadium
+    team: orm_models.Team
+    rival: orm_models.Team
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.league = orm_models.League.objects.create(name="テストリーグ")
+        cls.stadium = orm_models.Stadium.objects.create(name="テスト球場", city="東京")
+        cls.team = orm_models.Team.objects.create(league=cls.league, name="テストチーム", home_stadium=cls.stadium)
+        cls.rival = orm_models.Team.objects.create(league=cls.league, name="相手チーム")
+
     def setUp(self):
-        self.league = orm_models.League.objects.create(name="テストリーグ")
-        self.stadium = orm_models.Stadium.objects.create(name="テスト球場", city="東京")
-        self.team = orm_models.Team.objects.create(league=self.league, name="テストチーム", home_stadium=self.stadium)
-        self.rival = orm_models.Team.objects.create(league=self.league, name="相手チーム")
         self.service = build_service()
 
     def skip_roster_check(self) -> None:
@@ -31,6 +45,6 @@ class BaseCase(TestCase):
         小さな名簿で確かめるテストは、選手を足さずに済むよう、検査だけを外す（足すと選手の数を数える
         アサーションがずれる）。
         """
-        patcher = patch("myapp.application.pennant_world.ensure_roster_playable")
+        patcher = patch(ROSTER_CHECK)
         patcher.start()
         self.addCleanup(patcher.stop)

@@ -2,7 +2,14 @@
 
 import unittest
 
-from myapp.domain.pennant.race import PennantRace, RaceTeam, pennant_race, season_champion
+from myapp.domain.pennant.race import (
+    PennantRace,
+    RaceTeam,
+    final_ranks,
+    league_champion,
+    pennant_race,
+    season_champion,
+)
 
 
 def _team(team_id: int, wins: int, losses: int, remaining: int) -> RaceTeam:
@@ -159,3 +166,58 @@ class SeasonChampionTest(unittest.TestCase):
     def test_no_leaders_is_an_error(self) -> None:
         with self.assertRaises(ValueError):
             season_champion([], [], {}, self.ORDER)
+
+
+class LeagueChampionTest(unittest.TestCase):
+    """リーグの優勝球団。単独首位ならその球団、同率首位なら規定（`season_champion`）で決める。"""
+
+    ORDER = [1, 2, 3]
+
+    def test_a_single_leader_is_the_champion_without_reading_the_rule(self) -> None:
+        self.assertEqual(2, league_champion({1: 2, 2: 1, 3: 3}, [], {}, self.ORDER))
+
+    def test_a_dead_heat_is_decided_by_the_head_to_head_record(self) -> None:
+        results = [(2, 1), (2, 1), (1, 2)]
+
+        self.assertEqual(2, league_champion({1: 1, 2: 1, 3: 3}, results, {}, self.ORDER))
+
+    def test_a_dead_heat_with_no_head_to_head_difference_goes_to_last_years_rank(self) -> None:
+        results = [(1, 2), (2, 1)]
+
+        self.assertEqual(2, league_champion({1: 1, 2: 1, 3: 3}, results, {1: 2, 2: 1}, self.ORDER))
+
+    def test_a_dead_heat_with_everything_equal_goes_to_the_order(self) -> None:
+        self.assertEqual(1, league_champion({1: 1, 2: 1}, [], {}, self.ORDER))
+        self.assertEqual(2, league_champion({1: 1, 2: 1}, [], {}, [2, 1]))
+
+    def test_an_empty_league_has_no_champion(self) -> None:
+        self.assertIsNone(league_champion({}, [], {}, self.ORDER))
+
+
+class FinalRanksTest(unittest.TestCase):
+    """翌年の同率の決着に渡す最終順位。同率首位は、規定で決めた優勝を1位・ほかを2位にする。"""
+
+    def test_without_a_tie_at_the_top_the_ranks_are_unchanged(self) -> None:
+        ranks = {1: 1, 2: 2, 3: 2}
+
+        self.assertEqual(ranks, final_ranks(ranks, 1))
+
+    def test_the_champion_of_a_tie_is_first_and_the_other_leaders_are_second(self) -> None:
+        self.assertEqual({1: 2, 2: 1, 3: 2, 4: 4}, final_ranks({1: 1, 2: 1, 3: 1, 4: 4}, 2))
+
+    def test_a_tie_below_the_top_is_not_moved(self) -> None:
+        self.assertEqual({1: 1, 2: 2, 3: 2}, final_ranks({1: 1, 2: 2, 3: 2}, 1))
+
+    def test_the_input_is_not_changed(self) -> None:
+        ranks = {1: 1, 2: 1}
+
+        final_ranks(ranks, 1)
+
+        self.assertEqual({1: 1, 2: 1}, ranks)
+
+
+class SingleTeamLeagueTest(unittest.TestCase):
+    """球団が1つだけのリーグ。順位は1位が1球団なので、その球団が優勝になる（意図した振る舞い）。"""
+
+    def test_the_only_team_of_a_league_is_its_champion(self) -> None:
+        self.assertEqual(5, league_champion({5: 1}, [], {}, [5]))

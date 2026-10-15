@@ -129,23 +129,67 @@ def draw_ratings(
     shared_weight = 0.5
     talent = normal(rng)
     if position.is_pitcher:
+        pitching = _pitcher_item_means(mean, stamina_mean)
         return PitcherRatings(
-            stuff=_rating(rng, mean, sd, talent, shared_weight),
-            control=_rating(rng, mean, sd, talent, shared_weight),
-            home_run_avoidance=_rating(rng, mean, sd, talent, shared_weight),
-            stamina=_rating(rng, stamina_mean, stamina_sd, normal(rng), 0.0),
+            stuff=_rating(rng, pitching["stuff"], sd, talent, shared_weight),
+            control=_rating(rng, pitching["control"], sd, talent, shared_weight),
+            home_run_avoidance=_rating(rng, pitching["home_run_avoidance"], sd, talent, shared_weight),
+            stamina=_rating(rng, pitching["stamina"], stamina_sd, normal(rng), 0.0),
         )
-    # 守備位置による傾向: 捕手・内野手は守備が高め、指名打者は打撃が高めで守備が低い
-    field_bias = {Position.CATCHER: 4.0, Position.INFIELDER: 2.0, Position.OUTFIELDER: 0.0}.get(position, -8.0)
-    bat_bias = 3.0 if position is Position.DESIGNATED_HITTER else 0.0
+    means = _batter_item_means(mean, position)
     return BatterRatings(
-        contact=_rating(rng, mean + bat_bias + BATTER_ITEM_OFFSET["contact"], sd, talent, shared_weight),
-        power=_rating(rng, mean + bat_bias + BATTER_ITEM_OFFSET["power"], sd, talent, shared_weight),
-        eye=_rating(rng, mean + BATTER_ITEM_OFFSET["eye"], sd, talent, shared_weight),
-        speed=_rating(rng, mean + BATTER_ITEM_OFFSET["speed"], sd, normal(rng), 0.0),
-        fielding=_rating(rng, mean + field_bias, sd, normal(rng), 0.0),
+        contact=_rating(rng, means["contact"], sd, talent, shared_weight),
+        power=_rating(rng, means["power"], sd, talent, shared_weight),
+        eye=_rating(rng, means["eye"], sd, talent, shared_weight),
+        speed=_rating(rng, means["speed"], sd, normal(rng), 0.0),
+        fielding=_rating(rng, means["fielding"], sd, normal(rng), 0.0),
         growth=GrowthType.NORMAL,
     )
+
+
+def mean_ratings(*, mean: float, position: Position, stamina_mean: float = 50.0) -> BatterRatings | PitcherRatings:
+    """`draw_ratings` が引く能力の、項目ごとの平均（ぶれを除いた値。1〜100 に収めて丸める）。
+
+    新人の見込み（戦力外で、今の外国人と新しく迎える外国人を比べる）に使う。項目のずれは `draw_ratings` と同じ出典。
+    """
+    if position.is_pitcher:
+        pitching = _pitcher_item_means(mean, stamina_mean)
+        return PitcherRatings(
+            stuff=_clamp(pitching["stuff"]),
+            control=_clamp(pitching["control"]),
+            home_run_avoidance=_clamp(pitching["home_run_avoidance"]),
+            stamina=_clamp(pitching["stamina"]),
+        )
+    means = _batter_item_means(mean, position)
+    return BatterRatings(
+        contact=_clamp(means["contact"]),
+        power=_clamp(means["power"]),
+        eye=_clamp(means["eye"]),
+        speed=_clamp(means["speed"]),
+        fielding=_clamp(means["fielding"]),
+    )
+
+
+def _pitcher_item_means(mean: float, stamina_mean: float) -> dict[str, float]:
+    """投手の項目ごとの平均。抑える力の3項目は同じ平均（ずれなし）、スタミナは呼び出し側が決める平均。"""
+    return {"stuff": mean, "control": mean, "home_run_avoidance": mean, "stamina": stamina_mean}
+
+
+def _batter_item_means(mean: float, position: Position) -> dict[str, float]:
+    """野手の項目ごとの平均。守備位置による傾向: 捕手・内野手は守備が高め、指名打者は打撃が高めで守備が低い。"""
+    field_bias = {Position.CATCHER: 4.0, Position.INFIELDER: 2.0, Position.OUTFIELDER: 0.0}.get(position, -8.0)
+    bat_bias = 3.0 if position is Position.DESIGNATED_HITTER else 0.0
+    return {
+        "contact": mean + bat_bias + BATTER_ITEM_OFFSET["contact"],
+        "power": mean + bat_bias + BATTER_ITEM_OFFSET["power"],
+        "eye": mean + BATTER_ITEM_OFFSET["eye"],
+        "speed": mean + BATTER_ITEM_OFFSET["speed"],
+        "fielding": mean + field_bias,
+    }
+
+
+def _clamp(value: float) -> int:
+    return min(RATING_MAX, max(RATING_MIN, round(value)))
 
 
 def spread_league(rng: GameRandom, team_count: int, **kwargs: float) -> Sequence[ClubRoster]:

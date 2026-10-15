@@ -117,3 +117,38 @@ def season_champion(
         position = {team_id: index for index, team_id in enumerate(order)}
         candidates.sort(key=lambda t: position.get(t, len(position)))
     return candidates[0]
+
+
+def league_champion(
+    ranks: Mapping[int, int],
+    results: Iterable[tuple[int, int]],
+    previous_rank: Mapping[int, int],
+    order: Sequence[int],
+) -> int | None:
+    """リーグの優勝球団。**優勝の決め方の唯一の出典**（世界の終了・歴代の記録・球団史が同じ関数を通る）。
+
+    `ranks` はリーグの最終順位（球団 -> 順位。同率は同順位）。1位が1球団ならその球団、並んでいれば
+    `season_champion`（規定）で決める。順位が空（試合の無いリーグ）なら None。
+    `results`・`previous_rank`・`order` は `season_champion` の引数と同じ（同率のときにしか使わない）。
+    """
+    leaders = [team_id for team_id, rank in ranks.items() if rank == 1]
+    if not leaders:
+        return None
+    if len(leaders) == 1:
+        return leaders[0]
+    return season_champion(leaders, results, previous_rank, order)
+
+
+def final_ranks(ranks: Mapping[int, int], champion: int | None) -> dict[int, int]:
+    """翌年の同率の決着（前年の順位）に渡す、リーグの**最終順位**。
+
+    前年に同率首位があれば、規定で決めた優勝（`champion`）を1位、ほかの同率首位を2位にする。
+    同率首位が無ければ、順位はそのまま。2位以下の同率は動かさない。
+    """
+    leaders = [team_id for team_id, rank in ranks.items() if rank == 1]
+    result = dict(ranks)
+    if champion is not None and len(leaders) > 1:
+        for team_id in leaders:
+            if team_id != champion:
+                result[team_id] = 2
+    return result

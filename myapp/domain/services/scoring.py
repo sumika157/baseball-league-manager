@@ -30,6 +30,8 @@ from ..value_objects import (
     LineupEntry,
     PitchingLine,
     PlateAppearanceResult,
+    RecordWarning,
+    attendance_label,
 )
 from .decisions import pitching_decisions
 
@@ -621,6 +623,8 @@ def assemble_game(
         home_team_id=header.home_team_id,
         away_team_id=header.away_team_id,
         plate_appearances=pas,
+        times=header.times,
+        attendance=header.attendance,
     )
     # 得点とイニングスコアは打席から導く。手入力させない
     game.line_score = game.derived_line_score()
@@ -643,3 +647,18 @@ def assemble_game(
     record_derived_fielding(game)
     _apply_pitching_decisions(game, team_of_players(header, entries, pas))
     return game
+
+
+def attendance_warnings(attendance: int | None, stadium_name: str, capacity: int | None) -> tuple[RecordWarning, ...]:
+    """観客数が球場の収容人数を超えていないか。超えていれば警告を1件返す（例外にしない）。
+
+    収容人数を超える観客数は、立ち見や収容人数の登録の古さで起こりうるので保存は止めず、
+    見直しを促すだけにする。観客数・収容人数のどちらかが無ければ照合できないので警告なし。
+    """
+    if attendance is None or capacity is None or attendance <= capacity:
+        return ()
+    return (
+        RecordWarning(
+            f"観客数（{attendance_label(attendance)}）が本拠地「{stadium_name}」の収容人数（{attendance_label(capacity)}）を超えています。"
+        ),
+    )

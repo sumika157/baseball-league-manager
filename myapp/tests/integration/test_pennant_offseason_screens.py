@@ -25,6 +25,8 @@ from .test_pennant_advance import YEAR
 from .test_pennant_home import HomeCase
 
 DECIDE_RETIREMENTS = "myapp.domain.pennant.offseason.decide_retirements"
+# 戦力外も差し替えて「引退させた選手だけが抜ける」前提にする（本物の規則は外国人を入れ替えうる）
+DECIDE_RELEASES = "myapp.domain.pennant.offseason.decide_releases"
 IS_FINAL_SEASON = "myapp.application.pennant_offseason.is_final_season"
 
 
@@ -56,7 +58,10 @@ class ScreenCase(HomeCase):
         )
 
     def close_with(self, retiring: list[int]):
-        with mock.patch(DECIDE_RETIREMENTS, return_value=tuple(retiring)):
+        with (
+            mock.patch(DECIDE_RETIREMENTS, return_value=tuple(retiring)),
+            mock.patch(DECIDE_RELEASES, return_value=()),
+        ):
             return build_pennant_offseason_service(self.world_a).close_season(expected_year=YEAR)
 
 
@@ -120,7 +125,9 @@ class CloseSeasonPostTest(ScreenCase):
         response = self.post_close()
 
         self.assertRedirects(response, self.offseason_url(), fetch_redirect_response=False)
-        self.assertRegex(self.last_message(response), r"2026年のシーズンを締めました（引退 \d+人・新人 \d+人）。")
+        self.assertRegex(
+            self.last_message(response), r"2026年のシーズンを締めました（引退 \d+人・戦力外 \d+人・新人 \d+人）。"
+        )
         self.assertGreater(orm_models.PennantPlayerRatings.objects.filter(year=YEAR + 1).count(), 0)
 
     def test_a_second_post_with_the_same_year_changes_nothing_and_goes_to_the_result(self):
@@ -193,7 +200,7 @@ class CloseSeasonPostTest(ScreenCase):
         self.assertIn("上限", self.last_message(response))
         self.assertEqual(orm_models.PennantPlayerRatings.objects.filter(year=YEAR + 1).count(), 0)
 
-    def test_released_sections_are_told(self):
+    def test_reverted_sections_are_told(self):
         self.client.force_login(self.owner)
         team_id = orm_models.PennantWorld.objects.get(id=self.world_a).managed_team_id
         assert team_id is not None
@@ -208,7 +215,7 @@ class CloseSeasonPostTest(ScreenCase):
                 closer_id=others[2],
             )
         )
-        with mock.patch(DECIDE_RETIREMENTS, return_value=(retiring,)):
+        with mock.patch(DECIDE_RETIREMENTS, return_value=(retiring,)), mock.patch(DECIDE_RELEASES, return_value=()):
             response = self.post_close()
 
         told = " ".join(str(message) for message in get_messages(response.wsgi_request))
@@ -250,7 +257,7 @@ class OffseasonResultTest(ScreenCase):
 
         for name in names:
             self.assertIn(name, content)
-        self.assertIn("引退・退団（2人）", content)
+        self.assertIn("引退・退団・戦力外（2人）", content)
         self.assertIn(f"新人（{result.draftee_count}人）", content)
         self.assertIn("能力の変化", content)
 

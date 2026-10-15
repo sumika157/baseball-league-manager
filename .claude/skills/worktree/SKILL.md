@@ -35,7 +35,8 @@ PowerShell から（パス変換が起きないのでこちらを使う）:
 ```powershell
 $wt = "/app/.claude/worktrees/<名前>"; $ce = @("-e","PYTHONPYCACHEPREFIX=/tmp/pycache","-e","RUFF_CACHE_DIR=/tmp/ruff-cache","-e","MYPY_CACHE_DIR=/tmp/mypy-cache")
 docker compose exec -w $wt @ce web sh -c "ruff check . && ruff format --check . && mypy ."            # lint（コミット前に必須）
-docker compose exec -w $wt @ce web python manage.py test                                             # フルスイート
+docker compose exec -w $wt @ce web python manage.py test myapp.tests.domain myapp.tests.integration --parallel 4   # フルスイート（1/2）
+docker compose exec -w $wt @ce web python manage.py test myapp.tests.e2e                             # フルスイート（2/2。先に frontend-build）
 docker compose exec -w $wt @ce -e DJANGO_SETTINGS_MODULE= web python -m unittest discover -s myapp/tests/domain -t .   # domain だけ
 ```
 

@@ -1,11 +1,16 @@
 """仮想の選手データを投入する。
 
-各チーム最大40人（実運用に近い28〜40人でばらつかせる）まで、既存の選手・在籍は
-残したまま不足分を架空の選手で埋める。ポジション構成・年齢分布はMLBの40人ロース
-ターの構成比をおおまかに参考にする。
+各球団の支配下はペナントの開幕前の帯（`OPENING_REGISTERED_BAND`。62〜66人。リーグの支配下上限が
+それより低ければ上限まで）の中で、育成は `generator.DEVELOPMENTAL_RANGE`（10〜30人）の中で目標を引き、
+既存の選手・在籍は残したまま不足分を架空の選手で埋める（追加専用）。ポジション構成は
+`generator.POSITION_RATIOS` を支配下・育成それぞれに最大剰余法で配る。
 
 一部（約12%）は「助っ人」として nationality / is_foreign_player を設定する
-（既存データは 0024_backfill_foreign_players_from_birthplace で移行済み）。
+（既存データは 0024_backfill_foreign_players_from_birthplace で移行済み）。助っ人は支配下だけにする
+（外国人登録枠は育成も数えるので、枠は支配下の助っ人に回す）。
+
+背番号は支配下が 00・0〜99、育成が3桁（100番台から）。入団の経路は作った経路そのもの
+（日本人の支配下はドラフト、助っ人は新外国人、育成は育成ドラフト）を入れる。
 
 氏名は「苗字＋名前」を漢字プールから組み合わせて作るため、よみがな（カタカナ）と
 背ネーム（ユニフォーム背面のヘボン式アルファベット表記）もプール側に持たせてある。
@@ -15,20 +20,35 @@
 
 import random
 from collections import Counter, defaultdict
+from dataclasses import dataclass, field
 from datetime import date
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
+from myapp.domain.exceptions import DomainError, ForeignPlayerQuotaExceeded, RegisteredPlayerLimitExceeded
+from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND
 from myapp.domain.pennant.world import WorldScope
-from myapp.domain.value_objects import Position
+from myapp.domain.value_objects import (
+    DEVELOPMENTAL_MIN_NUMBER,
+    AcquisitionRoute,
+    ContractStatus,
+    JerseyNumber,
+    Position,
+    ensure_quota_not_exceeded,
+)
 from myapp.domain.virtual_players import generator, pools
-from myapp.domain.virtual_players.generator import MAX_ROSTER, MIN_ROSTER, POSITION_RATIOS, largest_remainder
 from myapp.infrastructure.scoping import players_in, stints_in, teams_in
 from myapp.models import Player, PlayerStint
 
 # 投入・補正の対象は実データだけ。ペナントの世界の球団・選手には触れない
 REAL_SCOPE = WorldScope.real()
+
+# 支配下の背番号（00・0〜99）
+REGISTERED_NUMBERS = ["00", "0", *map(str, range(1, DEVELOPMENTAL_MIN_NUMBER))]
+# 育成の背番号（3桁）。100番台を先に配り、尽きたら200番台以降を使う
+DEVELOPMENTAL_FIRST_NUMBERS = [str(n) for n in range(DEVELOPMENTAL_MIN_NUMBER, 200)]
+DEVELOPMENTAL_SPARE_NUMBERS = [str(n) for n in range(200, 1000)]
 
 # このコマンドの初回投入より前から存在した選手。--rename-existing で名前を
 # 選び直す対象から除外し、--assign-readings では固定のよみがな・ローマ字を使う
@@ -47,6 +67,17 @@ ORIGINAL_PLAYER_READINGS = {
     "佐藤涼介": ("サトウリョウスケ", "SATO", "RYOSUKE"),
 }
 ORIGINAL_PLAYER_NAMES = list(ORIGINAL_PLAYER_READINGS)
+
+
+@dataclass
+class _TeamTally:
+    """1球団の投入の集計（報告用）。"""
+
+    name: str
+    existing: Counter[ContractStatus] = field(default_factory=Counter)
+    added: Counter[ContractStatus] = field(default_factory=Counter)
+    # 足した助っ人の人数
+    foreign: int = 0
 
 
 class Command(BaseCommand):
@@ -93,141 +124,214 @@ class Command(BaseCommand):
             self._refresh_schools(rng, dry_run=options["dry_run"])
             return
 
+        self._fill_rosters(rng, dry_run=options["dry_run"])
+
+    def _fill_rosters(self, rng, *, dry_run):
         today = date.today()
         used_names = set(players_in(REAL_SCOPE).values_list("name", flat=True))
 
-        created_players = 0
-        created_stints = 0
-        foreign_count = 0
-        team_reports = []
-
         with transaction.atomic():
-            for team in teams_in(REAL_SCOPE).select_related("league"):
-                active_stints = list(
-                    PlayerStint.objects.filter(team=team, to_year__isnull=True).select_related("player")
-                )
-                existing_count = len(active_stints)
-                used_numbers = {s.number for s in active_stints}
-                # 外国人選手の登録枠（リーグが持つ。None は無制限）。ORM に直接書くため
-                # Team 集約の ensure_foreign_player_quota を通らないので、ここで同じ検査をする
-                foreign_limit = team.league.foreign_player_roster_limit
-                foreign_on_team = sum(1 for s in active_stints if s.player.is_foreign_player)
-                existing_by_position: dict[Position, int] = {}
-                for s in active_stints:
-                    existing = Position.from_label(s.player.position)
-                    existing_by_position[existing] = existing_by_position.get(existing, 0) + 1
-
-                roster_size = rng.randint(MIN_ROSTER, MAX_ROSTER)
-                if existing_count >= roster_size:
-                    team_reports.append((team.name, existing_count, 0))
-                    continue
-
-                to_add = roster_size - existing_count
-                target_by_position = largest_remainder(roster_size, POSITION_RATIOS)
-                add_by_position = {
-                    position: max(0, target_by_position[position] - existing_by_position.get(position, 0))
-                    for position in POSITION_RATIOS
-                }
-                # 端数調整で合計が to_add からずれる場合は内野手で吸収する
-                diff = to_add - sum(add_by_position.values())
-                add_by_position[Position.INFIELDER] += diff
-
-                available_numbers = [n for n in ["00", "0", *map(str, range(1, 100))] if n not in used_numbers]
-                rng.shuffle(available_numbers)
-
-                new_players = []
-                added_this_team = 0
-                for position, count in add_by_position.items():
-                    for _ in range(count):
-                        if added_this_team >= to_add:
-                            break
-
-                        is_foreign = rng.random() < generator.FOREIGN_PLAYER_RATIO
-                        if is_foreign and foreign_limit is not None and foreign_on_team >= foreign_limit:
-                            # 枠が埋まっていれば日本人選手にする
-                            is_foreign = False
-                        if is_foreign:
-                            foreign_on_team += 1
-                            name, name_kana, country, surname_romaji, given_romaji = generator.foreign_name(
-                                rng, used_names
-                            )
-                            birthplace = country
-                        else:
-                            name, name_kana, surname_romaji, given_romaji = generator.japanese_name(rng, used_names)
-                            birthplace = generator.prefecture(rng)
-
-                        age = max(19, min(40, round(rng.gauss(27.5, 3.8))))
-                        birth_date = generator.birth_date_for(rng, age=age, as_of=today)
-                        career = generator.amateur_career(rng, is_foreign=is_foreign, birthplace=birthplace)
-                        debut_age = min(career.debut_age, age)
-                        debut_year = birth_date.year + debut_age
-
-                        throws, bats = generator.handedness(rng, position)
-                        height_cm, weight_kg = generator.physique(rng, position)
-
-                        if not available_numbers:
-                            available_numbers = [n for n in map(str, range(100, 1000)) if n not in used_numbers]
-                            rng.shuffle(available_numbers)
-                        number = available_numbers.pop()
-                        used_numbers.add(number)
-
-                        if options["dry_run"]:
-                            created_players += 1
-                            created_stints += 1
-                            added_this_team += 1
-                            if is_foreign:
-                                foreign_count += 1
-                            continue
-
-                        player = Player.objects.create(
-                            name=name,
-                            name_kana=name_kana,
-                            position=position.value,
-                            birth_date=birth_date,
-                            throws=throws.value,
-                            bats=bats.value,
-                            height_cm=height_cm,
-                            weight_kg=weight_kg,
-                            birthplace=birthplace,
-                            debut_year=debut_year,
-                            high_school=career.high_school,
-                            university=career.university,
-                            corporate_team=career.corporate_team,
-                            nationality=birthplace if is_foreign else "",
-                            is_foreign_player=is_foreign,
-                        )
-                        PlayerStint.objects.create(
-                            player=player,
-                            team=team,
-                            number=number,
-                            from_year=debut_year,
-                            to_year=None,
-                        )
-                        new_players.append((player, surname_romaji, given_romaji))
-                        created_players += 1
-                        created_stints += 1
-                        added_this_team += 1
-                        if is_foreign:
-                            foreign_count += 1
-
-                if not options["dry_run"]:
-                    self._apply_back_names(team, new_players)
-
-                team_reports.append((team.name, existing_count, added_this_team))
-
-            if options["dry_run"]:
+            tallies = [
+                self._fill_team(rng, team, used_names=used_names, today=today, dry_run=dry_run)
+                for team in teams_in(REAL_SCOPE).select_related("league")
+            ]
+            if dry_run:
                 transaction.set_rollback(True)
 
-        for name, existing, added in team_reports:
-            self.stdout.write(f"{name}: 既存{existing}人 + 新規{added}人 = {existing + added}人")
+        registered, developmental = ContractStatus.REGISTERED, ContractStatus.DEVELOPMENTAL
+        for tally in tallies:
+            self.stdout.write(
+                f"{tally.name}: 支配下 既存{tally.existing[registered]}人 + 新規{tally.added[registered]}人"
+                f" = {tally.existing[registered] + tally.added[registered]}人 / "
+                f"育成 既存{tally.existing[developmental]}人 + 新規{tally.added[developmental]}人"
+                f" = {tally.existing[developmental] + tally.added[developmental]}人"
+            )
 
-        prefix = "[dry-run] " if options["dry_run"] else ""
+        added_registered = sum(t.added[registered] for t in tallies)
+        added_developmental = sum(t.added[developmental] for t in tallies)
+        total = added_registered + added_developmental
+        prefix = "[dry-run] " if dry_run else ""
         self.stdout.write(
             self.style.SUCCESS(
-                f"{prefix}選手 {created_players}人 / 在籍 {created_stints}件 を作成しました"
-                f"（うち海外出身 {foreign_count}人）"
+                f"{prefix}選手 {total}人 / 在籍 {total}件 を作成しました"
+                f"（支配下 {added_registered}人・育成 {added_developmental}人。"
+                f"うち海外出身 {sum(t.foreign for t in tallies)}人）"
             )
         )
+
+    def _fill_team(self, rng, team, *, used_names, today, dry_run):
+        """1球団の支配下・育成を目標まで埋める。既存と足した人数の集計を返す。"""
+        active_stints = list(PlayerStint.objects.filter(team=team, to_year__isnull=True).select_related("player"))
+        tally = _TeamTally(team.name)
+        used_numbers = {s.number for s in active_stints}
+        # 外国人選手の登録枠（リーグが持つ。None は無制限。育成も数える）。ORM に直接書くため
+        # Team 集約の ensure_foreign_player_quota を通らないので、ここで同じ検査をする
+        foreign_limit = team.league.foreign_player_roster_limit
+        foreign_on_team = sum(1 for s in active_stints if s.player.is_foreign_player)
+        existing_by_position: dict[ContractStatus, Counter[Position]] = defaultdict(Counter)
+        for s in active_stints:
+            contract = ContractStatus.now(ContractStatus.from_label(s.signed_as), s.promoted_year)
+            tally.existing[contract] += 1
+            existing_by_position[contract][Position.from_label(s.player.position)] += 1
+
+        # 既に枠・上限を超えている球団は、このコマンドでは直さない（追加専用で、減らすのは別の責務）。
+        # 黙って素通りせず、足さない理由を出す（支配下の目標は上限まで・助っ人は枠の内側なので、足すことは無い）
+        registered_limit = team.league.registered_player_limit
+        before = {
+            "支配下": (tally.existing[ContractStatus.REGISTERED], registered_limit),
+            "外国人": (foreign_on_team, foreign_limit),
+        }
+        already_over = {label: limit is not None and count > limit for label, (count, limit) in before.items()}
+        for label, (count, limit) in before.items():
+            if already_over[label]:
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"{team.name}: {label}が既に上限（{limit}人）を超えています（{count}人）。"
+                        f"{label}の選手は足しません（このコマンドは追加専用で、減らしません）。"
+                    )
+                )
+
+        targets = {
+            ContractStatus.REGISTERED: self._registered_target(rng, registered_limit),
+            ContractStatus.DEVELOPMENTAL: rng.randint(*generator.DEVELOPMENTAL_RANGE),
+        }
+        numbers = {
+            ContractStatus.REGISTERED: self._shuffled(rng, REGISTERED_NUMBERS, used_numbers),
+            # pop() は末尾から取るので、先に配る100番台を後ろに置く
+            ContractStatus.DEVELOPMENTAL: self._shuffled(rng, DEVELOPMENTAL_SPARE_NUMBERS, used_numbers)
+            + self._shuffled(rng, DEVELOPMENTAL_FIRST_NUMBERS, used_numbers),
+        }
+
+        new_players = []
+        for contract, target in targets.items():
+            additions = generator.additions_by_position(target, existing_by_position[contract])
+            for position in [p for p, count in additions.items() for _ in range(count)]:
+                if not numbers[contract]:
+                    # 支配下の番号（101個）は帯の上端より多いので、尽きるのは帯か既存のデータが崩れているとき。
+                    # 3桁を支配下に配ると契約区分の規則（`ensure_number_fits`）を破るので、止める
+                    raise CommandError(
+                        f"{team.name}: {contract.label}の背番号が足りません（使用中 {len(used_numbers)}個）。"
+                    )
+                number = numbers[contract].pop()
+                used_numbers.add(number)
+                # 助っ人は支配下だけ。枠が埋まっていれば日本人選手にする
+                is_foreign = (
+                    contract is ContractStatus.REGISTERED
+                    and rng.random() < generator.FOREIGN_PLAYER_RATIO
+                    and (foreign_limit is None or foreign_on_team < foreign_limit)
+                )
+                if is_foreign:
+                    foreign_on_team += 1
+                    tally.foreign += 1
+                player, stint, surname_romaji, given_romaji = self._new_player(
+                    rng,
+                    position=position,
+                    contract=contract,
+                    is_foreign=is_foreign,
+                    number=number,
+                    used_names=used_names,
+                    today=today,
+                )
+                tally.added[contract] += 1
+                if dry_run:
+                    continue
+                player.save()
+                stint.player = player
+                stint.team = team
+                stint.save()
+                new_players.append((player, surname_romaji, given_romaji))
+
+        # ORM に直接書いたので、集約と同じ規則（`ensure_quota_not_exceeded`）で投入後の人数を確かめる。
+        # 投入前から超えていた区分は上で理由を出したので、ここでは見ない
+        registered_after = tally.existing[ContractStatus.REGISTERED] + tally.added[ContractStatus.REGISTERED]
+        checks = [
+            (registered_after, registered_limit, "支配下", RegisteredPlayerLimitExceeded),
+            (foreign_on_team, foreign_limit, "外国人", ForeignPlayerQuotaExceeded),
+        ]
+        for count, limit, label, error in checks:
+            if already_over[label]:
+                continue
+            try:
+                ensure_quota_not_exceeded(
+                    count,
+                    limit,
+                    f"{team.name}: 投入後の{label}選手（{count}人）が上限（{limit}人）を超えます。",
+                    error,
+                )
+            except DomainError as exc:
+                raise CommandError(str(exc)) from exc
+
+        if not dry_run:
+            self._apply_back_names(team, new_players)
+        return tally
+
+    @staticmethod
+    def _registered_target(rng, limit):
+        """支配下の目標人数。帯の中から引く。リーグの支配下上限が上端より低ければ上限が天井になる。"""
+        band = OPENING_REGISTERED_BAND
+        ceiling = band.high if limit is None else min(band.high, limit)
+        return rng.randint(min(band.low, ceiling), ceiling)
+
+    @staticmethod
+    def _shuffled(rng, numbers, used_numbers):
+        available = [n for n in numbers if n not in used_numbers]
+        rng.shuffle(available)
+        return available
+
+    @staticmethod
+    def _new_player(rng, *, position, contract, is_foreign, number, used_names, today):
+        """未保存の選手と在籍を作る。(選手, 在籍, 苗字のローマ字, 名前のローマ字)。"""
+        if is_foreign:
+            name, name_kana, country, surname_romaji, given_romaji = generator.foreign_name(rng, used_names)
+            birthplace = country
+            route = AcquisitionRoute.NEW_FOREIGN
+        else:
+            name, name_kana, surname_romaji, given_romaji = generator.japanese_name(rng, used_names)
+            birthplace = generator.prefecture(rng)
+            route = (
+                AcquisitionRoute.DEVELOPMENTAL_DRAFT
+                if contract is ContractStatus.DEVELOPMENTAL
+                else AcquisitionRoute.DRAFT
+            )
+        # ORM に直接書くので、集約が守る区分の規則（背番号の桁・経路と区分の対応）をここで確かめる
+        contract.ensure_number_fits(JerseyNumber(number))
+        route.ensure_fits_contract(contract)
+
+        mean, sd, youngest, oldest = (
+            generator.DEVELOPMENTAL_AGE if contract is ContractStatus.DEVELOPMENTAL else generator.REGISTERED_AGE
+        )
+        age = max(youngest, min(oldest, round(rng.gauss(mean, sd))))
+        birth_date = generator.birth_date_for(rng, age=age, as_of=today)
+        career = generator.amateur_career(rng, is_foreign=is_foreign, birthplace=birthplace)
+        debut_year = birth_date.year + min(career.debut_age, age)
+        throws, bats = generator.handedness(rng, position)
+        height_cm, weight_kg = generator.physique(rng, position)
+
+        player = Player(
+            name=name,
+            name_kana=name_kana,
+            position=position.value,
+            birth_date=birth_date,
+            throws=throws.value,
+            bats=bats.value,
+            height_cm=height_cm,
+            weight_kg=weight_kg,
+            birthplace=birthplace,
+            debut_year=debut_year,
+            high_school=career.high_school,
+            university=career.university,
+            corporate_team=career.corporate_team,
+            nationality=birthplace if is_foreign else "",
+            is_foreign_player=is_foreign,
+        )
+        stint = PlayerStint(
+            number=number,
+            from_year=debut_year,
+            to_year=None,
+            signed_as=contract.value,
+            acquired_via=route.value,
+        )
+        return player, stint, surname_romaji, given_romaji
 
     def _apply_back_names(self, team, new_players):
         """新規追加分を、既存の在籍者も含めたチーム内の同姓関係で背ネーム付けする。"""

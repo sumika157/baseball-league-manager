@@ -260,10 +260,11 @@ class MultiLeagueTests(TestCase):
             self.assertEqual(count * 6 * 143 // 2, len(self._check([6] * count, season=2030 + count)), count)
 
     def test_eight_leagues_of_six_teams(self) -> None:
-        started = time.perf_counter()
+        # 壁時計ではなくこのプロセスの CPU 時間で測る（並列実行やほかの負荷で待たされた時間を入れない）
+        started = time.process_time()
         fixtures = self._check([6] * 8)
         self.assertEqual(3432, len(fixtures))
-        self.assertLess(time.perf_counter() - started, 3.0)
+        self.assertLess(time.process_time() - started, 3.0)
         # 交流戦 3 × 12 = 36、リーグ内 107 を5相手に 21〜22
         intra = Counter(
             frozenset((f.home_team_id, f.visitor_team_id))

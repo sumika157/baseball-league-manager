@@ -9,6 +9,9 @@ numpy==2.2.6
 # テストのカバレッジ計測（make coverage）。依存パッケージは無い（pyproject.toml の設定は
 # 標準ライブラリの tomllib で読む）
 coverage==7.16.2
+# 並列実行（manage.py test --parallel）で、子プロセスで失敗したテストのトレースバックを親へ渡す。
+# 無いと失敗が1件でもあると並列の実行全体が pickle のエラーで落ち、どれが落ちたか分からない。依存パッケージは無い
+tblib==3.2.2
 
 # 上記の依存パッケージ（バージョン固定用）
 ast-serialize==0.8.0

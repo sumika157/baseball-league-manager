@@ -31,6 +31,8 @@ $gh = "C:\Users\sumik\AppData\Local\Microsoft\WinGet\Packages\GitHub.cli_Microso
 - 直しは `git commit --amend` で機能のコミットに含める（push 前なので書き換えてよい）。
 - 周の途中でコードを直したら、その周の終わりに lint と、直した範囲のテストを通し直す（worktree なら `worktree` スキルの手順2。`-w` を忘れない）。
 - 最後の周の後、push の前に1回フルテストを流す（手元と CI の分担は `CLAUDE.md`「テストと品質のゲート」）。
+  差分が `.github/workflows/ci.yml` の `paths-ignore` に収まるなら流さない（CI も流れない）。
+  `git diff --name-only origin/<base>...HEAD` を `paths-ignore` と見比べて決め、省いたことを PR 本文の「確認したこと」に書く。
 - 周ごとに「何を直したか」を1行ずつメモしておく（手順3の「セルフレビュー」節に貼る）。
 - 計画からずれたら Issue 本文を直し、理由をコメントに残す（`issue-plan` の手順5）。
 
@@ -99,6 +101,8 @@ PR を作ったら、Issue（epic のタスクなら段階の sub-issue）を Pr
 ## 5. CI の結果を確かめる
 
 PR を作ると CI（`.github/workflows/ci.yml`）が走る（初回は数分）。終わるまで待って結果を見る。待つあいだに手順6を進めてよい。
+差分が `ci.yml` の `paths-ignore` に収まる PR では CI のテストが流れない。`infra/` に触れていれば `terraform.yml` の検査だけが流れるので、
+それを待つ。何も流れない PR は `gh pr checks` が「no checks reported」になるので、この手順を省く。
 
 ```powershell
 & $gh pr checks <PR番号> --watch --fail-fast   # 失敗したら終了コードが 0 以外になる
@@ -124,3 +128,5 @@ PR の URL と CI の結果を提示して終わる。**マージはしない**�
 - worktree を片付ける（`worktree` スキルの手順4）。
 - **base（main・epic）への push で走った CI の結果を確かめる**（`& $gh run list --branch <base> --limit 3`）。
   並行した PR の組み合わせで先端が壊れていないかは、これで分かる（手で先端のフルテストを流す代わり）。落ちていたら次の作業より先に直す。
+  `paths-ignore` に収まる PR のマージでは CI が流れず、一覧には前の実行が出るだけなので確かめなくてよい
+  （`infra/` に触れていれば `--workflow terraform.yml` で Terraform の検査を確かめる）。

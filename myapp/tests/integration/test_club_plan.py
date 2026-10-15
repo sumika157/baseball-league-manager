@@ -291,7 +291,10 @@ class AdvanceWithPlanTest(ClubPlanCase):
 
         self.assertEqual(view.closer_id, other)
         self.assertTrue(view.closer_is_manual)
-        build_season(self.world_a).advance(AdvanceTarget.MONTH_END)
+        # 開幕（3月末）の月末までは数試合しかなく、セーブの場面が来るかは能力の引き方しだいになる。
+        # 4月末まで進めて、セーブの場面が必ず何度か来るようにする
+        for _ in range(2):
+            build_season(self.world_a).advance(AdvanceTarget.MONTH_END)
         saves = orm_models.GamePitchingLine.objects.filter(
             game__home_team__league__world_id=self.world_a, player__stints__team=self.home_a, saves__gt=0
         )

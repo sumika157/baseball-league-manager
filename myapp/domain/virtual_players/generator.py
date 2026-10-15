@@ -40,8 +40,12 @@ PHYSIQUE_RANGES: dict[Position, tuple[tuple[int, int], tuple[int, int]]] = {
 
 # 投入時に外国人にする割合
 FOREIGN_PLAYER_RATIO = 0.12
-# 1球団の人数の範囲（実運用に近い28〜40人）
-MIN_ROSTER, MAX_ROSTER = 28, 40
+# 1球団の支配下の人数は、ペナントの開幕前の帯（`pennant/roster.py` の `OPENING_REGISTERED_BAND`）を出典にする。
+# 育成の人数の範囲（1球団）。NPB は球団差が大きい（数人〜50人超）ので幅を持たせ、平均を約20人にする
+DEVELOPMENTAL_RANGE = (10, 30)
+# 投入時の年齢（平均・標準偏差・下限・上限）。育成は高卒・大卒の直後が中心で若い
+REGISTERED_AGE = (27.5, 3.8, 19, 40)
+DEVELOPMENTAL_AGE = (21.5, 2.0, 19, 28)
 
 # 珍しい苗字・名前を抽選する確率。プール自体は104種・88種と大きいが、
 # 比率を高くすると「六月一日」のような超レア姓が「佐藤」など上位頻出姓と
@@ -126,6 +130,25 @@ def largest_remainder[K](total: int, ratios: Mapping[K, float]) -> dict[K, int]:
     for key in order[:remainder]:
         floored[key] += 1
     return floored
+
+
+def additions_by_position(target_total: int, existing: Mapping[Position, int]) -> dict[Position, int]:
+    """`target_total` 人にするために、位置ごとに何人足すか。合計は `target_total` − 既存の人数（0 未満にしない）。
+
+    目標の構成（`POSITION_RATIOS` を最大剰余法で配った人数）との差を足す。既存が偏っていて足す人数の合計が
+    超えるときは多く足す位置から削り、足りないとき（比率の合計が1未満の端数）は内野手で埋める。
+    """
+    to_add = max(0, target_total - sum(existing.values()))
+    target = largest_remainder(target_total, POSITION_RATIOS)
+    adds = {position: max(0, target[position] - existing.get(position, 0)) for position in POSITION_RATIOS}
+    excess = sum(adds.values()) - to_add
+    while excess > 0:
+        largest = max(adds, key=lambda position: adds[position])
+        adds[largest] -= 1
+        excess -= 1
+    if excess < 0:
+        adds[Position.INFIELDER] -= excess
+    return adds
 
 
 def _pick_surname(rng: GameRandom) -> tuple[str, str, str]:

@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, fields
-from datetime import date
+from datetime import date, time
 from decimal import ROUND_DOWN, Decimal
 from enum import Enum
 from functools import lru_cache
@@ -22,6 +22,7 @@ from .exceptions import (
     InvalidAcquisition,
     InvalidContract,
     InvalidFreeAgentDeclaration,
+    InvalidGame,
     InvalidInningsPitched,
     InvalidJerseyNumber,
     InvalidPlateAppearance,
@@ -29,6 +30,7 @@ from .exceptions import (
     InvalidProfile,
     InvalidSeason,
     InvalidStatValue,
+    InvalidStint,
 )
 
 
@@ -204,6 +206,29 @@ class AcquisitionRoute(Enum):
     @classmethod
     def labels(cls) -> list[str]:
         return [route.value for route in cls]
+
+
+class DepartureRoute(Enum):
+    """退団の経路。その在籍からどう離れたか（入団の経路 `AcquisitionRoute` と対になる）。
+
+    選択肢（永続化の choices）はこの Enum を唯一の出典とする。不明は値ではなく None で表す
+    （実データと、経路を記録する前に閉じた在籍は不明のまま。推測で埋めない）。
+    トレード・FA での退団は #40 で足す。
+    """
+
+    RETIRED = "引退"
+    RELEASED = "戦力外"
+
+    @property
+    def label(self) -> str:
+        return self.value
+
+    @classmethod
+    def from_label(cls, label: str) -> DepartureRoute:
+        for route in cls:
+            if route.value == label:
+                return route
+        raise InvalidStint(f"「{label}」は退団の経路として認識できません。")
 
 
 class FreeAgencyKind(Enum):
@@ -1397,6 +1422,118 @@ class Season:
 
 
 @dataclass(frozen=True)
+class GameTimes:
+    """試合の開始・終了の時刻と中断時間。**試合時間の導出の唯一の出典。**
+
+    時刻は試合日（`Game.played_on`）の現地の時刻（日本時間の壁時計。タイムゾーンは持たない）。
+    日時で持たないのは、開始の日付が `played_on` と同じ事実で出典が2つになるため。
+    終了が翌日かは明示の旗で持つ（「終了が開始より前なら翌日」と推測すると、開始と終了を
+    取り違えた入力が「23時間の試合」として通ってしまう）。
+
+    試合時間は保存せず、ここから導く。公式の試合時間は中断（天候・停電・技術的障害による遅延）を
+    差し引いた正味の時間（公認野球規則 9.02（ℓ））なので、中断時間（分の合計）も持つ。
+    """
+
+    start: time
+    end: time
+    ends_next_day: bool = False
+    interruption_minutes: int = 0
+
+    def __post_init__(self) -> None:
+        try:
+            interruption = int(self.interruption_minutes)
+        except (TypeError, ValueError):
+            raise InvalidGame("中断時間は数値で入力してください。") from None
+        object.__setattr__(self, "interruption_minutes", interruption)
+        if interruption < 0:
+            raise InvalidGame("中断時間に負の値は入力できません。")
+
+        elapsed = self.elapsed_minutes
+        if elapsed <= 0:
+            raise InvalidGame("終了時刻は開始時刻より後にしてください（日付をまたいだ試合は「翌日」に印を付けます）。")
+        if elapsed >= 24 * 60:
+            raise InvalidGame("開始から終了までは24時間未満にしてください（「翌日」の印を確かめてください）。")
+        if interruption >= elapsed:
+            raise InvalidGame("中断時間は、開始から終了までの長さより短くしてください。")
+
+    @classmethod
+    def from_inputs(
+        cls, start: time | None, end: time | None, ends_next_day: bool, interruption_minutes: int | None
+    ) -> GameTimes | None:
+        """画面・管理画面の入力から組み立てる。開始・終了がどちらも空なら未記録（None）。
+
+        入力の組み合わせの規則はここが唯一の出典:
+        開始と終了は両方そろえて入力する／中断時間と「翌日」は時刻があるときだけ指定できる。
+        """
+        interruption = interruption_minutes or 0
+        if start is None and end is None:
+            if interruption or ends_next_day:
+                raise InvalidGame("中断時間と「翌日」の印は、開始時刻と終了時刻を入力したときだけ指定できます。")
+            return None
+        if start is None or end is None:
+            raise InvalidGame("開始時刻と終了時刻は両方入力してください。")
+        return cls(start=start, end=end, ends_next_day=ends_next_day, interruption_minutes=interruption)
+
+    @property
+    def start_text(self) -> str:
+        """開始時刻の `HH:MM`（入力欄にそのまま入る形）。"""
+        return self.start.strftime("%H:%M")
+
+    @property
+    def end_text(self) -> str:
+        """終了時刻の `HH:MM`（入力欄にそのまま入る形。翌日かは `ends_next_day`）。"""
+        return self.end.strftime("%H:%M")
+
+    @property
+    def end_label(self) -> str:
+        """終了時刻の表示。翌日なら `翌00:30`。"""
+        return ("翌" if self.ends_next_day else "") + self.end_text
+
+    @property
+    def interruption_label(self) -> str:
+        """中断時間の表示（例 `25分`）。中断なしは空文字。"""
+        return minutes_label(self.interruption_minutes) if self.interruption_minutes else ""
+
+    @property
+    def elapsed_minutes(self) -> int:
+        """開始から終了までの長さ（分）。中断を引く前。"""
+        start = self.start.hour * 60 + self.start.minute
+        end = self.end.hour * 60 + self.end.minute + (24 * 60 if self.ends_next_day else 0)
+        return end - start
+
+    @property
+    def net_minutes(self) -> int:
+        """正味の試合時間（分）。**公式の試合時間**。終了 − 開始 − 中断。"""
+        return self.elapsed_minutes - self.interruption_minutes
+
+    @property
+    def duration_label(self) -> str:
+        """正味の試合時間の表示。例 `2時間50分`。表示の形はここが唯一の出典。"""
+        return minutes_label(self.net_minutes)
+
+
+def attendance_label(attendance: int) -> str:
+    """観客数の表示（例 `42,071人`）。3桁区切りの形はここが唯一の出典。"""
+    return f"{attendance:,}人"
+
+
+def minutes_label(minutes: int) -> str:
+    """分を `2時間50分` / `45分` の形にする。"""
+    hours, rest = divmod(minutes, 60)
+    return f"{rest}分" if hours == 0 else f"{hours}時間{rest}分"
+
+
+@dataclass(frozen=True)
+class RecordWarning:
+    """記録の警告。保存は止めないが、見直してほしい内容（例外にしない検査の結果）。
+
+    文言は日本語で完結させる。
+    """
+
+    message: str
+
+
+@dataclass(frozen=True)
 class GameHeader:
     """試合の見出し。いつ・どこ（シーズン）で・どのチームどうしが戦ったか。
 
@@ -1410,6 +1547,9 @@ class GameHeader:
     away_team_id: int
     # 保存済みの試合を上書きするときだけ。新規の試合は None
     id: int | None = None
+    # 手入力の事実（打席からは導けない）。無ければ未記録
+    times: GameTimes | None = None
+    attendance: int | None = None
 
 
 @dataclass(frozen=True)

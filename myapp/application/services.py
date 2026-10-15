@@ -26,6 +26,7 @@ from ..domain.value_objects import (
     Position,
     Season,
     TeamRecord,
+    attendance_label,
     format_average,
 )
 from .dto import (
@@ -73,7 +74,7 @@ from .dto import (
     YearlyRow,
 )
 from .game_edit import build_header, build_lineup_slots, build_plate_appearances
-from .player_stats_view import stats_player
+from .player_stats_view import played_counts, stats_player
 from .queries import GameListQuery, PlayerFieldingQuery, PlayerStatsQuery, TeamListQuery
 from .scorebook_view import build_line_score, build_scorebook_grids
 from .standings import league_standings, standing_row_of
@@ -395,7 +396,7 @@ class TeamApplicationService:
         `year` が None なら在籍中の選手の通算成績、年を渡せばその年に在籍した選手のその年の成績。
         戻り値は (読んだ行, 一覧に渡す選手, 主将の選手 id, 育成の選手 id)。
         """
-        rows = self._player_stats_query.list_roster(year=year, team_id=team_id, with_profile=True)
+        rows = self._player_stats_query.list_roster(year=year, team_id=team_id, with_profile=True, with_games=True)
         return (
             rows,
             [stats_player(row) for row in rows],
@@ -409,8 +410,9 @@ class TeamApplicationService:
         """球団の野手の成績の一覧。`year` を渡すとその年の成績（ペナントの「今季」）、省くと通算。"""
         rows, players, captain_ids, developmental_ids = self._roster(team_id, year)
         batters = [p for p in players if not p.is_pitcher]
+        games = played_counts(rows, pitchers=False)
         ordered, key, desc = domain_services.sort_batters(
-            batters, sort, descending, default_key=domain_services.DEFAULT_ROSTER_SORT
+            batters, sort, descending, default_key=domain_services.DEFAULT_ROSTER_SORT, games=games
         )
         context = self._league_context(rows[0].league_id if rows else None, year)
         today = self._today()
@@ -420,6 +422,7 @@ class TeamApplicationService:
                     p,
                     is_captain=p.id in captain_ids,
                     is_developmental=p.id in developmental_ids,
+                    played=games.get(p.id or 0, 0),
                     league_context=context,
                     today=today,
                 )
@@ -435,8 +438,9 @@ class TeamApplicationService:
         """球団の投手の成績の一覧。`year` の意味は `list_batters` と同じ。"""
         rows, players, captain_ids, developmental_ids = self._roster(team_id, year)
         pitchers = [p for p in players if p.is_pitcher]
+        appearances = played_counts(rows, pitchers=True)
         ordered, key, desc = domain_services.sort_pitchers(
-            pitchers, sort, descending, default_key=domain_services.DEFAULT_ROSTER_SORT
+            pitchers, sort, descending, default_key=domain_services.DEFAULT_ROSTER_SORT, appearances=appearances
         )
         context = self._league_context(rows[0].league_id if rows else None, year)
         today = self._today()
@@ -446,6 +450,7 @@ class TeamApplicationService:
                     p,
                     is_captain=p.id in captain_ids,
                     is_developmental=p.id in developmental_ids,
+                    played=appearances.get(p.id or 0, 0),
                     league_context=context,
                     today=today,
                 )
@@ -797,7 +802,9 @@ class TeamApplicationService:
         """
         league = self._leagues.find_by_id(league_id)
         # 集約（Team）を組み立てず、参照クエリがリーグの選手と成績をまとめて読む
-        all_rows = self._player_stats_query.list_roster(year=year, league_id=league_id, with_profile=True)
+        all_rows = self._player_stats_query.list_roster(
+            year=year, league_id=league_id, with_profile=True, with_games=True
+        )
         context = self._league_context(league_id, year, rows=all_rows)
 
         members: list[Player] = []
@@ -806,6 +813,8 @@ class TeamApplicationService:
         # 規定は所属チームの試合数で決まるため、選手ごとに引けるようにしておく
         games_played = self._team_game_counts(year)
         team_games: dict[int, int] = {}
+        # 選手ごとの出場数（野手は出場試合数、投手は登板数）。列と並べ替えに使う
+        played = played_counts([row for row in all_rows if row.position.is_pitcher == pitchers], pitchers=pitchers)
         for row in all_rows:
             if row.position.is_pitcher != pitchers:
                 continue
@@ -822,8 +831,11 @@ class TeamApplicationService:
             else domain_services.qualified_batters(members, team_games=team_games)
         )
 
-        sorter = domain_services.sort_pitchers if pitchers else domain_services.sort_batters
-        ordered, key, desc = sorter(reaching if qualified else members, sort, descending)
+        listed = reaching if qualified else members
+        if pitchers:
+            ordered, key, desc = domain_services.sort_pitchers(listed, sort, descending, appearances=played)
+        else:
+            ordered, key, desc = domain_services.sort_batters(listed, sort, descending, games=played)
         to_row = self._to_pitcher_row if pitchers else self._to_batter_row
         today = self._today()
 
@@ -834,7 +846,13 @@ class TeamApplicationService:
                 LeaguePlayerRow(
                     team_id=team_id,
                     team_name=team_name,
-                    player=to_row(player, is_captain=id(player) in captains, league_context=context, today=today),
+                    player=to_row(
+                        player,
+                        is_captain=id(player) in captains,
+                        played=played.get(player.id or 0, 0),
+                        league_context=context,
+                        today=today,
+                    ),
                 )
             )
 
@@ -992,6 +1010,7 @@ class TeamApplicationService:
             )
 
         fielding = self._to_fielding_rows(game, players)
+        times = game.times
 
         return GameDetail(
             game=self._to_game_row(game, names),
@@ -1005,6 +1024,11 @@ class TeamApplicationService:
                 names,
                 lambda player_id: players[player_id].name if player_id in players else f"選手{player_id}",
             ),
+            start_label=times.start_text if times else "",
+            end_label=times.end_label if times else "",
+            duration_label=times.duration_label if times else "",
+            interruption_label=times.interruption_label if times else "",
+            attendance_label=attendance_label(game.attendance) if game.attendance is not None else "",
         )
 
     @staticmethod
@@ -1590,9 +1614,11 @@ class TeamApplicationService:
         *,
         is_captain: bool = False,
         is_developmental: bool = False,
+        played: int = 0,
         league_context: _LeagueContext = _EMPTY_LEAGUE_CONTEXT,
         today: date,
     ) -> BatterRow:
+        """`played` は出場試合数（成績の値オブジェクトに無いので別に渡す）。"""
         assert player.id is not None, "一覧に載る選手は保存済み"
         line = player.batting
         profile = player.profile
@@ -1610,6 +1636,7 @@ class TeamApplicationService:
             batting_average=line.batting_average,
             on_base_percentage=line.on_base_percentage,
             ops=line.ops,
+            games=played,
             isolated_power=line.isolated_power,
             walks=line.walks,
             sacrifice_flies=line.sacrifice_flies,
@@ -1630,9 +1657,11 @@ class TeamApplicationService:
         *,
         is_captain: bool = False,
         is_developmental: bool = False,
+        played: int = 0,
         league_context: _LeagueContext = _EMPTY_LEAGUE_CONTEXT,
         today: date,
     ) -> PitcherRow:
+        """`played` は登板数（成績の値オブジェクトに無いので別に渡す）。"""
         assert player.id is not None, "一覧に載る選手は保存済み"
         line = player.pitching
         profile = player.profile
@@ -1648,6 +1677,7 @@ class TeamApplicationService:
             earned_run_average=line.earned_run_average,
             whip=line.whip,
             strikeouts_per_nine=line.strikeouts_per_nine,
+            appearances=played,
             walks_per_nine=line.walks_per_nine,
             fip=line.fip(league_context.fip_constant),
             era_plus=line.era_plus(league_context.average_era),

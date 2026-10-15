@@ -25,7 +25,7 @@ from myapp.domain.simulation.levels import SeasonTally
 from myapp.domain.simulation.manager import ClubRoster, PitchingHistory, SimBatter, SimPitcher, choose_active_roster
 from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings, RatingGrade
-from myapp.domain.value_objects import BattingLine, InningsPitched, PitchingLine
+from myapp.domain.value_objects import BattingLine, ContractStatus, InningsPitched, PitchingLine
 from myapp.presentation.views import build_pennant_world_service
 
 OUTS_PER_INNING = InningsPitched.OUTS_PER_INNING
@@ -168,6 +168,9 @@ def _club(team: Team, ratings: dict[int, PlayerRatings]) -> ClubRoster:
     batters: list[SimBatter] = []
     pitchers: list[SimPitcher] = []
     for player in team.active_players:
+        # 育成は1軍の候補に入れない（世界の進行と、複数シーズンの確認の `rosters_of` と同じ）
+        if team.contract_of(player) is ContractStatus.DEVELOPMENTAL:
+            continue
         rating = ratings[_id(player.id)].ratings
         if isinstance(rating, PitcherRatings):
             pitchers.append(SimPitcher(_id(player.id), player.name, rating, player.profile.is_foreign_player))

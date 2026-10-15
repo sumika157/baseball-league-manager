@@ -21,6 +21,9 @@
   <p class="page-subtitle">
     {{ detail.game.played_on|date:"Y年n月j日" }}（{{ detail.game.year }}年シーズン） · {{ detail.game.result }}{% if world %} · シミュレーション{% endif %}
   </p>
+  {% if detail.header_items %}
+    <p class="page-subtitle tabular-nums" data-testid="game-day-items">{{ detail.header_items|join:" ◇ " }}</p>
+  {% endif %}
   {% if can_edit %}
     <a href="{% url 'game_edit' detail.game.id %}" class="btn btn-secondary mt-2">記録を編集</a>
   {% endif %}

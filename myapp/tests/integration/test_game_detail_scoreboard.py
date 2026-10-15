@@ -15,7 +15,7 @@ from ..helpers import (
     lineup_rows,
     login_as_manager,
     play_game,
-    post_game_scorebook,
+    post_game_scorebook_day_unrecorded,
     register_lineup,
 )
 from .base import BaseCase
@@ -56,7 +56,7 @@ class _DetailCase(BaseCase):
         )
         for sequence, player_id in errors:
             entries[sequence - 1]["errors"] = [{"player_id": player_id, "position": "遊", "kind": "送球"}]
-        response = post_game_scorebook(
+        response = post_game_scorebook_day_unrecorded(
             self.client,
             self.game.id,
             {

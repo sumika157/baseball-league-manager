@@ -22,7 +22,9 @@
 - **すべてのコマンドは Docker コンテナ経由**で実行する（`docker compose exec web python manage.py ...`）。ホストに Python 環境は無い。
 - リポジトリの実体は WSL2 内。Windows からは `U:\` 経由で見えるが、**実行中コンテナへの操作（`exec` / `logs` / `ps`）は Windows 側から直接叩ける**。`wsl -e bash -c` で包まない。
 - ただし**コンテナを新規作成する操作（`docker compose up` / `run`）だけは WSL 側から実行する**。Windows 側から作るとバインドマウントが実体と切り離され、空マウントや容量 127MB の幽霊ディスク（書き込みが実リポジトリに届かない・`ENOSPC` で死ぬ）になる。
-- テスト: `docker compose exec web python manage.py test`（フル）。domain 層のみなら
+- テスト（フル）は2回に分ける: `docker compose exec web python manage.py test myapp.tests.domain myapp.tests.integration --parallel 4` と
+  `docker compose exec web python manage.py test myapp.tests.e2e`（WSL からは `make test` が同じ2つ）。**並列数は `auto` にしない**
+  （コンテナは他のエージェントと共有で、CPU の数＝20本にしたら Docker のエンジンが応答しなくなった。#184）。domain 層のみなら
   `docker compose exec -e DJANGO_SETTINGS_MODULE= web python -m unittest discover -s myapp/tests/domain -t .`（DB 不要・最速）。
 - `.env` の値に `$` を含めない（Docker Compose が変数展開して壊す。エラーにならず気づけない）。
 - `requirements.txt`・`requirements-dev.txt` は**間接依存まで `==` でバージョン固定**する（現状の方針を維持）。どちらかを変更したら `docker compose build --no-cache` でイメージの再ビルドが必要。
@@ -36,7 +38,7 @@
 - presentation（views）は application 経由で操作する。ORM モデルやリポジトリ実装を直接触らない。
 - **更新と参照を分ける**: 更新はリポジトリ経由で集約単位（`Team` / `Game`）に読み書きする。一覧表示などの参照は `infrastructure/queries.py` から直接 DTO を作る（集約を組み立てない）。参照クエリのインターフェースは `application/queries.py`（戻り値が DTO のため domain には置けない）。
 - **実データとペナントの世界を混ぜない**: リポジトリと参照クエリは `WorldScope` を必須の引数で受け取り（既定値なし）、「範囲が無ければ全世界を読む」形の API を作らない。例外は世界の一覧そのものを扱う台帳（`WorldRepository`・`WorldSummaryQuery`）だけ（詳細は Wiki「ペナントモードの仕組み」の「世界の分け方」。[docs/wiki/ペナントモードの仕組み.md](docs/wiki/ペナントモードの仕組み.md)）。
-- **依存の組み立ては `presentation/views.py` の `build_*()` 関数だけ。** 実データの `build_service()`（`TeamApplicationService`）・`build_recording_service()`（スコアブックの保存を担う `GameRecordingService`）・`build_team_analysis_service()`（戦力分析の `TeamAnalysisService`）・`build_roster_service()`（契約区分と FA 宣言の `RosterService`）と、ペナントの `build_pennant_world_service()`・`build_pennant_season_service(world_id)`、世界の画面を読む `build_world_view_service(world_id)`・`build_world_team_analysis_service(world_id)`（どれも世界の範囲に固定して組み立てる）がある。サービスを増やすときは組み立て口もここに足す。どれも依存を全部渡す（`tests/integration/test_wiring.py` が検査する）。管理コマンドもここから取る。呼ぶ側ごとに一部の依存だけを渡さない。渡し忘れが「開く画面によって落ちるサービス」になる（管理画面のテンプレートタグで実際に起きた）。テストも `tests/helpers.py` 経由でここを呼ぶ。
+- **依存の組み立ては `presentation/views.py` の `build_*()` 関数だけ。** 実データの `build_service()`（`TeamApplicationService`）・`build_recording_service()`（スコアブックの保存を担う `GameRecordingService`）・`build_team_analysis_service()`（戦力分析の `TeamAnalysisService`）・`build_roster_service()`（契約区分と FA 宣言の `RosterService`）と、ペナントの `build_pennant_world_service()`・`build_pennant_season_service(world_id)`・`build_pennant_history_service(world_id)`（歴代の記録と球団史の `PennantHistoryService`）、世界の画面を読む `build_world_view_service(world_id)`・`build_world_team_analysis_service(world_id)`（どれも世界の範囲に固定して組み立てる）がある。サービスを増やすときは組み立て口もここに足す。どれも依存を全部渡す（`tests/integration/test_wiring.py` が検査する）。管理コマンドもここから取る。呼ぶ側ごとに一部の依存だけを渡さない。渡し忘れが「開く画面によって落ちるサービス」になる（管理画面のテンプレートタグで実際に起きた）。テストも `tests/helpers.py` 経由でここを呼ぶ。
 - **層をまたぐ受け渡しに素の `dict` を使わない。** application が presentation に返す形は `application/dto.py` の dataclass にする。文字列キーの dict は綴りを間違えても静的検査が黙る。試合詳細の選手の索引（`PlayerIndexEntry`）は DTO に寄せた。編集画面の材料（`GameEditData`）も DTO に寄せた。集約は持たず、出場時点の読み戻しのような集約からの取り出しは `application/game_edit.py` が担い、presentation は DTO を JSON に写すだけにしてある（DTO に集約を包ませない）。
 - **`TeamApplicationService` は既に約50メソッド・1,500行**あり、チーム・選手・試合・リーグ・管理画面の概況を1クラスで抱えている。ここへ足す前に、対象ごとの別サービスに置けないか考える。分ける判断は選択肢としてユーザーに提示する。
 
@@ -79,12 +81,18 @@ ORM に直接 `bulk_create` 等で書き込むコード（データ投入コマ�
 - **バグを修正したら、同じコミットに再発防止テストを添える**（前例: テンプレートのコメント漏れを検査する `tests/integration/test_templates.py`）。どの層のバグかに応じて上記の置き場所に従う。
 - コミット前に `ruff check .`・`ruff format --check .`・`mypy .` を通す（いずれもコンテナ内。整形漏れは `ruff format .` で直す。WSL からは `make lint` が同じ3つを実行する）。ルールの設定は `pyproject.toml` が唯一の出典。**`# noqa` で黙らせる前に指摘のとおり直す**（それでも黙らせるなら理由をコメントに残す）。
 - **CI（`.github/workflows/ci.yml`）が、PR（宛先は問わない）と main・`epic/` への push で lint・型検査・React のビルド・フルテストを流す。**
-  手元と CI の分担は次のとおり（CI は1回約4分半で、手元のフルテスト約1分半より遅い。直しては確かめる繰り返しは手元で行う）。
+  手元と CI の分担は次のとおり（手元のフルテストは domain + integration を4本の並列で約1分半、e2e を足して約2分（2026-10 の実測・#184）。CI はイメージのビルドが加わるぶん手元より遅い。直しては確かめる繰り返しは手元で行う）。
   1. 実装中とセルフレビューの各周の終わりは、lint と、触った範囲のテスト（層・画面）を手元で流す。
   2. push の前に1回、手元でフルテストを流す。
   3. PR を作ったら CI の結果を待ち、**通ったのを確かめてからマージを頼む**。落ちたら直して push し直す。
   4. 並行した PR を続けてマージすると、単独では通っても組み合わせで壊れることがある（#32 と #37 で実際に起きた）。
      マージの後は、**main・epic への push で走った CI の結果を確かめる**（手で先端のフルテストを流す代わり）。落ちていたら次の作業より先に直す。
+
+  **差分がテストに影響しないパスだけなら、2（手元のフルテスト）を省く。** CI のテストもそのときは流れない。
+  どのパスが該当するかは `ci.yml` の `paths-ignore` が唯一の出典で、ここには書き写さない（判定は `git diff --name-only origin/<base>...HEAD` を
+  それと見比べる）。1つでも外れるファイルがあれば省かない。Terraform の検査は別の `terraform.yml` が `infra/` の変更でだけ流す。
+  3・4 は流れたチェックだけを確かめる（`infra/` に触れていれば Terraform の検査。何も流れなければ省く）。
+  セルフレビューの3周はテストと別なので省かない。
 
 ## UI・設計方針
 

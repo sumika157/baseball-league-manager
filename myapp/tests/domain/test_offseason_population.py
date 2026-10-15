@@ -5,11 +5,12 @@
 `入れ替わりの割合 × (引退の平均年齢 − 新人の平均年齢) ≈ 1歳` で、どれかの倍率を変えると崩れる。
 曲線や倍率を直したら、このテストで帯の内側に入ることを確かめる（3シーズンの実測の代わり）。
 
-2つの場面を見る（#167 で開幕前の支配下の帯を 62〜66人にしてから）:
-- **定常状態**（48 球団 × 64 人から）: 年齢・入れ替わり・錨・人数が帯の中に保たれる
+3つの場面を見る（#167 で開幕前の支配下の帯を 62〜66人にしてから。3つ目は #168 の戦力外から）:
+- **定常状態**（48 球団 × 64 人から）: 年齢・入れ替わり（引退＋戦力外）・錨・人数が帯の中に保たれる
 - **帯に追いつく途中**（12 球団 × 34 人から。実データから分岐した球団の人数）: 人数が上端を超えずに帯へ届く
+- **上端を超えた球団**（48 球団 × 70 人から）: 1回目のオフの戦力外で帯へ戻る
 
-帯のうち、錨の補正（3年目から 1 点以内）は、シード 1 の実測に近い値で、規則の小さな変更でも落ちうる。
+帯のうち、錨の補正（3年目から 1.2 点以内）は、シードの実測に近い値で、規則の小さな変更でも落ちうる。
 落ちたら、曲線の誤りか、シードの揺れ（別のシードでも落ちるか）かを切り分ける。Wiki「ペナントモードの仕組み」の「実測値」に
 シード 1〜4 の範囲がある。
 """
@@ -170,9 +171,9 @@ def run_year(members: list[Member], year: int, *, world_seed: int = 1) -> tuple[
         )
     plan = plan_offseason(clubs, year=year, world_seed=world_seed, start_year=START_YEAR, used_names=())
 
-    retired = set(plan.retired)
+    leaving = set(plan.retired) | set(plan.released)
     after = {change.player_id: change.after for change in plan.retained}
-    next_members = [replace(m, ratings=after[m.player_id]) for m in members if m.player_id not in retired]
+    next_members = [replace(m, ratings=after[m.player_id]) for m in members if m.player_id not in leaving]
     next_id = max(m.player_id for m in members) + 1
     for offset, draftee in enumerate(plan.draftees):
         player_id = next_id + offset
@@ -197,7 +198,10 @@ class YearStats:
     sd_age: float
     share_35_plus: float
     share_22_minus: float
+    # 入れ替わり（引退＋戦力外）と、その内訳
     turnover: float
+    retired_share: float
+    released_share: float
     min_roster: int
     max_roster: int
     mean_roster: float
@@ -225,7 +229,9 @@ def stats(members: list[Member], plan: OffseasonPlan, before: int) -> YearStats:
         sd_age=pstdev(values),
         share_35_plus=sum(1 for v in values if v >= 35) / len(values),
         share_22_minus=sum(1 for v in values if v <= 22) / len(values),
-        turnover=len(plan.retired) / before,
+        turnover=(len(plan.retired) + len(plan.released)) / before,
+        retired_share=len(plan.retired) / before,
+        released_share=len(plan.released) / before,
         min_roster=min(sizes.values()),
         max_roster=max(sizes.values()),
         mean_roster=fmean(sizes.values()),
@@ -257,12 +263,14 @@ class OffseasonPopulationTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        started = time.perf_counter()
+        # 壁時計ではなくこのプロセスの CPU 時間で測る。並列実行やほかのエージェントのテストと重なると、
+        # CPU を待たされた時間が入って壁時計では 30 秒を超えたことがある（#184）
+        started = time.process_time()
         cls.years = run_years(roster_size=STEADY_ROSTER)
-        cls.elapsed = time.perf_counter() - started
+        cls.elapsed = time.process_time() - started
 
     def test_runs_in_reasonable_time(self) -> None:
-        """10年ぶんの計算（約3,000人 × 10年）。実測は約1.4秒。遅い環境で落ちないよう余裕を持たせる。"""
+        """10年ぶんの計算（約3,000人 × 10年）の CPU 時間。実測は約1.4秒。遅い環境で落ちないよう余裕を持たせる。"""
         self.assertLess(self.elapsed, 4.0)
 
     def test_age_distribution_is_kept(self) -> None:
@@ -270,8 +278,8 @@ class OffseasonPopulationTest(unittest.TestCase):
         35歳以上の下限 2% → 1.5%。
 
         高校卒（18歳）を日本人の新人の30%入れる規則の定常状態は、22歳以下が約17〜20%・標準偏差が約4.5になる
-        （Wiki「ペナントモードの仕組み」の「実測値」）。支配下が約64人になると（#167）、1軍に出ない選手（25歳以上は引退しやすい）が
-        増えるぶん若くなり、平均年齢は 26.6〜27.8 歳（シード 1〜4）。
+        （Wiki「ペナントモードの仕組み」の「実測値」）。戦力外を足して引退の表を下げてから（#168）は、
+        平均年齢 27.3〜28.1 歳・35歳以上 3.5〜7.5%・22歳以下 11.1〜16.2%（シード 1〜4。帯は変えていない）。
         """
         for stat in self.years:
             with self.subTest(year=stat.year):
@@ -281,10 +289,22 @@ class OffseasonPopulationTest(unittest.TestCase):
                 self.assertTrue(0.05 <= stat.share_22_minus <= 0.22, stat.share_22_minus)
 
     def test_turnover_is_about_a_tenth(self) -> None:
-        """入れ替わりの割合。支配下約64人で、引退・退団は1球団 約6〜7人（シード 1〜4 で 8.6〜12.2%）。"""
+        """入れ替わり（引退＋戦力外）の割合。約10%（NPB の退団の水準）。
+
+        #168 から、戦力外がふだんの新人（6人）を迎える空きを作るので、入れ替わりは新人の数でほぼ決まる（6 / 約65人）。
+        平均 9.4〜9.6%・年ごとに 6.8〜12.6%（シード 1〜4）。
+        うち引退 6.2〜6.6%・戦力外 3.0〜3.2%（外国人の入れ替えを含む）。
+        下限を 8% → 6.5% に下げた（前の年に下端を割った球団は空きがあるので戦力外が0人になり、その年だけ少ない。
+        1年目の外国人に余裕を持たせてから最小 6.8%）。
+        """
         for stat in self.years:
             with self.subTest(year=stat.year):
-                self.assertTrue(0.08 <= stat.turnover <= 0.13, stat.turnover)
+                self.assertTrue(0.065 <= stat.turnover <= 0.13, stat.turnover)
+                self.assertGreater(stat.released_share, 0.0, "戦力外がある")
+        # 1年目は合成の初期母集団（外国人の数が球団ごとにばらつく）の入れ替えで戦力外が多い。10年の平均で比べる
+        retired = fmean(stat.retired_share for stat in self.years)
+        released = fmean(stat.released_share for stat in self.years)
+        self.assertGreater(retired, released, "引退のほうが多い（#168 の調整）")
 
     def test_opening_rosters_stay_in_the_band(self) -> None:
         """開幕前の支配下は上端（66人）を超えず、平均は帯の中。引退が多い年の球団だけ下端を割る（1年の上限10人）。"""
@@ -296,13 +316,15 @@ class OffseasonPopulationTest(unittest.TestCase):
                 self.assertGreaterEqual(stat.min_roster, band.low - 7)
                 self.assertLessEqual(stat.max_draftees, MAX_DRAFTEES)
 
-    def test_anchor_correction_is_within_one_point(self) -> None:
+    def test_anchor_correction_is_small(self) -> None:
         """錨の前の分布が目標から1点以上ずれるなら、曲線が合っていない（錨で歪みを隠さない）。
 
         合成の初期母集団は能力が年齢と無関係で、曲線と釣り合うまで2〜3年かかる。最初の2年は 1.5 点まで許す。
+        3年目からは 1.0 → 1.2 点（#168）: 戦力外は残す価値の低い順に外すので、錨の前の分布が少し上に寄る
+        （シード 1〜4 の最大 0.84〜1.06 点）。
         """
         for index, stat in enumerate(self.years):
-            limit = 1.5 if index < 2 else 1.0
+            limit = 1.5 if index < 2 else 1.2
             with self.subTest(year=stat.year):
                 self.assertLessEqual(stat.anchor_mean_shift, limit)
                 self.assertLessEqual(stat.anchor_sd_shift, 1.0)
@@ -351,7 +373,8 @@ class RosterGrowthTest(unittest.TestCase):
     def test_age_and_anchor_stay_within_loose_bands_while_catching_up(self) -> None:
         """追いつく途中は新人の割合が高く、若く偏る。定常状態より緩い帯で、崩れすぎていないことだけを見る。
 
-        実測（シード 1〜4）は平均年齢 25.4〜27.0・22歳以下 13〜30%・35歳以上 1.3〜3.7%・錨の平均のずれ 最大 2.06 点。
+        実測（シード 1〜4。#168 の戦力外と引退の表の後）は平均年齢 26.0〜27.2・22歳以下 12〜25%・35歳以上 2.2〜5.1%・
+        錨の平均のずれ 最大 1.81 点・標準偏差のずれ 最大 0.98 点（テストはシード 1）。
         """
         for stat in self.years:
             with self.subTest(year=stat.year):
@@ -360,6 +383,38 @@ class RosterGrowthTest(unittest.TestCase):
                 self.assertTrue(0.01 <= stat.share_35_plus <= 0.08, stat.share_35_plus)
                 self.assertTrue(0.05 <= stat.share_22_minus <= 0.32, stat.share_22_minus)
                 self.assertLessEqual(stat.anchor_mean_shift, 2.5)
+                self.assertLessEqual(stat.anchor_sd_shift, 1.0)
+
+
+class OverfullRosterTest(unittest.TestCase):
+    """帯の上端を超えた球団（48 球団 × 支配下の上限 70 人から）を、戦力外が帯へ戻す（#168）。
+
+    1回目のオフで、引退の後に残った人数から、ふだんの新人（6人）を迎えても上端（66人）を超えない人数まで外す。
+    実測（シード 1〜4）は1回目の入れ替わり 約15%（うち戦力外 約8%）、その後は定常状態と同じ（平均 約10%）。
+    """
+
+    years: list[YearStats]
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.years = run_years(roster_size=LEAGUE_REGISTERED_LIMIT)
+
+    def test_rosters_come_back_into_the_band_at_the_first_offseason(self) -> None:
+        first = self.years[0]
+        self.assertLessEqual(first.max_roster, OPENING_REGISTERED_BAND.high)
+        self.assertGreaterEqual(first.min_roster, OPENING_REGISTERED_BAND.low)
+        self.assertGreater(first.released_share, first.retired_share, "1回目は戦力外のほうが多い")
+        for stat in self.years:
+            with self.subTest(year=stat.year):
+                self.assertLessEqual(stat.max_roster, OPENING_REGISTERED_BAND.high)
+
+    def test_distribution_stays_within_the_steady_bands(self) -> None:
+        for stat in self.years:
+            with self.subTest(year=stat.year):
+                self.assertTrue(26.0 <= stat.mean_age <= 29.0, stat.mean_age)
+                self.assertTrue(0.015 <= stat.share_35_plus <= 0.08, stat.share_35_plus)
+                self.assertTrue(0.07 <= stat.turnover <= 0.16, stat.turnover)
+                self.assertLessEqual(stat.anchor_mean_shift, 1.5)
                 self.assertLessEqual(stat.anchor_sd_shift, 1.0)
 
 

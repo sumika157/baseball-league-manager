@@ -35,7 +35,10 @@ def league_standings(teams: Sequence[Team], leagues: Sequence[League], games: li
     result = []
     for league in leagues:
         members = [team for team in teams if team.league_id == league.id]
-        rows = domain_services.standings(members, games)
+        # 順位は所属球団の試合（交流戦を含む）だけで決まるので、リーグごとに試合を先に絞る
+        member_ids = {team.id for team in members}
+        league_games = [g for g in games if g.home_team_id in member_ids or g.away_team_id in member_ids]
+        rows = domain_services.standings(members, league_games)
         if not rows:
             continue
         assert league.id is not None, "保存済みのリーグには id がある"
@@ -43,3 +46,8 @@ def league_standings(teams: Sequence[Team], leagues: Sequence[League], games: li
             LeagueStandings(league_id=league.id, league_name=league.name, rows=[standing_row_of(row) for row in rows])
         )
     return result
+
+
+def record_label(wins: int, losses: int, ties: int) -> str:
+    """「80勝60敗3分」（引分が無ければ「80勝60敗」）。勝敗の文言の唯一の出典。"""
+    return f"{wins}勝{losses}敗" + (f"{ties}分" if ties else "")

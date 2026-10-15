@@ -22,3 +22,20 @@ def stats_player(row: ActivePlayerStats) -> Player:
         batting=row.batting,
         pitching=row.pitching,
     )
+
+
+def played_counts(rows: list[ActivePlayerStats], *, pitchers: bool) -> dict[int, int]:
+    """選手 id → 出場数（野手は出場試合数、投手は登板数）。一覧の列と並べ替えに使う。
+
+    `list_roster(with_games=True)` で読んだ行だけを受け取る。数を読んでいない行が来たら、
+    「0試合」と黙って並べずに落とす（読み忘れを画面の値で隠さない）。
+    """
+    counts: dict[int, int] = {}
+    for row in rows:
+        count = row.appearances if pitchers else row.games
+        if count is None:
+            raise ValueError(
+                f"出場数を読んでいない行です（選手 id={row.player_id}）。with_games=True で読んでください。"
+            )
+        counts[row.player_id] = count
+    return counts

@@ -14,7 +14,7 @@ from ..helpers import (
     lineup_rows,
     login_as_manager,
     play_game,
-    post_game_scorebook,
+    post_game_scorebook_day_unrecorded,
     register_lineup,
 )
 from .base import BaseCase
@@ -51,7 +51,7 @@ class _RecordingCase(BaseCase):
             away_pitchers={1: self.rival_pitcher.id},
             home_pitchers={1: home_pitcher},
         )
-        return post_game_scorebook(
+        return post_game_scorebook_day_unrecorded(
             self.client,
             self.game.id,
             {
@@ -98,7 +98,7 @@ class DevelopmentalPlayersCannotPlayTest(_RecordingCase):
             home_pitchers={1: self.pitcher.id},
         )
 
-        response = post_game_scorebook(
+        response = post_game_scorebook_day_unrecorded(
             self.client,
             self.game.id,
             {

@@ -59,6 +59,88 @@ export function GameInfoCard({ state, setState, payload }: Props) {
             </p>
           </div>
         </div>
+        {/* 打席から導けない手入力の事実。試合時間は「終了 − 開始 − 中断」で、保存後に試合詳細で見る */}
+        <div className="row g-3 align-items-end mt-1">
+          <div className="col-md-3">
+            <label className="form-label" htmlFor="scorebook-start-time">
+              開始時刻
+            </label>
+            <input
+              id="scorebook-start-time"
+              type="time"
+              className="form-control"
+              value={state.start_time}
+              onChange={(event) => {
+                const start_time = event.target.value;
+                setState((current) => ({ ...current, start_time }));
+              }}
+            />
+          </div>
+          <div className="col-md-3">
+            <label className="form-label" htmlFor="scorebook-end-time">
+              終了時刻
+            </label>
+            <input
+              id="scorebook-end-time"
+              type="time"
+              className="form-control"
+              value={state.end_time}
+              onChange={(event) => {
+                const end_time = event.target.value;
+                setState((current) => ({ ...current, end_time }));
+              }}
+            />
+          </div>
+          <div className="col-md-2">
+            <div className="form-check">
+              <input
+                id="scorebook-ends-next-day"
+                type="checkbox"
+                className="form-check-input"
+                checked={state.ends_next_day}
+                onChange={(event) => {
+                  const ends_next_day = event.target.checked;
+                  setState((current) => ({ ...current, ends_next_day }));
+                }}
+              />
+              <label className="form-check-label" htmlFor="scorebook-ends-next-day">
+                終了が翌日
+              </label>
+            </div>
+          </div>
+          <div className="col-md-2">
+            <label className="form-label" htmlFor="scorebook-interruption">
+              中断（分）
+            </label>
+            <input
+              id="scorebook-interruption"
+              type="number"
+              min={0}
+              className="form-control"
+              value={state.interruption_minutes}
+              onChange={(event) => {
+                const interruption_minutes = event.target.value;
+                setState((current) => ({ ...current, interruption_minutes }));
+              }}
+            />
+          </div>
+          <div className="col-md-2">
+            <label className="form-label" htmlFor="scorebook-attendance">
+              観客数
+            </label>
+            <input
+              id="scorebook-attendance"
+              type="number"
+              min={0}
+              className="form-control"
+              value={state.attendance}
+              onChange={(event) => {
+                const attendance = event.target.value;
+                setState((current) => ({ ...current, attendance }));
+              }}
+            />
+          </div>
+        </div>
       </div>
     </div>
   );

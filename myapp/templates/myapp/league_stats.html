@@ -55,6 +55,7 @@
         {% sort_header 'name' '選手名' 'start' False %}
         <th>チーム</th>
         {% if pos_mode == 'pitcher' %}
+          {% sort_header 'appearances' '登板' 'end' %}
           {% sort_header 'innings' '投球回' 'end' %}
           {% sort_header 'era' '防御率' 'end' False %}
           {% sort_header 'starts' '先発' 'end' %}
@@ -73,6 +74,7 @@
           {% sort_header 'home_runs_allowed' '被本塁打' 'end' %}
           {% sort_header 'hit_by_pitch_allowed' '与死球' 'end' %}
         {% else %}
+          {% sort_header 'games' '試合' 'end' %}
           {% sort_header 'average' '打率' 'end' %}
           {% sort_header 'hits' '安打' 'end' %}
           {% sort_header 'doubles' '2B' 'end' %}
@@ -102,6 +104,7 @@
         </td>
 
         {% if pos_mode == 'pitcher' %}
+          <td class="text-end stat-muted">{{ row.player.appearances }}</td>
           <td class="text-end stat-muted">{{ row.player.innings_pitched }}</td>
           <td class="text-end stat-key">{{ row.player.earned_run_average|floatformat:2 }}</td>
           <td class="text-end stat-muted">{{ row.player.starts }}</td>
@@ -119,6 +122,7 @@
           <td class="text-end stat-muted">{{ row.player.home_runs_allowed }}</td>
           <td class="text-end stat-muted">{{ row.player.hit_by_pitch_allowed }}</td>
         {% else %}
+          <td class="text-end stat-muted">{{ row.player.games }}</td>
           <td class="text-end stat-key">{{ row.player.batting_average|floatformat:3 }}</td>
           <td class="text-end stat-muted">{{ row.player.hits }}</td>
           <td class="text-end stat-muted">{{ row.player.doubles }}</td>
@@ -138,7 +142,7 @@
       </tr>
       {% empty %}
       <tr>
-        <td colspan="{% if pos_mode == 'pitcher' %}18{% else %}15{% endif %}">
+        <td colspan="{% if pos_mode == 'pitcher' %}19{% else %}16{% endif %}">
           <div class="empty-state">
             {% if stats.qualified %}
               {% if pos_mode == 'pitcher' %}規定投球回{% else %}規定打席{% endif %}に到達した選手がいません。

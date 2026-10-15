@@ -148,6 +148,8 @@ class FieldingTestBase(BaseCase):
             away_team_id=self.rival.id,
             lineup=self._lineup(),
             plate_appearances=plate_appearances or self._plate_appearances(),
+            times=None,
+            attendance=None,
         )
 
     def rows(self, game_id=None) -> dict[int, orm_models.GameFieldingLine]:
@@ -355,6 +357,8 @@ class BackfillOfLineupEntryTest(FieldingTestBase):
             away_team_id=self.rival.id,
             lineup=lineup,
             plate_appearances=entries,
+            times=None,
+            attendance=None,
         )
         return target
 
@@ -391,6 +395,8 @@ class BackfillOfLineupEntryTest(FieldingTestBase):
             away_team_id=self.rival.id,
             lineup=lineup,
             plate_appearances=entries,
+            times=None,
+            attendance=None,
         )
         before = self._state()
         self._batting().update(entered_sequence=None)
@@ -423,6 +429,8 @@ class BackfillOfLineupEntryTest(FieldingTestBase):
             away_team_id=self.rival.id,
             lineup=lineup,
             plate_appearances=self._plate_appearances(),
+            times=None,
+            attendance=None,
         )
         orm_models.PlayerStint.objects.filter(player_id=ghost).delete()
 
@@ -475,6 +483,8 @@ class SubstitutionTest(FieldingTestBase):
             away_team_id=self.rival.id,
             lineup=slots,
             plate_appearances=self._entries(relief=relief),
+            times=None,
+            attendance=None,
         )
 
     def _entered(self):
