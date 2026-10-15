@@ -11,12 +11,15 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from ..domain.entities import jersey_number_in
+from ..domain.pennant.awards import Award
 from ..domain.pennant.club_plan import PlanSection
 from ..domain.pennant.postseason import PostseasonFormat, PostseasonStatus
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.season import SeasonPhase
 from ..domain.services.free_agency import SERVICE_DAYS_PER_SEASON
+from ..domain.services.rankings import Title
 from ..domain.services.roster_analysis import NEUTRAL_CATEGORY, ColorCategory
+from ..domain.simulation.fatigue import FatigueLevel
 from ..domain.simulation.ratings import BatterRatings, PitcherRatings, RatingEmphasis
 from ..domain.value_objects import (
     AcquisitionRoute,
@@ -24,6 +27,7 @@ from ..domain.value_objects import (
     ContractStatus,
     DepartureRoute,
     FieldingPosition,
+    ForeignPlayerRules,
     FreeAgencyKind,
     Handedness,
     JerseyNumber,
@@ -484,6 +488,8 @@ class YearlyRow:
 
     label: str  # '2026年'
     appearances: int
+    # シーズンの年（ラベルから年を切り出さない。選手ページの「獲得タイトル」が出場した年に使う）
+    year: int = 0
     # 打撃
     plate_appearances: int = 0
     at_bats: int = 0
@@ -1212,12 +1218,11 @@ class SimulationPlayer:
 
 @dataclass(frozen=True)
 class SimulationTeam:
-    """シミュレーションに出る球団ひとつ。外国人の枠は所属リーグの値。"""
+    """シミュレーションに出る球団ひとつ。外国人枠は所属リーグの規則。"""
 
     team_id: int
     name: str
-    foreign_roster_limit: int | None
-    foreign_game_limit: int | None
+    foreign_rules: ForeignPlayerRules
     players: tuple[SimulationPlayer, ...]
     # 本拠地の収容人数。本拠地が無い・未設定なら None（ホーム試合の観客数を作らない）
     stadium_capacity: int | None
@@ -1411,8 +1416,8 @@ class ClubPlanView:
     `*_is_manual` が False の区画は、AI 監督の自動編成（提案）をそのまま映している。手動の区画で
     使えなくなっているものは区画が手動のまま（GM が自動に戻すまで）で、`notices` に理由が入り、
     中身はその日に使われる自動に落ちた形になる（Wiki「ペナントモードの仕組み」の「編成」）。
-    自動のスタメンは先発の外国人を出場枠に数えない目安で、外国人の投手が先発する日は実際の試合と違いうる
-    （先発は日ごとの疲労で決まるため、画面では決めない）。出場枠は世界のリーグで最も厳しい値で数えるので、
+    自動のスタメンは先発の外国人を外国人枠に数えない目安で、外国人の投手が先発する日は実際の試合と違いうる
+    （先発は日ごとの疲労で決まるため、画面では決めない）。試合の外国人枠は世界のリーグで最も厳しい規則で数えるので、
     自リーグの枠が緩い世界では、自リーグの試合の実際のスタメンと外国人の人数が違いうる。
     """
 
@@ -1447,8 +1452,8 @@ class ClubLimitsView:
     """編成の枠（画面に出す上限と、選択肢。数は domain が出典で、テンプレートには書かない）。None は制限なし。"""
 
     active_size: int
-    foreign_roster_limit: int | None
-    foreign_game_limit: int | None
+    # 所属リーグの外国人枠（1軍登録。計・投手・野手）
+    foreign: ForeignPlayerRules
     lineup_size: int
     rotation_size: int
     min_rotation_size: int
@@ -1466,6 +1471,9 @@ class ClubRosterCounts:
     pitchers: int
     catchers: int
     foreign: int
+    # 外国人のうち投手と野手（登録位置で数える）
+    foreign_pitchers: int
+    foreign_batters: int
 
 
 @dataclass(frozen=True)
@@ -1494,11 +1502,14 @@ class ClubPitcherUsage:
     days_since_start: int | None
     # 次の試合日に投げられるか（連投の上限に達していないか。上限はスタミナで決まる）
     can_pitch: bool
+    # 次の試合日に投げたときの疲労の区分（ローテーションは先発したら、抑えと救援陣は救援で投げたら）。
+    # エンジンが率に効かせる点と同じ式（`fatigue.pregame_fatigue_points`）から引く。次の試合日が無ければ「なし」
+    fatigue: FatigueLevel
 
 
 @dataclass(frozen=True)
 class ClubPitchingUsage:
-    """投手陣の状態（編成の「投手陣」タブに出す）。次の試合日が無ければ、状態は既定（投げられる）で返す。"""
+    """投手陣の状態（編成の「投手陣」タブに出す）。次の試合日が無ければ、状態は既定（投げられる・疲労なし）で返す。"""
 
     # 受け持つ球団の次の試合日（日程が残っていなければ None）
     next_game_on: date | None
@@ -2618,3 +2629,52 @@ class ClubHistory:
     seasons: list[ClubHistorySeason]
     record: str  # 通算の勝敗（「170勝113敗3分」）
     titles: int  # リーグ優勝の回数
+
+
+@dataclass(frozen=True)
+class AwardRow:
+    """タイトル受賞の1行（部門の1位。同率は1人ずつ）。歴代の記録・球団史・選手ページの材料。
+
+    締めた年は表彰（`PennantAward`）から、終わったが締めていない年は試合から導いた値（`pennant_awards.derive_award_rows`）から作る。
+    どちらも同じ形にして、画面は出どころを区別しない。
+    """
+
+    year: int
+    league_id: int
+    title: Title
+    player_id: int
+    player_name: str
+    team_id: int
+    team_name: str
+    value: str  # 記録の表記（「.345」「42」）
+
+    @property
+    def label(self) -> str:
+        return self.title.label
+
+    @property
+    def sort_key(self) -> tuple[int, int, str]:
+        """並び: 年 → 部門（`Title` の定義順）→ 選手名（同率の1位はタイトルの画面と同じ名前順）。"""
+        return (self.year, self.title.order, self.player_name)
+
+    def entry(self) -> RankingEntry:
+        """タイトルの表の1マスに置く形（順位は1位）。"""
+        return RankingEntry(
+            rank=1,
+            player_id=self.player_id,
+            player_name=self.player_name,
+            team_id=self.team_id,
+            team_name=self.team_name,
+            value=self.value,
+        )
+
+    def award(self) -> Award:
+        """保存する表彰（名前は持たない）。"""
+        return Award(
+            year=self.year,
+            league_id=self.league_id,
+            title=self.title,
+            player_id=self.player_id,
+            team_id=self.team_id,
+            value=self.value,
+        )

@@ -9,5 +9,7 @@
   {% if usage.next_game_on %}
     {% for pitched in row.pitched_recently %}<td class="text-center">{% if pitched %}登板{% else %}<span class="stat-muted">—</span>{% endif %}</td>{% endfor %}
     <td class="text-center">{% if row.can_pitch %}投げられる{% else %}<span class="stat-muted">連投のため休み</span>{% endif %}</td>
+    {% comment %}投げられない日は区分を並べない（休みと疲労を同じ行に出さない）{% endcomment %}
+    <td class="text-center">{% if row.can_pitch %}{% include 'pennant/_club_fatigue.html' with level=row.fatigue %}{% else %}<span class="stat-muted">—</span>{% endif %}</td>
   {% endif %}
 </tr>

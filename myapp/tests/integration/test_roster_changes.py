@@ -35,10 +35,10 @@ class TransferTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
 
     def test_transfer_closes_the_old_stint_and_opens_a_new_one(self):
-        self.service.transfer_player(
+        self.roster.transfer_player(
             self.player.id,
             from_team_id=self.team.id,
             to_team_id=self.rival.id,
@@ -55,7 +55,7 @@ class TransferTest(BaseCase):
         self.assertIsNone(stints[1].to_year)
 
     def test_player_appears_on_the_new_roster_only(self):
-        self.service.transfer_player(
+        self.roster.transfer_player(
             self.player.id,
             from_team_id=self.team.id,
             to_team_id=self.rival.id,
@@ -70,7 +70,7 @@ class TransferTest(BaseCase):
         """成績は選手に紐づくので、移籍しても失われない。"""
         give_batting(self.team, self.rival, self.player.id, BattingLine(at_bats=10, singles=3))
 
-        self.service.transfer_player(
+        self.roster.transfer_player(
             self.player.id,
             from_team_id=self.team.id,
             to_team_id=self.rival.id,
@@ -82,7 +82,7 @@ class TransferTest(BaseCase):
         self.assertEqual(detail.at_bats, 10)
 
     def test_the_old_number_becomes_available(self):
-        self.service.transfer_player(
+        self.roster.transfer_player(
             self.player.id,
             from_team_id=self.team.id,
             to_team_id=self.rival.id,
@@ -91,14 +91,14 @@ class TransferTest(BaseCase):
         )
 
         # 空いた10番を別の選手が使える
-        self.service.register_player(self.team.id, "田中", 10, "外野手")
+        self.roster.register_player(self.team.id, "田中", 10, "外野手")
         self.assertEqual([r.name for r in self.service.list_batters(self.team.id).rows], ["田中"])
 
     def test_number_in_use_at_the_destination_is_rejected(self):
-        self.service.register_player(self.rival.id, "先客", 7, "外野手")
+        self.roster.register_player(self.rival.id, "先客", 7, "外野手")
 
         with self.assertRaises(DuplicateJerseyNumber):
-            self.service.transfer_player(
+            self.roster.transfer_player(
                 self.player.id,
                 from_team_id=self.team.id,
                 to_team_id=self.rival.id,
@@ -107,7 +107,7 @@ class TransferTest(BaseCase):
             )
 
     def test_career_is_visible_on_the_team_aggregate(self):
-        self.service.transfer_player(
+        self.roster.transfer_player(
             self.player.id,
             from_team_id=self.team.id,
             to_team_id=self.rival.id,
@@ -129,10 +129,10 @@ class TransferTest(BaseCase):
 
     def test_failed_transfer_leaves_the_source_team_untouched(self):
         """検査に失敗したら、元チームの退団も取り消されること（部分的な保存を残さない）。"""
-        self.service.register_player(self.rival.id, "先客", 7, "外野手")
+        self.roster.register_player(self.rival.id, "先客", 7, "外野手")
 
         with self.assertRaises(DuplicateJerseyNumber):
-            self.service.transfer_player(
+            self.roster.transfer_player(
                 self.player.id,
                 from_team_id=self.team.id,
                 to_team_id=self.rival.id,
@@ -146,36 +146,55 @@ class TransferTest(BaseCase):
 
 
 class ForeignPlayerQuotaTest(BaseCase):
-    """外国人枠（登録上限・試合出場上限）。"""
+    """外国人枠（協約第82条の2。1軍登録は計4人・うち投手3人・野手3人）。保有は縛らず、実データは試合の出場者で検査する。"""
 
     def setUp(self):
         super().setUp()
-        self.foreign = self.service.register_player(self.team.id, "助っ人", 50, "外野手")
+        self.foreign = self.roster.register_player(self.team.id, "助っ人", 50, "外野手")
         orm_models.Player.objects.filter(id=self.foreign.id).update(is_foreign_player=True)
 
-    def test_transfer_rejects_when_destination_quota_exceeded(self):
-        orm_models.League.objects.filter(id=self.league.id).update(foreign_player_roster_limit=0)
+    def set_rules(self, active, pitchers, batters):
+        orm_models.League.objects.filter(id=self.league.id).update(
+            foreign_active_limit=active, foreign_active_pitcher_limit=pitchers, foreign_active_batter_limit=batters
+        )
 
-        with self.assertRaises(ForeignPlayerQuotaExceeded):
-            self.service.transfer_player(
-                self.foreign.id,
-                from_team_id=self.team.id,
-                to_team_id=self.rival.id,
-                number=99,
-                year=2026,
-            )
+    def foreigners(self, team, positions, *, first_number):
+        """外国人選手を登録する（`positions` は登録位置の並び）。"""
+        ids = []
+        for offset, position in enumerate(positions):
+            number = first_number + offset
+            player = self.roster.register_player(team.id, f"外国人{number}", number, position)
+            orm_models.Player.objects.filter(id=player.id).update(is_foreign_player=True)
+            ids.append(player.id)
+        return ids
 
-        # ロールバックされ、元チームの在籍は閉じられていない
-        stint = orm_models.PlayerStint.objects.get(player_id=self.foreign.id)
-        self.assertIsNone(stint.to_year)
-        self.assertEqual(stint.team_id, self.team.id)
+    def test_transfer_accepts_a_foreigner_however_many_the_destination_holds(self):
+        """協約第82条の2: 外国人は任意の数を保有できる（移籍の受け入れでは数えない）。"""
+        self.foreigners(self.rival, ["投手"] * 5, first_number=80)
 
-    def _record(self, game, *, foreign_batter, foreign_team):
-        """助っ人を打順の先頭に置いて、1回表だけのスコアブックを記録する。"""
+        self.roster.transfer_player(
+            self.foreign.id,
+            from_team_id=self.team.id,
+            to_team_id=self.rival.id,
+            number=99,
+            year=2026,
+        )
+
+        stint = orm_models.PlayerStint.objects.get(player_id=self.foreign.id, to_year__isnull=True)
+        self.assertEqual(stint.team_id, self.rival.id)
+
+    def _record(self, game, *, home_batters=(), away_batters=(), home_pitchers=None):
+        """1回表から、外国人を打順の先頭に置いたスコアブックを記録する。
+
+        `home_pitchers` は {回: 投手id}（ホームの投手は表を投げる）。表の回数は投手の数に合わせる。
+        """
         away = register_lineup(self.service, self.rival, prefix="ビジター", first_number=61)
         home = register_lineup(self.service, self.team, prefix="ホーム", first_number=71)
-        pitcher = self.service.register_player(self.team.id, "投手", 91, "投手")
-        (away if foreign_team is self.rival else home)[0] = foreign_batter
+        away[: len(away_batters)] = away_batters
+        home[: len(home_batters)] = home_batters
+        if home_pitchers is None:
+            home_pitchers = {1: self.roster.register_player(self.team.id, "投手", 91, "投手").id}
+        away_pitcher = self.roster.register_player(self.rival.id, "ビジター投手", 92, "投手")
 
         return build_recording_service().record_scorebook(
             game.id,
@@ -196,51 +215,93 @@ class ForeignPlayerQuotaTest(BaseCase):
             ],
             plate_appearances=to_plate_appearances(
                 build_scorebook(
-                    away=[0],
+                    away=[0] * max(home_pitchers),
                     home=[],
                     away_batters=away,
                     home_batters=home,
-                    away_pitchers={1: pitcher.id},
-                    home_pitchers={1: pitcher.id},
+                    away_pitchers={1: away_pitcher.id},
+                    home_pitchers=home_pitchers,
                 )
             ),
             times=None,
             attendance=None,
         )
 
+    def test_four_foreigners_split_two_and_two_pass_the_agreement(self):
+        game = play_game(self.team, self.rival, recorded=False)
+        batters = [self.foreign.id, *self.foreigners(self.team, ["内野手"], first_number=80)]
+        pitchers = self.foreigners(self.team, ["投手", "投手"], first_number=82)
+
+        self._record(game, home_batters=batters, home_pitchers={1: pitchers[0], 2: pitchers[1]})  # 例外にならない
+
+        self.assertTrue(orm_models.GameBattingLine.objects.filter(player_id=self.foreign.id).exists())
+
+    def test_a_fifth_foreigner_is_refused(self):
+        game = play_game(self.team, self.rival, recorded=False)
+        batters = [self.foreign.id, *self.foreigners(self.team, ["内野手", "内野手"], first_number=80)]
+        pitchers = self.foreigners(self.team, ["投手", "投手"], first_number=83)
+
+        with self.assertRaisesRegex(ForeignPlayerQuotaExceeded, "計4人までです（5人）"):
+            self._record(game, home_batters=batters, home_pitchers={1: pitchers[0], 2: pitchers[1]})
+        self.assertEqual(orm_models.GameBattingLine.objects.count(), 0)
+
+    def test_a_fourth_foreign_pitcher_is_refused(self):
+        game = play_game(self.team, self.rival, recorded=False)
+        pitchers = self.foreigners(self.team, ["投手"] * 4, first_number=80)
+
+        with self.assertRaisesRegex(ForeignPlayerQuotaExceeded, "投手3人までです（4人）"):
+            self._record(game, home_pitchers=dict(enumerate(pitchers, start=1)))
+
+    def test_a_fourth_foreign_batter_is_refused(self):
+        game = play_game(self.team, self.rival, recorded=False)
+        batters = [self.foreign.id, *self.foreigners(self.team, ["内野手"] * 3, first_number=80)]
+
+        with self.assertRaisesRegex(ForeignPlayerQuotaExceeded, "野手3人までです（4人）"):
+            self._record(game, home_batters=batters)
+
+    def test_a_position_player_who_pitches_counts_as_a_batter(self):
+        """投手か野手かは登録位置で数える（その試合で何をしたかでは数えない）。"""
+        game = play_game(self.team, self.rival, recorded=False)
+        batters = [self.foreign.id, *self.foreigners(self.team, ["内野手"] * 2, first_number=80)]
+        [outfielder] = self.foreigners(self.team, ["外野手"], first_number=83)
+        pitcher = self.roster.register_player(self.team.id, "投手", 91, "投手")
+
+        with self.assertRaisesRegex(ForeignPlayerQuotaExceeded, "野手3人までです（4人）"):
+            self._record(game, home_batters=batters, home_pitchers={1: pitcher.id, 2: outfielder})
+
     def test_recording_rejects_when_home_team_quota_exceeded(self):
-        orm_models.League.objects.filter(id=self.league.id).update(foreign_player_game_limit=0)
+        self.set_rules(0, None, None)
         game = play_game(self.team, self.rival, recorded=False)
 
         with self.assertRaises(ForeignPlayerQuotaExceeded):
-            self._record(game, foreign_batter=self.foreign.id, foreign_team=self.team)
+            self._record(game, home_batters=[self.foreign.id])
         self.assertEqual(orm_models.GameBattingLine.objects.count(), 0)
 
     def test_recording_rejects_when_away_team_quota_exceeded(self):
         """ホーム・ビジターは独立に判定する。ホームに助っ人がいなくても、
         ビジター側の上限超過は検出される。"""
-        rival_foreign = self.service.register_player(self.rival.id, "助っ人2", 51, "外野手")
-        orm_models.Player.objects.filter(id=rival_foreign.id).update(is_foreign_player=True)
-        orm_models.League.objects.filter(id=self.league.id).update(foreign_player_game_limit=0)
+        [rival_foreign] = self.foreigners(self.rival, ["外野手"], first_number=51)
+        self.set_rules(0, None, None)
         game = play_game(self.team, self.rival, recorded=False)
 
         with self.assertRaises(ForeignPlayerQuotaExceeded):
-            self._record(game, foreign_batter=rival_foreign.id, foreign_team=self.rival)
+            self._record(game, away_batters=[rival_foreign])
 
-    def test_recording_allows_exactly_at_the_game_limit(self):
-        orm_models.League.objects.filter(id=self.league.id).update(foreign_player_game_limit=1)
+    def test_recording_allows_exactly_at_the_limit(self):
+        self.set_rules(1, None, None)
         game = play_game(self.team, self.rival, recorded=False)
 
-        self._record(game, foreign_batter=self.foreign.id, foreign_team=self.team)  # 例外にならない
+        self._record(game, home_batters=[self.foreign.id])  # 例外にならない
 
         self.assertTrue(orm_models.GameBattingLine.objects.filter(player_id=self.foreign.id).exists())
 
     def test_recording_with_no_limit_set_never_rejects(self):
-        """空欄（無制限）はリーグの既定値（3人）とは別に、明示的に検証しておく。"""
-        orm_models.League.objects.filter(id=self.league.id).update(foreign_player_game_limit=None)
+        """空欄（無制限）はリーグの既定値（協約の 4／3／3）とは別に、明示的に検証しておく。"""
+        self.set_rules(None, None, None)
         game = play_game(self.team, self.rival, recorded=False)
+        batters = [self.foreign.id, *self.foreigners(self.team, ["内野手"] * 4, first_number=80)]
 
-        self._record(game, foreign_batter=self.foreign.id, foreign_team=self.team)  # 例外にならない
+        self._record(game, home_batters=batters)  # 例外にならない
 
         self.assertTrue(orm_models.GameBattingLine.objects.filter(player_id=self.foreign.id).exists())
 
@@ -250,15 +311,15 @@ class CaptaincyApplicationTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
 
     def test_appoint_and_remove_round_trip_through_the_database(self):
-        self.service.appoint_captain(self.team.id, self.player.id, 2026)
+        self.roster.appoint_captain(self.team.id, self.player.id, 2026)
 
         team = DjangoTeamRepository(WorldScope.real()).find_by_id(self.team.id)
         self.assertEqual(team.current_captain.id, self.player.id)
 
-        self.service.remove_captain(self.team.id, self.player.id, 2027)
+        self.roster.remove_captain(self.team.id, self.player.id, 2027)
 
         team = DjangoTeamRepository(WorldScope.real()).find_by_id(self.team.id)
         self.assertIsNone(team.current_captain)
@@ -276,8 +337,8 @@ class CaptaincyApplicationTest(BaseCase):
         self.assertEqual(team.current_captain.id, self.player.id)
 
     def test_player_edit_shows_duplicate_captain_error(self):
-        other = self.service.register_player(self.team.id, "田中", 11, "外野手")
-        self.service.appoint_captain(self.team.id, other.id)
+        other = self.roster.register_player(self.team.id, "田中", 11, "外野手")
+        self.roster.appoint_captain(self.team.id, other.id)
         login_as_manager(self.client, self.team, username="u")
 
         response = self.client.post(

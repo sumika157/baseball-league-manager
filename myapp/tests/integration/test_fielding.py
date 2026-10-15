@@ -68,7 +68,7 @@ class FieldingTestBase(BaseCase):
         self.game = play_game(self.team, self.rival, home_score=0, away_score=0)
 
     def _player(self, team, name, number, position) -> int:
-        return self.service.register_player(team.id, name, number, position).id
+        return self.roster.register_player(team.id, name, number, position).id
 
     def _lineup(self) -> list[LineupSlot]:
         return [
@@ -631,7 +631,7 @@ class GameDetailFieldingTest(FieldingTestBase):
         self.record()
 
     def test_each_team_box_lists_its_fielders(self):
-        detail = self.service.get_game_detail(self.game.id)
+        detail = self.game_view.get_game_detail(self.game.id)
 
         home = {row.player_name: row for row in detail.home_box.fielding}
         short = home["ホーム1"]
@@ -645,7 +645,7 @@ class GameDetailFieldingTest(FieldingTestBase):
         self.assertEqual(away["ビジター8"].putouts, 9)
 
     def test_fielders_are_in_batting_order_then_pitchers(self):
-        detail = self.service.get_game_detail(self.game.id)
+        detail = self.game_view.get_game_detail(self.game.id)
 
         names = [row.player_name for row in detail.home_box.fielding]
         self.assertEqual(names[:3], ["ホーム1", "ホーム2", "ホーム3"])

@@ -6,7 +6,7 @@
 - 延長は12回まで・引分、ホームがリードなら9回裏を省く、サヨナラは決勝点で終わる
 - 守備位置が空かない（代打を出したら次の守備から誰かがその位置に就く）、入った打席が正しい
 - `fielded_by` は結果ごとの固定経路ではなく散らばる。併殺は3人、三振は空
-- 先発は中5日、救援は3連投しない、外国人の出場枠を守る
+- 先発は中5日、救援は3連投しない、試合の外国人枠を守る
 """
 
 from collections import Counter, defaultdict
@@ -30,7 +30,7 @@ from myapp.domain.simulation.manager import (
 )
 from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.samples import average_club, round_robin_days, spread_league
-from myapp.domain.value_objects import FieldingPosition, GameStage, PlateAppearanceResult
+from myapp.domain.value_objects import FieldingPosition, ForeignPlayerRules, GameStage, PlateAppearanceResult
 
 FP = FieldingPosition
 P = PlateAppearanceResult
@@ -50,7 +50,13 @@ class ScriptedRandom:
         return value
 
 
+# 1軍を選ぶときの外国人枠（計だけ。試合の枠のほうを確かめるため、1軍には外国人を多めに入れる）
+LOOSE_FOREIGN_RULES = ForeignPlayerRules(active=8, pitchers=None, batters=None)
+
+
 def _play(seed: int, home, away, *, day: date = OPENING_DAY, history=None, **kwargs) -> SimulatedGame:
+    # 外国人枠を渡さないテストは無制限を明示する（`simulate_game` の引数は省略できない）
+    kwargs.setdefault("foreign_rules", ForeignPlayerRules.UNLIMITED)
     return simulate_game(
         make_random(seed), home, away, stage=GameStage.REGULAR, played_on=day, history=history, **kwargs
     )
@@ -58,8 +64,8 @@ def _play(seed: int, home, away, *, day: date = OPENING_DAY, history=None, **kwa
 
 class SameSeedTest(TestCase):
     def setUp(self):
-        self.home = choose_active_roster(average_club(1))
-        self.away = choose_active_roster(average_club(2))
+        self.home = choose_active_roster(average_club(1), rules=ForeignPlayerRules.UNLIMITED)
+        self.away = choose_active_roster(average_club(2), rules=ForeignPlayerRules.UNLIMITED)
 
     def test_the_same_seed_gives_the_same_plate_appearances(self):
         first = _play(42, self.home, self.away)
@@ -88,9 +94,16 @@ class SameSeedTest(TestCase):
 class ScriptedGameTest(TestCase):
     def test_a_game_without_a_runner_is_a_twelve_inning_scoreless_tie(self):
         """打者が一人も出塁しなければ、12回まで行って引き分ける（NPB の規定）。"""
-        home = choose_active_roster(average_club(1))
-        away = choose_active_roster(average_club(2))
-        played = simulate_game(ScriptedRandom(0.99), home, away, stage=GameStage.REGULAR, played_on=OPENING_DAY)
+        home = choose_active_roster(average_club(1), rules=ForeignPlayerRules.UNLIMITED)
+        away = choose_active_roster(average_club(2), rules=ForeignPlayerRules.UNLIMITED)
+        played = simulate_game(
+            ScriptedRandom(0.99),
+            home,
+            away,
+            stage=GameStage.REGULAR,
+            played_on=OPENING_DAY,
+            foreign_rules=ForeignPlayerRules.UNLIMITED,
+        )
         game = played.game
         self.assertEqual(game.line_score.innings, MAX_INNINGS)
         self.assertEqual(len(game.line_score.home), MAX_INNINGS)
@@ -106,10 +119,17 @@ class ScriptedGameTest(TestCase):
         """全打席が死球になる乱数源でも、半回が終わらないままにはならない。"""
         from myapp.domain.exceptions import InvalidGame
 
-        home = choose_active_roster(average_club(1))
-        away = choose_active_roster(average_club(2))
+        home = choose_active_roster(average_club(1), rules=ForeignPlayerRules.UNLIMITED)
+        away = choose_active_roster(average_club(2), rules=ForeignPlayerRules.UNLIMITED)
         with self.assertRaises(InvalidGame):
-            simulate_game(ScriptedRandom(0.0), home, away, stage=GameStage.REGULAR, played_on=OPENING_DAY)
+            simulate_game(
+                ScriptedRandom(0.0),
+                home,
+                away,
+                stage=GameStage.REGULAR,
+                played_on=OPENING_DAY,
+                foreign_rules=ForeignPlayerRules.UNLIMITED,
+            )
 
 
 class SimulatedGamesTest(TestCase):
@@ -119,7 +139,9 @@ class SimulatedGamesTest(TestCase):
     def setUpClass(cls):
         super().setUpClass()
         rng = make_random(20260801)
-        cls.rosters = {club.team_id: choose_active_roster(club, 4) for club in spread_league(rng, 6)}
+        cls.rosters = {
+            club.team_id: choose_active_roster(club, rules=ForeignPlayerRules.NPB) for club in spread_league(rng, 6)
+        }
         cls.history = PitchingHistory()
         cls.games: list[SimulatedGame] = []
         cls.days: list[date] = []
@@ -372,37 +394,41 @@ class SimulatedGamesTest(TestCase):
 
 
 class ForeignQuotaInGameTest(TestCase):
-    def test_foreign_players_never_exceed_the_game_limit(self):
+    def test_foreign_players_never_exceed_the_rules_of_the_game(self):
+        """出場した外国人が、計・投手・野手（登録位置で数える）のどれも枠を超えない。"""
         rng = make_random(77)
         pool = list(spread_league(rng, 2))
         clubs = []
         for club in pool:
             batters = tuple(replace(b, is_foreign=index < 5) for index, b in enumerate(club.batters))
             pitchers = tuple(replace(p, is_foreign=index < 5) for index, p in enumerate(club.pitchers))
-            clubs.append(choose_active_roster(replace(club, batters=batters, pitchers=pitchers), 8))
+            clubs.append(
+                choose_active_roster(replace(club, batters=batters, pitchers=pitchers), rules=LOOSE_FOREIGN_RULES)
+            )
 
-        for limit in (2, 3):
+        for rules in (ForeignPlayerRules.NPB, ForeignPlayerRules(active=3, pitchers=2, batters=2)):
             history = PitchingHistory()
             for day in range(24):
                 home, away = (clubs[0], clubs[1]) if day % 2 else (clubs[1], clubs[0])
                 played = _play(
-                    day, home, away, day=OPENING_DAY + timedelta(days=day), history=history, foreign_game_limit=limit
+                    day, home, away, day=OPENING_DAY + timedelta(days=day), history=history, foreign_rules=rules
                 )
-                foreign_ids = {b.player_id for c in clubs for b in c.batters if b.is_foreign} | {
-                    p.player_id for c in clubs for p in c.pitchers if p.is_foreign
-                }
                 for club in (home, away):
-                    team_ids = {b.player_id for b in club.batters} | {p.player_id for p in club.pitchers}
-                    appeared = {entry.player_id for entry in played.lineup if entry.team_id == club.team_id}
-                    appeared |= {o.player_id for o in played.game.pitching if o.player_id in team_ids}
-                    self.assertLessEqual(len(appeared & foreign_ids), limit, f"limit={limit} day={day}")
+                    foreign_batters = {b.player_id for b in club.batters if b.is_foreign}
+                    foreign_pitchers = {p.player_id for p in club.pitchers if p.is_foreign}
+                    batted = {entry.player_id for entry in played.lineup if entry.team_id == club.team_id}
+                    pitched = {o.player_id for o in played.game.pitching}
+                    counts = (len(pitched & foreign_pitchers), len(batted & foreign_batters))
+                    self.assertIsNone(
+                        rules.violation(pitchers=counts[0], batters=counts[1]), f"rules={rules} day={day}"
+                    )
 
 
 class ThirdOutTest(TestCase):
     def test_no_run_scores_on_the_play_that_makes_the_third_out(self):
         """3つ目のアウトを打者がアウトになって取った打席では、得点は入らない（規則 5.08）。"""
         rng = make_random(3)
-        rosters = [choose_active_roster(club, 4) for club in spread_league(rng, 2)]
+        rosters = [choose_active_roster(club, rules=ForeignPlayerRules.NPB) for club in spread_league(rng, 2)]
         history = PitchingHistory()
         checked = 0
         for day in range(150):
@@ -425,8 +451,8 @@ class OrdersTest(TestCase):
     """GM の編成の上書き（`ClubOrders`）。渡さなければ今までと同じ結果になる。"""
 
     def setUp(self):
-        self.home = choose_active_roster(average_club(1))
-        self.away = choose_active_roster(average_club(2))
+        self.home = choose_active_roster(average_club(1), rules=ForeignPlayerRules.UNLIMITED)
+        self.away = choose_active_roster(average_club(2), rules=ForeignPlayerRules.UNLIMITED)
 
     def starters(self, played: SimulatedGame, roster) -> list[int]:
         ids = {p.player_id for p in roster.pitchers}
@@ -506,17 +532,18 @@ class OrdersTest(TestCase):
 
     def test_a_manual_lineup_with_foreign_players_keeps_the_game_limit(self):
         """上書きのオーダーに外国人が並ぶときも、その枠で先発を選ぶ（枠を超えない）。"""
-        roster = choose_active_roster(average_club(3))
+        roster = choose_active_roster(average_club(3), rules=ForeignPlayerRules.UNLIMITED)
         starters_in_lineup = {s.batter.player_id for s in choose_lineup(roster.batters, ForeignQuota())}
-        foreign = set(sorted(starters_in_lineup)[:4])
+        foreign = set(sorted(starters_in_lineup)[:3])
         marked = replace(
             roster,
             batters=tuple(replace(b, is_foreign=b.player_id in foreign) for b in roster.batters),
             pitchers=tuple(replace(p, is_foreign=index < 3) for index, p in enumerate(roster.pitchers)),
         )
         lineup = tuple(LineupSlot(s.batter, s.position) for s in choose_lineup(marked.batters, ForeignQuota()))
-        self.assertEqual(sum(s.batter.is_foreign for s in lineup), 4)
-        played = _play(11, marked, self.away, foreign_game_limit=4, home_orders=ClubOrders(lineup=lineup))
+        self.assertEqual(sum(s.batter.is_foreign for s in lineup), 3)
+        rules = ForeignPlayerRules(active=3, pitchers=3, batters=3)
+        played = _play(11, marked, self.away, foreign_rules=rules, home_orders=ClubOrders(lineup=lineup))
 
         [starter_id] = self.starters(played, marked)
         starter = next(p for p in marked.pitchers if p.player_id == starter_id)

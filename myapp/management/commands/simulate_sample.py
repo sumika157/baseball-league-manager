@@ -34,15 +34,15 @@ from myapp.domain.simulation.levels import LevelRow, LevelTally, SeasonTally, Us
 from myapp.domain.simulation.manager import ClubRoster, choose_active_roster
 from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.samples import average_club, spread_league
-from myapp.domain.value_objects import GameStage
+from myapp.domain.value_objects import ForeignPlayerRules, GameStage
 from myapp.management.estimate_check import format_usage, run_check
 from myapp.management.multi_season_check import run_seasons
 
 DEFAULT_GAMES = 2000
 SAMPLE_YEAR = 2026
 SEASON_OPENING = date(SAMPLE_YEAR, 3, 29)
-# 外国人の登録枠（1軍に登録できる人数）。サンプルの選手は全員が日本人なので効かないが、選択の経路は通す
-FOREIGN_ROSTER_LIMIT = 4
+# 外国人枠（1軍登録。協約第82条の2）。サンプルの選手は全員が日本人なので効かないが、選択の経路は通す
+FOREIGN_RULES = ForeignPlayerRules.NPB
 # `--season` の日程の規則。既定値は NPB と同じ（1球団143試合）
 SEASON_RULES = ScheduleRules()
 
@@ -198,7 +198,7 @@ class Command(BaseCommand):
 
     def _run_average(self, seed: int, games: int) -> None:
         clubs = [
-            choose_active_roster(average_club(team_id, f"平均{team_id}"), FOREIGN_ROSTER_LIMIT) for team_id in (1, 2)
+            choose_active_roster(average_club(team_id, f"平均{team_id}"), rules=FOREIGN_RULES) for team_id in (1, 2)
         ]
         history = PitchingHistory()
         tally = LevelTally()
@@ -216,6 +216,7 @@ class Command(BaseCommand):
                 stage=GameStage.REGULAR,
                 played_on=SEASON_OPENING + timedelta(days=index),
                 history=history,
+                foreign_rules=FOREIGN_RULES,
             )
             tally.add(played.game)
             usage.add(played)
@@ -244,7 +245,7 @@ class Command(BaseCommand):
     def _run_season(self, seed: int) -> None:
         rng = make_random(game_seed(seed, SAMPLE_YEAR, "league"))
         clubs = spread_league(rng, 2 * NPB_TEAMS_PER_LEAGUE)
-        rosters = {club.team_id: choose_active_roster(club, FOREIGN_ROSTER_LIMIT) for club in clubs}
+        rosters = {club.team_id: choose_active_roster(club, rules=FOREIGN_RULES) for club in clubs}
         team_ids = list(rosters)
         leagues = {1: team_ids[:NPB_TEAMS_PER_LEAGUE], 2: team_ids[NPB_TEAMS_PER_LEAGUE:]}
         schedule_rng = make_random(game_seed(seed, SAMPLE_YEAR, "schedule"))
@@ -263,6 +264,7 @@ class Command(BaseCommand):
                 stage=GameStage.REGULAR,
                 played_on=fixture.date,
                 history=history,
+                foreign_rules=FOREIGN_RULES,
             )
             level.add(played.game)
             titles.add(played.game)

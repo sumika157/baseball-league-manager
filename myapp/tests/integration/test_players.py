@@ -97,8 +97,8 @@ class PlayerListColumnsTest(BaseCase):
         self._assert_aligned()
 
     def test_player_rows_match_the_header(self):
-        self.service.register_player(self.team.id, "山田", 10, "内野手")
-        self.service.register_player(self.team.id, "佐藤", 18, "投手")
+        self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        self.roster.register_player(self.team.id, "佐藤", 18, "投手")
         login_as_manager(self.client, self.team)
         self._assert_aligned()
 
@@ -113,7 +113,7 @@ class PlayerEditViewTest(BaseCase):
 
     def test_designated_hitter_keeps_position(self):
         """指名打者を編集しても投手に化けないこと（旧バグの再発防止）。"""
-        player = self.service.register_player(self.team.id, "大谷", 17, "指名打者")
+        player = self.roster.register_player(self.team.id, "大谷", 17, "指名打者")
 
         response = self.client.get(self._url(player.id))
 
@@ -121,7 +121,7 @@ class PlayerEditViewTest(BaseCase):
         self.assertContains(response, '<option value="指名打者" selected>', html=False)
 
     def test_update_basic_information(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
 
         self.client.post(
             self._url(player.id),
@@ -139,7 +139,7 @@ class PlayerEditViewTest(BaseCase):
 
     def test_stats_are_shown_but_not_editable(self):
         """成績は試合の集計結果なので、この画面からは変更できない。"""
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         give_batting(self.team, self.rival, player.id, BattingLine(at_bats=10, singles=3))
 
         # 打数を送っても無視される
@@ -156,7 +156,7 @@ class PlayerEditViewTest(BaseCase):
         self.assertEqual(self.service.get_player_detail(self.team.id, player.id).at_bats, 10)
 
     def test_totals_reflect_games(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         give_batting(self.team, self.rival, player.id, BattingLine(at_bats=4, singles=2), day=1)
         give_batting(self.team, self.rival, player.id, BattingLine(at_bats=6, home_runs=1), day=2)
 
@@ -166,7 +166,7 @@ class PlayerEditViewTest(BaseCase):
         self.assertAlmostEqual(detail.batting_average, 0.3)
 
     def test_retire_from_the_screen(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
 
         self.client.post(self._url(player.id), {"retire": "1"})
 
@@ -175,8 +175,8 @@ class PlayerEditViewTest(BaseCase):
         self.assertIsNotNone(stint.to_year)
 
     def test_duplicate_number_on_update_is_rejected(self):
-        self.service.register_player(self.team.id, "山田", 10, "内野手")
-        tanaka = self.service.register_player(self.team.id, "田中", 11, "外野手")
+        self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        tanaka = self.roster.register_player(self.team.id, "田中", 11, "外野手")
 
         self.client.post(
             self._url(tanaka.id),
@@ -198,7 +198,7 @@ class PlayerDetailViewTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         play_game(
             self.team,
             self.rival,
@@ -244,7 +244,7 @@ class PlayerDetailViewTest(BaseCase):
 
     def test_pitcher_rows_show_the_pitchers_own_decision(self):
         """投手には本人に付いた記録（勝・敗・Ｓ・Ｈ）を、ボックススコアと同じ印で出す。"""
-        ace = self.service.register_player(self.team.id, "エース", 18, "投手")
+        ace = self.roster.register_player(self.team.id, "エース", 18, "投手")
         give_pitching(
             self.team,
             self.rival,
@@ -252,7 +252,7 @@ class PlayerDetailViewTest(BaseCase):
             PitchingLine(innings=InningsPitched.from_notation("9.0"), wins=1),
             day=3,
         )
-        closer = self.service.register_player(self.team.id, "守護神", 22, "投手")
+        closer = self.roster.register_player(self.team.id, "守護神", 22, "投手")
         give_pitching(
             self.team,
             self.rival,
@@ -278,7 +278,7 @@ class PlayerDetailViewTest(BaseCase):
         self.assertEqual(profile.appearances, 2)
 
     def test_player_without_games(self):
-        other = self.service.register_player(self.team.id, "控え", 99, "内野手")
+        other = self.roster.register_player(self.team.id, "控え", 99, "内野手")
         response = self.client.get(reverse("player_detail", args=[self.team.id, other.id]))
 
         self.assertEqual(response.status_code, 200)
@@ -314,8 +314,8 @@ class PlayerDetailDerivedStatsTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.batter = self.service.register_player(self.team.id, "山田", 10, "内野手")
-        self.pitcher = self.service.register_player(self.team.id, "佐藤", 18, "投手")
+        self.batter = self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        self.pitcher = self.roster.register_player(self.team.id, "佐藤", 18, "投手")
         play_game(self.team, self.rival, day=1, batting={self.batter.id: self.BATTING})
         # 別の月・別の年にも出場させ、通算行・複数の月の行が出る形にする
         play_game(self.team, self.rival, month=5, day=1, batting={self.batter.id: BattingLine(at_bats=3, runs=1)})
@@ -430,7 +430,7 @@ class PlayerProfileTest(BaseCase):
     """選手のプロフィール項目。"""
 
     def test_profile_survives_the_round_trip(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         orm_models.Player.objects.filter(id=player.id).update(
             birth_date="1998-03-15",
             throws="右",
@@ -448,13 +448,13 @@ class PlayerProfileTest(BaseCase):
         self.assertEqual(saved.profile.birthplace, "大阪府")
 
     def test_profile_is_optional(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         saved = DjangoTeamRepository(WorldScope.real()).find_by_id(self.team.id).find_player(player.id)
 
         self.assertTrue(saved.profile.is_empty)
 
     def test_amateur_career_survives_the_round_trip(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         orm_models.Player.objects.filter(id=player.id).update(
             high_school="甲子園高校",
             university="六大学",
@@ -466,7 +466,7 @@ class PlayerProfileTest(BaseCase):
         self.assertEqual(saved.profile.amateur_path, "甲子園高校 → 六大学 → ○○重工")
 
     def test_name_kana_and_back_name_reach_the_player_page(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         orm_models.Player.objects.filter(id=player.id).update(name_kana="ヤマダタロウ", back_name="T.YAMADA")
 
         profile = self.service.get_player_profile(self.team.id, player.id)
@@ -475,7 +475,7 @@ class PlayerProfileTest(BaseCase):
         self.assertEqual(profile.back_name, "T.YAMADA")
 
     def test_name_kana_and_back_name_appear_on_the_page(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         orm_models.Player.objects.filter(id=player.id).update(name_kana="ヤマダタロウ", back_name="T.YAMADA")
 
         body = self.client.get(reverse("player_detail", args=[self.team.id, player.id])).content.decode()
@@ -485,7 +485,7 @@ class PlayerProfileTest(BaseCase):
 
     def test_page_without_kana_or_back_name_stays_plain(self):
         """未入力の選手に空のルビや区切り記号を出さない。"""
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
 
         body = self.client.get(reverse("player_detail", args=[self.team.id, player.id])).content.decode()
 
@@ -494,7 +494,7 @@ class PlayerProfileTest(BaseCase):
 
     def test_kana_identical_to_the_name_is_not_shown_as_ruby(self):
         """カタカナ名の選手（外国人など）は名前と読みが同じになるため、ルビを出さない。"""
-        player = self.service.register_player(self.team.id, "デイミアン・ベル", 42, "外野手")
+        player = self.roster.register_player(self.team.id, "デイミアン・ベル", 42, "外野手")
         orm_models.Player.objects.filter(id=player.id).update(name_kana="デイミアン・ベル")
 
         body = self.client.get(reverse("player_detail", args=[self.team.id, player.id])).content.decode()
@@ -503,10 +503,10 @@ class PlayerProfileTest(BaseCase):
 
     def test_name_kana_and_back_name_survive_an_aggregate_save(self):
         """集約経由の保存で、ドメインが知らない項目として消えないこと。"""
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         orm_models.Player.objects.filter(id=player.id).update(name_kana="ヤマダタロウ", back_name="T.YAMADA")
 
-        self.service.update_player(
+        self.roster.update_player(
             team_id=self.team.id, player_id=player.id, name="山田", number=11, position_label="内野手"
         )
 
@@ -516,7 +516,7 @@ class PlayerProfileTest(BaseCase):
 
     def test_nationality_reaches_the_player_page(self):
         """国籍と外国人枠は選手一覧にしか出ていなかった（本人のページに無かった）。"""
-        player = self.service.register_player(self.team.id, "デイミアン・ベル", 42, "外野手")
+        player = self.roster.register_player(self.team.id, "デイミアン・ベル", 42, "外野手")
         orm_models.Player.objects.filter(id=player.id).update(nationality="アメリカ合衆国", is_foreign_player=True)
 
         response = self.client.get(reverse("player_detail", args=[self.team.id, player.id]))
@@ -526,7 +526,7 @@ class PlayerProfileTest(BaseCase):
         self.assertContains(response, "外国人")
 
     def test_domestic_player_has_no_nationality_row_or_badge(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
 
         response = self.client.get(reverse("player_detail", args=[self.team.id, player.id]))
 
@@ -534,20 +534,20 @@ class PlayerProfileTest(BaseCase):
         self.assertNotContains(response, "外国人")
 
     def test_captain_badge_appears_on_the_player_page(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
-        self.service.appoint_captain(self.team.id, player.id)
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        self.roster.appoint_captain(self.team.id, player.id)
 
         response = self.client.get(reverse("player_detail", args=[self.team.id, player.id]))
 
         self.assertContains(response, "主将")
 
     def test_player_without_captaincy_has_no_badge(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
 
         self.assertNotContains(self.client.get(reverse("player_detail", args=[self.team.id, player.id])), "主将")
 
     def test_amateur_career_appears_on_the_player_page(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         orm_models.Player.objects.filter(id=player.id).update(high_school="甲子園高校")
 
         response = self.client.get(reverse("player_detail", args=[self.team.id, player.id]))
@@ -556,14 +556,14 @@ class PlayerProfileTest(BaseCase):
         self.assertContains(response, "甲子園高校")
 
     def test_player_without_amateur_career(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
 
         profile = self.service.get_player_profile(self.team.id, player.id)
 
         self.assertEqual(profile.amateur_career, [])
 
     def test_admin_has_the_amateur_career_section(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         self.client.force_login(User.objects.create_superuser(username="am", password="x"))
 
         response = self.client.get(f"/admin/myapp/player/{player.id}/change/")
@@ -574,7 +574,7 @@ class PlayerProfileTest(BaseCase):
                 self.assertContains(response, field)
 
     def test_admin_edit_page_has_the_profile_section(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         self.client.force_login(User.objects.create_superuser(username="root", password="x"))
 
         response = self.client.get(f"/admin/myapp/player/{player.id}/change/")
@@ -589,9 +589,9 @@ class PlayerSearchTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.yamada = self.service.register_player(self.team.id, "山田太郎", 10, "内野手")
-        self.yamamoto = self.service.register_player(self.team.id, "山本次郎", 11, "投手")
-        self.tanaka = self.service.register_player(self.rival.id, "田中三郎", 7, "外野手")
+        self.yamada = self.roster.register_player(self.team.id, "山田太郎", 10, "内野手")
+        self.yamamoto = self.roster.register_player(self.team.id, "山本次郎", 11, "投手")
+        self.tanaka = self.roster.register_player(self.rival.id, "田中三郎", 7, "外野手")
         self.url = reverse("player_search")
 
     def _search(self, keyword):
@@ -614,7 +614,7 @@ class PlayerSearchTest(BaseCase):
 
     def test_retired_players_are_found(self):
         """退団した選手も探せる。経歴を確認したい場面があるため。"""
-        self.service.retire_player(self.team.id, self.yamada.id)
+        self.roster.retire_player(self.team.id, self.yamada.id)
 
         row = next(r for r in self._search("山田") if r.name == "山田太郎")
 
@@ -622,7 +622,7 @@ class PlayerSearchTest(BaseCase):
         self.assertEqual(row.team_name, "テストチーム")
 
     def test_transferred_player_shows_the_current_team(self):
-        self.service.transfer_player(
+        self.roster.transfer_player(
             self.yamada.id,
             from_team_id=self.team.id,
             to_team_id=self.rival.id,

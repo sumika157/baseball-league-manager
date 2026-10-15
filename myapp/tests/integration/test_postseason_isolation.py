@@ -20,6 +20,7 @@ from django.urls import reverse
 
 from myapp.application.dto import LineupSlot
 from myapp.application.game_recording import GameRecordingService
+from myapp.application.pennant_awards import derive_awards
 from myapp.domain import services as domain_services
 from myapp.domain.entities import Game
 from myapp.domain.value_objects import FieldingPosition, GameHeader, GameStage, LineupEntry, Season
@@ -44,6 +45,7 @@ from myapp.infrastructure.repositories import (
     batting_totals,
 )
 from myapp.infrastructure.scoping import StageFilter
+from myapp.presentation.views import build_world_view_service
 
 from ..helpers import build_scorebook, to_plate_appearances
 from .world_case import YEAR, WorldCase
@@ -150,6 +152,8 @@ class PostseasonGamesDoNotCountTest(PostseasonCase):
             "集約の試合": [game.id for game in repository.find_all(YEAR)],
             "球団の試合（集約）": [game.id for game in repository.find_by_team(team, YEAR)],
             "対戦の試合（集約）": [game.id for game in repository.find_between_teams({team, rival}, YEAR)],
+            # 締める処理が書く表彰（#248）も、タイトルと同じく公式戦だけから導く
+            "表彰の導出": derive_awards(build_world_view_service(self.world_id), YEAR, [self.pennant_league.id]),
         }
 
     def test_the_postseason_game_would_change_the_numbers_if_it_counted(self):

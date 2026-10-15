@@ -1,11 +1,12 @@
 """戦力外の「実績の加点」（`release.track_record_credit`）と、その材料（`TrackRecord.of`）。DB 不要。
 
-2026-10-12 ユーザー決定: ベテランの能力で測れない価値（生え抜き・その球団での在籍年数・通算の実績・主将）を
-残す価値に足す。効果は外されにくくなるだけ。
+2026-10-12 ユーザー決定: ベテランの能力で測れない価値（生え抜き・その球団での在籍年数・通算の実績・主将・タイトル）を
+残す価値に足す。効果は外されにくくなるだけ。タイトルの数は表彰（#248）から数える。
 """
 
 from __future__ import annotations
 
+import math
 import unittest
 from dataclasses import replace
 
@@ -20,10 +21,14 @@ from myapp.domain.pennant.release import (
     MAX_TRACK_RECORD_CREDIT,
     SAVES_PER_POINT,
     SEASON_CREDIT,
+    TITLE_CREDIT,
     WINS_PER_POINT,
+    ability_value,
     career_points,
     foreign_prospect_value,
+    foreign_value,
     keep_value,
+    title_credit,
     track_record_credit,
 )
 from myapp.domain.value_objects import (
@@ -53,7 +58,9 @@ def stint(team_id: int, from_year: int, to_year: int | None = None, via: Acquisi
     return Stint(team_id=team_id, number=JerseyNumber("10"), from_year=from_year, to_year=to_year, acquired_via=via)
 
 
-def record_of(career: list[Stint], *, hits: int = 0, wins: int = 0, captain: bool = False) -> TrackRecord:
+def record_of(
+    career: list[Stint], *, hits: int = 0, wins: int = 0, captain: bool = False, titles: int = 0
+) -> TrackRecord:
     return TrackRecord.of(
         team_id=TEAM,
         career=career,
@@ -61,6 +68,7 @@ def record_of(career: list[Stint], *, hits: int = 0, wins: int = 0, captain: boo
         batting=BattingLine(at_bats=hits, singles=hits),
         pitching=PitchingLine(wins=wins),
         is_captain=captain,
+        titles=titles,
     )
 
 
@@ -95,8 +103,8 @@ class TrackRecordOfTest(unittest.TestCase):
                 self.assertFalse(record_of(career).homegrown)
 
     def test_career_totals_and_captain_are_copied(self) -> None:
-        record = record_of([stint(TEAM, YEAR)], hits=120, wins=7, captain=True)
-        self.assertEqual((record.hits, record.wins, record.is_captain), (120, 7, True))
+        record = record_of([stint(TEAM, YEAR)], hits=120, wins=7, captain=True, titles=2)
+        self.assertEqual((record.hits, record.wins, record.is_captain, record.titles), (120, 7, True, 2))
 
 
 class TrackRecordCreditTest(unittest.TestCase):
@@ -115,6 +123,19 @@ class TrackRecordCreditTest(unittest.TestCase):
     def test_the_credit_is_capped(self) -> None:
         legend = TrackRecord(homegrown=True, seasons=15, hits=2000, home_runs=400, is_captain=True)
         self.assertEqual(track_record_credit(legend), MAX_TRACK_RECORD_CREDIT)
+
+    def test_each_title_adds_the_title_credit(self) -> None:
+        """タイトル1つにつき `TITLE_CREDIT` 点（同じ年の別の部門・同率の受賞も1つ）。"""
+        base = TrackRecord(seasons=4)
+        for titles in (1, 2):
+            with self.subTest(titles=titles):
+                self.assertAlmostEqual(
+                    track_record_credit(replace(base, titles=titles)) - track_record_credit(base),
+                    TITLE_CREDIT * titles,
+                )
+
+    def test_titles_stay_under_the_cap(self) -> None:
+        self.assertEqual(track_record_credit(TrackRecord(titles=20)), MAX_TRACK_RECORD_CREDIT)
 
 
 class CreditInReleasesTest(unittest.TestCase):
@@ -144,7 +165,7 @@ class CreditInReleasesTest(unittest.TestCase):
         self.assertIn(201, releases([*players, faded]))
 
     def test_the_foreign_replacement_ignores_the_record(self) -> None:
-        """外国人の入れ替えは能力で測れる価値だけで比べる（実績があっても、見込みを下回れば入れ替える）。
+        """外国人の入れ替えにタイトル以外の実績は足さない（通算成績や在籍年数があっても、見込みを下回れば入れ替える）。
 
         実績を足すと、世界の中で活躍した外国人がほとんど入れ替わらなくなる（実測で外国人の戦力外が約半分に減った）。
         """
@@ -157,6 +178,33 @@ class CreditInReleasesTest(unittest.TestCase):
         )
         self.assertGreater(keep_value(star, year=YEAR, start_year=START_YEAR), prospect)
         self.assertEqual(releases([*roster(55), newcomer, star]), (101, 102))
+
+    def test_titles_count_in_the_foreign_replacement(self) -> None:
+        """外国人の比較にはタイトルの加点だけを足す（2026-10-15 ユーザー決定。#248）。タイトルを取った外国人は残る。"""
+        prospect = foreign_prospect_value(Position.PITCHER)
+        value = round(prospect - min(1.0, MAX_TRACK_RECORD_CREDIT / 2))
+        newcomer = member(101, position=Position.PITCHER, value=value, age=30, foreign=True)
+        titles = math.ceil(2 / TITLE_CREDIT)
+        champion = replace(
+            member(102, position=Position.PITCHER, value=value, age=30, foreign=True),
+            track_record=TrackRecord(seasons=5, wins=60, titles=titles),
+        )
+        self.assertAlmostEqual(
+            foreign_value(champion, year=YEAR, start_year=START_YEAR),
+            ability_value(champion, year=YEAR, start_year=START_YEAR)
+            + min(MAX_TRACK_RECORD_CREDIT, title_credit(champion.track_record)),
+        )
+        self.assertEqual(releases([*roster(55), newcomer, champion]), (101,))
+
+    def test_the_foreign_title_credit_is_capped(self) -> None:
+        legend = replace(
+            member(102, position=Position.PITCHER, value=40, age=30, foreign=True), track_record=TrackRecord(titles=50)
+        )
+        self.assertAlmostEqual(
+            foreign_value(legend, year=YEAR, start_year=START_YEAR)
+            - ability_value(legend, year=YEAR, start_year=START_YEAR),
+            MAX_TRACK_RECORD_CREDIT,
+        )
 
 
 class CreditIsTheOnlyChangeTest(unittest.TestCase):

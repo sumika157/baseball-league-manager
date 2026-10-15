@@ -16,7 +16,15 @@ from myapp.domain.pennant.world import (
     earliest_start_year,
     league_priority,
 )
-from myapp.domain.value_objects import ContractStatus, JerseyNumber, Position, Profile, RosterLimits, Season
+from myapp.domain.value_objects import (
+    ContractStatus,
+    ForeignPlayerRules,
+    JerseyNumber,
+    Position,
+    Profile,
+    RosterLimits,
+    Season,
+)
 
 UNLIMITED = RosterLimits.UNLIMITED
 
@@ -150,8 +158,7 @@ class ForkTest(unittest.TestCase):
         league = League(
             name="セ",
             id=3,
-            foreign_player_roster_limit=4,
-            foreign_player_game_limit=2,
+            foreign_rules=ForeignPlayerRules(active=3, pitchers=2, batters=None),
             display_order=5,
             registered_player_limit=65,
         )
@@ -162,12 +169,11 @@ class ForkTest(unittest.TestCase):
         self.assertEqual(
             (
                 copy.name,
-                copy.foreign_player_roster_limit,
-                copy.foreign_player_game_limit,
+                copy.foreign_rules,
                 copy.display_order,
                 copy.registered_player_limit,
             ),
-            ("セ", 4, 2, 1, 65),
+            ("セ", ForeignPlayerRules(active=3, pitchers=2, batters=None), 1, 65),
         )
 
     def test_fork_team_copies_the_stadium_and_order_but_starts_empty(self):
@@ -245,8 +251,8 @@ class ForkTest(unittest.TestCase):
         with self.assertRaises(DuplicateJerseyNumber):
             fork_roster(source, target, start_year=2026)
 
-    def test_the_foreign_player_quota_is_not_checked(self):
-        """枠を超えている分岐元も、そのまま写す（スナップショット）。"""
+    def test_any_number_of_foreign_players_is_copied(self):
+        """外国人の保有は縛らない（協約第82条の2）ので、何人いてもそのまま写す（スナップショット）。"""
         source = Team(name="多国籍", league_id=1, id=11)
         for number in range(1, 8):
             player = source.add_player(
@@ -258,7 +264,7 @@ class ForkTest(unittest.TestCase):
 
         fork_roster(source, target, start_year=2026)
 
-        self.assertEqual(target.foreign_player_count, 7)
+        self.assertEqual(sum(p.profile.is_foreign_player for p in target.active_players), 7)
 
     def test_the_contract_status_is_copied(self):
         """育成選手は育成のまま写す（育成の3桁の背番号を、支配下としては写せない）。昇格した選手は支配下。"""

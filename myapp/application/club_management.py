@@ -24,14 +24,19 @@ from ..domain.pennant.club_plan import (
     PlanSection,
     ResolvedClub,
     arrange_lineup,
+    foreign_counts,
     members_of,
     resolve_club,
-    strictest_game_limit,
     unfilled_position,
 )
 from ..domain.pennant.season import ratings_year
 from ..domain.repositories import ClubPlanRepository, FixtureRepository, RatingsRepository, WorldRepository
-from ..domain.simulation.fatigue import FATIGUE_WINDOW_DAYS, PitchingHistory
+from ..domain.simulation.fatigue import (
+    FATIGUE_WINDOW_DAYS,
+    FatigueLevel,
+    PitchingHistory,
+    pregame_fatigue_points,
+)
 from ..domain.simulation.manager import (
     LINEUP_SIZE,
     MIN_ACTIVE_PITCHERS,
@@ -43,7 +48,7 @@ from ..domain.simulation.manager import (
     plan_pitching_staff,
 )
 from ..domain.simulation.ratings import AVERAGE_RATING, PitcherRatings
-from ..domain.value_objects import Position
+from ..domain.value_objects import ForeignPlayerRules, Position
 from .dto import (
     ClubLimitsView,
     ClubLineupRow,
@@ -103,10 +108,11 @@ class ClubManagementService:
         return self._situation(team_id).view(ClubPlan(team_id=team_id))
 
     def pitching_usage(self, view: ClubPlanView) -> ClubPitchingUsage:
-        """投手陣の状態（直近の登板・前回の先発・次の試合日に投げられるか）。`view` は `view()` の結果。
+        """投手陣の状態（直近の登板・前回の先発・次の試合日に投げられるか・疲労の区分）。`view` は `view()` の結果。
 
         次の試合日は受け持つ球団の未消化の対戦の最初の日。疲労は保存せず、直近の登板から導く
-        （進めるときと同じ `PitchingHistory`）。日程が残っていなければ、状態は既定で返す。
+        （進めるときと同じ `PitchingHistory`）。疲労の区分はエンジンと同じ式（`pregame_fatigue_points`）で、
+        ローテーションは先発したら、抑えと救援陣は救援で投げたらの区分。日程が残っていなければ、状態は既定で返す。
         """
         team_id = view.team_id
         next_game_on = self._fixtures.first_date(team_id)
@@ -126,28 +132,31 @@ class ClubManagementService:
             }
         players = {row.player_id: row for row in view.players}
 
-        def usage_of(player_id: int) -> ClubPitcherUsage:
+        def usage_of(player_id: int, *, as_starter: bool) -> ClubPitcherUsage:
             row = players[player_id]
             if next_game_on is None:
-                return ClubPitcherUsage(player_id, row.name, row.is_foreign, (), None, True)
+                return ClubPitcherUsage(player_id, row.name, row.is_foreign, (), None, True, FatigueLevel.NONE)
+            # 投手陣に並ぶのは能力のある投手だけ（`view` の材料）。念のため無ければ平均で数える
+            stamina = staminas.get(player_id, AVERAGE_RATING)
+            points = pregame_fatigue_points(
+                history.workload(player_id, next_game_on), as_starter=as_starter, stamina=stamina
+            )
             return ClubPitcherUsage(
                 player_id=player_id,
                 name=row.name,
                 is_foreign=row.is_foreign,
                 pitched_recently=tuple(history.pitched_on(player_id, day) for day in recent_days),
                 days_since_start=history.days_since_start(player_id, next_game_on),
-                # 投手陣に並ぶのは能力のある投手だけ（`view` の材料）。念のため無ければ平均で数える
-                can_pitch=history.can_pitch_on(
-                    player_id, next_game_on, stamina=staminas.get(player_id, AVERAGE_RATING)
-                ),
+                can_pitch=history.can_pitch_on(player_id, next_game_on, stamina=stamina),
+                fatigue=FatigueLevel.from_points(points),
             )
 
         return ClubPitchingUsage(
             next_game_on=next_game_on,
             recent_days=recent_days,
-            rotation=tuple(usage_of(player_id) for player_id in view.rotation_ids),
-            closer=usage_of(view.closer_id) if view.closer_id is not None else None,
-            bullpen=tuple(usage_of(player_id) for player_id in view.bullpen_ids),
+            rotation=tuple(usage_of(player_id, as_starter=True) for player_id in view.rotation_ids),
+            closer=usage_of(view.closer_id, as_starter=False) if view.closer_id is not None else None,
+            bullpen=tuple(usage_of(player_id, as_starter=False) for player_id in view.bullpen_ids),
         )
 
     # --- 上書きする ---
@@ -190,7 +199,7 @@ class ClubManagementService:
 
         AI のオーダーは空いた枠を位置を問わず埋めるので、手動の規則（登録位置が就ける位置だけ）を
         満たさないことがある。選手と打順はそのままに守備位置を割り直し、それでも足りなければ1軍の控えから
-        入れ替える（外国人は出場枠まで）。組めないときは理由を返す（汎用の検査エラーにしない）。
+        入れ替える（外国人は試合の外国人枠まで）。組めないときは理由を返す（汎用の検査エラーにしない）。
         """
         situation = self._situation(team_id)
         plan = self._plans.find_by_team(team_id)
@@ -198,18 +207,18 @@ class ClubManagementService:
         resolved = resolve_club(plan, situation.pool, situation.limits)
         proposed = [LineupChoice(row.player_id, row.position) for row in situation.view(plan, resolved).lineup]
         bench = [situation.members[b.player_id] for b in resolved.roster.batters]
-        fitted = arrange_lineup(
-            proposed, situation.members, bench=bench, foreign_game_limit=situation.limits.foreign_game_limit
-        )
+        fitted = arrange_lineup(proposed, situation.members, bench=bench, foreign_rules=situation.limits.game_foreign)
         if fitted is None:
             gap = unfilled_position(bench)
             if gap is not None:
                 raise InvalidClubPlan(
                     f"1軍に{gap.full_name}を守れる野手が足りないため、手動のオーダーを組めません。1軍登録を見直してください。"
                 )
-            if arrange_lineup(proposed, situation.members, bench=bench) is not None:
+            # 外国人枠を外して組めるか（組めるなら、組めない理由は外国人枠）
+            unlimited = ForeignPlayerRules.UNLIMITED
+            if arrange_lineup(proposed, situation.members, bench=bench, foreign_rules=unlimited) is not None:
                 raise InvalidClubPlan(
-                    "外国人選手の出場枠の範囲では、守備位置を満たすオーダーを組めません。1軍登録を見直してください。"
+                    "試合の外国人枠の範囲では、守備位置を満たすオーダーを組めません。1軍登録を見直してください。"
                 )
             raise InvalidClubPlan(
                 "自動のオーダーと1軍の控えでは、守備位置を満たすオーダーを組めません。1軍登録を見直してください。"
@@ -270,10 +279,10 @@ class ClubManagementService:
         found = self._ratings.find_by_players([player.player_id for player in team.players], year)
         ratings = {item.player_id: item.ratings for item in found}
         pool = pool_of(team, ratings)
-        # 出場枠は、進めるときと同じく世界のリーグで最も厳しい値（交流戦でも組めるように）
+        # 試合の外国人枠は、進めるときと同じく世界のリーグで最も厳しい規則（交流戦でも組めるように）
         limits = ClubLimits(
-            foreign_roster_limit=team.foreign_roster_limit,
-            foreign_game_limit=strictest_game_limit(t.foreign_game_limit for t in teams),
+            active_foreign=team.foreign_rules,
+            game_foreign=ForeignPlayerRules.strictest(t.foreign_rules for t in teams),
         )
         return _Situation(
             team.team_id, team.name, year, pool, limits, frozenset(player.player_id for player in team.players)
@@ -329,7 +338,7 @@ class _Situation:
             lineup_slots = orders.lineup
         else:
             try:
-                lineup_slots = tuple(choose_lineup(roster.batters, ForeignQuota(limit=self.limits.foreign_game_limit)))
+                lineup_slots = tuple(choose_lineup(roster.batters, ForeignQuota(rules=self.limits.game_foreign)))
             except InvalidRoster:
                 lineup_slots = ()
         if orders is not None and orders.staff is not None:
@@ -341,6 +350,7 @@ class _Situation:
                 staff = None
 
         batter_count = len(roster.batters)
+        foreign_pitchers, foreign_batters = foreign_counts(self.members[player_id] for player_id in active_ids)
         return ClubPlanView(
             team_id=self.team_id,
             team_name=self.team_name,
@@ -359,8 +369,7 @@ class _Situation:
             bullpen_ids=tuple(p.player_id for p in staff.setup + staff.middle) if staff is not None else (),
             limits=ClubLimitsView(
                 active_size=self.limits.active_size,
-                foreign_roster_limit=self.limits.foreign_roster_limit,
-                foreign_game_limit=self.limits.foreign_game_limit,
+                foreign=self.limits.active_foreign,
                 lineup_size=LINEUP_SIZE,
                 rotation_size=ROTATION_SIZE,
                 min_rotation_size=MIN_ROTATION_SIZE,
@@ -372,7 +381,9 @@ class _Situation:
                 batters=batter_count,
                 pitchers=len(roster.pitchers),
                 catchers=sum(b.position is Position.CATCHER for b in roster.batters),
-                foreign=sum(self.members[player_id].is_foreign for player_id in active_ids),
+                foreign=foreign_pitchers + foreign_batters,
+                foreign_pitchers=foreign_pitchers,
+                foreign_batters=foreign_batters,
             ),
             saved_active_ids=plan.active_ids,
             saved_lineup=(

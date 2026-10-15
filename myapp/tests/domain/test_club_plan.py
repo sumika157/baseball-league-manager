@@ -1,7 +1,7 @@
 """球団の編成（`ClubPlan`）の単体テスト。Django も DB も使わない。
 
 守りたいこと:
-- 上書きを決めるときに、不変条件（1軍29人まで・外国人の登録枠・在籍している選手だけ・オーダー9人で
+- 上書きを決めるときに、不変条件（1軍29人まで・外国人枠（計・投手・野手）・在籍している選手だけ・オーダー9人で
   守備位置が9つ・捕手の枠は捕手・ローテーションは1軍の投手）を検査する
 - 検査を通らなかった上書きは入らない（途中まで書き換えない）
 - 決めたあとにロスターが変わって使えなくなった上書きは、例外にせず**その区画だけ自動に落ち**、理由を返す
@@ -20,9 +20,9 @@ from myapp.domain.pennant.club_plan import (
     LineupChoice,
     PlanSection,
     arrange_lineup,
+    lineup_capacity,
     members_of,
     resolve_club,
-    strictest_game_limit,
     unfilled_position,
 )
 from myapp.domain.simulation.manager import (
@@ -36,17 +36,23 @@ from myapp.domain.simulation.manager import (
     choose_lineup,
     plan_pitching_staff,
 )
-from myapp.domain.value_objects import FieldingPosition, Position
+from myapp.domain.value_objects import FieldingPosition, ForeignPlayerRules, Position
 
 from .test_ai_manager import full_pool
 
 FP = FieldingPosition
-LIMITS = ClubLimits()
+UNLIMITED = ForeignPlayerRules.UNLIMITED
+LIMITS = ClubLimits(active_foreign=UNLIMITED, game_foreign=UNLIMITED)
 # 手動のローテーション（下限の5人。1軍にいる投手）
 ROTATION = [110, 111, 112, 113, 114]
 # 守備位置の枠を満たす野手9人（捕1・内4・外3・指名打者1）と、もう1人（外野手）
 NINE = [1, 4, 5, 6, 7, 12, 13, 14, 19]
 TEN = [*NINE, 15]
+
+
+def total(limit: int | None) -> ForeignPlayerRules:
+    """計の枠だけの外国人枠（投手・野手の内訳は無制限）。"""
+    return ForeignPlayerRules(active=limit, pitchers=None, batters=None)
 
 
 def ids(roster):
@@ -58,7 +64,7 @@ class ClubPlanCase(TestCase):
         # 野手20人（1〜3 捕手・4〜11 内野・12〜18 外野・19〜20 指名打者）と投手19人（101〜119）。能力は若い番号が高い
         self.pool = full_pool()
         self.members = members_of(self.pool)
-        self.auto = choose_active_roster(self.pool)
+        self.auto = choose_active_roster(self.pool, rules=ForeignPlayerRules.UNLIMITED)
         self.active = ids(self.auto)
         self.plan = ClubPlan(team_id=1)
 
@@ -90,14 +96,33 @@ class ActiveRosterInvariantTest(ClubPlanCase):
         with self.assertRaisesRegex(InvalidClubPlan, "重複"):
             self.plan.set_active([*chosen, chosen[0]], roster=self.members, limits=LIMITS)
 
-    def test_the_foreign_roster_limit_is_enforced(self):
+    def test_the_active_foreign_rules_are_enforced(self):
         pool = full_pool(foreign_ids={1, 4, 5, 101, 102})
         members = members_of(pool)
         chosen = [1, 4, 5, 101, 102, *range(6, 15), *range(103, 114)]
-        limits = ClubLimits(foreign_roster_limit=4)
+        limits = ClubLimits(active_foreign=total(4), game_foreign=UNLIMITED)
         with self.assertRaises(ForeignPlayerQuotaExceeded):
             self.plan.set_active(chosen, roster=members, limits=limits)
-        self.plan.set_active(chosen, roster=members, limits=ClubLimits(foreign_roster_limit=5))
+        self.plan.set_active(
+            chosen, roster=members, limits=ClubLimits(active_foreign=total(5), game_foreign=UNLIMITED)
+        )
+
+    def test_the_agreement_refuses_a_fourth_foreign_pitcher_batter_or_a_fifth_foreigner(self):
+        """協約第82条の2: 1軍の外国人は計4人、うち投手・野手それぞれ3人まで（登録位置で数える）。"""
+        limits = ClubLimits(active_foreign=ForeignPlayerRules.NPB, game_foreign=UNLIMITED)
+        batters = [1, *range(4, 15)]
+        cases = {
+            "投手3人まで": ({101, 102, 103, 104}, "投手3人までです（4人）"),
+            "野手3人まで": ({4, 5, 6, 7}, "野手3人までです（4人）"),
+            "計4人まで": ({4, 5, 6, 101, 102}, "計4人までです（5人）"),
+        }
+        for label, (foreign, message) in cases.items():
+            with self.subTest(label):
+                members = members_of(full_pool(foreign_ids=foreign))
+                with self.assertRaisesRegex(ForeignPlayerQuotaExceeded, rf"1軍登録の外国人選手は{message}"):
+                    ClubPlan(team_id=1).set_active([*batters, *range(101, 114)], roster=members, limits=limits)
+        members = members_of(full_pool(foreign_ids={4, 5, 101, 102}))
+        self.plan.set_active([*batters, *range(101, 114)], roster=members, limits=limits)  # 投2・野2は通る
 
     def test_a_roster_that_cannot_field_a_lineup_is_refused(self):
         pitchers_only = [pid for pid in self.members if pid > 100]
@@ -151,10 +176,10 @@ class LineupInvariantTest(ClubPlanCase):
         with self.assertRaisesRegex(InvalidClubPlan, "投手"):
             self.set_lineup(choices)
 
-    def test_the_foreign_game_limit_is_enforced(self):
+    def test_the_game_foreign_rules_are_enforced(self):
         pool = full_pool(foreign_ids={1, 4, 5})
         members = members_of(pool)
-        roster = choose_active_roster(pool)
+        roster = choose_active_roster(pool, rules=ForeignPlayerRules.UNLIMITED)
         lineup = [LineupChoice(s.batter.player_id, s.position) for s in choose_lineup(roster.batters, ForeignQuota())]
         plan = ClubPlan(team_id=1)
         foreign_in_lineup = sum(members[c.player_id].is_foreign for c in lineup)
@@ -164,7 +189,7 @@ class LineupInvariantTest(ClubPlanCase):
                 lineup,
                 roster=members,
                 active_ids=ids(roster),
-                limits=ClubLimits(foreign_game_limit=foreign_in_lineup - 1),
+                limits=ClubLimits(active_foreign=UNLIMITED, game_foreign=total(foreign_in_lineup - 1)),
             )
 
 
@@ -446,19 +471,28 @@ class ResolveTest(ClubPlanCase):
 class PlanThatWouldStopTheSeasonTest(ClubPlanCase):
     """GM の操作だけで「進める」が例外で止まる組み合わせを、決めるときに弾くか、その日だけ自動に落とす（再発防止）。"""
 
-    def test_a_roster_whose_lineup_cannot_fit_the_foreign_game_limit_is_refused(self):
-        # 野手9人のうち外国人4人。登録枠（5）は満たすが、出場枠（3）ではスタメン9人を組めない
+    def test_a_roster_whose_lineup_cannot_fit_the_game_foreign_rules_is_refused(self):
+        # 野手9人のうち外国人4人。1軍の枠（計5）は満たすが、試合の枠（計3）ではスタメン9人を組めない
         members = members_of(full_pool(foreign_ids={4, 5, 6, 7}))
-        limits = ClubLimits(foreign_roster_limit=5, foreign_game_limit=3)
+        limits = ClubLimits(active_foreign=total(5), game_foreign=total(3))
         with self.assertRaisesRegex(ForeignPlayerQuotaExceeded, "スタメン9人を組めません"):
             self.plan.set_active([*NINE, *range(101, 111)], roster=members, limits=limits)
         self.plan.set_active([*TEN, *range(101, 111)], roster=members, limits=limits)
 
     def test_a_foreign_pitcher_who_may_start_takes_one_game_slot(self):
         members = members_of(full_pool(foreign_ids={4, 5, 6, 7, 101}))
-        limits = ClubLimits(foreign_roster_limit=5, foreign_game_limit=3)
+        limits = ClubLimits(active_foreign=total(5), game_foreign=total(3))
         with self.assertRaisesRegex(ForeignPlayerQuotaExceeded, "スタメン9人を組めません"):
             self.plan.set_active([*TEN, *range(101, 111)], roster=members, limits=limits)
+
+    def test_lineup_capacity_counts_the_batter_limit_and_the_total_left_after_a_foreign_starter(self):
+        """スタメンに入れる外国人の野手は、野手の枠と「計の枠 − 外国人の先発」の小さいほうまで。"""
+        members = [m for pid, m in members_of(full_pool(foreign_ids={4, 5, 6, 7, 101})).items() if pid in {*TEN, 101}]
+
+        # 野手10人のうち外国人4人。NPB は野手3人・計4人（先発の1人を引いて3人）なので、10 − 4 + 3
+        self.assertEqual(lineup_capacity(members, ForeignPlayerRules.NPB), 9)
+        self.assertEqual(lineup_capacity(members, total(3)), 8, "計3人なら、先発の1人を引いて野手は2人")
+        self.assertEqual(lineup_capacity(members, ForeignPlayerRules.UNLIMITED), 10)
 
     def test_a_roster_without_a_catcher_is_refused(self):
         with self.assertRaisesRegex(InvalidClubPlan, "捕手"):
@@ -480,7 +514,7 @@ class PlanThatWouldStopTheSeasonTest(ClubPlanCase):
         lineup = self.auto_lineup()
         foreign = {choice.player_id for choice in lineup[:3]}
         pool = full_pool(foreign_ids={*foreign, 101, 102, 103, 104, 105})
-        limits = ClubLimits(foreign_game_limit=3)
+        limits = ClubLimits(active_foreign=UNLIMITED, game_foreign=total(3))
 
         blocked = resolve_club(
             ClubPlan(team_id=1, lineup=tuple(lineup), rotation=(101, 102, 103, 104, 105)), pool, limits
@@ -498,16 +532,20 @@ class PlanThatWouldStopTheSeasonTest(ClubPlanCase):
         assert kept.orders is not None and kept.orders.lineup is not None
         self.assertEqual([s.batter.player_id for s in kept.orders.lineup], [c.player_id for c in lineup])
 
-    def test_the_game_limit_is_the_strictest_in_the_world(self):
-        # 交流戦はホーム球団のリーグの枠で行うので、出場枠の違うリーグがあれば厳しい方で検査する
-        self.assertEqual(strictest_game_limit([4, None, 3]), 3)
-        self.assertIsNone(strictest_game_limit([None, None]))
+    def test_the_game_rules_are_the_strictest_in_the_world(self):
+        # 交流戦はホーム球団のリーグの枠で行うので、枠の違うリーグがあれば厳しい方で検査する
         members = members_of(full_pool(foreign_ids={4, 5, 6, 7}))
         roster = [*NINE, *range(101, 111)]
-        self.plan.set_active(roster, roster=members, limits=ClubLimits(foreign_game_limit=4))
+        self.plan.set_active(
+            roster, roster=members, limits=ClubLimits(active_foreign=UNLIMITED, game_foreign=total(4))
+        )
         with self.assertRaises(ForeignPlayerQuotaExceeded):
             self.plan.set_active(
-                roster, roster=members, limits=ClubLimits(foreign_game_limit=strictest_game_limit([4, 3]))
+                roster,
+                roster=members,
+                limits=ClubLimits(
+                    active_foreign=UNLIMITED, game_foreign=ForeignPlayerRules.strictest([total(4), total(3)])
+                ),
             )
 
     def test_a_club_without_pitchers_does_not_raise_while_resolving(self):
@@ -516,7 +554,11 @@ class PlanThatWouldStopTheSeasonTest(ClubPlanCase):
         source = full_pool(foreign_ids=foreign)
         pool = ClubRoster(team_id=source.team_id, name=source.name, batters=source.batters, pitchers=())
         try:
-            resolve_club(ClubPlan(team_id=1, lineup=tuple(lineup)), pool, ClubLimits(foreign_game_limit=3))
+            resolve_club(
+                ClubPlan(team_id=1, lineup=tuple(lineup)),
+                pool,
+                ClubLimits(active_foreign=UNLIMITED, game_foreign=total(3)),
+            )
         except InvalidRoster as error:  # pragma: no cover - 失敗したときに理由を読めるように
             self.fail(f"投手のいない球団でも、当てはめは例外にしない（試合を組めないのはエンジンが知らせる）: {error}")
 
@@ -572,7 +614,7 @@ class WeakerManualPlanIsRefusedTest(ClubPlanCase):
         lineup = self.auto_lineup()
         foreign_batters = {choice.player_id for choice in lineup[:3]}
         pool = full_pool(foreign_ids={*foreign_batters, 101})
-        limits = ClubLimits(foreign_game_limit=3)
+        limits = ClubLimits(active_foreign=UNLIMITED, game_foreign=total(3))
         plan = ClubPlan(team_id=1, lineup=tuple(lineup), closer_id=101)
 
         resolved = resolve_club(plan, pool, limits)
@@ -590,11 +632,15 @@ class WeakerManualPlanIsRefusedTest(ClubPlanCase):
         foreign_batters = {choice.player_id for choice in lineup[:3]}
         pool = full_pool(foreign_ids={*foreign_batters, 101})
         domestic = resolve_club(
-            ClubPlan(team_id=1, lineup=tuple(lineup), closer_id=102), pool, ClubLimits(foreign_game_limit=3)
+            ClubPlan(team_id=1, lineup=tuple(lineup), closer_id=102),
+            pool,
+            ClubLimits(active_foreign=UNLIMITED, game_foreign=total(3)),
         )
         self.assertEqual(domestic.fallbacks, ())
         room = resolve_club(
-            ClubPlan(team_id=1, lineup=tuple(lineup), closer_id=101), pool, ClubLimits(foreign_game_limit=4)
+            ClubPlan(team_id=1, lineup=tuple(lineup), closer_id=101),
+            pool,
+            ClubLimits(active_foreign=UNLIMITED, game_foreign=total(4)),
         )
         self.assertEqual(room.fallbacks, ())
 
@@ -648,13 +694,15 @@ class FieldingPositionsInTheActiveRosterTest(ClubPlanCase):
 
     def test_arrange_lineup_reassigns_only_when_needed(self):
         choices = self.nine_choices()
-        self.assertEqual(arrange_lineup(choices, self.members), choices, "すでに就ける位置ならそのまま")
+        self.assertEqual(
+            arrange_lineup(choices, self.members, foreign_rules=UNLIMITED), choices, "すでに就ける位置ならそのまま"
+        )
         wrong = [
             LineupChoice(c.player_id, FP.DESIGNATED_HITTER if c.position is FP.SHORTSTOP else c.position)
             for c in choices
         ]
         wrong[-1] = LineupChoice(wrong[-1].player_id, FP.SHORTSTOP)  # 指名打者の登録が遊撃
-        fitted = arrange_lineup(wrong, self.members)
+        fitted = arrange_lineup(wrong, self.members, foreign_rules=UNLIMITED)
         assert fitted is not None
         self.assertEqual([c.player_id for c in fitted], NINE, "選手と打順は変えない")
         for choice in fitted:
@@ -667,7 +715,7 @@ class FieldingPositionsInTheActiveRosterTest(ClubPlanCase):
         wrong = [LineupChoice(c.player_id, c.position) for c in choices]
         wrong[0], wrong[1] = LineupChoice(1, FP.FIRST_BASE), LineupChoice(4, FP.CATCHER)
 
-        fitted = arrange_lineup(wrong, self.members)
+        fitted = arrange_lineup(wrong, self.members, foreign_rules=UNLIMITED)
 
         assert fitted is not None
         self.assertEqual({c.player_id: c.position for c in fitted[2:]}, {c.player_id: c.position for c in choices[2:]})
@@ -678,14 +726,14 @@ class FieldingPositionsInTheActiveRosterTest(ClubPlanCase):
     def test_arrange_lineup_gives_up_when_the_nine_and_the_bench_cannot_cover_the_field(self):
         no_outfield = [1, 4, 5, 6, 7, 8, 9, 10, 11]
         choices = [LineupChoice(pid, pos) for pid, pos in zip(no_outfield, LINEUP_POSITION_ORDER, strict=True)]
-        self.assertIsNone(arrange_lineup(choices, self.members))
+        self.assertIsNone(arrange_lineup(choices, self.members, foreign_rules=UNLIMITED))
 
     def test_arrange_lineup_brings_in_a_bench_player_for_a_missing_position(self):
         no_outfield = [1, 4, 5, 6, 7, 8, 9, 10, 11]
         choices = [LineupChoice(pid, pos) for pid, pos in zip(no_outfield, LINEUP_POSITION_ORDER, strict=True)]
         bench = [self.members[pid] for pid in (12, 13, 14)]
 
-        fitted = arrange_lineup(choices, self.members, bench=bench)
+        fitted = arrange_lineup(choices, self.members, bench=bench, foreign_rules=UNLIMITED)
 
         assert fitted is not None
         self.assertEqual({c.position for c in fitted}, LINEUP_POSITIONS)
@@ -705,7 +753,7 @@ class FieldingPositionsInTheActiveRosterTest(ClubPlanCase):
         nine = [1, 4, 5, 9, 7, 8, 10, 2, 3]  # 内野手が3人しかおらず遊撃が空く。控えの指名打者登録は遊撃を直接守れない
         choices = [LineupChoice(pid, pos) for pid, pos in zip(nine, LINEUP_POSITION_ORDER, strict=True)]
 
-        fitted = arrange_lineup(choices, roster, bench=[roster[6]])
+        fitted = arrange_lineup(choices, roster, bench=[roster[6]], foreign_rules=UNLIMITED)
 
         assert fitted is not None
         self.assertIn(6, [c.player_id for c in fitted])
@@ -714,22 +762,22 @@ class FieldingPositionsInTheActiveRosterTest(ClubPlanCase):
             self.assertTrue(can_play(roster[choice.player_id].position, choice.position))
 
     def test_arrange_lineup_succeeds_without_foreigners_even_with_a_game_limit(self):
-        """出場枠が原因でないとき（外国人がいない）は、枠があっても組める。"""
+        """外国人枠が原因でないとき（外国人がいない）は、枠があっても組める。"""
         no_outfield = [1, 4, 5, 6, 7, 8, 9, 10, 11]
         choices = [LineupChoice(pid, pos) for pid, pos in zip(no_outfield, LINEUP_POSITION_ORDER, strict=True)]
         bench = [self.members[pid] for pid in (12, 13, 14)]
 
-        self.assertIsNotNone(arrange_lineup(choices, self.members, bench=bench, foreign_game_limit=0))
+        self.assertIsNotNone(arrange_lineup(choices, self.members, bench=bench, foreign_rules=total(0)))
 
-    def test_arrange_lineup_respects_the_foreign_game_limit_when_bringing_in_the_bench(self):
+    def test_arrange_lineup_respects_the_game_foreign_rules_when_bringing_in_the_bench(self):
         members = members_of(full_pool(foreign_ids={12, 13, 14}))
         roster = dict(members)
         no_outfield = [1, 4, 5, 6, 7, 8, 9, 10, 11]
         choices = [LineupChoice(pid, pos) for pid, pos in zip(no_outfield, LINEUP_POSITION_ORDER, strict=True)]
         bench = [roster[pid] for pid in (12, 13, 14)]
 
-        self.assertIsNone(arrange_lineup(choices, roster, bench=bench, foreign_game_limit=2), "外野3人が全員外国人")
-        self.assertIsNotNone(arrange_lineup(choices, roster, bench=bench, foreign_game_limit=3))
+        self.assertIsNone(arrange_lineup(choices, roster, bench=bench, foreign_rules=total(2)), "外野3人が全員外国人")
+        self.assertIsNotNone(arrange_lineup(choices, roster, bench=bench, foreign_rules=total(3)))
 
 
 class NoticeKindTest(ClubPlanCase):
@@ -737,7 +785,7 @@ class NoticeKindTest(ClubPlanCase):
         lineup = self.auto_lineup()
         foreign_batters = {choice.player_id for choice in lineup[:3]}
         pool = full_pool(foreign_ids={*foreign_batters, 101})
-        limits = ClubLimits(foreign_game_limit=3)
+        limits = ClubLimits(active_foreign=UNLIMITED, game_foreign=total(3))
 
         manual = resolve_club(ClubPlan(team_id=1, lineup=tuple(lineup), closer_id=101), pool, limits)
         auto = resolve_club(

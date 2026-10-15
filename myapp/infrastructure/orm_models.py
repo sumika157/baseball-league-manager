@@ -11,6 +11,7 @@ from django.conf import settings
 from django.db import models
 
 from ..domain.pennant.postseason import PostseasonFormat
+from ..domain.services.rankings import Title
 from ..domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings
 from ..domain.value_objects import (
     DEFAULT_REGISTERED_PLAYER_LIMIT,
@@ -21,6 +22,7 @@ from ..domain.value_objects import (
     DepartureRoute,
     ErrorKind,
     FieldingPosition,
+    ForeignPlayerRules,
     FreeAgencyKind,
     GameStage,
     Handedness,
@@ -118,19 +120,39 @@ class League(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="登録日時")
     # 管理画面でドラッグして並べ替えた結果がここに入る
     display_order = models.PositiveIntegerField(default=0, verbose_name="表示順")
-    foreign_player_roster_limit = models.PositiveIntegerField(
+    # 外国人選手の1軍登録の枠（野球協約 第82条の2）。既定は ForeignPlayerRules.NPB が出典。
+    # ForeignPlayerRules との変換は repositories.foreign_rules_from / foreign_rule_values だけが行う
+    foreign_active_limit = models.PositiveIntegerField(
         null=True,
         blank=True,
-        default=5,
-        verbose_name="外国人選手登録枠",
-        help_text="登録できる外国人選手の上限人数。空欄なら無制限。",
+        default=ForeignPlayerRules.NPB.active,
+        verbose_name="外国人選手の1軍登録枠",
+        help_text=(
+            "1軍（出場選手登録）に置ける外国人選手の上限人数"
+            f"（野球協約 第82条の2 は{ForeignPlayerRules.NPB.active}人）。"
+            "空欄なら無制限。"
+            "保有（育成を含む在籍）の人数は縛りません。実データの試合では、出場した外国人選手に当てて検査します。"
+        ),
     )
-    foreign_player_game_limit = models.PositiveIntegerField(
+    foreign_active_pitcher_limit = models.PositiveIntegerField(
         null=True,
         blank=True,
-        default=3,
-        verbose_name="外国人選手出場枠",
-        help_text="1試合に出場できる外国人選手の上限人数。空欄なら無制限。",
+        default=ForeignPlayerRules.NPB.pitchers,
+        verbose_name="外国人選手の1軍登録枠（うち投手）",
+        help_text=(
+            "1軍に置ける外国人選手のうち、登録位置が投手の選手の上限人数"
+            f"（協約は{ForeignPlayerRules.NPB.pitchers}人）。空欄なら無制限。"
+        ),
+    )
+    foreign_active_batter_limit = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        default=ForeignPlayerRules.NPB.batters,
+        verbose_name="外国人選手の1軍登録枠（うち野手）",
+        help_text=(
+            "1軍に置ける外国人選手のうち、登録位置が投手でない選手の上限人数"
+            f"（協約は{ForeignPlayerRules.NPB.batters}人）。空欄なら無制限。"
+        ),
     )
     registered_player_limit = models.PositiveIntegerField(
         null=True,
@@ -260,7 +282,10 @@ class Player(models.Model):
     is_foreign_player = models.BooleanField(
         default=False,
         verbose_name="外国人選手",
-        help_text="外国人枠の対象として数える選手かどうか。",
+        help_text=(
+            "外国人枠の対象として数える選手かどうか。日本国籍を持たない選手のうち、"
+            "野球協約 第82条 (1)〜(3)・(5)（日本の学校・居住・社会人の年数など）に当たらない選手に付けます。"
+        ),
     )
 
     class Meta:
@@ -952,3 +977,33 @@ class PennantReleasePlanEntry(models.Model):
 
     def __str__(self) -> str:
         return f"{self.plan} {self.player_id}"
+
+
+class PennantAward(models.Model):
+    """ペナントの表彰。締めたシーズンのタイトル受賞者（部門の1位。同率は1人ずつ1行）。
+
+    CLAUDE.md の「集計を保存しない」の例外（範囲は締めたシーズンのタイトル受賞者だけ。#248）。書くのはシーズンを
+    締める処理だけで、そのとき導いた受賞者をそのまま写す（締めたシーズンの試合は書き換えないので、ずれない）。
+    世界の列は持たない。リーグで世界が決まる。`team` は受賞した年の所属球団、`value` は受賞時の記録の表記。
+    """
+
+    # 部門の選択肢は domain の `Title` が唯一の出典
+    TITLE_CHOICES = [(title.value, title.label) for title in Title]
+
+    league = models.ForeignKey(League, on_delete=models.CASCADE, related_name="+", verbose_name="リーグ")
+    year = models.PositiveSmallIntegerField(verbose_name="年度")
+    title = models.CharField(max_length=32, choices=TITLE_CHOICES, verbose_name="部門")
+    player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="pennant_awards", verbose_name="選手")
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="+", verbose_name="球団")
+    value = models.CharField(max_length=16, verbose_name="記録")
+
+    class Meta:
+        verbose_name = "ペナントの表彰"
+        verbose_name_plural = "ペナントの表彰"
+        ordering = ["year", "league_id", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["league", "year", "title", "player"], name="unique_pennant_award"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.year}年 {self.get_title_display()} {self.player_id}"

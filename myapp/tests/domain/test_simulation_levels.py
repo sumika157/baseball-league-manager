@@ -25,7 +25,7 @@ from myapp.domain.simulation.levels import (
 from myapp.domain.simulation.manager import choose_active_roster
 from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.samples import average_club
-from myapp.domain.value_objects import GameStage, PitchingLine
+from myapp.domain.value_objects import ForeignPlayerRules, GameStage, PitchingLine
 
 GAMES = 400
 OPENING_DAY = date(2026, 4, 1)
@@ -51,7 +51,7 @@ class AverageLeagueLevelsTest(TestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        clubs = [choose_active_roster(average_club(team_id)) for team_id in (1, 2)]
+        clubs = [choose_active_roster(average_club(team_id), rules=ForeignPlayerRules.UNLIMITED) for team_id in (1, 2)]
         history = PitchingHistory()
         cls.tally = LevelTally()
         cls.games = []
@@ -64,6 +64,7 @@ class AverageLeagueLevelsTest(TestCase):
                 stage=GameStage.REGULAR,
                 played_on=OPENING_DAY + timedelta(days=index),
                 history=history,
+                foreign_rules=ForeignPlayerRules.UNLIMITED,
             )
             cls.tally.add(played.game)
             cls.games.append(played.game)
@@ -130,7 +131,7 @@ class TargetTest(TestCase):
 
 class SeasonTallyTest(TestCase):
     def test_title_values_come_from_the_players_season_totals(self):
-        clubs = [choose_active_roster(average_club(team_id)) for team_id in (1, 2)]
+        clubs = [choose_active_roster(average_club(team_id), rules=ForeignPlayerRules.UNLIMITED) for team_id in (1, 2)]
         history = PitchingHistory()
         # 規定打席・規定投球回の判定を外して、合計から取れる値だけを確かめる
         season = SeasonTally(team_games=1)
@@ -144,6 +145,7 @@ class SeasonTallyTest(TestCase):
                 stage=GameStage.REGULAR,
                 played_on=OPENING_DAY + timedelta(days=index),
                 history=history,
+                foreign_rules=ForeignPlayerRules.UNLIMITED,
             )
             played_games.append(played.game)
         season.add_all(played_games)

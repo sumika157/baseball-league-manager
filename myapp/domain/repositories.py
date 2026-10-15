@@ -16,6 +16,7 @@ from datetime import date
 from typing import Protocol, runtime_checkable
 
 from .entities import Game, League, Team
+from .pennant.awards import Award
 from .pennant.club_plan import ClubPlan
 from .pennant.ratings import PlayerRatings
 from .pennant.release import ReleasePlan
@@ -273,4 +274,28 @@ class ReleasePlanRepository(Protocol):
 
     def delete_all(self) -> None:
         """範囲の指名をすべて消す（締める処理が、使い終わった指名と締める年の違う指名を消す）。"""
+        ...
+
+
+@runtime_checkable
+class AwardRepository(Protocol):
+    """ペナントの表彰（締めたシーズンのタイトル受賞者。`Award`）。書くのはシーズンを締める処理だけ。
+
+    ペナントの世界にだけ置ける。画面に出すときは参照クエリ（`application/queries.py` の `AwardQuery`）で、
+    選手名・球団名を添えて読む（更新と参照を分ける）。
+    """
+
+    def add_all(self, awards: Sequence[Award]) -> None:
+        """表彰をまとめて保存する。すでに表彰のある年をもう一度書くことはできない（InvalidAward）。
+
+        実データの範囲には書けない（InvalidWorld）。範囲の外のリーグ・球団・選手は書けない（InvalidAward）。
+        """
+        ...
+
+    def recorded_years(self) -> frozenset[int]:
+        """表彰を記録してある年。"""
+        ...
+
+    def count_by_player(self) -> dict[int, int]:
+        """選手ごとの表彰の数（戦力外の実績の加点の材料）。表彰の無い選手は含まない。"""
         ...

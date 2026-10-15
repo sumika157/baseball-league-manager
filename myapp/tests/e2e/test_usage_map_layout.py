@@ -8,7 +8,7 @@ from django.urls import reverse
 
 from myapp.infrastructure import orm_models
 
-from ..helpers import build_service
+from ..helpers import build_roster_service
 from .base import PlaywrightTestCase
 
 
@@ -17,9 +17,9 @@ class UsageMapLayoutTest(PlaywrightTestCase):
         super().setUp()
         league = orm_models.League.objects.create(name="Eリーグ")
         self.team = orm_models.Team.objects.create(league=league, name="ホームズ")
-        service = build_service()
+        roster = build_roster_service()
         for number in range(1, 8):
-            player = service.register_player(self.team.id, f"サルバドール・グティエレス{number}", number, "外野手")
+            player = roster.register_player(self.team.id, f"サルバドール・グティエレス{number}", number, "外野手")
             orm_models.Player.objects.filter(id=player.id).update(throws="右", bats="左")
 
     def _open(self, width: int, color: str = "hand") -> None:

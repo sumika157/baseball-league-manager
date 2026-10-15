@@ -179,7 +179,7 @@ id=$("$G" project item-add 2 --owner sumika157 --url https://github.com/sumika15
 
 - セルフレビューの「読み手」観点で、PR の差分が Issue の計画と合っているか（やらないと書いたことをやっていないか、手順の漏れ）を確かめる。
   ずれていたら手順5で Issue 側を直すか、実装を計画に合わせる。
-- Issue を手で閉じない。マージはユーザーが行い、そのとき閉じる。
+- Issue を手で閉じない。PR のマージ（自動マージを含む）で閉じる。
 - **例外: epic の段階の sub-issue は自動では閉じない**（base が main でないため）。次の段階に着手するとき、前の段階の PR が
   マージ済みかを `& $gh pr view <PR番号> --json state` で確かめ、`MERGED` なら
   `& $gh issue close <段階の番号> --comment "#<PR番号> で epic/<機能> に入った"` で閉じる。親 Issue の手順の行にもチェックを付ける。

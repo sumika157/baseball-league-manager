@@ -14,7 +14,7 @@ from myapp.domain.pennant import draft
 from myapp.domain.pennant.club_plan import ClubMember
 from myapp.domain.pennant.offseason import OffseasonClub, OffseasonPlayer, plan_offseason
 from myapp.domain.pennant.release import ReleasePlan, decide_releases, ensure_releasable
-from myapp.domain.value_objects import ContractStatus, Position
+from myapp.domain.value_objects import ContractStatus, ForeignPlayerRules, Position
 from myapp.tests.domain.test_release import REGULAR, START_YEAR, YEAR, member, roster
 
 
@@ -39,8 +39,14 @@ class ReleasePlanTest(unittest.TestCase):
 
 
 class EnsureReleasableTest(unittest.TestCase):
-    def check(self, ids: list[int], players: list[OffseasonPlayer], *, foreign_game_limit: int | None = 4) -> None:
-        ensure_releasable(ids, members(players), foreign_game_limit=foreign_game_limit)
+    def check(
+        self,
+        ids: list[int],
+        players: list[OffseasonPlayer],
+        *,
+        foreign_rules: ForeignPlayerRules = ForeignPlayerRules.NPB,
+    ) -> None:
+        ensure_releasable(ids, members(players), foreign_rules=foreign_rules)
 
     def test_any_registered_player_can_be_chosen(self) -> None:
         """主力も入団1年目も GM は外せる（AI が外さないのは自動の規則）。0人も成り立つ。"""
@@ -89,7 +95,9 @@ class EnsureReleasableTest(unittest.TestCase):
             p.player_id for p in players if not p.position.is_pitcher and not p.profile.is_foreign_player
         ]
         with self.assertRaises(InvalidReleasePlan):
-            self.check(japanese_batters[:4], players, foreign_game_limit=1)
+            self.check(
+                japanese_batters[:4], players, foreign_rules=ForeignPlayerRules(active=1, pitchers=None, batters=None)
+            )
 
 
 class ManualReleasesInThePlanTest(unittest.TestCase):
@@ -99,10 +107,16 @@ class ManualReleasesInThePlanTest(unittest.TestCase):
     def plan(
         own: list[OffseasonPlayer], manual: dict[int, frozenset[int]], *, other: list[OffseasonPlayer] | None = None
     ):
-        clubs = [OffseasonClub(team_id=1, foreign_roster_limit=4, registered_player_limit=70, players=tuple(own))]
+        clubs = [
+            OffseasonClub(
+                team_id=1, foreign_rules=ForeignPlayerRules.NPB, registered_player_limit=70, players=tuple(own)
+            )
+        ]
         if other is not None:
             clubs.append(
-                OffseasonClub(team_id=2, foreign_roster_limit=4, registered_player_limit=70, players=tuple(other))
+                OffseasonClub(
+                    team_id=2, foreign_rules=ForeignPlayerRules.NPB, registered_player_limit=70, players=tuple(other)
+                )
             )
         return plan_offseason(
             clubs, year=YEAR, world_seed=1, start_year=START_YEAR, used_names=(), manual_releases=manual
@@ -143,7 +157,9 @@ class ManualReleasesInThePlanTest(unittest.TestCase):
         other = roster(72, start_id=1000)
         result = self.plan(roster(60), {1: frozenset()}, other=other)
         remaining = [p for p in other if p.player_id not in result.retired]
-        club = OffseasonClub(team_id=2, foreign_roster_limit=4, registered_player_limit=70, players=tuple(other))
+        club = OffseasonClub(
+            team_id=2, foreign_rules=ForeignPlayerRules.NPB, registered_player_limit=70, players=tuple(other)
+        )
         expected = decide_releases(club, remaining, year=YEAR, start_year=START_YEAR)
         self.assertEqual(set(result.released), set(expected))
         self.assertTrue(expected)

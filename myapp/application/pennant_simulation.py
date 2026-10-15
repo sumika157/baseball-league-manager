@@ -17,7 +17,7 @@ from datetime import date
 
 from ..domain.entities import Game
 from ..domain.exceptions import InvalidRoster
-from ..domain.pennant.club_plan import ClubLimits, ClubPlan, ResolvedClub, resolve_club, strictest_game_limit
+from ..domain.pennant.club_plan import ClubLimits, ClubPlan, ResolvedClub, resolve_club
 from ..domain.pennant.world import World
 from ..domain.repositories import ClubPlanRepository, RatingsRepository
 from ..domain.simulation.engine import MAX_INNINGS, simulate_game
@@ -26,7 +26,7 @@ from ..domain.simulation.game_day import simulated_attendance, simulated_times
 from ..domain.simulation.manager import ClubRoster, SimBatter, SimPitcher
 from ..domain.simulation.randomness import game_seed, make_random
 from ..domain.simulation.ratings import BatterRatings, PitcherRatings
-from ..domain.value_objects import GameStage
+from ..domain.value_objects import ForeignPlayerRules, GameStage
 from .dto import PlanNotice, SimulationContext, SimulationTeam
 from .queries import SimulationContextQuery
 
@@ -61,7 +61,7 @@ class DaySimulator:
         self._history = pitching_history(context)
         self._clubs: dict[int, ResolvedClub] = {}
         self._notices: list[PlanNotice] = []
-        self._game_limit = strictest_game_limit(team.foreign_game_limit for team in context.teams)
+        self._game_foreign = ForeignPlayerRules.strictest(team.foreign_rules for team in context.teams)
 
     @classmethod
     def load(
@@ -118,8 +118,8 @@ class DaySimulator:
                 played_on=day,
                 stage=stage,
                 history=self._history,
-                # リーグをまたぐ交流戦（とポストシーズンの日本シリーズ）は、ホーム球団のリーグの枠で行う
-                foreign_game_limit=self._teams[home_team_id].foreign_game_limit,
+                # リーグをまたぐ交流戦（とポストシーズンの日本シリーズ）は、ホーム球団のリーグの外国人枠で行う
+                foreign_rules=self._teams[home_team_id].foreign_rules,
                 home_orders=home_club.orders,
                 away_orders=away_club.orders,
                 max_innings=max_innings,
@@ -138,7 +138,7 @@ class DaySimulator:
         # 変わらない。日ごとに選び直さない（上書きが使えない理由も、球団ごとに最初の日の1回だけ知らせる）
         if team_id not in self._clubs:
             team = self._teams[team_id]
-            limits = ClubLimits(foreign_roster_limit=team.foreign_roster_limit, foreign_game_limit=self._game_limit)
+            limits = ClubLimits(active_foreign=team.foreign_rules, game_foreign=self._game_foreign)
             self._clubs[team_id] = resolve_club(self._plans.get(team_id), self._pools[team_id], limits)
             self._notices.extend(
                 PlanNotice(team_id, team.name, day, fallback.section, fallback.reason, fallback.falls_back)

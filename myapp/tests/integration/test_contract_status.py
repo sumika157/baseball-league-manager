@@ -22,7 +22,7 @@ DEVELOPMENTAL = ContractStatus.DEVELOPMENTAL.value
 
 class ContractRepositoryTest(BaseCase):
     def test_signing_status_and_promotion_year_round_trip(self):
-        player = self.service.register_player(self.team.id, "育成", 120, "投手", contract_label=DEVELOPMENTAL)
+        player = self.roster.register_player(self.team.id, "育成", 120, "投手", contract_label=DEVELOPMENTAL)
         build_roster_service().promote_player(self.team.id, player.id, 30, year=2026)
 
         team = DjangoTeamRepository(REAL).find_by_id(self.team.id)
@@ -47,8 +47,8 @@ class ContractBackfillTest(BaseCase):
     """データマイグレーション 0039: 背番号が100以上の既存の在籍を育成にする。"""
 
     def test_three_digit_numbers_become_developmental(self):
-        two_digit = self.service.register_player(self.team.id, "支配下", 10, "内野手")
-        three_digit = self.service.register_player(self.team.id, "育成", 100, "内野手", contract_label=DEVELOPMENTAL)
+        two_digit = self.roster.register_player(self.team.id, "支配下", 10, "内野手")
+        three_digit = self.roster.register_player(self.team.id, "育成", 100, "内野手", contract_label=DEVELOPMENTAL)
         # 区分を持つ前のデータ（すべて既定の支配下）に戻す
         orm_models.PlayerStint.objects.update(signed_as="支配下")
 
@@ -62,33 +62,33 @@ class ContractBackfillTest(BaseCase):
 class ContractServiceTest(BaseCase):
     def test_developmental_player_does_not_count_towards_the_limit(self):
         orm_models.League.objects.filter(id=self.league.id).update(registered_player_limit=1)
-        self.service.register_player(self.team.id, "支配下", 10, "内野手")
+        self.roster.register_player(self.team.id, "支配下", 10, "内野手")
 
-        self.service.register_player(self.team.id, "育成", 120, "内野手", contract_label=DEVELOPMENTAL)
+        self.roster.register_player(self.team.id, "育成", 120, "内野手", contract_label=DEVELOPMENTAL)
 
         with self.assertRaises(RegisteredPlayerLimitExceeded):
-            self.service.register_player(self.team.id, "もう一人", 11, "内野手")
+            self.roster.register_player(self.team.id, "もう一人", 11, "内野手")
         self.assertFalse(orm_models.Player.objects.filter(name="もう一人").exists())
 
     def test_a_number_that_does_not_match_the_contract_is_rejected(self):
         with self.assertRaises(InvalidContract):
-            self.service.register_player(self.team.id, "育成", 50, "内野手", contract_label=DEVELOPMENTAL)
+            self.roster.register_player(self.team.id, "育成", 50, "内野手", contract_label=DEVELOPMENTAL)
 
     def test_transfer_receives_into_the_limit(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         orm_models.League.objects.filter(id=self.league.id).update(registered_player_limit=1)
-        self.service.register_player(self.rival.id, "先客", 5, "内野手")
+        self.roster.register_player(self.rival.id, "先客", 5, "内野手")
 
         with self.assertRaises(RegisteredPlayerLimitExceeded):
-            self.service.transfer_player(player.id, from_team_id=self.team.id, to_team_id=self.rival.id, number=7)
+            self.roster.transfer_player(player.id, from_team_id=self.team.id, to_team_id=self.rival.id, number=7)
 
         # 検査に落ちたら元の在籍も閉じない
         self.assertTrue(orm_models.PlayerStint.objects.get(player_id=player.id, team=self.team).to_year is None)
 
     def test_transfer_keeps_a_developmental_contract(self):
-        player = self.service.register_player(self.team.id, "育成", 120, "内野手", contract_label=DEVELOPMENTAL)
+        player = self.roster.register_player(self.team.id, "育成", 120, "内野手", contract_label=DEVELOPMENTAL)
 
-        self.service.transfer_player(
+        self.roster.transfer_player(
             player.id, from_team_id=self.team.id, to_team_id=self.rival.id, number=130, year=2026
         )
 
@@ -96,15 +96,15 @@ class ContractServiceTest(BaseCase):
         self.assertEqual(stint.signed_as, "育成")
 
     def test_transfer_rejects_a_number_that_does_not_match_the_contract(self):
-        player = self.service.register_player(self.team.id, "育成", 120, "内野手", contract_label=DEVELOPMENTAL)
+        player = self.roster.register_player(self.team.id, "育成", 120, "内野手", contract_label=DEVELOPMENTAL)
 
         with self.assertRaises(InvalidContract):
-            self.service.transfer_player(player.id, from_team_id=self.team.id, to_team_id=self.rival.id, number=7)
+            self.roster.transfer_player(player.id, from_team_id=self.team.id, to_team_id=self.rival.id, number=7)
 
     def test_promotion_over_the_limit_is_rejected_and_not_saved(self):
         orm_models.League.objects.filter(id=self.league.id).update(registered_player_limit=1)
-        self.service.register_player(self.team.id, "支配下", 10, "内野手")
-        player = self.service.register_player(self.team.id, "育成", 120, "内野手", contract_label=DEVELOPMENTAL)
+        self.roster.register_player(self.team.id, "支配下", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "育成", 120, "内野手", contract_label=DEVELOPMENTAL)
 
         with self.assertRaises(RegisteredPlayerLimitExceeded):
             build_roster_service().promote_player(self.team.id, player.id, 30)
@@ -115,20 +115,20 @@ class ContractServiceTest(BaseCase):
     def _fill_the_limit(self, team):
         """上限ちょうどまで支配下を入れる（上限は1）。"""
         orm_models.League.objects.filter(id=self.league.id).update(registered_player_limit=1)
-        self.service.register_player(team.id, "先客", 5, "内野手")
+        self.roster.register_player(team.id, "先客", 5, "内野手")
 
     def test_a_developmental_player_can_be_added_to_a_full_team(self):
         self._fill_the_limit(self.team)
 
-        self.service.register_player(self.team.id, "育成", 120, "内野手", contract_label=DEVELOPMENTAL)
+        self.roster.register_player(self.team.id, "育成", 120, "内野手", contract_label=DEVELOPMENTAL)
 
         self.assertTrue(orm_models.Player.objects.filter(name="育成").exists())
 
     def test_a_developmental_player_can_transfer_into_a_full_team(self):
-        player = self.service.register_player(self.team.id, "育成", 120, "内野手", contract_label=DEVELOPMENTAL)
+        player = self.roster.register_player(self.team.id, "育成", 120, "内野手", contract_label=DEVELOPMENTAL)
         self._fill_the_limit(self.rival)
 
-        self.service.transfer_player(
+        self.roster.transfer_player(
             player.id, from_team_id=self.team.id, to_team_id=self.rival.id, number=130, year=2026
         )
 
@@ -138,17 +138,17 @@ class ContractServiceTest(BaseCase):
         self._fill_the_limit(self.team)
 
         with self.assertRaises(RegisteredPlayerLimitExceeded):
-            self.service.register_player(self.team.id, "もう一人", 11, "内野手")
+            self.roster.register_player(self.team.id, "もう一人", 11, "内野手")
 
     def test_promotion_into_a_full_team_is_rejected(self):
-        player = self.service.register_player(self.team.id, "育成", 120, "内野手", contract_label=DEVELOPMENTAL)
+        player = self.roster.register_player(self.team.id, "育成", 120, "内野手", contract_label=DEVELOPMENTAL)
         self._fill_the_limit(self.team)
 
         with self.assertRaises(RegisteredPlayerLimitExceeded):
             build_roster_service().promote_player(self.team.id, player.id, 30)
 
     def test_promotion_keeps_the_number_worn_before(self):
-        player = self.service.register_player(self.team.id, "育成", 120, "内野手", contract_label=DEVELOPMENTAL)
+        player = self.roster.register_player(self.team.id, "育成", 120, "内野手", contract_label=DEVELOPMENTAL)
 
         build_roster_service().promote_player(self.team.id, player.id, 30, year=2026)
 
@@ -159,10 +159,10 @@ class ContractServiceTest(BaseCase):
 class ContractScreenTest(BaseCase):
     def setUp(self):
         super().setUp()
-        self.developmental = self.service.register_player(
+        self.developmental = self.roster.register_player(
             self.team.id, "育成太郎", 120, "投手", contract_label=DEVELOPMENTAL
         )
-        self.registered = self.service.register_player(self.team.id, "支配下次郎", 10, "内野手")
+        self.registered = self.roster.register_player(self.team.id, "支配下次郎", 10, "内野手")
         self.edit_url = reverse("player_edit", args=[self.team.id, self.developmental.id])
 
     def test_registration_form_offers_both_contracts_from_the_domain(self):
@@ -272,8 +272,8 @@ class AdminContractValidationTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.client.force_login(User.objects.create_superuser(username="root", password="x"))
-        self.player = self.service.register_player(self.team.id, "山田", 10, "内野手")
-        self.other = self.service.register_player(self.team.id, "田中", 11, "外野手")
+        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        self.other = self.roster.register_player(self.team.id, "田中", 11, "外野手")
 
     def _add(self, **overrides):
         payload = {
@@ -329,7 +329,7 @@ class AdminContractValidationTest(BaseCase):
 
     def test_current_registered_stint_over_the_limit_is_rejected(self):
         orm_models.League.objects.filter(id=self.league.id).update(registered_player_limit=1)
-        self.service.register_player(self.rival.id, "先客", 5, "内野手")
+        self.roster.register_player(self.rival.id, "先客", 5, "内野手")
 
         response = self._add(to_year="")
 
@@ -338,7 +338,7 @@ class AdminContractValidationTest(BaseCase):
 
     def test_current_developmental_stint_is_not_counted_against_the_limit(self):
         orm_models.League.objects.filter(id=self.league.id).update(registered_player_limit=1)
-        self.service.register_player(self.rival.id, "先客", 5, "内野手")
+        self.roster.register_player(self.rival.id, "先客", 5, "内野手")
 
         self._add(to_year="", signed_as="育成", number="150")
 
@@ -367,7 +367,7 @@ class AdminContractValidationTest(BaseCase):
 
     def test_promoting_in_the_admin_over_the_limit_is_rejected(self):
         orm_models.League.objects.filter(id=self.league.id).update(registered_player_limit=2)
-        developmental = self.service.register_player(self.team.id, "育成", 120, "内野手", contract_label=DEVELOPMENTAL)
+        developmental = self.roster.register_player(self.team.id, "育成", 120, "内野手", contract_label=DEVELOPMENTAL)
         stint = orm_models.PlayerStint.objects.get(player_id=developmental.id)
 
         response = self.client.post(
@@ -396,9 +396,7 @@ class AdminContractValidationTest(BaseCase):
         """2015〜2023 に 50 を着けた人がいても、2025 に 50 で昇格した選手を保存し直せる。"""
         earlier = orm_models.Player.objects.create(name="先代", position="内野手")
         orm_models.PlayerStint.objects.create(player=earlier, team=self.rival, number=50, from_year=2015, to_year=2023)
-        developmental = self.service.register_player(
-            self.rival.id, "育成", 120, "内野手", contract_label=DEVELOPMENTAL
-        )
+        developmental = self.roster.register_player(self.rival.id, "育成", 120, "内野手", contract_label=DEVELOPMENTAL)
         orm_models.PlayerStint.objects.filter(player_id=developmental.id).update(from_year=2020)
         build_roster_service().promote_player(self.rival.id, developmental.id, 50, year=2025)
         stint = orm_models.PlayerStint.objects.get(player_id=developmental.id)
@@ -482,15 +480,15 @@ class PromotionReasonTest(BaseCase):
         orm_models.League.objects.filter(id=self.league.id).update(registered_player_limit=1)
 
     def test_a_registered_player_is_told_he_is_not_developmental(self):
-        player = self.service.register_player(self.team.id, "支配下", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "支配下", 10, "内野手")
 
         with self.assertRaisesMessage(InvalidContract, "育成選手ではない"):
             build_roster_service().promote_player(self.team.id, player.id, 11)
 
     def test_a_player_who_left_is_told_he_is_not_on_the_team(self):
-        player = self.service.register_player(self.team.id, "育成", 120, "内野手", contract_label=DEVELOPMENTAL)
-        self.service.retire_player(self.team.id, player.id)
-        self.service.register_player(self.team.id, "先客", 5, "内野手")
+        player = self.roster.register_player(self.team.id, "育成", 120, "内野手", contract_label=DEVELOPMENTAL)
+        self.roster.retire_player(self.team.id, player.id)
+        self.roster.register_player(self.team.id, "先客", 5, "内野手")
 
         with self.assertRaisesMessage(InvalidContract, "在籍していない"):
             build_roster_service().promote_player(self.team.id, player.id, 30)

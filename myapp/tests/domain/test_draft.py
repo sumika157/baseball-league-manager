@@ -11,7 +11,7 @@ from myapp.domain.pennant import draft
 from myapp.domain.pennant.draft import DraftRoute, DraftTeam, draft_class, draftee_count
 from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND, RegisteredBand
 from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings
-from myapp.domain.value_objects import Position, Profile
+from myapp.domain.value_objects import ForeignPlayerRules, Position, Profile
 from myapp.domain.virtual_players import generator
 from myapp.domain.virtual_players.generator import AmateurPath
 
@@ -160,6 +160,10 @@ class ForeignTest(unittest.TestCase):
 
     def test_small_quota_caps_the_target(self) -> None:
         self.assertEqual(self.foreign_count(team(foreign=0, limit=1)), 1)
+
+    def test_the_target_is_what_the_agreement_lets_a_club_register(self) -> None:
+        """協約は保有を縛らないので、目標は1軍に置ける外国人の計（第82条の2 の4人）。#204 の前の値と同じ。"""
+        self.assertEqual(draft.foreign_target(ForeignPlayerRules.NPB.active), 4)
 
     def test_foreign_players_are_never_catchers_and_carry_nationality(self) -> None:
         counts = {Position.PITCHER: 15, Position.CATCHER: 0, Position.INFIELDER: 6, Position.OUTFIELDER: 5}

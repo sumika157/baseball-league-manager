@@ -21,7 +21,7 @@ from myapp.infrastructure.queries import DjangoHomeStadiumQuery
 from myapp.infrastructure.repositories import DjangoGameRepository, DjangoLeagueRepository, DjangoTeamRepository
 from myapp.presentation.views import build_pennant_world_service
 
-from ..helpers import build_scorebook, build_service, play_game, register_lineup, to_plate_appearances
+from ..helpers import build_roster_service, build_scorebook, play_game, register_lineup, to_plate_appearances
 from .base import ROSTER_CHECK, BaseCase
 
 PENNANT_LEAGUE = "目印リーグ"
@@ -65,12 +65,12 @@ class WorldCase(BaseCase):
 
     @classmethod
     def _build_the_real_data_and_the_world(cls) -> None:
-        service = build_service()
+        roster = build_roster_service()
         # --- 実データ。各チームに打者9人と投手1人、記録済みの試合を1つ ---
-        cls.real_batters = register_lineup(service, cls.team, prefix="実打者", first_number=1)
-        cls.real_rivals = register_lineup(service, cls.rival, prefix="実相手", first_number=1)
-        cls.real_pitcher = service.register_player(cls.team.id, "実投手", "18", "投手")
-        cls.real_rival_pitcher = service.register_player(cls.rival.id, "実相手投手", "19", "投手")
+        cls.real_batters = register_lineup(roster, cls.team, prefix="実打者", first_number=1)
+        cls.real_rivals = register_lineup(roster, cls.rival, prefix="実相手", first_number=1)
+        cls.real_pitcher = roster.register_player(cls.team.id, "実投手", "18", "投手")
+        cls.real_rival_pitcher = roster.register_player(cls.rival.id, "実相手投手", "19", "投手")
         cls.real_game = play_game(
             cls.team,
             cls.rival,

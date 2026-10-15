@@ -16,7 +16,7 @@ from myapp.domain.simulation.fatigue import PitchingHistory
 from myapp.domain.simulation.manager import choose_active_roster
 from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.samples import average_club, round_robin_days, spread_league
-from myapp.domain.value_objects import GameStage
+from myapp.domain.value_objects import ForeignPlayerRules, GameStage
 
 OPENING_DAY = date(2026, 4, 1)
 # `max_innings` を足す前のエンジン（S1 のコミット 346ca65）で、下の `_season_fingerprint()` を取った値。
@@ -41,7 +41,9 @@ class ScriptedRandom:
 def _season_fingerprint(**kwargs) -> tuple[str, int]:
     """能力を散らした6球団で28日回した試合の打席列のハッシュと、引分の数（引分が無いと延長の検査が空振りする）。"""
     rng = make_random(20260801)
-    rosters = {club.team_id: choose_active_roster(club, 4) for club in spread_league(rng, 6)}
+    rosters = {
+        club.team_id: choose_active_roster(club, rules=ForeignPlayerRules.NPB) for club in spread_league(rng, 6)
+    }
     history = PitchingHistory()
     digest = hashlib.sha256()
     ties = 0
@@ -55,6 +57,7 @@ def _season_fingerprint(**kwargs) -> tuple[str, int]:
                 stage=GameStage.REGULAR,
                 played_on=played_on,
                 history=history,
+                foreign_rules=ForeignPlayerRules.UNLIMITED,
                 **kwargs,
             )
             ties += played.game.is_tie
@@ -68,9 +71,17 @@ def _season_fingerprint(**kwargs) -> tuple[str, int]:
 
 
 def _play(seed: int, **kwargs) -> SimulatedGame:
-    home = choose_active_roster(average_club(1))
-    away = choose_active_roster(average_club(2))
-    return simulate_game(make_random(seed), home, away, stage=GameStage.REGULAR, played_on=OPENING_DAY, **kwargs)
+    home = choose_active_roster(average_club(1), rules=ForeignPlayerRules.UNLIMITED)
+    away = choose_active_roster(average_club(2), rules=ForeignPlayerRules.UNLIMITED)
+    return simulate_game(
+        make_random(seed),
+        home,
+        away,
+        stage=GameStage.REGULAR,
+        played_on=OPENING_DAY,
+        foreign_rules=ForeignPlayerRules.UNLIMITED,
+        **kwargs,
+    )
 
 
 def _first_tied_seed() -> int:
@@ -121,12 +132,18 @@ class UnlimitedInningsTest(TestCase):
         self.assertEqual(10, game.line_score.innings)
 
     def test_a_scoreless_random_source_cannot_loop_forever(self):
-        home = choose_active_roster(average_club(1))
-        away = choose_active_roster(average_club(2))
+        home = choose_active_roster(average_club(1), rules=ForeignPlayerRules.UNLIMITED)
+        away = choose_active_roster(average_club(2), rules=ForeignPlayerRules.UNLIMITED)
 
         with self.assertRaises(InvalidGame):
             simulate_game(
-                ScriptedRandom(0.99), home, away, stage=GameStage.REGULAR, played_on=OPENING_DAY, max_innings=None
+                ScriptedRandom(0.99),
+                home,
+                away,
+                stage=GameStage.REGULAR,
+                played_on=OPENING_DAY,
+                foreign_rules=ForeignPlayerRules.UNLIMITED,
+                max_innings=None,
             )
 
     def test_a_limit_below_nine_innings_is_rejected(self):

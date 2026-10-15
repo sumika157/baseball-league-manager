@@ -21,6 +21,7 @@ from myapp.domain.simulation.samples import round_robin_days, spread_league
 from myapp.domain.value_objects import (
     BattingLine,
     FieldingLine,
+    ForeignPlayerRules,
     GameStage,
     InningsPitched,
     PitchingLine,
@@ -159,6 +160,7 @@ def _play(clubs, seed_key, days, seed=1):
                 stage=GameStage.REGULAR,
                 played_on=date(YEAR, 4, 1) + timedelta(days=day),
                 history=history,
+                foreign_rules=ForeignPlayerRules.UNLIMITED,
             )
             tally.add(played.game)
             games.append(played.game)
@@ -238,13 +240,18 @@ class EstimatedRatingsReproduceTheLevelTest(TestCase):
         cls.pool = {club.team_id: club for club in pool_clubs}
         days = round_robin_days(list(cls.pool), cls.REPEATS)
 
-        actives = {team_id: choose_active_roster(club, 4) for team_id, club in cls.pool.items()}
+        actives = {
+            team_id: choose_active_roster(club, rules=ForeignPlayerRules.NPB) for team_id, club in cls.pool.items()
+        }
         cls.original, games = _play(actives, "original", days)
 
         records = _records(cls.pool, games)
         cls.estimated_ratings = estimate_initial_ratings(records, seed=3, year=YEAR)
         estimated_pool = _with_estimates(cls.pool, cls.estimated_ratings)
-        estimated_actives = {team_id: choose_active_roster(club, 4) for team_id, club in estimated_pool.items()}
+        estimated_actives = {
+            team_id: choose_active_roster(club, rules=ForeignPlayerRules.NPB)
+            for team_id, club in estimated_pool.items()
+        }
         cls.replayed, _ = _play(estimated_actives, "replayed", days)
         cls.original_rows = {row.key: row.value for row in cls.original.rows()}
         cls.replayed_rows = {row.key: row.value for row in cls.replayed.rows()}

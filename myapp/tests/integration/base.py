@@ -15,6 +15,8 @@ from django.test import TestCase
 from myapp.infrastructure import orm_models
 
 from ..helpers import (
+    build_game_view_service,
+    build_roster_service,
     build_service,
 )
 
@@ -37,6 +39,8 @@ class BaseCase(TestCase):
 
     def setUp(self):
         self.service = build_service()
+        self.roster = build_roster_service()
+        self.game_view = build_game_view_service()
 
     def skip_roster_check(self) -> None:
         """世界の作成の名簿の検査を外す。

@@ -55,7 +55,7 @@ class PlateAppearancePersistenceTest(BaseCase):
         self.pinch_runner = self._register(self.rival, "代走", 40, "外野手")
 
     def _register(self, team, name, number, position) -> int:
-        return self.service.register_player(team.id, name, number, position).id
+        return self.roster.register_player(team.id, name, number, position).id
 
     def _plate_appearances(self) -> list[PlateAppearance]:
         first, second, third, fourth, fifth, sixth = self.batters

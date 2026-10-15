@@ -34,7 +34,7 @@
 
 **決めたこと**
 
-- `GameStage`（`domain/value_objects.py`）: `REGULAR = "公式戦"`・`POSTSEASON = "ポストシーズン"`。`Game.stage` と `GameHeader.stage` は**既定値を持たない必須の引数**（渡し忘れを型検査と例外で捕まえる。範囲の `WorldScope` と同じ考え）。呼ぶ側（スコアブック・試合の登録・シミュレーション・仮想データの投入）はすべて区分を明示する。ORM の列は `CharField`（choices は Enum から）で、マイグレーション `0049_game_stage`（main の #168 段階B の `0048_pennant_release_plan` と番号がぶつかったので、main の取り込みで 0048 から付け直した） は AddField だけ（既存の試合は既定値で全部公式戦。backfill なし）。
+- `GameStage`（`domain/value_objects.py`）: `REGULAR = "公式戦"`・`POSTSEASON = "ポストシーズン"`。`Game.stage` と `GameHeader.stage` は**既定値を持たない必須の引数**（渡し忘れを型検査と例外で捕まえる。範囲の `WorldScope` と同じ考え）。呼ぶ側（スコアブック・試合の登録・シミュレーション・仮想データの投入）はすべて区分を明示する。ORM の列は `CharField`（choices は Enum から）で、マイグレーション `0052_game_stage`（main の取り込みで番号を付け直した。#168 段階B の `0048_pennant_release_plan` とぶつかって 0048 → 0049、#204 段階A・#248 の 0049〜0051 とぶつかって 0049 → 0052） は AddField だけ（既存の試合は既定値で全部公式戦。backfill なし）。
 - 試合を読む入口（`infrastructure/scoping.py`）は区分を**必須のキーワード引数**で受け取る: `games_in(scope, *, stages)`・`games_in_worlds(ids, *, stages)`。明細（打撃・投球・守備）の行から見た条件は `game_rows_condition("game", scope, *, stages)`、範囲で絞らない集計（選手・球団の id で絞る）は `stage_condition("game", stages)`。区分は `StageFilter`（`REGULAR_ONLY` / `POSTSEASON_ONLY` / `ALL_STAGES`）で、「None なら全部」の形は作らない（`WorldScope` と同じ）。
 - 成績の集計の関数（`repositories.py` の `batting_totals`・`pitching_totals`・`game_counts`）は区分 `stages` を**必須の引数**にし、関数の中で区分の条件を合成する。読む明細の持ち主も必須の引数 `within` で、範囲（`WorldScope`。その世界の全選手）か選手の id の並び（選手の行は世界ごとに別）のどちらか（`LineOwners`）。どちらも無い形（全世界を読む）は型の上で書けない。`games` は年・期間・球団などの追加の条件だけ。`games: Q` を必須にするだけでは `Q()` を渡すと黙って全区分になり、型で保証できない。チーム集約の選手の通算（`_RosterData`）は範囲を持たずに選手の id で絞っていて、区分を入れ忘れると黙って混ざる形だったため。
 - 分類（一覧は #238）: 公式戦の集計（成績・順位・タイトル・規定の試合数・試合一覧・年と月の選択肢・選手の試合・期間の集計・オフの出場機会・戦力分析の起用・FA の日数・選手の通算・`GameRepository` の一覧）は**公式戦だけ**。試合そのもの（`find_by_id`・保存）・世界の今日・直近の登板（疲労）・試合の見どころ（id で引く）・世界の削除・管理画面と道具は**全区分**。ポストシーズンだけを読む箇所は S1 には無い（S3 の `PostseasonQuery`、S4 の成績表）。
@@ -44,7 +44,7 @@
 
 **実測**（開発 DB のコピー。実データ 3,480 試合＋2リーグ12球団の世界で 2026 年の公式戦を消化（858 試合）。合計 4,338 試合）
 
-- マイグレーション `0049_game_stage`（main の #168 段階B の `0048_pennant_release_plan` と番号がぶつかったので、main の取り込みで 0048 から付け直した）: 2.4 秒（SQLite は既定値つきの AddField で表を作り直す）
+- マイグレーション `0052_game_stage`（main の取り込みで番号を付け直した。#168 段階B の `0048_pennant_release_plan` とぶつかって 0048 → 0049、#204 段階A・#248 の 0049〜0051 とぶつかって 0049 → 0052）: 2.4 秒（SQLite は既定値つきの AddField で表を作り直す）
 - 実データの主要画面（`measure_pages`）と世界の主要画面（GM ホーム・順位表・リーグ・タイトル・成績一覧・試合一覧・歴代・選手一覧・選手ページ・試合詳細・戦力分析の4タブ）: **クエリ数はすべて同じ**。応答と SQL 時間は前後で揺れの範囲（同じ DB を変更前のコードで2回測った値の幅に収まる。例: 世界の選手一覧 342〜413ms → 333ms、実データのリーグ成績 241〜268ms → 227ms）
 - シーズンを締める処理: 0.55〜0.75 秒（変更前）→ 0.51 秒（変更後）、1週間を進める（36試合）: 1.06〜1.34 秒 → 1.02 秒。結果（引退・戦力外・新人の人数、作った日程）は前後で同じ
 - → **索引は足さない**。区分の条件は `myapp_game` の行に対する `stage = '公式戦'` の1つで、明細からの JOIN は既に試合の行を引いている。ポストシーズンの試合が増える S3 の後に、8リーグの世界で測り直す
@@ -86,7 +86,7 @@
 
 **置き場所**
 
-- 方式: `World.postseason_format: PostseasonFormat`（domain。既定は `NONE`。選択肢の外の値は `InvalidWorld`）と `PennantWorld.postseason_format`（CharField・choices は `PostseasonFormat` から・既定「なし」）。マイグレーション `0050_pennantworld_postseason_format` は AddField だけ（**既存の世界は「なし」**。main の取り込みで番号を付け直す前提）。`World` の docstring は「作ったときに決まる事実と、オーナーが変えられる設定」に直した（#198 と共有の直し）。
+- 方式: `World.postseason_format: PostseasonFormat`（domain。既定は `NONE`。選択肢の外の値は `InvalidWorld`）と `PennantWorld.postseason_format`（CharField・choices は `PostseasonFormat` から・既定「なし」）。マイグレーション `0053_pennantworld_postseason_format` は AddField だけ（**既存の世界は「なし」**。main の取り込みで 0050 から付け直した）。`World` の docstring は「作ったときに決まる事実と、オーナーが変えられる設定」に直した（#198 と共有の直し）。
 - 世界の作成: `PennantWorldService.create_world(_with_schedule)` に `postseason_format`（省くと「なし」）。`pennant_create --postseason {npb,champions,none}`（既定 `npb`＝新しい世界の既定）。**画面の作成フォームはまだ方式を渡さない（「なし」の世界ができる）**。フォームの選択（既定 NPB）は S4。
 - シミュレーションの共通部分: `application/pennant_simulation.py` の `DaySimulator`（1回の「進める」の間の登録候補・`resolve_club`・直近の登板を持ち、`play(day, home, away, *, stage, max_innings)` で1試合を作る）。`pool_of`・`pitching_history` もここへ移した。乱数の識別は `game_key(stage, day, home, away)`: 公式戦は切り出す前と同じ `<日付>:<ホーム>:<ビジター>`、ポストシーズンは `post:` を前に付ける。
 - `simulate_game` は区分 `stage` を**必須のキーワード引数**で受け取る（エンジンの中の `REGULAR` の決め打ちを消した。S1 の「呼ぶ側はすべて区分を明示」）。
@@ -127,7 +127,7 @@
 | シーズンを締める処理 | 1.96 秒（方式「なし」にした同じ世界は 1.78 秒） | 0.52 秒（S1 の「なし」で 0.51 秒） |
 
 - 比べる基準: 同じコピーで作った 8リーグの世界の公式戦を `LIMIT`（144 試合）で進めると 3.37〜3.55 秒・ロック 1.23〜1.35 秒。ポストシーズンの1試合あたりのロックは公式戦と同じ水準（書くのは同じ `prepare_add_all` の行）。
-- マイグレーション `0050`: 世界の行に AddField するだけで、Django の起動を含めて 2.7 秒（`PennantWorld` は数行）。
+- マイグレーション `0053`（当時の 0050）: 世界の行に AddField するだけで、Django の起動を含めて 2.7 秒（`PennantWorld` は数行）。
 - 世界の主要画面（GM ホーム・順位表・リーグ・タイトル・成績一覧・試合一覧・歴代・選手一覧・選手ページ・戦力分析の FA・試合詳細）を、ポストシーズンの前後で測った: **クエリ数はすべて同じ**（GM ホーム 37〜38・順位表 8・成績一覧 14・試合一覧 10・選手ページ 27・試合詳細 21）。応答も揺れの範囲（例: 順位表 123 → 95ms、成績一覧 210 → 204ms）。ポストシーズンの試合の試合詳細も同じクエリ数（21）で開ける。
 - 方式 NPB の世界のシーズン終了の GM ホーム（オーナー）は、締められるかの判定（`close_option`）に勝ち上がりの導出が加わる（約 100ms・6 クエリ）。方式「なし」の世界は 0 クエリ。
 - → **`Game` の (year, stage) の索引は足さない**。ポストシーズンの材料の読み（結果・最後の公式戦の日）は2クエリで、導出の時間の大半はその年の順位表（公式戦の試合の読み込み）。画面のクエリ数も変わらない。

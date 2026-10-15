@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from enum import StrEnum
 
 from ..entities import Player
 
@@ -43,6 +44,78 @@ QUALIFYING_INNINGS_PER_GAME = 1.0
 # 最高勝率の対象になる勝利数。NPB の規則（13勝以上）にならう。
 # 規定投球回ではなく勝利数で絞るので、救援投手でも13勝すれば対象になる。
 WINNING_PERCENTAGE_MINIMUM_WINS = 13
+
+
+class Title(StrEnum):
+    """タイトルの部門。NPB のタイトルのうち、成績だけで決まる部門（投票や選考で決まる賞は持たない）。
+
+    **部門の並び・名前の唯一の出典**。タイトルの画面の部門・歴代の記録の列・ペナントの表彰（保存する部門の値）・
+    ORM の選択肢がここを読む。値は保存する文字列なので変えない。並びは画面の並び（打撃 → 投手）。
+    """
+
+    AVERAGE = "average"
+    HOME_RUNS = "home_runs"
+    RUNS_BATTED_IN = "rbi"
+    HITS = "hits"
+    STOLEN_BASES = "stolen_bases"
+    ON_BASE_PERCENTAGE = "obp"
+    EARNED_RUN_AVERAGE = "era"
+    WINS = "wins"
+    WINNING_PERCENTAGE = "winning_percentage"
+    STRIKEOUTS = "strikeouts"
+    SAVES = "saves"
+    HOLD_POINTS = "hold_points"
+
+    @property
+    def label(self) -> str:
+        return _TITLE_LABELS[self]
+
+    @property
+    def note(self) -> str:
+        """対象の条件（「規定打席以上」など）。率の部門と最高勝率だけ。"""
+        return _TITLE_NOTES.get(self, "")
+
+    @property
+    def order(self) -> int:
+        """定義の順番（画面の並び）。"""
+        return list(Title).index(self)
+
+    @property
+    def is_pitching(self) -> bool:
+        """投手の部門か（画面で打撃と投手を分けて並べる）。"""
+        return self in _PITCHING_TITLES
+
+
+_TITLE_LABELS = {
+    Title.AVERAGE: "首位打者",
+    Title.HOME_RUNS: "本塁打王",
+    Title.RUNS_BATTED_IN: "打点王",
+    Title.HITS: "最多安打",
+    Title.STOLEN_BASES: "盗塁王",
+    Title.ON_BASE_PERCENTAGE: "最高出塁率",
+    Title.EARNED_RUN_AVERAGE: "最優秀防御率",
+    Title.WINS: "最多勝利",
+    Title.WINNING_PERCENTAGE: "最高勝率",
+    Title.STRIKEOUTS: "最多奪三振",
+    Title.SAVES: "最多セーブ",
+    Title.HOLD_POINTS: "最優秀中継ぎ投手",
+}
+_TITLE_NOTES = {
+    Title.AVERAGE: "規定打席以上",
+    Title.ON_BASE_PERCENTAGE: "規定打席以上",
+    Title.EARNED_RUN_AVERAGE: "規定投球回以上",
+    Title.WINNING_PERCENTAGE: f"{WINNING_PERCENTAGE_MINIMUM_WINS}勝以上",
+}
+_PITCHING_TITLES = frozenset(
+    {
+        Title.EARNED_RUN_AVERAGE,
+        Title.WINS,
+        Title.WINNING_PERCENTAGE,
+        Title.STRIKEOUTS,
+        Title.SAVES,
+        Title.HOLD_POINTS,
+    }
+)
 
 
 def required_plate_appearances(team_games: int) -> int:

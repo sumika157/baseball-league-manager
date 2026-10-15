@@ -58,12 +58,12 @@ class ForkTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.skip_roster_check()
-        self.captain = self.service.register_player(self.team.id, "主将", 10, "内野手")
-        self.pitcher = self.service.register_player(self.team.id, "投手", 18, "投手")
-        self.retired = self.service.register_player(self.team.id, "退団", 5, "外野手")
-        self.service.register_player(self.rival.id, "相手の選手", 10, "内野手")
-        self.service.appoint_captain(self.team.id, self.captain.id)
-        self.service.retire_player(self.team.id, self.retired.id)
+        self.captain = self.roster.register_player(self.team.id, "主将", 10, "内野手")
+        self.pitcher = self.roster.register_player(self.team.id, "投手", 18, "投手")
+        self.retired = self.roster.register_player(self.team.id, "退団", 5, "外野手")
+        self.roster.register_player(self.rival.id, "相手の選手", 10, "内野手")
+        self.roster.appoint_captain(self.team.id, self.captain.id)
+        self.roster.retire_player(self.team.id, self.retired.id)
         orm_models.Player.objects.filter(id=self.captain.id).update(
             birth_date=date(1995, 3, 4),
             throws="右",
@@ -112,14 +112,20 @@ class ForkTest(BaseCase):
 
     def test_the_league_rules_are_copied(self):
         orm_models.League.objects.filter(id=self.league.id).update(
-            foreign_player_roster_limit=4, foreign_player_game_limit=2, display_order=3
+            foreign_active_limit=3, foreign_active_pitcher_limit=2, foreign_active_batter_limit=None, display_order=3
         )
 
         world = self._fork(name="規則")
         copy = orm_models.League.objects.get(world_id=world.world.id)
 
         self.assertEqual(
-            (copy.foreign_player_roster_limit, copy.foreign_player_game_limit, copy.display_order), (4, 2, 0)
+            (
+                copy.foreign_active_limit,
+                copy.foreign_active_pitcher_limit,
+                copy.foreign_active_batter_limit,
+                copy.display_order,
+            ),
+            (3, 2, None, 0),
         )
 
     def test_the_stadium_is_shared(self):
@@ -224,8 +230,8 @@ class ForkContractTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.skip_roster_check()
-        self.service.register_player(self.team.id, "支配下", "18", "投手")
-        self.service.register_player(self.team.id, "育成", "120", "投手", contract_label="育成")
+        self.roster.register_player(self.team.id, "支配下", "18", "投手")
+        self.roster.register_player(self.team.id, "育成", "120", "投手", contract_label="育成")
         orm_models.League.objects.filter(id=self.league.id).update(registered_player_limit=65)
         self.created = build_pennant_world_service().create_world(
             name="契約", owner_id=None, source_league_ids=[self.league.id], start_year=START, seed=7
@@ -260,7 +266,7 @@ class ForkOptionsTest(BaseCase):
         super().setUp()
         self.skip_roster_check()
         self.service_ = build_pennant_world_service()
-        self.service.register_player(self.team.id, "選手", 1, "内野手")
+        self.roster.register_player(self.team.id, "選手", 1, "内野手")
         self.second_league = orm_models.League.objects.create(name="第二リーグ", display_order=1)
         self.other_team = orm_models.Team.objects.create(league=self.second_league, name="第二のチーム")
 
@@ -502,7 +508,7 @@ class PennantCommandsTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.skip_roster_check()
-        self.service.register_player(self.team.id, "選手", 1, "内野手")
+        self.roster.register_player(self.team.id, "選手", 1, "内野手")
 
     def _create(self, *args):
         out = StringIO()

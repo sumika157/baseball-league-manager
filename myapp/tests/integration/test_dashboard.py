@@ -48,8 +48,8 @@ class DashboardLeadersTest(BaseCase):
         )
 
     def test_only_the_leader_is_shown(self):
-        a = self.service.register_player(self.team.id, "山田", 10, "内野手")
-        b = self.service.register_player(self.rival.id, "田中", 10, "外野手")
+        a = self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        b = self.roster.register_player(self.rival.id, "田中", 10, "外野手")
         play_game(
             self.team,
             self.rival,
@@ -68,9 +68,9 @@ class DashboardLeadersTest(BaseCase):
 
     def test_tied_leaders_are_all_shown(self):
         """同率の首位は全員出す。1人で切ると、タイトル画面（同率を並べる）と見え方が食い違う。"""
-        a = self.service.register_player(self.team.id, "山田", 10, "内野手")
-        b = self.service.register_player(self.rival.id, "田中", 10, "外野手")
-        c = self.service.register_player(self.rival.id, "鈴木", 11, "外野手")
+        a = self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        b = self.roster.register_player(self.rival.id, "田中", 10, "外野手")
+        c = self.roster.register_player(self.rival.id, "鈴木", 11, "外野手")
         play_game(
             self.team,
             self.rival,
@@ -91,8 +91,8 @@ class DashboardLeadersTest(BaseCase):
 
     def test_leaders_count_only_the_latest_season(self):
         """通算ではなく最新シーズン。通算で出すと、タイトル画面と同じ部門名で別の数字になる。"""
-        veteran = self.service.register_player(self.team.id, "ベテラン", 3, "内野手")
-        rookie = self.service.register_player(self.rival.id, "若手", 5, "内野手")
+        veteran = self.roster.register_player(self.team.id, "ベテラン", 3, "内野手")
+        rookie = self.roster.register_player(self.rival.id, "若手", 5, "内野手")
         give_batting(self.team, self.rival, veteran.id, BattingLine(at_bats=40, home_runs=30), year=2025)
         give_batting(self.team, self.rival, veteran.id, BattingLine(at_bats=4, home_runs=1), year=2026)
         give_batting(self.team, self.rival, rookie.id, BattingLine(at_bats=4, home_runs=2), year=2026, day=2)
@@ -104,9 +104,9 @@ class DashboardLeadersTest(BaseCase):
 
     def test_leaders_match_the_titles_page(self):
         """同じリーグ・同じシーズン・同じ部門の首位は、タイトル画面の1位と一致する（出典がずれたら落ちる）。"""
-        slugger = self.service.register_player(self.team.id, "大砲", 3, "内野手")
-        ace = self.service.register_player(self.team.id, "エース", 18, "投手")
-        closer = self.service.register_player(self.rival.id, "守護神", 22, "投手")
+        slugger = self.roster.register_player(self.team.id, "大砲", 3, "内野手")
+        ace = self.roster.register_player(self.team.id, "エース", 18, "投手")
+        closer = self.roster.register_player(self.rival.id, "守護神", 22, "投手")
         for day in range(1, 4):
             play_game(
                 self.team,
@@ -136,10 +136,10 @@ class DashboardLeadersTest(BaseCase):
         """
         other = orm_models.League.objects.create(name="別リーグ")
         x = orm_models.Team.objects.create(league=other, name="Xチーム")
-        regular = self.service.register_player(self.team.id, "常連", 3, "内野手")
-        spot = self.service.register_player(self.team.id, "代打", 4, "内野手")
-        starter = self.service.register_player(self.team.id, "先発", 18, "投手")
-        spot_pitcher = self.service.register_player(self.team.id, "谷間", 19, "投手")
+        regular = self.roster.register_player(self.team.id, "常連", 3, "内野手")
+        spot = self.roster.register_player(self.team.id, "代打", 4, "内野手")
+        starter = self.roster.register_player(self.team.id, "先発", 18, "投手")
+        spot_pitcher = self.roster.register_player(self.team.id, "谷間", 19, "投手")
         play_game(
             self.team,
             self.rival,
@@ -176,8 +176,8 @@ class DashboardLeadersTest(BaseCase):
         other = orm_models.League.objects.create(name="別リーグ")
         x = orm_models.Team.objects.create(league=other, name="Xチーム")
         y = orm_models.Team.objects.create(league=other, name="Yチーム")
-        here = self.service.register_player(self.team.id, "当リーグ", 10, "内野手")
-        there = self.service.register_player(x.id, "別リーグ選手", 10, "内野手")
+        here = self.roster.register_player(self.team.id, "当リーグ", 10, "内野手")
+        there = self.roster.register_player(x.id, "別リーグ選手", 10, "内野手")
         play_game(self.team, self.rival, batting={here.id: BattingLine(at_bats=10, home_runs=1)})
         play_game(x, y, batting={there.id: BattingLine(at_bats=10, home_runs=5)})
 
@@ -194,7 +194,7 @@ class DashboardLeadersTest(BaseCase):
 
     def test_leader_names_link_to_the_player_page(self):
         """選手名の行き先を、選手一覧・選手検索とそろえる（編集画面へは送らない）。"""
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         play_game(self.team, self.rival, batting={player.id: BattingLine(at_bats=10, home_runs=3)})
 
         body = self.client.get(reverse("dashboard")).content.decode()
@@ -350,7 +350,7 @@ class DashboardQueriesTest(BaseCase):
 
         試合を増やしてもクエリ数が変わらないことで、明細を読んでいないと分かる。
         """
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         play_game(self.team, self.rival, day=1, batting={player.id: BattingLine(at_bats=4, singles=2)})
 
         with CaptureQueriesContext(connection) as first:
