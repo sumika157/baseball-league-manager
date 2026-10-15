@@ -4,6 +4,8 @@ from django.contrib.auth.models import User
 from django.test import TestCase
 from django.urls import reverse
 
+from ..helpers import default_workspace
+
 
 class HeaderNavigationTest(TestCase):
     """ヘッダーの導線が権限に応じて出し分けられること。"""
@@ -12,6 +14,8 @@ class HeaderNavigationTest(TestCase):
     ADMIN_LINK = 'href="/admin/" class="nav-admin-link"'
 
     def setUp(self):
+        # 今の URL はワークスペースを1つ解決する（無ければ 404）
+        default_workspace()
         self.staff = User.objects.create_user(username="staff", password="x", is_staff=True)
         self.member = User.objects.create_user(username="member", password="x")
 

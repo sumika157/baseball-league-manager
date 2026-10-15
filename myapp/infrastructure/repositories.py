@@ -88,7 +88,6 @@ from .scoping import (
     teams_in,
     world_condition,
 )
-from .workspaces import legacy_workspace_id
 
 _BATTING_FIELDS = (
     "at_bats",
@@ -1315,10 +1314,9 @@ class DjangoLeagueRepository:
         }
         if league.id is None:
             # 帰属は作るときに決め、既存のリーグの workspace・world は書き換えない。
-            # 実データのリーグはワークスペースに、ペナントのリーグは世界（経由でワークスペース）に属す。
-            # 暫定: 実データのワークスペースは W2 まで id が最小のもの
+            # 実データのリーグは範囲のワークスペースに、ペナントのリーグは世界（経由でワークスペース）に属す
             if self._scope.world_id is None:
-                defaults["workspace_id"] = legacy_workspace_id()
+                defaults["workspace_id"] = self._scope.workspace_id
                 defaults["world_id"] = None
             else:
                 defaults["workspace_id"] = None
@@ -1658,11 +1656,12 @@ class DjangoWorldRepository:
         return orm_models.PennantWorld.objects.filter(owner_id=owner_id).count()
 
     def save(self, world: World) -> World:
-        # リーグ（新規のときだけ決める）と違い、id があっても workspace_id を埋める。
-        # 呼ぶのは世界の作成の流れだけという前提で、既存の世界は T5 のバックフィルが埋める
-        # 分岐で作る世界は workspace_id が空で来る。W1b で PennantWorldService が
-        # 範囲のワークスペースを渡す形に替えるまでは、暫定のワークスペースに属させる
-        workspace_id = world.workspace_id if world.workspace_id is not None else legacy_workspace_id()
+        # 世界は必ずワークスペースに属す（PennantWorldService が分岐元の範囲のワークスペースを渡す）。
+        # 空のまま来たら、どこかに書くのではなく拒む（W1b T2 で一時関数の補完をやめた）。
+        # 保存先のワークスペースが台帳の範囲と合うかの照合は T3（台帳をワークスペースで絞る）
+        workspace_id = world.workspace_id
+        if workspace_id is None:
+            raise InvalidWorld("世界はワークスペースに属している必要があります。")
         row, _ = orm_models.PennantWorld.objects.update_or_create(  # type: ignore[misc]
             id=world.id,
             defaults={
@@ -1681,9 +1680,12 @@ class DjangoWorldRepository:
     @transaction.atomic
     def delete(self, world_id: int) -> None:
         """世界と、属する行をすべて消す。子のテーブルから、範囲で絞って順に消す。"""
-        if not orm_models.PennantWorld.objects.filter(id=world_id).exists():
+        workspace_id = (
+            orm_models.PennantWorld.objects.filter(id=world_id).values_list("workspace_id", flat=True).first()
+        )
+        if workspace_id is None:
             raise WorldNotFound(f"世界が見つかりません（id={world_id}）。")
-        scope = WorldScope.pennant(world_id)
+        scope = WorldScope.pennant(workspace_id, world_id)
 
         # 選手は在籍をたどって世界が決まるので、在籍を消す前に控えておく
         player_ids = list(players_in(scope).values_list("id", flat=True))

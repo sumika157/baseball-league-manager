@@ -11,8 +11,6 @@ from myapp.infrastructure.repositories import DjangoTeamRepository
 from ..helpers import build_roster_service, real_scope
 from .base import BaseCase
 
-REAL = real_scope()
-
 THIS_YEAR = date.today().year
 
 
@@ -22,22 +20,22 @@ class RepositoryDoesNotDeleteUnknownDeclarationsTest(BaseCase):
     def test_saving_a_player_that_never_loaded_the_declarations_keeps_them(self):
         player = self.service.register_player(self.team.id, "山田", 10, "内野手")
         build_roster_service(real_scope()).declare_free_agency(self.team.id, player.id, THIS_YEAR, "国内")
-        team = DjangoTeamRepository(REAL).find_by_id(self.team.id)
+        team = DjangoTeamRepository(real_scope()).find_by_id(self.team.id)
         # 宣言を読み込まずに組み立てた選手（fa_declarations が空）で保存する
         team.find_player(player.id).fa_declarations = []
 
-        DjangoTeamRepository(REAL).save(team)
+        DjangoTeamRepository(real_scope()).save(team)
 
         self.assertEqual(orm_models.PlayerFreeAgentDeclaration.objects.filter(player_id=player.id).count(), 1)
 
     def test_the_removed_ids_are_cleared_after_saving(self):
         player = self.service.register_player(self.team.id, "山田", 10, "内野手")
         build_roster_service(real_scope()).declare_free_agency(self.team.id, player.id, THIS_YEAR, "国内")
-        team = DjangoTeamRepository(REAL).find_by_id(self.team.id)
+        team = DjangoTeamRepository(real_scope()).find_by_id(self.team.id)
         team.remove_free_agency_declaration(player.id, THIS_YEAR)
         self.assertEqual(len(team.find_player(player.id).removed_declaration_ids), 1)
 
-        DjangoTeamRepository(REAL).save(team)
+        DjangoTeamRepository(real_scope()).save(team)
 
         self.assertEqual(team.find_player(player.id).removed_declaration_ids, [])
         self.assertFalse(orm_models.PlayerFreeAgentDeclaration.objects.exists())

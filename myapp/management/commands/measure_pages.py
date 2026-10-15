@@ -23,8 +23,8 @@ from django.db import connection
 from django.test import Client
 from django.test.utils import CaptureQueriesContext
 
-from myapp.domain.pennant.world import WorldScope
 from myapp.infrastructure.scoping import games_in, leagues_in, stints_in
+from myapp.management.workspaces import legacy_real_scope
 
 # 応答時間の目安。超えたら印を付ける（絶対の基準ではなく、気づくための線）
 SLOW_MS = 500
@@ -81,7 +81,7 @@ class Command(BaseCommand):
     def _targets() -> list[tuple[str, str]]:
         """実在する id を拾って測る URL を組む。"""
         # ペナントの世界の行を拾うと、実データの画面を測ったことにならない
-        scope = WorldScope.real()
+        scope = legacy_real_scope()
         stint = stints_in(scope).select_related("player", "team").first()
         game = games_in(scope).order_by("-played_on").first()
         league = leagues_in(scope).filter(teams__isnull=False).first()

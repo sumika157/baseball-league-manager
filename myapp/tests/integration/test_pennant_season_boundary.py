@@ -35,7 +35,7 @@ class NextYearScheduleTest(WorldCase):
     def test_before_the_next_schedule_the_season_is_finished(self):
         orm_models.PennantFixture.objects.all().delete()
 
-        context = build_pennant_world_view().get_context(self.world_id)
+        context = build_pennant_world_view(real_scope().workspace_id).get_context(self.world_id)
 
         self.assertIs(context.phase, SeasonPhase.FINISHED)
         self.assertEqual(context.season_year, YEAR)
@@ -44,7 +44,7 @@ class NextYearScheduleTest(WorldCase):
         orm_models.PennantFixture.objects.all().delete()
         self.add_next_year()
 
-        context = build_pennant_world_view().get_context(self.world_id)
+        context = build_pennant_world_view(real_scope().workspace_id).get_context(self.world_id)
 
         self.assertIs(context.phase, SeasonPhase.BEFORE_OPENING)
         self.assertEqual(context.season_year, YEAR + 1)
@@ -64,7 +64,11 @@ class NextYearScheduleTest(WorldCase):
         self.add_next_year()
         orm_models.PennantWorld.objects.filter(id=self.world_id).update(managed_team_id=self.pennant_team.id)
 
-        (row,) = [r for r in build_pennant_world_view().list_rows() if r.context.world_id == self.world_id]
+        (row,) = [
+            r
+            for r in build_pennant_world_view(real_scope().workspace_id).list_rows()
+            if r.context.world_id == self.world_id
+        ]
 
         self.assertEqual(row.context.season_year, YEAR + 1)
         self.assertIs(row.context.phase, SeasonPhase.BEFORE_OPENING)
@@ -78,7 +82,7 @@ class NextYearScheduleTest(WorldCase):
             date=date(YEAR, 4, 3), home_team=self.pennant_team, visitor_team=self.pennant_rival
         )
 
-        context = build_pennant_world_view().get_context(self.world_id)
+        context = build_pennant_world_view(real_scope().workspace_id).get_context(self.world_id)
 
         self.assertIs(context.phase, SeasonPhase.IN_SEASON)
         self.assertEqual(context.season_year, YEAR)

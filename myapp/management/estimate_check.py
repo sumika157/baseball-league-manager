@@ -20,7 +20,6 @@ from myapp.domain.entities import Team
 from myapp.domain.exceptions import DomainError
 from myapp.domain.pennant.ratings import PlayerRatings
 from myapp.domain.pennant.schedule import ScheduleRules, default_opening_day, generate_schedule
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.simulation.engine import simulate_game
 from myapp.domain.simulation.fatigue import PitchingHistory
 from myapp.domain.simulation.levels import SeasonTally, UsageRow, UsageTally
@@ -28,6 +27,7 @@ from myapp.domain.simulation.manager import ClubRoster, SimBatter, SimPitcher, c
 from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings, RatingGrade
 from myapp.domain.value_objects import BattingLine, ContractStatus, InningsPitched, PitchingLine
+from myapp.management.workspaces import legacy_real_scope
 from myapp.presentation.views import build_pennant_world_service
 
 OUTS_PER_INNING = InningsPitched.OUTS_PER_INNING
@@ -261,7 +261,7 @@ def play_season(
 
 
 def run_check(league_ids: Sequence[int], *, seed: int, year: int, say: Callable[[str], None]) -> None:
-    service = build_pennant_world_service(WorldScope.real())
+    service = build_pennant_world_service(legacy_real_scope())
     source = service.load_source(league_ids)
     players = source.active_players
     team_count = sum(len(teams) for teams in source.rosters)

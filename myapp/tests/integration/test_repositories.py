@@ -4,7 +4,8 @@ from myapp.domain.entities import League
 from myapp.domain.exceptions import (
     DuplicateJerseyNumber,
     InvalidGame,
-    WorkspaceNotFound,
+    InvalidWorld,
+    LeagueNotFound,
 )
 from myapp.domain.pennant.world import World
 from myapp.domain.value_objects import (
@@ -153,24 +154,14 @@ class WorldWorkspaceRoundTripTest(BaseCase):
         self.assertEqual(repo.find_by_id(saved.id).workspace_id, workspace.id)
         self.assertEqual(orm_models.PennantWorld.objects.get(id=saved.id).workspace_id, workspace.id)
 
-    def test_a_world_without_a_workspace_gets_the_legacy_one(self):
-        repo = DjangoWorldRepository()
+    def test_a_world_without_a_workspace_is_rejected(self):
+        """ワークスペースの無い世界は保存しない（一時関数のワークスペースで補わない。W1b T2）。"""
+        before = orm_models.PennantWorld.objects.count()
 
-        saved = repo.save(World(name="世界B", seed=2, start_year=2040))
-
-        self.assertEqual(saved.workspace_id, self.workspace.id)
-        self.assertEqual(repo.find_by_id(saved.id).workspace_id, self.workspace.id)
-
-    def test_a_world_without_a_workspace_is_rejected_when_none_exists(self):
-        orm_models.Stadium.objects.all().delete()
-        orm_models.Team.objects.all().delete()
-        orm_models.League.objects.all().delete()
-        orm_models.Workspace.objects.all().delete()
-
-        with self.assertRaises(WorkspaceNotFound):
+        with self.assertRaisesMessage(InvalidWorld, "世界はワークスペースに属している必要があります。"):
             DjangoWorldRepository().save(World(name="世界B", seed=2, start_year=2040))
 
-        self.assertFalse(orm_models.PennantWorld.objects.exists())
+        self.assertEqual(orm_models.PennantWorld.objects.count(), before)
 
     def test_saving_again_keeps_the_workspace(self):
         workspace = self._workspace()
@@ -194,7 +185,9 @@ class LeagueWorkspaceTest(BaseCase):
         self.assertIsNone(row.world_id)
 
     def test_a_pennant_league_gets_the_world_and_no_workspace(self):
-        world = DjangoWorldRepository().save(World(name="世界", seed=1, start_year=2040))
+        world = DjangoWorldRepository().save(
+            World(name="世界", seed=1, start_year=2040, workspace_id=self.workspace.id)
+        )
 
         saved = DjangoLeagueRepository(world_scope(world.id)).save(League(name="世界のリーグ"))
 
@@ -202,35 +195,32 @@ class LeagueWorkspaceTest(BaseCase):
         self.assertEqual(row.world_id, world.id)
         self.assertIsNone(row.workspace_id)
 
-    def test_the_legacy_workspace_is_the_smallest_id(self):
-        make_workspace(name="あとから作った")
+    def test_a_real_league_goes_to_the_workspace_of_the_scope(self):
+        """新しい実データのリーグは範囲のワークスペースに属す（id が最小のワークスペースではない）。"""
+        other = make_workspace(name="あとから作った")
 
-        saved = DjangoLeagueRepository(real_scope()).save(League(name="新リーグ"))
+        saved = DjangoLeagueRepository(real_scope(other)).save(League(name="新リーグ"))
 
-        self.assertEqual(orm_models.League.objects.get(id=saved.id).workspace_id, self.workspace.id)
+        self.assertEqual(orm_models.League.objects.get(id=saved.id).workspace_id, other.id)
 
     def test_saving_again_does_not_rewrite_the_workspace(self):
         repo = DjangoLeagueRepository(real_scope())
         saved = repo.save(League(name="新リーグ"))
-        other = make_workspace(name="別")
-        orm_models.League.objects.filter(id=saved.id).update(workspace=other)
 
         saved.display_order = 5
         repo.save(saved)
 
         row = orm_models.League.objects.get(id=saved.id)
-        self.assertEqual((row.workspace_id, row.display_order), (other.id, 5))
+        self.assertEqual((row.workspace_id, row.display_order), (self.workspace.id, 5))
 
-    def test_without_any_workspace_nothing_is_written(self):
-        orm_models.Stadium.objects.all().delete()
-        orm_models.Team.objects.all().delete()
-        orm_models.League.objects.all().delete()
-        orm_models.Workspace.objects.all().delete()
+    def test_a_league_of_another_workspace_cannot_be_written(self):
+        """ほかのワークスペースのリーグの id を渡しても、範囲の外なので LeagueNotFound で何も書かない。"""
+        other = make_workspace(name="別")
+        saved = DjangoLeagueRepository(real_scope(other)).save(League(name="別のリーグ"))
 
-        with self.assertRaisesMessage(
-            WorkspaceNotFound,
-            "ワークスペースがありません。運営者が管理画面で最初のワークスペースを作るまで、この操作はできません。",
-        ):
-            DjangoLeagueRepository(real_scope()).save(League(name="新リーグ"))
+        saved.display_order = 5
+        with self.assertRaises(LeagueNotFound):
+            DjangoLeagueRepository(real_scope()).save(saved)
 
-        self.assertFalse(orm_models.League.objects.exists())
+        row = orm_models.League.objects.get(id=saved.id)
+        self.assertEqual((row.workspace_id, row.display_order), (other.id, 0))

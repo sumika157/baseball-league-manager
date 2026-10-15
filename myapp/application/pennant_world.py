@@ -96,6 +96,7 @@ class PennantWorldService:
         repositories_for: WorldRepositoryFactory,
         atomic: AtomicBlock,
         ensure_schedule: Callable[[int], bool],
+        workspace_id: int,
     ) -> None:
         # 実データ範囲のリポジトリと参照クエリ。分岐元を読むだけで、書き込みには使わない
         self._real_leagues = real_leagues
@@ -106,6 +107,8 @@ class PennantWorldService:
         # 世界の作成と日程の生成を1つにまとめるトランザクションと、世界の id から日程を作る関数（組み立て口が渡す）
         self._atomic = atomic
         self._ensure_schedule = ensure_schedule
+        # 作る世界が属するワークスペース（分岐元＝実データの範囲のワークスペース。組み立て口が渡す）
+        self._workspace_id = workspace_id
 
     def list_worlds(self) -> list[PennantWorldRow]:
         return [_row(world) for world in self._worlds.find_all()]
@@ -150,7 +153,7 @@ class PennantWorldService:
                 f"作れる世界は1人{MAX_WORLDS_PER_OWNER}つまでです。不要な世界を削除してから作ってください。"
             )
         # 検査を先に済ませる（世界を作ってから失敗すると、消す手間が増える）
-        world = World(name=name, seed=seed, start_year=start_year, owner_id=owner_id)
+        world = World(name=name, seed=seed, start_year=start_year, owner_id=owner_id, workspace_id=self._workspace_id)
         source = self.load_source(league_ids)
         # リーグ名はワークスペースの中でだけ一意なので、別のワークスペースの同名のリーグを両方選べてしまう。
         # 世界の中ではリーグ名が一意（unique_world_league_name）なので、写す前に弾く

@@ -64,14 +64,18 @@ def default_workspace() -> orm_models.Workspace:
     return make_workspace(owner, "既定のワークスペース", key=DEFAULT_WORKSPACE_KEY)
 
 
-def real_scope() -> WorldScope:
-    """実データの範囲。テストが組み立て口やリポジトリに渡す範囲はここで作る（W1b T2 で DB から引く形にする）。"""
-    return WorldScope.real()
+def real_scope(workspace: orm_models.Workspace | None = None) -> WorldScope:
+    """実データの範囲。テストが組み立て口やリポジトリに渡す範囲はここで作る。
+
+    workspace を省くと既定のワークスペース（`BaseCase` が最初に作るので id が最小＝今の URL が解決するもの）。
+    """
+    return WorldScope.real((workspace or default_workspace()).pk)
 
 
 def world_scope(world_id: int) -> WorldScope:
-    """ペナントの世界ひとつの範囲。"""
-    return WorldScope.pennant(world_id)
+    """ペナントの世界ひとつの範囲。ワークスペースは世界の行から取る（無い世界の id なら既定のワークスペース）。"""
+    workspace_id = orm_models.PennantWorld.objects.filter(id=world_id).values_list("workspace_id", flat=True).first()
+    return WorldScope.pennant(workspace_id if workspace_id is not None else default_workspace().pk, world_id)
 
 
 def make_league(name, *, workspace=None, **fields) -> orm_models.League:
@@ -104,7 +108,7 @@ def register_players(team, rows) -> list[int]:
     1人ずつ登録すると、そのたびにロスター全員（通算成績つき）を読み、保存で全員の行と比べるので、人数の2乗で遅くなる。
     登録そのものを確かめるテストは、これを使わずサービスを呼ぶ。
     """
-    scope = real_scope()
+    scope = real_scope(team.league.workspace)  # チームのワークスペースの実データ
     teams = DjangoTeamRepository(scope)
     aggregate = teams.find_by_id(team.id)
     assert aggregate.league_id is not None

@@ -56,8 +56,6 @@ from .world_case import (
     WorldCase,
 )
 
-REAL = real_scope()
-
 # 世界の目印。実データの画面のどこにも出てはならない
 MARKERS = (PENNANT_LEAGUE, PENNANT_TEAM, PENNANT_RIVAL, PENNANT_PLAYER_PREFIX, PENNANT_WORLD)
 
@@ -114,7 +112,7 @@ class RealPagesDoNotShowThePennantWorldTest(WorldCase):
         self.assertEqual(sum(row.games_played for row in board.rows), 2, "実データの1試合を両チームが数える")
 
     def test_the_game_list_has_only_the_real_game(self):
-        rows = DjangoGameListQuery(REAL).list_rows(year=YEAR)
+        rows = DjangoGameListQuery(real_scope()).list_rows(year=YEAR)
 
         self.assertEqual([row.id for row in rows], [self.real_game.id])
 
@@ -138,7 +136,7 @@ class RealPagesDoNotShowThePennantWorldTest(WorldCase):
         self.assertEqual(DjangoPlayerSearchQuery(self.scope).search("実打者"), [])
 
     def test_the_team_list_has_only_the_real_teams(self):
-        names = {summary.name for summary in DjangoTeamListQuery(REAL).list_summaries()}
+        names = {summary.name for summary in DjangoTeamListQuery(real_scope()).list_summaries()}
 
         self.assertEqual(names, {self.team.name, self.rival.name})
         self.assertEqual(
@@ -229,15 +227,15 @@ class PennantIdsAreNotFoundFromRealUrlsTest(WorldCase):
 
     def test_repositories_do_not_return_the_other_world(self):
         with self.assertRaises(TeamNotFound):
-            DjangoTeamRepository(REAL).find_by_id(self.pennant_team.id)
+            DjangoTeamRepository(real_scope()).find_by_id(self.pennant_team.id)
         with self.assertRaises(TeamNotFound):
             DjangoTeamRepository(self.scope).find_by_id(self.team.id)
         with self.assertRaises(LeagueNotFound):
-            DjangoLeagueRepository(REAL).find_by_id(self.pennant_league.id)
+            DjangoLeagueRepository(real_scope()).find_by_id(self.pennant_league.id)
         with self.assertRaises(LeagueNotFound):
             DjangoLeagueRepository(self.scope).find_by_id(self.league.id)
         with self.assertRaises(GameNotFound):
-            DjangoGameRepository(REAL).find_by_id(self.pennant_game_id)
+            DjangoGameRepository(real_scope()).find_by_id(self.pennant_game_id)
         with self.assertRaises(GameNotFound):
             DjangoGameRepository(self.scope).find_by_id(self.real_game.id)
 
@@ -246,7 +244,7 @@ class PennantIdsAreNotFoundFromRealUrlsTest(WorldCase):
         real_teams = {self.team.id, self.rival.id}
         pennant_teams = {self.pennant_team.id, self.pennant_rival.id}
         for scope, own, other, own_game in (
-            (REAL, real_teams, pennant_teams, self.real_game.id),
+            (real_scope(), real_teams, pennant_teams, self.real_game.id),
             (self.scope, pennant_teams, real_teams, self.pennant_game_id),
         ):
             with self.subTest(scope=str(scope)):
@@ -271,7 +269,7 @@ class PennantIdsAreNotFoundFromRealUrlsTest(WorldCase):
         """年と在籍の期間で引く新しい読み口も、両方の範囲で開いて、取り違えが無いことを見る。"""
         real_league, pennant_league = self.league.id, self.pennant_league.id
         for scope, own_team, other_team, own_league, other_league in (
-            (REAL, self.team.id, self.pennant_team.id, real_league, pennant_league),
+            (real_scope(), self.team.id, self.pennant_team.id, real_league, pennant_league),
             (self.scope, self.pennant_team.id, self.team.id, pennant_league, real_league),
         ):
             with self.subTest(scope=str(scope)):
@@ -321,7 +319,7 @@ class PennantIdsAreNotFoundFromRealUrlsTest(WorldCase):
 
     def test_by_league_reads_do_not_cross_over(self):
         self.assertEqual(
-            [t.id for t in DjangoTeamRepository(REAL).find_by_league_with_roster(self.pennant_league.id)], []
+            [t.id for t in DjangoTeamRepository(real_scope()).find_by_league_with_roster(self.pennant_league.id)], []
         )
         self.assertEqual(
             [t.id for t in DjangoTeamRepository(self.scope).find_by_league_with_roster(self.league.id)], []
@@ -330,7 +328,7 @@ class PennantIdsAreNotFoundFromRealUrlsTest(WorldCase):
     def test_the_team_analysis_query_is_limited_to_its_scope(self):
         """戦力分析の読み口も、範囲の外の球団の在籍と試合を読まない。"""
         for scope, own, other in (
-            (REAL, self.team.id, self.pennant_team.id),
+            (real_scope(), self.team.id, self.pennant_team.id),
             (self.scope, self.pennant_team.id, self.team.id),
         ):
             with self.subTest(scope=str(scope)):
@@ -347,7 +345,7 @@ class PennantIdsAreNotFoundFromRealUrlsTest(WorldCase):
         """FA 取得タブの材料（出場の期間・在籍の契約）も、範囲の外の選手の行を読まない。"""
         real_ids = list(orm_models.PlayerStint.objects.filter(team=self.team).values_list("player_id", flat=True))
         world_ids = self.pennant_players(self.pennant_team)
-        for scope, own, other in ((REAL, real_ids, world_ids), (self.scope, world_ids, real_ids)):
+        for scope, own, other in ((real_scope(), real_ids, world_ids), (self.scope, world_ids, real_ids)):
             with self.subTest(scope=str(scope)):
                 query = DjangoTeamAnalysisQuery(scope)
                 mine = query.load_service_history(own, YEAR)
@@ -364,7 +362,7 @@ class PennantIdsAreNotFoundFromRealUrlsTest(WorldCase):
         team_id = orm_models.PlayerStint.objects.filter(player_id=line.player_id).get().team_id
         # 世界の試合の守備成績は、世界の範囲でだけ見える
         self.assertIsNotNone(DjangoPlayerFieldingQuery(self.scope).for_player(line.player_id, team_id))
-        self.assertIsNone(DjangoPlayerFieldingQuery(REAL).for_player(line.player_id, team_id))
+        self.assertIsNone(DjangoPlayerFieldingQuery(real_scope()).for_player(line.player_id, team_id))
 
 
 class PermissionTest(WorldCase):

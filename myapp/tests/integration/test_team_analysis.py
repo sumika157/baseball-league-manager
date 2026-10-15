@@ -178,7 +178,8 @@ class TeamAnalysisPageTest(AnalysisCase):
             )
             self.game(self.team, self.rival, day=number % 28 + 1, pitching=[(player_id, 2)])
         self.assertEqual(count(), before)
-        self.assertLessEqual(before, 6)
+        # 7本目は今の URL のワークスペースを解決する一時関数（W1b。W2 で URL の key の解決に替わる）
+        self.assertLessEqual(before, 7)
 
 
 class AnalysisIndexTest(AnalysisCase):

@@ -25,7 +25,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 from myapp.domain.exceptions import DomainError
 from myapp.domain.pennant.schedule import AdvanceTarget
-from myapp.domain.pennant.world import WorldScope
+from myapp.management.workspaces import legacy_world_scope
 from myapp.presentation.views import build_pennant_season_service
 
 TARGETS = {
@@ -53,7 +53,7 @@ class Command(BaseCommand):
     def handle(self, *args: Any, **options: Any) -> None:
         started = time.perf_counter()
         try:
-            report = build_pennant_season_service(WorldScope.pennant(options["world"])).advance(
+            report = build_pennant_season_service(legacy_world_scope(options["world"])).advance(
                 TARGETS[options["target"]]
             )
         except DomainError as error:

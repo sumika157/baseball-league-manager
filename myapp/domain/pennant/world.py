@@ -15,7 +15,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
 
-from ..exceptions import InvalidWorld
+from ..exceptions import InvalidWorkspace, InvalidWorld
 from ..value_objects import Season
 
 MAX_NAME_LENGTH = 100
@@ -43,27 +43,41 @@ def earliest_start_year(birth_dates: Iterable[date | None]) -> int:
     return max([Season.MIN_YEAR, *years])
 
 
+def _is_valid_id(value: object) -> bool:
+    """行の id として成り立つか（1以上の int。bool は int の派生だが id ではないので弾く）。"""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
 @dataclass(frozen=True)
 class WorldScope:
-    """どの世界を読み書きするかの範囲。
+    """どのワークスペースの、どの世界を読み書きするかの範囲。
 
-    `world_id` が None なら実データ。**既定値は持たせない**（「指定しなければ実データ」と
-    読めるコードが、ペナントの画面に実データを出す事故のもとになるため）。
+    `world_id` が None なら**そのワークスペースの実データ**（ほかのワークスペースの実データは含まない）。
+    ペナントの世界は、属するワークスペースの id も持つ（球場のようにワークスペースで引くものがあるため）。
+    **既定値は持たせない**（「指定しなければ実データ」「指定しなければ全ワークスペース」と
+    読めるコードが、ほかの範囲の行を画面に出す事故のもとになるため）。作り方は `real()`・`pennant()` の2つ。
     """
 
+    workspace_id: int
     world_id: int | None
 
-    @classmethod
-    def real(cls) -> WorldScope:
-        """実データ（どの世界にも属さないリーグ）。"""
-        return cls(world_id=None)
+    def __post_init__(self) -> None:
+        if not _is_valid_id(self.workspace_id):
+            raise InvalidWorkspace("ワークスペースの id が正しくありません。")
+        if self.world_id is not None and not _is_valid_id(self.world_id):
+            raise InvalidWorld("世界の id が正しくありません。")
 
     @classmethod
-    def pennant(cls, world_id: int) -> WorldScope:
-        """ペナントの世界ひとつ。"""
-        if isinstance(world_id, bool) or not isinstance(world_id, int) or world_id < 1:
+    def real(cls, workspace_id: int) -> WorldScope:
+        """そのワークスペースの実データ（どの世界にも属さないリーグ）。"""
+        return cls(workspace_id=workspace_id, world_id=None)
+
+    @classmethod
+    def pennant(cls, workspace_id: int, world_id: int) -> WorldScope:
+        """そのワークスペースに属するペナントの世界ひとつ。"""
+        if world_id is None:
             raise InvalidWorld("世界の id が正しくありません。")
-        return cls(world_id=world_id)
+        return cls(workspace_id=workspace_id, world_id=world_id)
 
     @property
     def is_real(self) -> bool:
@@ -74,7 +88,9 @@ class WorldScope:
         return self.world_id is not None
 
     def __str__(self) -> str:
-        return "実データ" if self.world_id is None else f"世界 {self.world_id}"
+        if self.world_id is None:
+            return f"ワークスペース {self.workspace_id} の実データ"
+        return f"ワークスペース {self.workspace_id} の世界 {self.world_id}"
 
 
 @dataclass
@@ -113,7 +129,12 @@ class World:
 
     @property
     def scope(self) -> WorldScope:
-        """この世界を読み書きする範囲。保存前（id が無い）の世界には無い。"""
+        """この世界を読み書きする範囲（属するワークスペースを運ぶ）。
+
+        保存前（id が無い）の世界と、ワークスペースが決まっていない世界には無い。
+        """
         if self.id is None:
             raise InvalidWorld("保存していない世界には範囲がありません。")
-        return WorldScope.pennant(self.id)
+        if self.workspace_id is None:
+            raise InvalidWorld("ワークスペースに属していない世界には範囲がありません。")
+        return WorldScope.pennant(self.workspace_id, self.id)

@@ -25,7 +25,6 @@ from myapp.domain.pennant.offseason import OffseasonClub, OffseasonPlan, Offseas
 from myapp.domain.pennant.ratings import PlayerRatings
 from myapp.domain.pennant.retirement import PlayingTime
 from myapp.domain.pennant.schedule import ScheduleRules
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.simulation.levels import UsageTally
 from myapp.domain.simulation.manager import ClubRoster, SimBatter, SimPitcher, choose_active_roster
 from myapp.domain.simulation.ratings import PitcherRatings
@@ -42,6 +41,7 @@ from myapp.management.estimate_check import (
     play_season,
     summarize,
 )
+from myapp.management.workspaces import legacy_real_scope
 from myapp.presentation.views import build_pennant_world_service
 
 
@@ -263,7 +263,7 @@ def format_offseason(plan: OffseasonPlan, members: Sequence[Member], year: int) 
 
 
 def run_seasons(league_ids: Sequence[int], *, seasons: int, seed: int, year: int, say: Callable[[str], None]) -> None:
-    service = build_pennant_world_service(WorldScope.real())
+    service = build_pennant_world_service(legacy_real_scope())
     source = service.load_source(league_ids)
     players = source.active_players
     say(f"実データ {len(source.leagues)} リーグ・{len(players)} 人から初期能力を推定し、{seasons}シーズン続けます。")

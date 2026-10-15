@@ -641,3 +641,53 @@ W3 を W4 より先にするのは、W4 を先にすると、中身を入れら�
   - 数え直した値（T1 の前、epic 00a4f84）: 組み立て口18個、`WorldScope` を作る本番27か所・テスト154行・40ファイル、組み立て口の呼び出しは本番64・テスト258行（正規表現の数え方で 262 とずれる）。T1 の後: 本番の `WorldScope.real()`/`pennant()` は17か所、テストは `test_wiring.py`・`tests/domain/test_pennant_world.py`・`helpers.py`（定義の1行ずつ）だけが直接作り、ほかは `real_scope()`・`world_scope(id)` の呼び出し約329か所（組み立て口とリポジトリ・参照クエリ）。
   - テスト: `test_wiring.py` は「すべての組み立て口が `scope` だけを既定値なしで受け取る」（`BuildersRequireScopeTest`）、範囲の取り違えで `InvalidWorld`、吸収した2つの検査（`WorldViewScopeTest`）は `build_service(WorldScope.pennant(7))` の形。実測値は無い（読み取りの経路は変えていない）。
   - CLAUDE.md の組み立て口の一覧は W1b の最後の PR（T6）で直す。
+
+#### T2
+
+- T2（`feature/workspace-scope`）: 範囲がワークスペースを持つ。マイグレーションは無い。
+  - domain: `WorldScope(workspace_id, world_id)`。作り方は `real(ws)`・`pennant(ws, w)`（どちらも引数必須）。ワークスペースの id は `__post_init__` で検査し、0・負・bool・int でなければ `InvalidWorkspace`（直接 `WorldScope(...)` を作っても同じ）。`__str__` は「ワークスペース 2 の世界 3」。`World.scope` は `pennant(self.workspace_id, self.id)` で、ワークスペースの無い世界は `InvalidWorld`。
+  - `scoping.py`: 実データの条件は `{path}__workspace_id = X`（ペナントのリーグは workspace を持たないので、これだけで世界の行も外れる）。ペナントは `world_id = W` のまま。`players_in` は実データもペナントも肯定形の `Exists(在籍 → チーム → 範囲の条件)` 1本にした（在籍の無い選手はどの範囲にも出ない）。
+  - **Q4 の関数は `admin_real_queryset(model)`**（`scoping.py` の末尾）。League・Team・PlayerStint・Game はリーグに workspace があるもの（＝全ワークスペースの実データ）、Player は今までの否定形（ペナントの球団に在籍したことが無い選手。在籍の無い選手を含む）、ほかのモデルは None。使うのは `admin.py` だけ（`_real_queryset`・`_real_teams` の2つの部品経由）。`test_wiring.py` の `AdminOnlyScopeExceptionTest` が `myapp/` の .py（テストを除く）を走査し、名前を出すのが `scoping.py` と `admin.py` だけかを確かめる。
+  - `DjangoLeagueRepository.save`: 実データの新しいリーグは `scope.workspace_id` に属す（`legacy_workspace_id()` を外した）。`DjangoWorldRepository.delete` は世界の行から workspace を読んで範囲を作る（存在の確認と同じ1本）。`DjangoWorldRepository.save` の暫定は T3 のまま。
+  - presentation: **一時関数は1つの要求で1回だけ読む。** `_workspace_id(request)` が `legacy_workspace_id()` を呼び、結果を要求の属性に覚える（プロセスには覚えない）。`_real_scope(request)`・`_world_scope(request, world_id)`・権限の判定・`api.py`（範囲を1回作って3つの組み立て口に渡す）・`_world_context`・`_next_season_year` はすべてここを通る。ワークスペースが1つも無ければ 404（Q2）。`templatetags/admin_overview.py` は `takes_context` で要求を受け取り `_real_scope(request)` の範囲で概況を出す。ワークスペースが無いときは概況を出さない（運営者が最初の1つを作る管理画面のトップは開ける）。
+  - **計画からのずれ（1）: `build_pennant_world_view(workspace_id)` を T2 で受け取る形にした**（計画は T3）。世界ごとの範囲を作るラムダが `_world_scope` を呼ぶと、世界の一覧で世界の数だけ一時関数を読むため。台帳（`DjangoWorldSummaryQuery`）を絞るのは T3 のまま。`test_wiring.py` は台帳の組み立て口が `workspace_id` を既定値なしで受け取ることを確かめる。`build_pennant_world_service` は受け取った実データの範囲のワークスペースを `PennantWorldService(workspace_id=...)` に渡し、作る世界はそのワークスペースに属す（レビュー M1。一時関数のワークスペースではない）。日程の生成（`ensure_schedule`）も同じワークスペースで世界の範囲を作るので、`World.scope` と食い違わない。`DjangoWorldRepository.save` の暫定（空なら一時関数で補う）はやめ、ワークスペースの無い世界は `InvalidWorld` で拒む（レビュー2周目）。
+  - admin.py: `_REAL`・`_REAL_QUERYSETS` をやめた。一覧・選択肢・フィルタは `admin_real_queryset`、選択肢をワークスペースで絞る箇所（T7）は `teams_in(WorldScope.real(ws))`・`leagues_in(WorldScope.real(ws))`。リポジトリを直接作る3組（支配下の上限・外国人枠・選手の外国人の変更）と観客数の警告は `_row_scope(league)`（行のリーグのワークスペースの実データ）。
+  - 管理コマンド: 範囲は `myapp/management/workspaces.py` の `legacy_real_scope()`・`legacy_world_scope(world)`（一時関数のワークスペース。無ければ日本語の `CommandError`）で作る（T5 で `--workspace` と世界からの導出に替える）。`seed_virtual_players`・`seed_virtual_games` は1回の実行で1回だけ決めて覚える（`Command._real_scope()`）。`estimate_check.py`・`multi_season_check.py` も同じ暫定。スコアブックの保存 API は、ワークスペースが無ければほかのエラーと同じ JSON（`{"ok": false, ...}`・404）を返す。
+  - **計画からのずれ（2）: T6 の「同名のリーグを2つ分岐元に選べない」テスト**は、他所のリーグが分岐元の範囲に入らず `LeagueNotFound` になるので、「他所のリーグ（同名でも）を分岐元にできない」テスト（`test_world_fork.py`）に替えた。検査そのものは残した（安い保険）。
+  - テスト: `test_workspace_isolation.py`（新）。`WorkspaceCase` は A＝`BaseCase` の既定のワークスペース（最初に作るので id が最小）と、目印の名前の B（リーグ・球場・チーム2つ・選手・前後の年の試合2つ。能力・日程・編成・戦力外・守備の明細の行も ORM で直接置く）。`repositories`・`queries` の `Django*` 21クラスを列挙し、検査の表（`CHECKS`）に無いクラスがあれば落とす（台帳2つは T3）。どの検査も、実データの条件を `world__isnull` に戻すと落ちることを確かめた（40件）。ほかに `find_by_id` の相互の NotFound・`players_in`（B の選手も A の世界の選手も出ない・在籍の無い選手はどこにも出ない）・今の URL の画面に B の目印が出ない／B の id は 404・一時関数を1つの要求で1回だけ読む（試合一覧・チームの選手一覧で `myapp_workspace` を読むクエリが1本）・ワークスペースが無いとサイトは 404 で管理画面のトップは開ける。`test_admin.py` に Q4（A・B・在籍の無い選手が一覧に出てペナントの行は出ない・B の試合も一覧に出る・観客数の警告は B の球場の収容人数で出す）。
+  - テストの補助: `real_scope(workspace=None)` は既定のワークスペース、`world_scope(world_id)` は世界の行の workspace（無い世界の id なら既定のワークスペース）。`register_players` はチームのリーグのワークスペースで読み書きする。モジュール定数 `REAL = real_scope()` を置いていた8ファイルは、import の時点で DB を読むので呼び出しに替えた。ワークスペースを作らずに今の URL を開いていた `test_navigation.py`・`test_templates.py` は既定のワークスペースを作る。戦力分析の画面のクエリ数の上限（`test_team_analysis.py`）は 6→7（一時関数の1本）。
+  - **#39 S1（`epic/postseason`）と合わせるとき**: S1 は `games_in(scope, *, stages)` などに区分の条件（`stage_condition`・`game_rows_condition`）を足す。区分とワークスペースは独立した条件なので、`world_condition(path, scope) & stage_condition(...)` のように**別々の `Q` を `&` で重ねる**（`world_condition` の中に区分を混ぜない）。T2 が書き換えたのは `world_condition` の実データの分岐・`players_in` の本体・末尾の `admin_real_queryset` だけ。`admin_real_queryset(Game)` で試合を読む管理画面は、S1 の取り込みで `StageFilter.ALL_STAGES` 相当（区分で絞らない）にする。取り込んだ後は `test_workspace_isolation.py` と `test_postseason_isolation.py` の両方が通ることで確かめる。
+
+**計測（T0 と同じ手順。2026-10-15）**: 開発 DB を `backup()` で `/tmp/w1b-t2/db.sqlite3` に写し（`integrity_check` ok・試合 3,480）、0049〜0051 を当て、`measure_pages` を流した後、`pennant_create`（世界 1・リーグ2・球団12・選手966人）→ `pennant_advance --to week`（6日・36試合）→ `measure_pennant.py 1`。共有コンテナの負荷が T0 の日より高かった（同じ基点のコードでも T0 より 10〜20% 遅い）ので、**同じ写しで基点 ca1f371（使い捨ての worktree）と T2 を交互に3回ずつ**流し、それぞれの中央値を並べた。写しと使い捨ての worktree は計測後に消した。
+
+| 画面 | T0（応答/SQL/クエリ） | 基点・同時刻 | T2 |
+| --- | ---: | ---: | ---: |
+| ダッシュボード | 518 / 70 / 10 | 559 / 77 / 10 | 536 / 71 / 11 |
+| チーム一覧 | 16 / 6 / 2 | 16 / 6 / 2 | 16 / 6 / 3 |
+| 順位表 | 102 / 3 / 4 | 115 / 4 / 4 | 113 / 3 / 5 |
+| 順位表(2026) | 71 / 3 / 4 | 78 / 3 / 4 | 70 / 3 / 5 |
+| 選手一覧(野手) | 278 / 12 / 27 | 346 / 14 / 27 | 298 / 14 / 28 |
+| 選手一覧(投手) | 273 / 8 / 27 | 320 / 12 / 27 | 290 / 10 / 28 |
+| 選手詳細 | 95 / 3 / 15 | 117 / 5 / 15 | 98 / 3 / 16 |
+| 選手検索 | 15 / 1 / 4 | 19 / 2 / 4 | 16 / 1 / 5 |
+| リーグ詳細 | 74 / 9 / 5 | 86 / 12 / 5 | 77 / 9 / 6 |
+| リーグ成績 | 190 / 7 / 8 | 237 / 11 / 8 | 206 / 8 / 9 |
+| リーグタイトル | 70 / 9 / 7 | 85 / 11 / 7 | 86 / 11 / 8 |
+| 試合一覧 | 113 / 19 / 6 | 128 / 24 / 6 | 124 / 20 / 7 |
+| 試合詳細 | 516 / 35 / 17 | 609 / 42 / 17 | 594 / 39 / 18 |
+| 戦力分析 | 42 / 9 / 8 | 50 / 12 / 8 | 49 / 9 / 9 |
+| 戦力分析（起用マップ） | 31 / 9 / 8 | 39 / 9 / 8 | 37 / 9 / 9 |
+| 戦力分析（FA取得） | 47 / 14 / 13 | 55 / 14 / 13 | 54 / 14 / 14 |
+| ペナント一覧 `/pennant/` | 27 / 6 / 14 | 30 / 6 / 14 | 31 / 6 / 15 |
+| 世界ダッシュボード | 158 / 5 / 48 | 182 / 5 / 48 | 182 / 5 / 49 |
+| 世界の順位表 | 12 / 0 / 10 | 15 / 0 / 10 | 14 / 0 / 11 |
+| 世界のリーグ詳細 | 15 / 1 / 11 | 17 / 1 / 11 | 18 / 1 / 12 |
+| 世界のリーグ成績 | 136 / 0 / 16 | 155 / 1 / 16 | 164 / 0 / 17 |
+| 世界のチーム一覧 | 10 / 1 / 8 | 12 / 1 / 8 | 12 / 2 / 9 |
+| 世界の選手一覧 | 135 / 2 / 40 | 149 / 2 / 40 | 155 / 3 / 41 |
+| 世界の試合一覧 | 16 / 1 / 12 | 20 / 1 / 12 | 19 / 1 / 13 |
+| 世界の戦力分析 | 46 / 1 / 14 | 43 / 1 / 14 | 49 / 2 / 15 |
+| 世界の球団ホーム | 61 / 4 / 25 | 68 / 5 / 25 | 73 / 5 / 26 |
+
+- クエリ数はすべての画面でちょうど +1（一時関数の1本）。基点・同時刻のクエリ数は T0 と同じで、写しと手順が同じであることの確かめにもなる。
+- 応答時間は、同時刻の基点と比べて誤差の範囲（実データの画面は ±5% 以内か T2 が速い。ペナントの画面は −1〜+9ms）。肯定形の `Exists` に替えた選手検索も 19→16ms で劣化は無い。完了条件（クエリ数は +1 まで・応答時間は誤差の範囲）を満たす。

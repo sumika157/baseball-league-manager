@@ -20,7 +20,6 @@ from ..helpers import play_game, real_scope
 from .base import BaseCase
 from .world_case import WorldCase
 
-REAL = real_scope()
 TIMES = GameTimes(start=time(18, 19), end=time(0, 5), ends_next_day=True, interruption_minutes=25)
 
 
@@ -40,7 +39,7 @@ class GameDayRepositoryTest(BaseCase):
         return Game(**values)
 
     def test_save_then_find_by_id_round_trips_the_values(self):
-        repository = DjangoGameRepository(REAL)
+        repository = DjangoGameRepository(real_scope())
         saved = repository.save(self._new_game())
 
         found = repository.find_by_id(saved.id)
@@ -49,7 +48,7 @@ class GameDayRepositoryTest(BaseCase):
         self.assertEqual(found.attendance, 42071)
 
     def test_an_unrecorded_game_has_no_times_and_no_attendance(self):
-        repository = DjangoGameRepository(REAL)
+        repository = DjangoGameRepository(real_scope())
         saved = repository.save(self._new_game(times=None, attendance=None))
 
         found = repository.find_by_id(saved.id)
@@ -58,7 +57,7 @@ class GameDayRepositoryTest(BaseCase):
         self.assertIsNone(found.attendance)
 
     def test_add_all_round_trips_the_values(self):
-        repository = DjangoGameRepository(REAL)
+        repository = DjangoGameRepository(real_scope())
         repository.add_all([self._new_game(), self._new_game(played_on=date(2026, 4, 2), times=None, attendance=None)])
 
         first, second = sorted(repository.find_all(), key=lambda game: game.played_on)
@@ -68,7 +67,7 @@ class GameDayRepositoryTest(BaseCase):
 
     def test_saving_an_aggregate_read_for_a_list_keeps_the_recorded_values(self):
         """一覧用に読んだ集約を保存しても、記録済みの値が消えない（`_to_domain` の写し忘れの再発防止）。"""
-        repository = DjangoGameRepository(REAL)
+        repository = DjangoGameRepository(real_scope())
         saved = repository.save(self._new_game())
 
         read = next(game for game in repository.find_all() if game.id == saved.id)
@@ -83,13 +82,13 @@ class HomeStadiumQueryTest(BaseCase):
     def test_returns_the_name_and_capacity_of_the_home_stadium(self):
         orm_models.Stadium.objects.filter(id=self.stadium.id).update(capacity=40000)
 
-        stadium = DjangoHomeStadiumQuery(REAL).home_stadium_of(self.team.id)
+        stadium = DjangoHomeStadiumQuery(real_scope()).home_stadium_of(self.team.id)
 
         assert stadium is not None
         self.assertEqual((stadium.name, stadium.capacity), ("テスト球場", 40000))
 
     def test_a_team_without_a_home_stadium_gives_none(self):
-        self.assertIsNone(DjangoHomeStadiumQuery(REAL).home_stadium_of(self.rival.id))
+        self.assertIsNone(DjangoHomeStadiumQuery(real_scope()).home_stadium_of(self.rival.id))
 
 
 class GameDetailHeaderTest(BaseCase):

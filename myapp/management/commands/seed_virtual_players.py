@@ -39,10 +39,8 @@ from myapp.domain.value_objects import (
 )
 from myapp.domain.virtual_players import generator, pools
 from myapp.infrastructure.scoping import players_in, stints_in, teams_in
+from myapp.management.workspaces import legacy_real_scope
 from myapp.models import Player, PlayerStint
-
-# 投入・補正の対象は実データだけ。ペナントの世界の球団・選手には触れない
-REAL_SCOPE = WorldScope.real()
 
 # 支配下の背番号（00・0〜99）
 REGISTERED_NUMBERS = ["00", "0", *map(str, range(1, DEVELOPMENTAL_MIN_NUMBER))]
@@ -108,6 +106,17 @@ class Command(BaseCommand):
             ),
         )
 
+    def _real_scope(self) -> WorldScope:
+        """投入・補正の対象（実データだけ。ペナントの世界の球団・選手には触れない）。
+
+        暫定（W1b T2）: 今のワークスペース（id が最小のもの）。1回の実行で1回だけ決めて覚える。
+        T5 で `--workspace` を受け取る形に替える。
+        """
+        scope: WorldScope | None = getattr(self, "_scope", None)
+        if scope is None:
+            scope = self._scope = legacy_real_scope()
+        return scope
+
     def handle(self, *args, **options):
         # 乱数源はこのコマンドの中だけで持つ（生成の関数は rng を引数に取る）
         rng = random.Random(options["seed"])
@@ -128,12 +137,12 @@ class Command(BaseCommand):
 
     def _fill_rosters(self, rng, *, dry_run):
         today = date.today()
-        used_names = set(players_in(REAL_SCOPE).values_list("name", flat=True))
+        used_names = set(players_in(self._real_scope()).values_list("name", flat=True))
 
         with transaction.atomic():
             tallies = [
                 self._fill_team(rng, team, used_names=used_names, today=today, dry_run=dry_run)
-                for team in teams_in(REAL_SCOPE).select_related("league")
+                for team in teams_in(self._real_scope()).select_related("league")
             ]
             if dry_run:
                 transaction.set_rollback(True)
@@ -379,7 +388,9 @@ class Command(BaseCommand):
             Player.objects.bulk_update(stale, ["back_name"])
 
     def _refresh_schools(self, rng, *, dry_run):
-        targets = list(players_in(REAL_SCOPE).filter(is_foreign_player=False).exclude(name__in=ORIGINAL_PLAYER_NAMES))
+        targets = list(
+            players_in(self._real_scope()).filter(is_foreign_player=False).exclude(name__in=ORIGINAL_PLAYER_NAMES)
+        )
         to_update = []
         for player in targets:
             career = generator.amateur_career(rng, is_foreign=False, birthplace=player.birthplace)
@@ -398,8 +409,10 @@ class Command(BaseCommand):
         )
 
     def _rename_existing(self, rng, *, dry_run):
-        targets = players_in(REAL_SCOPE).filter(is_foreign_player=False).exclude(name__in=ORIGINAL_PLAYER_NAMES)
-        used_names = set(players_in(REAL_SCOPE).values_list("name", flat=True))
+        targets = (
+            players_in(self._real_scope()).filter(is_foreign_player=False).exclude(name__in=ORIGINAL_PLAYER_NAMES)
+        )
+        used_names = set(players_in(self._real_scope()).values_list("name", flat=True))
         renamed = 0
 
         with transaction.atomic():
@@ -436,7 +449,7 @@ class Command(BaseCommand):
         foreign_given_lookup = {kana: romaji for group in pools.FOREIGN_GROUPS for kana, romaji in group["given"]}
         foreign_surname_lookup = {kana: romaji for group in pools.FOREIGN_GROUPS for kana, romaji in group["surname"]}
 
-        players = list(players_in(REAL_SCOPE))
+        players = list(players_in(self._real_scope()))
         surname_romaji_by_id = {}
         given_romaji_by_id = {}
         name_kana_by_id = {}
@@ -474,7 +487,9 @@ class Command(BaseCommand):
             given_romaji_by_id[player.id] = given_romaji
 
         # チームごとに同姓を数え、背ネームを決める（在籍していない選手は苗字のみ）。
-        team_by_player_id = {s.player_id: s.team_id for s in stints_in(REAL_SCOPE).filter(to_year__isnull=True)}
+        team_by_player_id = {
+            s.player_id: s.team_id for s in stints_in(self._real_scope()).filter(to_year__isnull=True)
+        }
         counts_by_team = defaultdict(Counter)
         for player_id, surname_romaji in surname_romaji_by_id.items():
             team_id = team_by_player_id.get(player_id)

@@ -37,7 +37,7 @@ from myapp.presentation.views import (
     build_service,
 )
 
-from ..helpers import world_scope
+from ..helpers import real_scope, world_scope
 from .test_pennant_advance import SEASON_GAMES, YEAR
 from .test_pennant_home import FinishedSeasonCase, HomeCase
 
@@ -239,10 +239,10 @@ class RaceBandTest(FinishedSeasonCase):
         build_pennant_season_service(world_scope(self.world_a)).advance(AdvanceTarget.SEASON_END)
         home_service = build_pennant_home_service(world_scope(self.world_a))
         view = build_service(world_scope(self.world_a))
-        context = build_pennant_world_view().get_context(self.world_a)
+        context = build_pennant_world_view(real_scope().workspace_id).get_context(self.world_a)
 
         with mock.patch("myapp.application.pennant_view.is_final_season", return_value=True):
-            context = build_pennant_world_view().get_context(self.world_a)
+            context = build_pennant_world_view(real_scope().workspace_id).get_context(self.world_a)
             home = home_service.get_home(context, include_advance=False)
 
         both = {f.year: f.standings for f in _finals_of(home_service, view, [YEAR, YEAR + 1])}

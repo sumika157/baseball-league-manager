@@ -29,7 +29,7 @@ from myapp.presentation.views import (
     build_service,
 )
 
-from ..helpers import world_scope
+from ..helpers import real_scope, world_scope
 from .test_pennant_advance import YEAR
 from .test_pennant_home import HomeCase
 
@@ -52,7 +52,7 @@ class HistoryCase(HomeCase):
         build_pennant_season_service(world_scope(self.world_a)).advance(AdvanceTarget.SEASON_END)
 
     def context(self):
-        return build_pennant_world_view().get_context(self.world_a)
+        return build_pennant_world_view(real_scope().workspace_id).get_context(self.world_a)
 
     def history(self, **kwargs):
         return build_pennant_history_service(world_scope(self.world_a)).get_world_history(self.context(), **kwargs)
@@ -181,7 +181,7 @@ class ClubHistoryTest(HistoryCase):
         orm_models.PennantWorld.objects.filter(id=self.world_a).update(managed_team_id=team_id)
 
         with mock.patch("myapp.application.pennant_view.is_final_season", return_value=True):
-            context = build_pennant_world_view().get_context(self.world_a)
+            context = build_pennant_world_view(real_scope().workspace_id).get_context(self.world_a)
             finale = (
                 build_pennant_home_service(world_scope(self.world_a)).get_home(context, include_advance=False).finale
             )
