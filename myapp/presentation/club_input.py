@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 from django.http import QueryDict
 
-from ..application.dto import ClubPlanView, ClubPlayerDetail
+from ..application.dto import ClubPlanView, ClubPlayerDetail, ClubPlayerRow, ReleasePlanView
 from ..domain.exceptions import DomainError
 from ..domain.pennant.club_plan import LINEUP_POSITIONS, LineupChoice, PlanSection
 from ..domain.value_objects import FieldingPosition
@@ -34,8 +34,11 @@ TAB_OF_SECTION: Mapping[PlanSection, str] = {
     PlanSection.ROTATION: "pitching",
     PlanSection.CLOSER: "pitching",
 }
-TABS = ("active", "lineup", "pitching")
+TABS = ("active", "lineup", "pitching", "release")
 DEFAULT_TAB = "active"
+# 「戦力外」タブ（シーズン終了で締められるときだけ出す）と、その hidden の `section`。編成の区画（`PlanSection`）とは別
+RELEASE_TAB = "release"
+RELEASE_SECTION = "release"
 
 ACTION_MANUAL = "manual"
 ACTION_SAVE = "save"
@@ -74,7 +77,7 @@ class PlayerOption:
     label: str
 
 
-def player_option(detail: ClubPlayerDetail) -> PlayerOption:
+def player_option(detail: ClubPlayerDetail[ClubPlayerRow]) -> PlayerOption:
     """選手の選択肢。選ぶ材料として、能力の総合と年齢を添える（能力・生年月日が無ければ省く）。"""
     row = detail.player
     notes = [row.position.value] + (["外国人"] if row.is_foreign else []) + ([] if row.is_active else ["1軍外"])
@@ -216,3 +219,41 @@ def failed_state(
     if section is PlanSection.ROTATION:
         return ClubFormState(section, error, rotation=read_rotation(post, rotation_size))
     return ClubFormState(section, error, closer_id=to_int(post.get("closer")))
+
+
+# --- 戦力外の指名（「戦力外」タブ） ---
+
+
+@dataclass(frozen=True)
+class ReleaseFormState:
+    """戦力外の指名の保存に失敗したときの、送られた入力。チェックした選手を残して再表示する。"""
+
+    error: str
+    checked: frozenset[int]
+
+
+def read_releases(post: QueryDict) -> frozenset[int]:
+    """チェックされた選手（読めない値は無視する）。"""
+    return frozenset(number for number in map(to_int, post.getlist("release")) if number is not None)
+
+
+def parse_expected_year(post: QueryDict) -> int:
+    """画面を開いたときの締める年。欠けている・読めないなら古い画面として弾く（別の年の指名にしない）。"""
+    year = to_int(post.get("expected_year"))
+    if year is None:
+        raise ClubInputError(REOPEN)
+    return year
+
+
+def parse_releases(post: QueryDict, current: ReleasePlanView) -> list[int]:
+    """戦力外に指名する選手。表示した全選手の id（`shown`）が今の支配下と食い違えば古い画面として弾く。
+
+    チェックボックスは外すと何も送られないので、`shown` と突き合わせないと「0人を選んだ」と「欠けた」を区別できない。
+    """
+    shown = _ints(post.getlist("shown"))
+    if not shown or set(shown) != {row.player_id for row in current.players}:
+        raise ClubInputError(REOPEN)
+    checked = _ints(post.getlist("release"))
+    if not set(checked) <= set(shown):
+        raise ClubInputError(REOPEN)
+    return [row.player_id for row in current.players if row.player_id in checked]

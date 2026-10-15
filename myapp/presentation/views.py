@@ -31,6 +31,7 @@ from ..application.dto import (
     PlayerRatingsCard,
     PlayerRatingsHistory,
     RatingsTable,
+    ReleasePlanView,
     TeamMonthlyRow,
     WorldContext,
 )
@@ -53,6 +54,7 @@ from ..domain.exceptions import (
     AlreadyClosed,
     DomainError,
     GameNotFound,
+    InvalidReleasePlan,
     InvalidWorld,
     LeagueNotFound,
     PlayerNotFound,
@@ -97,6 +99,7 @@ from ..infrastructure.repositories import (
     DjangoGameRepository,
     DjangoLeagueRepository,
     DjangoRatingsRepository,
+    DjangoReleasePlanRepository,
     DjangoTeamRepository,
     DjangoWorldRepository,
 )
@@ -104,19 +107,26 @@ from .club_input import (
     ACTION_AUTO,
     ACTION_MANUAL,
     ACTIONS,
+    DEFAULT_TAB,
+    RELEASE_SECTION,
+    RELEASE_TAB,
     SECTIONS,
     TAB_OF_SECTION,
     ClubFormState,
     ClubInputError,
     LineupSlotInput,
     NoticeLink,
+    ReleaseFormState,
     RotationSlotInput,
     failed_state,
     parse_active,
     parse_closer,
+    parse_expected_year,
     parse_lineup,
+    parse_releases,
     parse_rotation,
     player_option,
+    read_releases,
     tab_of,
 )
 from .forms import (
@@ -400,6 +410,7 @@ def build_pennant_offseason_service(world_id: int) -> PennantOffseasonService:
         fixtures=DjangoFixtureRepository(scope),
         ratings=DjangoRatingsRepository(scope),
         plans=DjangoClubPlanRepository(scope),
+        releases=DjangoReleasePlanRepository(scope),
         context_query=DjangoSimulationContextQuery(scope),
         playing_time=DjangoSeasonPlayingTimeQuery(scope),
         atomic=transaction.atomic,
@@ -808,7 +819,9 @@ def build_club_details_service(world_id: int) -> ClubDetailsService:
 
 
 def pennant_club(request, world_id):
-    """編成。1軍登録・オーダー・投手陣の3タブ（`?tab=`）。受け持つ球団の編成を、区画ごとに自動か手動のどちらかで見せる。
+    """編成。1軍登録・オーダー・投手陣の3タブ（`?tab=`）と、シーズン終了で締められるときだけ「戦力外」タブ。
+
+    受け持つ球団の編成を、区画ごとに自動か手動のどちらかで見せる。「戦力外」は締めるときの戦力外の指名（自動か手動）。
 
     GET は誰でも（読み取り専用）、POST はオーナーだけ（未ログインはログインへ、ほかの人は 403）。
     POST は区画ごとに「手動にする」「保存する」「自動に戻す」を受け、成功したら同じタブへ戻る
@@ -832,6 +845,8 @@ def _post_club(request, world: WorldContext):
     if team_id is None:
         messages.error(request, "この世界には、受け持つ球団が決まっていません。")
         return redirect(club_url)
+    if request.POST.get("section") == RELEASE_SECTION:
+        return _post_release(request, world)
     section = SECTIONS.get(request.POST.get("section", ""))
     action = request.POST.get("action", "")
     if section is None or action not in ACTIONS:
@@ -870,6 +885,50 @@ def _post_club(request, world: WorldContext):
     return redirect(tab_url)
 
 
+def _post_release(request, world: WorldContext):
+    """「戦力外」タブの操作（手動にする・保存する・自動に戻す）。どれも画面を開いたときの締める年を送ってもらう。
+
+    指名として成立しない・古い画面なら、チェックを残して再表示する。締められなくなっていたら（別の画面で締めた・
+    年が変わった）、理由を出して編成の画面へ戻す（タブはもう出ない）。
+    """
+    club_url = reverse("pennant_club", args=[world.world_id])
+    action = request.POST.get("action", "")
+    if action not in ACTIONS:
+        messages.error(request, "その操作はできません。")
+        return redirect(club_url)
+    service = build_pennant_offseason_service(world.world_id)
+    try:
+        expected_year = parse_expected_year(request.POST)
+        if action == ACTION_AUTO:
+            service.reset_releases(expected_year=expected_year)
+            messages.success(request, "戦力外を自動に戻しました。")
+        elif action == ACTION_MANUAL:
+            service.start_manual_releases(expected_year=expected_year)
+            messages.success(request, "戦力外を手動にしました。外す選手を選んで保存してください。")
+        else:
+            chosen = parse_releases(request.POST, service.release_view())
+            service.set_releases(chosen, expected_year=expected_year)
+            messages.success(request, f"戦力外の指名を保存しました（{len(chosen)}人）。")
+    except (ClubInputError, InvalidReleasePlan) as error:
+        state = ReleaseFormState(error=str(error), checked=read_releases(request.POST))
+        return _render_club(request, world, RELEASE_TAB, release_state=state, status=400)
+    except DomainError as error:
+        messages.error(request, str(error))
+        return redirect(club_url)
+    return redirect(f"{club_url}?tab={RELEASE_TAB}")
+
+
+def _release_view(world: WorldContext) -> ReleasePlanView | None:
+    """「戦力外」タブの材料。締められないとき（シーズン中・締めた後・最終シーズン）・受け持ちが無いときは None。
+
+    None ならタブを出さない。
+    """
+    try:
+        return build_pennant_offseason_service(world.world_id).release_view()
+    except DomainError:
+        return None
+
+
 def _is_manual(view: ClubPlanView, section: PlanSection) -> bool:
     return {
         PlanSection.ACTIVE: view.active_is_manual,
@@ -906,13 +965,40 @@ def _save_section(service: ClubManagementService, post, current: ClubPlanView, s
         service.set_closer(team_id, parse_closer(post))
 
 
-def _render_club(request, world: WorldContext, tab: str, *, state: ClubFormState | None = None, status: int = 200):
-    """編成の画面を描く。`state` があるときは、保存に失敗した入力を残して出す。
+def _render_club(
+    request,
+    world: WorldContext,
+    tab: str,
+    *,
+    state: ClubFormState | None = None,
+    release_state: ReleaseFormState | None = None,
+    status: int = 200,
+):
+    """編成の画面を描く。`state` / `release_state` があるときは、保存に失敗した入力を残して出す。
 
     手動の区画の編集欄の初期値は、**保存済みの上書き**から作る（使えなくなって自動に落ちた区画も、
     GM が決めた形のまま出す。解決後の値から作ると、保存したときに上書きが AI の形で置き換わる）。
+    「戦力外」タブはシーズン終了で締められるときだけ出す。出せないときに `?tab=release` が来たら既定のタブに落とす。
     """
-    context: dict = {"is_owner": _is_owner(request, world), "tab": tab, "club": None, "club_error": None}
+    # ほかのタブではタブを出すかだけを決める（締められるか。支配下の一覧までは読まない）
+    release = None
+    has_release_tab = False
+    if world.managed_team_id is not None:
+        if tab == RELEASE_TAB:
+            release = _release_view(world)
+            has_release_tab = release is not None
+        else:
+            has_release_tab = build_pennant_offseason_service(world.world_id).close_option().can_close
+    if tab == RELEASE_TAB and release is None:
+        tab = DEFAULT_TAB
+    context: dict = {
+        "is_owner": _is_owner(request, world),
+        "tab": tab,
+        "club": None,
+        "club_error": None,
+        "release": release,
+        "has_release_tab": has_release_tab,
+    }
     if world.managed_team_id is None:
         return render(request, "pennant/club.html", {**context, "world": world}, status=status)
     service = build_club_service(world.world_id)
@@ -946,7 +1032,12 @@ def _render_club(request, world: WorldContext, tab: str, *, state: ClubFormState
 
     # 選択肢は1軍の選手。保存済みの上書きに入っている1軍外の選手も、印を付けて残す（保存時にドメインが弾く）
     kept = {slot.player_id for slot in lineup} | {slot.player_id for slot in rotation} | {closer}
-    details = build_club_details_service(world.world_id).details(world.managed_team_id, view.year, view.players)
+    # 「戦力外」タブは編成の選手の詳細を使わない（下で支配下の詳細を作る）
+    details = (
+        ()
+        if tab == RELEASE_TAB
+        else build_club_details_service(world.world_id).details(world.managed_team_id, view.year, view.players)
+    )
     batters = [
         d for d in details if not d.player.position.is_pitcher and (d.player.is_active or d.player.player_id in kept)
     ]
@@ -971,6 +1062,16 @@ def _render_club(request, world: WorldContext, tab: str, *, state: ClubFormState
         closer_selected=closer,
         usage=service.pitching_usage(view) if tab == "pitching" else None,
     )
+    if release_state is not None:
+        # 戦力外の保存に失敗した理由（締められなくなってタブを出せないときも、既定のタブの上に出す）
+        context["error"] = release_state.error
+    if tab == RELEASE_TAB and release is not None:
+        context.update(
+            release_players=build_club_details_service(world.world_id).details(
+                release.team_id, release.year, release.players
+            ),
+            release_checked=release_state.checked if release_state is not None else release.chosen_ids,
+        )
     return render(request, "pennant/club.html", {**context, "world": world}, status=status)
 
 
