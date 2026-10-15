@@ -11,6 +11,8 @@
       - 開いている、draft でない、同じリポジトリのブランチの PR で、mergeable が CONFLICTING
       - 動いている解消のエージェントが無い（lock.json の PID が生きていれば起動しない。-TimeoutMinutes を超えたものは止める）
       - 前に試したときと、PR の先端（headRefOid）か base の先端が変わっている（止まった PR を同じ形で試し直さない）
+      - 持ち主のセッションが作業中でない（そのブランチを開いている worktree に、push していないコミット・
+        -OwnerActiveMinutes 分以内の HEAD の動き・同じ時間内に変わった未コミットのファイルのどれも無い。#270）
 
     状態とログは %LOCALAPPDATA%\baseball-conflicts\ に置く:
       lock.json（動いているエージェント）・state.json（PR ごとに試したときの先端）・conflicts.log・runs\（1回ごとの Claude の出力。30日で消す）
@@ -21,7 +23,8 @@
 #>
 param(
     [switch]$Apply,
-    [int]$TimeoutMinutes = 90
+    [int]$TimeoutMinutes = 90,
+    [int]$OwnerActiveMinutes = 30
 )
 
 $ErrorActionPreference = 'Continue'
@@ -99,6 +102,39 @@ if (-not $gh) { Write-Log 'gh が見つからないので中止した'; exit 1 }
 $porcelain = git -C $PSScriptRoot worktree list --porcelain 2>$null
 if ($LASTEXITCODE -ne 0 -or -not $porcelain) { Write-Log "git worktree list が失敗したので中止した（$PSScriptRoot）"; exit 1 }
 $mainPath = ($porcelain | Select-Object -First 1).Substring(9)
+
+# ブランチ名 → それを開いている worktree のパス
+$worktreeOf = @{}
+$currentPath = $null
+foreach ($line in $porcelain) {
+    if ($line -like 'worktree *') { $currentPath = $line.Substring(9) }
+    elseif ($line -like 'branch refs/heads/*') { $worktreeOf[$line.Substring(18)] = $currentPath }
+}
+
+# 持ち主のセッションが今そのブランチで作業しているか（#270）。割り込むと持ち主の push が弾かれて二度手間になる。
+# 作業中とみなすのは、そのブランチを開いている worktree が次のどれかに当てはまるとき（理由を返す。作業中でなければ $null）:
+#   - push していないコミットがある（origin より先。載せ直した後など）
+#   - HEAD が直近 -OwnerActiveMinutes 分のうちに動いた（rebase や merge の途中も含む）
+#   - 未コミットの変更があり、そのファイルが直近 -OwnerActiveMinutes 分のうちに変わった
+function Get-OwnerActivity([string]$Branch) {
+    $path = $worktreeOf[$Branch]
+    if (-not $path) { return $null }
+    $since = (Get-Date).AddMinutes(-$OwnerActiveMinutes)
+    git -C $mainPath fetch -q origin $Branch 2>$null
+    $ahead = git -C $path rev-list --count "origin/$Branch..HEAD" 2>$null
+    if ($LASTEXITCODE -eq 0 -and [int]$ahead -gt 0) { return "push していないコミットが $ahead 個ある" }
+    $gitDir = git -C $path rev-parse --absolute-git-dir 2>$null
+    if ($gitDir) {
+        $headLog = Join-Path ($gitDir -replace '/', '\') 'logs\HEAD'
+        if ((Test-Path $headLog) -and (Get-Item $headLog).LastWriteTime -gt $since) { return "HEAD が $OwnerActiveMinutes 分以内に動いた" }
+    }
+    $changed = @(git -C $path -c core.quotePath=false status --porcelain 2>$null | ForEach-Object { $_.Substring(3) -replace '^.* -> ', '' })
+    foreach ($file in $changed) {
+        $full = Join-Path ($path -replace '/', '\') ($file -replace '/', '\')
+        if ((Test-Path $full) -and (Get-Item $full).LastWriteTime -gt $since) { return "未コミットの変更が $OwnerActiveMinutes 分以内にある" }
+    }
+    return $null
+}
 $repo = (git -C $mainPath remote get-url origin) -replace '^.*github\.com[:/]', '' -replace '\.git$', ''
 
 $json = & $gh pr list -R $repo --state open --limit 100 --json 'number,title,isDraft,isCrossRepository,mergeable,headRefName,headRefOid,baseRefName' 2>$null
@@ -119,6 +155,11 @@ foreach ($pr in $conflicting) {
     $seen = $tried[$key]
     if ($seen -and $seen.head -eq $pr.headRefOid -and $seen.base -eq $baseSha) {
         Write-Output "試し直さない: PR #$($pr.number)（前に試したときから先端も base も動いていない。PR のコメントを見る）"
+        continue
+    }
+    $activity = Get-OwnerActivity $pr.headRefName
+    if ($activity) {
+        Write-Output "起動しない: PR #$($pr.number)（持ち主が作業中: $activity。次の見回りで見直す）"
         continue
     }
     $target = $pr
