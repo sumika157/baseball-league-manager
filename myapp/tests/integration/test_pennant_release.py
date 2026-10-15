@@ -12,12 +12,12 @@ from django.contrib.messages import get_messages
 
 from myapp.domain.pennant.club_plan import ClubPlan, LineupChoice, PlanSection
 from myapp.domain.pennant.draft import MIN_BY_POSITION
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import DepartureRoute, FieldingPosition
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoClubPlanRepository, DjangoTeamRepository
 from myapp.presentation.views import build_pennant_offseason_service
 
+from ..helpers import world_scope
 from .test_pennant_advance import YEAR
 from .test_pennant_offseason_screens import DECIDE_RELEASES, DECIDE_RETIREMENTS, ScreenCase
 
@@ -35,7 +35,7 @@ class ReleaseCase(ScreenCase):
             mock.patch(DECIDE_RETIREMENTS, return_value=tuple(retired or ())),
             mock.patch(DECIDE_RELEASES, side_effect=decide),
         ):
-            return build_pennant_offseason_service(cls.world_a).close_season(expected_year=YEAR)
+            return build_pennant_offseason_service(world_scope(cls.world_a)).close_season(expected_year=YEAR)
 
     def stint(self, player_id: int) -> orm_models.PlayerStint:
         return orm_models.PlayerStint.objects.get(player_id=player_id, team__league__world_id=self.world_a)
@@ -69,7 +69,7 @@ class ReleasedOnceTest(ReleaseCase):
         )
 
     def test_the_departure_route_round_trips_through_the_repository(self):
-        teams = DjangoTeamRepository(WorldScope.pennant(self.world_a)).find_all_with_roster()
+        teams = DjangoTeamRepository(world_scope(self.world_a)).find_all_with_roster()
         player = next(p for team in teams for p in team.players if p.id == self.released_ids[0])
         self.assertEqual([stint.left_via for stint in player.career], [DepartureRoute.RELEASED])
 
@@ -90,7 +90,7 @@ class ReleaseWritesTest(ReleaseCase):
         assert team_id is not None
         players = self.managed_players(12)
         releasing, others = players[0], players[1:]
-        DjangoClubPlanRepository(WorldScope.pennant(self.world_a)).save(
+        DjangoClubPlanRepository(world_scope(self.world_a)).save(
             ClubPlan(
                 team_id,
                 active_ids=tuple(players),
@@ -117,7 +117,7 @@ class ReleaseWritesTest(ReleaseCase):
             mock.patch(DECIDE_RETIREMENTS, return_value=()),
             mock.patch.dict(MIN_BY_POSITION, dict.fromkeys(MIN_BY_POSITION, 0)),
         ):
-            result = build_pennant_offseason_service(self.world_a).close_season(expected_year=YEAR)
+            result = build_pennant_offseason_service(world_scope(self.world_a)).close_season(expected_year=YEAR)
 
         released = orm_models.PlayerStint.objects.filter(
             team__league__world_id=self.world_a, to_year=YEAR, left_via=DepartureRoute.RELEASED.value
@@ -129,7 +129,7 @@ class ReleaseWritesTest(ReleaseCase):
                 player_id__in=released.values("player_id"), year=YEAR + 1
             ).exists()
         )
-        teams = DjangoTeamRepository(WorldScope.pennant(self.world_a)).find_all_with_roster()
+        teams = DjangoTeamRepository(world_scope(self.world_a)).find_all_with_roster()
         self.assertTrue(all(team.registered_player_count <= 20 for team in teams), "上限を超えない")
 
 

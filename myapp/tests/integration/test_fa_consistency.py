@@ -5,14 +5,13 @@ from datetime import date
 from django.contrib.auth.models import User
 
 from myapp.domain.exceptions import InvalidFreeAgentDeclaration
-from myapp.domain.pennant.world import WorldScope
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoTeamRepository
 
-from ..helpers import build_roster_service
+from ..helpers import build_roster_service, real_scope
 from .base import BaseCase
 
-REAL = WorldScope.real()
+REAL = real_scope()
 
 THIS_YEAR = date.today().year
 
@@ -22,7 +21,7 @@ class RepositoryDoesNotDeleteUnknownDeclarationsTest(BaseCase):
 
     def test_saving_a_player_that_never_loaded_the_declarations_keeps_them(self):
         player = self.service.register_player(self.team.id, "山田", 10, "内野手")
-        build_roster_service().declare_free_agency(self.team.id, player.id, THIS_YEAR, "国内")
+        build_roster_service(real_scope()).declare_free_agency(self.team.id, player.id, THIS_YEAR, "国内")
         team = DjangoTeamRepository(REAL).find_by_id(self.team.id)
         # 宣言を読み込まずに組み立てた選手（fa_declarations が空）で保存する
         team.find_player(player.id).fa_declarations = []
@@ -33,7 +32,7 @@ class RepositoryDoesNotDeleteUnknownDeclarationsTest(BaseCase):
 
     def test_the_removed_ids_are_cleared_after_saving(self):
         player = self.service.register_player(self.team.id, "山田", 10, "内野手")
-        build_roster_service().declare_free_agency(self.team.id, player.id, THIS_YEAR, "国内")
+        build_roster_service(real_scope()).declare_free_agency(self.team.id, player.id, THIS_YEAR, "国内")
         team = DjangoTeamRepository(REAL).find_by_id(self.team.id)
         team.remove_free_agency_declaration(player.id, THIS_YEAR)
         self.assertEqual(len(team.find_player(player.id).removed_declaration_ids), 1)
@@ -190,7 +189,7 @@ class AdminSubmittedStateTest(BaseCase):
         # 宣言（今年）の年に在籍が無くなる退団（前の年を指定）は拒否する
         player = self.service.register_player(self.team.id, "新人", 20, "投手")
         orm_models.PlayerStint.objects.filter(player_id=player.id).update(from_year=THIS_YEAR - 3)
-        build_roster_service().declare_free_agency(self.team.id, player.id, THIS_YEAR, "国内")
+        build_roster_service(real_scope()).declare_free_agency(self.team.id, player.id, THIS_YEAR, "国内")
 
         with self.assertRaises(InvalidFreeAgentDeclaration):
             self.service.retire_player(self.team.id, player.id, year=THIS_YEAR - 1)
@@ -199,7 +198,7 @@ class AdminSubmittedStateTest(BaseCase):
     def test_transferring_before_the_declaration_year_is_refused_and_saves_nothing(self):
         player = self.service.register_player(self.team.id, "新人", 20, "投手")
         orm_models.PlayerStint.objects.filter(player_id=player.id).update(from_year=THIS_YEAR - 3)
-        build_roster_service().declare_free_agency(self.team.id, player.id, THIS_YEAR, "国内")
+        build_roster_service(real_scope()).declare_free_agency(self.team.id, player.id, THIS_YEAR, "国内")
 
         with self.assertRaises(InvalidFreeAgentDeclaration):
             self.service.transfer_player(
@@ -211,7 +210,7 @@ class AdminSubmittedStateTest(BaseCase):
     def test_retiring_before_a_declaration_ahead_of_the_clock_is_refused(self):
         """先の年の宣言は在籍が続く限り認める（時計で制限しない）。その年より前に退団させる操作は拒否し、何も保存しない。"""
         player = self.service.register_player(self.team.id, "新人", 20, "投手")
-        build_roster_service().declare_free_agency(self.team.id, player.id, THIS_YEAR + 1, "国内")
+        build_roster_service(real_scope()).declare_free_agency(self.team.id, player.id, THIS_YEAR + 1, "国内")
 
         with self.assertRaises(InvalidFreeAgentDeclaration):
             self.service.retire_player(self.team.id, player.id, year=THIS_YEAR)

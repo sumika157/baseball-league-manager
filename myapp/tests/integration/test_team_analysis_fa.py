@@ -8,7 +8,7 @@ from django.urls import reverse
 
 from myapp.infrastructure import orm_models
 
-from ..helpers import build_team_analysis_service
+from ..helpers import build_team_analysis_service, real_scope
 from .test_team_analysis import AnalysisCase
 
 
@@ -40,7 +40,7 @@ class TeamFaTabTest(AnalysisCase):
             orm_models.Game.objects.filter(pk=saved.id).update(played_on=date(year, month, day))
 
     def analysis(self, **kwargs):
-        return build_team_analysis_service().get_analysis(self.team.id, year=2026, tab="fa", **kwargs)
+        return build_team_analysis_service(real_scope()).get_analysis(self.team.id, year=2026, tab="fa", **kwargs)
 
     def rows(self, **kwargs):
         return {row.name: row for row in self.analysis(**kwargs).fa_rows}
@@ -129,7 +129,7 @@ class TeamFaTabTest(AnalysisCase):
     def test_other_tabs_do_not_read_the_career(self):
         def count(tab):
             with CaptureQueriesContext(connection) as captured:
-                build_team_analysis_service().get_analysis(self.team.id, year=2026, tab=tab)
+                build_team_analysis_service(real_scope()).get_analysis(self.team.id, year=2026, tab=tab)
             return len(captured)
 
         self.assertGreater(count("fa"), count("depth"))

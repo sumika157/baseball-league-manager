@@ -10,7 +10,7 @@ from myapp.domain.exceptions import InvalidWorld
 from myapp.infrastructure import orm_models
 from myapp.presentation.views import build_pennant_world_service, build_service
 
-from ..helpers import make_league, register_playable_support
+from ..helpers import make_league, real_scope, register_playable_support
 
 START = 2030
 
@@ -20,7 +20,7 @@ class RosterCheckTest(TestCase):
         self.league = make_league(name="検査リーグ")
         self.home = orm_models.Team.objects.create(league=self.league, name="十分な球団")
         self.short = orm_models.Team.objects.create(league=self.league, name="足りない球団")
-        self.service = build_service()
+        self.service = build_service(real_scope())
         register_playable_support(self.service, self.home)
 
     def _create(self, **overrides):
@@ -31,7 +31,7 @@ class RosterCheckTest(TestCase):
             "start_year": START,
             "seed": 1,
         } | overrides
-        return build_pennant_world_service().create_world(**arguments)
+        return build_pennant_world_service(real_scope()).create_world(**arguments)
 
     def _assert_nothing_left(self):
         self.assertEqual(orm_models.PennantWorld.objects.count(), 0)
@@ -59,7 +59,7 @@ class RosterCheckTest(TestCase):
 
     def test_the_schedule_version_is_checked_too(self):
         with self.assertRaises(InvalidWorld):
-            build_pennant_world_service().create_world_with_schedule(
+            build_pennant_world_service(real_scope()).create_world_with_schedule(
                 name="検査",
                 owner_id=None,
                 source_league_ids=[self.league.id],

@@ -10,12 +10,12 @@ from django.db import transaction
 
 from myapp.domain.exceptions import AlreadyClosed, SeasonNotFinished
 from myapp.domain.pennant.schedule import AdvanceTarget
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import JerseyNumber, Position, RosterLimits
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoTeamRepository
 from myapp.presentation.views import build_pennant_offseason_service, build_pennant_season_service
 
+from ..helpers import world_scope
 from .test_pennant_advance import SEASON_GAMES
 from .test_pennant_offseason import YEAR, ClosedSeasonCase
 
@@ -23,7 +23,7 @@ from .test_pennant_offseason import YEAR, ClosedSeasonCase
 class CloseRaceTest(ClosedSeasonCase):
     def _service_with_rival(self, rival):
         """計算（`_prepare`）が済んだ直後、書く前に `rival()` を実行するサービス（別のリクエストの割り込み）。"""
-        service = build_pennant_offseason_service(self.world_a)
+        service = build_pennant_offseason_service(world_scope(self.world_a))
         prepare = service._prepare
 
         def prepare_then_interrupt(world, year):
@@ -35,7 +35,7 @@ class CloseRaceTest(ClosedSeasonCase):
         return service
 
     def test_the_read_and_the_calculation_happen_before_the_transaction_opens(self):
-        service = build_pennant_offseason_service(self.world_a)
+        service = build_pennant_offseason_service(world_scope(self.world_a))
         events: list[str] = []
         prepare, commit, atomic = service._prepare, service._commit, service._atomic
 
@@ -60,7 +60,9 @@ class CloseRaceTest(ClosedSeasonCase):
         self.close()
         closed_once = self.counts()
         transaction.savepoint_rollback(savepoint)
-        service = self._service_with_rival(lambda: build_pennant_offseason_service(self.world_a).close_season())
+        service = self._service_with_rival(
+            lambda: build_pennant_offseason_service(world_scope(self.world_a)).close_season()
+        )
 
         with self.assertRaises(AlreadyClosed) as raised:
             service.close_season()
@@ -74,7 +76,7 @@ class CloseRaceTest(ClosedSeasonCase):
         """外で読んだ名簿を中で `save()` すると、割り込みで加わった選手を消す。在籍の目印で気づいて断る。"""
 
         def add_a_player():
-            repository = DjangoTeamRepository(WorldScope.pennant(self.world_a))
+            repository = DjangoTeamRepository(world_scope(self.world_a))
             team = repository.find_all_with_roster()[0]
             team.add_player(
                 "途中加入", JerseyNumber("99"), Position.PITCHER, from_year=YEAR, limits=RosterLimits.UNLIMITED
@@ -95,8 +97,8 @@ class CloseRaceTest(ClosedSeasonCase):
 
     def test_another_request_advancing_in_the_meantime_is_refused(self):
         def close_and_advance():
-            build_pennant_offseason_service(self.world_a).close_season()
-            build_pennant_season_service(self.world_a).advance(AdvanceTarget.DAY)
+            build_pennant_offseason_service(world_scope(self.world_a)).close_season()
+            build_pennant_season_service(world_scope(self.world_a)).advance(AdvanceTarget.DAY)
 
         service = self._service_with_rival(close_and_advance)
 
@@ -106,7 +108,7 @@ class CloseRaceTest(ClosedSeasonCase):
     def test_a_close_without_interruption_still_writes_everything(self):
         before = self.counts()
 
-        result = build_pennant_offseason_service(self.world_a).close_season()
+        result = build_pennant_offseason_service(world_scope(self.world_a)).close_season()
 
         after = self.counts()
         self.assertEqual(result.year, YEAR)

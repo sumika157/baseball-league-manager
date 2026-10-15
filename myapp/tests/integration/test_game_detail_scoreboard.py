@@ -6,7 +6,6 @@ from datetime import date
 from django.urls import reverse
 
 from myapp.domain.entities import Game
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import BattingLine, LineScore, Season
 from myapp.infrastructure.repositories import DjangoGameRepository
 
@@ -16,6 +15,7 @@ from ..helpers import (
     login_as_manager,
     play_game,
     post_game_scorebook_day_unrecorded,
+    real_scope,
     register_lineup,
 )
 from .base import BaseCase
@@ -133,7 +133,7 @@ class GameDetailScoreboardTest(_DetailCase):
             line_score=LineScore(away=(1,), home=(2,)),
         )
         old.record_batting(batter.id, BattingLine(at_bats=4, singles=2), team_id=self.team.id)
-        game = DjangoGameRepository(WorldScope.real()).save(old)
+        game = DjangoGameRepository(real_scope()).save(old)
 
         response = self.client.get(reverse("game_detail", args=[game.id]))
 

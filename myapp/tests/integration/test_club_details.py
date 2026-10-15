@@ -21,6 +21,7 @@ from myapp.presentation.views import (
     build_pennant_season_service,
 )
 
+from ..helpers import world_scope
 from .test_club_screen import ClubScreenCase
 from .test_pennant_advance import YEAR
 from .test_pennant_offseason_screens import DECIDE_RETIREMENTS
@@ -33,7 +34,7 @@ class ClubDetailsTest(ClubScreenCase):
 
     def details(self):
         view = self.view()
-        return build_club_details_service(self.world_a).details(self.home_a.id, view.year, view.players)
+        return build_club_details_service(world_scope(self.world_a)).details(self.home_a.id, view.year, view.players)
 
     def test_the_active_tab_shows_ratings_age_and_the_stats_column(self):
         content = self.client.get(self.club_url("active")).content.decode()
@@ -55,7 +56,7 @@ class ClubDetailsTest(ClubScreenCase):
     def test_the_stats_appear_after_games_are_played(self):
         self.assertTrue(all(d.batting is None and d.pitching is None for d in self.details()), "開幕前は成績が無い")
 
-        build_pennant_season_service(self.world_a).advance(AdvanceTarget.SEASON_END)
+        build_pennant_season_service(world_scope(self.world_a)).advance(AdvanceTarget.SEASON_END)
 
         details = self.details()
         self.assertTrue(any(d.batting is not None for d in details))
@@ -65,7 +66,7 @@ class ClubDetailsTest(ClubScreenCase):
 
     def test_the_ratings_are_read_in_a_fixed_number_of_queries(self):
         view = self.view()
-        details = build_club_details_service(self.world_a)
+        details = build_club_details_service(world_scope(self.world_a))
         with CaptureQueriesContext(connection) as queries:
             details.details(self.home_a.id, view.year, view.players)
 
@@ -129,7 +130,7 @@ class ReserveMarkTest(ClubScreenCase):
         rival_id = orm_models.Team.objects.get(name="ライバル球団", league__world_id=self.world_a).id
         ids = self.service.view(rival_id).active_ids
         self.service.set_active_roster(rival_id, ids[:-1])
-        reserve = build_club_service(self.world_a).reserve_player_ids(rival_id)
+        reserve = build_club_service(world_scope(self.world_a)).reserve_player_ids(rival_id)
         on_the_team = set(orm_models.PlayerStint.objects.filter(team_id=rival_id).values_list("player_id", flat=True))
         self.assertTrue(reserve and reserve < on_the_team, "テストの前提: 1軍と2軍がいる")
 
@@ -140,12 +141,12 @@ class ReserveMarkTest(ClubScreenCase):
 
     def test_a_player_who_left_the_team_is_not_marked(self):
         """退団・引退した選手は、通算の表に残っていても「2軍」ではない（もうチームにいない）。"""
-        build_pennant_season_service(self.world_a).advance(AdvanceTarget.SEASON_END)
+        build_pennant_season_service(world_scope(self.world_a)).advance(AdvanceTarget.SEASON_END)
         retired = orm_models.PlayerStint.objects.filter(team_id=self.home_a.id, to_year=None).order_by("number")[0]
         with mock.patch(DECIDE_RETIREMENTS, return_value=(retired.player_id,)):
-            build_pennant_offseason_service(self.world_a).close_season(expected_year=YEAR)
+            build_pennant_offseason_service(world_scope(self.world_a)).close_season(expected_year=YEAR)
         name = retired.player.name
-        reserve = build_club_service(self.world_a).reserve_player_ids(self.home_a.id)
+        reserve = build_club_service(world_scope(self.world_a)).reserve_player_ids(self.home_a.id)
         self.assertNotIn(retired.player_id, reserve)
 
         content = ""

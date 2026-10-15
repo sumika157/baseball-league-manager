@@ -16,7 +16,6 @@ from django.db import connection, models, transaction
 from django.test.utils import CaptureQueriesContext
 
 from myapp.domain.entities import Team
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import (
     AcquisitionRoute,
     ContractStatus,
@@ -38,7 +37,7 @@ from myapp.infrastructure.repositories import (
 )
 from myapp.presentation.views import build_pennant_offseason_service
 
-from ..helpers import register_players
+from ..helpers import real_scope, register_players, world_scope
 from .base import BaseCase
 from .test_pennant_offseason import ClosedSeasonCase
 
@@ -138,7 +137,7 @@ class TeamSaveWritesOnlyChangesTest(BaseCase):
         super().setUpTestData()
         register_players(cls.team, [(f"選手{n}", n, "内野手") for n in range(1, 31)])
         register_players(cls.rival, [(f"相手{n}", n, "内野手") for n in range(1, 6)])
-        teams = DjangoTeamRepository(WorldScope.real())
+        teams = DjangoTeamRepository(real_scope())
         team = teams.find_by_id(cls.team.id)
         first = team.active_players[0]
         first.profile = FULL_PROFILE
@@ -163,7 +162,7 @@ class TeamSaveWritesOnlyChangesTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.teams = DjangoTeamRepository(WorldScope.real())
+        self.teams = DjangoTeamRepository(real_scope())
 
     def save_capturing(self, team: Team) -> list[str]:
         with CaptureQueriesContext(connection) as context:
@@ -342,9 +341,9 @@ class CloseSeasonSameAsRewritingEveryoneTest(ClosedSeasonCase):
     def _close_and_dump(self, *, rewriting_everyone: bool):
         savepoint = transaction.savepoint()
         try:
-            service = build_pennant_offseason_service(self.world_a)
+            service = build_pennant_offseason_service(world_scope(self.world_a))
             if rewriting_everyone:
-                service._teams = _RewritingEveryoneRepository(WorldScope.pennant(self.world_a))
+                service._teams = _RewritingEveryoneRepository(world_scope(self.world_a))
             with CaptureQueriesContext(connection) as context:
                 result = service.close_season()
             return result, self._dump(), len(roster_writes(context))

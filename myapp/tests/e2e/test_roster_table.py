@@ -9,7 +9,7 @@ from django.urls import reverse
 
 from myapp.infrastructure import orm_models
 
-from ..helpers import build_service, make_league
+from ..helpers import build_service, make_league, real_scope
 from .base import PlaywrightTestCase
 
 # セルの中身が2行以上に割れているセルを返す。
@@ -33,7 +33,7 @@ class RosterTableLayoutTest(PlaywrightTestCase):
         super().setUp()
         league = make_league(name="Eリーグ")
         self.team = orm_models.Team.objects.create(league=league, name="ホームズ")
-        service = build_service()
+        service = build_service(real_scope())
         # 長い名前・投打・バッジ（外国人）がそろうと、折り返したときに崩れが最も大きい
         pitcher = service.register_player(self.team.id, "サルバドール・グティエレス", 42, "投手")
         orm_models.Player.objects.filter(id=pitcher.id).update(

@@ -64,6 +64,16 @@ def default_workspace() -> orm_models.Workspace:
     return make_workspace(owner, "既定のワークスペース", key=DEFAULT_WORKSPACE_KEY)
 
 
+def real_scope() -> WorldScope:
+    """実データの範囲。テストが組み立て口やリポジトリに渡す範囲はここで作る（W1b T2 で DB から引く形にする）。"""
+    return WorldScope.real()
+
+
+def world_scope(world_id: int) -> WorldScope:
+    """ペナントの世界ひとつの範囲。"""
+    return WorldScope.pennant(world_id)
+
+
 def make_league(name, *, workspace=None, **fields) -> orm_models.League:
     """リーグを作る。実データのリーグは workspace に属す（省けば既定のワークスペース）。
 
@@ -94,7 +104,7 @@ def register_players(team, rows) -> list[int]:
     1人ずつ登録すると、そのたびにロスター全員（通算成績つき）を読み、保存で全員の行と比べるので、人数の2乗で遅くなる。
     登録そのものを確かめるテストは、これを使わずサービスを呼ぶ。
     """
-    scope = WorldScope.real()
+    scope = real_scope()
     teams = DjangoTeamRepository(scope)
     aggregate = teams.find_by_id(team.id)
     assert aggregate.league_id is not None
@@ -337,7 +347,7 @@ def play_game(
         placeholder = orm_models.Player.objects.create(name="記録用ダミー")
         game.record_batting(placeholder.id, BattingLine(), team_id=home_team.id)
 
-    return DjangoGameRepository(scope or WorldScope.real()).save(game)
+    return DjangoGameRepository(scope or real_scope()).save(game)
 
 
 def _team_of(player_id, home_team, away_team) -> int:

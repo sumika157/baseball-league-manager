@@ -21,7 +21,15 @@ from myapp.infrastructure.queries import DjangoHomeStadiumQuery
 from myapp.infrastructure.repositories import DjangoGameRepository, DjangoLeagueRepository, DjangoTeamRepository
 from myapp.presentation.views import build_pennant_world_service
 
-from ..helpers import build_scorebook, build_service, play_game, register_lineup, to_plate_appearances
+from ..helpers import (
+    build_scorebook,
+    build_service,
+    play_game,
+    real_scope,
+    register_lineup,
+    to_plate_appearances,
+    world_scope,
+)
 from .base import ROSTER_CHECK, BaseCase
 
 PENNANT_LEAGUE = "目印リーグ"
@@ -65,7 +73,7 @@ class WorldCase(BaseCase):
 
     @classmethod
     def _build_the_real_data_and_the_world(cls) -> None:
-        service = build_service()
+        service = build_service(real_scope())
         # --- 実データ。各チームに打者9人と投手1人、記録済みの試合を1つ ---
         cls.real_batters = register_lineup(service, cls.team, prefix="実打者", first_number=1)
         cls.real_rivals = register_lineup(service, cls.rival, prefix="実相手", first_number=1)
@@ -81,7 +89,7 @@ class WorldCase(BaseCase):
         )
 
         # --- 世界。分岐してから、世界の側の名前を目印に付け替える ---
-        created = build_pennant_world_service().create_world(
+        created = build_pennant_world_service(real_scope()).create_world(
             name=PENNANT_WORLD,
             owner_id=None,
             source_league_ids=[cls.league.id],
@@ -89,7 +97,7 @@ class WorldCase(BaseCase):
             seed=1,
         )
         cls.world_id = created.world.id
-        cls.scope = WorldScope.pennant(cls.world_id)
+        cls.scope = world_scope(cls.world_id)
         cls._mark_the_world()
         cls._play_a_game_in_the_world()
 

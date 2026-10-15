@@ -14,7 +14,6 @@ from django.test.utils import CaptureQueriesContext
 from myapp.application.pennant_world import PennantWorldService, WorldRepositories
 from myapp.domain.exceptions import InvalidRatings, InvalidWorld, PlayerNotFound
 from myapp.domain.pennant.ratings import PlayerRatings
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings
 from myapp.domain.simulation.samples import BATTER_SD
 from myapp.domain.simulation.spread import MIN_POPULATION, target_mean
@@ -30,12 +29,12 @@ from myapp.infrastructure.repositories import (
 from myapp.management.estimate_check import estimate_from_source
 from myapp.presentation.views import build_pennant_world_service
 
-from ..helpers import give_batting, give_pitching, play_game
+from ..helpers import give_batting, give_pitching, play_game, real_scope, world_scope
 from .base import BaseCase
 from .world_case import YEAR, WorldCase
 
 START = 2030
-REAL = WorldScope.real()
+REAL = real_scope()
 
 
 class ColumnsMatchTheDomainTest(SimpleTestCase):
@@ -119,10 +118,10 @@ class RatingsRepositoryTest(WorldCase):
             DjangoRatingsRepository(REAL).add_all([PlayerRatings(self.real_batters[0], 2031, BatterRatings())])
 
     def test_another_world_cannot_see_the_ratings(self):
-        other = build_pennant_world_service().create_world(
+        other = build_pennant_world_service(real_scope()).create_world(
             name="別", owner_id=None, source_league_ids=[self.league.id], start_year=START, seed=9
         )
-        other_repository = DjangoRatingsRepository(WorldScope.pennant(other.world.id))
+        other_repository = DjangoRatingsRepository(world_scope(other.world.id))
 
         self.assertEqual(other_repository.find_by_player(self.batter_id), [])
         self.assertTrue(all(item.player_id != self.batter_id for item in other_repository.find_by_year(YEAR)))
@@ -212,18 +211,18 @@ class WorldDeletionRemovesRatingsTest(WorldCase):
     def test_deleting_the_world_removes_its_ratings(self):
         self.assertGreater(len(DjangoRatingsRepository(self.scope).find_by_year(YEAR)), 0)
 
-        build_pennant_world_service().delete_world(self.world_id)
+        build_pennant_world_service(real_scope()).delete_world(self.world_id)
 
         self.assertEqual(orm_models.PennantPlayerRatings.objects.count(), 0)
 
     def test_deleting_one_world_keeps_the_ratings_of_another(self):
-        other = build_pennant_world_service().create_world(
+        other = build_pennant_world_service(real_scope()).create_world(
             name="別", owner_id=None, source_league_ids=[self.league.id], start_year=START, seed=9
         )
         kept = orm_models.PennantPlayerRatings.objects.filter(player__stints__team__league__world=other.world.id)
         before = kept.count()
 
-        build_pennant_world_service().delete_world(self.world_id)
+        build_pennant_world_service(real_scope()).delete_world(self.world_id)
 
         self.assertGreater(before, 0)
         self.assertEqual(kept.count(), before)
@@ -270,13 +269,13 @@ class ForkedRatingsTest(BaseCase):
         self.ratings = self._ratings_by_name(self.created)
 
     def _create(self, *, seed, name="能力", start_year=START):
-        return build_pennant_world_service().create_world(
+        return build_pennant_world_service(real_scope()).create_world(
             name=name, owner_id=None, source_league_ids=[self.league.id], start_year=start_year, seed=seed
         )
 
     @staticmethod
     def _ratings_by_name(created):
-        repository = DjangoRatingsRepository(WorldScope.pennant(created.world.id))
+        repository = DjangoRatingsRepository(world_scope(created.world.id))
         return {
             orm_models.Player.objects.get(id=item.player_id).name: item.ratings
             for item in repository.find_by_year(created.world.start_year)
@@ -400,14 +399,14 @@ class SameMaterialTest(BaseCase):
         service.retire_player(self.rival.id, self.retired.id)
 
     def test_the_world_and_the_check_give_the_same_ratings(self):
-        world = build_pennant_world_service().create_world(
+        world = build_pennant_world_service(real_scope()).create_world(
             name="同じ材料", owner_id=None, source_league_ids=[self.league.id], start_year=START, seed=21
         )
         in_world = {
             orm_models.Player.objects.get(id=item.player_id).name: item.ratings
-            for item in DjangoRatingsRepository(WorldScope.pennant(world.world.id)).find_by_year(START)
+            for item in DjangoRatingsRepository(world_scope(world.world.id)).find_by_year(START)
         }
-        service = build_pennant_world_service()
+        service = build_pennant_world_service(real_scope())
         source = service.load_source([self.league.id])
 
         checked = estimate_from_source(service, source, seed=21, year=START)
@@ -418,7 +417,7 @@ class SameMaterialTest(BaseCase):
 
     def test_a_retired_player_does_not_move_the_league_norms(self):
         """退団した選手の盗塁は、目印に入らない。入ると、現役の走者の走力が低く見積もられる。"""
-        service = build_pennant_world_service()
+        service = build_pennant_world_service(real_scope())
         source = service.load_source([self.league.id])
         with_retired = [player for teams in source.rosters for team in teams for player in team.players]
 
@@ -454,7 +453,7 @@ class ForkedSpreadTest(BaseCase):
             self.service.register_player(self.team.id, f"2軍{index}", 60 + index, "外野手")
 
     def test_the_standard_deviation_of_the_world_matches_the_target(self):
-        created = build_pennant_world_service().create_world(
+        created = build_pennant_world_service(real_scope()).create_world(
             name="散らばり", owner_id=None, source_league_ids=[self.league.id], start_year=START, seed=3
         )
         # 成績のある選手（写した先）だけを測る。2軍の層を母集団に入れる退行があると、成績のある選手の
@@ -466,7 +465,7 @@ class ForkedSpreadTest(BaseCase):
         )
         ratings = [
             item.ratings
-            for item in DjangoRatingsRepository(WorldScope.pennant(created.world.id)).find_by_year(START)
+            for item in DjangoRatingsRepository(world_scope(created.world.id)).find_by_year(START)
             if isinstance(item.ratings, BatterRatings) and item.player_id in with_record
         ]
 
@@ -507,10 +506,10 @@ class FieldingTotalsQueryTest(BaseCase):
         self.assertEqual(DjangoFieldingTotalsQuery(REAL).totals_for([]), {})
 
     def test_another_scope_does_not_see_the_real_games(self):
-        created = build_pennant_world_service().create_world(
+        created = build_pennant_world_service(real_scope()).create_world(
             name="守備", owner_id=None, source_league_ids=[self.league.id], start_year=START, seed=1
         )
 
-        totals = DjangoFieldingTotalsQuery(WorldScope.pennant(created.world.id)).totals_for([self.shortstop.id])
+        totals = DjangoFieldingTotalsQuery(world_scope(created.world.id)).totals_for([self.shortstop.id])
 
         self.assertEqual(totals, {})

@@ -10,7 +10,6 @@ from datetime import date
 
 from django.urls import reverse
 
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import BattingLine, InningsPitched, PitchingLine
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoGameListQuery
@@ -22,6 +21,7 @@ from ..helpers import (
     login_as_manager,
     play_game,
     post_game_scorebook_day_unrecorded,
+    real_scope,
     register_lineup,
 )
 from .base import BaseCase
@@ -93,7 +93,7 @@ class UnrecordedGameTest(BaseCase):
 
         self.assertEqual(self.service.get_team_totals(self.team.id).games, 1)
         self.assertEqual(
-            DjangoGameListQuery(WorldScope.real()).count_by_team(year=2026), {self.team.id: 1, self.rival.id: 1}
+            DjangoGameListQuery(real_scope()).count_by_team(year=2026), {self.team.id: 1, self.rival.id: 1}
         )
 
     def test_an_unrecorded_game_does_not_move_the_qualification_denominator(self):
@@ -169,7 +169,7 @@ class UnrecordedGameTest(BaseCase):
     def test_no_winner_is_marked_on_an_unrecorded_game(self):
         self._register()
 
-        rows = DjangoGameListQuery(WorldScope.real()).list_rows(year=2026)
+        rows = DjangoGameListQuery(real_scope()).list_rows(year=2026)
 
         self.assertEqual([(row.is_recorded, row.winner_team_id) for row in rows], [(False, None)])
 
@@ -233,8 +233,8 @@ class RecordedConditionMatchesTheDomainTest(BaseCase):
         )
         cases["打席だけ"] = with_plate_appearance
 
-        repository = DjangoGameRepository(WorldScope.real())
-        query = DjangoGameListQuery(WorldScope.real())
+        repository = DjangoGameRepository(real_scope())
+        query = DjangoGameListQuery(real_scope())
         by_id_light = {game.id: game.is_recorded for game in query.list_for_standings()}
         by_id_row = {row.id: row.is_recorded for row in query.list_rows()}
 

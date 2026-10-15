@@ -9,7 +9,7 @@ from django.urls import reverse
 
 from myapp.infrastructure import orm_models
 
-from ..helpers import build_team_analysis_service
+from ..helpers import build_team_analysis_service, real_scope
 from .test_team_analysis import AnalysisCase
 
 BADGE = '<span class="badge bg-primary">育成</span>'
@@ -31,7 +31,7 @@ class DepthContractTest(AnalysisCase):
             self.game(self.team, self.rival, year=year, pitching=[(self.regular, 1), (self.promoted, 2)])
 
     def analysis(self, **kwargs):
-        return build_team_analysis_service().get_analysis(self.team.id, **kwargs)
+        return build_team_analysis_service(real_scope()).get_analysis(self.team.id, **kwargs)
 
     def url(self, **params):
         return reverse("team_analysis", args=[self.team.id]) + "?" + "&".join(f"{k}={v}" for k, v in params.items())

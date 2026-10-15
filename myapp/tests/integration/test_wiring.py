@@ -6,7 +6,7 @@ application/queries.py）だけに依存し、実装は組み立ての1か所（
 気づけないため、機械的に確かめる。
 
 あわせて、**リポジトリと参照クエリが世界の範囲（`WorldScope`）を必須で受け取る**こと、
-実データ用の組み立てが実データの範囲に固定されていることを確かめる。
+組み立て口が範囲を既定値なしで受け取り、範囲の取り違え（ペナント専用に実データ、実データ専用にペナント）を弾くことを確かめる。
 """
 
 import inspect
@@ -76,6 +76,7 @@ from myapp.infrastructure.repositories import (
     DjangoTeamRepository,
     DjangoWorldRepository,
 )
+from myapp.presentation import views
 from myapp.presentation.views import (
     build_club_details_service,
     build_club_service,
@@ -93,11 +94,36 @@ from myapp.presentation.views import (
     build_roster_service,
     build_service,
     build_team_analysis_service,
-    build_world_team_analysis_service,
-    build_world_view_service,
 )
 
 REAL = WorldScope.real()
+WORLD7 = WorldScope.pennant(7)
+WORLD8 = WorldScope.pennant(8)
+
+# 組み立て口の分類。views.build_* は、ちょうどどれか1つに入る（`test_every_builder_is_classified_once`）。
+# 実データでもペナントでも組み立てられる（範囲に応じて年の基準が変わる）
+BOTH_BUILDERS = (build_service, build_team_analysis_service)
+# 実データ専用。ペナントの範囲を渡すと InvalidWorld
+REAL_ONLY_BUILDERS = (
+    build_recording_service,
+    build_roster_service,
+    build_permission_query,
+    build_player_search_query,
+    build_pennant_world_service,
+)
+# 世界の台帳だけを読む。範囲を取らない（T3 で workspace_id を取る）
+LEDGER_BUILDERS = (build_pennant_world_view,)
+# ペナント専用。実データの範囲を渡すと InvalidWorld
+PENNANT_ONLY_BUILDERS = (
+    build_pennant_season_service,
+    build_pennant_offseason_service,
+    build_pennant_ratings_service,
+    build_pennant_home_service,
+    build_pennant_history_service,
+    build_club_service,
+    build_club_details_service,
+    build_offseason_view_service,
+)
 
 # 世界そのものの台帳なので、範囲を持たない
 UNSCOPED = {DjangoWorldRepository, DjangoWorldSummaryQuery}
@@ -170,56 +196,56 @@ class BuildServiceTest(SimpleTestCase):
         属性 `_teams` の対応を前提にする）。内部の控えは初期値が None を
         取りうるので、`vars()` を丸ごと見ない。
         """
-        self._assert_wired(build_service(), TeamApplicationService)
+        self._assert_wired(build_service(REAL), TeamApplicationService)
 
     def test_recording_service_dependencies_are_wired(self):
         """スコアブックの保存サービスも同じ検査にかける。
 
         組み立てが増えるたびに検査を書き忘れると、この形の事故だけが素通りする。
         """
-        self._assert_wired(build_recording_service(), GameRecordingService)
+        self._assert_wired(build_recording_service(REAL), GameRecordingService)
 
     def test_pennant_world_service_dependencies_are_wired(self):
-        self._assert_wired(build_pennant_world_service(), PennantWorldService)
+        self._assert_wired(build_pennant_world_service(REAL), PennantWorldService)
 
     def test_pennant_season_service_dependencies_are_wired(self):
-        self._assert_wired(build_pennant_season_service(7), PennantSeasonService)
+        self._assert_wired(build_pennant_season_service(WORLD7), PennantSeasonService)
 
     def test_pennant_offseason_service_dependencies_are_wired(self):
-        self._assert_wired(build_pennant_offseason_service(7), PennantOffseasonService)
+        self._assert_wired(build_pennant_offseason_service(WORLD7), PennantOffseasonService)
 
     def test_world_view_service_dependencies_are_wired(self):
         """世界の範囲の参照サービスも、実データ用と同じ検査にかける（依存は実データ用と同じ全部）。"""
-        self._assert_wired(build_world_view_service(7), TeamApplicationService)
+        self._assert_wired(build_service(WORLD7), TeamApplicationService)
 
     def test_pennant_home_service_dependencies_are_wired(self):
-        self._assert_wired(build_pennant_home_service(7), PennantHomeService)
+        self._assert_wired(build_pennant_home_service(WORLD7), PennantHomeService)
 
     def test_pennant_history_service_dependencies_are_wired(self):
-        self._assert_wired(build_pennant_history_service(7), PennantHistoryService)
+        self._assert_wired(build_pennant_history_service(WORLD7), PennantHistoryService)
 
     def test_pennant_world_view_dependencies_are_wired(self):
         self._assert_wired(build_pennant_world_view(), PennantWorldViewService)
 
     def test_club_service_dependencies_are_wired(self):
-        self._assert_wired(build_club_service(7), ClubManagementService)
+        self._assert_wired(build_club_service(WORLD7), ClubManagementService)
 
     def test_club_details_service_dependencies_are_wired(self):
-        self._assert_wired(build_club_details_service(7), ClubDetailsService)
+        self._assert_wired(build_club_details_service(WORLD7), ClubDetailsService)
 
     def test_pennant_ratings_service_dependencies_are_wired(self):
-        self._assert_wired(build_pennant_ratings_service(7), PennantRatingsViewService)
+        self._assert_wired(build_pennant_ratings_service(WORLD7), PennantRatingsViewService)
 
     def test_team_analysis_service_dependencies_are_wired(self):
         """戦力分析のサービスも同じ検査にかける（組み立て口は build_*() 関数だけ）。"""
-        self._assert_wired(build_team_analysis_service(), TeamAnalysisService)
+        self._assert_wired(build_team_analysis_service(REAL), TeamAnalysisService)
 
     def test_world_team_analysis_service_dependencies_are_wired(self):
-        self._assert_wired(build_world_team_analysis_service(7), TeamAnalysisService)
+        self._assert_wired(build_team_analysis_service(WORLD7), TeamAnalysisService)
 
     def test_roster_service_dependencies_are_wired(self):
         """契約区分（昇格）のサービスも同じ検査にかける（組み立て口は build_*() 関数だけ）。"""
-        self._assert_wired(build_roster_service(), RosterService)
+        self._assert_wired(build_roster_service(REAL), RosterService)
 
     def _assert_wired(self, service, cls):
         parameters = [name for name in signature(cls.__init__).parameters if name != "self"]
@@ -248,106 +274,144 @@ class WorldViewScopeTest(SimpleTestCase):
     )
 
     def test_every_dependency_is_fixed_to_the_given_world(self):
-        service = build_world_view_service(7)
+        service = build_service(WORLD7)
         for name in self.SCOPED:
             with self.subTest(dependency=name):
-                self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
+                self.assertEqual(getattr(service, name)._scope, WORLD7)
 
     def test_it_has_the_same_dependencies_as_the_real_one(self):
         """実データ用と同じ依存の組。片方だけに足して、世界の画面だけが落ちる形にしない。"""
         for name in self.SCOPED:
             with self.subTest(dependency=name):
-                self.assertTrue(hasattr(build_service(), name))
+                self.assertTrue(hasattr(build_service(REAL), name))
 
     def test_the_real_data_uses_the_calendar_today(self):
-        self.assertEqual(build_service()._today, date.today)
+        self.assertEqual(build_service(REAL)._today, date.today)
 
-    def test_the_real_data_cannot_be_viewed_as_a_world(self):
-        for bad in (0, -1, True):
-            with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
-                build_world_view_service(bad)
+    def test_the_calendar_today_is_not_used_for_a_world(self):
+        """世界の範囲では、年齢の基準日は暦の今日ではなく世界の「今日」。"""
+        self.assertIsNot(build_service(WORLD7)._today, date.today)
 
     def test_the_world_analysis_is_fixed_to_its_world_and_uses_the_worlds_today(self):
         """戦力分析も、世界の範囲だけを読み、試合の無い球団の既定の年は世界の今日から取る。"""
-        service = build_world_team_analysis_service(7)
+        service = build_team_analysis_service(WORLD7)
         for name in ("_team_list_query", "_analysis_query"):
             with self.subTest(dependency=name):
-                self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
+                self.assertEqual(getattr(service, name)._scope, WORLD7)
         self.assertIsNot(service._today, date.today)
-        self.assertEqual(build_team_analysis_service()._today, date.today)
-        for bad in (0, -1, True):
-            with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
-                build_world_team_analysis_service(bad)
+        self.assertEqual(build_team_analysis_service(REAL)._today, date.today)
 
     def test_the_header_view_takes_no_world_and_reads_each_worlds_standings_in_its_own_scope(self):
         """見出しは世界の台帳から読み、自軍の順位だけ世界の範囲のサービスで読む。"""
         view = build_pennant_world_view()
         self.assertEqual(list(signature(build_pennant_world_view).parameters), [])
-        self.assertEqual(view._standings_for(7)._games._scope, WorldScope.pennant(7))
-        self.assertEqual(view._standings_for(8)._games._scope, WorldScope.pennant(8))
+        self.assertEqual(view._standings_for(7)._games._scope, WORLD7)
+        self.assertEqual(view._standings_for(8)._games._scope, WORLD8)
         # 同率の決着に使う試合も、世界ごとの範囲で読む
-        self.assertEqual(view._games_for(7)._scope, WorldScope.pennant(7))
-        self.assertEqual(view._games_for(8)._scope, WorldScope.pennant(8))
+        self.assertEqual(view._games_for(7)._scope, WORLD7)
+        self.assertEqual(view._games_for(8)._scope, WORLD8)
 
 
 class RealScopeTest(SimpleTestCase):
-    """実データ用の組み立ては、すべて実データの範囲に固定されていること。"""
+    """実データの範囲を渡して組み立てたサービスは、すべて実データの範囲で読み書きすること。"""
 
     def test_build_service_is_fixed_to_the_real_scope(self):
-        service = build_service()
+        service = build_service(REAL)
         for name in ("_teams", "_team_list_query", "_games", "_leagues", "_game_list_query", "_player_fielding_query"):
             with self.subTest(dependency=name):
                 self.assertEqual(getattr(service, name)._scope, REAL)
 
     def test_build_recording_service_is_fixed_to_the_real_scope(self):
-        service = build_recording_service()
+        service = build_recording_service(REAL)
         for name in ("_games", "_teams", "_leagues", "_home_stadiums"):
             with self.subTest(dependency=name):
                 self.assertEqual(getattr(service, name)._scope, REAL)
 
     def test_build_team_analysis_service_is_fixed_to_the_real_scope(self):
-        service = build_team_analysis_service()
+        service = build_team_analysis_service(REAL)
         for name in ("_team_list_query", "_analysis_query"):
             with self.subTest(dependency=name):
                 self.assertEqual(getattr(service, name)._scope, REAL)
 
     def test_build_roster_service_is_fixed_to_the_real_scope(self):
         """昇格・FA 宣言は実データの管理画面の操作。ペナントの世界の球団には触れない。"""
-        service = build_roster_service()
+        service = build_roster_service(REAL)
         for name in ("_teams", "_leagues"):
             with self.subTest(dependency=name):
                 self.assertEqual(getattr(service, name)._scope, REAL)
 
     def test_queries_built_for_views_are_fixed_to_the_real_scope(self):
-        self.assertEqual(build_permission_query()._scope, REAL)
-        self.assertEqual(build_player_search_query()._scope, REAL)
+        self.assertEqual(build_permission_query(REAL)._scope, REAL)
+        self.assertEqual(build_player_search_query(REAL)._scope, REAL)
 
-    def test_build_functions_take_no_scope(self):
-        """範囲を引数に取る形にしない（既定値で切り替えると、渡し忘れが混入になる）。"""
-        for build in (
-            build_service,
-            build_recording_service,
-            build_team_analysis_service,
-            build_roster_service,
-            build_permission_query,
-            build_player_search_query,
-        ):
-            with self.subTest(build=build.__name__):
-                self.assertEqual(list(signature(build).parameters), [])
+    def test_real_only_builders_reject_a_pennant_scope(self):
+        """実データ専用の組み立て口にペナントの範囲を渡す取り違えは、組み立てるところで止める。"""
+        for build in REAL_ONLY_BUILDERS:
+            with self.subTest(build=build.__name__), self.assertRaises(InvalidWorld):
+                build(WORLD7)
+
+    def test_pennant_only_builders_reject_the_real_scope(self):
+        """ペナント専用の組み立て口に実データの範囲を渡す取り違えは、組み立てるところで止める。"""
+        for build in PENNANT_ONLY_BUILDERS:
+            with self.subTest(build=build.__name__), self.assertRaises(InvalidWorld):
+                build(REAL)
 
     def test_pennant_world_service_reads_the_real_data(self):
         """世界の作成は、分岐元を実データの範囲で読む。"""
-        service = build_pennant_world_service()
+        service = build_pennant_world_service(REAL)
         self.assertEqual(service._real_leagues._scope, REAL)
         self.assertEqual(service._real_teams._scope, REAL)
         self.assertEqual(service._real_fielding._scope, REAL, "守備成績も分岐元（実データ）から読む")
 
     def test_pennant_world_service_writes_to_the_given_world(self):
         """写し先のリポジトリは、渡された世界の範囲で組み立てられる。"""
-        repositories_ = build_pennant_world_service()._repositories_for(WorldScope.pennant(7))
-        self.assertEqual(repositories_.leagues._scope, WorldScope.pennant(7))
-        self.assertEqual(repositories_.teams._scope, WorldScope.pennant(7))
-        self.assertEqual(repositories_.ratings._scope, WorldScope.pennant(7))
+        repositories_ = build_pennant_world_service(REAL)._repositories_for(WORLD7)
+        self.assertEqual(repositories_.leagues._scope, WORLD7)
+        self.assertEqual(repositories_.teams._scope, WORLD7)
+        self.assertEqual(repositories_.ratings._scope, WORLD7)
+
+
+class BuildersRequireScopeTest(SimpleTestCase):
+    """組み立て口は範囲（`scope`）を既定値なしで受け取る。台帳だけを読む見出しは範囲を取らない（W1b T3 で替える）。"""
+
+    @staticmethod
+    def _found_builders():
+        return [
+            function
+            for name, function in inspect.getmembers(views, inspect.isfunction)
+            if name.startswith("build_") and function.__module__ == views.__name__
+        ]
+
+    def test_every_builder_is_classified_once(self):
+        """views の `build_*` は、実データ専用・ペナント専用・両方・台帳のちょうど1つに入る。
+
+        新しい組み立て口を足したら、どの範囲を受け取るかをここで決めさせる（分類の漏れ・二重を拾う）。
+        """
+        classes = (BOTH_BUILDERS, REAL_ONLY_BUILDERS, PENNANT_ONLY_BUILDERS, LEDGER_BUILDERS)
+        found = self._found_builders()
+        self.assertGreaterEqual(len(found), 16, "検査の対象を拾えていません")
+        for function in found:
+            with self.subTest(build=function.__name__):
+                self.assertEqual(sum(function in group for group in classes), 1, "分類がちょうど1つではありません")
+        classified = [function for group in classes for function in group]
+        self.assertEqual(sorted(f.__name__ for f in classified), sorted(f.__name__ for f in found))
+
+    def test_every_builder_takes_a_required_scope(self):
+        for function in self._found_builders():
+            if function in LEDGER_BUILDERS:
+                continue
+            with self.subTest(build=function.__name__):
+                parameters = signature(function).parameters
+                self.assertEqual(list(parameters), ["scope"])
+                self.assertIs(parameters["scope"].default, Parameter.empty, "範囲に既定値があります")
+
+    def test_the_ledger_only_view_takes_no_scope(self):
+        for build in LEDGER_BUILDERS:
+            self.assertEqual(list(signature(build).parameters), [])
+
+    def test_the_world_scope_builders_were_folded_into_the_scope_taking_ones(self):
+        self.assertFalse(hasattr(views, "build_world_view_service"))
+        self.assertFalse(hasattr(views, "build_world_team_analysis_service"))
 
 
 class PennantSeasonScopeTest(SimpleTestCase):
@@ -356,27 +420,26 @@ class PennantSeasonScopeTest(SimpleTestCase):
     SCOPED = ("_leagues", "_teams", "_games", "_fixtures", "_ratings", "_plans", "_context_query")
 
     def test_every_dependency_is_fixed_to_the_given_world(self):
-        service = build_pennant_season_service(7)
+        service = build_pennant_season_service(WORLD7)
         self.assertEqual(service._world_id, 7)
         for name in self.SCOPED:
             with self.subTest(dependency=name):
-                self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
+                self.assertEqual(getattr(service, name)._scope, WORLD7)
 
     def test_a_different_world_gets_a_different_scope(self):
-        self.assertEqual(build_pennant_season_service(8)._games._scope, WorldScope.pennant(8))
+        self.assertEqual(build_pennant_season_service(WORLD8)._games._scope, WORLD8)
 
     def test_the_real_data_cannot_be_advanced(self):
-        """世界の id は必須で、実データを指す形（0・負・None・真偽値）は弾く。"""
-        for bad in (0, -1, True):
-            with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
-                build_pennant_season_service(bad)
+        """実データの範囲では、ペナントの世界のシーズンを進める口を組み立てられない。"""
+        with self.assertRaises(InvalidWorld):
+            build_pennant_season_service(REAL)
 
     def test_the_transaction_is_the_database_transaction(self):
         from django.db import transaction
 
-        self.assertIs(build_pennant_season_service(7)._atomic, transaction.atomic)
+        self.assertIs(build_pennant_season_service(WORLD7)._atomic, transaction.atomic)
         # 世界の作成と日程の生成を1つにする（失敗したら世界を残さない）のも、本物のトランザクション
-        self.assertIs(build_pennant_world_service()._atomic, transaction.atomic)
+        self.assertIs(build_pennant_world_service(REAL)._atomic, transaction.atomic)
 
 
 class PennantHomeScopeTest(SimpleTestCase):
@@ -385,19 +448,18 @@ class PennantHomeScopeTest(SimpleTestCase):
     SCOPED = ("_games", "_game_records", "_fixtures", "_activity", "_team_records", "_leagues")
 
     def test_every_dependency_is_fixed_to_the_given_world(self):
-        service = build_pennant_home_service(7)
+        service = build_pennant_home_service(WORLD7)
         for name in self.SCOPED:
             with self.subTest(dependency=name):
-                self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
-        self.assertEqual(service._teams._games._scope, WorldScope.pennant(7), "順位・主力も世界の範囲のサービス")
+                self.assertEqual(getattr(service, name)._scope, WORLD7)
+        self.assertEqual(service._teams._games._scope, WORLD7, "順位・主力も世界の範囲のサービス")
 
     def test_a_different_world_gets_a_different_scope(self):
-        self.assertEqual(build_pennant_home_service(8)._activity._scope, WorldScope.pennant(8))
+        self.assertEqual(build_pennant_home_service(WORLD8)._activity._scope, WORLD8)
 
     def test_the_real_data_cannot_be_read_as_a_home(self):
-        for bad in (0, -1, True):
-            with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
-                build_pennant_home_service(bad)
+        with self.assertRaises(InvalidWorld):
+            build_pennant_home_service(REAL)
 
 
 class PennantHistoryScopeTest(SimpleTestCase):
@@ -406,19 +468,18 @@ class PennantHistoryScopeTest(SimpleTestCase):
     SCOPED = ("_games", "_team_records", "_leagues")
 
     def test_every_dependency_is_fixed_to_the_given_world(self):
-        service = build_pennant_history_service(7)
+        service = build_pennant_history_service(WORLD7)
         for name in self.SCOPED:
             with self.subTest(dependency=name):
-                self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
-        self.assertEqual(service._teams._games._scope, WorldScope.pennant(7), "順位・タイトルも世界の範囲のサービス")
+                self.assertEqual(getattr(service, name)._scope, WORLD7)
+        self.assertEqual(service._teams._games._scope, WORLD7, "順位・タイトルも世界の範囲のサービス")
 
     def test_a_different_world_gets_a_different_scope(self):
-        self.assertEqual(build_pennant_history_service(8)._games._scope, WorldScope.pennant(8))
+        self.assertEqual(build_pennant_history_service(WORLD8)._games._scope, WORLD8)
 
     def test_the_real_data_cannot_be_read_as_a_history(self):
-        for bad in (0, -1, True):
-            with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
-                build_pennant_history_service(bad)
+        with self.assertRaises(InvalidWorld):
+            build_pennant_history_service(REAL)
 
 
 class PennantOffseasonScopeTest(SimpleTestCase):
@@ -427,16 +488,15 @@ class PennantOffseasonScopeTest(SimpleTestCase):
     SCOPED = ("_leagues", "_teams", "_fixtures", "_ratings", "_plans", "_releases", "_context_query", "_playing_time")
 
     def test_every_dependency_is_fixed_to_the_given_world(self):
-        service = build_pennant_offseason_service(7)
+        service = build_pennant_offseason_service(WORLD7)
         self.assertEqual(service._world_id, 7)
         for name in self.SCOPED:
             with self.subTest(dependency=name):
-                self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
+                self.assertEqual(getattr(service, name)._scope, WORLD7)
 
     def test_the_real_data_cannot_be_closed(self):
-        for bad in (0, -1, True):
-            with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
-                build_pennant_offseason_service(bad)
+        with self.assertRaises(InvalidWorld):
+            build_pennant_offseason_service(REAL)
 
 
 class ClubServiceScopeTest(SimpleTestCase):
@@ -445,19 +505,18 @@ class ClubServiceScopeTest(SimpleTestCase):
     SCOPED = ("_plans", "_ratings", "_fixtures", "_context_query")
 
     def test_every_dependency_is_fixed_to_the_given_world(self):
-        service = build_club_service(7)
+        service = build_club_service(WORLD7)
         self.assertEqual(service._world_id, 7)
         for name in self.SCOPED:
             with self.subTest(dependency=name):
-                self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
+                self.assertEqual(getattr(service, name)._scope, WORLD7)
 
     def test_a_different_world_gets_a_different_scope(self):
-        self.assertEqual(build_club_service(8)._plans._scope, WorldScope.pennant(8))
+        self.assertEqual(build_club_service(WORLD8)._plans._scope, WORLD8)
 
     def test_the_real_data_has_no_club_service(self):
-        for bad in (0, -1, True):
-            with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
-                build_club_service(bad)
+        with self.assertRaises(InvalidWorld):
+            build_club_service(REAL)
 
 
 class ClubDetailsScopeTest(SimpleTestCase):
@@ -466,15 +525,14 @@ class ClubDetailsScopeTest(SimpleTestCase):
     SCOPED = ("_stats", "_ratings")
 
     def test_every_dependency_is_fixed_to_the_given_world(self):
-        service = build_club_details_service(7)
+        service = build_club_details_service(WORLD7)
         for name in self.SCOPED:
             with self.subTest(dependency=name):
-                self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
+                self.assertEqual(getattr(service, name)._scope, WORLD7)
 
     def test_the_real_data_has_no_club_details_service(self):
-        for bad in (0, -1, True):
-            with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
-                build_club_details_service(bad)
+        with self.assertRaises(InvalidWorld):
+            build_club_details_service(REAL)
 
 
 class PennantRatingsScopeTest(SimpleTestCase):
@@ -483,32 +541,30 @@ class PennantRatingsScopeTest(SimpleTestCase):
     SCOPED = ("_stats", "_ratings", "_history", "_fixtures", "_context_query")
 
     def test_every_dependency_is_fixed_to_the_given_world(self):
-        service = build_pennant_ratings_service(7)
+        service = build_pennant_ratings_service(WORLD7)
         for name in self.SCOPED:
             with self.subTest(dependency=name):
-                self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
+                self.assertEqual(getattr(service, name)._scope, WORLD7)
 
     def test_a_different_world_gets_a_different_scope(self):
-        self.assertEqual(build_pennant_ratings_service(8)._ratings._scope, WorldScope.pennant(8))
+        self.assertEqual(build_pennant_ratings_service(WORLD8)._ratings._scope, WORLD8)
 
     def test_the_real_data_has_no_ratings_service(self):
-        for bad in (0, -1, True):
-            with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
-                build_pennant_ratings_service(bad)
+        with self.assertRaises(InvalidWorld):
+            build_pennant_ratings_service(REAL)
 
 
 class OffseasonViewScopeTest(SimpleTestCase):
     """オフの結果の参照は、渡された世界の範囲だけを読む。"""
 
     def test_dependencies_are_wired_and_fixed_to_the_given_world(self):
-        service = build_offseason_view_service(7)
+        service = build_offseason_view_service(WORLD7)
         self.assertIsInstance(service, OffseasonViewService)
-        self.assertEqual(service._offseason._scope, WorldScope.pennant(7))
+        self.assertEqual(service._offseason._scope, WORLD7)
 
     def test_a_different_world_gets_a_different_scope(self):
-        self.assertEqual(build_offseason_view_service(8)._offseason._scope, WorldScope.pennant(8))
+        self.assertEqual(build_offseason_view_service(WORLD8)._offseason._scope, WORLD8)
 
     def test_the_real_data_has_no_offseason(self):
-        for bad in (0, -1, True):
-            with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
-                build_offseason_view_service(bad)
+        with self.assertRaises(InvalidWorld):
+            build_offseason_view_service(REAL)

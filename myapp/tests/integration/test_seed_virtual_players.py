@@ -14,7 +14,6 @@ from django.core.management.base import CommandError
 from django.test import SimpleTestCase
 
 from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND, RegisteredBand
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import AcquisitionRoute, ContractStatus
 from myapp.domain.virtual_players import generator
 from myapp.domain.virtual_players.generator import DEVELOPMENTAL_RANGE
@@ -23,6 +22,7 @@ from myapp.infrastructure.repositories import DjangoTeamRepository
 from myapp.management.commands import seed_virtual_players
 from myapp.management.commands.seed_virtual_players import ORIGINAL_PLAYER_READINGS
 
+from ..helpers import real_scope
 from .base import BaseCase
 
 COMMAND = "seed_virtual_players"
@@ -119,7 +119,7 @@ class SeedRosterTest(BaseCase):
                     # 助っ人は支配下だけ（外国人登録枠は育成も数えるので、枠を支配下に回す）
                     self.assertFalse(stint.player.is_foreign_player)
             # 集約として読み戻しても区分の規則に通る
-            DjangoTeamRepository(WorldScope.real()).find_by_id(team.id)
+            DjangoTeamRepository(real_scope()).find_by_id(team.id)
 
     def test_registered_stays_within_the_league_limit(self):
         self.league.registered_player_limit = 40
@@ -233,7 +233,7 @@ class SeedForeignPlayerQuotaTest(BaseCase):
                 foreign = [s for s in active_stints(team) if s.player.is_foreign_player]
                 self.assertEqual(len(foreign), 2)
                 # 集約自身の検査にも通る
-                DjangoTeamRepository(WorldScope.real()).find_by_id(team.id).ensure_foreign_player_quota(2)
+                DjangoTeamRepository(real_scope()).find_by_id(team.id).ensure_foreign_player_quota(2)
 
     def test_blank_limit_means_unlimited(self):
         self.league.foreign_player_roster_limit = None
@@ -259,7 +259,7 @@ class SeedForeignPlayerQuotaTest(BaseCase):
 
         foreign = [s for s in active_stints(self.team) if s.player.is_foreign_player]
         self.assertEqual(len(foreign), 2)
-        DjangoTeamRepository(WorldScope.real()).find_by_id(self.team.id).ensure_foreign_player_quota(2)
+        DjangoTeamRepository(real_scope()).find_by_id(self.team.id).ensure_foreign_player_quota(2)
 
 
 class SeedAlreadyOverTheLimitTest(BaseCase):

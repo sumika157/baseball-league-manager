@@ -12,12 +12,12 @@ from unittest import mock
 from django.db import transaction
 
 from myapp.domain.pennant.schedule import AdvanceTarget
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.simulation.fatigue import FATIGUE_WINDOW_DAYS, MIN_DAYS_BETWEEN_STARTS, fatigued, starter_rest_points
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoSimulationContextQuery
 from myapp.presentation.views import build_club_service
 
+from ..helpers import world_scope
 from .test_pennant_advance import SeasonCase
 
 
@@ -28,7 +28,7 @@ class FiveManRotationTest(SeasonCase):
     def setUpTestData(cls):
         super().setUpTestData()
         home = orm_models.Team.objects.get(league__world_id=cls.world_a, name=cls.home.name)
-        service = build_club_service(cls.world_a)
+        service = build_club_service(world_scope(cls.world_a))
         service.set_rotation(home.id, list(service.propose(home.id).rotation_ids[:5]))
 
     @classmethod
@@ -89,7 +89,7 @@ class FatigueWindowQueryTest(SeasonCase):
     def test_the_query_reads_exactly_the_window(self):
         self.advance(self.world_a, AdvanceTarget.WEEK)
         self.advance(self.world_a, AdvanceTarget.WEEK)
-        query = DjangoSimulationContextQuery(WorldScope.pennant(self.world_a))
+        query = DjangoSimulationContextQuery(world_scope(self.world_a))
         last = query.last_played_on()
         assert last is not None
         before = last + timedelta(days=1)

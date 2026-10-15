@@ -12,9 +12,9 @@ from django.urls import reverse
 
 from myapp.domain.value_objects import BattingLine
 from myapp.infrastructure import orm_models
-from myapp.presentation.views import build_pennant_world_service, build_world_team_analysis_service
+from myapp.presentation.views import build_pennant_world_service, build_team_analysis_service
 
-from ..helpers import play_game
+from ..helpers import play_game, real_scope, world_scope
 from .world_case import PENNANT_PLAYER_PREFIX, PENNANT_RIVAL, PENNANT_TEAM, YEAR, WorldCase
 
 OLD_YEAR = 2019
@@ -83,7 +83,7 @@ class WorldAnalysisIsolationTest(WorldAnalysisCase):
         self.assertEqual(self.client.get(reverse("team_analysis", args=[self.pennant_team.id])).status_code, 404)
 
     def test_another_worlds_team_is_404(self):
-        other = build_pennant_world_service().create_world(
+        other = build_pennant_world_service(real_scope()).create_world(
             name="別の世界", owner_id=None, source_league_ids=[self.league.id], start_year=YEAR + 1, seed=2
         )
         other_team = orm_models.Team.objects.filter(league__world_id=other.world.id).first()
@@ -114,12 +114,12 @@ class WorldServiceHistoryTest(WorldAnalysisCase):
     def test_the_default_year_is_the_worlds_today_when_there_are_no_games(self):
         """試合の無い世界の既定の年は、暦の今日ではなく、世界の今日（開幕年）。"""
         start_year = date.today().year + 5
-        created = build_pennant_world_service().create_world(
+        created = build_pennant_world_service(real_scope()).create_world(
             name="先の世界", owner_id=None, source_league_ids=[self.league.id], start_year=start_year, seed=3
         )
         team = orm_models.Team.objects.filter(league__world_id=created.world.id).first()
 
-        analysis = build_world_team_analysis_service(created.world.id).get_analysis(team.id)
+        analysis = build_team_analysis_service(world_scope(created.world.id)).get_analysis(team.id)
 
         self.assertEqual(analysis.year, start_year)
         self.assertEqual(analysis.years, [])

@@ -14,7 +14,7 @@ from myapp.domain.pennant.schedule import AdvanceTarget
 from myapp.infrastructure import orm_models
 from myapp.presentation.views import build_pennant_season_service
 
-from ..helpers import build_service, make_league, make_stadium
+from ..helpers import build_service, make_league, make_stadium, real_scope, world_scope
 from ..integration.test_pennant_advance import register_club
 from .base import PlaywrightTestCase
 
@@ -30,7 +30,7 @@ class PennantFlowTest(PlaywrightTestCase):
         stadium = make_stadium(name="P球場", city="東京")
         self.team = orm_models.Team.objects.create(league=league, name="ホームズ", home_stadium=stadium)
         self.rival = orm_models.Team.objects.create(league=league, name="ライバルズ")
-        service = build_service()
+        service = build_service(real_scope())
         register_club(service, self.team, "ホ")
         register_club(service, self.rival, "ラ")
         User.objects.create_user(username="gm", password="pass12345")
@@ -98,7 +98,7 @@ class PennantFlowTest(PlaywrightTestCase):
         world_id = int(re.search(r"/pennant/(\d+)/", self.page.url).group(1))
 
         # 1シーズンの進行はサービスで済ませる（画面で143試合ぶんを押さない）。締める操作から画面で確かめる
-        build_pennant_season_service(world_id).advance(AdvanceTarget.SEASON_END)
+        build_pennant_season_service(world_scope(world_id)).advance(AdvanceTarget.SEASON_END)
         self.page.reload()
         self.assertEqual(self.page.locator('button:has-text("1日進める")').count(), 0, "終了後は進めない")
 

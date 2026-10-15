@@ -19,13 +19,12 @@ from myapp.domain.exceptions import (
 )
 from myapp.domain.pennant.club_plan import ClubPlan, LineupChoice, PlanSection
 from myapp.domain.pennant.schedule import AdvanceTarget
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import JerseyNumber
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoClubPlanRepository
 from myapp.presentation.views import build_club_service
 
-from ..helpers import make_league
+from ..helpers import make_league, real_scope, world_scope
 from .test_pennant_advance import SeasonCase
 
 
@@ -61,8 +60,8 @@ class ClubPlanCase(SeasonCase):
     def setUp(self):
         self.home_a = team_of(self.world_a, self.home.name)
         self.home_b = team_of(self.world_b, self.home.name)
-        self.service_a = build_club_service(self.world_a)
-        self.service_b = build_club_service(self.world_b)
+        self.service_a = build_club_service(world_scope(self.world_a))
+        self.service_b = build_club_service(world_scope(self.world_b))
 
     @staticmethod
     def lineup_of(view) -> list[LineupChoice]:
@@ -88,7 +87,7 @@ class RepositoryTest(ClubPlanCase):
         service.set_closer(self.home_a.id, pitcher_ids[-1])
         service.set_active_roster(self.home_a.id, list(proposal.active_ids))
 
-        plan = DjangoClubPlanRepository(WorldScope.pennant(self.world_a)).find_by_team(self.home_a.id)
+        plan = DjangoClubPlanRepository(world_scope(self.world_a)).find_by_team(self.home_a.id)
 
         self.assertEqual(plan.lineup, tuple(lineup))
         self.assertEqual(plan.rotation, tuple(proposal.rotation_ids[:5]))
@@ -96,7 +95,7 @@ class RepositoryTest(ClubPlanCase):
         self.assertEqual(set(plan.active_ids or ()), set(proposal.active_ids))
 
     def test_a_team_without_a_plan_is_all_automatic(self):
-        repository = DjangoClubPlanRepository(WorldScope.pennant(self.world_a))
+        repository = DjangoClubPlanRepository(world_scope(self.world_a))
 
         plan = repository.find_by_team(self.home_a.id)
 
@@ -122,7 +121,7 @@ class RepositoryTest(ClubPlanCase):
         service.set_rotation(self.home_a.id, list(proposal.rotation_ids[:6]))
         service.set_rotation(self.home_a.id, list(proposal.rotation_ids[:5]))
 
-        plan = DjangoClubPlanRepository(WorldScope.pennant(self.world_a)).find_by_team(self.home_a.id)
+        plan = DjangoClubPlanRepository(world_scope(self.world_a)).find_by_team(self.home_a.id)
 
         self.assertEqual(plan.rotation, tuple(proposal.rotation_ids[:5]))
         self.assertEqual(orm_models.PennantClubPlanEntry.objects.filter(section="rotation").count(), 5)
@@ -133,7 +132,7 @@ class ScopeTest(ClubPlanCase):
         proposal = self.service_a.propose(self.home_a.id)
         self.service_a.set_lineup(self.home_a.id, self.lineup_of(proposal))
 
-        repository_b = DjangoClubPlanRepository(WorldScope.pennant(self.world_b))
+        repository_b = DjangoClubPlanRepository(world_scope(self.world_b))
 
         self.assertEqual(repository_b.find_all(), [])
         with self.assertRaises(TeamNotFound):
@@ -142,7 +141,7 @@ class ScopeTest(ClubPlanCase):
             self.service_b.view(self.home_a.id)
 
     def test_another_world_cannot_write_the_plan(self):
-        repository_b = DjangoClubPlanRepository(WorldScope.pennant(self.world_b))
+        repository_b = DjangoClubPlanRepository(world_scope(self.world_b))
         with self.assertRaises(TeamNotFound):
             repository_b.save(ClubPlan(team_id=self.home_a.id, closer_id=players_of(self.home_b)[-1].id))
         with self.assertRaises(TeamNotFound):
@@ -151,13 +150,13 @@ class ScopeTest(ClubPlanCase):
 
     def test_a_player_of_another_world_cannot_be_put_in_a_plan(self):
         foreign_player = players_of(self.home_b)[-1].id
-        repository_a = DjangoClubPlanRepository(WorldScope.pennant(self.world_a))
+        repository_a = DjangoClubPlanRepository(world_scope(self.world_a))
         with self.assertRaises(PlayerNotFound):
             repository_a.save(ClubPlan(team_id=self.home_a.id, closer_id=foreign_player))
         self.assertEqual(orm_models.PennantClubPlan.objects.count(), 0)
 
     def test_the_real_data_has_no_plan(self):
-        repository = DjangoClubPlanRepository(WorldScope.real())
+        repository = DjangoClubPlanRepository(real_scope())
         with self.assertRaises(InvalidWorld):
             repository.save(ClubPlan(team_id=self.home.id, closer_id=1))
         with self.assertRaises(TeamNotFound):
@@ -393,7 +392,7 @@ class ReplayWithPlanTest(ClubPlanCase):
 def build_season(world_id):
     from myapp.presentation.views import build_pennant_season_service
 
-    return build_pennant_season_service(world_id)
+    return build_pennant_season_service(world_scope(world_id))
 
 
 class StrictestGameLimitTest(ClubPlanCase):
@@ -421,7 +420,7 @@ class StrictestGameLimitTest(ClubPlanCase):
 
     def test_advancing_uses_the_strictest_limit_in_the_world(self):
         # 検査を通さずに保存した（枠の厳しいリーグが後から増えた）オーダーは、進めるときに自動に落ちる
-        repository = DjangoClubPlanRepository(WorldScope.pennant(self.world_a))
+        repository = DjangoClubPlanRepository(world_scope(self.world_a))
         repository.save(ClubPlan(team_id=self.home_a.id, lineup=tuple(self.lineup)))
 
         report = build_season(self.world_a).advance(AdvanceTarget.WEEK)

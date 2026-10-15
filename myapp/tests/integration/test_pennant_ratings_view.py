@@ -12,11 +12,11 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
 from myapp.domain.pennant.schedule import Fixture
-from myapp.domain.pennant.world import WorldScope
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoFixtureRepository, DjangoRatingsRepository
 from myapp.presentation.views import build_club_service, build_pennant_ratings_service, build_pennant_world_service
 
+from ..helpers import real_scope, world_scope
 from .world_case import YEAR, WorldCase
 
 
@@ -42,7 +42,7 @@ class RatingsRepositoryByPlayersTest(WorldCase):
 class RatingsServiceTest(WorldCase):
     def setUp(self):
         super().setUp()
-        self.ratings_service = build_pennant_ratings_service(self.world_id)
+        self.ratings_service = build_pennant_ratings_service(world_scope(self.world_id))
         players = self.pennant_players(self.pennant_team)
         self.batter_id, self.pitcher_id = players[0], players[9]
 
@@ -88,14 +88,14 @@ class RatingsServiceTest(WorldCase):
         self.assertEqual(card.cells, before.cells)
 
     def test_the_display_and_the_club_management_use_the_same_year(self):
-        club = build_club_service(self.world_id)
+        club = build_club_service(world_scope(self.world_id))
 
         self.assertEqual(self.ratings_service.current_year(), club._current_year())
         self.assertEqual(self.ratings_service.current_year(), YEAR)
 
     def test_the_year_moves_with_the_schedule_in_both(self):
         """試合が進んだあとも、表示と編成は同じ年を指す。"""
-        club = build_club_service(self.world_id)
+        club = build_club_service(world_scope(self.world_id))
         orm_models.PennantFixture.objects.all().delete()
         self.assertEqual(self.ratings_service.current_year(), club._current_year())
 
@@ -108,16 +108,16 @@ class RatingsServiceTest(WorldCase):
         self.assertEqual([row.cells for row in table.rows if row.id == self.batter_id], [()])
 
     def test_another_world_cannot_read_the_ratings(self):
-        other = build_pennant_world_service().create_world(
+        other = build_pennant_world_service(real_scope()).create_world(
             name="別の世界", owner_id=None, source_league_ids=[self.league.id], start_year=YEAR, seed=9
         )
-        other_service = build_pennant_ratings_service(other.world.id)
+        other_service = build_pennant_ratings_service(world_scope(other.world.id))
 
         self.assertIsNone(other_service.get_card(self.batter_id))
         self.assertEqual(
-            DjangoRatingsRepository(WorldScope.pennant(other.world.id)).find_by_players([self.batter_id], YEAR), []
+            DjangoRatingsRepository(world_scope(other.world.id)).find_by_players([self.batter_id], YEAR), []
         )
-        self.assertEqual(DjangoRatingsRepository(WorldScope.real()).find_by_players([self.batter_id], YEAR), [])
+        self.assertEqual(DjangoRatingsRepository(real_scope()).find_by_players([self.batter_id], YEAR), [])
 
 
 class PlayerDetailCardTest(WorldCase):
@@ -320,10 +320,10 @@ class FixtureFirstDateTest(WorldCase):
             ]
         )
 
-        service = build_pennant_ratings_service(self.world_id)
+        service = build_pennant_ratings_service(world_scope(self.world_id))
 
         self.assertEqual(service.current_year(), YEAR + 1)
-        self.assertEqual(build_club_service(self.world_id)._current_year(), YEAR + 1)
+        self.assertEqual(build_club_service(world_scope(self.world_id))._current_year(), YEAR + 1)
         table = service.get_table(self.pennant_team.id, pitchers=False)
         self.assertEqual(table.year, YEAR + 1)
         self.assertTrue(all(row.cells == () for row in table.rows))

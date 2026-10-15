@@ -5,9 +5,9 @@
 
 from datetime import date, timedelta
 
-from myapp.domain.pennant.world import WorldScope
 from myapp.infrastructure.queries import DjangoGameListQuery, DjangoPennantActivityQuery
 
+from ..helpers import real_scope
 from .world_case import PENNANT_PLAYER_PREFIX, YEAR, WorldCase
 
 PLAYED = date(YEAR, 4, 2)  # 世界の試合の日（WorldCase）
@@ -31,7 +31,7 @@ class GameNotesTest(WorldCase):
 
     def test_another_scope_does_not_see_the_game(self):
         """実データの範囲では、世界の試合の見どころは読めない。"""
-        self.assertEqual(DjangoPennantActivityQuery(WorldScope.real()).game_notes([self.pennant_game_id]), {})
+        self.assertEqual(DjangoPennantActivityQuery(real_scope()).game_notes([self.pennant_game_id]), {})
 
 
 class PeriodTotalsTest(WorldCase):

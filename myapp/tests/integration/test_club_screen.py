@@ -19,7 +19,6 @@ from django.urls import reverse
 from myapp.application.dto import PitchingOuting, SimulationContext
 from myapp.domain.pennant.club_plan import LineupChoice
 from myapp.domain.pennant.schedule import AdvanceTarget
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.simulation.fatigue import FATIGUE_WINDOW_DAYS, HIGH_STAMINA_RELIEVER
 from myapp.domain.simulation.manager import MIN_ACTIVE_PITCHERS, MIN_ROTATION_SIZE
 from myapp.domain.value_objects import FieldingPosition
@@ -27,6 +26,7 @@ from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoClubPlanRepository, DjangoFixtureRepository
 from myapp.presentation.views import build_club_service, build_pennant_season_service
 
+from ..helpers import world_scope
 from .test_club_plan import team_of
 from .test_pennant_home import HomeCase
 
@@ -34,7 +34,7 @@ from .test_pennant_home import HomeCase
 class ClubScreenCase(HomeCase):
     def setUp(self):
         self.home_a = team_of(self.world_a, self.home.name)
-        self.service = build_club_service(self.world_a)
+        self.service = build_club_service(world_scope(self.world_a))
 
     def club_url(self, tab=None, world_id=None) -> str:
         url = reverse("pennant_club", args=[self.world_a if world_id is None else world_id])
@@ -63,7 +63,7 @@ class ClubScreenCase(HomeCase):
         return [(row.player_id, row.position) for row in self.view().lineup]
 
     def plan(self):
-        return DjangoClubPlanRepository(WorldScope.pennant(self.world_a)).find_by_team(self.home_a.id)
+        return DjangoClubPlanRepository(world_scope(self.world_a)).find_by_team(self.home_a.id)
 
 
 class PermissionTest(ClubScreenCase):
@@ -229,7 +229,7 @@ class RoundTripTest(ClubScreenCase):
 
         self.assertEqual(self.lineup_rows(), rows)
         self.assertEqual(self.plan().lineup, tuple(LineupChoice(pid, pos) for pid, pos in rows))
-        build_pennant_season_service(self.world_a).advance(AdvanceTarget.DAY)
+        build_pennant_season_service(world_scope(self.world_a)).advance(AdvanceTarget.DAY)
         game = orm_models.Game.objects.filter(home_team__league__world_id=self.world_a).order_by("played_on", "id")[0]
         lines = orm_models.GameBattingLine.objects.filter(game=game, team=self.home_a, slot_sequence=0)
         played = [line.player_id for line in lines.order_by("batting_order")]
@@ -622,7 +622,7 @@ class PitchingUsageTest(ClubScreenCase):
 
     def test_the_usage_is_derived_from_the_recent_games(self):
         self.start_season()
-        report = build_pennant_season_service(self.world_a).advance(AdvanceTarget.DAY)
+        report = build_pennant_season_service(world_scope(self.world_a)).advance(AdvanceTarget.DAY)
         first_day = report.played_dates[0]
         view = self.view()
 
@@ -817,7 +817,7 @@ class NextGameOfTheClubTest(ClubScreenCase):
         early, late = date(2026, 4, 1), date(2026, 4, 3)
         orm_models.PennantFixture.objects.create(date=early, home_team=rival, visitor_team=third)
         orm_models.PennantFixture.objects.create(date=late, home_team=self.home_a, visitor_team=rival)
-        fixtures = DjangoFixtureRepository(WorldScope.pennant(self.world_a))
+        fixtures = DjangoFixtureRepository(world_scope(self.world_a))
 
         self.assertEqual(fixtures.first_date(), early, "世界の最初の日")
         self.assertEqual(fixtures.first_date(self.home_a.id), late, "自軍の最初の日")
@@ -827,7 +827,7 @@ class NextGameOfTheClubTest(ClubScreenCase):
         self.assertEqual(usage.recent_days[-1], late - timedelta(days=1))
 
     def test_a_team_without_fixtures_has_no_first_date(self):
-        self.assertIsNone(DjangoFixtureRepository(WorldScope.pennant(self.world_a)).first_date(self.home_a.id))
+        self.assertIsNone(DjangoFixtureRepository(world_scope(self.world_a)).first_date(self.home_a.id))
 
 
 class UnreadableClubTest(ClubScreenCase):

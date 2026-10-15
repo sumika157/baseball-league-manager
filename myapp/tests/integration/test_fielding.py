@@ -18,7 +18,6 @@ from django.urls import reverse
 from myapp.application.dto import LineupSlot
 from myapp.domain.entities import FieldingError, PlateAppearance, RunnerAdvance
 from myapp.domain.exceptions import InvalidGame, InvalidPlateAppearance
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import (
     AdvanceReason,
     Base,
@@ -30,7 +29,7 @@ from myapp.domain.value_objects import (
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
 
-from ..helpers import build_recording_service, login_as_manager, play_game
+from ..helpers import build_recording_service, login_as_manager, play_game, real_scope
 from .base import BaseCase
 
 P = PlateAppearanceResult
@@ -64,7 +63,7 @@ class FieldingTestBase(BaseCase):
         self.away_pitcher = self._player(self.rival, "ビジター先発", 12, "投手")
         self.home = [self._player(self.team, f"ホーム{i}", 30 + i, "内野手") for i in range(1, 10)]
         self.away = [self._player(self.rival, f"ビジター{i}", 50 + i, "内野手") for i in range(1, 10)]
-        self.recording = build_recording_service()
+        self.recording = build_recording_service(real_scope())
         self.game = play_game(self.team, self.rival, home_score=0, away_score=0)
 
     def _player(self, team, name, number, position) -> int:
@@ -198,7 +197,7 @@ class FieldingPersistenceTest(FieldingTestBase):
 
     def test_the_aggregate_round_trips(self):
         self.record()
-        game = DjangoGameRepository(WorldScope.real()).find_by_id(self.game.id)
+        game = DjangoGameRepository(real_scope()).find_by_id(self.game.id)
 
         by_player = {entry.player_id: entry.line for entry in game.fielding}
         self.assertEqual(by_player[self.home[0]], FieldingLine(assists=2, double_plays_turned=1))
@@ -207,7 +206,7 @@ class FieldingPersistenceTest(FieldingTestBase):
 
     def test_saving_again_does_not_duplicate_rows(self):
         self.record()
-        repo = DjangoGameRepository(WorldScope.real())
+        repo = DjangoGameRepository(real_scope())
         repo.save(repo.find_by_id(self.game.id))
         repo.save(repo.find_by_id(self.game.id))
 
@@ -217,7 +216,7 @@ class FieldingPersistenceTest(FieldingTestBase):
         """一覧のために省いて読んだ集約を保存しても、守備成績が消えない（打席と同じ罠）。"""
         self.record()
         before = _snapshot(self.rows())
-        repo = DjangoGameRepository(WorldScope.real())
+        repo = DjangoGameRepository(real_scope())
         game = next(g for g in repo.find_all() if g.id == self.game.id)
         self.assertEqual(game.fielding, [])
         self.assertFalse(game.plate_appearances_loaded)
@@ -242,7 +241,7 @@ class FieldingPersistenceTest(FieldingTestBase):
     def test_reads_of_many_games_do_not_load_fielding(self):
         """まとめて読む経路に守備成績を付けない（選手ページ・一覧の読み込みを広げない）。"""
         self.record()
-        repo = DjangoGameRepository(WorldScope.real())
+        repo = DjangoGameRepository(real_scope())
         with CaptureQueriesContext(connection) as queries:
             repo.find_by_team(self.team.id)
             repo.find_all()
@@ -259,7 +258,7 @@ class FieldingConsistencyTest(FieldingTestBase):
     def test_a_rewritten_fielding_line_is_rejected_and_nothing_is_saved(self):
         self.record()
         before = _snapshot(self.rows())
-        repo = DjangoGameRepository(WorldScope.real())
+        repo = DjangoGameRepository(real_scope())
         game = repo.find_by_id(self.game.id)
         game.record_fielding(self.home[0], FieldingLine(putouts=99))
 
@@ -271,7 +270,7 @@ class FieldingConsistencyTest(FieldingTestBase):
     def test_changing_the_plate_appearances_without_the_fielding_is_rejected(self):
         """打席だけを書き換えた集約は、古い守備成績のまま保存できない。"""
         self.record()
-        repo = DjangoGameRepository(WorldScope.real())
+        repo = DjangoGameRepository(real_scope())
         game = repo.find_by_id(self.game.id)
         game.plate_appearances[1].fielded_by = (FP.CATCHER, FP.FIRST_BASE)
 

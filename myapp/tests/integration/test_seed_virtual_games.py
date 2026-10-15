@@ -10,11 +10,11 @@ from dataclasses import fields
 from django.core.management import call_command
 
 from myapp.domain import services as domain_services
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import BattingLine, FieldingLine, PitchingLine
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
 
+from ..helpers import real_scope
 from .base import BaseCase
 
 YEAR = 2026
@@ -35,9 +35,7 @@ class SeedVirtualGamesTest(BaseCase):
             seed=20260812,
             verbosity=0,
         )
-        self.games = [
-            DjangoGameRepository(WorldScope.real()).find_by_id(row.id) for row in orm_models.Game.objects.all()
-        ]
+        self.games = [DjangoGameRepository(real_scope()).find_by_id(row.id) for row in orm_models.Game.objects.all()]
 
     def _fill_roster(self, team):
         """レギュラー9人＋控えとローテーション5人＋救援が組める人数を入れる。"""

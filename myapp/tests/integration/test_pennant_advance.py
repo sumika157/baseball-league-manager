@@ -25,14 +25,13 @@ from myapp.domain.exceptions import (
     WorldNotFound,
 )
 from myapp.domain.pennant.schedule import AdvanceTarget, Fixture
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.simulation.fatigue import max_consecutive_days
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoGameListQuery, DjangoSimulationContextQuery
 from myapp.infrastructure.repositories import DjangoFixtureRepository, DjangoGameRepository
 from myapp.presentation.views import build_pennant_season_service, build_pennant_world_service, build_service
 
-from ..helpers import make_league, make_stadium, register_players
+from ..helpers import make_league, make_stadium, real_scope, register_players, world_scope
 
 YEAR = 2026
 SEASON_GAMES = 143
@@ -75,7 +74,7 @@ class SeasonCase(TestCase):
         stadium = make_stadium(name="進行球場", city="東京", capacity=STADIUM_CAPACITY)
         cls.home = orm_models.Team.objects.create(league=league, name="ホーム球団", home_stadium=stadium)
         cls.rival = orm_models.Team.objects.create(league=league, name="ライバル球団")
-        service = build_service()
+        service = build_service(real_scope())
         register_club(service, cls.home, "ホ")
         register_club(service, cls.rival, "ラ")
         cls.world_a = cls._create_world("世界A", seed=7)
@@ -84,7 +83,7 @@ class SeasonCase(TestCase):
 
     @classmethod
     def _create_world(cls, name, *, seed) -> int:
-        created = build_pennant_world_service().create_world(
+        created = build_pennant_world_service(real_scope()).create_world(
             name=name,
             owner_id=None,
             source_league_ids=[cls.league_id],
@@ -98,11 +97,11 @@ class SeasonCase(TestCase):
 
     @staticmethod
     def fixtures_of(world_id) -> list[Fixture]:
-        return DjangoFixtureRepository(WorldScope.pennant(world_id)).find_all()
+        return DjangoFixtureRepository(world_scope(world_id)).find_all()
 
     @staticmethod
     def games_of(world_id) -> list[Game]:
-        return DjangoGameRepository(WorldScope.pennant(world_id)).find_all()
+        return DjangoGameRepository(world_scope(world_id)).find_all()
 
     @staticmethod
     def snapshot(world_id, *, until=None):
@@ -164,7 +163,7 @@ class SeasonCase(TestCase):
 
     @staticmethod
     def advance(world_id, target) -> AdvanceReport:
-        return build_pennant_season_service(world_id).advance(target)
+        return build_pennant_season_service(world_scope(world_id)).advance(target)
 
 
 class AdvanceTest(SeasonCase):
@@ -182,7 +181,7 @@ class AdvanceTest(SeasonCase):
         self.assertTrue(all(f.date.year == YEAR for f in fixtures))
 
     def test_a_day_turns_the_fixtures_of_that_day_into_games(self):
-        service = build_pennant_season_service(self.world_a)
+        service = build_pennant_season_service(world_scope(self.world_a))
         service.ensure_schedule()
         before = self.fixtures_of(self.world_a)
         first_day = before[0].date
@@ -204,7 +203,7 @@ class AdvanceTest(SeasonCase):
         self.assertEqual(game.season.year, YEAR)
 
     def test_the_schedule_is_made_only_once(self):
-        service = build_pennant_season_service(self.world_a)
+        service = build_pennant_season_service(world_scope(self.world_a))
 
         self.assertTrue(service.ensure_schedule())
         self.assertFalse(service.ensure_schedule())
@@ -213,7 +212,7 @@ class AdvanceTest(SeasonCase):
     def test_the_same_world_always_gets_the_same_schedule(self):
         """日程は世界のシードから作る。同じシードの別の世界は、同じ日付の並びになる。"""
         for world_id in (self.world_a, self.world_b, self.world_other_seed):
-            build_pennant_season_service(world_id).ensure_schedule()
+            build_pennant_season_service(world_scope(world_id)).ensure_schedule()
 
         dates = {w: [f.date for f in self.fixtures_of(w)] for w in (self.world_a, self.world_b, self.world_other_seed)}
 
@@ -224,7 +223,7 @@ class AdvanceTest(SeasonCase):
         """打席・明細・イニングスコア・守備成績まで揃った試合ができる（スコアブックの保存と同じ組み立て）。"""
         self.advance(self.world_a, AdvanceTarget.WEEK)
 
-        repository = DjangoGameRepository(WorldScope.pennant(self.world_a))
+        repository = DjangoGameRepository(world_scope(self.world_a))
         for game in self.games_of(self.world_a):
             with self.subTest(day=game.played_on):
                 loaded = repository.find_by_id(game.id)
@@ -264,7 +263,7 @@ class AdvanceTest(SeasonCase):
             self.advance(self.world_a + 1000, AdvanceTarget.DAY)
 
     def test_next_game_stops_on_the_managed_teams_next_game_day(self):
-        service = build_pennant_season_service(self.world_a)
+        service = build_pennant_season_service(world_scope(self.world_a))
 
         report = service.advance(AdvanceTarget.NEXT_MANAGED_GAME)
 
@@ -296,7 +295,7 @@ class FinishedSeasonTest(SeasonCase):
         self.assertTrue(report.season_finished)
         self.assertEqual(report.games, SEASON_GAMES)
         self.assertEqual(report.remaining_fixtures, 0)
-        counts = DjangoGameListQuery(WorldScope.pennant(self.world_a)).count_by_team(year=YEAR)
+        counts = DjangoGameListQuery(world_scope(self.world_a)).count_by_team(year=YEAR)
         self.assertEqual(set(counts.values()), {SEASON_GAMES})
         self.assertEqual(len(counts), 2)
 
@@ -333,7 +332,7 @@ class DerivedFromGamesTest(SeasonCase):
     def test_the_world_today_is_derived_from_the_games(self):
         report = self.advance(self.world_a, AdvanceTarget.WEEK)
 
-        query = DjangoSimulationContextQuery(WorldScope.pennant(self.world_a))
+        query = DjangoSimulationContextQuery(world_scope(self.world_a))
 
         self.assertEqual(query.last_played_on(), report.today)
         self.assertEqual(query.last_played_on(), max(g.played_on for g in self.games_of(self.world_a)))
@@ -462,7 +461,7 @@ class IsolationTest(SeasonCase):
     """ある世界を進めても、別の世界・実データには触れない。"""
 
     def test_advancing_one_world_leaves_the_others_alone(self):
-        build_pennant_season_service(self.world_b).ensure_schedule()
+        build_pennant_season_service(world_scope(self.world_b)).ensure_schedule()
         real_games = orm_models.Game.objects.filter(home_team__league__world__isnull=True).count()
 
         self.advance(self.world_a, AdvanceTarget.WEEK)
@@ -485,12 +484,12 @@ class IsolationTest(SeasonCase):
 
     def test_a_game_that_was_already_taken_cannot_be_played_twice(self):
         """同じ世界を同時に進めたとき、同じ対戦の試合が2つできない（消化済みを消そうとして止まる）。"""
-        service = build_pennant_season_service(self.world_a)
+        service = build_pennant_season_service(world_scope(self.world_a))
         service.ensure_schedule()
         stale_fixtures = self.fixtures_of(self.world_a)
         service.advance(AdvanceTarget.DAY)
         before = len(self.games_of(self.world_a))
-        stale = build_pennant_season_service(self.world_a)
+        stale = build_pennant_season_service(world_scope(self.world_a))
 
         # もう1つのサービスは、日を進める前の日程と「今日」を見ている（同時に進めようとした状況）
         with (
@@ -504,9 +503,9 @@ class IsolationTest(SeasonCase):
 
     def test_deleting_the_world_removes_its_fixtures(self):
         self.advance(self.world_a, AdvanceTarget.DAY)
-        build_pennant_season_service(self.world_b).ensure_schedule()
+        build_pennant_season_service(world_scope(self.world_b)).ensure_schedule()
 
-        build_pennant_world_service().delete_world(self.world_a)
+        build_pennant_world_service(real_scope()).delete_world(self.world_a)
 
         self.assertEqual(orm_models.PennantFixture.objects.filter(home_team__league__world_id=self.world_a).count(), 0)
         self.assertEqual(len(self.fixtures_of(self.world_b)), SEASON_GAMES)
@@ -514,7 +513,7 @@ class IsolationTest(SeasonCase):
 
 class FixtureRepositoryTest(SeasonCase):
     def setUp(self):
-        self.scope = WorldScope.pennant(self.world_a)
+        self.scope = world_scope(self.world_a)
         self.repository = DjangoFixtureRepository(self.scope)
         teams = orm_models.Team.objects.filter(league__world_id=self.world_a).order_by("id")
         self.first, self.second = (t.id for t in teams)
@@ -568,10 +567,10 @@ class FixtureRepositoryTest(SeasonCase):
     def test_each_world_sees_only_its_own_fixtures(self):
         self.repository.add_all([self._fixture(1)])
 
-        self.assertEqual(DjangoFixtureRepository(WorldScope.pennant(self.world_b)).find_all(), [])
+        self.assertEqual(DjangoFixtureRepository(world_scope(self.world_b)).find_all(), [])
 
     def test_the_real_data_has_no_schedule(self):
-        real = DjangoFixtureRepository(WorldScope.real())
+        real = DjangoFixtureRepository(real_scope())
 
         self.assertEqual(real.find_all(), [])
         with self.assertRaises(InvalidWorld):
@@ -583,7 +582,7 @@ class AddAllTest(SeasonCase):
 
     def setUp(self):
         self.advance(self.world_a, AdvanceTarget.WEEK)
-        self.repository = DjangoGameRepository(WorldScope.pennant(self.world_a))
+        self.repository = DjangoGameRepository(world_scope(self.world_a))
         self.source = self.repository.find_by_id(self.games_of(self.world_a)[0].id)
 
     def _new_game(self, **changes) -> Game:
@@ -721,7 +720,7 @@ class AddAllTest(SeasonCase):
             self.repository.add_all([self.source])
 
     def test_a_team_outside_the_scope_is_refused(self):
-        other = DjangoGameRepository(WorldScope.pennant(self.world_b))
+        other = DjangoGameRepository(world_scope(self.world_b))
         before = self._count()
 
         with self.assertRaises(TeamNotFound):

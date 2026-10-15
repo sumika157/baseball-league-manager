@@ -13,12 +13,12 @@ from django.urls import reverse
 from myapp.application.queries import SeasonPlayingTimeQuery
 from myapp.domain.pennant.retirement import PlayingTime
 from myapp.domain.pennant.season import SeasonPhase
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import InningsPitched
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoSeasonPlayingTimeQuery
 from myapp.presentation.views import build_pennant_world_service, build_pennant_world_view
 
+from ..helpers import real_scope, world_scope
 from .world_case import YEAR, WorldCase
 
 NEXT_OPENING = date(YEAR + 1, 3, 26)
@@ -132,7 +132,7 @@ class SeasonPlayingTimeTest(WorldCase):
     def test_the_real_data_and_other_worlds_are_not_counted(self):
         """実データと別の世界に、同じ年の打撃の明細があっても、この世界の結果には入らない。"""
         real_player = orm_models.GameBattingLine.objects.get(game_id=self.real_game.id).player_id
-        other = build_pennant_world_service().create_world(
+        other = build_pennant_world_service(real_scope()).create_world(
             name="別の世界", owner_id=None, source_league_ids=[self.league.id], start_year=YEAR, seed=2
         )
         other_teams = list(orm_models.Team.objects.filter(league__world_id=other.world.id).order_by("id"))
@@ -149,9 +149,7 @@ class SeasonPlayingTimeTest(WorldCase):
             game=other_game, player_id=other_player, team=other_teams[0], batting_order=1, at_bats=4, singles=1
         )
         self.assertEqual(
-            DjangoSeasonPlayingTimeQuery(WorldScope.pennant(other.world.id))
-            .for_year(YEAR)[other_player]
-            .plate_appearances,
+            DjangoSeasonPlayingTimeQuery(world_scope(other.world.id)).for_year(YEAR)[other_player].plate_appearances,
             4,
         )
 

@@ -13,6 +13,7 @@ from myapp.domain.exceptions import InvalidGame
 from myapp.domain.pennant.schedule import AdvanceTarget
 from myapp.presentation.views import build_pennant_season_service
 
+from ..helpers import world_scope
 from .test_pennant_advance import SeasonCase
 
 
@@ -41,7 +42,7 @@ class RowsDoNotChangeTest(SeasonCase):
         """世界を1週間進めた結果を取り、世界を元に戻す（球団の id が結果に効くので、同じ世界で比べる）。"""
         savepoint = transaction.savepoint()
         try:
-            service = build_pennant_season_service(self.world_a)
+            service = build_pennant_season_service(world_scope(self.world_a))
             if one_by_one:
                 service._games = _SaveOneByOne(service._games)
             report = service.advance(AdvanceTarget.WEEK)
@@ -59,7 +60,7 @@ class RowsDoNotChangeTest(SeasonCase):
 
     def test_the_games_read_back_equal_the_games_made(self):
         """作った試合と、保存して読み戻した試合が同じ（打席・明細・イニングスコアの欠けが無い）。"""
-        service = build_pennant_season_service(self.world_a)
+        service = build_pennant_season_service(world_scope(self.world_a))
         made = []
         inner = service._games
 
@@ -127,7 +128,7 @@ class LockScopeTest(SeasonCase):
         return events
 
     def test_the_check_and_the_row_building_happen_outside_the_transaction(self):
-        service = build_pennant_season_service(self.world_a)
+        service = build_pennant_season_service(world_scope(self.world_a))
         service.ensure_schedule()
         events = self._spy(service)
 
@@ -136,7 +137,7 @@ class LockScopeTest(SeasonCase):
         self.assertEqual(events, ["prepare", "enter", "write", "exit"])
 
     def test_a_game_that_fails_the_check_never_opens_a_transaction(self):
-        service = build_pennant_season_service(self.world_a)
+        service = build_pennant_season_service(world_scope(self.world_a))
         service.ensure_schedule()
         events = self._spy(service)
         fixtures_before = len(self.fixtures_of(self.world_a))
@@ -154,7 +155,7 @@ class LockScopeTest(SeasonCase):
         self.assertEqual(self.games_of(self.world_a), [])
 
     def test_preparing_writes_nothing_until_the_returned_function_is_called(self):
-        service = build_pennant_season_service(self.world_a)
+        service = build_pennant_season_service(world_scope(self.world_a))
         service.ensure_schedule()
         made = []
         inner = service._games

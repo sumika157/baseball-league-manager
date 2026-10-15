@@ -1718,7 +1718,7 @@ class GameAdmin(RealDataOnlyMixin, admin.ModelAdmin):
     def save_model(self, request, obj, form, change):
         super().save_model(request, obj, form, change)
         # 観客数が本拠地の収容人数を超えていても保存は止めず、見直しを促す（警告の経路は保存 API と同じ）
-        for warning in build_recording_service().attendance_warnings_for(obj.home_team_id, obj.attendance):
+        for warning in build_recording_service(_REAL).attendance_warnings_for(obj.home_team_id, obj.attendance):
             self.message_user(request, warning.message, level=messages.WARNING)
 
     def get_readonly_fields(self, request, obj=None):
