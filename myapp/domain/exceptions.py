@@ -126,6 +126,10 @@ class SeasonNotFinished(DomainError):
     """シーズンがまだ終わっていない（未消化の対戦が残っている、または試合を一度もしていない）ので締められない。"""
 
 
+class PostseasonNotFinished(DomainError):
+    """ポストシーズンがまだ終わっていない（始まっていない・進行中）ので、シーズンを締められない。"""
+
+
 class AlreadyClosed(DomainError):
     """そのシーズンは既に締めている（二重送信や、別の画面で先に締めた場合）。
 

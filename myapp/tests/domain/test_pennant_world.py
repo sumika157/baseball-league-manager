@@ -6,6 +6,7 @@ from datetime import date
 from myapp.domain.entities import League, Team
 from myapp.domain.exceptions import DuplicateJerseyNumber, InvalidSeason, InvalidWorld
 from myapp.domain.pennant.fork import fork_league, fork_roster, fork_team
+from myapp.domain.pennant.postseason import PostseasonFormat
 from myapp.domain.pennant.world import (
     MAX_SEASONS_PER_WORLD,
     MAX_SEED,
@@ -87,6 +88,15 @@ class WorldTest(unittest.TestCase):
         for seed in (-1, MAX_SEED + 1, True, 1.5):
             with self.subTest(seed=seed), self.assertRaises(InvalidWorld):
                 World(name="世界", seed=seed, start_year=2026)  # type: ignore[arg-type]
+
+    def test_the_postseason_format_defaults_to_none_and_must_be_a_format(self):
+        """方式の既定は「なし」（方式を足す前に作った世界と同じ）。選択肢の外の値は弾く。"""
+        self.assertIs(World(name="世界", seed=1, start_year=2026).postseason_format, PostseasonFormat.NONE)
+        world = World(name="世界", seed=1, start_year=2026, postseason_format=PostseasonFormat.NPB)
+        self.assertIs(world.postseason_format, PostseasonFormat.NPB)
+        for bad in ("なし", None, PostseasonFormat.NPB.value):
+            with self.subTest(postseason_format=bad), self.assertRaises(InvalidWorld):
+                World(name="世界", seed=1, start_year=2026, postseason_format=bad)  # type: ignore[arg-type]
 
     def test_the_start_year_must_be_a_season(self):
         with self.assertRaises(InvalidSeason):

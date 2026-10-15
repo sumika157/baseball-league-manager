@@ -10,6 +10,7 @@
 from django.conf import settings
 from django.db import models
 
+from ..domain.pennant.postseason import PostseasonFormat
 from ..domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings
 from ..domain.value_objects import (
     DEFAULT_REGISTERED_PLAYER_LIMIT,
@@ -37,6 +38,8 @@ ACQUISITION_ROUTE_CHOICES = [(route.value, route.value) for route in Acquisition
 DEPARTURE_ROUTE_CHOICES = [(route.value, route.value) for route in DepartureRoute]
 FREE_AGENCY_KIND_CHOICES = [(kind.value, kind.value) for kind in FreeAgencyKind]
 GAME_STAGE_CHOICES = [(stage.value, stage.value) for stage in GameStage]
+# ポストシーズンの方式の選択肢もドメインの PostseasonFormat が唯一の出典
+POSTSEASON_FORMAT_CHOICES = [(item.value, item.value) for item in PostseasonFormat]
 # 試合で就いた守備位置。登録位置（Position）とは別の概念
 FIELDING_POSITION_CHOICES = [(p.value, p.value) for p in FieldingPosition]
 # 打席まわりの選択肢も同じくドメインの値オブジェクトが出典。ここに文字列を
@@ -53,7 +56,8 @@ FIELDED_BY_SEPARATOR = "-"
 class PennantWorld(models.Model):
     """ペナントモードの世界（セーブデータ）。ペナント専用で、実データには現れない。
 
-    持つのは作ったときに決まる事実だけ。「今日」や「シーズン中か」は日程と試合から導く。
+    持つのは作ったときに決まる事実と、オーナーが変えられる設定（ポストシーズンの方式）だけ。
+    「今日」や「シーズン中か」・ポストシーズンの勝ち上がりは日程と試合から導く。
     リーグがこの世界に属する（`League.world`）ことで、球団・選手・試合も世界に属する。
     """
 
@@ -77,6 +81,17 @@ class PennantWorld(models.Model):
         verbose_name="受け持つ球団",
     )
     start_year = models.IntegerField(verbose_name="開幕年")
+    # ポストシーズンの方式（オーナーが変えられる設定。勝ち上がりは保存せず試合から導く）。既定の「なし」は、
+    # 方式を足す前に作った世界（AddField で入る）と同じ進み方。新しい世界の既定は作る側が渡す
+    postseason_format = models.CharField(
+        max_length=30,
+        choices=POSTSEASON_FORMAT_CHOICES,
+        default=PostseasonFormat.NONE.value,
+        verbose_name="ポストシーズンの方式",
+        help_text=(
+            "シーズン終了の後に行うポストシーズン（CS と日本シリーズ）の形。「なし」ならすぐにシーズンを締められます。"
+        ),
+    )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="作成日時")
 
     class Meta:

@@ -16,6 +16,7 @@ from myapp.domain.simulation.fatigue import PitchingHistory
 from myapp.domain.simulation.manager import choose_active_roster
 from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.samples import average_club, round_robin_days, spread_league
+from myapp.domain.value_objects import GameStage
 
 OPENING_DAY = date(2026, 4, 1)
 # `max_innings` を足す前のエンジン（S1 のコミット 346ca65）で、下の `_season_fingerprint()` を取った値。
@@ -51,6 +52,7 @@ def _season_fingerprint(**kwargs) -> tuple[str, int]:
                 make_random(game_seed(1, 2026, f"{day_index}-{home_id}")),
                 rosters[home_id],
                 rosters[away_id],
+                stage=GameStage.REGULAR,
                 played_on=played_on,
                 history=history,
                 **kwargs,
@@ -68,7 +70,7 @@ def _season_fingerprint(**kwargs) -> tuple[str, int]:
 def _play(seed: int, **kwargs) -> SimulatedGame:
     home = choose_active_roster(average_club(1))
     away = choose_active_roster(average_club(2))
-    return simulate_game(make_random(seed), home, away, played_on=OPENING_DAY, **kwargs)
+    return simulate_game(make_random(seed), home, away, stage=GameStage.REGULAR, played_on=OPENING_DAY, **kwargs)
 
 
 def _first_tied_seed() -> int:
@@ -123,7 +125,9 @@ class UnlimitedInningsTest(TestCase):
         away = choose_active_roster(average_club(2))
 
         with self.assertRaises(InvalidGame):
-            simulate_game(ScriptedRandom(0.99), home, away, played_on=OPENING_DAY, max_innings=None)
+            simulate_game(
+                ScriptedRandom(0.99), home, away, stage=GameStage.REGULAR, played_on=OPENING_DAY, max_innings=None
+            )
 
     def test_a_limit_below_nine_innings_is_rejected(self):
         with self.assertRaises(ValueError):

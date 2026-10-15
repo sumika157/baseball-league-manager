@@ -34,6 +34,7 @@ from myapp.domain.simulation.levels import LevelRow, LevelTally, SeasonTally, Us
 from myapp.domain.simulation.manager import ClubRoster, choose_active_roster
 from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.samples import average_club, spread_league
+from myapp.domain.value_objects import GameStage
 from myapp.management.estimate_check import format_usage, run_check
 from myapp.management.multi_season_check import run_seasons
 
@@ -208,7 +209,14 @@ class Command(BaseCommand):
             # ホームとビジターを入れ替えて、1日1試合ずつ進める（先発の登板間隔を空けるため）
             home, away = (clubs[0], clubs[1]) if index % 2 == 0 else (clubs[1], clubs[0])
             rng = make_random(game_seed(seed, SAMPLE_YEAR, f"average-{index}"))
-            played = simulate_game(rng, home, away, played_on=SEASON_OPENING + timedelta(days=index), history=history)
+            played = simulate_game(
+                rng,
+                home,
+                away,
+                stage=GameStage.REGULAR,
+                played_on=SEASON_OPENING + timedelta(days=index),
+                history=history,
+            )
             tally.add(played.game)
             usage.add(played)
             if first is None:
@@ -252,6 +260,7 @@ class Command(BaseCommand):
                 game_rng,
                 rosters[fixture.home_team_id],
                 rosters[fixture.visitor_team_id],
+                stage=GameStage.REGULAR,
                 played_on=fixture.date,
                 history=history,
             )

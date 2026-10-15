@@ -11,14 +11,25 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import Protocol
 
 from ..domain.entities import Game, League, Team
 from ..domain.pennant.race import RaceTeam, final_ranks, league_champion, pennant_race, season_champion
 from ..domain.pennant.schedule import Fixture
-from .dto import LeagueStandings, OwnRace, StandingRow
+from .dto import LeagueStandings, Listing, OwnRace, StandingRow
 from .queries import GameListQuery
-from .services import TeamApplicationService
 from .standings import league_standings
+
+
+class StandingsSource(Protocol):
+    """順位表と球団の並びの読み取り。同率の決着と勝ち上がりが使う2つだけ（`TeamApplicationService` が満たす）。
+
+    具象のサービスに依存しないのは、`TeamApplicationService` を分けるとき（#219）に触る範囲を狭めるため。
+    """
+
+    def get_league_standings(self, year: int) -> list[LeagueStandings]: ...
+
+    def list_teams(self) -> Listing: ...
 
 
 @dataclass(frozen=True)
@@ -33,12 +44,12 @@ class ChampionTiebreak:
     order: Callable[[], Sequence[int]]
 
 
-def team_order(teams: TeamApplicationService) -> list[int]:
+def team_order(teams: StandingsSource) -> list[int]:
     """球団の並び順（同率の決着の最後の基準）。"""
     return [team.id for team in teams.list_teams().rows]
 
 
-def tiebreak_for(year: int, *, games: GameListQuery, teams: TeamApplicationService) -> ChampionTiebreak:
+def tiebreak_for(year: int, *, games: GameListQuery, teams: StandingsSource) -> ChampionTiebreak:
     """`year` 年の同率の決着の材料。試合・前年の順位・球団の並びは、使うときに読む。"""
 
     def results() -> list[tuple[int, int]]:

@@ -18,7 +18,15 @@ from myapp.domain.simulation.manager import ClubRoster, SimBatter, SimPitcher, c
 from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings
 from myapp.domain.simulation.samples import round_robin_days, spread_league
-from myapp.domain.value_objects import BattingLine, FieldingLine, InningsPitched, PitchingLine, Position, Profile
+from myapp.domain.value_objects import (
+    BattingLine,
+    FieldingLine,
+    GameStage,
+    InningsPitched,
+    PitchingLine,
+    Position,
+    Profile,
+)
 
 YEAR = 2027
 
@@ -145,7 +153,12 @@ def _play(clubs, seed_key, days, seed=1):
         for home, away in matches:
             rng = make_random(game_seed(seed, YEAR, f"{seed_key}-{day}-{home}"))
             played = simulate_game(
-                rng, clubs[home], clubs[away], played_on=date(YEAR, 4, 1) + timedelta(days=day), history=history
+                rng,
+                clubs[home],
+                clubs[away],
+                stage=GameStage.REGULAR,
+                played_on=date(YEAR, 4, 1) + timedelta(days=day),
+                history=history,
             )
             tally.add(played.game)
             games.append(played.game)

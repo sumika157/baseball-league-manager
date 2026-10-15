@@ -41,6 +41,7 @@ from myapp.domain.simulation.odds import matchup
 from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings
 from myapp.domain.simulation.samples import average_club, round_robin_days, spread_league
+from myapp.domain.value_objects import GameStage
 
 TODAY = date(2026, 5, 10)
 OPENING_DAY = date(2026, 4, 1)
@@ -165,7 +166,13 @@ class EngineFatigueTest(TestCase):
 
     def _play(self, history: PitchingHistory | None, seed: int = 5) -> SimulatedGame:
         return simulate_game(
-            make_random(seed), self.home, self.away, played_on=TODAY, history=history, home_orders=self.home_orders
+            make_random(seed),
+            self.home,
+            self.away,
+            stage=GameStage.REGULAR,
+            played_on=TODAY,
+            history=history,
+            home_orders=self.home_orders,
         )
 
     @staticmethod
@@ -203,7 +210,13 @@ class EngineFatigueTest(TestCase):
         )
 
         played = simulate_game(
-            make_random(5), home, self.away, played_on=TODAY, history=history, home_orders=ClubOrders(staff=staff)
+            make_random(5),
+            home,
+            self.away,
+            stage=GameStage.REGULAR,
+            played_on=TODAY,
+            history=history,
+            home_orders=ClubOrders(staff=staff),
         )
 
         (outing,) = [o for o in played.outings if o.pitcher_id == reliever.player_id]
@@ -255,6 +268,7 @@ def _season(orders_for: dict[int, ClubOrders] | None = None, days: int = 28):
                 make_random(game_seed(1, 2026, f"{day_index}-{home_id}")),
                 rosters[home_id],
                 rosters[away_id],
+                stage=GameStage.REGULAR,
                 played_on=OPENING_DAY + timedelta(days=day_index),
                 history=history,
                 home_orders=orders_for.get(home_id),

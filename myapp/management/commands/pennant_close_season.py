@@ -3,6 +3,7 @@
     docker compose exec web python manage.py pennant_close_season --world 3
 
 シーズンの日程をすべて消化した世界だけが締められる（`pennant_advance --to season-end` の後）。
+ポストシーズンのある世界は、ポストシーズンが終わってから（`pennant_advance --to postseason-end` の後）。
 元に戻せない。同じ年を2回締めようとすると、何も変えずにエラーにする。
 実データには触れない。
 """
