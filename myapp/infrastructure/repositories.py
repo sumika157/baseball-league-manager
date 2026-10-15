@@ -86,6 +86,7 @@ from .scoping import (
     teams_in,
     world_condition,
 )
+from .workspaces import legacy_workspace_id
 
 _BATTING_FIELDS = (
     "at_bats",
@@ -1213,16 +1214,26 @@ class DjangoLeagueRepository:
         """リーグを保存する。新しいリーグは範囲の世界に属する。範囲の外のリーグには書けない。"""
         if league.id is not None and not leagues_in(self._scope).filter(id=league.id).exists():
             raise LeagueNotFound(f"リーグが見つかりません（id={league.id}）。")
+        defaults: dict[str, object] = {
+            "name": league.name,
+            "display_order": league.display_order,
+            "foreign_player_roster_limit": league.foreign_player_roster_limit,
+            "foreign_player_game_limit": league.foreign_player_game_limit,
+            "registered_player_limit": league.registered_player_limit,
+        }
+        if league.id is None:
+            # 帰属は作るときに決め、既存のリーグの workspace・world は書き換えない。
+            # 実データのリーグはワークスペースに、ペナントのリーグは世界（経由でワークスペース）に属す。
+            # 暫定: 実データのワークスペースは W2 まで id が最小のもの
+            if self._scope.world_id is None:
+                defaults["workspace_id"] = legacy_workspace_id()
+                defaults["world_id"] = None
+            else:
+                defaults["workspace_id"] = None
+                defaults["world_id"] = self._scope.world_id
         row, _ = orm_models.League.objects.update_or_create(  # type: ignore[misc]
             id=league.id,
-            defaults={
-                "name": league.name,
-                "world_id": self._scope.world_id,
-                "display_order": league.display_order,
-                "foreign_player_roster_limit": league.foreign_player_roster_limit,
-                "foreign_player_game_limit": league.foreign_player_game_limit,
-                "registered_player_limit": league.registered_player_limit,
-            },
+            defaults=defaults,
         )
         league.id = row.id
         return league
@@ -1509,6 +1520,11 @@ class DjangoWorldRepository:
         return orm_models.PennantWorld.objects.filter(owner_id=owner_id).count()
 
     def save(self, world: World) -> World:
+        # リーグ（新規のときだけ決める）と違い、id があっても workspace_id を埋める。
+        # 呼ぶのは世界の作成の流れだけという前提で、既存の世界は T5 のバックフィルが埋める
+        # 分岐で作る世界は workspace_id が空で来る。W1b で PennantWorldService が
+        # 範囲のワークスペースを渡す形に替えるまでは、暫定のワークスペースに属させる
+        workspace_id = world.workspace_id if world.workspace_id is not None else legacy_workspace_id()
         row, _ = orm_models.PennantWorld.objects.update_or_create(  # type: ignore[misc]
             id=world.id,
             defaults={
@@ -1517,10 +1533,11 @@ class DjangoWorldRepository:
                 "seed": world.seed,
                 "managed_team_id": world.managed_team_id,
                 "start_year": world.start_year,
-                "workspace_id": world.workspace_id,
+                "workspace_id": workspace_id,
             },
         )
         world.id = row.id
+        world.workspace_id = workspace_id
         return world
 
     @transaction.atomic

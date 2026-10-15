@@ -518,3 +518,14 @@ W3 を W4 より先にするのは、W4 を先にすると、中身を入れら�
 - 決定（2026-10-11）: 招待の表（`WorkspaceInvitation`）と `Invitation`・`InvitedRole` は W4 で作る。
 - T1（`feature/workspace-domain`）: `domain/workspace.py`（`Visibility`・`Workspace`・key の生成と検査）、`InvalidWorkspace`、`World.workspace_id` を入れた。ORM・マイグレーションは T2 以降。
 - T2（`feature/workspace-schema`）: マイグレーション `0048_workspace`（0047 の次。スキーマだけ）で `Workspace`・`WorkspaceEditor` を作り、`League`・`Stadium`・`PennantWorld` に null 可・PROTECT の `workspace` を足した。`Workspace.visibility` と `name` の長さはドメイン（`Visibility.choices()`・`MAX_NAME_LENGTH`）から取り、既定値は持たせない（ドメインの `Workspace` と同じ）。`DjangoWorldRepository` が `workspace_id` を読み書きする（保存時に埋める `legacy_workspace_id()` は T4）。分類表は「League までの道（今の道から末尾の `__world` を除く）」の形にし、`Workspace`＝全体・`WorkspaceEditor`＝メンバー・`PennantWorld`／`Stadium`＝直属・`League`＝2経路（`LEAGUE_ROUTES`）とした。`test_shared_models_do_not_point_into_a_world` は「直属・メンバーのモデルはリーグ以下を指さない」に替えた（例外は `PennantWorld.managed_team` だけ）。実測値は無い（スキーマだけで、読み取りの経路は変えていない）。
+- T4（`feature/workspace-write-paths`）: `infrastructure/workspaces.py` の `legacy_workspace_id()`（id が最小のワークスペース。無ければ `WorkspaceNotFound`＝`DomainError` の日本語メッセージなので、世界の作成の画面・管理コマンドは既存の `except DomainError` でメッセージにする）を入れた。書き込み経路で新しい行を作るのは次の3つだけだった（管理コマンドの `seed_*` は球団・選手・試合だけでリーグ・球場・世界は作らない。`bulk_create` はどれも試合・成績・能力・日程の行）。
+  - `DjangoLeagueRepository.save`: 新しいリーグだけ帰属を決める。実データの範囲は `workspace_id = legacy_workspace_id()`・`world_id = None`、ペナントの範囲は `workspace_id = None`・`world_id = scope.world_id`。既存のリーグの workspace・world は書き換えない。分岐のリーグはここを通るので workspace は空のまま。
+  - `DjangoWorldRepository.save`: `world.workspace_id` が空なら `legacy_workspace_id()` を入れ、集約にも書き戻す（分岐で作る世界）。W1b で `PennantWorldService` が範囲のワークスペースを渡す形に替える。
+  - 管理画面: League と Stadium のフォームに `workspace` を出して必須にした（`WorkspaceRequiredForm`）。選び忘れはフォームのエラーで、500 にならない。球場の管理画面は管理画面から作るだけで、リポジトリを通らない。
+
+#### T7 で必ず行うこと（T4 のレビューより）
+
+- (a) `Workspace` を管理画面に登録する。受け入れ条件: 空の DB で、運営者が管理画面から最初のワークスペースを作り、続けてリーグ・球場を作れる。`WorkspaceNotFound` のメッセージ（「ワークスペースがありません。管理画面で作成してください。」）がこの手順と合っていること。ペナントの画面だけを使う一般の利用者にどう読めるかも見直す。
+- (b) 同じコミットで、Wiki `開発環境` の管理ユーザーの作成（createsuperuser）の次と、`本番公開` の createsuperuser の2か所（164 行目付近と 402 行目付近）に「最初にワークスペースを1つ作る」を足す。
+- (c) 既存のリーグ・球場で `workspace` を管理画面から読み取り専用にするか決める（`get_readonly_fields`）。リポジトリは帰属を書き換えないが、管理画面は今は書き換えられる。どちらにしても、変更フォームのテストを添える。
+- (d) 球場の `home_teams` の選択肢は全ワークスペースのチームを並べる。W1b の範囲（ここでは直さない）。

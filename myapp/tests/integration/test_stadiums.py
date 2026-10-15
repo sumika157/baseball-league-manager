@@ -76,6 +76,7 @@ class StadiumHomeTeamAssignmentTest(BaseCase):
     def _save(self, team_ids, **overrides):
         payload = {
             "name": self.dome.name,
+            "workspace": self.workspace.id,
             "city": "",
             "capacity": "",
             "surface": "",
@@ -206,6 +207,7 @@ class StadiumRoofTest(BaseCase):
             "/admin/myapp/stadium/add/",
             {
                 "name": "屋根つき球場",
+                "workspace": self.workspace.id,
                 "city": "",
                 "capacity": "",
                 "surface": "",
@@ -230,6 +232,7 @@ class StadiumRoofTest(BaseCase):
             "/admin/myapp/stadium/add/",
             {
                 "name": "ガラス球場",
+                "workspace": self.workspace.id,
                 "city": "",
                 "capacity": "",
                 "surface": "",

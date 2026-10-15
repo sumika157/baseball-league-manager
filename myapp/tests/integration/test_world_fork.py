@@ -12,7 +12,6 @@ from django.contrib.auth.models import User
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import IntegrityError, transaction
-from django.test import TestCase
 
 from myapp.application.pennant_world import PennantWorldService, WorldRepositories
 from myapp.domain.exceptions import InvalidSeason, InvalidWorld, LeagueNotFound, TeamNotFound, WorldNotFound
@@ -203,6 +202,12 @@ class ForkTest(BaseCase):
         self.assertTrue(all(p.career[0].from_year == START for p in mine.players))
         self.assertEqual([league.name for league in DjangoLeagueRepository(scope).find_all()], [self.league.name])
 
+    def test_the_world_gets_a_workspace_and_its_leagues_do_not(self):
+        self.assertEqual(self.world.workspace_id, self.workspace.id)
+        leagues = orm_models.League.objects.filter(world=self.world)
+        self.assertTrue(leagues.exists())
+        self.assertEqual({league.workspace_id for league in leagues}, {None})
+
     def test_the_league_name_is_unique_within_a_world(self):
         with self.assertRaises(IntegrityError), transaction.atomic():
             make_league(name=self.league.name, world=self.world)
@@ -381,7 +386,7 @@ class ForkOptionsTest(BaseCase):
         self.assertEqual(orm_models.PennantPlayerRatings.objects.count(), 0)
 
 
-class WorldRepositoryTest(TestCase):
+class WorldRepositoryTest(BaseCase):
     def test_a_world_round_trips(self):
         repository = DjangoWorldRepository()
         owner = User.objects.create_user("gm", password="x")
