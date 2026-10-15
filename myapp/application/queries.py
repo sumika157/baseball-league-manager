@@ -16,6 +16,7 @@ from datetime import date
 from typing import Protocol, runtime_checkable
 
 from ..domain.entities import Game
+from ..domain.pennant.postseason import PostseasonResult
 from ..domain.pennant.retirement import PlayingTime
 from ..domain.value_objects import FieldingLine
 from .dto import (
@@ -236,6 +237,22 @@ class PennantActivityQuery(Protocol):
 
     def pitching_between(self, team_id: int, *, after: date, through: date) -> list[PeriodPitching]:
         """同じ期間の、球団の投手ごとの勝・敗・セーブ。登板の無い選手は含めない。"""
+        ...
+
+
+@runtime_checkable
+class PostseasonQuery(Protocol):
+    """世界のポストシーズンの材料の参照。勝ち上がり（`PostseasonBracket`）を導くのに使う。
+
+    試合を集約として組み立てず、日付・2球団・得点だけを読む。
+    """
+
+    def results(self, year: int) -> list[PostseasonResult]:
+        """その年のポストシーズンの試合の結果（順不同）。"""
+        ...
+
+    def last_regular_date(self, year: int) -> date | None:
+        """その年の最後の公式戦の日。公式戦が無ければ None。"""
         ...
 
 

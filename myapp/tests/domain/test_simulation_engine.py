@@ -30,7 +30,7 @@ from myapp.domain.simulation.manager import (
 )
 from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.samples import average_club, round_robin_days, spread_league
-from myapp.domain.value_objects import FieldingPosition, PlateAppearanceResult
+from myapp.domain.value_objects import FieldingPosition, GameStage, PlateAppearanceResult
 
 FP = FieldingPosition
 P = PlateAppearanceResult
@@ -51,7 +51,9 @@ class ScriptedRandom:
 
 
 def _play(seed: int, home, away, *, day: date = OPENING_DAY, history=None, **kwargs) -> SimulatedGame:
-    return simulate_game(make_random(seed), home, away, played_on=day, history=history, **kwargs)
+    return simulate_game(
+        make_random(seed), home, away, stage=GameStage.REGULAR, played_on=day, history=history, **kwargs
+    )
 
 
 class SameSeedTest(TestCase):
@@ -88,7 +90,7 @@ class ScriptedGameTest(TestCase):
         """打者が一人も出塁しなければ、12回まで行って引き分ける（NPB の規定）。"""
         home = choose_active_roster(average_club(1))
         away = choose_active_roster(average_club(2))
-        played = simulate_game(ScriptedRandom(0.99), home, away, played_on=OPENING_DAY)
+        played = simulate_game(ScriptedRandom(0.99), home, away, stage=GameStage.REGULAR, played_on=OPENING_DAY)
         game = played.game
         self.assertEqual(game.line_score.innings, MAX_INNINGS)
         self.assertEqual(len(game.line_score.home), MAX_INNINGS)
@@ -107,7 +109,7 @@ class ScriptedGameTest(TestCase):
         home = choose_active_roster(average_club(1))
         away = choose_active_roster(average_club(2))
         with self.assertRaises(InvalidGame):
-            simulate_game(ScriptedRandom(0.0), home, away, played_on=OPENING_DAY)
+            simulate_game(ScriptedRandom(0.0), home, away, stage=GameStage.REGULAR, played_on=OPENING_DAY)
 
 
 class SimulatedGamesTest(TestCase):

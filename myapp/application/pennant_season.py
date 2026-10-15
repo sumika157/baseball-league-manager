@@ -12,6 +12,9 @@
 - 1軍登録・スタメン・継投は、能力と GM の編成の上書き（`ClubPlan`）だけから決まる。上書きが使えない区画は
   その区画だけ自動に落とし、理由を `AdvanceReport.plan_notices` で返す（例外で止めない）
 
+試合を1つずつ作る部分（上の3つ）は `pennant_simulation.DaySimulator` にあり、ポストシーズンの進行
+（`PennantPostseasonService`）と共有する。
+
 試合は日の区切りで、`FLUSH_EVERY_GAMES` 試合ごとにまとめて保存する（メモリに溜める量の上限）。
 **日の途中では切らない**。残りの対戦が「今日」より前になり、進められなくなるため。
 保存と消化済みの対戦の削除は同じトランザクションで行う。
@@ -25,8 +28,7 @@ from datetime import date
 from types import EllipsisType
 
 from ..domain.entities import Game
-from ..domain.exceptions import AlreadyAdvanced, InvalidRoster, InvalidSchedule
-from ..domain.pennant.club_plan import ClubLimits, ResolvedClub, resolve_club, strictest_game_limit
+from ..domain.exceptions import AlreadyAdvanced, InvalidSchedule
 from ..domain.pennant.schedule import (
     AdvanceTarget,
     Fixture,
@@ -43,13 +45,9 @@ from ..domain.repositories import (
     TeamRepository,
     WorldRepository,
 )
-from ..domain.simulation.engine import simulate_game
-from ..domain.simulation.fatigue import PitchingHistory
-from ..domain.simulation.game_day import simulated_attendance, simulated_times
-from ..domain.simulation.manager import ClubRoster, SimBatter, SimPitcher
-from ..domain.simulation.randomness import game_seed, make_random
-from ..domain.simulation.ratings import BatterRatings, PitcherRatings
-from .dto import AdvanceReport, PlanNotice, SimulationContext, SimulationTeam
+from ..domain.value_objects import GameStage
+from .dto import AdvanceReport, PlanNotice
+from .pennant_simulation import DaySimulator
 from .queries import SimulationContextQuery
 
 # メモリに溜める試合数の上限（`seed_virtual_games` の `FLUSH_EVERY_GAMES` に倣う）
@@ -134,6 +132,9 @@ class PennantSeasonService:
         何も作らずに AlreadyAdvanced にする（画面を開いたあとに別の操作で進んだ世界を、さらに進めない。
         管理コマンドは渡さない）。
         """
+        if target is AdvanceTarget.POSTSEASON_END:
+            # 日程を作る前に断る（検査を先に。`dates_to_play` も同じ範囲を弾く）
+            raise InvalidSchedule("ポストシーズンの終わりまでの範囲は、公式戦の日程には使えません。")
         world = self._worlds.find_by_id(self._world_id)
         last_played = self._context_query.last_played_on()
         if expected_today is not ... and expected_today != last_played:
@@ -170,31 +171,16 @@ class PennantSeasonService:
 
     def _play(self, world: World, pending: list[Fixture], dates: list[date]) -> tuple[int, tuple[PlanNotice, ...]]:
         """`dates` の日の対戦をシミュレーションして保存し、作った試合数と、自動に落ちた編成の知らせを返す。"""
-        context = self._context_query.load(before=dates[0])
-        history = pitching_history(context)
-        teams = {team.team_id: team for team in context.teams}
-        # 能力を引く年。`dates[0]` は最後の試合日より後の未消化の最初の日。消化した日程は試合の保存と
+        # 能力を引く年は `dates[0]` の年。`dates[0]` は最後の試合日より後の未消化の最初の日。消化した日程は試合の保存と
         # 同じトランザクションで消えるので、日程の最初の日（`FixtureRepository.first_date`）と同じになり、
         # domain の `ratings_year`（編成・表示が使う規則）と一致する
-        pools = self._pools(context, dates[0].year)
-        plans = {plan.team_id: plan for plan in self._plans.find_all()}
-        clubs: dict[int, ResolvedClub] = {}
-        notices: list[PlanNotice] = []
-        game_limit = strictest_game_limit(team.foreign_game_limit for team in context.teams)
-
-        def club_of(team_id: int, day: date) -> ResolvedClub:
-            # 1軍登録・オーダー・投手陣は、能力と GM の上書きだけから決まるので、1回の「進める」の間は
-            # 変わらない。日ごとに選び直さない（上書きが使えない理由も、球団ごとに最初の日の1回だけ知らせる）
-            if team_id not in clubs:
-                team = teams[team_id]
-                limits = ClubLimits(foreign_roster_limit=team.foreign_roster_limit, foreign_game_limit=game_limit)
-                clubs[team_id] = resolve_club(plans.get(team_id), pools[team_id], limits)
-                notices.extend(
-                    PlanNotice(team_id, team.name, day, fallback.section, fallback.reason, fallback.falls_back)
-                    for fallback in clubs[team_id].fallbacks
-                )
-            return clubs[team_id]
-
+        simulator = DaySimulator.load(
+            world=world,
+            first_day=dates[0],
+            context_query=self._context_query,
+            ratings=self._ratings,
+            plans=self._plans,
+        )
         by_date: dict[date, list[Fixture]] = {}
         for fixture in pending:
             by_date.setdefault(fixture.date, []).append(fixture)
@@ -204,48 +190,15 @@ class PennantSeasonService:
         total = 0
         for day in dates:
             for fixture in by_date[day]:
-                home_club = club_of(fixture.home_team_id, day)
-                away_club = club_of(fixture.visitor_team_id, day)
-                home, away = home_club.roster, away_club.roster
-                rng = make_random(
-                    game_seed(
-                        world.seed, day.year, f"{day.isoformat()}:{fixture.home_team_id}:{fixture.visitor_team_id}"
-                    )
+                games.append(
+                    simulator.play(day, fixture.home_team_id, fixture.visitor_team_id, stage=GameStage.REGULAR)
                 )
-                try:
-                    simulated = simulate_game(
-                        rng,
-                        home,
-                        away,
-                        played_on=day,
-                        history=history,
-                        # リーグをまたぐ交流戦は、ホーム球団のリーグの枠で行う
-                        foreign_game_limit=teams[fixture.home_team_id].foreign_game_limit,
-                        home_orders=home_club.orders,
-                        away_orders=away_club.orders,
-                    )
-                except InvalidRoster as error:
-                    raise InvalidRoster(f"{day} {home.name} 対 {away.name}: {error}") from error
-                # 時刻と観客数は、打席を進めた乱数とは別の乱数源（用途の接尾辞付き）で作る。
-                # 試合の結果（得点・打席）と「まとめて進める」「1日ずつ進める」の一致を変えない
-                day_rng = make_random(
-                    game_seed(
-                        world.seed,
-                        day.year,
-                        f"{day.isoformat()}:{fixture.home_team_id}:{fixture.visitor_team_id}:game-day",
-                    )
-                )
-                simulated.game.times = simulated_times(simulated.game, day_rng)
-                simulated.game.attendance = simulated_attendance(
-                    teams[fixture.home_team_id].stadium_capacity, day, day_rng
-                )
-                games.append(simulated.game)
                 consumed.append(fixture)
             # 日の途中では書き出さない（残りの対戦が「今日」より前になり、進められなくなる）
             if len(games) >= FLUSH_EVERY_GAMES:
                 total += self._flush(games, consumed)
                 games, consumed = [], []
-        return total + self._flush(games, consumed), tuple(notices)
+        return total + self._flush(games, consumed), simulator.notices
 
     def _flush(self, games: list[Game], consumed: list[Fixture]) -> int:
         """試合を保存し、消化した対戦を消す。同じトランザクションで行う。
@@ -263,35 +216,3 @@ class PennantSeasonService:
             self._fixtures.remove(consumed)
             write()
         return len(games)
-
-    def _pools(self, context: SimulationContext, year: int) -> dict[int, ClubRoster]:
-        """球団ごとの登録候補。能力（その年のもの）が無い選手は出られない。"""
-        ratings = {item.player_id: item.ratings for item in self._ratings.find_by_year(year)}
-        return {team.team_id: pool_of(team, ratings) for team in context.teams}
-
-
-def pool_of(team: SimulationTeam, ratings: dict[int, BatterRatings | PitcherRatings]) -> ClubRoster:
-    batters: list[SimBatter] = []
-    pitchers: list[SimPitcher] = []
-    for player in team.players:
-        ability = ratings.get(player.player_id)
-        # 登録位置と能力の種類の食い違いは、能力の保存のときに弾いている
-        if isinstance(ability, PitcherRatings):
-            pitchers.append(SimPitcher(player.player_id, player.name, ability, player.is_foreign))
-        elif isinstance(ability, BatterRatings):
-            batters.append(
-                SimBatter(
-                    player.player_id, player.name, player.position, ability, player.is_foreign, throws=player.throws
-                )
-            )
-    return ClubRoster(team_id=team.team_id, name=team.name, batters=tuple(batters), pitchers=tuple(pitchers))
-
-
-def pitching_history(context: SimulationContext) -> PitchingHistory:
-    """読んだ直近の登板から、疲労を導くための記録を作る。"""
-    history = PitchingHistory()
-    for start in context.last_starts:
-        history.record(start.played_on, [start.pitcher_id])
-    for outing in context.recent_outings:
-        history.record(outing.played_on, list(outing.pitcher_ids))
-    return history

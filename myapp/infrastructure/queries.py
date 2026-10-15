@@ -53,6 +53,7 @@ from ..application.dto import (
 )
 from ..domain.entities import Game, jersey_number_in, winning_team_id
 from ..domain.exceptions import WorldNotFound
+from ..domain.pennant.postseason import PostseasonResult
 from ..domain.pennant.retirement import PlayingTime
 from ..domain.pennant.world import WorldScope
 from ..domain.simulation.fatigue import FATIGUE_WINDOW_DAYS
@@ -965,6 +966,42 @@ class DjangoSeasonPlayingTimeQuery:
             player_id: PlayingTime(plate_appearances=appearances.get(player_id, 0), outs=outs.get(player_id, 0))
             for player_id in sorted(appearances.keys() | outs.keys())
         }
+
+
+class DjangoPostseasonQuery:
+    """PostseasonQuery の Django ORM 実装。範囲（`WorldScope`）の中の試合を、区分を分けて読む。
+
+    結果はポストシーズンの試合だけ、最後の公式戦の日は公式戦だけから取る。集約は組み立てず、
+    日付・2球団・得点だけを `values_list` で読む（勝ち負けの出典は `winning_team_id`）。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def results(self, year: int) -> list[PostseasonResult]:
+        rows = (
+            games_in(self._scope, stages=StageFilter.POSTSEASON_ONLY)
+            .filter(year=year)
+            .order_by("played_on", "id")
+            .values_list("played_on", "home_team_id", "away_team_id", "home_score", "away_score")
+        )
+        return [
+            PostseasonResult(
+                played_on=played_on,
+                home_team_id=home,
+                away_team_id=away,
+                winner_team_id=winning_team_id(home, away, home_score, away_score),
+            )
+            for played_on, home, away, home_score, away_score in rows
+        ]
+
+    def last_regular_date(self, year: int) -> date | None:
+        last: date | None = (
+            games_in(self._scope, stages=StageFilter.REGULAR_ONLY)
+            .filter(year=year)
+            .aggregate(last=Max("played_on"))["last"]
+        )
+        return last
 
 
 _OFFSEASON_STINT_FIELDS = (

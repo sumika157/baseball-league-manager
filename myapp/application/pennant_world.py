@@ -19,6 +19,7 @@ from ..domain.exceptions import InvalidWorld, TeamNotFound
 from ..domain.pennant.club_plan import ClubMember, ensure_roster_playable, strictest_game_limit
 from ..domain.pennant.fork import fork_league, fork_roster, fork_team
 from ..domain.pennant.initial_ratings import career_record, estimate_initial_ratings
+from ..domain.pennant.postseason import PostseasonFormat
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.world import (
     MAX_SEASONS_PER_WORLD,
@@ -80,6 +81,7 @@ def _row(world: World) -> PennantWorldRow:
         start_year=world.start_year,
         owner_id=world.owner_id,
         managed_team_id=world.managed_team_id,
+        postseason_format=world.postseason_format,
     )
 
 
@@ -123,6 +125,7 @@ class PennantWorldService:
         start_year: int,
         seed: int,
         managed_source_team_id: int | None = None,
+        postseason_format: PostseasonFormat = PostseasonFormat.NONE,
     ) -> PennantWorldCreated:
         """実データのリーグを分岐して世界を作る。
 
@@ -132,6 +135,8 @@ class PennantWorldService:
 
         `managed_source_team_id` は受け持つ球団を**分岐元の球団の id**で指す（任意。
         世界を作ったあとで決めてもよい）。写した先の球団が受け持ちになる。
+
+        `postseason_format` はポストシーズンの方式。省くと「なし」（方式を足す前と同じ進み方）。
 
         球団の現在の在籍選手で試合を組めない球団（外国人の出場枠の中でスタメンを組めない名簿を含む）があるリーグは、
         InvalidWorld で弾く（世界を作る前に検査する。
@@ -150,7 +155,9 @@ class PennantWorldService:
                 f"作れる世界は1人{MAX_WORLDS_PER_OWNER}つまでです。不要な世界を削除してから作ってください。"
             )
         # 検査を先に済ませる（世界を作ってから失敗すると、消す手間が増える）
-        world = World(name=name, seed=seed, start_year=start_year, owner_id=owner_id)
+        world = World(
+            name=name, seed=seed, start_year=start_year, owner_id=owner_id, postseason_format=postseason_format
+        )
         source = self.load_source(league_ids)
         if world.start_year > MAX_START_YEAR:
             raise InvalidWorld(
@@ -197,6 +204,7 @@ class PennantWorldService:
         start_year: int,
         seed: int,
         managed_source_team_id: int | None = None,
+        postseason_format: PostseasonFormat = PostseasonFormat.NONE,
     ) -> PennantWorldCreated:
         """世界を作り、開幕年の日程まで作る。**同じトランザクション**で行い、日程が組めなければ世界も残さない。
 
@@ -211,6 +219,7 @@ class PennantWorldService:
                 start_year=start_year,
                 seed=seed,
                 managed_source_team_id=managed_source_team_id,
+                postseason_format=postseason_format,
             )
             self._ensure_schedule(_saved_id(created.world.id))
         return created

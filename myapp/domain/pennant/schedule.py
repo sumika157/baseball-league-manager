@@ -200,6 +200,8 @@ class AdvanceTarget(Enum):
     MONTH_END = "month_end"  # 次に試合がある日の月の末まで
     LIMIT = "limit"  # 試合数が `MAX_GAMES_PER_ADVANCE` を超えない、日の区切りで止まる最大の範囲
     SEASON_END = "season_end"  # 未消化の日程をすべて
+    # ポストシーズンの終わりまで（ポストシーズンの進行だけが受け付ける。公式戦の日程には使わない）
+    POSTSEASON_END = "postseason_end"
 
 
 def dates_to_play(
@@ -214,6 +216,9 @@ def dates_to_play(
     どの単位でも少なくとも次の試合日を含むので、進めても今日が動かない状態にはならない。
     未消化が無ければ空。
     """
+    if target is AdvanceTarget.POSTSEASON_END:
+        # 公式戦の日程に「終わりまで」を当てると、黙って残り全部（`SEASON_END`）と同じになる。範囲の取り違えを弾く
+        raise InvalidSchedule("ポストシーズンの終わりまでの範囲は、公式戦の日程には使えません。")
     upcoming = sorted({f.date for f in fixtures if f.date > today})
     if not upcoming:
         return []

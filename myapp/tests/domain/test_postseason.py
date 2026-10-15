@@ -421,6 +421,13 @@ class LeagueCountTest(unittest.TestCase):
         self.assertEqual((31, 21), (semi.upper_team_id, semi.lower_team_id))
 
 
+class StatusTest(unittest.TestCase):
+    def test_only_a_finished_or_absent_postseason_is_settled(self):
+        """締めてよい（世界の終了を出してよい）のは、終わった・無いときだけ。"""
+        settled = {status for status in PostseasonStatus if status.is_settled}
+        self.assertEqual(settled, {PostseasonStatus.NONE, PostseasonStatus.FINISHED})
+
+
 class FormatTest(unittest.TestCase):
     def test_none_has_no_postseason(self):
         bracket = _bracket(_league(1), _league(2), fmt=PostseasonFormat.NONE)

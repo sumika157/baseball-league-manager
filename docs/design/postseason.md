@@ -24,7 +24,7 @@
 | --- | --- | --- |
 | S1 | 試合の区分（`GameStage`・`Game.stage`）と、公式戦の集計からポストシーズンを外す | 実装済み（#238） |
 | S2 | 勝ち上がりの規則（domain の純粋な関数）・`final_order`・リーグの優先順・エンジンの延長の上限 | 実装済み（#239） |
-| S3 | 進行（`PennantPostseasonService`）・`World.postseason_format`・締める処理の検査・管理コマンド | 未着手 |
+| S3 | 進行（`PennantPostseasonService`）・`World.postseason_format`・締める処理の検査・管理コマンド | 実装済み（#240） |
 | S4 | 画面（勝ち上がりの表・ポストシーズンの成績表・GM ホームのカード・設定）と実測 | 未着手 |
 | S5 | 歴代・球団史への表示（#105 の後）・Wiki への吸収とこのファイルの削除 | 未着手 |
 
@@ -81,3 +81,61 @@
 - 結果の検査: 結果を日付の順に再生し、日ごとに「導いた次の日」と一致すること・その日の対戦（ホームとビジターの向きまで）にあることを確かめる。同じ日の一部の対戦だけ結果がある状態は許す（`next_day()` はその日の残りを返す）が、その後に別の日の結果があれば食い違い。延長の制限が無い試合（日本シリーズの第8戦以降）に引分の結果が来たら拒む。導出の入力は、リーグの優先順に同じリーグが2回ある・同じリーグ id の最終順位が2つある・同じ球団が2つのリーグにある、のどれでも拒む。
 
 **エンジンの再現性**: `max_innings` を足す前のエンジンで、6球団・28日（84試合・引分4）の打席列のハッシュを取り、既定値の経路でビット単位で一致することを `tests/domain/test_simulation_max_innings.py` が見張る。`None` では12回で引分だった試合の12回までの打席列が同じまま、延長で決着する。
+
+### S3 進行と締める処理（2026-10-15）
+
+**置き場所**
+
+- 方式: `World.postseason_format: PostseasonFormat`（domain。既定は `NONE`。選択肢の外の値は `InvalidWorld`）と `PennantWorld.postseason_format`（CharField・choices は `PostseasonFormat` から・既定「なし」）。マイグレーション `0050_pennantworld_postseason_format` は AddField だけ（**既存の世界は「なし」**。main の取り込みで番号を付け直す前提）。`World` の docstring は「作ったときに決まる事実と、オーナーが変えられる設定」に直した（#198 と共有の直し）。
+- 世界の作成: `PennantWorldService.create_world(_with_schedule)` に `postseason_format`（省くと「なし」）。`pennant_create --postseason {npb,champions,none}`（既定 `npb`＝新しい世界の既定）。**画面の作成フォームはまだ方式を渡さない（「なし」の世界ができる）**。フォームの選択（既定 NPB）は S4。
+- シミュレーションの共通部分: `application/pennant_simulation.py` の `DaySimulator`（1回の「進める」の間の登録候補・`resolve_club`・直近の登板を持ち、`play(day, home, away, *, stage, max_innings)` で1試合を作る）。`pool_of`・`pitching_history` もここへ移した。乱数の識別は `game_key(stage, day, home, away)`: 公式戦は切り出す前と同じ `<日付>:<ホーム>:<ビジター>`、ポストシーズンは `post:` を前に付ける。
+- `simulate_game` は区分 `stage` を**必須のキーワード引数**で受け取る（エンジンの中の `REGULAR` の決め打ちを消した。S1 の「呼ぶ側はすべて区分を明示」）。
+- 勝ち上がりの材料: `PostseasonQuery`（`results(year)`・`last_regular_date(year)`。`values_list` で読み、集約は組み立てない）と、それを使って `PostseasonBracket` を導く `PostseasonBracketReader`（`application/pennant_postseason.py`）。最終順位は世界の範囲の `TeamApplicationService.get_league_standings(year)`（公式戦だけ）、同率のあるリーグだけ `tiebreak_for` の材料で `final_order`、リーグの優先順は世界の全リーグで `league_priority`。**方式が「なし」なら何も読まずに状況 `NONE`**（既存の世界の締める処理・GM ホームにクエリを足さない）。
+- 進行: `PennantPostseasonService.advance(target, *, expected_today)`。範囲は `POSTSEASON_SCREEN_TARGETS`（`season.py`。`DAY`・`NEXT_MANAGED_GAME`・新しい `AdvanceTarget.POSTSEASON_END`）だけを受け付ける。公式戦の日程に `POSTSEASON_END` を当てると `dates_to_play` が `InvalidSchedule`（黙って「残り全部」にならない）。組み立て口 `build_pennant_postseason_service(world_id)`、勝ち上がりの読み取りは `views._postseason_brackets(world_id)`（進行と締める処理の両方が使う。`test_wiring.py` が依存と範囲を見る）。
+- 締める処理: `PennantOffseasonService._check` の最後（最終シーズンの検査の後）に「その年のポストシーズンが `NOT_STARTED` / `IN_PROGRESS` なら `PostseasonNotFinished`（「Y年のポストシーズンがまだ終わっていません。」）」を1つ足しただけ。`close_option()` は理由を返す。`_state()` には触れていない。
+- **戦力外の指名はポストシーズン中もできる**（ユーザーの決定 2026-10-15）: 指名できる条件（公式戦を終え、まだ締めていない・最終シーズンでない）を `_season_over_year` に分け、`_check`（締められる条件）はそれにポストシーズンの検査を足したものにした。「戦力外」タブ・`release_view`・`start_manual_releases`・`set_releases`・`reset_releases` は `_season_over_year` を、タブを出すかの判定は新しい `can_choose_releases()` を使う（それまでの `close_option().can_close` はポストシーズン中に偽になるため）。指名を使うのは締めるときだけで、ポストシーズン中に保存した指名は終わってから締めると使われる。
+- 管理コマンド: `pennant_advance --to postseason-end`。`day`・`next-game` は公式戦の日程が尽きていればポストシーズンを進める（S4 の「進めるの URL を共有し、局面がシーズン終了ならポストシーズン」と同じ振る舞い）。`pennant_close_season` はポストシーズンが終わっていなければ `PostseasonNotFinished` のメッセージで止まる。
+
+**進め方の決定**
+
+- 1日ずつ `next_day()` で対戦を導いてシミュレーションし、`played()` で結果をメモリに足して次の日を導く。保存は最後に1回。どの範囲も、試合数が `MAX_GAMES_PER_ADVANCE`（150）を超える手前の日で止める（少なくとも1日は進める）。8リーグの最悪でも 1回で終わる見込み（実測は 109試合）。
+- `NEXT_MANAGED_GAME` は自軍が試合をした日まで。自軍が出ない（敗退・不出場）なら終わりまで（公式戦の「自軍の未消化が無ければ残り全部」と同じ考え）。
+- 局面がシーズン中なら `SeasonNotFinished`、締めた後（翌年の開幕前）なら `AlreadyClosed`。方式「なし」・終わったポストシーズンは何もせず空の結果（`PostseasonAdvanceReport`）。
+- **ロック（#100）**: シミュレーションと `prepare_add_all`（検査と行の組み立て）はトランザクションの外。中では「世界の最後の試合日（全区分）と次の対戦の日」を読み直し、読み込みの前と違えば書かずに `AlreadyAdvanced`。公式戦の「対戦を先に消す」に当たる、ポストシーズンの二重の試合の防ぎ方。並行して進めたときに二重の試合を作らないことを、トランザクションに入る直前に別の「進める」を割り込ませるテストで確かめた。
+- `expected_today` を渡すと、世界の今日が違えば何も作らずに `AlreadyAdvanced`（画面の二重送信。S4 の進めるボタンが使う）。
+
+**設計から外した・広げたこと**
+
+- 「公式戦を終えた年」の判定は domain の `season.regular_season_over_year` に1つ置き、ポストシーズンの進行・戦力外の指名（`_season_over_year`。最終シーズンと画面の年の検査を足す）・締める処理（さらにポストシーズンの検査を足す）が共有する。「締めてよいポストシーズン」は `PostseasonStatus.is_settled`（終わった・無い。S4 の `WorldContext.is_over` も使う）。勝ち上がりの読み取りは順位表の2メソッドだけの Protocol（`pennant_race.StandingsSource`）で受ける（#219 の分割で触る範囲を狭める）。`pennant_advance` は公式戦の後に week・month・season-end を打つと、ポストシーズンが残っていれば `--to postseason-end` を案内する。
+- **`multi_season_check.py` は変えていない。** 設計は「締める前にポストシーズンを終わりまで進める」だったが、この道具は DB の世界を進めず、メモリの上で公式戦とオフの規則だけを回す（`plan_offseason` に渡す出場機会も能力も公式戦だけから決まる）。ポストシーズンを足しても結果が変わらないので、手を入れる理由が無い。DB の世界を締める道具（`pennant_close_season`）は上のとおり検査で止まる。
+- `PennantPostseasonService` の `view(year)`・`option()`（勝ち上がりの表と GM ホームのカードの DTO）は画面と一緒に S4 で作る（S3 は進める処理と検査まで）。`WorldContext.is_over`（最終シーズンのポストシーズンが終わるまで世界の終了を出さない）も S4。
+- 世界の一覧の DTO `PennantWorldRow` に `postseason_format` を足した（コマンドの出力と S4 の設定の画面が使う）。
+- Wiki は S5 で吸収する方針のまま、**コマンドの例だけ** S3 で直した（「仮想データの投入」の「1シーズン進める → 締める」に `--to postseason-end` を足し、「アーキテクチャ」の管理コマンドの例と組み立て口の表に `postseason-end`・`--postseason`・`build_pennant_postseason_service` を足した）。`pennant_create` の既定が NPB 方式になり、例のままでは締められなくなるため。
+
+**切り出しの前後の一致**: 切り出す前のコードで、2球団の世界の公式戦1シーズン（143日・11,038打席）の打席列・投手成績・時刻と観客数のハッシュを取り、`DaySimulator` に切り出した後のコードで同じハッシュになることを確かめた（`d882b21f…`）。以後は `test_pennant_advance.py` の再現性のテストと、`game_key` の形のテスト（`test_pennant_postseason.py`）が見張る。
+
+**テスト**: `tests/integration/test_pennant_postseason.py`（2リーグ×3球団の世界。公式戦を1週間だけ進めて残りの対戦を消し、公式戦を終えた世界にする）。1日ずつ・自軍の試合ごと・終わりまで一度に進めて打席列まで同じ、FS → ファイナル → 日本シリーズで優勝が決まる、FS の第1戦は2位の本拠地、年と能力の年がずれない、終わったポストシーズン・方式「なし」は何もしない、範囲の検査、`expected_today`、並行して進めても二重の試合を作らない、ポストシーズンの前後で公式戦の集計（順位表・試合一覧・オフの出場機会・最後の公式戦の日）が変わらない、シーズン中は進められない、終わるまで締められない（何も書かない・`close_option()` の理由）→ 終われば締められる、ポストシーズン中も戦力外のタブが出て、保存した指名が締めるときに使われる（公式戦の途中は出ない・方式「なし」は締めるまで出る） → 締めた後は進められない、方式「なし」はすぐ締められる、管理コマンド。
+
+**実測**（開発 DB のコピー。実データ 8リーグから分岐した 8リーグ48球団の世界と、2リーグ12球団の世界。どちらも NPB 方式で 2026 年の公式戦を消化した後）
+
+| 項目 | 8リーグ | 2リーグ |
+| --- | --- | --- |
+| 公式戦の最終日 → ポストシーズン | 9/13 → 9/16〜10/31（30日） | 9/10 → 9/13〜10/4（14日） |
+| 終わりまで進める（1回） | 3.52 秒・109 試合・264 クエリ | 0.73 秒・20 試合・68 クエリ |
+| うち書き込みロック | 1.46 秒 | 0.27 秒 |
+| 締める処理に足した勝ち上がりの導出 | 96〜110 ms・6 クエリ | — |
+| シーズンを締める処理 | 1.96 秒（方式「なし」にした同じ世界は 1.78 秒） | 0.52 秒（S1 の「なし」で 0.51 秒） |
+
+- 比べる基準: 同じコピーで作った 8リーグの世界の公式戦を `LIMIT`（144 試合）で進めると 3.37〜3.55 秒・ロック 1.23〜1.35 秒。ポストシーズンの1試合あたりのロックは公式戦と同じ水準（書くのは同じ `prepare_add_all` の行）。
+- マイグレーション `0050`: 世界の行に AddField するだけで、Django の起動を含めて 2.7 秒（`PennantWorld` は数行）。
+- 世界の主要画面（GM ホーム・順位表・リーグ・タイトル・成績一覧・試合一覧・歴代・選手一覧・選手ページ・戦力分析の FA・試合詳細）を、ポストシーズンの前後で測った: **クエリ数はすべて同じ**（GM ホーム 37〜38・順位表 8・成績一覧 14・試合一覧 10・選手ページ 27・試合詳細 21）。応答も揺れの範囲（例: 順位表 123 → 95ms、成績一覧 210 → 204ms）。ポストシーズンの試合の試合詳細も同じクエリ数（21）で開ける。
+- 方式 NPB の世界のシーズン終了の GM ホーム（オーナー）は、締められるかの判定（`close_option`）に勝ち上がりの導出が加わる（約 100ms・6 クエリ）。方式「なし」の世界は 0 クエリ。
+- → **`Game` の (year, stage) の索引は足さない**。ポストシーズンの材料の読み（結果・最後の公式戦の日）は2クエリで、導出の時間の大半はその年の順位表（公式戦の試合の読み込み）。画面のクエリ数も変わらない。
+
+**S4 への申し送り**
+
+- **画面からポストシーズンを進める手段は S4 で入れる（epic を main に入れる前に必須）。** S3 の時点では管理コマンド（`pennant_advance`）でしか進められず、NPB 方式の世界は画面だけではシーズンを締められない（画面から作る世界は S4 まで「なし」なので、いまは起きない）。
+- 進めるビューは今の URL を共有し、局面がシーズン終了なら `build_pennant_postseason_service(world_id).advance(target, expected_today=...)` を呼ぶ。範囲は `POSTSEASON_SCREEN_TARGETS` から（ボタンの文言は `pennant_home._LABELS` に「ポストシーズンの終わりまで」を足す）。
+- 作成フォームに方式の選択（既定 NPB）を足し、`create_world_with_schedule(postseason_format=...)` に渡す（いまは省いて「なし」）。設定の画面で方式を変えるときは、書き込みのトランザクションの中で「その年のポストシーズンの試合が無い」ことを `PostseasonQuery.results(year)` で読み直す。
+- 方式を変えられるようにしたら、**進める側**のトランザクションの中の読み直し（`PennantPostseasonService._save`）にも方式を足す（計算中に方式が「なし」に変わっても、ポストシーズンの試合を書かない。DDD レビューの指摘）。
+- 勝ち上がりの表・GM ホームのカードは `PostseasonBracketReader.bracket(world, year)` から DTO を作る（`PennantPostseasonService.view(year)`・`option()`）。GM ホームが `close_option()` と勝ち上がりの両方を呼ぶと導出が2回になるので、カードの出し分けは1回の導出で済ませる。

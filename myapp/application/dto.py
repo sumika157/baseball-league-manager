@@ -12,6 +12,7 @@ from datetime import date
 
 from ..domain.entities import jersey_number_in
 from ..domain.pennant.club_plan import PlanSection
+from ..domain.pennant.postseason import PostseasonFormat, PostseasonStatus
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.season import SeasonPhase
 from ..domain.services.free_agency import SERVICE_DAYS_PER_SEASON
@@ -1173,7 +1174,7 @@ class LineupSlot:
 
 @dataclass(frozen=True)
 class PennantWorldRow:
-    """ペナントの世界ひとつ。一覧や詳細に出す、作ったときに決まった事実。"""
+    """ペナントの世界ひとつ。一覧や詳細に出す、作ったときに決まった事実と設定。"""
 
     id: int
     name: str
@@ -1181,6 +1182,8 @@ class PennantWorldRow:
     start_year: int
     owner_id: int | None
     managed_team_id: int | None
+    # ポストシーズンの方式（オーナーが変えられる設定）
+    postseason_format: PostseasonFormat
 
 
 @dataclass(frozen=True)
@@ -1282,6 +1285,29 @@ class AdvanceReport:
     def season_finished(self) -> bool:
         """日程をすべて消化したか。日程を作った直後（試合のない開幕前）は終わっていない。"""
         return self.remaining_fixtures == 0 and self.today is not None
+
+
+@dataclass(frozen=True)
+class PostseasonAdvanceReport:
+    """ポストシーズンを進めた結果。"""
+
+    # 今回の「進める」で試合をした日（日付順）。進める試合が無ければ空
+    played_dates: tuple[date, ...]
+    games: int
+    # 進めた後の「今日」（消化した最後の試合日。ポストシーズンの試合を含む）
+    today: date | None
+    # 進めた後のポストシーズンの状況
+    status: PostseasonStatus
+    # 優勝（日本一。1リーグは CS の勝者）が決まっていれば、その球団
+    champion_team_id: int | None = None
+    champion_name: str = ""
+    # 編成の上書きが使えず自動で進めた区画（`AdvanceReport.plan_notices` と同じ）
+    plan_notices: tuple[PlanNotice, ...] = ()
+
+    @property
+    def finished(self) -> bool:
+        """ポストシーズンが終わったか（優勝が決まった）。"""
+        return self.status is PostseasonStatus.FINISHED
 
 
 @dataclass(frozen=True)

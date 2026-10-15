@@ -41,6 +41,7 @@ from ..application.pennant_history import PennantHistoryService
 from ..application.pennant_home import PennantHomeService
 from ..application.pennant_offseason import PennantOffseasonService
 from ..application.pennant_offseason_view import OffseasonViewService
+from ..application.pennant_postseason import PennantPostseasonService, PostseasonBracketReader
 from ..application.pennant_ratings import PennantRatingsViewService
 from ..application.pennant_season import PennantSeasonService
 from ..application.pennant_view import PennantWorldViewService
@@ -85,6 +86,7 @@ from ..infrastructure.queries import (
     DjangoPlayerFieldingQuery,
     DjangoPlayerSearchQuery,
     DjangoPlayerStatsQuery,
+    DjangoPostseasonQuery,
     DjangoRatingsHistoryQuery,
     DjangoSeasonPlayingTimeQuery,
     DjangoSimulationContextQuery,
@@ -413,7 +415,43 @@ def build_pennant_offseason_service(world_id: int) -> PennantOffseasonService:
         releases=DjangoReleasePlanRepository(scope),
         context_query=DjangoSimulationContextQuery(scope),
         playing_time=DjangoSeasonPlayingTimeQuery(scope),
+        postseason=_postseason_brackets(world_id),
         atomic=transaction.atomic,
+    )
+
+
+def build_pennant_postseason_service(world_id: int) -> PennantPostseasonService:
+    """ペナントの世界ひとつのポストシーズンの進行サービスを組み立てる。
+
+    **リポジトリと参照クエリは、すべて渡された世界の範囲で作る**（`build_pennant_season_service` と同じ）。
+    勝ち上がりの材料（順位・ポストシーズンの結果）も同じ世界の範囲で読む。トランザクションはここで渡す。
+    世界の id が正しくなければ InvalidWorld、存在しなければ使うときに WorldNotFound。
+    """
+    scope = WorldScope.pennant(world_id)
+    return PennantPostseasonService(
+        world_id=world_id,
+        worlds=DjangoWorldRepository(),
+        games=DjangoGameRepository(scope),
+        fixtures=DjangoFixtureRepository(scope),
+        ratings=DjangoRatingsRepository(scope),
+        plans=DjangoClubPlanRepository(scope),
+        context_query=DjangoSimulationContextQuery(scope),
+        brackets=_postseason_brackets(world_id),
+        atomic=transaction.atomic,
+    )
+
+
+def _postseason_brackets(world_id: int) -> PostseasonBracketReader:
+    """その年の勝ち上がりを導く読み取り（ポストシーズンの進行と、締める処理の検査が使う）。依存は全部、世界の範囲で作る。
+
+    順位表は世界の範囲の `TeamApplicationService`（`build_world_view_service`。公式戦だけ）が出典。
+    """
+    scope = WorldScope.pennant(world_id)
+    return PostseasonBracketReader(
+        teams=build_world_view_service(world_id),
+        games=DjangoGameListQuery(scope),
+        leagues=DjangoLeagueRepository(scope),
+        postseason=DjangoPostseasonQuery(scope),
     )
 
 
@@ -919,7 +957,7 @@ def _post_release(request, world: WorldContext):
 
 
 def _release_view(world: WorldContext) -> ReleasePlanView | None:
-    """「戦力外」タブの材料。締められないとき（シーズン中・締めた後・最終シーズン）・受け持ちが無いときは None。
+    """「戦力外」タブの材料。指名できないとき（公式戦の途中・締めた後・最終シーズン）・受け持ちが無いときは None。
 
     None ならタブを出さない。
     """
@@ -978,9 +1016,10 @@ def _render_club(
 
     手動の区画の編集欄の初期値は、**保存済みの上書き**から作る（使えなくなって自動に落ちた区画も、
     GM が決めた形のまま出す。解決後の値から作ると、保存したときに上書きが AI の形で置き換わる）。
-    「戦力外」タブはシーズン終了で締められるときだけ出す。出せないときに `?tab=release` が来たら既定のタブに落とす。
+    「戦力外」タブは公式戦を終えてから締めるまで出す（ポストシーズン中も出す。条件は `can_choose_releases`）。
+    出せないときに `?tab=release` が来たら既定のタブに落とす。
     """
-    # ほかのタブではタブを出すかだけを決める（締められるか。支配下の一覧までは読まない）
+    # ほかのタブではタブを出すかだけを決める（指名できるか。支配下の一覧までは読まない）
     release = None
     has_release_tab = False
     if world.managed_team_id is not None:
@@ -988,7 +1027,7 @@ def _render_club(
             release = _release_view(world)
             has_release_tab = release is not None
         else:
-            has_release_tab = build_pennant_offseason_service(world.world_id).close_option().can_close
+            has_release_tab = build_pennant_offseason_service(world.world_id).can_choose_releases()
     if tab == RELEASE_TAB and release is None:
         tab = DEFAULT_TAB
     context: dict = {

@@ -397,8 +397,8 @@ class ReproducibilityTest(SeasonCase):
         with_game_day = self.replay(self.world_a, lambda: self.advance(self.world_a, AdvanceTarget.WEEK))
 
         with (
-            mock.patch("myapp.application.pennant_season.simulated_times", return_value=None),
-            mock.patch("myapp.application.pennant_season.simulated_attendance", return_value=None),
+            mock.patch("myapp.application.pennant_simulation.simulated_times", return_value=None),
+            mock.patch("myapp.application.pennant_simulation.simulated_attendance", return_value=None),
         ):
             without = self.replay(self.world_a, lambda: self.advance(self.world_a, AdvanceTarget.WEEK))
 

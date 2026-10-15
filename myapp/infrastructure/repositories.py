@@ -47,6 +47,7 @@ from ..domain.exceptions import (
     WorldNotFound,
 )
 from ..domain.pennant.club_plan import ClubPlan, LineupChoice
+from ..domain.pennant.postseason import PostseasonFormat
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.release import ReleasePlan
 from ..domain.pennant.schedule import Fixture
@@ -1680,6 +1681,7 @@ class DjangoWorldRepository:
                 "seed": world.seed,
                 "managed_team_id": world.managed_team_id,
                 "start_year": world.start_year,
+                "postseason_format": world.postseason_format.value,
             },
         )
         world.id = row.id
@@ -1719,4 +1721,5 @@ class DjangoWorldRepository:
             start_year=row.start_year,
             owner_id=row.owner_id,
             managed_team_id=row.managed_team_id,
+            postseason_format=PostseasonFormat(row.postseason_format),
         )

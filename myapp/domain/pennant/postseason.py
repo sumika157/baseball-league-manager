@@ -83,6 +83,11 @@ class PostseasonStatus(Enum):
     IN_PROGRESS = "進行中"
     FINISHED = "終了"
 
+    @property
+    def is_settled(self) -> bool:
+        """ポストシーズンが終わった、または無い（シーズンを締めてよい・世界の終了を出してよい）。"""
+        return self in (PostseasonStatus.NONE, PostseasonStatus.FINISHED)
+
 
 class SeriesStage(Enum):
     """シリーズの段。値は画面に出す名前（日本シリーズの回の名前は `Series.name`）。"""

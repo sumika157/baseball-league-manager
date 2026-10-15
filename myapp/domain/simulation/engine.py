@@ -195,6 +195,7 @@ def simulate_game(
     away: ClubRoster,
     *,
     played_on: date,
+    stage: GameStage,
     history: PitchingHistory | None = None,
     foreign_game_limit: int | None = None,
     home_orders: ClubOrders | None = None,
@@ -205,6 +206,9 @@ def simulate_game(
     max_innings: int | None = MAX_INNINGS,
 ) -> SimulatedGame:
     """1試合を打席単位で進め、`assemble_game()` で `Game` を組み立てる。
+
+    `stage` は試合の区分（公式戦の日程を消化するなら `REGULAR`、ポストシーズンなら `POSTSEASON`）。既定値は持たない
+    （`Game.stage` と同じく、呼ぶ側が必ず明示する）。
 
     `max_innings` は延長の上限（その回を終えて同点なら引分）。`None` は制限なし（日本シリーズの第8戦以降。
     決着するまで続ける）。既定値（公式戦の12回）のままなら、引数を足す前と同じ打席列になる。
@@ -234,8 +238,7 @@ def simulate_game(
         played_on=played_on,
         home_team_id=home.team_id,
         away_team_id=away.team_id,
-        # 公式戦の日程を消化する（ポストシーズンの試合は S3 で区分を引数にして作る）
-        stage=GameStage.REGULAR,
+        stage=stage,
     )
     lineup = [entry for side in sides.values() for entry in side.entries]
     game = assemble_game(header, lineup, plate_appearances)
