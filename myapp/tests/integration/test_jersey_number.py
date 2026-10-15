@@ -11,15 +11,14 @@ from django.db.migrations.executor import MigrationExecutor
 from django.test import TransactionTestCase
 from django.urls import reverse
 
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import JerseyNumber, Position, RosterLimits
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoTeamRepository
 
-from ..helpers import login_as_manager
+from ..helpers import login_as_manager, real_scope
 from .base import BaseCase
 
-REAL = WorldScope.real()
+REAL = real_scope()
 
 
 class JerseyNumberRoundTripTest(BaseCase):

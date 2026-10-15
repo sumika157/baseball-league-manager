@@ -7,7 +7,6 @@ from django.urls import reverse
 from myapp.domain import services as domain_services
 from myapp.domain.entities import Game
 from myapp.domain.exceptions import InvalidGame
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import (
     BattingLine,
     Season,
@@ -18,7 +17,7 @@ from myapp.infrastructure.repositories import (
     DjangoGameRepository,
 )
 
-from ..helpers import make_league, play_game
+from ..helpers import make_league, play_game, real_scope
 from .base import BaseCase
 
 
@@ -110,7 +109,7 @@ class MonthlySplitViewTest(BaseCase):
             away_score=0,
         )
         game.record_batting(self.player.id, BattingLine(**line), team_id=game.home_team_id)
-        DjangoGameRepository(WorldScope.real()).save(game)
+        DjangoGameRepository(real_scope()).save(game)
 
     def _months(self, player_id=None):
         profile = self.service.get_player_profile(self.team.id, player_id or self.player.id)
@@ -376,13 +375,13 @@ class PlayerGamesQueryTest(BaseCase):
         play_game(self.team, self.rival, year=2026, month=6, batting={self.bench.id: BattingLine(at_bats=1)})
 
     def test_only_the_games_the_player_appeared_in_come_with_only_his_lines(self):
-        games = DjangoGameListQuery(WorldScope.real()).list_for_player(self.team.id, self.slugger.id)
+        games = DjangoGameListQuery(real_scope()).list_for_player(self.team.id, self.slugger.id)
 
         self.assertEqual([game.season.year for game in games], [2025, 2026])
         self.assertTrue(all([e.player_id for e in game.batting] == [self.slugger.id] for game in games))
 
     def test_the_profile_is_the_same_as_when_every_game_of_the_team_is_read(self):
-        full = DjangoGameRepository(WorldScope.real()).find_by_team(self.team.id)
+        full = DjangoGameRepository(real_scope()).find_by_team(self.team.id)
         profile = self.service.get_player_profile(self.team.id, self.slugger.id)
 
         years = domain_services.yearly_splits(full, self.slugger.id)
@@ -394,7 +393,7 @@ class PlayerGamesQueryTest(BaseCase):
 
     def test_a_read_only_game_cannot_be_saved(self):
         """選手の明細だけを持つ試合を保存すると、他の明細が消える。リポジトリは拒否する。"""
-        game = DjangoGameListQuery(WorldScope.real()).list_for_player(self.team.id, self.slugger.id)[0]
+        game = DjangoGameListQuery(real_scope()).list_for_player(self.team.id, self.slugger.id)[0]
 
         with self.assertRaises(InvalidGame):
-            DjangoGameRepository(WorldScope.real()).save(game)
+            DjangoGameRepository(real_scope()).save(game)

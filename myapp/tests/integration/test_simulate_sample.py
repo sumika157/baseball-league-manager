@@ -20,7 +20,7 @@ from myapp.management import estimate_check, multi_season_check
 from myapp.management.commands import simulate_sample
 from myapp.presentation.views import build_pennant_world_service
 
-from ..helpers import make_league
+from ..helpers import make_league, real_scope
 
 TIMING_LINE = re.compile(r"[\d.]+ ms/試合")
 
@@ -150,7 +150,7 @@ class EstimateCheckClubTest(TestCase):
         for number in range(2):
             orm_models.Team.objects.create(league=league, name=f"球団{number}")
         call_command("seed_virtual_players", "--seed", "1", stdout=StringIO())
-        service = build_pennant_world_service()
+        service = build_pennant_world_service(real_scope())
         source = service.load_source([league.id])
         ratings = estimate_check.estimate_from_source(service, source, seed=1, year=2026)
 

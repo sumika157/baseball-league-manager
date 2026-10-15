@@ -10,12 +10,12 @@ from unittest import mock
 from myapp.domain.exceptions import AlreadyClosed, InvalidWorld, PlayerNotFound, TeamNotFound
 from myapp.domain.pennant.offseason import plan_offseason
 from myapp.domain.pennant.release import ReleasePlan
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import DepartureRoute
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoReleasePlanRepository
 from myapp.presentation.views import build_pennant_offseason_service, build_pennant_world_service
 
+from ..helpers import real_scope, world_scope
 from .test_pennant_advance import YEAR
 from .test_pennant_offseason_screens import DECIDE_RELEASES, DECIDE_RETIREMENTS, ScreenCase
 
@@ -29,7 +29,7 @@ class ReleasePlanCase(ScreenCase):
         return team_id
 
     def repository(self, world_id=None) -> DjangoReleasePlanRepository:
-        return DjangoReleasePlanRepository(WorldScope.pennant(self.world_a if world_id is None else world_id))
+        return DjangoReleasePlanRepository(world_scope(self.world_a if world_id is None else world_id))
 
     def save_plan(self, player_ids, *, year: int = YEAR) -> None:
         self.repository().save(ReleasePlan(team_id=self.team_id(), year=year, player_ids=frozenset(player_ids)))
@@ -51,7 +51,7 @@ class ReleasePlanCase(ScreenCase):
                     )
                 )
                 stack.enter_context(mock.patch(DECIDE_RELEASES, decide))
-            result = build_pennant_offseason_service(self.world_a).close_season(expected_year=YEAR)
+            result = build_pennant_offseason_service(world_scope(self.world_a)).close_season(expected_year=YEAR)
         return result, decide
 
 
@@ -104,7 +104,7 @@ class CloseWithManualReleasesTest(ReleasePlanCase):
         self.assertFalse(orm_models.PennantReleasePlan.objects.exists())
 
     def test_the_close_option_counts_the_manual_plan(self):
-        service = build_pennant_offseason_service(self.world_a)
+        service = build_pennant_offseason_service(world_scope(self.world_a))
         self.assertIsNone(service.close_option().release_count, "自動")
         self.save_plan(self.managed_players(3))
         self.assertEqual(service.close_option().release_count, 3)
@@ -113,7 +113,7 @@ class CloseWithManualReleasesTest(ReleasePlanCase):
 class ReleasePlanChangedWhileClosingTest(ReleasePlanCase):
     def test_a_plan_saved_during_the_calculation_stops_the_close(self):
         """外で計算している間に GM が指名を変えたら、古い計算を書かずに断る（`_state()` に指名が入る。#100）。"""
-        service = build_pennant_offseason_service(self.world_a)
+        service = build_pennant_offseason_service(world_scope(self.world_a))
         original = service._prepare
 
         def prepare_then_save(world, year):
@@ -146,7 +146,7 @@ class ReleasePlanRepositoryTest(ReleasePlanCase):
 
     def test_the_real_data_and_other_worlds_cannot_be_written(self):
         with self.assertRaises(InvalidWorld):
-            DjangoReleasePlanRepository(WorldScope.real()).save(ReleasePlan(self.team_id(), YEAR, frozenset()))
+            DjangoReleasePlanRepository(real_scope()).save(ReleasePlan(self.team_id(), YEAR, frozenset()))
         with self.assertRaises(TeamNotFound):
             self.repository(self.world_b).save(ReleasePlan(self.team_id(), YEAR, frozenset()))
         with self.assertRaises(TeamNotFound):
@@ -160,7 +160,7 @@ class ReleasePlanRepositoryTest(ReleasePlanCase):
     def test_deleting_the_world_deletes_the_plan(self):
         self.save_plan(self.managed_players(1))
 
-        build_pennant_world_service().delete_world(self.world_a)
+        build_pennant_world_service(real_scope()).delete_world(self.world_a)
 
         self.assertFalse(orm_models.PennantReleasePlan.objects.exists())
         self.assertFalse(orm_models.PennantReleasePlanEntry.objects.exists())

@@ -9,15 +9,14 @@ from django.urls import reverse
 
 from myapp.admin import FreeAgentDeclarationForm
 from myapp.domain.exceptions import InvalidAcquisition, InvalidFreeAgentDeclaration
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import AcquisitionRoute, FreeAgencyKind
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoTeamRepository
 
-from ..helpers import build_roster_service, build_team_analysis_service, login_as_manager
+from ..helpers import build_roster_service, build_team_analysis_service, login_as_manager, real_scope
 from .base import BaseCase
 
-REAL = WorldScope.real()
+REAL = real_scope()
 
 THIS_YEAR = date.today().year
 DEVELOPMENTAL = "育成"
@@ -91,7 +90,7 @@ class RouteRepositoryTest(BaseCase):
 
     def test_transfer_as_a_free_agent_after_declaring(self):
         player = self.service.register_player(self.team.id, "山田", 10, "内野手")
-        build_roster_service().declare_free_agency(self.team.id, player.id, THIS_YEAR, "国内")
+        build_roster_service(real_scope()).declare_free_agency(self.team.id, player.id, THIS_YEAR, "国内")
 
         self.service.transfer_player(
             player.id,
@@ -112,7 +111,7 @@ class DeclarationRepositoryTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.player = self.service.register_player(self.team.id, "山田", 10, "内野手")
-        self.roster = build_roster_service()
+        self.roster = build_roster_service(real_scope())
 
     def _declarations(self):
         return list(orm_models.PlayerFreeAgentDeclaration.objects.filter(player_id=self.player.id))
@@ -314,7 +313,7 @@ class DeclarationScreenTest(BaseCase):
 
     def test_removing_from_the_edit_screen(self):
         login_as_manager(self.client, self.team)
-        build_roster_service().declare_free_agency(self.team.id, self.player.id, THIS_YEAR, "国内")
+        build_roster_service(real_scope()).declare_free_agency(self.team.id, self.player.id, THIS_YEAR, "国内")
 
         response = self.client.post(self.edit_url, {"remove_fa": str(THIS_YEAR)})
 
@@ -355,7 +354,7 @@ class DeclarationScreenTest(BaseCase):
         self.assertEqual(self._declarations(), [])
 
     def test_anonymous_sees_no_declaration_controls_on_the_profile(self):
-        build_roster_service().declare_free_agency(self.team.id, self.player.id, THIS_YEAR, "国内")
+        build_roster_service(real_scope()).declare_free_agency(self.team.id, self.player.id, THIS_YEAR, "国内")
 
         response = self.client.get(reverse("player_detail", args=[self.team.id, self.player.id]))
 
@@ -366,7 +365,7 @@ class DeclarationScreenTest(BaseCase):
 class ProfileDisplayTest(BaseCase):
     def setUp(self):
         super().setUp()
-        self.roster = build_roster_service()
+        self.roster = build_roster_service(real_scope())
 
     def _page(self, player):
         return self.client.get(reverse("player_detail", args=[self.team.id, player.id]))
@@ -416,7 +415,7 @@ class MovesDisplayTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.roster = build_roster_service()
+        self.roster = build_roster_service(real_scope())
         # 年を選べるよう、その年に記録済みの試合（先発1人）を作っておく
         self._with_a_recorded_game()
 
@@ -428,7 +427,7 @@ class MovesDisplayTest(BaseCase):
         return created
 
     def _analysis(self, team=None):
-        return build_team_analysis_service().get_analysis((team or self.team).id, year=self.YEAR)
+        return build_team_analysis_service(real_scope()).get_analysis((team or self.team).id, year=self.YEAR)
 
     def _with_a_recorded_game(self):
         from myapp.domain.entities import Game

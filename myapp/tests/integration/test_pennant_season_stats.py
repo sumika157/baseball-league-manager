@@ -14,9 +14,9 @@ from django.urls import reverse
 from myapp.domain.value_objects import BattingLine
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository, DjangoTeamRepository
-from myapp.presentation.views import build_world_view_service
+from myapp.presentation.views import build_service
 
-from ..helpers import make_league, play_game
+from ..helpers import make_league, play_game, world_scope
 from .world_case import YEAR, WorldCase
 
 NEXT_YEAR = YEAR + 1
@@ -34,7 +34,7 @@ class SeasonStatsCase(WorldCase):
         # 選手は全員、最初のシーズンから在籍している
         orm_models.PlayerStint.objects.filter(team__league__world_id=self.world_id).update(from_year=YEAR)
         self.veteran, self.regular = self.pennant_home_batters[8], self.pennant_home_batters[7]
-        self.service = build_world_view_service(self.world_id)
+        self.service = build_service(world_scope(self.world_id))
         self._play(
             YEAR,
             5,
@@ -253,7 +253,7 @@ class OnlyThatYearIsReadTest(SeasonStatsCase):
         titles_before = count(lambda: self.service.get_league_titles(self.pennant_league.id, NEXT_YEAR))
         standings_before = count(lambda: self.service.get_standings(NEXT_YEAR))
         roster_before = count(
-            lambda: build_world_view_service(self.world_id).list_batters(self.pennant_team.id, year=NEXT_YEAR)
+            lambda: build_service(world_scope(self.world_id)).list_batters(self.pennant_team.id, year=NEXT_YEAR)
         )
         for index in range(3):
             self._play(NEXT_YEAR + 1 + index, 5, {self.veteran: BattingLine(at_bats=3)})
@@ -263,6 +263,8 @@ class OnlyThatYearIsReadTest(SeasonStatsCase):
         )
         self.assertEqual(count(lambda: self.service.get_standings(NEXT_YEAR)), standings_before)
         self.assertEqual(
-            count(lambda: build_world_view_service(self.world_id).list_batters(self.pennant_team.id, year=NEXT_YEAR)),
+            count(
+                lambda: build_service(world_scope(self.world_id)).list_batters(self.pennant_team.id, year=NEXT_YEAR)
+            ),
             roster_before,
         )

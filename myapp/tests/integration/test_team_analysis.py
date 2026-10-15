@@ -12,14 +12,13 @@ from django.urls import reverse
 
 from myapp.application.team_analysis import USAGE_AREAS
 from myapp.domain.entities import Game
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.services import NEUTRAL_CATEGORY, ColorAxis, color_categories, usage_map_positions
 from myapp.domain.services.roster_analysis import MAX_PLAYERS_IN_BOX
 from myapp.domain.value_objects import BattingLine, FieldingPosition, PitchingLine, Season
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
 
-from ..helpers import build_team_analysis_service, make_league
+from ..helpers import build_team_analysis_service, make_league, real_scope
 from .base import BaseCase
 
 
@@ -55,7 +54,7 @@ class AnalysisCase(BaseCase):
             )
         for player_id, order in pitching:
             game.record_pitching(player_id, PitchingLine(), appearance_order=order)
-        return DjangoGameRepository(WorldScope.real()).save(game)
+        return DjangoGameRepository(real_scope()).save(game)
 
     @staticmethod
     def names(table):
@@ -87,7 +86,7 @@ class TeamAnalysisPageTest(AnalysisCase):
         )
 
     def analysis(self, **kwargs):
-        return build_team_analysis_service().get_analysis(self.team.id, **kwargs)
+        return build_team_analysis_service(real_scope()).get_analysis(self.team.id, **kwargs)
 
     def url(self, team=None):
         return reverse("team_analysis", args=[(team or self.team).id])
@@ -184,7 +183,7 @@ class TeamAnalysisPageTest(AnalysisCase):
 
 class AnalysisIndexTest(AnalysisCase):
     def test_redirects_to_first_team(self):
-        first = build_team_analysis_service().first_team_id()
+        first = build_team_analysis_service(real_scope()).first_team_id()
         response = self.client.get(reverse("analysis_index"))
         self.assertRedirects(response, reverse("team_analysis", args=[first]), fetch_redirect_response=False)
 
@@ -194,7 +193,7 @@ class AnalysisIndexTest(AnalysisCase):
         self.assertEqual(response["Location"], f"{reverse('team_analysis', args=[self.rival.id])}?year=2025")
 
     def test_unknown_team_choice_falls_back_to_first_team(self):
-        first = build_team_analysis_service().first_team_id()
+        first = build_team_analysis_service(real_scope()).first_team_id()
         response = self.client.get(reverse("analysis_index"), {"team": "99999"})
         self.assertEqual(response["Location"], reverse("team_analysis", args=[first]))
 
@@ -250,7 +249,9 @@ class TeamUsageMapTest(AnalysisCase):
         )
 
     def boxes(self, **kwargs):
-        analysis = build_team_analysis_service().get_analysis(self.team.id, year=2026, tab="usage", **kwargs)
+        analysis = build_team_analysis_service(real_scope()).get_analysis(
+            self.team.id, year=2026, tab="usage", **kwargs
+        )
         return {box.label: box for box in analysis.usage_boxes}
 
     def triples(self, box):
@@ -265,7 +266,7 @@ class TeamUsageMapTest(AnalysisCase):
         self.assertContains(response, "usage-box-short")
 
     def test_boxes_follow_the_domain_positions(self):
-        analysis = build_team_analysis_service().get_analysis(self.team.id, year=2026, tab="usage")
+        analysis = build_team_analysis_service(real_scope()).get_analysis(self.team.id, year=2026, tab="usage")
         self.assertEqual(
             [box.label for box in analysis.usage_boxes],
             [position.label for position in usage_map_positions()],
@@ -315,7 +316,7 @@ class TeamUsageMapTest(AnalysisCase):
     def test_query_count_does_not_grow_with_roster(self):
         def count():
             with CaptureQueriesContext(connection) as captured:
-                build_team_analysis_service().get_analysis(self.team.id, year=2026, tab="usage")
+                build_team_analysis_service(real_scope()).get_analysis(self.team.id, year=2026, tab="usage")
             return len(captured)
 
         before = count()
@@ -345,7 +346,7 @@ class TeamMovesTest(AnalysisCase):
         return self.player(team, name, number, position, from_year=from_year, to_year=to_year)
 
     def analysis(self, team=None, year=2026):
-        return build_team_analysis_service().get_analysis((team or self.team).id, year=year)
+        return build_team_analysis_service(real_scope()).get_analysis((team or self.team).id, year=year)
 
     @staticmethod
     def summary(rows):
@@ -441,7 +442,7 @@ class TeamColorTest(AnalysisCase):
         )
 
     def analysis(self, color=None, tab=None):
-        return build_team_analysis_service().get_analysis(self.team.id, year=2026, tab=tab, color=color)
+        return build_team_analysis_service(real_scope()).get_analysis(self.team.id, year=2026, tab=tab, color=color)
 
     def usage_tones(self, analysis):
         return {p.name: p.tone.key for box in analysis.usage_boxes for p in box.players}

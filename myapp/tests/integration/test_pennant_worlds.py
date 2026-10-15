@@ -18,7 +18,7 @@ from myapp.domain.pennant.world import MAX_WORLDS_PER_OWNER
 from myapp.infrastructure import orm_models
 from myapp.presentation.views import build_pennant_season_service, build_pennant_world_service, build_service
 
-from ..helpers import make_league, play_game
+from ..helpers import make_league, play_game, real_scope, world_scope
 from .test_pennant_advance import register_club
 from .test_pennant_home import HomeCase
 
@@ -105,7 +105,7 @@ class CreateWorldTest(HomeCase):
         before = orm_models.PennantWorld.objects.count()
         other_league = make_league(name="別リーグ")
         other_team = orm_models.Team.objects.create(league=other_league, name="別球団")
-        register_club(build_service(), other_team, "別")
+        register_club(build_service(real_scope()), other_team, "別")
         cases = {
             "no league": (self.form(leagues=[]), "このフィールドは必須です。"),
             "no team": (self.form(managed_team=""), "このフィールドは必須です。"),
@@ -135,7 +135,7 @@ class CreateWorldTest(HomeCase):
 
     def test_more_than_eight_leagues_are_refused(self):
         with self.assertRaises(InvalidWorld) as raised:
-            build_pennant_world_service().create_world(
+            build_pennant_world_service(real_scope()).create_world(
                 name="多すぎ", owner_id=None, source_league_ids=list(range(1, 10)), start_year=2040, seed=1
             )
 
@@ -223,7 +223,7 @@ class DeleteWorldTest(HomeCase):
         self.assertTrue(orm_models.PennantWorld.objects.filter(id=self.world_a).exists())
 
     def test_the_confirmation_says_what_will_be_lost(self):
-        build_pennant_season_service(self.world_a).advance(AdvanceTarget.WEEK)
+        build_pennant_season_service(world_scope(self.world_a)).advance(AdvanceTarget.WEEK)
         self.client.force_login(self.owner)
 
         content = self.client.get(self.delete_url()).content.decode()

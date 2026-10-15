@@ -7,15 +7,14 @@ from django.contrib.auth.models import User
 from django.urls import reverse
 
 from myapp.domain.exceptions import InvalidContract, RegisteredPlayerLimitExceeded
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import ContractStatus
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoLeagueRepository, DjangoTeamRepository
 
-from ..helpers import build_roster_service, login_as_manager
+from ..helpers import build_roster_service, login_as_manager, real_scope
 from .base import BaseCase
 
-REAL = WorldScope.real()
+REAL = real_scope()
 
 DEVELOPMENTAL = ContractStatus.DEVELOPMENTAL.value
 
@@ -23,7 +22,7 @@ DEVELOPMENTAL = ContractStatus.DEVELOPMENTAL.value
 class ContractRepositoryTest(BaseCase):
     def test_signing_status_and_promotion_year_round_trip(self):
         player = self.service.register_player(self.team.id, "育成", 120, "投手", contract_label=DEVELOPMENTAL)
-        build_roster_service().promote_player(self.team.id, player.id, 30, year=2026)
+        build_roster_service(real_scope()).promote_player(self.team.id, player.id, 30, year=2026)
 
         team = DjangoTeamRepository(REAL).find_by_id(self.team.id)
         stint = team.current_stint(team.find_player(player.id))
@@ -107,7 +106,7 @@ class ContractServiceTest(BaseCase):
         player = self.service.register_player(self.team.id, "育成", 120, "内野手", contract_label=DEVELOPMENTAL)
 
         with self.assertRaises(RegisteredPlayerLimitExceeded):
-            build_roster_service().promote_player(self.team.id, player.id, 30)
+            build_roster_service(real_scope()).promote_player(self.team.id, player.id, 30)
 
         stint = orm_models.PlayerStint.objects.get(player_id=player.id)
         self.assertEqual((stint.number, stint.promoted_year), ("120", None))
@@ -145,12 +144,12 @@ class ContractServiceTest(BaseCase):
         self._fill_the_limit(self.team)
 
         with self.assertRaises(RegisteredPlayerLimitExceeded):
-            build_roster_service().promote_player(self.team.id, player.id, 30)
+            build_roster_service(real_scope()).promote_player(self.team.id, player.id, 30)
 
     def test_promotion_keeps_the_number_worn_before(self):
         player = self.service.register_player(self.team.id, "育成", 120, "内野手", contract_label=DEVELOPMENTAL)
 
-        build_roster_service().promote_player(self.team.id, player.id, 30, year=2026)
+        build_roster_service(real_scope()).promote_player(self.team.id, player.id, 30, year=2026)
 
         row = orm_models.PlayerStint.objects.get(player_id=player.id)
         self.assertEqual((row.number, row.number_before_promotion), ("30", "120"))
@@ -400,7 +399,7 @@ class AdminContractValidationTest(BaseCase):
             self.rival.id, "育成", 120, "内野手", contract_label=DEVELOPMENTAL
         )
         orm_models.PlayerStint.objects.filter(player_id=developmental.id).update(from_year=2020)
-        build_roster_service().promote_player(self.rival.id, developmental.id, 50, year=2025)
+        build_roster_service(real_scope()).promote_player(self.rival.id, developmental.id, 50, year=2025)
         stint = orm_models.PlayerStint.objects.get(player_id=developmental.id)
 
         response = self.client.post(
@@ -485,7 +484,7 @@ class PromotionReasonTest(BaseCase):
         player = self.service.register_player(self.team.id, "支配下", 10, "内野手")
 
         with self.assertRaisesMessage(InvalidContract, "育成選手ではない"):
-            build_roster_service().promote_player(self.team.id, player.id, 11)
+            build_roster_service(real_scope()).promote_player(self.team.id, player.id, 11)
 
     def test_a_player_who_left_is_told_he_is_not_on_the_team(self):
         player = self.service.register_player(self.team.id, "育成", 120, "内野手", contract_label=DEVELOPMENTAL)
@@ -493,4 +492,4 @@ class PromotionReasonTest(BaseCase):
         self.service.register_player(self.team.id, "先客", 5, "内野手")
 
         with self.assertRaisesMessage(InvalidContract, "在籍していない"):
-            build_roster_service().promote_player(self.team.id, player.id, 30)
+            build_roster_service(real_scope()).promote_player(self.team.id, player.id, 30)

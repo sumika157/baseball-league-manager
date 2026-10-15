@@ -26,9 +26,10 @@ from myapp.presentation.views import (
     build_pennant_offseason_service,
     build_pennant_season_service,
     build_pennant_world_view,
-    build_world_view_service,
+    build_service,
 )
 
+from ..helpers import world_scope
 from .test_pennant_advance import YEAR
 from .test_pennant_home import HomeCase
 
@@ -43,21 +44,21 @@ class HistoryCase(HomeCase):
     def finish_season(self) -> None:
         """日程を作り、いまのシーズンを最後まで進める（シーズン終了）。"""
         self.start_season()
-        build_pennant_season_service(self.world_a).advance(AdvanceTarget.SEASON_END)
+        build_pennant_season_service(world_scope(self.world_a)).advance(AdvanceTarget.SEASON_END)
 
     def close_and_finish(self) -> None:
         """シーズンを締めて、次のシーズンを最後まで進める。"""
-        build_pennant_offseason_service(self.world_a).close_season()
-        build_pennant_season_service(self.world_a).advance(AdvanceTarget.SEASON_END)
+        build_pennant_offseason_service(world_scope(self.world_a)).close_season()
+        build_pennant_season_service(world_scope(self.world_a)).advance(AdvanceTarget.SEASON_END)
 
     def context(self):
         return build_pennant_world_view().get_context(self.world_a)
 
     def history(self, **kwargs):
-        return build_pennant_history_service(self.world_a).get_world_history(self.context(), **kwargs)
+        return build_pennant_history_service(world_scope(self.world_a)).get_world_history(self.context(), **kwargs)
 
     def club(self, team_id):
-        return build_pennant_history_service(self.world_a).get_club_history(self.context(), team_id)
+        return build_pennant_history_service(world_scope(self.world_a)).get_club_history(self.context(), team_id)
 
 
 class FinishedSeasonTest(HistoryCase):
@@ -65,7 +66,7 @@ class FinishedSeasonTest(HistoryCase):
 
     def test_the_champion_is_the_first_place_of_the_standings_screen(self):
         self.finish_season()
-        (shown,) = build_world_view_service(self.world_a).get_league_standings(YEAR)
+        (shown,) = build_service(world_scope(self.world_a)).get_league_standings(YEAR)
         leader = shown.rows[0]
 
         history = self.history(league_id=None)
@@ -81,7 +82,7 @@ class FinishedSeasonTest(HistoryCase):
 
     def test_the_title_holders_are_the_first_place_of_the_titles_screen(self):
         self.finish_season()
-        view = build_world_view_service(self.world_a)
+        view = build_service(world_scope(self.world_a))
         league_id = self.history(league_id=None).selected_league_id
         assert league_id is not None
         titles = view.get_league_titles(league_id, YEAR)
@@ -97,7 +98,7 @@ class FinishedSeasonTest(HistoryCase):
         self.finish_season()
         league_id = self.history(league_id=None).selected_league_id
         assert league_id is not None
-        titles = build_world_view_service(self.world_a).get_league_titles(league_id, YEAR)
+        titles = build_service(world_scope(self.world_a)).get_league_titles(league_id, YEAR)
 
         history = self.history(league_id=None)
 
@@ -107,7 +108,7 @@ class FinishedSeasonTest(HistoryCase):
 
     def test_the_screens_show_the_champion_and_link_to_the_club_history(self):
         self.finish_season()
-        (shown,) = build_world_view_service(self.world_a).get_league_standings(YEAR)
+        (shown,) = build_service(world_scope(self.world_a)).get_league_standings(YEAR)
         leader = shown.rows[0]
 
         content = self.client.get(self.history_url()).content.decode()
@@ -132,7 +133,7 @@ class FinishedSeasonTest(HistoryCase):
     def test_the_year_closed_stays_after_the_season_is_closed(self):
         """締めた後の開幕前は年度が翌年に進む。締めた年は、載ったままになる。"""
         self.finish_season()
-        build_pennant_offseason_service(self.world_a).close_season()
+        build_pennant_offseason_service(world_scope(self.world_a)).close_season()
 
         years = [y.year for y in self.history(league_id=None).years]
 
@@ -153,15 +154,15 @@ class UnfinishedSeasonTest(HistoryCase):
     def test_a_season_in_progress_is_not_listed(self):
         self.start_season()
         for _ in range(3):
-            build_pennant_season_service(self.world_a).advance(AdvanceTarget.DAY)
+            build_pennant_season_service(world_scope(self.world_a)).advance(AdvanceTarget.DAY)
 
         self.assertEqual(self.history(league_id=None).years, [])
         self.assertEqual(self.club(self._home_id()).seasons, [])
 
     def test_the_season_in_progress_is_not_listed_after_a_finished_one(self):
         self.finish_season()
-        build_pennant_offseason_service(self.world_a).close_season()
-        build_pennant_season_service(self.world_a).advance(AdvanceTarget.DAY)
+        build_pennant_offseason_service(world_scope(self.world_a)).close_season()
+        build_pennant_season_service(world_scope(self.world_a)).advance(AdvanceTarget.DAY)
 
         self.assertEqual([y.year for y in self.history(league_id=None).years], [YEAR])
 
@@ -174,15 +175,17 @@ class ClubHistoryTest(HistoryCase):
     def test_the_seasons_match_the_standings_and_the_totals_match_the_finale(self):
         self.finish_season()
         self.close_and_finish()
-        view = build_world_view_service(self.world_a)
+        view = build_service(world_scope(self.world_a))
         (first,) = view.get_league_standings(YEAR)
         team_id = first.rows[0].team_id
         orm_models.PennantWorld.objects.filter(id=self.world_a).update(managed_team_id=team_id)
 
         with mock.patch("myapp.application.pennant_view.is_final_season", return_value=True):
             context = build_pennant_world_view().get_context(self.world_a)
-            finale = build_pennant_home_service(self.world_a).get_home(context, include_advance=False).finale
-            club = build_pennant_history_service(self.world_a).get_club_history(context, team_id)
+            finale = (
+                build_pennant_home_service(world_scope(self.world_a)).get_home(context, include_advance=False).finale
+            )
+            club = build_pennant_history_service(world_scope(self.world_a)).get_club_history(context, team_id)
 
         assert finale is not None
         self.assertEqual([s.year for s in club.seasons], [YEAR, YEAR + 1])
@@ -203,7 +206,7 @@ class ClubHistoryTest(HistoryCase):
 
     def test_the_titles_are_only_the_players_of_the_club(self):
         self.finish_season()
-        view = build_world_view_service(self.world_a)
+        view = build_service(world_scope(self.world_a))
         league_id = self.history(league_id=None).selected_league_id
         assert league_id is not None
         titles = view.get_league_titles(league_id, YEAR)
@@ -224,7 +227,7 @@ class ClubHistoryTest(HistoryCase):
     def test_a_retired_player_keeps_the_title_of_the_year_he_played(self):
         self.finish_season()
         self.close_and_finish()
-        view = build_world_view_service(self.world_a)
+        view = build_service(world_scope(self.world_a))
         league_id = self.history(league_id=None).selected_league_id
         assert league_id is not None
         shown = view.get_league_titles(league_id, YEAR)
@@ -251,7 +254,7 @@ class ClubHistoryTest(HistoryCase):
 
     def test_the_club_screen_is_open_to_anyone_and_offers_no_write_link(self):
         self.finish_season()
-        (shown,) = build_world_view_service(self.world_a).get_league_standings(YEAR)
+        (shown,) = build_service(world_scope(self.world_a)).get_league_standings(YEAR)
 
         for url in (self.history_url(), self.club_url(shown.rows[0].team_id)):
             with self.subTest(url=url):
@@ -262,7 +265,7 @@ class ClubHistoryTest(HistoryCase):
 
     def test_the_club_screen_shows_the_champion_mark_the_totals_and_the_standings_link(self):
         self.finish_season()
-        (shown,) = build_world_view_service(self.world_a).get_league_standings(YEAR)
+        (shown,) = build_service(world_scope(self.world_a)).get_league_standings(YEAR)
         leader, runner_up = shown.rows[:2]
 
         champion = self.client.get(self.club_url(leader.team_id)).content.decode()
@@ -295,7 +298,7 @@ class LinksTest(HistoryCase):
 
     def test_the_end_card_links_the_club_history_of_the_own_team(self):
         self.finish_season()
-        (shown,) = build_world_view_service(self.world_a).get_league_standings(YEAR)
+        (shown,) = build_service(world_scope(self.world_a)).get_league_standings(YEAR)
         team_id = shown.rows[0].team_id
         orm_models.PennantWorld.objects.filter(id=self.world_a).update(managed_team_id=team_id)
 

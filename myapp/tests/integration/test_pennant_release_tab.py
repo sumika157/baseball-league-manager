@@ -13,12 +13,12 @@ from django.urls import reverse
 from myapp.domain.pennant.draft import MIN_BY_POSITION
 from myapp.domain.pennant.release import ReleasePlan
 from myapp.domain.pennant.schedule import AdvanceTarget
-from myapp.domain.pennant.world import WorldScope
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoReleasePlanRepository
 from myapp.presentation.club_input import REOPEN
 from myapp.presentation.views import build_pennant_season_service
 
+from ..helpers import world_scope
 from .test_pennant_advance import YEAR
 from .test_pennant_offseason_screens import IS_FINAL_SEASON, ScreenCase
 
@@ -50,10 +50,10 @@ class ReleaseTabCase(ScreenCase):
         )
 
     def plan(self) -> ReleasePlan | None:
-        return DjangoReleasePlanRepository(WorldScope.pennant(self.world_a)).find_by_team(self.team_id())
+        return DjangoReleasePlanRepository(world_scope(self.world_a)).find_by_team(self.team_id())
 
     def save_plan(self, player_ids) -> None:
-        DjangoReleasePlanRepository(WorldScope.pennant(self.world_a)).save(
+        DjangoReleasePlanRepository(world_scope(self.world_a)).save(
             ReleasePlan(team_id=self.team_id(), year=YEAR, player_ids=frozenset(player_ids))
         )
 
@@ -84,7 +84,7 @@ class ReleaseTabVisibilityTest(ReleaseTabCase):
         self.client.force_login(self.owner)
         for advance in (False, True):
             if advance:
-                build_pennant_season_service(self.world_b).advance(AdvanceTarget.DAY)
+                build_pennant_season_service(world_scope(self.world_b)).advance(AdvanceTarget.DAY)
             with self.subTest(in_season=advance):
                 response = self.client.get(self.club_url(world_id=self.world_b))
                 content = response.content.decode()

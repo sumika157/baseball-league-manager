@@ -16,13 +16,13 @@ from myapp.domain.value_objects import Season
 from myapp.infrastructure import orm_models
 from myapp.presentation.views import build_pennant_world_service
 
-from ..helpers import make_pennant_world
+from ..helpers import make_pennant_world, real_scope
 from .world_case import YEAR, WorldCase
 
 
 class StartYearRangeTest(WorldCase):
     def create(self, start_year: int):
-        return build_pennant_world_service().create_world(
+        return build_pennant_world_service(real_scope()).create_world(
             name="範囲の世界", owner_id=None, source_league_ids=[self.league.id], start_year=start_year, seed=3
         )
 
@@ -135,7 +135,7 @@ class UncountableAgeTest(WorldCase):
 
     def test_screens_do_not_fail_in_a_world_that_has_not_played_a_game(self):
         """試合の無い世界の「今日」は開幕日。生年月日より前の年に開幕した世界を再現する。"""
-        created = build_pennant_world_service().create_world(
+        created = build_pennant_world_service(real_scope()).create_world(
             name="空", owner_id=None, source_league_ids=[self.league.id], start_year=YEAR, seed=4
         )
         world_id = created.world.id

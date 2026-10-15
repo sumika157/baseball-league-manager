@@ -13,12 +13,12 @@ import numpy as np
 from django.core.management import CommandError, call_command
 from django.test import SimpleTestCase
 
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import ContractStatus, FieldingPosition, Position
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
 from myapp.management.commands.seed_virtual_games import LINEUP_SIZE, MAX_INNINGS, Command, _Outing, _Side
 
+from ..helpers import real_scope
 from .base import BaseCase
 
 COMMAND = "seed_virtual_games"
@@ -134,7 +134,7 @@ class SeedGamesTest(SeedGamesBase):
     def setUp(self) -> None:
         super().setUp()
         self.output = run()
-        self.games = DjangoGameRepository(WorldScope.real()).find_all(YEAR)
+        self.games = DjangoGameRepository(real_scope()).find_all(YEAR)
 
     def test_creates_round_robin_within_season(self):
         pairs = len(self.teams) * (len(self.teams) - 1) // 2
@@ -385,7 +385,7 @@ class SeedGamesLeftHandersTest(SeedGamesBase):
             )
             orm_models.Player.objects.filter(id__in=infielder_ids).update(throws="左")
         run()
-        self.games = DjangoGameRepository(WorldScope.real()).find_all(YEAR)
+        self.games = DjangoGameRepository(real_scope()).find_all(YEAR)
 
     def test_no_left_hander_takes_catcher_second_third_or_short(self) -> None:
         left_ids = set(orm_models.Player.objects.filter(throws="左").values_list("id", flat=True))

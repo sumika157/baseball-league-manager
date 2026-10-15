@@ -15,6 +15,7 @@ from ..helpers import (
     login_as_manager,
     play_game,
     post_game_scorebook_day_unrecorded,
+    real_scope,
     register_lineup,
 )
 from .base import BaseCase
@@ -120,7 +121,7 @@ class DevelopmentalPlayersCannotPlayTest(_RecordingCase):
 
     def test_a_player_promoted_in_the_year_of_the_game_can_play(self):
         player = self.developmental("昇格した打者", "内野手")
-        build_roster_service().promote_player(self.team.id, player.id, 5, year=2026)
+        build_roster_service(real_scope()).promote_player(self.team.id, player.id, 5, year=2026)
 
         response = self.post(home=[player.id, *self.home[1:]], home_pitcher=self.pitcher.id)
 
@@ -128,7 +129,7 @@ class DevelopmentalPlayersCannotPlayTest(_RecordingCase):
 
     def test_the_year_before_the_promotion_is_still_developmental(self):
         player = self.developmental("昇格前の打者", "内野手")
-        build_roster_service().promote_player(self.team.id, player.id, 5, year=2026)
+        build_roster_service(real_scope()).promote_player(self.team.id, player.id, 5, year=2026)
 
         response = self.post(home=[player.id, *self.home[1:]], home_pitcher=self.pitcher.id, year=2025)
 

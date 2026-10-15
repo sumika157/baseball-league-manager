@@ -11,17 +11,16 @@ from django.contrib.auth.models import User
 from django.urls import reverse
 
 from myapp.domain.entities import Game
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import GameTimes, Season
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoHomeStadiumQuery
 from myapp.infrastructure.repositories import DjangoGameRepository
 
-from ..helpers import play_game
+from ..helpers import play_game, real_scope
 from .base import BaseCase
 from .world_case import WorldCase
 
-REAL = WorldScope.real()
+REAL = real_scope()
 TIMES = GameTimes(start=time(18, 19), end=time(0, 5), ends_next_day=True, interruption_minutes=25)
 
 

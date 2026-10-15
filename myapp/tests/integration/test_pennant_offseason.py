@@ -27,7 +27,6 @@ from myapp.domain.exceptions import (
 from myapp.domain.pennant.club_plan import ClubPlan, LineupChoice, PlanSection
 from myapp.domain.pennant.schedule import AdvanceTarget
 from myapp.domain.pennant.season import SeasonPhase, season_phase, season_year
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import FieldingPosition
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoSimulationContextQuery
@@ -38,6 +37,7 @@ from myapp.presentation.views import (
     build_pennant_world_service,
 )
 
+from ..helpers import real_scope, world_scope
 from .test_pennant_advance import SEASON_GAMES, YEAR, SeasonCase
 
 DECIDE_RETIREMENTS = "myapp.domain.pennant.offseason.decide_retirements"
@@ -61,10 +61,12 @@ class ClosedSeasonCase(SeasonCase):
     def setUpTestData(cls):
         super().setUpTestData()
         for world_id in (cls.world_a,):
-            build_pennant_season_service(world_id).advance(AdvanceTarget.SEASON_END)
+            build_pennant_season_service(world_scope(world_id)).advance(AdvanceTarget.SEASON_END)
 
     def close(self, world_id=None, **kwargs) -> SeasonClosed:
-        return build_pennant_offseason_service(self.world_a if world_id is None else world_id).close_season(**kwargs)
+        return build_pennant_offseason_service(
+            world_scope(self.world_a if world_id is None else world_id)
+        ).close_season(**kwargs)
 
     def counts(self, world_id=None) -> dict[str, int]:
         world_id = self.world_a if world_id is None else world_id
@@ -127,13 +129,13 @@ class CloseSeasonTest(ClosedSeasonCase):
     def test_the_next_schedule_has_143_games_per_team_and_the_phase_is_before_the_opening(self):
         result = self.close()
 
-        fixtures = DjangoFixtureRepository(WorldScope.pennant(self.world_a)).find_all()
+        fixtures = DjangoFixtureRepository(world_scope(self.world_a)).find_all()
         self.assertEqual(len(fixtures), result.fixture_count)
         self.assertEqual({f.date.year for f in fixtures}, {YEAR + 1})
         per_team = Counter(team for f in fixtures for team in (f.home_team_id, f.visitor_team_id))
         self.assertEqual(set(per_team.values()), {SEASON_GAMES})
         self.assertEqual(len(per_team), 2)
-        last_played = DjangoSimulationContextQuery(WorldScope.pennant(self.world_a)).last_played_on()
+        last_played = DjangoSimulationContextQuery(world_scope(self.world_a)).last_played_on()
         first = fixtures[0].date
         self.assertIs(season_phase(last_played_on=last_played, next_fixture_on=first), SeasonPhase.BEFORE_OPENING)
         self.assertEqual(season_year(next_fixture_on=first, last_played_on=last_played, start_year=YEAR), YEAR + 1)
@@ -148,7 +150,7 @@ class CloseSeasonTest(ClosedSeasonCase):
         self.assertEqual(self.counts(), before)
 
     def test_a_season_with_games_left_cannot_be_closed(self):
-        build_pennant_season_service(self.world_other_seed).advance(AdvanceTarget.WEEK)
+        build_pennant_season_service(world_scope(self.world_other_seed)).advance(AdvanceTarget.WEEK)
         before = self.counts(self.world_other_seed)
 
         with self.assertRaises(SeasonNotFinished):
@@ -176,7 +178,7 @@ class CloseSeasonTest(ClosedSeasonCase):
         with mock.patch("myapp.domain.pennant.season.MAX_SEASONS_PER_WORLD", 1):
             with self.assertRaises(SeasonLimitReached):
                 self.close()
-            option = build_pennant_offseason_service(self.world_a).close_option()
+            option = build_pennant_offseason_service(world_scope(self.world_a)).close_option()
 
         self.assertEqual(self.counts(), before)
         self.assertFalse(option.can_close)
@@ -187,7 +189,7 @@ class CloseSeasonTest(ClosedSeasonCase):
             self.close(self.world_a + 1000)
 
     def test_the_option_follows_the_state_of_the_season(self):
-        service = build_pennant_offseason_service(self.world_a)
+        service = build_pennant_offseason_service(world_scope(self.world_a))
 
         before = service.close_option()
         self.close()
@@ -197,7 +199,7 @@ class CloseSeasonTest(ClosedSeasonCase):
         self.assertEqual((before.year, before.next_year), (YEAR, YEAR + 1))
         self.assertFalse(after.can_close)
         self.assertIn("既に締めています", after.reason)
-        unplayed = build_pennant_offseason_service(self.world_other_seed).close_option()
+        unplayed = build_pennant_offseason_service(world_scope(self.world_other_seed)).close_option()
         self.assertFalse(unplayed.can_close)
         self.assertIsNone(unplayed.year)
 
@@ -241,7 +243,7 @@ class CloseSeasonTest(ClosedSeasonCase):
             orm_models.Player.objects.filter(stints__team__league__world_id=self.world_a).values_list("id", flat=True)
         )
 
-        build_pennant_world_service().delete_world(self.world_a)
+        build_pennant_world_service(real_scope()).delete_world(self.world_a)
 
         self.assertFalse(orm_models.Player.objects.filter(id__in=player_ids).exists())
         self.assertFalse(orm_models.PennantPlayerRatings.objects.filter(player_id__in=player_ids).exists())
@@ -250,7 +252,7 @@ class CloseSeasonTest(ClosedSeasonCase):
 
 class ClubPlanReleaseTest(ClosedSeasonCase):
     def plan_repository(self) -> DjangoClubPlanRepository:
-        return DjangoClubPlanRepository(WorldScope.pennant(self.world_a))
+        return DjangoClubPlanRepository(world_scope(self.world_a))
 
     def test_manual_sections_with_a_retired_player_return_to_automatic(self):
         team_id = self.managed_team_id()
@@ -328,7 +330,7 @@ class AtomicityTest(ClosedSeasonCase):
         team_id = self.managed_team_id()
         players = self.first_players(team_id, 12)
         plan = ClubPlan(team_id, active_ids=tuple(players))
-        DjangoClubPlanRepository(WorldScope.pennant(self.world_a)).save(plan)
+        DjangoClubPlanRepository(world_scope(self.world_a)).save(plan)
         before = self.counts()
 
         # 最後の書き込み（日程）で失敗させる。在籍・新人・能力・編成の後始末がすべて巻き戻る
@@ -340,7 +342,7 @@ class AtomicityTest(ClosedSeasonCase):
             self.close()
 
         self.assertEqual(self.counts(), before)
-        self.assertEqual(DjangoClubPlanRepository(WorldScope.pennant(self.world_a)).find_all(), [plan])
+        self.assertEqual(DjangoClubPlanRepository(world_scope(self.world_a)).find_all(), [plan])
         self.assertFalse(orm_models.Player.objects.filter(stints__from_year=YEAR + 1).exists())
 
 
@@ -348,7 +350,7 @@ class AdvanceAfterCloseTest(ClosedSeasonCase):
     def test_the_next_season_is_played_with_the_next_year_ratings(self):
         result = self.close()
 
-        report = build_pennant_season_service(self.world_a).advance(AdvanceTarget.WEEK)
+        report = build_pennant_season_service(world_scope(self.world_a)).advance(AdvanceTarget.WEEK)
 
         self.assertFalse(report.schedule_created, "翌年の日程は締めるときに作ってある")
         self.assertGreater(report.games, 0)
@@ -359,7 +361,7 @@ class AdvanceAfterCloseTest(ClosedSeasonCase):
         first = min(report.played_dates)
         self.assertGreater(first, date(YEAR, 12, 31))
         # 新人は翌年の能力を持ち、日を進める材料（球団の現在の選手）に含まれる
-        context = DjangoSimulationContextQuery(WorldScope.pennant(self.world_a)).teams()
+        context = DjangoSimulationContextQuery(world_scope(self.world_a)).teams()
         in_context = {player.player_id for team in context for player in team.players}
         rookies = set(active_stints(self.world_a).filter(from_year=YEAR + 1).values_list("player_id", flat=True))
         self.assertEqual(len(rookies), result.draftee_count)
@@ -400,9 +402,9 @@ class DoubleCloseTest(ClosedSeasonCase):
         team_id = self.managed_team_id()
         players = self.first_players(team_id, 12)
         plan = ClubPlan(team_id, active_ids=tuple(players))
-        DjangoClubPlanRepository(WorldScope.pennant(self.world_a)).save(plan)
+        DjangoClubPlanRepository(world_scope(self.world_a)).save(plan)
         before = self.counts()
-        service = build_pennant_offseason_service(self.world_a)
+        service = build_pennant_offseason_service(world_scope(self.world_a))
         find_by_year = service._ratings.find_by_year
 
         def blind_to_next_year(year):
@@ -419,7 +421,7 @@ class DoubleCloseTest(ClosedSeasonCase):
             service.close_season()
 
         self.assertEqual(self.counts(), before)
-        self.assertEqual(DjangoClubPlanRepository(WorldScope.pennant(self.world_a)).find_all(), [plan])
+        self.assertEqual(DjangoClubPlanRepository(world_scope(self.world_a)).find_all(), [plan])
         self.assertEqual(active_stints(self.world_a, to_year=YEAR + 1).count(), 0)
 
 

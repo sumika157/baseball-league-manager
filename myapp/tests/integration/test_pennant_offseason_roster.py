@@ -9,12 +9,12 @@ from unittest import mock
 
 from myapp.domain.pennant.draft import draftee_count
 from myapp.domain.pennant.schedule import AdvanceTarget
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import AcquisitionRoute, ContractStatus
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoTeamRepository
 from myapp.presentation.views import build_pennant_season_service
 
+from ..helpers import world_scope
 from .test_pennant_advance import YEAR
 from .test_pennant_offseason import DECIDE_RELEASES, DECIDE_RETIREMENTS, ClosedSeasonCase, active_stints
 
@@ -22,7 +22,7 @@ from .test_pennant_offseason import DECIDE_RELEASES, DECIDE_RETIREMENTS, ClosedS
 class RegisteredRosterAfterCloseTest(ClosedSeasonCase):
     def registered_counts(self) -> dict[int, int]:
         """球団ごとの支配下の人数（集約の判定 `Team.registered_player_count`）。"""
-        teams = DjangoTeamRepository(WorldScope.pennant(self.world_a)).find_all_with_roster()
+        teams = DjangoTeamRepository(world_scope(self.world_a)).find_all_with_roster()
         return {team.id: team.registered_player_count for team in teams if team.id is not None}
 
     def league(self) -> orm_models.League:
@@ -105,7 +105,7 @@ class RegisteredRosterAfterCloseTest(ClosedSeasonCase):
 
         self.close()
         self.assertTrue(all(count <= 25 for count in self.registered_counts().values()), self.registered_counts())
-        build_pennant_season_service(self.world_a).advance(AdvanceTarget.SEASON_END)
+        build_pennant_season_service(world_scope(self.world_a)).advance(AdvanceTarget.SEASON_END)
         result = self.close(expected_year=YEAR + 1)
 
         self.assertEqual(result.year, YEAR + 1)

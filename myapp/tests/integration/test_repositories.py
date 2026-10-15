@@ -6,7 +6,7 @@ from myapp.domain.exceptions import (
     InvalidGame,
     WorkspaceNotFound,
 )
-from myapp.domain.pennant.world import World, WorldScope
+from myapp.domain.pennant.world import World
 from myapp.domain.value_objects import (
     BattingLine,
     InningsPitched,
@@ -29,6 +29,8 @@ from ..helpers import (
     give_pitching,
     make_workspace,
     play_game,
+    real_scope,
+    world_scope,
 )
 from .base import BaseCase
 
@@ -38,7 +40,7 @@ class RepositoryRoundTripTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.repo = DjangoTeamRepository(WorldScope.real())
+        self.repo = DjangoTeamRepository(real_scope())
 
     def test_save_and_reload_a_player(self):
         team = self.repo.find_by_id(self.team.id)
@@ -102,7 +104,7 @@ class GameRepositoryTest(BaseCase):
             batting={player.id: BattingLine(at_bats=4, singles=2, runs_batted_in=1)},
         )
 
-        reloaded = DjangoGameRepository(WorldScope.real()).find_by_id(saved.id)
+        reloaded = DjangoGameRepository(real_scope()).find_by_id(saved.id)
 
         self.assertEqual(reloaded.home_score, 5)
         self.assertEqual(reloaded.result_for(self.team.id), "win")
@@ -117,17 +119,17 @@ class GameRepositoryTest(BaseCase):
         play_game(self.team, self.rival, year=2025, day=1)
         play_game(self.team, self.rival, year=2026, day=1)
 
-        self.assertEqual(len(DjangoGameRepository(WorldScope.real()).find_all(2026)), 1)
-        self.assertEqual(len(DjangoGameRepository(WorldScope.real()).find_all()), 2)
+        self.assertEqual(len(DjangoGameRepository(real_scope()).find_all(2026)), 1)
+        self.assertEqual(len(DjangoGameRepository(real_scope()).find_all()), 2)
 
     def test_recording_the_same_player_twice_overwrites(self):
         player = self.service.register_player(self.team.id, "山田", 10, "内野手")
         game = play_game(self.team, self.rival, batting={player.id: BattingLine(at_bats=4, singles=1)})
         game.record_batting(player.id, BattingLine(at_bats=4, home_runs=2), team_id=game.home_team_id)
-        DjangoGameRepository(WorldScope.real()).save(game)
+        DjangoGameRepository(real_scope()).save(game)
 
         self.assertEqual(orm_models.GameBattingLine.objects.filter(game_id=game.id).count(), 1)
-        reloaded = DjangoGameRepository(WorldScope.real()).find_by_id(game.id)
+        reloaded = DjangoGameRepository(real_scope()).find_by_id(game.id)
         self.assertEqual(reloaded.batting[0].line.home_runs, 2)
 
 
@@ -185,7 +187,7 @@ class LeagueWorkspaceTest(BaseCase):
     """リーグの保存が、帰属（実データはワークスペース・ペナントは世界）を埋めること。"""
 
     def test_a_real_league_gets_the_workspace_and_no_world(self):
-        saved = DjangoLeagueRepository(WorldScope.real()).save(League(name="新リーグ"))
+        saved = DjangoLeagueRepository(real_scope()).save(League(name="新リーグ"))
 
         row = orm_models.League.objects.get(id=saved.id)
         self.assertEqual(row.workspace_id, self.workspace.id)
@@ -194,7 +196,7 @@ class LeagueWorkspaceTest(BaseCase):
     def test_a_pennant_league_gets_the_world_and_no_workspace(self):
         world = DjangoWorldRepository().save(World(name="世界", seed=1, start_year=2040))
 
-        saved = DjangoLeagueRepository(WorldScope.pennant(world.id)).save(League(name="世界のリーグ"))
+        saved = DjangoLeagueRepository(world_scope(world.id)).save(League(name="世界のリーグ"))
 
         row = orm_models.League.objects.get(id=saved.id)
         self.assertEqual(row.world_id, world.id)
@@ -203,12 +205,12 @@ class LeagueWorkspaceTest(BaseCase):
     def test_the_legacy_workspace_is_the_smallest_id(self):
         make_workspace(name="あとから作った")
 
-        saved = DjangoLeagueRepository(WorldScope.real()).save(League(name="新リーグ"))
+        saved = DjangoLeagueRepository(real_scope()).save(League(name="新リーグ"))
 
         self.assertEqual(orm_models.League.objects.get(id=saved.id).workspace_id, self.workspace.id)
 
     def test_saving_again_does_not_rewrite_the_workspace(self):
-        repo = DjangoLeagueRepository(WorldScope.real())
+        repo = DjangoLeagueRepository(real_scope())
         saved = repo.save(League(name="新リーグ"))
         other = make_workspace(name="別")
         orm_models.League.objects.filter(id=saved.id).update(workspace=other)
@@ -229,6 +231,6 @@ class LeagueWorkspaceTest(BaseCase):
             WorkspaceNotFound,
             "ワークスペースがありません。運営者が管理画面で最初のワークスペースを作るまで、この操作はできません。",
         ):
-            DjangoLeagueRepository(WorldScope.real()).save(League(name="新リーグ"))
+            DjangoLeagueRepository(real_scope()).save(League(name="新リーグ"))
 
         self.assertFalse(orm_models.League.objects.exists())

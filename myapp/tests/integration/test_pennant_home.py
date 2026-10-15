@@ -21,8 +21,9 @@ from myapp.domain.exceptions import AlreadyAdvanced, InvalidSchedule
 from myapp.domain.pennant.schedule import AdvanceTarget, Fixture
 from myapp.domain.pennant.season import SCREEN_ADVANCE_TARGETS, SeasonPhase, summary_period
 from myapp.infrastructure import orm_models
-from myapp.presentation.views import build_pennant_season_service, build_world_view_service
+from myapp.presentation.views import build_pennant_season_service, build_service
 
+from ..helpers import world_scope
 from .test_pennant_advance import SEASON_GAMES, YEAR, SeasonCase
 
 # 1シーズンを終えた世界のシード（同率で終わらないもの）
@@ -60,7 +61,7 @@ class HomeCase(SeasonCase):
 
     def start_season(self) -> None:
         """日程だけ作る（まだ1試合も進めない）。"""
-        build_pennant_season_service(self.world_a).ensure_schedule()
+        build_pennant_season_service(world_scope(self.world_a)).ensure_schedule()
 
 
 class FinishedSeasonCase(HomeCase):
@@ -74,8 +75,8 @@ class FinishedSeasonCase(HomeCase):
         # 優勝の印を確かめるので、球団2つが同率にならないシードで回す（世界Aのシード7は、
         # 投手の疲労（#97）を入れたら同率で終わるようになった）
         orm_models.PennantWorld.objects.filter(id=cls.world_a).update(seed=FINISHED_SEASON_SEED)
-        build_pennant_season_service(cls.world_a).advance(AdvanceTarget.SEASON_END)
-        (league,) = build_world_view_service(cls.world_a).get_league_standings(YEAR)
+        build_pennant_season_service(world_scope(cls.world_a)).advance(AdvanceTarget.SEASON_END)
+        (league,) = build_service(world_scope(cls.world_a)).get_league_standings(YEAR)
         first, second = league.rows[:2]
         # 球団2つで同率なら、優勝の印を確かめるテストにこの世界は使えない
         assert (first.wins, first.losses) != (second.wins, second.losses), "同率の世界は使えない"
@@ -95,7 +96,7 @@ class FinishedSeasonHomeTest(FinishedSeasonCase):
 
     def test_a_finished_season_says_there_is_nothing_to_advance(self):
         self.client.force_login(self.owner)
-        today = build_pennant_season_service(self.world_a)._context_query.last_played_on()
+        today = build_pennant_season_service(world_scope(self.world_a))._context_query.last_played_on()
         before = self.games_in()
 
         response = self.post_advance("day", expected=today.isoformat())
@@ -163,7 +164,7 @@ class HomeScreenTest(HomeCase):
     def test_the_next_games_and_the_standings_after_a_few_days(self):
         self.start_season()
         for _ in range(3):
-            build_pennant_season_service(self.world_a).advance(AdvanceTarget.DAY)
+            build_pennant_season_service(world_scope(self.world_a)).advance(AdvanceTarget.DAY)
 
         content = self.client.get(self.home_url()).content.decode()
 
@@ -174,7 +175,7 @@ class HomeScreenTest(HomeCase):
 
     def test_the_standings_switch_is_shown_only_when_there_are_several_leagues(self):
         self.start_season()
-        build_pennant_season_service(self.world_a).advance(AdvanceTarget.DAY)
+        build_pennant_season_service(world_scope(self.world_a)).advance(AdvanceTarget.DAY)
 
         content = self.client.get(self.home_url()).content.decode()
 
@@ -268,7 +269,7 @@ class AdvanceTest(HomeCase):
 
     def test_the_since_is_the_day_before_when_advancing_from_a_played_day(self):
         self.post_advance("day")
-        today = build_pennant_season_service(self.world_a)._context_query.last_played_on()
+        today = build_pennant_season_service(world_scope(self.world_a))._context_query.last_played_on()
 
         response = self.post_advance("day", expected=today.isoformat())
 
@@ -277,7 +278,7 @@ class AdvanceTest(HomeCase):
 
     def test_a_week_advances_the_games_of_seven_days(self):
         self.post_advance("day")
-        today = build_pennant_season_service(self.world_a)._context_query.last_played_on()
+        today = build_pennant_season_service(world_scope(self.world_a))._context_query.last_played_on()
 
         self.post_advance("week", expected=today.isoformat())
 
@@ -328,7 +329,7 @@ class AdvanceTest(HomeCase):
 
     def test_the_limit_on_one_advance_is_kept(self):
         """1回の上限を超える範囲は、何も作らずに断る（画面の応答が返らなくなる前に）。"""
-        service = build_pennant_season_service(self.world_a)
+        service = build_pennant_season_service(world_scope(self.world_a))
         service.ensure_schedule()
 
         with self.assertRaises(InvalidSchedule) as raised:
@@ -341,7 +342,7 @@ class AdvanceTest(HomeCase):
         with mock.patch("myapp.presentation.views.MAX_GAMES_PER_ADVANCE", 3):
             self.start_season()
             self.post_advance("day")  # 1試合は通る
-            today = build_pennant_season_service(self.world_a)._context_query.last_played_on()
+            today = build_pennant_season_service(world_scope(self.world_a))._context_query.last_played_on()
             response = self.post_advance("week", expected=today.isoformat())
 
         self.assertEqual(self.games_in(), 1)
@@ -349,7 +350,7 @@ class AdvanceTest(HomeCase):
 
     def test_the_service_refuses_when_the_world_has_moved_on(self):
         """画面を開いたときの今日と違えば、何も作らずに止まる（照合は、今日を読んだ直後に service が行う）。"""
-        service = build_pennant_season_service(self.world_a)
+        service = build_pennant_season_service(world_scope(self.world_a))
         service.advance(AdvanceTarget.DAY)
         today = service._context_query.last_played_on()
 
@@ -362,13 +363,13 @@ class AdvanceTest(HomeCase):
         self.assertEqual(self.games_in(), 2)
 
     def test_the_service_accepts_none_as_a_world_without_games(self):
-        build_pennant_season_service(self.world_a).advance(AdvanceTarget.DAY, expected_today=None)
+        build_pennant_season_service(world_scope(self.world_a)).advance(AdvanceTarget.DAY, expected_today=None)
 
         self.assertEqual(self.games_in(), 1)
 
     def test_the_commands_are_not_limited(self):
         """管理コマンドは上限を渡さない（シーズン終了まで通しで進められる）。"""
-        report = build_pennant_season_service(self.world_a).advance(AdvanceTarget.SEASON_END)
+        report = build_pennant_season_service(world_scope(self.world_a)).advance(AdvanceTarget.SEASON_END)
 
         self.assertEqual(report.games, SEASON_GAMES)
         self.assertGreater(report.games, 100)
@@ -450,7 +451,7 @@ class AdvanceOptionsTest(SimpleTestCase):
 class SummaryTest(HomeCase):
     def advance_days(self, count: int) -> date:
         """日程を作って `count` 日進める。進めたあとの今日（最後の試合日）を返す。"""
-        service = build_pennant_season_service(self.world_a)
+        service = build_pennant_season_service(world_scope(self.world_a))
         service.ensure_schedule()
         for _ in range(count):
             service.advance(AdvanceTarget.DAY)
@@ -532,14 +533,16 @@ class SummaryTest(HomeCase):
             return len(captured)
 
         short = count()
-        build_pennant_season_service(self.world_a).advance(AdvanceTarget.WEEK)
+        build_pennant_season_service(world_scope(self.world_a)).advance(AdvanceTarget.WEEK)
         self.assertEqual(count(), short)
 
     def _home(self, *, since):
         from myapp.presentation.views import build_pennant_home_service, build_pennant_world_view
 
         context = build_pennant_world_view().get_context(self.world_a)
-        return build_pennant_home_service(self.world_a).get_home(context, since=since, include_advance=False)
+        return build_pennant_home_service(world_scope(self.world_a)).get_home(
+            context, since=since, include_advance=False
+        )
 
 
 class StandingsSwitchTest(SimpleTestCase):

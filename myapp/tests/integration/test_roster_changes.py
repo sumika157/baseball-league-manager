@@ -8,7 +8,6 @@ from myapp.domain.exceptions import (
     DuplicateJerseyNumber,
     ForeignPlayerQuotaExceeded,
 )
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import (
     BattingLine,
     FieldingPosition,
@@ -24,6 +23,7 @@ from ..helpers import (
     give_batting,
     login_as_manager,
     play_game,
+    real_scope,
     register_lineup,
     to_plate_appearances,
 )
@@ -115,7 +115,7 @@ class TransferTest(BaseCase):
             year=2026,
         )
 
-        team = DjangoTeamRepository(WorldScope.real()).find_by_id(self.rival.id)
+        team = DjangoTeamRepository(real_scope()).find_by_id(self.rival.id)
         career = team.find_player(self.player.id).career
 
         self.assertEqual([s.team_name for s in career], ["相手チーム", "テストチーム"])
@@ -177,7 +177,7 @@ class ForeignPlayerQuotaTest(BaseCase):
         pitcher = self.service.register_player(self.team.id, "投手", 91, "投手")
         (away if foreign_team is self.rival else home)[0] = foreign_batter
 
-        return build_recording_service().record_scorebook(
+        return build_recording_service(real_scope()).record_scorebook(
             game.id,
             year=2026,
             played_on=game.played_on,
@@ -255,12 +255,12 @@ class CaptaincyApplicationTest(BaseCase):
     def test_appoint_and_remove_round_trip_through_the_database(self):
         self.service.appoint_captain(self.team.id, self.player.id, 2026)
 
-        team = DjangoTeamRepository(WorldScope.real()).find_by_id(self.team.id)
+        team = DjangoTeamRepository(real_scope()).find_by_id(self.team.id)
         self.assertEqual(team.current_captain.id, self.player.id)
 
         self.service.remove_captain(self.team.id, self.player.id, 2027)
 
-        team = DjangoTeamRepository(WorldScope.real()).find_by_id(self.team.id)
+        team = DjangoTeamRepository(real_scope()).find_by_id(self.team.id)
         self.assertIsNone(team.current_captain)
 
     def test_player_edit_appoints_a_captain(self):
@@ -272,7 +272,7 @@ class CaptaincyApplicationTest(BaseCase):
         )
 
         self.assertRedirects(response, reverse("player_edit", args=[self.team.id, self.player.id]))
-        team = DjangoTeamRepository(WorldScope.real()).find_by_id(self.team.id)
+        team = DjangoTeamRepository(real_scope()).find_by_id(self.team.id)
         self.assertEqual(team.current_captain.id, self.player.id)
 
     def test_player_edit_shows_duplicate_captain_error(self):
@@ -287,5 +287,5 @@ class CaptaincyApplicationTest(BaseCase):
         )
 
         self.assertContains(response, "には既に主将")
-        team = DjangoTeamRepository(WorldScope.real()).find_by_id(self.team.id)
+        team = DjangoTeamRepository(real_scope()).find_by_id(self.team.id)
         self.assertEqual(team.current_captain.id, other.id)

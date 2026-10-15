@@ -21,7 +21,6 @@ from django.urls import reverse
 
 from myapp.domain.exceptions import GameNotFound, LeagueNotFound, TeamNotFound
 from myapp.domain.pennant.club_plan import ClubPlan, LineupChoice
-from myapp.domain.pennant.world import WorldScope
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import (
     DjangoGameListQuery,
@@ -46,7 +45,7 @@ from myapp.presentation.views import (
     build_player_search_query,
 )
 
-from ..helpers import post_game_scorebook_day_unrecorded
+from ..helpers import post_game_scorebook_day_unrecorded, real_scope, world_scope
 from .world_case import (
     PENNANT_LEAGUE,
     PENNANT_PLAYER_PREFIX,
@@ -57,7 +56,7 @@ from .world_case import (
     WorldCase,
 )
 
-REAL = WorldScope.real()
+REAL = real_scope()
 
 # 世界の目印。実データの画面のどこにも出てはならない
 MARKERS = (PENNANT_LEAGUE, PENNANT_TEAM, PENNANT_RIVAL, PENNANT_PLAYER_PREFIX, PENNANT_WORLD)
@@ -122,12 +121,12 @@ class RealPagesDoNotShowThePennantWorldTest(WorldCase):
     def test_a_player_search_does_not_show_the_copy(self):
         """複製した選手は元の選手と同じ名前を持つ。名前で引くと2人ずつ出てしまう。"""
         # 目印に付け替える前の名前で探す。実データの選手は1人ずつだけ出る
-        results = build_player_search_query().search("実打者1")
+        results = build_player_search_query(real_scope()).search("実打者1")
 
         self.assertEqual([row.name for row in results], ["実打者1"])
 
     def test_a_player_search_by_the_marker_finds_nobody(self):
-        self.assertEqual(build_player_search_query().search(PENNANT_PLAYER_PREFIX), [])
+        self.assertEqual(build_player_search_query(real_scope()).search(PENNANT_PLAYER_PREFIX), [])
         response = self.client.get(reverse("player_search") + f"?q={PENNANT_PLAYER_PREFIX}")
         self.assertNotContains(response, PENNANT_PLAYER_PREFIX + "01", status_code=200)
 
@@ -372,19 +371,21 @@ class PermissionTest(WorldCase):
     def test_a_staff_user_cannot_edit_a_pennant_team_from_the_real_side(self):
         staff = User.objects.create_user("staff", password="x", is_staff=True)
 
-        self.assertFalse(build_permission_query().can_manage(staff, self.pennant_team.id))
-        self.assertFalse(build_permission_query().can_manage_any(staff, [self.pennant_team.id, self.pennant_rival.id]))
+        self.assertFalse(build_permission_query(real_scope()).can_manage(staff, self.pennant_team.id))
+        self.assertFalse(
+            build_permission_query(real_scope()).can_manage_any(staff, [self.pennant_team.id, self.pennant_rival.id])
+        )
 
     def test_a_staff_user_can_still_edit_a_real_team(self):
         staff = User.objects.create_user("staff", password="x", is_staff=True)
 
-        self.assertTrue(build_permission_query().can_manage(staff, self.team.id))
+        self.assertTrue(build_permission_query(real_scope()).can_manage(staff, self.team.id))
 
     def test_a_manager_of_a_pennant_team_row_cannot_edit_it_from_the_real_side(self):
         manager = User.objects.create_user("gm", password="x")
         self.pennant_team.managers.add(manager)
 
-        self.assertFalse(build_permission_query().can_manage(manager, self.pennant_team.id))
+        self.assertFalse(build_permission_query(real_scope()).can_manage(manager, self.pennant_team.id))
 
     def test_the_pennant_scope_never_allows_editing(self):
         """ペナントの書き込みはオーナーで判定する（その判定を足すまで、常に False）。"""
@@ -721,9 +722,9 @@ class PennantScreensStayInTheWorldTest(WorldCase):
         orm_models.PennantWorld.objects.filter(id=self.world_id).update(
             owner_id=owner.id, managed_team_id=self.pennant_team.id
         )
-        view = build_club_service(self.world_id).view(self.pennant_team.id)
+        view = build_club_service(world_scope(self.world_id)).view(self.pennant_team.id)
         # この世界の選手では検査を通らない（捕手がいない）ので、保存だけを直接行って全区画を手動にする
-        DjangoClubPlanRepository(WorldScope.pennant(self.world_id)).save(
+        DjangoClubPlanRepository(world_scope(self.world_id)).save(
             ClubPlan(
                 team_id=self.pennant_team.id,
                 active_ids=view.active_ids,
@@ -759,7 +760,7 @@ class OtherIdsAreNotFoundInAWorldTest(WorldCase):
 
     def setUp(self):
         super().setUp()
-        other = build_pennant_world_service().create_world(
+        other = build_pennant_world_service(real_scope()).create_world(
             name="別の世界", owner_id=None, source_league_ids=[self.league.id], start_year=YEAR + 1, seed=2
         )
         self.other_id = other.world.id

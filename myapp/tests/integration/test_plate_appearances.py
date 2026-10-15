@@ -14,7 +14,6 @@ from myapp.domain.entities import (
     RunnerSubstitution,
 )
 from myapp.domain.exceptions import InvalidPlateAppearance
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.services import batting_line_for, record_derived_fielding
 from myapp.domain.value_objects import (
     AdvanceReason,
@@ -28,6 +27,7 @@ from myapp.domain.value_objects import (
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
 
+from ..helpers import real_scope
 from .base import BaseCase
 
 P = PlateAppearanceResult
@@ -47,7 +47,7 @@ class PlateAppearancePersistenceTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.repo = DjangoGameRepository(WorldScope.real())
+        self.repo = DjangoGameRepository(real_scope())
         self.pitcher = self._register(self.team, "先発", 11, "投手")
         self.shortstop = self._register(self.team, "遊撃", 6, "内野手")
         self.batters = [self._register(self.rival, f"打者{i}", 20 + i, "内野手") for i in range(1, 7)]

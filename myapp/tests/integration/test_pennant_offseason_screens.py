@@ -15,12 +15,12 @@ from django.urls import reverse
 
 from myapp.domain.pennant.club_plan import ClubPlan, LineupChoice, PlanSection
 from myapp.domain.pennant.schedule import AdvanceTarget
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import FieldingPosition
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoClubPlanRepository
 from myapp.presentation.views import build_pennant_offseason_service, build_pennant_season_service
 
+from ..helpers import world_scope
 from .test_pennant_advance import YEAR
 from .test_pennant_home import HomeCase
 
@@ -37,7 +37,7 @@ class ScreenCase(HomeCase):
     def setUpTestData(cls):
         super().setUpTestData()
         orm_models.PennantWorld.objects.filter(id=cls.world_b).update(owner_id=cls.owner.id)
-        build_pennant_season_service(cls.world_a).advance(AdvanceTarget.SEASON_END)
+        build_pennant_season_service(world_scope(cls.world_a)).advance(AdvanceTarget.SEASON_END)
 
     def close_url(self, world_id=None) -> str:
         return reverse("pennant_close_season", args=[self.world_a if world_id is None else world_id])
@@ -62,7 +62,7 @@ class ScreenCase(HomeCase):
             mock.patch(DECIDE_RETIREMENTS, return_value=tuple(retiring)),
             mock.patch(DECIDE_RELEASES, return_value=()),
         ):
-            return build_pennant_offseason_service(self.world_a).close_season(expected_year=YEAR)
+            return build_pennant_offseason_service(world_scope(self.world_a)).close_season(expected_year=YEAR)
 
 
 class CloseCardTest(ScreenCase):
@@ -88,7 +88,7 @@ class CloseCardTest(ScreenCase):
         self.client.force_login(self.owner)
         self.assertNotIn(self.close_url(self.world_b), self.client.get(self.home_url(self.world_b)).content.decode())
 
-        build_pennant_season_service(self.world_b).advance(AdvanceTarget.DAY)
+        build_pennant_season_service(world_scope(self.world_b)).advance(AdvanceTarget.DAY)
         content = self.client.get(self.home_url(self.world_b)).content.decode()
         self.assertNotIn(self.close_url(self.world_b), content)
         self.assertIn(self.advance_url(self.world_b), content)
@@ -206,7 +206,7 @@ class CloseSeasonPostTest(ScreenCase):
         assert team_id is not None
         players = self.managed_players(12)
         retiring, others = players[0], players[1:]
-        DjangoClubPlanRepository(WorldScope.pennant(self.world_a)).save(
+        DjangoClubPlanRepository(world_scope(self.world_a)).save(
             ClubPlan(
                 team_id,
                 active_ids=tuple(players),
@@ -315,7 +315,7 @@ class HomeAfterCloseTest(ScreenCase):
         content = self.client.get(self.home_url()).content.decode()
         self.assertIn(self.advance_url(), content)
 
-        build_pennant_season_service(self.world_a).advance(AdvanceTarget.DAY)
+        build_pennant_season_service(world_scope(self.world_a)).advance(AdvanceTarget.DAY)
         after = self.client.get(self.home_url()).content.decode()
         self.assertIn("順位表（2027年）", after)
         self.assertNotIn(self.offseason_url(), after)

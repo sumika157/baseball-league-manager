@@ -15,7 +15,7 @@ from django.db import IntegrityError, transaction
 
 from myapp.application.pennant_world import PennantWorldService, WorldRepositories
 from myapp.domain.exceptions import InvalidSeason, InvalidWorld, LeagueNotFound, TeamNotFound, WorldNotFound
-from myapp.domain.pennant.world import World, WorldScope
+from myapp.domain.pennant.world import World
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoFieldingTotalsQuery, DjangoSimulationContextQuery
 from myapp.infrastructure.repositories import (
@@ -26,13 +26,13 @@ from myapp.infrastructure.repositories import (
 )
 from myapp.presentation.views import build_pennant_world_service
 
-from ..helpers import make_league, make_workspace, play_game
+from ..helpers import make_league, make_workspace, play_game, real_scope, world_scope
 from .base import BaseCase
 from .test_world_isolation import BOTH, CLASSIFICATION, GAME, LEAGUE, PLAYER
 from .world_case import PENNANT_LEAGUE, PENNANT_TEAM, YEAR, WorldCase
 
 START = 2030
-REAL = WorldScope.real()
+REAL = real_scope()
 
 
 def _real_counts() -> dict[str, int]:
@@ -88,7 +88,7 @@ class ForkTest(BaseCase):
             "start_year": START,
             "seed": 7,
         } | overrides
-        return build_pennant_world_service().create_world(**arguments)
+        return build_pennant_world_service(real_scope()).create_world(**arguments)
 
     def test_the_world_records_what_was_decided(self):
         self.assertEqual(
@@ -192,7 +192,7 @@ class ForkTest(BaseCase):
 
     def test_a_forked_world_can_be_read_through_its_scope(self):
         """集約経由で保存したものが、世界の範囲のリポジトリで往復して読める。"""
-        scope = WorldScope.pennant(self.world.id)
+        scope = world_scope(self.world.id)
         teams = DjangoTeamRepository(scope).find_all_with_roster()
 
         self.assertEqual({t.name for t in teams}, {self.team.name, self.rival.name})
@@ -242,7 +242,7 @@ class ForkContractTest(BaseCase):
         self.service.register_player(self.team.id, "支配下", "18", "投手")
         self.service.register_player(self.team.id, "育成", "120", "投手", contract_label="育成")
         orm_models.League.objects.filter(id=self.league.id).update(registered_player_limit=65)
-        self.created = build_pennant_world_service().create_world(
+        self.created = build_pennant_world_service(real_scope()).create_world(
             name="契約", owner_id=None, source_league_ids=[self.league.id], start_year=START, seed=7
         )
         self.world_id = self.created.world.id
@@ -263,7 +263,7 @@ class ForkContractTest(BaseCase):
 
     def test_a_developmental_player_is_not_a_simulation_candidate(self):
         """育成選手は試合に出られない（実データのスコアブックと同じ）。1軍の候補にも試合にも入らない。"""
-        teams = DjangoSimulationContextQuery(WorldScope.pennant(self.world_id)).teams()
+        teams = DjangoSimulationContextQuery(world_scope(self.world_id)).teams()
 
         names = {player.name for team in teams for player in team.players}
         self.assertIn("支配下", names)
@@ -274,7 +274,7 @@ class ForkOptionsTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.skip_roster_check()
-        self.service_ = build_pennant_world_service()
+        self.service_ = build_pennant_world_service(real_scope())
         self.service.register_player(self.team.id, "選手", 1, "内野手")
         self.second_league = make_league(name="第二リーグ", display_order=1)
         self.other_team = orm_models.Team.objects.create(league=self.second_league, name="第二のチーム")
@@ -292,7 +292,7 @@ class ForkOptionsTest(BaseCase):
     def test_several_leagues_keep_the_order_given(self):
         created = self._create(source_league_ids=[self.second_league.id, self.league.id])
 
-        names = [league.name for league in DjangoLeagueRepository(WorldScope.pennant(created.world.id)).find_all()]
+        names = [league.name for league in DjangoLeagueRepository(world_scope(created.world.id)).find_all()]
         self.assertEqual(names, ["第二リーグ", self.league.name], "指定した順に並ぶ")
         self.assertEqual(created.league_count, 2)
         self.assertEqual(created.team_count, 3)
@@ -421,10 +421,10 @@ class WorldRepositoryTest(BaseCase):
     def test_the_list_through_the_service(self):
         DjangoWorldRepository().save(World(name="世界", seed=1, start_year=2026))
 
-        rows = build_pennant_world_service().list_worlds()
+        rows = build_pennant_world_service(real_scope()).list_worlds()
 
         self.assertEqual([row.name for row in rows], ["世界"])
-        self.assertEqual(build_pennant_world_service().get_world(rows[0].id).name, "世界")
+        self.assertEqual(build_pennant_world_service(real_scope()).get_world(rows[0].id).name, "世界")
 
 
 class DeleteWorldTest(WorldCase):
@@ -453,7 +453,7 @@ class DeleteWorldTest(WorldCase):
         self.assertGreater(counts["PennantPlayerRatings"], 0, "能力の行も世界に属す")
 
     def test_deleting_removes_every_row_of_the_world(self):
-        build_pennant_world_service().delete_world(self.world_id)
+        build_pennant_world_service(real_scope()).delete_world(self.world_id)
 
         for name, count in self._rows_in_world().items():
             self.assertEqual(count, 0, f"{name} に世界の行が残っています")
@@ -464,7 +464,7 @@ class DeleteWorldTest(WorldCase):
         player_id = self.pennant_players(self.pennant_team)[0]
         orm_models.PlayerFreeAgentDeclaration.objects.create(player_id=player_id, year=YEAR, kind="国内")
 
-        build_pennant_world_service().delete_world(self.world_id)
+        build_pennant_world_service(real_scope()).delete_world(self.world_id)
 
         self.assertFalse(orm_models.PlayerFreeAgentDeclaration.objects.filter(player_id=player_id).exists())
 
@@ -472,7 +472,7 @@ class DeleteWorldTest(WorldCase):
         before = _real_counts()
         real_lines = orm_models.GameBattingLine.objects.filter(game=self.real_game.id).count()
 
-        build_pennant_world_service().delete_world(self.world_id)
+        build_pennant_world_service(real_scope()).delete_world(self.world_id)
 
         self.assertEqual(_real_counts(), before)
         self.assertEqual(orm_models.GameBattingLine.objects.filter(game=self.real_game.id).count(), real_lines)
@@ -480,18 +480,18 @@ class DeleteWorldTest(WorldCase):
         self.assertEqual(self.service.get_standings(2026).rows[0].games_played, 1)
 
     def test_deleting_one_world_leaves_another_alone(self):
-        other = build_pennant_world_service().create_world(
+        other = build_pennant_world_service(real_scope()).create_world(
             name="別", owner_id=None, source_league_ids=[self.league.id], start_year=2030, seed=2
         )
-        other_scope = WorldScope.pennant(other.world.id)
+        other_scope = world_scope(other.world.id)
 
-        build_pennant_world_service().delete_world(self.world_id)
+        build_pennant_world_service(real_scope()).delete_world(self.world_id)
 
         self.assertEqual(len(DjangoTeamRepository(other_scope).find_all_with_roster()), 2)
         self.assertGreater(orm_models.PlayerStint.objects.filter(team__league__world_id=other.world.id).count(), 0)
 
     def test_deleting_a_world_with_a_managed_team_works(self):
-        created = build_pennant_world_service().create_world(
+        created = build_pennant_world_service(real_scope()).create_world(
             name="受け持ち",
             owner_id=None,
             source_league_ids=[self.league.id],
@@ -500,16 +500,16 @@ class DeleteWorldTest(WorldCase):
             managed_source_team_id=self.team.id,
         )
 
-        build_pennant_world_service().delete_world(created.world.id)
+        build_pennant_world_service(real_scope()).delete_world(created.world.id)
 
         self.assertFalse(orm_models.PennantWorld.objects.filter(id=created.world.id).exists())
 
     def test_deleting_a_missing_world_is_reported(self):
         with self.assertRaises(WorldNotFound):
-            build_pennant_world_service().delete_world(999999)
+            build_pennant_world_service(real_scope()).delete_world(999999)
 
     def test_the_pennant_marker_names_are_gone(self):
-        build_pennant_world_service().delete_world(self.world_id)
+        build_pennant_world_service(real_scope()).delete_world(self.world_id)
 
         self.assertFalse(orm_models.League.objects.filter(name=PENNANT_LEAGUE).exists())
         self.assertFalse(orm_models.Team.objects.filter(name=PENNANT_TEAM).exists())

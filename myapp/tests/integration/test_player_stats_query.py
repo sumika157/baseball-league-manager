@@ -11,20 +11,19 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 
 from myapp.domain import services as domain_services
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import BattingLine, InningsPitched, PitchingLine, Profile
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoPlayerStatsQuery
 from myapp.infrastructure.repositories import DjangoGameRepository, DjangoTeamRepository
 
-from ..helpers import give_batting, give_pitching, make_league, play_game
+from ..helpers import give_batting, give_pitching, make_league, play_game, real_scope
 from .base import BaseCase
 
 
 class PlayerStatsQueryTest(BaseCase):
     def setUp(self):
         super().setUp()
-        self.query = DjangoPlayerStatsQuery(WorldScope.real())
+        self.query = DjangoPlayerStatsQuery(real_scope())
         self.slugger = self.service.register_player(self.team.id, "大砲", 3, "内野手")
         self.ace = self.service.register_player(self.team.id, "エース", 18, "投手")
 
@@ -99,7 +98,7 @@ class PlayerStatsQueryTest(BaseCase):
             self.team, self.rival, self.ace.id, PitchingLine(innings=InningsPitched.from_notation("6.1"), wins=1)
         )
         self.service.appoint_captain(self.team.id, self.ace.id)
-        team = DjangoTeamRepository(WorldScope.real()).find_by_id(self.team.id)
+        team = DjangoTeamRepository(real_scope()).find_by_id(self.team.id)
 
         rows = {
             row.player_id: row for row in self.query.list_roster(year=None, team_id=self.team.id, with_profile=True)
@@ -285,7 +284,7 @@ class PlayerStatsQueryTest(BaseCase):
             pitching={self.ace.id: PitchingLine(innings=InningsPitched.from_notation("5.2"), losses=1)},
             day=2,
         )
-        games = DjangoGameRepository(WorldScope.real()).find_all()
+        games = DjangoGameRepository(real_scope()).find_all()
 
         rows = self._by_name(self.query.list_season(self.league.id, 2026))
 
