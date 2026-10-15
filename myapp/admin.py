@@ -269,8 +269,9 @@ class TeamInline(RealDataOnlyMixin, admin.TabularInline):
 class WorkspaceRequiredForm(forms.ModelForm):
     """ワークスペースを必須にするフォーム。
 
-    列は T6 まで null 可だが、実データのリーグ・球場は必ずどこかに属す。フォームに含めて
-    必須にすれば、選び忘れが 500 ではなくフォームのエラーになる。
+    リーグの列は（ペナントのリーグが持たないので）null 可のままだが、実データのリーグ・球場は
+    必ずどこかに属す。フォームに含めて必須にすれば、選び忘れが 500 ではなくフォームのエラーになる。
+    同名の重複は、モデルの UniqueConstraint がフォームの検証で日本語のエラーにする。
     """
 
     def __init__(self, *args, **kwargs):
@@ -282,6 +283,8 @@ class LeagueForm(WorkspaceRequiredForm):
     class Meta:
         model = League
         fields = "__all__"
+        # ペナントのリーグは世界側で作る。管理画面から world を付けて workspace との排他を崩さない
+        exclude = ("world",)
 
 
 @admin.register(League)

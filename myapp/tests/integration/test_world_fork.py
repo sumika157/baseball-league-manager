@@ -26,7 +26,7 @@ from myapp.infrastructure.repositories import (
 )
 from myapp.presentation.views import build_pennant_world_service
 
-from ..helpers import make_league, play_game
+from ..helpers import make_league, make_workspace, play_game
 from .base import BaseCase
 from .test_world_isolation import BOTH, CLASSIFICATION, GAME, LEAGUE, PLAYER
 from .world_case import PENNANT_LEAGUE, PENNANT_TEAM, YEAR, WorldCase
@@ -216,6 +216,16 @@ class ForkTest(BaseCase):
         """world が NULL のどうしは一意制約で衝突しない。条件付きの制約で実データ側の一意性を保つ。"""
         with self.assertRaises(IntegrityError), transaction.atomic():
             make_league(name=self.league.name)
+
+    def test_source_leagues_with_the_same_name_are_rejected_before_anything_is_written(self):
+        other_workspace = make_workspace(name="別のワークスペース")
+        same_name = make_league(self.league.name, workspace=other_workspace)
+        before = orm_models.PennantWorld.objects.count()
+
+        with self.assertRaisesMessage(InvalidWorld, "同じ名前のリーグを2つ以上分岐元に選べません"):
+            self._fork(name="重複", source_league_ids=[self.league.id, same_name.id])
+
+        self.assertEqual(orm_models.PennantWorld.objects.count(), before)
 
     def test_the_same_league_name_is_allowed_across_worlds(self):
         other = self._fork(name="別の世界")
