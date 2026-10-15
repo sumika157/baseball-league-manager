@@ -22,7 +22,7 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Wiki のリポジトリは Web 画面で最初のページを作るまで存在しない（その場合はここで失敗する）
       - name: Wiki のリポジトリを取得する
