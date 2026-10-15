@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from math import sqrt
 
@@ -32,7 +32,7 @@ from .offseason_player import (
     retirement_value,
 )
 from .ratings import PlayerRatings
-from .release import decide_releases
+from .release import decide_releases, releases_as_chosen
 from .retirement import retirement_chance
 
 
@@ -193,11 +193,13 @@ def plan_offseason(
     world_seed: int,
     start_year: int,
     used_names: Collection[str],
+    manual_releases: Mapping[int, Collection[int]] | None = None,
 ) -> OffseasonPlan:
     """Y 年を締める計画。`clubs` は球団 id の昇順で処理する。
 
     - `used_names`: 世界の全選手（引退した選手を含む）の名前。新人の名前が重ならないようにする
     - `start_year`: 世界の開幕年（生年月日の無い選手の年齢の推定に使う）
+    - `manual_releases`: GM が手動で戦力外を指名した球団（球団 id → 選手 id）。無い球団は自動（`release.py`）
     """
     ordered = sorted(clubs, key=lambda club: club.team_id)
     retired = set(decide_retirements(ordered, year=year, world_seed=world_seed, start_year=start_year))
@@ -208,8 +210,13 @@ def plan_offseason(
     released: list[int] = []
     for club in ordered:
         remaining = [player for player in club.players if player.player_id not in retired]
-        # 戦力外は引退の後・ドラフトの前。ドラフトは戦力外の後の人数で数える
-        leaving = set(decide_releases(club, remaining, year=year, start_year=start_year))
+        # 戦力外は引退の後・ドラフトの前。ドラフトは戦力外の後の人数で数える。手動の球団は指名どおり
+        chosen = (manual_releases or {}).get(club.team_id)
+        leaving = set(
+            decide_releases(club, remaining, year=year, start_year=start_year)
+            if chosen is None
+            else releases_as_chosen(chosen, remaining)
+        )
         released.extend(sorted(leaving))
         remaining = [player for player in remaining if player.player_id not in leaving]
         survivors.extend(remaining)

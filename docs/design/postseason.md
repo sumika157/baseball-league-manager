@@ -34,7 +34,7 @@
 
 **決めたこと**
 
-- `GameStage`（`domain/value_objects.py`）: `REGULAR = "公式戦"`・`POSTSEASON = "ポストシーズン"`。`Game.stage` と `GameHeader.stage` は**既定値を持たない必須の引数**（渡し忘れを型検査と例外で捕まえる。範囲の `WorldScope` と同じ考え）。呼ぶ側（スコアブック・試合の登録・シミュレーション・仮想データの投入）はすべて区分を明示する。ORM の列は `CharField`（choices は Enum から）で、マイグレーション `0048_game_stage` は AddField だけ（既存の試合は既定値で全部公式戦。backfill なし）。
+- `GameStage`（`domain/value_objects.py`）: `REGULAR = "公式戦"`・`POSTSEASON = "ポストシーズン"`。`Game.stage` と `GameHeader.stage` は**既定値を持たない必須の引数**（渡し忘れを型検査と例外で捕まえる。範囲の `WorldScope` と同じ考え）。呼ぶ側（スコアブック・試合の登録・シミュレーション・仮想データの投入）はすべて区分を明示する。ORM の列は `CharField`（choices は Enum から）で、マイグレーション `0049_game_stage`（main の #168 段階B の `0048_pennant_release_plan` と番号がぶつかったので、main の取り込みで 0048 から付け直した） は AddField だけ（既存の試合は既定値で全部公式戦。backfill なし）。
 - 試合を読む入口（`infrastructure/scoping.py`）は区分を**必須のキーワード引数**で受け取る: `games_in(scope, *, stages)`・`games_in_worlds(ids, *, stages)`。明細（打撃・投球・守備）の行から見た条件は `game_rows_condition("game", scope, *, stages)`、範囲で絞らない集計（選手・球団の id で絞る）は `stage_condition("game", stages)`。区分は `StageFilter`（`REGULAR_ONLY` / `POSTSEASON_ONLY` / `ALL_STAGES`）で、「None なら全部」の形は作らない（`WorldScope` と同じ）。
 - 成績の集計の関数（`repositories.py` の `batting_totals`・`pitching_totals`・`game_counts`）は区分 `stages` を**必須の引数**にし、関数の中で区分の条件を合成する。読む明細の持ち主も必須の引数 `within` で、範囲（`WorldScope`。その世界の全選手）か選手の id の並び（選手の行は世界ごとに別）のどちらか（`LineOwners`）。どちらも無い形（全世界を読む）は型の上で書けない。`games` は年・期間・球団などの追加の条件だけ。`games: Q` を必須にするだけでは `Q()` を渡すと黙って全区分になり、型で保証できない。チーム集約の選手の通算（`_RosterData`）は範囲を持たずに選手の id で絞っていて、区分を入れ忘れると黙って混ざる形だったため。
 - 分類（一覧は #238）: 公式戦の集計（成績・順位・タイトル・規定の試合数・試合一覧・年と月の選択肢・選手の試合・期間の集計・オフの出場機会・戦力分析の起用・FA の日数・選手の通算・`GameRepository` の一覧）は**公式戦だけ**。試合そのもの（`find_by_id`・保存）・世界の今日・直近の登板（疲労）・試合の見どころ（id で引く）・世界の削除・管理画面と道具は**全区分**。ポストシーズンだけを読む箇所は S1 には無い（S3 の `PostseasonQuery`、S4 の成績表）。
@@ -44,7 +44,7 @@
 
 **実測**（開発 DB のコピー。実データ 3,480 試合＋2リーグ12球団の世界で 2026 年の公式戦を消化（858 試合）。合計 4,338 試合）
 
-- マイグレーション `0048_game_stage`: 2.4 秒（SQLite は既定値つきの AddField で表を作り直す）
+- マイグレーション `0049_game_stage`（main の #168 段階B の `0048_pennant_release_plan` と番号がぶつかったので、main の取り込みで 0048 から付け直した）: 2.4 秒（SQLite は既定値つきの AddField で表を作り直す）
 - 実データの主要画面（`measure_pages`）と世界の主要画面（GM ホーム・順位表・リーグ・タイトル・成績一覧・試合一覧・歴代・選手一覧・選手ページ・試合詳細・戦力分析の4タブ）: **クエリ数はすべて同じ**。応答と SQL 時間は前後で揺れの範囲（同じ DB を変更前のコードで2回測った値の幅に収まる。例: 世界の選手一覧 342〜413ms → 333ms、実データのリーグ成績 241〜268ms → 227ms）
 - シーズンを締める処理: 0.55〜0.75 秒（変更前）→ 0.51 秒（変更後）、1週間を進める（36試合）: 1.06〜1.34 秒 → 1.02 秒。結果（引退・戦力外・新人の人数、作った日程）は前後で同じ
 - → **索引は足さない**。区分の条件は `myapp_game` の行に対する `stage = '公式戦'` の1つで、明細からの JOIN は既に試合の行を引いている。ポストシーズンの試合が増える S3 の後に、8リーグの世界で測り直す

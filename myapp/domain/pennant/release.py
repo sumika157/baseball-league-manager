@@ -8,25 +8,36 @@
 - **支配下の空き**（`release_counts`）: ふだんの新人（`draft.USUAL_DRAFTEES`）を迎えても天井（帯の上端か支配下の上限の
   低い方）を超えない人数まで外す。式は `OPENING_REGISTERED_BAND.excess` が出典（ドラフトの `gap` と同じ天井）。
   外すのは、その年の主力（`PlayingTime.is_regular`）と入団1年目を除いた支配下から、残す価値（`keep_value`）の低い順
-- **外国人の入れ替え**（`is_replaceable_foreigner`）: 外国人は、残す価値が**新しく迎える外国人に見込める価値**
-  （`foreign_prospect_value`。ドラフトの外国人の新人の分布から導く）を下回れば、主力でも外す
+- **外国人の入れ替え**（`is_replaceable_foreigner`）: 外国人は、能力で測れる価値（`ability_value`。実績の加点は
+  足さない）が**新しく迎える外国人に見込める価値**（`foreign_prospect_value`。ドラフトの外国人の新人の分布から
+  導く）を下回れば、主力でも外す
   （入団1年目は `FIRST_YEAR_FOREIGN_MARGIN` 点の余裕を持たせる）。
   全員が下回れば全員を入れ替える。外した外国人はドラフトが同じオフに目標（`draft.foreign_target`）まで補う
 
 どちらも育成は外さない（#170・#174）。位置の最低人数（`draft.MIN_BY_POSITION`）を割らず、候補が足りなければ
 外せる分だけ（締める処理を失敗させない）。外国人を外した分も支配下の空きに数える。
+
+残す価値（`keep_value`）は、総合値に若さの上乗せと**実績の加点**（`track_record_credit`。生え抜き・その球団での
+在籍年数・世界の通算の実績・主将。2026-10-12 ユーザー決定）を足したもの。実績は外されにくくするだけで、
+試合には効かない。外国人の入れ替えの比較には使わない。
+
+GM は受け持つ球団の戦力外を手動で指名できる（`ReleasePlan`。検査は `ensure_releasable`）。手動の球団は指名どおりに外し
+（`releases_as_chosen`）、上の規則（自動）を使わない。AI 球団は常に自動。
 """
 
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from statistics import fmean
 
+from ..exceptions import InvalidReleasePlan
+from ..simulation.manager import LINEUP_SIZE
 from ..value_objects import Position
+from .club_plan import ClubMember, lineup_capacity, playable_shortfall
 from .draft import FOREIGN_AGE_RANGE, MIN_BY_POSITION, USUAL_DRAFTEES, DraftRoute, expected_rookie_ratings
-from .offseason_player import OffseasonClub, OffseasonPlayer, player_age, retirement_value
+from .offseason_player import OffseasonClub, OffseasonPlayer, TrackRecord, player_age, retirement_value
 from .roster import OPENING_REGISTERED_BAND
 
 # 残す価値の年齢の補正。この年齢より若い選手は、1歳につき `YOUTH_CREDIT` 点だけ総合値に上乗せして残しやすくする
@@ -37,6 +48,24 @@ YOUTH_CREDIT = 1.0
 # （2026-10-12 ユーザー決定。0 だと、見込みの平均の近くで入った1年目の外国人が成績と関係なく半分近く外れる。
 # 値は実測で決めた。Wiki「ペナントモードの仕組み」の「戦力外」）
 FIRST_YEAR_FOREIGN_MARGIN = 5.0
+
+# 実績の加点（`track_record_credit`。2026-10-12 ユーザー決定）。値は実測で決めた（Wiki「ペナントモードの仕組み」の
+# 「戦力外」）。
+# 通算の実績は「主力の1シーズンぶん ≒ 1点」に揃える（野手は安打と本塁打、投手は勝利・セーブ・ホールド）
+HITS_PER_POINT = 150
+HOME_RUNS_PER_POINT = 50
+WINS_PER_POINT = 10
+SAVES_PER_POINT = 30
+HOLDS_PER_POINT = 30
+# 通算の実績1点あたりの加点
+CAREER_CREDIT = 1.0
+# その球団に在籍した1年あたりの加点
+SEASON_CREDIT = 0.25
+# 生え抜き・主将の加点
+HOMEGROWN_CREDIT = 1.0
+CAPTAIN_CREDIT = 2.0
+# 加点の上限（実績だけで、能力の衰えた選手をいつまでも残さない）
+MAX_TRACK_RECORD_CREDIT = 6.0
 
 
 @dataclass(frozen=True)
@@ -61,16 +90,49 @@ def youth_credit(age: int) -> float:
     return YOUTH_CREDIT * max(0, PRIME_AGE - age)
 
 
-def keep_value(player: OffseasonPlayer, *, year: int, start_year: int) -> float:
-    """残す価値。総合値（`retirement_value`。捕手は守備力と打撃の大きい方）に、若さの上乗せを足す。低いほど外される。"""
+def career_points(record: TrackRecord) -> float:
+    """世界の通算の実績を「主力の1シーズンぶん ≒ 1点」に揃えた値。野手は安打と本塁打、投手は勝利・セーブ・ホールド。"""
+    return (
+        record.hits / HITS_PER_POINT
+        + record.home_runs / HOME_RUNS_PER_POINT
+        + record.wins / WINS_PER_POINT
+        + record.saves / SAVES_PER_POINT
+        + record.holds / HOLDS_PER_POINT
+    )
+
+
+def track_record_credit(record: TrackRecord) -> float:
+    """実績の加点（点）。能力で測れない価値（2026-10-12 ユーザー決定）で、残す価値に足して外されにくくするだけ。
+
+    通算の実績（`career_points`）・その球団での在籍年数・生え抜き・主将の和で、`MAX_TRACK_RECORD_CREDIT` で頭打ち。
+    """
+    credit = (
+        CAREER_CREDIT * career_points(record)
+        + SEASON_CREDIT * record.seasons
+        + (HOMEGROWN_CREDIT if record.homegrown else 0.0)
+        + (CAPTAIN_CREDIT if record.is_captain else 0.0)
+    )
+    return min(MAX_TRACK_RECORD_CREDIT, credit)
+
+
+def ability_value(player: OffseasonPlayer, *, year: int, start_year: int) -> float:
+    """能力で測れる価値。総合値（`retirement_value`。捕手は守備力と打撃の大きい方）に、若さの上乗せを足す。
+
+    外国人の入れ替えは、これを新しく迎える外国人の見込み（`foreign_prospect_value`）と比べる。
+    """
     ratings = None if player.ratings is None else player.ratings.ratings
     return retirement_value(player.position, ratings) + youth_credit(
         player_age(player.profile, year, start_year=start_year)
     )
 
 
+def keep_value(player: OffseasonPlayer, *, year: int, start_year: int) -> float:
+    """残す価値。能力で測れる価値（`ability_value`）に、実績の加点（`track_record_credit`）を足す。低いほど外される。"""
+    return ability_value(player, year=year, start_year=start_year) + track_record_credit(player.track_record)
+
+
 def foreign_prospect_value(position: Position) -> float:
-    """新しく迎える外国人に見込める残す価値（`keep_value` と同じ物差し）。
+    """新しく迎える外国人に見込める価値（`ability_value` と同じ物差し。新しく迎える外国人に実績は無い）。
 
     能力はドラフトの外国人の新人の平均（`draft.expected_rookie_ratings`。錨の前の尺度で、今の選手の能力と同じ尺度）、
     若さの上乗せは外国人の新人の年齢（`draft.FOREIGN_AGE_RANGE`。範囲の整数から一様に引く）の平均。
@@ -88,16 +150,19 @@ def is_release_candidate(player: OffseasonPlayer, *, year: int) -> bool:
 
 
 def is_replaceable_foreigner(player: OffseasonPlayer, *, year: int, start_year: int) -> bool:
-    """新しい外国人と入れ替える外国人か。支配下の外国人で、残す価値が新しく迎える外国人の見込みを下回る（主力も）。
+    """新しい外国人と入れ替える外国人か。支配下の外国人で、能力で測れる価値（`ability_value`）が新しく迎える
+    外国人の見込みを下回る（主力も）。
 
     入団1年目の外国人は、見込みから `FIRST_YEAR_FOREIGN_MARGIN` を引いた値と比べる（大きく下回るときだけ外す）。
+    実績の加点は足さない（比べる相手は実績の無い新しい外国人の能力の見込み。足すと世界の中で活躍した外国人が
+    入れ替わらなくなり、外国人の戦力外が約半分に減った。実測は Wiki「ペナントモードの仕組み」の「戦力外」）。
     """
     if not (player.is_registered and player.profile.is_foreign_player):
         return False
     threshold = foreign_prospect_value(player.position)
     if player.is_first_year(year):
         threshold -= FIRST_YEAR_FOREIGN_MARGIN
-    return keep_value(player, year=year, start_year=start_year) < threshold
+    return ability_value(player, year=year, start_year=start_year) < threshold
 
 
 def decide_releases(
@@ -135,3 +200,72 @@ def decide_releases(
     if counts.registered > len(chosen):
         take(order([p for p in remaining if is_release_candidate(p, year=year)]), counts.registered)
     return tuple(chosen)
+
+
+# --- GM の指名（受け持つ球団だけ） ---
+
+
+@dataclass(frozen=True)
+class ReleasePlan:
+    """GM の戦力外の指名。球団ごとに1つで、締める年 `year` のオフに使う。
+
+    `player_ids` が None なら自動（AI と同じ規則）、空なら手動で0人。`ClubPlan` と同じく GM の上書き（入力）だけを
+    持ち、締めた時点で消す（戦力外の事実は在籍の退団の経路に1つだけ残す）。コンストラクタは保存した値をそのまま写すので
+    検査しない（検査は決めるときの `ensure_releasable`）。
+    """
+
+    team_id: int
+    year: int
+    player_ids: frozenset[int] | None = None
+
+    @property
+    def is_manual(self) -> bool:
+        return self.player_ids is not None
+
+
+def ensure_releasable(
+    player_ids: Sequence[int], registered: Sequence[ClubMember], *, foreign_game_limit: int | None
+) -> None:
+    """戦力外の指名として成立するか。成立しなければ `InvalidReleasePlan`。
+
+    - `registered`: 球団の、いま在籍している支配下の選手（育成は外せない。#170・#174）
+    - `foreign_game_limit`: 世界のリーグで最も厳しい出場枠（`strictest_game_limit`）
+
+    指名できるのは支配下の在籍選手だけで、重複しない。外した後に、位置の最低人数（`draft.MIN_BY_POSITION`）を割らず、
+    残る支配下で試合を組めること（`playable_shortfall`・外国人の出場枠の中でスタメン9人）。
+    主力・入団1年目も GM は外せる（AI が外さないのは自動の規則で、GM の判断は縛らない）。帯は見ない。
+    """
+    if len(set(player_ids)) != len(player_ids):
+        raise InvalidReleasePlan("戦力外に同じ選手が重複しています。")
+    by_id = {member.player_id: member for member in registered}
+    unknown = [player_id for player_id in player_ids if player_id not in by_id]
+    if unknown:
+        raise InvalidReleasePlan(
+            f"戦力外にできるのは、この球団に在籍している支配下の選手だけです（id={unknown[0]}）。"
+        )
+    leaving = set(player_ids)
+    remaining = [member for member in registered if member.player_id not in leaving]
+    before = Counter(member.position for member in registered)
+    after = Counter(member.position for member in remaining)
+    for position, minimum in MIN_BY_POSITION.items():
+        if after[position] < before[position] and after[position] < minimum:
+            raise InvalidReleasePlan(
+                f"{position.value}は支配下に{minimum}人以上残す必要があります（外すと{after[position]}人）。"
+            )
+    shortfall = playable_shortfall((member.position for member in remaining), subject="残る支配下")
+    if shortfall is not None:
+        raise InvalidReleasePlan(shortfall)
+    if foreign_game_limit is not None and lineup_capacity(remaining, foreign_game_limit) < LINEUP_SIZE:
+        raise InvalidReleasePlan(
+            f"外国人選手の出場は1試合{foreign_game_limit}人までなので、残る支配下ではスタメン{LINEUP_SIZE}人を組めません。"
+            "外国人でない野手を残してください。"
+        )
+
+
+def releases_as_chosen(chosen: Collection[int], remaining: Sequence[OffseasonPlayer]) -> tuple[int, ...]:
+    """手動の指名から、締めるときに外す選手（id の昇順）。`remaining` は引退しなかった選手。
+
+    指名した後に引退した選手（引退として記録する）・支配下でなくなった選手は黙って除く。帯は見ない。
+    """
+    registered = {player.player_id for player in remaining if player.is_registered}
+    return tuple(sorted(registered.intersection(chosen)))

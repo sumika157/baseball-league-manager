@@ -12,6 +12,9 @@
 **中では、最後の試合日と次の対戦の日が読み込みの前と変わっていないこと・翌年の能力が無いことを読み直してから書く**。
 変わっていたら（外で計算している間に別のリクエストが締めた・進めた）、書かずに既存の例外
 （`AlreadyClosed` / `SeasonNotFinished`）で断る。編成（`ClubPlan`）は GM が保存しうるので、書く直前に中で読む。
+受け持つ球団の戦力外の指名（`ReleasePlan`）も GM が保存しうるが、こちらは計算に使うので `_state()` に入れて前後で比べる
+（変わっていたら断る）。指名を決める操作（`set_releases` など）もこのサービスが持つ
+（締められるかの検査 `_check` を1か所に保つ）。
 
 **前提: 世界の `Team` 集約に書くのは、世界の作成とこの処理だけ。** 外で読んだ `Team` を中でそのまま
 `save()` して安全なのは、この前提による（`save()` は変わった行だけを書くが、比べる相手は今の DB なので、
@@ -31,10 +34,12 @@ from dataclasses import dataclass
 from datetime import date
 
 from ..domain.entities import Player, Team
-from ..domain.exceptions import AlreadyClosed, SeasonLimitReached, SeasonNotFinished
-from ..domain.pennant.club_plan import PlanSection
+from ..domain.exceptions import AlreadyClosed, SeasonLimitReached, SeasonNotFinished, TeamNotFound
+from ..domain.pennant.club_plan import ClubMember, PlanSection, strictest_game_limit
 from ..domain.pennant.offseason import Draftee, OffseasonClub, OffseasonPlan, OffseasonPlayer, plan_offseason
+from ..domain.pennant.offseason_player import TrackRecord
 from ..domain.pennant.ratings import PlayerRatings
+from ..domain.pennant.release import ReleasePlan, ensure_releasable
 from ..domain.pennant.retirement import PlayingTime
 from ..domain.pennant.schedule import Fixture, season_schedule
 from ..domain.pennant.season import SeasonPhase, is_final_season, is_season_closed, season_phase, season_year
@@ -44,11 +49,12 @@ from ..domain.repositories import (
     FixtureRepository,
     LeagueRepository,
     RatingsRepository,
+    ReleasePlanRepository,
     TeamRepository,
     WorldRepository,
 )
 from ..domain.value_objects import ContractStatus, DepartureRoute, JerseyNumber, RosterLimits
-from .dto import SeasonClosed, SeasonCloseOption
+from .dto import ReleasePlanView, ReleasePlayerRow, SeasonClosed, SeasonCloseOption, SimulationTeam
 from .pennant_season import AtomicBlock
 from .queries import SeasonPlayingTimeQuery, SimulationContextQuery
 
@@ -91,6 +97,7 @@ class PennantOffseasonService:
         fixtures: FixtureRepository,
         ratings: RatingsRepository,
         plans: ClubPlanRepository,
+        releases: ReleasePlanRepository,
         context_query: SimulationContextQuery,
         playing_time: SeasonPlayingTimeQuery,
         atomic: AtomicBlock,
@@ -102,6 +109,7 @@ class PennantOffseasonService:
         self._fixtures = fixtures
         self._ratings = ratings
         self._plans = plans
+        self._releases = releases
         self._context_query = context_query
         self._playing_time = playing_time
         self._atomic = atomic
@@ -120,7 +128,10 @@ class PennantOffseasonService:
                 can_close=False,
                 reason=str(error),
             )
-        return SeasonCloseOption(year=year, next_year=year + 1, can_close=True)
+        chosen = self._chosen_releases(self._managed_release_plan(), year)
+        return SeasonCloseOption(
+            year=year, next_year=year + 1, can_close=True, release_count=None if chosen is None else len(chosen)
+        )
 
     def close_season(self, *, expected_year: int | None = None) -> SeasonClosed:
         """シーズンを締める。締める年は最後に試合をした年 Y で、翌年 Y+1 の在籍・能力・日程を作る。
@@ -151,9 +162,22 @@ class PennantOffseasonService:
             self._ensure_not_closed(world, year)
             return self._commit(world, prepared)
 
-    def _state(self) -> tuple[date | None, date | None, tuple[int, int, int]]:
-        """締められるかを決める事実（最後に試合をした日・次の対戦の日・在籍の目印）。読み込みの前後で比べる。"""
-        return self._context_query.last_played_on(), self._fixtures.first_date(), self._teams.roster_signature()
+    def _state(self) -> tuple[date | None, date | None, tuple[int, int, int], ReleasePlan | None]:
+        """締められるかと何を書くかを決める事実（最後に試合をした日・次の対戦の日・在籍の目印・受け持つ球団の戦力外の指名）。
+
+        読み込みの前後で比べる。戦力外の指名は GM が締める処理の計算中にも保存しうるので、ここに入れる（#100）。
+        """
+        return (
+            self._context_query.last_played_on(),
+            self._fixtures.first_date(),
+            self._teams.roster_signature(),
+            self._managed_release_plan(),
+        )
+
+    def _managed_release_plan(self) -> ReleasePlan | None:
+        """受け持つ球団の戦力外の手動の指名（自動・受け持ちが無いなら None）。"""
+        team_id = self._worlds.find_by_id(self._world_id).managed_team_id
+        return None if team_id is None else self._releases.find_by_team(team_id)
 
     def _ensure_not_closed(self, world: World, year: int) -> None:
         if is_season_closed(
@@ -162,6 +186,86 @@ class PennantOffseasonService:
             next_year_ratings_exist=bool(self._ratings.find_by_year(year + 1)),
         ):
             raise AlreadyClosed(f"{year}年のシーズンは既に締めています。", year=year)
+
+    # --- 戦力外の指名（受け持つ球団だけ。シーズン終了で締められるときだけ） ---
+
+    def release_view(self) -> ReleasePlanView:
+        """編成画面の「戦力外」タブの材料。締められないとき（シーズン中・締めた後・最終シーズン）は例外。
+
+        - `SeasonNotFinished` / `AlreadyClosed` / `SeasonLimitReached`: 締められない（タブを出さない）
+        - `TeamNotFound`: 受け持つ球団が無い
+        """
+        world = self._worlds.find_by_id(self._world_id)
+        year = self._check(world, expected_year=None)
+        self._ensure_not_closed(world, year)
+        team_id = self._managed_team_id(world)
+        team = _team_of(self._context_query.teams(), team_id)
+        chosen = self._chosen_releases(self._releases.find_by_team(team_id), year)
+        return ReleasePlanView(
+            team_id=team_id,
+            team_name=team.name,
+            year=year,
+            is_manual=chosen is not None,
+            chosen_ids=chosen if chosen is not None else frozenset(),
+            players=tuple(
+                ReleasePlayerRow(player_id=p.player_id, name=p.name, position=p.position, is_foreign=p.is_foreign)
+                for p in team.players
+            ),
+        )
+
+    def start_manual_releases(self, *, expected_year: int | None) -> None:
+        """戦力外を手動にする（0人から選ぶ）。すでに手動なら何も変えない。"""
+        year, team_id = self._release_target(expected_year)
+        current = self._releases.find_by_team(team_id)
+        if current is None or current.year != year:
+            self._releases.save(ReleasePlan(team_id=team_id, year=year, player_ids=frozenset()))
+
+    def set_releases(self, player_ids: Sequence[int], *, expected_year: int | None) -> None:
+        """戦力外を手動で指名する（丸ごと置き換える。0人も可）。成立しなければ `InvalidReleasePlan`。"""
+        year, team_id = self._release_target(expected_year)
+        teams = self._context_query.teams()
+        players = _team_of(teams, team_id).players
+        ensure_releasable(
+            player_ids,
+            [ClubMember(p.player_id, p.name, p.position, p.is_foreign) for p in players],
+            foreign_game_limit=strictest_game_limit(t.foreign_game_limit for t in teams),
+        )
+        self._releases.save(ReleasePlan(team_id=team_id, year=year, player_ids=frozenset(player_ids)))
+
+    def reset_releases(self, *, expected_year: int | None) -> None:
+        """戦力外を自動に戻す。すでに自動なら何も変わらない。"""
+        year, team_id = self._release_target(expected_year)
+        self._releases.save(ReleasePlan(team_id=team_id, year=year, player_ids=None))
+
+    def _release_target(self, expected_year: int | None) -> tuple[int, int]:
+        """指名を変えられるか（締められる年が画面を開いたときの年と同じ）を調べ、締める年と受け持つ球団を返す。"""
+        world = self._worlds.find_by_id(self._world_id)
+        year = self._check(world, expected_year=expected_year)
+        self._ensure_not_closed(world, year)
+        return year, self._managed_team_id(world)
+
+    @staticmethod
+    def _managed_team_id(world: World) -> int:
+        if world.managed_team_id is None:
+            raise TeamNotFound("この世界には、受け持つ球団が決まっていません。")
+        return world.managed_team_id
+
+    def _manual_releases(self, world: World, year: int) -> dict[int, frozenset[int]]:
+        """締める処理が使う手動の指名（受け持つ球団の、締める年の指名だけ。AI 球団は常に自動）。"""
+        if world.managed_team_id is None:
+            return {}
+        chosen = self._chosen_releases(self._releases.find_by_team(world.managed_team_id), year)
+        return {} if chosen is None else {world.managed_team_id: chosen}
+
+    @staticmethod
+    def _chosen_releases(plan: ReleasePlan | None, year: int) -> frozenset[int] | None:
+        """締める年 `year` に使う手動の指名。自動なら None。
+
+        締める年と違う指名（保存した年のまま締めなかったもの。ふつうは締めるときに消えるので残らない）は使わない。
+        """
+        if plan is None or plan.year != year:
+            return None
+        return plan.player_ids
 
     # --- 検査 ---
 
@@ -198,6 +302,7 @@ class PennantOffseasonService:
         limits = {league.id: league.roster_limits for league in self._leagues.find_all()}
         ratings_by_player = {item.player_id: item for item in self._ratings.find_by_year(year)}
         playing = self._playing_time.for_year(year)
+        manual = self._manual_releases(world, year)
 
         clubs = [
             OffseasonClub(
@@ -217,6 +322,7 @@ class PennantOffseasonService:
             world_seed=world.seed,
             start_year=world.start_year,
             used_names={player.name for team in teams for player in team.players},
+            manual_releases=manual,
         )
         changes = self._apply_roster_changes(teams, plan, limits, year)
         schedule = season_schedule(
@@ -244,6 +350,8 @@ class PennantOffseasonService:
         self._ratings.add_all([*retained, *rookie_ratings])
 
         reverted, reverted_clubs = self._revert_plans(plan, world)
+        # 戦力外の指名は使い終わった（締める年の違う指名も、使わずに消す）。事実は在籍の退団の経路に残る
+        self._releases.delete_all()
         self._fixtures.add_all(prepared.schedule)
 
         return SeasonClosed(
@@ -338,9 +446,26 @@ def _offseason_player(
         # （`Team.registered_player_count`）と同じ判定なので、domain の指名数が上限を超えない
         contract=team.contract_of(player),
         playing_time=playing.get(player_id, PlayingTime()),
+        # 実績の加点の材料。通算成績は `find_all_with_roster` が世界の試合から集計した値（保存しない）
+        track_record=TrackRecord.of(
+            team_id=_saved_id(team.id),
+            career=player.career,
+            year=year,
+            batting=player.batting,
+            pitching=player.pitching,
+            is_captain=team.current_captain is player,
+        ),
     )
 
 
 def _limits_of(team: Team, limits: Mapping[int | None, RosterLimits]) -> RosterLimits:
     """球団のリーグの人数の上限。リーグが見つからなければ無制限（世界の球団はどれもリーグに属す）。"""
     return limits.get(team.league_id, RosterLimits.UNLIMITED)
+
+
+def _team_of(teams: Sequence[SimulationTeam], team_id: int) -> SimulationTeam:
+    """球団と、いま在籍している支配下の選手（`SimulationContextQuery.teams()` は育成を含まない）。"""
+    team = next((team for team in teams if team.team_id == team_id), None)
+    if team is None:
+        raise TeamNotFound(f"球団が見つかりません（id={team_id}）。")
+    return team

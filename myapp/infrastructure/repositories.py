@@ -48,6 +48,7 @@ from ..domain.exceptions import (
 )
 from ..domain.pennant.club_plan import ClubPlan, LineupChoice
 from ..domain.pennant.ratings import PlayerRatings
+from ..domain.pennant.release import ReleasePlan
 from ..domain.pennant.schedule import Fixture
 from ..domain.pennant.world import World, WorldScope
 from ..domain.services import ensure_lines_match_plate_appearances
@@ -85,6 +86,7 @@ from .scoping import (
     leagues_in,
     players_in,
     ratings_in,
+    release_plans_in,
     stage_condition,
     stints_in,
     teams_in,
@@ -1362,9 +1364,11 @@ class DjangoLeagueRepository:
 _GAME_ROUTE = "home_team__league"
 _WORLD_ROWS_CHILD_FIRST: tuple[tuple[type[models.Model], str], ...] = (
     # 能力は選手の在籍をたどって世界が決まるので、在籍を消す前に消す
-    # 編成は選手を指すので、選手を消す前に消す（行から先に）
+    # 編成と戦力外の指名は選手を指すので、選手を消す前に消す（行から先に）
     (orm_models.PennantClubPlanEntry, "plan__team__league"),
     (orm_models.PennantClubPlan, "team__league"),
+    (orm_models.PennantReleasePlanEntry, "plan__team__league"),
+    (orm_models.PennantReleasePlan, "team__league"),
     (orm_models.PennantPlayerRatings, "player__stints__team__league"),
     # FA 宣言も選手の在籍をたどって世界が決まるので、在籍を消す前に消す
     (orm_models.PlayerFreeAgentDeclaration, "player__stints__team__league"),
@@ -1605,6 +1609,50 @@ class DjangoClubPlanRepository:
             rotation=rotation or None,
             closer_id=row.closer_id,
         )
+
+
+class DjangoReleasePlanRepository:
+    """ReleasePlanRepository の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る。
+
+    戦力外の指名はペナント専用で、実データの範囲には書けない。他の世界の球団の指名は、読めも書けもしない。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def find_by_team(self, team_id: int) -> ReleasePlan | None:
+        if not teams_in(self._scope).filter(id=team_id).exists():
+            raise TeamNotFound(f"球団が見つかりません（id={team_id}）。")
+        row = release_plans_in(self._scope).prefetch_related("entries").filter(team_id=team_id).first()
+        if row is None:
+            return None
+        return ReleasePlan(
+            team_id=row.team_id, year=row.year, player_ids=frozenset(entry.player_id for entry in row.entries.all())
+        )
+
+    @transaction.atomic
+    def save(self, plan: ReleasePlan) -> ReleasePlan:
+        if self._scope.is_real:
+            raise InvalidWorld("戦力外の指名はペナントの世界にだけ保存できます。")
+        if not teams_in(self._scope).filter(id=plan.team_id).exists():
+            raise TeamNotFound(f"球団が見つかりません（id={plan.team_id}）。")
+        if plan.player_ids is None:
+            release_plans_in(self._scope).filter(team_id=plan.team_id).delete()
+            return plan
+        known = set(players_in(self._scope).filter(id__in=plan.player_ids).values_list("id", flat=True))
+        if missing := sorted(plan.player_ids - known):
+            raise PlayerNotFound(f"この世界に居ない選手は戦力外に指名できません（id={missing[0]}）。")
+        row, _ = orm_models.PennantReleasePlan.objects.update_or_create(  # type: ignore[misc]
+            team_id=plan.team_id, defaults={"year": plan.year}
+        )
+        row.entries.all().delete()
+        entries = orm_models.PennantReleasePlanEntry
+        entries.objects.bulk_create([entries(plan=row, player_id=player_id) for player_id in sorted(plan.player_ids)])
+        return plan
+
+    def delete_all(self) -> None:
+        # 行は外部キーの CASCADE で消える（1世界に高々球団の数だけなので、collector に任せてよい）
+        release_plans_in(self._scope).delete()
 
 
 class DjangoWorldRepository:

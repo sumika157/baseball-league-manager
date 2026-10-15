@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('myapp', '0047_playerstint_left_via'),
+        ('myapp', '0048_pennant_release_plan'),
     ]
 
     operations = [

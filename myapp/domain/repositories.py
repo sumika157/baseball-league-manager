@@ -18,6 +18,7 @@ from typing import Protocol, runtime_checkable
 from .entities import Game, League, Team
 from .pennant.club_plan import ClubPlan
 from .pennant.ratings import PlayerRatings
+from .pennant.release import ReleasePlan
 from .pennant.schedule import Fixture
 from .pennant.world import World
 
@@ -248,4 +249,28 @@ class ClubPlanRepository(Protocol):
         球団に在籍していない選手が入っていても保存は止めない（在籍は変わるので、使える
         かどうかは進めるときに `resolve_club` が判断する）。範囲の外の選手だけは書けない（PlayerNotFound）。
         """
+        ...
+
+
+@runtime_checkable
+class ReleasePlanRepository(Protocol):
+    """GM の戦力外の指名（`ReleasePlan`）。球団ごとに1つで、自動（`player_ids` が None）は行を持たない。
+
+    ペナントの世界にだけ置ける。締める処理が使い終わったら消す（指名は入力で、事実は在籍の退団の経路に残る）。
+    """
+
+    def find_by_team(self, team_id: int) -> ReleasePlan | None:
+        """その球団の手動の指名。自動なら None。範囲の外の球団は TeamNotFound。"""
+        ...
+
+    def save(self, plan: ReleasePlan) -> ReleasePlan:
+        """指名を丸ごと置き換える。自動（`player_ids` が None）なら保存済みの行を消す。
+
+        範囲の外の球団には書けない（TeamNotFound）。実データの範囲には書けない（InvalidWorld）。
+        範囲の外の選手は書けない（PlayerNotFound）。
+        """
+        ...
+
+    def delete_all(self) -> None:
+        """範囲の指名をすべて消す（締める処理が、使い終わった指名と締める年の違う指名を消す）。"""
         ...

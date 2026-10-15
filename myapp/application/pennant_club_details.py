@@ -19,6 +19,7 @@ from .dto import (
     ClubPitchingStat,
     ClubPlayerDetail,
     ClubPlayerRow,
+    ReleasePlayerRow,
 )
 from .pennant_ratings import overall_cell, rating_cells
 from .queries import PlayerStatsQuery
@@ -32,7 +33,9 @@ class ClubDetailsService:
         self._ratings = ratings
         self._today = today
 
-    def details(self, team_id: int, year: int, players: Sequence[ClubPlayerRow]) -> tuple[ClubPlayerDetail, ...]:
+    def details[Row: (ClubPlayerRow, ReleasePlayerRow)](
+        self, team_id: int, year: int, players: Sequence[Row]
+    ) -> tuple[ClubPlayerDetail[Row], ...]:
         """`players` と同じ並びで、年 `year` の能力と今季（`year` 年）の成績・年齢を添える。"""
         rows = {row.player_id: row for row in self._stats.list_roster(year=year, team_id=team_id, with_profile=True)}
         ratings = {
