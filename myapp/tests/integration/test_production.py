@@ -112,6 +112,17 @@ class ProductionSettingsTest(SimpleTestCase):
                 self.assertEqual(result.stdout.splitlines()[0], expected)
                 self.assertIn("no issues", result.stdout)
 
+    def test_session_cookie_name_can_be_changed_for_previews(self):
+        """worktree のプレビュー（scripts/preview.py）は、ポートごとにセッションのクッキー名を変える。
+        localhost のクッキーはポートで分かれないので、同じ名前だと localhost:8000 のログインが切れる。"""
+        code = "from django.conf import settings as s\nprint(s.SESSION_COOKIE_NAME)\n"
+        renamed = {"DJANGO_SESSION_COOKIE_NAME": "sessionid_8001"}
+        for extra, expected in (({}, "sessionid"), (renamed, "sessionid_8001")):
+            with self.subTest(extra=extra):
+                result = run_python(code, extra)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), expected)
+
     def test_production_environment_enables_wal_and_whitenoise(self):
         """本番の環境変数で、SQLite が WAL になり、WhiteNoise が SecurityMiddleware の直後に入る。"""
         with tempfile.TemporaryDirectory() as tmp:
