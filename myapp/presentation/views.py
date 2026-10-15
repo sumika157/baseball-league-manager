@@ -269,9 +269,9 @@ def build_pennant_ratings_service(world_id: int) -> PennantRatingsViewService:
 
 
 def build_recording_service() -> GameRecordingService:
-    """スコアブックを保存するサービスを組み立てる。
+    """試合の登録とスコアブックの保存を担うサービスを組み立てる。
 
-    `build_service()` と同じく**組み立てはここだけ**にする。打席の記録は
+    `build_service()` と同じく**組み立てはここだけ**にする。試合の登録も打席の記録も
     チームの一覧も試合の一覧も要らないので、依存は4つ（試合・チーム・リーグ・本拠地の球場）で足りる。実データの範囲に固定する。
     """
     scope = WorldScope.real()
@@ -1388,7 +1388,7 @@ def game_create(request):
             messages.error(request, "どちらのチームも担当していないため、この試合は登録できません。")
         else:
             try:
-                game = service.create_game(
+                game = build_recording_service().create_game(
                     year=form.cleaned_data["year"],
                     played_on=form.cleaned_data["played_on"],
                     home_team_id=home_team_id,
@@ -1416,10 +1416,8 @@ def game_edit(request, game_id):
     require_GET により POST は 405 になり、旧フォームからの投稿が
     黙って捨てられて 200 が返る、という無反応な行き止まりを避ける）。
     """
-    service = build_service()
-
     try:
-        data = service.get_game_edit_data(game_id)
+        data = build_recording_service().get_game_edit_data(game_id)
     except GameNotFound:
         raise Http404("試合が見つかりません。") from None
 
