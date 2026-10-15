@@ -34,13 +34,17 @@ PRODUCTION_ENV = {
     "DJANGO_BEHIND_PROXY": "True",
     "DJANGO_SSL_REDIRECT": "True",
     "DJANGO_SECURE_COOKIES": "True",
-    "DJANGO_HSTS_SECONDS": "31536000",
+    "DJANGO_HSTS_SECONDS": "3600",
 }
 
 # 既定（開発・テスト）に戻すため、親プロセスの環境から外す変数
 SWITCHES = {key for key in PRODUCTION_ENV if key not in ("DJANGO_SECRET_KEY", "DJANGO_ALLOWED_HOSTS")}
 # E2E テスト（Playwright）が親プロセスに足す変数。本番の検査（async.E001）に引っかかるので外す
 SWITCHES.add("DJANGO_ALLOW_ASYNC_UNSAFE")
+# 鍵の入れ替え中だけ .env に書く変数。親の環境に残っていても既定の検査を狂わせない
+SWITCHES.add("DJANGO_SECRET_KEY_FALLBACKS")
+# HSTS のサブドメインとプリロード（本番の既定では付けない。付けたときのテストで足す）
+SWITCHES.update({"DJANGO_HSTS_INCLUDE_SUBDOMAINS", "DJANGO_HSTS_PRELOAD"})
 
 
 def run_python(code: str, extra_env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -90,6 +94,24 @@ class ProductionSettingsTest(SimpleTestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("no issues", result.stdout)
 
+    def test_hsts_subdomains_and_preload_are_opt_in(self):
+        """本番の値では HSTS にサブドメインとプリロードを付けず、環境変数で明示したときだけ付ける。
+        どちらの場合も `check --deploy` は警告を出さない。"""
+        code = (
+            "from django.conf import settings as s\n"
+            "print(s.SECURE_HSTS_SECONDS, s.SECURE_HSTS_INCLUDE_SUBDOMAINS, s.SECURE_HSTS_PRELOAD)\n"
+            "from django.core.management import execute_from_command_line\n"
+            "execute_from_command_line(['manage.py', 'check', '--deploy', '--fail-level', 'WARNING'])"
+        )
+        opt_in = {"DJANGO_HSTS_INCLUDE_SUBDOMAINS": "True", "DJANGO_HSTS_PRELOAD": "True"}
+        for extra, expected in (({}, "3600 False False"), (opt_in, "3600 True True")):
+            with self.subTest(extra=extra), tempfile.TemporaryDirectory() as tmp:
+                env = {**PRODUCTION_ENV, **extra, "DJANGO_DB_PATH": str(Path(tmp) / "db.sqlite3")}
+                result = run_python(code, env)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(result.stdout.splitlines()[0], expected)
+                self.assertIn("no issues", result.stdout)
+
     def test_production_environment_enables_wal_and_whitenoise(self):
         """本番の環境変数で、SQLite が WAL になり、WhiteNoise が SecurityMiddleware の直後に入る。"""
         with tempfile.TemporaryDirectory() as tmp:
@@ -109,6 +131,29 @@ class ProductionSettingsTest(SimpleTestCase):
         self.assertEqual(lines[0], "wal")
         self.assertEqual(lines[1], "1")  # NORMAL
         self.assertIn("whitenoise.middleware.WhiteNoiseMiddleware", lines[2])
+
+    def test_production_environment_sets_sqlite_options(self):
+        """本番の環境変数で、SQLite の OPTIONS（IMMEDIATE・ロック待ち20秒・WAL の初期化）が入る。既定では入らない。"""
+        code = (
+            "from django.conf import settings as s\n"
+            "o = s.DATABASES['default']['OPTIONS']\n"
+            "print(o['transaction_mode'], o['timeout'])\n"
+            "print(o['init_command'])\n"
+        )
+        result = run_python(code, {"DJANGO_SQLITE_WAL": "True"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout.splitlines(),
+            ["IMMEDIATE 20", "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;"],
+        )
+
+    def test_secret_key_fallbacks_come_from_environment(self):
+        """旧い鍵は DJANGO_SECRET_KEY_FALLBACKS（カンマ区切り）から読む。未設定なら空。"""
+        code = "from django.conf import settings as s\nprint(s.SECRET_KEY_FALLBACKS)\n"
+        self.assertEqual(run_python(code, {}).stdout.strip(), "[]")
+        result = run_python(code, {"DJANGO_SECRET_KEY_FALLBACKS": "old-one, old-two"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "['old-one', 'old-two']")
 
 
 class BackupDbCommandTest(TransactionTestCase):

@@ -3,3 +3,5 @@
 PATH=/usr/local/bin:/usr/bin:/bin
 15 3 * * * cd ${app_dir} && docker compose -f docker-compose.prod.yml exec -T web python manage.py backup_db /backups --keep 14 >> /home/ubuntu/backup.log 2>&1
 30 3 * * * aws s3 sync ${app_dir}/backups s3://${bucket}/baseball-backups/ --profile r2 --endpoint-url https://${account_id}.r2.cloudflarestorage.com >> /home/ubuntu/backup.log 2>&1
+# 期限切れのセッション（DB に溜まり続ける）を消す
+45 3 * * * cd ${app_dir} && docker compose -f docker-compose.prod.yml exec -T web python manage.py clearsessions >> /home/ubuntu/backup.log 2>&1

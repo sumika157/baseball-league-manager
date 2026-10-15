@@ -25,6 +25,9 @@ from myapp.presentation.views import build_pennant_season_service, build_world_v
 
 from .test_pennant_advance import SEASON_GAMES, YEAR, SeasonCase
 
+# 1シーズンを終えた世界のシード（同率で終わらないもの）
+FINISHED_SEASON_SEED = 9
+
 
 class HomeCase(SeasonCase):
     """世界A（オーナーは `owner`）。受け持つ球団は「ホーム球団」。"""
@@ -68,6 +71,9 @@ class FinishedSeasonCase(HomeCase):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
+        # 優勝の印を確かめるので、球団2つが同率にならないシードで回す（世界Aのシード7は、
+        # 投手の疲労（#97）を入れたら同率で終わるようになった）
+        orm_models.PennantWorld.objects.filter(id=cls.world_a).update(seed=FINISHED_SEASON_SEED)
         build_pennant_season_service(cls.world_a).advance(AdvanceTarget.SEASON_END)
         (league,) = build_world_view_service(cls.world_a).get_league_standings(YEAR)
         first, second = league.rows[:2]

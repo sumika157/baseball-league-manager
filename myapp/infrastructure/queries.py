@@ -55,7 +55,7 @@ from ..domain.entities import Game, jersey_number_in, winning_team_id
 from ..domain.exceptions import WorldNotFound
 from ..domain.pennant.retirement import PlayingTime
 from ..domain.pennant.world import WorldScope
-from ..domain.simulation.manager import RECENT_PITCHING_DAYS
+from ..domain.simulation.fatigue import RECENT_PITCHING_DAYS
 from ..domain.simulation.ratings import BatterRatings, PitcherRatings
 from ..domain.value_objects import (
     AcquisitionRoute,

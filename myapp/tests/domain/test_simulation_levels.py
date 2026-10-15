@@ -10,6 +10,7 @@ from unittest import TestCase
 
 from myapp.domain.pennant.schedule import ScheduleRules
 from myapp.domain.simulation.engine import simulate_game
+from myapp.domain.simulation.fatigue import PitchingHistory
 from myapp.domain.simulation.levels import (
     LEVEL_TARGETS,
     SEASON_GAMES,
@@ -19,7 +20,7 @@ from myapp.domain.simulation.levels import (
     LevelTarget,
     SeasonTally,
 )
-from myapp.domain.simulation.manager import PitchingHistory, choose_active_roster
+from myapp.domain.simulation.manager import choose_active_roster
 from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.samples import average_club
 

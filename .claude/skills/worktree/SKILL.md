@@ -3,9 +3,19 @@ name: worktree
 description: 並行作業のために git worktree を作り、その中のコードを検査・テストし、終わったら片付ける。ブランチを切るときに他の worktree がある・ユーザーが並行作業だと言った・未コミットの無関係な変更があるとき、または「worktree で作業して」「worktree を消して」と頼まれたときに使う。
 ---
 
-worktree での作業手順。**worktree を使う条件と、罠の理由は `CLAUDE.md`「並行して作業するときは worktree を使う」が出典**で、
-ここには Claude Code から実際に叩くコマンドだけを書く。以下、`<名前>` は `.claude/worktrees/` の下のディレクトリ名、
+worktree での作業手順。**worktree を使う条件は `CLAUDE.md`「並行作業は2本まで、分けるときは worktree」が出典**で、
+ここには Claude Code から実際に叩くコマンドと、この構成の罠とその理由を書く。以下、`<名前>` は `.claude/worktrees/` の下のディレクトリ名、
 `<ブランチ>` はブランチ名。
+
+## この構成の罠（どれもエラーにならないか、原因が分かりにくい形で出る）
+
+- **`make` と `docker compose` は main の作業ツリーから実行し、対象の worktree を明示する。** バインドマウントが `.:/app` なので
+  worktree も同じコンテナから見えるが、`-w` を省くと main のコードを検査・テストして「通ったのに直っていない」形になる。
+  `make ... WT=<名前>` はユーザーの WSL ターミナル用で、**`make` は Windows 側に無い**。Claude Code からは手順2の `docker compose exec -w` を直接叩く。
+- **worktree の中で `docker compose` を叩かない。** worktree 側の `docker-compose.yml` と、gitignore で存在しない `.env` を読み、
+  別プロジェクト＝別コンテナを作りにいって失敗する。
+- **worktree を作ったら `safe.directory` に登録する。** `//wsl.localhost/...` は所有者チェックに引っかかり、登録前は worktree 内で git が
+  一切動かない（`fatal: detected dubious ownership`）。worktree ごとに1行必要で、末尾 `/*` のグロブは `%(prefix)///` と併用すると効かない。
 
 ## 1. 作る
 

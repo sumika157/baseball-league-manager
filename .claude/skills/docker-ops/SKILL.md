@@ -47,9 +47,9 @@ wsl -e bash -c "cd /home/sumika/work/develop/my_django_project && docker compose
 
 読み取り専用の確認コマンド（`ps` / `logs` / `check` / `showmigrations` など）は確認なしで実行してよい。
 `docker compose down` のような状態を壊す操作や、ユーザーデータに影響する操作は実行前に確認する
-（[[permission-prompts-only-for-writes]]）。
+。
 
-## このプロジェクトで踏んだシェルの罠（[[wsl-windows-shell-gotchas]] 参照）
+## このプロジェクトで踏んだシェルの罠
 
 **Git Bash の MSYS パス変換**
 先頭がスラッシュの引数は Windows パスに変換される（`/accounts/login/` → `C:/Program Files/Git/accounts/login/`）。URL パスや `curl -w` の書式を渡すときは `MSYS_NO_PATHCONV=1` を前置する。`/tmp/...` への書き出しも同様に化けるので、このプロジェクトのスクラッチファイルは指定されたスクラッチディレクトリを使う。
@@ -73,4 +73,3 @@ wsl -e bash -c "cd /home/sumika/work/develop/my_django_project && docker compose
 
 `Client(SERVER_NAME='localhost')` が必要（理由は CLAUDE.md の既知の罠）。`DEBUG=False` 時の画面を
 確認する場合は `override_settings(DEBUG=False, ALLOWED_HOSTS=['localhost'])` も併用する。
-[[django-adhoc-test-client-host]]

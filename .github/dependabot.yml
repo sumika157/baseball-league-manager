@@ -1,0 +1,31 @@
+# 固定した依存の更新と脆弱性を、週1回の PR で知らせる。
+# requirements*.txt は間接依存まで == で固定している（CLAUDE.md）ので、Dependabot も個別の行を上げる PR を出す。
+# minor / patch は1本にまとめて PR の数を抑え、major は個別に出す（互換性を見て判断するため）。
+# セキュリティ更新（脆弱性の修正）はこのグループ設定と別に、すぐ個別の PR で出る。
+# 本番イメージのビルドとテストは CI が流すので、マージ前に CI の結果を確かめる。
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      python-minor-patch:
+        update-types: [minor, patch]
+    # Django は LTS（5.2。延長サポートは 2028年4月まで）に留め、次の LTS（6.2）が出てから上げる。
+    # メジャーだけを無視するので、5.2.x の更新と脆弱性の修正は届き続ける。6.2 に上げるときはこの ignore を外す
+    ignore:
+      - dependency-name: django
+        update-types: ["version-update:semver-major"]
+      # playwright の間接依存。playwright が上限（1.62.0 は pyee<14）を持つので、メジャーは playwright の更新に任せる
+      - dependency-name: pyee
+        update-types: ["version-update:semver-major"]
+    labels: [dependencies]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions-minor-patch:
+        update-types: [minor, patch]
+    labels: [dependencies]

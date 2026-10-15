@@ -13,6 +13,8 @@
   1球団143試合・全858試合）の1シーズンを回し、水準の表に加えて
   首位打者・本塁打王などのタイトルの水準を出す。β と能力の分布の調整に使う。
 
+どの型も最後に、投手の起用と疲労の表（`UsageTally`。中4日以下の先発・3連投・疲労のある打席など。#97）を出す。
+
 同じ `--seed` なら同じ結果になる。
 """
 
@@ -27,11 +29,12 @@ from myapp.domain.entities import Game
 from myapp.domain.exceptions import DomainError
 from myapp.domain.pennant.schedule import NPB_TEAMS_PER_LEAGUE, ScheduleRules, generate_schedule
 from myapp.domain.simulation.engine import SimulatedGame, simulate_game
-from myapp.domain.simulation.levels import LevelRow, LevelTally, SeasonTally
-from myapp.domain.simulation.manager import ClubRoster, PitchingHistory, choose_active_roster
+from myapp.domain.simulation.fatigue import PitchingHistory
+from myapp.domain.simulation.levels import LevelRow, LevelTally, SeasonTally, UsageTally
+from myapp.domain.simulation.manager import ClubRoster, choose_active_roster
 from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.samples import average_club, spread_league
-from myapp.management.estimate_check import run_check
+from myapp.management.estimate_check import format_usage, run_check
 from myapp.management.multi_season_check import run_seasons
 
 DEFAULT_GAMES = 2000
@@ -198,6 +201,7 @@ class Command(BaseCommand):
         ]
         history = PitchingHistory()
         tally = LevelTally()
+        usage = UsageTally()
         first: SimulatedGame | None = None
         started = time.perf_counter()
         for index in range(games):
@@ -206,6 +210,7 @@ class Command(BaseCommand):
             rng = make_random(game_seed(seed, SAMPLE_YEAR, f"average-{index}"))
             played = simulate_game(rng, home, away, played_on=SEASON_OPENING + timedelta(days=index), history=history)
             tally.add(played.game)
+            usage.add(played)
             if first is None:
                 first = played
                 self._say(format_box_score(played, home, away))
@@ -213,6 +218,8 @@ class Command(BaseCommand):
         elapsed = time.perf_counter() - started
         self._say(f"{games}試合（能力50の2球団・シード{seed}）  {elapsed / games * 1000:.1f} ms/試合")
         self._say(format_levels("リーグ全体の水準:", tally.rows()))
+        self._say()
+        self._say(format_usage(usage.rows()))
 
     def _run_seasons(self, seed: int, league_ids: list[int], year: int, seasons: int) -> None:
         try:
@@ -237,6 +244,7 @@ class Command(BaseCommand):
         history = PitchingHistory()
         level = LevelTally()
         titles = SeasonTally(team_games=SEASON_RULES.games_per_team)
+        usage = UsageTally()
         started = time.perf_counter()
         for fixture in fixtures:
             game_rng = make_random(game_seed(seed, SAMPLE_YEAR, f"season-{fixture.date}-{fixture.home_team_id}"))
@@ -249,6 +257,7 @@ class Command(BaseCommand):
             )
             level.add(played.game)
             titles.add(played.game)
+            usage.add(played)
         count = len(fixtures)
         elapsed = time.perf_counter() - started
         per_game = elapsed / count * 1000
@@ -256,3 +265,5 @@ class Command(BaseCommand):
         self._say(format_levels("リーグ全体の水準:", level.rows()))
         self._say()
         self._say(format_levels("タイトル争いの水準:", titles.rows()))
+        self._say()
+        self._say(format_usage(usage.rows()))

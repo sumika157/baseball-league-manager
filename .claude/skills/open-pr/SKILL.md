@@ -1,9 +1,9 @@
 ---
 name: open-pr
-description: 実装を終えたブランチを、3周のセルフレビューを済ませてから push し、Issue とリンクした PR を作って URL を提示する。「PR を出して」「PR にして」と頼まれたとき、または実装が終わって CLAUDE.md の流れで PR を出す段になったときに使う。PR を作った後の Issue の更新（チェック・epic の段階の sub-issue を閉じる）も扱う。
+description: 実装を終えたブランチを、セルフレビューを済ませてから push し、Issue とリンクした PR を作って URL を提示する。「PR を出して」「PR にして」と頼まれたとき、または実装が終わって CLAUDE.md の流れで PR を出す段になったときに使う。PR を作った後の Issue の更新（チェック・epic の段階の sub-issue を閉じる）も扱う。
 ---
 
-PR を出すまでの手順。**規則（3周セルフレビューの観点と終わる条件・コミットの粒度・マージはユーザーが行う）は
+PR を出すまでの手順。**規則（セルフレビューの周数・観点・終わる条件・コミットの粒度・マージはユーザーが行う）は
 `CLAUDE.md`「ブランチとコミット」が出典**で、ここには順番とコマンドだけを書く。Issue の書き方とリンクの仕組みは `issue-plan` スキル。
 
 以下、PowerShell の例は毎回この行から始める（PowerShell ツールは呼び出しごとに変数が消える）:
@@ -18,7 +18,7 @@ $gh = "C:\Users\sumik\AppData\Local\Microsoft\WinGet\Packages\GitHub.cli_Microso
 - base を決める: 通常は `main`。epic のタスクなら `epic/<機能>`（間違えると前の段階の差分まで載った PR になる）。
 - 変更が1つの機能につき1コミットにまとまっている（`git log --oneline origin/<base>..HEAD`）。
 
-## 1. 3周セルフレビュー
+## 1. セルフレビュー（周数は `CLAUDE.md`「手順の重さは変更の大きさで変える」の表）
 
 1周 ＝ 差分の全体（`git diff origin/<base>...HEAD`）を **正しさ・規則・読み手の3観点すべて**で読み、見つけたものを直すところまで。
 

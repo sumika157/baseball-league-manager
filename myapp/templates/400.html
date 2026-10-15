@@ -1,0 +1,39 @@
+{% comment %}
+400 は不正なリクエスト（ホスト名の不一致など）で描画される。500 と同じく、コンテキストプロセッサに依存しないよう
+base.html を継承せず単独で完結させる
+{% endcomment %}
+{% load static %}
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>リクエストを処理できません - Baseball Manager</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <link href="{% static 'myapp/css/theme.css' %}" rel="stylesheet" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="container">
+        <a class="app-brand" href="/">
+          <span class="app-brand-mark">⚾</span>
+          Baseball Manager
+        </a>
+      </div>
+    </header>
+
+    <main class="container">
+      <div class="auth-shell">
+        <div class="card">
+          <div class="card-body text-center">
+            <h1 class="auth-title">リクエストを処理できません</h1>
+            <p class="page-subtitle mb-4">
+              リクエストの形式が正しくないか、アクセスできないアドレスです。URL を確かめて、もう一度お試しください。
+            </p>
+            <a href="/" class="btn btn-primary w-100">チーム一覧へ</a>
+          </div>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>
