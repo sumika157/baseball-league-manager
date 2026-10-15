@@ -143,7 +143,7 @@ class RosterService:
 
         destination = self._teams.find_by_id(to_team_id)
         league = self._leagues.find_by_id(saved_id(destination.league_id))
-        # 背番号・区分・支配下の上限・経路と FA 宣言・外国人枠の検査は、移籍先の集約が行う
+        # 背番号・区分・支配下の上限・経路と FA 宣言の検査は、移籍先の集約が行う（外国人の保有は縛らない）
         destination.accept_transfer(
             player,
             JerseyNumber(number),

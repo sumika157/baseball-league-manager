@@ -119,10 +119,12 @@ class RosterCheckTest(TestCase):
         self.assertEqual(created.team_count, 2)
         self.assertEqual(orm_models.PennantWorld.objects.count(), 1)
 
-    def test_too_many_foreigners_for_the_game_limit_cannot_make_a_world(self):
-        """野手が9人ちょうどで出場枠を超える外国人がいると、自動のスタメンを組めず進行が止まる。"""
+    def test_too_many_foreigners_for_the_foreign_rules_cannot_make_a_world(self):
+        """野手が9人ちょうどで外国人枠を超える外国人がいると、自動のスタメンを組めず進行が止まる。"""
         register_playable_support(self.roster, self.short)
-        orm_models.League.objects.filter(id=self.league.id).update(foreign_player_game_limit=2)
+        orm_models.League.objects.filter(id=self.league.id).update(
+            foreign_active_limit=2, foreign_active_pitcher_limit=None, foreign_active_batter_limit=None
+        )
         batters = orm_models.Player.objects.filter(stints__team=self.short).exclude(position="投手")
         orm_models.Player.objects.filter(id__in=list(batters.values_list("id", flat=True)[:3])).update(
             is_foreign_player=True
@@ -132,11 +134,14 @@ class RosterCheckTest(TestCase):
             self._create()
 
         self.assertIn("足りない球団", str(raised.exception))
-        self.assertIn("出場は1試合2人まで", str(raised.exception))
+        self.assertIn("外国人選手の枠（計2人）の中では", str(raised.exception))
         self._assert_nothing_left()
 
-    def test_the_same_roster_passes_when_the_league_has_no_game_limit(self):
+    def test_the_same_roster_passes_when_the_league_has_no_foreign_rules(self):
         register_playable_support(self.roster, self.short)
+        orm_models.League.objects.filter(id=self.league.id).update(
+            foreign_active_limit=None, foreign_active_pitcher_limit=None, foreign_active_batter_limit=None
+        )
         batters = orm_models.Player.objects.filter(stints__team=self.short).exclude(position="投手")
         orm_models.Player.objects.filter(id__in=list(batters.values_list("id", flat=True)[:3])).update(
             is_foreign_player=True
@@ -146,10 +151,15 @@ class RosterCheckTest(TestCase):
 
         self.assertEqual(orm_models.PennantWorld.objects.count(), 1)
 
-    def test_the_strictest_game_limit_of_the_chosen_leagues_applies_to_every_team(self):
-        """出場枠の無いリーグの球団も、一緒に選んだリーグの厳しい枠で見る（交流戦はどのリーグとも当たる）。"""
+    def test_the_strictest_foreign_rules_of_the_chosen_leagues_apply_to_every_team(self):
+        """外国人枠の緩いリーグの球団も、一緒に選んだリーグの厳しい枠で見る（交流戦はどのリーグとも当たる）。"""
         register_playable_support(self.roster, self.short)
-        strict = orm_models.League.objects.create(name="厳しいリーグ", foreign_player_game_limit=2)
+        strict = orm_models.League.objects.create(
+            name="厳しいリーグ",
+            foreign_active_limit=2,
+            foreign_active_pitcher_limit=None,
+            foreign_active_batter_limit=None,
+        )
         strict_team = orm_models.Team.objects.create(league=strict, name="厳しい球団")
         register_playable_support(self.roster, strict_team)
         batters = orm_models.Player.objects.filter(stints__team=self.short).exclude(position="投手")
@@ -157,10 +167,10 @@ class RosterCheckTest(TestCase):
             is_foreign_player=True
         )
 
-        self._create()  # 枠の無いリーグだけなら作れる
+        self._create()  # 協約どおりのリーグ（野手3人まで）だけなら作れる
         orm_models.PennantWorld.objects.all().delete()
         with self.assertRaises(InvalidWorld) as raised:
             self._create(source_league_ids=[self.league.id, strict.id])
 
         self.assertIn("足りない球団", str(raised.exception))
-        self.assertIn("出場は1試合2人まで", str(raised.exception))
+        self.assertIn("外国人選手の枠（計2人・投手3人・野手3人）の中では", str(raised.exception))

@@ -17,7 +17,7 @@
     <div class="stat-label">捕手</div>
   </div>
   <div class="stat-cell">
-    <div class="stat-value">{{ club.counts.foreign }}/{% if club.limits.foreign_roster_limit is None %}無制限{% else %}{{ club.limits.foreign_roster_limit }}{% endif %}</div>
-    <div class="stat-label">外国人</div>
+    <div class="stat-value">{{ club.counts.foreign }}/{{ club.limits.foreign.active|default_if_none:"無制限" }}</div>
+    <div class="stat-label">外国人（投手 {{ club.counts.foreign_pitchers }}/{{ club.limits.foreign.pitchers|default_if_none:"無制限" }}・野手 {{ club.counts.foreign_batters }}/{{ club.limits.foreign.batters|default_if_none:"無制限" }}）</div>
   </div>
 </div>

@@ -2,13 +2,13 @@
 
 | 判断 | 規則 |
 | --- | --- |
-| 1軍登録 | 能力順に29人。捕手2人以上・投手14人（足りなければ減らす）。外国人は登録枠の範囲で |
+| 1軍登録 | 能力順に29人。捕手2人以上・投手14人（足りなければ減らす）。外国人はリーグの枠（計・投手・野手）の範囲で |
 | スタメン | 総合値の順に守備の枠を埋め、守備力の高い順に重要な位置へ。DH は残りの最強打者。打順は出塁→長打の定型 |
 | ローテーション | 先発6人。前回の先発から中5日以上空ける |
 | 継投 | スタミナと抑える力から受け持ちの目安を決め、失点が嵩めば早めに代える。抑えはセーブの状況で出す |
 | 救援の連投 | 2連投まで、スタミナ55以上は3連投目も（`fatigue.max_consecutive_days`）。疲労が重い救援は後回し |
 | 代打 | 7回以降・負けている・控えに明確に上の打者がいる、が揃えば。1試合2人まで |
-| 外国人の出場枠 | リーグの上限（`foreign_player_game_limit`）を守る |
+| 外国人の出場 | ホーム球団のリーグの外国人枠（`ForeignPlayerRules`。計・投手・野手）を守る |
 
 **疲労は保存しない。** 直近の登板の記録（`fatigue.PitchingHistory`）から導く。
 疲労が率に効くのはエンジン（`fatigue.py`）。
@@ -23,7 +23,7 @@ from datetime import date, timedelta
 
 from ..exceptions import InvalidRoster
 from ..services.decisions import SAVE_LEAD_LIMIT
-from ..value_objects import FieldingPosition, Handedness, Position
+from ..value_objects import FieldingPosition, ForeignPlayerRules, Handedness, Position
 from .fatigue import (
     MID_INNING_GRACE,
     MIN_DAYS_BETWEEN_STARTS,
@@ -184,24 +184,40 @@ class ClubOrders:
 
 @dataclass
 class ForeignQuota:
-    """外国人選手の出場枠。1試合にそのチームで出られる外国人選手の上限（None なら無制限）。"""
+    """1試合にそのチームで出た外国人選手（登録位置の並び）と、守る規則。
 
-    limit: int | None = None
-    used: int = 0
+    規則はその試合のホーム球団のリーグの外国人枠（`ForeignPlayerRules`）。出場者は1軍の中から出るので、
+    同じ規則で選んだ1軍なら縛りにならない。交流戦で相手のリーグの規則のほうが厳しいときに効く。
+    投手か野手かは `ForeignPlayerRules.counts`（登録位置）で数える。
+    """
+
+    rules: ForeignPlayerRules = ForeignPlayerRules.UNLIMITED
+    # 出場した外国人選手の登録位置（出た順）
+    appeared: list[Position] = field(default_factory=list)
 
     @property
-    def remaining(self) -> int | None:
-        return None if self.limit is None else self.limit - self.used
+    def pitchers(self) -> int:
+        return ForeignPlayerRules.counts(self.appeared)[0]
 
-    def allows(self, is_foreign: bool, *, extra: int = 0) -> bool:
-        """外国人選手を（すでに数えたぶんに `extra` 人加えて）出せるか。"""
-        if not is_foreign or self.limit is None:
+    @property
+    def batters(self) -> int:
+        return ForeignPlayerRules.counts(self.appeared)[1]
+
+    @property
+    def batter_room(self) -> int | None:
+        """あと何人の外国人の野手を出せるか（None は無制限）。"""
+        pitchers, batters = ForeignPlayerRules.counts(self.appeared)
+        return self.rules.batter_room(pitchers=pitchers, batters=batters)
+
+    def allows(self, is_foreign: bool, *, position: Position, extra: int = 0) -> bool:
+        """登録位置 `position` の選手を（すでに出たぶんに、同じ登録位置の外国人 `extra` 人を加えて）出せるか。"""
+        if not is_foreign:
             return True
-        return self.used + extra < self.limit
+        return self.rules.has_room_for([*self.appeared, *([position] * extra)], position)
 
-    def register(self, is_foreign: bool) -> None:
+    def register(self, is_foreign: bool, *, position: Position) -> None:
         if is_foreign:
-            self.used += 1
+            self.appeared.append(position)
 
 
 # --- 値 ---
@@ -275,11 +291,11 @@ def plays_position(batter: SimBatter, position: FieldingPosition) -> bool:
 # --- 1軍登録 ---
 
 
-def choose_active_roster(pool: ClubRoster, foreign_roster_limit: int | None = None) -> ClubRoster:
-    """登録候補から1軍29人を選ぶ。捕手2人以上・投手14人。外国人は登録枠まで。
+def choose_active_roster(pool: ClubRoster, *, rules: ForeignPlayerRules) -> ClubRoster:
+    """登録候補から1軍29人を選ぶ。捕手2人以上・投手14人。外国人はリーグの外国人枠（`rules`。計・投手・野手）まで。
 
     能力順に選び、外国人が枠を超えたら能力の低い外国人から外して、同じ区分（投手か野手か）の
-    外国人でない選手で埋める。候補が足りなければ人数を減らす。
+    外国人でない選手で埋める（投手の枠・野手の枠・計の枠の順に見る）。候補が足りなければ人数を減らす。
     """
     pitcher_count = min(ACTIVE_PITCHERS, len(pool.pitchers))
     batter_count = min(ACTIVE_ROSTER_SIZE - pitcher_count, len(pool.batters))
@@ -296,13 +312,12 @@ def choose_active_roster(pool: ClubRoster, foreign_roster_limit: int | None = No
             chosen_batters.append(batter)
     chosen_pitchers = pitchers_by_value[:pitcher_count]
 
-    if foreign_roster_limit is not None:
-        chosen_pitchers, chosen_batters = _within_foreign_roster(
-            chosen_pitchers, chosen_batters, pitchers_by_value, batters_by_value, foreign_roster_limit
-        )
+    chosen_pitchers, chosen_batters = _within_foreign_rules(
+        chosen_pitchers, chosen_batters, pitchers_by_value, batters_by_value, rules
+    )
     foreign_pitchers = sum(p.is_foreign for p in chosen_pitchers)
-    chosen_batters = _with_minimum_catchers(chosen_batters, batters_by_value, foreign_roster_limit, foreign_pitchers)
-    chosen_batters = _with_fielding_coverage(chosen_batters, batters_by_value, foreign_roster_limit, foreign_pitchers)
+    chosen_batters = _with_minimum_catchers(chosen_batters, batters_by_value, rules, foreign_pitchers)
+    chosen_batters = _with_fielding_coverage(chosen_batters, batters_by_value, rules, foreign_pitchers)
 
     return ClubRoster(
         team_id=pool.team_id,
@@ -329,61 +344,79 @@ def _pitcher_roster_value(pitcher: SimPitcher) -> float:
     return max(pitcher.ratings.starter_value, pitcher.ratings.pitching_value)
 
 
-def _within_foreign_roster(
+def _within_foreign_rules(
     pitchers: list[SimPitcher],
     batters: list[SimBatter],
     pitchers_by_value: list[SimPitcher],
     batters_by_value: list[SimBatter],
-    limit: int,
+    rules: ForeignPlayerRules,
 ) -> tuple[list[SimPitcher], list[SimBatter]]:
-    """外国人の登録枠を超えているあいだ、能力の最も低い外国人を、外国人でない次点の選手に替える。"""
+    """外国人の枠を超えているあいだ、能力の最も低い外国人を、同じ区分の外国人でない次点の選手に替える。
+
+    投手の枠 → 野手の枠 → 計の枠の順に見る。計の枠では、能力の低いほうの区分の外国人から外す。
+    """
     pitchers = list(pitchers)
     batters = list(batters)
-    while sum(p.is_foreign for p in pitchers) + sum(b.is_foreign for b in batters) > limit:
-        pitcher_out = min((p for p in pitchers if p.is_foreign), key=_pitcher_roster_value, default=None)
-        batter_out = min((b for b in batters if b.is_foreign), key=regular_value, default=None)
+
+    def foreign_pitchers() -> list[SimPitcher]:
+        return [p for p in pitchers if p.is_foreign]
+
+    def foreign_batters() -> list[SimBatter]:
+        return [b for b in batters if b.is_foreign]
+
+    def drop_pitcher(out: SimPitcher) -> None:
+        pitchers.remove(out)
+        substitute = next((p for p in pitchers_by_value if not p.is_foreign and p not in pitchers), None)
+        if substitute is not None:
+            pitchers.append(substitute)
+
+    def drop_batter(out: SimBatter) -> None:
+        batters.remove(out)
+        substitute = next((b for b in batters_by_value if not b.is_foreign and b not in batters), None)
+        if substitute is not None:
+            batters.append(substitute)
+
+    while rules.pitchers is not None and len(foreign_pitchers()) > rules.pitchers:
+        drop_pitcher(min(foreign_pitchers(), key=_pitcher_roster_value))
+    while rules.batters is not None and len(foreign_batters()) > rules.batters:
+        drop_batter(min(foreign_batters(), key=regular_value))
+    while rules.active is not None and len(foreign_pitchers()) + len(foreign_batters()) > rules.active:
+        pitcher_out = min(foreign_pitchers(), key=_pitcher_roster_value, default=None)
+        batter_out = min(foreign_batters(), key=regular_value, default=None)
         # 価値の単位が違うので、落とす候補は能力の低いほうの区分から（同点なら投手）
         pitcher_loss = _pitcher_roster_value(pitcher_out) if pitcher_out else float("inf")
         batter_loss = regular_value(batter_out) if batter_out else float("inf")
         if pitcher_out is not None and pitcher_loss <= batter_loss:
-            pitchers.remove(pitcher_out)
-            substitute_p = next((p for p in pitchers_by_value if not p.is_foreign and p not in pitchers), None)
-            if substitute_p is not None:
-                pitchers.append(substitute_p)
+            drop_pitcher(pitcher_out)
         elif batter_out is not None:
-            batters.remove(batter_out)
-            substitute_b = next(
-                (b for b in batters_by_value if not b.is_foreign and b not in batters),
-                None,
-            )
-            if substitute_b is not None:
-                batters.append(substitute_b)
-        else:
-            break
+            drop_batter(batter_out)
     return pitchers, batters
 
 
 def _with_minimum_catchers(
     batters: list[SimBatter],
     batters_by_value: list[SimBatter],
-    foreign_roster_limit: int | None,
+    rules: ForeignPlayerRules,
     foreign_pitchers: int = 0,
 ) -> list[SimBatter]:
     """捕手が足りなければ、控えの捕手を入れて、捕手でない最も低い野手と替える。
 
-    外国人の登録枠（1軍全体。投手を含む）を超えないように、外国人の捕手は枠に空きがあるときだけ入れる。
+    外国人の枠（計と野手）を超えないように、外国人の捕手は枠に空きがあるときだけ入れる。
     `foreign_pitchers` は1軍に入れる外国人の投手の数。
     """
     batters = list(batters)
     while sum(b.position is Position.CATCHER for b in batters) < MIN_ACTIVE_CATCHERS:
-        foreign_now = sum(b.is_foreign for b in batters) + foreign_pitchers
+        foreign_batters = sum(b.is_foreign for b in batters)
         spare = next(
             (
                 b
                 for b in batters_by_value
                 if b.position is Position.CATCHER
                 and b not in batters
-                and (not b.is_foreign or foreign_roster_limit is None or foreign_now < foreign_roster_limit)
+                and (
+                    not b.is_foreign
+                    or rules.has_room(pitchers=foreign_pitchers, batters=foreign_batters, is_pitcher=False)
+                )
             ),
             None,
         )
@@ -398,14 +431,14 @@ def _with_minimum_catchers(
 def _with_fielding_coverage(
     batters: list[SimBatter],
     batters_by_value: list[SimBatter],
-    foreign_roster_limit: int | None,
+    rules: ForeignPlayerRules,
     foreign_pitchers: int = 0,
 ) -> list[SimBatter]:
     """守備の8つの枠を野手で埋められなければ、足りない位置を守れる控えを入れて、替えても埋まる数が増える野手と替える。
 
     能力順に選ぶと、外野手が少ないときなどに手動のオーダー（登録位置が就ける位置だけ）を組めない1軍になる。
     埋まっている1軍は変えない。在籍選手を全員入れても埋まらないときは、今の結果のまま。
-    外国人の登録枠は1軍全体（投手を含む）で数える。
+    外国人の枠は計（投手を含む）と野手の両方で数える。
     """
     batters = list(batters)
 
@@ -418,8 +451,7 @@ def _with_fielding_coverage(
         for spare in (b for b in batters_by_value if b not in batters):
             for out in sorted(batters, key=regular_value):
                 trial = [b for b in batters if b is not out] + [spare]
-                foreign = sum(b.is_foreign for b in trial) + foreign_pitchers
-                if foreign_roster_limit is not None and foreign > foreign_roster_limit:
+                if rules.violation(pitchers=foreign_pitchers, batters=sum(b.is_foreign for b in trial)) is not None:
                     continue
                 if sum(b.position is Position.CATCHER for b in trial) < min(
                     MIN_ACTIVE_CATCHERS, sum(b.position is Position.CATCHER for b in batters)
@@ -452,15 +484,15 @@ def choose_lineup(batters: Sequence[SimBatter], quota: ForeignQuota) -> list[Lin
     - 手順1: 左投げの就ける枠（一塁など）の数を超える左投げは枠の候補から外し、座れる選手だけを座らせる。
       外れた選手は、残りの選手として手順2・3に回る。
     - 手順2: 空いた枠に、投げる手の合う選手を守備力の順に当てる。合う選手が足りない枠があれば、
-      外国人の出場枠の数え方を戻して、枠ごとに選び直す（左投げの就けない枠を先に。座れなかった選手に
-      出場枠を使わせない）。
-    - **規則を曲げるのは、出場枠の範囲に投げる手の合う選手がもう1人もいないときだけ**
+      外国人枠の数え方を戻して、枠ごとに選び直す（左投げの就けない枠を先に。座れなかった選手に
+      外国人枠を使わせない）。
+    - **規則を曲げるのは、外国人枠の範囲に投げる手の合う選手がもう1人もいないときだけ**
       （枠が埋まらないと試合が組めず、ペナントの進行が止まるため）。
     """
     if len(batters) < LINEUP_SIZE:
         raise InvalidRoster(f"打順を組むには野手が{LINEUP_SIZE}人要ります（{len(batters)}人）。")
 
-    foreign_left = quota.remaining
+    foreign_left = quota.batter_room
 
     def take(pool: list[SimBatter], count: int) -> list[SimBatter]:
         nonlocal foreign_left
@@ -500,12 +532,12 @@ def choose_lineup(batters: Sequence[SimBatter], quota: ForeignQuota) -> list[Lin
     foreign_before_fill = foreign_left
     extra = take(rest, len(open_slots) + 1)
     if len(extra) < len(open_slots) + 1:
-        raise InvalidRoster("外国人の出場枠の範囲では、打順を組める野手が足りません。")
+        raise InvalidRoster("外国人枠の範囲では、打順を組める野手が足りません。")
     designated_hitter = extra[0]
     fillers = sorted(extra[1:], key=lambda b: -b.ratings.fielding)
     filled, _ = _seat(fillers, open_slots)
     if len(filled) < len(open_slots):
-        # 投げる手の合う選手が足りない枠がある（左投げしか残っていない）。外国人の出場枠の数え方を
+        # 投げる手の合う選手が足りない枠がある（左投げしか残っていない）。外国人枠の数え方を
         # 戻して、枠ごとに選び直す（座れなかった選手に枠を使わせない）
         foreign_left = foreign_before_fill
         pool = list(rest)
@@ -522,11 +554,11 @@ def choose_lineup(batters: Sequence[SimBatter], quota: ForeignQuota) -> list[Lin
             by_fielding = sorted(pool, key=lambda b: -b.ratings.fielding)
             pick = claim([b for b in by_fielding if slot.suits_thrower(b.throws)]) or claim(by_fielding)
             if pick is None:
-                raise InvalidRoster("外国人の出場枠の範囲では、打順を組める野手が足りません。")
+                raise InvalidRoster("外国人枠の範囲では、打順を組める野手が足りません。")
             filled[slot] = pick
         picked_dh = claim(sorted(pool, key=lambda b: -b.ratings.batting_value))
         if picked_dh is None:
-            raise InvalidRoster("外国人の出場枠の範囲では、打順を組める野手が足りません。")
+            raise InvalidRoster("外国人枠の範囲では、打順を組める野手が足りません。")
         designated_hitter = picked_dh
     chosen.update(filled)
     chosen[FP.DESIGNATED_HITTER] = designated_hitter
@@ -625,7 +657,9 @@ def choose_starter(staff: PitchingStaff, history: PitchingHistory, today: date, 
 
     全員が空いていなければ、休養の最も長い投手に任せる（試合を組めないよりよい）。
     """
-    candidates = [p for p in staff.rotation if quota.allows(p.is_foreign)] or list(staff.rotation)
+    candidates = [p for p in staff.rotation if quota.allows(p.is_foreign, position=Position.PITCHER)] or list(
+        staff.rotation
+    )
 
     def rest_days(pitcher: SimPitcher) -> int:
         days = history.days_since_start(pitcher.player_id, today)
@@ -666,7 +700,7 @@ def available_relievers(
     def usable(pitcher: SimPitcher) -> bool:
         return (
             pitcher.player_id not in used_ids
-            and quota.allows(pitcher.is_foreign)
+            and quota.allows(pitcher.is_foreign, position=Position.PITCHER)
             and history.can_pitch_on(pitcher.player_id, today, stamina=pitcher.ratings.stamina)
         )
 
@@ -818,7 +852,7 @@ def choose_pinch_hitter(situation: PinchHitSituation) -> PinchHit | None:
     for candidate in by_batting:
         if candidate.ratings.batting_value - current_value < PINCH_HITTER_MARGIN:
             break  # これより後の控えはさらに劣る
-        if not situation.quota.allows(candidate.is_foreign):
+        if not situation.quota.allows(candidate.is_foreign, position=candidate.position):
             continue
         if plays_position(candidate, situation.position):
             return PinchHit(candidate, situation.position)
@@ -828,7 +862,7 @@ def choose_pinch_hitter(situation: PinchHitSituation) -> PinchHit | None:
                 for other in by_regular
                 if other is not candidate
                 and plays_position(other, situation.position)
-                and situation.quota.allows(other.is_foreign, extra=int(candidate.is_foreign))
+                and situation.quota.allows(other.is_foreign, position=other.position, extra=int(candidate.is_foreign))
             ),
             None,
         )

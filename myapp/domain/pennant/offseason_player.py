@@ -13,7 +13,15 @@ from dataclasses import dataclass
 
 from ..entities import Stint
 from ..simulation.ratings import BatterRatings, PitcherRatings
-from ..value_objects import AcquisitionRoute, BattingLine, ContractStatus, PitchingLine, Position, Profile
+from ..value_objects import (
+    AcquisitionRoute,
+    BattingLine,
+    ContractStatus,
+    ForeignPlayerRules,
+    PitchingLine,
+    Position,
+    Profile,
+)
 from .fork import ESTIMATED_AGE_AT_START, with_birth_date
 from .initial_ratings import age_at_season_start
 from .ratings import PlayerRatings
@@ -143,8 +151,8 @@ class OffseasonClub:
     """締める年 Y の球団。"""
 
     team_id: int
-    # リーグの外国人の登録枠。None は無制限
-    foreign_roster_limit: int | None
+    # リーグの外国人枠（1軍登録。協約第82条の2）。ドラフトの外国人の目標人数に計（`active`）を使う
+    foreign_rules: ForeignPlayerRules
     # リーグの支配下の上限（NPB は70人）。None は無制限。ドラフトはこれを超えない人数にする
     registered_player_limit: int | None
     players: tuple[OffseasonPlayer, ...]

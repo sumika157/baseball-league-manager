@@ -41,6 +41,7 @@ from myapp.domain.simulation.odds import matchup
 from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings
 from myapp.domain.simulation.samples import average_club, round_robin_days, spread_league
+from myapp.domain.value_objects import ForeignPlayerRules
 
 TODAY = date(2026, 5, 10)
 OPENING_DAY = date(2026, 4, 1)
@@ -152,7 +153,7 @@ class WorkloadTest(TestCase):
 
 def _single_pitcher_side(team_id: int):
     """投手が先発1人だけの球団。ブルペンが無いので、交代できずに最後まで投げる。"""
-    roster = choose_active_roster(average_club(team_id))
+    roster = choose_active_roster(average_club(team_id), rules=ForeignPlayerRules.UNLIMITED)
     starter = roster.pitchers[0]
     staff = PitchingStaff(rotation=(starter,), closer=None, setup=(), middle=())
     return replace(roster, pitchers=(starter,)), ClubOrders(staff=staff), starter
@@ -161,11 +162,17 @@ def _single_pitcher_side(team_id: int):
 class EngineFatigueTest(TestCase):
     def setUp(self):
         self.home, self.home_orders, self.starter = _single_pitcher_side(1)
-        self.away = choose_active_roster(average_club(2))
+        self.away = choose_active_roster(average_club(2), rules=ForeignPlayerRules.UNLIMITED)
 
     def _play(self, history: PitchingHistory | None, seed: int = 5) -> SimulatedGame:
         return simulate_game(
-            make_random(seed), self.home, self.away, played_on=TODAY, history=history, home_orders=self.home_orders
+            make_random(seed),
+            self.home,
+            self.away,
+            played_on=TODAY,
+            history=history,
+            home_orders=self.home_orders,
+            foreign_rules=ForeignPlayerRules.UNLIMITED,
         )
 
     @staticmethod
@@ -187,7 +194,7 @@ class EngineFatigueTest(TestCase):
 
     def test_a_busy_reliever_pitches_tired_with_his_own_stamina(self):
         """救援の登板前の疲労は、その救援のスタミナで、救援として（先発の休養を数えずに）数える。"""
-        roster = choose_active_roster(average_club(1))
+        roster = choose_active_roster(average_club(1), rules=ForeignPlayerRules.UNLIMITED)
         # 先発と救援でスタミナを大きく変えておく（取り違えると点が変わる）
         starter = replace(roster.pitchers[0], ratings=replace(roster.pitchers[0].ratings, stamina=90))
         reliever = replace(roster.pitchers[1], ratings=replace(roster.pitchers[1].ratings, stamina=30))
@@ -203,7 +210,13 @@ class EngineFatigueTest(TestCase):
         )
 
         played = simulate_game(
-            make_random(5), home, self.away, played_on=TODAY, history=history, home_orders=ClubOrders(staff=staff)
+            make_random(5),
+            home,
+            self.away,
+            played_on=TODAY,
+            history=history,
+            home_orders=ClubOrders(staff=staff),
+            foreign_rules=ForeignPlayerRules.UNLIMITED,
         )
 
         (outing,) = [o for o in played.outings if o.pitcher_id == reliever.player_id]
@@ -244,7 +257,9 @@ class EngineFatigueTest(TestCase):
 def _season(orders_for: dict[int, ClubOrders] | None = None, days: int = 28):
     """能力を散らした6球団で、毎日1試合ずつ回す（AI の6人ローテなら中5日を割らない）。"""
     rng = make_random(20260801)
-    rosters = {club.team_id: choose_active_roster(club, 4) for club in spread_league(rng, 6)}
+    rosters = {
+        club.team_id: choose_active_roster(club, rules=ForeignPlayerRules.NPB) for club in spread_league(rng, 6)
+    }
     orders_for = orders_for or {}
     history = PitchingHistory()
     usage = UsageTally()
@@ -259,6 +274,7 @@ def _season(orders_for: dict[int, ClubOrders] | None = None, days: int = 28):
                 history=history,
                 home_orders=orders_for.get(home_id),
                 away_orders=orders_for.get(away_id),
+                foreign_rules=ForeignPlayerRules.UNLIMITED,
             )
             usage.add(played)
             games.append(played)
@@ -301,7 +317,7 @@ class FiveManRotationTest(TestCase):
 
     def test_a_five_man_rotation_pitches_on_short_rest_and_tired(self):
         rng = make_random(20260801)
-        roster = choose_active_roster(spread_league(rng, 6)[0], 4)
+        roster = choose_active_roster(spread_league(rng, 6)[0], rules=ForeignPlayerRules.NPB)
         automatic = plan_pitching_staff(roster.pitchers)
         five = ClubOrders(staff=plan_pitching_staff(roster.pitchers, rotation=automatic.rotation[:5]))
 
@@ -409,7 +425,7 @@ class TiredRelieverChoiceTest(TestCase):
     """AI は疲労が重い救援を、ほかに投げられる投手がいる限り出さない。"""
 
     def setUp(self):
-        staff = plan_pitching_staff(choose_active_roster(average_club(1)).pitchers)
+        staff = plan_pitching_staff(choose_active_roster(average_club(1), rules=ForeignPlayerRules.UNLIMITED).pitchers)
         # 抑えだけスタミナを下げる（窓の中で4日投げると 4 × 1.5 = 6点で重い）
         assert staff.closer is not None
         self.closer = replace(staff.closer, ratings=replace(staff.closer.ratings, stamina=25))

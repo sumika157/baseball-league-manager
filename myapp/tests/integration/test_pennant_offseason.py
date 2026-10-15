@@ -302,9 +302,10 @@ class ClubPlanReleaseTest(ClosedSeasonCase):
 
 
 class ForeignQuotaTest(ClosedSeasonCase):
-    def test_a_team_at_its_foreign_quota_gets_no_foreign_rookie(self):
+    def test_a_team_at_its_foreign_target_gets_no_foreign_rookie(self):
+        """外国人の目標人数（ドラフト）は、リーグの1軍の外国人枠の計まで（協約は保有を縛らないので、AI の目安）。"""
         league = orm_models.League.objects.get(world_id=self.world_a)
-        league.foreign_player_roster_limit = 1
+        league.foreign_active_limit = 1
         league.save()
         team_id = self.managed_team_id()
         orm_models.Player.objects.filter(id=self.first_players(team_id, 1)[0]).update(is_foreign_player=True)

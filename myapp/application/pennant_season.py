@@ -26,7 +26,7 @@ from types import EllipsisType
 
 from ..domain.entities import Game
 from ..domain.exceptions import AlreadyAdvanced, InvalidRoster, InvalidSchedule
-from ..domain.pennant.club_plan import ClubLimits, ResolvedClub, resolve_club, strictest_game_limit
+from ..domain.pennant.club_plan import ClubLimits, ResolvedClub, resolve_club
 from ..domain.pennant.schedule import (
     AdvanceTarget,
     Fixture,
@@ -49,6 +49,7 @@ from ..domain.simulation.game_day import simulated_attendance, simulated_times
 from ..domain.simulation.manager import ClubRoster, SimBatter, SimPitcher
 from ..domain.simulation.randomness import game_seed, make_random
 from ..domain.simulation.ratings import BatterRatings, PitcherRatings
+from ..domain.value_objects import ForeignPlayerRules
 from .dto import AdvanceReport, PlanNotice, SimulationContext, SimulationTeam
 from .queries import SimulationContextQuery
 
@@ -180,14 +181,14 @@ class PennantSeasonService:
         plans = {plan.team_id: plan for plan in self._plans.find_all()}
         clubs: dict[int, ResolvedClub] = {}
         notices: list[PlanNotice] = []
-        game_limit = strictest_game_limit(team.foreign_game_limit for team in context.teams)
+        game_foreign = ForeignPlayerRules.strictest(team.foreign_rules for team in context.teams)
 
         def club_of(team_id: int, day: date) -> ResolvedClub:
             # 1軍登録・オーダー・投手陣は、能力と GM の上書きだけから決まるので、1回の「進める」の間は
             # 変わらない。日ごとに選び直さない（上書きが使えない理由も、球団ごとに最初の日の1回だけ知らせる）
             if team_id not in clubs:
                 team = teams[team_id]
-                limits = ClubLimits(foreign_roster_limit=team.foreign_roster_limit, foreign_game_limit=game_limit)
+                limits = ClubLimits(active_foreign=team.foreign_rules, game_foreign=game_foreign)
                 clubs[team_id] = resolve_club(plans.get(team_id), pools[team_id], limits)
                 notices.extend(
                     PlanNotice(team_id, team.name, day, fallback.section, fallback.reason, fallback.falls_back)
@@ -219,8 +220,8 @@ class PennantSeasonService:
                         away,
                         played_on=day,
                         history=history,
-                        # リーグをまたぐ交流戦は、ホーム球団のリーグの枠で行う
-                        foreign_game_limit=teams[fixture.home_team_id].foreign_game_limit,
+                        # リーグをまたぐ交流戦は、ホーム球団のリーグの外国人枠で行う
+                        foreign_rules=teams[fixture.home_team_id].foreign_rules,
                         home_orders=home_club.orders,
                         away_orders=away_club.orders,
                     )

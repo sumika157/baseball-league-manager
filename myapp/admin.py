@@ -1,5 +1,4 @@
 import types
-from dataclasses import replace
 from typing import ClassVar
 
 from django import forms
@@ -33,11 +32,11 @@ from .domain.pennant.world import WorldScope
 from .domain.value_objects import (
     AcquisitionRoute,
     ContractStatus,
+    ForeignPlayerRules,
     FreeAgencyKind,
     GameTimes,
     JerseyNumber,
     StadiumProfile,
-    ensure_quota_not_exceeded,
 )
 from .domain.value_objects import Profile as DomainProfile
 from .infrastructure import orm_models
@@ -282,8 +281,12 @@ class LeagueAdmin(RealDataOnlyMixin, ManualOrderAdminMixin, admin.ModelAdmin):
         (
             "外国人枠",
             {
-                "description": "空欄なら無制限として扱います。",
-                "fields": ("foreign_player_roster_limit", "foreign_player_game_limit"),
+                "description": (
+                    "1軍（出場選手登録）に置ける外国人選手の上限です"
+                    f"（野球協約 第82条の2 は{ForeignPlayerRules.NPB.label}）。"
+                    "保有の人数は縛りません。投手か野手かは登録位置で数えます。空欄なら無制限として扱います。"
+                ),
+                "fields": ("foreign_active_limit", "foreign_active_pitcher_limit", "foreign_active_batter_limit"),
             },
         ),
         (
@@ -724,7 +727,6 @@ class PlayerStintForm(forms.ModelForm):
                 )
 
         self._ensure_free_agency_consistent(candidate, player)
-        self._ensure_foreign_player_quota(cleaned, team, player)
         self._ensure_registered_limit(team, candidate)
         return cleaned
 
@@ -765,34 +767,6 @@ class PlayerStintForm(forms.ModelForm):
         try:
             # 判定とメッセージはドメイン（Team）の出典を使う
             domain_team.ensure_room_for_registered(league.registered_player_limit)
-        except DomainError as error:
-            raise forms.ValidationError(str(error)) from None
-
-    def _ensure_foreign_player_quota(self, cleaned, team, player):
-        """外国人選手が新たにこのチームに加わる（在籍を開始する）場合、枠を超えないか確認する。
-
-        player が分からない（インライン経由で未確定など）場合は検査を諦める。
-        主な適用対象は PlayerStintAdmin 経由の移籍・新規在籍の登録。
-        """
-        if cleaned.get("to_year") is not None or player is None or not player.pk:
-            return
-        if not player.is_foreign_player:
-            return
-
-        already_here = PlayerStint.objects.filter(player=player, team=team, to_year__isnull=True)
-        if self.instance.pk:
-            already_here = already_here.exclude(pk=self.instance.pk)
-        if already_here.exists():
-            return  # 既にこのチームに在籍中（背番号の変更など）なら人数は増えない
-
-        domain_team = DjangoTeamRepository(_REAL).find_by_id(team.id)
-        league = DjangoLeagueRepository(_REAL).find_by_id(team.league_id)
-        try:
-            ensure_quota_not_exceeded(
-                domain_team.foreign_player_count + 1,
-                league.foreign_player_roster_limit,
-                f"「{team.name}」の外国人選手登録数が上限（{league.foreign_player_roster_limit}人）を超えています。",
-            )
         except DomainError as error:
             raise forms.ValidationError(str(error)) from None
 
@@ -1099,23 +1073,6 @@ class PlayerForm(DomainCheckedForm):
             nationality=cleaned.get("nationality", ""),
             is_foreign_player=cleaned.get("is_foreign_player", False),
         )
-
-    def extra_clean(self, cleaned, profile):
-        if not profile.is_foreign_player:
-            return  # False へ戻す/変化なしは枠を超えない
-        stint = (
-            PlayerStint.objects.filter(player=self.instance, to_year__isnull=True)
-            .select_related("team__league")
-            .first()
-        )
-        if stint is None:
-            return  # まだどこにも在籍していない選手は検査不要
-
-        team = DjangoTeamRepository(_REAL).find_by_id(stint.team_id)
-        league = DjangoLeagueRepository(_REAL).find_by_id(stint.team.league_id)
-        player = team.find_player(self.instance.id)
-        player.profile = replace(player.profile, is_foreign_player=True)
-        team.ensure_foreign_player_quota(league.foreign_player_roster_limit)
 
 
 @admin.register(Player)

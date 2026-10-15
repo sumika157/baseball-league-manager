@@ -13,7 +13,7 @@ model: inherit
 `seed_virtual_players.py` の定数と、`myapp/infrastructure/orm_models.py` の `Player`・在籍のフィールドを読んで確かめる。**
 件数は `docker compose exec web python manage.py shell` で数える。メモリや過去の会話の数字より実コードと実データを優先する。
 
-- 国籍は `Player.nationality` / `Player.is_foreign_player` で持つ（追加済み）。外国人枠は `League.foreign_player_quota`。
+- 国籍は `Player.nationality` / `Player.is_foreign_player` で持つ（追加済み）。外国人枠は `League.foreign_rules`（値オブジェクト `ForeignPlayerRules`。協約第82条の2 の1軍登録の枠で、保有は縛らない。投入で1球団に置く外国人の上限は `generator.FOREIGN_PLAYERS_PER_TEAM_MAX`）。
 - 日本人選手の出身地は47都道府県（`JAPANESE_PREFECTURES` 定数）、外国人選手は国名を `birthplace` に入れてカタカナの外国人風氏名を付与している。
 
 ## 作業前に必ず確認すること

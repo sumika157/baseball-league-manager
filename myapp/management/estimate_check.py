@@ -26,12 +26,10 @@ from myapp.domain.simulation.levels import SeasonTally, UsageRow, UsageTally
 from myapp.domain.simulation.manager import ClubRoster, SimBatter, SimPitcher, choose_active_roster
 from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings, RatingGrade
-from myapp.domain.value_objects import BattingLine, ContractStatus, InningsPitched, PitchingLine
+from myapp.domain.value_objects import BattingLine, ContractStatus, ForeignPlayerRules, InningsPitched, PitchingLine
 from myapp.presentation.views import build_pennant_world_service
 
 OUTS_PER_INNING = InningsPitched.OUTS_PER_INNING
-# 外国人の登録枠が空欄（無制限）のリーグで使う上限。分岐元がすでに超えていても動かすため
-DEFAULT_FOREIGN_ROSTER_LIMIT = 4
 
 
 def _pad(text: str, width: int) -> str:
@@ -209,12 +207,8 @@ def simulate_season(
     """推定した能力で1シーズンを回す。(選手ごとの打撃, 投球, 試合数, 1球団の試合数)。"""
     rosters = {}
     for league, teams in zip(source.leagues, source.rosters, strict=True):
-        limit = league.foreign_player_roster_limit
         for team in teams:
-            club = _club(team, ratings)
-            rosters[_id(team.id)] = choose_active_roster(
-                club, DEFAULT_FOREIGN_ROSTER_LIMIT if limit is None else limit
-            )
+            rosters[_id(team.id)] = choose_active_roster(_club(team, ratings), rules=league.foreign_rules)
     leagues = {
         _id(league.id): [_id(team.id) for team in teams]
         for league, teams in zip(source.leagues, source.rosters, strict=True)
@@ -252,6 +246,8 @@ def play_season(
             rosters[fixture.visitor_team_id],
             played_on=fixture.date,
             history=history,
+            # 1軍はリーグの外国人枠で選んであるので、試合では縛らない（交流戦の枠の違いは測らない）
+            foreign_rules=ForeignPlayerRules.UNLIMITED,
         )
         season.add(played.game)
         if usage is not None:

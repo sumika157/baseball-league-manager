@@ -90,7 +90,7 @@ class InvalidCaptaincy(DomainError):
 
 
 class ForeignPlayerQuotaExceeded(DomainError):
-    """外国人選手の人数が上限を超えている（登録枠・試合出場枠のどちらにも使う）。"""
+    """外国人選手の人数が外国人枠（協約第82条の2。1軍登録・試合の出場者）を超えている。"""
 
 
 class InvalidRatings(DomainError):

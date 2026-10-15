@@ -16,6 +16,7 @@ from myapp.domain.simulation.game_day import simulated_attendance, simulated_tim
 from myapp.domain.simulation.manager import choose_active_roster
 from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.samples import average_club
+from myapp.domain.value_objects import ForeignPlayerRules
 
 WEEKDAY = date(2026, 4, 1)  # 水曜
 SATURDAY = date(2026, 4, 4)
@@ -34,12 +35,17 @@ class ScriptedRandom:
 
 
 def _clubs():
-    return choose_active_roster(average_club(1)), choose_active_roster(average_club(2))
+    return choose_active_roster(average_club(1), rules=ForeignPlayerRules.UNLIMITED), choose_active_roster(
+        average_club(2), rules=ForeignPlayerRules.UNLIMITED
+    )
 
 
 def _games(count: int, day: date = WEEKDAY):
     home, away = _clubs()
-    return [simulate_game(make_random(seed), home, away, played_on=day).game for seed in range(count)]
+    return [
+        simulate_game(make_random(seed), home, away, played_on=day, foreign_rules=ForeignPlayerRules.UNLIMITED).game
+        for seed in range(count)
+    ]
 
 
 class StartTimeTest(TestCase):

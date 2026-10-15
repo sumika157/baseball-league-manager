@@ -14,7 +14,7 @@ from django.core.management import CommandError, call_command
 from django.test import SimpleTestCase
 
 from myapp.domain.pennant.world import WorldScope
-from myapp.domain.value_objects import ContractStatus, FieldingPosition, Position
+from myapp.domain.value_objects import ContractStatus, FieldingPosition, ForeignPlayerRules, Position
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
 from myapp.management.commands.seed_virtual_games import LINEUP_SIZE, MAX_INNINGS, Command, _Outing, _Side
@@ -37,6 +37,10 @@ ROSTER = (
 )
 
 
+# 計1人だけの外国人枠（投手・野手の内訳は無制限）
+TOTAL_ONE = ForeignPlayerRules(active=1, pitchers=None, batters=None)
+
+
 def run(*args) -> str:
     out = StringIO()
     call_command(
@@ -48,8 +52,8 @@ def run(*args) -> str:
 class SeedGamesBase(BaseCase):
     def setUp(self) -> None:
         super().setUp()
-        # 出場枠1人。投手と野手に1人ずつ外国人を置き、両方は出られない状況にする
-        self.league.foreign_player_game_limit = 1
+        # 外国人枠は計1人。投手と野手に1人ずつ外国人を置き、両方は出られない状況にする
+        self.league.foreign_active_limit = 1
         self.league.save()
         self.third = orm_models.Team.objects.create(league=self.league, name="三番目のチーム")
         self.teams = (self.team, self.rival, self.third)
@@ -429,7 +433,7 @@ def _player(player_id: int, position: Position, throws: str) -> SimpleNamespace:
 class ForeignStarterTest(SimpleTestCase):
     """外国人の先発が投げる日は、外国人の野手が控えに回る（#191）。
 
-    以前は打順を先に組んでいたため、外国人の野手で出場枠が尽きると外国人の先発が投げられず、
+    以前は打順を先に組んでいたため、外国人の野手で外国人枠が尽きると外国人の先発が投げられず、
     毎回ローテーションの1番手が代わりに先発していた（年70試合に先発する投手が出た）。
     """
 
@@ -459,14 +463,14 @@ class ForeignStarterTest(SimpleTestCase):
         command.rng = np.random.default_rng(0)
         side = _Side(team=None, roster=roster, is_home=True)
 
-        command._take_field(side, 0, 1)
+        command._take_field(side, 0, TOTAL_ONE)
 
         self.assertIs(side.pitcher.player, starter)
         batters = {entry.player.id for entry in side.lineup}
         self.assertNotIn(self.FOREIGN_BATTER, batters)
         self.assertIn(self.RESERVE, batters)
         self.assertEqual(len(side.lineup), LINEUP_SIZE)
-        self.assertEqual(side.foreign_used, 1)
+        self.assertEqual(side.foreign_positions, [Position.PITCHER])
 
 
 class DefensiveAlignmentTest(SimpleTestCase):
@@ -521,22 +525,35 @@ class DefensiveAlignmentTest(SimpleTestCase):
 
 
 class WithinQuotaTest(SimpleTestCase):
-    """外国人の出場枠が先で、投げる手は次（#158）。"""
+    """外国人枠が先で、投げる手は次（#158）。"""
 
     def side(self, foreign_ids: set[int], used: int) -> _Side:
-        return _Side(team=None, roster={"foreign": foreign_ids}, is_home=True, foreign_used=used)
+        return _Side(
+            team=None, roster={"foreign": foreign_ids}, is_home=True, foreign_positions=[Position.OUTFIELDER] * used
+        )
 
     def test_a_reserve_that_suits_the_position_is_preferred(self) -> None:
         wanted = _player(1, Position.INFIELDER, "右")
         left = _player(2, Position.INFIELDER, "左")
         right = _player(3, Position.INFIELDER, "右")
         side = self.side({1}, used=1)
-        chosen = Command._within_quota(side, wanted, [left, right], 1, FieldingPosition.SHORTSTOP)
+        chosen = Command._within_quota(side, wanted, [left, right], TOTAL_ONE, FieldingPosition.SHORTSTOP)
         self.assertEqual(chosen.id, 3)
 
     def test_the_quota_wins_over_the_throwing_hand(self) -> None:
         wanted = _player(1, Position.INFIELDER, "右")
         left = _player(2, Position.INFIELDER, "左")
         side = self.side({1}, used=1)
-        chosen = Command._within_quota(side, wanted, [left], 1, FieldingPosition.SHORTSTOP)
+        chosen = Command._within_quota(side, wanted, [left], TOTAL_ONE, FieldingPosition.SHORTSTOP)
         self.assertEqual(chosen.id, 2)
+
+    def test_the_agreement_counts_pitchers_and_batters_by_registered_position(self) -> None:
+        """協約第82条の2: 投手は3人まで。4人目の外国人の投手は出せないが、計4人目の野手は出せる。"""
+        side = _Side(team=None, roster={"foreign": {1, 2}}, is_home=True, foreign_positions=[Position.PITCHER] * 3)
+        pitcher = _player(1, Position.PITCHER, "右")
+        batter = _player(2, Position.OUTFIELDER, "右")
+
+        self.assertFalse(Command._quota_allows(side, pitcher, ForeignPlayerRules.NPB))
+        self.assertTrue(Command._quota_allows(side, batter, ForeignPlayerRules.NPB))
+        Command._count_foreign(side, batter)
+        self.assertFalse(Command._quota_allows(side, batter, ForeignPlayerRules.NPB), "計4人まで")

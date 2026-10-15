@@ -67,6 +67,7 @@ from myapp.domain.value_objects import (
     Position,
     Season,
 )
+from myapp.infrastructure.repositories import FOREIGN_RULE_FIELDS, foreign_rules_from
 from myapp.infrastructure.scoping import games_in, leagues_in, world_condition
 from myapp.models import (
     Game,
@@ -326,7 +327,8 @@ class _Side:
     outings: list = field(default_factory=list)
     order_index: int = 0
     used_player_ids: set = field(default_factory=set)
-    foreign_used: int = 0
+    # 出場した外国人の登録位置（投手か野手かは `ForeignPlayerRules.counts` が数える）
+    foreign_positions: list = field(default_factory=list)
     pinch_hitters: int = 0
     score: int = 0
 
@@ -430,7 +432,7 @@ class Command(BaseCommand):
             if contract is ContractStatus.DEVELOPMENTAL:
                 continue
             entry = rosters[stint.team_id]
-            if stint.player.position == Position.PITCHER.value:
+            if Position.from_label(stint.player.position).is_pitcher:
                 entry["pitchers"].append(stint.player)
             else:
                 entry["batters"].append(stint.player)
@@ -615,16 +617,18 @@ class Command(BaseCommand):
     def _play(self, card, rosters, starts):
         """1試合を打席単位で進めて、保存に必要なものをまとめて返す。"""
         home, away = card["home"], card["away"]
-        limit = card["league"].foreign_player_game_limit
+        league = card["league"]
+        # 外国人枠はリーグの1軍登録の枠（協約第82条の2）。出場者は1軍の中から出るので、試合の出場者に当てる
+        rules = foreign_rules_from(*(getattr(league, name) for name in FOREIGN_RULE_FIELDS))
 
         sides = {}
         for team, is_home in ((home, True), (away, False)):
             side = _Side(team=team, roster=rosters[team.id], is_home=is_home)
-            self._take_field(side, starts[team.id], limit)
+            self._take_field(side, starts[team.id], rules)
             starts[team.id] += 1
             sides[is_home] = side
 
-        plate_appearances = self._simulate(sides, limit)
+        plate_appearances = self._simulate(sides, rules)
 
         header = GameHeader(
             season=Season(card["played_on"].year),
@@ -644,13 +648,17 @@ class Command(BaseCommand):
             )
         # 明細と打席が食い違っていないこと。bulk_create は集約の検査を素通りする
         domain_services.ensure_lines_match_plate_appearances(game)
+        # 出場した外国人が枠に収まっていること（スコアブックの保存の検査と同じ規則。起用の側で守っているが、
+        # bulk_create は保存の検査を素通りするので、組み立てた試合でも確かめる）
+        for side in sides.values():
+            rules.ensure_players_within(side.foreign_positions, subject=f"「{side.team.name}」のこの試合の出場選手")
         return {
             "league_name": card["league"].name,
             "card": card,
             "game": game,
         }
 
-    def _simulate(self, sides, limit):
+    def _simulate(self, sides, rules):
         """試合を打席単位で進める。通し番号が時系列の唯一の出典。"""
         plate_appearances = []
         inning = 1
@@ -658,7 +666,7 @@ class Command(BaseCommand):
             for is_bottom in (False, True):
                 if self._skip_bottom(sides, inning, is_bottom):
                     continue
-                self._half_inning(plate_appearances, sides, inning, is_bottom, limit)
+                self._half_inning(plate_appearances, sides, inning, is_bottom, rules)
             if inning >= INNINGS_PER_GAME and sides[True].score != sides[False].score:
                 break
             if inning >= MAX_INNINGS:
@@ -671,16 +679,16 @@ class Command(BaseCommand):
         """9回以降の裏は、ホームが既にリードしていれば行わない。"""
         return is_bottom and inning >= INNINGS_PER_GAME and sides[True].score > sides[False].score
 
-    def _half_inning(self, plate_appearances, sides, inning, is_bottom, limit):
+    def _half_inning(self, plate_appearances, sides, inning, is_bottom, rules):
         """半回ぶんの打席を積む。3アウトか、サヨナラで終わる。"""
         batting, fielding = sides[is_bottom], sides[not is_bottom]
         occupied: dict = {}
         outs = 0
-        self._maybe_send_in_late_relief(fielding, sides, inning, limit)
+        self._maybe_send_in_late_relief(fielding, sides, inning, rules)
 
         while outs < OUTS_PER_INNING:
-            self._maybe_change_pitcher(fielding, sides, inning, limit)
-            batter = self._next_batter(batting, inning, limit)
+            self._maybe_change_pitcher(fielding, sides, inning, rules)
+            batter = self._next_batter(batting, inning, rules)
             entry = self._plate_appearance(
                 sequence=len(plate_appearances) + 1,
                 inning=inning,
@@ -702,18 +710,18 @@ class Command(BaseCommand):
 
     # --- 出場選手 ---
 
-    def _take_field(self, side, start_index, limit):
+    def _take_field(self, side, start_index, rules):
         """1チームの出場選手を揃える。**先発を先に決めてから打順を組む。**
 
-        外国人の出場枠は先に入った選手から埋まる。打順を先に組むと、外国人の野手で枠が尽きた日に
+        外国人枠は先に入った選手から埋まる。打順を先に組むと、外国人の野手で枠が尽きた日に
         外国人の先発が投げられず、毎回同じ投手（ローテーションの1番手）が代わりに先発する
         （年70試合に先発する投手が出た）。先発を先に決めれば、打順の側で外国人の野手が
         控えと入れ替わる（実際のチームと同じ起用）。
         """
-        self._take_mound(side, start_index, limit)
-        self._set_lineup(side, limit)
+        self._take_mound(side, start_index, rules)
+        self._set_lineup(side, rules)
 
-    def _set_lineup(self, side, limit):
+    def _set_lineup(self, side, rules):
         """打順を決める。レギュラーを基本にし、一部を控えと入れ替える。
 
         控えは序列の上位から選ばれやすい。均等に散らすと1人あたりの打席が
@@ -734,13 +742,13 @@ class Command(BaseCommand):
                 picked = bench[self.rng.choice(len(bench), p=roster["bench_weights"])]
                 if (
                     picked.id not in side.used_player_ids
-                    and self._quota_allows(side, picked, limit)
+                    and self._quota_allows(side, picked, rules)
                     and _suits(picked, inherited)
                 ):
                     player = picked
             if player.id in side.used_player_ids:
                 player = regular
-            player = self._within_quota(side, player, bench, limit, inherited)
+            player = self._within_quota(side, player, bench, rules, inherited)
             entry = _Batter(
                 player=player,
                 batting_order=order,
@@ -753,7 +761,7 @@ class Command(BaseCommand):
             self._join(side, entry)
 
     @classmethod
-    def _within_quota(cls, side, wanted, alternatives, limit, position=None):
+    def _within_quota(cls, side, wanted, alternatives, rules, position=None):
         """外国人枠に収まる選手を返す。収まらなければ控えから代わりを探す。
 
         代わりが見つからないロスター（外国人ばかりのチーム）では、そのまま返す。
@@ -761,20 +769,20 @@ class Command(BaseCommand):
         いなければ外国人枠だけを満たす選手（このとき投げる手の規則は曲げる。外国人枠はリーグの規則で、
         破ると保存した試合が検査に通らないため）。
         """
-        if cls._quota_allows(side, wanted, limit):
+        if cls._quota_allows(side, wanted, rules):
             return wanted
-        usable = [o for o in alternatives if o.id not in side.used_player_ids and cls._quota_allows(side, o, limit)]
+        usable = [o for o in alternatives if o.id not in side.used_player_ids and cls._quota_allows(side, o, rules)]
         suited = [o for o in usable if position is None or _suits(o, position)]
         return (suited or usable or [wanted])[0]
 
-    def _next_batter(self, side, inning, limit):
+    def _next_batter(self, side, inning, rules):
         """次の打者。打順は1〜9を巡回する（スコアブックを横に読む性質そのもの）。"""
         slot = side.order_index
         side.order_index = (slot + 1) % LINEUP_SIZE
-        self._maybe_pinch_hit(side, slot, inning, limit)
+        self._maybe_pinch_hit(side, slot, inning, rules)
         return side.lineup[slot]
 
-    def _maybe_pinch_hit(self, side, slot, inning, limit):
+    def _maybe_pinch_hit(self, side, slot, inning, rules):
         """終盤に代打を送る。スタメンと途中出場の区別がボックススコアに出る。"""
         if inning < PINCH_HITTER_FROM_INNING or side.pinch_hitters >= MAX_PINCH_HITTERS:
             return
@@ -784,7 +792,7 @@ class Command(BaseCommand):
         if not bench:
             return
         picked = bench[int(self.rng.integers(0, len(bench)))]
-        if not self._quota_allows(side, picked, limit):
+        if not self._quota_allows(side, picked, rules):
             return
 
         current = side.lineup[slot]
@@ -809,27 +817,32 @@ class Command(BaseCommand):
         side.lineup[index] = entry
         side.appearances.append(entry)
         side.used_player_ids.add(entry.player.id)
-        if entry.player.id in side.roster["foreign"]:
-            side.foreign_used += 1
+        self._count_foreign(side, entry.player)
 
     @staticmethod
-    def _quota_allows(side, player, limit):
-        """外国人選手の出場枠に収まるか。
+    def _quota_allows(side, player, rules):
+        """外国人選手の枠（計・投手・野手。投手か野手かは登録位置）に収まるか。
 
-        枠は「1試合に出場できる外国人選手の上限」で、リーグが持つ。サイトからの
-        入力では検査されるので、投入データも同じ規則に従わせる。
+        枠はリーグの1軍登録の枠（`ForeignPlayerRules`）。サイトからの入力（スコアブックの保存）では
+        出場した外国人に当てて検査されるので、投入データも同じ規則に従わせる。
         """
-        if limit is None or player.id not in side.roster["foreign"]:
+        if player.id not in side.roster["foreign"]:
             return True
-        return side.foreign_used < limit
+        return rules.has_room_for(side.foreign_positions, Position.from_label(player.position))
+
+    @staticmethod
+    def _count_foreign(side, player):
+        """出場した外国人の登録位置を記録する（投手か野手かは `ForeignPlayerRules.counts` が数える）。"""
+        if player.id in side.roster["foreign"]:
+            side.foreign_positions.append(Position.from_label(player.position))
 
     # --- 継投 ---
 
-    def _take_mound(self, side, start_index, limit):
+    def _take_mound(self, side, start_index, rules):
         """先発をマウンドに送る。ローテーションを順に回す。"""
         rotation = side.roster["rotation"]
         starter = rotation[start_index % len(rotation)]
-        starter = self._within_quota(side, starter, rotation + side.roster["bullpen"], limit)
+        starter = self._within_quota(side, starter, rotation + side.roster["bullpen"], rules)
         innings = int(self.rng.integers(*STARTER_INNINGS, endpoint=True))
         self._add_outing(side, starter, inning=1, target_outs=innings * OUTS_PER_INNING)
 
@@ -845,27 +858,26 @@ class Command(BaseCommand):
             )
         )
         side.used_player_ids.add(player.id)
-        if player.id in side.roster["foreign"]:
-            side.foreign_used += 1
+        self._count_foreign(side, player)
 
     def _mid_inning_shave(self):
         if self.rng.random() >= MID_INNING_CHANGE_RATIO:
             return 0
         return int(self.rng.integers(1, OUTS_PER_INNING))
 
-    def _maybe_change_pitcher(self, side, sides, inning, limit):
+    def _maybe_change_pitcher(self, side, sides, inning, rules):
         """受け持ちのアウト数に達していたら次の投手に代える。"""
         if side.pitcher.outs < side.pitcher.target_outs:
             return
         lead = side.score - sides[not side.is_home].score
-        nxt = self._pick_reliever(side, inning, lead, limit)
+        nxt = self._pick_reliever(side, inning, lead, rules)
         if nxt is None:
             # 投げられる投手がいなければ続投する（投手のいない回を作らない）
             side.pitcher.target_outs += OUTS_PER_INNING
             return
         self._add_outing(side, nxt, inning, int(self.rng.integers(*RELIEVER_OUTS, endpoint=True)))
 
-    def _maybe_send_in_late_relief(self, side, sides, inning, limit):
+    def _maybe_send_in_late_relief(self, side, sides, inning, rules):
         """回の頭に、勝ちパターンの投手（9回以降は抑え、8回はセットアッパー）を送る。
 
         前の投手の受け持ちが残っていても代える。受け持ちは1イニングで、回の途中の交代を掛けない
@@ -884,12 +896,12 @@ class Command(BaseCommand):
                 usage = SETUP_USAGE_WHEN_TIED if lead == 0 else 0.0
         else:
             return
-        if pitcher.id in side.used_player_ids or not self._quota_allows(side, pitcher, limit):
+        if pitcher.id in side.used_player_ids or not self._quota_allows(side, pitcher, rules):
             return
         if self.rng.random() < usage:
             self._add_outing(side, pitcher, inning, OUTS_PER_INNING, shave=False)
 
-    def _pick_reliever(self, side, inning, lead, limit):
+    def _pick_reliever(self, side, inning, lead, rules):
         """次に投げる救援。最終回の接戦は抑えが締める。
 
         抑えを固定しないとセーブが数人に分散し、1人で年30セーブという実際の
@@ -898,7 +910,7 @@ class Command(BaseCommand):
         bullpen = [
             p
             for p in side.roster["bullpen"]
-            if p.id not in side.used_player_ids and self._quota_allows(side, p, limit)
+            if p.id not in side.used_player_ids and self._quota_allows(side, p, rules)
         ]
         if not bullpen:
             return None

@@ -89,20 +89,140 @@ DEFAULT_REGISTERED_PLAYER_LIMIT = 70
 
 @dataclass(frozen=True)
 class RosterLimits:
-    """ロスターの人数の上限（支配下の登録上限・外国人選手の登録枠）。リーグが持ち、集約の操作に渡す。
+    """ロスターの人数の上限（支配下の登録上限）。リーグが持ち、集約の操作に渡す。
 
     集約（`Team`）はリーグを知らないので、上限は操作の引数で受ける。**省略できない引数**にしてあるのは、
     省略時の既定を「検査しない」にすると、呼び出しを足したときに検査が黙って素通りするため。
     検査しない場合は `RosterLimits.UNLIMITED` を明示する（None は無制限）。
+    外国人選手の保有の人数は縛らない（協約第82条の2。外国人の枠は1軍の登録にかかる `ForeignPlayerRules`）。
     """
 
     registered: int | None
-    foreign: int | None
 
     UNLIMITED: ClassVar[RosterLimits]
 
 
-RosterLimits.UNLIMITED = RosterLimits(registered=None, foreign=None)
+RosterLimits.UNLIMITED = RosterLimits(registered=None)
+
+
+@dataclass(frozen=True)
+class ForeignPlayerRules:
+    """外国人選手の1軍登録の枠（日本プロフェッショナル野球協約 第82条の2）。リーグが持つ。
+
+    協約の原文: 「球団は、任意の数の外国人選手を支配下選手として保有することができる。ただし、出場選手登録は
+    4名以内に限られ、野手又は投手として同時に登録申請できるのは、それぞれ3名以内とする。」
+
+    - **保有（育成を含む在籍）の人数は縛らない。** 縛るのは1軍の登録（ペナントの1軍）と、1軍から出る
+      1試合の出場者（実データのスコアブック・ペナントの試合）。1試合の出場枠を別に持たない（同じ「4人」を
+      2か所に持たないため。出場者は1軍の中から出る）。
+    - 投手か野手かは**登録位置**（`Position.PITCHER` か）で数える（協約の「投手又は野手として登録申請」。
+      その試合で何をしたかでは数えない）。
+    - 各成分の None は無制限。既定の値の唯一の出典は `NPB`（`League` と永続化の既定はここを参照する）。
+    """
+
+    active: int | None
+    pitchers: int | None
+    batters: int | None
+
+    NPB: ClassVar[ForeignPlayerRules]
+    UNLIMITED: ClassVar[ForeignPlayerRules]
+
+    def __post_init__(self) -> None:
+        for label, value in (("1軍登録の枠", self.active), ("投手の枠", self.pitchers), ("野手の枠", self.batters)):
+            if value is not None and value < 0:
+                raise DomainError(f"外国人選手の{label}に負の数は指定できません（{value}）。")
+
+    @property
+    def label(self) -> str:
+        """案内文に出す形（例「計4人・投手3人・野手3人」）。無制限の成分は書かない（全部無制限なら「無制限」）。"""
+        parts = [
+            f"{what}{limit}人"
+            for what, limit in (("計", self.active), ("投手", self.pitchers), ("野手", self.batters))
+            if limit is not None
+        ]
+        return "・".join(parts) if parts else "無制限"
+
+    def violation(self, *, pitchers: int, batters: int) -> str | None:
+        """外国人の投手 `pitchers` 人・野手 `batters` 人が枠を超えていれば、超えた枠（例「計4人までです（5人）」）。
+
+        収まっていれば None。計・投手・野手の順に見て、最初に超えた枠を返す。
+        """
+        for what, limit, count in (
+            ("計", self.active, pitchers + batters),
+            ("投手", self.pitchers, pitchers),
+            ("野手", self.batters, batters),
+        ):
+            if limit is not None and count > limit:
+                return f"{what}{limit}人までです（{count}人）"
+        return None
+
+    def ensure_within(self, *, pitchers: int, batters: int, subject: str) -> None:
+        """枠に収まっているか。超えていれば ForeignPlayerQuotaExceeded（`subject` は数えた対象。例「1軍登録」）。
+
+        1軍の検査と試合の検査が、このメッセージを共通に使う。
+        """
+        exceeded = self.violation(pitchers=pitchers, batters=batters)
+        if exceeded is not None:
+            raise ForeignPlayerQuotaExceeded(f"{subject}の外国人選手は{exceeded}。")
+
+    @staticmethod
+    def counts(positions: Iterable[Position]) -> tuple[int, int]:
+        """外国人選手の登録位置の並びから、(投手, 野手) の人数。
+
+        **投手か野手かを数える唯一の入口**（協約の「投手又は野手として登録申請」。登録位置が投手なら投手、
+        それ以外は野手。その試合で何をしたかでは数えない）。スコアブックの保存・ペナントの編成と試合・
+        仮想データの投入がここを通る（FA 取得で枠の対象外になる選手を除くなら、渡す側で並びから外す）。
+        """
+        listed = list(positions)
+        pitchers = sum(1 for position in listed if position.is_pitcher)
+        return pitchers, len(listed) - pitchers
+
+    def ensure_players_within(self, positions: Iterable[Position], *, subject: str) -> None:
+        """外国人選手の登録位置の並びが枠に収まっているか（`counts` で数えて `ensure_within`）。"""
+        pitchers, batters = ForeignPlayerRules.counts(positions)
+        self.ensure_within(pitchers=pitchers, batters=batters, subject=subject)
+
+    def has_room_for(self, positions: Iterable[Position], position: Position) -> bool:
+        """外国人選手の登録位置の並び `positions` に、登録位置 `position` の外国人をもう1人足せるか。"""
+        pitchers, batters = ForeignPlayerRules.counts(positions)
+        return self.has_room(pitchers=pitchers, batters=batters, is_pitcher=position.is_pitcher)
+
+    def has_room(self, *, pitchers: int, batters: int, is_pitcher: bool) -> bool:
+        """外国人の投手 `pitchers` 人・野手 `batters` 人に、もう1人（`is_pitcher` の区分）足せるか。"""
+        return self.violation(pitchers=pitchers + int(is_pitcher), batters=batters + int(not is_pitcher)) is None
+
+    def batter_room(self, *, pitchers: int, batters: int) -> int | None:
+        """あと何人の外国人の野手を足せるか（計の枠と野手の枠の小さいほう）。どちらも無制限なら None。"""
+        rooms = [
+            limit - used
+            for limit, used in ((self.active, pitchers + batters), (self.batters, batters))
+            if limit is not None
+        ]
+        return max(0, min(rooms)) if rooms else None
+
+    @staticmethod
+    def strictest(rules: Iterable[ForeignPlayerRules]) -> ForeignPlayerRules:
+        """いくつかの規則のうち、成分ごとに最も厳しいもの（None は無制限。規則が無ければ無制限）。
+
+        ペナントの世界でリーグごとに規則が違うとき、交流戦はホーム球団のリーグの規則で行うので、
+        編成はどのリーグと当たっても組める規則（成分ごとの最小）で検査する。
+        """
+        listed = list(rules)
+
+        def tightest(values: Iterable[int | None]) -> int | None:
+            limits = [value for value in values if value is not None]
+            return min(limits) if limits else None
+
+        return ForeignPlayerRules(
+            active=tightest(r.active for r in listed),
+            pitchers=tightest(r.pitchers for r in listed),
+            batters=tightest(r.batters for r in listed),
+        )
+
+
+# 協約第82条の2 の値（1軍登録は4人まで、うち投手・野手それぞれ3人まで）
+ForeignPlayerRules.NPB = ForeignPlayerRules(active=4, pitchers=3, batters=3)
+ForeignPlayerRules.UNLIMITED = ForeignPlayerRules(active=None, pitchers=None, batters=None)
 
 
 class ContractStatus(Enum):
@@ -1875,12 +1995,11 @@ def ensure_quota_not_exceeded(
     count: int,
     limit: int | None,
     message: str,
-    error: type[DomainError] = ForeignPlayerQuotaExceeded,
+    error: type[DomainError],
 ) -> None:
-    """人数が上限を超えていないか確認する。limit が None なら無制限。
+    """人数が上限を超えていないか確認する。limit が None なら無制限。超えたときの例外は error で選ぶ。
 
-    外国人選手の登録枠・試合出場枠、支配下選手の上限のいずれも、この同じ規則で判定する。
-    超えたときの例外は error で選ぶ（既定は外国人枠）。
+    支配下選手の上限が使う（外国人選手の枠は投手・野手の内訳があるので `ForeignPlayerRules` が判定する）。
     """
     if limit is not None and count > limit:
         raise error(message)

@@ -23,6 +23,7 @@ from ..domain.value_objects import (
     ContractStatus,
     DepartureRoute,
     FieldingPosition,
+    ForeignPlayerRules,
     FreeAgencyKind,
     Handedness,
     JerseyNumber,
@@ -1209,12 +1210,11 @@ class SimulationPlayer:
 
 @dataclass(frozen=True)
 class SimulationTeam:
-    """シミュレーションに出る球団ひとつ。外国人の枠は所属リーグの値。"""
+    """シミュレーションに出る球団ひとつ。外国人枠は所属リーグの規則。"""
 
     team_id: int
     name: str
-    foreign_roster_limit: int | None
-    foreign_game_limit: int | None
+    foreign_rules: ForeignPlayerRules
     players: tuple[SimulationPlayer, ...]
     # 本拠地の収容人数。本拠地が無い・未設定なら None（ホーム試合の観客数を作らない）
     stadium_capacity: int | None
@@ -1385,8 +1385,8 @@ class ClubPlanView:
     `*_is_manual` が False の区画は、AI 監督の自動編成（提案）をそのまま映している。手動の区画で
     使えなくなっているものは区画が手動のまま（GM が自動に戻すまで）で、`notices` に理由が入り、
     中身はその日に使われる自動に落ちた形になる（Wiki「ペナントモードの仕組み」の「編成」）。
-    自動のスタメンは先発の外国人を出場枠に数えない目安で、外国人の投手が先発する日は実際の試合と違いうる
-    （先発は日ごとの疲労で決まるため、画面では決めない）。出場枠は世界のリーグで最も厳しい値で数えるので、
+    自動のスタメンは先発の外国人を外国人枠に数えない目安で、外国人の投手が先発する日は実際の試合と違いうる
+    （先発は日ごとの疲労で決まるため、画面では決めない）。試合の外国人枠は世界のリーグで最も厳しい規則で数えるので、
     自リーグの枠が緩い世界では、自リーグの試合の実際のスタメンと外国人の人数が違いうる。
     """
 
@@ -1421,8 +1421,8 @@ class ClubLimitsView:
     """編成の枠（画面に出す上限と、選択肢。数は domain が出典で、テンプレートには書かない）。None は制限なし。"""
 
     active_size: int
-    foreign_roster_limit: int | None
-    foreign_game_limit: int | None
+    # 所属リーグの外国人枠（1軍登録。計・投手・野手）
+    foreign: ForeignPlayerRules
     lineup_size: int
     rotation_size: int
     min_rotation_size: int
@@ -1440,6 +1440,9 @@ class ClubRosterCounts:
     pitchers: int
     catchers: int
     foreign: int
+    # 外国人のうち投手と野手（登録位置で数える）
+    foreign_pitchers: int
+    foreign_batters: int
 
 
 @dataclass(frozen=True)

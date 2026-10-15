@@ -18,7 +18,15 @@ from myapp.domain.simulation.manager import ClubRoster, SimBatter, SimPitcher, c
 from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings
 from myapp.domain.simulation.samples import round_robin_days, spread_league
-from myapp.domain.value_objects import BattingLine, FieldingLine, InningsPitched, PitchingLine, Position, Profile
+from myapp.domain.value_objects import (
+    BattingLine,
+    FieldingLine,
+    ForeignPlayerRules,
+    InningsPitched,
+    PitchingLine,
+    Position,
+    Profile,
+)
 
 YEAR = 2027
 
@@ -145,7 +153,12 @@ def _play(clubs, seed_key, days, seed=1):
         for home, away in matches:
             rng = make_random(game_seed(seed, YEAR, f"{seed_key}-{day}-{home}"))
             played = simulate_game(
-                rng, clubs[home], clubs[away], played_on=date(YEAR, 4, 1) + timedelta(days=day), history=history
+                rng,
+                clubs[home],
+                clubs[away],
+                played_on=date(YEAR, 4, 1) + timedelta(days=day),
+                history=history,
+                foreign_rules=ForeignPlayerRules.UNLIMITED,
             )
             tally.add(played.game)
             games.append(played.game)
@@ -225,13 +238,18 @@ class EstimatedRatingsReproduceTheLevelTest(TestCase):
         cls.pool = {club.team_id: club for club in pool_clubs}
         days = round_robin_days(list(cls.pool), cls.REPEATS)
 
-        actives = {team_id: choose_active_roster(club, 4) for team_id, club in cls.pool.items()}
+        actives = {
+            team_id: choose_active_roster(club, rules=ForeignPlayerRules.NPB) for team_id, club in cls.pool.items()
+        }
         cls.original, games = _play(actives, "original", days)
 
         records = _records(cls.pool, games)
         cls.estimated_ratings = estimate_initial_ratings(records, seed=3, year=YEAR)
         estimated_pool = _with_estimates(cls.pool, cls.estimated_ratings)
-        estimated_actives = {team_id: choose_active_roster(club, 4) for team_id, club in estimated_pool.items()}
+        estimated_actives = {
+            team_id: choose_active_roster(club, rules=ForeignPlayerRules.NPB)
+            for team_id, club in estimated_pool.items()
+        }
         cls.replayed, _ = _play(estimated_actives, "replayed", days)
         cls.original_rows = {row.key: row.value for row in cls.original.rows()}
         cls.replayed_rows = {row.key: row.value for row in cls.replayed.rows()}

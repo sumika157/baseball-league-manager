@@ -35,7 +35,7 @@ from datetime import date
 
 from ..domain.entities import Player, Team
 from ..domain.exceptions import AlreadyClosed, SeasonLimitReached, SeasonNotFinished, TeamNotFound
-from ..domain.pennant.club_plan import ClubMember, PlanSection, strictest_game_limit
+from ..domain.pennant.club_plan import ClubMember, PlanSection
 from ..domain.pennant.offseason import Draftee, OffseasonClub, OffseasonPlan, OffseasonPlayer, plan_offseason
 from ..domain.pennant.offseason_player import TrackRecord
 from ..domain.pennant.ratings import PlayerRatings
@@ -53,7 +53,7 @@ from ..domain.repositories import (
     TeamRepository,
     WorldRepository,
 )
-from ..domain.value_objects import ContractStatus, DepartureRoute, JerseyNumber, RosterLimits
+from ..domain.value_objects import ContractStatus, DepartureRoute, ForeignPlayerRules, JerseyNumber, RosterLimits
 from .dto import ReleasePlanView, ReleasePlayerRow, SeasonClosed, SeasonCloseOption, SimulationTeam
 from .pennant_season import AtomicBlock
 from .queries import SeasonPlayingTimeQuery, SimulationContextQuery
@@ -228,7 +228,7 @@ class PennantOffseasonService:
         ensure_releasable(
             player_ids,
             [ClubMember(p.player_id, p.name, p.position, p.is_foreign) for p in players],
-            foreign_game_limit=strictest_game_limit(t.foreign_game_limit for t in teams),
+            foreign_rules=ForeignPlayerRules.strictest(t.foreign_rules for t in teams),
         )
         self._releases.save(ReleasePlan(team_id=team_id, year=year, player_ids=frozenset(player_ids)))
 
@@ -299,7 +299,9 @@ class PennantOffseasonService:
     def _prepare(self, world: World, year: int) -> _PreparedClose:
         """読んで計算し、集約の変更（引退・戦力外・新人）をメモリの上で済ませる。DB には何も書かない。"""
         teams = self._teams.find_all_with_roster()
-        limits = {league.id: league.roster_limits for league in self._leagues.find_all()}
+        leagues = self._leagues.find_all()
+        limits = {league.id: league.roster_limits for league in leagues}
+        foreign = {league.id: league.foreign_rules for league in leagues}
         ratings_by_player = {item.player_id: item for item in self._ratings.find_by_year(year)}
         playing = self._playing_time.for_year(year)
         manual = self._manual_releases(world, year)
@@ -307,7 +309,7 @@ class PennantOffseasonService:
         clubs = [
             OffseasonClub(
                 team_id=_saved_id(team.id),
-                foreign_roster_limit=_limits_of(team, limits).foreign,
+                foreign_rules=foreign.get(team.league_id, ForeignPlayerRules.UNLIMITED),
                 registered_player_limit=_limits_of(team, limits).registered,
                 players=tuple(
                     _offseason_player(team, player, ratings_by_player, playing, year=year)
@@ -392,7 +394,7 @@ class PennantOffseasonService:
             for draftee in draftees:
                 # 新人は支配下で入り、入団の経路（ドラフト / 新外国人）を記録する。支配下の上限は集約が検査する
                 # （人数は domain の `draftee_count` が上限を超えないように決めるので、ここでは失敗しない）。
-                # 外国人枠は国籍（プロフィール）を入れた後に、下でまとめて検査する
+                # 外国人の保有の人数は縛らない（協約第82条の2。外国人枠は1軍の登録にかかる）
                 player = team.add_player(
                     draftee.name,
                     JerseyNumber(draftee.number),
@@ -404,8 +406,6 @@ class PennantOffseasonService:
                 )
                 player.profile = draftee.profile
                 added.append(player)
-            if any(draftee.is_foreign for draftee in draftees):
-                team.ensure_foreign_player_quota(team_limits.foreign)
             changes.append(_RosterChange(team=team, added=added, draftees=draftees))
         return changes
 
