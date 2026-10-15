@@ -18,6 +18,7 @@ from ..domain.pennant.season import SeasonPhase
 from ..domain.services.free_agency import SERVICE_DAYS_PER_SEASON
 from ..domain.services.rankings import Title
 from ..domain.services.roster_analysis import NEUTRAL_CATEGORY, ColorCategory
+from ..domain.simulation.fatigue import FatigueLevel
 from ..domain.simulation.ratings import BatterRatings, PitcherRatings, RatingEmphasis
 from ..domain.value_objects import (
     AcquisitionRoute,
@@ -1475,11 +1476,14 @@ class ClubPitcherUsage:
     days_since_start: int | None
     # 次の試合日に投げられるか（連投の上限に達していないか。上限はスタミナで決まる）
     can_pitch: bool
+    # 次の試合日に投げたときの疲労の区分（ローテーションは先発したら、抑えと救援陣は救援で投げたら）。
+    # エンジンが率に効かせる点と同じ式（`fatigue.pregame_fatigue_points`）から引く。次の試合日が無ければ「なし」
+    fatigue: FatigueLevel
 
 
 @dataclass(frozen=True)
 class ClubPitchingUsage:
-    """投手陣の状態（編成の「投手陣」タブに出す）。次の試合日が無ければ、状態は既定（投げられる）で返す。"""
+    """投手陣の状態（編成の「投手陣」タブに出す）。次の試合日が無ければ、状態は既定（投げられる・疲労なし）で返す。"""
 
     # 受け持つ球団の次の試合日（日程が残っていなければ None）
     next_game_on: date | None
