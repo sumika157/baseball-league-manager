@@ -196,10 +196,17 @@ CSRF_FAILURE_VIEW = "myapp.presentation.csrf.csrf_failure"
 SECURE_SSL_REDIRECT = env_bool("DJANGO_SSL_REDIRECT")
 SESSION_COOKIE_SECURE = env_bool("DJANGO_SECURE_COOKIES")
 CSRF_COOKIE_SECURE = env_bool("DJANGO_SECURE_COOKIES")
-# HSTS（秒）。0 は出さない。出すときはサブドメインとプリロードも付ける
+# HSTS（秒）。0 は出さない。公開直後は短い値で始め、問題が無いのを確かめてから延ばす（Wiki「本番公開」）
 SECURE_HSTS_SECONDS = int(os.environ.get("DJANGO_HSTS_SECONDS") or 0)
-SECURE_HSTS_INCLUDE_SUBDOMAINS = SECURE_HSTS_SECONDS > 0
-SECURE_HSTS_PRELOAD = SECURE_HSTS_SECONDS > 0
+# サブドメインとプリロードはドメイン配下のすべてに HTTPS を強い、プリロードは外すのに数か月かかる。
+# そのため秒数からは決めず、明示したときだけ付ける
+SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool("DJANGO_HSTS_INCLUDE_SUBDOMAINS")
+SECURE_HSTS_PRELOAD = env_bool("DJANGO_HSTS_PRELOAD")
+# 意図して付けていない間は、check --deploy の「付いていない」警告（W005・W021）を出さない
+SILENCED_SYSTEM_CHECKS = [
+    *([] if SECURE_HSTS_INCLUDE_SUBDOMAINS else ["security.W005"]),
+    *([] if SECURE_HSTS_PRELOAD else ["security.W021"]),
+]
 
 # ログを標準出力へ出す（DJANGO_LOG_TO_STDOUT=True のとき。docker compose logs で読める）。
 # 開発・テストでは 404 などの警告でテスト出力が汚れるので入れない。
