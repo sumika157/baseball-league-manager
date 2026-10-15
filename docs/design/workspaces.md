@@ -317,7 +317,7 @@ W1a（T1）で入れるのは `Visibility` と `Workspace` の最小形（`id`�
 | `test_workspace_service.py`（W4 で作る） | 作成（見本あり・なし）、上限、削除で全行が消えて他のワークスペースの行は残ること、招待の受諾と除名（除名すると担当も外れる） |
 | `test_league_setup_screens.py` | 作成・編集・空のときだけ削除できること。名前の一意がワークスペースの中だけで効くこと |
 | `test_world_isolation.py` の `ModelClassificationTest`（epic の `CLASSIFICATION` を拡張。独立したファイルは作らない） | myapp の全モデルを、範囲のたどり方で分類する。分類に漏れがあれば落とす。分類表は下の表 |
-| `test_workspace_migration.py`（`test_jersey_number.py` の `MigrationToTextTest` に倣う） | データのある DB ではワークスペースが1つでき、**実データのリーグ**（ペナントのリーグは除く）・全球場・全世界が付く。持ち主は最小 id の superuser（いなければ staff）、ほかの staff は編集者、staff でない人は編集者にならない。どちらもいなければ日本語の例外で止まる。空の DB では何もできない。逆方向で元に戻る |
+| `test_workspace_migration.py`（`test_jersey_number.py` の `MigrationToTextTest` に倣う） | データのある DB ではワークスペースが1つでき、**実データのリーグ**（ペナントのリーグは除く）・全球場・全世界が付く。持ち主は最小 id の superuser（いなければ staff）、ほかの staff は編集者、staff でも superuser でもない人は編集者にならない。どちらもいなければ日本語の例外で止まる。空の DB では何もできない。逆方向は何もせず、再び適用してもワークスペースが増えない |
 | `test_admin.py`（拡張） | 管理画面の外部キーの選択肢が、同じワークスペースのものに限られる。在籍の無い選手が管理画面の一覧に出る（Q4） |
 | `test_seed_commands_scope.py`（拡張） | `--workspace` が必須で、ほかのワークスペースに触れない。`pennant_create --workspace` が他所のリーグを分岐元にできない |
 | `test_wiring.py`（拡張） | 17個＋新しい `build_*` のすべてと、範囲が必須であること。`ScopeIsRequiredTest` を「`scope` か `workspace_id` が必須」に広げ、`UNSCOPED` を空にする。管理画面専用の関数を `admin.py` 以外が import していないこと（Q4） |
@@ -522,6 +522,15 @@ W3 を W4 より先にするのは、W4 を先にすると、中身を入れら�
   - `DjangoLeagueRepository.save`: 新しいリーグだけ帰属を決める。実データの範囲は `workspace_id = legacy_workspace_id()`・`world_id = None`、ペナントの範囲は `workspace_id = None`・`world_id = scope.world_id`。既存のリーグの workspace・world は書き換えない。分岐のリーグはここを通るので workspace は空のまま。
   - `DjangoWorldRepository.save`: `world.workspace_id` が空なら `legacy_workspace_id()` を入れ、集約にも書き戻す（分岐で作る世界）。W1b で `PennantWorldService` が範囲のワークスペースを渡す形に替える。
   - 管理画面: League と Stadium のフォームに `workspace` を出して必須にした（`WorkspaceRequiredForm`）。選び忘れはフォームのエラーで、500 にならない。球場の管理画面は管理画面から作るだけで、リポジトリを通らない。
+- T5（`feature/workspace-backfill`）: マイグレーション `0049_backfill_default_workspace`（0048 の次。`RunPython` だけでスキーマ変更は無い）。
+  - リーグ・球場・世界のどれかが1行でもあれば、ワークスペースを1つ作る（公開。名前は「既定のワークスペース」。管理画面から後で変えられる）。何も無い DB では作らない。
+  - 持ち主は id が最小の superuser、いなければ id が最小の staff。どちらもいなければ `RuntimeError`（「先に createsuperuser を実行してください」を含む日本語）で止まり、マイグレーションは適用されない。ほかの staff は `WorkspaceEditor`、staff でない人は編集者にしない。`Team.managers` には触れない。
+  - `world IS NULL` のリーグ・全球場・全世界に付ける。ペナントのリーグには付けない。
+  - key はマイグレーション内で `random.SystemRandom()` から作る（英小文字と数字の10文字。domain の `KEY_LENGTH`・`KEY_ALPHABET` を写した。重複したら引き直す）。
+  - 全権を持っていた人は「staff または superuser」（`infrastructure/queries.py` と同じ）なので、持ち主以外のその両方を編集者にする。持ち主・編集者とも `is_active` な人だけ。エラーの文には本番の復旧コマンド（`docker compose -f docker-compose.prod.yml run --rm --no-deps --entrypoint python web manage.py createsuperuser`）を入れた。再起動を繰り返すコンテナには `exec` が効かないため。
+  - 逆方向は何もしない（`noop`）。0048 では列が残るので帰属はそのままでよく、0048 より前へ戻れば列ごと消える。消す形にすると、戻して再び適用したときに、あとから作られたワークスペースを消したり、非公開のものを1つの公開ワークスペースに混ぜたりしてしまう。順方向も、ワークスペースが1つでもあれば何もしない。
+  - テスト: `tests/integration/test_workspace_migration.py`（`TransactionTestCase` 1クラス・4テスト。帰属と逆方向／superuser がいない場合／持ち主がなれる人がいない場合／空の DB）。
+  - 開発 DB の写し（`/tmp/w1a-t5/db.sqlite3`、`DJANGO_DB_PATH` で指して実施。共有の `db.sqlite3` には当てていない。試行後に写しは削除）: 0048・0049 の適用に 2.6 秒（プロセス起動を含む）。ワークスペース1つ（公開・持ち主 `admin`＝id 1 の superuser）、編集者1人（`smoketest`＝superuser かつ staff）、リーグ 8/8（ペナントのリーグは 0 で付いていない）、球場 21/21、世界 0/0。ユーザーは3人（admin・s-sato・smoketest）で、staff でない `s-sato` は編集者にならない。`migrate myapp 0048` で3つの表の `workspace` が全部 NULL、`Workspace`・`WorkspaceEditor` が 0 行に戻ることを確かめた。
 
 #### T7 で必ず行うこと（T4 のレビューより）
 
@@ -529,3 +538,7 @@ W3 を W4 より先にするのは、W4 を先にすると、中身を入れら�
 - (b) 同じコミットで、Wiki `開発環境` の管理ユーザーの作成（createsuperuser）の次と、`本番公開` の createsuperuser の2か所（164 行目付近と 402 行目付近）に「最初にワークスペースを1つ作る」を足す。
 - (c) 既存のリーグ・球場で `workspace` を管理画面から読み取り専用にするか決める（`get_readonly_fields`）。リポジトリは帰属を書き換えないが、管理画面は今は書き換えられる。どちらにしても、変更フォームのテストを添える。
 - (d) 球場の `home_teams` の選択肢は全ワークスペースのチームを並べる。W1b の範囲（ここでは直さない）。
+
+#### epic を main に入れるときに必ず行うこと（T5 のレビューより）
+
+- 0049 は、データがあるのに superuser も staff もいない DB ではエラーで止まる。ワークスペースの epic をデプロイする前に、superuser がいることを確かめる。止まったときの復旧手順（上の `run --rm --no-deps --entrypoint python web manage.py createsuperuser`）を、epic を main に入れるときに Wiki「本番公開」のデプロイ（更新）の節に足す。
