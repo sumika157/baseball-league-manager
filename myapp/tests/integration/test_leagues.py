@@ -14,11 +14,7 @@ from myapp.domain.value_objects import (
 )
 from myapp.infrastructure import orm_models
 
-from ..helpers import (
-    give_batting,
-    give_pitching,
-    play_game,
-)
+from ..helpers import give_batting, give_pitching, make_league, play_game
 from .base import BaseCase
 
 
@@ -27,7 +23,7 @@ class TeamListByLeagueTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.other = orm_models.League.objects.create(name="別リーグ")
+        self.other = make_league(name="別リーグ")
         self.x = orm_models.Team.objects.create(league=self.other, name="Xチーム")
 
     def test_grouped_by_league(self):
@@ -37,7 +33,7 @@ class TeamListByLeagueTest(BaseCase):
         self.assertEqual(grouped, {"テストリーグ": ["テストチーム", "相手チーム"], "別リーグ": ["Xチーム"]})
 
     def test_leagues_without_teams_are_omitted(self):
-        orm_models.League.objects.create(name="空リーグ")
+        make_league(name="空リーグ")
         names = [g.league_name for g in self.service.list_teams_by_league().rows]
 
         self.assertNotIn("空リーグ", names)
@@ -97,7 +93,7 @@ class LeagueDetailTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.outsider_league = orm_models.League.objects.create(name="別リーグ")
+        self.outsider_league = make_league(name="別リーグ")
         self.outsider = orm_models.Team.objects.create(league=self.outsider_league, name="部外チーム")
         play_game(self.team, self.rival, home_score=5, away_score=3, day=1)
         self.url = reverse("league_detail", args=[self.league.id])
@@ -285,7 +281,7 @@ class LeagueTitlesViewTest(BaseCase):
         self.assertEqual(self._departments(2026)["home_runs"].leader.value, "1")
 
     def test_players_of_another_league_are_not_listed(self):
-        other_league = orm_models.League.objects.create(name="別リーグ")
+        other_league = make_league(name="別リーグ")
         other = orm_models.Team.objects.create(league=other_league, name="別チーム")
         opponent = orm_models.Team.objects.create(league=other_league, name="別の相手")
         outsider = self.service.register_player(other.id, "他リーグの大砲", 9, "内野手")
@@ -393,7 +389,7 @@ class LeagueStatsViewTest(BaseCase):
         self.assertEqual({r.team_name for r in rows}, {"テストチーム", "相手チーム"})
 
     def test_players_of_another_league_are_not_listed(self):
-        other_league = orm_models.League.objects.create(name="別リーグ")
+        other_league = make_league(name="別リーグ")
         other = orm_models.Team.objects.create(league=other_league, name="別チーム")
         self.service.register_player(other.id, "他リーグの大砲", 9, "内野手")
 

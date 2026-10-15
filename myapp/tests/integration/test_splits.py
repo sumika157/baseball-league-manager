@@ -18,9 +18,7 @@ from myapp.infrastructure.repositories import (
     DjangoGameRepository,
 )
 
-from ..helpers import (
-    play_game,
-)
+from ..helpers import make_league, play_game
 from .base import BaseCase
 
 
@@ -84,7 +82,7 @@ class MatchupViewTest(BaseCase):
         self.assertEqual(row.total_label, "0-1-0")
 
     def test_league_without_games_has_no_table(self):
-        empty = orm_models.League.objects.create(name="無試合リーグ")
+        empty = make_league(name="無試合リーグ")
         orm_models.Team.objects.create(league=empty, name="新チーム")
 
         self.assertIsNone(self.service.get_league_detail(empty.id).matchups)

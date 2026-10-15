@@ -10,14 +10,14 @@ from myapp.domain.exceptions import InvalidWorld
 from myapp.infrastructure import orm_models
 from myapp.presentation.views import build_pennant_world_service, build_service
 
-from ..helpers import register_playable_support
+from ..helpers import make_league, register_playable_support
 
 START = 2030
 
 
 class RosterCheckTest(TestCase):
     def setUp(self):
-        self.league = orm_models.League.objects.create(name="検査リーグ")
+        self.league = make_league(name="検査リーグ")
         self.home = orm_models.Team.objects.create(league=self.league, name="十分な球団")
         self.short = orm_models.Team.objects.create(league=self.league, name="足りない球団")
         self.service = build_service()
@@ -149,7 +149,7 @@ class RosterCheckTest(TestCase):
     def test_the_strictest_game_limit_of_the_chosen_leagues_applies_to_every_team(self):
         """出場枠の無いリーグの球団も、一緒に選んだリーグの厳しい枠で見る（交流戦はどのリーグとも当たる）。"""
         register_playable_support(self.service, self.short)
-        strict = orm_models.League.objects.create(name="厳しいリーグ", foreign_player_game_limit=2)
+        strict = make_league(name="厳しいリーグ", foreign_player_game_limit=2)
         strict_team = orm_models.Team.objects.create(league=strict, name="厳しい球団")
         register_playable_support(self.service, strict_team)
         batters = orm_models.Player.objects.filter(stints__team=self.short).exclude(position="投手")

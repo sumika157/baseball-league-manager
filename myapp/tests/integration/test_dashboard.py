@@ -15,10 +15,7 @@ from myapp.domain.value_objects import (
 )
 from myapp.infrastructure import orm_models
 
-from ..helpers import (
-    give_batting,
-    play_game,
-)
+from ..helpers import give_batting, make_league, play_game
 from .base import BaseCase
 
 
@@ -134,7 +131,7 @@ class DashboardLeadersTest(BaseCase):
         リーグ内の1試合だけに出た選手（4打席・2回）は規定に届かない。試合数をリーグ内の
         対戦だけで数えると（1試合）この選手が規定に届いて首位になり、タイトル画面とずれる。
         """
-        other = orm_models.League.objects.create(name="別リーグ")
+        other = make_league(name="別リーグ")
         x = orm_models.Team.objects.create(league=other, name="Xチーム")
         regular = self.service.register_player(self.team.id, "常連", 3, "内野手")
         spot = self.service.register_player(self.team.id, "代打", 4, "内野手")
@@ -173,7 +170,7 @@ class DashboardLeadersTest(BaseCase):
 
     def test_leaders_are_split_by_league(self):
         """タイトルはリーグの中で争われる。他リーグの選手と比べない。"""
-        other = orm_models.League.objects.create(name="別リーグ")
+        other = make_league(name="別リーグ")
         x = orm_models.Team.objects.create(league=other, name="Xチーム")
         y = orm_models.Team.objects.create(league=other, name="Yチーム")
         here = self.service.register_player(self.team.id, "当リーグ", 10, "内野手")
@@ -217,7 +214,7 @@ class DashboardLeaguesTest(BaseCase):
 
     def test_every_league_is_shown_at_once(self):
         """タブで切り替えない（切り替えた先がリーグ画面の上半分と同じになるため）。"""
-        other = orm_models.League.objects.create(name="別リーグ")
+        other = make_league(name="別リーグ")
         x = orm_models.Team.objects.create(league=other, name="Xチーム")
         y = orm_models.Team.objects.create(league=other, name="Yチーム")
         play_game(self.team, self.rival)
@@ -231,7 +228,7 @@ class DashboardLeaguesTest(BaseCase):
         self.assertNotIn('role="tablist"', body)
 
     def test_teams_are_grouped_by_league(self):
-        other = orm_models.League.objects.create(name="別リーグ")
+        other = make_league(name="別リーグ")
         orm_models.Team.objects.create(league=other, name="Xチーム")
 
         board = self.service.get_dashboard()
@@ -245,7 +242,7 @@ class DashboardLeaguesTest(BaseCase):
         self.assertEqual(len(self.service.get_dashboard().teams), 2)
 
     def test_leagues_without_teams_are_omitted(self):
-        orm_models.League.objects.create(name="空リーグ")
+        make_league(name="空リーグ")
         board = self.service.get_dashboard()
 
         self.assertNotIn("空リーグ", [g.league_name for g in board.leagues])
@@ -305,7 +302,7 @@ class DashboardLatestResultsTest(BaseCase):
 
     def test_every_league_of_that_day_is_shown(self):
         """件数で切らない。同じ日の一部のリーグだけが残る形にしない。"""
-        other = orm_models.League.objects.create(name="別リーグ")
+        other = make_league(name="別リーグ")
         x = orm_models.Team.objects.create(league=other, name="Xチーム")
         y = orm_models.Team.objects.create(league=other, name="Yチーム")
         for _ in range(4):

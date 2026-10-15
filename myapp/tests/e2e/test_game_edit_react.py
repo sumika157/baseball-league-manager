@@ -12,7 +12,7 @@ from django.urls import reverse
 
 from myapp.infrastructure import orm_models
 
-from ..helpers import build_service, play_game
+from ..helpers import build_service, make_league, make_stadium, play_game
 from .base import PlaywrightTestCase
 
 # React のビルド成果物。無いと画面が「読み込んでいます」のまま失敗し原因が
@@ -32,7 +32,7 @@ class GameEditReactTest(PlaywrightTestCase):
 
     def setUp(self):
         super().setUp()
-        league = orm_models.League.objects.create(name="Eリーグ")
+        league = make_league(name="Eリーグ")
         self.team = orm_models.Team.objects.create(league=league, name="ホームズ")
         self.rival = orm_models.Team.objects.create(league=league, name="ビジターズ")
 
@@ -111,7 +111,7 @@ class GameEditReactTest(PlaywrightTestCase):
         self.assertEqual(items, "開始 18:19 ◇ 終了 21:09 ◇ 試合時間 2時間50分 ◇ 観客 42,071人")
 
     def test_an_attendance_over_the_capacity_warns_and_stays_on_the_page(self):
-        stadium = orm_models.Stadium.objects.create(name="小さな球場", capacity=1000)
+        stadium = make_stadium(name="小さな球場", capacity=1000)
         orm_models.Team.objects.filter(id=self.team.id).update(home_stadium=stadium)
         self._record_a_home_run()
 

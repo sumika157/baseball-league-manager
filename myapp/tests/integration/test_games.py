@@ -15,6 +15,7 @@ from ..helpers import (
     build_scorebook,
     lineup_rows,
     login_as_manager,
+    make_league,
     play_game,
     post_game_scorebook_day_unrecorded,
     register_lineup,
@@ -107,7 +108,7 @@ class GameViewTest(BaseCase):
         self.assertEqual(response.context["selected_month"], 4)
 
     def test_list_can_be_filtered_by_league(self):
-        other_league = orm_models.League.objects.create(name="別リーグ")
+        other_league = make_league(name="別リーグ")
         x = orm_models.Team.objects.create(league=other_league, name="Xチーム")
         y = orm_models.Team.objects.create(league=other_league, name="Yチーム")
         play_game(x, y, day=3)
@@ -118,7 +119,7 @@ class GameViewTest(BaseCase):
 
     def test_interleague_games_appear_in_both_leagues(self):
         """リーグをまたぐ対戦は、どちらのリーグの日程にも現れる。"""
-        other_league = orm_models.League.objects.create(name="別リーグ")
+        other_league = make_league(name="別リーグ")
         x = orm_models.Team.objects.create(league=other_league, name="Xチーム")
         play_game(self.team, x, day=6)
 
@@ -129,7 +130,7 @@ class GameViewTest(BaseCase):
 
     def test_league_tabs_are_shown_with_an_all_option(self):
         """リーグはタブで切り替える。"""
-        other_league = orm_models.League.objects.create(name="別リーグ")
+        other_league = make_league(name="別リーグ")
 
         body = self.client.get(reverse("game_list")).content.decode()
 
@@ -148,7 +149,7 @@ class GameViewTest(BaseCase):
 
     def test_team_choices_follow_the_selected_league(self):
         """チームの選択肢は、選んでいるリーグの所属チームだけにする。"""
-        other_league = orm_models.League.objects.create(name="別リーグ")
+        other_league = make_league(name="別リーグ")
         orm_models.Team.objects.create(league=other_league, name="Xチーム")
 
         response = self.client.get(f"{reverse('game_list')}?league={self.league.id}")
@@ -160,7 +161,7 @@ class GameViewTest(BaseCase):
 
     def test_team_outside_the_league_is_dropped(self):
         """リーグを切り替えると、選んでいたチームがそのリーグにいないことがある。"""
-        other_league = orm_models.League.objects.create(name="別リーグ")
+        other_league = make_league(name="別リーグ")
         x = orm_models.Team.objects.create(league=other_league, name="Xチーム")
 
         response = self.client.get(f"{reverse('game_list')}?league={self.league.id}&team={x.id}")
@@ -170,7 +171,7 @@ class GameViewTest(BaseCase):
 
     def test_create_link_ignores_the_league_filter(self):
         """登録の導線は、リーグを絞っていても担当チームがあれば見せる。"""
-        other_league = orm_models.League.objects.create(name="別リーグ")
+        other_league = make_league(name="別リーグ")
         managed = orm_models.Team.objects.create(league=other_league, name="担当チーム")
         login_as_manager(self.client, managed)
 
@@ -180,7 +181,7 @@ class GameViewTest(BaseCase):
 
     def test_month_choices_follow_the_selected_league(self):
         """リーグを絞ると、そのリーグで試合がある月だけが選択肢になる。"""
-        other_league = orm_models.League.objects.create(name="別リーグ")
+        other_league = make_league(name="別リーグ")
         x = orm_models.Team.objects.create(league=other_league, name="Xチーム")
         y = orm_models.Team.objects.create(league=other_league, name="Yチーム")
         play_game(x, y, month=8, day=1)

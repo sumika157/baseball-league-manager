@@ -14,15 +14,14 @@ from django.test import TestCase
 
 from myapp.infrastructure import orm_models
 
-from ..helpers import (
-    build_service,
-)
+from ..helpers import build_service, default_workspace, make_league, make_stadium
 
 # 世界の作成の名簿の検査（`skip_roster_check` が外すもの）
 ROSTER_CHECK = "myapp.application.pennant_world.ensure_roster_playable"
 
 
 class BaseCase(TestCase):
+    workspace: orm_models.Workspace
     league: orm_models.League
     stadium: orm_models.Stadium
     team: orm_models.Team
@@ -30,8 +29,9 @@ class BaseCase(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        cls.league = orm_models.League.objects.create(name="テストリーグ")
-        cls.stadium = orm_models.Stadium.objects.create(name="テスト球場", city="東京")
+        cls.workspace = default_workspace()
+        cls.league = make_league("テストリーグ", workspace=cls.workspace)
+        cls.stadium = make_stadium("テスト球場", workspace=cls.workspace, city="東京")
         cls.team = orm_models.Team.objects.create(league=cls.league, name="テストチーム", home_stadium=cls.stadium)
         cls.rival = orm_models.Team.objects.create(league=cls.league, name="相手チーム")
 

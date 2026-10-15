@@ -25,6 +25,7 @@ from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoClubPlanRepository
 from myapp.presentation.views import build_club_service
 
+from ..helpers import make_league
 from .test_pennant_advance import SeasonCase
 
 
@@ -407,9 +408,7 @@ class StrictestGameLimitTest(ClubPlanCase):
         super().setUp()
         # 日程を作ってから、出場枠の厳しいリーグを世界に足す（日程には入らず、枠の値だけが効く）
         build_season(self.world_a).advance(AdvanceTarget.WEEK)
-        strict = orm_models.League.objects.create(
-            name="枠の厳しいリーグ", world_id=self.world_a, foreign_player_game_limit=1
-        )
+        strict = make_league(name="枠の厳しいリーグ", world_id=self.world_a, foreign_player_game_limit=1)
         orm_models.Team.objects.create(league=strict, name="枠の厳しい球団")
         self.lineup = self.lineup_of(self.service_a.propose(self.home_a.id))
         # 自リーグの枠（3）には収まり、厳しい枠（1）には収まらない

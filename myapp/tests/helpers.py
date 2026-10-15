@@ -4,6 +4,7 @@
 という手順を踏む。その定型をここにまとめる。
 """
 
+import itertools
 import json
 from datetime import date
 
@@ -23,6 +24,7 @@ from myapp.domain.value_objects import (
     Position,
     Season,
 )
+from myapp.domain.workspace import KEY_LENGTH, Visibility
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository, DjangoLeagueRepository, DjangoTeamRepository
 
@@ -34,6 +36,54 @@ from myapp.presentation.views import build_service as build_service
 from myapp.presentation.views import build_team_analysis_service as build_team_analysis_service
 
 LINEUP_SIZE = 9
+
+# 既定のワークスペース（バックフィルが作る「移したデータ」の入れ物に当たる）の key。10文字の英小文字と数字
+DEFAULT_WORKSPACE_KEY = "defaultws0"
+_workspace_serial = itertools.count(1)
+
+
+def make_workspace(owner=None, name="テストワークスペース", *, visibility=Visibility.PUBLIC, key=None):
+    """ワークスペースを1つ作る。owner を省くと運営者のユーザーも作る。
+
+    key を省くと呼ぶたびに別の key（ドメインの形: 10文字の英小文字と数字）になる。
+    公開範囲はドメインに既定が無いので、ここで明示する（既定は公開。バックフィルと同じ）。
+    """
+    if owner is None:
+        owner = User.objects.create_user(username=f"operator{next(_workspace_serial)}", password="x")
+    if key is None:
+        key = f"ws{next(_workspace_serial):0{KEY_LENGTH - 2}d}"
+    return orm_models.Workspace.objects.create(name=name, owner=owner, key=key, visibility=visibility.value)
+
+
+def default_workspace() -> orm_models.Workspace:
+    """テストの既定のワークスペース（公開）。無ければ作る。`BaseCase` は `setUpTestData` で先に作っておく。"""
+    existing = orm_models.Workspace.objects.filter(key=DEFAULT_WORKSPACE_KEY).first()
+    if existing is not None:
+        return existing
+    owner, _ = User.objects.get_or_create(username="default-operator")
+    return make_workspace(owner, "既定のワークスペース", key=DEFAULT_WORKSPACE_KEY)
+
+
+def make_league(name, *, workspace=None, **fields) -> orm_models.League:
+    """リーグを作る。実データのリーグは workspace に属す（省けば既定のワークスペース）。
+
+    ペナントのリーグ（world / world_id を渡す）は世界経由で属すので workspace を持たない
+    （workspace と world はどちらか一方だけ、という制約に合わせる）。
+    """
+    if fields.get("world") is not None or fields.get("world_id") is not None:
+        assert workspace is None, "ペナントのリーグはワークスペースを持たない（世界経由で属す）"
+        return orm_models.League.objects.create(name=name, **fields)
+    return orm_models.League.objects.create(name=name, workspace=workspace or default_workspace(), **fields)
+
+
+def make_stadium(name, *, workspace=None, **fields) -> orm_models.Stadium:
+    """球場を作る。省けば既定のワークスペースに属す。"""
+    return orm_models.Stadium.objects.create(name=name, workspace=workspace or default_workspace(), **fields)
+
+
+def make_pennant_world(name, *, workspace=None, **fields) -> orm_models.PennantWorld:
+    """ペナントの世界を直接作る。省けば既定のワークスペースに属す。"""
+    return orm_models.PennantWorld.objects.create(name=name, workspace=workspace or default_workspace(), **fields)
 
 
 def register_players(team, rows) -> list[int]:

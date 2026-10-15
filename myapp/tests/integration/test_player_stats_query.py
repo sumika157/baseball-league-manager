@@ -17,7 +17,7 @@ from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoPlayerStatsQuery
 from myapp.infrastructure.repositories import DjangoGameRepository, DjangoTeamRepository
 
-from ..helpers import give_batting, give_pitching, play_game
+from ..helpers import give_batting, give_pitching, make_league, play_game
 from .base import BaseCase
 
 
@@ -41,7 +41,7 @@ class PlayerStatsQueryTest(BaseCase):
 
     def test_season_counts_games_across_leagues(self):
         """タイトルは交流戦も数える（NPB と同じ）。リーグをまたぐ対戦の成績も、その年の成績に入る。"""
-        other = orm_models.League.objects.create(name="別リーグ")
+        other = make_league(name="別リーグ")
         outsider = orm_models.Team.objects.create(league=other, name="別チーム")
         give_batting(self.team, self.rival, self.slugger.id, BattingLine(at_bats=4, home_runs=1))
         give_batting(self.team, outsider, self.slugger.id, BattingLine(at_bats=6, home_runs=5), day=2)
@@ -181,7 +181,7 @@ class PlayerStatsQueryTest(BaseCase):
         self.assertEqual(career["大砲"].batting.home_runs, 3)
 
     def test_season_lists_only_the_league_players(self):
-        other = orm_models.League.objects.create(name="別リーグ")
+        other = make_league(name="別リーグ")
         outsider = orm_models.Team.objects.create(league=other, name="別チーム")
         self.service.register_player(outsider.id, "他リーグ選手", 1, "内野手")
 
@@ -195,7 +195,7 @@ class PlayerStatsQueryTest(BaseCase):
         他リーグとの対戦（交流戦も数える）・別の年の試合・投球回の表記の足し算（5.2 + 5.2 = 11.1）・
         年の途中でリーグを移った選手（両方のリーグに出る）を混ぜて確かめる。
         """
-        other = orm_models.League.objects.create(name="別リーグ")
+        other = make_league(name="別リーグ")
         x = orm_models.Team.objects.create(league=other, name="Xチーム")
         y = orm_models.Team.objects.create(league=other, name="Yチーム")
         there = self.service.register_player(x.id, "別リーグ選手", 7, "内野手")

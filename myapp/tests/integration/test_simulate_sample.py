@@ -20,6 +20,8 @@ from myapp.management import estimate_check, multi_season_check
 from myapp.management.commands import simulate_sample
 from myapp.presentation.views import build_pennant_world_service
 
+from ..helpers import make_league
+
 TIMING_LINE = re.compile(r"[\d.]+ ms/試合")
 
 
@@ -95,7 +97,7 @@ class SimulateSampleSeasonsTest(TestCase):
     SMALL = ScheduleRules(games_per_team=16, inter_games=1, series_length=2)
 
     def setUp(self):
-        self.leagues = [orm_models.League.objects.create(name=f"リーグ{i}") for i in (1, 2)]
+        self.leagues = [make_league(name=f"リーグ{i}") for i in (1, 2)]
         for league in self.leagues:
             for number in range(6):
                 orm_models.Team.objects.create(league=league, name=f"{league.name}の{number}")
@@ -140,7 +142,7 @@ class EstimateCheckClubTest(TestCase):
     """
 
     def test_developmental_players_are_not_candidates(self):
-        league = orm_models.League.objects.create(name="リーグ")
+        league = make_league(name="リーグ")
         for number in range(2):
             orm_models.Team.objects.create(league=league, name=f"球団{number}")
         call_command("seed_virtual_players", "--seed", "1", stdout=StringIO())
