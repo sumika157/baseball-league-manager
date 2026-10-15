@@ -41,6 +41,8 @@ PRODUCTION_ENV = {
 SWITCHES = {key for key in PRODUCTION_ENV if key not in ("DJANGO_SECRET_KEY", "DJANGO_ALLOWED_HOSTS")}
 # E2E テスト（Playwright）が親プロセスに足す変数。本番の検査（async.E001）に引っかかるので外す
 SWITCHES.add("DJANGO_ALLOW_ASYNC_UNSAFE")
+# 鍵の入れ替え中だけ .env に書く変数。親の環境に残っていても既定の検査を狂わせない
+SWITCHES.add("DJANGO_SECRET_KEY_FALLBACKS")
 
 
 def run_python(code: str, extra_env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -109,6 +111,29 @@ class ProductionSettingsTest(SimpleTestCase):
         self.assertEqual(lines[0], "wal")
         self.assertEqual(lines[1], "1")  # NORMAL
         self.assertIn("whitenoise.middleware.WhiteNoiseMiddleware", lines[2])
+
+    def test_production_environment_sets_sqlite_options(self):
+        """本番の環境変数で、SQLite の OPTIONS（IMMEDIATE・ロック待ち20秒・WAL の初期化）が入る。既定では入らない。"""
+        code = (
+            "from django.conf import settings as s\n"
+            "o = s.DATABASES['default']['OPTIONS']\n"
+            "print(o['transaction_mode'], o['timeout'])\n"
+            "print(o['init_command'])\n"
+        )
+        result = run_python(code, {"DJANGO_SQLITE_WAL": "True"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout.splitlines(),
+            ["IMMEDIATE 20", "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;"],
+        )
+
+    def test_secret_key_fallbacks_come_from_environment(self):
+        """旧い鍵は DJANGO_SECRET_KEY_FALLBACKS（カンマ区切り）から読む。未設定なら空。"""
+        code = "from django.conf import settings as s\nprint(s.SECRET_KEY_FALLBACKS)\n"
+        self.assertEqual(run_python(code, {}).stdout.strip(), "[]")
+        result = run_python(code, {"DJANGO_SECRET_KEY_FALLBACKS": "old-one, old-two"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "['old-one', 'old-two']")
 
 
 class BackupDbCommandTest(TransactionTestCase):
