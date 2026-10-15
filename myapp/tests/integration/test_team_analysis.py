@@ -15,7 +15,7 @@ from myapp.domain.entities import Game
 from myapp.domain.pennant.world import WorldScope
 from myapp.domain.services import NEUTRAL_CATEGORY, ColorAxis, color_categories, usage_map_positions
 from myapp.domain.services.roster_analysis import MAX_PLAYERS_IN_BOX
-from myapp.domain.value_objects import BattingLine, FieldingPosition, PitchingLine, Season
+from myapp.domain.value_objects import BattingLine, FieldingPosition, GameStage, PitchingLine, Season
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
 
@@ -41,6 +41,7 @@ class AnalysisCase(BaseCase):
             played_on=date(year, 4, day),
             home_team_id=home.id,
             away_team_id=away.id,
+            stage=GameStage.REGULAR,
             home_score=1,
             away_score=0,
         )

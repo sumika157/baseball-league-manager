@@ -15,7 +15,7 @@ from myapp.application.dto import LineupSlot
 from myapp.application.game_recording import GameRecordingService
 from myapp.domain.entities import Game, Player
 from myapp.domain.pennant.world import WorldScope
-from myapp.domain.value_objects import BattingLine, FieldingPosition, JerseyNumber, Season
+from myapp.domain.value_objects import BattingLine, FieldingPosition, GameStage, JerseyNumber, Season
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoHomeStadiumQuery
 from myapp.infrastructure.repositories import DjangoGameRepository, DjangoLeagueRepository, DjangoTeamRepository
@@ -134,6 +134,7 @@ class WorldCase(BaseCase):
                 played_on=date(YEAR, 4, 2),
                 home_team_id=cls.pennant_team.id,
                 away_team_id=cls.pennant_rival.id,
+                stage=GameStage.REGULAR,
             )
         )
         lineup = [

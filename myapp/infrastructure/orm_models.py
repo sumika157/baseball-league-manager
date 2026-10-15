@@ -21,6 +21,7 @@ from ..domain.value_objects import (
     ErrorKind,
     FieldingPosition,
     FreeAgencyKind,
+    GameStage,
     Handedness,
     PlateAppearanceResult,
     Position,
@@ -35,6 +36,7 @@ CONTRACT_STATUS_CHOICES = [(status.value, status.value) for status in ContractSt
 ACQUISITION_ROUTE_CHOICES = [(route.value, route.value) for route in AcquisitionRoute]
 DEPARTURE_ROUTE_CHOICES = [(route.value, route.value) for route in DepartureRoute]
 FREE_AGENCY_KIND_CHOICES = [(kind.value, kind.value) for kind in FreeAgencyKind]
+GAME_STAGE_CHOICES = [(stage.value, stage.value) for stage in GameStage]
 # 試合で就いた守備位置。登録位置（Position）とは別の概念
 FIELDING_POSITION_CHOICES = [(p.value, p.value) for p in FieldingPosition]
 # 打席まわりの選択肢も同じくドメインの値オブジェクトが出典。ここに文字列を
@@ -414,6 +416,16 @@ class Game(models.Model):
         help_text="雨天・停電などの中断。試合時間から差し引きます。",
     )
     attendance = models.PositiveIntegerField(null=True, blank=True, verbose_name="観客数")
+    # 公式戦かポストシーズンか（`GameStage`）。公式戦の集計はポストシーズンを数えないので、試合を読む
+    # 入口（`scoping.games_in` など）が区分を必須の引数で受け取る。実データの試合は常に公式戦
+    stage = models.CharField(
+        max_length=10,
+        choices=GAME_STAGE_CHOICES,
+        # 既定値は AddField（既存の試合）と管理画面の試合の登録のため。domain の `Game.stage` は既定値なしの必須
+        default=GameStage.REGULAR.value,
+        verbose_name="区分",
+        help_text="公式戦かポストシーズンか。ポストシーズンの試合は公式戦の成績・順位・タイトルに数えません。",
+    )
 
     class Meta:
         verbose_name = "試合"

@@ -8,7 +8,7 @@ from unittest import TestCase
 
 from myapp.domain import services
 from myapp.domain.entities import Game, Team
-from myapp.domain.value_objects import BattingLine, InningsPitched, PitchingLine, Season
+from myapp.domain.value_objects import BattingLine, GameStage, InningsPitched, PitchingLine, Season
 
 HOME, AWAY = 1, 2
 
@@ -20,6 +20,7 @@ def _game(home_score=0, away_score=0, *, day=1, month=4, season=2026, record=Non
         played_on=date(season, month, day),
         home_team_id=HOME,
         away_team_id=AWAY,
+        stage=GameStage.REGULAR,
         home_score=home_score,
         away_score=away_score,
     )
@@ -62,6 +63,7 @@ class IsRecordedTest(TestCase):
             played_on=date(2026, 4, 1),
             home_team_id=HOME,
             away_team_id=AWAY,
+            stage=GameStage.REGULAR,
             recorded_hint=True,
         )
 

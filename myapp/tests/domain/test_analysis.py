@@ -10,6 +10,7 @@ from myapp.domain import services
 from myapp.domain.entities import Game, Player, Team
 from myapp.domain.value_objects import (
     BattingLine,
+    GameStage,
     InningsPitched,
     JerseyNumber,
     PitchingLine,
@@ -41,6 +42,7 @@ def _game(
         played_on=date(season, month, day),
         home_team_id=home,
         away_team_id=away,
+        stage=GameStage.REGULAR,
         home_score=home_score,
         away_score=away_score,
     )
