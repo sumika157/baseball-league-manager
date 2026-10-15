@@ -26,6 +26,9 @@ from ..domain.value_objects import (
     Position,
     StadiumProfile,
 )
+from ..domain.workspace import KEY_LENGTH as WORKSPACE_KEY_LENGTH
+from ..domain.workspace import MAX_NAME_LENGTH as WORKSPACE_NAME_MAX_LENGTH
+from ..domain.workspace import Visibility
 
 # 守備位置の選択肢はドメインの Position を唯一の出典とする。
 POSITION_CHOICES = [(position.value, position.value) for position in Position]
@@ -46,6 +49,71 @@ ERROR_KIND_CHOICES = [(k.value, k.value) for k in ErrorKind]
 BASE_CHOICES = [(base.value, base.label) for base in Base]
 # 打球の処理経路（スコアブックの 6-3）は守備位置をこの記号で連ねて1列に持つ
 FIELDED_BY_SEPARATOR = "-"
+# 公開範囲の選択肢もドメインの Visibility が唯一の出典
+VISIBILITY_CHOICES = Visibility.choices()
+VISIBILITY_MAX_LENGTH = max(len(member.value) for member in Visibility)
+
+
+class Workspace(models.Model):
+    """ワークスペース。データ（リーグ・球場・ペナントの世界）の持ち主ごとの区切り。
+
+    リーグ・球場・世界は `workspace` でここに属す（ペナントのリーグは世界経由）。
+    ここには持ち主と公開範囲だけを置き、権限の判定はドメイン側が行う。
+    """
+
+    key = models.CharField(
+        max_length=WORKSPACE_KEY_LENGTH,
+        unique=True,
+        verbose_name="キー",
+        help_text=f"URL に入れる識別子（英小文字と数字の{WORKSPACE_KEY_LENGTH}文字）。",
+    )
+    name = models.CharField(max_length=WORKSPACE_NAME_MAX_LENGTH, verbose_name="ワークスペース名")
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="owned_workspaces",
+        verbose_name="持ち主",
+        help_text="このワークスペースの全権を持つユーザー。",
+    )
+    visibility = models.CharField(
+        max_length=VISIBILITY_MAX_LENGTH,
+        choices=VISIBILITY_CHOICES,
+        verbose_name="公開範囲",
+        help_text="誰が閲覧できるか。",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="作成日時")
+
+    class Meta:
+        verbose_name = "ワークスペース"
+        verbose_name_plural = "ワークスペース"
+        ordering = ["id"]
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class WorkspaceEditor(models.Model):
+    """ワークスペースの編集者（持ち主のほかに、全体を編集できるユーザー）。"""
+
+    workspace = models.ForeignKey(
+        Workspace, on_delete=models.CASCADE, related_name="editors", verbose_name="ワークスペース"
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="workspace_editings",
+        verbose_name="編集者",
+    )
+
+    class Meta:
+        verbose_name = "ワークスペースの編集者"
+        verbose_name_plural = "ワークスペースの編集者"
+        constraints = [
+            models.UniqueConstraint(fields=["workspace", "user"], name="unique_workspace_editor"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.workspace} / {self.user}"
 
 
 class PennantWorld(models.Model):
@@ -64,6 +132,15 @@ class PennantWorld(models.Model):
         related_name="pennant_worlds",
         verbose_name="オーナー",
         help_text="この世界を遊ぶユーザー。ペナントの書き込みはこの人だけに許します。",
+    )
+    workspace = models.ForeignKey(
+        Workspace,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="pennant_worlds",
+        verbose_name="ワークスペース",
+        help_text="この世界が属すワークスペース。",
     )
     seed = models.PositiveBigIntegerField(verbose_name="乱数のシード")
     managed_team = models.ForeignKey(
@@ -97,6 +174,15 @@ class League(models.Model):
         related_name="leagues",
         verbose_name="世界",
         help_text="空なら実データのリーグです。",
+    )
+    workspace = models.ForeignKey(
+        Workspace,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="leagues",
+        verbose_name="ワークスペース",
+        help_text="実データのリーグが属すワークスペース。ペナントのリーグは空で、世界から決まります。",
     )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="登録日時")
     # 管理画面でドラッグして並べ替えた結果がここに入る
@@ -150,6 +236,15 @@ class Stadium(models.Model):
     ROOF_CHOICES = [(r, r) for r in StadiumProfile.ROOFS]
 
     name = models.CharField(max_length=100, unique=True, verbose_name="球場名")
+    workspace = models.ForeignKey(
+        Workspace,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="stadiums",
+        verbose_name="ワークスペース",
+        help_text="この球場が属すワークスペース。",
+    )
     city = models.CharField(max_length=100, blank=True, verbose_name="所在地")
     capacity = models.PositiveIntegerField(null=True, blank=True, verbose_name="収容人数")
     surface = models.CharField(max_length=10, choices=SURFACE_CHOICES, blank=True, verbose_name="グラウンド")

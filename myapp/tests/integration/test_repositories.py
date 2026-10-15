@@ -4,7 +4,7 @@ from myapp.domain.exceptions import (
     DuplicateJerseyNumber,
     InvalidGame,
 )
-from myapp.domain.pennant.world import WorldScope
+from myapp.domain.pennant.world import World, WorldScope
 from myapp.domain.value_objects import (
     BattingLine,
     InningsPitched,
@@ -13,10 +13,12 @@ from myapp.domain.value_objects import (
     Position,
     RosterLimits,
 )
+from myapp.domain.workspace import Visibility
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import (
     DjangoGameRepository,
     DjangoTeamRepository,
+    DjangoWorldRepository,
 )
 
 from ..helpers import (
@@ -123,3 +125,41 @@ class GameRepositoryTest(BaseCase):
         self.assertEqual(orm_models.GameBattingLine.objects.filter(game_id=game.id).count(), 1)
         reloaded = DjangoGameRepository(WorldScope.real()).find_by_id(game.id)
         self.assertEqual(reloaded.batting[0].line.home_runs, 2)
+
+
+class WorldWorkspaceRoundTripTest(BaseCase):
+    """世界の `workspace_id` が、保存と読み戻しで往復すること。"""
+
+    def _workspace(self):
+        from django.contrib.auth.models import User
+
+        owner = User.objects.create_user("ws-owner", password="x")
+        return orm_models.Workspace.objects.create(
+            key="abcde12345", name="テスト用", owner=owner, visibility=Visibility.PUBLIC.value
+        )
+
+    def test_the_workspace_id_round_trips(self):
+        workspace = self._workspace()
+        repo = DjangoWorldRepository()
+
+        saved = repo.save(World(name="世界A", seed=1, start_year=2040, workspace_id=workspace.id))
+
+        self.assertEqual(repo.find_by_id(saved.id).workspace_id, workspace.id)
+        self.assertEqual(orm_models.PennantWorld.objects.get(id=saved.id).workspace_id, workspace.id)
+
+    def test_a_world_without_a_workspace_stays_empty(self):
+        repo = DjangoWorldRepository()
+
+        saved = repo.save(World(name="世界B", seed=2, start_year=2040))
+
+        self.assertIsNone(repo.find_by_id(saved.id).workspace_id)
+
+    def test_saving_again_keeps_the_workspace(self):
+        workspace = self._workspace()
+        repo = DjangoWorldRepository()
+        saved = repo.save(World(name="世界C", seed=3, start_year=2040, workspace_id=workspace.id))
+
+        saved.name = "世界C改"
+        repo.save(saved)
+
+        self.assertEqual(repo.find_by_id(saved.id).workspace_id, workspace.id)
