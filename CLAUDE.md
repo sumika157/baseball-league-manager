@@ -2,32 +2,23 @@
 
 野球リーグ管理の Django アプリ。セットアップと起動は [README.md](README.md)、画面構成・仕様・アーキテクチャは Wiki（原稿は [docs/wiki/](docs/wiki/)。入口は [Home](docs/wiki/Home.md)）を参照。
 
-ここには**どのファイルを触るときでも効く規則**だけを書く。特定の場所でだけ効く規則は
-`.claude/rules/` にあり、**該当するファイルを触ったときに読み込まれる**（`paths` でスコープ済み）。
-
-| ファイル | 適用範囲 | 内容 |
-| --- | --- | --- |
-| `.claude/rules/python-typing.md` | `myapp/**/*.py`・`config/**/*.py` | 型注釈と静的検査 |
-| `.claude/rules/tests.md` | `myapp/tests/**/*.py` | テストの置き場所とファイル分割 |
-| `.claude/rules/migrations.md` | `myapp/migrations/`・`myapp/management/commands/` | マイグレーションとデータ投入 |
-| `.claude/rules/templates.md` | `myapp/templates/**/*.html` | テンプレートの書き方 |
-| `.claude/rules/frontend.md` | `frontend/**`・`static/myapp/css/*.css` | React アイランドの配線・スタイル |
-| `.claude/rules/performance.md` | `myapp/application/`・`myapp/infrastructure/`・`views.py` | 読む範囲の絞り方と計測 |
-
-パス限定の規則は「そのファイルを読んだとき」に効くので、**何を作るかを決める段階で必要な規則
-（依存の向き・出典の一元化・不変条件）はこのファイルに置いたままにする。**
+ここには**どのファイルを触るときでも効く規則**だけを書く。特定の場所でだけ効く規則は `.claude/rules/`（`paths` で
+スコープ済み。該当ファイルを読んだときに読み込まれる）、手順とコマンドは `.claude/skills/` に置く。
+**何を作るかを決める段階で必要な規則（依存の向き・出典の一元化・不変条件）はこのファイルに置く。**
 
 ## 実行環境
 
 - **すべてのコマンドは Docker コンテナ経由**で実行する（`docker compose exec web python manage.py ...`）。ホストに Python 環境は無い。
-- リポジトリの実体は WSL2 内。Windows からは `U:\` 経由で見えるが、**実行中コンテナへの操作（`exec` / `logs` / `ps`）は Windows 側から直接叩ける**。`wsl -e bash -c` で包まない。
-- ただし**コンテナを新規作成する操作（`docker compose up` / `run`）だけは WSL 側から実行する**。Windows 側から作るとバインドマウントが実体と切り離され、空マウントや容量 127MB の幽霊ディスク（書き込みが実リポジトリに届かない・`ENOSPC` で死ぬ）になる。
-- テスト（フル）は2回に分ける: `docker compose exec web python manage.py test myapp.tests.domain myapp.tests.integration --parallel 4` と
-  `docker compose exec web python manage.py test myapp.tests.e2e`（WSL からは `make test` が同じ2つ）。**並列数は `auto` にしない**
-  （コンテナは他のエージェントと共有で、CPU の数＝20本にしたら Docker のエンジンが応答しなくなった。#184）。domain 層のみなら
+- リポジトリの実体は WSL2 内（Windows からは `U:\`）。実行中コンテナへの操作（`exec` / `logs` / `ps`）は Windows 側から直接叩ける。
+  **コンテナを新規作成する操作（`docker compose up` / `run`）だけは WSL 側から実行する**（Windows 側から作るとバインドマウントが
+  実体と切り離され、書き込みが実リポジトリに届かない）。手順は `docker-ops` スキル。
+- テスト（フル）は `docker compose exec web python manage.py test myapp.tests.domain myapp.tests.integration --parallel 4` と
+  `docker compose exec web python manage.py test myapp.tests.e2e` の2回（WSL からは `make test`）。domain 層のみなら
   `docker compose exec -e DJANGO_SETTINGS_MODULE= web python -m unittest discover -s myapp/tests/domain -t .`（DB 不要・最速）。
+  **手元では並列数を `auto` にしない**（手元のコンテナは他のエージェントと共有で、20本にしたら Docker のエンジンが応答しなくなった。#184）。
+  CI は専用のランナーなので `auto` でよい。どれを流すかの判断は `run-tests` スキル。
 - `.env` の値に `$` を含めない（Docker Compose が変数展開して壊す。エラーにならず気づけない）。
-- `requirements.txt`・`requirements-dev.txt` は**間接依存まで `==` でバージョン固定**する（現状の方針を維持）。どちらかを変更したら `docker compose build --no-cache` でイメージの再ビルドが必要。
+- `requirements.txt`・`requirements-dev.txt` は**間接依存まで `==` でバージョン固定**する。変更したら `docker compose build --no-cache` でイメージを作り直す。
 
 ## アーキテクチャ規則（DDD）
 
@@ -37,10 +28,12 @@
 - application は domain のインターフェース（`domain/repositories.py`）越しに永続化を使う。`infrastructure/orm_models.py` を直接 import しない。
 - presentation（views）は application 経由で操作する。ORM モデルやリポジトリ実装を直接触らない。
 - **更新と参照を分ける**: 更新はリポジトリ経由で集約単位（`Team` / `Game`）に読み書きする。一覧表示などの参照は `infrastructure/queries.py` から直接 DTO を作る（集約を組み立てない）。参照クエリのインターフェースは `application/queries.py`（戻り値が DTO のため domain には置けない）。
-- **実データとペナントの世界を混ぜない**: リポジトリと参照クエリは `WorldScope` を必須の引数で受け取り（既定値なし）、「範囲が無ければ全世界を読む」形の API を作らない。例外は世界の一覧そのものを扱う台帳（`WorldRepository`・`WorldSummaryQuery`）だけ（詳細は Wiki「ペナントモードの仕組み」の「世界の分け方」。[docs/wiki/ペナントモードの仕組み.md](docs/wiki/ペナントモードの仕組み.md)）。
-- **依存の組み立ては `presentation/views.py` の `build_*()` 関数だけ。** 実データの `build_service()`（`TeamApplicationService`）・`build_recording_service()`（スコアブックの保存を担う `GameRecordingService`）・`build_team_analysis_service()`（戦力分析の `TeamAnalysisService`）・`build_roster_service()`（契約区分と FA 宣言の `RosterService`）と、ペナントの `build_pennant_world_service()`・`build_pennant_season_service(world_id)`・`build_pennant_history_service(world_id)`（歴代の記録と球団史の `PennantHistoryService`）、世界の画面を読む `build_world_view_service(world_id)`・`build_world_team_analysis_service(world_id)`（どれも世界の範囲に固定して組み立てる）がある。サービスを増やすときは組み立て口もここに足す。どれも依存を全部渡す（`tests/integration/test_wiring.py` が検査する）。管理コマンドもここから取る。呼ぶ側ごとに一部の依存だけを渡さない。渡し忘れが「開く画面によって落ちるサービス」になる（管理画面のテンプレートタグで実際に起きた）。テストも `tests/helpers.py` 経由でここを呼ぶ。
-- **層をまたぐ受け渡しに素の `dict` を使わない。** application が presentation に返す形は `application/dto.py` の dataclass にする。文字列キーの dict は綴りを間違えても静的検査が黙る。試合詳細の選手の索引（`PlayerIndexEntry`）は DTO に寄せた。編集画面の材料（`GameEditData`）も DTO に寄せた。集約は持たず、出場時点の読み戻しのような集約からの取り出しは `application/game_edit.py` が担い、presentation は DTO を JSON に写すだけにしてある（DTO に集約を包ませない）。
-- **`TeamApplicationService` は既に約50メソッド・1,500行**あり、チーム・選手・試合・リーグ・管理画面の概況を1クラスで抱えている。ここへ足す前に、対象ごとの別サービスに置けないか考える。分ける判断は選択肢としてユーザーに提示する。
+- **実データとペナントの世界を混ぜない**: リポジトリと参照クエリは `WorldScope` を必須の引数で受け取り（既定値なし）、「範囲が無ければ全世界を読む」形の API を作らない。例外は世界の一覧そのものを扱う台帳（`WorldRepository`・`WorldSummaryQuery`）だけ（Wiki「ペナントモードの仕組み」の「世界の分け方」）。
+- **依存の組み立ては `presentation/views.py` の `build_*()` 関数だけ。** サービスを増やすときは組み立て口もここに足し、依存を全部渡す
+  （`tests/integration/test_wiring.py` が検査する）。管理コマンドとテスト（`tests/helpers.py` 経由）もここから取る。呼ぶ側ごとに一部の依存だけを
+  渡さない（渡し忘れが「開く画面によって落ちるサービス」になる。管理画面のテンプレートタグで実際に起きた）。ペナントの組み立て口は世界の範囲に固定して組み立てる。
+- **層をまたぐ受け渡しに素の `dict` を使わない。** application が presentation に返す形は `application/dto.py` の dataclass にする（文字列キーの dict は綴りを間違えても静的検査が黙る）。DTO に集約を包ませない。集約からの取り出しは application が担い、presentation は DTO を写すだけにする（前例: `application/game_edit.py` と `GameEditData`）。
+- **`TeamApplicationService` に足す前に、対象ごとの別サービスに置けないか考える**（既に巨大で、分割は #219 で計画中）。分ける判断は選択肢としてユーザーに提示する。
 
 ## 同じ事実の出典を2つ作らない
 
@@ -48,27 +41,21 @@
 - **年齢は保持しない。** 生年月日から算出する。
 - 投球回の変換（`5.2` = 5回2/3 = 17アウト）は `InningsPitched` 値オブジェクトが唯一の出典。他の場所に再実装しない。率（打率・防御率など）は試合ごとの率を平均せず、合算した実数から計算し直す。
 - 選択肢の一覧（球場の屋根種別など）はドメインの値オブジェクトが唯一の出典。画面やモデルに複製しない。
-- **成績のカウント項目は値オブジェクト（`BattingLine` / `PitchingLine` / `FieldingLine`）のフィールドが出典。** 永続化（`infrastructure/repositories.py` の `_BATTING_FIELDS` など）とテーブルの列はそれに従う。成績を手入力する画面が無くなったので、入力フォームの列挙（`STAT_FIELDS`）も React の列挙も無い（`frontend/src/game_edit/types.ts` に残るのは塁の番号だけ）。値オブジェクト ↔ 永続化・参照クエリ・テーブルの列は `tests/integration/test_stat_fields.py` が突き合わせる。**項目を増やすときは値オブジェクト・永続化・参照クエリ（守備）・マイグレーションを同じコミットで直す**（ずれても例外にならず、その項目だけ保存されないという静かな不具合になる）。
+- **成績のカウント項目は値オブジェクト（`BattingLine` / `PitchingLine` / `FieldingLine`）のフィールドが出典。** 永続化（`infrastructure/repositories.py` の `_BATTING_FIELDS` など）とテーブルの列はそれに従い、`tests/integration/test_stat_fields.py` が突き合わせる。**項目を増やすときは値オブジェクト・永続化・参照クエリ（守備）・マイグレーションを同じコミットで直す**（ずれても例外にならず、その項目だけ保存されないという静かな不具合になる）。
 
 ### 例外: 1試合の明細は打席の導出値だが、保存もする
 
-**試合の成績の出典は打席（`GamePlateAppearance`）。** `GameBattingLine` /
-`GamePitchingLine` / `GameFieldingLine` / `GameInningScore` はそこから導ける値だが、**通算成績の集計のために
-保存もしている**（この規則の唯一の例外）。理由は**自責点が SQL で集計できない**こと。
-自責点と失点は走者ごとに「誰が塁に出したか」「失策が絡んだか」を追う逐次再生でしか
-出せず、3,480試合を再生すると約68秒かかる（実測。経緯は Wiki「試合がすべての出典」の「打席を出典にした理由」。`docs/wiki/試合がすべての出典.md`）。
+**試合の成績の出典は打席（`GamePlateAppearance`）。** `GameBattingLine` / `GamePitchingLine` / `GameFieldingLine` /
+`GameInningScore` はそこから導ける値だが、**通算成績の集計のために保存もしている**（この規則の唯一の例外）。
+自責点と失点は走者ごとの逐次再生でしか出せず、SQL で集計できないため（経緯と実測は Wiki「試合がすべての出典」）。
 
 同じ事実が2か所にあるので、**集約が照合する**:
 
-- `domain/services/scoring.py` の `ensure_lines_match_plate_appearances()` が、保存しようとしている
-  明細を打席から数え直した値と突き合わせる（`ensure_line_score_matches()` と同じ形）。
-- `DjangoGameRepository.save()` が保存前に必ず通す。`bulk_create` で直接書くコード
-  （`seed_virtual_games`）は素通りするので、自分で呼ぶ。
-- 照合しないのは勝敗・セーブ・ホールド・先発登板だけ（打席からは決まらず、イニングスコアと
-  継投から決まる別の関心事）。
+- `domain/services/scoring.py` の `ensure_lines_match_plate_appearances()` が、保存しようとしている明細を打席から数え直した値と突き合わせる。
+- `DjangoGameRepository.save()` が保存前に必ず通す。`bulk_create` で直接書くコード（`seed_virtual_games`）は素通りするので、自分で呼ぶ。
+- 照合しないのは勝敗・セーブ・ホールド・先発登板だけ（打席からは決まらず、イニングスコアと継投から決まる別の関心事）。
 
-**この例外を他の項目に広げない。** 「集計が遅いから保存する」を一般化すると、通算成績も
-順位も保存する形に戻ってしまう。
+**この例外を他の項目に広げない。** 「集計が遅いから保存する」を一般化すると、通算成績も順位も保存する形に戻ってしまう。
 
 ## 不変条件は集約が守る
 
@@ -78,21 +65,12 @@ ORM に直接 `bulk_create` 等で書き込むコード（データ投入コマ�
 ## テストと品質のゲート
 
 - **テストは層ごとのディレクトリに置く**: 業務ルールは `tests/domain/`（DB 不要・Django 非依存）、画面の動作・リポジトリの往復・フォーム検証は `tests/integration/`、実ブラウザでの確認だけ `tests/e2e/`。
-- **バグを修正したら、同じコミットに再発防止テストを添える**（前例: テンプレートのコメント漏れを検査する `tests/integration/test_templates.py`）。どの層のバグかに応じて上記の置き場所に従う。
-- コミット前に `ruff check .`・`ruff format --check .`・`mypy .` を通す（いずれもコンテナ内。整形漏れは `ruff format .` で直す。WSL からは `make lint` が同じ3つを実行する）。ルールの設定は `pyproject.toml` が唯一の出典。**`# noqa` で黙らせる前に指摘のとおり直す**（それでも黙らせるなら理由をコメントに残す）。
-- **CI（`.github/workflows/ci.yml`）が、PR（宛先は問わない）と main・`epic/` への push で lint・型検査・React のビルド・フルテストを流す。**
-  手元と CI の分担は次のとおり（手元のフルテストは domain + integration を4本の並列で約1分半、e2e を足して約2分（2026-10 の実測・#184）。CI はイメージのビルドが加わるぶん手元より遅い。直しては確かめる繰り返しは手元で行う）。
-  1. 実装中とセルフレビューの各周の終わりは、lint と、触った範囲のテスト（層・画面）を手元で流す。
-  2. push の前に1回、手元でフルテストを流す。
-  3. PR を作ったら CI の結果を待ち、**通ったのを確かめてからマージを頼む**。落ちたら直して push し直す。
-  4. 並行した PR を続けてマージすると、単独では通っても組み合わせで壊れることがある（#32 と #37 で実際に起きた）。
-     マージの後は、**main・epic への push で走った CI の結果を確かめる**（手で先端のフルテストを流す代わり）。落ちていたら次の作業より先に直す。
-
-  **差分がテストに影響しないパスだけなら、2（手元のフルテスト）を省く。** CI のテストもそのときは流れない。
-  どのパスが該当するかは `ci.yml` の `paths-ignore` が唯一の出典で、ここには書き写さない（判定は `git diff --name-only origin/<base>...HEAD` を
-  それと見比べる）。1つでも外れるファイルがあれば省かない。Terraform の検査は別の `terraform.yml` が `infra/` の変更でだけ流す。
-  3・4 は流れたチェックだけを確かめる（`infra/` に触れていれば Terraform の検査。何も流れなければ省く）。
-  セルフレビューの3周はテストと別なので省かない。
+- **バグを修正したら、同じコミットに再発防止テストを添える**（前例: `tests/integration/test_templates.py`）。
+- コミット前に `ruff check .`・`ruff format --check .`・`mypy .` を通す（コンテナ内。WSL からは `make lint`）。ルールの設定は `pyproject.toml` が唯一の出典。**`# noqa` で黙らせる前に指摘のとおり直す**（それでも黙らせるなら理由をコメントに残す）。
+- **CI（`.github/workflows/ci.yml`）が PR と main・`epic/` への push で lint・型検査・React のビルド・フルテストを流す。** 直しては確かめる繰り返しは手元で行い、
+  push の前に1回だけ手元でフルテストを流す。PR は **CI が通ったのを確かめてからマージを頼む**。マージの後は main・epic への push で走った CI を確かめる
+  （並行した PR は単独で通っても組み合わせで壊れる。#32 と #37）。落ちていたら次の作業より先に直す。
+  差分が `ci.yml` の `paths-ignore` に収まるなら手元のフルテストを省く（どのパスが該当するかは `ci.yml` が唯一の出典）。手順は `open-pr` スキル。
 
 ## UI・設計方針
 
@@ -103,11 +81,10 @@ ORM に直接 `bulk_create` 等で書き込むコード（データ投入コマ�
 
 ## 既知の罠（踏み直さない）
 
-- **SQLite + `prefetch_related` の多段リレーション**: 関連行が1000件を超えると OR 連結クエリになり `Expression tree is too large` で落ちる。`Prefetch(..., queryset=...select_related(...))` で JOIN にまとめる（回避例: `infrastructure/repositories.py` の `DjangoTeamRepository`）。**落ちずに「ただ遅い」形で出ることもある**ので、データ投入後は `manage.py measure_pages` で主要画面の応答を実測する。
-- **遅さは SQL ではなく Python 側に出る**: 主要画面が4〜5秒かかっていたとき、SQL は 38ms しかなかった。残りは ORM のモデル生成と値オブジェクトの組み立て。**SQL 時間だけを見ても気づけない**（詳細と直し方は `.claude/rules/performance.md`）。
+- **性能**: SQLite の多段 `prefetch_related` は関連1000件超で落ちるか遅くなる。遅さは SQL ではなく Python 側（ORM のモデル生成と値オブジェクトの組み立て）に出る。データ投入後と遅いと言われたときは `manage.py measure_pages` で実測する（詳細は `.claude/rules/performance.md`）。
 - **単発スクリプトの `django.test.Client`**: `Client(SERVER_NAME='localhost')` を指定する（既定の `testserver` は `ALLOWED_HOSTS` に無く 400 になる）。検証用に作ったデータは必ず後始末する。
 - **JSON API の部分更新**: キーの欠落を「空リスト」と同じ扱いにすると既存データが全消去される。行は位置ではなく識別子で組み立てる。
-- **`Team.add_player` などの年の既定は現実の今日**: `add_player(from_year=)`・`promote_player(year=)`・`retire_player(year=)`・`appoint_captain(year=)`・`remove_captain(year=)` は年を省くと `date.today().year` が入る。ペナントの世界の年で書くときは必ず年を渡す（省くと現実の年の在籍ができる）。
+- **`Team.add_player` などの年の既定は現実の今日**: `add_player(from_year=)`・`promote_player(year=)`・`retire_player(year=)`・`appoint_captain(year=)`・`remove_captain(year=)` は年を省くと `date.today().year` が入る。ペナントの世界の年で書くときは必ず年を渡す。
 
 ## 文言・命名
 
@@ -117,133 +94,74 @@ ORM に直接 `bulk_create` 等で書き込むコード（データ投入コマ�
 
 ## ブランチとコミット
 
-- **実装に着手する前に、実装計画を GitHub Issue に書く**（`issue-plan` スキル）。ブランチを切って PR を出す作業すべてが対象で、
-  省いてよいのは1行で説明しきれる変更（誤字・文言修正・依存の更新など）だけ。会話の中にしか無い計画は、
-  後から「何をやると決めて着手したか」「どこで変えたか」を追えないため。
-  - 計画にユーザーへの選択肢が含まれるときは、Issue を出して URL を提示したところで止め、回答を待ってから着手する。
+### 手順の重さは変更の大きさで変える
+
+| 変更 | Issue | セルフレビュー |
+| --- | --- | --- |
+| 1行で説明しきれる変更（誤字・文言・依存の更新） | 省く | 1周 |
+| ドキュメント・規則・設定だけ（`docs/`・`.claude/`・CLAUDE.md・CI 以外の設定） | 省いてよい | 1周 |
+| 上記以外（コードの変更） | 立てる | 3周 |
+
+ブランチ・PR・CI の確認は、どの変更でも省かない。Issue を省いた PR は本文に「なぜ」を書く。
+
+### Issue と PR
+
+- **実装に着手する前に、実装計画を GitHub Issue に書く**（`issue-plan` スキル）。会話の中にしか無い計画は、後から「何をやると決めて着手したか」を追えない。
+  - 計画にユーザーへの選択肢が含まれるときは、Issue の URL を提示したところで止め、回答を待ってから着手する。
   - 実装中に計画が変わったら Issue 本文を最新に直し、変えた理由をコメントに残す。
-  - **PR は必ず Issue とリンクさせる。** ブランチは `gh issue develop <番号> --name <ブランチ> --base <基点>` で
-    Issue に紐づけて作る（base が main でない epic のタスク PR は、本文のキーワードだけではリンクしないため）。
-    本文には base が main なら `Closes #<番号>`、epic のタスク PR なら `Refs #<番号>` を書く。
-    PR を作ったらリンクしたかを確かめる（しなくてもエラーにならない。確かめ方は `issue-plan` スキル）。
-  - **epic は親 Issue ＋ 段階ごとの sub-issue で追う**（前例: #26 と #50〜#54）。親には「なぜ・範囲・段階の分け方」、
-    sub-issue には段階ごとの実装計画を書く。統合ブランチは親に、タスクブランチは段階の sub-issue に紐づけて切る。
-    詳細設計と段階ごとの実測値は従来どおり `docs/design/` に置き、Issue からはリンクするだけにする（同じ内容を両方に書かない）。
-  - 初期範囲から外した拡張は epic の親の子にせず、別の親 Issue にまとめる（前例: #55）。epic の親が閉じた後も未完了の子が残るため。
-  - **Issue の状態は GitHub Projects（[Baseball League Manager](https://github.com/users/sumika157/projects/2)）で追う。**
-    Issue の作成（未着手）とクローズ（完了）は Project の組み込みワークフローが動かすが、**作業中とレビュー待ちは自動では動かない**ので、
-    ブランチを切ったら「作業中」、PR を作ったら「レビュー待ち」にする（コマンドと ID は `issue-plan` スキルの手順4）。
-    載せるのは Issue だけで PR は載せない（同じ作業のカードが2枚になるため）。epic ごとの表示は親 Issue（sub-issue）でまとめる。
-    **Project は状態だけを持つ。** 何を・なぜ・どの順でやるかは `docs/ROADMAP.md` と Issue に書き、Project に独自の項目を足さない（同じ内容を両方に書かない）。
+- **PR は必ず Issue とリンクさせる。** ブランチは `gh issue develop` で Issue に紐づけて作り、PR を作ったらリンクしたかを確かめる（しなくてもエラーにならない）。
+- **Issue の状態は GitHub Projects（[Baseball League Manager](https://github.com/users/sumika157/projects/2)）で追う。** 作業中とレビュー待ちは自動では動かないので手で動かす
+  （手順は `issue-plan`）。**Project は状態だけを持つ。** 何を・なぜ・どの順では `docs/ROADMAP.md` と Issue に書く。
 - **タスクごとにブランチを切る。main に直接コミットしない。** 命名は `feature/` `fix/` `refactor/` `docs/` ＋ 英語の kebab-case（例: `feature/player-nationality`）。
-- **機能ごとにコミットする。** 複数の機能や無関係な修正を1つのコミットに混ぜない。逆に、1つの機能（実装＋テスト＋ドキュメント更新）は1コミットにまとめる。
-- コミットメッセージは既存の履歴にならい日本語で書く。
-- 完了したら**3周のセルフレビュー（下記）を済ませてから** `git push -u origin <ブランチ>` し、**`gh pr create` で PR を作り、CI の結果を確かめてから URL を提示して終わる**（落ちていたら直してから。CI は「テストと品質のゲート」）。タイトルと本文は日本語。本文はファイルに書いて `--body-file` で渡す（引用符と改行で壊れない）。**マージはユーザーが GitHub 上で行う。こちらでマージしない。** 手順は `open-pr` スキル。
-- `gh` は **Windows 側だけ**にある（winget の user スコープ。`sumika157` で認証済み）。**WSL には無い**ので `wsl -e` 経由では呼べない。既に開いているシェルの PATH には載っていないことがあるので、その場合は
+- **機能ごとにコミットする。** 複数の機能や無関係な修正を1つのコミットに混ぜない。1つの機能（実装＋テスト＋ドキュメント更新）は1コミットにまとめる。
+- コミットメッセージ・PR のタイトルと本文は日本語で書く。
+- 完了したらセルフレビュー（下記）を済ませて push し、PR を作り、CI の結果を確かめてから URL を提示して終わる（手順は `open-pr` スキル）。
+  **マージはユーザーが GitHub 上で行う。こちらでマージしない。**
+- **`gh pr create` の前に `gh pr list --head <ブランチ> --state all` を見る。** ユーザーが先に PR を作っていることがあり、
+  2本目を作るとスカッシュマージで main に空コミットが残る（#1 と #2。エラーにならない）。
+- **PR を出した後にブランチへ追記する前に、PR がまだ OPEN かを確かめる。** マージ済みのブランチへの push は main に届かず、エラーにもならない（#83）。
+- **ブランチを切る前に `git log --oneline origin/main..main` を見る。** ローカル main が先行していたらユーザーに push を促す。
+- `gh` は **Windows 側だけ**にある（`sumika157` で認証済み。WSL には無い）。PATH に無ければ
   `C:\Users\sumik\AppData\Local\Microsoft\WinGet\Packages\GitHub.cli_Microsoft.Winget.Source_8wekyb3d8bbwe\bin\gh.exe` を直接叩く。
-- **`gh pr create` の前に `gh pr list --head <ブランチ> --state all` を見る。** push だけして URL を渡した時点で、
-  **ユーザーがそれをクリックして先に PR を作っていることがある**。同じブランチで2本目を作るとスカッシュマージが
-  差分ゼロになり、**main に空コミットが残る**（#1 と #2 で実際に起きた。エラーにならないので気づけない）。
-- **ブランチを切る前に `git log --oneline origin/main..main` を見る。** ローカル main が先行していたらユーザーに push を促す（worktree は origin/main を基点にするため、先行分が抜けたブランチができる）。
 
-### PR を出す前に3周セルフレビューする
+### PR を出す前のセルフレビュー
 
-push の前に、**「レビュー → 改善」を3周繰り返す**。1周は、PR に載る差分の全体
-（`git diff origin/<base>...HEAD`。base は main か統合ブランチ）を下の**3つの観点すべて**で読み、
-見つけたものを直すところまで。次の周は直した後の差分を、また3観点すべてで読み直す
-（直しが新しい問題を生んでいないかを、どの観点でも確かめるため。観点を周ごとに1つずつ割り振らない）。
-差分が小さい・ドキュメントだけの PR でも周を省かない（その場合は短く済む）。
+push の前に、PR に載る差分の全体（`git diff origin/<base>...HEAD`）を**3つの観点すべて**で読み、見つけたものを直す。これを1周として、上の表の周数を回す。
+次の周は直した後の差分を、また3観点すべてで読み直す（観点を周ごとに1つずつ割り振らない）。
 
-- **正しさ**: 頼まれたことを過不足なく満たしているか。バグ・境界値・通っていない経路
-  （未ログイン・空データ・JSON のキー欠落など）。`/code-review` を使ってよい。
-- **規則**: このファイルと、触ったファイルに効く `.claude/rules/` に照らす（依存の向き・出典の一元化・
-  素の `dict`・文言の日本語・`# noqa` など）。domain・集約・リポジトリ・クエリに触れたら
-  `ddd-boundary-reviewer` エージェントを通す（2周目以降は、直しがそれらの層に及んだときにもう一度通す）。
-- **読み手**: PR 本文・コミットメッセージ・README と Wiki（`docs/wiki/`）が変更と合っているか。差分が Issue の計画と合っているか
-  （ずれたなら Issue 側を直したか）。再発防止テストの有無、
-  デバッグ出力・一時ファイル・無関係な変更の混入、コミットの粒度。
+- **正しさ**: 頼まれたことを過不足なく満たしているか。バグ・境界値・通っていない経路（未ログイン・空データ・JSON のキー欠落など）。
+- **規則**: このファイルと、触ったファイルに効く `.claude/rules/`。domain・集約・リポジトリ・クエリに触れたら `ddd-boundary-reviewer` エージェントを通す。
+- **読み手**: PR 本文・コミットメッセージ・README と Wiki が変更と合っているか。差分が Issue の計画と合っているか。再発防止テストの有無、デバッグ出力・一時ファイル・無関係な変更の混入、コミットの粒度。
 
-- 直しは修正コミットを積まず、その機能のコミットに `git commit --amend` で含める（push 前なので書き換えてよい。
-  「1つの機能は1コミット」を崩さないため）。
-- 周の途中でコードを直したら、その周の終わりに `ruff check`・`ruff format --check`・`mypy` と、直した範囲のテストを通し直す。
-  フルテストは最後の周の後、push の前に1回流す（「テストと品質のゲート」の手元と CI の分担）。
-- **終わる条件は「重要な指摘が残っていない」こと**（指摘ゼロまでは求めない）。重要＝バグ・データ消失・
-  このファイルの規則違反・頼まれたことの未達。言い回しや好みの範囲の指摘は、直さずに残してよい。
-  3周目で重要な指摘を直したときだけ、直した箇所をもう1周確かめる（直しっぱなしで出さない）。
-- PR 本文に「セルフレビュー」節を設け、周ごとに直したことを1行ずつ書く（無ければ「指摘なし」）。
-  直さずに残した軽微な指摘もここに書く。周を回したか・何を見送ったかを、後からユーザーが確かめられるようにするため。
+- 直しは修正コミットを積まず、`git commit --amend` で機能のコミットに含める（push 前なので書き換えてよい）。
+- **終わる条件は「重要な指摘が残っていない」こと。** 重要＝バグ・データ消失・このファイルの規則違反・頼まれたことの未達。
+  最後の周で重要な指摘を直したときだけ、直した箇所をもう1周確かめる。
+- PR 本文に「セルフレビュー」節を設け、周ごとに直したこと（無ければ「指摘なし」）と、直さずに残した軽微な指摘を書く。
 
-### 並行して作業するときは worktree を使う
+### 並行作業は2本まで、分けるときは worktree
 
-手順（作成・中での検査とテスト・片付けのコマンド）は `worktree` スキル。ここには使う条件と罠の理由を置く。
-
-`.git/index` は単一ファイルで、git はコマンド単位でしかロックしない。同じ作業ツリーで別セッションが `git add` すると、
-**自分のステージ内容ではなく相手の変更が自分のコミットメッセージで確定する**（実際に起きた）。ブランチを分けるだけでは
-防げないので、作業ツリーごと分ける。
-
-- 次のいずれかに当てはまるなら worktree にする: ユーザーが並行作業だと言った / `git worktree list` に他の worktree がある / 未コミットの変更が自分のタスクと無関係。
-- 作成は、`gh issue develop` でリモートに作ったブランチを取ってきて
-  `git fetch origin <ブランチ>` → `git worktree add -b <ブランチ> .claude/worktrees/<名前> origin/<ブランチ>`（`.claude/worktrees/` は gitignore 済み）。
-  **`EnterWorktree` ツールはこの構成では使えない**（U: 形式のパスは「メインの作業ツリー」と誤認され、
-  UNC 形式は「UNC network path」として拒否される）。作った worktree に**セッションごと移ることはできない**ので、
-  cwd は main の作業ツリーに置いたまま、Read / Write / Bash に worktree の絶対パスを明示して作業する。
-- **worktree を作ったら `safe.directory` に登録する。** `//wsl.localhost/...` は所有者チェックに引っかかり、
-  登録前は worktree 内で git が一切動かない（`fatal: detected dubious ownership`）。**worktree ごとに1行必要**で、
-  末尾 `/*` のグロブは `%(prefix)///` と併用すると効かない。git が提示してくるフルパスをそのまま登録する:
-  `git config --global --add safe.directory '%(prefix)///wsl.localhost/Ubuntu/home/sumika/work/develop/my_django_project/.claude/worktrees/<名前>'`
-- **`make` と `docker compose` は必ず main の作業ツリーから実行し、対象の worktree を明示する。**
-  `make test WT=<名前>` / `docker compose exec -w /app/.claude/worktrees/<名前> web ...`（`make where WT=<名前>` で対象を確認できる）。
-  バインドマウントが `.:/app` なので worktree も同じコンテナから見えるが、**`-w` を省くと main のコードを検査・テストして
-  「通ったのに直っていない」形になる**（エラーにならないので気づけない）。worktree の中から `WT` 無しで `make` を呼ぶと止まる。
-  - **`make` は Windows 側に無い。** `make ... WT=<名前>` はユーザーの WSL ターミナル用。Claude Code からは
-    `docker compose exec -w /app/.claude/worktrees/<名前> <CACHE_ENV> web ...` を直接叩く。`CACHE_ENV` を省くと
-    **root 所有のキャッシュが worktree に残り、後始末で消せなくなる**（Makefile と同じ3つの `-e` を付ける）。
-  - **`-w /app/...` は Bash ツールから渡すと MSYS のパス変換で壊れる**
-    （`OCI runtime exec failed: Cwd must be an absolute path`）。`MSYS_NO_PATHCONV=1` を付けるか PowerShell から叩く。
-- **worktree の中で `docker compose` を叩かない。** worktree 側の `docker-compose.yml` と、gitignore で存在しない `.env` を読み、
-  別プロジェクト＝別コンテナを作りにいって失敗する。
-- gitignore されたものは worktree に無い。**e2e と TypeScript の型検査の前に `make frontend-build WT=<名前>`**（`dist`・`node_modules` が無い）。
-  `db.sqlite3` はテストが作るので integration までは不要。
-- worktree の `.git` には Windows 側のパスが書かれるため、**WSL のターミナルからは worktree 内で git が動かない**。git 操作は
-  Claude Code（Windows 側）から行い、ユーザーの WSL ターミナルは main の作業ツリーに置いたままにする。
-- `runserver`（localhost:8000）が配信するのは main の作業ツリーのコード。**worktree の変更はブラウザで見られない**ので、
-  確認は自動テスト（必要なら e2e）で行う。
-- **後始末は `ExitWorktree`（remove）か `git worktree remove .claude/worktrees/<名前>`。** 「Directory not empty」で失敗したら
-  コンテナ（root）が作った生成物が残っている。WSL の `sudo` はパスワードを要求するので、**コンテナ経由で消す**:
-  `docker compose exec web rm -rf /app/.claude/worktrees/<名前>/.mypy_cache`（`.ruff_cache`・`__pycache__` も同様）。
-  `make` 経由ならこれらは `/tmp` に逃がしてあるので起きない。直接 `docker compose exec` を叩くときは Makefile の
-  `CACHE_ENV` と同じ `-e` を付ける。なお **`git worktree remove --force` は中途半端に成功することがある**
-  （追跡ファイルだけ消えて登録が残り、以後 `No module named 'config'` のような形で現れる）。失敗したら残骸を確認する。
+- **同時に動かす作業（セッション・バックグラウンドのエージェント）は2本までを目安にする。** 手元のコンテナは共有で、
+  増やすほど負荷・テスト DB の衝突・コンテナの再起動待ちが増え、全体では遅くなる。並行中はコンテナを再起動しない。
+- 次のいずれかに当てはまるなら worktree で作業する: 並行作業中 / `git worktree list` に他の worktree がある / 未コミットの変更が自分のタスクと無関係。
+  `.git/index` は単一ファイルなので、同じ作業ツリーで別セッションが `git add` すると、相手の変更が自分のコミットで確定する（実際に起きた）。
+- worktree の作り方・中での検査とテスト（**`-w` で worktree を指さないと main のコードを検査する**）・罠・片付けは `worktree` スキル。
 
 ### 段階単体では main に入れられない機能は `epic/` に積む
 
-**「タスクごとにブランチを切って main へ PR」が成り立たない機能がある。** 永続化だけ・画面だけの段階は
-単体では動かないため、main に入れると中途半端な状態が残る。この場合だけ統合ブランチを1本立て、
-その上にタスクブランチを乗せて、**main への PR は統合ブランチの1本だけ**にする。
+**段階単体では動かない**（永続化だけ・画面だけ）/ **データの全再生成を伴う** / 3コミット以上に分かれる見込み、のいずれかなら、
+統合ブランチ `epic/<機能>` を1本立てて、その上にタスクブランチを乗せ、**main への PR は統合ブランチの1本だけ**にする。
+当てはまらない単発の修正・小さい機能は従来どおり `feature/xxx` 1本で main へ PR する。
 
-- 次のいずれかに当てはまるなら統合ブランチにする: **段階単体では動かない**（永続化なし・画面なし）/
-  **データの全再生成を伴う** / 3コミット以上に分かれる見込み。
-  **当てはまらない単発の修正・小さい機能は従来どおり `feature/xxx` 1本で main へ PR**（2段にしても手間だけ増える）。
-- 命名は統合が `epic/` ＋ 英語の kebab-case、タスクは従来どおり `feature/` `fix/` `refactor/` `docs/`。
-  **`epic/x` の下に `epic/x/task` は作れない。** git は ref を入れ子にできず
-  `cannot lock ref 'refs/heads/epic/x/task': 'refs/heads/epic/x' exists` で失敗する。
-  タスク名は統合ブランチ名の接頭辞にせず、独立した短い名前にする（`feature/pa-persistence` など）。
-- **タスクの PR は base を統合ブランチにする。** `gh pr create --base epic/<機能>` を忘れると
-  main が base になり、前の段階の差分まで含んだ PR ができる。
-- **タスクブランチは統合ブランチを基点に作る**: `gh issue develop <段階の sub-issue> --name <タスク> --base epic/<機能>` →
-  `git fetch origin <タスク>` → `git worktree add -b <タスク> .claude/worktrees/<名前> origin/<タスク>`
-  （統合ブランチ自体は `--base main` で親 Issue に紐づけて作る）。
-- **統合ブランチは長生きするので、段階の区切りごとに main を取り込む**（`git merge origin/main`）。
-  放っておくと最後に大きく衝突する。並行して別のタスクが main にマージされていく前提で動く。
-- 設計は `docs/design/<機能>.md` に置き、**段階ごとに実測値と決定を追記する**（次のセッションへの引き継ぎになる）。
-  統合ブランチを main にマージするときに Wiki（`docs/wiki/`）へ吸収して削除する。
+- epic は親 Issue ＋ 段階ごとの sub-issue で追う（前例: #26 と #50〜#54）。タスクの PR は base を統合ブランチにする。
+- 統合ブランチは段階の区切りごとに main を取り込む（`git merge origin/main`）。
+- 設計は `docs/design/<機能>.md` に置き、段階ごとに実測値と決定を追記する。統合ブランチを main にマージするときに Wiki へ吸収して削除する。
+- ブランチ名の制約・Issue の紐づけ方・sub-issue の閉じ方は `issue-plan` スキルの「epic の運用」。
 
 ## ドキュメント
 
 - **仕様の一次ドキュメントは Wiki。原稿はリポジトリの `docs/wiki/` が唯一の出典**で、main に入ると
   `.github/workflows/wiki-sync.yml` が GitHub Wiki へ丸ごと反映する。Wiki の画面では編集しない（次の反映で上書きされる）。
-- 機能を追加・変更したら `docs/wiki/` の該当ページ（利用者向け: 画面・成績の仕様、開発者向け: アーキテクチャ・開発手順）を
-  **同じコミットで**更新する。README はセットアップと起動の手順だけを持ち、仕様は書かない（同じ内容を両方に書かない）。
-- ページ間のリンクは `[表示名](ページ名)`（拡張子なし。Wiki で解決される）、リポジトリ内のファイルへのリンクは
+- 機能を追加・変更したら `docs/wiki/` の該当ページを**同じコミットで**更新する。README はセットアップと起動の手順だけを持ち、仕様は書かない。
+- ページ間のリンクは `[表示名](ページ名)`（拡張子なし）、リポジトリ内のファイルへのリンクは
   `https://github.com/sumika157/baseball-league-manager/blob/main/...` の絶対 URL で書く（Wiki では相対パスがリポジトリを指さない）。
 - ページを増やしたら `Home.md` と `_Sidebar.md` の目次にも足す。

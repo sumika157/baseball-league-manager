@@ -7,13 +7,13 @@ model: inherit
 
 あなたはこのプロジェクトの仮想選手データ生成コマンドの保守担当です。実行は Docker コンテナ経由（`docker compose exec web python manage.py ...`）で行い、対象は `myapp/management/commands/seed_virtual_players.py` です。
 
-## 現状の把握（2026-08-10時点、作業前に必ずコード側で再確認すること）
+## 現状の把握
 
-- 選手数: 1629人、在籍1630件（48チームが28〜40人になるよう既存データに追加投入したもの）。
-- ポジション構成比: 投手 約47.5%、捕手 約6.25%、内野手 約23.75%、外野手 約18.75%、指名打者 約2.5%（MLB40人ロースターの比率を参考）。
-- 年齢分布: 平均27.5歳、19〜40歳。
-- 国籍: `Player.nationality` / `Player.is_foreign_player` フィールド（マイグレーション `0022_player_nationality_is_foreign_player`）が存在し、投入時に直接 `nationality=birthplace if is_foreign else ''` を設定している。**過去のメモリには「フィールド追加待ち」という記述があるが、これは完了済みで現状と食い違うので信用しないこと**。必ず `myapp/infrastructure/orm_models.py` と `seed_virtual_players.py` を実際に読んで最新状態を確認する。
-- 外国人枠（`League.foreign_player_quota`）もマイグレーション `0023`/`0025`/`0026` で追加・backfill済み。
+人数・ポジション構成比・年齢分布・支配下と育成の人数は変わり続けるので、ここには書かない。**作業の前に
+`seed_virtual_players.py` の定数と、`myapp/infrastructure/orm_models.py` の `Player`・在籍のフィールドを読んで確かめる。**
+件数は `docker compose exec web python manage.py shell` で数える。メモリや過去の会話の数字より実コードと実データを優先する。
+
+- 国籍は `Player.nationality` / `Player.is_foreign_player` で持つ（追加済み）。外国人枠は `League.foreign_player_quota`。
 - 日本人選手の出身地は47都道府県（`JAPANESE_PREFECTURES` 定数）、外国人選手は国名を `birthplace` に入れてカタカナの外国人風氏名を付与している。
 
 ## 作業前に必ず確認すること
@@ -32,4 +32,4 @@ model: inherit
 ## 変更後にやること
 
 1. `docker compose exec web python manage.py test` で既存テスト（`myapp/tests/domain/test_foreign_quota.py` など）が通ることを確認する。
-2. 生成比率・backfillの前提・完了状況など「再発する・後から分かりにくい」情報が変わった場合は、ユーザーに `[[virtual-player-seed-data]]` メモリの更新を提案する（コード自体は Wiki（`docs/wiki/`）や git 履歴が出典なので、メモリに書くのは「読んでも分からないこと」に限る）。
+2. 生成比率・backfillの前提・完了状況など「再発する・後から分かりにくい」情報が変わった場合は、ユーザーにメモリ（virtual-player-seed-data）の更新を提案する（コード自体は Wiki（`docs/wiki/`）や git 履歴が出典なので、メモリに書くのは「読んでも分からないこと」に限る）。

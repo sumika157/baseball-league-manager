@@ -50,10 +50,10 @@ presentation  →  application  →  domain  ←  infrastructure
 ### 4. 並べ替え・表示順のルール
 - 「何を基準に並べ替えられるか」「既定の向き（昇順/降順）」はドメイン層が持つ。画面側（views/templates）に個別のソート方向のハードコードが漏れていないか。
 - 不正なソートキーはエラーにせず既定の並びにフォールバックしているか。
-- チーム一覧・リーグ一覧は「表示順」というドラッグ確定順を唯一の並びとして持つ画面であり、列ソートと共存させてはならない（両立しない操作を同一画面に並べない、という方針。[[no-silent-dead-ends]] 参照）。
+- チーム一覧・リーグ一覧は「表示順」というドラッグ確定順を唯一の並びとして持つ画面であり、列ソートと共存させてはならない（両立しない操作を同一画面に並べない、という方針。CLAUDE.md「UI・設計方針」）。
 
 ### 5. パフォーマンス上の既知の罠
-- `prefetch_related('a__b')` のような多段リレーションを新設・変更していないか確認する。中間テーブルが1000件を超えるとSQLiteで `Expression tree is too large` になるため、`Prefetch(..., queryset=...select_related(...))` でJOINにまとめる必要がある（[[sqlite-prefetch-related-expression-depth]] 参照。既存の回避例は `myapp/infrastructure/repositories.py` の `DjangoTeamRepository`）。
+- `prefetch_related('a__b')` のような多段リレーションを新設・変更していないか確認する。中間テーブルが1000件を超えるとSQLiteで `Expression tree is too large` になるため、`Prefetch(..., queryset=...select_related(...))` でJOINにまとめる必要がある（`.claude/rules/performance.md` 参照。既存の回避例は `myapp/infrastructure/repositories.py` の `DjangoTeamRepository`）。
 
 ### 6. 組み立てと受け渡し（CLAUDE.md「アーキテクチャ規則」）
 - **依存の組み立ては `presentation/views.py` の `build_service()` だけ**。サービスやリポジトリを別の場所（テンプレートタグ・管理画面・
