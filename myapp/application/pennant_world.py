@@ -152,6 +152,12 @@ class PennantWorldService:
         # 検査を先に済ませる（世界を作ってから失敗すると、消す手間が増える）
         world = World(name=name, seed=seed, start_year=start_year, owner_id=owner_id)
         source = self.load_source(league_ids)
+        # リーグ名はワークスペースの中でだけ一意なので、別のワークスペースの同名のリーグを両方選べてしまう。
+        # 世界の中ではリーグ名が一意（unique_world_league_name）なので、写す前に弾く
+        names = [league.name for league in source.leagues]
+        duplicated = sorted({n for n in names if names.count(n) > 1})
+        if duplicated:
+            raise InvalidWorld(f"同じ名前のリーグを2つ以上分岐元に選べません（{'・'.join(duplicated)}）。")
         if world.start_year > MAX_START_YEAR:
             raise InvalidWorld(
                 f"開幕年は{MAX_START_YEAR}年までにしてください（{MAX_SEASONS_PER_WORLD}シーズン遊べる年が必要です）。"

@@ -136,8 +136,6 @@ class PennantWorld(models.Model):
     workspace = models.ForeignKey(
         Workspace,
         on_delete=models.PROTECT,
-        null=True,
-        blank=True,
         related_name="pennant_worlds",
         verbose_name="ワークスペース",
         help_text="この世界が属すワークスペース。",
@@ -216,12 +214,23 @@ class League(models.Model):
         # 手動の並び順を既定とし、未設定どうしは名前で安定させる
         ordering = ["display_order", "name"]
         constraints = [
-            # リーグ名の一意性は世界の中で保つ。world が NULL のどうしは一意制約で
-            # 衝突しないため、条件を付けないと実データ側の一意性が消える
+            # 実データのリーグ名はワークスペースの中で一意にする。ペナントのリーグは workspace が NULL で
+            # 一意制約に引っかからないが、世界の中の一意は下の unique_world_league_name が保つ
             models.UniqueConstraint(
-                fields=["name"], condition=models.Q(world__isnull=True), name="unique_real_league_name"
+                fields=["workspace", "name"],
+                name="unique_workspace_league_name",
+                violation_error_message="同じワークスペースに同じ名前のリーグがあります。",
             ),
             models.UniqueConstraint(fields=["world", "name"], name="unique_world_league_name"),
+            # 実データのリーグは workspace だけ、ペナントのリーグは world だけを持つ（ちょうど片方）
+            models.CheckConstraint(
+                condition=(
+                    models.Q(workspace__isnull=False, world__isnull=True)
+                    | models.Q(workspace__isnull=True, world__isnull=False)
+                ),
+                name="league_workspace_xor_world",
+                violation_error_message="リーグはワークスペースか世界のどちらか一方にだけ属します。",
+            ),
         ]
 
     def __str__(self) -> str:
@@ -235,12 +244,10 @@ class Stadium(models.Model):
     SURFACE_CHOICES = [(s, s) for s in StadiumProfile.SURFACES]
     ROOF_CHOICES = [(r, r) for r in StadiumProfile.ROOFS]
 
-    name = models.CharField(max_length=100, unique=True, verbose_name="球場名")
+    name = models.CharField(max_length=100, verbose_name="球場名")
     workspace = models.ForeignKey(
         Workspace,
         on_delete=models.PROTECT,
-        null=True,
-        blank=True,
         related_name="stadiums",
         verbose_name="ワークスペース",
         help_text="この球場が属すワークスペース。",
@@ -261,6 +268,13 @@ class Stadium(models.Model):
         verbose_name = "球場"
         verbose_name_plural = "球場"
         ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["workspace", "name"],
+                name="unique_workspace_stadium_name",
+                violation_error_message="同じワークスペースに同じ名前の球場があります。",
+            ),
+        ]
 
     def __str__(self) -> str:
         return self.name

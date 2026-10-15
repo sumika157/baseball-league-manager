@@ -531,6 +531,21 @@ W3 を W4 より先にするのは、W4 を先にすると、中身を入れら�
   - 逆方向は何もしない（`noop`）。0048 では列が残るので帰属はそのままでよく、0048 より前へ戻れば列ごと消える。消す形にすると、戻して再び適用したときに、あとから作られたワークスペースを消したり、非公開のものを1つの公開ワークスペースに混ぜたりしてしまう。順方向も、ワークスペースが1つでもあれば何もしない。
   - テスト: `tests/integration/test_workspace_migration.py`（`TransactionTestCase` 1クラス・4テスト。帰属と逆方向／superuser がいない場合／持ち主がなれる人がいない場合／空の DB）。
   - 開発 DB の写し（`/tmp/w1a-t5/db.sqlite3`、`DJANGO_DB_PATH` で指して実施。共有の `db.sqlite3` には当てていない。試行後に写しは削除）: 0048・0049 の適用に 2.6 秒（プロセス起動を含む）。ワークスペース1つ（公開・持ち主 `admin`＝id 1 の superuser）、編集者1人（`smoketest`＝superuser かつ staff）、リーグ 8/8（ペナントのリーグは 0 で付いていない）、球場 21/21、世界 0/0。ユーザーは3人（admin・s-sato・smoketest）で、staff でない `s-sato` は編集者にならない。`migrate myapp 0048` で3つの表の `workspace` が全部 NULL、`Workspace`・`WorkspaceEditor` が 0 行に戻ることを確かめた。
+- T6（`feature/workspace-constraints`）: マイグレーション `0050_workspace_constraints`（0049 の次。スキーマだけ）。
+  - `Stadium.workspace` と `PennantWorld.workspace` を null 不可にした。`League.workspace` は、ペナントのリーグが持たないので null 可のまま。
+  - 一意制約: `Stadium.name` の `unique=True` を `unique_workspace_stadium_name`（workspace, name）に、`unique_real_league_name`（`world IS NULL` の条件つきで name）を `unique_workspace_league_name`（workspace, name）に替えた。`unique_world_league_name` は残した。ペナントのリーグは workspace が NULL なので前者に引っかからず、どのワークスペースの実データとも同名でよい（世界の中の一意は後者が保つ）。
+  - `CheckConstraint` `league_workspace_xor_world`: workspace と world がちょうど片方（`condition=`。前例 `game_teams_differ`）。
+  - 違反メッセージ（`violation_error_message`）は日本語。管理画面のリーグ・球場のフォームは `ModelForm` の検証が UniqueConstraint を見るので、同名の重複は 500 ではなくフォームのエラーになる。world は管理画面のリーグのフォームに出ていないため、「両方持つ」はフォームからは作れない（モデル・DB で弾く）。
+  - ドメイン・リポジトリに名前の重複検査は無かった（一意は DB 制約だけ）ので、直すものは無い。ペナントの分岐が世界へ写すリーグ名は `unique_world_league_name` の範囲。
+  - マイグレーションは `makemigrations` の自動生成ではなく手書き（null 不可への変更は既定値を尋ねられるため。0049 で帰属済みなので既定値は不要）。`makemigrations --check` は差分なし。
+  - テスト: `tests/integration/test_workspace_constraints.py`（名前の一意の範囲・ペナントの同名・帰属の排他と必須・管理画面の重複）。既存テストの修正は不要（T3 のヘルパーが帰属を渡している）。
+  - 逆方向（0049 まで戻す）が成功するのは、リーグ名・球場名がワークスペースをまたいで重複していないときだけ（一意制約を名前だけに戻すため）。
+  - 0050 は、リーグ・球場・世界に帰属の無い行（NULL）があると、素の NOT NULL・CHECK のエラーで止まる。起きるのは、異例のロールバックと当て直しの後だけ（通常のデプロイは 0048〜0050 を続けて当てる）。
+  - 設計 3.3 は「リポジトリが名前の一意違反を日本語のエラーに直す」としているが、実データの範囲で `DjangoLeagueRepository.save` を呼ぶ画面は今無い。この翻訳は最初の呼び出し元（リーグ設定画面）が現れる W3 に回す（W3 の TODO）。
+  - ペナントの世界の作成（`PennantWorldService.create_world`）は、分岐元に同名のリーグが2つ以上あると `InvalidWorld`（日本語）で弾く。名前がワークスペースの中でしか一意でなくなり、別のワークスペースの同名リーグを両方選ぶと世界の中の `unique_world_league_name` で 500 になるため。世界を作る前に検査する。
+  - 管理画面のリーグのフォームは `world` を除外した（ペナントのリーグは世界側で作り、workspace との排他を崩さない）。
+  - 開発 DB の写し（`/tmp/w1a-t6/db.sqlite3`、`DJANGO_DB_PATH` で指して実施。共有の `db.sqlite3` には当てていない。試行後に写しは削除）: 0048〜0050 が通った（数秒）。ワークスペース1つ、リーグ 8（帰属なし 0）、球場 21（帰属なし 0）、世界 0。`check_constraints()` と全リーグ・全球場の `validate_constraints()` が通った。
+
 
 #### T7 で必ず行うこと（T4 のレビューより）
 
