@@ -64,6 +64,7 @@ from ..domain.value_objects import (
     BattingLine,
     ContractStatus,
     DepartureRoute,
+    DraftPick,
     ErrorKind,
     FieldingLine,
     FieldingPosition,
@@ -539,6 +540,20 @@ def _captaincy_values(captaincy: Captaincy, player_id: int) -> dict[str, Any]:
     }
 
 
+def draft_of(year: int | None, round_: int | None, *, is_development: bool) -> DraftPick | None:
+    """ドラフトの3列から。年が空ならドラフトを経ていない（None）。参照クエリもこれを通す（変換の出典を1つにする）。"""
+    if year is None:
+        return None
+    return DraftPick(year=year, round=round_, is_development=is_development)
+
+
+def draft_columns(draft: DraftPick | None) -> dict:
+    """`draft_of` の逆。ドラフトを経ていなければ3列とも空（育成は False）。"""
+    if draft is None:
+        return {"draft_year": None, "draft_round": None, "is_development_draft": False}
+    return {"draft_year": draft.year, "draft_round": draft.round, "is_development_draft": draft.is_development}
+
+
 def _profile_defaults(profile: Profile) -> dict:
     return {
         "birth_date": profile.birth_date,
@@ -547,7 +562,7 @@ def _profile_defaults(profile: Profile) -> dict:
         "height_cm": profile.height_cm,
         "weight_kg": profile.weight_kg,
         "birthplace": profile.birthplace,
-        "debut_year": profile.debut_year,
+        **draft_columns(profile.draft),
         "high_school": profile.high_school,
         "university": profile.university,
         "corporate_team": profile.corporate_team,
@@ -566,7 +581,7 @@ def profile_of(row: orm_models.Player) -> Profile:
         height_cm=row.height_cm,
         weight_kg=row.weight_kg,
         birthplace=row.birthplace,
-        debut_year=row.debut_year,
+        draft=draft_of(row.draft_year, row.draft_round, is_development=row.is_development_draft),
         high_school=row.high_school,
         university=row.university,
         corporate_team=row.corporate_team,

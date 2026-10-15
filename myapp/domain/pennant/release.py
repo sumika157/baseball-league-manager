@@ -171,9 +171,13 @@ def foreign_prospect_value(position: Position) -> float:
     return retirement_value(compared, ratings) + fmean(youth_credit(age) for age in range(low, high + 1))
 
 
-def is_release_candidate(player: OffseasonPlayer, *, year: int) -> bool:
+def is_release_candidate(player: OffseasonPlayer, *, year: int, start_year: int) -> bool:
     """支配下の空きのために AI が外しうる選手か。支配下で、その年の主力でなく、入団1年目（`is_first_year`）でない。"""
-    return player.is_registered and not player.playing_time.is_regular and not player.is_first_year(year)
+    return (
+        player.is_registered
+        and not player.playing_time.is_regular
+        and not player.is_first_year(year, start_year=start_year)
+    )
 
 
 def is_replaceable_foreigner(player: OffseasonPlayer, *, year: int, start_year: int) -> bool:
@@ -186,7 +190,7 @@ def is_replaceable_foreigner(player: OffseasonPlayer, *, year: int, start_year: 
     if not (player.is_registered and player.profile.is_foreign_player):
         return False
     threshold = foreign_prospect_value(player.position)
-    if player.is_first_year(year):
+    if player.is_first_year(year, start_year=start_year):
         threshold -= FIRST_YEAR_FOREIGN_MARGIN
     return foreign_value(player, year=year, start_year=start_year) < threshold
 
@@ -224,7 +228,10 @@ def decide_releases(
     foreigners = order([p for p in remaining if is_replaceable_foreigner(p, year=year, start_year=start_year)])
     take(foreigners, len(foreigners))
     if counts.registered > len(chosen):
-        take(order([p for p in remaining if is_release_candidate(p, year=year)]), counts.registered)
+        take(
+            order([p for p in remaining if is_release_candidate(p, year=year, start_year=start_year)]),
+            counts.registered,
+        )
     return tuple(chosen)
 
 

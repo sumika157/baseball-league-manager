@@ -9,8 +9,10 @@
 （既存データは 0024_backfill_foreign_players_from_birthplace で移行済み）。助っ人は支配下だけにする
 （1球団の外国人の上限 `generator.FOREIGN_PLAYERS_PER_TEAM_MAX` は育成も数えるので、上限は支配下の助っ人に回す）。
 
-背番号は支配下が 00・0〜99、育成が3桁（100番台から）。入団の経路は作った経路そのもの
-（日本人の支配下はドラフト、助っ人は新外国人、育成は育成ドラフト）を入れる。
+背番号は支配下が 00・0〜99、育成が3桁（100番台から）。日本人選手にはドラフトの指名（`DraftPick`。年は加入年の前年、
+支配下は本指名・育成は育成ドラフト）を付け、入団の経路はそこから導く（`DraftPick.acquisition_route`）。助っ人はドラフトを
+持たず、経路は新外国人。順位は球団 × ドラフト年 × 本指名/育成ごとに、既にある最大の順位の次から1つずつ振る
+（重複しない）。
 
 氏名は「苗字＋名前」を漢字プールから組み合わせて作るため、よみがな（カタカナ）と
 背ネーム（ユニフォーム背面のヘボン式アルファベット表記）もプール側に持たせてある。
@@ -25,6 +27,7 @@ from datetime import date
 
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
+from django.db.models import Max
 
 from myapp.domain.exceptions import DomainError, RegisteredPlayerLimitExceeded
 from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND
@@ -33,11 +36,13 @@ from myapp.domain.value_objects import (
     DEVELOPMENTAL_MIN_NUMBER,
     AcquisitionRoute,
     ContractStatus,
+    DraftPick,
     JerseyNumber,
     Position,
     ensure_quota_not_exceeded,
 )
 from myapp.domain.virtual_players import generator, pools
+from myapp.infrastructure.repositories import draft_columns
 from myapp.infrastructure.scoping import players_in, stints_in, teams_in
 from myapp.models import Player, PlayerStint
 
@@ -104,7 +109,7 @@ class Command(BaseCommand):
             action="store_true",
             help=(
                 "このコマンドで過去に投入した架空の日本人選手（助っ人を除く）の"
-                "出身高校・大学・社会人チームを選び直す。入団年など他の項目は変えない。"
+                "出身高校・大学・社会人チームを選び直す。ドラフトなど他の項目は変えない。"
             ),
         )
 
@@ -197,6 +202,8 @@ class Command(BaseCommand):
             + self._shuffled(rng, DEVELOPMENTAL_FIRST_NUMBERS, used_numbers),
         }
 
+        # ドラフトの順位の次の番号（球団 × ドラフト年 × 本指名/育成）
+        next_rounds = self._next_rounds(team)
         new_players = []
         for contract, target in targets.items():
             additions = generator.additions_by_position(target, existing_by_position[contract])
@@ -226,6 +233,7 @@ class Command(BaseCommand):
                     number=number,
                     used_names=used_names,
                     today=today,
+                    next_rounds=next_rounds,
                 )
                 tally.added[contract] += 1
                 if dry_run:
@@ -269,23 +277,34 @@ class Command(BaseCommand):
         return available
 
     @staticmethod
-    def _new_player(rng, *, position, contract, is_foreign, number, used_names, today):
+    def _next_rounds(team) -> Counter[tuple[int, bool]]:
+        """球団の既存の選手の、ドラフト年 × 本指名/育成ごとの最大の順位（次に振る順位はこれ＋1）。
+
+        指名した球団は最初の在籍で分かるが、ここではこの球団に在籍したことのある選手をすべて数える
+        （移籍してきた選手の順位まで避けるので、番号が飛ぶことはあっても重複はしない）。
+        """
+        rows = (
+            players_in(REAL_SCOPE)
+            .filter(stints__team=team, draft_year__isnull=False, draft_round__isnull=False)
+            .values("draft_year", "is_development_draft")
+            .annotate(last=Max("draft_round"))
+            .order_by()
+        )
+        last_rounds: Counter[tuple[int, bool]] = Counter()
+        for row in rows:
+            if row["draft_year"] is not None:  # 絞り込み済み（型のため）
+                last_rounds[(row["draft_year"], row["is_development_draft"])] = row["last"]
+        return last_rounds
+
+    @staticmethod
+    def _new_player(rng, *, position, contract, is_foreign, number, used_names, today, next_rounds):
         """未保存の選手と在籍を作る。(選手, 在籍, 苗字のローマ字, 名前のローマ字)。"""
         if is_foreign:
             name, name_kana, country, surname_romaji, given_romaji = generator.foreign_name(rng, used_names)
             birthplace = country
-            route = AcquisitionRoute.NEW_FOREIGN
         else:
             name, name_kana, surname_romaji, given_romaji = generator.japanese_name(rng, used_names)
             birthplace = generator.prefecture(rng)
-            route = (
-                AcquisitionRoute.DEVELOPMENTAL_DRAFT
-                if contract is ContractStatus.DEVELOPMENTAL
-                else AcquisitionRoute.DRAFT
-            )
-        # ORM に直接書くので、集約が守る区分の規則（背番号の桁・経路と区分の対応）をここで確かめる
-        contract.ensure_number_fits(JerseyNumber(number))
-        route.ensure_fits_contract(contract)
 
         mean, sd, youngest, oldest = (
             generator.DEVELOPMENTAL_AGE if contract is ContractStatus.DEVELOPMENTAL else generator.REGISTERED_AGE
@@ -293,7 +312,24 @@ class Command(BaseCommand):
         age = max(youngest, min(oldest, round(rng.gauss(mean, sd))))
         birth_date = generator.birth_date_for(rng, age=age, as_of=today)
         career = generator.amateur_career(rng, is_foreign=is_foreign, birthplace=birthplace)
-        debut_year = birth_date.year + min(career.debut_age, age)
+        # プロ入りの年（加入年）。経歴のプロ入りの年齢で、今の年齢を超えない
+        joined_year = birth_date.year + min(career.debut_age, age)
+        draft = None
+        route = AcquisitionRoute.NEW_FOREIGN
+        if not is_foreign:
+            # 日本人はドラフトを経て入る。プロ入りの前年の秋に指名され、加入年はその翌年（`DraftPick.entry_year`）。
+            # 順位は球団 × 年 × 本指名/育成ごとに次の番号
+            is_development = contract is ContractStatus.DEVELOPMENTAL
+            draft_year = joined_year - 1
+            next_rounds[(draft_year, is_development)] += 1
+            draft = DraftPick(
+                year=draft_year, round=next_rounds[(draft_year, is_development)], is_development=is_development
+            )
+            joined_year = draft.entry_year
+            route = draft.acquisition_route
+        # ORM に直接書くので、集約が守る区分の規則（背番号の桁・経路と区分の対応）をここで確かめる
+        contract.ensure_number_fits(JerseyNumber(number))
+        route.ensure_fits_contract(contract)
         throws, bats = generator.handedness(rng, position)
         height_cm, weight_kg = generator.physique(rng, position)
 
@@ -307,7 +343,7 @@ class Command(BaseCommand):
             height_cm=height_cm,
             weight_kg=weight_kg,
             birthplace=birthplace,
-            debut_year=debut_year,
+            **draft_columns(draft),
             high_school=career.high_school,
             university=career.university,
             corporate_team=career.corporate_team,
@@ -316,7 +352,7 @@ class Command(BaseCommand):
         )
         stint = PlayerStint(
             number=number,
-            from_year=debut_year,
+            from_year=joined_year,
             to_year=None,
             signed_as=contract.value,
             acquired_via=route.value,

@@ -24,6 +24,7 @@ from ..domain.value_objects import (
     BattingLine,
     ContractStatus,
     DepartureRoute,
+    DraftPick,
     FieldingPosition,
     ForeignPlayerRules,
     FreeAgencyKind,
@@ -669,7 +670,8 @@ class PlayerProfile:
     nationality: str = ""
     # 外国人枠の対象か。国籍（事実）とは別の概念なので独立して持つ
     is_foreign_player: bool = False
-    debut_year: int | None = None
+    # ドラフトの表記（「2019年ドラフト1位」。`DraftPick.label`）。ドラフトを経ていない選手は空
+    draft_label: str = ""
     # プロ入り前の経歴。(区分, 名称) を通った順に並べたもの
     amateur_career: list | None = None
     has_profile: bool = False
@@ -2068,8 +2070,8 @@ class AnalysisRosterRow:
     throws: Handedness | None
     bats: Handedness | None
     is_foreign_player: bool
-    # FA 取得の見込み（学歴の区分と入団年）の材料
-    debut_year: int | None = None
+    # FA 取得の見込み（学歴の区分とプロ入り。`ProEntry`）の材料
+    draft: DraftPick | None = None
     high_school: str = ""
     university: str = ""
     corporate_team: str = ""
@@ -2374,8 +2376,9 @@ class FaRow:
     name: str
     number: str
     education_label: str
-    debut_year: int | None
-    # 数えたシーズン数と持ち越しの日数。入団年が分からないときは None
+    # ドラフトの表記（`DraftPick.label`）。ドラフトを経ていない選手は空
+    draft_label: str
+    # 数えたシーズン数と持ち越しの日数。プロ入りが分からないときは None
     seasons: int | None
     remainder_days: int
     includes_estimate: bool

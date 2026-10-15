@@ -11,7 +11,7 @@ from myapp.domain.pennant import draft
 from myapp.domain.pennant.draft import DraftRoute, DraftTeam, draft_class, draftee_count
 from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND, RegisteredBand
 from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings
-from myapp.domain.value_objects import ForeignPlayerRules, Position, Profile
+from myapp.domain.value_objects import AcquisitionRoute, ForeignPlayerRules, Position, Profile
 from myapp.domain.virtual_players import generator
 from myapp.domain.virtual_players.generator import AmateurPath
 
@@ -203,7 +203,6 @@ class ProfileTest(unittest.TestCase):
             for rookie in run(team(), seed):
                 age = rookie.profile.age(as_of)
                 seen.add(rookie.route)
-                self.assertEqual(rookie.profile.debut_year, YEAR + 1)
                 if rookie.route is DraftRoute.HIGH_SCHOOL:
                     self.assertEqual(age, 18)
                 elif rookie.route is DraftRoute.UNIVERSITY:
@@ -234,6 +233,40 @@ class ProfileTest(unittest.TestCase):
 
     def test_route_labels_are_the_screen_names(self) -> None:
         self.assertEqual([route.label for route in DraftRoute], ["高校", "大学", "社会人", "外国人"])
+
+
+class DraftPickTest(unittest.TestCase):
+    """新人のドラフトの指名。年は締める年、順位は指名の順のうち日本人だけを数えた番号（仮置き。#198 で置き換える）。"""
+
+    def test_japanese_rookies_are_drafted_in_the_closing_year_and_enter_the_next(self) -> None:
+        for seed in range(20):
+            for rookie in run(team(), seed):
+                if rookie.is_foreign:
+                    continue
+                pick = rookie.profile.draft
+                assert pick is not None
+                self.assertEqual((pick.year, pick.entry_year, pick.is_development), (YEAR, YEAR + 1, False))
+
+    def test_rounds_count_from_one_without_gaps_or_duplicates(self) -> None:
+        for seed in range(20):
+            rookies = run(team(foreign=0, limit=None), seed)
+            rounds = [rookie.profile.draft.round for rookie in rookies if rookie.profile.draft is not None]
+            self.assertEqual(rounds, list(range(1, len(rounds) + 1)))
+
+    def test_foreign_rookies_have_no_draft(self) -> None:
+        rookies = run(team(foreign=0, limit=None))
+        self.assertTrue(any(rookie.is_foreign for rookie in rookies), "前提: 外国人の新人がいる")
+        for rookie in rookies:
+            self.assertEqual(rookie.profile.draft is None, rookie.is_foreign)
+
+    def test_acquisition_route_follows_the_draft(self) -> None:
+        for rookie in run(team(foreign=0, limit=None)):
+            pick = rookie.profile.draft
+            if pick is None:
+                self.assertIs(rookie.acquisition_route, AcquisitionRoute.NEW_FOREIGN)
+                continue
+            self.assertIs(rookie.acquisition_route, pick.acquisition_route)
+            self.assertIs(rookie.acquisition_route, AcquisitionRoute.DRAFT)
 
 
 class RouteMappingTest(unittest.TestCase):
