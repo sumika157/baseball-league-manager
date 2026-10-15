@@ -75,10 +75,13 @@ FP = FieldingPosition
 
 INNINGS_PER_GAME = 9
 OUTS_PER_INNING = InningsPitched.OUTS_PER_INNING
-# 延長の上限。NPB は12回を終えて同点なら引分。
+# 延長の上限（公式戦の既定）。NPB は12回を終えて同点なら引分。
 MAX_INNINGS = 12
 # 1つの半回の打席数の上限。乱数源が壊れていても無限ループにならないための安全装置
 _MAX_PLATE_APPEARANCES_PER_HALF = 100
+# 延長の制限が無い試合（日本シリーズの第8戦以降）の回数の上限。点の入らない乱数源でも
+# 無限ループにならないための安全装置で、実際の試合がここに届くことはない
+_MAX_INNINGS_WITHOUT_LIMIT = 50
 
 
 @dataclass
@@ -199,8 +202,12 @@ def simulate_game(
     baseline: LeagueBaseline = NPB,
     sensitivity: RatingSensitivity = DEFAULT_SENSITIVITY,
     rules: BaserunningRules = DEFAULT_RULES,
+    max_innings: int | None = MAX_INNINGS,
 ) -> SimulatedGame:
     """1試合を打席単位で進め、`assemble_game()` で `Game` を組み立てる。
+
+    `max_innings` は延長の上限（その回を終えて同点なら引分）。`None` は制限なし（日本シリーズの第8戦以降。
+    決着するまで続ける）。既定値（公式戦の12回）のままなら、引数を足す前と同じ打席列になる。
 
     `home` / `away` は1軍に登録された選手だけを入れた `ClubRoster`。先発は `history`（直近の登板の
     記録）から中5日を空けて決め、試合が終わったらその日の登板を `history` に書き足す。
@@ -209,7 +216,12 @@ def simulate_game(
     `home_orders` / `away_orders` は GM の編成の上書き（オーダー・投手陣）。渡さなければ（または
     区画が `None` なら）AI 監督が決めるので、渡さないときの結果は上書きを知らない版と同じ。
     """
-    engine = _Engine(rng, baseline, sensitivity, rules)
+    if max_innings is not None and not INNINGS_PER_GAME <= max_innings <= _MAX_INNINGS_WITHOUT_LIMIT:
+        raise ValueError(
+            f"延長の上限は{INNINGS_PER_GAME}〜{_MAX_INNINGS_WITHOUT_LIMIT}回にしてください（{max_innings}）。"
+            "制限なしは None。"
+        )
+    engine = _Engine(rng, baseline, sensitivity, rules, max_innings)
     history = history if history is not None else PitchingHistory()
     sides = {
         True: engine.make_side(home, True, played_on, history, foreign_game_limit, home_orders),
@@ -250,12 +262,18 @@ def simulate_game(
 
 class _Engine:
     def __init__(
-        self, rng: GameRandom, baseline: LeagueBaseline, sensitivity: RatingSensitivity, rules: BaserunningRules
+        self,
+        rng: GameRandom,
+        baseline: LeagueBaseline,
+        sensitivity: RatingSensitivity,
+        rules: BaserunningRules,
+        max_innings: int | None,
     ) -> None:
         self.rng = rng
         self.baseline = baseline
         self.sensitivity = sensitivity
         self.rules = rules
+        self.max_innings = max_innings
         # 打席ごとの投手の疲労点（測定用）
         self.pitcher_fatigue: list[int] = []
 
@@ -341,8 +359,10 @@ class _Engine:
                 self._half_inning(plate_appearances, sides, inning, is_bottom, played_on, history)
             if inning >= INNINGS_PER_GAME and sides[True].score != sides[False].score:
                 break
-            if inning >= MAX_INNINGS:
+            if self.max_innings is not None and inning >= self.max_innings:
                 break
+            if inning >= _MAX_INNINGS_WITHOUT_LIMIT:
+                raise InvalidGame("延長が終わりません（乱数源が壊れている可能性があります）。")
             inning += 1
         return plate_appearances
 

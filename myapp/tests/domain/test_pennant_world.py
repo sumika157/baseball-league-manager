@@ -13,6 +13,7 @@ from myapp.domain.pennant.world import (
     World,
     WorldScope,
     earliest_start_year,
+    league_priority,
 )
 from myapp.domain.value_objects import ContractStatus, JerseyNumber, Position, Profile, RosterLimits, Season
 
@@ -284,3 +285,23 @@ class ForkTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LeaguePriorityTest(unittest.TestCase):
+    """リーグの優先順（日本シリーズの本拠地と種の同率。#198 のドラフトの優先リーグも使う）。"""
+
+    def test_two_leagues_alternate_every_year_starting_with_the_smaller_id(self):
+        self.assertEqual([3, 8], league_priority([8, 3], year=2026, start_year=2026))
+        self.assertEqual([8, 3], league_priority([8, 3], year=2027, start_year=2026))
+        self.assertEqual([3, 8], league_priority([8, 3], year=2028, start_year=2026))
+
+    def test_three_or_more_leagues_rotate_one_by_one(self):
+        ids = [5, 1, 3]
+        self.assertEqual([1, 3, 5], league_priority(ids, year=2030, start_year=2030))
+        self.assertEqual([3, 5, 1], league_priority(ids, year=2031, start_year=2030))
+        self.assertEqual([5, 1, 3], league_priority(ids, year=2032, start_year=2030))
+        self.assertEqual([1, 3, 5], league_priority(ids, year=2033, start_year=2030))
+
+    def test_a_single_league_and_no_league(self):
+        self.assertEqual([4], league_priority([4], year=2029, start_year=2026))
+        self.assertEqual([], league_priority([], year=2029, start_year=2026))

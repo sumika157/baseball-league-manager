@@ -33,6 +33,21 @@ MAX_SEASONS_PER_WORLD = 10
 MAX_START_YEAR = Season.MAX_YEAR - MAX_SEASONS_PER_WORLD + 1
 
 
+def league_priority(league_ids: Iterable[int], *, year: int, start_year: int) -> list[int]:
+    """その年のリーグの優先順。**リーグの優先順の唯一の出典**。
+
+    日本シリーズの本拠地と種の同率に使う（#198 のドラフトでも使う予定）。
+
+    リーグを id の順に並べ、`(年 − 開幕年) mod リーグ数` だけ左に回す。2リーグなら年ごとに交互で、
+    開幕年はいちばん id の小さいリーグが先。3リーグ以上は1年に1つずつ先頭が入れ替わる。
+    """
+    ids = sorted(set(league_ids))
+    if not ids:
+        return []
+    shift = (year - start_year) % len(ids)
+    return ids[shift:] + ids[:shift]
+
+
 def earliest_start_year(birth_dates: Iterable[date | None]) -> int:
     """分岐元の選手の生年月日と矛盾しない、いちばん早い開幕年。
 

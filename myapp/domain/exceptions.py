@@ -117,6 +117,11 @@ class InvalidSchedule(DomainError):
     """日程が組めない（球団数が奇数・リーグが1つ・規則が成立しないなど）、または日程の指定が不正。"""
 
 
+class InvalidPostseason(DomainError):
+    """ポストシーズンの試合が、結果から導いた勝ち上がりと食い違う（決着したシリーズの試合・同じ日の二重の試合・
+    出場していない球団・導いた日と違う日の試合など）。"""
+
+
 class SeasonNotFinished(DomainError):
     """シーズンがまだ終わっていない（未消化の対戦が残っている、または試合を一度もしていない）ので締められない。"""
 
