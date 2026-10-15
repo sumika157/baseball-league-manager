@@ -266,6 +266,24 @@ class TeamInline(RealDataOnlyMixin, admin.TabularInline):
     show_change_link = True
 
 
+class WorkspaceRequiredForm(forms.ModelForm):
+    """ワークスペースを必須にするフォーム。
+
+    列は T6 まで null 可だが、実データのリーグ・球場は必ずどこかに属す。フォームに含めて
+    必須にすれば、選び忘れが 500 ではなくフォームのエラーになる。
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["workspace"].required = True
+
+
+class LeagueForm(WorkspaceRequiredForm):
+    class Meta:
+        model = League
+        fields = "__all__"
+
+
 @admin.register(League)
 class LeagueAdmin(RealDataOnlyMixin, ManualOrderAdminMixin, admin.ModelAdmin):
     # display_order は行をドラッグすると書き換わる。数値そのものに意味は無いが、
@@ -277,8 +295,9 @@ class LeagueAdmin(RealDataOnlyMixin, ManualOrderAdminMixin, admin.ModelAdmin):
     # 手動の並び順を既定にする。未設定どうしは名前で安定させる
     ordering = ("display_order", "name")
     inlines = [TeamInline]
+    form = LeagueForm
     fieldsets = (
-        (None, {"fields": ("name", "display_order")}),
+        (None, {"fields": ("name", "workspace", "display_order")}),
         (
             "外国人枠",
             {
@@ -455,7 +474,7 @@ class DomainCheckedForm(forms.ModelForm):
         """既定では何もしない。サブクラスが追加のドメイン検査を差し込む。"""
 
 
-class StadiumForm(DomainCheckedForm):
+class StadiumForm(WorkspaceRequiredForm, DomainCheckedForm):
     """球場の編集。本拠地とするチームもここから決められる。
 
     所属の出典は Team.home_stadium の1か所だけ。この欄は同じ関係を
@@ -503,7 +522,7 @@ class StadiumAdmin(RealDataOnlyMixin, admin.ModelAdmin):
     ordering = ("name",)
 
     fieldsets = (
-        (None, {"fields": ("name", "city")}),
+        (None, {"fields": ("name", "workspace", "city")}),
         (
             "設備",
             {

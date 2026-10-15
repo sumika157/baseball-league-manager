@@ -50,6 +50,55 @@ class AdminTest(BaseCase):
         self.assertContains(response, "field-appearances")
 
 
+class WorkspaceRequiredTest(BaseCase):
+    """リーグ・球場は、ワークスペースを選ばないと作れない（500 ではなくフォームのエラー）。"""
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(User.objects.create_superuser(username="root", password="x"))
+
+    def _league_data(self, **overrides):
+        return {
+            "name": "新リーグ",
+            "display_order": 0,
+            "foreign_player_roster_limit": 5,
+            "foreign_player_game_limit": 3,
+            "registered_player_limit": 70,
+            "teams-TOTAL_FORMS": 0,
+            "teams-INITIAL_FORMS": 0,
+            "teams-MIN_NUM_FORMS": 0,
+            "teams-MAX_NUM_FORMS": 1000,
+        } | overrides
+
+    def test_a_league_without_a_workspace_is_a_form_error(self):
+        response = self.client.post(reverse("admin:myapp_league_add"), self._league_data())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFormError(response.context["adminform"].form, "workspace", "このフィールドは必須です。")
+        self.assertFalse(orm_models.League.objects.filter(name="新リーグ").exists())
+
+    def test_a_league_with_a_workspace_is_created(self):
+        response = self.client.post(reverse("admin:myapp_league_add"), self._league_data(workspace=self.workspace.id))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(orm_models.League.objects.get(name="新リーグ").workspace_id, self.workspace.id)
+
+    def test_a_stadium_without_a_workspace_is_a_form_error(self):
+        response = self.client.post(reverse("admin:myapp_stadium_add"), {"name": "新球場"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFormError(response.context["adminform"].form, "workspace", "このフィールドは必須です。")
+        self.assertFalse(orm_models.Stadium.objects.filter(name="新球場").exists())
+
+    def test_a_stadium_with_a_workspace_is_created(self):
+        response = self.client.post(
+            reverse("admin:myapp_stadium_add"), {"name": "新球場", "workspace": self.workspace.id}
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(orm_models.Stadium.objects.get(name="新球場").workspace_id, self.workspace.id)
+
+
 class AdminIndexTest(BaseCase):
     def setUp(self):
         super().setUp()

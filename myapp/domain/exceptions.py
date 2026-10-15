@@ -65,6 +65,10 @@ class InvalidWorkspace(DomainError):
     """ワークスペースとして成立しない内容（名前が空、key の形が違うなど）。"""
 
 
+class WorkspaceNotFound(DomainError):
+    """ワークスペースが無い（書き込み先を決められない）。"""
+
+
 class InvalidProfile(DomainError):
     """プロフィールの値が不正（現実的でない身長など）。"""
 

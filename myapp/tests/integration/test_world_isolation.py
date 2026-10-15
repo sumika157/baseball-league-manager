@@ -495,6 +495,7 @@ class AdminDoesNotShowThePennantWorldTest(WorldCase):
         """球場の本拠地の付け替えは、世界の球団に及ばない。"""
         form = {
             "name": self.stadium.name,
+            "workspace": self.workspace.id,
             "city": self.stadium.city,
             "home_teams": [self.team.id],
             "surface": "",

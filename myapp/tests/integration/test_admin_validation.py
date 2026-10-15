@@ -360,6 +360,7 @@ class AdminUsesDomainRulesTest(BaseCase):
             "/admin/myapp/stadium/add/",
             {
                 "name": "検証球場",
+                "workspace": self.workspace.id,
                 "city": "",
                 "capacity": "",
                 "surface": "",
@@ -376,6 +377,7 @@ class AdminUsesDomainRulesTest(BaseCase):
             "/admin/myapp/stadium/add/",
             {
                 "name": "検証球場",
+                "workspace": self.workspace.id,
                 "city": "仙台市",
                 "capacity": "30000",
                 "surface": "人工芝",
