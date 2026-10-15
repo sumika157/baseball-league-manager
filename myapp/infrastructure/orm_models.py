@@ -256,7 +256,17 @@ class Player(models.Model):
     height_cm = models.PositiveIntegerField(null=True, blank=True, verbose_name="身長(cm)")
     weight_kg = models.PositiveIntegerField(null=True, blank=True, verbose_name="体重(kg)")
     birthplace = models.CharField(max_length=100, blank=True, verbose_name="出身地")
-    debut_year = models.IntegerField(null=True, blank=True, verbose_name="入団年")
+    # ドラフトの指名（ドメインの `DraftPick`）。年が空ならドラフトを経ていない（外国人選手など）。入団年は持たない
+    draft_year = models.IntegerField(
+        null=True, blank=True, verbose_name="ドラフト年", help_text="指名された年。入団はふつうその翌年です。"
+    )
+    draft_round = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        verbose_name="ドラフト順位",
+        help_text="本指名と育成ドラフトで別に数えます。分からなければ空欄。",
+    )
+    is_development_draft = models.BooleanField(default=False, verbose_name="育成ドラフト")
     # プロ入り前の経歴。通った所だけ埋める
     high_school = models.CharField(max_length=100, blank=True, verbose_name="出身高校")
     university = models.CharField(max_length=100, blank=True, verbose_name="出身大学")

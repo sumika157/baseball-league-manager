@@ -200,6 +200,8 @@ class TeamAnalysisService:
         stints: dict[int, list[PlayerContractStint]] = defaultdict(list)
         for stint in history.stints:
             stints[stint.player_id].append(stint)
+        # 最初の在籍の加入年（全球団の在籍から）。ドラフトを経ていない選手の FA の数え始め（`ProEntry`）
+        first_stint_year = {player_id: min(s.from_year for s in owned) for player_id, owned in stints.items()}
         declared_years: dict[int, list[int]] = defaultdict(list)
         for declaration in history.declarations:
             declared_years[declaration.player_id].append(declaration.year)
@@ -223,7 +225,11 @@ class TeamAnalysisService:
             )
             outlook = domain_services.fa_outlook(
                 education=education,
-                debut_year=player.debut_year,
+                entry=domain_services.ProEntry.of(
+                    draft=player.draft,
+                    is_foreign_player=player.is_foreign_player,
+                    first_stint_year=first_stint_year.get(player.player_id),
+                ),
                 days_by_year=by_year,
                 through_year=year,
                 records_from_year=records_from,
@@ -236,7 +242,7 @@ class TeamAnalysisService:
                 name=player.name,
                 number=number,
                 education_label=education.value,
-                debut_year=player.debut_year,
+                draft_label=player.draft.label if player.draft is not None else "",
                 seasons=outlook.service.seasons if outlook.service else None,
                 remainder_days=outlook.service.remainder_days if outlook.service else 0,
                 includes_estimate=outlook.includes_estimate,

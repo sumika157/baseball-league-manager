@@ -26,12 +26,18 @@ from django.utils.html import format_html, format_html_join
 from .domain.entities import Captaincy as DomainCaptaincy
 from .domain.entities import FreeAgentDeclaration as DomainFreeAgentDeclaration
 from .domain.entities import Stint as DomainStint
-from .domain.entities import ensure_declarations_valid, ensure_free_agent_acquisitions, winning_team_id
+from .domain.entities import (
+    ensure_declarations_valid,
+    ensure_draft_fits_career,
+    ensure_free_agent_acquisitions,
+    winning_team_id,
+)
 from .domain.exceptions import DomainError
 from .domain.pennant.world import WorldScope
 from .domain.value_objects import (
     AcquisitionRoute,
     ContractStatus,
+    DraftPick,
     ForeignPlayerRules,
     FreeAgencyKind,
     GameTimes,
@@ -54,7 +60,7 @@ from .infrastructure.orm_models import (
     Stadium,
     Team,
 )
-from .infrastructure.repositories import DjangoLeagueRepository, DjangoTeamRepository
+from .infrastructure.repositories import DjangoLeagueRepository, DjangoTeamRepository, draft_of
 from .infrastructure.scoping import games_in, leagues_in, players_in, stints_in, teams_in
 from .presentation.views import build_recording_service
 
@@ -637,6 +643,24 @@ def ensure_player_free_agency_consistent(stints, declarations, name="") -> None:
         raise forms.ValidationError(str(error)) from None
 
 
+def _draft_of_player(player) -> DraftPick | None:
+    """選手の行（未保存の入力を含む）のドラフト。ドラフト年が無い・不正（選手の欄の検査が別に弾く）なら None。"""
+    if player is None:
+        return None
+    try:
+        return draft_of(player.draft_year, player.draft_round, is_development=player.is_development_draft)
+    except DomainError:
+        return None
+
+
+def ensure_player_draft_fits(draft: DraftPick | None, stints) -> None:
+    """ドラフトと最初の在籍の経路の整合。ドメインの規則（`ensure_draft_fits_career`）に任せ、入力エラーに直す。"""
+    try:
+        ensure_draft_fits_career(draft, stints)
+    except DomainError as error:
+        raise forms.ValidationError(str(error)) from None
+
+
 class PlayerStintForm(forms.ModelForm):
     """在籍の入力検証。
 
@@ -657,9 +681,9 @@ class PlayerStintForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # 入団年で埋められるので、入力そのものは必須にしない
+        # ドラフト年の翌年で埋められるので、入力そのものは必須にしない
         self.fields["from_year"].required = False
-        self.fields["from_year"].help_text = "空欄なら選手の入団年を使います。"
+        self.fields["from_year"].help_text = "空欄なら選手のドラフト年の翌年を使います。"
         # 空欄なら支配下として扱う（モデルの既定と同じ）
         self.fields["signed_as"].required = False
 
@@ -728,6 +752,7 @@ class PlayerStintForm(forms.ModelForm):
                 )
 
         self._ensure_free_agency_consistent(candidate, player)
+        self._ensure_draft_fits(candidate, player)
         self._ensure_registered_limit(team, candidate)
         return cleaned
 
@@ -742,6 +767,16 @@ class PlayerStintForm(forms.ModelForm):
         ensure_player_free_agency_consistent(
             [*others, candidate], _domain_declarations_of(player), f"「{player.name}」"
         )
+
+    def _ensure_draft_fits(self, candidate, player):
+        """この在籍を保存した後の、その選手の最初の在籍の経路と保存済みのドラフトの整合（`ensure_draft_fits_career`）。
+
+        選手の管理画面のインラインでは、送信後の在籍の全体とドラフトをフォームセットが検査する。
+        """
+        if self.checked_with_declarations or player is None or not player.pk:
+            return
+        others = _domain_stints_of(player, excluding_pk=self.instance.pk)
+        ensure_player_draft_fits(_draft_of_player(player), [*others, candidate])
 
     def _ensure_registered_limit(self, team, candidate):
         """支配下の選手が新たにこのチームの人数に加わる場合、上限を超えないか確認する。
@@ -772,24 +807,24 @@ class PlayerStintForm(forms.ModelForm):
             raise forms.ValidationError(str(error)) from None
 
     def _fill_from_year(self, cleaned):
-        """加入年が空欄なら、選手の入団年で埋める。
+        """加入年が空欄なら、選手のドラフト年の翌年（`DraftPick.entry_year`）で埋める。
 
-        最初の在籍では加入年＝入団年になることがほとんどで、同じ年を
+        最初の在籍では加入年＝ドラフトの翌年になることがほとんどで、同じことを
         二度入力させる意味が無い。どちらも空欄のときだけ入力を求める。
+        同じ画面で入力した未保存のドラフト年も使う（親フォームの未保存の選手から拾う）。
         """
         if cleaned.get("from_year") is not None:
             return
 
-        player = cleaned.get("player")
-        debut_year = getattr(player, "debut_year", None) if player else None
-        if debut_year is None:
+        draft = _draft_of_player(cleaned.get("player"))
+        if draft is None:
             self.add_error(
                 "from_year",
-                "加入年を入力してください。選手に入団年が登録されていれば、空欄でもそちらを使います。",
+                "加入年を入力してください。選手にドラフト年が登録されていれば、空欄でもその翌年を使います。",
             )
             return
 
-        cleaned["from_year"] = debut_year
+        cleaned["from_year"] = draft.entry_year
 
 
 class PlayerStintFormSet(forms.BaseInlineFormSet):
@@ -866,6 +901,10 @@ class PlayerStintFormSet(forms.BaseInlineFormSet):
                     )
                     break
             checked.append(current)
+
+        # ドラフト（本指名か育成か）と最初の在籍の経路の整合は、送信後の在籍の全体と、同じ画面で入力した
+        # 選手のドラフトで見る（1行ずつでは最初の在籍が分からない）
+        ensure_player_draft_fits(_draft_of_player(self.instance), self.submitted_stints())
 
 
 class PlayerStintInline(RealDataOnlyMixin, admin.TabularInline):
@@ -1060,6 +1099,12 @@ class PlayerForm(DomainCheckedForm):
         fields = "__all__"
 
     def build_value_object(self, cleaned):
+        draft_year, draft_round = cleaned.get("draft_year"), cleaned.get("draft_round")
+        is_development = cleaned.get("is_development_draft", False)
+        if draft_year is None and (draft_round is not None or is_development):
+            raise forms.ValidationError(
+                {"draft_year": "ドラフト年を入力してください（順位・育成だけでは登録できません）。"}
+            )
         return DomainProfile(
             birth_date=cleaned.get("birth_date"),
             throws=cleaned.get("throws") or None,
@@ -1067,7 +1112,7 @@ class PlayerForm(DomainCheckedForm):
             height_cm=cleaned.get("height_cm"),
             weight_kg=cleaned.get("weight_kg"),
             birthplace=cleaned.get("birthplace", ""),
-            debut_year=cleaned.get("debut_year"),
+            draft=draft_of(draft_year, draft_round, is_development=is_development),
             high_school=cleaned.get("high_school", ""),
             university=cleaned.get("university", ""),
             corporate_team=cleaned.get("corporate_team", ""),
@@ -1106,7 +1151,7 @@ class PlayerAdmin(RealDataOnlyMixin, admin.ModelAdmin):
                     ("throws", "bats"),
                     ("height_cm", "weight_kg"),
                     "birthplace",
-                    "debut_year",
+                    ("draft_year", "draft_round", "is_development_draft"),
                     "nationality",
                     "is_foreign_player",
                 ),

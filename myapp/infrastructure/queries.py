@@ -79,6 +79,7 @@ from .repositories import (
     FOREIGN_RULE_FIELDS,
     DjangoRatingsRepository,
     batting_totals,
+    draft_of,
     foreign_rules_from,
     game_batting_of,
     game_counts,
@@ -961,7 +962,6 @@ _OFFSEASON_STINT_FIELDS = (
     "player__high_school",
     "player__university",
     "player__corporate_team",
-    "player__debut_year",
     "team_id",
     "team__name",
     "team__league_id",
@@ -1024,7 +1024,6 @@ class DjangoOffseasonQuery:
             number=row["number"],
             profile=Profile(
                 birth_date=row["player__birth_date"],
-                debut_year=row["player__debut_year"],
                 high_school=row["player__high_school"],
                 university=row["player__university"],
                 corporate_team=row["player__corporate_team"],
@@ -1078,12 +1077,7 @@ class DjangoRatingsHistoryQuery:
         self._scope = scope
 
     def for_player(self, player_id: int) -> RatingsHistoryFacts | None:
-        player = (
-            players_in(self._scope)
-            .filter(id=player_id)
-            .values("birth_date", "is_foreign_player", "debut_year")
-            .first()
-        )
+        player = players_in(self._scope).filter(id=player_id).values("birth_date", "is_foreign_player").first()
         if player is None:
             return None
         spans = (
@@ -1095,7 +1089,6 @@ class DjangoRatingsHistoryQuery:
         return RatingsHistoryFacts(
             profile=Profile(
                 birth_date=player["birth_date"],
-                debut_year=player["debut_year"],
                 is_foreign_player=player["is_foreign_player"],
             ),
             spans=tuple(TeamSpan(team_id, name, from_year, to_year) for team_id, name, from_year, to_year in spans),
@@ -1270,7 +1263,7 @@ class DjangoTeamAnalysisQuery:
                     throws=Handedness.from_label(player.throws),
                     bats=Handedness.from_label(player.bats),
                     is_foreign_player=player.is_foreign_player,
-                    debut_year=player.debut_year,
+                    draft=draft_of(player.draft_year, player.draft_round, is_development=player.is_development_draft),
                     high_school=player.high_school,
                     university=player.university,
                     corporate_team=player.corporate_team,

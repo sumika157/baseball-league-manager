@@ -84,12 +84,12 @@ class AdminStintValidationTest(BaseCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "退団年が加入年より前")
 
-    def test_blank_joining_year_falls_back_to_the_debut_year(self):
-        """最初の在籍では加入年＝入団年になることがほとんど。
+    def test_blank_joining_year_falls_back_to_the_year_after_the_draft(self):
+        """最初の在籍では加入年＝ドラフトの翌年になることがほとんど。
 
-        同じ年を二度入力させる意味が無いので、空欄なら入団年で埋める。
+        同じことを二度入力させる意味が無いので、空欄ならドラフト年の翌年で埋める。
         """
-        orm_models.Player.objects.filter(pk=self.other.id).update(debut_year=2019)
+        orm_models.Player.objects.filter(pk=self.other.id).update(draft_year=2018)
         past = orm_models.Team.objects.create(league=self.league, name="前所属")
 
         self._add(team=past.id, number="55", from_year="")
@@ -97,8 +97,8 @@ class AdminStintValidationTest(BaseCase):
         stint = orm_models.PlayerStint.objects.get(player_id=self.other.id, team=past)
         self.assertEqual(stint.from_year, 2019)
 
-    def test_explicit_joining_year_wins_over_the_debut_year(self):
-        orm_models.Player.objects.filter(pk=self.other.id).update(debut_year=2019)
+    def test_explicit_joining_year_wins_over_the_draft(self):
+        orm_models.Player.objects.filter(pk=self.other.id).update(draft_year=2018)
         past = orm_models.Team.objects.create(league=self.league, name="前所属")
 
         self._add(team=past.id, number="55", from_year="2022")
@@ -106,7 +106,7 @@ class AdminStintValidationTest(BaseCase):
         stint = orm_models.PlayerStint.objects.get(player_id=self.other.id, team=past)
         self.assertEqual(stint.from_year, 2022)
 
-    def test_blank_joining_year_is_rejected_without_a_debut_year(self):
+    def test_blank_joining_year_is_rejected_without_a_draft(self):
         """埋める材料が無いときだけ入力を求める。"""
         past = orm_models.Team.objects.create(league=self.league, name="前所属")
 
@@ -154,7 +154,8 @@ class AdminCaptaincyValidationTest(BaseCase):
             "height_cm": "",
             "weight_kg": "",
             "birthplace": "",
-            "debut_year": "",
+            "draft_year": "",
+            "draft_round": "",
             "high_school": "",
             "university": "",
             "corporate_team": "",
@@ -237,7 +238,8 @@ class AdminForeignPlayerQuotaTest(BaseCase):
             "height_cm": "",
             "weight_kg": "",
             "birthplace": "",
-            "debut_year": "",
+            "draft_year": "",
+            "draft_round": "",
             "high_school": "",
             "university": "",
             "corporate_team": "",
@@ -318,7 +320,8 @@ class AdminUsesDomainRulesTest(BaseCase):
             "height_cm": "",
             "weight_kg": "",
             "birthplace": "",
-            "debut_year": "",
+            "draft_year": "",
+            "draft_round": "",
             "high_school": "",
             "university": "",
             "corporate_team": "",
@@ -345,8 +348,8 @@ class AdminUsesDomainRulesTest(BaseCase):
         self.assertContains(response, "身長の値が現実的ではありません")
         self.assertFalse(orm_models.Player.objects.filter(name="検証太郎").exists())
 
-    def test_debut_year_outside_the_season_range_is_rejected(self):
-        response = self.client.post("/admin/myapp/player/add/", self._player_payload(debut_year="1800"))
+    def test_draft_year_outside_the_season_range_is_rejected(self):
+        response = self.client.post("/admin/myapp/player/add/", self._player_payload(draft_year="1800"))
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "シーズンは")
@@ -358,14 +361,15 @@ class AdminUsesDomainRulesTest(BaseCase):
             self._player_payload(
                 height_cm="180",
                 weight_kg="78",
-                debut_year="2021",
+                draft_year="2020",
+                draft_round="1",
                 birthplace="大阪府",
             ),
         )
 
         self.assertEqual(response.status_code, 302)
         player = orm_models.Player.objects.get(name="検証太郎")
-        self.assertEqual((player.height_cm, player.debut_year), (180, 2021))
+        self.assertEqual((player.height_cm, player.draft_year, player.draft_round), (180, 2020, 1))
 
     def test_stadium_opened_year_outside_the_season_range_is_rejected(self):
         response = self.client.post(
@@ -407,7 +411,7 @@ class AdminPlayerWithStintsTest(BaseCase):
         self.client.force_login(User.objects.create_superuser(username="root", password="x"))
         self.past = orm_models.Team.objects.create(league=self.league, name="前所属")
 
-    def _post(self, stints, debut_year=""):
+    def _post(self, stints, draft_year=""):
         payload = {
             "name": "新人太郎",
             "position": "投手",
@@ -417,7 +421,8 @@ class AdminPlayerWithStintsTest(BaseCase):
             "height_cm": "",
             "weight_kg": "",
             "birthplace": "",
-            "debut_year": debut_year,
+            "draft_year": draft_year,
+            "draft_round": "",
             "high_school": "",
             "university": "",
             "corporate_team": "",
@@ -491,9 +496,9 @@ class AdminPlayerWithStintsTest(BaseCase):
         self.assertContains(response, "同じチームに同時に2度在籍することはできません")
         self.assertIsNone(self._created())
 
-    def test_stint_takes_the_debut_year_entered_on_the_same_page(self):
-        """入団年はまだ保存されていないが、同じ画面で入力されている。"""
-        response = self._post([(self.team, 18, "", "")], debut_year="2021")
+    def test_stint_takes_the_draft_year_entered_on_the_same_page(self):
+        """ドラフト年はまだ保存されていないが、同じ画面で入力されている。加入年はその翌年。"""
+        response = self._post([(self.team, 18, "", "")], draft_year="2020")
 
         self.assertEqual(response.status_code, 302)
         self.assertEqual(self._created().stints.get().from_year, 2021)

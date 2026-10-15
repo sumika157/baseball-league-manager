@@ -79,7 +79,8 @@ def retirement_chance(
     """引退する確率（0〜1）。`MAX_PLAYING_AGE` 以上は必ず 1。
 
     `value` は能力の総合値（野手は打撃の総合値、投手は抑える力。捕手は守備力と打撃の大きい方）。
-    `seasons_as_pro` は、その年を含めてプロにいた年数（入団年から数える。無ければ在籍の開始年から）。
+    `seasons_as_pro` は、その年を含めてプロにいた年数（ドラフトの翌年から数える。無ければ在籍の開始年から。
+    `OffseasonPlayer.entered_year`）。
     """
     if age >= MAX_PLAYING_AGE:
         return 1.0
