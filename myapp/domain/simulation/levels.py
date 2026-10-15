@@ -5,17 +5,26 @@
 
 - `LevelTally`: リーグ全体の水準（得点・打率・防御率・K/9 など）
 - `SeasonTally`: 選手ごとの1シーズンの合計から、首位打者・本塁打王などのタイトルの水準
+- `UsageTally`: 投手の起用と疲労（中4日以下の先発・3連投・疲労のある打席など）。
+  目標帯は付けない（#97 の前後を並べる道具）
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import date, timedelta
+from typing import TYPE_CHECKING
 
 from ..entities import Game
 from ..pennant.schedule import ScheduleRules
 from ..services.rankings import QUALIFYING_INNINGS_PER_GAME, QUALIFYING_PLATE_APPEARANCES_PER_GAME
 from ..value_objects import BattingLine, InningsPitched, PitchingLine
+from .fatigue import FatigueLevel, in_game_fatigue_points, starter_rest_points
+
+if TYPE_CHECKING:
+    # 型注釈だけに使う（エンジンへの実行時の依存を作らない）
+    from .engine import SimulatedGame
 
 OUTS_PER_INNING = InningsPitched.OUTS_PER_INNING
 # 1シーズンの試合数（NPB）。出典は日程の規則。引分の目標帯は「1チームが年に何試合引き分けるか」で持つ
@@ -185,3 +194,95 @@ class SeasonTally:
             "era_title": min((line.earned_run_average for line in qualified_pitchers), default=0.0),
         }
         return [LevelRow(key, TITLE_TARGETS[key][0], value, TITLE_TARGETS[key][1]) for key, value in values.items()]
+
+
+@dataclass(frozen=True)
+class UsageRow:
+    """起用の1行。目標帯は持たない（前後を並べて読む）。"""
+
+    key: str
+    label: str
+    value: float
+
+
+USAGE_LABELS: dict[str, str] = {
+    "short_rest_starts": "中4日以下の先発の割合",
+    "starter_innings": "先発の平均投球回",
+    "relief_appearances": "救援の登板（1チーム1試合）",
+    "most_relief_appearances": "救援の最多登板（1人）",
+    "three_day_streaks": "3連投（延べ）",
+    "light_fatigue": "疲労が軽い打席の割合",
+    "heavy_fatigue": "疲労が重い打席の割合",
+    "overrun_batters": "目安を超えた続投の打者（1試合）",
+}
+
+
+class UsageTally:
+    """投手の起用と疲労を数える（#97）。シミュレーションの出力（`SimulatedGame`）から数え、保存はしない。
+
+    AI だけの世界では、中4日以下の先発・疲労のある打席・目安を超えた続投がほぼ0になるはず
+    （疲労は酷使にだけ効かせる）。手動の編成で酷使したときにどれだけ起きるかを見る。
+    """
+
+    def __init__(self) -> None:
+        self.games = 0
+        self.starts = 0
+        self.short_rest_starts = 0
+        self.start_outs = 0
+        self.relief_appearances = 0
+        self.relief_by_pitcher: dict[int, int] = {}
+        self.pitched_days: dict[int, set[date]] = {}
+        self.plate_appearances = 0
+        self.light = 0
+        self.heavy = 0
+        self.overrun_batters = 0
+
+    def add(self, simulated: SimulatedGame) -> None:
+        game = simulated.game
+        self.games += 1
+        outs = {pitching.player_id: pitching.line.innings.outs for pitching in game.pitching}
+        for outing in simulated.outings:
+            self.pitched_days.setdefault(outing.pitcher_id, set()).add(game.played_on)
+            # 目安を超えた続投の打者数 = 最後の打者（faced − 1 人と対戦した後）の試合中の疲労点（1人ごとに1点）
+            self.overrun_batters += in_game_fatigue_points(outing.faced - 1, outing.planned_target)
+            if outing.is_starter:
+                self.starts += 1
+                self.start_outs += outs.get(outing.pitcher_id, 0)
+                # 中4日以下 = 休養の疲労点が付く先発
+                if starter_rest_points(outing.workload.days_since_start) > 0:
+                    self.short_rest_starts += 1
+            else:
+                self.relief_appearances += 1
+                self.relief_by_pitcher[outing.pitcher_id] = self.relief_by_pitcher.get(outing.pitcher_id, 0) + 1
+        for points in simulated.pitcher_fatigue:
+            self.plate_appearances += 1
+            level = FatigueLevel.from_points(points)
+            self.light += level is FatigueLevel.LIGHT
+            self.heavy += level is FatigueLevel.HEAVY
+
+    @property
+    def three_day_streaks(self) -> int:
+        """3日続けて投げた登板の延べ数（3日目を1つと数える。4連投なら2）。"""
+        one_day = timedelta(days=1)
+        return sum(
+            1
+            for days in self.pitched_days.values()
+            for day in days
+            if day - one_day in days and day - 2 * one_day in days
+        )
+
+    def rows(self) -> list[UsageRow]:
+        team_games = max(1, self.games * 2)
+        starts = max(1, self.starts)
+        plate_appearances = max(1, self.plate_appearances)
+        values = {
+            "short_rest_starts": self.short_rest_starts / starts,
+            "starter_innings": self.start_outs / starts / OUTS_PER_INNING,
+            "relief_appearances": self.relief_appearances / team_games,
+            "most_relief_appearances": float(max(self.relief_by_pitcher.values(), default=0)),
+            "three_day_streaks": float(self.three_day_streaks),
+            "light_fatigue": self.light / plate_appearances,
+            "heavy_fatigue": self.heavy / plate_appearances,
+            "overrun_batters": self.overrun_batters / max(1, self.games),
+        }
+        return [UsageRow(key, USAGE_LABELS[key], value) for key, value in values.items()]

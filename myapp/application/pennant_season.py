@@ -44,8 +44,9 @@ from ..domain.repositories import (
     WorldRepository,
 )
 from ..domain.simulation.engine import simulate_game
+from ..domain.simulation.fatigue import PitchingHistory
 from ..domain.simulation.game_day import simulated_attendance, simulated_times
-from ..domain.simulation.manager import ClubRoster, PitchingHistory, SimBatter, SimPitcher
+from ..domain.simulation.manager import ClubRoster, SimBatter, SimPitcher
 from ..domain.simulation.randomness import game_seed, make_random
 from ..domain.simulation.ratings import BatterRatings, PitcherRatings
 from .dto import AdvanceReport, PlanNotice, SimulationContext, SimulationTeam
