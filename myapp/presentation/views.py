@@ -36,6 +36,7 @@ from ..application.dto import (
     WorldContext,
 )
 from ..application.game_recording import GameRecordingService
+from ..application.game_view import GameViewService
 from ..application.pennant_club_details import ClubDetailsService
 from ..application.pennant_history import PennantHistoryService
 from ..application.pennant_home import PennantHomeService
@@ -283,6 +284,34 @@ def build_recording_service() -> GameRecordingService:
     )
 
 
+def build_game_view_service() -> GameViewService:
+    """試合の一覧と詳細を読むサービスを組み立てる。
+
+    `build_service()` と同じく**組み立てはここだけ**にする。依存は全部渡し、呼ぶ側ごとに
+    一部だけ渡さない。実データの範囲に固定する。
+    """
+    scope = WorldScope.real()
+    return GameViewService(
+        games=DjangoGameRepository(scope),
+        teams=DjangoTeamRepository(scope),
+        game_list_query=DjangoGameListQuery(scope),
+    )
+
+
+def build_world_game_view_service(world_id: int) -> GameViewService:
+    """ペナントの世界ひとつの試合の一覧と詳細を読むサービスを組み立てる。
+
+    `build_game_view_service()` と同じ依存を、すべて渡された世界の範囲で作る（範囲の外の試合・球団には触れない）。
+    世界の id が正しくなければ InvalidWorld。
+    """
+    scope = WorldScope.pennant(world_id)
+    return GameViewService(
+        games=DjangoGameRepository(scope),
+        teams=DjangoTeamRepository(scope),
+        game_list_query=DjangoGameListQuery(scope),
+    )
+
+
 def build_team_analysis_service() -> TeamAnalysisService:
     """戦力分析のサービスを組み立てる。
 
@@ -500,6 +529,14 @@ def _scope(world_id: int | None) -> tuple[TeamApplicationService, WorldContext |
     return build_world_view_service(world_id), world
 
 
+def _game_scope(world_id: int | None) -> tuple[TeamApplicationService, GameViewService, WorldContext | None]:
+    """試合の画面が読む範囲。`_scope` と同じく、世界が無ければ実データ、あればその世界（無ければ 404）。"""
+    if world_id is None:
+        return build_service(), build_game_view_service(), None
+    world = _world_context(world_id)
+    return build_world_view_service(world_id), build_world_game_view_service(world_id), world
+
+
 def _own_team_id(world: WorldContext | None) -> int | None:
     """順位表で「自軍」の印を付ける球団。実データには自軍が無い。"""
     return world.managed_team_id if world is not None else None
@@ -520,7 +557,7 @@ def _parse_date(value: str | None) -> date | None:
 
 def _next_season_year() -> int:
     """世界の開幕年の既定。実データの最新シーズンの翌年（試合が無ければ今年）。"""
-    latest = build_service().latest_game_year()
+    latest = build_game_view_service().latest_game_year()
     return latest + 1 if latest is not None else date.today().year
 
 
@@ -1320,7 +1357,7 @@ def game_list(request, world_id=None):
     全件を一度に描くと件数ぶん重くなるため、指定が無ければ最新シーズンの
     最後に試合があった月を見せる。
     """
-    service, world = _scope(world_id)
+    service, games, world = _game_scope(world_id)
 
     def _int(name):
         value = request.GET.get(name)
@@ -1337,16 +1374,16 @@ def game_list(request, world_id=None):
         team_id = None
 
     if year is None:
-        year = service.latest_game_year()
+        year = games.latest_game_year()
 
-    months = service.list_game_months(year=year, team_id=team_id, league_id=league_id)
+    months = games.list_game_months(year=year, team_id=team_id, league_id=league_id)
     # 月を選んでいないとき（＝一覧を開いた直後）と、年・リーグ・チームを変えて
     # 選んでいた月に試合が無くなったときは、その範囲の最新の月に落とす。
     # 全件を一度に描くと件数ぶん重くなるため、月は必ず1つに決める
     if months and month not in months:
         month = months[-1]
 
-    listing = service.list_games(year=year, team_id=team_id, month=month, league_id=league_id)
+    listing = games.list_games(year=year, team_id=team_id, month=month, league_id=league_id)
     leagues = service.list_leagues()
 
     return _render(
@@ -1354,7 +1391,7 @@ def game_list(request, world_id=None):
         "myapp/game_list.html",
         {
             "games": listing.rows,
-            "years": service.list_game_seasons(),
+            "years": games.list_game_seasons(),
             "months": months,
             "leagues": leagues,
             "teams": teams,
@@ -1565,9 +1602,9 @@ def _scorebook_vocabulary() -> dict:
 
 def game_detail(request, game_id, world_id=None):
     """試合詳細。その試合の出場選手の成績を並べる。"""
-    service, world = _scope(world_id)
+    _, games, world = _game_scope(world_id)
     try:
-        detail = service.get_game_detail(game_id)
+        detail = games.get_game_detail(game_id)
     except GameNotFound:
         raise Http404("試合が見つかりません。") from None
 
