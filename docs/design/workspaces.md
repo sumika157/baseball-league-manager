@@ -577,6 +577,63 @@ W3 を W4 より先にするのは、W4 を先にすると、中身を入れら�
 
 ### W1b（#172）
 
+#### T0 基準値（2026-10-15）
+
+`epic/workspaces` 00a4f84（W1a の T1〜T7 と main b093741 相当を取り込んだ先端）で測った。T2（範囲にワークスペースを持たせる）・T3（台帳をワークスペースで絞る）の後に**同じ手順**で測り直し、この表と並べる。マシンは開発用コンテナ（他のエージェントと共有。±10% 程度の揺れは出る）。
+
+**手順**（PowerShell から。`<DB>` は `/tmp/w1b-t0/db.sqlite3`）
+
+1. 開発 DB の写し: コンテナの中で Python の `sqlite3` の `backup()` を使う（コンテナは止めない。共有の `/app/db.sqlite3` は読み取り専用で開く）。`pragma integrity_check` が `ok`、試合 3,480 件を確かめる。
+2. 以降は共通の接頭辞を付ける: `docker compose exec -w /app/.claude/worktrees/<測る worktree> -e PYTHONPYCACHEPREFIX=/tmp/pycache -e DJANGO_DB_PATH=<DB> web <コマンド>`（Bash から叩くなら `MSYS_NO_PATHCONV=1`）。
+3. `python manage.py migrate`（0049〜0051 が当たる）。
+4. 実データ: `python manage.py measure_pages` を3回流し、画面ごとに中央値。
+5. ペナント: `python manage.py pennant_create --name w1b-baseline --league 1 --league 2 --year 2030 --seed 20261015 --owner admin --managed-team 1`（世界 id=1・リーグ2・球団12・選手966人）→ `python manage.py pennant_advance --world 1 --to week`（6日・36試合）。
+6. `python /tmp/w1b-t0/measure_pennant.py 1`（下の概要）を流す。
+
+**`measure_pennant.py` の概要**: `django.setup()` のあと `admin`（superuser）で `Client(SERVER_NAME="localhost")` に `force_login` し、世界 1 の URL を1つにつき3回 `get`。`CaptureQueriesContext(connection)` で SQL 時間とクエリ数を取り、応答時間・SQL 時間・クエリ数の中央値を出す（3回は同じプロセスの連続なので2回目以降は暖まっている）。対象は下の表の URL。世界のリーグ・球団は世界 1 の最初の行（リーグ 9・球団 50）。スクリプトはリポジトリに入れていない（使い捨て）。上の概要から書き直せる。
+
+**実データ（`measure_pages` 3回の中央値）**
+
+| 画面 | 応答 ms | SQL ms | クエリ |
+| --- | ---: | ---: | ---: |
+| ダッシュボード | 518 | 70 | 10 |
+| チーム一覧 | 16 | 6 | 2 |
+| 順位表 | 102 | 3 | 4 |
+| 順位表(2026) | 71 | 3 | 4 |
+| 選手一覧(野手) | 278 | 12 | 27 |
+| 選手一覧(投手) | 273 | 8 | 27 |
+| 選手詳細 | 95 | 3 | 15 |
+| 選手検索 | 15 | 1 | 4 |
+| リーグ詳細 | 74 | 9 | 5 |
+| リーグ成績 | 190 | 7 | 8 |
+| リーグタイトル | 70 | 9 | 7 |
+| 試合一覧 | 113 | 19 | 6 |
+| 試合詳細 | 516 | 35 | 17 |
+| 戦力分析 | 42 | 9 | 8 |
+| 戦力分析（起用マップ） | 31 | 9 | 8 |
+| 戦力分析（FA取得） | 47 | 14 | 13 |
+
+**ペナント（`measure_pennant.py` 3回の中央値）**
+
+| 画面 | URL | 応答 ms | SQL ms | クエリ |
+| --- | --- | ---: | ---: | ---: |
+| ペナント一覧 | `/pennant/` | 27 | 6 | 14 |
+| 世界ダッシュボード | `/pennant/1/` | 158 | 5 | 48 |
+| 世界の順位表 | `/pennant/1/standings/` | 12 | 0 | 10 |
+| 世界のリーグ詳細 | `/pennant/1/league/9/` | 15 | 1 | 11 |
+| 世界のリーグ成績 | `/pennant/1/league/9/stats/?pos=batter` | 136 | 0 | 16 |
+| 世界のチーム一覧 | `/pennant/1/teams/` | 10 | 1 | 8 |
+| 世界の選手一覧 | `/pennant/1/team/50/?pos=batter` | 135 | 2 | 40 |
+| 世界の試合一覧 | `/pennant/1/games/` | 16 | 1 | 12 |
+| 世界の戦力分析 | `/pennant/1/team/50/analysis/` | 46 | 1 | 14 |
+| 世界の球団ホーム | `/pennant/1/club/` | 61 | 4 | 25 |
+
+- 世界の選手検索は URL が無い（`/players/` は実データ専用の `build_player_search_query()`）。計画の「世界の選手検索」は、近い画面の世界の選手一覧・リーグ成績で代える。
+- 実データのダッシュボード（518ms）と試合詳細（516ms）が既に 500ms の線を超えている（T2・T3 の劣化の判定はこの2つの比でも見る）。
+- 実データの `measure_pages` は 3 回とも ±3% 以内で揃った。ペナントの値は暖まった状態なので、初回アクセスはこれより遅い。
+
+#### T1
+
 - T1（`refactor/scope-taking-builders`）: 振る舞いは変えない。`WorldScope` の形はまだ変えない。
   - 決定（2026-10-15、ユーザー承認）: `build_world_view_service(world_id)` を `build_service(scope)` に、`build_world_team_analysis_service(world_id)` を `build_team_analysis_service(scope)` に吸収した。ペナントの範囲なら年の基準は `_world_clock(world_id, ...)`（世界の今日）、実データなら `date.today`。
   - 組み立て口は16個、すべて `scope: WorldScope` を既定値なしで受け取る。例外は台帳だけの `build_pennant_world_view()`（T3 で `workspace_id` を取る）。ペナント専用の8つは実データの範囲で、実データ専用の5つ（スコアブックの保存・契約区分・権限判定・選手検索・世界の作成）はペナントの範囲で、`InvalidWorld`（組み立てるときに判定。DB は読まないので `SimpleTestCase` で通る）。権限判定・選手検索も実データ専用に含めた（計画は3つだけ挙げていたが、どちらも今は実データ固定のため同じ扱いにした）。
