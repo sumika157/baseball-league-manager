@@ -9,6 +9,7 @@ from myapp.domain.value_objects import ContractStatus
 from myapp.infrastructure import orm_models
 
 from ..helpers import (
+    build_recording_service,
     build_roster_service,
     build_scorebook,
     lineup_rows,
@@ -30,8 +31,8 @@ class _RecordingCase(BaseCase):
     def setUp(self):
         super().setUp()
         login_as_manager(self.client, self.team, self.rival)
-        self.pitcher = self.service.register_player(self.team.id, "佐藤", 18, "投手")
-        self.rival_pitcher = self.service.register_player(self.rival.id, "相手投手", 19, "投手")
+        self.pitcher = self.roster.register_player(self.team.id, "佐藤", 18, "投手")
+        self.rival_pitcher = self.roster.register_player(self.rival.id, "相手投手", 19, "投手")
         self.home = register_lineup(self.service, self.team, prefix="ホーム", first_number=31)
         self.away = register_lineup(self.service, self.rival, prefix="ビジター", first_number=61)
         self.game = play_game(self.team, self.rival, home_score=0, away_score=0)
@@ -39,7 +40,7 @@ class _RecordingCase(BaseCase):
     def developmental(self, name, position, number=120, *, team=None, from_year=2020):
         """育成で登録した選手。加入年は過去にしておく（試合の年に在籍している）。"""
         team = team or self.team
-        player = self.service.register_player(team.id, name, number, position, contract_label=DEVELOPMENTAL)
+        player = self.roster.register_player(team.id, name, number, position, contract_label=DEVELOPMENTAL)
         orm_models.PlayerStint.objects.filter(player_id=player.id).update(from_year=from_year)
         return player
 
@@ -140,7 +141,7 @@ class GameEditCandidatesTest(AnalysisCase):
     """編集画面の選手の候補に、その試合の年に育成の選手を出さない。"""
 
     def roster_names(self, game_id):
-        data = self.service.get_game_edit_data(game_id)
+        data = build_recording_service(real_scope()).get_game_edit_data(game_id)
         return {roster.team_id: [p.name for p in roster.players] for roster in data.rosters}
 
     def make_developmental(self, name, number=120, *, promoted_year=None, before=None):
@@ -174,7 +175,7 @@ class GameEditCandidatesTest(AnalysisCase):
         past = self.make_developmental("過去に出場")
         game = self.game(self.team, self.rival, batting=[(past, self.team, "遊", 0)])
 
-        data = self.service.get_game_edit_data(game.id)
+        data = build_recording_service(real_scope()).get_game_edit_data(game.id)
 
         home = next(r for r in data.rosters if r.team_id == self.team.id)
         self.assertEqual([p.name for p in home.players], ["過去に出場"])

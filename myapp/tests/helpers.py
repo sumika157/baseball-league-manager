@@ -36,6 +36,7 @@ from myapp.infrastructure.repositories import (
 
 # テストも画面と同じ組み立て（presentation/views.py）を使い、ここから再輸出する。
 # テスト専用の組み立てを別に持つと、依存が食い違ってもテストでは気づけない
+from myapp.presentation.views import build_game_view_service as build_game_view_service
 from myapp.presentation.views import build_recording_service as build_recording_service
 from myapp.presentation.views import build_roster_service as build_roster_service
 from myapp.presentation.views import build_service as build_service
@@ -119,7 +120,7 @@ def make_pennant_world(name, *, workspace=None, **fields) -> orm_models.PennantW
 def register_players(team, rows) -> list[int]:
     """実データのチームに選手をまとめて登録して id を返す。rows は (名前, 背番号, 守備位置の表示名) の並び。
 
-    `TeamApplicationService.register_player` を人数ぶん呼ぶのと同じ結果になる（集約の `add_player` が
+    `RosterService.register_player` を人数ぶん呼ぶのと同じ結果になる（集約の `add_player` が
     背番号の重複・支配下の上限を検査する）。違いは、集約の読み込みと保存を1回にまとめること。
     1人ずつ登録すると、そのたびにロスター全員（通算成績つき）を読み、保存で全員の行と比べるので、人数の2乗で遅くなる。
     登録そのものを確かめるテストは、これを使わずサービスを呼ぶ。

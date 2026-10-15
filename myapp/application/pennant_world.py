@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 from ..domain.entities import League, Player, Team
 from ..domain.exceptions import InvalidWorld, TeamNotFound
-from ..domain.pennant.club_plan import ClubMember, ensure_roster_playable, strictest_game_limit
+from ..domain.pennant.club_plan import ClubMember, ensure_roster_playable
 from ..domain.pennant.fork import fork_league, fork_roster, fork_team
 from ..domain.pennant.initial_ratings import career_record, estimate_initial_ratings
 from ..domain.pennant.ratings import PlayerRatings
@@ -31,7 +31,7 @@ from ..domain.pennant.world import (
     earliest_start_year,
 )
 from ..domain.repositories import LeagueRepository, RatingsRepository, TeamRepository, WorldRepository
-from ..domain.value_objects import ContractStatus
+from ..domain.value_objects import ContractStatus, ForeignPlayerRules
 from .dto import PennantWorldCreated, PennantWorldRow
 from .pennant_season import AtomicBlock
 from .queries import FieldingTotalsQuery
@@ -137,7 +137,7 @@ class PennantWorldService:
         `managed_source_team_id` は受け持つ球団を**分岐元の球団の id**で指す（任意。
         世界を作ったあとで決めてもよい）。写した先の球団が受け持ちになる。
 
-        球団の現在の在籍選手で試合を組めない球団（外国人の出場枠の中でスタメンを組めない名簿を含む）があるリーグは、
+        球団の現在の在籍選手で試合を組めない球団（外国人枠の中でスタメンを組めない名簿を含む）があるリーグは、
         InvalidWorld で弾く（世界を作る前に検査する。
         作ってから進行が止まるのを防ぐ。規則は `ensure_roster_playable`
         （`playable_shortfall` と `lineup_capacity`））。
@@ -169,9 +169,9 @@ class PennantWorldService:
             raise InvalidWorld(
                 f"開幕年は{earliest}年以降にしてください（選んだリーグに、それより後に生まれた選手がいます）。"
             )
-        # 試合を組めない名簿の球団があると、進行が永久に止まる。世界を作る前に弾く。外国人の出場枠は、
-        # 世界のリーグで最も厳しい枠で見る（交流戦はどのリーグとも当たる。進める処理と同じ）
-        game_limit = strictest_game_limit(league.foreign_player_game_limit for league in source.leagues)
+        # 試合を組めない名簿の球団があると、進行が永久に止まる。世界を作る前に弾く。外国人枠は、
+        # 世界のリーグで最も厳しい規則で見る（交流戦はどのリーグとも当たる。進める処理と同じ）
+        game_foreign = ForeignPlayerRules.strictest(league.foreign_rules for league in source.leagues)
         # 育成選手は試合に出られず、進める処理の候補にも入らない（`SimulationContextQuery`）ので、
         # 今の区分が支配下の選手だけで組めるかを見る
         for teams in source.rosters:
@@ -181,7 +181,7 @@ class PennantWorldService:
                     for player in team.active_players
                     if team.contract_of(player) is ContractStatus.REGISTERED
                 ]
-                ensure_roster_playable(team.name, members, foreign_game_limit=game_limit)
+                ensure_roster_playable(team.name, members, foreign_rules=game_foreign)
         if managed_source_team_id is not None and not any(
             team.id == managed_source_team_id for teams in source.rosters for team in teams
         ):

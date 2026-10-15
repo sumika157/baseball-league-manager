@@ -20,6 +20,7 @@ from django.db.models import BooleanField, Case, Count, Exists, Max, Min, OuterR
 from ..application.dto import (
     ActivePlayerStats,
     AnalysisRosterRow,
+    AwardRow,
     ContractFacts,
     DeclarationFact,
     FielderUsage,
@@ -55,6 +56,7 @@ from ..domain.entities import Game, jersey_number_in, winning_team_id
 from ..domain.exceptions import WorldNotFound
 from ..domain.pennant.retirement import PlayingTime
 from ..domain.pennant.world import WorldScope
+from ..domain.services.rankings import Title
 from ..domain.simulation.fatigue import FATIGUE_WINDOW_DAYS
 from ..domain.simulation.ratings import BatterRatings, PitcherRatings
 from ..domain.value_objects import (
@@ -74,8 +76,10 @@ from ..domain.value_objects import (
 )
 from . import orm_models
 from .repositories import (
+    FOREIGN_RULE_FIELDS,
     DjangoRatingsRepository,
     batting_totals,
+    foreign_rules_from,
     game_batting_of,
     game_counts,
     game_pitching_of,
@@ -83,6 +87,7 @@ from .repositories import (
     profile_of,
 )
 from .scoping import (
+    awards_in,
     fixtures_in_worlds,
     games_in,
     games_in_worlds,
@@ -267,18 +272,16 @@ class DjangoSimulationContextQuery:
             SimulationTeam(
                 team_id=team_id,
                 name=name,
-                foreign_roster_limit=roster_limit,
-                foreign_game_limit=game_limit,
+                foreign_rules=foreign_rules_from(active, pitchers, batters),
                 players=tuple(players.get(team_id, ())),
                 stadium_capacity=capacity,
             )
-            for team_id, name, roster_limit, game_limit, capacity in teams_in(self._scope)
+            for team_id, name, active, pitchers, batters, capacity in teams_in(self._scope)
             .order_by("id")
             .values_list(
                 "id",
                 "name",
-                "league__foreign_player_roster_limit",
-                "league__foreign_player_game_limit",
+                *(f"league__{field}" for field in FOREIGN_RULE_FIELDS),
                 "home_stadium__capacity",
             )
         )
@@ -1044,6 +1047,40 @@ class DjangoOffseasonQuery:
             # 空（None・空文字）は不明（経路を記録する前に締めた年・実データ）
             left_via=DepartureRoute.from_label(row["left_via"]) if row["left_via"] else None,
         )
+
+
+class DjangoAwardQuery:
+    """AwardQuery の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る。選手名・球団名は1本の JOIN で読む。"""
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def list_awards(
+        self, *, league_id: int | None = None, team_id: int | None = None, player_id: int | None = None
+    ) -> list[AwardRow]:
+        rows = awards_in(self._scope)
+        if league_id is not None:
+            rows = rows.filter(league_id=league_id)
+        if team_id is not None:
+            rows = rows.filter(team_id=team_id)
+        if player_id is not None:
+            rows = rows.filter(player_id=player_id)
+        awards = [
+            AwardRow(
+                year=row["year"],
+                league_id=row["league_id"],
+                title=Title(row["title"]),
+                player_id=row["player_id"],
+                player_name=row["player__name"],
+                team_id=row["team_id"],
+                team_name=row["team__name"],
+                value=row["value"],
+            )
+            for row in rows.values(
+                "year", "league_id", "title", "player_id", "player__name", "team_id", "team__name", "value"
+            )
+        ]
+        return sorted(awards, key=lambda award: award.sort_key)
 
 
 class DjangoRatingsHistoryQuery:

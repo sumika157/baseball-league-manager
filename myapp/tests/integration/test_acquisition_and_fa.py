@@ -22,7 +22,7 @@ DEVELOPMENTAL = "育成"
 
 class RouteRepositoryTest(BaseCase):
     def test_route_round_trips(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手", acquired_via_label="ドラフト")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手", acquired_via_label="ドラフト")
 
         stint = DjangoTeamRepository(real_scope()).find_by_id(self.team.id).current_stint(player)
 
@@ -30,7 +30,7 @@ class RouteRepositoryTest(BaseCase):
         self.assertEqual(orm_models.PlayerStint.objects.get(player_id=player.id).acquired_via, "ドラフト")
 
     def test_unknown_route_is_stored_as_null_and_read_back_as_none(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
 
         stint = DjangoTeamRepository(real_scope()).find_by_id(self.team.id).current_stint(player)
 
@@ -39,11 +39,11 @@ class RouteRepositoryTest(BaseCase):
 
     def test_a_route_that_conflicts_with_the_contract_is_rejected_and_not_saved(self):
         with self.assertRaises(InvalidAcquisition):
-            self.service.register_player(self.team.id, "山田", 10, "内野手", acquired_via_label="育成ドラフト")
+            self.roster.register_player(self.team.id, "山田", 10, "内野手", acquired_via_label="育成ドラフト")
         self.assertFalse(orm_models.Player.objects.exists())
 
     def test_developmental_draft_with_a_developmental_contract(self):
-        player = self.service.register_player(
+        player = self.roster.register_player(
             self.team.id, "育成", 120, "内野手", contract_label=DEVELOPMENTAL, acquired_via_label="育成ドラフト"
         )
 
@@ -51,12 +51,12 @@ class RouteRepositoryTest(BaseCase):
 
     def test_a_free_agent_signing_needs_a_declaration(self):
         with self.assertRaises(InvalidAcquisition):
-            self.service.register_player(self.team.id, "山田", 10, "内野手", acquired_via_label="FA")
+            self.roster.register_player(self.team.id, "山田", 10, "内野手", acquired_via_label="FA")
 
     def test_transfer_carries_the_route_to_the_new_stint(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
 
-        self.service.transfer_player(
+        self.roster.transfer_player(
             player.id,
             from_team_id=self.team.id,
             to_team_id=self.rival.id,
@@ -71,10 +71,10 @@ class RouteRepositoryTest(BaseCase):
         self.assertIsNone(orm_models.PlayerStint.objects.get(player_id=player.id, team=self.team).acquired_via)
 
     def test_transfer_as_a_free_agent_without_a_declaration_is_rejected_and_not_saved(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
 
         with self.assertRaises(InvalidAcquisition):
-            self.service.transfer_player(
+            self.roster.transfer_player(
                 player.id,
                 from_team_id=self.team.id,
                 to_team_id=self.rival.id,
@@ -87,10 +87,10 @@ class RouteRepositoryTest(BaseCase):
         self.assertFalse(orm_models.PlayerStint.objects.filter(team=self.rival).exists())
 
     def test_transfer_as_a_free_agent_after_declaring(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         build_roster_service(real_scope()).declare_free_agency(self.team.id, player.id, THIS_YEAR, "国内")
 
-        self.service.transfer_player(
+        self.roster.transfer_player(
             player.id,
             from_team_id=self.team.id,
             to_team_id=self.rival.id,
@@ -108,7 +108,7 @@ class RouteRepositoryTest(BaseCase):
 class DeclarationRepositoryTest(BaseCase):
     def setUp(self):
         super().setUp()
-        self.player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         self.roster = build_roster_service(real_scope())
 
     def _declarations(self):
@@ -125,7 +125,7 @@ class DeclarationRepositoryTest(BaseCase):
     def test_saving_again_does_not_duplicate(self):
         self.roster.declare_free_agency(self.team.id, self.player.id, THIS_YEAR, "国内")
 
-        self.service.update_player(self.team.id, self.player.id, name="山田", number=10, position_label="内野手")
+        self.roster.update_player(self.team.id, self.player.id, name="山田", number=10, position_label="内野手")
 
         self.assertEqual(len(self._declarations()), 1)
 
@@ -168,7 +168,7 @@ class DeclarationRepositoryTest(BaseCase):
 
         before = count()
         for number in range(11, 31):
-            extra = self.service.register_player(self.team.id, f"選手{number}", number, "内野手")
+            extra = self.roster.register_player(self.team.id, f"選手{number}", number, "内野手")
             orm_models.PlayerFreeAgentDeclaration.objects.create(player_id=extra.id, year=2024, kind="国内")
 
         self.assertEqual(count(), before)
@@ -180,8 +180,8 @@ class AdminAcquisitionTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.client.force_login(User.objects.create_superuser(username="root", password="x"))
-        self.player = self.service.register_player(self.team.id, "山田", 10, "内野手")
-        self.other = self.service.register_player(self.team.id, "田中", 11, "外野手")
+        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        self.other = self.roster.register_player(self.team.id, "田中", 11, "外野手")
 
     def _add_stint(self, **overrides):
         payload = {
@@ -283,7 +283,7 @@ class AdminAcquisitionTest(BaseCase):
 class DeclarationScreenTest(BaseCase):
     def setUp(self):
         super().setUp()
-        self.player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         self.edit_url = reverse("player_edit", args=[self.team.id, self.player.id])
 
     def _declarations(self):
@@ -369,17 +369,17 @@ class ProfileDisplayTest(BaseCase):
         return self.client.get(reverse("player_detail", args=[self.team.id, player.id]))
 
     def test_the_career_row_shows_the_route(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手", acquired_via_label="ドラフト")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手", acquired_via_label="ドラフト")
 
         self.assertContains(self._page(player), "ドラフトで入団")
 
     def test_an_unknown_route_shows_nothing(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
 
         self.assertNotContains(self._page(player), "で入団")
 
     def test_a_declaration_without_a_move_is_shown_as_a_stay(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         self.roster.declare_free_agency(self.team.id, player.id, THIS_YEAR, "国内")
 
         response = self._page(player)
@@ -389,9 +389,9 @@ class ProfileDisplayTest(BaseCase):
         self.assertNotContains(response, ">移籍</span>")
 
     def test_a_declaration_followed_by_a_move_is_shown_as_a_move(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         self.roster.declare_free_agency(self.team.id, player.id, THIS_YEAR, "海外")
-        self.service.transfer_player(
+        self.roster.transfer_player(
             player.id, from_team_id=self.team.id, to_team_id=self.rival.id, number=7, year=THIS_YEAR + 1
         )
 
@@ -401,7 +401,7 @@ class ProfileDisplayTest(BaseCase):
         self.assertContains(response, ">移籍</span>")
 
     def test_no_declaration_means_no_section(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
 
         self.assertNotContains(self._page(player), "FA 宣言")
 
@@ -418,7 +418,7 @@ class MovesDisplayTest(BaseCase):
         self._with_a_recorded_game()
 
     def _player(self, team, name, number, from_year, to_year=None, route=None):
-        created = self.service.register_player(team.id, name, number, "内野手")
+        created = self.roster.register_player(team.id, name, number, "内野手")
         orm_models.PlayerStint.objects.filter(player_id=created.id).update(
             from_year=from_year, to_year=to_year, acquired_via=route
         )

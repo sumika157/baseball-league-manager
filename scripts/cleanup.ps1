@@ -233,3 +233,9 @@ foreach ($p in $browsers) {
     if ($LASTEXITCODE -eq 0) { Write-Log "止めた: 自動操作用の Chrome pid=$($p.ProcessId)（$hours 時間）: $cmd" }
     else { Write-Log "止められなかった: 自動操作用の Chrome pid=$($p.ProcessId): $cmd" }
 }
+
+# ---- base とコンフリクトした PR -------------------------------------------------------
+# 見つけたら claude -p を1本だけ切り離して起動し、resolve-conflicts スキルで直させる（終わりは待たない。#267）
+
+$resolver = Join-Path $PSScriptRoot 'resolve_conflicts.ps1'
+if (Test-Path $resolver) { & $resolver -Apply:$Apply }

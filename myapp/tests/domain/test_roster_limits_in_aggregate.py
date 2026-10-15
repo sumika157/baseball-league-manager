@@ -1,4 +1,5 @@
-"""移籍の受け入れと、支配下の上限・外国人枠の検査が `Team` 集約の中にあること。Django も DB も使わない。
+"""移籍の受け入れと、支配下の上限の検査が `Team` 集約の中にあること（外国人の保有は縛らない）。
+Django も DB も使わない。
 
 呼び出し側が事前に検査する約束だと、呼び忘れた経路が黙って上限を超える。上限を操作の引数で受け、
 集約の中で検査するので、**呼び忘れても超えない**ことをここで確かめる。
@@ -10,7 +11,6 @@ from unittest import TestCase
 from myapp.domain.entities import FreeAgentDeclaration, League, Player, Team
 from myapp.domain.exceptions import (
     DuplicateJerseyNumber,
-    ForeignPlayerQuotaExceeded,
     InvalidAcquisition,
     InvalidContract,
     RegisteredPlayerLimitExceeded,
@@ -29,18 +29,18 @@ REGISTERED = ContractStatus.REGISTERED
 DEVELOPMENTAL = ContractStatus.DEVELOPMENTAL
 
 
-def limits(registered=None, foreign=None) -> RosterLimits:
-    return RosterLimits(registered=registered, foreign=foreign)
+def limits(registered=None) -> RosterLimits:
+    return RosterLimits(registered=registered)
 
 
 class RosterLimitsTest(TestCase):
-    def test_the_league_hands_over_both_limits(self):
-        league = League(name="L", registered_player_limit=70, foreign_player_roster_limit=4)
+    def test_the_league_hands_over_the_registered_limit(self):
+        league = League(name="L", registered_player_limit=70)
 
-        self.assertEqual(league.roster_limits, RosterLimits(registered=70, foreign=4))
+        self.assertEqual(league.roster_limits, RosterLimits(registered=70))
 
     def test_unlimited_is_explicit_and_checks_nothing(self):
-        self.assertEqual(RosterLimits.UNLIMITED, RosterLimits(registered=None, foreign=None))
+        self.assertEqual(RosterLimits.UNLIMITED, RosterLimits(registered=None))
 
 
 class AddPlayerChecksTheLimitTest(TestCase):
@@ -127,11 +127,18 @@ class AcceptTransferTest(TestCase):
             self.accept(lim=limits(registered=1))
         self.accept(number=150, contract=DEVELOPMENTAL, lim=limits(registered=1))
 
-    def test_the_foreign_roster_limit_is_checked(self):
+    def test_a_foreign_player_is_accepted_however_many_foreigners_the_team_holds(self):
+        """協約第82条の2: 外国人は任意の数を保有できる（外国人枠は1軍の登録にかかる）。"""
+        for index in range(6):
+            held = self.destination.add_player(
+                f"外国人{index}", JerseyNumber(str(40 + index)), Position.PITCHER, 2020, limits=UNLIMITED
+            )
+            held.profile = replace(held.profile, is_foreign_player=True)
         self.player.profile = replace(self.player.profile, is_foreign_player=True)
 
-        with self.assertRaises(ForeignPlayerQuotaExceeded):
-            self.accept(lim=limits(foreign=0))
+        self.accept()
+
+        self.assertEqual(sum(p.profile.is_foreign_player for p in self.destination.active_players), 7)
 
     def test_a_free_agent_signing_needs_the_declaration(self):
         with self.assertRaises(InvalidAcquisition):

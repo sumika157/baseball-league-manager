@@ -38,7 +38,7 @@ class JerseyNumberRoundTripTest(BaseCase):
 
     def test_the_team_lists_players_in_jersey_order_not_text_order(self):
         for number in ["10", "2", "00", "0", "1", "100"]:
-            self.service.register_player(
+            self.roster.register_player(
                 self.team.id, f"選手{number}", number, "内野手", "育成" if number == "100" else "支配下"
             )
 
@@ -50,7 +50,7 @@ class JerseyNumberRoundTripTest(BaseCase):
         from myapp.domain.exceptions import InvalidJerseyNumber
 
         with self.assertRaises(InvalidJerseyNumber):
-            self.service.register_player(self.team.id, "山田", "01", "内野手")
+            self.roster.register_player(self.team.id, "山田", "01", "内野手")
 
 
 class JerseyNumberScreenTest(BaseCase):
@@ -92,7 +92,7 @@ class JerseyNumberScreenTest(BaseCase):
         self.assertEqual(shown, ["00", "0", "2", "10"])
 
     def test_editing_to_double_zero_keeps_it(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
 
         self.client.post(
             reverse("player_edit", args=[self.team.id, player.id]),
@@ -102,7 +102,7 @@ class JerseyNumberScreenTest(BaseCase):
         self.assertEqual(self.service.get_player_detail(self.team.id, player.id).number, "00")
 
     def test_promoting_to_double_zero(self):
-        developmental = self.service.register_player(self.team.id, "育成", 120, "投手", "育成")
+        developmental = self.roster.register_player(self.team.id, "育成", 120, "投手", "育成")
 
         self.client.post(
             reverse("player_edit", args=[self.team.id, developmental.id]),
@@ -117,8 +117,8 @@ class JerseyNumberAdminTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.client.force_login(User.objects.create_superuser(username="root", password="x"))
-        self.player = self.service.register_player(self.team.id, "山田", 10, "内野手")
-        self.other = self.service.register_player(self.team.id, "田中", 11, "外野手")
+        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        self.other = self.roster.register_player(self.team.id, "田中", 11, "外野手")
 
     def _add(self, number):
         return self.client.post(
@@ -175,7 +175,7 @@ class MigrationToTextTest(TransactionTestCase):
 
     def test_existing_integers_become_text_and_double_zero_stays_possible(self):
         old = self._migrate(self.BEFORE)
-        # tearDown で最新まで進めるとき、リーグがあるので 0050（既定のワークスペース）が持ち主を要求する
+        # tearDown で最新まで進めるとき、リーグがあるので 0053（既定のワークスペース）が持ち主を要求する
         old.get_model("auth", "User").objects.create(username="admin", is_superuser=True)
         league = old.get_model("myapp", "League").objects.create(name="旧リーグ")
         team = old.get_model("myapp", "Team").objects.create(league=league, name="旧チーム")

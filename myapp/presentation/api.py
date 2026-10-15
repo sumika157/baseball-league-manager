@@ -22,7 +22,7 @@ from .forms import (
     RunnerAdvanceForm,
     ScorebookGameForm,
 )
-from .views import _first_error, _real_scope, build_permission_query, build_recording_service, build_service
+from .views import _first_error, _real_scope, build_permission_query, build_recording_service
 
 _MISSING = object()
 
@@ -123,7 +123,7 @@ def game_scorebook(request, game_id):
     except Http404:
         # ワークスペースが1つも無い（運営者が最初の1つを作る前）。ほかのエラーと同じ JSON の形で返す
         return JsonResponse({"ok": False, "error": "ワークスペースがありません。"}, status=404)
-    service = build_service(scope)
+    service = build_recording_service(scope)
     try:
         team_ids = service.get_game_team_ids(game_id)
     except GameNotFound:
@@ -156,7 +156,7 @@ def game_scorebook(request, game_id):
         return JsonResponse({"ok": False, "error": error}, status=400)
 
     try:
-        saved = build_recording_service(scope).record_scorebook(
+        saved = service.record_scorebook(
             game_id,
             year=game_form.cleaned_data["year"],
             played_on=game_form.cleaned_data["played_on"],

@@ -40,6 +40,7 @@ from .value_objects import (
     ErrorKind,
     FieldingLine,
     FieldingPosition,
+    ForeignPlayerRules,
     FreeAgencyKind,
     FreeAgencyOutcome,
     GameTimes,
@@ -68,9 +69,8 @@ class League:
 
     name: str
     id: int | None = None
-    # 外国人選手の枠。リーグごとにルールが異なりうるためここに持つ。None なら無制限
-    foreign_player_roster_limit: int | None = None
-    foreign_player_game_limit: int | None = None
+    # 外国人選手の1軍登録の枠（協約第82条の2）。リーグごとにルールが異なりうるためここに持つ
+    foreign_rules: ForeignPlayerRules = ForeignPlayerRules.NPB
     # 並び順。管理画面で手動に並べ替える。分岐でも元の並びを保つために持つ
     display_order: int = 0
     # 支配下選手の登録上限。NPB は70人。None なら無制限
@@ -82,7 +82,7 @@ class League:
     @property
     def roster_limits(self) -> RosterLimits:
         """ロスターの人数の上限。`Team` の追加・移籍の受け入れ・昇格に渡す。"""
-        return RosterLimits(registered=self.registered_player_limit, foreign=self.foreign_player_roster_limit)
+        return RosterLimits(registered=self.registered_player_limit)
 
 
 @dataclass
@@ -568,7 +568,7 @@ class Team:
 
         支配下で加えるときは、支配下の上限（`limits`）も**ここで**検査する（呼び忘れて黙って超えないように）。
         `limits` は省略できない。検査しないなら `RosterLimits.UNLIMITED` を明示する。
-        外国人枠は、新しい選手は外国人ではない（登録後に管理画面で国籍フラグを立てる）ので、人数が増えず見ない。
+        外国人選手の保有の人数は縛らない（協約第82条の2。外国人の枠は1軍の登録にかかる）。
         """
         assert self.id is not None, "ロスターの変更は保存済みのチームに対して行う"
         if contract is ContractStatus.REGISTERED:
@@ -664,13 +664,12 @@ class Team:
         """他のチームから移籍してきた選手を受け入れ、このチームの新しい在籍を開く。
 
         移籍元の退団（`retire_player`）は呼び出し側が先に行う。ここで次を検査する。
-        背番号・区分・支配下の上限で拒否したときは何も変えない。FA の整合と外国人の登録枠は、選手を足した後の
-        ロスターで検査するので、そこで拒否したときは集約も選手も途中まで変わっている。**呼び出し側は例外のとき
+        背番号・区分・支配下の上限で拒否したときは何も変えない。FA の整合は、選手を足した後の
+        経歴で検査するので、そこで拒否したときは集約も選手も途中まで変わっている。**呼び出し側は例外のとき
         保存しない**（例外を握りつぶして続けない）。
         - 背番号が在籍中の選手と重複しないこと・契約区分に合うこと
         - 支配下で受け入れるなら、支配下の上限（`limits`）に収まること
         - 経路と区分の整合・経路が FA の在籍の根拠（`Player.ensure_free_agency_consistent`）
-        - 外国人選手の登録枠（`limits`）に収まること
         `limits` は省略できない。検査しないなら `RosterLimits.UNLIMITED` を明示する。
         """
         assert self.id is not None, "ロスターの変更は保存済みのチームに対して行う"
@@ -692,7 +691,6 @@ class Team:
         player.number = number
         player.is_active = True
         self.players.append(player)
-        self.ensure_foreign_player_quota(limits.foreign)
         return stint
 
     def contract_of(self, player: Player) -> ContractStatus | None:
@@ -814,25 +812,6 @@ class Team:
                 continue
             if self._current_captaincy(player) is not None:
                 raise DuplicateCaptain(f"「{self.name}」には既に主将（{player.name}）がいます。")
-
-    # --- 外国人枠 ---
-
-    @property
-    def foreign_player_count(self) -> int:
-        return sum(1 for p in self.active_players if p.profile.is_foreign_player)
-
-    def ensure_foreign_player_quota(self, limit: int | None) -> None:
-        """現在のロスターが外国人枠の上限を超えていないか確認する。
-
-        `accept_transfer`（`limits.foreign`）は、受け入れの検査としてこれを集約の中で呼ぶ。
-        管理画面のように集約の操作を通らない書き込み（国籍フラグの変更）は、検査したい変更を
-        保存前の roster に反映してから自分で呼ぶ。超えていれば例外を投げ、保存処理を止める。
-        """
-        ensure_quota_not_exceeded(
-            self.foreign_player_count,
-            limit,
-            f"「{self.name}」の外国人選手登録数が上限（{limit}人）を超えています。",
-        )
 
     # --- 支配下の上限 ---
 

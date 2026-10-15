@@ -22,8 +22,8 @@ from myapp.infrastructure.repositories import DjangoGameRepository, DjangoLeague
 from myapp.presentation.views import build_pennant_world_service
 
 from ..helpers import (
+    build_roster_service,
     build_scorebook,
-    build_service,
     play_game,
     real_scope,
     register_lineup,
@@ -73,12 +73,12 @@ class WorldCase(BaseCase):
 
     @classmethod
     def _build_the_real_data_and_the_world(cls) -> None:
-        service = build_service(real_scope())
+        roster = build_roster_service(real_scope())
         # --- 実データ。各チームに打者9人と投手1人、記録済みの試合を1つ ---
-        cls.real_batters = register_lineup(service, cls.team, prefix="実打者", first_number=1)
-        cls.real_rivals = register_lineup(service, cls.rival, prefix="実相手", first_number=1)
-        cls.real_pitcher = service.register_player(cls.team.id, "実投手", "18", "投手")
-        cls.real_rival_pitcher = service.register_player(cls.rival.id, "実相手投手", "19", "投手")
+        cls.real_batters = register_lineup(roster, cls.team, prefix="実打者", first_number=1)
+        cls.real_rivals = register_lineup(roster, cls.rival, prefix="実相手", first_number=1)
+        cls.real_pitcher = roster.register_player(cls.team.id, "実投手", "18", "投手")
+        cls.real_rival_pitcher = roster.register_player(cls.rival.id, "実相手投手", "19", "投手")
         cls.real_game = play_game(
             cls.team,
             cls.rival,
@@ -155,6 +155,8 @@ class WorldCase(BaseCase):
             for team_id, batters in ((cls.pennant_team.id, home_batters), (cls.pennant_rival.id, away_batters))
             for order, player_id in enumerate(batters, start=1)
         ]
+        # 組み立て口の `build_recording_service` は実データの範囲しか受け取らない（ペナントの範囲は InvalidWorld）。
+        # この準備は世界の中に試合を書くので、同じ依存を世界の範囲で直接組み立てる
         recording = GameRecordingService(
             games=games,
             teams=DjangoTeamRepository(cls.scope),

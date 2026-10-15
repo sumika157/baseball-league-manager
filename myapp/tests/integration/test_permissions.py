@@ -33,7 +33,7 @@ class WriteRequiresLoginTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
 
     def test_reading_needs_no_login(self):
         pages = [
@@ -109,7 +109,7 @@ class TeamManagerPermissionTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         self.game = play_game(self.team, self.rival)
         # 相手チームとも別リーグとも無関係な、どこも担当していないチーム
         self.outsider = orm_models.Team.objects.create(league=self.league, name="無関係チーム")

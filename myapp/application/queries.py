@@ -20,6 +20,7 @@ from ..domain.pennant.retirement import PlayingTime
 from ..domain.value_objects import FieldingLine
 from .dto import (
     ActivePlayerStats,
+    AwardRow,
     GameNote,
     GameRow,
     HomeStadium,
@@ -294,4 +295,19 @@ class TeamAnalysisQuery(Protocol):
 
     def load_service_history(self, player_ids: list[int], year: int) -> ServiceHistory:
         """FA 取得タブの材料。選手の year 年までの年ごとの初出場〜最終出場と、全在籍の契約。固定本数。"""
+        ...
+
+
+@runtime_checkable
+class AwardQuery(Protocol):
+    """ペナントの表彰（締めたシーズンのタイトル受賞者）の参照。選手名と、受賞した年の球団名を添える。
+
+    書くのは domain の `AwardRepository`（シーズンを締める処理だけ）。絞り込みはどれも任意で、範囲（世界）は
+    組み立てるときに必須で渡す。並びは年 → 部門（`Title` の定義順）→ 選手名。
+    """
+
+    def list_awards(
+        self, *, league_id: int | None = None, team_id: int | None = None, player_id: int | None = None
+    ) -> list[AwardRow]:
+        """範囲の表彰。リーグ・球団（受賞した年の所属）・選手で絞れる。"""
         ...

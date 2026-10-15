@@ -14,10 +14,10 @@ from .base import BaseCase
 class GamesPlayedColumnTest(BaseCase):
     def setUp(self):
         super().setUp()
-        self.regular = self.service.register_player(self.team.id, "正選手", 1, "内野手")
-        self.bench = self.service.register_player(self.team.id, "控え", 2, "外野手")
-        self.starter = self.service.register_player(self.team.id, "先発", 11, "投手")
-        self.reliever = self.service.register_player(self.team.id, "中継ぎ", 12, "投手")
+        self.regular = self.roster.register_player(self.team.id, "正選手", 1, "内野手")
+        self.bench = self.roster.register_player(self.team.id, "控え", 2, "外野手")
+        self.starter = self.roster.register_player(self.team.id, "先発", 11, "投手")
+        self.reliever = self.roster.register_player(self.team.id, "中継ぎ", 12, "投手")
         for day in (1, 2, 3):
             give_batting(self.team, self.rival, self.regular.id, BattingLine(at_bats=4, singles=1), day=day)
             give_pitching(

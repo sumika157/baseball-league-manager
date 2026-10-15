@@ -37,7 +37,7 @@ class WorldTeamAnalysisTest(WorldAnalysisCase):
 
     def test_only_the_worlds_players_are_counted(self):
         # 実データの球団にだけ、もう1人足す
-        self.service.register_player(self.team.id, "実の控え", 50, "投手")
+        self.roster.register_player(self.team.id, "実の控え", 50, "投手")
         response = self.client.get(self.url())
 
         analysis = response.context["analysis"]

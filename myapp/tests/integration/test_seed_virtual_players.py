@@ -1,6 +1,6 @@
 """仮想選手の投入コマンド（seed_virtual_players）。
 
-ORM に直接書き込むため Team 集約の検査を通らない。背番号の一意性・外国人登録枠
+ORM に直接書き込むため Team 集約の検査を通らない。背番号の一意性・支配下の上限
 など、集約が守る不変条件を投入結果が満たしているかをここで確かめる。
 """
 
@@ -116,7 +116,7 @@ class SeedRosterTest(BaseCase):
                     self.assertEqual(stint.signed_as, ContractStatus.DEVELOPMENTAL.value)
                     self.assertIsNone(stint.promoted_year)
                     self.assertEqual(stint.acquired_via, AcquisitionRoute.DEVELOPMENTAL_DRAFT.value)
-                    # 助っ人は支配下だけ（外国人登録枠は育成も数えるので、枠を支配下に回す）
+                    # 助っ人は支配下だけ（1球団の外国人の上限は育成も数えるので、上限を支配下に回す）
                     self.assertFalse(stint.player.is_foreign_player)
             # 集約として読み戻しても区分の規則に通る
             DjangoTeamRepository(real_scope()).find_by_id(team.id)
@@ -213,61 +213,61 @@ class SeedRosterTest(BaseCase):
 
 
 class SeedForeignPlayerQuotaTest(BaseCase):
-    """外国人登録枠（League.foreign_player_roster_limit）を超えて投入しない。
+    """1球団の外国人は、生成の上限（`generator.FOREIGN_PLAYERS_PER_TEAM_MAX`）を超えて投入しない。
 
     以前は枠を見ずに12%の確率で外国人にしていたため、48チーム中11チームが
-    枠（5人）を超えていた。
+    枠（5人）を超えていた。協約（第82条の2）は保有を縛らないので、上限はリーグの外国人枠ではなく生成の目安。
     """
 
-    def test_does_not_exceed_roster_limit(self):
-        self.league.foreign_player_roster_limit = 2
-        self.league.save()
+    def test_does_not_exceed_the_generation_cap(self):
         add_player(self.team, "マイケル・ジョンソン", number=1, is_foreign=True)
 
-        # 全員を外国人として抽選させ、枠だけが歯止めになる状況を作る
-        with mock.patch.object(generator, "FOREIGN_PLAYER_RATIO", 1.0):
+        # 全員を外国人として抽選させ、上限だけが歯止めになる状況を作る
+        with (
+            mock.patch.object(generator, "FOREIGN_PLAYER_RATIO", 1.0),
+            mock.patch.object(generator, "FOREIGN_PLAYERS_PER_TEAM_MAX", 2),
+        ):
             run()
 
         for team in (self.team, self.rival):
             with self.subTest(team=team.name):
                 foreign = [s for s in active_stints(team) if s.player.is_foreign_player]
                 self.assertEqual(len(foreign), 2)
-                # 集約自身の検査にも通る
-                DjangoTeamRepository(real_scope()).find_by_id(team.id).ensure_foreign_player_quota(2)
 
-    def test_blank_limit_means_unlimited(self):
-        self.league.foreign_player_roster_limit = None
-        self.league.save()
-
-        with mock.patch.object(generator, "FOREIGN_PLAYER_RATIO", 1.0):
-            run()
-
-        registered, _ = split_by_contract(self.team)
-        self.assertTrue(all(s.player.is_foreign_player for s in registered))
-
-    def test_developmental_foreigners_count_toward_the_limit(self):
-        """外国人登録枠は育成も数える（集約の `Team.foreign_player_count` と同じ）。"""
-        self.league.foreign_player_roster_limit = 2
-        self.league.save()
-        player = orm_models.Player.objects.create(name="育成の助っ人", is_foreign_player=True, nationality="キューバ")
-        orm_models.PlayerStint.objects.create(
-            player=player, team=self.team, number="150", from_year=2024, signed_as=ContractStatus.DEVELOPMENTAL.value
+    def test_the_league_foreign_rules_do_not_cap_holdings(self):
+        """リーグの外国人枠は1軍の登録にかかるので、0 にしても投入の人数は変わらない。"""
+        orm_models.League.objects.filter(id=self.league.id).update(
+            foreign_active_limit=0, foreign_active_pitcher_limit=0, foreign_active_batter_limit=0
         )
 
         with mock.patch.object(generator, "FOREIGN_PLAYER_RATIO", 1.0):
             run()
 
         foreign = [s for s in active_stints(self.team) if s.player.is_foreign_player]
+        self.assertEqual(len(foreign), generator.FOREIGN_PLAYERS_PER_TEAM_MAX)
+
+    def test_developmental_foreigners_count_toward_the_cap(self):
+        """生成の上限は育成も数える（保有の人数の目安）。"""
+        player = orm_models.Player.objects.create(name="育成の助っ人", is_foreign_player=True, nationality="キューバ")
+        orm_models.PlayerStint.objects.create(
+            player=player, team=self.team, number="150", from_year=2024, signed_as=ContractStatus.DEVELOPMENTAL.value
+        )
+
+        with (
+            mock.patch.object(generator, "FOREIGN_PLAYER_RATIO", 1.0),
+            mock.patch.object(generator, "FOREIGN_PLAYERS_PER_TEAM_MAX", 2),
+        ):
+            run()
+
+        foreign = [s for s in active_stints(self.team) if s.player.is_foreign_player]
         self.assertEqual(len(foreign), 2)
-        DjangoTeamRepository(real_scope()).find_by_id(self.team.id).ensure_foreign_player_quota(2)
 
 
 class SeedAlreadyOverTheLimitTest(BaseCase):
-    """投入前から上限を超えている球団は、減らさず（追加専用）、その区分は足さずに理由を出す。"""
+    """投入前から支配下の上限を超えている球団は、減らさず（追加専用）、支配下は足さずに理由を出す。"""
 
     def test_reports_and_adds_nothing_to_an_over_limit_section(self):
         self.league.registered_player_limit = 2
-        self.league.foreign_player_roster_limit = 1
         self.league.save()
         for number, is_foreign in ((1, True), (2, True), (3, False)):
             add_player(self.team, f"既存{number}", number=number, is_foreign=is_foreign)
@@ -275,11 +275,9 @@ class SeedAlreadyOverTheLimitTest(BaseCase):
         output = run()
 
         self.assertIn(f"{self.team.name}: 支配下が既に上限（2人）を超えています（3人）", output)
-        self.assertIn(f"{self.team.name}: 外国人が既に上限（1人）を超えています（2人）", output)
         registered, developmental = split_by_contract(self.team)
         self.assertEqual(len(registered), 3)
         self.assertTrue(developmental, "育成は上限の外なので足す")
-        self.assertEqual(sum(1 for s in active_stints(self.team) if s.player.is_foreign_player), 2)
         # 超えていない球団は黙って埋まる
         self.assertNotIn(f"{self.rival.name}: 支配下が既に上限", output)
 

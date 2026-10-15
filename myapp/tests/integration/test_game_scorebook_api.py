@@ -31,7 +31,7 @@ class ScorebookApiTest(BaseCase):
         self.home_batters = [self._register(self.team, f"ホーム{i}", 30 + i, "内野手") for i in range(1, 4)]
 
     def _register(self, team, name, number, position) -> int:
-        return self.service.register_player(team.id, name, number, position).id
+        return self.roster.register_player(team.id, name, number, position).id
 
     # --- 送る中身 ---
 

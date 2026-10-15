@@ -12,7 +12,7 @@ from myapp.domain.simulation.manager import (
     plays_position,
 )
 from myapp.domain.simulation.ratings import BatterRatings
-from myapp.domain.value_objects import FieldingPosition, Handedness, Position
+from myapp.domain.value_objects import FieldingPosition, ForeignPlayerRules, Handedness, Position
 from myapp.domain.virtual_players import generator
 
 from .test_ai_manager import full_pool
@@ -166,12 +166,12 @@ class PinchHitTest(TestCase):
 
 class LineupQuotaTest(TestCase):
     def test_left_handers_that_cannot_be_seated_do_not_use_up_the_foreign_quota(self) -> None:
-        """座れない左投げの外国人が出場枠を先に使っても、右投げの外国人を二・三・遊に回せる。"""
+        """座れない左投げの外国人が外国人枠を先に使っても、右投げの外国人を二・三・遊に回せる。"""
         pool = full_pool(foreign_ids=(4, 5, 6))
         batters = tuple(
             left_handed(b) if b.position is Position.INFIELDER and b.player_id in (4, 5) else b for b in pool.batters
         )
-        lineup = choose_lineup(batters, ForeignQuota(limit=1))
+        lineup = choose_lineup(batters, ForeignQuota(rules=ForeignPlayerRules(active=1, pitchers=None, batters=None)))
         for slot in lineup:
             self.assertTrue(slot.position.suits_thrower(slot.batter.throws), (slot.position, slot.batter.player_id))
         self.assertLessEqual(sum(slot.batter.is_foreign for slot in lineup), 1)

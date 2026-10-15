@@ -21,12 +21,12 @@ from myapp.domain.pennant.club_plan import LineupChoice
 from myapp.domain.pennant.schedule import AdvanceTarget
 from myapp.domain.simulation.fatigue import FATIGUE_WINDOW_DAYS, HIGH_STAMINA_RELIEVER
 from myapp.domain.simulation.manager import MIN_ACTIVE_PITCHERS, MIN_ROTATION_SIZE
-from myapp.domain.value_objects import FieldingPosition
+from myapp.domain.value_objects import FieldingPosition, ForeignPlayerRules
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoClubPlanRepository, DjangoFixtureRepository
 from myapp.presentation.views import build_club_service, build_pennant_season_service
 
-from ..helpers import world_scope
+from ..helpers import make_league, world_scope
 from .test_club_plan import team_of
 from .test_pennant_home import HomeCase
 
@@ -486,7 +486,7 @@ class NoticesTest(ClubScreenCase):
 
 
 class AdvisoryNoticeTest(ClubScreenCase):
-    """外国人の抑えが出場枠で投げられない注意は、区画を自動に落とさない。画面は「自動編成になります」と言わない。"""
+    """外国人の抑えが試合の外国人枠で投げられない注意は、区画を自動に落とさない。画面は「自動編成になります」と言わない。"""
 
     def setup_blocked_foreign_closer(self):
         view = self.view()
@@ -496,9 +496,19 @@ class AdvisoryNoticeTest(ClubScreenCase):
         orm_models.Player.objects.filter(id__in=[*(r.player_id for r in view.lineup[:3]), closer]).update(
             is_foreign_player=True
         )
+        # 自リーグは枠なし（1軍には外国人4人が入る）。試合の枠は世界で最も厳しい規則（計3人）なので、
+        # オーダーの外国人3人で枠を使い切り、外国人の抑えは投げられない
         orm_models.League.objects.filter(world_id=self.world_a).update(
-            foreign_player_roster_limit=None, foreign_player_game_limit=3
+            foreign_active_limit=None, foreign_active_pitcher_limit=None, foreign_active_batter_limit=None
         )
+        strict = make_league(
+            "枠の厳しいリーグ",
+            world_id=self.world_a,
+            foreign_active_limit=3,
+            foreign_active_pitcher_limit=None,
+            foreign_active_batter_limit=None,
+        )
+        orm_models.Team.objects.create(league=strict, name="枠の厳しい球団")
 
     def test_the_club_tab_says_the_closer_stays_manual(self):
         self.setup_blocked_foreign_closer()
@@ -592,20 +602,32 @@ class LimitsAndCountsTest(ClubScreenCase):
         self.assertIn(f"投手（{MIN_ACTIVE_PITCHERS}人以上）", active)
         self.assertIn(f"{MIN_ROTATION_SIZE}〜{limits.rotation_size}人を選びます", pitching)
 
-    def set_foreign_limit(self, limit):
-        orm_models.League.objects.filter(id=self.home_a.league_id).update(foreign_player_roster_limit=limit)
+    def set_foreign_rules(self, active, pitchers, batters):
+        orm_models.League.objects.filter(id=self.home_a.league_id).update(
+            foreign_active_limit=active, foreign_active_pitcher_limit=pitchers, foreign_active_batter_limit=batters
+        )
+
+    def test_the_foreign_rules_of_the_agreement_are_shown_with_the_pitcher_and_batter_split(self):
+        view = self.view()
+        content = self.client.get(self.club_url("active")).content.decode()
+
+        self.assertEqual(view.limits.foreign, ForeignPlayerRules.NPB)
+        counts = view.counts
+        self.assertEqual(counts.foreign, counts.foreign_pitchers + counts.foreign_batters)
+        self.assertIn(f"{counts.foreign}/4", content)
+        self.assertIn(f"投手 {counts.foreign_pitchers}/3・野手 {counts.foreign_batters}/3", content)
 
     def test_the_foreign_limit_is_shown_as_unlimited_when_the_league_has_none(self):
-        self.set_foreign_limit(None)
+        self.set_foreign_rules(None, None, None)
 
         view = self.view()
         content = self.client.get(self.club_url("active")).content.decode()
 
-        self.assertIsNone(view.limits.foreign_roster_limit)
+        self.assertEqual(view.limits.foreign, ForeignPlayerRules.UNLIMITED)
         self.assertIn(f"{view.counts.foreign}/無制限", content)
 
     def test_a_limit_of_zero_is_shown_as_zero_not_unlimited(self):
-        self.set_foreign_limit(0)
+        self.set_foreign_rules(0, 0, 0)
 
         content = self.client.get(self.club_url("active")).content.decode()
 

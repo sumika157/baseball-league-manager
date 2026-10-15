@@ -26,7 +26,7 @@ from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND, RegisteredBand
 from myapp.domain.simulation.randomness import make_random
 from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings
 from myapp.domain.simulation.samples import draw_ratings
-from myapp.domain.value_objects import ContractStatus, Position, Profile
+from myapp.domain.value_objects import ContractStatus, ForeignPlayerRules, Position, Profile
 
 YEAR = 2027
 START_YEAR = 2026
@@ -75,7 +75,10 @@ def roster(size: int, *, start_id: int = 1, foreign: int = 0) -> list[OffseasonP
 
 def club(players: list[OffseasonPlayer], *, registered_limit: int | None = 70, foreign_limit: int | None = 4):
     return OffseasonClub(
-        team_id=1, foreign_roster_limit=foreign_limit, registered_player_limit=registered_limit, players=tuple(players)
+        team_id=1,
+        foreign_rules=ForeignPlayerRules(active=foreign_limit, pitchers=None, batters=None),
+        registered_player_limit=registered_limit,
+        players=tuple(players),
     )
 
 

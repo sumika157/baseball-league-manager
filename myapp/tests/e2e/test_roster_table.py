@@ -9,7 +9,7 @@ from django.urls import reverse
 
 from myapp.infrastructure import orm_models
 
-from ..helpers import build_service, make_league, real_scope
+from ..helpers import build_roster_service, make_league, real_scope
 from .base import PlaywrightTestCase
 
 # セルの中身が2行以上に割れているセルを返す。
@@ -33,14 +33,14 @@ class RosterTableLayoutTest(PlaywrightTestCase):
         super().setUp()
         league = make_league(name="Eリーグ")
         self.team = orm_models.Team.objects.create(league=league, name="ホームズ")
-        service = build_service(real_scope())
+        roster = build_roster_service(real_scope())
         # 長い名前・投打・バッジ（外国人）がそろうと、折り返したときに崩れが最も大きい
-        pitcher = service.register_player(self.team.id, "サルバドール・グティエレス", 42, "投手")
+        pitcher = roster.register_player(self.team.id, "サルバドール・グティエレス", 42, "投手")
         orm_models.Player.objects.filter(id=pitcher.id).update(
             throws="右", bats="左", height_cm=190, weight_kg=95, is_foreign_player=True
         )
-        service.register_player(self.team.id, "山田太郎", 18, "投手")
-        batter = service.register_player(self.team.id, "ホセ・フェルナンデス", 7, "外野手")
+        roster.register_player(self.team.id, "山田太郎", 18, "投手")
+        batter = roster.register_player(self.team.id, "ホセ・フェルナンデス", 7, "外野手")
         orm_models.Player.objects.filter(id=batter.id).update(throws="右", bats="両", is_foreign_player=True)
 
     def _open(self, pos: str, width: int) -> None:

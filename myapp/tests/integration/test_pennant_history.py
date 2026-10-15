@@ -1,7 +1,8 @@
 """ペナントの歴代の記録と球団史（#105）。
 
-終わったシーズンだけを載せ、何も保存しない。優勝は世界の終了と同じ関数（`final_standings`）、
-タイトルは順位表の隣のタイトルの画面と同じ集計（`get_league_titles`）から出るので、
+終わったシーズンだけを載せ、何も書かない。優勝は世界の終了と同じ関数（`final_standings`）、
+タイトルは締めた年は表彰（#248。締めたときにタイトルの画面と同じ集計で導いて保存した受賞者。表彰そのものは
+`test_pennant_awards.py`）、締めていない年は順位表の隣のタイトルの画面と同じ集計（`get_league_titles`）から出るので、
 ここは「画面どうしが食い違わない」「終わっていないシーズンは載らない」を確かめる。
 世界は球団2つ（1リーグ）なので、リーグの切り替えは選び方の単体で確かめる。
 """
@@ -310,14 +311,15 @@ class LinksTest(HistoryCase):
 
 
 class QueryCountTest(HistoryCase):
-    """クエリ数は終わった年の数に比例し、球団・選手の数には比例しない（年あたり一定）。"""
+    """クエリ数は球団・選手の数に比例しない。締めた年のタイトルは表彰を1本で読むので（#248）、年が増えて
+    増えるのは順位の読み込みだけで、タイトルの集計（締めていない年の分）は増えない。"""
 
     def count(self, url) -> int:
         with CaptureQueriesContext(connection) as queries:
             self.assertEqual(self.client.get(url).status_code, 200)
         return len(queries)
 
-    def test_the_query_count_grows_by_a_fixed_amount_per_year(self):
+    def test_a_closed_year_adds_fewer_queries_than_a_derived_one(self):
         team_id = orm_models.Team.objects.get(league__world_id=self.world_a, name="ホーム球団").id
         urls = (self.history_url(), self.club_url(team_id))
         none = [self.count(url) for url in urls]
@@ -328,8 +330,10 @@ class QueryCountTest(HistoryCase):
 
         for index, url in enumerate(urls):
             with self.subTest(url=url):
-                self.assertEqual(two[index] - one[index], one[index] - none[index], "年が1つ増えるごとに同じだけ")
+                # none → one: 締めていない年が1つ（順位とタイトルの集計）。one → two: 締めた年が1つ増える（順位だけ）
                 self.assertGreater(one[index], none[index])
+                self.assertGreater(two[index], one[index])
+                self.assertLess(two[index] - one[index], one[index] - none[index], "締めた年はタイトルを集計しない")
 
 
 class SelectedLeagueTest(SimpleTestCase):

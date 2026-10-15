@@ -112,6 +112,8 @@ def is_season_closed(*, year: int, start_year: int, next_year_ratings_exist: boo
 
     締める処理だけが翌年（`year + 1`）の能力を作る。世界の作成は開幕年の能力を作るので、
     開幕年より前の年（`year + 1` が開幕年）は、翌年の能力があっても締めた年ではない。
+    局面から同じ事実を判定する `unclosed_completed_year`（終わったが締めていない年）もある
+    （読む画面が使う。食い違わないことは結合テストが確かめる）。
     """
     return year >= start_year and next_year_ratings_exist
 
@@ -124,6 +126,16 @@ def stats_year(*, phase: SeasonPhase, last_played_on: datetime.date | None, curr
     if phase is SeasonPhase.BEFORE_OPENING and last_played_on is not None:
         return last_played_on.year
     return current_year
+
+
+def unclosed_completed_year(*, phase: SeasonPhase, current_year: int) -> int | None:
+    """終わったが締めていないシーズンの年。シーズン終了の局面のいまの年度（最終シーズンも）。無ければ None。
+
+    `completed_years` に載る年のうち、これ以外は締めた年（締めると翌年の対戦ができて年度が進むので、
+    いまの年度より前の年はどれも締めてある。`is_season_closed` と食い違わないことは結合テストが確かめる）。
+    歴代の記録・球団史・選手ページは、締めた年のタイトルを表彰（`awards.py`）から読み、この年だけを試合から導く。
+    """
+    return current_year if phase is SeasonPhase.FINISHED else None
 
 
 def completed_years(recorded_years: Iterable[int], *, phase: SeasonPhase, current_year: int) -> list[int]:
