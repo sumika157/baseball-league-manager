@@ -18,7 +18,7 @@ from myapp.domain.pennant.world import MAX_WORLDS_PER_OWNER
 from myapp.infrastructure import orm_models
 from myapp.presentation.views import build_pennant_season_service, build_pennant_world_service, build_service
 
-from ..helpers import make_league, play_game, real_scope, world_scope
+from ..helpers import make_league, play_game, real_scope, world_ledger, world_scope
 from .test_pennant_advance import register_club
 from .test_pennant_home import HomeCase
 
@@ -279,9 +279,7 @@ class CreateFailureTest(HomeCase):
 
 class WorldCountTest(HomeCase):
     def test_the_count_is_per_owner_and_does_not_build_worlds(self):
-        from myapp.infrastructure.repositories import DjangoWorldRepository
-
-        repository = DjangoWorldRepository()
+        repository = world_ledger()
 
         self.assertEqual(repository.count_by_owner(self.owner.id), 1, "世界Aだけ")
         self.assertEqual(repository.count_by_owner(self.other.id), 0)

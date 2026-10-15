@@ -1,11 +1,14 @@
 """リポジトリの往復。ORM ⇄ ドメインの変換でデータが失われないことを確認する。"""
 
+from django.contrib.auth.models import User
+
 from myapp.domain.entities import League
 from myapp.domain.exceptions import (
     DuplicateJerseyNumber,
     InvalidGame,
     InvalidWorld,
     LeagueNotFound,
+    WorldNotFound,
 )
 from myapp.domain.pennant.world import World
 from myapp.domain.value_objects import (
@@ -16,7 +19,6 @@ from myapp.domain.value_objects import (
     Position,
     RosterLimits,
 )
-from myapp.domain.workspace import Visibility
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import (
     DjangoGameRepository,
@@ -31,6 +33,7 @@ from ..helpers import (
     make_workspace,
     play_game,
     real_scope,
+    world_ledger,
     world_scope,
 )
 from .base import BaseCase
@@ -135,43 +138,84 @@ class GameRepositoryTest(BaseCase):
 
 
 class WorldWorkspaceRoundTripTest(BaseCase):
-    """世界の `workspace_id` が、保存と読み戻しで往復すること。"""
+    """世界の台帳（ワークスペースで絞る）の保存と読み戻し。"""
 
-    def _workspace(self):
-        from django.contrib.auth.models import User
-
-        owner = User.objects.create_user("ws-owner", password="x")
-        return orm_models.Workspace.objects.create(
-            key="abcde12345", name="テスト用", owner=owner, visibility=Visibility.PUBLIC.value
-        )
+    def setUp(self):
+        super().setUp()
+        self.other = make_workspace(name="テスト用")
 
     def test_the_workspace_id_round_trips(self):
-        workspace = self._workspace()
-        repo = DjangoWorldRepository()
+        repo = DjangoWorldRepository(self.other.id)
 
-        saved = repo.save(World(name="世界A", seed=1, start_year=2040, workspace_id=workspace.id))
+        saved = repo.save(World(name="世界A", seed=1, start_year=2040, workspace_id=self.other.id))
 
-        self.assertEqual(repo.find_by_id(saved.id).workspace_id, workspace.id)
-        self.assertEqual(orm_models.PennantWorld.objects.get(id=saved.id).workspace_id, workspace.id)
+        self.assertEqual(repo.find_by_id(saved.id).workspace_id, self.other.id)
+        self.assertEqual(orm_models.PennantWorld.objects.get(id=saved.id).workspace_id, self.other.id)
 
     def test_a_world_without_a_workspace_is_rejected(self):
-        """ワークスペースの無い世界は保存しない（一時関数のワークスペースで補わない。W1b T2）。"""
+        """ワークスペースの無い世界は保存しない（台帳のワークスペースで補わない。W1b T2）。"""
         before = orm_models.PennantWorld.objects.count()
 
         with self.assertRaisesMessage(InvalidWorld, "世界はワークスペースに属している必要があります。"):
-            DjangoWorldRepository().save(World(name="世界B", seed=2, start_year=2040))
+            DjangoWorldRepository(self.workspace.id).save(World(name="世界B", seed=2, start_year=2040))
+
+        self.assertEqual(orm_models.PennantWorld.objects.count(), before)
+
+    def test_a_world_of_another_workspace_is_rejected(self):
+        """台帳と違うワークスペースの世界は、新しい世界でも保存しない（W1b T3）。"""
+        before = orm_models.PennantWorld.objects.count()
+
+        with self.assertRaisesMessage(InvalidWorld, "ほかのワークスペースの世界は保存できません。"):
+            DjangoWorldRepository(self.workspace.id).save(
+                World(name="世界B", seed=2, start_year=2040, workspace_id=self.other.id)
+            )
 
         self.assertEqual(orm_models.PennantWorld.objects.count(), before)
 
     def test_saving_again_keeps_the_workspace(self):
-        workspace = self._workspace()
-        repo = DjangoWorldRepository()
-        saved = repo.save(World(name="世界C", seed=3, start_year=2040, workspace_id=workspace.id))
+        repo = DjangoWorldRepository(self.other.id)
+        saved = repo.save(World(name="世界C", seed=3, start_year=2040, workspace_id=self.other.id))
 
         saved.name = "世界C改"
         repo.save(saved)
 
-        self.assertEqual(repo.find_by_id(saved.id).workspace_id, workspace.id)
+        self.assertEqual(repo.find_by_id(saved.id).name, "世界C改")
+        self.assertEqual(repo.find_by_id(saved.id).workspace_id, self.other.id)
+
+    def test_an_unknown_id_is_not_created(self):
+        """台帳に無い id の世界は作らない（`update_or_create(id=...)` のように新しい行を作らない）。"""
+        before = orm_models.PennantWorld.objects.count()
+
+        with self.assertRaises(WorldNotFound):
+            DjangoWorldRepository(self.workspace.id).save(
+                World(id=999, name="世界D", seed=4, start_year=2040, workspace_id=self.workspace.id)
+            )
+
+        self.assertEqual(orm_models.PennantWorld.objects.count(), before)
+
+    def test_the_ledger_reads_and_deletes_only_its_workspaces_worlds(self):
+        mine = world_ledger().save(World(name="自分の世界", seed=1, start_year=2040, workspace_id=self.workspace.id))
+        theirs = DjangoWorldRepository(self.other.id).save(
+            World(name="他所の世界", seed=2, start_year=2040, workspace_id=self.other.id)
+        )
+        ledger = world_ledger()
+
+        self.assertEqual([world.id for world in ledger.find_all()], [mine.id])
+        with self.assertRaises(WorldNotFound):
+            ledger.find_by_id(theirs.id)
+        with self.assertRaises(WorldNotFound):
+            ledger.delete(theirs.id)
+        self.assertTrue(orm_models.PennantWorld.objects.filter(id=theirs.id).exists())
+
+    def test_the_owner_count_spans_workspaces(self):
+        """世界の数の上限は1人あたりなので、`count_by_owner` は全ワークスペースで数える（W6 で見直す）。"""
+        owner = User.objects.create_user("world-owner", password="x")
+        for workspace in (self.workspace, self.other):
+            DjangoWorldRepository(workspace.id).save(
+                World(name="世界", seed=1, start_year=2040, owner_id=owner.id, workspace_id=workspace.id)
+            )
+
+        self.assertEqual(world_ledger().count_by_owner(owner.id), 2)
 
 
 class LeagueWorkspaceTest(BaseCase):
@@ -185,9 +229,7 @@ class LeagueWorkspaceTest(BaseCase):
         self.assertIsNone(row.world_id)
 
     def test_a_pennant_league_gets_the_world_and_no_workspace(self):
-        world = DjangoWorldRepository().save(
-            World(name="世界", seed=1, start_year=2040, workspace_id=self.workspace.id)
-        )
+        world = world_ledger().save(World(name="世界", seed=1, start_year=2040, workspace_id=self.workspace.id))
 
         saved = DjangoLeagueRepository(world_scope(world.id)).save(League(name="世界のリーグ"))
 

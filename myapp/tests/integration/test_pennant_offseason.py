@@ -30,14 +30,14 @@ from myapp.domain.pennant.season import SeasonPhase, season_phase, season_year
 from myapp.domain.value_objects import FieldingPosition
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoSimulationContextQuery
-from myapp.infrastructure.repositories import DjangoClubPlanRepository, DjangoFixtureRepository, DjangoWorldRepository
+from myapp.infrastructure.repositories import DjangoClubPlanRepository, DjangoFixtureRepository
 from myapp.presentation.views import (
     build_pennant_offseason_service,
     build_pennant_season_service,
     build_pennant_world_service,
 )
 
-from ..helpers import real_scope, world_scope
+from ..helpers import real_scope, world_ledger, world_scope
 from .test_pennant_advance import SEASON_GAMES, YEAR, SeasonCase
 
 DECIDE_RETIREMENTS = "myapp.domain.pennant.offseason.decide_retirements"
@@ -81,7 +81,7 @@ class ClosedSeasonCase(SeasonCase):
         }
 
     def managed_team_id(self, world_id=None) -> int:
-        team_id = DjangoWorldRepository().find_by_id(self.world_a if world_id is None else world_id).managed_team_id
+        team_id = world_ledger().find_by_id(self.world_a if world_id is None else world_id).managed_team_id
         assert team_id is not None
         return team_id
 

@@ -6,7 +6,8 @@
 **`TeamRepository` / `GameRepository` / `LeagueRepository` / `RatingsRepository` / `FixtureRepository` は、
 組み立てるときに `WorldScope` を必須で受け取る**（実装のコンストラクタの話で、このインターフェースには
 現れない）。読み出しはすべてその範囲に絞られ、範囲の外の id は「見つからない」になる。
-`WorldRepository` だけは世界そのものの台帳なので範囲を持たない。
+`WorldRepository` だけは世界そのものの台帳なので、範囲の代わりにワークスペースを必須で受け取り、
+そのワークスペースの世界だけを読み書きする。
 """
 
 from __future__ import annotations
@@ -135,26 +136,33 @@ class LeagueRepository(Protocol):
 
 @runtime_checkable
 class WorldRepository(Protocol):
-    """世界の台帳。世界そのものの出入りだけを扱い、範囲は持たない。"""
+    """世界の台帳。世界そのものの出入りだけを扱う。
+
+    実装はワークスペースを必須で受け取り、そのワークスペースの世界だけを読み書きする
+    （ほかのワークスペースの世界の id は、無い世界と同じ扱い）。
+    """
 
     def find_by_id(self, world_id: int) -> World:
-        """無ければ WorldNotFound。"""
+        """無ければ（ほかのワークスペースの世界でも）WorldNotFound。"""
         ...
 
     def find_all(self) -> list[World]:
-        """新しく作った世界から順に。"""
+        """このワークスペースの世界を、新しく作った世界から順に。"""
         ...
 
     def count_by_owner(self, owner_id: int) -> int:
-        """そのユーザーがオーナーの世界の数。世界の数の上限の検査に使う（世界を組み立てずに数える）。"""
+        """そのユーザーがオーナーの世界の数（全ワークスペースで数える）。世界の数の上限の検査に使う（世界を組み立てずに数える）。"""
         ...
 
     def save(self, world: World) -> World:
-        """世界を保存する。"""
+        """このワークスペースに世界を保存する。
+
+        ほかのワークスペースの世界は InvalidWorld、台帳に無い id は WorldNotFound（どちらも何も書かない）。
+        """
         ...
 
     def delete(self, world_id: int) -> None:
-        """世界と、その世界に属するリーグ・球団・選手・試合・能力をすべて消す。無ければ WorldNotFound。"""
+        """世界と、その世界に属するリーグ・球団・選手・試合・能力をすべて消す。無ければ（ほかのワークスペースの世界でも）WorldNotFound。"""
         ...
 
 

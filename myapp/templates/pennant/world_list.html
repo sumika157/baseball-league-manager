@@ -30,7 +30,7 @@
   <h2 class="h6 mb-2 mt-4">世界を作る</h2>
   {% if worlds.at_limit %}
     <div class="alert alert-secondary">
-      作れる世界は1人{{ worlds.world_limit }}つまでです。不要な世界を削除してから作ってください。
+      {{ worlds.limit_message }}
     </div>
   {% else %}
     <form method="post" class="card mb-4">

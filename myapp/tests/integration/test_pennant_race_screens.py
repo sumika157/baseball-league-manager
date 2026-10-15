@@ -28,7 +28,7 @@ from myapp.application.pennant_race import (
 from myapp.domain.pennant.schedule import AdvanceTarget, Fixture
 from myapp.domain.pennant.season import SCREEN_ADVANCE_TARGETS, SeasonPhase
 from myapp.infrastructure import orm_models
-from myapp.infrastructure.queries import DjangoGameListQuery, DjangoWorldSummaryQuery
+from myapp.infrastructure.queries import DjangoGameListQuery
 from myapp.presentation.views import (
     build_pennant_home_service,
     build_pennant_offseason_service,
@@ -37,7 +37,7 @@ from myapp.presentation.views import (
     build_service,
 )
 
-from ..helpers import real_scope, world_scope
+from ..helpers import real_scope, world_scope, world_summary_query
 from .test_pennant_advance import SEASON_GAMES, YEAR
 from .test_pennant_home import FinishedSeasonCase, HomeCase
 
@@ -170,11 +170,11 @@ class RaceBandBeforeTheEndTest(HomeCase):
     def test_the_world_list_summary_query_count_does_not_grow_with_the_number_of_worlds(self):
         self.start_season()
         with CaptureQueriesContext(connection) as before:
-            DjangoWorldSummaryQuery().list_all()
+            world_summary_query().list_all()
         self._create_world("世界D", seed=9)
         self._create_world("世界E", seed=10)
         with CaptureQueriesContext(connection) as after:
-            rows = DjangoWorldSummaryQuery().list_all()
+            rows = world_summary_query().list_all()
 
         self.assertGreaterEqual(len(rows), 5)
         self.assertEqual(len(before), len(after))

@@ -123,17 +123,17 @@ class SimulationContextQuery(Protocol):
 
 @runtime_checkable
 class WorldSummaryQuery(Protocol):
-    """世界の見出し（今日・局面の材料・受け持つ球団）の参照。世界の台帳そのものなので範囲は持たない。
+    """世界の見出し（今日・局面の材料・受け持つ球団）の参照。世界の台帳そのもので、実装はワークスペースで絞る。
 
     **世界の数にかかわらず、一定のクエリ数でまとめて読む**（世界ごとにサービスを組み立てて読み直さない）。
     """
 
     def get(self, world_id: int) -> WorldSummary:
-        """無ければ WorldNotFound。"""
+        """無ければ（ほかのワークスペースの世界でも）WorldNotFound。"""
         ...
 
     def list_all(self) -> list[WorldSummary]:
-        """新しく作った世界から順に。"""
+        """このワークスペースの世界を、新しく作った世界から順に。"""
         ...
 
 

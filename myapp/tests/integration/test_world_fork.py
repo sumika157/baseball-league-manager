@@ -26,7 +26,7 @@ from myapp.infrastructure.repositories import (
 )
 from myapp.presentation.views import build_pennant_world_service
 
-from ..helpers import make_league, make_workspace, play_game, real_scope, world_scope
+from ..helpers import make_league, make_workspace, play_game, real_scope, world_ledger, world_scope
 from .base import BaseCase
 from .test_world_isolation import BOTH, CLASSIFICATION, GAME, LEAGUE, PLAYER
 from .world_case import PENNANT_LEAGUE, PENNANT_TEAM, YEAR, WorldCase
@@ -207,6 +207,26 @@ class ForkTest(BaseCase):
         self.assertTrue(leagues.exists())
         self.assertEqual({league.workspace_id for league in leagues}, {None})
 
+    def test_the_world_belongs_to_the_workspace_of_the_scope(self):
+        """作った世界のワークスペースは、組み立て口に渡した範囲のもの（一時関数の id が最小のものではない）。
+
+        台帳もそのワークスペースで引ける（ほかのワークスペースの台帳には出ない）。W1b T3。
+        """
+        other = make_workspace(name="あとから作った")
+        league = make_league("他所のリーグ", workspace=other)
+        orm_models.Team.objects.create(league=league, name="他所の球団")
+        orm_models.Team.objects.create(league=league, name="他所の相手")
+
+        created = build_pennant_world_service(real_scope(other)).create_world(
+            name="他所の世界", owner_id=None, source_league_ids=[league.id], start_year=START, seed=1
+        )
+
+        self.assertLess(self.workspace.id, other.id)
+        self.assertEqual(orm_models.PennantWorld.objects.get(id=created.world.id).workspace_id, other.id)
+        self.assertEqual(world_ledger(other).find_by_id(created.world.id).workspace_id, other.id)
+        with self.assertRaises(WorldNotFound):
+            world_ledger().find_by_id(created.world.id)
+
     def test_the_league_name_is_unique_within_a_world(self):
         with self.assertRaises(IntegrityError), transaction.atomic():
             make_league(name=self.league.name, world=self.world)
@@ -383,7 +403,7 @@ class ForkOptionsTest(BaseCase):
             real_leagues=DjangoLeagueRepository(real_scope()),
             real_teams=DjangoTeamRepository(real_scope()),
             real_fielding=DjangoFieldingTotalsQuery(real_scope()),
-            worlds=DjangoWorldRepository(),
+            worlds=DjangoWorldRepository(real_scope().workspace_id),
             repositories_for=factory,  # type: ignore[arg-type]
             atomic=transaction.atomic,
             ensure_schedule=lambda world_id: False,
@@ -404,7 +424,7 @@ class ForkOptionsTest(BaseCase):
 
 class WorldRepositoryTest(BaseCase):
     def test_a_world_round_trips(self):
-        repository = DjangoWorldRepository()
+        repository = world_ledger()
         owner = User.objects.create_user("gm", password="x")
 
         saved = repository.save(
@@ -416,7 +436,7 @@ class WorldRepositoryTest(BaseCase):
         self.assertEqual(loaded.seed, 2**40)
 
     def test_the_newest_world_comes_first(self):
-        repository = DjangoWorldRepository()
+        repository = world_ledger()
         first = repository.save(World(name="古い", seed=1, start_year=2026, workspace_id=self.workspace.id))
         second = repository.save(World(name="新しい", seed=2, start_year=2026, workspace_id=self.workspace.id))
 
@@ -424,10 +444,10 @@ class WorldRepositoryTest(BaseCase):
 
     def test_a_missing_world_is_not_found(self):
         with self.assertRaises(WorldNotFound):
-            DjangoWorldRepository().find_by_id(999)
+            world_ledger().find_by_id(999)
 
     def test_the_list_through_the_service(self):
-        DjangoWorldRepository().save(World(name="世界", seed=1, start_year=2026, workspace_id=self.workspace.id))
+        world_ledger().save(World(name="世界", seed=1, start_year=2026, workspace_id=self.workspace.id))
 
         rows = build_pennant_world_service(real_scope()).list_worlds()
 
@@ -587,6 +607,21 @@ class PennantCommandsTest(BaseCase):
 
         self.assertEqual(orm_models.PennantWorld.objects.count(), 0)
         self.assertEqual(orm_models.Team.objects.count(), 2, "実データの球団は残る")
+
+    def test_pennant_delete_finds_a_world_of_another_workspace_by_its_row(self):
+        """`--world` の世界のワークスペースは、世界の行から導く（一時関数のワークスペースの台帳では見つからない）。"""
+        other = make_workspace(name="あとから作った")
+        league = make_league("他所のリーグ", workspace=other)
+        orm_models.Team.objects.create(league=league, name="他所の球団")
+        orm_models.Team.objects.create(league=league, name="他所の相手")
+        created = build_pennant_world_service(real_scope(other)).create_world(
+            name="他所の世界", owner_id=None, source_league_ids=[league.id], start_year=START, seed=1
+        )
+
+        call_command("pennant_delete", "--world", str(created.world.id), stdout=StringIO())
+
+        self.assertFalse(orm_models.PennantWorld.objects.filter(id=created.world.id).exists())
+        self.assertEqual(orm_models.League.objects.filter(id=league.id).count(), 1, "他所の実データは残る")
 
     def test_pennant_delete_reports_a_missing_world(self):
         with self.assertRaises(CommandError):

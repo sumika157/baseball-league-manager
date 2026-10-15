@@ -42,10 +42,21 @@ def world_condition(path: str, scope: WorldScope) -> Q:
     return Q(**{f"{prefix}world_id": scope.world_id})
 
 
+def worlds_in(workspace_id: int) -> QuerySet[orm_models.PennantWorld]:
+    """そのワークスペースの世界（台帳の行）。世界の台帳（`DjangoWorldRepository`・`DjangoWorldSummaryQuery`）が使う。
+
+    ほかのワークスペースの世界の id は、ここで絞った台帳では見つからない。`world_condition` のペナントの条件は
+    ワークスペースを見ないので、ペナントの範囲（`pennant(ws, w)`）はこの台帳で世界を引けたときだけ作る。
+    """
+    return orm_models.PennantWorld.objects.filter(workspace_id=workspace_id)
+
+
 def world_condition_in(path: str, world_ids: Sequence[int]) -> Q:
     """`world_condition` の、世界の id の集まり版（ペナントの世界だけ。実データは含まない）。
 
     世界の台帳のように、複数の世界をまとめて読む参照が使う。`path` の意味は `world_condition` と同じ。
+    ここではワークスペースを見ないので、**渡す id は、ワークスペースで絞った台帳（`worlds_in`）が
+    返したものだけにする。**
     """
     prefix = f"{path}__" if path else ""
     return Q(**{f"{prefix}world_id__in": list(world_ids)})

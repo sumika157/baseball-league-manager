@@ -113,7 +113,7 @@ REAL_ONLY_BUILDERS = (
     build_player_search_query,
     build_pennant_world_service,
 )
-# 世界の台帳だけを読む。範囲ではなくワークスペースの id を取る（世界ごとの範囲をそこで作る。台帳を絞るのは T3）
+# 世界の台帳だけを読む。範囲ではなくワークスペースの id を取る（台帳をそのワークスペースで絞り、世界ごとの範囲を作る）
 LEDGER_BUILDERS = (build_pennant_world_view,)
 # ペナント専用。実データの範囲を渡すと InvalidWorld
 PENNANT_ONLY_BUILDERS = (
@@ -127,8 +127,11 @@ PENNANT_ONLY_BUILDERS = (
     build_offseason_view_service,
 )
 
-# 世界そのものの台帳なので、範囲を持たない
-UNSCOPED = {DjangoWorldRepository, DjangoWorldSummaryQuery}
+# 範囲もワークスペースも受け取らずに作れる実装。W1b T3 で世界の台帳もワークスペースを受け取るようになり、空になった。
+# ここに足す前に、範囲かワークスペースで絞れないかを考える（全範囲を読む実装は、ワークスペースをまたいで行を漏らす）
+UNSCOPED: set[type] = set()
+# 世界の台帳。範囲（ワークスペースと世界）ではなく、ワークスペースの id だけを受け取る
+LEDGERS = {DjangoWorldRepository, DjangoWorldSummaryQuery}
 
 
 class ProtocolConformanceTest(SimpleTestCase):
@@ -136,7 +139,7 @@ class ProtocolConformanceTest(SimpleTestCase):
         (DjangoTeamRepository(REAL), TeamRepository),
         (DjangoGameRepository(REAL), GameRepository),
         (DjangoLeagueRepository(REAL), LeagueRepository),
-        (DjangoWorldRepository(), WorldRepository),
+        (DjangoWorldRepository(1), WorldRepository),
         (DjangoRatingsRepository(REAL), RatingsRepository),
         (DjangoFixtureRepository(REAL), FixtureRepository),
         (DjangoClubPlanRepository(REAL), ClubPlanRepository),
@@ -147,7 +150,7 @@ class ProtocolConformanceTest(SimpleTestCase):
         (DjangoGameListQuery(REAL), GameListQuery),
         (DjangoTeamAnalysisQuery(REAL), TeamAnalysisQuery),
         (DjangoPennantActivityQuery(REAL), PennantActivityQuery),
-        (DjangoWorldSummaryQuery(), WorldSummaryQuery),
+        (DjangoWorldSummaryQuery(1), WorldSummaryQuery),
         (DjangoOffseasonQuery(REAL), OffseasonQuery),
         (DjangoRatingsHistoryQuery(REAL), RatingsHistoryQuery),
         (DjangoHomeStadiumQuery(REAL), HomeStadiumQuery),
@@ -161,10 +164,11 @@ class ProtocolConformanceTest(SimpleTestCase):
 
 
 class ScopeIsRequiredTest(SimpleTestCase):
-    """範囲を渡さずに作れるリポジトリ・参照クエリがあってはならない。
+    """範囲（`scope`）かワークスペース（`workspace_id`）を渡さずに作れるリポジトリ・参照クエリがあってはならない。
 
-    既定値があると「渡し忘れ」が型検査にも実行にも引っかからず、ペナントの画面に
-    実データが出る形で現れる。新しい Django* の実装を足したときも、ここが拾う。
+    既定値があると「渡し忘れ」が型検査にも実行にも引っかからず、ペナントの画面に実データが出る・
+    ほかのワークスペースの行が出る形で現れる。新しい Django* の実装を足したときも、ここが拾う。
+    世界の台帳（`LEDGERS`）だけがワークスペースを受け取り、ほかはすべて範囲を受け取る。
     """
 
     def _implementations(self):
@@ -173,18 +177,28 @@ class ScopeIsRequiredTest(SimpleTestCase):
                 if name.startswith("Django") and cls.__module__ == module.__name__ and cls not in UNSCOPED:
                     yield cls
 
-    def test_every_implementation_requires_a_scope(self):
+    def test_nothing_is_unscoped(self):
+        self.assertEqual(UNSCOPED, set(), "範囲もワークスペースも受け取らない実装があります")
+
+    def test_every_implementation_requires_a_scope_or_a_workspace(self):
         found = list(self._implementations())
-        self.assertGreaterEqual(len(found), 8, "検査の対象を拾えていません")
+        self.assertGreaterEqual(len(found), 20, "検査の対象を拾えていません")
+        self.assertLessEqual(LEDGERS, set(found), "台帳を拾えていません")
         for cls in found:
             with self.subTest(implementation=cls.__name__):
+                expected = "workspace_id" if cls in LEDGERS else "scope"
                 parameters = signature(cls.__init__).parameters
-                self.assertIn("scope", parameters, "範囲（scope）を受け取っていません")
-                self.assertIs(parameters["scope"].default, Parameter.empty, "範囲に既定値があります")
+                self.assertEqual(list(parameters), ["self", expected], f"{expected} だけを受け取っていません")
+                self.assertIs(parameters[expected].default, Parameter.empty, f"{expected} に既定値があります")
 
     def test_a_scope_cannot_be_omitted(self):
         with self.assertRaises(TypeError):
             DjangoTeamRepository()  # type: ignore[call-arg]
+
+    def test_a_workspace_cannot_be_omitted_from_the_ledgers(self):
+        for cls in LEDGERS:
+            with self.subTest(implementation=cls.__name__), self.assertRaises(TypeError):
+                cls()
 
 
 class BuildServiceTest(SimpleTestCase):
@@ -595,3 +609,79 @@ class AdminOnlyScopeExceptionTest(SimpleTestCase):
         }
         self.assertIn(Path("myapp/admin.py"), users, "検査の対象を拾えていません")
         self.assertEqual(users - self.ALLOWED, set(), "admin.py 以外が管理画面専用の関数を使っています")
+
+
+class LedgersAreScopedToTheWorkspaceTest(SimpleTestCase):
+    """組み立て口は、世界の台帳を範囲のワークスペースで組み立てる（W1b T3）。
+
+    台帳が別のワークスペース（一時関数のものなど）で組み立てられると、範囲の世界が台帳で見つからない・
+    ほかのワークスペースの世界が引ける形で現れる。範囲には既定のワークスペース（1）と違う id を使う。
+    """
+
+    WORKSPACE = 3
+
+    def _built(self):
+        real, world = WorldScope.real(self.WORKSPACE), WorldScope.pennant(self.WORKSPACE, 7)
+        for build in BOTH_BUILDERS:
+            yield build, build(world)
+        for build in REAL_ONLY_BUILDERS:
+            yield build, build(real)
+        for build in PENNANT_ONLY_BUILDERS:
+            yield build, build(world)
+        for build in LEDGER_BUILDERS:
+            yield build, build(self.WORKSPACE)
+
+    def test_every_ledger_a_builder_holds_is_of_the_scopes_workspace(self):
+        seen = set()
+        for build, service in self._built():
+            for name, value in vars(service).items():
+                if isinstance(value, tuple(LEDGERS)):
+                    seen.add(build.__name__)
+                    with self.subTest(build=build.__name__, dependency=name):
+                        self.assertEqual(value._workspace_id, self.WORKSPACE)
+        # 台帳を持つ組み立て口を拾えていること（検査の空振りを防ぐ。世界の「今日」の台帳は次の検査）
+        expected = {
+            build_pennant_world_view,
+            build_pennant_world_service,
+            build_pennant_season_service,
+            build_pennant_offseason_service,
+            build_pennant_ratings_service,
+            build_club_service,
+            build_offseason_view_service,
+        }
+        self.assertEqual(seen, {build.__name__ for build in expected})
+
+    def test_the_worlds_today_reads_the_ledger_of_the_scopes_workspace(self):
+        """世界の「今日」（`_world_clock`）も、範囲のワークスペースの台帳で世界を引く。"""
+        world = WorldScope.pennant(self.WORKSPACE, 7)
+        for today in (
+            build_service(world)._today,
+            build_team_analysis_service(world)._today,
+            build_pennant_ratings_service(world)._today,
+            build_club_details_service(world)._today,
+        ):
+            with self.subTest(today=today):
+                worlds = inspect.getclosurevars(today).nonlocals["worlds"]
+                self.assertIsInstance(worlds, DjangoWorldRepository)
+                self.assertEqual(worlds._workspace_id, self.WORKSPACE)
+
+
+class WorldWorkspaceResolverTest(SimpleTestCase):
+    """世界の行からワークスペースを導く `workspace_id_of_world` は、管理コマンドの入口だけが使う（W1b T3）。
+
+    台帳を通さずに世界のワークスペースを決めるので、画面が使うと今の URL のワークスペースに無い世界を開けてしまう
+    （画面は今の URL のワークスペースの台帳で世界を引く）。`myapp/` の .py（テストを除く）を走査する。
+    """
+
+    NAME = "workspace_id_of_world"
+    ALLOWED = {Path("myapp/infrastructure/workspaces.py"), Path("myapp/management/workspaces.py")}
+
+    def test_only_the_management_commands_resolve_a_worlds_workspace(self):
+        root = Path(__file__).resolve().parents[3]
+        users = {
+            path.relative_to(root)
+            for path in (root / "myapp").rglob("*.py")
+            if "tests" not in path.relative_to(root).parts and self.NAME in path.read_text(encoding="utf-8")
+        }
+        self.assertIn(Path("myapp/management/workspaces.py"), users, "検査の対象を拾えていません")
+        self.assertEqual(users - self.ALLOWED, set(), "管理コマンドの入口以外が世界のワークスペースを直接導いています")
