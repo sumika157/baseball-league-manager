@@ -225,7 +225,10 @@ class LeagueWorkspaceTest(BaseCase):
         orm_models.League.objects.all().delete()
         orm_models.Workspace.objects.all().delete()
 
-        with self.assertRaisesMessage(WorkspaceNotFound, "ワークスペースがありません。管理画面で作成してください。"):
+        with self.assertRaisesMessage(
+            WorkspaceNotFound,
+            "ワークスペースがありません。運営者が管理画面で最初のワークスペースを作るまで、この操作はできません。",
+        ):
             DjangoLeagueRepository(WorldScope.real()).save(League(name="新リーグ"))
 
         self.assertFalse(orm_models.League.objects.exists())

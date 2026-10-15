@@ -1,3 +1,4 @@
+import random
 import types
 from dataclasses import replace
 from typing import ClassVar
@@ -40,6 +41,7 @@ from .domain.value_objects import (
     ensure_quota_not_exceeded,
 )
 from .domain.value_objects import Profile as DomainProfile
+from .domain.workspace import generate_workspace_key, validate_workspace_key
 from .infrastructure import orm_models
 from .infrastructure.orm_models import (
     Captaincy,
@@ -54,6 +56,8 @@ from .infrastructure.orm_models import (
     PlayerStint,
     Stadium,
     Team,
+    Workspace,
+    WorkspaceEditor,
 )
 from .infrastructure.repositories import DjangoLeagueRepository, DjangoTeamRepository
 from .infrastructure.scoping import games_in, leagues_in, players_in, stints_in, teams_in
@@ -85,6 +89,7 @@ def _ordered_app_list(self, request, app_label=None):
     app_list = _original_get_app_list(request, app_label)
 
     model_order = {
+        "Workspace": 0,
         "League": 1,
         "Team": 2,
         "Player": 3,
@@ -138,7 +143,8 @@ class RealDataOnlyMixin:
         # 選択肢（プルダウン・検索）にペナントの行を出さない
         scoped = _real_queryset(db_field.remote_field.model)
         if scoped is not None and "queryset" not in kwargs:
-            kwargs["queryset"] = scoped
+            # チームの選択肢は「同じワークスペースか」の検査でリーグを読むので、先に引く
+            kwargs["queryset"] = scoped.select_related("league") if db_field.remote_field.model is Team else scoped
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 
@@ -150,6 +156,111 @@ class RealDataRelatedFieldListFilter(admin.RelatedFieldListFilter):
         limit = Q(pk__in=scoped.values("pk")) if scoped is not None else None
         ordering = self.field_admin_ordering(field, request, model_admin)
         return field.get_choices(include_blank=False, ordering=ordering, limit_choices_to=limit)
+
+
+# ワークスペースをまたぐ組み合わせを弾くときの文言。選択肢を絞るのは導線で、検査（clean）が本体
+_CROSS_WORKSPACE = "「{name}」は別のワークスペースに属しています。同じワークスペースのものを選んでください。"
+_NOT_IN_WORKSPACE_CHOICE = "正しい選択肢を選択してください。選べるのは、同じワークスペースの実データだけです。"
+
+
+def _narrow_choices(fields, name, queryset):
+    """フォームの外部キー・多対多の欄の選択肢を、与えた QuerySet の範囲に絞る（欄が無ければ何もしない）。
+
+    追加画面では行のワークスペースが決まっていないので絞れない。絞るのは変更画面の導線で、
+    範囲をまたぐ組み合わせを本当に弾くのは各フォームの `clean()`。
+    """
+    field = fields.get(name)
+    if field is None:
+        return
+    field.queryset = field.queryset.filter(pk__in=queryset.values("pk"))
+    field.error_messages["invalid_choice"] = _NOT_IN_WORKSPACE_CHOICE
+
+
+def _player_workspace_ids(player, *, excluding_stint_pk=None, excluding_captaincy_pk=None) -> set[int]:
+    """選手の保存済みの在籍・主将在任が属すワークスペースの id。どちらも無ければ空（どこにも縛られない）。
+
+    主将在任も数える（在籍の無い選手に過去の主将在任だけを足せるため、在籍だけを見ると
+    あとから別のワークスペースの在籍を足して、選手が2つの範囲にまたがってしまう）。
+    """
+    if player is None or not player.pk:
+        return set()
+    stints = PlayerStint.objects.filter(player=player)
+    if excluding_stint_pk is not None:
+        stints = stints.exclude(pk=excluding_stint_pk)
+    captaincies = Captaincy.objects.filter(player=player)
+    if excluding_captaincy_pk is not None:
+        captaincies = captaincies.exclude(pk=excluding_captaincy_pk)
+    ids = set(stints.values_list("team__league__workspace_id", flat=True))
+    ids.update(captaincies.values_list("team__league__workspace_id", flat=True))
+    ids.discard(None)
+    return ids
+
+
+def _formset_workspace_ids(formset) -> tuple[set[int], set[int]]:
+    """在籍・主将在任のフォームセットの、(送信後の行のワークスペース, 送信に含まれなかった保存済みの行のもの)。
+
+    送信後の行は、削除する行を除く（入力エラーのある行は保存済みの値で見る）。送信に含まれなかった保存済みの行
+    （POST から行を落とした場合）も、DB に残るので数える。どちらも、選択肢を絞る処理に頼らずに検査するため。
+    フォームセット全体の `is_valid()` は呼ばない（在籍と主将在任が互いに呼ぶと循環する）。
+    """
+    submitted: set[int] = set()
+    kept_pks = set()
+    for form in formset.forms:
+        if form.instance.pk:
+            kept_pks.add(form.instance.pk)
+        if form.is_valid():
+            data = form.cleaned_data
+            team = None if data.get("DELETE") else data.get("team")
+        else:
+            team = form.instance.team if form.instance.pk else None
+        if team is not None:
+            submitted.add(team.league.workspace_id)
+    omitted: set[int] = set()
+    parent = formset.instance
+    if parent.pk:
+        rows = formset.model.objects.filter(player=parent).exclude(pk__in=kept_pks)
+        omitted = {pk for pk in rows.values_list("team__league__workspace_id", flat=True) if pk is not None}
+    return submitted, omitted
+
+
+def _ensure_rows_share_workspace(formset, other_formset) -> None:
+    """選手の在籍・主将在任の行は、すべて同じワークスペースのチームでなければならない（選手は1つの範囲に属す）。
+
+    比べる相手は、もう一方のフォームセットの送信後の行・どちらにも含まれなかった保存済みの行・
+    このフォームセットの先の行。選択肢を絞る処理（`PlayerWorkspaceChoicesMixin`）が外れても、これが本体として弾く。
+    """
+    others: set[int] = set()
+    if other_formset is not None:
+        submitted, omitted = _formset_workspace_ids(other_formset)
+        others |= submitted | omitted
+    others |= _formset_workspace_ids(formset)[1]
+    for form in formset.forms:
+        if not form.is_valid() or form.cleaned_data.get("DELETE"):
+            continue
+        team = form.cleaned_data.get("team")
+        if team is None:
+            continue
+        workspace_id = team.league.workspace_id
+        if others and workspace_id not in others:
+            form.add_error("team", _CROSS_WORKSPACE.format(name=team.name))
+        else:
+            others.add(workspace_id)
+
+
+class PlayerWorkspaceChoicesMixin:
+    """選手の下に並ぶ行（在籍・主将在任）の「チーム」の選択肢を、選手の在籍と同じワークスペースに絞る。
+
+    選手がちょうど1つのワークスペースにだけ在籍しているときだけ絞る（新しい選手や、
+    在籍が無い選手は決まらないので絞らない。そのときは `clean()` が本体）。
+    """
+
+    def add_fields(self, form, index):
+        super().add_fields(form, index)
+        if "_workspace_id_set" not in self.__dict__:
+            self._workspace_id_set = _player_workspace_ids(self.instance)
+        if len(self._workspace_id_set) == 1:
+            (workspace_id,) = self._workspace_id_set
+            _narrow_choices(form.fields, "team", teams_in(_REAL).filter(league__workspace_id=workspace_id))
 
 
 class GroupedChangeList(ChangeList):
@@ -255,11 +366,32 @@ class TeamInlineForm(forms.ModelForm):
         widgets = {"display_order": forms.HiddenInput()}
 
 
+class TeamInlineFormSet(forms.BaseInlineFormSet):
+    """リーグのチーム。本拠地の球場は、そのリーグと同じワークスペースのものに限る。"""
+
+    def add_fields(self, form, index):
+        super().add_fields(form, index)
+        workspace_id = self.instance.workspace_id
+        if workspace_id is not None:
+            _narrow_choices(form.fields, "home_stadium", Stadium.objects.filter(workspace_id=workspace_id))
+
+    def clean(self):
+        super().clean()
+        workspace_id = self.instance.workspace_id
+        if workspace_id is None:
+            return
+        for form in self.forms:
+            stadium = getattr(form, "cleaned_data", {}).get("home_stadium")
+            if stadium is not None and stadium.workspace_id != workspace_id:
+                form.add_error("home_stadium", _CROSS_WORKSPACE.format(name=stadium.name))
+
+
 class TeamInline(RealDataOnlyMixin, admin.TabularInline):
     """リーグに所属するチーム。行をドラッグして表示順を並べ替えられる。"""
 
     model = Team
     form = TeamInlineForm
+    formset = TeamInlineFormSet
     extra = 0
     fields = ("display_order", "name", "home_stadium")
     ordering = ("display_order", "name")
@@ -276,7 +408,20 @@ class WorkspaceRequiredForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["workspace"].required = True
+        # 登録済みの行ではワークスペースを読み取り専用にする（その場合、欄は無い）
+        if "workspace" in self.fields:
+            self.fields["workspace"].required = True
+
+    def _get_validation_exclusions(self):
+        """読み取り専用で欄が無い `workspace` も、一意制約の検査に含める。
+
+        含めないと、ModelForm は（ワークスペース, 名前）の一意制約を丸ごと飛ばし、同名の重複が
+        フォームのエラーではなく DB の IntegrityError（500）になる。行の値は保存済みなのでそのまま使える。
+        """
+        exclude = super()._get_validation_exclusions()
+        if "workspace" not in self.fields:
+            exclude.discard("workspace")
+        return exclude
 
 
 class LeagueForm(WorkspaceRequiredForm):
@@ -291,9 +436,11 @@ class LeagueForm(WorkspaceRequiredForm):
 class LeagueAdmin(RealDataOnlyMixin, ManualOrderAdminMixin, admin.ModelAdmin):
     # display_order は行をドラッグすると書き換わる。数値そのものに意味は無いが、
     # JavaScript が動かない環境でも直接入力できるよう残してある
-    list_display = ("name", "display_order", "teams_accordion", "created_at")
+    list_display = ("name", "workspace", "display_order", "teams_accordion", "created_at")
     list_display_links = ("name",)
     list_editable = ("display_order",)
+    list_filter = ("workspace",)
+    list_select_related = ("workspace",)
     search_fields = ("name",)
     # 手動の並び順を既定にする。未設定どうしは名前で安定させる
     ordering = ("display_order", "name")
@@ -323,6 +470,15 @@ class LeagueAdmin(RealDataOnlyMixin, ManualOrderAdminMixin, admin.ModelAdmin):
 
     # 表示順の列は隠してあるので、操作方法を画面上で伝える
     change_list_template = "admin/sortable_change_list.html"
+
+    def get_readonly_fields(self, request, obj=None):
+        """登録済みのリーグはワークスペースを変えられない。
+
+        球団・試合の帰属はリーグ経由で決まるので、付け替えると中身ごと別のワークスペースへ移ってしまう。
+        リポジトリも帰属を書き換えない。
+        """
+        fixed = super().get_readonly_fields(request, obj)
+        return (*fixed, "workspace") if obj is not None else fixed
 
     def get_queryset(self, request):
         """所属チームを先読みする。行ごとに引くと一覧で N+1 になる。"""
@@ -361,14 +517,41 @@ class LeagueAdmin(RealDataOnlyMixin, ManualOrderAdminMixin, admin.ModelAdmin):
         )
 
 
+class TeamForm(forms.ModelForm):
+    """チームの編集。リーグと本拠地の球場は、同じワークスペースのものに限る。
+
+    変更画面は、編集中のチームのワークスペースに選択肢を絞る。追加画面はまだ決まっていないので
+    絞れず、`clean()` が「リーグと球場が同じワークスペースか」を見る（検査が本体）。
+    """
+
+    class Meta:
+        model = Team
+        fields = "__all__"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance.pk:
+            workspace_id = self.instance.league.workspace_id
+            _narrow_choices(self.fields, "league", leagues_in(_REAL).filter(workspace_id=workspace_id))
+            _narrow_choices(self.fields, "home_stadium", Stadium.objects.filter(workspace_id=workspace_id))
+
+    def clean(self):
+        cleaned = super().clean()
+        league, stadium = cleaned.get("league"), cleaned.get("home_stadium")
+        if league is not None and stadium is not None and league.workspace_id != stadium.workspace_id:
+            self.add_error("home_stadium", _CROSS_WORKSPACE.format(name=stadium.name))
+        return cleaned
+
+
 @admin.register(Team)
 class TeamAdmin(RealDataOnlyMixin, ManualOrderAdminMixin, admin.ModelAdmin):
+    form = TeamForm
     # display_order は行をドラッグすると書き換わる。リーグ編集画面からだけでなく
     # この一覧でも並べ替えられるようにしてある
-    list_display = ("name", "display_order", "home_stadium", "active_player_count", "game_count")
+    list_display = ("name", "workspace", "display_order", "home_stadium", "active_player_count", "game_count")
     list_display_links = ("name",)
     list_editable = ("display_order",)
-    list_filter = (("league", RealDataRelatedFieldListFilter),)
+    list_filter = (("league", RealDataRelatedFieldListFilter), "league__workspace")
     search_fields = ("name", "home_stadium__name")
     autocomplete_fields = ("home_stadium",)
     # 担当者はここで割り当てる。左右2ペインの選択肢の方が M2M の既定より選びやすい
@@ -376,7 +559,7 @@ class TeamAdmin(RealDataOnlyMixin, ManualOrderAdminMixin, admin.ModelAdmin):
     # リーグごとにまとまるよう並べる。リーグ内は手動の表示順を尊重する。
     # この並びが区切り表示の前提（同じリーグの行が続いていないと見出しが何度も出る）
     ordering = ("league__display_order", "league__name", "display_order", "name")
-    list_select_related = ("league", "home_stadium")
+    list_select_related = ("league", "league__workspace", "home_stadium")
 
     class Media:
         js = ("myapp/js/admin-inline-sortable.js",)
@@ -438,6 +621,11 @@ class TeamAdmin(RealDataOnlyMixin, ManualOrderAdminMixin, admin.ModelAdmin):
     # 表示順はリーグの中でしか意味が無いため、ドラッグも区切りをまたげない。
     # 区切りが成立するのは ordering がリーグ単位でまとめているから
     group_by = staticmethod(lambda team: f"{team.league.name}（{team.league_team_count}チーム）")
+
+    @admin.display(description="ワークスペース", ordering="league__workspace__name")
+    def workspace(self, obj):
+        # リーグ経由（チームは自分では帰属を持たない）
+        return obj.league.workspace
 
     @admin.display(description="現役選手", ordering="active_players_count")
     def active_player_count(self, obj):
@@ -503,6 +691,24 @@ class StadiumForm(WorkspaceRequiredForm, DomainCheckedForm):
         super().__init__(*args, **kwargs)
         if self.instance.pk:
             self.fields["home_teams"].initial = teams_in(_REAL).filter(home_stadium=self.instance)
+            # 変更画面では、この球場と同じワークスペースのチームだけを並べる
+            _narrow_choices(
+                self.fields,
+                "home_teams",
+                teams_in(_REAL).filter(league__workspace_id=self.instance.workspace_id),
+            )
+
+    def clean(self):
+        cleaned = super().clean()
+        # 登録済みの球場はワークスペースが読み取り専用（欄が無い）ので、行の値で見る
+        workspace = cleaned.get("workspace")
+        workspace_id = workspace.pk if workspace is not None else self.instance.workspace_id
+        if workspace_id is None:
+            return cleaned
+        for team in cleaned.get("home_teams") or []:
+            if team.league.workspace_id != workspace_id:
+                self.add_error("home_teams", _CROSS_WORKSPACE.format(name=team.name))
+        return cleaned
 
     def build_value_object(self, cleaned):
         return StadiumProfile(
@@ -517,9 +723,10 @@ class StadiumForm(WorkspaceRequiredForm, DomainCheckedForm):
 @admin.register(Stadium)
 class StadiumAdmin(RealDataOnlyMixin, admin.ModelAdmin):
     form = StadiumForm
-    list_display = ("name", "city", "capacity", "surface", "roof", "opened_year", "home_team_names")
+    list_display = ("name", "workspace", "city", "capacity", "surface", "roof", "opened_year", "home_team_names")
+    list_select_related = ("workspace",)
     search_fields = ("name", "city")
-    list_filter = ("surface", "roof")
+    list_filter = ("workspace", "surface", "roof")
     # 一覧では本拠地チームの並びが先に効き、その中でこの順になる。
     # プルダウンなど一覧以外の場所ではこれがそのまま使われる
     ordering = ("name",)
@@ -544,6 +751,11 @@ class StadiumAdmin(RealDataOnlyMixin, admin.ModelAdmin):
 
     def get_changelist(self, request, **kwargs):
         return HomeTeamOrderedChangeList
+
+    def get_readonly_fields(self, request, obj=None):
+        """登録済みの球場はワークスペースを変えられない（リポジトリも帰属を書き換えない）。"""
+        fixed = super().get_readonly_fields(request, obj)
+        return (*fixed, "workspace") if obj is not None else fixed
 
     def get_queryset(self, request):
         """本拠地チームを先読みし、並べ替えの手がかりも一緒に引く。
@@ -680,6 +892,28 @@ class PlayerStintForm(forms.ModelForm):
         self.fields["from_year"].help_text = "空欄なら選手の入団年を使います。"
         # 空欄なら支配下として扱う（モデルの既定と同じ）
         self.fields["signed_as"].required = False
+        # 変更画面では、この在籍と同じワークスペースのチームだけを並べる（インラインは formset が絞る）
+        if self.instance.pk:
+            _narrow_choices(
+                self.fields,
+                "team",
+                teams_in(_REAL).filter(league__workspace_id=self.instance.team.league.workspace_id),
+            )
+
+    def _ensure_same_workspace(self, cleaned) -> bool:
+        """選手のほかの在籍と同じワークスペースのチームか。違えば「チーム」欄のエラーにして False を返す。
+
+        選手は在籍から1つのワークスペースに属す（選手に帰属の列は無い）。違うワークスペースのチームへ
+        在籍を足すと、選手が複数の範囲に現れてしまう。送信全体を見るインラインは formset が検査する。
+        """
+        team = cleaned.get("team")
+        if self.checked_with_declarations or team is None:
+            return True
+        others = _player_workspace_ids(cleaned.get("player"), excluding_stint_pk=self.instance.pk)
+        if others and team.league.workspace_id not in others:
+            self.add_error("team", _CROSS_WORKSPACE.format(name=team.name))
+            return False
+        return True
 
     def clean_number(self):
         return _clean_jersey(self.cleaned_data.get("number"))
@@ -696,6 +930,8 @@ class PlayerStintForm(forms.ModelForm):
 
     def clean(self):
         cleaned = super().clean()
+        if not self._ensure_same_workspace(cleaned):
+            return cleaned
         self._fill_from_year(cleaned)
 
         team = cleaned.get("team")
@@ -839,7 +1075,7 @@ class PlayerStintForm(forms.ModelForm):
         cleaned["from_year"] = debut_year
 
 
-class PlayerStintFormSet(forms.BaseInlineFormSet):
+class PlayerStintFormSet(PlayerWorkspaceChoicesMixin, forms.BaseInlineFormSet):
     """同じ選手の在籍どうしの食い違いを見る。
 
     1行ずつの検証では、同時に送られた他の行が見えない。まとめて登録すると
@@ -882,8 +1118,15 @@ class PlayerStintFormSet(forms.BaseInlineFormSet):
             )
         return stints
 
+    captaincy_formset = None
+
+    def link_captaincies(self, captaincy_formset) -> None:
+        """主将在任のフォームセットをつなぐ（ワークスペースの突き合わせに使う）。"""
+        self.captaincy_formset = captaincy_formset
+
     def clean(self):
         super().clean()
+        _ensure_rows_share_workspace(self, self.captaincy_formset)
         if any(self.errors):
             return
 
@@ -1020,6 +1263,10 @@ class FreeAgentDeclarationInline(admin.TabularInline):
 class CaptaincyForm(forms.ModelForm):
     """主将在任の入力検証。PlayerStintForm と同じパターンの相互検証。"""
 
+    # 選手の管理画面のインラインでは、送信後の在籍とのワークスペースの突き合わせをフォームセットが行う
+    # （保存済みの在籍だけを見ると、同じ送信で足す在籍を見落とす）。単独で使うときは False
+    checked_with_stints = False
+
     class Meta:
         model = Captaincy
         fields = "__all__"
@@ -1027,6 +1274,15 @@ class CaptaincyForm(forms.ModelForm):
     def clean(self):
         cleaned = super().clean()
         team, from_year = cleaned.get("team"), cleaned.get("from_year")
+        # 主将は、その選手が在籍しているチームと同じワークスペースのチームの主将でなければならない
+        workspaces = (
+            set()
+            if self.checked_with_stints
+            else _player_workspace_ids(cleaned.get("player"), excluding_captaincy_pk=self.instance.pk)
+        )
+        if team is not None and workspaces and team.league.workspace_id not in workspaces:
+            self.add_error("team", _CROSS_WORKSPACE.format(name=team.name))
+            return cleaned
         if not (team and from_year is not None):
             return cleaned
 
@@ -1062,11 +1318,20 @@ class CaptaincyForm(forms.ModelForm):
         return cleaned
 
 
-class CaptaincyFormSet(forms.BaseInlineFormSet):
+class CaptaincyFormSet(PlayerWorkspaceChoicesMixin, forms.BaseInlineFormSet):
     """同じ選手の複数行を同時編集する際のクロスチェック(PlayerStintFormSet と同型)。"""
+
+    stint_formset = None
+
+    def link_stints(self, stint_formset) -> None:
+        """在籍のフォームセットをつなぐ。つないだら、在籍とのワークスペースの突き合わせは送信後の全体で行う。"""
+        self.stint_formset = stint_formset
+        for form in self.forms:
+            form.checked_with_stints = True  # type: ignore[attr-defined]  # CaptaincyForm の属性
 
     def clean(self):
         super().clean()
+        _ensure_rows_share_workspace(self, self.stint_formset)
         if any(self.errors):
             return
 
@@ -1146,6 +1411,7 @@ class PlayerAdmin(RealDataOnlyMixin, admin.ModelAdmin):
     list_display = ("name", "position", "current_team", "current_number", "appearances")
     list_filter = (
         "position",
+        "stints__team__league__workspace",
         ("stints__team__league", RealDataRelatedFieldListFilter),
         ("stints__team", RealDataRelatedFieldListFilter),
     )
@@ -1187,15 +1453,18 @@ class PlayerAdmin(RealDataOnlyMixin, admin.ModelAdmin):
     )
 
     def _create_formsets(self, request, obj, change):
-        """在籍と FA 宣言のフォームセットをつなぐ。
+        """在籍と FA 宣言・主将在任のフォームセットをつなぐ。
 
         宣言の検査は、送信後の在籍の全体を見る必要がある（宣言の削除・在籍の削除や短縮が互いの根拠を壊すため）。
         """
         formsets, inline_instances = super()._create_formsets(request, obj, change)
         stints = next((fs for fs in formsets if fs.model is PlayerStint), None)
         for formset in formsets:
-            if isinstance(formset, FreeAgentDeclarationFormSet) and stints is not None:
+            if isinstance(formset, FreeAgentDeclarationFormSet | CaptaincyFormSet) and stints is not None:
                 formset.link_stints(stints)
+        captaincies = next((fs for fs in formsets if fs.model is Captaincy), None)
+        if stints is not None and captaincies is not None:
+            stints.link_captaincies(captaincies)
         return formsets, inline_instances
 
     @admin.display(description="現在の所属")
@@ -1249,13 +1518,17 @@ class PlayerStintAdmin(RealDataOnlyMixin, GroupedAdminMixin, admin.ModelAdmin):
     group_ordering = ("team__league__display_order", "team__league__name", "team__name")
 
     form = PlayerStintForm
-    list_display = ("number_label", "player", "from_year", "to_year")
-    list_filter = (("team__league", RealDataRelatedFieldListFilter), ("team", RealDataRelatedFieldListFilter))
+    list_display = ("number_label", "player", "workspace", "from_year", "to_year")
+    list_filter = (
+        "team__league__workspace",
+        ("team__league", RealDataRelatedFieldListFilter),
+        ("team", RealDataRelatedFieldListFilter),
+    )
     search_fields = ("player__name",)
     # 背番号は文字列の列なので、そのままでは「10」が「2」より前に来る。数値に直した並びのキーを足す
     # （00 → 0 → 1 …。出典は `JerseyNumber.sort_key`。食い違わないことを test_admin が確かめる）
     # （注釈は `ordering` の検査に通らないので get_ordering で返す）
-    list_select_related = ("player", "team", "team__league")
+    list_select_related = ("player", "team", "team__league", "team__league__workspace")
     autocomplete_fields = ("player", "team")
 
     # 行をチームごとに区切る
@@ -1282,6 +1555,11 @@ class PlayerStintAdmin(RealDataOnlyMixin, GroupedAdminMixin, admin.ModelAdmin):
     @admin.display(description="背番号", ordering="number_order")
     def number_label(self, obj):
         return obj.number
+
+    @admin.display(description="ワークスペース", ordering="team__league__workspace__name")
+    def workspace(self, obj):
+        # チーム → リーグ経由（在籍は自分では帰属を持たない）
+        return obj.team.league.workspace
 
     @staticmethod
     def deletion_blocker(obj) -> str:
@@ -1370,6 +1648,15 @@ class GameForm(DomainCheckedForm):
         # 空欄は0分（中断なし）。モデルの既定値がそのまま入る
         self.fields["interruption_minutes"].required = False
 
+    def clean(self):
+        cleaned = super().clean()
+        # 追加画面の対戦カードは同じワークスペースのチームどうしでなければならない
+        # （登録済みの試合は対戦カードが読み取り専用なので、欄が無く検査しない）
+        home, away = cleaned.get("home_team"), cleaned.get("away_team")
+        if home is not None and away is not None and home.league.workspace_id != away.league.workspace_id:
+            self.add_error("away_team", _CROSS_WORKSPACE.format(name=away.name))
+        return cleaned
+
     def clean_interruption_minutes(self):
         # 空欄は0分。None のまま保存すると NOT NULL 制約で落ちる
         return self.cleaned_data.get("interruption_minutes") or 0
@@ -1392,11 +1679,11 @@ class GameAdmin(RealDataOnlyMixin, admin.ModelAdmin):
     """
 
     form = GameForm
-    list_display = ("played_on", "year", "matchup", "score", "result")
-    list_filter = ("year", ("home_team__league", RealDataRelatedFieldListFilter))
+    list_display = ("played_on", "year", "workspace", "matchup", "score", "result")
+    list_filter = ("year", "home_team__league__workspace", ("home_team__league", RealDataRelatedFieldListFilter))
     date_hierarchy = "played_on"
     ordering = ("-played_on",)
-    list_select_related = ("home_team", "away_team")
+    list_select_related = ("home_team", "home_team__league", "home_team__league__workspace", "away_team")
     inlines = [GameInningScoreInline, GameBattingLineInline, GamePitchingLineInline, GameFieldingLineInline]
     fieldsets = (
         (
@@ -1442,6 +1729,11 @@ class GameAdmin(RealDataOnlyMixin, admin.ModelAdmin):
         fixed = super().get_readonly_fields(request, obj)
         return (*fixed, "home_team", "away_team") if obj is not None else fixed
 
+    @admin.display(description="ワークスペース", ordering="home_team__league__workspace__name")
+    def workspace(self, obj):
+        # ホームチーム → リーグ経由（試合は自分では帰属を持たない）
+        return obj.home_team.league.workspace
+
     @admin.display(description="対戦")
     def matchup(self, obj):
         return f"{obj.home_team.name} vs {obj.away_team.name}"
@@ -1457,3 +1749,78 @@ class GameAdmin(RealDataOnlyMixin, admin.ModelAdmin):
         if winner is None:
             return "引分"
         return f"{(obj.home_team if winner == obj.home_team_id else obj.away_team).name} の勝ち"
+
+
+def _new_workspace_key() -> str:
+    """まだ使われていない key を作る。推測されないよう OS の乱数源（`SystemRandom`）で引く。"""
+    rng = random.SystemRandom()
+    while True:
+        key = generate_workspace_key(rng)
+        if not Workspace.objects.filter(key=key).exists():
+            return key
+
+
+class WorkspaceForm(forms.ModelForm):
+    """ワークスペースの作成。key は空欄ならサーバーが作る（登録後は読み取り専用で変えられない）。"""
+
+    class Meta:
+        model = Workspace
+        fields = "__all__"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # 登録済みの行では key が読み取り専用になり、欄が無い
+        if "key" in self.fields:
+            self.fields["key"].required = False
+            self.fields[
+                "key"
+            ].help_text = "空欄なら自動で作ります（推測されない10文字）。URL に入るので、作成後は変えられません。"
+
+    def clean_key(self):
+        key = (self.cleaned_data.get("key") or "").strip()
+        if not key:
+            return _new_workspace_key()
+        try:
+            return validate_workspace_key(key)
+        except DomainError as error:
+            raise forms.ValidationError(str(error)) from None
+
+
+class WorkspaceEditorFormSet(forms.BaseInlineFormSet):
+    """編集者の行。持ち主は編集者に入れない（持ち主は全権を持つ。移行 0049 も持ち主を除いた）。"""
+
+    def clean(self):
+        super().clean()
+        owner_id = self.instance.owner_id
+        if owner_id is None:
+            return
+        for form in self.forms:
+            data = getattr(form, "cleaned_data", None)
+            user = data.get("user") if data and not data.get("DELETE") else None
+            if user is not None and user.pk == owner_id:
+                form.add_error("user", "持ち主は編集者に加えられません。持ち主はもともと全権を持っています。")
+
+
+class WorkspaceEditorInline(admin.TabularInline):
+    """編集者。持ち主のほかに、ワークスペース全体を編集できるユーザー。"""
+
+    model = WorkspaceEditor
+    formset = WorkspaceEditorFormSet
+    extra = 0
+    verbose_name_plural = "編集者"
+
+
+@admin.register(Workspace)
+class WorkspaceAdmin(admin.ModelAdmin):
+    """ワークスペース。空の DB で運営者が最初の1つを作る入口（リーグ・球場はこれに属す）。"""
+
+    form = WorkspaceForm
+    list_display = ("name", "key", "owner", "visibility", "created_at")
+    list_filter = ("visibility",)
+    search_fields = ("name", "key")
+    inlines = [WorkspaceEditorInline]
+
+    def get_readonly_fields(self, request, obj=None):
+        """key は URL に入る識別子なので、作った後は変えさせない。"""
+        fixed = super().get_readonly_fields(request, obj)
+        return (*fixed, "key") if obj is not None else fixed
