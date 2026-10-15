@@ -32,7 +32,6 @@ from .test_world_isolation import BOTH, CLASSIFICATION, GAME, LEAGUE, PLAYER
 from .world_case import PENNANT_LEAGUE, PENNANT_TEAM, YEAR, WorldCase
 
 START = 2030
-REAL = real_scope()
 
 
 def _real_counts() -> dict[str, int]:
@@ -217,15 +216,21 @@ class ForkTest(BaseCase):
         with self.assertRaises(IntegrityError), transaction.atomic():
             make_league(name=self.league.name)
 
-    def test_source_leagues_with_the_same_name_are_rejected_before_anything_is_written(self):
+    def test_a_league_of_another_workspace_cannot_be_a_source(self):
+        """分岐元は範囲のワークスペースのリーグだけ。他所のリーグ（同名でも）は LeagueNotFound で、世界を作らない。
+
+        W1a T6 の「同じ名前のリーグを2つ以上分岐元に選べない」検査は、名前がワークスペースの中で一意なので
+        今は届かない（安い保険として残してある。#172）。
+        """
         other_workspace = make_workspace(name="別のワークスペース")
         same_name = make_league(self.league.name, workspace=other_workspace)
-        before = orm_models.PennantWorld.objects.count()
+        before = (orm_models.PennantWorld.objects.count(), orm_models.League.objects.count())
 
-        with self.assertRaisesMessage(InvalidWorld, "同じ名前のリーグを2つ以上分岐元に選べません"):
-            self._fork(name="重複", source_league_ids=[self.league.id, same_name.id])
+        for source_league_ids in ([same_name.id], [self.league.id, same_name.id]):
+            with self.subTest(source_league_ids=source_league_ids), self.assertRaises(LeagueNotFound):
+                self._fork(name="他所", source_league_ids=source_league_ids)
 
-        self.assertEqual(orm_models.PennantWorld.objects.count(), before)
+        self.assertEqual((orm_models.PennantWorld.objects.count(), orm_models.League.objects.count()), before)
 
     def test_the_same_league_name_is_allowed_across_worlds(self):
         other = self._fork(name="別の世界")
@@ -375,13 +380,14 @@ class ForkOptionsTest(BaseCase):
             )
 
         service = PennantWorldService(
-            real_leagues=DjangoLeagueRepository(REAL),
-            real_teams=DjangoTeamRepository(REAL),
-            real_fielding=DjangoFieldingTotalsQuery(REAL),
+            real_leagues=DjangoLeagueRepository(real_scope()),
+            real_teams=DjangoTeamRepository(real_scope()),
+            real_fielding=DjangoFieldingTotalsQuery(real_scope()),
             worlds=DjangoWorldRepository(),
             repositories_for=factory,  # type: ignore[arg-type]
             atomic=transaction.atomic,
             ensure_schedule=lambda world_id: False,
+            workspace_id=real_scope().workspace_id,
         )
 
         with self.assertRaises(RuntimeError):
@@ -401,7 +407,9 @@ class WorldRepositoryTest(BaseCase):
         repository = DjangoWorldRepository()
         owner = User.objects.create_user("gm", password="x")
 
-        saved = repository.save(World(name="世界", seed=2**40, start_year=2026, owner_id=owner.id))
+        saved = repository.save(
+            World(name="世界", seed=2**40, start_year=2026, owner_id=owner.id, workspace_id=self.workspace.id)
+        )
         loaded = repository.find_by_id(saved.id)
 
         self.assertEqual(loaded, saved)
@@ -409,8 +417,8 @@ class WorldRepositoryTest(BaseCase):
 
     def test_the_newest_world_comes_first(self):
         repository = DjangoWorldRepository()
-        first = repository.save(World(name="古い", seed=1, start_year=2026))
-        second = repository.save(World(name="新しい", seed=2, start_year=2026))
+        first = repository.save(World(name="古い", seed=1, start_year=2026, workspace_id=self.workspace.id))
+        second = repository.save(World(name="新しい", seed=2, start_year=2026, workspace_id=self.workspace.id))
 
         self.assertEqual([w.id for w in repository.find_all()], [second.id, first.id])
 
@@ -419,7 +427,7 @@ class WorldRepositoryTest(BaseCase):
             DjangoWorldRepository().find_by_id(999)
 
     def test_the_list_through_the_service(self):
-        DjangoWorldRepository().save(World(name="世界", seed=1, start_year=2026))
+        DjangoWorldRepository().save(World(name="世界", seed=1, start_year=2026, workspace_id=self.workspace.id))
 
         rows = build_pennant_world_service(real_scope()).list_worlds()
 

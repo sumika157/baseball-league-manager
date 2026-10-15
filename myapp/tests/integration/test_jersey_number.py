@@ -18,18 +18,16 @@ from myapp.infrastructure.repositories import DjangoTeamRepository
 from ..helpers import login_as_manager, real_scope
 from .base import BaseCase
 
-REAL = real_scope()
-
 
 class JerseyNumberRoundTripTest(BaseCase):
     def test_double_zero_and_zero_survive_the_round_trip(self):
-        repo = DjangoTeamRepository(REAL)
+        repo = DjangoTeamRepository(real_scope())
         team = repo.find_by_id(self.team.id)
         zero = team.add_player("零", JerseyNumber("0"), Position.INFIELDER, limits=RosterLimits.UNLIMITED)
         double_zero = team.add_player("双零", JerseyNumber("00"), Position.PITCHER, limits=RosterLimits.UNLIMITED)
         repo.save(team)
 
-        saved = DjangoTeamRepository(REAL).find_by_id(self.team.id)
+        saved = DjangoTeamRepository(real_scope()).find_by_id(self.team.id)
 
         self.assertEqual(saved.find_player(zero.id).number.value, "0")
         self.assertEqual(saved.find_player(double_zero.id).number.value, "00")
@@ -44,7 +42,7 @@ class JerseyNumberRoundTripTest(BaseCase):
                 self.team.id, f"選手{number}", number, "内野手", "育成" if number == "100" else "支配下"
             )
 
-        saved = DjangoTeamRepository(REAL).find_by_id(self.team.id)
+        saved = DjangoTeamRepository(real_scope()).find_by_id(self.team.id)
 
         self.assertEqual([p.number.value for p in saved.players], ["00", "0", "1", "2", "10", "100"])
 

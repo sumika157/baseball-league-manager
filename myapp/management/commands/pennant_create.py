@@ -18,7 +18,8 @@ from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 
 from myapp.domain.exceptions import DomainError
-from myapp.domain.pennant.world import MAX_SEED, WorldScope
+from myapp.domain.pennant.world import MAX_SEED
+from myapp.management.workspaces import legacy_real_scope
 from myapp.presentation.views import build_pennant_world_service
 
 
@@ -59,7 +60,7 @@ class Command(BaseCommand):
 
         started = time.perf_counter()
         try:
-            created = build_pennant_world_service(WorldScope.real()).create_world(
+            created = build_pennant_world_service(legacy_real_scope()).create_world(
                 name=options["name"],
                 owner_id=owner_id,
                 source_league_ids=options["leagues"],

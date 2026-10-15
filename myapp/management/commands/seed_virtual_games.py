@@ -68,6 +68,7 @@ from myapp.domain.value_objects import (
     Season,
 )
 from myapp.infrastructure.scoping import games_in, leagues_in, world_condition
+from myapp.management.workspaces import legacy_real_scope
 from myapp.models import (
     Game,
     GameBattingLine,
@@ -354,6 +355,17 @@ class Command(BaseCommand):
             help="指定シーズンの既存の試合を削除してから投入する（既定は中止する）",
         )
 
+    def _real_scope(self) -> WorldScope:
+        """投入・補正の対象（実データだけ。ペナントの世界の球団・選手には触れない）。
+
+        暫定（W1b T2）: 今のワークスペース（id が最小のもの）。1回の実行で1回だけ決めて覚える。
+        T5 で `--workspace` を受け取る形に替える。
+        """
+        scope: WorldScope | None = getattr(self, "_scope", None)
+        if scope is None:
+            scope = self._scope = legacy_real_scope()
+        return scope
+
     def handle(self, *args, **options):
         self.rng = np.random.default_rng(options["seed"])
         # 時刻と観客数の乱数は、打席を進める `self.rng` とは別の列にする（同じ列から引くと、
@@ -368,7 +380,7 @@ class Command(BaseCommand):
             raise CommandError("--games-per-pair は1以上を指定してください。")
 
         # 対象は実データだけ。ペナントの世界の試合は、--replace でも消さない
-        existing = games_in(WorldScope.real()).filter(year=year)
+        existing = games_in(self._real_scope()).filter(year=year)
         if existing.exists() and not options["replace"]:
             raise CommandError(
                 f"{year}年の試合が既に {existing.count()} 件あります。"
@@ -421,7 +433,7 @@ class Command(BaseCommand):
         """
         rosters = defaultdict(lambda: {"batters": [], "pitchers": [], "foreign": set()})
         stints = PlayerStint.objects.filter(
-            world_condition("team__league", WorldScope.real()), from_year__lte=year
+            world_condition("team__league", self._real_scope()), from_year__lte=year
         ).select_related("player", "team")
         for stint in stints:
             if stint.to_year is not None and stint.to_year < year:
@@ -548,7 +560,7 @@ class Command(BaseCommand):
     def _schedule(self, year, per_pair, rosters):
         """組み合わせと試合日だけを決める。試合の中身はまだ作らない。"""
         schedule = []
-        for league in leagues_in(WorldScope.real()).prefetch_related("teams"):
+        for league in leagues_in(self._real_scope()).prefetch_related("teams"):
             teams = [
                 team for team in league.teams.all() if rosters[team.id]["batters"] and rosters[team.id]["pitchers"]
             ]

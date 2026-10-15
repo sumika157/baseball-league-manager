@@ -15,10 +15,10 @@ from django.db import transaction
 
 from myapp.domain import services as domain_services
 from myapp.domain.exceptions import DomainError
-from myapp.domain.pennant.world import WorldScope
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
 from myapp.infrastructure.scoping import games_in
+from myapp.management.workspaces import legacy_real_scope
 
 
 class Command(BaseCommand):
@@ -26,7 +26,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         # 対象は実データの試合だけ（ペナントの世界の試合は、その世界を進める側が導く）
-        scope = WorldScope.real()
+        scope = legacy_real_scope()
         repository = DjangoGameRepository(scope)
         game_ids = sorted(
             orm_models.GamePlateAppearance.objects.filter(game__in=games_in(scope).values("pk"))

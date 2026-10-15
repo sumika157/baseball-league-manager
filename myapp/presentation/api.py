@@ -10,7 +10,7 @@ presentation/forms.py のフォームを行単位で使い、業務ルール（�
 
 import json
 
-from django.http import JsonResponse
+from django.http import Http404, JsonResponse
 from django.urls import reverse
 from django.views.decorators.http import require_POST
 
@@ -118,15 +118,18 @@ def game_scorebook(request, game_id):
     if not isinstance(body, dict):
         return JsonResponse({"ok": False, "error": "リクエストの形式が不正です。"}, status=400)
 
-    service = build_service(_real_scope())
+    try:
+        scope = _real_scope(request)
+    except Http404:
+        # ワークスペースが1つも無い（運営者が最初の1つを作る前）。ほかのエラーと同じ JSON の形で返す
+        return JsonResponse({"ok": False, "error": "ワークスペースがありません。"}, status=404)
+    service = build_service(scope)
     try:
         team_ids = service.get_game_team_ids(game_id)
     except GameNotFound:
         return JsonResponse({"ok": False, "error": "試合が見つかりません。"}, status=404)
 
-    if not build_permission_query(_real_scope()).can_manage_any(
-        request.user, (team_ids.home_team_id, team_ids.away_team_id)
-    ):
+    if not build_permission_query(scope).can_manage_any(request.user, (team_ids.home_team_id, team_ids.away_team_id)):
         return JsonResponse({"ok": False, "error": "このチームを編集する権限がありません。"}, status=403)
 
     lineup_data = _as_row_list(body, "lineup")
@@ -153,7 +156,7 @@ def game_scorebook(request, game_id):
         return JsonResponse({"ok": False, "error": error}, status=400)
 
     try:
-        saved = build_recording_service(_real_scope()).record_scorebook(
+        saved = build_recording_service(scope).record_scorebook(
             game_id,
             year=game_form.cleaned_data["year"],
             played_on=game_form.cleaned_data["played_on"],

@@ -4,7 +4,7 @@ import unittest
 from datetime import date
 
 from myapp.domain.entities import League, Team
-from myapp.domain.exceptions import DuplicateJerseyNumber, InvalidSeason, InvalidWorld
+from myapp.domain.exceptions import DuplicateJerseyNumber, InvalidSeason, InvalidWorkspace, InvalidWorld
 from myapp.domain.pennant.fork import fork_league, fork_roster, fork_team
 from myapp.domain.pennant.world import (
     MAX_SEASONS_PER_WORLD,
@@ -20,39 +20,66 @@ UNLIMITED = RosterLimits.UNLIMITED
 
 
 class WorldScopeTest(unittest.TestCase):
-    def test_real_scope_has_no_world(self):
-        scope = WorldScope.real()
+    def test_real_scope_is_the_real_data_of_a_workspace(self):
+        scope = WorldScope.real(2)
 
         self.assertTrue(scope.is_real)
         self.assertFalse(scope.is_pennant)
         self.assertIsNone(scope.world_id)
+        self.assertEqual(scope.workspace_id, 2)
 
-    def test_pennant_scope_points_to_a_world(self):
-        scope = WorldScope.pennant(3)
+    def test_pennant_scope_points_to_a_world_of_a_workspace(self):
+        scope = WorldScope.pennant(2, 3)
 
         self.assertTrue(scope.is_pennant)
         self.assertFalse(scope.is_real)
         self.assertEqual(scope.world_id, 3)
+        self.assertEqual(scope.workspace_id, 2)
 
     def test_scopes_compare_by_value(self):
-        self.assertEqual(WorldScope.real(), WorldScope.real())
-        self.assertEqual(WorldScope.pennant(3), WorldScope.pennant(3))
-        self.assertNotEqual(WorldScope.pennant(3), WorldScope.pennant(4))
-        self.assertNotEqual(WorldScope.real(), WorldScope.pennant(3))
+        self.assertEqual(WorldScope.real(1), WorldScope.real(1))
+        self.assertEqual(WorldScope.pennant(1, 3), WorldScope.pennant(1, 3))
+        self.assertNotEqual(WorldScope.pennant(1, 3), WorldScope.pennant(1, 4))
+        self.assertNotEqual(WorldScope.real(1), WorldScope.pennant(1, 3))
+
+    def test_the_real_data_of_different_workspaces_are_different_scopes(self):
+        """実データは「そのワークスペースの実データ」。ほかのワークスペースの実データと同じ範囲にならない。"""
+        self.assertNotEqual(WorldScope.real(1), WorldScope.real(2))
+        self.assertNotEqual(WorldScope.pennant(1, 3), WorldScope.pennant(2, 3))
 
     def test_a_scope_is_immutable(self):
         with self.assertRaises(AttributeError):
-            WorldScope.real().world_id = 1  # type: ignore[misc]
+            WorldScope.real(1).world_id = 1  # type: ignore[misc]
+        with self.assertRaises(AttributeError):
+            WorldScope.real(1).workspace_id = 2  # type: ignore[misc]
 
     def test_a_scope_cannot_be_built_without_saying_which(self):
-        """既定値が無い。「指定しなければ実データ」と読める形を作らない。"""
+        """既定値が無い。「指定しなければ実データ」「指定しなければ全ワークスペース」と読める形を作らない。"""
         with self.assertRaises(TypeError):
             WorldScope()  # type: ignore[call-arg]
+        with self.assertRaises(TypeError):
+            WorldScope.real()  # type: ignore[call-arg]
+        with self.assertRaises(TypeError):
+            WorldScope.pennant(3)  # type: ignore[call-arg]
+
+    def test_the_workspace_must_be_a_workspace_id(self):
+        for bad in (0, -1, None, True, False, "3", 1.0):
+            with self.subTest(workspace_id=bad):
+                with self.assertRaises(InvalidWorkspace):
+                    WorldScope.real(bad)  # type: ignore[arg-type]
+                with self.assertRaises(InvalidWorkspace):
+                    WorldScope.pennant(bad, 3)  # type: ignore[arg-type]
+                with self.assertRaises(InvalidWorkspace):
+                    WorldScope(workspace_id=bad, world_id=None)  # type: ignore[arg-type]
 
     def test_pennant_scope_rejects_a_value_that_is_not_a_world_id(self):
         for bad in (0, -1, None, True, "3"):
             with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
-                WorldScope.pennant(bad)  # type: ignore[arg-type]
+                WorldScope.pennant(1, bad)  # type: ignore[arg-type]
+
+    def test_the_text_names_the_workspace(self):
+        self.assertEqual(str(WorldScope.real(2)), "ワークスペース 2 の実データ")
+        self.assertEqual(str(WorldScope.pennant(2, 3)), "ワークスペース 2 の世界 3")
 
 
 class WorldTest(unittest.TestCase):
@@ -118,8 +145,14 @@ class WorldTest(unittest.TestCase):
         with self.assertRaises(InvalidWorld):
             _ = World(name="世界", seed=1, start_year=2026).scope
 
-    def test_a_saved_world_has_its_scope(self):
-        self.assertEqual(World(name="世界", seed=1, start_year=2026, id=9).scope, WorldScope.pennant(9))
+    def test_a_saved_world_has_its_scope_with_its_workspace(self):
+        world = World(name="世界", seed=1, start_year=2026, id=9, workspace_id=4)
+
+        self.assertEqual(world.scope, WorldScope.pennant(4, 9))
+
+    def test_a_world_without_a_workspace_has_no_scope(self):
+        with self.assertRaises(InvalidWorld):
+            _ = World(name="世界", seed=1, start_year=2026, id=9).scope
 
 
 def _source_team() -> Team:

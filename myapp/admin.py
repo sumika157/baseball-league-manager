@@ -60,7 +60,7 @@ from .infrastructure.orm_models import (
     WorkspaceEditor,
 )
 from .infrastructure.repositories import DjangoLeagueRepository, DjangoTeamRepository
-from .infrastructure.scoping import games_in, leagues_in, players_in, stints_in, teams_in
+from .infrastructure.scoping import admin_real_queryset, leagues_in, teams_in
 from .presentation.views import build_recording_service
 
 # ヘッダーの文言
@@ -115,20 +115,23 @@ admin.site.get_app_list = types.MethodType(_ordered_app_list, admin.site)  # typ
 # ペナント専用のモデル（PennantWorld・PennantPlayerRatings・PennantFixture・PennantClubPlan と
 # その行 PennantClubPlanEntry・PennantReleasePlan とその行 PennantReleasePlanEntry）は管理画面に登録しない
 # （手で直すと、能力と成績・日程の整合が壊れるため）。
-_REAL = WorldScope.real()
-_REAL_QUERYSETS = {
-    orm_models.League: leagues_in,
-    orm_models.Team: teams_in,
-    orm_models.Player: players_in,
-    orm_models.PlayerStint: stints_in,
-    orm_models.Game: games_in,
-}
+# 管理画面は運営者が**全ワークスペースの実データ**を扱う。全範囲を読むのは `admin_real_queryset` だけで、
+# 「全範囲を読む API を作らない」規則の唯一の例外（決定 2026-10-07 Q4。admin.py 以外からは使わない）。
 
 
 def _real_queryset(model):
-    """そのモデルの、実データの行だけの QuerySet。世界を持たないモデル（球場など）は None。"""
-    scoped = _REAL_QUERYSETS.get(model)
-    return scoped(_REAL) if scoped is not None else None
+    """そのモデルの、全ワークスペースの実データの行だけの QuerySet。世界を持たないモデル（球場など）は None。"""
+    return admin_real_queryset(model)
+
+
+def _real_teams():
+    """全ワークスペースの実データのチーム（ペナントの球団を除く）。"""
+    return admin_real_queryset(Team)
+
+
+def _row_scope(league) -> WorldScope:
+    """行が属するリーグのワークスペースの、実データの範囲。リポジトリ・組み立て口を行ごとに作るのに使う。"""
+    return WorldScope.real(league.workspace_id)
 
 
 class RealDataOnlyMixin:
@@ -260,7 +263,7 @@ class PlayerWorkspaceChoicesMixin:
             self._workspace_id_set = _player_workspace_ids(self.instance)
         if len(self._workspace_id_set) == 1:
             (workspace_id,) = self._workspace_id_set
-            _narrow_choices(form.fields, "team", teams_in(_REAL).filter(league__workspace_id=workspace_id))
+            _narrow_choices(form.fields, "team", teams_in(WorldScope.real(workspace_id)))
 
 
 class GroupedChangeList(ChangeList):
@@ -532,7 +535,7 @@ class TeamForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         if self.instance.pk:
             workspace_id = self.instance.league.workspace_id
-            _narrow_choices(self.fields, "league", leagues_in(_REAL).filter(workspace_id=workspace_id))
+            _narrow_choices(self.fields, "league", leagues_in(WorldScope.real(workspace_id)))
             _narrow_choices(self.fields, "home_stadium", Stadium.objects.filter(workspace_id=workspace_id))
 
     def clean(self):
@@ -673,7 +676,7 @@ class StadiumForm(WorkspaceRequiredForm, DomainCheckedForm):
     """
 
     home_teams = forms.ModelMultipleChoiceField(
-        queryset=teams_in(_REAL)
+        queryset=_real_teams()
         .select_related("league")
         .order_by("league__display_order", "league__name", "display_order", "name"),
         required=False,
@@ -690,12 +693,12 @@ class StadiumForm(WorkspaceRequiredForm, DomainCheckedForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if self.instance.pk:
-            self.fields["home_teams"].initial = teams_in(_REAL).filter(home_stadium=self.instance)
+            self.fields["home_teams"].initial = _real_teams().filter(home_stadium=self.instance)
             # 変更画面では、この球場と同じワークスペースのチームだけを並べる
             _narrow_choices(
                 self.fields,
                 "home_teams",
-                teams_in(_REAL).filter(league__workspace_id=self.instance.workspace_id),
+                teams_in(WorldScope.real(self.instance.workspace_id)),
             )
 
     def clean(self):
@@ -764,7 +767,7 @@ class StadiumAdmin(RealDataOnlyMixin, admin.ModelAdmin):
         本拠地が複数あるときは、チームの並びで先頭に来るものを代表とする。
         """
         home_teams = (
-            teams_in(_REAL)
+            _real_teams()
             .filter(home_stadium=OuterRef("pk"))
             .order_by("league__display_order", "league__name", "display_order", "name")
         )
@@ -772,7 +775,7 @@ class StadiumAdmin(RealDataOnlyMixin, admin.ModelAdmin):
         return (
             super()
             .get_queryset(request)
-            .prefetch_related(Prefetch("home_teams", queryset=teams_in(_REAL)))
+            .prefetch_related(Prefetch("home_teams", queryset=_real_teams()))
             .annotate(
                 home_league_order=Subquery(home_teams.values("league__display_order")[:1]),
                 home_league_name=Subquery(home_teams.values("league__name")[:1]),
@@ -800,10 +803,10 @@ class StadiumAdmin(RealDataOnlyMixin, admin.ModelAdmin):
             return
 
         # ペナントの球団の本拠地は、実データの球場の編集では変えない
-        teams_in(_REAL).filter(home_stadium=stadium).exclude(pk__in=[team.pk for team in selected]).update(
+        _real_teams().filter(home_stadium=stadium).exclude(pk__in=[team.pk for team in selected]).update(
             home_stadium=None
         )
-        teams_in(_REAL).filter(pk__in=[team.pk for team in selected]).update(home_stadium=stadium)
+        _real_teams().filter(pk__in=[team.pk for team in selected]).update(home_stadium=stadium)
 
 
 def _jersey_or_none(value):
@@ -897,7 +900,7 @@ class PlayerStintForm(forms.ModelForm):
             _narrow_choices(
                 self.fields,
                 "team",
-                teams_in(_REAL).filter(league__workspace_id=self.instance.team.league.workspace_id),
+                teams_in(WorldScope.real(self.instance.team.league.workspace_id)),
             )
 
     def _ensure_same_workspace(self, cleaned) -> bool:
@@ -1018,8 +1021,8 @@ class PlayerStintForm(forms.ModelForm):
             if counted:
                 return  # 既に支配下として数えられている
 
-        domain_team = DjangoTeamRepository(_REAL).find_by_id(team.id)
-        league = DjangoLeagueRepository(_REAL).find_by_id(team.league_id)
+        domain_team = DjangoTeamRepository(_row_scope(team.league)).find_by_id(team.id)
+        league = DjangoLeagueRepository(_row_scope(team.league)).find_by_id(team.league_id)
         try:
             # 判定とメッセージはドメイン（Team）の出典を使う
             domain_team.ensure_room_for_registered(league.registered_player_limit)
@@ -1043,8 +1046,8 @@ class PlayerStintForm(forms.ModelForm):
         if already_here.exists():
             return  # 既にこのチームに在籍中（背番号の変更など）なら人数は増えない
 
-        domain_team = DjangoTeamRepository(_REAL).find_by_id(team.id)
-        league = DjangoLeagueRepository(_REAL).find_by_id(team.league_id)
+        domain_team = DjangoTeamRepository(_row_scope(team.league)).find_by_id(team.id)
+        league = DjangoLeagueRepository(_row_scope(team.league)).find_by_id(team.league_id)
         try:
             ensure_quota_not_exceeded(
                 domain_team.foreign_player_count + 1,
@@ -1398,8 +1401,8 @@ class PlayerForm(DomainCheckedForm):
         if stint is None:
             return  # まだどこにも在籍していない選手は検査不要
 
-        team = DjangoTeamRepository(_REAL).find_by_id(stint.team_id)
-        league = DjangoLeagueRepository(_REAL).find_by_id(stint.team.league_id)
+        team = DjangoTeamRepository(_row_scope(stint.team.league)).find_by_id(stint.team_id)
+        league = DjangoLeagueRepository(_row_scope(stint.team.league)).find_by_id(stint.team.league_id)
         player = team.find_player(self.instance.id)
         player.profile = replace(player.profile, is_foreign_player=True)
         team.ensure_foreign_player_quota(league.foreign_player_roster_limit)
@@ -1718,7 +1721,9 @@ class GameAdmin(RealDataOnlyMixin, admin.ModelAdmin):
     def save_model(self, request, obj, form, change):
         super().save_model(request, obj, form, change)
         # 観客数が本拠地の収容人数を超えていても保存は止めず、見直しを促す（警告の経路は保存 API と同じ）
-        for warning in build_recording_service(_REAL).attendance_warnings_for(obj.home_team_id, obj.attendance):
+        for warning in build_recording_service(_row_scope(obj.home_team.league)).attendance_warnings_for(
+            obj.home_team_id, obj.attendance
+        ):
             self.message_user(request, warning.message, level=messages.WARNING)
 
     def get_readonly_fields(self, request, obj=None):

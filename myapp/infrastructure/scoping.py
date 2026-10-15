@@ -1,19 +1,22 @@
-"""世界の範囲（`WorldScope`）で絞った QuerySet の出入口。
+"""範囲（`WorldScope`。ワークスペースと世界）で絞った QuerySet の出入口。
 
-**世界の出典は `League.world` の1か所だけ**で、球団・選手・試合はリーグをたどって
-世界が決まる。その「たどり方」をここに集める。リポジトリ・参照クエリ・管理画面・
+**範囲の出典はリーグの1か所だけ**で、実データのリーグは `League.workspace`、ペナントのリーグは
+`League.world` を持つ（どちらか片方だけ。`league_workspace_xor_world`）。球団・選手・試合は
+リーグをたどって範囲が決まる。その「たどり方」をここに集める。リポジトリ・参照クエリ・管理画面・
 データ投入コマンドは、テーブルを直接 `.objects` で引かず、ここを通す。
 絞り込みはすべて SQL 側で行う（取得後に Python で捨てると、捨てる分の組み立てが無駄になる）。
 
-選手は世界を持たない（世界ごとに選手の行が別）。在籍をたどって世界が決まり、
-在籍のない選手は実データとして扱う（登録途中の選手を実データの管理画面から隠さないため）。
+選手は範囲の列を持たない（世界ごとに選手の行が別）。在籍をたどって範囲が決まるので、
+在籍の無い選手はどの範囲にも出ない（管理画面だけが `admin_real_queryset` で拾う）。
+
+**全範囲を読む関数を作らない。** 例外は管理画面専用の `admin_real_queryset` だけ（決定 2026-10-07 Q4）。
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 
-from django.db.models import Exists, OuterRef, Q, QuerySet
+from django.db.models import Exists, Model, OuterRef, Q, QuerySet
 
 from ..domain.pennant.world import WorldScope
 from . import orm_models
@@ -24,10 +27,18 @@ def world_condition(path: str, scope: WorldScope) -> Q:
 
     `path` は対象のモデルから League までの関連名（Team なら "league"、
     Game なら "home_team__league"）。League 自身なら空文字。
+
+    - 実データ: そのワークスペースのリーグ（`workspace_id = X`）。ペナントのリーグは workspace を
+      持たないので、この条件だけで世界の行も外れる。
+    - ペナント: その世界のリーグ（`world_id = W`）。世界がワークスペースに属することは、
+      範囲を作る側（世界の台帳）が照合する。
+
+    どちらも League の列なので、結合の深さは変わらない。試合の区分のようなほかの条件は、
+    この `Q` と別の `Q` にして `&` で重ねる（範囲の条件に混ぜない）。
     """
     prefix = f"{path}__" if path else ""
     if scope.is_real:
-        return Q(**{f"{prefix}world__isnull": True})
+        return Q(**{f"{prefix}workspace_id": scope.workspace_id})
     return Q(**{f"{prefix}world_id": scope.world_id})
 
 
@@ -80,18 +91,15 @@ def ratings_in(scope: WorldScope) -> QuerySet[orm_models.PennantPlayerRatings]:
 
 
 def players_in(scope: WorldScope) -> QuerySet[orm_models.Player]:
-    """範囲に属する選手。ペナントの選手は、その世界の球団に在籍の行がある選手。
+    """範囲に属する選手。範囲のリーグの球団に在籍の行がある選手（肯定形の `Exists`）。
 
-    実データの側は「ペナントの球団に在籍した選手**ではない**」で絞る。複製した選手と
-    元の選手は同じ名前なので、名前だけで引くと2人ずつ出てしまう。
+    実データもペナントも同じ形。在籍の無い選手はどの範囲にも出ない（管理画面だけが
+    `admin_real_queryset` で拾う）。複製した選手と元の選手は同じ名前なので、名前ではなく在籍で引く。
     """
-    if scope.is_pennant:
-        in_world = orm_models.PlayerStint.objects.filter(player_id=OuterRef("pk")).filter(
-            world_condition("team__league", scope)
-        )
-        return orm_models.Player.objects.filter(Exists(in_world))
-    in_pennant = orm_models.PlayerStint.objects.filter(player_id=OuterRef("pk"), team__league__world__isnull=False)
-    return orm_models.Player.objects.filter(~Exists(in_pennant))
+    in_scope = orm_models.PlayerStint.objects.filter(player_id=OuterRef("pk")).filter(
+        world_condition("team__league", scope)
+    )
+    return orm_models.Player.objects.filter(Exists(in_scope))
 
 
 def club_plans_in(scope: WorldScope) -> QuerySet[orm_models.PennantClubPlan]:
@@ -114,3 +122,34 @@ def period_covering(year: int | None) -> Q:
 def release_plans_in(scope: WorldScope) -> QuerySet[orm_models.PennantReleasePlan]:
     """範囲の球団の戦力外の指名。編成と同じく、球団のリーグで世界が決まる。"""
     return orm_models.PennantReleasePlan.objects.filter(world_condition("team__league", scope))
+
+
+# 管理画面が全ワークスペースの実データを読むときの、モデルから League までの道
+_ADMIN_REAL_ROUTES: dict[type[Model], str] = {
+    orm_models.League: "",
+    orm_models.Team: "league",
+    orm_models.PlayerStint: "team__league",
+    orm_models.Game: "home_team__league",
+}
+
+
+def admin_real_queryset[M: Model](model: type[M]) -> QuerySet[M] | None:
+    """**`admin.py` 専用。** 全ワークスペースの実データの行（ペナントの世界の行は含まない）。
+
+    「リポジトリと参照クエリは範囲を必須で受け取り、全範囲を読む API を作らない」規則の
+    **唯一の例外**（決定 2026-10-07 Q4。管理画面は運営者が全ワークスペースを扱う）。
+    `admin.py` 以外から import しない（`tests/integration/test_wiring.py` が検査する）。
+
+    - リーグ・チーム・在籍・試合: リーグがワークスペースに属するもの（＝実データ）。
+    - 選手: ペナントの球団に在籍したことが無い選手（否定形）。**在籍の無い選手も含む**
+      （管理画面で登録途中の選手を隠さない。範囲で読む `players_in` には出ない）。
+    - それ以外のモデル（球場など、世界の行を持たないもの）: None。
+    """
+    if model is orm_models.Player:
+        in_pennant = orm_models.PlayerStint.objects.filter(player_id=OuterRef("pk"), team__league__world__isnull=False)
+        return model._default_manager.filter(~Exists(in_pennant))
+    path = _ADMIN_REAL_ROUTES.get(model)
+    if path is None:
+        return None
+    prefix = f"{path}__" if path else ""
+    return model._default_manager.filter(**{f"{prefix}workspace__isnull": False})

@@ -10,7 +10,15 @@ from myapp.domain.value_objects import (
 )
 from myapp.infrastructure import orm_models
 
-from ..helpers import give_batting, make_league, play_game
+from ..helpers import (
+    give_batting,
+    make_league,
+    make_pennant_world,
+    make_stadium,
+    make_workspace,
+    play_game,
+    real_scope,
+)
 from .base import BaseCase
 
 
@@ -486,3 +494,75 @@ class PlayerDeleteProtectedTest(BaseCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertFalse(orm_models.Player.objects.filter(pk=bystander.id).exists())
+
+
+class AdminReadsEveryWorkspaceTest(BaseCase):
+    """管理画面は全ワークスペースの実データを扱う（決定 2026-10-07 Q4。`admin_real_queryset`）。
+
+    在籍の無い選手も出す（範囲で読む `players_in` には出ないので、管理画面だけが拾う）。ペナントの行は出さない。
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.player_a = orm_models.Player.objects.create(name="Aの選手")
+        orm_models.PlayerStint.objects.create(player=cls.player_a, team=cls.team, number="1", from_year=2026)
+        other = make_workspace(name="別のワークスペース")
+        cls.league_b = make_league("Bのリーグ", workspace=other)
+        cls.stadium_b = make_stadium("Bの球場", workspace=other, capacity=20000)
+        cls.team_b = orm_models.Team.objects.create(league=cls.league_b, name="Bのチーム", home_stadium=cls.stadium_b)
+        cls.rival_b = orm_models.Team.objects.create(league=cls.league_b, name="Bの相手")
+        cls.player_b = orm_models.Player.objects.create(name="Bの選手")
+        orm_models.PlayerStint.objects.create(player=cls.player_b, team=cls.team_b, number="1", from_year=2026)
+        cls.unattached = orm_models.Player.objects.create(name="在籍の無い選手")
+        world = make_pennant_world("世界", seed=1, start_year=2026)
+        league_w = make_league("世界のリーグ", world=world)
+        team_w = orm_models.Team.objects.create(league=league_w, name="世界の球団")
+        player_w = orm_models.Player.objects.create(name="世界の選手")
+        orm_models.PlayerStint.objects.create(player=player_w, team=team_w, number="1", from_year=2026)
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(User.objects.create_superuser(username="root", password="x"))
+
+    def test_the_lists_show_the_real_data_of_every_workspace_and_no_world(self):
+        cases = {
+            "/admin/myapp/player/": (["Aの選手", "Bの選手", "在籍の無い選手"], "世界の選手"),
+            "/admin/myapp/team/": ([self.team.name, "Bのチーム"], "世界の球団"),
+            "/admin/myapp/league/": ([self.league.name, "Bのリーグ"], "世界のリーグ"),
+        }
+        for url, (shown, hidden) in cases.items():
+            with self.subTest(url=url):
+                response = self.client.get(url)
+                for name in shown:
+                    self.assertContains(response, name)
+                self.assertNotContains(response, hidden)
+
+    def test_the_games_of_every_workspace_are_listed(self):
+        game_b = play_game(self.team_b, self.rival_b, scope=real_scope(self.team_b.league.workspace))
+
+        response = self.client.get("/admin/myapp/game/")
+
+        self.assertContains(response, f"/admin/myapp/game/{game_b.id}/change/")
+
+    def test_the_attendance_warning_reads_the_workspace_of_the_game(self):
+        """観客数の警告は、試合のリーグのワークスペースの範囲で本拠地を引く（今の URL のワークスペースではない）。"""
+        game_b = play_game(self.team_b, self.rival_b, scope=real_scope(self.team_b.league.workspace))
+        data = {
+            "year": 2026,
+            "played_on": "2026-04-01",
+            "start_time": "",
+            "end_time": "",
+            "interruption_minutes": "",
+            "attendance": "25000",
+            "_save": "1",
+            **{
+                f"{prefix}-{key}": 0
+                for prefix in ("inning_scores", "batting_lines", "pitching_lines", "fielding_lines")
+                for key in ("TOTAL_FORMS", "INITIAL_FORMS")
+            },
+        }
+
+        response = self.client.post(f"/admin/myapp/game/{game_b.id}/change/", data, follow=True)
+
+        self.assertContains(response, "収容人数（20,000人）を超えています")

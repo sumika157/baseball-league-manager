@@ -34,7 +34,6 @@ from .base import BaseCase
 from .world_case import YEAR, WorldCase
 
 START = 2030
-REAL = real_scope()
 
 
 class ColumnsMatchTheDomainTest(SimpleTestCase):
@@ -115,7 +114,7 @@ class RatingsRepositoryTest(WorldCase):
 
     def test_the_real_scope_cannot_hold_ratings(self):
         with self.assertRaises(InvalidWorld):
-            DjangoRatingsRepository(REAL).add_all([PlayerRatings(self.real_batters[0], 2031, BatterRatings())])
+            DjangoRatingsRepository(real_scope()).add_all([PlayerRatings(self.real_batters[0], 2031, BatterRatings())])
 
     def test_another_world_cannot_see_the_ratings(self):
         other = build_pennant_world_service(real_scope()).create_world(
@@ -125,7 +124,7 @@ class RatingsRepositoryTest(WorldCase):
 
         self.assertEqual(other_repository.find_by_player(self.batter_id), [])
         self.assertTrue(all(item.player_id != self.batter_id for item in other_repository.find_by_year(YEAR)))
-        self.assertEqual(DjangoRatingsRepository(REAL).find_by_year(YEAR), [])
+        self.assertEqual(DjangoRatingsRepository(real_scope()).find_by_year(YEAR), [])
 
     def test_the_same_player_and_year_cannot_be_saved_twice(self):
         self.repository.add_all([PlayerRatings(self.batter_id, 2031, BatterRatings())])
@@ -335,13 +334,14 @@ class ForkedRatingsTest(BaseCase):
             )
 
         service = PennantWorldService(
-            real_leagues=DjangoLeagueRepository(REAL),
-            real_teams=DjangoTeamRepository(REAL),
-            real_fielding=DjangoFieldingTotalsQuery(REAL),
+            real_leagues=DjangoLeagueRepository(real_scope()),
+            real_teams=DjangoTeamRepository(real_scope()),
+            real_fielding=DjangoFieldingTotalsQuery(real_scope()),
             worlds=DjangoWorldRepository(),
             repositories_for=factory,
             atomic=transaction.atomic,
             ensure_schedule=lambda world_id: False,
+            workspace_id=real_scope().workspace_id,
         )
         worlds_before = orm_models.PennantWorld.objects.count()
 
@@ -491,19 +491,19 @@ class FieldingTotalsQueryTest(BaseCase):
             )
 
     def test_totals_are_summed_over_games(self):
-        totals = DjangoFieldingTotalsQuery(REAL).totals_for([self.shortstop.id, self.bench.id])
+        totals = DjangoFieldingTotalsQuery(real_scope()).totals_for([self.shortstop.id, self.bench.id])
 
         line = totals[self.shortstop.id]
         self.assertEqual((line.putouts, line.assists, line.errors), (3, 7, 1))
         self.assertEqual(line.total_chances, 11)
 
     def test_players_who_never_fielded_are_left_out(self):
-        totals = DjangoFieldingTotalsQuery(REAL).totals_for([self.shortstop.id, self.bench.id])
+        totals = DjangoFieldingTotalsQuery(real_scope()).totals_for([self.shortstop.id, self.bench.id])
 
         self.assertEqual(set(totals), {self.shortstop.id})
 
     def test_no_players_means_no_query_result(self):
-        self.assertEqual(DjangoFieldingTotalsQuery(REAL).totals_for([]), {})
+        self.assertEqual(DjangoFieldingTotalsQuery(real_scope()).totals_for([]), {})
 
     def test_another_scope_does_not_see_the_real_games(self):
         created = build_pennant_world_service(real_scope()).create_world(

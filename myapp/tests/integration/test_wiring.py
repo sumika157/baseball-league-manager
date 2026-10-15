@@ -12,6 +12,7 @@ application/queries.py）だけに依存し、実装は組み立ての1か所（
 import inspect
 from datetime import date
 from inspect import Parameter, signature
+from pathlib import Path
 
 from django.test import SimpleTestCase
 
@@ -96,9 +97,10 @@ from myapp.presentation.views import (
     build_team_analysis_service,
 )
 
-REAL = WorldScope.real()
-WORLD7 = WorldScope.pennant(7)
-WORLD8 = WorldScope.pennant(8)
+# 組み立てるときに DB を読まないので、ワークスペースの id はリテラルでよい（SimpleTestCase のまま通す）
+REAL = WorldScope.real(1)
+WORLD7 = WorldScope.pennant(1, 7)
+WORLD8 = WorldScope.pennant(1, 8)
 
 # 組み立て口の分類。views.build_* は、ちょうどどれか1つに入る（`test_every_builder_is_classified_once`）。
 # 実データでもペナントでも組み立てられる（範囲に応じて年の基準が変わる）
@@ -111,7 +113,7 @@ REAL_ONLY_BUILDERS = (
     build_player_search_query,
     build_pennant_world_service,
 )
-# 世界の台帳だけを読む。範囲を取らない（T3 で workspace_id を取る）
+# 世界の台帳だけを読む。範囲ではなくワークスペースの id を取る（世界ごとの範囲をそこで作る。台帳を絞るのは T3）
 LEDGER_BUILDERS = (build_pennant_world_view,)
 # ペナント専用。実データの範囲を渡すと InvalidWorld
 PENNANT_ONLY_BUILDERS = (
@@ -225,7 +227,7 @@ class BuildServiceTest(SimpleTestCase):
         self._assert_wired(build_pennant_history_service(WORLD7), PennantHistoryService)
 
     def test_pennant_world_view_dependencies_are_wired(self):
-        self._assert_wired(build_pennant_world_view(), PennantWorldViewService)
+        self._assert_wired(build_pennant_world_view(1), PennantWorldViewService)
 
     def test_club_service_dependencies_are_wired(self):
         self._assert_wired(build_club_service(WORLD7), ClubManagementService)
@@ -301,10 +303,10 @@ class WorldViewScopeTest(SimpleTestCase):
         self.assertIsNot(service._today, date.today)
         self.assertEqual(build_team_analysis_service(REAL)._today, date.today)
 
-    def test_the_header_view_takes_no_world_and_reads_each_worlds_standings_in_its_own_scope(self):
-        """見出しは世界の台帳から読み、自軍の順位だけ世界の範囲のサービスで読む。"""
-        view = build_pennant_world_view()
-        self.assertEqual(list(signature(build_pennant_world_view).parameters), [])
+    def test_the_header_view_takes_a_workspace_and_reads_each_worlds_standings_in_its_own_scope(self):
+        """見出しは世界の台帳から読み、自軍の順位だけ世界の範囲（渡されたワークスペースの世界）のサービスで読む。"""
+        view = build_pennant_world_view(1)
+        self.assertEqual(list(signature(build_pennant_world_view).parameters), ["workspace_id"])
         self.assertEqual(view._standings_for(7)._games._scope, WORLD7)
         self.assertEqual(view._standings_for(8)._games._scope, WORLD8)
         # 同率の決着に使う試合も、世界ごとの範囲で読む
@@ -362,6 +364,7 @@ class RealScopeTest(SimpleTestCase):
         self.assertEqual(service._real_leagues._scope, REAL)
         self.assertEqual(service._real_teams._scope, REAL)
         self.assertEqual(service._real_fielding._scope, REAL, "守備成績も分岐元（実データ）から読む")
+        self.assertEqual(service._workspace_id, REAL.workspace_id, "作る世界は分岐元の範囲のワークスペースに属す")
 
     def test_pennant_world_service_writes_to_the_given_world(self):
         """写し先のリポジトリは、渡された世界の範囲で組み立てられる。"""
@@ -372,7 +375,7 @@ class RealScopeTest(SimpleTestCase):
 
 
 class BuildersRequireScopeTest(SimpleTestCase):
-    """組み立て口は範囲（`scope`）を既定値なしで受け取る。台帳だけを読む見出しは範囲を取らない（W1b T3 で替える）。"""
+    """組み立て口は範囲（`scope`）を既定値なしで受け取る。台帳だけを読む見出しはワークスペースの id を受け取る。"""
 
     @staticmethod
     def _found_builders():
@@ -405,9 +408,11 @@ class BuildersRequireScopeTest(SimpleTestCase):
                 self.assertEqual(list(parameters), ["scope"])
                 self.assertIs(parameters["scope"].default, Parameter.empty, "範囲に既定値があります")
 
-    def test_the_ledger_only_view_takes_no_scope(self):
+    def test_the_ledger_only_view_takes_a_required_workspace(self):
         for build in LEDGER_BUILDERS:
-            self.assertEqual(list(signature(build).parameters), [])
+            parameters = signature(build).parameters
+            self.assertEqual(list(parameters), ["workspace_id"])
+            self.assertIs(parameters["workspace_id"].default, Parameter.empty, "ワークスペースに既定値があります")
 
     def test_the_world_scope_builders_were_folded_into_the_scope_taking_ones(self):
         self.assertFalse(hasattr(views, "build_world_view_service"))
@@ -568,3 +573,25 @@ class OffseasonViewScopeTest(SimpleTestCase):
     def test_the_real_data_has_no_offseason(self):
         with self.assertRaises(InvalidWorld):
             build_offseason_view_service(REAL)
+
+
+class AdminOnlyScopeExceptionTest(SimpleTestCase):
+    """全ワークスペースの実データを読む `admin_real_queryset` は、`admin.py` だけが使う（決定 2026-10-07 Q4）。
+
+    「全範囲を読む API を作らない」規則の唯一の例外なので、ほかの場所（画面・リポジトリ・管理コマンド）に
+    広がると、ワークスペースをまたいで行が漏れる。`myapp/` の .py を走査し、名前を出すのが定義と管理画面だけか
+    （テストは除く）を確かめる。
+    """
+
+    NAME = "admin_real_queryset"
+    ALLOWED = {Path("myapp/admin.py"), Path("myapp/infrastructure/scoping.py")}
+
+    def test_only_the_admin_uses_the_all_workspaces_queryset(self):
+        root = Path(__file__).resolve().parents[3]
+        users = {
+            path.relative_to(root)
+            for path in (root / "myapp").rglob("*.py")
+            if "tests" not in path.relative_to(root).parts and self.NAME in path.read_text(encoding="utf-8")
+        }
+        self.assertIn(Path("myapp/admin.py"), users, "検査の対象を拾えていません")
+        self.assertEqual(users - self.ALLOWED, set(), "admin.py 以外が管理画面専用の関数を使っています")

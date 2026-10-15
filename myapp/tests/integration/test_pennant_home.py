@@ -23,7 +23,7 @@ from myapp.domain.pennant.season import SCREEN_ADVANCE_TARGETS, SeasonPhase, sum
 from myapp.infrastructure import orm_models
 from myapp.presentation.views import build_pennant_season_service, build_service
 
-from ..helpers import world_scope
+from ..helpers import real_scope, world_scope
 from .test_pennant_advance import SEASON_GAMES, YEAR, SeasonCase
 
 # 1シーズンを終えた世界のシード（同率で終わらないもの）
@@ -539,7 +539,7 @@ class SummaryTest(HomeCase):
     def _home(self, *, since):
         from myapp.presentation.views import build_pennant_home_service, build_pennant_world_view
 
-        context = build_pennant_world_view().get_context(self.world_a)
+        context = build_pennant_world_view(real_scope().workspace_id).get_context(self.world_a)
         return build_pennant_home_service(world_scope(self.world_a)).get_home(
             context, since=since, include_advance=False
         )

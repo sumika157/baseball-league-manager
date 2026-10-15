@@ -12,7 +12,7 @@ from typing import Any
 from django.core.management.base import BaseCommand, CommandError
 
 from myapp.domain.exceptions import DomainError
-from myapp.domain.pennant.world import WorldScope
+from myapp.management.workspaces import legacy_real_scope
 from myapp.presentation.views import build_pennant_world_service
 
 
@@ -24,7 +24,7 @@ class Command(BaseCommand):
 
     def handle(self, *args: Any, **options: Any) -> None:
         try:
-            build_pennant_world_service(WorldScope.real()).delete_world(options["world"])
+            build_pennant_world_service(legacy_real_scope()).delete_world(options["world"])
         except DomainError as error:
             raise CommandError(str(error)) from error
         self.stdout.write(self.style.SUCCESS(f"世界 {options['world']} を消しました"))

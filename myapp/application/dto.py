@@ -700,7 +700,11 @@ class StandingRow:
 
 @dataclass(frozen=True)
 class PlayerSearchRow:
-    """選手検索の1行。所属が分からなくても名前でたどり着けるようにする。"""
+    """選手検索の1行。所属が分からなくても名前でたどり着けるようにする。
+
+    検索は範囲の選手（範囲のリーグの球団に在籍の行がある選手）だけを引く。在籍の無い選手はサイトには出ない
+    （管理画面だけに出る。`infrastructure/scoping.py` の `players_in`）。退団した選手は在籍の行があるので出る。
+    """
 
     id: int
     name: str

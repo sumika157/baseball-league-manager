@@ -66,6 +66,10 @@ class TemplateRenderTest(TestCase):
     def setUp(self):
         from django.contrib.auth.models import User
 
+        from ..helpers import default_workspace
+
+        # 今の URL はワークスペースを1つ解決する（無ければ 404）
+        default_workspace()
         self.client.force_login(User.objects.create_superuser(username="root", password="x"))
 
     def test_pages_do_not_leak_comment_text(self):
