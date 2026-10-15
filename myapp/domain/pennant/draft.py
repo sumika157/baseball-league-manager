@@ -2,7 +2,7 @@
 
 人数は、引退・退団の後の**支配下**の人数から、開幕前の支配下が帯（`roster.OPENING_REGISTERED_BAND`。62〜66人）に
 入るように決める（育成は数えない。`draftee_count`）。登録位置は支配下の構成と目標の構成との差の大きい位置から埋め、
-外国人は登録枠の内側で目標（4人）まで補う（戦力外で外した外国人の入れ替え。#168）。新人の質は球団の順位によらず同じ。
+外国人はリーグの1軍の外国人枠の計の内側で目標（4人）まで補う（戦力外で外した外国人の入れ替え。#168）。新人の質は球団の順位によらず同じ。
 新人は支配下で入り、入団の経路は日本人が「ドラフト」、外国人が「新外国人」（`Draftee.acquisition_route`）。
 能力は水準の錨の**前**の値（`offseason.py` が残る選手とまとめて錨をかける）。
 名前とプロフィールの生成は `virtual_players/generator.py`（実データへの投入と同じ関数）。
@@ -18,7 +18,7 @@ from enum import Enum
 from ..simulation.estimate import draw_growth_type, with_growth
 from ..simulation.randomness import GameRandom
 from ..simulation.ratings import AVERAGE_RATING, BatterRatings, PitcherRatings
-from ..value_objects import AcquisitionRoute, Position, Profile
+from ..value_objects import AcquisitionRoute, ForeignPlayerRules, Position, Profile
 from ..virtual_players import generator
 from ..virtual_players.generator import AmateurPath
 from .initial_ratings import SEASON_START_MONTH, STRENGTH_UNIT
@@ -38,9 +38,12 @@ MIN_BY_POSITION = {
     Position.INFIELDER: 6,
     Position.OUTFIELDER: 5,
 }
-# 外国人の目標（リーグの登録枠が小さければ枠まで）。1回のドラフトで目標まで足す（#168 で年2人の上限をやめた。
-# 外す外国人は戦力外が新しく迎える外国人の見込みと比べて決めるので、外した人数を同じオフに埋める）
-FOREIGN_TARGET = 4
+# 外国人の目標（リーグの1軍の外国人枠の計が小さければそこまで）。1回のドラフトで目標まで足す
+# （#168 で年2人の上限をやめた。外す外国人は戦力外が新しく迎える外国人の見込みと比べて決めるので、
+# 外した人数を同じオフに埋める）
+# 値は協約の1軍の外国人枠の計（`ForeignPlayerRules.NPB.active`。1軍に置ける人数を保有の目安にする。#204）
+# `or 0` は型のため（`active` は `int | None`。NPB の値は4で None にならない）
+FOREIGN_TARGET = ForeignPlayerRules.NPB.active or 0
 
 # 新人の能力の平均は経路ごと（`DraftRoute.rating_mean`）。標準偏差とスタミナの分布は `prospects.py`
 # （世界の作成で成績の無い選手＝2軍の層と同じ引き方）
@@ -105,9 +108,9 @@ class DraftTeam:
     team_id: int
     # 今の区分が支配下の選手の、位置ごとの人数（育成は数えない。試合に出られず、指名数と位置の補充に効かせない）
     position_counts: Mapping[Position, int]
-    # 外国人の人数。集約の外国人枠の検査（`Team.foreign_player_count`）と同じく、育成も数える
+    # 外国人の人数（育成も数える。目標 `foreign_target` は保有の目安）
     foreign_count: int
-    # リーグの外国人の登録枠。None は無制限
+    # リーグの外国人の1軍登録の枠の計（`ForeignPlayerRules.active`）。None は無制限。目標人数の上限に使う
     foreign_limit: int | None
     # 引退の後の現在の在籍が使っている背番号
     used_numbers: frozenset[str]
@@ -174,15 +177,17 @@ def draftee_count(registered: int, *, registered_limit: int | None, expected_oth
 
 
 def foreign_target(foreign_limit: int | None) -> int:
-    """球団の外国人の目標人数。リーグの登録枠（None は無制限）が小さければ枠まで。
+    """球団の外国人の目標人数。`foreign_limit` はリーグの外国人の1軍登録の枠の計（None は無制限）で、
+    小さければそこまで。
 
-    ドラフトが外国人を足す数の出典。
+    ドラフトが外国人を足す数の出典。協約（第82条の2）は保有の人数を縛らないので、これは AI の編成の目安で、
+    1軍に置ける外国人の数（NPB は4人）を保有の目標にしている（1軍に置けない外国人を抱えない）。
     """
     return FOREIGN_TARGET if foreign_limit is None else min(FOREIGN_TARGET, foreign_limit)
 
 
 def foreign_count_to_add(team: DraftTeam, draftees: int) -> int:
-    """外国人にする新人の数。登録枠に達している球団には足さない。"""
+    """外国人にする新人の数。目標（`foreign_target`）に達している球団には足さない。"""
     return max(0, min(foreign_target(team.foreign_limit) - team.foreign_count, draftees))
 
 

@@ -24,7 +24,15 @@ from myapp.domain.pennant.retirement import MAX_PLAYING_AGE, ROOKIE_FACTOR, Play
 from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND
 from myapp.domain.simulation.randomness import game_uniform
 from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings
-from myapp.domain.value_objects import AcquisitionRoute, ContractStatus, JerseyNumber, Position, Profile, RosterLimits
+from myapp.domain.value_objects import (
+    AcquisitionRoute,
+    ContractStatus,
+    ForeignPlayerRules,
+    JerseyNumber,
+    Position,
+    Profile,
+    RosterLimits,
+)
 
 YEAR = 2027
 START_YEAR = 2026
@@ -54,7 +62,10 @@ def player(
 
 def club(*players: OffseasonPlayer, team_id: int = 1, registered_limit: int | None = 70) -> OffseasonClub:
     return OffseasonClub(
-        team_id=team_id, foreign_roster_limit=4, registered_player_limit=registered_limit, players=players
+        team_id=team_id,
+        foreign_rules=ForeignPlayerRules.NPB,
+        registered_player_limit=registered_limit,
+        players=players,
     )
 
 

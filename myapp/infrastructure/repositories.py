@@ -63,6 +63,7 @@ from ..domain.value_objects import (
     ErrorKind,
     FieldingLine,
     FieldingPosition,
+    ForeignPlayerRules,
     FreeAgencyKind,
     GameTimes,
     Handedness,
@@ -1283,6 +1284,21 @@ def game_pitching_of(row: orm_models.GamePitchingLine) -> GamePitching:
     )
 
 
+# リーグの外国人枠の3列（計・投手・野手）。`ForeignPlayerRules` との変換は下の2つの関数だけが行う
+# （リポジトリと参照クエリが同じ変換を使う）
+FOREIGN_RULE_FIELDS = ("foreign_active_limit", "foreign_active_pitcher_limit", "foreign_active_batter_limit")
+
+
+def foreign_rules_from(active: int | None, pitchers: int | None, batters: int | None) -> ForeignPlayerRules:
+    """リーグの3列（`FOREIGN_RULE_FIELDS` の順）から外国人枠を作る。"""
+    return ForeignPlayerRules(active=active, pitchers=pitchers, batters=batters)
+
+
+def foreign_rule_values(rules: ForeignPlayerRules) -> dict[str, int | None]:
+    """外国人枠を、リーグの3列の値にする。"""
+    return dict(zip(FOREIGN_RULE_FIELDS, (rules.active, rules.pitchers, rules.batters), strict=True))
+
+
 class DjangoLeagueRepository:
     """LeagueRepository の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る。"""
 
@@ -1311,8 +1327,7 @@ class DjangoLeagueRepository:
                 "name": league.name,
                 "world_id": self._scope.world_id,
                 "display_order": league.display_order,
-                "foreign_player_roster_limit": league.foreign_player_roster_limit,
-                "foreign_player_game_limit": league.foreign_player_game_limit,
+                **foreign_rule_values(league.foreign_rules),
                 "registered_player_limit": league.registered_player_limit,
             },
         )
@@ -1324,8 +1339,9 @@ class DjangoLeagueRepository:
         return League(
             id=row.id,
             name=row.name,
-            foreign_player_roster_limit=row.foreign_player_roster_limit,
-            foreign_player_game_limit=row.foreign_player_game_limit,
+            foreign_rules=foreign_rules_from(
+                row.foreign_active_limit, row.foreign_active_pitcher_limit, row.foreign_active_batter_limit
+            ),
             display_order=row.display_order,
             registered_player_limit=row.registered_player_limit,
         )

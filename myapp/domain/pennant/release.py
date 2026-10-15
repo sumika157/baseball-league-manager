@@ -34,7 +34,7 @@ from statistics import fmean
 
 from ..exceptions import InvalidReleasePlan
 from ..simulation.manager import LINEUP_SIZE
-from ..value_objects import Position
+from ..value_objects import ForeignPlayerRules, Position
 from .club_plan import ClubMember, lineup_capacity, playable_shortfall
 from .draft import FOREIGN_AGE_RANGE, MIN_BY_POSITION, USUAL_DRAFTEES, DraftRoute, expected_rookie_ratings
 from .offseason_player import OffseasonClub, OffseasonPlayer, TrackRecord, player_age, retirement_value
@@ -224,15 +224,15 @@ class ReleasePlan:
 
 
 def ensure_releasable(
-    player_ids: Sequence[int], registered: Sequence[ClubMember], *, foreign_game_limit: int | None
+    player_ids: Sequence[int], registered: Sequence[ClubMember], *, foreign_rules: ForeignPlayerRules
 ) -> None:
     """戦力外の指名として成立するか。成立しなければ `InvalidReleasePlan`。
 
     - `registered`: 球団の、いま在籍している支配下の選手（育成は外せない。#170・#174）
-    - `foreign_game_limit`: 世界のリーグで最も厳しい出場枠（`strictest_game_limit`）
+    - `foreign_rules`: 世界のリーグで最も厳しい外国人枠（`ForeignPlayerRules.strictest`）
 
     指名できるのは支配下の在籍選手だけで、重複しない。外した後に、位置の最低人数（`draft.MIN_BY_POSITION`）を割らず、
-    残る支配下で試合を組めること（`playable_shortfall`・外国人の出場枠の中でスタメン9人）。
+    残る支配下で試合を組めること（`playable_shortfall`・外国人枠の中でスタメン9人）。
     主力・入団1年目も GM は外せる（AI が外さないのは自動の規則で、GM の判断は縛らない）。帯は見ない。
     """
     if len(set(player_ids)) != len(player_ids):
@@ -255,9 +255,9 @@ def ensure_releasable(
     shortfall = playable_shortfall((member.position for member in remaining), subject="残る支配下")
     if shortfall is not None:
         raise InvalidReleasePlan(shortfall)
-    if foreign_game_limit is not None and lineup_capacity(remaining, foreign_game_limit) < LINEUP_SIZE:
+    if lineup_capacity(remaining, foreign_rules) < LINEUP_SIZE:
         raise InvalidReleasePlan(
-            f"外国人選手の出場は1試合{foreign_game_limit}人までなので、残る支配下ではスタメン{LINEUP_SIZE}人を組めません。"
+            f"外国人選手の枠（{foreign_rules.label}）の中では、残る支配下でスタメン{LINEUP_SIZE}人を組めません。"
             "外国人でない野手を残してください。"
         )
 

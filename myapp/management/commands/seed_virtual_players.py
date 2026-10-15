@@ -7,7 +7,7 @@
 
 一部（約12%）は「助っ人」として nationality / is_foreign_player を設定する
 （既存データは 0024_backfill_foreign_players_from_birthplace で移行済み）。助っ人は支配下だけにする
-（外国人登録枠は育成も数えるので、枠は支配下の助っ人に回す）。
+（1球団の外国人の上限 `generator.FOREIGN_PLAYERS_PER_TEAM_MAX` は育成も数えるので、上限は支配下の助っ人に回す）。
 
 背番号は支配下が 00・0〜99、育成が3桁（100番台から）。入団の経路は作った経路そのもの
 （日本人の支配下はドラフト、助っ人は新外国人、育成は育成ドラフト）を入れる。
@@ -26,7 +26,7 @@ from datetime import date
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from myapp.domain.exceptions import DomainError, ForeignPlayerQuotaExceeded, RegisteredPlayerLimitExceeded
+from myapp.domain.exceptions import DomainError, RegisteredPlayerLimitExceeded
 from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND
 from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import (
@@ -164,9 +164,8 @@ class Command(BaseCommand):
         active_stints = list(PlayerStint.objects.filter(team=team, to_year__isnull=True).select_related("player"))
         tally = _TeamTally(team.name)
         used_numbers = {s.number for s in active_stints}
-        # 外国人選手の登録枠（リーグが持つ。None は無制限。育成も数える）。ORM に直接書くため
-        # Team 集約の ensure_foreign_player_quota を通らないので、ここで同じ検査をする
-        foreign_limit = team.league.foreign_player_roster_limit
+        # 外国人の人数（育成も数える）。協約は保有の人数を縛らないので、上限は生成の目安
+        # （`generator.FOREIGN_PLAYERS_PER_TEAM_MAX`。リーグの外国人枠は1軍の登録にかかる）
         foreign_on_team = sum(1 for s in active_stints if s.player.is_foreign_player)
         existing_by_position: dict[ContractStatus, Counter[Position]] = defaultdict(Counter)
         for s in active_stints:
@@ -174,22 +173,18 @@ class Command(BaseCommand):
             tally.existing[contract] += 1
             existing_by_position[contract][Position.from_label(s.player.position)] += 1
 
-        # 既に枠・上限を超えている球団は、このコマンドでは直さない（追加専用で、減らすのは別の責務）。
-        # 黙って素通りせず、足さない理由を出す（支配下の目標は上限まで・助っ人は枠の内側なので、足すことは無い）
+        # 既に上限を超えている球団は、このコマンドでは直さない（追加専用で、減らすのは別の責務）。
+        # 黙って素通りせず、足さない理由を出す（支配下の目標は上限までなので、足すことは無い）
         registered_limit = team.league.registered_player_limit
-        before = {
-            "支配下": (tally.existing[ContractStatus.REGISTERED], registered_limit),
-            "外国人": (foreign_on_team, foreign_limit),
-        }
-        already_over = {label: limit is not None and count > limit for label, (count, limit) in before.items()}
-        for label, (count, limit) in before.items():
-            if already_over[label]:
-                self.stdout.write(
-                    self.style.WARNING(
-                        f"{team.name}: {label}が既に上限（{limit}人）を超えています（{count}人）。"
-                        f"{label}の選手は足しません（このコマンドは追加専用で、減らしません）。"
-                    )
+        registered_before = tally.existing[ContractStatus.REGISTERED]
+        already_over = registered_limit is not None and registered_before > registered_limit
+        if already_over:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"{team.name}: 支配下が既に上限（{registered_limit}人）を超えています（{registered_before}人）。"
+                    "支配下の選手は足しません（このコマンドは追加専用で、減らしません）。"
                 )
+            )
 
         targets = {
             ContractStatus.REGISTERED: self._registered_target(rng, registered_limit),
@@ -214,11 +209,11 @@ class Command(BaseCommand):
                     )
                 number = numbers[contract].pop()
                 used_numbers.add(number)
-                # 助っ人は支配下だけ。枠が埋まっていれば日本人選手にする
+                # 助っ人は支配下だけ。生成の上限に達していれば日本人選手にする
                 is_foreign = (
                     contract is ContractStatus.REGISTERED
                     and rng.random() < generator.FOREIGN_PLAYER_RATIO
-                    and (foreign_limit is None or foreign_on_team < foreign_limit)
+                    and foreign_on_team < generator.FOREIGN_PLAYERS_PER_TEAM_MAX
                 )
                 if is_foreign:
                     foreign_on_team += 1
@@ -241,22 +236,17 @@ class Command(BaseCommand):
                 stint.save()
                 new_players.append((player, surname_romaji, given_romaji))
 
-        # ORM に直接書いたので、集約と同じ規則（`ensure_quota_not_exceeded`）で投入後の人数を確かめる。
-        # 投入前から超えていた区分は上で理由を出したので、ここでは見ない
-        registered_after = tally.existing[ContractStatus.REGISTERED] + tally.added[ContractStatus.REGISTERED]
-        checks = [
-            (registered_after, registered_limit, "支配下", RegisteredPlayerLimitExceeded),
-            (foreign_on_team, foreign_limit, "外国人", ForeignPlayerQuotaExceeded),
-        ]
-        for count, limit, label, error in checks:
-            if already_over[label]:
-                continue
+        # ORM に直接書いたので、集約と同じ規則（`ensure_quota_not_exceeded`）で投入後の支配下の人数を確かめる。
+        # 投入前から超えていた球団は上で理由を出したので、ここでは見ない
+        registered_after = registered_before + tally.added[ContractStatus.REGISTERED]
+        if not already_over:
             try:
                 ensure_quota_not_exceeded(
-                    count,
-                    limit,
-                    f"{team.name}: 投入後の{label}選手（{count}人）が上限（{limit}人）を超えます。",
-                    error,
+                    registered_after,
+                    registered_limit,
+                    f"{team.name}: 投入後の支配下選手（{registered_after}人）が"
+                    f"上限（{registered_limit}人）を超えます。",
+                    RegisteredPlayerLimitExceeded,
                 )
             except DomainError as exc:
                 raise CommandError(str(exc)) from exc

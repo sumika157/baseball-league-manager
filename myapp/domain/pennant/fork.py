@@ -47,8 +47,7 @@ def fork_league(source: League, *, display_order: int) -> League:
     """リーグを写す。id は付けない（保存するときに世界の中で採番される）。"""
     return League(
         name=source.name,
-        foreign_player_roster_limit=source.foreign_player_roster_limit,
-        foreign_player_game_limit=source.foreign_player_game_limit,
+        foreign_rules=source.foreign_rules,
         registered_player_limit=source.registered_player_limit,
         display_order=display_order,
     )

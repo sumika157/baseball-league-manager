@@ -112,14 +112,20 @@ class ForkTest(BaseCase):
 
     def test_the_league_rules_are_copied(self):
         orm_models.League.objects.filter(id=self.league.id).update(
-            foreign_player_roster_limit=4, foreign_player_game_limit=2, display_order=3
+            foreign_active_limit=3, foreign_active_pitcher_limit=2, foreign_active_batter_limit=None, display_order=3
         )
 
         world = self._fork(name="規則")
         copy = orm_models.League.objects.get(world_id=world.world.id)
 
         self.assertEqual(
-            (copy.foreign_player_roster_limit, copy.foreign_player_game_limit, copy.display_order), (4, 2, 0)
+            (
+                copy.foreign_active_limit,
+                copy.foreign_active_pitcher_limit,
+                copy.foreign_active_batter_limit,
+                copy.display_order,
+            ),
+            (3, 2, None, 0),
         )
 
     def test_the_stadium_is_shared(self):

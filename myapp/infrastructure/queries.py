@@ -74,8 +74,10 @@ from ..domain.value_objects import (
 )
 from . import orm_models
 from .repositories import (
+    FOREIGN_RULE_FIELDS,
     DjangoRatingsRepository,
     batting_totals,
+    foreign_rules_from,
     game_batting_of,
     game_counts,
     game_pitching_of,
@@ -266,18 +268,16 @@ class DjangoSimulationContextQuery:
             SimulationTeam(
                 team_id=team_id,
                 name=name,
-                foreign_roster_limit=roster_limit,
-                foreign_game_limit=game_limit,
+                foreign_rules=foreign_rules_from(active, pitchers, batters),
                 players=tuple(players.get(team_id, ())),
                 stadium_capacity=capacity,
             )
-            for team_id, name, roster_limit, game_limit, capacity in teams_in(self._scope)
+            for team_id, name, active, pitchers, batters, capacity in teams_in(self._scope)
             .order_by("id")
             .values_list(
                 "id",
                 "name",
-                "league__foreign_player_roster_limit",
-                "league__foreign_player_game_limit",
+                *(f"league__{field}" for field in FOREIGN_RULE_FIELDS),
                 "home_stadium__capacity",
             )
         )

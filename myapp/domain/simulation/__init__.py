@@ -7,7 +7,7 @@
 | `odds` | 能力 → 個人の率 → odds ratio 法による対戦の確率 |
 | `baserunning` | 打席の結果と走者の走力から進塁（`RunnerAdvance`）を組み立てる |
 | `fielding` | 打球の処理経路（`fielded_by`）と失策を犯す守備者 |
-| `manager` | AI 監督（1軍登録・スタメン・ローテーション・継投・代打・外国人の出場枠） |
+| `manager` | AI 監督（1軍登録・スタメン・ローテーション・継投・代打・試合の外国人枠） |
 | `fatigue` | 投手の疲労（直近の登板の記録 `PitchingHistory`・疲労点・能力の目減り）。保存しない |
 | `engine` | 1試合を打席単位で進め、`assemble_game()` で `Game` を組み立てる |
 | `levels` | リーグの水準・タイトル争いの水準・投手の起用と疲労を数える |

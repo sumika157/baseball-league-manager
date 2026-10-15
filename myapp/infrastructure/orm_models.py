@@ -20,6 +20,7 @@ from ..domain.value_objects import (
     DepartureRoute,
     ErrorKind,
     FieldingPosition,
+    ForeignPlayerRules,
     FreeAgencyKind,
     Handedness,
     PlateAppearanceResult,
@@ -101,19 +102,39 @@ class League(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="登録日時")
     # 管理画面でドラッグして並べ替えた結果がここに入る
     display_order = models.PositiveIntegerField(default=0, verbose_name="表示順")
-    foreign_player_roster_limit = models.PositiveIntegerField(
+    # 外国人選手の1軍登録の枠（野球協約 第82条の2）。既定は ForeignPlayerRules.NPB が出典。
+    # ForeignPlayerRules との変換は repositories.foreign_rules_from / foreign_rule_values だけが行う
+    foreign_active_limit = models.PositiveIntegerField(
         null=True,
         blank=True,
-        default=5,
-        verbose_name="外国人選手登録枠",
-        help_text="登録できる外国人選手の上限人数。空欄なら無制限。",
+        default=ForeignPlayerRules.NPB.active,
+        verbose_name="外国人選手の1軍登録枠",
+        help_text=(
+            "1軍（出場選手登録）に置ける外国人選手の上限人数"
+            f"（野球協約 第82条の2 は{ForeignPlayerRules.NPB.active}人）。"
+            "空欄なら無制限。"
+            "保有（育成を含む在籍）の人数は縛りません。実データの試合では、出場した外国人選手に当てて検査します。"
+        ),
     )
-    foreign_player_game_limit = models.PositiveIntegerField(
+    foreign_active_pitcher_limit = models.PositiveIntegerField(
         null=True,
         blank=True,
-        default=3,
-        verbose_name="外国人選手出場枠",
-        help_text="1試合に出場できる外国人選手の上限人数。空欄なら無制限。",
+        default=ForeignPlayerRules.NPB.pitchers,
+        verbose_name="外国人選手の1軍登録枠（うち投手）",
+        help_text=(
+            "1軍に置ける外国人選手のうち、登録位置が投手の選手の上限人数"
+            f"（協約は{ForeignPlayerRules.NPB.pitchers}人）。空欄なら無制限。"
+        ),
+    )
+    foreign_active_batter_limit = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        default=ForeignPlayerRules.NPB.batters,
+        verbose_name="外国人選手の1軍登録枠（うち野手）",
+        help_text=(
+            "1軍に置ける外国人選手のうち、登録位置が投手でない選手の上限人数"
+            f"（協約は{ForeignPlayerRules.NPB.batters}人）。空欄なら無制限。"
+        ),
     )
     registered_player_limit = models.PositiveIntegerField(
         null=True,
@@ -243,7 +264,10 @@ class Player(models.Model):
     is_foreign_player = models.BooleanField(
         default=False,
         verbose_name="外国人選手",
-        help_text="外国人枠の対象として数える選手かどうか。",
+        help_text=(
+            "外国人枠の対象として数える選手かどうか。日本国籍を持たない選手のうち、"
+            "野球協約 第82条 (1)〜(3)・(5)（日本の学校・居住・社会人の年数など）に当たらない選手に付けます。"
+        ),
     )
 
     class Meta:

@@ -1,71 +1,106 @@
-"""外国人枠（登録上限）の単体テスト。Django も DB も使わない。"""
+"""外国人枠（野球協約 第82条の2。1軍登録は計4人・うち投手3人・野手3人）の単体テスト。Django も DB も使わない。"""
 
-from dataclasses import replace
 from unittest import TestCase
 
-from myapp.domain.entities import Team
-from myapp.domain.exceptions import ForeignPlayerQuotaExceeded
-from myapp.domain.value_objects import JerseyNumber, Position, RosterLimits, ensure_quota_not_exceeded
+from myapp.domain.entities import League
+from myapp.domain.exceptions import DomainError, ForeignPlayerQuotaExceeded, RegisteredPlayerLimitExceeded
+from myapp.domain.value_objects import ForeignPlayerRules, Position, ensure_quota_not_exceeded
 
-
-def _make_foreign(player):
-    player.profile = replace(player.profile, is_foreign_player=True)
-    return player
+NPB = ForeignPlayerRules.NPB
 
 
 class EnsureQuotaNotExceededTest(TestCase):
+    """支配下の上限が使う、上限1つの判定。"""
+
     def test_allows_none_limit(self):
-        ensure_quota_not_exceeded(1000, None, "エラー")  # 例外にならない
+        ensure_quota_not_exceeded(1000, None, "エラー", RegisteredPlayerLimitExceeded)  # 例外にならない
 
     def test_allows_exactly_at_the_limit(self):
-        ensure_quota_not_exceeded(3, 3, "エラー")  # 例外にならない
+        ensure_quota_not_exceeded(3, 3, "エラー", RegisteredPlayerLimitExceeded)  # 例外にならない
 
-    def test_raises_when_count_exceeds_limit(self):
-        with self.assertRaises(ForeignPlayerQuotaExceeded):
-            ensure_quota_not_exceeded(4, 3, "エラー")
+    def test_raises_the_given_error_when_count_exceeds_limit(self):
+        with self.assertRaises(RegisteredPlayerLimitExceeded):
+            ensure_quota_not_exceeded(4, 3, "エラー", RegisteredPlayerLimitExceeded)
 
 
-class TeamForeignPlayerQuotaTest(TestCase):
-    def setUp(self):
-        self.team = Team(name="テストチーム", id=1, league_id=1)
+class ForeignPlayerRulesTest(TestCase):
+    def test_the_npb_rules_follow_the_agreement(self):
+        self.assertEqual((NPB.active, NPB.pitchers, NPB.batters), (4, 3, 3))
+        self.assertEqual(NPB.label, "計4人・投手3人・野手3人")
 
-    def _add_foreign(self, name, number, from_year=2026):
-        player = self.team.add_player(
-            name, JerseyNumber(number), Position.INFIELDER, from_year=from_year, limits=RosterLimits.UNLIMITED
+    def test_a_league_follows_the_agreement_by_default(self):
+        self.assertEqual(League(name="L").foreign_rules, NPB)
+
+    def test_four_foreigners_split_two_and_two_or_three_and_one_are_within(self):
+        for pitchers, batters in ((2, 2), (3, 1), (1, 3), (0, 3), (3, 0)):
+            with self.subTest(pitchers=pitchers, batters=batters):
+                NPB.ensure_within(pitchers=pitchers, batters=batters, subject="1軍登録")  # 例外にならない
+                self.assertIsNone(NPB.violation(pitchers=pitchers, batters=batters))
+
+    def test_the_fifth_foreigner_is_refused(self):
+        with self.assertRaises(ForeignPlayerQuotaExceeded) as caught:
+            NPB.ensure_within(pitchers=2, batters=3, subject="1軍登録")
+        self.assertEqual(str(caught.exception), "1軍登録の外国人選手は計4人までです（5人）。")
+
+    def test_the_fourth_pitcher_is_refused(self):
+        with self.assertRaises(ForeignPlayerQuotaExceeded) as caught:
+            NPB.ensure_within(pitchers=4, batters=0, subject="1軍登録")
+        self.assertEqual(str(caught.exception), "1軍登録の外国人選手は投手3人までです（4人）。")
+
+    def test_the_fourth_batter_is_refused(self):
+        with self.assertRaises(ForeignPlayerQuotaExceeded) as caught:
+            NPB.ensure_within(pitchers=0, batters=4, subject="オーダー")
+        self.assertEqual(str(caught.exception), "オーダーの外国人選手は野手3人までです（4人）。")
+
+    def test_none_is_unlimited(self):
+        ForeignPlayerRules.UNLIMITED.ensure_within(pitchers=20, batters=20, subject="1軍登録")  # 例外にならない
+        self.assertEqual(ForeignPlayerRules.UNLIMITED.label, "無制限")
+        only_total = ForeignPlayerRules(active=4, pitchers=None, batters=None)
+        only_total.ensure_within(pitchers=4, batters=0, subject="1軍登録")  # 例外にならない
+        self.assertEqual(only_total.label, "計4人")
+
+    def test_a_negative_limit_is_refused(self):
+        with self.assertRaises(DomainError):
+            ForeignPlayerRules(active=-1, pitchers=3, batters=3)
+
+    def test_has_room_counts_the_category_and_the_total(self):
+        self.assertTrue(NPB.has_room(pitchers=2, batters=1, is_pitcher=True))
+        self.assertFalse(NPB.has_room(pitchers=3, batters=0, is_pitcher=True), "投手の枠")
+        self.assertTrue(NPB.has_room(pitchers=3, batters=0, is_pitcher=False))
+        self.assertFalse(NPB.has_room(pitchers=1, batters=3, is_pitcher=False), "野手の枠")
+        self.assertFalse(NPB.has_room(pitchers=2, batters=2, is_pitcher=True), "計の枠")
+
+    def test_batter_room_is_the_smaller_of_the_total_and_the_batter_limits(self):
+        self.assertEqual(NPB.batter_room(pitchers=0, batters=0), 3)
+        self.assertEqual(NPB.batter_room(pitchers=2, batters=0), 2)
+        self.assertEqual(NPB.batter_room(pitchers=0, batters=3), 0)
+        self.assertIsNone(ForeignPlayerRules.UNLIMITED.batter_room(pitchers=5, batters=5))
+
+    def test_strictest_takes_the_minimum_of_each_component(self):
+        loose = ForeignPlayerRules(active=5, pitchers=None, batters=2)
+        tight = ForeignPlayerRules(active=4, pitchers=3, batters=3)
+
+        self.assertEqual(
+            ForeignPlayerRules.strictest([loose, tight, ForeignPlayerRules.UNLIMITED]),
+            ForeignPlayerRules(active=4, pitchers=3, batters=2),
         )
-        return _make_foreign(player)
+        self.assertEqual(ForeignPlayerRules.strictest([]), ForeignPlayerRules.UNLIMITED)
 
-    def test_quota_is_ignored_when_no_limit_set(self):
-        for i in range(5):
-            self._add_foreign(f"外国人{i}", 10 + i)
 
-        self.team.ensure_foreign_player_quota(None)  # 例外にならない
+class CountByRegisteredPositionTest(TestCase):
+    """投手か野手かを数える入口は `ForeignPlayerRules.counts`（登録位置）。"""
 
-    def test_quota_allows_exactly_at_the_limit(self):
-        self._add_foreign("外国人1", 10)
-        self._add_foreign("外国人2", 11)
+    def test_only_a_registered_pitcher_counts_as_a_pitcher(self):
+        positions = [Position.PITCHER, Position.CATCHER, Position.INFIELDER, Position.OUTFIELDER]
+        positions.append(Position.DESIGNATED_HITTER)
 
-        self.team.ensure_foreign_player_quota(2)  # 例外にならない
+        self.assertEqual(ForeignPlayerRules.counts(positions), (1, 4))
 
-    def test_quota_rejects_when_over_limit(self):
-        self._add_foreign("外国人1", 10)
-        self._add_foreign("外国人2", 11)
+    def test_ensure_players_within_counts_the_positions(self):
+        NPB.ensure_players_within([Position.PITCHER] * 3 + [Position.OUTFIELDER], subject="1軍登録")  # 例外にならない
+        with self.assertRaisesRegex(ForeignPlayerQuotaExceeded, "投手3人までです（4人）"):
+            NPB.ensure_players_within([Position.PITCHER] * 4, subject="1軍登録")
 
-        with self.assertRaises(ForeignPlayerQuotaExceeded):
-            self.team.ensure_foreign_player_quota(1)
-
-    def test_non_foreign_players_do_not_count(self):
-        self.team.add_player(
-            "日本人", JerseyNumber("10"), Position.INFIELDER, from_year=2026, limits=RosterLimits.UNLIMITED
-        )
-        self._add_foreign("外国人1", 11)
-
-        self.assertEqual(self.team.foreign_player_count, 1)
-        self.team.ensure_foreign_player_quota(1)  # 例外にならない
-
-    def test_retired_foreign_players_do_not_count(self):
-        player = self._add_foreign("外国人1", 10, from_year=2024)
-        self.team.retire_player(player, 2025)
-
-        self.assertEqual(self.team.foreign_player_count, 0)
-        self.team.ensure_foreign_player_quota(0)  # 例外にならない
+    def test_has_room_for_a_position(self):
+        self.assertFalse(NPB.has_room_for([Position.PITCHER] * 3, Position.PITCHER))
+        self.assertTrue(NPB.has_room_for([Position.PITCHER] * 3, Position.CATCHER))
