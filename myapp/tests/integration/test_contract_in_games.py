@@ -9,6 +9,7 @@ from myapp.domain.value_objects import ContractStatus
 from myapp.infrastructure import orm_models
 
 from ..helpers import (
+    build_recording_service,
     build_roster_service,
     build_scorebook,
     lineup_rows,
@@ -139,7 +140,7 @@ class GameEditCandidatesTest(AnalysisCase):
     """編集画面の選手の候補に、その試合の年に育成の選手を出さない。"""
 
     def roster_names(self, game_id):
-        data = self.service.get_game_edit_data(game_id)
+        data = build_recording_service().get_game_edit_data(game_id)
         return {roster.team_id: [p.name for p in roster.players] for roster in data.rosters}
 
     def make_developmental(self, name, number=120, *, promoted_year=None, before=None):
@@ -173,7 +174,7 @@ class GameEditCandidatesTest(AnalysisCase):
         past = self.make_developmental("過去に出場")
         game = self.game(self.team, self.rival, batting=[(past, self.team, "遊", 0)])
 
-        data = self.service.get_game_edit_data(game.id)
+        data = build_recording_service().get_game_edit_data(game.id)
 
         home = next(r for r in data.rosters if r.team_id == self.team.id)
         self.assertEqual([p.name for p in home.players], ["過去に出場"])

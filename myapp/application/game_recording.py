@@ -1,4 +1,4 @@
-"""スコアブック（打席の記録）の保存。
+"""試合の登録とスコアブック（打席の記録）の保存。
 
 試合の経過を打席単位で受け取り、**打撃・投球・守備・イニングスコア・得点はすべてそこから
 導いて**保存する。組み立ては domain の `assemble_game()` が行い、ここは入力の読み替え（出場した回）と
@@ -22,6 +22,7 @@ from ..domain.entities import Game, PlateAppearance, Team
 from ..domain.exceptions import DomainError, InvalidGame
 from ..domain.repositories import GameRepository, LeagueRepository, TeamRepository
 from ..domain.value_objects import (
+    ContractStatus,
     FieldingPosition,
     GameHeader,
     GameTimes,
@@ -30,7 +31,8 @@ from ..domain.value_objects import (
     Season,
     ensure_quota_not_exceeded,
 )
-from .dto import LineupSlot, ScorebookSaved
+from .dto import GameEditData, GameEditPlayer, GameEditRoster, GameTeamIds, LineupSlot, ScorebookSaved
+from .game_edit import build_header, build_lineup_slots, build_plate_appearances
 from .queries import HomeStadiumQuery
 
 
@@ -41,7 +43,7 @@ def _saved_id(value: int | None) -> int:
 
 
 class GameRecordingService:
-    """1試合ぶんのスコアブックを受け取って保存する。"""
+    """試合の登録（作成・編集画面の材料）と、1試合ぶんのスコアブックの保存。"""
 
     def __init__(
         self,
@@ -55,6 +57,72 @@ class GameRecordingService:
         self._teams = teams
         self._leagues = leagues
         self._home_stadiums = home_stadiums
+
+    def get_game_team_ids(self, game_id: int) -> GameTeamIds:
+        """試合の両チームの id だけを返す。権限の確認など、ロスターまで要らないとき用。"""
+        game = self._games.find_by_id(game_id)
+        return GameTeamIds(home_team_id=game.home_team_id, away_team_id=game.away_team_id)
+
+    def get_game_edit_data(self, game_id: int) -> GameEditData:
+        """試合の編集画面に必要な材料をまとめて返す。
+
+        試合の基本項目と、両チームの在籍中の選手（背番号順）・その試合の打順、打席。
+        集約（`Game`）は外に出さず、画面が使う値の DTO に詰め替える。
+        """
+        game = self._games.find_by_id(game_id)
+        names = {_saved_id(team.id): team.name for team in self._teams.find_all()}
+        slots = build_lineup_slots(game)
+
+        rosters = []
+        for team_id in (game.home_team_id, game.away_team_id):
+            team = self._teams.find_by_id(team_id)
+            players = [
+                GameEditPlayer(
+                    id=_saved_id(player.id),
+                    name=player.name,
+                    number=player.number.value,
+                    position=player.position.label,
+                    is_pitcher=player.is_pitcher,
+                )
+                for player in sorted(team.active_players, key=lambda p: p.number.sort_key)
+                # 育成選手は試合に出られないので候補に出さない（保存で弾かれるだけの導線になる）。
+                # ただし既にこの試合に出ている選手は残す（過去のデータで、外すと打順・打席の表示が壊れる）
+                if player.id in slots or team.contract_in(player, game.season.year) is not ContractStatus.DEVELOPMENTAL
+            ]
+            rosters.append(
+                GameEditRoster(
+                    team_id=team_id,
+                    team_name=names.get(team_id, team.name),
+                    # rosters が home を先頭に返す前提に頼らず、試合の home_team_id と比べて決める
+                    is_home=team_id == game.home_team_id,
+                    players=players,
+                    lineup=[slots[player.id] for player in players if player.id in slots],
+                )
+            )
+
+        return GameEditData(
+            header=build_header(game_id, game),
+            rosters=rosters,
+            plate_appearances=build_plate_appearances(game),
+        )
+
+    def create_game(
+        self,
+        *,
+        year: int,
+        played_on: date,
+        home_team_id: int,
+        away_team_id: int,
+    ) -> Game:
+        """試合を作る。得点は 0-0 で作る（打席から導く値で、スコアブックの保存で決まる）。成績も後から記録する。"""
+        return self._games.save(
+            Game(
+                season=Season(year),
+                played_on=played_on,
+                home_team_id=home_team_id,
+                away_team_id=away_team_id,
+            )
+        )
 
     def record_scorebook(
         self,

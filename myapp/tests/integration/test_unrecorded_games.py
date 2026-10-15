@@ -17,6 +17,7 @@ from myapp.infrastructure.queries import DjangoGameListQuery
 from myapp.infrastructure.repositories import DjangoGameRepository
 
 from ..helpers import (
+    build_recording_service,
     build_scorebook,
     lineup_rows,
     login_as_manager,
@@ -35,7 +36,7 @@ class UnrecordedGameTest(BaseCase):
 
     def _register(self, *, day=1):
         """登録しただけの試合。"""
-        return self.service.create_game(
+        return build_recording_service().create_game(
             year=2026, played_on=date(2026, 4, day), home_team_id=self.team.id, away_team_id=self.rival.id
         )
 
