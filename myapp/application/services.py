@@ -14,6 +14,7 @@ from ..domain import services as domain_services
 from ..domain.entities import Game, Player, Team
 from ..domain.exceptions import TeamNotFound
 from ..domain.repositories import GameRepository, LeagueRepository, TeamRepository
+from ..domain.services import Title
 from ..domain.value_objects import (
     ContractStatus,
     FreeAgencyOutcome,
@@ -69,7 +70,17 @@ def _is_developmental(team: Team, player: Player) -> bool:
 ValueFormatter = Callable[[float], str]
 # ダッシュボードに首位だけを出す部門。NPB の個人成績ページの主要部門（打率・本塁打・打点・
 # 防御率・勝利・セーブ）にならう。残りの部門と上位3人・過去の年はタイトル画面が受け持つ
-DASHBOARD_TITLE_KEYS = ("average", "home_runs", "rbi", "era", "wins", "saves")
+DASHBOARD_TITLE_KEYS = frozenset(
+    title.value
+    for title in (
+        Title.AVERAGE,
+        Title.HOME_RUNS,
+        Title.RUNS_BATTED_IN,
+        Title.EARNED_RUN_AVERAGE,
+        Title.WINS,
+        Title.SAVES,
+    )
+)
 # タイトル画面に出す各部門の人数
 TITLE_LEADERS = 3
 
@@ -534,9 +545,9 @@ class TeamApplicationService:
         )
 
     def get_league_titles(
-        self, league_id: int, year: int | None = None, *, leaders: int = TITLE_LEADERS
+        self, league_id: int, year: int | None = None, *, leaders: int | None = TITLE_LEADERS
     ) -> LeagueTitles:
-        """リーグのタイトル一覧。シーズンで区切った部門別の上位者（既定は各部門3人まで）。
+        """リーグのタイトル一覧。シーズンで区切った部門別の上位者（既定は各部門3人まで。`leaders=None` なら全員）。
 
         タイトルはシーズンごとに争われるので、対象シーズンの試合だけから成績を積み直す。
 
@@ -584,7 +595,7 @@ class TeamApplicationService:
         stats_rows: list[ActivePlayerStats],
         games_played: dict[int, int],
         *,
-        leaders: int,
+        leaders: int | None,
     ) -> list[TitleDepartment]:
         """1リーグ×1シーズンの部門別の上位者。タイトル画面とダッシュボードの部門の首位の出典。
 
@@ -601,107 +612,53 @@ class TeamApplicationService:
         players: list[Player],
         team_of: dict[int, tuple[int, str]],
         team_games: dict[int, int],
-        leaders: int,
+        leaders: int | None,
     ) -> list[TitleDepartment]:
         """部門ごとの上位者。NPB のタイトルのうち、成績だけで決まる部門をすべて並べる。
 
+        部門の並び・名前・条件の表記は domain の `Title` が出典（歴代の列とペナントの表彰も同じ `Title` を読む）。
         率の部門（打率・出塁率・防御率）は規定に達した選手だけ、最高勝率は13勝以上の
         投手だけを対象にする（条件はドメインの順位づけが持つ）。本数そのものが記録になる
         部門（本塁打・打点・安打・盗塁・勝利・奪三振・セーブ・HP）は規定を設けない。
         投票や選考で決まる賞（MVP・新人王など）は成績からは決まらないので出さない。
+        `leaders` が None なら部門の全員を並べる（ペナントの表彰が、同率の1位を全員拾うため）。
         """
-
-        def to_entries(ranked: list[domain_services.RankedPlayer], formatter: ValueFormatter) -> list[RankingEntry]:
-            return _to_ranking_entries(ranked, team_of, formatter)
-
+        ranked: dict[Title, tuple[list[domain_services.RankedPlayer], ValueFormatter]] = {
+            Title.AVERAGE: (
+                domain_services.leaders_by_batting_average(players, limit=leaders, team_games=team_games),
+                _as_average,
+            ),
+            Title.HOME_RUNS: (domain_services.leaders_by_home_runs(players, limit=leaders), _as_count),
+            Title.RUNS_BATTED_IN: (domain_services.leaders_by_runs_batted_in(players, limit=leaders), _as_count),
+            Title.HITS: (domain_services.leaders_by_hits(players, limit=leaders), _as_count),
+            Title.STOLEN_BASES: (domain_services.leaders_by_stolen_bases(players, limit=leaders), _as_count),
+            Title.ON_BASE_PERCENTAGE: (
+                domain_services.leaders_by_on_base_percentage(players, limit=leaders, team_games=team_games),
+                _as_average,
+            ),
+            Title.EARNED_RUN_AVERAGE: (
+                domain_services.leaders_by_era(players, limit=leaders, team_games=team_games),
+                _as_rate,
+            ),
+            Title.WINS: (domain_services.leaders_by_wins(players, limit=leaders), _as_count),
+            Title.WINNING_PERCENTAGE: (
+                domain_services.leaders_by_winning_percentage(players, limit=leaders),
+                _as_average,
+            ),
+            Title.STRIKEOUTS: (domain_services.leaders_by_strikeouts(players, limit=leaders), _as_count),
+            Title.SAVES: (domain_services.leaders_by_saves(players, limit=leaders), _as_count),
+            Title.HOLD_POINTS: (domain_services.leaders_by_hold_points(players, limit=leaders), _as_count),
+        }
         return [
-            # 打撃
             TitleDepartment(
-                key="average",
-                label="首位打者",
-                note="規定打席以上",
-                entries=to_entries(
-                    domain_services.leaders_by_batting_average(players, limit=leaders, team_games=team_games),
-                    _as_average,
-                ),
-            ),
-            TitleDepartment(
-                key="home_runs",
-                label="本塁打王",
-                entries=to_entries(domain_services.leaders_by_home_runs(players, limit=leaders), _as_count),
-            ),
-            TitleDepartment(
-                key="rbi",
-                label="打点王",
-                entries=to_entries(
-                    domain_services.leaders_by_runs_batted_in(players, limit=leaders),
-                    _as_count,
-                ),
-            ),
-            TitleDepartment(
-                key="hits",
-                label="最多安打",
-                entries=to_entries(domain_services.leaders_by_hits(players, limit=leaders), _as_count),
-            ),
-            TitleDepartment(
-                key="stolen_bases",
-                label="盗塁王",
-                entries=to_entries(domain_services.leaders_by_stolen_bases(players, limit=leaders), _as_count),
-            ),
-            TitleDepartment(
-                key="obp",
-                label="最高出塁率",
-                note="規定打席以上",
-                entries=to_entries(
-                    domain_services.leaders_by_on_base_percentage(players, limit=leaders, team_games=team_games),
-                    _as_average,
-                ),
-            ),
-            # 投手
-            TitleDepartment(
-                key="era",
-                label="最優秀防御率",
-                note="規定投球回以上",
-                entries=to_entries(
-                    domain_services.leaders_by_era(players, limit=leaders, team_games=team_games),
-                    _as_rate,
-                ),
-                is_pitching=True,
-            ),
-            TitleDepartment(
-                key="wins",
-                label="最多勝利",
-                entries=to_entries(domain_services.leaders_by_wins(players, limit=leaders), _as_count),
-                is_pitching=True,
-            ),
-            TitleDepartment(
-                key="winning_percentage",
-                label="最高勝率",
-                note=f"{domain_services.WINNING_PERCENTAGE_MINIMUM_WINS}勝以上",
-                entries=to_entries(
-                    domain_services.leaders_by_winning_percentage(players, limit=leaders),
-                    _as_average,
-                ),
-                is_pitching=True,
-            ),
-            TitleDepartment(
-                key="strikeouts",
-                label="最多奪三振",
-                entries=to_entries(domain_services.leaders_by_strikeouts(players, limit=leaders), _as_count),
-                is_pitching=True,
-            ),
-            TitleDepartment(
-                key="saves",
-                label="最多セーブ",
-                entries=to_entries(domain_services.leaders_by_saves(players, limit=leaders), _as_count),
-                is_pitching=True,
-            ),
-            TitleDepartment(
-                key="hold_points",
-                label="最優秀中継ぎ投手",
-                entries=to_entries(domain_services.leaders_by_hold_points(players, limit=leaders), _as_count),
-                is_pitching=True,
-            ),
+                key=title.value,
+                label=title.label,
+                note=title.note,
+                entries=_to_ranking_entries(ranked[title][0], team_of, ranked[title][1]),
+                is_pitching=title.is_pitching,
+            )
+            # 並びは `Title` の定義順（打撃 → 投手）
+            for title in Title
         ]
 
     def get_league_stats(
@@ -928,6 +885,7 @@ class TeamApplicationService:
         return YearlyRow(
             label=split.label,
             appearances=split.appearances,
+            year=split.year,
             plate_appearances=batting.plate_appearances,
             at_bats=batting.at_bats,
             hits=batting.hits,

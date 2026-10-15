@@ -1,0 +1,31 @@
+{% comment %}
+選手ページの「獲得タイトル」（ペナントの世界の選手だけ）。awards は AwardRow の並び（古い順）。
+締めた年は表彰（締めたときに確定した受賞者）、終わったが締めていない年は試合から導いた受賞者。どちらも同じ形。
+{% endcomment %}
+<div class="card mb-3">
+  <div class="card-header">獲得タイトル（{{ awards|length }}）</div>
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>年度</th>
+            <th>タイトル</th>
+            <th class="text-end">記録</th>
+            <th>球団</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for award in awards %}
+            <tr>
+              <td>{{ award.year }}年</td>
+              <td>{{ award.label }}</td>
+              <td class="text-end tabular-nums">{{ award.value }}</td>
+              <td>{{ award.team_name }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>

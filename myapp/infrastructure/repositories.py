@@ -35,7 +35,9 @@ from ..domain.entities import (
     Team,
 )
 from ..domain.exceptions import (
+    AlreadyClosed,
     GameNotFound,
+    InvalidAward,
     InvalidGame,
     InvalidPosition,
     InvalidRatings,
@@ -46,10 +48,12 @@ from ..domain.exceptions import (
     TeamNotFound,
     WorldNotFound,
 )
+from ..domain.pennant.awards import Award
 from ..domain.pennant.club_plan import ClubPlan, LineupChoice
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.release import ReleasePlan
 from ..domain.pennant.schedule import Fixture
+from ..domain.pennant.season import is_season_closed
 from ..domain.pennant.world import World, WorldScope
 from ..domain.services import ensure_lines_match_plate_appearances
 from ..domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings
@@ -78,6 +82,7 @@ from ..domain.value_objects import (
 )
 from . import orm_models
 from .scoping import (
+    awards_in,
     club_plans_in,
     fixtures_in,
     games_in,
@@ -959,6 +964,7 @@ class DjangoGameRepository:
             raise InvalidGame("参照専用に読んだ試合は保存できません（読んでいない明細が消えます）。")
         ensure_lines_match_plate_appearances(game)
         self._ensure_in_scope(game)
+        self._ensure_years_not_closed({game.season.year})
         row, _ = orm_models.Game.objects.update_or_create(  # type: ignore[misc]
             id=game.id,
             defaults={
@@ -1018,6 +1024,7 @@ class DjangoGameRepository:
             # `save()` と同じ照合。食い違ったまま保存されないよう、集約に確かめさせる
             ensure_lines_match_plate_appearances(game)
         self._ensure_teams_in_scope({team_id for game in games for team_id in (game.home_team_id, game.away_team_id)})
+        self._ensure_years_not_closed({game.season.year for game in games})
 
         prepared = [_NewGame.build(game) for game in games]
 
@@ -1055,6 +1062,35 @@ class DjangoGameRepository:
     def _ensure_teams_in_scope(self, team_ids: set[int]) -> None:
         if teams_in(self._scope).filter(id__in=team_ids).count() != len(team_ids):
             raise TeamNotFound("試合のチームが見つかりません。")
+
+    def _ensure_years_not_closed(self, years: set[int]) -> None:
+        """ペナントの世界の、締めた年の試合は書かない（`AlreadyClosed`）。実データには関係しない。
+
+        締めたシーズンのタイトル受賞者は表彰として保存してある（#248。CLAUDE.md の例外）。締めた年の試合が
+        書き換わると、保存した受賞者と試合から導いた受賞者がずれるので、書き込みの入口で拒む。
+        締めたかの判定は domain の `is_season_closed`（翌年の能力があるか）。締める前の年（シーズン終了後の
+        ポストシーズンなど）は書ける。
+        """
+        world_id = self._scope.world_id
+        if world_id is None or not years:
+            return
+        start_year = orm_models.PennantWorld.objects.filter(id=world_id).values_list("start_year", flat=True).first()
+        if start_year is None:
+            return
+        # 翌年の能力の有無は年ごとの exists（最初の1行で止まる。ふつうは1年ぶんの1クエリ）
+        closed = sorted(
+            year
+            for year in years
+            if is_season_closed(
+                year=year,
+                start_year=start_year,
+                next_year_ratings_exist=ratings_in(self._scope).filter(year=year + 1).exists(),
+            )
+        )
+        if closed:
+            raise AlreadyClosed(
+                f"{closed[0]}年のシーズンは既に締めているので、その年の試合は書けません。", year=closed[0]
+            )
 
     def _ensure_in_scope(self, game: Game) -> None:
         """範囲の外の試合・チームには書けない（別の世界の試合を書き換えない）。"""
@@ -1355,6 +1391,8 @@ class DjangoLeagueRepository:
 _GAME_ROUTE = "home_team__league"
 _WORLD_ROWS_CHILD_FIRST: tuple[tuple[type[models.Model], str], ...] = (
     # 能力は選手の在籍をたどって世界が決まるので、在籍を消す前に消す
+    # 表彰は選手・球団・リーグを指すので、それらを消す前に消す
+    (orm_models.PennantAward, "league"),
     # 編成と戦力外の指名は選手を指すので、選手を消す前に消す（行から先に）
     (orm_models.PennantClubPlanEntry, "plan__team__league"),
     (orm_models.PennantClubPlan, "team__league"),
@@ -1644,6 +1682,66 @@ class DjangoReleasePlanRepository:
     def delete_all(self) -> None:
         # 行は外部キーの CASCADE で消える（1世界に高々球団の数だけなので、collector に任せてよい）
         release_plans_in(self._scope).delete()
+
+
+class DjangoAwardRepository:
+    """AwardRepository の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る。
+
+    表彰はペナント専用で、実データの範囲には書けない。他の世界の表彰は、読めも書けもしない。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    @transaction.atomic
+    def add_all(self, awards: Sequence[Award]) -> None:
+        if self._scope.is_real:
+            raise InvalidWorld("表彰はペナントの世界にだけ保存できます。")
+        if not awards:
+            return
+        self._ensure_in_scope(awards)
+        keys = [(a.league_id, a.year, a.title, a.player_id) for a in awards]
+        if len(set(keys)) != len(keys):
+            raise InvalidAward("同じ表彰が重複しています。")
+        years = {award.year for award in awards}
+        if recorded := sorted(years & self.recorded_years()):
+            raise InvalidAward(f"{recorded[0]}年の表彰は既に記録しています。")
+        orm_models.PennantAward.objects.bulk_create(
+            [
+                orm_models.PennantAward(
+                    league_id=award.league_id,
+                    year=award.year,
+                    title=award.title.value,
+                    player_id=award.player_id,
+                    team_id=award.team_id,
+                    value=award.value,
+                )
+                for award in awards
+            ]
+        )
+
+    def recorded_years(self) -> frozenset[int]:
+        return frozenset(awards_in(self._scope).values_list("year", flat=True).distinct())
+
+    def count_by_player(self) -> dict[int, int]:
+        rows = awards_in(self._scope).values("player_id").annotate(count=Count("id")).order_by()
+        return {row["player_id"]: row["count"] for row in rows}
+
+    def _ensure_in_scope(self, awards: Sequence[Award]) -> None:
+        """範囲の外のリーグ・球団・選手を指す表彰は書かない（球団はリーグとの組も確かめる）。"""
+        league_ids = {award.league_id for award in awards}
+        if missing := sorted(
+            league_ids - set(leagues_in(self._scope).filter(id__in=league_ids).values_list("id", flat=True))
+        ):
+            raise InvalidAward(f"この世界に無いリーグの表彰は保存できません（id={missing[0]}）。")
+        team_ids = {award.team_id for award in awards}
+        league_of = dict(teams_in(self._scope).filter(id__in=team_ids).values_list("id", "league_id"))
+        if wrong := sorted(a.team_id for a in awards if league_of.get(a.team_id) != a.league_id):
+            raise InvalidAward(f"この世界のそのリーグに無い球団の表彰は保存できません（id={wrong[0]}）。")
+        player_ids = {award.player_id for award in awards}
+        known = set(players_in(self._scope).filter(id__in=player_ids).values_list("id", flat=True))
+        if missing := sorted(player_ids - known):
+            raise InvalidAward(f"この世界に居ない選手の表彰は保存できません（id={missing[0]}）。")
 
 
 class DjangoWorldRepository:

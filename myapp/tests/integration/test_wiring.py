@@ -28,6 +28,7 @@ from myapp.application.pennant_season import PennantSeasonService
 from myapp.application.pennant_view import PennantWorldViewService
 from myapp.application.pennant_world import PennantWorldService
 from myapp.application.queries import (
+    AwardQuery,
     FieldingTotalsQuery,
     GameListQuery,
     HomeStadiumQuery,
@@ -45,6 +46,7 @@ from myapp.application.team_analysis import TeamAnalysisService
 from myapp.domain.exceptions import InvalidWorld
 from myapp.domain.pennant.world import WorldScope
 from myapp.domain.repositories import (
+    AwardRepository,
     ClubPlanRepository,
     FixtureRepository,
     GameRepository,
@@ -56,6 +58,7 @@ from myapp.domain.repositories import (
 )
 from myapp.infrastructure import queries, repositories
 from myapp.infrastructure.queries import (
+    DjangoAwardQuery,
     DjangoFieldingTotalsQuery,
     DjangoGameListQuery,
     DjangoHomeStadiumQuery,
@@ -68,6 +71,7 @@ from myapp.infrastructure.queries import (
     DjangoWorldSummaryQuery,
 )
 from myapp.infrastructure.repositories import (
+    DjangoAwardRepository,
     DjangoClubPlanRepository,
     DjangoFixtureRepository,
     DjangoGameRepository,
@@ -116,6 +120,8 @@ class ProtocolConformanceTest(SimpleTestCase):
         (DjangoFixtureRepository(REAL), FixtureRepository),
         (DjangoClubPlanRepository(REAL), ClubPlanRepository),
         (DjangoReleasePlanRepository(REAL), ReleasePlanRepository),
+        (DjangoAwardRepository(REAL), AwardRepository),
+        (DjangoAwardQuery(REAL), AwardQuery),
         (DjangoSimulationContextQuery(REAL), SimulationContextQuery),
         (DjangoFieldingTotalsQuery(REAL), FieldingTotalsQuery),
         (DjangoTeamListQuery(REAL), TeamListQuery),
@@ -456,7 +462,7 @@ class PennantHomeScopeTest(SimpleTestCase):
 class PennantHistoryScopeTest(SimpleTestCase):
     """歴代の記録と球団史は、渡された世界の範囲だけを読む。"""
 
-    SCOPED = ("_games", "_team_records", "_leagues")
+    SCOPED = ("_games", "_team_records", "_leagues", "_awards")
 
     def test_every_dependency_is_fixed_to_the_given_world(self):
         service = build_pennant_history_service(7)
@@ -477,7 +483,17 @@ class PennantHistoryScopeTest(SimpleTestCase):
 class PennantOffseasonScopeTest(SimpleTestCase):
     """シーズンを締める処理と戦力外の指名は、渡された世界の範囲だけを読み書きする。"""
 
-    SCOPED = ("_leagues", "_teams", "_fixtures", "_ratings", "_plans", "_releases", "_context_query", "_playing_time")
+    SCOPED = (
+        "_leagues",
+        "_teams",
+        "_fixtures",
+        "_ratings",
+        "_plans",
+        "_releases",
+        "_awards",
+        "_context_query",
+        "_playing_time",
+    )
 
     def test_every_dependency_is_fixed_to_the_given_world(self):
         service = build_pennant_offseason_service(7)
@@ -485,6 +501,9 @@ class PennantOffseasonScopeTest(SimpleTestCase):
         for name in self.SCOPED:
             with self.subTest(dependency=name):
                 self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
+        self.assertEqual(
+            service._titles._games._scope, WorldScope.pennant(7), "タイトルを導くのも世界の範囲のサービス"
+        )
 
     def test_the_real_data_cannot_be_closed(self):
         for bad in (0, -1, True):
