@@ -7,8 +7,9 @@ description: 実装に着手する前に、実装計画を GitHub Issue に書�
 
 ## 0. Issue にするか判断する
 
-- **ブランチを切って PR を出す作業は、着手前に Issue を立てる。**
-- 省いてよいのは、1行で説明しきれる変更だけ（誤字・文言修正・依存の更新など）。迷ったら立てる。
+- **コードを変えて PR を出す作業は、着手前に Issue を立てる。**
+- 省いてよいのは、1行で説明しきれる変更（誤字・文言修正・依存の更新など）と、ドキュメント・規則・設定だけの変更
+  （`CLAUDE.md`「手順の重さは変更の大きさで変える」の表）。迷ったら立てる。省いた PR は本文に「なぜ」を書く。
 - ユーザーが既存の Issue を指して頼んだ場合は新しく立てない。その Issue の計画を読み、足りなければ本文を補う（手順5）。
 
 ## 1. 重複を確かめる
@@ -182,3 +183,18 @@ id=$("$G" project item-add 2 --owner sumika157 --url https://github.com/sumika15
 - **例外: epic の段階の sub-issue は自動では閉じない**（base が main でないため）。次の段階に着手するとき、前の段階の PR が
   マージ済みかを `& $gh pr view <PR番号> --json state` で確かめ、`MERGED` なら
   `& $gh issue close <段階の番号> --comment "#<PR番号> で epic/<機能> に入った"` で閉じる。親 Issue の手順の行にもチェックを付ける。
+
+## 7. epic の運用
+
+使う条件は `CLAUDE.md`「段階単体では main に入れられない機能は `epic/` に積む」。ここには手順と罠を書く。
+
+- **命名**: 統合は `epic/` ＋ 英語の kebab-case、タスクは従来どおり `feature/` `fix/` `refactor/` `docs/`。
+  **`epic/x` の下に `epic/x/task` は作れない**（git は ref を入れ子にできず
+  `cannot lock ref 'refs/heads/epic/x/task': 'refs/heads/epic/x' exists` で失敗する）。タスク名は統合ブランチ名の接頭辞にせず、
+  独立した短い名前にする（`feature/pa-persistence` など）。
+- **ブランチの切り方**: 統合ブランチは `gh issue develop <親> --name epic/<機能> --base main`。タスクブランチは
+  `gh issue develop <段階の sub-issue> --name <タスク> --base epic/<機能>` → `git fetch origin <タスク>` →
+  `git worktree add -b <タスク> .claude/worktrees/<名前> origin/<タスク>`。
+- **タスクの PR は `gh pr create --base epic/<機能>`。** 忘れると main が base になり、前の段階の差分まで含んだ PR ができる。
+- **統合ブランチは長生きするので、段階の区切りごとに main を取り込む**（`git merge origin/main`）。放っておくと最後に大きく衝突する。
+- 設計書 `docs/design/<機能>.md` に、段階ごとに実測値と決定を追記する（次のセッションへの引き継ぎになる）。
