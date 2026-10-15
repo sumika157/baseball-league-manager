@@ -92,6 +92,24 @@ frontend-build: ## React 画面をビルドする（E2E テスト実行の前提
 frontend-check: ## TypeScript の型チェック（tsc --noEmit）
 	docker compose run --rm -w $(WORKDIR)/frontend frontend sh -c "npm install && npm run typecheck"
 
+# ---- プレビュー（worktree の変更をマージ前にブラウザで見る。#220）----
+# localhost:8000 が配信するのは main の作業ツリーなので、worktree は 8001〜8009 の空いているポートで別に立てる。
+# DB は worktree の db.sqlite3（無ければ main の写し）。中身は scripts/preview.py。
+
+.PHONY: preview
+preview: ## worktree の画面を 8001〜8009 の空いているポートで立て、URL を表示する（WT= 必須）
+	@test -n "$(WT)" || { echo "preview は WT=<worktree名> を付けて実行してください"; exit 1; }
+	$(EXEC) python /app/scripts/preview.py start
+
+.PHONY: preview-stop
+preview-stop: ## worktree のプレビューを止める（WT= 必須）
+	@test -n "$(WT)" || { echo "preview-stop は WT=<worktree名> を付けて実行してください"; exit 1; }
+	$(EXEC) python /app/scripts/preview.py stop
+
+.PHONY: preview-list
+preview-list: ## 動いているプレビューの一覧
+	$(EXEC) python /app/scripts/preview.py list
+
 # ---- 品質チェック ----
 
 .PHONY: lint
