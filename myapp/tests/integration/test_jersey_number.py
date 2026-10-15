@@ -178,7 +178,7 @@ class MigrationToTextTest(TransactionTestCase):
 
     def test_existing_integers_become_text_and_double_zero_stays_possible(self):
         old = self._migrate(self.BEFORE)
-        # tearDown で最新まで進めるとき、リーグがあるので 0049（既定のワークスペース）が持ち主を要求する
+        # tearDown で最新まで進めるとき、リーグがあるので 0050（既定のワークスペース）が持ち主を要求する
         old.get_model("auth", "User").objects.create(username="admin", is_superuser=True)
         league = old.get_model("myapp", "League").objects.create(name="旧リーグ")
         team = old.get_model("myapp", "Team").objects.create(league=league, name="旧チーム")

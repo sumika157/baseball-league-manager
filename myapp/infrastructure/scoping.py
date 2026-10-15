@@ -109,3 +109,8 @@ def period_covering(year: int | None) -> Q:
     if year is None:
         return Q(to_year__isnull=True)
     return Q(from_year__lte=year) & (Q(to_year__isnull=True) | Q(to_year__gte=year))
+
+
+def release_plans_in(scope: WorldScope) -> QuerySet[orm_models.PennantReleasePlan]:
+    """範囲の球団の戦力外の指名。編成と同じく、球団のリーグで世界が決まる。"""
+    return orm_models.PennantReleasePlan.objects.filter(world_condition("team__league", scope))

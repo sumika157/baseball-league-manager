@@ -195,6 +195,8 @@ CSRF_TRUSTED_ORIGINS = env_list("DJANGO_CSRF_TRUSTED_ORIGINS")  # 例: https://e
 CSRF_FAILURE_VIEW = "myapp.presentation.csrf.csrf_failure"
 SECURE_SSL_REDIRECT = env_bool("DJANGO_SSL_REDIRECT")
 SESSION_COOKIE_SECURE = env_bool("DJANGO_SECURE_COOKIES")
+# worktree のプレビュー（scripts/preview.py）がポートごとに変える。localhost のクッキーはポートで分かれないため
+SESSION_COOKIE_NAME = os.environ.get("DJANGO_SESSION_COOKIE_NAME") or "sessionid"
 CSRF_COOKIE_SECURE = env_bool("DJANGO_SECURE_COOKIES")
 # HSTS（秒）。0 は出さない。公開直後は短い値で始め、問題が無いのを確かめてから延ばす（Wiki「本番公開」）
 SECURE_HSTS_SECONDS = int(os.environ.get("DJANGO_HSTS_SECONDS") or 0)

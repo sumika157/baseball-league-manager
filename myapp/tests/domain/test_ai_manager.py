@@ -11,7 +11,7 @@ from unittest import TestCase
 
 from myapp.domain.exceptions import InvalidRoster
 from myapp.domain.services import SAVE_LEAD_LIMIT
-from myapp.domain.simulation.fatigue import MIN_DAYS_BETWEEN_STARTS, PitchingHistory
+from myapp.domain.simulation.fatigue import HIGH_STAMINA_RELIEVER, MIN_DAYS_BETWEEN_STARTS, PitchingHistory
 from myapp.domain.simulation.manager import (
     ACTIVE_PITCHERS,
     ACTIVE_ROSTER_SIZE,
@@ -414,11 +414,23 @@ class BullpenAvailabilityTest(TestCase):
         self.closer = self.staff.closer
 
     def test_a_reliever_who_pitched_the_two_previous_days_cannot_pitch(self):
+        """スタミナが55未満なら2連投まで。"""
+        closer = replace(self.closer, ratings=replace(self.closer.ratings, stamina=HIGH_STAMINA_RELIEVER - 1))
+        staff = replace(self.staff, closer=closer)
         history = PitchingHistory()
-        history.record(TODAY - timedelta(days=1), [900, self.closer.player_id])
-        history.record(TODAY - timedelta(days=2), [901, self.closer.player_id])
-        available = available_relievers(self.staff, set(), history, TODAY, ForeignQuota())
-        self.assertNotIn(self.closer, available)
+        history.record(TODAY - timedelta(days=1), [900, closer.player_id])
+        history.record(TODAY - timedelta(days=2), [901, closer.player_id])
+        available = available_relievers(staff, set(), history, TODAY, ForeignQuota())
+        self.assertNotIn(closer, available)
+
+    def test_a_high_stamina_reliever_may_pitch_a_third_straight_day(self):
+        """スタミナ55以上は3連投目も投げられる（#97 の D2）。"""
+        closer = replace(self.closer, ratings=replace(self.closer.ratings, stamina=HIGH_STAMINA_RELIEVER))
+        staff = replace(self.staff, closer=closer)
+        history = PitchingHistory()
+        history.record(TODAY - timedelta(days=1), [900, closer.player_id])
+        history.record(TODAY - timedelta(days=2), [901, closer.player_id])
+        self.assertIn(closer, available_relievers(staff, set(), history, TODAY, ForeignQuota()))
 
     def test_one_or_two_nonconsecutive_days_are_fine(self):
         history = PitchingHistory()
@@ -703,13 +715,13 @@ class CanPitchOnTest(TestCase):
         history.record(TODAY - timedelta(days=1), [1])
         history.record(TODAY - timedelta(days=1), [2])
 
-        self.assertFalse(history.can_pitch_on(1, TODAY))
-        self.assertTrue(history.can_pitch_on(2, TODAY))
-        self.assertTrue(history.can_pitch_on(3, TODAY), "投げていない投手は投げられる")
+        self.assertFalse(history.can_pitch_on(1, TODAY, stamina=50))
+        self.assertTrue(history.can_pitch_on(2, TODAY, stamina=50))
+        self.assertTrue(history.can_pitch_on(3, TODAY, stamina=50), "投げていない投手は投げられる")
 
     def test_a_gap_day_resets_the_streak(self):
         history = PitchingHistory()
         history.record(TODAY - timedelta(days=3), [1])
         history.record(TODAY - timedelta(days=2), [1])
 
-        self.assertTrue(history.can_pitch_on(1, TODAY))
+        self.assertTrue(history.can_pitch_on(1, TODAY, stamina=50))

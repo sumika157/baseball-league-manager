@@ -4,6 +4,8 @@ services:
     container_name: baseball-web
     ports:
       - "8000:8000"
+      # worktree のプレビュー（make preview。scripts/preview.py の PORTS と同じ範囲）
+      - "8001-8009:8001-8009"
     # Playwright(Chromium)がデフォルトの64MBだとクラッシュしやすいため拡張
     shm_size: '1gb'
     # SECRET_KEY などの設定を読み込む（.env.example をコピーして作成する）

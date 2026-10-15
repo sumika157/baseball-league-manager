@@ -1,4 +1,4 @@
-"""ワークスペースの制約（0050）。名前の一意はワークスペースの中だけ、帰属は必須・排他。"""
+"""ワークスペースの制約（0051）。名前の一意はワークスペースの中だけ、帰属は必須・排他。"""
 
 from django.contrib.auth.models import User
 from django.db import IntegrityError, transaction

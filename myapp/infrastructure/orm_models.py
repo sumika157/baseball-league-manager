@@ -994,3 +994,43 @@ class PennantClubPlanEntry(models.Model):
 
     def __str__(self) -> str:
         return f"{self.plan} {self.get_section_display()} {self.order}"
+
+
+class PennantReleasePlan(models.Model):
+    """ペナントの受け持つ球団の、戦力外の手動の指名。球団ごとに1つ。自動の球団は行を持たない。
+
+    `year` は指名した締める年（その年のオフにだけ使い、締めた時点で消す）。選手は `PennantReleasePlanEntry`。
+    行があって選手が0人なら「手動で0人」。戦力外の事実は在籍の退団の経路（`PlayerStint.left_via`）に1つだけ残す。
+    世界の列は持たない。球団のリーグで世界が決まる（編成と同じ）。
+    """
+
+    team = models.OneToOneField(Team, on_delete=models.CASCADE, related_name="release_plan", verbose_name="球団")
+    year = models.PositiveSmallIntegerField(verbose_name="締める年")
+
+    class Meta:
+        verbose_name = "ペナントの戦力外の指名"
+        verbose_name_plural = "ペナントの戦力外の指名"
+        ordering = ["team_id"]
+
+    def __str__(self) -> str:
+        return f"{self.team.name}の{self.year}年の戦力外の指名"
+
+
+class PennantReleasePlanEntry(models.Model):
+    """戦力外の指名の1人。"""
+
+    plan = models.ForeignKey(
+        PennantReleasePlan, on_delete=models.CASCADE, related_name="entries", verbose_name="戦力外の指名"
+    )
+    player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="+", verbose_name="選手")
+
+    class Meta:
+        verbose_name = "ペナントの戦力外の指名の行"
+        verbose_name_plural = "ペナントの戦力外の指名の行"
+        ordering = ["plan_id", "player_id"]
+        constraints = [
+            models.UniqueConstraint(fields=["plan", "player"], name="unique_pennant_release_plan_entry_player"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.plan} {self.player_id}"

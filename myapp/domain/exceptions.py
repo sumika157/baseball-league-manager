@@ -113,6 +113,10 @@ class InvalidClubPlan(DomainError):
     """球団の編成（1軍登録・オーダー・ローテーション・抑え）として成立しない上書き。"""
 
 
+class InvalidReleasePlan(DomainError):
+    """戦力外の指名として成立しない（支配下の在籍選手でない・位置の最低人数を割る・試合を組めなくなる）。"""
+
+
 class AlreadyAdvanced(DomainError):
     """画面を開いたときから世界が進んでいる（二重送信や、別の画面で先に進めた場合）。"""
 

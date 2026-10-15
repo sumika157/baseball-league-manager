@@ -20,6 +20,7 @@ from myapp.application.dto import PitchingOuting, SimulationContext
 from myapp.domain.pennant.club_plan import LineupChoice
 from myapp.domain.pennant.schedule import AdvanceTarget
 from myapp.domain.pennant.world import WorldScope
+from myapp.domain.simulation.fatigue import FATIGUE_WINDOW_DAYS, HIGH_STAMINA_RELIEVER
 from myapp.domain.simulation.manager import MIN_ACTIVE_PITCHERS, MIN_ROTATION_SIZE
 from myapp.domain.value_objects import FieldingPosition
 from myapp.infrastructure import orm_models
@@ -629,9 +630,9 @@ class PitchingUsageTest(ClubScreenCase):
 
         assert usage.next_game_on is not None
         self.assertGreater(usage.next_game_on, first_day)
-        self.assertEqual(len(usage.recent_days), 3)
+        self.assertEqual(len(usage.recent_days), FATIGUE_WINDOW_DAYS)
         self.assertEqual(
-            usage.recent_days[-1], usage.next_game_on - timedelta(days=1), "直近3日は次の試合日の前日まで"
+            usage.recent_days[-1], usage.next_game_on - timedelta(days=1), "直近の日は次の試合日の前日まで"
         )
         gap = (usage.next_game_on - first_day).days
         (starter,) = [row for row in usage.rotation if row.days_since_start == gap]
@@ -749,9 +750,13 @@ class ConsecutiveDaysTest(ClubScreenCase):
         assert day is not None
         return day
 
+    def set_stamina(self, player_id, stamina):
+        orm_models.PennantPlayerRatings.objects.filter(player_id=player_id).update(stamina=stamina)
+
     def test_a_pitcher_who_pitched_the_last_two_days_cannot_pitch_next(self):
         next_day = self.next_day()
         tired = self.view().bullpen_ids[0]
+        self.set_stamina(tired, HIGH_STAMINA_RELIEVER - 1)
         outings = (
             PitchingOuting(next_day - timedelta(days=2), (tired,)),
             PitchingOuting(next_day - timedelta(days=1), (tired,)),
@@ -762,9 +767,9 @@ class ConsecutiveDaysTest(ClubScreenCase):
             usage = self.service.pitching_usage(self.view())
             content = self.get_as_owner("pitching").content.decode()
 
-        by_id = {row.player_id: row for row in (*usage.bullpen, *usage.rotation)}
+        by_id = {row.player_id: row for row in (*usage.bullpen, *usage.rotation, *filter(None, [usage.closer]))}
         self.assertFalse(by_id[tired].can_pitch)
-        self.assertEqual(by_id[tired].pitched_recently[1:], (True, True))
+        self.assertEqual(by_id[tired].pitched_recently[-2:], (True, True))
         self.assertTrue(all(row.can_pitch for pid, row in by_id.items() if pid != tired))
         self.assertIn("連投のため休み", content)
 
@@ -782,6 +787,25 @@ class ConsecutiveDaysTest(ClubScreenCase):
 
         (row,) = [r for r in usage.bullpen if r.player_id == pitcher]
         self.assertTrue(row.can_pitch)
+
+    def test_a_high_stamina_pitcher_may_pitch_a_third_straight_day_but_not_a_fourth(self):
+        """連投の上限は進めるときと同じくスタミナで決まる（55以上は3連投まで）。"""
+        next_day = self.next_day()
+        pitcher = self.view().bullpen_ids[0]
+        self.set_stamina(pitcher, HIGH_STAMINA_RELIEVER)
+
+        def usage_after(days_back):
+            outings = tuple(PitchingOuting(next_day - timedelta(days=back), (pitcher,)) for back in days_back)
+            context = SimulationContext(teams=(), last_starts=(), recent_outings=outings)
+            with mock.patch(self.LOAD, return_value=context):
+                usage = self.service.pitching_usage(self.view())
+            return {row.player_id: row for row in (*usage.bullpen, *usage.rotation, *filter(None, [usage.closer]))}[
+                pitcher
+            ]
+
+        self.assertTrue(usage_after((1, 2)).can_pitch)
+        self.assertFalse(usage_after((1, 2, 3)).can_pitch)
+        self.assertEqual(len(usage_after((1, 2)).pitched_recently), FATIGUE_WINDOW_DAYS)
 
 
 class NextGameOfTheClubTest(ClubScreenCase):

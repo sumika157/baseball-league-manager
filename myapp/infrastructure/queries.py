@@ -55,7 +55,7 @@ from ..domain.entities import Game, jersey_number_in, winning_team_id
 from ..domain.exceptions import WorldNotFound
 from ..domain.pennant.retirement import PlayingTime
 from ..domain.pennant.world import WorldScope
-from ..domain.simulation.fatigue import RECENT_PITCHING_DAYS
+from ..domain.simulation.fatigue import FATIGUE_WINDOW_DAYS
 from ..domain.simulation.ratings import BatterRatings, PitcherRatings
 from ..domain.value_objects import (
     AcquisitionRoute,
@@ -220,7 +220,7 @@ class DjangoSimulationContextQuery:
             .order_by("player_id")
         )
 
-        recent = lines.filter(game__played_on__gte=before - timedelta(days=RECENT_PITCHING_DAYS)).order_by(
+        recent = lines.filter(game__played_on__gte=before - timedelta(days=FATIGUE_WINDOW_DAYS)).order_by(
             "game_id", "appearance_order", "player_id"
         )
         recent_outings = tuple(

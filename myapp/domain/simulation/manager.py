@@ -6,7 +6,7 @@
 | スタメン | 総合値の順に守備の枠を埋め、守備力の高い順に重要な位置へ。DH は残りの最強打者。打順は出塁→長打の定型 |
 | ローテーション | 先発6人。前回の先発から中5日以上空ける |
 | 継投 | スタミナと抑える力から受け持ちの目安を決め、失点が嵩めば早めに代える。抑えはセーブの状況で出す |
-| 救援の連投 | 3連投はさせない（上限は `fatigue.PitchingHistory.can_pitch_on`） |
+| 救援の連投 | 2連投まで、スタミナ55以上は3連投目も（`fatigue.max_consecutive_days`）。疲労が重い救援は後回し |
 | 代打 | 7回以降・負けている・控えに明確に上の打者がいる、が揃えば。1試合2人まで |
 | 外国人の出場枠 | リーグの上限（`foreign_player_game_limit`）を守る |
 
@@ -24,7 +24,13 @@ from datetime import date, timedelta
 from ..exceptions import InvalidRoster
 from ..services.decisions import SAVE_LEAD_LIMIT
 from ..value_objects import FieldingPosition, Handedness, Position
-from .fatigue import MID_INNING_GRACE, MIN_DAYS_BETWEEN_STARTS, PitchingHistory
+from .fatigue import (
+    MID_INNING_GRACE,
+    MIN_DAYS_BETWEEN_STARTS,
+    FatigueLevel,
+    PitchingHistory,
+    pregame_fatigue_points,
+)
 from .randomness import GameRandom, normal, weighted_index
 from .ratings import BatterRatings, PitcherRatings
 
@@ -647,7 +653,11 @@ def available_relievers(
     today: date,
     quota: ForeignQuota,
 ) -> list[SimPitcher]:
-    """今日投げられる救援。この試合で投げていない・3連投にならない・外国人の枠に収まる投手。
+    """今日投げられる救援。この試合で投げていない・連投の上限（スタミナで決まる）に達していない・
+    外国人の枠に収まる投手。
+
+    **疲労が「重い」投手は、ほかに投げられる投手がいる限り外す**（抑えも同じ。抑えが重ければ、その回は
+    抑えを出さない）。「軽い」は普段どおり残す。全員が重ければ重い投手から選ぶ（続投で目安を超えるより良い）。
 
     ブルペンが編成上いない小さなロスターに限り、まだ投げていない先発陣から出す。ブルペンがいて全員が
     使えないときは空を返し、呼び出し側は今の投手を続投させる（先発陣から出すと、中5日と連投の規則が崩れる）。
@@ -657,13 +667,21 @@ def available_relievers(
         return (
             pitcher.player_id not in used_ids
             and quota.allows(pitcher.is_foreign)
-            and history.can_pitch_on(pitcher.player_id, today)
+            and history.can_pitch_on(pitcher.player_id, today, stamina=pitcher.ratings.stamina)
         )
 
-    if staff.bullpen:
-        # 全員が使えない日は空のまま返す（続投する）。先発陣から出すと、ローテーションと連投の規則が崩れる
-        return [p for p in staff.bullpen if usable(p)]
-    return [p for p in staff.rotation if usable(p)]
+    # 全員が使えない日は空のまま返す（続投する）。先発陣から出すと、ローテーションと連投の規則が崩れる
+    usable_ones = [p for p in (staff.bullpen or staff.rotation) if usable(p)]
+    fresh_enough = [p for p in usable_ones if relief_fatigue(history, p, today) is not FatigueLevel.HEAVY]
+    return fresh_enough or usable_ones
+
+
+def relief_fatigue(history: PitchingHistory, pitcher: SimPitcher, today: date) -> FatigueLevel:
+    """救援として今日投げるときの疲労の区分（登板前の点から。エンジンが率に効かせる点と同じ式）。"""
+    points = pregame_fatigue_points(
+        history.workload(pitcher.player_id, today), as_starter=False, stamina=pitcher.ratings.stamina
+    )
+    return FatigueLevel.from_points(points)
 
 
 def starter_batter_target(rng: GameRandom, pitcher: SimPitcher) -> int:

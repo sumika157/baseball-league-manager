@@ -1462,11 +1462,11 @@ class ClubPitcherUsage:
     player_id: int
     name: str
     is_foreign: bool
-    # 次の試合日の直近3日に投げたか（古い日から）
+    # 次の試合日の直近 `FATIGUE_WINDOW_DAYS` 日（5日）に投げたか（古い日から）
     pitched_recently: tuple[bool, ...]
     # 前回の先発から何日経っているか（次の試合日の時点。先発の記録が無ければ None）
     days_since_start: int | None
-    # 次の試合日に投げられるか（連投の上限に達していないか）
+    # 次の試合日に投げられるか（連投の上限に達していないか。上限はスタミナで決まる）
     can_pitch: bool
 
 
@@ -1840,6 +1840,35 @@ class SeasonCloseOption:
     can_close: bool
     # 締められない理由（締められるときは空）
     reason: str = ""
+    # 受け持つ球団の戦力外を手動で指名した人数（保存した指名の件数。締めるときに引退で除かれる選手も数える）。
+    # None は自動（締められないときも None）
+    release_count: int | None = None
+
+
+@dataclass(frozen=True)
+class ReleasePlayerRow:
+    """「戦力外」タブに並べる、受け持つ球団の支配下の選手1人（育成は外せないので並べない）。"""
+
+    player_id: int
+    name: str
+    position: Position
+    is_foreign: bool
+
+
+@dataclass(frozen=True)
+class ReleasePlanView:
+    """編成画面の「戦力外」タブの材料。シーズン終了で締められるときだけ作る。
+
+    `is_manual` が False なら自動（AI と同じ規則で締めるときに決める）で、`chosen_ids` は空。
+    """
+
+    team_id: int
+    team_name: str
+    # 締める年（指名はこの年のオフにだけ使う）
+    year: int
+    is_manual: bool
+    chosen_ids: frozenset[int]
+    players: tuple[ReleasePlayerRow, ...]
 
 
 # --- オフの結果と能力の推移（P6c） ---
@@ -2419,13 +2448,13 @@ class ClubPitchingStat:
 
 
 @dataclass(frozen=True)
-class ClubPlayerDetail:
-    """編成画面の選手1人の、選ぶ材料（年齢・能力の要約・今季の成績）。
+class ClubPlayerDetail[Row: (ClubPlayerRow, ReleasePlayerRow)]:
+    """編成画面の選手1人の、選ぶ材料（年齢・能力の要約・今季の成績）。`player` は編成のタブの行か、「戦力外」タブの行。
 
     `overall` と `cells` は能力が無い選手では None / 空（画面では「—」）。成績は出場が無ければ None。
     """
 
-    player: ClubPlayerRow
+    player: Row
     age: int | None
     overall: RatingCell | None
     cells: tuple[RatingCell, ...]

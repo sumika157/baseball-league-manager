@@ -69,8 +69,15 @@ wsl -e bash -c "cd /home/sumika/work/develop/my_django_project && make frontend-
 
 ### ブラウザで見たいとき
 
-`runserver`（localhost:8000）が配信するのは main の作業ツリー。worktree の変更はブラウザで見られないので、
-確認は自動テスト（必要なら e2e）で行う。
+`runserver`（localhost:8000）が配信するのは main の作業ツリー。worktree の変更は、8001〜8009 番のプレビューで見る
+（使い方と DB・ログインの扱いは Wiki「開発環境」の「worktree の画面を見る」）。Claude Code からは:
+
+```powershell
+docker compose exec -T -w $wt web python /app/scripts/preview.py start   # URL が出る。先に frontend-build
+docker compose exec -T -w $wt web python /app/scripts/preview.py stop
+```
+
+画面を変える PR では、プレビューの URL を PR 本文の「確認したこと」に書き、ユーザーが触って確かめられるようにする。
 
 ## 3. git 操作
 
@@ -88,6 +95,8 @@ push と PR は `open-pr` スキル。
 
 PR がマージされたら（`gh pr view <番号> --json state` が `MERGED`）片付ける。マージ前に消さない。
 
+プレビューを立てていたら先に止める（`preview.py stop`。動いたままだと消した後もポートを握り続ける）。
+
 ```bash
 git -C .claude/worktrees/<名前> status --short   # 何も出ないこと。出たら消す前にユーザーに確かめる
 git worktree remove .claude/worktrees/<名前>
@@ -97,7 +106,7 @@ git branch -D <ブランチ>                          # スカッシュマージ
 - **`Directory not empty` で失敗したら**、コンテナ（root）が作った生成物が残っている。WSL の `sudo` はパスワードを
   要求するので、コンテナ経由で消してからやり直す:
   ```powershell
-  docker compose exec web sh -c "cd /app/.claude/worktrees/<名前> && rm -rf .mypy_cache .ruff_cache && find . -name __pycache__ -type d -prune -exec rm -rf {} +"
+  docker compose exec web sh -c "cd /app/.claude/worktrees/<名前> && rm -rf db.sqlite3 .mypy_cache .ruff_cache && find . -name __pycache__ -type d -prune -exec rm -rf {} +"
   ```
 - `git worktree remove --force` は中途半端に成功することがある（追跡ファイルだけ消えて登録が残る）。使ったら
   `git worktree list` と `ls .claude/worktrees/` で残骸が無いことを確かめ、登録だけ残っていたら `git worktree prune`。

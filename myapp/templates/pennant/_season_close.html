@@ -2,12 +2,14 @@
 「シーズンを締める」のカード。シーズン終了のオーナーにだけ出し、「進める」のカードとは同時に出さない（home.html が出し分ける）。
 締められない理由（最終シーズン）は、押しても弾かれるだけのボタンを出さずに文で知らせる。
 文言の人数は domain の OPENING_REGISTERED_BAND（ビューが渡す registered_band。開幕前の支配下の帯）。
+戦力外の行は、受け持つ球団の指名が自動か手動（人数）か。選ぶのは編成の「戦力外」タブで、締める操作はこのボタン1つのまま。
 {% endcomment %}
 <div class="card mb-4" id="season-close">
   <div class="card-header">シーズンを締める</div>
   <div class="card-body">
     {% if close_option.can_close %}
-      <p class="mb-3">引退・ドラフト（開幕前の支配下を各球団{{ registered_band.low }}〜{{ registered_band.high }}人に近づける）・成長と衰えを済ませ、{{ close_option.next_year }}年の日程を作ります。元に戻せません。</p>
+      <p class="mb-2">引退・戦力外・ドラフト（開幕前の支配下を各球団{{ registered_band.low }}〜{{ registered_band.high }}人に近づける）・成長と衰えを済ませ、{{ close_option.next_year }}年の日程を作ります。元に戻せません。</p>
+      <p class="mb-3 stat-muted" id="season-close-release">戦力外: {% if close_option.release_count is None %}自動{% else %}手動（{{ close_option.release_count }}人）{% endif %} · <a href="{% url 'pennant_club' world.world_id %}?tab=release">編成の「戦力外」で選ぶ</a></p>
       <form method="post" action="{% url 'pennant_close_season' world.world_id %}">
         {% csrf_token %}
         <input type="hidden" name="expected_year" value="{{ close_option.year }}">
