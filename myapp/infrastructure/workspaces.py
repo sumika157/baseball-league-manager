@@ -16,5 +16,7 @@ def legacy_workspace_id() -> int:
     """id が最小のワークスペースの id を返す。1つも無ければ `WorkspaceNotFound`。"""
     workspace_id = orm_models.Workspace.objects.order_by("id").values_list("id", flat=True).first()
     if workspace_id is None:
-        raise WorkspaceNotFound("ワークスペースがありません。管理画面で作成してください。")
+        raise WorkspaceNotFound(
+            "ワークスペースがありません。運営者が管理画面で最初のワークスペースを作るまで、この操作はできません。"
+        )
     return int(workspace_id)
