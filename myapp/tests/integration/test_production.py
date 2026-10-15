@@ -34,7 +34,7 @@ PRODUCTION_ENV = {
     "DJANGO_BEHIND_PROXY": "True",
     "DJANGO_SSL_REDIRECT": "True",
     "DJANGO_SECURE_COOKIES": "True",
-    "DJANGO_HSTS_SECONDS": "31536000",
+    "DJANGO_HSTS_SECONDS": "3600",
 }
 
 # 既定（開発・テスト）に戻すため、親プロセスの環境から外す変数
@@ -43,6 +43,8 @@ SWITCHES = {key for key in PRODUCTION_ENV if key not in ("DJANGO_SECRET_KEY", "D
 SWITCHES.add("DJANGO_ALLOW_ASYNC_UNSAFE")
 # 鍵の入れ替え中だけ .env に書く変数。親の環境に残っていても既定の検査を狂わせない
 SWITCHES.add("DJANGO_SECRET_KEY_FALLBACKS")
+# HSTS のサブドメインとプリロード（本番の既定では付けない。付けたときのテストで足す）
+SWITCHES.update({"DJANGO_HSTS_INCLUDE_SUBDOMAINS", "DJANGO_HSTS_PRELOAD"})
 
 
 def run_python(code: str, extra_env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -91,6 +93,24 @@ class ProductionSettingsTest(SimpleTestCase):
             result = run_python(code, env)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("no issues", result.stdout)
+
+    def test_hsts_subdomains_and_preload_are_opt_in(self):
+        """本番の値では HSTS にサブドメインとプリロードを付けず、環境変数で明示したときだけ付ける。
+        どちらの場合も `check --deploy` は警告を出さない。"""
+        code = (
+            "from django.conf import settings as s\n"
+            "print(s.SECURE_HSTS_SECONDS, s.SECURE_HSTS_INCLUDE_SUBDOMAINS, s.SECURE_HSTS_PRELOAD)\n"
+            "from django.core.management import execute_from_command_line\n"
+            "execute_from_command_line(['manage.py', 'check', '--deploy', '--fail-level', 'WARNING'])"
+        )
+        opt_in = {"DJANGO_HSTS_INCLUDE_SUBDOMAINS": "True", "DJANGO_HSTS_PRELOAD": "True"}
+        for extra, expected in (({}, "3600 False False"), (opt_in, "3600 True True")):
+            with self.subTest(extra=extra), tempfile.TemporaryDirectory() as tmp:
+                env = {**PRODUCTION_ENV, **extra, "DJANGO_DB_PATH": str(Path(tmp) / "db.sqlite3")}
+                result = run_python(code, env)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(result.stdout.splitlines()[0], expected)
+                self.assertIn("no issues", result.stdout)
 
     def test_production_environment_enables_wal_and_whitenoise(self):
         """本番の環境変数で、SQLite が WAL になり、WhiteNoise が SecurityMiddleware の直後に入る。"""
