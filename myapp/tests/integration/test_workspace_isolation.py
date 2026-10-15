@@ -31,16 +31,20 @@ from myapp.domain.entities import Team as DomainTeam
 from myapp.domain.exceptions import (
     DomainError,
     GameNotFound,
+    InvalidAward,
     InvalidWorld,
     LeagueNotFound,
     TeamNotFound,
     WorldNotFound,
 )
+from myapp.domain.pennant.awards import Award
 from myapp.domain.pennant.release import ReleasePlan
 from myapp.domain.pennant.world import MAX_WORLDS_PER_OWNER, WORLD_LIMIT_MESSAGE, World, WorldScope
+from myapp.domain.services.rankings import Title
 from myapp.domain.value_objects import BattingLine, PitchingLine, Season
 from myapp.infrastructure import orm_models, queries, repositories
 from myapp.infrastructure.queries import (
+    DjangoAwardQuery,
     DjangoFieldingTotalsQuery,
     DjangoGameListQuery,
     DjangoHomeStadiumQuery,
@@ -58,6 +62,7 @@ from myapp.infrastructure.queries import (
     DjangoWorldSummaryQuery,
 )
 from myapp.infrastructure.repositories import (
+    DjangoAwardRepository,
     DjangoClubPlanRepository,
     DjangoFixtureRepository,
     DjangoGameRepository,
@@ -108,7 +113,8 @@ class WorkspaceCase(BaseCase):
     B には、ペナント専用の表（能力・日程・編成・戦力外）と守備の明細の行も直接置く（範囲の条件が
     表ごとに効いているかを、行がある状態で確かめるため）。
     世界: A のリーグから分岐した A の世界（`A_WORLD`）と、B のリーグから分岐した B の世界（`B_WORLD`。オーナーは
-    `b_owner`）。世界の台帳の検査に使う。準備はクラスで1回（`setUpTestData`）。
+    `b_owner`）。世界の台帳の検査に使う。B の世界には表彰の行も1つ直接置く（表彰はペナントの世界にしか無い）。
+    準備はクラスで1回（`setUpTestData`）。
     """
 
     workspace_b: orm_models.Workspace
@@ -125,6 +131,8 @@ class WorkspaceCase(BaseCase):
     a_world_id: int
     b_world_id: int
     b_owner: User
+    b_award_player_id: int
+    b_award_team_id: int
 
     @classmethod
     def setUpTestData(cls):
@@ -171,6 +179,24 @@ class WorkspaceCase(BaseCase):
                 )
                 .world.id
             )
+        cls._plant_b_award()
+
+    @classmethod
+    def _plant_b_award(cls) -> None:
+        """B の世界の表彰（シーズンを締めずに置くので ORM で直接置く。表彰はペナントの世界にしか無い）。"""
+        league = orm_models.League.objects.get(world_id=cls.b_world_id)
+        stint = orm_models.PlayerStint.objects.filter(team__league=league).order_by("id").first()
+        assert stint is not None, "B の世界に選手が写っていない"
+        cls.b_award_player_id = stint.player_id
+        cls.b_award_team_id = stint.team_id
+        orm_models.PennantAward.objects.create(
+            league=league,
+            year=YEAR,
+            title=Title.HOME_RUNS.value,
+            player_id=stint.player_id,
+            team_id=stint.team_id,
+            value="42",
+        )
 
     @staticmethod
     def _play(home, away, batter, pitcher, year, scope):
@@ -396,6 +422,37 @@ def _team_analysis_query(t: WorkspaceCase) -> None:
     t.assertEqual(query.load_service_history([], YEAR).records_from_year, YEAR, "B の試合の年に引きずられた")
 
 
+def _award_repository(t: WorkspaceCase) -> None:
+    """表彰はペナントの世界にしか無い。A の実データにも A の世界にも、B の世界の表彰は出ず、書けない。"""
+    for scope in (t.a, WorldScope.pennant(t.workspace.id, t.a_world_id)):
+        repo = DjangoAwardRepository(scope)
+        t.assertEqual(repo.recorded_years(), frozenset(), f"{scope} で B の世界の表彰の年が読めた")
+        t.assertEqual(repo.count_by_player(), {}, f"{scope} で B の世界の表彰が数えられた")
+    b_league = orm_models.League.objects.get(world_id=t.b_world_id)
+    stray = Award(
+        year=B_YEAR,
+        league_id=b_league.id,
+        title=Title.HITS,
+        player_id=t.b_award_player_id,
+        team_id=t.b_award_team_id,
+        value="200",
+    )
+    with t.assertRaises(InvalidAward):
+        DjangoAwardRepository(WorldScope.pennant(t.workspace.id, t.a_world_id)).add_all([stray])
+    t.assertEqual(
+        orm_models.PennantAward.objects.filter(league=b_league).count(), 1, "A の範囲で B の世界に表彰を書いた"
+    )
+
+
+def _award_query(t: WorkspaceCase) -> None:
+    for scope in (t.a, WorldScope.pennant(t.workspace.id, t.a_world_id)):
+        query = DjangoAwardQuery(scope)
+        t.assertEqual(query.list_awards(), [], f"{scope} で B の世界の表彰が読めた")
+        t.assertEqual(query.list_awards(player_id=t.b_award_player_id), [])
+    # 空振りの防止: B の世界の範囲では読める
+    t.assertEqual(len(DjangoAwardQuery(WorldScope.pennant(t.workspace_b.id, t.b_world_id)).list_awards()), 1)
+
+
 def _world_repository(t: WorkspaceCase) -> None:
     repo = DjangoWorldRepository(t.workspace.id)
     worlds = repo.find_all()
@@ -423,6 +480,8 @@ CHECKS: dict[type, Callable[[WorkspaceCase], None]] = {
     DjangoFixtureRepository: _fixture_repository,
     DjangoClubPlanRepository: _club_plan_repository,
     DjangoReleasePlanRepository: _release_plan_repository,
+    DjangoAwardRepository: _award_repository,
+    DjangoAwardQuery: _award_query,
     DjangoPlayerFieldingQuery: _player_fielding_query,
     DjangoFieldingTotalsQuery: _fielding_totals_query,
     DjangoSimulationContextQuery: _simulation_context_query,
@@ -652,6 +711,31 @@ class WritesDoNotReachTheOtherWorkspaceTest(WorkspaceCase):
                 write()
         self.assertEqual(self._snapshot(), before, "A の範囲の書き込みが B の行を変えた")
         self.assertEqual(orm_models.Team.objects.get(id=self.b_team.id).league_id, self.b_league.id)
+
+
+class MisbuiltWorldScopeGameWritesTest(WorkspaceCase):
+    """取り違えた範囲（A のワークスペースに B の世界）で試合を書くと、締めた年の検査が台帳で世界を引けず拒む。
+
+    ペナントの範囲の条件（`world_id = W`）はワークスペースを見ないので、B の世界の球団は範囲の検査を抜ける。
+    締めた年の検査が世界の行を引けないときに飛ばすと、そのまま書けてしまう（検査を飛ばさない）。
+    """
+
+    def test_a_game_write_through_a_misbuilt_scope_raises_and_writes_nothing(self):
+        misbuilt = DjangoGameRepository(WorldScope.pennant(self.workspace.id, self.b_world_id))
+        home, away = orm_models.Team.objects.filter(league__world_id=self.b_world_id).order_by("id")[:2]
+        game = Game(
+            season=Season(YEAR),
+            played_on=date(YEAR, 5, 1),
+            home_team_id=home.id,
+            away_team_id=away.id,
+            home_score=0,
+            away_score=0,
+        )
+        before = orm_models.Game.objects.count()
+        for label, write in (("save", lambda: misbuilt.save(game)), ("add_all", lambda: misbuilt.add_all([game]))):
+            with self.subTest(write=label), self.assertRaises(WorldNotFound):
+                write()
+        self.assertEqual(orm_models.Game.objects.count(), before, "取り違えた範囲で B の世界に試合を書いた")
 
 
 class WorldLedgerWritesTest(WorkspaceCase):

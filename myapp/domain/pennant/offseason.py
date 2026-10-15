@@ -108,14 +108,14 @@ def decide_retirements(
 def _draft_team(club: OffseasonClub, remaining: Sequence[OffseasonPlayer]) -> DraftTeam:
     """引退・戦力外の後の球団。人数と位置は支配下だけで数える（育成の捕手がいても、支配下の捕手が足りなければ補う）。
 
-    外国人の人数・背番号・苗字は育成も含める（外国人枠の検査・背番号の重複・背ネームは区分によらない）。
+    外国人の人数・背番号・苗字は育成も含める（外国人の目標人数・背番号の重複・背ネームは区分によらない）。
     """
     surnames = Counter(player.profile.back_name.split(".")[-1] for player in remaining if player.profile.back_name)
     return DraftTeam(
         team_id=club.team_id,
         position_counts=dict(Counter(player.position for player in remaining if player.is_registered)),
         foreign_count=sum(1 for player in remaining if player.profile.is_foreign_player),
-        foreign_limit=club.foreign_roster_limit,
+        foreign_limit=club.foreign_rules.active,
         used_numbers=frozenset(player.number for player in remaining),
         surname_counts=dict(surnames),
         registered_limit=club.registered_player_limit,

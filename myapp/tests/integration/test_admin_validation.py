@@ -18,8 +18,8 @@ class AdminStintValidationTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.client.force_login(User.objects.create_superuser(username="root", password="x"))
-        self.player = self.service.register_player(self.team.id, "山田", 10, "内野手")
-        self.other = self.service.register_player(self.team.id, "田中", 11, "外野手")
+        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        self.other = self.roster.register_player(self.team.id, "田中", 11, "外野手")
 
     def _add(self, **overrides):
         payload = {
@@ -141,8 +141,8 @@ class AdminCaptaincyValidationTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.client.force_login(User.objects.create_superuser(username="root", password="x"))
-        self.player = self.service.register_player(self.team.id, "山田", 10, "内野手")
-        self.other = self.service.register_player(self.team.id, "田中", 11, "外野手")
+        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        self.other = self.roster.register_player(self.team.id, "田中", 11, "外野手")
 
     def _change_payload(self, player, **captaincy_overrides):
         payload = {
@@ -211,15 +211,21 @@ class AdminCaptaincyValidationTest(BaseCase):
 
 
 class AdminForeignPlayerQuotaTest(BaseCase):
-    """管理画面から外国人選手を登録・移籍するときの、枠の検証。"""
+    """管理画面から外国人選手を登録・移籍しても、外国人枠では弾かない。
+
+    協約第82条の2 は保有の人数を縛らない（外国人枠は1軍の登録にかかり、実データでは試合の保存で検査する）。
+    枠を 0 にしたリーグでも、外国人フラグの変更と在籍の追加は通る。
+    """
 
     def setUp(self):
         super().setUp()
         self.client.force_login(User.objects.create_superuser(username="root", password="x"))
-        orm_models.League.objects.filter(id=self.league.id).update(foreign_player_roster_limit=1)
-        self.existing_foreign = self.service.register_player(self.team.id, "既存助っ人", 50, "外野手")
+        orm_models.League.objects.filter(id=self.league.id).update(
+            foreign_active_limit=0, foreign_active_pitcher_limit=0, foreign_active_batter_limit=0
+        )
+        self.existing_foreign = self.roster.register_player(self.team.id, "既存助っ人", 50, "外野手")
         orm_models.Player.objects.filter(id=self.existing_foreign.id).update(is_foreign_player=True)
-        self.player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
 
     def _player_change_payload(self, player, **overrides):
         payload = {
@@ -253,18 +259,17 @@ class AdminForeignPlayerQuotaTest(BaseCase):
         payload.update(overrides)
         return payload
 
-    def test_marking_a_player_as_foreign_is_rejected_over_the_roster_limit(self):
+    def test_marking_a_player_as_foreign_is_not_limited(self):
         response = self.client.post(
             f"/admin/myapp/player/{self.player.id}/change/",
             self._player_change_payload(self.player, is_foreign_player="on"),
         )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "外国人選手登録数が上限")
-        self.assertFalse(orm_models.Player.objects.get(id=self.player.id).is_foreign_player)
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(orm_models.Player.objects.get(id=self.player.id).is_foreign_player)
 
-    def test_transferring_a_foreign_player_is_rejected_over_the_destination_limit(self):
-        orm_models.League.objects.filter(id=self.league.id).update(foreign_player_roster_limit=0)
+    def test_transferring_a_foreign_player_is_not_limited(self):
+        orm_models.PlayerStint.objects.filter(player_id=self.existing_foreign.id).update(from_year=2020, to_year=2025)
 
         response = self.client.post(
             "/admin/myapp/playerstint/add/",
@@ -277,11 +282,18 @@ class AdminForeignPlayerQuotaTest(BaseCase):
             },
         )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "外国人選手登録数が上限")
-        self.assertFalse(
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(
             orm_models.PlayerStint.objects.filter(player_id=self.existing_foreign.id, team_id=self.rival.id).exists()
         )
+
+    def test_the_league_admin_edits_the_three_limits_of_the_agreement(self):
+        response = self.client.get(f"/admin/myapp/league/{self.league.id}/change/")
+
+        for field in ("foreign_active_limit", "foreign_active_pitcher_limit", "foreign_active_batter_limit"):
+            self.assertContains(response, f'name="{field}"')
+        self.assertContains(response, "第82条の2")
+        self.assertNotContains(response, "foreign_player_roster_limit")
 
 
 class AdminUsesDomainRulesTest(BaseCase):
@@ -490,7 +502,7 @@ class AdminPlayerWithStintsTest(BaseCase):
 
     def test_number_taken_by_another_player_is_still_rejected(self):
         """新規登録でも、他の選手との背番号の重なりは弾く。"""
-        self.service.register_player(self.team.id, "山田", 10, "内野手")
+        self.roster.register_player(self.team.id, "山田", 10, "内野手")
 
         response = self._post([(self.team, 10, 2026, "")])
 

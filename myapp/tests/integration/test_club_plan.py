@@ -217,9 +217,9 @@ class ServiceTest(ClubPlanCase):
             self.service_a.set_active_roster(self.home_a.id, list(range(1, 40)))
         self.assertEqual(orm_models.PennantClubPlan.objects.count(), 0)
 
-    def test_the_foreign_roster_limit_of_the_league_is_enforced(self):
+    def test_the_foreign_rules_of_the_league_are_enforced(self):
         league = self.home_a.league
-        league.foreign_player_roster_limit = 1
+        league.foreign_active_limit = 1
         league.save()
         foreign = [p for p in players_of(self.home_a) if p.position != "投手"][:2]
         for player in foreign:
@@ -394,7 +394,7 @@ def build_season(world_id):
 
 
 class StrictestGameLimitTest(ClubPlanCase):
-    """出場枠の違うリーグがある世界では、編成を最も厳しい枠で検査する（再発防止）。
+    """外国人枠の違うリーグがある世界では、編成を最も厳しい枠で検査する（再発防止）。
 
     交流戦はホーム球団のリーグの枠で行うので、自リーグの枠で検査すると、枠の厳しいリーグとの交流戦で
     スタメンを組めず「進める」が止まる。決めるとき（`ClubManagementService`）と進めるとき
@@ -403,12 +403,18 @@ class StrictestGameLimitTest(ClubPlanCase):
 
     def setUp(self):
         super().setUp()
-        # 日程を作ってから、出場枠の厳しいリーグを世界に足す（日程には入らず、枠の値だけが効く）
+        # 日程を作ってから、外国人枠の厳しいリーグを世界に足す（日程には入らず、枠の値だけが効く）
         build_season(self.world_a).advance(AdvanceTarget.WEEK)
-        strict = make_league(name="枠の厳しいリーグ", world_id=self.world_a, foreign_player_game_limit=1)
+        strict = make_league(
+            "枠の厳しいリーグ",
+            world_id=self.world_a,
+            foreign_active_limit=1,
+            foreign_active_pitcher_limit=None,
+            foreign_active_batter_limit=None,
+        )
         orm_models.Team.objects.create(league=strict, name="枠の厳しい球団")
         self.lineup = self.lineup_of(self.service_a.propose(self.home_a.id))
-        # 自リーグの枠（3）には収まり、厳しい枠（1）には収まらない
+        # 自リーグの枠（協約の野手3人）には収まり、厳しい枠（計1人）には収まらない
         foreign = [choice.player_id for choice in self.lineup[:2]]
         orm_models.Player.objects.filter(id__in=foreign).update(is_foreign_player=True)
 

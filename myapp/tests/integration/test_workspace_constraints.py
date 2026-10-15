@@ -1,4 +1,4 @@
-"""ワークスペースの制約（0051）。名前の一意はワークスペースの中だけ、帰属は必須・排他。"""
+"""ワークスペースの制約（0054）。名前の一意はワークスペースの中だけ、帰属は必須・排他。"""
 
 from django.contrib.auth.models import User
 from django.db import IntegrityError, transaction
@@ -77,8 +77,9 @@ class AdminDuplicateNameTest(BaseCase):
             "name": "テストリーグ",
             "workspace": self.workspace.id,
             "display_order": 0,
-            "foreign_player_roster_limit": 5,
-            "foreign_player_game_limit": 3,
+            "foreign_active_limit": 4,
+            "foreign_active_pitcher_limit": 3,
+            "foreign_active_batter_limit": 3,
             "registered_player_limit": 70,
             "teams-TOTAL_FORMS": 0,
             "teams-INITIAL_FORMS": 0,

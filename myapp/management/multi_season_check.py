@@ -28,9 +28,8 @@ from myapp.domain.pennant.schedule import ScheduleRules
 from myapp.domain.simulation.levels import UsageTally
 from myapp.domain.simulation.manager import ClubRoster, SimBatter, SimPitcher, choose_active_roster
 from myapp.domain.simulation.ratings import PitcherRatings
-from myapp.domain.value_objects import BattingLine, ContractStatus, PitchingLine, Position, Profile
+from myapp.domain.value_objects import BattingLine, ContractStatus, ForeignPlayerRules, PitchingLine, Position, Profile
 from myapp.management.estimate_check import (
-    DEFAULT_FOREIGN_ROSTER_LIMIT,
     LEVEL_LABELS,
     average_titles,
     estimate_from_source,
@@ -67,7 +66,7 @@ class TeamInfo:
     team_id: int
     league_id: int
     name: str
-    foreign_limit: int | None
+    foreign_rules: ForeignPlayerRules
     registered_limit: int | None
 
 
@@ -89,7 +88,7 @@ def initial_members(
                 _id(team.id),
                 _id(league.id),
                 team.name,
-                league.foreign_player_roster_limit,
+                league.foreign_rules,
                 league.registered_player_limit,
             )
             for player in team.active_players:
@@ -138,8 +137,7 @@ def rosters_of(
     leagues: dict[int, list[int]] = {}
     for team_id, team in teams.items():
         club = ClubRoster(team_id, team.name, tuple(batters[team_id]), tuple(pitchers[team_id]))
-        limit = DEFAULT_FOREIGN_ROSTER_LIMIT if team.foreign_limit is None else team.foreign_limit
-        rosters[team_id] = choose_active_roster(club, limit)
+        rosters[team_id] = choose_active_roster(club, rules=team.foreign_rules)
         leagues.setdefault(team.league_id, []).append(team_id)
     return rosters, leagues
 
@@ -176,7 +174,7 @@ def offseason_clubs(
     return [
         OffseasonClub(
             team_id=team_id,
-            foreign_roster_limit=team.foreign_limit,
+            foreign_rules=team.foreign_rules,
             registered_player_limit=team.registered_limit,
             players=tuple(by_team[team_id]),
         )

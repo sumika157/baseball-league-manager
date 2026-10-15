@@ -14,7 +14,15 @@ from django.test import TestCase
 
 from myapp.infrastructure import orm_models
 
-from ..helpers import build_service, default_workspace, make_league, make_stadium, real_scope
+from ..helpers import (
+    build_game_view_service,
+    build_roster_service,
+    build_service,
+    default_workspace,
+    make_league,
+    make_stadium,
+    real_scope,
+)
 
 # 世界の作成の名簿の検査（`skip_roster_check` が外すもの）
 ROSTER_CHECK = "myapp.application.pennant_world.ensure_roster_playable"
@@ -36,7 +44,10 @@ class BaseCase(TestCase):
         cls.rival = orm_models.Team.objects.create(league=cls.league, name="相手チーム")
 
     def setUp(self):
-        self.service = build_service(real_scope())
+        scope = real_scope()
+        self.service = build_service(scope)
+        self.roster = build_roster_service(scope)
+        self.game_view = build_game_view_service(scope)
 
     def skip_roster_check(self) -> None:
         """世界の作成の名簿の検査を外す。

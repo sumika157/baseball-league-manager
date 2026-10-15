@@ -32,13 +32,13 @@ from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND
 from myapp.domain.simulation.randomness import GameRandom, make_random, normal
 from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings
 from myapp.domain.simulation.samples import BATTER_MEAN, BATTER_SD, PITCHER_MEAN, PITCHER_SD, draw_ratings
-from myapp.domain.value_objects import ContractStatus, Position, Profile
+from myapp.domain.value_objects import ContractStatus, ForeignPlayerRules, Position, Profile
 from myapp.domain.virtual_players import generator
 
 START_YEAR = 2026
 TEAMS = 48
 YEARS = 10
-LEAGUE_FOREIGN_LIMIT = 4
+LEAGUE_FOREIGN_RULES = ForeignPlayerRules.NPB
 LEAGUE_REGISTERED_LIMIT = 70
 # 実データから分岐した球団の支配下の人数（開発用 DB の平均 約34人）と、帯の中の人数（定常状態から始める）
 INITIAL_ROSTER = 34
@@ -152,7 +152,7 @@ def run_year(members: list[Member], year: int, *, world_seed: int = 1) -> tuple[
         clubs.append(
             OffseasonClub(
                 team_id=team_id,
-                foreign_roster_limit=LEAGUE_FOREIGN_LIMIT,
+                foreign_rules=LEAGUE_FOREIGN_RULES,
                 registered_player_limit=LEAGUE_REGISTERED_LIMIT,
                 players=tuple(
                     OffseasonPlayer(

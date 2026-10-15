@@ -69,7 +69,7 @@ jobs:
             exit 0
           fi
           # force push の後などで比べる相手が無いときは、差分を出せないのでテストする（黙って飛ばさない）
-          if ! files=$(git diff --name-only "$base"...HEAD); then
+          if ! files=$(git -c core.quotePath=false diff --name-only "$base"...HEAD); then
             echo "差分を出せないので、テストする"
             echo "code=true" >> "$GITHUB_OUTPUT"
             exit 0

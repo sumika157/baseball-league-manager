@@ -24,6 +24,7 @@ from django.views.generic import CreateView
 
 from ..application.club_management import ClubManagementService
 from ..application.dto import (
+    AwardRow,
     ClubPlanView,
     GameEditData,
     GameEditPlateAppearance,
@@ -36,6 +37,7 @@ from ..application.dto import (
     WorldContext,
 )
 from ..application.game_recording import GameRecordingService
+from ..application.game_view import GameViewService
 from ..application.pennant_club_details import ClubDetailsService
 from ..application.pennant_history import PennantHistoryService
 from ..application.pennant_home import PennantHomeService
@@ -78,6 +80,7 @@ from ..domain.value_objects import (
     Position,
 )
 from ..infrastructure.queries import (
+    DjangoAwardQuery,
     DjangoFieldingTotalsQuery,
     DjangoGameListQuery,
     DjangoHomeStadiumQuery,
@@ -95,6 +98,7 @@ from ..infrastructure.queries import (
     DjangoWorldSummaryQuery,
 )
 from ..infrastructure.repositories import (
+    DjangoAwardRepository,
     DjangoClubPlanRepository,
     DjangoFixtureRepository,
     DjangoGameRepository,
@@ -348,9 +352,9 @@ def build_pennant_ratings_service(scope: WorldScope) -> PennantRatingsViewServic
 
 
 def build_recording_service(scope: WorldScope) -> GameRecordingService:
-    """スコアブックを保存するサービスを組み立てる。
+    """試合の登録とスコアブックの保存を担うサービスを組み立てる。
 
-    `build_service(scope)` と同じく**組み立てはここだけ**にする。打席の記録は
+    `build_service(scope)` と同じく**組み立てはここだけ**にする。試合の登録も打席の記録も
     チームの一覧も試合の一覧も要らないので、依存は4つ（試合・チーム・リーグ・本拠地の球場）で足りる。
     実データの範囲だけを受け取る（ペナントの世界の範囲なら InvalidWorld）。
     """
@@ -360,6 +364,20 @@ def build_recording_service(scope: WorldScope) -> GameRecordingService:
         teams=DjangoTeamRepository(scope),
         leagues=DjangoLeagueRepository(scope),
         home_stadiums=DjangoHomeStadiumQuery(scope),
+    )
+
+
+def build_game_view_service(scope: WorldScope) -> GameViewService:
+    """試合の一覧と詳細を読むサービスを組み立てる。
+
+    `build_service(scope)` と同じく**組み立てはここだけ**にする。依存は全部渡し、呼ぶ側ごとに
+    一部だけ渡さない。実データの範囲もペナントの世界の範囲も受け取り、依存は全部、渡された範囲で作る
+    （範囲の外の試合・球団には触れない）。
+    """
+    return GameViewService(
+        games=DjangoGameRepository(scope),
+        teams=DjangoTeamRepository(scope),
+        game_list_query=DjangoGameListQuery(scope),
     )
 
 
@@ -489,6 +507,8 @@ def build_pennant_offseason_service(scope: WorldScope) -> PennantOffseasonServic
         ratings=DjangoRatingsRepository(scope),
         plans=DjangoClubPlanRepository(scope),
         releases=DjangoReleasePlanRepository(scope),
+        awards=DjangoAwardRepository(scope),
+        titles=build_service(scope),
         context_query=DjangoSimulationContextQuery(scope),
         playing_time=DjangoSeasonPlayingTimeQuery(scope),
         atomic=transaction.atomic,
@@ -538,6 +558,7 @@ def build_pennant_history_service(scope: WorldScope) -> PennantHistoryService:
         games=DjangoGameListQuery(scope),
         team_records=DjangoTeamRepository(scope),
         leagues=DjangoLeagueRepository(scope),
+        awards=DjangoAwardQuery(scope),
     )
 
 
@@ -585,6 +606,16 @@ def _scope(request, world_id: int | None) -> tuple[TeamApplicationService, World
     return build_service(_world_scope(request, world_id)), world
 
 
+def _game_scope(request, world_id: int | None) -> tuple[TeamApplicationService, GameViewService, WorldContext | None]:
+    """試合の画面が読む範囲。`_scope` と同じく、世界が無ければ実データ、あればその世界（無ければ 404）。"""
+    if world_id is None:
+        scope = _real_scope(request)
+        return build_service(scope), build_game_view_service(scope), None
+    world = _world_context(request, world_id)
+    scope = _world_scope(request, world_id)
+    return build_service(scope), build_game_view_service(scope), world
+
+
 def _own_team_id(world: WorldContext | None) -> int | None:
     """順位表で「自軍」の印を付ける球団。実データには自軍が無い。"""
     return world.managed_team_id if world is not None else None
@@ -605,7 +636,7 @@ def _parse_date(value: str | None) -> date | None:
 
 def _next_season_year(request) -> int:
     """世界の開幕年の既定。実データの最新シーズンの翌年（試合が無ければ今年）。"""
-    latest = build_service(_real_scope(request)).latest_game_year()
+    latest = build_game_view_service(_real_scope(request)).latest_game_year()
     return latest + 1 if latest is not None else date.today().year
 
 
@@ -1250,7 +1281,7 @@ def player_list(request, team_id, world_id=None):
         form = PlayerRegistrationForm(request.POST)
         if form.is_valid():
             try:
-                service.register_player(
+                build_roster_service(_real_scope(request)).register_player(
                     team_id=team_id,
                     name=form.cleaned_data["name"],
                     number=form.cleaned_data["number"],
@@ -1416,7 +1447,7 @@ def game_list(request, world_id=None):
     全件を一度に描くと件数ぶん重くなるため、指定が無ければ最新シーズンの
     最後に試合があった月を見せる。
     """
-    service, world = _scope(request, world_id)
+    service, games, world = _game_scope(request, world_id)
 
     def _int(name):
         value = request.GET.get(name)
@@ -1433,16 +1464,16 @@ def game_list(request, world_id=None):
         team_id = None
 
     if year is None:
-        year = service.latest_game_year()
+        year = games.latest_game_year()
 
-    months = service.list_game_months(year=year, team_id=team_id, league_id=league_id)
+    months = games.list_game_months(year=year, team_id=team_id, league_id=league_id)
     # 月を選んでいないとき（＝一覧を開いた直後）と、年・リーグ・チームを変えて
     # 選んでいた月に試合が無くなったときは、その範囲の最新の月に落とす。
     # 全件を一度に描くと件数ぶん重くなるため、月は必ず1つに決める
     if months and month not in months:
         month = months[-1]
 
-    listing = service.list_games(year=year, team_id=team_id, month=month, league_id=league_id)
+    listing = games.list_games(year=year, team_id=team_id, month=month, league_id=league_id)
     leagues = service.list_leagues()
 
     return _render(
@@ -1450,7 +1481,7 @@ def game_list(request, world_id=None):
         "myapp/game_list.html",
         {
             "games": listing.rows,
-            "years": service.list_game_seasons(),
+            "years": games.list_game_seasons(),
             "months": months,
             "leagues": leagues,
             "teams": teams,
@@ -1484,7 +1515,7 @@ def game_create(request):
             messages.error(request, "どちらのチームも担当していないため、この試合は登録できません。")
         else:
             try:
-                game = service.create_game(
+                game = build_recording_service(_real_scope(request)).create_game(
                     year=form.cleaned_data["year"],
                     played_on=form.cleaned_data["played_on"],
                     home_team_id=home_team_id,
@@ -1512,10 +1543,8 @@ def game_edit(request, game_id):
     require_GET により POST は 405 になり、旧フォームからの投稿が
     黙って捨てられて 200 が返る、という無反応な行き止まりを避ける）。
     """
-    service = build_service(_real_scope(request))
-
     try:
-        data = service.get_game_edit_data(game_id)
+        data = build_recording_service(_real_scope(request)).get_game_edit_data(game_id)
     except GameNotFound:
         raise Http404("試合が見つかりません。") from None
 
@@ -1665,9 +1694,9 @@ def _scorebook_vocabulary() -> dict:
 
 def game_detail(request, game_id, world_id=None):
     """試合詳細。その試合の出場選手の成績を並べる。"""
-    service, world = _scope(request, world_id)
+    _, games, world = _game_scope(request, world_id)
     try:
-        detail = service.get_game_detail(game_id)
+        detail = games.get_game_detail(game_id)
     except GameNotFound:
         raise Http404("試合が見つかりません。") from None
 
@@ -1692,6 +1721,17 @@ def _ratings_history(request, world: WorldContext | None, player_id: int) -> Pla
     return build_pennant_ratings_service(_world_scope(request, world.world_id)).get_history(player_id)
 
 
+def _player_awards(
+    request, world: WorldContext | None, team_id: int, player_id: int, played_years: set[int]
+) -> list[AwardRow]:
+    """選手ページの「獲得タイトル」。表彰はペナントの世界だけで、実データの選手には出さない（実データは保存しない）。"""
+    if world is None:
+        return []
+    return build_pennant_history_service(_world_scope(request, world.world_id)).get_player_awards(
+        world, team_id, player_id, played_years=played_years
+    )
+
+
 def player_detail(request, team_id, player_id, world_id=None):
     """選手の個人ページ。通算・年度別・月別の成績と、選んだ月の試合ごとの記録。
 
@@ -1712,6 +1752,7 @@ def player_detail(request, team_id, player_id, world_id=None):
             "player": profile.detail,
             "ratings_card": _ratings_card(request, world, player_id),
             "ratings_history": _ratings_history(request, world, player_id),
+            "awards": _player_awards(request, world, team_id, player_id, {row.year for row in profile.years or []}),
             "can_edit_team": world is None
             and build_permission_query(_real_scope(request)).can_manage(request.user, team_id),
         },
@@ -1735,13 +1776,13 @@ def player_edit(request, team_id, player_id):
     if request.method == "POST":
         # 退団・主将の指名/解任はフォームの検証を通さず、押されたボタンで判断する
         if "retire" in request.POST:
-            service.retire_player(team_id, player_id)
+            build_roster_service(_real_scope(request)).retire_player(team_id, player_id)
             messages.success(request, f"{detail.name} 選手を退団にしました。")
             return redirect(reverse("player_list", args=[team_id]))
 
         if "appoint_captain" in request.POST:
             try:
-                service.appoint_captain(team_id, player_id)
+                build_roster_service(_real_scope(request)).appoint_captain(team_id, player_id)
             except DomainError as error:
                 messages.error(request, str(error))
             else:
@@ -1765,14 +1806,14 @@ def player_edit(request, team_id, player_id):
             return redirect(reverse("player_edit", args=[team_id, player_id]))
 
         if "remove_captain" in request.POST:
-            service.remove_captain(team_id, player_id)
+            build_roster_service(_real_scope(request)).remove_captain(team_id, player_id)
             messages.success(request, f"{detail.name} 選手の主将を解任しました。")
             return redirect(reverse("player_edit", args=[team_id, player_id]))
 
         base_form = PlayerUpdateForm(request.POST)
         if base_form.is_valid():
             try:
-                service.update_player(
+                build_roster_service(_real_scope(request)).update_player(
                     team_id=team_id,
                     player_id=player_id,
                     name=base_form.cleaned_data["name"],

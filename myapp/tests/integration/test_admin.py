@@ -51,7 +51,7 @@ class AdminTest(BaseCase):
         self.assertContains(response, "投球成績")
 
     def test_player_list_shows_appearances(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         give_batting(self.team, self.rival, player.id, BattingLine(at_bats=4, singles=1))
 
         response = self.client.get("/admin/myapp/player/")
@@ -69,8 +69,9 @@ class WorkspaceRequiredTest(BaseCase):
         return {
             "name": "新リーグ",
             "display_order": 0,
-            "foreign_player_roster_limit": 5,
-            "foreign_player_game_limit": 3,
+            "foreign_active_limit": 4,
+            "foreign_active_pitcher_limit": 3,
+            "foreign_active_batter_limit": 3,
             "registered_player_limit": 70,
             "teams-TOTAL_FORMS": 0,
             "teams-INITIAL_FORMS": 0,
@@ -133,8 +134,8 @@ class AdminIndexTest(BaseCase):
         self.assertLess(body.index("/admin/myapp/"), body.index("/admin/auth/"))
 
     def test_overview_counts(self):
-        self.service.register_player(self.team.id, "山田", 10, "内野手")
-        self.service.register_player(self.team.id, "佐藤", 18, "投手")
+        self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        self.roster.register_player(self.team.id, "佐藤", 18, "投手")
 
         overview = self.service.get_admin_overview()
 
@@ -143,15 +144,15 @@ class AdminIndexTest(BaseCase):
         self.assertEqual(overview.pitcher_count, 1)
 
     def test_overview_flags_players_without_stats(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         self.assertEqual(self.service.get_admin_overview().players_without_stats, 1)
 
         give_batting(self.team, self.rival, player.id, BattingLine(at_bats=10, singles=3))
         self.assertEqual(self.service.get_admin_overview().players_without_stats, 0)
 
     def test_overview_flags_empty_teams_and_retired_players(self):
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
-        self.service.retire_player(self.team.id, player.id)
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        self.roster.retire_player(self.team.id, player.id)
 
         overview = self.service.get_admin_overview()
 
@@ -159,7 +160,7 @@ class AdminIndexTest(BaseCase):
         self.assertEqual(overview.retired_count, 1)
 
     def test_notes_appear_on_the_page(self):
-        self.service.register_player(self.team.id, "山田", 10, "内野手")
+        self.roster.register_player(self.team.id, "山田", 10, "内野手")
         self.assertContains(self.client.get("/admin/"), "成績が未入力の選手")
 
 
@@ -175,8 +176,8 @@ class AdminGroupingTest(BaseCase):
         self.client.force_login(User.objects.create_superuser(username="root", password="x"))
         self.other = make_league(name="別リーグ")
         self.x = orm_models.Team.objects.create(league=self.other, name="Xチーム")
-        self.service.register_player(self.team.id, "山田", 10, "内野手")
-        self.service.register_player(self.x.id, "田中", 20, "外野手")
+        self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        self.roster.register_player(self.x.id, "田中", 20, "外野手")
 
     def test_team_list_has_league_headings(self):
         response = self.client.get("/admin/myapp/team/")
@@ -270,8 +271,8 @@ class LeagueAccordionTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.client.force_login(User.objects.create_superuser(username="root", password="x"))
-        self.service.register_player(self.team.id, "山田", 10, "内野手")
-        self.service.register_player(self.team.id, "佐藤", 18, "投手")
+        self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        self.roster.register_player(self.team.id, "佐藤", 18, "投手")
 
     def _body(self):
         return self.client.get("/admin/myapp/league/").content.decode()
@@ -294,8 +295,8 @@ class LeagueAccordionTest(BaseCase):
         self.assertIn("2名", self._body())
 
     def test_retired_players_are_not_counted(self):
-        player = self.service.register_player(self.team.id, "退団", 99, "内野手")
-        self.service.retire_player(self.team.id, player.id)
+        player = self.roster.register_player(self.team.id, "退団", 99, "内野手")
+        self.roster.retire_player(self.team.id, player.id)
 
         # 在籍中は2名のまま
         self.assertIn("2名", self._body())
@@ -344,7 +345,7 @@ class GameAdminReadOnlyTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.client.force_login(User.objects.create_superuser(username="root", password="x"))
-        player = self.service.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         self.game = play_game(
             self.team,
             self.rival,
@@ -447,9 +448,9 @@ class PlayerDeleteProtectedTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.client.force_login(User.objects.create_superuser(username="root", password="x"))
-        self.batter = self.service.register_player(self.team.id, "打者", 10, "内野手")
-        self.pitcher = self.service.register_player(self.rival.id, "投手", 18, "投手")
-        self.runner = self.service.register_player(self.team.id, "走者", 11, "内野手")
+        self.batter = self.roster.register_player(self.team.id, "打者", 10, "内野手")
+        self.pitcher = self.roster.register_player(self.rival.id, "投手", 18, "投手")
+        self.runner = self.roster.register_player(self.team.id, "走者", 11, "内野手")
         self.game = play_game(self.team, self.rival, home_score=0, away_score=0)
         entry = orm_models.GamePlateAppearance.objects.create(
             game_id=self.game.id,
@@ -488,7 +489,7 @@ class PlayerDeleteProtectedTest(BaseCase):
         self.assertEqual(orm_models.GameRunnerAdvance.objects.count(), 1)
 
     def test_a_player_without_any_plate_appearance_can_still_be_deleted(self):
-        bystander = self.service.register_player(self.team.id, "控え", 99, "内野手")
+        bystander = self.roster.register_player(self.team.id, "控え", 99, "内野手")
 
         response = self._delete(bystander.id)
 
