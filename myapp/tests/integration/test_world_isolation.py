@@ -512,44 +512,56 @@ class AdminDoesNotShowThePennantWorldTest(WorldCase):
 
 # --- モデルの分類表 -----------------------------------------------------------------
 
-LEAGUE = "リーグ経由で世界に属す"
-PLAYER = "選手経由で世界に属す"
-GAME = "試合経由で世界に属す"
-SHARED = "共有"
-PENNANT_ONLY = "ペナント専用"
+LEAGUE = "リーグ経由でワークスペースに属す"
+PLAYER = "選手の在籍経由でワークスペースに属す"
+GAME = "試合経由でワークスペースに属す"
+DIRECT = "ワークスペース直属"
+MEMBER = "メンバー"
+BOTH = "2経路（リーグ）"
+ROOT = "全体"
 
-# モデル名 -> (分類, League.world に至る道)。道は「そのモデルから見た関連名を `__` でつないだもの」。
-# 世界に属すモデルは、League.world までの道が実在することを下のテストが確かめる。
+# モデル名 -> (分類, 道)。
+# - LEAGUE / PLAYER / GAME: 道は「そのモデルから League までの関連名を `__` でつないだもの」
+#   （今の絞り込み `world_condition` の path と同じ）。
+# - DIRECT / MEMBER: 道は Workspace までの関連名（`workspace`）。
+# - BOTH（League だけ）: 道は無い。Workspace へ着く2経路を `LEAGUE_ROUTES` に持つ。
+# - ROOT（Workspace）: 自身。道は無い。
 # **モデルを足したら、ここに分類を足す。** 分類が無いとテストが落ちる（絞り込みの要否を
-# 決めないままにしない）。世界の削除（`DjangoWorldRepository.delete`）も、ここで世界に属すとした
-# モデルをすべて消すことを確かめている。
+# 決めないままにしない）。世界の削除（`DjangoWorldRepository.delete`）も、ここで League 経由・
+# 選手経由・試合経由としたモデルをすべて消すことを確かめている。
 CLASSIFICATION: dict[str, tuple[str, str | None]] = {
-    "League": (LEAGUE, "world"),
-    "Team": (LEAGUE, "league__world"),
-    "PlayerStint": (LEAGUE, "team__league__world"),
-    "Captaincy": (LEAGUE, "team__league__world"),
-    "Player": (PLAYER, "stints__team__league__world"),
-    "PennantPlayerRatings": (PLAYER, "player__stints__team__league__world"),
-    "PlayerFreeAgentDeclaration": (PLAYER, "player__stints__team__league__world"),
-    "PennantFixture": (LEAGUE, "home_team__league__world"),
-    "PennantClubPlan": (LEAGUE, "team__league__world"),
-    "PennantClubPlanEntry": (LEAGUE, "plan__team__league__world"),
-    "Game": (GAME, "home_team__league__world"),
-    "GameInningScore": (GAME, "game__home_team__league__world"),
-    "GameBattingLine": (GAME, "game__home_team__league__world"),
-    "GamePitchingLine": (GAME, "game__home_team__league__world"),
-    "GameFieldingLine": (GAME, "game__home_team__league__world"),
-    "GamePlateAppearance": (GAME, "game__home_team__league__world"),
-    "GameRunnerAdvance": (GAME, "plate_appearance__game__home_team__league__world"),
-    "GameRunnerSubstitution": (GAME, "plate_appearance__game__home_team__league__world"),
-    "GameFieldingError": (GAME, "plate_appearance__game__home_team__league__world"),
-    "Stadium": (SHARED, None),
-    "PennantWorld": (PENNANT_ONLY, None),
+    "Workspace": (ROOT, None),
+    "WorkspaceEditor": (MEMBER, "workspace"),
+    "PennantWorld": (DIRECT, "workspace"),
+    "Stadium": (DIRECT, "workspace"),
+    "League": (BOTH, None),
+    "Team": (LEAGUE, "league"),
+    "PlayerStint": (LEAGUE, "team__league"),
+    "Captaincy": (LEAGUE, "team__league"),
+    "Player": (PLAYER, "stints__team__league"),
+    "PennantPlayerRatings": (PLAYER, "player__stints__team__league"),
+    "PlayerFreeAgentDeclaration": (PLAYER, "player__stints__team__league"),
+    "PennantFixture": (LEAGUE, "home_team__league"),
+    "PennantClubPlan": (LEAGUE, "team__league"),
+    "PennantClubPlanEntry": (LEAGUE, "plan__team__league"),
+    "Game": (GAME, "home_team__league"),
+    "GameInningScore": (GAME, "game__home_team__league"),
+    "GameBattingLine": (GAME, "game__home_team__league"),
+    "GamePitchingLine": (GAME, "game__home_team__league"),
+    "GameFieldingLine": (GAME, "game__home_team__league"),
+    "GamePlateAppearance": (GAME, "game__home_team__league"),
+    "GameRunnerAdvance": (GAME, "plate_appearance__game__home_team__league"),
+    "GameRunnerSubstitution": (GAME, "plate_appearance__game__home_team__league"),
+    "GameFieldingError": (GAME, "plate_appearance__game__home_team__league"),
 }
+
+# League から Workspace へ着く道。実データのリーグは直接、ペナントのリーグは世界経由
+# （T6 の CheckConstraint で、どちらか片方だけを持つ）
+LEAGUE_ROUTES = ("workspace", "world__workspace")
 
 
 def _follow(model, route):
-    """モデルから関連をたどる。たどれなければ例外。たどり着いたフィールドを返す。"""
+    """モデルから関連をたどる。たどれなければ例外。(着いたモデル, 最後のフィールド) を返す。"""
     field = None
     for name in route.split("__"):
         field = model._meta.get_field(name)
@@ -559,7 +571,7 @@ def _follow(model, route):
 
 
 class ModelClassificationTest(SimpleTestCase):
-    """全モデルが、世界にどう属すかを決められていること（`test_stat_fields.py` と同じ突き合わせの形）。"""
+    """全モデルが、ワークスペースにどう属すかを決められていること（`test_stat_fields.py` と同じ突き合わせの形）。"""
 
     def _models(self):
         return {model.__name__: model for model in apps.get_app_config("myapp").get_models()}
@@ -569,7 +581,7 @@ class ModelClassificationTest(SimpleTestCase):
         self.assertEqual(
             unclassified,
             [],
-            f"世界への属し方が決まっていないモデルがあります: {unclassified}。"
+            f"ワークスペースへの属し方が決まっていないモデルがあります: {unclassified}。"
             "この表に分類を足し、絞り込み（infrastructure/scoping.py）と世界の削除も直してください。",
         )
 
@@ -577,33 +589,49 @@ class ModelClassificationTest(SimpleTestCase):
         stale = sorted(set(CLASSIFICATION) - set(self._models()))
         self.assertEqual(stale, [], f"存在しないモデルが表に残っています: {stale}")
 
-    def test_models_in_a_world_reach_league_world(self):
-        """世界に属すモデルは、書かれた道をたどると League.world に着く。"""
+    def test_every_model_reaches_league_or_workspace(self):
+        """全モデルが、書かれた道をたどると League か Workspace に着く。"""
         models = self._models()
         for name, (kind, route) in CLASSIFICATION.items():
-            if kind in (SHARED, PENNANT_ONLY):
-                self.assertIsNone(route, f"{name} は世界に属さないので道は要りません")
-                continue
             with self.subTest(model=name):
+                if kind in (ROOT, BOTH):
+                    self.assertIsNone(route, f"{name} の道は別に持つか、要りません")
+                    continue
                 assert route is not None
-                model, field = _follow(models[name], route)
-                self.assertIs(model, orm_models.PennantWorld)
-                self.assertEqual((field.model, field.name), (orm_models.League, "world"))
+                model, _ = _follow(models[name], route)
+                if kind in (LEAGUE, PLAYER, GAME):
+                    self.assertIs(model, orm_models.League)
+                else:
+                    self.assertIs(model, orm_models.Workspace)
 
-    def test_shared_models_do_not_point_into_a_world(self):
-        """共有のモデルは、世界に属す行を指さない（指すなら共有ではない）。"""
+    def test_the_league_has_both_paths_to_the_workspace(self):
+        """League は、実データ（workspace）とペナント（world 経由）の2経路のどちらも実在する。"""
+        self.assertEqual(CLASSIFICATION["League"][0], BOTH)
+        for route in LEAGUE_ROUTES:
+            with self.subTest(route=route):
+                model, _ = _follow(orm_models.League, route)
+                self.assertIs(model, orm_models.Workspace)
+        self.assertEqual(_follow(orm_models.League, "workspace")[1].model, orm_models.League)
+        self.assertEqual(_follow(orm_models.League, "world__workspace")[1].model, orm_models.PennantWorld)
+
+    def test_workspace_level_models_do_not_point_into_a_league(self):
+        """ワークスペース直属・メンバーのモデルは、リーグ以下の行を指さない（指すならリーグ経由）。
+
+        例外は世界の「受け持つ球団」だけ（世界は直属だが、遊ぶ球団を指す。球団を消すと外れる）。
+        """
         models = self._models()
-        world_models = {
-            models[name] for name, (kind, _) in CLASSIFICATION.items() if kind not in (SHARED, PENNANT_ONLY)
-        }
+        below_league = {
+            models[name] for name, (kind, _) in CLASSIFICATION.items() if kind in (LEAGUE, PLAYER, GAME)
+        } | {orm_models.League}
+        allowed = {("PennantWorld", "managed_team")}
         for name, (kind, _) in CLASSIFICATION.items():
-            if kind != SHARED:
+            if kind not in (DIRECT, MEMBER):
                 continue
             for field in models[name]._meta.get_fields():
-                if field.is_relation and field.concrete:
-                    self.assertNotIn(field.related_model, world_models, f"{name}.{field.name}")
+                if field.is_relation and field.concrete and (name, field.name) not in allowed:
+                    self.assertNotIn(field.related_model, below_league, f"{name}.{field.name}")
 
-    def test_the_world_deletion_covers_every_model_that_belongs_to_a_world(self):
+    def test_the_world_deletion_covers_every_model_that_belongs_to_a_league(self):
         from myapp.infrastructure.repositories import _WORLD_ROWS_CHILD_FIRST
 
         models = self._models()
@@ -613,8 +641,15 @@ class ModelClassificationTest(SimpleTestCase):
         expected = {
             name for name, (kind, _) in CLASSIFICATION.items() if kind in (LEAGUE, PLAYER, GAME)
         } - individually
-        self.assertEqual(deleted, expected, "世界の削除が、世界に属すモデルと食い違っています")
+        self.assertEqual(deleted, expected, "世界の削除が、League 以下のモデルと食い違っています")
         self.assertTrue(deleted <= set(models))
+        # 道（League までの関連名）も分類表と一致する。ずれると別の行を消す・消し残す
+        routes = {model.__name__: route for model, route in _WORLD_ROWS_CHILD_FIRST}
+        self.assertEqual(routes, {name: CLASSIFICATION[name][1] for name in expected})
+        # 世界の削除が触れてはならない、ワークスペース直属・メンバー・全体のモデル
+        for name, (kind, _) in CLASSIFICATION.items():
+            if kind in (DIRECT, MEMBER, ROOT):
+                self.assertNotIn(name, deleted)
 
 
 # ペナントの画面のリンクが向いてよい、世界の外の行き先（ヘッダーの出口）

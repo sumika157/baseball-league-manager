@@ -29,7 +29,7 @@ from myapp.presentation.views import build_pennant_world_service
 
 from ..helpers import play_game
 from .base import BaseCase
-from .test_world_isolation import CLASSIFICATION, GAME, LEAGUE, PLAYER
+from .test_world_isolation import BOTH, CLASSIFICATION, GAME, LEAGUE, PLAYER
 from .world_case import PENNANT_LEAGUE, PENNANT_TEAM, YEAR, WorldCase
 
 START = 2030
@@ -419,10 +419,12 @@ class DeleteWorldTest(WorldCase):
         """世界に属すモデルごとの行数（分類表の道をたどって数える）。"""
         counts = {}
         for name, (kind, route) in CLASSIFICATION.items():
-            if kind not in (LEAGUE, PLAYER, GAME):
+            if kind not in (LEAGUE, PLAYER, GAME, BOTH):
                 continue
             model = getattr(orm_models, name)
-            counts[name] = model.objects.filter(**{f"{route}__isnull": False}).count()
+            # 道は League までなので、世界に属すのは League の world が空でない行（League 自身は道が無い）
+            world_path = f"{route}__world" if route else "world"
+            counts[name] = model.objects.filter(**{f"{world_path}__isnull": False}).count()
         return counts
 
     def test_the_world_has_rows_in_every_table_before_deleting(self):

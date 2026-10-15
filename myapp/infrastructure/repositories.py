@@ -1517,6 +1517,7 @@ class DjangoWorldRepository:
                 "seed": world.seed,
                 "managed_team_id": world.managed_team_id,
                 "start_year": world.start_year,
+                "workspace_id": world.workspace_id,
             },
         )
         world.id = row.id
@@ -1556,4 +1557,5 @@ class DjangoWorldRepository:
             start_year=row.start_year,
             owner_id=row.owner_id,
             managed_team_id=row.managed_team_id,
+            workspace_id=row.workspace_id,
         )
