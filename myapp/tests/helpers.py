@@ -26,7 +26,13 @@ from myapp.domain.value_objects import (
 )
 from myapp.domain.workspace import KEY_LENGTH, Visibility
 from myapp.infrastructure import orm_models
-from myapp.infrastructure.repositories import DjangoGameRepository, DjangoLeagueRepository, DjangoTeamRepository
+from myapp.infrastructure.queries import DjangoWorldSummaryQuery
+from myapp.infrastructure.repositories import (
+    DjangoGameRepository,
+    DjangoLeagueRepository,
+    DjangoTeamRepository,
+    DjangoWorldRepository,
+)
 
 # テストも画面と同じ組み立て（presentation/views.py）を使い、ここから再輸出する。
 # テスト専用の組み立てを別に持つと、依存が食い違ってもテストでは気づけない
@@ -70,6 +76,16 @@ def real_scope(workspace: orm_models.Workspace | None = None) -> WorldScope:
     workspace を省くと既定のワークスペース（`BaseCase` が最初に作るので id が最小＝今の URL が解決するもの）。
     """
     return WorldScope.real((workspace or default_workspace()).pk)
+
+
+def world_ledger(workspace: orm_models.Workspace | None = None) -> DjangoWorldRepository:
+    """世界の台帳（ワークスペースで絞る）。workspace を省くと既定のワークスペース。"""
+    return DjangoWorldRepository((workspace or default_workspace()).pk)
+
+
+def world_summary_query(workspace: orm_models.Workspace | None = None) -> DjangoWorldSummaryQuery:
+    """世界の見出しの台帳（ワークスペースで絞る）。workspace を省くと既定のワークスペース。"""
+    return DjangoWorldSummaryQuery((workspace or default_workspace()).pk)
 
 
 def world_scope(world_id: int) -> WorldScope:

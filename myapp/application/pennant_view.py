@@ -14,7 +14,8 @@ from collections.abc import Callable
 from datetime import date
 
 from ..domain.pennant.season import is_final_season, season_phase, season_year
-from ..domain.pennant.world import MAX_WORLDS_PER_OWNER
+from ..domain.pennant.world import MAX_WORLDS_PER_OWNER, WORLD_LIMIT_MESSAGE
+from ..domain.repositories import WorldRepository
 from .dto import OwnRace, OwnStanding, PennantWorldList, PennantWorldListRow, WorldContext, WorldSummary
 from .pennant_race import own_race, tiebreak_for
 from .queries import GameListQuery, WorldSummaryQuery
@@ -46,10 +47,12 @@ class PennantWorldViewService:
         self,
         *,
         summaries: WorldSummaryQuery,
+        worlds: WorldRepository,
         standings_for: Callable[[int], TeamApplicationService],
         games_for: Callable[[int], GameListQuery],
     ) -> None:
         self._summaries = summaries
+        self._worlds = worlds
         self._standings_for = standings_for
         self._games_for = games_for
 
@@ -67,13 +70,23 @@ class PennantWorldViewService:
         どちらも最後に進めた日が新しい順（まだ進めていない世界は後ろ）。`viewer_id` が None
         （未ログイン）なら、自分の世界は無い。オーナーのいない世界（コマンドで作った世界）は
         ほかの人の世界。
+
+        上限に達したか（作成フォームを出すか）は、作成の検査と同じ `count_by_owner`（全ワークスペースで数える）で
+        決める。このワークスペースの自分の世界の数で決めると、ほかのワークスペースに世界を持つ人に、送っても
+        拒まれるフォームを見せてしまう。未ログインなら数えない。
         """
         rows = sorted(
             self.list_rows(), key=lambda row: (row.context.today or date.min, row.context.world_id), reverse=True
         )
         mine = [row for row in rows if viewer_id is not None and row.context.owner_id == viewer_id]
         others = [row for row in rows if row not in mine]
-        return PennantWorldList(mine=mine, others=others, world_limit=MAX_WORLDS_PER_OWNER)
+        return PennantWorldList(
+            mine=mine,
+            others=others,
+            world_limit=MAX_WORLDS_PER_OWNER,
+            owned_count=self._worlds.count_by_owner(viewer_id) if viewer_id is not None else 0,
+            limit_message=WORLD_LIMIT_MESSAGE,
+        )
 
     def _row_of(self, summary: WorldSummary) -> PennantWorldListRow:
         context = _context_of(summary)

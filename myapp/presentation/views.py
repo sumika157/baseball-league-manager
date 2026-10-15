@@ -216,12 +216,36 @@ def _real_scope(request) -> WorldScope:
 
 
 def _world_scope(request, world_id: int) -> WorldScope:
-    """ペナントの世界ひとつの範囲。世界の id が正しくなければ InvalidWorld。
+    """今の URL のワークスペースの、ペナントの世界ひとつの範囲。**そのワークスペースの台帳に無い世界は 404。**
 
-    暫定（W1b T2）: ワークスペースは今の URL のもの。世界がそのワークスペースに属するかの照合（台帳で引けたときだけ
-    範囲を作る）は T3 で足す。T2 の時点ではペナントの条件がワークスペースを使わないので、読み書きは変わらない。
+    ペナントの範囲の条件（`world_id = W`）はワークスペースを見ないので、ほかのワークスペースの世界の id で
+    範囲を作らせないよう、ワークスペースで絞った台帳で世界を引けたときだけ範囲を作る。
+    台帳は `_world_context` が既に読んでいる（世界の画面は必ず先に見出しを作る）ので、その結果を要求に覚えて使い、
+    クエリを増やさない。見出しを読んでいない要求だけ、ここで台帳を1回読む。
+    範囲を作るのは依存の組み立て（`views.py` の `build_*` と同じ組み立て口の側）の一部なので、
+    ここで `DjangoWorldRepository` を直接作る（ビューの本体はリポジトリを触らない）。
     """
-    return WorldScope.pennant(_workspace_id(request), world_id)
+    workspace_id = _workspace_id(request)
+    if world_id not in _verified_world_ids(request):
+        try:
+            DjangoWorldRepository(workspace_id).find_by_id(world_id)
+        except WorldNotFound:
+            raise Http404("世界が見つかりません。") from None
+        _verified_world_ids(request).add(world_id)
+    return WorldScope.pennant(workspace_id, world_id)
+
+
+# 要求（request）に覚える、今の URL のワークスペースの台帳で引けた世界の id の属性名
+_VERIFIED_WORLDS_ATTR = "_verified_world_ids"
+
+
+def _verified_world_ids(request) -> set[int]:
+    """この要求の中で、今の URL のワークスペースの台帳で引けた世界の id（`_world_context`・`_world_scope` が足す）。"""
+    verified = getattr(request, _VERIFIED_WORLDS_ATTR, None)
+    if verified is None:
+        verified = set()
+        setattr(request, _VERIFIED_WORLDS_ATTR, verified)
+    return verified
 
 
 def _pennant_world_id(scope: WorldScope) -> int:
@@ -244,7 +268,7 @@ def _today_for(scope: WorldScope) -> Callable[[], date]:
     """範囲の「今日」を返す関数。実データなら暦の今日、ペナントの世界ならその世界の「今日」。"""
     if scope.world_id is None:
         return date.today
-    return _world_clock(scope.world_id, DjangoSimulationContextQuery(scope))
+    return _world_clock(scope, DjangoSimulationContextQuery(scope))
 
 
 def build_service(scope: WorldScope) -> TeamApplicationService:
@@ -273,9 +297,13 @@ def build_service(scope: WorldScope) -> TeamApplicationService:
     )
 
 
-def _world_clock(world_id: int, context_query: SimulationContextQuery) -> Callable[[], date]:
-    """その世界の「今日」を返す関数。呼ばれるたびに読み直す（進めた後に古い日付を返さない）。"""
-    worlds = DjangoWorldRepository()
+def _world_clock(scope: WorldScope, context_query: SimulationContextQuery) -> Callable[[], date]:
+    """その世界の「今日」を返す関数。呼ばれるたびに読み直す（進めた後に古い日付を返さない）。
+
+    世界は範囲のワークスペースで絞った台帳から引く（ほかのワークスペースの世界なら、使うときに WorldNotFound）。
+    """
+    world_id = _pennant_world_id(scope)
+    worlds = DjangoWorldRepository(scope.workspace_id)
 
     def today() -> date:
         return world_today(worlds.find_by_id(world_id).start_year, context_query.last_played_on())
@@ -286,12 +314,15 @@ def _world_clock(world_id: int, context_query: SimulationContextQuery) -> Callab
 def build_pennant_world_view(workspace_id: int) -> PennantWorldViewService:
     """世界の見出し（世界バー・世界の一覧）を作るサービスを組み立てる。
 
-    見出しの材料は世界の台帳を読む参照クエリ（T2 の時点では範囲を持たない。T3 でワークスペースで絞る）が
-    一定のクエリ数でまとめて読む。自軍の順位だけは、世界の範囲のサービス（`build_service(世界の範囲)`）に任せる。
-    世界の範囲は渡されたワークスペースで作る（世界ごとにワークスペースを読み直さない）。
+    見出しの材料は、**渡されたワークスペースで絞った**世界の台帳を読む参照クエリが一定のクエリ数でまとめて読む
+    （ほかのワークスペースの世界は一覧に出ず、id で引いても WorldNotFound）。自軍の順位だけは、世界の範囲のサービス
+    （`build_service(世界の範囲)`）に任せる。世界の範囲は渡されたワークスペースで作る（世界の id は台帳が返したもの
+    だけなので、ほかのワークスペースの世界の範囲はできない。世界ごとにワークスペースを読み直さない）。
+    作成フォームを出すかの上限の判定は、作成の検査と同じ台帳の `count_by_owner`（全ワークスペースで数える）で行う。
     """
     return PennantWorldViewService(
-        summaries=DjangoWorldSummaryQuery(),
+        summaries=DjangoWorldSummaryQuery(workspace_id),
+        worlds=DjangoWorldRepository(workspace_id),
         standings_for=lambda world_id: build_service(WorldScope.pennant(workspace_id, world_id)),
         games_for=lambda world_id: DjangoGameListQuery(WorldScope.pennant(workspace_id, world_id)),
     )
@@ -306,13 +337,13 @@ def build_pennant_ratings_service(scope: WorldScope) -> PennantRatingsViewServic
     world_id = _pennant_world_id(scope)
     return PennantRatingsViewService(
         world_id=world_id,
-        worlds=DjangoWorldRepository(),
+        worlds=DjangoWorldRepository(scope.workspace_id),
         fixtures=DjangoFixtureRepository(scope),
         context_query=DjangoSimulationContextQuery(scope),
         stats=DjangoPlayerStatsQuery(scope),
         ratings=DjangoRatingsRepository(scope),
         history=DjangoRatingsHistoryQuery(scope),
-        today=_world_clock(world_id, DjangoSimulationContextQuery(scope)),
+        today=_world_clock(scope, DjangoSimulationContextQuery(scope)),
     )
 
 
@@ -409,7 +440,7 @@ def build_pennant_world_service(scope: WorldScope) -> PennantWorldService:
         real_leagues=DjangoLeagueRepository(scope),
         real_teams=DjangoTeamRepository(scope),
         real_fielding=DjangoFieldingTotalsQuery(scope),
-        worlds=DjangoWorldRepository(),
+        worlds=DjangoWorldRepository(scope.workspace_id),
         repositories_for=_repositories_for,
         atomic=transaction.atomic,
         ensure_schedule=lambda world_id: build_pennant_season_service(
@@ -429,7 +460,7 @@ def build_pennant_season_service(scope: WorldScope) -> PennantSeasonService:
     world_id = _pennant_world_id(scope)
     return PennantSeasonService(
         world_id=world_id,
-        worlds=DjangoWorldRepository(),
+        worlds=DjangoWorldRepository(scope.workspace_id),
         leagues=DjangoLeagueRepository(scope),
         teams=DjangoTeamRepository(scope),
         games=DjangoGameRepository(scope),
@@ -451,7 +482,7 @@ def build_pennant_offseason_service(scope: WorldScope) -> PennantOffseasonServic
     world_id = _pennant_world_id(scope)
     return PennantOffseasonService(
         world_id=world_id,
-        worlds=DjangoWorldRepository(),
+        worlds=DjangoWorldRepository(scope.workspace_id),
         leagues=DjangoLeagueRepository(scope),
         teams=DjangoTeamRepository(scope),
         fixtures=DjangoFixtureRepository(scope),
@@ -470,7 +501,9 @@ def build_offseason_view_service(scope: WorldScope) -> OffseasonViewService:
     ペナントの世界の範囲だけを受け取る（実データの範囲なら InvalidWorld）。
     """
     _pennant_world_id(scope)
-    return OffseasonViewService(worlds=DjangoWorldRepository(), offseason=DjangoOffseasonQuery(scope))
+    return OffseasonViewService(
+        worlds=DjangoWorldRepository(scope.workspace_id), offseason=DjangoOffseasonQuery(scope)
+    )
 
 
 def build_pennant_home_service(scope: WorldScope) -> PennantHomeService:
@@ -509,11 +542,17 @@ def build_pennant_history_service(scope: WorldScope) -> PennantHistoryService:
 
 
 def _world_context(request, world_id: int) -> WorldContext:
-    """世界の見出し。存在しない・id が正しくない世界は 404。"""
+    """世界の見出し。存在しない・id が正しくない・今の URL のワークスペースに無い世界は 404。
+
+    見出しはワークスペースで絞った台帳から読むので、引けた世界の id を要求に覚え、
+    続く `_world_scope` が台帳を読み直さずに範囲を作れるようにする。
+    """
     try:
-        return build_pennant_world_view(_workspace_id(request)).get_context(world_id)
+        context = build_pennant_world_view(_workspace_id(request)).get_context(world_id)
     except (WorldNotFound, InvalidWorld):
         raise Http404("世界が見つかりません。") from None
+    _verified_world_ids(request).add(context.world_id)
+    return context
 
 
 def _is_owner(request, world: WorldContext) -> bool:
@@ -848,7 +887,7 @@ def build_club_service(scope: WorldScope) -> ClubManagementService:
     world_id = _pennant_world_id(scope)
     return ClubManagementService(
         world_id=world_id,
-        worlds=DjangoWorldRepository(),
+        worlds=DjangoWorldRepository(scope.workspace_id),
         plans=DjangoClubPlanRepository(scope),
         ratings=DjangoRatingsRepository(scope),
         fixtures=DjangoFixtureRepository(scope),
@@ -862,11 +901,11 @@ def build_club_details_service(scope: WorldScope) -> ClubDetailsService:
     参照クエリとリポジトリは**渡された世界の範囲で**作る。年齢の基準日は世界の「今日」。
     ペナントの世界の範囲だけを受け取る（実データの範囲なら InvalidWorld）。
     """
-    world_id = _pennant_world_id(scope)
+    _pennant_world_id(scope)
     return ClubDetailsService(
         stats=DjangoPlayerStatsQuery(scope),
         ratings=DjangoRatingsRepository(scope),
-        today=_world_clock(world_id, DjangoSimulationContextQuery(scope)),
+        today=_world_clock(scope, DjangoSimulationContextQuery(scope)),
     )
 
 

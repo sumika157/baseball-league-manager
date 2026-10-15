@@ -25,6 +25,7 @@ from ..domain.pennant.world import (
     MAX_SOURCE_LEAGUES,
     MAX_START_YEAR,
     MAX_WORLDS_PER_OWNER,
+    WORLD_LIMIT_MESSAGE,
     World,
     WorldScope,
     earliest_start_year,
@@ -149,9 +150,7 @@ class PennantWorldService:
         if len(league_ids) > MAX_SOURCE_LEAGUES:
             raise InvalidWorld(f"分岐元のリーグは{MAX_SOURCE_LEAGUES}つまで選べます。")
         if owner_id is not None and self._worlds.count_by_owner(owner_id) >= MAX_WORLDS_PER_OWNER:
-            raise InvalidWorld(
-                f"作れる世界は1人{MAX_WORLDS_PER_OWNER}つまでです。不要な世界を削除してから作ってください。"
-            )
+            raise InvalidWorld(WORLD_LIMIT_MESSAGE)
         # 検査を先に済ませる（世界を作ってから失敗すると、消す手間が増える）
         world = World(name=name, seed=seed, start_year=start_year, owner_id=owner_id, workspace_id=self._workspace_id)
         source = self.load_source(league_ids)

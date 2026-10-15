@@ -1498,10 +1498,16 @@ class PennantWorldList:
     others: list[PennantWorldListRow]
     # 1人が持てる世界の数（上限に達したら作成フォームを出さない）
     world_limit: int
+    # 見ている人がオーナーの世界の数。作成の検査（`WorldRepository.count_by_owner`）と同じ数え方で、
+    # ほかのワークスペースの世界も含む（`mine` はこのワークスペースの世界だけなので、数に使わない）
+    owned_count: int
+    # 上限に達したときに、作成フォームの代わりに出す理由（作成の拒否と同じ文言）
+    limit_message: str
 
     @property
     def at_limit(self) -> bool:
-        return len(self.mine) >= self.world_limit
+        """作ろうとしても拒まれるときだけ真（作成の検査と同じ数で判定する）。"""
+        return self.owned_count >= self.world_limit
 
 
 @dataclass(frozen=True)

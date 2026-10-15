@@ -94,6 +94,7 @@ from .scoping import (
     stints_in,
     teams_in,
     world_condition,
+    worlds_in,
 )
 
 
@@ -870,22 +871,33 @@ class DjangoHomeStadiumQuery:
 
 
 class DjangoWorldSummaryQuery:
-    """WorldSummaryQuery の Django ORM 実装。世界の台帳そのものなので、範囲は持たない。
+    """WorldSummaryQuery の Django ORM 実装。世界の台帳を、ワークスペース（必須）で絞って読む。
 
+    ほかのワークスペースの世界の id は `WorldNotFound`、一覧にも出ない。
     世界の数にかかわらず、一定のクエリ数（世界・最後の試合日・次の対戦の日・リーグの4本。一覧は球団ごとの残り試合の2本が加わる）で読む。
     """
 
+    def __init__(self, workspace_id: int) -> None:
+        self._workspace_id = workspace_id
+
     def get(self, world_id: int) -> WorldSummary:
-        rows = self._read(orm_models.PennantWorld.objects.filter(id=world_id))
+        rows = self._read(world_id=world_id)
         if not rows:
             raise WorldNotFound(f"世界が見つかりません（id={world_id}）。")
         return rows[0]
 
     def list_all(self) -> list[WorldSummary]:
-        return self._read(orm_models.PennantWorld.objects.all(), with_remaining=True)
+        return self._read(with_remaining=True)
 
-    @staticmethod
-    def _read(worlds: QuerySet[orm_models.PennantWorld], *, with_remaining: bool = False) -> list[WorldSummary]:
+    def _read(self, *, world_id: int | None = None, with_remaining: bool = False) -> list[WorldSummary]:
+        """このワークスペースの世界（`world_id` を渡せばその1つだけ）の見出しを読む。
+
+        世界の行は**ここで必ず** `worlds_in(このワークスペース)` から引く（呼ぶ側に QuerySet を渡させない）。
+        `*_in_worlds` はワークスペースを見ないので、渡す id がこの行から来ることを形で守る。
+        """
+        worlds = worlds_in(self._workspace_id)
+        if world_id is not None:
+            worlds = worlds.filter(id=world_id)
         rows = list(worlds.select_related("managed_team"))
         ids = [row.id for row in rows]
         # order_by() で既定の並びを外す（外さないと、並びの列が GROUP BY に入って世界ごとにまとまらない）

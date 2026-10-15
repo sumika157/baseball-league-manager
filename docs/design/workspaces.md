@@ -691,3 +691,60 @@ W3 を W4 より先にするのは、W4 を先にすると、中身を入れら�
 
 - クエリ数はすべての画面でちょうど +1（一時関数の1本）。基点・同時刻のクエリ数は T0 と同じで、写しと手順が同じであることの確かめにもなる。
 - 応答時間は、同時刻の基点と比べて誤差の範囲（実データの画面は ±5% 以内か T2 が速い。ペナントの画面は −1〜+9ms）。肯定形の `Exists` に替えた選手検索も 19→16ms で劣化は無い。完了条件（クエリ数は +1 まで・応答時間は誤差の範囲）を満たす。
+
+#### T3
+
+- T3（`feature/workspace-world-ledger`）: 世界の台帳をワークスペースで絞る（Q3）。マイグレーションは無い。
+  - infrastructure: `scoping.py` に `worlds_in(workspace_id)`（そのワークスペースの `PennantWorld`）。`DjangoWorldRepository(workspace_id)`・`DjangoWorldSummaryQuery(workspace_id)`（既定値なし）は、読み・削除をすべて `worlds_in` から引く。ほかのワークスペースの世界の id は `find_by_id`・`get`・`delete` で `WorldNotFound`、`find_all`・`list_all` に出ない。`world_condition_in`・`*_in_worlds` に渡すのは `worlds_in` で絞った行の id だけ（docstring に明記）。
+  - **保存の乗っ取りの防ぎ方**: `update_or_create(id=...)` をやめた。`world.workspace_id` が空なら `InvalidWorld`（T2 のまま）、台帳と違うワークスペースなら `InvalidWorld`（「ほかのワークスペースの世界は保存できません。」）。id の無い世界は台帳のワークスペースに `create`。id のある世界は `worlds_in(ws).filter(id=...).update(...)` の1クエリで更新し、0行なら `WorldNotFound`（ほかのワークスペースの世界の id でも、台帳に無い id でも、何も書かず新しい行も作らない）。`workspace_id` は更新の対象に入れない（ワークスペースは作るときに決まり、動かない）。
+  - `count_by_owner` は全ワークスペースで数える（世界の数の上限は1人あたり。読み替えは W6）。docstring とドメインのプロトコルに書いた。
+  - presentation: 世界の台帳を作る組み立て口（`build_pennant_world_view`・`build_pennant_world_service`・`build_pennant_season_service`・`build_pennant_offseason_service`・`build_pennant_ratings_service`・`build_club_service`・`build_offseason_view_service`）はすべて範囲のワークスペースを渡す。`_world_clock(scope, …)` は範囲を受け取り、その範囲のワークスペースの台帳で世界の開幕年を引く。
+  - **`_world_scope(request, world_id)` の照合**: 今の URL のワークスペースの台帳で世界を引けたときだけ `pennant(ws, w)` を作り、引けなければ 404。世界の画面は必ず先に `_world_context`（見出し）を作り、見出しは絞った `DjangoWorldSummaryQuery.get` で読むので、`_world_context` が引けた世界の id を要求に覚え（`_verified_world_ids`）、`_world_scope` はそれを見るだけにした。**世界の画面のクエリ数は変わらない**（下の計測）。見出しを読んでいない要求だけ、`_world_scope` が台帳を1回読む（今の画面には無い。テストで確かめた）。
+  - 管理コマンド: `legacy_world_scope(world_id)` は世界の行からワークスペースを導く（`infrastructure/workspaces.py` の `workspace_id_of_world`。無い世界は日本語の `CommandError`）。`pennant_delete` は新しい `legacy_world_real_scope(world_id)`（世界のワークスペースの実データの範囲）で組み立てる。`pennant_create`・`estimate_check`・`multi_season_check` は一時関数のワークスペースで作り、同じワークスペースの台帳で消すので変えていない。
+  - **計画からのずれ（1）: `workspace_id_of_world` を T3 で足した**（計画は T5）。`--world` から台帳のワークスペースを導くのに T3 の時点で要るため。T5 は `workspace_id_for_key` と `--workspace` だけを足す。台帳を通さずに世界のワークスペースを決める関数なので、`test_wiring.py` の `WorldWorkspaceResolverTest` が、名前を出すのが `infrastructure/workspaces.py`・`management/workspaces.py` だけかを確かめる（画面が使うと、今の URL のワークスペースに無い世界を開けてしまう）。
+  - テスト:
+    - `test_wiring.py`: `UNSCOPED` を空にし、空であることを検査する。`ScopeIsRequiredTest` は「台帳（`LEDGERS`）は `workspace_id`、ほかはすべて `scope` だけを既定値なしで受け取る」。`ProtocolConformanceTest` の台帳は引数つき。`LedgersAreScopedToTheWorkspaceTest`: 範囲のワークスペースを 3 にして全組み立て口を作り、持っている台帳（7つの組み立て口）と世界の「今日」の台帳（`build_service`・`build_team_analysis_service`・`build_pennant_ratings_service`・`build_club_details_service`）がそのワークスペースのものか。
+    - `test_workspace_isolation.py`: `WorkspaceCase` に A の世界（`A_WORLD`）と B の世界（目印の名前。オーナーは `b_owner`）を足し、`CHECKS` に台帳2つ（A の台帳に A の世界だけ・B の世界の id は `WorldNotFound`）を載せた（`LEDGERS` の除外は消した）。`WorldLedgerWritesTest`: A の台帳で B の世界を保存（そのまま→`InvalidWorld`・ワークスペースを A に書き換えた乗っ取り→`WorldNotFound`）・削除（`WorldNotFound`）しても、世界・B の世界のリーグと球団・戦力外の行が変わらない。A の台帳で自分の世界は更新できる（空振りの防止）。**T2 で外した戦力外の書き込み**: `pennant(A, A の世界)` の範囲で B の世界の球団の戦力外を指名すると `TeamNotFound` で何も変わらない。`WorldPagesOfTheOtherWorkspaceTest`: 今の URL で B の世界の17画面（見出し・歴代・オフ・削除・編成・順位表・リーグ・チーム・試合・戦力分析・選手）を B のオーナーで開いても 404、進める・締める・消すの POST も 404 で世界と試合が変わらない、`/pennant/` に A の世界だけが出る。`WorldScopeIsVerifiedAgainstTheLedgerTest`: B の世界の `_world_scope`・`_world_context` は 404、見出しの後の `_world_scope` は0クエリ、見出しの無い `_world_scope` は2回呼んでも台帳を1回だけ読む。どれも `worlds_in` を `PennantWorld.objects.all()` に戻すと落ちることを確かめた（30件）。
+    - `test_world_fork.py`: id が最小でないワークスペースの範囲で作った世界は、そのワークスペースに属し、その台帳で引けて既定のワークスペースの台帳では `WorldNotFound`。`pennant_delete --world` は、ほかのワークスペースの世界も行から導いて消す。`test_repositories.py`: 台帳と違うワークスペースの世界・台帳に無い id は保存しない（新しい行を作らない）、台帳は自分のワークスペースの世界だけを読み・消す、`count_by_owner` は全ワークスペースで数える。
+    - テストの補助: `world_ledger(workspace=None)`・`world_summary_query(workspace=None)`（省くと既定のワークスペース）。
+
+**計測（T0 と同じ手順。2026-10-15）**: 開発 DB を `backup()` で `/tmp/w1b-t3/db.sqlite3` に写した（`integrity_check` ok・試合 3,480）。**共有の開発 DB には main の `0049_league_foreign_active_limits`・`0050_remove_league_foreign_player_limits`（#204）が当たっていて、epic の 0049〜0051 と番号がぶつかる**（そのまま epic の `migrate` を流すと、リーグの外国人枠の列に列名の文字列が入った壊れた写しになり、`pennant_create` が `TypeError` で落ちる）。写しの上だけで、main の作業ツリーのコードで `migrate myapp 0048_pennant_release_plan`（#204 の2本を戻す。外国人枠は逆方向の既定値の 登録5・出場3 になる）→ T3 の worktree で `migrate`（0049〜0051）としてから、`pennant_create`（世界 1・リーグ2・球団12・選手966人）→ `pennant_advance --to week`（6日・36試合）。**同じ写しで基点 49b305b（T2 の後。使い捨ての worktree）と T3 を交互に3回ずつ**流し、それぞれの中央値を並べた。写しと使い捨ての worktree は計測後に消した。T5 以降も同じ写しを作るときは、この戻しの手順が要る（epic のマイグレーションを main の後ろへ振り直すまで）。
+
+| 画面 | T0（応答/SQL/クエリ） | T2 の後（基点 49b305b）・同時刻 | T3 |
+| --- | ---: | ---: | ---: |
+| ダッシュボード | 518 / 70 / 10 | 514 / 68 / 11 | 499 / 68 / 11 |
+| チーム一覧 | 16 / 6 / 2 | 16 / 6 / 3 | 15 / 6 / 3 |
+| 順位表 | 102 / 3 / 4 | 96 / 3 / 5 | 96 / 3 / 5 |
+| 順位表(2026) | 71 / 3 / 4 | 70 / 3 / 5 | 69 / 3 / 5 |
+| 選手一覧(野手) | 278 / 12 / 27 | 289 / 11 / 28 | 286 / 12 / 28 |
+| 選手一覧(投手) | 273 / 8 / 27 | 270 / 8 / 28 | 268 / 8 / 28 |
+| 選手詳細 | 95 / 3 / 15 | 91 / 2 / 16 | 90 / 3 / 16 |
+| 選手検索 | 15 / 1 / 4 | 14 / 1 / 5 | 15 / 1 / 5 |
+| リーグ詳細 | 74 / 9 / 5 | 72 / 9 / 6 | 73 / 9 / 6 |
+| リーグ成績 | 190 / 7 / 8 | 178 / 6 / 9 | 184 / 7 / 9 |
+| リーグタイトル | 70 / 9 / 7 | 68 / 9 / 8 | 70 / 9 / 8 |
+| 試合一覧 | 113 / 19 / 6 | 109 / 19 / 7 | 112 / 19 / 7 |
+| 試合詳細 | 516 / 35 / 17 | 506 / 35 / 18 | 500 / 35 / 18 |
+| 戦力分析 | 42 / 9 / 8 | 42 / 9 / 9 | 42 / 9 / 9 |
+| 戦力分析（起用マップ） | 31 / 9 / 8 | 31 / 9 / 9 | 31 / 9 / 9 |
+| 戦力分析（FA取得） | 47 / 14 / 13 | 47 / 14 / 14 | 46 / 13 / 14 |
+| ペナント一覧 `/pennant/` | 27 / 6 / 14 | 26 / 6 / 15 | 27 / 6 / 15 |
+| 世界ダッシュボード | 158 / 5 / 48 | 155 / 3 / 49 | 150 / 4 / 49 |
+| 世界の順位表 | 12 / 0 / 10 | 12 / 0 / 11 | 11 / 0 / 11 |
+| 世界のリーグ詳細 | 15 / 1 / 11 | 14 / 1 / 12 | 15 / 1 / 12 |
+| 世界のリーグ成績 | 136 / 0 / 16 | 128 / 0 / 17 | 130 / 0 / 17 |
+| 世界のチーム一覧 | 10 / 1 / 8 | 9 / 1 / 9 | 9 / 1 / 9 |
+| 世界の選手一覧 | 135 / 2 / 40 | 124 / 2 / 41 | 128 / 2 / 41 |
+| 世界の試合一覧 | 16 / 1 / 12 | 16 / 1 / 13 | 15 / 1 / 13 |
+| 世界の戦力分析 | 46 / 1 / 14 | 36 / 1 / 15 | 38 / 1 / 15 |
+| 世界の球団ホーム | 61 / 4 / 25 | 57 / 4 / 26 | 58 / 4 / 26 |
+
+- **クエリ数は T2 の後とすべての画面で同じ**（台帳の条件は既存のクエリの `WHERE` に1つ足されるだけで、`_world_scope` の照合は見出しの読み取りを使い回す）。T0 との差は T2 の一時関数の1本だけで、完了条件（+1 まで）を満たす。
+- 応答時間は同時刻の基点と誤差の範囲（実データ −15〜+6ms、ペナント −5〜+4ms）。この日の共有コンテナの負荷は T2 の計測の日より低く、基点の値は T0 とほぼ同じだった。
+
+**レビューの後に直したこと・後に回すこと（T3）**
+
+- 直した（M1）: 世界の一覧の作成フォームの上限（`PennantWorldList.at_limit`）は、このワークスペースの自分の世界の数（`mine`）ではなく、作成の検査と同じ `count_by_owner`（全ワークスペース）で決める。ほかのワークスペースに上限まで世界を持つ人に、送れば拒まれるフォームを見せないため（`PennantWorldViewService` が台帳を受け取る。ログインしている人の `/pennant/` だけクエリが1本増える）。上限の文言は `domain/pennant/world.py` の `WORLD_LIMIT_MESSAGE` を出典にし、作成の拒否と画面の理由の両方で使う（「ほかのワークスペースの世界も数えます」を足した）。W6 でワークスペースごとの上限に読み替えるときは、ここと `count_by_owner` を一緒に直す。
+- 直した: `DjangoWorldSummaryQuery._read` はインスタンスのメソッドにし、世界の行を必ず自分で `worlds_in(このワークスペース)` から引く（呼ぶ側に QuerySet を渡させない。`*_in_worlds` に渡す id の出どころを形で守る）。
+- 後に回す（a）多重の防御: ペナントの条件（`world_condition` の `world_id = W`）に `world__workspace_id = X` を足すと、範囲を作る側の照合が漏れても SQL で止まる。代わりに League → PennantWorld の結合が1つ増える。入れるかは測ってから決める（W2 で URL がワークスペースを運ぶようになった後が候補）。
+- 後に回す（b）W2: 今の URL のワークスペースは1つの要求で1つに決まるので、`_verified_world_ids` は世界の id だけで覚えている。W2 で URL の key からワークスペースを解決するようになったら、`(workspace_id, world_id)` で覚える形にする（1つの要求で2つのワークスペースを扱う経路ができても取り違えないように）。

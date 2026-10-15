@@ -87,6 +87,7 @@ from .scoping import (
     stints_in,
     teams_in,
     world_condition,
+    worlds_in,
 )
 
 _BATTING_FIELDS = (
@@ -1640,52 +1641,69 @@ class DjangoReleasePlanRepository:
 
 
 class DjangoWorldRepository:
-    """WorldRepository の Django ORM 実装。世界の台帳で、範囲は持たない。"""
+    """WorldRepository の Django ORM 実装。世界の台帳を、ワークスペース（必須）で絞って読み書きする。
+
+    ほかのワークスペースの世界の id は、読んでも消しても `WorldNotFound`。保存もそのワークスペースの世界にしか
+    書かない（`World.scope` のワークスペースは、この台帳が書いた行のものになる）。
+    """
+
+    def __init__(self, workspace_id: int) -> None:
+        self._workspace_id = workspace_id
 
     def find_by_id(self, world_id: int) -> World:
         try:
-            row = orm_models.PennantWorld.objects.get(id=world_id)
+            row = worlds_in(self._workspace_id).get(id=world_id)
         except orm_models.PennantWorld.DoesNotExist:
             raise WorldNotFound(f"世界が見つかりません（id={world_id}）。") from None
         return self._to_domain(row)
 
     def find_all(self) -> list[World]:
-        return [self._to_domain(row) for row in orm_models.PennantWorld.objects.all()]
+        return [self._to_domain(row) for row in worlds_in(self._workspace_id)]
 
     def count_by_owner(self, owner_id: int) -> int:
+        """そのユーザーがオーナーの世界の数。**ワークスペースで絞らず、全ワークスペースで数える。**
+
+        世界の数の上限は「1人あたり」の決まりなので、ワークスペースを分けても上限を回避できないようにしている。
+        ワークスペースごとの上限への読み替えは W6 で見直す。
+        """
         return orm_models.PennantWorld.objects.filter(owner_id=owner_id).count()
 
     def save(self, world: World) -> World:
-        # 世界は必ずワークスペースに属す（PennantWorldService が分岐元の範囲のワークスペースを渡す）。
-        # 空のまま来たら、どこかに書くのではなく拒む（W1b T2 で一時関数の補完をやめた）。
-        # 保存先のワークスペースが台帳の範囲と合うかの照合は T3（台帳をワークスペースで絞る）
-        workspace_id = world.workspace_id
-        if workspace_id is None:
+        """このワークスペースに世界を書く。
+
+        - ワークスペースの無い世界・ほかのワークスペースの世界は `InvalidWorld`（何も書かない）。
+        - id のある世界は、**このワークスペースの台帳にある行だけ**を更新する。無ければ `WorldNotFound`
+          （`update_or_create(id=...)` にすると、ほかのワークスペースの世界の id を渡されたときに書き換えてしまう）。
+        """
+        if world.workspace_id is None:
             raise InvalidWorld("世界はワークスペースに属している必要があります。")
-        row, _ = orm_models.PennantWorld.objects.update_or_create(  # type: ignore[misc]
-            id=world.id,
-            defaults={
-                "name": world.name,
-                "owner_id": world.owner_id,
-                "seed": world.seed,
-                "managed_team_id": world.managed_team_id,
-                "start_year": world.start_year,
-                "workspace_id": workspace_id,
-            },
-        )
-        world.id = row.id
-        world.workspace_id = workspace_id
+        if world.workspace_id != self._workspace_id:
+            raise InvalidWorld("ほかのワークスペースの世界は保存できません。")
+        fields = {
+            "name": world.name,
+            "owner_id": world.owner_id,
+            "seed": world.seed,
+            "managed_team_id": world.managed_team_id,
+            "start_year": world.start_year,
+        }
+        if world.id is None:
+            row = orm_models.PennantWorld.objects.create(workspace_id=self._workspace_id, **fields)
+            world.id = row.id
+            return world
+        # 絞った台帳の行だけを更新する（1クエリ。他所の世界の id なら0行で、何も変えない）
+        if not worlds_in(self._workspace_id).filter(id=world.id).update(**fields):
+            raise WorldNotFound(f"世界が見つかりません（id={world.id}）。")
         return world
 
     @transaction.atomic
     def delete(self, world_id: int) -> None:
-        """世界と、属する行をすべて消す。子のテーブルから、範囲で絞って順に消す。"""
-        workspace_id = (
-            orm_models.PennantWorld.objects.filter(id=world_id).values_list("workspace_id", flat=True).first()
-        )
-        if workspace_id is None:
+        """世界と、属する行をすべて消す。子のテーブルから、範囲で絞って順に消す。
+
+        ほかのワークスペースの世界の id は `WorldNotFound` で、何も消さない。
+        """
+        if not worlds_in(self._workspace_id).filter(id=world_id).exists():
             raise WorldNotFound(f"世界が見つかりません（id={world_id}）。")
-        scope = WorldScope.pennant(workspace_id, world_id)
+        scope = WorldScope.pennant(self._workspace_id, world_id)
 
         # 選手は在籍をたどって世界が決まるので、在籍を消す前に控えておく
         player_ids = list(players_in(scope).values_list("id", flat=True))
@@ -1703,7 +1721,7 @@ class DjangoWorldRepository:
         # 球団・リーグ・世界は数が少ないので、通常の削除でよい（担当者や受け持ちの参照も外れる）
         teams_in(scope).delete()
         leagues_in(scope).delete()
-        orm_models.PennantWorld.objects.filter(id=world_id).delete()
+        worlds_in(self._workspace_id).filter(id=world_id).delete()
 
     @staticmethod
     def _to_domain(row: orm_models.PennantWorld) -> World:

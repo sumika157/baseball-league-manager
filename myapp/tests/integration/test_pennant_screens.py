@@ -13,10 +13,9 @@ from django.urls import reverse
 
 from myapp.domain.exceptions import WorldNotFound
 from myapp.infrastructure import orm_models
-from myapp.infrastructure.queries import DjangoWorldSummaryQuery
 from myapp.presentation.views import build_pennant_world_service, build_service
 
-from ..helpers import real_scope, world_scope
+from ..helpers import real_scope, world_scope, world_summary_query
 from .base import BaseCase
 from .world_case import PENNANT_RIVAL, PENNANT_TEAM, PENNANT_WORLD, YEAR, WorldCase
 
@@ -234,7 +233,7 @@ class WorldSummaryQueryTest(WorldCase):
             date=date(YEAR, 4, 3), home_team=self.pennant_team, visitor_team=self.pennant_rival
         )
 
-        summary = DjangoWorldSummaryQuery().get(self.world_id)
+        summary = world_summary_query().get(self.world_id)
 
         self.assertEqual(summary.name, PENNANT_WORLD)
         self.assertEqual(summary.managed_team_name, PENNANT_TEAM)
@@ -256,22 +255,22 @@ class WorldSummaryQueryTest(WorldCase):
         )
         orm_models.PennantFixture.objects.create(date=late, home_team=self.team, visitor_team=self.rival)
 
-        summary = DjangoWorldSummaryQuery().get(self.world_id)
+        summary = world_summary_query().get(self.world_id)
 
         self.assertEqual(summary.last_played_on, date(YEAR, 4, 2))
         self.assertIsNone(summary.next_fixture_on)
-        listed = {s.world_id: s for s in DjangoWorldSummaryQuery().list_all()}
+        listed = {s.world_id: s for s in world_summary_query().list_all()}
         self.assertEqual(listed[other].last_played_on, late)
         self.assertEqual(listed[other].next_fixture_on, late)
 
     def test_an_unknown_world_is_not_found(self):
         with self.assertRaises(WorldNotFound):
-            DjangoWorldSummaryQuery().get(self.world_id + 100)
+            world_summary_query().get(self.world_id + 100)
 
     def test_the_query_count_does_not_grow_with_the_number_of_worlds(self):
         def count() -> int:
             with CaptureQueriesContext(connection) as captured:
-                DjangoWorldSummaryQuery().list_all()
+                world_summary_query().list_all()
             return len(captured)
 
         one = count()
@@ -279,7 +278,7 @@ class WorldSummaryQueryTest(WorldCase):
         create_empty_world(self)
 
         self.assertEqual(count(), one)
-        self.assertEqual(len(DjangoWorldSummaryQuery().list_all()), 3)
+        self.assertEqual(len(world_summary_query().list_all()), 3)
 
     def test_the_list_screen_reads_only_the_managed_season(self):
         """自軍の順位は、その年の試合だけを読む（全シーズンの試合を組み立てない）。"""

@@ -24,7 +24,7 @@ from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoClubPlanRepository
 from myapp.presentation.views import build_club_service
 
-from ..helpers import make_league, real_scope, world_scope
+from ..helpers import make_league, real_scope, world_ledger, world_scope
 from .test_pennant_advance import SeasonCase
 
 
@@ -163,14 +163,12 @@ class ScopeTest(ClubPlanCase):
             repository.find_by_team(self.home_a.id)
 
     def test_a_plan_is_removed_with_its_world(self):
-        from myapp.infrastructure.repositories import DjangoWorldRepository
-
         proposal = self.service_a.propose(self.home_a.id)
         self.service_a.set_lineup(self.home_a.id, self.lineup_of(proposal))
         self.service_a.set_closer(self.home_a.id, proposal.closer_id)
         self.service_b.set_rotation(self.home_b.id, list(self.service_b.propose(self.home_b.id).rotation_ids[:5]))
 
-        DjangoWorldRepository().delete(self.world_a)
+        world_ledger().delete(self.world_a)
 
         self.assertEqual(orm_models.PennantClubPlan.objects.filter(team__league__world_id=self.world_a).count(), 0)
         self.assertEqual(orm_models.PennantClubPlan.objects.count(), 1, "他の世界の編成は残る")

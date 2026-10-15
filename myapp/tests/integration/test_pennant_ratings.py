@@ -337,7 +337,7 @@ class ForkedRatingsTest(BaseCase):
             real_leagues=DjangoLeagueRepository(real_scope()),
             real_teams=DjangoTeamRepository(real_scope()),
             real_fielding=DjangoFieldingTotalsQuery(real_scope()),
-            worlds=DjangoWorldRepository(),
+            worlds=DjangoWorldRepository(real_scope().workspace_id),
             repositories_for=factory,
             atomic=transaction.atomic,
             ensure_schedule=lambda world_id: False,
