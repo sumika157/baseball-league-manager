@@ -1,7 +1,8 @@
-"""投手の疲労（#97 段階1）。疲労は保存せず直近の登板と対戦打者数から導き、能力の目減りとして率に効かせる。
+"""投手の疲労（#97）。疲労は保存せず直近の登板と対戦打者数から導き、能力の目減りとして率に効かせる。
 
-AI の普段の起用（6人ローテ・目安＋猶予の内側の交代）では疲労点が0になること、酷使（中4日以下の先発・
-ブルペンが尽きたときの続投）にだけ効くことを確かめる。
+AI の普段の起用（6人ローテ・目安＋猶予の内側の交代・救援は2連投まで）では疲労がほとんど付かないこと、
+酷使（中4日以下の先発・ブルペンが尽きたときの続投・救援の3連投や詰まった登板）に効くことを確かめる。
+救援の連投の上限はスタミナで変わる（55以上は3連投まで。段階2）。
 """
 
 from dataclasses import replace
@@ -10,21 +11,29 @@ from unittest import TestCase
 
 from myapp.domain.simulation.engine import SimulatedGame, simulate_game
 from myapp.domain.simulation.fatigue import (
+    FATIGUE_WINDOW_DAYS,
+    HIGH_STAMINA_RELIEVER,
     MAX_FATIGUE_POINTS,
     MID_INNING_GRACE,
     MIN_DAYS_BETWEEN_STARTS,
     FatigueLevel,
     PitcherWorkload,
     PitchingHistory,
+    consecutive_points,
     fatigued,
     in_game_fatigue_points,
+    max_consecutive_days,
     pregame_fatigue_points,
+    recent_appearance_points,
+    stamina_factor,
     starter_rest_points,
 )
 from myapp.domain.simulation.levels import UsageTally
 from myapp.domain.simulation.manager import (
     ClubOrders,
+    ForeignQuota,
     PitchingStaff,
+    available_relievers,
     choose_active_roster,
     plan_pitching_staff,
 )
@@ -37,8 +46,10 @@ TODAY = date(2026, 5, 10)
 OPENING_DAY = date(2026, 4, 1)
 
 
-def workload(days_since_start: int | None, consecutive_days: int = 0) -> PitcherWorkload:
-    return PitcherWorkload(days_since_start=days_since_start, consecutive_days=consecutive_days)
+def workload(days_since_start: int | None, consecutive_days: int = 0, recent_appearances: int = 0) -> PitcherWorkload:
+    return PitcherWorkload(
+        days_since_start=days_since_start, consecutive_days=consecutive_days, recent_appearances=recent_appearances
+    )
 
 
 class StarterRestTest(TestCase):
@@ -59,10 +70,13 @@ class StarterRestTest(TestCase):
         self.assertEqual(points, sorted(points, reverse=True))
 
     def test_rest_counts_only_when_the_pitcher_starts(self):
-        """段階1では救援の登板前の疲労は数えない（救援の連投は段階2）。"""
-        self.assertEqual(pregame_fatigue_points(workload(5), as_starter=True), 3)
-        self.assertEqual(pregame_fatigue_points(workload(5), as_starter=False), 0)
-        self.assertEqual(pregame_fatigue_points(workload(None, consecutive_days=2), as_starter=False), 0)
+        self.assertEqual(pregame_fatigue_points(workload(5), as_starter=True, stamina=50), 3)
+        self.assertEqual(pregame_fatigue_points(workload(5), as_starter=False, stamina=50), 0)
+
+    def test_stamina_does_not_change_the_rest_points(self):
+        """スタミナは先発の受け持ちの長さに効いているので、休養の点にはかけない（二重に効かせない）。"""
+        for stamina in (1, 50, 100):
+            self.assertEqual(pregame_fatigue_points(workload(5), as_starter=True, stamina=stamina), 3)
 
 
 class InGameFatigueTest(TestCase):
@@ -128,8 +142,8 @@ class WorkloadTest(TestCase):
         history = PitchingHistory()
         history.record(TODAY - timedelta(days=5), [1, 2])
         history.record(TODAY - timedelta(days=1), [3, 2])
-        self.assertEqual(history.workload(1, TODAY), workload(5))
-        self.assertEqual(history.workload(2, TODAY), workload(None, consecutive_days=1))
+        self.assertEqual(history.workload(1, TODAY), workload(5, recent_appearances=1))
+        self.assertEqual(history.workload(2, TODAY), workload(None, consecutive_days=1, recent_appearances=2))
         self.assertEqual(history.workload(9, TODAY), workload(None))
 
 
@@ -170,6 +184,32 @@ class EngineFatigueTest(TestCase):
             f for pa, f in zip(played.plate_appearances, played.pitcher_fatigue, strict=True) if not pa.is_bottom
         ]
         self.assertEqual(faced_by_home[0], 10)
+
+    def test_a_busy_reliever_pitches_tired_with_his_own_stamina(self):
+        """救援の登板前の疲労は、その救援のスタミナで、救援として（先発の休養を数えずに）数える。"""
+        roster = choose_active_roster(average_club(1))
+        # 先発と救援でスタミナを大きく変えておく（取り違えると点が変わる）
+        starter = replace(roster.pitchers[0], ratings=replace(roster.pitchers[0].ratings, stamina=90))
+        reliever = replace(roster.pitchers[1], ratings=replace(roster.pitchers[1].ratings, stamina=30))
+        staff = PitchingStaff(rotation=(starter,), closer=None, setup=(), middle=(reliever,))
+        home = replace(roster, pitchers=(starter, reliever))
+        history = PitchingHistory()
+        # 4日前に先発（先発として数えると中3日の6点が付く）、3日前と前日に救援 → 窓の中で3日
+        history.record(TODAY - timedelta(days=4), [reliever.player_id])
+        history.record(TODAY - timedelta(days=3), [900, reliever.player_id])
+        history.record(TODAY - timedelta(days=1), [901, reliever.player_id])
+        expected = pregame_fatigue_points(
+            history.workload(reliever.player_id, TODAY), as_starter=False, stamina=reliever.ratings.stamina
+        )
+
+        played = simulate_game(
+            make_random(5), home, self.away, played_on=TODAY, history=history, home_orders=ClubOrders(staff=staff)
+        )
+
+        (outing,) = [o for o in played.outings if o.pitcher_id == reliever.player_id]
+        self.assertFalse(outing.is_starter)
+        self.assertEqual(expected, 3, "2点 × スタミナ30の係数1.4 = 2.8")
+        self.assertEqual(outing.fatigue_before, expected)
 
     def test_the_tired_start_plays_out_differently_with_the_same_random_numbers(self):
         """疲労が打席の確率まで届いていること（同じ乱数でも打席の列が食い違う）。"""
@@ -226,7 +266,10 @@ def _season(orders_for: dict[int, ClubOrders] | None = None, days: int = 28):
 
 
 class UsualUsageTest(TestCase):
-    """AI の普段の起用では、疲労が効かない（リーグの水準を動かさない）。"""
+    """AI の普段の起用: 先発に疲労は付かず、重い疲労はほとんど無い。
+
+    救援の詰まった登板には軽い疲労が付く（打席の約5%。段階2）。
+    """
 
     @classmethod
     def setUpClass(cls):
@@ -238,12 +281,19 @@ class UsualUsageTest(TestCase):
         self.assertGreater(len(starts), 100)
         self.assertTrue(all(o.fatigue_before == 0 for o in starts))
 
-    def test_almost_no_plate_appearance_is_against_a_tired_pitcher(self):
+    def test_heavy_fatigue_is_rare_and_light_fatigue_comes_from_busy_relievers(self):
+        """AI は重い救援を後回しにするので、重い疲労はほとんど無い。軽い疲労は救援の詰まった登板で付く。"""
         rows = {row.key: row.value for row in self.usage.rows()}
         self.assertEqual(rows["short_rest_starts"], 0.0)
-        self.assertEqual(rows["three_day_streaks"], 0.0)
-        # ブルペンが尽きた延長戦の続投だけ。ほとんど起きない
-        self.assertLess(rows["light_fatigue"] + rows["heavy_fatigue"], 0.01)
+        self.assertLess(rows["heavy_fatigue"], 0.01)
+        self.assertGreater(rows["light_fatigue"], 0.01, "救援の詰まった登板（5日で3日目など）に軽い疲労が付く")
+        self.assertLess(rows["light_fatigue"], 0.15)
+
+    def test_only_high_stamina_relievers_pitch_three_straight_days(self):
+        stamina = {p.player_id: p.ratings.stamina for r in self.rosters.values() for p in r.pitchers}
+        three_day = [o for g in self.games for o in g.outings if o.workload.consecutive_days == 2]
+        self.assertTrue(three_day, "スタミナ55以上の救援は3連投目も投げる")
+        self.assertTrue(all(stamina[o.pitcher_id] >= HIGH_STAMINA_RELIEVER for o in three_day))
 
 
 class FiveManRotationTest(TestCase):
@@ -259,8 +309,12 @@ class FiveManRotationTest(TestCase):
 
         rows = {row.key: row.value for row in usage.rows()}
         self.assertGreater(rows["short_rest_starts"], 0.0)
-        self.assertGreater(rows["light_fatigue"], 0.0)
-        tired = [o for g in games for o in g.outings if o.team_id == roster.team_id and o.fatigue_before > 0]
+        tired = [
+            o
+            for g in games
+            for o in g.outings
+            if o.team_id == roster.team_id and o.is_starter and o.fatigue_before > 0
+        ]
         self.assertTrue(tired)
         self.assertTrue(all(o.workload.days_since_start == MIN_DAYS_BETWEEN_STARTS - 1 for o in tired), "中4日")
 
@@ -277,3 +331,105 @@ class UsageTallyTest(TestCase):
 
     def test_an_empty_tally_reads_zero(self):
         self.assertTrue(all(row.value == 0.0 for row in UsageTally().rows()))
+
+
+# --- 救援の連投と直近の登板（段階2） -------------------------------------------------------
+
+
+class ReliefLoadPointsTest(TestCase):
+    def test_up_to_two_straight_days_is_no_fatigue_and_the_third_is(self):
+        self.assertEqual([consecutive_points(days) for days in (0, 1)], [0, 0])
+        self.assertEqual(consecutive_points(2), 5, "3連投目")
+
+    def test_up_to_two_appearances_in_the_window_is_no_fatigue(self):
+        self.assertEqual([recent_appearance_points(days) for days in (0, 1, 2)], [0, 0, 0])
+        self.assertEqual(recent_appearance_points(3), 2)
+        self.assertEqual(recent_appearance_points(4), 4)
+        self.assertEqual(recent_appearance_points(FATIGUE_WINDOW_DAYS), 4)
+
+    def test_the_stamina_factor_is_one_at_fifty_and_clamped(self):
+        self.assertEqual(stamina_factor(50), 1.0)
+        self.assertEqual(stamina_factor(100), 0.5)
+        self.assertEqual(stamina_factor(1), 1.5)
+        factors = [stamina_factor(stamina) for stamina in range(1, 101)]
+        self.assertEqual(factors, sorted(factors, reverse=True), "スタミナが高いほど軽い")
+
+    def test_relief_points_are_scaled_by_stamina_and_rounded_half_up(self):
+        def points(stamina, consecutive=0, recent=0):
+            return pregame_fatigue_points(
+                workload(None, consecutive_days=consecutive, recent_appearances=recent),
+                as_starter=False,
+                stamina=stamina,
+            )
+
+        self.assertEqual(points(36, recent=3), 3, "2 × 1.28 = 2.56")
+        self.assertEqual(points(55, consecutive=2, recent=2), 5, "5 × 0.9 = 4.5 は切り上げ")
+        self.assertEqual(points(55, consecutive=2, recent=3), 6, "(5 + 2) × 0.9 = 6.3")
+        self.assertIs(FatigueLevel.from_points(points(55, consecutive=2, recent=3)), FatigueLevel.HEAVY)
+        self.assertEqual(points(50, recent=2), 0, "2連投・5日で2日までは普段の起用")
+
+    def test_a_starter_gets_both_rest_and_load_points(self):
+        self.assertEqual(pregame_fatigue_points(workload(5, recent_appearances=3), as_starter=True, stamina=50), 3 + 2)
+
+
+class ConsecutiveDayLimitTest(TestCase):
+    def test_only_high_stamina_pitchers_may_pitch_a_third_straight_day(self):
+        self.assertEqual(max_consecutive_days(HIGH_STAMINA_RELIEVER - 1), 2)
+        self.assertEqual(max_consecutive_days(HIGH_STAMINA_RELIEVER), 3)
+        self.assertEqual(max_consecutive_days(100), 3)
+
+    def test_can_pitch_on_follows_the_stamina_limit(self):
+        history = PitchingHistory()
+        for back in (1, 2):
+            history.record(TODAY - timedelta(days=back), [1])
+        self.assertFalse(history.can_pitch_on(1, TODAY, stamina=HIGH_STAMINA_RELIEVER - 1))
+        self.assertTrue(history.can_pitch_on(1, TODAY, stamina=HIGH_STAMINA_RELIEVER))
+        history.record(TODAY - timedelta(days=3), [1])
+        self.assertFalse(history.can_pitch_on(1, TODAY, stamina=100), "4連投はスタミナが高くてもしない")
+
+
+class WindowTest(TestCase):
+    """窓の外の登板は数えない（1日ずつ進めても、まとめて進めても同じ答えにするため）。"""
+
+    def test_the_edge_of_the_window_counts_and_the_day_before_does_not(self):
+        history = PitchingHistory()
+        history.record(TODAY - timedelta(days=FATIGUE_WINDOW_DAYS), [1])
+        history.record(TODAY - timedelta(days=FATIGUE_WINDOW_DAYS + 1), [2])
+        self.assertEqual(history.workload(1, TODAY).recent_appearances, 1)
+        self.assertEqual(history.workload(2, TODAY).recent_appearances, 0)
+
+    def test_the_streak_is_counted_inside_the_window(self):
+        history = PitchingHistory()
+        for back in range(1, FATIGUE_WINDOW_DAYS + 3):
+            history.record(TODAY - timedelta(days=back), [1])
+        self.assertEqual(history.consecutive_days_before(1, TODAY), FATIGUE_WINDOW_DAYS)
+
+
+class TiredRelieverChoiceTest(TestCase):
+    """AI は疲労が重い救援を、ほかに投げられる投手がいる限り出さない。"""
+
+    def setUp(self):
+        staff = plan_pitching_staff(choose_active_roster(average_club(1)).pitchers)
+        # 抑えだけスタミナを下げる（窓の中で4日投げると 4 × 1.5 = 6点で重い）
+        assert staff.closer is not None
+        self.closer = replace(staff.closer, ratings=replace(staff.closer.ratings, stamina=25))
+        self.staff = replace(staff, closer=self.closer)
+        self.history = PitchingHistory()
+        for back in (1, 3, 4, 5):
+            self.history.record(TODAY - timedelta(days=back), [900, self.closer.player_id])
+
+    def test_a_heavily_tired_closer_is_left_out_while_others_can_pitch(self):
+        self.assertTrue(self.history.can_pitch_on(self.closer.player_id, TODAY, stamina=25))
+        available = available_relievers(self.staff, set(), self.history, TODAY, ForeignQuota())
+        self.assertNotIn(self.closer, available)
+        self.assertTrue(available)
+
+    def test_when_everyone_else_is_used_the_tired_closer_still_pitches(self):
+        used = {p.player_id for p in self.staff.bullpen if p is not self.closer}
+        self.assertEqual(available_relievers(self.staff, used, self.history, TODAY, ForeignQuota()), [self.closer])
+
+    def test_a_lightly_tired_reliever_is_chosen_as_usual(self):
+        history = PitchingHistory()
+        for back in (1, 3, 4):
+            history.record(TODAY - timedelta(days=back), [900, self.closer.player_id])  # 3日 → 2 × 1.5 = 3点
+        self.assertIn(self.closer, available_relievers(self.staff, set(), history, TODAY, ForeignQuota()))

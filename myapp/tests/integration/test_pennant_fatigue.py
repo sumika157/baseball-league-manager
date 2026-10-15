@@ -6,13 +6,16 @@
 """
 
 from collections import defaultdict
+from datetime import timedelta
 from unittest import mock
 
 from django.db import transaction
 
 from myapp.domain.pennant.schedule import AdvanceTarget
-from myapp.domain.simulation.fatigue import MIN_DAYS_BETWEEN_STARTS, fatigued, starter_rest_points
+from myapp.domain.pennant.world import WorldScope
+from myapp.domain.simulation.fatigue import FATIGUE_WINDOW_DAYS, MIN_DAYS_BETWEEN_STARTS, fatigued, starter_rest_points
 from myapp.infrastructure import orm_models
+from myapp.infrastructure.queries import DjangoSimulationContextQuery
 from myapp.presentation.views import build_club_service
 
 from .test_pennant_advance import SeasonCase
@@ -78,3 +81,26 @@ class FiveManRotationTest(SeasonCase):
             self.two_weeks()
 
         self.assertIn(starter_rest_points(MIN_DAYS_BETWEEN_STARTS - 1), points)
+
+
+class FatigueWindowQueryTest(SeasonCase):
+    """直近の登板は疲労の窓（`FATIGUE_WINDOW_DAYS`）の日数ぶんだけ読む。窓の端を含み、その前日を含まない。"""
+
+    def test_the_query_reads_exactly_the_window(self):
+        self.advance(self.world_a, AdvanceTarget.WEEK)
+        self.advance(self.world_a, AdvanceTarget.WEEK)
+        query = DjangoSimulationContextQuery(WorldScope.pennant(self.world_a))
+        last = query.last_played_on()
+        assert last is not None
+        before = last + timedelta(days=1)
+
+        days = {outing.played_on for outing in query.load(before=before).recent_outings}
+
+        played = set(
+            orm_models.Game.objects.filter(home_team__league__world_id=self.world_a).values_list(
+                "played_on", flat=True
+            )
+        )
+        window = {before - timedelta(days=ago) for ago in range(1, FATIGUE_WINDOW_DAYS + 1)}
+        self.assertEqual(days, played & window)
+        self.assertTrue(played - window, "窓より前にも試合がある（読まないことを確かめられる）")

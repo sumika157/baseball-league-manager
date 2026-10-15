@@ -1462,11 +1462,11 @@ class ClubPitcherUsage:
     player_id: int
     name: str
     is_foreign: bool
-    # 次の試合日の直近3日に投げたか（古い日から）
+    # 次の試合日の直近 `FATIGUE_WINDOW_DAYS` 日（5日）に投げたか（古い日から）
     pitched_recently: tuple[bool, ...]
     # 前回の先発から何日経っているか（次の試合日の時点。先発の記録が無ければ None）
     days_since_start: int | None
-    # 次の試合日に投げられるか（連投の上限に達していないか）
+    # 次の試合日に投げられるか（連投の上限に達していないか。上限はスタミナで決まる）
     can_pitch: bool
 
 
