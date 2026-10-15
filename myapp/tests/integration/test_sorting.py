@@ -14,9 +14,7 @@ from myapp.infrastructure.repositories import (
     DjangoLeagueRepository,
 )
 
-from ..helpers import (
-    play_game,
-)
+from ..helpers import make_league, play_game
 from .base import BaseCase
 
 
@@ -203,7 +201,7 @@ class LeagueOrderingTest(BaseCase):
         self.client.force_login(User.objects.create_superuser(username="root", password="x"))
         # 名前順なら A → Z だが、表示順で逆にする
         orm_models.League.objects.filter(id=self.league.id).update(name="Zリーグ", display_order=1)
-        self.first = orm_models.League.objects.create(name="Aリーグ", display_order=2)
+        self.first = make_league(name="Aリーグ", display_order=2)
         orm_models.Team.objects.create(league=self.first, name="Aチーム")
 
     def test_display_order_beats_name(self):

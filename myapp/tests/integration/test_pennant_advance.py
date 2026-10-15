@@ -31,7 +31,7 @@ from myapp.infrastructure.queries import DjangoGameListQuery, DjangoSimulationCo
 from myapp.infrastructure.repositories import DjangoFixtureRepository, DjangoGameRepository
 from myapp.presentation.views import build_pennant_season_service, build_pennant_world_service, build_service
 
-from ..helpers import register_players
+from ..helpers import make_league, make_stadium, register_players
 
 YEAR = 2026
 SEASON_GAMES = 143
@@ -69,9 +69,9 @@ class SeasonCase(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        league = orm_models.League.objects.create(name="進行リーグ")
+        league = make_league(name="進行リーグ")
         cls.league_id = league.id
-        stadium = orm_models.Stadium.objects.create(name="進行球場", city="東京", capacity=STADIUM_CAPACITY)
+        stadium = make_stadium(name="進行球場", city="東京", capacity=STADIUM_CAPACITY)
         cls.home = orm_models.Team.objects.create(league=league, name="ホーム球団", home_stadium=stadium)
         cls.rival = orm_models.Team.objects.create(league=league, name="ライバル球団")
         service = build_service()

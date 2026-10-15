@@ -8,14 +8,14 @@ from django.urls import reverse
 
 from myapp.infrastructure import orm_models
 
-from ..helpers import build_service
+from ..helpers import build_service, make_league
 from .base import PlaywrightTestCase
 
 
 class UsageMapLayoutTest(PlaywrightTestCase):
     def setUp(self):
         super().setUp()
-        league = orm_models.League.objects.create(name="Eリーグ")
+        league = make_league(name="Eリーグ")
         self.team = orm_models.Team.objects.create(league=league, name="ホームズ")
         service = build_service()
         for number in range(1, 8):

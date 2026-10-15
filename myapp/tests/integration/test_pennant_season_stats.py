@@ -16,7 +16,7 @@ from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository, DjangoTeamRepository
 from myapp.presentation.views import build_world_view_service
 
-from ..helpers import play_game
+from ..helpers import make_league, play_game
 from .world_case import YEAR, WorldCase
 
 NEXT_YEAR = YEAR + 1
@@ -120,7 +120,7 @@ class InterleagueGamesCountTest(SeasonStatsCase):
 
     def setUp(self):
         super().setUp()
-        other_league = orm_models.League.objects.create(name="目印の別リーグ", world_id=self.world_id)
+        other_league = make_league(name="目印の別リーグ", world_id=self.world_id)
         self.outsider = orm_models.Team.objects.create(league=other_league, name="目印の交流戦相手")
         self._play(NEXT_YEAR, 6, {self.veteran: BattingLine(at_bats=4, home_runs=3)}, away=self.outsider, day=2)
 

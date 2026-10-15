@@ -18,7 +18,7 @@ from myapp.domain.pennant.world import MAX_WORLDS_PER_OWNER
 from myapp.infrastructure import orm_models
 from myapp.presentation.views import build_pennant_season_service, build_pennant_world_service, build_service
 
-from ..helpers import play_game
+from ..helpers import make_league, play_game
 from .test_pennant_advance import register_club
 from .test_pennant_home import HomeCase
 
@@ -103,7 +103,7 @@ class CreateWorldTest(HomeCase):
     def test_the_form_errors_are_shown_in_japanese_and_nothing_is_created(self):
         self.client.force_login(self.other)
         before = orm_models.PennantWorld.objects.count()
-        other_league = orm_models.League.objects.create(name="別リーグ")
+        other_league = make_league(name="別リーグ")
         other_team = orm_models.Team.objects.create(league=other_league, name="別球団")
         register_club(build_service(), other_team, "別")
         cases = {

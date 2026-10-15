@@ -19,7 +19,7 @@ from myapp.domain.value_objects import BattingLine, FieldingPosition, PitchingLi
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
 
-from ..helpers import build_team_analysis_service
+from ..helpers import build_team_analysis_service, make_league
 from .base import BaseCase
 
 
@@ -207,7 +207,7 @@ class AnalysisIndexTest(AnalysisCase):
 
 class AnalysisLinksTest(TestCase):
     def setUp(self):
-        league = orm_models.League.objects.create(name="リーグ")
+        league = make_league(name="リーグ")
         self.team = orm_models.Team.objects.create(league=league, name="チーム")
 
     def test_header_links_to_analysis_index(self):

@@ -27,7 +27,7 @@ from myapp.infrastructure.repositories import (
 )
 from myapp.presentation.views import build_pennant_world_service
 
-from ..helpers import play_game
+from ..helpers import make_league, play_game
 from .base import BaseCase
 from .test_world_isolation import BOTH, CLASSIFICATION, GAME, LEAGUE, PLAYER
 from .world_case import PENNANT_LEAGUE, PENNANT_TEAM, YEAR, WorldCase
@@ -205,12 +205,12 @@ class ForkTest(BaseCase):
 
     def test_the_league_name_is_unique_within_a_world(self):
         with self.assertRaises(IntegrityError), transaction.atomic():
-            orm_models.League.objects.create(name=self.league.name, world=self.world)
+            make_league(name=self.league.name, world=self.world)
 
     def test_the_league_name_is_still_unique_among_the_real_leagues(self):
         """world が NULL のどうしは一意制約で衝突しない。条件付きの制約で実データ側の一意性を保つ。"""
         with self.assertRaises(IntegrityError), transaction.atomic():
-            orm_models.League.objects.create(name=self.league.name)
+            make_league(name=self.league.name)
 
     def test_the_same_league_name_is_allowed_across_worlds(self):
         other = self._fork(name="別の世界")
@@ -261,7 +261,7 @@ class ForkOptionsTest(BaseCase):
         self.skip_roster_check()
         self.service_ = build_pennant_world_service()
         self.service.register_player(self.team.id, "選手", 1, "内野手")
-        self.second_league = orm_models.League.objects.create(name="第二リーグ", display_order=1)
+        self.second_league = make_league(name="第二リーグ", display_order=1)
         self.other_team = orm_models.Team.objects.create(league=self.second_league, name="第二のチーム")
 
     def _create(self, **overrides):

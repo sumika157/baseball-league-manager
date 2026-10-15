@@ -14,7 +14,7 @@ from myapp.domain.pennant.schedule import AdvanceTarget
 from myapp.infrastructure import orm_models
 from myapp.presentation.views import build_pennant_season_service
 
-from ..helpers import build_service
+from ..helpers import build_service, make_league, make_stadium
 from ..integration.test_pennant_advance import register_club
 from .base import PlaywrightTestCase
 
@@ -26,8 +26,8 @@ HEADER_PREFIXES = ("/accounts/", "/admin/")
 class PennantFlowTest(PlaywrightTestCase):
     def setUp(self):
         super().setUp()
-        league = orm_models.League.objects.create(name="Pリーグ")
-        stadium = orm_models.Stadium.objects.create(name="P球場", city="東京")
+        league = make_league(name="Pリーグ")
+        stadium = make_stadium(name="P球場", city="東京")
         self.team = orm_models.Team.objects.create(league=league, name="ホームズ", home_stadium=stadium)
         self.rival = orm_models.Team.objects.create(league=league, name="ライバルズ")
         service = build_service()

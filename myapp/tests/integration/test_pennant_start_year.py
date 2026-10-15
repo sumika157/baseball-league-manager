@@ -16,6 +16,7 @@ from myapp.domain.value_objects import Season
 from myapp.infrastructure import orm_models
 from myapp.presentation.views import build_pennant_world_service
 
+from ..helpers import make_pennant_world
 from .world_case import YEAR, WorldCase
 
 
@@ -44,7 +45,7 @@ class StartYearRangeTest(WorldCase):
 
     def test_the_list_opens_even_with_a_saved_world_after_the_latest_year(self):
         """上限は作るときだけ検査する。上限を超えた行があっても、世界の一覧は誰にでも開ける。"""
-        orm_models.PennantWorld.objects.create(name="遅い世界", seed=1, start_year=Season.MAX_YEAR)
+        make_pennant_world(name="遅い世界", seed=1, start_year=Season.MAX_YEAR)
 
         response = self.client.get(reverse("pennant_index"))
 

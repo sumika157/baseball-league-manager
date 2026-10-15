@@ -10,6 +10,7 @@ from myapp.domain.value_objects import (
 )
 from myapp.infrastructure import orm_models
 
+from ..helpers import make_league, make_stadium
 from .base import BaseCase
 
 
@@ -41,7 +42,7 @@ class StadiumTest(BaseCase):
         self.assertContains(response, "テスト球場")
 
     def test_can_be_sorted_by_stadium(self):
-        other = orm_models.Stadium.objects.create(name="あ球場")
+        other = make_stadium(name="あ球場")
         orm_models.Team.objects.filter(id=self.rival.id).update(home_stadium=other)
 
         rows = self.service.list_teams(sort="stadium", descending=False).rows
@@ -69,7 +70,7 @@ class StadiumHomeTeamAssignmentTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.client.force_login(User.objects.create_superuser(username="root", password="x"))
-        self.dome = orm_models.Stadium.objects.create(name="新ドーム")
+        self.dome = make_stadium(name="新ドーム")
         self.url = f"/admin/myapp/stadium/{self.dome.id}/change/"
 
     def _save(self, team_ids, **overrides):
@@ -150,9 +151,9 @@ class StadiumOrderingTest(BaseCase):
         orm_models.Team.objects.filter(pk=self.rival.id).update(display_order=2)
         # 球場名の順（あ→た→わ）と、チームの並び順をわざと食い違わせる
         orm_models.Stadium.objects.filter(pk=self.stadium.id).update(name="わ球場")
-        self.rival_stadium = orm_models.Stadium.objects.create(name="た球場")
+        self.rival_stadium = make_stadium(name="た球場")
         orm_models.Team.objects.filter(pk=self.rival.id).update(home_stadium=self.rival_stadium)
-        self.unused = orm_models.Stadium.objects.create(name="あ球場")
+        self.unused = make_stadium(name="あ球場")
 
     def _listed(self):
         body = self.client.get("/admin/myapp/stadium/").content.decode()
@@ -165,7 +166,7 @@ class StadiumOrderingTest(BaseCase):
         self.assertEqual(self._listed()[-1], "あ球場")
 
     def test_unused_stadiums_are_ordered_by_name_among_themselves(self):
-        orm_models.Stadium.objects.create(name="い球場")
+        make_stadium(name="い球場")
 
         listed = self._listed()
 
@@ -178,9 +179,9 @@ class StadiumOrderingTest(BaseCase):
         ことで先頭へ来る。
         """
         orm_models.League.objects.filter(pk=self.league.id).update(display_order=1)
-        other = orm_models.League.objects.create(name="別リーグ", display_order=0)
+        other = make_league(name="別リーグ", display_order=0)
         far = orm_models.Team.objects.create(league=other, name="別リーグのチーム", display_order=99)
-        first = orm_models.Stadium.objects.create(name="ん球場")
+        first = make_stadium(name="ん球場")
         orm_models.Team.objects.filter(pk=far.id).update(home_stadium=first)
 
         self.assertEqual(self._listed()[0], "ん球場")

@@ -4,9 +4,7 @@ from django.urls import reverse
 
 from myapp.infrastructure import orm_models
 
-from ..helpers import (
-    play_game,
-)
+from ..helpers import make_league, play_game
 from .base import BaseCase
 
 
@@ -76,7 +74,7 @@ class LeagueScopedStandingsTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.other_league = orm_models.League.objects.create(name="別リーグ")
+        self.other_league = make_league(name="別リーグ")
         self.x = orm_models.Team.objects.create(league=self.other_league, name="Xチーム")
         self.y = orm_models.Team.objects.create(league=self.other_league, name="Yチーム")
 
@@ -100,7 +98,7 @@ class LeagueScopedStandingsTest(BaseCase):
         self.assertTrue(all(row.rank == 1 for row in leaders))
 
     def test_leagues_without_games_are_omitted(self):
-        orm_models.League.objects.create(name="未実施リーグ")
+        make_league(name="未実施リーグ")
         board = self.service.get_standings(2026)
 
         self.assertNotIn("未実施リーグ", [lg.league_name for lg in board.leagues])

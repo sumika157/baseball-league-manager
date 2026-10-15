@@ -15,6 +15,7 @@ from ..helpers import (
     give_pitching,
     lineup_rows,
     login_as_manager,
+    make_league,
     play_game,
     post_game_scorebook_day_unrecorded,
     register_lineup,
@@ -84,7 +85,7 @@ class RelativeMetricsTest(BaseCase):
 
     def test_players_in_another_league_do_not_move_the_baseline(self):
         """指数はリーグごとに閉じる。他リーグの成績は基準に混ぜない。"""
-        other_league = orm_models.League.objects.create(name="別リーグ")
+        other_league = make_league(name="別リーグ")
         other = orm_models.Team.objects.create(league=other_league, name="別チーム")
         opponent = orm_models.Team.objects.create(league=other_league, name="別の相手")
         slugger = self.service.register_player(other.id, "大砲", 3, "内野手")

@@ -10,10 +10,7 @@ from myapp.domain.value_objects import (
 )
 from myapp.infrastructure import orm_models
 
-from ..helpers import (
-    give_batting,
-    play_game,
-)
+from ..helpers import give_batting, make_league, play_game
 from .base import BaseCase
 
 
@@ -119,7 +116,7 @@ class AdminGroupingTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.client.force_login(User.objects.create_superuser(username="root", password="x"))
-        self.other = orm_models.League.objects.create(name="別リーグ")
+        self.other = make_league(name="別リーグ")
         self.x = orm_models.Team.objects.create(league=self.other, name="Xチーム")
         self.service.register_player(self.team.id, "山田", 10, "内野手")
         self.service.register_player(self.x.id, "田中", 20, "外野手")
@@ -247,7 +244,7 @@ class LeagueAccordionTest(BaseCase):
         self.assertIn("2名", self._body())
 
     def test_league_without_teams(self):
-        orm_models.League.objects.create(name="空リーグ")
+        make_league(name="空リーグ")
         body = self._body()
 
         self.assertIn("空リーグ", body)
@@ -274,7 +271,7 @@ class LeagueAccordionTest(BaseCase):
         before = count_queries()
 
         for i in range(5):
-            league = orm_models.League.objects.create(name=f"L{i}")
+            league = make_league(name=f"L{i}")
             orm_models.Team.objects.create(league=league, name=f"T{i}")
 
         self.assertEqual(count_queries(), before)
