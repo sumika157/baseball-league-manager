@@ -17,6 +17,7 @@ from datetime import date
 
 from ..exceptions import InvalidWorkspace, InvalidWorld
 from ..value_objects import Season
+from .draft_order import DraftOrderRule
 from .postseason import PostseasonFormat
 
 MAX_NAME_LENGTH = 100
@@ -43,7 +44,7 @@ MAX_START_YEAR = Season.MAX_YEAR - MAX_SEASONS_PER_WORLD + 1
 def league_priority(league_ids: Iterable[int], *, year: int, start_year: int) -> list[int]:
     """その年のリーグの優先順。**リーグの優先順の唯一の出典**。
 
-    日本シリーズの本拠地と種の同率に使う（#198 のドラフトでも使う予定）。
+    日本シリーズの本拠地と種の同率と、ドラフト会議の「球団順位の逆順」の段の中の並び（#198）に使う。
 
     リーグを id の順に並べ、`(年 − 開幕年) mod リーグ数` だけ左に回す。2リーグなら年ごとに交互で、
     開幕年はいちばん id の小さいリーグが先。3リーグ以上は1年に1つずつ先頭が入れ替わる。
@@ -68,6 +69,19 @@ def postseason_format_change_blocker(*, started: bool, world_over: bool) -> str 
         return "この世界は最終シーズンを終えているので、ポストシーズンの方式は変えられません。"
     if started:
         return "今年のポストシーズンが始まっているので、方式は変えられません。"
+    return None
+
+
+def draft_order_rule_change_blocker(*, world_over: bool) -> str | None:
+    """ドラフトの指名順の規則を変えられない理由。変えられるなら None。**規則を変えられる条件の唯一の出典**。
+
+    - `world_over`: 最終シーズンを終えた世界（これ以上ドラフトが無いので、変えても使われない）
+
+    会議はシーズンを締める処理の中で全自動で行う（#198 D1）ので、締める前ならいつでも変えられる（その年のオフの会議から
+    新しい規則になる）。GM が1巡ずつ進める会議（D3）を入れたら、「その年の会議が始まっている」を足す。
+    """
+    if world_over:
+        return "この世界は最終シーズンを終えているので、ドラフトの指名順は変えられません。"
     return None
 
 
@@ -135,7 +149,7 @@ class WorldScope:
 class World:
     """世界。ペナントモードのセーブデータひとつぶん。
 
-    持つのは作ったときに決まる事実と、オーナーが変えられる設定（ポストシーズンの方式）だけ。
+    持つのは作ったときに決まる事実と、オーナーが変えられる設定（ポストシーズンの方式・ドラフトの指名順の規則）だけ。
     「今日」や「シーズン中か」・ポストシーズンの勝ち上がりは持たない（日程と試合から導けるので、持つと食い違う）。
     """
 
@@ -152,6 +166,9 @@ class World:
     workspace_id: int | None = None
     # ポストシーズンの方式（`PostseasonFormat` が選択肢の出典）。既定の「なし」は、方式を足す前に作った世界と同じ進み方
     postseason_format: PostseasonFormat = PostseasonFormat.NONE
+    # ドラフトの指名順の規則（`DraftOrderRule` が選択肢の出典）。既定は NPB 方式
+    # （規則を足す前に作った世界も NPB 方式になる）
+    draft_order_rule: DraftOrderRule = DraftOrderRule.NPB
 
     def __post_init__(self) -> None:
         self.name = (self.name or "").strip()
@@ -165,6 +182,8 @@ class World:
         self.start_year = Season(self.start_year).year
         if not isinstance(self.postseason_format, PostseasonFormat):
             raise InvalidWorld("ポストシーズンの方式が正しくありません。")
+        if not isinstance(self.draft_order_rule, DraftOrderRule):
+            raise InvalidWorld("ドラフトの指名順の規則が正しくありません。")
 
     def __str__(self) -> str:
         return self.name

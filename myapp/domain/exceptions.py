@@ -161,6 +161,18 @@ class PostseasonFormatLocked(DomainError):
     """
 
 
+class DraftOrderRuleLocked(DomainError):
+    """ドラフトの指名順の規則を変えられない（世界が終了している）。
+
+    理由の文言は domain の `world.draft_order_rule_change_blocker` が出典。
+    """
+
+
+class InvalidDraftAction(DomainError):
+    """ドラフト会議の行動として成立しない（自分の番でない・候補にいない・既に指名された・人数の幅を超える・
+    最少に届く前の選択終了・位置の最低人数を割る・会議が終わっている）。"""
+
+
 class AlreadyClosed(DomainError):
     """そのシーズンは既に締めている（二重送信や、別の画面で先に締めた場合）。
 

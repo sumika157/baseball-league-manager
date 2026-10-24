@@ -9,6 +9,7 @@
 球場は共有する。実データには何も書かない。作った世界は実データの画面・集計・管理画面に現れない。
 消すときは `pennant_delete --world <id>`。
 `--postseason` はポストシーズンの方式（既定は `npb`＝CS と日本シリーズ。新しい世界の既定）。
+`--draft-order` はドラフトの指名順の規則（既定は `npb`＝NPB 方式）。
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 
 from myapp.domain.exceptions import DomainError
+from myapp.domain.pennant.draft_order import DraftOrderRule
 from myapp.domain.pennant.postseason import PostseasonFormat
 from myapp.domain.pennant.world import MAX_SEED
 from myapp.management.workspaces import add_workspace_argument, real_scope_for_key
@@ -33,6 +35,9 @@ POSTSEASON_FORMATS = {
     "champions": PostseasonFormat.CHAMPIONS,
     "none": PostseasonFormat.NONE,
 }
+
+# `--draft-order` の値。規則の選択肢の出典は `DraftOrderRule`（ここは綴りの対応だけ。規則の名前を小文字にしたもの）
+DRAFT_ORDER_RULES = {rule.name.lower(): rule for rule in DraftOrderRule}
 
 
 class Command(BaseCommand):
@@ -69,6 +74,15 @@ class Command(BaseCommand):
                 "既定は npb）"
             ),
         )
+        parser.add_argument(
+            "--draft-order",
+            choices=list(DRAFT_ORDER_RULES),
+            default="npb",
+            help=(
+                "ドラフトの指名順の規則（npb: NPB 方式・waiver: 完全ウェーバー・random_snake: くじ順・"
+                "all_lottery: 全巡入札。既定は npb）"
+            ),
+        )
 
     def handle(self, *args: Any, **options: Any) -> None:
         scope = real_scope_for_key(options["workspace"])
@@ -91,6 +105,7 @@ class Command(BaseCommand):
                 seed=seed,
                 managed_source_team_id=options["managed_team"],
                 postseason_format=POSTSEASON_FORMATS[options["postseason"]],
+                draft_order_rule=DRAFT_ORDER_RULES[options["draft_order"]],
             )
         except DomainError as error:
             raise CommandError(str(error)) from error
@@ -100,7 +115,8 @@ class Command(BaseCommand):
             self.style.SUCCESS(
                 f"世界 {created.world.id}「{created.world.name}」を作りました"
                 f"（開幕年 {created.world.start_year} / シード {created.world.seed} / "
-                f"ポストシーズン {created.world.postseason_format.label}）"
+                f"ポストシーズン {created.world.postseason_format.label} / "
+                f"ドラフトの指名順 {created.world.draft_order_rule.label}）"
             )
         )
         self.stdout.write(

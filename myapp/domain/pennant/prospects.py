@@ -34,14 +34,19 @@ def farm_rating_mean(position: Position) -> float:
     return (PITCHER_MEAN if position.is_pitcher else BATTER_MEAN) - FARM_GAP
 
 
-def draw_prospect_ratings(rng: GameRandom, *, mean: float, position: Position) -> BatterRatings | PitcherRatings:
-    """ひとりぶんの能力。投手は先発型か救援型かを先に決めて、スタミナをその型の分布から引く。成長型は普通。"""
+def draw_prospect_ratings(
+    rng: GameRandom, *, mean: float, position: Position, sd: float = PROSPECT_RATING_SD
+) -> BatterRatings | PitcherRatings:
+    """ひとりぶんの能力。投手は先発型か救援型かを先に決めて、スタミナをその型の分布から引く。成長型は普通。
+
+    `sd` はドラフト会議の候補だけが広げる（会議は候補の上から取るので、指名された新人の散らばりが狭くなる分を補う）。
+    """
     starter = rng.random() < STARTER_TYPE_RATIO
     stamina_mean, stamina_sd = STARTER_STAMINA if starter else RELIEVER_STAMINA
     return draw_ratings(
         rng,
         mean=mean,
-        sd=PROSPECT_RATING_SD,
+        sd=sd,
         position=position,
         stamina_mean=stamina_mean,
         stamina_sd=stamina_sd,

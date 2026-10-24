@@ -115,6 +115,7 @@ class OffseasonViewService:
             age=age_at_season_start(fact.profile, year + 1),
             route=DraftRoute.of_profile(fact.profile).label,
             rating=overall_cell(fact.after) if fact.after is not None else None,
+            pick="" if fact.profile.draft is None else fact.profile.draft.order_label,
         )
 
     @staticmethod

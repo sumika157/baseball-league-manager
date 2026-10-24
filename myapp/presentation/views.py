@@ -50,6 +50,7 @@ from ..application.pennant_offseason import PennantOffseasonService
 from ..application.pennant_offseason_view import OffseasonViewService
 from ..application.pennant_postseason import PennantPostseasonService, PostseasonBracketReader
 from ..application.pennant_postseason_view import PennantPostseasonViewService
+from ..application.pennant_race import LeagueFinishReader
 from ..application.pennant_ratings import PennantRatingsViewService
 from ..application.pennant_season import PennantSeasonService
 from ..application.pennant_settings import PennantSettingsService
@@ -159,6 +160,7 @@ from .club_input import (
 from .forms import (
     FIELDED_BY_SEPARATOR,
     MAX_INNINGS,
+    DraftOrderRuleForm,
     GameForm,
     PennantWorldForm,
     PlayerRegistrationForm,
@@ -599,8 +601,10 @@ def build_pennant_offseason_service(scope: WorldScope) -> PennantOffseasonServic
     **リポジトリと参照クエリは、すべて渡された世界の範囲で作る。** 引退・新人・翌年の能力・日程・編成の
     後始末を1つのトランザクションにまとめるので、`transaction.atomic` もここで渡す。
     ペナントの世界の範囲だけを受け取る（実データの範囲なら InvalidWorld）。存在しない世界は、使うときに WorldNotFound。
+    締める年の最終順位の読み取りは、勝ち上がり（締められるかの検査）とドラフトの指名順で1つを共有する。
     """
     world_id = _pennant_world_id(scope)
+    finishes = _league_finishes(scope)
     return PennantOffseasonService(
         world_id=world_id,
         worlds=DjangoWorldRepository(scope.workspace_id),
@@ -615,7 +619,8 @@ def build_pennant_offseason_service(scope: WorldScope) -> PennantOffseasonServic
         titles=build_league_view_service(scope),
         context_query=DjangoSimulationContextQuery(scope),
         playing_time=DjangoSeasonPlayingTimeQuery(scope),
-        postseason=_postseason_brackets(scope),
+        postseason=_postseason_brackets(scope, finishes=finishes),
+        finishes=finishes,
         fa_exemptions=ForeignQuotaExemptions(DjangoServiceHistoryQuery(scope)),
         atomic=transaction.atomic,
     )
@@ -643,7 +648,7 @@ def build_pennant_postseason_service(scope: WorldScope) -> PennantPostseasonServ
     )
 
 
-def _postseason_brackets(scope: WorldScope) -> PostseasonBracketReader:
+def _postseason_brackets(scope: WorldScope, *, finishes: LeagueFinishReader | None = None) -> PostseasonBracketReader:
     """その年の勝ち上がりを導く読み取り（ポストシーズンの進行と、締める処理の検査が使う）。依存は全部、世界の範囲で作る。
 
     順位表は世界の範囲の `LeagueViewService`（`build_league_view_service(世界の範囲)`。公式戦だけ）が出典。
@@ -651,10 +656,16 @@ def _postseason_brackets(scope: WorldScope) -> PostseasonBracketReader:
     _pennant_world_id(scope)
     return PostseasonBracketReader(
         league_view=build_league_view_service(scope),
-        games=DjangoGameListQuery(scope),
+        finishes=finishes if finishes is not None else _league_finishes(scope),
         leagues=DjangoLeagueRepository(scope),
         postseason=DjangoPostseasonQuery(scope),
     )
+
+
+def _league_finishes(scope: WorldScope) -> LeagueFinishReader:
+    """その年の公式戦の最終順位の読み取り（勝ち上がりと、締める処理のドラフトの指名順が共有する）。世界の範囲で作る。"""
+    _pennant_world_id(scope)
+    return LeagueFinishReader(league_view=build_league_view_service(scope), games=DjangoGameListQuery(scope))
 
 
 def build_pennant_postseason_view_service(scope: WorldScope) -> PennantPostseasonViewService:
@@ -902,6 +913,7 @@ def _create_world(request, form: PennantWorldForm) -> int | None:
             seed=seed if seed is not None else secrets.randbelow(2**31),
             managed_source_team_id=int(data["managed_team"]),
             postseason_format=data["postseason_format"],
+            draft_order_rule=data["draft_order_rule"],
         )
     except DomainError as error:
         messages.error(request, str(error))
@@ -1170,8 +1182,9 @@ def pennant_postseason_stats(request, world_id, year):
 
 
 def pennant_settings(request, world_id):
-    """世界の設定（ポストシーズンの方式）。見るのは誰でも、変える（POST）のはオーナーだけ。
+    """世界の設定（ポストシーズンの方式・ドラフトの指名順の規則）。見るのは誰でも、変える（POST）のはオーナーだけ。
 
+    この URL への POST はポストシーズンの方式の変更。指名順の規則は `pennant_draft_order_settings` へ送る。
     変えられないとき（いまの年度のポストシーズンが始まっている・世界が終了している）は、操作を出さずに理由だけを出す。
     """
     world = _world_context(request, world_id)
@@ -1200,12 +1213,48 @@ def pennant_settings(request, world_id):
     settings = service.view()
     if is_owner and settings.can_change and form is None:
         form = PostseasonFormatForm(initial={"postseason_format": settings.postseason_format.name})
+    draft_form = None
+    if is_owner and settings.can_change_draft_order:
+        draft_form = DraftOrderRuleForm(initial={"draft_order_rule": settings.draft_order_rule.name})
     return _render(
         request,
         "pennant/settings.html",
-        {"settings": settings, "form": form if is_owner and settings.can_change else None, "is_owner": is_owner},
+        {
+            "settings": settings,
+            "form": form if is_owner and settings.can_change else None,
+            "draft_form": draft_form,
+            "is_owner": is_owner,
+        },
         world,
     )
+
+
+def pennant_draft_order_settings(request, world_id):
+    """ドラフトの指名順の規則を変える（POST だけ。オーナーだけ。GET は設定の画面へ戻す）。
+
+    結果は設定の画面で messages に出す。
+    """
+    world = _world_context(request, world_id)
+    if request.method != "POST":
+        return redirect(_url(request, "pennant_settings", world_id))
+    denied = _requires_world_owner(request, world)
+    if denied is not None:
+        return denied
+    form = DraftOrderRuleForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, "ドラフトの指名順の規則を選んでください。")
+        return redirect(_url(request, "pennant_settings", world_id))
+    chosen = form.cleaned_data["draft_order_rule"]
+    try:
+        changed = build_pennant_settings_service(_world_scope(request, world_id)).change_draft_order_rule(chosen)
+    except DomainError as error:
+        messages.error(request, str(error))
+        return redirect(_url(request, "pennant_settings", world_id))
+    if changed:
+        messages.success(request, f"ドラフトの指名順を「{chosen.label}」にしました。")
+    else:
+        messages.info(request, "ドラフトの指名順は変わっていません。")
+    return redirect(_url(request, "pennant_settings", world_id))
 
 
 @require_safe

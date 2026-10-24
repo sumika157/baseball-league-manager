@@ -1532,6 +1532,7 @@ URL_TABLE: dict[str, tuple[tuple[str, ...], str, bool]] = {
     "pennant_postseason_by_year": (("world", "world_year"), PAGE, False),
     "pennant_postseason_stats": (("world", "world_year"), PAGE, False),
     "pennant_settings": (("world",), PAGE, False),
+    "pennant_draft_order_settings": (("world",), WRITE, False),
 }
 
 # 下ごしらえにその年のオフの結果が無いので、自分のワークスペースでも 404 になる画面（ゲートの検査は別に効く）。

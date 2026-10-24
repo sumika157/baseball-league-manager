@@ -22,7 +22,7 @@ class MigrationDraftYearTest(TransactionTestCase):
     def test_japanese_players_move_and_foreign_players_stay_empty(self):
         old = self._migrate(BEFORE)
         Player = old.get_model("myapp", "Player")
-        # tearDown で最新まで進めるとき、リーグがあるので 0059（既定のワークスペース）が持ち主を要求する
+        # tearDown で最新まで進めるとき、リーグがあるので 0060（既定のワークスペース）が持ち主を要求する
         old.get_model("auth", "User").objects.create(username="admin", is_superuser=True)
         league = old.get_model("myapp", "League").objects.create(name="旧リーグ")
         team = old.get_model("myapp", "Team").objects.create(league=league, name="旧チーム")

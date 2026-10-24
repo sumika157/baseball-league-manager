@@ -1885,6 +1885,13 @@ class DraftPick:
         return f"{self.year}年{kind}{order}"
 
     @property
+    def order_label(self) -> str:
+        """順位だけの表記（「1位」「育成3位」）。順位が無ければ空。オフの結果の「指名」の列。"""
+        if self.round is None:
+            return ""
+        return f"{'育成' if self.is_development else ''}{self.round}位"
+
+    @property
     def acquisition_route(self) -> AcquisitionRoute:
         """この指名で入団したときの在籍の経路。本指名はドラフト、育成は育成ドラフト。"""
         return AcquisitionRoute.DEVELOPMENTAL_DRAFT if self.is_development else AcquisitionRoute.DRAFT
