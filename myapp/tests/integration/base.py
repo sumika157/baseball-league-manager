@@ -16,8 +16,8 @@ from myapp.infrastructure import orm_models
 
 from ..helpers import (
     build_game_view_service,
+    build_league_view_service,
     build_roster_service,
-    build_service,
     build_team_view_service,
 )
 
@@ -39,7 +39,7 @@ class BaseCase(TestCase):
         cls.rival = orm_models.Team.objects.create(league=cls.league, name="相手チーム")
 
     def setUp(self):
-        self.service = build_service()
+        self.league_view = build_league_view_service()
         self.roster = build_roster_service()
         self.game_view = build_game_view_service()
         self.team_view = build_team_view_service()

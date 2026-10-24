@@ -6,11 +6,11 @@ AdminSite を差し替えずに済ませるため、テンプレート側から�
 
 from django import template
 
-from ..presentation.views import build_service
+from ..presentation.views import build_admin_overview_service
 
 register = template.Library()
 
 
 @register.inclusion_tag("admin/_overview.html")
 def admin_overview():
-    return {"overview": build_service().get_admin_overview()}
+    return {"overview": build_admin_overview_service().get_admin_overview()}

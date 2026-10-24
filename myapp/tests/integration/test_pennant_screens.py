@@ -16,8 +16,8 @@ from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoWorldSummaryQuery
 from myapp.presentation.views import (
     build_pennant_world_service,
+    build_world_league_view_service,
     build_world_team_view_service,
-    build_world_view_service,
 )
 
 from .base import BaseCase
@@ -286,7 +286,7 @@ class WorldSummaryQueryTest(WorldCase):
 
     def test_the_list_screen_reads_only_the_managed_season(self):
         """自軍の順位は、その年の試合だけを読む（全シーズンの試合を組み立てない）。"""
-        service = build_world_view_service(self.world_id)
+        service = build_world_league_view_service(self.world_id)
 
         leagues = service.get_league_standings(YEAR)
         other_year = service.get_league_standings(YEAR + 5)

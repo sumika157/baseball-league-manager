@@ -31,21 +31,21 @@ class TeamListByLeagueTest(BaseCase):
         self.x = orm_models.Team.objects.create(league=self.other, name="Xチーム")
 
     def test_grouped_by_league(self):
-        listing = self.service.list_teams_by_league()
+        listing = self.league_view.list_teams_by_league()
 
         grouped = {g.league_name: [t.name for t in g.teams] for g in listing.rows}
         self.assertEqual(grouped, {"テストリーグ": ["テストチーム", "相手チーム"], "別リーグ": ["Xチーム"]})
 
     def test_leagues_without_teams_are_omitted(self):
         orm_models.League.objects.create(name="空リーグ")
-        names = [g.league_name for g in self.service.list_teams_by_league().rows]
+        names = [g.league_name for g in self.league_view.list_teams_by_league().rows]
 
         self.assertNotIn("空リーグ", names)
 
     def test_sorting_applies_within_each_league(self):
         orm_models.Team.objects.create(league=self.other, name="Aチーム")
 
-        listing = self.service.list_teams_by_league(sort="name", descending=False)
+        listing = self.league_view.list_teams_by_league(sort="name", descending=False)
         grouped = {g.league_name: [t.name for t in g.teams] for g in listing.rows}
 
         self.assertEqual(grouped["別リーグ"], ["Aチーム", "Xチーム"])
@@ -88,7 +88,7 @@ class TeamListByLeagueTest(BaseCase):
 
     def test_flat_list_is_still_available_for_filters(self):
         """試合一覧の絞り込みなどは平坦な一覧を使う。"""
-        rows = self.service.list_teams().rows
+        rows = self.league_view.list_teams().rows
         self.assertEqual(len(rows), 3)
 
 
@@ -109,14 +109,14 @@ class LeagueDetailTest(BaseCase):
         self.assertContains(response, "テストリーグ")
 
     def test_shows_only_member_teams(self):
-        detail = self.service.get_league_detail(self.league.id)
+        detail = self.league_view.get_league_detail(self.league.id)
 
         names = [t.name for t in detail.teams]
         self.assertIn("テストチーム", names)
         self.assertNotIn("部外チーム", names)
 
     def test_shows_standings_and_recent_games(self):
-        detail = self.service.get_league_detail(self.league.id)
+        detail = self.league_view.get_league_detail(self.league.id)
 
         self.assertEqual(detail.standings[0].team_name, "テストチーム")
         self.assertEqual(len(detail.recent_games), 1)
@@ -125,19 +125,19 @@ class LeagueDetailTest(BaseCase):
         another = orm_models.Team.objects.create(league=self.outsider_league, name="部外チーム2")
         play_game(self.outsider, another, day=2)
 
-        detail = self.service.get_league_detail(self.league.id)
+        detail = self.league_view.get_league_detail(self.league.id)
         self.assertEqual(len(detail.recent_games), 1)
 
     def test_season_can_be_selected(self):
         play_game(self.team, self.rival, year=2025, day=1)
 
-        detail = self.service.get_league_detail(self.league.id, 2025)
+        detail = self.league_view.get_league_detail(self.league.id, 2025)
 
         self.assertEqual(detail.year, 2025)
         self.assertEqual(detail.available_years, [2026, 2025])
 
     def test_league_without_games(self):
-        detail = self.service.get_league_detail(self.outsider_league.id)
+        detail = self.league_view.get_league_detail(self.outsider_league.id)
 
         self.assertEqual(detail.standings, [])
         self.assertIsNone(detail.year)
@@ -164,7 +164,7 @@ class LeagueTitlesViewTest(BaseCase):
         self.url = reverse("league_titles", args=[self.league.id])
 
     def _departments(self, year=None):
-        titles = self.service.get_league_titles(self.league.id, year)
+        titles = self.league_view.get_league_titles(self.league.id, year)
         return {d.key: d for d in titles.departments}
 
     def test_home_run_leader(self):
@@ -336,7 +336,7 @@ class LeagueTitlesViewTest(BaseCase):
         """NPB のタイトルのうち成績だけで決まる12部門を、打撃6・投手6の順に並べる。"""
         play_game(self.team, self.rival)
 
-        titles = self.service.get_league_titles(self.league.id)
+        titles = self.league_view.get_league_titles(self.league.id)
 
         self.assertEqual(
             [d.key for d in titles.batting_departments],
@@ -387,7 +387,7 @@ class LeagueStatsViewTest(BaseCase):
         give_batting(self.team, self.rival, self.slugger.id, BattingLine(at_bats=10, home_runs=2), day=1)
         give_batting(self.rival, self.team, self.contact.id, BattingLine(at_bats=10, singles=5), day=2)
 
-        rows = self.service.get_league_stats(self.league.id).listing.rows
+        rows = self.league_view.get_league_stats(self.league.id).listing.rows
 
         self.assertEqual({r.player.name for r in rows}, {"大砲", "安打製造機"})
         self.assertEqual({r.team_name for r in rows}, {"テストチーム", "相手チーム"})
@@ -397,12 +397,12 @@ class LeagueStatsViewTest(BaseCase):
         other = orm_models.Team.objects.create(league=other_league, name="別チーム")
         self.roster.register_player(other.id, "他リーグの大砲", 9, "内野手")
 
-        rows = self.service.get_league_stats(self.league.id).listing.rows
+        rows = self.league_view.get_league_stats(self.league.id).listing.rows
 
         self.assertNotIn("他リーグの大砲", [r.player.name for r in rows])
 
     def test_default_batter_sort_is_ops(self):
-        listing = self.service.get_league_stats(self.league.id).listing
+        listing = self.league_view.get_league_stats(self.league.id).listing
 
         self.assertEqual(listing.sort, "ops")
         self.assertTrue(listing.descending)
@@ -411,13 +411,13 @@ class LeagueStatsViewTest(BaseCase):
         give_batting(self.team, self.rival, self.slugger.id, BattingLine(at_bats=10, home_runs=2), day=1)
         give_batting(self.rival, self.team, self.contact.id, BattingLine(at_bats=10, singles=5), day=2)
 
-        listing = self.service.get_league_stats(self.league.id, sort="average").listing
+        listing = self.league_view.get_league_stats(self.league.id, sort="average").listing
 
         self.assertEqual(listing.sort, "average")
         self.assertEqual([r.player.name for r in listing.rows], ["安打製造機", "大砲"])
 
     def test_invalid_sort_key_falls_back_to_the_default(self):
-        listing = self.service.get_league_stats(self.league.id, sort="怪しいキー").listing
+        listing = self.league_view.get_league_stats(self.league.id, sort="怪しいキー").listing
 
         self.assertEqual(listing.sort, "ops")
 
@@ -430,7 +430,7 @@ class LeagueStatsViewTest(BaseCase):
             day=1,
         )
 
-        rows = self.service.get_league_stats(self.league.id, pitchers=True).listing.rows
+        rows = self.league_view.get_league_stats(self.league.id, pitchers=True).listing.rows
 
         self.assertEqual([r.player.name for r in rows], ["エース"])
         self.assertEqual(rows[0].player.wins, 1)
@@ -470,8 +470,8 @@ class LeagueStatsViewTest(BaseCase):
             },
         )
 
-        everyone = self.service.get_league_stats(self.league.id)
-        reaching = self.service.get_league_stats(self.league.id, qualified=True)
+        everyone = self.league_view.get_league_stats(self.league.id)
+        reaching = self.league_view.get_league_stats(self.league.id, qualified=True)
 
         self.assertIn("代打", [r.player.name for r in everyone.listing.rows])
         self.assertNotIn("代打", [r.player.name for r in reaching.listing.rows])
@@ -481,8 +481,8 @@ class LeagueStatsViewTest(BaseCase):
         """切り替える前に規模が分かるよう、人数はどちらの状態でも返す。"""
         give_batting(self.team, self.rival, self.slugger.id, BattingLine(at_bats=10, singles=3), day=1)
 
-        everyone = self.service.get_league_stats(self.league.id)
-        reaching = self.service.get_league_stats(self.league.id, qualified=True)
+        everyone = self.league_view.get_league_stats(self.league.id)
+        reaching = self.league_view.get_league_stats(self.league.id, qualified=True)
 
         self.assertFalse(everyone.qualified)
         self.assertTrue(reaching.qualified)
@@ -502,7 +502,7 @@ class LeagueStatsViewTest(BaseCase):
             },
         )
 
-        rows = self.service.get_league_stats(self.league.id, pitchers=True, qualified=True).listing.rows
+        rows = self.league_view.get_league_stats(self.league.id, pitchers=True, qualified=True).listing.rows
 
         self.assertEqual([r.player.name for r in rows], ["エース"])
 

@@ -35,7 +35,7 @@ class DashboardLeadersTest(BaseCase):
         """主な6部門だけ。残りの部門はタイトル画面が受け持つ。"""
         play_game(self.team, self.rival)
 
-        league = self.service.get_dashboard().leagues[0]
+        league = self.league_view.get_dashboard().leagues[0]
 
         self.assertEqual(
             [d.key for d in league.leaders],
@@ -59,7 +59,7 @@ class DashboardLeadersTest(BaseCase):
             },
         )
 
-        league = self.service.get_dashboard().leagues[0]
+        league = self.league_view.get_dashboard().leagues[0]
         home_runs = next(d for d in league.leaders if d.key == "home_runs")
 
         self.assertEqual(
@@ -81,7 +81,7 @@ class DashboardLeadersTest(BaseCase):
             },
         )
 
-        league = self.service.get_dashboard().leagues[0]
+        league = self.league_view.get_dashboard().leagues[0]
         home_runs = next(d for d in league.leaders if d.key == "home_runs")
 
         self.assertEqual(sorted(e.player_name for e in home_runs.entries), ["山田", "田中"])
@@ -97,7 +97,7 @@ class DashboardLeadersTest(BaseCase):
         give_batting(self.team, self.rival, veteran.id, BattingLine(at_bats=4, home_runs=1), year=2026)
         give_batting(self.team, self.rival, rookie.id, BattingLine(at_bats=4, home_runs=2), year=2026, day=2)
 
-        league = self.service.get_dashboard().leagues[0]
+        league = self.league_view.get_dashboard().leagues[0]
 
         self.assertEqual(_leader(league, "home_runs").player_name, "若手")
         self.assertEqual(_leader(league, "home_runs").value, "2")
@@ -119,8 +119,8 @@ class DashboardLeadersTest(BaseCase):
                 },
             )
 
-        league = self.service.get_dashboard().leagues[0]
-        titles = {d.key: d for d in self.service.get_league_titles(self.league.id).departments}
+        league = self.league_view.get_dashboard().leagues[0]
+        titles = {d.key: d for d in self.league_view.get_league_titles(self.league.id).departments}
 
         for department in league.leaders:
             with self.subTest(key=department.key):
@@ -162,8 +162,8 @@ class DashboardLeadersTest(BaseCase):
                 pitching={starter.id: PitchingLine(innings=InningsPitched.from_notation("9.0"), earned_runs=1)},
             )
 
-        league = next(g for g in self.service.get_dashboard().leagues if g.league_id == self.league.id)
-        titles = {d.key: d for d in self.service.get_league_titles(self.league.id).departments}
+        league = next(g for g in self.league_view.get_dashboard().leagues if g.league_id == self.league.id)
+        titles = {d.key: d for d in self.league_view.get_league_titles(self.league.id).departments}
 
         self.assertEqual(_leader(league, "average").player_name, "常連")
         self.assertEqual(_leader(league, "era").player_name, "先発")
@@ -181,13 +181,13 @@ class DashboardLeadersTest(BaseCase):
         play_game(self.team, self.rival, batting={here.id: BattingLine(at_bats=10, home_runs=1)})
         play_game(x, y, batting={there.id: BattingLine(at_bats=10, home_runs=5)})
 
-        leagues = {g.league_name: g for g in self.service.get_dashboard().leagues}
+        leagues = {g.league_name: g for g in self.league_view.get_dashboard().leagues}
 
         self.assertEqual(_leader(leagues["テストリーグ"], "home_runs").player_name, "当リーグ")
         self.assertEqual(_leader(leagues["別リーグ"], "home_runs").player_name, "別リーグ選手")
 
     def test_league_without_games_has_no_leaders(self):
-        league = self.service.get_dashboard().leagues[0]
+        league = self.league_view.get_dashboard().leagues[0]
 
         self.assertEqual(league.leaders, [])
         self.assertFalse(league.has_leaders)
@@ -234,7 +234,7 @@ class DashboardLeaguesTest(BaseCase):
         other = orm_models.League.objects.create(name="別リーグ")
         orm_models.Team.objects.create(league=other, name="Xチーム")
 
-        board = self.service.get_dashboard()
+        board = self.league_view.get_dashboard()
 
         self.assertEqual(
             {g.league_name: [t.name for t in g.teams] for g in board.leagues},
@@ -242,11 +242,11 @@ class DashboardLeaguesTest(BaseCase):
         )
 
     def test_flat_team_list_is_still_available(self):
-        self.assertEqual(len(self.service.get_dashboard().teams), 2)
+        self.assertEqual(len(self.league_view.get_dashboard().teams), 2)
 
     def test_leagues_without_teams_are_omitted(self):
         orm_models.League.objects.create(name="空リーグ")
-        board = self.service.get_dashboard()
+        board = self.league_view.get_dashboard()
 
         self.assertNotIn("空リーグ", [g.league_name for g in board.leagues])
 
@@ -261,7 +261,7 @@ class DashboardLeaguesTest(BaseCase):
         play_game(self.team, self.rival, home_score=5, away_score=3, year=2025)
         play_game(self.team, self.rival, home_score=2, away_score=7, year=2026)
 
-        league = self.service.get_dashboard().leagues[0]
+        league = self.league_view.get_dashboard().leagues[0]
 
         self.assertEqual(league.standings_year, 2026)
         self.assertEqual([r.team_name for r in league.standings], ["相手チーム", "テストチーム"])
@@ -299,7 +299,7 @@ class DashboardLatestResultsTest(BaseCase):
         play_game(self.rival, self.team, day=3)
         play_game(self.team, self.rival, day=2)
 
-        results = self.service.get_dashboard().latest_results
+        results = self.league_view.get_dashboard().latest_results
 
         self.assertEqual([g.played_on.day for g in results], [3])
 
@@ -312,7 +312,7 @@ class DashboardLatestResultsTest(BaseCase):
             play_game(self.team, self.rival, day=5)
             play_game(x, y, day=5)
 
-        results = self.service.get_dashboard().latest_results
+        results = self.league_view.get_dashboard().latest_results
 
         self.assertEqual(len(results), 8)
         # リーグの並び順（同じリーグの試合がまとまる）
@@ -326,7 +326,7 @@ class DashboardLatestResultsTest(BaseCase):
         play_game(self.team, self.rival, home_score=4, away_score=1, day=1)
         play_game(self.team, self.rival, day=9, recorded=False)
 
-        results = self.service.get_dashboard().latest_results
+        results = self.league_view.get_dashboard().latest_results
 
         self.assertEqual([(r.played_on.day, r.home_score, r.away_score) for r in results], [(1, 4, 1)])
 

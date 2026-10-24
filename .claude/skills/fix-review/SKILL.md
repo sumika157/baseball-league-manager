@@ -23,7 +23,7 @@ description: レビュー（ddd-boundary-reviewer エージェントや /code-re
 | --- | --- |
 | 業務ルール・不変条件の欠落 | `myapp/domain/`（集約・値オブジェクト） |
 | domain 層への Django 混入 | import を除去し、必要な変換は infrastructure 側へ移す |
-| ユースケースの手順・検査漏れ | `myapp/application/services.py` |
+| ユースケースの手順・検査漏れ | `myapp/application/`（対象ごとのサービス。`league_view.py`・`team_view.py`・`roster.py` など） |
 | ORM・クエリの問題（prefetch 罠など） | `myapp/infrastructure/`（回避例: repositories.py の `Prefetch(...)`） |
 | 画面・フォーム・導線 | `myapp/presentation/`・templates |
 

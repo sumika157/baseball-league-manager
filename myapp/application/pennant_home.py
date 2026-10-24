@@ -2,7 +2,7 @@
 
 材料は次の3つに分けて読み、**世界の全試合を集約として組み立てない**（`.claude/rules/performance.md`）。
 
-- 順位・タイトル: 世界の範囲で組み立てた `TeamApplicationService`、主力: 同じく `TeamViewService`（既存の参照）
+- 順位・タイトル: 世界の範囲で組み立てた `LeagueViewService`、主力: 同じく `TeamViewService`（既存の参照）
 - 自軍の試合・期間の試合: `GameListQuery`（試合の一覧の SQL。明細は読まない）
 - 責任投手・本塁打・期間の成績: `PennantActivityQuery`（明細の SQL 集計）
 
@@ -43,10 +43,10 @@ from .dto import (
     WorldDeletion,
     WorldFinale,
 )
+from .league_view import LeagueViewService
 from .pennant_race import final_standings, own_race, remaining_by_team, team_order, tiebreak_for
 from .queries import GameListQuery, PennantActivityQuery
 from .scorebook_view import build_line_score
-from .services import TeamApplicationService
 from .standings import record_label
 from .team_view import TeamViewService
 
@@ -76,12 +76,12 @@ def _saved_id(value: int | None) -> int:
 
 
 class PennantHomeService:
-    """GM ホームと世界の削除の確認の材料を作る。`teams`・`team_view` は世界の範囲で組み立てたサービス。"""
+    """GM ホームと世界の削除の確認の材料を作る。`league_view`・`team_view` は世界の範囲で組み立てたサービス。"""
 
     def __init__(
         self,
         *,
-        teams: TeamApplicationService,
+        league_view: LeagueViewService,
         team_view: TeamViewService,
         games: GameListQuery,
         game_records: GameRepository,
@@ -90,7 +90,7 @@ class PennantHomeService:
         team_records: TeamRepository,
         leagues: LeagueRepository,
     ) -> None:
-        self._teams = teams
+        self._league_view = league_view
         # 主力打者・投手陣（自軍の選手の一覧）
         self._team_view = team_view
         # 世界の終了の通算が、年ごとの順位を作るために読む（順位の規則は domain の `standings`）
@@ -116,8 +116,8 @@ class PennantHomeService:
         own_games = self._games.list_rows(year=year, team_id=own_id) if own_id is not None else []
         # 締めた後の開幕前は、今季の成績がまだ無い。順位表・主力・タイトルは前年の最終のものを見せる
         stats_year = stats_year_of(phase=world.phase, last_played_on=world.today, current_year=world.season_year)
-        standings = self._teams.get_league_standings(stats_year)
-        team_rows = self._teams.list_teams().rows
+        standings = self._league_view.get_league_standings(stats_year)
+        team_rows = self._league_view.list_teams().rows
         team_leagues = {team.id: (team.league_id, team.league_name) for team in team_rows}
         names = {team.id: team.name for team in team_rows}
 
@@ -196,7 +196,7 @@ class PennantHomeService:
                     standings,
                     remaining_by_team(pending),
                     own_id,
-                    tiebreak_for(year, games=self._games, teams=self._teams),
+                    tiebreak_for(year, games=self._games, league_view=self._league_view),
                 )
                 if world.phase is not SeasonPhase.BEFORE_OPENING
                 else None
@@ -219,7 +219,7 @@ class PennantHomeService:
             teams=self._team_records.find_all(),
             leagues=self._leagues.find_all(),
             games_of=lambda year: self._games.list_for_standings(year=year),
-            order=team_order(self._teams),
+            order=team_order(self._league_view),
         )
         seasons: list[FinaleSeason] = []
         wins = losses = ties = 0
@@ -322,7 +322,7 @@ class PennantHomeService:
         in_period = [game for game in own_games if after < _day(game) <= through]
         results = self._own_results(own_id, in_period)
         outcomes = [result.outcome for result in results]
-        before = _find_row(self._teams.get_league_standings(year, through=after), own_id)
+        before = _find_row(self._league_view.get_league_standings(year, through=after), own_id)
         after_row = _find_row(standings, own_id)
         own_ids = {game.id for game in in_period}
         everyone = self._games.list_rows(year=year, after=after, through=through)
@@ -481,7 +481,7 @@ class PennantHomeService:
         """自軍の選手が上位 `KEY_PLAYERS` 位以内にいる部門。"""
         if own_id is None or own_league_id is None:
             return []
-        titles = self._teams.get_league_titles(own_league_id, year, leaders=KEY_PLAYERS)
+        titles = self._league_view.get_league_titles(own_league_id, year, leaders=KEY_PLAYERS)
         return [
             TitleRaceRow(
                 department=department.label,

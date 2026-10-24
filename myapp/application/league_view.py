@@ -1,6 +1,7 @@
-"""リーグ・順位・タイトル・成績・チーム一覧の参照と、管理画面の概況のユースケース。
+"""リーグ・順位・タイトル・成績・チーム一覧の参照のユースケース。
 
-読むだけで、書き込みはしない（ロスターの更新は `RosterService`、球団と選手の画面の参照は `TeamViewService`）。
+読むだけで、書き込みはしない（ロスターの更新は `RosterService`、球団と選手の画面の参照は `TeamViewService`、
+試合の参照は `GameViewService`、管理画面の概況は `AdminOverviewService`）。
 指標の計算や並べ替えといった業務ルールはドメイン層にあり、ここには無い。
 """
 
@@ -20,7 +21,6 @@ from ..domain.value_objects import (
 )
 from .dto import (
     ActivePlayerStats,
-    AdminOverview,
     Dashboard,
     DashboardLeague,
     GameRow,
@@ -105,8 +105,8 @@ def _as_count(value: float) -> str:
     return str(int(value))
 
 
-class TeamApplicationService:
-    """リーグ・順位・タイトル・成績・チーム一覧の参照と、管理画面の概況のユースケース。"""
+class LeagueViewService:
+    """リーグ・順位・タイトル・成績・チーム一覧の参照のユースケース。"""
 
     def __init__(
         self,
@@ -679,32 +679,6 @@ class TeamApplicationService:
     def list_leagues(self) -> list[LeagueOption]:
         """リーグの絞り込みに使う選択肢。表示順は管理画面で決めた順。"""
         return [LeagueOption(id=saved_id(league.id), name=league.name) for league in self._leagues.find_all()]
-
-    def get_admin_overview(self) -> AdminOverview:
-        """管理画面トップ用の概況。
-
-        「成績が未入力か」の判定はドメインサービスの規定（打数0・投球回0を除く）を
-        そのまま使う。ここで独自に条件を書くと、ランキングの対象と管理画面の
-        警告がずれてしまう。
-        """
-        teams = self._teams.find_all_with_roster()
-        active = [p for team in teams for p in team.active_players]
-        retired = sum(1 for team in teams for p in team.players if not p.is_active)
-
-        qualified = {id(p) for p in domain_services.qualified_batters(active)} | {
-            id(p) for p in domain_services.qualified_pitchers(active)
-        }
-
-        return AdminOverview(
-            league_count=len({team.league_id for team in teams}),
-            team_count=len(teams),
-            player_count=len(active),
-            batter_count=sum(1 for p in active if not p.is_pitcher),
-            pitcher_count=sum(1 for p in active if p.is_pitcher),
-            players_without_stats=sum(1 for p in active if id(p) not in qualified),
-            retired_count=retired,
-            teams_without_players=sum(1 for team in teams if not team.active_players),
-        )
 
     # --- 参照用の索引 ---
 

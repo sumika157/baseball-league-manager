@@ -35,7 +35,7 @@ from myapp.presentation.views import (
     build_pennant_offseason_service,
     build_pennant_season_service,
     build_pennant_world_view,
-    build_world_view_service,
+    build_world_league_view_service,
 )
 
 from .test_pennant_advance import SEASON_GAMES, YEAR
@@ -160,7 +160,7 @@ class RaceBandBeforeTheEndTest(HomeCase):
         # 単独首位は残りを全勝すれば必ず首位なので、「マジックが残り試合以内なら点灯」の規則（race.py）どおり
         # 序盤でも点灯する（球団3つでも 3勝0敗でマジック139）。
         # 結果に依存しないよう、首位でない（または並んでいる）側から見る
-        (league,) = build_world_view_service(self.world_a).get_league_standings(YEAR)
+        (league,) = build_world_league_view_service(self.world_a).get_league_standings(YEAR)
         orm_models.PennantWorld.objects.filter(id=self.world_a).update(managed_team_id=league.rows[-1].team_id)
         early = self.client.get(self.home_url()).content.decode()
 
@@ -220,7 +220,7 @@ class RaceBandTest(FinishedSeasonCase):
         """世界の終了の通算が読む年ごとの順位は、順位表と同じ規則（domain の standings）から出る。"""
         service = build_pennant_home_service(self.world_a)
 
-        view = build_world_view_service(self.world_a)
+        view = build_world_league_view_service(self.world_a)
 
         ((final,),) = [f.standings for f in _finals_of(service, view, [YEAR])]
         (shown,) = view.get_league_standings(YEAR)
@@ -238,7 +238,7 @@ class RaceBandTest(FinishedSeasonCase):
         build_pennant_offseason_service(self.world_a).close_season()
         build_pennant_season_service(self.world_a).advance(AdvanceTarget.SEASON_END)
         home_service = build_pennant_home_service(self.world_a)
-        view = build_world_view_service(self.world_a)
+        view = build_world_league_view_service(self.world_a)
         context = build_pennant_world_view().get_context(self.world_a)
 
         with mock.patch("myapp.application.pennant_view.is_final_season", return_value=True):
@@ -256,7 +256,9 @@ class RaceBandTest(FinishedSeasonCase):
         self.assertEqual([s.year for s in finale.seasons], [YEAR, YEAR + 1])
         self.assertEqual((finale.wins, finale.losses), (sum(r.wins for r in own), sum(r.losses for r in own)))
         self.assertEqual([s.rank for s in finale.seasons], [r.rank for r in own])
-        tiebreak = tiebreak_for(YEAR + 1, games=DjangoGameListQuery(WorldScope.pennant(self.world_a)), teams=view)
+        tiebreak = tiebreak_for(
+            YEAR + 1, games=DjangoGameListQuery(WorldScope.pennant(self.world_a)), league_view=view
+        )
         last_years = {r.team_id: r.rank for r in both[YEAR][0].rows}
         self.assertEqual(tiebreak.previous_rank(), last_years, "2年目の前年の順位は1年目の最終順位")
 
@@ -393,7 +395,7 @@ class WorldContextTest(SimpleTestCase):
 class FinaleTest(SimpleTestCase):
     """終了した世界の通算。年ごとの順位表から、自軍の成績と優勝を足し上げる。"""
 
-    class Teams:
+    class LeagueView:
         def list_teams(self):
             return SimpleNamespace(rows=[SimpleNamespace(id=1), SimpleNamespace(id=2)])
 
@@ -414,7 +416,7 @@ class FinaleTest(SimpleTestCase):
 
     def service(self, games):
         return PennantHomeService(
-            teams=self.Teams(),
+            league_view=self.LeagueView(),
             team_view=None,
             games=games,
             game_records=None,
@@ -489,7 +491,7 @@ class PreviousRankTest(SimpleTestCase):
                 ],
             )
         ]
-        teams = SimpleNamespace(
+        league_view = SimpleNamespace(
             get_league_standings=lambda year: last_year if year == 2026 else [],
             list_teams=lambda: SimpleNamespace(
                 rows=[SimpleNamespace(id=1), SimpleNamespace(id=2), SimpleNamespace(id=3)]
@@ -503,6 +505,6 @@ class PreviousRankTest(SimpleTestCase):
             ]
         )
 
-        ranks = tiebreak_for(2027, games=games, teams=teams).previous_rank()
+        ranks = tiebreak_for(2027, games=games, league_view=league_view).previous_rank()
 
         self.assertEqual({1: 2, 2: 1, 3: 3}, ranks, "直接対決で勝った球団2が1位。ほかの同率首位は2位")

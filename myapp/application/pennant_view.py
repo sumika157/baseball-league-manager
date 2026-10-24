@@ -1,7 +1,7 @@
 """ペナントの世界の「いま」を読む。世界バーと世界の一覧の材料。
 
-読むだけで、書き込みはしない。順位・試合・選手の参照は世界の範囲で組み立てた
-`TeamApplicationService` が受け持ち、ここは世界の見出し（今日・局面・受け持つ球団）だけを作る。
+読むだけで、書き込みはしない。順位・試合・選手の参照は世界の範囲で組み立てた `LeagueViewService`・
+`GameViewService`・`TeamViewService` が受け持ち、ここは世界の見出し（今日・局面・受け持つ球団）だけを作る。
 
 見出しの材料は `WorldSummaryQuery` が**世界の数にかかわらず一定のクエリ数で**まとめて読む。
 世界の一覧で世界ごとに読み直さないため。自軍の順位だけは世界ごとの計算になる（`standings_for` で
@@ -16,9 +16,9 @@ from datetime import date
 from ..domain.pennant.season import is_final_season, season_phase, season_year
 from ..domain.pennant.world import MAX_WORLDS_PER_OWNER
 from .dto import OwnRace, OwnStanding, PennantWorldList, PennantWorldListRow, WorldContext, WorldSummary
+from .league_view import LeagueViewService
 from .pennant_race import own_race, tiebreak_for
 from .queries import GameListQuery, WorldSummaryQuery
-from .services import TeamApplicationService
 
 
 def _context_of(summary: WorldSummary) -> WorldContext:
@@ -46,7 +46,7 @@ class PennantWorldViewService:
         self,
         *,
         summaries: WorldSummaryQuery,
-        standings_for: Callable[[int], TeamApplicationService],
+        standings_for: Callable[[int], LeagueViewService],
         games_for: Callable[[int], GameListQuery],
     ) -> None:
         self._summaries = summaries
@@ -86,8 +86,8 @@ class PennantWorldViewService:
         # 試合の無い年（締めた直後の翌年の開幕前）は、順位を出さない
         if context.managed_team_id is None or context.today is None or context.today.year != year:
             return None, None
-        teams = self._standings_for(context.world_id)
-        standings = teams.get_league_standings(year)
+        league_view = self._standings_for(context.world_id)
+        standings = league_view.get_league_standings(year)
         for league in standings:
             for row in league.rows:
                 if row.team_id == context.managed_team_id:
@@ -98,7 +98,7 @@ class PennantWorldViewService:
                         ties=row.ties,
                         games_behind=row.games_behind,
                     )
-                    tiebreak = tiebreak_for(year, games=self._games_for(context.world_id), teams=teams)
+                    tiebreak = tiebreak_for(year, games=self._games_for(context.world_id), league_view=league_view)
                     race = own_race(standings, summary.remaining_by_team, context.managed_team_id, tiebreak)
                     return standing, race
         return None, None

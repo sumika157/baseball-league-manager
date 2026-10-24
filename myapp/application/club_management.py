@@ -4,8 +4,7 @@
 上書きを決める／外すだけで、試合の進行には関わらない（進めるときに `PennantSeasonService` が
 `resolve_club` で上書きを当てはめる）。
 
-`TeamApplicationService` には足さない（あのクラスは既に大きい）。読むのは集約ではなく、
-球団・選手の現在の状態（`SimulationContextQuery.teams()`）と能力（`RatingsRepository`）で、
+読むのは集約ではなく、球団・選手の現在の状態（`SimulationContextQuery.teams()`）と能力（`RatingsRepository`）で、
 `Team` 集約は組み立てない。リポジトリと参照クエリは、世界の範囲で組み立てて渡す。
 """
 

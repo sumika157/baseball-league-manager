@@ -105,12 +105,12 @@ class RealPagesDoNotShowThePennantWorldTest(WorldCase):
                 self._assert_no_marker(url)
 
     def test_the_dashboard_counts_only_the_real_games(self):
-        board = self.service.get_dashboard()
+        board = self.league_view.get_dashboard()
 
         self.assertEqual([league.league_name for league in board.leagues], [self.league.name])
 
     def test_standings_count_only_the_real_games(self):
-        board = self.service.get_standings(YEAR)
+        board = self.league_view.get_standings(YEAR)
 
         self.assertEqual([row.team_name for row in board.rows], [self.team.name, self.rival.name])
         self.assertEqual(sum(row.games_played for row in board.rows), 2, "実データの1試合を両チームが数える")

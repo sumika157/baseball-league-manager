@@ -16,8 +16,8 @@ from ..domain.entities import Game, League, Team
 from ..domain.pennant.race import RaceTeam, final_ranks, league_champion, pennant_race, season_champion
 from ..domain.pennant.schedule import Fixture
 from .dto import LeagueStandings, OwnRace, StandingRow
+from .league_view import LeagueViewService
 from .queries import GameListQuery
-from .services import TeamApplicationService
 from .standings import league_standings
 
 
@@ -33,12 +33,12 @@ class ChampionTiebreak:
     order: Callable[[], Sequence[int]]
 
 
-def team_order(teams: TeamApplicationService) -> list[int]:
+def team_order(league_view: LeagueViewService) -> list[int]:
     """球団の並び順（同率の決着の最後の基準）。"""
-    return [team.id for team in teams.list_teams().rows]
+    return [team.id for team in league_view.list_teams().rows]
 
 
-def tiebreak_for(year: int, *, games: GameListQuery, teams: TeamApplicationService) -> ChampionTiebreak:
+def tiebreak_for(year: int, *, games: GameListQuery, league_view: LeagueViewService) -> ChampionTiebreak:
     """`year` 年の同率の決着の材料。試合・前年の順位・球団の並びは、使うときに読む。"""
 
     def results() -> list[tuple[int, int]]:
@@ -52,8 +52,8 @@ def tiebreak_for(year: int, *, games: GameListQuery, teams: TeamApplicationServi
     def previous_rank() -> dict[int, int]:
         """前年の**最終順位**。前年に同率首位があれば、規定で決めた優勝を1位とする（ほかの同率首位は2位）。"""
         ranks: dict[int, int] = {}
-        last_year = tiebreak_for(year - 1, games=games, teams=teams)
-        for league in teams.get_league_standings(year - 1):
+        last_year = tiebreak_for(year - 1, games=games, league_view=league_view)
+        for league in league_view.get_league_standings(year - 1):
             league_ranks = {row.team_id: row.rank for row in league.rows}
             # 同率首位が無ければ、前々年の順位や試合は読まない
             tied = sum(1 for rank in league_ranks.values() if rank == 1) > 1
@@ -66,7 +66,7 @@ def tiebreak_for(year: int, *, games: GameListQuery, teams: TeamApplicationServi
         return ranks
 
     def order() -> list[int]:
-        return team_order(teams)
+        return team_order(league_view)
 
     return ChampionTiebreak(results=results, previous_rank=previous_rank, order=order)
 

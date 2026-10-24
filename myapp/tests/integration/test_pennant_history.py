@@ -27,7 +27,7 @@ from myapp.presentation.views import (
     build_pennant_offseason_service,
     build_pennant_season_service,
     build_pennant_world_view,
-    build_world_view_service,
+    build_world_league_view_service,
 )
 
 from .test_pennant_advance import YEAR
@@ -66,7 +66,7 @@ class FinishedSeasonTest(HistoryCase):
 
     def test_the_champion_is_the_first_place_of_the_standings_screen(self):
         self.finish_season()
-        (shown,) = build_world_view_service(self.world_a).get_league_standings(YEAR)
+        (shown,) = build_world_league_view_service(self.world_a).get_league_standings(YEAR)
         leader = shown.rows[0]
 
         history = self.history(league_id=None)
@@ -82,7 +82,7 @@ class FinishedSeasonTest(HistoryCase):
 
     def test_the_title_holders_are_the_first_place_of_the_titles_screen(self):
         self.finish_season()
-        view = build_world_view_service(self.world_a)
+        view = build_world_league_view_service(self.world_a)
         league_id = self.history(league_id=None).selected_league_id
         assert league_id is not None
         titles = view.get_league_titles(league_id, YEAR)
@@ -98,7 +98,7 @@ class FinishedSeasonTest(HistoryCase):
         self.finish_season()
         league_id = self.history(league_id=None).selected_league_id
         assert league_id is not None
-        titles = build_world_view_service(self.world_a).get_league_titles(league_id, YEAR)
+        titles = build_world_league_view_service(self.world_a).get_league_titles(league_id, YEAR)
 
         history = self.history(league_id=None)
 
@@ -108,7 +108,7 @@ class FinishedSeasonTest(HistoryCase):
 
     def test_the_screens_show_the_champion_and_link_to_the_club_history(self):
         self.finish_season()
-        (shown,) = build_world_view_service(self.world_a).get_league_standings(YEAR)
+        (shown,) = build_world_league_view_service(self.world_a).get_league_standings(YEAR)
         leader = shown.rows[0]
 
         content = self.client.get(self.history_url()).content.decode()
@@ -175,7 +175,7 @@ class ClubHistoryTest(HistoryCase):
     def test_the_seasons_match_the_standings_and_the_totals_match_the_finale(self):
         self.finish_season()
         self.close_and_finish()
-        view = build_world_view_service(self.world_a)
+        view = build_world_league_view_service(self.world_a)
         (first,) = view.get_league_standings(YEAR)
         team_id = first.rows[0].team_id
         orm_models.PennantWorld.objects.filter(id=self.world_a).update(managed_team_id=team_id)
@@ -204,7 +204,7 @@ class ClubHistoryTest(HistoryCase):
 
     def test_the_titles_are_only_the_players_of_the_club(self):
         self.finish_season()
-        view = build_world_view_service(self.world_a)
+        view = build_world_league_view_service(self.world_a)
         league_id = self.history(league_id=None).selected_league_id
         assert league_id is not None
         titles = view.get_league_titles(league_id, YEAR)
@@ -225,7 +225,7 @@ class ClubHistoryTest(HistoryCase):
     def test_a_retired_player_keeps_the_title_of_the_year_he_played(self):
         self.finish_season()
         self.close_and_finish()
-        view = build_world_view_service(self.world_a)
+        view = build_world_league_view_service(self.world_a)
         league_id = self.history(league_id=None).selected_league_id
         assert league_id is not None
         shown = view.get_league_titles(league_id, YEAR)
@@ -252,7 +252,7 @@ class ClubHistoryTest(HistoryCase):
 
     def test_the_club_screen_is_open_to_anyone_and_offers_no_write_link(self):
         self.finish_season()
-        (shown,) = build_world_view_service(self.world_a).get_league_standings(YEAR)
+        (shown,) = build_world_league_view_service(self.world_a).get_league_standings(YEAR)
 
         for url in (self.history_url(), self.club_url(shown.rows[0].team_id)):
             with self.subTest(url=url):
@@ -263,7 +263,7 @@ class ClubHistoryTest(HistoryCase):
 
     def test_the_club_screen_shows_the_champion_mark_the_totals_and_the_standings_link(self):
         self.finish_season()
-        (shown,) = build_world_view_service(self.world_a).get_league_standings(YEAR)
+        (shown,) = build_world_league_view_service(self.world_a).get_league_standings(YEAR)
         leader, runner_up = shown.rows[:2]
 
         champion = self.client.get(self.club_url(leader.team_id)).content.decode()
@@ -296,7 +296,7 @@ class LinksTest(HistoryCase):
 
     def test_the_end_card_links_the_club_history_of_the_own_team(self):
         self.finish_season()
-        (shown,) = build_world_view_service(self.world_a).get_league_standings(YEAR)
+        (shown,) = build_world_league_view_service(self.world_a).get_league_standings(YEAR)
         team_id = shown.rows[0].team_id
         orm_models.PennantWorld.objects.filter(id=self.world_a).update(managed_team_id=team_id)
 
@@ -449,7 +449,7 @@ class ChampionAgreementTest(SimpleTestCase):
             ]
             for year, results in self.RESULTS.items()
         }
-        teams = SimpleNamespace(
+        league_view = SimpleNamespace(
             get_league_standings=lambda year: standings if year in self.RESULTS else [],
             list_teams=lambda: SimpleNamespace(rows=[SimpleNamespace(id=n) for n in (1, 2, 3)]),
         )
@@ -469,7 +469,7 @@ class ChampionAgreementTest(SimpleTestCase):
             finals = final_standings([2026, 2027], teams=[], leagues=[], games_of=lambda y: games[y], order=[1, 2, 3])
 
         for final in finals:
-            tiebreak = tiebreak_for(final.year, games=query, teams=teams)
+            tiebreak = tiebreak_for(final.year, games=query, league_view=league_view)
             for team_id in (1, 2):
                 race = own_race(standings, {}, team_id, tiebreak)
                 with self.subTest(year=final.year, team_id=team_id):

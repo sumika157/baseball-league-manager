@@ -16,8 +16,8 @@ from unittest import mock
 from django.core.management import CommandError, call_command
 from django.urls import reverse
 
+from myapp.application.league_view import LeagueViewService
 from myapp.application.pennant_awards import derive_award_rows
-from myapp.application.services import TeamApplicationService
 from myapp.domain.exceptions import AlreadyClosed, InvalidAward, InvalidWorld
 from myapp.domain.pennant.awards import Award
 from myapp.domain.pennant.offseason import plan_offseason
@@ -33,7 +33,7 @@ from myapp.presentation.views import (
     build_pennant_season_service,
     build_pennant_world_service,
     build_pennant_world_view,
-    build_world_view_service,
+    build_world_league_view_service,
 )
 
 from .test_pennant_advance import YEAR
@@ -70,7 +70,7 @@ class ClosedYearCase(HomeCase):
         super().setUpTestData()
         cls.league_id = orm_models.League.objects.get(world_id=cls.world_a).id
         build_pennant_season_service(cls.world_a).advance(AdvanceTarget.SEASON_END)
-        cls.derived_before = derive_award_rows(build_world_view_service(cls.world_a), YEAR, cls.league_id)
+        cls.derived_before = derive_award_rows(build_world_league_view_service(cls.world_a), YEAR, cls.league_id)
         cls.games_before = year_games(cls.world_a, YEAR)
         build_pennant_offseason_service(cls.world_a).close_season()
         build_pennant_season_service(cls.world_a).advance(AdvanceTarget.SEASON_END)
@@ -92,7 +92,7 @@ class SavedAwardsTest(ClosedYearCase):
 
     def test_tied_leaders_are_all_saved(self):
         """同率の1位は全員が受賞者（タイトルの画面の1位と同じ。上位で切らない）。"""
-        titles = build_world_view_service(self.world_a).get_league_titles(self.league_id, YEAR, leaders=None)
+        titles = build_world_league_view_service(self.world_a).get_league_titles(self.league_id, YEAR, leaders=None)
         expected = {(d.key, e.player_id) for d in titles.departments for e in d.entries or [] if e.rank == 1}
         self.assertEqual({(row.title.value, row.player_id) for row in self.saved()}, expected)
         ties = Counter((row.title, row.year) for row in self.saved())
@@ -101,7 +101,9 @@ class SavedAwardsTest(ClosedYearCase):
     def test_the_closed_season_is_not_rewritten(self):
         """締めた年の試合は、締めた後も次のシーズンを回した後も変わらない。だから導き直しても表彰と同じ。"""
         self.assertEqual(year_games(self.world_a, YEAR), self.games_before)
-        self.assertEqual(derive_award_rows(build_world_view_service(self.world_a), YEAR, self.league_id), self.saved())
+        self.assertEqual(
+            derive_award_rows(build_world_league_view_service(self.world_a), YEAR, self.league_id), self.saved()
+        )
 
     def test_the_unclosed_year_is_not_saved(self):
         self.assertEqual({row.year for row in self.saved()}, {YEAR})
@@ -152,15 +154,15 @@ class SavedAwardsTest(ClosedYearCase):
         expected = Counter(row.player_id for row in self.saved())
         expected.update(
             row.player_id
-            for row in derive_award_rows(build_world_view_service(self.world_a), YEAR + 1, self.league_id)
+            for row in derive_award_rows(build_world_league_view_service(self.world_a), YEAR + 1, self.league_id)
         )
         with (
             mock.patch("myapp.application.pennant_offseason.plan_offseason", wraps=plan_offseason) as planned,
             mock.patch.object(
-                TeamApplicationService,
+                LeagueViewService,
                 "get_league_titles",
                 autospec=True,
-                side_effect=TeamApplicationService.get_league_titles,
+                side_effect=LeagueViewService.get_league_titles,
             ) as titles,
         ):
             build_pennant_offseason_service(self.world_a).close_season()
@@ -177,10 +179,10 @@ class ScreensReadTheAwardsTest(ClosedYearCase):
     def test_the_history_reads_the_closed_year_from_the_awards(self):
         """締めた年は表彰を読み、締めていない年（シーズン終了のいまの年度）だけを導く。"""
         with mock.patch.object(
-            TeamApplicationService,
+            LeagueViewService,
             "get_league_titles",
             autospec=True,
-            side_effect=TeamApplicationService.get_league_titles,
+            side_effect=LeagueViewService.get_league_titles,
         ) as titles:
             history = build_pennant_history_service(self.world_a).get_world_history(self.context(), league_id=None)
 
@@ -188,7 +190,7 @@ class ScreensReadTheAwardsTest(ClosedYearCase):
         first, second = history.years
         shown = {(c.department_key, h.player_id) for c in (*first.batting, *first.pitching) for h in c.holders}
         self.assertEqual(shown, {(row.title.value, row.player_id) for row in self.saved()})
-        derived = derive_award_rows(build_world_view_service(self.world_a), YEAR + 1, self.league_id)
+        derived = derive_award_rows(build_world_league_view_service(self.world_a), YEAR + 1, self.league_id)
         shown = {(c.department_key, h.player_id) for c in (*second.batting, *second.pitching) for h in c.holders}
         self.assertEqual(shown, {(row.title.value, row.player_id) for row in derived})
 
@@ -232,7 +234,7 @@ class PlayerPageTest(ClosedYearCase):
         )
 
     def test_the_unclosed_year_is_derived_on_the_player_page(self):
-        derived = derive_award_rows(build_world_view_service(self.world_a), YEAR + 1, self.league_id)
+        derived = derive_award_rows(build_world_league_view_service(self.world_a), YEAR + 1, self.league_id)
         row = derived[0]
 
         awards = self.client.get(self.player_url(row)).context["awards"]
@@ -255,10 +257,10 @@ class PlayerPageTest(ClosedYearCase):
         assert stint is not None, "2年目に出場していない選手（控え・新人）がいる"
 
         with mock.patch.object(
-            TeamApplicationService,
+            LeagueViewService,
             "get_league_titles",
             autospec=True,
-            side_effect=TeamApplicationService.get_league_titles,
+            side_effect=LeagueViewService.get_league_titles,
         ) as titles:
             response = self.client.get(
                 reverse("pennant_player_detail", args=[self.world_a, stint.team_id, stint.player_id])
@@ -270,7 +272,7 @@ class PlayerPageTest(ClosedYearCase):
     def test_a_player_without_titles_has_no_card(self):
         holders = {row.player_id for row in self.saved()} | {
             row.player_id
-            for row in derive_award_rows(build_world_view_service(self.world_a), YEAR + 1, self.league_id)
+            for row in derive_award_rows(build_world_league_view_service(self.world_a), YEAR + 1, self.league_id)
         }
         stint = (
             orm_models.PlayerStint.objects.filter(team__league__world_id=self.world_a)

@@ -50,8 +50,8 @@ class GamesPlayedColumnTest(BaseCase):
         self.assertEqual([row.name for row in pitchers.rows], ["中継ぎ", "先発"])
 
     def test_league_stats_list_and_sort_by_games_and_appearances(self):
-        batters = self.service.get_league_stats(self.league.id, sort="games", descending=False).listing
-        pitchers = self.service.get_league_stats(self.league.id, pitchers=True, sort="appearances").listing
+        batters = self.league_view.get_league_stats(self.league.id, sort="games", descending=False).listing
+        pitchers = self.league_view.get_league_stats(self.league.id, pitchers=True, sort="appearances").listing
 
         self.assertEqual([(r.player.name, r.player.games) for r in batters.rows], [("控え", 1), ("正選手", 3)])
         self.assertEqual([(r.player.name, r.player.appearances) for r in pitchers.rows], [("中継ぎ", 3), ("先発", 1)])

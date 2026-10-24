@@ -320,14 +320,14 @@ class RankingScreensDoNotBuildAggregatesTest(BaseCase):
     def test_dashboard_reads_without_aggregates(self):
         self._forbid_aggregates()
 
-        board = self.service.get_dashboard()
+        board = self.league_view.get_dashboard()
 
         self.assertEqual(next(d for d in board.leagues[0].leaders if d.key == "home_runs").leader.player_name, "大砲")
 
     def test_league_titles_read_without_aggregates(self):
         self._forbid_aggregates()
 
-        titles = self.service.get_league_titles(self.league.id)
+        titles = self.league_view.get_league_titles(self.league.id)
 
         home_runs = next(d for d in titles.departments if d.key == "home_runs")
         self.assertEqual(home_runs.entries[0].player_name, "大砲")
@@ -340,7 +340,7 @@ class RankingScreensDoNotBuildAggregatesTest(BaseCase):
         batters = self.team_view.list_batters(self.team.id)
         pitchers = self.team_view.list_pitchers(self.team.id, year=2026)
         totals = self.team_view.get_team_totals(self.team.id)
-        stats = self.service.get_league_stats(self.league.id)
+        stats = self.league_view.get_league_stats(self.league.id)
 
         self.assertEqual([row.name for row in batters.rows], ["大砲"])
         self.assertEqual(pitchers.rows, [])
@@ -355,16 +355,16 @@ class RankingScreensDoNotBuildAggregatesTest(BaseCase):
                 call()
             return len(queries)
 
-        dashboard_before = count(self.service.get_dashboard)
-        titles_before = count(lambda: self.service.get_league_titles(self.league.id))
+        dashboard_before = count(self.league_view.get_dashboard)
+        titles_before = count(lambda: self.league_view.get_league_titles(self.league.id))
 
         for index in range(5):
             team = orm_models.Team.objects.create(league=self.league, name=f"増えたチーム{index}")
             added = self.roster.register_player(team.id, f"選手{index}", 1, "投手")
             play_game(team, self.rival, pitching={added.id: PitchingLine(innings=InningsPitched.from_notation("9.0"))})
 
-        self.assertEqual(count(self.service.get_dashboard), dashboard_before)
-        self.assertEqual(count(lambda: self.service.get_league_titles(self.league.id)), titles_before)
+        self.assertEqual(count(self.league_view.get_dashboard), dashboard_before)
+        self.assertEqual(count(lambda: self.league_view.get_league_titles(self.league.id)), titles_before)
 
 
 class PeriodCoveringMatchesTheDomainTest(BaseCase):
