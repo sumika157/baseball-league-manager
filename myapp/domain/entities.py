@@ -37,6 +37,7 @@ from .value_objects import (
     BattingLine,
     ContractStatus,
     DepartureRoute,
+    DraftPick,
     ErrorKind,
     FieldingLine,
     FieldingPosition,
@@ -321,6 +322,21 @@ def ensure_free_agent_acquisitions(
                 f"その年の前年に、別の球団から FA を宣言した記録がありません"
                 f"（FA 宣言と、宣言した球団の在籍が先に要ります）。"
             )
+
+
+def ensure_draft_fits_career(draft: DraftPick | None, career: Iterable[Stint]) -> None:
+    """ドラフトの指名が、最初の在籍（加入年が最も早い在籍）の経路と食い違わないこと（`DraftPick.ensure_fits_route`）。
+
+    ドラフトが無い・在籍が無い・経路が不明なら見ない（不明は推測しない）。ドラフト年と加入年の整合は見ない
+    （社会人の入団が遅れる例などで一律に決まらない）。
+    """
+    stints = list(career)
+    if draft is None or not stints:
+        return
+    first_year = min(stint.from_year for stint in stints)
+    for stint in stints:
+        if stint.from_year == first_year and stint.acquired_via is not None:
+            draft.ensure_fits_route(stint.acquired_via)
 
 
 def ensure_declarations_valid(

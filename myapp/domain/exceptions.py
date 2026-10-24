@@ -65,6 +65,10 @@ class InvalidProfile(DomainError):
     """プロフィールの値が不正（現実的でない身長など）。"""
 
 
+class InvalidDraftPick(InvalidProfile):
+    """ドラフトの指名として成立しない（0位、育成ドラフトの入団なのに本指名など）。"""
+
+
 class InvalidStint(DomainError):
     """在籍期間として成立しない（退団年が加入年より前など）。"""
 

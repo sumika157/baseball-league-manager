@@ -26,7 +26,7 @@ from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND, RegisteredBand
 from myapp.domain.simulation.randomness import make_random
 from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings
 from myapp.domain.simulation.samples import draw_ratings
-from myapp.domain.value_objects import ContractStatus, ForeignPlayerRules, Position, Profile
+from myapp.domain.value_objects import ContractStatus, DraftPick, ForeignPlayerRules, Position, Profile
 
 YEAR = 2027
 START_YEAR = 2026
@@ -43,9 +43,12 @@ def member(
     foreign: bool = False,
     playing_time: PlayingTime = BENCH,
     contract: ContractStatus = ContractStatus.REGISTERED,
-    debut_year: int = 2015,
+    entered_year: int = 2015,
 ) -> OffseasonPlayer:
-    """能力の総合値が `value` の選手（全項目を同じ値にする。捕手は守備力も同じなので総合値どおり）。"""
+    """能力の総合値が `value` の選手（全項目を同じ値にする。捕手は守備力も同じなので総合値どおり）。
+
+    `entered_year` はプロ入りの年で、在籍の開始年も同じ。日本人はその前年のドラフト、外国人はドラフトなし。
+    """
     ratings = PitcherRatings(value, value, value, 50) if position.is_pitcher else BatterRatings(*(value,) * 5)
     return OffseasonPlayer(
         player_id=player_id,
@@ -53,11 +56,11 @@ def member(
         profile=Profile(
             birth_date=date(YEAR - age, 1, 1),
             is_foreign_player=foreign,
-            debut_year=debut_year,
+            draft=None if foreign else DraftPick(entered_year - 1),
             back_name=f"N{player_id}",
         ),
         number=str(player_id),
-        joined_year=debut_year,
+        joined_year=entered_year,
         ratings=PlayerRatings(player_id, YEAR, ratings),
         contract=contract,
         playing_time=playing_time,
@@ -198,26 +201,37 @@ class DecideReleasesTest(unittest.TestCase):
         players = roster(62)
         weak = [
             member(101, value=20, playing_time=REGULAR),
-            member(102, value=20, debut_year=YEAR),
+            member(102, value=20, entered_year=YEAR),
             member(103, value=20, contract=ContractStatus.DEVELOPMENTAL),
         ]
         chosen = releases([*players, *weak])
         self.assertEqual(len(chosen), 4, "支配下は 62 + 2 = 64人（育成は数えない）。6人の空きまで4人")
         self.assertFalse({101, 102, 103} & set(chosen))
 
-    def test_a_forked_player_without_a_debut_year_is_not_a_first_year_player(self) -> None:
-        """分岐した選手は在籍の開始年が一律に開幕年。入団年が空でも、最初のオフに1年目として守らない（再発防止）。"""
+    def test_a_forked_player_without_a_draft_is_not_a_first_year_player(self) -> None:
+        """分岐した選手は在籍の開始年が一律に開幕年。ドラフトが無くても、最初のオフに1年目として守らない（再発防止）。"""
         players = roster(62)
         forked = replace(
-            member(101, value=20), joined_year=YEAR, profile=replace(member(101).profile, debut_year=None)
+            member(101, value=20), joined_year=START_YEAR, profile=replace(member(101).profile, draft=None)
         )
-        self.assertIn(101, releases([*players, forked]))
+        self.assertIn(
+            101, decide_releases(club([*players, forked]), [*players, forked], year=START_YEAR, start_year=START_YEAR)
+        )
+
+    def test_a_foreign_rookie_without_a_draft_is_a_first_year_player(self) -> None:
+        """外国人の新人はドラフトを持たない。開幕年より後に在籍を始めた（世界の中で迎えた）ので1年目として守る（#108）。"""
+        rookie = member(101, value=20, foreign=True, entered_year=YEAR)
+        self.assertIsNone(rookie.profile.draft)
+        self.assertTrue(rookie.is_first_year(YEAR, start_year=START_YEAR))
+        forked = replace(rookie, joined_year=START_YEAR)
+        self.assertFalse(forked.is_first_year(START_YEAR, start_year=START_YEAR))
+        self.assertFalse(rookie.is_first_year(YEAR + 1, start_year=START_YEAR))
 
     def test_foreigners_below_the_prospect_are_replaced_even_if_regular(self) -> None:
         """外国人は、新しく迎える外国人の見込みを下回れば主力でも外し（1年目は余裕を引いても下回るとき）、上回れば残す。"""
         players = roster(55)
         weak_regular = member(101, position=Position.PITCHER, value=40, foreign=True, playing_time=REGULAR)
-        weak_rookie = member(102, position=Position.OUTFIELDER, value=40, foreign=True, debut_year=YEAR)
+        weak_rookie = member(102, position=Position.OUTFIELDER, value=40, foreign=True, entered_year=YEAR)
         strong_bench = member(103, position=Position.PITCHER, value=60, foreign=True)
         self.assertEqual(releases([*players, weak_regular, weak_rookie, strong_bench]), (101, 102))
 
@@ -226,9 +240,9 @@ class DecideReleasesTest(unittest.TestCase):
         prospect = foreign_prospect_value(Position.PITCHER)
         slightly_below = round(prospect - FIRST_YEAR_FOREIGN_MARGIN / 2)
         far_below = round(prospect - FIRST_YEAR_FOREIGN_MARGIN - 2)
-        rookie = member(101, position=Position.PITCHER, value=slightly_below, foreign=True, debut_year=YEAR)
+        rookie = member(101, position=Position.PITCHER, value=slightly_below, foreign=True, entered_year=YEAR)
         veteran = member(102, position=Position.PITCHER, value=slightly_below, foreign=True)
-        weak_rookie = member(103, position=Position.PITCHER, value=far_below, foreign=True, debut_year=YEAR)
+        weak_rookie = member(103, position=Position.PITCHER, value=far_below, foreign=True, entered_year=YEAR)
         self.assertEqual(releases([*roster(55), rookie, veteran, weak_rookie]), (103, 102))
 
     def test_all_foreigners_may_be_replaced(self) -> None:

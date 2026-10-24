@@ -52,7 +52,7 @@ class EnsureReleasableTest(unittest.TestCase):
         """主力も入団1年目も GM は外せる（AI が外さないのは自動の規則）。0人も成り立つ。"""
         players = squad()
         players[0] = replace(players[0], playing_time=REGULAR)
-        players[1] = member(players[1].player_id, position=players[1].position, debut_year=YEAR)
+        players[1] = member(players[1].player_id, position=players[1].position, entered_year=YEAR)
         self.check([players[0].player_id, players[1].player_id], players)
         self.check([], players)
 

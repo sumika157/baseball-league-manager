@@ -21,6 +21,7 @@ from .exceptions import (
     ForeignPlayerQuotaExceeded,
     InvalidAcquisition,
     InvalidContract,
+    InvalidDraftPick,
     InvalidFreeAgentDeclaration,
     InvalidGame,
     InvalidInningsPitched,
@@ -1847,6 +1848,58 @@ class Handedness(Enum):
 
 
 @dataclass(frozen=True)
+class DraftPick:
+    """ドラフトの指名。年（指名された秋の年）・順位・育成ドラフトかどうか。
+
+    順位は本指名と育成ドラフトで別に数える。分からなければ None（入団年から移した選手は順位を持たない）。
+    指名した球団は持たない（最初の在籍の球団で分かる。同じ事実を2か所に持たない）。
+    """
+
+    year: int
+    round: int | None = None
+    is_development: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "year", Season(self.year).year)  # 年としての妥当性はここで検査する
+        if self.round is not None:
+            try:
+                number = int(self.round)
+            except (TypeError, ValueError):
+                raise InvalidDraftPick("ドラフトの順位は数値で入力してください。") from None
+            if number < 1:
+                raise InvalidDraftPick("ドラフトの順位は1以上で入力してください。")
+            object.__setattr__(self, "round", number)
+
+    @property
+    def entry_year(self) -> int:
+        """入団の年。**「入団はドラフトの翌年」の唯一の出典**（自由獲得枠などの例外は扱わない）。"""
+        return self.year + 1
+
+    @property
+    def label(self) -> str:
+        """「2020年ドラフト1位」「2020年育成ドラフト3位」。順位が無ければ「2020年ドラフト」。表記の唯一の出典。"""
+        kind = "育成ドラフト" if self.is_development else "ドラフト"
+        order = "" if self.round is None else f"{self.round}位"
+        return f"{self.year}年{kind}{order}"
+
+    @property
+    def acquisition_route(self) -> AcquisitionRoute:
+        """この指名で入団したときの在籍の経路。本指名はドラフト、育成は育成ドラフト。"""
+        return AcquisitionRoute.DEVELOPMENTAL_DRAFT if self.is_development else AcquisitionRoute.DRAFT
+
+    def ensure_fits_route(self, route: AcquisitionRoute) -> None:
+        """入団の経路（最初の在籍）と食い違わないか。ドラフト・育成ドラフト以外の経路は見ない。"""
+        if route not in (AcquisitionRoute.DRAFT, AcquisitionRoute.DEVELOPMENTAL_DRAFT):
+            return
+        if route is AcquisitionRoute.DEVELOPMENTAL_DRAFT and not self.is_development:
+            raise InvalidDraftPick("育成ドラフトで入団した選手は、ドラフトも育成にしてください。")
+        if route is AcquisitionRoute.DRAFT and self.is_development:
+            raise InvalidDraftPick(
+                "ドラフトで入団した選手は、ドラフトを育成にできません（育成は「育成ドラフト」で入団）。"
+            )
+
+
+@dataclass(frozen=True)
 class Profile:
     """選手のプロフィール。
 
@@ -1860,7 +1913,9 @@ class Profile:
     height_cm: int | None = None
     weight_kg: int | None = None
     birthplace: str = ""
-    debut_year: int | None = None
+    # ドラフトの指名。ドラフトを経ていない選手（外国人選手など）は None。入団年は持たない
+    # （ドラフトの翌年＝`DraftPick.entry_year`。ドラフトの無い選手のプロ入りは最初の在籍の加入年で分かる）
+    draft: DraftPick | None = None
     # プロ入り前の経歴。日本では 高校 →（大学 または 社会人）→ プロ が多いが、
     # 高校からプロ、大学から社会人を経てプロなど、順路はさまざま
     high_school: str = ""
@@ -1889,10 +1944,6 @@ class Profile:
             if not (0 < number <= upper):
                 raise InvalidProfile(f"{label}の値が現実的ではありません。")
             object.__setattr__(self, name, number)
-
-        if self.debut_year is not None:
-            season = Season(self.debut_year)  # 年としての妥当性はここで検査する
-            object.__setattr__(self, "debut_year", season.year)
 
     def age(self, as_of: date) -> int | None:
         """指定日時点の満年齢。生年月日が未設定なら None。"""
@@ -1963,7 +2014,7 @@ class Profile:
                 self.height_cm,
                 self.weight_kg,
                 self.birthplace,
-                self.debut_year,
+                self.draft,
                 self.high_school,
                 self.university,
                 self.corporate_team,

@@ -110,7 +110,7 @@ class OffseasonPlayer:
     profile: Profile
     # 背番号の表記（「00」と「0」は別の番号）
     number: str
-    # 現在の在籍の開始年（分岐した選手は一律に開幕年。入団年は entered_year）
+    # 現在の在籍の開始年（分岐した選手は一律に開幕年。プロ入りの年は entered_year）
     joined_year: int
     # Y の能力。無い選手は翌年の能力も作らない
     ratings: PlayerRatings | None
@@ -127,27 +127,33 @@ class OffseasonPlayer:
 
     @property
     def entered_year(self) -> int:
-        """プロ入りの年。入団年（`debut_year`）があればそれ、無ければ現在の在籍の開始年。
+        """プロ入りの年。ドラフトがあればその翌年（`DraftPick.entry_year`）、無ければ現在の在籍の開始年。
 
         分岐した選手の在籍の開始年は一律に開幕年になる。若手の保護（入団2年以内）を在籍の開始年で数えると、
-        実際の経歴にかかわらず最初の2シーズン保護されてしまうので、入団年を優先する。
+        実際の経歴にかかわらず最初の2シーズン保護されてしまうので、ドラフトを優先する。
         """
-        return self.profile.debut_year if self.profile.debut_year is not None else self.joined_year
+        draft = self.profile.draft
+        return draft.entry_year if draft is not None else self.joined_year
 
     def seasons_as_pro(self, year: int) -> int:
         """`year` を含めてプロにいた年数（1以上）。引退の若手の保護（入団2年以内）の判定に使う。
 
-        入団年が空なら在籍の開始年で数える（分からない選手も保護の対象になりうる側に倒す）。
+        ドラフトが無ければ在籍の開始年で数える（分からない選手も保護の対象になりうる側に倒す）。
         """
         return max(1, year - self.entered_year + 1)
 
-    def is_first_year(self, year: int) -> bool:
-        """入団1年目（入団年 `debut_year` が `year` 以降）か。戦力外（`release.py`）が使う。
+    def is_first_year(self, year: int, *, start_year: int) -> bool:
+        """入団1年目（プロ入りの年が `year` 以降）か。戦力外（`release.py`）が使う。`start_year` は世界の開幕年。
 
-        `seasons_as_pro` と違い、入団年が空なら1年目と見なさない。在籍の開始年で代用すると、分岐した選手は
-        一律に開幕年から在籍するので、最初のオフで全員が1年目として戦力外から守られてしまう。新人は必ず入団年を持つ。
+        ドラフトがあればその翌年（`DraftPick.entry_year`）で見る。ドラフトの無い選手（外国人の新人など）は、
+        在籍の開始年が開幕年より後（世界の中で迎えた選手）のときだけ在籍の開始年で見る。分岐した選手は一律に
+        開幕年から在籍するので、在籍の開始年で代用すると、最初のオフで全員が1年目として戦力外から守られてしまう
+        （`seasons_as_pro` と違い、分からない選手は1年目と見なさない側に倒す）。
         """
-        return self.profile.debut_year is not None and self.profile.debut_year >= year
+        draft = self.profile.draft
+        if draft is not None:
+            return draft.entry_year >= year
+        return start_year < self.joined_year and self.joined_year >= year
 
 
 @dataclass(frozen=True)

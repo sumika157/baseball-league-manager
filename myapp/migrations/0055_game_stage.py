@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('myapp', '0051_pennant_award'),
+        ('myapp', '0054_remove_player_debut_year'),
     ]
 
     operations = [

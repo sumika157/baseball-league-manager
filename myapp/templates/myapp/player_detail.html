@@ -162,7 +162,7 @@
             {% if profile.weight_kg %}{% include 'myapp/_stat_readout.html' with label='体重' value=profile.weight_kg %}{% endif %}
             {% if profile.birthplace %}{% include 'myapp/_stat_readout.html' with label='出身' value=profile.birthplace %}{% endif %}
             {% if profile.nationality %}{% include 'myapp/_stat_readout.html' with label='国籍' value=profile.nationality %}{% endif %}
-            {% if profile.debut_year %}{% include 'myapp/_stat_readout.html' with label='入団' value=profile.debut_year %}{% endif %}
+            {% if profile.draft_label %}{% include 'myapp/_stat_readout.html' with label='ドラフト' value=profile.draft_label %}{% endif %}
           </div>
 
           {% if profile.amateur_career %}

@@ -253,7 +253,7 @@
   <p class="page-subtitle mb-2" style="font-size: 0.8125rem;">
     {{ analysis.year }}年に在籍した選手。<strong>登録日数は試合への出場（初出場〜最終出場）から推定した値です</strong>
     （育成だった年と試合に出ていない年は0日。{{ analysis.service_days_per_season }}日で1シーズン、{{ analysis.service_days_per_season }}日に満たない年は合算）。
-    {% if analysis.records_from_year %}試合の記録は{{ analysis.records_from_year }}年からで、それより前の年は数えられません。入団がそれより前の選手は、取得済みでなければ「不明」です。{% else %}試合の記録がまだありません。{% endif %}
+    {% if analysis.records_from_year %}試合の記録は{{ analysis.records_from_year }}年からで、それより前の年は数えられません。プロ入り（ドラフトの翌年。ドラフトの無い選手は最初の在籍）がそれより前の選手は、取得済みでなければ「不明」です。ただし外国人選手（ドラフトなし）は記録のある最初の年から数えます（海外リーグの年数は数えません）。{% else %}試合の記録がまだありません。{% endif %}
     並びは取得済み、取得が近い順（国内FA）です。
   </p>
   <div class="table-responsive mb-4">
@@ -263,7 +263,7 @@
           <th>背番号</th>
           <th>選手</th>
           <th>学歴</th>
-          <th class="text-end">入団年</th>
+          <th>ドラフト</th>
           <th class="text-end">数えたシーズン（推定）</th>
           <th>国内FA</th>
           <th>海外FA</th>
@@ -275,7 +275,7 @@
           <td><span class="jersey-number">{{ row.number }}</span></td>
           <td class="player-tone player-tone-{{ row.tone.key }}"><a href="{% scoped_url 'player_detail' analysis.team_id row.player_id %}" class="player-name">{{ row.name }}</a>{% if row.tone.mark %}<span class="tone-mark">{{ row.tone.mark }}</span>{% endif %}{% if row.is_developmental %} <span class="badge bg-primary">育成</span>{% endif %}</td>
           <td>{{ row.education_label }}</td>
-          <td class="text-end">{% if row.debut_year %}{{ row.debut_year }}年{% else %}—{% endif %}</td>
+          <td>{{ row.draft_label|default:"—" }}</td>
           <td class="text-end">{% if row.seasons is None %}—{% else %}{{ row.seasons }}シーズン{% if row.remainder_days %}＋{{ row.remainder_days }}日{% endif %}{% if row.includes_estimate %}<span class="stat-muted">（推定）</span>{% endif %}{% endif %}</td>
           <td{% if row.is_domestic_acquired %} class="fw-semibold"{% endif %}>{{ row.domestic_label }}</td>
           <td{% if row.is_overseas_acquired %} class="fw-semibold"{% endif %}>{{ row.overseas_label }}</td>

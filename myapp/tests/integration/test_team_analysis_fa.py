@@ -27,9 +27,10 @@ class TeamFaTabTest(AnalysisCase):
         self.game(self.team, self.rival, pitching=[(self.rookie, 1), (self.mystery, 1)])
 
     def person(self, name, number, *, debut, high_school="", university="", from_year, to_year=None):
+        """`debut` は入団の年（ドラフトはその前年）。None ならドラフトなし。"""
         player_id = self.player(self.team, name, number, "投手", throws="右", from_year=from_year, to_year=to_year)
         orm_models.Player.objects.filter(id=player_id).update(
-            debut_year=debut, high_school=high_school, university=university
+            draft_year=None if debut is None else debut - 1, high_school=high_school, university=university
         )
         return player_id
 
@@ -50,7 +51,9 @@ class TeamFaTabTest(AnalysisCase):
 
     def test_nine_seasons_acquire_domestic_and_overseas(self):
         veteran = self.rows()["ベテラン"]
-        self.assertEqual((veteran.education_label, veteran.debut_year, veteran.seasons), ("高卒", 2018, 9))
+        self.assertEqual(
+            (veteran.education_label, veteran.draft_label, veteran.seasons), ("高卒", "2017年ドラフト", 9)
+        )
         self.assertEqual(veteran.domestic_label, "取得済み（2025年）")
         self.assertEqual(veteran.overseas_label, "取得済み（2026年）")
         self.assertTrue(veteran.includes_estimate)
@@ -91,6 +94,28 @@ class TeamFaTabTest(AnalysisCase):
     def test_debut_before_the_records_is_unknown_with_an_upper_bound(self):
         row = self.rows()["記録前入団"]
         self.assertEqual(row.domestic_label, "不明（あと最大7シーズン）")
+
+    def test_undrafted_foreign_player_counts_from_the_first_recorded_year(self):
+        """ドラフトの無い外国人選手は、記録より前の在籍の年を数えず、記録の最初の年から言い切る（#108）。
+
+        海外リーグの年数を数えない NPB の規則と同じ扱い。国内FAは学歴によらず8シーズン。
+        """
+        foreigner = self.person("助っ人", 42, debut=None, university="米国の大学", from_year=2015)
+        orm_models.Player.objects.filter(id=foreigner).update(is_foreign_player=True)
+        for year in (2018, 2019):
+            self.season(foreigner, year)
+        row = self.rows()["助っ人"]
+        self.assertEqual(row.draft_label, "")
+        self.assertEqual((row.seasons, row.domestic_label, row.overseas_label), (2, "あと6シーズン", "あと7シーズン"))
+        response = self.client.get(self.url(), {"year": 2026, "tab": "fa"})
+        self.assertContains(response, "<th>ドラフト</th>", html=True)
+        self.assertContains(response, "外国人選手（ドラフトなし）は記録のある最初の年から数えます")
+
+    def test_undrafted_japanese_player_counts_from_the_first_stint(self):
+        """ドラフトの入っていない日本人選手は、最初の在籍の加入年から数え、記録より前は「不明」のまま。"""
+        unknown = self.person("ドラフト不明", 43, debut=None, high_school="H高", from_year=2015)
+        self.season(unknown, 2018)
+        self.assertEqual(self.rows()["ドラフト不明"].domestic_label, "不明（あと最大7シーズン）")
 
     def test_only_players_on_the_roster_in_the_year(self):
         self.assertNotIn("退団済み", self.rows())

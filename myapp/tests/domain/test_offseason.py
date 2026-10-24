@@ -27,6 +27,7 @@ from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings
 from myapp.domain.value_objects import (
     AcquisitionRoute,
     ContractStatus,
+    DraftPick,
     ForeignPlayerRules,
     JerseyNumber,
     Position,
@@ -74,23 +75,23 @@ def plan(clubs: list[OffseasonClub], seed: int = 1):
 
 
 class EstimatedBirthDateTest(unittest.TestCase):
-    def test_uses_debut_year_when_known(self) -> None:
-        self.assertEqual(estimated_birth_date(Profile(debut_year=2018), 2026), date(1996, 7, 1))
+    def test_uses_the_entry_year_of_the_draft_when_known(self) -> None:
+        self.assertEqual(estimated_birth_date(Profile(draft=DraftPick(2017)), 2026), date(1996, 7, 1))
 
     def test_falls_back_to_start_year(self) -> None:
         self.assertEqual(estimated_birth_date(Profile(), 2026), date(1999, 7, 1))
 
     def test_with_birth_date_keeps_a_known_one(self) -> None:
-        known = Profile(birth_date=date(1990, 1, 1), debut_year=2018)
+        known = Profile(birth_date=date(1990, 1, 1), draft=DraftPick(2017))
         self.assertIs(with_birth_date(known, 2026), known)
-        self.assertEqual(with_birth_date(Profile(debut_year=2018), 2026).birth_date, date(1996, 7, 1))
+        self.assertEqual(with_birth_date(Profile(draft=DraftPick(2017)), 2026).birth_date, date(1996, 7, 1))
 
     def test_fork_fills_the_birth_date_without_touching_the_source(self) -> None:
         source = Team(name="元", league_id=1, id=1)
         original = source.add_player(
             "田中太郎", JerseyNumber("1"), Position.PITCHER, from_year=2020, limits=RosterLimits.UNLIMITED
         )
-        original.profile = Profile(debut_year=2020, throws=None)
+        original.profile = Profile(draft=DraftPick(2019), throws=None)
         target = Team(name="先", league_id=2, id=2)
         ((_, copy),) = fork_roster(source, target, start_year=2026)
         self.assertEqual(copy.profile.birth_date, date(1998, 7, 1))
@@ -244,23 +245,23 @@ class HelperTest(unittest.TestCase):
 
 
 class RookieProtectionTest(unittest.TestCase):
-    """若手の保護（入団2年以内）は、入団年（`debut_year`）から数える。分岐した選手の在籍の開始年は一律に開幕年。"""
+    """若手の保護（入団2年以内）は、ドラフトの翌年（`DraftPick.entry_year`）から数える。分岐した選手の在籍の開始年は一律に開幕年。"""
 
-    def test_the_entered_year_is_the_debut_year_when_known(self) -> None:
-        forked = replace(player(1), joined_year=START_YEAR, profile=Profile(debut_year=2018))
+    def test_the_entered_year_is_the_year_after_the_draft_when_known(self) -> None:
+        forked = replace(player(1), joined_year=START_YEAR, profile=Profile(draft=DraftPick(2017)))
         self.assertEqual(forked.entered_year, 2018)
 
     def test_the_entered_year_falls_back_to_the_start_of_the_stint(self) -> None:
         self.assertEqual(replace(player(1), joined_year=2020, profile=Profile()).entered_year, 2020)
 
     def test_a_forked_veteran_is_not_protected_as_a_rookie(self) -> None:
-        """入団2021年の23歳の選手が、分岐した年（在籍の開始年 = 開幕年）を理由に保護されない。"""
+        """2020年ドラフト（入団2021年）の23歳の選手が、分岐した年（在籍の開始年 = 開幕年）を理由に保護されない。"""
         born = date(2003, 7, 1)  # YEAR の4月1日で23歳
         veteran = replace(
-            player(1, born=born), joined_year=START_YEAR, profile=Profile(birth_date=born, debut_year=2021)
+            player(1, born=born), joined_year=START_YEAR, profile=Profile(birth_date=born, draft=DraftPick(2020))
         )
         rookie = replace(
-            player(2, born=born), joined_year=START_YEAR, profile=Profile(birth_date=born, debut_year=YEAR)
+            player(2, born=born), joined_year=START_YEAR, profile=Profile(birth_date=born, draft=DraftPick(YEAR - 1))
         )
         self.assertEqual((veteran.seasons_as_pro(YEAR), rookie.seasons_as_pro(YEAR)), (7, 1))
         chances = [
