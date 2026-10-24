@@ -117,6 +117,10 @@ class InvalidAward(DomainError):
     """表彰として保存できない内容（同じ年の表彰を2度書く、範囲の外の選手など）。"""
 
 
+class InvalidChampionship(DomainError):
+    """日本一の記録として保存できない内容（同じ年を2度書く、範囲の外の球団など）。"""
+
+
 class AlreadyAdvanced(DomainError):
     """画面を開いたときから世界が進んでいる（二重送信や、別の画面で先に進めた場合）。"""
 

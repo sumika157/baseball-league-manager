@@ -32,6 +32,7 @@ from myapp.domain.pennant.postseason import (
     PostseasonStatus,
     Series,
     SeriesStage,
+    champion_title,
     final_stage_rules,
 )
 from myapp.domain.value_objects import TeamRecord
@@ -647,6 +648,14 @@ class OutcomeTest(unittest.TestCase):
         one_league = _play(_bracket(_league(1)))
         self.assertEqual(one_league.champion_label, "CS 優勝")
         self.assertEqual(one_league.outcome_of(11).label, "CS 優勝")
+
+    def test_the_label_is_the_title_of_the_league_count(self):
+        """勝ち上がりの呼び名は `champion_title`（保存した日本一の呼び名と同じ出典）。1〜8リーグで一致する。"""
+        for count in range(1, 9):
+            with self.subTest(leagues=count):
+                bracket = _bracket(*(_league(n) for n in range(1, count + 1)))
+                self.assertEqual(bracket.champion_label, champion_title(count))
+        self.assertEqual((champion_title(1), champion_title(2), champion_title(8)), ("CS 優勝", "日本一", "日本一"))
 
     def test_the_pending_rounds_are_named_until_they_are_built(self):
         leagues = [_league(n) for n in range(1, 5)]

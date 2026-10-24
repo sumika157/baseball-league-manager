@@ -13,8 +13,9 @@
 </nav>{% include 'pennant/_world_bar.html' %}
 
 {% comment %}
-球団史。終わったシーズンだけ。年ごとの最終順位・勝敗・優勝と、その年に球団の選手が取ったタイトル。
-保存した値ではなく、順位表とタイトルの集計から導いた値（世界の終了と同じ関数を通る）。
+球団史。終わったシーズンだけ。年ごとの最終順位・勝敗・優勝と、ポストシーズンの結果（ポストシーズンのある世界だけ）、
+その年に球団の選手が取ったタイトル。順位は順位表から導いた値（世界の終了と同じ関数を通る）。タイトルと日本一は、
+締めた年は締めたときに保存した記録、いまの年度は試合から導いた値。ポストシーズンの到達段は試合から導いた値。
 {% endcomment %}
 <div class="page-head">
   <h1 class="page-title">{{ history.team_name }} 球団史</h1>
@@ -25,6 +26,7 @@
   <p class="mb-3">
     通算 <span class="stat-key">{{ history.record }}</span>
     <span class="stat-muted ms-2">優勝</span> <span class="stat-key">{{ history.titles }}回</span>
+    {% if history.postseason_title %}<span class="stat-muted ms-2">{{ history.postseason_title }}</span> <span class="stat-key">{{ history.postseason_titles }}回</span>{% endif %}
   </p>
   <div class="card mb-4">
     <div class="card-body p-0">
@@ -40,6 +42,7 @@
               <th class="text-end">勝率</th>
               <th class="text-end">差</th>
               <th></th>
+              {% if history.postseason_title %}<th>ポストシーズン</th>{% endif %}
               <th>タイトル</th>
             </tr>
           </thead>
@@ -54,6 +57,9 @@
                 <td class="text-end tabular-nums">{{ season.winning_percentage }}</td>
                 <td class="text-end tabular-nums">{{ season.games_behind }}</td>
                 <td>{% if season.is_champion %}<span class="badge bg-primary">優勝</span>{% endif %}</td>
+                {% if history.postseason_title %}
+                  <td>{% if season.postseason %}<a href="{% url 'pennant_postseason_by_year' world.world_id season.year %}">{% if season.won_postseason %}<span class="badge bg-primary">{{ season.postseason }}</span>{% else %}{{ season.postseason }}{% endif %}</a>{% else %}<span class="stat-muted">—</span>{% endif %}</td>
+                {% endif %}
                 <td>{% for title in season.titles %}{% if not forloop.first %} · {% endif %}{{ title.label }}（<a href="{% scoped_url 'player_detail' title.team_id title.player_id %}">{{ title.player_name }}</a> {{ title.value }}）{% empty %}<span class="stat-muted">—</span>{% endfor %}</td>
               </tr>
             {% endfor %}

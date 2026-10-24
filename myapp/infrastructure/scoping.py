@@ -175,3 +175,8 @@ def release_plans_in(scope: WorldScope) -> QuerySet[orm_models.PennantReleasePla
 def awards_in(scope: WorldScope) -> QuerySet[orm_models.PennantAward]:
     """範囲の表彰。表彰はリーグを持つので、リーグで世界が決まる。"""
     return orm_models.PennantAward.objects.filter(world_condition("league", scope))
+
+
+def championships_in(scope: WorldScope) -> QuerySet[orm_models.PennantChampionship]:
+    """範囲の日本一の記録。記録は球団を持つので、球団のリーグで世界が決まる。"""
+    return orm_models.PennantChampionship.objects.filter(world_condition("team__league", scope))

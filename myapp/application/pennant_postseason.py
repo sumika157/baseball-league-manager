@@ -17,14 +17,13 @@ domain の `PostseasonBracket` が毎回導く（いまのステージ・次の�
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Iterable, Sequence
 from datetime import date
 from types import EllipsisType
 
 from ..domain.entities import Game
 from ..domain.exceptions import AlreadyAdvanced, AlreadyClosed, InvalidSchedule, SeasonNotFinished
 from ..domain.pennant.postseason import (
-    FinalStanding,
     LeagueFinish,
     PostseasonBracket,
     PostseasonFormat,
@@ -33,7 +32,6 @@ from ..domain.pennant.postseason import (
     ScheduledGame,
     played_format,
 )
-from ..domain.pennant.race import final_order
 from ..domain.pennant.schedule import MAX_GAMES_PER_ADVANCE, AdvanceTarget
 from ..domain.pennant.season import POSTSEASON_SCREEN_TARGETS, regular_season_over_year
 from ..domain.pennant.world import World, league_priority
@@ -45,9 +43,9 @@ from ..domain.repositories import (
     RatingsRepository,
     WorldRepository,
 )
-from ..domain.value_objects import GameStage, TeamRecord
-from .dto import LeagueStandings, PlanNotice, PostseasonAdvanceReport
-from .pennant_race import ChampionTiebreak, StandingsSource, tiebreak_for
+from ..domain.value_objects import GameStage
+from .dto import PlanNotice, PostseasonAdvanceReport
+from .pennant_race import StandingsSource, league_finishes, tiebreak_for
 from .pennant_season import AtomicBlock
 from .pennant_simulation import DaySimulator
 from .queries import GameListQuery, PostseasonQuery, SimulationContextQuery
@@ -106,20 +104,14 @@ class PostseasonBracketReader:
         if last_regular is None:
             return _no_postseason(year)
         standings = self._teams.get_league_standings(year)
-        postseason_format = (
-            played_format(results, {row.team_id: league.league_id for league in standings for row in league.rows})
-            if results
-            else world.postseason_format
-        )
-        priority = league_priority(
-            (_saved_id(league.id) for league in self._leagues.find_all()), year=year, start_year=world.start_year
-        )
-        return PostseasonBracket.derive(
-            postseason_format,
-            _league_finishes(standings, tiebreak_for(year, games=self._games, teams=self._teams)),
-            priority,
-            last_regular,
-            results,
+        return derive_bracket(
+            year,
+            finishes=league_finishes(standings, tiebreak_for(year, games=self._games, teams=self._teams)),
+            last_regular=last_regular,
+            results=results,
+            unplayed_format=world.postseason_format,
+            league_ids=[_saved_id(league.id) for league in self._leagues.find_all()],
+            start_year=world.start_year,
         )
 
     def team_names(self) -> dict[int, str]:
@@ -127,55 +119,39 @@ class PostseasonBracketReader:
         return {team.id: team.name for team in self._teams.list_teams().rows}
 
 
+def derive_bracket(
+    year: int,
+    *,
+    finishes: Sequence[LeagueFinish],
+    last_regular: date | None,
+    results: Sequence[PostseasonResult],
+    unplayed_format: PostseasonFormat,
+    league_ids: Sequence[int],
+    start_year: int,
+) -> PostseasonBracket:
+    """その年の勝ち上がりを、最終順位（全順序。`pennant_race.league_finishes`）と結果から導く。
+
+    **勝ち上がりを導く唯一の入口**で、読み取り（`PostseasonBracketReader.bracket`）と、歴代の記録・球団史・世界の終了
+    （`pennant_championships`。`final_standings` の最終順位から）の両方が通る。2つの経路で導いた勝ち上がりが
+    食い違わないよう、方式の決め方・リーグの優先順・最終順位の作り方をここと `league_finishes` の1か所に置く。
+
+    方式は年ごとに導く（#280）: 結果があればその年の試合から（`played_format`）、無ければ `unplayed_format`
+    （いまの年度は世界のいまの方式、締めた年は「なし」＝試合が無かった）。その年の公式戦が無ければ状況 `NONE`。
+    """
+    if last_regular is None or (not results and unplayed_format is PostseasonFormat.NONE):
+        return _no_postseason(year)
+    postseason_format = (
+        played_format(results, {row.team_id: league.league_id for league in finishes for row in league.standings})
+        if results
+        else unplayed_format
+    )
+    priority = league_priority(league_ids, year=year, start_year=start_year)
+    return PostseasonBracket.derive(postseason_format, finishes, priority, last_regular, results)
+
+
 def _no_postseason(year: int) -> PostseasonBracket:
     # 方式「なし」は回が無いので、日付も結果も使わない（状況は `NONE`）
     return PostseasonBracket.derive(PostseasonFormat.NONE, (), (), date(year, 1, 1))
-
-
-def _league_finishes(standings: Sequence[LeagueStandings], tiebreak: ChampionTiebreak) -> list[LeagueFinish]:
-    """リーグ別の順位表を、ポストシーズンの出場を決める**全順序**の最終順位にする。
-
-    同率のあるリーグだけ、優勝と同じ規定（domain の `final_order`。首位は `league_champion` と同じ）で並べる。
-    同率の材料（対戦結果・前年の順位・球団の並び）は、要るときに1回だけ読む。
-    """
-    results = _once(lambda: list(tiebreak.results()))
-    previous = _once(lambda: dict(tiebreak.previous_rank()))
-    order = _once(lambda: list(tiebreak.order()))
-    finishes = []
-    for league in standings:
-        ranks = {row.team_id: row.rank for row in league.rows}
-        if len(set(ranks.values())) == len(ranks):
-            ordered = sorted(ranks, key=ranks.__getitem__)
-        else:
-            ordered = final_order(ranks, results(), previous(), order())
-        rows = {row.team_id: row for row in league.rows}
-        finishes.append(
-            LeagueFinish(
-                league_id=league.league_id,
-                standings=tuple(
-                    FinalStanding(
-                        team_id=team_id,
-                        record=TeamRecord(
-                            wins=rows[team_id].wins, losses=rows[team_id].losses, ties=rows[team_id].ties
-                        ),
-                    )
-                    for team_id in ordered
-                ),
-            )
-        )
-    return finishes
-
-
-def _once[T](read: Callable[[], T]) -> Callable[[], T]:
-    """最初に呼ばれたときだけ読み、以後は同じ値を返す（同率のリーグが複数あっても読み直さない）。"""
-    cache: list[T] = []
-
-    def value() -> T:
-        if not cache:
-            cache.append(read())
-        return cache[0]
-
-    return value
 
 
 class PennantPostseasonService:

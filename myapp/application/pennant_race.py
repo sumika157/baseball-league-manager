@@ -11,11 +11,14 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date
 from typing import Protocol
 
 from ..domain.entities import Game, League, Team
-from ..domain.pennant.race import RaceTeam, final_ranks, league_champion, pennant_race, season_champion
+from ..domain.pennant.postseason import FinalStanding, LeagueFinish
+from ..domain.pennant.race import RaceTeam, final_order, final_ranks, league_champion, pennant_race, season_champion
 from ..domain.pennant.schedule import Fixture
+from ..domain.value_objects import TeamRecord
 from .dto import LeagueStandings, Listing, OwnRace, StandingRow
 from .queries import GameListQuery
 from .standings import league_standings
@@ -144,6 +147,10 @@ class SeasonFinal:
     standings: list[LeagueStandings]
     # リーグ id -> 優勝した球団 id（順位表の無いリーグは載らない）
     champions: Mapping[int, int]
+    # リーグごとの全順序の最終順位（ポストシーズンの出場と種を決める。`league_finishes`）
+    finishes: Sequence[LeagueFinish]
+    # その年の最後の公式戦の日（ポストシーズンの日付の起点）。試合が無ければ None
+    last_regular_date: date | None
 
     def league_of(self, team_id: int) -> LeagueStandings | None:
         """球団が載っているリーグの順位表。その年に試合の無い球団（順位表に載らない）は None。"""
@@ -172,6 +179,10 @@ def final_standings(
     （同率首位は規定で決めた優勝を1位にしたもの。domain の `final_ranks`）を次の年の同率の決着に渡す。
     前年が `years` に無ければ、前年の順位は無いものとする（開幕年と同じ）。
     同率の決着に使う対戦結果は、その年に読んだ試合から作る（クエリを足さない）。
+
+    ポストシーズンの勝ち上がりの材料（全順序の最終順位 `finishes` と最後の公式戦の日）も、同じ材料から作る。
+    全順序は勝ち上がりの読み取り（`PostseasonBracketReader`）と同じ関数 `league_finishes` を通す
+    （同率の材料が食い違うと、導いた勝ち上がりが試合と合わず `InvalidPostseason` になる）。
     """
     seasons: list[SeasonFinal] = []
     previous_year: int | None = None
@@ -193,6 +204,70 @@ def final_standings(
             if champion is not None:
                 champions[league.league_id] = champion
             ranks.update(final_ranks(league_ranks, champion))
-        seasons.append(SeasonFinal(year=year, standings=standings, champions=champions))
+        tiebreak = ChampionTiebreak(
+            results=_constant(results), previous_rank=_constant(before), order=_constant(order)
+        )
+        seasons.append(
+            SeasonFinal(
+                year=year,
+                standings=standings,
+                champions=champions,
+                finishes=league_finishes(standings, tiebreak),
+                last_regular_date=max((game.played_on for game in games), default=None),
+            )
+        )
         previous_year, previous_ranks = year, ranks
     return seasons
+
+
+def league_finishes(standings: Sequence[LeagueStandings], tiebreak: ChampionTiebreak) -> list[LeagueFinish]:
+    """リーグ別の順位表を、ポストシーズンの出場と種を決める**全順序**の最終順位にする。
+
+    **全順序の唯一の出典**で、勝ち上がりの読み取り（`PostseasonBracketReader`。その年の順位表と `tiebreak_for`）と
+    `final_standings`（歴代の記録・球団史・世界の終了。年ごとに読んだ試合と前年の最終順位）の両方が通る。
+    同率のあるリーグだけ、優勝と同じ規定（domain の `final_order`。首位は `league_champion` と同じ）で並べる。
+    同率の材料（対戦結果・前年の順位・球団の並び）は、要るときに1回だけ読む。
+    """
+    results = _once(lambda: list(tiebreak.results()))
+    previous = _once(lambda: dict(tiebreak.previous_rank()))
+    order = _once(lambda: list(tiebreak.order()))
+    finishes = []
+    for league in standings:
+        ranks = {row.team_id: row.rank for row in league.rows}
+        if len(set(ranks.values())) == len(ranks):
+            ordered = sorted(ranks, key=ranks.__getitem__)
+        else:
+            ordered = final_order(ranks, results(), previous(), order())
+        rows = {row.team_id: row for row in league.rows}
+        finishes.append(
+            LeagueFinish(
+                league_id=league.league_id,
+                standings=tuple(
+                    FinalStanding(
+                        team_id=team_id,
+                        record=TeamRecord(
+                            wins=rows[team_id].wins, losses=rows[team_id].losses, ties=rows[team_id].ties
+                        ),
+                    )
+                    for team_id in ordered
+                ),
+            )
+        )
+    return finishes
+
+
+def _constant[T](value: T) -> Callable[[], T]:
+    """いつも同じ値を返す読み取り（既に手元にある同率の材料を `ChampionTiebreak` に渡す）。"""
+    return lambda: value
+
+
+def _once[T](read: Callable[[], T]) -> Callable[[], T]:
+    """最初に呼ばれたときだけ読み、以後は同じ値を返す（同率のリーグが複数あっても読み直さない）。"""
+    cache: list[T] = []
+
+    def value() -> T:
+        if not cache:
+            cache.append(read())
+        return cache[0]
+
+    return value
