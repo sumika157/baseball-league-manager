@@ -13,7 +13,7 @@ from django.urls import reverse
 
 from myapp.domain.exceptions import WorldNotFound
 from myapp.infrastructure import orm_models
-from myapp.presentation.views import build_pennant_world_service, build_service
+from myapp.presentation.views import build_pennant_world_service, build_service, build_team_view_service
 
 from ..helpers import real_scope, world_scope, world_summary_query
 from .base import BaseCase
@@ -173,7 +173,7 @@ class WorldAgeTest(WorldCase):
         player_id = self.pennant_players(self.pennant_team)[0]
         orm_models.Player.objects.filter(id=player_id).update(birth_date=date(YEAR - 25, 4, 3))
 
-        listing = build_service(world_scope(self.world_id)).list_batters(self.pennant_team.id)
+        listing = build_team_view_service(world_scope(self.world_id)).list_batters(self.pennant_team.id)
 
         row = next(row for row in listing.rows if row.id == player_id)
         self.assertEqual(row.age, 24, "誕生日の前日なので、世界の日付ではまだ24歳")

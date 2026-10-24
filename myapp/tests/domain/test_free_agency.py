@@ -8,9 +8,11 @@ from myapp.domain.services.free_agency import (
     FaStatusKind,
     ProEntry,
     ServiceTime,
+    earliest_domestic_acquisition_year,
     estimated_service_days,
     fa_order,
     fa_outlook,
+    first_domestic_acquisition_year,
     service_seasons,
 )
 from myapp.domain.value_objects import DraftPick, Profile
@@ -307,3 +309,82 @@ class FaOrderTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def foreigner(first_stint_year: int) -> ProEntry:
+    """ドラフトを経ていない外国人選手のプロ入り。"""
+    entry = ProEntry.of(draft=None, is_foreign_player=True, first_stint_year=first_stint_year)
+    assert entry is not None
+    return entry
+
+
+class FirstDomesticAcquisitionYearTest(unittest.TestCase):
+    """国内 FA の最初の取得年（外国人枠の対象外の起点）。判定は `fa_outlook` と一致する。"""
+
+    def first(self, entry, days, *, through=2040, records_from=2000, developmental=()):
+        return first_domestic_acquisition_year(
+            education=EducationPath.UNKNOWN,
+            entry=entry,
+            days_by_year=days,
+            through_year=through,
+            records_from_year=records_from,
+            developmental_years=set(developmental),
+        )
+
+    def test_matches_the_acquired_year_of_the_outlook(self):
+        days = full_years(*range(2026, 2036))
+        self.assertEqual(self.first(foreigner(2026), days), 2033)
+        shown = outlook(EducationPath.UNKNOWN, None, days, through=2040, entry=foreigner(2026))
+        self.assertEqual(shown.domestic.acquired_year, 2033)
+
+    def test_none_until_acquired(self):
+        days = full_years(*range(2026, 2036))
+        self.assertIsNone(self.first(foreigner(2026), days, through=2032))
+        self.assertEqual(self.first(foreigner(2026), days, through=2033), 2033)
+
+    def test_a_later_year_does_not_move_the_first_acquisition(self):
+        days = full_years(*range(2026, 2040))
+        self.assertEqual(self.first(foreigner(2026), days, through=2033), self.first(foreigner(2026), days))
+
+    def test_the_latest_possible_year_is_returned_as_is(self):
+        """記録より前の年を数えられない日本人選手は「遅くとも Y」で、その Y を返す。"""
+        days = full_years(*range(2026, 2034))
+        found = self.first(drafted(2018), days, records_from=2026)
+        shown = outlook(EducationPath.UNKNOWN, 2018, days, through=2040, records_from=2026)
+        self.assertTrue(shown.domestic.acquired_year_is_latest)
+        self.assertEqual(found, shown.domestic.acquired_year)
+
+    def test_developmental_years_delay_the_acquisition(self):
+        days = full_years(*range(2026, 2036))
+        self.assertEqual(self.first(foreigner(2026), days, developmental=[2026]), 2034)
+
+    def test_unknown_entry_never_acquires(self):
+        self.assertIsNone(self.first(None, full_years(*range(2026, 2040))))
+
+
+class EarliestDomesticAcquisitionYearTest(unittest.TestCase):
+    """取得しうる最も早い年（出場を読む前の絞り込み）。実際の取得年はこれより前にならない。"""
+
+    def test_undrafted_foreigner_counts_from_the_later_of_entry_and_records(self):
+        self.assertEqual(earliest_domestic_acquisition_year(foreigner(2018), 2026), 2033)
+        self.assertEqual(earliest_domestic_acquisition_year(foreigner(2028), 2026), 2035)
+
+    def test_the_college_rule_lowers_the_bound_to_seven_seasons(self):
+        college = ProEntry.of(draft=DraftPick(2025), is_foreign_player=False, first_stint_year=None)
+        assert college is not None
+        self.assertEqual(earliest_domestic_acquisition_year(college, 2026), 2032)
+
+    def test_the_bound_is_never_later_than_the_actual_first_acquisition(self):
+        days = full_years(*range(2026, 2040))
+        for entry in (foreigner(2026), foreigner(2020), drafted(2026), drafted(2015)):
+            with self.subTest(entry=entry):
+                for education in EducationPath:
+                    acquired = first_domestic_acquisition_year(
+                        education=education,
+                        entry=entry,
+                        days_by_year=days,
+                        through_year=2045,
+                        records_from_year=2026,
+                    )
+                    assert acquired is not None
+                    self.assertLessEqual(earliest_domestic_acquisition_year(entry, 2026), acquired)

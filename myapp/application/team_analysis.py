@@ -46,7 +46,6 @@ from .dto import (
     MoveStintRow,
     PitcherRow,
     PitcherUsage,
-    PlayerContractStint,
     PlayerTone,
     ServiceHistory,
     TeamAnalysis,
@@ -55,7 +54,8 @@ from .dto import (
     UsageBox,
     UsagePlayer,
 )
-from .queries import TeamAnalysisQuery, TeamListQuery
+from .free_agency import fa_inputs
+from .queries import ServiceHistoryQuery, TeamAnalysisQuery, TeamListQuery
 
 DEPTH_TAB = "depth"
 USAGE_TAB = "usage"
@@ -86,10 +86,15 @@ USAGE_AREAS: dict[FieldingPosition, str] = {
 
 class TeamAnalysisService:
     def __init__(
-        self, team_list_query: TeamListQuery, analysis_query: TeamAnalysisQuery, today: Callable[[], date]
+        self,
+        team_list_query: TeamListQuery,
+        analysis_query: TeamAnalysisQuery,
+        service_history_query: ServiceHistoryQuery,
+        today: Callable[[], date],
     ) -> None:
         self._team_list_query = team_list_query
         self._analysis_query = analysis_query
+        self._service_history_query = service_history_query
         # 試合の無い球団の既定の年に使う「今日」。実データは暦の今日、ペナントの世界はその世界の今日
         self._today = today
 
@@ -138,7 +143,7 @@ class TeamAnalysisService:
         usage_boxes = self._usage_boxes(facts, chosen, axis)
         # FA 取得タブのときだけ、キャリア通算の出場を読む（ほかのタブのクエリ数を増やさない）
         history = (
-            self._analysis_query.load_service_history([row.player_id for row in facts.roster], chosen)
+            self._service_history_query.load_service_history([row.player_id for row in facts.roster], chosen)
             if chosen_tab == FA_TAB and facts.roster
             else None
         )
@@ -192,56 +197,22 @@ class TeamAnalysisService:
     def _fa_rows(facts: TeamAnalysisFacts, history: ServiceHistory | None, year: int, axis: ColorAxis) -> list[FaRow]:
         """FA 取得タブの行。表示年の在籍選手ごとに、年ごとの登録日数（推定）からFA権の見込みを出す。
 
-        登録日数は年ごとの初出場〜最終出場の日数で、育成だった年と試合の無い年は0日。
-        FA 宣言（F1）は表示年までのものを渡し、最後の宣言の翌年から数え直す（再取得）。
+        材料の組み立て（登録日数・育成だった年・FA 宣言・プロ入り）は `fa_inputs`。
         """
         if history is None:
             return []
-        stints: dict[int, list[PlayerContractStint]] = defaultdict(list)
-        for stint in history.stints:
-            stints[stint.player_id].append(stint)
-        # 最初の在籍の加入年（全球団の在籍から）。ドラフトを経ていない選手の FA の数え始め（`ProEntry`）
-        first_stint_year = {player_id: min(s.from_year for s in owned) for player_id, owned in stints.items()}
-        declared_years: dict[int, list[int]] = defaultdict(list)
-        for declaration in history.declarations:
-            declared_years[declaration.player_id].append(declaration.year)
-        days: dict[int, dict[int, int]] = defaultdict(dict)
-        for span in history.spans:
-            days[span.player_id][span.year] = domain_services.estimated_service_days(span.first_on, span.last_on)
-        # 記録が無ければ数えられる年が無いので、表示年を始まりとして「記録より前」を作らない
-        records_from = history.records_from_year if history.records_from_year is not None else year
+        inputs = fa_inputs(facts.roster, history, through_year=year)
 
         rows: list[tuple[tuple[int, int, int], FaRow]] = []
         for player in facts.roster:
-            by_year = days[player.player_id]
-            # 育成だった年かの判定だけをここで行い（在籍の契約から）、数えない扱いはドメインに任せる
-            developmental_years = {y for y in by_year if _is_developmental_year(stints[player.player_id], y)}
-            education = domain_services.EducationPath.of(
-                Profile(
-                    high_school=player.high_school,
-                    university=player.university,
-                    corporate_team=player.corporate_team,
-                )
-            )
-            outlook = domain_services.fa_outlook(
-                education=education,
-                entry=domain_services.ProEntry.of(
-                    draft=player.draft,
-                    is_foreign_player=player.is_foreign_player,
-                    first_stint_year=first_stint_year.get(player.player_id),
-                ),
-                days_by_year=by_year,
-                through_year=year,
-                records_from_year=records_from,
-                declared_years=declared_years[player.player_id],
-                developmental_years=developmental_years,
-            )
+            player_inputs = inputs[player.player_id]
+            outlook = player_inputs.outlook()
             number = player.contract.number_in(year)
             row = FaRow(
                 player_id=player.player_id,
                 name=player.name,
                 number=number,
-                education_label=education.value,
+                education_label=player_inputs.education.value,
                 draft_label=player.draft.label if player.draft is not None else "",
                 seasons=outlook.service.seasons if outlook.service else None,
                 remainder_days=outlook.service.remainder_days if outlook.service else 0,
@@ -259,6 +230,10 @@ class TeamAnalysisService:
                     fielding_position=None,
                 ),
                 is_developmental=player.contract.contract_in(year) is ContractStatus.DEVELOPMENTAL,
+                # 外国人選手は、国内 FA の最初の取得（または FA 宣言）の翌年から外国人枠の対象外（協約 第82条 (4)）
+                foreign_quota_exempt_from=(
+                    player_inputs.foreign_quota_exempt_from() if player.is_foreign_player else None
+                ),
             )
             rows.append(((*domain_services.fa_order(outlook), JerseyNumber(number).sort_key), row))
         rows.sort(key=lambda entry: entry[0])
@@ -445,12 +420,6 @@ def _tone(
         profile=Profile(throws=throws, bats=bats),
         fielding_position=fielding_position,
     )
-
-
-def _is_developmental_year(stints: list[PlayerContractStint], year: int) -> bool:
-    """その年に在籍があり、そのすべてが育成か。在籍が無い年は育成とは言えないので False。"""
-    covering = [s for s in stints if s.from_year <= year and (s.to_year is None or year <= s.to_year)]
-    return bool(covering) and all(s.contract.contract_in(year) is ContractStatus.DEVELOPMENTAL for s in covering)
 
 
 def _roster_tones(*tables: DepthTable) -> list[PlayerTone]:

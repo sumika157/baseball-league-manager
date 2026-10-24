@@ -36,6 +36,7 @@ from ..application.dto import (
     TeamMonthlyRow,
     WorldContext,
 )
+from ..application.foreign_quota import ForeignQuotaExemptions
 from ..application.game_recording import GameRecordingService
 from ..application.game_view import GameViewService
 from ..application.pennant_club_details import ClubDetailsService
@@ -51,6 +52,7 @@ from ..application.queries import SimulationContextQuery
 from ..application.roster import RosterService
 from ..application.services import TeamApplicationService
 from ..application.team_analysis import STATS_TAB, TeamAnalysisService
+from ..application.team_view import TeamViewService
 from ..domain.exceptions import (
     AlreadyAdvanced,
     AlreadyClosed,
@@ -91,6 +93,7 @@ from ..infrastructure.queries import (
     DjangoPlayerStatsQuery,
     DjangoRatingsHistoryQuery,
     DjangoSeasonPlayingTimeQuery,
+    DjangoServiceHistoryQuery,
     DjangoSimulationContextQuery,
     DjangoTeamAnalysisQuery,
     DjangoTeamListQuery,
@@ -294,8 +297,25 @@ def build_service(scope: WorldScope) -> TeamApplicationService:
     return TeamApplicationService(
         teams=DjangoTeamRepository(scope),
         team_list_query=DjangoTeamListQuery(scope),
-        games=DjangoGameRepository(scope),
         leagues=DjangoLeagueRepository(scope),
+        game_list_query=DjangoGameListQuery(scope),
+        player_stats_query=DjangoPlayerStatsQuery(scope),
+        today=today,
+    )
+
+
+def build_team_view_service(scope: WorldScope) -> TeamViewService:
+    """球団と選手の画面（選手の一覧・チームの合計と月別・選手の個人ページ）を読むサービスを組み立てる。
+
+    `build_service(scope)` と同じく**組み立てはここだけ**にする。依存は全部渡し、呼ぶ側ごとに
+    一部だけ渡さない。実データの範囲もペナントの世界の範囲も受け取り、依存は全部、渡された範囲で作る
+    （範囲の外の球団・試合には触れない）。年齢の基準日は、実データなら暦の今日、ペナントの世界ならその世界の
+    「今日」（`build_service` と同じ）。存在しない世界は、年齢を数えるときに WorldNotFound。
+    """
+    today = _today_for(scope)
+    return TeamViewService(
+        teams=DjangoTeamRepository(scope),
+        games=DjangoGameRepository(scope),
         game_list_query=DjangoGameListQuery(scope),
         player_fielding_query=DjangoPlayerFieldingQuery(scope),
         player_stats_query=DjangoPlayerStatsQuery(scope),
@@ -357,8 +377,8 @@ def build_recording_service(scope: WorldScope) -> GameRecordingService:
     """試合の登録とスコアブックの保存を担うサービスを組み立てる。
 
     `build_service(scope)` と同じく**組み立てはここだけ**にする。試合の登録も打席の記録も
-    チームの一覧も試合の一覧も要らないので、依存は4つ（試合・チーム・リーグ・本拠地の球場）で足りる。
-    実データの範囲だけを受け取る（ペナントの世界の範囲なら InvalidWorld）。
+    チームの一覧も試合の一覧も要らないので、依存は5つ（試合・チーム・リーグ・本拠地の球場・FA 取得による
+    外国人枠の対象外）で足りる。実データの範囲だけを受け取る（ペナントの世界の範囲なら InvalidWorld）。
     """
     _require_real(scope)
     return GameRecordingService(
@@ -366,6 +386,7 @@ def build_recording_service(scope: WorldScope) -> GameRecordingService:
         teams=DjangoTeamRepository(scope),
         leagues=DjangoLeagueRepository(scope),
         home_stadiums=DjangoHomeStadiumQuery(scope),
+        fa_exemptions=ForeignQuotaExemptions(DjangoServiceHistoryQuery(scope)),
     )
 
 
@@ -396,20 +417,19 @@ def build_team_analysis_service(scope: WorldScope) -> TeamAnalysisService:
     return TeamAnalysisService(
         team_list_query=DjangoTeamListQuery(scope),
         analysis_query=DjangoTeamAnalysisQuery(scope),
+        service_history_query=DjangoServiceHistoryQuery(scope),
         today=today,
     )
 
 
-def _analysis_scope(
-    request, world_id: int | None
-) -> tuple[TeamAnalysisService, TeamApplicationService, WorldContext | None]:
+def _analysis_scope(request, world_id: int | None) -> tuple[TeamAnalysisService, TeamViewService, WorldContext | None]:
     """戦力分析の画面が読む範囲。世界が無ければ実データ、あればその世界（無ければ 404）。"""
     if world_id is None:
         scope = _real_scope(request)
-        return build_team_analysis_service(scope), build_service(scope), None
+        return build_team_analysis_service(scope), build_team_view_service(scope), None
     world = _world_context(request, world_id)
     scope = _world_scope(request, world_id)
-    return build_team_analysis_service(scope), build_service(scope), world
+    return build_team_analysis_service(scope), build_team_view_service(scope), world
 
 
 def build_roster_service(scope: WorldScope) -> RosterService:
@@ -501,6 +521,7 @@ def build_pennant_season_service(scope: WorldScope) -> PennantSeasonService:
         ratings=DjangoRatingsRepository(scope),
         plans=DjangoClubPlanRepository(scope),
         context_query=DjangoSimulationContextQuery(scope),
+        fa_exemptions=ForeignQuotaExemptions(DjangoServiceHistoryQuery(scope)),
         atomic=transaction.atomic,
     )
 
@@ -526,6 +547,7 @@ def build_pennant_offseason_service(scope: WorldScope) -> PennantOffseasonServic
         titles=build_service(scope),
         context_query=DjangoSimulationContextQuery(scope),
         playing_time=DjangoSeasonPlayingTimeQuery(scope),
+        fa_exemptions=ForeignQuotaExemptions(DjangoServiceHistoryQuery(scope)),
         atomic=transaction.atomic,
     )
 
@@ -544,13 +566,15 @@ def build_offseason_view_service(scope: WorldScope) -> OffseasonViewService:
 def build_pennant_home_service(scope: WorldScope) -> PennantHomeService:
     """GM ホームの材料を作るサービスを組み立てる。
 
-    順位・主力・タイトルは世界の範囲の `TeamApplicationService`（`build_service(世界の範囲)`）に任せ、
+    順位・タイトルは世界の範囲の `TeamApplicationService`（`build_service(世界の範囲)`）に、
+    主力打者・投手陣は世界の範囲の `TeamViewService`（`build_team_view_service(世界の範囲)`）に任せ、
     試合の一覧・日程・期間の見どころの参照は、すべて渡された世界の範囲で作る。
     ペナントの世界の範囲だけを受け取る（実データの範囲なら InvalidWorld）。
     """
     _pennant_world_id(scope)
     return PennantHomeService(
         teams=build_service(scope),
+        team_view=build_team_view_service(scope),
         games=DjangoGameListQuery(scope),
         game_records=DjangoGameRepository(scope),
         fixtures=DjangoFixtureRepository(scope),
@@ -619,6 +643,17 @@ def _scope(request, world_id: int | None) -> tuple[TeamApplicationService, World
         return build_service(_real_scope(request)), None
     world = _world_context(request, world_id)
     return build_service(_world_scope(request, world_id)), world
+
+
+def _team_view_scope(request, world_id: int | None) -> tuple[TeamViewService, WorldContext | None]:
+    """球団と選手の画面（選手の一覧・個人ページ）が読む範囲。
+
+    `_scope` と同じく、世界が無ければ実データ、あればその世界（無ければ 404）。
+    """
+    if world_id is None:
+        return build_team_view_service(_real_scope(request)), None
+    world = _world_context(request, world_id)
+    return build_team_view_service(_world_scope(request, world_id)), world
 
 
 def _game_scope(request, world_id: int | None) -> tuple[TeamApplicationService, GameViewService, WorldContext | None]:
@@ -938,6 +973,7 @@ def build_club_service(scope: WorldScope) -> ClubManagementService:
         ratings=DjangoRatingsRepository(scope),
         fixtures=DjangoFixtureRepository(scope),
         context_query=DjangoSimulationContextQuery(scope),
+        fa_exemptions=ForeignQuotaExemptions(DjangoServiceHistoryQuery(scope)),
     )
 
 
@@ -1275,7 +1311,7 @@ def standings(request, year=None, world_id=None):
 
 def player_list(request, team_id, world_id=None):
     """選手一覧。野手／投手モードを切り替えて表示する。"""
-    service, world = _scope(request, world_id)
+    service, world = _team_view_scope(request, world_id)
     if world is not None and request.method not in ("GET", "HEAD"):
         # ペナントの世界の選手は、画面から登録・編集しない
         return HttpResponseNotAllowed(["GET", "HEAD"])
@@ -1753,7 +1789,7 @@ def player_detail(request, team_id, player_id, world_id=None):
     月の指定（`?month=2026-04`）が不正なら application 側が最新の月に落とす。
     ここでは弾かず、そのまま渡す（並べ替えのキーと同じ扱い）。
     """
-    service, world = _scope(request, world_id)
+    service, world = _team_view_scope(request, world_id)
     try:
         profile = service.get_player_profile(team_id, player_id, month=request.GET.get("month"))
     except (TeamNotFound, PlayerNotFound):
@@ -1778,7 +1814,7 @@ def player_detail(request, team_id, player_id, world_id=None):
 @login_required
 def player_edit(request, team_id, player_id):
     """選手の基本情報と成績を編集する。"""
-    service = build_service(_real_scope(request))
+    service = build_team_view_service(_real_scope(request))
 
     try:
         detail = service.get_player_detail(team_id, player_id)
@@ -1935,7 +1971,7 @@ def team_analysis(request, team_id, world_id=None):
     context: dict[str, object] = {"analysis": analysis}
     if analysis.tab == STATS_TAB:
         # 成績一覧のタブだけ、その年に在籍した選手のその年の成績を読む（ほかのタブのクエリ数を増やさない）。
-        # 表の材料は選手一覧と同じ `TeamApplicationService`。戦力分析のサービスにチームの表は持たせない
+        # 表の材料は選手一覧と同じ `TeamViewService`。戦力分析のサービスにチームの表は持たせない
         pos_mode = PITCHER_MODE if request.GET.get("pos") == PITCHER_MODE else BATTER_MODE
         sort, descending = _sort_params(request)
         listing = (

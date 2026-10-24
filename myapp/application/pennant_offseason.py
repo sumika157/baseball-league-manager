@@ -62,6 +62,7 @@ from ..domain.repositories import (
 )
 from ..domain.value_objects import ContractStatus, DepartureRoute, ForeignPlayerRules, JerseyNumber, RosterLimits
 from .dto import ReleasePlanView, ReleasePlayerRow, SeasonClosed, SeasonCloseOption, SimulationTeam
+from .foreign_quota import ForeignQuotaExemptions
 from .pennant_awards import derive_awards
 from .pennant_season import AtomicBlock
 from .queries import SeasonPlayingTimeQuery, SimulationContextQuery
@@ -113,6 +114,7 @@ class PennantOffseasonService:
         titles: TeamApplicationService,
         context_query: SimulationContextQuery,
         playing_time: SeasonPlayingTimeQuery,
+        fa_exemptions: ForeignQuotaExemptions,
         atomic: AtomicBlock,
     ) -> None:
         self._world_id = world_id
@@ -128,6 +130,8 @@ class PennantOffseasonService:
         self._titles = titles
         self._context_query = context_query
         self._playing_time = playing_time
+        # FA 資格の取得による外国人枠の対象外（協約 第82条 (4)）。GM の戦力外の検査だけが使う
+        self._fa_exemptions = fa_exemptions
         self._atomic = atomic
 
     def close_option(self) -> SeasonCloseOption:
@@ -278,9 +282,19 @@ class PennantOffseasonService:
         year, team_id = self._release_target(expected_year)
         teams = self._context_query.teams()
         players = _team_of(teams, team_id).players
+        # 残る選手が組むのは翌シーズン（Y+1 年）の名簿なので、外国人枠は Y+1 年の扱い（Y 年までの記録）で数える
+        exemptions = self._fa_exemptions.for_year([p.player_id for p in players if p.is_foreign], year + 1)
         ensure_releasable(
             player_ids,
-            [ClubMember(p.player_id, p.name, p.position, p.is_foreign) for p in players],
+            [
+                ClubMember(
+                    p.player_id,
+                    p.name,
+                    p.position,
+                    counts_as_foreign=exemptions.counts(p.player_id, is_foreign_player=p.is_foreign),
+                )
+                for p in players
+            ],
             foreign_rules=ForeignPlayerRules.strictest(t.foreign_rules for t in teams),
         )
         self._releases.save(ReleasePlan(team_id=team_id, year=year, player_ids=frozenset(player_ids)))

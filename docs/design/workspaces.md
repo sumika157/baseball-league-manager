@@ -68,15 +68,15 @@
 | 球場 | 世界をまたいで共有し、ペナントは読むだけ（分類 `SHARED`）。ただし `DjangoTeamRepository.save` は `home_stadium_id` を範囲で検査せずに書く | `repositories.py:233-251` |
 | 書き込みの判定 | `PennantWorld.owner`（`_is_owner`・`_requires_world_owner`）。owner は `SET_NULL`。世界の上限は1人5つ（`MAX_WORLDS_PER_OWNER=5`、`count_by_owner`）、シーズンは `MAX_SEASONS_PER_WORLD=10` | `views.py:401,406`、`world.py:28-30` |
 | 世界の一覧 | 誰でも見られる。台帳は範囲を持たない設計で、`test_wiring.py:94` の `UNSCOPED = {DjangoWorldRepository, DjangoWorldSummaryQuery}` で検査から外してある。`find_all`・`list_all` は全世界を読む | `repositories.py:1359-`、`queries.py:758-` |
-| 組み立て口 | T1 の前は18個（#105 の `build_pennant_history_service`、#193 の `build_world_team_analysis_service` を含む）。T1 で `build_world_view_service`・`build_world_team_analysis_service` を `build_service(scope)`・`build_team_analysis_service(scope)` に吸収して16個。すべて `scope` を既定値なしで受け取る（台帳だけの `build_pennant_world_view` は T3 まで範囲を取らない） | `views.py` |
+| 組み立て口 | T1 の前は18個（#105 の `build_pennant_history_service`、#193 の `build_world_team_analysis_service` を含む）。T1 で `build_world_view_service`・`build_world_team_analysis_service` を `build_service(scope)`・`build_team_analysis_service(scope)` に吸収して16個。その後 main の取り込みで `build_game_view_service(scope)`（2026-10-16）・`build_team_view_service(scope)`（2026-10-24 その2）が加わって18個、W2 T1 でワークスペースの台帳の `build_workspace_access_query()`・`build_workspace_list_query()` が加わり、今は20個。すべて `scope` を既定値なしで受け取る（台帳だけの `build_pennant_world_view` は T3 まで範囲を取らない） | `views.py` |
 | `scoped_url` | 入っている。context の `world` が無ければ `reverse(name)`、あれば `reverse("pennant_" + name, (world_id, *args))`。テンプレートで `{% scoped_url %}` 54か所、素の `{% url %}` 97か所（#130 などで変わっている。W2 の着手時に数え直す） | `templatetags/scoped.py:17-22`、`urls.py` の `_pennant()` |
 | マイグレーション | main は `0045_pennant_club_plan` まで。#168 が `0046_playerstint_left_via` を取るので、**ワークスペースは 0047 から始まる**（#168 を取り込んだ後に番号を確かめる） | `myapp/migrations/` |
 
-組み立て口（16個。W1b T1 の後）の範囲の受け方:
+組み立て口（W1b T1 の後は16個。main の取り込みで2つ増え、2026-10-24 その2 の後は18個。W2 T1 の台帳の2つを含めると20個）の範囲の受け方:
 
 | 範囲の受け方 | 組み立て口 |
 | --- | --- |
-| 実データまたはペナントの世界（どちらも `scope` で受ける） | `build_service`・`build_team_analysis_service`（実データなら年の基準は暦の今日、世界ならその世界の今日） |
+| 実データまたはペナントの世界（どちらも `scope` で受ける） | `build_service`・`build_team_view_service`・`build_game_view_service`・`build_team_analysis_service`（実データなら年の基準は暦の今日、世界ならその世界の今日） |
 | 実データ専用（ペナントの範囲なら `InvalidWorld`） | `build_recording_service`・`build_roster_service`・`build_permission_query`・`build_player_search_query`・`build_pennant_world_service`（分岐元が実データ） |
 | ペナント専用（実データの範囲なら `InvalidWorld`） | `build_pennant_ratings_service`・`build_pennant_season_service`・`build_pennant_offseason_service`・`build_offseason_view_service`・`build_pennant_home_service`・`build_pennant_history_service`・`build_club_service`・`build_club_details_service` |
 | 範囲を持たない | `build_pennant_world_view`（T3 で `workspace_id` を取る） |
@@ -917,3 +917,14 @@ W3 を W4 より先にするのは、W4 を先にすると、中身を入れら�
 
 - 「全範囲を読む API を作らない。例外は `admin_real_queryset` だけ」に、`scoping.real_teams_of_outer_workspace`（外側の `Workspace` に相関した副問い合わせとしてだけ働く。`infrastructure/queries.py` だけが使い、`test_wiring.py` の `OuterWorkspaceTeamsTest` が縛る）を足す。
 - 「組み立て口はすべて範囲を受け取る。例外は `build_pennant_world_view`」に、引数を取らないワークスペースの台帳2つ（`DjangoWorkspaceAccessQuery`・`DjangoWorkspaceListQuery`）とその組み立て口（`build_workspace_access_query()`・`build_workspace_list_query()`。key・利用者からワークスペースを引く）を足す。
+
+#### main の取り込み（2026-10-24 その2）
+
+W2 の T0。`refactor/merge-main-into-workspaces-3` で、epic 2e76eae に main b4d0b26 を取り込んだ。
+
+- main から来たもの: #219 段階4（`TeamApplicationService` から球団と選手の画面の参照を `TeamViewService` へ。組み立て口 `build_team_view_service()`・`build_world_team_view_service(world_id)`）、#204 段階B0・B（FA の推定の材料の読み口を `DjangoServiceHistoryQuery` に切り出し、FA 資格を取得した外国人を翌年から外国人枠の対象外に。`ForeignQuotaExemptions` を記録・進行・締め・編成のサービスに渡す。シミュレーションの外国人を `counts_as_foreign` に改名）、依存の更新（#277）。**マイグレーションは無い**ので振り直しは無し（epic は 0055〜0057 のまま）。
+- 衝突は9ファイル（`views.py`・`test_wiring.py`・`helpers.py`・`base.py`・`test_pennant_screens.py`・`test_pennant_season_stats.py`・`test_splits.py`・`.claude/rules/tests.md`・Wiki「アーキテクチャ」）。どれも main の分割（`TeamViewService`）と epic の範囲の形を両方残した。
+- 組み立て口: `build_team_view_service` は `scope` を既定値なしで受け取る形にし、`build_world_team_view_service(world_id)` を吸収した（年齢の基準日は `_today_for(scope)`）。分類は `BOTH_BUILDERS`。`_team_view_scope(request, world_id)`・`_analysis_scope` は `_real_scope(request)`・`_world_context`・`_world_scope` で範囲を作る。選手の編集画面は `build_team_view_service(_real_scope(request))`、GM ホームの主力は `build_team_view_service(scope)`。main が `build_world_team_analysis_service` に足した `service_history_query` は `build_team_analysis_service(scope)` に足した。
+- FA の対象外（#204 段階B）: `ForeignQuotaExemptions(DjangoServiceHistoryQuery(scope))` は各組み立て口の範囲で作る（記録は実データ専用、進行・締め・編成はペナント専用の範囲）。`DjangoServiceHistoryQuery` は main の時点で `scope` 必須で、出場は `world_condition`、在籍は `stints_in`、選手は `players_in`、記録のある最初の年は `games_in` で読むので、実装は変えていない。FA 宣言は今まで選手の id だけで絞っていた（ほかのワークスペースの選手の id を渡されると漏れる）ので、`scoping.py` に `declarations_in(scope)`（`players_in` と同じ在籍の条件を、宣言の行ごとに相関した `Exists` で見る。同じ1本の中なのでクエリ数は変わらない。`player_id__in=players_in(scope)` の形は相関しない副問い合わせで、チームを読むたびに全ワークスペースの選手を走査するのでやめた（レビュー））を足し、宣言を読む3か所（`DjangoServiceHistoryQuery._declarations`・`DjangoTeamAnalysisQuery._moves`・`repositories._declarations_of`。`_RosterData.for_players` に範囲を渡す）をそこへ通した。チームの保存の取り消した宣言の削除（集約の選手の id と宣言の id で絞る書き込み）と管理画面は変えていない。
+- テスト: `test_workspace_isolation.py` の `CHECKS` に `DjangoServiceHistoryQuery` を足し、`DjangoTeamAnalysisQuery` の検査にあった `load_service_history` をそこへ移して `load_fa_subjects`（B の選手が載らない・A の選手は載る・記録のある最初の年が B に引きずられない）を足した。B の打者に FA 宣言を1つ置き、A と B の選手の id を混ぜて渡しても、宣言の読み口（FA の推定の材料の2つと `_declarations_of`）と集約に A の宣言だけが出ることを確かめる（`declarations_in` を全件に戻す・`_declarations_of` を id だけの絞り込みに戻すと落ちることを確かめた）。`test_wiring.py` は `TeamViewService` の検査を範囲の形にし、記録・進行・締め・編成の FA の対象外の読み口が組み立て口の範囲で作られることと、世界の「今日」の台帳の検査に `build_team_view_service` を足した。main の新しいテスト（`test_pennant_foreign_quota.py`・`test_team_analysis_fa.py`）の `WorldScope.real()`／`WorldScope.pennant(id)`・`build_pennant_*_service(world_id)` を `real_scope()`・`world_scope(id)` に替えた。`test_team_analysis_fa.py` のクエリ数の検査（4本・0本）は、範囲を作る読み取り（ワークスペースを引く1本）を数える区間の外で済ませる形にした。
+- **計測（T0 の手順。2026-10-24）**: 開発 DB を `backup()` で `/tmp/w2-merge/db.sqlite3` に写し（`integrity_check` ok・試合 3,480）、`migrate`（0055〜0057）。同じ写しで基点 2e76eae（使い捨ての worktree）とこの取り込みを交互に3回ずつ `measure_pages`。中央値（応答 ms / SQL ms / クエリ）: チーム一覧 11/3/3 → 11/3/3、選手一覧(野手) 281/10/28 → 277/9/28、選手一覧(投手) 265/7/28 → 266/7/28、選手詳細 90/2/16 → 91/2/16、戦力分析（FA取得） 41/11/14 → 42/10/14。**クエリ数はすべての画面で同じ**で、応答時間は揺れの範囲。ペナントの画面は測っていない。写しと使い捨ての worktree は計測後に消した。

@@ -1376,8 +1376,11 @@ class ClubPlayerRow:
     player_id: int
     name: str
     position: Position
+    # 外国人選手フラグ（「外国人」の印に使う事実）
     is_foreign: bool
     is_active: bool
+    # 外国人選手のうち、FA 資格の取得でこの年の外国人枠の対象外（協約 第82条 (4)。枠の人数で数えない）
+    quota_exempt: bool = False
 
 
 @dataclass(frozen=True)
@@ -1452,9 +1455,11 @@ class ClubRosterCounts:
     pitchers: int
     catchers: int
     foreign: int
-    # 外国人のうち投手と野手（登録位置で数える）
+    # 外国人のうち投手と野手（登録位置で数える）。外国人の人数は、この年の枠で数える人だけ
     foreign_pitchers: int
     foreign_batters: int
+    # 1軍の外国人選手のうち、FA 資格の取得で枠の対象外の人数（上の人数に含めない）
+    foreign_exempt: int = 0
 
 
 @dataclass(frozen=True)
@@ -2125,6 +2130,33 @@ class ServiceHistory:
 
 
 @dataclass(frozen=True)
+class FaSubject:
+    """FA の推定の対象の選手1人（`free_agency.FaPlayer` の形）と、数え始めを決める最初の在籍の加入年。
+
+    外国人枠の対象外を導く前段の絞り込み（出場を読む前に、取得しえない選手を外す）に使う。
+    """
+
+    player_id: int
+    draft: DraftPick | None
+    is_foreign_player: bool
+    high_school: str
+    university: str
+    corporate_team: str
+    # 範囲の中の在籍のうち最初の加入年（読んだ年まで）。在籍が無ければ None
+    first_stint_year: int | None
+
+
+@dataclass(frozen=True)
+class FaSubjects:
+    """外国人枠の対象外を導く前段の材料。選手の属性・FA 宣言・記録のある最初の年（読んだ年まで）。"""
+
+    subjects: list[FaSubject]
+    declarations: list[DeclarationFact]
+    # 試合の記録がある最初の年。記録が無ければ None
+    records_from_year: int | None
+
+
+@dataclass(frozen=True)
 class FielderUsage:
     """野手の守備位置ごとの出場数と先発数（その年・そのチーム）。位置が空なら None。"""
 
@@ -2403,6 +2435,9 @@ class FaRow:
     is_overseas_acquired: bool = False
     tone: ColorCategory = NEUTRAL_CATEGORY
     is_developmental: bool = False
+    # 外国人選手が FA 資格の取得（または FA 宣言）で外国人枠の対象外になる年（協約 第82条 (4)）。外国人でない・
+    # 対象外にならない選手は None
+    foreign_quota_exempt_from: int | None = None
 
 
 @dataclass(frozen=True)

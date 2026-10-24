@@ -51,6 +51,7 @@ from ..domain.simulation.randomness import game_seed, make_random
 from ..domain.simulation.ratings import BatterRatings, PitcherRatings
 from ..domain.value_objects import ForeignPlayerRules
 from .dto import AdvanceReport, PlanNotice, SimulationContext, SimulationTeam
+from .foreign_quota import ForeignQuotaExemptions, QuotaExemptions
 from .queries import SimulationContextQuery
 
 # メモリに溜める試合数の上限（`seed_virtual_games` の `FLUSH_EVERY_GAMES` に倣う）
@@ -81,6 +82,7 @@ class PennantSeasonService:
         ratings: RatingsRepository,
         plans: ClubPlanRepository,
         context_query: SimulationContextQuery,
+        fa_exemptions: ForeignQuotaExemptions,
         atomic: AtomicBlock,
     ) -> None:
         self._world_id = world_id
@@ -92,6 +94,8 @@ class PennantSeasonService:
         self._ratings = ratings
         self._plans = plans
         self._context_query = context_query
+        # FA 資格の取得による外国人枠の対象外（協約 第82条 (4)）。1回の「進める」で1回だけ導く
+        self._fa_exemptions = fa_exemptions
         self._atomic = atomic
 
     def ensure_schedule(self) -> bool:
@@ -177,7 +181,12 @@ class PennantSeasonService:
         # 能力を引く年。`dates[0]` は最後の試合日より後の未消化の最初の日。消化した日程は試合の保存と
         # 同じトランザクションで消えるので、日程の最初の日（`FixtureRepository.first_date`）と同じになり、
         # domain の `ratings_year`（編成・表示が使う規則）と一致する
-        pools = self._pools(context, dates[0].year)
+        year = dates[0].year
+        # 外国人枠の対象外も同じ年で導く（その年の扱いは前の年までの記録で決まるので、進める間は変わらない）
+        exemptions = self._fa_exemptions.for_year(
+            [player.player_id for team in context.teams for player in team.players if player.is_foreign], year
+        )
+        pools = self._pools(context, year, exemptions)
         plans = {plan.team_id: plan for plan in self._plans.find_all()}
         clubs: dict[int, ResolvedClub] = {}
         notices: list[PlanNotice] = []
@@ -265,24 +274,38 @@ class PennantSeasonService:
             write()
         return len(games)
 
-    def _pools(self, context: SimulationContext, year: int) -> dict[int, ClubRoster]:
+    def _pools(self, context: SimulationContext, year: int, exemptions: QuotaExemptions) -> dict[int, ClubRoster]:
         """球団ごとの登録候補。能力（その年のもの）が無い選手は出られない。"""
         ratings = {item.player_id: item.ratings for item in self._ratings.find_by_year(year)}
-        return {team.team_id: pool_of(team, ratings) for team in context.teams}
+        return {team.team_id: pool_of(team, ratings, exemptions=exemptions) for team in context.teams}
 
 
-def pool_of(team: SimulationTeam, ratings: dict[int, BatterRatings | PitcherRatings]) -> ClubRoster:
+def pool_of(
+    team: SimulationTeam, ratings: dict[int, BatterRatings | PitcherRatings], *, exemptions: QuotaExemptions
+) -> ClubRoster:
+    """球団の登録候補（シミュレーションの型）。
+
+    **その年の外国人枠で数えるか（`counts_as_foreign`）はここで1回だけ決める**（外国人選手フラグと、FA 資格の取得による
+    対象外 `exemptions`。協約 第82条 (4)）。AI の1軍・試合の枠・GM の編成の検査は、この値だけを見る。
+    `exemptions` は省略できない（対象外を導かない場面は空の `QuotaExemptions` を明示する）。
+    """
     batters: list[SimBatter] = []
     pitchers: list[SimPitcher] = []
     for player in team.players:
         ability = ratings.get(player.player_id)
+        counts_as_foreign = exemptions.counts(player.player_id, is_foreign_player=player.is_foreign)
         # 登録位置と能力の種類の食い違いは、能力の保存のときに弾いている
         if isinstance(ability, PitcherRatings):
-            pitchers.append(SimPitcher(player.player_id, player.name, ability, player.is_foreign))
+            pitchers.append(SimPitcher(player.player_id, player.name, ability, counts_as_foreign=counts_as_foreign))
         elif isinstance(ability, BatterRatings):
             batters.append(
                 SimBatter(
-                    player.player_id, player.name, player.position, ability, player.is_foreign, throws=player.throws
+                    player.player_id,
+                    player.name,
+                    player.position,
+                    ability,
+                    counts_as_foreign=counts_as_foreign,
+                    throws=player.throws,
                 )
             )
     return ClubRoster(team_id=team.team_id, name=team.name, batters=tuple(batters), pitchers=tuple(pitchers))

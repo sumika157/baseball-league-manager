@@ -23,6 +23,8 @@ from ..application.dto import (
     AwardRow,
     ContractFacts,
     DeclarationFact,
+    FaSubject,
+    FaSubjects,
     FielderUsage,
     FieldingRow,
     GameNote,
@@ -92,6 +94,7 @@ from .repositories import (
 )
 from .scoping import (
     awards_in,
+    declarations_in,
     fixtures_in_worlds,
     games_in,
     games_in_worlds,
@@ -1279,62 +1282,9 @@ class DjangoTeamAnalysisQuery:
         ]
         declarations = [
             DeclarationFact(player_id=row.player_id, year=row.year, kind=FreeAgencyKind.from_label(row.kind))
-            for row in orm_models.PlayerFreeAgentDeclaration.objects.filter(player_id__in=player_ids).order_by(
-                "year", "id"
-            )
+            for row in declarations_in(self._scope).filter(player_id__in=player_ids).order_by("year", "id")
         ]
         return moves, related, declarations
-
-    def load_service_history(self, player_ids: list[int], year: int) -> ServiceHistory:
-        """FA 取得タブの材料。打撃・投球の明細で、選手×年の試合日の最小・最大を集める（2本）。
-
-        チームは問わない（FA 権は選手のキャリア通算）。在籍の契約は1本、記録のある最初の年は1本で、
-        選手の数に比例しない。
-        """
-        spans: dict[tuple[int, int], tuple[date, date]] = {}
-        for lines in (orm_models.GameBattingLine.objects, orm_models.GamePitchingLine.objects):
-            rows = (
-                lines.filter(
-                    world_condition("game__home_team__league", self._scope),
-                    player_id__in=player_ids,
-                    game__year__lte=year,
-                )
-                .values("player_id", "game__year")
-                .annotate(first=Min("game__played_on"), last=Max("game__played_on"))
-                .order_by()
-            )
-            for row in rows:
-                key = (row["player_id"], row["game__year"])
-                known = spans.get(key)
-                spans[key] = (
-                    min(row["first"], known[0]) if known else row["first"],
-                    max(row["last"], known[1]) if known else row["last"],
-                )
-        stints = [
-            PlayerContractStint(
-                player_id=stint.player_id,
-                from_year=stint.from_year,
-                to_year=stint.to_year,
-                contract=_contract_facts(stint),
-            )
-            for stint in stints_in(self._scope).filter(player_id__in=player_ids, from_year__lte=year)
-        ]
-        declarations = [
-            DeclarationFact(player_id=row.player_id, year=row.year, kind=FreeAgencyKind.from_label(row.kind))
-            for row in orm_models.PlayerFreeAgentDeclaration.objects.filter(
-                player_id__in=player_ids, year__lte=year
-            ).order_by("player_id", "year")
-        ]
-        recorded = games_in(self._scope).filter(recorded_games_filter()).order_by().aggregate(first=Min("year"))
-        return ServiceHistory(
-            spans=[
-                PlayerYearSpan(player_id=player_id, year=span_year, first_on=first, last_on=last)
-                for (player_id, span_year), (first, last) in spans.items()
-            ],
-            stints=stints,
-            declarations=declarations,
-            records_from_year=recorded["first"],
-        )
 
     def load(self, team_id: int, year: int) -> TeamAnalysisFacts:
         # 在籍の期間の意味は Stint.covers と同じ（`period_covering` がその SQL 側の写し）
@@ -1418,3 +1368,116 @@ class DjangoTeamAnalysisQuery:
             declarations=declarations,
             registered_limit=registered_limit,
         )
+
+
+class DjangoServiceHistoryQuery:
+    """ServiceHistoryQuery の Django ORM 実装。選手の年ごとの出場・在籍の契約・FA 宣言を固定本数のクエリで読む。
+
+    試合・在籍・選手・FA 宣言は範囲（`WorldScope`）の中だけを読む（FA 宣言は `declarations_in` で範囲の選手に絞る）。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def load_service_history(self, player_ids: list[int], year: int) -> ServiceHistory:
+        """FA の推定の材料。打撃・投球の明細で、選手×年の試合日の最小・最大を集める（2本）。
+
+        チームは問わない（FA 権は選手のキャリア通算）。在籍の契約は1本、記録のある最初の年は1本で、
+        選手の数に比例しない。
+        """
+        spans: dict[tuple[int, int], tuple[date, date]] = {}
+        for lines in (orm_models.GameBattingLine.objects, orm_models.GamePitchingLine.objects):
+            rows = (
+                lines.filter(
+                    world_condition("game__home_team__league", self._scope),
+                    player_id__in=player_ids,
+                    game__year__lte=year,
+                )
+                .values("player_id", "game__year")
+                .annotate(first=Min("game__played_on"), last=Max("game__played_on"))
+                .order_by()
+            )
+            for row in rows:
+                key = (row["player_id"], row["game__year"])
+                known = spans.get(key)
+                spans[key] = (
+                    min(row["first"], known[0]) if known else row["first"],
+                    max(row["last"], known[1]) if known else row["last"],
+                )
+        stints = [
+            PlayerContractStint(
+                player_id=stint.player_id,
+                from_year=stint.from_year,
+                to_year=stint.to_year,
+                contract=_contract_facts(stint),
+            )
+            for stint in stints_in(self._scope).filter(player_id__in=player_ids, from_year__lte=year)
+        ]
+        return ServiceHistory(
+            spans=[
+                PlayerYearSpan(player_id=player_id, year=span_year, first_on=first, last_on=last)
+                for (player_id, span_year), (first, last) in spans.items()
+            ],
+            stints=stints,
+            declarations=self._declarations(player_ids, year),
+            records_from_year=self._records_from_year(),
+        )
+
+    def load_fa_subjects(self, player_ids: list[int], through_year: int) -> FaSubjects:
+        """選手の属性と最初の在籍の加入年・FA 宣言・記録のある最初の年（4本。選手の数に比例しない）。
+
+        選手と在籍は範囲の中だけを読む（範囲の外の選手は載らない）。
+        """
+        first_stint_year = {
+            row["player_id"]: row["first"]
+            for row in stints_in(self._scope)
+            .filter(player_id__in=player_ids, from_year__lte=through_year)
+            .values("player_id")
+            .annotate(first=Min("from_year"))
+            .order_by()
+        }
+        players = (
+            players_in(self._scope)
+            .filter(id__in=player_ids)
+            .only(
+                "id",
+                "draft_year",
+                "draft_round",
+                "is_development_draft",
+                "is_foreign_player",
+                "high_school",
+                "university",
+                "corporate_team",
+            )
+        )
+        return FaSubjects(
+            subjects=[
+                FaSubject(
+                    player_id=player.id,
+                    draft=draft_of(player.draft_year, player.draft_round, is_development=player.is_development_draft),
+                    is_foreign_player=player.is_foreign_player,
+                    high_school=player.high_school,
+                    university=player.university,
+                    corporate_team=player.corporate_team,
+                    first_stint_year=first_stint_year.get(player.id),
+                )
+                for player in players
+            ],
+            declarations=self._declarations(player_ids, through_year),
+            records_from_year=self._records_from_year(),
+        )
+
+    def _declarations(self, player_ids: list[int], year: int) -> list[DeclarationFact]:
+        """範囲の選手の、year 年までの FA 宣言（範囲の外の選手の id を渡されても読まない）。"""
+        return [
+            DeclarationFact(player_id=row.player_id, year=row.year, kind=FreeAgencyKind.from_label(row.kind))
+            for row in declarations_in(self._scope)
+            .filter(player_id__in=player_ids, year__lte=year)
+            .order_by("player_id", "year")
+        ]
+
+    def _records_from_year(self) -> int | None:
+        """範囲の中で試合の記録がある最初の年。記録が無ければ None。"""
+        recorded = games_in(self._scope).filter(recorded_games_filter()).order_by().aggregate(first=Min("year"))
+        first: int | None = recorded["first"]
+        return first

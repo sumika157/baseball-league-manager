@@ -124,7 +124,8 @@ class SimBatter:
     name: str
     position: Position
     ratings: BatterRatings
-    is_foreign: bool = False
+    # その年の外国人枠で数えるか。国籍やフラグの事実ではない（誰を数えるかは選手を組み立てる側が決める）
+    counts_as_foreign: bool = False
     # 投げる手。AI の守備位置の割り振りが、左投げを捕・二・三・遊に就かせないために見る（不明なら制限しない）
     throws: Handedness | None = field(kw_only=True)
 
@@ -136,7 +137,8 @@ class SimPitcher:
     player_id: int
     name: str
     ratings: PitcherRatings
-    is_foreign: bool = False
+    # その年の外国人枠で数えるか。国籍やフラグの事実ではない（誰を数えるかは選手を組み立てる側が決める）
+    counts_as_foreign: bool = False
 
 
 @dataclass(frozen=True)
@@ -209,14 +211,14 @@ class ForeignQuota:
         pitchers, batters = ForeignPlayerRules.counts(self.appeared)
         return self.rules.batter_room(pitchers=pitchers, batters=batters)
 
-    def allows(self, is_foreign: bool, *, position: Position, extra: int = 0) -> bool:
+    def allows(self, counts_as_foreign: bool, *, position: Position, extra: int = 0) -> bool:
         """登録位置 `position` の選手を（すでに出たぶんに、同じ登録位置の外国人 `extra` 人を加えて）出せるか。"""
-        if not is_foreign:
+        if not counts_as_foreign:
             return True
         return self.rules.has_room_for([*self.appeared, *([position] * extra)], position)
 
-    def register(self, is_foreign: bool, *, position: Position) -> None:
-        if is_foreign:
+    def register(self, counts_as_foreign: bool, *, position: Position) -> None:
+        if counts_as_foreign:
             self.appeared.append(position)
 
 
@@ -315,7 +317,7 @@ def choose_active_roster(pool: ClubRoster, *, rules: ForeignPlayerRules) -> Club
     chosen_pitchers, chosen_batters = _within_foreign_rules(
         chosen_pitchers, chosen_batters, pitchers_by_value, batters_by_value, rules
     )
-    foreign_pitchers = sum(p.is_foreign for p in chosen_pitchers)
+    foreign_pitchers = sum(p.counts_as_foreign for p in chosen_pitchers)
     chosen_batters = _with_minimum_catchers(chosen_batters, batters_by_value, rules, foreign_pitchers)
     chosen_batters = _with_fielding_coverage(chosen_batters, batters_by_value, rules, foreign_pitchers)
 
@@ -359,20 +361,20 @@ def _within_foreign_rules(
     batters = list(batters)
 
     def foreign_pitchers() -> list[SimPitcher]:
-        return [p for p in pitchers if p.is_foreign]
+        return [p for p in pitchers if p.counts_as_foreign]
 
     def foreign_batters() -> list[SimBatter]:
-        return [b for b in batters if b.is_foreign]
+        return [b for b in batters if b.counts_as_foreign]
 
     def drop_pitcher(out: SimPitcher) -> None:
         pitchers.remove(out)
-        substitute = next((p for p in pitchers_by_value if not p.is_foreign and p not in pitchers), None)
+        substitute = next((p for p in pitchers_by_value if not p.counts_as_foreign and p not in pitchers), None)
         if substitute is not None:
             pitchers.append(substitute)
 
     def drop_batter(out: SimBatter) -> None:
         batters.remove(out)
-        substitute = next((b for b in batters_by_value if not b.is_foreign and b not in batters), None)
+        substitute = next((b for b in batters_by_value if not b.counts_as_foreign and b not in batters), None)
         if substitute is not None:
             batters.append(substitute)
 
@@ -406,7 +408,7 @@ def _with_minimum_catchers(
     """
     batters = list(batters)
     while sum(b.position is Position.CATCHER for b in batters) < MIN_ACTIVE_CATCHERS:
-        foreign_batters = sum(b.is_foreign for b in batters)
+        foreign_batters = sum(b.counts_as_foreign for b in batters)
         spare = next(
             (
                 b
@@ -414,7 +416,7 @@ def _with_minimum_catchers(
                 if b.position is Position.CATCHER
                 and b not in batters
                 and (
-                    not b.is_foreign
+                    not b.counts_as_foreign
                     or rules.has_room(pitchers=foreign_pitchers, batters=foreign_batters, is_pitcher=False)
                 )
             ),
@@ -451,7 +453,10 @@ def _with_fielding_coverage(
         for spare in (b for b in batters_by_value if b not in batters):
             for out in sorted(batters, key=regular_value):
                 trial = [b for b in batters if b is not out] + [spare]
-                if rules.violation(pitchers=foreign_pitchers, batters=sum(b.is_foreign for b in trial)) is not None:
+                if (
+                    rules.violation(pitchers=foreign_pitchers, batters=sum(b.counts_as_foreign for b in trial))
+                    is not None
+                ):
                     continue
                 if sum(b.position is Position.CATCHER for b in trial) < min(
                     MIN_ACTIVE_CATCHERS, sum(b.position is Position.CATCHER for b in batters)
@@ -500,7 +505,7 @@ def choose_lineup(batters: Sequence[SimBatter], quota: ForeignQuota) -> list[Lin
         for batter in pool:
             if len(picked) >= count:
                 break
-            if batter.is_foreign and foreign_left is not None:
+            if batter.counts_as_foreign and foreign_left is not None:
                 if foreign_left <= 0:
                     continue
                 foreign_left -= 1
@@ -657,7 +662,7 @@ def choose_starter(staff: PitchingStaff, history: PitchingHistory, today: date, 
 
     全員が空いていなければ、休養の最も長い投手に任せる（試合を組めないよりよい）。
     """
-    candidates = [p for p in staff.rotation if quota.allows(p.is_foreign, position=Position.PITCHER)] or list(
+    candidates = [p for p in staff.rotation if quota.allows(p.counts_as_foreign, position=Position.PITCHER)] or list(
         staff.rotation
     )
 
@@ -700,7 +705,7 @@ def available_relievers(
     def usable(pitcher: SimPitcher) -> bool:
         return (
             pitcher.player_id not in used_ids
-            and quota.allows(pitcher.is_foreign, position=Position.PITCHER)
+            and quota.allows(pitcher.counts_as_foreign, position=Position.PITCHER)
             and history.can_pitch_on(pitcher.player_id, today, stamina=pitcher.ratings.stamina)
         )
 
@@ -852,7 +857,7 @@ def choose_pinch_hitter(situation: PinchHitSituation) -> PinchHit | None:
     for candidate in by_batting:
         if candidate.ratings.batting_value - current_value < PINCH_HITTER_MARGIN:
             break  # これより後の控えはさらに劣る
-        if not situation.quota.allows(candidate.is_foreign, position=candidate.position):
+        if not situation.quota.allows(candidate.counts_as_foreign, position=candidate.position):
             continue
         if plays_position(candidate, situation.position):
             return PinchHit(candidate, situation.position)
@@ -862,7 +867,9 @@ def choose_pinch_hitter(situation: PinchHitSituation) -> PinchHit | None:
                 for other in by_regular
                 if other is not candidate
                 and plays_position(other, situation.position)
-                and situation.quota.allows(other.is_foreign, position=other.position, extra=int(candidate.is_foreign))
+                and situation.quota.allows(
+                    other.counts_as_foreign, position=other.position, extra=int(candidate.counts_as_foreign)
+                )
             ),
             None,
         )

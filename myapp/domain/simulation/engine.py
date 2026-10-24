@@ -275,15 +275,15 @@ class _Engine:
             # 決めたオーダーの外国人を先に数え、その枠で先発を選ぶ（先発が枠を押し出さないように）
             lineup: Sequence[LineupSlot] = orders.lineup
             for item in lineup:
-                quota.register(item.batter.is_foreign, position=item.batter.position)
+                quota.register(item.batter.counts_as_foreign, position=item.batter.position)
             starter = choose_starter(staff, history, played_on, quota)
-            quota.register(starter.is_foreign, position=Position.PITCHER)
+            quota.register(starter.counts_as_foreign, position=Position.PITCHER)
         else:
             starter = choose_starter(staff, history, played_on, quota)
-            quota.register(starter.is_foreign, position=Position.PITCHER)
+            quota.register(starter.counts_as_foreign, position=Position.PITCHER)
             lineup = choose_lineup(roster.batters, quota)
             for item in lineup:
-                quota.register(item.batter.is_foreign, position=item.batter.position)
+                quota.register(item.batter.counts_as_foreign, position=item.batter.position)
         slots = [
             _Slot(batter=item.batter, position=item.position, batting_order=order, slot_sequence=0)
             for order, item in enumerate(lineup, start=1)
@@ -457,7 +457,7 @@ class _Engine:
             # 投げられる投手がいなければ続投する（投手のいない回を作らない）
             mound.target += 3
             return
-        fielding.quota.register(chosen.is_foreign, position=Position.PITCHER)
+        fielding.quota.register(chosen.counts_as_foreign, position=Position.PITCHER)
         fielding.used_pitchers.add(chosen.player_id)
         workload = history.workload(chosen.player_id, played_on)
         fielding.mounds.append(
@@ -514,7 +514,7 @@ class _Engine:
 
         side.pinch_hitters += 1
         side.bench.remove(decision.batter)
-        side.quota.register(decision.batter.is_foreign, position=decision.batter.position)
+        side.quota.register(decision.batter.counts_as_foreign, position=decision.batter.position)
         covered = slot.position
         replaced = _Slot(decision.batter, decision.fielding_position, slot.batting_order, slot.slot_sequence + 1)
         side.slots[index] = replaced
@@ -531,7 +531,7 @@ class _Engine:
         )
         if decision.replacement is not None:
             side.bench.remove(decision.replacement)
-            side.quota.register(decision.replacement.is_foreign, position=decision.replacement.position)
+            side.quota.register(decision.replacement.counts_as_foreign, position=decision.replacement.position)
             side.pending_replacements[index] = (decision.replacement, covered)
 
     # --- 1打席 ---

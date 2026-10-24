@@ -1,12 +1,15 @@
 """戦力分析の FA 取得タブ。登録日数は試合の初出場〜最終出場から推定する。"""
 
 from datetime import date
+from unittest import mock
 
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
+from myapp.application.foreign_quota import ForeignQuotaExemptions
 from myapp.infrastructure import orm_models
+from myapp.infrastructure.queries import DjangoServiceHistoryQuery
 
 from ..helpers import build_team_analysis_service, real_scope
 from .test_team_analysis import AnalysisCase
@@ -171,3 +174,67 @@ class TeamFaTabTest(AnalysisCase):
             player_id = self.person(f"控え{number}", number, debut=2020, high_school="G高", from_year=2020)
             self.season(player_id, 2025)
         self.assertEqual(count(), before)
+
+    # --- 協約第82条 (4): 外国人は国内FAの取得（または FA 宣言）の翌年から外国人枠の対象外 ---
+
+    def foreigner(self, name, number, *, from_year, seasons=()):
+        """ドラフトを経ていない外国人選手。`seasons` の年に毎年1シーズン出場する。"""
+        player_id = self.person(name, number, debut=None, from_year=from_year)
+        orm_models.Player.objects.filter(id=player_id).update(is_foreign_player=True)
+        for year in seasons:
+            self.season(player_id, year)
+        return player_id
+
+    def exemptions(self, player_ids, year):
+        return self.exemptions_reader().for_year(player_ids, year)
+
+    def exemptions_reader(self) -> ForeignQuotaExemptions:
+        """範囲を作る読み取り（ワークスペースを引く1本）を、クエリ数を数える区間の外で済ませる。"""
+        return ForeignQuotaExemptions(DjangoServiceHistoryQuery(real_scope()))
+
+    def test_a_foreigner_who_acquired_domestic_fa_is_marked_exempt_from_the_next_year(self):
+        self.foreigner("取得助っ人", 44, from_year=2018, seasons=range(2018, 2026))
+
+        row = self.rows()["取得助っ人"]
+
+        self.assertEqual(row.domestic_label, "取得済み（2025年）")
+        self.assertEqual(row.foreign_quota_exempt_from, 2026)
+        response = self.client.get(self.url(), {"year": 2026, "tab": "fa"})
+        self.assertContains(response, "外国人枠の対象外（2026年から）")
+
+    def test_a_declaration_marks_a_foreigner_exempt_from_the_next_year(self):
+        player_id = self.foreigner("宣言助っ人", 45, from_year=2024, seasons=(2024,))
+        orm_models.PlayerFreeAgentDeclaration.objects.create(player_id=player_id, year=2024, kind="海外")
+
+        self.assertEqual(self.rows()["宣言助っ人"].foreign_quota_exempt_from, 2025)
+
+    def test_only_foreigners_are_marked(self):
+        """日本人選手は国内FAを取得しても外国人枠とは関係が無い（添え書きを出さない）。"""
+        rows = self.rows()
+        self.assertEqual(rows["ベテラン"].domestic_label, "取得済み（2025年）")
+        self.assertIsNone(rows["ベテラン"].foreign_quota_exempt_from)
+
+    def test_the_quota_uses_the_same_acquisition_as_the_tab(self):
+        """枠の判定は、タブと同じ材料・同じ組み立てで取得年を導く。年 Y の扱いは Y−1 年までの記録で決まる。"""
+        player_id = self.foreigner("取得助っ人", 44, from_year=2018, seasons=range(2018, 2026))
+
+        self.assertEqual(dict(self.exemptions([player_id], 2026).exempt_from), {player_id: 2026})
+        self.assertEqual(dict(self.exemptions([player_id], 2025).exempt_from), {}, "取得した年はまだ数える")
+        self.assertFalse(self.exemptions([player_id], 2026).counts(player_id, is_foreign_player=True))
+        self.assertTrue(self.exemptions([player_id], 2025).counts(player_id, is_foreign_player=True))
+
+    def test_players_who_cannot_have_acquired_yet_are_not_read(self):
+        """記録が浅く取得しえない外国人は、出場（重い）を読まずに外す。読むのは固定の4本だけ。"""
+        player_id = self.foreigner("新しい助っ人", 46, from_year=2020, seasons=range(2020, 2026))
+
+        with mock.patch.object(DjangoServiceHistoryQuery, "load_service_history") as load:
+            self.assertEqual(dict(self.exemptions([player_id], 2026).exempt_from), {})
+        load.assert_not_called()
+        reader = self.exemptions_reader()
+        with self.assertNumQueries(4):
+            reader.for_year([player_id], 2026)
+
+    def test_no_foreigners_reads_nothing(self):
+        reader = self.exemptions_reader()
+        with self.assertNumQueries(0):
+            self.assertEqual(dict(reader.for_year([], 2026).exempt_from), {})

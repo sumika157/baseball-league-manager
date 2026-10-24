@@ -174,4 +174,4 @@ class LineupQuotaTest(TestCase):
         lineup = choose_lineup(batters, ForeignQuota(rules=ForeignPlayerRules(active=1, pitchers=None, batters=None)))
         for slot in lineup:
             self.assertTrue(slot.position.suits_thrower(slot.batter.throws), (slot.position, slot.batter.player_id))
-        self.assertLessEqual(sum(slot.batter.is_foreign for slot in lineup), 1)
+        self.assertLessEqual(sum(slot.batter.counts_as_foreign for slot in lineup), 1)

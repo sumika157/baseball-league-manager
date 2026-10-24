@@ -119,13 +119,16 @@ class DepthContractTest(AnalysisCase):
         self.assertTrue(row.is_developmental)
 
     def test_query_count_does_not_depend_on_the_contracts(self):
-        def count():
+        # FA 取得タブは在籍の契約（育成だった年）と出場の期間を別の参照クエリ（`ServiceHistoryQuery`）で読む
+        def count(tab):
             with CaptureQueriesContext(connection) as captured:
-                self.analysis(year=2026)
+                self.analysis(year=2026, tab=tab)
             return len(captured)
 
-        before = count()
+        before = {tab: count(tab) for tab in ("depth", "fa")}
         for number in range(160, 180):
             player_id = self.player(self.team, f"育成{number}", number - 100, "投手", throws="右")
             orm_models.PlayerStint.objects.filter(player_id=player_id).update(signed_as="育成", number=number)
-        self.assertEqual(count(), before)
+        for tab, expected in before.items():
+            with self.subTest(tab=tab):
+                self.assertEqual(count(tab), expected)

@@ -62,6 +62,7 @@ from myapp.infrastructure.queries import (
     DjangoPlayerStatsQuery,
     DjangoRatingsHistoryQuery,
     DjangoSeasonPlayingTimeQuery,
+    DjangoServiceHistoryQuery,
     DjangoSimulationContextQuery,
     DjangoTeamAnalysisQuery,
     DjangoTeamListQuery,
@@ -145,6 +146,7 @@ class WorkspaceCase(BaseCase):
     b_award_player_id: int
     b_award_team_id: int
     a_world_stray_team_id: int
+    a_declaration_year: int
 
     @classmethod
     def setUpTestData(cls):
@@ -193,6 +195,18 @@ class WorkspaceCase(BaseCase):
             )
         cls._plant_b_award()
         cls._plant_stray_stadiums()
+        cls._plant_a_declaration()
+
+    @classmethod
+    def _plant_a_declaration(cls) -> None:
+        """A の打者の FA 宣言（B の宣言の目印と対で、範囲の読み取りが A の宣言だけを出すことを確かめる）。
+
+        世界を作った後に置く（A の世界の分岐に写さない）。在籍の最初の年に置く。
+        """
+        stint = orm_models.PlayerStint.objects.filter(player_id=cls.a_batters[0]).order_by("from_year").first()
+        assert stint is not None
+        cls.a_declaration_year = stint.from_year
+        orm_models.PlayerFreeAgentDeclaration.objects.create(player_id=cls.a_batters[0], year=stint.from_year)
 
     @classmethod
     def _plant_stray_stadiums(cls) -> None:
@@ -245,6 +259,10 @@ class WorkspaceCase(BaseCase):
         """B の、範囲の条件を確かめたい表の行。リポジトリは実データにペナントの行を書かないので、ORM で直接置く。"""
         batter = cls.b_batters[0]
         orm_models.GameFieldingLine.objects.create(game_id=cls.b_game_ids[0], player_id=batter, putouts=3)
+        # FA 宣言（選手の行に付く。範囲の外の選手の id を渡されても読まないことを確かめる）。在籍の最初の年に置く
+        first_year = orm_models.PlayerStint.objects.filter(player_id=batter).order_by("from_year").first()
+        assert first_year is not None
+        orm_models.PlayerFreeAgentDeclaration.objects.create(player_id=batter, year=first_year.from_year)
         for year in (YEAR, B_YEAR):
             orm_models.PennantPlayerRatings.objects.create(
                 player_id=batter, year=year, growth="普通", contact=50, power=50, eye=50, speed=50, fielding=50
@@ -456,9 +474,50 @@ def _team_analysis_query(t: WorkspaceCase) -> None:
     query = DjangoTeamAnalysisQuery(t.a)
     t.assertEqual(query.list_years(t.b_team.id), [])
     t.assert_hidden(lambda: query.load(t.b_team.id, YEAR))
-    history = query.load_service_history([*t.b_batters, t.b_pitcher], YEAR)
+
+
+def _service_history_query(t: WorkspaceCase) -> None:
+    """FA の推定の材料（FA 取得タブと外国人枠の対象外。#204）。B の選手の出場・在籍・属性は読めない。"""
+    query = DjangoServiceHistoryQuery(t.a)
+    b_players = [*t.b_batters, t.b_pitcher]
+    history = query.load_service_history(b_players, B_YEAR)
     t.assertEqual((history.spans, history.stints, history.declarations), ([], [], []))
-    t.assertEqual(query.load_service_history([], YEAR).records_from_year, YEAR, "B の試合の年に引きずられた")
+    t.assertEqual(query.load_service_history([], B_YEAR).records_from_year, YEAR, "B の試合の年に引きずられた")
+    subjects = query.load_fa_subjects(b_players, B_YEAR)
+    t.assertEqual((subjects.subjects, subjects.declarations), ([], []), "B の選手が FA の推定の材料に載った")
+    t.assertEqual(subjects.records_from_year, YEAR, "B の試合の年に引きずられた")
+    # 空振りの防止: A の選手は読める
+    t.assertEqual(
+        {subject.player_id for subject in query.load_fa_subjects(t.a_batters, YEAR).subjects}, set(t.a_batters)
+    )
+    _fa_declarations(t, query)
+
+
+def _fa_declarations(t: WorkspaceCase, query: DjangoServiceHistoryQuery) -> None:
+    """FA 宣言は範囲の選手のものだけ読む。B の選手の id を混ぜて渡しても、B の宣言（目印の行）は出ない。
+
+    宣言を読む3か所（FA の推定の材料・戦力分析の入退団・チームの集約）は同じ `declarations_in` を通る。
+    戦力分析の入退団は範囲のチームの在籍から選手を引くので B の id を渡せない。集約の読み口を直接確かめる。
+    """
+    b_players = [*t.b_batters, t.b_pitcher]
+    t.assertTrue(
+        orm_models.PlayerFreeAgentDeclaration.objects.filter(player_id__in=b_players).exists(),
+        "B の宣言の目印が無い（検査が空振りする）",
+    )
+    a_player = t.a_batters[0]
+    mixed = [a_player, *b_players]
+    through = max(B_YEAR, t.a_declaration_year)
+
+    for declarations in (
+        query.load_service_history(mixed, through).declarations,
+        query.load_fa_subjects(mixed, through).declarations,
+    ):
+        t.assertEqual([declaration.player_id for declaration in declarations], [a_player])
+    t.assertEqual(list(repositories._declarations_of(mixed, t.a)), [a_player])
+    # 集約でも、A の選手は宣言を持つ
+    team = DjangoTeamRepository(t.a).find_by_id(t.team.id)
+    player = next(player for player in team.players if player.id == a_player)
+    t.assertEqual([declaration.year for declaration in player.fa_declarations], [t.a_declaration_year])
 
 
 def _award_repository(t: WorkspaceCase) -> None:
@@ -579,6 +638,7 @@ CHECKS: dict[type, Callable[[WorkspaceCase], None]] = {
     DjangoOffseasonQuery: _offseason_query,
     DjangoRatingsHistoryQuery: _ratings_history_query,
     DjangoTeamAnalysisQuery: _team_analysis_query,
+    DjangoServiceHistoryQuery: _service_history_query,
     DjangoWorldRepository: _world_repository,
     DjangoWorldSummaryQuery: _world_summary_query,
     DjangoWorkspaceAccessQuery: _workspace_access_query,

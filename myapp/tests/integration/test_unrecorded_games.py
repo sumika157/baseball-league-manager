@@ -92,7 +92,7 @@ class UnrecordedGameTest(BaseCase):
         self._register()
         play_game(self.team, self.rival, day=2)
 
-        self.assertEqual(self.service.get_team_totals(self.team.id).games, 1)
+        self.assertEqual(self.team_view.get_team_totals(self.team.id).games, 1)
         self.assertEqual(
             DjangoGameListQuery(real_scope()).count_by_team(year=2026), {self.team.id: 1, self.rival.id: 1}
         )
@@ -105,7 +105,7 @@ class UnrecordedGameTest(BaseCase):
         play_game(self.team, self.rival, recorded=False, day=2)
         self._register(day=3)
 
-        self.assertEqual(self.service.get_team_totals(self.team.id).games, 1)
+        self.assertEqual(self.team_view.get_team_totals(self.team.id).games, 1)
         stats = self.service.get_league_stats(self.league.id, qualified=True)
         self.assertEqual([row.player.name for row in stats.listing.rows], ["山田"])
 
@@ -115,7 +115,7 @@ class UnrecordedGameTest(BaseCase):
 
         table = self.service.get_league_detail(self.league.id, 2026).matchups
         row = next(r for r in table.rows if r.team_id == self.team.id)
-        monthly = self.service.list_team_monthly_splits(self.team.id)
+        monthly = self.team_view.list_team_monthly_splits(self.team.id)
 
         self.assertEqual(row.total_label, "1-0-0")
         self.assertEqual([m.games_played for m in monthly], [1])
@@ -137,7 +137,7 @@ class UnrecordedGameTest(BaseCase):
         self.assertEqual(response.status_code, 200, response.content)
         row = next(r for r in self.service.get_standings(2026).rows if r.team_name == "相手チーム")
         self.assertEqual((row.wins, row.losses, row.games_played), (1, 0, 1))
-        self.assertEqual(self.service.get_team_totals(self.team.id).games, 1)
+        self.assertEqual(self.team_view.get_team_totals(self.team.id).games, 1)
 
     # --- 画面 ---
 
