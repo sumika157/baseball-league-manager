@@ -46,10 +46,10 @@ from ..domain.repositories import (
 from ..domain.value_objects import GameStage
 from .dto import PlanNotice, PostseasonAdvanceReport
 from .foreign_quota import ForeignQuotaExemptions
-from .pennant_race import StandingsSource, league_finishes, tiebreak_for
+from .pennant_race import LeagueFinishReader, StandingsSource
 from .pennant_season import AtomicBlock
 from .pennant_simulation import DaySimulator
-from .queries import GameListQuery, PostseasonQuery, SimulationContextQuery
+from .queries import PostseasonQuery, SimulationContextQuery
 
 
 def _saved_id(value: int | None) -> int:
@@ -60,20 +60,20 @@ def _saved_id(value: int | None) -> int:
 class PostseasonBracketReader:
     """その年の勝ち上がりを導く読み取り。進める処理と、シーズンを締める処理の検査が共有する。
 
-    `league_view` は世界の範囲で組み立てた順位表の読み取り（`LeagueViewService`。順位表の出典で、公式戦だけ）。
+    `league_view` は世界の範囲で組み立てた順位表の読み取り（`LeagueViewService`。球団の名前）、`finishes` は
+    公式戦の最終順位（シーズンを締める処理のドラフトの指名順と共有）。
     """
 
     def __init__(
         self,
         *,
         league_view: StandingsSource,
-        games: GameListQuery,
+        finishes: LeagueFinishReader,
         leagues: LeagueRepository,
         postseason: PostseasonQuery,
     ) -> None:
         self._league_view = league_view
-        # 同率の決着（当該球団間の対戦勝率など）の材料。公式戦だけを読む
-        self._games = games
+        self._finishes = finishes
         self._leagues = leagues
         self._postseason = postseason
 
@@ -104,10 +104,9 @@ class PostseasonBracketReader:
         last_regular = self._postseason.last_regular_date(year)
         if last_regular is None:
             return _no_postseason(year)
-        standings = self._league_view.get_league_standings(year)
         return derive_bracket(
             year,
-            finishes=league_finishes(standings, tiebreak_for(year, games=self._games, league_view=self._league_view)),
+            finishes=self._finishes.finishes(year),
             last_regular=last_regular,
             results=results,
             unplayed_format=world.postseason_format,

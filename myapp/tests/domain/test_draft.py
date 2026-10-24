@@ -1,14 +1,18 @@
-"""自動ドラフト（`domain/pennant/draft.py`）。DB 不要。"""
+"""ドラフトの新人（`domain/pennant/draft.py` の人数・位置・外国人・背番号と、1球団だけの会議の結果）。DB 不要。
+
+会議の指名順・入札と抽選・AI は `test_draft_meeting.py` / `test_draft_order.py` が見る。
+"""
 
 from __future__ import annotations
 
-import random
 import unittest
 from collections import Counter
 from datetime import date
 
 from myapp.domain.pennant import draft
-from myapp.domain.pennant.draft import DraftRoute, DraftTeam, draft_class, draftee_count
+from myapp.domain.pennant.draft import DraftRoute, DraftTeam, draftee_count
+from myapp.domain.pennant.draft_meeting import DraftContext, run_draft
+from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
 from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND, RegisteredBand
 from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings
 from myapp.domain.value_objects import AcquisitionRoute, ForeignPlayerRules, Position, Profile
@@ -16,16 +20,6 @@ from myapp.domain.virtual_players import generator
 from myapp.domain.virtual_players.generator import AmateurPath
 
 YEAR = 2027
-
-
-class OnlyRandom:
-    """`random()` しか持たない乱数源。"""
-
-    def __init__(self, seed: int) -> None:
-        self._rng = random.Random(seed)
-
-    def random(self) -> float:
-        return self._rng.random()
 
 
 def team(
@@ -53,7 +47,10 @@ def team(
 
 
 def run(target: DraftTeam, seed: int = 1, used: set[str] | None = None) -> tuple[draft.Draftee, ...]:
-    return draft_class(OnlyRandom(seed), target, year=YEAR, used_names=set() if used is None else used)
+    """1球団だけの会議（世界のシード `seed`）で迎える新人。"""
+    context = DraftContext(DraftOrderRule.NPB, DraftStandings(leagues=((target.team_id,),)))
+    names = set() if used is None else used
+    return run_draft([target], context, year=YEAR, world_seed=seed, used_names=names).draftees
 
 
 class CountTest(unittest.TestCase):
@@ -236,7 +233,7 @@ class ProfileTest(unittest.TestCase):
 
 
 class DraftPickTest(unittest.TestCase):
-    """新人のドラフトの指名。年は締める年、順位は指名の順のうち日本人だけを数えた番号（仮置き。#198 で置き換える）。"""
+    """新人のドラフトの指名。年は締める年、順位は会議の巡（1球団だけの会議なら1巡に1人ずつ）。"""
 
     def test_japanese_rookies_are_drafted_in_the_closing_year_and_enter_the_next(self) -> None:
         for seed in range(20):

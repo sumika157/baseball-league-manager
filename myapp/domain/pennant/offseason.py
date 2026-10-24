@@ -1,6 +1,7 @@
 """シーズンを締めるときの計算。**純粋な関数**で、DB にも Django にも触れない。
 
-    引退を決める → 球団ごとに戦力外（`release.py`）と新人を決める → 残る選手の能力を1年ぶん進める
+    引退を決める → 球団ごとに戦力外（`release.py`。ここまでが `plan_departures`）→ 球団ごとの新人の人数と位置・
+    外国人（`draft.py`）→ ドラフト会議（`draft_meeting.py`。全球団の日本人の新人）→ 残る選手の能力を1年ぶん進める
     → 残る選手と新人をまとめて、項目ごとに水準の錨をかける
 
 結果は `OffseasonPlan`（何を書くかの計画）。書くのは呼び出し側（application）で、ここは読み取った
@@ -22,7 +23,8 @@ from ..simulation.randomness import game_seed, game_uniform, make_random
 from ..simulation.ratings import BatterRatings, PitcherRatings
 from ..simulation.spread import MIN_POPULATION, rescale, spread_ratings, target_mean, target_sd
 from .aging import age_ratings
-from .draft import Draftee, DraftTeam, draft_class
+from .draft import Draftee, DraftTeam
+from .draft_meeting import DraftAction, DraftContext, Lottery, run_draft
 from .offseason_player import (
     OffseasonClub,
     OffseasonPlayer,
@@ -74,6 +76,8 @@ class OffseasonPlan:
     retained: tuple[RatingChange, ...]
     # 新人。能力は錨をかけた後の値
     draftees: tuple[Draftee, ...]
+    # ドラフト会議の入札の重複と抽選の結果（D4 で記録する。いまは締めた結果の件数に使う）
+    lotteries: tuple[Lottery, ...]
     # 能力が無いために翌年の能力を作らなかった選手
     without_ratings: tuple[int, ...]
     anchor: AnchorCorrection
@@ -186,28 +190,36 @@ def anchor_correction(before: Sequence[Ratings]) -> AnchorCorrection:
     return AnchorCorrection(mean_shift, sd_shift, mean_item, signed)
 
 
-def plan_offseason(
+@dataclass(frozen=True)
+class Departures:
+    """引退と戦力外の後の球団（`plan_departures` の結果）。ドラフトの人数はこの後の人数で数える。"""
+
+    retired: frozenset[int]
+    # 戦力外の選手（球団ごとに外す順で、球団 id の順につなげたもの）
+    released: tuple[int, ...]
+    # 残る選手（球団 id の順・選手の並びの順）
+    survivors: tuple[OffseasonPlayer, ...]
+    # 引退・戦力外の後の球団（球団 id の昇順）
+    draft_teams: tuple[DraftTeam, ...]
+
+
+def plan_departures(
     clubs: Sequence[OffseasonClub],
     *,
     year: int,
     world_seed: int,
     start_year: int,
-    used_names: Collection[str],
     manual_releases: Mapping[int, Collection[int]] | None = None,
-) -> OffseasonPlan:
-    """Y 年を締める計画。`clubs` は球団 id の昇順で処理する。
+) -> Departures:
+    """Y 年を締めるときの引退と戦力外（球団 id の昇順）。ドラフト会議の人数の幅（D3）も同じ関数で数える。
 
-    - `used_names`: 世界の全選手（引退した選手を含む）の名前。新人の名前が重ならないようにする
-    - `start_year`: 世界の開幕年（生年月日の無い選手の年齢の推定に使う）
-    - `manual_releases`: GM が手動で戦力外を指名した球団（球団 id → 選手 id）。無い球団は自動（`release.py`）
+    `manual_releases`: GM が手動で戦力外を指名した球団（球団 id → 選手 id）。無い球団は自動（`release.py`）。
     """
     ordered = sorted(clubs, key=lambda club: club.team_id)
     retired = set(decide_retirements(ordered, year=year, world_seed=world_seed, start_year=start_year))
-
-    names = set(used_names)
-    drafted: list[Draftee] = []
     survivors: list[OffseasonPlayer] = []
     released: list[int] = []
+    teams: list[DraftTeam] = []
     for club in ordered:
         remaining = [player for player in club.players if player.player_id not in retired]
         # 戦力外は引退の後・ドラフトの前。ドラフトは戦力外の後の人数で数える。手動の球団は指名どおり
@@ -220,8 +232,46 @@ def plan_offseason(
         released.extend(sorted(leaving))
         remaining = [player for player in remaining if player.player_id not in leaving]
         survivors.extend(remaining)
-        rng = make_random(game_seed(world_seed, year + 1, f"draft-{club.team_id}"))
-        drafted.extend(draft_class(rng, _draft_team(club, remaining), year=year, used_names=names))
+        teams.append(_draft_team(club, remaining))
+    return Departures(
+        retired=frozenset(retired), released=tuple(released), survivors=tuple(survivors), draft_teams=tuple(teams)
+    )
+
+
+def plan_offseason(
+    clubs: Sequence[OffseasonClub],
+    *,
+    year: int,
+    world_seed: int,
+    start_year: int,
+    used_names: Collection[str],
+    draft: DraftContext,
+    manual_releases: Mapping[int, Collection[int]] | None = None,
+    draft_actions: Sequence[DraftAction] = (),
+) -> OffseasonPlan:
+    """Y 年を締める計画。`clubs` は球団 id の昇順で処理する。
+
+    - `used_names`: 世界の全選手（引退した選手を含む）の名前。新人の名前が重ならないようにする
+    - `start_year`: 世界の開幕年（生年月日の無い選手の年齢の推定に使う）
+    - `draft`: ドラフト会議の設定（世界の規則と、Y 年の公式戦の最終順位）。既定値は持たない
+    - `manual_releases`: GM が手動で戦力外を指名した球団（球団 id → 選手 id）。無い球団は自動（`release.py`）
+    - `draft_actions`: 保存した会議の行動（D3）。残りは AI が最後まで進める
+    """
+    departures = plan_departures(
+        clubs, year=year, world_seed=world_seed, start_year=start_year, manual_releases=manual_releases
+    )
+    retired = departures.retired
+    survivors = departures.survivors
+    result = run_draft(
+        departures.draft_teams,
+        draft,
+        year=year,
+        world_seed=world_seed,
+        used_names=set(used_names),
+        actions=draft_actions,
+    )
+    drafted = list(result.draftees)
+    ordered = sorted(clubs, key=lambda club: club.team_id)
 
     aged: list[tuple[int, PlayerRatings, Ratings]] = []
     without_ratings: list[int] = []
@@ -251,9 +301,10 @@ def plan_offseason(
     return OffseasonPlan(
         year=year,
         retired=tuple(sorted(retired)),
-        released=tuple(sorted(released)),
+        released=tuple(sorted(departures.released)),
         retained=retained,
         draftees=draftees,
+        lotteries=result.lotteries,
         without_ratings=tuple(without_ratings),
         anchor=anchor_correction(population),
     )

@@ -12,6 +12,8 @@ from dataclasses import replace
 from myapp.domain.exceptions import InvalidReleasePlan
 from myapp.domain.pennant import draft
 from myapp.domain.pennant.club_plan import ClubMember
+from myapp.domain.pennant.draft_meeting import DraftContext
+from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
 from myapp.domain.pennant.offseason import OffseasonClub, OffseasonPlayer, plan_offseason
 from myapp.domain.pennant.release import ReleasePlan, decide_releases, ensure_releasable
 from myapp.domain.value_objects import ContractStatus, ForeignPlayerRules, Position
@@ -119,7 +121,13 @@ class ManualReleasesInThePlanTest(unittest.TestCase):
                 )
             )
         return plan_offseason(
-            clubs, year=YEAR, world_seed=1, start_year=START_YEAR, used_names=(), manual_releases=manual
+            clubs,
+            year=YEAR,
+            world_seed=1,
+            start_year=START_YEAR,
+            used_names=(),
+            manual_releases=manual,
+            draft=DraftContext(DraftOrderRule.NPB, DraftStandings(leagues=(tuple(c.team_id for c in clubs),))),
         )
 
     def test_only_the_chosen_players_are_released(self) -> None:

@@ -9,6 +9,8 @@ from statistics import fmean
 
 from myapp.domain.pennant import draft
 from myapp.domain.pennant.draft import DraftRoute, expected_rookie_ratings
+from myapp.domain.pennant.draft_meeting import DraftContext
+from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
 from myapp.domain.pennant.offseason import OffseasonClub, OffseasonPlayer, plan_offseason, retirement_value
 from myapp.domain.pennant.ratings import PlayerRatings
 from myapp.domain.pennant.release import (
@@ -288,12 +290,14 @@ class PlanWithReleasesTest(unittest.TestCase):
 
     @staticmethod
     def plan(players: list[OffseasonPlayer], *, registered_limit: int | None = 70):
+        clubs = [club(players, registered_limit=registered_limit)]
         return plan_offseason(
-            [club(players, registered_limit=registered_limit)],
+            clubs,
             year=YEAR,
             world_seed=1,
             start_year=START_YEAR,
             used_names=(),
+            draft=DraftContext(DraftOrderRule.NPB, DraftStandings(leagues=(tuple(c.team_id for c in clubs),))),
         )
 
     def test_released_players_leave_without_next_year_ratings(self) -> None:

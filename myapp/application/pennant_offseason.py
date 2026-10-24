@@ -1,5 +1,9 @@
 """ペナントのシーズンを締める（オフ）。引退・戦力外・ドラフト・成長と衰え・編成の後始末・翌年の日程を、1つの操作にまとめる。
 
+ドラフトは世界で1回の会議（`domain/pennant/draft_meeting.py`。#198）で、指名順は世界の規則（`World.draft_order_rule`）と
+締める年の**公式戦の最終順位**（`LeagueFinishReader`。NPB の「球団順位」は公式戦の年度順位で、CS・日本シリーズの
+結果は使わない）から導く。会議はこの処理の中で全球団を AI として最後まで進める（GM の指名は #198 D3）。
+
 **進行（`PennantSeasonService`）には足さない。** 進行は試合を作って保存する処理で、こちらは集約（`Team`）の
 書き換えと能力・日程の一括保存で、依存も検査も違う。
 
@@ -52,6 +56,8 @@ from ..domain.exceptions import (
 from ..domain.pennant.awards import Award, title_counts
 from ..domain.pennant.championship import Championship
 from ..domain.pennant.club_plan import ClubMember, PlanSection
+from ..domain.pennant.draft_meeting import DraftContext
+from ..domain.pennant.draft_order import DraftOrderRule, DraftStandings
 from ..domain.pennant.offseason import Draftee, OffseasonClub, OffseasonPlan, OffseasonPlayer, plan_offseason
 from ..domain.pennant.offseason_player import TrackRecord
 from ..domain.pennant.postseason import PostseasonFormat, PostseasonStatus
@@ -60,7 +66,7 @@ from ..domain.pennant.release import ReleasePlan, ensure_releasable
 from ..domain.pennant.retirement import PlayingTime
 from ..domain.pennant.schedule import Fixture, season_schedule
 from ..domain.pennant.season import is_final_season, is_season_closed, regular_season_over_year
-from ..domain.pennant.world import World
+from ..domain.pennant.world import World, league_priority
 from ..domain.repositories import (
     AwardRepository,
     ChampionshipRepository,
@@ -78,6 +84,7 @@ from .foreign_quota import ForeignQuotaExemptions
 from .league_view import LeagueViewService
 from .pennant_awards import derive_awards
 from .pennant_postseason import PostseasonBracketReader
+from .pennant_race import LeagueFinishReader
 from .pennant_season import AtomicBlock
 from .queries import SeasonPlayingTimeQuery, SimulationContextQuery
 
@@ -131,6 +138,7 @@ class PennantOffseasonService:
         context_query: SimulationContextQuery,
         playing_time: SeasonPlayingTimeQuery,
         postseason: PostseasonBracketReader,
+        finishes: LeagueFinishReader,
         fa_exemptions: ForeignQuotaExemptions,
         atomic: AtomicBlock,
     ) -> None:
@@ -150,6 +158,8 @@ class PennantOffseasonService:
         self._playing_time = playing_time
         # ポストシーズンが終わるまで締めない（その年の勝ち上がりを導いて状況を見る。方式「なし」は何も読まない）
         self._postseason = postseason
+        # 締める年の公式戦の最終順位（ドラフトの指名順の「球団順位」）
+        self._finishes = finishes
         # FA 資格の取得による外国人枠の対象外（協約 第82条 (4)）。GM の戦力外の検査だけが使う
         self._fa_exemptions = fa_exemptions
         self._atomic = atomic
@@ -216,12 +226,13 @@ class PennantOffseasonService:
 
     def _state(
         self,
-    ) -> tuple[date | None, date | None, tuple[int, int, int], ReleasePlan | None, PostseasonFormat]:
+    ) -> tuple[date | None, date | None, tuple[int, int, int], ReleasePlan | None, PostseasonFormat, DraftOrderRule]:
         """締められるかと何を書くかを決める事実（最後に試合をした日・次の対戦の日・在籍の目印・受け持つ球団の戦力外の指名・
-        ポストシーズンの方式）。
+        ポストシーズンの方式・ドラフトの指名順の規則）。
 
         読み込みの前後で比べる。戦力外の指名は GM が締める処理の計算中にも保存しうるので、ここに入れる（#100）。
         方式も設定の画面で計算中に変えうる（「なし」から変えたのに、その年のポストシーズンを行わずに締めない。#280）。
+        指名順の規則も同じ（古い規則で指名した新人を書かない。#198）。
         """
         world = self._worlds.find_by_id(self._world_id)
         return (
@@ -230,6 +241,7 @@ class PennantOffseasonService:
             self._teams.roster_signature(),
             self._release_plan_of(world.managed_team_id),
             world.postseason_format,
+            world.draft_order_rule,
         )
 
     def _managed_release_plan(self) -> ReleasePlan | None:
@@ -455,6 +467,7 @@ class PennantOffseasonService:
             start_year=world.start_year,
             used_names={player.name for team in teams for player in team.players},
             manual_releases=manual,
+            draft=DraftContext(world.draft_order_rule, self._draft_standings(world, year, teams)),
         )
         changes = self._apply_roster_changes(teams, plan, limits, year)
         schedule = season_schedule(
@@ -466,6 +479,24 @@ class PennantOffseasonService:
             year=year + 1,
         )
         return _PreparedClose(plan=plan, changes=changes, schedule=schedule, year=year, awards=awards)
+
+    def _draft_standings(self, world: World, year: int, teams: Sequence[Team]) -> DraftStandings:
+        """ドラフトの指名順に使う、締める年の公式戦の最終順位。リーグはその年の優先順（`league_priority`）に並べる。
+
+        公式戦の順位に無い球団（その年に試合をしていない。ふつうは無い）は、最下位の段より前に置く。
+        """
+        by_league = {
+            finish.league_id: tuple(row.team_id for row in finish.standings)
+            for finish in self._finishes.finishes(year)
+        }
+        league_ids = sorted({team.league_id for team in teams if team.league_id is not None})
+        priority = league_priority(league_ids, year=year, start_year=world.start_year)
+        # 世界の球団のリーグに載る順位だけを使う（順位の側にしか無いリーグの球団を、どちらにも入れ落とさない）
+        ranked = {team_id for league_id in priority for team_id in by_league.get(league_id, ())}
+        return DraftStandings(
+            leagues=tuple(by_league.get(league_id, ()) for league_id in priority),
+            unranked=tuple(_saved_id(team.id) for team in teams if team.id not in ranked),
+        )
 
     def _commit(self, world: World, prepared: _PreparedClose) -> SeasonClosed:
         """計算済みの変更を書く（トランザクションの中。SQL を流すだけにする）。"""
@@ -498,6 +529,7 @@ class PennantOffseasonService:
             released_count=len(plan.released),
             draftee_count=len(plan.draftees),
             foreign_draftee_count=sum(1 for draftee in plan.draftees if draftee.is_foreign),
+            first_round_lottery_count=sum(1 for lottery in plan.lotteries if lottery.round_number == 1),
             without_ratings_count=len(plan.without_ratings),
             reverted_sections=reverted,
             reverted_club_count=reverted_clubs,
@@ -529,12 +561,14 @@ class PennantOffseasonService:
             for draftee in draftees:
                 # 新人は支配下で入り、入団の経路（ドラフト / 新外国人）を記録する。支配下の上限は集約が検査する
                 # （人数は domain の `draftee_count` が上限を超えないように決めるので、ここでは失敗しない）。
-                # 外国人の保有の人数は縛らない（協約第82条の2。外国人枠は1軍の登録にかかる）
+                # 外国人の保有の人数は縛らない（協約第82条の2。外国人枠は1軍の登録にかかる）。
+                # 加入年は、ドラフトの指名があれば「入団はドラフトの翌年」の出典（`DraftPick.entry_year`）から
+                pick = draftee.profile.draft
                 player = team.add_player(
                     draftee.name,
                     JerseyNumber(draftee.number),
                     draftee.position,
-                    from_year=next_year,
+                    from_year=next_year if pick is None else pick.entry_year,
                     contract=ContractStatus.REGISTERED,
                     acquired_via=draftee.acquisition_route,
                     limits=team_limits,

@@ -1,0 +1,15 @@
+{% comment %}
+ドラフトの指名順の規則のラジオボタンと、選択肢ごとの1行の説明（世界の作成フォームと設定の画面で共有）。
+選択肢と説明は domain の `DraftOrderRule` が出典（フォームの `draft_order_choices` から受け取る）。
+{% endcomment %}
+<div class="mb-3">
+  <div class="form-label">{{ form.draft_order_rule.label }}</div>
+  {% for radio, description in form.draft_order_choices %}
+    <div class="form-check">
+      {{ radio.tag }}
+      <label class="form-check-label" for="{{ radio.id_for_label }}">{{ radio.choice_label }}</label>
+      <div class="stat-muted" style="font-size: 0.8125rem;">{{ description }}</div>
+    </div>
+  {% endfor %}
+  {% include 'pennant/_field_errors.html' with errors=form.draft_order_rule.errors %}
+</div>

@@ -5,6 +5,7 @@ from datetime import date
 
 from myapp.domain.entities import League, Team
 from myapp.domain.exceptions import DuplicateJerseyNumber, InvalidSeason, InvalidWorld
+from myapp.domain.pennant.draft_order import DraftOrderRule
 from myapp.domain.pennant.fork import fork_league, fork_roster, fork_team
 from myapp.domain.pennant.postseason import PostseasonFormat
 from myapp.domain.pennant.world import (
@@ -13,6 +14,7 @@ from myapp.domain.pennant.world import (
     MAX_START_YEAR,
     World,
     WorldScope,
+    draft_order_rule_change_blocker,
     earliest_start_year,
     league_priority,
 )
@@ -106,6 +108,19 @@ class WorldTest(unittest.TestCase):
         for bad in ("なし", None, PostseasonFormat.NPB.value):
             with self.subTest(postseason_format=bad), self.assertRaises(InvalidWorld):
                 World(name="世界", seed=1, start_year=2026, postseason_format=bad)  # type: ignore[arg-type]
+
+    def test_the_draft_order_rule_defaults_to_npb_and_must_be_a_rule(self):
+        """指名順の既定は NPB 方式（#198。規則を足す前に作った世界も NPB 方式）。選択肢の外の値は弾く。"""
+        self.assertIs(World(name="世界", seed=1, start_year=2026).draft_order_rule, DraftOrderRule.NPB)
+        world = World(name="世界", seed=1, start_year=2026, draft_order_rule=DraftOrderRule.WAIVER)
+        self.assertIs(world.draft_order_rule, DraftOrderRule.WAIVER)
+        for bad in ("NPB", None, DraftOrderRule.NPB.value):
+            with self.subTest(draft_order_rule=bad), self.assertRaises(InvalidWorld):
+                World(name="世界", seed=1, start_year=2026, draft_order_rule=bad)  # type: ignore[arg-type]
+
+    def test_the_draft_order_rule_can_change_until_the_world_is_over(self):
+        self.assertIsNone(draft_order_rule_change_blocker(world_over=False))
+        self.assertIn("最終シーズン", draft_order_rule_change_blocker(world_over=True) or "")
 
     def test_the_start_year_must_be_a_season(self):
         with self.assertRaises(InvalidSeason):

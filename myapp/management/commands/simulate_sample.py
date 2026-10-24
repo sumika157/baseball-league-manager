@@ -27,6 +27,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 from myapp.domain.entities import Game
 from myapp.domain.exceptions import DomainError
+from myapp.domain.pennant.draft_order import DraftOrderRule
 from myapp.domain.pennant.schedule import NPB_TEAMS_PER_LEAGUE, ScheduleRules, generate_schedule
 from myapp.domain.simulation.engine import SimulatedGame, simulate_game
 from myapp.domain.simulation.fatigue import PitchingHistory
@@ -170,6 +171,12 @@ class Command(BaseCommand):
             ),
         )
         parser.add_argument(
+            "--draft-order",
+            choices=[rule.name.lower() for rule in DraftOrderRule],
+            default=DraftOrderRule.NPB.name.lower(),
+            help="--seasons のオフのドラフトの指名順の規則（pennant_create と同じ綴り。既定 npb）",
+        )
+        parser.add_argument(
             "--year", type=int, default=SAMPLE_YEAR, help=f"--from-real-leagues の開幕年（既定 {SAMPLE_YEAR}）"
         )
 
@@ -180,7 +187,13 @@ class Command(BaseCommand):
                 raise CommandError("--seasons は --from-real-leagues と一緒に指定してください。")
             if options["seasons"] < 1:
                 raise CommandError("--seasons は1以上を指定してください。")
-            self._run_seasons(seed, options["from_real_leagues"], options["year"], options["seasons"])
+            self._run_seasons(
+                seed,
+                options["from_real_leagues"],
+                options["year"],
+                options["seasons"],
+                DraftOrderRule[options["draft_order"].upper()],
+            )
             return
         if options["from_real_leagues"]:
             self._run_estimate_check(seed, options["from_real_leagues"], options["year"])
@@ -230,9 +243,11 @@ class Command(BaseCommand):
         self._say()
         self._say(format_usage(usage.rows()))
 
-    def _run_seasons(self, seed: int, league_ids: list[int], year: int, seasons: int) -> None:
+    def _run_seasons(
+        self, seed: int, league_ids: list[int], year: int, seasons: int, draft_order: DraftOrderRule
+    ) -> None:
         try:
-            run_seasons(league_ids, seasons=seasons, seed=seed, year=year, say=self._say)
+            run_seasons(league_ids, seasons=seasons, seed=seed, year=year, say=self._say, draft_order=draft_order)
         except (DomainError, ValueError) as error:
             raise CommandError(str(error)) from error
 

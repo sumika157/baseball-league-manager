@@ -25,6 +25,8 @@ from datetime import date
 from statistics import fmean, pstdev
 
 from myapp.domain.pennant.draft import MAX_DRAFTEES
+from myapp.domain.pennant.draft_meeting import DraftContext
+from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
 from myapp.domain.pennant.offseason import OffseasonClub, OffseasonPlan, OffseasonPlayer, plan_offseason
 from myapp.domain.pennant.ratings import PlayerRatings
 from myapp.domain.pennant.retirement import PlayingTime
@@ -143,7 +145,9 @@ def _playing_time(members: list[Member]) -> dict[int, PlayingTime]:
     return result
 
 
-def run_year(members: list[Member], year: int, *, world_seed: int = 1) -> tuple[list[Member], OffseasonPlan]:
+def run_year(
+    members: list[Member], year: int, *, world_seed: int = 1, rule: DraftOrderRule = DraftOrderRule.NPB
+) -> tuple[list[Member], OffseasonPlan]:
     """Y 年を締めて、翌年の母集団を返す。"""
     by_team: dict[int, list[Member]] = {}
     for member in members:
@@ -171,7 +175,16 @@ def run_year(members: list[Member], year: int, *, world_seed: int = 1) -> tuple[
                 ),
             )
         )
-    plan = plan_offseason(clubs, year=year, world_seed=world_seed, start_year=START_YEAR, used_names=())
+    # 指名順の最終順位は1リーグ・球団 id の順（合成の母集団に順位は無い。規則ごとの違いは `test_draft_meeting` が見る）
+    standings = DraftStandings(leagues=(tuple(sorted(by_team)),))
+    plan = plan_offseason(
+        clubs,
+        year=year,
+        world_seed=world_seed,
+        start_year=START_YEAR,
+        used_names=(),
+        draft=DraftContext(rule, standings),
+    )
 
     leaving = set(plan.retired) | set(plan.released)
     after = {change.player_id: change.after for change in plan.retained}
@@ -246,13 +259,18 @@ def stats(members: list[Member], plan: OffseasonPlan, before: int) -> YearStats:
 
 
 def run_years(
-    seed: int = 1, years: int = YEARS, *, roster_size: int = INITIAL_ROSTER, teams: int = TEAMS
+    seed: int = 1,
+    years: int = YEARS,
+    *,
+    roster_size: int = INITIAL_ROSTER,
+    teams: int = TEAMS,
+    rule: DraftOrderRule = DraftOrderRule.NPB,
 ) -> list[YearStats]:
     members = make_population(seed, roster_size, teams)
     result = []
     for year in range(START_YEAR, START_YEAR + years):
         before = len(members)
-        members, plan = run_year(members, year, world_seed=seed)
+        members, plan = run_year(members, year, world_seed=seed, rule=rule)
         result.append(stats(members, plan, before))
     return result
 
@@ -272,8 +290,12 @@ class OffseasonPopulationTest(unittest.TestCase):
         cls.elapsed = time.process_time() - started
 
     def test_runs_in_reasonable_time(self) -> None:
-        """10年ぶんの計算（約3,000人 × 10年）の CPU 時間。実測は約1.4秒。遅い環境で落ちないよう余裕を持たせる。"""
-        self.assertLess(self.elapsed, 4.0)
+        """10年ぶんの計算（約3,000人 × 10年）の CPU 時間。遅い環境で落ちないよう余裕を持たせる。
+
+        実測は約1.4秒だったが、ドラフト会議（#198 D1。48球団の候補 約1,200人を球団ごとのスカウトの推定で見比べる）で
+        1年あたり約0.45秒増え、手元で約6秒・CI のランナーで約14秒になった（上限を 4 → 25 秒）。
+        """
+        self.assertLess(self.elapsed, 25.0)
 
     def test_age_distribution_is_kept(self) -> None:
         """当初の帯からの変更: 標準偏差の上限 4.5 → 4.8、22歳以下 5〜15% → 5〜22%、平均年齢の下限 27 → 26、

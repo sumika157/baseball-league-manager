@@ -636,6 +636,9 @@ class PennantOffseasonScopeTest(SimpleTestCase):
         self.assertEqual(
             service._titles._game_list_query._scope, WorldScope.pennant(7), "タイトルを導くのも世界の範囲のサービス"
         )
+        # ドラフトの指名順の最終順位（#198）も世界の範囲
+        self.assertEqual(service._finishes._games._scope, WorldScope.pennant(7))
+        self.assertEqual(service._finishes._league_view._game_list_query._scope, WorldScope.pennant(7))
 
     def test_the_real_data_cannot_be_closed(self):
         for bad in (0, -1, True):
@@ -722,7 +725,7 @@ class PennantPostseasonScopeTest(SimpleTestCase):
     """ポストシーズンの進行と、締める処理が読む勝ち上がりは、渡された世界の範囲だけを読み書きする。"""
 
     SCOPED = ("_games", "_fixtures", "_ratings", "_plans", "_context_query")
-    BRACKETS = ("_games", "_leagues", "_postseason")
+    BRACKETS = ("_leagues", "_postseason")
 
     def test_every_dependency_is_fixed_to_the_given_world(self):
         service = build_pennant_postseason_service(7)
@@ -742,6 +745,8 @@ class PennantPostseasonScopeTest(SimpleTestCase):
             self.assertEqual(
                 brackets._league_view._game_list_query._scope, WorldScope.pennant(7), "順位も世界の範囲のサービス"
             )
+            self.assertEqual(brackets._finishes._games._scope, WorldScope.pennant(7), "同率の決着の材料も世界の範囲")
+            self.assertEqual(brackets._finishes._league_view._game_list_query._scope, WorldScope.pennant(7))
 
     def test_a_different_world_gets_a_different_scope(self):
         self.assertEqual(build_pennant_postseason_service(8)._games._scope, WorldScope.pennant(8))

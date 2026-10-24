@@ -19,12 +19,15 @@ from dataclasses import dataclass, replace
 from statistics import fmean, pstdev
 
 from myapp.application.pennant_world import ForkSource
+from myapp.domain.pennant.draft_meeting import DraftContext
+from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
 from myapp.domain.pennant.fork import with_birth_date
 from myapp.domain.pennant.initial_ratings import age_at_season_start
 from myapp.domain.pennant.offseason import OffseasonClub, OffseasonPlan, OffseasonPlayer, plan_offseason
 from myapp.domain.pennant.ratings import PlayerRatings
 from myapp.domain.pennant.retirement import PlayingTime
 from myapp.domain.pennant.schedule import ScheduleRules
+from myapp.domain.pennant.world import league_priority
 from myapp.domain.simulation.levels import UsageTally
 from myapp.domain.simulation.manager import ClubRoster, SimBatter, SimPitcher, choose_active_roster
 from myapp.domain.simulation.ratings import PitcherRatings
@@ -253,13 +256,50 @@ def format_offseason(plan: OffseasonPlan, members: Sequence[Member], year: int) 
             f"入れ替わり {(len(plan.retired) + len(plan.released)) / max(1, len(members)):.1%}",
             f"  能力の変化（総合値）平均 {_mean(deltas):+.2f}・標準偏差 {pstdev(deltas) if deltas else 0.0:.2f}・"
             f"最大 {max(deltas, default=0.0):+.1f}・最小 {min(deltas, default=0.0):+.1f}",
+            f"  ドラフト: 1位の競合 {sum(1 for lot in plan.lotteries if lot.round_number == 1)}件"
+            f"（最多 {max((len(lot.bidders) for lot in plan.lotteries), default=0)}球団）",
             f"  錨の補正（前の分布の目標からのずれ）平均 最大 {plan.anchor.mean_shift:.2f} 点"
             f"（{plan.anchor.mean_item} {plan.anchor.mean_signed:+.2f}）・標準偏差 最大 {plan.anchor.sd_shift:.2f} 点",
         ]
     )
 
 
-def run_seasons(league_ids: Sequence[int], *, seasons: int, seed: int, year: int, say: Callable[[str], None]) -> None:
+def draft_standings(
+    leagues: dict[int, list[int]],
+    pitching: dict[int, PitchingLine],
+    members: Sequence[Member],
+    *,
+    year: int,
+    start_year: int,
+) -> DraftStandings:
+    """ドラフトの指名順に使う最終順位（メモリの上のシーズン）。勝ち数（投手の勝利の合計）の多い順、同数は球団 id の順。
+
+    確認用の近似（引分・同率の規定は見ない）。リーグはその年の優先順（`league_priority`）に並べる。
+    """
+    team_of = {m.player_id: m.team_id for m in members}
+    wins: dict[int, int] = {}
+    for player_id, line in pitching.items():
+        team_id = team_of.get(player_id)
+        if team_id is not None:
+            wins[team_id] = wins.get(team_id, 0) + line.wins
+    priority = league_priority(leagues, year=year, start_year=start_year)
+    return DraftStandings(
+        leagues=tuple(
+            tuple(sorted(leagues[league_id], key=lambda team_id: (-wins.get(team_id, 0), team_id)))
+            for league_id in priority
+        )
+    )
+
+
+def run_seasons(
+    league_ids: Sequence[int],
+    *,
+    seasons: int,
+    seed: int,
+    year: int,
+    say: Callable[[str], None],
+    draft_order: DraftOrderRule = DraftOrderRule.NPB,
+) -> None:
     service = build_pennant_world_service()
     source = service.load_source(league_ids)
     players = source.active_players
@@ -308,6 +348,9 @@ def run_seasons(league_ids: Sequence[int], *, seasons: int, seed: int, year: int
             world_seed=seed,
             start_year=year,
             used_names=names,
+            draft=DraftContext(
+                draft_order, draft_standings(leagues, pitching, members, year=current, start_year=year)
+            ),
         )
         elapsed = time.perf_counter() - started
         names.update(draftee.name for draftee in plan.draftees)
