@@ -2,7 +2,7 @@
 
 材料は次の3つに分けて読み、**世界の全試合を集約として組み立てない**（`.claude/rules/performance.md`）。
 
-- 順位・主力・タイトル: 世界の範囲で組み立てた `TeamApplicationService`（既存の参照）
+- 順位・タイトル: 世界の範囲で組み立てた `TeamApplicationService`、主力: 同じく `TeamViewService`（既存の参照）
 - 自軍の試合・期間の試合: `GameListQuery`（試合の一覧の SQL。明細は読まない）
 - 責任投手・本塁打・期間の成績: `PennantActivityQuery`（明細の SQL 集計）
 
@@ -48,6 +48,7 @@ from .queries import GameListQuery, PennantActivityQuery
 from .scorebook_view import build_line_score
 from .services import TeamApplicationService
 from .standings import record_label
+from .team_view import TeamViewService
 
 # 今後の日程に出す件数
 UPCOMING_GAMES = 5
@@ -75,12 +76,13 @@ def _saved_id(value: int | None) -> int:
 
 
 class PennantHomeService:
-    """GM ホームと世界の削除の確認の材料を作る。`teams` は世界の範囲で組み立てたサービス。"""
+    """GM ホームと世界の削除の確認の材料を作る。`teams`・`team_view` は世界の範囲で組み立てたサービス。"""
 
     def __init__(
         self,
         *,
         teams: TeamApplicationService,
+        team_view: TeamViewService,
         games: GameListQuery,
         game_records: GameRepository,
         fixtures: FixtureRepository,
@@ -89,6 +91,8 @@ class PennantHomeService:
         leagues: LeagueRepository,
     ) -> None:
         self._teams = teams
+        # 主力打者・投手陣（自軍の選手の一覧）
+        self._team_view = team_view
         # 世界の終了の通算が、年ごとの順位を作るために読む（順位の規則は domain の `standings`）
         self._team_records = team_records
         self._leagues = leagues
@@ -426,7 +430,9 @@ class PennantHomeService:
     def _key_batters(self, world: WorldContext, year: int) -> list[KeyBatterRow]:
         own_id = _saved_id(world.managed_team_id)
         rows = [
-            row for row in self._teams.list_batters(own_id, sort="ops", descending=True, year=year).rows if row.at_bats
+            row
+            for row in self._team_view.list_batters(own_id, sort="ops", descending=True, year=year).rows
+            if row.at_bats
         ]
         recent: dict[int, PeriodBatting] = {}
         if world.today is not None:
@@ -454,7 +460,7 @@ class PennantHomeService:
             return []
         rows = [
             row
-            for row in self._teams.list_pitchers(own_id, sort="innings", descending=True, year=year).rows
+            for row in self._team_view.list_pitchers(own_id, sort="innings", descending=True, year=year).rows
             if row.starts or InningsPitched.from_notation(row.innings_pitched).outs
         ]
         return [

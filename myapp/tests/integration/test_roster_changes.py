@@ -63,8 +63,8 @@ class TransferTest(BaseCase):
             year=2026,
         )
 
-        self.assertEqual(self.service.list_batters(self.team.id).rows, [])
-        self.assertEqual([r.name for r in self.service.list_batters(self.rival.id).rows], ["山田"])
+        self.assertEqual(self.team_view.list_batters(self.team.id).rows, [])
+        self.assertEqual([r.name for r in self.team_view.list_batters(self.rival.id).rows], ["山田"])
 
     def test_stats_follow_the_player_not_the_team(self):
         """成績は選手に紐づくので、移籍しても失われない。"""
@@ -78,7 +78,7 @@ class TransferTest(BaseCase):
             year=2026,
         )
 
-        detail = self.service.get_player_detail(self.rival.id, self.player.id)
+        detail = self.team_view.get_player_detail(self.rival.id, self.player.id)
         self.assertEqual(detail.at_bats, 10)
 
     def test_the_old_number_becomes_available(self):
@@ -92,7 +92,7 @@ class TransferTest(BaseCase):
 
         # 空いた10番を別の選手が使える
         self.roster.register_player(self.team.id, "田中", 10, "外野手")
-        self.assertEqual([r.name for r in self.service.list_batters(self.team.id).rows], ["田中"])
+        self.assertEqual([r.name for r in self.team_view.list_batters(self.team.id).rows], ["田中"])
 
     def test_number_in_use_at_the_destination_is_rejected(self):
         self.roster.register_player(self.rival.id, "先客", 7, "外野手")

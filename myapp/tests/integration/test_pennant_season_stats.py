@@ -14,7 +14,7 @@ from django.urls import reverse
 from myapp.domain.value_objects import BattingLine
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository, DjangoTeamRepository
-from myapp.presentation.views import build_world_view_service
+from myapp.presentation.views import build_world_team_view_service, build_world_view_service
 
 from ..helpers import play_game
 from .world_case import YEAR, WorldCase
@@ -35,6 +35,7 @@ class SeasonStatsCase(WorldCase):
         orm_models.PlayerStint.objects.filter(team__league__world_id=self.world_id).update(from_year=YEAR)
         self.veteran, self.regular = self.pennant_home_batters[8], self.pennant_home_batters[7]
         self.service = build_world_view_service(self.world_id)
+        self.team_view = build_world_team_view_service(self.world_id)
         self._play(
             YEAR,
             5,
@@ -132,7 +133,7 @@ class InterleagueGamesCountTest(SeasonStatsCase):
 
     def test_the_regulation_uses_every_game_of_the_team(self):
         """規定打席は、その球団の全試合（交流戦を含む）の数で決まる。"""
-        totals = self.service.get_team_totals(self.pennant_team.id, NEXT_YEAR)
+        totals = self.team_view.get_team_totals(self.pennant_team.id, NEXT_YEAR)
 
         self.assertEqual(totals.games, 2, "リーグ内の1試合 + 交流戦の1試合")
 
@@ -253,7 +254,7 @@ class OnlyThatYearIsReadTest(SeasonStatsCase):
         titles_before = count(lambda: self.service.get_league_titles(self.pennant_league.id, NEXT_YEAR))
         standings_before = count(lambda: self.service.get_standings(NEXT_YEAR))
         roster_before = count(
-            lambda: build_world_view_service(self.world_id).list_batters(self.pennant_team.id, year=NEXT_YEAR)
+            lambda: build_world_team_view_service(self.world_id).list_batters(self.pennant_team.id, year=NEXT_YEAR)
         )
         for index in range(3):
             self._play(NEXT_YEAR + 1 + index, 5, {self.veteran: BattingLine(at_bats=3)})
@@ -263,6 +264,8 @@ class OnlyThatYearIsReadTest(SeasonStatsCase):
         )
         self.assertEqual(count(lambda: self.service.get_standings(NEXT_YEAR)), standings_before)
         self.assertEqual(
-            count(lambda: build_world_view_service(self.world_id).list_batters(self.pennant_team.id, year=NEXT_YEAR)),
+            count(
+                lambda: build_world_team_view_service(self.world_id).list_batters(self.pennant_team.id, year=NEXT_YEAR)
+            ),
             roster_before,
         )

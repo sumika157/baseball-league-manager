@@ -458,7 +458,7 @@ class BoxScoreEntryTest(BaseCase):
     def test_hold_points_accumulate_for_the_reliever(self):
         post_game_scorebook_day_unrecorded(self.client, self.game.id, self._payload())
 
-        detail = self.service.get_player_detail(self.team.id, self.middle.id)
+        detail = self.team_view.get_player_detail(self.team.id, self.middle.id)
         self.assertEqual(detail.holds, 1)
         self.assertEqual(detail.hold_points, 1)
 

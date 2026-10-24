@@ -585,7 +585,7 @@ class PlayerPageFieldingTest(FieldingTestBase):
         )
 
     def test_profile_carries_career_and_yearly_fielding(self):
-        profile = self.service.get_player_profile(self.team.id, self.home[1])
+        profile = self.team_view.get_player_profile(self.team.id, self.home[1])
 
         fielding = profile.fielding
         self.assertIsNotNone(fielding)
