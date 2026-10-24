@@ -6,23 +6,32 @@ from datetime import date
 from myapp.domain.services.free_agency import (
     EducationPath,
     FaStatusKind,
+    ProEntry,
     ServiceTime,
     estimated_service_days,
     fa_order,
     fa_outlook,
     service_seasons,
 )
-from myapp.domain.value_objects import Profile
+from myapp.domain.value_objects import DraftPick, Profile
 
 
 def full_years(*years: int, days: int = 145) -> dict[int, int]:
     return dict.fromkeys(years, days)
 
 
-def outlook(education, debut, days, *, through=2030, records_from=2000, declared=(), developmental=()):
+def drafted(entry_year):
+    """ドラフトを経た選手のプロ入り（`entry_year` はドラフトの翌年＝入団の年）。None はプロ入りが分からない。"""
+    if entry_year is None:
+        return None
+    return ProEntry.of(draft=DraftPick(entry_year - 1), is_foreign_player=False, first_stint_year=None)
+
+
+def outlook(education, debut, days, *, through=2030, records_from=2000, declared=(), developmental=(), entry=None):
+    """`debut` はドラフトを経た選手の入団の年。`entry` を渡せばそちらを使う（ドラフトの無い選手）。"""
     return fa_outlook(
         education=education,
-        debut_year=debut,
+        entry=entry if entry is not None else drafted(debut),
         days_by_year=days,
         through_year=through,
         records_from_year=records_from,
@@ -82,7 +91,7 @@ class FaOutlookTest(unittest.TestCase):
         self.assertEqual((result.domestic.kind, result.domestic.remaining), (FaStatusKind.REMAINING, 1))
 
     def test_university_entering_in_2007_is_drafted_in_2006_and_needs_eight(self):
-        # 入団はドラフトの翌年。2007年入団はドラフトが2006年なので短縮の対象外
+        # 2007年入団はドラフトが2006年なので短縮の対象外（ドラフトの年で判定する）
         result = outlook(EducationPath.UNIVERSITY, 2007, full_years(*range(2007, 2014)))
         self.assertEqual((result.domestic.kind, result.domestic.remaining), (FaStatusKind.REMAINING, 1))
 
@@ -131,7 +140,7 @@ class FaOutlookTest(unittest.TestCase):
         self.assertEqual(result.domestic.kind, FaStatusKind.UNKNOWN)
 
     def test_unknown_education_before_the_college_rule_needs_eight(self):
-        # ドラフトが2007年より前（入団が2007年以前）なら、学歴によらず8シーズン
+        # ドラフトが2007年より前なら、学歴によらず8シーズン
         result = outlook(EducationPath.UNKNOWN, 2007, full_years(*range(2007, 2014)))
         self.assertEqual((result.domestic.kind, result.domestic.remaining), (FaStatusKind.REMAINING, 1))
         later = outlook(EducationPath.UNKNOWN, 2008, full_years(*range(2008, 2014)))
@@ -156,7 +165,7 @@ class FaOutlookTest(unittest.TestCase):
         result = outlook(EducationPath.UNKNOWN, 2010, full_years(*range(2010, 2019)))
         self.assertEqual((result.overseas.kind, result.overseas.acquired_year), (FaStatusKind.ACQUIRED, 2018))
 
-    def test_unknown_debut_year_cannot_be_counted(self):
+    def test_unknown_entry_cannot_be_counted(self):
         result = outlook(EducationPath.HIGH_SCHOOL, None, full_years(2010))
         self.assertIsNone(result.service)
         self.assertEqual(result.domestic.kind, FaStatusKind.UNKNOWN)
@@ -186,6 +195,103 @@ class FaOutlookTest(unittest.TestCase):
         result = outlook(EducationPath.HIGH_SCHOOL, 2010, full_years(*range(2010, 2018)))
         self.assertEqual(result.domestic.label, "取得済み（2017年）")
         self.assertEqual(result.overseas.label, "あと1シーズン")
+
+
+class ProEntryTest(unittest.TestCase):
+    """プロ入りの3種類（ドラフトあり／ドラフトなしの外国人／ドラフトなしの日本人）。"""
+
+    def test_drafted_player_counts_from_the_year_after_the_draft(self):
+        entry = ProEntry.of(draft=DraftPick(2019, round=1), is_foreign_player=False, first_stint_year=2021)
+        self.assertEqual(entry.year, 2020)  # 最初の在籍の加入年ではなく、ドラフトの翌年
+
+    def test_without_a_draft_counts_from_the_first_stint(self):
+        self.assertEqual(ProEntry.of(draft=None, is_foreign_player=True, first_stint_year=2022).year, 2022)
+
+    def test_without_a_draft_or_a_stint_cannot_be_counted(self):
+        self.assertIsNone(ProEntry.of(draft=None, is_foreign_player=False, first_stint_year=None))
+
+    def test_college_rule_is_judged_by_the_draft_year(self):
+        """短縮は「2007年以降のドラフト」。入団の年ではなくドラフトの年そのもので判定する（境界）。"""
+        draft_2006 = ProEntry.of(draft=DraftPick(2006), is_foreign_player=False, first_stint_year=None)
+        draft_2007 = ProEntry.of(draft=DraftPick(2007), is_foreign_player=False, first_stint_year=None)
+        self.assertEqual(
+            outlook(EducationPath.UNIVERSITY, None, full_years(*range(2007, 2014)), entry=draft_2006).domestic.kind,
+            FaStatusKind.REMAINING,
+        )
+        self.assertEqual(
+            outlook(EducationPath.UNIVERSITY, None, full_years(*range(2008, 2015)), entry=draft_2007).domestic.kind,
+            FaStatusKind.ACQUIRED,
+        )
+
+    def test_drafted_foreign_player_follows_the_same_rules(self):
+        """ドラフトを経た外国籍の選手（日本の学校を出た選手など）は日本人と同じ規則（大卒なら7シーズン）。"""
+        entry = ProEntry.of(draft=DraftPick(2014), is_foreign_player=True, first_stint_year=2015)
+        result = outlook(EducationPath.UNIVERSITY, None, full_years(*range(2015, 2022)), entry=entry)
+        self.assertEqual((result.domestic.kind, result.domestic.acquired_year), (FaStatusKind.ACQUIRED, 2021))
+
+
+class UndraftedForeignPlayerTest(unittest.TestCase):
+    """ドラフトを経ていない外国人選手。海外リーグの年数は数えず、記録の最初の年から言い切る（決定 C）。"""
+
+    def entry(self, first_stint_year):
+        return ProEntry.of(draft=None, is_foreign_player=True, first_stint_year=first_stint_year)
+
+    def test_years_before_the_records_are_not_counted_and_not_unknown(self):
+        result = outlook(
+            EducationPath.UNKNOWN,
+            None,
+            full_years(2020, 2021),
+            records_from=2020,
+            through=2021,
+            entry=self.entry(2015),
+        )
+        self.assertEqual(result.service, ServiceTime(2, 0))
+        self.assertEqual((result.domestic.kind, result.domestic.remaining), (FaStatusKind.REMAINING, 6))
+        self.assertEqual(result.domestic.label, "あと6シーズン")
+        self.assertEqual((result.overseas.kind, result.overseas.remaining), (FaStatusKind.REMAINING, 7))
+
+    def test_acquired_year_is_exact(self):
+        result = outlook(
+            EducationPath.UNKNOWN, None, full_years(*range(2020, 2028)), records_from=2020, entry=self.entry(2015)
+        )
+        self.assertEqual(result.domestic.label, "取得済み（2027年）")
+
+    def test_domestic_needs_eight_even_with_a_university(self):
+        """短縮はドラフトで入団した大学生・社会人だけ。ドラフトを経ていなければ学歴によらず8シーズン。"""
+        result = outlook(EducationPath.UNIVERSITY, None, full_years(*range(2020, 2027)), entry=self.entry(2020))
+        self.assertEqual((result.domestic.kind, result.domestic.remaining), (FaStatusKind.REMAINING, 1))
+
+    def test_joining_after_the_records_start_counts_from_the_first_stint(self):
+        result = outlook(
+            EducationPath.UNKNOWN, None, full_years(2020, 2021, 2022), records_from=2018, entry=self.entry(2021)
+        )
+        self.assertEqual(result.service, ServiceTime(2, 0))
+
+    def test_reacquisition_takes_four_seasons(self):
+        days = full_years(*range(2020, 2033))
+        result = outlook(EducationPath.UNKNOWN, None, days, through=2032, declared=[2028], entry=self.entry(2020))
+        self.assertEqual((result.domestic.kind, result.domestic.acquired_year), (FaStatusKind.ACQUIRED, 2032))
+
+
+class UndraftedJapanesePlayerTest(unittest.TestCase):
+    """ドラフトが入力されていない日本人選手。今までどおり保守的に扱う。"""
+
+    def entry(self, first_stint_year):
+        return ProEntry.of(draft=None, is_foreign_player=False, first_stint_year=first_stint_year)
+
+    def test_entering_by_2007_cannot_be_shortened(self):
+        result = outlook(EducationPath.UNKNOWN, None, full_years(*range(2007, 2014)), entry=self.entry(2007))
+        self.assertEqual((result.domestic.kind, result.domestic.remaining), (FaStatusKind.REMAINING, 1))
+
+    def test_entering_from_2008_is_undecided_without_education(self):
+        result = outlook(EducationPath.UNKNOWN, None, full_years(*range(2008, 2015)), entry=self.entry(2008))
+        self.assertEqual(result.domestic.kind, FaStatusKind.UNKNOWN)
+
+    def test_years_before_the_records_stay_unknown(self):
+        result = outlook(
+            EducationPath.HIGH_SCHOOL, None, full_years(2020, 2021), records_from=2020, entry=self.entry(2015)
+        )
+        self.assertEqual(result.domestic.label, "不明（あと最大6シーズン）")
 
 
 class FaOrderTest(unittest.TestCase):

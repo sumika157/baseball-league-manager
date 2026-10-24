@@ -32,7 +32,7 @@ from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND
 from myapp.domain.simulation.randomness import GameRandom, make_random, normal
 from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings
 from myapp.domain.simulation.samples import BATTER_MEAN, BATTER_SD, PITCHER_MEAN, PITCHER_SD, draw_ratings
-from myapp.domain.value_objects import ContractStatus, ForeignPlayerRules, Position, Profile
+from myapp.domain.value_objects import ContractStatus, DraftPick, ForeignPlayerRules, Position, Profile
 from myapp.domain.virtual_players import generator
 
 START_YEAR = 2026
@@ -82,15 +82,17 @@ def make_population(seed: int = 1, roster_size: int = INITIAL_ROSTER, teams: int
         for number, position in enumerate(positions, start=1):
             age = _age_distribution(rng)
             is_foreign = rng.random() < generator.FOREIGN_PLAYER_RATIO
+            birth_date = generator.birth_date_for(rng, age=age, as_of=date(START_YEAR, 4, 1))
+            # プロ入りの年。日本人はその前年のドラフト、外国人はドラフトなし（在籍の開始年がプロ入り）
+            entered = START_YEAR - generator.randint(rng, 0, max(0, age - 19))
             profile = Profile(
-                birth_date=generator.birth_date_for(rng, age=age, as_of=date(START_YEAR, 4, 1)),
-                debut_year=START_YEAR - generator.randint(rng, 0, max(0, age - 19)),
+                birth_date=birth_date,
+                draft=None if is_foreign else DraftPick(entered - 1),
                 is_foreign_player=is_foreign,
             )
             mean, sd = (PITCHER_MEAN, PITCHER_SD) if position.is_pitcher else (BATTER_MEAN, BATTER_SD)
             ratings = draw_ratings(rng, mean=mean, sd=sd, position=position, stamina_mean=50.0)
             player_id = len(members) + 1
-            assert profile.debut_year is not None
             members.append(
                 Member(
                     player_id=player_id,
@@ -98,7 +100,7 @@ def make_population(seed: int = 1, roster_size: int = INITIAL_ROSTER, teams: int
                     position=position,
                     profile=profile,
                     number=str(number),
-                    joined_year=profile.debut_year,
+                    joined_year=entered,
                     ratings=PlayerRatings(player_id=player_id, year=START_YEAR, ratings=ratings),
                 )
             )

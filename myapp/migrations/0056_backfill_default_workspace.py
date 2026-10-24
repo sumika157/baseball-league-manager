@@ -1,6 +1,6 @@
 """既存のリーグ・球場・世界を、既定のワークスペース1つに帰属させる（データ移行）。
 
-スキーマ変更（0052）とは別ファイルにしている。凍結した履歴なので、domain は import せず、
+スキーマ変更（0055）とは別ファイルにしている。凍結した履歴なので、domain は import せず、
 key の長さと文字種（`domain/workspace.py` の `KEY_LENGTH`・`KEY_ALPHABET`）と公開の値をここに写している。
 """
 
@@ -74,11 +74,11 @@ def backfill_default_workspace(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("myapp", "0052_workspace"),
+        ("myapp", "0055_workspace"),
     ]
 
     operations = [
-        # 逆方向は何もしない。0052 では列が残るので帰属はそのままでよく（0052 より前へ戻れば列ごと消える）、
+        # 逆方向は何もしない。0055 では列が残るので帰属はそのままでよく（0055 より前へ戻れば列ごと消える）、
         # 戻して再び適用するときに、あとから作られたワークスペースを消してはならないため
         migrations.RunPython(backfill_default_workspace, migrations.RunPython.noop),
     ]

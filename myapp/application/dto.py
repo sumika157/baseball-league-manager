@@ -18,12 +18,14 @@ from ..domain.pennant.season import SeasonPhase
 from ..domain.services.free_agency import SERVICE_DAYS_PER_SEASON
 from ..domain.services.rankings import Title
 from ..domain.services.roster_analysis import NEUTRAL_CATEGORY, ColorCategory
+from ..domain.simulation.fatigue import FatigueLevel
 from ..domain.simulation.ratings import BatterRatings, PitcherRatings, RatingEmphasis
 from ..domain.value_objects import (
     AcquisitionRoute,
     BattingLine,
     ContractStatus,
     DepartureRoute,
+    DraftPick,
     FieldingPosition,
     ForeignPlayerRules,
     FreeAgencyKind,
@@ -669,7 +671,8 @@ class PlayerProfile:
     nationality: str = ""
     # 外国人枠の対象か。国籍（事実）とは別の概念なので独立して持つ
     is_foreign_player: bool = False
-    debut_year: int | None = None
+    # ドラフトの表記（「2019年ドラフト1位」。`DraftPick.label`）。ドラフトを経ていない選手は空
+    draft_label: str = ""
     # プロ入り前の経歴。(区分, 名称) を通った順に並べたもの
     amateur_career: list | None = None
     has_profile: bool = False
@@ -1479,11 +1482,14 @@ class ClubPitcherUsage:
     days_since_start: int | None
     # 次の試合日に投げられるか（連投の上限に達していないか。上限はスタミナで決まる）
     can_pitch: bool
+    # 次の試合日に投げたときの疲労の区分（ローテーションは先発したら、抑えと救援陣は救援で投げたら）。
+    # エンジンが率に効かせる点と同じ式（`fatigue.pregame_fatigue_points`）から引く。次の試合日が無ければ「なし」
+    fatigue: FatigueLevel
 
 
 @dataclass(frozen=True)
 class ClubPitchingUsage:
-    """投手陣の状態（編成の「投手陣」タブに出す）。次の試合日が無ければ、状態は既定（投げられる）で返す。"""
+    """投手陣の状態（編成の「投手陣」タブに出す）。次の試合日が無ければ、状態は既定（投げられる・疲労なし）で返す。"""
 
     # 受け持つ球団の次の試合日（日程が残っていなければ None）
     next_game_on: date | None
@@ -2078,8 +2084,8 @@ class AnalysisRosterRow:
     throws: Handedness | None
     bats: Handedness | None
     is_foreign_player: bool
-    # FA 取得の見込み（学歴の区分と入団年）の材料
-    debut_year: int | None = None
+    # FA 取得の見込み（学歴の区分とプロ入り。`ProEntry`）の材料
+    draft: DraftPick | None = None
     high_school: str = ""
     university: str = ""
     corporate_team: str = ""
@@ -2384,8 +2390,9 @@ class FaRow:
     name: str
     number: str
     education_label: str
-    debut_year: int | None
-    # 数えたシーズン数と持ち越しの日数。入団年が分からないときは None
+    # ドラフトの表記（`DraftPick.label`）。ドラフトを経ていない選手は空
+    draft_label: str
+    # 数えたシーズン数と持ち越しの日数。プロ入りが分からないときは None
     seasons: int | None
     remainder_days: int
     includes_estimate: bool

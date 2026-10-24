@@ -7,6 +7,7 @@ from django.urls import reverse
 
 from myapp.domain.value_objects import (
     BattingLine,
+    DraftPick,
     InningsPitched,
     PitchingLine,
 )
@@ -438,7 +439,8 @@ class PlayerProfileTest(BaseCase):
             height_cm=180,
             weight_kg=78,
             birthplace="大阪府",
-            debut_year=2021,
+            draft_year=2020,
+            draft_round=1,
         )
 
         saved = DjangoTeamRepository(real_scope()).find_by_id(self.team.id).find_player(player.id)
@@ -446,6 +448,7 @@ class PlayerProfileTest(BaseCase):
         self.assertEqual(saved.profile.height_cm, 180)
         self.assertEqual(saved.profile.throws_bats, "右投左打")
         self.assertEqual(saved.profile.birthplace, "大阪府")
+        self.assertEqual(saved.profile.draft, DraftPick(2020, round=1))
 
     def test_profile_is_optional(self):
         player = self.roster.register_player(self.team.id, "山田", 10, "内野手")

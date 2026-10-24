@@ -1,0 +1,2 @@
+{% comment %}疲労の区分の表示。level（FatigueLevel）。境目の点数は持たず、区分の名前だけで見た目を分ける。{% endcomment %}
+{% if level.name == "HEAVY" %}<span class="badge bg-danger">{{ level.label }}</span>{% elif level.name == "LIGHT" %}<span class="badge bg-warning text-dark">{{ level.label }}</span>{% else %}<span class="stat-muted">{{ level.label }}</span>{% endif %}

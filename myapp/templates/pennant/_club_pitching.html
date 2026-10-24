@@ -36,23 +36,15 @@
         </div>
       </form>
       {% include 'pennant/_club_reset_form.html' with token="rotation" %}
+      {% if usage.rotation and usage.next_game_on %}
+        {% comment %}編集する本人にも、いま進めたときに使われるローテーションの休養と疲労を見せる（表示だけ）{% endcomment %}
+        <div id="club-rotation-usage" class="mt-4">
+          <div class="stat-muted mb-2" style="font-size: 0.8125rem;">いま進めたときのローテーションの状態（編集中の内容は含みません）</div>
+          {% include 'pennant/_club_rotation_usage.html' %}
+        </div>
+      {% endif %}
     {% elif usage.rotation %}
-      <div class="table-responsive">
-        <table class="table tabular-nums mb-0">
-          <thead>
-            <tr><th style="width: 4rem;">順</th><th>投手</th>{% if usage.next_game_on %}<th class="text-end">前回の先発から</th>{% endif %}</tr>
-          </thead>
-          <tbody>
-            {% for row in usage.rotation %}
-              <tr>
-                <td class="stat-key">{{ forloop.counter }}</td>
-                <td><a href="{% scoped_url 'player_detail' club.team_id row.player_id %}" class="player-name">{{ row.name }}</a>{% if row.is_foreign %} <span class="badge bg-secondary">外国人</span>{% endif %}</td>
-                {% if usage.next_game_on %}<td class="text-end">{% if row.days_since_start is None %}—{% else %}{{ row.days_since_start }}日{% endif %}</td>{% endif %}
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
+      {% include 'pennant/_club_rotation_usage.html' %}
     {% else %}
       <p class="stat-muted mb-0">ローテーションを組める投手がいません。</p>
     {% endif %}
@@ -100,6 +92,7 @@
               {% if usage.next_game_on %}
                 {% for day in usage.recent_days %}<th class="text-center">{{ day|date:"n/j" }}</th>{% endfor %}
                 <th class="text-center">{{ usage.next_game_on|date:"n月j日" }}の試合</th>
+                <th class="text-center">疲労（救援で投げたら）</th>
               {% endif %}
             </tr>
           </thead>

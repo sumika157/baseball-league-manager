@@ -19,6 +19,7 @@ from myapp.domain.entities import Team
 from myapp.domain.value_objects import (
     AcquisitionRoute,
     ContractStatus,
+    DraftPick,
     FreeAgencyKind,
     Handedness,
     JerseyNumber,
@@ -118,7 +119,7 @@ FULL_PROFILE = Profile(
     height_cm=180,
     weight_kg=82,
     birthplace="宮城",
-    debut_year=2018,
+    draft=DraftPick(2017, round=2, is_development=True),
     high_school="青葉高",
     university="杜大",
     corporate_team="仙台製鉄",

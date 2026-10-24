@@ -1,0 +1,32 @@
+{% comment %}
+ローテーションの状態の表（読み取り専用）。usage（ClubPitchingUsage）と club は呼び出し元の文脈。
+自動のローテーションの表示と、手動のローテーションの編集欄の下の両方で使う。
+疲労は「次の試合日に先発したら」の区分（中5日未満なら休養の点が付く）。
+{% endcomment %}
+{% load scoped %}
+<div class="table-responsive">
+  <table class="table tabular-nums mb-0">
+    <thead>
+      <tr>
+        <th style="width: 4rem;">順</th>
+        <th>投手</th>
+        {% if usage.next_game_on %}
+          <th class="text-end">前回の先発から</th>
+          <th class="text-center">疲労（{{ usage.next_game_on|date:"n月j日" }}に先発したら）</th>
+        {% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in usage.rotation %}
+        <tr>
+          <td class="stat-key">{{ forloop.counter }}</td>
+          <td><a href="{% scoped_url 'player_detail' club.team_id row.player_id %}" class="player-name">{{ row.name }}</a>{% if row.is_foreign %} <span class="badge bg-secondary">外国人</span>{% endif %}</td>
+          {% if usage.next_game_on %}
+            <td class="text-end">{% if row.days_since_start is None %}—{% else %}{{ row.days_since_start }}日{% endif %}</td>
+            <td class="text-center">{% include 'pennant/_club_fatigue.html' with level=row.fatigue %}</td>
+          {% endif %}
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

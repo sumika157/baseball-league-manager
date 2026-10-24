@@ -13,6 +13,7 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import SimpleTestCase
 
+from myapp.domain.entities import ensure_draft_fits_career
 from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND, RegisteredBand
 from myapp.domain.value_objects import AcquisitionRoute, ContractStatus
 from myapp.domain.virtual_players import generator
@@ -169,11 +170,57 @@ class SeedRosterTest(BaseCase):
             age = today.year - born.year - ((today.month, today.day) < (born.month, born.day))
             with self.subTest(player=player.name):
                 self.assertTrue(19 <= age <= 40)
-                # 在籍の開始は入団年。高卒の18歳〜助っ人の30歳で入団している
-                self.assertEqual(stint.from_year, player.debut_year)
-                self.assertTrue(18 <= player.debut_year - born.year <= 30)
+                # 高卒の18歳〜助っ人の30歳で入団している。日本人の在籍の開始はドラフトの翌年、助っ人はドラフトなし
+                self.assertTrue(18 <= stint.from_year - born.year <= 30)
+                if player.is_foreign_player:
+                    self.assertIsNone(player.draft_year)
+                else:
+                    self.assertEqual(stint.from_year, player.draft_year + 1)
                 self.assertTrue(player.back_name)
                 self.assertTrue(player.name_kana)
+
+    def test_draft_rounds_are_unique_per_team_year_and_kind(self):
+        """順位は球団 × ドラフト年 × 本指名/育成ごとに1から振り、流し直しても重ならない（#108）。
+
+        育成ドラフトかどうかは在籍の経路と食い違わない（`ensure_draft_fits_career`）。
+        """
+        run()
+        run("--seed", "2")
+
+        for team in (self.team, self.rival):
+            stints = [s for s in active_stints(team) if s.player != self.original]
+            picks = Counter(
+                (s.player.draft_year, s.player.is_development_draft, s.player.draft_round)
+                for s in stints
+                if not s.player.is_foreign_player
+            )
+            with self.subTest(team=team.name):
+                self.assertTrue(picks)
+                self.assertEqual(max(picks.values()), 1, "同じ年・区分・順位の選手が2人いる")
+                for s in stints:
+                    player = s.player
+                    if player.is_foreign_player:
+                        self.assertEqual((player.draft_round, player.is_development_draft), (None, False))
+                        continue
+                    self.assertGreaterEqual(player.draft_round, 1)
+                    self.assertEqual(
+                        player.is_development_draft, s.acquired_via == AcquisitionRoute.DEVELOPMENTAL_DRAFT.value
+                    )
+            for player in DjangoTeamRepository(real_scope()).find_by_id(team.id).players:
+                ensure_draft_fits_career(player.profile.draft, player.career)
+
+    def test_rounds_continue_after_the_existing_ones(self):
+        """流し直したときは、同じ球団 × 年 × 区分で既にある最大の順位の次から振る。
+
+        数えるのはこの球団に在籍したことのある選手（他球団の選手は数えない）。
+        """
+        add_player(self.team, "既存一位", number=50, draft_year=2019, draft_round=5)
+        add_player(self.team, "既存育成", number=51, draft_year=2019, draft_round=2, is_development_draft=True)
+        add_player(self.rival, "他球団", number=50, draft_year=2019, draft_round=9)
+
+        last = seed_virtual_players.Command._next_rounds(self.team)
+
+        self.assertEqual(last, {(2019, False): 5, (2019, True): 2})
 
     def test_foreign_players_carry_nationality_and_no_japanese_amateur_career(self):
         with mock.patch.object(generator, "FOREIGN_PLAYER_RATIO", 0.5):
@@ -381,7 +428,7 @@ class RefreshSchoolsTest(BaseCase):
     def test_refreshes_only_virtual_japanese_players(self):
         original = add_player(self.team, "藤井健吾", number=10, high_school="実在高校")
         foreign = add_player(self.team, "マイケル・ジョンソン", number=11, is_foreign=True)
-        virtual = add_player(self.team, "佐藤翔太", number=12, birthplace="北海道", debut_year=2020)
+        virtual = add_player(self.team, "佐藤翔太", number=12, birthplace="北海道", draft_year=2019, draft_round=3)
 
         output = run("--refresh-schools")
 
@@ -392,8 +439,8 @@ class RefreshSchoolsTest(BaseCase):
         self.assertEqual(original.high_school, "実在高校")
         self.assertEqual(foreign.high_school, "")
         self.assertTrue(virtual.high_school)
-        # 入団年など他の項目は変えない
-        self.assertEqual(virtual.debut_year, 2020)
+        # ドラフトなど他の項目は変えない
+        self.assertEqual((virtual.draft_year, virtual.draft_round), (2019, 3))
 
     def test_public_high_school_is_in_birthplace(self):
         virtual = add_player(self.team, "佐藤翔太", number=12, birthplace="北海道")
