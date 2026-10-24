@@ -74,6 +74,21 @@ class PostseasonFormat(Enum):
     def label(self) -> str:
         return self.value
 
+    @property
+    def description(self) -> str:
+        """方式の1行の説明（作成フォームで選択肢の下に出す）。"""
+        return _FORMAT_DESCRIPTIONS[self]
+
+
+_FORMAT_DESCRIPTIONS = {
+    PostseasonFormat.NPB: (
+        "各リーグの上位3球団でクライマックスシリーズを行い、勝ち抜いた球団で日本シリーズを行います"
+        "（1リーグの世界はクライマックスシリーズの優勝まで）。"
+    ),
+    PostseasonFormat.CHAMPIONS: "各リーグの優勝球団で日本シリーズを行います（1リーグの世界は行いません）。",
+    PostseasonFormat.NONE: "ポストシーズンを行わず、公式戦が終わればシーズンを締められます。",
+}
+
 
 class PostseasonStatus(Enum):
     """その年のポストシーズンの状況。保存せず、結果から導く。値は画面に出す名前。"""
@@ -173,6 +188,25 @@ def final_stage_rules(leader: TeamRecord, challenger: TeamRecord) -> SeriesRules
     ):
         return FINAL_STAGE_TWO_WIN_ADVANTAGE
     return FINAL_STAGE
+
+
+class OutcomeKind(Enum):
+    """球団のポストシーズンの結果の区分。値は区分の名前（画面には `PostseasonOutcome.label` を出す）。"""
+
+    CHAMPION = "優勝"
+    ELIMINATED = "敗退"
+    NOT_QUALIFIED = "出場なし"
+
+
+@dataclass(frozen=True)
+class PostseasonOutcome:
+    """球団1つのその年のポストシーズンの結果。
+
+    `label` は画面に出す名前（「日本一」・「CS ファイナルステージ敗退」・「出場なし」）。
+    """
+
+    kind: OutcomeKind
+    label: str
 
 
 @dataclass(frozen=True)
@@ -347,6 +381,20 @@ class _Plan:
 
     def priority_of(self, team_id: int) -> int:
         return self.league_priority.index(self.league_of(team_id))
+
+    def is_participant(self, team_id: int) -> bool:
+        """ポストシーズンに出る球団か（方式 `NPB` は各リーグの上位 `CS_TEAMS`、`CHAMPIONS` は各リーグの1位）。"""
+        if not self.stages:
+            return False
+        places = CS_TEAMS if self.postseason_format is PostseasonFormat.NPB else 1
+        return any(row.team_id == team_id for league in self.leagues for row in league.standings[:places])
+
+    def stage_name(self, index: int) -> str:
+        """`index` 番目の回の名前（日本シリーズは回の数から「準決勝」などを付ける。`Series.name` と同じ）。"""
+        stage = self.stages[index]
+        if stage is not SeriesStage.JAPAN_SERIES:
+            return stage.value
+        return _round_name(self, sum(1 for s in self.stages[: index + 1] if s is SeriesStage.JAPAN_SERIES))
 
 
 def _stages(postseason_format: PostseasonFormat, leagues: Sequence[LeagueFinish]) -> tuple[SeriesStage, ...]:
@@ -622,6 +670,34 @@ class PostseasonBracket:
         if not self.results:
             return PostseasonStatus.NOT_STARTED
         return PostseasonStatus.IN_PROGRESS
+
+    @property
+    def champion_label(self) -> str:
+        """優勝の呼び名。最後の回が日本シリーズなら「日本一」、1リーグ（CS で終わる）なら「CS 優勝」。
+        ポストシーズンが無ければ空。"""
+        if not self.plan.stages:
+            return ""
+        return "日本一" if self.plan.stages[-1] is SeriesStage.JAPAN_SERIES else "CS 優勝"
+
+    def pending_stage_names(self) -> list[str]:
+        """まだ組めていない先の回の名前（回の順）。前の回が決着するまで、対戦は決まらない。"""
+        return [self.plan.stage_name(index) for index in range(len(self.rounds), len(self.plan.stages))]
+
+    def outcome_of(self, team_id: int) -> PostseasonOutcome | None:
+        """球団のその年の結果。勝ち残っている（まだ決まっていない）・ポストシーズンが無ければ None。
+
+        出場しない球団は、勝ち上がりが始まる前から「出場なし」に決まる。
+        """
+        if not self.plan.stages:
+            return None
+        if not self.plan.is_participant(team_id):
+            return PostseasonOutcome(OutcomeKind.NOT_QUALIFIED, OutcomeKind.NOT_QUALIFIED.value)
+        if self.champion == team_id:
+            return PostseasonOutcome(OutcomeKind.CHAMPION, self.champion_label)
+        lost = next((series for series in self.series_of(team_id) if series.loser == team_id), None)
+        if lost is not None:
+            return PostseasonOutcome(OutcomeKind.ELIMINATED, f"{lost.name}敗退")
+        return None
 
     def series(self) -> list[Series]:
         """組めたシリーズ（回の順。CS はリーグの優先順、日本シリーズはトーナメントの枠の順）。"""

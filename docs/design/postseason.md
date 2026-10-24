@@ -25,7 +25,8 @@
 | S1 | 試合の区分（`GameStage`・`Game.stage`）と、公式戦の集計からポストシーズンを外す | 実装済み（#238） |
 | S2 | 勝ち上がりの規則（domain の純粋な関数）・`final_order`・リーグの優先順・エンジンの延長の上限 | 実装済み（#239） |
 | S3 | 進行（`PennantPostseasonService`）・`World.postseason_format`・締める処理の検査・管理コマンド | 実装済み（#240） |
-| S4 | 画面（勝ち上がりの表・ポストシーズンの成績表・GM ホームのカード・設定）と実測 | 未着手 |
+| S4a | 画面から進めて締められる最小（勝ち上がりの表・GM ホームのカード・進めるボタン・作成フォームの方式・世界の終了の直し）と実測 | 実装済み（#241） |
+| S4b | 方式の設定の画面・ポストシーズンの個人成績の表 | 未着手（#280） |
 | S5 | 歴代・球団史への表示（#105 の後）・Wiki への吸収とこのファイルの削除 | 未着手 |
 
 ## 4. 段階ごとの記録
@@ -139,3 +140,50 @@
 - 作成フォームに方式の選択（既定 NPB）を足し、`create_world_with_schedule(postseason_format=...)` に渡す（いまは省いて「なし」）。設定の画面で方式を変えるときは、書き込みのトランザクションの中で「その年のポストシーズンの試合が無い」ことを `PostseasonQuery.results(year)` で読み直す。
 - 方式を変えられるようにしたら、**進める側**のトランザクションの中の読み直し（`PennantPostseasonService._save`）にも方式を足す（計算中に方式が「なし」に変わっても、ポストシーズンの試合を書かない。DDD レビューの指摘）。
 - 勝ち上がりの表・GM ホームのカードは `PostseasonBracketReader.bracket(world, year)` から DTO を作る（`PennantPostseasonService.view(year)`・`option()`）。GM ホームが `close_option()` と勝ち上がりの両方を呼ぶと導出が2回になるので、カードの出し分けは1回の導出で済ませる。
+
+### S4a 画面から進めて締められる最小（2026-10-24。#241）
+
+S4 は S4a（この段階）と S4b（設定の画面と個人成績の表。#280）に分けた（ユーザー決定 2026-10-24）。
+
+**置き場所**
+
+- 見るためのサービス `PennantPostseasonViewService`（`application/pennant_postseason_view.py`）を進めるサービスと分けた（`OffseasonViewService` の前例）。組み立て口 `build_pennant_postseason_view_service(world_id)`。`view(world, year)`（勝ち上がりの表）・`card(world, *, include_advance)`（GM ホームのカード）・`status(year)`（世界の終了の判定）・`years(world)`。S3 の申し送りの `PennantPostseasonService.view()`・`option()` は作らなかった（進める側に読むための依存を足さない）。
+- その年の試合は `PostseasonQuery.games(year)`（id・日付・2球団・得点。1クエリ）で1回だけ読み、表の行と導出の両方に使う（`PostseasonBracketReader.bracket(world, year, results=...)`）。`results(year)` は `games` から写す（勝者の導き方は `PostseasonGameRow.result` の1か所）。表を開ける年は `PostseasonQuery.years()` と、公式戦を終えたいまの年。
+- domain: `PostseasonFormat.description`（作成フォームの説明）・`PostseasonBracket.outcome_of(team_id)`（`PostseasonOutcome`。「日本一」・「◯◯敗退」・「出場なし」。勝ち残っていれば None。S5 でも使う）・`champion_label`（最後の回が日本シリーズなら「日本一」、1リーグは「CS 優勝」）・`pending_stage_names()`（まだ組めていない先の回の名前）・`_Plan.stage_name(index)`・`_Plan.is_participant`。
+- 進めるボタンの文言は `pennant_home._LABELS` に `POSTSEASON_END`、選択肢は `postseason_advance_options(own_alive=)`（範囲と順序は `POSTSEASON_SCREEN_TARGETS`。「次の自軍の試合まで」は自軍が勝ち残っているときだけ。終わる日付と試合数は出さない）。
+- 試合詳細は `GameDetail.stage`・`is_postseason`。
+
+**決めたこと**
+
+- **GM ホームでは勝ち上がりを1回だけ導く**: `card()` で導き、その状況を `close_option(postseason_status=)` と世界の終了の判定（`settled_context`）に渡す。`close_season()` は必ず自分で導き直す（表示にだけ使う）。
+- **世界の終了（`WorldContext.is_over`）は、最終シーズンのポストシーズンが終わるまで偽。** 見出し（`get_context`）では導かない: 世界の全画面が通るので、終了した世界のどの画面でも勝ち上がりを導くことになるため（最初の実装でそうなっていた。DDD レビューの指摘）。終了を出す画面だけが状況を入れる（GM ホームはカードの状況・世界の一覧は `PennantWorldViewService.settle`）。`postseason_settled` が None のまま `is_over` を聞くと例外（`RuntimeError`。黙ってどちらかにしない）。一覧は、壊れた結果（`InvalidPostseason`）の世界を「終わっていない」として出し、一覧ごと落とさない。
+- **両立しない操作は並べない**: ポストシーズン中（開始前・進行中）は締めるカードを出さない。終わったらカードは優勝の1行になり、締めるカードを続けて出す。進めるボタンと「戦力外はポストシーズン中も編成の『戦力外』で選べます」はオーナーにだけ（最終シーズンは代わりに「ポストシーズンが終わると、この世界は終了します」）。
+- 進めるビューは URL を共有し、局面がシーズン終了なら `POSTSEASON_SCREEN_TARGETS` で検査してポストシーズンを進める（公式戦の途中の `postseason_end`、ポストシーズン中の `week` などは「その進め方はできません」）。進めた後は `?since=` を付けずに `#postseason` へ戻る。期間に公式戦が1つも無い `?since=` では「進めた結果」を出さない（まとめは公式戦だけを読むため）。
+- 予定日は `next_day()` からだけ出す（`Series.date_of`・`scheduled_last_day` は画面に出さない。年をまたぐ日付を導いたら次の試合は出さない）。
+- スコアブックのフォームの `MAX_INNINGS = 12` は一本化しない（実データの入力の上限。世界の試合は画面で直さない）。13回の試合詳細が開けることをテストで固定した。
+- 作成フォームの方式は `RadioSelect`（送る値は `PostseasonFormat` の名前、既定 NPB）。説明は `PostseasonFormat.description`。
+
+**実測**（開発 DB のコピー。実データ 8リーグから分岐した 2リーグ12球団・8リーグ48球団の NPB 方式の世界で公式戦を消化。中央値・3回）
+
+| 画面 | 2リーグ | 8リーグ |
+| --- | --- | --- |
+| 勝ち上がりの表（開始前 → 進行中 → 終了） | 65 → 66 → 75ms・18 クエリ（3つとも同じ） | 127 → 141 → 145ms・13 クエリ（3つとも同じ） |
+| GM ホーム（オーナー。終了） | 375ms・64q → 438ms・66q | 533ms・59q → 558ms・61q |
+| GM ホーム（未ログイン。終了） | 274ms・37q → 386ms・50q | 355ms・37q → 443ms・45q |
+| 最終シーズン・終了の GM ホーム（オーナー） | 360ms・52q → 384ms・65q | 554ms・52q → 694ms・60q |
+| 最終シーズン・終了の順位表（ほかの画面の代表） | 36ms・8q → 30ms・8q | 127ms・8q → 132ms・8q |
+| 世界の一覧（最終シーズンを終えた世界が1つ） | 140ms・17q → 286ms・29q | 143ms・17q → 340ms・24q |
+| ポストシーズンの試合詳細（最も長い試合） | 176ms・21q | 589ms・21q |
+
+- 「→」の左は変更前のコード（32b5422）、右は変更後。同じ DB のコピーで測った。
+- 表のページのクエリ数はシリーズと試合の数によらず一定（N+1 でない。テストでも開始前と終了後のクエリ数が同じことを固定）。
+- GM ホームはカード（勝ち上がりの導出 約 100ms・8〜13 クエリ）が足される。オーナーは締めるカードの導出（S3 で足した分）がカードの導出に置き換わるので、増えるのは 2 クエリ。
+- 世界の一覧は、最終シーズンを終えた NPB 方式の世界ごとに導出が1回足される（約 150〜200ms）。1人の世界は5つまでで、終えた世界だけなので見送り。世界の数が増えて遅くなったら、終わったかの判定を軽い経路にする（例: 最後の試合が優勝を決めた試合か）を検討する。
+- 実データの主要画面（`measure_pages`）: クエリ数はすべて同じ、応答は揺れの範囲（変更前後を交互に2回ずつ。例: 選手一覧（投手）374〜389ms → 331〜538ms、試合詳細 673〜732ms → 634〜851ms）。
+
+**S4b への申し送り**
+
+- 方式の設定の画面を足すと、過去の年の方式が今と違いうる。いまの表は**世界のいまの方式で導く**（`PostseasonBracketReader.bracket` が `world.postseason_format` を使う）ので、S4b の決定どおり「その年の試合から方式を導く」に替える。`years()` は試合のある年を返すので、方式を「なし」にした世界の過去の年も開けるようになる（いまは方式「なし」なら表の導出が状況 `NONE` で 404）。
+- 世界バーの「ポストシーズン」のリンク・試合詳細の表へのリンクは `WorldContext.has_postseason`（いまの方式）で出し分けている。方式を変えられるようにしたら、過去の年の表へのリンクの出し方を見直す。
+- 方式を変えるときの読み直し（S3 の申し送り: 進める側の `_save` の中でも方式を読み直す）はまだ入っていない。
+- 個人成績の表は、公式戦と同じ参照クエリに区分の条件を渡して集計する（S1 の決定）。表のページ（`pennant/postseason.html`）にタブか下の区画として足す想定。

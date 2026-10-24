@@ -24,8 +24,10 @@ from myapp.domain.pennant.postseason import (
     POSTSEASON_MAX_INNINGS,
     FinalStanding,
     LeagueFinish,
+    OutcomeKind,
     PostseasonBracket,
     PostseasonFormat,
+    PostseasonOutcome,
     PostseasonResult,
     PostseasonStatus,
     Series,
@@ -604,3 +606,64 @@ class CalendarTest(unittest.TestCase):
         bracket = _bracket(_league(1), _league(2), last=date(2026, 12, 20))
         with self.assertRaises(InvalidPostseason):
             _play(bracket)
+
+
+class OutcomeTest(unittest.TestCase):
+    """球団ごとの結果（`outcome_of`）・優勝の呼び名・まだ組めていない回の名前・方式の説明（#241）。"""
+
+    def test_before_it_starts_only_the_teams_out_of_the_postseason_are_decided(self):
+        bracket = _bracket(_league(1), _league(2))
+        self.assertEqual(bracket.outcome_of(14).kind, OutcomeKind.NOT_QUALIFIED)
+        self.assertEqual(bracket.outcome_of(14).label, "出場なし")
+        for team_id in (11, 12, 13, 21):
+            with self.subTest(team_id=team_id):
+                self.assertIsNone(bracket.outcome_of(team_id))
+
+    def test_every_team_gets_its_outcome_at_the_end(self):
+        # 上位が全部勝つ: 各リーグの1位が日本シリーズへ、優先順で先の 11 が日本一
+        bracket = _play(_bracket(_league(1), _league(2)))
+        self.assertEqual(bracket.outcome_of(11), PostseasonOutcome(OutcomeKind.CHAMPION, "日本一"))
+        self.assertEqual(bracket.outcome_of(21).label, "日本シリーズ敗退")
+        self.assertEqual(bracket.outcome_of(12).label, "CS ファイナルステージ敗退")
+        self.assertEqual(bracket.outcome_of(13).label, "CS ファーストステージ敗退")
+        self.assertEqual(bracket.outcome_of(16).label, "出場なし")
+        self.assertEqual(bracket.outcome_of(999).label, "出場なし")
+
+    def test_with_champions_only_the_first_places_take_part(self):
+        bracket = _bracket(_league(1), _league(2), fmt=CHAMPIONS)
+        self.assertIsNone(bracket.outcome_of(11))
+        self.assertEqual(bracket.outcome_of(12).kind, OutcomeKind.NOT_QUALIFIED)
+
+    def test_no_postseason_has_no_outcome_and_no_label(self):
+        bracket = _bracket(_league(1), fmt=CHAMPIONS)
+        self.assertIs(bracket.status, PostseasonStatus.NONE)
+        self.assertIsNone(bracket.outcome_of(11))
+        self.assertEqual(bracket.champion_label, "")
+        self.assertEqual(bracket.pending_stage_names(), [])
+
+    def test_the_champion_label_depends_on_the_last_round(self):
+        self.assertEqual(_bracket(_league(1), _league(2)).champion_label, "日本一")
+        self.assertEqual(_bracket(_league(1), _league(2), fmt=CHAMPIONS).champion_label, "日本一")
+        one_league = _play(_bracket(_league(1)))
+        self.assertEqual(one_league.champion_label, "CS 優勝")
+        self.assertEqual(one_league.outcome_of(11).label, "CS 優勝")
+
+    def test_the_pending_rounds_are_named_until_they_are_built(self):
+        leagues = [_league(n) for n in range(1, 5)]
+        bracket = _bracket(*leagues)
+        self.assertEqual(
+            bracket.pending_stage_names(),
+            ["CS ファイナルステージ", "日本シリーズ準決勝", "日本シリーズ"],
+        )
+        finished = _play(bracket)
+        self.assertEqual(finished.pending_stage_names(), [])
+        # 回の名前は組んだシリーズの名前と同じ
+        self.assertEqual(
+            [finished.plan.stage_name(i) for i in range(len(finished.rounds))],
+            [round_[0].name for round_ in finished.rounds],
+        )
+
+    def test_every_format_has_a_description(self):
+        for postseason_format in PostseasonFormat:
+            with self.subTest(postseason_format=postseason_format):
+                self.assertTrue(postseason_format.description)

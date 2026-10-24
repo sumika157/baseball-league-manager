@@ -29,6 +29,7 @@ from .dto import (
     PeriodBatting,
     PeriodPitching,
     PlayerFielding,
+    PostseasonGameRow,
     RatingsHistoryFacts,
     ServiceHistory,
     SimulationContext,
@@ -250,6 +251,14 @@ class PostseasonQuery(Protocol):
 
     def results(self, year: int) -> list[PostseasonResult]:
         """その年のポストシーズンの試合の結果（順不同）。"""
+        ...
+
+    def games(self, year: int) -> list[PostseasonGameRow]:
+        """その年のポストシーズンの試合（日付の順）。表の試合の行と、勝ち上がりの導出の両方に使う（2回読まない）。"""
+        ...
+
+    def years(self) -> list[int]:
+        """ポストシーズンの試合のある年（新しい順）。"""
         ...
 
     def last_regular_date(self, year: int) -> date | None:

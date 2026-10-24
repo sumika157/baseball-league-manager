@@ -16,7 +16,13 @@ from datetime import date, timedelta
 
 from ..domain.pennant.form import Outcome, outcome_for, recent_form
 from ..domain.pennant.schedule import AdvanceTarget, Fixture, ScheduleRules, dates_to_play, default_opening_day
-from ..domain.pennant.season import MAX_GAMES_PER_ADVANCE, SCREEN_ADVANCE_TARGETS, SeasonPhase, summary_period
+from ..domain.pennant.season import (
+    MAX_GAMES_PER_ADVANCE,
+    POSTSEASON_SCREEN_TARGETS,
+    SCREEN_ADVANCE_TARGETS,
+    SeasonPhase,
+    summary_period,
+)
 from ..domain.pennant.season import stats_year as stats_year_of
 from ..domain.repositories import FixtureRepository, GameRepository, LeagueRepository, TeamRepository
 from ..domain.value_objects import InningsPitched, format_average
@@ -66,7 +72,21 @@ _LABELS = {
     AdvanceTarget.WEEK: "1週間進める",
     AdvanceTarget.MONTH_END: "月末まで進める",
     AdvanceTarget.LIMIT: "上限まで進める",
+    AdvanceTarget.POSTSEASON_END: "ポストシーズンの終わりまで進める",
 }
+
+
+def postseason_advance_options(*, own_alive: bool) -> list[AdvanceOption]:
+    """ポストシーズンの「進める」の選択肢（範囲と順序は `POSTSEASON_SCREEN_TARGETS` が出典）。
+
+    「次の自軍の試合まで」は自軍が勝ち残っているときだけ（敗退・不出場なら終わりまでと同じになるため出さない）。
+    終わる日付と試合数は、結果を導くまで決まらないので出さない。
+    """
+    return [
+        AdvanceOption(target=target.value, label=_LABELS[target], end_date=None, games=None)
+        for target in POSTSEASON_SCREEN_TARGETS
+        if target is not AdvanceTarget.NEXT_MANAGED_GAME or own_alive
+    ]
 
 
 def _saved_id(value: int | None) -> int:
@@ -316,12 +336,15 @@ class PennantHomeService:
             return None
         after, through = period
         in_period = [game for game in own_games if after < _day(game) <= through]
+        everyone = self._games.list_rows(year=year, after=after, through=through)
+        if not everyone:
+            # 期間に公式戦が1つも無い（ポストシーズンの期間を指す `since`）。まとめは公式戦だけを読むので出さない
+            return None
         results = self._own_results(own_id, in_period)
         outcomes = [result.outcome for result in results]
         before = _find_row(self._teams.get_league_standings(year, through=after), own_id)
         after_row = _find_row(standings, own_id)
         own_ids = {game.id for game in in_period}
-        everyone = self._games.list_rows(year=year, after=after, through=through)
         others = [game for game in everyone if game.id not in own_ids]
         single = in_period[0] if len(in_period) == 1 else None
         return AdvanceSummary(

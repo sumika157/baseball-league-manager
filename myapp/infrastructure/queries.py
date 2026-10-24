@@ -41,6 +41,7 @@ from ..application.dto import (
     PlayerFielding,
     PlayerSearchRow,
     PlayerYearSpan,
+    PostseasonGameRow,
     RatingsHistoryFacts,
     RelatedStint,
     ServiceHistory,
@@ -54,7 +55,7 @@ from ..application.dto import (
 )
 from ..domain.entities import Game, jersey_number_in, winning_team_id
 from ..domain.exceptions import WorldNotFound
-from ..domain.pennant.postseason import PostseasonResult
+from ..domain.pennant.postseason import PostseasonFormat, PostseasonResult
 from ..domain.pennant.retirement import PlayingTime
 from ..domain.pennant.world import WorldScope
 from ..domain.services.rankings import Title
@@ -944,6 +945,7 @@ class DjangoWorldSummaryQuery:
                 next_fixture_on=next_fixture.get(row.id),
                 owner_id=row.owner_id,
                 remaining_by_team=remaining.get(row.id, {}),
+                postseason_format=PostseasonFormat(row.postseason_format),
             )
             for row in rows
         ]
@@ -983,21 +985,35 @@ class DjangoPostseasonQuery:
         self._scope = scope
 
     def results(self, year: int) -> list[PostseasonResult]:
+        # 結果への写し方（勝者の導き方）は `PostseasonGameRow.result` の1か所
+        return [game.result for game in self.games(year)]
+
+    def games(self, year: int) -> list[PostseasonGameRow]:
         rows = (
             games_in(self._scope, stages=StageFilter.POSTSEASON_ONLY)
             .filter(year=year)
             .order_by("played_on", "id")
-            .values_list("played_on", "home_team_id", "away_team_id", "home_score", "away_score")
+            .values_list("id", "played_on", "home_team_id", "away_team_id", "home_score", "away_score")
         )
         return [
-            PostseasonResult(
+            PostseasonGameRow(
+                game_id=game_id,
                 played_on=played_on,
                 home_team_id=home,
                 away_team_id=away,
-                winner_team_id=winning_team_id(home, away, home_score, away_score),
+                home_score=home_score,
+                away_score=away_score,
             )
-            for played_on, home, away, home_score, away_score in rows
+            for game_id, played_on, home, away, home_score, away_score in rows
         ]
+
+    def years(self) -> list[int]:
+        return list(
+            games_in(self._scope, stages=StageFilter.POSTSEASON_ONLY)
+            .order_by("-year")
+            .values_list("year", flat=True)
+            .distinct()
+        )
 
     def last_regular_date(self, year: int) -> date | None:
         last: date | None = (

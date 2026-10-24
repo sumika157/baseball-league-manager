@@ -66,6 +66,18 @@
           {% include 'pennant/_field_errors.html' with errors=form.start_year.errors %}
         </div>
 
+        <div class="mb-3">
+          <div class="form-label">{{ form.postseason_format.label }}</div>
+          {% for radio, description in form.postseason_choices %}
+            <div class="form-check">
+              {{ radio.tag }}
+              <label class="form-check-label" for="{{ radio.id_for_label }}">{{ radio.choice_label }}</label>
+              <div class="stat-muted" style="font-size: 0.8125rem;">{{ description }}</div>
+            </div>
+          {% endfor %}
+          {% include 'pennant/_field_errors.html' with errors=form.postseason_format.errors %}
+        </div>
+
         <details class="mb-3">
           <summary>詳細設定</summary>
           <div class="mt-2">

@@ -26,7 +26,7 @@ from myapp.application.pennant_race import (
     tiebreak_for,
 )
 from myapp.domain.pennant.schedule import AdvanceTarget, Fixture
-from myapp.domain.pennant.season import SCREEN_ADVANCE_TARGETS, SeasonPhase
+from myapp.domain.pennant.season import POSTSEASON_SCREEN_TARGETS, SCREEN_ADVANCE_TARGETS, SeasonPhase
 from myapp.domain.pennant.world import WorldScope
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoGameListQuery, DjangoWorldSummaryQuery
@@ -122,8 +122,8 @@ class AdvanceUnitsTest(HomeCase):
         self.assertIn("一度に進められるのは3試合までです", self.last_message(response))
 
     def test_every_screen_target_is_labelled(self):
-        """ボタンの文言を持たない範囲を、画面の選択肢に足してしまわない。"""
-        self.assertEqual(set(SCREEN_ADVANCE_TARGETS), set(_LABELS))
+        """ボタンの文言を持たない範囲を、画面の選択肢（公式戦とポストシーズン）に足してしまわない。"""
+        self.assertEqual(set(SCREEN_ADVANCE_TARGETS) | set(POSTSEASON_SCREEN_TARGETS), set(_LABELS))
 
 
 class OptionsTest(SimpleTestCase):

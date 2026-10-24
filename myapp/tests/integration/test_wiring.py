@@ -24,6 +24,7 @@ from myapp.application.pennant_home import PennantHomeService
 from myapp.application.pennant_offseason import PennantOffseasonService
 from myapp.application.pennant_offseason_view import OffseasonViewService
 from myapp.application.pennant_postseason import PennantPostseasonService, PostseasonBracketReader
+from myapp.application.pennant_postseason_view import PennantPostseasonViewService
 from myapp.application.pennant_ratings import PennantRatingsViewService
 from myapp.application.pennant_season import PennantSeasonService
 from myapp.application.pennant_view import PennantWorldViewService
@@ -93,6 +94,7 @@ from myapp.presentation.views import (
     build_pennant_home_service,
     build_pennant_offseason_service,
     build_pennant_postseason_service,
+    build_pennant_postseason_view_service,
     build_pennant_ratings_service,
     build_pennant_season_service,
     build_pennant_world_service,
@@ -209,6 +211,18 @@ class BuildServiceTest(SimpleTestCase):
         """勝ち上がりの読み取りは、進める処理と締める処理の検査の両方で、依存を全部渡して組み立てる。"""
         self._assert_wired(build_pennant_postseason_service(7)._brackets, PostseasonBracketReader)
         self._assert_wired(build_pennant_offseason_service(7)._postseason, PostseasonBracketReader)
+
+    def test_pennant_postseason_view_service_dependencies_are_wired_in_the_given_world(self):
+        """勝ち上がりの表・GM ホームのカード・世界の終了の判定を読むサービスも、依存を全部、世界の範囲で渡す。"""
+        service = build_pennant_postseason_view_service(7)
+        self._assert_wired(service, PennantPostseasonViewService)
+        self._assert_wired(service._brackets, PostseasonBracketReader)
+        self.assertEqual(service._world_id, 7)
+        self.assertEqual(service._postseason._scope, WorldScope.pennant(7))
+        self.assertEqual(service._teams._games._scope, WorldScope.pennant(7))
+        self.assertEqual(service._brackets._postseason._scope, WorldScope.pennant(7))
+        with self.assertRaises(InvalidWorld):
+            build_pennant_postseason_view_service(0)
 
     def test_world_view_service_dependencies_are_wired(self):
         """世界の範囲の参照サービスも、実データ用と同じ検査にかける（依存は実データ用と同じ全部）。"""
