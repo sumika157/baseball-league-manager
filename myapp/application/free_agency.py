@@ -2,7 +2,8 @@
 
 参照クエリ（`ServiceHistoryQuery`）が読んだ選手の年ごとの出場・在籍の契約・FA 宣言を、ドメインの
 `fa_outlook` に渡す形にする。推定の規則はドメイン（`domain/services/free_agency.py`）にあり、ここは
-材料を選手ごとに振り分けるだけ。戦力分析の FA 取得タブは、ここを通して見込みを出す。
+材料を選手ごとに振り分けるだけ。戦力分析の FA 取得タブと外国人枠の対象外（`foreign_quota.py`）は、
+ここを通して見込みを出す（同じ組み立てを通るので、タブの取得年と枠の扱いがずれない）。
 """
 
 from __future__ import annotations
@@ -60,6 +61,23 @@ class FaInputs:
             records_from_year=self.records_from_year,
             declared_years=self.declared_years,
             developmental_years=self.developmental_years,
+        )
+
+    def first_domestic_acquisition_year(self) -> int | None:
+        """国内 FA 権を最初に取得した年（FA 宣言で数え直す前。外国人枠の対象外の起点）。"""
+        return domain_services.first_domestic_acquisition_year(
+            education=self.education,
+            entry=self.entry,
+            days_by_year=self.days_by_year,
+            through_year=self.through_year,
+            records_from_year=self.records_from_year,
+            developmental_years=self.developmental_years,
+        )
+
+    def foreign_quota_exempt_from(self) -> int | None:
+        """外国人枠の対象外になる年（最初の取得の翌年と最初の宣言の翌年の早いほう）。外国人かどうかは見ない。"""
+        return domain_services.foreign_quota_exempt_from(
+            acquired_year=self.first_domestic_acquisition_year(), declared_years=self.declared_years
         )
 
 

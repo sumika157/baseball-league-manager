@@ -36,6 +36,7 @@ from ..application.dto import (
     TeamMonthlyRow,
     WorldContext,
 )
+from ..application.foreign_quota import ForeignQuotaExemptions
 from ..application.game_recording import GameRecordingService
 from ..application.game_view import GameViewService
 from ..application.pennant_club_details import ClubDetailsService
@@ -309,7 +310,8 @@ def build_recording_service() -> GameRecordingService:
     """試合の登録とスコアブックの保存を担うサービスを組み立てる。
 
     `build_service()` と同じく**組み立てはここだけ**にする。試合の登録も打席の記録も
-    チームの一覧も試合の一覧も要らないので、依存は4つ（試合・チーム・リーグ・本拠地の球場）で足りる。実データの範囲に固定する。
+    チームの一覧も試合の一覧も要らないので、依存は5つ（試合・チーム・リーグ・本拠地の球場・FA 取得による
+    外国人枠の対象外）で足りる。実データの範囲に固定する。
     """
     scope = WorldScope.real()
     return GameRecordingService(
@@ -317,6 +319,7 @@ def build_recording_service() -> GameRecordingService:
         teams=DjangoTeamRepository(scope),
         leagues=DjangoLeagueRepository(scope),
         home_stadiums=DjangoHomeStadiumQuery(scope),
+        fa_exemptions=ForeignQuotaExemptions(DjangoServiceHistoryQuery(scope)),
     )
 
 
@@ -457,6 +460,7 @@ def build_pennant_season_service(world_id: int) -> PennantSeasonService:
         ratings=DjangoRatingsRepository(scope),
         plans=DjangoClubPlanRepository(scope),
         context_query=DjangoSimulationContextQuery(scope),
+        fa_exemptions=ForeignQuotaExemptions(DjangoServiceHistoryQuery(scope)),
         atomic=transaction.atomic,
     )
 
@@ -482,6 +486,7 @@ def build_pennant_offseason_service(world_id: int) -> PennantOffseasonService:
         titles=build_world_view_service(world_id),
         context_query=DjangoSimulationContextQuery(scope),
         playing_time=DjangoSeasonPlayingTimeQuery(scope),
+        fa_exemptions=ForeignQuotaExemptions(DjangoServiceHistoryQuery(scope)),
         atomic=transaction.atomic,
     )
 
@@ -892,6 +897,7 @@ def build_club_service(world_id: int) -> ClubManagementService:
         ratings=DjangoRatingsRepository(scope),
         fixtures=DjangoFixtureRepository(scope),
         context_query=DjangoSimulationContextQuery(scope),
+        fa_exemptions=ForeignQuotaExemptions(DjangoServiceHistoryQuery(scope)),
     )
 
 

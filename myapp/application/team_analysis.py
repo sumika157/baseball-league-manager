@@ -230,6 +230,10 @@ class TeamAnalysisService:
                     fielding_position=None,
                 ),
                 is_developmental=player.contract.contract_in(year) is ContractStatus.DEVELOPMENTAL,
+                # 外国人選手は、国内 FA の最初の取得（または FA 宣言）の翌年から外国人枠の対象外（協約 第82条 (4)）
+                foreign_quota_exempt_from=(
+                    player_inputs.foreign_quota_exempt_from() if player.is_foreign_player else None
+                ),
             )
             rows.append(((*domain_services.fa_order(outlook), JerseyNumber(number).sort_key), row))
         rows.sort(key=lambda entry: entry[0])

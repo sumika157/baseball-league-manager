@@ -161,6 +161,25 @@ class ActiveRosterTest(TestCase):
         self.assertEqual({b.player_id for b in active.batters if b.counts_as_foreign}, {4, 5, 6})
         self.assertEqual(len(active.batters) + len(active.pitchers), ACTIVE_ROSTER_SIZE)
 
+    def test_foreigners_exempt_by_free_agency_are_chosen_by_ability_without_using_the_quota(self):
+        """協約第82条 (4): FA 資格の取得で枠の対象外の外国人（`counts_as_foreign=False`）は数えず、能力順に入る。"""
+        pool = full_pool(foreign_ids=(4, 5, 6, 7, 8))
+        exempt = {7, 8}
+        pool = ClubRoster(
+            pool.team_id,
+            pool.name,
+            tuple(
+                replace(b, counts_as_foreign=b.counts_as_foreign and b.player_id not in exempt) for b in pool.batters
+            ),
+            pool.pitchers,
+        )
+
+        active = choose_active_roster(pool, rules=ForeignPlayerRules.NPB)
+
+        chosen = {b.player_id for b in active.batters}
+        self.assertTrue({4, 5, 6, 7, 8} <= chosen, "対象外の2人も能力どおり1軍に入る")
+        self.assertEqual({b.player_id for b in active.batters if b.counts_as_foreign}, {4, 5, 6})
+
     def test_the_agreement_caps_the_total_at_four(self):
         pool = full_pool(foreign_ids=(4, 5, 6, 101, 102, 103))
 

@@ -23,6 +23,8 @@ from ..application.dto import (
     AwardRow,
     ContractFacts,
     DeclarationFact,
+    FaSubject,
+    FaSubjects,
     FielderUsage,
     FieldingRow,
     GameNote,
@@ -1309,19 +1311,72 @@ class DjangoServiceHistoryQuery:
             )
             for stint in stints_in(self._scope).filter(player_id__in=player_ids, from_year__lte=year)
         ]
-        declarations = [
-            DeclarationFact(player_id=row.player_id, year=row.year, kind=FreeAgencyKind.from_label(row.kind))
-            for row in orm_models.PlayerFreeAgentDeclaration.objects.filter(
-                player_id__in=player_ids, year__lte=year
-            ).order_by("player_id", "year")
-        ]
-        recorded = games_in(self._scope).filter(recorded_games_filter()).order_by().aggregate(first=Min("year"))
         return ServiceHistory(
             spans=[
                 PlayerYearSpan(player_id=player_id, year=span_year, first_on=first, last_on=last)
                 for (player_id, span_year), (first, last) in spans.items()
             ],
             stints=stints,
-            declarations=declarations,
-            records_from_year=recorded["first"],
+            declarations=self._declarations(player_ids, year),
+            records_from_year=self._records_from_year(),
         )
+
+    def load_fa_subjects(self, player_ids: list[int], through_year: int) -> FaSubjects:
+        """選手の属性と最初の在籍の加入年・FA 宣言・記録のある最初の年（4本。選手の数に比例しない）。
+
+        選手と在籍は範囲の中だけを読む（範囲の外の選手は載らない）。
+        """
+        first_stint_year = {
+            row["player_id"]: row["first"]
+            for row in stints_in(self._scope)
+            .filter(player_id__in=player_ids, from_year__lte=through_year)
+            .values("player_id")
+            .annotate(first=Min("from_year"))
+            .order_by()
+        }
+        players = (
+            players_in(self._scope)
+            .filter(id__in=player_ids)
+            .only(
+                "id",
+                "draft_year",
+                "draft_round",
+                "is_development_draft",
+                "is_foreign_player",
+                "high_school",
+                "university",
+                "corporate_team",
+            )
+        )
+        return FaSubjects(
+            subjects=[
+                FaSubject(
+                    player_id=player.id,
+                    draft=draft_of(player.draft_year, player.draft_round, is_development=player.is_development_draft),
+                    is_foreign_player=player.is_foreign_player,
+                    high_school=player.high_school,
+                    university=player.university,
+                    corporate_team=player.corporate_team,
+                    first_stint_year=first_stint_year.get(player.id),
+                )
+                for player in players
+            ],
+            declarations=self._declarations(player_ids, through_year),
+            records_from_year=self._records_from_year(),
+        )
+
+    @staticmethod
+    def _declarations(player_ids: list[int], year: int) -> list[DeclarationFact]:
+        """選手の year 年までの FA 宣言（選手で絞るので範囲の外に出ない）。"""
+        return [
+            DeclarationFact(player_id=row.player_id, year=row.year, kind=FreeAgencyKind.from_label(row.kind))
+            for row in orm_models.PlayerFreeAgentDeclaration.objects.filter(
+                player_id__in=player_ids, year__lte=year
+            ).order_by("player_id", "year")
+        ]
+
+    def _records_from_year(self) -> int | None:
+        """範囲の中で試合の記録がある最初の年。記録が無ければ None。"""
+        recorded = games_in(self._scope).filter(recorded_games_filter()).order_by().aggregate(first=Min("year"))
+        first: int | None = recorded["first"]
+        return first
