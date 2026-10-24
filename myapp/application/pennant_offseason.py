@@ -20,6 +20,8 @@
 締める年のタイトル受賞者は**表彰として保存する**（#248。CLAUDE.md の「集計を保存しない」の例外）。受賞者は外で
 タイトルの画面と同じ集計から導き（`pennant_awards.derive_awards`。8リーグで 0.6〜2.9秒）、中では書くだけ。
 戦力外の実績の加点に使うタイトルの数は、締めた年までの表彰と、いま導いた締める年の受賞を足す（過去の年を導き直さない）。
+締める年のポストシーズンの優勝球団（日本一）も**記録として保存する**（#242。表彰と同じ例外）。勝ち上がりは外で1回だけ導き、
+締められるかの検査（ポストシーズンが終わったか）と、書く優勝球団の両方に使う。
 
 **前提: 世界の `Team` 集約に書くのは、世界の作成とこの処理だけ。** 外で読んだ `Team` を中でそのまま
 `save()` して安全なのは、この前提による（`save()` は変わった行だけを書くが、比べる相手は今の DB なので、
@@ -36,7 +38,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 
 from ..domain.entities import Player, Team
@@ -48,6 +50,7 @@ from ..domain.exceptions import (
     TeamNotFound,
 )
 from ..domain.pennant.awards import Award, title_counts
+from ..domain.pennant.championship import Championship
 from ..domain.pennant.club_plan import ClubMember, PlanSection
 from ..domain.pennant.offseason import Draftee, OffseasonClub, OffseasonPlan, OffseasonPlayer, plan_offseason
 from ..domain.pennant.offseason_player import TrackRecord
@@ -60,6 +63,7 @@ from ..domain.pennant.season import is_final_season, is_season_closed, regular_s
 from ..domain.pennant.world import World
 from ..domain.repositories import (
     AwardRepository,
+    ChampionshipRepository,
     ClubPlanRepository,
     FixtureRepository,
     LeagueRepository,
@@ -102,6 +106,8 @@ class _PreparedClose:
     year: int
     # 締める年のタイトル受賞者（表彰として書く。ロックの外で導いた値）
     awards: list[Award]
+    # 締める年の日本一（記録として書く。ロックの外で導いた勝ち上がりから `close_season` が入れる）。無い年は None
+    championship: Championship | None = None
 
 
 class PennantOffseasonService:
@@ -119,6 +125,7 @@ class PennantOffseasonService:
         plans: ClubPlanRepository,
         releases: ReleasePlanRepository,
         awards: AwardRepository,
+        championships: ChampionshipRepository,
         titles: TeamApplicationService,
         context_query: SimulationContextQuery,
         playing_time: SeasonPlayingTimeQuery,
@@ -134,6 +141,7 @@ class PennantOffseasonService:
         self._plans = plans
         self._releases = releases
         self._awards = awards
+        self._championships = championships
         # タイトルの受賞者を導く（世界の範囲の、タイトルの画面と同じサービス）
         self._titles = titles
         self._context_query = context_query
@@ -182,9 +190,16 @@ class PennantOffseasonService:
         # トランザクションの中にいる間は他の書き込みを止めるため。中では状態が変わっていないことだけを確かめ、書く
         world = self._worlds.find_by_id(self._world_id)
         state = self._state()
-        year = self._check(world, expected_year=expected_year)
+        year = self._season_over_year(world, expected_year=expected_year)
+        # 勝ち上がりは1回だけ導き、締められるかの検査と、記録する日本一の両方に使う
+        bracket = self._postseason.bracket(world, year)
+        _ensure_postseason_settled(year, bracket.status)
         self._ensure_not_closed(world, year)
-        prepared = self._prepare(world, year)
+        champion = bracket.champion
+        prepared = replace(
+            self._prepare(world, year),
+            championship=Championship(year=year, team_id=champion) if champion is not None else None,
+        )
         with self._atomic():
             if self._state() != state:
                 # 計算している間に、別のリクエストが進めた・締めた。古い読み込みを書かない。
@@ -367,8 +382,7 @@ class PennantOffseasonService:
         """
         year = self._season_over_year(world, expected_year=expected_year)
         status = self._postseason.status(world, year) if postseason_status is None else postseason_status
-        if not status.is_settled:
-            raise PostseasonNotFinished(f"{year}年のポストシーズンがまだ終わっていません。")
+        _ensure_postseason_settled(year, status)
         return year
 
     def _season_over_year(self, world: World, *, expected_year: int | None) -> int:
@@ -459,6 +473,9 @@ class PennantOffseasonService:
         self._fixtures.add_all(prepared.schedule)
         # 締める年のタイトル受賞者を表彰として書く（導いたのはロックの外。#248）
         self._awards.add_all(prepared.awards)
+        # 締める年の日本一を記録として書く（導いたのはロックの外。#242）
+        if prepared.championship is not None:
+            self._championships.add(prepared.championship)
 
         return SeasonClosed(
             year=year,
@@ -580,3 +597,9 @@ def _team_of(teams: Sequence[SimulationTeam], team_id: int) -> SimulationTeam:
     if team is None:
         raise TeamNotFound(f"球団が見つかりません（id={team_id}）。")
     return team
+
+
+def _ensure_postseason_settled(year: int, status: PostseasonStatus) -> None:
+    """その年のポストシーズンが終わった（または無い）か。終わっていなければ `PostseasonNotFinished`（締めない）。"""
+    if not status.is_settled:
+        raise PostseasonNotFinished(f"{year}年のポストシーズンがまだ終わっていません。")

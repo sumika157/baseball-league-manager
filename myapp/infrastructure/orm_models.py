@@ -1017,3 +1017,26 @@ class PennantAward(models.Model):
 
     def __str__(self) -> str:
         return f"{self.year}年 {self.get_title_display()} {self.player_id}"
+
+
+class PennantChampionship(models.Model):
+    """ペナントの日本一の記録。締めたシーズンのポストシーズンの優勝球団（1リーグの世界は CS の優勝）。
+
+    CLAUDE.md の「集計を保存しない」の例外（表彰と同じ。範囲は締めたシーズンの優勝球団だけ。#242）。書くのは
+    シーズンを締める処理だけで、そのとき導いた優勝球団をそのまま写す。世界の列は持たない。球団のリーグで世界が決まる。
+    1世界1年に1つは、リポジトリが書く前に検査する（世界は球団の先にあるので、DB の一意制約では言えない）。
+    """
+
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="+", verbose_name="球団")
+    year = models.PositiveSmallIntegerField(verbose_name="年度")
+
+    class Meta:
+        verbose_name = "ペナントの日本一"
+        verbose_name_plural = "ペナントの日本一"
+        ordering = ["year", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["team", "year"], name="unique_pennant_championship"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.year}年 {self.team_id}"

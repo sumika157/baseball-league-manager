@@ -38,6 +38,7 @@ from ..domain.exceptions import (
     AlreadyClosed,
     GameNotFound,
     InvalidAward,
+    InvalidChampionship,
     InvalidGame,
     InvalidPosition,
     InvalidRatings,
@@ -49,6 +50,7 @@ from ..domain.exceptions import (
     WorldNotFound,
 )
 from ..domain.pennant.awards import Award
+from ..domain.pennant.championship import Championship
 from ..domain.pennant.club_plan import ClubPlan, LineupChoice
 from ..domain.pennant.postseason import PostseasonFormat
 from ..domain.pennant.ratings import PlayerRatings
@@ -87,6 +89,7 @@ from . import orm_models
 from .scoping import (
     StageFilter,
     awards_in,
+    championships_in,
     club_plans_in,
     fixtures_in,
     game_rows_in_world,
@@ -1434,6 +1437,8 @@ _WORLD_ROWS_CHILD_FIRST: tuple[tuple[type[models.Model], str], ...] = (
     # 能力は選手の在籍をたどって世界が決まるので、在籍を消す前に消す
     # 表彰は選手・球団・リーグを指すので、それらを消す前に消す
     (orm_models.PennantAward, "league"),
+    # 日本一の記録は球団を指すので、球団を消す前に消す
+    (orm_models.PennantChampionship, "team__league"),
     # 編成と戦力外の指名は選手を指すので、選手を消す前に消す（行から先に）
     (orm_models.PennantClubPlanEntry, "plan__team__league"),
     (orm_models.PennantClubPlan, "team__league"),
@@ -1783,6 +1788,27 @@ class DjangoAwardRepository:
         known = set(players_in(self._scope).filter(id__in=player_ids).values_list("id", flat=True))
         if missing := sorted(player_ids - known):
             raise InvalidAward(f"この世界に居ない選手の表彰は保存できません（id={missing[0]}）。")
+
+
+class DjangoChampionshipRepository:
+    """ChampionshipRepository の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る。
+
+    日本一の記録はペナント専用で、実データの範囲には書けない。他の世界の記録は、読めも書けもしない。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    @transaction.atomic
+    def add(self, championship: Championship) -> None:
+        if self._scope.is_real:
+            raise InvalidWorld("日本一の記録はペナントの世界にだけ保存できます。")
+        if not teams_in(self._scope).filter(id=championship.team_id).exists():
+            raise InvalidChampionship(f"この世界に無い球団の日本一は保存できません（id={championship.team_id}）。")
+        # 1世界1年に1つ（世界は球団のリーグで決まるので、DB の一意制約では言えない）
+        if championships_in(self._scope).filter(year=championship.year).exists():
+            raise InvalidChampionship(f"{championship.year}年の日本一は既に記録しています。")
+        orm_models.PennantChampionship.objects.create(team_id=championship.team_id, year=championship.year)
 
 
 class DjangoWorldRepository:

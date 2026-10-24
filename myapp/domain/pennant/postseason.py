@@ -5,7 +5,7 @@
 同じ年の勝ち上がりで同じ2球団が当たるのは1回だけなので、シリーズは2球団から、第何戦かは日付の順から決まる。
 
 規則は NPB の現行の規定（2026年）を 1〜8リーグに写したもの（出典と一般化の理由は Issue #39 と
-`docs/design/postseason.md`）:
+Wiki「ペナントモードの仕組み」の「ポストシーズン」）:
 
 - **CS**（方式 `NPB` だけ）: 各リーグの上位 `min(3, 球団数)`。ファーストステージ（2位 vs 3位、3試合・先に2勝・
   全試合2位のホーム）→ ファイナルステージ（1位 vs FS の勝者、6試合・1位に1勝のアドバンテージ・先に4勝・
@@ -247,6 +247,16 @@ def played_format(results: Iterable[PostseasonResult], league_of: Mapping[int, i
         if home == away:
             return PostseasonFormat.NPB
     return PostseasonFormat.CHAMPIONS
+
+
+def champion_title(league_count: int) -> str:
+    """ポストシーズンの優勝の呼び名。**呼び名の唯一の出典**（勝ち上がりの表・歴代の記録・球団史・世界の終了）。
+
+    2リーグ以上は最後の回が日本シリーズなので「日本一」、1リーグは CS で終わるので「CS 優勝」
+    （1リーグの「優勝球団で日本シリーズ」は対戦が組めず、優勝が無い）。世界のリーグの数は作った後に変わらないので、
+    保存した日本一（`championship.py`）の呼び名もこれで決まる。
+    """
+    return "日本一" if league_count >= 2 else "CS 優勝"
 
 
 @dataclass(frozen=True)
@@ -701,7 +711,7 @@ class PostseasonBracket:
         ポストシーズンが無ければ空。"""
         if not self.plan.stages:
             return ""
-        return "日本一" if self.plan.stages[-1] is SeriesStage.JAPAN_SERIES else "CS 優勝"
+        return champion_title(len(self.plan.leagues))
 
     def pending_stage_names(self) -> list[str]:
         """まだ組めていない先の回の名前（回の順）。前の回が決着するまで、対戦は決まらない。"""

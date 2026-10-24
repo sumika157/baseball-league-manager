@@ -38,6 +38,7 @@ from ..application.dto import (
 )
 from ..application.game_recording import GameRecordingService
 from ..application.game_view import GameViewService
+from ..application.pennant_championships import PostseasonHistoryReader
 from ..application.pennant_club_details import ClubDetailsService
 from ..application.pennant_history import PennantHistoryService
 from ..application.pennant_home import PennantHomeService
@@ -90,6 +91,7 @@ from ..domain.value_objects import (
 )
 from ..infrastructure.queries import (
     DjangoAwardQuery,
+    DjangoChampionshipQuery,
     DjangoFieldingTotalsQuery,
     DjangoGameListQuery,
     DjangoHomeStadiumQuery,
@@ -110,6 +112,7 @@ from ..infrastructure.queries import (
 )
 from ..infrastructure.repositories import (
     DjangoAwardRepository,
+    DjangoChampionshipRepository,
     DjangoClubPlanRepository,
     DjangoFixtureRepository,
     DjangoGameRepository,
@@ -459,6 +462,7 @@ def build_pennant_offseason_service(world_id: int) -> PennantOffseasonService:
         plans=DjangoClubPlanRepository(scope),
         releases=DjangoReleasePlanRepository(scope),
         awards=DjangoAwardRepository(scope),
+        championships=DjangoChampionshipRepository(scope),
         titles=build_world_view_service(world_id),
         context_query=DjangoSimulationContextQuery(scope),
         playing_time=DjangoSeasonPlayingTimeQuery(scope),
@@ -564,6 +568,7 @@ def build_pennant_home_service(world_id: int) -> PennantHomeService:
         activity=DjangoPennantActivityQuery(scope),
         team_records=DjangoTeamRepository(scope),
         leagues=DjangoLeagueRepository(scope),
+        postseason=_postseason_history(world_id),
     )
 
 
@@ -581,6 +586,17 @@ def build_pennant_history_service(world_id: int) -> PennantHistoryService:
         team_records=DjangoTeamRepository(scope),
         leagues=DjangoLeagueRepository(scope),
         awards=DjangoAwardQuery(scope),
+        postseason=_postseason_history(world_id),
+    )
+
+
+def _postseason_history(world_id: int) -> PostseasonHistoryReader:
+    """日本一と球団ごとのポストシーズンの結果の読み取り（歴代の記録・球団史・世界の終了が使う）。依存は全部、世界の範囲で作る。"""
+    scope = WorldScope.pennant(world_id)
+    return PostseasonHistoryReader(
+        worlds=DjangoWorldRepository(),
+        postseason=DjangoPostseasonQuery(scope),
+        championships=DjangoChampionshipQuery(scope),
     )
 
 
@@ -741,6 +757,7 @@ def pennant_world(request, world_id):
         since=_parse_date(request.GET.get("since")),
         league_id=int(league) if league and league.isdigit() else None,
         include_advance=is_owner,
+        postseason=postseason,
     )
     # 「シーズンを締める」はシーズン終了のオーナーにだけ出す。ポストシーズンが終わるまでは出さない（進めるのと
     # 締めるのを同じ画面に並べない）。最終シーズンを終えた世界は締められないので、締めるカードの代わりに

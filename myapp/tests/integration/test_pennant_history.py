@@ -7,6 +7,7 @@
 世界は球団2つ（1リーグ）なので、リーグの切り替えは選び方の単体で確かめる。
 """
 
+from datetime import date
 from types import SimpleNamespace
 from unittest import mock
 
@@ -17,7 +18,7 @@ from django.urls import reverse
 
 from myapp.application.dto import LeagueOption, LeagueStandings, StandingRow
 from myapp.application.pennant_history import _selected_league
-from myapp.application.pennant_race import final_standings, own_race, tiebreak_for
+from myapp.application.pennant_race import final_standings, league_finishes, own_race, tiebreak_for
 from myapp.domain.exceptions import TeamNotFound
 from myapp.domain.pennant.schedule import AdvanceTarget
 from myapp.infrastructure import orm_models
@@ -361,7 +362,12 @@ class FinalStandingsTest(SimpleTestCase):
 
     def game(self, year, winner, loser):
         return SimpleNamespace(
-            year=year, is_recorded=True, winner_team_id=winner, home_team_id=winner, away_team_id=loser
+            year=year,
+            played_on=date(year, 9, 1),
+            is_recorded=True,
+            winner_team_id=winner,
+            home_team_id=winner,
+            away_team_id=loser,
         )
 
     def finals(self, years, standings, games):
@@ -444,7 +450,14 @@ class ChampionAgreementTest(SimpleTestCase):
         standings = [LeagueStandings(league_id=1, league_name="リーグ", rows=self.ROWS)]
         games = {
             year: [
-                SimpleNamespace(year=year, is_recorded=True, winner_team_id=w, home_team_id=w, away_team_id=loser)
+                SimpleNamespace(
+                    year=year,
+                    played_on=date(year, 9, 1),
+                    is_recorded=True,
+                    winner_team_id=w,
+                    home_team_id=w,
+                    away_team_id=loser,
+                )
                 for w, loser in results
             ]
             for year, results in self.RESULTS.items()
@@ -479,3 +492,13 @@ class ChampionAgreementTest(SimpleTestCase):
                         "進行中の判定と最終の優勝が食い違っている",
                     )
         self.assertEqual([dict(f.champions) for f in finals], [{1: 2}, {1: 2}])
+        for final in finals:
+            with self.subTest(year=final.year, path="全順序"):
+                # ポストシーズンの出場と種を決める全順序も、2つの経路（歴代の側の `final_standings` と、
+                # 勝ち上がりの読み取りの `tiebreak_for`）で同じ（食い違うと、導いた勝ち上がりが試合と合わない）
+                self.assertEqual(
+                    final.finishes,
+                    league_finishes(standings, tiebreak_for(final.year, games=query, teams=teams)),
+                )
+                self.assertEqual([row.team_id for row in final.finishes[0].standings], [2, 1, 3])
+                self.assertEqual(final.last_regular_date, date(final.year, 9, 1))

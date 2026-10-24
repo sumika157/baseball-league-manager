@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import date
 from typing import Protocol, runtime_checkable
 
@@ -22,6 +22,7 @@ from ..domain.value_objects import FieldingLine
 from .dto import (
     ActivePlayerStats,
     AwardRow,
+    ChampionshipRow,
     GameNote,
     GameRow,
     HomeStadium,
@@ -257,6 +258,11 @@ class PostseasonQuery(Protocol):
         """その年のポストシーズンの試合（日付の順）。表の試合の行と、勝ち上がりの導出の両方に使う（2回読まない）。"""
         ...
 
+    def results_by_year(self, years: Collection[int]) -> dict[int, list[PostseasonResult]]:
+        """`years` の各年のポストシーズンの試合の結果（年 -> 結果。試合の無い年は載らない）。1クエリで読む
+        （歴代の記録・球団史が年ごとに読まない）。"""
+        ...
+
     def years(self) -> list[int]:
         """ポストシーズンの試合のある年（新しい順）。"""
         ...
@@ -355,4 +361,16 @@ class AwardQuery(Protocol):
         self, *, league_id: int | None = None, team_id: int | None = None, player_id: int | None = None
     ) -> list[AwardRow]:
         """範囲の表彰。リーグ・球団（受賞した年の所属）・選手で絞れる。"""
+        ...
+
+
+@runtime_checkable
+class ChampionshipQuery(Protocol):
+    """ペナントの日本一の記録（締めたシーズンのポストシーズンの優勝球団）の参照。球団名を添える。
+
+    書くのは domain の `ChampionshipRepository`（シーズンを締める処理だけ）。範囲（世界）は組み立てるときに必須で渡す。
+    """
+
+    def list_championships(self) -> list[ChampionshipRow]:
+        """範囲の日本一の記録（古い順）。"""
         ...

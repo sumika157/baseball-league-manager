@@ -203,6 +203,7 @@ class PennantPostseasonViewService:
             year=world.season_year,
             status=bracket.status,
             champion_label=bracket.champion_label,
+            champion_team_id=bracket.champion,
             champion_name=_name(names, bracket.champion),
             own_outcome=_own_outcome(bracket, own_id),
             own_series=_series_view(own_series[-1], _games_by_key(games), names, leagues) if own_series else None,

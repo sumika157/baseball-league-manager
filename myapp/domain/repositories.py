@@ -17,6 +17,7 @@ from typing import Protocol, runtime_checkable
 
 from .entities import Game, League, Team
 from .pennant.awards import Award
+from .pennant.championship import Championship
 from .pennant.club_plan import ClubPlan
 from .pennant.ratings import PlayerRatings
 from .pennant.release import ReleasePlan
@@ -298,4 +299,19 @@ class AwardRepository(Protocol):
 
     def count_by_player(self) -> dict[int, int]:
         """選手ごとの表彰の数（戦力外の実績の加点の材料）。表彰の無い選手は含まない。"""
+        ...
+
+
+@runtime_checkable
+class ChampionshipRepository(Protocol):
+    """ペナントの日本一の記録（締めたシーズンの優勝球団。`Championship`）。書くのはシーズンを締める処理だけ。
+
+    ペナントの世界にだけ置ける。画面に出すときは参照クエリ（`application/queries.py` の `ChampionshipQuery`）で読む。
+    """
+
+    def add(self, championship: Championship) -> None:
+        """日本一を保存する。すでに記録のある年をもう一度書くことはできない（InvalidChampionship）。
+
+        実データの範囲には書けない（InvalidWorld）。範囲の外の球団は書けない（InvalidChampionship）。
+        """
         ...

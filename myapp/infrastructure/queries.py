@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import fields
 from datetime import date, timedelta
 from itertools import groupby
@@ -21,6 +21,7 @@ from ..application.dto import (
     ActivePlayerStats,
     AnalysisRosterRow,
     AwardRow,
+    ChampionshipRow,
     ContractFacts,
     DeclarationFact,
     FielderUsage,
@@ -93,6 +94,7 @@ from .repositories import (
 from .scoping import (
     StageFilter,
     awards_in,
+    championships_in,
     fixtures_in_worlds,
     game_rows_condition,
     games_in,
@@ -999,22 +1001,38 @@ class DjangoPostseasonQuery:
         return [game.result for game in self.games(year)]
 
     def games(self, year: int) -> list[PostseasonGameRow]:
+        return [row for _, row in self._rows(year=year)]
+
+    def results_by_year(self, years: Collection[int]) -> dict[int, list[PostseasonResult]]:
+        wanted = sorted(set(years))
+        by_year: dict[int, list[PostseasonResult]] = {}
+        if not wanted:
+            return by_year
+        for year, row in self._rows(year__in=wanted):
+            by_year.setdefault(year, []).append(row.result)
+        return by_year
+
+    def _rows(self, **years: object) -> list[tuple[int, PostseasonGameRow]]:
+        """ポストシーズンの試合（年と行。日付の順）。`years` は年の条件（`year=` か `year__in=`）。"""
         rows = (
             games_in(self._scope, stages=StageFilter.POSTSEASON_ONLY)
-            .filter(year=year)
+            .filter(**years)
             .order_by("played_on", "id")
-            .values_list("id", "played_on", "home_team_id", "away_team_id", "home_score", "away_score")
+            .values_list("year", "id", "played_on", "home_team_id", "away_team_id", "home_score", "away_score")
         )
         return [
-            PostseasonGameRow(
-                game_id=game_id,
-                played_on=played_on,
-                home_team_id=home,
-                away_team_id=away,
-                home_score=home_score,
-                away_score=away_score,
+            (
+                year,
+                PostseasonGameRow(
+                    game_id=game_id,
+                    played_on=played_on,
+                    home_team_id=home,
+                    away_team_id=away,
+                    home_score=home_score,
+                    away_score=away_score,
+                ),
             )
-            for game_id, played_on, home, away, home_score, away_score in rows
+            for year, game_id, played_on, home, away, home_score, away_score in rows
         ]
 
     def years(self) -> list[int]:
@@ -1175,6 +1193,21 @@ class DjangoAwardQuery:
             )
         ]
         return sorted(awards, key=lambda award: award.sort_key)
+
+
+class DjangoChampionshipQuery:
+    """ChampionshipQuery の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る。球団名は1本の JOIN で読む。"""
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def list_championships(self) -> list[ChampionshipRow]:
+        return [
+            ChampionshipRow(year=year, team_id=team_id, team_name=team_name)
+            for year, team_id, team_name in championships_in(self._scope)
+            .order_by("year", "id")
+            .values_list("year", "team_id", "team__name")
+        ]
 
 
 class DjangoRatingsHistoryQuery:
