@@ -4,6 +4,7 @@ from unittest import TestCase
 
 from myapp.domain.entities import League
 from myapp.domain.exceptions import DomainError, ForeignPlayerQuotaExceeded, RegisteredPlayerLimitExceeded
+from myapp.domain.services.foreign_quota import counts_toward_foreign_quota, foreign_quota_exempt_from
 from myapp.domain.value_objects import ForeignPlayerRules, Position, ensure_quota_not_exceeded
 
 NPB = ForeignPlayerRules.NPB
@@ -104,3 +105,38 @@ class CountByRegisteredPositionTest(TestCase):
     def test_has_room_for_a_position(self):
         self.assertFalse(NPB.has_room_for([Position.PITCHER] * 3, Position.PITCHER))
         self.assertTrue(NPB.has_room_for([Position.PITCHER] * 3, Position.CATCHER))
+
+
+class ForeignQuotaExemptFromTest(TestCase):
+    """FA 資格の取得で外国人枠の対象外になる年（協約 第82条 (4)。公示の次の年度のシーズンから）。"""
+
+    def test_the_year_after_the_acquisition(self):
+        self.assertEqual(foreign_quota_exempt_from(acquired_year=2033, declared_years=()), 2034)
+
+    def test_the_year_after_the_declaration(self):
+        self.assertEqual(foreign_quota_exempt_from(acquired_year=None, declared_years=[2030]), 2031)
+
+    def test_the_earlier_of_the_two(self):
+        self.assertEqual(foreign_quota_exempt_from(acquired_year=2033, declared_years=[2035, 2031]), 2032)
+        self.assertEqual(foreign_quota_exempt_from(acquired_year=2029, declared_years=[2031]), 2030)
+
+    def test_none_without_either(self):
+        self.assertIsNone(foreign_quota_exempt_from(acquired_year=None, declared_years=()))
+
+
+class CountsTowardForeignQuotaTest(TestCase):
+    def test_counts_in_the_acquisition_year_and_not_from_the_next_year(self):
+        exempt_from = foreign_quota_exempt_from(acquired_year=2033, declared_years=())
+        self.assertTrue(counts_toward_foreign_quota(is_foreign_player=True, exempt_from=exempt_from, year=2033))
+        self.assertFalse(counts_toward_foreign_quota(is_foreign_player=True, exempt_from=exempt_from, year=2034))
+        self.assertFalse(counts_toward_foreign_quota(is_foreign_player=True, exempt_from=exempt_from, year=2040))
+
+    def test_a_foreigner_without_exemption_counts(self):
+        self.assertTrue(counts_toward_foreign_quota(is_foreign_player=True, exempt_from=None, year=2040))
+
+    def test_a_player_without_the_flag_never_counts(self):
+        for exempt_from in (None, 2030):
+            with self.subTest(exempt_from=exempt_from):
+                self.assertFalse(
+                    counts_toward_foreign_quota(is_foreign_player=False, exempt_from=exempt_from, year=2026)
+                )

@@ -21,6 +21,7 @@ from ..domain.value_objects import FieldingLine
 from .dto import (
     ActivePlayerStats,
     AwardRow,
+    FaSubjects,
     GameNote,
     GameRow,
     HomeStadium,
@@ -293,8 +294,25 @@ class TeamAnalysisQuery(Protocol):
         """その年にそのチームへ在籍していた選手と、その年の出場・登板の数、入退団の材料（在籍）。"""
         ...
 
+
+@runtime_checkable
+class ServiceHistoryQuery(Protocol):
+    """選手の FA 資格の推定の材料（年ごとの出場・在籍の契約・FA 宣言）の参照。
+
+    チームを問わず選手のキャリア通算で読む。実装は組み立て時に `WorldScope`（必須）を受け取り、その範囲の
+    試合と在籍だけを読む。推定の規則はドメイン層（`domain/services/free_agency.py`）にあり、ここは材料を返すだけ。
+    """
+
     def load_service_history(self, player_ids: list[int], year: int) -> ServiceHistory:
-        """FA 取得タブの材料。選手の year 年までの年ごとの初出場〜最終出場と、全在籍の契約。固定本数。"""
+        """選手の year 年までの年ごとの初出場〜最終出場と、全在籍の契約・FA 宣言。固定本数。"""
+        ...
+
+    def load_fa_subjects(self, player_ids: list[int], through_year: int) -> FaSubjects:
+        """選手の属性（ドラフト・外国人選手フラグ・学歴）と最初の在籍の加入年・FA 宣言・記録のある最初の年。
+
+        `through_year` 年までを読む。出場（`load_service_history`）より軽い前段で、外国人枠の対象外を導くとき、
+        取得しえない選手の出場を読まないために使う。固定本数。
+        """
         ...
 
 

@@ -80,7 +80,9 @@ class PlayerOption:
 def player_option(detail: ClubPlayerDetail[ClubPlayerRow]) -> PlayerOption:
     """選手の選択肢。選ぶ材料として、能力の総合と年齢を添える（能力・生年月日が無ければ省く）。"""
     row = detail.player
-    notes = [row.position.value] + (["外国人"] if row.is_foreign else []) + ([] if row.is_active else ["1軍外"])
+    # FA 資格の取得で枠の対象外の外国人は、そう添える（人数で数えない理由）
+    foreign = (["外国人", "FA取得で枠外"] if row.quota_exempt else ["外国人"]) if row.is_foreign else []
+    notes = [row.position.value, *foreign] + ([] if row.is_active else ["1軍外"])
     if detail.overall is not None:
         notes.append(f"総合{detail.overall.grade} {detail.overall.value}")
     if detail.age is not None:

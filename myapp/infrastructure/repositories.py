@@ -86,6 +86,7 @@ from . import orm_models
 from .scoping import (
     awards_in,
     club_plans_in,
+    declarations_in,
     fixtures_in,
     games_in,
     home_stadium_in,
@@ -162,7 +163,7 @@ class _RosterData:
     declarations: dict[int, list[FreeAgentDeclaration]]
 
     @classmethod
-    def for_players(cls, rows: Iterable[orm_models.Player]) -> _RosterData:
+    def for_players(cls, rows: Iterable[orm_models.Player], scope: WorldScope) -> _RosterData:
         players = {row.id: row for row in rows}
         player_ids = list(players)
         return cls(
@@ -171,7 +172,7 @@ class _RosterData:
             pitching=pitching_totals(player_ids),
             careers=_careers_of(player_ids),
             captaincies=_captaincies_of(player_ids),
-            declarations=_declarations_of(player_ids),
+            declarations=_declarations_of(player_ids, scope),
         )
 
 
@@ -202,7 +203,7 @@ class DjangoTeamRepository:
         except orm_models.Team.DoesNotExist:
             raise TeamNotFound(f"チームが見つかりません（id={team_id}）。") from None
 
-        return self._to_domain(row, roster=_RosterData.for_players(s.player for s in row.stints.all()))
+        return self._to_domain(row, roster=_RosterData.for_players((s.player for s in row.stints.all()), self._scope))
 
     def roster_signature(self) -> tuple[int, int, int]:
         """範囲の在籍の目印（在籍の行数・現在在籍の人数・最大の id）。クエリ1本。
@@ -241,7 +242,7 @@ class DjangoTeamRepository:
         """渡したチーム全部のロスターを、選手をまとめて1度に読んで組み立てる。"""
         team_rows = list(rows)
         # チームごとに引くとチーム数ぶんのクエリになる（_RosterData の説明を参照）
-        roster = _RosterData.for_players(s.player for row in team_rows for s in row.stints.all())
+        roster = _RosterData.for_players((s.player for row in team_rows for s in row.stints.all()), self._scope)
         return [self._to_domain(row, roster=roster) for row in team_rows]
 
     @staticmethod
@@ -417,13 +418,16 @@ def _careers_of(player_ids: list[int]) -> dict[int, list[Stint]]:
     return careers
 
 
-def _declarations_of(player_ids: list[int]) -> dict[int, list[FreeAgentDeclaration]]:
-    """選手ごとの FA 宣言。新しい順に並べる。_careers_of と同じく選手 id の集合で1本のクエリにする。"""
+def _declarations_of(player_ids: list[int], scope: WorldScope) -> dict[int, list[FreeAgentDeclaration]]:
+    """選手ごとの FA 宣言。新しい順に並べる。_careers_of と同じく選手 id の集合で1本のクエリにする。
+
+    範囲の選手の宣言だけを読む（`declarations_in`。範囲の外の選手の id を渡されても読まない）。
+    """
     if not player_ids:
         return {}
 
     declarations: dict[int, list[FreeAgentDeclaration]] = {}
-    rows = orm_models.PlayerFreeAgentDeclaration.objects.filter(player_id__in=player_ids).order_by("-year", "-id")
+    rows = declarations_in(scope).filter(player_id__in=player_ids).order_by("-year", "-id")
     for row in rows:
         declarations.setdefault(row.player_id, []).append(
             FreeAgentDeclaration(id=row.id, year=row.year, kind=FreeAgencyKind.from_label(row.kind))

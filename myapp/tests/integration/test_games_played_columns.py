@@ -34,15 +34,15 @@ class GamesPlayedColumnTest(BaseCase):
         )
 
     def test_the_roster_lists_games_and_appearances(self):
-        batters = {row.name: row.games for row in self.service.list_batters(self.team.id).rows}
-        pitchers = {row.name: row.appearances for row in self.service.list_pitchers(self.team.id).rows}
+        batters = {row.name: row.games for row in self.team_view.list_batters(self.team.id).rows}
+        pitchers = {row.name: row.appearances for row in self.team_view.list_pitchers(self.team.id).rows}
 
         self.assertEqual(batters, {"正選手": 3, "控え": 1})
         self.assertEqual(pitchers, {"先発": 1, "中継ぎ": 3})
 
     def test_the_roster_sorts_by_games_and_appearances_most_first(self):
-        batters = self.service.list_batters(self.team.id, sort="games")
-        pitchers = self.service.list_pitchers(self.team.id, sort="appearances")
+        batters = self.team_view.list_batters(self.team.id, sort="games")
+        pitchers = self.team_view.list_pitchers(self.team.id, sort="appearances")
 
         self.assertEqual((batters.sort, batters.descending), ("games", True))
         self.assertEqual([row.name for row in batters.rows], ["正選手", "控え"])

@@ -415,6 +415,7 @@ class FinaleTest(SimpleTestCase):
     def service(self, games):
         return PennantHomeService(
             teams=self.Teams(),
+            team_view=None,
             games=games,
             game_records=None,
             fixtures=None,

@@ -27,7 +27,7 @@
           {% endif %}
           <td><a href="{% scoped_url 'player_detail' club.team_id row.player_id %}" class="player-name">{{ row.name }}</a></td>
           <td>{{ row.position.value }}</td>
-          <td>{% if row.is_foreign %}<span class="badge bg-secondary">外国人</span>{% endif %}</td>
+          <td>{% if row.is_foreign %}<span class="badge bg-secondary">外国人</span>{% if row.quota_exempt %} <span class="stat-muted text-nowrap" title="FA 資格の取得で、この年の外国人枠の対象外（野球協約 第82条 (4)）">FA取得で枠外</span>{% endif %}{% endif %}</td>
           <td>{% if row.is_active %}1軍{% else %}<span class="stat-muted">2軍</span>{% endif %}</td>
           <td class="text-end stat-muted">{{ detail.age|default:'—' }}</td>
           <td>

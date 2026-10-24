@@ -18,6 +18,7 @@ from ..helpers import (
     build_game_view_service,
     build_roster_service,
     build_service,
+    build_team_view_service,
     default_workspace,
     make_league,
     make_stadium,
@@ -48,6 +49,7 @@ class BaseCase(TestCase):
         self.service = build_service(scope)
         self.roster = build_roster_service(scope)
         self.game_view = build_game_view_service(scope)
+        self.team_view = build_team_view_service(scope)
 
     def skip_roster_check(self) -> None:
         """世界の作成の名簿の検査を外す。

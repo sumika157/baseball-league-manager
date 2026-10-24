@@ -41,6 +41,7 @@ from myapp.presentation.views import build_recording_service as build_recording_
 from myapp.presentation.views import build_roster_service as build_roster_service
 from myapp.presentation.views import build_service as build_service
 from myapp.presentation.views import build_team_analysis_service as build_team_analysis_service
+from myapp.presentation.views import build_team_view_service as build_team_view_service
 
 LINEUP_SIZE = 9
 

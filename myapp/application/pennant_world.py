@@ -14,6 +14,7 @@ from collections.abc import Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 
+from ..domain import services as domain_services
 from ..domain.entities import League, Player, Team
 from ..domain.exceptions import InvalidWorld, TeamNotFound
 from ..domain.pennant.club_plan import ClubMember, ensure_roster_playable
@@ -173,11 +174,22 @@ class PennantWorldService:
         # 世界のリーグで最も厳しい規則で見る（交流戦はどのリーグとも当たる。進める処理と同じ）
         game_foreign = ForeignPlayerRules.strictest(league.foreign_rules for league in source.leagues)
         # 育成選手は試合に出られず、進める処理の候補にも入らない（`SimulationContextQuery`）ので、
-        # 今の区分が支配下の選手だけで組めるかを見る
+        # 今の区分が支配下の選手だけで組めるかを見る。
+        # FA 資格の取得による外国人枠の対象外（協約 第82条 (4)）は導かず、フラグどおりに数える（`exempt_from=None`）:
+        # 世界の FA は分岐後の記録（開幕年から）で数えるので、開幕年に対象外の選手はいない
         for teams in source.rosters:
             for team in teams:
                 members = [
-                    ClubMember(_saved_id(player.id), player.name, player.position, player.profile.is_foreign_player)
+                    ClubMember(
+                        _saved_id(player.id),
+                        player.name,
+                        player.position,
+                        counts_as_foreign=domain_services.counts_toward_foreign_quota(
+                            is_foreign_player=player.profile.is_foreign_player,
+                            exempt_from=None,
+                            year=world.start_year,
+                        ),
+                    )
                     for player in team.active_players
                     if team.contract_of(player) is ContractStatus.REGISTERED
                 ]

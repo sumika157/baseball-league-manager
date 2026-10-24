@@ -51,8 +51,8 @@ class RelativeMetricsTest(BaseCase):
 
     def test_a_lone_player_sits_at_the_league_average(self):
         """リーグにその選手しかいなければ、本人がリーグ平均そのもの＝100。"""
-        batter = self.service.get_player_detail(self.team.id, self.batter.id)
-        pitcher = self.service.get_player_detail(self.team.id, self.pitcher.id)
+        batter = self.team_view.get_player_detail(self.team.id, self.batter.id)
+        pitcher = self.team_view.get_player_detail(self.team.id, self.pitcher.id)
 
         self.assertAlmostEqual(batter.ops_plus, 100.0)
         self.assertAlmostEqual(pitcher.era_plus, 100.0)
@@ -62,7 +62,7 @@ class RelativeMetricsTest(BaseCase):
         weak = self.roster.register_player(self.team.id, "田中", 11, "外野手")
         give_batting(self.team, self.rival, weak.id, BattingLine(at_bats=10, singles=1), day=3)
 
-        rows = {r.name: r for r in self.service.list_batters(self.team.id).rows}
+        rows = {r.name: r for r in self.team_view.list_batters(self.team.id).rows}
 
         self.assertGreater(rows["山田"].ops_plus, 100.0)
         self.assertLess(rows["田中"].ops_plus, 100.0)
@@ -78,7 +78,7 @@ class RelativeMetricsTest(BaseCase):
             day=4,
         )
 
-        rows = {r.name: r for r in self.service.list_pitchers(self.team.id).rows}
+        rows = {r.name: r for r in self.team_view.list_pitchers(self.team.id).rows}
 
         self.assertGreater(rows["佐藤"].era_plus, rows["鈴木"].era_plus)
         self.assertGreater(rows["佐藤"].era_plus, 100.0)
@@ -98,7 +98,7 @@ class RelativeMetricsTest(BaseCase):
         )
 
         # 別リーグに強打者が現れても、こちらのリーグの基準は動かない
-        detail = self.service.get_player_detail(self.team.id, self.batter.id)
+        detail = self.team_view.get_player_detail(self.team.id, self.batter.id)
 
         self.assertAlmostEqual(detail.ops_plus, 100.0)
 
@@ -143,7 +143,7 @@ class AdvancedMetricsTest(BaseCase):
         )
 
     def test_new_counts_survive_the_round_trip(self):
-        detail = self.service.get_player_detail(self.team.id, self.pitcher.id)
+        detail = self.team_view.get_player_detail(self.team.id, self.pitcher.id)
 
         self.assertEqual(detail.home_runs_allowed, 1)
         self.assertEqual(detail.hit_by_pitch_allowed, 1)
@@ -154,12 +154,12 @@ class AdvancedMetricsTest(BaseCase):
         定数はリーグ全体の防御率と素点の差なので、本人＝リーグ全体のとき
         素点との差がそのまま埋まる。
         """
-        detail = self.service.get_player_detail(self.team.id, self.pitcher.id)
+        detail = self.team_view.get_player_detail(self.team.id, self.pitcher.id)
 
         self.assertAlmostEqual(detail.fip, detail.earned_run_average)
 
     def test_isolated_power(self):
-        detail = self.service.get_player_detail(self.team.id, self.batter.id)
+        detail = self.team_view.get_player_detail(self.team.id, self.batter.id)
 
         self.assertAlmostEqual(detail.isolated_power, detail.slugging_percentage - detail.batting_average)
 
@@ -192,12 +192,12 @@ class AdvancedMetricsTest(BaseCase):
             day=3,
         )
 
-        listing = self.service.list_pitchers(self.team.id, sort="fip")
+        listing = self.team_view.list_pitchers(self.team.id, sort="fip")
 
         self.assertEqual([r.name for r in listing.rows], ["佐藤", "田中"])
 
     def test_team_totals_include_fip(self):
-        totals = self.service.get_team_totals(self.team.id)
+        totals = self.team_view.get_team_totals(self.team.id)
 
         self.assertAlmostEqual(totals.fip, totals.earned_run_average)
 

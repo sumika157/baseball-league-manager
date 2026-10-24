@@ -335,10 +335,10 @@ class RankingScreensDoNotBuildAggregatesTest(BaseCase):
         """球団の選手一覧・チームの合計・リーグの成績一覧も、ロスターの集約（通算を全シーズンぶん読む）を経由しない。"""
         self._forbid_aggregates()
 
-        self.assertEqual(self.service.get_team_name(self.team.id), "テストチーム")
-        batters = self.service.list_batters(self.team.id)
-        pitchers = self.service.list_pitchers(self.team.id, year=2026)
-        totals = self.service.get_team_totals(self.team.id)
+        self.assertEqual(self.team_view.get_team_name(self.team.id), "テストチーム")
+        batters = self.team_view.list_batters(self.team.id)
+        pitchers = self.team_view.list_pitchers(self.team.id, year=2026)
+        totals = self.team_view.get_team_totals(self.team.id)
         stats = self.service.get_league_stats(self.league.id)
 
         self.assertEqual([row.name for row in batters.rows], ["大砲"])

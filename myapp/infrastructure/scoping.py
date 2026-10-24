@@ -104,6 +104,19 @@ def ratings_in(scope: WorldScope) -> QuerySet[orm_models.PennantPlayerRatings]:
     return orm_models.PennantPlayerRatings.objects.filter(player_id__in=players_in(scope).values("id"))
 
 
+def declarations_in(scope: WorldScope) -> QuerySet[orm_models.PlayerFreeAgentDeclaration]:
+    """範囲の選手の FA 宣言。宣言は選手の行に付くので、`players_in` と同じく範囲の在籍がある選手で絞る。
+
+    呼ぶ側が渡す選手の id だけで絞ると、ほかのワークスペース・世界の選手の id を渡されたときに宣言が漏れる。
+    条件は宣言の行ごとの相関した `Exists`（同じ1本の中）。`player_id__in=players_in(scope)` の形にすると、
+    相関しない副問い合わせが全ワークスペースの選手を走査する（チームの読み込みのたびに）。
+    """
+    in_scope = orm_models.PlayerStint.objects.filter(player_id=OuterRef("player_id")).filter(
+        world_condition("team__league", scope)
+    )
+    return orm_models.PlayerFreeAgentDeclaration.objects.filter(Exists(in_scope))
+
+
 def players_in(scope: WorldScope) -> QuerySet[orm_models.Player]:
     """範囲に属する選手。範囲のリーグの球団に在籍の行がある選手（肯定形の `Exists`）。
 

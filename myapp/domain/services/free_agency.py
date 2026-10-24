@@ -256,6 +256,45 @@ def fa_outlook(
     )
 
 
+def first_domestic_acquisition_year(
+    *,
+    education: EducationPath,
+    entry: ProEntry | None,
+    days_by_year: Mapping[int, int],
+    through_year: int,
+    records_from_year: int,
+    developmental_years: Collection[int] = (),
+) -> int | None:
+    """国内 FA 権を**最初に**取得した年。`through_year` 年までに取得していなければ None。
+
+    判定は `fa_outlook` を FA 宣言なし（`declared_years=()`）で呼んだ結果だけを使う（取得の規則を2つ書かない）。
+    権利を行使して数え直しても最初の取得は消えないので、宣言は渡さない。取得年が「遅くとも Y」
+    （記録より前の年を数えられない）でも Y を返す（記録から言える年）。
+    """
+    outlook = fa_outlook(
+        education=education,
+        entry=entry,
+        days_by_year=days_by_year,
+        through_year=through_year,
+        records_from_year=records_from_year,
+        developmental_years=developmental_years,
+    )
+    if outlook.domestic.kind is not FaStatusKind.ACQUIRED:
+        return None
+    return outlook.domestic.acquired_year
+
+
+def earliest_domestic_acquisition_year(entry: ProEntry, records_from_year: int) -> int:
+    """国内 FA 権を取得しうる最も早い年（記録を読む前に、取得しえない選手を外すための下限）。
+
+    数えるのは記録のある年だけなので、数え始めはプロ入りと記録の最初の年の遅いほう。そこから1年に
+    最大1シーズンずつ数え、必要なシーズン数（短縮に当たりうるなら `DOMESTIC_SEASONS_COLLEGE`、それ以外は
+    `DOMESTIC_SEASONS`）に達する年が下限。`first_domestic_acquisition_year` は、この年より前の年を返さない。
+    """
+    required = DOMESTIC_SEASONS_COLLEGE if entry.college_rule_may_apply else DOMESTIC_SEASONS
+    return max(entry.year, records_from_year) + required - 1
+
+
 def fa_order(outlook: FaOutlook) -> tuple[int, int]:
     """並びのキー。取得済み、取得が近い順、不明（数えた分だけの上限があるものを先）の順。国内FAで見る。"""
     status = outlook.domestic
