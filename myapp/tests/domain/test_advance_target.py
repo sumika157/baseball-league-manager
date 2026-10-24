@@ -8,6 +8,8 @@ from myapp.domain.exceptions import InvalidSchedule
 from myapp.domain.pennant.schedule import AdvanceTarget, Fixture, dates_to_play
 
 MINE, OTHER_A, OTHER_B = 1, 2, 3
+# 公式戦の日程に使える範囲（ポストシーズンの終わりまでは公式戦の日程には使えない）
+REGULAR_TARGETS = [target for target in AdvanceTarget if target is not AdvanceTarget.POSTSEASON_END]
 
 
 def _d(month: int, day: int) -> datetime.date:
@@ -83,13 +85,18 @@ class DatesToPlayTests(TestCase):
         self.assertEqual(sorted({f.date for f in FIXTURES}), self._dates(AdvanceTarget.SEASON_END))
 
     def test_nothing_left_gives_nothing(self) -> None:
-        for target in AdvanceTarget:
+        for target in REGULAR_TARGETS:
             self.assertEqual([], self._dates(target, today=_d(5, 2)), target)
             self.assertEqual([], dates_to_play([], TODAY, target, MINE), target)
 
     def test_every_target_includes_the_next_game_date(self) -> None:
-        for target in AdvanceTarget:
+        for target in REGULAR_TARGETS:
             self.assertEqual(_d(4, 1), self._dates(target)[0], target)
+
+    def test_the_postseason_end_is_refused_for_the_regular_schedule(self) -> None:
+        """ポストシーズンの範囲を公式戦の日程に当てても、残り全部にはならず断る（範囲の取り違え）。"""
+        with self.assertRaises(InvalidSchedule):
+            self._dates(AdvanceTarget.POSTSEASON_END)
 
     def test_result_is_sorted_and_unique(self) -> None:
         shuffled = list(reversed(FIXTURES))

@@ -1,0 +1,43 @@
+{% load scoped %}
+{% comment %}
+勝ち上がりの表のシリーズ1つ（SeriesView を series で渡す）。上位（アドバンテージ・第1戦の本拠地の側）を上に置く。
+上位の勝利数はアドバンテージ込み。試合のスコアはビジター - ホームの順（試合詳細の見出しと同じ並び）。
+{% endcomment %}
+<div class="card h-100" data-testid="postseason-series">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span>{{ series.name }}{% if series.league_name %}（{{ series.league_name }}）{% endif %}</span>
+    <span class="stat-muted">{% if series.is_decided %}{{ series.winner_name }}が勝ち抜け{% else %}進行中{% endif %}</span>
+  </div>
+  <div class="card-body">
+    <table class="table table-sm mb-2 tabular-nums">
+      <tbody>
+        <tr{% if series.winner_team_id == series.upper_team_id %} class="fw-semibold"{% endif %}>
+          <td><a href="{% scoped_url 'player_list' series.upper_team_id %}" class="player-name">{{ series.upper_team_name }}</a>{% if series.advantage %} <span class="stat-muted">（アドバンテージ {{ series.advantage }}勝）</span>{% endif %}</td>
+          <td class="text-end stat-key">{{ series.upper_wins }}勝</td>
+        </tr>
+        <tr{% if series.winner_team_id == series.lower_team_id %} class="fw-semibold"{% endif %}>
+          <td><a href="{% scoped_url 'player_list' series.lower_team_id %}" class="player-name">{{ series.lower_team_name }}</a></td>
+          <td class="text-end stat-key">{{ series.lower_wins }}勝</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="stat-muted mb-2" style="font-size: 0.8125rem;">{{ series.rules_label }}{% if series.ties %} · 引分 {{ series.ties }}{% endif %}</p>
+    {% if series.games %}
+      <table class="table table-sm mb-0 tabular-nums">
+        <tbody>
+          {% for game in series.games %}
+            <tr>
+              <td class="stat-muted">第{{ game.number }}戦</td>
+              <td class="stat-muted">{{ game.played_on|date:"n月j日" }}</td>
+              <td>{{ game.away_team_name }} {{ game.away_score }} - {{ game.home_score }} {{ game.home_team_name }}</td>
+              <td>{% if game.winner_name %}{{ game.winner_name }}{% else %}引分{% endif %}</td>
+              <td class="text-end"><a href="{% scoped_url 'game_detail' game.game_id %}" class="card-header-link">詳細</a></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="stat-muted mb-0">まだ試合がありません。</p>
+    {% endif %}
+  </div>
+</div>

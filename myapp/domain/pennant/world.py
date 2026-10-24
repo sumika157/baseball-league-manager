@@ -17,6 +17,7 @@ from datetime import date
 
 from ..exceptions import InvalidWorkspace, InvalidWorld
 from ..value_objects import Season
+from .postseason import PostseasonFormat
 
 MAX_NAME_LENGTH = 100
 # 乱数のシード。永続化先（64ビット符号つき整数）に収まる範囲
@@ -37,6 +38,37 @@ MAX_SEASONS_PER_WORLD = 10
 # 開幕年の上限。最後のシーズン（開幕年 + 上限 − 1）が `Season` の範囲に収まる年。
 # **世界を作るときだけ**検査する（保存済みの世界を読み戻せなくしないため）
 MAX_START_YEAR = Season.MAX_YEAR - MAX_SEASONS_PER_WORLD + 1
+
+
+def league_priority(league_ids: Iterable[int], *, year: int, start_year: int) -> list[int]:
+    """その年のリーグの優先順。**リーグの優先順の唯一の出典**。
+
+    日本シリーズの本拠地と種の同率に使う（#198 のドラフトでも使う予定）。
+
+    リーグを id の順に並べ、`(年 − 開幕年) mod リーグ数` だけ左に回す。2リーグなら年ごとに交互で、
+    開幕年はいちばん id の小さいリーグが先。3リーグ以上は1年に1つずつ先頭が入れ替わる。
+    """
+    ids = sorted(set(league_ids))
+    if not ids:
+        return []
+    shift = (year - start_year) % len(ids)
+    return ids[shift:] + ids[:shift]
+
+
+def postseason_format_change_blocker(*, started: bool, world_over: bool) -> str | None:
+    """ポストシーズンの方式を変えられない理由。変えられるなら None。**方式を変えられる条件の唯一の出典**。
+
+    - `world_over`: 最終シーズンを終えた世界（これ以上シーズンが無いので、変えても使われない）
+    - `started`: いまの年度のポストシーズンの試合がある（途中で方式が変わると、勝ち上がりが導けなくなる）。
+      締めると年度が翌年に進むので、締めた後は変えられる（締めた年の勝ち上がりは、その年の試合から導く）
+
+    公式戦の途中・ポストシーズンの開始前は変えられる（その年のポストシーズンから新しい方式になる）。
+    """
+    if world_over:
+        return "この世界は最終シーズンを終えているので、ポストシーズンの方式は変えられません。"
+    if started:
+        return "今年のポストシーズンが始まっているので、方式は変えられません。"
+    return None
 
 
 def earliest_start_year(birth_dates: Iterable[date | None]) -> int:
@@ -103,8 +135,8 @@ class WorldScope:
 class World:
     """世界。ペナントモードのセーブデータひとつぶん。
 
-    持つのは作ったときに決まる事実だけ。「今日」や「シーズン中か」は持たない
-    （日程と試合から導けるので、持つと食い違う）。
+    持つのは作ったときに決まる事実と、オーナーが変えられる設定（ポストシーズンの方式）だけ。
+    「今日」や「シーズン中か」・ポストシーズンの勝ち上がりは持たない（日程と試合から導けるので、持つと食い違う）。
     """
 
     name: str
@@ -118,6 +150,8 @@ class World:
     # 属するワークスペース。作るときに範囲のワークスペースを渡す（`PennantWorldService`）。
     # 空のままの世界は保存できない（`DjangoWorldRepository.save` が `InvalidWorld` で拒む）
     workspace_id: int | None = None
+    # ポストシーズンの方式（`PostseasonFormat` が選択肢の出典）。既定の「なし」は、方式を足す前に作った世界と同じ進み方
+    postseason_format: PostseasonFormat = PostseasonFormat.NONE
 
     def __post_init__(self) -> None:
         self.name = (self.name or "").strip()
@@ -129,6 +163,8 @@ class World:
             raise InvalidWorld(f"乱数のシードは 0〜{MAX_SEED} の整数にしてください。")
         # 開幕年は在籍の加入年になる。年として成り立たない値はここで弾く
         self.start_year = Season(self.start_year).year
+        if not isinstance(self.postseason_format, PostseasonFormat):
+            raise InvalidWorld("ポストシーズンの方式が正しくありません。")
 
     def __str__(self) -> str:
         return self.name

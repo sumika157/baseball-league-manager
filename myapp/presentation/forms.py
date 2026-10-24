@@ -14,6 +14,7 @@ from django.core.exceptions import ValidationError
 from ..application.dto import LeagueTeams, LineupSlot
 from ..domain.entities import FieldingError, PlateAppearance, RunnerAdvance
 from ..domain.exceptions import DomainError, InvalidJerseyNumber, InvalidPosition
+from ..domain.pennant.postseason import PostseasonFormat
 from ..domain.pennant.world import MAX_NAME_LENGTH, MAX_SEED, MAX_SOURCE_LEAGUES, MAX_START_YEAR
 from ..domain.value_objects import (
     AdvanceReason,
@@ -293,6 +294,36 @@ class PlateAppearanceForm(forms.Form):
         )
 
 
+def _postseason_format_field(*, initial: PostseasonFormat | None = None) -> forms.ChoiceField:
+    """ポストシーズンの方式の項目（作成フォームと設定の画面で共有）。
+
+    選択肢は domain の `PostseasonFormat` が出典（送る値は名前、表示は `label`）。
+    """
+    return forms.ChoiceField(
+        label="ポストシーズン",
+        choices=[(option.name, option.label) for option in PostseasonFormat],
+        initial=initial.name if initial is not None else None,
+        widget=forms.RadioSelect(attrs={"class": "form-check-input"}),
+    )
+
+
+def _postseason_choices(form: forms.Form) -> list[tuple[Any, str]]:
+    """方式の選択肢（ラジオボタン）と、その1行の説明（`PostseasonFormat.description`）の組。"""
+    return [(radio, PostseasonFormat[radio.data["value"]].description) for radio in form["postseason_format"]]
+
+
+class PostseasonFormatForm(forms.Form):
+    """世界の設定の画面の、ポストシーズンの方式の変更。初期値は世界のいまの方式（ビューが渡す）。"""
+
+    postseason_format = _postseason_format_field()
+
+    def clean_postseason_format(self) -> PostseasonFormat:
+        return PostseasonFormat[self.cleaned_data["postseason_format"]]
+
+    def postseason_choices(self) -> list[tuple[Any, str]]:
+        return _postseason_choices(self)
+
+
 class PennantWorldForm(forms.Form):
     """ペナントの世界の作成。元にするリーグ（1〜8）と、受け持つ球団（必須）を選ぶ。
 
@@ -320,6 +351,8 @@ class PennantWorldForm(forms.Form):
         max_value=MAX_SEED,
         widget=forms.NumberInput(attrs={"class": "form-control"}),
     )
+    # 新しい世界の既定は NPB 方式
+    postseason_format = _postseason_format_field(initial=PostseasonFormat.NPB)
 
     def __init__(self, *args, groups: Sequence[LeagueTeams], default_year: int, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -333,6 +366,12 @@ class PennantWorldForm(forms.Form):
             (group.league_name, [(str(team.id), team.name) for team in group.teams]) for group in groups
         ]
         self.fields["start_year"].initial = default_year
+
+    def clean_postseason_format(self) -> PostseasonFormat:
+        return PostseasonFormat[self.cleaned_data["postseason_format"]]
+
+    def postseason_choices(self) -> list[tuple[Any, str]]:
+        return _postseason_choices(self)
 
     def clean(self):
         cleaned = super().clean()

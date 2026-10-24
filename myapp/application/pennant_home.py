@@ -2,7 +2,7 @@
 
 材料は次の3つに分けて読み、**世界の全試合を集約として組み立てない**（`.claude/rules/performance.md`）。
 
-- 順位・タイトル: 世界の範囲で組み立てた `TeamApplicationService`、主力: 同じく `TeamViewService`（既存の参照）
+- 順位・タイトル: 世界の範囲で組み立てた `LeagueViewService`、主力: 同じく `TeamViewService`（既存の参照）
 - 自軍の試合・期間の試合: `GameListQuery`（試合の一覧の SQL。明細は読まない）
 - 責任投手・本塁打・期間の成績: `PennantActivityQuery`（明細の SQL 集計）
 
@@ -16,7 +16,13 @@ from datetime import date, timedelta
 
 from ..domain.pennant.form import Outcome, outcome_for, recent_form
 from ..domain.pennant.schedule import AdvanceTarget, Fixture, ScheduleRules, dates_to_play, default_opening_day
-from ..domain.pennant.season import MAX_GAMES_PER_ADVANCE, SCREEN_ADVANCE_TARGETS, SeasonPhase, summary_period
+from ..domain.pennant.season import (
+    MAX_GAMES_PER_ADVANCE,
+    POSTSEASON_SCREEN_TARGETS,
+    SCREEN_ADVANCE_TARGETS,
+    SeasonPhase,
+    summary_period,
+)
 from ..domain.pennant.season import stats_year as stats_year_of
 from ..domain.repositories import FixtureRepository, GameRepository, LeagueRepository, TeamRepository
 from ..domain.value_objects import InningsPitched, format_average
@@ -36,6 +42,7 @@ from .dto import (
     PeriodBatter,
     PeriodBatting,
     PeriodPitching,
+    PostseasonCard,
     StandingRow,
     TitleRaceRow,
     UpcomingGame,
@@ -43,10 +50,11 @@ from .dto import (
     WorldDeletion,
     WorldFinale,
 )
+from .league_view import LeagueViewService
+from .pennant_championships import PostseasonHistoryReader, YearChampion
 from .pennant_race import final_standings, own_race, remaining_by_team, team_order, tiebreak_for
 from .queries import GameListQuery, PennantActivityQuery
 from .scorebook_view import build_line_score
-from .services import TeamApplicationService
 from .standings import record_label
 from .team_view import TeamViewService
 
@@ -67,7 +75,21 @@ _LABELS = {
     AdvanceTarget.WEEK: "1週間進める",
     AdvanceTarget.MONTH_END: "月末まで進める",
     AdvanceTarget.LIMIT: "上限まで進める",
+    AdvanceTarget.POSTSEASON_END: "ポストシーズンの終わりまで進める",
 }
+
+
+def postseason_advance_options(*, own_alive: bool) -> list[AdvanceOption]:
+    """ポストシーズンの「進める」の選択肢（範囲と順序は `POSTSEASON_SCREEN_TARGETS` が出典）。
+
+    「次の自軍の試合まで」は自軍が勝ち残っているときだけ（敗退・不出場なら終わりまでと同じになるため出さない）。
+    終わる日付と試合数は、結果を導くまで決まらないので出さない。
+    """
+    return [
+        AdvanceOption(target=target.value, label=_LABELS[target], end_date=None, games=None)
+        for target in POSTSEASON_SCREEN_TARGETS
+        if target is not AdvanceTarget.NEXT_MANAGED_GAME or own_alive
+    ]
 
 
 def _saved_id(value: int | None) -> int:
@@ -76,12 +98,12 @@ def _saved_id(value: int | None) -> int:
 
 
 class PennantHomeService:
-    """GM ホームと世界の削除の確認の材料を作る。`teams`・`team_view` は世界の範囲で組み立てたサービス。"""
+    """GM ホームと世界の削除の確認の材料を作る。`league_view`・`team_view` は世界の範囲で組み立てたサービス。"""
 
     def __init__(
         self,
         *,
-        teams: TeamApplicationService,
+        league_view: LeagueViewService,
         team_view: TeamViewService,
         games: GameListQuery,
         game_records: GameRepository,
@@ -89,8 +111,9 @@ class PennantHomeService:
         activity: PennantActivityQuery,
         team_records: TeamRepository,
         leagues: LeagueRepository,
+        postseason: PostseasonHistoryReader,
     ) -> None:
-        self._teams = teams
+        self._league_view = league_view
         # 主力打者・投手陣（自軍の選手の一覧）
         self._team_view = team_view
         # 世界の終了の通算が、年ごとの順位を作るために読む（順位の規則は domain の `standings`）
@@ -101,13 +124,23 @@ class PennantHomeService:
         self._game_records = game_records
         self._fixtures = fixtures
         self._activity = activity
+        # 世界の終了の日本一（締めた年は記録、最終シーズンは導く）
+        self._postseason = postseason
 
     def get_home(
-        self, world: WorldContext, *, since: date | None = None, league_id: int | None = None, include_advance: bool
+        self,
+        world: WorldContext,
+        *,
+        since: date | None = None,
+        league_id: int | None = None,
+        include_advance: bool,
+        postseason: PostseasonCard | None = None,
     ) -> PennantHome:
         """GM ホームの材料。`since` は「進める前の今日」（URL の値なので信用しない）。
 
         `include_advance` は「進める」の選択肢を作るか（オーナーにしか出さないので、他の人には読まない）。
+        `postseason` は呼び手（GM ホームのビュー）が既に導いたいまの年度のポストシーズンのカード。渡せば、世界の終了の
+        最終シーズンの日本一を導き直さない（1回の表示で勝ち上がりを2回導かない。`close_option` と同じ）。
         受け持つ球団が無い世界でも開ける（自軍に関する区画が空になる）。
         """
         year = world.season_year
@@ -116,8 +149,8 @@ class PennantHomeService:
         own_games = self._games.list_rows(year=year, team_id=own_id) if own_id is not None else []
         # 締めた後の開幕前は、今季の成績がまだ無い。順位表・主力・タイトルは前年の最終のものを見せる
         stats_year = stats_year_of(phase=world.phase, last_played_on=world.today, current_year=world.season_year)
-        standings = self._teams.get_league_standings(stats_year)
-        team_rows = self._teams.list_teams().rows
+        standings = self._league_view.get_league_standings(stats_year)
+        team_rows = self._league_view.list_teams().rows
         team_leagues = {team.id: (team.league_id, team.league_name) for team in team_rows}
         names = {team.id: team.name for team in team_rows}
 
@@ -136,7 +169,7 @@ class PennantHomeService:
             titles=self._title_race(own_id, own_league_id, stats_year),
             stats_year=stats_year,
             shows_previous_season=stats_year != year,
-            finale=self._finale(world),
+            finale=self._finale(world, postseason),
         )
 
     def get_deletion(self, world: WorldContext) -> WorldDeletion:
@@ -196,32 +229,36 @@ class PennantHomeService:
                     standings,
                     remaining_by_team(pending),
                     own_id,
-                    tiebreak_for(year, games=self._games, teams=self._teams),
+                    tiebreak_for(year, games=self._games, league_view=self._league_view),
                 )
                 if world.phase is not SeasonPhase.BEFORE_OPENING
                 else None
             ),
         )
 
-    def _finale(self, world: WorldContext) -> WorldFinale | None:
+    def _finale(self, world: WorldContext, card: PostseasonCard | None) -> WorldFinale | None:
         """最終シーズンを終えた世界の、自軍の年度ごとの順位と通算。終えていない世界・受け持つ球団が無い世界は None。
 
         年ごとの最終順位と優勝は `final_standings`（歴代の記録・球団史と同じ関数。優勝の決め方は domain の
         `league_champion`）から取る。球団とリーグは1回だけ読み、年ごとにその年の試合だけを読む。
         終えた世界だけが読む（最大 `MAX_SEASONS_PER_WORLD` 年ぶん）。
         自軍が載らない年（その年に試合の無い球団）は読み飛ばす。
+        日本一は `PostseasonHistoryReader.champions`（締めた年は記録、最終シーズン（締めない年）は導く）。
         """
         own_id = world.managed_team_id
         if own_id is None or not world.is_over:
             return None
+        leagues = self._leagues.find_all()
         finals = final_standings(
             self._games.list_seasons(recorded_only=True),
             teams=self._team_records.find_all(),
-            leagues=self._leagues.find_all(),
+            leagues=leagues,
             games_of=lambda year: self._games.list_for_standings(year=year),
-            order=team_order(self._teams),
+            order=team_order(self._league_view),
         )
         seasons: list[FinaleSeason] = []
+        league_ids = [league.id for league in leagues if league.id is not None]
+        champions = self._postseason.champions(world, finals, league_ids, open_year=_open_year_champion(card))
         wins = losses = ties = 0
         for final in finals:
             result = final.result_of(own_id)
@@ -234,6 +271,7 @@ class PennantHomeService:
                     rank=row.rank,
                     record=record_label(row.wins, row.losses, row.ties),
                     is_champion=is_champion,
+                    won_postseason=final.year in champions and champions[final.year].team_id == own_id,
                 )
             )
             wins += row.wins
@@ -246,6 +284,8 @@ class PennantHomeService:
             ties=ties,
             titles=sum(1 for s in seasons if s.is_champion),
             record=record_label(wins, losses, ties),
+            postseason_title=self._postseason.title(world, league_ids),
+            postseason_titles=sum(1 for s in seasons if s.won_postseason),
         )
 
     # --- 次の試合・進める ---
@@ -320,12 +360,15 @@ class PennantHomeService:
             return None
         after, through = period
         in_period = [game for game in own_games if after < _day(game) <= through]
+        everyone = self._games.list_rows(year=year, after=after, through=through)
+        if not everyone:
+            # 期間に公式戦が1つも無い（ポストシーズンの期間を指す `since`）。まとめは公式戦だけを読むので出さない
+            return None
         results = self._own_results(own_id, in_period)
         outcomes = [result.outcome for result in results]
-        before = _find_row(self._teams.get_league_standings(year, through=after), own_id)
+        before = _find_row(self._league_view.get_league_standings(year, through=after), own_id)
         after_row = _find_row(standings, own_id)
         own_ids = {game.id for game in in_period}
-        everyone = self._games.list_rows(year=year, after=after, through=through)
         others = [game for game in everyone if game.id not in own_ids]
         single = in_period[0] if len(in_period) == 1 else None
         return AdvanceSummary(
@@ -481,7 +524,7 @@ class PennantHomeService:
         """自軍の選手が上位 `KEY_PLAYERS` 位以内にいる部門。"""
         if own_id is None or own_league_id is None:
             return []
-        titles = self._teams.get_league_titles(own_league_id, year, leaders=KEY_PLAYERS)
+        titles = self._league_view.get_league_titles(own_league_id, year, leaders=KEY_PLAYERS)
         return [
             TitleRaceRow(
                 department=department.label,
@@ -522,3 +565,15 @@ def _day(game: GameRow) -> date:
     """試合日。`GameRow.played_on` は型が緩いので、日付であることをここで確かめる。"""
     assert isinstance(game.played_on, date), "試合日は日付"
     return game.played_on
+
+
+def _open_year_champion(card: PostseasonCard | None) -> YearChampion | None:
+    """GM ホームのカードが導いた、いまの年度の日本一（カードが無ければ None。読み取りが導く）。"""
+    if card is None:
+        return None
+    return YearChampion(
+        year=card.year,
+        team_id=card.champion_team_id,
+        team_name=card.champion_name,
+        in_progress=not card.status.is_settled,
+    )

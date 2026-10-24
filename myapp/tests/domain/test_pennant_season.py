@@ -1,6 +1,7 @@
 import datetime
 import unittest
 
+from myapp.domain.exceptions import AlreadyClosed, SeasonNotFinished
 from myapp.domain.pennant.season import (
     MAX_GAMES_PER_ADVANCE,
     MAX_SUMMARY_DAYS,
@@ -9,6 +10,7 @@ from myapp.domain.pennant.season import (
     is_final_season,
     is_season_closed,
     ratings_year,
+    regular_season_over_year,
     season_phase,
     season_year,
     stats_year,
@@ -172,3 +174,28 @@ class CompletedYearsTest(unittest.TestCase):
 
     def test_nothing_is_complete_before_the_first_game(self) -> None:
         self.assertEqual([], completed_years([], phase=SeasonPhase.BEFORE_OPENING, current_year=2026))
+
+
+class RegularSeasonOverYearTest(unittest.TestCase):
+    """公式戦を終えた年（ポストシーズンを進める・戦力外を選ぶ・締めるが共有する判定）。"""
+
+    def test_the_year_whose_schedule_is_used_up(self):
+        self.assertEqual(
+            2026, regular_season_over_year(last_played_on=D(2026, 10, 20), next_fixture_on=None, start_year=2026)
+        )
+
+    def test_before_any_game_the_regular_season_is_not_over(self):
+        with self.assertRaises(SeasonNotFinished):
+            regular_season_over_year(last_played_on=None, next_fixture_on=D(2026, 3, 27), start_year=2026)
+        with self.assertRaises(SeasonNotFinished):
+            regular_season_over_year(last_played_on=None, next_fixture_on=None, start_year=2026)
+
+    def test_with_fixtures_left_the_regular_season_is_not_over(self):
+        with self.assertRaisesRegex(SeasonNotFinished, "未消化"):
+            regular_season_over_year(last_played_on=D(2026, 6, 1), next_fixture_on=D(2026, 6, 2), start_year=2026)
+
+    def test_after_closing_the_season_is_already_closed(self):
+        """翌年の日程があるなら、締めた後（翌年の開幕前）。締めた年を添える。"""
+        with self.assertRaises(AlreadyClosed) as raised:
+            regular_season_over_year(last_played_on=D(2026, 10, 20), next_fixture_on=D(2027, 3, 26), start_year=2026)
+        self.assertEqual(raised.exception.year, 2026)

@@ -9,6 +9,7 @@ from unittest import TestCase
 from myapp.domain import services
 from myapp.domain.entities import Game
 from myapp.domain.value_objects import (
+    GameStage,
     InningsPitched,
     LineScore,
     PitchingLine,
@@ -38,6 +39,7 @@ def _game(away_innings, home_innings, *, home_staff=(), away_staff=()) -> Game:
         played_on=date(2026, 4, 1),
         home_team_id=HOME,
         away_team_id=AWAY,
+        stage=GameStage.REGULAR,
         home_score=score.home_total,
         away_score=score.away_total,
         line_score=score,
@@ -133,6 +135,7 @@ class WinningPitcherTest(TestCase):
             played_on=date(2026, 4, 1),
             home_team_id=HOME,
             away_team_id=AWAY,
+            stage=GameStage.REGULAR,
             home_score=5,
             away_score=3,
         )

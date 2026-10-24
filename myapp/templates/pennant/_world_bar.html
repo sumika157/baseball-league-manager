@@ -2,6 +2,7 @@
 世界バー。いまペナントの中にいることを、世界の全画面で示す。パンくずの下に置く。
 1行目は世界の名前と「いま」（今日・局面・受け持つ球団）、2行目は世界の中の移動。
 「ホーム」は GM ホーム（P4b）、「編成」は受け持つ球団の編成（P5b。見るのは誰でもできる）。
+「ポストシーズン」は勝ち上がりの表で、いまの方式が「なし」でないか、過去の年の試合がある世界にだけ出す。
 成績とタイトルはリーグごとの画面なので、受け持つ球団のリーグ（無ければ先頭のリーグ）へ向ける。
 {% endcomment %}
 {% with name=request.resolver_match.url_name %}
@@ -14,7 +15,7 @@
     </span>
   </div>
   <div class="segmented mb-0">
-    <a class="segmented-item {% if name == 'pennant_world' or name == 'pennant_delete' or name == 'pennant_offseason' %}is-active{% endif %}" href="{% workspace_url 'pennant_world' world.world_id %}">ホーム</a>
+    <a class="segmented-item {% if name == 'pennant_world' or name == 'pennant_delete' or name == 'pennant_settings' or name == 'pennant_offseason' %}is-active{% endif %}" href="{% workspace_url 'pennant_world' world.world_id %}">ホーム</a>
     <a class="segmented-item {% if name == 'pennant_standings' or name == 'pennant_standings_by_year' or name == 'pennant_league_detail' or name == 'pennant_league_detail_by_year' %}is-active{% endif %}"
        href="{% workspace_url 'pennant_standings' world.world_id %}">順位表</a>
     <a class="segmented-item {% if name == 'pennant_game_list' or name == 'pennant_game_detail' %}is-active{% endif %}"
@@ -29,6 +30,10 @@
        href="{% workspace_url 'pennant_team_list' world.world_id %}">球団</a>
     <a class="segmented-item {% if name == 'pennant_club' %}is-active{% endif %}"
        href="{% workspace_url 'pennant_club' world.world_id %}">編成</a>
+    {% if world.shows_postseason %}
+      <a class="segmented-item {% if name == 'pennant_postseason' or name == 'pennant_postseason_by_year' or name == 'pennant_postseason_stats' %}is-active{% endif %}"
+         href="{% workspace_url 'pennant_postseason' world.world_id %}">ポストシーズン</a>
+    {% endif %}
     <a class="segmented-item {% if name == 'pennant_history' or name == 'pennant_team_history' %}is-active{% endif %}"
        href="{% workspace_url 'pennant_history' world.world_id %}">歴代</a>
   </div>

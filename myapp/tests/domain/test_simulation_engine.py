@@ -30,7 +30,7 @@ from myapp.domain.simulation.manager import (
 )
 from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.samples import average_club, round_robin_days, spread_league
-from myapp.domain.value_objects import FieldingPosition, ForeignPlayerRules, PlateAppearanceResult
+from myapp.domain.value_objects import FieldingPosition, ForeignPlayerRules, GameStage, PlateAppearanceResult
 
 FP = FieldingPosition
 P = PlateAppearanceResult
@@ -57,7 +57,9 @@ LOOSE_FOREIGN_RULES = ForeignPlayerRules(active=8, pitchers=None, batters=None)
 def _play(seed: int, home, away, *, day: date = OPENING_DAY, history=None, **kwargs) -> SimulatedGame:
     # 外国人枠を渡さないテストは無制限を明示する（`simulate_game` の引数は省略できない）
     kwargs.setdefault("foreign_rules", ForeignPlayerRules.UNLIMITED)
-    return simulate_game(make_random(seed), home, away, played_on=day, history=history, **kwargs)
+    return simulate_game(
+        make_random(seed), home, away, stage=GameStage.REGULAR, played_on=day, history=history, **kwargs
+    )
 
 
 class SameSeedTest(TestCase):
@@ -95,7 +97,12 @@ class ScriptedGameTest(TestCase):
         home = choose_active_roster(average_club(1), rules=ForeignPlayerRules.UNLIMITED)
         away = choose_active_roster(average_club(2), rules=ForeignPlayerRules.UNLIMITED)
         played = simulate_game(
-            ScriptedRandom(0.99), home, away, played_on=OPENING_DAY, foreign_rules=ForeignPlayerRules.UNLIMITED
+            ScriptedRandom(0.99),
+            home,
+            away,
+            stage=GameStage.REGULAR,
+            played_on=OPENING_DAY,
+            foreign_rules=ForeignPlayerRules.UNLIMITED,
         )
         game = played.game
         self.assertEqual(game.line_score.innings, MAX_INNINGS)
@@ -116,7 +123,12 @@ class ScriptedGameTest(TestCase):
         away = choose_active_roster(average_club(2), rules=ForeignPlayerRules.UNLIMITED)
         with self.assertRaises(InvalidGame):
             simulate_game(
-                ScriptedRandom(0.0), home, away, played_on=OPENING_DAY, foreign_rules=ForeignPlayerRules.UNLIMITED
+                ScriptedRandom(0.0),
+                home,
+                away,
+                stage=GameStage.REGULAR,
+                played_on=OPENING_DAY,
+                foreign_rules=ForeignPlayerRules.UNLIMITED,
             )
 
 

@@ -8,6 +8,8 @@ from myapp.domain.entities import Game, Team
 from myapp.domain.exceptions import InvalidGame
 from myapp.domain.value_objects import (
     BattingLine,
+    GameHeader,
+    GameStage,
     InningsPitched,
     PitchingLine,
     Season,
@@ -23,6 +25,7 @@ def _game(home_score, away_score, day=1, season=2026, home=HOME, away=AWAY, *, r
         played_on=date(season, 4, day),
         home_team_id=home,
         away_team_id=away,
+        stage=GameStage.REGULAR,
         home_score=home_score,
         away_score=away_score,
     )
@@ -40,6 +43,7 @@ class GameRuleTest(TestCase):
                 played_on=date(2026, 4, 1),
                 home_team_id=1,
                 away_team_id=1,
+                stage=GameStage.REGULAR,
             )
 
     def test_negative_score_is_rejected(self):
@@ -191,3 +195,24 @@ class StandingsFromGamesTest(TestCase):
         games = [_game(1, 0, season=2024), _game(1, 0, season=2026), _game(1, 0, season=2025)]
 
         self.assertEqual([s.year for s in services.seasons_of(games)], [2026, 2025, 2024])
+
+
+class GameStageTest(TestCase):
+    """試合の区分。公式戦かポストシーズンか（`GameStage` が選択肢の唯一の出典）。"""
+
+    def test_the_stage_has_no_default(self):
+        """区分は省けない（渡し忘れが黙って公式戦になる形にしない）。"""
+        with self.assertRaises(TypeError):
+            Game(season=Season(2026), played_on=date(2026, 4, 1), home_team_id=HOME, away_team_id=AWAY)  # type: ignore[call-arg]
+        with self.assertRaises(TypeError):
+            GameHeader(season=Season(2026), played_on=date(2026, 4, 1), home_team_id=HOME, away_team_id=AWAY)  # type: ignore[call-arg]
+
+    def test_labels_are_read_back(self):
+        for stage in GameStage:
+            with self.subTest(stage=stage):
+                self.assertIs(GameStage.from_label(stage.label), stage)
+        self.assertEqual(GameStage.labels(), ["公式戦", "ポストシーズン"])
+
+    def test_an_unknown_label_is_rejected_in_japanese(self):
+        with self.assertRaisesRegex(InvalidGame, "試合の区分"):
+            GameStage.from_label("交流戦")

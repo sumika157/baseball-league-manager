@@ -1,6 +1,7 @@
-"""リーグ・順位・タイトル・成績・チーム一覧の参照と、管理画面の概況のユースケース。
+"""リーグ・順位・タイトル・成績・チーム一覧の参照のユースケース。
 
-読むだけで、書き込みはしない（ロスターの更新は `RosterService`、球団と選手の画面の参照は `TeamViewService`）。
+読むだけで、書き込みはしない（ロスターの更新は `RosterService`、球団と選手の画面の参照は `TeamViewService`、
+試合の参照は `GameViewService`。管理画面の概況は `admin.py` の `operator_overview`）。
 指標の計算や並べ替えといった業務ルールはドメイン層にあり、ここには無い。
 """
 
@@ -104,8 +105,8 @@ def _as_count(value: float) -> str:
     return str(int(value))
 
 
-class TeamApplicationService:
-    """リーグ・順位・タイトル・成績・チーム一覧の参照と、管理画面の概況のユースケース。"""
+class LeagueViewService:
+    """リーグ・順位・タイトル・成績・チーム一覧の参照のユースケース。"""
 
     def __init__(
         self,

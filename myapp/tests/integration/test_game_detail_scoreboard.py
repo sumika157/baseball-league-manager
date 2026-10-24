@@ -4,7 +4,7 @@ import re
 from datetime import date
 
 from myapp.domain.entities import Game
-from myapp.domain.value_objects import BattingLine, LineScore, Season
+from myapp.domain.value_objects import BattingLine, GameStage, LineScore, Season
 from myapp.infrastructure.repositories import DjangoGameRepository
 
 from ..helpers import (
@@ -39,8 +39,8 @@ class _DetailCase(BaseCase):
         login_as_manager(self.client, self.team, self.rival)
         self.pitcher = self.roster.register_player(self.team.id, "佐藤", 18, "投手")
         self.rival_pitcher = self.roster.register_player(self.rival.id, "相手投手", 19, "投手")
-        self.home = register_lineup(self.service, self.team, prefix="ホーム", first_number=31)
-        self.away = register_lineup(self.service, self.rival, prefix="ビジター", first_number=61)
+        self.home = register_lineup(self.roster, self.team, prefix="ホーム", first_number=31)
+        self.away = register_lineup(self.roster, self.rival, prefix="ビジター", first_number=61)
         self.game = play_game(self.team, self.rival, home_score=0, away_score=0)
 
     def _post(self, *, away, home, errors=()):
@@ -127,6 +127,7 @@ class GameDetailScoreboardTest(_DetailCase):
             played_on=date(2026, 4, 2),
             home_team_id=self.team.id,
             away_team_id=self.rival.id,
+            stage=GameStage.REGULAR,
             home_score=2,
             away_score=1,
             line_score=LineScore(away=(1,), home=(2,)),

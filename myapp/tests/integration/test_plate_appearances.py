@@ -21,6 +21,7 @@ from myapp.domain.value_objects import (
     BattingLine,
     ErrorKind,
     FieldingPosition,
+    GameStage,
     PlateAppearanceResult,
     Season,
 )
@@ -130,6 +131,7 @@ class PlateAppearancePersistenceTest(BaseCase):
             played_on=date(2026, 4, 1),
             home_team_id=self.team.id,
             away_team_id=self.rival.id,
+            stage=GameStage.REGULAR,
             home_score=0,
             away_score=1,
             plate_appearances=self._plate_appearances(),

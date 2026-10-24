@@ -16,8 +16,8 @@ from myapp.infrastructure import orm_models
 
 from ..helpers import (
     build_game_view_service,
+    build_league_view_service,
     build_roster_service,
-    build_service,
     build_team_view_service,
     default_workspace,
     make_league,
@@ -46,7 +46,7 @@ class BaseCase(TestCase):
 
     def setUp(self):
         scope = real_scope()
-        self.service = build_service(scope)
+        self.league_view = build_league_view_service(scope)
         self.roster = build_roster_service(scope)
         self.game_view = build_game_view_service(scope)
         self.team_view = build_team_view_service(scope)

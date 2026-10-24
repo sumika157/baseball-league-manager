@@ -36,7 +36,7 @@ from myapp.domain.simulation.levels import LevelRow, LevelTally, SeasonTally, Us
 from myapp.domain.simulation.manager import ClubRoster, choose_active_roster
 from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.samples import average_club, spread_league
-from myapp.domain.value_objects import ForeignPlayerRules
+from myapp.domain.value_objects import ForeignPlayerRules, GameStage
 from myapp.management.estimate_check import format_usage, run_check
 from myapp.management.multi_season_check import run_seasons
 from myapp.management.workspaces import add_workspace_argument, real_scope_for_key
@@ -224,6 +224,7 @@ class Command(BaseCommand):
                 rng,
                 home,
                 away,
+                stage=GameStage.REGULAR,
                 played_on=SEASON_OPENING + timedelta(days=index),
                 history=history,
                 foreign_rules=FOREIGN_RULES,
@@ -271,6 +272,7 @@ class Command(BaseCommand):
                 game_rng,
                 rosters[fixture.home_team_id],
                 rosters[fixture.visitor_team_id],
+                stage=GameStage.REGULAR,
                 played_on=fixture.date,
                 history=history,
                 foreign_rules=FOREIGN_RULES,

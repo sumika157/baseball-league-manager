@@ -10,6 +10,7 @@
 from django.conf import settings
 from django.db import models
 
+from ..domain.pennant.postseason import PostseasonFormat
 from ..domain.services.rankings import Title
 from ..domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings
 from ..domain.value_objects import (
@@ -23,6 +24,7 @@ from ..domain.value_objects import (
     FieldingPosition,
     ForeignPlayerRules,
     FreeAgencyKind,
+    GameStage,
     Handedness,
     PlateAppearanceResult,
     Position,
@@ -40,6 +42,9 @@ CONTRACT_STATUS_CHOICES = [(status.value, status.value) for status in ContractSt
 ACQUISITION_ROUTE_CHOICES = [(route.value, route.value) for route in AcquisitionRoute]
 DEPARTURE_ROUTE_CHOICES = [(route.value, route.value) for route in DepartureRoute]
 FREE_AGENCY_KIND_CHOICES = [(kind.value, kind.value) for kind in FreeAgencyKind]
+GAME_STAGE_CHOICES = [(stage.value, stage.value) for stage in GameStage]
+# ポストシーズンの方式の選択肢もドメインの PostseasonFormat が唯一の出典
+POSTSEASON_FORMAT_CHOICES = [(item.value, item.value) for item in PostseasonFormat]
 # 試合で就いた守備位置。登録位置（Position）とは別の概念
 FIELDING_POSITION_CHOICES = [(p.value, p.value) for p in FieldingPosition]
 # 打席まわりの選択肢も同じくドメインの値オブジェクトが出典。ここに文字列を
@@ -121,7 +126,8 @@ class WorkspaceEditor(models.Model):
 class PennantWorld(models.Model):
     """ペナントモードの世界（セーブデータ）。ペナント専用で、実データには現れない。
 
-    持つのは作ったときに決まる事実だけ。「今日」や「シーズン中か」は日程と試合から導く。
+    持つのは作ったときに決まる事実と、オーナーが変えられる設定（ポストシーズンの方式）だけ。
+    「今日」や「シーズン中か」・ポストシーズンの勝ち上がりは日程と試合から導く。
     リーグがこの世界に属する（`League.world`）ことで、球団・選手・試合も世界に属する。
     """
 
@@ -152,6 +158,17 @@ class PennantWorld(models.Model):
         verbose_name="受け持つ球団",
     )
     start_year = models.IntegerField(verbose_name="開幕年")
+    # ポストシーズンの方式（オーナーが変えられる設定。勝ち上がりは保存せず試合から導く）。既定の「なし」は、
+    # 方式を足す前に作った世界（AddField で入る）と同じ進み方。新しい世界の既定は作る側が渡す
+    postseason_format = models.CharField(
+        max_length=30,
+        choices=POSTSEASON_FORMAT_CHOICES,
+        default=PostseasonFormat.NONE.value,
+        verbose_name="ポストシーズンの方式",
+        help_text=(
+            "シーズン終了の後に行うポストシーズン（CS と日本シリーズ）の形。「なし」ならすぐにシーズンを締められます。"
+        ),
+    )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="作成日時")
 
     class Meta:
@@ -558,6 +575,16 @@ class Game(models.Model):
         help_text="雨天・停電などの中断。試合時間から差し引きます。",
     )
     attendance = models.PositiveIntegerField(null=True, blank=True, verbose_name="観客数")
+    # 公式戦かポストシーズンか（`GameStage`）。公式戦の集計はポストシーズンを数えないので、試合を読む
+    # 入口（`scoping.games_in` など）が区分を必須の引数で受け取る。実データの試合は常に公式戦
+    stage = models.CharField(
+        max_length=10,
+        choices=GAME_STAGE_CHOICES,
+        # 既定値は AddField（既存の試合）と管理画面の試合の登録のため。domain の `Game.stage` は既定値なしの必須
+        default=GameStage.REGULAR.value,
+        verbose_name="区分",
+        help_text="公式戦かポストシーズンか。ポストシーズンの試合は公式戦の成績・順位・タイトルに数えません。",
+    )
 
     class Meta:
         verbose_name = "試合"
@@ -1099,3 +1126,26 @@ class PennantAward(models.Model):
 
     def __str__(self) -> str:
         return f"{self.year}年 {self.get_title_display()} {self.player_id}"
+
+
+class PennantChampionship(models.Model):
+    """ペナントの日本一の記録。締めたシーズンのポストシーズンの優勝球団（1リーグの世界は CS の優勝）。
+
+    CLAUDE.md の「集計を保存しない」の例外（表彰と同じ。範囲は締めたシーズンの優勝球団だけ。#242）。書くのは
+    シーズンを締める処理だけで、そのとき導いた優勝球団をそのまま写す。世界の列は持たない。球団のリーグで世界が決まる。
+    1世界1年に1つは、リポジトリが書く前に検査する（世界は球団の先にあるので、DB の一意制約では言えない）。
+    """
+
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="+", verbose_name="球団")
+    year = models.PositiveSmallIntegerField(verbose_name="年度")
+
+    class Meta:
+        verbose_name = "ペナントの日本一"
+        verbose_name_plural = "ペナントの日本一"
+        ordering = ["year", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["team", "year"], name="unique_pennant_championship"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.year}年 {self.team_id}"

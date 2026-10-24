@@ -399,8 +399,8 @@ class PlayerDetailDerivedStatsTest(BaseCase):
         """スコアブックの打席から導いた三振が、個人ページに出ること。"""
         login_as_manager(self.client, self.team, self.rival)
         game = play_game(self.team, self.rival, home_score=0, away_score=0, day=9)
-        home = register_lineup(self.service, self.team, prefix="ホーム", first_number=31)
-        away = register_lineup(self.service, self.rival, prefix="ビジター", first_number=41)
+        home = register_lineup(self.roster, self.team, prefix="ホーム", first_number=31)
+        away = register_lineup(self.roster, self.rival, prefix="ビジター", first_number=41)
         post_game_scorebook_day_unrecorded(
             self.client,
             game.id,

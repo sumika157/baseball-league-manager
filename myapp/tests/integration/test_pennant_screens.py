@@ -12,7 +12,7 @@ from django.test.utils import CaptureQueriesContext
 
 from myapp.domain.exceptions import WorldNotFound
 from myapp.infrastructure import orm_models
-from myapp.presentation.views import build_pennant_world_service, build_service, build_team_view_service
+from myapp.presentation.views import build_league_view_service, build_pennant_world_service, build_team_view_service
 
 from ..helpers import make_editor, real_scope, world_scope, world_summary_query, ws_url
 from .base import BaseCase
@@ -285,7 +285,7 @@ class WorldSummaryQueryTest(WorldCase):
 
     def test_the_list_screen_reads_only_the_managed_season(self):
         """自軍の順位は、その年の試合だけを読む（全シーズンの試合を組み立てない）。"""
-        service = build_service(world_scope(self.world_id))
+        service = build_league_view_service(world_scope(self.world_id))
 
         leagues = service.get_league_standings(YEAR)
         other_year = service.get_league_standings(YEAR + 5)

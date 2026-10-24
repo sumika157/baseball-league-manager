@@ -34,7 +34,7 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
 from myapp.domain.pennant.world import WorldScope
-from myapp.infrastructure.scoping import games_in, leagues_in, stints_in, teams_in
+from myapp.infrastructure.scoping import StageFilter, games_in, leagues_in, stints_in, teams_in
 from myapp.management.workspaces import add_workspace_argument, real_scope_for_key, world_scope
 
 # 応答時間の目安。超えたら印を付ける（絶対の基準ではなく、気づくための線）
@@ -139,7 +139,7 @@ class Command(BaseCommand):
         """実データの16画面。実在する id を拾って測る URL を組む。"""
         # ペナントの世界の行を拾うと、実データの画面を測ったことにならない
         stint = stints_in(scope).select_related("player", "team").first()
-        game = games_in(scope).order_by("-played_on").first()
+        game = games_in(scope, stages=StageFilter.ALL_STAGES).order_by("-played_on").first()
         league = leagues_in(scope).filter(teams__isnull=False).first()
         if stint is None or game is None or league is None:
             return []

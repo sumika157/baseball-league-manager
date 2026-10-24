@@ -17,14 +17,14 @@ class StadiumTest(BaseCase):
     """球場と本拠地。"""
 
     def test_team_summary_uses_the_stadium(self):
-        summary = self.service.list_teams().rows[0]
+        summary = self.league_view.list_teams().rows[0]
 
         self.assertEqual(summary.stadium_name, "テスト球場")
         self.assertEqual(summary.city, "東京")
 
     def test_team_without_a_stadium(self):
         orm_models.Team.objects.filter(id=self.team.id).update(home_stadium=None)
-        summary = {s.id: s for s in self.service.list_teams().rows}[self.team.id]
+        summary = {s.id: s for s in self.league_view.list_teams().rows}[self.team.id]
 
         self.assertEqual(summary.stadium_name, "")
         self.assertEqual(summary.city, "")
@@ -44,11 +44,11 @@ class StadiumTest(BaseCase):
         other = make_stadium(name="あ球場")
         orm_models.Team.objects.filter(id=self.rival.id).update(home_stadium=other)
 
-        rows = self.service.list_teams(sort="stadium", descending=False).rows
+        rows = self.league_view.list_teams(sort="stadium", descending=False).rows
         self.assertEqual(rows[0].stadium_name, "あ球場")
 
     def test_teams_without_a_stadium_sort_last(self):
-        rows = self.service.list_teams(sort="stadium", descending=False).rows
+        rows = self.league_view.list_teams(sort="stadium", descending=False).rows
         self.assertEqual(rows[-1].stadium_name, "")
 
     def test_admin_page(self):

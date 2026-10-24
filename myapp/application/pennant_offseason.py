@@ -14,11 +14,14 @@
 （`AlreadyClosed` / `SeasonNotFinished`）で断る。編成（`ClubPlan`）は GM が保存しうるので、書く直前に中で読む。
 受け持つ球団の戦力外の指名（`ReleasePlan`）も GM が保存しうるが、こちらは計算に使うので `_state()` に入れて前後で比べる
 （変わっていたら断る）。指名を決める操作（`set_releases` など）もこのサービスが持つ
-（締められるかの検査 `_check` を1か所に保つ）。
+（指名できるかの検査 `_season_over_year` と、それにポストシーズンの検査を足した締められるかの検査 `_check` を
+1か所に保つ。指名は公式戦を終えればポストシーズン中もできる）。
 
 締める年のタイトル受賞者は**表彰として保存する**（#248。CLAUDE.md の「集計を保存しない」の例外）。受賞者は外で
 タイトルの画面と同じ集計から導き（`pennant_awards.derive_awards`。8リーグで 0.6〜2.9秒）、中では書くだけ。
 戦力外の実績の加点に使うタイトルの数は、締めた年までの表彰と、いま導いた締める年の受賞を足す（過去の年を導き直さない）。
+締める年のポストシーズンの優勝球団（日本一）も**記録として保存する**（#242。表彰と同じ例外）。勝ち上がりは外で1回だけ導き、
+締められるかの検査（ポストシーズンが終わったか）と、書く優勝球団の両方に使う。
 
 **前提: 世界の `Team` 集約に書くのは、世界の作成とこの処理だけ。** 外で読んだ `Team` を中でそのまま
 `save()` して安全なのは、この前提による（`save()` は変わった行だけを書くが、比べる相手は今の DB なので、
@@ -35,23 +38,32 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 
 from ..domain.entities import Player, Team
-from ..domain.exceptions import AlreadyClosed, SeasonLimitReached, SeasonNotFinished, TeamNotFound
+from ..domain.exceptions import (
+    AlreadyClosed,
+    PostseasonNotFinished,
+    SeasonLimitReached,
+    SeasonNotFinished,
+    TeamNotFound,
+)
 from ..domain.pennant.awards import Award, title_counts
+from ..domain.pennant.championship import Championship
 from ..domain.pennant.club_plan import ClubMember, PlanSection
 from ..domain.pennant.offseason import Draftee, OffseasonClub, OffseasonPlan, OffseasonPlayer, plan_offseason
 from ..domain.pennant.offseason_player import TrackRecord
+from ..domain.pennant.postseason import PostseasonFormat, PostseasonStatus
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.release import ReleasePlan, ensure_releasable
 from ..domain.pennant.retirement import PlayingTime
 from ..domain.pennant.schedule import Fixture, season_schedule
-from ..domain.pennant.season import SeasonPhase, is_final_season, is_season_closed, season_phase, season_year
+from ..domain.pennant.season import is_final_season, is_season_closed, regular_season_over_year
 from ..domain.pennant.world import World
 from ..domain.repositories import (
     AwardRepository,
+    ChampionshipRepository,
     ClubPlanRepository,
     FixtureRepository,
     LeagueRepository,
@@ -63,10 +75,11 @@ from ..domain.repositories import (
 from ..domain.value_objects import ContractStatus, DepartureRoute, ForeignPlayerRules, JerseyNumber, RosterLimits
 from .dto import ReleasePlanView, ReleasePlayerRow, SeasonClosed, SeasonCloseOption, SimulationTeam
 from .foreign_quota import ForeignQuotaExemptions
+from .league_view import LeagueViewService
 from .pennant_awards import derive_awards
+from .pennant_postseason import PostseasonBracketReader
 from .pennant_season import AtomicBlock
 from .queries import SeasonPlayingTimeQuery, SimulationContextQuery
-from .services import TeamApplicationService
 
 
 def _saved_id(value: int | None) -> int:
@@ -94,6 +107,8 @@ class _PreparedClose:
     year: int
     # 締める年のタイトル受賞者（表彰として書く。ロックの外で導いた値）
     awards: list[Award]
+    # 締める年の日本一（記録として書く。ロックの外で導いた勝ち上がりから `close_season` が入れる）。無い年は None
+    championship: Championship | None = None
 
 
 class PennantOffseasonService:
@@ -111,9 +126,11 @@ class PennantOffseasonService:
         plans: ClubPlanRepository,
         releases: ReleasePlanRepository,
         awards: AwardRepository,
-        titles: TeamApplicationService,
+        championships: ChampionshipRepository,
+        titles: LeagueViewService,
         context_query: SimulationContextQuery,
         playing_time: SeasonPlayingTimeQuery,
+        postseason: PostseasonBracketReader,
         fa_exemptions: ForeignQuotaExemptions,
         atomic: AtomicBlock,
     ) -> None:
@@ -126,20 +143,27 @@ class PennantOffseasonService:
         self._plans = plans
         self._releases = releases
         self._awards = awards
+        self._championships = championships
         # タイトルの受賞者を導く（世界の範囲の、タイトルの画面と同じサービス）
         self._titles = titles
         self._context_query = context_query
         self._playing_time = playing_time
+        # ポストシーズンが終わるまで締めない（その年の勝ち上がりを導いて状況を見る。方式「なし」は何も読まない）
+        self._postseason = postseason
         # FA 資格の取得による外国人枠の対象外（協約 第82条 (4)）。GM の戦力外の検査だけが使う
         self._fa_exemptions = fa_exemptions
         self._atomic = atomic
 
-    def close_option(self) -> SeasonCloseOption:
-        """いま締められるか。締められないときは理由を返す（例外にしない。画面のボタンの出し分けの材料）。"""
+    def close_option(self, *, postseason_status: PostseasonStatus | None = None) -> SeasonCloseOption:
+        """いま締められるか。締められないときは理由を返す（例外にしない。画面のボタンの出し分けの材料）。
+
+        `postseason_status` は呼び手（GM ホーム）が既に導いたその年のポストシーズンの状況。渡せば導き直さない
+        （1回の表示で勝ち上がりを2回導かない）。**表示にだけ使う**: `close_season()` は必ず自分で導き直す。
+        """
         world = self._worlds.find_by_id(self._world_id)
         try:
-            year = self._check(world, expected_year=None)
-        except (SeasonNotFinished, AlreadyClosed, SeasonLimitReached) as error:
+            year = self._check(world, expected_year=None, postseason_status=postseason_status)
+        except (SeasonNotFinished, PostseasonNotFinished, AlreadyClosed, SeasonLimitReached) as error:
             last_played = self._context_query.last_played_on()
             blocked_year = None if last_played is None else last_played.year
             return SeasonCloseOption(
@@ -159,6 +183,7 @@ class PennantOffseasonService:
         - 未消化の対戦が残っている、または試合を一度もしていない → `SeasonNotFinished`
         - 既に締めている、または `expected_year`（画面を開いたときの年）が Y と違う → `AlreadyClosed`
         - 世界の最後のシーズン → `SeasonLimitReached`
+        - その年のポストシーズンが終わっていない（始まっていない・進行中） → `PostseasonNotFinished`
 
         どれも何も書かない。書き込みの途中で失敗したときも何も残さない（1つのトランザクション）。
         引退・戦力外の選手の在籍は Y で閉じ（退団の経路を記録する）、新人は Y+1 から加入する。
@@ -169,9 +194,16 @@ class PennantOffseasonService:
         # トランザクションの中にいる間は他の書き込みを止めるため。中では状態が変わっていないことだけを確かめ、書く
         world = self._worlds.find_by_id(self._world_id)
         state = self._state()
-        year = self._check(world, expected_year=expected_year)
+        year = self._season_over_year(world, expected_year=expected_year)
+        # 勝ち上がりは1回だけ導き、締められるかの検査と、記録する日本一の両方に使う
+        bracket = self._postseason.bracket(world, year)
+        _ensure_postseason_settled(year, bracket.status)
         self._ensure_not_closed(world, year)
-        prepared = self._prepare(world, year)
+        champion = bracket.champion
+        prepared = replace(
+            self._prepare(world, year),
+            championship=Championship(year=year, team_id=champion) if champion is not None else None,
+        )
         with self._atomic():
             if self._state() != state:
                 # 計算している間に、別のリクエストが進めた・締めた。古い読み込みを書かない。
@@ -182,21 +214,29 @@ class PennantOffseasonService:
             self._ensure_not_closed(world, year)
             return self._commit(world, prepared)
 
-    def _state(self) -> tuple[date | None, date | None, tuple[int, int, int], ReleasePlan | None]:
-        """締められるかと何を書くかを決める事実（最後に試合をした日・次の対戦の日・在籍の目印・受け持つ球団の戦力外の指名）。
+    def _state(
+        self,
+    ) -> tuple[date | None, date | None, tuple[int, int, int], ReleasePlan | None, PostseasonFormat]:
+        """締められるかと何を書くかを決める事実（最後に試合をした日・次の対戦の日・在籍の目印・受け持つ球団の戦力外の指名・
+        ポストシーズンの方式）。
 
         読み込みの前後で比べる。戦力外の指名は GM が締める処理の計算中にも保存しうるので、ここに入れる（#100）。
+        方式も設定の画面で計算中に変えうる（「なし」から変えたのに、その年のポストシーズンを行わずに締めない。#280）。
         """
+        world = self._worlds.find_by_id(self._world_id)
         return (
             self._context_query.last_played_on(),
             self._fixtures.first_date(),
             self._teams.roster_signature(),
-            self._managed_release_plan(),
+            self._release_plan_of(world.managed_team_id),
+            world.postseason_format,
         )
 
     def _managed_release_plan(self) -> ReleasePlan | None:
         """受け持つ球団の戦力外の手動の指名（自動・受け持ちが無いなら None）。"""
-        team_id = self._worlds.find_by_id(self._world_id).managed_team_id
+        return self._release_plan_of(self._worlds.find_by_id(self._world_id).managed_team_id)
+
+    def _release_plan_of(self, team_id: int | None) -> ReleasePlan | None:
         return None if team_id is None else self._releases.find_by_team(team_id)
 
     def _ensure_not_closed(self, world: World, year: int) -> None:
@@ -244,16 +284,16 @@ class PennantOffseasonService:
             )
         ]
 
-    # --- 戦力外の指名（受け持つ球団だけ。シーズン終了で締められるときだけ） ---
+    # --- 戦力外の指名（受け持つ球団だけ。公式戦を終えてから締めるまで。ポストシーズン中も選べる） ---
 
     def release_view(self) -> ReleasePlanView:
-        """編成画面の「戦力外」タブの材料。締められないとき（シーズン中・締めた後・最終シーズン）は例外。
+        """編成画面の「戦力外」タブの材料。公式戦の途中・締めた後・最終シーズンは例外（ポストシーズン中は出す）。
 
-        - `SeasonNotFinished` / `AlreadyClosed` / `SeasonLimitReached`: 締められない（タブを出さない）
+        - `SeasonNotFinished` / `AlreadyClosed` / `SeasonLimitReached`: 指名できない（タブを出さない）
         - `TeamNotFound`: 受け持つ球団が無い
         """
         world = self._worlds.find_by_id(self._world_id)
-        year = self._check(world, expected_year=None)
+        year = self._season_over_year(world, expected_year=None)
         self._ensure_not_closed(world, year)
         team_id = self._managed_team_id(world)
         team = _team_of(self._context_query.teams(), team_id)
@@ -269,6 +309,17 @@ class PennantOffseasonService:
                 for p in team.players
             ),
         )
+
+    def can_choose_releases(self) -> bool:
+        """「戦力外」タブを出せるか（`release_view` が例外にならないか）。支配下の一覧までは読まない。"""
+        world = self._worlds.find_by_id(self._world_id)
+        if world.managed_team_id is None:
+            return False
+        try:
+            self._ensure_not_closed(world, self._season_over_year(world, expected_year=None))
+        except (SeasonNotFinished, AlreadyClosed, SeasonLimitReached):
+            return False
+        return True
 
     def start_manual_releases(self, *, expected_year: int | None) -> None:
         """戦力外を手動にする（0人から選ぶ）。すでに手動なら何も変えない。"""
@@ -305,9 +356,9 @@ class PennantOffseasonService:
         self._releases.save(ReleasePlan(team_id=team_id, year=year, player_ids=None))
 
     def _release_target(self, expected_year: int | None) -> tuple[int, int]:
-        """指名を変えられるか（締められる年が画面を開いたときの年と同じ）を調べ、締める年と受け持つ球団を返す。"""
+        """指名を変えられるか（公式戦を終えた年が画面を開いたときの年と同じ）を調べ、締める年と受け持つ球団を返す。"""
         world = self._worlds.find_by_id(self._world_id)
-        year = self._check(world, expected_year=expected_year)
+        year = self._season_over_year(world, expected_year=expected_year)
         self._ensure_not_closed(world, year)
         return year, self._managed_team_id(world)
 
@@ -336,23 +387,31 @@ class PennantOffseasonService:
 
     # --- 検査 ---
 
-    def _check(self, world: World, *, expected_year: int | None) -> int:
+    def _check(
+        self, world: World, *, expected_year: int | None, postseason_status: PostseasonStatus | None = None
+    ) -> int:
         """締められるかを調べ、締める年 Y を返す。締められなければ例外。
 
-        局面の規則は domain の `season_phase` / `season_year` が出典（ここで書き直さない）。
+        戦力外を指名できる条件（`_season_over_year`）に、「その年のポストシーズンが終わった」を足したもの。
         """
-        last_played = self._context_query.last_played_on()
-        next_fixture = self._fixtures.first_date()
-        phase = season_phase(last_played_on=last_played, next_fixture_on=next_fixture)
-        if last_played is None:
-            raise SeasonNotFinished("まだ試合をしていないので、シーズンを締められません。")
-        if phase is SeasonPhase.BEFORE_OPENING:
-            raise AlreadyClosed(f"{last_played.year}年のシーズンは既に締めています。", year=last_played.year)
-        if phase is SeasonPhase.IN_SEASON:
-            raise SeasonNotFinished(
-                f"{last_played.year}年のシーズンはまだ終わっていません（未消化の試合があります）。"
-            )
-        year = season_year(next_fixture_on=next_fixture, last_played_on=last_played, start_year=world.start_year)
+        year = self._season_over_year(world, expected_year=expected_year)
+        status = self._postseason.status(world, year) if postseason_status is None else postseason_status
+        _ensure_postseason_settled(year, status)
+        return year
+
+    def _season_over_year(self, world: World, *, expected_year: int | None) -> int:
+        """その年の公式戦を終えて、まだ締めていない年 Y を返す（最終シーズンは除く）。そうでなければ例外。
+
+        **戦力外を指名できる条件の唯一の出典**（ポストシーズン中も指名できる。使うのは締めるときだけ）。
+        締められる条件（`_check`）はこれにポストシーズンの検査を足したもの。
+        「公式戦を終えた年」は domain の `regular_season_over_year` が出典（ここで書き直さない）。ここで足すのは
+        画面を開いたときの年（`expected_year`）と最終シーズンの検査だけ。
+        """
+        year = regular_season_over_year(
+            last_played_on=self._context_query.last_played_on(),
+            next_fixture_on=self._fixtures.first_date(),
+            start_year=world.start_year,
+        )
         if expected_year is not None and expected_year != year:
             if world.start_year <= expected_year < year:
                 raise AlreadyClosed(f"{expected_year}年のシーズンは既に締めています。", year=expected_year)
@@ -428,6 +487,9 @@ class PennantOffseasonService:
         self._fixtures.add_all(prepared.schedule)
         # 締める年のタイトル受賞者を表彰として書く（導いたのはロックの外。#248）
         self._awards.add_all(prepared.awards)
+        # 締める年の日本一を記録として書く（導いたのはロックの外。#242）
+        if prepared.championship is not None:
+            self._championships.add(prepared.championship)
 
         return SeasonClosed(
             year=year,
@@ -549,3 +611,9 @@ def _team_of(teams: Sequence[SimulationTeam], team_id: int) -> SimulationTeam:
     if team is None:
         raise TeamNotFound(f"球団が見つかりません（id={team_id}）。")
     return team
+
+
+def _ensure_postseason_settled(year: int, status: PostseasonStatus) -> None:
+    """その年のポストシーズンが終わった（または無い）か。終わっていなければ `PostseasonNotFinished`（締めない）。"""
+    if not status.is_settled:
+        raise PostseasonNotFinished(f"{year}年のポストシーズンがまだ終わっていません。")

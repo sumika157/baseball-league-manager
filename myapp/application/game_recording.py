@@ -26,6 +26,7 @@ from ..domain.value_objects import (
     FieldingPosition,
     ForeignPlayerRules,
     GameHeader,
+    GameStage,
     GameTimes,
     LineupEntry,
     RecordWarning,
@@ -125,6 +126,8 @@ class GameRecordingService:
                 played_on=played_on,
                 home_team_id=home_team_id,
                 away_team_id=away_team_id,
+                # 実データの試合は常に公式戦（スコアブックに区分の入力は無い）
+                stage=GameStage.REGULAR,
             )
         )
 
@@ -162,6 +165,8 @@ class GameRecordingService:
             away_team_id=away_team_id,
             times=times,
             attendance=attendance,
+            # 区分はスコアブックの入力ではない。今の試合の区分を引き継ぐ（公式戦に戻さない）
+            stage=current.stage,
         )
         entries = [
             LineupEntry(

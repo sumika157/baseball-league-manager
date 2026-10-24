@@ -1,7 +1,7 @@
 """ロスターの更新（選手の登録・更新・退団・移籍・主将、契約区分の昇格、FA 宣言）を担うアプリケーションサービス。
 
-更新だけを持ち、参照（ロスターや成績の画面）は `TeamApplicationService` が担う。世界の範囲に固定した
-参照用の組み立て（`build_service(世界の範囲)`）から更新を呼べないよう、更新はこのサービスに分けてある。
+更新だけを持ち、参照（ロスターや成績の画面）は `TeamViewService`・`LeagueViewService` が担う。世界の範囲に固定した
+参照用の組み立て（`build_team_view_service(世界の範囲)` など）から更新を呼べないよう、更新はこのサービスに分けてある。
 """
 
 from __future__ import annotations

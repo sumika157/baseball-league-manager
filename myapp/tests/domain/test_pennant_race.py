@@ -5,6 +5,7 @@ import unittest
 from myapp.domain.pennant.race import (
     PennantRace,
     RaceTeam,
+    final_order,
     final_ranks,
     league_champion,
     pennant_race,
@@ -221,3 +222,48 @@ class SingleTeamLeagueTest(unittest.TestCase):
 
     def test_the_only_team_of_a_league_is_its_champion(self) -> None:
         self.assertEqual(5, league_champion({5: 1}, [], {}, [5]))
+
+
+class FinalOrderTest(unittest.TestCase):
+    """最終順位の全順序（ポストシーズンの出場と本拠地）。同率は優勝と同じ規定で上から1球団ずつ決める。"""
+
+    ORDER = [1, 2, 3, 4, 5]
+
+    def test_without_ties_the_order_follows_the_ranks(self) -> None:
+        self.assertEqual([3, 1, 2], final_order({1: 2, 2: 3, 3: 1}, [], {}, self.ORDER))
+
+    def test_the_top_is_the_same_as_the_league_champion(self) -> None:
+        cases = [
+            ({1: 1, 2: 1, 3: 3}, [(2, 1)], {}),
+            ({1: 1, 2: 1, 3: 1}, [(3, 1), (3, 2), (1, 2)], {}),
+            ({1: 1, 2: 1}, [], {2: 1, 1: 4}),
+            ({1: 1, 2: 1}, [], {}),
+        ]
+        for ranks, results, previous in cases:
+            with self.subTest(ranks=ranks, results=results, previous=previous):
+                self.assertEqual(
+                    league_champion(ranks, results, previous, self.ORDER),
+                    final_order(ranks, results, previous, self.ORDER)[0],
+                )
+
+    def test_a_tie_for_second_is_decided_by_the_head_to_head_record(self) -> None:
+        # 2位と3位が同率。対戦は 3 が 2 に2勝1敗
+        ranks = {1: 1, 2: 2, 3: 2, 4: 4}
+        self.assertEqual([1, 3, 2, 4], final_order(ranks, [(3, 2), (3, 2), (2, 3), (2, 1)], {}, self.ORDER))
+
+    def test_an_even_head_to_head_falls_to_last_years_rank(self) -> None:
+        ranks = {1: 1, 2: 2, 3: 2}
+        self.assertEqual([1, 3, 2], final_order(ranks, [(3, 2), (2, 3)], {3: 2, 2: 5}, self.ORDER))
+
+    def test_everything_equal_falls_to_the_team_order(self) -> None:
+        self.assertEqual([1, 2, 3], final_order({3: 2, 2: 2, 1: 1}, [], {}, self.ORDER))
+
+    def test_a_three_way_tie_is_decided_one_by_one_among_the_remaining_teams(self) -> None:
+        # 2・3・4 が同率。3者の対戦勝率は 4: 2勝3敗 / 3: 3勝2敗 / 2: 1勝1敗 → 3 が先。
+        # 残る 2・4 だけで数え直すと 4 の1勝0敗 → 4、最後に 2（3者のままなら 2 が 4 より上だった）
+        ranks = {1: 1, 2: 2, 3: 2, 4: 2}
+        results = [(4, 2), (4, 3), (2, 3), (3, 4), (3, 4), (3, 4)]
+        self.assertEqual([1, 3, 4, 2], final_order(ranks, results, {}, self.ORDER))
+
+    def test_an_empty_league(self) -> None:
+        self.assertEqual([], final_order({}, [], {}, self.ORDER))

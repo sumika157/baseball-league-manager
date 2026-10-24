@@ -412,7 +412,8 @@ class DoubleCloseTest(ClosedSeasonCase):
             return [] if year == YEAR + 1 else find_by_year(year)
 
         with (
-            mock.patch.object(service, "_check", return_value=YEAR),
+            # 締める年の検査（公式戦を終えた年。ポストシーズンの検査は、この世界は方式「なし」なので通る）をすり抜ける
+            mock.patch.object(service, "_season_over_year", return_value=YEAR),
             mock.patch.object(service._ratings, "find_by_year", side_effect=blind_to_next_year),
             mock.patch(DECIDE_RETIREMENTS, return_value=(players[0],)),
             # 戦力外も外さない（翌年に入った新人の外国人を、締めた年で閉じようとして別の検査で落ちるため）

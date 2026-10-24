@@ -1,9 +1,9 @@
-"""ワークスペースの制約（スキーマだけ。帰属の backfill は 0056）。
+"""ワークスペースの制約（スキーマだけ。帰属の backfill は 0059）。
 
 球場・世界のワークスペースを null 不可にし、リーグ名・球場名の一意をワークスペースの中に替え、
 リーグが「ワークスペースか世界のどちらか一方」に属すことを CheckConstraint で保つ。
 
-逆方向（0056 まで戻す）は、リーグ名・球場名がワークスペースをまたいで重複していると、
+逆方向（0059 まで戻す）は、リーグ名・球場名がワークスペースをまたいで重複していると、
 一意制約を戻すところで失敗する（重複が無いときだけ成功する）。
 """
 
@@ -13,7 +13,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("myapp", "0056_backfill_default_workspace"),
+        ("myapp", "0059_backfill_default_workspace"),
     ]
 
     operations = [

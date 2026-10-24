@@ -7,6 +7,7 @@ from myapp.domain.entities import Game
 from myapp.domain.exceptions import InvalidGame
 from myapp.domain.value_objects import (
     BattingLine,
+    GameStage,
     Season,
 )
 from myapp.infrastructure import orm_models
@@ -32,7 +33,7 @@ class MatchupViewTest(BaseCase):
         self.url = ws_url("league_detail", self.league.id)
 
     def _table(self):
-        return self.service.get_league_detail(self.league.id).matchups
+        return self.league_view.get_league_detail(self.league.id).matchups
 
     def test_rows_and_columns_share_the_order(self):
         table = self._table()
@@ -73,7 +74,7 @@ class MatchupViewTest(BaseCase):
     def test_table_follows_the_selected_season(self):
         play_game(self.team, self.rival, year=2025, home_score=0, away_score=9, day=1)
 
-        table = self.service.get_league_detail(self.league.id, 2025).matchups
+        table = self.league_view.get_league_detail(self.league.id, 2025).matchups
         row = next(r for r in table.rows if r.team_id == self.team.id)
 
         self.assertEqual(row.total_label, "0-1-0")
@@ -82,7 +83,7 @@ class MatchupViewTest(BaseCase):
         empty = make_league(name="無試合リーグ")
         orm_models.Team.objects.create(league=empty, name="新チーム")
 
-        self.assertIsNone(self.service.get_league_detail(empty.id).matchups)
+        self.assertIsNone(self.league_view.get_league_detail(empty.id).matchups)
 
 
 class MonthlySplitViewTest(BaseCase):
@@ -103,6 +104,7 @@ class MonthlySplitViewTest(BaseCase):
             played_on=date(2026, month, day),
             home_team_id=self.team.id,
             away_team_id=self.rival.id,
+            stage=GameStage.REGULAR,
             home_score=1,
             away_score=0,
         )

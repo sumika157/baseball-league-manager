@@ -25,7 +25,7 @@ from myapp.domain.simulation.levels import (
 from myapp.domain.simulation.manager import choose_active_roster
 from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.samples import average_club
-from myapp.domain.value_objects import ForeignPlayerRules, PitchingLine
+from myapp.domain.value_objects import ForeignPlayerRules, GameStage, PitchingLine
 
 GAMES = 400
 OPENING_DAY = date(2026, 4, 1)
@@ -61,6 +61,7 @@ class AverageLeagueLevelsTest(TestCase):
                 make_random(game_seed(20260802, 2026, f"level-{index}")),
                 home,
                 away,
+                stage=GameStage.REGULAR,
                 played_on=OPENING_DAY + timedelta(days=index),
                 history=history,
                 foreign_rules=ForeignPlayerRules.UNLIMITED,
@@ -141,6 +142,7 @@ class SeasonTallyTest(TestCase):
                 make_random(index),
                 home,
                 away,
+                stage=GameStage.REGULAR,
                 played_on=OPENING_DAY + timedelta(days=index),
                 history=history,
                 foreign_rules=ForeignPlayerRules.UNLIMITED,
