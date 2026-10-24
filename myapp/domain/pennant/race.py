@@ -152,3 +152,27 @@ def final_ranks(ranks: Mapping[int, int], champion: int | None) -> dict[int, int
             if team_id != champion:
                 result[team_id] = 2
     return result
+
+
+def final_order(
+    ranks: Mapping[int, int],
+    results: Iterable[tuple[int, int]],
+    previous_rank: Mapping[int, int],
+    order: Sequence[int],
+) -> list[int]:
+    """リーグの最終順位の**全順序**（同率を残さない並び）。ポストシーズンの出場と本拠地を決める。
+
+    `ranks` の順位の順に並べ、同率の球団どうしは `season_champion` の規定（当該球団間の対戦勝率 → 前年の
+    最終順位 → 球団の並び順）で上から1球団ずつ決める（決まった球団を除いた残りで、対戦勝率を数え直す）。
+    首位は `league_champion` と必ず同じ球団になる（優勝の規則を2つ持たない）。
+    引数は `league_champion` と同じ。順位が空なら空。
+    """
+    decided = list(results)
+    ordered: list[int] = []
+    for rank in sorted(set(ranks.values())):
+        tied = [team_id for team_id, value in ranks.items() if value == rank]
+        while tied:
+            first = season_champion(tied, decided, previous_rank, order)
+            ordered.append(first)
+            tied.remove(first)
+    return ordered

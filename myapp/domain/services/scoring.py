@@ -625,6 +625,7 @@ def assemble_game(
         plate_appearances=pas,
         times=header.times,
         attendance=header.attendance,
+        stage=header.stage,
     )
     # 得点とイニングスコアは打席から導く。手入力させない
     game.line_score = game.derived_line_score()

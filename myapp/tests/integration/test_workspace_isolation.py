@@ -42,6 +42,7 @@ from myapp.domain.exceptions import (
     DomainError,
     GameNotFound,
     InvalidAward,
+    InvalidChampionship,
     InvalidWorld,
     LeagueNotFound,
     StadiumNotFound,
@@ -49,14 +50,24 @@ from myapp.domain.exceptions import (
     WorldNotFound,
 )
 from myapp.domain.pennant.awards import Award
+from myapp.domain.pennant.championship import Championship
 from myapp.domain.pennant.release import ReleasePlan
 from myapp.domain.pennant.world import MAX_WORLDS_PER_OWNER, WORLD_LIMIT_MESSAGE, World, WorldScope
 from myapp.domain.services.rankings import Title
-from myapp.domain.value_objects import BattingLine, JerseyNumber, PitchingLine, Position, RosterLimits, Season
+from myapp.domain.value_objects import (
+    BattingLine,
+    GameStage,
+    JerseyNumber,
+    PitchingLine,
+    Position,
+    RosterLimits,
+    Season,
+)
 from myapp.domain.workspace import Visibility, WorkspaceRole
 from myapp.infrastructure import orm_models, queries, repositories
 from myapp.infrastructure.queries import (
     DjangoAwardQuery,
+    DjangoChampionshipQuery,
     DjangoFieldingTotalsQuery,
     DjangoGameListQuery,
     DjangoHomeStadiumQuery,
@@ -65,6 +76,8 @@ from myapp.infrastructure.queries import (
     DjangoPlayerFieldingQuery,
     DjangoPlayerSearchQuery,
     DjangoPlayerStatsQuery,
+    DjangoPostseasonQuery,
+    DjangoPostseasonStatsQuery,
     DjangoRatingsHistoryQuery,
     DjangoSeasonPlayingTimeQuery,
     DjangoServiceHistoryQuery,
@@ -78,6 +91,7 @@ from myapp.infrastructure.queries import (
 )
 from myapp.infrastructure.repositories import (
     DjangoAwardRepository,
+    DjangoChampionshipRepository,
     DjangoClubPlanRepository,
     DjangoFixtureRepository,
     DjangoGameRepository,
@@ -94,7 +108,7 @@ from myapp.presentation.views import build_pennant_world_service
 from myapp.urls import workspace_urlpatterns
 
 from ..helpers import (
-    build_service,
+    build_league_view_service,
     build_workspace_access_query,
     make_editor,
     make_league,
@@ -124,6 +138,27 @@ A_WORLD = "Aの世界"
 B_WORLD = f"{B_MARK}世界"
 
 
+def _plant_postseason(scope: WorldScope, year: int) -> int:
+    """世界の `year` に、公式戦1つと、それに見合う終わったポストシーズン（CS ファイナルステージ）を置く。
+
+    世界の最初の2球団（id の順）で、公式戦（10月1日）をホームの勝ちにして1位を決め、1位のホームで3連勝させる
+    （1リーグ2球団は CS のファイナルステージだけ。アドバンテージ込みで先に勝ち抜ける）。最初の試合には1位の選手の
+    打撃を付ける（個人成績の画面に行が出る）。試合は世界の範囲で保存してから区分をポストシーズンに替える
+    （進行を回さずに置くため）。優勝した球団（1位）の id を返す。
+    """
+    assert scope.world_id is not None
+    home, away = orm_models.Team.objects.filter(league__world_id=scope.world_id).order_by("id")[:2]
+    stint = orm_models.PlayerStint.objects.filter(team=home).order_by("id").first()
+    assert stint is not None, "世界に選手が写っていない"
+    play_game(home, away, year=year, month=10, day=1, scope=scope)
+    for number, day in enumerate((4, 5, 6)):
+        batting = {stint.player_id: BattingLine(at_bats=4, singles=1)} if number == 0 else None
+        game = play_game(home, away, year=year, month=10, day=day, batting=batting, scope=scope)
+        assert game.id is not None
+        orm_models.Game.objects.filter(id=game.id).update(stage=GameStage.POSTSEASON.value)
+    return home.id
+
+
 class WorkspaceCase(BaseCase):
     """ワークスペース A（`BaseCase` の既定のワークスペース。最初に作るので id が最小）と B の実データ。
 
@@ -133,6 +168,7 @@ class WorkspaceCase(BaseCase):
     表ごとに効いているかを、行がある状態で確かめるため）。
     世界: A のリーグから分岐した A の世界（`A_WORLD`）と、B のリーグから分岐した B の世界（`B_WORLD`。オーナーは
     `b_owner`）。世界の台帳の検査に使う。B の世界には表彰の行も1つ直接置く（表彰はペナントの世界にしか無い）。
+    B の世界には `B_YEAR` の終わったポストシーズンと、同じ年の日本一の記録も置く（A の世界には置かない）。
     球場: A の相手チームと、A の世界のその写しの本拠地を、ORM で B の球場に向けておく（`_plant_stray_stadiums`。
     範囲の読み取りが B の球場を出さないことを、ほかの検査と同じ目印で確かめる）。
     準備はクラスで1回（`setUpTestData`）。
@@ -154,6 +190,7 @@ class WorkspaceCase(BaseCase):
     b_owner: User
     b_award_player_id: int
     b_award_team_id: int
+    b_world_team_id: int
     a_world_stray_team_id: int
     a_declaration_year: int
 
@@ -164,7 +201,7 @@ class WorkspaceCase(BaseCase):
         assert cls.workspace.id < cls.workspace_b.id, "A の id が最小（今の URL が A に解決する）"
 
         # --- A ---
-        service_a = build_service(real_scope())
+        service_a = build_league_view_service(real_scope())
         cls.a_batters = register_lineup(service_a, cls.team, prefix="A打者", first_number=1)
         (cls.a_pitcher,) = register_players(cls.team, [("A投手", 18, "投手")])
         cls.a_game_id = cls._play(cls.team, cls.rival, cls.a_batters[0], cls.a_pitcher, YEAR, None).id
@@ -203,6 +240,7 @@ class WorkspaceCase(BaseCase):
                 .world.id
             )
         cls._plant_b_award()
+        cls._plant_b_postseason()
         cls._plant_stray_stadiums()
         cls._plant_a_declaration()
 
@@ -248,6 +286,16 @@ class WorkspaceCase(BaseCase):
             team_id=stint.team_id,
             value="42",
         )
+
+    @classmethod
+    def _plant_b_postseason(cls) -> None:
+        """B の世界の、`B_YEAR` の終わったポストシーズン（B の世界の選手の打撃つき）と日本一の記録（#39）。
+
+        記録は試合と同じ年に置く（記録があればその年のポストシーズンの試合がある。ずれると球団史などが
+        `InvalidPostseason`）。日本一は締める処理だけが書くので、ORM で直接置く。
+        """
+        cls.b_world_team_id = _plant_postseason(WorldScope.pennant(cls.workspace_b.id, cls.b_world_id), B_YEAR)
+        orm_models.PennantChampionship.objects.create(team_id=cls.b_world_team_id, year=B_YEAR)
 
     @staticmethod
     def _play(home, away, batter, pitcher, year, scope):
@@ -560,6 +608,65 @@ def _award_query(t: WorkspaceCase) -> None:
     t.assertEqual(len(DjangoAwardQuery(WorldScope.pennant(t.workspace_b.id, t.b_world_id)).list_awards()), 1)
 
 
+def _a_scopes(t: WorkspaceCase) -> tuple[WorldScope, WorldScope]:
+    """A の実データと A の世界の範囲（ペナントの表は、どちらから読んでも B の世界の行が出てはならない）。"""
+    return t.a, WorldScope.pennant(t.workspace.id, t.a_world_id)
+
+
+def _b_world(t: WorkspaceCase) -> WorldScope:
+    return WorldScope.pennant(t.workspace_b.id, t.b_world_id)
+
+
+def _championship_repository(t: WorkspaceCase) -> None:
+    """日本一の記録（#39）。A の世界の範囲で B の世界の球団の日本一は書けず、B の記録は A の年の重複にも数えない。"""
+    a_world = WorldScope.pennant(t.workspace.id, t.a_world_id)
+    with t.assertRaises(InvalidWorld):
+        DjangoChampionshipRepository(t.a).add(Championship(year=YEAR, team_id=t.team.id))
+    b_records = orm_models.PennantChampionship.objects.filter(team_id=t.b_world_team_id)
+    before = list(b_records.values())
+    # B の世界の記録の無い年に書く（年の重複ではなく、範囲の外の球団であることで止まることを見る）
+    with t.assertRaises(InvalidChampionship):
+        DjangoChampionshipRepository(a_world).add(Championship(year=YEAR, team_id=t.b_world_team_id))
+    t.assertEqual(list(b_records.values()), before, "A の範囲で B の世界に日本一を書いた")
+    # B の世界の同じ年（`B_YEAR`）の記録は、A の世界の「1世界1年に1つ」の検査に数えない
+    a_team = orm_models.Team.objects.filter(league__world_id=t.a_world_id).order_by("id").first()
+    assert a_team is not None
+    DjangoChampionshipRepository(a_world).add(Championship(year=B_YEAR, team_id=a_team.id))
+    t.assertEqual(orm_models.PennantChampionship.objects.filter(year=B_YEAR).count(), 2)
+
+
+def _championship_query(t: WorkspaceCase) -> None:
+    for scope in _a_scopes(t):
+        rows = DjangoChampionshipQuery(scope).list_championships()
+        t.assertFalse(
+            [row for row in rows if row.team_id == t.b_world_team_id], f"{scope} で B の世界の日本一が読めた"
+        )
+        t.assert_no_mark(rows)
+    # 空振りの防止: B の世界の範囲では読める
+    t.assertEqual(
+        [row.team_id for row in DjangoChampionshipQuery(_b_world(t)).list_championships()], [t.b_world_team_id]
+    )
+
+
+def _postseason_query(t: WorkspaceCase) -> None:
+    for scope in _a_scopes(t):
+        query = DjangoPostseasonQuery(scope)
+        t.assertEqual(query.years(), [], f"{scope} で B の世界のポストシーズンの年が読めた")
+        t.assertEqual(query.games(B_YEAR), [])
+        t.assertEqual(query.results(B_YEAR), [])
+        t.assertEqual(query.results_by_year([B_YEAR]), {})
+        t.assertIsNone(query.last_regular_date(B_YEAR), f"{scope} で B の公式戦の日付が読めた")
+    # 空振りの防止: B の世界の範囲では読める
+    t.assertEqual(DjangoPostseasonQuery(_b_world(t)).years(), [B_YEAR])
+
+
+def _postseason_stats_query(t: WorkspaceCase) -> None:
+    for scope in _a_scopes(t):
+        t.assertEqual(DjangoPostseasonStatsQuery(scope).list_players(B_YEAR), [], f"{scope} で B の成績が読めた")
+    # 空振りの防止: B の世界の範囲では読める
+    t.assertTrue(DjangoPostseasonStatsQuery(_b_world(t)).list_players(B_YEAR))
+
+
 def _world_repository(t: WorkspaceCase) -> None:
     repo = DjangoWorldRepository(t.workspace.id)
     worlds = repo.find_all()
@@ -576,6 +683,13 @@ def _world_summary_query(t: WorkspaceCase) -> None:
     t.assert_no_mark(summaries)
     with t.assertRaises(WorldNotFound):
         query.get(t.b_world_id)
+    # ポストシーズンの試合があるか（世界バーの出し分け。#39）は A の世界の事実どおり
+    # （A の世界には無い。B の世界のポストシーズンに引きずられない）
+    t.assertFalse(summaries[0].played_postseason, "B の世界のポストシーズンを A の世界の要約に数えた")
+    t.assertFalse(query.get(t.a_world_id).played_postseason, "B の世界のポストシーズンを A の世界の要約に数えた")
+    # 空振りの防止: B の台帳では、B の世界にポストシーズンの試合がある
+    b_summaries = DjangoWorldSummaryQuery(t.workspace_b.id).list_all()
+    t.assertEqual([(summary.world_id, summary.played_postseason) for summary in b_summaries], [(t.b_world_id, True)])
 
 
 def _b_members(t: WorkspaceCase) -> tuple[User, User]:
@@ -633,6 +747,10 @@ CHECKS: dict[type, Callable[[WorkspaceCase], None]] = {
     DjangoReleasePlanRepository: _release_plan_repository,
     DjangoAwardRepository: _award_repository,
     DjangoAwardQuery: _award_query,
+    DjangoChampionshipRepository: _championship_repository,
+    DjangoChampionshipQuery: _championship_query,
+    DjangoPostseasonQuery: _postseason_query,
+    DjangoPostseasonStatsQuery: _postseason_stats_query,
     DjangoPlayerFieldingQuery: _player_fielding_query,
     DjangoFieldingTotalsQuery: _fielding_totals_query,
     DjangoSimulationContextQuery: _simulation_context_query,
@@ -831,6 +949,7 @@ class WritesDoNotReachTheOtherWorkspaceTest(WorkspaceCase):
             played_on=date(YEAR, 5, 1),
             home_team_id=home.id,
             away_team_id=away.id,
+            stage=GameStage.REGULAR,
             home_score=9,
             away_score=0,
         )
@@ -894,6 +1013,7 @@ class MisbuiltWorldScopeGameWritesTest(WorkspaceCase):
             played_on=date(YEAR, 5, 1),
             home_team_id=home.id,
             away_team_id=away.id,
+            stage=GameStage.REGULAR,
             home_score=0,
             away_score=0,
         )
@@ -1408,9 +1528,15 @@ URL_TABLE: dict[str, tuple[tuple[str, ...], str, bool]] = {
     "pennant_analysis_index": (("world",), PAGE, False),
     "pennant_team_analysis": (("world", "world_team"), PAGE, False),
     "pennant_player_detail": (("world", "world_team", "world_player"), PAGE, False),
+    "pennant_postseason": (("world",), PAGE, False),
+    "pennant_postseason_by_year": (("world", "world_year"), PAGE, False),
+    "pennant_postseason_stats": (("world", "world_year"), PAGE, False),
+    "pennant_settings": (("world",), PAGE, False),
+    "pennant_draft_order_settings": (("world",), WRITE, False),
 }
 
-# 下ごしらえにその年のオフの結果が無いので、自分のワークスペースでも 404 になる画面（ゲートの検査は別に効く）
+# 下ごしらえにその年のオフの結果が無いので、自分のワークスペースでも 404 になる画面（ゲートの検査は別に効く）。
+# 年を指すポストシーズンの画面は、両方の世界にその年のポストシーズンを置いて描く（ここに入れない）
 ABSENT_IN_FIXTURE = frozenset({"pennant_offseason"})
 
 # A の画面のリンクが向いてよい、ワークスペースの外の行き先（`/` は完全一致）
@@ -1448,11 +1574,22 @@ class EveryWorkspaceUrlTest(WorkspaceCase):
         super().setUpTestData()
         a_world = _world_side_ids(cls.a_world_id)
         b_world = _world_side_ids(cls.b_world_id)
+        # A の世界にも、世界の年（`YEAR`）のポストシーズンを置く（年を指すポストシーズンの画面を A で描くため）。
+        # B の世界の年は B のポストシーズンの年（`B_YEAR`）。門が無ければ B の id で開けてしまう年にして、
+        # 「A の key の下で B の id は 404」が「その年のポストシーズンが無い」の 404 で空振りしないようにする
+        _plant_postseason(WorldScope.pennant(cls.workspace.id, cls.a_world_id), YEAR)
         cls.side_a = Side(
             cls.team.id, cls.a_batters[0], cls.a_game_id, cls.league.id, YEAR, cls.a_world_id, *a_world, YEAR
         )
         cls.side_b = Side(
-            cls.b_team.id, cls.b_batters[0], cls.b_game_ids[1], cls.b_league.id, B_YEAR, cls.b_world_id, *b_world, YEAR
+            cls.b_team.id,
+            cls.b_batters[0],
+            cls.b_game_ids[1],
+            cls.b_league.id,
+            B_YEAR,
+            cls.b_world_id,
+            *b_world,
+            B_YEAR,
         )
 
     def _url(self, name: str, side: Side, workspace=None) -> str:
@@ -1529,6 +1666,19 @@ class EveryWorkspaceUrlTest(WorkspaceCase):
                                 link == "/" or link.startswith((inside, *OUTSIDE_PREFIXES)),
                                 f"{url} のリンク {link} が A の外へ出ています",
                             )
+
+    def test_the_postseason_pages_by_year_open_only_in_their_workspace(self):
+        """年を指すポストシーズンの画面は、A では A の世界で開け、A の key の下で B の世界の id なら 404。
+
+        B の key では同じ引数で開ける（404 が「その年のポストシーズンが無い」ではなく、門によることの確かめ）。
+        """
+        for name in ("pennant_postseason_by_year", "pennant_postseason_stats"):
+            with self.subTest(name=name):
+                self.assertEqual(self.client.get(self._url(name, self.side_a)).status_code, 200)
+                self.assertEqual(self.client.get(self._url(name, self.side_b)).status_code, 404)
+                b_page = self.client.get(self._url(name, self.side_b, workspace=self.workspace_b))
+                self.assertEqual(b_page.status_code, 200)
+                self.assertContains(b_page, B_MARK)
 
     def test_a_private_workspace_is_closed_to_outsiders(self):
         """(3) 非公開の B: 未ログインはログインへ、部外者（A の持ち主）は 404、B の編集者と担当は門を通る。"""

@@ -10,6 +10,7 @@ from django.contrib.auth.models import User
 from django.urls import reverse
 
 from myapp.admin import CaptaincyForm, GameForm
+from myapp.domain.value_objects import GameStage
 from myapp.domain.workspace import KEY_LENGTH, validate_workspace_key
 from myapp.infrastructure import orm_models
 
@@ -17,7 +18,8 @@ from ..helpers import make_league, make_stadium, make_workspace
 from .base import BaseCase
 
 CROSS = "別のワークスペースに属しています"
-GAME = {"year": 2024, "played_on": "2024-04-01", "home_score": 0, "away_score": 0}
+# 区分（stage）は ModelForm の必須欄（管理画面のフィールドセットには出ない。実データの試合は常に公式戦）
+GAME = {"year": 2024, "played_on": "2024-04-01", "home_score": 0, "away_score": 0, "stage": GameStage.REGULAR.value}
 
 
 class TwoWorkspaceCase(BaseCase):

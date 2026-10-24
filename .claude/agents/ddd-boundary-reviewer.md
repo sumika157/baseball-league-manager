@@ -57,7 +57,7 @@ presentation  →  application  →  domain  ←  infrastructure
 
 ### 6. 組み立てと受け渡し（CLAUDE.md「アーキテクチャ規則」）
 - **依存の組み立ては `presentation/views.py` の `build_*()` だけ**。サービスやリポジトリを別の場所（テンプレートタグ・管理画面・
-  管理コマンド・テスト）で個別に組み立てていないか。テストは `tests/helpers.py` 経由で `build_service(real_scope())` などを呼ぶ。
+  管理コマンド・テスト）で個別に組み立てていないか。テストは `tests/helpers.py` 経由で `build_league_view_service(real_scope())` などを呼ぶ。
 - **組み立て口・リポジトリ・参照クエリが範囲（`WorldScope(workspace_id, world_id)`）を必須で受け取っているか**。既定値を持たせる・
   範囲を無視して全部読む・`admin_real_queryset` を `admin.py` 以外から使う、のどれかがあればワークスペース間の漏れになる。
   新しい組み立て口は `test_wiring.py` の分類（両用・実データ専用・ペナント専用・台帳）に、新しい `Django*` の読み書きのクラスは
@@ -65,8 +65,10 @@ presentation  →  application  →  domain  ←  infrastructure
   呼ぶ側ごとに一部の依存だけを渡すと、開く画面によって落ちるサービスになる（管理画面のテンプレートタグで実際に起きた）。
 - **層をまたぐ受け渡しに素の `dict` を新しく使っていないか**。application が presentation に返す形は `application/dto.py` の
   dataclass にする（文字列キーの dict は綴りを間違えても静的検査が黙る）。既存の dict を触った変更なら、DTO へ寄せる余地を指摘してよい。
-- **`TeamApplicationService` にメソッドを足していないか**（`application/services.py`。約50メソッド・1,500行）。足しているなら、
-  対象ごとの別サービス（`game_recording.py` が前例）に置けないかを指摘する。分けるかどうかはユーザーが決めるので、「分ける案」として出す。
+- **サービスに別の対象のメソッドを足していないか**。application のサービスは対象ごとに分けてある（#219。参照は `LeagueViewService`・
+  `TeamViewService`・`GameViewService`、更新は `RosterService`・`GameRecordingService`）。対象の違うメソッドを
+  既存のサービスに足しているなら、対象ごとの別サービスに置けないかを指摘する。分けるかどうかはユーザーが決めるので、「分ける案」として出す。
+  参照のサービスに更新を足していないか（世界の範囲の参照用の組み立てから、現実の今日の年で書く更新を呼べるようになる）も見る。
 
 ## 進め方
 

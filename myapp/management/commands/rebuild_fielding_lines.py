@@ -19,7 +19,7 @@ from myapp.domain import services as domain_services
 from myapp.domain.exceptions import DomainError
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
-from myapp.infrastructure.scoping import games_in
+from myapp.infrastructure.scoping import StageFilter, games_in
 from myapp.management.workspaces import add_workspace_argument, real_scope_for_key
 
 
@@ -34,7 +34,9 @@ class Command(BaseCommand):
         scope = real_scope_for_key(options["workspace"])
         repository = DjangoGameRepository(scope)
         game_ids = sorted(
-            orm_models.GamePlateAppearance.objects.filter(game__in=games_in(scope).values("pk"))
+            orm_models.GamePlateAppearance.objects.filter(
+                game__in=games_in(scope, stages=StageFilter.ALL_STAGES).values("pk")
+            )
             .order_by()
             .values_list("game_id", flat=True)
             .distinct()

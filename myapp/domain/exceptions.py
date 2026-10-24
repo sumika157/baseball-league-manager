@@ -129,6 +129,10 @@ class InvalidAward(DomainError):
     """表彰として保存できない内容（同じ年の表彰を2度書く、範囲の外の選手など）。"""
 
 
+class InvalidChampionship(DomainError):
+    """日本一の記録として保存できない内容（同じ年を2度書く、範囲の外の球団など）。"""
+
+
 class AlreadyAdvanced(DomainError):
     """画面を開いたときから世界が進んでいる（二重送信や、別の画面で先に進めた場合）。"""
 
@@ -137,8 +141,36 @@ class InvalidSchedule(DomainError):
     """日程が組めない（球団数が奇数・リーグが1つ・規則が成立しないなど）、または日程の指定が不正。"""
 
 
+class InvalidPostseason(DomainError):
+    """ポストシーズンの試合が、結果から導いた勝ち上がりと食い違う（決着したシリーズの試合・同じ日の二重の試合・
+    出場していない球団・導いた日と違う日の試合など）。"""
+
+
 class SeasonNotFinished(DomainError):
     """シーズンがまだ終わっていない（未消化の対戦が残っている、または試合を一度もしていない）ので締められない。"""
+
+
+class PostseasonNotFinished(DomainError):
+    """ポストシーズンがまだ終わっていない（始まっていない・進行中）ので、シーズンを締められない。"""
+
+
+class PostseasonFormatLocked(DomainError):
+    """ポストシーズンの方式を変えられない（いまの年度のポストシーズンが始まっている・世界が終了している）。
+
+    理由の文言は domain の `world.postseason_format_change_blocker` が出典。
+    """
+
+
+class DraftOrderRuleLocked(DomainError):
+    """ドラフトの指名順の規則を変えられない（世界が終了している）。
+
+    理由の文言は domain の `world.draft_order_rule_change_blocker` が出典。
+    """
+
+
+class InvalidDraftAction(DomainError):
+    """ドラフト会議の行動として成立しない（自分の番でない・候補にいない・既に指名された・人数の幅を超える・
+    最少に届く前の選択終了・位置の最低人数を割る・会議が終わっている）。"""
 
 
 class AlreadyClosed(DomainError):

@@ -12,8 +12,9 @@
 </nav>{% include 'pennant/_world_bar.html' %}
 
 {% comment %}
-歴代の記録。終わったシーズンだけを古い順に並べる（保存した値ではなく、順位表とタイトルの集計から導いた値）。
-上が各リーグの優勝、下が選んだリーグのタイトルの受賞者（成績だけで決まる部門。同率首位は全員）。
+歴代の記録。終わったシーズンだけを古い順に並べる（順位とリーグ優勝は順位表から導いた値。締めた年のタイトルと日本一は締めたときの記録）。
+上が各リーグの優勝（公式戦の首位）と日本一（ポストシーズンの優勝。ポストシーズンのある世界だけ。締めた年は
+締めたときに保存した記録、いまの年度は試合から導いた値）、下が選んだリーグのタイトルの受賞者（成績だけで決まる部門。同率首位は全員）。
 {% endcomment %}
 <div class="page-head">
   <h1 class="page-title">歴代の記録</h1>
@@ -22,7 +23,7 @@
 
 {% if history.years %}
   <div class="card mb-4">
-    <div class="card-header">リーグ優勝</div>
+    <div class="card-header">リーグ優勝{% if history.postseason_title %}と{{ history.postseason_title }}{% endif %}</div>
     <div class="card-body p-0">
       <div class="table-responsive">
         <table class="table table-sm mb-0">
@@ -30,6 +31,7 @@
             <tr>
               <th>年</th>
               {% for league in history.leagues %}<th>{{ league.name }}</th>{% endfor %}
+              {% if history.postseason_title %}<th>{{ history.postseason_title }}</th>{% endif %}
             </tr>
           </thead>
           <tbody>
@@ -46,6 +48,17 @@
                     {% endif %}
                   </td>
                 {% endfor %}
+                {% if year.postseason %}
+                  <td>
+                    {% if year.postseason.team_id %}
+                      <a href="{% workspace_url 'pennant_team_history' world.world_id year.postseason.team_id %}">{{ year.postseason.team_name }}</a>{% if year.postseason.is_own %} <span class="badge bg-primary">自軍</span>{% endif %}
+                    {% elif year.postseason.in_progress %}
+                      <a href="{% workspace_url 'pennant_postseason_by_year' world.world_id year.year %}">進行中</a>
+                    {% else %}
+                      <span class="stat-muted">—</span>
+                    {% endif %}
+                  </td>
+                {% endif %}
               </tr>
             {% endfor %}
           </tbody>

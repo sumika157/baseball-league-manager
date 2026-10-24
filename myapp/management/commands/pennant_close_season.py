@@ -3,6 +3,7 @@
     docker compose exec web python manage.py pennant_close_season --world 3
 
 シーズンの日程をすべて消化した世界だけが締められる（`pennant_advance --to season-end` の後）。
+ポストシーズンのある世界は、ポストシーズンが終わってから（`pennant_advance --to postseason-end` の後）。
 元に戻せない。同じ年を2回締めようとすると、何も変えずにエラーにする。
 実データには触れない。
 """
@@ -37,7 +38,8 @@ class Command(BaseCommand):
             self.style.SUCCESS(
                 f"{result.year}年のシーズンを締めました（引退 {result.retired_count}人・"
                 f"戦力外 {result.released_count}人・"
-                f"新人 {result.draftee_count}人（うち外国人 {result.foreign_draftee_count}人））　所要 {elapsed:.2f}秒"
+                f"新人 {result.draftee_count}人（うち外国人 {result.foreign_draftee_count}人）・"
+                f"ドラフト1巡目の抽選 {result.first_round_lottery_count}件）　所要 {elapsed:.2f}秒"
             )
         )
         self.stdout.write(f"{result.next_year}年の日程を作りました（{result.fixture_count}試合）")

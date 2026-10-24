@@ -10,7 +10,7 @@ from django.test import SimpleTestCase
 
 from myapp.application.dto import SimulationPlayer, SimulationTeam
 from myapp.application.foreign_quota import ForeignQuotaExemptions, QuotaExemptions
-from myapp.application.pennant_season import pool_of
+from myapp.application.pennant_simulation import pool_of
 from myapp.domain.pennant.schedule import AdvanceTarget
 from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings
 from myapp.domain.value_objects import BattingLine, ForeignPlayerRules, Position

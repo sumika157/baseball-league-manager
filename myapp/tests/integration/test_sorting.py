@@ -104,16 +104,16 @@ class TeamOrderingTest(BaseCase):
         orm_models.Team.objects.filter(id=self.rival.id).update(display_order=1, name="Bチーム")
 
     def test_display_order_beats_name(self):
-        names = [t.name for t in self.service.list_teams().rows]
+        names = [t.name for t in self.league_view.list_teams().rows]
         self.assertEqual(names, ["Bチーム", "Aチーム"])
 
     def test_dashboard_uses_the_same_order(self):
-        names = [t.name for t in self.service.get_dashboard().teams]
+        names = [t.name for t in self.league_view.get_dashboard().teams]
         self.assertEqual(names, ["Bチーム", "Aチーム"])
 
     def test_same_order_falls_back_to_name(self):
         orm_models.Team.objects.update(display_order=0)
-        names = [t.name for t in self.service.list_teams().rows]
+        names = [t.name for t in self.league_view.list_teams().rows]
         self.assertEqual(names, ["Aチーム", "Bチーム"])
 
     def _league_page(self):
@@ -226,13 +226,13 @@ class LeagueOrderingTest(BaseCase):
         a2 = orm_models.Team.objects.create(league=self.first, name="A2チーム")
         play_game(orm_models.Team.objects.get(name="Aチーム"), a2, day=1)
 
-        names = [g.league_name for g in self.service.get_standings(2026).leagues]
+        names = [g.league_name for g in self.league_view.get_standings(2026).leagues]
         self.assertEqual(names, ["Zリーグ", "Aリーグ"])
 
     def test_order_is_reflected_in_the_team_list(self):
-        names = [g.league_name for g in self.service.list_teams_by_league().rows]
+        names = [g.league_name for g in self.league_view.list_teams_by_league().rows]
         self.assertEqual(names, ["Zリーグ", "Aリーグ"])
 
     def test_order_is_reflected_in_the_dashboard(self):
-        names = [g.league_name for g in self.service.get_dashboard().leagues]
+        names = [g.league_name for g in self.league_view.get_dashboard().leagues]
         self.assertEqual(names, ["Zリーグ", "Aリーグ"])

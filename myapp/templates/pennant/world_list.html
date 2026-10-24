@@ -67,6 +67,10 @@
           {% include 'pennant/_field_errors.html' with errors=form.start_year.errors %}
         </div>
 
+        {% include 'pennant/_postseason_format_field.html' %}
+
+        {% include 'pennant/_draft_order_field.html' %}
+
         <details class="mb-3">
           <summary>詳細設定</summary>
           <div class="mt-2">

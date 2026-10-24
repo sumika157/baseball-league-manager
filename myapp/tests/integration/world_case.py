@@ -9,24 +9,42 @@
 from datetime import date
 from unittest.mock import patch
 
-from myapp.application.dto import LineupSlot
+from django.db import transaction
+from django.test import TestCase
+
+from myapp.application.dto import LineupSlot, PostseasonAdvanceReport
 from myapp.application.foreign_quota import ForeignQuotaExemptions
 from myapp.application.game_recording import GameRecordingService
 from myapp.domain.entities import Game, Player
+from myapp.domain.pennant.postseason import PostseasonFormat
+from myapp.domain.pennant.schedule import AdvanceTarget
 from myapp.domain.pennant.world import WorldScope
-from myapp.domain.value_objects import BattingLine, FieldingPosition, JerseyNumber, Season
+from myapp.domain.value_objects import BattingLine, FieldingPosition, GameStage, JerseyNumber, Season
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoHomeStadiumQuery, DjangoServiceHistoryQuery
-from myapp.infrastructure.repositories import DjangoGameRepository, DjangoLeagueRepository, DjangoTeamRepository
-from myapp.presentation.views import build_pennant_world_service
+from myapp.infrastructure.repositories import (
+    DjangoFixtureRepository,
+    DjangoGameRepository,
+    DjangoLeagueRepository,
+    DjangoTeamRepository,
+)
+from myapp.presentation.views import (
+    build_pennant_postseason_service,
+    build_pennant_season_service,
+    build_pennant_world_service,
+)
 
 from ..helpers import (
     build_roster_service,
     build_scorebook,
+    make_league,
+    make_stadium,
     play_game,
     real_scope,
     register_lineup,
+    register_players,
     to_plate_appearances,
+    world_ledger,
     world_scope,
     ws_url,
 )
@@ -142,6 +160,7 @@ class WorldCase(BaseCase):
                 played_on=date(YEAR, 4, 2),
                 home_team_id=cls.pennant_team.id,
                 away_team_id=cls.pennant_rival.id,
+                stage=GameStage.REGULAR,
             )
         )
         lineup = [
@@ -212,6 +231,8 @@ class WorldCase(BaseCase):
             ws_url("pennant_team_list", world_id),
             ws_url("pennant_game_list", world_id),
             ws_url("pennant_history", world_id),
+            ws_url("pennant_postseason", world_id),
+            ws_url("pennant_settings", world_id),
             ws_url("pennant_team_history", world_id, team.id),
             *(ws_url("pennant_club", world_id) + f"?tab={tab}" for tab in ("active", "lineup", "pitching")),
             ws_url("pennant_player_list", world_id, team.id),
@@ -226,3 +247,118 @@ class WorldCase(BaseCase):
         if game is not None:
             urls.append(ws_url("pennant_game_detail", world_id, game.id))
         return urls
+
+
+# --- ポストシーズン（#39）の土台 ---
+BATTER_POSITIONS = ["捕手"] * 2 + ["内野手"] * 5 + ["外野手"] * 4 + ["指名打者"]
+PITCHERS = 11
+
+
+def _register_club(team: orm_models.Team, prefix: str) -> None:
+    register_players(
+        team,
+        [
+            *((f"{prefix}野手{n}", n, position) for n, position in enumerate(BATTER_POSITIONS, start=1)),
+            *((f"{prefix}投手{n}", 20 + n, "投手") for n in range(1, PITCHERS + 1)),
+        ],
+    )
+
+
+class PostseasonWorldCase(TestCase):
+    """公式戦を終えた世界（NPB 方式・方式「なし」）。同じシードなので公式戦の結果は同じ。"""
+
+    npb_world: int
+    none_world: int
+    managed_source_id: int
+
+    @classmethod
+    def setUpTestData(cls):
+        league_ids = []
+        for league_index in range(2):
+            league = make_league(f"ポスト{league_index}リーグ")
+            league_ids.append(league.id)
+            stadium = make_stadium(f"ポスト{league_index}球場", city="東京", capacity=30000)
+            for team_index in range(3):
+                team = orm_models.Team.objects.create(
+                    league=league, name=f"ポスト{league_index}-{team_index}球団", home_stadium=stadium
+                )
+                _register_club(team, f"{league_index}{team_index}")
+                if league_index == 0 and team_index == 0:
+                    cls.managed_source_id = team.id
+        cls.npb_world = cls._create(league_ids, "NPB の世界", PostseasonFormat.NPB)
+        cls.none_world = cls._create(league_ids, "なしの世界", PostseasonFormat.NONE)
+        for world_id in (cls.npb_world, cls.none_world):
+            build_pennant_season_service(world_scope(world_id)).advance(AdvanceTarget.WEEK)
+            fixtures = DjangoFixtureRepository(world_scope(world_id))
+            fixtures.remove(fixtures.find_all())
+
+    @classmethod
+    def _create(cls, league_ids, name, postseason_format) -> int:
+        created = build_pennant_world_service(real_scope()).create_world(
+            name=name,
+            owner_id=None,
+            source_league_ids=league_ids,
+            start_year=YEAR,
+            seed=11,
+            managed_source_team_id=cls.managed_source_id,
+            postseason_format=postseason_format,
+        )
+        return created.world.id
+
+    # --- 道具 ---
+
+    @staticmethod
+    def advance(world_id, target=AdvanceTarget.DAY, **kwargs) -> PostseasonAdvanceReport:
+        return build_pennant_postseason_service(world_scope(world_id)).advance(target, **kwargs)
+
+    def advance_to_the_end(self, world_id, target=AdvanceTarget.DAY) -> list[PostseasonAdvanceReport]:
+        reports = []
+        for _ in range(200):
+            report = self.advance(world_id, target)
+            reports.append(report)
+            if not report.played_dates:
+                return reports
+        raise AssertionError("ポストシーズンが終わりません")
+
+    @staticmethod
+    def postseason_snapshot(world_id):
+        """ポストシーズンの試合の打席列（球団と選手は名前で）。"""
+        return list(
+            orm_models.GamePlateAppearance.objects.filter(
+                game__home_team__league__world_id=world_id, game__stage=GameStage.POSTSEASON.value
+            )
+            .order_by("game__played_on", "game__home_team__name", "sequence")
+            .values_list(
+                "game__played_on",
+                "game__home_team__name",
+                "game__away_team__name",
+                "game__home_score",
+                "game__away_score",
+                "sequence",
+                "inning",
+                "batter__name",
+                "pitcher__name",
+                "result",
+            )
+        )
+
+    @staticmethod
+    def replay(world_id, run):
+        savepoint = transaction.savepoint()
+        try:
+            run()
+            return PostseasonWorldCase.postseason_snapshot(world_id)
+        finally:
+            transaction.savepoint_rollback(savepoint)
+
+    @staticmethod
+    def bracket(world_id):
+        service = build_pennant_postseason_service(world_scope(world_id))
+        world = world_ledger().find_by_id(world_id)
+        return service._brackets.bracket(world, YEAR)
+
+    @staticmethod
+    def postseason_games(world_id):
+        return orm_models.Game.objects.filter(
+            home_team__league__world_id=world_id, stage=GameStage.POSTSEASON.value
+        ).order_by("played_on", "id")

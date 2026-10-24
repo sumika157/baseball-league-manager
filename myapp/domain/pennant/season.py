@@ -10,6 +10,7 @@ import datetime
 from collections.abc import Iterable
 from enum import Enum
 
+from ..exceptions import AlreadyClosed, SeasonNotFinished
 from .schedule import MAX_GAMES_PER_ADVANCE as MAX_GAMES_PER_ADVANCE
 from .schedule import AdvanceTarget, ScheduleRules, default_opening_day
 from .world import MAX_SEASONS_PER_WORLD
@@ -25,6 +26,13 @@ SCREEN_ADVANCE_TARGETS = (
     AdvanceTarget.WEEK,
     AdvanceTarget.MONTH_END,
     AdvanceTarget.LIMIT,
+)
+# ポストシーズン（シーズン終了の後）に画面から進められる範囲。ボタンの並び順。受け付ける範囲もここが唯一の出典。
+# どの範囲も1回の上限（`MAX_GAMES_PER_ADVANCE`）を超える手前の日で止まる（`PennantPostseasonService`）
+POSTSEASON_SCREEN_TARGETS = (
+    AdvanceTarget.DAY,
+    AdvanceTarget.NEXT_MANAGED_GAME,
+    AdvanceTarget.POSTSEASON_END,
 )
 # 「進めた結果」のまとめに載せる期間の上限（日）。長く進めても、読める量に丸める
 MAX_SUMMARY_DAYS = 31
@@ -100,6 +108,25 @@ def season_year(
     能力を引く年と同じ規則なので `ratings_year` をそのまま呼ぶ（年の決め方を2つに増やさない）。
     """
     return ratings_year(next_game_on=next_fixture_on, last_played_on=last_played_on, start_year=start_year)
+
+
+def regular_season_over_year(
+    *, last_played_on: datetime.date | None, next_fixture_on: datetime.date | None, start_year: int
+) -> int:
+    """公式戦を終えて、まだ締めていない年。**「公式戦を終えた年」の判定の唯一の出典**。
+
+    ポストシーズンを進める・戦力外を指名する・シーズンを締める（さらにポストシーズンの検査を足す）が同じ判定を使う。
+    試合がまだ無い・未消化の対戦が残っていれば `SeasonNotFinished`、締めた後（翌年の開幕前）なら `AlreadyClosed`。
+    最終シーズンかどうかは見ない（呼ぶ側の関心）。
+    """
+    phase = season_phase(last_played_on=last_played_on, next_fixture_on=next_fixture_on)
+    if last_played_on is None:
+        raise SeasonNotFinished("まだ試合をしていないので、公式戦が終わっていません。")
+    if phase is SeasonPhase.BEFORE_OPENING:
+        raise AlreadyClosed(f"{last_played_on.year}年のシーズンは既に締めています。", year=last_played_on.year)
+    if phase is SeasonPhase.IN_SEASON:
+        raise SeasonNotFinished(f"{last_played_on.year}年の公式戦はまだ終わっていません（未消化の試合があります）。")
+    return season_year(next_fixture_on=next_fixture_on, last_played_on=last_played_on, start_year=start_year)
 
 
 def is_final_season(*, current_year: int, start_year: int) -> bool:

@@ -1,0 +1,55 @@
+{% load scoped %}{% comment %}
+GM ホームの「ポストシーズン」のカード（PostseasonCard を postseason で渡す）。公式戦を終え、ポストシーズンのある年だけ。
+開始前・進行中は、自軍の状況・次の試合の日と対戦・自軍のシリーズを出し、オーナーには進めるボタンを出す
+（このとき「シーズンを締める」のカードは出さない。home.html とビューが出し分ける）。
+終わったら優勝の1行だけにし、締めるカード（オーナー）を続けて出す。予定日は次の試合の日だけ（先の回の日付は出さない）。
+{% endcomment %}
+<div class="card mb-4" id="postseason">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span>{{ postseason.year }}年 ポストシーズン（{{ postseason.status.value }}）</span>
+    <a href="{% workspace_url 'pennant_postseason_by_year' world.world_id postseason.year %}" class="card-header-link">勝ち上がりを見る</a>
+  </div>
+  <div class="card-body">
+    {% if postseason.finished %}
+      <p class="mb-0" data-testid="postseason-champion">
+        {{ postseason.year }}年 {{ postseason.champion_label }}: <span class="stat-key">{{ postseason.champion_name }}</span>
+        {% if postseason.own_outcome %}<span class="stat-muted ms-2">自軍 {{ postseason.own_outcome }}</span>{% endif %}
+      </p>
+    {% else %}
+      {% if postseason.own_outcome %}
+        <p class="mb-2">自軍 <span class="stat-key">{{ postseason.own_outcome }}</span></p>
+      {% endif %}
+      {% if postseason.next_day %}
+        <div class="mb-3">
+          <div class="stat-muted mb-1">次の試合 {{ postseason.next_day|date:"n月j日（D）" }}</div>
+          <ul class="mb-0">
+            {% for match in postseason.next_games %}
+              <li>{{ match.series_name }} 第{{ match.number }}戦 {{ match.away_team_name }} ＠ {{ match.home_team_name }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+      {% if postseason.own_series %}
+        <div class="mb-3">{% include 'pennant/_postseason_series.html' with series=postseason.own_series %}</div>
+      {% endif %}
+      {% if is_owner %}
+        <form method="post" action="{% workspace_url 'pennant_advance' world.world_id %}">
+          {% csrf_token %}
+          <input type="hidden" name="expected_today" value="{{ postseason.expected_today }}">
+          <div class="d-flex flex-wrap gap-2 mb-2">
+            {% for option in postseason.advance_options %}
+              <button type="submit" name="target" value="{{ option.target }}" class="btn {% if forloop.first %}btn-primary{% else %}btn-secondary{% endif %}">{{ option.label }}</button>
+            {% endfor %}
+          </div>
+        </form>
+        <p class="stat-muted mb-0" style="font-size: 0.8125rem;" data-testid="postseason-note">
+          {% if world.is_final_season %}
+            ポストシーズンが終わると、この世界は終了します。
+          {% else %}
+            戦力外はポストシーズン中も編成の「戦力外」で選べます（<a href="{% workspace_url 'pennant_club' world.world_id %}?tab=release">編成を開く</a>）。シーズンを締められるのは、ポストシーズンが終わってからです。
+          {% endif %}
+        </p>
+      {% endif %}
+    {% endif %}
+  </div>
+</div>

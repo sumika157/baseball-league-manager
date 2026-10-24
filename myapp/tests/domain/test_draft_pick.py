@@ -58,6 +58,12 @@ class DraftPickTest(TestCase):
             with self.subTest(label=label):
                 self.assertEqual(pick.label, label)
 
+    def test_order_label(self):
+        """オフの結果の「指名」の列（#198 D1）。順位が無ければ空。"""
+        self.assertEqual(DraftPick(2020, round=1).order_label, "1位")
+        self.assertEqual(DraftPick(2020, round=3, is_development=True).order_label, "育成3位")
+        self.assertEqual(DraftPick(2020).order_label, "")
+
     def test_entry_year_is_the_next_year(self):
         self.assertEqual(DraftPick(2019, round=1).entry_year, 2020)
 

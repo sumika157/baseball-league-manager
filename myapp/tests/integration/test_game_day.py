@@ -11,7 +11,7 @@ from django.contrib.auth.models import User
 from django.urls import reverse
 
 from myapp.domain.entities import Game
-from myapp.domain.value_objects import GameTimes, Season
+from myapp.domain.value_objects import GameStage, GameTimes, Season
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoHomeStadiumQuery
 from myapp.infrastructure.repositories import DjangoGameRepository
@@ -32,6 +32,7 @@ class GameDayRepositoryTest(BaseCase):
             "played_on": date(2026, 4, 1),
             "home_team_id": self.team.id,
             "away_team_id": self.rival.id,
+            "stage": GameStage.REGULAR,
             "times": TIMES,
             "attendance": 42071,
         }

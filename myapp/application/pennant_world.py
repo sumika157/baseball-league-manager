@@ -18,8 +18,10 @@ from ..domain import services as domain_services
 from ..domain.entities import League, Player, Team
 from ..domain.exceptions import InvalidWorld, TeamNotFound
 from ..domain.pennant.club_plan import ClubMember, ensure_roster_playable
+from ..domain.pennant.draft_order import DraftOrderRule
 from ..domain.pennant.fork import fork_league, fork_roster, fork_team
 from ..domain.pennant.initial_ratings import career_record, estimate_initial_ratings
+from ..domain.pennant.postseason import PostseasonFormat
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.world import (
     MAX_SEASONS_PER_WORLD,
@@ -82,6 +84,8 @@ def _row(world: World) -> PennantWorldRow:
         start_year=world.start_year,
         owner_id=world.owner_id,
         managed_team_id=world.managed_team_id,
+        postseason_format=world.postseason_format,
+        draft_order_rule=world.draft_order_rule,
     )
 
 
@@ -128,6 +132,8 @@ class PennantWorldService:
         start_year: int,
         seed: int,
         managed_source_team_id: int | None = None,
+        postseason_format: PostseasonFormat = PostseasonFormat.NONE,
+        draft_order_rule: DraftOrderRule = DraftOrderRule.NPB,
     ) -> PennantWorldCreated:
         """実データのリーグを分岐して世界を作る。
 
@@ -137,6 +143,9 @@ class PennantWorldService:
 
         `managed_source_team_id` は受け持つ球団を**分岐元の球団の id**で指す（任意。
         世界を作ったあとで決めてもよい）。写した先の球団が受け持ちになる。
+
+        `postseason_format` はポストシーズンの方式。省くと「なし」（方式を足す前と同じ進み方）。
+        `draft_order_rule` はドラフトの指名順の規則。省くと NPB 方式。
 
         球団の現在の在籍選手で試合を組めない球団（外国人枠の中でスタメンを組めない名簿を含む）があるリーグは、
         InvalidWorld で弾く（世界を作る前に検査する。
@@ -153,7 +162,15 @@ class PennantWorldService:
         if owner_id is not None and self._worlds.count_by_owner(owner_id) >= MAX_WORLDS_PER_OWNER:
             raise InvalidWorld(WORLD_LIMIT_MESSAGE)
         # 検査を先に済ませる（世界を作ってから失敗すると、消す手間が増える）
-        world = World(name=name, seed=seed, start_year=start_year, owner_id=owner_id, workspace_id=self._workspace_id)
+        world = World(
+            name=name,
+            seed=seed,
+            start_year=start_year,
+            owner_id=owner_id,
+            workspace_id=self._workspace_id,
+            postseason_format=postseason_format,
+            draft_order_rule=draft_order_rule,
+        )
         source = self.load_source(league_ids)
         # リーグ名はワークスペースの中でだけ一意なので、別のワークスペースの同名のリーグを両方選べてしまう。
         # 世界の中ではリーグ名が一意（unique_world_league_name）なので、写す前に弾く
@@ -217,6 +234,8 @@ class PennantWorldService:
         start_year: int,
         seed: int,
         managed_source_team_id: int | None = None,
+        postseason_format: PostseasonFormat = PostseasonFormat.NONE,
+        draft_order_rule: DraftOrderRule = DraftOrderRule.NPB,
     ) -> PennantWorldCreated:
         """世界を作り、開幕年の日程まで作る。**同じトランザクション**で行い、日程が組めなければ世界も残さない。
 
@@ -231,6 +250,8 @@ class PennantWorldService:
                 start_year=start_year,
                 seed=seed,
                 managed_source_team_id=managed_source_team_id,
+                postseason_format=postseason_format,
+                draft_order_rule=draft_order_rule,
             )
             self._ensure_schedule(_saved_id(created.world.id))
         return created

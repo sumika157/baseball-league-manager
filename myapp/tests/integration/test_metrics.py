@@ -214,8 +214,8 @@ class AdvancedMetricsTest(BaseCase):
         """
         login_as_manager(self.client, self.team, username="scorer")
         game = play_game(self.team, self.rival, home_score=0, away_score=0)
-        batters = register_lineup(self.service, self.rival, prefix="相手打者", first_number=71)
-        home_batters = register_lineup(self.service, self.team, prefix="自軍打者", first_number=81)
+        batters = register_lineup(self.roster, self.rival, prefix="相手打者", first_number=71)
+        home_batters = register_lineup(self.roster, self.team, prefix="自軍打者", first_number=81)
 
         post_game_scorebook_day_unrecorded(
             self.client,

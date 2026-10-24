@@ -27,7 +27,14 @@ from myapp.domain.simulation.levels import SeasonTally, UsageRow, UsageTally
 from myapp.domain.simulation.manager import ClubRoster, SimBatter, SimPitcher, choose_active_roster
 from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings, RatingGrade
-from myapp.domain.value_objects import BattingLine, ContractStatus, ForeignPlayerRules, InningsPitched, PitchingLine
+from myapp.domain.value_objects import (
+    BattingLine,
+    ContractStatus,
+    ForeignPlayerRules,
+    GameStage,
+    InningsPitched,
+    PitchingLine,
+)
 from myapp.presentation.views import build_pennant_world_service
 
 OUTS_PER_INNING = InningsPitched.OUTS_PER_INNING
@@ -245,6 +252,7 @@ def play_season(
             rng,
             rosters[fixture.home_team_id],
             rosters[fixture.visitor_team_id],
+            stage=GameStage.REGULAR,
             played_on=fixture.date,
             history=history,
             # 1軍はリーグの外国人枠で選んであるので、試合では縛らない（交流戦の枠の違いは測らない）

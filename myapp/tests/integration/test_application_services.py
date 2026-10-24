@@ -31,6 +31,6 @@ class ApplicationServiceTest(BaseCase):
         self.roster.register_player(self.team.id, "山田", 10, "内野手")
         self.roster.register_player(self.team.id, "佐藤", 18, "投手")
 
-        summary = self.service.list_teams().rows[0]
+        summary = self.league_view.list_teams().rows[0]
         self.assertEqual(summary.league_name, "テストリーグ")
         self.assertEqual(summary.player_count, 2)

@@ -8,7 +8,7 @@ from django.test.utils import CaptureQueriesContext
 
 from myapp.admin import FreeAgentDeclarationForm
 from myapp.domain.exceptions import InvalidAcquisition, InvalidFreeAgentDeclaration
-from myapp.domain.value_objects import AcquisitionRoute, FreeAgencyKind
+from myapp.domain.value_objects import AcquisitionRoute, FreeAgencyKind, GameStage
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoTeamRepository
 
@@ -437,6 +437,7 @@ class MovesDisplayTest(BaseCase):
             played_on=date(self.YEAR, 4, 1),
             home_team_id=self.team.id,
             away_team_id=self.rival.id,
+            stage=GameStage.REGULAR,
             home_score=1,
             away_score=0,
         )

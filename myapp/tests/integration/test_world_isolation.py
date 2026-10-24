@@ -109,12 +109,12 @@ class RealPagesDoNotShowThePennantWorldTest(WorldCase):
                 self._assert_no_marker(url)
 
     def test_the_dashboard_counts_only_the_real_games(self):
-        board = self.service.get_dashboard()
+        board = self.league_view.get_dashboard()
 
         self.assertEqual([league.league_name for league in board.leagues], [self.league.name])
 
     def test_standings_count_only_the_real_games(self):
-        board = self.service.get_standings(YEAR)
+        board = self.league_view.get_standings(YEAR)
 
         self.assertEqual([row.team_name for row in board.rows], [self.team.name, self.rival.name])
         self.assertEqual(sum(row.games_played for row in board.rows), 2, "実データの1試合を両チームが数える")
@@ -440,6 +440,7 @@ class AdminDoesNotShowThePennantWorldTest(WorldCase):
         self.assertNotIn(orm_models.PennantReleasePlan, admin.site._registry)
         self.assertNotIn(orm_models.PennantReleasePlanEntry, admin.site._registry)
         self.assertNotIn(orm_models.PennantAward, admin.site._registry)
+        self.assertNotIn(orm_models.PennantChampionship, admin.site._registry)
 
     def test_change_pages_by_pennant_ids_do_not_open(self):
         """世界の id を直接指定しても、編集画面は開かない（Django は管理画面の一覧へ戻す）。"""
@@ -558,6 +559,7 @@ CLASSIFICATION: dict[str, tuple[str, str | None]] = {
     "PennantReleasePlan": (LEAGUE, "team__league"),
     "PennantReleasePlanEntry": (LEAGUE, "plan__team__league"),
     "PennantAward": (LEAGUE, "league"),
+    "PennantChampionship": (LEAGUE, "team__league"),
     "Game": (GAME, "home_team__league"),
     "GameInningScore": (GAME, "game__home_team__league"),
     "GameBattingLine": (GAME, "game__home_team__league"),

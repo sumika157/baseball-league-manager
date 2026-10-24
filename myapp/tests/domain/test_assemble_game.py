@@ -7,6 +7,7 @@
 ホームの投手は 100（先発）→101（救援）、ビジターの投手は 200 だけ。
 """
 
+from dataclasses import replace
 from datetime import date
 from unittest import TestCase
 
@@ -16,6 +17,7 @@ from myapp.domain.value_objects import (
     Base,
     FieldingPosition,
     GameHeader,
+    GameStage,
     LineupEntry,
     PlateAppearanceResult,
     Season,
@@ -41,7 +43,9 @@ POSITIONS = [
 HOME_CATCHER, AWAY_CATCHER = 28, 8
 HOME_SECOND_BASEMAN, HOME_DESIGNATED_HITTER = 22, 29
 
-HEADER = GameHeader(season=Season(2026), played_on=date(2026, 4, 1), home_team_id=HOME, away_team_id=AWAY)
+HEADER = GameHeader(
+    season=Season(2026), played_on=date(2026, 4, 1), home_team_id=HOME, away_team_id=AWAY, stage=GameStage.REGULAR
+)
 
 
 def _lineup() -> list[LineupEntry]:
@@ -113,8 +117,21 @@ class AssembleGameTest(TestCase):
         self.assertEqual(len(self.game.plate_appearances), 19)
 
     def test_the_header_id_is_kept_when_overwriting_a_saved_game(self):
-        saved = GameHeader(season=Season(2026), played_on=date(2026, 4, 1), home_team_id=HOME, away_team_id=AWAY, id=7)
+        saved = GameHeader(
+            season=Season(2026),
+            played_on=date(2026, 4, 1),
+            home_team_id=HOME,
+            away_team_id=AWAY,
+            stage=GameStage.REGULAR,
+            id=7,
+        )
         self.assertEqual(services.assemble_game(saved, _lineup(), _plate_appearances()).id, 7)
+
+    def test_the_stage_is_carried_over_from_the_header(self):
+        self.assertIs(self.game.stage, GameStage.REGULAR)
+
+        postseason = replace(HEADER, stage=GameStage.POSTSEASON)
+        self.assertIs(services.assemble_game(postseason, _lineup(), _plate_appearances()).stage, GameStage.POSTSEASON)
 
     def test_scores_and_line_score_are_derived_from_the_plate_appearances(self):
         self.assertEqual((self.game.away_score, self.game.home_score), (1, 0))

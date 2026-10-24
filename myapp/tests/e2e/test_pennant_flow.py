@@ -1,6 +1,7 @@
 """ペナントの通し導線のスモーク（P4b）。
 
 世界を作る → GM ホームで1日進める → 結果のまとめ → 順位表とボックススコアを読む、を実ブラウザで1本だけ確かめる。
+シーズン終了の後は、ポストシーズンを終わりまで進めてから締める（新しい世界の既定は NPB 方式。#241）。
 権限・上限・検証エラーなどの分岐は integration（`test_pennant_home.py`・`test_pennant_worlds.py`）で見ている。
 ここでは、フォームの送信・リダイレクト・画面遷移がブラウザで繋がることと、
 ペナントの画面のリンクが世界の外に出ないことだけを確かめる。
@@ -109,7 +110,14 @@ class PennantFlowTest(PlaywrightTestCase):
         # 1シーズンの進行はサービスで済ませる（画面で143試合ぶんを押さない）。締める操作から画面で確かめる
         build_pennant_season_service(world_scope(world_id)).advance(AdvanceTarget.SEASON_END)
         self.page.reload()
-        self.assertEqual(self.page.locator('button:has-text("1日進める")').count(), 0, "終了後は進めない")
+        # 公式戦の終了後は公式戦を進めない
+        self.assertEqual(self.page.locator('button:has-text("1週間進める")').count(), 0)
+        # 新しい世界の既定は NPB 方式。ポストシーズンが終わるまで締めるカードは出ない
+        self.assertEqual(self.page.locator('button:has-text("のシーズンを締める")').count(), 0)
+        self.page.click('button:has-text("ポストシーズンの終わりまで進める")')
+        self.page.wait_for_url(re.compile(r"#postseason$"))
+        self.assertIn("の優勝です。", self.page.content())
+        self._assert_links_stay_in_the_world(world_id)
 
         # 締める。確認はボタン1つ（文言で「元に戻せません」を伝える）
         self.assertIn("元に戻せません", self.page.content())

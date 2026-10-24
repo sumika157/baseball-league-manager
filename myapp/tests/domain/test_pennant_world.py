@@ -5,14 +5,18 @@ from datetime import date
 
 from myapp.domain.entities import League, Team
 from myapp.domain.exceptions import DuplicateJerseyNumber, InvalidSeason, InvalidWorkspace, InvalidWorld
+from myapp.domain.pennant.draft_order import DraftOrderRule
 from myapp.domain.pennant.fork import fork_league, fork_roster, fork_team
+from myapp.domain.pennant.postseason import PostseasonFormat
 from myapp.domain.pennant.world import (
     MAX_SEASONS_PER_WORLD,
     MAX_SEED,
     MAX_START_YEAR,
     World,
     WorldScope,
+    draft_order_rule_change_blocker,
     earliest_start_year,
+    league_priority,
 )
 from myapp.domain.value_objects import (
     ContractStatus,
@@ -126,6 +130,28 @@ class WorldTest(unittest.TestCase):
         for seed in (-1, MAX_SEED + 1, True, 1.5):
             with self.subTest(seed=seed), self.assertRaises(InvalidWorld):
                 World(name="世界", seed=seed, start_year=2026)  # type: ignore[arg-type]
+
+    def test_the_postseason_format_defaults_to_none_and_must_be_a_format(self):
+        """方式の既定は「なし」（方式を足す前に作った世界と同じ）。選択肢の外の値は弾く。"""
+        self.assertIs(World(name="世界", seed=1, start_year=2026).postseason_format, PostseasonFormat.NONE)
+        world = World(name="世界", seed=1, start_year=2026, postseason_format=PostseasonFormat.NPB)
+        self.assertIs(world.postseason_format, PostseasonFormat.NPB)
+        for bad in ("なし", None, PostseasonFormat.NPB.value):
+            with self.subTest(postseason_format=bad), self.assertRaises(InvalidWorld):
+                World(name="世界", seed=1, start_year=2026, postseason_format=bad)  # type: ignore[arg-type]
+
+    def test_the_draft_order_rule_defaults_to_npb_and_must_be_a_rule(self):
+        """指名順の既定は NPB 方式（#198。規則を足す前に作った世界も NPB 方式）。選択肢の外の値は弾く。"""
+        self.assertIs(World(name="世界", seed=1, start_year=2026).draft_order_rule, DraftOrderRule.NPB)
+        world = World(name="世界", seed=1, start_year=2026, draft_order_rule=DraftOrderRule.WAIVER)
+        self.assertIs(world.draft_order_rule, DraftOrderRule.WAIVER)
+        for bad in ("NPB", None, DraftOrderRule.NPB.value):
+            with self.subTest(draft_order_rule=bad), self.assertRaises(InvalidWorld):
+                World(name="世界", seed=1, start_year=2026, draft_order_rule=bad)  # type: ignore[arg-type]
+
+    def test_the_draft_order_rule_can_change_until_the_world_is_over(self):
+        self.assertIsNone(draft_order_rule_change_blocker(world_over=False))
+        self.assertIn("最終シーズン", draft_order_rule_change_blocker(world_over=True) or "")
 
     def test_the_start_year_must_be_a_season(self):
         with self.assertRaises(InvalidSeason):
@@ -331,3 +357,23 @@ class ForkTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LeaguePriorityTest(unittest.TestCase):
+    """リーグの優先順（日本シリーズの本拠地と種の同率。#198 のドラフトの優先リーグも使う）。"""
+
+    def test_two_leagues_alternate_every_year_starting_with_the_smaller_id(self):
+        self.assertEqual([3, 8], league_priority([8, 3], year=2026, start_year=2026))
+        self.assertEqual([8, 3], league_priority([8, 3], year=2027, start_year=2026))
+        self.assertEqual([3, 8], league_priority([8, 3], year=2028, start_year=2026))
+
+    def test_three_or_more_leagues_rotate_one_by_one(self):
+        ids = [5, 1, 3]
+        self.assertEqual([1, 3, 5], league_priority(ids, year=2030, start_year=2030))
+        self.assertEqual([3, 5, 1], league_priority(ids, year=2031, start_year=2030))
+        self.assertEqual([5, 1, 3], league_priority(ids, year=2032, start_year=2030))
+        self.assertEqual([1, 3, 5], league_priority(ids, year=2033, start_year=2030))
+
+    def test_a_single_league_and_no_league(self):
+        self.assertEqual([4], league_priority([4], year=2029, start_year=2026))
+        self.assertEqual([], league_priority([], year=2029, start_year=2026))

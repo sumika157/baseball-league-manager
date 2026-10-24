@@ -11,7 +11,7 @@ from unittest import TestCase
 from myapp.domain import services
 from myapp.domain.entities import Game
 from myapp.domain.exceptions import InvalidGame
-from myapp.domain.value_objects import GameHeader, GameTimes, Season, attendance_label
+from myapp.domain.value_objects import GameHeader, GameStage, GameTimes, Season, attendance_label
 
 
 class GameTimesTest(TestCase):
@@ -65,6 +65,7 @@ def _game(**overrides) -> Game:
         "played_on": date(2026, 4, 1),
         "home_team_id": 1,
         "away_team_id": 2,
+        "stage": GameStage.REGULAR,
     }
     values.update(overrides)
     return Game(**values)
@@ -94,6 +95,7 @@ class AssembleGameTest(TestCase):
             home_team_id=1,
             away_team_id=2,
             times=times,
+            stage=GameStage.REGULAR,
             attendance=42071,
         )
 
