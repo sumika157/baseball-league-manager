@@ -12,13 +12,11 @@ import json
 from datetime import date
 from pathlib import Path
 
-from django.urls import reverse
-
 from myapp.application.dto import LineupSlot
 from myapp.domain.entities import PlateAppearance, RunnerAdvance
 from myapp.domain.value_objects import AdvanceReason, Base, FieldingPosition, JerseyNumber, PlateAppearanceResult
 
-from ..helpers import login_as_manager
+from ..helpers import login_as_manager, ws_url
 from .test_fielding import FieldingTestBase
 
 GOLDEN = Path(__file__).parent / "golden" / "game_edit_payload.json"
@@ -98,7 +96,7 @@ class GameEditPayloadTest(FieldingTestBase):
         return snapshot
 
     def _get_payload(self) -> dict:
-        response = self.client.get(reverse("game_edit", args=[self.game.id]))
+        response = self.client.get(ws_url("game_edit", self.game.id))
         self.assertEqual(response.status_code, 200)
         return response.context["payload"]
 

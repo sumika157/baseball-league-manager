@@ -121,7 +121,7 @@
 
         {% if can_edit_team %}
           <td class="text-end">
-            <a href="{% url 'player_edit' team_id player.id %}" class="btn btn-sm btn-outline-info">編集</a>
+            <a href="{% workspace_url 'player_edit' team_id player.id %}" class="btn btn-sm btn-outline-info">編集</a>
           </td>
         {% endif %}
       </tr>

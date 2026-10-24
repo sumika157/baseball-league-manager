@@ -1,4 +1,5 @@
 {% extends 'myapp/base.html' %}
+{% load scoped %}
 
 {% block title %}世界を削除する - ペナント - Baseball Manager{% endblock %}
 
@@ -21,6 +22,6 @@
 <form method="post" class="d-flex gap-2">
   {% csrf_token %}
   <button type="submit" class="btn btn-danger">削除する</button>
-  <a href="{% url 'pennant_world' deletion.world.world_id %}" class="btn btn-secondary">やめる</a>
+  <a href="{% workspace_url 'pennant_world' deletion.world.world_id %}" class="btn btn-secondary">やめる</a>
 </form>
 {% endblock %}

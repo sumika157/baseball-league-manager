@@ -8,7 +8,6 @@ from django.conf import settings
 from django.db import connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
-from django.urls import reverse
 
 from myapp.application.team_analysis import USAGE_AREAS
 from myapp.domain.entities import Game
@@ -18,7 +17,7 @@ from myapp.domain.value_objects import BattingLine, FieldingPosition, PitchingLi
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
 
-from ..helpers import build_team_analysis_service, make_league, real_scope
+from ..helpers import build_team_analysis_service, make_league, real_scope, ws_url
 from .base import BaseCase
 
 
@@ -89,7 +88,7 @@ class TeamAnalysisPageTest(AnalysisCase):
         return build_team_analysis_service(real_scope()).get_analysis(self.team.id, **kwargs)
 
     def url(self, team=None):
-        return reverse("team_analysis", args=[(team or self.team).id])
+        return ws_url("team_analysis", (team or self.team).id)
 
     def test_anonymous_can_view_without_any_write_controls(self):
         response = self.client.get(self.url())
@@ -102,7 +101,7 @@ class TeamAnalysisPageTest(AnalysisCase):
         self.assertEqual(self.client.post(self.url()).status_code, 405)
 
     def test_unknown_team_is_404(self):
-        self.assertEqual(self.client.get(reverse("team_analysis", args=[99999])).status_code, 404)
+        self.assertEqual(self.client.get(ws_url("team_analysis", 99999)).status_code, 404)
 
     def test_left_handed_starter_lands_in_starter_by_left_cell(self):
         analysis = self.analysis(year=2026)
@@ -185,22 +184,22 @@ class TeamAnalysisPageTest(AnalysisCase):
 class AnalysisIndexTest(AnalysisCase):
     def test_redirects_to_first_team(self):
         first = build_team_analysis_service(real_scope()).first_team_id()
-        response = self.client.get(reverse("analysis_index"))
-        self.assertRedirects(response, reverse("team_analysis", args=[first]), fetch_redirect_response=False)
+        response = self.client.get(ws_url("analysis_index"))
+        self.assertRedirects(response, ws_url("team_analysis", first), fetch_redirect_response=False)
 
     def test_team_and_year_choice_is_carried_over(self):
-        response = self.client.get(reverse("analysis_index"), {"team": self.rival.id, "year": "2025"})
+        response = self.client.get(ws_url("analysis_index"), {"team": self.rival.id, "year": "2025"})
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(response["Location"], f"{reverse('team_analysis', args=[self.rival.id])}?year=2025")
+        self.assertEqual(response["Location"], f"{ws_url('team_analysis', self.rival.id)}?year=2025")
 
     def test_unknown_team_choice_falls_back_to_first_team(self):
         first = build_team_analysis_service(real_scope()).first_team_id()
-        response = self.client.get(reverse("analysis_index"), {"team": "99999"})
-        self.assertEqual(response["Location"], reverse("team_analysis", args=[first]))
+        response = self.client.get(ws_url("analysis_index"), {"team": "99999"})
+        self.assertEqual(response["Location"], ws_url("team_analysis", first))
 
     def test_no_teams_shows_a_notice(self):
         orm_models.Team.objects.all().delete()
-        response = self.client.get(reverse("analysis_index"))
+        response = self.client.get(ws_url("analysis_index"))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "チームがまだ登録されていない")
 
@@ -211,12 +210,12 @@ class AnalysisLinksTest(TestCase):
         self.team = orm_models.Team.objects.create(league=league, name="チーム")
 
     def test_header_links_to_analysis_index(self):
-        response = self.client.get(reverse("dashboard"))
-        self.assertContains(response, f'href="{reverse("analysis_index")}"')
+        response = self.client.get(ws_url("dashboard"))
+        self.assertContains(response, f'href="{ws_url("analysis_index")}"')
 
     def test_team_page_links_to_its_analysis(self):
-        response = self.client.get(reverse("player_list", args=[self.team.id]))
-        self.assertContains(response, f'href="{reverse("team_analysis", args=[self.team.id])}"')
+        response = self.client.get(ws_url("player_list", self.team.id))
+        self.assertContains(response, f'href="{ws_url("team_analysis", self.team.id)}"')
 
 
 class TeamUsageMapTest(AnalysisCase):
@@ -259,7 +258,7 @@ class TeamUsageMapTest(AnalysisCase):
         return [(p.name, p.starts, p.games) for p in box.players]
 
     def test_tab_is_shown_and_listed(self):
-        response = self.client.get(reverse("team_analysis", args=[self.team.id]), {"tab": "usage"})
+        response = self.client.get(ws_url("team_analysis", self.team.id), {"tab": "usage"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context["analysis"].tab, "usage")
         self.assertEqual([t.key for t in response.context["analysis"].tabs], ["depth", "usage", "fa", "stats"])
@@ -400,10 +399,10 @@ class TeamMovesTest(AnalysisCase):
 
     def test_page_shows_both_tables_with_player_links_and_empty_messages(self):
         new = self.move(self.team, "新人", 50, 2026)
-        url = reverse("team_analysis", args=[self.team.id])
+        url = ws_url("team_analysis", self.team.id)
         response = self.client.get(url, {"year": 2026})
         self.assertContains(response, "新入団")
-        self.assertContains(response, reverse("player_detail", args=[self.team.id, new]))
+        self.assertContains(response, ws_url("player_detail", self.team.id, new))
         self.assertContains(response, "この年の退団はありません。")
         self.assertNotContains(response, "この年の加入はありません。")
         self.assertContains(self.client.get(url, {"year": 2025}), "この年の加入はありません。")
@@ -510,19 +509,19 @@ class TeamColorTest(AnalysisCase):
         self.assertEqual(set(natural.values()), {"neutral"})
 
     def test_page_carries_the_axis_to_year_tab_team_links(self):
-        response = self.client.get(reverse("team_analysis", args=[self.team.id]), {"year": 2026, "color": "natural"})
+        response = self.client.get(ws_url("team_analysis", self.team.id), {"year": 2026, "color": "natural"})
         self.assertContains(response, 'name="color" value="natural"')
         self.assertContains(response, "tab=usage&amp;color=natural")
         self.assertContains(response, "year=2026&amp;tab=depth&amp;color=natural")
         self.assertContains(response, "player-tone-natural-yes")
 
     def test_invalid_color_page_uses_hand_in_links(self):
-        response = self.client.get(reverse("team_analysis", args=[self.team.id]), {"color": "x"})
+        response = self.client.get(ws_url("team_analysis", self.team.id), {"color": "x"})
         self.assertContains(response, 'name="color" value="hand"')
 
     def test_analysis_index_redirect_keeps_color(self):
-        response = self.client.get(reverse("analysis_index"), {"team": self.team.id, "color": "natural"})
-        self.assertEqual(response["Location"], f"{reverse('team_analysis', args=[self.team.id])}?color=natural")
+        response = self.client.get(ws_url("analysis_index"), {"team": self.team.id, "color": "natural"})
+        self.assertEqual(response["Location"], f"{ws_url('team_analysis', self.team.id)}?color=natural")
 
     def test_query_count_does_not_depend_on_the_axis(self):
         def count(color):

@@ -7,7 +7,7 @@
   {% include 'pennant/_club_section_head.html' with title="先発ローテーション" token="rotation" manual=club.rotation_is_manual %}
   <div class="card-body">
     {% if is_owner and club.rotation_is_manual %}
-      <form method="post" action="{% url 'pennant_club' world.world_id %}">
+      <form method="post" action="{% workspace_url 'pennant_club' world.world_id %}">
         {% csrf_token %}
         <input type="hidden" name="section" value="rotation">
         <div class="stat-muted mb-2" style="font-size: 0.8125rem;">先発の序列順に、{{ club.limits.min_rotation_size }}〜{{ club.limits.rotation_size }}人を選びます（空の枠は使いません）。</div>
@@ -55,7 +55,7 @@
   {% include 'pennant/_club_section_head.html' with title="抑え" token="closer" manual=club.closer_is_manual %}
   <div class="card-body">
     {% if is_owner and club.closer_is_manual %}
-      <form method="post" action="{% url 'pennant_club' world.world_id %}">
+      <form method="post" action="{% workspace_url 'pennant_club' world.world_id %}">
         {% csrf_token %}
         <input type="hidden" name="section" value="closer">
         <div class="mb-3">

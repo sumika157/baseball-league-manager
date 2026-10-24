@@ -1,4 +1,4 @@
-{% comment %}
+{% load scoped %}{% comment %}
 編成の「戦力外」タブ。シーズン終了で締められるときだけ出る（ビューが release を渡す）。
 自動のあいだは説明と「手動で選ぶ」、手動のあいだ（オーナーだけ）は支配下の表とチェックボックス・「保存する」「自動に戻す」。両方を同時に出さない。
 チェックボックスは外すと何も送られないので、表示した全選手の id を shown で送り、いまの支配下と突き合わせる。
@@ -12,7 +12,7 @@
       {% if release.is_manual %}<span class="badge bg-primary ms-2">手動（{{ release.chosen_ids|length }}人）</span>{% else %}<span class="badge bg-secondary ms-2">自動</span>{% endif %}
     </span>
     {% if is_owner and not release.is_manual %}
-      <form method="post" action="{% url 'pennant_club' world.world_id %}" class="m-0">
+      <form method="post" action="{% workspace_url 'pennant_club' world.world_id %}" class="m-0">
         {% csrf_token %}
         <input type="hidden" name="section" value="release">
         <input type="hidden" name="expected_year" value="{{ release.year }}">
@@ -27,7 +27,7 @@
       <p class="mb-3">シーズンを締めるときに、ほかの球団と同じ規則で決めます。新人を迎える空きができるまで、その年の主力と入団1年目を除く支配下から、残す価値（能力・若さ・実績）の低い順に外します。外国人は、新しく迎える外国人の見込みを下回れば入れ替えます。</p>
     {% endif %}
     {% if is_owner and release.is_manual %}
-      <form method="post" action="{% url 'pennant_club' world.world_id %}">
+      <form method="post" action="{% workspace_url 'pennant_club' world.world_id %}">
         {% csrf_token %}
         <input type="hidden" name="section" value="release">
         <input type="hidden" name="expected_year" value="{{ release.year }}">
@@ -38,7 +38,7 @@
           <button type="submit" form="club-reset-release" name="action" value="auto" class="btn btn-secondary">自動に戻す</button>
         </div>
       </form>
-      <form method="post" id="club-reset-release" action="{% url 'pennant_club' world.world_id %}" class="d-none">
+      <form method="post" id="club-reset-release" action="{% workspace_url 'pennant_club' world.world_id %}" class="d-none">
         {% csrf_token %}
         <input type="hidden" name="section" value="release">
         <input type="hidden" name="expected_year" value="{{ release.year }}">

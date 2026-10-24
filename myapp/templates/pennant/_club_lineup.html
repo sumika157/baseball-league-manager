@@ -8,7 +8,7 @@
   {% include 'pennant/_club_section_head.html' with title="オーダー" token="lineup" manual=club.lineup_is_manual %}
   <div class="card-body">
     {% if is_owner and club.lineup_is_manual %}
-      <form method="post" action="{% url 'pennant_club' world.world_id %}">
+      <form method="post" action="{% workspace_url 'pennant_club' world.world_id %}">
         {% csrf_token %}
         <input type="hidden" name="section" value="lineup">
         <div class="table-responsive">

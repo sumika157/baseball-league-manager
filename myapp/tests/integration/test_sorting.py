@@ -1,7 +1,6 @@
 """一覧の並べ替えと表示順。不正なソートキーが既定の並びに落ちることも含む。"""
 
 from django.contrib.auth.models import User
-from django.urls import reverse
 
 from myapp.domain.value_objects import (
     BattingLine,
@@ -13,7 +12,7 @@ from myapp.infrastructure.repositories import (
     DjangoLeagueRepository,
 )
 
-from ..helpers import make_league, play_game, real_scope
+from ..helpers import make_league, play_game, real_scope, ws_url
 from .base import BaseCase
 
 
@@ -30,7 +29,7 @@ class SortingViewTest(BaseCase):
                 b.id: BattingLine(at_bats=20, singles=2, home_runs=5),
             },
         )
-        self.url = reverse("player_list", args=[self.team.id])
+        self.url = ws_url("player_list", self.team.id)
 
     def _names(self, query=""):
         listing = self.client.get(f"{self.url}{query}").context["listing"]
@@ -79,7 +78,7 @@ class SortingViewTest(BaseCase):
         self.assertIn("sort-link is-active", body)
 
     def test_team_list_can_be_sorted(self):
-        response = self.client.get(f"{reverse('team_list')}?sort=name&dir=asc")
+        response = self.client.get(f"{ws_url('team_list')}?sort=name&dir=asc")
         names = [t.name for t in response.context["teams"]]
         self.assertEqual(names, sorted(names))
 
@@ -87,14 +86,14 @@ class SortingViewTest(BaseCase):
         """名前順ではなく、管理画面で設定した表示順が既定になること。"""
         orm_models.Team.objects.update(display_order=5)
         orm_models.Team.objects.create(league=self.league, name="Zチーム", display_order=1)
-        response = self.client.get(reverse("team_list"))
+        response = self.client.get(ws_url("team_list"))
 
         # 名前順なら最後に来るはずの Z が、表示順1なので先頭に出る
         self.assertEqual(response.context["teams"][0].name, "Zチーム")
         self.assertEqual(response.context["current_sort"], "order")
 
     def test_standings_can_be_sorted(self):
-        response = self.client.get(f"{reverse('standings')}?sort=wins&dir=desc")
+        response = self.client.get(f"{ws_url('standings')}?sort=wins&dir=desc")
         self.assertEqual(response.context["standings"].sort, "wins")
 
 

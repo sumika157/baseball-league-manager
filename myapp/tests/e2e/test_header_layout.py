@@ -4,8 +4,7 @@
 CSS の効き方の問題で integration では確かめられないため、実ブラウザで測る。
 """
 
-from django.urls import reverse
-
+from ..helpers import ws_url
 from .base import PlaywrightTestCase
 
 # 要素どうしの最低限の間隔（px）。ヘッダーの他の要素の間は 14〜16px 空いている
@@ -15,7 +14,7 @@ MIN_GAP = 8
 class HeaderLayoutTest(PlaywrightTestCase):
     def _gap_after_analysis_link(self, width: int) -> float:
         self.page.set_viewport_size({"width": width, "height": 800})
-        self.page.goto(self.live_server_url + reverse("dashboard"))
+        self.page.goto(self.live_server_url + ws_url("dashboard"))
         link = self.page.locator(".nav-analysis-link").bounding_box()
         user = self.page.locator(".app-nav-user").bounding_box()
         assert link is not None and user is not None

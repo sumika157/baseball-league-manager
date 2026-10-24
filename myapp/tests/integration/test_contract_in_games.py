@@ -3,8 +3,6 @@
 その年の区分は `Stint.contract_in(年)` が出典で、昇格した年の試合なら出られる。
 """
 
-from django.urls import reverse
-
 from myapp.domain.value_objects import ContractStatus
 from myapp.infrastructure import orm_models
 
@@ -18,6 +16,7 @@ from ..helpers import (
     post_game_scorebook_day_unrecorded,
     real_scope,
     register_lineup,
+    ws_url,
 )
 from .base import BaseCase
 from .test_team_analysis import AnalysisCase
@@ -186,7 +185,7 @@ class GameEditCandidatesTest(AnalysisCase):
         self.make_developmental("画面に出ない育成")
         game = self.game(self.team, self.rival)
 
-        response = self.client.get(reverse("game_edit", args=[game.id]))
+        response = self.client.get(ws_url("game_edit", game.id))
 
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, "画面に出ない育成")

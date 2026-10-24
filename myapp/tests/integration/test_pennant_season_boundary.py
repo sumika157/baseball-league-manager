@@ -8,7 +8,6 @@ from datetime import date
 
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from django.urls import reverse
 
 from myapp.application.queries import SeasonPlayingTimeQuery
 from myapp.domain.pennant.retirement import PlayingTime
@@ -18,7 +17,7 @@ from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoSeasonPlayingTimeQuery
 from myapp.presentation.views import build_pennant_world_service, build_pennant_world_view
 
-from ..helpers import real_scope, world_scope
+from ..helpers import real_scope, world_scope, ws_url
 from .world_case import YEAR, WorldCase
 
 NEXT_OPENING = date(YEAR + 1, 3, 26)
@@ -54,7 +53,7 @@ class NextYearScheduleTest(WorldCase):
         orm_models.PennantFixture.objects.all().delete()
         self.add_next_year()
 
-        content = self.client.get(reverse("pennant_world", args=[self.world_id])).content.decode()
+        content = self.client.get(ws_url("pennant_world", self.world_id)).content.decode()
 
         self.assertIn(f"{YEAR + 1}年 · 開幕前", content)
         self.assertNotIn("シーズン中", content)
@@ -73,7 +72,7 @@ class NextYearScheduleTest(WorldCase):
         self.assertEqual(row.context.season_year, YEAR + 1)
         self.assertIs(row.context.phase, SeasonPhase.BEFORE_OPENING)
         self.assertIsNone(row.own_standing, "試合の無い年の順位は出さない")
-        content = self.client.get(reverse("pennant_index")).content.decode()
+        content = self.client.get(ws_url("pennant_index")).content.decode()
         self.assertIn(f"{YEAR + 1}年 · 開幕前", content)
 
     def test_the_first_season_still_shows_the_season_in_progress(self):

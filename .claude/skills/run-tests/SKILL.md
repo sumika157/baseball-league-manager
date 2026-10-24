@@ -67,8 +67,8 @@ docker compose exec web python manage.py test myapp.tests.e2e
 小さいため）。判断基準は `.claude/rules/performance.md`。
 
 ```bash
-docker compose exec web python manage.py measure_pages
-MSYS_NO_PATHCONV=1 docker compose exec web python manage.py measure_pages --profile /games/
+docker compose exec web python manage.py measure_pages --workspace <key>
+MSYS_NO_PATHCONV=1 docker compose exec web python manage.py measure_pages --workspace <key> --profile /games/
 ```
 
 ## 6. 失敗したときの一次診断

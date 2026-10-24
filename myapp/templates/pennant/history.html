@@ -39,7 +39,7 @@
                 {% for cell in year.champions %}
                   <td>
                     {% if cell.team_id %}
-                      <a href="{% url 'pennant_team_history' world.world_id cell.team_id %}">{{ cell.team_name }}</a>{% if cell.is_own %} <span class="badge bg-primary">自軍</span>{% endif %}
+                      <a href="{% workspace_url 'pennant_team_history' world.world_id cell.team_id %}">{{ cell.team_name }}</a>{% if cell.is_own %} <span class="badge bg-primary">自軍</span>{% endif %}
                       <span class="stat-muted tabular-nums">{{ cell.record }}</span>
                     {% else %}
                       <span class="stat-muted">—</span>
@@ -56,7 +56,7 @@
 
   <h2 class="h5 mb-3">タイトルの受賞者{% if history.selected_league_name %}（{{ history.selected_league_name }}）{% endif %}</h2>
   {% if history.leagues|length > 1 %}
-    <form method="get" class="d-flex gap-2 mb-3" action="{% url 'pennant_history' world.world_id %}">
+    <form method="get" class="d-flex gap-2 mb-3" action="{% workspace_url 'pennant_history' world.world_id %}">
       <select name="league" class="form-select form-select-sm" aria-label="リーグ" style="max-width: 16rem;">
         {% for league in history.leagues %}
           <option value="{{ league.id }}" {% if league.id == history.selected_league_id %}selected{% endif %}>{{ league.name }}</option>

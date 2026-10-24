@@ -5,13 +5,12 @@ from unittest import mock
 
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from django.urls import reverse
 
 from myapp.application.foreign_quota import ForeignQuotaExemptions
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoServiceHistoryQuery
 
-from ..helpers import build_team_analysis_service, real_scope
+from ..helpers import build_team_analysis_service, real_scope, ws_url
 from .test_team_analysis import AnalysisCase
 
 
@@ -50,7 +49,7 @@ class TeamFaTabTest(AnalysisCase):
         return {row.name: row for row in self.analysis(**kwargs).fa_rows}
 
     def url(self):
-        return reverse("team_analysis", args=[self.team.id])
+        return ws_url("team_analysis", self.team.id)
 
     def test_nine_seasons_acquire_domestic_and_overseas(self):
         veteran = self.rows()["ベテラン"]

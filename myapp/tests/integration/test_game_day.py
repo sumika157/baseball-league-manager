@@ -16,7 +16,7 @@ from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoHomeStadiumQuery
 from myapp.infrastructure.repositories import DjangoGameRepository
 
-from ..helpers import play_game, real_scope
+from ..helpers import play_game, real_scope, ws_url
 from .base import BaseCase
 from .world_case import WorldCase
 
@@ -97,7 +97,7 @@ class GameDetailHeaderTest(BaseCase):
         self.game = play_game(self.team, self.rival)
 
     def _detail(self):
-        return self.client.get(reverse("game_detail", args=[self.game.id]))
+        return self.client.get(ws_url("game_detail", self.game.id))
 
     def test_the_recorded_items_are_shown_under_the_title(self):
         orm_models.Game.objects.filter(id=self.game.id).update(
@@ -145,7 +145,7 @@ class WorldGameDetailTest(WorldCase):
             start_time=time(14, 0), end_time=time(17, 5), attendance=30000
         )
 
-        response = self.client.get(reverse("pennant_game_detail", args=[self.world_id, self.pennant_game_id]))
+        response = self.client.get(ws_url("pennant_game_detail", self.world_id, self.pennant_game_id))
 
         self.assertContains(response, "開始 14:00 ◇ 終了 17:05 ◇ 試合時間 3時間5分 ◇ 観客 30,000人")
 

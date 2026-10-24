@@ -6,7 +6,6 @@
 
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from django.urls import reverse
 
 from myapp.domain.value_objects import (
     BattingLine,
@@ -15,7 +14,7 @@ from myapp.domain.value_objects import (
 )
 from myapp.infrastructure import orm_models
 
-from ..helpers import give_batting, make_league, play_game
+from ..helpers import give_batting, make_league, play_game, ws_url
 from .base import BaseCase
 
 
@@ -82,7 +81,7 @@ class DashboardLeadersTest(BaseCase):
         home_runs = next(d for d in league.leaders if d.key == "home_runs")
 
         self.assertEqual(sorted(e.player_name for e in home_runs.entries), ["山田", "田中"])
-        body = self.client.get(reverse("dashboard")).content.decode()
+        body = self.client.get(ws_url("dashboard")).content.decode()
         self.assertIn("山田", body)
         self.assertIn("田中", body)
 
@@ -194,19 +193,19 @@ class DashboardLeadersTest(BaseCase):
         player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         play_game(self.team, self.rival, batting={player.id: BattingLine(at_bats=10, home_runs=3)})
 
-        body = self.client.get(reverse("dashboard")).content.decode()
+        body = self.client.get(ws_url("dashboard")).content.decode()
 
-        self.assertIn(reverse("player_detail", args=[self.team.id, player.id]), body)
-        self.assertNotIn(reverse("player_edit", args=[self.team.id, player.id]), body)
+        self.assertIn(ws_url("player_detail", self.team.id, player.id), body)
+        self.assertNotIn(ws_url("player_edit", self.team.id, player.id), body)
 
     def test_each_card_links_to_the_titles_and_the_league_page(self):
         """上位3人・残りの部門はタイトル画面、1リーグの掘り下げはリーグ画面へ送る。"""
         play_game(self.team, self.rival, year=2026)
 
-        body = self.client.get(reverse("dashboard")).content.decode()
+        body = self.client.get(ws_url("dashboard")).content.decode()
 
-        self.assertIn(reverse("league_titles_by_year", args=[self.league.id, 2026]), body)
-        self.assertIn(reverse("league_detail", args=[self.league.id]), body)
+        self.assertIn(ws_url("league_titles_by_year", self.league.id, 2026), body)
+        self.assertIn(ws_url("league_detail", self.league.id), body)
 
 
 class DashboardLeaguesTest(BaseCase):
@@ -220,7 +219,7 @@ class DashboardLeaguesTest(BaseCase):
         play_game(self.team, self.rival)
         play_game(x, y)
 
-        body = self.client.get(reverse("dashboard")).content.decode()
+        body = self.client.get(ws_url("dashboard")).content.decode()
 
         for name in ("テストチーム", "相手チーム", "Xチーム", "Yチーム"):
             with self.subTest(team=name):
@@ -249,7 +248,7 @@ class DashboardLeaguesTest(BaseCase):
 
     def test_counts_are_not_shown(self):
         """登録数（リーグ・チーム・選手）は出さない。規模は管理画面のトップの概況にある。"""
-        body = self.client.get(reverse("dashboard")).content.decode()
+        body = self.client.get(ws_url("dashboard")).content.decode()
 
         self.assertNotIn("stat-strip", body)
 
@@ -266,7 +265,7 @@ class DashboardLeaguesTest(BaseCase):
     def test_standings_replace_the_team_list(self):
         """順位表があるリーグではチームの一覧を出さない（同じチームの並びが二重になる）。"""
         play_game(self.team, self.rival)
-        body = self.client.get(reverse("dashboard")).content.decode()
+        body = self.client.get(ws_url("dashboard")).content.decode()
 
         self.assertIn("<th>順位</th>", body)
         # チームの一覧に差し替わっていない（在籍人数はそこにしか出ない）
@@ -277,7 +276,7 @@ class DashboardLeaguesTest(BaseCase):
 
         登録したばかりのチームがホームのどこにも出ない状態を作らないため。
         """
-        body = self.client.get(reverse("dashboard")).content.decode()
+        body = self.client.get(ws_url("dashboard")).content.decode()
 
         self.assertIn("tile-list-meta", body)
         self.assertIn("テストチーム", body)
@@ -285,7 +284,7 @@ class DashboardLeaguesTest(BaseCase):
 
     def test_page_renders_without_any_data(self):
         orm_models.Team.objects.all().delete()
-        self.assertEqual(self.client.get(reverse("dashboard")).status_code, 200)
+        self.assertEqual(self.client.get(ws_url("dashboard")).status_code, 200)
 
 
 class DashboardLatestResultsTest(BaseCase):
@@ -329,14 +328,14 @@ class DashboardLatestResultsTest(BaseCase):
 
     def test_results_link_to_each_game_and_the_game_list(self):
         game = play_game(self.team, self.rival)
-        body = self.client.get(reverse("dashboard")).content.decode()
+        body = self.client.get(ws_url("dashboard")).content.decode()
 
         self.assertIn("の試合結果", body)
-        self.assertIn(reverse("game_detail", args=[game.id]), body)
-        self.assertIn(reverse("game_list"), body)
+        self.assertIn(ws_url("game_detail", game.id), body)
+        self.assertIn(ws_url("game_list"), body)
 
     def test_no_results_card_without_games(self):
-        body = self.client.get(reverse("dashboard")).content.decode()
+        body = self.client.get(ws_url("dashboard")).content.decode()
 
         self.assertNotIn("の試合結果", body)
 
@@ -351,12 +350,12 @@ class DashboardQueriesTest(BaseCase):
         play_game(self.team, self.rival, day=1, batting={player.id: BattingLine(at_bats=4, singles=2)})
 
         with CaptureQueriesContext(connection) as first:
-            self.client.get(reverse("dashboard"))
+            self.client.get(ws_url("dashboard"))
 
         for day in range(2, 12):
             play_game(self.team, self.rival, day=day, batting={player.id: BattingLine(at_bats=4, singles=1)})
 
         with CaptureQueriesContext(connection) as grown:
-            self.client.get(reverse("dashboard"))
+            self.client.get(ws_url("dashboard"))
 
         self.assertEqual(len(grown.captured_queries), len(first.captured_queries))

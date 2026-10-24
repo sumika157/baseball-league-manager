@@ -3,7 +3,6 @@
 import re
 
 from django.contrib.auth.models import User
-from django.urls import reverse
 
 from myapp.domain.value_objects import (
     BattingLine,
@@ -26,6 +25,7 @@ from ..helpers import (
     post_game_scorebook_day_unrecorded,
     real_scope,
     register_lineup,
+    ws_url,
 )
 from .base import BaseCase
 
@@ -33,7 +33,7 @@ from .base import BaseCase
 class PlayerListViewTest(BaseCase):
     def setUp(self):
         super().setUp()
-        self.url = reverse("player_list", args=[self.team.id])
+        self.url = ws_url("player_list", self.team.id)
         # 登録は書き込みなので担当者であることが要る（閲覧は誰でもできる）
         login_as_manager(self.client, self.team, username="editor")
 
@@ -56,7 +56,7 @@ class PlayerListViewTest(BaseCase):
         self.assertEqual(self.client.get(f"{self.url}?pos=pitcher").status_code, 200)
 
     def test_missing_team_returns_404(self):
-        self.assertEqual(self.client.get(reverse("player_list", args=[9999])).status_code, 404)
+        self.assertEqual(self.client.get(ws_url("player_list", 9999)).status_code, 404)
 
 
 class PlayerListColumnsTest(BaseCase):
@@ -68,7 +68,7 @@ class PlayerListColumnsTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.url = reverse("player_list", args=[self.team.id])
+        self.url = ws_url("player_list", self.team.id)
 
     def _columns(self, pos) -> tuple[int, list[int]]:
         """選手の表の (見出しの列数, 本体の各行がまたがる列数) を返す。"""
@@ -110,7 +110,7 @@ class PlayerEditViewTest(BaseCase):
         login_as_manager(self.client, self.team, username="editor")
 
     def _url(self, player_id):
-        return reverse("player_edit", args=[self.team.id, player_id])
+        return ws_url("player_edit", self.team.id, player_id)
 
     def test_designated_hitter_keeps_position(self):
         """指名打者を編集しても投手に化けないこと（旧バグの再発防止）。"""
@@ -216,7 +216,7 @@ class PlayerDetailViewTest(BaseCase):
             day=2,
             batting={self.player.id: BattingLine(at_bats=6, home_runs=1)},
         )
-        self.url = reverse("player_detail", args=[self.team.id, self.player.id])
+        self.url = ws_url("player_detail", self.team.id, self.player.id)
 
     def test_page_renders(self):
         response = self.client.get(self.url)
@@ -280,17 +280,17 @@ class PlayerDetailViewTest(BaseCase):
 
     def test_player_without_games(self):
         other = self.roster.register_player(self.team.id, "控え", 99, "内野手")
-        response = self.client.get(reverse("player_detail", args=[self.team.id, other.id]))
+        response = self.client.get(ws_url("player_detail", self.team.id, other.id))
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "出場した試合がまだありません")
 
     def test_player_list_links_to_the_profile(self):
-        body = self.client.get(reverse("player_list", args=[self.team.id])).content.decode()
+        body = self.client.get(ws_url("player_list", self.team.id)).content.decode()
         self.assertIn(self.url, body)
 
     def test_missing_player_returns_404(self):
-        self.assertEqual(self.client.get(reverse("player_detail", args=[self.team.id, 9999])).status_code, 404)
+        self.assertEqual(self.client.get(ws_url("player_detail", self.team.id, 9999)).status_code, 404)
 
 
 class PlayerDetailDerivedStatsTest(BaseCase):
@@ -326,7 +326,7 @@ class PlayerDetailDerivedStatsTest(BaseCase):
         give_pitching(self.team, self.rival, self.pitcher.id, pitching, year=2027, day=3)
 
     def _url(self, player):
-        return reverse("player_detail", args=[self.team.id, player.id])
+        return ws_url("player_detail", self.team.id, player.id)
 
     def _tables(self, player) -> list[tuple[int, list[int]]]:
         """各表の (見出しの列数, 本体の各行の列数) を返す。"""
@@ -481,7 +481,7 @@ class PlayerProfileTest(BaseCase):
         player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         orm_models.Player.objects.filter(id=player.id).update(name_kana="ヤマダタロウ", back_name="T.YAMADA")
 
-        body = self.client.get(reverse("player_detail", args=[self.team.id, player.id])).content.decode()
+        body = self.client.get(ws_url("player_detail", self.team.id, player.id)).content.decode()
 
         self.assertIn("<rt>ヤマダタロウ</rt>", body)
         self.assertIn("T.YAMADA", body)
@@ -490,7 +490,7 @@ class PlayerProfileTest(BaseCase):
         """未入力の選手に空のルビや区切り記号を出さない。"""
         player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
 
-        body = self.client.get(reverse("player_detail", args=[self.team.id, player.id])).content.decode()
+        body = self.client.get(ws_url("player_detail", self.team.id, player.id)).content.decode()
 
         self.assertNotIn("<ruby>", body)
         self.assertNotIn("back-name", body)
@@ -500,7 +500,7 @@ class PlayerProfileTest(BaseCase):
         player = self.roster.register_player(self.team.id, "デイミアン・ベル", 42, "外野手")
         orm_models.Player.objects.filter(id=player.id).update(name_kana="デイミアン・ベル")
 
-        body = self.client.get(reverse("player_detail", args=[self.team.id, player.id])).content.decode()
+        body = self.client.get(ws_url("player_detail", self.team.id, player.id)).content.decode()
 
         self.assertNotIn("<ruby>", body)
 
@@ -522,7 +522,7 @@ class PlayerProfileTest(BaseCase):
         player = self.roster.register_player(self.team.id, "デイミアン・ベル", 42, "外野手")
         orm_models.Player.objects.filter(id=player.id).update(nationality="アメリカ合衆国", is_foreign_player=True)
 
-        response = self.client.get(reverse("player_detail", args=[self.team.id, player.id]))
+        response = self.client.get(ws_url("player_detail", self.team.id, player.id))
 
         self.assertContains(response, "国籍")
         self.assertContains(response, "アメリカ合衆国")
@@ -531,7 +531,7 @@ class PlayerProfileTest(BaseCase):
     def test_domestic_player_has_no_nationality_row_or_badge(self):
         player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
 
-        response = self.client.get(reverse("player_detail", args=[self.team.id, player.id]))
+        response = self.client.get(ws_url("player_detail", self.team.id, player.id))
 
         self.assertNotContains(response, "国籍")
         self.assertNotContains(response, "外国人")
@@ -540,20 +540,20 @@ class PlayerProfileTest(BaseCase):
         player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         self.roster.appoint_captain(self.team.id, player.id)
 
-        response = self.client.get(reverse("player_detail", args=[self.team.id, player.id]))
+        response = self.client.get(ws_url("player_detail", self.team.id, player.id))
 
         self.assertContains(response, "主将")
 
     def test_player_without_captaincy_has_no_badge(self):
         player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
 
-        self.assertNotContains(self.client.get(reverse("player_detail", args=[self.team.id, player.id])), "主将")
+        self.assertNotContains(self.client.get(ws_url("player_detail", self.team.id, player.id)), "主将")
 
     def test_amateur_career_appears_on_the_player_page(self):
         player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         orm_models.Player.objects.filter(id=player.id).update(high_school="甲子園高校")
 
-        response = self.client.get(reverse("player_detail", args=[self.team.id, player.id]))
+        response = self.client.get(ws_url("player_detail", self.team.id, player.id))
 
         self.assertContains(response, "プロ入り前")
         self.assertContains(response, "甲子園高校")
@@ -595,7 +595,7 @@ class PlayerSearchTest(BaseCase):
         self.yamada = self.roster.register_player(self.team.id, "山田太郎", 10, "内野手")
         self.yamamoto = self.roster.register_player(self.team.id, "山本次郎", 11, "投手")
         self.tanaka = self.roster.register_player(self.rival.id, "田中三郎", 7, "外野手")
-        self.url = reverse("player_search")
+        self.url = ws_url("player_search")
 
     def _search(self, keyword):
         return self.client.get(f"{self.url}?q={keyword}").context["results"]
@@ -654,8 +654,8 @@ class PlayerSearchTest(BaseCase):
     def test_search_box_is_on_every_page(self):
         for name in ("dashboard", "team_list", "game_list"):
             with self.subTest(page=name):
-                self.assertContains(self.client.get(reverse(name)), "app-search")
+                self.assertContains(self.client.get(ws_url(name)), "app-search")
 
     def test_results_link_to_the_player_page(self):
         body = self.client.get(f"{self.url}?q=田中").content.decode()
-        self.assertIn(reverse("player_detail", args=[self.rival.id, self.tanaka.id]), body)
+        self.assertIn(ws_url("player_detail", self.rival.id, self.tanaka.id), body)

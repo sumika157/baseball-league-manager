@@ -6,7 +6,7 @@
 {% block content %}
 <nav aria-label="breadcrumb">
   <ol class="breadcrumb">
-    {% if world %}{% include 'pennant/_crumbs.html' %}{% else %}<li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>{% endif %}
+    {% if world %}{% include 'pennant/_crumbs.html' %}{% else %}<li class="breadcrumb-item"><a href="{% workspace_url 'dashboard' %}">ダッシュボード</a></li>{% endif %}
     <li class="breadcrumb-item active">試合</li>
   </ol>
 </nav>{% if world %}{% include 'pennant/_world_bar.html' %}{% endif %}
@@ -26,7 +26,7 @@
     </p>{% endif %}
   </div>
   {% if can_create_game %}
-    <a href="{% url 'game_create' %}" class="btn btn-primary">試合を登録</a>
+    <a href="{% workspace_url 'game_create' %}" class="btn btn-primary">試合を登録</a>
   {% endif %}
 </div>
 

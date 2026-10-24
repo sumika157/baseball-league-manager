@@ -1,9 +1,8 @@
 """選手詳細のドラフトの表記（#108）。表記の出典は `DraftPick.label`。"""
 
-from django.urls import reverse
-
 from myapp.infrastructure import orm_models
 
+from ..helpers import ws_url
 from .base import BaseCase
 
 
@@ -12,7 +11,7 @@ class PlayerDraftReadoutTest(BaseCase):
         player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         if draft:
             orm_models.Player.objects.filter(id=player.id).update(**draft)
-        return self.client.get(reverse("player_detail", args=[self.team.id, player.id])).content.decode()
+        return self.client.get(ws_url("player_detail", self.team.id, player.id)).content.decode()
 
     def test_regular_pick(self):
         body = self.page(draft_year=2020, draft_round=1)

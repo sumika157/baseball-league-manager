@@ -6,7 +6,7 @@
 {% block content %}
 <nav aria-label="breadcrumb">
   <ol class="breadcrumb">
-    {% if world %}{% include 'pennant/_crumbs.html' %}{% else %}<li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>{% endif %}
+    {% if world %}{% include 'pennant/_crumbs.html' %}{% else %}<li class="breadcrumb-item"><a href="{% workspace_url 'dashboard' %}">ダッシュボード</a></li>{% endif %}
     <li class="breadcrumb-item"><a href="{% scoped_url 'team_list' %}">チーム一覧</a></li>
     <li class="breadcrumb-item active">{{ team_name }}</li>
   </ol>
@@ -17,7 +17,7 @@
   <p class="page-subtitle">
     {% if pos_mode == 'pitcher' %}投手{% else %}野手{% endif %}{% if ratings_table %}能力{% else %}成績{% endif %}{% if stats_year %}（{{ stats_year }}年）{% endif %}
     · {{ players|length }}名
-    · <a href="{% scoped_url 'team_analysis' team_id %}">戦力分析</a>{% if world %} · <a href="{% url 'pennant_team_history' world.world_id team_id %}">球団史</a>{% endif %}
+    · <a href="{% scoped_url 'team_analysis' team_id %}">戦力分析</a>{% if world %} · <a href="{% workspace_url 'pennant_team_history' world.world_id team_id %}">球団史</a>{% endif %}
   </p>
 </div>
 

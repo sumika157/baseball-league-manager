@@ -8,22 +8,20 @@ import re
 from datetime import date
 
 from django.contrib.auth.models import User
-from django.urls import reverse
 
 from myapp.domain.value_objects import BattingLine
 from myapp.infrastructure import orm_models
 from myapp.presentation.views import build_pennant_world_service, build_team_analysis_service
 
-from ..helpers import play_game, real_scope, world_scope
+from ..helpers import header_pages, play_game, real_scope, world_scope, ws_url
 from .world_case import PENNANT_PLAYER_PREFIX, PENNANT_RIVAL, PENNANT_TEAM, YEAR, WorldCase
 
 OLD_YEAR = 2019
-HEADER_PAGES = ("/", "/players/", "/pennant/")
 
 
 class WorldAnalysisCase(WorldCase):
     def url(self, team=None, **params) -> str:
-        url = reverse("pennant_team_analysis", args=[self.world_id, (team or self.pennant_team).id])
+        url = ws_url("pennant_team_analysis", self.world_id, (team or self.pennant_team).id)
         return f"{url}?" + "&".join(f"{key}={value}" for key, value in params.items()) if params else url
 
 
@@ -52,18 +50,18 @@ class WorldTeamAnalysisTest(WorldAnalysisCase):
 
         names = [option.name for option in response.context["analysis"].teams]
         self.assertCountEqual(names, [PENNANT_TEAM, PENNANT_RIVAL])
-        self.assertContains(response, f'action="/pennant/{self.world_id}/analysis/"')
+        self.assertContains(response, f'action="{ws_url("pennant_analysis_index", self.world_id)}"')
 
     def test_the_index_redirects_to_the_first_team_of_the_world(self):
-        response = self.client.get(reverse("pennant_analysis_index", args=[self.world_id]), {"year": YEAR})
+        response = self.client.get(ws_url("pennant_analysis_index", self.world_id), {"year": YEAR})
 
         self.assertEqual(response.status_code, 302)
-        self.assertTrue(response["Location"].startswith(f"/pennant/{self.world_id}/team/"))
+        self.assertTrue(response["Location"].startswith(ws_url("pennant_world", self.world_id) + "team/"))
         self.assertIn("/analysis/?year=", response["Location"])
 
     def test_the_index_ignores_a_real_team_id(self):
         """切り替えフォームに実データの球団の id が来ても、世界の先頭の球団へ移る。"""
-        response = self.client.get(reverse("pennant_analysis_index", args=[self.world_id]), {"team": self.team.id})
+        response = self.client.get(ws_url("pennant_analysis_index", self.world_id), {"team": self.team.id})
 
         self.assertEqual(response.status_code, 302)
         self.assertNotIn(f"/team/{self.team.id}/", response["Location"])
@@ -72,7 +70,7 @@ class WorldTeamAnalysisTest(WorldAnalysisCase):
     def test_an_unknown_world_is_404(self):
         for name, args in (("pennant_analysis_index", []), ("pennant_team_analysis", [self.pennant_team.id])):
             with self.subTest(name=name):
-                self.assertEqual(self.client.get(reverse(name, args=[self.world_id + 100, *args])).status_code, 404)
+                self.assertEqual(self.client.get(ws_url(name, self.world_id + 100, *args)).status_code, 404)
 
 
 class WorldAnalysisIsolationTest(WorldAnalysisCase):
@@ -80,7 +78,7 @@ class WorldAnalysisIsolationTest(WorldAnalysisCase):
         self.assertEqual(self.client.get(self.url(self.team)).status_code, 404)
 
     def test_a_pennant_team_is_404_in_the_real_data(self):
-        self.assertEqual(self.client.get(reverse("team_analysis", args=[self.pennant_team.id])).status_code, 404)
+        self.assertEqual(self.client.get(ws_url("team_analysis", self.pennant_team.id)).status_code, 404)
 
     def test_another_worlds_team_is_404(self):
         other = build_pennant_world_service(real_scope()).create_world(
@@ -91,12 +89,12 @@ class WorldAnalysisIsolationTest(WorldAnalysisCase):
         self.assertEqual(self.client.get(self.url(other_team)).status_code, 404)
 
     def test_the_real_page_does_not_show_the_world(self):
-        response = self.client.get(reverse("team_analysis", args=[self.team.id]))
+        response = self.client.get(ws_url("team_analysis", self.team.id))
 
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, PENNANT_PLAYER_PREFIX)
         self.assertNotContains(response, PENNANT_TEAM)
-        self.assertNotContains(response, f"/pennant/{self.world_id}/")
+        self.assertNotContains(response, ws_url("pennant_world", self.world_id))
 
 
 class WorldServiceHistoryTest(WorldAnalysisCase):
@@ -104,7 +102,7 @@ class WorldServiceHistoryTest(WorldAnalysisCase):
         """FA 取得の「試合の記録のある最初の年」は、世界の試合から取る（実データの古い年に引きずられない）。"""
         play_game(self.team, self.rival, year=OLD_YEAR, batting={self.real_batters[0]: BattingLine(at_bats=1)})
 
-        real = self.client.get(reverse("team_analysis", args=[self.team.id]), {"tab": "fa"})
+        real = self.client.get(ws_url("team_analysis", self.team.id), {"tab": "fa"})
         world = self.client.get(self.url(tab="fa"))
 
         self.assertEqual(real.context["analysis"].records_from_year, OLD_YEAR)
@@ -127,7 +125,7 @@ class WorldServiceHistoryTest(WorldAnalysisCase):
     def test_the_real_default_year_is_the_calendar_today(self):
         orm_models.Game.objects.filter(home_team__league__world_id__isnull=True).delete()
 
-        response = self.client.get(reverse("team_analysis", args=[self.team.id]))
+        response = self.client.get(ws_url("team_analysis", self.team.id))
 
         self.assertEqual(response.context["analysis"].year, date.today().year)
 
@@ -156,24 +154,24 @@ class WorldAnalysisLinksTest(WorldAnalysisCase):
         return re.findall(r'<a [^>]*href="([^"]*)"', self.client.get(url).content.decode())
 
     def test_every_link_stays_in_the_world_on_every_tab(self):
-        prefix = f"/pennant/{self.world_id}/"
+        prefix = ws_url("pennant_world", self.world_id)
         for tab in ("depth", "usage", "fa", "stats"):
             for href in self.hrefs(self.url(tab=tab)):
-                allowed = href.startswith((prefix, "?", "#", "/accounts/", "/admin/")) or href in HEADER_PAGES
+                allowed = href.startswith((prefix, "?", "#", "/accounts/", "/admin/")) or href in header_pages()
                 with self.subTest(tab=tab, href=href):
                     self.assertTrue(allowed)
 
     def test_the_header_and_the_team_page_link_to_the_worlds_analysis(self):
-        links = self.hrefs(reverse("pennant_player_list", args=[self.world_id, self.pennant_team.id]))
+        links = self.hrefs(ws_url("pennant_player_list", self.world_id, self.pennant_team.id))
 
-        self.assertIn(f"/pennant/{self.world_id}/team/{self.pennant_team.id}/analysis/", links)
-        self.assertIn(f"/pennant/{self.world_id}/analysis/", links)
+        self.assertIn(ws_url("pennant_team_analysis", self.world_id, self.pennant_team.id), links)
+        self.assertIn(ws_url("pennant_analysis_index", self.world_id), links)
 
     def test_the_real_pages_still_link_to_the_real_analysis(self):
-        links = self.hrefs(reverse("player_list", args=[self.team.id]))
+        links = self.hrefs(ws_url("player_list", self.team.id))
 
-        self.assertIn(reverse("analysis_index"), links)
-        self.assertIn(reverse("team_analysis", args=[self.team.id]), links)
+        self.assertIn(ws_url("analysis_index"), links)
+        self.assertIn(ws_url("team_analysis", self.team.id), links)
 
     def test_the_page_has_no_write_links_even_for_the_owner(self):
         owner = User.objects.create_user("gm", password="x")

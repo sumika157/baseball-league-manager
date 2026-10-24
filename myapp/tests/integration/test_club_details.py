@@ -9,7 +9,6 @@ from unittest import mock
 
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from django.urls import reverse
 
 from myapp.domain.exceptions import TeamNotFound
 from myapp.domain.pennant.schedule import AdvanceTarget
@@ -21,7 +20,7 @@ from myapp.presentation.views import (
     build_pennant_season_service,
 )
 
-from ..helpers import world_scope
+from ..helpers import world_scope, ws_url
 from .test_club_screen import ClubScreenCase
 from .test_pennant_advance import YEAR
 from .test_pennant_offseason_screens import DECIDE_RETIREMENTS
@@ -95,7 +94,7 @@ class ClubDetailsTest(ClubScreenCase):
 
 class ReserveMarkTest(ClubScreenCase):
     def team_url(self, team_id=None, **query) -> str:
-        url = reverse("pennant_player_list", args=[self.world_a, team_id or self.home_a.id])
+        url = ws_url("pennant_player_list", self.world_a, team_id or self.home_a.id)
         return url + ("?" + "&".join(f"{k}={v}" for k, v in query.items()) if query else "")
 
     def names_of(self, player_ids) -> list[str]:
@@ -169,6 +168,6 @@ class ReserveMarkTest(ClubScreenCase):
         real_team = orm_models.Team.objects.filter(league__world__isnull=True).first()
         assert real_team is not None
 
-        content = self.client.get(reverse("player_list", args=[real_team.id])).content.decode()
+        content = self.client.get(ws_url("player_list", real_team.id)).content.decode()
 
         self.assertNotIn(">2軍<", content)

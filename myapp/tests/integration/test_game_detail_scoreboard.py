@@ -3,8 +3,6 @@
 import re
 from datetime import date
 
-from django.urls import reverse
-
 from myapp.domain.entities import Game
 from myapp.domain.value_objects import BattingLine, LineScore, Season
 from myapp.infrastructure.repositories import DjangoGameRepository
@@ -17,6 +15,7 @@ from ..helpers import (
     post_game_scorebook_day_unrecorded,
     real_scope,
     register_lineup,
+    ws_url,
 )
 from .base import BaseCase
 
@@ -71,7 +70,7 @@ class _DetailCase(BaseCase):
         self.assertEqual(response.status_code, 200, response.content)
 
     def _detail(self):
-        return self.client.get(reverse("game_detail", args=[self.game.id]))
+        return self.client.get(ws_url("game_detail", self.game.id))
 
 
 class GameDetailScoreboardTest(_DetailCase):
@@ -135,7 +134,7 @@ class GameDetailScoreboardTest(_DetailCase):
         old.record_batting(batter.id, BattingLine(at_bats=4, singles=2), team_id=self.team.id)
         game = DjangoGameRepository(real_scope()).save(old)
 
-        response = self.client.get(reverse("game_detail", args=[game.id]))
+        response = self.client.get(ws_url("game_detail", game.id))
 
         self.assertEqual(response.status_code, 200)
         line_score = response.context["detail"].line_score

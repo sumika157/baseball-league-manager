@@ -12,7 +12,6 @@ from unittest import mock
 from django.db import connection
 from django.test import SimpleTestCase
 from django.test.utils import CaptureQueriesContext
-from django.urls import reverse
 
 from myapp.application.dto import LeagueStandings, StandingRow, WorldContext
 from myapp.application.pennant_home import _LABELS, PennantHomeService
@@ -37,7 +36,7 @@ from myapp.presentation.views import (
     build_service,
 )
 
-from ..helpers import real_scope, world_scope, world_summary_query
+from ..helpers import real_scope, world_scope, world_summary_query, ws_url
 from .test_pennant_advance import SEASON_GAMES, YEAR
 from .test_pennant_home import FinishedSeasonCase, HomeCase
 
@@ -186,7 +185,7 @@ class RaceBandTest(FinishedSeasonCase):
         orm_models.PennantWorld.objects.filter(id=self.world_a).update(managed_team_id=leader)
 
         home = self.client.get(self.home_url()).content.decode()
-        index = self.client.get(reverse("pennant_index")).content.decode()
+        index = self.client.get(ws_url("pennant_index")).content.decode()
 
         self.assertIn("優勝確定", home)
         self.assertIn("優勝争い", home)
@@ -198,7 +197,7 @@ class RaceBandTest(FinishedSeasonCase):
         orm_models.PennantWorld.objects.filter(id=self.world_a).update(managed_team_id=runner_up.id)
 
         home = self.client.get(self.home_url()).content.decode()
-        index = self.client.get(reverse("pennant_index")).content.decode()
+        index = self.client.get(ws_url("pennant_index")).content.decode()
 
         self.assertNotIn("優勝争い", home)
         self.assertNotIn("優勝確定", index)
@@ -209,7 +208,7 @@ class RaceBandTest(FinishedSeasonCase):
 
         with mock.patch("myapp.application.pennant_view.is_final_season", return_value=True):
             home = self.client.get(self.home_url()).content.decode()
-            index = self.client.get(reverse("pennant_index")).content.decode()
+            index = self.client.get(ws_url("pennant_index")).content.decode()
 
         self.assertIn("世界の終了（1シーズン）", home)
         self.assertIn("優勝</span>", home)
@@ -276,7 +275,7 @@ class RaceBandTest(FinishedSeasonCase):
 
     def test_the_finale_is_not_shown_before_the_final_season_ends(self):
         home = self.client.get(self.home_url()).content.decode()
-        index = self.client.get(reverse("pennant_index")).content.decode()
+        index = self.client.get(ws_url("pennant_index")).content.decode()
 
         self.assertNotIn("世界の終了", home)
         self.assertIn(f"{YEAR}年 · シーズン終了", index)

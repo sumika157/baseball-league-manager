@@ -11,7 +11,6 @@ presentation/forms.py のフォームを行単位で使い、業務ルール（�
 import json
 
 from django.http import Http404, JsonResponse
-from django.urls import reverse
 from django.views.decorators.http import require_POST
 
 from ..domain.exceptions import DomainError, GameNotFound
@@ -22,7 +21,7 @@ from .forms import (
     RunnerAdvanceForm,
     ScorebookGameForm,
 )
-from .views import _first_error, _real_scope, build_permission_query, build_recording_service
+from .views import _first_error, _real_scope, _url, build_permission_query, build_recording_service
 
 _MISSING = object()
 
@@ -173,7 +172,7 @@ def game_scorebook(request, game_id):
     return JsonResponse(
         {
             "ok": True,
-            "redirect_url": reverse("game_detail", args=[game_id]),
+            "redirect_url": _url(request, "game_detail", game_id),
             # 保存は済んでいる。見直してほしい内容（例: 観客数が収容人数を超えている）。無ければ空の配列
             "warnings": list(saved.warnings),
         }

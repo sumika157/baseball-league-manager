@@ -5,7 +5,6 @@ import re
 from django.contrib.auth.models import User
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from django.urls import reverse
 
 from myapp.domain.value_objects import (
     BattingLine,
@@ -14,7 +13,7 @@ from myapp.domain.value_objects import (
 )
 from myapp.infrastructure import orm_models
 
-from ..helpers import give_batting, give_pitching, make_league, play_game
+from ..helpers import give_batting, give_pitching, make_league, play_game, ws_url
 from .base import BaseCase
 
 
@@ -47,14 +46,14 @@ class TeamListByLeagueTest(BaseCase):
         self.assertEqual(grouped["別リーグ"], ["Aチーム", "Xチーム"])
 
     def test_page_shows_each_league_heading(self):
-        response = self.client.get(reverse("team_list"))
+        response = self.client.get(ws_url("team_list"))
 
         self.assertContains(response, "テストリーグ")
         self.assertContains(response, "別リーグ")
         self.assertEqual(len(response.context["leagues"]), 2)
 
     def test_heading_shows_the_team_count(self):
-        body = self.client.get(reverse("team_list")).content.decode()
+        body = self.client.get(ws_url("team_list")).content.decode()
 
         # テストリーグは2チーム、別リーグは1チーム
         self.assertIn(">2チーム</span>", body)
@@ -96,7 +95,7 @@ class LeagueDetailTest(BaseCase):
         self.outsider_league = make_league(name="別リーグ")
         self.outsider = orm_models.Team.objects.create(league=self.outsider_league, name="部外チーム")
         play_game(self.team, self.rival, home_score=5, away_score=3, day=1)
-        self.url = reverse("league_detail", args=[self.league.id])
+        self.url = ws_url("league_detail", self.league.id)
 
     def test_page_renders(self):
         response = self.client.get(self.url)
@@ -139,10 +138,10 @@ class LeagueDetailTest(BaseCase):
         self.assertIsNone(detail.year)
 
     def test_missing_league_returns_404(self):
-        self.assertEqual(self.client.get(reverse("league_detail", args=[9999])).status_code, 404)
+        self.assertEqual(self.client.get(ws_url("league_detail", 9999)).status_code, 404)
 
     def test_team_list_links_to_the_league(self):
-        body = self.client.get(reverse("team_list")).content.decode()
+        body = self.client.get(ws_url("team_list")).content.decode()
         self.assertIn(self.url, body)
 
 
@@ -157,7 +156,7 @@ class LeagueTitlesViewTest(BaseCase):
         super().setUp()
         self.slugger = self.roster.register_player(self.team.id, "大砲", 3, "内野手")
         self.ace = self.roster.register_player(self.team.id, "エース", 18, "投手")
-        self.url = reverse("league_titles", args=[self.league.id])
+        self.url = ws_url("league_titles", self.league.id)
 
     def _departments(self, year=None):
         titles = self.service.get_league_titles(self.league.id, year)
@@ -359,14 +358,14 @@ class LeagueTitlesViewTest(BaseCase):
         self.assertContains(response, "まだ登録されていません")
 
     def test_missing_league_returns_404(self):
-        self.assertEqual(self.client.get(reverse("league_titles", args=[9999])).status_code, 404)
+        self.assertEqual(self.client.get(ws_url("league_titles", 9999)).status_code, 404)
 
     def test_league_page_links_to_the_titles_page(self):
         play_game(self.team, self.rival)
 
-        response = self.client.get(reverse("league_detail", args=[self.league.id]))
+        response = self.client.get(ws_url("league_detail", self.league.id))
 
-        self.assertContains(response, reverse("league_titles_by_year", args=[self.league.id, 2026]))
+        self.assertContains(response, ws_url("league_titles_by_year", self.league.id, 2026))
 
 
 class LeagueStatsViewTest(BaseCase):
@@ -377,7 +376,7 @@ class LeagueStatsViewTest(BaseCase):
         self.slugger = self.roster.register_player(self.team.id, "大砲", 3, "内野手")
         self.contact = self.roster.register_player(self.rival.id, "安打製造機", 7, "外野手")
         self.ace = self.roster.register_player(self.team.id, "エース", 18, "投手")
-        self.url = reverse("league_stats", args=[self.league.id])
+        self.url = ws_url("league_stats", self.league.id)
 
     def test_batters_span_teams_within_the_league(self):
         give_batting(self.team, self.rival, self.slugger.id, BattingLine(at_bats=10, home_runs=2), day=1)
@@ -436,7 +435,7 @@ class LeagueStatsViewTest(BaseCase):
 
         body = self.client.get(self.url).content.decode()
 
-        self.assertIn(reverse("player_detail", args=[self.team.id, self.slugger.id]), body)
+        self.assertIn(ws_url("player_detail", self.team.id, self.slugger.id), body)
         self.assertIn("成績一覧", body)
 
     def test_pitcher_page_renders(self):
@@ -446,7 +445,7 @@ class LeagueStatsViewTest(BaseCase):
         self.assertContains(response, "防御率")
 
     def test_missing_league_returns_404(self):
-        self.assertEqual(self.client.get(reverse("league_stats", args=[9999])).status_code, 404)
+        self.assertEqual(self.client.get(ws_url("league_stats", 9999)).status_code, 404)
 
     # --- 規定到達での絞り込み ---
     #
@@ -523,6 +522,6 @@ class LeagueStatsViewTest(BaseCase):
             self.assertIn("sort=era", link)
 
     def test_league_page_links_here(self):
-        response = self.client.get(reverse("league_detail", args=[self.league.id]))
+        response = self.client.get(ws_url("league_detail", self.league.id))
 
-        self.assertContains(response, reverse("league_stats", args=[self.league.id]))
+        self.assertContains(response, ws_url("league_stats", self.league.id))

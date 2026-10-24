@@ -9,6 +9,7 @@ from myapp.infrastructure import orm_models
 from ..helpers import (
     login_as_manager,
     play_game,
+    ws_url,
 )
 from .base import BaseCase
 
@@ -37,12 +38,12 @@ class WriteRequiresLoginTest(BaseCase):
 
     def test_reading_needs_no_login(self):
         pages = [
-            reverse("dashboard"),
-            reverse("team_list"),
-            reverse("player_list", args=[self.team.id]),
-            reverse("player_detail", args=[self.team.id, self.player.id]),
-            reverse("game_list"),
-            reverse("standings"),
+            ws_url("dashboard"),
+            ws_url("team_list"),
+            ws_url("player_list", self.team.id),
+            ws_url("player_detail", self.team.id, self.player.id),
+            ws_url("game_list"),
+            ws_url("standings"),
         ]
         for url in pages:
             with self.subTest(url=url):
@@ -50,8 +51,8 @@ class WriteRequiresLoginTest(BaseCase):
 
     def test_writing_pages_redirect_to_login(self):
         for url in (
-            reverse("game_create"),
-            reverse("player_edit", args=[self.team.id, self.player.id]),
+            ws_url("game_create"),
+            ws_url("player_edit", self.team.id, self.player.id),
         ):
             with self.subTest(url=url):
                 response = self.client.get(url)
@@ -63,7 +64,7 @@ class WriteRequiresLoginTest(BaseCase):
         before = orm_models.Player.objects.count()
 
         response = self.client.post(
-            reverse("player_list", args=[self.team.id]),
+            ws_url("player_list", self.team.id),
             {"name": "侵入", "number": "99", "position": "内野手"},
         )
 
@@ -73,7 +74,7 @@ class WriteRequiresLoginTest(BaseCase):
 
     def test_editing_a_player_without_login_changes_nothing(self):
         response = self.client.post(
-            reverse("player_edit", args=[self.team.id, self.player.id]),
+            ws_url("player_edit", self.team.id, self.player.id),
             {"name": "改ざん", "number": "10", "position": "内野手"},
         )
 
@@ -83,7 +84,7 @@ class WriteRequiresLoginTest(BaseCase):
 
     def test_retiring_a_player_without_login_changes_nothing(self):
         self.client.post(
-            reverse("player_edit", args=[self.team.id, self.player.id]),
+            ws_url("player_edit", self.team.id, self.player.id),
             {"retire": "1"},
         )
 
@@ -92,12 +93,12 @@ class WriteRequiresLoginTest(BaseCase):
 
     def test_write_controls_are_hidden_from_anonymous_visitors(self):
         """押せない導線は見せない（試合の画面と同じ扱いに揃える）。"""
-        listing = self.client.get(reverse("player_list", args=[self.team.id]))
-        detail = self.client.get(reverse("player_detail", args=[self.team.id, self.player.id]))
+        listing = self.client.get(ws_url("player_list", self.team.id))
+        detail = self.client.get(ws_url("player_detail", self.team.id, self.player.id))
 
         self.assertNotContains(listing, "新入団選手の登録")
         self.assertNotContains(detail, "player_edit")
-        self.assertNotContains(detail, reverse("player_edit", args=[self.team.id, self.player.id]))
+        self.assertNotContains(detail, ws_url("player_edit", self.team.id, self.player.id))
 
 
 class TeamManagerPermissionTest(BaseCase):
@@ -115,7 +116,7 @@ class TeamManagerPermissionTest(BaseCase):
         self.outsider = orm_models.Team.objects.create(league=self.league, name="無関係チーム")
 
     def _player_edit_url(self):
-        return reverse("player_edit", args=[self.team.id, self.player.id])
+        return ws_url("player_edit", self.team.id, self.player.id)
 
     # --- 選手 ---
 
@@ -146,7 +147,7 @@ class TeamManagerPermissionTest(BaseCase):
         self.client.force_login(User.objects.create_user(username="other", password="x"))
 
         response = self.client.post(
-            reverse("player_list", args=[self.team.id]),
+            ws_url("player_list", self.team.id),
             {"name": "田中", "number": "11", "position": "外野手"},
         )
 
@@ -156,7 +157,7 @@ class TeamManagerPermissionTest(BaseCase):
     def test_player_list_hides_write_controls_from_non_managers(self):
         self.client.force_login(User.objects.create_user(username="other", password="x"))
 
-        response = self.client.get(reverse("player_list", args=[self.team.id]))
+        response = self.client.get(ws_url("player_list", self.team.id))
 
         self.assertEqual(response.status_code, 200)  # 閲覧はできる
         self.assertNotContains(response, "新入団選手の登録")
@@ -164,7 +165,7 @@ class TeamManagerPermissionTest(BaseCase):
     def test_player_list_shows_write_controls_to_managers(self):
         login_as_manager(self.client, self.team)
 
-        response = self.client.get(reverse("player_list", args=[self.team.id]))
+        response = self.client.get(ws_url("player_list", self.team.id))
 
         self.assertContains(response, "新入団選手の登録")
 
@@ -173,16 +174,16 @@ class TeamManagerPermissionTest(BaseCase):
     def test_manager_of_either_side_can_edit_the_game(self):
         """試合は2チームにまたがる。どちらか一方の担当者なら編集できる。"""
         login_as_manager(self.client, self.rival)
-        self.assertEqual(self.client.get(reverse("game_edit", args=[self.game.id])).status_code, 200)
+        self.assertEqual(self.client.get(ws_url("game_edit", self.game.id)).status_code, 200)
 
     def test_manager_of_an_uninvolved_team_cannot_edit_the_game(self):
         login_as_manager(self.client, self.outsider)
-        self.assertEqual(self.client.get(reverse("game_edit", args=[self.game.id])).status_code, 403)
+        self.assertEqual(self.client.get(ws_url("game_edit", self.game.id)).status_code, 403)
 
     def test_game_detail_hides_the_edit_link_from_non_managers(self):
         login_as_manager(self.client, self.outsider)
 
-        response = self.client.get(reverse("game_detail", args=[self.game.id]))
+        response = self.client.get(ws_url("game_detail", self.game.id))
 
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, "記録を編集")
@@ -191,7 +192,7 @@ class TeamManagerPermissionTest(BaseCase):
         login_as_manager(self.client, self.outsider)
 
         response = self.client.post(
-            reverse("game_create"),
+            ws_url("game_create"),
             {
                 "year": "2026",
                 "played_on": "2026-04-02",
@@ -207,6 +208,6 @@ class TeamManagerPermissionTest(BaseCase):
     def test_game_list_hides_the_create_link_when_you_manage_nothing(self):
         self.client.force_login(User.objects.create_user(username="other", password="x"))
 
-        response = self.client.get(reverse("game_list"))
+        response = self.client.get(ws_url("game_list"))
 
         self.assertNotContains(response, "試合を登録")

@@ -5,11 +5,9 @@
 CSS の効き方の問題で integration では確かめられないため、実ブラウザで測る。
 """
 
-from django.urls import reverse
-
 from myapp.infrastructure import orm_models
 
-from ..helpers import build_roster_service, make_league, real_scope
+from ..helpers import build_roster_service, make_league, real_scope, ws_url
 from .base import PlaywrightTestCase
 
 # セルの中身が2行以上に割れているセルを返す。
@@ -45,7 +43,7 @@ class RosterTableLayoutTest(PlaywrightTestCase):
 
     def _open(self, pos: str, width: int) -> None:
         self.page.set_viewport_size({"width": width, "height": 900})
-        self.page.goto(self.live_server_url + reverse("player_list", args=[self.team.id]) + f"?pos={pos}")
+        self.page.goto(self.live_server_url + ws_url("player_list", self.team.id) + f"?pos={pos}")
 
     def test_pitcher_table_cells_do_not_wrap(self):
         """投手の表のセルが折り返さず、収まらない分は表の中で横スクロールすること。"""

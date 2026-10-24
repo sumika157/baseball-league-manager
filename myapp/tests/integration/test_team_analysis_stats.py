@@ -4,12 +4,11 @@ from datetime import date
 
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from django.urls import reverse
 
 from myapp.domain.value_objects import BattingLine, InningsPitched, PitchingLine
 from myapp.infrastructure import orm_models
 
-from ..helpers import give_batting, give_pitching, play_game
+from ..helpers import give_batting, give_pitching, play_game, ws_url
 from .test_team_analysis import AnalysisCase
 
 
@@ -28,7 +27,7 @@ class TeamStatsTabBase(AnalysisCase):
         give_batting(self.team, self.rival, self.rival_batter, BattingLine(at_bats=4, singles=4), day=4)
 
     def url(self, team=None):
-        return reverse("team_analysis", args=[(team or self.team).id])
+        return ws_url("team_analysis", (team or self.team).id)
 
     def get(self, **params):
         return self.client.get(self.url(), {"tab": "stats", **params})
@@ -111,7 +110,7 @@ class TeamStatsTabTest(TeamStatsTabBase):
 
     def test_team_switch_goes_through_the_index_with_pos_and_sort(self):
         response = self.client.get(
-            reverse("analysis_index"), {"team": self.rival.id, "tab": "stats", "pos": "pitcher", "sort": "wins"}
+            ws_url("analysis_index"), {"team": self.rival.id, "tab": "stats", "pos": "pitcher", "sort": "wins"}
         )
         self.assertEqual(response.status_code, 302)
         self.assertIn("tab=stats", response["Location"])
@@ -174,7 +173,7 @@ class TeamStatsTabToneTest(TeamStatsTabBase):
         self.assertEqual(self.legend_counts(pitchers), {"hand-left": 1})
 
     def test_player_list_has_no_tone_class(self):
-        response = self.client.get(reverse("player_list", args=[self.team.id]))
+        response = self.client.get(ws_url("player_list", self.team.id))
         self.assertNotContains(response, "player-tone")
 
     def test_player_without_games_is_listed_and_counted_in_the_legend(self):

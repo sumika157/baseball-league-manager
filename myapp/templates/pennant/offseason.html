@@ -64,7 +64,7 @@
 
 <h2 class="h5 mb-3">リーグ別の引退・退団・戦力外と新人</h2>
 {% if summary.leagues|length > 1 %}
-  <form method="get" class="d-flex gap-2 mb-3" action="{% url 'pennant_offseason' world.world_id summary.year %}">
+  <form method="get" class="d-flex gap-2 mb-3" action="{% workspace_url 'pennant_offseason' world.world_id summary.year %}">
     <select name="league" class="form-select form-select-sm" aria-label="リーグ" style="max-width: 16rem;">
       {% for league in summary.leagues %}
         <option value="{{ league.id }}" {% if league.id == summary.selected_league_id %}selected{% endif %}>{{ league.name }}</option>

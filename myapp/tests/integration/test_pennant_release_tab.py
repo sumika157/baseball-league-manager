@@ -8,7 +8,6 @@
 from unittest import mock
 
 from django.contrib.messages import get_messages
-from django.urls import reverse
 
 from myapp.domain.pennant.draft import MIN_BY_POSITION
 from myapp.domain.pennant.release import ReleasePlan
@@ -18,7 +17,7 @@ from myapp.infrastructure.repositories import DjangoReleasePlanRepository
 from myapp.presentation.club_input import REOPEN
 from myapp.presentation.views import build_pennant_season_service
 
-from ..helpers import world_scope
+from ..helpers import world_scope, ws_url
 from .test_pennant_advance import YEAR
 from .test_pennant_offseason_screens import IS_FINAL_SEASON, ScreenCase
 
@@ -27,7 +26,7 @@ NO_POSITION_MINIMUM = dict.fromkeys(MIN_BY_POSITION, 0)
 
 class ReleaseTabCase(ScreenCase):
     def club_url(self, tab: str | None = "release", world_id=None) -> str:
-        url = reverse("pennant_club", args=[self.world_a if world_id is None else world_id])
+        url = ws_url("pennant_club", self.world_a if world_id is None else world_id)
         return url if tab is None else f"{url}?tab={tab}"
 
     def team_id(self) -> int:

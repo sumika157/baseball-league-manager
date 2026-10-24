@@ -85,7 +85,7 @@ GM ホーム。上から、自軍の位置 → 進めた結果 → 進める（�
 {% endif %}
 
 {% if home.shows_previous_season %}
-  <p class="mb-3"><a href="{% url 'pennant_offseason' world.world_id home.stats_year %}">{{ home.stats_year }}年のオフの結果（引退・新人・能力の変化）を見る</a></p>
+  <p class="mb-3"><a href="{% workspace_url 'pennant_offseason' world.world_id home.stats_year %}">{{ home.stats_year }}年のオフの結果（引退・新人・能力の変化）を見る</a></p>
 {% endif %}
 
 {% if is_owner and plan_notices %}
@@ -94,7 +94,7 @@ GM ホーム。上から、自軍の位置 → 進めた結果 → 進める（�
     <ul class="mb-1">
       {% for notice in plan_notices %}
         <li>{% if notice.falls_back %}「{{ notice.section }}」は、いま進めると自動編成になります。理由: {% else %}「{{ notice.section }}」: {% endif %}{{ notice.reason }}
-          <a href="{% url 'pennant_club' world.world_id %}?tab={{ notice.tab }}" class="alert-link">編成を開く</a></li>
+          <a href="{% workspace_url 'pennant_club' world.world_id %}?tab={{ notice.tab }}" class="alert-link">編成を開く</a></li>
       {% endfor %}
     </ul>
   </div>
@@ -217,7 +217,7 @@ GM ホーム。上から、自軍の位置 → 進めた結果 → 進める（�
     <div class="card-header">進める</div>
     <div class="card-body">
       {% if home.advance_options %}
-        <form method="post" action="{% url 'pennant_advance' world.world_id %}">
+        <form method="post" action="{% workspace_url 'pennant_advance' world.world_id %}">
           {% csrf_token %}
           <input type="hidden" name="expected_today" value="{{ home.expected_today }}">
           {% for option in home.advance_options %}
@@ -262,7 +262,7 @@ GM ホーム。上から、自軍の位置 → 進めた結果 → 進める（�
   </div>
   {% if home.standings.leagues|length > 1 %}
     {% comment %}リーグは8つまである。タブではなく選択欄で切り替える（JavaScript は使わず、押して切り替える）。{% endcomment %}
-    <form method="get" class="d-flex gap-2 p-3 pb-0" action="{% url 'pennant_world' world.world_id %}">
+    <form method="get" class="d-flex gap-2 p-3 pb-0" action="{% workspace_url 'pennant_world' world.world_id %}">
       <select name="league" class="form-select form-select-sm" aria-label="リーグ" style="max-width: 16rem;">
         {% for league in home.standings.leagues %}
           <option value="{{ league.id }}" {% if league.id == home.standings.selected.league_id %}selected{% endif %}>{{ league.name }}</option>
@@ -390,7 +390,7 @@ GM ホーム。上から、自軍の位置 → 進めた結果 → 進める（�
 {% endif %}
 
 {% if is_owner %}
-  <p class="text-end mt-4"><a href="{% url 'pennant_delete' world.world_id %}" class="btn-link-quiet">この世界を削除する</a></p>
+  <p class="text-end mt-4"><a href="{% workspace_url 'pennant_delete' world.world_id %}" class="btn-link-quiet">この世界を削除する</a></p>
 {% endif %}
 
 {% endwith %}

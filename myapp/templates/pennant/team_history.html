@@ -46,7 +46,7 @@
           <tbody>
             {% for season in history.seasons %}
               <tr>
-                <td class="tabular-nums"><a href="{% url 'pennant_standings_by_year' world.world_id season.year %}">{{ season.year }}年</a></td>
+                <td class="tabular-nums"><a href="{% workspace_url 'pennant_standings_by_year' world.world_id season.year %}">{{ season.year }}年</a></td>
                 <td class="text-end tabular-nums stat-key">{{ season.rank }}位<span class="stat-muted fw-normal">/{{ season.team_count }}</span></td>
                 <td class="text-end tabular-nums">{{ season.wins }}</td>
                 <td class="text-end tabular-nums">{{ season.losses }}</td>
@@ -67,5 +67,5 @@
     <div class="empty-state">まだ終わったシーズンがありません。シーズンを終えると、ここに年ごとの成績が並びます。</div>
   </div>
 {% endif %}
-<p><a href="{% url 'pennant_history' world.world_id %}">歴代の記録を見る →</a></p>
+<p><a href="{% workspace_url 'pennant_history' world.world_id %}">歴代の記録を見る →</a></p>
 {% endblock %}

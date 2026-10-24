@@ -3,11 +3,9 @@
 選手一覧（戦力分析の成績一覧も同じ表）とリーグの成績一覧に並べ、見出しで並べ替えられる。
 """
 
-from django.urls import reverse
-
 from myapp.domain.value_objects import BattingLine, InningsPitched, PitchingLine
 
-from ..helpers import give_batting, give_pitching
+from ..helpers import give_batting, give_pitching, ws_url
 from .base import BaseCase
 
 
@@ -58,10 +56,10 @@ class GamesPlayedColumnTest(BaseCase):
 
     def test_pages_show_the_columns(self):
         pages = (
-            (reverse("player_list", args=[self.team.id]), "試合"),
-            (reverse("player_list", args=[self.team.id]) + "?pos=pitcher", "登板"),
-            (reverse("league_stats", args=[self.league.id]), "試合"),
-            (reverse("league_stats", args=[self.league.id]) + "?pos=pitcher", "登板"),
+            (ws_url("player_list", self.team.id), "試合"),
+            (ws_url("player_list", self.team.id) + "?pos=pitcher", "登板"),
+            (ws_url("league_stats", self.league.id), "試合"),
+            (ws_url("league_stats", self.league.id) + "?pos=pitcher", "登板"),
         )
         for url, heading in pages:
             with self.subTest(url=url):

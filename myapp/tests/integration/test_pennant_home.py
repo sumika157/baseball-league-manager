@@ -13,7 +13,6 @@ from django.contrib.messages import get_messages
 from django.db import connection
 from django.test import SimpleTestCase
 from django.test.utils import CaptureQueriesContext
-from django.urls import reverse
 
 from myapp.application.dto import LeagueStandings, OwnTeamSummary, StandingRow, WorldContext
 from myapp.application.pennant_home import PennantHomeService
@@ -23,7 +22,7 @@ from myapp.domain.pennant.season import SCREEN_ADVANCE_TARGETS, SeasonPhase, sum
 from myapp.infrastructure import orm_models
 from myapp.presentation.views import build_pennant_season_service, build_service
 
-from ..helpers import real_scope, world_scope
+from ..helpers import real_scope, world_scope, ws_url
 from .test_pennant_advance import SEASON_GAMES, YEAR, SeasonCase
 
 # 1シーズンを終えた世界のシード（同率で終わらないもの）
@@ -44,10 +43,10 @@ class HomeCase(SeasonCase):
         orm_models.PennantWorld.objects.filter(id=cls.world_a).update(owner_id=cls.owner.id)
 
     def home_url(self, world_id=None) -> str:
-        return reverse("pennant_world", args=[self.world_a if world_id is None else world_id])
+        return ws_url("pennant_world", self.world_a if world_id is None else world_id)
 
     def advance_url(self, world_id=None) -> str:
-        return reverse("pennant_advance", args=[self.world_a if world_id is None else world_id])
+        return ws_url("pennant_advance", self.world_a if world_id is None else world_id)
 
     def post_advance(self, target, *, expected="", world_id=None):
         return self.client.post(self.advance_url(world_id), {"target": target, "expected_today": expected})
@@ -122,7 +121,7 @@ class HomeScreenTest(HomeCase):
                     self.client.force_login(user)
                 content = self.client.get(self.home_url()).content.decode()
                 self.assertNotIn(self.advance_url(), content)
-                self.assertNotIn(reverse("pennant_delete", args=[self.world_a]), content)
+                self.assertNotIn(ws_url("pennant_delete", self.world_a), content)
 
     def test_the_owner_sees_the_advance_form_and_the_delete_link(self):
         self.start_season()
@@ -133,7 +132,7 @@ class HomeScreenTest(HomeCase):
         self.assertIn(f'action="{self.advance_url()}"', content)
         self.assertIn("1日進める", content)
         self.assertIn("1週間進める", content)
-        self.assertIn(reverse("pennant_delete", args=[self.world_a]), content)
+        self.assertIn(ws_url("pennant_delete", self.world_a), content)
 
     def test_an_admin_who_is_not_the_owner_sees_nothing_to_write(self):
         """管理ユーザーの権限は世界に及ばない（世界は遊ぶ人のセーブデータ）。"""
@@ -193,7 +192,7 @@ class HomeScreenTest(HomeCase):
         for url in (
             self.home_url(missing),
             self.advance_url(missing),
-            reverse("pennant_delete", args=[missing]),
+            ws_url("pennant_delete", missing),
         ):
             with self.subTest(url=url):
                 self.assertEqual(self.client.get(url).status_code, 404)

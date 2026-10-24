@@ -1,7 +1,5 @@
 """指標。リーグ平均を基準にする相対指標（OPS+・ERA+）と発展的な指標（FIP など）。"""
 
-from django.urls import reverse
-
 from myapp.domain.value_objects import (
     BattingLine,
     InningsPitched,
@@ -19,6 +17,7 @@ from ..helpers import (
     play_game,
     post_game_scorebook_day_unrecorded,
     register_lineup,
+    ws_url,
 )
 from .base import BaseCase
 
@@ -103,9 +102,9 @@ class RelativeMetricsTest(BaseCase):
         self.assertAlmostEqual(detail.ops_plus, 100.0)
 
     def test_lists_and_pages_show_the_indexes(self):
-        batters = self.client.get(reverse("player_list", args=[self.team.id]))
-        pitchers = self.client.get(f"{reverse('player_list', args=[self.team.id])}?pos=pitcher")
-        page = self.client.get(reverse("player_detail", args=[self.team.id, self.batter.id]))
+        batters = self.client.get(ws_url("player_list", self.team.id))
+        pitchers = self.client.get(f"{ws_url('player_list', self.team.id)}?pos=pitcher")
+        page = self.client.get(ws_url("player_detail", self.team.id, self.batter.id))
 
         self.assertContains(batters, "OPS+")
         self.assertContains(pitchers, "ERA+")
@@ -164,14 +163,14 @@ class AdvancedMetricsTest(BaseCase):
         self.assertAlmostEqual(detail.isolated_power, detail.slugging_percentage - detail.batting_average)
 
     def test_pitcher_list_shows_fip(self):
-        response = self.client.get(f"{reverse('player_list', args=[self.team.id])}?pos=pitcher")
+        response = self.client.get(f"{ws_url('player_list', self.team.id)}?pos=pitcher")
 
         self.assertContains(response, "FIP")
         self.assertContains(response, "BB/9")
         self.assertAlmostEqual(response.context["players"][0].fip, 3.0)
 
     def test_batter_list_shows_iso(self):
-        response = self.client.get(reverse("player_list", args=[self.team.id]))
+        response = self.client.get(ws_url("player_list", self.team.id))
 
         self.assertContains(response, "IsoP")
         self.assertAlmostEqual(response.context["players"][0].isolated_power, 0.6)
@@ -202,7 +201,7 @@ class AdvancedMetricsTest(BaseCase):
         self.assertAlmostEqual(totals.fip, totals.earned_run_average)
 
     def test_player_page_shows_fip(self):
-        response = self.client.get(reverse("player_detail", args=[self.team.id, self.pitcher.id]))
+        response = self.client.get(ws_url("player_detail", self.team.id, self.pitcher.id))
 
         self.assertContains(response, "FIP")
 

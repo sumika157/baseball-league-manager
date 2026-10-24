@@ -18,6 +18,7 @@ from ..helpers import (
     make_workspace,
     play_game,
     real_scope,
+    ws_url,
 )
 from .base import BaseCase
 
@@ -35,7 +36,7 @@ class AdminTest(BaseCase):
                 self.assertNotContains(response, "myapp/css/theme.css")
 
     def test_site_pages_do_not_use_the_admin_theme(self):
-        response = self.client.get(reverse("dashboard"))
+        response = self.client.get(ws_url("dashboard"))
         self.assertContains(response, "myapp/css/theme.css")
         self.assertNotContains(response, "myapp/css/admin-theme.css")
 

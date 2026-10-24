@@ -9,13 +9,12 @@ from datetime import date
 from django.contrib.auth.models import User
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from django.urls import reverse
 
 from myapp.domain.exceptions import WorldNotFound
 from myapp.infrastructure import orm_models
 from myapp.presentation.views import build_pennant_world_service, build_service, build_team_view_service
 
-from ..helpers import real_scope, world_scope, world_summary_query
+from ..helpers import real_scope, world_scope, world_summary_query, ws_url
 from .base import BaseCase
 from .world_case import PENNANT_RIVAL, PENNANT_TEAM, PENNANT_WORLD, YEAR, WorldCase
 
@@ -42,13 +41,13 @@ class WorldScreensOpenTest(WorldCase):
 
     def test_the_world_entry_is_the_gm_home(self):
         """世界の入口は GM ホーム（P4a の間は順位表への案内だった）。"""
-        response = self.client.get(reverse("pennant_world", args=[self.world_id]))
+        response = self.client.get(ws_url("pennant_world", self.world_id))
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("GM ホーム", response.content.decode())
 
     def test_screens_show_the_world_not_the_real_data(self):
-        standings = self.client.get(reverse("pennant_standings", args=[self.world_id])).content.decode()
+        standings = self.client.get(ws_url("pennant_standings", self.world_id)).content.decode()
 
         self.assertIn(PENNANT_TEAM, standings)
         self.assertNotIn("テストチーム", standings)
@@ -56,7 +55,7 @@ class WorldScreensOpenTest(WorldCase):
     def test_the_unknown_world_is_404(self):
         for name in ("pennant_world", "pennant_standings", "pennant_team_list", "pennant_game_list"):
             with self.subTest(name=name):
-                self.assertEqual(self.client.get(reverse(name, args=[self.world_id + 100])).status_code, 404)
+                self.assertEqual(self.client.get(ws_url(name, self.world_id + 100)).status_code, 404)
 
 
 class WorldScreensAreReadOnlyTest(WorldCase):
@@ -79,7 +78,7 @@ class WorldScreensAreReadOnlyTest(WorldCase):
 
     def test_a_post_to_a_pennant_team_is_not_allowed(self):
         self.client.force_login(User.objects.create_superuser("root", password="x"))
-        url = reverse("pennant_player_list", args=[self.world_id, self.pennant_team.id])
+        url = ws_url("pennant_player_list", self.world_id, self.pennant_team.id)
         before = orm_models.PlayerStint.objects.filter(team=self.pennant_team).count()
 
         response = self.client.post(url, {"name": "紛れ込み", "number": 77, "position": "内野手"})
@@ -88,8 +87,8 @@ class WorldScreensAreReadOnlyTest(WorldCase):
         self.assertEqual(orm_models.PlayerStint.objects.filter(team=self.pennant_team).count(), before)
 
     def test_the_game_detail_says_it_is_a_simulation(self):
-        content = self.client.get(reverse("pennant_game_detail", args=[self.world_id, self.pennant_game_id]))
-        real = self.client.get(reverse("game_detail", args=[self.real_game.id]))
+        content = self.client.get(ws_url("pennant_game_detail", self.world_id, self.pennant_game_id))
+        real = self.client.get(ws_url("game_detail", self.real_game.id))
 
         self.assertIn("シミュレーション", content.content.decode())
         self.assertNotIn("シミュレーション", real.content.decode())
@@ -97,9 +96,9 @@ class WorldScreensAreReadOnlyTest(WorldCase):
 
 class WorldBarTest(WorldCase):
     def test_the_bar_and_the_breadcrumb_start_from_the_world(self):
-        content = self.client.get(reverse("pennant_standings", args=[self.world_id])).content.decode()
+        content = self.client.get(ws_url("pennant_standings", self.world_id)).content.decode()
 
-        self.assertIn(f'href="{reverse("pennant_index")}"', content)
+        self.assertIn(f'href="{ws_url("pennant_index")}"', content)
         self.assertIn(PENNANT_WORLD, content)
         self.assertIn(f"{YEAR}年4月2日時点", content, "今日は最後に試合をした日")
         self.assertIn("シーズン終了", content, "試合を消化して、未消化の対戦が残っていない")
@@ -110,24 +109,24 @@ class WorldBarTest(WorldCase):
             date=date(YEAR, 4, 3), home_team=self.pennant_team, visitor_team=self.pennant_rival
         )
 
-        content = self.client.get(reverse("pennant_standings", args=[self.world_id])).content.decode()
+        content = self.client.get(ws_url("pennant_standings", self.world_id)).content.decode()
 
         self.assertIn("シーズン中", content)
 
     def test_the_bar_links_stay_in_the_world(self):
-        content = self.client.get(reverse("pennant_team_list", args=[self.world_id])).content.decode()
+        content = self.client.get(ws_url("pennant_team_list", self.world_id)).content.decode()
 
         for name in ("pennant_standings", "pennant_game_list", "pennant_team_list"):
-            self.assertIn(f'href="{reverse(name, args=[self.world_id])}"', content)
+            self.assertIn(f'href="{ws_url(name, self.world_id)}"', content)
 
     def test_the_real_data_has_no_bar(self):
-        content = self.client.get(reverse("standings")).content.decode()
+        content = self.client.get(ws_url("standings")).content.decode()
 
         self.assertNotIn("ペナント</span>", content)
         self.assertIn("ダッシュボード", content)
 
     def test_before_the_first_game_the_bar_says_before_opening(self):
-        content = self.client.get(reverse("pennant_standings", args=[create_empty_world(self)])).content.decode()
+        content = self.client.get(ws_url("pennant_standings", create_empty_world(self))).content.decode()
 
         self.assertIn("開幕前", content)
         self.assertNotIn("時点", content)
@@ -137,19 +136,19 @@ class OwnTeamMarkTest(WorldCase):
     def test_the_managed_team_is_marked_in_the_standings(self):
         orm_models.PennantWorld.objects.filter(id=self.world_id).update(managed_team_id=self.pennant_team.id)
 
-        content = self.client.get(reverse("pennant_standings", args=[self.world_id])).content.decode()
+        content = self.client.get(ws_url("pennant_standings", self.world_id)).content.decode()
 
         self.assertEqual(content.count("自軍</span>"), 1, "受け持つ球団の行だけに印が付く")
         self.assertIn("fw-semibold", content)
         self.assertIn(f"自軍 {PENNANT_TEAM}", content, "世界バーにも受け持つ球団を出す")
 
     def test_without_a_managed_team_nothing_is_marked(self):
-        content = self.client.get(reverse("pennant_standings", args=[self.world_id])).content.decode()
+        content = self.client.get(ws_url("pennant_standings", self.world_id)).content.decode()
 
         self.assertNotIn("自軍", content)
 
     def test_the_real_standings_have_no_mark(self):
-        self.assertNotIn("自軍", self.client.get(reverse("standings")).content.decode())
+        self.assertNotIn("自軍", self.client.get(ws_url("standings")).content.decode())
 
 
 class EmptyWorldTest(WorldCase):
@@ -162,7 +161,7 @@ class EmptyWorldTest(WorldCase):
         for url in urls:
             with self.subTest(url=url):
                 self.assertEqual(self.client.get(url, follow=True).status_code, 200, url)
-        standings = self.client.get(reverse("pennant_standings", args=[empty])).content.decode()
+        standings = self.client.get(ws_url("pennant_standings", empty)).content.decode()
         self.assertIn("まだ試合が行われていません", standings)
         self.assertNotIn("管理画面の", standings, "実データ向けの案内を出さない")
 
@@ -188,7 +187,7 @@ class WorldListTest(WorldCase):
         )
 
     def test_anyone_can_read_the_list_and_the_owner_is_not_shown(self):
-        response = self.client.get(reverse("pennant_index"))
+        response = self.client.get(ws_url("pennant_index"))
 
         self.assertEqual(response.status_code, 200)
         content = response.content.decode()
@@ -199,27 +198,27 @@ class WorldListTest(WorldCase):
         self.assertIn("1-0-0", content)
 
     def test_the_create_form_is_for_a_logged_in_user_only(self):
-        anonymous = self.client.get(reverse("pennant_index")).content.decode()
+        anonymous = self.client.get(ws_url("pennant_index")).content.decode()
         self.client.force_login(self.owner)
-        logged_in = self.client.get(reverse("pennant_index")).content.decode()
+        logged_in = self.client.get(ws_url("pennant_index")).content.decode()
 
         self.assertNotIn('name="leagues"', anonymous)
         self.assertIn('name="leagues"', logged_in)
 
     def test_the_header_links_to_pennant_for_everyone(self):
-        anonymous = self.client.get(reverse("standings")).content.decode()
+        anonymous = self.client.get(ws_url("standings")).content.decode()
         self.client.force_login(User.objects.create_superuser("root", password="x"))
-        staff = self.client.get(reverse("standings")).content.decode()
+        staff = self.client.get(ws_url("standings")).content.decode()
 
-        self.assertIn(f'href="{reverse("pennant_index")}"', anonymous)
+        self.assertIn(f'href="{ws_url("pennant_index")}"', anonymous)
         self.assertLess(
-            staff.index(reverse("pennant_index")), staff.index("管理画面"), "並びは「ペナント」→「管理画面」"
+            staff.index(ws_url("pennant_index")), staff.index("管理画面"), "並びは「ペナント」→「管理画面」"
         )
 
 
 class EmptyWorldListTest(BaseCase):
     def test_an_empty_list(self):
-        content = self.client.get(reverse("pennant_index")).content.decode()
+        content = self.client.get(ws_url("pennant_index")).content.decode()
 
         self.assertIn("まだ世界がありません", content)
 

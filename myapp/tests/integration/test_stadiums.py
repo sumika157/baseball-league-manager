@@ -3,14 +3,13 @@
 import re
 
 from django.contrib.auth.models import User
-from django.urls import reverse
 
 from myapp.domain.value_objects import (
     StadiumProfile,
 )
 from myapp.infrastructure import orm_models
 
-from ..helpers import make_league, make_stadium
+from ..helpers import make_league, make_stadium, ws_url
 from .base import BaseCase
 
 
@@ -38,7 +37,7 @@ class StadiumTest(BaseCase):
         self.assertIsNone(orm_models.Team.objects.get(id=self.team.id).home_stadium)
 
     def test_page_shows_the_stadium(self):
-        response = self.client.get(reverse("team_list"))
+        response = self.client.get(ws_url("team_list"))
         self.assertContains(response, "テスト球場")
 
     def test_can_be_sorted_by_stadium(self):

@@ -14,7 +14,6 @@ from datetime import date, timedelta
 from unittest import mock
 
 from django.contrib.auth.models import User
-from django.urls import reverse
 
 from myapp.application.dto import PitchingOuting, SimulationContext
 from myapp.domain.pennant.club_plan import LineupChoice
@@ -26,7 +25,7 @@ from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoClubPlanRepository, DjangoFixtureRepository
 from myapp.presentation.views import build_club_service, build_pennant_season_service
 
-from ..helpers import make_league, world_scope
+from ..helpers import make_league, world_scope, ws_url
 from .test_club_plan import team_of
 from .test_pennant_home import HomeCase
 
@@ -37,7 +36,7 @@ class ClubScreenCase(HomeCase):
         self.service = build_club_service(world_scope(self.world_a))
 
     def club_url(self, tab=None, world_id=None) -> str:
-        url = reverse("pennant_club", args=[self.world_a if world_id is None else world_id])
+        url = ws_url("pennant_club", self.world_a if world_id is None else world_id)
         return f"{url}?tab={tab}" if tab else url
 
     def view(self):

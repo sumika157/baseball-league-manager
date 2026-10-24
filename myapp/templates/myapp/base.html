@@ -18,7 +18,7 @@
         </a>
 
         {# 所属が分からなくても選手にたどり着けるよう、どの画面からも探せるようにする #}
-        <form method="get" action="{% url 'player_search' %}" class="app-search" role="search">
+        <form method="get" action="{% workspace_url 'player_search' %}" class="app-search" role="search">
           <input type="search" name="q" class="form-control form-control-sm"
                  placeholder="選手を探す" aria-label="選手を探す" />
         </form>
@@ -28,7 +28,7 @@
 
         <div class="app-nav-user">
           {# ペナント（実データとは別の世界）への入口。閲覧は誰でもできるので、ログインしていなくても出す #}
-          <a href="{% url 'pennant_index' %}" class="nav-admin-link">ペナント</a>
+          <a href="{% workspace_url 'pennant_index' %}" class="nav-admin-link">ペナント</a>
           {% if user.is_authenticated %}
             {# is_staff が管理画面へ入れる条件そのものなので、それを表示条件にする #}
             {% if user.is_staff %}
