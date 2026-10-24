@@ -209,13 +209,15 @@ def _with_estimates(pool: dict[int, ClubRoster], estimated: list[PlayerRatings])
             ratings = by_player[hitter.player_id]
             assert isinstance(ratings, BatterRatings)
             batters.append(
-                SimBatter(hitter.player_id, hitter.name, hitter.position, ratings, hitter.is_foreign, throws=None)
+                SimBatter(
+                    hitter.player_id, hitter.name, hitter.position, ratings, hitter.counts_as_foreign, throws=None
+                )
             )
         pitchers = []
         for thrower in club.pitchers:
             ratings = by_player[thrower.player_id]
             assert isinstance(ratings, PitcherRatings)
-            pitchers.append(SimPitcher(thrower.player_id, thrower.name, ratings, thrower.is_foreign))
+            pitchers.append(SimPitcher(thrower.player_id, thrower.name, ratings, thrower.counts_as_foreign))
         clubs[team_id] = ClubRoster(team_id, club.name, tuple(batters), tuple(pitchers))
     return clubs
 

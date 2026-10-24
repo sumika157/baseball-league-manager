@@ -28,6 +28,7 @@ from myapp.infrastructure.queries import (
     DjangoPlayerFieldingQuery,
     DjangoPlayerSearchQuery,
     DjangoPlayerStatsQuery,
+    DjangoServiceHistoryQuery,
     DjangoTeamAnalysisQuery,
     DjangoTeamListQuery,
     DjangoTeamPermissionQuery,
@@ -350,7 +351,7 @@ class PennantIdsAreNotFoundFromRealUrlsTest(WorldCase):
         world_ids = self.pennant_players(self.pennant_team)
         for scope, own, other in ((REAL, real_ids, world_ids), (self.scope, world_ids, real_ids)):
             with self.subTest(scope=str(scope)):
-                query = DjangoTeamAnalysisQuery(scope)
+                query = DjangoServiceHistoryQuery(scope)
                 mine = query.load_service_history(own, YEAR)
                 self.assertTrue(mine.spans)
                 self.assertTrue(mine.stints)
