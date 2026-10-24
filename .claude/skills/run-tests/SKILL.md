@@ -68,7 +68,7 @@ docker compose exec web python manage.py test myapp.tests.e2e
 
 ```bash
 docker compose exec web python manage.py measure_pages --workspace <key>
-MSYS_NO_PATHCONV=1 docker compose exec web python manage.py measure_pages --workspace <key> --profile /games/
+MSYS_NO_PATHCONV=1 docker compose exec web python manage.py measure_pages --workspace <key> --profile /w/<key>/games/
 ```
 
 ## 6. 失敗したときの一次診断

@@ -261,7 +261,11 @@ class ClubHistoryTest(HistoryCase):
                 response = self.client.get(url)
                 self.assertEqual(response.status_code, 200)
                 self.assertNotIn('method="post"', response.content.decode().lower())
+                # 未ログインの POST はビューの手前でログインへ。405 はログインした人で確かめる
+                self.assertEqual(self.client.post(url).status_code, 302)
+                self.client.force_login(self.other)
                 self.assertEqual(self.client.post(url).status_code, 405)
+                self.client.logout()
 
     def test_the_club_screen_shows_the_champion_mark_the_totals_and_the_standings_link(self):
         self.finish_season()

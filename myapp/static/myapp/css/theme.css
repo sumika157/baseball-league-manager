@@ -148,6 +148,29 @@ main.container {
   font-size: 0.8125rem;
 }
 
+/* ヘッダーの今いるワークスペース（名前・公開範囲・自分の役割）。ロゴ（ワークスペースの外のトップ）と並べる */
+.app-workspace {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin-left: 1rem;
+  min-width: 0;
+  font-size: 0.875rem;
+}
+
+.app-workspace-name {
+  color: var(--app-text);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 12rem;
+}
+
+.app-workspace-name:hover {
+  color: var(--app-accent);
+}
+
 /* ヘッダーの検索。狭い画面では隠して場所を空ける */
 .app-search {
   margin-left: auto;

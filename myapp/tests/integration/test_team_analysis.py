@@ -5,6 +5,7 @@ import re
 from datetime import date
 
 from django.conf import settings
+from django.contrib.auth.models import User
 from django.db import connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
@@ -98,6 +99,9 @@ class TeamAnalysisPageTest(AnalysisCase):
         self.assertContains(response, "左腕エース")
 
     def test_post_is_not_allowed(self):
+        # 未ログインの POST はビューの手前（workspace_view）でログインへ。405 はログインした人で確かめる
+        self.assertEqual(self.client.post(self.url()).status_code, 302)
+        self.client.force_login(User.objects.create_user("poster", password="x"))
         self.assertEqual(self.client.post(self.url()).status_code, 405)
 
     def test_unknown_team_is_404(self):

@@ -105,20 +105,12 @@ def _workspace_url_names() -> set[str]:
 class WorkspaceUrlTagTest(SimpleTestCase):
     """ワークスペースの中の画面へのリンクを、素の `{% url %}` で引かない（W2 T3。#78）。
 
-    中の画面の URL は T4 でワークスペースの key を先頭に持つ（`/w/<key>/...`）。素の `{% url %}` は key を
+    中の画面の URL はワークスペースの key を先頭に持つ（`/w/<key>/...`。T4）。素の `{% url %}` は key を
     足せないので、`{% workspace_url %}`（名前を切り替えない）か `{% scoped_url %}`（実データとペナントの世界で
     引き分ける）で引く。ほかの epic（`epic/postseason` など）を取り込んだときも、新しいテンプレートの
     素の `{% url %}` をここで拾う。
     """
 
-    # ワークスペースの外の画面（ロゴ・404・パスワード変更）から中の画面へのリンク。
-    # 外の画面にはワークスペースが無く key を足せないので、T4 で `/`（`home`）へ向け替える
-    OUTSIDE_LINKS = {
-        ("myapp/base.html", "dashboard"),
-        ("404.html", "dashboard"),
-        ("registration/password_change_form.html", "team_list"),
-        ("registration/password_change_done.html", "team_list"),
-    }
     URL_TAG = re.compile(r"\{%\s*url\s+['\"]([^'\"]+)['\"]")
     WORKSPACE_TAGS = re.compile(r"\{%\s*(workspace_url|scoped_url)\s+['\"]([^'\"]+)['\"]")
 
@@ -138,7 +130,7 @@ class WorkspaceUrlTagTest(SimpleTestCase):
         for relative, text in self._templates():
             for match in self.URL_TAG.finditer(text):
                 name = match.group(1)
-                if name in names and (relative, name) not in self.OUTSIDE_LINKS:
+                if name in names:
                     line = text[: match.start()].count("\n") + 1
                     offenders.append(f"{relative}:{line} {name}")
         self.assertEqual(
@@ -147,13 +139,6 @@ class WorkspaceUrlTagTest(SimpleTestCase):
             "ワークスペースの中の画面を素の {% url %} で引いています。{% workspace_url %} か {% scoped_url %} に"
             "替えてください: " + ", ".join(offenders),
         )
-
-    def test_outside_links_still_exist(self):
-        """例外の表が古くならない（向け替えた・消したものは表からも消す）。"""
-        found = set()
-        for relative, text in self._templates():
-            found.update((relative, name) for name in self.URL_TAG.findall(text))
-        self.assertEqual(self.OUTSIDE_LINKS - found, set())
 
     def test_workspace_tags_name_only_workspace_pages(self):
         """`workspace_url`・`scoped_url` はワークスペースの中の名前だけを引く（外の画面は素の `{% url %}`）。"""

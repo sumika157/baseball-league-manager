@@ -4,7 +4,7 @@
 CSS の効き方の問題で integration では確かめられないため、実ブラウザで測る。
 """
 
-from ..helpers import ws_url
+from ..helpers import default_workspace, ws_url
 from .base import PlaywrightTestCase
 
 # 要素どうしの最低限の間隔（px）。ヘッダーの他の要素の間は 14〜16px 空いている
@@ -13,6 +13,7 @@ MIN_GAP = 8
 
 class HeaderLayoutTest(PlaywrightTestCase):
     def _gap_after_analysis_link(self, width: int) -> float:
+        default_workspace()  # ヘッダーの導線はワークスペースの中の画面でだけ出る
         self.page.set_viewport_size({"width": width, "height": 800})
         self.page.goto(self.live_server_url + ws_url("dashboard"))
         link = self.page.locator(".nav-analysis-link").bounding_box()

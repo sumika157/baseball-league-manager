@@ -6,7 +6,7 @@
 {% block content %}
 <nav aria-label="breadcrumb">
   <ol class="breadcrumb">
-    <li class="breadcrumb-item"><a href="{% workspace_url 'dashboard' %}">ダッシュボード</a></li>
+    <li class="breadcrumb-item"><a href="{% workspace_url 'dashboard' %}">{{ workspace.name }}</a></li>
     <li class="breadcrumb-item"><a href="{% workspace_url 'game_list' %}">試合</a></li>
     <li class="breadcrumb-item"><a href="{% workspace_url 'game_detail' game.id %}">{{ game.played_on|date:"Y/m/d" }}</a></li>
     <li class="breadcrumb-item active">編集</li>

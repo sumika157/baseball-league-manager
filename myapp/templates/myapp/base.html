@@ -12,23 +12,40 @@
   <body>
     <header class="app-header">
       <div class="container d-flex justify-content-between align-items-center">
-        <a class="app-brand" href="{% url 'dashboard' %}">
+        <a class="app-brand" href="{% url 'home' %}">
           <span class="app-brand-mark">⚾</span>
           Baseball Manager
         </a>
 
-        {# 所属が分からなくても選手にたどり着けるよう、どの画面からも探せるようにする #}
-        <form method="get" action="{% workspace_url 'player_search' %}" class="app-search" role="search">
-          <input type="search" name="q" class="form-control form-control-sm"
-                 placeholder="選手を探す" aria-label="選手を探す" />
-        </form>
+        {% comment %}
+        ワークスペースの中の画面でだけ、そのワークスペースの名前・公開範囲・自分の役割と、選手検索・戦力分析・ペナントの
+        導線を出す。外の画面（/・ログイン・404 など）にはワークスペースが無く、中の画面の URL を組めない。
+        表示名は WorkspaceRole・Visibility が出典（テンプレートに並べない）。
+        {% endcomment %}
+        {% if workspace %}
+          <div class="app-workspace">
+            <a href="{% workspace_url 'dashboard' %}" class="app-workspace-name">{{ workspace.name }}</a>
+            <span class="badge bg-secondary">{{ workspace.visibility.label }}</span>
+            {% if user.is_authenticated %}
+              <span class="badge bg-primary">{{ workspace.access.role.label }}</span>
+            {% endif %}
+          </div>
 
-        {# 戦力分析。ペナントの世界の中では、その世界の戦力分析へ向ける（世界の画面のリンクは世界の中に留める） #}
-        <a href="{% scoped_url 'analysis_index' %}" class="nav-analysis-link">戦力分析</a>
+          {# 所属が分からなくても選手にたどり着けるよう、どの画面からも探せるようにする #}
+          <form method="get" action="{% workspace_url 'player_search' %}" class="app-search" role="search">
+            <input type="search" name="q" class="form-control form-control-sm"
+                   placeholder="選手を探す" aria-label="選手を探す" />
+          </form>
+
+          {# 戦力分析。ペナントの世界の中では、その世界の戦力分析へ向ける（世界の画面のリンクは世界の中に留める） #}
+          <a href="{% scoped_url 'analysis_index' %}" class="nav-analysis-link">戦力分析</a>
+        {% endif %}
 
         <div class="app-nav-user">
-          {# ペナント（実データとは別の世界）への入口。閲覧は誰でもできるので、ログインしていなくても出す #}
-          <a href="{% workspace_url 'pennant_index' %}" class="nav-admin-link">ペナント</a>
+          {% if workspace %}
+            {# ペナント（実データとは別の世界）への入口。閲覧はワークスペースを読める人なら誰でもできる #}
+            <a href="{% workspace_url 'pennant_index' %}" class="nav-admin-link">ペナント</a>
+          {% endif %}
           {% if user.is_authenticated %}
             {# is_staff が管理画面へ入れる条件そのものなので、それを表示条件にする #}
             {% if user.is_staff %}

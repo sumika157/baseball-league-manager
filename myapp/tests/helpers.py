@@ -74,6 +74,12 @@ def default_workspace() -> orm_models.Workspace:
     return make_workspace(owner, "既定のワークスペース", key=DEFAULT_WORKSPACE_KEY)
 
 
+def make_editor(user: User, workspace: orm_models.Workspace | None = None) -> User:
+    """user をワークスペース（省けば既定のワークスペース）の編集者にする。全体の編集（世界の作成など）ができる。"""
+    orm_models.WorkspaceEditor.objects.get_or_create(workspace=workspace or default_workspace(), user=user)
+    return user
+
+
 def real_scope(workspace: orm_models.Workspace | None = None) -> WorldScope:
     """実データの範囲。テストが組み立て口やリポジトリに渡す範囲はここで作る。
 
@@ -86,15 +92,19 @@ def ws_url(name: str, *args: object, workspace: orm_models.Workspace | None = No
     """ワークスペースの中の画面（`myapp/urls.py` の `workspace_urlpatterns`）の URL。
 
     テストが中の画面を開く・リンクを確かめるときは、`reverse` や直書きのパスではなくここを通す（管理画面・
-    ログインの URL は `reverse` のまま）。W2 T3（#78）の時点では `reverse(name, args=args)` と同じで、
-    T4 で workspace（省けば既定のワークスペース）の key を先頭の引数に足す。
+    ログインの URL は `reverse` のまま）。workspace（省けば既定のワークスペース）の key を先頭の引数に足す
+    （`/w/<key>/...`）。DB は読まない（既定のワークスペースの key は定数）。
     """
-    return reverse(name, args=args)
+    key = workspace.key if workspace is not None else DEFAULT_WORKSPACE_KEY
+    return reverse(name, args=(key, *args))
 
 
 def header_pages() -> tuple[str, ...]:
-    """ヘッダーの出口（ロゴ・選手検索・ペナント）の URL。ペナントの画面のリンクが向いてよい、世界の外の行き先。"""
-    return (ws_url("dashboard"), ws_url("player_search"), ws_url("pennant_index"))
+    """ヘッダーの出口の URL。ペナントの画面のリンクが向いてよい、世界の外の行き先。
+
+    ロゴ（ワークスペースの外のトップ `/`）・ワークスペースの名前（ダッシュボード）・選手検索・ペナント。
+    """
+    return (reverse("home"), ws_url("dashboard"), ws_url("player_search"), ws_url("pennant_index"))
 
 
 def world_ledger(workspace: orm_models.Workspace | None = None) -> DjangoWorldRepository:

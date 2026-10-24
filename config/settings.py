@@ -106,6 +106,8 @@ TEMPLATES = [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
+                # 今の要求のワークスペース（`workspace_view` が解決したもの。外の画面では None）
+                "myapp.presentation.context_processors.workspace",
             ],
         },
     },
@@ -191,7 +193,7 @@ if PRODUCTION_STATIC:
 if env_bool("DJANGO_BEHIND_PROXY"):
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 CSRF_TRUSTED_ORIGINS = env_list("DJANGO_CSRF_TRUSTED_ORIGINS")  # 例: https://example.com
-# CSRF の検査に落ちたときの画面。/api/ には日本語の JSON、それ以外は 403.html を返す
+# CSRF の検査に落ちたときの画面。保存 API（URL 名が `api_` で始まる）には日本語の JSON、それ以外は 403.html を返す
 CSRF_FAILURE_VIEW = "myapp.presentation.csrf.csrf_failure"
 SECURE_SSL_REDIRECT = env_bool("DJANGO_SSL_REDIRECT")
 SESSION_COOKIE_SECURE = env_bool("DJANGO_SECURE_COOKIES")
@@ -234,7 +236,8 @@ if env_bool("DJANGO_LOG_TO_STDOUT"):
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-LOGIN_REDIRECT_URL = "dashboard"
+# ログインの後はワークスペースの外のトップ（自分のワークスペースの一覧）。`next` があればそちらへ戻る
+LOGIN_REDIRECT_URL = "home"
 LOGOUT_REDIRECT_URL = "login"
 
 MESSAGE_TAGS = {
@@ -244,3 +247,7 @@ MESSAGE_TAGS = {
     messages.WARNING: "warning",
     messages.ERROR: "danger",  # これで error が danger（赤色）になります
 }
+
+# 見本のワークスペースの key（`/` で、ログインしていない人に見せるリンクの先）。空なら出さない。
+# key のワークスペースが無い・非公開のときも出さない（推し量らない。W2 T4。#78）
+SAMPLE_WORKSPACE_KEY = os.environ.get("SAMPLE_WORKSPACE_KEY", "").strip()

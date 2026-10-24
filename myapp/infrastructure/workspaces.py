@@ -1,25 +1,11 @@
-"""ワークスペースの解決（管理コマンド・今の URL の入口用）。
+"""ワークスペースの解決（管理コマンドの入口用）。画面は URL の key を `workspace_view` が解決する（W2 T4）。
 
-- `legacy_workspace_id()`（W1a の暫定。W2 で消す）: 書き込み口がまだ「どのワークスペースの操作か」を知らない間、
-  id が最小のワークスペース（移行で作った既定のもの）を返す。W1b の Q2（範囲がワークスペースを持つ形への移行）も
-  この関数を使う（views に別の実装を置かない）。W2 で、書き込み口が範囲のワークスペースを渡す形に替えて消す。
 - `workspace_id_of_world()`（W1b T3）: 管理コマンドが `--world` から世界のワークスペースを導く。
-- `workspace_id_for_key()`（W1b T5）: 管理コマンドが `--workspace <key>` からワークスペースを引く（W2 で URL の
-  key を解決する土台にもなる）。
+- `workspace_id_for_key()`（W1b T5）: 管理コマンドが `--workspace <key>` からワークスペースを引く。
 """
 
 from ..domain.exceptions import WorkspaceNotFound, WorldNotFound
 from . import orm_models
-
-
-def legacy_workspace_id() -> int:
-    """id が最小のワークスペースの id を返す。1つも無ければ `WorkspaceNotFound`。"""
-    workspace_id = orm_models.Workspace.objects.order_by("id").values_list("id", flat=True).first()
-    if workspace_id is None:
-        raise WorkspaceNotFound(
-            "ワークスペースがありません。運営者が管理画面で最初のワークスペースを作るまで、この操作はできません。"
-        )
-    return int(workspace_id)
 
 
 def workspace_id_of_world(world_id: int) -> int:

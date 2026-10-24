@@ -15,7 +15,7 @@ from myapp.domain.value_objects import Season
 from myapp.infrastructure import orm_models
 from myapp.presentation.views import build_pennant_world_service
 
-from ..helpers import make_pennant_world, real_scope, ws_url
+from ..helpers import make_editor, make_pennant_world, real_scope, ws_url
 from .world_case import YEAR, WorldCase
 
 
@@ -52,7 +52,7 @@ class StartYearRangeTest(WorldCase):
         self.assertIn("遅い世界", response.content.decode())
 
     def test_an_early_year_posted_through_the_form_shows_the_earliest_year(self):
-        self.client.force_login(User.objects.create_user("owner", password="x"))
+        self.client.force_login(make_editor(User.objects.create_user("owner", password="x")))
         orm_models.Player.objects.filter(stints__team=self.team).update(birth_date=date(2000, 6, 1))
         before = orm_models.PennantWorld.objects.count()
         data = {
@@ -82,7 +82,7 @@ class StartYearRangeTest(WorldCase):
                 self.assertEqual(self.client.get(url).status_code, 200, url)
 
     def test_the_form_takes_its_range_from_the_domain(self):
-        self.client.force_login(User.objects.create_user("owner", password="x"))
+        self.client.force_login(make_editor(User.objects.create_user("owner", password="x")))
 
         content = self.client.get(ws_url("pennant_index")).content.decode()
 
@@ -90,7 +90,7 @@ class StartYearRangeTest(WorldCase):
         self.assertIn(f'max="{MAX_START_YEAR}"', content)
 
     def test_a_year_out_of_range_posted_through_the_form_creates_nothing(self):
-        self.client.force_login(User.objects.create_user("owner", password="x"))
+        self.client.force_login(make_editor(User.objects.create_user("owner", password="x")))
         before = orm_models.PennantWorld.objects.count()
         data = {
             "name": "範囲外",
