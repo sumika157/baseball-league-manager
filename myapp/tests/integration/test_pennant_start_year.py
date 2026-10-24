@@ -59,6 +59,7 @@ class StartYearRangeTest(WorldCase):
             "name": "早い",
             "leagues": [str(self.league.id)],
             "managed_team": str(self.team.id),
+            "postseason_format": "NPB",
             "start_year": "2000",
             "seed": "1",
         }
@@ -96,6 +97,7 @@ class StartYearRangeTest(WorldCase):
             "name": "範囲外",
             "leagues": [str(self.league.id)],
             "managed_team": str(self.team.id),
+            "postseason_format": "NPB",
             "seed": "1",
         }
 

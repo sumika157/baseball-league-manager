@@ -7,7 +7,7 @@ from django.urls import reverse
 
 from myapp.domain.entities import Game
 from myapp.domain.pennant.world import WorldScope
-from myapp.domain.value_objects import BattingLine, LineScore, Season
+from myapp.domain.value_objects import BattingLine, GameStage, LineScore, Season
 from myapp.infrastructure.repositories import DjangoGameRepository
 
 from ..helpers import (
@@ -128,6 +128,7 @@ class GameDetailScoreboardTest(_DetailCase):
             played_on=date(2026, 4, 2),
             home_team_id=self.team.id,
             away_team_id=self.rival.id,
+            stage=GameStage.REGULAR,
             home_score=2,
             away_score=1,
             line_score=LineScore(away=(1,), home=(2,)),

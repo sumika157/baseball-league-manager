@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import fields
 from datetime import date, timedelta
 from itertools import groupby
@@ -21,6 +21,7 @@ from ..application.dto import (
     ActivePlayerStats,
     AnalysisRosterRow,
     AwardRow,
+    ChampionshipRow,
     ContractFacts,
     DeclarationFact,
     FaSubject,
@@ -43,6 +44,7 @@ from ..application.dto import (
     PlayerFielding,
     PlayerSearchRow,
     PlayerYearSpan,
+    PostseasonGameRow,
     RatingsHistoryFacts,
     RelatedStint,
     ServiceHistory,
@@ -56,6 +58,7 @@ from ..application.dto import (
 )
 from ..domain.entities import Game, jersey_number_in, winning_team_id
 from ..domain.exceptions import WorldNotFound
+from ..domain.pennant.postseason import PostseasonFormat, PostseasonResult
 from ..domain.pennant.retirement import PlayingTime
 from ..domain.pennant.world import WorldScope
 from ..domain.services.rankings import Title
@@ -69,6 +72,7 @@ from ..domain.value_objects import (
     FieldingLine,
     FieldingPosition,
     FreeAgencyKind,
+    GameStage,
     Handedness,
     JerseyNumber,
     PitchingLine,
@@ -90,8 +94,11 @@ from .repositories import (
     profile_of,
 )
 from .scoping import (
+    StageFilter,
     awards_in,
+    championships_in,
     fixtures_in_worlds,
+    game_rows_condition,
     games_in,
     games_in_worlds,
     leagues_in,
@@ -99,9 +106,9 @@ from .scoping import (
     period_covering,
     players_in,
     ratings_in,
+    stage_condition,
     stints_in,
     teams_in,
-    world_condition,
 )
 
 
@@ -144,7 +151,7 @@ class DjangoPlayerFieldingQuery:
     def for_player(self, player_id: int, team_id: int) -> PlayerFielding | None:
         # 選手ごとに行が別なので範囲外の行は混ざらないが、他のクエリと同じく範囲で絞る
         rows = orm_models.GameFieldingLine.objects.filter(
-            world_condition("game__home_team__league", self._scope), player_id=player_id
+            game_rows_condition("game", self._scope, stages=StageFilter.REGULAR_ONLY), player_id=player_id
         )
         total = rows.aggregate(games=Count("id"), **self._SUMS)
         if not total["games"]:
@@ -190,7 +197,9 @@ class DjangoFieldingTotalsQuery:
         # 集計後の行は選手1人につき1行なので、Python で選んでも組み立てる量は変わらない
         wanted = set(player_ids)
         rows = (
-            orm_models.GameFieldingLine.objects.filter(world_condition("game__home_team__league", self._scope))
+            orm_models.GameFieldingLine.objects.filter(
+                game_rows_condition("game", self._scope, stages=StageFilter.REGULAR_ONLY)
+            )
             .values("player_id")
             .annotate(**self._SUMS)
         )
@@ -214,11 +223,13 @@ class DjangoSimulationContextQuery:
         self._scope = scope
 
     def last_played_on(self) -> date | None:
-        return games_in(self._scope).aggregate(last=Max("played_on"))["last"]
+        # 世界の今日はポストシーズンの試合も含めて決まる
+        return games_in(self._scope, stages=StageFilter.ALL_STAGES).aggregate(last=Max("played_on"))["last"]
 
     def load(self, *, before: date) -> SimulationContext:
+        # 直近の先発・登板（疲労）は区分を問わない。ポストシーズンで投げた疲れも次の試合に残る
         lines = orm_models.GamePitchingLine.objects.filter(
-            world_condition("game__home_team__league", self._scope), game__played_on__lt=before
+            game_rows_condition("game", self._scope, stages=StageFilter.ALL_STAGES), game__played_on__lt=before
         )
         last_starts = tuple(
             LastStart(pitcher_id=pitcher_id, played_on=last)
@@ -303,6 +314,7 @@ class DjangoPlayerStatsQuery:
 
     在籍も成績も世界の範囲（`WorldScope`）で絞る。選手は世界ごとに別の行なので、範囲の外の
     明細は数えても結果は変わらないが、集計する行を範囲の中に限って読む量を抑える。
+    成績は公式戦だけを数える（ポストシーズンの試合は数えない。NPB と同じ）。
     """
 
     def __init__(self, scope: WorldScope) -> None:
@@ -321,9 +333,10 @@ class DjangoPlayerStatsQuery:
         by_league: dict[int, list[orm_models.PlayerStint]] = {}
         for row in self._ordered(self._stints(year)):
             by_league.setdefault(row.team.league_id, []).append(row)
-        games = Q(game__year=year) & world_condition("game__home_team__league", self._scope)
-        batting = batting_totals(games=games)
-        pitching = pitching_totals(games=games)
+        # 成績は公式戦だけ（ポストシーズンは数えない）
+        games = Q(game__year=year)
+        batting = batting_totals(self._scope, stages=StageFilter.REGULAR_ONLY, games=games)
+        pitching = pitching_totals(self._scope, stages=StageFilter.REGULAR_ONLY, games=games)
         return {
             league_id: self._to_stats(self._one_per_player(members), year, batting, pitching)
             for league_id, members in by_league.items()
@@ -349,18 +362,20 @@ class DjangoPlayerStatsQuery:
         if year is not None:
             rows = self._one_per_player(rows)
 
+        # 成績は公式戦だけ（ポストシーズンは数えない）
+        regular = StageFilter.REGULAR_ONLY
         games = Q() if year is None else Q(game__year=year)
         if team_id is None and league_id is None:
             # 世界の全選手。IN 句に何千件も並べず、範囲の試合で絞る
-            games &= world_condition("game__home_team__league", self._scope)
-            batting = batting_totals(games=games)
-            pitching = pitching_totals(games=games)
-            counts = game_counts(games=games) if with_games else None
+            batting = batting_totals(self._scope, stages=regular, games=games)
+            pitching = pitching_totals(self._scope, stages=regular, games=games)
+            counts = game_counts(self._scope, stages=regular, games=games) if with_games else None
         else:
+            # 選手の行は世界ごとに別なので、選手の id で絞れば範囲の外は混ざらない
             player_ids = [row.player_id for row in rows]
-            batting = batting_totals(player_ids, games=games or None)
-            pitching = pitching_totals(player_ids, games=games or None)
-            counts = game_counts(player_ids, games=games or None) if with_games else None
+            batting = batting_totals(player_ids, stages=regular, games=games)
+            pitching = pitching_totals(player_ids, stages=regular, games=games)
+            counts = game_counts(player_ids, stages=regular, games=games) if with_games else None
 
         captains = self._captains(team_id, year) if team_id is not None else frozenset()
         return self._to_stats(rows, year, batting, pitching, counts, captains=captains, with_profile=with_profile)
@@ -556,6 +571,7 @@ class DjangoGameListQuery:
     件数が増えると一覧が開かなくなる。
 
     範囲（`WorldScope`）を必須で受け取り、読み出しはすべて SQL でその世界の試合に絞る。
+    **読むのは公式戦だけ**（一覧・順位・規定の試合数・年の選択肢。ポストシーズンの試合は勝ち上がりの表から開く）。
     """
 
     def __init__(self, scope: WorldScope) -> None:
@@ -572,7 +588,7 @@ class DjangoGameListQuery:
         through: date | None = None,
     ) -> QuerySet[orm_models.Game]:
         """絞り込みは SQL 側で行う。取得後に Python で捨てると件数ぶん無駄になる。"""
-        rows = games_in(self._scope).select_related("home_team", "away_team")
+        rows = games_in(self._scope, stages=StageFilter.REGULAR_ONLY).select_related("home_team", "away_team")
         if year is not None:
             rows = rows.filter(year=year)
         if league_id is not None:
@@ -639,7 +655,7 @@ class DjangoGameListQuery:
         `Game.is_recorded` は自力で判定できない。記録済みかどうかは SQL で調べて
         `recorded_hint` に持たせる。順位・勝敗の集計はドメインサービスが未記録を数えない。
         """
-        rows = _with_recorded(games_in(self._scope))
+        rows = _with_recorded(games_in(self._scope, stages=StageFilter.REGULAR_ONLY))
         if year is not None:
             rows = rows.filter(year=year)
         return [
@@ -651,6 +667,7 @@ class DjangoGameListQuery:
                 played_on=row.played_on,
                 home_team_id=row.home_team_id,
                 away_team_id=row.away_team_id,
+                stage=GameStage.from_label(row.stage),
                 home_score=row.home_score,
                 away_score=row.away_score,
             )
@@ -665,7 +682,7 @@ class DjangoGameListQuery:
         明細ごと全シーズンぶん組み立てると、シーズンが増えるほど遅くなる。参照専用で、保存しない。
         """
         in_team = Q(game__home_team_id=team_id) | Q(game__away_team_id=team_id)
-        in_scope = world_condition("game__home_team__league", self._scope)
+        in_scope = game_rows_condition("game", self._scope, stages=StageFilter.REGULAR_ONLY)
         batting = orm_models.GameBattingLine.objects.filter(in_scope, in_team, player_id=player_id).select_related(
             "game"
         )
@@ -685,6 +702,7 @@ class DjangoGameListQuery:
                     played_on=row.played_on,
                     home_team_id=row.home_team_id,
                     away_team_id=row.away_team_id,
+                    stage=GameStage.from_label(row.stage),
                     home_score=row.home_score,
                     away_score=row.away_score,
                 )
@@ -698,7 +716,7 @@ class DjangoGameListQuery:
 
     def list_seasons(self, *, league_id: int | None = None, recorded_only: bool = False) -> list[int]:
         """試合のある年を新しい順に。"""
-        rows = games_in(self._scope)
+        rows = games_in(self._scope, stages=StageFilter.REGULAR_ONLY)
         if league_id is not None:
             rows = rows.filter(Q(home_team__league_id=league_id) | Q(away_team__league_id=league_id))
         if recorded_only:
@@ -714,7 +732,7 @@ class DjangoGameListQuery:
         足す（1試合は両チームの1試合として数える）。未記録の試合は数えない
         （規定打席・規定投球回は、実際に行われた試合の数で決まる）。
         """
-        rows = games_in(self._scope).filter(recorded_games_filter())
+        rows = games_in(self._scope, stages=StageFilter.REGULAR_ONLY).filter(recorded_games_filter())
         if year is not None:
             rows = rows.filter(year=year)
 
@@ -746,6 +764,7 @@ class DjangoPennantActivityQuery:
     """PennantActivityQuery の Django ORM 実装。期間の見どころを、明細の SQL 集計で読む。
 
     読む行は範囲（`WorldScope`）の中の、対象の試合・球団・期間に絞る。集約は組み立てない。
+    期間の集計は公式戦だけ（試合の見どころは渡された試合の id で決まるので区分を問わない）。
     """
 
     def __init__(self, scope: WorldScope) -> None:
@@ -755,7 +774,8 @@ class DjangoPennantActivityQuery:
         ids = list(game_ids)
         if not ids:
             return {}
-        in_scope = world_condition("game__home_team__league", self._scope)
+        # 渡された試合の id で決まるので、区分では絞らない（ポストシーズンの試合にも同じ見どころが付けられる）
+        in_scope = game_rows_condition("game", self._scope, stages=StageFilter.ALL_STAGES)
         decided: dict[int, dict[str, str]] = {}
         pitching = (
             orm_models.GamePitchingLine.objects.filter(in_scope, game_id__in=ids)
@@ -794,12 +814,8 @@ class DjangoPennantActivityQuery:
 
     def batting_between(self, team_id: int, *, after: date, through: date) -> list[PeriodBatting]:
         # 合計と率は BattingLine が出典。ここは内訳（打数・単打・二塁打…）を選手ごとに足すだけ
-        games = (
-            world_condition("game__home_team__league", self._scope)
-            & Q(team_id=team_id)
-            & Q(game__played_on__gt=after, game__played_on__lte=through)
-        )
-        totals = batting_totals(games=games)
+        games = Q(team_id=team_id) & Q(game__played_on__gt=after, game__played_on__lte=through)
+        totals = batting_totals(self._scope, stages=StageFilter.REGULAR_ONLY, games=games)
         names = dict(orm_models.Player.objects.filter(id__in=list(totals)).values_list("id", "name"))
         return [
             PeriodBatting(player_id=player_id, name=names[player_id], batting=line)
@@ -809,7 +825,7 @@ class DjangoPennantActivityQuery:
     def pitching_between(self, team_id: int, *, after: date, through: date) -> list[PeriodPitching]:
         rows = (
             orm_models.GamePitchingLine.objects.filter(
-                world_condition("game__home_team__league", self._scope),
+                game_rows_condition("game", self._scope, stages=StageFilter.REGULAR_ONLY),
                 game__played_on__gt=after,
                 game__played_on__lte=through,
                 # 投球の明細は球団を持たない。在籍中の球団で引く（世界の選手の在籍は1つ）
@@ -895,9 +911,22 @@ class DjangoWorldSummaryQuery:
         rows = list(worlds.select_related("managed_team"))
         ids = [row.id for row in rows]
         # order_by() で既定の並びを外す（外さないと、並びの列が GROUP BY に入って世界ごとにまとまらない）
-        last_played = dict(
-            games_in_worlds(ids).order_by().values_list("home_team__league__world_id").annotate(last=Max("played_on"))
-        )
+        # 最後の試合日（世界の今日）はポストシーズンの試合も含めて決まる。同じ集計で、ポストシーズンの試合が
+        # あるか（世界バーの「ポストシーズン」の出し分け）も読む（クエリを足さない）
+        last_played: dict[int, date] = {}
+        played_postseason: set[int] = set()
+        for world_id, last, last_postseason in (
+            games_in_worlds(ids, stages=StageFilter.ALL_STAGES)
+            .order_by()
+            .values_list("home_team__league__world_id")
+            .annotate(
+                last=Max("played_on"),
+                last_postseason=Max("played_on", filter=Q(stage=GameStage.POSTSEASON.value)),
+            )
+        ):
+            last_played[world_id] = last
+            if last_postseason is not None:
+                played_postseason.add(world_id)
         next_fixture = dict(
             fixtures_in_worlds(ids).order_by().values_list("home_team__league__world_id").annotate(first=Min("date"))
         )
@@ -929,13 +958,15 @@ class DjangoWorldSummaryQuery:
                 next_fixture_on=next_fixture.get(row.id),
                 owner_id=row.owner_id,
                 remaining_by_team=remaining.get(row.id, {}),
+                postseason_format=PostseasonFormat(row.postseason_format),
+                played_postseason=row.id in played_postseason,
             )
             for row in rows
         ]
 
 
 class DjangoSeasonPlayingTimeQuery:
-    """SeasonPlayingTimeQuery の Django ORM 実装。範囲（`WorldScope`）の中の、その年の試合だけを数える。
+    """SeasonPlayingTimeQuery の Django ORM 実装。範囲（`WorldScope`）の中の、その年の公式戦だけを数える。
 
     打席数は打撃の集計（`batting_totals`。`BattingLine.plate_appearances` が出典で、打撃妨害・走塁妨害は
     含まない）から、アウト数は投球回の集計（`pitching_totals`。5.2 = 17アウトの換算は
@@ -946,13 +977,107 @@ class DjangoSeasonPlayingTimeQuery:
         self._scope = scope
 
     def for_year(self, year: int) -> dict[int, PlayingTime]:
-        games = world_condition("game__home_team__league", self._scope) & Q(game__year=year)
-        appearances = {player_id: line.plate_appearances for player_id, line in batting_totals(games=games).items()}
-        outs = {player_id: line.innings.outs for player_id, line in pitching_totals(games=games).items()}
+        games = Q(game__year=year)
+        batting = batting_totals(self._scope, stages=StageFilter.REGULAR_ONLY, games=games)
+        pitching = pitching_totals(self._scope, stages=StageFilter.REGULAR_ONLY, games=games)
+        appearances = {player_id: line.plate_appearances for player_id, line in batting.items()}
+        outs = {player_id: line.innings.outs for player_id, line in pitching.items()}
         return {
             player_id: PlayingTime(plate_appearances=appearances.get(player_id, 0), outs=outs.get(player_id, 0))
             for player_id in sorted(appearances.keys() | outs.keys())
         }
+
+
+class DjangoPostseasonQuery:
+    """PostseasonQuery の Django ORM 実装。範囲（`WorldScope`）の中の試合を、区分を分けて読む。
+
+    結果はポストシーズンの試合だけ、最後の公式戦の日は公式戦だけから取る。集約は組み立てず、
+    日付・2球団・得点だけを `values_list` で読む（勝ち負けの出典は `winning_team_id`）。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def results(self, year: int) -> list[PostseasonResult]:
+        # 結果への写し方（勝者の導き方）は `PostseasonGameRow.result` の1か所
+        return [game.result for game in self.games(year)]
+
+    def games(self, year: int) -> list[PostseasonGameRow]:
+        return [row for _, row in self._rows(year=year)]
+
+    def results_by_year(self, years: Collection[int]) -> dict[int, list[PostseasonResult]]:
+        wanted = sorted(set(years))
+        by_year: dict[int, list[PostseasonResult]] = {}
+        if not wanted:
+            return by_year
+        for year, row in self._rows(year__in=wanted):
+            by_year.setdefault(year, []).append(row.result)
+        return by_year
+
+    def _rows(self, **years: object) -> list[tuple[int, PostseasonGameRow]]:
+        """ポストシーズンの試合（年と行。日付の順）。`years` は年の条件（`year=` か `year__in=`）。"""
+        rows = (
+            games_in(self._scope, stages=StageFilter.POSTSEASON_ONLY)
+            .filter(**years)
+            .order_by("played_on", "id")
+            .values_list("year", "id", "played_on", "home_team_id", "away_team_id", "home_score", "away_score")
+        )
+        return [
+            (
+                year,
+                PostseasonGameRow(
+                    game_id=game_id,
+                    played_on=played_on,
+                    home_team_id=home,
+                    away_team_id=away,
+                    home_score=home_score,
+                    away_score=away_score,
+                ),
+            )
+            for year, game_id, played_on, home, away, home_score, away_score in rows
+        ]
+
+    def years(self) -> list[int]:
+        return list(
+            games_in(self._scope, stages=StageFilter.POSTSEASON_ONLY)
+            .order_by("-year")
+            .values_list("year", flat=True)
+            .distinct()
+        )
+
+    def last_regular_date(self, year: int) -> date | None:
+        last: date | None = (
+            games_in(self._scope, stages=StageFilter.REGULAR_ONLY)
+            .filter(year=year)
+            .aggregate(last=Max("played_on"))["last"]
+        )
+        return last
+
+
+class DjangoPostseasonStatsQuery:
+    """PostseasonStatsQuery の Django ORM 実装。範囲（`WorldScope`）の中の、その年のポストシーズンの試合だけを数える。
+
+    集計の式は公式戦の成績と同じ（`batting_totals`・`pitching_totals`・`game_counts` に区分 `POSTSEASON_ONLY`）。
+    在籍の行から DTO への写し方（背番号・契約区分の年ごとの導出）は `DjangoPlayerStatsQuery` と共有する。
+    在籍は出場した選手の分だけ読む（世界の全選手の在籍を組み立てない）。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def list_players(self, year: int) -> list[ActivePlayerStats]:
+        stages = StageFilter.POSTSEASON_ONLY
+        games = Q(game__year=year)
+        counts = game_counts(self._scope, stages=stages, games=games)
+        played, pitched = counts
+        appeared = sorted(played.keys() | pitched.keys())
+        if not appeared:
+            return []
+        batting = batting_totals(self._scope, stages=stages, games=games)
+        pitching = pitching_totals(self._scope, stages=stages, games=games)
+        stints = stints_in(self._scope).filter(period_covering(year), player_id__in=appeared)
+        rows = DjangoPlayerStatsQuery._one_per_player(DjangoPlayerStatsQuery._ordered(stints))
+        return DjangoPlayerStatsQuery._to_stats(rows, year, batting, pitching, counts)
 
 
 _OFFSEASON_STINT_FIELDS = (
@@ -1072,6 +1197,21 @@ class DjangoAwardQuery:
         return sorted(awards, key=lambda award: award.sort_key)
 
 
+class DjangoChampionshipQuery:
+    """ChampionshipQuery の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る。球団名は1本の JOIN で読む。"""
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def list_championships(self) -> list[ChampionshipRow]:
+        return [
+            ChampionshipRow(year=year, team_id=team_id, team_name=team_name)
+            for year, team_id, team_name in championships_in(self._scope)
+            .order_by("year", "id")
+            .values_list("year", "team_id", "team__name")
+        ]
+
+
 class DjangoRatingsHistoryQuery:
     """RatingsHistoryQuery の Django ORM 実装。選手・在籍・能力の3本のクエリだけで読む。"""
 
@@ -1114,6 +1254,7 @@ class DjangoTeamAnalysisQuery:
     クエリは在籍・野手の出場・投手の登板・入退団の在籍2本の5本（年の一覧は別に1本）で、選手の数に
     比例しない。集約を組み立てず、数えるだけなので明細の行も Python に持ち込まない。
     在籍と試合は範囲（`WorldScope`）の中だけを読む（明細はその球団・その選手で絞るので範囲の外に出ない）。
+    試合は公式戦だけ（起用も FA の日数もポストシーズンを数えない。日数は公式戦の期間で数える）。
     """
 
     def __init__(self, scope: WorldScope) -> None:
@@ -1122,7 +1263,7 @@ class DjangoTeamAnalysisQuery:
     def list_years(self, team_id: int) -> list[int]:
         # 試合数の数え方（count_by_team）と同じく、記録済みの試合だけ。登録しただけの試合は編成に効かない
         rows = (
-            games_in(self._scope)
+            games_in(self._scope, stages=StageFilter.REGULAR_ONLY)
             .filter(recorded_games_filter())
             .filter(Q(home_team_id=team_id) | Q(away_team_id=team_id))
         )
@@ -1224,10 +1365,14 @@ class DjangoTeamAnalysisQuery:
         if not player_ids:
             return TeamAnalysisFacts(roster=[], fielder_usage=[], pitcher_usage=[], moves=[], related_stints=[])
 
+        # 起用は公式戦だけを数える（ポストシーズンは数えない）。明細はその球団・その選手で絞るので区分だけ足す
+        regular = stage_condition("game", StageFilter.REGULAR_ONLY)
         # 野手: 明細の行がチームを持つので、そのチームの出場だけを数える。
         # スタメンの意味は GameBatting.is_starter（交代の順が0）と同じ
         fielder_rows = (
-            orm_models.GameBattingLine.objects.filter(team_id=team_id, game__year=year, player_id__in=player_ids)
+            orm_models.GameBattingLine.objects.filter(
+                regular, team_id=team_id, game__year=year, player_id__in=player_ids
+            )
             .values("player_id", "fielding_position")
             .annotate(games=Count("id"), starts=Count("id", filter=Q(slot_sequence=0)))
             .order_by()
@@ -1238,6 +1383,7 @@ class DjangoTeamAnalysisQuery:
         pitcher_rows = (
             orm_models.GamePitchingLine.objects.filter(
                 Q(game__home_team_id=team_id) | Q(game__away_team_id=team_id),
+                regular,
                 game__year=year,
                 player_id__in=player_ids,
             )
@@ -1287,7 +1433,7 @@ class DjangoServiceHistoryQuery:
         for lines in (orm_models.GameBattingLine.objects, orm_models.GamePitchingLine.objects):
             rows = (
                 lines.filter(
-                    world_condition("game__home_team__league", self._scope),
+                    game_rows_condition("game", self._scope, stages=StageFilter.REGULAR_ONLY),
                     player_id__in=player_ids,
                     game__year__lte=year,
                 )
@@ -1377,6 +1523,11 @@ class DjangoServiceHistoryQuery:
 
     def _records_from_year(self) -> int | None:
         """範囲の中で試合の記録がある最初の年。記録が無ければ None。"""
-        recorded = games_in(self._scope).filter(recorded_games_filter()).order_by().aggregate(first=Min("year"))
+        recorded = (
+            games_in(self._scope, stages=StageFilter.REGULAR_ONLY)
+            .filter(recorded_games_filter())
+            .order_by()
+            .aggregate(first=Min("year"))
+        )
         first: int | None = recorded["first"]
         return first

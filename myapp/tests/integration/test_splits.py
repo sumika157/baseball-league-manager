@@ -10,6 +10,7 @@ from myapp.domain.exceptions import InvalidGame
 from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import (
     BattingLine,
+    GameStage,
     Season,
 )
 from myapp.infrastructure import orm_models
@@ -108,6 +109,7 @@ class MonthlySplitViewTest(BaseCase):
             played_on=date(2026, month, day),
             home_team_id=self.team.id,
             away_team_id=self.rival.id,
+            stage=GameStage.REGULAR,
             home_score=1,
             away_score=0,
         )

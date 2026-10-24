@@ -67,6 +67,10 @@ PITCHER_APPEARANCES_SORT = "appearances"
 DEFAULT_BATTER_SORT = "ops"
 DEFAULT_PITCHER_SORT = "era"
 
+# ポストシーズンの個人成績の既定。試合数が少なく率は数打席で大きく振れるので、積み上げの数で並べる
+DEFAULT_POSTSEASON_BATTER_SORT = "hits"
+DEFAULT_POSTSEASON_PITCHER_SORT = "innings"
+
 # チームの選手一覧（名簿）の既定。成績を比べる画面ではなく選手を探す画面なので、
 # 指標ではなく背番号の小さい順にする。野手・投手で共通のキー。
 DEFAULT_ROSTER_SORT = "number"

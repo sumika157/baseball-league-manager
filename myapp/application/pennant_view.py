@@ -11,8 +11,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import date
 
+from ..domain.exceptions import InvalidPostseason
+from ..domain.pennant.postseason import PostseasonStatus
 from ..domain.pennant.season import is_final_season, season_phase, season_year
 from ..domain.pennant.world import MAX_WORLDS_PER_OWNER
 from .dto import OwnRace, OwnStanding, PennantWorldList, PennantWorldListRow, WorldContext, WorldSummary
@@ -21,26 +24,15 @@ from .pennant_race import own_race, tiebreak_for
 from .queries import GameListQuery, WorldSummaryQuery
 
 
-def _context_of(summary: WorldSummary) -> WorldContext:
-    year = season_year(
-        next_fixture_on=summary.next_fixture_on, last_played_on=summary.last_played_on, start_year=summary.start_year
-    )
-    return WorldContext(
-        world_id=summary.world_id,
-        name=summary.name,
-        phase=season_phase(last_played_on=summary.last_played_on, next_fixture_on=summary.next_fixture_on),
-        season_year=year,
-        today=summary.last_played_on,
-        managed_team_id=summary.managed_team_id,
-        managed_team_name=summary.managed_team_name,
-        default_league_id=summary.default_league_id,
-        owner_id=summary.owner_id,
-        is_final_season=is_final_season(current_year=year, start_year=summary.start_year),
-    )
-
-
 class PennantWorldViewService:
-    """世界の見出しを作る。`standings_for` は、世界の id から、その世界の範囲で組み立てたサービスを返す。"""
+    """世界の見出しを作る。`standings_for` は、世界の id から、その世界の範囲で組み立てたサービスを返す。
+
+    `postseason_status_for` は (世界の id, 年) からその年のポストシーズンの状況を導く（世界の範囲で読む）。
+    世界の終了の判定にだけ使い、世界の一覧で、最終シーズンのシーズン終了で方式が「なし」でない世界のときだけ呼ぶ。
+
+    **見出し（`get_context`）では導かない。** 世界の全画面が通るので、終了した世界のどの画面でも勝ち上がりを
+    導くことになるため。終了を出す画面（GM ホーム・世界の一覧）だけが `settled_context` で状況を入れる。
+    """
 
     def __init__(
         self,
@@ -48,14 +40,52 @@ class PennantWorldViewService:
         summaries: WorldSummaryQuery,
         standings_for: Callable[[int], LeagueViewService],
         games_for: Callable[[int], GameListQuery],
+        postseason_status_for: Callable[[int, int], PostseasonStatus],
     ) -> None:
         self._summaries = summaries
         self._standings_for = standings_for
         self._games_for = games_for
+        self._postseason_status_for = postseason_status_for
 
     def get_context(self, world_id: int) -> WorldContext:
         """無ければ WorldNotFound。"""
-        return _context_of(self._summaries.get(world_id))
+        return self._context_of(self._summaries.get(world_id))
+
+    def _context_of(self, summary: WorldSummary) -> WorldContext:
+        year = season_year(
+            next_fixture_on=summary.next_fixture_on,
+            last_played_on=summary.last_played_on,
+            start_year=summary.start_year,
+        )
+        phase = season_phase(last_played_on=summary.last_played_on, next_fixture_on=summary.next_fixture_on)
+        final = is_final_season(current_year=year, start_year=summary.start_year)
+        return WorldContext(
+            world_id=summary.world_id,
+            name=summary.name,
+            phase=phase,
+            season_year=year,
+            today=summary.last_played_on,
+            managed_team_id=summary.managed_team_id,
+            managed_team_name=summary.managed_team_name,
+            default_league_id=summary.default_league_id,
+            owner_id=summary.owner_id,
+            is_final_season=final,
+            postseason_format=summary.postseason_format,
+            played_postseason=summary.played_postseason,
+        )
+
+    def settle(self, context: WorldContext) -> WorldContext:
+        """世界の終了を判定できる見出し。要るとき（`needs_postseason_status`）だけ勝ち上がりを導く。
+
+        結果が導いた対戦と食い違う（壊れたデータ）ときは「終わっていない」として扱い、一覧ごと落とさない。
+        """
+        if not context.needs_postseason_status:
+            return context
+        try:
+            status = self._postseason_status_for(context.world_id, context.season_year)
+        except InvalidPostseason:
+            status = PostseasonStatus.IN_PROGRESS
+        return settled_context(context, status)
 
     def list_rows(self) -> list[PennantWorldListRow]:
         """世界の一覧の行。新しく作った世界から順に。順位は、受け持つ球団のいまのシーズンのもの。"""
@@ -76,7 +106,7 @@ class PennantWorldViewService:
         return PennantWorldList(mine=mine, others=others, world_limit=MAX_WORLDS_PER_OWNER)
 
     def _row_of(self, summary: WorldSummary) -> PennantWorldListRow:
-        context = _context_of(summary)
+        context = self.settle(self._context_of(summary))
         standing, race = self._own_standing(context, summary)
         return PennantWorldListRow(context=context, own_standing=standing, race=race)
 
@@ -102,3 +132,13 @@ class PennantWorldViewService:
                     race = own_race(standings, summary.remaining_by_team, context.managed_team_id, tiebreak)
                     return standing, race
         return None, None
+
+
+def settled_context(context: WorldContext, status: PostseasonStatus) -> WorldContext:
+    """既に導いたその年のポストシーズンの状況を、見出しに入れる。
+
+    GM ホームはカードで導いた状況を渡し、2回導かない。
+    """
+    if not context.needs_postseason_status:
+        return context
+    return replace(context, postseason_settled=status.is_settled)

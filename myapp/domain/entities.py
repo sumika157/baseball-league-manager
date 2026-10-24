@@ -44,6 +44,7 @@ from .value_objects import (
     ForeignPlayerRules,
     FreeAgencyKind,
     FreeAgencyOutcome,
+    GameStage,
     GameTimes,
     JerseyNumber,
     LineScore,
@@ -1187,6 +1188,10 @@ class Game:
     played_on: date
     home_team_id: int
     away_team_id: int
+    # 公式戦かポストシーズンか。入力の事実（日程から導く案は、日程の作り方が変わると壊れるので採らない）。
+    # 実データの試合は常に公式戦。**公式戦の集計（成績・順位・タイトル・FA の日数）はポストシーズンを数えない**。
+    # 既定値は持たない（渡し忘れが黙って公式戦になる形にしない。範囲の `WorldScope` と同じ考え）
+    stage: GameStage
     home_score: int = 0
     away_score: int = 0
     id: int | None = None

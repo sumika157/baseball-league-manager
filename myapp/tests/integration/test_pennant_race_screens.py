@@ -26,7 +26,7 @@ from myapp.application.pennant_race import (
     tiebreak_for,
 )
 from myapp.domain.pennant.schedule import AdvanceTarget, Fixture
-from myapp.domain.pennant.season import SCREEN_ADVANCE_TARGETS, SeasonPhase
+from myapp.domain.pennant.season import POSTSEASON_SCREEN_TARGETS, SCREEN_ADVANCE_TARGETS, SeasonPhase
 from myapp.domain.pennant.world import WorldScope
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoGameListQuery, DjangoWorldSummaryQuery
@@ -122,8 +122,8 @@ class AdvanceUnitsTest(HomeCase):
         self.assertIn("一度に進められるのは3試合までです", self.last_message(response))
 
     def test_every_screen_target_is_labelled(self):
-        """ボタンの文言を持たない範囲を、画面の選択肢に足してしまわない。"""
-        self.assertEqual(set(SCREEN_ADVANCE_TARGETS), set(_LABELS))
+        """ボタンの文言を持たない範囲を、画面の選択肢（公式戦とポストシーズン）に足してしまわない。"""
+        self.assertEqual(set(SCREEN_ADVANCE_TARGETS) | set(POSTSEASON_SCREEN_TARGETS), set(_LABELS))
 
 
 class OptionsTest(SimpleTestCase):
@@ -409,7 +409,12 @@ class FinaleTest(SimpleTestCase):
         def list_for_standings(self, *, year):
             return [
                 SimpleNamespace(
-                    year=year, is_recorded=True, winner_team_id=winner, home_team_id=winner, away_team_id=loser
+                    year=year,
+                    played_on=date(year, 9, 1),
+                    is_recorded=True,
+                    winner_team_id=winner,
+                    home_team_id=winner,
+                    away_team_id=loser,
                 )
                 for winner, loser in self.results_by_year[year]
             ]
@@ -424,6 +429,8 @@ class FinaleTest(SimpleTestCase):
             activity=None,
             team_records=SimpleNamespace(find_all=list),
             leagues=SimpleNamespace(find_all=list),
+            # ポストシーズンの無い世界（日本一は `test_pennant_championships.py`）
+            postseason=SimpleNamespace(champions=lambda *args, **kwargs: {}, title=lambda *args: ""),
         )
 
     def league(self, *rows):
@@ -461,7 +468,7 @@ class FinaleTest(SimpleTestCase):
             "myapp.application.pennant_race.league_standings",
             lambda teams, leagues, year_games: by_year[year_games[0].year],
         ):
-            finale = service._finale(self.world())
+            finale = service._finale(self.world(), None)
 
         assert finale is not None
         self.assertEqual([s.year for s in finale.seasons], [2026, 2028])
@@ -473,7 +480,7 @@ class FinaleTest(SimpleTestCase):
         service = self.service(self.Games({}))
         world = replace(self.world(), is_final_season=False)
 
-        self.assertIsNone(service._finale(world))
+        self.assertIsNone(service._finale(world, None))
 
 
 class PreviousRankTest(SimpleTestCase):

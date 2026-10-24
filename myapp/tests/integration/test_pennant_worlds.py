@@ -29,6 +29,7 @@ class CreateWorldTest(HomeCase):
             "name": "新しい世界",
             "leagues": [str(self.league_id)],
             "managed_team": str(self.home.id),
+            "postseason_format": "NPB",
             "start_year": "2040",
             "seed": "5",
         }
@@ -263,6 +264,7 @@ class CreateFailureTest(HomeCase):
             "name": "日程の組めない世界",
             "leagues": [str(self.league_id)],
             "managed_team": str(self.home.id),
+            "postseason_format": "NPB",
             "start_year": "2040",
             "seed": "",
         }

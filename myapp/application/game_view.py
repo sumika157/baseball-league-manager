@@ -166,6 +166,7 @@ class GameViewService:
             duration_label=times.duration_label if times else "",
             interruption_label=times.interruption_label if times else "",
             attendance_label=attendance_label(game.attendance) if game.attendance is not None else "",
+            stage=game.stage,
         )
 
     @staticmethod

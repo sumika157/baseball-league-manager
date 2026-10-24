@@ -1656,6 +1656,34 @@ class RecordWarning:
     message: str
 
 
+class GameStage(Enum):
+    """試合の区分。公式戦（レギュラーシーズン）かポストシーズンか。
+
+    選択肢（永続化の choices）はこの Enum を唯一の出典とする。**公式戦の成績・順位・タイトル・
+    FA の日数はポストシーズンを数えない**（NPB と同じ）。どの集計がどちらを読むかはインフラの
+    参照クエリが決める（`infrastructure/scoping.py` の `StageFilter`）。
+    持つのは区分だけで、どのシリーズの第何戦かは持たない（その年の2球団と日付の順から導ける）。
+    """
+
+    REGULAR = "公式戦"
+    POSTSEASON = "ポストシーズン"
+
+    @property
+    def label(self) -> str:
+        return self.value
+
+    @classmethod
+    def from_label(cls, label: str) -> GameStage:
+        for stage in cls:
+            if stage.value == label:
+                return stage
+        raise InvalidGame(f"「{label}」は試合の区分として認識できません。")
+
+    @classmethod
+    def labels(cls) -> list[str]:
+        return [stage.value for stage in cls]
+
+
 @dataclass(frozen=True)
 class GameHeader:
     """試合の見出し。いつ・どこ（シーズン）で・どのチームどうしが戦ったか。
@@ -1668,6 +1696,8 @@ class GameHeader:
     played_on: date
     home_team_id: int
     away_team_id: int
+    # 試合の区分。既定値は持たない（上書きするときは今の試合の区分を渡す。省いて公式戦に戻る形にしない）
+    stage: GameStage
     # 保存済みの試合を上書きするときだけ。新規の試合は None
     id: int | None = None
     # 手入力の事実（打席からは導けない）。無ければ未記録

@@ -1,6 +1,8 @@
 """ペナントの歴代の記録・球団史・選手の獲得タイトルの材料を作る。終わったシーズンだけを読み、何も書かない。
 
 - 年ごとの最終順位と優勝: `final_standings`（世界の終了と同じ関数。優勝の決め方は domain の `league_champion`）
+- 日本一（ポストシーズンの優勝。#242）と球団ごとのポストシーズンの結果: `PostseasonHistoryReader`
+  （締めた年の日本一は記録、締めていない年と到達段は試合から導く）
 - タイトルの受賞者（#248）: **締めた年は表彰**（`AwardQuery`。締める処理が保存した受賞者）を1本で読み、
   **終わったが締めていない年**（domain の `unclosed_completed_year`。シーズン終了のいまの年度）だけを、締める処理と
   同じ関数（`pennant_awards.derive_award_rows`。タイトルの画面と同じ `get_league_titles`）で導く。
@@ -26,6 +28,7 @@ from .dto import (
     ClubTitle,
     LeagueChampionCell,
     LeagueOption,
+    PostseasonChampionCell,
     TitleColumn,
     TitleHolderCell,
     WorldContext,
@@ -34,6 +37,7 @@ from .dto import (
 )
 from .league_view import LeagueViewService
 from .pennant_awards import derive_award_rows
+from .pennant_championships import PostseasonHistoryReader, YearChampion
 from .pennant_race import SeasonFinal, final_standings, team_order
 from .queries import AwardQuery, GameListQuery
 from .standings import record_label
@@ -50,6 +54,7 @@ class PennantHistoryService:
         team_records: TeamRepository,
         leagues: LeagueRepository,
         awards: AwardQuery,
+        postseason: PostseasonHistoryReader,
     ) -> None:
         self._league_view = league_view
         self._games = games
@@ -57,6 +62,7 @@ class PennantHistoryService:
         self._team_records = team_records
         self._leagues = leagues
         self._awards = awards
+        self._postseason = postseason
 
     def get_world_history(self, world: WorldContext, *, league_id: int | None) -> WorldHistory:
         """歴代の記録。`league_id` は受賞者を見るリーグ（無効な値は既定のリーグ、無ければ先頭に落とす）。"""
@@ -70,14 +76,19 @@ class PennantHistoryService:
         shown = list(Title) if selected and finals else []
         batting = [title for title in shown if not title.is_pitching]
         pitching = [title for title in shown if title.is_pitching]
+        league_ids = [option.id for option in options]
+        # 日本一（ポストシーズンの無い世界は空で、列を出さない）
+        postseason = self._postseason.champions(world, finals, league_ids)
 
         years = []
         for final in finals:
             year_holders = holders.get(final.year, [])
+            champion = postseason.get(final.year)
             years.append(
                 WorldHistoryYear(
                     year=final.year,
                     champions=[self._champion_cell(final, option.id, world.managed_team_id) for option in options],
+                    postseason=_postseason_cell(champion, world.managed_team_id) if champion is not None else None,
                     batting=[_cell(year_holders, title) for title in batting],
                     pitching=[_cell(year_holders, title) for title in pitching],
                 )
@@ -89,6 +100,7 @@ class PennantHistoryService:
             batting_columns=[_column(title) for title in batting],
             pitching_columns=[_column(title) for title in pitching],
             years=years,
+            postseason_title=self._postseason.title(world, league_ids) if finals else "",
         )
 
     def get_club_history(self, world: WorldContext, team_id: int) -> ClubHistory:
@@ -96,6 +108,7 @@ class PennantHistoryService:
 
         タイトルは、その年にその球団に所属して取ったもの（締めた年は表彰の球団、締めていない年は
         球団の**いまの所属リーグ**で導く。ペナントの球団はリーグを移らない）。
+        ポストシーズンの結果は `PostseasonHistoryReader.club_results`（日本一は締めた年は記録、到達段は試合から導く）。
         """
         teams = self._team_records.find_all()
         leagues = self._leagues.find_all()
@@ -111,6 +124,8 @@ class PennantHistoryService:
             else {}
         )
         seasons: list[ClubHistorySeason] = []
+        league_ids = [league.id for league in leagues if league.id is not None]
+        postseason = self._postseason.club_results(world, finals, league_ids, team_id)
         wins = losses = ties = 0
         for final in finals:
             league = final.league_of(team_id)
@@ -118,6 +133,7 @@ class PennantHistoryService:
             if league is None or result is None:
                 continue
             row, is_champion = result
+            outcome = postseason.get(final.year)
             seasons.append(
                 ClubHistorySeason(
                     year=final.year,
@@ -130,6 +146,8 @@ class PennantHistoryService:
                     games_behind=row.games_behind,
                     is_champion=is_champion,
                     titles=[_club_title(award) for award in holders.get(final.year, [])],
+                    postseason=outcome.label if outcome is not None else "",
+                    won_postseason=outcome is not None and outcome.won,
                 )
             )
             wins += row.wins
@@ -142,6 +160,8 @@ class PennantHistoryService:
             seasons=seasons,
             record=record_label(wins, losses, ties),
             titles=sum(1 for season in seasons if season.is_champion),
+            postseason_title=self._postseason.title(world, league_ids) if seasons else "",
+            postseason_titles=sum(1 for season in seasons if season.won_postseason),
         )
 
     def get_player_awards(
@@ -237,6 +257,15 @@ def _column(title: Title) -> TitleColumn:
 def _cell(holders: list[AwardRow], title: Title) -> TitleHolderCell:
     """その年のある部門の受賞者（同率は全員。並びは名前順）。"""
     return TitleHolderCell(department_key=title.value, holders=[row.entry() for row in holders if row.title is title])
+
+
+def _postseason_cell(champion: YearChampion, own_team_id: int | None) -> PostseasonChampionCell:
+    return PostseasonChampionCell(
+        team_id=champion.team_id,
+        team_name=champion.team_name,
+        is_own=champion.team_id is not None and champion.team_id == own_team_id,
+        in_progress=champion.in_progress,
+    )
 
 
 def _club_title(award: AwardRow) -> ClubTitle:

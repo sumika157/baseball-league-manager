@@ -38,6 +38,7 @@ from ..domain.exceptions import (
     AlreadyClosed,
     GameNotFound,
     InvalidAward,
+    InvalidChampionship,
     InvalidGame,
     InvalidPosition,
     InvalidRatings,
@@ -49,7 +50,9 @@ from ..domain.exceptions import (
     WorldNotFound,
 )
 from ..domain.pennant.awards import Award
+from ..domain.pennant.championship import Championship
 from ..domain.pennant.club_plan import ClubPlan, LineupChoice
+from ..domain.pennant.postseason import PostseasonFormat
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.release import ReleasePlan
 from ..domain.pennant.schedule import Fixture
@@ -70,6 +73,7 @@ from ..domain.value_objects import (
     FieldingPosition,
     ForeignPlayerRules,
     FreeAgencyKind,
+    GameStage,
     GameTimes,
     Handedness,
     InningsPitched,
@@ -83,14 +87,18 @@ from ..domain.value_objects import (
 )
 from . import orm_models
 from .scoping import (
+    StageFilter,
     awards_in,
+    championships_in,
     club_plans_in,
     fixtures_in,
+    game_rows_in_world,
     games_in,
     leagues_in,
     players_in,
     ratings_in,
     release_plans_in,
+    stage_condition,
     stints_in,
     teams_in,
     world_condition,
@@ -163,8 +171,10 @@ class _RosterData:
         player_ids = list(players)
         return cls(
             players=players,
-            batting=batting_totals(player_ids),
-            pitching=pitching_totals(player_ids),
+            # 通算は公式戦だけ（ポストシーズンは数えない。NPB と同じ）。選手の行は世界ごとに別なので、
+            # 選手の id で絞れば範囲の外の明細は混ざらない
+            batting=batting_totals(player_ids, stages=StageFilter.REGULAR_ONLY),
+            pitching=pitching_totals(player_ids, stages=StageFilter.REGULAR_ONLY),
             careers=_careers_of(player_ids),
             captaincies=_captaincies_of(player_ids),
             declarations=_declarations_of(player_ids),
@@ -592,27 +602,42 @@ def profile_of(row: orm_models.Player) -> Profile:
     )
 
 
-def batting_totals(player_ids: list[int] | None = None, *, games: Q | None = None) -> dict[int, BattingLine]:
+# 成績の集計で読む明細の持ち主。範囲（その世界の全選手）か、選手の id の並び（選手の行は世界ごとに別なので、
+# id で絞れば範囲の外は混ざらない）のどちらか。**どちらも無い（全世界を読む）呼び出しは書けない**
+LineOwners = WorldScope | list[int]
+
+
+def _line_rows(
+    model: type[models.Model], within: LineOwners, *, stages: StageFilter, games: Q | None
+) -> QuerySet[Any]:
+    """成績の明細の行を、範囲か選手・区分・追加の条件で絞る（`batting_totals` などの共通の入口）。"""
+    rows: QuerySet[Any] = model._default_manager.all()
+    if isinstance(within, WorldScope):
+        rows = rows.filter(game_rows_in_world("game", within))
+    else:
+        rows = rows.filter(player_id__in=within)
+    rows = rows.filter(stage_condition("game", stages))
+    return rows if games is None else rows.filter(games)
+
+
+def batting_totals(within: LineOwners, *, stages: StageFilter, games: Q | None = None) -> dict[int, BattingLine]:
     """選手ごとの打撃成績を SQL の集計で求める。
 
-    既定は通算。`games` に試合の条件（`game__year=2026` など、明細の行から見た条件）を
-    渡すと、その試合だけの成績になる（タイトルのようにシーズンで区切る用途）。
-    `player_ids` が None なら全選手（IN 句に何千件も並べずに済む）。空なら何も読まない。
+    `stages` は数える試合の区分（必須。公式戦の成績なら `REGULAR_ONLY`）。省けると、区分を入れ忘れた集計に
+    ポストシーズンが例外なしに混ざるので、既定値を持たない。`games` は追加の条件（明細の行から見た、年・期間・
+    球団など）で、無ければ通算。`within` は範囲（その世界の全選手。IN 句に何千件も並べずに済む）か選手の id の並び
+    （空なら何も読まない）。どちらも無い形（全世界を読む）は作らない。
     """
-    if player_ids is not None and not player_ids:
+    if isinstance(within, list) and not within:
         return {}
-    rows = orm_models.GameBattingLine.objects.all()
-    if player_ids is not None:
-        rows = rows.filter(player_id__in=player_ids)
-    if games is not None:
-        rows = rows.filter(games)
+    rows = _line_rows(orm_models.GameBattingLine, within, stages=stages, games=games)
     totals = rows.values("player_id").annotate(**{f: Sum(f) for f in _BATTING_FIELDS})
     # values() の行から可変のキーで取り出すため、TypedDict の字面キー検査は効かない
     return {r["player_id"]: BattingLine(**{f: r[f] or 0 for f in _BATTING_FIELDS}) for r in totals}  # type: ignore[literal-required]
 
 
 def game_counts(
-    player_ids: list[int] | None = None, *, games: Q | None = None
+    within: LineOwners, *, stages: StageFilter, games: Q | None = None
 ) -> tuple[dict[int, int], dict[int, int]]:
     """選手ごとの (出場試合数, 登板数)。引数の意味は `batting_totals` と同じ。
 
@@ -622,17 +647,12 @@ def game_counts(
     成績の値オブジェクトには持たせない（守備成績の試合数と同じく、明細の行数から数える値）。
     数の無い選手はキーに現れない。
     """
-    if player_ids is not None and not player_ids:
+    if isinstance(within, list) and not within:
         return {}, {}
-
-    def narrowed(rows: QuerySet[Any]) -> QuerySet[Any]:
-        if player_ids is not None:
-            rows = rows.filter(player_id__in=player_ids)
-        return rows if games is None else rows.filter(games)
 
     batted = {
         r["player_id"]: r["n"]
-        for r in narrowed(orm_models.GameBattingLine.objects.all())
+        for r in _line_rows(orm_models.GameBattingLine, within, stages=stages, games=games)
         .values("player_id")
         .annotate(n=Count("game_id", distinct=True))
         .order_by()
@@ -642,7 +662,7 @@ def game_counts(
         game_id=OuterRef("game_id"), player_id=OuterRef("player_id")
     )
     pitching = (
-        narrowed(orm_models.GamePitchingLine.objects.all())
+        _line_rows(orm_models.GamePitchingLine, within, stages=stages, games=games)
         .annotate(batted=Exists(same_game_batting))
         .values("player_id")
         .annotate(n=Count("game_id", distinct=True), alone=Count("game_id", distinct=True, filter=Q(batted=False)))
@@ -657,7 +677,7 @@ def game_counts(
     return played, pitched
 
 
-def pitching_totals(player_ids: list[int] | None = None, *, games: Q | None = None) -> dict[int, PitchingLine]:
+def pitching_totals(within: LineOwners, *, stages: StageFilter, games: Q | None = None) -> dict[int, PitchingLine]:
     """選手ごとの投球成績を求める。引数の意味は `batting_totals` と同じ。
 
     投球回だけは 5.2 が「5回と2/3」を意味する特殊な表記のため、単純な合計では
@@ -668,13 +688,9 @@ def pitching_totals(player_ids: list[int] | None = None, *, games: Q | None = No
     SQL で（選手, 表記）ごとに集計してから足す。先発登板数と救援勝利は登板順から導く
     項目なので、同じ集計の中で条件つきに数える。
     """
-    if player_ids is not None and not player_ids:
+    if isinstance(within, list) and not within:
         return {}
-    rows = orm_models.GamePitchingLine.objects.all()
-    if player_ids is not None:
-        rows = rows.filter(player_id__in=player_ids)
-    if games is not None:
-        rows = rows.filter(games)
+    rows = _line_rows(orm_models.GamePitchingLine, within, stages=stages, games=games)
 
     grouped = (
         rows.values("player_id", "innings_pitched")
@@ -866,6 +882,7 @@ class _NewGame:
                 away_team_id=game.away_team_id,
                 home_score=game.home_score,
                 away_score=game.away_score,
+                stage=game.stage.value,
                 **_game_day_values(game),
             ),
             batting=[orm_models.GameBattingLine(player_id=e.player_id, **_batting_values(e)) for e in game.batting],
@@ -910,6 +927,8 @@ class DjangoGameRepository:
     """GameRepository の Django ORM 実装。試合（Game 集約）の永続化。
 
     範囲（`WorldScope`）を必須で受け取り、読み出しはすべて SQL でその世界の試合に絞る。
+    1試合を id で読む・保存するときは区分を問わない（ポストシーズンの試合も開ける）。まとめて読む
+    `find_all` などは公式戦だけ（公式戦の集計の材料。ポストシーズンを混ぜない）。
     """
 
     def __init__(self, scope: WorldScope) -> None:
@@ -918,7 +937,7 @@ class DjangoGameRepository:
     def find_by_id(self, game_id: int) -> Game:
         try:
             row = (
-                self._with_details()
+                self._with_details(StageFilter.ALL_STAGES)
                 .prefetch_related(self._plate_appearance_prefetch(), "fielding_lines")
                 .get(id=game_id)
             )
@@ -927,13 +946,13 @@ class DjangoGameRepository:
         return self._to_domain(row, with_plate_appearances=True)
 
     def find_all(self, year: int | None = None) -> list[Game]:
-        rows = self._with_details()
+        rows = self._with_details(StageFilter.REGULAR_ONLY)
         if year is not None:
             rows = rows.filter(year=year)
         return [self._to_domain(row) for row in rows]
 
     def find_by_team(self, team_id: int, year: int | None = None) -> list[Game]:
-        rows = self._with_details().filter(Q(home_team_id=team_id) | Q(away_team_id=team_id))
+        rows = self._with_details(StageFilter.REGULAR_ONLY).filter(Q(home_team_id=team_id) | Q(away_team_id=team_id))
         if year is not None:
             rows = rows.filter(year=year)
         return [self._to_domain(row) for row in rows]
@@ -957,19 +976,23 @@ class DjangoGameRepository:
         組み立てることになる（リーグ6チームぶんを得るために全48チームぶんの
         明細を読んでいて、4.5秒かかっていた）。
         """
-        rows = self._with_details().filter(home_team_id__in=team_ids, away_team_id__in=team_ids)
+        rows = self._with_details(StageFilter.REGULAR_ONLY).filter(
+            home_team_id__in=team_ids, away_team_id__in=team_ids
+        )
         if year is not None:
             rows = rows.filter(year=year)
         return [self._to_domain(row) for row in rows]
 
-    def _with_details(self) -> QuerySet[orm_models.Game]:
-        """打撃・投球・イニングスコアの明細つきで、範囲の試合を読む。集約として扱うときに使う。
+    def _with_details(self, stages: StageFilter) -> QuerySet[orm_models.Game]:
+        """打撃・投球・イニングスコアの明細つきで、範囲と区分の試合を読む。集約として扱うときに使う。
 
         **打席は含めない。** 1試合で約280行あり、まとめて読む用途（リーグ集計など）で
         付けると数十万行を組み立てることになる。打席が要るのは1試合を編集するときだけで、
         そこは `find_by_id` が読む。
         """
-        return games_in(self._scope).prefetch_related("batting_lines", "pitching_lines", "inning_scores")
+        return games_in(self._scope, stages=stages).prefetch_related(
+            "batting_lines", "pitching_lines", "inning_scores"
+        )
 
     @transaction.atomic
     def save(self, game: Game) -> Game:
@@ -989,6 +1012,7 @@ class DjangoGameRepository:
                 "away_team_id": game.away_team_id,
                 "home_score": game.home_score,
                 "away_score": game.away_score,
+                "stage": game.stage.value,
                 **_game_day_values(game),
             },
         )
@@ -1110,7 +1134,10 @@ class DjangoGameRepository:
     def _ensure_in_scope(self, game: Game) -> None:
         """範囲の外の試合・チームには書けない（別の世界の試合を書き換えない）。"""
         self._ensure_teams_in_scope({game.home_team_id, game.away_team_id})
-        if game.id is not None and not games_in(self._scope).filter(id=game.id).exists():
+        if (
+            game.id is not None
+            and not games_in(self._scope, stages=StageFilter.ALL_STAGES).filter(id=game.id).exists()
+        ):
             raise GameNotFound(f"試合が見つかりません（id={game.id}）。")
 
     @staticmethod
@@ -1298,6 +1325,7 @@ class DjangoGameRepository:
             plate_appearances_loaded=with_plate_appearances,
             times=_times_of(row),
             attendance=row.attendance,
+            stage=GameStage.from_label(row.stage),
         )
         game.batting = [game_batting_of(b) for b in row.batting_lines.all()]
         game.pitching = [game_pitching_of(p) for p in row.pitching_lines.all()]
@@ -1403,11 +1431,14 @@ class DjangoLeagueRepository:
 # あり、collector は消す行を Python に集めてしまうため。ここに挙げたモデルと、選手・球団・
 # リーグ・世界は、`tests/integration/test_world_isolation.py` の分類表が「世界に属する」と
 # したものと一致することを検査している（足したモデルを消し忘れると、そのテストが落ちる）。
+# 試合とその明細は区分（公式戦・ポストシーズン）を問わず全部消すので、`game_rows_condition` ではなく範囲だけで絞る
 _GAME_ROUTE = "home_team__league"
 _WORLD_ROWS_CHILD_FIRST: tuple[tuple[type[models.Model], str], ...] = (
     # 能力は選手の在籍をたどって世界が決まるので、在籍を消す前に消す
     # 表彰は選手・球団・リーグを指すので、それらを消す前に消す
     (orm_models.PennantAward, "league"),
+    # 日本一の記録は球団を指すので、球団を消す前に消す
+    (orm_models.PennantChampionship, "team__league"),
     # 編成と戦力外の指名は選手を指すので、選手を消す前に消す（行から先に）
     (orm_models.PennantClubPlanEntry, "plan__team__league"),
     (orm_models.PennantClubPlan, "team__league"),
@@ -1759,6 +1790,27 @@ class DjangoAwardRepository:
             raise InvalidAward(f"この世界に居ない選手の表彰は保存できません（id={missing[0]}）。")
 
 
+class DjangoChampionshipRepository:
+    """ChampionshipRepository の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る。
+
+    日本一の記録はペナント専用で、実データの範囲には書けない。他の世界の記録は、読めも書けもしない。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    @transaction.atomic
+    def add(self, championship: Championship) -> None:
+        if self._scope.is_real:
+            raise InvalidWorld("日本一の記録はペナントの世界にだけ保存できます。")
+        if not teams_in(self._scope).filter(id=championship.team_id).exists():
+            raise InvalidChampionship(f"この世界に無い球団の日本一は保存できません（id={championship.team_id}）。")
+        # 1世界1年に1つ（世界は球団のリーグで決まるので、DB の一意制約では言えない）
+        if championships_in(self._scope).filter(year=championship.year).exists():
+            raise InvalidChampionship(f"{championship.year}年の日本一は既に記録しています。")
+        orm_models.PennantChampionship.objects.create(team_id=championship.team_id, year=championship.year)
+
+
 class DjangoWorldRepository:
     """WorldRepository の Django ORM 実装。世界の台帳で、範囲は持たない。"""
 
@@ -1784,6 +1836,7 @@ class DjangoWorldRepository:
                 "seed": world.seed,
                 "managed_team_id": world.managed_team_id,
                 "start_year": world.start_year,
+                "postseason_format": world.postseason_format.value,
             },
         )
         world.id = row.id
@@ -1823,4 +1876,5 @@ class DjangoWorldRepository:
             start_year=row.start_year,
             owner_id=row.owner_id,
             managed_team_id=row.managed_team_id,
+            postseason_format=PostseasonFormat(row.postseason_format),
         )

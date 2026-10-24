@@ -1,0 +1,16 @@
+{% comment %}
+ポストシーズンの画面の切り替え（勝ち上がりの表と個人成績の表で共有）。1行目は年（開ける年が2つ以上のとき）、
+2行目は「勝ち上がり｜個人成績」。年を切り替えても、いま見ている表のまま。
+`year`・`years` は表示中の年と開ける年、`tab` は 'bracket' か 'stats'。
+{% endcomment %}
+{% if years|length > 1 %}
+  <div class="segmented mb-2">
+    {% for option in years %}
+      <a class="segmented-item {% if option == year %}is-active{% endif %}" href="{% if tab == 'stats' %}{% url 'pennant_postseason_stats' world.world_id option %}{% else %}{% url 'pennant_postseason_by_year' world.world_id option %}{% endif %}">{{ option }}年</a>
+    {% endfor %}
+  </div>
+{% endif %}
+<div class="segmented mb-3">
+  <a class="segmented-item {% if tab == 'bracket' %}is-active{% endif %}" href="{% url 'pennant_postseason_by_year' world.world_id year %}">勝ち上がり</a>
+  <a class="segmented-item {% if tab == 'stats' %}is-active{% endif %}" href="{% url 'pennant_postseason_stats' world.world_id year %}">個人成績</a>
+</div>

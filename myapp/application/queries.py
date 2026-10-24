@@ -11,16 +11,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import date
 from typing import Protocol, runtime_checkable
 
 from ..domain.entities import Game
+from ..domain.pennant.postseason import PostseasonResult
 from ..domain.pennant.retirement import PlayingTime
 from ..domain.value_objects import FieldingLine
 from .dto import (
     ActivePlayerStats,
     AwardRow,
+    ChampionshipRow,
     FaSubjects,
     GameNote,
     GameRow,
@@ -29,6 +31,7 @@ from .dto import (
     PeriodBatting,
     PeriodPitching,
     PlayerFielding,
+    PostseasonGameRow,
     RatingsHistoryFacts,
     ServiceHistory,
     SimulationContext,
@@ -171,7 +174,7 @@ class TeamListQuery(Protocol):
 
 @runtime_checkable
 class GameListQuery(Protocol):
-    """試合一覧の参照。"""
+    """試合一覧の参照。**公式戦だけを返す**（ポストシーズンの試合は含まない。どのメソッドも同じ）。"""
 
     def list_rows(
         self,
@@ -183,19 +186,22 @@ class GameListQuery(Protocol):
         after: date | None = None,
         through: date | None = None,
     ) -> list[GameRow]:
-        """絞り込んだ試合を新しい順に返す。`after` より後、`through` 以前の試合に絞れる。"""
+        """絞り込んだ公式戦を新しい順に返す（ポストシーズンを含まない）。`after` より後、`through` 以前に絞れる。"""
         ...
 
     def list_for_standings(self, *, year: int | None = None) -> list[Game]:
-        """順位表の計算に渡す試合。成績の明細は持たない。"""
+        """順位表の計算に渡す試合（公式戦だけ。ポストシーズンを含まない）。成績の明細は持たない。"""
         ...
 
     def list_for_player(self, team_id: int, player_id: int) -> list[Game]:
-        """そのチームの試合のうち、選手が出場した試合。その選手の打撃・投球の明細だけを持つ（参照専用）。試合日の古い順。"""
+        """そのチームの公式戦のうち、選手が出場した試合（ポストシーズンを含まない）。
+
+        その選手の打撃・投球の明細だけを持つ（参照専用）。試合日の古い順。
+        """
         ...
 
     def list_seasons(self, *, league_id: int | None = None, recorded_only: bool = False) -> list[int]:
-        """試合のある年を新しい順に返す。
+        """公式戦のある年を新しい順に返す（ポストシーズンの試合だけの年は含まない）。
 
         `league_id` を渡すと、そのリーグのチームが出た試合のある年だけ。
         `recorded_only` を立てると記録済みの試合だけを数える
@@ -204,17 +210,17 @@ class GameListQuery(Protocol):
         ...
 
     def count_by_team(self, *, year: int | None = None) -> dict[int, int]:
-        """チームid → 試合数。ホーム・ビジターの両方を数える。"""
+        """チームid → 公式戦の試合数（ポストシーズンを含まない）。ホーム・ビジターの両方を数える。"""
         ...
 
     def list_months(
         self, *, year: int | None = None, team_id: int | None = None, league_id: int | None = None
     ) -> list[int]:
-        """その絞り込みで試合がある月を昇順に返す。"""
+        """その絞り込みで公式戦がある月を昇順に返す（ポストシーズンを含まない）。"""
         ...
 
     def latest_year(self) -> int | None:
-        """最新シーズン。試合が1件も無ければ None。"""
+        """最新シーズン（公式戦のある年）。試合が1件も無ければ None。"""
         ...
 
 
@@ -235,6 +241,51 @@ class PennantActivityQuery(Protocol):
 
     def pitching_between(self, team_id: int, *, after: date, through: date) -> list[PeriodPitching]:
         """同じ期間の、球団の投手ごとの勝・敗・セーブ。登板の無い選手は含めない。"""
+        ...
+
+
+@runtime_checkable
+class PostseasonQuery(Protocol):
+    """世界のポストシーズンの材料の参照。勝ち上がり（`PostseasonBracket`）を導くのに使う。
+
+    試合を集約として組み立てず、日付・2球団・得点だけを読む。
+    """
+
+    def results(self, year: int) -> list[PostseasonResult]:
+        """その年のポストシーズンの試合の結果（順不同）。"""
+        ...
+
+    def games(self, year: int) -> list[PostseasonGameRow]:
+        """その年のポストシーズンの試合（日付の順）。表の試合の行と、勝ち上がりの導出の両方に使う（2回読まない）。"""
+        ...
+
+    def results_by_year(self, years: Collection[int]) -> dict[int, list[PostseasonResult]]:
+        """`years` の各年のポストシーズンの試合の結果（年 -> 結果。試合の無い年は載らない）。1クエリで読む
+        （歴代の記録・球団史が年ごとに読まない）。"""
+        ...
+
+    def years(self) -> list[int]:
+        """ポストシーズンの試合のある年（新しい順）。"""
+        ...
+
+    def last_regular_date(self, year: int) -> date | None:
+        """その年の最後の公式戦の日。公式戦が無ければ None。"""
+        ...
+
+
+@runtime_checkable
+class PostseasonStatsQuery(Protocol):
+    """世界のポストシーズンの個人成績の参照（#39 のユーザーの決定: 表を出す・保存しない）。
+
+    公式戦の `PlayerStatsQuery` には区分の引数を足さない（公式戦の集計にポストシーズンを混ぜる口を作らない）。
+    集計の式は公式戦と同じ（`repositories.batting_totals` などに区分 `POSTSEASON_ONLY` を渡す）。
+    """
+
+    def list_players(self, year: int) -> list[ActivePlayerStats]:
+        """その年のポストシーズンに出場した選手（打撃か投球の明細がある選手だけ）と、その年のポストシーズンの成績。
+
+        所属はその年の終わりの球団（同じ年に移った選手は1行）。出場試合数と登板数も読む。球団の表示順、背番号順。
+        """
         ...
 
 
@@ -328,4 +379,16 @@ class AwardQuery(Protocol):
         self, *, league_id: int | None = None, team_id: int | None = None, player_id: int | None = None
     ) -> list[AwardRow]:
         """範囲の表彰。リーグ・球団（受賞した年の所属）・選手で絞れる。"""
+        ...
+
+
+@runtime_checkable
+class ChampionshipQuery(Protocol):
+    """ペナントの日本一の記録（締めたシーズンのポストシーズンの優勝球団）の参照。球団名を添える。
+
+    書くのは domain の `ChampionshipRepository`（シーズンを締める処理だけ）。範囲（世界）は組み立てるときに必須で渡す。
+    """
+
+    def list_championships(self) -> list[ChampionshipRow]:
+        """範囲の日本一の記録（古い順）。"""
         ...

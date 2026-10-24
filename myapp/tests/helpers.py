@@ -17,6 +17,7 @@ from myapp.domain.value_objects import (
     AdvanceReason,
     Base,
     BattingLine,
+    GameStage,
     JerseyNumber,
     PitchingLine,
     PlateAppearanceResult,
@@ -282,6 +283,7 @@ def play_game(
         played_on=date(year, month, day),
         home_team_id=home_team.id,
         away_team_id=away_team.id,
+        stage=GameStage.REGULAR,
         home_score=home_score,
         away_score=away_score,
     )

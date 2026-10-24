@@ -17,6 +17,7 @@ from typing import Protocol, runtime_checkable
 
 from .entities import Game, League, Team
 from .pennant.awards import Award
+from .pennant.championship import Championship
 from .pennant.club_plan import ClubPlan
 from .pennant.ratings import PlayerRatings
 from .pennant.release import ReleasePlan
@@ -72,6 +73,8 @@ class GameRepository(Protocol):
     def find_by_id(self, game_id: int) -> Game:
         """打撃・投球・イニングスコア・打席の記録込みで取得する。無ければ GameNotFound。
 
+        区分（公式戦・ポストシーズン）を問わない（試合詳細はポストシーズンの試合も開ける）。
+
         打席まで読むのはこれだけ。1試合で約280行あり、まとめて読む用途に付けると
         数十万行になるため、下の3つは打席を省いて読む（省いた集約は
         `plate_appearances_loaded` が False になり、保存しても打席に触れない）。
@@ -79,15 +82,15 @@ class GameRepository(Protocol):
         ...
 
     def find_all(self, year: int | None = None) -> list[Game]:
-        """全試合を取得する。年を渡すとそのシーズンだけ。打席は含まない。"""
+        """公式戦の全試合を取得する（ポストシーズンは含まない）。年を渡すとそのシーズンだけ。打席は含まない。"""
         ...
 
     def find_by_team(self, team_id: int, year: int | None = None) -> list[Game]:
-        """そのチームが出場した試合を取得する（ホーム・ビジターの別を問わない）。打席は含まない。"""
+        """そのチームが出場した公式戦を取得する（ホーム・ビジターの別を問わない。ポストシーズンは含まない）。打席は含まない。"""
         ...
 
     def find_between_teams(self, team_ids: set[int], year: int | None = None) -> list[Game]:
-        """渡したチームどうしの試合だけを取得する（両チームが対象に含まれるもの）。
+        """渡したチームどうしの公式戦だけを取得する（両チームが対象に含まれるもの。ポストシーズンは含まない）。
 
         リーグ内の試合を集めるのに使う。全試合を読んでから Python で捨てると、
         使わない試合の明細まで組み立てることになる。
@@ -296,4 +299,19 @@ class AwardRepository(Protocol):
 
     def count_by_player(self) -> dict[int, int]:
         """選手ごとの表彰の数（戦力外の実績の加点の材料）。表彰の無い選手は含まない。"""
+        ...
+
+
+@runtime_checkable
+class ChampionshipRepository(Protocol):
+    """ペナントの日本一の記録（締めたシーズンの優勝球団。`Championship`）。書くのはシーズンを締める処理だけ。
+
+    ペナントの世界にだけ置ける。画面に出すときは参照クエリ（`application/queries.py` の `ChampionshipQuery`）で読む。
+    """
+
+    def add(self, championship: Championship) -> None:
+        """日本一を保存する。すでに記録のある年をもう一度書くことはできない（InvalidChampionship）。
+
+        実データの範囲には書けない（InvalidWorld）。範囲の外の球団は書けない（InvalidChampionship）。
+        """
         ...

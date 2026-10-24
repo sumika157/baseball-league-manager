@@ -61,7 +61,7 @@ from .infrastructure.orm_models import (
     Team,
 )
 from .infrastructure.repositories import DjangoLeagueRepository, DjangoTeamRepository, draft_of
-from .infrastructure.scoping import games_in, leagues_in, players_in, stints_in, teams_in
+from .infrastructure.scoping import StageFilter, games_in, leagues_in, players_in, stage_condition, stints_in, teams_in
 from .presentation.views import build_recording_service
 
 # ヘッダーの文言
@@ -113,8 +113,8 @@ admin.site.get_app_list = types.MethodType(_ordered_app_list, admin.site)  # typ
 # 管理画面で扱うのは**実データだけ**。ペナントの世界の行は、一覧にも・id を指定した編集画面にも・
 # 選択肢にも・フィルタにも出さない（手で直すと、世界の整合が実データの側から壊れるため）。
 # ペナント専用のモデル（PennantWorld・PennantPlayerRatings・PennantFixture・PennantClubPlan と
-# その行 PennantClubPlanEntry・PennantReleasePlan とその行 PennantReleasePlanEntry・表彰 PennantAward）は
-# 管理画面に登録しない
+# その行 PennantClubPlanEntry・PennantReleasePlan とその行 PennantReleasePlanEntry・表彰 PennantAward・
+# 日本一 PennantChampionship）は管理画面に登録しない
 # （手で直すと、能力と成績・日程の整合が壊れるため）。
 _REAL = WorldScope.real()
 _REAL_QUERYSETS = {
@@ -122,7 +122,8 @@ _REAL_QUERYSETS = {
     orm_models.Team: teams_in,
     orm_models.Player: players_in,
     orm_models.PlayerStint: stints_in,
-    orm_models.Game: games_in,
+    # 試合は区分（公式戦・ポストシーズン）を問わず実データの行を全部出す（実データの試合は常に公式戦）
+    orm_models.Game: lambda scope: games_in(scope, stages=StageFilter.ALL_STAGES),
 }
 
 
@@ -401,7 +402,9 @@ class TeamAdmin(RealDataOnlyMixin, ManualOrderAdminMixin, admin.ModelAdmin):
                     Coalesce(
                         Subquery(
                             _grouped_count(
-                                orm_models.Game.objects.filter(home_team=OuterRef("pk")),
+                                orm_models.Game.objects.filter(
+                                    stage_condition("", StageFilter.REGULAR_ONLY), home_team=OuterRef("pk")
+                                ),
                                 "home_team",
                             ),
                             output_field=IntegerField(),
@@ -411,7 +414,9 @@ class TeamAdmin(RealDataOnlyMixin, ManualOrderAdminMixin, admin.ModelAdmin):
                     + Coalesce(
                         Subquery(
                             _grouped_count(
-                                orm_models.Game.objects.filter(away_team=OuterRef("pk")),
+                                orm_models.Game.objects.filter(
+                                    stage_condition("", StageFilter.REGULAR_ONLY), away_team=OuterRef("pk")
+                                ),
                                 "away_team",
                             ),
                             output_field=IntegerField(),
@@ -1191,8 +1196,9 @@ class PlayerAdmin(RealDataOnlyMixin, admin.ModelAdmin):
 
     @admin.display(description="出場試合")
     def appearances(self, obj):
-        """成績そのものは試合側にあるので、ここでは出場数だけ示す。"""
-        count = obj.game_batting.count() + obj.game_pitching.count()
+        """成績そのものは試合側にあるので、ここでは出場数だけ示す（公式戦だけ。チームの試合数と揃える）。"""
+        regular = stage_condition("game", StageFilter.REGULAR_ONLY)
+        count = obj.game_batting.filter(regular).count() + obj.game_pitching.filter(regular).count()
         return count or "—"
 
     @staticmethod

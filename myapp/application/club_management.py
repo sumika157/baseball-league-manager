@@ -59,7 +59,7 @@ from .dto import (
     ClubRosterCounts,
 )
 from .foreign_quota import ForeignQuotaExemptions
-from .pennant_season import pitching_history, pool_of
+from .pennant_simulation import pitching_history, pool_of
 from .queries import SimulationContextQuery
 
 
