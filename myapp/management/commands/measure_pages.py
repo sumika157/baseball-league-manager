@@ -6,15 +6,14 @@
 
     docker compose exec web python manage.py measure_pages --workspace <key>
     docker compose exec web python manage.py measure_pages --workspace <key> --as admin --world 1
-    MSYS_NO_PATHCONV=1 docker compose exec web python manage.py measure_pages --workspace <key> --profile /games/
+    docker compose exec web python manage.py measure_pages --workspace <key> --profile /w/<key>/games/
 
 - `--workspace <key>`（必須）: 測るワークスペース。画面の id（チーム・選手・試合・リーグ）はその実データから拾う。
 - `--as <ユーザー名>`: ログインして測る（省けば未ログイン）。権限で出し分ける画面のクエリ数は、ログインした人で変わる。
 - `--world <id>`: そのワークスペースのペナントの世界の10画面も測る。
 
-測る URL は `reverse` で組む（`_url`）。W2 T3（#78）の時点では今の URL（`/teams/` など）のままで、今の URL が
-開くのは id が最小のワークスペースだけ（ほかのワークスペースを指すと、拾った id が見つからず 404 になる）。
-T4 で URL に key が入る（`_url` が key を先頭の引数に足す）。
+測る URL は `reverse` で組む（`_url`。`/w/<key>/...`）。どのワークスペースでも、その key の下の画面を測る。
+非公開のワークスペースを未ログインで測ると、画面はログインへのリダイレクト（302）になる（`--as` でメンバーを指す）。
 
 --profile に渡す URL は先頭がスラッシュなので、Git Bash では `MSYS_NO_PATHCONV=1` を
 前置しないと Windows パスに変換されて 404 になる。
@@ -44,8 +43,8 @@ VERY_SLOW_MS = 1500
 
 
 def _url(key: str, name: str, *args: object) -> str:
-    """ワークスペース key の中の画面の URL。T3 の時点では `reverse` と同じで、T4 で key を先頭の引数に足す。"""
-    return reverse(name, args=args)
+    """ワークスペース key の中の画面の URL（key を先頭の引数に足す）。"""
+    return reverse(name, args=(key, *args))
 
 
 class Command(BaseCommand):

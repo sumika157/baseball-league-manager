@@ -7,7 +7,7 @@
 {% if not analysis %}
   <nav aria-label="breadcrumb">
     <ol class="breadcrumb">
-      {% if world %}{% include 'pennant/_crumbs.html' %}{% else %}<li class="breadcrumb-item"><a href="{% workspace_url 'dashboard' %}">ダッシュボード</a></li>{% endif %}
+      {% if world %}{% include 'pennant/_crumbs.html' %}{% else %}<li class="breadcrumb-item"><a href="{% workspace_url 'dashboard' %}">{{ workspace.name }}</a></li>{% endif %}
       <li class="breadcrumb-item active">戦力分析</li>
     </ol>
   </nav>
@@ -18,7 +18,7 @@
 {% else %}
 <nav aria-label="breadcrumb">
   <ol class="breadcrumb">
-    {% if world %}{% include 'pennant/_crumbs.html' %}{% else %}<li class="breadcrumb-item"><a href="{% workspace_url 'dashboard' %}">ダッシュボード</a></li>{% endif %}
+    {% if world %}{% include 'pennant/_crumbs.html' %}{% else %}<li class="breadcrumb-item"><a href="{% workspace_url 'dashboard' %}">{{ workspace.name }}</a></li>{% endif %}
     <li class="breadcrumb-item"><a href="{% scoped_url 'team_list' %}">チーム一覧</a></li>
     <li class="breadcrumb-item"><a href="{% scoped_url 'player_list' analysis.team_id %}">{{ analysis.team_name }}</a></li>
     <li class="breadcrumb-item active">戦力分析</li>

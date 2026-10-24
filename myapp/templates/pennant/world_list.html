@@ -6,7 +6,7 @@
 {% block content %}
 <nav aria-label="breadcrumb">
   <ol class="breadcrumb">
-    <li class="breadcrumb-item"><a href="{% workspace_url 'dashboard' %}">ダッシュボード</a></li>
+    <li class="breadcrumb-item"><a href="{% workspace_url 'dashboard' %}">{{ workspace.name }}</a></li>
     <li class="breadcrumb-item active">ペナント</li>
   </ol>
 </nav>
@@ -24,7 +24,7 @@
 {% endif %}
 
 {% comment %}
-作成フォームはログインしている人にだけ出す。上限に達していたら、フォームの代わりに理由を出す。
+作成フォームは世界を作れる人（ワークスペースの持ち主・編集者）にだけ出す。上限に達していたら、フォームの代わりに理由を出す。
 乱数のシードは詳細設定に畳む（決めなければ自動）。
 {% endcomment %}
 {% if form %}
@@ -92,7 +92,7 @@
 {% if not worlds.mine and not worlds.others %}
   <div class="card">
     <div class="empty-state">
-      まだ世界がありません。{% if not form %}ログインすると作成できます。{% endif %}
+      まだ世界がありません。{% if not form %}世界を作れるのは、このワークスペースの持ち主と編集者です（ログインが必要です）。{% endif %}
     </div>
   </div>
 {% endif %}

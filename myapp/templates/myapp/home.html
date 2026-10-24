@@ -1,0 +1,68 @@
+{% extends 'myapp/base.html' %}
+{% load scoped %}
+
+{% block title %}Baseball Manager{% endblock %}
+
+{% block content %}
+{% comment %}
+ワークスペースの外のトップ（/）。ログインしていれば自分のワークスペースの一覧（名前順。持ち主・編集者・チーム担当として
+入っているもの）、していなければ紹介と見本のワークスペースへのリンク・新規登録とログイン。
+ワークスペースの作成は W4（ここにはフォームを置かない）。公開範囲と役割の表示名は Visibility・WorkspaceRole が出典。
+{% endcomment %}
+{% if user.is_authenticated %}
+  <div class="page-head">
+    <h1 class="page-title">ワークスペース</h1>
+    <p class="page-subtitle">あなたが持ち主・編集者・チーム担当として入っているワークスペースです。</p>
+  </div>
+
+  {% if workspaces %}
+    <div class="table-responsive">
+      <table class="table table-hover">
+        <thead>
+          <tr>
+            <th>名前</th>
+            <th>公開範囲</th>
+            <th>あなたの役割</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in workspaces %}
+            <tr>
+              <td><a href="{% workspace_entry_url row.key %}" class="player-name">{{ row.name }}</a></td>
+              <td><span class="badge bg-secondary">{{ row.visibility.label }}</span></td>
+              <td>{{ row.role.label }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="alert alert-secondary">
+      まだどのワークスペースにも入っていません。公開されているワークスペースは、その URL を開けば誰でも見られます。
+    </div>
+  {% endif %}
+{% else %}
+  <div class="page-head">
+    <h1 class="page-title">Baseball Manager</h1>
+    <p class="page-subtitle">
+      野球リーグの試合をスコアブックで記録し、順位・成績・タイトルを自動で集計します。
+      実データを元にした別の世界で、GM としてシーズンを進めるペナントモードもあります。
+    </p>
+  </div>
+
+  {% if sample %}
+    <div class="card mb-3">
+      <div class="card-body">
+        <h2 class="h6 mb-2">見本のワークスペース</h2>
+        <p class="stat-muted mb-3">ログインしなくても、記録済みのリーグの順位表や成績を見られます。</p>
+        <a href="{% workspace_entry_url sample.key %}" class="btn btn-primary">「{{ sample.name }}」を見る</a>
+      </div>
+    </div>
+  {% endif %}
+
+  <div class="d-flex gap-2">
+    <a href="{% url 'signup' %}" class="btn btn-outline-primary">新規登録</a>
+    <a href="{% url 'login' %}" class="btn btn-outline-secondary">ログイン</a>
+  </div>
+{% endif %}
+{% endblock %}

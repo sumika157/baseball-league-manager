@@ -1,6 +1,7 @@
 """ペナントの世界の作成・一覧・削除（P4b）。
 
-作成と削除は書き込みなので権限を確かめる（未ログインはログインへ、ほかの人は 403）。
+作成と削除は書き込みなので権限を確かめる（未ログインはログインへ、ほかの人は 403）。作成できるのは
+ワークスペースの持ち主・編集者だけ（W2 T4。#78）。削除・進めるは世界の作成者。
 上限（1人の世界の数・元にするリーグの数）と、フォームの検証エラー（日本語）も。
 GM ホームと進める操作は `test_pennant_home.py`。
 """
@@ -17,12 +18,19 @@ from myapp.domain.pennant.world import MAX_WORLDS_PER_OWNER
 from myapp.infrastructure import orm_models
 from myapp.presentation.views import build_pennant_season_service, build_pennant_world_service, build_service
 
-from ..helpers import make_league, play_game, real_scope, world_ledger, world_scope, ws_url
+from ..helpers import make_editor, make_league, play_game, real_scope, world_ledger, world_scope, ws_url
 from .test_pennant_advance import register_club
 from .test_pennant_home import HomeCase
 
 
 class CreateWorldTest(HomeCase):
+    """世界の作成。作る人（`other`・`owner`）は既定のワークスペースの編集者にしておく。"""
+
+    def setUp(self):
+        super().setUp()
+        make_editor(self.other)
+        make_editor(self.owner)
+
     def form(self, **overrides) -> dict:
         data = {
             "name": "新しい世界",
@@ -49,6 +57,19 @@ class CreateWorldTest(HomeCase):
         self.assertIn("<optgroup", content, "受け持つ球団はリーグごとの optgroup")
         self.assertIn("作成に数秒かかります", content)
         self.assertIn("<details", content, "シードは詳細設定の中")
+
+    def test_a_logged_in_user_who_is_not_an_editor_gets_no_form_and_cannot_create(self):
+        """公開ワークスペースを見に来ただけの人は、他人のワークスペースに世界を作れない（作成はワークスペースへの書き込み）。"""
+        self.client.force_login(User.objects.create_superuser("visitor", password="x"))
+        before = orm_models.PennantWorld.objects.count()
+
+        content = self.client.get(ws_url("pennant_index")).content.decode()
+        response = self.client.post(ws_url("pennant_index"), self.form(name="見に来た人の世界"))
+
+        self.assertIn("世界A", content, "一覧は読める")
+        self.assertNotIn('name="leagues"', content)
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(orm_models.PennantWorld.objects.count(), before)
 
     def test_the_default_year_is_the_year_after_the_latest_real_season(self):
         play_game(self.home, self.rival, home_score=1, away_score=0, year=2031)
@@ -191,7 +212,7 @@ class CreateWorldTest(HomeCase):
 
         content = self.client.get(ws_url("pennant_index")).content.decode()
 
-        self.assertIn("まだ世界がありません。ログインすると作成できます。", content)
+        self.assertIn("まだ世界がありません。世界を作れるのは、このワークスペースの持ち主と編集者です", content)
 
 
 class DeleteWorldTest(HomeCase):
@@ -256,7 +277,7 @@ class DeleteWorldTest(HomeCase):
 class CreateFailureTest(HomeCase):
     def test_a_world_whose_schedule_cannot_be_made_is_not_left_behind(self):
         """日程が組めない世界は進められない。作りかけを残さず、理由を出す。"""
-        self.client.force_login(self.other)
+        self.client.force_login(make_editor(self.other))
         before = orm_models.PennantWorld.objects.count()
         form = {
             "name": "日程の組めない世界",

@@ -862,7 +862,7 @@
   ],
   "max_innings": 12,
   "urls": {
-    "save": "/api/games/GAME/scorebook/",
-    "detail": "/games/GAME/"
+    "save": "/w/defaultws0/api/games/GAME/scorebook/",
+    "detail": "/w/defaultws0/games/GAME/"
   }
 }

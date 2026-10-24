@@ -1,8 +1,8 @@
 """ワークスペースをまたいで行が漏れないこと（W1b T2。#172）。
 
 範囲（`WorldScope`）がワークスペースを持つようになり、実データの条件は「そのワークスペースのリーグ」になった。
-ワークスペース A（既定・id が最小＝今の URL が解決するもの）と B に実データを置き、B の名前は A のどの名前とも
-重ならない**目印**にする。A の範囲で読んだもの・今の URL の画面に目印が出たら、それは漏れ。
+ワークスペース A（既定）と B に実データを置き、B の名前は A のどの名前とも重ならない**目印**にする。
+A の範囲で読んだもの・A の key の URL（`/w/<A の key>/...`）の画面に目印が出たら、それは漏れ。
 
 - (1) `repositories`・`queries` の `Django*` をモジュールから列挙し、すべてを検査の表（`CHECKS`）で検査する。
   表に無いクラスがあれば落ちる（新しい実装を足したら、漏れないかをここで決めさせる）。
@@ -11,16 +11,21 @@
   指していても、A の範囲の読み取りは本拠地なしとして読む。A の範囲で B の球場を本拠地にして保存すると
   `StadiumNotFound` で、チームも選手も書かれない。管理画面の組み合わせは `test_admin_workspaces.py`。
 - (4) 世界の台帳（`DjangoWorldRepository`・`DjangoWorldSummaryQuery`。W1b T3）: A の台帳に B の世界が出ず、
-  B の世界の id は `WorldNotFound`。A の台帳で B の世界を保存・削除できず、何も変わらない。今の URL で
-  B の世界（`/pennant/<B の世界>/` とその下）を開くと 404、`/pennant/` には A の世界だけが出る。
+  B の世界の id は `WorldNotFound`。A の台帳で B の世界を保存・削除できず、何も変わらない。A の key で
+  B の世界（`/w/<A>/pennant/<B の世界>/` とその下）を開くと 404、A のペナントの一覧には A の世界だけが出る。
 - (5) `players_in(real(A))` に B の選手も A の世界の選手も出ない。
 - ワークスペースの台帳（`DjangoWorkspaceAccessQuery`・`DjangoWorkspaceListQuery`。W2 T1）: A の key で B の行が
   出ず、B の編集者・担当は A では部外者。一覧に、入っていないワークスペースは出ない。
-- 今の URL の画面に B の目印が出ない（一時関数が A に解決する）。一時関数は1つの要求で1回だけ読む。
+- URL（W2 T4）: `workspace_urlpatterns` の全パターンを分類表（`URL_TABLE`）で検査する（表に無いパターンが
+  あれば落ちる）。A の key の下で B の id は 404・A の画面に B の目印が出ない（選手検索を含む）・非公開の B は
+  未ログインならログインへ、部外者は 404、B の編集者と担当は通る・A の画面のリンクは A の key の下か
+  ワークスペースの外だけ。ワークスペースは1つの要求で1回だけ読む。
 """
 
 import inspect
+import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import date
 from unittest.mock import patch
 
@@ -29,6 +34,7 @@ from django.db import connection
 from django.http import Http404
 from django.test import RequestFactory, TestCase
 from django.test.utils import CaptureQueriesContext
+from django.urls import reverse
 
 from myapp.domain.entities import Game
 from myapp.domain.entities import Team as DomainTeam
@@ -47,7 +53,7 @@ from myapp.domain.pennant.release import ReleasePlan
 from myapp.domain.pennant.world import MAX_WORLDS_PER_OWNER, WORLD_LIMIT_MESSAGE, World, WorldScope
 from myapp.domain.services.rankings import Title
 from myapp.domain.value_objects import BattingLine, JerseyNumber, PitchingLine, Position, RosterLimits, Season
-from myapp.domain.workspace import WorkspaceRole
+from myapp.domain.workspace import Visibility, WorkspaceRole
 from myapp.infrastructure import orm_models, queries, repositories
 from myapp.infrastructure.queries import (
     DjangoAwardQuery,
@@ -85,9 +91,12 @@ from myapp.infrastructure.scoping import players_in, stadiums_in
 from myapp.presentation import views
 from myapp.presentation.club_input import ACTION_MANUAL, ACTION_SAVE, RELEASE_SECTION
 from myapp.presentation.views import build_pennant_world_service
+from myapp.urls import workspace_urlpatterns
 
 from ..helpers import (
     build_service,
+    build_workspace_access_query,
+    make_editor,
     make_league,
     make_stadium,
     make_workspace,
@@ -728,8 +737,8 @@ class PlayersInTest(WorkspaceCase):
                 self.assertFalse(players_in(scope).filter(id=self.unattached.id).exists())
 
 
-class CurrentUrlsShowOnlyTheLegacyWorkspaceTest(WorkspaceCase):
-    """今の URL（ワークスペースを含まない）は一時関数で A に解決し、B の目印を出さない。"""
+class UrlsShowOnlyTheirWorkspaceTest(WorkspaceCase):
+    """URL の key のワークスペースだけを読む。A の key の画面に B の目印を出さず、B の key では B が見える。"""
 
     def _pages(self) -> list[str]:
         return [
@@ -752,10 +761,16 @@ class CurrentUrlsShowOnlyTheLegacyWorkspaceTest(WorkspaceCase):
                 self.assertEqual(response.status_code, 200)
                 self.assertNotContains(response, B_MARK)
 
-    def test_the_pages_show_the_legacy_workspace(self):
-        """検査が空振りしていないこと（A の行は出ている）。"""
+    def test_the_pages_show_their_workspace(self):
+        """検査が空振りしていないこと（A の key では A の行が、B の key では B の行だけが出る）。"""
         self.assertContains(self.client.get(ws_url("team_list")), self.team.name)
         self.assertContains(self.client.get(f"{ws_url('player_search')}?q=A打者"), "A打者1")
+        b_teams = self.client.get(ws_url("team_list", workspace=self.workspace_b))
+        self.assertContains(b_teams, B_TEAM)
+        self.assertNotContains(b_teams, self.team.name)
+        b_search = self.client.get(f"{ws_url('player_search', workspace=self.workspace_b)}?q=目印選手")
+        self.assertContains(b_search, B_PLAYER)
+        self.assertNotContains(b_search, "A打者")
 
     def test_pages_by_the_other_workspaces_ids_are_404(self):
         for url in (
@@ -768,7 +783,7 @@ class CurrentUrlsShowOnlyTheLegacyWorkspaceTest(WorkspaceCase):
                 self.assertEqual(self.client.get(url).status_code, 404)
 
     def test_the_workspace_is_read_once_per_request(self):
-        """一時関数は1つの要求で1回だけ読む（範囲・権限の判定・API が別々に読まない）。"""
+        """ワークスペースは1つの要求で1回だけ読む（`workspace_view` が解決し、範囲・権限の判定が別々に読まない）。"""
         staff = User.objects.create_user(username="staff-once", password="x", is_staff=True)
         self.client.force_login(staff)
         # 試合一覧は、画面の範囲と「登録の導線を出すか」（権限の判定）の両方で実データの範囲を使う
@@ -780,12 +795,17 @@ class CurrentUrlsShowOnlyTheLegacyWorkspaceTest(WorkspaceCase):
 
 
 class NoWorkspaceTest(TestCase):
-    """ワークスペースが1つも無い DB では、今の URL は 404（決定 2026-10-07 Q2）。管理画面のトップは開ける。"""
+    """ワークスペースが1つも無い DB でも、`/` と管理画面のトップは開く。ワークスペースの中の URL は 404。"""
 
     def test_the_site_pages_are_404(self):
         for url in (ws_url("dashboard"), ws_url("team_list"), ws_url("pennant_index")):
             with self.subTest(url=url):
                 self.assertEqual(self.client.get(url).status_code, 404)
+
+    def test_the_top_page_opens(self):
+        self.assertEqual(self.client.get(reverse("home")).status_code, 200)
+        self.client.force_login(User.objects.create_user(username="alone", password="x"))
+        self.assertContains(self.client.get(reverse("home")), "まだどのワークスペースにも入っていません")
 
     def test_the_admin_index_still_opens_to_create_the_first_workspace(self):
         self.client.force_login(User.objects.create_superuser(username="root", password="x"))
@@ -1101,7 +1121,7 @@ class WorldLedgerWritesTest(WorkspaceCase):
 
 
 class WorldPagesOfTheOtherWorkspaceTest(WorkspaceCase):
-    """(4) 今の URL（A に解決する）で B の世界を開くと 404。`/pennant/` には A の世界だけが出る。"""
+    """(4) A の key の URL で B の世界を開くと 404。A のペナントの一覧には A の世界だけが出る。"""
 
     def _b_world_pages(self) -> list[str]:
         world = self.b_world_id
@@ -1134,7 +1154,7 @@ class WorldPagesOfTheOtherWorkspaceTest(WorkspaceCase):
         ]
 
     def test_the_pages_of_bs_world_are_404(self):
-        # B の世界のオーナーでも、今の URL（A）からは開けない
+        # B の世界のオーナーでも、A の key の URL からは開けない
         self.client.force_login(self.b_owner)
         for url in self._b_world_pages():
             with self.subTest(url=url):
@@ -1195,8 +1215,9 @@ class WorldPagesOfTheOtherWorkspaceTest(WorkspaceCase):
         """上限は全ワークスペースで数える（作成の検査と同じ）。
 
         B に上限まで世界を持つ人には、A でも作成フォームを出さない。A の一覧に出る自分の世界は0でも、
-        送れば拒まれるフォームを見せない。
+        送れば拒まれるフォームを見せない（A で世界を作れるよう、A の編集者にしておく）。
         """
+        make_editor(self.b_owner)
         ledger_b = DjangoWorldRepository(self.workspace_b.id)
         for number in range(MAX_WORLDS_PER_OWNER - 1):  # B の世界（setUpTestData）と合わせて上限ちょうど
             ledger_b.save(
@@ -1220,8 +1241,8 @@ class WorldPagesOfTheOtherWorkspaceTest(WorkspaceCase):
         self.assertNotContains(response, 'name="name"')
 
     def test_below_the_limit_the_form_is_shown(self):
-        """検査が空振りしていないこと（B に1つだけなら、A で作成フォームが出る）。"""
-        self.client.force_login(self.b_owner)
+        """検査が空振りしていないこと（B に1つだけなら、A の編集者には A で作成フォームが出る）。"""
+        self.client.force_login(make_editor(self.b_owner))
 
         response = self.client.get(ws_url("pennant_index"))
 
@@ -1235,21 +1256,37 @@ class WorldScopeIsVerifiedAgainstTheLedgerTest(WorkspaceCase):
     見出し（`_world_context`）が台帳を読んだ後なら、台帳を読み直さない（世界の画面のクエリを増やさない）。
     """
 
-    def setUp(self):
-        super().setUp()
-        self.factory = RequestFactory()
+    def _request(self, workspace=None):
+        """`workspace_view` を通った後の要求（key で解決したワークスペースを載せる。省けば A）。"""
+        request = RequestFactory().get("/")
+        request.workspace = build_workspace_access_query().resolve((workspace or self.workspace).key, None)
+        return request
 
     def test_a_world_of_another_workspace_gets_no_scope(self):
         with self.assertRaises(Http404):
-            views._world_scope(self.factory.get("/"), self.b_world_id)
+            views._world_scope(self._request(), self.b_world_id)
 
     def test_the_header_of_another_workspaces_world_is_404(self):
         with self.assertRaises(Http404):
-            views._world_context(self.factory.get("/"), self.b_world_id)
+            views._world_context(self._request(), self.b_world_id)
+
+    def test_a_request_without_a_resolved_workspace_fails_loudly(self):
+        """`workspace_view` を通らない要求で範囲を作らない（既定のワークスペースに黙って落とさない）。"""
+        for read in (views._real_scope, lambda request: views._world_scope(request, self.a_world_id)):
+            with self.subTest(read=read), self.assertRaises(views.WorkspaceNotResolved):
+                read(RequestFactory().get("/"))
+
+    def test_a_world_verified_in_another_workspace_is_not_trusted(self):
+        """確かめた世界は（ワークスペース, 世界）の組で覚える。B で確かめた id を A の範囲では通さない。"""
+        request = self._request(self.workspace_b)
+        views._world_context(request, self.b_world_id)
+        request.workspace = self._request().workspace
+
+        with self.assertRaises(Http404):
+            views._world_scope(request, self.b_world_id)
 
     def test_without_a_header_the_ledger_is_read_once_per_request(self):
-        request = self.factory.get("/")
-        views._workspace_id(request)
+        request = self._request()
         with CaptureQueriesContext(connection) as captured:
             scope = views._world_scope(request, self.a_world_id)
             views._world_scope(request, self.a_world_id)
@@ -1258,14 +1295,14 @@ class WorldScopeIsVerifiedAgainstTheLedgerTest(WorkspaceCase):
 
     def test_a_verified_world_does_not_open_another_workspaces_world_in_the_same_request(self):
         """同じ要求で A の世界を見出しで確かめた後でも、B の世界の範囲は作らない（確かめた id だけを通す）。"""
-        request = self.factory.get("/")
+        request = self._request()
         views._world_context(request, self.a_world_id)
 
         with self.assertRaises(Http404):
             views._world_scope(request, self.b_world_id)
 
     def test_after_the_header_the_ledger_is_not_read_again(self):
-        request = self.factory.get("/")
+        request = self._request()
         views._world_context(request, self.a_world_id)
         with self.assertNumQueries(0):
             scope = views._world_scope(request, self.a_world_id)
@@ -1283,7 +1320,7 @@ class WorldCreationWorkspaceTest(WorkspaceCase):
 
 
 class ScorebookApiWithoutWorkspaceTest(TestCase):
-    """ワークスペースが1つも無いとき、スコアブックの保存 API はほかのエラーと同じ JSON の形で 404 を返す。"""
+    """無い key のスコアブックの保存 API は、ほかのエラーと同じ JSON の形で 404 を返す（画面の 404 を返さない）。"""
 
     def test_the_api_returns_the_json_error(self):
         self.client.force_login(User.objects.create_superuser(username="root", password="x"))
@@ -1291,4 +1328,238 @@ class ScorebookApiWithoutWorkspaceTest(TestCase):
         response = self.client.post(ws_url("api_game_scorebook", 1), data="{}", content_type="application/json")
 
         self.assertEqual(response.status_code, 404)
-        self.assertEqual(response.json(), {"ok": False, "error": "ワークスペースがありません。"})
+        self.assertEqual(response.json(), {"ok": False, "error": "ワークスペースが見つかりません。"})
+
+
+# --- URL（W2 T4）: `/w/<key>/` の下の全パターン ---
+
+# 種類。PAGE は GET で開く画面（読み書きが同居する画面も GET で確かめる）、WRITE は POST だけの書き込み
+# （GET はホームへ戻すだけ）、API は JSON の保存 API（POST）
+PAGE = "page"
+WRITE = "write"
+API = "api"
+
+
+@dataclass(frozen=True)
+class Side:
+    """1つのワークスペースの、URL の引数に入れる id と年。"""
+
+    team: int
+    player: int
+    game: int
+    league: int
+    year: int
+    world: int
+    world_team: int
+    world_player: int
+    world_league: int
+    world_game: int
+    world_year: int
+
+
+# id の引数（年は id ではない。年だけの URL は「ほかのワークスペースの id」の検査の対象外）
+ID_ARGS = frozenset(
+    {"team", "player", "game", "league", "world", "world_team", "world_player", "world_league", "world_game"}
+)
+
+# 分類表。`workspace_urlpatterns` のパターンは、ちょうどここに載る（新しい URL を足したら、引数と種類をここで決める）。
+# URL 名 → (引数（`Side` の属性名）, 種類, 閲覧にもログインが要るか)
+URL_TABLE: dict[str, tuple[tuple[str, ...], str, bool]] = {
+    "dashboard": ((), PAGE, False),
+    "team_list": ((), PAGE, False),
+    "player_search": ((), PAGE, False),
+    "standings": ((), PAGE, False),
+    "standings_by_year": (("year",), PAGE, False),
+    "league_detail": (("league",), PAGE, False),
+    "league_detail_by_year": (("league", "year"), PAGE, False),
+    "league_titles": (("league",), PAGE, False),
+    "league_titles_by_year": (("league", "year"), PAGE, False),
+    "league_stats": (("league",), PAGE, False),
+    "game_list": ((), PAGE, False),
+    "game_create": ((), PAGE, True),
+    "game_detail": (("game",), PAGE, False),
+    "game_edit": (("game",), PAGE, True),
+    "api_game_scorebook": (("game",), API, False),
+    "analysis_index": ((), PAGE, False),
+    "player_list": (("team",), PAGE, False),
+    "team_analysis": (("team",), PAGE, False),
+    "player_detail": (("team", "player"), PAGE, False),
+    "player_edit": (("team", "player"), PAGE, True),
+    "pennant_index": ((), PAGE, False),
+    "pennant_world": (("world",), PAGE, False),
+    "pennant_advance": (("world",), WRITE, False),
+    "pennant_close_season": (("world",), WRITE, False),
+    "pennant_offseason": (("world", "world_year"), PAGE, False),
+    "pennant_history": (("world",), PAGE, False),
+    "pennant_team_history": (("world", "world_team"), PAGE, False),
+    "pennant_delete": (("world",), PAGE, False),
+    "pennant_club": (("world",), PAGE, False),
+    "pennant_standings": (("world",), PAGE, False),
+    "pennant_standings_by_year": (("world", "world_year"), PAGE, False),
+    "pennant_league_detail": (("world", "world_league"), PAGE, False),
+    "pennant_league_detail_by_year": (("world", "world_league", "world_year"), PAGE, False),
+    "pennant_league_titles": (("world", "world_league"), PAGE, False),
+    "pennant_league_titles_by_year": (("world", "world_league", "world_year"), PAGE, False),
+    "pennant_league_stats": (("world", "world_league"), PAGE, False),
+    "pennant_team_list": (("world",), PAGE, False),
+    "pennant_game_list": (("world",), PAGE, False),
+    "pennant_game_detail": (("world", "world_game"), PAGE, False),
+    "pennant_player_list": (("world", "world_team"), PAGE, False),
+    "pennant_analysis_index": (("world",), PAGE, False),
+    "pennant_team_analysis": (("world", "world_team"), PAGE, False),
+    "pennant_player_detail": (("world", "world_team", "world_player"), PAGE, False),
+}
+
+# 下ごしらえにその年のオフの結果が無いので、自分のワークスペースでも 404 になる画面（ゲートの検査は別に効く）
+ABSENT_IN_FIXTURE = frozenset({"pennant_offseason"})
+
+# A の画面のリンクが向いてよい、ワークスペースの外の行き先（`/` は完全一致）
+OUTSIDE_PREFIXES = ("/accounts/", "/admin/", "/static/", "?", "#", "https://cdn.jsdelivr.net/")
+LINK = re.compile(r'(?:href|action)="([^"]*)"')
+
+
+def _world_side_ids(world_id: int) -> tuple[int, int, int, int]:
+    """世界の (球団, 選手, リーグ, 試合)。試合はここで1つ置く（世界の試合の画面を開くため）。"""
+    league = orm_models.League.objects.filter(world_id=world_id).order_by("id").first()
+    assert league is not None
+    home, away = orm_models.Team.objects.filter(league=league).order_by("id")[:2]
+    player = orm_models.PlayerStint.objects.filter(team=home).order_by("id").values_list("player_id", flat=True)[0]
+    game = orm_models.Game.objects.create(
+        year=YEAR, played_on=date(YEAR, 4, 2), home_team=home, away_team=away, home_score=1, away_score=0
+    )
+    return home.id, player, league.id, game.id
+
+
+class EveryWorkspaceUrlTest(WorkspaceCase):
+    """`workspace_urlpatterns` の全パターンを、分類表で A と B について検査する（W2 T4。設計書 7.）。
+
+    - 表に無いパターン・表にしか無い名前があれば落ちる。すべて `workspace_view` で包まれている。
+    - (1)(5) A の key の下で B の id（チーム・選手・試合・リーグ・世界とその中の id）を渡すと 404。
+    - (2)(6)(7) A の画面（未ログイン・A の持ち主）に B の目印が出ず、リンクは A の key の下かワークスペースの外だけ。
+    - (3) B を非公開にすると、未ログインはログインへ（`next` つき）、A の持ち主（B の部外者）は 404、
+      B の編集者と担当はワークスペースの門を通る（`request.workspace` が B になる。画面ごとの権限はその先で決まる）。
+    """
+
+    side_a: Side
+    side_b: Side
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        a_world = _world_side_ids(cls.a_world_id)
+        b_world = _world_side_ids(cls.b_world_id)
+        cls.side_a = Side(
+            cls.team.id, cls.a_batters[0], cls.a_game_id, cls.league.id, YEAR, cls.a_world_id, *a_world, YEAR
+        )
+        cls.side_b = Side(
+            cls.b_team.id, cls.b_batters[0], cls.b_game_ids[1], cls.b_league.id, B_YEAR, cls.b_world_id, *b_world, YEAR
+        )
+
+    def _url(self, name: str, side: Side, workspace=None) -> str:
+        args, _, _ = URL_TABLE[name]
+        return ws_url(name, *(getattr(side, arg) for arg in args), workspace=workspace)
+
+    def _send(self, name: str, url: str):
+        _, kind, _ = URL_TABLE[name]
+        if kind == API:
+            return self.client.post(url, data="{}", content_type="application/json")
+        if kind == WRITE:
+            return self.client.post(url, {})
+        return self.client.get(url)
+
+    def test_every_pattern_is_in_the_table(self):
+        names = [pattern.name for pattern in workspace_urlpatterns]
+        self.assertEqual(len(names), len(set(names)), "同じ名前のパターンがあります")
+        self.assertEqual(sorted(set(names) - set(URL_TABLE)), [], "分類表に無い URL があります（表に足してください）")
+        self.assertEqual(sorted(set(URL_TABLE) - set(names)), [], "表に、もう無い URL が残っています")
+
+    def test_every_pattern_goes_through_workspace_view(self):
+        """包み忘れが無い（`_w()` を通らずに `path()` で足した URL は、解決も公開範囲の判定も通らない）。"""
+        wrapper_code = views.workspace_view(lambda request: None).__code__
+        for pattern in workspace_urlpatterns:
+            with self.subTest(name=pattern.name):
+                callback = pattern.callback
+                self.assertIs(callback.__code__, wrapper_code, "workspace_view で包まれていません")
+                options = inspect.getclosurevars(callback).nonlocals
+                _, kind, login = URL_TABLE[pattern.name]
+                self.assertEqual((options["login"], options["json"]), (login, kind == API))
+
+    def test_the_other_workspaces_ids_are_404_under_a(self):
+        """(1)(5) A の key の下で B の id を渡すと 404（API は JSON の 404）。A の持ち主でも開けない。"""
+        self.client.force_login(self.workspace.owner)
+        checked = 0
+        for name, (args, kind, _) in URL_TABLE.items():
+            if not ID_ARGS.intersection(args):
+                continue
+            url = self._url(name, self.side_b)
+            with self.subTest(name=name, url=url):
+                response = self._send(name, url)
+                self.assertEqual(response.status_code, 404)
+                if kind == API:
+                    self.assertFalse(response.json()["ok"])
+                checked += 1
+        self.assertGreaterEqual(checked, 30, "検査の対象を拾えていません")
+
+    def test_the_pages_of_a_show_nothing_of_b_and_link_only_inside_a(self):
+        """(2)(6)(7) A の画面に B の目印が出ず、リンクは A の key の下かワークスペースの外（`/` など）だけ。"""
+        inside = f"/w/{self.workspace.key}/"
+        for user in (None, self.workspace.owner):
+            if user is not None:
+                self.client.force_login(user)
+            for name, (_, kind, _) in URL_TABLE.items():
+                if kind != PAGE:
+                    continue
+                urls = [self._url(name, self.side_a)]
+                if name == "player_search":
+                    # 検索語は画面に出るので、目印そのものではなく目印の一部で探す
+                    urls += [f"{urls[0]}?q=目印", f"{urls[0]}?q=打者"]
+                for url in urls:
+                    with self.subTest(user=str(user), url=url):
+                        response = self.client.get(url)
+                        expected = {200, 302, 403} | ({404} if name in ABSENT_IN_FIXTURE else set())
+                        self.assertIn(response.status_code, expected)
+                        if response.status_code == 302:
+                            location = response["Location"]
+                            self.assertTrue(location.startswith((inside, "/accounts/login/")), location)
+                            continue
+                        content = response.content.decode()
+                        self.assertNotIn(B_MARK, content)
+                        for link in LINK.findall(content):
+                            self.assertTrue(
+                                link == "/" or link.startswith((inside, *OUTSIDE_PREFIXES)),
+                                f"{url} のリンク {link} が A の外へ出ています",
+                            )
+
+    def test_a_private_workspace_is_closed_to_outsiders(self):
+        """(3) 非公開の B: 未ログインはログインへ、部外者（A の持ち主）は 404、B の編集者と担当は門を通る。"""
+        orm_models.Workspace.objects.filter(id=self.workspace_b.id).update(visibility=Visibility.PRIVATE.value)
+        editor, manager = _b_members(self)
+        for name, (_, kind, _) in URL_TABLE.items():
+            url = self._url(name, self.side_b, workspace=self.workspace_b)
+            with self.subTest(name=name, user="anonymous"):
+                self.client.logout()
+                response = self._send(name, url)
+                if kind == API:
+                    self.assertEqual(response.status_code, 403)
+                else:
+                    self.assertEqual(response.status_code, 302)
+                    self.assertEqual(response["Location"], f"{reverse('login')}?next={url}")
+            with self.subTest(name=name, user="outsider"):
+                self.client.force_login(self.workspace.owner)
+                response = self._send(name, url)
+                self.assertEqual(response.status_code, 404)
+                self.assertFalse(hasattr(response.wsgi_request, "workspace"), "部外者に門を通した")
+            for member in (editor, manager):
+                with self.subTest(name=name, user=member.username):
+                    self.client.force_login(member)
+                    response = self._send(name, url)
+                    self.assertEqual(response.wsgi_request.workspace.key, self.workspace_b.key)
+
+    def test_a_public_workspace_is_open_to_everyone(self):
+        """空振りの防止: 公開の B なら、A の持ち主（部外者）も B の key の画面を読める。"""
+        self.client.force_login(self.workspace.owner)
+        for name in ("dashboard", "team_list", "player_list", "pennant_world"):
+            with self.subTest(name=name):
+                response = self.client.get(self._url(name, self.side_b, workspace=self.workspace_b))
+                self.assertEqual(response.status_code, 200)
+                self.assertContains(response, B_MARK)

@@ -4,18 +4,19 @@
 成績の計算も背番号の重複判定もここには無い（ドメイン層にある）。
 """
 
+import functools
 import secrets
 from collections.abc import Callable
 from datetime import date, timedelta
 from urllib.parse import urlencode
 
+from django.conf import settings
 from django.contrib import messages
-from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.views import redirect_to_login
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
-from django.http import Http404, HttpResponseNotAllowed
+from django.http import Http404, HttpResponseNotAllowed, JsonResponse
 from django.middleware.csrf import get_token
 from django.shortcuts import redirect, render
 from django.urls import reverse, reverse_lazy
@@ -34,6 +35,7 @@ from ..application.dto import (
     RatingsTable,
     ReleasePlanView,
     TeamMonthlyRow,
+    WorkspaceContext,
     WorldContext,
 )
 from ..application.foreign_quota import ForeignQuotaExemptions
@@ -113,7 +115,6 @@ from ..infrastructure.repositories import (
     DjangoTeamRepository,
     DjangoWorldRepository,
 )
-from ..infrastructure.workspaces import legacy_workspace_id
 from .club_input import (
     ACTION_AUTO,
     ACTION_MANUAL,
@@ -180,12 +181,11 @@ def _requires_login(request):
 
 
 def _url(request, name: str, *args) -> str:
-    """ワークスペースの中の画面の URL（`myapp/urls.py` の `workspace_urlpatterns`）。
+    """ワークスペースの中の画面の URL（`myapp/urls.py` の `workspace_urlpatterns`）。今の要求のワークスペースの下。
 
-    views・API がリダイレクト先やリンクを組むときは、`reverse` を直接呼ばずにここを通す。W2 T3（#78）の
-    時点では `reverse(name, args=args)` と同じで、T4 で今の要求のワークスペースの key を先頭の引数に足す。
+    views・API がリダイレクト先やリンクを組むときは、`reverse` を直接呼ばずにここを通す（key を先頭の引数に足す）。
     """
-    return reverse(name, args=args)
+    return reverse(name, args=(_workspace(request).key, *args))
 
 
 def _requires_team_permission(request, *team_ids):
@@ -202,27 +202,62 @@ def _requires_team_permission(request, *team_ids):
     return None
 
 
-# 要求（request）に覚える、今の URL のワークスペースの id の属性名
-_WORKSPACE_ID_ATTR = "_legacy_workspace_id"
+class WorkspaceNotResolved(RuntimeError):
+    """ワークスペースの中の処理が、`workspace_view` を通らない要求で呼ばれた（プログラムの誤り）。
+
+    黙って既定のワークスペースや key の無い URL に落とさない（ほかのワークスペースのデータを読み書きする穴になる）。
+    """
+
+
+def workspace_view(view, *, login: bool = False, json: bool = False):
+    """ワークスペースの中の画面を包む（`myapp/urls.py` の `_w()` が必ず掛ける。W2 T4）。
+
+    1. URL の `key` から、ワークスペースとその人の権限を引く（`build_workspace_access_query().resolve`。1要求で1回）。
+       無い key は 404。
+    2. 閲覧できなければ（非公開でメンバーでない）、未ログインはログインへ（`next` つき。ログイン後に同じ URL へ戻る）、
+       ログインしていれば 404（存在を明かさない）。
+    3. `login=True` の画面と、未ログインの POST はログインへ（閲覧は誰でも、書き込みはログイン必須）。
+    4. `request.workspace`（`WorkspaceContext`）を載せて、ビューを `key` 抜きの引数で呼ぶ。
+
+    `json=True`（スコアブックの保存 API）は、リダイレクトや 404 の画面の代わりに、ほかのエラーと同じ形の JSON を返す
+    （未ログイン 403・無い／見えないワークスペース 404）。チームごとの書き込みの判定はビューに残す
+    （どのチームかは POST の本文を読むまで決まらない画面がある）。
+    """
+
+    @functools.wraps(view)
+    def wrapped(request, key: str, *args, **kwargs):
+        user_id = request.user.id if request.user.is_authenticated else None
+        if json and user_id is None:
+            return JsonResponse({"ok": False, "error": "ログインが必要です。再度ログインしてください。"}, status=403)
+        try:
+            workspace = build_workspace_access_query().resolve(key, user_id)
+        except WorkspaceNotFound:
+            workspace = None
+        if workspace is None or not workspace.access.can_view():
+            if json:
+                return JsonResponse({"ok": False, "error": "ワークスペースが見つかりません。"}, status=404)
+            if workspace is not None and user_id is None:
+                return redirect_to_login(request.get_full_path())
+            raise Http404("ワークスペースが見つかりません。")
+        if user_id is None and (login or request.method == "POST"):
+            return redirect_to_login(request.get_full_path())
+        request.workspace = workspace
+        return view(request, *args, **kwargs)
+
+    return wrapped
+
+
+def _workspace(request) -> WorkspaceContext:
+    """今の要求のワークスペース（`workspace_view` が URL の key から解決して載せたもの）。"""
+    workspace = getattr(request, "workspace", None)
+    if not isinstance(workspace, WorkspaceContext):
+        raise WorkspaceNotResolved("ワークスペースが解決されていません（workspace_view を通っていない要求です）。")
+    return workspace
 
 
 def _workspace_id(request) -> int:
-    """今の URL が読み書きするワークスペース（W1 の暫定。W2 で URL の key の解決に替える。決定 2026-10-07 Q2）。
-
-    一時関数 `legacy_workspace_id()`（id が最小のワークスペース）は1クエリ読むので、**1つの要求で1回だけ**呼び、
-    要求に覚える（範囲を作る `_real_scope`・`_world_scope` も、権限の判定も、API もここを通る）。
-    プロセスに覚えないのは、テストごとにワークスペースが作り直されると古い値を返すため。
-    ワークスペースが1つも無ければ 404。
-    """
-    cached = getattr(request, _WORKSPACE_ID_ATTR, None)
-    if cached is not None:
-        return cached
-    try:
-        workspace_id = legacy_workspace_id()
-    except WorkspaceNotFound:
-        raise Http404("ワークスペースがありません。") from None
-    setattr(request, _WORKSPACE_ID_ATTR, workspace_id)
-    return workspace_id
+    """今の URL が読み書きするワークスペースの id。範囲を作る `_real_scope`・`_world_scope` も、API もここを通る。"""
+    return _workspace(request).workspace_id
 
 
 def _real_scope(request) -> WorldScope:
@@ -244,21 +279,25 @@ def _world_scope(request, world_id: int) -> WorldScope:
     ここで `DjangoWorldRepository` を直接作る（ビューの本体はリポジトリを触らない）。
     """
     workspace_id = _workspace_id(request)
-    if world_id not in _verified_world_ids(request):
+    if (workspace_id, world_id) not in _verified_world_ids(request):
         try:
             DjangoWorldRepository(workspace_id).find_by_id(world_id)
         except WorldNotFound:
             raise Http404("世界が見つかりません。") from None
-        _verified_world_ids(request).add(world_id)
+        _verified_world_ids(request).add((workspace_id, world_id))
     return WorldScope.pennant(workspace_id, world_id)
 
 
-# 要求（request）に覚える、今の URL のワークスペースの台帳で引けた世界の id の属性名
+# 要求（request）に覚える、台帳で引けた（ワークスペースの id, 世界の id）の組の属性名
 _VERIFIED_WORLDS_ATTR = "_verified_world_ids"
 
 
-def _verified_world_ids(request) -> set[int]:
-    """この要求の中で、今の URL のワークスペースの台帳で引けた世界の id（`_world_context`・`_world_scope` が足す）。"""
+def _verified_world_ids(request) -> set[tuple[int, int]]:
+    """この要求の中で、ワークスペースの台帳で引けた（ワークスペースの id, 世界の id）の組。
+
+    `_world_context`・`_world_scope` が足す。組で覚えるのは、ほかのワークスペースで確かめた世界の id を、
+    別のワークスペースの範囲で通さないため（要求のワークスペースは1つだが、形で防ぐ）。
+    """
     verified = getattr(request, _VERIFIED_WORLDS_ATTR, None)
     if verified is None:
         verified = set()
@@ -616,11 +655,12 @@ def _world_context(request, world_id: int) -> WorldContext:
     見出しはワークスペースで絞った台帳から読むので、引けた世界の id を要求に覚え、
     続く `_world_scope` が台帳を読み直さずに範囲を作れるようにする。
     """
+    workspace_id = _workspace_id(request)
     try:
-        context = build_pennant_world_view(_workspace_id(request)).get_context(world_id)
+        context = build_pennant_world_view(workspace_id).get_context(world_id)
     except (WorldNotFound, InvalidWorld):
         raise Http404("世界が見つかりません。") from None
-    _verified_world_ids(request).add(context.world_id)
+    _verified_world_ids(request).add((workspace_id, context.world_id))
     return context
 
 
@@ -700,21 +740,25 @@ def _next_season_year(request) -> int:
 
 
 def pennant_index(request):
-    """ペナントの世界の一覧と作成。一覧は誰でも、作成（POST）はログインが必要。
+    """ペナントの世界の一覧と作成。一覧はワークスペースを読める人なら誰でも、作成（POST）は持ち主・編集者だけ。
 
     世界の一覧は「あなたの世界」と「ほかの人の世界」に分け、オーナーの名前は出さない。
-    作成フォームはログインしている人にだけ出す（上限に達していれば理由を出す）。
+    作成フォームは世界を作れる人（`WorkspaceAccess.can_create_world()`）にだけ出す（上限に達していれば理由を出す）。
+    公開ワークスペースを見に来ただけの人が、他人のワークスペースに世界を作れないようにする（作成はワークスペースへの書き込み）。
     """
     if request.method not in ("GET", "HEAD", "POST"):
         return HttpResponseNotAllowed(["GET", "HEAD", "POST"])
+    can_create = _workspace(request).access.can_create_world()
     if request.method == "POST":
         denied = _requires_login(request)
         if denied is not None:
             return denied
+        if not can_create:
+            raise PermissionDenied("このワークスペースで世界を作る権限がありません。")
 
     views = build_pennant_world_view(_workspace_id(request))
     form = None
-    if request.user.is_authenticated:
+    if can_create:
         form_args = {
             "groups": build_service(_real_scope(request)).list_teams_by_league().rows,
             "default_year": _next_season_year(request),
@@ -1261,6 +1305,32 @@ def _render_club(
     return render(request, "pennant/club.html", {**context, "world": world}, status=status)
 
 
+@require_safe
+def home(request):
+    """ワークスペースの外のトップ（`/`）。
+
+    ログインしていれば、自分が持ち主・編集者・チーム担当として入っているワークスペースの一覧（名前順）。
+    ログインしていなければ、紹介と、見本のワークスペース（`settings.SAMPLE_WORKSPACE_KEY`）へのリンクと、新規登録・ログイン。
+    見本のリンクは、設定があり、その key のワークスペースがあり、公開のときだけ出す（推し量らない。作成は W4）。
+    """
+    if request.user.is_authenticated:
+        workspaces = build_workspace_list_query().list_for(request.user.id)
+        return render(request, "myapp/home.html", {"workspaces": workspaces})
+    return render(request, "myapp/home.html", {"sample": _sample_workspace()})
+
+
+def _sample_workspace() -> WorkspaceContext | None:
+    """見本のワークスペース（未ログインの人に見せる公開ワークスペース）。設定が無い・無い key・非公開なら None。"""
+    key = settings.SAMPLE_WORKSPACE_KEY
+    if not key:
+        return None
+    try:
+        workspace = build_workspace_access_query().resolve(key, None)
+    except WorkspaceNotFound:
+        return None
+    return workspace if workspace.access.can_view() else None
+
+
 def dashboard(request):
     """ホーム画面。全リーグの最新シーズンの順位表・部門の首位と、最新の試合日の結果。"""
     return render(request, "myapp/dashboard.html", {"board": build_service(_real_scope(request)).get_dashboard()})
@@ -1561,9 +1631,11 @@ def game_list(request, world_id=None):
     )
 
 
-@login_required
 def game_create(request):
-    """試合を作る。作成後、成績の入力画面へ進む。"""
+    """試合を作る。作成後、成績の入力画面へ進む。
+
+    ログインは `workspace_view(login=True)` が求める（`myapp/urls.py`）。
+    """
     service = build_service(_real_scope(request))
     teams = service.list_teams().rows
     form = GameForm(request.POST or None, initial={"year": date.today().year})
@@ -1592,7 +1664,6 @@ def game_create(request):
     return render(request, "myapp/game_form.html", {"form": form, "teams": teams})
 
 
-@login_required
 @require_GET
 def game_edit(request, game_id):
     """試合の基本情報と、両チームのロスターぶんの成績を入力する画面を返す。
@@ -1820,9 +1891,8 @@ def player_detail(request, team_id, player_id, world_id=None):
     )
 
 
-@login_required
 def player_edit(request, team_id, player_id):
-    """選手の基本情報と成績を編集する。"""
+    """選手の基本情報と成績を編集する。ログインは `workspace_view(login=True)` が求める（`myapp/urls.py`）。"""
     service = build_team_view_service(_real_scope(request))
 
     try:

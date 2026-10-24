@@ -14,7 +14,7 @@ from myapp.domain.exceptions import WorldNotFound
 from myapp.infrastructure import orm_models
 from myapp.presentation.views import build_pennant_world_service, build_service, build_team_view_service
 
-from ..helpers import real_scope, world_scope, world_summary_query, ws_url
+from ..helpers import make_editor, real_scope, world_scope, world_summary_query, ws_url
 from .base import BaseCase
 from .world_case import PENNANT_RIVAL, PENNANT_TEAM, PENNANT_WORLD, YEAR, WorldCase
 
@@ -123,7 +123,7 @@ class WorldBarTest(WorldCase):
         content = self.client.get(ws_url("standings")).content.decode()
 
         self.assertNotIn("ペナント</span>", content)
-        self.assertIn("ダッシュボード", content)
+        self.assertIn("既定のワークスペース</a></li>", content, "パンくずの起点はワークスペースの名前")
 
     def test_before_the_first_game_the_bar_says_before_opening(self):
         content = self.client.get(ws_url("pennant_standings", create_empty_world(self))).content.decode()
@@ -197,13 +197,17 @@ class WorldListTest(WorldCase):
         self.assertIn("1位", content)
         self.assertIn("1-0-0", content)
 
-    def test_the_create_form_is_for_a_logged_in_user_only(self):
+    def test_the_create_form_is_for_an_editor_of_the_workspace_only(self):
+        """作成フォームは世界を作れる人（ワークスペースの持ち主・編集者）にだけ出す。"""
         anonymous = self.client.get(ws_url("pennant_index")).content.decode()
         self.client.force_login(self.owner)
-        logged_in = self.client.get(ws_url("pennant_index")).content.decode()
+        not_an_editor = self.client.get(ws_url("pennant_index")).content.decode()
+        make_editor(self.owner)
+        editor = self.client.get(ws_url("pennant_index")).content.decode()
 
         self.assertNotIn('name="leagues"', anonymous)
-        self.assertIn('name="leagues"', logged_in)
+        self.assertNotIn('name="leagues"', not_an_editor)
+        self.assertIn('name="leagues"', editor)
 
     def test_the_header_links_to_pennant_for_everyone(self):
         anonymous = self.client.get(ws_url("standings")).content.decode()

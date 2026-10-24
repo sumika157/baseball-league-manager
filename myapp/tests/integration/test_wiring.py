@@ -868,42 +868,26 @@ class WorldWorkspaceResolverTest(SimpleTestCase):
         self.assertEqual(users - self.ALLOWED, set(), "管理コマンドの入口以外が世界のワークスペースを直接導いています")
 
 
-class LegacyRealScopeTest(SimpleTestCase):
-    """管理コマンドは一時関数のワークスペースを使わない（W1b T5・W2 T3）。
+class LegacyWorkspaceIsGoneTest(SimpleTestCase):
+    """一時関数のワークスペース（id が最小のもの）は、どこにも残っていない（W2 T4。#78）。
 
-    実データを読み書きするコマンドは `--workspace <key>` を必須で受け取る（`real_scope_for_key`）。新しいコマンドが
-    一時関数で範囲を作ると、ワークスペースが複数あるときにエラーにならず id が最小のワークスペースを書き換える。
-    最後まで使っていた `measure_pages` も W2 T3 で `--workspace` を取るようにし、`legacy_real_scope` は消した。
-    一時関数そのもの（`legacy_workspace_id`）も、定義と views（今の URL。W2 T4 で URL の key の解決に替える）の
-    外では使わない。
+    画面は URL の key を `workspace_view` が解決し、管理コマンドは `--workspace <key>` を必須で受け取る
+    （`real_scope_for_key`）。「id が最小のワークスペース」で推し量る関数が戻ると、ワークスペースが複数あるときに
+    エラーにならず、別のワークスペースを読み書きする。名前で戻さない（テスト以外の `myapp/` に名前が無い）。
     """
 
-    NAME = "legacy_real_scope"
+    NAMES = ("legacy_workspace_id", "legacy_real_scope", "_legacy_workspace")
 
-    LEGACY_ID = "legacy_workspace_id"
-    LEGACY_ID_ALLOWED = {
-        Path("myapp/infrastructure/workspaces.py"),
-        Path("myapp/presentation/views.py"),
-    }
-
-    @staticmethod
-    def _users(name: str) -> set[Path]:
+    def test_no_legacy_name_is_left_in_the_app(self):
         root = Path(__file__).resolve().parents[3]
-        return {
-            path.relative_to(root)
+        users = {
+            (path.relative_to(root), name)
             for path in (root / "myapp").rglob("*.py")
-            if "tests" not in path.relative_to(root).parts and name in path.read_text(encoding="utf-8")
+            if "tests" not in path.relative_to(root).parts
+            for name in self.NAMES
+            if name in path.read_text(encoding="utf-8")
         }
-
-    def test_no_command_uses_the_legacy_workspace(self):
-        self.assertEqual(self._users(self.NAME), set(), "一時関数のワークスペースで範囲を作る管理コマンドがあります")
-
-    def test_the_legacy_workspace_id_stays_at_the_entrances(self):
-        users = self._users(self.LEGACY_ID)
-        self.assertIn(Path("myapp/presentation/views.py"), users, "検査の対象を拾えていません")
-        self.assertEqual(
-            users - self.LEGACY_ID_ALLOWED, set(), "入口の外で一時関数のワークスペース（id が最小）を使っています"
-        )
+        self.assertEqual(users, set(), "一時関数のワークスペース（id が最小）の名前が残っています")
 
 
 class ForeignQuotaExemptionScopeTest(SimpleTestCase):

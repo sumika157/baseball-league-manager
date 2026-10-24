@@ -14,7 +14,16 @@ from myapp.domain.pennant.schedule import AdvanceTarget
 from myapp.infrastructure import orm_models
 from myapp.presentation.views import build_pennant_season_service
 
-from ..helpers import build_roster_service, header_pages, make_league, make_stadium, real_scope, world_scope, ws_url
+from ..helpers import (
+    build_roster_service,
+    header_pages,
+    make_editor,
+    make_league,
+    make_stadium,
+    real_scope,
+    world_scope,
+    ws_url,
+)
 from ..integration.test_pennant_advance import register_club
 from .base import PlaywrightTestCase
 
@@ -32,7 +41,8 @@ class PennantFlowTest(PlaywrightTestCase):
         roster = build_roster_service(real_scope())
         register_club(roster, self.team, "ホ")
         register_club(roster, self.rival, "ラ")
-        User.objects.create_user(username="gm", password="pass12345")
+        # 世界を作れるのはワークスペースの持ち主・編集者（W2 T4）
+        make_editor(User.objects.create_user(username="gm", password="pass12345"))
 
     def _login(self):
         self.page.goto(self.live_server_url + "/accounts/login/")

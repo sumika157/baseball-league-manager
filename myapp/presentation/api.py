@@ -10,7 +10,7 @@ presentation/forms.py のフォームを行単位で使い、業務ルール（�
 
 import json
 
-from django.http import Http404, JsonResponse
+from django.http import JsonResponse
 from django.views.decorators.http import require_POST
 
 from ..domain.exceptions import DomainError, GameNotFound
@@ -106,9 +106,10 @@ def game_scorebook(request, game_id):
 
     得点・イニングスコア・登板順・勝敗は受け取らない。すべて打席から導く
     （受け取ると「記録と食い違う得点」を保存できてしまう）。
+
+    ワークスペースの解決・閲覧の可否・ログインは `workspace_view(json=True)` が済ませてから呼ぶ（未ログインは 403、
+    無い・見えないワークスペースは 404 の JSON）。ここではチームの編集権を判定する。
     """
-    if not request.user.is_authenticated:
-        return JsonResponse({"ok": False, "error": "ログインが必要です。再度ログインしてください。"}, status=403)
 
     try:
         body = json.loads(request.body)
@@ -117,11 +118,7 @@ def game_scorebook(request, game_id):
     if not isinstance(body, dict):
         return JsonResponse({"ok": False, "error": "リクエストの形式が不正です。"}, status=400)
 
-    try:
-        scope = _real_scope(request)
-    except Http404:
-        # ワークスペースが1つも無い（運営者が最初の1つを作る前）。ほかのエラーと同じ JSON の形で返す
-        return JsonResponse({"ok": False, "error": "ワークスペースがありません。"}, status=404)
+    scope = _real_scope(request)
     service = build_recording_service(scope)
     try:
         team_ids = service.get_game_team_ids(game_id)

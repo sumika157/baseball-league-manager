@@ -984,3 +984,75 @@ W2 の T0。`refactor/merge-main-into-workspaces-3` で、epic 2e76eae に main 
 - 未ログインは基点と T3 で**全画面のクエリ数が同じ**、応答時間は揺れの範囲（URL を組む補助は `reverse` を1段包むだけ）。
 - ログインした人は、全画面で +2（セッションと利用者の行）。権限を判定する画面（選手一覧・選手詳細・試合一覧・試合詳細）はさらに +1（`DjangoTeamPermissionQuery`。持ち主・担当とも1本）。T4 の完了条件（担当・部外者は +1 まで）と T5 の見込み（持ち主・編集者は判定のある画面で −1）は、この表の持ち主・担当の列と比べる。
 - ペナントの画面は W1b T0（未ログインではなく superuser で測った同じ手順）と比べて、クエリは一覧 +2・世界の画面 +1〜+5（W1b T0 の後の変更の分。内訳は追っていない）。応答時間は同程度。
+
+#### T4 URL にワークスペースを入れる（`feature/workspace-urls`、2026-10-24）
+
+W2 の本体。ワークスペースの中の画面43本（実データ20・ペナント23）を `/w/<key>/` の下へ移し、URL の key から解決するようにした。マイグレーションは無い。
+
+- URL: `config/urls.py` が `path("w/<wskey:key>/", include(workspace_urlpatterns))`、`/` は新しいトップ `home`。パスコンバータ `presentation/converters.py` の `WorkspaceKeyConverter`（正規表現はドメインの `KEY_LENGTH`・`KEY_ALPHABET` から作る）。形の合わない key は URL の解決で外れ、DB を読まずに 404。古い URL（`/teams/`・`/pennant/` など）は 404（リダイレクトしない）。
+- 登録の補助 `myapp/urls.py` の `_w(route, view, name, *, login=False, json=False)`（`_pennant()` も通す）が**必ず** `views.workspace_view` で包む。`login=True` は試合の登録・編集と選手の編集（`@login_required` は外した）、`json=True` はスコアブックの保存 API。
+- `workspace_view`（`views.py`）: `build_workspace_access_query().resolve(key, user_id)`（1要求で1回）→ 無い key は 404 → `can_view()` でなければ未ログインはログインへ（`next` つき）・ログイン済みは 404 → `login=True` の画面と未ログインの POST はログインへ → `request.workspace`（`WorkspaceContext`）を載せて key 抜きの引数でビューを呼ぶ。`json=True` は未ログイン 403・無い／見えない 404 の JSON（未ログインは key を引く前に 403。API の中の未ログインと「ワークスペースがありません」の分岐は消した）。
+- `_workspace_id(request)` は `request.workspace.workspace_id`（載っていなければ `WorkspaceNotResolved`。黙って既定に落とさない）。`_url(request, …)` も同じ key を足す。`_verified_world_ids` は（ワークスペースの id, 世界の id）の組。`infrastructure/workspaces.py` の `legacy_workspace_id()` を消し、`test_wiring.py` の `LegacyWorkspaceIsGoneTest` が `legacy_workspace_id`・`legacy_real_scope`・`_legacy_workspace` の名前がテスト以外の `myapp/` に無いことを固定する。
+- テンプレート: コンテキストプロセッサ `presentation/context_processors.workspace`（`settings.TEMPLATES` に登録）が `workspace` を渡し、`scoped_url`・`workspace_url`（`_workspace_reverse`）がその key を先頭に足す。`workspace` が無ければ `WorkspaceMissing`（key の無い URL を作らない）。`/` の一覧は行ごとの key で入口を引く `{% workspace_entry_url key %}` を足した（計画に無い。素の `{% url 'dashboard' key %}` は T3 の検査が中の名前として弾くため）。
+- `base.html`: ロゴは `home`。ワークスペースの中（`{% if workspace %}`）でだけ、名前（ダッシュボードへ）・公開範囲・自分の役割（ログイン時。表示名は `Visibility`・`WorkspaceRole`）のバッジと、選手検索・戦力分析・ペナントの導線。パンくずの起点の「ダッシュボード」17か所をワークスペースの名前に。`404.html` とパスワード変更の2画面の「チーム一覧へ」は「トップへ」（`home`）。`test_templates.py` の `OUTSIDE_LINKS` と「例外の表が古くない」検査は表ごと消した。
+- `home`（`/`）: ログイン時は `build_workspace_list_query().list_for(user_id)`（名前順・名前・公開範囲・役割・入口へのリンク）。未ログイン時は紹介・見本のワークスペースへのリンク（`settings.SAMPLE_WORKSPACE_KEY`。環境変数。設定があり・key があり・公開のときだけ）・新規登録とログイン。作成フォームは無い（W4）。`LOGIN_REDIRECT_URL = "home"`。`.env.example` に `SAMPLE_WORKSPACE_KEY=`。
+- ペナントの世界の作成: `request.workspace.access.can_create_world()`（持ち主・編集者）に絞り、作成フォームもその人にだけ出す。ほかのログインした人の POST は 403。空の一覧の文言を「世界を作れるのは、このワークスペースの持ち主と編集者です（ログインが必要です）」に。進める・締める・編成・削除は世界の作成者のまま。
+- CSRF の失敗（`presentation/csrf.py`）: API かどうかを `request.path.startswith("/api/")` から URL 名（`resolver_match`、無ければ `resolve()`。`api_` で始まる）に替えた。
+- `measure_pages`: `_url` が key を足す。docstring・Wiki「仮想データの投入」の「T3 の時点ではほかの key は 404」を消した。
+- チームの書き込みの判定（`DjangoTeamPermissionQuery`。staff の特権が残る）は替えていない（T5）。
+
+**計画からのずれ**
+
+- 未ログインの POST をデコレータでログインへ送るので、読むだけの画面（`require_GET`・`require_safe`）への未ログインの POST は 405 ではなく 302 になる（ログインした人は今どおり 405）。既存のテスト2つ（戦力分析・球団史）を「未ログインは 302、ログインした人は 405」に替えた。
+- `{% workspace_entry_url %}` を足した（上）。
+- 計測の写し: 共有の開発 DB に `epic/postseason` のマイグレーション（`myapp_game.stage` 列ほか）が当たっていたので、写しから `stage` 列を落としてから `migrate` した（epic/workspaces のコードはこの列を知らず、世界の進行が `NOT NULL` で落ちる）。ほかの差（使われない表）は残した。既定のワークスペースの key は写しを作るたびに変わる（`ye8gj0k9h4`）。
+
+**テスト**
+
+- `test_workspace_isolation.py`（中心）: `EveryWorkspaceUrlTest` を足した。分類表 `URL_TABLE`（URL 名 → 引数（`Side` の属性）・種類（画面・書き込み・API）・ログインが要るか）と `workspace_urlpatterns` の名前が一致すること・全パターンの callback が `workspace_view` の包み（`__code__`）で、`login`・`json` が表と同じこと・(1)(5) A の key の下で B の id（チーム・選手・試合・リーグ・世界とその中の id）は 404（API は JSON の 404）・(2)(6)(7) A の画面（未ログイン・A の持ち主）に B の目印が出ず（選手検索を含む）、リンク（`href`・`action`）は `/w/<A の key>/` か `/`・`/accounts/`・`/admin/`・`/static/`・CDN だけ・(3) B を非公開にすると、全パターンで未ログインは `next` つきでログインへ（API は 403）、A の持ち主（B の部外者）は 404 で `request.workspace` が載らない、B の編集者と担当は門を通る（`request.workspace` が B）・公開の B は部外者も読める（空振りの防止）。`CurrentUrlsShowOnlyTheLegacyWorkspaceTest` は `UrlsShowOnlyTheirWorkspaceTest`（B の key では B だけが見える）に、`NoWorkspaceTest` は「中の URL は 404・`/` は開く・管理画面のトップは開く」に替えた。`WorldPagesOfTheOtherWorkspaceTest` は新しい URL のまま残し、作成フォームの検査は B のオーナーを A の編集者にして確かめる。`WorldScopeIsVerifiedAgainstTheLedgerTest` は解決済みのワークスペースを載せた要求で、`workspace_view` を通らない要求は `WorkspaceNotResolved`・B で確かめた世界の id を A の範囲で通さないことを足した。
+- `test_workspace_urls.py`（新）: 古い URL は 404・形の合わない key は 404 で `assertNumQueries(0)`・形はドメインの定数から・無い key は 404・`/` の未ログイン（見本のリンクは設定があり、key があり、公開のときだけ）・ログイン時の一覧（名前順・役割と公開範囲・入っていない公開ワークスペースは出ない）と、一覧のクエリ数がワークスペースの数によらない・ログイン後は `/`・非公開の URL からログインして同じ URL に戻る・部外者は 404・リダイレクトが同じ key の下（選手の登録と退団・試合の登録・`analysis_index` の `?team=`・ペナントの進める・締める（GET と不正な POST）・削除）・API の `redirect_url`・`_url` が要求の key を足す・views と API が `_url` の外で `reverse`／名前の `redirect` を使わない（AST）・`404.html` がワークスペースの外でも描ける（`DEBUG=False`。再発防止）と、中の 404 はヘッダーを保つ。
+- CSRF の失敗が `/w/<key>/api/...` でも JSON になることは、`test_csrf.py`（`ws_url` 経由で key つきの URL を叩く）が確かめる。
+- ほか: `ws_url` が key を足す（`workspace` を省けば既定の `defaultws0`。DB は読まない）、`make_editor()`・`header_pages()` に `/`、`test_scoped_url.py`（key の先頭・外では例外・`workspace_entry_url`）、世界の作成のテストは作る人を編集者に、`game_edit_payload.json` の URL、e2e（既定のワークスペースを作る・世界を作る人を編集者に）。
+- 件数: domain＋integration 3,499（T3 の先端より +21）、e2e 13。
+
+**変異の確かめ**（domain＋integration を流し、どれも戻した）
+
+| 変異 | 落ちたテスト |
+| --- | --- |
+| `workspace_view` が公開範囲を見ない | 3件（81 の部分テスト） |
+| `resolve` が key を見ず、id が最小のワークスペースを返す | 14件 |
+| `can_edit_teams` が常に真 | 5件（T5 で画面の検査が足される） |
+| 確かめた世界を世界の id だけで覚える | 1件 |
+| `_w` を通さず `path()` で登録する（試合一覧だけ） | 33件 |
+| 世界の作成をログインした人なら誰でもに戻す | 2件 |
+
+**計測（2026-10-24）**: 「W2 の計測の基準」と同じ手順。開発 DB を `backup()` で `/tmp/w2-t4/db.sqlite3` に写し（`integrity_check` ok・試合 3,480。上の `stage` 列を落とした）、T4 のコードで `migrate` → `pennant_create`（2リーグ・世界 1・球団12・選手966人）→ `pennant_advance --to week`（36試合）。写しの上だけで `s-sato`（staff でない）を球団 1 の担当にした。基点 e5aadc4（T3 の先端。使い捨ての worktree）と T4 を交互に3回ずつ、未ログイン・持ち主（`admin`。`--world 1` でペナントも）・担当（`s-sato`）で流した。中央値（応答 ms / SQL ms / クエリ）。写しと使い捨ての worktree は計測後に消した。
+
+| 画面 | 基点・未ログイン | T4・未ログイン | 基点・持ち主 | T4・持ち主 | 基点・担当 | T4・担当 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| ダッシュボード | 493/61/11 | 517/64/11 | 517/65/13 | 507/62/13 | 492/62/13 | 517/62/14 |
+| チーム一覧 | 10/3/3 | 12/3/3 | 13/3/5 | 13/3/5 | 13/3/5 | 14/3/6 |
+| 順位表 | 69/3/5 | 69/3/5 | 71/3/7 | 71/3/7 | 69/3/7 | 72/3/8 |
+| 順位表(2026) | 66/3/5 | 67/3/5 | 66/3/7 | 68/3/7 | 66/3/7 | 72/3/8 |
+| 選手一覧(野手) | 262/9/28 | 285/10/28 | 259/9/31 | 274/10/31 | 254/9/31 | 281/10/32 |
+| 選手一覧(投手) | 249/6/28 | 272/8/28 | 247/6/31 | 267/7/31 | 256/6/31 | 274/7/32 |
+| 選手詳細 | 91/2/16 | 93/2/16 | 91/2/19 | 91/3/19 | 93/2/19 | 94/2/20 |
+| 選手検索 | 15/1/5 | 13/1/5 | 15/1/7 | 16/1/7 | 15/1/7 | 16/2/8 |
+| リーグ詳細 | 106/6/6 | 101/6/6 | 114/6/8 | 109/6/8 | 108/6/8 | 115/6/9 |
+| リーグ成績 | 134/5/9 | 140/7/9 | 141/6/11 | 143/6/11 | 139/6/11 | 146/6/12 |
+| リーグタイトル | 70/9/8 | 67/9/8 | 68/9/10 | 69/9/10 | 69/9/10 | 71/9/11 |
+| 試合一覧 | 102/15/7 | 109/15/7 | 101/14/10 | 104/14/10 | 103/16/10 | 109/15/11 |
+| 試合詳細 | 506/33/18 | 511/32/18 | 492/32/21 | 488/32/21 | 504/34/21 | 513/34/22 |
+| 戦力分析 | 38/6/9 | 35/6/9 | 36/6/11 | 40/6/11 | 39/6/11 | 40/6/12 |
+| 戦力分析（起用マップ） | 28/6/9 | 28/6/9 | 26/5/11 | 28/5/11 | 29/6/11 | 30/6/12 |
+| 戦力分析（FA取得） | 43/11/14 | 44/10/14 | 43/10/16 | 42/9/16 | 43/11/16 | 46/11/17 |
+
+ペナント（持ち主 `admin`。基点 → T4）: ペナント一覧 25/3/16 → 26/3/16、世界ダッシュボード 151/4/53 → 158/4/53、世界の順位表 11/0/11 → 11/0/11、世界のリーグ詳細 14/1/12 → 14/1/12、世界のリーグ成績 122/0/17 → 121/0/17、世界のチーム一覧 9/1/9 → 9/1/9、世界の選手一覧 122/2/45 → 118/2/45、世界の試合一覧 14/1/13 → 14/1/13、世界の戦力分析 36/1/15 → 36/1/15、世界の球団ホーム 63/4/30 → 63/4/30。
+
+- **完了条件を満たす**: 未ログインと持ち主は全画面で基準と同じクエリ数（一時関数の1本が key の1本に替わっただけ。持ち主は編集者の有無を同じ1本の注釈で読む）。担当は全画面で +1（担当チームの id の2本目）。ペナントの10画面も同じ。
+- 応答時間は揺れの範囲（選手一覧が未ログインで +9% ほどだが、クエリ数も SQL 時間も同じで、持ち主・担当でも同程度。共有コンテナの揺れの幅）。
+- `/`（同じ写しで、使い捨てのユーザーとワークスペースを足して）: 未ログイン 0 クエリ（見本の設定なし。設定すれば key を引く1本）。ログインしてワークスペース1つのユーザー・4つ（持ち主3・編集者1）のユーザーとも**3クエリ**（セッション・利用者・一覧1本）、応答 3ms。数に比例しない。
+
+**レビュー（`ddd-boundary-reviewer`）**: 重要な指摘なし。軽微3件: (1) 未ログインの人には、無い key（404）とある非公開の key（ログインへ）で応答が分かれる → 計画どおり（ログインへ送る便利さを取る。key は推測しにくい）として Wiki「アーキテクチャ」に明記した。(2) `DjangoTeamPermissionQuery` は `is_staff` に範囲のどのチームの書き込みも許すので、URL にワークスペースが入った今、公開ワークスペースにメンバーでない運営者が書き込める（閲覧の判定と書き込みの判定が食い違う）→ T5 で直す。**T5 が入るまで epic を main に入れない**。(3) `myapp/urls.py` の docstring の検査の参照先 → 直した。
+
+**T5 に回すもの**: チームの書き込みの判定（`_requires_team_permission`・`can_edit_team` などのフラグ・`game_create`・`game_edit`・`player_edit`・API）を `request.workspace.access` へ替え、`DjangoTeamPermissionQuery`・`build_permission_query` を消す（上の (2) の食い違いを閉じる）。権限の真理値表の画面の検査（`test_workspace_permissions.py`）・他所の id を混ぜる経路（`test_cross_workspace_ids.py`）・全 POST を B の key に送る検査。Wiki「ワークスペースと共有」の新設。

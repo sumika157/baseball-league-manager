@@ -14,10 +14,14 @@ from ..helpers import ws_url
 
 
 class ScorebookApiCsrfTest(TestCase):
-    """スコアブックの保存 API（`api_game_scorebook`）。存在しない試合に空の JSON を送り、403 かどうかだけを見る。"""
+    """スコアブックの保存 API（`api_game_scorebook`）。存在しない試合に空の JSON を送り、403 かどうかだけを見る。
+
+    URL はワークスペースの下（`/w/<key>/api/...`）。API かどうかはパスの形ではなく URL 名で決める（W2 T4）。
+    """
 
     def setUp(self):
         self.url = ws_url("api_game_scorebook", 999999)
+        self.assertTrue(self.url.startswith("/w/"), self.url)
         self.client = Client(enforce_csrf_checks=True)
         # ログイン済みにして、未ログインの 403 と CSRF の 403 を取り違えないようにする
         self.client.force_login(User.objects.create_user("csrf-check", password="x"))
@@ -56,7 +60,7 @@ class ScorebookApiCsrfTest(TestCase):
 
 class CsrfFailureOutsideApiTest(TestCase):
     def test_non_api_failure_renders_403_template(self):
-        """`/api/` 以外は、JSON ではなく 403.html（日本語の HTML）を返す。"""
+        """保存 API 以外は、JSON ではなく 403.html（日本語の HTML）を返す。"""
         client = Client(enforce_csrf_checks=True)
 
         response = client.post(reverse("login"), {"username": "a", "password": "b"})
