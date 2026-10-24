@@ -637,3 +637,15 @@ class OffseasonViewScopeTest(SimpleTestCase):
         for bad in (0, -1, True):
             with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
                 build_offseason_view_service(bad)
+
+
+class ForeignQuotaExemptionScopeTest(SimpleTestCase):
+    """FA 資格の取得による外国人枠の対象外は、使う側と同じ範囲の記録だけで導く（実データと世界の FA を混ぜない）。"""
+
+    def test_the_scorebook_reads_the_real_data(self):
+        self.assertEqual(build_recording_service()._fa_exemptions._query._scope, REAL)
+
+    def test_the_pennant_services_read_their_own_world(self):
+        for build in (build_pennant_season_service, build_club_service, build_pennant_offseason_service):
+            with self.subTest(build=build.__name__):
+                self.assertEqual(build(7)._fa_exemptions._query._scope, WorldScope.pennant(7))

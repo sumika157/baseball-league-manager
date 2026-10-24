@@ -59,6 +59,7 @@ from .dto import (
     ClubPlayerRow,
     ClubRosterCounts,
 )
+from .foreign_quota import ForeignQuotaExemptions
 from .pennant_season import pitching_history, pool_of
 from .queries import SimulationContextQuery
 
@@ -79,6 +80,7 @@ class ClubManagementService:
         ratings: RatingsRepository,
         fixtures: FixtureRepository,
         context_query: SimulationContextQuery,
+        fa_exemptions: ForeignQuotaExemptions,
     ) -> None:
         self._world_id = world_id
         self._worlds = worlds
@@ -86,6 +88,8 @@ class ClubManagementService:
         self._ratings = ratings
         self._fixtures = fixtures
         self._context_query = context_query
+        # FA 資格の取得による外国人枠の対象外（協約 第82条 (4)。進めるときと同じ年で導く）
+        self._fa_exemptions = fa_exemptions
 
     # --- 見る ---
 
@@ -278,7 +282,10 @@ class ClubManagementService:
         # 受け持つ球団の選手だけ読む（世界の全選手の能力は要らない）
         found = self._ratings.find_by_players([player.player_id for player in team.players], year)
         ratings = {item.player_id: item.ratings for item in found}
-        pool = pool_of(team, ratings)
+        foreign_player_ids = frozenset(player.player_id for player in team.players if player.is_foreign)
+        # 枠で数えるかは、進めるときと同じ年（能力を引く年）で導く
+        exemptions = self._fa_exemptions.for_year(foreign_player_ids, year)
+        pool = pool_of(team, ratings, exemptions=exemptions)
         # 試合の外国人枠は、進めるときと同じく世界のリーグで最も厳しい規則（交流戦でも組めるように）
         limits = ClubLimits(
             active_foreign=team.foreign_rules,
@@ -291,7 +298,7 @@ class ClubManagementService:
             pool,
             limits,
             frozenset(player.player_id for player in team.players),
-            frozenset(player.player_id for player in team.players if player.is_foreign),
+            foreign_player_ids,
         )
 
     def _current_year(self) -> int:
@@ -331,6 +338,10 @@ class _Situation:
     def _ids_of(roster: ClubRoster) -> set[int]:
         return {b.player_id for b in roster.batters} | {p.player_id for p in roster.pitchers}
 
+    def _is_quota_exempt(self, player_id: int) -> bool:
+        """外国人選手のうち、この年の外国人枠で数えない人か（FA 資格の取得。`pool_of` が決めた値を読む）。"""
+        return player_id in self.foreign_player_ids and not self.members[player_id].counts_as_foreign
+
     def active_ids(self, plan: ClubPlan) -> set[int]:
         """いま 1軍にいる選手（1軍登録が自動か、使えない手動なら AI が選んだ人）。"""
         return self._ids_of(resolve_club(plan, self.pool, self.limits).roster)
@@ -366,7 +377,12 @@ class _Situation:
             year=self.year,
             players=tuple(
                 ClubPlayerRow(
-                    m.player_id, m.name, m.position, m.player_id in self.foreign_player_ids, m.player_id in active_ids
+                    m.player_id,
+                    m.name,
+                    m.position,
+                    m.player_id in self.foreign_player_ids,
+                    m.player_id in active_ids,
+                    quota_exempt=self._is_quota_exempt(m.player_id),
                 )
                 for m in self.members.values()
             ),
@@ -395,6 +411,7 @@ class _Situation:
                 foreign=foreign_pitchers + foreign_batters,
                 foreign_pitchers=foreign_pitchers,
                 foreign_batters=foreign_batters,
+                foreign_exempt=sum(1 for player_id in active_ids if self._is_quota_exempt(player_id)),
             ),
             saved_active_ids=plan.active_ids,
             saved_lineup=(

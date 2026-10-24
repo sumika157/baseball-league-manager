@@ -21,6 +21,7 @@ from ..domain.value_objects import FieldingLine
 from .dto import (
     ActivePlayerStats,
     AwardRow,
+    FaSubjects,
     GameNote,
     GameRow,
     HomeStadium,
@@ -304,6 +305,14 @@ class ServiceHistoryQuery(Protocol):
 
     def load_service_history(self, player_ids: list[int], year: int) -> ServiceHistory:
         """選手の year 年までの年ごとの初出場〜最終出場と、全在籍の契約・FA 宣言。固定本数。"""
+        ...
+
+    def load_fa_subjects(self, player_ids: list[int], through_year: int) -> FaSubjects:
+        """選手の属性（ドラフト・外国人選手フラグ・学歴）と最初の在籍の加入年・FA 宣言・記録のある最初の年。
+
+        `through_year` 年までを読む。出場（`load_service_history`）より軽い前段で、外国人枠の対象外を導くとき、
+        取得しえない選手の出場を読まないために使う。固定本数。
+        """
         ...
 
 

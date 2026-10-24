@@ -172,8 +172,9 @@ class ForeignPlayerRules:
 
         **投手か野手かを数える入口**（協約の「投手又は野手として登録申請」。登録位置が投手なら投手、
         それ以外は野手。その試合で何をしたかでは数えない）。スコアブックの保存・ペナントの編成と試合・
-        仮想データの投入がここを通る。**誰を数えるか（その年の外国人枠の対象か）は呼ぶ側が決め**、数える選手の
-        登録位置だけを渡す（シミュレーションの型では `counts_as_foreign` の選手）。
+        仮想データの投入がここを通る。**誰を数えるか（その年の外国人枠の対象か）は呼ぶ側が
+        `domain/services/foreign_quota.py` の `counts_toward_foreign_quota` で決め**、数える選手の登録位置だけを渡す
+        （シミュレーションの型では `counts_as_foreign` の選手）。
         """
         listed = list(positions)
         pitchers = sum(1 for position in listed if position.is_pitcher)
