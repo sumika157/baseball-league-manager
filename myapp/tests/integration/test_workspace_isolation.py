@@ -7,6 +7,9 @@
 - (1) `repositories`・`queries` の `Django*` をモジュールから列挙し、すべてを検査の表（`CHECKS`）で検査する。
   表に無いクラスがあれば落ちる（新しい実装を足したら、漏れないかをここで決めさせる）。
 - (2) A の範囲で B の id を `find_by_id` すると NotFound。
+- (3) 球場（W1b T4）: 範囲の球場はそのワークスペースの球場だけ（ペナントの範囲も同じ）。A の球団が B の球場を
+  指していても、A の範囲の読み取りは本拠地なしとして読む。A の範囲で B の球場を本拠地にして保存すると
+  `StadiumNotFound` で、チームも選手も書かれない。管理画面の組み合わせは `test_admin_workspaces.py`。
 - (4) 世界の台帳（`DjangoWorldRepository`・`DjangoWorldSummaryQuery`。W1b T3）: A の台帳に B の世界が出ず、
   B の世界の id は `WorldNotFound`。A の台帳で B の世界を保存・削除できず、何も変わらない。今の URL で
   B の世界（`/pennant/<B の世界>/` とその下）を開くと 404、`/pennant/` には A の世界だけが出る。
@@ -34,6 +37,7 @@ from myapp.domain.exceptions import (
     InvalidAward,
     InvalidWorld,
     LeagueNotFound,
+    StadiumNotFound,
     TeamNotFound,
     WorldNotFound,
 )
@@ -41,7 +45,7 @@ from myapp.domain.pennant.awards import Award
 from myapp.domain.pennant.release import ReleasePlan
 from myapp.domain.pennant.world import MAX_WORLDS_PER_OWNER, WORLD_LIMIT_MESSAGE, World, WorldScope
 from myapp.domain.services.rankings import Title
-from myapp.domain.value_objects import BattingLine, PitchingLine, Season
+from myapp.domain.value_objects import BattingLine, JerseyNumber, PitchingLine, Position, RosterLimits, Season
 from myapp.infrastructure import orm_models, queries, repositories
 from myapp.infrastructure.queries import (
     DjangoAwardQuery,
@@ -72,7 +76,7 @@ from myapp.infrastructure.repositories import (
     DjangoTeamRepository,
     DjangoWorldRepository,
 )
-from myapp.infrastructure.scoping import players_in
+from myapp.infrastructure.scoping import players_in, stadiums_in
 from myapp.presentation import views
 from myapp.presentation.club_input import ACTION_MANUAL, ACTION_SAVE, RELEASE_SECTION
 from myapp.presentation.views import build_pennant_world_service
@@ -114,6 +118,8 @@ class WorkspaceCase(BaseCase):
     表ごとに効いているかを、行がある状態で確かめるため）。
     世界: A のリーグから分岐した A の世界（`A_WORLD`）と、B のリーグから分岐した B の世界（`B_WORLD`。オーナーは
     `b_owner`）。世界の台帳の検査に使う。B の世界には表彰の行も1つ直接置く（表彰はペナントの世界にしか無い）。
+    球場: A の相手チームと、A の世界のその写しの本拠地を、ORM で B の球場に向けておく（`_plant_stray_stadiums`。
+    範囲の読み取りが B の球場を出さないことを、ほかの検査と同じ目印で確かめる）。
     準備はクラスで1回（`setUpTestData`）。
     """
 
@@ -133,6 +139,7 @@ class WorkspaceCase(BaseCase):
     b_owner: User
     b_award_player_id: int
     b_award_team_id: int
+    a_world_stray_team_id: int
 
     @classmethod
     def setUpTestData(cls):
@@ -180,6 +187,22 @@ class WorkspaceCase(BaseCase):
                 .world.id
             )
         cls._plant_b_award()
+        cls._plant_stray_stadiums()
+
+    @classmethod
+    def _plant_stray_stadiums(cls) -> None:
+        """A の球団に B の球場を指させる（W1b T4）。
+
+        リポジトリは範囲の外の球場を本拠地として書かない（`StadiumNotFound`）ので、ORM で直接書く
+        （管理画面の直書き・古いデータなど、書き込みの検査を通らない行の代わり）。A の範囲の読み取りは
+        これを本拠地なしとして読み、B の球場の名前（目印）も収容人数も出さないこと。
+        世界を作った後に置く（分岐は本拠地を写すので、先に置くと A の世界の分岐が `StadiumNotFound` になる）。
+        """
+        orm_models.Team.objects.filter(id=cls.rival.id).update(home_stadium=cls.b_stadium)
+        cls.a_world_stray_team_id = orm_models.Team.objects.get(
+            league__world_id=cls.a_world_id, name=cls.rival.name
+        ).id
+        orm_models.Team.objects.filter(id=cls.a_world_stray_team_id).update(home_stadium=cls.b_stadium)
 
     @classmethod
     def _plant_b_award(cls) -> None:
@@ -328,7 +351,9 @@ def _fielding_totals_query(t: WorkspaceCase) -> None:
 def _simulation_context_query(t: WorkspaceCase) -> None:
     query = DjangoSimulationContextQuery(t.a)
     t.assertEqual(query.last_played_on(), date(YEAR, 4, 1), "B の試合の日付を A の最後の試合日にした")
-    t.assertEqual({team.team_id for team in query.teams()}, {t.team.id, t.rival.id})
+    teams = {team.team_id: team for team in query.teams()}
+    t.assertEqual(set(teams), {t.team.id, t.rival.id})
+    t.assertIsNone(teams[t.rival.id].stadium_capacity, "B の球場の収容人数を A の球団の本拠地として読んだ")
     context = query.load(before=date(B_YEAR + 1, 1, 1))
     t.assertEqual({team.team_id for team in context.teams}, {t.team.id, t.rival.id})
     t.assert_no_mark(context)
@@ -391,10 +416,19 @@ def _team_list_query(t: WorkspaceCase) -> None:
     summaries = DjangoTeamListQuery(t.a).list_summaries()
     t.assertEqual({summary.id for summary in summaries}, {t.team.id, t.rival.id})
     t.assert_no_mark(summaries)
+    by_id = {summary.id: summary for summary in summaries}
+    t.assertEqual((by_id[t.rival.id].stadium_name, by_id[t.rival.id].city), ("", ""), "B の球場を本拠地として読んだ")
+    # 空振りの防止: A の球場は読める
+    t.assertEqual((by_id[t.team.id].stadium_name, by_id[t.team.id].city), (t.stadium.name, t.stadium.city))
 
 
 def _home_stadium_query(t: WorkspaceCase) -> None:
-    t.assertIsNone(DjangoHomeStadiumQuery(t.a).home_stadium_of(t.b_team.id))
+    query = DjangoHomeStadiumQuery(t.a)
+    t.assertIsNone(query.home_stadium_of(t.b_team.id))
+    t.assertIsNone(query.home_stadium_of(t.rival.id), "B の球場を A の球団の本拠地として読んだ")
+    stadium = query.home_stadium_of(t.team.id)
+    t.assertIsNotNone(stadium, "A の球場を読めていない（検査が空振りする）")
+    t.assertEqual(stadium.name if stadium else None, t.stadium.name)
 
 
 def _season_playing_time_query(t: WorkspaceCase) -> None:
@@ -736,6 +770,157 @@ class MisbuiltWorldScopeGameWritesTest(WorkspaceCase):
             with self.subTest(write=label), self.assertRaises(WorldNotFound):
                 write()
         self.assertEqual(orm_models.Game.objects.count(), before, "取り違えた範囲で B の世界に試合を書いた")
+
+
+class StadiumsInTest(WorkspaceCase):
+    """(3) 球場はワークスペース直属。実データの範囲でもペナントの範囲でも、そのワークスペースの球場だけ（W1b T4）。"""
+
+    def test_each_scope_sees_only_the_stadiums_of_its_workspace(self):
+        a_world = WorldScope.pennant(self.workspace.id, self.a_world_id)
+        b_world = WorldScope.pennant(self.workspace_b.id, self.b_world_id)
+        for scope, expected in (
+            (self.a, {self.stadium.id}),
+            (a_world, {self.stadium.id}),
+            (real_scope(self.workspace_b), {self.b_stadium.id}),
+            (b_world, {self.b_stadium.id}),
+        ):
+            with self.subTest(scope=str(scope)):
+                self.assertEqual(set(stadiums_in(scope).values_list("id", flat=True)), expected)
+
+    def test_a_world_reads_the_stadiums_of_its_workspace_only(self):
+        """A の世界の球団は A の球場を本拠地として読め、B の球場を指す球団は本拠地なしになる。"""
+        a_world = WorldScope.pennant(self.workspace.id, self.a_world_id)
+        copied = orm_models.Team.objects.get(league__world_id=self.a_world_id, name=self.team.name)
+        query = DjangoHomeStadiumQuery(a_world)
+        stadium = query.home_stadium_of(copied.id)
+        self.assertEqual(stadium.name if stadium else None, self.stadium.name, "分岐した球団が元の球場を読めない")
+        self.assertIsNone(query.home_stadium_of(self.a_world_stray_team_id))
+        self.assert_no_mark(DjangoTeamListQuery(a_world).list_summaries())
+        capacities = {team.team_id: team.stadium_capacity for team in DjangoSimulationContextQuery(a_world).teams()}
+        self.assertIsNone(capacities[self.a_world_stray_team_id], "B の球場の収容人数で A の世界の観客数を作る")
+
+    def test_a_fork_keeps_the_stadium_of_its_own_workspace(self):
+        """B の世界の分岐は、B の範囲で B の球場を写せた（本拠地の検査を通る）。"""
+        copied = orm_models.Team.objects.get(league__world_id=self.b_world_id, name=B_TEAM)
+        self.assertEqual(copied.home_stadium_id, self.b_stadium.id)
+
+    def test_the_team_list_page_does_not_show_bs_stadium(self):
+        response = self.client.get(reverse("team_list"))
+
+        self.assertContains(response, self.stadium.name)
+        self.assertNotContains(response, B_STADIUM)
+
+
+class HomeStadiumWritesTest(WorkspaceCase):
+    """(3) A の範囲で B の球場を本拠地にして保存すると `StadiumNotFound` で、チームも選手も書かれない（W1b T4）。"""
+
+    def _snapshot(self):
+        return (
+            list(orm_models.Team.objects.order_by("id").values()),
+            list(orm_models.Player.objects.order_by("id").values()),
+            list(orm_models.PlayerStint.objects.order_by("id").values()),
+        )
+
+    def _with_new_player(self, team: DomainTeam) -> DomainTeam:
+        team.add_player(
+            "新入団", JerseyNumber("77"), Position.INFIELDER, from_year=YEAR, limits=RosterLimits.UNLIMITED
+        )
+        return team
+
+    def test_saving_a_team_with_bs_stadium_raises_and_writes_nothing(self):
+        a_world = WorldScope.pennant(self.workspace.id, self.a_world_id)
+        copied_id = orm_models.Team.objects.get(league__world_id=self.a_world_id, name=self.team.name).id
+        world_league_id = orm_models.League.objects.get(world_id=self.a_world_id).id
+
+        def existing(scope, team_id):
+            team = self._with_new_player(DjangoTeamRepository(scope).find_by_id(team_id))
+            team.home_stadium_id = self.b_stadium.id
+            return lambda: DjangoTeamRepository(scope).save(team)
+
+        def new(scope, league_id):
+            team = DomainTeam(name="新球団", league_id=league_id, home_stadium_id=self.b_stadium.id)
+            return lambda: DjangoTeamRepository(scope).save(team)
+
+        writes = {
+            "A の球団の本拠地を B の球場に": existing(self.a, self.team.id),
+            "A の新しい球団の本拠地が B の球場": new(self.a, self.league.id),
+            "A の世界の球団の本拠地を B の球場に": existing(a_world, copied_id),
+            "A の世界の新しい球団の本拠地が B の球場": new(a_world, world_league_id),
+        }
+        before = self._snapshot()
+        for label, write in writes.items():
+            with self.subTest(write=label):
+                with CaptureQueriesContext(connection) as captured, self.assertRaises(StadiumNotFound):
+                    write()
+                # 書いてから巻き戻すのではなく、書く前に止まる
+                written = [q["sql"] for q in captured if q["sql"].lstrip().upper().startswith(("INSERT", "UPDATE"))]
+                self.assertEqual(written, [], "本拠地の検査の前に書いた")
+        self.assertEqual(self._snapshot(), before, "B の球場を本拠地にする保存が、チームか選手を書いた")
+
+    def test_a_team_can_take_a_stadium_of_its_own_workspace(self):
+        """空振りの防止: 同じワークスペースの球場なら、実データでも世界でも本拠地にできる。"""
+        a_world = WorldScope.pennant(self.workspace.id, self.a_world_id)
+        for scope, team_id in ((self.a, self.rival.id), (a_world, self.a_world_stray_team_id)):
+            with self.subTest(scope=str(scope)):
+                repo = DjangoTeamRepository(scope)
+                team = repo.find_by_id(team_id)
+                team.home_stadium_id = self.stadium.id
+                repo.save(team)
+                self.assertEqual(orm_models.Team.objects.get(id=team_id).home_stadium_id, self.stadium.id)
+
+    def test_a_team_pointing_outside_reads_without_a_stadium_and_saving_clears_it(self):
+        """範囲の外の球場を指す行は、集約でも参照クエリと同じく本拠地なしとして読む。保存すると外の id は消える。"""
+        a_world = WorldScope.pennant(self.workspace.id, self.a_world_id)
+        for scope, team_id in ((self.a, self.rival.id), (a_world, self.a_world_stray_team_id)):
+            with self.subTest(scope=str(scope)):
+                repo = DjangoTeamRepository(scope)
+                team = repo.find_by_id(team_id)
+                self.assertIsNone(team.home_stadium_id, "範囲の外の球場を集約に読んだ")
+                for loaded in (*repo.find_all(), *repo.find_all_with_roster()):
+                    if loaded.id == team_id:
+                        self.assertIsNone(loaded.home_stadium_id)
+                team.name = "改名した相手"
+                repo.save(team)
+                row = orm_models.Team.objects.get(id=team_id)
+                self.assertEqual((row.name, row.home_stadium_id), ("改名した相手", None))
+
+    def test_a_fork_of_a_league_with_a_team_pointing_outside_copies_no_stadium(self):
+        """範囲の外の球場を指す球団のリーグからも世界を作れ、写した球団は本拠地なし（「球場が見つかりません」で止まらない）。"""
+        with patch(ROSTER_CHECK):
+            world_id = (
+                build_pennant_world_service(real_scope())
+                .create_world(
+                    name="分岐の確かめ", owner_id=None, source_league_ids=[self.league.id], start_year=YEAR, seed=2
+                )
+                .world.id
+            )
+        copies = dict(orm_models.Team.objects.filter(league__world_id=world_id).values_list("name", "home_stadium_id"))
+        self.assertEqual(copies, {self.team.name: self.stadium.id, self.rival.name: None})
+
+
+class MisbuiltWorldScopeStadiumWritesTest(WorkspaceCase):
+    """取り違えた範囲（A のワークスペースに B の世界）で、B の世界の球団に A の球場を書けない（W1b T4）。
+
+    ペナントの範囲の条件（`world_id = W`）はワークスペースを見ないので、B の世界の球団は範囲の検査を抜ける。
+    球場の検査は、範囲の世界が球場のワークスペースに属すことも見る（`stadiums_in`）。
+    """
+
+    def test_a_stadium_of_a_cannot_be_written_to_a_team_of_bs_world(self):
+        misbuilt = WorldScope.pennant(self.workspace.id, self.b_world_id)
+        repo = DjangoTeamRepository(misbuilt)
+        b_world_team = orm_models.Team.objects.filter(league__world_id=self.b_world_id).order_by("id").first()
+        assert b_world_team is not None
+        existing = repo.find_by_id(b_world_team.id)
+        existing.home_stadium_id = self.stadium.id
+        new = DomainTeam(name="新球団", league_id=b_world_team.league_id, home_stadium_id=self.stadium.id)
+        self.assertFalse(stadiums_in(misbuilt).exists(), "取り違えた範囲に球場がある")
+        before = list(orm_models.Team.objects.order_by("id").values())
+        for label, team in (("既存の球団", existing), ("新しい球団", new)):
+            with self.subTest(write=label), self.assertRaises(StadiumNotFound):
+                repo.save(team)
+        self.assertEqual(
+            list(orm_models.Team.objects.order_by("id").values()), before, "取り違えた範囲で本拠地を書いた"
+        )
 
 
 class WorldLedgerWritesTest(WorkspaceCase):

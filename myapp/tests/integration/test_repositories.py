@@ -1,8 +1,10 @@
 """リポジトリの往復。ORM ⇄ ドメインの変換でデータが失われないことを確認する。"""
 
 from django.contrib.auth.models import User
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 
-from myapp.domain.entities import League
+from myapp.domain.entities import League, Team
 from myapp.domain.exceptions import (
     DuplicateJerseyNumber,
     InvalidGame,
@@ -32,6 +34,7 @@ from ..helpers import (
     give_batting,
     give_pitching,
     make_league,
+    make_stadium,
     make_workspace,
     play_game,
     real_scope,
@@ -97,6 +100,40 @@ class RepositoryRoundTripTest(BaseCase):
         reloaded = self.repo.find_by_id(self.team.id)
         with self.assertRaises(DuplicateJerseyNumber):
             reloaded.add_player("田中", JerseyNumber("10"), Position.OUTFIELDER, limits=RosterLimits.UNLIMITED)
+
+
+class HomeStadiumCheckQueriesTest(BaseCase):
+    """本拠地の検査（W1b T4）は、新しいチームと本拠地を変えた保存でだけ球場を引く。
+
+    チームの存在を確かめるクエリで今の本拠地も読むので、本拠地を変えない保存（シーズンを締める処理など、
+    ロスターだけを書く保存）のクエリ数は検査を入れる前と同じ。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.repo = DjangoTeamRepository(real_scope())
+        self.other = make_stadium("第二球場")
+
+    def _queries_to_save(self, change) -> int:
+        team = self.repo.find_by_id(self.team.id)
+        change(team)
+        with CaptureQueriesContext(connection) as captured:
+            self.repo.save(team)
+        return len(captured)
+
+    def test_only_a_changed_stadium_costs_one_query(self):
+        unchanged = self._queries_to_save(lambda team: setattr(team, "name", "改名"))
+        changed = self._queries_to_save(lambda team: setattr(team, "home_stadium_id", self.other.id))
+        cleared = self._queries_to_save(lambda team: setattr(team, "home_stadium_id", None))
+
+        self.assertEqual(changed, unchanged + 1, "本拠地を変えた保存だけが球場を1回引く")
+        self.assertEqual(cleared, unchanged, "本拠地を外す保存は球場を引かない")
+        self.assertIsNone(orm_models.Team.objects.get(id=self.team.id).home_stadium_id)
+
+    def test_a_new_team_takes_a_stadium_of_its_workspace(self):
+        saved = self.repo.save(Team(name="新球団", league_id=self.league.id, home_stadium_id=self.other.id))
+
+        self.assertEqual(orm_models.Team.objects.get(id=saved.id).home_stadium_id, self.other.id)
 
 
 class GameRepositoryTest(BaseCase):

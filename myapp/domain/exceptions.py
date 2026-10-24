@@ -85,6 +85,10 @@ class TeamNotFound(DomainError):
     """指定されたチームが存在しない。"""
 
 
+class StadiumNotFound(DomainError):
+    """指定された球場が範囲（ワークスペース）に存在しない。ほかのワークスペースの球場も、ここでは「無い」。"""
+
+
 class PlayerNotFound(DomainError):
     """指定された選手が存在しない。"""
 

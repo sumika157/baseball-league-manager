@@ -68,7 +68,7 @@ from myapp.domain.value_objects import (
     Season,
 )
 from myapp.infrastructure.repositories import FOREIGN_RULE_FIELDS, foreign_rules_from
-from myapp.infrastructure.scoping import games_in, leagues_in, world_condition
+from myapp.infrastructure.scoping import games_in, home_stadium_in, leagues_in, teams_in, world_condition
 from myapp.management.workspaces import legacy_real_scope
 from myapp.models import (
     Game,
@@ -80,7 +80,6 @@ from myapp.models import (
     GamePlateAppearance,
     GameRunnerAdvance,
     PlayerStint,
-    Team,
 )
 
 # --- 現実的な数値に寄せるための調整値 ---
@@ -605,11 +604,14 @@ class Command(BaseCommand):
         # 先発の順番はチームごとに持ち回る（ローテーション）
         starts = defaultdict(int)
         buffered = []
-        # 本拠地の収容人数は球団ごとに最初に1回まとめて引く（試合ごとに引くと N+1 になる）
+        # 本拠地の収容人数は球団ごとに最初に1回まとめて引く（試合ごとに引くと N+1 になる）。
+        # 球団も球場も投入の範囲で引く
+        scope = self._real_scope()
         capacities = dict(
-            Team.objects.filter(id__in={card["home"].id for card in schedule}).values_list(
-                "id", "home_stadium__capacity"
-            )
+            teams_in(scope)
+            .filter(id__in={card["home"].id for card in schedule})
+            .annotate(stadium=home_stadium_in(scope))
+            .values_list("id", "stadium__capacity")
         )
         for card in schedule:
             record = self._play(card, rosters, starts)
