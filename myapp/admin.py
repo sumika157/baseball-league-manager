@@ -7,6 +7,7 @@ from django.contrib import admin, messages
 from django.contrib.admin.actions import delete_selected
 from django.contrib.admin.views.main import ORDER_VAR, ChangeList
 from django.contrib.admin.widgets import FilteredSelectMultiple
+from django.contrib.auth import get_user_model
 from django.db.models import (
     Case,
     Count,
@@ -24,6 +25,7 @@ from django.http import HttpResponseRedirect
 from django.urls import reverse
 from django.utils.html import format_html, format_html_join
 
+from .application.dto import OperatorOverview, OperatorWorkspaceRow
 from .domain.entities import Captaincy as DomainCaptaincy
 from .domain.entities import FreeAgentDeclaration as DomainFreeAgentDeclaration
 from .domain.entities import Stint as DomainStint
@@ -46,7 +48,7 @@ from .domain.value_objects import (
     StadiumProfile,
 )
 from .domain.value_objects import Profile as DomainProfile
-from .domain.workspace import generate_workspace_key, validate_workspace_key
+from .domain.workspace import Visibility, generate_workspace_key, validate_workspace_key
 from .infrastructure import orm_models
 from .infrastructure.orm_models import (
     Captaincy,
@@ -133,6 +135,66 @@ def _real_queryset(model):
 def _real_teams():
     """全ワークスペースの実データのチーム（ペナントの球団を除く）。"""
     return admin_real_queryset(Team)
+
+
+# 運営向けの概況に出す、試合の多いワークスペースの数
+OPERATOR_TOP_WORKSPACES = 5
+
+
+def _real_rows(model):
+    """全ワークスペースの実データの行（管理画面の一覧と同じ行）。世界の行を持たないモデル（球場など）は誤り。"""
+    queryset = admin_real_queryset(model)
+    if queryset is None:
+        raise TypeError(f"{model.__name__} は実データの行を持たないモデルです")
+    return queryset
+
+
+def operator_overview() -> OperatorOverview:
+    """管理画面のトップの、運営向けの全ワークスペースの概況（W2 T2）。
+
+    全ワークスペースを読む集計なので、Q4 の例外（`admin_real_queryset` は admin.py だけ）の中に置く。
+    テンプレートタグ（`templatetags/admin_overview.py`）はこれを呼ぶだけ。数字は管理画面の一覧と同じ行を
+    数えるので、リンク先の一覧と件数がそろう（ペナントの世界の行は数えない）。
+    クエリ数はワークスペースの数によらず一定（7本）。ワークスペースが1つも無くても、すべて0で返す。
+    """
+    workspaces = Workspace.objects.aggregate(
+        total=Count("pk"),
+        public=Count("pk", filter=Q(visibility=Visibility.PUBLIC.value)),
+        private=Count("pk", filter=Q(visibility=Visibility.PRIVATE.value)),
+    )
+    games_of_workspace = (
+        _real_rows(Game)
+        .filter(home_team__league__workspace=OuterRef("pk"))
+        .order_by()
+        .values("home_team__league__workspace")
+        .annotate(n=Count("pk"))
+        .values("n")
+    )
+    top = (
+        Workspace.objects.select_related("owner")
+        .annotate(game_count=Coalesce(Subquery(games_of_workspace, output_field=IntegerField()), Value(0)))
+        .order_by("-game_count", "id")[:OPERATOR_TOP_WORKSPACES]
+    )
+    return OperatorOverview(
+        workspace_count=workspaces["total"],
+        public_workspace_count=workspaces["public"],
+        private_workspace_count=workspaces["private"],
+        user_count=get_user_model().objects.count(),
+        league_count=_real_rows(League).count(),
+        team_count=_real_rows(Team).count(),
+        player_count=_real_rows(Player).count(),
+        game_count=_real_rows(Game).count(),
+        top_workspaces=[
+            OperatorWorkspaceRow(
+                workspace_id=workspace.pk,
+                key=workspace.key,
+                name=workspace.name,
+                owner_name=workspace.owner.get_username(),
+                game_count=workspace.game_count,
+            )
+            for workspace in top
+        ],
+    )
 
 
 def _row_scope(league) -> WorldScope:

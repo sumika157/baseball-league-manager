@@ -1,25 +1,18 @@
 """管理画面トップに概況を差し込むためのテンプレートタグ。
 
 AdminSite を差し替えずに済ませるため、テンプレート側から呼び出す形にしている。
-件数の算出はアプリケーション層に委ね、ここでは組み立てない。
-
-W1 の間は今の URL と同じワークスペース（`_real_scope`）の実データの概況を出す。
-運営向けの概況（ワークスペース数など）への置き換えは W2。
+概況は運営向けの全ワークスペースの数字（W2 T2）。全ワークスペースを読む集計は、管理画面だけに許した例外
+（決定 2026-10-07 Q4）の中に置くため `admin.py` の `operator_overview()` が持ち、ここでは呼ぶだけにする。
 """
 
 from django import template
-from django.http import Http404
-
-from ..presentation.views import _real_scope, build_service
 
 register = template.Library()
 
 
-@register.inclusion_tag("admin/_overview.html", takes_context=True)
-def admin_overview(context):
-    try:
-        scope = _real_scope(context["request"])
-    except Http404:
-        # ワークスペースがまだ無い（運営者が最初の1つを作る前）。管理画面のトップは開けるようにする
-        return {"overview": None}
-    return {"overview": build_service(scope).get_admin_overview()}
+@register.inclusion_tag("admin/_overview.html")
+def admin_overview():
+    # 管理画面のモジュールはテンプレートを描く時点で読み込み済み。循環を避けるため、ここで引く
+    from ..admin import operator_overview
+
+    return {"overview": operator_overview()}

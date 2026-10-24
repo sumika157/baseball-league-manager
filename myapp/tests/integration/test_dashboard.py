@@ -248,7 +248,7 @@ class DashboardLeaguesTest(BaseCase):
         self.assertNotIn("空リーグ", [g.league_name for g in board.leagues])
 
     def test_counts_are_not_shown(self):
-        """登録数（リーグ・チーム・選手）は出さない。規模は管理画面の「データの概況」にある。"""
+        """登録数（リーグ・チーム・選手）は出さない。規模は管理画面のトップの概況にある。"""
         body = self.client.get(reverse("dashboard")).content.decode()
 
         self.assertNotIn("stat-strip", body)

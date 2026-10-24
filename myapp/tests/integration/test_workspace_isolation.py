@@ -793,7 +793,8 @@ class NoWorkspaceTest(TestCase):
         response = self.client.get("/admin/")
 
         self.assertEqual(response.status_code, 200)
-        self.assertNotContains(response, "データの概況")
+        # 概況は運営向けの全ワークスペースの数字（W2 T2）。すべて0で、最初の1つを作る導線を出す
+        self.assertContains(response, "ワークスペースがまだありません")
 
 
 class WritesDoNotReachTheOtherWorkspaceTest(WorkspaceCase):

@@ -556,28 +556,29 @@ ul.messagelist li {
   letter-spacing: 0.03em;
 }
 
-.admin-overview-notes {
+.admin-overview-top {
+  width: 100%;
+}
+
+.admin-overview-top caption {
+  padding: 10px 16px 4px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-align: left;
+  color: var(--body-quiet-color);
+  background: none;
+}
+
+.admin-overview-number {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.admin-overview-empty {
   margin: 0;
   padding: 10px 16px;
-  list-style: none;
-  background: var(--darkened-bg);
-}
-
-.admin-overview-notes li {
-  padding: 4px 0;
   font-size: 0.8125rem;
-}
-
-.admin-overview-notes li::before {
-  content: '•';
-  color: var(--body-quiet-color);
-  margin-right: 8px;
-}
-
-.admin-overview-hint {
-  color: var(--body-quiet-color);
-  margin-left: 8px;
-  font-size: 0.75rem;
+  background: var(--darkened-bg);
 }
 
 /* ------------------------------------------------------------------

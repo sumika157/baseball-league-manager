@@ -939,25 +939,6 @@ class LeagueDetail:
 
 
 @dataclass(frozen=True)
-class AdminOverview:
-    """管理画面トップに出す概況。
-
-    「いま何件あるか」と「手当てが必要なデータはどれか」に絞る。
-    成績のランキングはサイト側のダッシュボードの役割なので、ここには置かない。
-    """
-
-    league_count: int
-    team_count: int
-    player_count: int
-    batter_count: int
-    pitcher_count: int
-    # 手当てが必要なもの
-    players_without_stats: int
-    retired_count: int
-    teams_without_players: int
-
-
-@dataclass(frozen=True)
 class RankingEntry:
     """ランキングの1行。"""
 
@@ -2729,3 +2710,34 @@ class WorkspaceRow:
     name: str
     visibility: Visibility
     role: WorkspaceRole
+
+
+@dataclass(frozen=True)
+class OperatorWorkspaceRow:
+    """運営向けの概況の、試合の多いワークスペースの1行。"""
+
+    workspace_id: int
+    key: str
+    name: str
+    owner_name: str
+    game_count: int
+
+
+@dataclass(frozen=True)
+class OperatorOverview:
+    """管理画面のトップに出す、運営向けの全ワークスペースの概況（W2 T2）。
+
+    数字は管理画面の一覧（全ワークスペースの実データ）と同じ行を数える。ペナントの世界の行は数えない。
+    「いま何件あるか」と「大きいワークスペースはどれか」に絞る。成績のランキングはサイト側の役割なので置かない。
+    """
+
+    workspace_count: int
+    public_workspace_count: int
+    private_workspace_count: int
+    user_count: int
+    league_count: int
+    team_count: int
+    player_count: int
+    game_count: int
+    # 試合の多い順（同数は古い順）に最大 `OPERATOR_TOP_WORKSPACES` 件
+    top_workspaces: list[OperatorWorkspaceRow]
