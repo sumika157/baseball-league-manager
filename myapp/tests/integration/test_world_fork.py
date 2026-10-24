@@ -70,7 +70,8 @@ class ForkTest(BaseCase):
             nationality="日本",
             birthplace="東京都",
             high_school="東京高校",
-            debut_year=2014,
+            draft_year=2013,
+            draft_round=4,
         )
         orm_models.Player.objects.filter(id=self.pitcher.id).update(is_foreign_player=True, nationality="米国")
         play_game(self.team, self.rival, year=2026, home_score=2, away_score=1)
@@ -155,7 +156,7 @@ class ForkTest(BaseCase):
             (copy.birth_date, copy.throws, copy.bats, copy.height_cm, copy.nationality, copy.birthplace),
             (date(1995, 3, 4), "右", "左", 180, "日本", "東京都"),
         )
-        self.assertEqual((copy.high_school, copy.debut_year), ("東京高校", 2014))
+        self.assertEqual((copy.high_school, copy.draft_year, copy.draft_round), ("東京高校", 2013, 4))
         foreign = orm_models.Player.objects.get(stints__team=self.copied_team, name="投手")
         self.assertTrue(foreign.is_foreign_player)
 

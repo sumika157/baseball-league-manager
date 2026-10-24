@@ -5,7 +5,7 @@ from unittest import TestCase
 
 from myapp.domain.entities import Stadium
 from myapp.domain.exceptions import InvalidProfile, InvalidSeason
-from myapp.domain.value_objects import Handedness, Profile, StadiumProfile
+from myapp.domain.value_objects import DraftPick, Handedness, Profile, StadiumProfile
 
 
 class HandednessTest(TestCase):
@@ -75,10 +75,8 @@ class ProfileTest(TestCase):
         with self.assertRaises(InvalidProfile):
             Profile(height_cm="高い")
 
-    def test_debut_year_is_validated_as_a_season(self):
-        self.assertEqual(Profile(debut_year="2021").debut_year, 2021)
-        with self.assertRaises(InvalidSeason):
-            Profile(debut_year=1800)
+    def test_draft_makes_the_profile_non_empty(self):
+        self.assertFalse(Profile(draft=DraftPick(2020)).is_empty)
 
     def test_is_empty_becomes_false_with_any_field(self):
         self.assertFalse(Profile(birthplace="大阪府").is_empty)

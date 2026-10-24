@@ -873,7 +873,7 @@ class TeamApplicationService:
             birthplace=profile.birthplace,
             nationality=profile.nationality,
             is_foreign_player=profile.is_foreign_player,
-            debut_year=profile.debut_year,
+            draft_label=profile.draft.label if profile.draft is not None else "",
             amateur_career=profile.amateur_career,
             has_profile=not profile.is_empty,
         )

@@ -518,12 +518,12 @@ W3 を W4 より先にするのは、W4 を先にすると、中身を入れら�
 - 決定（2026-10-11）: `legacy_workspace_id()` は `infrastructure/workspaces.py` に置く（views には置かない）。W1a のリポジトリの書き込み経路と W1b の views が同じ関数を使い、W2 で消す。
 - 決定（2026-10-11）: 招待の表（`WorkspaceInvitation`）と `Invitation`・`InvitedRole` は W4 で作る。
 - T1（`feature/workspace-domain`）: `domain/workspace.py`（`Visibility`・`Workspace`・key の生成と検査）、`InvalidWorkspace`、`World.workspace_id` を入れた。ORM・マイグレーションは T2 以降。
-- T2（`feature/workspace-schema`）: マイグレーション `0052_workspace`（main の `0051_pennant_award` の次。当初は 0048 で、#168 段階B を取り込むときに 0049 へ、#204・#248 を取り込むとき（2026-10-16）に 0052 へ振り直した。スキーマだけ）で `Workspace`・`WorkspaceEditor` を作り、`League`・`Stadium`・`PennantWorld` に null 可・PROTECT の `workspace` を足した。`Workspace.visibility` と `name` の長さはドメイン（`Visibility.choices()`・`MAX_NAME_LENGTH`）から取り、既定値は持たせない（ドメインの `Workspace` と同じ）。`DjangoWorldRepository` が `workspace_id` を読み書きする（保存時に埋める `legacy_workspace_id()` は T4）。分類表は「League までの道（今の道から末尾の `__world` を除く）」の形にし、`Workspace`＝全体・`WorkspaceEditor`＝メンバー・`PennantWorld`／`Stadium`＝直属・`League`＝2経路（`LEAGUE_ROUTES`）とした。`test_shared_models_do_not_point_into_a_world` は「直属・メンバーのモデルはリーグ以下を指さない」に替えた（例外は `PennantWorld.managed_team` だけ）。実測値は無い（スキーマだけで、読み取りの経路は変えていない）。
+- T2（`feature/workspace-schema`）: マイグレーション `0055_workspace`（main の `0054_remove_player_debut_year` の次。当初は 0048、のち 0049・0052 で、#168 段階B を取り込むときに 0049 へ、#204・#248 を取り込むとき（2026-10-16）に 0052 へ振り直した。スキーマだけ）で `Workspace`・`WorkspaceEditor` を作り、`League`・`Stadium`・`PennantWorld` に null 可・PROTECT の `workspace` を足した。`Workspace.visibility` と `name` の長さはドメイン（`Visibility.choices()`・`MAX_NAME_LENGTH`）から取り、既定値は持たせない（ドメインの `Workspace` と同じ）。`DjangoWorldRepository` が `workspace_id` を読み書きする（保存時に埋める `legacy_workspace_id()` は T4）。分類表は「League までの道（今の道から末尾の `__world` を除く）」の形にし、`Workspace`＝全体・`WorkspaceEditor`＝メンバー・`PennantWorld`／`Stadium`＝直属・`League`＝2経路（`LEAGUE_ROUTES`）とした。`test_shared_models_do_not_point_into_a_world` は「直属・メンバーのモデルはリーグ以下を指さない」に替えた（例外は `PennantWorld.managed_team` だけ）。実測値は無い（スキーマだけで、読み取りの経路は変えていない）。
 - T4（`feature/workspace-write-paths`）: `infrastructure/workspaces.py` の `legacy_workspace_id()`（id が最小のワークスペース。無ければ `WorkspaceNotFound`＝`DomainError` の日本語メッセージなので、世界の作成の画面・管理コマンドは既存の `except DomainError` でメッセージにする）を入れた。書き込み経路で新しい行を作るのは次の3つだけだった（管理コマンドの `seed_*` は球団・選手・試合だけでリーグ・球場・世界は作らない。`bulk_create` はどれも試合・成績・能力・日程の行）。
   - `DjangoLeagueRepository.save`: 新しいリーグだけ帰属を決める。実データの範囲は `workspace_id = legacy_workspace_id()`・`world_id = None`、ペナントの範囲は `workspace_id = None`・`world_id = scope.world_id`。既存のリーグの workspace・world は書き換えない。分岐のリーグはここを通るので workspace は空のまま。
   - `DjangoWorldRepository.save`: `world.workspace_id` が空なら `legacy_workspace_id()` を入れ、集約にも書き戻す（分岐で作る世界）。W1b で `PennantWorldService` が範囲のワークスペースを渡す形に替える。
   - 管理画面: League と Stadium のフォームに `workspace` を出して必須にした（`WorkspaceRequiredForm`）。選び忘れはフォームのエラーで、500 にならない。球場の管理画面は管理画面から作るだけで、リポジトリを通らない。
-- T5（`feature/workspace-backfill`）: マイグレーション `0053_backfill_default_workspace`（0052 の次。当初は 0049、のち 0050。`RunPython` だけでスキーマ変更は無い）。
+- T5（`feature/workspace-backfill`）: マイグレーション `0056_backfill_default_workspace`（0055 の次。当初は 0049、のち 0050・0053。`RunPython` だけでスキーマ変更は無い）。
   - リーグ・球場・世界のどれかが1行でもあれば、ワークスペースを1つ作る（公開。名前は「既定のワークスペース」。管理画面から後で変えられる）。何も無い DB では作らない。
   - 持ち主は id が最小の superuser、いなければ id が最小の staff。どちらもいなければ `RuntimeError`（「先に createsuperuser を実行してください」を含む日本語）で止まり、マイグレーションは適用されない。ほかの staff は `WorkspaceEditor`、staff でない人は編集者にしない。`Team.managers` には触れない。
   - `world IS NULL` のリーグ・全球場・全世界に付ける。ペナントのリーグには付けない。
@@ -532,7 +532,7 @@ W3 を W4 より先にするのは、W4 を先にすると、中身を入れら�
   - 逆方向は何もしない（`noop`）。0048 では列が残るので帰属はそのままでよく、0048 より前へ戻れば列ごと消える。消す形にすると、戻して再び適用したときに、あとから作られたワークスペースを消したり、非公開のものを1つの公開ワークスペースに混ぜたりしてしまう。順方向も、ワークスペースが1つでもあれば何もしない。
   - テスト: `tests/integration/test_workspace_migration.py`（`TransactionTestCase` 1クラス・4テスト。帰属と逆方向／superuser がいない場合／持ち主がなれる人がいない場合／空の DB）。
   - 開発 DB の写し（`/tmp/w1a-t5/db.sqlite3`、`DJANGO_DB_PATH` で指して実施。共有の `db.sqlite3` には当てていない。試行後に写しは削除）: 0048・0049 の適用に 2.6 秒（プロセス起動を含む）。ワークスペース1つ（公開・持ち主 `admin`＝id 1 の superuser）、編集者1人（`smoketest`＝superuser かつ staff）、リーグ 8/8（ペナントのリーグは 0 で付いていない）、球場 21/21、世界 0/0。ユーザーは3人（admin・s-sato・smoketest）で、staff でない `s-sato` は編集者にならない。`migrate myapp 0048` で3つの表の `workspace` が全部 NULL、`Workspace`・`WorkspaceEditor` が 0 行に戻ることを確かめた。
-- T6（`feature/workspace-constraints`）: マイグレーション `0054_workspace_constraints`（0053 の次。当初は 0050、のち 0051。スキーマだけ）。
+- T6（`feature/workspace-constraints`）: マイグレーション `0057_workspace_constraints`（0056 の次。当初は 0050、のち 0051・0054。スキーマだけ）。
   - `Stadium.workspace` と `PennantWorld.workspace` を null 不可にした。`League.workspace` は、ペナントのリーグが持たないので null 可のまま。
   - 一意制約: `Stadium.name` の `unique=True` を `unique_workspace_stadium_name`（workspace, name）に、`unique_real_league_name`（`world IS NULL` の条件つきで name）を `unique_workspace_league_name`（workspace, name）に替えた。`unique_world_league_name` は残した。ペナントのリーグは workspace が NULL なので前者に引っかからず、どのワークスペースの実データとも同名でよい（世界の中の一意は後者が保つ）。
   - `CheckConstraint` `league_workspace_xor_world`: workspace と world がちょうど片方（`condition=`。前例 `game_teams_differ`）。
@@ -573,7 +573,7 @@ W3 を W4 より先にするのは、W4 を先にすると、中身を入れら�
 
 #### epic を main に入れるときに必ず行うこと（T5 のレビューより）
 
-- 0053（バックフィル。当時の番号は 0049）は、データがあるのに superuser も staff もいない DB ではエラーで止まる。ワークスペースの epic をデプロイする前に、superuser がいることを確かめる。止まったときの復旧手順（上の `run --rm --no-deps --entrypoint python web manage.py createsuperuser`）を、epic を main に入れるときに Wiki「本番公開」のデプロイ（更新）の節に足す。
+- 0056（バックフィル。当時の番号は 0049）は、データがあるのに superuser も staff もいない DB ではエラーで止まる。ワークスペースの epic をデプロイする前に、superuser がいることを確かめる。止まったときの復旧手順（上の `run --rm --no-deps --entrypoint python web manage.py createsuperuser`）を、epic を main に入れるときに Wiki「本番公開」のデプロイ（更新）の節に足す。
 
 ### W1b（#172）
 
@@ -585,7 +585,7 @@ W3 を W4 より先にするのは、W4 を先にすると、中身を入れら�
 
 1. 開発 DB の写し: コンテナの中で Python の `sqlite3` の `backup()` を使う（コンテナは止めない。共有の `/app/db.sqlite3` は読み取り専用で開く）。`pragma integrity_check` が `ok`、試合 3,480 件を確かめる。
 2. 以降は共通の接頭辞を付ける: `docker compose exec -w /app/.claude/worktrees/<測る worktree> -e PYTHONPYCACHEPREFIX=/tmp/pycache -e DJANGO_DB_PATH=<DB> web <コマンド>`（Bash から叩くなら `MSYS_NO_PATHCONV=1`）。
-3. `python manage.py migrate`（epic の 0052〜0054 が当たる。2026-10-16 に振り直す前は 0049〜0051）。
+3. `python manage.py migrate`（epic の 0055〜0057 が当たる。2026-10-16 に 0052〜0054、2026-10-24 に 0055〜0057 へ振り直した）。
 4. 実データ: `python manage.py measure_pages` を3回流し、画面ごとに中央値。
 5. ペナント: `python manage.py pennant_create --name w1b-baseline --league 1 --league 2 --year 2030 --seed 20261015 --owner admin --managed-team 1`（世界 id=1・リーグ2・球団12・選手966人）→ `python manage.py pennant_advance --world 1 --to week`（6日・36試合）。
 6. `python /tmp/w1b-t0/measure_pennant.py 1`（下の概要）を流す。
@@ -765,3 +765,10 @@ W3 を W4 より先にするのは、W4 を先にすると、中身を入れら�
   - 分類表（`test_world_isolation.py`）に `PennantAward` を「League までの道」の形（`"league"`）で足した。世界の削除の順（`_WORLD_ROWS_CHILD_FIRST`）には main が `"league"` の道で入れていて、epic の形と同じなので変えていない。
   - リーグの保存（`DjangoLeagueRepository.save`）は epic の帰属の分岐（作るときだけ workspace／world を決める）を残し、外国人枠は main の `foreign_rule_values(league.foreign_rules)` で書く。管理画面のリーグのフォーム（T7）は workspace の扱いが変わらず、新しい3列は main のフィールドセットのまま出る。テストの管理画面の POST（`test_admin.py`・`test_workspace_constraints.py`）を新しい3列に替えた。`make_league` は変えていない（新しい列はモデルの既定値＝協約の値）。0054 の制約は外国人枠の列に関わらない。
   - テスト: main が足した・書き換えたテストの `WorldScope.real()`／`WorldScope.pennant(id)`・`build_*()`・`build_world_view_service(id)`・リーグの直接作成を、`real_scope()`・`world_scope(id)`・`build_service(world_scope(id))`・`make_league` に替えた（`test_pennant_awards.py`・`test_club_plan.py`・`test_club_screen.py`・`test_world_roster_check.py`・`test_repositories.py` など）。`BaseCase` は範囲を1回作って `service`・`roster`・`game_view` に渡す。`helpers.py` の `build_world_game_view_service` の再輸出は消した。
+
+#### main の取り込み（2026-10-24）
+
+- main から来たもの: #97 段階3（ペナントの疲労の表示）・#108（入団年をドラフトの年・順位・育成に置き換え。マイグレーション 0052〜0054）。
+- 振り直し: #108 が 0052〜0054 を使ったので、epic のマイグレーションを `0055_workspace`（依存は `0054_remove_player_debut_year`）・`0056_backfill_default_workspace`・`0057_workspace_constraints` に移した。依存・`test_workspace_migration.py`・コメントをそろえた。
+- 衝突は2つ（`admin.py` の import と `test_pennant_fatigue.py` の import）。main の新しいテストのうち、古い形の範囲（`WorldScope.real()`）を使っていた `test_seed_virtual_players.py` の1か所を `real_scope()` に直した。#108 で新しい組み立て口・リポジトリ・モデルは増えていない（`Player` の列だけ）。
+- #108 のマイグレーションのテスト（`test_migration_draft_year.py`）は、後始末で最新まで当て直すときに epic の 0056 が持ち主を求めるので、`test_jersey_number.py` と同じく古い状態に superuser を足した。マイグレーションのテストでリーグを作るときは、これからも同じ手当てが要る。

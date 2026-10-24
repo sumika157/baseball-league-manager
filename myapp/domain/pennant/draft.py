@@ -4,6 +4,8 @@
 入るように決める（育成は数えない。`draftee_count`）。登録位置は支配下の構成と目標の構成との差の大きい位置から埋め、
 外国人はリーグの1軍の外国人枠の計の内側で目標（4人）まで補う（戦力外で外した外国人の入れ替え。#168）。新人の質は球団の順位によらず同じ。
 新人は支配下で入り、入団の経路は日本人が「ドラフト」、外国人が「新外国人」（`Draftee.acquisition_route`）。
+日本人の新人はドラフトの指名（`DraftPick`。年は締める年、順位は指名の順の仮置きで #198 で置き換える）を持ち、
+外国人は持たない。
 能力は水準の錨の**前**の値（`offseason.py` が残る選手とまとめて錨をかける）。
 名前とプロフィールの生成は `virtual_players/generator.py`（実データへの投入と同じ関数）。
 """
@@ -18,7 +20,7 @@ from enum import Enum
 from ..simulation.estimate import draw_growth_type, with_growth
 from ..simulation.randomness import GameRandom
 from ..simulation.ratings import AVERAGE_RATING, BatterRatings, PitcherRatings
-from ..value_objects import AcquisitionRoute, ForeignPlayerRules, Position, Profile
+from ..value_objects import AcquisitionRoute, DraftPick, ForeignPlayerRules, Position, Profile
 from ..virtual_players import generator
 from ..virtual_players.generator import AmateurPath
 from .initial_ratings import SEASON_START_MONTH, STRENGTH_UNIT
@@ -143,8 +145,12 @@ class Draftee:
 
     @property
     def acquisition_route(self) -> AcquisitionRoute:
-        """在籍に記録する入団の経路。日本人はドラフト、外国人は新外国人（新人はどちらも支配下で入る）。"""
-        return AcquisitionRoute.NEW_FOREIGN if self.is_foreign else AcquisitionRoute.DRAFT
+        """在籍に記録する入団の経路。日本人はドラフトの指名から（`DraftPick.acquisition_route`。今は本指名だけなので
+        ドラフト）、外国人は新外国人（新人はどちらも支配下で入る）。"""
+        if self.is_foreign:
+            return AcquisitionRoute.NEW_FOREIGN
+        draft = self.profile.draft
+        return AcquisitionRoute.DRAFT if draft is None else draft.acquisition_route
 
 
 @dataclass(frozen=True)
@@ -241,7 +247,14 @@ def _draw_rookie_ratings(rng: GameRandom, route: DraftRoute, position: Position)
 
 
 def _draw_rookie(
-    rng: GameRandom, position: Position, *, foreign: bool, year: int, number: str, used_names: MutableSet[str]
+    rng: GameRandom,
+    position: Position,
+    *,
+    foreign: bool,
+    year: int,
+    draft: DraftPick | None,
+    number: str,
+    used_names: MutableSet[str],
 ) -> _Pending:
     """新人ひとりぶんの名前・プロフィール・能力。乱数は名前 → 経歴 → 生年月日 → 体格 → 能力 → 成長型の順。"""
     if foreign:
@@ -271,7 +284,7 @@ def _draw_rookie(
         height_cm=height_cm,
         weight_kg=weight_kg,
         birthplace=birthplace,
-        debut_year=year + 1,
+        draft=draft,
         high_school=career.high_school,
         university=career.university,
         corporate_team=career.corporate_team,
@@ -293,6 +306,10 @@ def draft_class(rng: GameRandom, team: DraftTeam, *, year: int, used_names: Muta
     count = draftee_count(team.registered_count, registered_limit=team.registered_limit)
     positions = choose_positions(team, count)
     foreign_indexes = _foreign_picks(positions, foreign_count_to_add(team, count))
+    # 日本人の新人のドラフトの順位。今は指名の順（`positions` の並び）のうち日本人だけを数えた番号の**仮置き**で、
+    # 順位の決め方はドラフト会議（#198）で置き換える。外国人はドラフトを経ないので順位を持たない
+    japanese_indexes = [index for index in range(len(positions)) if index not in foreign_indexes]
+    rounds = {index: order for order, index in enumerate(japanese_indexes, start=1)}
     used_numbers = set(team.used_numbers)
     pending = [
         _draw_rookie(
@@ -300,6 +317,7 @@ def draft_class(rng: GameRandom, team: DraftTeam, *, year: int, used_names: Muta
             position,
             foreign=index in foreign_indexes,
             year=year,
+            draft=None if index in foreign_indexes else DraftPick(year=year, round=rounds[index]),
             number=_draw_number(rng, used_numbers),
             used_names=used_names,
         )

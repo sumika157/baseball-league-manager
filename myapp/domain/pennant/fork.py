@@ -20,7 +20,7 @@ from datetime import date
 from ..entities import League, Player, Team
 from ..value_objects import Profile, RosterLimits
 
-# 生年月日の推定（乱数なし）。入団年があれば入団年の22年前、無ければ開幕年の27年前の7月1日
+# 生年月日の推定（乱数なし）。ドラフトがあれば入団（ドラフトの翌年）の22年前、無ければ開幕年の27年前の7月1日
 ESTIMATED_DEBUT_AGE = 22
 ESTIMATED_AGE_AT_START = 27
 
@@ -28,11 +28,11 @@ ESTIMATED_AGE_AT_START = 27
 def estimated_birth_date(profile: Profile, start_year: int) -> date:
     """生年月日の無い選手の推定。**年齢の規則（成長・衰え・引退）が年齢を引けるようにするため**に補う。
 
-    入団年があれば「入団年 − 22 年」、無ければ「開幕年 − 27 年」の7月1日。乱数を使わないので、
-    同じプロフィールなら何度推定しても同じ。
+    ドラフトがあれば「入団の年（`DraftPick.entry_year`）− 22 年」、無ければ「開幕年 − 27 年」の7月1日。
+    乱数を使わないので、同じプロフィールなら何度推定しても同じ。
     """
-    if profile.debut_year is not None:
-        return date(profile.debut_year - ESTIMATED_DEBUT_AGE, 7, 1)
+    if profile.draft is not None:
+        return date(profile.draft.entry_year - ESTIMATED_DEBUT_AGE, 7, 1)
     return date(start_year - ESTIMATED_AGE_AT_START, 7, 1)
 
 

@@ -16,6 +16,7 @@ from myapp.domain.pennant.world import (
 )
 from myapp.domain.value_objects import (
     ContractStatus,
+    DraftPick,
     ForeignPlayerRules,
     JerseyNumber,
     Position,
@@ -167,7 +168,9 @@ def _source_team() -> Team:
     """分岐元の球団。現在の選手2人と、退団済みの選手1人（過去の在籍のみ）がいる。"""
     team = Team(name="東京", league_id=1, home_stadium_id=7, id=10, display_order=2)
     first = team.add_player("山田", JerseyNumber("1"), Position.INFIELDER, from_year=2018, limits=UNLIMITED)
-    first.profile = Profile(birth_date=None, is_foreign_player=False, birthplace="東京都", debut_year=2018)
+    first.profile = Profile(
+        birth_date=None, is_foreign_player=False, birthplace="東京都", draft=DraftPick(2017, round=3)
+    )
     second = team.add_player("スミス", JerseyNumber("99"), Position.PITCHER, from_year=2020, limits=UNLIMITED)
     second.profile = Profile(is_foreign_player=True, nationality="米国")
     gone = team.add_player("引退", JerseyNumber("5"), Position.OUTFIELDER, from_year=2010, limits=UNLIMITED)
@@ -243,7 +246,8 @@ class ForkTest(unittest.TestCase):
         self.assertEqual(by_name["山田"].number, JerseyNumber("1"))
         self.assertEqual(by_name["山田"].position, Position.INFIELDER)
         self.assertEqual(by_name["山田"].profile.birthplace, "東京都")
-        self.assertEqual(by_name["山田"].profile.debut_year, 2018)
+        self.assertEqual(by_name["山田"].profile.draft, DraftPick(2017, round=3))
+        self.assertIsNone(by_name["スミス"].profile.draft)
         self.assertEqual(by_name["スミス"].number, JerseyNumber("99"))
         self.assertTrue(by_name["スミス"].profile.is_foreign_player)
 
