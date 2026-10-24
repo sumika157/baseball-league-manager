@@ -1,6 +1,8 @@
-"""保存済みの集約から取り出す id の扱い。"""
+"""保存済みの集約から取り出す id の扱いと、id から名前を引く索引。"""
 
 from __future__ import annotations
+
+from ..domain.repositories import TeamRepository
 
 
 def saved_id(value: int | None) -> int:
@@ -13,3 +15,8 @@ def saved_id(value: int | None) -> int:
     """
     assert value is not None, "リポジトリから読んだ集約は保存済み"
     return value
+
+
+def team_names(teams: TeamRepository) -> dict[int, str]:
+    """チームの id から名前を引く索引。ロスターと成績を読まない一覧用の読み方（`find_all`）で作る。"""
+    return {saved_id(team.id): team.name for team in teams.find_all()}

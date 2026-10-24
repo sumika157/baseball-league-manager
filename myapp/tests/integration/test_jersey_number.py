@@ -102,7 +102,7 @@ class JerseyNumberScreenTest(BaseCase):
             {"name": "山田", "number": "00", "position": "内野手"},
         )
 
-        self.assertEqual(self.service.get_player_detail(self.team.id, player.id).number, "00")
+        self.assertEqual(self.team_view.get_player_detail(self.team.id, player.id).number, "00")
 
     def test_promoting_to_double_zero(self):
         developmental = self.roster.register_player(self.team.id, "育成", 120, "投手", "育成")

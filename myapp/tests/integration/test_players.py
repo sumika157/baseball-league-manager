@@ -133,7 +133,7 @@ class PlayerEditViewTest(BaseCase):
             },
         )
 
-        detail = self.service.get_player_detail(self.team.id, player.id)
+        detail = self.team_view.get_player_detail(self.team.id, player.id)
         self.assertEqual(detail.name, "山田太郎")
         self.assertEqual(detail.number, "11")
         self.assertEqual(detail.position, "外野手")
@@ -154,14 +154,14 @@ class PlayerEditViewTest(BaseCase):
             },
         )
 
-        self.assertEqual(self.service.get_player_detail(self.team.id, player.id).at_bats, 10)
+        self.assertEqual(self.team_view.get_player_detail(self.team.id, player.id).at_bats, 10)
 
     def test_totals_reflect_games(self):
         player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         give_batting(self.team, self.rival, player.id, BattingLine(at_bats=4, singles=2), day=1)
         give_batting(self.team, self.rival, player.id, BattingLine(at_bats=6, home_runs=1), day=2)
 
-        detail = self.service.get_player_detail(self.team.id, player.id)
+        detail = self.team_view.get_player_detail(self.team.id, player.id)
 
         self.assertEqual(detail.at_bats, 10)
         self.assertAlmostEqual(detail.batting_average, 0.3)
@@ -188,7 +188,7 @@ class PlayerEditViewTest(BaseCase):
             },
         )
 
-        self.assertEqual(self.service.get_player_detail(self.team.id, tanaka.id).number, "11")
+        self.assertEqual(self.team_view.get_player_detail(self.team.id, tanaka.id).number, "11")
 
     def test_missing_player_returns_404(self):
         self.assertEqual(self.client.get(self._url(9999)).status_code, 404)
@@ -225,21 +225,21 @@ class PlayerDetailViewTest(BaseCase):
         self.assertContains(response, "山田")
 
     def test_shows_career_totals(self):
-        profile = self.service.get_player_profile(self.team.id, self.player.id)
+        profile = self.team_view.get_player_profile(self.team.id, self.player.id)
 
         self.assertEqual(profile.detail.at_bats, 10)
         self.assertAlmostEqual(profile.detail.batting_average, 0.3)
 
     def test_lists_each_game_oldest_first(self):
         """1か月ぶんの表なので、月の頭から追えるように試合日の昇順に並べる。"""
-        profile = self.service.get_player_profile(self.team.id, self.player.id)
+        profile = self.team_view.get_player_profile(self.team.id, self.player.id)
 
         self.assertEqual(profile.appearances, 2)
         self.assertEqual([r.played_on.day for r in profile.games], [1, 2])
 
     def test_batter_rows_have_no_decision(self):
         """個人ページはその選手の働きを見る場所。野手にチームの勝敗は出さない。"""
-        profile = self.service.get_player_profile(self.team.id, self.player.id)
+        profile = self.team_view.get_player_profile(self.team.id, self.player.id)
 
         self.assertEqual([r.decision for r in profile.games], ["", ""])
 
@@ -262,19 +262,19 @@ class PlayerDetailViewTest(BaseCase):
             day=4,
         )
 
-        ace_games = self.service.get_player_profile(self.team.id, ace.id).games
-        closer_games = self.service.get_player_profile(self.team.id, closer.id).games
+        ace_games = self.team_view.get_player_profile(self.team.id, ace.id).games
+        closer_games = self.team_view.get_player_profile(self.team.id, closer.id).games
 
         self.assertEqual(ace_games[0].decision, "勝")
         self.assertEqual(closer_games[0].decision, "Ｓ")
 
     def test_opponent_is_shown_from_the_player_side(self):
-        profile = self.service.get_player_profile(self.team.id, self.player.id)
+        profile = self.team_view.get_player_profile(self.team.id, self.player.id)
         self.assertEqual(profile.games[0].opponent_name, "相手チーム")
 
     def test_games_without_the_player_are_excluded(self):
         play_game(self.team, self.rival, day=3)
-        profile = self.service.get_player_profile(self.team.id, self.player.id)
+        profile = self.team_view.get_player_profile(self.team.id, self.player.id)
 
         self.assertEqual(profile.appearances, 2)
 
@@ -362,7 +362,7 @@ class PlayerDetailDerivedStatsTest(BaseCase):
             self.assertIn(f">{heading}</th>", body)
 
     def test_batter_values_reach_every_row_type(self):
-        profile = self.service.get_player_profile(self.team.id, self.batter.id, month="2026-04")
+        profile = self.team_view.get_player_profile(self.team.id, self.batter.id, month="2026-04")
         expected = {
             "runs": 3,
             "stolen_bases": 2,
@@ -387,7 +387,7 @@ class PlayerDetailDerivedStatsTest(BaseCase):
         self.assertEqual(year.strikeouts_batting, 4)
 
     def test_pitcher_runs_allowed_reach_every_row_type(self):
-        profile = self.service.get_player_profile(self.team.id, self.pitcher.id)
+        profile = self.team_view.get_player_profile(self.team.id, self.pitcher.id)
 
         self.assertEqual(profile.games[0].runs_allowed, 4)
         self.assertEqual(profile.months[0].runs_allowed, 4)
@@ -421,7 +421,7 @@ class PlayerDetailDerivedStatsTest(BaseCase):
             },
         )
 
-        profile = self.service.get_player_profile(self.rival.id, away[0], month="2026-04")
+        profile = self.team_view.get_player_profile(self.rival.id, away[0], month="2026-04")
 
         self.assertEqual(profile.detail.strikeouts_batting, 1)
         self.assertEqual(profile.games[0].strikeouts_batting, 1)
@@ -472,7 +472,7 @@ class PlayerProfileTest(BaseCase):
         player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         orm_models.Player.objects.filter(id=player.id).update(name_kana="ヤマダタロウ", back_name="T.YAMADA")
 
-        profile = self.service.get_player_profile(self.team.id, player.id)
+        profile = self.team_view.get_player_profile(self.team.id, player.id)
 
         self.assertEqual(profile.name_kana, "ヤマダタロウ")
         self.assertEqual(profile.back_name, "T.YAMADA")
@@ -561,7 +561,7 @@ class PlayerProfileTest(BaseCase):
     def test_player_without_amateur_career(self):
         player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
 
-        profile = self.service.get_player_profile(self.team.id, player.id)
+        profile = self.team_view.get_player_profile(self.team.id, player.id)
 
         self.assertEqual(profile.amateur_career, [])
 
