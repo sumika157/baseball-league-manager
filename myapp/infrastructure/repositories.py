@@ -52,6 +52,7 @@ from ..domain.exceptions import (
 from ..domain.pennant.awards import Award
 from ..domain.pennant.championship import Championship
 from ..domain.pennant.club_plan import ClubPlan, LineupChoice
+from ..domain.pennant.draft_order import DraftOrderRule
 from ..domain.pennant.postseason import PostseasonFormat
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.release import ReleasePlan
@@ -1837,6 +1838,7 @@ class DjangoWorldRepository:
                 "managed_team_id": world.managed_team_id,
                 "start_year": world.start_year,
                 "postseason_format": world.postseason_format.value,
+                "draft_order_rule": world.draft_order_rule.value,
             },
         )
         world.id = row.id
@@ -1877,4 +1879,5 @@ class DjangoWorldRepository:
             owner_id=row.owner_id,
             managed_team_id=row.managed_team_id,
             postseason_format=PostseasonFormat(row.postseason_format),
+            draft_order_rule=DraftOrderRule(row.draft_order_rule),
         )

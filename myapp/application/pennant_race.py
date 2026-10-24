@@ -85,6 +85,21 @@ def tiebreak_for(year: int, *, games: GameListQuery, league_view: StandingsSourc
     return ChampionTiebreak(results=results, previous_rank=previous_rank, order=order)
 
 
+class LeagueFinishReader:
+    """その年の公式戦の最終順位（全順序。`league_finishes`）を読む。勝ち上がりの読み取りと、ドラフト会議の指名順
+    （シーズンを締める処理）が共有する（同じ年の順位を2通りに作らない）。"""
+
+    def __init__(self, *, league_view: StandingsSource, games: GameListQuery) -> None:
+        self._league_view = league_view
+        # 同率の決着（当該球団間の対戦勝率など）の材料。公式戦だけを読む
+        self._games = games
+
+    def finishes(self, year: int) -> list[LeagueFinish]:
+        """`year` 年の公式戦のリーグごとの最終順位（ポストシーズンの結果は使わない）。"""
+        standings = self._league_view.get_league_standings(year)
+        return league_finishes(standings, tiebreak_for(year, games=self._games, league_view=self._league_view))
+
+
 def own_race(
     standings: list[LeagueStandings],
     remaining: Mapping[int, int],

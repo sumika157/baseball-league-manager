@@ -10,6 +10,7 @@
 from django.conf import settings
 from django.db import models
 
+from ..domain.pennant.draft_order import DraftOrderRule
 from ..domain.pennant.postseason import PostseasonFormat
 from ..domain.services.rankings import Title
 from ..domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings
@@ -42,6 +43,7 @@ FREE_AGENCY_KIND_CHOICES = [(kind.value, kind.value) for kind in FreeAgencyKind]
 GAME_STAGE_CHOICES = [(stage.value, stage.value) for stage in GameStage]
 # ポストシーズンの方式の選択肢もドメインの PostseasonFormat が唯一の出典
 POSTSEASON_FORMAT_CHOICES = [(item.value, item.value) for item in PostseasonFormat]
+DRAFT_ORDER_RULE_CHOICES = [(item.value, item.value) for item in DraftOrderRule]
 # 試合で就いた守備位置。登録位置（Position）とは別の概念
 FIELDING_POSITION_CHOICES = [(p.value, p.value) for p in FieldingPosition]
 # 打席まわりの選択肢も同じくドメインの値オブジェクトが出典。ここに文字列を
@@ -93,6 +95,15 @@ class PennantWorld(models.Model):
         help_text=(
             "シーズン終了の後に行うポストシーズン（CS と日本シリーズ）の形。「なし」ならすぐにシーズンを締められます。"
         ),
+    )
+    # ドラフト会議の指名順の規則（オーナーが変えられる設定。指名順は保存せず、規則とその年の公式戦の順位から導く）。
+    # 既定は NPB 方式（規則を足す前に作った世界も AddField で NPB 方式になる）
+    draft_order_rule = models.CharField(
+        max_length=30,
+        choices=DRAFT_ORDER_RULE_CHOICES,
+        default=DraftOrderRule.NPB.value,
+        verbose_name="ドラフトの指名順",
+        help_text="シーズンを締めるときのドラフト会議で、どの球団から指名するかの規則。",
     )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="作成日時")
 

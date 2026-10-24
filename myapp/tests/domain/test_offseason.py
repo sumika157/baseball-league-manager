@@ -9,12 +9,15 @@ from datetime import date
 
 from myapp.domain.entities import Team
 from myapp.domain.pennant import draft
+from myapp.domain.pennant.draft_meeting import DraftContext
+from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
 from myapp.domain.pennant.fork import estimated_birth_date, fork_roster, with_birth_date
 from myapp.domain.pennant.offseason import (
     OffseasonClub,
     OffseasonPlan,
     OffseasonPlayer,
     overall_value,
+    plan_departures,
     plan_offseason,
     rating_change,
     retirement_value,
@@ -70,8 +73,38 @@ def club(*players: OffseasonPlayer, team_id: int = 1, registered_limit: int | No
     )
 
 
+def draft_context(clubs: list[OffseasonClub]) -> DraftContext:
+    """指名順の最終順位は1リーグ・球団 id の順（規則ごとの違いは `test_draft_meeting` が見る）。"""
+    return DraftContext(DraftOrderRule.NPB, DraftStandings(leagues=(tuple(sorted(c.team_id for c in clubs)),)))
+
+
 def plan(clubs: list[OffseasonClub], seed: int = 1):
-    return plan_offseason(clubs, year=YEAR, world_seed=seed, start_year=START_YEAR, used_names=())
+    return plan_offseason(
+        clubs, year=YEAR, world_seed=seed, start_year=START_YEAR, used_names=(), draft=draft_context(clubs)
+    )
+
+
+class DraftDoesNotMoveDeparturesTest(unittest.TestCase):
+    """会議（#198）は引退・戦力外の後に、別の乱数で行う。規則を変えても引退・戦力外する選手は変わらない。"""
+
+    def test_retirements_and_releases_do_not_depend_on_the_rule(self):
+        clubs = [club(*(player(i + 100 * t) for i in range(1, 41)), team_id=t) for t in (1, 2, 3)]
+        results = [
+            plan_offseason(
+                clubs,
+                year=YEAR,
+                world_seed=5,
+                start_year=START_YEAR,
+                used_names=(),
+                draft=DraftContext(rule, DraftStandings(leagues=((1, 2, 3),))),
+            )
+            for rule in DraftOrderRule
+        ]
+        departures = plan_departures(clubs, year=YEAR, world_seed=5, start_year=START_YEAR)
+        for result in results:
+            self.assertEqual(set(result.retired), set(departures.retired))
+            self.assertEqual(set(result.released), set(departures.released))
+            self.assertEqual(len(result.draftees), len(results[0].draftees))
 
 
 class EstimatedBirthDateTest(unittest.TestCase):
@@ -145,7 +178,9 @@ class PlanTest(unittest.TestCase):
         clubs = [club(*(player(i) for i in range(1, 31)))]
         first = plan(clubs)
         taken = {d.name for d in first.draftees}
-        second = plan_offseason(clubs, year=YEAR, world_seed=1, start_year=START_YEAR, used_names=taken)
+        second = plan_offseason(
+            clubs, year=YEAR, world_seed=1, start_year=START_YEAR, used_names=taken, draft=draft_context(clubs)
+        )
         self.assertFalse(taken & {d.name for d in second.draftees})
 
     def test_retirement_is_independent_of_other_players(self) -> None:

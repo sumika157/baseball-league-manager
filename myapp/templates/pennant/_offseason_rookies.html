@@ -8,6 +8,7 @@
         <th>選手</th>
         <th>位置</th>
         <th class="text-end">年齢</th>
+        <th>指名</th>
         <th>経路</th>
         <th>総合</th>
       </tr>
@@ -20,6 +21,7 @@
           <td><a href="{% scoped_url 'player_detail' row.team_id row.player_id %}" class="player-name">{{ row.name }}</a></td>
           <td>{{ row.position }}</td>
           <td class="text-end">{{ row.age|default_if_none:"—" }}</td>
+          <td data-testid="rookie-pick">{{ row.pick|default:"—" }}</td>
           <td>{{ row.route }}</td>
           <td>{% if row.rating %}{% include 'myapp/_rating_grade.html' with rating=row.rating %}{% else %}—{% endif %}</td>
         </tr>

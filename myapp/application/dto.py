@@ -13,6 +13,7 @@ from datetime import date
 from ..domain.entities import jersey_number_in, winning_team_id
 from ..domain.pennant.awards import Award
 from ..domain.pennant.club_plan import PlanSection
+from ..domain.pennant.draft_order import DraftOrderRule
 from ..domain.pennant.postseason import PostseasonFormat, PostseasonResult, PostseasonStatus
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.season import SeasonPhase
@@ -1200,6 +1201,8 @@ class PennantWorldRow:
     managed_team_id: int | None
     # ポストシーズンの方式（オーナーが変えられる設定）
     postseason_format: PostseasonFormat
+    # ドラフトの指名順の規則（オーナーが変えられる設定）
+    draft_order_rule: DraftOrderRule
 
 
 @dataclass(frozen=True)
@@ -1447,15 +1450,22 @@ class PostseasonStats:
 
 @dataclass(frozen=True)
 class PennantSettingsView:
-    """世界の設定の画面（ポストシーズンの方式）。"""
+    """世界の設定の画面（ポストシーズンの方式・ドラフトの指名順の規則）。"""
 
     postseason_format: PostseasonFormat
     # 方式を変えられない理由（domain の `postseason_format_change_blocker`）。変えられるなら空
     blocker: str
+    draft_order_rule: DraftOrderRule
+    # 指名順の規則を変えられない理由（domain の `draft_order_rule_change_blocker`）。変えられるなら空
+    draft_order_blocker: str
 
     @property
     def can_change(self) -> bool:
         return not self.blocker
+
+    @property
+    def can_change_draft_order(self) -> bool:
+        return not self.draft_order_blocker
 
 
 @dataclass(frozen=True)
@@ -2066,6 +2076,8 @@ class SeasonClosed:
     # 新人の人数と、そのうち外国人の人数
     draftee_count: int
     foreign_draftee_count: int
+    # ドラフト会議の1巡目の入札の重複（抽選）の件数（外れ1位の再入札の抽選も数える。入札の無い規則は0）
+    first_round_lottery_count: int
     # 翌年の能力を作らなかった選手の数（締める年の能力が無かった選手）
     without_ratings_count: int
     # 引退・戦力外の選手を含んでいたため、自動に戻した編成の区画。受け持つ球団のぶん（無ければ空）
@@ -2186,6 +2198,8 @@ class OffseasonRookieRow:
     # 高校・大学・社会人・外国人
     route: str
     rating: RatingCell | None
+    # ドラフトの指名の順位（「1位」。`DraftPick.order_label`）。外国人など指名の無い新人は空
+    pick: str = ""
 
 
 @dataclass(frozen=True)

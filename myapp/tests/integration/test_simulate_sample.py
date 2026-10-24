@@ -171,6 +171,7 @@ class FormatOffseasonTest(TestCase):
             released=(),
             retained=(),
             draftees=(),
+            lotteries=(),
             without_ratings=(),
             anchor=AnchorCorrection(),
         )
