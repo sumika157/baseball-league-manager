@@ -28,10 +28,17 @@
 - application は domain のインターフェース（`domain/repositories.py`）越しに永続化を使う。`infrastructure/orm_models.py` を直接 import しない。
 - presentation（views）は application 経由で操作する。ORM モデルやリポジトリ実装を直接触らない。
 - **更新と参照を分ける**: 更新はリポジトリ経由で集約単位（`Team` / `Game`）に読み書きする。一覧表示などの参照は `infrastructure/queries.py` から直接 DTO を作る（集約を組み立てない）。参照クエリのインターフェースは `application/queries.py`（戻り値が DTO のため domain には置けない）。
-- **実データとペナントの世界を混ぜない**: リポジトリと参照クエリは `WorldScope` を必須の引数で受け取り（既定値なし）、「範囲が無ければ全世界を読む」形の API を作らない。例外は世界の一覧そのものを扱う台帳（`WorldRepository`・`WorldSummaryQuery`）だけ（Wiki「ペナントモードの仕組み」の「世界の分け方」）。
+- **ワークスペースどうし・実データとペナントの世界を混ぜない**: リポジトリと参照クエリは範囲 `WorldScope(workspace_id, world_id)` を
+  必須の引数で受け取り（既定値なし）、実データはそのワークスペース、ペナントはその世界だけを読み書きする。
+  世界の台帳（`WorldRepository`・`WorldSummaryQuery`）もワークスペースの id を必須で受け取る。「範囲が無ければ全部読む」形の API を作らない。
+  **例外は管理画面専用の `admin_real_queryset` だけ**（全ワークスペースの実データ。`admin.py` 以外から使わないことを `test_wiring.py` が検査）。
+  範囲を作るのは views の `_real_scope(request)`・`_world_scope(request, world_id)`、管理コマンドの `--workspace`・`--world`、テストの
+  `real_scope()`・`world_scope()` だけ（Wiki「ペナントモードの仕組み」の「世界の分け方」・設計書 `docs/design/workspaces.md`）。
 - **依存の組み立ては `presentation/views.py` の `build_*()` 関数だけ。** サービスを増やすときは組み立て口もここに足し、依存を全部渡す
   （`tests/integration/test_wiring.py` が検査する）。管理コマンドとテスト（`tests/helpers.py` 経由）もここから取る。呼ぶ側ごとに一部の依存だけを
-  渡さない（渡し忘れが「開く画面によって落ちるサービス」になる。管理画面のテンプレートタグで実際に起きた）。ペナントの組み立て口は世界の範囲に固定して組み立てる。
+  渡さない（渡し忘れが「開く画面によって落ちるサービス」になる。管理画面のテンプレートタグで実際に起きた）。
+  **組み立て口はすべて範囲（`scope`）を必須で受け取る**（台帳だけを読む `build_pennant_world_view(workspace_id)` を除く）。
+  ペナント専用・実データ専用の組み立て口に違う種類の範囲を渡すと `InvalidWorld`（どれがどれかは `test_wiring.py` の分類が出典）。
 - **層をまたぐ受け渡しに素の `dict` を使わない。** application が presentation に返す形は `application/dto.py` の dataclass にする（文字列キーの dict は綴りを間違えても静的検査が黙る）。DTO に集約を包ませない。集約からの取り出しは application が担い、presentation は DTO を写すだけにする（前例: `application/game_edit.py` と `GameEditData`）。
 - **`TeamApplicationService` に足す前に、対象ごとの別サービスに置けないか考える**（既に巨大で、分割は #219 で計画中）。分ける判断は選択肢としてユーザーに提示する。
 

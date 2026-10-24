@@ -56,8 +56,12 @@ presentation  →  application  →  domain  ←  infrastructure
 - `prefetch_related('a__b')` のような多段リレーションを新設・変更していないか確認する。中間テーブルが1000件を超えるとSQLiteで `Expression tree is too large` になるため、`Prefetch(..., queryset=...select_related(...))` でJOINにまとめる必要がある（`.claude/rules/performance.md` 参照。既存の回避例は `myapp/infrastructure/repositories.py` の `DjangoTeamRepository`）。
 
 ### 6. 組み立てと受け渡し（CLAUDE.md「アーキテクチャ規則」）
-- **依存の組み立ては `presentation/views.py` の `build_service()` だけ**。サービスやリポジトリを別の場所（テンプレートタグ・管理画面・
-  管理コマンド・テスト）で個別に組み立てていないか。テストは `tests/helpers.py` 経由で `build_service()` を呼ぶ。
+- **依存の組み立ては `presentation/views.py` の `build_*()` だけ**。サービスやリポジトリを別の場所（テンプレートタグ・管理画面・
+  管理コマンド・テスト）で個別に組み立てていないか。テストは `tests/helpers.py` 経由で `build_service(real_scope())` などを呼ぶ。
+- **組み立て口・リポジトリ・参照クエリが範囲（`WorldScope(workspace_id, world_id)`）を必須で受け取っているか**。既定値を持たせる・
+  範囲を無視して全部読む・`admin_real_queryset` を `admin.py` 以外から使う、のどれかがあればワークスペース間の漏れになる。
+  新しい組み立て口は `test_wiring.py` の分類（両用・実データ専用・ペナント専用・台帳）に、新しい `Django*` の読み書きのクラスは
+  `test_workspace_isolation.py` の検査の表に足してあるか。
   呼ぶ側ごとに一部の依存だけを渡すと、開く画面によって落ちるサービスになる（管理画面のテンプレートタグで実際に起きた）。
 - **層をまたぐ受け渡しに素の `dict` を新しく使っていないか**。application が presentation に返す形は `application/dto.py` の
   dataclass にする（文字列キーの dict は綴りを間違えても静的検査が黙る）。既存の dict を触った変更なら、DTO へ寄せる余地を指摘してよい。
