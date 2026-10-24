@@ -13,6 +13,7 @@ import inspect
 from datetime import date
 from inspect import Parameter, signature
 from pathlib import Path
+from unittest import mock
 
 from django.test import SimpleTestCase
 
@@ -509,6 +510,18 @@ class WorldViewScopeTest(SimpleTestCase):
         # 同率の決着に使う試合も、世界ごとの範囲で読む
         self.assertEqual(view._games_for(7)._scope, WORLD7)
         self.assertEqual(view._games_for(8)._scope, WORLD8)
+        # 世界の終了の判定に使うポストシーズンの状況も、世界ごとの範囲で導く
+        # （組み立て口を差し替えて、渡る範囲を捕まえる。DB を読まない）
+        scopes: list[WorldScope] = []
+
+        def capture(scope: WorldScope) -> mock.Mock:
+            scopes.append(scope)
+            return mock.Mock(status=lambda year: year)
+
+        with mock.patch.object(views, "build_pennant_postseason_view_service", side_effect=capture):
+            self.assertEqual(view._postseason_status_for(7, 2026), 2026)
+            self.assertEqual(view._postseason_status_for(8, 2027), 2027)
+        self.assertEqual(scopes, [WORLD7, WORLD8])
 
 
 class RealScopeTest(SimpleTestCase):

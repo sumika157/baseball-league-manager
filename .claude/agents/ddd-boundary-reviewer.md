@@ -57,7 +57,7 @@ presentation  →  application  →  domain  ←  infrastructure
 
 ### 6. 組み立てと受け渡し（CLAUDE.md「アーキテクチャ規則」）
 - **依存の組み立ては `presentation/views.py` の `build_*()` だけ**。サービスやリポジトリを別の場所（テンプレートタグ・管理画面・
-  管理コマンド・テスト）で個別に組み立てていないか。テストは `tests/helpers.py` 経由で `build_service(real_scope())` などを呼ぶ。
+  管理コマンド・テスト）で個別に組み立てていないか。テストは `tests/helpers.py` 経由で `build_league_view_service(real_scope())` などを呼ぶ。
 - **組み立て口・リポジトリ・参照クエリが範囲（`WorldScope(workspace_id, world_id)`）を必須で受け取っているか**。既定値を持たせる・
   範囲を無視して全部読む・`admin_real_queryset` を `admin.py` 以外から使う、のどれかがあればワークスペース間の漏れになる。
   新しい組み立て口は `test_wiring.py` の分類（両用・実データ専用・ペナント専用・台帳）に、新しい `Django*` の読み書きのクラスは
