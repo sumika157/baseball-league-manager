@@ -40,6 +40,8 @@ from myapp.application.queries import (
     SimulationContextQuery,
     TeamAnalysisQuery,
     TeamListQuery,
+    WorkspaceAccessQuery,
+    WorkspaceListQuery,
     WorldSummaryQuery,
 )
 from myapp.application.roster import RosterService
@@ -72,6 +74,8 @@ from myapp.infrastructure.queries import (
     DjangoSimulationContextQuery,
     DjangoTeamAnalysisQuery,
     DjangoTeamListQuery,
+    DjangoWorkspaceAccessQuery,
+    DjangoWorkspaceListQuery,
     DjangoWorldSummaryQuery,
 )
 from myapp.infrastructure.repositories import (
@@ -105,6 +109,8 @@ from myapp.presentation.views import (
     build_service,
     build_team_analysis_service,
     build_team_view_service,
+    build_workspace_access_query,
+    build_workspace_list_query,
 )
 
 # 組み立てるときに DB を読まないので、ワークスペースの id はリテラルでよい（SimpleTestCase のまま通す）
@@ -136,12 +142,18 @@ PENNANT_ONLY_BUILDERS = (
     build_club_details_service,
     build_offseason_view_service,
 )
+# ワークスペースの台帳（W2 T1）。範囲もワークスペースの id も取らない（key・利用者からワークスペースそのものを引き、
+# 中のデータは読まない）。名前で列挙し、黙って増えないようにする（`WorkspaceLedgersTest`）
+WORKSPACE_LEDGER_BUILDERS = (build_workspace_access_query, build_workspace_list_query)
 
 # 範囲もワークスペースも受け取らずに作れる実装。W1b T3 で世界の台帳もワークスペースを受け取るようになり、空になった。
 # ここに足す前に、範囲かワークスペースで絞れないかを考える（全範囲を読む実装は、ワークスペースをまたいで行を漏らす）
 UNSCOPED: set[type] = set()
 # 世界の台帳。範囲（ワークスペースと世界）ではなく、ワークスペースの id だけを受け取る
 LEDGERS = {DjangoWorldRepository, DjangoWorldSummaryQuery}
+# ワークスペースの台帳（W2 T1）。何も受け取らない（key・利用者は呼ぶときに渡す）。ここに足すのは
+# 「ワークスペースそのものを引き、中のデータを読まない」実装だけ
+WORKSPACE_LEDGERS = {DjangoWorkspaceAccessQuery, DjangoWorkspaceListQuery}
 
 
 class ProtocolConformanceTest(SimpleTestCase):
@@ -167,6 +179,8 @@ class ProtocolConformanceTest(SimpleTestCase):
         (DjangoOffseasonQuery(REAL), OffseasonQuery),
         (DjangoRatingsHistoryQuery(REAL), RatingsHistoryQuery),
         (DjangoHomeStadiumQuery(REAL), HomeStadiumQuery),
+        (DjangoWorkspaceAccessQuery(), WorkspaceAccessQuery),
+        (DjangoWorkspaceListQuery(), WorkspaceListQuery),
     ]
 
     def test_implementations_satisfy_interfaces(self):
@@ -197,7 +211,10 @@ class ScopeIsRequiredTest(SimpleTestCase):
         found = list(self._implementations())
         self.assertGreaterEqual(len(found), 20, "検査の対象を拾えていません")
         self.assertLessEqual(LEDGERS, set(found), "台帳を拾えていません")
+        self.assertLessEqual(WORKSPACE_LEDGERS, set(found), "ワークスペースの台帳を拾えていません")
         for cls in found:
+            if cls in WORKSPACE_LEDGERS:
+                continue
             with self.subTest(implementation=cls.__name__):
                 expected = "workspace_id" if cls in LEDGERS else "scope"
                 parameters = signature(cls.__init__).parameters
@@ -212,6 +229,20 @@ class ScopeIsRequiredTest(SimpleTestCase):
         for cls in LEDGERS:
             with self.subTest(implementation=cls.__name__), self.assertRaises(TypeError):
                 cls()
+
+    def test_only_the_workspace_ledgers_take_nothing(self):
+        """何も受け取らずに作れるのは、ワークスペースの台帳の2つだけ（名前で固定し、黙って増やさない）。
+
+        ワークスペースの台帳は key・利用者からワークスペースそのものを引くので、範囲を作る前に呼ばれる。
+        ほかの実装が範囲を取らずに作れると、ワークスペースをまたいで行を読む。
+        """
+        # クラスそのものの signature は、継いだコンストラクタも解決して呼ぶときの引数を返す
+        # （`__init__` を定義しなければ object の `()`。親の `__init__(self, scope)` を継げば `(scope)`）
+        takes_nothing = {cls for cls in self._implementations() if not signature(cls).parameters}
+        self.assertEqual(
+            {cls.__name__ for cls in takes_nothing}, {"DjangoWorkspaceAccessQuery", "DjangoWorkspaceListQuery"}
+        )
+        self.assertEqual(takes_nothing, WORKSPACE_LEDGERS)
 
 
 class BuildServiceTest(SimpleTestCase):
@@ -502,7 +533,13 @@ class BuildersRequireScopeTest(SimpleTestCase):
 
         新しい組み立て口を足したら、どの範囲を受け取るかをここで決めさせる（分類の漏れ・二重を拾う）。
         """
-        classes = (BOTH_BUILDERS, REAL_ONLY_BUILDERS, PENNANT_ONLY_BUILDERS, LEDGER_BUILDERS)
+        classes = (
+            BOTH_BUILDERS,
+            REAL_ONLY_BUILDERS,
+            PENNANT_ONLY_BUILDERS,
+            LEDGER_BUILDERS,
+            WORKSPACE_LEDGER_BUILDERS,
+        )
         found = self._found_builders()
         self.assertGreaterEqual(len(found), 16, "検査の対象を拾えていません")
         for function in found:
@@ -513,7 +550,7 @@ class BuildersRequireScopeTest(SimpleTestCase):
 
     def test_every_builder_takes_a_required_scope(self):
         for function in self._found_builders():
-            if function in LEDGER_BUILDERS:
+            if function in LEDGER_BUILDERS or function in WORKSPACE_LEDGER_BUILDERS:
                 continue
             with self.subTest(build=function.__name__):
                 parameters = signature(function).parameters
@@ -525,6 +562,14 @@ class BuildersRequireScopeTest(SimpleTestCase):
             parameters = signature(build).parameters
             self.assertEqual(list(parameters), ["workspace_id"])
             self.assertIs(parameters["workspace_id"].default, Parameter.empty, "ワークスペースに既定値があります")
+
+    def test_only_the_workspace_ledgers_are_built_without_a_scope_or_a_workspace(self):
+        """範囲もワークスペースの id も取らない組み立て口は、ワークスペースの台帳の2つだけ（名前で固定する）。"""
+        takes_nothing = {f.__name__ for f in self._found_builders() if not signature(f).parameters}
+        self.assertEqual(takes_nothing, {"build_workspace_access_query", "build_workspace_list_query"})
+        self.assertEqual(takes_nothing, {f.__name__ for f in WORKSPACE_LEDGER_BUILDERS})
+        self.assertIsInstance(build_workspace_access_query(), DjangoWorkspaceAccessQuery)
+        self.assertIsInstance(build_workspace_list_query(), DjangoWorkspaceListQuery)
 
     def test_the_world_scope_builders_were_folded_into_the_scope_taking_ones(self):
         self.assertFalse(hasattr(views, "build_world_view_service"))
@@ -722,6 +767,28 @@ class AdminOnlyScopeExceptionTest(SimpleTestCase):
         }
         self.assertIn(Path("myapp/admin.py"), users, "検査の対象を拾えていません")
         self.assertEqual(users - self.ALLOWED, set(), "admin.py 以外が管理画面専用の関数を使っています")
+
+
+class OuterWorkspaceTeamsTest(SimpleTestCase):
+    """範囲を取らない `real_teams_of_outer_workspace` は、`infrastructure/queries.py` だけが使う（W2 T1）。
+
+    外側の `Workspace` の行に相関した副問い合わせとしてしか正しく働かない。ほかの場所で別のモデルを外側にして
+    使うと、その行の pk をワークスペースの id と取り違え、エラーにならずにほかのワークスペースの球団を読む。
+    `myapp/` の .py（テストを除く）を走査し、名前を出すのが定義とワークスペースの一覧だけかを確かめる。
+    """
+
+    NAME = "real_teams_of_outer_workspace"
+    ALLOWED = {Path("myapp/infrastructure/queries.py"), Path("myapp/infrastructure/scoping.py")}
+
+    def test_only_the_workspace_list_uses_the_correlated_teams(self):
+        root = Path(__file__).resolve().parents[3]
+        users = {
+            path.relative_to(root)
+            for path in (root / "myapp").rglob("*.py")
+            if "tests" not in path.relative_to(root).parts and self.NAME in path.read_text(encoding="utf-8")
+        }
+        self.assertIn(Path("myapp/infrastructure/queries.py"), users, "検査の対象を拾えていません")
+        self.assertEqual(users - self.ALLOWED, set(), "ワークスペースの一覧の外で相関副問い合わせの球団を使っています")
 
 
 class LedgersAreScopedToTheWorkspaceTest(SimpleTestCase):

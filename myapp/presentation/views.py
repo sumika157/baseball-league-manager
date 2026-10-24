@@ -98,6 +98,8 @@ from ..infrastructure.queries import (
     DjangoTeamAnalysisQuery,
     DjangoTeamListQuery,
     DjangoTeamPermissionQuery,
+    DjangoWorkspaceAccessQuery,
+    DjangoWorkspaceListQuery,
     DjangoWorldSummaryQuery,
 )
 from ..infrastructure.repositories import (
@@ -454,6 +456,19 @@ def build_player_search_query(scope: WorldScope) -> DjangoPlayerSearchQuery:
     """選手検索を組み立てる。実データの範囲だけを受け取る（ペナントの範囲なら InvalidWorld）。"""
     _require_real(scope)
     return DjangoPlayerSearchQuery(scope)
+
+
+def build_workspace_access_query() -> DjangoWorkspaceAccessQuery:
+    """URL の key と利用者からワークスペースと権限を引く台帳を組み立てる（W2 T4 の `workspace_view` が使う）。
+
+    範囲を取らない: key から引くワークスペースそのものの台帳で、ワークスペースの中のデータは読まない。
+    """
+    return DjangoWorkspaceAccessQuery()
+
+
+def build_workspace_list_query() -> DjangoWorkspaceListQuery:
+    """自分が入っているワークスペースの一覧（`/`）を組み立てる。範囲を取らない台帳（利用者で絞る）。"""
+    return DjangoWorkspaceListQuery()
 
 
 def _repositories_for(scope: WorldScope) -> WorldRepositories:

@@ -42,6 +42,8 @@ from myapp.presentation.views import build_roster_service as build_roster_servic
 from myapp.presentation.views import build_service as build_service
 from myapp.presentation.views import build_team_analysis_service as build_team_analysis_service
 from myapp.presentation.views import build_team_view_service as build_team_view_service
+from myapp.presentation.views import build_workspace_access_query as build_workspace_access_query
+from myapp.presentation.views import build_workspace_list_query as build_workspace_list_query
 
 LINEUP_SIZE = 9
 

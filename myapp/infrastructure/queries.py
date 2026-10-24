@@ -52,10 +52,12 @@ from ..application.dto import (
     TeamAnalysisFacts,
     TeamSpan,
     TeamSummary,
+    WorkspaceContext,
+    WorkspaceRow,
     WorldSummary,
 )
 from ..domain.entities import Game, jersey_number_in, winning_team_id
-from ..domain.exceptions import WorldNotFound
+from ..domain.exceptions import WorkspaceNotFound, WorldNotFound
 from ..domain.pennant.retirement import PlayingTime
 from ..domain.pennant.world import WorldScope
 from ..domain.services.rankings import Title
@@ -76,6 +78,7 @@ from ..domain.value_objects import (
     Profile,
     Season,
 )
+from ..domain.workspace import Visibility, WorkspaceAccess, WorkspaceRole
 from . import orm_models
 from .repositories import (
     FOREIGN_RULE_FIELDS,
@@ -101,6 +104,7 @@ from .scoping import (
     period_covering,
     players_in,
     ratings_in,
+    real_teams_of_outer_workspace,
     stints_in,
     teams_in,
     world_condition,
@@ -550,6 +554,81 @@ class DjangoTeamPermissionQuery:
         if user.is_staff or user.is_superuser:
             return in_scope.exists()
         return in_scope.filter(managers=user).exists()
+
+
+class DjangoWorkspaceAccessQuery:
+    """WorkspaceAccessQuery の Django ORM 実装。key と利用者から、ワークスペースと権限の事実を読む台帳。
+
+    範囲を取らない（key から引くワークスペースそのものの台帳で、その中のデータは読まない）。クエリ数:
+
+    - 1本目: ワークスペースの行（id・key・名前・持ち主・公開範囲）。ログインしていれば、編集者の行の有無を
+      同じ問い合わせの `Exists` の注釈で読む。未ログイン・持ち主・編集者はここで終わる（**1クエリ**）。
+    - 2本目: それ以外のログインした人だけ、担当チームの id を、そのワークスペースの実データのチーム
+      （`teams_in(WorldScope.real(ws))`）から読む（**2クエリ**）。ほかのワークスペースのチームやペナントの
+      球団の担当は混ざらない。
+
+    判定（役割の優先・公開範囲）は domain の `WorkspaceAccess.of` に任せる。`is_staff` は読まない。
+    """
+
+    def resolve(self, key: str, user_id: int | None) -> WorkspaceContext:
+        rows = orm_models.Workspace.objects.filter(key=key)
+        columns = ["id", "key", "name", "owner_id", "visibility"]
+        if user_id is not None:
+            rows = rows.annotate(
+                is_editor=Exists(orm_models.WorkspaceEditor.objects.filter(workspace=OuterRef("pk"), user_id=user_id))
+            )
+            columns.append("is_editor")
+        row = rows.values(*columns).first()
+        if row is None:
+            raise WorkspaceNotFound(f"ワークスペースが見つかりません（key={key}）。")
+
+        workspace_id = int(row["id"])
+        is_editor = bool(row.get("is_editor", False))
+        managed_team_ids: list[int] = []
+        if user_id is not None and user_id != row["owner_id"] and not is_editor:
+            managed_team_ids = list(
+                teams_in(WorldScope.real(workspace_id)).filter(managers__id=user_id).values_list("id", flat=True)
+            )
+        access = WorkspaceAccess.of(
+            owner_id=int(row["owner_id"]),
+            visibility=Visibility(row["visibility"]),
+            user_id=user_id,
+            is_editor=is_editor,
+            managed_team_ids=managed_team_ids,
+        )
+        return WorkspaceContext(workspace_id=workspace_id, key=row["key"], name=row["name"], access=access)
+
+
+class DjangoWorkspaceListQuery:
+    """WorkspaceListQuery の Django ORM 実装。自分が入っているワークスペースを**1クエリ**で読む台帳。
+
+    編集者かどうか・担当のチームがあるかを `Exists` の注釈（相関副問い合わせ）で読み、役割は domain の
+    `WorkspaceRole.of` で決める。担当として数えるのは、そのワークスペースの実データのチームの担当だけ
+    （ペナントの球団の担当では入らない）。メンバーでないワークスペースは公開でも出さない。
+    """
+
+    def list_for(self, user_id: int) -> list[WorkspaceRow]:
+        rows = (
+            orm_models.Workspace.objects.annotate(
+                is_editor=Exists(orm_models.WorkspaceEditor.objects.filter(workspace=OuterRef("pk"), user_id=user_id)),
+                manages_a_team=Exists(real_teams_of_outer_workspace().filter(managers__id=user_id)),
+            )
+            .filter(Q(owner_id=user_id) | Q(is_editor=True) | Q(manages_a_team=True))
+            .order_by("name", "id")
+            .values("key", "name", "owner_id", "visibility", "is_editor", "manages_a_team")
+        )
+        result = []
+        for row in rows:
+            visibility = Visibility(row["visibility"])
+            role = WorkspaceRole.of(
+                owner_id=int(row["owner_id"]),
+                visibility=visibility,
+                user_id=user_id,
+                is_editor=bool(row["is_editor"]),
+                manages_a_team=bool(row["manages_a_team"]),
+            )
+            result.append(WorkspaceRow(key=row["key"], name=row["name"], visibility=visibility, role=role))
+        return result
 
 
 class DjangoGameListQuery:

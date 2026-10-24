@@ -12,7 +12,14 @@
 球場はリーグを持たず、ワークスペースに直属する（世界ごとの行は無く、実データとそのワークスペースの世界が共有する）。
 球場の範囲の条件は `_stadium_condition` の1か所で、`stadiums_in`・`home_stadium_in` がこれを使う。
 
-**全範囲を読む関数を作らない。** 例外は管理画面専用の `admin_real_queryset` だけ（決定 2026-10-07 Q4）。
+**全範囲を読む関数を作らない。** 例外は次の2つだけ。
+
+- 管理画面専用の `admin_real_queryset`（決定 2026-10-07 Q4）。`admin.py` だけが使う。
+- `real_teams_of_outer_workspace`（W2 T1）。範囲を取らないが、`OuterRef("pk")` で外側の `Workspace` の行に
+  相関した副問い合わせとしてしか働かない（外側のワークスペースの実データの球団に絞られる）ので、全範囲を読まない。
+  ただし `Workspace` 以外を外側にして使うと、その行の pk をワークスペースの id と取り違えて**エラーにならずに**
+  別のワークスペースの球団を数える。`infrastructure/queries.py`（ワークスペースの一覧）だけが使う
+  （`test_wiring.py` の `OuterWorkspaceTeamsTest` が縛る）。
 """
 
 from __future__ import annotations
@@ -83,6 +90,17 @@ def leagues_in(scope: WorldScope) -> QuerySet[orm_models.League]:
 
 def teams_in(scope: WorldScope) -> QuerySet[orm_models.Team]:
     return orm_models.Team.objects.filter(world_condition("league", scope))
+
+
+def real_teams_of_outer_workspace() -> QuerySet[orm_models.Team]:
+    """相関副問い合わせ用: 外側の問い合わせのワークスペース（`OuterRef("pk")`）の実データの球団。
+
+    `teams_in(WorldScope.real(ws))` の、ワークスペースの id が外側の行で決まる版。ワークスペースを
+    まとめて読む台帳（自分が担当として入っているワークスペースの一覧）だけが `Exists` の中で使う。
+    ペナントのリーグは workspace を持たないので、世界の球団は入らない。
+    条件は `world_condition` の実データの分岐と対になる（実データの条件の表し方を変えるときは、ここも直す）。
+    """
+    return orm_models.Team.objects.filter(league__workspace_id=OuterRef("pk"))
 
 
 def stints_in(scope: WorldScope) -> QuerySet[orm_models.PlayerStint]:
