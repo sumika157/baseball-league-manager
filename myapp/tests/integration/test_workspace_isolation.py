@@ -14,6 +14,8 @@
   B の世界の id は `WorldNotFound`。A の台帳で B の世界を保存・削除できず、何も変わらない。今の URL で
   B の世界（`/pennant/<B の世界>/` とその下）を開くと 404、`/pennant/` には A の世界だけが出る。
 - (5) `players_in(real(A))` に B の選手も A の世界の選手も出ない。
+- ワークスペースの台帳（`DjangoWorkspaceAccessQuery`・`DjangoWorkspaceListQuery`。W2 T1）: A の key で B の行が
+  出ず、B の編集者・担当は A では部外者。一覧に、入っていないワークスペースは出ない。
 - 今の URL の画面に B の目印が出ない（一時関数が A に解決する）。一時関数は1つの要求で1回だけ読む。
 """
 
@@ -46,6 +48,7 @@ from myapp.domain.pennant.release import ReleasePlan
 from myapp.domain.pennant.world import MAX_WORLDS_PER_OWNER, WORLD_LIMIT_MESSAGE, World, WorldScope
 from myapp.domain.services.rankings import Title
 from myapp.domain.value_objects import BattingLine, JerseyNumber, PitchingLine, Position, RosterLimits, Season
+from myapp.domain.workspace import WorkspaceRole
 from myapp.infrastructure import orm_models, queries, repositories
 from myapp.infrastructure.queries import (
     DjangoAwardQuery,
@@ -63,6 +66,8 @@ from myapp.infrastructure.queries import (
     DjangoTeamAnalysisQuery,
     DjangoTeamListQuery,
     DjangoTeamPermissionQuery,
+    DjangoWorkspaceAccessQuery,
+    DjangoWorkspaceListQuery,
     DjangoWorldSummaryQuery,
 )
 from myapp.infrastructure.repositories import (
@@ -505,6 +510,50 @@ def _world_summary_query(t: WorkspaceCase) -> None:
         query.get(t.b_world_id)
 
 
+def _b_members(t: WorkspaceCase) -> tuple[User, User]:
+    """B の編集者と、B のチームの担当（どちらも A では部外者）。
+
+    表の検査は1つのテストで続けて流れるので、2回目は同じ行を返す。
+    """
+    editor, _ = User.objects.get_or_create(username="b-editor-iso")
+    orm_models.WorkspaceEditor.objects.get_or_create(workspace=t.workspace_b, user=editor)
+    manager, _ = User.objects.get_or_create(username="b-manager-iso")
+    t.b_team.managers.add(manager)
+    return editor, manager
+
+
+def _workspace_access_query(t: WorkspaceCase) -> None:
+    """A の key で引くと A の行だけ。B の持ち主・編集者・担当は A では部外者（公開の A では閲覧者）。"""
+    query = DjangoWorkspaceAccessQuery()
+    editor, manager = _b_members(t)
+    for user_id in (t.workspace_b.owner_id, editor.id, manager.id):
+        with t.subTest(user_id=user_id):
+            context = query.resolve(t.workspace.key, user_id)
+            t.assertEqual(context.workspace_id, t.workspace.id)
+            t.assertEqual(context.access.role, WorkspaceRole.VIEWER, "B のメンバーが A のメンバーになった")
+            t.assertEqual(context.access.managed_team_ids, frozenset())
+            t.assert_no_mark(context)
+    # A のチームも担当していれば、A では A のチームだけが担当になる（B のチームは混ざらない）
+    t.team.managers.add(manager)
+    t.assertEqual(query.resolve(t.workspace.key, manager.id).access.managed_team_ids, frozenset({t.team.id}))
+    t.team.managers.remove(manager)  # 後の検査（一覧）では A の部外者に戻す
+    # 空振りの防止: B の key では B のメンバーとして引ける
+    t.assertEqual(query.resolve(t.workspace_b.key, editor.id).access.role, WorkspaceRole.EDITOR)
+    t.assertEqual(query.resolve(t.workspace_b.key, manager.id).access.managed_team_ids, frozenset({t.b_team.id}))
+
+
+def _workspace_list_query(t: WorkspaceCase) -> None:
+    """一覧は自分が入っているものだけ。B のメンバーの一覧に A は出ず、A の持ち主の一覧に B は出ない。"""
+    query = DjangoWorkspaceListQuery()
+    editor, manager = _b_members(t)
+    for user_id in (editor.id, manager.id, t.workspace_b.owner_id):
+        with t.subTest(user_id=user_id):
+            t.assertEqual([row.key for row in query.list_for(user_id)], [t.workspace_b.key])
+    a_rows = query.list_for(t.workspace.owner_id)
+    t.assertEqual([row.key for row in a_rows], [t.workspace.key])
+    t.assert_no_mark(a_rows)
+
+
 # 検査の表。`repositories`・`queries` の `Django*` は、ちょうどここに載る
 CHECKS: dict[type, Callable[[WorkspaceCase], None]] = {
     DjangoTeamRepository: _team_repository,
@@ -532,6 +581,8 @@ CHECKS: dict[type, Callable[[WorkspaceCase], None]] = {
     DjangoTeamAnalysisQuery: _team_analysis_query,
     DjangoWorldRepository: _world_repository,
     DjangoWorldSummaryQuery: _world_summary_query,
+    DjangoWorkspaceAccessQuery: _workspace_access_query,
+    DjangoWorkspaceListQuery: _workspace_list_query,
 }
 
 

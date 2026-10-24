@@ -35,6 +35,7 @@ from ..domain.value_objects import (
     Position,
     Profile,
 )
+from ..domain.workspace import Visibility, WorkspaceAccess, WorkspaceRole
 
 
 @dataclass(frozen=True)
@@ -2665,3 +2666,31 @@ class AwardRow:
             team_id=self.team_id,
             value=self.value,
         )
+
+
+@dataclass(frozen=True)
+class WorkspaceContext:
+    """URL の key から解決した、1回の要求のワークスペース（`WorkspaceAccessQuery.resolve`）。
+
+    権限の判定は値オブジェクト `WorkspaceAccess` が持つ（包んでよいのは値オブジェクトだけ。集約は包まない）。
+    """
+
+    workspace_id: int
+    key: str
+    name: str
+    access: WorkspaceAccess
+
+    @property
+    def visibility(self) -> Visibility:
+        """公開範囲。出典は `access` の1か所（同じ値を2つの欄に持たない）。"""
+        return self.access.visibility
+
+
+@dataclass(frozen=True)
+class WorkspaceRow:
+    """`/` の一覧の1行。自分が持ち主・編集者・チーム担当として入っているワークスペース。"""
+
+    key: str
+    name: str
+    visibility: Visibility
+    role: WorkspaceRole
