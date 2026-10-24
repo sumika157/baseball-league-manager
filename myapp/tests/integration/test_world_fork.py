@@ -26,7 +26,15 @@ from myapp.infrastructure.repositories import (
 )
 from myapp.presentation.views import build_pennant_world_service
 
-from ..helpers import make_league, make_workspace, play_game, real_scope, world_ledger, world_scope
+from ..helpers import (
+    DEFAULT_WORKSPACE_KEY,
+    make_league,
+    make_workspace,
+    play_game,
+    real_scope,
+    world_ledger,
+    world_scope,
+)
 from .base import BaseCase
 from .test_world_isolation import BOTH, CLASSIFICATION, GAME, LEAGUE, PLAYER
 from .world_case import PENNANT_LEAGUE, PENNANT_TEAM, YEAR, WorldCase
@@ -560,7 +568,16 @@ class PennantCommandsTest(BaseCase):
         out = StringIO()
         managed = [] if "--managed-team" in args else ["--managed-team", str(self.team.id)]
         call_command(
-            "pennant_create", "--name", "コマンド", "--league", str(self.league.id), *managed, *args, stdout=out
+            "pennant_create",
+            "--workspace",
+            DEFAULT_WORKSPACE_KEY,
+            "--name",
+            "コマンド",
+            "--league",
+            str(self.league.id),
+            *managed,
+            *args,
+            stdout=out,
         )
         return out.getvalue()
 
@@ -589,7 +606,16 @@ class PennantCommandsTest(BaseCase):
     def test_pennant_create_requires_a_managed_team(self):
         """受け持ちの無い世界はコマンドでも作らない（画面では作成時に必須。同じにする）。"""
         with self.assertRaises(CommandError) as raised:
-            call_command("pennant_create", "--name", "x", "--league", str(self.league.id), stdout=StringIO())
+            call_command(
+                "pennant_create",
+                "--workspace",
+                DEFAULT_WORKSPACE_KEY,
+                "--name",
+                "x",
+                "--league",
+                str(self.league.id),
+                stdout=StringIO(),
+            )
 
         self.assertIn("--managed-team", str(raised.exception))
         self.assertEqual(orm_models.PennantWorld.objects.count(), 0)
@@ -602,7 +628,18 @@ class PennantCommandsTest(BaseCase):
 
     def test_pennant_create_reports_a_domain_error_as_a_command_error(self):
         with self.assertRaises(CommandError) as raised:
-            call_command("pennant_create", "--name", "x", "--league", "9999", "--managed-team", "1", stdout=StringIO())
+            call_command(
+                "pennant_create",
+                "--workspace",
+                DEFAULT_WORKSPACE_KEY,
+                "--name",
+                "x",
+                "--league",
+                "9999",
+                "--managed-team",
+                "1",
+                stdout=StringIO(),
+            )
 
         self.assertIn("リーグが見つかりません", str(raised.exception))
 

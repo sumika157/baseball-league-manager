@@ -16,7 +16,7 @@ from typing import Any
 from django.core.management.base import BaseCommand, CommandError
 
 from myapp.domain.exceptions import DomainError
-from myapp.management.workspaces import legacy_world_scope
+from myapp.management.workspaces import world_scope
 from myapp.presentation.views import build_pennant_offseason_service
 
 
@@ -35,7 +35,7 @@ class Command(BaseCommand):
             return
         started = time.perf_counter()
         try:
-            years = build_pennant_offseason_service(legacy_world_scope(options["world"])).record_missing_awards()
+            years = build_pennant_offseason_service(world_scope(options["world"])).record_missing_awards()
         except DomainError as error:
             raise CommandError(str(error)) from error
         elapsed = time.perf_counter() - started
@@ -48,7 +48,7 @@ class Command(BaseCommand):
 
     def _check(self, world_id: int) -> None:
         try:
-            years = build_pennant_offseason_service(legacy_world_scope(world_id)).missing_award_years()
+            years = build_pennant_offseason_service(world_scope(world_id)).missing_award_years()
         except DomainError as error:
             raise CommandError(str(error)) from error
         if not years:

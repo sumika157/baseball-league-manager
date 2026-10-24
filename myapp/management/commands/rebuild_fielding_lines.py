@@ -1,4 +1,6 @@
-"""全試合の守備成績を、打席の記録から導き直して保存する。
+"""ワークスペースの全試合の守備成績を、打席の記録から導き直して保存する。
+
+    docker compose exec web python manage.py rebuild_fielding_lines --workspace <key>
 
 守備成績（`GameFieldingLine`）は打席から導いた値で、通算成績の集計のために保存している。
 導き方（経路の読み方・守備位置の解決）を直したときや、既存の試合に後から守備成績を
@@ -18,15 +20,18 @@ from myapp.domain.exceptions import DomainError
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
 from myapp.infrastructure.scoping import games_in
-from myapp.management.workspaces import legacy_real_scope
+from myapp.management.workspaces import add_workspace_argument, real_scope_for_key
 
 
 class Command(BaseCommand):
     help = "全試合の守備成績を、打席の記録から導き直して保存する"
 
+    def add_arguments(self, parser):
+        add_workspace_argument(parser, help="対象のワークスペースの key（必須）。その実データの試合だけを導き直す")
+
     def handle(self, *args, **options):
-        # 対象は実データの試合だけ（ペナントの世界の試合は、その世界を進める側が導く）
-        scope = legacy_real_scope()
+        # 対象は `--workspace` の実データの試合だけ（ペナントの世界の試合は、その世界を進める側が導く）
+        scope = real_scope_for_key(options["workspace"])
         repository = DjangoGameRepository(scope)
         game_ids = sorted(
             orm_models.GamePlateAppearance.objects.filter(game__in=games_in(scope).values("pk"))

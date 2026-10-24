@@ -20,7 +20,7 @@ from myapp.management import estimate_check, multi_season_check
 from myapp.management.commands import simulate_sample
 from myapp.presentation.views import build_pennant_world_service
 
-from ..helpers import make_league, real_scope
+from ..helpers import DEFAULT_WORKSPACE_KEY, make_league, real_scope
 
 TIMING_LINE = re.compile(r"[\d.]+ ms/試合")
 
@@ -104,7 +104,7 @@ class SimulateSampleSeasonsTest(TestCase):
         for league in self.leagues:
             for number in range(6):
                 orm_models.Team.objects.create(league=league, name=f"{league.name}の{number}")
-        call_command("seed_virtual_players", "--seed", "1", stdout=StringIO())
+        call_command("seed_virtual_players", "--workspace", DEFAULT_WORKSPACE_KEY, "--seed", "1", stdout=StringIO())
 
     def counts(self) -> dict[str, int]:
         return {model.__name__: model.objects.count() for model in orm_models.__dict__.values() if _is_model(model)}
@@ -115,7 +115,7 @@ class SimulateSampleSeasonsTest(TestCase):
             patch.object(estimate_check, "ScheduleRules", lambda: self.SMALL),
             patch.object(multi_season_check, "ScheduleRules", lambda: self.SMALL),
         ):
-            return run(from_real_leagues=ids, seasons=seasons, seed=1)
+            return run(workspace=DEFAULT_WORKSPACE_KEY, from_real_leagues=ids, seasons=seasons, seed=1)
 
     def test_two_seasons_run_through_the_offseason_without_writing(self):
         before = self.counts()
@@ -135,7 +135,7 @@ class SimulateSampleSeasonsTest(TestCase):
 
     def test_zero_seasons_is_rejected(self):
         with self.assertRaises(CommandError):
-            run(from_real_leagues=[self.leagues[0].id], seasons=0)
+            run(workspace=DEFAULT_WORKSPACE_KEY, from_real_leagues=[self.leagues[0].id], seasons=0)
 
 
 class EstimateCheckClubTest(TestCase):
@@ -149,7 +149,7 @@ class EstimateCheckClubTest(TestCase):
         league = make_league(name="リーグ")
         for number in range(2):
             orm_models.Team.objects.create(league=league, name=f"球団{number}")
-        call_command("seed_virtual_players", "--seed", "1", stdout=StringIO())
+        call_command("seed_virtual_players", "--workspace", DEFAULT_WORKSPACE_KEY, "--seed", "1", stdout=StringIO())
         service = build_pennant_world_service(real_scope())
         source = service.load_source([league.id])
         ratings = estimate_check.estimate_from_source(service, source, seed=1, year=2026)

@@ -44,7 +44,7 @@ from myapp.domain.value_objects import (
 from myapp.domain.virtual_players import generator, pools
 from myapp.infrastructure.repositories import draft_columns
 from myapp.infrastructure.scoping import players_in, stints_in, teams_in
-from myapp.management.workspaces import legacy_real_scope
+from myapp.management.workspaces import add_workspace_argument, real_scope_for_key
 from myapp.models import Player, PlayerStint
 
 # 支配下の背番号（00・0〜99）
@@ -87,6 +87,7 @@ class Command(BaseCommand):
     help = "各チームに仮想の選手データを投入する（既存の選手・在籍は残す）"
 
     def add_arguments(self, parser):
+        add_workspace_argument(parser, help="投入・補正するワークスペースの key（必須）")
         parser.add_argument("--seed", type=int, default=None, help="乱数シード（再現用）")
         parser.add_argument("--dry-run", action="store_true", help="投入せず件数だけ表示する")
         parser.add_argument(
@@ -112,17 +113,14 @@ class Command(BaseCommand):
         )
 
     def _real_scope(self) -> WorldScope:
-        """投入・補正の対象（実データだけ。ペナントの世界の球団・選手には触れない）。
+        """投入・補正の対象（`--workspace` の実データだけ。ほかのワークスペースとペナントの世界には触れない）。
 
-        暫定（W1b T2）: 今のワークスペース（id が最小のもの）。1回の実行で1回だけ決めて覚える。
-        T5 で `--workspace` を受け取る形に替える。
+        `handle` の最初に1回だけ決めて覚える。
         """
-        scope: WorldScope | None = getattr(self, "_scope", None)
-        if scope is None:
-            scope = self._scope = legacy_real_scope()
-        return scope
+        return self._scope
 
     def handle(self, *args, **options):
+        self._scope = real_scope_for_key(options["workspace"])
         # 乱数源はこのコマンドの中だけで持つ（生成の関数は rng を引数に取る）
         rng = random.Random(options["seed"])
 
@@ -285,15 +283,14 @@ class Command(BaseCommand):
         rng.shuffle(available)
         return available
 
-    @staticmethod
-    def _next_rounds(team) -> Counter[tuple[int, bool]]:
+    def _next_rounds(self, team) -> Counter[tuple[int, bool]]:
         """球団の既存の選手の、ドラフト年 × 本指名/育成ごとの最大の順位（次に振る順位はこれ＋1）。
 
         指名した球団は最初の在籍で分かるが、ここではこの球団に在籍したことのある選手をすべて数える
         （移籍してきた選手の順位まで避けるので、番号が飛ぶことはあっても重複はしない）。
         """
         rows = (
-            players_in(WorldScope.real(team.league.workspace_id))
+            players_in(self._real_scope())
             .filter(stints__team=team, draft_year__isnull=False, draft_round__isnull=False)
             .values("draft_year", "is_development_draft")
             .annotate(last=Max("draft_round"))
