@@ -4,6 +4,8 @@
   id が最小のワークスペース（移行で作った既定のもの）を返す。W1b の Q2（範囲がワークスペースを持つ形への移行）も
   この関数を使う（views に別の実装を置かない）。W2 で、書き込み口が範囲のワークスペースを渡す形に替えて消す。
 - `workspace_id_of_world()`（W1b T3）: 管理コマンドが `--world` から世界のワークスペースを導く。
+- `workspace_id_for_key()`（W1b T5）: 管理コマンドが `--workspace <key>` からワークスペースを引く（W2 で URL の
+  key を解決する土台にもなる）。
 """
 
 from ..domain.exceptions import WorkspaceNotFound, WorldNotFound
@@ -30,4 +32,12 @@ def workspace_id_of_world(world_id: int) -> int:
     workspace_id = orm_models.PennantWorld.objects.filter(id=world_id).values_list("workspace_id", flat=True).first()
     if workspace_id is None:
         raise WorldNotFound(f"世界が見つかりません（id={world_id}）。")
+    return int(workspace_id)
+
+
+def workspace_id_for_key(key: str) -> int:
+    """key のワークスペースの id。無い key なら `WorkspaceNotFound`。"""
+    workspace_id = orm_models.Workspace.objects.filter(key=key).values_list("id", flat=True).first()
+    if workspace_id is None:
+        raise WorkspaceNotFound(f"ワークスペースが見つかりません（key={key}）。")
     return int(workspace_id)

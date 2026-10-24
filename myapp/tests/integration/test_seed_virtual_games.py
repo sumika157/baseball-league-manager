@@ -14,7 +14,7 @@ from myapp.domain.value_objects import BattingLine, FieldingLine, PitchingLine
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
 
-from ..helpers import real_scope
+from ..helpers import DEFAULT_WORKSPACE_KEY, real_scope
 from .base import BaseCase
 
 YEAR = 2026
@@ -30,6 +30,7 @@ class SeedVirtualGamesTest(BaseCase):
             self._fill_roster(team)
         call_command(
             "seed_virtual_games",
+            workspace=DEFAULT_WORKSPACE_KEY,
             year=YEAR,
             games_per_pair=GAMES_PER_PAIR,
             seed=20260812,

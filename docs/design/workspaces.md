@@ -357,7 +357,7 @@ W1a（T1）で入れるのは `Visibility` と `Workspace` の最小形（`id`�
 | Wiki「チームと選手の管理」 | 「チーム担当者」の節を書き換える（`is_staff` の全権を削り、持ち主・編集者・担当に）。リーグ・チーム・球場はサイトの登録画面から登録する |
 | Wiki「アーキテクチャ」 | 範囲（`WorldScope(workspace, world)`）、組み立て口の一覧、権限の置き場所（事実は参照クエリ、規則は `WorkspaceAccess`、適用はデコレータ） |
 | Wiki「本番公開」（W0 で新設） | `--workspace` の指定、多数のワークスペースでの運用 |
-| Wiki「仮想データの投入」「テストと品質」 | `--workspace`、漏れの検査 |
+| Wiki「仮想データの投入」「テストと品質」 | 漏れの検査（コマンド例の `--workspace`（`simulate_sample --from-real-leagues` を含む）は W1b T5 で直した） |
 | `Home.md`・`_Sidebar.md` | 新しいページ |
 | ROADMAP | フェーズ9 の各行を ✅ に。フェーズ5の「権限管理（担当者制）」に、管理ユーザーの全権をワークスペースの持ち主に置き換えたことを追記する |
 
@@ -827,3 +827,29 @@ W3 を W4 より先にするのは、W4 を先にすると、中身を入れら�
 
 - 検査（`stadiums_in` の `exists()`）と書き込みの間に球場のワークスペースが変わる隙はあるが、登録済みの球場のワークスペースは読み取り専用なので実害は無い。
 - 管理画面のオートコンプリート（チームの本拠地）の候補は別の URL が返すので、ほかのワークスペースの球場も並びうる（T7 と同じ。Wiki「チームと選手の管理」に書いてある）。送信すると選択肢の検査で弾くので、そのままにした。
+
+#### T5
+
+- T5（`feature/workspace-commands`）: 管理コマンドが `--workspace <key>` を受け取る。マイグレーションは無い。基点は T4（9e2c817。当初は d0b16c7）。
+  - infrastructure: `infrastructure/workspaces.py` に `workspace_id_for_key(key)`（無い key は `WorkspaceNotFound`「ワークスペースが見つかりません（key=…）。」）。`workspace_id_of_world` は T3 で入っている。
+  - `management/workspaces.py`: `real_scope_for_key(key)`（`--workspace` のワークスペースの実データの範囲）と `add_workspace_argument(parser, help=…)`。T3 の `legacy_world_scope`・`legacy_world_real_scope` は暫定ではないので `world_scope`・`world_real_scope` に名前を替えた。`legacy_real_scope` は `measure_pages` 専用で残す（W2 で消す）。
+  - **省いたときは必ずエラー**（計画どおり）。ワークスペースが1つしか無くても推し量らない（取り違えた投入はエラーにならずにほかのワークスペースを書き換えるので、「1つなら黙って選ぶ」も入れない）。argparse の `required=True` は省いたときのエラーが英語になるので使わず、`real_scope_for_key` が日本語の `CommandError`（「--workspace でワークスペースの key を指定してください。」）にする。
+  - コマンドごとの範囲:
+
+    | コマンド | ワークスペース |
+    | --- | --- |
+    | `seed_virtual_players`（投入・`--refresh-schools`・`--rename-existing`・`--assign-readings`）・`seed_virtual_games`・`rebuild_fielding_lines` | `--workspace`（必須）。`handle` の最初に1回決める |
+    | `pennant_create` | `--workspace`（必須）。分岐元はそのワークスペースのリーグだけ（ほかのリーグは「リーグが見つかりません」で世界を作らない）。世界はそのワークスペースに属す |
+    | `simulate_sample` | `--from-real-leagues`（`--seasons` つきも）のときだけ `--workspace` が必須。既定・`--season` は DB を読まないので取らない（渡すとエラー）。`estimate_check.run_check`・`multi_season_check.run_seasons` は範囲を引数で受け取る |
+    | `pennant_advance`・`pennant_close_season`・`pennant_record_awards` | `--world` の世界の行から導く（`world_scope`。T3 のまま） |
+    | `pennant_delete` | `--world` の世界のワークスペースの実データの範囲で台帳を組む（`world_real_scope`。T3 のまま） |
+    | `measure_pages` | 一時関数のワークスペース（`legacy_real_scope`）。`--workspace` は W2（決定の「推奨で進めるもの」3） |
+    | `backup_db`・`runserver` | 対象外 |
+
+  - **計画からのずれ**: (1) Wiki のコマンド例（「仮想データの投入」「アーキテクチャ」「成績と順位の見方」「ペナントモードの仕組み」）を T5 で直した（計画は epic を main に入れるとき）。epic の Wiki は main に入るまで公開されないので、コードと同時に公開される。8. の表もそう直した。(2) テストの土台は `WorkspaceCase` ではなく、`test_seed_commands_scope.py` の `WorkspaceCommandsCase`（A と B に試合を組める2球団のリーグを置き、`seed_virtual_games` で試合を入れる）にした。`WorkspaceCase` の B は相手チームに選手がおらず、試合の投入・世界の進行ができないため。
+  - テスト:
+    - `test_seed_commands_scope.py`: 既存の世界の検査は `--workspace` を付けて残した。`WorkspaceOptionTest`: 7通り（`seed_virtual_players` の投入と補正・`seed_virtual_games --replace`・`rebuild_fielding_lines`・`pennant_create`・`simulate_sample --from-real-leagues`（`--seasons` つきも））で、省くと・無い key だと日本語のエラーで A も B も変わらない。`simulate_sample` の既定は `--workspace` なしで動き、`--from-real-leagues` なしの `--workspace` は「--workspace は --from-real-leagues と一緒に指定してください。」で止まる（黙って捨てると実データで回したと読み違えるため）。`SeedCommandsWorkspaceTest`: B を指した投入・補正3つ・`--replace`・別の年の投入（打席に B 以外の選手が立たない）・守備成績の導き直しで、B は変わり A の行（選手・在籍・試合・守備・世界・世界の試合）は変わらない。`PennantCommandsWorkspaceTest`: `pennant_create --workspace A --league <B のリーグ>` は世界を作らない・B を指せば世界は B に属す・`pennant_advance --world <B の世界>` は B の世界を進め A は変わらない・`simulate_sample --workspace B --from-real-leagues <A のリーグ>`（`--seasons 1` つきも）はリーグが見つからない（A は id が最小なので、一時関数に落ちる退行なら読めてしまう向きで確かめる）。
+    - `test_wiring.py`（`LegacyRealScopeTest`）: `legacy_real_scope` の名前を出すのは `management/workspaces.py` と `measure_pages.py` だけ、`legacy_workspace_id` は `infrastructure/workspaces.py`・`management/workspaces.py`・`presentation/views.py` だけ（新しいコマンドが一時関数で範囲を作ると、ワークスペースが複数あるときに黙って id が最小のものを書き換える）。
+    - 既存のコマンドのテスト（`test_seed_virtual_*`・`test_fielding.py`・`test_world_fork.py`・`test_simulate_sample.py`）は既定のワークスペースの key（`DEFAULT_WORKSPACE_KEY`）を渡す。
+    - **変異の確かめ**: `seed_virtual_players` と `rebuild_fielding_lines` の範囲を一時関数のワークスペースに戻すと `SeedCommandsWorkspaceTest` の3件（サブテストを含め6件）が落ち、`real_scope_for_key` が key を見ずに一時関数を使うと `WorkspaceCommandsCase` の準備（B への投入）が落ちることを確かめ、戻した。
+  - T6 に残すもの: 設計書 14. の W1b のまとめ、CLAUDE.md の差分（組み立て口の一覧・範囲の規則・例外）をユーザーに見せてから直す、`.claude/rules/tests.md`・`ddd-boundary-reviewer.md` の `build_service()` の表記、#172 の本文の更新。`measure_pages --workspace` と `legacy_real_scope`・`legacy_workspace_id` の削除は W2。

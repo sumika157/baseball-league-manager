@@ -69,7 +69,7 @@ from myapp.domain.value_objects import (
 )
 from myapp.infrastructure.repositories import FOREIGN_RULE_FIELDS, foreign_rules_from
 from myapp.infrastructure.scoping import games_in, home_stadium_in, leagues_in, teams_in, world_condition
-from myapp.management.workspaces import legacy_real_scope
+from myapp.management.workspaces import add_workspace_argument, real_scope_for_key
 from myapp.models import (
     Game,
     GameBattingLine,
@@ -341,6 +341,7 @@ class Command(BaseCommand):
     help = "各リーグに仮想の試合データを投入する（順位表・タイトルなどの確認用）"
 
     def add_arguments(self, parser):
+        add_workspace_argument(parser, help="投入・補正するワークスペースの key（必須）")
         parser.add_argument("--seed", type=int, default=None, help="乱数シード（再現用）")
         parser.add_argument("--year", type=int, default=date.today().year, help="投入するシーズン（西暦）")
         parser.add_argument(
@@ -357,17 +358,14 @@ class Command(BaseCommand):
         )
 
     def _real_scope(self) -> WorldScope:
-        """投入・補正の対象（実データだけ。ペナントの世界の球団・選手には触れない）。
+        """投入・補正の対象（`--workspace` の実データだけ。ほかのワークスペースとペナントの世界には触れない）。
 
-        暫定（W1b T2）: 今のワークスペース（id が最小のもの）。1回の実行で1回だけ決めて覚える。
-        T5 で `--workspace` を受け取る形に替える。
+        `handle` の最初に1回だけ決めて覚える。
         """
-        scope: WorldScope | None = getattr(self, "_scope", None)
-        if scope is None:
-            scope = self._scope = legacy_real_scope()
-        return scope
+        return self._scope
 
     def handle(self, *args, **options):
+        self._scope = real_scope_for_key(options["workspace"])
         self.rng = np.random.default_rng(options["seed"])
         # 時刻と観客数の乱数は、打席を進める `self.rng` とは別の列にする（同じ列から引くと、
         # 以降の試合の中身がすべてずれる）。`--seed` があればそこから派生させ、再現できるようにする

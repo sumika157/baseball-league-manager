@@ -15,7 +15,7 @@ from typing import Any
 from django.core.management.base import BaseCommand, CommandError
 
 from myapp.domain.exceptions import DomainError
-from myapp.management.workspaces import legacy_world_scope
+from myapp.management.workspaces import world_scope
 from myapp.presentation.views import build_pennant_offseason_service
 
 
@@ -28,7 +28,7 @@ class Command(BaseCommand):
     def handle(self, *args: Any, **options: Any) -> None:
         started = time.perf_counter()
         try:
-            result = build_pennant_offseason_service(legacy_world_scope(options["world"])).close_season()
+            result = build_pennant_offseason_service(world_scope(options["world"])).close_season()
         except DomainError as error:
             raise CommandError(str(error)) from error
         elapsed = time.perf_counter() - started

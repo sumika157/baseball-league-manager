@@ -29,7 +29,7 @@ from myapp.domain.value_objects import (
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
 
-from ..helpers import build_recording_service, login_as_manager, play_game, real_scope
+from ..helpers import DEFAULT_WORKSPACE_KEY, build_recording_service, login_as_manager, play_game, real_scope
 from .base import BaseCase
 
 P = PlateAppearanceResult
@@ -283,7 +283,7 @@ class FieldingRebuildTest(FieldingTestBase):
 
     def _run(self):
         out, err = StringIO(), StringIO()
-        call_command("rebuild_fielding_lines", stdout=out, stderr=err)
+        call_command("rebuild_fielding_lines", workspace=DEFAULT_WORKSPACE_KEY, stdout=out, stderr=err)
         return out.getvalue(), err.getvalue()
 
     def test_rows_are_created_from_the_plate_appearances(self):

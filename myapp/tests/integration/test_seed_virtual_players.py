@@ -23,7 +23,7 @@ from myapp.infrastructure.repositories import DjangoTeamRepository
 from myapp.management.commands import seed_virtual_players
 from myapp.management.commands.seed_virtual_players import ORIGINAL_PLAYER_READINGS
 
-from ..helpers import real_scope
+from ..helpers import DEFAULT_WORKSPACE_KEY, real_scope
 from .base import BaseCase
 
 COMMAND = "seed_virtual_players"
@@ -31,7 +31,7 @@ COMMAND = "seed_virtual_players"
 
 def run(*args) -> str:
     out = StringIO()
-    call_command(COMMAND, "--seed", "1", *args, stdout=out)
+    call_command(COMMAND, "--workspace", DEFAULT_WORKSPACE_KEY, "--seed", "1", *args, stdout=out)
     return out.getvalue()
 
 
@@ -218,7 +218,9 @@ class SeedRosterTest(BaseCase):
         add_player(self.team, "既存育成", number=51, draft_year=2019, draft_round=2, is_development_draft=True)
         add_player(self.rival, "他球団", number=50, draft_year=2019, draft_round=9)
 
-        last = seed_virtual_players.Command._next_rounds(self.team)
+        command = seed_virtual_players.Command()
+        command._scope = real_scope()  # `handle` が `--workspace` から決める範囲
+        last = command._next_rounds(self.team)
 
         self.assertEqual(last, {(2019, False): 5, (2019, True): 2})
 

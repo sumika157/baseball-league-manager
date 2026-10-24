@@ -4,8 +4,9 @@
 
 - 既定: 能力50の2球団で N 試合を回し、1試合ぶんのボックススコアを文字で出して、水準の表を
   NPB の目標帯と並べて出す。基準値（`LeagueBaseline`）の調整に使う。
-- `--from-real-leagues`: 実データのリーグから初期能力を推定し（世界の作成と同じ推定）、その能力で
-  1シーズンを回して、元の成績の水準・タイトル争いと並べる。推定した能力の分布も出す。
+- `--from-real-leagues ... --workspace <key>`: そのワークスペースの実データのリーグから初期能力を推定し
+  （世界の作成と同じ推定）、その能力で1シーズンを回して、元の成績の水準・タイトル争いと並べる。
+  推定した能力の分布も出す。`--workspace` はこのときだけ必須（ほかの型は DB を読まない）。
 - `--from-real-leagues ... --seasons N`: 上に加えて、シーズンの間にオフ（成長・衰え・引退・自動ドラフト。
   `plan_offseason`）をメモリで回し、N シーズンを続ける。シーズンごとに水準の表・タイトル・年齢と能力の分布・
   入れ替わり・錨の補正を出す。オフの規則（曲線・引退の倍率）の確認に使う。DB には書かない。
@@ -28,6 +29,7 @@ from django.core.management.base import BaseCommand, CommandError
 from myapp.domain.entities import Game
 from myapp.domain.exceptions import DomainError
 from myapp.domain.pennant.schedule import NPB_TEAMS_PER_LEAGUE, ScheduleRules, generate_schedule
+from myapp.domain.pennant.world import WorldScope
 from myapp.domain.simulation.engine import SimulatedGame, simulate_game
 from myapp.domain.simulation.fatigue import PitchingHistory
 from myapp.domain.simulation.levels import LevelRow, LevelTally, SeasonTally, UsageTally
@@ -37,6 +39,7 @@ from myapp.domain.simulation.samples import average_club, spread_league
 from myapp.domain.value_objects import ForeignPlayerRules
 from myapp.management.estimate_check import format_usage, run_check
 from myapp.management.multi_season_check import run_seasons
+from myapp.management.workspaces import add_workspace_argument, real_scope_for_key
 
 DEFAULT_GAMES = 2000
 SAMPLE_YEAR = 2026
@@ -172,18 +175,26 @@ class Command(BaseCommand):
         parser.add_argument(
             "--year", type=int, default=SAMPLE_YEAR, help=f"--from-real-leagues の開幕年（既定 {SAMPLE_YEAR}）"
         )
+        add_workspace_argument(
+            parser, help="--from-real-leagues のリーグのワークスペースの key（--from-real-leagues と組むときは必須）"
+        )
 
     def handle(self, *args, **options):
         seed = options["seed"]
+        if options["workspace"] and not options["from_real_leagues"]:
+            # ほかの型は DB を読まない。指定を黙って捨てると、実データで回したと読み違える
+            raise CommandError("--workspace は --from-real-leagues と一緒に指定してください。")
         if options["seasons"] is not None:
             if not options["from_real_leagues"]:
                 raise CommandError("--seasons は --from-real-leagues と一緒に指定してください。")
             if options["seasons"] < 1:
                 raise CommandError("--seasons は1以上を指定してください。")
-            self._run_seasons(seed, options["from_real_leagues"], options["year"], options["seasons"])
+            scope = real_scope_for_key(options["workspace"])
+            self._run_seasons(scope, seed, options["from_real_leagues"], options["year"], options["seasons"])
             return
         if options["from_real_leagues"]:
-            self._run_estimate_check(seed, options["from_real_leagues"], options["year"])
+            scope = real_scope_for_key(options["workspace"])
+            self._run_estimate_check(scope, seed, options["from_real_leagues"], options["year"])
             return
         if options["season"]:
             self._run_season(seed)
@@ -229,15 +240,15 @@ class Command(BaseCommand):
         self._say()
         self._say(format_usage(usage.rows()))
 
-    def _run_seasons(self, seed: int, league_ids: list[int], year: int, seasons: int) -> None:
+    def _run_seasons(self, scope: WorldScope, seed: int, league_ids: list[int], year: int, seasons: int) -> None:
         try:
-            run_seasons(league_ids, seasons=seasons, seed=seed, year=year, say=self._say)
+            run_seasons(scope, league_ids, seasons=seasons, seed=seed, year=year, say=self._say)
         except (DomainError, ValueError) as error:
             raise CommandError(str(error)) from error
 
-    def _run_estimate_check(self, seed: int, league_ids: list[int], year: int) -> None:
+    def _run_estimate_check(self, scope: WorldScope, seed: int, league_ids: list[int], year: int) -> None:
         try:
-            run_check(league_ids, seed=seed, year=year, say=self._say)
+            run_check(scope, league_ids, seed=seed, year=year, say=self._say)
         except (DomainError, ValueError) as error:
             raise CommandError(str(error)) from error
 

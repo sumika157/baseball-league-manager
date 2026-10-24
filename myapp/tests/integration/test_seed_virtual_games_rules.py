@@ -18,7 +18,7 @@ from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
 from myapp.management.commands.seed_virtual_games import LINEUP_SIZE, MAX_INNINGS, Command, _Outing, _Side
 
-from ..helpers import real_scope
+from ..helpers import DEFAULT_WORKSPACE_KEY, real_scope
 from .base import BaseCase
 
 COMMAND = "seed_virtual_games"
@@ -44,7 +44,17 @@ TOTAL_ONE = ForeignPlayerRules(active=1, pitchers=None, batters=None)
 def run(*args) -> str:
     out = StringIO()
     call_command(
-        COMMAND, "--seed", "7", "--year", str(YEAR), "--games-per-pair", str(GAMES_PER_PAIR), *args, stdout=out
+        COMMAND,
+        "--workspace",
+        DEFAULT_WORKSPACE_KEY,
+        "--seed",
+        "7",
+        "--year",
+        str(YEAR),
+        "--games-per-pair",
+        str(GAMES_PER_PAIR),
+        *args,
+        stdout=out,
     )
     return out.getvalue()
 
@@ -126,6 +136,7 @@ class SeedGamesRosterTest(SeedGamesBase):
         )
         command = Command()
         command.rng = np.random.default_rng(1)
+        command._scope = real_scope()  # `handle` が `--workspace` から決める範囲
 
         roster = command._rosters(YEAR)[self.team.id]
 
@@ -361,7 +372,16 @@ class SeedGamesOptionsTest(SeedGamesBase):
 
     def test_rejects_non_positive_games_per_pair(self):
         with self.assertRaisesMessage(CommandError, "--games-per-pair"):
-            call_command(COMMAND, "--year", str(YEAR), "--games-per-pair", "0", stdout=StringIO())
+            call_command(
+                COMMAND,
+                "--workspace",
+                DEFAULT_WORKSPACE_KEY,
+                "--year",
+                str(YEAR),
+                "--games-per-pair",
+                "0",
+                stdout=StringIO(),
+            )
 
 
 class SeedGamesWithoutRostersTest(BaseCase):
