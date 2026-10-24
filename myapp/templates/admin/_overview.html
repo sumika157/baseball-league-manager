@@ -1,8 +1,24 @@
-{% load i18n %}
-{% if overview %}
 <div class="module admin-overview">
-  <h2>データの概況</h2>
+  <h2>全ワークスペースの概況</h2>
 
+  <div class="admin-overview-grid">
+    <a class="admin-overview-cell" href="{% url 'admin:myapp_workspace_changelist' %}">
+      <span class="admin-overview-value">{{ overview.workspace_count }}</span>
+      <span class="admin-overview-label">ワークスペース</span>
+    </a>
+    <a class="admin-overview-cell" href="{% url 'admin:myapp_workspace_changelist' %}?visibility__exact=public">
+      <span class="admin-overview-value">{{ overview.public_workspace_count }}</span>
+      <span class="admin-overview-label">うち公開</span>
+    </a>
+    <a class="admin-overview-cell" href="{% url 'admin:myapp_workspace_changelist' %}?visibility__exact=private">
+      <span class="admin-overview-value">{{ overview.private_workspace_count }}</span>
+      <span class="admin-overview-label">うち非公開</span>
+    </a>
+    <a class="admin-overview-cell" href="{% url 'admin:auth_user_changelist' %}">
+      <span class="admin-overview-value">{{ overview.user_count }}</span>
+      <span class="admin-overview-label">ユーザー</span>
+    </a>
+  </div>
   <div class="admin-overview-grid">
     <a class="admin-overview-cell" href="{% url 'admin:myapp_league_changelist' %}">
       <span class="admin-overview-value">{{ overview.league_count }}</span>
@@ -14,40 +30,39 @@
     </a>
     <a class="admin-overview-cell" href="{% url 'admin:myapp_player_changelist' %}">
       <span class="admin-overview-value">{{ overview.player_count }}</span>
-      <span class="admin-overview-label">在籍選手</span>
+      <span class="admin-overview-label">選手</span>
     </a>
-    <a class="admin-overview-cell" href="{% url 'admin:myapp_player_changelist' %}?position=投手">
-      <span class="admin-overview-value">{{ overview.pitcher_count }}</span>
-      <span class="admin-overview-label">うち投手</span>
+    <a class="admin-overview-cell" href="{% url 'admin:myapp_game_changelist' %}">
+      <span class="admin-overview-value">{{ overview.game_count }}</span>
+      <span class="admin-overview-label">試合</span>
     </a>
   </div>
 
-  {% if overview.players_without_stats or overview.teams_without_players or overview.retired_count %}
-    <ul class="admin-overview-notes">
-      {% if overview.players_without_stats %}
-        <li>
-          <a href="{% url 'admin:myapp_player_changelist' %}">
-            成績が未入力の選手が {{ overview.players_without_stats }}名います
-          </a>
-          <span class="admin-overview-hint">ランキングの集計対象から外れています</span>
-        </li>
-      {% endif %}
-      {% if overview.teams_without_players %}
-        <li>
-          <a href="{% url 'admin:myapp_team_changelist' %}">
-            選手が1人もいないチームが {{ overview.teams_without_players }}件あります
-          </a>
-        </li>
-      {% endif %}
-      {% if overview.retired_count %}
-        <li>
-          <a href="{% url 'admin:myapp_player_changelist' %}?is_active__exact=0">
-            退団した選手が {{ overview.retired_count }}名います
-          </a>
-          <span class="admin-overview-hint">背番号は再利用できます</span>
-        </li>
-      {% endif %}
-    </ul>
+  {% if overview.top_workspaces %}
+    <table class="admin-overview-top">
+      <caption>試合の多いワークスペース</caption>
+      <thead>
+        <tr>
+          <th scope="col">ワークスペース</th>
+          <th scope="col">キー</th>
+          <th scope="col">持ち主</th>
+          <th scope="col" class="admin-overview-number">試合</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in overview.top_workspaces %}
+          <tr>
+            <td><a href="{% url 'admin:myapp_workspace_change' row.workspace_id %}">{{ row.name }}</a></td>
+            <td><code>{{ row.key }}</code></td>
+            <td>{{ row.owner_name }}</td>
+            <td class="admin-overview-number">
+              <a href="{% url 'admin:myapp_game_changelist' %}?home_team__league__workspace__id__exact={{ row.workspace_id }}">{{ row.game_count }}</a>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="admin-overview-empty">ワークスペースがまだありません。<a href="{% url 'admin:myapp_workspace_add' %}">最初のワークスペースを作る</a></p>
   {% endif %}
 </div>
-{% endif %}
