@@ -14,6 +14,7 @@
 勝ち上がりの表。保存せず、順位（公式戦だけ）とその年の試合の結果から導いた値（PostseasonView）を並べるだけ。
 回の順に、組めたシリーズを並べ、まだ組めていない先の回は名前だけ出す（対戦は前の回が決着するまで決まらない）。
 予定日は次に試合をする日だけ。進めるボタンは GM ホームにだけ置く（読むだけの画面で、誰でも開ける）。
+方式はその年の試合から導いた方式（いまの方式を変えても、過去の年は当時のまま）。個人成績はタブで切り替える。
 {% endcomment %}
 <div class="page-head">
   <h1 class="page-title">{% if postseason %}{{ postseason.year }}年 {% endif %}ポストシーズン</h1>
@@ -29,13 +30,7 @@
     </div>
   </div>
 {% else %}
-  {% if postseason.years|length > 1 %}
-    <div class="segmented mb-3">
-      {% for year in postseason.years %}
-        <a class="segmented-item {% if year == postseason.year %}is-active{% endif %}" href="{% url 'pennant_postseason_by_year' world.world_id year %}">{{ year }}年</a>
-      {% endfor %}
-    </div>
-  {% endif %}
+  {% include 'pennant/_postseason_tabs.html' with year=postseason.year years=postseason.years tab='bracket' %}
 
   {% if postseason.champion_team_id %}
     <div class="alert alert-primary" data-testid="postseason-champion">

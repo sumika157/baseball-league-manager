@@ -1,0 +1,40 @@
+{% extends 'myapp/base.html' %}
+
+{% block title %}設定 - {{ world.name }} - ペナント - Baseball Manager{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb">
+    {% include 'pennant/_crumbs.html' %}
+    <li class="breadcrumb-item active" aria-current="page">設定</li>
+  </ol>
+</nav>{% include 'pennant/_world_bar.html' %}
+
+{% comment %}
+世界の設定（ポストシーズンの方式）。見るのは誰でも、変えるのはオーナーだけ（フォームはオーナーにだけ出す）。
+変えられないとき（今年のポストシーズンが始まっている・世界が終了している）は、フォームを出さずに理由だけを出す。
+選択肢と説明は domain の `PostseasonFormat` が出典。過去の年の勝ち上がりは、その年の試合から方式を導く（変えても当時のまま）。
+{% endcomment %}
+<div class="page-head">
+  <h1 class="page-title">設定</h1>
+</div>
+
+<div class="card">
+  <div class="card-header">ポストシーズン</div>
+  <div class="card-body">
+    <p class="mb-1">いまの方式: <span class="fw-semibold" data-testid="postseason-format">{{ settings.postseason_format.label }}</span></p>
+    <p class="stat-muted mb-3" style="font-size: 0.8125rem;">{{ settings.postseason_format.description }}</p>
+
+    {% if form %}
+      <form method="post">
+        {% csrf_token %}
+        {% include 'pennant/_postseason_format_field.html' %}
+        <p class="stat-muted" style="font-size: 0.8125rem;">変えた方式は、今年のポストシーズン（まだ始まっていなければ）から使います。過去の年の勝ち上がりは当時の方式のままです。</p>
+        <button type="submit" class="btn btn-primary">変更する</button>
+      </form>
+    {% elif is_owner and settings.blocker %}
+      <p class="mb-0" data-testid="settings-blocker">{{ settings.blocker }}</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

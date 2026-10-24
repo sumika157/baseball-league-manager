@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from ..domain import services as domain_services
 from ..domain.exceptions import InvalidPostseason
 from ..domain.pennant.postseason import (
     PostseasonBracket,
@@ -27,10 +28,13 @@ from ..domain.pennant.season import SeasonPhase
 from ..domain.pennant.world import World
 from ..domain.repositories import WorldRepository
 from .dto import (
+    LeaguePlayerRow,
+    Listing,
     PostseasonCard,
     PostseasonGameRow,
     PostseasonMatchup,
     PostseasonRound,
+    PostseasonStats,
     PostseasonView,
     SeriesGameView,
     SeriesView,
@@ -39,7 +43,9 @@ from .dto import (
 from .pennant_home import postseason_advance_options
 from .pennant_postseason import PostseasonBracketReader
 from .pennant_race import StandingsSource
-from .queries import PostseasonQuery
+from .player_stats_view import played_counts, stats_player
+from .queries import PostseasonQuery, PostseasonStatsQuery
+from .stat_rows import to_batter_row, to_pitcher_row
 
 # 自軍がまだ決まっていないときの結果の名前（始まる前は「出場」、始まった後は「勝ち残り」）
 _QUALIFIED = "出場"
@@ -63,12 +69,14 @@ class PennantPostseasonViewService:
         teams: StandingsSource,
         postseason: PostseasonQuery,
         brackets: PostseasonBracketReader,
+        stats: PostseasonStatsQuery,
     ) -> None:
         self._world_id = world_id
         self._worlds = worlds
         self._teams = teams
         self._postseason = postseason
         self._brackets = brackets
+        self._stats = stats
         self._world_cache: list[World] = []
         self._derived: dict[int, tuple[PostseasonBracket, list[PostseasonGameRow]]] = {}
 
@@ -124,6 +132,53 @@ class PennantPostseasonViewService:
             next_games=_matchups(next_day, names),
             own_outcome=_own_outcome(bracket, world.managed_team_id),
             years=tuple(years),
+        )
+
+    # --- 個人成績の表 ---
+
+    def stats(
+        self,
+        world: WorldContext,
+        year: int,
+        *,
+        pitchers: bool,
+        sort: str | None = None,
+        descending: bool | None = None,
+    ) -> PostseasonStats | None:
+        """Y年のポストシーズンの個人成績（出場した選手だけ）。開けない年（`years` に無い）なら None。
+
+        並べ替えの規則は domain（キーは公式戦の成績と同じ、既定は打撃が安打・投手が投球回）。不正なキーは既定に落ちる。
+        率は試合ごとの率を平均せず、合算した実数から計算し直す（成績の値オブジェクトが出典）。
+        """
+        years = self.years(world)
+        if year not in years:
+            return None
+        rows = [
+            row
+            for row in self._stats.list_players(year)
+            if row.position.is_pitcher == pitchers and (row.appearances if pitchers else row.games)
+        ]
+        played = played_counts(rows, pitchers=pitchers)
+        members = [stats_player(row) for row in rows]
+        home_of = {row.player_id: (row.team_id, row.team_name) for row in rows}
+        if pitchers:
+            ordered, key, desc = domain_services.sort_pitchers(
+                members, sort, descending, domain_services.DEFAULT_POSTSEASON_PITCHER_SORT, appearances=played
+            )
+        else:
+            ordered, key, desc = domain_services.sort_batters(
+                members, sort, descending, domain_services.DEFAULT_POSTSEASON_BATTER_SORT, games=played
+            )
+        to_row = to_pitcher_row if pitchers else to_batter_row
+        listed = []
+        for player in ordered:
+            player_id = player.id or 0
+            team_id, team_name = home_of[player_id]
+            # 年齢は出さない（プロフィールを読まない）ので、基準日はその年の終わりでよい
+            row = to_row(player, played=played[player_id], today=date(year, 12, 31))
+            listed.append(LeaguePlayerRow(team_id=team_id, team_name=team_name, player=row))
+        return PostseasonStats(
+            year=year, pitchers=pitchers, listing=Listing(rows=listed, sort=key, descending=desc), years=tuple(years)
         )
 
     # --- GM ホームのカード ---

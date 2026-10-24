@@ -267,6 +267,22 @@ class PostseasonQuery(Protocol):
 
 
 @runtime_checkable
+class PostseasonStatsQuery(Protocol):
+    """世界のポストシーズンの個人成績の参照（#39 のユーザーの決定: 表を出す・保存しない）。
+
+    公式戦の `PlayerStatsQuery` には区分の引数を足さない（公式戦の集計にポストシーズンを混ぜる口を作らない）。
+    集計の式は公式戦と同じ（`repositories.batting_totals` などに区分 `POSTSEASON_ONLY` を渡す）。
+    """
+
+    def list_players(self, year: int) -> list[ActivePlayerStats]:
+        """その年のポストシーズンに出場した選手（打撃か投球の明細がある選手だけ）と、その年のポストシーズンの成績。
+
+        所属はその年の終わりの球団（同じ年に移った選手は1行）。出場試合数と登板数も読む。球団の表示順、背番号順。
+        """
+        ...
+
+
+@runtime_checkable
 class SeasonPlayingTimeQuery(Protocol):
     """世界のその年の出場機会の参照。シーズンを締めるときの引退の材料。
 

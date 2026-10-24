@@ -27,6 +27,7 @@ from myapp.application.pennant_postseason import PennantPostseasonService, Posts
 from myapp.application.pennant_postseason_view import PennantPostseasonViewService
 from myapp.application.pennant_ratings import PennantRatingsViewService
 from myapp.application.pennant_season import PennantSeasonService
+from myapp.application.pennant_settings import PennantSettingsService
 from myapp.application.pennant_view import PennantWorldViewService
 from myapp.application.pennant_world import PennantWorldService
 from myapp.application.queries import (
@@ -37,6 +38,7 @@ from myapp.application.queries import (
     OffseasonQuery,
     PennantActivityQuery,
     PostseasonQuery,
+    PostseasonStatsQuery,
     RatingsHistoryQuery,
     SimulationContextQuery,
     TeamAnalysisQuery,
@@ -68,6 +70,7 @@ from myapp.infrastructure.queries import (
     DjangoOffseasonQuery,
     DjangoPennantActivityQuery,
     DjangoPostseasonQuery,
+    DjangoPostseasonStatsQuery,
     DjangoRatingsHistoryQuery,
     DjangoSimulationContextQuery,
     DjangoTeamAnalysisQuery,
@@ -97,6 +100,7 @@ from myapp.presentation.views import (
     build_pennant_postseason_view_service,
     build_pennant_ratings_service,
     build_pennant_season_service,
+    build_pennant_settings_service,
     build_pennant_world_service,
     build_pennant_world_view,
     build_permission_query,
@@ -139,6 +143,7 @@ class ProtocolConformanceTest(SimpleTestCase):
         (DjangoRatingsHistoryQuery(REAL), RatingsHistoryQuery),
         (DjangoHomeStadiumQuery(REAL), HomeStadiumQuery),
         (DjangoPostseasonQuery(REAL), PostseasonQuery),
+        (DjangoPostseasonStatsQuery(REAL), PostseasonStatsQuery),
     ]
 
     def test_implementations_satisfy_interfaces(self):
@@ -221,8 +226,26 @@ class BuildServiceTest(SimpleTestCase):
         self.assertEqual(service._postseason._scope, WorldScope.pennant(7))
         self.assertEqual(service._teams._games._scope, WorldScope.pennant(7))
         self.assertEqual(service._brackets._postseason._scope, WorldScope.pennant(7))
+        self.assertEqual(service._stats._scope, WorldScope.pennant(7))
         with self.assertRaises(InvalidWorld):
             build_pennant_postseason_view_service(0)
+
+    def test_pennant_settings_service_dependencies_are_wired_in_the_given_world(self):
+        """方式の設定も、依存を全部、世界の範囲で渡す（いまの年度のポストシーズンの試合を読み直す）。"""
+        from django.db import transaction
+
+        service = build_pennant_settings_service(7)
+        self._assert_wired(service, PennantSettingsService)
+        self._assert_wired(service._brackets, PostseasonBracketReader)
+        self.assertEqual(service._world_id, 7)
+        for name in ("_fixtures", "_context_query", "_postseason"):
+            with self.subTest(dependency=name):
+                self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
+        self.assertEqual(service._brackets._postseason._scope, WorldScope.pennant(7))
+        self.assertIs(service._atomic, transaction.atomic)
+        for bad in (0, -1, True):
+            with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
+                build_pennant_settings_service(bad)
 
     def test_world_view_service_dependencies_are_wired(self):
         """世界の範囲の参照サービスも、実データ用と同じ検査にかける（依存は実データ用と同じ全部）。"""

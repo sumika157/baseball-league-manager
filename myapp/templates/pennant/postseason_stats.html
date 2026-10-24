@@ -1,0 +1,115 @@
+{% extends 'myapp/base.html' %}
+{% load sorting scoped %}
+
+{% block title %}{{ stats.year }}年 ポストシーズン 個人成績 - {{ world.name }} - ペナント - Baseball Manager{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb">
+    {% include 'pennant/_crumbs.html' %}
+    <li class="breadcrumb-item"><a href="{% url 'pennant_postseason_by_year' world.world_id stats.year %}">ポストシーズン</a></li>
+    <li class="breadcrumb-item active" aria-current="page">個人成績</li>
+  </ol>
+</nav>{% include 'pennant/_world_bar.html' %}
+
+{% comment %}
+ポストシーズンの個人成績。保存せず、その年のポストシーズンの試合だけを集計した値（PostseasonStats）を並べるだけ。
+公式戦の成績・タイトルには数えない（NPB と同じ）。出場した選手だけを、リーグをまたいで1つの表に並べる。
+リーグの基準値が要る指標（OPS+・ERA+・FIP）はリーグをまたぐ表なので出さない。規定の絞り込みも無い（試合数が球団ごとに違う）。
+{% endcomment %}
+<div class="page-head">
+  <h1 class="page-title">{{ stats.year }}年 ポストシーズン</h1>
+  <p class="page-subtitle">ポストシーズンに出場した{% if pos_mode == 'pitcher' %}投手{% else %}野手{% endif %}の{{ stats.year }}年のポストシーズンの成績（公式戦の成績には数えません）。見出しを押すと並べ替えられます。</p>
+</div>
+
+{% include 'pennant/_postseason_tabs.html' with year=stats.year years=stats.years tab='stats' %}
+
+<div class="segmented mb-2">
+  <a class="segmented-item {% if pos_mode == 'batter' %}is-active{% endif %}" href="{% query_with pos='batter' %}">野手</a>
+  <a class="segmented-item {% if pos_mode == 'pitcher' %}is-active{% endif %}" href="{% query_with pos='pitcher' %}">投手</a>
+</div>
+
+<div class="table-responsive">
+  <table class="table table-hover tabular-nums" data-testid="postseason-stats">
+    <thead>
+      <tr>
+        {% sort_header 'name' '選手名' 'start' False %}
+        <th>チーム</th>
+        {% if pos_mode == 'pitcher' %}
+          {% sort_header 'appearances' '登板' 'end' %}
+          {% sort_header 'innings' '投球回' 'end' %}
+          {% sort_header 'era' '防御率' 'end' False %}
+          {% sort_header 'starts' '先発' 'end' %}
+          {% sort_header 'wins' '勝' 'end' %}
+          {% sort_header 'losses' '敗' 'end' %}
+          {% sort_header 'saves' 'S' 'end' %}
+          {% sort_header 'holds' 'H' 'end' %}
+          {% sort_header 'strikeouts' '奪三振' 'end' %}
+          {% sort_header 'whip' 'WHIP' 'end' False %}
+          {% sort_header 'k9' 'K/9' 'end' %}
+          {% sort_header 'bb9' 'BB/9' 'end' False %}
+          {% sort_header 'home_runs_allowed' '被本塁打' 'end' %}
+        {% else %}
+          {% sort_header 'games' '試合' 'end' %}
+          {% sort_header 'average' '打率' 'end' %}
+          {% sort_header 'hits' '安打' 'end' %}
+          {% sort_header 'doubles' '2B' 'end' %}
+          {% sort_header 'triples' '3B' 'end' %}
+          {% sort_header 'home_runs' 'HR' 'end' %}
+          {% sort_header 'rbi' '打点' 'end' %}
+          {% sort_header 'walks' '四球' 'end' %}
+          {% sort_header 'obp' '出塁率' 'end' %}
+          {% sort_header 'slg' '長打率' 'end' %}
+          {% sort_header 'ops' 'OPS' 'end' %}
+        {% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in players %}
+      <tr>
+        <td>
+          <a href="{% scoped_url 'player_detail' row.team_id row.player.id %}" class="player-name">{{ row.player.name }}</a>
+          <span class="badge bg-secondary ms-1">{{ row.player.position }}</span>
+        </td>
+        <td>
+          <a href="{% scoped_url 'player_list' row.team_id %}" class="stat-muted">{{ row.team_name }}</a>
+        </td>
+        {% if pos_mode == 'pitcher' %}
+          <td class="text-end stat-muted">{{ row.player.appearances }}</td>
+          <td class="text-end">{{ row.player.innings_pitched }}</td>
+          <td class="text-end stat-key">{{ row.player.earned_run_average|floatformat:2 }}</td>
+          <td class="text-end stat-muted">{{ row.player.starts }}</td>
+          <td class="text-end">{{ row.player.wins }}</td>
+          <td class="text-end stat-muted">{{ row.player.losses }}</td>
+          <td class="text-end">{{ row.player.saves }}</td>
+          <td class="text-end stat-muted">{{ row.player.holds }}</td>
+          <td class="text-end stat-muted">{{ row.player.strikeouts }}</td>
+          <td class="text-end">{{ row.player.whip|floatformat:2 }}</td>
+          <td class="text-end stat-muted">{{ row.player.strikeouts_per_nine|floatformat:2 }}</td>
+          <td class="text-end stat-muted">{{ row.player.walks_per_nine|floatformat:2 }}</td>
+          <td class="text-end stat-muted">{{ row.player.home_runs_allowed }}</td>
+        {% else %}
+          <td class="text-end stat-muted">{{ row.player.games }}</td>
+          <td class="text-end stat-key">{{ row.player.batting_average|floatformat:3 }}</td>
+          <td class="text-end">{{ row.player.hits }}</td>
+          <td class="text-end stat-muted">{{ row.player.doubles }}</td>
+          <td class="text-end stat-muted">{{ row.player.triples }}</td>
+          <td class="text-end">{{ row.player.home_runs }}</td>
+          <td class="text-end">{{ row.player.runs_batted_in }}</td>
+          <td class="text-end stat-muted">{{ row.player.walks }}</td>
+          <td class="text-end">{{ row.player.on_base_percentage|floatformat:3 }}</td>
+          <td class="text-end stat-muted">{{ row.player.slugging_percentage|floatformat:3 }}</td>
+          <td class="text-end stat-key">{{ row.player.ops|floatformat:3 }}</td>
+        {% endif %}
+      </tr>
+      {% empty %}
+      <tr>
+        <td colspan="{% if pos_mode == 'pitcher' %}15{% else %}13{% endif %}">
+          <div class="empty-state">{{ stats.year }}年のポストシーズンの試合は、まだありません。</div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

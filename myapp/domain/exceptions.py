@@ -138,6 +138,13 @@ class PostseasonNotFinished(DomainError):
     """ポストシーズンがまだ終わっていない（始まっていない・進行中）ので、シーズンを締められない。"""
 
 
+class PostseasonFormatLocked(DomainError):
+    """ポストシーズンの方式を変えられない（いまの年度のポストシーズンが始まっている・世界が終了している）。
+
+    理由の文言は domain の `world.postseason_format_change_blocker` が出典。
+    """
+
+
 class AlreadyClosed(DomainError):
     """そのシーズンは既に締めている（二重送信や、別の画面で先に締めた場合）。
 

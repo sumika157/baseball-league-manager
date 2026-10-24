@@ -26,7 +26,7 @@
 | S2 | 勝ち上がりの規則（domain の純粋な関数）・`final_order`・リーグの優先順・エンジンの延長の上限 | 実装済み（#239） |
 | S3 | 進行（`PennantPostseasonService`）・`World.postseason_format`・締める処理の検査・管理コマンド | 実装済み（#240） |
 | S4a | 画面から進めて締められる最小（勝ち上がりの表・GM ホームのカード・進めるボタン・作成フォームの方式・世界の終了の直し）と実測 | 実装済み（#241） |
-| S4b | 方式の設定の画面・ポストシーズンの個人成績の表 | 未着手（#280） |
+| S4b | 方式の設定の画面・ポストシーズンの個人成績の表 | 実装済み（#280） |
 | S5 | 歴代・球団史への表示（#105 の後）・Wiki への吸収とこのファイルの削除 | 未着手 |
 
 ## 4. 段階ごとの記録
@@ -187,3 +187,45 @@ S4 は S4a（この段階）と S4b（設定の画面と個人成績の表。#28
 - 世界バーの「ポストシーズン」のリンク・試合詳細の表へのリンクは `WorldContext.has_postseason`（いまの方式）で出し分けている。方式を変えられるようにしたら、過去の年の表へのリンクの出し方を見直す。
 - 方式を変えるときの読み直し（S3 の申し送り: 進める側の `_save` の中でも方式を読み直す）はまだ入っていない。
 - 個人成績の表は、公式戦と同じ参照クエリに区分の条件を渡して集計する（S1 の決定）。表のページ（`pennant/postseason.html`）にタブか下の区画として足す想定。
+
+### S4b 方式の設定の画面と個人成績の表（2026-10-24。#280）
+
+**ユーザーの決定（2026-10-24）**
+
+- **過去の年の勝ち上がりは、その年の試合から方式を導く**（年ごとの方式は保存しない）。試合が無ければ「なし」、同じリーグどうしの試合（CS）があれば NPB、それ以外は「優勝球団で日本シリーズ」。いまの年度で試合がまだ無いときだけ世界のいまの方式を使う。締めた年の試合は書き換えられない（`DjangoGameRepository` が `AlreadyClosed`）ので、導いた方式も変わらない。
+- **終了した世界の方式は変えられない**（設定の画面は理由だけを出す）。
+
+**置き場所**
+
+- domain: `postseason.played_format(results, league_of)`（`league_of` は球団 id → リーグ id の `Mapping`。分からない球団は `InvalidPostseason`）・`world.postseason_format_change_blocker(*, started, world_over)`（**方式を変えられる条件の唯一の出典**。理由の文言を返す）・`sorting.DEFAULT_POSTSEASON_BATTER_SORT = "hits"` / `DEFAULT_POSTSEASON_PITCHER_SORT = "innings"`（キーは公式戦の `BATTER_SORT_KEYS` / `PITCHER_SORT_KEYS`）・例外 `PostseasonFormatLocked`（Issue の `PostseasonAlreadyStarted` を、終了した世界も含む名前にした）。
+- application: `PennantSettingsService`（`application/pennant_settings.py`。`view()`・`change_postseason_format(format) -> bool`）。組み立て口 `build_pennant_settings_service(world_id)`（`test_wiring`）。設計書で「`PennantWorldService.update_settings` を #198 と共有」としていたのは、このサービスに置いた（世界の作成・削除のサービスは実データの範囲で組み立てるので、世界の範囲の読み直しを持たせない）。
+- 勝ち上がりの読み取り（`PostseasonBracketReader.bracket`）が方式を年ごとに導く: 結果があれば `played_format`（リーグは読んだ順位表から引く。クエリは増えない）、無ければ世界のいまの方式。`results` を省いた呼び手（進める・締める・世界の終了。どれもいまの年度）は、世界のいまの方式が「なし」なら何も読まずに `NONE`（いまの年度は、方式が「なし」なら試合が無い。始まった年の方式は変えられないため）。
+- 個人成績: 参照クエリ `PostseasonStatsQuery.list_players(year)`（`DjangoPostseasonStatsQuery`。`game_counts`・`batting_totals`・`pitching_totals` に `POSTSEASON_ONLY`。在籍は出場した選手の分だけ読み、DTO への写し方は `DjangoPlayerStatsQuery` の `_ordered`・`_one_per_player`・`_to_stats` を共有）。公式戦の `PlayerStatsQuery` には区分の引数を足していない（公式戦の集計にポストシーズンを混ぜる口を作らない）。`PennantPostseasonViewService.stats(world, year, *, pitchers, sort, descending)` が DTO `PostseasonStats` を作る（行は成績一覧と同じ `LeaguePlayerRow`）。
+- 世界バーのリンク: `WorldSummary` / `WorldContext.played_postseason`（ポストシーズンの試合が1つでもあるか）。`DjangoWorldSummaryQuery` の「最後の試合日」と同じ集計に `Max(played_on, filter=ポストシーズン)` を足して読む（**クエリは増えない**）。`WorldContext.shows_postseason`（いまの方式が「なし」でないか、試合がある）で世界バーに「ポストシーズン」を出す。GM ホームのカード・世界の終了の判定は今までどおり `has_postseason`（いまの方式）。
+- 試合詳細の「Y年の勝ち上がりを見る」は、ポストシーズンの試合なら常に出す（その年は試合があるので表が開ける）。
+
+**決めたこと**
+
+- **変えられる条件**: いまの年度（`season_year`）のポストシーズンの試合が無く、終了した世界（最終シーズンのシーズン終了で、ポストシーズンが終わった・無い。`WorldContext.is_over` と同じ条件）でないこと。公式戦の途中・ポストシーズンの開始前・締めた後（年度が翌年に進む）は変えられる。最終シーズンでも、NPB 方式でポストシーズンの開始前なら変えられる（「なし」にすれば終了する）。
+- **ロック**: 設定は書き込みのトランザクションの中で、いまの年度のポストシーズンの試合を読み直してから書く。進める側（`PennantPostseasonService._save`）はトランザクションの中で方式も読み直し、計算に使った方式と違えば書かずに `AlreadyAdvanced`（S3 の申し送り）。計算の間に方式が「なし」に変わる割り込みのテストで固定した。
+- 設定の画面（`/pennant/<世界>/settings/`）: GET は誰でも（いまの方式と説明）、POST はオーナーだけ。変えられないときはフォームを出さずに理由だけ（オーナーに）。GM ホームの最下部（削除の隣）にオーナーだけ「設定」。方式のラジオボタンは作成フォームと共有（`forms._postseason_format_field`・`pennant/_postseason_format_field.html`）。
+- 個人成績の表（`/pennant/<世界>/postseason/<年>/stats/`）: 勝ち上がりの表と「勝ち上がり｜個人成績」のタブで行き来する（年の切り替えは見ている表のまま）。開ける年は勝ち上がりの表と同じ（`years`。ほかは 404）。`?pos=pitcher`・`?sort=`・`?dir=`（成績一覧と同じ引数。Issue の `desc=` は既存の `dir=` に揃えた）。出場した選手だけ（野手は出場試合、投手は登板がある選手）。**リーグの基準値が要る OPS+・ERA+・FIP と規定の絞り込みは出さない**（リーグをまたぐ表で、試合数も球団ごとに違う）。
+- `test_postseason_isolation.py` の画面の比較は、勝ち上がりの表と設定の画面を除き（ポストシーズンの試合で変わるのが正しい）、世界バーの「ポストシーズン」のリンクを外して比べる。`world_urls()` に設定の画面を足した（個人成績はポストシーズンの無い年が 404 なので足さない）。
+
+**限界**: 全リーグが1球団の世界の NPB 方式は、試合から「優勝球団で日本シリーズ」と導く（勝ち上がりは同じ。いまの年度の表の方式の名前だけが世界の方式と違って見える）。
+- **締める処理も方式を読み直す**: 締める処理の前後比較（`PennantOffseasonService._state()`）に世界の方式を足した。方式「なし」で公式戦を終えた年に、締める計算の間に NPB へ変えると、締めずに断る（いまの状態で検査し直すので `PostseasonNotFinished`）（変えた方式をその年から使う、という画面の案内のとおりにする。DDD レビューの指摘）。
+
+**実測**（開発 DB のコピー。実データから分岐した 2リーグ12球団（858試合）・8リーグ48球団（3,432試合）の NPB 方式の世界で、2026年の公式戦とポストシーズン（20試合・101試合）を終えた状態。中央値・3回を2巡）
+
+| 画面 | 2リーグ | 8リーグ |
+| --- | --- | --- |
+| 個人成績（野手。既定の安打順） | 36ms・10 クエリ | 114〜115ms・10 クエリ |
+| 個人成績（投手。既定の投球回順・防御率順） | 37〜39ms・10 クエリ | 132〜136ms・10 クエリ |
+| 設定（未ログイン／オーナー） | 6ms・8q ／ 7ms・10q | 8〜9ms・8q ／ 10ms・10q |
+| 勝ち上がりの表 | 33ms・13q → 33ms・13q | 99〜100ms・13q → 102〜104ms・13q |
+| 順位表（世界バーの代表） | 26〜27ms・8q → 27ms・8q | 82〜84ms・8q → 83〜86ms・8q |
+| GM ホーム（オーナー／未ログイン） | 244〜248ms・61q／221〜222ms・45q → 245〜247ms・61q／220〜225ms・45q | 388〜391ms・61q／350〜351ms・45q → 410〜421ms・61q／349〜356ms・45q |
+| 世界の一覧（2つの世界） | 93〜94ms・12q → 101〜110ms・12q | （同左） |
+
+- 「→」の左は変更前のコード（f2049c8）、右は変更後。同じ DB のコピーで交互に測った。**既存の画面のクエリ数はすべて同じ**（世界バーの出し分けは「最後の試合日」と同じ集計で読む）。
+- 個人成績のクエリ数は試合と選手の数によらず一定（出場数・打撃・投球の集計が1本ずつ、在籍は出場した選手の分だけ1本）。8リーグでも 140ms 未満なので、索引・キャッシュは足さない。

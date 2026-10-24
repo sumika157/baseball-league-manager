@@ -47,6 +47,7 @@ from ..application.pennant_postseason import PennantPostseasonService, Postseaso
 from ..application.pennant_postseason_view import PennantPostseasonViewService
 from ..application.pennant_ratings import PennantRatingsViewService
 from ..application.pennant_season import PennantSeasonService
+from ..application.pennant_settings import PennantSettingsService
 from ..application.pennant_view import PennantWorldViewService, settled_context
 from ..application.pennant_world import PennantWorldService, WorldRepositories
 from ..application.queries import SimulationContextQuery
@@ -98,6 +99,7 @@ from ..infrastructure.queries import (
     DjangoPlayerSearchQuery,
     DjangoPlayerStatsQuery,
     DjangoPostseasonQuery,
+    DjangoPostseasonStatsQuery,
     DjangoRatingsHistoryQuery,
     DjangoSeasonPlayingTimeQuery,
     DjangoSimulationContextQuery,
@@ -150,6 +152,7 @@ from .forms import (
     PennantWorldForm,
     PlayerRegistrationForm,
     PlayerUpdateForm,
+    PostseasonFormatForm,
 )
 
 BATTER_MODE = "batter"
@@ -505,12 +508,33 @@ def build_pennant_postseason_view_service(world_id: int) -> PennantPostseasonVie
     リポジトリと参照クエリは、すべて渡された世界の範囲で作る。勝ち上がりの導出は進める処理・締める処理と同じ
     読み取り（`_postseason_brackets`）。世界の id が正しくなければ InvalidWorld。
     """
+    scope = WorldScope.pennant(world_id)
     return PennantPostseasonViewService(
         world_id=world_id,
         worlds=DjangoWorldRepository(),
         teams=build_world_view_service(world_id),
-        postseason=DjangoPostseasonQuery(WorldScope.pennant(world_id)),
+        postseason=DjangoPostseasonQuery(scope),
         brackets=_postseason_brackets(world_id),
+        stats=DjangoPostseasonStatsQuery(scope),
+    )
+
+
+def build_pennant_settings_service(world_id: int) -> PennantSettingsService:
+    """世界の設定（ポストシーズンの方式）のサービスを組み立てる。
+
+    いまの年度のポストシーズンの試合・日程・今日の読み直しは、すべて渡された世界の範囲で作る。世界の終了の判定は
+    進める処理と同じ勝ち上がりの読み取り（`_postseason_brackets`）。トランザクションはここで渡す。
+    世界の id が正しくなければ InvalidWorld。
+    """
+    scope = WorldScope.pennant(world_id)
+    return PennantSettingsService(
+        world_id=world_id,
+        worlds=DjangoWorldRepository(),
+        fixtures=DjangoFixtureRepository(scope),
+        context_query=DjangoSimulationContextQuery(scope),
+        postseason=DjangoPostseasonQuery(scope),
+        brackets=_postseason_brackets(world_id),
+        atomic=transaction.atomic,
     )
 
 
@@ -907,6 +931,74 @@ def pennant_postseason(request, world_id, year=None):
     if view is None and year is not None:
         raise Http404("その年のポストシーズンはありません。")
     return _render(request, "pennant/postseason.html", {"postseason": view}, world)
+
+
+@require_safe
+def pennant_postseason_stats(request, world_id, year):
+    """Y年のポストシーズンの個人成績（出場した選手だけ）。読むだけの画面なので誰でも開ける。
+
+    `?pos=pitcher` で投手、`?sort=`・`?dir=` で並べ替え（不正なキーは既定の並びに落とす）。開けない年は 404
+    （勝ち上がりの表と同じ年だけ開ける）。
+    """
+    world = _world_context(world_id)
+    pitchers = request.GET.get("pos") == PITCHER_MODE
+    sort, descending = _sort_params(request)
+    stats = build_pennant_postseason_view_service(world_id).stats(
+        world, year, pitchers=pitchers, sort=sort, descending=descending
+    )
+    if stats is None:
+        raise Http404("その年のポストシーズンはありません。")
+    return _render(
+        request,
+        "pennant/postseason_stats.html",
+        {
+            "stats": stats,
+            "players": stats.listing.rows,
+            "pos_mode": PITCHER_MODE if pitchers else BATTER_MODE,
+            "current_sort": stats.listing.sort,
+            "current_descending": stats.listing.descending,
+        },
+        world,
+    )
+
+
+def pennant_settings(request, world_id):
+    """世界の設定（ポストシーズンの方式）。見るのは誰でも、変える（POST）のはオーナーだけ。
+
+    変えられないとき（いまの年度のポストシーズンが始まっている・世界が終了している）は、操作を出さずに理由だけを出す。
+    """
+    world = _world_context(world_id)
+    if request.method not in ("GET", "HEAD", "POST"):
+        return HttpResponseNotAllowed(["GET", "HEAD", "POST"])
+    is_owner = _is_owner(request, world)
+    service = build_pennant_settings_service(world_id)
+    form = None
+    if request.method == "POST":
+        denied = _requires_world_owner(request, world)
+        if denied is not None:
+            return denied
+        form = PostseasonFormatForm(request.POST)
+        if form.is_valid():
+            chosen = form.cleaned_data["postseason_format"]
+            try:
+                changed = service.change_postseason_format(chosen)
+            except DomainError as error:
+                messages.error(request, str(error))
+                return redirect("pennant_settings", world_id=world_id)
+            if changed:
+                messages.success(request, f"ポストシーズンの方式を「{chosen.label}」にしました。")
+            else:
+                messages.info(request, "ポストシーズンの方式は変わっていません。")
+            return redirect("pennant_settings", world_id=world_id)
+    settings = service.view()
+    if is_owner and settings.can_change and form is None:
+        form = PostseasonFormatForm(initial={"postseason_format": settings.postseason_format.name})
+    return _render(
+        request,
+        "pennant/settings.html",
+        {"settings": settings, "form": form if is_owner and settings.can_change else None, "is_owner": is_owner},
+        world,
+    )
 
 
 @require_safe

@@ -224,6 +224,7 @@ class WorldCase(BaseCase):
             reverse("pennant_game_list", args=[world_id]),
             reverse("pennant_history", args=[world_id]),
             reverse("pennant_postseason", args=[world_id]),
+            reverse("pennant_settings", args=[world_id]),
             reverse("pennant_team_history", args=[world_id, team.id]),
             *(reverse("pennant_club", args=[world_id]) + f"?tab={tab}" for tab in ("active", "lineup", "pitching")),
             reverse("pennant_player_list", args=[world_id, team.id]),

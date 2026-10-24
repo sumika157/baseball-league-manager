@@ -57,6 +57,14 @@ POSTSEASON_AWAY_RUNS = [7]
 POSTSEASON_HOME_RUNS = [20]
 
 _CSRF = re.compile(r'name="csrfmiddlewaretoken" value="[^"]*"')
+# 世界バーの「ポストシーズン」のリンク。ポストシーズンの試合のある世界に出る（方式「なし」の世界の過去の年の表）ので、
+# 試合を足すと出るのが正しい。公式戦の集計の比較からは外す
+_POSTSEASON_LINK = re.compile(r'<a class="segmented-item[^"]*"\s*href="/pennant/\d+/postseason/">ポストシーズン</a>')
+
+
+def _without_postseason_link(page: str) -> str:
+    """世界バーの「ポストシーズン」のリンクを外し、空白の並びを1つにまとめる（`{% if %}` の行の空白も変わるため）。"""
+    return re.sub(r"\s+", " ", _POSTSEASON_LINK.sub("", page))
 
 
 class PostseasonCase(WorldCase):
@@ -188,7 +196,10 @@ class PostseasonGamesDoNotCountTest(PostseasonCase):
             owner_id=owner.id, managed_team_id=self.pennant_team.id
         )
         self.client.force_login(owner)
-        urls = [*self.world_urls(), reverse("pennant_world", args=[self.world_id]) + f"?since={YEAR}-04-01"]
+        urls = [
+            *(url for url in self.world_urls() if url not in self.postseason_urls()),
+            reverse("pennant_world", args=[self.world_id]) + f"?since={YEAR}-04-01",
+        ]
         self.assertGreaterEqual(len(urls), 20, "画面の一覧を拾えていません")
         before = self._pages(urls)
 
@@ -197,7 +208,15 @@ class PostseasonGamesDoNotCountTest(PostseasonCase):
         after = self._pages(urls)
         for url in urls:
             with self.subTest(url=url):
-                self.assertEqual(after[url], before[url])
+                self.assertEqual(_without_postseason_link(after[url]), _without_postseason_link(before[url]))
+
+    def postseason_urls(self) -> set[str]:
+        """ポストシーズンの試合で変わるのが正しい画面（勝ち上がりの表・設定の画面）。比べない。
+
+        設定の画面は、その年のポストシーズンが始まると方式を変えられなくなる。個人成績（`pennant_postseason_stats`）は
+        `world_urls` に無い（ポストシーズンの無い年は 404）。どちらも `test_pennant_postseason_settings.py` が見る。
+        """
+        return {reverse(name, args=[self.world_id]) for name in ("pennant_postseason", "pennant_settings")}
 
     def test_a_postseason_game_in_another_year_adds_no_season(self):
         """年の選択肢・既定の年はポストシーズンの試合だけの年を拾わない。"""
