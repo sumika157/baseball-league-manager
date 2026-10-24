@@ -125,7 +125,7 @@ class ActiveRosterTest(TestCase):
     def test_foreign_players_are_capped_at_the_registration_limit(self):
         pool = full_pool(foreign_ids=(4, 5, 6, 7, 8, 101, 102, 103))
         active = choose_active_roster(pool, rules=total(4))
-        foreign = [p for p in (*active.batters, *active.pitchers) if p.is_foreign]
+        foreign = [p for p in (*active.batters, *active.pitchers) if p.counts_as_foreign]
         self.assertEqual(len(foreign), 4)
         self.assertEqual(len(active.batters) + len(active.pitchers), ACTIVE_ROSTER_SIZE)
 
@@ -134,13 +134,13 @@ class ActiveRosterTest(TestCase):
         active = choose_active_roster(pool, rules=total(1))
         catchers = [b for b in active.batters if b.position is Position.CATCHER]
         self.assertGreaterEqual(len(catchers), 2)
-        self.assertEqual(sum(b.is_foreign for b in (*active.batters, *active.pitchers)), 1)
+        self.assertEqual(sum(b.counts_as_foreign for b in (*active.batters, *active.pitchers)), 1)
         self.assertEqual(len(active.batters) + len(active.pitchers), ACTIVE_ROSTER_SIZE)
 
     def test_no_cap_means_all_the_best_foreign_players_stay(self):
         pool = full_pool(foreign_ids=(4, 5, 6, 7, 8))
         active = choose_active_roster(pool, rules=ForeignPlayerRules.UNLIMITED)
-        self.assertEqual(sum(b.is_foreign for b in active.batters), 5)
+        self.assertEqual(sum(b.counts_as_foreign for b in active.batters), 5)
 
     def test_the_agreement_caps_foreign_pitchers_at_three_and_replaces_them_with_domestic_pitchers(self):
         """協約第82条の2: 投手は3人まで。外した外国人の代わりは外国人でない投手（野手の枠は使わない）。"""
@@ -148,7 +148,7 @@ class ActiveRosterTest(TestCase):
 
         active = choose_active_roster(pool, rules=ForeignPlayerRules.NPB)
 
-        foreign_pitchers = [p for p in active.pitchers if p.is_foreign]
+        foreign_pitchers = [p for p in active.pitchers if p.counts_as_foreign]
         self.assertEqual({p.player_id for p in foreign_pitchers}, {101, 102, 103}, "能力の高い3人が残る")
         self.assertEqual(len(active.pitchers), ACTIVE_PITCHERS)
         self.assertEqual(len(active.batters) + len(active.pitchers), ACTIVE_ROSTER_SIZE)
@@ -158,7 +158,7 @@ class ActiveRosterTest(TestCase):
 
         active = choose_active_roster(pool, rules=ForeignPlayerRules.NPB)
 
-        self.assertEqual({b.player_id for b in active.batters if b.is_foreign}, {4, 5, 6})
+        self.assertEqual({b.player_id for b in active.batters if b.counts_as_foreign}, {4, 5, 6})
         self.assertEqual(len(active.batters) + len(active.pitchers), ACTIVE_ROSTER_SIZE)
 
     def test_the_agreement_caps_the_total_at_four(self):
@@ -166,10 +166,10 @@ class ActiveRosterTest(TestCase):
 
         active = choose_active_roster(pool, rules=ForeignPlayerRules.NPB)
 
-        foreign = [p for p in (*active.batters, *active.pitchers) if p.is_foreign]
+        foreign = [p for p in (*active.batters, *active.pitchers) if p.counts_as_foreign]
         self.assertEqual(len(foreign), 4)
-        self.assertLessEqual(sum(p.is_foreign for p in active.pitchers), 3)
-        self.assertLessEqual(sum(b.is_foreign for b in active.batters), 3)
+        self.assertLessEqual(sum(p.counts_as_foreign for p in active.pitchers), 3)
+        self.assertLessEqual(sum(b.counts_as_foreign for b in active.batters), 3)
 
     def test_the_catcher_minimum_respects_the_batter_limit(self):
         pool = full_pool(foreign_ids=(1, 4, 5, 6))  # 捕手3人のうち強い1人と、野手3人が外国人
@@ -178,7 +178,7 @@ class ActiveRosterTest(TestCase):
         active = choose_active_roster(pool, rules=rules)
 
         self.assertGreaterEqual(sum(b.position is Position.CATCHER for b in active.batters), 2)
-        self.assertLessEqual(sum(b.is_foreign for b in active.batters), 3)
+        self.assertLessEqual(sum(b.counts_as_foreign for b in active.batters), 3)
 
     def fielders_pool(self, outfielders: int) -> ClubRoster:
         """外野手がいちばん弱く、能力順に選ぶと外野を守れる人数が1軍に入らない候補。"""
@@ -214,13 +214,13 @@ class ActiveRosterTest(TestCase):
         pool = ClubRoster(
             1,
             pool.name,
-            tuple(replace(b, is_foreign=b.player_id in foreign_outfielders) for b in pool.batters),
+            tuple(replace(b, counts_as_foreign=b.player_id in foreign_outfielders) for b in pool.batters),
             pool.pitchers,
         )
 
         active = choose_active_roster(pool, rules=total(1))
 
-        self.assertLessEqual(sum(b.is_foreign for b in (*active.batters, *active.pitchers)), 1)
+        self.assertLessEqual(sum(b.counts_as_foreign for b in (*active.batters, *active.pitchers)), 1)
 
     def test_the_foreign_registration_limit_counts_the_foreign_pitchers_too(self):
         """外国人枠の計は1軍全体（投手を含む）。補充（守備位置・捕手）が、投手の外国人ぶんを忘れて枠を破らない。"""
@@ -230,20 +230,20 @@ class ActiveRosterTest(TestCase):
         pool = ClubRoster(
             1,
             pool.name,
-            tuple(replace(b, is_foreign=b.player_id in outfielders) for b in pool.batters),
-            tuple(replace(p, is_foreign=p.player_id in foreign_pitchers) for p in pool.pitchers),
+            tuple(replace(b, counts_as_foreign=b.player_id in outfielders) for b in pool.batters),
+            tuple(replace(p, counts_as_foreign=p.player_id in foreign_pitchers) for p in pool.pitchers),
         )
 
         active = choose_active_roster(pool, rules=total(3))
 
-        self.assertLessEqual(sum(p.is_foreign for p in (*active.batters, *active.pitchers)), 3)
+        self.assertLessEqual(sum(p.counts_as_foreign for p in (*active.batters, *active.pitchers)), 3)
 
     def test_the_catcher_minimum_counts_the_foreign_pitchers_too(self):
         pool = full_pool(foreign_ids=(1, 2, 101, 102))  # 捕手3人のうち強い2人と、強い投手2人が外国人
 
         active = choose_active_roster(pool, rules=total(2))
 
-        self.assertLessEqual(sum(p.is_foreign for p in (*active.batters, *active.pitchers)), 2)
+        self.assertLessEqual(sum(p.counts_as_foreign for p in (*active.batters, *active.pitchers)), 2)
 
     def test_fielders_who_already_stand_correctly_do_not_move_for_a_newcomer(self):
         """空いている位置があるのに、座っている選手を玉突きで動かさない。"""
@@ -365,14 +365,14 @@ class LineupTest(TestCase):
         active = choose_active_roster(pool, rules=total(4))
         for limit in (0, 1, 2, 3):
             lineup = choose_lineup(active.batters, foreign_quota(limit))
-            self.assertLessEqual(sum(slot.batter.is_foreign for slot in lineup), limit, f"limit={limit}")
+            self.assertLessEqual(sum(slot.batter.counts_as_foreign for slot in lineup), limit, f"limit={limit}")
 
     def test_the_quota_already_used_by_the_starter_is_counted(self):
         pool = full_pool(foreign_ids=tuple(range(4, 12)))
         active = choose_active_roster(pool, rules=total(4))
         quota = foreign_quota(2, pitchers=1)
         lineup = choose_lineup(active.batters, quota)
-        self.assertLessEqual(sum(slot.batter.is_foreign for slot in lineup), 1)
+        self.assertLessEqual(sum(slot.batter.counts_as_foreign for slot in lineup), 1)
 
     def test_fewer_than_nine_batters_cannot_make_a_lineup(self):
         with self.assertRaises(InvalidRoster):

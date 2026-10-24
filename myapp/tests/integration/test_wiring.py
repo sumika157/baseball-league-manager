@@ -35,6 +35,7 @@ from myapp.application.queries import (
     OffseasonQuery,
     PennantActivityQuery,
     RatingsHistoryQuery,
+    ServiceHistoryQuery,
     SimulationContextQuery,
     TeamAnalysisQuery,
     TeamListQuery,
@@ -66,6 +67,7 @@ from myapp.infrastructure.queries import (
     DjangoOffseasonQuery,
     DjangoPennantActivityQuery,
     DjangoRatingsHistoryQuery,
+    DjangoServiceHistoryQuery,
     DjangoSimulationContextQuery,
     DjangoTeamAnalysisQuery,
     DjangoTeamListQuery,
@@ -130,6 +132,7 @@ class ProtocolConformanceTest(SimpleTestCase):
         (DjangoTeamListQuery(REAL), TeamListQuery),
         (DjangoGameListQuery(REAL), GameListQuery),
         (DjangoTeamAnalysisQuery(REAL), TeamAnalysisQuery),
+        (DjangoServiceHistoryQuery(REAL), ServiceHistoryQuery),
         (DjangoPennantActivityQuery(REAL), PennantActivityQuery),
         (DjangoWorldSummaryQuery(), WorldSummaryQuery),
         (DjangoOffseasonQuery(REAL), OffseasonQuery),
@@ -361,7 +364,7 @@ class WorldViewScopeTest(SimpleTestCase):
     def test_the_world_analysis_is_fixed_to_its_world_and_uses_the_worlds_today(self):
         """戦力分析も、世界の範囲だけを読み、試合の無い球団の既定の年は世界の今日から取る。"""
         service = build_world_team_analysis_service(7)
-        for name in ("_team_list_query", "_analysis_query"):
+        for name in ("_team_list_query", "_analysis_query", "_service_history_query"):
             with self.subTest(dependency=name):
                 self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
         self.assertIsNot(service._today, date.today)
@@ -404,7 +407,7 @@ class RealScopeTest(SimpleTestCase):
 
     def test_build_team_analysis_service_is_fixed_to_the_real_scope(self):
         service = build_team_analysis_service()
-        for name in ("_team_list_query", "_analysis_query"):
+        for name in ("_team_list_query", "_analysis_query", "_service_history_query"):
             with self.subTest(dependency=name):
                 self.assertEqual(getattr(service, name)._scope, REAL)
 

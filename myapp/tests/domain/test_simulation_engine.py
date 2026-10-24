@@ -388,8 +388,8 @@ class ForeignQuotaInGameTest(TestCase):
         pool = list(spread_league(rng, 2))
         clubs = []
         for club in pool:
-            batters = tuple(replace(b, is_foreign=index < 5) for index, b in enumerate(club.batters))
-            pitchers = tuple(replace(p, is_foreign=index < 5) for index, p in enumerate(club.pitchers))
+            batters = tuple(replace(b, counts_as_foreign=index < 5) for index, b in enumerate(club.batters))
+            pitchers = tuple(replace(p, counts_as_foreign=index < 5) for index, p in enumerate(club.pitchers))
             clubs.append(
                 choose_active_roster(replace(club, batters=batters, pitchers=pitchers), rules=LOOSE_FOREIGN_RULES)
             )
@@ -402,8 +402,8 @@ class ForeignQuotaInGameTest(TestCase):
                     day, home, away, day=OPENING_DAY + timedelta(days=day), history=history, foreign_rules=rules
                 )
                 for club in (home, away):
-                    foreign_batters = {b.player_id for b in club.batters if b.is_foreign}
-                    foreign_pitchers = {p.player_id for p in club.pitchers if p.is_foreign}
+                    foreign_batters = {b.player_id for b in club.batters if b.counts_as_foreign}
+                    foreign_pitchers = {p.player_id for p in club.pitchers if p.counts_as_foreign}
                     batted = {entry.player_id for entry in played.lineup if entry.team_id == club.team_id}
                     pitched = {o.player_id for o in played.game.pitching}
                     counts = (len(pitched & foreign_pitchers), len(batted & foreign_batters))
@@ -525,14 +525,14 @@ class OrdersTest(TestCase):
         foreign = set(sorted(starters_in_lineup)[:3])
         marked = replace(
             roster,
-            batters=tuple(replace(b, is_foreign=b.player_id in foreign) for b in roster.batters),
-            pitchers=tuple(replace(p, is_foreign=index < 3) for index, p in enumerate(roster.pitchers)),
+            batters=tuple(replace(b, counts_as_foreign=b.player_id in foreign) for b in roster.batters),
+            pitchers=tuple(replace(p, counts_as_foreign=index < 3) for index, p in enumerate(roster.pitchers)),
         )
         lineup = tuple(LineupSlot(s.batter, s.position) for s in choose_lineup(marked.batters, ForeignQuota()))
-        self.assertEqual(sum(s.batter.is_foreign for s in lineup), 3)
+        self.assertEqual(sum(s.batter.counts_as_foreign for s in lineup), 3)
         rules = ForeignPlayerRules(active=3, pitchers=3, batters=3)
         played = _play(11, marked, self.away, foreign_rules=rules, home_orders=ClubOrders(lineup=lineup))
 
         [starter_id] = self.starters(played, marked)
         starter = next(p for p in marked.pitchers if p.player_id == starter_id)
-        self.assertFalse(starter.is_foreign, "オーダーの外国人で枠が埋まっているので、外国人の投手は先発しない")
+        self.assertFalse(starter.counts_as_foreign, "オーダーの外国人で枠が埋まっているので、外国人の投手は先発しない")

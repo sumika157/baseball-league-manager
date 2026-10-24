@@ -86,7 +86,8 @@ class ClubMember:
     player_id: int
     name: str
     position: Position
-    is_foreign: bool = False
+    # その年の外国人枠で数えるか。国籍やフラグの事実ではない（誰を数えるかは作る側が決める）
+    counts_as_foreign: bool = False
 
     @property
     def is_pitcher(self) -> bool:
@@ -137,9 +138,9 @@ class ResolvedClub:
 
 def members_of(pool: ClubRoster) -> dict[int, ClubMember]:
     """登録候補（能力のある在籍選手）を、検査に使う形にする。"""
-    members = {b.player_id: ClubMember(b.player_id, b.name, b.position, b.is_foreign) for b in pool.batters}
+    members = {b.player_id: ClubMember(b.player_id, b.name, b.position, b.counts_as_foreign) for b in pool.batters}
     members.update(
-        {p.player_id: ClubMember(p.player_id, p.name, Position.PITCHER, p.is_foreign) for p in pool.pitchers}
+        {p.player_id: ClubMember(p.player_id, p.name, Position.PITCHER, p.counts_as_foreign) for p in pool.pitchers}
     )
     return members
 
@@ -258,7 +259,7 @@ def playable_shortfall(positions: Iterable[Position], *, subject: str = "1軍") 
 
 def foreign_positions(members: Iterable[ClubMember]) -> list[Position]:
     """外国人選手の登録位置の並び（`ForeignPlayerRules` が投手か野手かを数える材料）。"""
-    return [m.position for m in members if m.is_foreign]
+    return [m.position for m in members if m.counts_as_foreign]
 
 
 def foreign_counts(members: Iterable[ClubMember]) -> tuple[int, int]:
@@ -542,10 +543,10 @@ def resolve_club(plan: ClubPlan | None, pool: ClubRoster, limits: ClubLimits) ->
     # ローテーションでは枠の中で先発を立てられない（エンジンはオーダーを先に枠に数える）。
     # その日はオーダーを自動に落とす
     if lineup is not None and roster.pitchers:
-        lineup_foreign = sum(slot.batter.is_foreign for slot in lineup)
+        lineup_foreign = sum(slot.batter.counts_as_foreign for slot in lineup)
         effective = staff if staff is not None else plan_pitching_staff(roster.pitchers)
         full = not limits.game_foreign.has_room(pitchers=0, batters=lineup_foreign, is_pitcher=True)
-        if full and all(p.is_foreign for p in effective.rotation):
+        if full and all(p.counts_as_foreign for p in effective.rotation):
             fallbacks.append(
                 PlanFallback(
                     PlanSection.LINEUP,
@@ -554,7 +555,7 @@ def resolve_club(plan: ClubPlan | None, pool: ClubRoster, limits: ClubLimits) ->
                 )
             )
             lineup = None
-        elif full and effective.closer is not None and effective.closer.is_foreign:
+        elif full and effective.closer is not None and effective.closer.counts_as_foreign:
             # オーダーが枠を使い切ると、外国人の抑えは1年中投げられない（黙って投げなくなる）。
             # 区画は外さず（自動の抑えも外国人になりうる）、GM に知らせるだけにする
             source = "手動で指定した" if closer is not None else "自動で選ばれた"

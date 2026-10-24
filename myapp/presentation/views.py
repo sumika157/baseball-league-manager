@@ -91,6 +91,7 @@ from ..infrastructure.queries import (
     DjangoPlayerStatsQuery,
     DjangoRatingsHistoryQuery,
     DjangoSeasonPlayingTimeQuery,
+    DjangoServiceHistoryQuery,
     DjangoSimulationContextQuery,
     DjangoTeamAnalysisQuery,
     DjangoTeamListQuery,
@@ -359,6 +360,7 @@ def build_team_analysis_service() -> TeamAnalysisService:
     return TeamAnalysisService(
         team_list_query=DjangoTeamListQuery(scope),
         analysis_query=DjangoTeamAnalysisQuery(scope),
+        service_history_query=DjangoServiceHistoryQuery(scope),
         today=date.today,
     )
 
@@ -374,6 +376,7 @@ def build_world_team_analysis_service(world_id: int) -> TeamAnalysisService:
     return TeamAnalysisService(
         team_list_query=DjangoTeamListQuery(scope),
         analysis_query=DjangoTeamAnalysisQuery(scope),
+        service_history_query=DjangoServiceHistoryQuery(scope),
         today=_world_clock(world_id, DjangoSimulationContextQuery(scope)),
     )
 

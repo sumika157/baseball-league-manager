@@ -169,7 +169,12 @@ class PennantWorldService:
         for teams in source.rosters:
             for team in teams:
                 members = [
-                    ClubMember(_saved_id(player.id), player.name, player.position, player.profile.is_foreign_player)
+                    ClubMember(
+                        _saved_id(player.id),
+                        player.name,
+                        player.position,
+                        counts_as_foreign=player.profile.is_foreign_player,
+                    )
                     for player in team.active_players
                     if team.contract_of(player) is ContractStatus.REGISTERED
                 ]

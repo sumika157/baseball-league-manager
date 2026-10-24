@@ -278,11 +278,16 @@ def pool_of(team: SimulationTeam, ratings: dict[int, BatterRatings | PitcherRati
         ability = ratings.get(player.player_id)
         # 登録位置と能力の種類の食い違いは、能力の保存のときに弾いている
         if isinstance(ability, PitcherRatings):
-            pitchers.append(SimPitcher(player.player_id, player.name, ability, player.is_foreign))
+            pitchers.append(SimPitcher(player.player_id, player.name, ability, counts_as_foreign=player.is_foreign))
         elif isinstance(ability, BatterRatings):
             batters.append(
                 SimBatter(
-                    player.player_id, player.name, player.position, ability, player.is_foreign, throws=player.throws
+                    player.player_id,
+                    player.name,
+                    player.position,
+                    ability,
+                    counts_as_foreign=player.is_foreign,
+                    throws=player.throws,
                 )
             )
     return ClubRoster(team_id=team.team_id, name=team.name, batters=tuple(batters), pitchers=tuple(pitchers))

@@ -285,7 +285,13 @@ class ClubManagementService:
             game_foreign=ForeignPlayerRules.strictest(t.foreign_rules for t in teams),
         )
         return _Situation(
-            team.team_id, team.name, year, pool, limits, frozenset(player.player_id for player in team.players)
+            team.team_id,
+            team.name,
+            year,
+            pool,
+            limits,
+            frozenset(player.player_id for player in team.players),
+            frozenset(player.player_id for player in team.players if player.is_foreign),
         )
 
     def _current_year(self) -> int:
@@ -308,6 +314,7 @@ class _Situation:
         pool: ClubRoster,
         limits: ClubLimits,
         on_team_ids: frozenset[int],
+        foreign_player_ids: frozenset[int],
     ) -> None:
         self.team_id = team_id
         self.team_name = team_name
@@ -317,6 +324,8 @@ class _Situation:
         self.members: dict[int, ClubMember] = members_of(pool)
         # いま在籍している選手（能力の有無によらない）。1軍に使われるのはこのうち能力のある人だけ
         self.on_team_ids = on_team_ids
+        # 外国人選手フラグの選手（画面の「外国人」の印に使う事実。枠で数えるかは `ClubMember.counts_as_foreign`）
+        self.foreign_player_ids = foreign_player_ids
 
     @staticmethod
     def _ids_of(roster: ClubRoster) -> set[int]:
@@ -356,7 +365,9 @@ class _Situation:
             team_name=self.team_name,
             year=self.year,
             players=tuple(
-                ClubPlayerRow(m.player_id, m.name, m.position, m.is_foreign, m.player_id in active_ids)
+                ClubPlayerRow(
+                    m.player_id, m.name, m.position, m.player_id in self.foreign_player_ids, m.player_id in active_ids
+                )
                 for m in self.members.values()
             ),
             active_ids=tuple([b.player_id for b in roster.batters] + [p.player_id for p in roster.pitchers]),

@@ -280,7 +280,7 @@ class PennantOffseasonService:
         players = _team_of(teams, team_id).players
         ensure_releasable(
             player_ids,
-            [ClubMember(p.player_id, p.name, p.position, p.is_foreign) for p in players],
+            [ClubMember(p.player_id, p.name, p.position, counts_as_foreign=p.is_foreign) for p in players],
             foreign_rules=ForeignPlayerRules.strictest(t.foreign_rules for t in teams),
         )
         self._releases.save(ReleasePlan(team_id=team_id, year=year, player_ids=frozenset(player_ids)))
