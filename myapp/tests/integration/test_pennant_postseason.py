@@ -12,10 +12,8 @@ from io import StringIO
 from unittest import mock
 
 from django.core.management import call_command
-from django.db import transaction
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase
 
-from myapp.application.dto import PostseasonAdvanceReport
 from myapp.application.pennant_simulation import game_key
 from myapp.domain.exceptions import (
     AlreadyAdvanced,
@@ -41,130 +39,17 @@ from myapp.presentation.views import (
     build_pennant_offseason_service,
     build_pennant_postseason_service,
     build_pennant_season_service,
-    build_pennant_world_service,
     build_pennant_world_view,
     build_world_view_service,
 )
 
-from ..helpers import register_players
+from .world_case import PostseasonWorldCase
 
 YEAR = 2026
 DECIDE_RETIREMENTS = "myapp.domain.pennant.offseason.decide_retirements"
-BATTER_POSITIONS = ["捕手"] * 2 + ["内野手"] * 5 + ["外野手"] * 4 + ["指名打者"]
-PITCHERS = 11
 
 
-def _register_club(team: orm_models.Team, prefix: str) -> None:
-    register_players(
-        team,
-        [
-            *((f"{prefix}野手{n}", n, position) for n, position in enumerate(BATTER_POSITIONS, start=1)),
-            *((f"{prefix}投手{n}", 20 + n, "投手") for n in range(1, PITCHERS + 1)),
-        ],
-    )
-
-
-class PostseasonCase(TestCase):
-    """公式戦を終えた世界（NPB 方式・方式「なし」）。同じシードなので公式戦の結果は同じ。"""
-
-    npb_world: int
-    none_world: int
-    managed_source_id: int
-
-    @classmethod
-    def setUpTestData(cls):
-        league_ids = []
-        for league_index in range(2):
-            league = orm_models.League.objects.create(name=f"ポスト{league_index}リーグ")
-            league_ids.append(league.id)
-            stadium = orm_models.Stadium.objects.create(name=f"ポスト{league_index}球場", city="東京", capacity=30000)
-            for team_index in range(3):
-                team = orm_models.Team.objects.create(
-                    league=league, name=f"ポスト{league_index}-{team_index}球団", home_stadium=stadium
-                )
-                _register_club(team, f"{league_index}{team_index}")
-                if league_index == 0 and team_index == 0:
-                    cls.managed_source_id = team.id
-        cls.npb_world = cls._create(league_ids, "NPB の世界", PostseasonFormat.NPB)
-        cls.none_world = cls._create(league_ids, "なしの世界", PostseasonFormat.NONE)
-        for world_id in (cls.npb_world, cls.none_world):
-            build_pennant_season_service(world_id).advance(AdvanceTarget.WEEK)
-            fixtures = DjangoFixtureRepository(WorldScope.pennant(world_id))
-            fixtures.remove(fixtures.find_all())
-
-    @classmethod
-    def _create(cls, league_ids, name, postseason_format) -> int:
-        created = build_pennant_world_service().create_world(
-            name=name,
-            owner_id=None,
-            source_league_ids=league_ids,
-            start_year=YEAR,
-            seed=11,
-            managed_source_team_id=cls.managed_source_id,
-            postseason_format=postseason_format,
-        )
-        return created.world.id
-
-    # --- 道具 ---
-
-    @staticmethod
-    def advance(world_id, target=AdvanceTarget.DAY, **kwargs) -> PostseasonAdvanceReport:
-        return build_pennant_postseason_service(world_id).advance(target, **kwargs)
-
-    def advance_to_the_end(self, world_id, target=AdvanceTarget.DAY) -> list[PostseasonAdvanceReport]:
-        reports = []
-        for _ in range(200):
-            report = self.advance(world_id, target)
-            reports.append(report)
-            if not report.played_dates:
-                return reports
-        raise AssertionError("ポストシーズンが終わりません")
-
-    @staticmethod
-    def postseason_snapshot(world_id):
-        """ポストシーズンの試合の打席列（球団と選手は名前で）。"""
-        return list(
-            orm_models.GamePlateAppearance.objects.filter(
-                game__home_team__league__world_id=world_id, game__stage=GameStage.POSTSEASON.value
-            )
-            .order_by("game__played_on", "game__home_team__name", "sequence")
-            .values_list(
-                "game__played_on",
-                "game__home_team__name",
-                "game__away_team__name",
-                "game__home_score",
-                "game__away_score",
-                "sequence",
-                "inning",
-                "batter__name",
-                "pitcher__name",
-                "result",
-            )
-        )
-
-    @staticmethod
-    def replay(world_id, run):
-        savepoint = transaction.savepoint()
-        try:
-            run()
-            return PostseasonCase.postseason_snapshot(world_id)
-        finally:
-            transaction.savepoint_rollback(savepoint)
-
-    @staticmethod
-    def bracket(world_id):
-        service = build_pennant_postseason_service(world_id)
-        world = DjangoWorldRepository().find_by_id(world_id)
-        return service._brackets.bracket(world, YEAR)
-
-    @staticmethod
-    def postseason_games(world_id):
-        return orm_models.Game.objects.filter(
-            home_team__league__world_id=world_id, stage=GameStage.POSTSEASON.value
-        ).order_by("played_on", "id")
-
-
-class AdvancePostseasonTest(PostseasonCase):
+class AdvancePostseasonTest(PostseasonWorldCase):
     def test_the_world_keeps_its_format(self):
         self.assertIs(DjangoWorldRepository().find_by_id(self.npb_world).postseason_format, PostseasonFormat.NPB)
         self.assertIs(DjangoWorldRepository().find_by_id(self.none_world).postseason_format, PostseasonFormat.NONE)
@@ -307,7 +192,7 @@ class AdvancePostseasonTest(PostseasonCase):
         self.assertFalse(self.postseason_games(self.npb_world).exists())
 
 
-class ClosingTest(PostseasonCase):
+class ClosingTest(PostseasonWorldCase):
     def test_the_season_cannot_be_closed_until_the_postseason_is_over(self):
         offseason = build_pennant_offseason_service(self.npb_world)
         scope = WorldScope.pennant(self.npb_world)
@@ -342,7 +227,7 @@ class ClosingTest(PostseasonCase):
         self.assertEqual(offseason.close_season().year, YEAR)
 
 
-class ReleasesDuringThePostseasonTest(PostseasonCase):
+class ReleasesDuringThePostseasonTest(PostseasonWorldCase):
     """戦力外は公式戦を終えれば選べる（ポストシーズン中も）。指名を使うのは締めるときだけ。"""
 
     def test_the_release_tab_is_open_during_the_postseason(self):
@@ -397,7 +282,7 @@ class ReleasesDuringThePostseasonTest(PostseasonCase):
         self.assertFalse(offseason.can_choose_releases())
 
 
-class CommandTest(PostseasonCase):
+class CommandTest(PostseasonWorldCase):
     def test_the_command_plays_to_the_end(self):
         out = StringIO()
         call_command("pennant_advance", world=self.npb_world, target="postseason-end", stdout=out)

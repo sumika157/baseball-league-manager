@@ -11,7 +11,8 @@
 </nav>{% include 'pennant/_world_bar.html' %}
 
 {% comment %}
-GM ホーム。上から、自軍の位置 → 進めた結果 → 進める（シーズン終了なら「締める」。同時には出さない） → 次の試合 → 順位表 → 主力 → タイトル争い → 削除。
+GM ホーム。上から、自軍の位置 → 進めた結果 → 進める（シーズン終了なら「ポストシーズン」のカードと「締める」。
+ポストシーズンが終わるまでは締めるカードを出さない。進めると締めるを同時には出さない） → 次の試合 → 順位表 → 主力 → タイトル争い → 削除。
 状態は保存せず、日程と試合から導いた値（PennantHome）を並べるだけ。
 「注意」は、編成の上書きが使えず、いま進めると自動編成に落ちる区画（オーナーにだけ出す。自軍の帯の直後）。
 {% endcomment %}
@@ -209,8 +210,12 @@ GM ホーム。上から、自軍の位置 → 進めた結果 → 進める（�
   </div>
 {% endif %}
 
+{% if postseason %}
+  {% include 'pennant/_postseason_card.html' %}
+{% endif %}
+
 {% if is_owner and home.season_finished %}
-  {% comment %}最終シーズンを終えた世界は締められない。締めるカードの代わりに「世界の終了」を出す（そのとき close_option は無い）。{% endcomment %}
+  {% comment %}最終シーズンを終えた世界は締められない。締めるカードの代わりに「世界の終了」を出す（そのとき close_option は無い）。ポストシーズン中も close_option は無い。{% endcomment %}
   {% if close_option %}{% include 'pennant/_season_close.html' %}{% endif %}
 {% elif is_owner %}
   <div class="card mb-4">

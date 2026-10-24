@@ -80,11 +80,14 @@ class PostseasonBracketReader:
         """その年のポストシーズンの状況。方式が「なし」の世界は何も読まずに `NONE`。"""
         return self.bracket(world, year).status
 
-    def bracket(self, world: World, year: int) -> PostseasonBracket:
+    def bracket(
+        self, world: World, year: int, *, results: Sequence[PostseasonResult] | None = None
+    ) -> PostseasonBracket:
         """その年の勝ち上がり。結果が導いた対戦と食い違えば `InvalidPostseason`。
 
         方式が「なし」・その年の公式戦が無いときは、順位を読まずに状況 `NONE` の勝ち上がりを返す
         （方式「なし」の世界の締める処理に、読み込みを足さない）。
+        `results` はその年のポストシーズンの結果。既に読んだ呼び手（勝ち上がりの表）が渡し、省けばここで読む。
         """
         if world.postseason_format is PostseasonFormat.NONE:
             return _no_postseason(year)
@@ -100,7 +103,7 @@ class PostseasonBracketReader:
             _league_finishes(standings, tiebreak_for(year, games=self._games, teams=self._teams)),
             priority,
             last_regular,
-            self._postseason.results(year),
+            self._postseason.results(year) if results is None else results,
         )
 
     def team_names(self) -> dict[int, str]:

@@ -10,10 +10,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 
-from ..domain.entities import jersey_number_in
+from ..domain.entities import jersey_number_in, winning_team_id
 from ..domain.pennant.awards import Award
 from ..domain.pennant.club_plan import PlanSection
-from ..domain.pennant.postseason import PostseasonFormat, PostseasonStatus
+from ..domain.pennant.postseason import PostseasonFormat, PostseasonResult, PostseasonStatus
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.season import SeasonPhase
 from ..domain.services.free_agency import SERVICE_DAYS_PER_SEASON
@@ -30,6 +30,7 @@ from ..domain.value_objects import (
     FieldingPosition,
     ForeignPlayerRules,
     FreeAgencyKind,
+    GameStage,
     Handedness,
     JerseyNumber,
     PitchingLine,
@@ -429,6 +430,13 @@ class GameDetail:
     duration_label: str = ""
     interruption_label: str = ""
     attendance_label: str = ""
+    # 試合の区分（公式戦・ポストシーズン）
+    stage: GameStage = GameStage.REGULAR
+
+    @property
+    def is_postseason(self) -> bool:
+        """ポストシーズンの試合か（見出しの印と、勝ち上がりの表へのリンクを出す）。"""
+        return self.stage is GameStage.POSTSEASON
 
     @property
     def header_items(self) -> list[str]:
@@ -1318,6 +1326,134 @@ class PostseasonAdvanceReport:
 
 
 @dataclass(frozen=True)
+class PostseasonGameRow:
+    """ポストシーズンの試合1つ（id・日付・2球団・得点）。勝ち上がりの導出と、表の試合の行の両方に使う。"""
+
+    game_id: int
+    played_on: date
+    home_team_id: int
+    away_team_id: int
+    home_score: int
+    away_score: int
+
+    @property
+    def result(self) -> PostseasonResult:
+        """勝ち上がりの導出に渡す結果（勝者の出典は domain の `winning_team_id`）。"""
+        return PostseasonResult(
+            played_on=self.played_on,
+            home_team_id=self.home_team_id,
+            away_team_id=self.away_team_id,
+            winner_team_id=winning_team_id(self.home_team_id, self.away_team_id, self.home_score, self.away_score),
+        )
+
+
+@dataclass(frozen=True)
+class SeriesGameView:
+    """勝ち上がりの表の、シリーズの試合1つ。"""
+
+    number: int  # 第何戦か
+    game_id: int
+    played_on: date
+    home_team_name: str
+    away_team_name: str
+    home_score: int
+    away_score: int
+    # 勝った球団の名前。引分は空
+    winner_name: str
+
+
+@dataclass(frozen=True)
+class SeriesView:
+    """勝ち上がりの表の、シリーズ1つ。上位はアドバンテージ・第1戦の本拠地の側。"""
+
+    name: str
+    # CS のリーグの名前。日本シリーズは空
+    league_name: str
+    upper_team_id: int
+    upper_team_name: str
+    lower_team_id: int
+    lower_team_name: str
+    # 上位の勝利数はアドバンテージ込み
+    upper_wins: int
+    lower_wins: int
+    ties: int
+    advantage: int
+    # 規則の1行（例「先に4勝（上位はアドバンテージの1勝を含む）・6試合まで」）
+    rules_label: str
+    winner_team_id: int | None
+    winner_name: str
+    games: tuple[SeriesGameView, ...]
+
+    @property
+    def is_decided(self) -> bool:
+        return self.winner_team_id is not None
+
+
+@dataclass(frozen=True)
+class PostseasonRound:
+    """勝ち上がりの表の回1つ（同じ日に始まるシリーズの並び）。"""
+
+    name: str
+    series: tuple[SeriesView, ...]
+
+
+@dataclass(frozen=True)
+class PostseasonMatchup:
+    """次に試合をする日の対戦1つ。"""
+
+    series_name: str
+    number: int  # 第何戦か
+    home_team_name: str
+    away_team_name: str
+
+
+@dataclass(frozen=True)
+class PostseasonView:
+    """Y年の勝ち上がりの表。保存せず、順位と試合の結果から導いた値。"""
+
+    year: int
+    status: PostseasonStatus
+    format_label: str
+    # 優勝の呼び名（「日本一」・「CS 優勝」）と球団。決まっていなければ球団は None
+    champion_label: str
+    champion_team_id: int | None
+    champion_name: str
+    rounds: tuple[PostseasonRound, ...]
+    # まだ組めていない先の回の名前
+    pending_stage_names: tuple[str, ...]
+    # 次に試合をする日とその日の対戦（終わっていれば None と空）
+    next_day: date | None
+    next_games: tuple[PostseasonMatchup, ...]
+    # 自軍の結果（「日本一」・「◯◯敗退」・「出場なし」・「勝ち残り」）。受け持つ球団が無ければ空
+    own_outcome: str
+    # 表を開ける年（年の切り替え。新しい順）
+    years: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class PostseasonCard:
+    """GM ホームの「ポストシーズン」のカード（公式戦を終え、ポストシーズンのある年だけ）。"""
+
+    year: int
+    status: PostseasonStatus
+    champion_label: str
+    champion_name: str
+    own_outcome: str
+    # 自軍の最後のシリーズ（出場していなければ None）
+    own_series: SeriesView | None
+    next_day: date | None
+    next_games: tuple[PostseasonMatchup, ...]
+    # 進めるボタン（オーナーにだけ作る。終わっていれば空）
+    advance_options: tuple[AdvanceOption, ...]
+    # 二重送信の検出に使う「いまの今日」
+    expected_today: str
+
+    @property
+    def finished(self) -> bool:
+        return self.status is PostseasonStatus.FINISHED
+
+
+@dataclass(frozen=True)
 class WorldContext:
     """世界ひとつの「いま」。世界バーの表示と、共有テンプレートの URL の引き方（`scoped_url`）に使う。
 
@@ -1341,11 +1477,37 @@ class WorldContext:
     owner_id: int | None = None
     # 最終シーズン（`MAX_SEASONS_PER_WORLD` 番目）か。最後まで終えた世界に「終了」の印を出す（#104）
     is_final_season: bool = False
+    # ポストシーズンの方式（世界を作ったときに決まる）
+    postseason_format: PostseasonFormat = PostseasonFormat.NONE
+    # 最終シーズンのポストシーズンが終わった（または無い）か。世界の終了の判定にだけ使い、要る画面（GM ホーム・
+    # 世界の一覧）だけが導いて入れる（`pennant_view.settled_context`）。None は導いていない
+    postseason_settled: bool | None = None
+
+    @property
+    def has_postseason(self) -> bool:
+        """ポストシーズンのある世界か（世界バーの「ポストシーズン」の出し分け）。"""
+        return self.postseason_format is not PostseasonFormat.NONE
+
+    @property
+    def needs_postseason_status(self) -> bool:
+        """世界の終了を決めるのに、その年のポストシーズンの状況が要るか（最終シーズンのシーズン終了で、方式が「なし」でない）。"""
+        return self.is_final_season and self.phase is SeasonPhase.FINISHED and self.has_postseason
 
     @property
     def is_over(self) -> bool:
-        """最終シーズンを終えた世界か（これ以上は締められず、進めるものも無い）。"""
-        return self.is_final_season and self.phase is SeasonPhase.FINISHED
+        """最終シーズンを終えた世界か（これ以上は締められず、進めるものも無い）。
+
+        最終シーズンのポストシーズンが終わるまでは終了にしない（ポストシーズンを進められる）。状況を導いていない
+        見出しで聞くのは誤り（黙って「終了」「未終了」のどちらかにしない）。
+        """
+        if not (self.is_final_season and self.phase is SeasonPhase.FINISHED):
+            return False
+        if not self.has_postseason:
+            return True
+        if self.postseason_settled is None:
+            # 最適化モード（-O）でも消えないよう、assert ではなく例外にする
+            raise RuntimeError("世界の終了には、ポストシーズンの状況を導いた見出しが要る（settled_context・settle）")
+        return self.postseason_settled
 
 
 @dataclass(frozen=True)
@@ -1366,6 +1528,8 @@ class WorldSummary:
     owner_id: int | None = None
     # 球団ごとの未消化の試合数（優勝争いの残り試合。日程の残っていない球団は載らない）
     remaining_by_team: Mapping[int, int] = field(default_factory=dict)
+    # ポストシーズンの方式
+    postseason_format: PostseasonFormat = PostseasonFormat.NONE
 
 
 @dataclass(frozen=True)

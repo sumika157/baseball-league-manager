@@ -1,0 +1,77 @@
+{% extends 'myapp/base.html' %}
+
+{% block title %}{% if postseason %}{{ postseason.year }}年 {% endif %}ポストシーズン - {{ world.name }} - ペナント - Baseball Manager{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb">
+    {% include 'pennant/_crumbs.html' %}
+    <li class="breadcrumb-item active" aria-current="page">ポストシーズン</li>
+  </ol>
+</nav>{% include 'pennant/_world_bar.html' %}
+
+{% comment %}
+勝ち上がりの表。保存せず、順位（公式戦だけ）とその年の試合の結果から導いた値（PostseasonView）を並べるだけ。
+回の順に、組めたシリーズを並べ、まだ組めていない先の回は名前だけ出す（対戦は前の回が決着するまで決まらない）。
+予定日は次に試合をする日だけ。進めるボタンは GM ホームにだけ置く（読むだけの画面で、誰でも開ける）。
+{% endcomment %}
+<div class="page-head">
+  <h1 class="page-title">{% if postseason %}{{ postseason.year }}年 {% endif %}ポストシーズン</h1>
+  {% if postseason %}
+    <p class="page-subtitle">{{ postseason.format_label }} · {{ postseason.status.value }}{% if postseason.own_outcome %} · 自軍 {{ postseason.own_outcome }}{% endif %}</p>
+  {% endif %}
+</div>
+
+{% if not postseason %}
+  <div class="card">
+    <div class="empty-state">
+      {% if world.has_postseason %}まだポストシーズンはありません。公式戦が終わると、ここに勝ち上がりが出ます。{% else %}この世界はポストシーズンを行いません。{% endif %}
+    </div>
+  </div>
+{% else %}
+  {% if postseason.years|length > 1 %}
+    <div class="segmented mb-3">
+      {% for year in postseason.years %}
+        <a class="segmented-item {% if year == postseason.year %}is-active{% endif %}" href="{% url 'pennant_postseason_by_year' world.world_id year %}">{{ year }}年</a>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  {% if postseason.champion_team_id %}
+    <div class="alert alert-primary" data-testid="postseason-champion">
+      {{ postseason.year }}年 {{ postseason.champion_label }}: <span class="fw-semibold">{{ postseason.champion_name }}</span>
+    </div>
+  {% elif postseason.next_day %}
+    <div class="card mb-4">
+      <div class="card-header">次の試合（{{ postseason.next_day|date:"n月j日（D）" }}）</div>
+      <div class="card-body">
+        <ul class="mb-0">
+          {% for match in postseason.next_games %}
+            <li>{{ match.series_name }} 第{{ match.number }}戦 {{ match.away_team_name }} ＠ {{ match.home_team_name }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+  {% endif %}
+
+  {% for round in postseason.rounds %}
+    <h2 class="h5 mb-3">{{ round.name }}</h2>
+    <div class="row g-3 mb-4">
+      {% for series in round.series %}
+        <div class="col-lg-6">
+          {% include 'pennant/_postseason_series.html' %}
+        </div>
+      {% endfor %}
+    </div>
+  {% endfor %}
+
+  {% if postseason.pending_stage_names %}
+    <div class="card mb-4">
+      <div class="card-header">この先の回</div>
+      <div class="card-body">
+        <p class="mb-0 stat-muted">{{ postseason.pending_stage_names|join:" → " }}（対戦は前の回が決着してから決まります）</p>
+      </div>
+    </div>
+  {% endif %}
+{% endif %}
+{% endblock %}

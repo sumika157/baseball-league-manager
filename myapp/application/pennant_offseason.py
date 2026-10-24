@@ -51,6 +51,7 @@ from ..domain.pennant.awards import Award, title_counts
 from ..domain.pennant.club_plan import ClubMember, PlanSection
 from ..domain.pennant.offseason import Draftee, OffseasonClub, OffseasonPlan, OffseasonPlayer, plan_offseason
 from ..domain.pennant.offseason_player import TrackRecord
+from ..domain.pennant.postseason import PostseasonStatus
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.release import ReleasePlan, ensure_releasable
 from ..domain.pennant.retirement import PlayingTime
@@ -141,11 +142,15 @@ class PennantOffseasonService:
         self._postseason = postseason
         self._atomic = atomic
 
-    def close_option(self) -> SeasonCloseOption:
-        """いま締められるか。締められないときは理由を返す（例外にしない。画面のボタンの出し分けの材料）。"""
+    def close_option(self, *, postseason_status: PostseasonStatus | None = None) -> SeasonCloseOption:
+        """いま締められるか。締められないときは理由を返す（例外にしない。画面のボタンの出し分けの材料）。
+
+        `postseason_status` は呼び手（GM ホーム）が既に導いたその年のポストシーズンの状況。渡せば導き直さない
+        （1回の表示で勝ち上がりを2回導かない）。**表示にだけ使う**: `close_season()` は必ず自分で導き直す。
+        """
         world = self._worlds.find_by_id(self._world_id)
         try:
-            year = self._check(world, expected_year=None)
+            year = self._check(world, expected_year=None, postseason_status=postseason_status)
         except (SeasonNotFinished, PostseasonNotFinished, AlreadyClosed, SeasonLimitReached) as error:
             last_played = self._context_query.last_played_on()
             blocked_year = None if last_played is None else last_played.year
@@ -345,13 +350,16 @@ class PennantOffseasonService:
 
     # --- 検査 ---
 
-    def _check(self, world: World, *, expected_year: int | None) -> int:
+    def _check(
+        self, world: World, *, expected_year: int | None, postseason_status: PostseasonStatus | None = None
+    ) -> int:
         """締められるかを調べ、締める年 Y を返す。締められなければ例外。
 
         戦力外を指名できる条件（`_season_over_year`）に、「その年のポストシーズンが終わった」を足したもの。
         """
         year = self._season_over_year(world, expected_year=expected_year)
-        if not self._postseason.status(world, year).is_settled:
+        status = self._postseason.status(world, year) if postseason_status is None else postseason_status
+        if not status.is_settled:
             raise PostseasonNotFinished(f"{year}年のポストシーズンがまだ終わっていません。")
         return year
 
