@@ -14,7 +14,7 @@ from django.urls import reverse
 from myapp.domain.value_objects import BattingLine
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository, DjangoTeamRepository
-from myapp.presentation.views import build_world_team_view_service, build_world_view_service
+from myapp.presentation.views import build_world_league_view_service, build_world_team_view_service
 
 from ..helpers import play_game
 from .world_case import YEAR, WorldCase
@@ -34,7 +34,7 @@ class SeasonStatsCase(WorldCase):
         # 選手は全員、最初のシーズンから在籍している
         orm_models.PlayerStint.objects.filter(team__league__world_id=self.world_id).update(from_year=YEAR)
         self.veteran, self.regular = self.pennant_home_batters[8], self.pennant_home_batters[7]
-        self.service = build_world_view_service(self.world_id)
+        self.league_view = build_world_league_view_service(self.world_id)
         self.team_view = build_world_team_view_service(self.world_id)
         self._play(
             YEAR,
@@ -59,7 +59,7 @@ class SeasonStatsCase(WorldCase):
         )
 
     def _title(self, key, year=None, league_id=None):
-        titles = self.service.get_league_titles(league_id or self.pennant_league.id, year)
+        titles = self.league_view.get_league_titles(league_id or self.pennant_league.id, year)
         return next(d for d in titles.departments if d.key == key)
 
     def _leader_names(self, key, year=None):
@@ -138,7 +138,7 @@ class InterleagueGamesCountTest(SeasonStatsCase):
         self.assertEqual(totals.games, 2, "リーグ内の1試合 + 交流戦の1試合")
 
     def test_the_other_leagues_year_choices_include_the_interleague_game(self):
-        titles = self.service.get_league_titles(self.outsider.league_id)
+        titles = self.league_view.get_league_titles(self.outsider.league_id)
 
         self.assertEqual(titles.available_years, [NEXT_YEAR])
 
@@ -238,10 +238,10 @@ class HomeReadsThisSeasonTest(SeasonStatsCase):
 class OnlyThatYearIsReadTest(SeasonStatsCase):
     def test_the_standings_do_not_assemble_every_game(self):
         """年の選択肢は SQL で調べ、試合は対象の年だけ読む。"""
-        self.assertEqual(self.service.get_standings().available_years, [NEXT_YEAR, YEAR])
+        self.assertEqual(self.league_view.get_standings().available_years, [NEXT_YEAR, YEAR])
 
         with mock.patch.object(DjangoGameRepository, "find_all", side_effect=AssertionError("find_all")):
-            board = self.service.get_standings(YEAR)
+            board = self.league_view.get_standings(YEAR)
 
         self.assertEqual(board.year, YEAR)
 
@@ -251,8 +251,8 @@ class OnlyThatYearIsReadTest(SeasonStatsCase):
                 call()
             return len(queries)
 
-        titles_before = count(lambda: self.service.get_league_titles(self.pennant_league.id, NEXT_YEAR))
-        standings_before = count(lambda: self.service.get_standings(NEXT_YEAR))
+        titles_before = count(lambda: self.league_view.get_league_titles(self.pennant_league.id, NEXT_YEAR))
+        standings_before = count(lambda: self.league_view.get_standings(NEXT_YEAR))
         roster_before = count(
             lambda: build_world_team_view_service(self.world_id).list_batters(self.pennant_team.id, year=NEXT_YEAR)
         )
@@ -260,9 +260,9 @@ class OnlyThatYearIsReadTest(SeasonStatsCase):
             self._play(NEXT_YEAR + 1 + index, 5, {self.veteran: BattingLine(at_bats=3)})
 
         self.assertEqual(
-            count(lambda: self.service.get_league_titles(self.pennant_league.id, NEXT_YEAR)), titles_before
+            count(lambda: self.league_view.get_league_titles(self.pennant_league.id, NEXT_YEAR)), titles_before
         )
-        self.assertEqual(count(lambda: self.service.get_standings(NEXT_YEAR)), standings_before)
+        self.assertEqual(count(lambda: self.league_view.get_standings(NEXT_YEAR)), standings_before)
         self.assertEqual(
             count(
                 lambda: build_world_team_view_service(self.world_id).list_batters(self.pennant_team.id, year=NEXT_YEAR)

@@ -21,7 +21,7 @@ from myapp.domain.exceptions import AlreadyAdvanced, InvalidSchedule
 from myapp.domain.pennant.schedule import AdvanceTarget, Fixture
 from myapp.domain.pennant.season import SCREEN_ADVANCE_TARGETS, SeasonPhase, summary_period
 from myapp.infrastructure import orm_models
-from myapp.presentation.views import build_pennant_season_service, build_world_view_service
+from myapp.presentation.views import build_pennant_season_service, build_world_league_view_service
 
 from .test_pennant_advance import SEASON_GAMES, YEAR, SeasonCase
 
@@ -75,7 +75,7 @@ class FinishedSeasonCase(HomeCase):
         # 投手の疲労（#97）を入れたら同率で終わるようになった）
         orm_models.PennantWorld.objects.filter(id=cls.world_a).update(seed=FINISHED_SEASON_SEED)
         build_pennant_season_service(cls.world_a).advance(AdvanceTarget.SEASON_END)
-        (league,) = build_world_view_service(cls.world_a).get_league_standings(YEAR)
+        (league,) = build_world_league_view_service(cls.world_a).get_league_standings(YEAR)
         first, second = league.rows[:2]
         # 球団2つで同率なら、優勝の印を確かめるテストにこの世界は使えない
         assert (first.wins, first.losses) != (second.wins, second.losses), "同率の世界は使えない"

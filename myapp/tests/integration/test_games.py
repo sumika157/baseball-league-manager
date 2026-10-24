@@ -334,8 +334,8 @@ class GameEntryTest(BaseCase):
         """
         self._create_game()
         game = orm_models.Game.objects.get()
-        batters = register_lineup(self.service, self.team, prefix="打者", first_number=51)
-        rivals = register_lineup(self.service, self.rival, prefix="相手", first_number=61)
+        batters = register_lineup(self.roster, self.team, prefix="打者", first_number=51)
+        rivals = register_lineup(self.roster, self.rival, prefix="相手", first_number=61)
         post_game_scorebook_day_unrecorded(
             self.client,
             game.id,
@@ -380,8 +380,8 @@ class BoxScoreEntryTest(BaseCase):
         self.middle = self.roster.register_player(self.team.id, "中継ぎ", 12, "投手")
         self.closer = self.roster.register_player(self.team.id, "抑え", 13, "投手")
         self.loser = self.roster.register_player(self.rival.id, "相手先発", 21, "投手")
-        self.home_batters = register_lineup(self.service, self.team, prefix="ホーム", first_number=31)
-        self.away_batters = register_lineup(self.service, self.rival, prefix="ビジター", first_number=41)
+        self.home_batters = register_lineup(self.roster, self.team, prefix="ホーム", first_number=31)
+        self.away_batters = register_lineup(self.roster, self.rival, prefix="ビジター", first_number=41)
         self.game = play_game(self.team, self.rival, home_score=0, away_score=0)
         self.url = reverse("game_edit", args=[self.game.id])
 
@@ -500,8 +500,8 @@ class BoxScoreColumnsTest(BaseCase):
         login_as_manager(self.client, self.team, self.rival)
         self.pitcher = self.roster.register_player(self.team.id, "先発", 11, "投手")
         self.rival_pitcher = self.roster.register_player(self.rival.id, "相手先発", 21, "投手")
-        self.home_batters = register_lineup(self.service, self.team, prefix="ホーム", first_number=31)
-        self.away_batters = register_lineup(self.service, self.rival, prefix="ビジター", first_number=41)
+        self.home_batters = register_lineup(self.roster, self.team, prefix="ホーム", first_number=31)
+        self.away_batters = register_lineup(self.roster, self.rival, prefix="ビジター", first_number=41)
         self.game = play_game(self.team, self.rival, home_score=0, away_score=0)
 
         post_game_scorebook_day_unrecorded(

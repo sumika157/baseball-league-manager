@@ -191,8 +191,8 @@ class ForeignPlayerQuotaTest(BaseCase):
 
         `home_pitchers` は {回: 投手id}（ホームの投手は表を投げる）。表の回数は投手の数に合わせる。
         """
-        away = register_lineup(self.service, self.rival, prefix="ビジター", first_number=61)
-        home = register_lineup(self.service, self.team, prefix="ホーム", first_number=71)
+        away = register_lineup(self.roster, self.rival, prefix="ビジター", first_number=61)
+        home = register_lineup(self.roster, self.team, prefix="ホーム", first_number=71)
         away[: len(away_batters)] = away_batters
         home[: len(home_batters)] = home_batters
         if home_pitchers is None:

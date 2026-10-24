@@ -32,8 +32,8 @@ class _RecordingCase(BaseCase):
         login_as_manager(self.client, self.team, self.rival)
         self.pitcher = self.roster.register_player(self.team.id, "佐藤", 18, "投手")
         self.rival_pitcher = self.roster.register_player(self.rival.id, "相手投手", 19, "投手")
-        self.home = register_lineup(self.service, self.team, prefix="ホーム", first_number=31)
-        self.away = register_lineup(self.service, self.rival, prefix="ビジター", first_number=61)
+        self.home = register_lineup(self.roster, self.team, prefix="ホーム", first_number=31)
+        self.away = register_lineup(self.roster, self.rival, prefix="ビジター", first_number=61)
         self.game = play_game(self.team, self.rival, home_score=0, away_score=0)
 
     def developmental(self, name, position, number=120, *, team=None, from_year=2020):

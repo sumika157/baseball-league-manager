@@ -33,7 +33,9 @@
   （`tests/integration/test_wiring.py` が検査する）。管理コマンドとテスト（`tests/helpers.py` 経由）もここから取る。呼ぶ側ごとに一部の依存だけを
   渡さない（渡し忘れが「開く画面によって落ちるサービス」になる。管理画面のテンプレートタグで実際に起きた）。ペナントの組み立て口は世界の範囲に固定して組み立てる。
 - **層をまたぐ受け渡しに素の `dict` を使わない。** application が presentation に返す形は `application/dto.py` の dataclass にする（文字列キーの dict は綴りを間違えても静的検査が黙る）。DTO に集約を包ませない。集約からの取り出しは application が担い、presentation は DTO を写すだけにする（前例: `application/game_edit.py` と `GameEditData`）。
-- **`TeamApplicationService` に足す前に、対象ごとの別サービスに置けないか考える**（既に巨大で、分割は #219 で計画中）。分ける判断は選択肢としてユーザーに提示する。
+- **application のサービスは対象ごとに分けてある**（参照は `LeagueViewService`・`TeamViewService`・`GameViewService`・`AdminOverviewService`、
+  更新は `RosterService`・`GameRecordingService`。#219）。対象の違うメソッドを既存のサービスに足す前に、別のサービスに置けないか考える。
+  参照のサービスに更新を足さない。分ける判断は選択肢としてユーザーに提示する。
 
 ## 同じ事実の出典を2つ作らない
 

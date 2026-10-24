@@ -63,10 +63,10 @@ from ..domain.repositories import (
 from ..domain.value_objects import ContractStatus, DepartureRoute, ForeignPlayerRules, JerseyNumber, RosterLimits
 from .dto import ReleasePlanView, ReleasePlayerRow, SeasonClosed, SeasonCloseOption, SimulationTeam
 from .foreign_quota import ForeignQuotaExemptions
+from .league_view import LeagueViewService
 from .pennant_awards import derive_awards
 from .pennant_season import AtomicBlock
 from .queries import SeasonPlayingTimeQuery, SimulationContextQuery
-from .services import TeamApplicationService
 
 
 def _saved_id(value: int | None) -> int:
@@ -111,7 +111,7 @@ class PennantOffseasonService:
         plans: ClubPlanRepository,
         releases: ReleasePlanRepository,
         awards: AwardRepository,
-        titles: TeamApplicationService,
+        titles: LeagueViewService,
         context_query: SimulationContextQuery,
         playing_time: SeasonPlayingTimeQuery,
         fa_exemptions: ForeignQuotaExemptions,

@@ -11,6 +11,7 @@ from myapp.domain.value_objects import (
 from myapp.infrastructure import orm_models
 
 from ..helpers import (
+    build_admin_overview_service,
     give_batting,
     play_game,
 )
@@ -57,6 +58,7 @@ class AdminIndexTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.client.force_login(User.objects.create_superuser(username="root", password="x"))
+        self.admin_overview = build_admin_overview_service()
 
     def test_models_are_labelled_in_japanese(self):
         response = self.client.get("/admin/")
@@ -82,7 +84,7 @@ class AdminIndexTest(BaseCase):
         self.roster.register_player(self.team.id, "山田", 10, "内野手")
         self.roster.register_player(self.team.id, "佐藤", 18, "投手")
 
-        overview = self.service.get_admin_overview()
+        overview = self.admin_overview.get_admin_overview()
 
         self.assertEqual(overview.team_count, 2)
         self.assertEqual(overview.player_count, 2)
@@ -90,16 +92,16 @@ class AdminIndexTest(BaseCase):
 
     def test_overview_flags_players_without_stats(self):
         player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
-        self.assertEqual(self.service.get_admin_overview().players_without_stats, 1)
+        self.assertEqual(self.admin_overview.get_admin_overview().players_without_stats, 1)
 
         give_batting(self.team, self.rival, player.id, BattingLine(at_bats=10, singles=3))
-        self.assertEqual(self.service.get_admin_overview().players_without_stats, 0)
+        self.assertEqual(self.admin_overview.get_admin_overview().players_without_stats, 0)
 
     def test_overview_flags_empty_teams_and_retired_players(self):
         player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
         self.roster.retire_player(self.team.id, player.id)
 
-        overview = self.service.get_admin_overview()
+        overview = self.admin_overview.get_admin_overview()
 
         self.assertEqual(overview.teams_without_players, 2)
         self.assertEqual(overview.retired_count, 1)

@@ -7,7 +7,7 @@
 
 実装済みの土台。
 
-- ドメイン駆動設計による4層構成（domain / application / infrastructure / presentation）
+- ドメイン駆動設計による4層構成（domain / application / infrastructure / presentation）。application のサービスは対象（リーグ・球団と選手・試合・ロスターの更新・試合の登録・管理画面の概況）ごとに分けてある（#219）
 - リーグ・チーム・選手・**試合**の登録
 - 試合を唯一の出典として、チームの勝敗・順位・選手の通算成績を集計
 - 選手の**在籍（経歴）**。所属と背番号は在籍が持ち、移籍しても成績は残る
