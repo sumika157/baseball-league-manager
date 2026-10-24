@@ -40,7 +40,7 @@ from myapp.presentation.views import (
     build_pennant_postseason_service,
     build_pennant_season_service,
     build_pennant_world_view,
-    build_world_view_service,
+    build_world_league_view_service,
 )
 
 from .world_case import PostseasonWorldCase
@@ -169,7 +169,7 @@ class AdvancePostseasonTest(PostseasonWorldCase):
 
         def regular():
             return (
-                build_world_view_service(self.npb_world).get_league_standings(YEAR),
+                build_world_league_view_service(self.npb_world).get_league_standings(YEAR),
                 DjangoGameListQuery(scope).list_rows(year=YEAR),
                 DjangoSeasonPlayingTimeQuery(scope).for_year(YEAR),
                 DjangoPostseasonQuery(scope).last_regular_date(YEAR),

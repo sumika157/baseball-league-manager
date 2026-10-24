@@ -1,7 +1,7 @@
 """依存の組み立てに関する検査。
 
 アプリケーションサービスはインターフェース（domain/repositories.py・
-application/queries.py）だけに依存し、実装は組み立ての1か所（build_service）で
+application/queries.py）だけに依存し、実装は組み立ての1か所（presentation/views.py の build_*()）で
 差し込む。実装側でメソッド名が変わっても、この検査が無いと画面を開くまで
 気づけないため、機械的に確かめる。
 
@@ -15,9 +15,11 @@ from inspect import Parameter, signature
 
 from django.test import SimpleTestCase
 
+from myapp.application.admin_overview import AdminOverviewService
 from myapp.application.club_management import ClubManagementService
 from myapp.application.game_recording import GameRecordingService
 from myapp.application.game_view import GameViewService
+from myapp.application.league_view import LeagueViewService
 from myapp.application.pennant_championships import PostseasonHistoryReader
 from myapp.application.pennant_club_details import ClubDetailsService
 from myapp.application.pennant_history import PennantHistoryService
@@ -42,14 +44,15 @@ from myapp.application.queries import (
     PostseasonQuery,
     PostseasonStatsQuery,
     RatingsHistoryQuery,
+    ServiceHistoryQuery,
     SimulationContextQuery,
     TeamAnalysisQuery,
     TeamListQuery,
     WorldSummaryQuery,
 )
 from myapp.application.roster import RosterService
-from myapp.application.services import TeamApplicationService
 from myapp.application.team_analysis import TeamAnalysisService
+from myapp.application.team_view import TeamViewService
 from myapp.domain.exceptions import InvalidWorld
 from myapp.domain.pennant.world import WorldScope
 from myapp.domain.repositories import (
@@ -76,6 +79,7 @@ from myapp.infrastructure.queries import (
     DjangoPostseasonQuery,
     DjangoPostseasonStatsQuery,
     DjangoRatingsHistoryQuery,
+    DjangoServiceHistoryQuery,
     DjangoSimulationContextQuery,
     DjangoTeamAnalysisQuery,
     DjangoTeamListQuery,
@@ -94,9 +98,11 @@ from myapp.infrastructure.repositories import (
     DjangoWorldRepository,
 )
 from myapp.presentation.views import (
+    build_admin_overview_service,
     build_club_details_service,
     build_club_service,
     build_game_view_service,
+    build_league_view_service,
     build_offseason_view_service,
     build_pennant_history_service,
     build_pennant_home_service,
@@ -112,11 +118,12 @@ from myapp.presentation.views import (
     build_player_search_query,
     build_recording_service,
     build_roster_service,
-    build_service,
     build_team_analysis_service,
+    build_team_view_service,
     build_world_game_view_service,
+    build_world_league_view_service,
     build_world_team_analysis_service,
-    build_world_view_service,
+    build_world_team_view_service,
 )
 
 REAL = WorldScope.real()
@@ -144,6 +151,7 @@ class ProtocolConformanceTest(SimpleTestCase):
         (DjangoTeamListQuery(REAL), TeamListQuery),
         (DjangoGameListQuery(REAL), GameListQuery),
         (DjangoTeamAnalysisQuery(REAL), TeamAnalysisQuery),
+        (DjangoServiceHistoryQuery(REAL), ServiceHistoryQuery),
         (DjangoPennantActivityQuery(REAL), PennantActivityQuery),
         (DjangoWorldSummaryQuery(), WorldSummaryQuery),
         (DjangoOffseasonQuery(REAL), OffseasonQuery),
@@ -198,7 +206,7 @@ class BuildServiceTest(SimpleTestCase):
         属性 `_teams` の対応を前提にする）。内部の控えは初期値が None を
         取りうるので、`vars()` を丸ごと見ない。
         """
-        self._assert_wired(build_service(), TeamApplicationService)
+        self._assert_wired(build_league_view_service(), LeagueViewService)
 
     def test_recording_service_dependencies_are_wired(self):
         """スコアブックの保存サービスも同じ検査にかける。
@@ -231,7 +239,7 @@ class BuildServiceTest(SimpleTestCase):
         self._assert_wired(service._brackets, PostseasonBracketReader)
         self.assertEqual(service._world_id, 7)
         self.assertEqual(service._postseason._scope, WorldScope.pennant(7))
-        self.assertEqual(service._teams._games._scope, WorldScope.pennant(7))
+        self.assertEqual(service._league_view._game_list_query._scope, WorldScope.pennant(7))
         self.assertEqual(service._brackets._postseason._scope, WorldScope.pennant(7))
         self.assertEqual(service._stats._scope, WorldScope.pennant(7))
         with self.assertRaises(InvalidWorld):
@@ -254,9 +262,20 @@ class BuildServiceTest(SimpleTestCase):
             with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
                 build_pennant_settings_service(bad)
 
-    def test_world_view_service_dependencies_are_wired(self):
+    def test_world_league_view_service_dependencies_are_wired(self):
         """世界の範囲の参照サービスも、実データ用と同じ検査にかける（依存は実データ用と同じ全部）。"""
-        self._assert_wired(build_world_view_service(7), TeamApplicationService)
+        self._assert_wired(build_world_league_view_service(7), LeagueViewService)
+
+    def test_admin_overview_service_dependencies_are_wired(self):
+        """管理画面の概況のサービスも同じ検査にかける（組み立て口は build_*() 関数だけ）。"""
+        self._assert_wired(build_admin_overview_service(), AdminOverviewService)
+
+    def test_team_view_service_dependencies_are_wired(self):
+        """球団と選手の画面の参照サービスも同じ検査にかける（組み立て口は build_*() 関数だけ）。"""
+        self._assert_wired(build_team_view_service(), TeamViewService)
+
+    def test_world_team_view_service_dependencies_are_wired(self):
+        self._assert_wired(build_world_team_view_service(7), TeamViewService)
 
     def test_pennant_home_service_dependencies_are_wired(self):
         self._assert_wired(build_pennant_home_service(7), PennantHomeService)
@@ -306,7 +325,7 @@ class BuildServiceTest(SimpleTestCase):
     def test_requires_every_dependency(self):
         """依存を省略したサービスは作れないこと。"""
         with self.assertRaises(TypeError):
-            TeamApplicationService(teams=DjangoTeamRepository(REAL))  # type: ignore[call-arg]
+            LeagueViewService(teams=DjangoTeamRepository(REAL))  # type: ignore[call-arg]
 
 
 class WorldViewScopeTest(SimpleTestCase):
@@ -315,15 +334,13 @@ class WorldViewScopeTest(SimpleTestCase):
     SCOPED = (
         "_teams",
         "_team_list_query",
-        "_games",
         "_leagues",
         "_game_list_query",
-        "_player_fielding_query",
         "_player_stats_query",
     )
 
     def test_every_dependency_is_fixed_to_the_given_world(self):
-        service = build_world_view_service(7)
+        service = build_world_league_view_service(7)
         for name in self.SCOPED:
             with self.subTest(dependency=name):
                 self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
@@ -336,11 +353,14 @@ class WorldViewScopeTest(SimpleTestCase):
         "transfer_player",
         "appoint_captain",
         "remove_captain",
+        "promote_player",
+        "declare_free_agency",
+        "remove_free_agency_declaration",
     )
 
     def test_it_cannot_update_the_roster(self):
         """世界の画面を読む組み立てからは、ロスターの更新を呼べない（更新は `RosterService` だけが持つ）。"""
-        service = build_world_view_service(7)
+        service = build_world_league_view_service(7)
         for name in self.ROSTER_UPDATES:
             with self.subTest(method=name):
                 self.assertFalse(hasattr(service, name))
@@ -350,7 +370,7 @@ class WorldViewScopeTest(SimpleTestCase):
         """実データ用と同じ依存の組。片方だけに足して、世界の画面だけが落ちる形にしない。"""
         for name in self.SCOPED:
             with self.subTest(dependency=name):
-                self.assertTrue(hasattr(build_service(), name))
+                self.assertTrue(hasattr(build_league_view_service(), name))
 
     GAME_VIEW_SCOPED = ("_teams", "_games", "_game_list_query")
 
@@ -370,18 +390,46 @@ class WorldViewScopeTest(SimpleTestCase):
             with self.subTest(dependency=name):
                 self.assertTrue(hasattr(build_game_view_service(), name))
 
+    TEAM_VIEW_SCOPED = ("_teams", "_games", "_game_list_query", "_player_fielding_query", "_player_stats_query")
+
+    def test_the_world_team_view_is_fixed_to_the_given_world(self):
+        """世界の球団と選手の画面（選手の一覧・個人ページ）も、渡された世界の範囲だけを読み、年齢は世界の今日で数える。"""
+        service = build_world_team_view_service(7)
+        for name in self.TEAM_VIEW_SCOPED:
+            with self.subTest(dependency=name):
+                self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
+        self.assertIsNot(service._today, date.today)
+        for bad in (0, -1, True):
+            with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
+                build_world_team_view_service(bad)
+
+    def test_the_world_team_view_has_the_same_dependencies_as_the_real_one(self):
+        """実データ用と同じ依存の組。片方だけに足して、世界の画面だけが落ちる形にしない。"""
+        for name in self.TEAM_VIEW_SCOPED:
+            with self.subTest(dependency=name):
+                self.assertTrue(hasattr(build_team_view_service(), name))
+
+    def test_the_team_view_cannot_update_the_roster(self):
+        """球団と選手の画面の参照サービスからも、ロスターの更新を呼べない。"""
+        for build in (build_team_view_service, lambda: build_world_team_view_service(7)):
+            service = build()
+            for name in self.ROSTER_UPDATES:
+                with self.subTest(method=name):
+                    self.assertFalse(hasattr(service, name))
+
     def test_the_real_data_uses_the_calendar_today(self):
-        self.assertEqual(build_service()._today, date.today)
+        self.assertEqual(build_league_view_service()._today, date.today)
+        self.assertEqual(build_team_view_service()._today, date.today)
 
     def test_the_real_data_cannot_be_viewed_as_a_world(self):
         for bad in (0, -1, True):
             with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
-                build_world_view_service(bad)
+                build_world_league_view_service(bad)
 
     def test_the_world_analysis_is_fixed_to_its_world_and_uses_the_worlds_today(self):
         """戦力分析も、世界の範囲だけを読み、試合の無い球団の既定の年は世界の今日から取る。"""
         service = build_world_team_analysis_service(7)
-        for name in ("_team_list_query", "_analysis_query"):
+        for name in ("_team_list_query", "_analysis_query", "_service_history_query"):
             with self.subTest(dependency=name):
                 self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
         self.assertIsNot(service._today, date.today)
@@ -394,8 +442,8 @@ class WorldViewScopeTest(SimpleTestCase):
         """見出しは世界の台帳から読み、自軍の順位だけ世界の範囲のサービスで読む。"""
         view = build_pennant_world_view()
         self.assertEqual(list(signature(build_pennant_world_view).parameters), [])
-        self.assertEqual(view._standings_for(7)._games._scope, WorldScope.pennant(7))
-        self.assertEqual(view._standings_for(8)._games._scope, WorldScope.pennant(8))
+        self.assertEqual(view._standings_for(7)._game_list_query._scope, WorldScope.pennant(7))
+        self.assertEqual(view._standings_for(8)._game_list_query._scope, WorldScope.pennant(8))
         # 同率の決着に使う試合も、世界ごとの範囲で読む
         self.assertEqual(view._games_for(7)._scope, WorldScope.pennant(7))
         self.assertEqual(view._games_for(8)._scope, WorldScope.pennant(8))
@@ -404,9 +452,15 @@ class WorldViewScopeTest(SimpleTestCase):
 class RealScopeTest(SimpleTestCase):
     """実データ用の組み立ては、すべて実データの範囲に固定されていること。"""
 
-    def test_build_service_is_fixed_to_the_real_scope(self):
-        service = build_service()
-        for name in ("_teams", "_team_list_query", "_games", "_leagues", "_game_list_query", "_player_fielding_query"):
+    def test_build_league_view_service_is_fixed_to_the_real_scope(self):
+        service = build_league_view_service()
+        for name in ("_teams", "_team_list_query", "_leagues", "_game_list_query", "_player_stats_query"):
+            with self.subTest(dependency=name):
+                self.assertEqual(getattr(service, name)._scope, REAL)
+
+    def test_build_team_view_service_is_fixed_to_the_real_scope(self):
+        service = build_team_view_service()
+        for name in ("_teams", "_games", "_game_list_query", "_player_fielding_query", "_player_stats_query"):
             with self.subTest(dependency=name):
                 self.assertEqual(getattr(service, name)._scope, REAL)
 
@@ -418,7 +472,7 @@ class RealScopeTest(SimpleTestCase):
 
     def test_build_team_analysis_service_is_fixed_to_the_real_scope(self):
         service = build_team_analysis_service()
-        for name in ("_team_list_query", "_analysis_query"):
+        for name in ("_team_list_query", "_analysis_query", "_service_history_query"):
             with self.subTest(dependency=name):
                 self.assertEqual(getattr(service, name)._scope, REAL)
 
@@ -435,6 +489,10 @@ class RealScopeTest(SimpleTestCase):
             with self.subTest(dependency=name):
                 self.assertEqual(getattr(service, name)._scope, REAL)
 
+    def test_build_admin_overview_service_is_fixed_to_the_real_scope(self):
+        """管理画面の概況は実データだけを数える（ペナントの世界の球団・選手を混ぜない）。"""
+        self.assertEqual(build_admin_overview_service()._teams._scope, REAL)
+
     def test_queries_built_for_views_are_fixed_to_the_real_scope(self):
         self.assertEqual(build_permission_query()._scope, REAL)
         self.assertEqual(build_player_search_query()._scope, REAL)
@@ -442,11 +500,13 @@ class RealScopeTest(SimpleTestCase):
     def test_build_functions_take_no_scope(self):
         """範囲を引数に取る形にしない（既定値で切り替えると、渡し忘れが混入になる）。"""
         for build in (
-            build_service,
+            build_league_view_service,
             build_recording_service,
             build_game_view_service,
             build_team_analysis_service,
+            build_team_view_service,
             build_roster_service,
+            build_admin_overview_service,
             build_permission_query,
             build_player_search_query,
         ):
@@ -507,7 +567,11 @@ class PennantHomeScopeTest(SimpleTestCase):
         for name in self.SCOPED:
             with self.subTest(dependency=name):
                 self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
-        self.assertEqual(service._teams._games._scope, WorldScope.pennant(7), "順位・主力も世界の範囲のサービス")
+        self.assertEqual(
+            service._league_view._game_list_query._scope, WorldScope.pennant(7), "順位も世界の範囲のサービス"
+        )
+        self.assertEqual(service._team_view._games._scope, WorldScope.pennant(7), "主力も世界の範囲のサービス")
+        self.assertEqual(service._team_view._player_stats_query._scope, WorldScope.pennant(7))
         for name in ("_postseason", "_championships"):
             with self.subTest(dependency=f"_postseason.{name}"):
                 self.assertEqual(getattr(service._postseason, name)._scope, WorldScope.pennant(7))
@@ -531,7 +595,9 @@ class PennantHistoryScopeTest(SimpleTestCase):
         for name in self.SCOPED:
             with self.subTest(dependency=name):
                 self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
-        self.assertEqual(service._teams._games._scope, WorldScope.pennant(7), "順位・タイトルも世界の範囲のサービス")
+        self.assertEqual(
+            service._league_view._game_list_query._scope, WorldScope.pennant(7), "順位・タイトルも世界の範囲のサービス"
+        )
         for name in ("_postseason", "_championships"):
             with self.subTest(dependency=f"_postseason.{name}"):
                 self.assertEqual(getattr(service._postseason, name)._scope, WorldScope.pennant(7))
@@ -568,7 +634,7 @@ class PennantOffseasonScopeTest(SimpleTestCase):
             with self.subTest(dependency=name):
                 self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
         self.assertEqual(
-            service._titles._games._scope, WorldScope.pennant(7), "タイトルを導くのも世界の範囲のサービス"
+            service._titles._game_list_query._scope, WorldScope.pennant(7), "タイトルを導くのも世界の範囲のサービス"
         )
 
     def test_the_real_data_cannot_be_closed(self):
@@ -673,7 +739,9 @@ class PennantPostseasonScopeTest(SimpleTestCase):
             for name in self.BRACKETS:
                 with self.subTest(dependency=name):
                     self.assertEqual(getattr(brackets, name)._scope, WorldScope.pennant(7))
-            self.assertEqual(brackets._teams._games._scope, WorldScope.pennant(7), "順位も世界の範囲のサービス")
+            self.assertEqual(
+                brackets._league_view._game_list_query._scope, WorldScope.pennant(7), "順位も世界の範囲のサービス"
+            )
 
     def test_a_different_world_gets_a_different_scope(self):
         self.assertEqual(build_pennant_postseason_service(8)._games._scope, WorldScope.pennant(8))
@@ -688,3 +756,20 @@ class PennantPostseasonScopeTest(SimpleTestCase):
         from django.db import transaction
 
         self.assertIs(build_pennant_postseason_service(7)._atomic, transaction.atomic)
+
+
+class ForeignQuotaExemptionScopeTest(SimpleTestCase):
+    """FA 資格の取得による外国人枠の対象外は、使う側と同じ範囲の記録だけで導く（実データと世界の FA を混ぜない）。"""
+
+    def test_the_scorebook_reads_the_real_data(self):
+        self.assertEqual(build_recording_service()._fa_exemptions._query._scope, REAL)
+
+    def test_the_pennant_services_read_their_own_world(self):
+        for build in (
+            build_pennant_season_service,
+            build_pennant_postseason_service,
+            build_club_service,
+            build_pennant_offseason_service,
+        ):
+            with self.subTest(build=build.__name__):
+                self.assertEqual(build(7)._fa_exemptions._query._scope, WorldScope.pennant(7))

@@ -41,8 +41,8 @@ class UnrecordedGameTest(BaseCase):
         )
 
     def _save_scorebook(self, game, *, away_runs=3, home_runs=1):
-        batters = register_lineup(self.service, self.team, prefix="打者", first_number=51)
-        rivals = register_lineup(self.service, self.rival, prefix="相手", first_number=61)
+        batters = register_lineup(self.roster, self.team, prefix="打者", first_number=51)
+        rivals = register_lineup(self.roster, self.rival, prefix="相手", first_number=61)
         return post_game_scorebook_day_unrecorded(
             self.client,
             game.id,
@@ -68,7 +68,7 @@ class UnrecordedGameTest(BaseCase):
     def test_an_unrecorded_game_is_not_in_the_standings(self):
         self._register()
 
-        board = self.service.get_standings(2026)
+        board = self.league_view.get_standings(2026)
 
         self.assertEqual(board.leagues, [])
 
@@ -76,7 +76,7 @@ class UnrecordedGameTest(BaseCase):
         play_game(self.team, self.rival, home_score=5, away_score=3, day=1)
         self._register(day=2)
 
-        row = next(r for r in self.service.get_standings(2026).rows if r.team_name == "テストチーム")
+        row = next(r for r in self.league_view.get_standings(2026).rows if r.team_name == "テストチーム")
 
         self.assertEqual((row.wins, row.losses, row.ties, row.games_played), (1, 0, 0, 1))
 
@@ -84,7 +84,7 @@ class UnrecordedGameTest(BaseCase):
         play_game(self.team, self.rival, home_score=5, away_score=3, day=1)
         self._register(day=2)
 
-        row = next(r for r in self.service.get_standings(2026).rows if r.team_name == "テストチーム")
+        row = next(r for r in self.league_view.get_standings(2026).rows if r.team_name == "テストチーム")
 
         self.assertEqual(row.ties, 0)
 
@@ -92,7 +92,7 @@ class UnrecordedGameTest(BaseCase):
         self._register()
         play_game(self.team, self.rival, day=2)
 
-        self.assertEqual(self.service.get_team_totals(self.team.id).games, 1)
+        self.assertEqual(self.team_view.get_team_totals(self.team.id).games, 1)
         self.assertEqual(
             DjangoGameListQuery(WorldScope.real()).count_by_team(year=2026), {self.team.id: 1, self.rival.id: 1}
         )
@@ -105,17 +105,17 @@ class UnrecordedGameTest(BaseCase):
         play_game(self.team, self.rival, recorded=False, day=2)
         self._register(day=3)
 
-        self.assertEqual(self.service.get_team_totals(self.team.id).games, 1)
-        stats = self.service.get_league_stats(self.league.id, qualified=True)
+        self.assertEqual(self.team_view.get_team_totals(self.team.id).games, 1)
+        stats = self.league_view.get_league_stats(self.league.id, qualified=True)
         self.assertEqual([row.player.name for row in stats.listing.rows], ["山田"])
 
     def test_matchups_and_monthly_splits_skip_unrecorded_games(self):
         play_game(self.team, self.rival, home_score=2, away_score=1, day=1)
         self._register(day=2)
 
-        table = self.service.get_league_detail(self.league.id, 2026).matchups
+        table = self.league_view.get_league_detail(self.league.id, 2026).matchups
         row = next(r for r in table.rows if r.team_id == self.team.id)
-        monthly = self.service.list_team_monthly_splits(self.team.id)
+        monthly = self.team_view.list_team_monthly_splits(self.team.id)
 
         self.assertEqual(row.total_label, "1-0-0")
         self.assertEqual([m.games_played for m in monthly], [1])
@@ -124,7 +124,7 @@ class UnrecordedGameTest(BaseCase):
         play_game(self.team, self.rival, year=2025)
         self._register()
 
-        self.assertEqual(self.service.get_standings().available_years, [2025])
+        self.assertEqual(self.league_view.get_standings().available_years, [2025])
 
     # --- 数えられるようになる ---
 
@@ -135,9 +135,9 @@ class UnrecordedGameTest(BaseCase):
         response = self._save_scorebook(game)
 
         self.assertEqual(response.status_code, 200, response.content)
-        row = next(r for r in self.service.get_standings(2026).rows if r.team_name == "相手チーム")
+        row = next(r for r in self.league_view.get_standings(2026).rows if r.team_name == "相手チーム")
         self.assertEqual((row.wins, row.losses, row.games_played), (1, 0, 1))
-        self.assertEqual(self.service.get_team_totals(self.team.id).games, 1)
+        self.assertEqual(self.team_view.get_team_totals(self.team.id).games, 1)
 
     # --- 画面 ---
 

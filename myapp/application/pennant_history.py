@@ -35,28 +35,28 @@ from .dto import (
     WorldHistory,
     WorldHistoryYear,
 )
+from .league_view import LeagueViewService
 from .pennant_awards import derive_award_rows
 from .pennant_championships import PostseasonHistoryReader, YearChampion
 from .pennant_race import SeasonFinal, final_standings, team_order
 from .queries import AwardQuery, GameListQuery
-from .services import TeamApplicationService
 from .standings import record_label
 
 
 class PennantHistoryService:
-    """歴代の記録・球団史・選手の獲得タイトル。`teams` は世界の範囲で組み立てたサービス。"""
+    """歴代の記録・球団史・選手の獲得タイトル。`league_view` は世界の範囲で組み立てたサービス。"""
 
     def __init__(
         self,
         *,
-        teams: TeamApplicationService,
+        league_view: LeagueViewService,
         games: GameListQuery,
         team_records: TeamRepository,
         leagues: LeagueRepository,
         awards: AwardQuery,
         postseason: PostseasonHistoryReader,
     ) -> None:
-        self._teams = teams
+        self._league_view = league_view
         self._games = games
         # 年ごとの順位を作るために読む（順位の規則は domain の `standings`）
         self._team_records = team_records
@@ -178,9 +178,9 @@ class PennantHistoryService:
         open_year = unclosed_completed_year(phase=world.phase, current_year=world.season_year)
         if open_year is None or open_year not in played_years:
             return recorded
-        league_id = next((team.league_id for team in self._teams.list_teams().rows if team.id == team_id), None)
+        league_id = next((team.league_id for team in self._league_view.list_teams().rows if team.id == team_id), None)
         derived = (
-            [row for row in derive_award_rows(self._teams, open_year, league_id) if row.player_id == player_id]
+            [row for row in derive_award_rows(self._league_view, open_year, league_id) if row.player_id == player_id]
             if league_id is not None
             else []
         )
@@ -204,7 +204,7 @@ class PennantHistoryService:
             assert open_year is not None
             rows.extend(
                 row
-                for row in derive_award_rows(self._teams, open_year, league_id)
+                for row in derive_award_rows(self._league_view, open_year, league_id)
                 if team_id is None or row.team_id == team_id
             )
         by_year: dict[int, list[AwardRow]] = {}
@@ -222,7 +222,7 @@ class PennantHistoryService:
             teams=teams,
             leagues=leagues,
             games_of=lambda year: self._games.list_for_standings(year=year),
-            order=team_order(self._teams),
+            order=team_order(self._league_view),
         )
 
     @staticmethod

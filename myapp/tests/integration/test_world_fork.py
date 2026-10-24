@@ -467,7 +467,7 @@ class DeleteWorldTest(WorldCase):
         self.assertEqual(_real_counts(), before)
         self.assertEqual(orm_models.GameBattingLine.objects.filter(game=self.real_game.id).count(), real_lines)
         self.assertTrue(orm_models.Stadium.objects.filter(id=self.stadium.id).exists(), "球場は共有なので残る")
-        self.assertEqual(self.service.get_standings(2026).rows[0].games_played, 1)
+        self.assertEqual(self.league_view.get_standings(2026).rows[0].games_played, 1)
 
     def test_deleting_one_world_leaves_another_alone(self):
         other = build_pennant_world_service().create_world(

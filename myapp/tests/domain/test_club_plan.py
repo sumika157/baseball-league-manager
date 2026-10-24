@@ -182,7 +182,7 @@ class LineupInvariantTest(ClubPlanCase):
         roster = choose_active_roster(pool, rules=ForeignPlayerRules.UNLIMITED)
         lineup = [LineupChoice(s.batter.player_id, s.position) for s in choose_lineup(roster.batters, ForeignQuota())]
         plan = ClubPlan(team_id=1)
-        foreign_in_lineup = sum(members[c.player_id].is_foreign for c in lineup)
+        foreign_in_lineup = sum(members[c.player_id].counts_as_foreign for c in lineup)
         self.assertGreaterEqual(foreign_in_lineup, 2)
         with self.assertRaises(ForeignPlayerQuotaExceeded):
             plan.set_lineup(

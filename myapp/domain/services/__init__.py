@@ -10,6 +10,7 @@
 - decisions: 勝敗・セーブ・ホールドの導出（日本プロ野球の規則）
 - scoring: 打席の記録から1試合ぶんの成績を導く（打撃・投球・守備・失点・残塁）と、試合の組み立て（assemble_game）
 - free_agency: FA権の取得の見込み（登録日数の推定・国内／海外・再取得）
+- foreign_quota: FA 資格の取得で外国人枠の対象外になるか（協約 第82条 (4)）
 - roster_analysis: 戦力分析（デプス表の区分・主な守備位置・年齢の帯）の判定規則
 """
 
@@ -21,6 +22,7 @@ from .decisions import (
     PitchingDecisions,
     pitching_decisions,
 )
+from .foreign_quota import counts_toward_foreign_quota, foreign_quota_exempt_from
 from .free_agency import (
     COLLEGE_RULE_FROM_DRAFT_YEAR,
     DOMESTIC_SEASONS,
@@ -34,9 +36,11 @@ from .free_agency import (
     FaStatusKind,
     ProEntry,
     ServiceTime,
+    earliest_domestic_acquisition_year,
     estimated_service_days,
     fa_order,
     fa_outlook,
+    first_domestic_acquisition_year,
     service_seasons,
 )
 from .rankings import (
@@ -257,10 +261,15 @@ __all__ = [
     "FaStatusKind",
     "ProEntry",
     "ServiceTime",
+    "earliest_domestic_acquisition_year",
     "estimated_service_days",
     "fa_order",
     "fa_outlook",
+    "first_domestic_acquisition_year",
     "service_seasons",
+    # foreign_quota
+    "counts_toward_foreign_quota",
+    "foreign_quota_exempt_from",
     # roster_analysis
     "MAX_AGE_BAND",
     "MIN_AGE_BAND",

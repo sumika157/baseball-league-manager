@@ -1,4 +1,5 @@
-{% comment %}1軍の内訳。club（ClubPlanView）の limits と counts を出す。上限の数は domain が出典。{% endcomment %}
+{% comment %}1軍の内訳。club（ClubPlanView）の limits と counts を出す。上限の数は domain が出典。
+外国人の人数は枠で数える人だけ（FA 資格の取得で枠外の外国人は除き、除いた人数を添える）。{% endcomment %}
 <div class="stat-strip mb-3">
   <div class="stat-cell">
     <div class="stat-value">{{ club.counts.total }}/{{ club.limits.active_size }}</div>
@@ -19,5 +20,6 @@
   <div class="stat-cell">
     <div class="stat-value">{{ club.counts.foreign }}/{{ club.limits.foreign.active|default_if_none:"無制限" }}</div>
     <div class="stat-label">外国人（投手 {{ club.counts.foreign_pitchers }}/{{ club.limits.foreign.pitchers|default_if_none:"無制限" }}・野手 {{ club.counts.foreign_batters }}/{{ club.limits.foreign.batters|default_if_none:"無制限" }}）</div>
+    {% if club.counts.foreign_exempt %}<div class="stat-label">FA取得で枠外の{{ club.counts.foreign_exempt }}人を除く</div>{% endif %}
   </div>
 </div>

@@ -19,7 +19,7 @@ from .dto import (
     Listing,
     PlayerIndexEntry,
 )
-from .ids import saved_id
+from .ids import saved_id, team_names
 from .queries import GameListQuery
 from .scorebook_view import build_line_score, build_scorebook_grids
 from .stat_rows import decision_label, to_game_row
@@ -79,7 +79,7 @@ class GameViewService:
     def get_game_detail(self, game_id: int) -> GameDetail:
         """試合詳細。ボックススコアの形（チームごと・打順の順）で返す。"""
         game = self._games.find_by_id(game_id)
-        names = self._team_names()
+        names = team_names(self._teams)
         players = self._player_index()
 
         batting = []
@@ -238,9 +238,6 @@ class GameViewService:
     def _to_line_score(game: Game, batting: list[GamePlayerRow]) -> GameLineScore | None:
         """スコアボード。回ごとの得点が記録されていなければ出さない。"""
         return build_line_score(game, lambda team_id: sum(row.hits for row in batting if row.team_id == team_id))
-
-    def _team_names(self) -> dict[int, str]:
-        return {saved_id(t.id): t.name for t in self._teams.find_all()}
 
     def _player_index(self) -> dict[int, PlayerIndexEntry]:
         """選手 id から名前・背番号・所属チーム・通算の率を引ける索引。"""

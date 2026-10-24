@@ -38,7 +38,7 @@ class MatchupViewTest(BaseCase):
         self.url = reverse("league_detail", args=[self.league.id])
 
     def _table(self):
-        return self.service.get_league_detail(self.league.id).matchups
+        return self.league_view.get_league_detail(self.league.id).matchups
 
     def test_rows_and_columns_share_the_order(self):
         table = self._table()
@@ -79,7 +79,7 @@ class MatchupViewTest(BaseCase):
     def test_table_follows_the_selected_season(self):
         play_game(self.team, self.rival, year=2025, home_score=0, away_score=9, day=1)
 
-        table = self.service.get_league_detail(self.league.id, 2025).matchups
+        table = self.league_view.get_league_detail(self.league.id, 2025).matchups
         row = next(r for r in table.rows if r.team_id == self.team.id)
 
         self.assertEqual(row.total_label, "0-1-0")
@@ -88,7 +88,7 @@ class MatchupViewTest(BaseCase):
         empty = orm_models.League.objects.create(name="無試合リーグ")
         orm_models.Team.objects.create(league=empty, name="新チーム")
 
-        self.assertIsNone(self.service.get_league_detail(empty.id).matchups)
+        self.assertIsNone(self.league_view.get_league_detail(empty.id).matchups)
 
 
 class MonthlySplitViewTest(BaseCase):
@@ -117,7 +117,7 @@ class MonthlySplitViewTest(BaseCase):
         DjangoGameRepository(WorldScope.real()).save(game)
 
     def _months(self, player_id=None):
-        profile = self.service.get_player_profile(self.team.id, player_id or self.player.id)
+        profile = self.team_view.get_player_profile(self.team.id, player_id or self.player.id)
         return profile.months
 
     def test_grouped_by_month_oldest_first(self):
@@ -169,7 +169,7 @@ class YearlySplitViewTest(BaseCase):
         )
 
     def _years(self, player_id=None):
-        return self.service.get_player_profile(self.team.id, player_id or self.player.id).years
+        return self.team_view.get_player_profile(self.team.id, player_id or self.player.id).years
 
     def test_grouped_by_year_oldest_first(self):
         self._play(year=2026, at_bats=4, singles=3)
@@ -222,7 +222,7 @@ class YearlySplitViewTest(BaseCase):
         self._play(year=2025, at_bats=4, singles=1)
         self._play(year=2026, at_bats=4, singles=3)
 
-        detail = self.service.get_player_profile(self.team.id, self.player.id).detail
+        detail = self.team_view.get_player_profile(self.team.id, self.player.id).detail
 
         self.assertEqual((detail.at_bats, detail.hits, detail.plate_appearances), (8, 4, 8))
         self.assertContains(self.client.get(self.url), "0.500")  # 通算打率 4/8
@@ -253,7 +253,7 @@ class PlayerGameMonthTabTest(BaseCase):
         )
 
     def _profile(self, month=None):
-        return self.service.get_player_profile(self.team.id, self.player.id, month=month)
+        return self.team_view.get_player_profile(self.team.id, self.player.id, month=month)
 
     def test_latest_month_is_selected_by_default(self):
         profile = self._profile()
@@ -300,7 +300,7 @@ class TeamMonthlySplitViewTest(BaseCase):
         play_game(self.team, self.rival, month=5, day=1)
         play_game(self.team, self.rival, month=4, day=1)
 
-        rows = self.service.list_team_monthly_splits(self.team.id)
+        rows = self.team_view.list_team_monthly_splits(self.team.id)
 
         self.assertEqual([r.label for r in rows], ["2026年4月", "2026年5月"])
 
@@ -324,7 +324,7 @@ class TeamMonthlySplitViewTest(BaseCase):
             batting={self.batter.id: BattingLine(at_bats=4, singles=1)},
         )
 
-        april = self.service.list_team_monthly_splits(self.team.id)[0]
+        april = self.team_view.list_team_monthly_splits(self.team.id)[0]
 
         self.assertEqual(april.games_played, 2)
         self.assertEqual(april.record_label, "1-1-0")
@@ -343,7 +343,7 @@ class TeamMonthlySplitViewTest(BaseCase):
             },
         )
 
-        april = self.service.list_team_monthly_splits(self.team.id)[0]
+        april = self.team_view.list_team_monthly_splits(self.team.id)[0]
 
         self.assertAlmostEqual(april.batting_average, 0.25)
 
@@ -356,7 +356,7 @@ class TeamMonthlySplitViewTest(BaseCase):
         self.assertContains(response, "2026年4月")
 
     def test_team_without_games_has_no_months(self):
-        self.assertEqual(self.service.list_team_monthly_splits(self.team.id), [])
+        self.assertEqual(self.team_view.list_team_monthly_splits(self.team.id), [])
         self.assertNotContains(self.client.get(self.url), "月別成績")
 
 
@@ -387,7 +387,7 @@ class PlayerGamesQueryTest(BaseCase):
 
     def test_the_profile_is_the_same_as_when_every_game_of_the_team_is_read(self):
         full = DjangoGameRepository(WorldScope.real()).find_by_team(self.team.id)
-        profile = self.service.get_player_profile(self.team.id, self.slugger.id)
+        profile = self.team_view.get_player_profile(self.team.id, self.slugger.id)
 
         years = domain_services.yearly_splits(full, self.slugger.id)
         self.assertEqual(

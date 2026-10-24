@@ -30,7 +30,7 @@ from myapp.domain.simulation.fatigue import max_consecutive_days
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoGameListQuery, DjangoSimulationContextQuery
 from myapp.infrastructure.repositories import DjangoFixtureRepository, DjangoGameRepository
-from myapp.presentation.views import build_pennant_season_service, build_pennant_world_service, build_service
+from myapp.presentation.views import build_pennant_season_service, build_pennant_world_service, build_roster_service
 
 from ..helpers import register_players
 
@@ -75,9 +75,9 @@ class SeasonCase(TestCase):
         stadium = orm_models.Stadium.objects.create(name="進行球場", city="東京", capacity=STADIUM_CAPACITY)
         cls.home = orm_models.Team.objects.create(league=league, name="ホーム球団", home_stadium=stadium)
         cls.rival = orm_models.Team.objects.create(league=league, name="ライバル球団")
-        service = build_service()
-        register_club(service, cls.home, "ホ")
-        register_club(service, cls.rival, "ラ")
+        roster = build_roster_service()
+        register_club(roster, cls.home, "ホ")
+        register_club(roster, cls.rival, "ラ")
         cls.world_a = cls._create_world("世界A", seed=7)
         cls.world_b = cls._create_world("世界B", seed=7)
         cls.world_other_seed = cls._create_world("世界C", seed=8)

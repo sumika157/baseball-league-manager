@@ -19,6 +19,7 @@ from django.test import SimpleTestCase
 from django.urls import reverse
 
 from myapp.application.dto import LineupSlot
+from myapp.application.foreign_quota import ForeignQuotaExemptions
 from myapp.application.game_recording import GameRecordingService
 from myapp.application.pennant_awards import derive_awards
 from myapp.domain import services as domain_services
@@ -33,6 +34,7 @@ from myapp.infrastructure.queries import (
     DjangoPlayerFieldingQuery,
     DjangoPlayerStatsQuery,
     DjangoSeasonPlayingTimeQuery,
+    DjangoServiceHistoryQuery,
     DjangoSimulationContextQuery,
     DjangoTeamAnalysisQuery,
     DjangoWorldSummaryQuery,
@@ -45,7 +47,7 @@ from myapp.infrastructure.repositories import (
     batting_totals,
 )
 from myapp.infrastructure.scoping import StageFilter
-from myapp.presentation.views import build_world_view_service
+from myapp.presentation.views import build_world_league_view_service
 
 from ..helpers import build_scorebook, to_plate_appearances
 from .world_case import YEAR, WorldCase
@@ -130,6 +132,7 @@ class PostseasonGamesDoNotCountTest(PostseasonCase):
         games = DjangoGameListQuery(scope)
         activity = DjangoPennantActivityQuery(scope)
         analysis = DjangoTeamAnalysisQuery(scope)
+        service_history = DjangoServiceHistoryQuery(scope)
         repository = DjangoGameRepository(scope)
         whole_year = {"after": date(YEAR - 1, 12, 31), "through": date(YEAR, 12, 31)}
         roster = DjangoTeamRepository(scope).find_by_id(team).players
@@ -155,13 +158,16 @@ class PostseasonGamesDoNotCountTest(PostseasonCase):
             "オフの出場機会": DjangoSeasonPlayingTimeQuery(scope).for_year(YEAR),
             "戦力分析の年": analysis.list_years(team),
             "戦力分析の起用": analysis.load(team, YEAR),
-            "FA の日数": analysis.load_service_history(players, YEAR),
+            "FA の日数": service_history.load_service_history(players, YEAR),
+            "FA の推定の対象": service_history.load_fa_subjects(players, YEAR),
             "選手の通算（集約）": sorted((p.id or 0, p.batting, p.pitching) for p in roster),
             "集約の試合": [game.id for game in repository.find_all(YEAR)],
             "球団の試合（集約）": [game.id for game in repository.find_by_team(team, YEAR)],
             "対戦の試合（集約）": [game.id for game in repository.find_between_teams({team, rival}, YEAR)],
             # 締める処理が書く表彰（#248）も、タイトルと同じく公式戦だけから導く
-            "表彰の導出": derive_awards(build_world_view_service(self.world_id), YEAR, [self.pennant_league.id]),
+            "表彰の導出": derive_awards(
+                build_world_league_view_service(self.world_id), YEAR, [self.pennant_league.id]
+            ),
         }
 
     def test_the_postseason_game_would_change_the_numbers_if_it_counted(self):
@@ -287,6 +293,7 @@ class PostseasonGamesAreStillGamesTest(PostseasonCase):
             teams=DjangoTeamRepository(self.scope),
             leagues=DjangoLeagueRepository(self.scope),
             home_stadiums=DjangoHomeStadiumQuery(self.scope),
+            fa_exemptions=ForeignQuotaExemptions(DjangoServiceHistoryQuery(self.scope)),
         )
 
         recording.record_scorebook(

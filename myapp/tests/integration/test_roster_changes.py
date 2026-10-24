@@ -1,9 +1,12 @@
 """ロスターの変更。移籍・外国人枠・主将の指名。"""
 
+from unittest import mock
+
 from django.contrib.auth.models import User
 from django.urls import reverse
 
 from myapp.application.dto import LineupSlot
+from myapp.application.foreign_quota import ForeignQuotaExemptions
 from myapp.domain.exceptions import (
     DuplicateJerseyNumber,
     ForeignPlayerQuotaExceeded,
@@ -63,8 +66,8 @@ class TransferTest(BaseCase):
             year=2026,
         )
 
-        self.assertEqual(self.service.list_batters(self.team.id).rows, [])
-        self.assertEqual([r.name for r in self.service.list_batters(self.rival.id).rows], ["山田"])
+        self.assertEqual(self.team_view.list_batters(self.team.id).rows, [])
+        self.assertEqual([r.name for r in self.team_view.list_batters(self.rival.id).rows], ["山田"])
 
     def test_stats_follow_the_player_not_the_team(self):
         """成績は選手に紐づくので、移籍しても失われない。"""
@@ -78,7 +81,7 @@ class TransferTest(BaseCase):
             year=2026,
         )
 
-        detail = self.service.get_player_detail(self.rival.id, self.player.id)
+        detail = self.team_view.get_player_detail(self.rival.id, self.player.id)
         self.assertEqual(detail.at_bats, 10)
 
     def test_the_old_number_becomes_available(self):
@@ -92,7 +95,7 @@ class TransferTest(BaseCase):
 
         # 空いた10番を別の選手が使える
         self.roster.register_player(self.team.id, "田中", 10, "外野手")
-        self.assertEqual([r.name for r in self.service.list_batters(self.team.id).rows], ["田中"])
+        self.assertEqual([r.name for r in self.team_view.list_batters(self.team.id).rows], ["田中"])
 
     def test_number_in_use_at_the_destination_is_rejected(self):
         self.roster.register_player(self.rival.id, "先客", 7, "外野手")
@@ -188,8 +191,8 @@ class ForeignPlayerQuotaTest(BaseCase):
 
         `home_pitchers` は {回: 投手id}（ホームの投手は表を投げる）。表の回数は投手の数に合わせる。
         """
-        away = register_lineup(self.service, self.rival, prefix="ビジター", first_number=61)
-        home = register_lineup(self.service, self.team, prefix="ホーム", first_number=71)
+        away = register_lineup(self.roster, self.rival, prefix="ビジター", first_number=61)
+        home = register_lineup(self.roster, self.team, prefix="ホーム", first_number=71)
         away[: len(away_batters)] = away_batters
         home[: len(home_batters)] = home_batters
         if home_pitchers is None:
@@ -304,6 +307,71 @@ class ForeignPlayerQuotaTest(BaseCase):
         self._record(game, home_batters=batters)  # 例外にならない
 
         self.assertTrue(orm_models.GameBattingLine.objects.filter(player_id=self.foreign.id).exists())
+
+    # --- 協約第82条 (4): FA 資格を取得した外国人は、公示の翌年のシーズンから外国人枠の対象外 ---
+
+    def serve_seasons(self, player_id, years):
+        """毎年 4/1 と 9/30 に出場する（登録日数は初〜最終出場で推定するので、毎年1シーズン）。在籍は最初の年から。"""
+        orm_models.PlayerStint.objects.filter(player_id=player_id).update(from_year=min(years))
+        for year in years:
+            for month, day in ((4, 1), (9, 30)):
+                play_game(self.team, self.rival, year=year, month=month, day=day, batting={player_id: BattingLine()})
+
+    def five_foreigners(self, *, pitchers=2):
+        """2026年の未記録の試合と、外国人の打者3人（`self.foreign` を含む）・投手 `pitchers` 人。"""
+        game = play_game(self.team, self.rival, recorded=False)
+        batters = [self.foreign.id, *self.foreigners(self.team, ["内野手", "内野手"], first_number=80)]
+        ids = self.foreigners(self.team, ["投手"] * pitchers, first_number=83)
+        return game, batters, dict(enumerate(ids, start=1))
+
+    def test_a_foreigner_who_acquired_domestic_fa_last_year_is_not_counted(self):
+        """2018〜2025年の8シーズンで国内FAを取得（2025年）。2026年の試合では数えないので、5人目でも通る。"""
+        self.serve_seasons(self.foreign.id, range(2018, 2026))
+        game, batters, pitchers = self.five_foreigners()
+
+        self._record(game, home_batters=batters, home_pitchers=pitchers)  # 例外にならない
+
+        self.assertTrue(orm_models.GameBattingLine.objects.filter(game_id=game.id, player_id=self.foreign.id).exists())
+
+    def test_a_foreigner_still_counts_in_the_year_of_the_acquisition(self):
+        """2019〜2026年の8シーズン目は2026年。取得した年はまだ数える（対象外は公示の翌年から）。"""
+        self.serve_seasons(self.foreign.id, range(2019, 2027))
+        game, batters, pitchers = self.five_foreigners()
+
+        with self.assertRaisesRegex(ForeignPlayerQuotaExceeded, r"の出場選手の外国人選手は計4人までです（5人）"):
+            self._record(game, home_batters=batters, home_pitchers=pitchers)
+
+    def test_a_foreigner_who_declared_fa_last_year_is_not_counted(self):
+        """FA 宣言には資格が要るので、宣言の翌年からも対象外（記録が浅くて取得を数えられなくても）。"""
+        orm_models.PlayerFreeAgentDeclaration.objects.create(player_id=self.foreign.id, year=2025, kind="国内")
+        game, batters, pitchers = self.five_foreigners()
+
+        self._record(game, home_batters=batters, home_pitchers=pitchers)  # 例外にならない
+
+    def test_a_declaration_in_the_same_year_does_not_exempt(self):
+        orm_models.PlayerFreeAgentDeclaration.objects.create(player_id=self.foreign.id, year=2026, kind="国内")
+        game, batters, pitchers = self.five_foreigners()
+
+        with self.assertRaises(ForeignPlayerQuotaExceeded):
+            self._record(game, home_batters=batters, home_pitchers=pitchers)
+
+    def test_the_message_tells_how_many_were_left_out(self):
+        orm_models.PlayerFreeAgentDeclaration.objects.create(player_id=self.foreign.id, year=2025, kind="国内")
+        game, batters, pitchers = self.five_foreigners(pitchers=3)
+
+        with self.assertRaisesRegex(
+            ForeignPlayerQuotaExceeded, r"（FA 取得で枠外の1人を除く）の外国人選手は計4人までです（5人）"
+        ):
+            self._record(game, home_batters=batters, home_pitchers=pitchers)
+
+    def test_a_save_within_the_quota_does_not_read_the_fa_records(self):
+        """枠に収まる保存では、対象外を導かない（ふだんの保存のクエリを増やさない）。"""
+        game = play_game(self.team, self.rival, recorded=False)
+
+        with mock.patch.object(ForeignQuotaExemptions, "for_year") as for_year:
+            self._record(game, home_batters=[self.foreign.id])
+
+        for_year.assert_not_called()
 
 
 class CaptaincyApplicationTest(BaseCase):

@@ -45,6 +45,7 @@ from ..domain.repositories import (
 )
 from ..domain.value_objects import GameStage
 from .dto import PlanNotice, PostseasonAdvanceReport
+from .foreign_quota import ForeignQuotaExemptions
 from .pennant_race import StandingsSource, league_finishes, tiebreak_for
 from .pennant_season import AtomicBlock
 from .pennant_simulation import DaySimulator
@@ -59,18 +60,18 @@ def _saved_id(value: int | None) -> int:
 class PostseasonBracketReader:
     """その年の勝ち上がりを導く読み取り。進める処理と、シーズンを締める処理の検査が共有する。
 
-    `teams` は世界の範囲で組み立てた順位表の読み取り（`TeamApplicationService`。順位表の出典で、公式戦だけ）。
+    `league_view` は世界の範囲で組み立てた順位表の読み取り（`LeagueViewService`。順位表の出典で、公式戦だけ）。
     """
 
     def __init__(
         self,
         *,
-        teams: StandingsSource,
+        league_view: StandingsSource,
         games: GameListQuery,
         leagues: LeagueRepository,
         postseason: PostseasonQuery,
     ) -> None:
-        self._teams = teams
+        self._league_view = league_view
         # 同率の決着（当該球団間の対戦勝率など）の材料。公式戦だけを読む
         self._games = games
         self._leagues = leagues
@@ -103,10 +104,10 @@ class PostseasonBracketReader:
         last_regular = self._postseason.last_regular_date(year)
         if last_regular is None:
             return _no_postseason(year)
-        standings = self._teams.get_league_standings(year)
+        standings = self._league_view.get_league_standings(year)
         return derive_bracket(
             year,
-            finishes=league_finishes(standings, tiebreak_for(year, games=self._games, teams=self._teams)),
+            finishes=league_finishes(standings, tiebreak_for(year, games=self._games, league_view=self._league_view)),
             last_regular=last_regular,
             results=results,
             unplayed_format=world.postseason_format,
@@ -116,7 +117,7 @@ class PostseasonBracketReader:
 
     def team_names(self) -> dict[int, str]:
         """球団の名前（優勝の球団を知らせるのに使う）。"""
-        return {team.id: team.name for team in self._teams.list_teams().rows}
+        return {team.id: team.name for team in self._league_view.list_teams().rows}
 
 
 def derive_bracket(
@@ -167,6 +168,7 @@ class PennantPostseasonService:
         ratings: RatingsRepository,
         plans: ClubPlanRepository,
         context_query: SimulationContextQuery,
+        fa_exemptions: ForeignQuotaExemptions,
         brackets: PostseasonBracketReader,
         atomic: AtomicBlock,
     ) -> None:
@@ -177,6 +179,8 @@ class PennantPostseasonService:
         self._ratings = ratings
         self._plans = plans
         self._context_query = context_query
+        # FA 資格の取得による外国人枠の対象外（協約 第82条 (4)）。公式戦の進行と同じく1回の「進める」で1回だけ導く
+        self._fa_exemptions = fa_exemptions
         self._brackets = brackets
         self._atomic = atomic
 
@@ -233,6 +237,7 @@ class PennantPostseasonService:
             context_query=self._context_query,
             ratings=self._ratings,
             plans=self._plans,
+            fa_exemptions=self._fa_exemptions,
         )
         games: list[Game] = []
         dates: list[date] = []

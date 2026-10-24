@@ -16,7 +16,7 @@ from myapp.domain.exceptions import InvalidSchedule, InvalidWorld
 from myapp.domain.pennant.schedule import AdvanceTarget
 from myapp.domain.pennant.world import MAX_WORLDS_PER_OWNER
 from myapp.infrastructure import orm_models
-from myapp.presentation.views import build_pennant_season_service, build_pennant_world_service, build_service
+from myapp.presentation.views import build_pennant_season_service, build_pennant_world_service, build_roster_service
 
 from ..helpers import play_game
 from .test_pennant_advance import register_club
@@ -106,7 +106,7 @@ class CreateWorldTest(HomeCase):
         before = orm_models.PennantWorld.objects.count()
         other_league = orm_models.League.objects.create(name="別リーグ")
         other_team = orm_models.Team.objects.create(league=other_league, name="別球団")
-        register_club(build_service(), other_team, "別")
+        register_club(build_roster_service(), other_team, "別")
         cases = {
             "no league": (self.form(leagues=[]), "このフィールドは必須です。"),
             "no team": (self.form(managed_team=""), "このフィールドは必須です。"),

@@ -24,6 +24,7 @@ from ..domain.repositories import GameRepository, LeagueRepository, TeamReposito
 from ..domain.value_objects import (
     ContractStatus,
     FieldingPosition,
+    ForeignPlayerRules,
     GameHeader,
     GameStage,
     GameTimes,
@@ -32,6 +33,7 @@ from ..domain.value_objects import (
     Season,
 )
 from .dto import GameEditData, GameEditPlayer, GameEditRoster, GameTeamIds, LineupSlot, ScorebookSaved
+from .foreign_quota import ForeignQuotaExemptions
 from .game_edit import build_header, build_lineup_slots, build_plate_appearances
 from .queries import HomeStadiumQuery
 
@@ -52,11 +54,14 @@ class GameRecordingService:
         teams: TeamRepository,
         leagues: LeagueRepository,
         home_stadiums: HomeStadiumQuery,
+        fa_exemptions: ForeignQuotaExemptions,
     ) -> None:
         self._games = games
         self._teams = teams
         self._leagues = leagues
         self._home_stadiums = home_stadiums
+        # FA 資格の取得による外国人枠の対象外（試合の外国人枠を超えたときだけ読む）
+        self._fa_exemptions = fa_exemptions
 
     def get_game_team_ids(self, game_id: int) -> GameTeamIds:
         """試合の両チームの id だけを返す。権限の確認など、ロスターまで要らないとき用。"""
@@ -180,7 +185,7 @@ class GameRecordingService:
         team_of = domain_services.team_of_players(header, entries, game.plate_appearances)
         # 対戦する2チームのロスターは1回だけ読み、出場の検査で使い回す（集約の組み立ては重いため）
         teams = [self._teams.find_by_id(team_id) for team_id in (game.home_team_id, game.away_team_id)]
-        self._ensure_foreign_player_game_quota(teams, team_of)
+        self._ensure_foreign_player_game_quota(teams, team_of, game.season.year)
         self._ensure_no_developmental_players(game, teams, team_of)
         saved = self._games.save(game)
         warnings = self.attendance_warnings_for(saved.home_team_id, saved.attendance)
@@ -286,20 +291,33 @@ class GameRecordingService:
         except DomainError:
             return f"選手id={slot.player_id}"
 
-    def _ensure_foreign_player_game_quota(self, teams: list[Team], team_of: dict[int, int]) -> None:
+    def _ensure_foreign_player_game_quota(self, teams: list[Team], team_of: dict[int, int], year: int) -> None:
         """出場した外国人選手が、チームごとに所属リーグの外国人枠（計・投手・野手）に収まっているか確認する。
 
         枠は1軍の登録にかかる（協約第82条の2）が、実データは1軍の登録を記録していないので、試合に出た
         外国人に当てる（出場者は1軍の中から出るので、試合から言える必要条件）。投手か野手かは登録位置で数える
         （野手の登板は野手）。ホーム・ビジターはそれぞれ独立に判定する（合算しない）。読むのは対戦する
         2チームのロスターだけ（全チームの索引を作ると通算成績まで付いてくる）。
+
+        FA 資格の取得で試合の年 `year` の枠の対象外になった外国人（協約 第82条 (4)）は数えない。対象外を導くには
+        記録を読むので、**外国人選手フラグで数えて超えたときだけ**導いて検査し直す（枠に収まるふだんの保存で
+        クエリを増やさない。対象外は数えない人を増やすだけなので、フラグで収まれば対象外を除いても収まる）。
         """
         for team in teams:
             team_id = _saved_id(team.id)
             appeared = {player_id for player_id, owner in team_of.items() if owner == team_id}
-            positions = [p.position for p in team.players if p.profile.is_foreign_player and p.id in appeared]
+            foreigners = [p for p in team.players if p.profile.is_foreign_player and p.id in appeared]
             rules = self._leagues.find_by_id(_saved_id(team.league_id)).foreign_rules
-            rules.ensure_players_within(positions, subject=f"「{team.name}」のこの試合の出場選手")
+            subject = f"「{team.name}」のこの試合の出場選手"
+            pitchers, batters = ForeignPlayerRules.counts(p.position for p in foreigners)
+            if rules.violation(pitchers=pitchers, batters=batters) is None:
+                continue
+            exemptions = self._fa_exemptions.for_year([_saved_id(p.id) for p in foreigners], year)
+            counted = [p for p in foreigners if exemptions.counts(_saved_id(p.id), is_foreign_player=True)]
+            excluded = len(foreigners) - len(counted)
+            if excluded:
+                subject = f"{subject}（FA 取得で枠外の{excluded}人を除く）"
+            rules.ensure_players_within((p.position for p in counted), subject=subject)
 
     @staticmethod
     def _ensure_no_developmental_players(game: Game, teams: list[Team], team_of: dict[int, int]) -> None:

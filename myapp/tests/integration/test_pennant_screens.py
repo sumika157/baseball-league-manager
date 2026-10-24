@@ -14,7 +14,11 @@ from django.urls import reverse
 from myapp.domain.exceptions import WorldNotFound
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoWorldSummaryQuery
-from myapp.presentation.views import build_pennant_world_service, build_world_view_service
+from myapp.presentation.views import (
+    build_pennant_world_service,
+    build_world_league_view_service,
+    build_world_team_view_service,
+)
 
 from .base import BaseCase
 from .world_case import PENNANT_RIVAL, PENNANT_TEAM, PENNANT_WORLD, YEAR, WorldCase
@@ -173,7 +177,7 @@ class WorldAgeTest(WorldCase):
         player_id = self.pennant_players(self.pennant_team)[0]
         orm_models.Player.objects.filter(id=player_id).update(birth_date=date(YEAR - 25, 4, 3))
 
-        listing = build_world_view_service(self.world_id).list_batters(self.pennant_team.id)
+        listing = build_world_team_view_service(self.world_id).list_batters(self.pennant_team.id)
 
         row = next(row for row in listing.rows if row.id == player_id)
         self.assertEqual(row.age, 24, "誕生日の前日なので、世界の日付ではまだ24歳")
@@ -282,7 +286,7 @@ class WorldSummaryQueryTest(WorldCase):
 
     def test_the_list_screen_reads_only_the_managed_season(self):
         """自軍の順位は、その年の試合だけを読む（全シーズンの試合を組み立てない）。"""
-        service = build_world_view_service(self.world_id)
+        service = build_world_league_view_service(self.world_id)
 
         leagues = service.get_league_standings(YEAR)
         other_year = service.get_league_standings(YEAR + 5)

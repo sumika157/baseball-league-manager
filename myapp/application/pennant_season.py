@@ -47,6 +47,7 @@ from ..domain.repositories import (
 )
 from ..domain.value_objects import GameStage
 from .dto import AdvanceReport, PlanNotice
+from .foreign_quota import ForeignQuotaExemptions
 from .pennant_simulation import DaySimulator
 from .queries import SimulationContextQuery
 
@@ -78,6 +79,7 @@ class PennantSeasonService:
         ratings: RatingsRepository,
         plans: ClubPlanRepository,
         context_query: SimulationContextQuery,
+        fa_exemptions: ForeignQuotaExemptions,
         atomic: AtomicBlock,
     ) -> None:
         self._world_id = world_id
@@ -89,6 +91,8 @@ class PennantSeasonService:
         self._ratings = ratings
         self._plans = plans
         self._context_query = context_query
+        # FA 資格の取得による外国人枠の対象外（協約 第82条 (4)）。1回の「進める」で1回だけ導く（`DaySimulator.load`）
+        self._fa_exemptions = fa_exemptions
         self._atomic = atomic
 
     def ensure_schedule(self) -> bool:
@@ -180,6 +184,7 @@ class PennantSeasonService:
             context_query=self._context_query,
             ratings=self._ratings,
             plans=self._plans,
+            fa_exemptions=self._fa_exemptions,
         )
         by_date: dict[date, list[Fixture]] = {}
         for fixture in pending:

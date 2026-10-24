@@ -28,6 +28,7 @@ from ..domain.simulation.randomness import game_seed, make_random
 from ..domain.simulation.ratings import BatterRatings, PitcherRatings
 from ..domain.value_objects import ForeignPlayerRules, GameStage
 from .dto import PlanNotice, SimulationContext, SimulationTeam
+from .foreign_quota import ForeignQuotaExemptions, QuotaExemptions
 from .queries import SimulationContextQuery
 
 # ポストシーズンの試合の識別の接頭辞（公式戦の識別と混ざらない）
@@ -72,18 +73,24 @@ class DaySimulator:
         context_query: SimulationContextQuery,
         ratings: RatingsRepository,
         plans: ClubPlanRepository,
+        fa_exemptions: ForeignQuotaExemptions,
     ) -> DaySimulator:
         """`first_day`（今回の最初の試合の日）より前の試合から導ける状態と、その年の能力と編成を読む。
 
         能力は `first_day` の年のもの（公式戦は日程の最初の日の年、ポストシーズンは同じ年の続き。
-        domain の `ratings_year` と一致する）。
+        domain の `ratings_year` と一致する）。FA 資格の取得による外国人枠の対象外（協約 第82条 (4)）も
+        同じ年で導く（その年の扱いは前の年までの記録で決まるので、進める間は変わらない）。
         """
         context = context_query.load(before=first_day)
-        abilities = {item.player_id: item.ratings for item in ratings.find_by_year(first_day.year)}
+        year = first_day.year
+        abilities = {item.player_id: item.ratings for item in ratings.find_by_year(year)}
+        exemptions = fa_exemptions.for_year(
+            [player.player_id for team in context.teams for player in team.players if player.is_foreign], year
+        )
         return cls(
             world_seed=world.seed,
             context=context,
-            pools={team.team_id: pool_of(team, abilities) for team in context.teams},
+            pools={team.team_id: pool_of(team, abilities, exemptions=exemptions) for team in context.teams},
             plans={plan.team_id: plan for plan in plans.find_all()},
         )
 
@@ -147,19 +154,32 @@ class DaySimulator:
         return self._clubs[team_id]
 
 
-def pool_of(team: SimulationTeam, ratings: dict[int, BatterRatings | PitcherRatings]) -> ClubRoster:
-    """球団の登録候補。能力（その年のもの）が無い選手は出られない。"""
+def pool_of(
+    team: SimulationTeam, ratings: dict[int, BatterRatings | PitcherRatings], *, exemptions: QuotaExemptions
+) -> ClubRoster:
+    """球団の登録候補（シミュレーションの型）。能力（その年のもの）が無い選手は出られない。
+
+    **その年の外国人枠で数えるか（`counts_as_foreign`）はここで1回だけ決める**（外国人選手フラグと、FA 資格の取得による
+    対象外 `exemptions`。協約 第82条 (4)）。AI の1軍・試合の枠・GM の編成の検査は、この値だけを見る。
+    `exemptions` は省略できない（対象外を導かない場面は空の `QuotaExemptions` を明示する）。
+    """
     batters: list[SimBatter] = []
     pitchers: list[SimPitcher] = []
     for player in team.players:
         ability = ratings.get(player.player_id)
+        counts_as_foreign = exemptions.counts(player.player_id, is_foreign_player=player.is_foreign)
         # 登録位置と能力の種類の食い違いは、能力の保存のときに弾いている
         if isinstance(ability, PitcherRatings):
-            pitchers.append(SimPitcher(player.player_id, player.name, ability, player.is_foreign))
+            pitchers.append(SimPitcher(player.player_id, player.name, ability, counts_as_foreign=counts_as_foreign))
         elif isinstance(ability, BatterRatings):
             batters.append(
                 SimBatter(
-                    player.player_id, player.name, player.position, ability, player.is_foreign, throws=player.throws
+                    player.player_id,
+                    player.name,
+                    player.position,
+                    ability,
+                    counts_as_foreign=counts_as_foreign,
+                    throws=player.throws,
                 )
             )
     return ClubRoster(team_id=team.team_id, name=team.name, batters=tuple(batters), pitchers=tuple(pitchers))

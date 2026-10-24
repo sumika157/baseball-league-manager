@@ -58,7 +58,7 @@ type _GameKey = tuple[date, int, int]
 class PennantPostseasonViewService:
     """ポストシーズンの表とカードの材料を作る。リポジトリと参照クエリは、その世界の範囲で組み立てて渡す。
 
-    `teams` は世界の範囲の順位表の読み取り（球団とリーグの名前に使う。勝ち上がりの導出と同じもの）。
+    `league_view` は世界の範囲の順位表の読み取り（球団とリーグの名前に使う。勝ち上がりの導出と同じもの）。
     """
 
     def __init__(
@@ -66,14 +66,14 @@ class PennantPostseasonViewService:
         *,
         world_id: int,
         worlds: WorldRepository,
-        teams: StandingsSource,
+        league_view: StandingsSource,
         postseason: PostseasonQuery,
         brackets: PostseasonBracketReader,
         stats: PostseasonStatsQuery,
     ) -> None:
         self._world_id = world_id
         self._worlds = worlds
-        self._teams = teams
+        self._league_view = league_view
         self._postseason = postseason
         self._brackets = brackets
         self._stats = stats
@@ -232,7 +232,7 @@ class PennantPostseasonViewService:
 
     def _names(self) -> tuple[dict[int, str], dict[int, str]]:
         """球団の名前とリーグの名前。"""
-        rows = self._teams.list_teams().rows
+        rows = self._league_view.list_teams().rows
         return (
             {team.id: team.name for team in rows},
             {team.league_id: team.league_name for team in rows},

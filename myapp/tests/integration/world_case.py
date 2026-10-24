@@ -14,6 +14,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from myapp.application.dto import LineupSlot, PostseasonAdvanceReport
+from myapp.application.foreign_quota import ForeignQuotaExemptions
 from myapp.application.game_recording import GameRecordingService
 from myapp.domain.entities import Game, Player
 from myapp.domain.pennant.postseason import PostseasonFormat
@@ -21,7 +22,7 @@ from myapp.domain.pennant.schedule import AdvanceTarget
 from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import BattingLine, FieldingPosition, GameStage, JerseyNumber, Season
 from myapp.infrastructure import orm_models
-from myapp.infrastructure.queries import DjangoHomeStadiumQuery
+from myapp.infrastructure.queries import DjangoHomeStadiumQuery, DjangoServiceHistoryQuery
 from myapp.infrastructure.repositories import (
     DjangoFixtureRepository,
     DjangoGameRepository,
@@ -174,6 +175,7 @@ class WorldCase(BaseCase):
             teams=DjangoTeamRepository(cls.scope),
             leagues=DjangoLeagueRepository(cls.scope),
             home_stadiums=DjangoHomeStadiumQuery(cls.scope),
+            fa_exemptions=ForeignQuotaExemptions(DjangoServiceHistoryQuery(cls.scope)),
         )
         assert empty.id is not None
         saved = recording.record_scorebook(
