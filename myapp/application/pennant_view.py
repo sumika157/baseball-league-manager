@@ -71,6 +71,7 @@ class PennantWorldViewService:
             owner_id=summary.owner_id,
             is_final_season=final,
             postseason_format=summary.postseason_format,
+            played_postseason=summary.played_postseason,
         )
 
     def settle(self, context: WorldContext) -> WorldContext:

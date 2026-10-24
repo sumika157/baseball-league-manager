@@ -1431,6 +1431,34 @@ class PostseasonView:
 
 
 @dataclass(frozen=True)
+class PostseasonStats:
+    """Y年のポストシーズンの個人成績の表。保存せず、その年のポストシーズンの試合から集計した値。
+
+    `listing.rows` は `LeaguePlayerRow`（全リーグの出場した選手。所属はその年の終わりの球団）。
+    リーグの基準値が要る指標（OPS+・ERA+・FIP）は、リーグをまたぐ表なので作らない。
+    """
+
+    year: int
+    pitchers: bool
+    listing: Listing
+    # 表を開ける年（勝ち上がりの表と同じ。新しい順）
+    years: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class PennantSettingsView:
+    """世界の設定の画面（ポストシーズンの方式）。"""
+
+    postseason_format: PostseasonFormat
+    # 方式を変えられない理由（domain の `postseason_format_change_blocker`）。変えられるなら空
+    blocker: str
+
+    @property
+    def can_change(self) -> bool:
+        return not self.blocker
+
+
+@dataclass(frozen=True)
 class PostseasonCard:
     """GM ホームの「ポストシーズン」のカード（公式戦を終え、ポストシーズンのある年だけ）。"""
 
@@ -1477,16 +1505,23 @@ class WorldContext:
     owner_id: int | None = None
     # 最終シーズン（`MAX_SEASONS_PER_WORLD` 番目）か。最後まで終えた世界に「終了」の印を出す（#104）
     is_final_season: bool = False
-    # ポストシーズンの方式（世界を作ったときに決まる）
+    # ポストシーズンのいまの方式（作るときに選び、設定の画面で変えられる。過去の年の方式はその年の試合から導く）
     postseason_format: PostseasonFormat = PostseasonFormat.NONE
     # 最終シーズンのポストシーズンが終わった（または無い）か。世界の終了の判定にだけ使い、要る画面（GM ホーム・
     # 世界の一覧）だけが導いて入れる（`pennant_view.settled_context`）。None は導いていない
     postseason_settled: bool | None = None
+    # ポストシーズンの試合が1つでもあるか（いまの方式が「なし」でも、過去の年の表は開ける）
+    played_postseason: bool = False
 
     @property
     def has_postseason(self) -> bool:
-        """ポストシーズンのある世界か（世界バーの「ポストシーズン」の出し分け）。"""
+        """いまの方式でポストシーズンを行う世界か（GM ホームのカード・世界の終了の判定）。"""
         return self.postseason_format is not PostseasonFormat.NONE
+
+    @property
+    def shows_postseason(self) -> bool:
+        """世界バーに「ポストシーズン」を出すか。いまの方式でポストシーズンを行うか、過去の年の表があるとき。"""
+        return self.has_postseason or self.played_postseason
 
     @property
     def needs_postseason_status(self) -> bool:
@@ -1530,6 +1565,8 @@ class WorldSummary:
     remaining_by_team: Mapping[int, int] = field(default_factory=dict)
     # ポストシーズンの方式
     postseason_format: PostseasonFormat = PostseasonFormat.NONE
+    # ポストシーズンの試合が1つでもあるか（方式を「なし」に変えた世界の、過去の年の表へのリンク）
+    played_postseason: bool = False
 
 
 @dataclass(frozen=True)

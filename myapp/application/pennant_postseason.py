@@ -11,7 +11,8 @@ domain の `PostseasonBracket` が毎回導く（いまのステージ・次の�
 - 試合ごとの乱数の識別は公式戦と別の接頭辞（`game_key`）。1日ずつ進めても終わりまで進めても同じ結果になる
 - **ロック（#100）**: 計算はトランザクションの外。中では「世界の最後の試合日（全区分）と次の対戦の日が
   読み込みの前と同じ」ことを読み直してから書く（公式戦の「対戦を先に消す」の代わり。ポストシーズンには消す対戦が無い）。
-  変わっていれば書かずに `AlreadyAdvanced`
+  世界の方式も読み直す（設定の画面で変えられる）。変わっていれば書かずに `AlreadyAdvanced`
+- **方式は年ごとに導く**: 試合のある年はその年の試合から（`played_format`）、まだ無い年（いまの年度）は世界のいまの方式
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from ..domain.pennant.postseason import (
     PostseasonResult,
     PostseasonStatus,
     ScheduledGame,
+    played_format,
 )
 from ..domain.pennant.race import final_order
 from ..domain.pennant.schedule import MAX_GAMES_PER_ADVANCE, AdvanceTarget
@@ -85,25 +87,39 @@ class PostseasonBracketReader:
     ) -> PostseasonBracket:
         """その年の勝ち上がり。結果が導いた対戦と食い違えば `InvalidPostseason`。
 
+        **方式は年ごとに導く**（#280 のユーザーの決定）: その年の試合があれば試合から（domain の `played_format`）、
+        まだ無ければ世界のいまの方式。試合の無い年を渡すのは、公式戦を終えて締めていない年（いまの年度）だけにする
+        （締めた年で試合が無ければ、その年は「なし」だった。表を開ける年は `PennantPostseasonViewService.years`）。
+
         方式が「なし」・その年の公式戦が無いときは、順位を読まずに状況 `NONE` の勝ち上がりを返す
-        （方式「なし」の世界の締める処理に、読み込みを足さない）。
-        `results` はその年のポストシーズンの結果。既に読んだ呼び手（勝ち上がりの表）が渡し、省けばここで読む。
+        （方式「なし」の世界の締める処理に、読み込みを足さない）。`results` はその年のポストシーズンの結果。
+        既に読んだ呼び手（勝ち上がりの表）が渡す。省くと、世界のいまの方式が「なし」なら読まずに `NONE`
+        （いまの年度は、方式が「なし」なら試合が無い。始まった年の方式は変えられないため）、ほかはここで読む。
         """
-        if world.postseason_format is PostseasonFormat.NONE:
+        if results is None:
+            if world.postseason_format is PostseasonFormat.NONE:
+                return _no_postseason(year)
+            results = self._postseason.results(year)
+        if not results and world.postseason_format is PostseasonFormat.NONE:
             return _no_postseason(year)
         last_regular = self._postseason.last_regular_date(year)
         if last_regular is None:
             return _no_postseason(year)
         standings = self._teams.get_league_standings(year)
+        postseason_format = (
+            played_format(results, {row.team_id: league.league_id for league in standings for row in league.rows})
+            if results
+            else world.postseason_format
+        )
         priority = league_priority(
             (_saved_id(league.id) for league in self._leagues.find_all()), year=year, start_year=world.start_year
         )
         return PostseasonBracket.derive(
-            world.postseason_format,
+            postseason_format,
             _league_finishes(standings, tiebreak_for(year, games=self._games, teams=self._teams)),
             priority,
             last_regular,
-            self._postseason.results(year) if results is None else results,
+            results,
         )
 
     def team_names(self) -> dict[int, str]:
@@ -267,18 +283,31 @@ class PennantPostseasonService:
                 break
             day = bracket.next_day()
 
-        self._save(games, before=(last_played, next_fixture))
+        self._save(games, before=(last_played, next_fixture), postseason_format=world.postseason_format)
         return self._report(bracket, tuple(dates), games, dates[-1], simulator.notices)
 
     # --- 内部 ---
 
-    def _save(self, games: list[Game], *, before: tuple[date | None, date | None]) -> None:
-        """試合を保存する。検査と行の組み立てはトランザクションの外、中では状態の読み直しと書き込みだけ。"""
+    def _save(
+        self,
+        games: list[Game],
+        *,
+        before: tuple[date | None, date | None],
+        postseason_format: PostseasonFormat,
+    ) -> None:
+        """試合を保存する。検査と行の組み立てはトランザクションの外、中では状態の読み直しと書き込みだけ。
+
+        読み直すのは世界の今日・次の対戦の日と、方式（`postseason_format` は計算に使った方式）。方式は設定の画面
+        （`PennantSettingsService`）が、その年のポストシーズンの試合が無いことをトランザクションの中で確かめてから
+        変える。ここでも読み直すので、計算している間に方式が変わっても、古い方式の試合を書かない。
+        """
         write = self._games.prepare_add_all(games)
         with self._atomic():
             if (self._context_query.last_played_on(), self._fixtures.first_date()) != before:
                 # 計算している間に、別のリクエストが進めた（締めた）。同じ日の試合を2つ作らない
                 raise AlreadyAdvanced("計算している間に世界が進みました。最新の状態を表示しました。")
+            if self._worlds.find_by_id(self._world_id).postseason_format is not postseason_format:
+                raise AlreadyAdvanced("計算している間にポストシーズンの方式が変わりました。最新の状態を表示しました。")
             write()
 
     def _report(

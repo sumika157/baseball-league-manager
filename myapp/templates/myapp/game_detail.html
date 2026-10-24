@@ -24,7 +24,7 @@
   {% if world and detail.is_postseason %}
     <p class="page-subtitle" data-testid="game-stage">
       <span class="badge bg-secondary">ポストシーズン</span>
-      {% if world.has_postseason %}<a href="{% url 'pennant_postseason_by_year' world.world_id detail.game.year %}" class="ms-2">{{ detail.game.year }}年の勝ち上がりを見る</a>{% endif %}
+      <a href="{% url 'pennant_postseason_by_year' world.world_id detail.game.year %}" class="ms-2">{{ detail.game.year }}年の勝ち上がりを見る</a>
     </p>
   {% endif %}
   {% if detail.header_items %}

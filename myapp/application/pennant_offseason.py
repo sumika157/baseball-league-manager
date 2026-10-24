@@ -51,7 +51,7 @@ from ..domain.pennant.awards import Award, title_counts
 from ..domain.pennant.club_plan import ClubMember, PlanSection
 from ..domain.pennant.offseason import Draftee, OffseasonClub, OffseasonPlan, OffseasonPlayer, plan_offseason
 from ..domain.pennant.offseason_player import TrackRecord
-from ..domain.pennant.postseason import PostseasonStatus
+from ..domain.pennant.postseason import PostseasonFormat, PostseasonStatus
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.release import ReleasePlan, ensure_releasable
 from ..domain.pennant.retirement import PlayingTime
@@ -195,21 +195,29 @@ class PennantOffseasonService:
             self._ensure_not_closed(world, year)
             return self._commit(world, prepared)
 
-    def _state(self) -> tuple[date | None, date | None, tuple[int, int, int], ReleasePlan | None]:
-        """締められるかと何を書くかを決める事実（最後に試合をした日・次の対戦の日・在籍の目印・受け持つ球団の戦力外の指名）。
+    def _state(
+        self,
+    ) -> tuple[date | None, date | None, tuple[int, int, int], ReleasePlan | None, PostseasonFormat]:
+        """締められるかと何を書くかを決める事実（最後に試合をした日・次の対戦の日・在籍の目印・受け持つ球団の戦力外の指名・
+        ポストシーズンの方式）。
 
         読み込みの前後で比べる。戦力外の指名は GM が締める処理の計算中にも保存しうるので、ここに入れる（#100）。
+        方式も設定の画面で計算中に変えうる（「なし」から変えたのに、その年のポストシーズンを行わずに締めない。#280）。
         """
+        world = self._worlds.find_by_id(self._world_id)
         return (
             self._context_query.last_played_on(),
             self._fixtures.first_date(),
             self._teams.roster_signature(),
-            self._managed_release_plan(),
+            self._release_plan_of(world.managed_team_id),
+            world.postseason_format,
         )
 
     def _managed_release_plan(self) -> ReleasePlan | None:
         """受け持つ球団の戦力外の手動の指名（自動・受け持ちが無いなら None）。"""
-        team_id = self._worlds.find_by_id(self._world_id).managed_team_id
+        return self._release_plan_of(self._worlds.find_by_id(self._world_id).managed_team_id)
+
+    def _release_plan_of(self, team_id: int | None) -> ReleasePlan | None:
         return None if team_id is None else self._releases.find_by_team(team_id)
 
     def _ensure_not_closed(self, world: World, year: int) -> None:

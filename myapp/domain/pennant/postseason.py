@@ -30,7 +30,7 @@
 from __future__ import annotations
 
 import datetime
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import Enum
 
@@ -223,6 +223,30 @@ class PostseasonResult:
             raise InvalidPostseason("同じ球団どうしの試合はありません。")
         if self.winner_team_id is not None and self.winner_team_id not in (self.home_team_id, self.away_team_id):
             raise InvalidPostseason("勝った球団がその試合の球団ではありません。")
+
+
+def played_format(results: Iterable[PostseasonResult], league_of: Mapping[int, int]) -> PostseasonFormat:
+    """その年の試合から、その年に行った方式を導く（方式は年ごとに保存しない。#280 のユーザーの決定）。
+
+    - 試合が無ければ `NONE`
+    - 同じリーグどうしの試合（CS）があれば `NPB`
+    - それ以外（リーグの代表どうしの日本シリーズだけ）は `CHAMPIONS`
+
+    `league_of` は球団 id → リーグ id。全リーグが1球団の世界の NPB 方式は CS が無く `CHAMPIONS` と導くが、
+    勝ち上がりは同じ（どちらも各リーグの1位で日本シリーズ）なので答えは変わらない。
+    締めた年の試合は書き換えられない（`DjangoGameRepository` が拒む）ので、導いた方式も変わらない。
+    **試合がまだ無い年（いまの年度）には使わない**（呼ぶ側が世界のいまの方式を使う）。
+    """
+    games = list(results)
+    if not games:
+        return PostseasonFormat.NONE
+    for game in games:
+        home, away = league_of.get(game.home_team_id), league_of.get(game.away_team_id)
+        if home is None or away is None:
+            raise InvalidPostseason("ポストシーズンの試合に、リーグの分からない球団があります。")
+        if home == away:
+            return PostseasonFormat.NPB
+    return PostseasonFormat.CHAMPIONS
 
 
 @dataclass(frozen=True)

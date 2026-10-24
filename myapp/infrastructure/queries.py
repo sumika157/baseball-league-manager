@@ -907,13 +907,22 @@ class DjangoWorldSummaryQuery:
         rows = list(worlds.select_related("managed_team"))
         ids = [row.id for row in rows]
         # order_by() で既定の並びを外す（外さないと、並びの列が GROUP BY に入って世界ごとにまとまらない）
-        # 最後の試合日（世界の今日）はポストシーズンの試合も含めて決まる
-        last_played = dict(
+        # 最後の試合日（世界の今日）はポストシーズンの試合も含めて決まる。同じ集計で、ポストシーズンの試合が
+        # あるか（世界バーの「ポストシーズン」の出し分け）も読む（クエリを足さない）
+        last_played: dict[int, date] = {}
+        played_postseason: set[int] = set()
+        for world_id, last, last_postseason in (
             games_in_worlds(ids, stages=StageFilter.ALL_STAGES)
             .order_by()
             .values_list("home_team__league__world_id")
-            .annotate(last=Max("played_on"))
-        )
+            .annotate(
+                last=Max("played_on"),
+                last_postseason=Max("played_on", filter=Q(stage=GameStage.POSTSEASON.value)),
+            )
+        ):
+            last_played[world_id] = last
+            if last_postseason is not None:
+                played_postseason.add(world_id)
         next_fixture = dict(
             fixtures_in_worlds(ids).order_by().values_list("home_team__league__world_id").annotate(first=Min("date"))
         )
@@ -946,6 +955,7 @@ class DjangoWorldSummaryQuery:
                 owner_id=row.owner_id,
                 remaining_by_team=remaining.get(row.id, {}),
                 postseason_format=PostseasonFormat(row.postseason_format),
+                played_postseason=row.id in played_postseason,
             )
             for row in rows
         ]
@@ -1022,6 +1032,32 @@ class DjangoPostseasonQuery:
             .aggregate(last=Max("played_on"))["last"]
         )
         return last
+
+
+class DjangoPostseasonStatsQuery:
+    """PostseasonStatsQuery の Django ORM 実装。範囲（`WorldScope`）の中の、その年のポストシーズンの試合だけを数える。
+
+    集計の式は公式戦の成績と同じ（`batting_totals`・`pitching_totals`・`game_counts` に区分 `POSTSEASON_ONLY`）。
+    在籍の行から DTO への写し方（背番号・契約区分の年ごとの導出）は `DjangoPlayerStatsQuery` と共有する。
+    在籍は出場した選手の分だけ読む（世界の全選手の在籍を組み立てない）。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def list_players(self, year: int) -> list[ActivePlayerStats]:
+        stages = StageFilter.POSTSEASON_ONLY
+        games = Q(game__year=year)
+        counts = game_counts(self._scope, stages=stages, games=games)
+        played, pitched = counts
+        appeared = sorted(played.keys() | pitched.keys())
+        if not appeared:
+            return []
+        batting = batting_totals(self._scope, stages=stages, games=games)
+        pitching = pitching_totals(self._scope, stages=stages, games=games)
+        stints = stints_in(self._scope).filter(period_covering(year), player_id__in=appeared)
+        rows = DjangoPlayerStatsQuery._one_per_player(DjangoPlayerStatsQuery._ordered(stints))
+        return DjangoPlayerStatsQuery._to_stats(rows, year, batting, pitching, counts)
 
 
 _OFFSEASON_STINT_FIELDS = (

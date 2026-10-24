@@ -66,6 +66,8 @@ urlpatterns = [
     _pennant("offseason/<int:year>/", views.pennant_offseason, "offseason"),
     _pennant("postseason/", views.pennant_postseason, "postseason"),
     _pennant("postseason/<int:year>/", views.pennant_postseason, "postseason_by_year"),
+    _pennant("postseason/<int:year>/stats/", views.pennant_postseason_stats, "postseason_stats"),
+    _pennant("settings/", views.pennant_settings, "settings"),
     _pennant("history/", views.pennant_history, "history"),
     _pennant("team/<int:team_id>/history/", views.pennant_team_history, "team_history"),
     _pennant("delete/", views.pennant_delete, "delete"),
