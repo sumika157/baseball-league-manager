@@ -34,6 +34,8 @@ from .dto import (
     SimulationTeam,
     TeamAnalysisFacts,
     TeamSummary,
+    WorkspaceContext,
+    WorkspaceRow,
     WorldSummary,
 )
 
@@ -310,4 +312,32 @@ class AwardQuery(Protocol):
         self, *, league_id: int | None = None, team_id: int | None = None, player_id: int | None = None
     ) -> list[AwardRow]:
         """範囲の表彰。リーグ・球団（受賞した年の所属）・選手で絞れる。"""
+        ...
+
+
+@runtime_checkable
+class WorkspaceAccessQuery(Protocol):
+    """URL の key と利用者から、ワークスペースとその人の権限を引く台帳（範囲は取らない）。
+
+    読むのはワークスペースの行・編集者の行の有無・担当チームの id という**権限の事実**だけで、判定は
+    domain の `WorkspaceAccess` が行う。ワークスペースの中のデータ（リーグ・試合など）は読まない。
+    """
+
+    def resolve(self, key: str, user_id: int | None) -> WorkspaceContext:
+        """key のワークスペースと、`user_id`（未ログインなら None）の権限。無い key は `WorkspaceNotFound`。
+
+        見えるかどうか（`access.can_view()`）は呼ぶ側が見る（非公開でも行は返す。部外者には `NONE` の権限）。
+        """
+        ...
+
+
+@runtime_checkable
+class WorkspaceListQuery(Protocol):
+    """自分が入っているワークスペースの一覧（`/`）。範囲は取らない台帳。"""
+
+    def list_for(self, user_id: int) -> list[WorkspaceRow]:
+        """持ち主・編集者・チーム担当として入っているワークスペースを名前順に。
+
+        メンバーでないワークスペースは公開でも出さない（公開ワークスペースの一覧は作らない。2026-10-03 Q3）。
+        """
         ...

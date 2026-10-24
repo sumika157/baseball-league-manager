@@ -140,7 +140,7 @@ W1a（T1）で入れるのは `Visibility` と `Workspace` の最小形（`id`�
 | `Workspace` | 集約ルート | `id`・`key`（URL 用）・`name`・`owner_id`・`visibility`・`editor_ids: frozenset[int]`・`team_managers: dict[team_id, frozenset[user_id]]` |
 | `Invitation` | エンティティ | `token_digest`・`role`・`team_ids`・`expires_at`・`created_by`。受諾したら消す（残すと、メンバーである事実が2か所になる） |
 | `InvitedRole` | Enum | `EDIT_ALL`（全体を編集）/ `EDIT_TEAMS`（特定のチームを編集） |
-| `WorkspaceAccess` | 値オブジェクト（frozen） | 1回の要求で、その人がそのワークスペースで何をできるか。`role`（`OWNER` / `EDITOR` / `TEAM_MANAGER` / `VIEWER` / `NONE`）・`managed_team_ids`・`visibility` を持つ。メソッドは `can_view()`・`can_edit_all()`・`can_edit_teams(team_ids)`（どちらか1チームの担当なら可）・`can_manage_members()`・`can_delete()` |
+| `WorkspaceAccess` | 値オブジェクト（frozen） | 1回の要求で、その人がそのワークスペースで何をできるか。`role`（`OWNER` / `EDITOR` / `TEAM_MANAGER` / `VIEWER` / `NONE`）・`managed_team_ids`・`visibility` を持つ。メソッドは `can_view()`・`can_edit_all()`・`can_edit_teams(team_ids)`（どちらか1チームの担当なら可）・`can_manage_members()`・`can_delete()`。W2 T1 で `can_create_world()`（＝`can_edit_all()`。2026-10-24 決定）・`is_member` と、役割を導く `WorkspaceRole.of()`・組み立ての `WorkspaceAccess.of()` を足した（14. の W2 T1） |
 | `WorkspaceQuota` | 値オブジェクト | `max_owned_workspaces=3`。後で足すための差し込み口として `max_games: int \| None`・`max_pennant_worlds: int \| None` も持つ。`ensure_can_create_workspace(owned_count)` で検査する |
 | 例外 | `DomainError` の派生 | `WorkspaceNotFound`・`WorkspaceLimitReached`・`InvalidInvitation`（期限切れ・使用済み）・`InvalidWorkspace`。メッセージは日本語 |
 
@@ -209,8 +209,12 @@ W1a（T1）で入れるのは `Visibility` と `Workspace` の最小形（`id`�
 | `TeamAnalysisService`・`RosterService` | 変更なし。範囲つきで組み立てるだけ（戦力分析は `DjangoTeamAnalysisQuery(scope)`、契約区分・昇格・FA 宣言は `DjangoTeamRepository(scope)` で、すでに範囲で絞れている） | — |
 | ペナントの9サービス（`PennantWorldService`・`PennantSeasonService`・`PennantOffseasonService`・`OffseasonViewService`・`PennantHomeService`・`PennantRatingsViewService`・`PennantWorldViewService`・`ClubManagementService`・`ClubDetailsService`） | 変更なし。範囲（またはワークスペースの id）つきで組み立てるだけ | — |
 
-- DTO（`application/dto.py`）: `WorkspaceContext`（key・名前・公開かどうか・自分の権限・世界 id）・`WorkspaceRow`・`MemberRow`・`InvitationView` など。素の dict は使わない。
-- 参照の Protocol（`application/queries.py`）: `WorkspaceAccessQuery.access_for(user_id | None, key) -> WorkspaceAccess`、`WorkspaceListQuery`。
+- DTO（`application/dto.py`）: `WorkspaceContext`・`WorkspaceRow`・`MemberRow`・`InvitationView` など。素の dict は使わない。
+  - **W2 T1 で入れた形**: `WorkspaceContext` は `workspace_id`・`key`・`name`・`access: WorkspaceAccess`。公開範囲は `access.visibility` を返す**プロパティ**（欄にしない）。世界 id は持たない（世界はビューが URL から台帳で引く）。`WorkspaceRow` は `key`・`name`・`visibility`・`role`。
+  - ~~`WorkspaceContext`（key・名前・公開かどうか・自分の権限・世界 id）~~（当初の案。W2 T1 で上の形に置き換えた）
+- 参照の Protocol（`application/queries.py`）:
+  - **W2 T1 で入れた形**: `WorkspaceAccessQuery.resolve(key: str, user_id: int | None) -> WorkspaceContext`（無い key は `WorkspaceNotFound`）・`WorkspaceListQuery.list_for(user_id: int) -> list[WorkspaceRow]`。実装はどちらも引数なしで組み立てる台帳（`build_workspace_access_query()`・`build_workspace_list_query()`）。
+  - ~~`WorkspaceAccessQuery.access_for(user_id | None, key) -> WorkspaceAccess`~~（当初の案。W2 T1 で `resolve` に置き換えた。ワークスペースの id・名前も同じ1本で読むため）
 
 ### infrastructure
 
@@ -218,6 +222,7 @@ W1a（T1）で入れるのは `Visibility` と `Workspace` の最小形（`id`�
 - `scoping.py`: 3.1 のとおり（`stadiums_in` を足し、条件にワークスペースを加える）。
 - `repositories.py` / `queries.py`: epic で `WorldScope` を通した箇所はそのまま使う。追加は球場とメンバーの経路だけ。
 - `DjangoTeamPermissionQuery` は `DjangoWorkspaceAccessQuery` に置き換える。1回の要求で読むのは、ワークスペースの行・編集者の行の有無・担当チームの id で、**多くて3クエリ**。判定は domain の `WorkspaceAccess` に任せる。
+  - W2 T1 で入れた形: 編集者の行の有無はワークスペースの行と同じ1本（`Exists` の注釈）で読むので、未ログイン・持ち主・編集者は1クエリ、担当・ログインした部外者は2クエリ（14. の W2 T1）。置き換え（`DjangoTeamPermissionQuery` の削除）は T5。
 - `admin.py`: 管理画面は運営者専用にする。
   - 管理画面に登録されているのは League・Team・Stadium・Player・PlayerStint・Game の6モデルだけ（ペナントのモデルは登録しない方針のまま）。一覧にワークスペースの列と絞り込みを足す（League・Stadium は直属、Team・PlayerStint・Game はリーグ経由、Player は在籍経由）。
   - **`Workspace` 自体も登録する**（空の DB で運営者が最初の1つを作る手段。`WorkspaceEditor` はインライン）。W1a の T7。
@@ -884,3 +889,31 @@ W3 を W4 より先にするのは、W4 を先にすると、中身を入れら�
 - 名前の一意の違反を日本語の例外に訳すのは W3
 - 管理画面のオートコンプリートの候補は絞っていない（保存で弾く）
 - epic を main に入れるとき: 上の「epic を main に入れるときに必ず行うこと」（superuser の確認と本番公開の手順）と、main を取り込むたびのマイグレーション番号の確認
+
+### W2（#78）
+
+#### T1 `WorkspaceAccess` と参照クエリ（`feature/workspace-access`、2026-10-24）
+
+画面はまだ使わない（T4 の `workspace_view`・T5 の権限の切り替えが使う）。マイグレーションは無い。
+
+- domain（`domain/workspace.py`）: `WorkspaceRole`（`OWNER`・`EDITOR`・`TEAM_MANAGER`・`VIEWER`・`NONE`。表示名「持ち主」「編集者」「チーム担当」「閲覧」「関係なし」もここが出典）と `WorkspaceRole.of(owner_id, visibility, user_id, is_editor, manages_a_team)`（役割の優先 持ち主 > 編集者 > 担当 > 閲覧）。`WorkspaceAccess(role, visibility, managed_team_ids)` は `of()` で作り、`can_view()`・`can_edit_all()`・`can_edit_teams(team_ids)`・`can_create_world()`・`can_manage_members()`・`can_delete()` を持つ。`is_staff` は引数に無い。
+  - `can_create_world()` は `can_edit_all()` と同じ（2026-10-24 の決定。世界の作成は持ち主・編集者だけ）。計画の5つのメソッドに、名前で呼べるよう足した。
+  - 値の組み合わせを `__post_init__` で検査する: 担当チームを持つのはチーム担当だけ（持ち主・編集者が担当を兼ねても持たない）、非公開の `VIEWER`・公開の `NONE` は作れない、未ログインは編集者・担当になれない。
+- application: `WorkspaceAccessQuery.resolve(key, user_id) -> WorkspaceContext`（無い key は `WorkspaceNotFound`）・`WorkspaceListQuery.list_for(user_id) -> list[WorkspaceRow]`。DTO の `WorkspaceContext` は `workspace_id`・`key`・`name`・`access`。**公開範囲は `access.visibility` を返すプロパティにした**（計画は欄だったが、同じ値を2つの欄に持たないため）。
+- infrastructure（`infrastructure/queries.py`）: `DjangoWorkspaceAccessQuery`（1本目でワークスペースの行と、ログインしていれば `Exists(WorkspaceEditor)` の注釈。持ち主・編集者・未ログインはここで終わる。それ以外は2本目で `teams_in(WorldScope.real(ws)).filter(managers=…)` の id）。`DjangoWorkspaceListQuery`（`Exists` の注釈2つ（編集者・担当）と持ち主の条件で1本。名前順。メンバーでないワークスペースは公開でも出さない）。担当の相関副問い合わせのためのたどり方は `scoping.real_teams_of_outer_workspace()` に置いた（`teams_in` の、ワークスペースの id が外側の行で決まる版）。
+- presentation: 組み立て口 `build_workspace_access_query()`・`build_workspace_list_query()`（何も取らない台帳）。`tests/helpers.py` が再輸出する。
+- テスト: domain `test_workspace_access.py`（役割5 × 公開範囲2 × 操作9 の真理値表を表のまま持つ・役割の優先・`is_staff` の入る余地が無い・組み合わせの検査）。integration `test_workspace_access_query.py`（key で引ける・無い key・役割が表の事実から決まる・staff かつ superuser の部外者は何も得ない・担当はそのワークスペースの実データのチームだけ（B のチーム・A の世界の球団は入らない）・クエリ数・一覧）。`test_wiring.py` は新しい分類 `WORKSPACE_LEDGER_BUILDERS`・`WORKSPACE_LEDGERS` を足し、何も取らない組み立て口と実装がこの2つずつだけであることを名前で固定した。`test_workspace_isolation.py` の `CHECKS` に2つを足した（A の key で B の行が出ない・B の持ち主・編集者・担当は A では閲覧者・一覧に入っていないワークスペースは出ない）。
+
+**クエリ数**（`assertNumQueries` で固定）
+
+| 呼び出し | 未ログイン | 持ち主 | 編集者 | 担当 | ログインした部外者 | 無い key |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `resolve` | 1 | 1 | 1 | 2 | 2 | 1 |
+| `list_for` | — | 1（ワークスペースの数によらない） | 同 | 同 | 同 | — |
+
+**変異の確かめ**: `resolve` が key を見ない → 16件、担当チームを範囲で絞らない → 7件、`can_edit_teams` が常に真 → 24件、一覧が公開ワークスペースも出す → 7件落ちる（どれも戻した）。
+
+**T6 で直すもの**（CLAUDE.md。差分をユーザーに見せてから）: 範囲の規則の2つの例外の書き方が、T1 で入れたものを名前で挙げていない。
+
+- 「全範囲を読む API を作らない。例外は `admin_real_queryset` だけ」に、`scoping.real_teams_of_outer_workspace`（外側の `Workspace` に相関した副問い合わせとしてだけ働く。`infrastructure/queries.py` だけが使い、`test_wiring.py` の `OuterWorkspaceTeamsTest` が縛る）を足す。
+- 「組み立て口はすべて範囲を受け取る。例外は `build_pennant_world_view`」に、引数を取らないワークスペースの台帳2つ（`DjangoWorkspaceAccessQuery`・`DjangoWorkspaceListQuery`）とその組み立て口（`build_workspace_access_query()`・`build_workspace_list_query()`。key・利用者からワークスペースを引く）を足す。
