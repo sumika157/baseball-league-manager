@@ -9,8 +9,6 @@
 from datetime import date
 from unittest.mock import patch
 
-from django.urls import reverse
-
 from myapp.application.dto import LineupSlot
 from myapp.application.foreign_quota import ForeignQuotaExemptions
 from myapp.application.game_recording import GameRecordingService
@@ -30,6 +28,7 @@ from ..helpers import (
     register_lineup,
     to_plate_appearances,
     world_scope,
+    ws_url,
 )
 from .base import ROSTER_CHECK, BaseCase
 
@@ -202,28 +201,28 @@ class WorldCase(BaseCase):
         player_id = stint.player_id
         game = orm_models.Game.objects.filter(home_team__league__world_id=world_id).first()
         urls = [
-            reverse("pennant_world", args=[world_id]),
-            reverse("pennant_standings", args=[world_id]),
-            reverse("pennant_standings_by_year", args=[world_id, YEAR]),
-            reverse("pennant_league_detail", args=[world_id, league.id]),
-            reverse("pennant_league_detail_by_year", args=[world_id, league.id, YEAR]),
-            reverse("pennant_league_titles", args=[world_id, league.id]),
-            reverse("pennant_league_titles_by_year", args=[world_id, league.id, YEAR]),
-            reverse("pennant_league_stats", args=[world_id, league.id]),
-            reverse("pennant_team_list", args=[world_id]),
-            reverse("pennant_game_list", args=[world_id]),
-            reverse("pennant_history", args=[world_id]),
-            reverse("pennant_team_history", args=[world_id, team.id]),
-            *(reverse("pennant_club", args=[world_id]) + f"?tab={tab}" for tab in ("active", "lineup", "pitching")),
-            reverse("pennant_player_list", args=[world_id, team.id]),
-            reverse("pennant_player_detail", args=[world_id, team.id, player_id]),
-            reverse("pennant_analysis_index", args=[world_id]),
+            ws_url("pennant_world", world_id),
+            ws_url("pennant_standings", world_id),
+            ws_url("pennant_standings_by_year", world_id, YEAR),
+            ws_url("pennant_league_detail", world_id, league.id),
+            ws_url("pennant_league_detail_by_year", world_id, league.id, YEAR),
+            ws_url("pennant_league_titles", world_id, league.id),
+            ws_url("pennant_league_titles_by_year", world_id, league.id, YEAR),
+            ws_url("pennant_league_stats", world_id, league.id),
+            ws_url("pennant_team_list", world_id),
+            ws_url("pennant_game_list", world_id),
+            ws_url("pennant_history", world_id),
+            ws_url("pennant_team_history", world_id, team.id),
+            *(ws_url("pennant_club", world_id) + f"?tab={tab}" for tab in ("active", "lineup", "pitching")),
+            ws_url("pennant_player_list", world_id, team.id),
+            ws_url("pennant_player_detail", world_id, team.id, player_id),
+            ws_url("pennant_analysis_index", world_id),
             *(
-                reverse("pennant_team_analysis", args=[world_id, team.id]) + f"?tab={tab}"
+                ws_url("pennant_team_analysis", world_id, team.id) + f"?tab={tab}"
                 for tab in ("depth", "usage", "fa", "stats")
             ),
-            reverse("pennant_team_analysis", args=[world_id, team.id]) + "?tab=stats&pos=pitcher",
+            ws_url("pennant_team_analysis", world_id, team.id) + "?tab=stats&pos=pitcher",
         ]
         if game is not None:
-            urls.append(reverse("pennant_game_detail", args=[world_id, game.id]))
+            urls.append(ws_url("pennant_game_detail", world_id, game.id))
         return urls

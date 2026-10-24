@@ -5,7 +5,6 @@ from datetime import date
 from django.contrib.auth.models import User
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from django.urls import reverse
 
 from myapp.admin import FreeAgentDeclarationForm
 from myapp.domain.exceptions import InvalidAcquisition, InvalidFreeAgentDeclaration
@@ -13,7 +12,7 @@ from myapp.domain.value_objects import AcquisitionRoute, FreeAgencyKind
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoTeamRepository
 
-from ..helpers import build_roster_service, build_team_analysis_service, login_as_manager, real_scope
+from ..helpers import build_roster_service, build_team_analysis_service, login_as_manager, real_scope, ws_url
 from .base import BaseCase
 
 THIS_YEAR = date.today().year
@@ -284,7 +283,7 @@ class DeclarationScreenTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
-        self.edit_url = reverse("player_edit", args=[self.team.id, self.player.id])
+        self.edit_url = ws_url("player_edit", self.team.id, self.player.id)
 
     def _declarations(self):
         return [
@@ -354,7 +353,7 @@ class DeclarationScreenTest(BaseCase):
     def test_anonymous_sees_no_declaration_controls_on_the_profile(self):
         build_roster_service(real_scope()).declare_free_agency(self.team.id, self.player.id, THIS_YEAR, "国内")
 
-        response = self.client.get(reverse("player_detail", args=[self.team.id, self.player.id]))
+        response = self.client.get(ws_url("player_detail", self.team.id, self.player.id))
 
         self.assertNotContains(response, "FA を宣言する")
         self.assertNotContains(response, "取り消す")
@@ -366,7 +365,7 @@ class ProfileDisplayTest(BaseCase):
         self.roster = build_roster_service(real_scope())
 
     def _page(self, player):
-        return self.client.get(reverse("player_detail", args=[self.team.id, player.id]))
+        return self.client.get(ws_url("player_detail", self.team.id, player.id))
 
     def test_the_career_row_shows_the_route(self):
         player = self.roster.register_player(self.team.id, "山田", 10, "内野手", acquired_via_label="ドラフト")
@@ -395,7 +394,7 @@ class ProfileDisplayTest(BaseCase):
             player.id, from_team_id=self.team.id, to_team_id=self.rival.id, number=7, year=THIS_YEAR + 1
         )
 
-        response = self.client.get(reverse("player_detail", args=[self.rival.id, player.id]))
+        response = self.client.get(ws_url("player_detail", self.rival.id, player.id))
 
         self.assertContains(response, f"{THIS_YEAR}年 海外FA")
         self.assertContains(response, ">移籍</span>")
@@ -456,7 +455,7 @@ class MovesDisplayTest(BaseCase):
         self._player(self.team, "ドラフト組", 20, self.YEAR, route="ドラフト")
         self._player(self.team, "経路不明", 21, self.YEAR)
 
-        response = self.client.get(reverse("team_analysis", args=[self.team.id]), {"year": self.YEAR})
+        response = self.client.get(ws_url("team_analysis", self.team.id), {"year": self.YEAR})
 
         self.assertContains(response, "<th>経路</th>")
         self.assertContains(response, "<td>ドラフト</td>")
@@ -512,7 +511,7 @@ class MovesDisplayTest(BaseCase):
     def test_the_departures_table_shows_the_mark(self):
         self._leave_via_fa("国内")
 
-        response = self.client.get(reverse("team_analysis", args=[self.team.id]), {"year": self.YEAR})
+        response = self.client.get(ws_url("team_analysis", self.team.id), {"year": self.YEAR})
 
         self.assertContains(response, ">国内FA</span>")
 

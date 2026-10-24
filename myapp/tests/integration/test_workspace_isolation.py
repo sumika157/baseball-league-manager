@@ -29,7 +29,6 @@ from django.db import connection
 from django.http import Http404
 from django.test import RequestFactory, TestCase
 from django.test.utils import CaptureQueriesContext
-from django.urls import reverse
 
 from myapp.domain.entities import Game
 from myapp.domain.entities import Team as DomainTeam
@@ -96,6 +95,7 @@ from ..helpers import (
     real_scope,
     register_lineup,
     register_players,
+    ws_url,
 )
 from .base import ROSTER_CHECK, BaseCase
 
@@ -733,16 +733,16 @@ class CurrentUrlsShowOnlyTheLegacyWorkspaceTest(WorkspaceCase):
 
     def _pages(self) -> list[str]:
         return [
-            reverse("dashboard"),
-            reverse("team_list"),
-            reverse("standings"),
-            reverse("standings_by_year", args=[YEAR]),
-            reverse("game_list"),
+            ws_url("dashboard"),
+            ws_url("team_list"),
+            ws_url("standings"),
+            ws_url("standings_by_year", YEAR),
+            ws_url("game_list"),
             # 検索語は画面に出るので、目印そのものではなく目印の一部で探す
-            f"{reverse('player_search')}?q=目印選手",
-            f"{reverse('player_search')}?q=目印",
-            reverse("league_detail", args=[self.league.id]),
-            reverse("analysis_index"),
+            f"{ws_url('player_search')}?q=目印選手",
+            f"{ws_url('player_search')}?q=目印",
+            ws_url("league_detail", self.league.id),
+            ws_url("analysis_index"),
         ]
 
     def test_the_pages_do_not_show_the_other_workspace(self):
@@ -754,15 +754,15 @@ class CurrentUrlsShowOnlyTheLegacyWorkspaceTest(WorkspaceCase):
 
     def test_the_pages_show_the_legacy_workspace(self):
         """検査が空振りしていないこと（A の行は出ている）。"""
-        self.assertContains(self.client.get(reverse("team_list")), self.team.name)
-        self.assertContains(self.client.get(f"{reverse('player_search')}?q=A打者"), "A打者1")
+        self.assertContains(self.client.get(ws_url("team_list")), self.team.name)
+        self.assertContains(self.client.get(f"{ws_url('player_search')}?q=A打者"), "A打者1")
 
     def test_pages_by_the_other_workspaces_ids_are_404(self):
         for url in (
-            reverse("player_list", args=[self.b_team.id]),
-            reverse("league_detail", args=[self.b_league.id]),
-            reverse("game_detail", args=[self.b_game_ids[0]]),
-            reverse("team_analysis", args=[self.b_team.id]),
+            ws_url("player_list", self.b_team.id),
+            ws_url("league_detail", self.b_league.id),
+            ws_url("game_detail", self.b_game_ids[0]),
+            ws_url("team_analysis", self.b_team.id),
         ):
             with self.subTest(url=url):
                 self.assertEqual(self.client.get(url).status_code, 404)
@@ -772,7 +772,7 @@ class CurrentUrlsShowOnlyTheLegacyWorkspaceTest(WorkspaceCase):
         staff = User.objects.create_user(username="staff-once", password="x", is_staff=True)
         self.client.force_login(staff)
         # 試合一覧は、画面の範囲と「登録の導線を出すか」（権限の判定）の両方で実データの範囲を使う
-        for url in (reverse("game_list"), reverse("player_list", args=[self.team.id])):
+        for url in (ws_url("game_list"), ws_url("player_list", self.team.id)):
             with self.subTest(url=url), CaptureQueriesContext(connection) as captured:
                 self.assertEqual(self.client.get(url).status_code, 200)
             reads = [q["sql"] for q in captured if 'FROM "myapp_workspace"' in q["sql"]]
@@ -783,7 +783,7 @@ class NoWorkspaceTest(TestCase):
     """ワークスペースが1つも無い DB では、今の URL は 404（決定 2026-10-07 Q2）。管理画面のトップは開ける。"""
 
     def test_the_site_pages_are_404(self):
-        for url in (reverse("dashboard"), reverse("team_list"), reverse("pennant_index")):
+        for url in (ws_url("dashboard"), ws_url("team_list"), ws_url("pennant_index")):
             with self.subTest(url=url):
                 self.assertEqual(self.client.get(url).status_code, 404)
 
@@ -917,7 +917,7 @@ class StadiumsInTest(WorkspaceCase):
         self.assertEqual(copied.home_stadium_id, self.b_stadium.id)
 
     def test_the_team_list_page_does_not_show_bs_stadium(self):
-        response = self.client.get(reverse("team_list"))
+        response = self.client.get(ws_url("team_list"))
 
         self.assertContains(response, self.stadium.name)
         self.assertNotContains(response, B_STADIUM)
@@ -1113,24 +1113,24 @@ class WorldPagesOfTheOtherWorkspaceTest(WorkspaceCase):
             year=YEAR, played_on=date(YEAR, 4, 2), home_team=home, away_team=away, home_score=1, away_score=0
         )
         return [
-            reverse("pennant_game_detail", args=[world, game.id]),
-            reverse("pennant_world", args=[world]),
-            reverse("pennant_history", args=[world]),
-            reverse("pennant_team_history", args=[world, team]),
-            reverse("pennant_offseason", args=[world, YEAR]),
-            reverse("pennant_delete", args=[world]),
-            reverse("pennant_club", args=[world]),
-            reverse("pennant_standings", args=[world]),
-            reverse("pennant_standings_by_year", args=[world, YEAR]),
-            reverse("pennant_league_detail", args=[world, league]),
-            reverse("pennant_league_titles", args=[world, league]),
-            reverse("pennant_league_stats", args=[world, league]),
-            reverse("pennant_team_list", args=[world]),
-            reverse("pennant_game_list", args=[world]),
-            reverse("pennant_player_list", args=[world, team]),
-            reverse("pennant_analysis_index", args=[world]),
-            reverse("pennant_team_analysis", args=[world, team]),
-            reverse("pennant_player_detail", args=[world, team, player]),
+            ws_url("pennant_game_detail", world, game.id),
+            ws_url("pennant_world", world),
+            ws_url("pennant_history", world),
+            ws_url("pennant_team_history", world, team),
+            ws_url("pennant_offseason", world, YEAR),
+            ws_url("pennant_delete", world),
+            ws_url("pennant_club", world),
+            ws_url("pennant_standings", world),
+            ws_url("pennant_standings_by_year", world, YEAR),
+            ws_url("pennant_league_detail", world, league),
+            ws_url("pennant_league_titles", world, league),
+            ws_url("pennant_league_stats", world, league),
+            ws_url("pennant_team_list", world),
+            ws_url("pennant_game_list", world),
+            ws_url("pennant_player_list", world, team),
+            ws_url("pennant_analysis_index", world),
+            ws_url("pennant_team_analysis", world, team),
+            ws_url("pennant_player_detail", world, team, player),
         ]
 
     def test_the_pages_of_bs_world_are_404(self):
@@ -1146,9 +1146,9 @@ class WorldPagesOfTheOtherWorkspaceTest(WorkspaceCase):
         b_games = orm_models.Game.objects.filter(home_team__league__world_id=self.b_world_id)
         games_before = b_games.count()
         for url in (
-            reverse("pennant_advance", args=[self.b_world_id]),
-            reverse("pennant_close_season", args=[self.b_world_id]),
-            reverse("pennant_delete", args=[self.b_world_id]),
+            ws_url("pennant_advance", self.b_world_id),
+            ws_url("pennant_close_season", self.b_world_id),
+            ws_url("pennant_delete", self.b_world_id),
         ):
             with self.subTest(url=url):
                 self.assertEqual(self.client.post(url, {"target": "day", "confirm_name": B_WORLD}).status_code, 404)
@@ -1158,7 +1158,7 @@ class WorldPagesOfTheOtherWorkspaceTest(WorkspaceCase):
     def test_the_club_writes_to_bs_world_are_404_and_change_nothing(self):
         """編成（区画の手動化・保存）と戦力外の指名の POST も、B の世界なら 404 で何も書かない。"""
         self.client.force_login(self.b_owner)
-        url = reverse("pennant_club", args=[self.b_world_id])
+        url = ws_url("pennant_club", self.b_world_id)
         plans = orm_models.PennantClubPlan.objects.filter(team__league__world_id=self.b_world_id)
         releases = orm_models.PennantReleasePlan.objects.filter(team__league__world_id=self.b_world_id)
         before = (list(plans.values()), list(releases.values()))
@@ -1176,8 +1176,8 @@ class WorldPagesOfTheOtherWorkspaceTest(WorkspaceCase):
     def test_the_pages_of_as_world_open(self):
         """検査が空振りしていないこと（A の世界は開ける）。"""
         for url in (
-            reverse("pennant_world", args=[self.a_world_id]),
-            reverse("pennant_team_list", args=[self.a_world_id]),
+            ws_url("pennant_world", self.a_world_id),
+            ws_url("pennant_team_list", self.a_world_id),
         ):
             with self.subTest(url=url):
                 self.assertEqual(self.client.get(url).status_code, 200)
@@ -1185,7 +1185,7 @@ class WorldPagesOfTheOtherWorkspaceTest(WorkspaceCase):
     def test_the_index_lists_only_as_worlds(self):
         self.client.force_login(self.b_owner)
 
-        response = self.client.get(reverse("pennant_index"))
+        response = self.client.get(ws_url("pennant_index"))
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, A_WORLD)
@@ -1210,7 +1210,7 @@ class WorldPagesOfTheOtherWorkspaceTest(WorkspaceCase):
             )
         self.client.force_login(self.b_owner)
 
-        response = self.client.get(reverse("pennant_index"))
+        response = self.client.get(ws_url("pennant_index"))
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context["worlds"].mine, [])
@@ -1223,7 +1223,7 @@ class WorldPagesOfTheOtherWorkspaceTest(WorkspaceCase):
         """検査が空振りしていないこと（B に1つだけなら、A で作成フォームが出る）。"""
         self.client.force_login(self.b_owner)
 
-        response = self.client.get(reverse("pennant_index"))
+        response = self.client.get(ws_url("pennant_index"))
 
         self.assertFalse(response.context["worlds"].at_limit)
         self.assertContains(response, 'name="name"')
@@ -1288,9 +1288,7 @@ class ScorebookApiWithoutWorkspaceTest(TestCase):
     def test_the_api_returns_the_json_error(self):
         self.client.force_login(User.objects.create_superuser(username="root", password="x"))
 
-        response = self.client.post(
-            reverse("api_game_scorebook", args=[1]), data="{}", content_type="application/json"
-        )
+        response = self.client.post(ws_url("api_game_scorebook", 1), data="{}", content_type="application/json")
 
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json(), {"ok": False, "error": "ワークスペースがありません。"})

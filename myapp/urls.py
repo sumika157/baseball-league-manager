@@ -1,4 +1,12 @@
-from django.urls import path
+"""URL の表。ワークスペースの中の画面（`workspace_urlpatterns`）と、外の画面（新規登録）に分ける。
+
+W2 T3（#78）の時点では、どちらも今の URL（`""` の下）のまま。T4 でワークスペースの中の画面を
+`/w/<key>/` の下へ移す。中の画面へのリンクは、テンプレートでは `{% workspace_url %}`・`{% scoped_url %}`、
+views では `_url(request, …)`、テストでは `ws_url(…)` で組む（素の `{% url %}`・`reverse` で組まない。
+`test_templates.py` がテンプレートの素の `{% url %}` を検査する）。
+"""
+
+from django.urls import include, path
 
 from .presentation import api, views
 
@@ -11,7 +19,8 @@ def _pennant(route: str, view, name: str):
     return path(f"pennant/<int:world_id>/{route}", view, name=f"pennant_{name}")
 
 
-urlpatterns = [
+# ワークスペースの中の画面（実データとペナント）。T4 で `/w/<key>/` の下へ移す
+workspace_urlpatterns = [
     path("", views.dashboard, name="dashboard"),
     path("teams/", views.team_list, name="team_list"),
     path("players/", views.player_search, name="player_search"),
@@ -57,7 +66,6 @@ urlpatterns = [
         views.player_edit,
         name="player_edit",
     ),
-    path("accounts/signup/", views.SignUpView.as_view(), name="signup"),
     # --- ペナントの世界（参照は誰でも。作成・進める・削除はログイン／オーナー。選手・試合の編集の URL は作らない） ---
     path("pennant/", views.pennant_index, name="pennant_index"),
     path("pennant/<int:world_id>/", views.pennant_world, name="pennant_world"),
@@ -82,4 +90,10 @@ urlpatterns = [
     _pennant("analysis/", views.analysis_index, "analysis_index"),
     _pennant("team/<int:team_id>/analysis/", views.team_analysis, "team_analysis"),
     _pennant("team/<int:team_id>/player/<int:player_id>/", views.player_detail, "player_detail"),
+]
+
+urlpatterns = [
+    path("", include(workspace_urlpatterns)),
+    # --- ワークスペースの外 ---
+    path("accounts/signup/", views.SignUpView.as_view(), name="signup"),
 ]

@@ -2,9 +2,8 @@
 
 from django.contrib.auth.models import User
 from django.test import TestCase
-from django.urls import reverse
 
-from ..helpers import default_workspace
+from ..helpers import default_workspace, ws_url
 
 
 class HeaderNavigationTest(TestCase):
@@ -21,15 +20,15 @@ class HeaderNavigationTest(TestCase):
 
     def test_staff_sees_admin_link(self):
         self.client.force_login(self.staff)
-        response = self.client.get(reverse("dashboard"))
+        response = self.client.get(ws_url("dashboard"))
         self.assertContains(response, self.ADMIN_LINK)
 
     def test_normal_user_does_not_see_admin_link(self):
         self.client.force_login(self.member)
-        self.assertNotContains(self.client.get(reverse("dashboard")), self.ADMIN_LINK)
+        self.assertNotContains(self.client.get(ws_url("dashboard")), self.ADMIN_LINK)
 
     def test_anonymous_does_not_see_admin_link(self):
-        response = self.client.get(reverse("dashboard"))
+        response = self.client.get(ws_url("dashboard"))
         self.assertNotContains(response, self.ADMIN_LINK)
         self.assertContains(response, "ログイン")
 

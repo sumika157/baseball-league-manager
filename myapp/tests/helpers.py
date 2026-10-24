@@ -82,6 +82,21 @@ def real_scope(workspace: orm_models.Workspace | None = None) -> WorldScope:
     return WorldScope.real((workspace or default_workspace()).pk)
 
 
+def ws_url(name: str, *args: object, workspace: orm_models.Workspace | None = None) -> str:
+    """ワークスペースの中の画面（`myapp/urls.py` の `workspace_urlpatterns`）の URL。
+
+    テストが中の画面を開く・リンクを確かめるときは、`reverse` や直書きのパスではなくここを通す（管理画面・
+    ログインの URL は `reverse` のまま）。W2 T3（#78）の時点では `reverse(name, args=args)` と同じで、
+    T4 で workspace（省けば既定のワークスペース）の key を先頭の引数に足す。
+    """
+    return reverse(name, args=args)
+
+
+def header_pages() -> tuple[str, ...]:
+    """ヘッダーの出口（ロゴ・選手検索・ペナント）の URL。ペナントの画面のリンクが向いてよい、世界の外の行き先。"""
+    return (ws_url("dashboard"), ws_url("player_search"), ws_url("pennant_index"))
+
+
 def world_ledger(workspace: orm_models.Workspace | None = None) -> DjangoWorldRepository:
     """世界の台帳（ワークスペースで絞る）。workspace を省くと既定のワークスペース。"""
     return DjangoWorldRepository((workspace or default_workspace()).pk)
@@ -303,7 +318,7 @@ GAME_DAY_UNRECORDED = {
 def post_game_scorebook(client, game_id, payload):
     """スコアブックの保存 API（api_game_scorebook）に、payload をそのまま JSON で POST する（補わない）。"""
     return client.post(
-        reverse("api_game_scorebook", args=[game_id]),
+        ws_url("api_game_scorebook", game_id),
         data=json.dumps(payload),
         content_type="application/json",
     )

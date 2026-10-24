@@ -11,7 +11,6 @@ from django.contrib.auth.models import User
 from django.contrib.messages import get_messages
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from django.urls import reverse
 
 from myapp.domain.pennant.club_plan import ClubPlan, LineupChoice, PlanSection
 from myapp.domain.pennant.schedule import AdvanceTarget
@@ -20,7 +19,7 @@ from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoClubPlanRepository
 from myapp.presentation.views import build_pennant_offseason_service, build_pennant_season_service
 
-from ..helpers import world_scope
+from ..helpers import world_scope, ws_url
 from .test_pennant_advance import YEAR
 from .test_pennant_home import HomeCase
 
@@ -40,10 +39,10 @@ class ScreenCase(HomeCase):
         build_pennant_season_service(world_scope(cls.world_a)).advance(AdvanceTarget.SEASON_END)
 
     def close_url(self, world_id=None) -> str:
-        return reverse("pennant_close_season", args=[self.world_a if world_id is None else world_id])
+        return ws_url("pennant_close_season", self.world_a if world_id is None else world_id)
 
     def offseason_url(self, year=YEAR, world_id=None) -> str:
-        return reverse("pennant_offseason", args=[self.world_a if world_id is None else world_id, year])
+        return ws_url("pennant_offseason", self.world_a if world_id is None else world_id, year)
 
     def post_close(self, expected="2026", world_id=None):
         return self.client.post(self.close_url(world_id), {"expected_year": expected})
@@ -265,7 +264,7 @@ class OffseasonResultTest(ScreenCase):
         retiring = self.managed_players(1)
         self.close_with(retiring)
         team_id = orm_models.PennantWorld.objects.get(id=self.world_a).managed_team_id
-        link = reverse("pennant_player_detail", args=[self.world_a, team_id, retiring[0]])
+        link = ws_url("pennant_player_detail", self.world_a, team_id, retiring[0])
 
         self.assertIn(link, self.client.get(self.offseason_url()).content.decode())
         self.assertEqual(self.client.get(link).status_code, 200)
@@ -284,7 +283,7 @@ class OffseasonResultTest(ScreenCase):
         content = response.content.decode()
         self.assertTrue(other_names)
         # 世界Bの選手は、名前が世界Aと同じ（分岐元が同じ）。ここでは世界Bの id のリンクが出ないことで見る
-        self.assertNotIn(f"/pennant/{self.world_b}/", content)
+        self.assertNotIn(ws_url("pennant_world", self.world_b), content)
 
     def test_the_other_world_and_a_missing_world_are_404(self):
         self.close_with(self.managed_players(1))
@@ -306,7 +305,7 @@ class HomeAfterCloseTest(ScreenCase):
         self.assertIn("順位表（2026年）", content, "順位表は前年の最終順位")
         self.assertIn("2026年のタイトル", content)
         world_league = orm_models.League.objects.get(world_id=self.world_a)
-        titles = reverse("pennant_league_titles_by_year", args=[self.world_a, world_league.id, YEAR])
+        titles = ws_url("pennant_league_titles_by_year", self.world_a, world_league.id, YEAR)
         self.assertIn(titles, content, "タイトル一覧は前年を指す")
         self.assertNotIn(self.close_url(), content)
 
@@ -325,7 +324,7 @@ class RatingsHistoryTest(ScreenCase):
     def history_url(self, player_id: int) -> str:
         stint = orm_models.PlayerStint.objects.filter(player_id=player_id).order_by("-from_year").first()
         assert stint is not None, "選手には在籍がある"
-        return reverse("pennant_player_detail", args=[self.world_a, stint.team_id, player_id])
+        return ws_url("pennant_player_detail", self.world_a, stint.team_id, player_id)
 
     def test_the_first_season_shows_a_single_row(self):
         player = self.managed_players(1)[0]
@@ -364,7 +363,7 @@ class RatingsHistoryTest(ScreenCase):
         team = self.home
         stint = orm_models.PlayerStint.objects.filter(team=team).first()
         assert stint is not None
-        response = self.client.get(reverse("player_detail", args=[team.id, stint.player_id]))
+        response = self.client.get(ws_url("player_detail", team.id, stint.player_id))
         self.assertNotIn("能力の推移", response.content.decode())
 
 

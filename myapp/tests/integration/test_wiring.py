@@ -869,21 +869,20 @@ class WorldWorkspaceResolverTest(SimpleTestCase):
 
 
 class LegacyRealScopeTest(SimpleTestCase):
-    """管理コマンドの一時関数のワークスペース（`legacy_real_scope`）は `measure_pages` だけが使う（W1b T5）。
+    """管理コマンドは一時関数のワークスペースを使わない（W1b T5・W2 T3）。
 
     実データを読み書きするコマンドは `--workspace <key>` を必須で受け取る（`real_scope_for_key`）。新しいコマンドが
     一時関数で範囲を作ると、ワークスペースが複数あるときにエラーにならず id が最小のワークスペースを書き換える。
-    `measure_pages` は今の URL（一時関数のワークスペース）の画面を測るので残す（`--workspace` は W2）。
-    一時関数そのもの（`legacy_workspace_id`）も、定義・管理コマンドの入口・views（今の URL。W2 まで）の外では使わない。
+    最後まで使っていた `measure_pages` も W2 T3 で `--workspace` を取るようにし、`legacy_real_scope` は消した。
+    一時関数そのもの（`legacy_workspace_id`）も、定義と views（今の URL。W2 T4 で URL の key の解決に替える）の
+    外では使わない。
     """
 
     NAME = "legacy_real_scope"
-    ALLOWED = {Path("myapp/management/workspaces.py"), Path("myapp/management/commands/measure_pages.py")}
 
     LEGACY_ID = "legacy_workspace_id"
     LEGACY_ID_ALLOWED = {
         Path("myapp/infrastructure/workspaces.py"),
-        Path("myapp/management/workspaces.py"),
         Path("myapp/presentation/views.py"),
     }
 
@@ -896,12 +895,8 @@ class LegacyRealScopeTest(SimpleTestCase):
             if "tests" not in path.relative_to(root).parts and name in path.read_text(encoding="utf-8")
         }
 
-    def test_only_measure_pages_uses_the_legacy_workspace(self):
-        users = self._users(self.NAME)
-        self.assertIn(Path("myapp/management/commands/measure_pages.py"), users, "検査の対象を拾えていません")
-        self.assertEqual(
-            users - self.ALLOWED, set(), "measure_pages 以外のコマンドが一時関数のワークスペースを使っています"
-        )
+    def test_no_command_uses_the_legacy_workspace(self):
+        self.assertEqual(self._users(self.NAME), set(), "一時関数のワークスペースで範囲を作る管理コマンドがあります")
 
     def test_the_legacy_workspace_id_stays_at_the_entrances(self):
         users = self._users(self.LEGACY_ID)

@@ -10,12 +10,14 @@ from django.urls import reverse
 
 from myapp.presentation.csrf import API_ERROR_MESSAGE
 
+from ..helpers import ws_url
+
 
 class ScorebookApiCsrfTest(TestCase):
     """スコアブックの保存 API（`api_game_scorebook`）。存在しない試合に空の JSON を送り、403 かどうかだけを見る。"""
 
     def setUp(self):
-        self.url = reverse("api_game_scorebook", args=[999999])
+        self.url = ws_url("api_game_scorebook", 999999)
         self.client = Client(enforce_csrf_checks=True)
         # ログイン済みにして、未ログインの 403 と CSRF の 403 を取り違えないようにする
         self.client.force_login(User.objects.create_user("csrf-check", password="x"))

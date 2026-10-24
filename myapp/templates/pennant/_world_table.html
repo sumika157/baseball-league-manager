@@ -1,4 +1,4 @@
-{% comment %}
+{% load scoped %}{% comment %}
 世界の表（一覧の「あなたの世界」「ほかの人の世界」で共通）。rows（PennantWorldListRow）を渡す。
 オーナーは出さない（一覧は誰にでも見せる）。
 {% endcomment %}
@@ -17,7 +17,7 @@
     <tbody>
       {% for row in rows %}
         <tr>
-          <td><a href="{% url 'pennant_world' row.context.world_id %}" class="player-name">{{ row.context.name }}</a></td>
+          <td><a href="{% workspace_url 'pennant_world' row.context.world_id %}" class="player-name">{{ row.context.name }}</a></td>
           <td>{% if row.context.managed_team_name %}{{ row.context.managed_team_name }}{% else %}<span class="stat-muted">—</span>{% endif %}</td>
           <td class="stat-muted">{{ row.context.season_year }}年 · {% if row.context.is_over %}終了{% else %}{{ row.context.phase.value }}{% endif %}{% if row.race %} · <span class="stat-key">{{ row.race.label }}</span>{% endif %}</td>
           {% if row.own_standing %}

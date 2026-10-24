@@ -941,3 +941,46 @@ W2 の T0。`refactor/merge-main-into-workspaces-3` で、epic 2e76eae に main 
 - #219 段階5（PR #288）との関係: main で `get_admin_overview` が `AdminOverviewService`（組み立て口 `build_admin_overview_service()`）へ移る。次の main の取り込みで、そのサービス・組み立て口・`test_wiring.py` の分類を消し、この運営向けの概況を残す（計画の「衝突」の表のとおり）。
 - テスト: integration `test_admin_overview.py`（A・B 両方の行を数える・ペナントの行を数えない・公開と非公開の内訳・上位の並びと件数の上限・一覧の `result_count` と一致・クエリ数がワークスペースを増やしても7本・トップに出る・ワークスペースが無くてもすべて0で開く）。`test_admin.py` の前の概況の検査4件を消し、`test_workspace_isolation.py` の `NoWorkspaceTest` を「概況を出さない」から「最初の1つを作る導線を出す」に替えた。
 - **変異の確かめ**: 行数を `admin_real_queryset` でなく全行で数える → 5件、上位を試合数で並べない → 2件、上位の試合数をワークスペースで相関させない → 2件落ちる（どれも戻した）。
+
+#### T3 URL の組み立てを補助に寄せる（`refactor/workspace-url-helpers`、2026-10-24）
+
+**URL も振る舞いも変えない**（T4 の差分を URL と解決の切り替えだけにする）。マイグレーションは無い。補助はどれも今は `reverse(name, args=args)` と同じで、T4 でワークスペースの key を先頭の引数に足す。
+
+- `myapp/urls.py`: ワークスペースの中の画面43本（実データ20・`pennant_index`・`pennant_world`・`_pennant()` の21本）を `workspace_urlpatterns` にまとめ、`urlpatterns = [path("", include(workspace_urlpatterns)), signup]`。T4 は `""` を `w/<wskey:key>/` に替える。`config/urls.py` は変えていない。計画の登録の補助（`_w(...)`。`workspace_view` で包む）は T4 で足す（T3 では包むものが無い）。
+- テンプレート（`templatetags/scoped.py`）: `{% workspace_url %}`（名前を切り替えない）を足し、`scoped_url` と共通の `_workspace_reverse(context, name, args)` を通す（T4 で key を足すのはこの1か所）。素の `{% url %}` で中の画面を引いていた **74か所**を `workspace_url` に替えた（`scoped_url` 69か所は書き換え不要）。`{% load scoped %}` の無かった15ファイルに足した（`{% extends %}` の無い部品は、出力に改行を足さないよう次のタグと同じ行に置いた）。
+  - **計画からのずれ: 素の `{% url %}` のまま残したのは4か所**（計画はロゴと `404.html` の2か所）。ワークスペースの外の画面（パスワード変更の2画面。`registration/password_change_form.html`・`password_change_done.html`）の「チーム一覧へ」も、外の画面にはワークスペースが無く key を足せないので、ロゴ・`404.html` と同じく T4 で `home` へ向け替える。計画の「78か所」は、管理画面のドキュメント（`django-admindocs-docroot`）2つを中に数えていた（素の `{% url %}` 97 = 管理画面15・ログイン等4・中74・外から中4）。
+  - 残りの素の `{% url %}` 23か所は、管理画面・ログイン・ログアウト・新規登録と、上の4か所。
+- views・API: `_url(request, name, *args)`（`views.py`）。`reverse`・`redirect("名前", …)` の20か所（`views.py`。キーワード引数の `redirect` 4か所を含む）と `api.py` の `redirect_url` 1か所を寄せた。スコアブックの埋め込みの `urls` もここを通る。`_plan_notices` は URL を組まない（タブの名前だけ）ので変えていない。
+- テスト: `tests/helpers.py` に `ws_url(name, *args, workspace=None)`（`workspace` は `orm_models.Workspace`。T3 では使わない。DB も読まない）と `header_pages()`（ヘッダーの出口。3ファイルが同じ定数を持っていた）。`reverse(…)` 434か所（AST で書き換え。52ファイル）・引数の名前が変数の `reverse` 7か所・直書きの URL 約30か所（`test_world_isolation.py`・`test_team_analysis_world.py`・`test_pennant_*`・e2e の `test_smoke.py`・`test_pennant_flow.py`）を替えた。管理画面・ログイン・パスワード変更・`LOGIN_REDIRECT_URL` の `reverse` は替えていない。計画の「直書き59行」は数え方の違いで、URL の直書きとして残っているのは、部分一致で見る目印（`"/edit/"`・`"/history/"`・`f"/team/{id}/"` の `assertNotIn` など。key が入っても意味が変わらない）と、`RequestFactory().get("/")`（ビューの内部を呼ぶための要求で、URL の解決を通らない）と `test_csrf.py`（未知のホストで 400）だけ。e2e の `wait_for_url` の正規表現（`/pennant/\d+/$` など）は部分一致なので、key が前に付いても通る。ログイン後の `wait_for_url(f"{live}/")` は T4 でも `/`（`home`）なので変えていない。
+- 検査（`test_templates.py` の `WorkspaceUrlTagTest`、`SimpleTestCase`）: `workspace_urlpatterns` から URL 名を集め、(1) 素の `{% url %}` が中の名前を引いていたら落とす（例外は上の4か所の表 `OUTSIDE_LINKS`。T4 で `home` に替えたら表から消す）、(2) 例外の表が古くなっていない、(3) `workspace_url`・`scoped_url` は中の名前だけを引く。`game_form.html` の1か所を素の `{% url %}` に戻すと (1) が場所つきで落ちることを確かめた。`epic/postseason` を取り込むとき、新しいテンプレートの素の `{% url 'pennant_…' %}` はここが場所を示す。`test_scoped_url.py` に `workspace_url` の検査（`{% url %}` と同じ・世界の中でも名前を切り替えない）を足した。
+- `measure_pages`: `--workspace <key>`（必須。`management/workspaces.py` の `add_workspace_argument`・`real_scope_for_key`。省いた・無い key は日本語の `CommandError`）、`--as <ユーザー名>`（`force_login` して測る。無いユーザーは `CommandError`）、`--world <id>`（ペナントの10画面も測る。W1b T0 の `measure_pennant.py` と同じ並び・リーグと球団は世界の最初の行。ほかのワークスペースの世界は `CommandError`）。URL は `_url(key, name, *args)`（`reverse`）で組む。`--profile` は `--as` のユーザーで測る。`legacy_real_scope` を消し、`test_wiring.py` の `LegacyRealScopeTest` は「どの管理コマンドも使わない」と「`legacy_workspace_id` は定義と views だけ」に替えた。新しい `test_measure_pages.py`（必須・無い key・16画面が 200・id は指したワークスペースから拾う・`--as`＋`--world` で26画面が 200・ほかのワークスペースの世界・無いユーザー）。T3 の時点では今の URL が開くのは id が最小のワークスペースだけなので、ほかの key を指すと画面は 404 になる（docstring と Wiki に書いた）。
+- 振る舞いを変えていないことの確かめ: 下の計測の写しの上で、基点 0f694b1（使い捨ての worktree）と T3 のコードで、実データ22・ペナント22・ログイン・新規登録の46の URL を未ログイン・`admin`・担当の3通り（138要求）描き、状態コード・リダイレクト先・HTML（CSRF のトークンを伏せる）のハッシュが**すべて一致**した。
+- **T4 で一緒に直すもの**（レビューで挙がった、URL を組む処理ではないが key が入ると変わる箇所）: `config/settings.py` の `LOGIN_REDIRECT_URL = "dashboard"`（外から中への出口。計画どおり `home` に）。`presentation/csrf.py` が API かどうかを `request.path.startswith("/api/")` で決めている（`/w/<key>/api/...` に移ると、CSRF の失敗が JSON ではなく 403.html になる。`test_csrf.py` が `ws_url` 経由なので T4 で落ちて気づける。URL 名（`resolver_match`）で判定する形に替える）。
+- Wiki「アーキテクチャ」（URL の組み立ての補助・`measure_pages` の引数）・「ペナントモードの仕組み」・「仮想データの投入」、`.claude/rules/templates.md`（中の画面は `scoped_url`/`workspace_url`）・`.claude/rules/performance.md`・`run-tests` スキルの `measure_pages` を直した。
+
+**W2 の計測の基準（T0 の手順。2026-10-24）**: 開発 DB を `backup()` で `/tmp/w2-t3/db.sqlite3` に写し（`integrity_check` ok・試合 3,480）、`migrate`（0055〜0057。既定のワークスペースの key は `h8ta3y38rs`）→ `pennant_create --workspace h8ta3y38rs --name w2-baseline --league 1 --league 2 --year 2030 --seed 20261015 --owner admin --managed-team 1`（世界 1・リーグ2・球団12・選手966人）→ `pennant_advance --world 1 --to week`（6日・36試合）。写しの上だけで `s-sato`（staff でない）を球団 1 の担当にした（`Team.managers`）。`admin` は superuser で、既定のワークスペースの持ち主。同じ写しで、基点 0f694b1（使い捨ての worktree。`measure_pages` は引数を取らないので未ログインの実データだけ）と T3 の3通り（`--workspace h8ta3y38rs`／`--as admin --world 1`／`--as s-sato`）を交互に3回ずつ流した。中央値（応答 ms / SQL ms / クエリ）。写しと使い捨ての worktree は計測後に消した。T4・T5 はこの手順で写しを作り直し、T3 の先端と交互に流して比べる。
+
+| 画面 | 基点・未ログイン | T3・未ログイン | T3・持ち主（admin） | T3・担当（s-sato） |
+| --- | ---: | ---: | ---: | ---: |
+| ダッシュボード | 456/59/11 | 449/60/11 | 489/60/13 | 453/60/13 |
+| チーム一覧 | 10/3/3 | 10/3/3 | 11/3/5 | 11/3/5 |
+| 順位表 | 82/3/5 | 83/3/5 | 66/3/7 | 87/3/7 |
+| 順位表(2026) | 63/3/5 | 64/3/5 | 63/3/7 | 62/3/7 |
+| 選手一覧(野手) | 253/8/28 | 258/7/28 | 256/8/31 | 263/8/31 |
+| 選手一覧(投手) | 247/6/28 | 254/6/28 | 253/6/31 | 253/7/31 |
+| 選手詳細 | 86/2/16 | 84/2/16 | 84/2/19 | 89/2/19 |
+| 選手検索 | 14/1/5 | 12/1/5 | 13/1/7 | 15/1/7 |
+| リーグ詳細 | 67/6/6 | 63/6/6 | 104/6/8 | 68/6/8 |
+| リーグ成績 | 164/5/9 | 159/5/9 | 133/5/11 | 175/6/11 |
+| リーグタイトル | 64/8/8 | 63/8/8 | 65/8/10 | 64/8/10 |
+| 試合一覧 | 96/14/7 | 96/14/7 | 97/14/10 | 97/14/10 |
+| 試合詳細 | 479/32/18 | 478/32/18 | 479/32/21 | 473/32/21 |
+| 戦力分析 | 35/6/9 | 36/6/9 | 38/6/11 | 37/6/11 |
+| 戦力分析（起用マップ） | 27/6/9 | 25/5/9 | 28/6/11 | 28/6/11 |
+| 戦力分析（FA取得） | 40/10/14 | 39/10/14 | 41/10/16 | 41/11/16 |
+
+ペナント（T3・持ち主 `admin`。`measure_pages --world 1`）: ペナント一覧 24/3/16、世界ダッシュボード 155/3/53、世界の順位表 11/0/11、世界のリーグ詳細 13/1/12、世界のリーグ成績 113/0/17、世界のチーム一覧 8/1/9、世界の選手一覧 111/2/45、世界の試合一覧 12/1/13、世界の戦力分析 32/1/15、世界の球団ホーム 56/4/30。
+
+- 未ログインは基点と T3 で**全画面のクエリ数が同じ**、応答時間は揺れの範囲（URL を組む補助は `reverse` を1段包むだけ）。
+- ログインした人は、全画面で +2（セッションと利用者の行）。権限を判定する画面（選手一覧・選手詳細・試合一覧・試合詳細）はさらに +1（`DjangoTeamPermissionQuery`。持ち主・担当とも1本）。T4 の完了条件（担当・部外者は +1 まで）と T5 の見込み（持ち主・編集者は判定のある画面で −1）は、この表の持ち主・担当の列と比べる。
+- ペナントの画面は W1b T0（未ログインではなく superuser で測った同じ手順）と比べて、クエリは一覧 +2・世界の画面 +1〜+5（W1b T0 の後の変更の分。内訳は追っていない）。応答時間は同程度。

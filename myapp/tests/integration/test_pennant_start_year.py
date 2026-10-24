@@ -8,7 +8,6 @@
 from datetime import date
 
 from django.contrib.auth.models import User
-from django.urls import reverse
 
 from myapp.domain.exceptions import InvalidWorld
 from myapp.domain.pennant.world import MAX_START_YEAR
@@ -16,7 +15,7 @@ from myapp.domain.value_objects import Season
 from myapp.infrastructure import orm_models
 from myapp.presentation.views import build_pennant_world_service
 
-from ..helpers import make_pennant_world, real_scope
+from ..helpers import make_pennant_world, real_scope, ws_url
 from .world_case import YEAR, WorldCase
 
 
@@ -47,7 +46,7 @@ class StartYearRangeTest(WorldCase):
         """上限は作るときだけ検査する。上限を超えた行があっても、世界の一覧は誰にでも開ける。"""
         make_pennant_world(name="遅い世界", seed=1, start_year=Season.MAX_YEAR)
 
-        response = self.client.get(reverse("pennant_index"))
+        response = self.client.get(ws_url("pennant_index"))
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("遅い世界", response.content.decode())
@@ -64,7 +63,7 @@ class StartYearRangeTest(WorldCase):
             "seed": "1",
         }
 
-        response = self.client.post(reverse("pennant_index"), data)
+        response = self.client.post(ws_url("pennant_index"), data)
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("2001年以降にしてください", response.content.decode())
@@ -76,8 +75,8 @@ class StartYearRangeTest(WorldCase):
         assert stint is not None
 
         for url in (
-            reverse("player_list", args=[self.team.id]),
-            reverse("player_detail", args=[self.team.id, stint.player_id]),
+            ws_url("player_list", self.team.id),
+            ws_url("player_detail", self.team.id, stint.player_id),
         ):
             with self.subTest(url=url):
                 self.assertEqual(self.client.get(url).status_code, 200, url)
@@ -85,7 +84,7 @@ class StartYearRangeTest(WorldCase):
     def test_the_form_takes_its_range_from_the_domain(self):
         self.client.force_login(User.objects.create_user("owner", password="x"))
 
-        content = self.client.get(reverse("pennant_index")).content.decode()
+        content = self.client.get(ws_url("pennant_index")).content.decode()
 
         self.assertIn(f'min="{Season.MIN_YEAR}"', content)
         self.assertIn(f'max="{MAX_START_YEAR}"', content)
@@ -102,7 +101,7 @@ class StartYearRangeTest(WorldCase):
 
         for year in (Season.MIN_YEAR - 1, MAX_START_YEAR + 1):
             with self.subTest(year=year):
-                response = self.client.post(reverse("pennant_index"), {**data, "start_year": str(year)})
+                response = self.client.post(ws_url("pennant_index"), {**data, "start_year": str(year)})
 
                 self.assertEqual(response.status_code, 200)
                 self.assertIn(
@@ -116,8 +115,8 @@ class StartYearRangeTest(WorldCase):
         assert created.world.id is not None
 
         for url in (
-            reverse("pennant_world", args=[created.world.id]),
-            reverse("pennant_club", args=[created.world.id]),
+            ws_url("pennant_world", created.world.id),
+            ws_url("pennant_club", created.world.id),
         ):
             with self.subTest(url=url):
                 self.assertEqual(self.client.get(url).status_code, 200, url)
@@ -147,9 +146,9 @@ class UncountableAgeTest(WorldCase):
         assert team is not None
 
         for url in (
-            reverse("pennant_world", args=[world_id]),
-            reverse("pennant_club", args=[world_id]),
-            reverse("pennant_player_list", args=[world_id, team.id]),
+            ws_url("pennant_world", world_id),
+            ws_url("pennant_club", world_id),
+            ws_url("pennant_player_list", world_id, team.id),
         ):
             with self.subTest(url=url):
                 self.assertEqual(self.client.get(url, follow=True).status_code, 200, url)

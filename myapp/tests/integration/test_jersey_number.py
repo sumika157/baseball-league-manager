@@ -9,13 +9,12 @@ from django.contrib.auth.models import User
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 from django.test import TransactionTestCase
-from django.urls import reverse
 
 from myapp.domain.value_objects import JerseyNumber, Position, RosterLimits
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoTeamRepository
 
-from ..helpers import login_as_manager, real_scope
+from ..helpers import login_as_manager, real_scope, ws_url
 from .base import BaseCase
 
 
@@ -56,7 +55,7 @@ class JerseyNumberRoundTripTest(BaseCase):
 class JerseyNumberScreenTest(BaseCase):
     def setUp(self):
         super().setUp()
-        self.url = reverse("player_list", args=[self.team.id])
+        self.url = ws_url("player_list", self.team.id)
         login_as_manager(self.client, self.team, username="editor")
 
     def test_registering_with_double_zero(self):
@@ -95,7 +94,7 @@ class JerseyNumberScreenTest(BaseCase):
         player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
 
         self.client.post(
-            reverse("player_edit", args=[self.team.id, player.id]),
+            ws_url("player_edit", self.team.id, player.id),
             {"name": "山田", "number": "00", "position": "内野手"},
         )
 
@@ -105,7 +104,7 @@ class JerseyNumberScreenTest(BaseCase):
         developmental = self.roster.register_player(self.team.id, "育成", 120, "投手", "育成")
 
         self.client.post(
-            reverse("player_edit", args=[self.team.id, developmental.id]),
+            ws_url("player_edit", self.team.id, developmental.id),
             {"promote": "1", "promote_number": "00"},
         )
 

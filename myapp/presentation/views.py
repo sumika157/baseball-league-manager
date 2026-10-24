@@ -179,6 +179,15 @@ def _requires_login(request):
     return redirect_to_login(request.get_full_path())
 
 
+def _url(request, name: str, *args) -> str:
+    """ワークスペースの中の画面の URL（`myapp/urls.py` の `workspace_urlpatterns`）。
+
+    views・API がリダイレクト先やリンクを組むときは、`reverse` を直接呼ばずにここを通す。W2 T3（#78）の
+    時点では `reverse(name, args=args)` と同じで、T4 で今の要求のワークスペースの key を先頭の引数に足す。
+    """
+    return reverse(name, args=args)
+
+
 def _requires_team_permission(request, *team_ids):
     """担当チームでなければ拒否する。
 
@@ -716,7 +725,7 @@ def pennant_index(request):
         if request.method == "POST" and form.is_valid():
             created = _create_world(request, form)
             if created is not None:
-                return redirect("pennant_world", world_id=created)
+                return redirect(_url(request, "pennant_world", created))
 
     return render(
         request,
@@ -815,7 +824,7 @@ def pennant_advance(request, world_id):
     `expected_today` がずれていたら進めない（二重送信や、別の画面で先に進めたときに、さらに進めてしまわない）。
     """
     world = _world_context(request, world_id)
-    home_url = reverse("pennant_world", args=[world_id])
+    home_url = _url(request, "pennant_world", world_id)
     if request.method != "POST":
         return redirect(home_url)
     denied = _requires_world_owner(request, world)
@@ -861,7 +870,7 @@ def pennant_close_season(request, world_id):
     さらに次の年を締めてしまわない）。`expected_year` の欠落は「検査なし」にせず弾く。
     """
     world = _world_context(request, world_id)
-    home_url = reverse("pennant_world", args=[world_id])
+    home_url = _url(request, "pennant_world", world_id)
     if request.method != "POST":
         return redirect(home_url)
     denied = _requires_world_owner(request, world)
@@ -882,7 +891,7 @@ def pennant_close_season(request, world_id):
         messages.warning(request, str(error))
         # 締めていると確かめられた年（error.year）のオフの結果へ。確かめられないとき（年度のずれなど）はホームへ
         if error.year is not None:
-            return redirect("pennant_offseason", world_id=world_id, year=error.year)
+            return redirect(_url(request, "pennant_offseason", world_id, error.year))
         return redirect(home_url)
     except DomainError as error:
         messages.error(request, str(error))
@@ -898,7 +907,7 @@ def pennant_close_season(request, world_id):
         messages.warning(request, f"引退・戦力外の選手を含んでいたため、自軍の編成（{labels}）を自動に戻しました。")
     if result.without_ratings_count:
         messages.info(request, f"能力の無い選手 {result.without_ratings_count}人は、翌年の能力を作りませんでした。")
-    return redirect("pennant_offseason", world_id=world_id, year=result.year)
+    return redirect(_url(request, "pennant_offseason", world_id, result.year))
 
 
 def pennant_offseason(request, world_id, year):
@@ -953,7 +962,7 @@ def pennant_delete(request, world_id):
     if request.method == "POST":
         build_pennant_world_service(_real_scope(request)).delete_world(world_id)
         messages.success(request, f"世界「{world.name}」を削除しました。")
-        return redirect("pennant_index")
+        return redirect(_url(request, "pennant_index"))
     deletion = build_pennant_home_service(_world_scope(request, world_id)).get_deletion(world)
     return _render(request, "pennant/world_delete.html", {"deletion": deletion}, world)
 
@@ -1013,7 +1022,7 @@ def pennant_club(request, world_id):
 
 
 def _post_club(request, world: WorldContext):
-    club_url = reverse("pennant_club", args=[world.world_id])
+    club_url = _url(request, "pennant_club", world.world_id)
     team_id = world.managed_team_id
     if team_id is None:
         messages.error(request, "この世界には、受け持つ球団が決まっていません。")
@@ -1064,7 +1073,7 @@ def _post_release(request, world: WorldContext):
     指名として成立しない・古い画面なら、チェックを残して再表示する。締められなくなっていたら（別の画面で締めた・
     年が変わった）、理由を出して編成の画面へ戻す（タブはもう出ない）。
     """
-    club_url = reverse("pennant_club", args=[world.world_id])
+    club_url = _url(request, "pennant_club", world.world_id)
     action = request.POST.get("action", "")
     if action not in ACTIONS:
         messages.error(request, "その操作はできません。")
@@ -1344,7 +1353,7 @@ def player_list(request, team_id, world_id=None):
             else:
                 messages.success(request, f"{form.cleaned_data['name']} 選手を登録しました。")
                 mode = PITCHER_MODE if form.cleaned_data["position"] == Position.PITCHER.value else BATTER_MODE
-                return redirect(f"{reverse('player_list', args=[team_id])}?pos={mode}")
+                return redirect(f"{_url(request, 'player_list', team_id)}?pos={mode}")
         else:
             messages.error(request, _first_error(form))
 
@@ -1576,7 +1585,7 @@ def game_create(request):
                 messages.error(request, str(error))
             else:
                 messages.success(request, "試合を登録しました。続けて成績を入力できます。")
-                return redirect(reverse("game_edit", args=[game.id]))
+                return redirect(_url(request, "game_edit", game.id))
     elif request.method == "POST":
         messages.error(request, _first_error(form))
 
@@ -1674,8 +1683,8 @@ def _game_edit_payload(request, data: GameEditData) -> dict:
         "vocabulary": _scorebook_vocabulary(),
         "max_innings": MAX_INNINGS,
         "urls": {
-            "save": reverse("api_game_scorebook", args=[game.id]),
-            "detail": reverse("game_detail", args=[game.id]),
+            "save": _url(request, "api_game_scorebook", game.id),
+            "detail": _url(request, "game_detail", game.id),
         },
         "csrf_token": get_token(request),
     }
@@ -1829,7 +1838,7 @@ def player_edit(request, team_id, player_id):
         if "retire" in request.POST:
             build_roster_service(_real_scope(request)).retire_player(team_id, player_id)
             messages.success(request, f"{detail.name} 選手を退団にしました。")
-            return redirect(reverse("player_list", args=[team_id]))
+            return redirect(_url(request, "player_list", team_id))
 
         if "appoint_captain" in request.POST:
             try:
@@ -1838,7 +1847,7 @@ def player_edit(request, team_id, player_id):
                 messages.error(request, str(error))
             else:
                 messages.success(request, f"{detail.name} 選手を主将に指名しました。")
-            return redirect(reverse("player_edit", args=[team_id, player_id]))
+            return redirect(_url(request, "player_edit", team_id, player_id))
 
         if "promote" in request.POST:
             # 支配下登録は新しい背番号が要るので、フォームの欄を自分で読む。表記の検証はドメインが行う
@@ -1849,17 +1858,17 @@ def player_edit(request, team_id, player_id):
                 messages.error(request, str(error))
             else:
                 messages.success(request, f"{detail.name} 選手を支配下登録にしました（背番号 {new_number}）。")
-            return redirect(reverse("player_edit", args=[team_id, player_id]))
+            return redirect(_url(request, "player_edit", team_id, player_id))
 
         if "declare_fa" in request.POST or "remove_fa" in request.POST:
             # FA 宣言の追加・取り消しも、フォームの検証を通さず押されたボタンで判断する
             _handle_free_agency(request, team_id, player_id, detail.name)
-            return redirect(reverse("player_edit", args=[team_id, player_id]))
+            return redirect(_url(request, "player_edit", team_id, player_id))
 
         if "remove_captain" in request.POST:
             build_roster_service(_real_scope(request)).remove_captain(team_id, player_id)
             messages.success(request, f"{detail.name} 選手の主将を解任しました。")
-            return redirect(reverse("player_edit", args=[team_id, player_id]))
+            return redirect(_url(request, "player_edit", team_id, player_id))
 
         base_form = PlayerUpdateForm(request.POST)
         if base_form.is_valid():
@@ -1876,7 +1885,7 @@ def player_edit(request, team_id, player_id):
             else:
                 messages.success(request, "選手情報を更新しました。")
                 mode = PITCHER_MODE if base_form.cleaned_data["position"] == Position.PITCHER.value else BATTER_MODE
-                return redirect(f"{reverse('player_list', args=[team_id])}?pos={mode}")
+                return redirect(f"{_url(request, 'player_list', team_id)}?pos={mode}")
         else:
             messages.error(request, _first_error(base_form))
 
@@ -1952,9 +1961,9 @@ def analysis_index(request, world_id=None):
         name: request.GET[name] for name in ("year", "tab", "color", "pos", "sort", "dir") if request.GET.get(name)
     }
     if world is None:
-        url = reverse("team_analysis", args=[team_id])
+        url = _url(request, "team_analysis", team_id)
     else:
-        url = reverse("pennant_team_analysis", args=[world.world_id, team_id])
+        url = _url(request, "pennant_team_analysis", world.world_id, team_id)
     return redirect(f"{url}?{urlencode(query)}" if query else url)
 
 

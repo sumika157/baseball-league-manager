@@ -2,8 +2,6 @@
 
 from datetime import date
 
-from django.urls import reverse
-
 from myapp.domain import services as domain_services
 from myapp.domain.entities import Game
 from myapp.domain.exceptions import InvalidGame
@@ -17,7 +15,7 @@ from myapp.infrastructure.repositories import (
     DjangoGameRepository,
 )
 
-from ..helpers import make_league, play_game, real_scope
+from ..helpers import make_league, play_game, real_scope, ws_url
 from .base import BaseCase
 
 
@@ -31,7 +29,7 @@ class MatchupViewTest(BaseCase):
         play_game(self.team, self.rival, home_score=5, away_score=3, day=1)
         play_game(self.team, self.rival, home_score=2, away_score=1, day=2)
         play_game(self.third, self.team, home_score=6, away_score=0, day=3)
-        self.url = reverse("league_detail", args=[self.league.id])
+        self.url = ws_url("league_detail", self.league.id)
 
     def _table(self):
         return self.service.get_league_detail(self.league.id).matchups
@@ -97,7 +95,7 @@ class MonthlySplitViewTest(BaseCase):
         self._play(month=4, day=1, at_bats=4, singles=1)
         self._play(month=4, day=2, at_bats=4, singles=1)
         self._play(month=5, day=1, at_bats=4, singles=3)
-        self.url = reverse("player_detail", args=[self.team.id, self.player.id])
+        self.url = ws_url("player_detail", self.team.id, self.player.id)
 
     def _play(self, *, month, day, **line):
         game = Game(
@@ -140,7 +138,7 @@ class MonthlySplitViewTest(BaseCase):
         self.assertContains(response, "2026年4月")
 
     def test_page_of_a_player_without_games_omits_the_table(self):
-        response = self.client.get(reverse("player_detail", args=[self.team.id, self.pitcher.id]))
+        response = self.client.get(ws_url("player_detail", self.team.id, self.pitcher.id))
 
         self.assertNotContains(response, "月別成績")
 
@@ -151,7 +149,7 @@ class YearlySplitViewTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
-        self.url = reverse("player_detail", args=[self.team.id, self.player.id])
+        self.url = ws_url("player_detail", self.team.id, self.player.id)
 
     def _play(self, *, year=2026, month=4, day=1, **line):
         play_game(
@@ -236,7 +234,7 @@ class PlayerGameMonthTabTest(BaseCase):
         self._play(month=4, day=1)
         self._play(month=4, day=2)
         self._play(month=5, day=1)
-        self.url = reverse("player_detail", args=[self.team.id, self.player.id])
+        self.url = ws_url("player_detail", self.team.id, self.player.id)
 
     def _play(self, *, month, day):
         play_game(
@@ -289,7 +287,7 @@ class TeamMonthlySplitViewTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.batter = self.roster.register_player(self.team.id, "山田", 10, "内野手")
-        self.url = reverse("player_list", args=[self.team.id])
+        self.url = ws_url("player_list", self.team.id)
 
     def test_grouped_by_month_oldest_first(self):
         play_game(self.team, self.rival, month=5, day=1)

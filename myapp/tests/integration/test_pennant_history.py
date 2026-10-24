@@ -13,7 +13,6 @@ from unittest import mock
 from django.db import connection
 from django.test import SimpleTestCase
 from django.test.utils import CaptureQueriesContext
-from django.urls import reverse
 
 from myapp.application.dto import LeagueOption, LeagueStandings, StandingRow
 from myapp.application.pennant_history import _selected_league
@@ -30,17 +29,17 @@ from myapp.presentation.views import (
     build_service,
 )
 
-from ..helpers import real_scope, world_scope
+from ..helpers import real_scope, world_scope, ws_url
 from .test_pennant_advance import YEAR
 from .test_pennant_home import HomeCase
 
 
 class HistoryCase(HomeCase):
     def history_url(self, world_id=None) -> str:
-        return reverse("pennant_history", args=[self.world_a if world_id is None else world_id])
+        return ws_url("pennant_history", self.world_a if world_id is None else world_id)
 
     def club_url(self, team_id, world_id=None) -> str:
-        return reverse("pennant_team_history", args=[self.world_a if world_id is None else world_id, team_id])
+        return ws_url("pennant_team_history", self.world_a if world_id is None else world_id, team_id)
 
     def finish_season(self) -> None:
         """日程を作り、いまのシーズンを最後まで進める（シーズン終了）。"""
@@ -274,7 +273,7 @@ class ClubHistoryTest(HistoryCase):
 
         self.assertIn("優勝", champion)
         self.assertIn("1回", champion)
-        self.assertIn(reverse("pennant_standings_by_year", args=[self.world_a, YEAR]), champion)
+        self.assertIn(ws_url("pennant_standings_by_year", self.world_a, YEAR), champion)
         self.assertIn("0回", second)
         self.assertNotIn('badge bg-primary">優勝', second)
 
@@ -290,8 +289,8 @@ class LinksTest(HistoryCase):
         team = orm_models.Team.objects.filter(league__world_id=self.world_a).first()
         real = orm_models.Team.objects.filter(league__world_id__isnull=True).first()
 
-        world_page = self.client.get(reverse("pennant_player_list", args=[self.world_a, team.id])).content.decode()
-        real_page = self.client.get(reverse("player_list", args=[real.id])).content.decode()
+        world_page = self.client.get(ws_url("pennant_player_list", self.world_a, team.id)).content.decode()
+        real_page = self.client.get(ws_url("player_list", real.id)).content.decode()
 
         self.assertIn(self.club_url(team.id), world_page)
         self.assertNotIn("球団史", real_page)
@@ -304,7 +303,7 @@ class LinksTest(HistoryCase):
         orm_models.PennantWorld.objects.filter(id=self.world_a).update(managed_team_id=team_id)
 
         with mock.patch("myapp.application.pennant_view.is_final_season", return_value=True):
-            content = self.client.get(reverse("pennant_world", args=[self.world_a])).content.decode()
+            content = self.client.get(ws_url("pennant_world", self.world_a)).content.decode()
 
         self.assertIn("世界の終了", content)
         self.assertIn(f'href="{self.club_url(team_id)}">球団史を見る', content)

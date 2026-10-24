@@ -3,7 +3,6 @@
 from unittest import mock
 
 from django.contrib.auth.models import User
-from django.urls import reverse
 
 from myapp.application.dto import LineupSlot
 from myapp.application.foreign_quota import ForeignQuotaExemptions
@@ -29,6 +28,7 @@ from ..helpers import (
     real_scope,
     register_lineup,
     to_plate_appearances,
+    ws_url,
 )
 from .base import BaseCase
 
@@ -396,11 +396,11 @@ class CaptaincyApplicationTest(BaseCase):
         login_as_manager(self.client, self.team, username="u")
 
         response = self.client.post(
-            reverse("player_edit", args=[self.team.id, self.player.id]),
+            ws_url("player_edit", self.team.id, self.player.id),
             {"appoint_captain": "1"},
         )
 
-        self.assertRedirects(response, reverse("player_edit", args=[self.team.id, self.player.id]))
+        self.assertRedirects(response, ws_url("player_edit", self.team.id, self.player.id))
         team = DjangoTeamRepository(real_scope()).find_by_id(self.team.id)
         self.assertEqual(team.current_captain.id, self.player.id)
 
@@ -410,7 +410,7 @@ class CaptaincyApplicationTest(BaseCase):
         login_as_manager(self.client, self.team, username="u")
 
         response = self.client.post(
-            reverse("player_edit", args=[self.team.id, self.player.id]),
+            ws_url("player_edit", self.team.id, self.player.id),
             {"appoint_captain": "1"},
             follow=True,
         )

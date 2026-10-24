@@ -13,7 +13,6 @@ from django.core.management import call_command
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 from django.test.utils import CaptureQueriesContext
-from django.urls import reverse
 
 from myapp.application.dto import LineupSlot
 from myapp.domain.entities import FieldingError, PlateAppearance, RunnerAdvance
@@ -29,7 +28,7 @@ from myapp.domain.value_objects import (
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
 
-from ..helpers import DEFAULT_WORKSPACE_KEY, build_recording_service, login_as_manager, play_game, real_scope
+from ..helpers import DEFAULT_WORKSPACE_KEY, build_recording_service, login_as_manager, play_game, real_scope, ws_url
 from .base import BaseCase
 
 P = PlateAppearanceResult
@@ -550,7 +549,7 @@ class SubstitutionTest(FieldingTestBase):
     def test_the_edit_payload_returns_the_input_only_for_rows_that_need_it(self):
         self._record(self._slots(entered_batter=2))
         login_as_manager(self.client, self.team)
-        payload = self.client.get(reverse("game_edit", args=[self.game.id])).context["payload"]
+        payload = self.client.get(ws_url("game_edit", self.game.id)).context["payload"]
         rows = {slot["player_id"]: slot for team in payload["teams"] for slot in team["lineup"]}
 
         defender = rows[self.defender]
@@ -569,7 +568,7 @@ class PlayerPageFieldingTest(FieldingTestBase):
         self.record(second.id, year=2027)
 
     def _url(self, player_id):
-        return reverse("player_detail", args=[self.team.id, player_id])
+        return ws_url("player_detail", self.team.id, player_id)
 
     def _fielding_table(self, player_id) -> tuple[int, list[int], str]:
         html = self.client.get(self._url(player_id)).content.decode()
@@ -651,13 +650,13 @@ class GameDetailFieldingTest(FieldingTestBase):
         self.assertEqual(names[-1], "ホーム先発")
 
     def test_the_page_renders_a_fielding_card_for_both_teams(self):
-        body = self.client.get(reverse("game_detail", args=[self.game.id])).content.decode()
+        body = self.client.get(ws_url("game_detail", self.game.id)).content.decode()
 
         self.assertIn(f"{self.team.name} 守備", body)
         self.assertIn(f"{self.rival.name} 守備", body)
 
     def test_fielding_table_keeps_header_and_rows_aligned(self):
-        body = self.client.get(reverse("game_detail", args=[self.game.id])).content.decode()
+        body = self.client.get(ws_url("game_detail", self.game.id)).content.decode()
 
         tables = [t for t in re.findall(r"<table.*?</table>", body, flags=re.DOTALL) if "<th>選手名</th>" in t]
         fielding = [t for t in tables if "刺殺" in t]
@@ -671,6 +670,6 @@ class GameDetailFieldingTest(FieldingTestBase):
     def test_a_game_without_plate_appearances_has_no_card(self):
         plain = play_game(self.team, self.rival, home_score=1, away_score=0)
 
-        body = self.client.get(reverse("game_detail", args=[plain.id])).content.decode()
+        body = self.client.get(ws_url("game_detail", plain.id)).content.decode()
 
         self.assertNotIn("守備</div>", body)

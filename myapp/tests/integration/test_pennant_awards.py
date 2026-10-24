@@ -14,7 +14,6 @@ from io import StringIO
 from unittest import mock
 
 from django.core.management import CommandError, call_command
-from django.urls import reverse
 
 from myapp.application.pennant_awards import derive_award_rows
 from myapp.application.services import TeamApplicationService
@@ -34,7 +33,7 @@ from myapp.presentation.views import (
     build_pennant_world_view,
 )
 
-from ..helpers import build_service, real_scope, world_scope
+from ..helpers import build_service, real_scope, world_scope, ws_url
 from .test_pennant_advance import YEAR
 from .test_pennant_home import HomeCase
 
@@ -81,7 +80,7 @@ class ClosedYearCase(HomeCase):
         return build_pennant_world_view(real_scope().workspace_id).get_context(self.world_a)
 
     def player_url(self, row, world_id=None) -> str:
-        return reverse("pennant_player_detail", args=[world_id or self.world_a, row.team_id, row.player_id])
+        return ws_url("pennant_player_detail", world_id or self.world_a, row.team_id, row.player_id)
 
 
 class SavedAwardsTest(ClosedYearCase):
@@ -202,8 +201,8 @@ class ScreensReadTheAwardsTest(ClosedYearCase):
         row = next(r for r in self.saved() if r.value == "9.999")
 
         pages = (
-            reverse("pennant_history", args=[self.world_a]),
-            reverse("pennant_team_history", args=[self.world_a, row.team_id]),
+            ws_url("pennant_history", self.world_a),
+            ws_url("pennant_team_history", self.world_a, row.team_id),
             self.player_url(row),
         )
         for url in pages:
@@ -265,9 +264,7 @@ class PlayerPageTest(ClosedYearCase):
             autospec=True,
             side_effect=TeamApplicationService.get_league_titles,
         ) as titles:
-            response = self.client.get(
-                reverse("pennant_player_detail", args=[self.world_a, stint.team_id, stint.player_id])
-            )
+            response = self.client.get(ws_url("pennant_player_detail", self.world_a, stint.team_id, stint.player_id))
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(titles.call_count, 0)
@@ -283,9 +280,7 @@ class PlayerPageTest(ClosedYearCase):
             .first()
         )
 
-        response = self.client.get(
-            reverse("pennant_player_detail", args=[self.world_a, stint.team_id, stint.player_id])
-        )
+        response = self.client.get(ws_url("pennant_player_detail", self.world_a, stint.team_id, stint.player_id))
 
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, "獲得タイトル")
@@ -293,7 +288,7 @@ class PlayerPageTest(ClosedYearCase):
     def test_the_real_data_page_has_no_titles(self):
         stint = orm_models.PlayerStint.objects.filter(team__league__world__isnull=True).first()
 
-        response = self.client.get(reverse("player_detail", args=[stint.team_id, stint.player_id]))
+        response = self.client.get(ws_url("player_detail", stint.team_id, stint.player_id))
 
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, "獲得タイトル")

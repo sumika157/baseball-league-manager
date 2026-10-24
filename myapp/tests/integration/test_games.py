@@ -2,7 +2,6 @@
 
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from django.urls import reverse
 
 from myapp.domain.value_objects import (
     BattingLine,
@@ -19,6 +18,7 @@ from ..helpers import (
     play_game,
     post_game_scorebook_day_unrecorded,
     register_lineup,
+    ws_url,
 )
 from .base import BaseCase
 
@@ -43,7 +43,7 @@ class GameViewTest(BaseCase):
         )
 
     def test_list_renders(self):
-        response = self.client.get(reverse("game_list"))
+        response = self.client.get(ws_url("game_list"))
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "テストチーム")
@@ -51,7 +51,7 @@ class GameViewTest(BaseCase):
 
     def test_list_is_newest_first(self):
         play_game(self.team, self.rival, day=5)
-        rows = self.client.get(reverse("game_list")).context["games"]
+        rows = self.client.get(ws_url("game_list")).context["games"]
 
         self.assertEqual(rows[0].played_on.day, 5)
 
@@ -59,33 +59,33 @@ class GameViewTest(BaseCase):
         other = orm_models.Team.objects.create(league=self.league, name="第三チーム")
         play_game(other, self.rival, day=9)
 
-        rows = self.client.get(f"{reverse('game_list')}?team={other.id}").context["games"]
+        rows = self.client.get(f"{ws_url('game_list')}?team={other.id}").context["games"]
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0].home_team_name, "第三チーム")
 
     def test_list_can_be_filtered_by_year(self):
         play_game(self.team, self.rival, year=2025, day=1)
-        rows = self.client.get(f"{reverse('game_list')}?year=2025").context["games"]
+        rows = self.client.get(f"{ws_url('game_list')}?year=2025").context["games"]
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0].year, 2025)
 
     def test_invalid_filter_is_ignored(self):
-        response = self.client.get(f"{reverse('game_list')}?year=abc&team=xyz")
+        response = self.client.get(f"{ws_url('game_list')}?year=abc&team=xyz")
         self.assertEqual(response.status_code, 200)
 
     def test_list_can_be_filtered_by_month(self):
         play_game(self.team, self.rival, month=7, day=20)
 
-        rows = self.client.get(f"{reverse('game_list')}?year=2026&month=7").context["games"]
+        rows = self.client.get(f"{ws_url('game_list')}?year=2026&month=7").context["games"]
 
         self.assertEqual([r.played_on.month for r in rows], [7])
 
     def test_month_choices_come_from_the_games(self):
         play_game(self.team, self.rival, month=7, day=20)
 
-        response = self.client.get(reverse("game_list"))
+        response = self.client.get(ws_url("game_list"))
 
         self.assertEqual(response.context["months"], [4, 7])
 
@@ -94,7 +94,7 @@ class GameViewTest(BaseCase):
         play_game(self.team, self.rival, year=2025, month=9, day=1)
         play_game(self.team, self.rival, month=7, day=20)
 
-        response = self.client.get(reverse("game_list"))
+        response = self.client.get(ws_url("game_list"))
 
         self.assertEqual(response.context["selected_year"], 2026)
         self.assertEqual(response.context["selected_month"], 7)
@@ -102,7 +102,7 @@ class GameViewTest(BaseCase):
 
     def test_month_without_games_falls_back_instead_of_erroring(self):
         """年やチームを変えると選んでいた月に試合が無いことがある。エラーにしない。"""
-        response = self.client.get(f"{reverse('game_list')}?year=2026&month=12")
+        response = self.client.get(f"{ws_url('game_list')}?year=2026&month=12")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context["selected_month"], 4)
@@ -113,7 +113,7 @@ class GameViewTest(BaseCase):
         y = orm_models.Team.objects.create(league=other_league, name="Yチーム")
         play_game(x, y, day=3)
 
-        rows = self.client.get(f"{reverse('game_list')}?league={other_league.id}").context["games"]
+        rows = self.client.get(f"{ws_url('game_list')}?league={other_league.id}").context["games"]
 
         self.assertEqual([r.home_team_name for r in rows], ["Xチーム"])
 
@@ -125,14 +125,14 @@ class GameViewTest(BaseCase):
 
         for league in (self.league, other_league):
             with self.subTest(league=league.name):
-                rows = self.client.get(f"{reverse('game_list')}?league={league.id}").context["games"]
+                rows = self.client.get(f"{ws_url('game_list')}?league={league.id}").context["games"]
                 self.assertIn(6, [r.played_on.day for r in rows])
 
     def test_league_tabs_are_shown_with_an_all_option(self):
         """リーグはタブで切り替える。"""
         other_league = make_league(name="別リーグ")
 
-        body = self.client.get(reverse("game_list")).content.decode()
+        body = self.client.get(ws_url("game_list")).content.decode()
 
         for league in (self.league, other_league):
             with self.subTest(league=league.name):
@@ -143,7 +143,7 @@ class GameViewTest(BaseCase):
         """リーグを切り替えても、見ている月は保つ。"""
         play_game(self.team, self.rival, month=7, day=20)
 
-        body = self.client.get(f"{reverse('game_list')}?year=2026&month=7").content.decode()
+        body = self.client.get(f"{ws_url('game_list')}?year=2026&month=7").content.decode()
 
         self.assertIn(f"league={self.league.id}&amp;month=7", body)
 
@@ -152,7 +152,7 @@ class GameViewTest(BaseCase):
         other_league = make_league(name="別リーグ")
         orm_models.Team.objects.create(league=other_league, name="Xチーム")
 
-        response = self.client.get(f"{reverse('game_list')}?league={self.league.id}")
+        response = self.client.get(f"{ws_url('game_list')}?league={self.league.id}")
 
         self.assertEqual(
             {t.name for t in response.context["teams"]},
@@ -164,7 +164,7 @@ class GameViewTest(BaseCase):
         other_league = make_league(name="別リーグ")
         x = orm_models.Team.objects.create(league=other_league, name="Xチーム")
 
-        response = self.client.get(f"{reverse('game_list')}?league={self.league.id}&team={x.id}")
+        response = self.client.get(f"{ws_url('game_list')}?league={self.league.id}&team={x.id}")
 
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(response.context["selected_team"])
@@ -175,7 +175,7 @@ class GameViewTest(BaseCase):
         managed = orm_models.Team.objects.create(league=other_league, name="担当チーム")
         login_as_manager(self.client, managed)
 
-        response = self.client.get(f"{reverse('game_list')}?league={self.league.id}")
+        response = self.client.get(f"{ws_url('game_list')}?league={self.league.id}")
 
         self.assertTrue(response.context["can_create_game"])
 
@@ -186,14 +186,14 @@ class GameViewTest(BaseCase):
         y = orm_models.Team.objects.create(league=other_league, name="Yチーム")
         play_game(x, y, month=8, day=1)
 
-        response = self.client.get(f"{reverse('game_list')}?league={other_league.id}")
+        response = self.client.get(f"{ws_url('game_list')}?league={other_league.id}")
 
         self.assertEqual(response.context["months"], [8])
         self.assertEqual(response.context["selected_month"], 8)
 
     def test_result_label_is_the_same_from_both_paths(self):
         """結果の文言は GameRow が持つ。参照クエリと集約の経路で食い違わないこと。"""
-        from_query = self.client.get(reverse("game_list")).context["games"][0]
+        from_query = self.client.get(ws_url("game_list")).context["games"][0]
         from_aggregate = self.game_view.get_game_detail(self.game.id).game
 
         self.assertEqual(from_query.result, "テストチーム の勝ち")
@@ -213,19 +213,19 @@ class GameViewTest(BaseCase):
         試合を増やしてもクエリ数が変わらないことで、明細を読んでいないと分かる。
         """
         with CaptureQueriesContext(connection) as first:
-            self.client.get(reverse("game_list"))
+            self.client.get(ws_url("game_list"))
 
         for day in range(2, 12):
             play_game(self.team, self.rival, day=day)
 
         with CaptureQueriesContext(connection) as grown:
-            response = self.client.get(reverse("game_list"))
+            response = self.client.get(ws_url("game_list"))
 
         self.assertEqual(len(response.context["games"]), 11)
         self.assertEqual(len(grown.captured_queries), len(first.captured_queries))
 
     def test_detail_shows_both_stat_kinds(self):
-        response = self.client.get(reverse("game_detail", args=[self.game.id]))
+        response = self.client.get(ws_url("game_detail", self.game.id))
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "山田")
@@ -240,7 +240,7 @@ class GameViewTest(BaseCase):
         self.assertAlmostEqual(detail.pitching[0].earned_run_average, 2 * 27 / 21)
 
     def test_missing_game_returns_404(self):
-        self.assertEqual(self.client.get(reverse("game_detail", args=[9999])).status_code, 404)
+        self.assertEqual(self.client.get(ws_url("game_detail", 9999)).status_code, 404)
 
 
 class GameEntryTest(BaseCase):
@@ -254,7 +254,7 @@ class GameEntryTest(BaseCase):
 
     def _create_game(self):
         return self.client.post(
-            reverse("game_create"),
+            ws_url("game_create"),
             {
                 "year": "2026",
                 "played_on": "2026-04-01",
@@ -265,7 +265,7 @@ class GameEntryTest(BaseCase):
 
     def test_login_is_required(self):
         self.client.logout()
-        response = self.client.get(reverse("game_create"))
+        response = self.client.get(ws_url("game_create"))
 
         self.assertEqual(response.status_code, 302)
         self.assertIn("/accounts/login/", response["Location"])
@@ -275,16 +275,16 @@ class GameEntryTest(BaseCase):
 
         game = orm_models.Game.objects.get()
         self.assertEqual((game.home_score, game.away_score), (0, 0))
-        self.assertRedirects(response, reverse("game_edit", args=[game.id]))
+        self.assertRedirects(response, ws_url("game_edit", game.id))
 
     def test_the_form_has_no_score_inputs_and_a_posted_score_is_ignored(self):
         """得点は打席から導く値。登録で手入力させると、記録と食い違う得点を作れてしまう。"""
-        page = self.client.get(reverse("game_create"))
+        page = self.client.get(ws_url("game_create"))
         self.assertNotContains(page, 'name="home_score"')
         self.assertNotContains(page, 'name="away_score"')
 
         self.client.post(
-            reverse("game_create"),
+            ws_url("game_create"),
             {
                 "year": "2026",
                 "played_on": "2026-04-01",
@@ -300,7 +300,7 @@ class GameEntryTest(BaseCase):
 
     def test_same_team_is_rejected_without_crashing(self):
         response = self.client.post(
-            reverse("game_create"),
+            ws_url("game_create"),
             {
                 "year": "2026",
                 "played_on": "2026-04-01",
@@ -316,7 +316,7 @@ class GameEntryTest(BaseCase):
         self._create_game()
         game = orm_models.Game.objects.get()
 
-        response = self.client.get(reverse("game_edit", args=[game.id]))
+        response = self.client.get(ws_url("game_edit", game.id))
 
         self.assertEqual(response.status_code, 200)
         payload = response.context["payload"]
@@ -357,13 +357,13 @@ class GameEntryTest(BaseCase):
             },
         )
 
-        payload = self.client.get(reverse("game_edit", args=[game.id])).context["payload"]
+        payload = self.client.get(ws_url("game_edit", game.id)).context["payload"]
         slots = [slot for team in payload["teams"] for slot in team["lineup"]]
         slot = next(each for each in slots if each["player_id"] == batters[2])
         self.assertEqual(slot["batting_order"], 3)
 
     def test_missing_game_returns_404(self):
-        self.assertEqual(self.client.get(reverse("game_edit", args=[9999])).status_code, 404)
+        self.assertEqual(self.client.get(ws_url("game_edit", 9999)).status_code, 404)
 
 
 class BoxScoreEntryTest(BaseCase):
@@ -384,7 +384,7 @@ class BoxScoreEntryTest(BaseCase):
         self.home_batters = register_lineup(self.service, self.team, prefix="ホーム", first_number=31)
         self.away_batters = register_lineup(self.service, self.rival, prefix="ビジター", first_number=41)
         self.game = play_game(self.team, self.rival, home_score=0, away_score=0)
-        self.url = reverse("game_edit", args=[self.game.id])
+        self.url = ws_url("game_edit", self.game.id)
 
     def _payload(self, *, home_runs=(2, 0, 0, 0, 0, 0, 0, 0, 0)):
         """ホームが初回に得点し、そのまま逃げ切る試合。
@@ -441,7 +441,7 @@ class BoxScoreEntryTest(BaseCase):
         self.assertEqual(line.batting_order, 4)
         self.assertEqual(line.fielding_position, "指")
 
-        response = self.client.get(reverse("game_detail", args=[self.game.id]))
+        response = self.client.get(ws_url("game_detail", self.game.id))
         self.assertContains(response, "打順")
 
     def test_appearance_order_follows_the_first_plate_appearance(self):
@@ -466,7 +466,7 @@ class BoxScoreEntryTest(BaseCase):
     def test_line_score_is_shown_on_the_detail_page(self):
         post_game_scorebook_day_unrecorded(self.client, self.game.id, self._payload())
 
-        response = self.client.get(reverse("game_detail", args=[self.game.id]))
+        response = self.client.get(ws_url("game_detail", self.game.id))
 
         self.assertContains(response, "linescore-table")
         self.assertEqual(len(response.context["detail"].line_score.columns), 9)
@@ -527,31 +527,31 @@ class BoxScoreColumnsTest(BaseCase):
         )
 
     def test_the_batting_table_has_the_new_columns(self):
-        response = self.client.get(reverse("game_detail", args=[self.game.id]))
+        response = self.client.get(ws_url("game_detail", self.game.id))
 
         for label in ("得点", "三振", "犠打", "盗塁", "併殺打"):
             with self.subTest(label=label):
                 self.assertContains(response, f'<th class="text-end">{label}</th>', html=False)
 
     def test_the_pitching_table_shows_runs_allowed(self):
-        response = self.client.get(reverse("game_detail", args=[self.game.id]))
+        response = self.client.get(ws_url("game_detail", self.game.id))
 
         self.assertContains(response, '<th class="text-end">失点</th>', html=False)
 
     def test_runs_are_shown_for_the_batter_who_scored(self):
         """本塁打を打った選手に得点が付く（打点と別の欄で並ぶ）。"""
-        rows = self.client.get(reverse("game_detail", args=[self.game.id])).context["detail"].away_box.batting
+        rows = self.client.get(ws_url("game_detail", self.game.id)).context["detail"].away_box.batting
 
         scorer = next(row for row in rows if row.player_id == self.away_batters[0])
         self.assertEqual((scorer.runs, scorer.home_runs, scorer.runs_batted_in), (1, 1, 1))
 
     def test_strikeouts_are_shown_for_the_batter(self):
-        rows = self.client.get(reverse("game_detail", args=[self.game.id])).context["detail"].home_box.batting
+        rows = self.client.get(ws_url("game_detail", self.game.id)).context["detail"].home_box.batting
 
         self.assertEqual(sum(row.strikeouts_batting for row in rows), 3)
 
     def test_runs_allowed_is_shown_for_the_pitcher(self):
-        rows = self.client.get(reverse("game_detail", args=[self.game.id])).context["detail"].home_box.pitching
+        rows = self.client.get(ws_url("game_detail", self.game.id)).context["detail"].home_box.pitching
 
         self.assertEqual(rows[0].runs_allowed, 2)
 

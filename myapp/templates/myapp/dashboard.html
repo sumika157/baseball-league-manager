@@ -1,4 +1,5 @@
 {% extends 'myapp/base.html' %}
+{% load scoped %}
 
 {% block title %}ダッシュボード - Baseball Manager{% endblock %}
 
@@ -21,12 +22,12 @@
   <div class="card mb-3">
     <div class="card-header d-flex justify-content-between align-items-center">
       <span>{{ board.latest_results.0.played_on|date:"n月j日" }}の試合結果</span>
-      <a href="{% url 'game_list' %}" class="card-header-link">試合一覧</a>
+      <a href="{% workspace_url 'game_list' %}" class="card-header-link">試合一覧</a>
     </div>
     <ul class="tile-list row row-cols-1 row-cols-md-2 row-cols-xl-3 g-0">
       {% for game in board.latest_results %}
         <li class="col">
-          <a href="{% url 'game_detail' game.id %}">
+          <a href="{% workspace_url 'game_detail' game.id %}">
             <span class="tile-list-main">
               <span class="tile-list-title">{{ game.home_team_name }} {{ game.home_score }} - {{ game.away_score }} {{ game.away_team_name }}</span>
               <span class="tile-list-sub">{{ game.result }}</span>
@@ -45,7 +46,7 @@
       <div class="col-lg-6">
         <div class="card h-100">
           <div class="card-header d-flex justify-content-between align-items-center">
-            <a href="{% url 'league_detail' league.league_id %}" class="player-name">{{ league.league_name }}</a>
+            <a href="{% workspace_url 'league_detail' league.league_id %}" class="player-name">{{ league.league_name }}</a>
             {% if league.standings_year %}
               <span class="stat-muted" style="font-size: 0.75rem;">{{ league.standings_year }}年シーズン</span>
             {% endif %}
@@ -67,7 +68,7 @@
                   <tr>
                     <td style="width: 3rem;"><span class="jersey-number">{{ row.rank }}</span></td>
                     <td>
-                      <a href="{% url 'player_list' row.team_id %}" class="player-name">{{ row.team_name }}</a>
+                      <a href="{% workspace_url 'player_list' row.team_id %}" class="player-name">{{ row.team_name }}</a>
                     </td>
                     <td class="text-end text-nowrap">{{ row.wins }}-{{ row.losses }}-{{ row.ties }}</td>
                     <td class="text-end stat-muted">{{ row.games_behind }}</td>
@@ -91,7 +92,7 @@
                           {# 同率の首位は全員並べる（値は同じなので右の列は1つ） #}
                           {% for entry in department.entries %}
                             <div>
-                              <a href="{% url 'player_detail' entry.team_id entry.player_id %}" class="player-name">{{ entry.player_name }}</a>
+                              <a href="{% workspace_url 'player_detail' entry.team_id entry.player_id %}" class="player-name">{{ entry.player_name }}</a>
                               <div class="stat-muted" style="font-size: 0.75rem;">{{ entry.team_name }}</div>
                             </div>
                           {% endfor %}
@@ -109,7 +110,7 @@
             {% endif %}
 
             <div class="card-footer text-end mt-auto">
-              <a href="{% url 'league_titles_by_year' league.league_id league.standings_year %}" class="card-header-link">タイトルを見る</a>
+              <a href="{% workspace_url 'league_titles_by_year' league.league_id league.standings_year %}" class="card-header-link">タイトルを見る</a>
             </div>
           {% else %}
             {% comment %}
@@ -120,7 +121,7 @@
             <ul class="tile-list">
               {% for team in league.teams %}
                 <li>
-                  <a href="{% url 'player_list' team.id %}">
+                  <a href="{% workspace_url 'player_list' team.id %}">
                     <span class="tile-list-main">
                       <span class="tile-list-title">{{ team.name }}</span>
                       {% if team.city %}<span class="tile-list-sub">{{ team.city }}</span>{% endif %}

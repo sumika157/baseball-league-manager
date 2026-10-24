@@ -4,11 +4,9 @@
 integration では確かめられないため、実ブラウザで測る（#144）。
 """
 
-from django.urls import reverse
-
 from myapp.infrastructure import orm_models
 
-from ..helpers import build_roster_service, make_league, real_scope
+from ..helpers import build_roster_service, make_league, real_scope, ws_url
 from .base import PlaywrightTestCase
 
 
@@ -24,7 +22,7 @@ class UsageMapLayoutTest(PlaywrightTestCase):
 
     def _open(self, width: int, color: str = "hand") -> None:
         self.page.set_viewport_size({"width": width, "height": 900})
-        url = reverse("team_analysis", args=[self.team.id])
+        url = ws_url("team_analysis", self.team.id)
         self.page.goto(self.live_server_url + f"{url}?tab=usage&color={color}")
 
     def test_boxes_do_not_overlap_on_a_wide_screen(self):

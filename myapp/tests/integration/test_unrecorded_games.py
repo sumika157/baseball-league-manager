@@ -8,8 +8,6 @@
 
 from datetime import date
 
-from django.urls import reverse
-
 from myapp.domain.value_objects import BattingLine, InningsPitched, PitchingLine
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoGameListQuery
@@ -24,6 +22,7 @@ from ..helpers import (
     post_game_scorebook_day_unrecorded,
     real_scope,
     register_lineup,
+    ws_url,
 )
 from .base import BaseCase
 
@@ -144,7 +143,7 @@ class UnrecordedGameTest(BaseCase):
     def test_the_game_list_says_unrecorded_instead_of_a_tie(self):
         self._register()
 
-        response = self.client.get(reverse("game_list"), {"year": 2026})
+        response = self.client.get(ws_url("game_list"), {"year": 2026})
 
         self.assertContains(response, "未記録")
         self.assertNotContains(response, "引分")
@@ -153,7 +152,7 @@ class UnrecordedGameTest(BaseCase):
     def test_a_recorded_tie_is_still_a_tie(self):
         play_game(self.team, self.rival, home_score=2, away_score=2)
 
-        response = self.client.get(reverse("game_list"), {"year": 2026})
+        response = self.client.get(ws_url("game_list"), {"year": 2026})
 
         self.assertContains(response, "引分")
         self.assertNotContains(response, "未記録")
@@ -161,7 +160,7 @@ class UnrecordedGameTest(BaseCase):
     def test_the_game_detail_says_unrecorded(self):
         game = self._register()
 
-        response = self.client.get(reverse("game_detail", args=[game.id]))
+        response = self.client.get(ws_url("game_detail", game.id))
 
         self.assertContains(response, "未記録")
         self.assertNotContains(response, "引分")
@@ -178,7 +177,7 @@ class UnrecordedGameTest(BaseCase):
         play_game(self.team, self.rival, home_score=4, away_score=1, day=1)
         self._register(day=2)
 
-        response = self.client.get(reverse("league_detail", args=[self.league.id]))
+        response = self.client.get(ws_url("league_detail", self.league.id))
 
         self.assertContains(response, "未記録")
         self.assertNotContains(response, "0 - 0")
@@ -189,7 +188,7 @@ class UnrecordedGameTest(BaseCase):
         play_game(self.team, self.rival, home_score=4, away_score=1, day=1)
         self._register(day=2)
 
-        response = self.client.get(reverse("dashboard"))
+        response = self.client.get(ws_url("dashboard"))
 
         self.assertContains(response, "4 - 1")
         self.assertNotContains(response, "0 - 0")

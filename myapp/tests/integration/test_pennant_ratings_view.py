@@ -9,14 +9,13 @@ from datetime import date
 
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from django.urls import reverse
 
 from myapp.domain.pennant.schedule import Fixture
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoFixtureRepository, DjangoRatingsRepository
 from myapp.presentation.views import build_club_service, build_pennant_ratings_service, build_pennant_world_service
 
-from ..helpers import real_scope, world_scope
+from ..helpers import real_scope, world_scope, ws_url
 from .world_case import YEAR, WorldCase
 
 
@@ -125,10 +124,8 @@ class PlayerDetailCardTest(WorldCase):
         super().setUp()
         players = self.pennant_players(self.pennant_team)
         self.batter_id, self.pitcher_id = players[0], players[9]
-        self.batter_url = reverse("pennant_player_detail", args=[self.world_id, self.pennant_team.id, self.batter_id])
-        self.pitcher_url = reverse(
-            "pennant_player_detail", args=[self.world_id, self.pennant_team.id, self.pitcher_id]
-        )
+        self.batter_url = ws_url("pennant_player_detail", self.world_id, self.pennant_team.id, self.batter_id)
+        self.pitcher_url = ws_url("pennant_player_detail", self.world_id, self.pennant_team.id, self.pitcher_id)
 
     def test_the_card_shows_the_grade_and_the_value(self):
         orm_models.PennantPlayerRatings.objects.filter(player_id=self.batter_id).update(
@@ -170,7 +167,7 @@ class PlayerDetailCardTest(WorldCase):
         self.assertNotIn("能力（", response.content.decode())
 
     def test_the_real_players_page_has_no_card(self):
-        url = reverse("player_detail", args=[self.team.id, self.real_batters[0]])
+        url = ws_url("player_detail", self.team.id, self.real_batters[0])
 
         content = self.client.get(url).content.decode()
 
@@ -181,7 +178,7 @@ class PlayerDetailCardTest(WorldCase):
 class TeamRatingsTableTest(WorldCase):
     def setUp(self):
         super().setUp()
-        self.url = reverse("pennant_player_list", args=[self.world_id, self.pennant_team.id])
+        self.url = ws_url("pennant_player_list", self.world_id, self.pennant_team.id)
         self.players = self.pennant_players(self.pennant_team)
         # 野手 9人のミートを背番号の順に高くそろえる（背番号 1 が最低、9 が最高）
         for offset, player_id in enumerate(self.players[:9]):
@@ -254,7 +251,7 @@ class TeamRatingsTableTest(WorldCase):
         self.assertIn("—", response.content.decode())
 
     def test_the_other_teams_ratings_are_visible(self):
-        url = reverse("pennant_player_list", args=[self.world_id, self.pennant_rival.id])
+        url = ws_url("pennant_player_list", self.world_id, self.pennant_rival.id)
 
         response = self.client.get(url + "?view=ratings")
 
@@ -262,7 +259,7 @@ class TeamRatingsTableTest(WorldCase):
         self.assertEqual(len(response.context["ratings_table"].rows), 9)
 
     def test_the_real_data_ignores_the_ratings_view(self):
-        real_url = reverse("player_list", args=[self.team.id])
+        real_url = ws_url("player_list", self.team.id)
 
         plain = self.client.get(real_url).content.decode()
         response = self.client.get(real_url + "?view=ratings")
@@ -276,7 +273,7 @@ class TeamRatingsTableTest(WorldCase):
         content = self.client.get(self.url + "?view=ratings").content.decode()
 
         self.assertEqual(len(self._names(content)), 9)
-        self.assertIn(f"/pennant/{self.world_id}/", content)
+        self.assertIn(ws_url("pennant_world", self.world_id), content)
 
 
 class FixtureFirstDateTest(WorldCase):

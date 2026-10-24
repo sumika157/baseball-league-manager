@@ -9,14 +9,13 @@ from unittest import mock
 
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from django.urls import reverse
 
 from myapp.domain.value_objects import BattingLine
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository, DjangoTeamRepository
 from myapp.presentation.views import build_service, build_team_view_service
 
-from ..helpers import make_league, play_game, world_scope
+from ..helpers import make_league, play_game, world_scope, ws_url
 from .world_case import YEAR, WorldCase
 
 NEXT_YEAR = YEAR + 1
@@ -95,7 +94,7 @@ class RetiredPlayersKeepTheirTitlesTest(SeasonStatsCase):
 
     def test_the_title_screen_lists_the_retired_player_of_that_year(self):
         self.retire(self.veteran, YEAR)
-        url = reverse("pennant_league_titles_by_year", args=[self.world_id, self.pennant_league.id, YEAR])
+        url = ws_url("pennant_league_titles_by_year", self.world_id, self.pennant_league.id, YEAR)
 
         self.assertContains(self.client.get(url), self._name_of(self.veteran))
 
@@ -103,9 +102,7 @@ class RetiredPlayersKeepTheirTitlesTest(SeasonStatsCase):
         """オフの結果から引退した選手へリンクする前提。退団しても選手ページは開ける。"""
         self.retire(self.veteran, YEAR)
 
-        response = self.client.get(
-            reverse("pennant_player_detail", args=[self.world_id, self.pennant_team.id, self.veteran])
-        )
+        response = self.client.get(ws_url("pennant_player_detail", self.world_id, self.pennant_team.id, self.veteran))
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, self._name_of(self.veteran))
@@ -148,7 +145,7 @@ class PeriodToggleTest(SeasonStatsCase):
     """成績一覧は、ペナントの世界では今季が既定で、通算に切り替えられる。"""
 
     def _stats(self, period=None):
-        url = reverse("pennant_league_stats", args=[self.world_id, self.pennant_league.id])
+        url = ws_url("pennant_league_stats", self.world_id, self.pennant_league.id)
         response = self.client.get(url + (f"?period={period}" if period else ""))
         self.assertEqual(response.status_code, 200)
         return response, {row.player.id: row.player for row in response.context["players"]}
@@ -170,7 +167,7 @@ class PeriodToggleTest(SeasonStatsCase):
         self.assertIn("period=career", content)
 
     def test_the_team_page_follows_the_same_period(self):
-        url = reverse("pennant_player_list", args=[self.world_id, self.pennant_team.id])
+        url = ws_url("pennant_player_list", self.world_id, self.pennant_team.id)
 
         season = self.client.get(url)
         career = self.client.get(url + "?period=career")
@@ -185,7 +182,7 @@ class PeriodToggleTest(SeasonStatsCase):
         self.assertIsNone(career.context["stats_year"])
 
     def test_the_ratings_table_shows_the_batting_of_the_same_period(self):
-        url = reverse("pennant_player_list", args=[self.world_id, self.pennant_team.id]) + "?view=ratings"
+        url = ws_url("pennant_player_list", self.world_id, self.pennant_team.id) + "?view=ratings"
 
         season = self.client.get(url)
         career = self.client.get(url + "&period=career")
@@ -212,7 +209,7 @@ class HomeReadsThisSeasonTest(SeasonStatsCase):
         orm_models.PennantWorld.objects.filter(id=self.world_id).update(managed_team_id=self.pennant_team.id)
 
     def _home(self):
-        response = self.client.get(reverse("pennant_world", args=[self.world_id]))
+        response = self.client.get(ws_url("pennant_world", self.world_id))
         self.assertEqual(response.status_code, 200)
         return response.context["home"]
 

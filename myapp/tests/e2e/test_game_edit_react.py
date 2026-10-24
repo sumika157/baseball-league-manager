@@ -8,11 +8,10 @@
 from pathlib import Path
 
 from django.contrib.auth.models import User
-from django.urls import reverse
 
 from myapp.infrastructure import orm_models
 
-from ..helpers import build_roster_service, make_league, make_stadium, play_game, real_scope
+from ..helpers import build_roster_service, make_league, make_stadium, play_game, real_scope, ws_url
 from .base import PlaywrightTestCase
 
 # React のビルド成果物。無いと画面が「読み込んでいます」のまま失敗し原因が
@@ -55,7 +54,7 @@ class GameEditReactTest(PlaywrightTestCase):
 
     def test_record_a_plate_appearance_and_save(self):
         self._login()
-        self.page.goto(self.live_server_url + reverse("game_edit", args=[self.game.id]))
+        self.page.goto(self.live_server_url + ws_url("game_edit", self.game.id))
 
         # 打順を決める。1回表はビジターの攻撃なので、そちらの1番が最初の打者になる
         self.page.get_by_label("ビジターズ 1番の選手", exact=True).select_option(str(self.batter.id))
@@ -76,7 +75,7 @@ class GameEditReactTest(PlaywrightTestCase):
         self.assertIn("ビジターズ 1 - 0 ホームズ", self.page.get_by_label("導出した得点").inner_text())
 
         self.page.get_by_role("button", name="保存する").click()
-        self.page.wait_for_url(f"{self.live_server_url}{reverse('game_detail', args=[self.game.id])}")
+        self.page.wait_for_url(f"{self.live_server_url}{ws_url('game_detail', self.game.id)}")
 
         # 保存の中身はドメイン経由で永続化されている（成績はすべて打席から導出）
         saved = orm_models.Game.objects.get(id=self.game.id)
@@ -88,7 +87,7 @@ class GameEditReactTest(PlaywrightTestCase):
     def _record_a_home_run(self):
         """打順を決めて本塁打を1つ記録する（保存はしない）。"""
         self._login()
-        self.page.goto(self.live_server_url + reverse("game_edit", args=[self.game.id]))
+        self.page.goto(self.live_server_url + ws_url("game_edit", self.game.id))
         self.page.get_by_label("ビジターズ 1番の選手", exact=True).select_option(str(self.batter.id))
         self.page.get_by_label("ビジターズ 1番の守備位置", exact=True).select_option("指")
         self.page.get_by_label("ホームズ 1番の選手", exact=True).select_option(str(self.home_batter.id))
@@ -105,7 +104,7 @@ class GameEditReactTest(PlaywrightTestCase):
         self.page.get_by_label("終了時刻").fill("21:09")
         self.page.get_by_label("観客数").fill("42071")
         self.page.get_by_role("button", name="保存する").click()
-        self.page.wait_for_url(f"{self.live_server_url}{reverse('game_detail', args=[self.game.id])}")
+        self.page.wait_for_url(f"{self.live_server_url}{ws_url('game_detail', self.game.id)}")
 
         items = self.page.get_by_test_id("game-day-items").inner_text()
         self.assertEqual(items, "開始 18:19 ◇ 終了 21:09 ◇ 試合時間 2時間50分 ◇ 観客 42,071人")
@@ -123,6 +122,6 @@ class GameEditReactTest(PlaywrightTestCase):
         self.assertIn("保存しました。", warnings.inner_text())
         self.assertIn("5,000人", warnings.inner_text())
         self.assertIn("収容人数（1,000人）", warnings.inner_text())
-        self.assertIn(reverse("game_edit", args=[self.game.id]), self.page.url)
+        self.assertIn(ws_url("game_edit", self.game.id), self.page.url)
         # 保存は済んでいる
         self.assertEqual(orm_models.Game.objects.get(id=self.game.id).attendance, 5000)

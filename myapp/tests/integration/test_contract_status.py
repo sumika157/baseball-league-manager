@@ -4,14 +4,13 @@ from importlib import import_module
 
 from django.apps import apps as django_apps
 from django.contrib.auth.models import User
-from django.urls import reverse
 
 from myapp.domain.exceptions import InvalidContract, RegisteredPlayerLimitExceeded
 from myapp.domain.value_objects import ContractStatus
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoLeagueRepository, DjangoTeamRepository
 
-from ..helpers import build_roster_service, login_as_manager, real_scope
+from ..helpers import build_roster_service, login_as_manager, real_scope, ws_url
 from .base import BaseCase
 
 DEVELOPMENTAL = ContractStatus.DEVELOPMENTAL.value
@@ -160,12 +159,12 @@ class ContractScreenTest(BaseCase):
             self.team.id, "育成太郎", 120, "投手", contract_label=DEVELOPMENTAL
         )
         self.registered = self.roster.register_player(self.team.id, "支配下次郎", 10, "内野手")
-        self.edit_url = reverse("player_edit", args=[self.team.id, self.developmental.id])
+        self.edit_url = ws_url("player_edit", self.team.id, self.developmental.id)
 
     def test_registration_form_offers_both_contracts_from_the_domain(self):
         login_as_manager(self.client, self.team)
 
-        response = self.client.get(reverse("player_list", args=[self.team.id]))
+        response = self.client.get(ws_url("player_list", self.team.id))
 
         for label in ContractStatus.labels():
             self.assertContains(response, f'<option value="{label}"')
@@ -174,7 +173,7 @@ class ContractScreenTest(BaseCase):
         login_as_manager(self.client, self.team)
 
         self.client.post(
-            reverse("player_list", args=[self.team.id]),
+            ws_url("player_list", self.team.id),
             {"name": "新人育成", "number": "130", "position": "投手", "contract": DEVELOPMENTAL},
         )
 
@@ -185,7 +184,7 @@ class ContractScreenTest(BaseCase):
         login_as_manager(self.client, self.team)
 
         self.client.post(
-            reverse("player_list", args=[self.team.id]),
+            ws_url("player_list", self.team.id),
             {"name": "新人", "number": "40", "position": "投手"},
         )
 
@@ -195,7 +194,7 @@ class ContractScreenTest(BaseCase):
         login_as_manager(self.client, self.team)
 
         response = self.client.post(
-            reverse("player_list", args=[self.team.id]),
+            ws_url("player_list", self.team.id),
             {"name": "新人育成", "number": "40", "position": "投手", "contract": DEVELOPMENTAL},
             follow=True,
         )
@@ -204,9 +203,9 @@ class ContractScreenTest(BaseCase):
         self.assertFalse(orm_models.Player.objects.filter(name="新人育成").exists())
 
     def test_badge_marks_developmental_players_in_the_list_and_on_their_page(self):
-        list_page = self.client.get(reverse("player_list", args=[self.team.id]) + "?pos=pitcher")
-        detail = self.client.get(reverse("player_detail", args=[self.team.id, self.developmental.id]))
-        registered_detail = self.client.get(reverse("player_detail", args=[self.team.id, self.registered.id]))
+        list_page = self.client.get(ws_url("player_list", self.team.id) + "?pos=pitcher")
+        detail = self.client.get(ws_url("player_detail", self.team.id, self.developmental.id))
+        registered_detail = self.client.get(ws_url("player_detail", self.team.id, self.registered.id))
 
         self.assertContains(list_page, 'class="badge bg-primary ms-1">育成</span>', count=1)
         self.assertContains(detail, 'class="badge bg-primary ms-1">育成</span>')
@@ -216,7 +215,7 @@ class ContractScreenTest(BaseCase):
         login_as_manager(self.client, self.team)
 
         shown = self.client.get(self.edit_url)
-        hidden = self.client.get(reverse("player_edit", args=[self.team.id, self.registered.id]))
+        hidden = self.client.get(ws_url("player_edit", self.team.id, self.registered.id))
 
         self.assertContains(shown, "支配下登録する")
         self.assertNotContains(hidden, "支配下登録する")

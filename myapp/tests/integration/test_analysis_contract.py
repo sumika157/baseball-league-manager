@@ -5,11 +5,10 @@
 
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from django.urls import reverse
 
 from myapp.infrastructure import orm_models
 
-from ..helpers import build_team_analysis_service, real_scope
+from ..helpers import build_team_analysis_service, real_scope, ws_url
 from .test_team_analysis import AnalysisCase
 
 BADGE = '<span class="badge bg-primary">育成</span>'
@@ -34,7 +33,7 @@ class DepthContractTest(AnalysisCase):
         return build_team_analysis_service(real_scope()).get_analysis(self.team.id, **kwargs)
 
     def url(self, **params):
-        return reverse("team_analysis", args=[self.team.id]) + "?" + "&".join(f"{k}={v}" for k, v in params.items())
+        return ws_url("team_analysis", self.team.id) + "?" + "&".join(f"{k}={v}" for k, v in params.items())
 
     def test_the_promotion_year_is_registered_and_the_year_before_is_developmental(self):
         before = self.analysis(year=2025)

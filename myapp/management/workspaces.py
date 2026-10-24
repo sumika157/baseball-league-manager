@@ -6,8 +6,6 @@
 - 世界（`world_scope`・`world_real_scope`）: ワークスペースは `--world` の世界の行から導く（W1b T3）。
   世界の台帳はワークスペースで絞られるので、ほかのワークスペースの世界を `--world` で指しても、その世界の
   ワークスペースの台帳で引ける。無い世界は日本語の `CommandError`。
-- `legacy_real_scope`（暫定。W2 で消す）: `measure_pages` だけが使う。今の URL は一時関数のワークスペース
-  （id が最小のもの）しか開けないので、測る画面のデータも同じワークスペースから拾う（`--workspace` は W2）。
 """
 
 from typing import Any
@@ -16,7 +14,7 @@ from django.core.management.base import CommandError
 
 from ..domain.exceptions import WorkspaceNotFound, WorldNotFound
 from ..domain.pennant.world import WorldScope
-from ..infrastructure.workspaces import legacy_workspace_id, workspace_id_for_key, workspace_id_of_world
+from ..infrastructure.workspaces import workspace_id_for_key, workspace_id_of_world
 
 WORKSPACE_OPTION = "--workspace"
 
@@ -54,11 +52,3 @@ def world_scope(world_id: int) -> WorldScope:
 def world_real_scope(world_id: int) -> WorldScope:
     """世界が属するワークスペースの実データの範囲。世界を消すコマンドが、その世界の台帳を組み立てるのに使う。"""
     return WorldScope.real(_workspace_id_of_world(world_id))
-
-
-def legacy_real_scope() -> WorldScope:
-    """一時関数のワークスペース（id が最小のもの）の実データの範囲。`measure_pages` 専用（W2 で消す）。"""
-    try:
-        return WorldScope.real(legacy_workspace_id())
-    except WorkspaceNotFound as error:
-        raise CommandError(str(error)) from error

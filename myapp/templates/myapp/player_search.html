@@ -1,11 +1,12 @@
 {% extends 'myapp/base.html' %}
+{% load scoped %}
 
 {% block title %}選手検索 - Baseball Manager{% endblock %}
 
 {% block content %}
 <nav aria-label="breadcrumb">
   <ol class="breadcrumb">
-    <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>
+    <li class="breadcrumb-item"><a href="{% workspace_url 'dashboard' %}">ダッシュボード</a></li>
     <li class="breadcrumb-item active">選手検索</li>
   </ol>
 </nav>
@@ -48,7 +49,7 @@
             <td>{% if row.number %}<span class="jersey-number">{{ row.number }}</span>{% else %}—{% endif %}</td>
             <td>
               {% if row.team_id %}
-                <a href="{% url 'player_detail' row.team_id row.id %}" class="player-name">{{ row.name }}</a>
+                <a href="{% workspace_url 'player_detail' row.team_id row.id %}" class="player-name">{{ row.name }}</a>
               {% else %}
                 <span class="player-name">{{ row.name }}</span>
               {% endif %}
@@ -57,13 +58,13 @@
             <td class="stat-muted">{{ row.position }}</td>
             <td>
               {% if row.team_id %}
-                <a href="{% url 'player_list' row.team_id %}" class="stat-muted">{{ row.team_name }}</a>
+                <a href="{% workspace_url 'player_list' row.team_id %}" class="stat-muted">{{ row.team_name }}</a>
               {% else %}—{% endif %}
             </td>
             <td class="stat-muted">{{ row.league_name|default:"—" }}</td>
             <td class="text-end">
               {% if row.team_id %}
-                <a href="{% url 'player_detail' row.team_id row.id %}" class="btn btn-sm btn-outline-info">詳細</a>
+                <a href="{% workspace_url 'player_detail' row.team_id row.id %}" class="btn btn-sm btn-outline-info">詳細</a>
               {% endif %}
             </td>
           </tr>

@@ -1,11 +1,12 @@
 {% extends 'myapp/base.html' %}
+{% load scoped %}
 
 {% block title %}ペナント - Baseball Manager{% endblock %}
 
 {% block content %}
 <nav aria-label="breadcrumb">
   <ol class="breadcrumb">
-    <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">ダッシュボード</a></li>
+    <li class="breadcrumb-item"><a href="{% workspace_url 'dashboard' %}">ダッシュボード</a></li>
     <li class="breadcrumb-item active">ペナント</li>
   </ol>
 </nav>

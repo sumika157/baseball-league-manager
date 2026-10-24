@@ -1,10 +1,8 @@
 """順位表。年別の切り替えと、リーグ単位の絞り込み。"""
 
-from django.urls import reverse
-
 from myapp.infrastructure import orm_models
 
-from ..helpers import make_league, play_game
+from ..helpers import make_league, play_game, ws_url
 from .base import BaseCase
 
 
@@ -51,7 +49,7 @@ class StandingsTest(BaseCase):
 
     def test_page_renders(self):
         play_game(self.team, self.rival, home_score=5, away_score=3)
-        response = self.client.get(reverse("standings"))
+        response = self.client.get(ws_url("standings"))
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "テストチーム")
@@ -60,11 +58,11 @@ class StandingsTest(BaseCase):
         play_game(self.team, self.rival, year=2025, day=1)
         play_game(self.team, self.rival, year=2026, day=1)
 
-        response = self.client.get(reverse("standings_by_year", args=[2025]))
+        response = self.client.get(ws_url("standings_by_year", 2025))
         self.assertContains(response, "2025年")
 
     def test_page_without_any_game(self):
-        response = self.client.get(reverse("standings"))
+        response = self.client.get(ws_url("standings"))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "試合がまだ登録されていません")
 
@@ -104,7 +102,7 @@ class LeagueScopedStandingsTest(BaseCase):
         self.assertNotIn("未実施リーグ", [lg.league_name for lg in board.leagues])
 
     def test_page_shows_each_league_heading(self):
-        response = self.client.get(reverse("standings"))
+        response = self.client.get(ws_url("standings"))
 
         self.assertContains(response, "テストリーグ")
         self.assertContains(response, "別リーグ")

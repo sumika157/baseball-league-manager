@@ -14,12 +14,11 @@ from myapp.domain.pennant.schedule import AdvanceTarget
 from myapp.infrastructure import orm_models
 from myapp.presentation.views import build_pennant_season_service
 
-from ..helpers import build_roster_service, make_league, make_stadium, real_scope, world_scope
+from ..helpers import build_roster_service, header_pages, make_league, make_stadium, real_scope, world_scope, ws_url
 from ..integration.test_pennant_advance import register_club
 from .base import PlaywrightTestCase
 
-# ペナントの画面のリンクが向いてよい、世界の外の行き先（ヘッダーの出口）
-HEADER_PAGES = ("/", "/players/", "/pennant/")
+# ペナントの画面のリンクが向いてよい、世界の外の行き先（ヘッダーの出口は helpers.header_pages）
 HEADER_PREFIXES = ("/accounts/", "/admin/")
 
 
@@ -43,18 +42,18 @@ class PennantFlowTest(PlaywrightTestCase):
         self.page.wait_for_url(f"{self.live_server_url}/")
 
     def _assert_links_stay_in_the_world(self, world_id: int):
-        prefix = f"/pennant/{world_id}/"
+        prefix = ws_url("pennant_world", world_id)
         hrefs = self.page.eval_on_selector_all("a", "els => els.map(e => e.getAttribute('href'))")
         self.assertGreater(len(hrefs), 0)
         for href in hrefs:
-            allowed = href.startswith((prefix, "?", "#", *HEADER_PREFIXES)) or href in HEADER_PAGES
+            allowed = href.startswith((prefix, "?", "#", *HEADER_PREFIXES)) or href in header_pages()
             self.assertTrue(allowed, f"{self.page.url} のリンク {href} が世界の外へ出ています")
 
     def test_create_advance_and_read(self):
         self._login()
 
         # 世界を作る（元にするリーグと受け持つ球団を選ぶ）
-        self.page.goto(self.live_server_url + "/pennant/")
+        self.page.goto(self.live_server_url + ws_url("pennant_index"))
         self.page.fill('input[name="name"]', "スモークの世界")
         self.page.check('input[name="leagues"]')
         self.page.select_option('select[name="managed_team"]', label="ホームズ")
@@ -89,7 +88,7 @@ class PennantFlowTest(PlaywrightTestCase):
 
     def test_close_the_season_read_the_result_and_start_the_next_year(self):
         self._login()
-        self.page.goto(self.live_server_url + "/pennant/")
+        self.page.goto(self.live_server_url + ws_url("pennant_index"))
         self.page.fill('input[name="name"]', "オフの世界")
         self.page.check('input[name="leagues"]')
         self.page.select_option('select[name="managed_team"]', label="ホームズ")

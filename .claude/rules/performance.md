@@ -9,7 +9,7 @@ paths:
 
 3,480試合・1,629選手のデータで主要画面が4〜5秒かかっていた。原因はすべて
 **必要のない範囲まで読んでいたこと**で、SQL の書き方や索引の問題ではなかった。
-`docker compose exec web python manage.py measure_pages` で実測できる。
+`docker compose exec web python manage.py measure_pages --workspace <key>` で実測できる（`--as <ユーザー名>` でログインして、`--world <id>` でペナントの画面も）。
 
 ## 遅さの見つけ方
 
