@@ -65,7 +65,7 @@ from .infrastructure.orm_models import (
     WorkspaceEditor,
 )
 from .infrastructure.repositories import DjangoLeagueRepository, DjangoTeamRepository, draft_of
-from .infrastructure.scoping import admin_real_queryset, leagues_in, teams_in
+from .infrastructure.scoping import admin_real_queryset, leagues_in, stadiums_in, teams_in
 from .presentation.views import build_recording_service
 
 # ヘッダーの文言
@@ -382,7 +382,7 @@ class TeamInlineFormSet(forms.BaseInlineFormSet):
         super().add_fields(form, index)
         workspace_id = self.instance.workspace_id
         if workspace_id is not None:
-            _narrow_choices(form.fields, "home_stadium", Stadium.objects.filter(workspace_id=workspace_id))
+            _narrow_choices(form.fields, "home_stadium", stadiums_in(WorldScope.real(workspace_id)))
 
     def clean(self):
         super().clean()
@@ -546,7 +546,7 @@ class TeamForm(forms.ModelForm):
         if self.instance.pk:
             workspace_id = self.instance.league.workspace_id
             _narrow_choices(self.fields, "league", leagues_in(WorldScope.real(workspace_id)))
-            _narrow_choices(self.fields, "home_stadium", Stadium.objects.filter(workspace_id=workspace_id))
+            _narrow_choices(self.fields, "home_stadium", stadiums_in(WorldScope.real(workspace_id)))
 
     def clean(self):
         cleaned = super().clean()

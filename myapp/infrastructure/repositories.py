@@ -16,7 +16,7 @@ from datetime import date
 from typing import Any, Protocol
 
 from django.db import models, transaction
-from django.db.models import Count, Exists, Max, Min, OuterRef, Prefetch, Q, QuerySet, Sum
+from django.db.models import Count, Exists, F, Max, Min, OuterRef, Prefetch, Q, QuerySet, Sum
 
 from ..domain.entities import (
     Captaincy,
@@ -45,6 +45,7 @@ from ..domain.exceptions import (
     InvalidWorld,
     LeagueNotFound,
     PlayerNotFound,
+    StadiumNotFound,
     TeamNotFound,
     WorldNotFound,
 )
@@ -87,10 +88,12 @@ from .scoping import (
     club_plans_in,
     fixtures_in,
     games_in,
+    home_stadium_in,
     leagues_in,
     players_in,
     ratings_in,
     release_plans_in,
+    stadiums_in,
     stints_in,
     teams_in,
     world_condition,
@@ -182,14 +185,20 @@ class DjangoTeamRepository:
     def __init__(self, scope: WorldScope) -> None:
         self._scope = scope
 
+    def _team_rows(self) -> QuerySet[orm_models.Team]:
+        """範囲のチームの行。本拠地は範囲の球場だけを読む（`scoped_home_stadium_id`）。
+
+        範囲の外の球場を指す行（ORM の直書きでしか生まれない）は、参照クエリ（`home_stadium_in`）と同じく
+        本拠地なしとして読む。読み取りと集約で本拠地が食い違うと、画面では本拠地なしなのに、分岐が
+        その球場を写そうとして `StadiumNotFound` で世界を作れない。この集約を保存すると、外の球場の id は消える。
+        """
+        return teams_in(self._scope).annotate(
+            stadium=home_stadium_in(self._scope), scoped_home_stadium_id=F("stadium__id")
+        )
+
     def find_by_id(self, team_id: int) -> Team:
         try:
-            row = (
-                teams_in(self._scope)
-                .select_related("league")
-                .prefetch_related(self._stints_prefetch())
-                .get(id=team_id)
-            )
+            row = self._team_rows().select_related("league").prefetch_related(self._stints_prefetch()).get(id=team_id)
         except orm_models.Team.DoesNotExist:
             raise TeamNotFound(f"チームが見つかりません（id={team_id}）。") from None
 
@@ -206,7 +215,7 @@ class DjangoTeamRepository:
         return (values["total"], values["active"], values["newest"] or 0)
 
     def find_all(self) -> list[Team]:
-        rows = teams_in(self._scope).select_related("league").order_by("display_order", "name")
+        rows = self._team_rows().select_related("league").order_by("display_order", "name")
         return [self._to_domain(row) for row in rows]
 
     def find_all_with_roster(self) -> list[Team]:
@@ -222,7 +231,7 @@ class DjangoTeamRepository:
 
     def _roster_rows(self) -> QuerySet[orm_models.Team]:
         return (
-            teams_in(self._scope)
+            self._team_rows()
             .select_related("league")
             .prefetch_related(self._stints_prefetch())
             .order_by("display_order", "name")
@@ -253,6 +262,10 @@ class DjangoTeamRepository:
 
         成績は試合側に持つため、ここでは書かない。
         範囲の外のリーグ・チームには書けない（別の世界の球団を書き換えない）。
+        本拠地は範囲の球場（`stadiums_in`。範囲のワークスペースの球場）だけ。外なら `StadiumNotFound` で何も書かない。
+        検査するのは新しいチームと、本拠地を変えたときだけ（チームの存在を確かめるクエリで今の本拠地も読むので、
+        本拠地を変えない保存ではクエリが増えない。範囲の外の球場を指したままの行は、このワークスペースへの書き込みの
+        結果ではないので、変えない限り咎めない）。
 
         **選手・在籍・FA 宣言・主将は、保存する時点の DB の行と比べて変わった行だけを書く**（`_write_changed`。#176）。
         全員を書き直すと、シーズンを締める処理が引退した選手まで含めて約1.3万行（8リーグの9シーズン目）を書き、その間ずっと書き込みロックを持っていた。
@@ -261,8 +274,18 @@ class DjangoTeamRepository:
         """
         if team.league_id is None or not leagues_in(self._scope).filter(id=team.league_id).exists():
             raise LeagueNotFound(f"リーグが見つかりません（id={team.league_id}）。")
-        if team.id is not None and not teams_in(self._scope).filter(id=team.id).exists():
-            raise TeamNotFound(f"チームが見つかりません（id={team.id}）。")
+        stadium_changed = True
+        if team.id is not None:
+            saved = teams_in(self._scope).filter(id=team.id).values("home_stadium_id").first()
+            if saved is None:
+                raise TeamNotFound(f"チームが見つかりません（id={team.id}）。")
+            stadium_changed = saved["home_stadium_id"] != team.home_stadium_id
+        if (
+            stadium_changed
+            and team.home_stadium_id is not None
+            and not stadiums_in(self._scope).filter(id=team.home_stadium_id).exists()
+        ):
+            raise StadiumNotFound(f"球場が見つかりません（id={team.home_stadium_id}）。")
 
         # id=None（未保存）なら update_or_create が新規作成に落ちる。この使い方は
         # 型スタブで表現できないため、このファイルの id 検索は ignore で明示する
@@ -354,7 +377,8 @@ class DjangoTeamRepository:
             id=row.id,
             league_id=row.league_id,
             name=row.name,
-            home_stadium_id=row.home_stadium_id,
+            # 範囲の外の球場は本拠地なし（`_team_rows` の注釈。注釈の列は型スタブがモデルの属性として知らない）
+            home_stadium_id=row.scoped_home_stadium_id,  # type: ignore[attr-defined]
             display_order=row.display_order,
             players=players,
         )

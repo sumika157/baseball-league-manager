@@ -7,6 +7,7 @@ from myapp.domain.value_objects import GameTimes
 from myapp.infrastructure import orm_models
 from myapp.management.commands.seed_virtual_games import Command
 
+from ..helpers import make_stadium, make_workspace
 from .test_seed_virtual_games_rules import YEAR, SeedGamesBase, run
 
 CAPACITY = 30000
@@ -79,3 +80,27 @@ class SeedGamesOutcomeUnchangedTest(SeedGamesBase):
 
         self.assertGreater(len(without[0]), 0)
         self.assertEqual(self.outcome(), without)
+
+
+class SeedGamesOtherWorkspaceStadiumTest(SeedGamesBase):
+    """別のワークスペースの球場を指す球団（ORM の直書き）のホーム試合に、その球場の収容人数を使わない（W1b T4）。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.stadium.capacity = CAPACITY
+        self.stadium.save()
+        other = make_stadium(
+            "別ワークスペースの球場", workspace=make_workspace(name="別ワークスペース"), capacity=CAPACITY
+        )
+        orm_models.Team.objects.filter(id=self.rival.id).update(home_stadium=other)
+        run()
+
+    def test_the_capacity_of_another_workspaces_stadium_is_not_used(self):
+        games = orm_models.Game.objects.filter(year=YEAR)
+        rival_home = games.filter(home_team_id=self.rival.id)
+        self.assertGreater(rival_home.count(), 0)
+        self.assertFalse(
+            rival_home.filter(attendance__isnull=False).exists(), "別のワークスペースの球場で観客数を作った"
+        )
+        # 空振りの防止: 自分のワークスペースの球場なら観客数を作る
+        self.assertFalse(games.filter(home_team_id=self.team.id, attendance__isnull=True).exists())

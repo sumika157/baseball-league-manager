@@ -115,8 +115,8 @@ class World:
     owner_id: int | None = None
     # 受け持つ球団。世界を作ったあとで決めてよい
     managed_team_id: int | None = None
-    # 属するワークスペース。W1a では保存時に埋まる（未設定なら暫定のワークスペース）。
-    # W1b で範囲から渡す形に替える
+    # 属するワークスペース。作るときに範囲のワークスペースを渡す（`PennantWorldService`）。
+    # 空のままの世界は保存できない（`DjangoWorldRepository.save` が `InvalidWorld` で拒む）
     workspace_id: int | None = None
 
     def __post_init__(self) -> None:

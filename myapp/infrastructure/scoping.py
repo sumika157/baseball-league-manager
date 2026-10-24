@@ -9,6 +9,9 @@
 選手は範囲の列を持たない（世界ごとに選手の行が別）。在籍をたどって範囲が決まるので、
 在籍の無い選手はどの範囲にも出ない（管理画面だけが `admin_real_queryset` で拾う）。
 
+球場はリーグを持たず、ワークスペースに直属する（世界ごとの行は無く、実データとそのワークスペースの世界が共有する）。
+球場の範囲の条件は `_stadium_condition` の1か所で、`stadiums_in`・`home_stadium_in` がこれを使う。
+
 **全範囲を読む関数を作らない。** 例外は管理画面専用の `admin_real_queryset` だけ（決定 2026-10-07 Q4）。
 """
 
@@ -16,7 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from django.db.models import Exists, Model, OuterRef, Q, QuerySet
+from django.db.models import Exists, FilteredRelation, Model, OuterRef, Q, QuerySet
 
 from ..domain.pennant.world import WorldScope
 from . import orm_models
@@ -118,6 +121,41 @@ def club_plans_in(scope: WorldScope) -> QuerySet[orm_models.PennantClubPlan]:
     return orm_models.PennantClubPlan.objects.filter(world_condition("team__league", scope))
 
 
+def _stadium_condition(path: str, scope: WorldScope) -> Q:
+    """球場（`path` は球場へ至る関連名。球場自身なら空文字）の、範囲の条件。
+
+    球場はワークスペースに直属するので、**実データでもペナントでも `workspace_id = scope.workspace_id`**
+    （ペナントの範囲もワークスペースの id を持つ理由の1つ。世界はそのワークスペースの球場を共有する）。
+    """
+    prefix = f"{path}__" if path else ""
+    return Q(**{f"{prefix}workspace_id": scope.workspace_id})
+
+
+def stadiums_in(scope: WorldScope) -> QuerySet[orm_models.Stadium]:
+    """範囲の球場（範囲のワークスペースの球場）。本拠地の検査と、管理画面の選択肢の絞り込みが使う。
+
+    ペナントの範囲では、さらに**範囲の世界がその球場のワークスペースに属すこと**も条件にする。ペナントの範囲の
+    ほかの条件（`world_condition`）はワークスペースを見ないので、取り違えた範囲（`pennant(A, B の世界)`）で
+    B の世界の球団に A の球場を書けないようにする（同じ1クエリの中の結合で見る）。
+    """
+    stadiums = orm_models.Stadium.objects.filter(_stadium_condition("", scope))
+    if scope.world_id is not None:  # ペナントの範囲
+        stadiums = stadiums.filter(workspace__pennant_worlds__id=scope.world_id)
+    return stadiums
+
+
+def home_stadium_in(scope: WorldScope) -> FilteredRelation:
+    """球団の本拠地を、範囲の球場に限って結合する関連。
+
+    `teams_in(scope).annotate(stadium=home_stadium_in(scope)).values("stadium__name")` の形で、参照クエリが
+    本拠地の名前・所在地・収容人数を球団と一緒に読むときに使う（`select_related("home_stadium")` の代わり。
+    結合の数は同じ）。範囲の外の球場を指す球団は、本拠地なし（列が NULL）として読む。
+    本拠地を書く経路（`DjangoTeamRepository.save`）が範囲の外の球場を拒むので、ふだんの結果は素の結合と同じ。
+    これは書き込みの検査を通らない行（ORM の直書き）に対する、読み取り側の防御。
+    """
+    return FilteredRelation("home_stadium", condition=_stadium_condition("home_stadium", scope))
+
+
 def period_covering(year: int | None) -> Q:
     """在籍・主将の期間が `year` を含む条件（`from_year <= year かつ (to_year が空 または year <= to_year)`）。
 
@@ -159,7 +197,8 @@ def admin_real_queryset[M: Model](model: type[M]) -> QuerySet[M] | None:
     - リーグ・チーム・在籍・試合: リーグがワークスペースに属するもの（＝実データ）。
     - 選手: ペナントの球団に在籍したことが無い選手（否定形）。**在籍の無い選手も含む**
       （管理画面で登録途中の選手を隠さない。範囲で読む `players_in` には出ない）。
-    - それ以外のモデル（球場など、世界の行を持たないもの）: None。
+    - それ以外のモデル（球場など、世界の行を持たないもの）: None（管理画面は全ワークスペースの球場を扱う。
+      選択肢をワークスペースで絞るときは `stadiums_in` を使う）。
     """
     if model is orm_models.Player:
         in_pennant = orm_models.PlayerStint.objects.filter(player_id=OuterRef("pk"), team__league__world__isnull=False)

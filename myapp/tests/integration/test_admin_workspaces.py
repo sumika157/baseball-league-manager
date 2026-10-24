@@ -308,6 +308,18 @@ class CrossWorkspaceFormErrorTest(TwoWorkspaceCase):
         self.team.refresh_from_db()
         self.assertEqual(self.team.league_id, self.league.id)
 
+    def test_a_team_change_cannot_take_a_stadium_of_another_workspace(self):
+        """変更画面の本拠地は、チームのワークスペースの球場（`stadiums_in`）に絞った選択肢で受ける（W1b T4）。"""
+        response = self.client.post(
+            reverse("admin:myapp_team_change", args=[self.team.id]),
+            {"league": self.league.id, "name": self.team.name, "display_order": 0, "home_stadium": self.stadium_b.id},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "同じワークスペースの実データだけです")
+        self.team.refresh_from_db()
+        self.assertEqual(self.team.home_stadium_id, self.stadium.id)
+
     def test_a_league_add_with_a_team_stadium_of_another_workspace_is_rejected(self):
         response = self.client.post(
             reverse("admin:myapp_league_add"),

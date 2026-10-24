@@ -145,7 +145,7 @@ class RealPagesDoNotShowThePennantWorldTest(WorldCase):
         )
 
     def test_the_stadium_is_shared(self):
-        """球場は共有。世界の球団の本拠地は、実データと同じ球場を指す。"""
+        """球場は同じワークスペースの中で共有。世界の球団の本拠地は、実データと同じ球場（世界のワークスペースの球場）を指す。"""
         self.assertEqual(self.pennant_team.home_stadium_id, self.stadium.id)
 
 
@@ -494,7 +494,7 @@ class AdminDoesNotShowThePennantWorldTest(WorldCase):
                     self.assertNotContains(response, marker)
 
     def test_editing_a_stadium_does_not_detach_the_world_teams(self):
-        """球場の本拠地の付け替えは、世界の球団に及ばない。"""
+        """球場の本拠地の付け替えは、同じワークスペースの世界の球団（同じ球場を共有する）に及ばない。"""
         form = {
             "name": self.stadium.name,
             "workspace": self.workspace.id,

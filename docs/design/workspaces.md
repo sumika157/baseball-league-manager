@@ -772,3 +772,58 @@ W3 を W4 より先にするのは、W4 を先にすると、中身を入れら�
 - 振り直し: #108 が 0052〜0054 を使ったので、epic のマイグレーションを `0055_workspace`（依存は `0054_remove_player_debut_year`）・`0056_backfill_default_workspace`・`0057_workspace_constraints` に移した。依存・`test_workspace_migration.py`・コメントをそろえた。
 - 衝突は2つ（`admin.py` の import と `test_pennant_fatigue.py` の import）。main の新しいテストのうち、古い形の範囲（`WorldScope.real()`）を使っていた `test_seed_virtual_players.py` の1か所を `real_scope()` に直した。#108 で新しい組み立て口・リポジトリ・モデルは増えていない（`Player` の列だけ）。
 - #108 のマイグレーションのテスト（`test_migration_draft_year.py`）は、後始末で最新まで当て直すときに epic の 0056 が持ち主を求めるので、`test_jersey_number.py` と同じく古い状態に superuser を足した。マイグレーションのテストでリーグを作るときは、これからも同じ手当てが要る。
+
+#### T4
+
+- T4（`feature/workspace-stadiums`）: 球場を範囲で引き、本拠地を検査する。マイグレーションは無い。基点は epic の main 取り込み（2026-10-24、090921b）。
+  - `scoping.py`: 球場の範囲の条件は `_stadium_condition(path, scope)` の1か所（実データでもペナントでも `workspace_id = scope.workspace_id`）。これを使うのが `stadiums_in(scope)`（範囲の球場の QuerySet）と `home_stadium_in(scope)`（球団の本拠地を範囲の球場に限って結合する `FilteredRelation`。範囲の外の球場を指す球団は本拠地なしとして読む）。`admin_real_queryset(Stadium)` は今までどおり None（管理画面は全ワークスペースの球場を扱う）。
+  - domain: `StadiumNotFound`（`DomainError`。メッセージは「球場が見つかりません（id=…）。」）。
+  - **球場を読む経路（`myapp/` を `Stadium`・`home_stadium`・`capacity`・`city` で洗った）**: チーム一覧（`DjangoTeamListQuery`。球場名と所在地）・観客数の警告（`DjangoHomeStadiumQuery`）・試合のシミュレーションの収容人数（`DjangoSimulationContextQuery.teams`。ペナントの進行）・`seed_virtual_games` の収容人数（`Team.objects` の直読みだったのを `teams_in` ＋ `home_stadium_in` に）。どれも `select_related("home_stadium")`／`home_stadium__…` を `home_stadium_in(scope)` の結合に替えた（結合の数は同じ）。チームの詳細・戦力分析は球場を読んでいない（集約の `Team.home_stadium_id` は id だけ）。
+  - **書く経路**: `DjangoTeamRepository.save` だけ（分岐で写す本拠地もここを通る。写し先はペナントの範囲で、ワークスペースは分岐元と同じなので通る）。**新しいチームと、本拠地を変えたときだけ** `stadiums_in(scope)` で引き、無ければ `StadiumNotFound` で何も書かない（リーグ・チームの検査の後、`update_or_create` の前）。チームの存在の確認を `.exists()` から `.values("home_stadium_id").first()` に替え、今の本拠地も同じ1本で読むので、本拠地を変えない保存（シーズンを締める処理など）のクエリ数は変わらない。本拠地を外す（None）保存も引かない。範囲の外の球場を指す行（ORM の直書き）は、集約も参照クエリと同じく本拠地なしとして読み（`_team_rows` が `home_stadium_in` で `scoped_home_stadium_id` を読む）、その集約を保存すると外の球場の id は消える（レビュー M1。分岐はその球団を本拠地なしで写し、「球場が見つかりません」で世界を作れなくはならない）。**ペナントの範囲では `stadiums_in` が、範囲の世界が球場のワークスペースに属すことも同じ1クエリの結合で見る**（レビュー M2。`pennant(A, B の世界)` のように取り違えた範囲で、B の世界の球団に A の球場を書けない）。
+  - 管理画面: T7 で絞った本拠地の選択肢（チームの変更画面・リーグの中のチーム）の `Stadium.objects.filter(workspace_id=…)` を `stadiums_in(WorldScope.real(ws))` にした。球場の「本拠地とするチーム」（T7 (d)）は T7 で済んでいたので変えていない。`admin.py` に W1b の TODO の文言は残っていなかった。管理画面の `save_related`（球場の側から `Team.home_stadium` を `update` で書く）はリポジトリを通らないが、`clean()` が同じワークスペースかを検査する（T7）。
+  - テスト:
+    - `test_workspace_isolation.py`: `WorkspaceCase` が世界を作った後に、A の相手チームと A の世界のその写しの本拠地を ORM で B の球場に向ける（`_plant_stray_stadiums`）。`CHECKS` の `DjangoTeamListQuery`・`DjangoHomeStadiumQuery`・`DjangoSimulationContextQuery` はその球団の本拠地が空（名前・所在地・収容人数が出ない）で、A の球場は読めることを確かめる。今の URL のチーム一覧にも B の球場名が出ない。`StadiumsInTest`: 4つの範囲（A・A の世界・B・B の世界）の `stadiums_in` がそれぞれのワークスペースの球場だけ・A の世界の範囲の読み取り・B の世界の分岐が B の球場を写せた。`HomeStadiumWritesTest`: 実データと A の世界の範囲で、既存の球団（選手を1人足した集約）と新しい球団の本拠地を B の球場にすると `StadiumNotFound` で、チーム・選手・在籍の行が変わらない／同じワークスペースの球場なら実データでも世界でも付けられる。新しい `Django*` は無いので `CHECKS` の行は増えていない。
+    - `test_repositories.py`（`HomeStadiumCheckQueriesTest`）: 本拠地を変えた保存は変えない保存よりちょうど1本多く、外す保存は同じ。新しいチームに同じワークスペースの球場を付けられる。
+    - `test_admin_workspaces.py`: チームの変更画面で B の球場を送ると選択肢のエラーで本拠地が変わらない（ほかの組み合わせ（追加画面・リーグの中のチーム・球場の本拠地チーム）は T7 のテストのまま）。
+    - `test_world_isolation.py` の `test_the_stadium_is_shared`・`test_editing_a_stadium_does_not_detach_the_world_teams` は「同じワークスペースの中で共有」と読めるので、docstring だけ直した。
+    - **変異の確かめ**: `_stadium_condition` を `id IS NOT NULL`（全球場）に替えると、上の検査と管理画面の選択肢の検査が19件落ちることを確かめ、戻した。
+    - レビューで足したテスト: 集約も範囲の外の球場を本拠地なしとして読み保存で消える（実データ・A の世界）、その球団のリーグから分岐した世界の写しは本拠地なし（`test_workspace_isolation.py`）、`MisbuiltWorldScopeStadiumWritesTest`（`pennant(A, B の世界)` で B の世界の既存・新しい球団に A の球場を書くと `StadiumNotFound` で何も変わらない）、`seed_virtual_games` は別のワークスペースの球場を指す球団のホーム試合に観客数を作らない（`test_seed_virtual_games_game_day.py`）。
+
+**計測（T0 と同じ手順。2026-10-24）**: 開発 DB を `backup()` で `/tmp/w1b-t4/db.sqlite3` に写し（`integrity_check` ok・試合 3,480）、`migrate`（0055〜0057）→ `pennant_create`（世界 1・リーグ2・球団12・選手966人）→ `pennant_advance --to week`（6日・36試合）。**同じ写しで基点 090921b（使い捨ての worktree）と T4 を交互に3回ずつ** `measure_pages` と `measure_pennant.py 1` を流し、中央値を並べた（応答 ms / SQL ms / クエリ）。写しと使い捨ての worktree は計測後に消した。
+
+| 画面 | 基点 090921b・同時刻 | T4 |
+| --- | ---: | ---: |
+| ダッシュボード | 486 / 64 / 11 | 502 / 65 / 11 |
+| チーム一覧 | 14 / 6 / 3 | 11 / 3 / 3 |
+| 順位表 | 90 / 3 / 5 | 94 / 3 / 5 |
+| 順位表(2026) | 66 / 3 / 5 | 67 / 3 / 5 |
+| 選手一覧(野手) | 260 / 9 / 28 | 259 / 9 / 28 |
+| 選手一覧(投手) | 256 / 7 / 28 | 265 / 7 / 28 |
+| 選手詳細 | 84 / 2 / 16 | 91 / 2 / 16 |
+| 選手検索 | 13 / 1 / 5 | 14 / 1 / 5 |
+| リーグ詳細 | 68 / 9 / 6 | 68 / 6 / 6 |
+| リーグ成績 | 173 / 6 / 9 | 185 / 6 / 9 |
+| リーグタイトル | 64 / 9 / 8 | 63 / 9 / 8 |
+| 試合一覧 | 100 / 17 / 7 | 95 / 14 / 7 |
+| 試合詳細 | 486 / 33 / 18 | 508 / 34 / 18 |
+| 戦力分析 | 41 / 9 / 9 | 38 / 6 / 9 |
+| 戦力分析（起用マップ） | 31 / 9 / 9 | 28 / 6 / 9 |
+| 戦力分析（FA取得） | 48 / 14 / 14 | 42 / 10 / 14 |
+| ペナント一覧 `/pennant/` | 26 / 6 / 16 | 23 / 3 / 16 |
+| 世界ダッシュボード | 143 / 3 / 49 | 148 / 3 / 49 |
+| 世界の順位表 | 10 / 0 / 11 | 11 / 0 / 11 |
+| 世界のリーグ詳細 | 14 / 1 / 12 | 13 / 1 / 12 |
+| 世界のリーグ成績 | 125 / 0 / 17 | 127 / 0 / 17 |
+| 世界のチーム一覧 | 10 / 1 / 9 | 8 / 1 / 9 |
+| 世界の選手一覧 | 116 / 2 / 41 | 121 / 2 / 41 |
+| 世界の試合一覧 | 14 / 1 / 13 | 14 / 1 / 13 |
+| 世界の戦力分析 | 35 / 1 / 15 | 35 / 1 / 15 |
+| 世界の球団ホーム | 56 / 4 / 26 | 56 / 4 / 26 |
+
+- **クエリ数はすべての画面で基点と同じ**。球場を読むチーム一覧（実データ・世界）は 14→11ms・10→8ms で劣化は無い。ほかの画面の差（−6〜+22ms）は球場を読まない画面にも同じ幅で出ていて、共有コンテナの揺れの範囲。
+- `/pennant/` のクエリ数（16）が T3 の表（15）より1本多いのは、T3 のレビュー M1（ログインしている人の作成フォームの上限に `count_by_owner` を読む）による。T4 の差ではない。
+
+**レビューで残した軽微な点（T4）**
+
+- 検査（`stadiums_in` の `exists()`）と書き込みの間に球場のワークスペースが変わる隙はあるが、登録済みの球場のワークスペースは読み取り専用なので実害は無い。
+- 管理画面のオートコンプリート（チームの本拠地）の候補は別の URL が返すので、ほかのワークスペースの球場も並びうる（T7 と同じ。Wiki「チームと選手の管理」に書いてある）。送信すると選択肢の検査で弾くので、そのままにした。

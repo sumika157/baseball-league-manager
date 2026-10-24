@@ -92,6 +92,7 @@ from .scoping import (
     fixtures_in_worlds,
     games_in,
     games_in_worlds,
+    home_stadium_in,
     leagues_in,
     leagues_in_worlds,
     period_covering,
@@ -278,12 +279,13 @@ class DjangoSimulationContextQuery:
                 stadium_capacity=capacity,
             )
             for team_id, name, active, pitchers, batters, capacity in teams_in(self._scope)
+            .annotate(stadium=home_stadium_in(self._scope))
             .order_by("id")
             .values_list(
                 "id",
                 "name",
                 *(f"league__{field}" for field in FOREIGN_RULE_FIELDS),
-                "home_stadium__capacity",
+                "stadium__capacity",
             )
         )
 
@@ -840,38 +842,48 @@ class DjangoTeamListQuery:
     def list_summaries(self) -> list[TeamSummary]:
         rows = (
             teams_in(self._scope)
-            .select_related("league", "home_stadium")
-            # 在籍中＝退団年が空の在籍
-            .annotate(active_player_count=Count("stints", filter=Q(stints__to_year__isnull=True)))
+            # 本拠地は範囲の球場だけを結合する（範囲の外の球場は本拠地なしとして読む）
+            .annotate(
+                stadium=home_stadium_in(self._scope),
+                # 在籍中＝退団年が空の在籍
+                active_player_count=Count("stints", filter=Q(stints__to_year__isnull=True)),
+            )
             # 管理画面で手動設定した表示順を既定にする
             .order_by("display_order", "name")
+            .values("id", "name", "league_id", "league__name", "active_player_count", "stadium__name", "stadium__city")
         )
         return [
             TeamSummary(
-                id=row.id,
-                name=row.name,
-                league_id=row.league_id,
-                league_name=row.league.name,
-                player_count=row.active_player_count,
-                stadium_name=row.home_stadium.name if row.home_stadium else "",
+                id=row["id"],
+                name=row["name"],
+                league_id=row["league_id"],
+                league_name=row["league__name"],
+                player_count=row["active_player_count"],
+                stadium_name=row["stadium__name"] or "",
                 # 所在地は球場から取る。チーム側には持たせない
-                city=row.home_stadium.city if row.home_stadium else "",
+                city=row["stadium__city"] or "",
             )
             for row in rows
         ]
 
 
 class DjangoHomeStadiumQuery:
-    """HomeStadiumQuery の Django ORM 実装。範囲（`WorldScope`）の中の球団だけを引く。"""
+    """HomeStadiumQuery の Django ORM 実装。範囲（`WorldScope`）の中の球団と、範囲の球場だけを引く。"""
 
     def __init__(self, scope: WorldScope) -> None:
         self._scope = scope
 
     def home_stadium_of(self, team_id: int) -> HomeStadium | None:
-        row = teams_in(self._scope).select_related("home_stadium").filter(id=team_id).first()
-        if row is None or row.home_stadium is None:
+        row = (
+            teams_in(self._scope)
+            .filter(id=team_id)
+            .annotate(stadium=home_stadium_in(self._scope))
+            .values("stadium__name", "stadium__capacity")
+            .first()
+        )
+        if row is None or row["stadium__name"] is None:
             return None
-        return HomeStadium(name=row.home_stadium.name, capacity=row.home_stadium.capacity)
+        return HomeStadium(name=row["stadium__name"], capacity=row["stadium__capacity"])
 
 
 class DjangoWorldSummaryQuery:
