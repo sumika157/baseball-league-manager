@@ -96,6 +96,7 @@ from ..domain.pennant.season import (
     world_today,
 )
 from ..domain.pennant.world import WorldScope
+from ..domain.setup import ORDER_MISMATCH
 from ..domain.value_objects import (
     AdvanceReason,
     Base,
@@ -565,6 +566,7 @@ def build_league_setup_service(scope: WorldScope) -> LeagueSetupService:
         leagues=DjangoLeagueRepository(scope),
         teams=DjangoTeamRepository(scope),
         stadiums=DjangoStadiumRepository(scope),
+        atomic=transaction.atomic,
     )
 
 
@@ -2433,14 +2435,46 @@ def _deletion_page(
     )
 
 
+def _posted_order(request) -> list[int] | None:
+    """並べ替えの本文（`order` の繰り返し。識別子の並び）。数でない値があれば None。"""
+    try:
+        return [int(value) for value in request.POST.getlist("order")]
+    except ValueError:
+        return None
+
+
+def _reorder(request, reorder: Callable[[list[int]], None], *, success: str) -> str | None:
+    """並べ替えを書く。書けたら messages に `success` を出して None、書けなければ理由（何も書いていない）。
+
+    範囲の外のリーグ（チームの並べ替えの URL の id）は、呼ぶ側がここより前に 404 にする。
+    """
+    ids = _posted_order(request)
+    if ids is None:
+        return ORDER_MISMATCH
+    try:
+        reorder(ids)
+    except DomainError as error:
+        return str(error)
+    messages.success(request, success)
+    return None
+
+
+def _leagues_page(request, scope, form):
+    return render(
+        request,
+        "myapp/setup/leagues.html",
+        {"leagues": build_setup_query(scope).leagues(), "form": form, "setup_tab": "leagues"},
+    )
+
+
 def setup_leagues(request):
-    """リーグの一覧と作成フォーム。新しいリーグは表示順の末尾に入る。"""
+    """リーグの一覧（表示順。行をドラッグで並べ替える）と作成フォーム。新しいリーグは表示順の末尾に入る。"""
     if request.method not in _SETUP_METHODS:
         return HttpResponseNotAllowed(_SETUP_METHODS)
     _requires_set_up(request)
     scope = _real_scope(request)
     if request.method == "POST":
-        form = LeagueSetupForm(request.POST, with_display_order=False)
+        form = LeagueSetupForm(request.POST)
         if form.is_valid():
             data = form.cleaned_data
             try:
@@ -2455,12 +2489,28 @@ def setup_leagues(request):
                 messages.success(request, f"リーグ「{data['name']}」を登録しました。")
                 return redirect(_url(request, "setup_leagues"))
     else:
-        form = LeagueSetupForm(with_display_order=False)
-    return render(
-        request,
-        "myapp/setup/leagues.html",
-        {"leagues": build_setup_query(scope).leagues(), "form": form, "setup_tab": "leagues"},
-    )
+        form = LeagueSetupForm()
+    return _leagues_page(request, scope, form)
+
+
+def setup_leagues_reorder(request):
+    """リーグの表示順の並べ替え（POST だけ。GET は一覧へ戻す）。本文はリーグの id の並び（`order`）。
+
+    範囲のリーグの集まりとちょうど一致しない並び（欠け・余り・重複・ほかのワークスペースの id）は、何も書かずに
+    一覧を理由つきで出し直す（200。フォームのエラーと同じ扱い）。書けたら一覧へ戻す。
+    """
+    if request.method not in _SETUP_METHODS:
+        return HttpResponseNotAllowed(_SETUP_METHODS)
+    _requires_set_up(request)
+    if request.method != "POST":
+        return redirect(_url(request, "setup_leagues"))
+    scope = _real_scope(request)
+    service = build_league_setup_service(scope)
+    error = _reorder(request, service.reorder_leagues, success="リーグの表示順を保存しました。")
+    if error is None:
+        return redirect(_url(request, "setup_leagues"))
+    messages.error(request, error)
+    return _leagues_page(request, scope, LeagueSetupForm())
 
 
 def _setup_league(request, league_id: int) -> LeagueSetupRow:
@@ -2472,7 +2522,7 @@ def _setup_league(request, league_id: int) -> LeagueSetupRow:
 
 
 def setup_league_edit(request, league_id):
-    """リーグの編集（名前・表示順・外国人枠・支配下選手の登録枠）。保存したら一覧へ戻る。"""
+    """リーグの編集（名前・外国人枠・支配下選手の登録枠）。保存したら一覧へ戻る。表示順は一覧のドラッグで決める。"""
     if request.method not in _SETUP_METHODS:
         return HttpResponseNotAllowed(_SETUP_METHODS)
     _requires_set_up(request)
@@ -2485,7 +2535,6 @@ def setup_league_edit(request, league_id):
                 build_league_setup_service(_real_scope(request)).update_league(
                     league_id,
                     name=data["name"],
-                    display_order=data["display_order"],
                     foreign_rules=data["foreign_rules"],
                     registered_player_limit=data["registered_player_limit"],
                 )
@@ -2500,7 +2549,6 @@ def setup_league_edit(request, league_id):
         form = LeagueSetupForm(
             initial={
                 "name": league.name,
-                "display_order": league.display_order,
                 "foreign_active": league.foreign_rules.active,
                 "foreign_pitchers": league.foreign_rules.pitchers,
                 "foreign_batters": league.foreign_rules.batters,
@@ -2648,31 +2696,7 @@ def _team_setup_form(query, data=None, **kwargs) -> TeamSetupForm:
     return TeamSetupForm(data, leagues=query.leagues(), stadiums=query.stadiums(), **kwargs)
 
 
-def setup_teams(request):
-    """チームの一覧（リーグの表示順・チームの表示順）と作成フォーム。新しいチームはそのリーグの末尾に入る。
-
-    リーグが1つも無いワークスペースでは作成フォームを出さず、リーグのタブへ案内する（チームはリーグに属する）。
-    """
-    if request.method not in _SETUP_METHODS:
-        return HttpResponseNotAllowed(_SETUP_METHODS)
-    _requires_set_up(request)
-    scope = _real_scope(request)
-    query = build_setup_query(scope)
-    if request.method == "POST":
-        form = _team_setup_form(query, request.POST, with_display_order=False)
-        if form.is_valid():
-            data = form.cleaned_data
-            try:
-                build_league_setup_service(scope).create_team(
-                    name=data["name"], league_id=data["league"], home_stadium_id=data["home_stadium"]
-                )
-            except DomainError as error:
-                _team_setup_error(form, error)
-            else:
-                messages.success(request, f"チーム「{data['name']}」を登録しました。")
-                return redirect(_url(request, "setup_teams"))
-    else:
-        form = _team_setup_form(query, with_display_order=False)
+def _teams_page(request, query, form):
     return render(
         request,
         "myapp/setup/teams.html",
@@ -2685,6 +2709,62 @@ def setup_teams(request):
     )
 
 
+def setup_teams(request):
+    """チームの一覧（リーグごと。リーグの中の行をドラッグで並べ替える）と作成フォーム。
+
+    新しいチームはそのリーグの末尾に入る。リーグが1つも無いワークスペースでは作成フォームを出さず、リーグのタブへ
+    案内する（チームはリーグに属する）。
+    """
+    if request.method not in _SETUP_METHODS:
+        return HttpResponseNotAllowed(_SETUP_METHODS)
+    _requires_set_up(request)
+    scope = _real_scope(request)
+    query = build_setup_query(scope)
+    if request.method == "POST":
+        form = _team_setup_form(query, request.POST)
+        if form.is_valid():
+            data = form.cleaned_data
+            try:
+                build_league_setup_service(scope).create_team(
+                    name=data["name"], league_id=data["league"], home_stadium_id=data["home_stadium"]
+                )
+            except DomainError as error:
+                _team_setup_error(form, error)
+            else:
+                messages.success(request, f"チーム「{data['name']}」を登録しました。")
+                return redirect(_url(request, "setup_teams"))
+    else:
+        form = _team_setup_form(query)
+    return _teams_page(request, query, form)
+
+
+def setup_teams_reorder(request, league_id):
+    """そのリーグのチームの表示順の並べ替え（POST だけ。GET は一覧へ戻す）。本文はチームの id の並び（`order`）。
+
+    範囲の外のリーグ（ほかのワークスペース・ペナントの世界）の id は 404。そのリーグのチームの集まりとちょうど
+    一致しない並び（欠け・余り・重複・ほかのリーグやワークスペースのチーム）は、何も書かずに一覧を理由つきで
+    出し直す（200）。書けたら一覧へ戻す。
+    """
+    if request.method not in _SETUP_METHODS:
+        return HttpResponseNotAllowed(_SETUP_METHODS)
+    _requires_set_up(request)
+    league = _setup_league(request, league_id)
+    if request.method != "POST":
+        return redirect(_url(request, "setup_teams"))
+    scope = _real_scope(request)
+    service = build_league_setup_service(scope)
+    error = _reorder(
+        request,
+        lambda ids: service.reorder_teams(league_id, ids),
+        success=f"{league.name}のチームの表示順を保存しました。",
+    )
+    if error is None:
+        return redirect(_url(request, "setup_teams"))
+    messages.error(request, error)
+    query = build_setup_query(scope)
+    return _teams_page(request, query, _team_setup_form(query))
+
+
 def _setup_team(request, team_id: int) -> TeamSetupRow:
     """登録画面のチームの1行。範囲の外（ほかのワークスペース・ペナントの世界）の id は 404。"""
     try:
@@ -2694,11 +2774,11 @@ def _setup_team(request, team_id: int) -> TeamSetupRow:
 
 
 def setup_team_edit(request, team_id):
-    """チームの編集（名前・所属リーグ・本拠地・表示順）。保存したら一覧へ戻る。
+    """チームの編集（名前・所属リーグ・本拠地）。保存したら一覧へ戻る。表示順は一覧のドラッグで決める（W3 T8）。
 
     所属リーグは試合が1つも無いときだけ変えられる（2026-10-25 決定 2）。変えられないチームは所属リーグの欄を出さず
     理由を出し、POST に `league` があっても今のリーグのまま保存する。移す先の支配下選手の登録枠を超えるチームは
-    移せない（フォームのエラー。W3 T3）。
+    移せない（フォームのエラー。W3 T3）。移したチームは移す先のリーグの末尾に入る。
     """
     if request.method not in _SETUP_METHODS:
         return HttpResponseNotAllowed(_SETUP_METHODS)
@@ -2717,7 +2797,6 @@ def setup_team_edit(request, team_id):
                     name=data["name"],
                     league_id=data["league"] if with_league else team.league_id,
                     home_stadium_id=data["home_stadium"],
-                    display_order=data["display_order"],
                 )
             except TeamNotFound:
                 raise Http404("チームが見つかりません。") from None
@@ -2734,7 +2813,6 @@ def setup_team_edit(request, team_id):
                 "name": team.name,
                 "league": team.league_id,
                 "home_stadium": team.home_stadium_id,
-                "display_order": team.display_order,
             },
         )
     return render(request, "myapp/setup/team_edit.html", {"team": team, "form": form, "setup_tab": "teams"})

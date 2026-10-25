@@ -53,24 +53,26 @@ CHECKS = (
     "ペナントの作成（POST）",
     "リーグの登録（POST）",
     "チームの登録（POST）",
+    "リーグの並べ替え（POST）",
+    "チームの並べ替え（POST）",
 )
 
 # 役割 → 期待（CHECKS の順）。公開のワークスペース
 _MEMBERS = {
-    "持ち主": "Y Y Y Y Y Y 200 200 200 200 ok ok ok ok ok ok ok",
-    "編集者": "Y Y Y Y Y Y 200 200 200 200 ok ok ok ok ok ok ok",
+    "持ち主": "Y Y Y Y Y Y 200 200 200 200 ok ok ok ok ok ok ok ok ok",
+    "編集者": "Y Y Y Y Y Y 200 200 200 200 ok ok ok ok ok ok ok ok ok",
     # 担当: 登録画面（リーグ・チーム・球場）は全体の編集権だけ。導線も出さない
-    "担当": "Y Y Y Y N N 200 200 200 403 ok ok ok ok 403 403 403",
+    "担当": "Y Y Y Y N N 200 200 200 403 ok ok ok ok 403 403 403 403 403",
     # ほかのチームの担当: 試合の登録の画面は開ける（担当のチームがある）が、担当していない2チームの試合は登録できない
-    "ほかのチームの担当": "N N Y N N N 200 403 403 403 403 403 refused 403 403 403 403",
+    "ほかのチームの担当": "N N Y N N N 200 403 403 403 403 403 refused 403 403 403 403 403 403",
 }
-_NO_RIGHTS = "N N N N N N 403 403 403 403 403 403 403 403 403 403 403"
+_NO_RIGHTS = "N N N N N N 403 403 403 403 403 403 403 403 403 403 403 403 403"
 PUBLIC = {
     **_MEMBERS,
     "ログインした部外者": _NO_RIGHTS,
     "staff の部外者": _NO_RIGHTS,
     "superuser の部外者": _NO_RIGHTS,
-    "未ログイン": "N N N N N N login login login login login login login 403 login login login",
+    "未ログイン": "N N N N N N login login login login login login login 403 login login login login login",
 }
 # 非公開: メンバーは公開と同じ。部外者は存在を明かさない（404）、未ログインはログインへ（API は 403）
 _HIDDEN = " ".join(["404"] * len(CHECKS))
@@ -79,7 +81,7 @@ PRIVATE = {
     "ログインした部外者": _HIDDEN,
     "staff の部外者": _HIDDEN,
     "superuser の部外者": _HIDDEN,
-    "未ログイン": " ".join(["login"] * (len(CHECKS) - 4) + ["403", "login", "login", "login"]),
+    "未ログイン": " ".join(["login"] * (len(CHECKS) - 6) + ["403", "login", "login", "login", "login", "login"]),
 }
 
 
@@ -266,6 +268,17 @@ class PermissionTableCase(BaseCase):
             {"name": f"{role}のチーム", "league": str(self.other_league_id), "home_stadium": ""},
         )
         observed.append(self._write(response, orm_models.Team.objects.count() != teams))
+
+        # 並べ替え（W3 T8）: 今の表示順の逆を送る（通れば必ず表示順が変わる。リーグはこのワークスペースに2つ以上ある）
+        league_rows = orm_models.League.objects.filter(workspace=self.ws).order_by("-display_order", "-name")
+        orders = list(league_rows.values_list("id", "display_order"))
+        response = self.client.post(self.url("setup_leagues_reorder"), {"order": [i for i, _ in orders]})
+        observed.append(self._write(response, list(league_rows.values_list("id", "display_order")) != orders))
+
+        teams_of = orm_models.Team.objects.filter(league_id=self.league_id).order_by("-display_order", "-name")
+        orders = list(teams_of.values_list("id", "display_order"))
+        response = self.client.post(self.url("setup_teams_reorder", self.league_id), {"order": [i for i, _ in orders]})
+        observed.append(self._write(response, list(teams_of.values_list("id", "display_order")) != orders))
         return observed
 
     def check_the_table(self):

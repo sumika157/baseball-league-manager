@@ -21,6 +21,7 @@ from myapp.domain.exceptions import (
     DomainError,
     DuplicateName,
     InvalidName,
+    InvalidOrder,
     InvalidWorld,
     LeagueChangeLocked,
     LeagueNotFound,
@@ -110,12 +111,12 @@ class RoundTripTest(SetupCase):
         self.assertIsNone(row.deletion_blocker)
         self.assertEqual(orm_models.League.objects.get(id=league_id).workspace_id, self.workspace.id)
 
-        self.service.update_league(
-            league_id, name="改名リーグ", display_order=7, foreign_rules=NPB, registered_player_limit=65
-        )
+        order = row.display_order
+        self.service.update_league(league_id, name="改名リーグ", foreign_rules=NPB, registered_player_limit=65)
         row = self.query.league(league_id)
         self.assertEqual(
-            (row.name, row.display_order, row.foreign_rules, row.registered_player_limit), ("改名リーグ", 7, NPB, 65)
+            (row.name, row.display_order, row.foreign_rules, row.registered_player_limit),
+            ("改名リーグ", order, NPB, 65),
         )
 
     def test_a_stadium_round_trips(self):
@@ -139,22 +140,25 @@ class RoundTripTest(SetupCase):
         self.assertIsNone(row.deletion_blocker)
         self.assertIsNone(row.league_change_blocker)
 
-        self.service.update_team(
-            team_id, name="改名チーム", league_id=other.id, home_stadium_id=self.stadium.id, display_order=4
-        )
+        # 移したチームは、移す先のリーグの末尾に入る（W3 T8。表示順の欄は無い）
+        orm_models.Team.objects.create(league=other, name="先客", display_order=3)
+        self.service.update_team(team_id, name="改名チーム", league_id=other.id, home_stadium_id=self.stadium.id)
         row = self.query.team(team_id)
         self.assertEqual(
             (row.name, row.league_id, row.home_stadium_id, row.home_stadium_name, row.display_order),
             ("改名チーム", other.id, self.stadium.id, "テスト球場", 4),
         )
 
+    def test_an_edit_without_moving_keeps_the_display_order(self):
+        orm_models.Team.objects.filter(id=self.team.id).update(display_order=7)
+        self.service.update_team(self.team.id, name="改名", league_id=self.league.id, home_stadium_id=None)
+        self.assertEqual(self.query.team(self.team.id).display_order, 7)
+
     def test_renaming_a_team_keeps_its_roster(self):
         """チームの編集は集約ごと読み書きするが、選手・在籍は変えない。"""
         register_players(self.team, [("在籍選手", 10, "内野手")])
         before = {name: rows for name, rows in _all_rows().items() if name != "Team"}
-        self.service.update_team(
-            self.team.id, name="改名", league_id=self.league.id, home_stadium_id=self.stadium.id, display_order=0
-        )
+        self.service.update_team(self.team.id, name="改名", league_id=self.league.id, home_stadium_id=self.stadium.id)
         after = {name: rows for name, rows in _all_rows().items() if name != "Team"}
         self.assertEqual(after, before)
         self.assertEqual(orm_models.Team.objects.get(id=self.team.id).name, "改名")
@@ -178,9 +182,7 @@ class RoundTripTest(SetupCase):
             lambda: self.service.create_league(name=" ", foreign_rules=NPB, registered_player_limit=70),
             lambda: self.service.create_team(name="", league_id=self.league.id, home_stadium_id=None),
             lambda: self.service.create_stadium(name="あ" * 101, profile=StadiumProfile()),
-            lambda: self.service.update_team(
-                self.team.id, name="", league_id=self.league.id, home_stadium_id=None, display_order=0
-            ),
+            lambda: self.service.update_team(self.team.id, name="", league_id=self.league.id, home_stadium_id=None),
         ):
             with self.subTest(call=call):
                 self.assert_nothing_changes(call, InvalidName)
@@ -199,7 +201,7 @@ class NameUniquenessTest(SetupCase):
                 name="相手チーム", league_id=self.league.id, home_stadium_id=None
             ),
             "チームの改名": lambda: self.service.update_team(
-                self.team.id, name="相手チーム", league_id=self.league.id, home_stadium_id=None, display_order=0
+                self.team.id, name="相手チーム", league_id=self.league.id, home_stadium_id=None
             ),
         }
         for kind, call in cases.items():
@@ -216,14 +218,10 @@ class NameUniquenessTest(SetupCase):
         )
 
     def test_keeping_the_own_name_is_not_a_duplicate(self):
-        self.service.update_team(
-            self.team.id, name="テストチーム", league_id=self.league.id, home_stadium_id=None, display_order=2
-        )
-        self.service.update_league(
-            self.league.id, name="テストリーグ", display_order=1, foreign_rules=NPB, registered_player_limit=70
-        )
+        self.service.update_team(self.team.id, name="テストチーム", league_id=self.league.id, home_stadium_id=None)
+        self.service.update_league(self.league.id, name="テストリーグ", foreign_rules=NPB, registered_player_limit=70)
         self.service.update_stadium(self.stadium.id, name="テスト球場", profile=StadiumProfile(city="横浜"))
-        self.assertEqual(self.query.team(self.team.id).display_order, 2)
+        self.assertEqual(self.query.team(self.team.id).name, "テストチーム")
         self.assertEqual(self.query.stadium(self.stadium.id).profile.city, "横浜")
 
     def test_another_workspace_can_use_the_same_names(self):
@@ -275,7 +273,7 @@ class NameUniquenessTest(SetupCase):
                     name="テストリーグ", foreign_rules=NPB, registered_player_limit=70
                 ),
                 "リーグの改名": lambda: self.service.update_league(
-                    self.league.id, name="Bと同名", display_order=0, foreign_rules=NPB, registered_player_limit=70
+                    self.league.id, name="Bと同名", foreign_rules=NPB, registered_player_limit=70
                 ),
                 "球場": lambda: self.service.create_stadium(name="テスト球場", profile=StadiumProfile()),
             }.items():
@@ -377,9 +375,7 @@ class LeagueChangeTest(SetupCase):
         self.other = make_league("移籍先")
 
     def test_a_team_without_games_can_move(self):
-        self.service.update_team(
-            self.team.id, name="テストチーム", league_id=self.other.id, home_stadium_id=None, display_order=0
-        )
+        self.service.update_team(self.team.id, name="テストチーム", league_id=self.other.id, home_stadium_id=None)
         self.assertEqual(orm_models.Team.objects.get(id=self.team.id).league_id, self.other.id)
 
     def test_a_team_with_a_game_cannot_move_and_nothing_is_written(self):
@@ -387,7 +383,7 @@ class LeagueChangeTest(SetupCase):
         self.assertIsNotNone(self.query.team(self.team.id).league_change_blocker)
         error = self.assert_nothing_changes(
             lambda: self.service.update_team(
-                self.team.id, name="改名も書かない", league_id=self.other.id, home_stadium_id=None, display_order=0
+                self.team.id, name="改名も書かない", league_id=self.other.id, home_stadium_id=None
             ),
             LeagueChangeLocked,
         )
@@ -399,16 +395,14 @@ class LeagueChangeTest(SetupCase):
         small = make_league("小さいリーグ", registered_player_limit=1)
         self.assert_nothing_changes(
             lambda: self.service.update_team(
-                self.team.id, name="改名も書かない", league_id=small.id, home_stadium_id=None, display_order=0
+                self.team.id, name="改名も書かない", league_id=small.id, home_stadium_id=None
             ),
             RegisteredPlayerLimitExceeded,
         )
 
     def test_a_team_with_games_can_still_be_edited_in_its_league(self):
         play_game(self.team, self.rival)
-        self.service.update_team(
-            self.team.id, name="改名", league_id=self.league.id, home_stadium_id=None, display_order=1
-        )
+        self.service.update_team(self.team.id, name="改名", league_id=self.league.id, home_stadium_id=None)
         self.assertEqual(orm_models.Team.objects.get(id=self.team.id).name, "改名")
 
 
@@ -454,16 +448,12 @@ class OtherWorkspaceIdsTest(SetupCase):
             (lambda: s.delete_team(self.b_team.id), TeamNotFound),
             (lambda: s.delete_stadium(self.b_stadium.id), StadiumNotFound),
             (
-                lambda: s.update_league(
-                    self.b_league.id, name="x", display_order=0, foreign_rules=NPB, registered_player_limit=70
-                ),
+                lambda: s.update_league(self.b_league.id, name="x", foreign_rules=NPB, registered_player_limit=70),
                 LeagueNotFound,
             ),
             (lambda: s.update_stadium(self.b_stadium.id, name="x", profile=StadiumProfile()), StadiumNotFound),
             (
-                lambda: s.update_team(
-                    self.b_team.id, name="x", league_id=self.b_league.id, home_stadium_id=None, display_order=0
-                ),
+                lambda: s.update_team(self.b_team.id, name="x", league_id=self.b_league.id, home_stadium_id=None),
                 TeamNotFound,
             ),
             (lambda: s.create_team(name="x", league_id=self.b_league.id, home_stadium_id=None), LeagueNotFound),
@@ -472,9 +462,7 @@ class OtherWorkspaceIdsTest(SetupCase):
                 StadiumNotFound,
             ),
             (
-                lambda: s.update_team(
-                    self.team.id, name="x", league_id=self.b_league.id, home_stadium_id=None, display_order=0
-                ),
+                lambda: s.update_team(self.team.id, name="x", league_id=self.b_league.id, home_stadium_id=None),
                 LeagueNotFound,
             ),
         ]
@@ -527,3 +515,104 @@ class ListQueryCountTest(SetupCase):
         # 数が掛け合わさらない（在籍1・試合1のチームの試合数が 1 のまま）
         row = next(row for row in self.query.teams() if row.name == "追加チーム0")
         self.assertEqual((row.stint_count, row.game_count, row.captaincy_count), (1, 1, 0))
+
+
+class ReorderTest(SetupCase):
+    """表示順の並べ替え（W3 T8）。識別子の並びで受け取り、範囲の行の集まりとちょうど一致するときだけ書く。"""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.second = make_league("2番目のリーグ")
+        cls.third = make_league("3番目のリーグ")
+        cls.third_team = orm_models.Team.objects.create(league=cls.league, name="3番目のチーム")
+        cls.elsewhere = orm_models.Team.objects.create(league=cls.second, name="別リーグのチーム")
+        cls.b_league = make_league("B のリーグ", workspace=cls.workspace_b)
+        cls.b_team = orm_models.Team.objects.create(league=cls.b_league, name="B のチーム")
+
+    def _team_ids(self, league_id: int) -> list[int]:
+        return [row.team_id for row in self.query.teams() if row.league_id == league_id]
+
+    def test_leagues_round_trip(self):
+        order = [self.third.id, self.league.id, self.second.id]
+        self.service.reorder_leagues(order)
+        self.assertEqual([row.league_id for row in self.query.leagues()], order)
+        self.assertEqual([row.display_order for row in self.query.leagues()], [0, 1, 2])
+
+    def test_teams_round_trip_inside_the_league(self):
+        elsewhere = orm_models.Team.objects.filter(id=self.elsewhere.id).values().get()
+        order = [self.third_team.id, self.rival.id, self.team.id]
+        self.service.reorder_teams(self.league.id, order)
+        self.assertEqual(self._team_ids(self.league.id), order)
+        self.assertEqual([self.query.team(i).display_order for i in order], [0, 1, 2])
+        self.assertEqual(orm_models.Team.objects.filter(id=self.elsewhere.id).values().get(), elsewhere)
+
+    def test_only_the_display_order_is_written(self):
+        """表示順のほか（名前・リーグ・本拠地・在籍など）はどの表も変わらない。"""
+        register_players(self.team, [("在籍選手", 10, "内野手")])
+
+        def without_orders(rows: dict[str, list[dict]]) -> dict[str, list[dict]]:
+            return {
+                table: [{k: v for k, v in row.items() if k != "display_order"} for row in table_rows]
+                for table, table_rows in rows.items()
+            }
+
+        before = _all_rows()
+        self.service.reorder_teams(self.league.id, [self.rival.id, self.third_team.id, self.team.id])
+        self.service.reorder_leagues([self.second.id, self.third.id, self.league.id])
+        after = _all_rows()
+        self.assertNotEqual(after, before)
+        self.assertEqual(without_orders(after), without_orders(before))
+
+    def test_an_order_that_does_not_match_the_rows_writes_nothing(self):
+        """欠け・余り・重複・ほかのリーグやワークスペースの id・空は、どれも `InvalidOrder` で何も書かない。"""
+        leagues = [self.league.id, self.second.id, self.third.id]
+        teams = [self.team.id, self.rival.id, self.third_team.id]
+        cases = {
+            "リーグの欠け": lambda: self.service.reorder_leagues(leagues[:2]),
+            "リーグの余り（B のリーグ）": lambda: self.service.reorder_leagues([*leagues, self.b_league.id]),
+            "リーグの入れ替え（B のリーグ）": lambda: self.service.reorder_leagues([*leagues[:2], self.b_league.id]),
+            "リーグの重複": lambda: self.service.reorder_leagues([*leagues, leagues[0]]),
+            "リーグの空": lambda: self.service.reorder_leagues([]),
+            "チームの欠け": lambda: self.service.reorder_teams(self.league.id, teams[1:]),
+            "チームの余り（別リーグ）": lambda: self.service.reorder_teams(
+                self.league.id, [*teams, self.elsewhere.id]
+            ),
+            "チームの入れ替え（B のチーム）": lambda: self.service.reorder_teams(
+                self.league.id, [*teams[:2], self.b_team.id]
+            ),
+            "チームの重複": lambda: self.service.reorder_teams(self.league.id, [teams[0], *teams]),
+            "知らない id": lambda: self.service.reorder_teams(self.league.id, [*teams[:2], 999_999]),
+        }
+        for label, call in cases.items():
+            with self.subTest(label):
+                self.assert_nothing_changes(call, InvalidOrder)
+
+    def test_the_teams_of_another_workspaces_league_are_not_found(self):
+        self.assert_nothing_changes(
+            lambda: self.service.reorder_teams(self.b_league.id, [self.b_team.id]), LeagueNotFound
+        )
+
+    def test_the_repository_rejects_rows_outside_the_scope(self):
+        """`save_display_orders` も範囲の外の行があれば何も書かない（サービスを通らない呼び方の守り）。"""
+        b_teams = DjangoTeamRepository(real_scope(self.workspace_b)).find_all()
+        repo = DjangoTeamRepository(real_scope())
+        self.assert_nothing_changes(lambda: repo.save_display_orders(b_teams), TeamNotFound)
+
+    def _queries(self, call) -> int:
+        with CaptureQueriesContext(connection) as captured:
+            call()
+        return len(captured)
+
+    def test_the_query_count_does_not_grow_with_the_rows(self):
+        def reorder_all():
+            leagues = [row.league_id for row in self.query.leagues()][::-1]
+            teams = self._team_ids(self.league.id)[::-1]
+            return lambda: (self.service.reorder_leagues(leagues), self.service.reorder_teams(self.league.id, teams))
+
+        few = self._queries(reorder_all())
+        for number in range(5):
+            make_league(f"追加リーグ{number}")
+            team = orm_models.Team.objects.create(league=self.league, name=f"追加チーム{number}")
+            register_players(team, [(f"追加選手{number}", 1, "内野手")])
+        self.assertEqual(self._queries(reorder_all()), few)

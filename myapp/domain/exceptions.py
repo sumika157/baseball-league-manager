@@ -239,3 +239,10 @@ class NotDeletable(DomainError):
 
 class LeagueChangeLocked(DomainError):
     """チームの所属リーグを変えられない（試合がある）。理由の文言は domain の `setup.league_change_blocker` が出典。"""
+
+
+class InvalidOrder(DomainError):
+    """並べ替えの内容が今の行の集まりと合わない（欠け・余り・重複・範囲の外の id）。
+
+    文言は domain の `setup.ORDER_MISMATCH` が出典。
+    """

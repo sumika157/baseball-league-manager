@@ -1,5 +1,5 @@
 {% extends 'myapp/base.html' %}
-{% load scoped %}
+{% load static scoped %}
 
 {% block title %}チームの登録 - Baseball Manager{% endblock %}
 
@@ -7,43 +7,54 @@
 {% include 'myapp/setup/_head.html' %}
 
 {% comment %}
-チームの一覧（リーグの表示順・チームの表示順）。列ソートは付けない（並びは表示順の数値で決める）。
+チームの一覧。リーグごと（リーグの表示順）に分け、リーグの中はチームの表示順。列ソートは付けない。
+表示順はリーグの中で行のドラッグで決める（W3 T8。編集画面に表示順の欄は無い）。リーグごとに別の一覧と保存のフォームを
+持つので、リーグをまたいでは動かせない（所属リーグを変えるのは編集画面）。仕組みは leagues.html と同じ（setup-sortable.js）。
+teams はリーグの表示順・チームの表示順で並んで来るので、regroup でリーグごとにまとまる。
 削除のリンクは消せる行（在籍・主将の在任・試合が1つも無いチーム）にだけ出す。消せない行は在籍・試合の数で理由が分かる。
 {% endcomment %}
 {% if teams %}
-  <div class="table-responsive">
-    <table class="table table-hover">
-      <thead>
-        <tr>
-          <th>リーグ</th>
-          <th class="text-end">表示順</th>
-          <th>チーム名</th>
-          <th>本拠地</th>
-          <th class="text-end">在籍の記録</th>
-          <th class="text-end">試合</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody class="tabular-nums">
-        {% for team in teams %}
+  <p class="sortable-hint" id="team-order-hint" hidden>リーグの中で行をドラッグして並べ替え、「並び順を保存する」で確定します。</p>
+  {% regroup teams by league_id as league_groups %}
+  {% for group in league_groups %}
+    <h2 class="h6 mb-2{% if not forloop.first %} mt-4{% endif %}">{{ group.list.0.league_name }}</h2>
+    <div class="table-responsive">
+      <table class="table table-hover">
+        <thead>
           <tr>
-            <td class="stat-muted">{{ team.league_name }}</td>
-            <td class="text-end stat-muted">{{ team.display_order }}</td>
-            <td><a href="{% workspace_url 'player_list' team.team_id %}" class="player-name">{{ team.name }}</a></td>
-            <td>{{ team.home_stadium_name|default:'—' }}</td>
-            <td class="text-end">{{ team.stint_count }}</td>
-            <td class="text-end">{{ team.game_count }}</td>
-            <td class="text-end text-nowrap">
-              <a href="{% workspace_url 'setup_team_edit' team.team_id %}" class="btn btn-sm btn-outline-secondary">編集</a>
-              {% if not team.deletion_blocker %}
-                <a href="{% workspace_url 'setup_team_delete' team.team_id %}" class="btn btn-sm btn-outline-danger">削除</a>
-              {% endif %}
-            </td>
+            <th>チーム名</th>
+            <th>本拠地</th>
+            <th class="text-end">在籍の記録</th>
+            <th class="text-end">試合</th>
+            <th></th>
           </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
+        </thead>
+        <tbody class="tabular-nums" data-sortable-form="team-order-{{ group.grouper }}" data-sortable-hint="team-order-hint">
+          {% for team in group.list %}
+            <tr data-order-id="{{ team.team_id }}">
+              <td data-sortable-handle><a href="{% workspace_url 'player_list' team.team_id %}" class="player-name">{{ team.name }}</a></td>
+              <td>{{ team.home_stadium_name|default:'—' }}</td>
+              <td class="text-end">{{ team.stint_count }}</td>
+              <td class="text-end">{{ team.game_count }}</td>
+              <td class="text-end text-nowrap">
+                <a href="{% workspace_url 'setup_team_edit' team.team_id %}" class="btn btn-sm btn-outline-secondary">編集</a>
+                {% if not team.deletion_blocker %}
+                  <a href="{% workspace_url 'setup_team_delete' team.team_id %}" class="btn btn-sm btn-outline-danger">削除</a>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <form method="post" action="{% workspace_url 'setup_teams_reorder' group.grouper %}" id="team-order-{{ group.grouper }}" class="sortable-save mb-3" hidden>
+      {% for team in group.list %}<input type="hidden" name="order" value="{{ team.team_id }}">{% endfor %}
+      {% csrf_token %}
+      <button type="submit" class="btn btn-sm btn-primary">並び順を保存する</button>
+      <a href="{% workspace_url 'setup_teams' %}" class="btn btn-sm btn-secondary">元に戻す</a>
+    </form>
+  {% endfor %}
+  <script src="{% static 'myapp/js/setup-sortable.js' %}" defer></script>
 {% else %}
   <div class="card mb-3">
     <div class="empty-state">まだチームがありません。{% if can_create %}下のフォームから作ってください。{% endif %}</div>
@@ -62,7 +73,7 @@
         <div class="col-md-6">{% include 'myapp/setup/_field.html' with field=form.home_stadium %}</div>
       </div>
       <button type="submit" class="btn btn-primary">作る</button>
-      <span class="stat-muted ms-2" style="font-size: 0.8125rem;">表示順はリーグの末尾に入ります（作った後に編集で変えられます）。</span>
+      <span class="stat-muted ms-2" style="font-size: 0.8125rem;">表示順はリーグの末尾に入ります（作った後に一覧の行をドラッグして変えられます）。</span>
     </div>
   </form>
 {% else %}

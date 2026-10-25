@@ -161,7 +161,6 @@ class CrossWorkspaceIdsTest(WorkspaceCase):
         """A の持ち主が A の key の下で B のリーグ・球場の id を開く・送る。どれも 404 で、何も変わらない。"""
         league_body = {
             "name": "改ざん",
-            "display_order": "0",
             "foreign_active": "4",
             "foreign_pitchers": "3",
             "foreign_batters": "3",
@@ -203,10 +202,10 @@ class CrossWorkspaceIdsTest(WorkspaceCase):
                 ws_url("setup_teams"),
                 {"name": "新", "league": self.league.id, "home_stadium": self.b_stadium.id},
             ),
-            "編集で B のリーグへ": (edit, {"name": "改", "league": self.b_league.id, "display_order": "0"}),
+            "編集で B のリーグへ": (edit, {"name": "改", "league": self.b_league.id}),
             "編集で B の球場へ": (
                 edit,
-                {"name": "改", "league": self.league.id, "home_stadium": self.b_stadium.id, "display_order": "0"},
+                {"name": "改", "league": self.league.id, "home_stadium": self.b_stadium.id},
             ),
         }
         for label, (url, body) in cases.items():
@@ -217,7 +216,7 @@ class CrossWorkspaceIdsTest(WorkspaceCase):
                 self.assert_nothing_changed()
 
     def test_the_team_setup_pages_with_b_team_ids_are_404(self):
-        body = {"name": "改ざん", "league": self.league.id, "display_order": "0"}
+        body = {"name": "改ざん", "league": self.league.id}
         for name in ("setup_team_edit", "setup_team_delete"):
             with self.subTest(name=name):
                 url = ws_url(name, self.b_team.id)
@@ -230,3 +229,28 @@ class CrossWorkspaceIdsTest(WorkspaceCase):
         self.assertEqual(response.status_code, 200)
         for text in (self.b_team.name, self.b_league.name, self.b_stadium.name):
             self.assertNotContains(response, text)
+
+    # --- 登録画面の並べ替え（W3 T8。#79） ---
+
+    def test_reordering_with_b_ids_writes_nothing(self):
+        """A の並べ替えに B のリーグ・チームの id を混ぜると、並びが合わないので何も書かない（200）。
+        B のリーグの URL でチームを並べ替えると 404。"""
+        a_teams = [self.team.id, self.rival.id]
+        cases = {
+            "リーグに B のリーグを足す": (ws_url("setup_leagues_reorder"), [self.league.id, self.b_league.id], 200),
+            "リーグを B のリーグに入れ替える": (ws_url("setup_leagues_reorder"), [self.b_league.id], 200),
+            "チームに B のチームを足す": (
+                ws_url("setup_teams_reorder", self.league.id),
+                [*a_teams, self.b_team.id],
+                200,
+            ),
+            "B のリーグのチーム": (
+                ws_url("setup_teams_reorder", self.b_league.id),
+                [self.b_team.id, self.b_rival.id],
+                404,
+            ),
+        }
+        for label, (url, order, status) in cases.items():
+            with self.subTest(label):
+                self.assertEqual(self.client.post(url, {"order": order}).status_code, status)
+                self.assert_nothing_changed()

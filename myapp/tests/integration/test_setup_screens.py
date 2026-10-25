@@ -131,12 +131,14 @@ class LeagueScreensTest(SetupCase):
 
     def test_editing_a_league(self):
         url = ws_url("setup_league_edit", self.league.id)
+        orm_models.League.objects.filter(id=self.league.id).update(display_order=3)
         form = self.client.get(url).context["form"]
+        self.assertNotIn("display_order", form.fields, "表示順は一覧のドラッグで決める（W3 T8）")
+        self.assertNotContains(self.client.get(url), "表示順")
         self.assertEqual(form["name"].value(), "テストリーグ")
 
         body = {
             "name": "改名リーグ",
-            "display_order": "3",
             **LEAGUE_BODY,
             "foreign_active": "",
             "registered_player_limit": "65",
@@ -145,7 +147,7 @@ class LeagueScreensTest(SetupCase):
 
         self.assertRedirects(response, ws_url("setup_leagues"))
         league = orm_models.League.objects.get(id=self.league.id)
-        self.assertEqual((league.name, league.display_order), ("改名リーグ", 3))
+        self.assertEqual((league.name, league.display_order), ("改名リーグ", 3), "編集は表示順を変えない")
         self.assertIsNone(league.foreign_active_limit)
         self.assertEqual(league.registered_player_limit, 65)
 
@@ -154,7 +156,7 @@ class LeagueScreensTest(SetupCase):
         before = snapshot_all_rows()
 
         response = self.client.post(
-            ws_url("setup_league_edit", self.league.id), {"name": "ほかのリーグ", "display_order": "0", **LEAGUE_BODY}
+            ws_url("setup_league_edit", self.league.id), {"name": "ほかのリーグ", **LEAGUE_BODY}
         )
 
         self.assert_form_error(response, "同じ名前のリーグ", before)
@@ -203,7 +205,7 @@ class LeagueScreensTest(SetupCase):
             with self.subTest(name=name):
                 url = ws_url(name, world_league.id)
                 self.assertEqual(self.client.get(url).status_code, 404)
-                self.assertEqual(self.client.post(url, {"name": "改ざん", "display_order": "0"}).status_code, 404)
+                self.assertEqual(self.client.post(url, {"name": "改ざん"}).status_code, 404)
                 self.assertEqual(snapshot_all_rows(), before)
 
 
@@ -356,13 +358,21 @@ class SetupGateTest(BaseCase):
             ws_url("setup_stadium_delete", self.stadium.id),
         ]
 
+    def _reorder_bodies(self) -> dict[str, dict]:
+        """並べ替え（W3 T8。POST だけ）の URL と、持ち主なら書ける本文（今の並びの逆）。"""
+        return {
+            ws_url("setup_leagues_reorder"): {"order": [self.league.id]},
+            ws_url("setup_teams_reorder", self.league.id): {"order": [self.rival.id, self.team.id]},
+        }
+
     def test_a_manager_gets_403_on_every_setup_url_and_writes_nothing(self):
         self.client.force_login(self.manager)
         before = snapshot_all_rows()
-        for url in self._all_setup_urls():
+        bodies = {url: {"name": "侵入", **LEAGUE_BODY} for url in self._all_setup_urls()} | self._reorder_bodies()
+        for url, body in bodies.items():
             with self.subTest(url=url):
                 self.assertEqual(self.client.get(url).status_code, 403)
-                response = self.client.post(url, {"name": "侵入", "display_order": "0", **LEAGUE_BODY})
+                response = self.client.post(url, body)
                 self.assertEqual(response.status_code, 403)
                 self.assertEqual(snapshot_all_rows(), before)
 
@@ -373,7 +383,7 @@ class SetupGateTest(BaseCase):
             patch.object(views, "build_setup_query", side_effect=AssertionError("門の前に読んだ")) as query,
             patch.object(views, "build_league_setup_service", side_effect=AssertionError("門の前に書いた")) as service,
         ):
-            for url in self._all_setup_urls():
+            for url in [*self._all_setup_urls(), *self._reorder_bodies()]:
                 with self.subTest(url=url):
                     self.assertEqual(self.client.get(url).status_code, 403)
                     self.assertEqual(self.client.post(url, {"name": "侵入"}).status_code, 403)
@@ -387,9 +397,21 @@ class SetupGateTest(BaseCase):
                 self.assertEqual(self.client.get(url).status_code, 200)
         response = self.client.post(ws_url("setup_stadiums"), {"name": "編集者の球場"})
         self.assertRedirects(response, ws_url("setup_stadiums"))
+        url, body = list(self._reorder_bodies().items())[1]
+        self.assertRedirects(self.client.post(url, body), ws_url("setup_teams"))
+        self.assertEqual(
+            [orm_models.Team.objects.get(id=i).display_order for i in (self.rival.id, self.team.id)], [0, 1]
+        )
 
     def test_anonymous_is_sent_to_login(self):
-        for url in self._all_setup_urls():
+        before = snapshot_all_rows()
+        for url, body in self._reorder_bodies().items():
+            with self.subTest(url=url):
+                response = self.client.post(url, body)
+                self.assertEqual(response.status_code, 302)
+                self.assertIn("/accounts/login/", response["Location"])
+                self.assertEqual(snapshot_all_rows(), before)
+        for url in [*self._all_setup_urls(), *self._reorder_bodies()]:
             with self.subTest(url=url):
                 response = self.client.get(url)
                 self.assertEqual(response.status_code, 302)

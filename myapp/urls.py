@@ -56,9 +56,16 @@ workspace_urlpatterns = [
     _w("team/<int:team_id>/player/<int:player_id>/edit/", views.player_edit, "player_edit", login=True),
     # --- 登録画面（リーグ・チーム・球場。W3 #79）。見るのも書くのも全体の編集権（持ち主・編集者）だけ ---
     _w("setup/leagues/", views.setup_leagues, "setup_leagues", login=True),
+    _w("setup/leagues/reorder/", views.setup_leagues_reorder, "setup_leagues_reorder", login=True),
     _w("setup/leagues/<int:league_id>/", views.setup_league_edit, "setup_league_edit", login=True),
     _w("setup/leagues/<int:league_id>/delete/", views.setup_league_delete, "setup_league_delete", login=True),
     _w("setup/teams/", views.setup_teams, "setup_teams", login=True),
+    _w(
+        "setup/leagues/<int:league_id>/teams/reorder/",
+        views.setup_teams_reorder,
+        "setup_teams_reorder",
+        login=True,
+    ),
     _w("setup/teams/<int:team_id>/", views.setup_team_edit, "setup_team_edit", login=True),
     _w("setup/teams/<int:team_id>/delete/", views.setup_team_delete, "setup_team_delete", login=True),
     _w("setup/stadiums/", views.setup_stadiums, "setup_stadiums", login=True),

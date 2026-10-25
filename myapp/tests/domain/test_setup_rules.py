@@ -4,6 +4,7 @@
 - 消してよいか（`domain/setup.py`）は、消せるなら None、消せなければ日本語の理由。0件の境界で切り替わる。
 - 所属リーグの変更は、試合が1つも無いときだけ（2026-10-25 決定）。移す先の支配下選手の登録枠を超えるチームは
   移せない（W3 T3）。
+- 表示順の並べ替え（`apply_order`）は識別子の並びで受け取り、行の集まりとちょうど一致しなければ何も変えない（W3 T8）。
 """
 
 import unittest
@@ -16,8 +17,16 @@ from myapp.domain.entities import (
     Stadium,
     Team,
 )
-from myapp.domain.exceptions import DomainError, InvalidName, LeagueChangeLocked, RegisteredPlayerLimitExceeded
+from myapp.domain.exceptions import (
+    DomainError,
+    InvalidName,
+    InvalidOrder,
+    LeagueChangeLocked,
+    RegisteredPlayerLimitExceeded,
+)
 from myapp.domain.setup import (
+    ORDER_MISMATCH,
+    apply_order,
     ensure_league_change_allowed,
     league_change_blocker,
     league_deletion_blocker,
@@ -209,3 +218,48 @@ class MoveToLeagueLimitTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ApplyOrderTest(unittest.TestCase):
+    """表示順の並べ替え（W3 T8）。識別子の並びに 0, 1, 2 … を振り直す。"""
+
+    def _leagues(self) -> list[League]:
+        return [
+            League(name=name, id=league_id, display_order=order)
+            for name, league_id, order in (
+                ("A", 1, 0),
+                ("B", 2, 1),
+                ("C", 3, 5),
+            )
+        ]
+
+    def test_the_orders_follow_the_ids(self):
+        leagues = self._leagues()
+        ordered = apply_order(leagues, [3, 1, 2])
+        self.assertEqual([league.id for league in ordered], [3, 1, 2])
+        self.assertEqual({league.id: league.display_order for league in leagues}, {3: 0, 1: 1, 2: 2})
+
+    def test_teams_are_ordered_the_same_way(self):
+        teams = [Team(name="甲", id=10, display_order=0), Team(name="乙", id=11, display_order=0)]
+        apply_order(teams, [11, 10])
+        self.assertEqual([team.display_order for team in teams], [1, 0])
+
+    def test_an_order_that_does_not_match_changes_nothing(self):
+        cases = {
+            "欠け": [1, 2],
+            "余り": [1, 2, 3, 4],
+            "入れ替え": [1, 2, 4],
+            "重複": [1, 2, 3, 3],
+            "重複で数だけ合う": [1, 1, 2],
+            "空": [],
+        }
+        for label, ids in cases.items():
+            with self.subTest(label):
+                leagues = self._leagues()
+                with self.assertRaises(InvalidOrder) as raised:
+                    apply_order(leagues, ids)
+                self.assertEqual(str(raised.exception), ORDER_MISMATCH)
+                self.assertEqual([league.display_order for league in leagues], [0, 1, 5])
+
+    def test_no_rows_and_no_ids_is_nothing_to_do(self):
+        self.assertEqual(apply_order([], []), [])

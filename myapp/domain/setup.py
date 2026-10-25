@@ -1,7 +1,7 @@
 """リーグ・チーム・球場の登録（骨組みの組み立て）の規則。W3（#79）。
 
-ここにあるのは「消してよいか」「所属リーグを変えてよいか」の規則だけで、判定の材料（チームの数・在籍の数・
-試合の数・本拠地にしているチームの数）は呼ぶ側が数えて渡す。数は保存せず、その都度数える（同じ事実の出典を
+ここにあるのは「消してよいか」「所属リーグを変えてよいか」の規則と、表示順の並べ替え（`apply_order`。W3 T8）だけで、
+判定の材料（チームの数・在籍の数・試合の数・本拠地にしているチームの数）は呼ぶ側が数えて渡す。数は保存せず、その都度数える（同じ事実の出典を
 2つ作らない）。**消せるかの出典はここだけ**で、画面の表示（参照クエリの DTO）とリポジトリの削除の両方がこれを通す。
 消せるなら None、消せなければ日本語の理由を返す（前例: `pennant.world.postseason_format_change_blocker`）。
 Django は import しない。
@@ -9,7 +9,10 @@ Django は import しない。
 
 from __future__ import annotations
 
-from .exceptions import LeagueChangeLocked
+from collections.abc import Sequence
+from typing import Protocol
+
+from .exceptions import InvalidOrder, LeagueChangeLocked
 
 
 def _ensure_count(value: int) -> int:
@@ -83,3 +86,36 @@ def ensure_league_change_allowed(game_count: int) -> None:
     """所属リーグを変えてよいかを検査する。変えられなければ `LeagueChangeLocked`（理由は `league_change_blocker`）。"""
     if (reason := league_change_blocker(game_count)) is not None:
         raise LeagueChangeLocked(reason)
+
+
+# --- 表示順の並べ替え（W3 T8。2026-10-25 決定: 登録画面の一覧のドラッグで決める） ---
+
+ORDER_MISMATCH = (
+    "並べ替えの内容が今の一覧と合いません（ほかの人が行を足したり消したりした可能性があります）。"
+    "画面を開き直してから並べ替えてください。"
+)
+
+
+class Orderable(Protocol):
+    """表示順を持つ行（`League`・`Team`）。"""
+
+    @property
+    def id(self) -> int | None: ...
+
+    def reorder(self, display_order: int) -> None: ...
+
+
+def apply_order[O: Orderable](items: Sequence[O], ordered_ids: Sequence[int]) -> list[O]:
+    """`ordered_ids` の並びに、表示順を 0, 1, 2 … と振り直す（並べた後の行を返す）。
+
+    **識別子で組み立てる**（位置では組み立てない）。`ordered_ids` が `items` の id の集まりと**ちょうど一致しない**
+    とき（欠け・余り・重複・範囲の外の id）は `InvalidOrder` で、どの行も変えない。欠けた行を末尾に回すなどして
+    黙って補わない（開いていた画面が古いまま送られた並べ替えで、見ていない行の順を決めない）。
+    """
+    by_id = {item.id: item for item in items}
+    if len(ordered_ids) != len(set(ordered_ids)) or set(ordered_ids) != set(by_id):
+        raise InvalidOrder(ORDER_MISMATCH)
+    ordered = [by_id[item_id] for item_id in ordered_ids]
+    for position, item in enumerate(ordered):
+        item.reorder(position)
+    return ordered

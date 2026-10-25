@@ -1698,9 +1698,11 @@ URL_TABLE: dict[str, tuple[tuple[str, ...], str, bool]] = {
     "player_detail": (("team", "player"), PAGE, False),
     "player_edit": (("team", "player"), PAGE, True),
     "setup_leagues": ((), PAGE, True),
+    "setup_leagues_reorder": ((), WRITE, True),
     "setup_league_edit": (("league",), PAGE, True),
     "setup_league_delete": (("league",), PAGE, True),
     "setup_teams": ((), PAGE, True),
+    "setup_teams_reorder": (("league",), WRITE, True),
     "setup_team_edit": (("team",), PAGE, True),
     "setup_team_delete": (("team",), PAGE, True),
     "setup_stadiums": ((), PAGE, True),
@@ -1761,6 +1763,21 @@ SETUP_LEAGUE_LIMITS = {
     "registered_player_limit": "70",
 }
 
+
+def _reversed_leagues(league_id: int) -> list[int]:
+    """そのリーグのワークスペースのリーグの id を、今の表示順の逆に（並べ替えの本文。通れば必ず行が変わる）。"""
+    workspace_id = orm_models.League.objects.get(id=league_id).workspace_id
+    assert workspace_id is not None
+    rows = orm_models.League.objects.filter(workspace_id=workspace_id).order_by("-display_order", "-name")
+    return list(rows.values_list("id", flat=True))
+
+
+def _reversed_teams(league_id: int) -> list[int]:
+    """そのリーグのチームの id を、今の表示順の逆に。"""
+    rows = orm_models.Team.objects.filter(league_id=league_id).order_by("-display_order", "-name")
+    return list(rows.values_list("id", flat=True))
+
+
 # 書き込み（POST）を受け付けるパターンと、送る本文（通れば実際に書ける形。空の本文で検証に落ちて空振りしないように）。
 # 引数は (その側の id, その側のもう1つのチーム)。表に無い画面への POST は、読むだけの画面への POST
 WRITE_BODIES: dict[str, Callable[[Side, int], dict]] = {
@@ -1795,14 +1812,15 @@ WRITE_BODIES: dict[str, Callable[[Side, int], dict]] = {
     "pennant_settings": lambda side, rival: {"postseason_format": "NONE"},
     "pennant_draft_order_settings": lambda side, rival: {"draft_order_rule": "NPB"},
     "setup_leagues": lambda side, rival: {"name": "侵入のリーグ", **SETUP_LEAGUE_LIMITS},
-    "setup_league_edit": lambda side, rival: {"name": "改ざんのリーグ", "display_order": "0", **SETUP_LEAGUE_LIMITS},
+    "setup_leagues_reorder": lambda side, rival: {"order": _reversed_leagues(side.league)},
+    "setup_league_edit": lambda side, rival: {"name": "改ざんのリーグ", **SETUP_LEAGUE_LIMITS},
     "setup_league_delete": lambda side, rival: {},
     "setup_teams": lambda side, rival: {"name": "侵入のチーム", "league": side.league, "home_stadium": side.stadium},
+    "setup_teams_reorder": lambda side, rival: {"order": _reversed_teams(side.league)},
     "setup_team_edit": lambda side, rival: {
         "name": "改ざんのチーム",
         "league": side.league,
         "home_stadium": side.stadium,
-        "display_order": "0",
     },
     "setup_team_delete": lambda side, rival: {},
     "setup_stadiums": lambda side, rival: {"name": "侵入の球場", "capacity": "1"},
@@ -2051,7 +2069,11 @@ class EveryWorkspaceUrlTest(WorkspaceCase):
             "setup_team_edit",
             "setup_stadiums",
             "setup_stadium_edit",
+            "setup_leagues_reorder",
+            "setup_teams_reorder",
         )
+        # リーグの並べ替えが行を変えるよう、A のリーグを2つにする（上の作成でも増えるが、順に頼らない）
+        make_league("並べ替えの相手", workspace=self.workspace)
         for name in writes + setup_writes:
             with self.subTest(name=name), patch(ROSTER_CHECK):
                 before = snapshot_all_rows()
