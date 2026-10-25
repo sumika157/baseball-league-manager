@@ -1,6 +1,8 @@
 """選手の画面。一覧・個人ページ・編集・検索。"""
 
+import json
 import re
+from html.parser import HTMLParser
 
 from django.contrib.auth.models import User
 from django.urls import reverse
@@ -28,6 +30,24 @@ from ..helpers import (
     register_lineup,
 )
 from .base import BaseCase
+
+
+def _event_handlers(html: str, *, button_name: str) -> list[str]:
+    """name が button_name のボタンの onclick を、ブラウザと同じく HTML として戻した形で返す。"""
+
+    class _Collector(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.handlers: list[str] = []
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            values = dict(attrs)
+            if tag == "button" and values.get("name") == button_name and values.get("onclick"):
+                self.handlers.append(values["onclick"] or "")
+
+    collector = _Collector()
+    collector.feed(html)
+    return collector.handlers
 
 
 class PlayerListViewTest(BaseCase):
@@ -120,6 +140,30 @@ class PlayerEditViewTest(BaseCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, '<option value="指名打者" selected>', html=False)
+
+    def test_retire_confirm_keeps_a_crafted_name_inside_the_js_string(self):
+        """細工した選手名でも、退団の確認文が JavaScript の文字列から抜け出さないこと（#320）。
+
+        イベント属性の値はブラウザが HTML として戻してから JavaScript に渡すので、HTML の
+        エスケープだけでは `'` で文字列を閉じられる。ブラウザと同じく属性を HTML として戻し、
+        残りが「confirm に文字列を1つ渡すだけ」の形で、その文字列が名前を文字のまま含むことを確かめる。
+        """
+        name = "O'Brien</script>');alert(1);//\"<b>\\"
+        player = self.roster.register_player(self.team.id, name, 10, "内野手")
+
+        html = self.client.get(self._url(player.id)).content.decode()
+
+        handlers = _event_handlers(html, button_name="retire")
+        self.assertEqual(len(handlers), 1)
+        literal = re.fullmatch(r"return confirm\('((?:[^'\\\n]|\\.)*)'\)", handlers[0])
+        self.assertIsNotNone(literal, f"確認文が文字列1つの形になっていません: {handlers[0]}")
+        assert literal is not None
+        # escapejs は \uXXXX だけを使うので、JSON の文字列として読み戻せる
+        message = json.loads('"' + literal.group(1) + '"')
+        self.assertEqual(
+            message,
+            f"{name} 選手を退団にします。成績は残り、背番号は再利用できるようになります。よろしいですか?",
+        )
 
     def test_update_basic_information(self):
         player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
