@@ -65,10 +65,14 @@ presentation  →  application  →  domain  ←  infrastructure
   新しい組み立て口は `test_wiring.py` の分類（両用・実データ専用・ペナント専用・台帳）に、新しい `Django*` の読み書きのクラスは
   `test_workspace_isolation.py` の検査の表に足してあるか。
   呼ぶ側ごとに一部の依存だけを渡すと、開く画面によって落ちるサービスになる（管理画面のテンプレートタグで実際に起きた）。
+- **管理画面（`admin.py`）に、登録の規則の別の数え方・別の削除の経路を作っていないか**。リーグ・チーム・球場を消せるかは登録画面と
+  同じ参照クエリの行（`build_setup_query(scope)` の `deletion_blocker`）で決め、消すのは登録のサービス（`build_league_setup_service(scope)`
+  の `delete_*`）、チーム名の一意は `ensure_team_name_free` を通す（W3 T5）。管理画面で件数を数え直す・Django の collector の連鎖で消す変更は、
+  サイトと管理画面で規則が食い違う。
 - **層をまたぐ受け渡しに素の `dict` を新しく使っていないか**。application が presentation に返す形は `application/dto.py` の
   dataclass にする（文字列キーの dict は綴りを間違えても静的検査が黙る）。既存の dict を触った変更なら、DTO へ寄せる余地を指摘してよい。
 - **サービスに別の対象のメソッドを足していないか**。application のサービスは対象ごとに分けてある（#219。参照は `LeagueViewService`・
-  `TeamViewService`・`GameViewService`、更新は `RosterService`・`GameRecordingService`）。対象の違うメソッドを
+  `TeamViewService`・`GameViewService`、更新は `RosterService`・`GameRecordingService`・`LeagueSetupService`）。対象の違うメソッドを
   既存のサービスに足しているなら、対象ごとの別サービスに置けないかを指摘する。分けるかどうかはユーザーが決めるので、「分ける案」として出す。
   参照のサービスに更新を足していないか（世界の範囲の参照用の組み立てから、現実の今日の年で書く更新を呼べるようになる）も見る。
 
