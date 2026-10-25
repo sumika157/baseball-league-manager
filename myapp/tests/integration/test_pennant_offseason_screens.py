@@ -19,7 +19,7 @@ from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoClubPlanRepository
 from myapp.presentation.views import build_pennant_offseason_service, build_pennant_season_service
 
-from ..helpers import world_scope, ws_url
+from ..helpers import make_editor, world_scope, ws_url
 from .test_pennant_advance import YEAR
 from .test_pennant_home import HomeCase
 
@@ -176,9 +176,9 @@ class CloseSeasonPostTest(ScreenCase):
 
                 self.assertRedirects(response, self.offseason_url(YEAR), fetch_redirect_response=False)
 
-    def test_an_admin_who_is_not_the_owner_gets_403(self):
-        admin = User.objects.create_superuser("root", password="x")
-        self.client.force_login(admin)
+    def test_an_editor_who_is_not_the_owner_gets_403(self):
+        """ワークスペースの編集者でも、世界の作成者でなければ締められない。"""
+        self.client.force_login(make_editor(User.objects.create_user("editor", password="x")))
 
         self.assertEqual(self.post_close().status_code, 403)
         self.assertEqual(orm_models.PennantPlayerRatings.objects.filter(year=YEAR + 1).count(), 0)

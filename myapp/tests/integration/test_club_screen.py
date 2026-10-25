@@ -25,7 +25,7 @@ from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoClubPlanRepository, DjangoFixtureRepository
 from myapp.presentation.views import build_club_service, build_pennant_season_service
 
-from ..helpers import make_league, world_scope, ws_url
+from ..helpers import make_editor, make_league, world_scope, ws_url
 from .test_club_plan import team_of
 from .test_pennant_home import HomeCase
 
@@ -96,8 +96,10 @@ class PermissionTest(ClubScreenCase):
         self.assertIn("/accounts/login/", response["Location"])
         self.assertTrue(self.plan().is_empty)
 
-    def test_another_user_and_an_admin_cannot_change_the_plan(self):
-        for user in (self.other, User.objects.create_superuser("root", password="x")):
+    def test_another_user_and_an_editor_cannot_change_the_plan(self):
+        """世界の書き込みは世界の作成者だけ。ワークスペースの編集者でも、作成者でなければ変えられない。"""
+        editor = make_editor(User.objects.create_user("editor", password="x"))
+        for user in (self.other, editor):
             with self.subTest(user=user.username):
                 self.client.force_login(user)
                 self.assertEqual(self.post("lineup", "manual").status_code, 403)

@@ -119,7 +119,6 @@ from myapp.presentation.views import (
     build_pennant_settings_service,
     build_pennant_world_service,
     build_pennant_world_view,
-    build_permission_query,
     build_player_search_query,
     build_recording_service,
     build_roster_service,
@@ -146,7 +145,6 @@ BOTH_BUILDERS = (
 REAL_ONLY_BUILDERS = (
     build_recording_service,
     build_roster_service,
-    build_permission_query,
     build_player_search_query,
     build_pennant_world_service,
 )
@@ -565,7 +563,6 @@ class RealScopeTest(SimpleTestCase):
                 self.assertEqual(getattr(service, name)._scope, REAL)
 
     def test_queries_built_for_views_are_fixed_to_the_real_scope(self):
-        self.assertEqual(build_permission_query(REAL)._scope, REAL)
         self.assertEqual(build_player_search_query(REAL)._scope, REAL)
 
     def test_real_only_builders_reject_a_pennant_scope(self):
@@ -992,6 +989,41 @@ class LegacyWorkspaceIsGoneTest(SimpleTestCase):
             if name in path.read_text(encoding="utf-8")
         }
         self.assertEqual(users, set(), "一時関数のワークスペース（id が最小）の名前が残っています")
+
+
+class TeamPermissionQueryIsGoneTest(SimpleTestCase):
+    """サイトのチームの書き込みの判定は、`workspace_view` が解決した `WorkspaceAccess` だけで行う（W2 T5。#78）。
+
+    前の判定（`DjangoTeamPermissionQuery`・`build_permission_query`）は `is_staff` に範囲のどのチームの書き込みも
+    許していた。URL にワークスペースが入った後に戻ると、公開ワークスペースにメンバーでない運営者が書き込める
+    （閲覧の判定と書き込みの判定が食い違う）。名前で戻さない（テスト以外の `myapp/` に名前が無い）。
+    """
+
+    NAMES = ("DjangoTeamPermissionQuery", "build_permission_query", "TeamPermissionQuery")
+
+    def test_no_team_permission_query_is_left_in_the_app(self):
+        root = Path(__file__).resolve().parents[3]
+        users = {
+            (path.relative_to(root), name)
+            for path in (root / "myapp").rglob("*.py")
+            if "tests" not in path.relative_to(root).parts
+            for name in self.NAMES
+            if name in path.read_text(encoding="utf-8")
+        }
+        self.assertEqual(users, set(), "チームの権限の判定が WorkspaceAccess の外に残っています")
+
+    def test_views_do_not_read_is_staff(self):
+        """サイトの views・API は `user.is_staff`・`user.is_superuser` を読まない。
+
+        管理画面のリンクの表示（`base.html`）はテンプレートだけが見る。
+        """
+        root = Path(__file__).resolve().parents[3]
+        users = {
+            path.relative_to(root)
+            for path in (root / "myapp" / "presentation").glob("*.py")
+            if ".is_staff" in path.read_text(encoding="utf-8") or ".is_superuser" in path.read_text(encoding="utf-8")
+        }
+        self.assertEqual(users, set(), "サイトの判定に is_staff・is_superuser が残っています")
 
 
 class PennantPostseasonScopeTest(SimpleTestCase):

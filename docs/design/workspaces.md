@@ -1053,7 +1053,7 @@ W2 の本体。ワークスペースの中の画面43本（実データ20・ペ�
 - 応答時間は揺れの範囲（選手一覧が未ログインで +9% ほどだが、クエリ数も SQL 時間も同じで、持ち主・担当でも同程度。共有コンテナの揺れの幅）。
 - `/`（同じ写しで、使い捨てのユーザーとワークスペースを足して）: 未ログイン 0 クエリ（見本の設定なし。設定すれば key を引く1本）。ログインしてワークスペース1つのユーザー・4つ（持ち主3・編集者1）のユーザーとも**3クエリ**（セッション・利用者・一覧1本）、応答 3ms。数に比例しない。
 
-**レビュー（`ddd-boundary-reviewer`）**: 重要な指摘なし。軽微3件: (1) 未ログインの人には、無い key（404）とある非公開の key（ログインへ）で応答が分かれる → 計画どおり（ログインへ送る便利さを取る。key は推測しにくい）として Wiki「アーキテクチャ」に明記した。(2) `DjangoTeamPermissionQuery` は `is_staff` に範囲のどのチームの書き込みも許すので、URL にワークスペースが入った今、公開ワークスペースにメンバーでない運営者が書き込める（閲覧の判定と書き込みの判定が食い違う）→ T5 で直す。**T5 が入るまで epic を main に入れない**。(3) `myapp/urls.py` の docstring の検査の参照先 → 直した。
+**レビュー（`ddd-boundary-reviewer`）**: 重要な指摘なし。軽微3件: (1) 未ログインの人には、無い key（404）とある非公開の key（ログインへ）で応答が分かれる → 計画どおり（ログインへ送る便利さを取る。key は推測しにくい）として Wiki「アーキテクチャ」に明記した。(2) `DjangoTeamPermissionQuery` は `is_staff` に範囲のどのチームの書き込みも許すので、URL にワークスペースが入った今、公開ワークスペースにメンバーでない運営者が書き込める（閲覧の判定と書き込みの判定が食い違う）→ T5 で直す。**T5 が入るまで epic を main に入れない**（**W2 T5 で解消した**。下の T5 の記録）。(3) `myapp/urls.py` の docstring の検査の参照先 → 直した。
 
 **T5 に回すもの**: チームの書き込みの判定（`_requires_team_permission`・`can_edit_team` などのフラグ・`game_create`・`game_edit`・`player_edit`・API）を `request.workspace.access` へ替え、`DjangoTeamPermissionQuery`・`build_permission_query` を消す（上の (2) の食い違いを閉じる）。権限の真理値表の画面の検査（`test_workspace_permissions.py`）・他所の id を混ぜる経路（`test_cross_workspace_ids.py`）・全 POST を B の key に送る検査。Wiki「ワークスペースと共有」の新設。
 
@@ -1090,3 +1090,67 @@ W2 の本体。ワークスペースの中の画面43本（実データ20・ペ�
   - `ddd-boundary-reviewer.md` の `build_service(real_scope())` を `build_league_view_service(real_scope())` に。`.claude/`・`docs/wiki/` に消えた名前（`build_service`・`build_world_league_view_service`・`build_admin_overview_service`・`AdminOverviewService`・`TeamApplicationService`）が「今あるもの」として残っていないことを確かめた（残るのは「当時の」「#219 で分けた」と断った歴史の記述だけ）。Wiki「ペナントモードの仕組み」の `TeamApplicationService` の1行を過去の形に直した。
   - `test_wiring.py`: `build_pennant_world_view` の `postseason_status_for` が世界ごとの範囲（`WORLD7`・`WORLD8`）で組み立てることを、`standings_for`・`games_for` と同じ検査に足した（組み立て口を差し替えて渡る範囲を捕まえる。DB を読まない）。
   - 変異で確かめた: ポストシーズンの2画面のビューから `_world_context`・`_world_scope` の門を外す（世界の行のワークスペースで見出しと範囲を作る）と、`test_the_other_workspaces_ids_are_404_under_a`（年を指す2本と `pennant_postseason`）と新しい検査が落ちる。台帳の要約の `played_postseason` をどの世界のポストシーズンの試合でも真にすると、`DjangoWorldSummaryQuery` の検査が落ちる。どちらも戻した。
+
+#### T5 権限を `WorkspaceAccess` で判定する（`feature/workspace-permissions`、2026-10-25）
+
+サイトのチームの書き込みの判定を `request.workspace.access`（`WorkspaceAccess`）だけにし、**`is_staff`・superuser の特権を廃止した**。T4 のレビューの (2)（公開ワークスペースにメンバーでない運営者が書き込める。閲覧の判定と書き込みの判定の食い違い）を閉じたので、「T5 が入るまで epic を main に入れない」は解消した。マイグレーションは無い。
+
+- views（`presentation/views.py`）: `_can_edit_teams(request, team_ids)`（`_workspace(request).access.can_edit_teams(team_ids)`。DB を読まない）を足し、`_requires_team_permission`・選手一覧と選手詳細の `can_edit_team`・試合一覧の `can_create_game`・試合詳細の `can_edit`・`game_create`・`game_edit`・`player_edit` をここへ通した。API（`api.py`）の判定も同じ。
+  - `game_create`: 編集できるチームが1つも無い人（どのチームの担当でもない部外者）は、GET も POST も 403（押しても弾かれる入力画面を見せない）。チームが1つも無いワークスペースでは、持ち主・編集者でも一覧へ戻す（`can_edit_teams([])` は真になるが、対戦カードを選べない画面になる）。
+  - `can_create_game` も同じ2つの条件（編集できるチームがある・チームが1つ以上ある）。レビューの指摘で `game_create` を一覧の導線の条件にそろえた。
+  - **スコアブックの保存は、書き換えた後の対戦カードでも判定する**（計画に無い。前は保存前の試合の2チームだけで判定していたので、片方の担当者が対戦カードを担当外の2チームに替えられた。試合の登録と同じ規則にそろえた。403 の JSON）。
+- `DjangoTeamPermissionQuery`・`build_permission_query` を消した（計画の「その Protocol」は、application に置いていなかったので消すものが無かった）。`test_wiring.py` の分類（`REAL_ONLY_BUILDERS`）と `test_workspace_isolation.py` の `CHECKS` から外し、`TeamPermissionQueryIsGoneTest` が名前（`DjangoTeamPermissionQuery`・`build_permission_query`・`TeamPermissionQuery`）がテスト以外の `myapp/` に無いことと、`presentation/` の `.py` が `.is_staff`・`.is_superuser` を読まないことを固定する。
+- テンプレート: 書き込みの導線はすでにビューのフラグ（`can_edit_team`・`can_edit`・`can_create_game`・世界の `is_owner`・作成フォームの有無）で囲まれていて、`user.is_authenticated` で囲んだ書き込みの導線は無かった（`base.html` の `user.is_authenticated` はユーザー欄と役割のバッジ、`user.is_staff` は管理画面のリンクで、どちらも残した）。フラグの出どころが `WorkspaceAccess` に替わっただけで、テンプレートは変えていない。`.claude/rules/templates.md` の規則を「ビューが渡す権限のフラグで囲む」に直した。
+- `orm_models.Team.managers` のコメントを今の規則に直した。`help_text`（「管理ユーザーは常に編集できます。」）は古くなったが、変えるとマイグレーションが要るので直していない（T6 以降に回す）。
+- ペナントの世界の書き込み（進める・締める・編成・設定・削除）は今どおり世界の作成者（`_requires_world_owner`）。docstring の「管理ユーザーでも」を「ワークスペースの持ち主・編集者でも」に。
+
+**計画からのずれ**
+
+- 計画の「サイトの書き込みに staff を使っていた約10ファイル」は、T3・T4 の書き換えで担当（`login_as_manager`）・編集者（`make_editor`）に替わっていて、残っていた staff・superuser は管理画面のテストと「権限が無いこと」を確かめるテストだけだった（T5 の判定の切り替えでフルテストは1件も落ちなかった）。「権限が無いこと」を superuser で確かめていたペナントのテスト7件（`test_pennant_home.py` 2・`test_pennant_worlds.py`・`test_pennant_offseason_screens.py`・`test_pennant_screens.py` 2・`test_club_screen.py`）は、T5 の後は superuser に権限が無いので空振りになる。**ワークスペースの編集者（実データなら全チームを書ける人）でも、世界の作成者でなければ書けない**ことを確かめる形に替えた。`test_world_isolation.py` の「世界の id は 404」の検査も、superuser から編集者に替えた（「権限が無い」ではなく「見つからない」まで進める）。e2e は staff を使っていなかった（担当と編集者）ので変えていない。
+- スコアブックの対戦カードの判定（上）を足した。
+- 変異「`_requires_team_permission` が staff を通す」は、判定の唯一の入口 `_can_edit_teams` に当てた（`_requires_team_permission` だけに当てると、導線のフラグと API が漏れる）。
+
+**テスト**
+
+- `test_workspace_permissions.py`（新）: 役割8つ（持ち主・編集者・担当・ほかのチームの担当・ログインした部外者・未ログイン・staff の部外者・superuser の部外者）× 13項目（選手一覧・選手詳細・試合一覧・試合詳細の導線、ペナントの作成フォーム、試合の登録・試合の編集・選手の編集の GET、選手の登録・選手の編集・試合の登録・スコアブックの保存・ペナントの作成の POST）の真理値表を、公開のワークスペースと非公開のワークスペースで1つずつ持つ。POST は DB の変化と合わせて判定する（ok なら保存された、403・ログインへ・フォームのエラーなら何も変わらない）。非公開ではメンバーの行は公開と同じ、部外者（staff・superuser を含む）はすべて 404、未ログインはすべてログインへ（API は 403）。ほかのワークスペースの担当・編集者・持ち主は、このワークスペースでは部外者（担当チームは解決したワークスペースのものだけを数える）。
+- `test_cross_workspace_ids.py`（新）: A の持ち主が A の key の下で B の id を混ぜて送る。試合の登録の `home_team`・`away_team`（片方・両方）はフォームのエラー（200）、スコアブックの B の試合は 404、A の試合の対戦カードを B のチームに・打順に B の選手・打順の行のチームが B は 400、B のチームへの選手の登録は 404、選手の編集画面の7つのボタン（編集・退団・主将の指名と解任・支配下登録・FA 宣言とその取り消し）を B のチームと B の選手・A のチームと B の選手・B のチームと A の選手で送るとどれも 404、戦力分析の `?team=<B>` は A の先頭の球団へ落ちる。どれも **アプリの全表の行が変わらない**（`snapshot_all_rows()`）。止まらない経路（500 や保存）は見つからなかった。
+- `test_workspace_isolation.py`（拡張）: `EveryWorkspaceUrlTest` に、書き込みを受け付けるパターンの本文の表 `WRITE_BODIES`（実際に書ける本文。空の本文の検証落ちで空振りしない）を足し、(a) 種類が書き込み・API のパターンはどれも本文を持つ、(b) A の持ち主（公開の B では閲覧者）が B の key の下の**全パターン**へ POST すると、書き込みは 403・読むだけの画面は 200／405 で、全表の行が変わらない、(c) A の key の下で B の id を送ると、id を URL に持つ書き込みは 404（読むだけの画面は 405 も）、本文だけに持つもの（試合の登録・世界の作成）はフォームのエラーで、全表の行が変わらない、(d) 空振りの防止: 同じ本文を A の持ち主が A の id で送ると、選手の登録・試合の登録・スコアブックの保存・世界の作成は書ける。
+- `test_permissions.py`: `test_staff_can_edit_any_team` を `test_staff_outside_the_workspace_cannot_edit`（staff・superuser の部外者は選手の編集・試合の編集が 403 で、登録の導線も出ない）と `test_an_editor_of_the_workspace_can_edit_any_team` に替えた。スコアブックで対戦カードを担当外の2チームに替えると 403 で試合が変わらないこと（再発防止）と、担当のチームが残る対戦カードなら保存できること（空振りの防止）を足した。チームの無いワークスペースでは、持ち主にも試合の登録の導線を出さず画面は一覧へ戻し、部外者は 403 であること（`EmptyWorkspaceGameCreateTest`）。
+- `test_world_isolation.py` の `PermissionTest`: `build_permission_query` の検査を、画面の振る舞い（編集者がペナントの球団に選手を登録しようとすると 404・ペナントの球団の行の担当者は実データでは閲覧者で、ペナントの球団は 404・実データの球団は 403）に替えた。
+- 件数: domain＋integration 3,814、e2e 13。
+
+**変異の確かめ**（domain＋integration を流し、どれも戻した）
+
+| 変異 | 落ちたテスト |
+| --- | --- |
+| `can_edit_teams` が常に真（担当がほかのチームも書ける） | 24件（86 の部分テスト） |
+| `_can_edit_teams`（`_requires_team_permission`・導線のフラグ・API の唯一の入口）が staff・superuser を通す | 3件（5 の部分テスト。権限の真理値表・`test_staff_outside_the_workspace_cannot_edit`・`test_views_do_not_read_is_staff`） |
+| 担当チームの判定が、ほかのワークスペース（とペナントの世界の球団）の担当を数える（`DjangoWorkspaceAccessQuery` の2本目を `Team.objects` に） | 6件（8 の部分テスト） |
+
+
+**計測（2026-10-25）**: 「W2 の計測の基準」と同じ手順。開発 DB を `backup()` で `/tmp/w2-t5/db.sqlite3` に写し（`integrity_check` ok・試合 3,480。共有の開発 DB は main の 0058 まで当たっていて、epic の 0059〜0061 はそのまま `migrate` できた。T4 の `stage` 列の手当ては要らなかった）、T5 のコードで `migrate` → `pennant_create`（2リーグ・世界 1・球団12・選手966人）→ `pennant_advance --to week`（36試合）。写しの上だけで `s-sato`（staff でない）を球団 1 の担当にした。既定のワークスペースの key は `q5pab3hlrh`。基点 e113c47（epic の先端＝T4 と main の取り込みの後。使い捨ての worktree）と T5 を交互に3回ずつ、未ログイン・持ち主（`admin`。`--world 1` でペナントも）・担当（`s-sato`）で流した。中央値（応答 ms / SQL ms / クエリ）。写しと使い捨ての worktree は計測後に消した。
+
+| 画面 | 基点・未ログイン | T5・未ログイン | 基点・持ち主 | T5・持ち主 | 基点・担当 | T5・担当 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| ダッシュボード | 487/63/11 | 489/61/11 | 501/61/13 | 493/61/13 | 491/60/14 | 508/63/14 |
+| チーム一覧 | 12/3/3 | 12/3/3 | 12/3/5 | 13/3/5 | 14/3/6 | 14/3/6 |
+| 順位表 | 72/3/5 | 71/3/5 | 75/3/7 | 71/3/7 | 78/3/8 | 74/3/8 |
+| 順位表(2026) | 69/3/5 | 68/3/5 | 70/3/7 | 69/3/7 | 73/3/8 | 73/3/8 |
+| 選手一覧(野手) | 265/12/28 | 270/12/28 | 275/13/31 | 269/12/30 | 267/13/32 | 270/13/31 |
+| 選手一覧(投手) | 262/11/28 | 265/11/28 | 270/11/31 | 253/11/30 | 263/11/32 | 260/11/31 |
+| 選手詳細 | 87/4/16 | 87/4/16 | 90/4/19 | 95/4/18 | 89/4/20 | 94/4/19 |
+| 選手検索 | 14/1/5 | 13/1/5 | 14/1/7 | 15/1/7 | 15/1/8 | 15/1/8 |
+| リーグ詳細 | 109/6/6 | 104/6/6 | 108/6/8 | 112/6/8 | 109/6/9 | 109/6/9 |
+| リーグ成績 | 147/7/9 | 143/8/9 | 142/8/11 | 151/10/11 | 143/7/12 | 143/7/12 |
+| リーグタイトル | 70/9/8 | 65/8/8 | 66/9/10 | 69/9/10 | 70/9/11 | 68/9/11 |
+| 試合一覧 | 102/15/7 | 100/14/7 | 104/14/10 | 101/14/9 | 100/14/11 | 102/14/10 |
+| 試合詳細 | 497/36/18 | 495/38/18 | 495/37/21 | 499/38/20 | 503/37/22 | 500/38/21 |
+| 戦力分析 | 35/6/9 | 36/6/9 | 38/6/11 | 37/6/11 | 38/6/12 | 40/6/12 |
+| 戦力分析（起用マップ） | 26/5/9 | 27/5/9 | 28/5/11 | 28/5/11 | 28/5/12 | 31/6/12 |
+| 戦力分析（FA取得） | 42/10/14 | 41/10/14 | 41/10/16 | 42/10/16 | 42/10/17 | 45/11/17 |
+
+ペナント（持ち主 `admin`。基点 → T5）: ペナント一覧 27/3/16 → 30/3/16、世界ダッシュボード 154/4/53 → 158/4/53、世界の順位表 12/0/11 → 12/0/11、世界のリーグ詳細 15/1/12 → 14/1/12、世界のリーグ成績 115/0/17 → 116/0/17、世界のチーム一覧 8/1/9 → 9/1/9、世界の選手一覧 115/2/45 → 115/2/45、世界の試合一覧 15/1/13 → 16/1/13、世界の戦力分析 39/1/15 → 35/1/15、世界の球団ホーム 62/4/29 → 61/4/29。
+
+- **見込みどおり**: 未ログインは全画面で基点と同じクエリ数。持ち主は判定のある4画面（選手一覧の2つ・選手詳細・試合一覧・試合詳細）で −1（`DjangoTeamPermissionQuery` の1本が消えた）、ほかの画面とペナントの10画面は同じ。担当も判定のある画面で −1（T4 の +1 と打ち消し合い、W2 の基準＝T3 の先端と同じ）、判定の無い画面は基準から +1 のまま（担当チームの id の2本目）。
+- 応答時間は揺れの範囲（同じ画面で ±10% 以内。SQL 時間も同じ）。
+

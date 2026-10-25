@@ -21,7 +21,7 @@ from .forms import (
     RunnerAdvanceForm,
     ScorebookGameForm,
 )
-from .views import _first_error, _real_scope, _url, build_permission_query, build_recording_service
+from .views import _can_edit_teams, _first_error, _real_scope, _url, build_recording_service
 
 _MISSING = object()
 
@@ -125,7 +125,7 @@ def game_scorebook(request, game_id):
     except GameNotFound:
         return JsonResponse({"ok": False, "error": "試合が見つかりません。"}, status=404)
 
-    if not build_permission_query(scope).can_manage_any(request.user, (team_ids.home_team_id, team_ids.away_team_id)):
+    if not _can_edit_teams(request, (team_ids.home_team_id, team_ids.away_team_id)):
         return JsonResponse({"ok": False, "error": "このチームを編集する権限がありません。"}, status=403)
 
     lineup_data = _as_row_list(body, "lineup")
@@ -146,6 +146,13 @@ def game_scorebook(request, game_id):
     for form in (game_form, *lineup_forms):
         if not form.is_valid():
             return JsonResponse({"ok": False, "error": _first_error(form)}, status=400)
+
+    if not _can_edit_teams(request, (game_form.cleaned_data["home_team"], game_form.cleaned_data["away_team"])):
+        # 対戦カードを書き換える保存は、書き換えた後の2チームでも判定する（担当していない2チームの試合に替えさせない。
+        # 試合の登録と同じ規則）
+        return JsonResponse(
+            {"ok": False, "error": "どちらのチームも担当していないため、この試合は保存できません。"}, status=403
+        )
 
     plate_appearances, error = _collect_plate_appearances(plate_appearance_data)
     if error is not None:

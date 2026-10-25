@@ -23,12 +23,14 @@ A の範囲で読んだもの・A の key の URL（`/w/<A の key>/...`）の�
 """
 
 import inspect
+import json
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from unittest.mock import patch
 
+from django.apps import apps
 from django.contrib.auth.models import User
 from django.db import connection
 from django.http import Http404
@@ -84,7 +86,6 @@ from myapp.infrastructure.queries import (
     DjangoSimulationContextQuery,
     DjangoTeamAnalysisQuery,
     DjangoTeamListQuery,
-    DjangoTeamPermissionQuery,
     DjangoWorkspaceAccessQuery,
     DjangoWorkspaceListQuery,
     DjangoWorldSummaryQuery,
@@ -108,6 +109,7 @@ from myapp.presentation.views import build_pennant_world_service
 from myapp.urls import workspace_urlpatterns
 
 from ..helpers import (
+    GAME_DAY_UNRECORDED,
     build_league_view_service,
     build_workspace_access_query,
     make_editor,
@@ -461,14 +463,6 @@ def _player_search_query(t: WorkspaceCase) -> None:
     t.assertEqual(len(query.search("A打者")), 9)
 
 
-def _team_permission_query(t: WorkspaceCase) -> None:
-    query = DjangoTeamPermissionQuery(t.a)
-    staff = User.objects.create_user(username="staff-iso", password="x", is_staff=True)
-    t.assertTrue(query.can_manage(staff, t.team.id))
-    t.assertFalse(query.can_manage(staff, t.b_team.id))
-    t.assertFalse(query.can_manage_any(staff, t.b_ids))
-
-
 def _game_list_query(t: WorkspaceCase) -> None:
     query = DjangoGameListQuery(t.a)
     t.assertEqual([row.id for row in query.list_rows()], [t.a_game_id])
@@ -756,7 +750,6 @@ CHECKS: dict[type, Callable[[WorkspaceCase], None]] = {
     DjangoSimulationContextQuery: _simulation_context_query,
     DjangoPlayerStatsQuery: _player_stats_query,
     DjangoPlayerSearchQuery: _player_search_query,
-    DjangoTeamPermissionQuery: _team_permission_query,
     DjangoGameListQuery: _game_list_query,
     DjangoPennantActivityQuery: _pennant_activity_query,
     DjangoTeamListQuery: _team_list_query,
@@ -1544,6 +1537,50 @@ OUTSIDE_PREFIXES = ("/accounts/", "/admin/", "/static/", "?", "#", "https://cdn.
 LINK = re.compile(r'(?:href|action)="([^"]*)"')
 
 
+def snapshot_all_rows() -> dict[str, list[dict]]:
+    """アプリの全表の行（中身ごと）。書き込みを送った前後で比べ、何も変わらなかったことを確かめる。"""
+    return {
+        model.__name__: list(model._default_manager.order_by("pk").values())
+        for model in apps.get_app_config("myapp").get_models()
+    }
+
+
+# 書き込み（POST）を受け付けるパターンと、送る本文（通れば実際に書ける形。空の本文で検証に落ちて空振りしないように）。
+# 引数は (その側の id, その側のもう1つのチーム)。表に無い画面への POST は、読むだけの画面への POST
+WRITE_BODIES: dict[str, Callable[[Side, int], dict]] = {
+    "player_list": lambda side, rival: {"name": "侵入", "number": "99", "position": "内野手"},
+    "player_edit": lambda side, rival: {"retire": "1"},
+    "game_create": lambda side, rival: {
+        "year": str(side.year),
+        "played_on": f"{side.year}-05-01",
+        "home_team": side.team,
+        "away_team": rival,
+    },
+    "api_game_scorebook": lambda side, rival: {
+        **GAME_DAY_UNRECORDED,
+        "year": side.year,
+        "played_on": f"{side.year}-06-01",
+        "home_team": side.team,
+        "away_team": rival,
+        "lineup": [],
+        "plate_appearances": [],
+    },
+    "pennant_index": lambda side, rival: {
+        "name": "侵入の世界",
+        "leagues": [str(side.league)],
+        "managed_team": str(side.team),
+        "postseason_format": "NPB",
+        "start_year": "2040",
+    },
+    "pennant_advance": lambda side, rival: {"target": "day", "expected_today": ""},
+    "pennant_close_season": lambda side, rival: {},
+    "pennant_club": lambda side, rival: {"section": "lineup", "action": "manual"},
+    "pennant_delete": lambda side, rival: {},
+    "pennant_settings": lambda side, rival: {"postseason_format": "NONE"},
+    "pennant_draft_order_settings": lambda side, rival: {"draft_order_rule": "NPB"},
+}
+
+
 def _world_side_ids(world_id: int) -> tuple[int, int, int, int]:
     """世界の (球団, 選手, リーグ, 試合)。試合はここで1つ置く（世界の試合の画面を開くため）。"""
     league = orm_models.League.objects.filter(world_id=world_id).order_by("id").first()
@@ -1704,6 +1741,72 @@ class EveryWorkspaceUrlTest(WorkspaceCase):
                     self.client.force_login(member)
                     response = self._send(name, url)
                     self.assertEqual(response.wsgi_request.workspace.key, self.workspace_b.key)
+
+    def _post(self, name: str, url: str, side: Side, rival: int):
+        body = WRITE_BODIES[name](side, rival) if name in WRITE_BODIES else {}
+        if URL_TABLE[name][1] == API:
+            return self.client.post(url, data=json.dumps(body), content_type="application/json")
+        return self.client.post(url, body)
+
+    def test_every_write_pattern_has_a_body(self):
+        """書き込みの種類（WRITE・API）は、どれも本文を持つ（空の本文の検証落ちで空振りしない）。"""
+        writes = {name for name, (_, kind, _) in URL_TABLE.items() if kind in (WRITE, API)}
+        self.assertEqual(writes - set(WRITE_BODIES), set())
+        self.assertEqual(set(WRITE_BODIES) - set(URL_TABLE), set(), "本文の表に、もう無い URL が残っています")
+
+    def test_posts_by_an_outsider_to_the_other_workspace_change_nothing(self):
+        """A の持ち主は公開の B では閲覧者。B の key の下の全パターンへ POST しても、書き込みは 403 で何も変わらない。
+
+        書き込みを受け付ける画面（`WRITE_BODIES`）は 403（未ログインではないのでログインへは送らない）。
+        読むだけの画面への POST は、405 か画面を返すだけで、やはり何も変わらない。
+        """
+        self.client.force_login(self.workspace.owner)
+        before = snapshot_all_rows()
+        for name in URL_TABLE:
+            url = self._url(name, self.side_b, workspace=self.workspace_b)
+            with self.subTest(name=name):
+                response = self._post(name, url, self.side_b, self.b_rival.id)
+                if name in WRITE_BODIES:
+                    self.assertEqual(response.status_code, 403)
+                else:
+                    self.assertIn(response.status_code, {200, 302, 404, 405})
+                self.assertEqual(snapshot_all_rows(), before, f"{name}: 部外者の POST が行を変えた")
+
+    def test_posts_with_the_other_workspaces_ids_under_a_change_nothing(self):
+        """A の持ち主が A の key の下で B の id を送る。id を URL に持つパターンは 404、本文だけに持つ
+        パターン（試合の登録・世界の作成）はフォームのエラー。どれも何も変わらない（500 にならない）。
+        """
+        self.client.force_login(self.workspace.owner)
+        before = snapshot_all_rows()
+        for name, (args, _, _) in URL_TABLE.items():
+            if not ID_ARGS.intersection(args) and name not in WRITE_BODIES:
+                continue
+            url = self._url(name, self.side_b) if ID_ARGS.intersection(args) else self._url(name, self.side_a)
+            with self.subTest(name=name):
+                response = self._post(name, url, self.side_b, self.b_rival.id)
+                if not ID_ARGS.intersection(args):
+                    expected = {200}
+                elif name in WRITE_BODIES:
+                    expected = {404}
+                else:
+                    expected = {404, 405}  # 読むだけの画面（`require_GET` など）は、POST をビューの前に 405 で返す
+                self.assertIn(response.status_code, expected)
+                self.assertEqual(snapshot_all_rows(), before, f"{name}: B の id を混ぜた POST が行を変えた")
+
+    def test_the_write_bodies_do_write_for_the_owner(self):
+        """空振りの防止: 同じ本文を A の持ち主が A の id で送ると、選手の登録・試合の登録・スコアブックの保存・
+        世界の作成は書ける（上の 403・404・フォームのエラーが、本文の誤りによるものではない）。
+        """
+        # スコアブックは打席の記録の無い古い形式の試合を保存しないので、登録しただけの試合へ送る
+        unrecorded = play_game(self.team, self.rival, recorded=False).id
+        self.client.force_login(self.workspace.owner)
+        for name in ("player_list", "game_create", "api_game_scorebook", "pennant_index"):
+            with self.subTest(name=name), patch(ROSTER_CHECK):
+                before = snapshot_all_rows()
+                side = replace(self.side_a, game=unrecorded)
+                response = self._post(name, self._url(name, side), side, self.rival.id)
+                self.assertIn(response.status_code, {200, 302})
+                self.assertNotEqual(snapshot_all_rows(), before, f"{name}: 持ち主の書き込みが空振りした")
 
     def test_a_public_workspace_is_open_to_everyone(self):
         """空振りの防止: 公開の B なら、A の持ち主（部外者）も B の key の画面を読める。"""

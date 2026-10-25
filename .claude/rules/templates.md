@@ -11,5 +11,5 @@ paths:
 - 成績表は `tabular-nums` で桁を揃える。
 - **ワークスペースの中の画面（`myapp/urls.py` の `workspace_urlpatterns`。`/w/<key>/` の下）へのリンクは `{% scoped_url %}` か `{% workspace_url %}` で引く。** 素の `{% url %}` はワークスペースの外（`/`・ログイン・管理画面）だけ。共有テンプレート（実データとペナントの世界で使う）は `scoped_url`、片方専用の画面は `workspace_url`。素の `{% url %}` では key を運べない（`test_templates.py` の `WorkspaceUrlTagTest` が検査する）。
 - どちらのタグも context の `workspace`（今の要求のワークスペース）の key を足し、`workspace` の無い描画では例外になる。ワークスペースの外でも描くテンプレート（`base.html`・`404.html` など）は、中の画面へのリンクを `{% if workspace %}` で囲む。`/` の一覧のように行ごとに別のワークスペースの入口を引くときは `{% workspace_entry_url key %}`。
-- 書き込みの導線（登録フォーム・編集ボタン）は未ログインの人に表示しない。`{% if user.is_authenticated %}` で囲む。
+- 書き込みの導線（登録フォーム・編集ボタン）は、**ビューが渡す権限のフラグで囲む**（`can_edit_team`・`can_edit`・`can_create_game`・世界の `is_owner`・作成フォームの有無など。ビューは `request.workspace.access`（`WorkspaceAccess`）から作る）。`{% if user.is_authenticated %}` で囲まない（ログインしただけの人や、管理ユーザーでもワークスペースの部外者には、押しても弾かれる導線になる）。未ログインならフラグは偽。ヘッダーの「管理画面」のリンクだけは `user.is_staff`（管理画面に入れる条件そのもの）。
 - 選択肢の一覧（守備位置・球場の屋根種別など）をテンプレートに並べない。ドメインの値オブジェクトが唯一の出典で、ビューかフォーム経由で受け取る。
