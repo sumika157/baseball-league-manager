@@ -54,10 +54,13 @@ workspace_urlpatterns = [
     # 選手は Team 集約の内部エンティティなので、URL もチームの下に置く
     _w("team/<int:team_id>/player/<int:player_id>/", views.player_detail, "player_detail"),
     _w("team/<int:team_id>/player/<int:player_id>/edit/", views.player_edit, "player_edit", login=True),
-    # --- 登録画面（リーグ・球場。W3 #79）。見るのも書くのも全体の編集権（持ち主・編集者）だけ ---
+    # --- 登録画面（リーグ・チーム・球場。W3 #79）。見るのも書くのも全体の編集権（持ち主・編集者）だけ ---
     _w("setup/leagues/", views.setup_leagues, "setup_leagues", login=True),
     _w("setup/leagues/<int:league_id>/", views.setup_league_edit, "setup_league_edit", login=True),
     _w("setup/leagues/<int:league_id>/delete/", views.setup_league_delete, "setup_league_delete", login=True),
+    _w("setup/teams/", views.setup_teams, "setup_teams", login=True),
+    _w("setup/teams/<int:team_id>/", views.setup_team_edit, "setup_team_edit", login=True),
+    _w("setup/teams/<int:team_id>/delete/", views.setup_team_delete, "setup_team_delete", login=True),
     _w("setup/stadiums/", views.setup_stadiums, "setup_stadiums", login=True),
     _w("setup/stadiums/<int:stadium_id>/", views.setup_stadium_edit, "setup_stadium_edit", login=True),
     _w("setup/stadiums/<int:stadium_id>/delete/", views.setup_stadium_delete, "setup_stadium_delete", login=True),

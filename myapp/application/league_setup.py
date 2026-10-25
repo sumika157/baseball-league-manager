@@ -88,11 +88,14 @@ class LeagueSetupService:
 
         所属リーグは試合が1つも無いときだけ変えられる（`LeagueChangeLocked`。2026-10-25 決定）。検査は、今の所属と
         比べて変えたときにリポジトリが試合を数えて domain の規則で行う。
+        移す先のリーグの支配下選手の登録枠を超えるチームは移せない（`RegisteredPlayerLimitExceeded`。W3 T3）。
+        移す先のリーグは範囲で引く（範囲の外なら `LeagueNotFound`）。所属を変えないときはリーグを読まない。
         """
         team = self._teams.find_by_id(team_id)
         team.rename(name)
         team.reorder(display_order)
-        team.move_to_league(league_id)
+        if league_id != team.league_id:
+            team.move_to_league(league_id, limits=self._leagues.find_by_id(league_id).roster_limits)
         team.change_home_stadium(home_stadium_id)
         self._teams.save(team)
 

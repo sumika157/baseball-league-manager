@@ -15,7 +15,7 @@ A の範囲で読んだもの・A の key の URL（`/w/<A の key>/...`）の�
   B の世界（`/w/<A>/pennant/<B の世界>/` とその下）を開くと 404、A のペナントの一覧には A の世界だけが出る。
 - (5) `players_in(real(A))` に B の選手も A の世界の選手も出ない。
 - (6) 登録（W3。#79）: A の範囲の球場のリポジトリ・登録画面の参照に B の行が出ず、A の範囲のリーグ・チーム・球場の
-  削除は B の行を消せない（どの表の行も変わらない）。登録画面の URL（T2）も `URL_TABLE` に載る（`Side.stadium`）。
+  削除は B の行を消せない（どの表の行も変わらない）。登録画面の URL（T2・T3）も `URL_TABLE` に載る（`Side.stadium`）。
 - ワークスペースの台帳（`DjangoWorkspaceAccessQuery`・`DjangoWorkspaceListQuery`。W2 T1）: A の key で B の行が
   出ず、B の編集者・担当は A では部外者。一覧に、入っていないワークスペースは出ない。
 - URL（W2 T4）: `workspace_urlpatterns` の全パターンを分類表（`URL_TABLE`）で検査する（表に無いパターンが
@@ -1567,6 +1567,9 @@ URL_TABLE: dict[str, tuple[tuple[str, ...], str, bool]] = {
     "setup_leagues": ((), PAGE, True),
     "setup_league_edit": (("league",), PAGE, True),
     "setup_league_delete": (("league",), PAGE, True),
+    "setup_teams": ((), PAGE, True),
+    "setup_team_edit": (("team",), PAGE, True),
+    "setup_team_delete": (("team",), PAGE, True),
     "setup_stadiums": ((), PAGE, True),
     "setup_stadium_edit": (("stadium",), PAGE, True),
     "setup_stadium_delete": (("stadium",), PAGE, True),
@@ -1661,6 +1664,14 @@ WRITE_BODIES: dict[str, Callable[[Side, int], dict]] = {
     "setup_leagues": lambda side, rival: {"name": "侵入のリーグ", **SETUP_LEAGUE_LIMITS},
     "setup_league_edit": lambda side, rival: {"name": "改ざんのリーグ", "display_order": "0", **SETUP_LEAGUE_LIMITS},
     "setup_league_delete": lambda side, rival: {},
+    "setup_teams": lambda side, rival: {"name": "侵入のチーム", "league": side.league, "home_stadium": side.stadium},
+    "setup_team_edit": lambda side, rival: {
+        "name": "改ざんのチーム",
+        "league": side.league,
+        "home_stadium": side.stadium,
+        "display_order": "0",
+    },
+    "setup_team_delete": lambda side, rival: {},
     "setup_stadiums": lambda side, rival: {"name": "侵入の球場", "capacity": "1"},
     "setup_stadium_edit": lambda side, rival: {"name": "改ざんの球場", "capacity": "1"},
     "setup_stadium_delete": lambda side, rival: {},
@@ -1900,7 +1911,14 @@ class EveryWorkspaceUrlTest(WorkspaceCase):
         unrecorded = play_game(self.team, self.rival, recorded=False).id
         self.client.force_login(self.workspace.owner)
         writes = ("player_list", "game_create", "api_game_scorebook", "pennant_index")
-        setup_writes = ("setup_leagues", "setup_league_edit", "setup_stadiums", "setup_stadium_edit")
+        setup_writes = (
+            "setup_leagues",
+            "setup_league_edit",
+            "setup_teams",
+            "setup_team_edit",
+            "setup_stadiums",
+            "setup_stadium_edit",
+        )
         for name in writes + setup_writes:
             with self.subTest(name=name), patch(ROSTER_CHECK):
                 before = snapshot_all_rows()

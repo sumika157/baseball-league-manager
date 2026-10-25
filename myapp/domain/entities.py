@@ -612,10 +612,27 @@ class Team:
     def reorder(self, display_order: int) -> None:
         self.display_order = _ensure_display_order(display_order)
 
-    def move_to_league(self, league_id: int) -> None:
-        """所属リーグを変える。試合のあるチームは変えられない（`setup.ensure_league_change_allowed`）が、試合の数は
-        集約が持たないので、検査は保存するリポジトリが行う。移す先の枠の検査を足すなら、ここに足す（W3 T3 で決める）。
+    def move_to_league(self, league_id: int, *, limits: RosterLimits) -> None:
+        """所属リーグを変える。`limits` は**移す先のリーグ**の上限（`League.roster_limits`）。
+
+        今の支配下選手が移す先の支配下選手の登録枠を超えるなら `RegisteredPlayerLimitExceeded` で、何も変えない
+        （移した後に枠を超えたままのリーグを作らない。W3 T3）。今と同じリーグなら何もしない（今のリーグの枠を
+        後から下げて超えているチームも、所属を変えない保存では咎めない）。
+        試合のあるチームは変えられない（`setup.ensure_league_change_allowed`）が、試合の数は集約が持たないので、
+        その検査は保存するリポジトリが行う（枠の検査がここで先に走るので、試合があって枠も超えるチームを
+        サービスから直接動かすと、理由は枠のほうになる。画面は試合のあるチームの所属リーグの欄を出さない）。
+        `limits` は省略できない（`add_player` と同じ。検査しないなら `RosterLimits.UNLIMITED` を明示する）。
         """
+        if league_id == self.league_id:
+            return
+        count = self.registered_player_count
+        ensure_quota_not_exceeded(
+            count,
+            limits.registered,
+            f"「{self.name}」の支配下選手（{count}人）が、移す先のリーグの支配下選手の登録枠"
+            f"（{limits.registered}人）を超えるため、所属リーグを変えられません。",
+            RegisteredPlayerLimitExceeded,
+        )
         self.league_id = league_id
 
     def change_home_stadium(self, stadium_id: int | None) -> None:

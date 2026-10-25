@@ -66,7 +66,13 @@
 {% empty %}
   <div class="card">
     <div class="empty-state">
-      まだチームが登録されていません。管理画面から追加してください。
+      まだチームが登録されていません。
+      {# 登録できる人（持ち主・編集者）にだけ、実データのチームの登録画面への案内を出す（ペナントの世界の一覧には出さない） #}
+      {% if can_set_up and not world %}
+        <div class="mt-2">
+          <a href="{% workspace_url 'setup_teams' %}" class="btn btn-sm btn-primary">チームを登録する</a>
+        </div>
+      {% endif %}
     </div>
   </div>
 {% endfor %}

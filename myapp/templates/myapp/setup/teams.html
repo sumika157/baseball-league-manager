@@ -1,0 +1,77 @@
+{% extends 'myapp/base.html' %}
+{% load scoped %}
+
+{% block title %}チームの登録 - Baseball Manager{% endblock %}
+
+{% block content %}
+{% include 'myapp/setup/_head.html' %}
+
+{% comment %}
+チームの一覧（リーグの表示順・チームの表示順）。列ソートは付けない（並びは表示順の数値で決める）。
+削除のリンクは消せる行（在籍・主将の在任・試合が1つも無いチーム）にだけ出す。消せない行は在籍・試合の数で理由が分かる。
+{% endcomment %}
+{% if teams %}
+  <div class="table-responsive">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>リーグ</th>
+          <th class="text-end">表示順</th>
+          <th>チーム名</th>
+          <th>本拠地</th>
+          <th class="text-end">在籍の記録</th>
+          <th class="text-end">試合</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody class="tabular-nums">
+        {% for team in teams %}
+          <tr>
+            <td class="stat-muted">{{ team.league_name }}</td>
+            <td class="text-end stat-muted">{{ team.display_order }}</td>
+            <td><a href="{% workspace_url 'player_list' team.team_id %}" class="player-name">{{ team.name }}</a></td>
+            <td>{{ team.home_stadium_name|default:'—' }}</td>
+            <td class="text-end">{{ team.stint_count }}</td>
+            <td class="text-end">{{ team.game_count }}</td>
+            <td class="text-end text-nowrap">
+              <a href="{% workspace_url 'setup_team_edit' team.team_id %}" class="btn btn-sm btn-outline-secondary">編集</a>
+              {% if not team.deletion_blocker %}
+                <a href="{% workspace_url 'setup_team_delete' team.team_id %}" class="btn btn-sm btn-outline-danger">削除</a>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <div class="card mb-3">
+    <div class="empty-state">まだチームがありません。{% if can_create %}下のフォームから作ってください。{% endif %}</div>
+  </div>
+{% endif %}
+
+<h2 class="h6 mb-2 mt-4">チームを作る</h2>
+{% if can_create %}
+  <form method="post" class="card mb-4">
+    {% csrf_token %}
+    <div class="card-body">
+      {% for error in form.non_field_errors %}<div class="alert alert-danger">{{ error }}</div>{% endfor %}
+      {% include 'myapp/setup/_field.html' with field=form.name %}
+      <div class="row">
+        <div class="col-md-6">{% include 'myapp/setup/_field.html' with field=form.league %}</div>
+        <div class="col-md-6">{% include 'myapp/setup/_field.html' with field=form.home_stadium %}</div>
+      </div>
+      <button type="submit" class="btn btn-primary">作る</button>
+      <span class="stat-muted ms-2" style="font-size: 0.8125rem;">表示順はリーグの末尾に入ります（作った後に編集で変えられます）。</span>
+    </div>
+  </form>
+{% else %}
+  {# チームはリーグに属するので、リーグが無いうちは作成フォームを出さず、リーグのタブへ案内する #}
+  <div class="card mb-4">
+    <div class="empty-state">
+      チームを作るには、先にリーグが要ります。
+      <div class="mt-2"><a href="{% workspace_url 'setup_leagues' %}" class="btn btn-sm btn-primary">リーグを作る</a></div>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

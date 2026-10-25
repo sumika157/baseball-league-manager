@@ -1,4 +1,6 @@
-"""登録画面（リーグ・球場。W3 T2。#79）。
+"""登録画面（リーグ・球場は W3 T2。#79）と、登録画面の門・空のワークスペース・クエリ数（チームを含む。T3）。
+
+チームの画面そのものは `test_setup_teams.py`。
 
 - 作成・編集・削除が画面から通る（新しいリーグは表示順の末尾）。
 - 名前の空・長さ・重複、属性の不正は、フォームのエラー（200）で何も書かない（500 にしない）。
@@ -18,7 +20,16 @@ from django.test.utils import CaptureQueriesContext
 from myapp.infrastructure import orm_models
 from myapp.presentation import views
 
-from ..helpers import make_editor, make_league, make_pennant_world, make_stadium, make_workspace, ws_url
+from ..helpers import (
+    make_editor,
+    make_league,
+    make_pennant_world,
+    make_stadium,
+    make_workspace,
+    play_game,
+    register_players,
+    ws_url,
+)
 from .base import BaseCase
 from .test_workspace_isolation import PAGE, URL_TABLE, snapshot_all_rows
 
@@ -320,7 +331,7 @@ class StadiumScreensTest(SetupCase):
         self.assertTrue(orm_models.Stadium.objects.filter(id=self.stadium.id).exists())
 
 
-SETUP_PAGES = ("setup_leagues", "setup_stadiums")
+SETUP_PAGES = ("setup_leagues", "setup_teams", "setup_stadiums")
 
 
 class SetupGateTest(BaseCase):
@@ -337,6 +348,9 @@ class SetupGateTest(BaseCase):
             ws_url("setup_leagues"),
             ws_url("setup_league_edit", self.league.id),
             ws_url("setup_league_delete", self.league.id),
+            ws_url("setup_teams"),
+            ws_url("setup_team_edit", self.team.id),
+            ws_url("setup_team_delete", self.team.id),
             ws_url("setup_stadiums"),
             ws_url("setup_stadium_edit", self.stadium.id),
             ws_url("setup_stadium_delete", self.stadium.id),
@@ -430,15 +444,42 @@ class EmptyWorkspaceTest(BaseCase):
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(guide in response.content.decode(), shown)
 
-    def test_the_owner_builds_a_league_and_a_stadium_from_nothing(self):
+    def test_the_team_list_guides_only_those_who_can_set_up(self):
+        guide = f'href="{ws_url("setup_teams", workspace=self.empty)}" class="btn'
+        for user, shown in ((self.empty.owner, True), (self.viewer, False), (None, False)):
+            with self.subTest(user=str(user)):
+                if user is None:
+                    self.client.logout()
+                else:
+                    self.client.force_login(user)
+                response = self.client.get(ws_url("team_list", workspace=self.empty))
+                self.assertEqual(response.status_code, 200)
+                self.assertNotContains(response, "管理画面から追加してください")
+                self.assertEqual(guide in response.content.decode(), shown)
+
+    def test_the_owner_builds_a_league_from_nothing(self):
         self.client.force_login(self.empty.owner)
 
         self.client.post(ws_url("setup_stadiums", workspace=self.empty), {"name": "はじめての球場"})
         self.client.post(ws_url("setup_leagues", workspace=self.empty), {"name": "はじめてのリーグ", **LEAGUE_BODY})
-
         league = orm_models.League.objects.get(workspace=self.empty)
+        stadium = orm_models.Stadium.objects.get(workspace=self.empty)
+        for name, home in (("はじめての球団", stadium.id), ("ふたつめの球団", "")):
+            response = self.client.post(
+                ws_url("setup_teams", workspace=self.empty), {"name": name, "league": league.id, "home_stadium": home}
+            )
+            self.assertRedirects(response, ws_url("setup_teams", workspace=self.empty))
+
         self.assertEqual((league.name, league.display_order), ("はじめてのリーグ", 0))
-        self.assertEqual(orm_models.Stadium.objects.get(workspace=self.empty).name, "はじめての球場")
+        self.assertEqual(stadium.name, "はじめての球場")
+        self.assertEqual(
+            list(
+                orm_models.Team.objects.filter(league=league)
+                .order_by("display_order")
+                .values_list("name", "home_stadium_id", "display_order")
+            ),
+            [("はじめての球団", stadium.id, 0), ("ふたつめの球団", None, 1)],
+        )
 
 
 class SetupQueryCountTest(SetupCase):
@@ -469,15 +510,35 @@ class SetupQueryCountTest(SetupCase):
         with self.assertNumQueries(baseline):
             self.client.get(url)
 
+    def test_the_team_list(self):
+        """チームの一覧（と作成フォームの選択肢のリーグ・球場）も、チーム・在籍・試合・担当の数によらない。"""
+        url = ws_url("setup_teams")
+        baseline = self._count(url)
+        manager = User.objects.create_user(username="manager", password="x")
+        for i in range(4):
+            league = make_league(f"追加リーグ{i}")
+            team = orm_models.Team.objects.create(
+                league=league, name=f"追加チーム{i}", home_stadium=make_stadium(f"追加球場{i}")
+            )
+            team.managers.add(manager)
+            register_players(team, [(f"追加選手{i}", "1", "投手")])
+        play_game(self.team, self.rival)
+
+        with self.assertNumQueries(baseline):
+            self.client.get(url)
+
     def test_the_edit_and_delete_pages(self):
-        """編集と削除の確認も、行の数（チーム・本拠地の数）によらない。"""
+        """編集と削除の確認も、行の数（チーム・本拠地・在籍の数）によらない。"""
         urls = [
             ws_url("setup_league_edit", self.league.id),
             ws_url("setup_league_delete", self.league.id),
+            ws_url("setup_team_edit", self.team.id),
+            ws_url("setup_team_delete", self.team.id),
             ws_url("setup_stadium_edit", self.stadium.id),
             ws_url("setup_stadium_delete", self.stadium.id),
         ]
         baselines = [self._count(url) for url in urls]
+        register_players(self.team, [("追加選手", "1", "投手")])
         for i in range(4):
             orm_models.Team.objects.create(league=self.league, name=f"追加チーム{i}", home_stadium=self.stadium)
 
