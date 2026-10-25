@@ -31,18 +31,27 @@
 - **ワークスペースどうし・実データとペナントの世界を混ぜない**: リポジトリと参照クエリは範囲 `WorldScope(workspace_id, world_id)` を
   必須の引数で受け取り（既定値なし）、実データはそのワークスペース、ペナントはその世界だけを読み書きする。
   世界の台帳（`WorldRepository`・`WorldSummaryQuery`）もワークスペースの id を必須で受け取る。「範囲が無ければ全部読む」形の API を作らない。
-  **例外は管理画面専用の `admin_real_queryset` だけ**（全ワークスペースの実データ。`admin.py` 以外から使わないことを `test_wiring.py` が検査）。
-  範囲を作るのは views の `_real_scope(request)`・`_world_scope(request, world_id)`、管理コマンドの `--workspace`・`--world`、テストの
-  `real_scope()`・`world_scope()` だけ（Wiki「ペナントモードの仕組み」の「世界の分け方」・設計書 `docs/design/workspaces.md`）。
+  **例外は次の3つだけ**（どれも使ってよい場所を `test_wiring.py` が検査する）:
+  - 管理画面専用の `admin_real_queryset`（全ワークスペースの実データ。`admin.py` だけ。運営向けの概況もここ）
+  - ワークスペースそのものを引く台帳（`WorkspaceAccessQuery`・`WorkspaceListQuery`）。key や利用者からワークスペースを引くだけで、中のデータは読まない
+  - 台帳の相関副問い合わせ用の `real_teams_of_outer_workspace()`（`infrastructure/queries.py` だけ）
+
+  ワークスペースは URL（`/w/<key>/`）の key から `workspace_view` が解決する。範囲を作るのは views の `_real_scope(request)`・
+  `_world_scope(request, world_id)`、管理コマンドの `--workspace`・`--world`、テストの `real_scope()`・`world_scope()` だけ（Wiki「ペナントモードの仕組み」の「世界の分け方」・設計書 `docs/design/workspaces.md`）。
 - **依存の組み立ては `presentation/views.py` の `build_*()` 関数だけ。** サービスを増やすときは組み立て口もここに足し、依存を全部渡す
   （`tests/integration/test_wiring.py` が検査する）。管理コマンドとテスト（`tests/helpers.py` 経由）もここから取る。呼ぶ側ごとに一部の依存だけを
   渡さない（渡し忘れが「開く画面によって落ちるサービス」になる。管理画面のテンプレートタグで実際に起きた）。
-  **組み立て口はすべて範囲（`scope`）を必須で受け取る**（台帳だけを読む `build_pennant_world_view(workspace_id)` を除く）。
+  **組み立て口はすべて範囲（`scope`）を必須で受け取る**（台帳だけを読む `build_pennant_world_view(workspace_id)`・
+  `build_workspace_access_query()`・`build_workspace_list_query()` を除く）。
   ペナント専用・実データ専用の組み立て口に違う種類の範囲を渡すと `InvalidWorld`（どれがどれかは `test_wiring.py` の分類が出典）。
 - **層をまたぐ受け渡しに素の `dict` を使わない。** application が presentation に返す形は `application/dto.py` の dataclass にする（文字列キーの dict は綴りを間違えても静的検査が黙る）。DTO に集約を包ませない。集約からの取り出しは application が担い、presentation は DTO を写すだけにする（前例: `application/game_edit.py` と `GameEditData`）。
-- **application のサービスは対象ごとに分けてある**（参照は `LeagueViewService`・`TeamViewService`・`GameViewService`・`AdminOverviewService`、
+- **application のサービスは対象ごとに分けてある**（参照は `LeagueViewService`・`TeamViewService`・`GameViewService`、
   更新は `RosterService`・`GameRecordingService`。#219）。対象の違うメソッドを既存のサービスに足す前に、別のサービスに置けないか考える。
   参照のサービスに更新を足さない。分ける判断は選択肢としてユーザーに提示する。
+- **サイトの権限は `WorkspaceAccess`（持ち主・編集者・チーム担当・閲覧）だけで判定する。** 判定の材料は `workspace_view` が要求ごとに
+  1回読む。`is_staff`・`is_superuser` は管理画面に入る条件にだけ使い、サイトの読み書きの判定に使わない。`WorkspaceAccess` は「そのチームを
+  編集できる役割か」だけを見て、チームがこのワークスペースのものかは見ない。他所の id を混ぜた書き込みは、範囲で絞ったリポジトリ・サービスが
+  止める（新しい書き込みの経路は、id を必ず範囲で絞って引く）。
 
 ## 同じ事実の出典を2つ作らない
 
@@ -103,8 +112,8 @@ ORM に直接 `bulk_create` 等で書き込むコード（データ投入コマ�
 ## UI・設計方針
 
 - **両立しない操作を同じ画面に並べない。** 片方を無効化して案内文で繕う前に、片方を消せないか考える。消す判断は選択肢としてユーザーに提示する。
-- 書き込みの導線（登録フォーム・編集ボタン）は、ログインしていない人には表示しない。押しても弾かれるだけの導線を見せない。
-- 読み書きが同じ URL に同居する画面は、GET は誰でも通し POST だけログインを求める（画面ごと `login_required` にしない）。
+- 書き込みの導線（登録フォーム・編集ボタン）は、書き込める人（ビューが `WorkspaceAccess` から渡すフラグが真）にだけ表示する。押しても弾かれるだけの導線を見せない。
+- 読み書きが同じ URL に同居する画面は、GET はワークスペースを読める人を通し、POST だけログインと編集権を求める（画面ごと `login_required` にしない）。
 - 並べ替えのキーと既定の向きはドメイン層が持つ。不正なソートキーはエラーにせず既定の並びに落とす。
 
 ## 既知の罠（踏み直さない）

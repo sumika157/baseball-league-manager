@@ -59,7 +59,9 @@ presentation  →  application  →  domain  ←  infrastructure
 - **依存の組み立ては `presentation/views.py` の `build_*()` だけ**。サービスやリポジトリを別の場所（テンプレートタグ・管理画面・
   管理コマンド・テスト）で個別に組み立てていないか。テストは `tests/helpers.py` 経由で `build_league_view_service(real_scope())` などを呼ぶ。
 - **組み立て口・リポジトリ・参照クエリが範囲（`WorldScope(workspace_id, world_id)`）を必須で受け取っているか**。既定値を持たせる・
-  範囲を無視して全部読む・`admin_real_queryset` を `admin.py` 以外から使う、のどれかがあればワークスペース間の漏れになる。
+  範囲を無視して全部読む・範囲を取らない例外（`admin_real_queryset` は `admin.py` だけ、ワークスペースの台帳
+  `build_workspace_access_query()`・`build_workspace_list_query()` は `views.py` だけ、`real_teams_of_outer_workspace()` は
+  `infrastructure/queries.py` だけ）を決まった場所の外から使う、のどれかがあればワークスペース間の漏れになる。
   新しい組み立て口は `test_wiring.py` の分類（両用・実データ専用・ペナント専用・台帳）に、新しい `Django*` の読み書きのクラスは
   `test_workspace_isolation.py` の検査の表に足してあるか。
   呼ぶ側ごとに一部の依存だけを渡すと、開く画面によって落ちるサービスになる（管理画面のテンプレートタグで実際に起きた）。
@@ -69,6 +71,18 @@ presentation  →  application  →  domain  ←  infrastructure
   `TeamViewService`・`GameViewService`、更新は `RosterService`・`GameRecordingService`）。対象の違うメソッドを
   既存のサービスに足しているなら、対象ごとの別サービスに置けないかを指摘する。分けるかどうかはユーザーが決めるので、「分ける案」として出す。
   参照のサービスに更新を足していないか（世界の範囲の参照用の組み立てから、現実の今日の年で書く更新を呼べるようになる）も見る。
+
+### 7. 権限（CLAUDE.md「アーキテクチャ規則」・W2）
+- **サイトの読み書きの判定は `WorkspaceAccess`（`domain/workspace.py`。持ち主・編集者・チーム担当・閲覧）だけで行っているか**。
+  判定の材料は URL（`/w/<key>/`）の key から `workspace_view` が要求ごとに1回読み、`request.workspace.access` に置く。
+  ビュー・API が判定のために DB を読み直したり、別の判定（`Team.managers` を直接見るなど）を足したりしていないか。
+- **`is_staff`・`is_superuser` をサイトの判定に使っていないか**。管理画面に入る条件（`admin.py`・ヘッダーの「管理画面」のリンク）にだけ使う。
+  `presentation/` の `.py` が `.is_staff`・`.is_superuser` を読まないことは `TeamPermissionQueryIsGoneTest` が固定している。
+- **新しい書き込みの経路が、受け取った id（チーム・選手・試合）を範囲で絞って引いているか**。`WorkspaceAccess` は「そのチームを編集
+  できる役割か」だけを見て、チームがこのワークスペースのものかは見ない。他所の id を混ぜた書き込みを止めるのは、範囲で絞った
+  リポジトリ・サービス（範囲の外の id は見つからない＝404 かフォームのエラー）。範囲を取らずに id で引く経路があれば、
+  持ち主が自分の key の下で他所の行を書き換えられる。新しい経路は `test_cross_workspace_ids.py` に足してあるか。
+- 書き込みの導線（テンプレート）は、ビューが `WorkspaceAccess` から渡すフラグで囲んでいるか（`user.is_authenticated` で囲まない）。
 
 ## 進め方
 

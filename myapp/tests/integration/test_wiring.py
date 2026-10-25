@@ -880,6 +880,36 @@ class OuterWorkspaceTeamsTest(SimpleTestCase):
         self.assertEqual(users - self.ALLOWED, set(), "ワークスペースの一覧の外で相関副問い合わせの球団を使っています")
 
 
+class WorkspaceLedgerUsersTest(SimpleTestCase):
+    """範囲を取らないワークスペースの台帳は、定義（`infrastructure/queries.py`）と `views.py` だけが使う（W2 T6）。
+
+    台帳は key・利用者からワークスペースそのものを引くだけで、範囲を作る前（`workspace_view`・`/` の一覧）に呼ばれる。
+    application・管理コマンド・テンプレートタグなど、範囲を受け取れる場所で台帳を引き始めると、範囲の外から
+    ワークスペースを選び直す経路になる。`myapp/` の .py（テストを除く）を走査し、名前を出すのが
+    この2つだけかを確かめる。
+    """
+
+    NAMES = (
+        "build_workspace_access_query",
+        "build_workspace_list_query",
+        "DjangoWorkspaceAccessQuery",
+        "DjangoWorkspaceListQuery",
+    )
+    ALLOWED = {Path("myapp/presentation/views.py"), Path("myapp/infrastructure/queries.py")}
+
+    def test_only_the_views_use_the_workspace_ledgers(self):
+        root = Path(__file__).resolve().parents[3]
+        users = set()
+        for path in (root / "myapp").rglob("*.py"):
+            if "tests" in path.relative_to(root).parts:
+                continue
+            text = path.read_text(encoding="utf-8")
+            if any(name in text for name in self.NAMES):
+                users.add(path.relative_to(root))
+        self.assertIn(Path("myapp/presentation/views.py"), users, "検査の対象を拾えていません")
+        self.assertEqual(users - self.ALLOWED, set(), "views.py の外でワークスペースの台帳を使っています")
+
+
 class LedgersAreScopedToTheWorkspaceTest(SimpleTestCase):
     """組み立て口は、世界の台帳を範囲のワークスペースで組み立てる（W1b T3）。
 
