@@ -1,5 +1,6 @@
 import random
 import types
+from collections import Counter
 from typing import ClassVar
 
 from django import forms
@@ -8,6 +9,7 @@ from django.contrib.admin.actions import delete_selected
 from django.contrib.admin.views.main import ORDER_VAR, ChangeList
 from django.contrib.admin.widgets import FilteredSelectMultiple
 from django.contrib.auth import get_user_model
+from django.db import transaction
 from django.db.models import (
     Case,
     Count,
@@ -21,6 +23,7 @@ from django.db.models import (
     When,
 )
 from django.db.models.functions import Cast, Coalesce
+from django.forms.formsets import DELETION_FIELD_NAME
 from django.http import HttpResponseRedirect
 from django.urls import reverse
 from django.utils.html import format_html, format_html_join
@@ -66,7 +69,13 @@ from .infrastructure.orm_models import (
     Workspace,
     WorkspaceEditor,
 )
-from .infrastructure.repositories import DjangoLeagueRepository, DjangoTeamRepository, draft_of
+from .infrastructure.repositories import (
+    DjangoLeagueRepository,
+    DjangoTeamRepository,
+    draft_of,
+    duplicate_team_name,
+    ensure_team_name_free,
+)
 from .infrastructure.scoping import (
     StageFilter,
     admin_real_queryset,
@@ -75,7 +84,7 @@ from .infrastructure.scoping import (
     stage_condition,
     teams_in,
 )
-from .presentation.views import build_recording_service
+from .presentation.views import build_league_setup_service, build_recording_service, build_setup_query
 
 # ヘッダーの文言
 admin.site.site_header = "Baseball Manager 管理"
@@ -421,6 +430,78 @@ class ManualOrderAdminMixin:
         return super().changelist_view(request, extra_context)
 
 
+def _delete_selected_unless_blocked(modeladmin, request, queryset):
+    """一括削除。消せない行（`deletion_blocker` が理由を返す行）が含まれていれば、理由だけを出して何も消さない。"""
+    blocked = [f"{row}: {reason}" for row in queryset if (reason := modeladmin.deletion_blocker(row))]
+    if blocked:
+        label = modeladmin.model._meta.verbose_name
+        modeladmin.message_user(
+            request, f"削除できない{label}が含まれているため、何も削除しませんでした。", level=messages.ERROR
+        )
+        for line in blocked:
+            modeladmin.message_user(request, line, level=messages.ERROR)
+        return None
+    return delete_selected(modeladmin, request, queryset)
+
+
+class BlockedDeletionAdmin(admin.ModelAdmin):
+    """消せない行の削除の導線（ボタン・削除画面）を出さず、一括削除でも何も消さない ModelAdmin（部品として継承する）。
+
+    サブクラスが `deletion_blocker(obj)` で消せない理由を返す（消せるなら空文字か None）。
+    拒否したのに「削除しました」と出るのを避けるため、導線ごと消す（削除画面を直接開いても 403）。
+    """
+
+    def deletion_blocker(self, obj) -> str | None:
+        raise NotImplementedError
+
+    def has_delete_permission(self, request, obj=None):
+        if obj is not None and self.deletion_blocker(obj):
+            return False
+        return super().has_delete_permission(request, obj)
+
+    def get_actions(self, request):
+        actions = super().get_actions(request)
+        if "delete_selected" in actions:
+            _, name, description = actions["delete_selected"]
+            actions["delete_selected"] = (_delete_selected_unless_blocked, name, description)
+        return actions
+
+
+class SetupRulesDeletionAdmin(BlockedDeletionAdmin):
+    """リーグ・チーム・球場の削除を、サイトの登録画面と同じ規則で扱う（W3 T5。#79。2026-10-25 決定 3）。
+
+    消せるかは、サイトの登録画面と同じ参照クエリ（`build_setup_query`）の行の `deletion_blocker` で決める
+    （数え方は `league_usage`・`team_usage`・`stadium_usage`、規則は `domain/setup.py`。どちらもサイトと共有し、
+    管理画面に別の数え方を作らない）。消すのも登録のサービス（`build_league_setup_service` の `delete_*`）で、
+    リポジトリが規則をもう一度通してから範囲で絞った1行を消す。
+    Django の collector の連鎖（在籍・試合まで消える）では消さない。
+    """
+
+    _BLOCKER_CACHE = "_setup_deletion_blocker"
+
+    def setup_row(self, obj):
+        """`obj` の登録画面の行（`LeagueSetupRow` など。`deletion_blocker` を持つ）。"""
+        raise NotImplementedError
+
+    def delete_by_setup_rules(self, obj) -> None:
+        raise NotImplementedError
+
+    def deletion_blocker(self, obj) -> str | None:
+        # 1回の画面で何度も聞かれる（削除のボタン・削除画面）ので、行に覚えておく（クエリは行ごとに1本）
+        if not hasattr(obj, self._BLOCKER_CACHE):
+            setattr(obj, self._BLOCKER_CACHE, self.setup_row(obj).deletion_blocker)
+        return getattr(obj, self._BLOCKER_CACHE)
+
+    def delete_model(self, request, obj):
+        self.delete_by_setup_rules(obj)
+
+    def delete_queryset(self, request, queryset):
+        # 一括削除は消す前に全行を検査済み（`_delete_selected_unless_blocked`）。途中で弾かれたら何も消さない
+        with transaction.atomic():
+            for obj in queryset:
+                self.delete_by_setup_rules(obj)
+
+
 def _grouped_count(queryset, group_field):
     """親1件ぶんの件数を返す副問い合わせを組み立てる。
 
@@ -445,13 +526,33 @@ class TeamInlineForm(forms.ModelForm):
 
 
 class TeamInlineFormSet(forms.BaseInlineFormSet):
-    """リーグのチーム。本拠地の球場は、そのリーグと同じワークスペースのものに限る。"""
+    """リーグのチーム。本拠地の球場は、そのリーグと同じワークスペースのものに限る。
+
+    チームの削除（行の「削除」）とチーム名の一意は、チームの変更画面（`TeamAdmin`・`TeamForm`）と同じ規則で検査する
+    （W3 T5。#79）。消せないチームの行には「削除」の欄を出さず、送られてきても検査で弾く。消すのは登録のサービスで、
+    Django の collector の連鎖（在籍・試合まで消える）では消さない。
+    """
 
     def add_fields(self, form, index):
         super().add_fields(form, index)
         workspace_id = self.instance.workspace_id
         if workspace_id is not None:
             _narrow_choices(form.fields, "home_stadium", stadiums_in(WorldScope.real(workspace_id)))
+        if DELETION_FIELD_NAME in form.fields and self._deletion_blocker(form.instance.pk):
+            # 消せないチームは「削除」の導線を出さない（値は送るが常に偽。偽造して真を送っても `clean` が弾く）
+            form.fields[DELETION_FIELD_NAME].widget = forms.HiddenInput()
+
+    def _deletion_blocker(self, team_id) -> str | None:
+        """このリーグのチーム（`team_id`）を消せない理由。サイトの登録画面と同じ行（`build_setup_query`）から読む。"""
+        if team_id is None:
+            return None
+        if not hasattr(self, "_team_rows"):
+            # ワークスペースのチームをクエリ1本で読む（行ごとに引かない）
+            workspace_id = self.instance.workspace_id
+            rows = build_setup_query(WorldScope.real(workspace_id)).teams() if workspace_id is not None else []
+            self._team_rows = {row.team_id: row for row in rows}
+        row = self._team_rows.get(team_id)
+        return row.deletion_blocker if row is not None else None
 
     def clean(self):
         super().clean()
@@ -462,6 +563,43 @@ class TeamInlineFormSet(forms.BaseInlineFormSet):
             stadium = getattr(form, "cleaned_data", {}).get("home_stadium")
             if stadium is not None and stadium.workspace_id != workspace_id:
                 form.add_error("home_stadium", _CROSS_WORKSPACE.format(name=stadium.name))
+        self._check_team_names(workspace_id)
+        blocked = [
+            f"「{form.instance.name}」: {reason}"
+            for form in self.deleted_forms
+            if (reason := self._deletion_blocker(form.instance.pk))
+        ]
+        if blocked:
+            raise forms.ValidationError(blocked)
+
+    def _check_team_names(self, workspace_id) -> None:
+        """新しい行と名前を変えた行の名前が、ワークスペースの中で重ならないか（`TeamForm` と同じ規則）。
+
+        保存した後の状態で比べる: このリーグの行（消す行を除く）どうしと、このリーグの外のワークスペースのチーム。
+        行どうしの入れ替え（A↔B の改名）は重ならないので通す。
+        名前を変えない行は咎めない（`TeamRepository.save` と同じ）。
+        """
+        deleted = set(self.deleted_forms)
+        kept = [form for form in self.forms if form not in deleted and getattr(form, "cleaned_data", {}).get("name")]
+        counts = Counter(form.cleaned_data["name"] for form in kept)
+        others = teams_in(WorldScope.real(workspace_id)).exclude(
+            pk__in=[form.instance.pk for form in self.forms if form.instance.pk is not None]
+        )
+        for form in kept:
+            if form.instance.pk is not None and "name" not in form.changed_data:
+                continue
+            name = form.cleaned_data["name"]
+            try:
+                if counts[name] > 1:
+                    raise duplicate_team_name(name)
+                ensure_team_name_free(others, name, None)
+            except DomainError as error:
+                form.add_error("name", str(error))
+
+    def delete_existing(self, obj, commit=True):
+        """行の「削除」は登録のサービスで消す（リポジトリが規則をもう一度通し、そのチームの1行だけを消す）。"""
+        if commit:
+            build_league_setup_service(WorldScope.real(self.instance.workspace_id)).delete_team(obj.pk)
 
 
 class TeamInline(RealDataOnlyMixin, admin.TabularInline):
@@ -511,7 +649,7 @@ class LeagueForm(WorkspaceRequiredForm):
 
 
 @admin.register(League)
-class LeagueAdmin(RealDataOnlyMixin, ManualOrderAdminMixin, admin.ModelAdmin):
+class LeagueAdmin(SetupRulesDeletionAdmin, RealDataOnlyMixin, ManualOrderAdminMixin, admin.ModelAdmin):
     # display_order は行をドラッグすると書き換わる。数値そのものに意味は無いが、
     # JavaScript が動かない環境でも直接入力できるよう残してある
     list_display = ("name", "workspace", "display_order", "teams_accordion", "created_at")
@@ -562,6 +700,13 @@ class LeagueAdmin(RealDataOnlyMixin, ManualOrderAdminMixin, admin.ModelAdmin):
         fixed = super().get_readonly_fields(request, obj)
         return (*fixed, "workspace") if obj is not None else fixed
 
+    def setup_row(self, obj):
+        # チームが1つも無いときだけ消せる（`league_deletion_blocker`）
+        return build_setup_query(_row_scope(obj)).league(obj.pk)
+
+    def delete_by_setup_rules(self, obj) -> None:
+        build_league_setup_service(_row_scope(obj)).delete_league(obj.pk)
+
     def get_queryset(self, request):
         """所属チームを先読みする。行ごとに引くと一覧で N+1 になる。"""
         teams = orm_models.Team.objects.annotate(
@@ -604,6 +749,10 @@ class TeamForm(forms.ModelForm):
 
     変更画面は、編集中のチームのワークスペースに選択肢を絞る。追加画面はまだ決まっていないので
     絞れず、`clean()` が「リーグと球場が同じワークスペースか」を見る（検査が本体）。
+
+    チーム名の一意と所属リーグの変更は、サイトの登録画面と同じ規則で検査する（W3 T5。#79）: 名前は
+    `ensure_team_name_free`（`TeamRepository.save` と同じ関数。新しいチームと改名のときだけ）、所属リーグは
+    登録画面の行の `league_change_blocker`（試合のあるチームは変えられない。変えたときだけ）。
     """
 
     class Meta:
@@ -619,14 +768,26 @@ class TeamForm(forms.ModelForm):
 
     def clean(self):
         cleaned = super().clean()
-        league, stadium = cleaned.get("league"), cleaned.get("home_stadium")
+        league, stadium, name = cleaned.get("league"), cleaned.get("home_stadium"), cleaned.get("name")
         if league is not None and stadium is not None and league.workspace_id != stadium.workspace_id:
             self.add_error("home_stadium", _CROSS_WORKSPACE.format(name=stadium.name))
+        if league is None:
+            return cleaned
+        scope = WorldScope.real(league.workspace_id)
+        if name and (self.instance.pk is None or "name" in self.changed_data):
+            try:
+                ensure_team_name_free(teams_in(scope), name, self.instance.pk)
+            except DomainError as error:
+                self.add_error("name", str(error))
+        if self.instance.pk is not None and "league" in self.changed_data:
+            reason = build_setup_query(scope).team(self.instance.pk).league_change_blocker
+            if reason is not None:
+                self.add_error("league", reason)
         return cleaned
 
 
 @admin.register(Team)
-class TeamAdmin(RealDataOnlyMixin, ManualOrderAdminMixin, admin.ModelAdmin):
+class TeamAdmin(SetupRulesDeletionAdmin, RealDataOnlyMixin, ManualOrderAdminMixin, admin.ModelAdmin):
     form = TeamForm
     # display_order は行をドラッグすると書き換わる。リーグ編集画面からだけでなく
     # この一覧でも並べ替えられるようにしてある
@@ -722,6 +883,13 @@ class TeamAdmin(RealDataOnlyMixin, ManualOrderAdminMixin, admin.ModelAdmin):
     def game_count(self, obj):
         return obj.played_games_count
 
+    def setup_row(self, obj):
+        # 在籍・主将の在任・試合が1つも無いときだけ消せる（`team_deletion_blocker`。試合は区分を問わず数える）
+        return build_setup_query(_row_scope(obj.league)).team(obj.pk)
+
+    def delete_by_setup_rules(self, obj) -> None:
+        build_league_setup_service(_row_scope(obj.league)).delete_team(obj.pk)
+
 
 class DomainCheckedForm(forms.ModelForm):
     """入力をドメインの値オブジェクトに検証させる ModelForm。
@@ -807,7 +975,7 @@ class StadiumForm(WorkspaceRequiredForm, DomainCheckedForm):
 
 
 @admin.register(Stadium)
-class StadiumAdmin(RealDataOnlyMixin, admin.ModelAdmin):
+class StadiumAdmin(SetupRulesDeletionAdmin, RealDataOnlyMixin, admin.ModelAdmin):
     form = StadiumForm
     list_display = ("name", "workspace", "city", "capacity", "surface", "roof", "opened_year", "home_team_names")
     list_select_related = ("workspace",)
@@ -842,6 +1010,13 @@ class StadiumAdmin(RealDataOnlyMixin, admin.ModelAdmin):
         """登録済みの球場はワークスペースを変えられない（リポジトリも帰属を書き換えない）。"""
         fixed = super().get_readonly_fields(request, obj)
         return (*fixed, "workspace") if obj is not None else fixed
+
+    def setup_row(self, obj):
+        # どのチームも本拠地にしていないときだけ消せる（`stadium_deletion_blocker`。ペナントの世界の球団も数える）
+        return build_setup_query(WorldScope.real(obj.workspace_id)).stadium(obj.pk)
+
+    def delete_by_setup_rules(self, obj) -> None:
+        build_league_setup_service(WorldScope.real(obj.workspace_id)).delete_stadium(obj.pk)
 
     def get_queryset(self, request):
         """本拠地チームを先読みし、並べ替えの手がかりも一緒に引く。
@@ -1577,25 +1752,8 @@ class PlayerAdmin(RealDataOnlyMixin, admin.ModelAdmin):
         return super().get_queryset(request).prefetch_related("stints__team")
 
 
-def _delete_selected_unless_blocked(modeladmin, request, queryset):
-    """一括削除。消せない在籍（FA 宣言・FA 入団の根拠）が含まれていれば、理由だけを出して何も消さない。"""
-    blocked = [
-        f"{stint}: {reason}"
-        for stint in queryset.select_related("player")
-        if (reason := modeladmin.deletion_blocker(stint))
-    ]
-    if blocked:
-        modeladmin.message_user(
-            request, "削除できない在籍が含まれているため、何も削除しませんでした。", level=messages.ERROR
-        )
-        for line in blocked:
-            modeladmin.message_user(request, line, level=messages.ERROR)
-        return None
-    return delete_selected(modeladmin, request, queryset)
-
-
 @admin.register(PlayerStint)
-class PlayerStintAdmin(RealDataOnlyMixin, GroupedAdminMixin, admin.ModelAdmin):
+class PlayerStintAdmin(BlockedDeletionAdmin, RealDataOnlyMixin, GroupedAdminMixin, admin.ModelAdmin):
     """在籍そのものの一覧。チームごとの名簿として使える。"""
 
     group_ordering = ("team__league__display_order", "team__league__name", "team__name")
@@ -1644,9 +1802,11 @@ class PlayerStintAdmin(RealDataOnlyMixin, GroupedAdminMixin, admin.ModelAdmin):
         # チーム → リーグ経由（在籍は自分では帰属を持たない）
         return obj.team.league.workspace
 
-    @staticmethod
-    def deletion_blocker(obj) -> str:
-        """この在籍を消すと FA 宣言（宣言した年の在籍）か FA 入団の根拠が崩れるなら、その理由。消せるなら空文字。"""
+    def deletion_blocker(self, obj) -> str:
+        """この在籍を消すと FA 宣言（宣言した年の在籍）か FA 入団の根拠が崩れるなら、その理由。消せるなら空文字。
+
+        消せない在籍は削除の導線ごと出さず、一括削除でも何も消さない（`BlockedDeletionAdmin`）。
+        """
         try:
             ensure_player_free_agency_consistent(
                 _domain_stints_of(obj.player, excluding_pk=obj.pk),
@@ -1656,19 +1816,6 @@ class PlayerStintAdmin(RealDataOnlyMixin, GroupedAdminMixin, admin.ModelAdmin):
         except forms.ValidationError as error:
             return str(error.message)
         return ""
-
-    def has_delete_permission(self, request, obj=None):
-        # 消せない在籍は、削除の導線（ボタンと削除画面）ごと出さない（拒否したのに「削除しました」と出るのを避ける）
-        if obj is not None and self.deletion_blocker(obj):
-            return False
-        return super().has_delete_permission(request, obj)
-
-    def get_actions(self, request):
-        actions = super().get_actions(request)
-        if "delete_selected" in actions:
-            _, name, description = actions["delete_selected"]
-            actions["delete_selected"] = (_delete_selected_unless_blocked, name, description)
-        return actions
 
 
 class DerivedLinesInline(admin.TabularInline):
