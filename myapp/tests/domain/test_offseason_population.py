@@ -29,6 +29,7 @@ from myapp.domain.pennant.draft_meeting import DraftContext, scouting_value
 from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
 from myapp.domain.pennant.foreign_market import SIGNED_RATING_MEAN
 from myapp.domain.pennant.offseason import OffseasonClub, OffseasonPlan, OffseasonPlayer, plan_offseason
+from myapp.domain.pennant.outlook import PEAK_AGE, with_filled_potential
 from myapp.domain.pennant.prospects import expected_prospect_ratings
 from myapp.domain.pennant.ratings import PlayerRatings
 from myapp.domain.pennant.retirement import PlayingTime
@@ -256,6 +257,10 @@ class YearStats:
     signings_per_club: float
     signed_value_shift: float
     foreign_per_club: float
+    # 締める年の若手（4月1日に `PEAK_AGE` 歳未満の支配下の日本人）の本当の伸びしろの倍率。戦力外になった若手と、
+    # 引退も戦力外もしなかった若手（#308 P3b。AI は所属球団の見立ての見込みで外す）
+    released_young_multipliers: tuple[float, ...]
+    kept_young_multipliers: tuple[float, ...]
 
 
 def _main_draft_japanese(plan: OffseasonPlan) -> list[Draftee]:
@@ -268,7 +273,27 @@ def _potential_mean(rookies: list[Draftee], route: DraftRoute) -> float:
     return fmean(values) if values else 0.0
 
 
-def stats(members: list[Member], plan: OffseasonPlan, previous: list[Member]) -> YearStats:
+def _young_multipliers(
+    previous: list[Member], plan: OffseasonPlan, *, world_seed: int
+) -> tuple[list[float], list[float]]:
+    """締める年の若手の本当の伸びしろの倍率（戦力外になった若手、残った若手）。伸びしろの無い行（合成の初期母集団）は
+    締める処理が付けるのと同じ値（`with_filled_potential`）で見る。外国人は入れ替えの規則が別なので数えない。"""
+    as_of = date(plan.year, 4, 1)
+    released = set(plan.released)
+    retired = set(plan.retired)
+    result: tuple[list[float], list[float]] = ([], [])
+    for member in previous:
+        age = member.profile.age(as_of)
+        if not member.is_registered or member.profile.is_foreign_player or age is None or age >= PEAK_AGE:
+            continue
+        if member.player_id in retired:
+            continue
+        ratings = with_filled_potential(member.ratings.ratings, player_id=member.player_id, world_seed=world_seed)
+        result[0 if member.player_id in released else 1].append(potential_multiplier(ratings.potential))
+    return result
+
+
+def stats(members: list[Member], plan: OffseasonPlan, previous: list[Member], *, world_seed: int) -> YearStats:
     """Y 年を締めた後（Y+1 の開幕時点）の分布。年齢・入れ替わり・人数・スタミナは**支配下**で測る
     （育成ドラフトの前と同じ物差し。育成は別に人数を測る。#198 D2）。"""
     as_of = date(plan.year + 1, 4, 1)
@@ -288,6 +313,7 @@ def stats(members: list[Member], plan: OffseasonPlan, previous: list[Member]) ->
     rookies = _main_draft_japanese(plan)
     retired = len(set(plan.retired) & set(before))
     released = len(set(plan.released) & set(before))
+    released_young, kept_young = _young_multipliers(previous, plan, world_seed=world_seed)
     return YearStats(
         year=plan.year,
         mean_age=fmean(values),
@@ -338,6 +364,8 @@ def stats(members: list[Member], plan: OffseasonPlan, previous: list[Member]) ->
         if plan.signings
         else 0.0,
         foreign_per_club=sum(1 for m in members if m.profile.is_foreign_player) / len(sizes),
+        released_young_multipliers=tuple(released_young),
+        kept_young_multipliers=tuple(kept_young),
     )
 
 
@@ -354,7 +382,7 @@ def run_years(
     for year in range(START_YEAR, START_YEAR + years):
         previous = members
         members, plan = run_year(members, year, world_seed=seed, rule=rule)
-        result.append(stats(members, plan, previous))
+        result.append(stats(members, plan, previous, world_seed=seed))
     return result
 
 
@@ -467,11 +495,21 @@ class OffseasonPopulationTest(unittest.TestCase):
 
         伸びしろの大きい選手は伸びて残りやすいので、平均はわずかに上へ寄る（引退・戦力外は伸びしろを見ないが、
         能力を見る）。新人は事前の分布（平均 1.0）で入るので、寄りは止まる。実測（シード 1〜4）は 0.994〜1.007。
+        #308 P3b（AI の戦力外・引退が見立ての見込みを見る）の後もシード 1〜8 で 0.985〜1.016（前 0.988〜1.015）で、
+        帯は変えていない（2026-10-25 ユーザー決定 Q4 A の「測り直して広げる」は不要だった）。
         """
         for stat in self.years:
             with self.subTest(year=stat.year):
                 self.assertEqual(stat.without_potential, 0)
                 self.assertTrue(0.98 <= stat.potential_mean <= 1.03, stat.potential_mean)
+
+    def test_released_youngsters_have_less_potential_than_kept_ones(self) -> None:
+        """#308 P3b: AI は若手を所属球団の見立ての見込みで外すので、戦力外になった若手の本当の伸びしろの倍率の平均は、
+        残った若手より低い（見立ては誤差つきなので、本当は伸びしろのある若手も外れうる）。10年の合計で見る。"""
+        released = [value for stat in self.years for value in stat.released_young_multipliers]
+        kept = [value for stat in self.years for value in stat.kept_young_multipliers]
+        self.assertTrue(released, "若手の戦力外がある")
+        self.assertLess(fmean(released), fmean(kept))
 
     def test_drafted_rookies_keep_the_average_potential_and_the_route_shares(self) -> None:
         """#308 P2: AI は伸びしろの推定の大きい候補を上に見るが、候補の伸びしろの平均（`POOL_POTENTIAL_MEAN`）を

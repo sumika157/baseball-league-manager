@@ -185,7 +185,8 @@ def roster_projection(
 ) -> Ratings:
     """球団 `team_id` のスカウトの見立てで見た、在籍の選手の見込みの能力（`PEAK_AGE` 歳ごろ）。
 
-    **在籍の選手の見込みの出典**で、画面の見込みの区分（`outlook_grade`）が使う（P3b で AI の戦力外・引退も使う）。
+    **在籍の選手の見込みの出典**で、画面の見込みの区分（`outlook_grade`）と、AI の戦力外・引退
+    （`release.ability_value`。#308 P3b）が使う。
     年齢 `age` は締める年・能力の年の4月1日時点（`offseason_player.player_age`）。
     """
     if age >= PEAK_AGE:

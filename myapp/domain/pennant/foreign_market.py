@@ -459,7 +459,8 @@ def expected_signing_ages() -> dict[int, float]:
     """候補の年齢の分布（年齢 → 割合）。前所属の割合と、区分ごとの年齢の範囲（一様）から。
 
     獲得した外国人は能力の高いメジャー経験に寄るぶん候補より年上（実測で平均 28.4歳。候補は 27.9歳）だが、
-    若さの上乗せ（`release.youth_credit`）は26歳以下にしか付かないので、見込みの差は約0.1点で、候補の分布のままにした。
+    見込みの伸び（`outlook.projected_ratings`）は26歳以下にしか付かず小さいので、候補の分布のままにした
+    （#308 P3b の前の若さの上乗せで測って、見込みの差は約0.1点）。
     """
     total = sum(item.weight for item in BACKGROUNDS.values())
     result: dict[int, float] = {}
