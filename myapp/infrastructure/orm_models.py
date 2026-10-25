@@ -347,14 +347,15 @@ class Team(models.Model):
     # 担当者はこのチームが関わる範囲（ロスター・このチームが絡む試合）だけ
     # 編集できるようにする。ワークスペースの持ち主・編集者は担当者に関わらず全体を編集できる
     # （判定は domain の WorkspaceAccess。管理ユーザー（is_staff）はサイトでは何の権限も持たない。W2 T5）。
-    # help_text の「管理ユーザーは常に編集できます」は古い
-    # （変えるとマイグレーションが要るので、W2 T5 では直さない。T6 に回した）
     managers = models.ManyToManyField(
         settings.AUTH_USER_MODEL,
         blank=True,
         related_name="managed_teams",
         verbose_name="担当者",
-        help_text="このチームの選手・試合を編集できるユーザー。管理ユーザーは常に編集できます。",
+        help_text=(
+            "このチームの選手・試合を編集できるユーザー。ワークスペースの持ち主・編集者は担当に関わらず全チームを編集できます。"
+            "管理画面に入れること（スタッフ権限）は、サイトでの編集の権限に何も足しません。"
+        ),
     )
 
     class Meta:
