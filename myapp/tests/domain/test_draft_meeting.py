@@ -7,26 +7,45 @@ from __future__ import annotations
 
 import unittest
 from collections import Counter
-from statistics import fmean
+from dataclasses import replace
+from datetime import date
+from statistics import fmean, pstdev
 
 from myapp.domain.exceptions import InvalidDraftAction
 from myapp.domain.pennant import draft
 from myapp.domain.pennant.draft import DraftTeam, plan_team_draft
 from myapp.domain.pennant.draft_meeting import (
+    POTENTIAL_SCOUT_SD,
+    SCOUT_SD,
     SCOUT_STEP,
+    TASTE_GROWTH,
+    TASTE_LIKING_SD,
+    TASTE_PITCHER,
     DraftAction,
     DraftActionKind,
     DraftContext,
     DraftSlot,
     DraftState,
+    DraftTaste,
+    Prospect,
+    ScoutingAccuracy,
+    ScoutingReport,
+    _scout_noise,
+    draft_liking,
+    draft_taste,
     draw_pool,
+    future_value,
+    growth_to_peak,
+    projected_grade,
+    projected_growth,
     run_draft,
     scouting_report,
     scouting_value,
 )
 from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings, strategy_for
+from myapp.domain.pennant.initial_ratings import SEASON_START_MONTH
 from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND
-from myapp.domain.simulation.ratings import GrowthType
+from myapp.domain.simulation.ratings import GrowthType, Potential, RatingGrade, potential_multiplier
 from myapp.domain.value_objects import Position
 from myapp.domain.virtual_players import generator
 
@@ -68,6 +87,18 @@ def meeting(
 def run(teams: list[DraftTeam], rule: DraftOrderRule = DraftOrderRule.NPB, *, seed: int = 1):
     context = DraftContext(rule, standings([team.team_id for team in teams]))
     return run_draft(teams, context, year=YEAR, world_seed=seed, used_names=set())
+
+
+def _with_potential(prospect: Prospect, value: int) -> Prospect:
+    """本当の伸びしろだけを差し替えた候補。"""
+    rookie = prospect.rookie
+    return replace(prospect, rookie=replace(rookie, ratings=replace(rookie.ratings, potential=Potential(value))))
+
+
+def _true_potential(prospect: Prospect) -> int:
+    potential = prospect.rookie.ratings.potential
+    assert potential is not None, "候補は伸びしろを持つ"
+    return potential.value
 
 
 class AutoCompleteTest(unittest.TestCase):
@@ -210,14 +241,22 @@ class OrderTest(unittest.TestCase):
         self.assertEqual([s.team_id for s in state.selections if s.round_number == 3], [1, 2, 3, 4])
 
     def test_the_front_of_the_waiver_gets_better_rookies(self) -> None:
-        """判断21 の書き換えの根拠: 完全ウェーバーは前年の下位ほど良い新人。くじ順は順位に依らない。"""
+        """判断21 の書き換えの根拠: 完全ウェーバーは前年の下位ほど良い新人。くじ順は順位に依らない。
+
+        「良い」は本当の見込み（今の能力の総合 + 普通の伸び × 本当の伸びしろの倍率）。AI は見込みで選ぶので
+        （#308 P2）、今の能力だけで比べると、伸びしろの大きい若い候補を先に取る前の球団の差が見えなくなる。
+        """
         teams = [club(team_id) for team_id in range(1, 13)]
+        as_of = date(YEAR + 1, SEASON_START_MONTH, 1)
 
         def gap(rule: DraftOrderRule) -> float:
             values: dict[int, list[float]] = {team.team_id: [] for team in teams}
             for seed in range(1, 5):
                 for rookie in run(teams, rule, seed=seed).draftees:
-                    values[rookie.team_id].append(scouting_value(rookie.ratings))
+                    age = rookie.profile.age(as_of)
+                    assert age is not None
+                    growth = growth_to_peak(age, rookie.position) * potential_multiplier(rookie.ratings.potential)
+                    values[rookie.team_id].append(scouting_value(rookie.ratings) + growth)
             # 1リーグの1位から順に 1〜12。下位（7〜12）が逆順の前半
             return fmean(v for t in range(7, 13) for v in values[t]) - fmean(v for t in range(1, 7) for v in values[t])
 
@@ -367,6 +406,89 @@ class ProspectTest(unittest.TestCase):
             self.assertIsNot(prospect.route, draft.DraftRoute.FOREIGN)
 
 
+class TasteTest(unittest.TestCase):
+    """1位の好み（#302）: 球団の色（`DraftTaste`）と惚れ込み（`draft_liking`）。本指名の1巡目の入札にだけ効く。"""
+
+    def test_a_club_has_the_same_taste_every_time_and_clubs_differ(self) -> None:
+        tastes = [draft_taste(1, team_id) for team_id in range(1, 49)]
+        self.assertEqual(tastes[0], draft_taste(1, 1))
+        self.assertNotEqual(tastes[0], draft_taste(2, 1))
+        self.assertGreater(len({taste.growth_weight for taste in tastes}), 40)
+        for taste in tastes:
+            self.assertAlmostEqual(sum(taste.route_bonus.values()), 0.0, places=9)
+            self.assertEqual(
+                set(taste.route_bonus),
+                {draft.DraftRoute.HIGH_SCHOOL, draft.DraftRoute.UNIVERSITY, draft.DraftRoute.CORPORATE},
+            )
+            self.assertLessEqual(abs(taste.growth_weight - 1.0), TASTE_GROWTH)
+            self.assertLessEqual(abs(taste.pitcher_bonus), TASTE_PITCHER)
+
+    def test_liking_is_fixed_per_club_and_prospect_and_spreads_by_the_set_width(self) -> None:
+        self.assertEqual(draft_liking(1, YEAR, 3, 10), draft_liking(1, YEAR, 3, 10))
+        likings = [draft_liking(1, YEAR, team_id, key) for team_id in range(1, 49) for key in range(100)]
+        self.assertAlmostEqual(fmean(likings), 0.0, delta=0.3)
+        self.assertAlmostEqual(pstdev(likings), TASTE_LIKING_SD, delta=0.3)
+
+    def test_the_taste_moves_the_evaluation_by_its_parts(self) -> None:
+        pool = draw_pool({Position.PITCHER: 10, Position.INFIELDER: 10}, world_seed=1, year=YEAR, used_names=set())
+        high_school = next(
+            p for p in pool.prospects if p.route is draft.DraftRoute.HIGH_SCHOOL and p.position.is_pitcher
+        )
+        report = scouting_report(high_school, 1, world_seed=1, year=YEAR)
+        future = future_value(high_school, report)
+        self.assertAlmostEqual(DraftTaste().evaluate(high_school, report), future)
+        taste = DraftTaste(route_bonus={draft.DraftRoute.HIGH_SCHOOL: 1.5}, growth_weight=1.25, pitcher_bonus=-2.0)
+        # 伸びの項は見込みの伸び（`projected_growth`。推定の伸びしろの倍率が掛かる。#308 P2）
+        growth = projected_growth(high_school, report)
+        self.assertAlmostEqual(growth, future - scouting_value(report.ratings))
+        self.assertGreater(growth_to_peak(high_school.age, high_school.position), 10)  # 高校生は伸びが大きい
+        self.assertAlmostEqual(
+            taste.evaluate(high_school, report, liking=0.5), future + 0.25 * growth + 1.5 - 2.0 + 0.5
+        )
+
+    def test_the_taste_is_used_only_for_the_first_round_bids(self) -> None:
+        """2巡目以降と、1巡目が入札でない規則（完全ウェーバー）は将来値で選ぶ（新人の分布と、前の球団ほど良い新人を保つ）。"""
+        teams = [club(team_id) for team_id in range(1, 5)]
+        npb = meeting(teams)
+        self.assertTrue(npb._tasted())
+        replay = meeting(teams)
+        while (turn := replay.next_turn()) is not None and turn.round_number == 1:
+            replay.apply(replay.ai_action())
+        self.assertFalse(replay._tasted())
+        self.assertFalse(meeting(teams, DraftOrderRule.WAIVER)._tasted())
+
+    def test_the_taste_is_used_for_the_rebid_after_a_lost_lottery(self) -> None:
+        """外れ1位の再入札（1巡目の2回目）も1位の入札なので、好みを入れる。"""
+        state = meeting([club(1), club(2)])
+        key = next(p.key for p in state.pool.prospects if p.position is Position.PITCHER)
+        for _ in range(2):
+            turn = state.next_turn()
+            assert turn is not None
+            state.apply(DraftAction(DraftActionKind.BID, turn.team_id, key))
+        rebid = state.next_turn()
+        assert rebid is not None
+        self.assertEqual((rebid.round_number, rebid.attempt), (1, 2))
+        self.assertTrue(state._tasted())
+
+    def test_first_round_bids_do_not_gather_on_one_prospect(self) -> None:
+        """再発防止（#302）: 8リーグ48球団の会議で、1位の入札が1人に集まるのは多くても十数球団。
+
+        シードは好みを入れる前に集中がひどかった2つ（最多 40球団・41球団。入れた後は 9・14球団）。
+        """
+        leagues = tuple(tuple(range(1 + 6 * league, 7 + 6 * league)) for league in range(8))
+        for seed in (1, 7):
+            teams = [club(team_id, size=58 - team_id % 4) for team_id in range(1, 49)]
+            slots = [DraftSlot.of(team, plan_team_draft(team)) for team in teams]
+            planned = Counter(position for slot in slots for position in slot.planned)
+            pool = draw_pool(planned, world_seed=seed, year=YEAR, used_names=set())
+            strategy = strategy_for(DraftOrderRule.NPB, DraftStandings(leagues=leagues), world_seed=seed, year=YEAR)
+            state = DraftState.open(strategy, slots, pool)
+            state.auto_complete()
+            first = [lot for lot in state.lotteries if lot.round_number == 1 and not lot.is_development]
+            with self.subTest(seed=seed):
+                self.assertLessEqual(max((len(lot.bidders) for lot in first), default=1), 18)
+
+
 class ScoutingTest(unittest.TestCase):
     def setUp(self) -> None:
         self.pool = draw_pool({Position.PITCHER: 5, Position.INFIELDER: 5}, world_seed=1, year=YEAR, used_names=set())
@@ -374,9 +496,73 @@ class ScoutingTest(unittest.TestCase):
     def test_estimates_are_rounded_to_steps_and_hide_the_growth_type(self) -> None:
         for prospect in self.pool.prospects:
             report = scouting_report(prospect, 1, world_seed=1, year=YEAR)
-            self.assertIs(report.growth, GrowthType.NORMAL)
-            for name in report.LABELS:
-                self.assertEqual(getattr(report, name) % SCOUT_STEP, 0)
+            self.assertIs(report.ratings.growth, GrowthType.NORMAL)
+            self.assertIsNone(report.ratings.potential)
+            for name in report.ratings.LABELS:
+                self.assertEqual(getattr(report.ratings, name) % SCOUT_STEP, 0)
+            self.assertEqual(report.potential.value % SCOUT_STEP, 0)
+
+    def test_the_potential_estimate_leaves_the_item_estimates_as_before(self) -> None:
+        """#308 P2: 伸びしろの誤差は項目の次の添字で引くので、項目の推定は伸びしろを足す前と同じ。
+        本当の伸びしろを変えても、項目の推定は変わらない。"""
+        for prospect in self.pool.prospects:
+            ratings = prospect.rookie.ratings
+            noise = _scout_noise(1, YEAR, 1, prospect.key, len(ratings.LABELS))
+            report = scouting_report(prospect, 1, world_seed=1, year=YEAR)
+            for name, error in zip(ratings.LABELS, noise, strict=True):
+                expected = min(
+                    100, max(1, SCOUT_STEP * round((getattr(ratings, name) + SCOUT_SD * error) / SCOUT_STEP))
+                )
+                self.assertEqual(getattr(report.ratings, name), expected)
+            other = _with_potential(prospect, 90)
+            self.assertEqual(scouting_report(other, 1, world_seed=1, year=YEAR).ratings, report.ratings)
+
+    def test_the_potential_estimate_spreads_around_the_truth(self) -> None:
+        """伸びしろの推定 = 本当の値 + N(0, `POTENTIAL_SCOUT_SD`) を5刻み。偏らず、精度（`ScoutingAccuracy`）で
+        幅が変わる。"""
+        pool = draw_pool({Position.PITCHER: 100, Position.INFIELDER: 100}, world_seed=2, year=YEAR, used_names=set())
+        errors = [
+            scouting_report(p, team_id, world_seed=2, year=YEAR).potential.value - _true_potential(p)
+            for p in pool.prospects
+            for team_id in range(1, 7)
+        ]
+        self.assertAlmostEqual(fmean(errors), 0.0, delta=0.6)
+        self.assertAlmostEqual(pstdev(errors), (POTENTIAL_SCOUT_SD**2 + SCOUT_STEP**2 / 12) ** 0.5, delta=0.6)
+        exact = ScoutingAccuracy(potential_sd=0.0)
+        for prospect in pool.prospects:
+            truth = _true_potential(prospect)
+            estimate = scouting_report(prospect, 1, world_seed=2, year=YEAR, accuracy=exact).potential.value
+            self.assertEqual(estimate, SCOUT_STEP * round(truth / SCOUT_STEP))
+
+    def test_the_projection_grows_with_the_estimated_potential(self) -> None:
+        """見込みの伸び（`projected_growth`）は普通の伸び × 推定の伸びしろの倍率。将来値も見込みの区分もこれに従う。"""
+        prospect = next(p for p in self.pool.prospects if p.route is draft.DraftRoute.HIGH_SCHOOL)
+        base = scouting_report(prospect, 1, world_seed=1, year=YEAR)
+        normal = growth_to_peak(prospect.age, prospect.position)
+        futures = []
+        for value in (25, 50, 100):
+            report = ScoutingReport(ratings=base.ratings, potential=Potential(value))
+            self.assertAlmostEqual(projected_growth(prospect, report), normal * value / 50)
+            future = future_value(prospect, report)
+            self.assertAlmostEqual(future, scouting_value(base.ratings) + normal * value / 50)
+            self.assertIs(projected_grade(prospect, report), RatingGrade.from_value(round(future)))
+            futures.append(future)
+        self.assertEqual(futures, sorted(futures))
+        self.assertGreater(futures[-1] - futures[0], 10)  # 高校生は伸びしろで見込みが大きく変わる
+
+    def test_the_ai_ranks_by_the_projection(self) -> None:
+        """AI の評価（1位の好みを入れない巡）は見込み（`future_value`）。本当の伸びしろが高い候補ほど上に見る。"""
+        state = meeting([club(1), club(2)])
+        for prospect in state.pool.prospects[:10]:
+            report = scouting_report(prospect, 1, world_seed=1, year=YEAR)
+            self.assertAlmostEqual(state.evaluation(1, prospect), future_value(prospect, report))
+        exact = ScoutingAccuracy(potential_sd=0.0)
+        prospect = next(p for p in self.pool.prospects if p.route is draft.DraftRoute.HIGH_SCHOOL)
+        low, high = (
+            future_value(p, scouting_report(p, 1, world_seed=1, year=YEAR, accuracy=exact))
+            for p in (_with_potential(prospect, 20), _with_potential(prospect, 80))
+        )
+        self.assertGreater(high, low)
 
     def test_each_club_sees_differently_but_the_same_club_always_the_same(self) -> None:
         reports = {

@@ -313,8 +313,13 @@ class PlanWithReleasesTest(unittest.TestCase):
         result = self.plan(players)
         left = set(result.retired) | set(result.released)
         remaining = sum(1 for p in players if p.player_id not in left)
-        self.assertEqual(len(result.draftees), draft.draftee_count(remaining, registered_limit=70))
-        self.assertEqual(remaining + len(result.draftees), OPENING_REGISTERED_BAND.high)
+        self.assertEqual(
+            len([d for d in result.draftees if not d.is_development]),
+            draft.draftee_count(remaining, registered_limit=70),
+        )
+        self.assertEqual(
+            remaining + len([d for d in result.draftees if not d.is_development]), OPENING_REGISTERED_BAND.high
+        )
 
     def test_a_club_with_room_is_planned_as_before(self) -> None:
         """空きがある球団（引退の後 + 6人 ≤ 上端）で外国人が見込みを上回るなら、戦力外0人でドラフトは今までどおり。"""
@@ -325,7 +330,10 @@ class PlanWithReleasesTest(unittest.TestCase):
         result = self.plan(players)
         self.assertEqual(result.released, ())
         remaining = sum(1 for p in players if p.player_id not in result.retired)
-        self.assertEqual(len(result.draftees), draft.draftee_count(remaining, registered_limit=70))
+        self.assertEqual(
+            len([d for d in result.draftees if not d.is_development]),
+            draft.draftee_count(remaining, registered_limit=70),
+        )
 
 
 if __name__ == "__main__":

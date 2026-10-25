@@ -27,7 +27,7 @@ from myapp.domain.exceptions import (
 from myapp.domain.pennant.club_plan import ClubPlan, LineupChoice, PlanSection
 from myapp.domain.pennant.schedule import AdvanceTarget
 from myapp.domain.pennant.season import SeasonPhase, season_phase, season_year
-from myapp.domain.value_objects import FieldingPosition
+from myapp.domain.value_objects import ContractStatus, FieldingPosition
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoSimulationContextQuery
 from myapp.infrastructure.repositories import DjangoClubPlanRepository, DjangoFixtureRepository
@@ -125,6 +125,24 @@ class CloseSeasonTest(ClosedSeasonCase):
         self.assertFalse(next_year & retired)
         # 年ごとの推移が残る: 締めた年の能力は消えない
         self.assertTrue(ratings_of(self.world_a, YEAR).filter(player_id__in=retired).count() == 3)
+
+    def test_a_player_without_a_potential_gets_one_in_the_next_year_only(self):
+        """#308 より前に作った世界（伸びしろが空の行）は、締めるときに引いて翌年の行に書く。締めた年の行は空のまま。"""
+        ratings_of(self.world_a, YEAR).update(potential=None)
+        kept = ratings_of(self.world_a, YEAR).values_list("player_id", flat=True).first()
+        orm_models.PennantPlayerRatings.objects.filter(player_id=kept, year=YEAR).update(potential=77)
+
+        # 伸びしろを持つ選手が残るように、引退と戦力外を止める
+        with mock.patch(DECIDE_RETIREMENTS, return_value=()), mock.patch(DECIDE_RELEASES, return_value=()):
+            self.close()
+
+        self.assertEqual(
+            set(ratings_of(self.world_a, YEAR).exclude(player_id=kept).values_list("potential", flat=True)), {None}
+        )
+        next_year = dict(ratings_of(self.world_a, YEAR + 1).values_list("player_id", "potential"))
+        self.assertTrue(next_year)
+        self.assertNotIn(None, next_year.values(), "残る選手も新人も伸びしろを持つ")
+        self.assertEqual(next_year[kept], 77, "伸びしろを持つ選手はそのまま写す")
 
     def test_the_next_schedule_has_143_games_per_team_and_the_phase_is_before_the_opening(self):
         result = self.close()
@@ -366,7 +384,15 @@ class AdvanceAfterCloseTest(ClosedSeasonCase):
         in_context = {player.player_id for team in context for player in team.players}
         rookies = set(active_stints(self.world_a).filter(from_year=YEAR + 1).values_list("player_id", flat=True))
         self.assertEqual(len(rookies), result.draftee_count)
-        self.assertTrue(rookies <= in_context)
+        # 育成ドラフトの新人は試合に出ない（材料に入るのは支配下の新人だけ。#198 D2）
+        registered = set(
+            active_stints(self.world_a)
+            .filter(from_year=YEAR + 1, signed_as=ContractStatus.REGISTERED.value)
+            .values_list("player_id", flat=True)
+        )
+        self.assertEqual(len(rookies - registered), result.development_draftee_count)
+        self.assertTrue(registered <= in_context)
+        self.assertFalse((rookies - registered) & in_context)
         self.assertEqual(
             set(ratings_of(self.world_a, YEAR + 1).values_list("player_id", flat=True)) & rookies, rookies
         )

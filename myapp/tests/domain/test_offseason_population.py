@@ -24,15 +24,15 @@ from dataclasses import dataclass, replace
 from datetime import date
 from statistics import fmean, pstdev
 
-from myapp.domain.pennant.draft import MAX_DRAFTEES
+from myapp.domain.pennant.draft import MAX_DEVELOPMENT_PICKS, MAX_DRAFTEES, Draftee, DraftRoute
 from myapp.domain.pennant.draft_meeting import DraftContext
 from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
 from myapp.domain.pennant.offseason import OffseasonClub, OffseasonPlan, OffseasonPlayer, plan_offseason
 from myapp.domain.pennant.ratings import PlayerRatings
 from myapp.domain.pennant.retirement import PlayingTime
-from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND
+from myapp.domain.pennant.roster import DEVELOPMENT_BAND, OPENING_REGISTERED_BAND
 from myapp.domain.simulation.randomness import GameRandom, make_random, normal
-from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings
+from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings, potential_multiplier
 from myapp.domain.simulation.samples import BATTER_MEAN, BATTER_SD, PITCHER_MEAN, PITCHER_SD, draw_ratings
 from myapp.domain.value_objects import ContractStatus, DraftPick, ForeignPlayerRules, Position, Profile
 from myapp.domain.virtual_players import generator
@@ -65,6 +65,12 @@ class Member:
     number: str
     joined_year: int
     ratings: PlayerRatings
+    # 今の契約区分（初期の母集団は全員支配下。育成ドラフトの新人は育成。#198 D2）
+    contract: ContractStatus = ContractStatus.REGISTERED
+
+    @property
+    def is_registered(self) -> bool:
+        return self.contract is ContractStatus.REGISTERED
 
 
 def _age_distribution(rng: GameRandom) -> int:
@@ -154,7 +160,8 @@ def run_year(
         by_team.setdefault(member.team_id, []).append(member)
     clubs = []
     for team_id, team_members in sorted(by_team.items()):
-        playing = _playing_time(team_members)
+        # 育成は試合に出ない（出場機会は支配下の中で合成する）
+        playing = _playing_time([m for m in team_members if m.is_registered])
         clubs.append(
             OffseasonClub(
                 team_id=team_id,
@@ -168,7 +175,7 @@ def run_year(
                         number=m.number,
                         joined_year=m.joined_year,
                         ratings=m.ratings,
-                        contract=ContractStatus.REGISTERED,
+                        contract=m.contract,
                         playing_time=playing.get(m.player_id, PlayingTime()),
                     )
                     for m in team_members
@@ -201,6 +208,7 @@ def run_year(
                 number=draftee.number,
                 joined_year=year + 1,
                 ratings=PlayerRatings(player_id=player_id, year=year + 1, ratings=draftee.ratings),
+                contract=draftee.contract,
             )
         )
     return next_members, plan
@@ -220,41 +228,84 @@ class YearStats:
     min_roster: int
     max_roster: int
     mean_roster: float
-    # 1球団が1年に迎えた新人の最大
+    # 1球団が1年に迎えた支配下の新人（本指名と外国人）の最大
     max_draftees: int
+    # 育成の人数（1球団の最少・最多・平均）と、1球団が1年に迎えた育成の新人の最大
+    min_development: int
+    max_development: int
+    mean_development: float
+    max_development_draftees: int
     anchor_mean_shift: float
     anchor_sd_shift: float
     stamina_mean: float
     stamina_sd: float
+    # 支配下の伸びしろの倍率の平均と、伸びしろの無い選手の数
+    # （#308。合成の初期母集団は伸びしろを持たず、1回目のオフで付く）
+    potential_mean: float
+    without_potential: int
+    # 本指名の日本人の新人の伸びしろの倍率の平均と、経路（高校・大学・社会人）の割合
+    # （#308 P2。AI が伸びしろの推定を見る）
+    rookie_potential_mean: float
+    rookie_route_shares: tuple[float, float, float]
 
 
-def stats(members: list[Member], plan: OffseasonPlan, before: int) -> YearStats:
-    """Y 年を締めた後（Y+1 の開幕時点）の分布。"""
+def _main_draft_japanese(plan: OffseasonPlan) -> list[Draftee]:
+    return [draftee for draftee in plan.draftees if not draftee.is_foreign and not draftee.is_development]
+
+
+def stats(members: list[Member], plan: OffseasonPlan, previous: list[Member]) -> YearStats:
+    """Y 年を締めた後（Y+1 の開幕時点）の分布。年齢・入れ替わり・人数・スタミナは**支配下**で測る
+    （育成ドラフトの前と同じ物差し。育成は別に人数を測る。#198 D2）。"""
     as_of = date(plan.year + 1, 4, 1)
-    ages = [m.profile.age(as_of) for m in members]
+    registered = [m for m in members if m.is_registered]
+    ages = [m.profile.age(as_of) for m in registered]
     assert all(age is not None for age in ages)
     values = [float(age) for age in ages if age is not None]
     sizes: dict[int, int] = {}
+    development: dict[int, int] = {m.team_id: 0 for m in members}
     for member in members:
-        sizes[member.team_id] = sizes.get(member.team_id, 0) + 1
-    staminas = [float(m.ratings.ratings.stamina) for m in members if isinstance(m.ratings.ratings, PitcherRatings)]
+        if member.is_registered:
+            sizes[member.team_id] = sizes.get(member.team_id, 0) + 1
+        else:
+            development[member.team_id] += 1
+    staminas = [float(m.ratings.ratings.stamina) for m in registered if isinstance(m.ratings.ratings, PitcherRatings)]
+    before = [m.player_id for m in previous if m.is_registered]
+    rookies = _main_draft_japanese(plan)
+    retired = len(set(plan.retired) & set(before))
+    released = len(set(plan.released) & set(before))
     return YearStats(
         year=plan.year,
         mean_age=fmean(values),
         sd_age=pstdev(values),
         share_35_plus=sum(1 for v in values if v >= 35) / len(values),
         share_22_minus=sum(1 for v in values if v <= 22) / len(values),
-        turnover=(len(plan.retired) + len(plan.released)) / before,
-        retired_share=len(plan.retired) / before,
-        released_share=len(plan.released) / before,
+        turnover=(retired + released) / len(before),
+        retired_share=retired / len(before),
+        released_share=released / len(before),
         min_roster=min(sizes.values()),
         max_roster=max(sizes.values()),
         mean_roster=fmean(sizes.values()),
-        max_draftees=max(Counter(draftee.team_id for draftee in plan.draftees).values(), default=0),
+        max_draftees=max(
+            Counter(draftee.team_id for draftee in plan.draftees if not draftee.is_development).values(), default=0
+        ),
+        min_development=min(development.values()),
+        max_development=max(development.values()),
+        mean_development=fmean(development.values()),
+        max_development_draftees=max(
+            Counter(draftee.team_id for draftee in plan.draftees if draftee.is_development).values(), default=0
+        ),
         anchor_mean_shift=plan.anchor.mean_shift,
         anchor_sd_shift=plan.anchor.sd_shift,
         stamina_mean=fmean(staminas),
         stamina_sd=pstdev(staminas),
+        potential_mean=fmean(potential_multiplier(m.ratings.ratings.potential) for m in registered),
+        without_potential=sum(1 for m in members if m.ratings.ratings.potential is None),
+        rookie_potential_mean=fmean(potential_multiplier(d.ratings.potential) for d in rookies),
+        rookie_route_shares=(
+            sum(1 for d in rookies if d.route is DraftRoute.HIGH_SCHOOL) / len(rookies),
+            sum(1 for d in rookies if d.route is DraftRoute.UNIVERSITY) / len(rookies),
+            sum(1 for d in rookies if d.route is DraftRoute.CORPORATE) / len(rookies),
+        ),
     )
 
 
@@ -269,9 +320,9 @@ def run_years(
     members = make_population(seed, roster_size, teams)
     result = []
     for year in range(START_YEAR, START_YEAR + years):
-        before = len(members)
+        previous = members
         members, plan = run_year(members, year, world_seed=seed, rule=rule)
-        result.append(stats(members, plan, before))
+        result.append(stats(members, plan, previous))
     return result
 
 
@@ -294,8 +345,27 @@ class OffseasonPopulationTest(unittest.TestCase):
 
         実測は約1.4秒だったが、ドラフト会議（#198 D1。48球団の候補 約1,200人を球団ごとのスカウトの推定で見比べる）で
         1年あたり約0.45秒増え、手元で約6秒・CI のランナーで約14秒になった（上限を 4 → 25 秒）。
+        育成の巡と育成の母集団（#198 D2）で手元 約8秒（シード 1〜4 で 7.7〜8.2秒）。上限は変えていない。
+        その後の #302・#308 P1 で手元 約9.5秒になり、#308 P2（推定に伸びしろ・見込みの評価）で手元 約12秒・
+        CI のランナーで 25.3秒になって上限を超えた。能力の検査で `fields()` を引くのをやめ、将来値を覚えるようにして
+        手元 約11秒まで戻したが、CI は手元の約2倍かかり余裕が無いので、上限を 25 → 35 秒にした。
         """
-        self.assertLess(self.elapsed, 25.0)
+        self.assertLess(self.elapsed, 35.0)
+
+    def test_developmental_rosters_grow_to_the_target_band(self) -> None:
+        """育成0人から、育成ドラフト（1年6人まで）で球団ごとの目標（帯 10〜30人の中）へ届き、帯を超えない（#198 D2）。
+
+        実測（シード 1〜4）は5回目のオフの後に全球団が目標に届き、平均 18.8〜21.3人。支配下の帯・年齢・入れ替わり・
+        錨（支配下で測る）は育成ドラフトの前と同じ範囲。
+        """
+        band = DEVELOPMENT_BAND
+        for index, stat in enumerate(self.years):
+            with self.subTest(year=stat.year):
+                self.assertLessEqual(stat.max_development, band.high)
+                self.assertLessEqual(stat.max_development_draftees, MAX_DEVELOPMENT_PICKS)
+                if index >= 4:
+                    self.assertGreaterEqual(stat.min_development, band.low)
+                    self.assertTrue(band.low + 5 <= stat.mean_development <= band.high - 5, stat.mean_development)
 
     def test_age_distribution_is_kept(self) -> None:
         """当初の帯からの変更: 標準偏差の上限 4.5 → 4.8、22歳以下 5〜15% → 5〜22%、平均年齢の下限 27 → 26、
@@ -360,6 +430,34 @@ class OffseasonPopulationTest(unittest.TestCase):
                 self.assertTrue(47.0 <= stat.stamina_mean <= 54.0, stat.stamina_mean)
                 self.assertTrue(8.0 <= stat.stamina_sd <= 12.0, stat.stamina_sd)
 
+    def test_potential_stays_about_average(self) -> None:
+        """伸びしろ（#308 P1）: 1回目のオフで全員に付き、支配下の倍率の平均は 1.0 の近くに保たれる。
+
+        伸びしろの大きい選手は伸びて残りやすいので、平均はわずかに上へ寄る（引退・戦力外は伸びしろを見ないが、
+        能力を見る）。新人は事前の分布（平均 1.0）で入るので、寄りは止まる。実測（シード 1〜4）は 0.994〜1.007。
+        """
+        for stat in self.years:
+            with self.subTest(year=stat.year):
+                self.assertEqual(stat.without_potential, 0)
+                self.assertTrue(0.98 <= stat.potential_mean <= 1.03, stat.potential_mean)
+
+    def test_drafted_rookies_keep_the_average_potential_and_the_route_shares(self) -> None:
+        """#308 P2: AI は伸びしろの推定の大きい候補を上に見るが、候補の伸びしろの平均（`POOL_POTENTIAL_MEAN`）を
+        下げてあるので、本指名の日本人の新人の倍率の平均は約1.0（年齢曲線を引き直さずに平衡を保つ条件）。
+        経路の割合も今までどおり 30/50/20 の近く（`POOL_ROUTE_WEIGHTS` の合わせ込み）。
+
+        実測（シード 1〜8・2〜3年目の合計）は倍率 0.997〜0.999・高校 30〜31%・大学 49〜51%・社会人 19〜20%。
+        年ごと（1年 約290人）の揺れを見込んだ帯。
+        """
+        for stat in self.years:
+            high_school, university, corporate = stat.rookie_route_shares
+            with self.subTest(year=stat.year):
+                self.assertTrue(0.93 <= stat.rookie_potential_mean <= 1.07, stat.rookie_potential_mean)
+                self.assertTrue(0.20 <= high_school <= 0.40, high_school)
+                self.assertTrue(0.40 <= university <= 0.60, university)
+                self.assertTrue(0.12 <= corporate <= 0.28, corporate)
+        self.assertAlmostEqual(fmean(stat.rookie_potential_mean for stat in self.years), 1.0, delta=0.03)
+
     def test_same_seed_gives_same_result(self) -> None:
         self.assertEqual(run_years(years=3, roster_size=STEADY_ROSTER), self.years[:3])
 
@@ -399,15 +497,19 @@ class RosterGrowthTest(unittest.TestCase):
 
         実測（シード 1〜4。#168 の戦力外と引退の表の後）は平均年齢 26.0〜27.2・22歳以下 12〜25%・35歳以上 2.2〜5.1%・
         錨の平均のずれ 最大 1.81 点・標準偏差のずれ 最大 0.98 点（テストはシード 1）。
+
+        標準偏差のずれは1回目のオフだけ 1.0 → 1.3 点（#308 P2）: 合成の初期母集団（能力が年齢と無関係）から新人を
+        10人ずつ迎える年で、シードの揺れが大きい（シード 1〜8 の1回目は P2 の前 0.47〜1.05・後 0.51〜1.21 点。
+        2〜3回目は前後とも 0.29〜0.74 点）。
         """
-        for stat in self.years:
+        for index, stat in enumerate(self.years):
             with self.subTest(year=stat.year):
                 self.assertTrue(25.0 <= stat.mean_age <= 29.0, stat.mean_age)
                 self.assertTrue(3.3 <= stat.sd_age <= 5.2, stat.sd_age)
                 self.assertTrue(0.01 <= stat.share_35_plus <= 0.08, stat.share_35_plus)
                 self.assertTrue(0.05 <= stat.share_22_minus <= 0.32, stat.share_22_minus)
                 self.assertLessEqual(stat.anchor_mean_shift, 2.5)
-                self.assertLessEqual(stat.anchor_sd_shift, 1.0)
+                self.assertLessEqual(stat.anchor_sd_shift, 1.3 if index == 0 else 1.0)
 
 
 class OverfullRosterTest(unittest.TestCase):

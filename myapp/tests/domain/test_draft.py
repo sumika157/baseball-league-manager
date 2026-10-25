@@ -5,14 +5,17 @@
 
 from __future__ import annotations
 
+import random
 import unittest
 from collections import Counter
+from dataclasses import replace
 from datetime import date
 
 from myapp.domain.pennant import draft
 from myapp.domain.pennant.draft import DraftRoute, DraftTeam, draftee_count
 from myapp.domain.pennant.draft_meeting import DraftContext, run_draft
 from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
+from myapp.domain.pennant.prospects import expected_prospect_ratings
 from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND, RegisteredBand
 from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings
 from myapp.domain.value_objects import AcquisitionRoute, ForeignPlayerRules, Position, Profile
@@ -44,6 +47,11 @@ def team(
         surname_counts=surnames or {},
         registered_limit=registered_limit,
     )
+
+
+def _item_mean(ratings: BatterRatings | PitcherRatings) -> float:
+    """項目（スタミナを含む全項目）の平均。"""
+    return sum(getattr(ratings, name) for name in ratings.LABELS) / len(ratings.LABELS)
 
 
 def run(target: DraftTeam, seed: int = 1, used: set[str] | None = None) -> tuple[draft.Draftee, ...]:
@@ -211,7 +219,15 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual(seen, set(DraftRoute))
 
     def test_domestic_routes_follow_the_weights(self) -> None:
-        counts = Counter(rookie.route for seed in range(150) for rookie in run(team(), seed))
+        """12球団の会議で数える（1球団だけの会議は候補が24人と少なく、高校の割合が 0.22 と許容の端にあった。
+        1位の好み（#302）で1人動いて外れたため、合わせ込みの前提に近い多球団の会議にした）。"""
+        teams = [replace(team(), team_id=team_id) for team_id in range(1, 13)]
+        context = DraftContext(DraftOrderRule.NPB, DraftStandings(leagues=(tuple(range(1, 13)),)))
+        counts = Counter(
+            rookie.route
+            for seed in range(1, 26)
+            for rookie in run_draft(teams, context, year=YEAR, world_seed=seed, used_names=set()).draftees
+        )
         domestic = counts[DraftRoute.HIGH_SCHOOL] + counts[DraftRoute.UNIVERSITY] + counts[DraftRoute.CORPORATE]
         self.assertAlmostEqual(counts[DraftRoute.UNIVERSITY] / domestic, 0.5, delta=0.08)
         self.assertAlmostEqual(counts[DraftRoute.HIGH_SCHOOL] / domestic, 0.3, delta=0.08)
@@ -227,6 +243,36 @@ class ProfileTest(unittest.TestCase):
         self.assertLess(means[DraftRoute.HIGH_SCHOOL], means[DraftRoute.UNIVERSITY])
         self.assertLess(means[DraftRoute.UNIVERSITY], means[DraftRoute.CORPORATE])
         self.assertLess(means[DraftRoute.CORPORATE], means[DraftRoute.FOREIGN])
+
+    def test_corporate_rookies_are_stronger_the_older_they_enter_and_keep_the_route_mean(self) -> None:
+        """社会人だけ入団の年齢で今の能力を傾ける（#308 Q2）: 23歳 約41.3 → 26歳 約44.8、範囲の中央で経路の平均 43。
+
+        ほかの経路は年齢に依らず経路の平均。`draw_rookie` が引く能力の平均がこの傾きに従う。
+        """
+        corporate = DraftRoute.CORPORATE
+        low, high = generator.CORPORATE_DEBUT_AGE_RANGE
+        means = [corporate.rating_mean_at(age) for age in range(low, high + 1)]
+        self.assertEqual(means, sorted(means))
+        self.assertAlmostEqual(means[-1] - means[0], draft.CORPORATE_AGE_SPREAD)
+        self.assertAlmostEqual(sum(means) / len(means), corporate.rating_mean)
+        for route in (DraftRoute.HIGH_SCHOOL, DraftRoute.UNIVERSITY, DraftRoute.FOREIGN):
+            self.assertEqual(route.rating_mean_at(30), route.rating_mean)
+        values: dict[int, list[float]] = {age: [] for age in range(low, high + 1)}
+        rng = random.Random(5)
+        as_of = date(YEAR + 1, 4, 1)
+        for _ in range(2000):
+            rookie = draft.draw_rookie(
+                rng, Position.OUTFIELDER, foreign=False, year=YEAR, used_names=set(), path=AmateurPath.CORPORATE
+            )
+            age = rookie.profile.age(as_of)
+            assert age is not None
+            values[age].append(_item_mean(rookie.ratings))
+        for age, items in values.items():
+            expected = _item_mean(
+                expected_prospect_ratings(mean=corporate.rating_mean_at(age), position=Position.OUTFIELDER)
+            )
+            with self.subTest(age=age):
+                self.assertAlmostEqual(sum(items) / len(items), expected, delta=0.8)
 
     def test_route_labels_are_the_screen_names(self) -> None:
         self.assertEqual([route.label for route in DraftRoute], ["高校", "大学", "社会人", "外国人"])

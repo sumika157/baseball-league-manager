@@ -1,7 +1,7 @@
 """仮想の選手データを投入する。
 
 各球団の支配下はペナントの開幕前の帯（`OPENING_REGISTERED_BAND`。62〜66人。リーグの支配下上限が
-それより低ければ上限まで）の中で、育成は `generator.DEVELOPMENTAL_RANGE`（10〜30人）の中で目標を引き、
+それより低ければ上限まで）の中で、育成は `DEVELOPMENT_BAND`（10〜30人）の中で目標を引き、
 既存の選手・在籍は残したまま不足分を架空の選手で埋める（追加専用）。ポジション構成は
 `generator.POSITION_RATIOS` を支配下・育成それぞれに最大剰余法で配る。
 
@@ -12,7 +12,8 @@
 背番号は支配下が 00・0〜99、育成が3桁（100番台から）。日本人選手にはドラフトの指名（`DraftPick`。年は加入年の前年、
 支配下は本指名・育成は育成ドラフト）を付け、入団の経路はそこから導く（`DraftPick.acquisition_route`）。助っ人はドラフトを
 持たず、経路は新外国人。順位は球団 × ドラフト年 × 本指名/育成ごとに、既にある最大の順位の次から1つずつ振る
-（重複しない）。
+（重複しない）。育成ドラフトの選手の経歴は、育成で指名できる経路（`DraftRoute.allows_development_pick`。
+社会人は不可。#307）からだけ引く。
 
 氏名は「苗字＋名前」を漢字プールから組み合わせて作るため、よみがな（カタカナ）と
 背ネーム（ユニフォーム背面のヘボン式アルファベット表記）もプール側に持たせてある。
@@ -30,10 +31,13 @@ from django.db import transaction
 from django.db.models import Max
 
 from myapp.domain.exceptions import DomainError, RegisteredPlayerLimitExceeded
-from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND
+from myapp.domain.pennant.draft import DraftRoute
+from myapp.domain.pennant.roster import DEVELOPMENT_BAND, OPENING_REGISTERED_BAND
 from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import (
+    DEVELOPMENTAL_FIRST_NUMBERS,
     DEVELOPMENTAL_MIN_NUMBER,
+    DEVELOPMENTAL_SPARE_NUMBERS,
     AcquisitionRoute,
     ContractStatus,
     DraftPick,
@@ -47,11 +51,12 @@ from myapp.infrastructure.scoping import players_in, stints_in, teams_in
 from myapp.management.workspaces import add_workspace_argument, real_scope_for_key
 from myapp.models import Player, PlayerStint
 
+# 経歴の経路（育成ドラフトの選手は、育成で指名できる経路だけ。規則の出典は `DraftRoute.allows_development_pick`）
+ALL_PATHS = tuple(generator.AmateurPath)
+DEVELOPMENT_PATHS = DraftRoute.development_amateur_paths()
+
 # 支配下の背番号（00・0〜99）
 REGISTERED_NUMBERS = ["00", "0", *map(str, range(1, DEVELOPMENTAL_MIN_NUMBER))]
-# 育成の背番号（3桁）。100番台を先に配り、尽きたら200番台以降を使う
-DEVELOPMENTAL_FIRST_NUMBERS = [str(n) for n in range(DEVELOPMENTAL_MIN_NUMBER, 200)]
-DEVELOPMENTAL_SPARE_NUMBERS = [str(n) for n in range(200, 1000)]
 
 # このコマンドの初回投入より前から存在した選手。--rename-existing で名前を
 # 選び直す対象から除外し、--assign-readings では固定のよみがな・ローマ字を使う
@@ -200,7 +205,7 @@ class Command(BaseCommand):
 
         targets = {
             ContractStatus.REGISTERED: self._registered_target(rng, registered_limit),
-            ContractStatus.DEVELOPMENTAL: rng.randint(*generator.DEVELOPMENTAL_RANGE),
+            ContractStatus.DEVELOPMENTAL: rng.randint(DEVELOPMENT_BAND.low, DEVELOPMENT_BAND.high),
         }
         numbers = {
             ContractStatus.REGISTERED: self._shuffled(rng, REGISTERED_NUMBERS, used_numbers),
@@ -317,7 +322,8 @@ class Command(BaseCommand):
         )
         age = max(youngest, min(oldest, round(rng.gauss(mean, sd))))
         birth_date = generator.birth_date_for(rng, age=age, as_of=today)
-        career = generator.amateur_career(rng, is_foreign=is_foreign, birthplace=birthplace)
+        paths = DEVELOPMENT_PATHS if contract is ContractStatus.DEVELOPMENTAL else ALL_PATHS
+        career = generator.amateur_career(rng, is_foreign=is_foreign, birthplace=birthplace, paths=paths)
         # プロ入りの年（加入年）。経歴のプロ入りの年齢で、今の年齢を超えない
         joined_year = birth_date.year + min(career.debut_age, age)
         draft = None
@@ -416,7 +422,8 @@ class Command(BaseCommand):
         )
         to_update = []
         for player in targets:
-            career = generator.amateur_career(rng, is_foreign=False, birthplace=player.birthplace)
+            paths = DEVELOPMENT_PATHS if player.is_development_draft else ALL_PATHS
+            career = generator.amateur_career(rng, is_foreign=False, birthplace=player.birthplace, paths=paths)
             player.high_school = career.high_school
             player.university = career.university
             player.corporate_team = career.corporate_team

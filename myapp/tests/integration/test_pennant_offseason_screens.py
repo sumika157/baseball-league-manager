@@ -125,7 +125,8 @@ class CloseSeasonPostTest(ScreenCase):
 
         self.assertRedirects(response, self.offseason_url(), fetch_redirect_response=False)
         self.assertRegex(
-            self.last_message(response), r"2026年のシーズンを締めました（引退 \d+人・戦力外 \d+人・新人 \d+人）。"
+            self.last_message(response),
+            r"2026年のシーズンを締めました（引退 \d+人・戦力外 \d+人・新人 \d+人（うち育成 \d+人））。",
         )
         self.assertGreater(orm_models.PennantPlayerRatings.objects.filter(year=YEAR + 1).count(), 0)
 

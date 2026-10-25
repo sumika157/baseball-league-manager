@@ -176,9 +176,15 @@ class CloseSeasonDraftTest(DraftOrderCase):
         rookies = self.rookies(self.none_world)
         self.assertEqual(sum(len(stints) for stints in rookies.values()), result.draftee_count)
         for stints in rookies.values():
-            japanese = [s for s in stints if s.player.draft_year is not None]
+            japanese = [s for s in stints if s.player.draft_year is not None and not s.player.is_development_draft]
+            development = [s for s in stints if s.player.is_development_draft]
             foreign = [s for s in stints if s.player.draft_year is None]
             self.assertEqual(sorted(s.player.draft_round for s in japanese), list(range(1, len(japanese) + 1)))
+            # 育成ドラフトの巡は本指名と別に1から（#198 D2）
+            self.assertEqual(sorted(s.player.draft_round for s in development), list(range(1, len(development) + 1)))
+            for stint in development:
+                self.assertEqual(stint.player.draft_year, YEAR)
+                self.assertEqual(stint.acquired_via, AcquisitionRoute.DEVELOPMENTAL_DRAFT.value)
             for stint in japanese:
                 self.assertEqual(stint.player.draft_year, YEAR)
                 self.assertFalse(stint.player.is_development_draft)
@@ -229,6 +235,7 @@ class CloseSeasonDraftTest(DraftOrderCase):
         content = self.client.get(ws_url("pennant_offseason", self.none_world, YEAR)).content.decode()
         self.assertIn("<th>指名</th>", content)
         self.assertIn('data-testid="rookie-pick">1位<', content)
+        self.assertIn('data-testid="rookie-pick">育成1位<', content)
 
 
 class CreateCommandTest(DraftOrderCase):
