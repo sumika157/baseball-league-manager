@@ -17,7 +17,7 @@ from .presentation import api, views
 def _w(route: str, view, name: str, *, login: bool = False, json: bool = False):
     """ワークスペースの中の画面を1つ登録する。必ず `workspace_view` で包む。
 
-    `login=True` は閲覧にもログインが要る画面（試合の登録・編集・選手の編集）、`json=True` は JSON を返す API
+    `login=True` は閲覧にもログインが要る画面（試合の登録・編集・選手の編集・登録画面）、`json=True` は JSON を返す API
     （ログインへのリダイレクトや 404 の画面の代わりに、同じ形の JSON のエラーを返す）。
     """
     return path(route, views.workspace_view(view, login=login, json=json), name=name)
@@ -54,6 +54,13 @@ workspace_urlpatterns = [
     # 選手は Team 集約の内部エンティティなので、URL もチームの下に置く
     _w("team/<int:team_id>/player/<int:player_id>/", views.player_detail, "player_detail"),
     _w("team/<int:team_id>/player/<int:player_id>/edit/", views.player_edit, "player_edit", login=True),
+    # --- 登録画面（リーグ・球場。W3 #79）。見るのも書くのも全体の編集権（持ち主・編集者）だけ ---
+    _w("setup/leagues/", views.setup_leagues, "setup_leagues", login=True),
+    _w("setup/leagues/<int:league_id>/", views.setup_league_edit, "setup_league_edit", login=True),
+    _w("setup/leagues/<int:league_id>/delete/", views.setup_league_delete, "setup_league_delete", login=True),
+    _w("setup/stadiums/", views.setup_stadiums, "setup_stadiums", login=True),
+    _w("setup/stadiums/<int:stadium_id>/", views.setup_stadium_edit, "setup_stadium_edit", login=True),
+    _w("setup/stadiums/<int:stadium_id>/delete/", views.setup_stadium_delete, "setup_stadium_delete", login=True),
     # --- ペナントの世界（参照はワークスペースの公開範囲に従う。作成は持ち主・編集者、進める・削除は世界の作成者。
     # 選手・試合の編集の URL は作らない） ---
     _w("pennant/", views.pennant_index, "pennant_index"),

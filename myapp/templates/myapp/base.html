@@ -45,6 +45,10 @@
           {% if workspace %}
             {# ペナント（実データとは別の世界）への入口。閲覧はワークスペースを読める人なら誰でもできる #}
             <a href="{% workspace_url 'pennant_index' %}" class="nav-admin-link">ペナント</a>
+            {# リーグ・チーム・球場の登録。全体の編集権（持ち主・編集者）だけ（can_set_up はコンテキストプロセッサが渡す） #}
+            {% if can_set_up %}
+              <a href="{% workspace_url 'setup_leagues' %}" class="nav-admin-link">登録</a>
+            {% endif %}
           {% endif %}
           {% if user.is_authenticated %}
             {# is_staff が管理画面へ入れる条件そのものなので、それを表示条件にする #}

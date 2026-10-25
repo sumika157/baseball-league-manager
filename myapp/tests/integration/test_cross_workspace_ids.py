@@ -4,6 +4,7 @@
 （持ち主・編集者はどの id でも可）。前の判定（`DjangoTeamPermissionQuery`）は「範囲の外のチームなら偽」を
 兼ねていたので、その役目は範囲で絞ったサービスとリポジトリが負う。ここでは A の持ち主が A の key の下で
 B の id を混ぜて送り、どれも 404 かフォームのエラー（500 にならない）で、DB のどの行も変わらないことを確かめる。
+登録画面（W3）のリーグ・球場の id も同じ（範囲で絞った参照クエリとリポジトリが `*NotFound` にし、画面は 404）。
 """
 
 import json
@@ -151,3 +152,35 @@ class CrossWorkspaceIdsTest(WorkspaceCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response["Location"], ws_url("team_analysis", self.team.id))
+
+    # --- 登録画面（リーグ・球場。W3 T2。#79） ---
+
+    def test_the_setup_pages_with_b_league_and_stadium_ids_are_404(self):
+        """A の持ち主が A の key の下で B のリーグ・球場の id を開く・送る。どれも 404 で、何も変わらない。"""
+        league_body = {
+            "name": "改ざん",
+            "display_order": "0",
+            "foreign_active": "4",
+            "foreign_pitchers": "3",
+            "foreign_batters": "3",
+            "registered_player_limit": "70",
+        }
+        targets = {
+            "リーグの編集": (ws_url("setup_league_edit", self.b_league.id), league_body),
+            "リーグの削除": (ws_url("setup_league_delete", self.b_league.id), {}),
+            "球場の編集": (ws_url("setup_stadium_edit", self.b_stadium.id), {"name": "改ざん", "capacity": "1"}),
+            "球場の削除": (ws_url("setup_stadium_delete", self.b_stadium.id), {}),
+        }
+        for label, (url, body) in targets.items():
+            with self.subTest(label):
+                self.assertEqual(self.client.get(url).status_code, 404)
+                self.assertEqual(self.client.post(url, body).status_code, 404)
+                self.assert_nothing_changed()
+
+    def test_the_setup_lists_do_not_show_b_rows(self):
+        for name in ("setup_leagues", "setup_stadiums"):
+            with self.subTest(name=name):
+                response = self.client.get(ws_url(name))
+                self.assertEqual(response.status_code, 200)
+                self.assertNotContains(response, self.b_league.name)
+                self.assertNotContains(response, self.b_stadium.name)

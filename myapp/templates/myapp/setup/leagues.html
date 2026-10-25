@@ -1,0 +1,67 @@
+{% extends 'myapp/base.html' %}
+{% load scoped %}
+
+{% block title %}リーグの登録 - Baseball Manager{% endblock %}
+
+{% block content %}
+{% include 'myapp/setup/_head.html' %}
+
+{% comment %}
+リーグの一覧（表示順）。列ソートは付けない（並びは表示順の数値で決める）。
+削除のリンクは消せる行（チームが1つも無いリーグ）にだけ出す。消せない行はチームの数で理由が分かる。
+{% endcomment %}
+{% if leagues %}
+  <div class="table-responsive">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th class="text-end">表示順</th>
+          <th>リーグ名</th>
+          <th class="text-end">チーム</th>
+          <th>外国人選手の1軍登録の枠</th>
+          <th class="text-end">支配下選手の登録枠</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody class="tabular-nums">
+        {% for league in leagues %}
+          <tr>
+            <td class="text-end stat-muted">{{ league.display_order }}</td>
+            <td><a href="{% workspace_url 'league_detail' league.league_id %}" class="player-name">{{ league.name }}</a></td>
+            <td class="text-end">{{ league.team_count }}</td>
+            <td>{{ league.foreign_rules.label }}</td>
+            <td class="text-end">{% if league.registered_player_limit is None %}無制限{% else %}{{ league.registered_player_limit }}人{% endif %}</td>
+            <td class="text-end text-nowrap">
+              <a href="{% workspace_url 'setup_league_edit' league.league_id %}" class="btn btn-sm btn-outline-secondary">編集</a>
+              {% if not league.deletion_blocker %}
+                <a href="{% workspace_url 'setup_league_delete' league.league_id %}" class="btn btn-sm btn-outline-danger">削除</a>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <div class="card mb-3">
+    <div class="empty-state">まだリーグがありません。下のフォームから作ってください。</div>
+  </div>
+{% endif %}
+
+<h2 class="h6 mb-2 mt-4">リーグを作る</h2>
+<form method="post" class="card mb-4">
+  {% csrf_token %}
+  <div class="card-body">
+    {% for error in form.non_field_errors %}<div class="alert alert-danger">{{ error }}</div>{% endfor %}
+    {% include 'myapp/setup/_field.html' with field=form.name %}
+    <div class="row">
+      <div class="col-md-4">{% include 'myapp/setup/_field.html' with field=form.foreign_active %}</div>
+      <div class="col-md-4">{% include 'myapp/setup/_field.html' with field=form.foreign_pitchers %}</div>
+      <div class="col-md-4">{% include 'myapp/setup/_field.html' with field=form.foreign_batters %}</div>
+    </div>
+    {% include 'myapp/setup/_field.html' with field=form.registered_player_limit %}
+    <button type="submit" class="btn btn-primary">作る</button>
+    <span class="stat-muted ms-2" style="font-size: 0.8125rem;">表示順は末尾に入ります（作った後に編集で変えられます）。</span>
+  </div>
+</form>
+{% endblock %}

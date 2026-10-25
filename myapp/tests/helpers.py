@@ -105,9 +105,16 @@ def ws_url(name: str, *args: object, workspace: orm_models.Workspace | None = No
 def header_pages() -> tuple[str, ...]:
     """ヘッダーの出口の URL。ペナントの画面のリンクが向いてよい、世界の外の行き先。
 
-    ロゴ（ワークスペースの外のトップ `/`）・ワークスペースの名前（ダッシュボード）・選手検索・ペナント。
+    ロゴ（ワークスペースの外のトップ `/`）・ワークスペースの名前（ダッシュボード）・選手検索・ペナント・
+    登録（持ち主・編集者だけに出る。W3）。
     """
-    return (reverse("home"), ws_url("dashboard"), ws_url("player_search"), ws_url("pennant_index"))
+    return (
+        reverse("home"),
+        ws_url("dashboard"),
+        ws_url("player_search"),
+        ws_url("pennant_index"),
+        ws_url("setup_leagues"),
+    )
 
 
 def world_ledger(workspace: orm_models.Workspace | None = None) -> DjangoWorldRepository:

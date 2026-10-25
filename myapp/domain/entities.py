@@ -70,6 +70,8 @@ BATTING_ORDER_SIZE = 9
 LEAGUE_NAME_MAX_LENGTH = 50
 TEAM_NAME_MAX_LENGTH = 100
 STADIUM_NAME_MAX_LENGTH = 100
+# 球場の所在地の長さ。domain は検査しない（空でもよい）が、列の長さとフォームの上限の出典はここ
+STADIUM_CITY_MAX_LENGTH = 100
 
 
 def clean_name(name: str, *, what: str, max_length: int) -> str:

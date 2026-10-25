@@ -1,0 +1,29 @@
+{% extends 'myapp/base.html' %}
+{% load scoped %}
+
+{% block title %}{{ league.name }}の編集 - リーグの登録 - Baseball Manager{% endblock %}
+
+{% block content %}
+{% workspace_url 'setup_leagues' as back_url %}
+{% include 'myapp/setup/_head.html' with crumb='リーグの編集' back_url=back_url %}
+
+<h2 class="h6 mb-2">{{ league.name }}</h2>
+<form method="post" class="card mb-4">
+  {% csrf_token %}
+  <div class="card-body">
+    {% for error in form.non_field_errors %}<div class="alert alert-danger">{{ error }}</div>{% endfor %}
+    {% include 'myapp/setup/_field.html' with field=form.name %}
+    {% include 'myapp/setup/_field.html' with field=form.display_order %}
+    <div class="row">
+      <div class="col-md-4">{% include 'myapp/setup/_field.html' with field=form.foreign_active %}</div>
+      <div class="col-md-4">{% include 'myapp/setup/_field.html' with field=form.foreign_pitchers %}</div>
+      <div class="col-md-4">{% include 'myapp/setup/_field.html' with field=form.foreign_batters %}</div>
+    </div>
+    {% include 'myapp/setup/_field.html' with field=form.registered_player_limit %}
+    <div class="d-flex gap-2">
+      <button type="submit" class="btn btn-primary">保存する</button>
+      <a href="{{ back_url }}" class="btn btn-secondary">戻る</a>
+    </div>
+  </div>
+</form>
+{% endblock %}

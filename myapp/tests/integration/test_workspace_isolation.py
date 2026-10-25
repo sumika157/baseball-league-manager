@@ -15,7 +15,7 @@ A の範囲で読んだもの・A の key の URL（`/w/<A の key>/...`）の�
   B の世界（`/w/<A>/pennant/<B の世界>/` とその下）を開くと 404、A のペナントの一覧には A の世界だけが出る。
 - (5) `players_in(real(A))` に B の選手も A の世界の選手も出ない。
 - (6) 登録（W3。#79）: A の範囲の球場のリポジトリ・登録画面の参照に B の行が出ず、A の範囲のリーグ・チーム・球場の
-  削除は B の行を消せない（どの表の行も変わらない）。
+  削除は B の行を消せない（どの表の行も変わらない）。登録画面の URL（T2）も `URL_TABLE` に載る（`Side.stadium`）。
 - ワークスペースの台帳（`DjangoWorkspaceAccessQuery`・`DjangoWorkspaceListQuery`。W2 T1）: A の key で B の行が
   出ず、B の編集者・担当は A では部外者。一覧に、入っていないワークスペースは出ない。
 - URL（W2 T4）: `workspace_urlpatterns` の全パターンを分類表（`URL_TABLE`）で検査する（表に無いパターンが
@@ -1515,6 +1515,7 @@ class Side:
     player: int
     game: int
     league: int
+    stadium: int
     year: int
     world: int
     world_team: int
@@ -1526,7 +1527,18 @@ class Side:
 
 # id の引数（年は id ではない。年だけの URL は「ほかのワークスペースの id」の検査の対象外）
 ID_ARGS = frozenset(
-    {"team", "player", "game", "league", "world", "world_team", "world_player", "world_league", "world_game"}
+    {
+        "team",
+        "player",
+        "game",
+        "league",
+        "stadium",
+        "world",
+        "world_team",
+        "world_player",
+        "world_league",
+        "world_game",
+    }
 )
 
 # 分類表。`workspace_urlpatterns` のパターンは、ちょうどここに載る（新しい URL を足したら、引数と種類をここで決める）。
@@ -1552,6 +1564,12 @@ URL_TABLE: dict[str, tuple[tuple[str, ...], str, bool]] = {
     "team_analysis": (("team",), PAGE, False),
     "player_detail": (("team", "player"), PAGE, False),
     "player_edit": (("team", "player"), PAGE, True),
+    "setup_leagues": ((), PAGE, True),
+    "setup_league_edit": (("league",), PAGE, True),
+    "setup_league_delete": (("league",), PAGE, True),
+    "setup_stadiums": ((), PAGE, True),
+    "setup_stadium_edit": (("stadium",), PAGE, True),
+    "setup_stadium_delete": (("stadium",), PAGE, True),
     "pennant_index": ((), PAGE, False),
     "pennant_world": (("world",), PAGE, False),
     "pennant_advance": (("world",), WRITE, False),
@@ -1599,6 +1617,14 @@ def snapshot_all_rows() -> dict[str, list[dict]]:
     }
 
 
+# リーグの作成・編集の本文の枠の欄（通る値）
+SETUP_LEAGUE_LIMITS = {
+    "foreign_active": "4",
+    "foreign_pitchers": "3",
+    "foreign_batters": "3",
+    "registered_player_limit": "70",
+}
+
 # 書き込み（POST）を受け付けるパターンと、送る本文（通れば実際に書ける形。空の本文で検証に落ちて空振りしないように）。
 # 引数は (その側の id, その側のもう1つのチーム)。表に無い画面への POST は、読むだけの画面への POST
 WRITE_BODIES: dict[str, Callable[[Side, int], dict]] = {
@@ -1632,7 +1658,17 @@ WRITE_BODIES: dict[str, Callable[[Side, int], dict]] = {
     "pennant_delete": lambda side, rival: {},
     "pennant_settings": lambda side, rival: {"postseason_format": "NONE"},
     "pennant_draft_order_settings": lambda side, rival: {"draft_order_rule": "NPB"},
+    "setup_leagues": lambda side, rival: {"name": "侵入のリーグ", **SETUP_LEAGUE_LIMITS},
+    "setup_league_edit": lambda side, rival: {"name": "改ざんのリーグ", "display_order": "0", **SETUP_LEAGUE_LIMITS},
+    "setup_league_delete": lambda side, rival: {},
+    "setup_stadiums": lambda side, rival: {"name": "侵入の球場", "capacity": "1"},
+    "setup_stadium_edit": lambda side, rival: {"name": "改ざんの球場", "capacity": "1"},
+    "setup_stadium_delete": lambda side, rival: {},
 }
+
+# 本文にも URL にも id を持たない書き込み（作るだけ）。ほかのワークスペースの id を混ぜる余地が無いので、
+# 「B の id を混ぜた POST」の検査の対象外（門の検査は部外者の POST の検査が受け持つ）
+ID_FREE_WRITES = frozenset({"setup_leagues", "setup_stadiums"})
 
 
 def _world_side_ids(world_id: int) -> tuple[int, int, int, int]:
@@ -1670,13 +1706,22 @@ class EveryWorkspaceUrlTest(WorkspaceCase):
         # 「A の key の下で B の id は 404」が「その年のポストシーズンが無い」の 404 で空振りしないようにする
         _plant_postseason(WorldScope.pennant(cls.workspace.id, cls.a_world_id), YEAR)
         cls.side_a = Side(
-            cls.team.id, cls.a_batters[0], cls.a_game_id, cls.league.id, YEAR, cls.a_world_id, *a_world, YEAR
+            cls.team.id,
+            cls.a_batters[0],
+            cls.a_game_id,
+            cls.league.id,
+            cls.stadium.id,
+            YEAR,
+            cls.a_world_id,
+            *a_world,
+            YEAR,
         )
         cls.side_b = Side(
             cls.b_team.id,
             cls.b_batters[0],
             cls.b_game_ids[1],
             cls.b_league.id,
+            cls.b_stadium.id,
             B_YEAR,
             cls.b_world_id,
             *b_world,
@@ -1833,7 +1878,7 @@ class EveryWorkspaceUrlTest(WorkspaceCase):
         self.client.force_login(self.workspace.owner)
         before = snapshot_all_rows()
         for name, (args, _, _) in URL_TABLE.items():
-            if not ID_ARGS.intersection(args) and name not in WRITE_BODIES:
+            if name in ID_FREE_WRITES or (not ID_ARGS.intersection(args) and name not in WRITE_BODIES):
                 continue
             url = self._url(name, self.side_b) if ID_ARGS.intersection(args) else self._url(name, self.side_a)
             with self.subTest(name=name):
@@ -1854,7 +1899,9 @@ class EveryWorkspaceUrlTest(WorkspaceCase):
         # スコアブックは打席の記録の無い古い形式の試合を保存しないので、登録しただけの試合へ送る
         unrecorded = play_game(self.team, self.rival, recorded=False).id
         self.client.force_login(self.workspace.owner)
-        for name in ("player_list", "game_create", "api_game_scorebook", "pennant_index"):
+        writes = ("player_list", "game_create", "api_game_scorebook", "pennant_index")
+        setup_writes = ("setup_leagues", "setup_league_edit", "setup_stadiums", "setup_stadium_edit")
+        for name in writes + setup_writes:
             with self.subTest(name=name), patch(ROSTER_CHECK):
                 before = snapshot_all_rows()
                 side = replace(self.side_a, game=unrecorded)

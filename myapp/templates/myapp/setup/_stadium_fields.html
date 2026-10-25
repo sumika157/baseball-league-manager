@@ -1,0 +1,12 @@
+{% comment %}球場のフォームの項目（作成と編集で共通）。選択肢はフォームが StadiumProfile から作る。{% endcomment %}
+{% for error in form.non_field_errors %}<div class="alert alert-danger">{{ error }}</div>{% endfor %}
+{% include 'myapp/setup/_field.html' with field=form.name %}
+<div class="row">
+  <div class="col-md-6">{% include 'myapp/setup/_field.html' with field=form.city %}</div>
+  <div class="col-md-6">{% include 'myapp/setup/_field.html' with field=form.capacity %}</div>
+</div>
+<div class="row">
+  <div class="col-md-4">{% include 'myapp/setup/_field.html' with field=form.surface %}</div>
+  <div class="col-md-4">{% include 'myapp/setup/_field.html' with field=form.roof %}</div>
+  <div class="col-md-4">{% include 'myapp/setup/_field.html' with field=form.opened_year %}</div>
+</div>
