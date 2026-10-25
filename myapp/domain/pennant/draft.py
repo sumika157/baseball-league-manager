@@ -1,12 +1,14 @@
 """ドラフトの新人の人数・位置・作り方。**純粋な関数**で、DB にも Django にも触れない。
 
 人数は、引退・退団の後の**支配下**の人数から、開幕前の支配下が帯（`roster.OPENING_REGISTERED_BAND`。62〜66人）に
-入るように決める（育成は数えない。`draftee_count`）。登録位置は支配下の構成と目標の構成との差の大きい位置から決め、
-外国人はリーグの1軍の外国人枠の計の内側で目標（4人）まで補う（戦力外で外した外国人の入れ替え。#168）。
-球団ごとの人数と位置は `plan_team_draft` が決め、日本人は**ドラフト会議**（`draft_meeting.py`。指名順は
-世界の規則 `draft_order.py`）で候補から指名し、外国人は会議の外でここが作る（NPB の会議に外国人はいない）。
-新人は支配下で入り、入団の経路は日本人が「ドラフト」、外国人が「新外国人」（`Draftee.acquisition_route`）。
-日本人の新人はドラフトの指名（`DraftPick`。年は締める年、順位は会議の巡）を持ち、外国人は持たない。
+入るように決める（育成は数えない。`draftee_count`）。登録位置は支配下の構成と目標の構成との差の大きい位置から決める。
+この人数は**外国人の獲得を含めた新しい支配下の選手の枠**で、外国人はリーグの1軍の外国人枠の計の内側で目標（4人）まで
+獲得で補う（`foreign_count_to_add`。戦力外で外した外国人の入れ替え。#168）。獲得は会議の前に `foreign_market.py` が
+候補から選び（#169。NPB の会議に外国人はいない）、日本人の新人は残りの人数（新人の人数 − 獲得した外国人）を
+**ドラフト会議**（`draft_meeting.py`。指名順は世界の規則 `draft_order.py`）で候補から指名する。
+球団ごとの人数と位置は `plan_team_draft` が決める。
+新人は支配下で入り、入団の経路は「ドラフト」（`Draftee.acquisition_route`）。新人はドラフトの指名
+（`DraftPick`。年は締める年、順位は会議の巡）を持つ。
 本指名の後の**育成の巡**（#198 D2）で、球団ごとの育成の目標（`development_target`。目安の帯 `roster.DEVELOPMENT_BAND`
 の中）までの不足を1年 `MAX_DEVELOPMENT_PICKS` 人まで指名する。育成の新人は育成で入り（3桁の背番号）、
 経路は「育成ドラフト」、指名は `DraftPick(is_development=True)`。支配下の帯と上限には数えない。
@@ -38,7 +40,7 @@ from ..value_objects import (
 from ..virtual_players import generator
 from ..virtual_players.generator import AmateurPath
 from .initial_ratings import SEASON_START_MONTH, STRENGTH_UNIT
-from .prospects import PROSPECT_RATING_SD, draw_prospect_ratings, expected_prospect_ratings
+from .prospects import PROSPECT_RATING_SD, draw_prospect_ratings
 from .roster import DEVELOPMENT_BAND, OPENING_REGISTERED_BAND
 
 # 帯（開幕前の支配下）の出典は `roster.OPENING_REGISTERED_BAND`。ここは指名の人数の決め方だけを持つ
@@ -55,9 +57,9 @@ MIN_BY_POSITION = {
     Position.INFIELDER: 6,
     Position.OUTFIELDER: 5,
 }
-# 外国人の目標（リーグの1軍の外国人枠の計が小さければそこまで）。1回のオフで目標まで足す
+# 外国人の目標（リーグの1軍の外国人枠の計が小さければそこまで）。1回のオフで目標まで獲得で補う
 # （#168 で年2人の上限をやめた。外す外国人は戦力外が新しく迎える外国人の見込みと比べて決めるので、
-# 外した人数を同じオフに埋める）
+# 外した人数を同じオフに埋める。獲得は `foreign_market.py`。#169）
 # 値は協約の1軍の外国人枠の計（`ForeignPlayerRules.NPB.active`。1軍に置ける人数を保有の目安にする。#204）
 # `or 0` は型のため（`active` は `int | None`。NPB の値は4で None にならない）
 FOREIGN_TARGET = ForeignPlayerRules.NPB.active or 0
@@ -67,13 +69,11 @@ FOREIGN_TARGET = ForeignPlayerRules.NPB.active or 0
 # 社会人の新人の能力の、入団の年齢の範囲の両端（23歳と26歳）の差（点。`DraftRoute.rating_mean_at`。#308 Q2）。
 # 平均 43 のまま 23歳 約41.3 → 26歳 約44.8（計画の「23歳 41.5 → 26歳 45」）
 CORPORATE_AGE_SPREAD = 3.5
-# 外国人の新人の年齢（満年齢）の範囲
-FOREIGN_AGE_RANGE = (25, 31)
 # 育成ドラフトで1球団が1年に迎える育成の上限（ドラフト会議の育成の巡の最多。#198 の一般化。GM の上限も同じ＝D3）。
 # 目安の帯（`roster.DEVELOPMENT_BAND`）の下にいる球団も、一度には埋めない（本指名の `MAX_DRAFTEES` と同じ考え）
 MAX_DEVELOPMENT_PICKS = 6
-# 背番号（表記）。支配下の新人は 1〜99 から選び、尽きたら 0・00（育成の3桁は使わない）
-_NUMBER_POOLS = (tuple(str(number) for number in range(1, DEVELOPMENTAL_MIN_NUMBER)), ("0", "00"))
+# 背番号（表記）。支配下の新人（と獲得した外国人）は 1〜99 から選び、尽きたら 0・00（育成の3桁は使わない）
+NUMBER_POOLS = (tuple(str(number) for number in range(1, DEVELOPMENTAL_MIN_NUMBER)), ("0", "00"))
 # 育成の新人は3桁。100番台から選び、尽きたら 200〜999（範囲の出典は `value_objects` で、実データの投入と共有）
 _DEVELOPMENT_NUMBER_POOLS = (DEVELOPMENTAL_FIRST_NUMBERS, DEVELOPMENTAL_SPARE_NUMBERS)
 
@@ -84,7 +84,6 @@ class DraftRoute(Enum):
     HIGH_SCHOOL = AmateurPath.HIGH_SCHOOL.value
     UNIVERSITY = AmateurPath.UNIVERSITY.value
     CORPORATE = AmateurPath.CORPORATE.value
-    FOREIGN = "外国人"
 
     @property
     def label(self) -> str:
@@ -114,7 +113,7 @@ class DraftRoute(Enum):
 
         社会人（日本野球連盟の企業チーム）の選手は育成で指名しない（育成制度の理念から外れるとして、日本野球連盟が
         2011年に「指名するなら支配下で」と申し入れた慣行。明文の規定ではない。クラブチームの選手は育成でも指名できるが、
-        このアプリの社会人は企業とクラブを分けず、名前はすべて企業チーム）。外国人は育成でも契約できる。
+        このアプリの社会人は企業とクラブを分けず、名前はすべて企業チーム）。
         """
         return self is not DraftRoute.CORPORATE
 
@@ -124,21 +123,17 @@ class DraftRoute(Enum):
         return tuple(path for path in AmateurPath if cls.from_amateur_path(path).allows_development_pick)
 
     @classmethod
-    def from_amateur_path(cls, path: AmateurPath | None) -> DraftRoute:
-        """日本人の経歴の経路から（名前で対応づける。経路を足して対応を忘れると KeyError。テストが見張る）。
-
-        経歴の無い（日本の学校を持たない）新人は外国人。
-        """
-        return cls.FOREIGN if path is None else cls[path.name]
+    def from_amateur_path(cls, path: AmateurPath) -> DraftRoute:
+        """日本人の経歴の経路から（名前で対応づける。経路を足して対応を忘れると KeyError。テストが見張る）。"""
+        return cls[path.name]
 
     @classmethod
     def of_profile(cls, profile: Profile) -> DraftRoute:
         """新人のプロフィールから経路を導く（経路は保存していない。画面がオフの結果を読むときに使う）。
 
-        外国人は外国人。日本人は、経歴のいちばん後ろの段階（社会人 > 大学 > 高校）が経路。
+        経歴のいちばん後ろの段階（社会人 > 大学 > 高校）が経路。獲得した外国人（日本の経歴を持たない）は
+        新人ではないので、呼び出し側が先に分ける（オフの結果の表記は `foreign_market.newcomer_route_label`）。
         """
-        if profile.is_foreign_player:
-            return cls.FOREIGN
         if profile.corporate_team:
             return cls.CORPORATE
         if profile.university:
@@ -150,7 +145,6 @@ _RATING_MEAN = {
     DraftRoute.HIGH_SCHOOL: 35.0,
     DraftRoute.UNIVERSITY: 40.0,
     DraftRoute.CORPORATE: 43.0,
-    DraftRoute.FOREIGN: 50.0,
 }
 
 
@@ -161,11 +155,11 @@ class DraftTeam:
     team_id: int
     # 今の区分が支配下の選手の、位置ごとの人数（育成は数えない。試合に出られず、指名数と位置の補充に効かせない）
     position_counts: Mapping[Position, int]
-    # 外国人の人数（育成も数える。目標 `foreign_target` は保有の目安）
+    # 外国人の人数（育成も数える。目標 `foreign_target` は保有の目安。獲得で補う人数 `foreign_count_to_add` に使う）
     foreign_count: int
     # リーグの外国人の1軍登録の枠の計（`ForeignPlayerRules.active`）。None は無制限。目標人数の上限に使う
     foreign_limit: int | None
-    # 引退の後の現在の在籍が使っている背番号
+    # 引退の後の現在の在籍（と獲得した外国人）が使っている背番号
     used_numbers: frozenset[str]
     # 現在の選手の背ネームの苗字（ローマ字）ごとの人数。同じ苗字の新人に頭文字を付けるため
     surname_counts: Mapping[str, int]
@@ -189,7 +183,7 @@ class DraftTeam:
 
 @dataclass(frozen=True)
 class Draftee:
-    """新人。能力は錨の前（`offseason.py` が錨をかけて差し替える）。"""
+    """ドラフトの新人（日本人）。能力は錨の前（`offseason.py` が錨をかけて差し替える）。"""
 
     team_id: int
     route: DraftRoute
@@ -200,32 +194,26 @@ class Draftee:
     ratings: BatterRatings | PitcherRatings
 
     @property
-    def is_foreign(self) -> bool:
-        return self.route is DraftRoute.FOREIGN
-
-    @property
     def is_development(self) -> bool:
         """育成ドラフトの新人か（指名 `DraftPick.is_development` から）。"""
         return _drafted_as_development(self.profile)
 
     @property
     def contract(self) -> ContractStatus:
-        """入団の契約区分。育成ドラフトの新人は育成（背番号は3桁）、それ以外（本指名・外国人）は支配下。"""
+        """入団の契約区分。育成ドラフトの新人は育成（背番号は3桁）、本指名は支配下。"""
         return ContractStatus.DEVELOPMENTAL if self.is_development else ContractStatus.REGISTERED
 
     @property
     def acquisition_route(self) -> AcquisitionRoute:
-        """在籍に記録する入団の経路。日本人はドラフトの指名から（`DraftPick.acquisition_route`。本指名はドラフト、
-        育成は育成ドラフト）、外国人は新外国人。"""
-        if self.is_foreign:
-            return AcquisitionRoute.NEW_FOREIGN
+        """在籍に記録する入団の経路。ドラフトの指名から（`DraftPick.acquisition_route`。本指名はドラフト、
+        育成は育成ドラフト）。"""
         draft = self.profile.draft
         return AcquisitionRoute.DRAFT if draft is None else draft.acquisition_route
 
 
 @dataclass(frozen=True)
 class Rookie:
-    """背番号・背ネーム・指名が決まる前の新人（ドラフト会議の候補と、会議の外の外国人）。能力は錨の前。"""
+    """背番号・背ネーム・指名が決まる前の新人（ドラフト会議の候補）。能力は錨の前。"""
 
     route: DraftRoute
     position: Position
@@ -238,12 +226,12 @@ class Rookie:
 
 @dataclass(frozen=True)
 class TeamDraftPlan:
-    """球団の今年の新人の人数と位置。外国人の位置を先に決め、日本人（会議で指名する）は残り。"""
+    """球団の今年の新人の人数と位置。獲得した外国人の位置を先に除き、日本人（会議で指名する）は残り。"""
 
     team_id: int
-    # 新人の位置（`choose_positions` の並び。外国人と日本人を合わせた全員）
+    # 新しい支配下の選手の位置（`choose_positions` の並び。獲得する外国人と日本人の新人を合わせた全員の計画）
     positions: tuple[Position, ...]
-    # 外国人にする新人の位置（会議の外で作る）
+    # 獲得した外国人の位置（会議の前に `foreign_market.py` が獲得した。`DraftSlot.base_counts` に足す）
     foreign_positions: tuple[Position, ...]
     # 日本人の新人の位置（会議で指名する人数と、AI が埋める位置の計画）
     japanese_positions: tuple[Position, ...]
@@ -265,7 +253,8 @@ def draftee_count(registered: int, *, registered_limit: int | None, expected_oth
     （`registered_limit`）は超えない。既に達している・超えている球団は0人（締める処理は上限で失敗させない）。
     ふつうは、その前の戦力外（`release.py`）が `USUAL_DRAFTEES` 人を迎える空きを作っている。
 
-    `expected_other` は、ほかの獲得手段（外国人の獲得・トレード・昇格。どれも未実装）で埋まる見込みの人数。
+    この人数は外国人の獲得を含めた新しい支配下の選手の枠（獲得した外国人の分だけ日本人の新人が減る。#169 Q2）。
+    `expected_other` は、ほかの獲得手段（トレード・昇格。どれも未実装）で埋まる見込みの人数。
     ドラフトはその残りを埋める。いまは手段が無いので常に 0。
     """
     gap = OPENING_REGISTERED_BAND.gap(registered, limit=registered_limit, expected=expected_other)
@@ -283,29 +272,54 @@ def foreign_target(foreign_limit: int | None) -> int:
 
 
 def foreign_count_to_add(team: DraftTeam, draftees: int) -> int:
-    """外国人にする新人の数。目標（`foreign_target`）に達している球団には足さない。"""
+    """外国人の獲得で補う人数。目標（`foreign_target`）に達している球団は0。新しい支配下の選手の枠（`draftees`）の
+    内側（#169 Q2）。"""
     return max(0, min(foreign_target(team.foreign_limit) - team.foreign_count, draftees))
 
 
-def plan_team_draft(team: DraftTeam) -> TeamDraftPlan:
-    """球団の今年の新人の人数と位置（外国人と、会議で指名する日本人。育成の巡の人数と位置）。
+def newcomer_plan(team: DraftTeam) -> tuple[int, tuple[Position, ...]]:
+    """新しい支配下の選手（獲得する外国人と日本人の新人）の人数と、位置の計画（`choose_positions` の並び）。
 
-    人数は `draftee_count`、位置は `choose_positions`、外国人は後ろの指名の捕手でない位置から（`_foreign_picks`）。
-    育成は `development_draftee_count` と `development_positions`（支配下の人数・位置には効かない）。
+    外国人の獲得（`foreign_market.py`）と会議の人数（`plan_team_draft`）が同じ計画を見る。
     """
     count = draftee_count(team.registered_count, registered_limit=team.registered_limit)
-    positions = choose_positions(team, count)
-    foreign_indexes = _foreign_picks(positions, foreign_count_to_add(team, count))
+    return count, tuple(choose_positions(team, count))
+
+
+def plan_team_draft(team: DraftTeam, signed: Sequence[Position] = ()) -> TeamDraftPlan:
+    """球団の今年の新人の人数と位置（会議で指名する日本人と、育成の巡の人数と位置）。
+
+    人数と位置は `newcomer_plan`（獲得した外国人を含めた計画）。`signed` は会議の前に獲得した外国人の位置
+    （`foreign_market.py`）で、計画から外国人の位置を1つずつ除いた残りが日本人の位置（計画に無い位置の外国人は、
+    捕手でない後ろの位置を除く）。日本人の人数は「新人の人数 − 獲得した外国人」（#169 Q2）。獲得が0なら計画のまま。
+    育成は `development_draftee_count` と `development_positions`（支配下の人数・位置には効かない）。
+    """
+    count, positions = newcomer_plan(team)
+    if len(signed) > count:
+        raise ValueError("獲得した外国人が新しい支配下の選手の枠を超えています。")
+    japanese = list(positions)
+    for position in signed:
+        japanese.pop(_signed_place(japanese, position))
     shortfall = OPENING_REGISTERED_BAND.gap(team.registered_count, limit=team.registered_limit).shortfall
     development = development_draftee_count(team.development_count, target=team.development_target)
     return TeamDraftPlan(
         team_id=team.team_id,
-        positions=tuple(positions),
-        foreign_positions=tuple(positions[index] for index in sorted(foreign_indexes)),
-        japanese_positions=tuple(position for index, position in enumerate(positions) if index not in foreign_indexes),
-        japanese_minimum=max(0, min(shortfall, count) - len(foreign_indexes)),
+        positions=positions,
+        foreign_positions=tuple(signed),
+        japanese_positions=tuple(japanese),
+        japanese_minimum=max(0, min(shortfall, count) - len(signed)),
         development_positions=development_positions(team.development_counts, development),
     )
+
+
+def _signed_place(positions: Sequence[Position], signed: Position) -> int:
+    """獲得した外国人の位置 `signed` を計画から除く添字。同じ位置の後ろから。無ければ捕手でない後ろの位置、
+    それも無ければ末尾（会議の人数だけを合わせる）。"""
+    same = [index for index, position in enumerate(positions) if position is signed]
+    if same:
+        return same[-1]
+    others = [index for index, position in enumerate(positions) if position is not Position.CATCHER]
+    return others[-1] if others else len(positions) - 1
 
 
 def development_target(team_id: int, *, world_seed: int) -> int:
@@ -334,15 +348,6 @@ def development_positions(counts: Mapping[Position, int], count: int) -> tuple[P
     return tuple(position for position in generator.POSITION_RATIOS for _ in range(adds.get(position, 0)))
 
 
-def expected_rookie_ratings(route: DraftRoute, position: Position) -> BatterRatings | PitcherRatings:
-    """経路 `route` の新人に見込める能力（ぶれを除いた平均。錨の前の尺度）。
-
-    戦力外が、今の外国人と新しく迎える外国人を比べるのに使う。分布の出典は新人を引く
-    `draw_rookie`（経路ごとの平均 `DraftRoute.rating_mean` と `prospects.draw_prospect_ratings`）。
-    """
-    return expected_prospect_ratings(mean=route.rating_mean, position=position)
-
-
 def choose_positions(team: DraftTeam, count: int) -> list[Position]:
     """新人の登録位置。最低人数に足りない位置を先に、そのあとは目標の構成との差が大きい位置から。
 
@@ -363,20 +368,16 @@ def choose_positions(team: DraftTeam, count: int) -> list[Position]:
     return chosen
 
 
-def _foreign_picks(positions: list[Position], count: int) -> set[int]:
-    """外国人にする新人の添字。捕手にはせず、後ろの指名から選ぶ。"""
-    eligible = [index for index, position in enumerate(positions) if position is not Position.CATCHER]
-    return set(eligible[len(eligible) - min(count, len(eligible)) :])
-
-
-def _draw_number(rng: GameRandom, used: set[str], pools: Sequence[Sequence[str]] = _NUMBER_POOLS) -> str:
+def draw_number(rng: GameRandom, used: set[str], pools: Sequence[Sequence[str]] = NUMBER_POOLS) -> str:
+    """空いている背番号を1つ選んで `used` に足す（新人と獲得した外国人。`pools` の前から）。"""
     for pool in pools:
         available = [number for number in pool if number not in used]
         if available:
             number = generator.pick(rng, available)
             used.add(number)
             return number
-    # 00・0〜99 が埋まる球団は無い（新人を迎えるのは支配下66人未満）。100〜999 も同じ（育成は目安の帯で30人まで）
+    # 00・0〜99 が埋まる球団は無い（新人と外国人を迎えるのは支配下66人未満）。
+    # 100〜999 も同じ（育成は目安の帯で30人まで）
     raise ValueError("背番号が尽きました")
 
 
@@ -384,31 +385,24 @@ def draw_rookie(
     rng: GameRandom,
     position: Position,
     *,
-    foreign: bool,
     year: int,
     used_names: MutableSet[str],
     path: AmateurPath | None = None,
     rating_shift: float = 0.0,
     rating_sd: float = PROSPECT_RATING_SD,
 ) -> Rookie:
-    """新人ひとりぶんの名前・プロフィール・能力。乱数は名前 → 経歴 → 生年月日 → 体格 → 能力 → 成長型の順。
+    """日本人の新人（会議の候補）ひとりぶんの名前・プロフィール・能力。乱数は名前 → 出身地 → 経歴 → 生年月日 →
+    体格 → 能力 → 成長型の順。
 
     `path` を渡すと日本人の経路をそれにする（省くと `AmateurPath.weight` で引く）。`rating_shift` は能力の平均を
     経路と年齢の平均（`DraftRoute.rating_mean_at`。社会人だけ年齢で傾く）からずらす点、`rating_sd` は能力の
     標準偏差（どちらもドラフト会議の候補の合わせ込み。`draft_meeting.py`）。
     指名（`Profile.draft`）は持たない（会議の結果で付ける）。
     """
-    if foreign:
-        overseas = generator.foreign_name(rng, used_names)
-        full_name, kana, birthplace = overseas.name, overseas.kana, overseas.country
-        surname_romaji, given_romaji = overseas.surname_romaji, overseas.given_romaji
-    else:
-        domestic = generator.japanese_name(rng, used_names)
-        full_name, kana, birthplace = domestic.name, domestic.kana, generator.prefecture(rng)
-        surname_romaji, given_romaji = domestic.surname_romaji, domestic.given_romaji
-    career = generator.amateur_career(
-        rng, is_foreign=foreign, birthplace=birthplace, path=path, foreign_age_range=FOREIGN_AGE_RANGE
-    )
+    domestic = generator.japanese_name(rng, used_names)
+    birthplace = generator.prefecture(rng)
+    career = generator.amateur_career(rng, is_foreign=False, birthplace=birthplace, path=path)
+    assert career.path is not None, "日本人の経歴は経路を持つ"
     route = DraftRoute.from_amateur_path(career.path)
     age = career.debut_age
     birth_date = generator.birth_date_for(rng, age=age, as_of=date(year + 1, SEASON_START_MONTH, 1))
@@ -430,11 +424,17 @@ def draw_rookie(
         high_school=career.high_school,
         university=career.university,
         corporate_team=career.corporate_team,
-        nationality=birthplace if foreign else "",
-        name_kana=kana,
-        is_foreign_player=foreign,
+        name_kana=domestic.kana,
     )
-    return Rookie(route, position, full_name, surname_romaji, given_romaji, profile, with_growth(ratings, growth))
+    return Rookie(
+        route,
+        position,
+        domestic.name,
+        domestic.surname_romaji,
+        domestic.given_romaji,
+        profile,
+        with_growth(ratings, growth),
+    )
 
 
 def club_draftees(
@@ -443,37 +443,21 @@ def club_draftees(
     plan: TeamDraftPlan,
     *,
     drafted: Sequence[tuple[Rookie, DraftPick]],
-    year: int,
-    world_seed: int,
-    used_names: MutableSet[str],
 ) -> tuple[Draftee, ...]:
-    """締める年 `year` に球団に入る新人（入団は翌年）。
+    """締める年に球団に入る新人（入団は翌年）。
 
-    `drafted` はドラフト会議で指名した日本人（本指名の巡の順、続けて育成の巡の順）。外国人は会議の外で、
-    `plan.foreign_positions` の位置にここで作る（ドラフトの指名を持たない）。`used_names` は世界の全選手（引退した
-    選手・
-    会議の候補を含む）の名前で、外国人の名前を足していく。乱数は `rng` から、外国人（1人ずつ）→ 支配下の背番号
-    （本指名の順、続けて外国人）→ 育成の背番号（3桁。育成の指名の順）の順に引く（育成を足しても、本指名と外国人の
-    背番号は変わらない）。返す並びは本指名・外国人・育成。
-    外国人の伸びしろは、球団と外国人の並びごとの乱数（`draft-foreign-potential-<球団 id>-<番号>`）から引く
-    （`rng` の流れに足さない。会議の候補の伸びしろは `draft_meeting.py`）。
+    `drafted` はドラフト会議で指名した日本人（本指名の巡の順、続けて育成の巡の順）。`team` は獲得した外国人の
+    背番号と苗字を含めた球団（外国人の獲得は会議の前。`foreign_market.py`）。乱数は `rng` から、支配下の背番号
+    （本指名の順）→ 育成の背番号（3桁。育成の指名の順）の順に引く（育成を足しても、本指名の背番号は変わらない）。
+    返す並びは本指名・育成。
     """
-    foreign = [
-        with_drawn_potential(
-            draw_rookie(rng, position, foreign=True, year=year, used_names=used_names),
-            world_seed=world_seed,
-            year=year,
-            key=f"draft-foreign-potential-{team.team_id}-{index}",
-        )
-        for index, position in enumerate(plan.foreign_positions)
-    ]
     signed = [replace(rookie, profile=replace(rookie.profile, draft=pick)) for rookie, pick in drafted]
-    registered = [rookie for rookie in signed if not _drafted_as_development(rookie.profile)] + foreign
+    registered = [rookie for rookie in signed if not _drafted_as_development(rookie.profile)]
     development = [rookie for rookie in signed if _drafted_as_development(rookie.profile)]
     rookies = registered + development
     used_numbers = set(team.used_numbers)
-    numbers = [_draw_number(rng, used_numbers) for _ in registered] + [
-        _draw_number(rng, used_numbers, _DEVELOPMENT_NUMBER_POOLS) for _ in development
+    numbers = [draw_number(rng, used_numbers) for _ in registered] + [
+        draw_number(rng, used_numbers, _DEVELOPMENT_NUMBER_POOLS) for _ in development
     ]
 
     # 背ネーム: 現在の選手や他の新人と苗字が重なる新人だけ、名前の頭文字を付ける
@@ -510,8 +494,8 @@ def with_drawn_potential(
 ) -> Rookie:
     """新人に伸びしろを付ける。乱数は用途 `key` の専用の流れ（`draw_rookie` の乱数の流れに引く回数を足さない）。
 
-    外国人の新人（`club_draftees`。平均は普通の50）と会議の候補（`draft_meeting.py`。平均は合わせ込んだ
-    `POOL_POTENTIAL_MEAN`。経路ごと）が通る。
+    会議の候補（`draft_meeting.py`。平均は合わせ込んだ `POOL_POTENTIAL_MEAN`。経路ごと）が通る（外国人の獲得の候補は
+    `foreign_market.py` が同じ事前の分布から、平均は普通の50で引く）。
     """
     potential = draw_potential(make_random(game_seed(world_seed, year, key)), mean=mean)
     return replace(rookie, ratings=with_potential(rookie.ratings, potential))

@@ -296,6 +296,7 @@ class TeamViewService:
             birthplace=profile.birthplace,
             nationality=profile.nationality,
             is_foreign_player=profile.is_foreign_player,
+            foreign_background=profile.foreign_background.label if profile.foreign_background else "",
             draft_label=profile.draft.label if profile.draft is not None else "",
             amateur_career=profile.amateur_career,
             has_profile=not profile.is_empty,

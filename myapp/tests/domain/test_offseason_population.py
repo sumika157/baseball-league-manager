@@ -25,9 +25,11 @@ from datetime import date
 from statistics import fmean, pstdev
 
 from myapp.domain.pennant.draft import MAX_DEVELOPMENT_PICKS, MAX_DRAFTEES, Draftee, DraftRoute
-from myapp.domain.pennant.draft_meeting import DraftContext
+from myapp.domain.pennant.draft_meeting import DraftContext, scouting_value
 from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
+from myapp.domain.pennant.foreign_market import SIGNED_RATING_MEAN
 from myapp.domain.pennant.offseason import OffseasonClub, OffseasonPlan, OffseasonPlayer, plan_offseason
+from myapp.domain.pennant.prospects import expected_prospect_ratings
 from myapp.domain.pennant.ratings import PlayerRatings
 from myapp.domain.pennant.retirement import PlayingTime
 from myapp.domain.pennant.roster import DEVELOPMENT_BAND, OPENING_REGISTERED_BAND
@@ -197,18 +199,18 @@ def run_year(
     after = {change.player_id: change.after for change in plan.retained}
     next_members = [replace(m, ratings=after[m.player_id]) for m in members if m.player_id not in leaving]
     next_id = max(m.player_id for m in members) + 1
-    for offset, draftee in enumerate(plan.draftees):
+    for offset, newcomer in enumerate(plan.newcomers):
         player_id = next_id + offset
         next_members.append(
             Member(
                 player_id=player_id,
-                team_id=draftee.team_id,
-                position=draftee.position,
-                profile=draftee.profile,
-                number=draftee.number,
+                team_id=newcomer.team_id,
+                position=newcomer.position,
+                profile=newcomer.profile,
+                number=newcomer.number,
                 joined_year=year + 1,
-                ratings=PlayerRatings(player_id=player_id, year=year + 1, ratings=draftee.ratings),
-                contract=draftee.contract,
+                ratings=PlayerRatings(player_id=player_id, year=year + 1, ratings=newcomer.ratings),
+                contract=newcomer.contract,
             )
         )
     return next_members, plan
@@ -249,10 +251,15 @@ class YearStats:
     rookie_route_shares: tuple[float, float, float]
     # 本指名の日本人の新人の伸びしろの倍率の平均（経路ごと。高校・大学・社会人。#308 P3 段階0）
     rookie_route_potential_means: tuple[float, float, float]
+    # 獲得した外国人（#169）: 1球団あたりの人数、錨の前の総合（`scouting_value`）の平均の、今までの外国人の新人
+    # （平均 `SIGNED_RATING_MEAN`）からのずれ（点）と、獲得した後の1球団の外国人の平均人数
+    signings_per_club: float
+    signed_value_shift: float
+    foreign_per_club: float
 
 
 def _main_draft_japanese(plan: OffseasonPlan) -> list[Draftee]:
-    return [draftee for draftee in plan.draftees if not draftee.is_foreign and not draftee.is_development]
+    return [draftee for draftee in plan.draftees if not draftee.is_development]
 
 
 def _potential_mean(rookies: list[Draftee], route: DraftRoute) -> float:
@@ -294,7 +301,10 @@ def stats(members: list[Member], plan: OffseasonPlan, previous: list[Member]) ->
         max_roster=max(sizes.values()),
         mean_roster=fmean(sizes.values()),
         max_draftees=max(
-            Counter(draftee.team_id for draftee in plan.draftees if not draftee.is_development).values(), default=0
+            Counter(
+                newcomer.team_id for newcomer in plan.newcomers if newcomer.contract is ContractStatus.REGISTERED
+            ).values(),
+            default=0,
         ),
         min_development=min(development.values()),
         max_development=max(development.values()),
@@ -319,6 +329,15 @@ def stats(members: list[Member], plan: OffseasonPlan, previous: list[Member]) ->
             _potential_mean(rookies, DraftRoute.UNIVERSITY),
             _potential_mean(rookies, DraftRoute.CORPORATE),
         ),
+        signings_per_club=len(plan.signings) / len(sizes),
+        signed_value_shift=fmean(
+            scouting_value(s.candidate.ratings)
+            - scouting_value(expected_prospect_ratings(mean=SIGNED_RATING_MEAN, position=s.position))
+            for s in plan.signings
+        )
+        if plan.signings
+        else 0.0,
+        foreign_per_club=sum(1 for m in members if m.profile.is_foreign_player) / len(sizes),
     )
 
 
@@ -483,6 +502,24 @@ class OffseasonPopulationTest(unittest.TestCase):
             mean = fmean(stat.rookie_route_potential_means[index] for stat in self.years)
             with self.subTest(route=route):
                 self.assertAlmostEqual(mean, 1.0, delta=0.05)
+
+    def test_signed_foreigners_keep_the_old_foreign_rookies(self) -> None:
+        """#169: 外国人は候補から獲得する（AI は見立てで上から取る）。候補の平均を下げた合わせ込み
+        （`foreign_market.POOL_RATING_SHIFT`）で、獲得した外国人の錨の前の平均は今までの外国人の新人と同じ
+        （`SIGNED_RATING_MEAN`。ずれ 0 点）。1球団の外国人は目標（4人）の近く、獲得は1球団1年 約1人（入れ替わり）。
+
+        実測（シード 1〜2・2〜10年目）はずれ 平均 −0.13 点（年ごとに −1.0〜+0.6）・獲得 1球団 1.1人/年（0.6〜1.65）・
+        1球団の外国人 4.0人。合わせ込みの値はシード 1〜6・2〜4年目でずれ +0.06 点
+        （投手 +0.11・内野手 −0.40・外野手 +0.54）。
+        1年 約45人なので年ごとの揺れを見込んだ帯。1年目は合成の初期母集団（外国人の数がばらつく）の入れ替えで多い。
+        """
+        for index, stat in enumerate(self.years):
+            with self.subTest(year=stat.year):
+                self.assertLess(abs(stat.signed_value_shift), 2.0)
+                self.assertTrue(3.5 <= stat.foreign_per_club <= 4.5, stat.foreign_per_club)
+                if index > 0:
+                    self.assertTrue(0.4 <= stat.signings_per_club <= 1.9, stat.signings_per_club)
+        self.assertLess(abs(fmean(stat.signed_value_shift for stat in self.years[1:])), 0.8)
 
     def test_same_seed_gives_same_result(self) -> None:
         self.assertEqual(run_years(years=3, roster_size=STEADY_ROSTER), self.years[:3])

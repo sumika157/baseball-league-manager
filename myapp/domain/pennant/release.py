@@ -1,7 +1,7 @@
 """AI 球団の戦力外。締める処理の中で、引退の後・ドラフトの前に、球団ごとに外す選手を決める。
 **純粋な関数**で、乱数も使わない（同じ材料なら必ず同じ選手を外す）。DB にも Django にも触れない。
 
-    引退 → **戦力外** → ドラフト → 成長と衰え → 水準の錨
+    引退 → **戦力外** → 外国人の獲得 → ドラフト → 成長と衰え → 水準の錨
 
 規則は2つ（2026-10-11・10-12 ユーザー決定。Issue #168）:
 
@@ -10,9 +10,9 @@
   外すのは、その年の主力（`PlayingTime.is_regular`）と入団1年目を除いた支配下から、残す価値（`keep_value`）の低い順
 - **外国人の入れ替え**（`is_replaceable_foreigner`）: 外国人は、能力で測れる価値にタイトルの加点だけを足した値
   （`foreign_value`。ほかの実績の加点は足さない。タイトルは #248）が**新しく迎える外国人に見込める価値**
-  （`foreign_prospect_value`。ドラフトの外国人の新人の分布から導く）を下回れば、主力でも外す
+  （`foreign_prospect_value`。獲得した外国人の分布から導く。`foreign_market.py`）を下回れば、主力でも外す
   （入団1年目は `FIRST_YEAR_FOREIGN_MARGIN` 点の余裕を持たせる）。
-  全員が下回れば全員を入れ替える。外した外国人はドラフトが同じオフに目標（`draft.foreign_target`）まで補う
+  全員が下回れば全員を入れ替える。外した外国人は外国人の獲得が同じオフに目標（`draft.foreign_target`）まで補う
 
 どちらも育成は外さない（#170・#174）。位置の最低人数（`draft.MIN_BY_POSITION`）を割らず、候補が足りなければ
 外せる分だけ（締める処理を失敗させない）。外国人を外した分も支配下の空きに数える。
@@ -30,13 +30,13 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
-from statistics import fmean
 
 from ..exceptions import InvalidReleasePlan
 from ..simulation.manager import LINEUP_SIZE
 from ..value_objects import ForeignPlayerRules, Position
 from .club_plan import ClubMember, lineup_capacity, playable_shortfall
-from .draft import FOREIGN_AGE_RANGE, MIN_BY_POSITION, USUAL_DRAFTEES, DraftRoute, expected_rookie_ratings
+from .draft import MIN_BY_POSITION, USUAL_DRAFTEES
+from .foreign_market import expected_signing_ages, expected_signing_ratings
 from .offseason_player import OffseasonClub, OffseasonPlayer, TrackRecord, player_age, retirement_value
 from .outlook import PEAK_AGE
 from .roster import OPENING_REGISTERED_BAND
@@ -162,14 +162,14 @@ def foreign_value(player: OffseasonPlayer, *, year: int, start_year: int) -> flo
 def foreign_prospect_value(position: Position) -> float:
     """新しく迎える外国人に見込める価値（`ability_value` と同じ物差し。新しく迎える外国人に実績は無い）。
 
-    能力はドラフトの外国人の新人の平均（`draft.expected_rookie_ratings`。錨の前の尺度で、今の選手の能力と同じ尺度）、
-    若さの上乗せは外国人の新人の年齢（`draft.FOREIGN_AGE_RANGE`。範囲の整数から一様に引く）の平均。
-    外国人の新人は捕手にしないので、捕手は内野手の見込みで比べる。
+    能力は獲得した外国人の平均（`foreign_market.expected_signing_ratings`。錨の前の尺度で、今の選手の能力と同じ尺度）、
+    若さの上乗せは候補の年齢の分布（`foreign_market.expected_signing_ages`。前所属ごとの範囲）の平均。
+    外国人は捕手を獲得しないので、捕手は内野手の見込みで比べる。
     """
     compared = Position.INFIELDER if position is Position.CATCHER else position
-    ratings = expected_rookie_ratings(DraftRoute.FOREIGN, compared)
-    low, high = FOREIGN_AGE_RANGE
-    return retirement_value(compared, ratings) + fmean(youth_credit(age) for age in range(low, high + 1))
+    ratings = expected_signing_ratings(compared)
+    youth = sum(share * youth_credit(age) for age, share in expected_signing_ages().items())
+    return retirement_value(compared, ratings) + youth
 
 
 def is_release_candidate(player: OffseasonPlayer, *, year: int, start_year: int) -> bool:

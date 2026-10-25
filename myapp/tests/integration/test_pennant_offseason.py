@@ -28,7 +28,7 @@ from myapp.domain.pennant.club_plan import ClubPlan, LineupChoice, PlanSection
 from myapp.domain.pennant.schedule import AdvanceTarget
 from myapp.domain.pennant.season import SeasonPhase, season_phase, season_year
 from myapp.domain.pennant.world import WorldScope
-from myapp.domain.value_objects import ContractStatus, FieldingPosition
+from myapp.domain.value_objects import AcquisitionRoute, ContractStatus, FieldingPosition, ForeignBackground
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoSimulationContextQuery
 from myapp.infrastructure.repositories import DjangoClubPlanRepository, DjangoFixtureRepository, DjangoWorldRepository
@@ -98,11 +98,35 @@ class CloseSeasonTest(ClosedSeasonCase):
         self.assertEqual((result.year, result.next_year), (YEAR, YEAR + 1))
         self.assertEqual(active_stints(self.world_a, to_year=YEAR).count(), result.retired_count)
         rookies = active_stints(self.world_a).filter(from_year=YEAR + 1)
-        self.assertEqual(rookies.count(), result.draftee_count)
+        self.assertEqual(rookies.count(), result.draftee_count + result.signed_foreign_count)
         self.assertGreaterEqual(result.draftee_count, 2 * 2, "前提: 各球団23人で帯の下なので、どの球団も指名する")
         self.assertFalse(active_stints(self.world_a).filter(from_year__gt=YEAR + 1).exists())
         for player in orm_models.Player.objects.filter(stints__in=rookies):
             self.assertTrue(player.birth_date, f"{player.name} のプロフィールが入っている")
+
+    def test_signed_foreigners_join_the_next_year_as_new_foreigners_with_the_background(self):
+        """外国人の獲得（#169）: 戦力外の後に AI が獲得した外国人は、翌年から支配下・新外国人で加入し、
+        前所属を保存する。"""
+        result = self.close()
+
+        signed = active_stints(self.world_a).filter(
+            from_year=YEAR + 1, acquired_via=AcquisitionRoute.NEW_FOREIGN.value
+        )
+        self.assertGreater(result.signed_foreign_count, 0, "前提: 外国人を獲得する")
+        self.assertEqual(signed.count(), result.signed_foreign_count)
+        backgrounds = {item.value for item in ForeignBackground}
+        for stint in signed.select_related("player"):
+            self.assertTrue(stint.player.is_foreign_player)
+            self.assertIn(stint.player.foreign_background, backgrounds)
+            self.assertIsNone(stint.player.draft_year)
+            self.assertEqual(stint.signed_as, ContractStatus.REGISTERED.value)
+        signed_ids = set(signed.values_list("player_id", flat=True))
+        self.assertEqual(
+            set(
+                ratings_of(self.world_a, YEAR + 1).filter(player_id__in=signed_ids).values_list("player_id", flat=True)
+            ),
+            signed_ids,
+        )
 
     def test_current_jersey_numbers_do_not_overlap_in_a_team(self):
         self.close()
@@ -381,7 +405,7 @@ class AdvanceAfterCloseTest(ClosedSeasonCase):
         context = DjangoSimulationContextQuery(WorldScope.pennant(self.world_a)).teams()
         in_context = {player.player_id for team in context for player in team.players}
         rookies = set(active_stints(self.world_a).filter(from_year=YEAR + 1).values_list("player_id", flat=True))
-        self.assertEqual(len(rookies), result.draftee_count)
+        self.assertEqual(len(rookies), result.draftee_count + result.signed_foreign_count)
         # 育成ドラフトの新人は試合に出ない（材料に入るのは支配下の新人だけ。#198 D2）
         registered = set(
             active_stints(self.world_a)

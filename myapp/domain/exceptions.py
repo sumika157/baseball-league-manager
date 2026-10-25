@@ -113,6 +113,10 @@ class InvalidReleasePlan(DomainError):
     """戦力外の指名として成立しない（支配下の在籍選手でない・位置の最低人数を割る・試合を組めなくなる）。"""
 
 
+class InvalidSigning(DomainError):
+    """外国人の獲得として成立しない（候補にいない・重複・保有の上限を超える・期中の1年の上限を超える。#169）。"""
+
+
 class InvalidAward(DomainError):
     """表彰として保存できない内容（同じ年の表彰を2度書く、範囲の外の選手など）。"""
 

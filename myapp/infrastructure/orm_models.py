@@ -23,6 +23,7 @@ from ..domain.value_objects import (
     DepartureRoute,
     ErrorKind,
     FieldingPosition,
+    ForeignBackground,
     ForeignPlayerRules,
     FreeAgencyKind,
     GameStage,
@@ -40,6 +41,8 @@ CONTRACT_STATUS_CHOICES = [(status.value, status.value) for status in ContractSt
 ACQUISITION_ROUTE_CHOICES = [(route.value, route.value) for route in AcquisitionRoute]
 DEPARTURE_ROUTE_CHOICES = [(route.value, route.value) for route in DepartureRoute]
 FREE_AGENCY_KIND_CHOICES = [(kind.value, kind.value) for kind in FreeAgencyKind]
+# 前所属の区分の選択肢もドメインの ForeignBackground が唯一の出典
+FOREIGN_BACKGROUND_CHOICES = [(item.value, item.value) for item in ForeignBackground]
 GAME_STAGE_CHOICES = [(stage.value, stage.value) for stage in GameStage]
 # ポストシーズンの方式の選択肢もドメインの PostseasonFormat が唯一の出典
 POSTSEASON_FORMAT_CHOICES = [(item.value, item.value) for item in PostseasonFormat]
@@ -307,6 +310,13 @@ class Player(models.Model):
             "外国人枠の対象として数える選手かどうか。日本国籍を持たない選手のうち、"
             "野球協約 第82条 (1)〜(3)・(5)（日本の学校・居住・社会人の年数など）に当たらない選手に付けます。"
         ),
+    )
+    foreign_background = models.CharField(
+        max_length=20,
+        choices=FOREIGN_BACKGROUND_CHOICES,
+        blank=True,
+        verbose_name="前所属",
+        help_text="海外から入団した選手の、入団前の所属の区分。分からない・当たらなければ空欄。",
     )
 
     class Meta:

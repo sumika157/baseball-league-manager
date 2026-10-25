@@ -128,8 +128,8 @@ class AutoCompleteTest(unittest.TestCase):
         self.assertEqual(first.lotteries, second.lotteries)
         self.assertNotEqual(first.draftees, run(teams, seed=2).draftees)
 
-    def test_foreign_rookies_are_made_outside_the_meeting(self) -> None:
-        """NPB の会議に外国人はいない。外国人は会議の外で作り、ドラフトの指名を持たない。"""
+    def test_signed_foreigners_take_places_out_of_the_meeting(self) -> None:
+        """NPB の会議に外国人はいない。会議の前に獲得した外国人（#169）の分だけ、会議で指名する日本人が減る。"""
         target = DraftTeam(
             team_id=1,
             position_counts=generator.largest_remainder(59, generator.POSITION_RATIOS),
@@ -139,11 +139,11 @@ class AutoCompleteTest(unittest.TestCase):
             surname_counts={},
             registered_limit=70,
         )
-        result = run([target, club(2)])
-        foreign = [d for d in result.draftees if d.team_id == 1 and d.is_foreign]
-        self.assertEqual(len(foreign), 3)
-        self.assertTrue(all(d.profile.draft is None for d in foreign))
-        japanese = [d for d in result.draftees if d.team_id == 1 and not d.is_foreign]
+        context = DraftContext(DraftOrderRule.NPB, standings([1, 2]))
+        signed = {1: (Position.PITCHER, Position.OUTFIELDER, Position.INFIELDER)}
+        result = run_draft([target, club(2)], context, year=YEAR, world_seed=1, used_names=set(), signed=signed)
+        japanese = [d for d in result.draftees if d.team_id == 1]
+        self.assertTrue(all(not d.profile.is_foreign_player for d in result.draftees))
         self.assertEqual([d.profile.draft.round for d in japanese if d.profile.draft], [1, 2, 3])
 
     def test_a_club_missing_from_the_standings_is_refused(self) -> None:
@@ -399,7 +399,6 @@ class ProspectTest(unittest.TestCase):
         for prospect in pool.prospects:
             self.assertFalse(prospect.rookie.profile.is_foreign_player)
             self.assertIsNone(prospect.rookie.profile.draft)
-            self.assertIsNot(prospect.route, draft.DraftRoute.FOREIGN)
 
 
 class TasteTest(unittest.TestCase):

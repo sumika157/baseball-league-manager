@@ -29,7 +29,7 @@
   `DraftState.apply` の検査・育成の巡で足す候補が同じ判定を使う）。本指名では今までどおり指名できる
 
 GM の指名（D3。#198）は同じ `DraftState.apply` を通る。会議を始めなかった年は、締める処理が `auto_complete` で
-全球団を AI として最後まで進める。外国人は会議の外（`draft.club_draftees`）。
+全球団を AI として最後まで進める。外国人は会議の前に獲得する（`foreign_market.py`。#169）。
 """
 
 from __future__ import annotations
@@ -226,7 +226,6 @@ def _draw_prospect(
     rookie = draw_rookie(
         rng,
         position,
-        foreign=False,
         year=year,
         used_names=used_names,
         path=path,
@@ -299,8 +298,26 @@ def scouting_report(
     推定の能力は成長型が普通で伸びしろを持たない（隠し値を見せない）。伸びしろの無い候補（ふつうは無い）は普通として見る。
     """
     ratings = prospect.rookie.ratings
+    noise = _scout_noise(world_seed, year, team_id, prospect.key, len(ratings.LABELS) + 1)
+    return scout_with_noise(ratings, noise, accuracy=accuracy)
+
+
+def scout_noise(text: str, ratings: Ratings) -> list[float]:
+    """`ratings` を見る推定の誤差（標準正規。項目の数 + 伸びしろの1つ）。種は用途を表す文字列 `text`。
+
+    会議の外の候補（外国人の獲得の候補。`foreign_market.py`）が、会議の候補と種の重ならない用途で見るのに使う。
+    """
+    return hash_normals(text, len(ratings.LABELS) + 1)
+
+
+def scout_with_noise(
+    ratings: Ratings,
+    noise: Sequence[float],
+    *,
+    accuracy: ScoutingAccuracy = ScoutingAccuracy(),  # noqa: B008  不変の値（frozen）なので既定値に置いてよい
+) -> ScoutingReport:
+    """真の能力 `ratings` に誤差 `noise`（項目の宣言の順、続けて伸びしろ）を足した推定（`scouting_report` の本体）。"""
     labels = ratings.LABELS
-    noise = _scout_noise(world_seed, year, team_id, prospect.key, len(labels) + 1)
     values = {
         name: rounded_estimate(getattr(ratings, name) + accuracy.sd * error)
         for name, error in zip(labels, noise[: len(labels)], strict=True)
@@ -396,7 +413,7 @@ class DraftTaste:
 
 
 # 日本人の経路（`DraftRoute` の並びのまま。並びは hash から引く乱数の位置に対応するので、変えると全球団の好みが変わる）
-_TASTE_ROUTES = tuple(route for route in DraftRoute if route is not DraftRoute.FOREIGN)
+_TASTE_ROUTES = tuple(DraftRoute)
 
 
 def draft_taste(world_seed: int, team_id: int) -> DraftTaste:
@@ -427,7 +444,7 @@ class DraftSlot:
 
     - `minimum`・`maximum`: 指名する日本人の人数の幅。AI は最多まで指名する。最少に届けば自分の番で選択終了できる
     - `planned`: AI が埋める位置（`draft.plan_team_draft` の日本人の位置）
-    - `base_counts`: 会議の前の支配下の位置ごとの人数に、外国人の新人の位置を足したもの（位置の最低人数の検査に使う）
+    - `base_counts`: 会議の前の支配下の位置ごとの人数に、獲得した外国人の位置を足したもの（位置の最低人数の検査に使う）
     - `development_planned`: 育成の巡で AI が埋める位置（`draft.plan_team_draft` の育成の位置）
     - `development_max`: 育成の巡で指名できる最多（AI は計画の人数。D3 で GM の球団は
       `MAX_DEVELOPMENT_PICKS` を写す）。
@@ -450,6 +467,7 @@ class DraftSlot:
 
     @classmethod
     def of(cls, team: DraftTeam, plan: TeamDraftPlan) -> DraftSlot:
+        """球団の計画から。位置の最低人数は、会議の前の支配下に獲得した外国人を足して数える。"""
         base = Counter({position: team.position_counts.get(position, 0) for position in MIN_BY_POSITION})
         base.update(plan.foreign_positions)
         return cls(
@@ -919,17 +937,20 @@ def run_draft(
     world_seed: int,
     used_names: set[str],
     actions: Sequence[DraftAction] = (),
+    signed: Mapping[int, Sequence[Position]] | None = None,
 ) -> DraftResult:
     """締める年 `year` の会議を開き、`actions`（D3 で保存した行動）を当ててから残りを AI で進め、新人を作る。
 
-    `teams` は引退・戦力外の後の球団（球団 id の昇順に処理する）。`used_names` は世界の全選手の名前で、
-    候補と外国人の新人の名前を足していく。外国人は球団ごとの乱数（`draft-<球団 id>`、年は翌年）で会議の外で作る。
+    `teams` は引退・戦力外・外国人の獲得の後の球団（球団 id の昇順に処理する）。`signed` は球団ごとの、会議の前に
+    獲得した外国人の位置（`foreign_market.OffseasonSignings.signed_positions`。日本人の人数と位置から除く）。
+    `used_names` は世界の全選手の名前で、候補の名前を足していく。新人の背番号は球団ごとの乱数（`draft-<球団 id>`、
+    年は翌年）で引く。
     """
     ordered = sorted(teams, key=lambda team: team.team_id)
     missing = {team.team_id for team in ordered} - context.standings.team_ids
     if missing:
         raise ValueError(f"最終順位に無い球団があります（{sorted(missing)}）。")
-    plans = {team.team_id: plan_team_draft(team) for team in ordered}
+    plans = {team.team_id: plan_team_draft(team, (signed or {}).get(team.team_id, ())) for team in ordered}
     slots = [DraftSlot.of(team, plans[team.team_id]) for team in ordered]
     planned = Counter(position for slot in slots for position in slot.planned)
     pool = draw_pool(planned, world_seed=world_seed, year=year, used_names=used_names)
@@ -942,15 +963,5 @@ def run_draft(
     draftees: list[Draftee] = []
     for team in ordered:
         rng = make_random(game_seed(world_seed, year + 1, f"draft-{team.team_id}"))
-        draftees.extend(
-            club_draftees(
-                rng,
-                team,
-                plans[team.team_id],
-                drafted=drafted[team.team_id],
-                year=year,
-                world_seed=world_seed,
-                used_names=used_names,
-            )
-        )
+        draftees.extend(club_draftees(rng, team, plans[team.team_id], drafted=drafted[team.team_id]))
     return DraftResult(draftees=tuple(draftees), lotteries=tuple(state.lotteries), state=state)

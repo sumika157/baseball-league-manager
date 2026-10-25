@@ -178,7 +178,9 @@ class CloseSeasonDraftTest(DraftOrderCase):
         result = self.close(self.none_world)
 
         rookies = self.rookies(self.none_world)
-        self.assertEqual(sum(len(stints) for stints in rookies.values()), result.draftee_count)
+        self.assertEqual(
+            sum(len(stints) for stints in rookies.values()), result.draftee_count + result.signed_foreign_count
+        )
         for stints in rookies.values():
             japanese = [s for s in stints if s.player.draft_year is not None and not s.player.is_development_draft]
             development = [s for s in stints if s.player.is_development_draft]
@@ -196,6 +198,8 @@ class CloseSeasonDraftTest(DraftOrderCase):
             for stint in foreign:
                 self.assertTrue(stint.player.is_foreign_player)
                 self.assertEqual(stint.acquired_via, AcquisitionRoute.NEW_FOREIGN.value)
+                # 獲得した外国人は前所属の区分をプロフィールに持つ（#169 Q5）
+                self.assertTrue(stint.player.foreign_background)
         self.assertGreaterEqual(result.first_round_lottery_count, 0)
 
     def test_the_meeting_uses_the_world_rule_and_the_regular_season_order(self):

@@ -995,7 +995,8 @@ def pennant_close_season(request, world_id):
     messages.success(
         request,
         f"{result.year}年のシーズンを締めました"
-        f"（引退 {result.retired_count}人・戦力外 {result.released_count}人・新人 {result.draftee_count}人"
+        f"（引退 {result.retired_count}人・戦力外 {result.released_count}人・"
+        f"新外国人 {result.signed_foreign_count}人・新人 {result.draftee_count}人"
         f"（うち育成 {result.development_draftee_count}人））。",
     )
     if result.reverted_sections:
