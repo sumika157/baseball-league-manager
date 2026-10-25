@@ -1281,3 +1281,34 @@ W2 の本体。ワークスペースの中の画面43本（実データ20・ペ�
 **レビュー（ddd-boundary-reviewer）**: 重要な指摘なし。軽微のうち、管理画面のコメントの途切れ・`draft_of` の docstring（読む変換と入力の検査の使い分け）・長さの定数のコメント（`Profile` は検査しない）を直した。残したもの: プロフィールの欄と退団・主将・支配下登録のボタンが同じ `<form>` にあり、欄を書き換えてからボタンを押すと入力は捨てられる（名前・背番号も以前から同じ。データは失われない）。分けるかはユーザーが決める。
 
 **Enter での送信の不具合の修正（既存の不具合。T4 で直した）**: 入力欄で Enter を押すと、HTML の仕様でフォームの文書順で最初の送信ボタンが押されたことになり、この画面では「支配下登録する」（育成選手）か「主将にする／解任する」が押されていた（プロフィールの欄が増えて踏みやすくなった）。フォームの先頭に「更新する」と同じ送信（name・value なし）を見えない形（`visually-hidden`・`tabindex="-1"`・`aria-hidden`）で置いた。再発防止: integration `DefaultSubmitButtonTest`（描いた HTML で最初の送信ボタンが「更新する」。育成・主将・主将でないの3通り）、e2e `test_player_edit_enter.py`（育成で主将でない選手のよみがなで Enter → 更新され、昇格も主将の指名も起きない）。変異: 隠しボタンを消す → integration 3件・e2e 1件が落ちる。
+
+#### T2 リーグと球場の画面（`feature/setup-leagues-stadiums`、2026-10-25）
+
+マイグレーションは無い（`makemigrations --check`）。
+
+- URL 6本（`_w(..., login=True)`）: `setup/leagues/`（`setup_leagues`。一覧と作成）・`setup/leagues/<id>/`（`setup_league_edit`）・`setup/leagues/<id>/delete/`（`setup_league_delete`。GET は確認、POST は削除）、球場も同じ形（`setup_stadiums`・`setup_stadium_edit`・`setup_stadium_delete`）。
+- ビュー: 門は `_requires_set_up(request)`（`can_set_up()` が偽なら 403。解決済みの権限だけを見て、参照クエリもサービスも組み立てる前に拒む）。GET も POST も同じ門。一覧・初期値・消せない理由は `build_setup_query`、書き込みは `build_league_setup_service`。範囲の外の id（ほかのワークスペース・ペナントの世界）は表示でも保存でも 404。`InvalidName`・`DuplicateName` は名前の欄、ほかの `DomainError` はフォーム全体のエラー（200）。削除は消せない行なら理由と「戻る」だけを出し、POST しても `NotDeletable` の理由を出して何も消さない。
+- フォーム: `LeagueSetupForm`（作成は `with_display_order=False` で表示順の欄を外す。外国人枠3つと支配下枠は空欄で無制限。初期値は `ForeignPlayerRules.NPB`・`DEFAULT_REGISTERED_PLAYER_LIMIT`。`clean()` が `ForeignPlayerRules` を組み立てる）・`StadiumSetupForm`（選択肢は `StadiumProfile.SURFACES`・`ROOFS`、開場年は `Season` の範囲。`clean()` が `StadiumProfile` を組み立て、その例外をフォームのエラーにする）。数値の欄は DB の整数の範囲（`MAX_STORED_INTEGER`）で頭を押さえる。
+- テンプレート（`myapp/setup/`）: `_head.html`（パンくず・見出し・タブ。チームのタブは T3 が足す）・`_field.html`・`_stadium_fields.html`・`leagues.html`・`league_edit.html`・`stadiums.html`・`stadium_edit.html`・`delete.html`（**削除の確認は共通**。ビューの `_deletion_page(kind, name, reason, back_url, setup_tab, notes)` が描く。T3 のチームは `notes` に外れる担当者の数を渡す）。削除のリンクは `deletion_blocker` が None の行だけ。世界の球団が本拠地の球場の編集画面は「変更は世界にも映ります」と知らせる。
+- 導線: コンテキストプロセッサが `can_set_up` を渡し、ヘッダーの「登録」（行き先は `setup_leagues`）とダッシュボードの空の案内（チームが1つも無いとき）をそれで囲む。
+
+**計画からのずれ**
+
+- 所在地の長さの定数 `STADIUM_CITY_MAX_LENGTH`（100）を `domain/entities.py` に置き、ORM の `city` の `max_length` とフォームがそれを参照する（T1 の申し送りは「フォームで止める」。レビューの指摘で出典を1か所にした。domain は検査しない。値は同じなのでマイグレーションは出ない）。
+- `test_workspace_isolation.py` の「B の id を混ぜた POST」の検査から、本文にも URL にも id を持たない作成（`setup_leagues`・`setup_stadiums`）を外した（`ID_FREE_WRITES`。混ぜる id が無い。門は部外者の POST の検査が受け持つ）。
+- `tests/helpers.header_pages()` にヘッダーの「登録」を足した（ペナントの画面のリンクが世界の外へ出てよい行き先。e2e で見つかった）。
+- 空のワークスペースの「id を取らない画面がどれも開く」の検査で、試合の登録だけは既存どおり試合一覧へ戻す（チームが無いと対戦カードを選べない）。
+
+**テスト**: integration `test_setup_screens.py`（新。作成・編集・削除・表示順の末尾・空欄は無制限・NPB の初期値・名前の重複と空と長さ・枠と属性の不正はフォームのエラーで行が変わらない・ほかのワークスペースと同じ名前は作れる・削除のリンクは消せる行だけ・消せない行の削除は理由と戻るだけで POST しても消えない・世界の球団だけが本拠地の球場も消せない・ペナントのリーグの id は 404・門（担当は全 URL で 403 で何も書かない・門は参照クエリとサービスの組み立ての前に拒む・編集者は通る・未ログインはログインへ）・ヘッダーの導線・空のワークスペース（id を取らない PAGE が開く・案内は持ち主と編集者だけ・一から球場とリーグを作れる）・一覧と編集・削除の画面のクエリ数が行数によらない）、`test_workspace_isolation.py`（`URL_TABLE` に6本・`Side.stadium`・`WRITE_BODIES`・持ち主の本文が実際に書くことの確かめに作成と編集を足した）、`test_workspace_permissions.py`（真理値表に「ヘッダーの登録の導線」「登録画面（GET）」「リーグの登録（POST）」の列）、`test_cross_workspace_ids.py`（B のリーグ・球場の id で GET・POST とも 404 で行が変わらない・一覧に B の行が出ない）。
+
+**変異の確かめ**（どれも戻した。`test_setup_screens`・`test_workspace_permissions`・`test_cross_workspace_ids`・`EveryWorkspaceUrlTest` の58件を流した）: 門を外す → 57件、削除のリンクを常に出す → 3件、ヘッダーの導線を `can_set_up` で絞らない → 15件、消せない行にも削除のボタンを出す → 4件、ドメイン例外をフォームのエラーにしない → 4件（500）。
+
+**レビュー（ddd-boundary-reviewer）**: 重要な指摘なし。軽微で直したもの: 所在地の長さの出典（上のずれ）・`ID_FREE_WRITES` の条件に括弧・Wiki の案内の条件（「リーグが無い」→「チームが無い」。ダッシュボードはチームのあるリーグだけを並べる）。残したもの: 表示順は登録画面では数値、管理画面ではドラッグの2系統（別の画面なので並べない規則には当たらない。管理画面の扱いは T5 で決める）。
+
+件数: domain＋integration 3,902（T1 より +39）、e2e 13。
+
+**T3 への申し送り**
+
+- チームの画面は `_head.html` にタブ（リーグと球場の間）を足し、削除は `_deletion_page(..., notes=[外れる担当者の数])` を使う。所属リーグの欄は `league_change_blocker` があれば出さない。
+- ダッシュボードの案内の文言（「リーグと球場を登録する」）と、チーム一覧の空の文言（「管理画面から追加してください」）を、チームを作れるようになった形に直す。
+- e2e `test_setup_flow.py` はヘッダーの「登録」から入る。

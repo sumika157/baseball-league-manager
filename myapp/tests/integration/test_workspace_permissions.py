@@ -5,7 +5,8 @@
 特権を戻すと、staff の部外者・superuser の部外者の行が落ちる。
 
 画面ごとに、書き込みの導線が出る／出ない（押しても弾かれる導線を見せない）と、書き込みが通る／403／ログインへ／404 を
-同じ表で確かめる。公開のワークスペースと非公開のワークスペースで、メンバーの行は同じ。非公開では部外者は
+同じ表で確かめる。登録画面（リーグ・チーム・球場。W3）とヘッダーの「登録」は全体の編集権（持ち主・編集者）だけ。
+公開のワークスペースと非公開のワークスペースで、メンバーの行は同じ。非公開では部外者は
 どの画面も 404、未ログインはログインへ（API は 403 の JSON）。
 """
 
@@ -40,31 +41,35 @@ CHECKS = (
     "試合一覧の登録の導線",
     "試合詳細の編集の導線",
     "ペナントの作成フォーム",
+    "ヘッダーの登録の導線",
     "試合の登録（GET）",
     "試合の編集（GET）",
     "選手の編集（GET）",
+    "登録画面（GET）",
     "選手の登録（POST）",
     "選手の編集（POST）",
     "試合の登録（POST）",
     "スコアブックの保存",
     "ペナントの作成（POST）",
+    "リーグの登録（POST）",
 )
 
 # 役割 → 期待（CHECKS の順）。公開のワークスペース
 _MEMBERS = {
-    "持ち主": "Y Y Y Y Y 200 200 200 ok ok ok ok ok",
-    "編集者": "Y Y Y Y Y 200 200 200 ok ok ok ok ok",
-    "担当": "Y Y Y Y N 200 200 200 ok ok ok ok 403",
+    "持ち主": "Y Y Y Y Y Y 200 200 200 200 ok ok ok ok ok ok",
+    "編集者": "Y Y Y Y Y Y 200 200 200 200 ok ok ok ok ok ok",
+    # 担当: 登録画面（リーグ・チーム・球場）は全体の編集権だけ。導線も出さない
+    "担当": "Y Y Y Y N N 200 200 200 403 ok ok ok ok 403 403",
     # ほかのチームの担当: 試合の登録の画面は開ける（担当のチームがある）が、担当していない2チームの試合は登録できない
-    "ほかのチームの担当": "N N Y N N 200 403 403 403 403 refused 403 403",
+    "ほかのチームの担当": "N N Y N N N 200 403 403 403 403 403 refused 403 403 403",
 }
-_NO_RIGHTS = "N N N N N 403 403 403 403 403 403 403 403"
+_NO_RIGHTS = "N N N N N N 403 403 403 403 403 403 403 403 403 403"
 PUBLIC = {
     **_MEMBERS,
     "ログインした部外者": _NO_RIGHTS,
     "staff の部外者": _NO_RIGHTS,
     "superuser の部外者": _NO_RIGHTS,
-    "未ログイン": "N N N N N login login login login login login 403 login",
+    "未ログイン": "N N N N N N login login login login login login login 403 login login",
 }
 # 非公開: メンバーは公開と同じ。部外者は存在を明かさない（404）、未ログインはログインへ（API は 403）
 _HIDDEN = " ".join(["404"] * len(CHECKS))
@@ -73,7 +78,7 @@ PRIVATE = {
     "ログインした部外者": _HIDDEN,
     "staff の部外者": _HIDDEN,
     "superuser の部外者": _HIDDEN,
-    "未ログイン": " ".join(["login"] * (len(CHECKS) - 2) + ["403", "login"]),
+    "未ログイン": " ".join(["login"] * (len(CHECKS) - 3) + ["403", "login", "login"]),
 }
 
 
@@ -172,9 +177,11 @@ class PermissionTableCase(BaseCase):
             self._link(self.url("game_list"), self.url("game_create")),
             self._link(self.url("game_detail", game), self.url("game_edit", game)),
             self._link(self.url("pennant_index"), 'name="leagues"'),
+            self._link(self.url("dashboard"), f'href="{self.url("setup_leagues")}"'),
             self._get(self.url("game_create")),
             self._get(self.url("game_edit", game)),
             self._get(edit_url),
+            self._get(self.url("setup_leagues")),
         ]
 
         # 役割ごとに続けて登録するので、背番号は呼ぶたびに変える（重複の検査で落ちて空振りしない）
@@ -241,6 +248,13 @@ class PermissionTableCase(BaseCase):
             },
         )
         observed.append(self._write(response, orm_models.PennantWorld.objects.count() != worlds))
+
+        leagues = orm_models.League.objects.count()
+        response = self.client.post(
+            self.url("setup_leagues"),
+            {"name": f"{role}のリーグ", "foreign_active": "4", "foreign_pitchers": "3", "foreign_batters": "3"},
+        )
+        observed.append(self._write(response, orm_models.League.objects.count() != leagues))
         return observed
 
     def check_the_table(self):

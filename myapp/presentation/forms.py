@@ -13,25 +13,35 @@ from django import forms
 from django.core.exceptions import ValidationError
 
 from ..application.dto import LeagueTeams, LineupSlot, ProfileInput
-from ..domain.entities import FieldingError, PlateAppearance, RunnerAdvance
+from ..domain.entities import (
+    LEAGUE_NAME_MAX_LENGTH,
+    STADIUM_CITY_MAX_LENGTH,
+    STADIUM_NAME_MAX_LENGTH,
+    FieldingError,
+    PlateAppearance,
+    RunnerAdvance,
+)
 from ..domain.exceptions import DomainError, InvalidJerseyNumber, InvalidPosition
 from ..domain.pennant.draft_order import DraftOrderRule
 from ..domain.pennant.postseason import PostseasonFormat
 from ..domain.pennant.world import MAX_NAME_LENGTH, MAX_SEED, MAX_SOURCE_LEAGUES, MAX_START_YEAR
 from ..domain.value_objects import (
     BACK_NAME_MAX_LENGTH,
+    DEFAULT_REGISTERED_PLAYER_LIMIT,
     PROFILE_TEXT_MAX_LENGTH,
     AdvanceReason,
     Base,
     ContractStatus,
     ErrorKind,
     FieldingPosition,
+    ForeignPlayerRules,
     GameTimes,
     Handedness,
     JerseyNumber,
     PlateAppearanceResult,
     Position,
     Season,
+    StadiumProfile,
 )
 
 POSITION_CHOICES = [(position.value, position.value) for position in Position]
@@ -482,3 +492,152 @@ class PennantWorldForm(forms.Form):
         if team and leagues and self._league_of_team.get(team) not in leagues:
             self.add_error("managed_team", "受け持つ球団は、選んだリーグの球団から選んでください。")
         return cleaned
+
+
+# --- 登録画面（リーグ・球場。W3 #79） ---
+
+# 数値の欄の上限。DB の整数の列（PositiveIntegerField）に入る範囲で止め、桁あふれを 500 にしない
+MAX_STORED_INTEGER = 2_147_483_647
+
+
+def _count_field(label: str, *, help_text: str = "") -> forms.IntegerField:
+    """0以上の人数の欄。空欄は無制限（None）。"""
+    return forms.IntegerField(
+        label=label,
+        min_value=0,
+        max_value=MAX_STORED_INTEGER,
+        required=False,
+        help_text=help_text,
+        widget=forms.NumberInput(attrs={"class": "form-control"}),
+    )
+
+
+def _blank_choices(options: Sequence[str]) -> list[tuple[str, str]]:
+    """未設定（空）を先頭に置いた選択肢。選択肢そのものはドメインの値オブジェクトが出典。"""
+    return [("", "未設定")] + [(option, option) for option in options]
+
+
+class LeagueSetupForm(forms.Form):
+    """リーグの作成・編集。外国人枠と支配下選手の登録枠は空欄なら無制限。
+
+    表示順は編集だけで入れる（作成は末尾。`with_display_order=False` で欄を外す）。初期値の出典は domain
+    （外国人枠は `ForeignPlayerRules.NPB`、支配下枠は `DEFAULT_REGISTERED_PLAYER_LIMIT`）。
+    名前の空・長さ・重複はドメインとリポジトリが検査し、ビューがこのフォームのエラーにする。
+    """
+
+    name = forms.CharField(
+        label="リーグ名",
+        max_length=LEAGUE_NAME_MAX_LENGTH,
+        widget=forms.TextInput(attrs={"class": "form-control"}),
+    )
+    display_order = forms.IntegerField(
+        label="表示順",
+        min_value=0,
+        max_value=MAX_STORED_INTEGER,
+        help_text="小さいほど前に並びます。",
+        widget=forms.NumberInput(attrs={"class": "form-control"}),
+    )
+    foreign_active = _count_field("外国人選手の1軍登録の枠（計）", help_text="空欄なら無制限。")
+    foreign_pitchers = _count_field("うち投手", help_text="空欄なら無制限。")
+    foreign_batters = _count_field("うち野手", help_text="空欄なら無制限。")
+    registered_player_limit = _count_field("支配下選手の登録枠", help_text="空欄なら無制限。")
+
+    def __init__(self, *args: Any, with_display_order: bool = True, **kwargs: Any) -> None:
+        kwargs.setdefault(
+            "initial",
+            {
+                "foreign_active": ForeignPlayerRules.NPB.active,
+                "foreign_pitchers": ForeignPlayerRules.NPB.pitchers,
+                "foreign_batters": ForeignPlayerRules.NPB.batters,
+                "registered_player_limit": DEFAULT_REGISTERED_PLAYER_LIMIT,
+            },
+        )
+        super().__init__(*args, **kwargs)
+        if not with_display_order:
+            del self.fields["display_order"]
+
+    def clean(self) -> dict[str, Any]:
+        cleaned = super().clean() or {}
+        if not any(name in self.errors for name in ("foreign_active", "foreign_pitchers", "foreign_batters")):
+            try:
+                cleaned["foreign_rules"] = ForeignPlayerRules(
+                    active=cleaned.get("foreign_active"),
+                    pitchers=cleaned.get("foreign_pitchers"),
+                    batters=cleaned.get("foreign_batters"),
+                )
+            except DomainError as error:
+                self.add_error("foreign_active", str(error))
+        return cleaned
+
+
+class StadiumSetupForm(forms.Form):
+    """球場の作成・編集。名前のほかは空欄でよい（未設定）。
+
+    グラウンド・屋根の選択肢は `StadiumProfile.SURFACES`・`ROOFS`、開場年の範囲は `Season` が出典。
+    属性の検査（収容人数・選択肢・年）は `StadiumProfile` が行い、ここはその例外を欄のエラーにするだけ。
+    """
+
+    name = forms.CharField(
+        label="球場名",
+        max_length=STADIUM_NAME_MAX_LENGTH,
+        widget=forms.TextInput(attrs={"class": "form-control"}),
+    )
+    city = forms.CharField(
+        label="所在地",
+        max_length=STADIUM_CITY_MAX_LENGTH,
+        required=False,
+        widget=forms.TextInput(attrs={"class": "form-control"}),
+    )
+    capacity = forms.IntegerField(
+        label="収容人数",
+        min_value=0,
+        max_value=MAX_STORED_INTEGER,
+        required=False,
+        help_text="ペナントの観客数の上限になります。空欄なら観客数を出しません。",
+        widget=forms.NumberInput(attrs={"class": "form-control"}),
+    )
+    surface = forms.ChoiceField(
+        label="グラウンド",
+        choices=_blank_choices(StadiumProfile.SURFACES),
+        required=False,
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
+    roof = forms.ChoiceField(
+        label="屋根",
+        choices=_blank_choices(StadiumProfile.ROOFS),
+        required=False,
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
+    opened_year = forms.IntegerField(
+        label="開場年",
+        min_value=Season.MIN_YEAR,
+        max_value=Season.MAX_YEAR,
+        required=False,
+        widget=forms.NumberInput(attrs={"class": "form-control"}),
+    )
+
+    def clean(self) -> dict[str, Any]:
+        cleaned = super().clean() or {}
+        if not any(name in self.errors for name in ("city", "capacity", "surface", "roof", "opened_year")):
+            try:
+                cleaned["profile"] = StadiumProfile(
+                    city=cleaned.get("city") or "",
+                    capacity=cleaned.get("capacity"),
+                    surface=cleaned.get("surface") or "",
+                    opened_year=cleaned.get("opened_year"),
+                    roof=cleaned.get("roof") or "",
+                )
+            except DomainError as error:
+                self.add_error(None, str(error))
+        return cleaned
+
+    @staticmethod
+    def initial_of(profile: StadiumProfile) -> dict[str, Any]:
+        """編集フォームの初期値（属性の部分）。"""
+        return {
+            "city": profile.city,
+            "capacity": profile.capacity,
+            "surface": profile.surface,
+            "roof": profile.roof,
+            "opened_year": profile.opened_year,
+        }

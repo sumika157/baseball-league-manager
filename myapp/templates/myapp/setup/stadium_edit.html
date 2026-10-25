@@ -1,0 +1,29 @@
+{% extends 'myapp/base.html' %}
+{% load scoped %}
+
+{% block title %}{{ stadium.name }}の編集 - 球場の登録 - Baseball Manager{% endblock %}
+
+{% block content %}
+{% workspace_url 'setup_stadiums' as back_url %}
+{% include 'myapp/setup/_head.html' with crumb='球場の編集' back_url=back_url %}
+
+<h2 class="h6 mb-2">{{ stadium.name }}</h2>
+{% comment %}
+球場はワークスペースのペナントの世界と共有する（2026-10-25 決定）。世界の球団の本拠地でもあれば、変更が世界にも映ることを先に知らせる。
+{% endcomment %}
+{% if stadium.world_home_team_count %}
+  <div class="alert alert-info">
+    ペナントの世界の{{ stadium.world_home_team_count }}球団もこの球場を本拠地にしています。変更は世界にも映ります（収容人数はペナントの観客数の上限になります）。
+  </div>
+{% endif %}
+<form method="post" class="card mb-4">
+  {% csrf_token %}
+  <div class="card-body">
+    {% include 'myapp/setup/_stadium_fields.html' %}
+    <div class="d-flex gap-2">
+      <button type="submit" class="btn btn-primary">保存する</button>
+      <a href="{{ back_url }}" class="btn btn-secondary">戻る</a>
+    </div>
+  </div>
+</form>
+{% endblock %}

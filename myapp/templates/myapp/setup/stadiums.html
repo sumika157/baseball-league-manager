@@ -1,0 +1,67 @@
+{% extends 'myapp/base.html' %}
+{% load scoped %}
+
+{% block title %}球場の登録 - Baseball Manager{% endblock %}
+
+{% block content %}
+{% include 'myapp/setup/_head.html' %}
+
+{% comment %}
+球場の一覧（名前順）。列ソートは付けない。本拠地はチームの側で選ぶので、ここには数だけを出す。
+ペナントの世界の球団も同じ球場を本拠地にする（球場はワークスペースで共有）。
+削除のリンクは消せる行（どのチームも本拠地にしていない球場）にだけ出す。
+{% endcomment %}
+{% if stadiums %}
+  <div class="table-responsive">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>球場名</th>
+          <th>所在地</th>
+          <th class="text-end">収容人数</th>
+          <th>グラウンド</th>
+          <th>屋根</th>
+          <th class="text-end">開場年</th>
+          <th class="text-end">本拠地のチーム</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody class="tabular-nums">
+        {% for stadium in stadiums %}
+          <tr>
+            <td class="player-name">{{ stadium.name }}</td>
+            <td class="stat-muted">{{ stadium.profile.city|default:'—' }}</td>
+            <td class="text-end">{% if stadium.profile.capacity is not None %}{{ stadium.profile.capacity }}人{% else %}—{% endif %}</td>
+            <td>{{ stadium.profile.surface|default:'—' }}</td>
+            <td>{{ stadium.profile.roof|default:'—' }}</td>
+            <td class="text-end">{{ stadium.profile.opened_year|default:'—' }}</td>
+            <td class="text-end text-nowrap">
+              {{ stadium.real_home_team_count }}
+              {% if stadium.world_home_team_count %}<span class="stat-muted" style="font-size: 0.75rem;">（ペナント {{ stadium.world_home_team_count }}）</span>{% endif %}
+            </td>
+            <td class="text-end text-nowrap">
+              <a href="{% workspace_url 'setup_stadium_edit' stadium.stadium_id %}" class="btn btn-sm btn-outline-secondary">編集</a>
+              {% if not stadium.deletion_blocker %}
+                <a href="{% workspace_url 'setup_stadium_delete' stadium.stadium_id %}" class="btn btn-sm btn-outline-danger">削除</a>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <div class="card mb-3">
+    <div class="empty-state">まだ球場がありません。下のフォームから作ってください（チームの本拠地として選べるようになります）。</div>
+  </div>
+{% endif %}
+
+<h2 class="h6 mb-2 mt-4">球場を作る</h2>
+<form method="post" class="card mb-4">
+  {% csrf_token %}
+  <div class="card-body">
+    {% include 'myapp/setup/_stadium_fields.html' %}
+    <button type="submit" class="btn btn-primary">作る</button>
+  </div>
+</form>
+{% endblock %}

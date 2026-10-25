@@ -1,0 +1,31 @@
+{% extends 'myapp/base.html' %}
+
+{% block title %}{{ kind }}の削除 - 登録 - Baseball Manager{% endblock %}
+
+{% block content %}
+{% comment %}
+削除の確認。リーグ・球場・チームで共通（kind・name・reason・back_url・notes をビューが渡す）。
+消せない（reason がある）ときは理由と「戻る」だけを出し、削除のボタンを出さない（両立しない操作を並べない）。
+消せないまま POST されたときも、同じ理由を出して何も消さない。
+{% endcomment %}
+{% with crumb=kind|add:'の削除' %}
+  {% include 'myapp/setup/_head.html' with crumb=crumb %}
+{% endwith %}
+
+<h2 class="h6 mb-2">{{ kind }}「{{ name }}」を削除する</h2>
+
+{% if reason %}
+  <div class="alert alert-secondary">{{ reason }}</div>
+  <a href="{{ back_url }}" class="btn btn-secondary">戻る</a>
+{% else %}
+  <div class="alert alert-danger">
+    {{ kind }}「{{ name }}」を削除します。元に戻せません。
+    {% for note in notes %}<div>{{ note }}</div>{% endfor %}
+  </div>
+  <form method="post" class="d-flex gap-2">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-danger">削除する</button>
+    <a href="{{ back_url }}" class="btn btn-secondary">やめる</a>
+  </form>
+{% endif %}
+{% endblock %}

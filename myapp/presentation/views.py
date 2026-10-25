@@ -29,11 +29,13 @@ from ..application.dto import (
     ClubPlanView,
     GameEditData,
     GameEditPlateAppearance,
+    LeagueSetupRow,
     Listing,
     PlayerRatingsCard,
     PlayerRatingsHistory,
     RatingsTable,
     ReleasePlanView,
+    StadiumSetupRow,
     TeamMonthlyRow,
     WorkspaceContext,
     WorldContext,
@@ -65,11 +67,14 @@ from ..domain.exceptions import (
     AlreadyAdvanced,
     AlreadyClosed,
     DomainError,
+    DuplicateName,
     GameNotFound,
+    InvalidName,
     InvalidReleasePlan,
     InvalidWorld,
     LeagueNotFound,
     PlayerNotFound,
+    StadiumNotFound,
     TeamNotFound,
     WorkspaceNotFound,
     WorldNotFound,
@@ -165,11 +170,13 @@ from .forms import (
     PROFILE_SECTION_MARKER,
     DraftOrderRuleForm,
     GameForm,
+    LeagueSetupForm,
     PennantWorldForm,
     PlayerProfileForm,
     PlayerRegistrationForm,
     PlayerUpdateForm,
     PostseasonFormatForm,
+    StadiumSetupForm,
 )
 
 BATTER_MODE = "batter"
@@ -2326,6 +2333,249 @@ def _handle_free_agency(request, team_id, player_id, player_name) -> None:
         messages.error(request, "FA を宣言した年を数値で入力してください。")
     except DomainError as error:
         messages.error(request, str(error))
+
+
+# --- 登録画面（リーグ・球場。W3 #79。チームは T3） ---
+#
+# どれも `workspace_view(login=True)` で包み、門は `_requires_set_up`。一覧・編集フォームの初期値・消せない理由は
+# 参照クエリ（`build_setup_query`）、作成・編集・削除はサービス（`build_league_setup_service`）。
+# ドメインの例外（名前の空・長さ・重複、消せない）はフォームのエラー、範囲の外の id は 404 にする（500 にしない）。
+
+_SETUP_METHODS = ("GET", "HEAD", "POST")
+
+
+def _requires_set_up(request) -> None:
+    """登録画面の門。全体の編集権（持ち主・編集者。`WorkspaceAccess.can_set_up()`）が無ければ 403。
+
+    ログインは `workspace_view(login=True)` が先に求める。判定は解決済みの権限だけで、DB は読まない。
+    GET も POST も同じ門を通す（登録画面はフォームだけの画面なので、書けない人には見せない。中身はほかの画面で
+    読める）。
+    """
+    if not _workspace(request).access.can_set_up():
+        raise PermissionDenied("このワークスペースのリーグ・チーム・球場を登録する権限がありません。")
+
+
+def _setup_error(form, error: DomainError) -> None:
+    """登録のドメイン例外をフォームのエラーにする。名前の検査と重複は名前の欄、ほかはフォーム全体。"""
+    form.add_error("name" if isinstance(error, (InvalidName, DuplicateName)) else None, str(error))
+
+
+def _deletion_page(
+    request, *, kind: str, name: str, reason: str | None, back_url: str, setup_tab: str, notes: Iterable[str] = ()
+):
+    """削除の確認（リーグ・球場・チームで共通の形。`myapp/setup/delete.html`）。
+
+    消せない（`reason` がある）ときは理由と「戻る」だけを出し、削除のボタンを出さない（両立しない操作を並べない）。
+    `notes` は消すと一緒に外れるもの（チームの担当者など）の案内。
+    """
+    return render(
+        request,
+        "myapp/setup/delete.html",
+        {
+            "kind": kind,
+            "name": name,
+            "reason": reason,
+            "back_url": back_url,
+            "setup_tab": setup_tab,
+            "notes": list(notes),
+        },
+    )
+
+
+def setup_leagues(request):
+    """リーグの一覧と作成フォーム。新しいリーグは表示順の末尾に入る。"""
+    if request.method not in _SETUP_METHODS:
+        return HttpResponseNotAllowed(_SETUP_METHODS)
+    _requires_set_up(request)
+    scope = _real_scope(request)
+    if request.method == "POST":
+        form = LeagueSetupForm(request.POST, with_display_order=False)
+        if form.is_valid():
+            data = form.cleaned_data
+            try:
+                build_league_setup_service(scope).create_league(
+                    name=data["name"],
+                    foreign_rules=data["foreign_rules"],
+                    registered_player_limit=data["registered_player_limit"],
+                )
+            except DomainError as error:
+                _setup_error(form, error)
+            else:
+                messages.success(request, f"リーグ「{data['name']}」を登録しました。")
+                return redirect(_url(request, "setup_leagues"))
+    else:
+        form = LeagueSetupForm(with_display_order=False)
+    return render(
+        request,
+        "myapp/setup/leagues.html",
+        {"leagues": build_setup_query(scope).leagues(), "form": form, "setup_tab": "leagues"},
+    )
+
+
+def _setup_league(request, league_id: int) -> LeagueSetupRow:
+    """登録画面のリーグの1行。範囲の外（ほかのワークスペース・ペナントの世界）の id は 404。"""
+    try:
+        return build_setup_query(_real_scope(request)).league(league_id)
+    except LeagueNotFound:
+        raise Http404("リーグが見つかりません。") from None
+
+
+def setup_league_edit(request, league_id):
+    """リーグの編集（名前・表示順・外国人枠・支配下選手の登録枠）。保存したら一覧へ戻る。"""
+    if request.method not in _SETUP_METHODS:
+        return HttpResponseNotAllowed(_SETUP_METHODS)
+    _requires_set_up(request)
+    league = _setup_league(request, league_id)
+    if request.method == "POST":
+        form = LeagueSetupForm(request.POST)
+        if form.is_valid():
+            data = form.cleaned_data
+            try:
+                build_league_setup_service(_real_scope(request)).update_league(
+                    league_id,
+                    name=data["name"],
+                    display_order=data["display_order"],
+                    foreign_rules=data["foreign_rules"],
+                    registered_player_limit=data["registered_player_limit"],
+                )
+            except LeagueNotFound:
+                raise Http404("リーグが見つかりません。") from None
+            except DomainError as error:
+                _setup_error(form, error)
+            else:
+                messages.success(request, f"リーグ「{data['name']}」を更新しました。")
+                return redirect(_url(request, "setup_leagues"))
+    else:
+        form = LeagueSetupForm(
+            initial={
+                "name": league.name,
+                "display_order": league.display_order,
+                "foreign_active": league.foreign_rules.active,
+                "foreign_pitchers": league.foreign_rules.pitchers,
+                "foreign_batters": league.foreign_rules.batters,
+                "registered_player_limit": league.registered_player_limit,
+            }
+        )
+    return render(request, "myapp/setup/league_edit.html", {"league": league, "form": form, "setup_tab": "leagues"})
+
+
+def setup_league_delete(request, league_id):
+    """リーグの削除の確認（GET）と削除（POST）。チームが1つも無いリーグだけ消せる。
+
+    消せないリーグへの POST は、理由を出して何も消さない（リポジトリが同じ規則で `NotDeletable` にする）。
+    """
+    if request.method not in _SETUP_METHODS:
+        return HttpResponseNotAllowed(_SETUP_METHODS)
+    _requires_set_up(request)
+    league = _setup_league(request, league_id)
+    reason = league.deletion_blocker
+    if request.method == "POST":
+        try:
+            build_league_setup_service(_real_scope(request)).delete_league(league_id)
+        except LeagueNotFound:
+            raise Http404("リーグが見つかりません。") from None
+        except DomainError as error:
+            reason = str(error)
+        else:
+            messages.success(request, f"リーグ「{league.name}」を削除しました。")
+            return redirect(_url(request, "setup_leagues"))
+    return _deletion_page(
+        request,
+        kind="リーグ",
+        name=league.name,
+        reason=reason,
+        back_url=_url(request, "setup_leagues"),
+        setup_tab="leagues",
+    )
+
+
+def setup_stadiums(request):
+    """球場の一覧（名前順）と作成フォーム。球場はワークスペースのペナントの世界と共有する。"""
+    if request.method not in _SETUP_METHODS:
+        return HttpResponseNotAllowed(_SETUP_METHODS)
+    _requires_set_up(request)
+    scope = _real_scope(request)
+    if request.method == "POST":
+        form = StadiumSetupForm(request.POST)
+        if form.is_valid():
+            data = form.cleaned_data
+            try:
+                build_league_setup_service(scope).create_stadium(name=data["name"], profile=data["profile"])
+            except DomainError as error:
+                _setup_error(form, error)
+            else:
+                messages.success(request, f"球場「{data['name']}」を登録しました。")
+                return redirect(_url(request, "setup_stadiums"))
+    else:
+        form = StadiumSetupForm()
+    return render(
+        request,
+        "myapp/setup/stadiums.html",
+        {"stadiums": build_setup_query(scope).stadiums(), "form": form, "setup_tab": "stadiums"},
+    )
+
+
+def _setup_stadium(request, stadium_id: int) -> StadiumSetupRow:
+    """登録画面の球場の1行。範囲の外（ほかのワークスペース）の id は 404。"""
+    try:
+        return build_setup_query(_real_scope(request)).stadium(stadium_id)
+    except StadiumNotFound:
+        raise Http404("球場が見つかりません。") from None
+
+
+def setup_stadium_edit(request, stadium_id):
+    """球場の編集。ペナントの世界の球団の本拠地でもあれば、変更は世界にも映る（2026-10-25 決定 1）。"""
+    if request.method not in _SETUP_METHODS:
+        return HttpResponseNotAllowed(_SETUP_METHODS)
+    _requires_set_up(request)
+    stadium = _setup_stadium(request, stadium_id)
+    if request.method == "POST":
+        form = StadiumSetupForm(request.POST)
+        if form.is_valid():
+            data = form.cleaned_data
+            try:
+                build_league_setup_service(_real_scope(request)).update_stadium(
+                    stadium_id, name=data["name"], profile=data["profile"]
+                )
+            except StadiumNotFound:
+                raise Http404("球場が見つかりません。") from None
+            except DomainError as error:
+                _setup_error(form, error)
+            else:
+                messages.success(request, f"球場「{data['name']}」を更新しました。")
+                return redirect(_url(request, "setup_stadiums"))
+    else:
+        form = StadiumSetupForm(initial={"name": stadium.name, **StadiumSetupForm.initial_of(stadium.profile)})
+    return render(
+        request, "myapp/setup/stadium_edit.html", {"stadium": stadium, "form": form, "setup_tab": "stadiums"}
+    )
+
+
+def setup_stadium_delete(request, stadium_id):
+    """球場の削除の確認（GET）と削除（POST）。どのチーム（世界の球団を含む）も本拠地にしていない球場だけ消せる。"""
+    if request.method not in _SETUP_METHODS:
+        return HttpResponseNotAllowed(_SETUP_METHODS)
+    _requires_set_up(request)
+    stadium = _setup_stadium(request, stadium_id)
+    reason = stadium.deletion_blocker
+    if request.method == "POST":
+        try:
+            build_league_setup_service(_real_scope(request)).delete_stadium(stadium_id)
+        except StadiumNotFound:
+            raise Http404("球場が見つかりません。") from None
+        except DomainError as error:
+            reason = str(error)
+        else:
+            messages.success(request, f"球場「{stadium.name}」を削除しました。")
+            return redirect(_url(request, "setup_stadiums"))
+    return _deletion_page(
+        request,
+        kind="球場",
+        name=stadium.name,
+        reason=reason,
+        back_url=_url(request, "setup_stadiums"),
+        setup_tab="stadiums",
+    )
 
 
 def _first_error(form) -> str:

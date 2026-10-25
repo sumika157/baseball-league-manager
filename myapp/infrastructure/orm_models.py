@@ -10,7 +10,12 @@
 from django.conf import settings
 from django.db import models
 
-from ..domain.entities import LEAGUE_NAME_MAX_LENGTH, STADIUM_NAME_MAX_LENGTH, TEAM_NAME_MAX_LENGTH
+from ..domain.entities import (
+    LEAGUE_NAME_MAX_LENGTH,
+    STADIUM_CITY_MAX_LENGTH,
+    STADIUM_NAME_MAX_LENGTH,
+    TEAM_NAME_MAX_LENGTH,
+)
 from ..domain.pennant.draft_order import DraftOrderRule
 from ..domain.pennant.postseason import PostseasonFormat
 from ..domain.services.rankings import Title
@@ -305,7 +310,7 @@ class Stadium(models.Model):
         verbose_name="ワークスペース",
         help_text="この球場が属すワークスペース。",
     )
-    city = models.CharField(max_length=100, blank=True, verbose_name="所在地")
+    city = models.CharField(max_length=STADIUM_CITY_MAX_LENGTH, blank=True, verbose_name="所在地")
     capacity = models.PositiveIntegerField(null=True, blank=True, verbose_name="収容人数")
     surface = models.CharField(max_length=10, choices=SURFACE_CHOICES, blank=True, verbose_name="グラウンド")
     roof = models.CharField(
