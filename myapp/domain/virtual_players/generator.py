@@ -43,9 +43,8 @@ FOREIGN_PLAYER_RATIO = 0.12
 # 投入で1球団に置く外国人の上限（育成も数える）。協約（第82条の2）は保有の人数を縛らないので、生成の目安。
 # 1軍に置けるのは4人まで（`ForeignPlayerRules.NPB`）なので、控えを1人持てる5人にする（#204 の前の登録枠と同じ水準）
 FOREIGN_PLAYERS_PER_TEAM_MAX = 5
-# 1球団の支配下の人数は、ペナントの開幕前の帯（`pennant/roster.py` の `OPENING_REGISTERED_BAND`）を出典にする。
-# 育成の人数の範囲（1球団）。NPB は球団差が大きい（数人〜50人超）ので幅を持たせ、平均を約20人にする
-DEVELOPMENTAL_RANGE = (10, 30)
+# 1球団の支配下と育成の人数は、ペナントの開幕前の帯（`pennant/roster.py` の `OPENING_REGISTERED_BAND`）と
+# 育成の目安の帯（同じファイルの `DEVELOPMENT_BAND`）を出典にする。
 # 投入時の年齢（平均・標準偏差・下限・上限）。育成は高卒・大卒の直後が中心で若い
 REGISTERED_AGE = (27.5, 3.8, 19, 40)
 DEVELOPMENTAL_AGE = (21.5, 2.0, 19, 28)

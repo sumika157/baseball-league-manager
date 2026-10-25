@@ -16,7 +16,9 @@ P1 の目標帯より低くなる。
 
 母集団は呼び出し側が渡す。世界の作成では**成績のある選手だけ**（成績の無い選手は全員が同じ事前の値に並び、
 標準偏差を縮めて成績のある選手を押し上げるので、2軍の層として分布から引く。`pennant/initial_ratings.py`）、
-オフの水準の錨では世界の現役の選手全員（`pennant/offseason.py`）。
+オフの水準の錨では世界の現役の**支配下**の選手全員で写像を決め、育成にも同じ写像を当てる（`pennant/offseason.py`。
+毎年の育成の流入で1軍の水準が動かないように。#198 D2）。母集団の外の選手にも同じ写像を当てるときは
+`population` で印を渡す。
 人数が `MIN_POPULATION` に満たないと標準偏差が安定しないので、その区分は手を付けない。
 スタミナは先発と救援で2つに分かれる値（`samples.spread_club` と同じ）で、成績から決まる先発の割合を
 反映しているので、散らばりを動かさない。
@@ -49,25 +51,45 @@ def target_sd(*, pitcher: bool) -> float:
     return PITCHER_SD if pitcher else BATTER_SD
 
 
-def rescale(values: Sequence[int], goal_mean: float, goal_sd: float) -> list[int]:
-    """順位を保ったまま、平均と標準偏差を目標に写す。母集団に差が無ければ（標準偏差 0）そのまま。"""
-    spread = pstdev(values)
+def rescale(
+    values: Sequence[int], goal_mean: float, goal_sd: float, *, population: Sequence[bool] | None = None
+) -> list[int]:
+    """順位を保ったまま、平均と標準偏差を目標に写す。母集団に差が無ければ（標準偏差 0）そのまま。
+
+    `population` は値ごとの「写像を決める母集団に入れるか」の印（省くと全員）。写像（中心と散らばり）は印の付いた
+    値だけで決め、**全員に同じ写像を当てる**（オフの錨は支配下で決め、育成にも同じ写像を当てる。#198 D2）。
+    """
+    base = (
+        list(values)
+        if population is None
+        else [value for value, inside in zip(values, population, strict=True) if inside]
+    )
+    spread = pstdev(base) if len(base) > 1 else 0.0
     if spread == 0.0:
         return list(values)
-    center = fmean(values)
+    center = fmean(base)
     return [
         min(RATING_MAX, max(RATING_MIN, round(goal_mean + goal_sd * (value - center) / spread))) for value in values
     ]
 
 
-def spread_batter_ratings(ratings: Sequence[BatterRatings]) -> list[BatterRatings]:
-    """野手の能力の散らばりを合わせる。入力と同じ順に返す。成長型は変えない。"""
-    if len(ratings) < MIN_POPULATION:
+def _population_size(count: int, population: Sequence[bool] | None) -> int:
+    return count if population is None else sum(1 for inside in population if inside)
+
+
+def spread_batter_ratings(
+    ratings: Sequence[BatterRatings], *, population: Sequence[bool] | None = None
+) -> list[BatterRatings]:
+    """野手の能力の散らばりを合わせる。入力と同じ順に返す。成長型は変えない。`population` は `rescale` と同じ。"""
+    if _population_size(len(ratings), population) < MIN_POPULATION:
         return list(ratings)
 
     def column(name: str) -> list[int]:
         return rescale(
-            [getattr(item, name) for item in ratings], target_mean(name, pitcher=False), target_sd(pitcher=False)
+            [getattr(item, name) for item in ratings],
+            target_mean(name, pitcher=False),
+            target_sd(pitcher=False),
+            population=population,
         )
 
     contact, power, eye, speed, fielding = (column(name) for name in _BATTER_ITEMS)
@@ -79,14 +101,20 @@ def spread_batter_ratings(ratings: Sequence[BatterRatings]) -> list[BatterRating
     ]
 
 
-def spread_pitcher_ratings(ratings: Sequence[PitcherRatings]) -> list[PitcherRatings]:
-    """投手の能力の散らばりを合わせる（スタミナを除く）。入力と同じ順に返す。成長型は変えない。"""
-    if len(ratings) < MIN_POPULATION:
+def spread_pitcher_ratings(
+    ratings: Sequence[PitcherRatings], *, population: Sequence[bool] | None = None
+) -> list[PitcherRatings]:
+    """投手の能力の散らばりを合わせる（スタミナを除く）。入力と同じ順に返す。成長型は変えない。
+    `population` は `rescale` と同じ。"""
+    if _population_size(len(ratings), population) < MIN_POPULATION:
         return list(ratings)
 
     def column(name: str) -> list[int]:
         return rescale(
-            [getattr(item, name) for item in ratings], target_mean(name, pitcher=True), target_sd(pitcher=True)
+            [getattr(item, name) for item in ratings],
+            target_mean(name, pitcher=True),
+            target_sd(pitcher=True),
+            population=population,
         )
 
     stuff, control, avoidance = (column(name) for name in _PITCHER_ITEMS)
@@ -102,13 +130,24 @@ def spread_pitcher_ratings(ratings: Sequence[PitcherRatings]) -> list[PitcherRat
     ]
 
 
-def spread_ratings(ratings: Sequence[BatterRatings | PitcherRatings]) -> list[BatterRatings | PitcherRatings]:
-    """野手と投手が混ざった能力を、野手 / 投手ごとに散らばりを合わせる。入力と同じ順に返す。"""
+def spread_ratings(
+    ratings: Sequence[BatterRatings | PitcherRatings], *, population: Sequence[bool] | None = None
+) -> list[BatterRatings | PitcherRatings]:
+    """野手と投手が混ざった能力を、野手 / 投手ごとに散らばりを合わせる。入力と同じ順に返す。
+
+    `population` は能力ごとの「写像を決める母集団に入れるか」の印（省くと全員。`rescale`）。
+    """
     batter_places = [i for i, item in enumerate(ratings) if isinstance(item, BatterRatings)]
     pitcher_places = [i for i, item in enumerate(ratings) if isinstance(item, PitcherRatings)]
     result: list[BatterRatings | PitcherRatings] = list(ratings)
-    spread_batters = spread_batter_ratings([_batter(ratings[i]) for i in batter_places])
-    spread_pitchers = spread_pitcher_ratings([_pitcher(ratings[i]) for i in pitcher_places])
+    spread_batters = spread_batter_ratings(
+        [_batter(ratings[i]) for i in batter_places],
+        population=None if population is None else [population[i] for i in batter_places],
+    )
+    spread_pitchers = spread_pitcher_ratings(
+        [_pitcher(ratings[i]) for i in pitcher_places],
+        population=None if population is None else [population[i] for i in pitcher_places],
+    )
     for place, batter in zip(batter_places, spread_batters, strict=True):
         result[place] = batter
     for place, pitcher in zip(pitcher_places, spread_pitchers, strict=True):

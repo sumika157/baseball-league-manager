@@ -6,7 +6,7 @@ import random
 import unittest
 from datetime import date
 
-from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND
+from myapp.domain.pennant.roster import DEVELOPMENT_BAND, OPENING_REGISTERED_BAND
 from myapp.domain.value_objects import Handedness, Position, Profile
 from myapp.domain.virtual_players import generator, pools
 from myapp.domain.virtual_players.generator import AmateurPath
@@ -124,7 +124,7 @@ class AllocationTest(unittest.TestCase):
 
     def test_largest_remainder_keeps_the_total(self) -> None:
         # 投入が配る人数（育成の範囲〜支配下の帯の上端）
-        for total in range(generator.DEVELOPMENTAL_RANGE[0], OPENING_REGISTERED_BAND.high + 1):
+        for total in range(DEVELOPMENT_BAND.low, OPENING_REGISTERED_BAND.high + 1):
             allocation = generator.largest_remainder(total, generator.POSITION_RATIOS)
             self.assertEqual(sum(allocation.values()), total)
 

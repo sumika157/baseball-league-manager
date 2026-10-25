@@ -78,7 +78,7 @@ from ..domain.repositories import (
     TeamRepository,
     WorldRepository,
 )
-from ..domain.value_objects import ContractStatus, DepartureRoute, ForeignPlayerRules, JerseyNumber, RosterLimits
+from ..domain.value_objects import DepartureRoute, ForeignPlayerRules, JerseyNumber, RosterLimits
 from .dto import ReleasePlanView, ReleasePlayerRow, SeasonClosed, SeasonCloseOption, SimulationTeam
 from .foreign_quota import ForeignQuotaExemptions
 from .league_view import LeagueViewService
@@ -529,7 +529,10 @@ class PennantOffseasonService:
             released_count=len(plan.released),
             draftee_count=len(plan.draftees),
             foreign_draftee_count=sum(1 for draftee in plan.draftees if draftee.is_foreign),
-            first_round_lottery_count=sum(1 for lottery in plan.lotteries if lottery.round_number == 1),
+            development_draftee_count=sum(1 for draftee in plan.draftees if draftee.is_development),
+            first_round_lottery_count=sum(
+                1 for lottery in plan.lotteries if lottery.round_number == 1 and not lottery.is_development
+            ),
             without_ratings_count=len(plan.without_ratings),
             reverted_sections=reverted,
             reverted_club_count=reverted_clubs,
@@ -559,8 +562,11 @@ class PennantOffseasonService:
             added: list[Player] = []
             team_limits = _limits_of(team, limits)
             for draftee in draftees:
-                # 新人は支配下で入り、入団の経路（ドラフト / 新外国人）を記録する。支配下の上限は集約が検査する
-                # （人数は domain の `draftee_count` が上限を超えないように決めるので、ここでは失敗しない）。
+                # 新人は契約区分（本指名・外国人は支配下、育成ドラフトは育成。`Draftee.contract`）と入団の経路
+                # （ドラフト / 育成ドラフト / 新外国人）を記録する。区分と背番号・経路の食い違いと支配下の上限は
+                # 集約が検査する
+                # （人数は domain の `draftee_count` が上限を超えないように決めるので、ここでは失敗しない。
+                # 育成は上限に数えない）。
                 # 外国人の保有の人数は縛らない（協約第82条の2。外国人枠は1軍の登録にかかる）。
                 # 加入年は、ドラフトの指名があれば「入団はドラフトの翌年」の出典（`DraftPick.entry_year`）から
                 pick = draftee.profile.draft
@@ -569,7 +575,7 @@ class PennantOffseasonService:
                     JerseyNumber(draftee.number),
                     draftee.position,
                     from_year=next_year if pick is None else pick.entry_year,
-                    contract=ContractStatus.REGISTERED,
+                    contract=draftee.contract,
                     acquired_via=draftee.acquisition_route,
                     limits=team_limits,
                 )

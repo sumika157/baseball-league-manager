@@ -1,4 +1,4 @@
-"""ドラフト会議（本指名）。**純粋な関数と値**で、DB にも Django にも触れない。
+"""ドラフト会議（本指名と育成の巡）。**純粋な関数と値**で、DB にも Django にも触れない。
 
 会議は世界で1回、全リーグの球団が同じ会議で、その年の候補（`ProspectPool`）を取り合う。指名の順番は世界の規則の
 戦略（`draft_order.py`）が決め、ここは規則を知らない。
@@ -13,6 +13,12 @@
 - AI の指名（`ai_action`）は、自分のスカウトの推定の**将来値**（`future_value`）に、位置の残りの重みを足した評価が
   最大の候補。位置は、その球団の新人の位置の計画（`draft.plan_team_draft`。今までの自動ドラフトと同じ）の中から選ぶ
 - 位置の候補が尽きたら、その場で1人足す（`ProspectPool.with_extra`。締める処理を失敗させない）
+- **育成の巡**（#198 D2）: 本指名が全球団で終わった時点で、本指名の合計が「球団数 × `MAX_DRAFTEES`」（NPB の120名の
+  一般化）に達しておらず、育成の枠（`DraftSlot.development_max`）のある球団がいれば続けて開く。巡は1から数え、
+  順番は**本指名の最後の巡の続き**（戦略に `本指名の最後の巡 + 育成の巡` を渡す。全巡入札なら育成の巡も入札と抽選で、
+  乱数の用途は `draft-lottery-development-<巡>-<回>-<候補>`）。候補は本指名の残り（同じ `ProspectPool`。候補の人数と
+  合わせ込みは本指名の計画だけから決まるので、育成の巡を足しても本指名の分布は変わらない）。選択終了はいつでもでき、
+  位置の最低人数（支配下の話）は見ない。区分（本指名 / 育成）も行動の並びから導く（`DraftAction` は区分を持たない）
 
 GM の指名（D3。#198）は同じ `DraftState.apply` を通る。会議を始めなかった年は、締める処理が `auto_complete` で
 全球団を AI として最後まで進める。外国人は会議の外（`draft.club_draftees`）。
@@ -40,6 +46,7 @@ from ..virtual_players import generator
 from ..virtual_players.generator import AmateurPath
 from .aging import BATTER_CURVES, PITCHER_CURVES, expected_change
 from .draft import (
+    MAX_DEVELOPMENT_PICKS,
     MAX_DRAFTEES,
     MIN_BY_POSITION,
     Draftee,
@@ -317,6 +324,10 @@ class DraftSlot:
     - `minimum`・`maximum`: 指名する日本人の人数の幅。AI は最多まで指名する。最少に届けば自分の番で選択終了できる
     - `planned`: AI が埋める位置（`draft.plan_team_draft` の日本人の位置）
     - `base_counts`: 会議の前の支配下の位置ごとの人数に、外国人の新人の位置を足したもの（位置の最低人数の検査に使う）
+    - `development_planned`: 育成の巡で AI が埋める位置（`draft.plan_team_draft` の育成の位置）
+    - `development_max`: 育成の巡で指名できる最多（AI は計画の人数。D3 で GM の球団は
+      `MAX_DEVELOPMENT_PICKS` を写す）。
+      最少は無い（育成の巡はいつでも選択終了できる）
     """
 
     team_id: int
@@ -324,10 +335,14 @@ class DraftSlot:
     maximum: int
     planned: tuple[Position, ...]
     base_counts: Mapping[Position, int]
+    development_planned: tuple[Position, ...] = ()
+    development_max: int = 0
 
     def __post_init__(self) -> None:
         if not 0 <= self.minimum <= self.maximum <= MAX_DRAFTEES:
             raise ValueError("指名の人数の幅が正しくありません。")
+        if not 0 <= self.development_max <= MAX_DEVELOPMENT_PICKS:
+            raise ValueError("育成の指名の人数が正しくありません。")
 
     @classmethod
     def of(cls, team: DraftTeam, plan: TeamDraftPlan) -> DraftSlot:
@@ -339,6 +354,8 @@ class DraftSlot:
             maximum=plan.japanese_count,
             planned=plan.japanese_positions,
             base_counts=dict(base),
+            development_planned=plan.development_positions,
+            development_max=len(plan.development_positions),
         )
 
 
@@ -352,32 +369,36 @@ class DraftContext:
 
 @dataclass(frozen=True)
 class DraftTurn:
-    """次に動く球団。`is_bid` は入札の巡か、`attempt` は入札の回（1から。指名の巡は1）。"""
+    """次に動く球団。`is_bid` は入札の巡か、`attempt` は入札の回（1から。指名の巡は1）。
+    `round_number` は区分の中の巡（本指名・育成それぞれ1から）、`is_development` は育成の巡か。"""
 
     team_id: int
     round_number: int
     is_bid: bool
     attempt: int
+    is_development: bool = False
 
 
 @dataclass(frozen=True)
 class Lottery:
-    """入札の重複と抽選の結果。`bidders` は入札した球団（id の順）。"""
+    """入札の重複と抽選の結果。`bidders` は入札した球団（id の順）。`round_number` は区分の中の巡。"""
 
     round_number: int
     attempt: int
     prospect_key: int
     bidders: tuple[int, ...]
     winner: int
+    is_development: bool = False
 
 
 @dataclass(frozen=True)
 class DraftSelection:
-    """指名の結果ひとつ（巡は本指名の巡。1から）。"""
+    """指名の結果ひとつ（巡は区分の中の巡。本指名・育成それぞれ1から）。"""
 
     team_id: int
     prospect_key: int
     round_number: int
+    is_development: bool = False
 
 
 @dataclass
@@ -394,14 +415,23 @@ class DraftState:
     actions: list[DraftAction] = field(default_factory=list)
     selections: list[DraftSelection] = field(default_factory=list)
     lotteries: list[Lottery] = field(default_factory=list)
+    # 区分の中の巡（本指名・育成それぞれ1から）と、育成の巡に入ったか（どちらも行動の並びから導いた値）
     round_number: int = 1
     attempt: int = 1
+    is_development: bool = False
     _bids: dict[int, int] = field(default_factory=dict)
     _settled: set[int] = field(default_factory=set)
-    _passed: set[int] = field(default_factory=set)
     _taken: set[int] = field(default_factory=set)
+    # 本指名の選択終了・指名の数・指名した位置
+    _passed: set[int] = field(default_factory=set)
     _picked: Counter[int] = field(default_factory=Counter)
     _positions: dict[int, Counter[Position]] = field(default_factory=dict)
+    # 育成の巡の選択終了・指名の数・指名した位置
+    _development_passed: set[int] = field(default_factory=set)
+    _development_picked: Counter[int] = field(default_factory=Counter)
+    _development_positions: dict[int, Counter[Position]] = field(default_factory=dict)
+    # 本指名で行動のあった最後の巡（育成の巡の順番の起点）
+    _main_last_round: int = 0
     # 球団 × 位置ごとの、候補の将来値の高い順（AI が使う。候補を足したら差し込む）
     _rankings: dict[tuple[int, Position], list[tuple[float, int]]] = field(default_factory=dict)
 
@@ -431,42 +461,73 @@ class DraftState:
 
     def _active(self, team_id: int) -> bool:
         slot = self.slots[team_id]
+        if self.is_development:
+            return team_id not in self._development_passed and self._development_picked[team_id] < slot.development_max
         return team_id not in self._passed and self._picked[team_id] < slot.maximum
+
+    def _strategy_round(self) -> int:
+        """戦略に渡す巡。育成の巡は本指名の最後の巡の続き（本指名が1巡も無ければ1巡目の続きとみなし、育成の1巡目は2巡目。
+        NPB 方式で育成の1巡目が入札にならないように）。"""
+        if not self.is_development:
+            return self.round_number
+        return max(1, self._main_last_round) + self.round_number
+
+    def _bidding(self) -> bool:
+        return self.strategy.is_bidding(self._strategy_round())
 
     def _participants(self) -> list[int]:
         return [
             team_id
-            for team_id in self.strategy.order(self.round_number)
+            for team_id in self.strategy.order(self._strategy_round())
             if team_id in self.slots and self._active(team_id) and team_id not in self._settled
         ]
 
+    def _phase_over(self) -> bool:
+        """いまの区分（本指名 / 育成）が終わったか。"""
+        limit = MAX_DEVELOPMENT_PICKS if self.is_development else MAX_DRAFTEES
+        return self.round_number > limit or not any(self._active(team_id) for team_id in self.slots)
+
+    def _holds_development(self) -> bool:
+        """本指名の後に育成の巡を開くか。本指名の合計が「球団数 × `MAX_DRAFTEES`」（NPB の120名）に届いておらず、
+        育成の枠のある球団がいるとき。"""
+        return len(self.selections) < len(self.slots) * MAX_DRAFTEES and any(
+            slot.development_max > 0 for slot in self.slots.values()
+        )
+
     @property
     def is_complete(self) -> bool:
-        return self.round_number > MAX_DRAFTEES or not any(self._active(team_id) for team_id in self.slots)
+        return self._phase_over() and (self.is_development or not self._holds_development())
 
     def next_turn(self) -> DraftTurn | None:
         """次に動く球団。会議が終わっていれば None。"""
         if self.is_complete:
             return None
-        bidding = self.strategy.is_bidding(self.round_number)
+        bidding = self._bidding()
         waiting = [team_id for team_id in self._participants() if not (bidding and team_id in self._bids)]
         if not waiting:  # `_normalize` が巡を進めるので来ない
             return None
         return DraftTurn(
-            team_id=waiting[0], round_number=self.round_number, is_bid=bidding, attempt=self.attempt if bidding else 1
+            team_id=waiting[0],
+            round_number=self.round_number,
+            is_bid=bidding,
+            attempt=self.attempt if bidding else 1,
+            is_development=self.is_development,
         )
 
     def picked_positions(self, team_id: int) -> Counter[Position]:
         return Counter(self._positions.get(team_id, Counter()))
 
     def drafted(self) -> dict[int, list[tuple[Rookie, DraftPick]]]:
-        """球団ごとの指名（巡の順）。指名は締める年のドラフトの本指名で、順位は巡。"""
+        """球団ごとの指名（本指名の巡の順、続けて育成の巡の順）。指名は締める年のドラフトで、順位は区分の中の巡。"""
         result: dict[int, list[tuple[Rookie, DraftPick]]] = {team_id: [] for team_id in self.slots}
-        for selection in sorted(self.selections, key=lambda item: (item.team_id, item.round_number)):
+        for selection in sorted(
+            self.selections, key=lambda item: (item.team_id, item.is_development, item.round_number)
+        ):
             prospect = self.pool.get(selection.prospect_key)
-            result[selection.team_id].append(
-                (prospect.rookie, DraftPick(year=self.pool.year, round=selection.round_number))
+            pick = DraftPick(
+                year=self.pool.year, round=selection.round_number, is_development=selection.is_development
             )
+            result[selection.team_id].append((prospect.rookie, pick))
         return result
 
     def shortfall_after(self, team_id: int, position: Position | None) -> int:
@@ -479,7 +540,10 @@ class DraftState:
 
     def position_allowed(self, team_id: int, position: Position) -> bool:
         """位置の最低人数の硬い制約（AI も GM も）。足りない位置はいつでも選べ、ほかの位置は、残りの指名で
-        最低人数に届く間だけ選べる（今までの自動ドラフト `choose_positions` が守っていた保証）。"""
+        最低人数に届く間だけ選べる（今までの自動ドラフト `choose_positions` が守っていた保証）。
+        育成の巡はどの位置も選べる（位置の最低人数は支配下の話）。"""
+        if self.is_development:
+            return True
         before = self.shortfall_after(team_id, None)
         after = self.shortfall_after(team_id, position)
         remaining = self.slots[team_id].maximum - self._picked[team_id] - 1
@@ -496,12 +560,14 @@ class DraftState:
             raise InvalidDraftAction("この球団の番ではありません。")
         slot = self.slots[action.team_id]
         if action.kind is DraftActionKind.PASS:
-            if self._picked[action.team_id] < slot.minimum:
-                raise InvalidDraftAction(f"少なくとも{slot.minimum}人を指名するまで、選択を終えられません。")
-            if self.shortfall_after(action.team_id, None) > 0:
-                raise InvalidDraftAction("位置の最低人数に届くまで、選択を終えられません。")
-            self.actions.append(action)
-            self._passed.add(action.team_id)
+            # 育成の巡はいつでも選択を終えられる（最少は無く、位置の最低人数は支配下の話）
+            if not self.is_development:
+                if self._picked[action.team_id] < slot.minimum:
+                    raise InvalidDraftAction(f"少なくとも{slot.minimum}人を指名するまで、選択を終えられません。")
+                if self.shortfall_after(action.team_id, None) > 0:
+                    raise InvalidDraftAction("位置の最低人数に届くまで、選択を終えられません。")
+            self._record(action)
+            (self._development_passed if self.is_development else self._passed).add(action.team_id)
             # 入札の巡で最後に残った球団が選択を終えたら、そろった入札をここで解く
             self._resolve_if_ready()
             self._normalize()
@@ -519,7 +585,7 @@ class DraftState:
         if pool is not self.pool:
             self._add_to_rankings(prospect)
         self.pool = pool
-        self.actions.append(action)
+        self._record(action)
         if action.kind is DraftActionKind.PICK:
             self._select(action.team_id, prospect)
         else:
@@ -527,9 +593,15 @@ class DraftState:
             self._resolve_if_ready()
         self._normalize()
 
+    def _record(self, action: DraftAction) -> None:
+        """当てた行動を覚える（本指名なら、行動のあった最後の巡も。育成の巡の順番の起点）。"""
+        self.actions.append(action)
+        if not self.is_development:
+            self._main_last_round = self.round_number
+
     def _resolve_if_ready(self) -> None:
         """入札の巡で、まだ決まっていない全球団の入札がそろっていれば解く。"""
-        if not self.strategy.is_bidding(self.round_number) or not self._bids:
+        if not self._bidding() or not self._bids:
             return
         if all(team_id in self._bids for team_id in self._participants()):
             self._resolve_bids()
@@ -542,10 +614,14 @@ class DraftState:
         return self.pool.with_extra(action.extra_position)
 
     def _select(self, team_id: int, prospect: Prospect) -> None:
-        self.selections.append(DraftSelection(team_id, prospect.key, self.round_number))
+        development = self.is_development
+        self.selections.append(DraftSelection(team_id, prospect.key, self.round_number, is_development=development))
         self._taken.add(prospect.key)
-        self._picked[team_id] += 1
-        self._positions.setdefault(team_id, Counter())[prospect.position] += 1
+        picked, positions = (
+            (self._development_picked, self._development_positions) if development else (self._picked, self._positions)
+        )
+        picked[team_id] += 1
+        positions.setdefault(team_id, Counter())[prospect.position] += 1
         self._settled.add(team_id)
 
     def _resolve_bids(self) -> None:
@@ -558,22 +634,32 @@ class DraftState:
             if len(bidders) == 1:
                 winner = bidders[0]
             else:
+                section = "development" if self.is_development else "main"
                 rng = make_random(
                     game_seed(
                         self.pool.world_seed,
                         self.pool.year,
-                        f"draft-lottery-main-{self.round_number}-{self.attempt}-{key}",
+                        f"draft-lottery-{section}-{self.round_number}-{self.attempt}-{key}",
                     )
                 )
                 winner = bidders[min(len(bidders) - 1, int(rng.random() * len(bidders)))]
-                self.lotteries.append(Lottery(self.round_number, self.attempt, key, bidders, winner))
+                self.lotteries.append(
+                    Lottery(self.round_number, self.attempt, key, bidders, winner, is_development=self.is_development)
+                )
             self._select(winner, self.pool.get(key))
         self._bids = {}
         self.attempt += 1
 
     def _normalize(self) -> None:
-        """動ける球団が残っていない巡を進める。"""
-        while not self.is_complete and not self._participants():
+        """動ける球団が残っていない巡を進める。本指名が終わったら、育成の巡を開くなら育成の1巡目へ移る。"""
+        while True:
+            if self._phase_over():
+                if self.is_development or not self._holds_development():
+                    return
+                self.is_development = True
+                self.round_number = 0  # 下で1巡目にする
+            elif self._participants():
+                return
             self.round_number += 1
             self.attempt = 1
             self._bids = {}
@@ -613,6 +699,7 @@ class DraftState:
 
         評価は `将来値 + NEED_WEIGHT × 位置の残り`。計画した位置を指名し尽くしていれば（GM が別の位置を選んだ後の
         お任せ）、位置の最低人数を割らない候補から将来値で選ぶ。その位置の候補が尽きていれば、その場で1人足す。
+        育成の巡は育成の位置の計画（`DraftSlot.development_planned`）で同じように選ぶ。
         """
         turn = self.next_turn()
         if turn is None:
@@ -620,8 +707,12 @@ class DraftState:
         team_id = turn.team_id
         kind = DraftActionKind.BID if turn.is_bid else DraftActionKind.PICK
         slot = self.slots[team_id]
-        needed = Counter(slot.planned)
-        needed.subtract(self._positions.get(team_id, Counter()))
+        if turn.is_development:
+            needed = Counter(slot.development_planned)
+            needed.subtract(self._development_positions.get(team_id, Counter()))
+        else:
+            needed = Counter(slot.planned)
+            needed.subtract(self._positions.get(team_id, Counter()))
         order = list(generator.POSITION_RATIOS)
         any_needed = any(count > 0 for count in needed.values())
         allowed = [

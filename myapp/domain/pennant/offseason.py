@@ -1,8 +1,9 @@
 """シーズンを締めるときの計算。**純粋な関数**で、DB にも Django にも触れない。
 
     引退を決める → 球団ごとに戦力外（`release.py`。ここまでが `plan_departures`）→ 球団ごとの新人の人数と位置・
-    外国人（`draft.py`）→ ドラフト会議（`draft_meeting.py`。全球団の日本人の新人）→ 残る選手の能力を1年ぶん進める
-    → 残る選手と新人をまとめて、項目ごとに水準の錨をかける
+    外国人（`draft.py`）→ ドラフト会議（`draft_meeting.py`。全球団の日本人の新人。本指名の後に育成の巡）→
+    残る選手の能力を1年ぶん進める → 残る選手と新人をまとめて、項目ごとに水準の錨をかける（写像は支配下で決め、
+    育成にも同じ写像を当てる）
 
 結果は `OffseasonPlan`（何を書くかの計画）。書くのは呼び出し側（application）で、ここは読み取った
 材料（`OffseasonClub`）だけを見る。乱数の種は `game_seed(世界のシード, 年, 用途-選手 / 球団の id)` で、
@@ -23,7 +24,7 @@ from ..simulation.randomness import game_seed, game_uniform, make_random
 from ..simulation.ratings import BatterRatings, PitcherRatings
 from ..simulation.spread import MIN_POPULATION, rescale, spread_ratings, target_mean, target_sd
 from .aging import age_ratings
-from .draft import Draftee, DraftTeam
+from .draft import Draftee, DraftTeam, development_target
 from .draft_meeting import DraftAction, DraftContext, Lottery, run_draft
 from .offseason_player import (
     OffseasonClub,
@@ -109,8 +110,9 @@ def decide_retirements(
     return tuple(retired)
 
 
-def _draft_team(club: OffseasonClub, remaining: Sequence[OffseasonPlayer]) -> DraftTeam:
+def _draft_team(club: OffseasonClub, remaining: Sequence[OffseasonPlayer], *, world_seed: int) -> DraftTeam:
     """引退・戦力外の後の球団。人数と位置は支配下だけで数える（育成の捕手がいても、支配下の捕手が足りなければ補う）。
+    育成ドラフトの人数と位置は、別に育成だけで数える（目標は `draft.development_target`）。
 
     外国人の人数・背番号・苗字は育成も含める（外国人の目標人数・背番号の重複・背ネームは区分によらない）。
     """
@@ -123,36 +125,44 @@ def _draft_team(club: OffseasonClub, remaining: Sequence[OffseasonPlayer]) -> Dr
         used_numbers=frozenset(player.number for player in remaining),
         surname_counts=dict(surnames),
         registered_limit=club.registered_player_limit,
+        development_counts=dict(Counter(player.position for player in remaining if player.is_development)),
+        development_target=development_target(club.team_id, world_seed=world_seed),
     )
 
 
 def _stamina_target(clubs: Sequence[OffseasonClub]) -> tuple[float, float] | None:
-    """スタミナを保つ目標（締める年の投手全員の平均と標準偏差）。人数が足りなければ None（かけない）。"""
+    """スタミナを保つ目標（締める年の支配下の投手全員の平均と標準偏差）。人数が足りなければ None（かけない）。"""
     values = [
         player.ratings.ratings.stamina
         for club in clubs
         for player in club.players
-        if player.ratings is not None and isinstance(player.ratings.ratings, PitcherRatings)
+        if player.ratings is not None
+        and isinstance(player.ratings.ratings, PitcherRatings)
+        and not player.is_development
     ]
     return _mean_sd(values) if len(values) >= MIN_POPULATION else None
 
 
-def anchor_stamina(ratings: Sequence[Ratings], goal: tuple[float, float] | None) -> list[Ratings]:
+def anchor_stamina(
+    ratings: Sequence[Ratings], goal: tuple[float, float] | None, *, population: Sequence[bool] | None = None
+) -> list[Ratings]:
     """投手のスタミナの平均と標準偏差を、締める年の値に保つ。
 
     スタミナは先発型と救援型の二つの山で、`spread_ratings` の目標（`samples.py`）の対象外。錨が無いと毎年のぶれで
     標準偏差が広がり続ける（合成の10年で 9.9 → 13.4）。一次式で写すので、順位も二つの山の形も保たれる。
     目標は初期の分布そのもの（実データから分岐した世界は、分岐時のスタミナの分布を保つ）。
     整数への丸めで標準偏差がわずかに広がる（10年で約 0.1。1世界は10シーズンまでなので許容）。
+    `population` は `spread_ratings` と同じ印（写像は支配下で決め、育成にも同じ写像を当てる。省くと全員）。
     """
     result = list(ratings)
     if goal is None:
         return result
     places = [i for i, item in enumerate(result) if isinstance(item, PitcherRatings)]
-    if len(places) < MIN_POPULATION:
+    inside = None if population is None else [population[i] for i in places]
+    if (len(places) if inside is None else sum(inside)) < MIN_POPULATION:
         return result
     pitchers = [item for item in result if isinstance(item, PitcherRatings)]
-    moved = rescale([item.stamina for item in pitchers], goal[0], goal[1])
+    moved = rescale([item.stamina for item in pitchers], goal[0], goal[1], population=inside)
     for place, item, stamina in zip(places, pitchers, moved, strict=True):
         result[place] = replace(item, stamina=stamina)
     return result
@@ -232,7 +242,7 @@ def plan_departures(
         released.extend(sorted(leaving))
         remaining = [player for player in remaining if player.player_id not in leaving]
         survivors.extend(remaining)
-        teams.append(_draft_team(club, remaining))
+        teams.append(_draft_team(club, remaining, world_seed=world_seed))
     return Departures(
         retired=frozenset(retired), released=tuple(released), survivors=tuple(survivors), draft_teams=tuple(teams)
     )
@@ -274,6 +284,8 @@ def plan_offseason(
     ordered = sorted(clubs, key=lambda club: club.team_id)
 
     aged: list[tuple[int, PlayerRatings, Ratings]] = []
+    # 錨の写像を決める母集団に入れるか（支配下。`aged` と同じ並び）
+    aged_inside: list[bool] = []
     without_ratings: list[int] = []
     for player in survivors:
         if player.ratings is None:
@@ -282,10 +294,16 @@ def plan_offseason(
         rng = make_random(game_seed(world_seed, year + 1, f"aging-{player.player_id}"))
         age = player_age(player.profile, year, start_year=start_year)
         aged.append((player.player_id, player.ratings, age_ratings(player.ratings.ratings, age=age, rng=rng)))
+        aged_inside.append(not player.is_development)
 
-    # 残る選手と新人をまとめて、項目ごとに水準の錨をかける（スタミナは別に、締める年の分布を保つ）
+    # 残る選手と新人をまとめて、項目ごとに水準の錨をかける（スタミナは別に、締める年の分布を保つ）。
+    # 写像は**支配下**（残る支配下と、本指名・外国人の新人）で決め、育成（残る育成と育成の新人）にも同じ写像を当てる
+    # （毎年の育成の流入で1軍の水準が動かないように。2026-10-12 ユーザー決定。#198 D2）
     population: list[Ratings] = [ratings for _, _, ratings in aged] + [draftee.ratings for draftee in drafted]
-    anchored = anchor_stamina(spread_ratings(population), _stamina_target(ordered))
+    inside = aged_inside + [not draftee.is_development for draftee in drafted]
+    anchored = anchor_stamina(
+        spread_ratings(population, population=inside), _stamina_target(ordered), population=inside
+    )
     kept = anchored[: len(aged)]
     retained = tuple(
         RatingChange(
@@ -306,5 +324,5 @@ def plan_offseason(
         draftees=draftees,
         lotteries=result.lotteries,
         without_ratings=tuple(without_ratings),
-        anchor=anchor_correction(population),
+        anchor=anchor_correction([ratings for ratings, counted in zip(population, inside, strict=True) if counted]),
     )

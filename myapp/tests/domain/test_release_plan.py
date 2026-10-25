@@ -142,7 +142,10 @@ class ManualReleasesInThePlanTest(unittest.TestCase):
         result = self.plan(roster(72), {1: frozenset()})
         self.assertEqual(result.released, ())
         remaining = 72 - len(result.retired)
-        self.assertEqual(len(result.draftees), draft.draftee_count(remaining, registered_limit=70))
+        self.assertEqual(
+            len([d for d in result.draftees if not d.is_development]),
+            draft.draftee_count(remaining, registered_limit=70),
+        )
 
     def test_a_chosen_player_who_retires_is_recorded_as_retired(self) -> None:
         # 39歳は引退の確率が高い（9割）ので、このシードでも誰かが引退する

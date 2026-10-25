@@ -126,6 +126,11 @@ class OffseasonPlayer:
         return self.contract is ContractStatus.REGISTERED
 
     @property
+    def is_development(self) -> bool:
+        """今の区分が育成か（在籍の無い選手はどちらでもない）。錨の母集団から外し、育成ドラフトの人数に数える。"""
+        return self.contract is ContractStatus.DEVELOPMENTAL
+
+    @property
     def entered_year(self) -> int:
         """プロ入りの年。ドラフトがあればその翌年（`DraftPick.entry_year`）、無ければ現在の在籍の開始年。
 
