@@ -21,6 +21,7 @@ from django.urls import reverse
 
 from myapp.domain.exceptions import GameNotFound, LeagueNotFound, TeamNotFound
 from myapp.domain.pennant.club_plan import ClubPlan, LineupChoice
+from myapp.domain.workspace import WorkspaceRole
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import (
     DjangoGameListQuery,
@@ -30,7 +31,6 @@ from myapp.infrastructure.queries import (
     DjangoServiceHistoryQuery,
     DjangoTeamAnalysisQuery,
     DjangoTeamListQuery,
-    DjangoTeamPermissionQuery,
 )
 from myapp.infrastructure.repositories import (
     DjangoClubPlanRepository,
@@ -42,13 +42,13 @@ from myapp.management.commands.measure_pages import Command as MeasurePages
 from myapp.presentation.views import (
     build_club_service,
     build_pennant_world_service,
-    build_permission_query,
     build_player_search_query,
 )
 
 from ..helpers import (
     DEFAULT_WORKSPACE_KEY,
     header_pages,
+    make_editor,
     post_game_scorebook_day_unrecorded,
     real_scope,
     world_scope,
@@ -162,9 +162,9 @@ class PennantIdsAreNotFoundFromRealUrlsTest(WorldCase):
 
     def setUp(self):
         super().setUp()
-        # 管理ユーザーなら「権限が無い」ではなく「見つからない」まで進める
-        self.admin = User.objects.create_superuser("root", password="x")
-        self.client.force_login(self.admin)
+        # ワークスペースの編集者なら「権限が無い」ではなく「見つからない」まで進める
+        # （管理ユーザーはサイトでは何の権限も持たない。W2 T5）
+        self.client.force_login(make_editor(User.objects.create_user("editor", password="x")))
         self.pennant_player = self.pennant_players(self.pennant_team)[0]
 
     def test_pages_by_pennant_ids_are_404(self):
@@ -374,32 +374,35 @@ class PennantIdsAreNotFoundFromRealUrlsTest(WorldCase):
 
 
 class PermissionTest(WorldCase):
-    def test_a_staff_user_cannot_edit_a_pennant_team_from_the_real_side(self):
-        staff = User.objects.create_user("staff", password="x", is_staff=True)
+    """実データの画面から、ペナントの球団は書けない（W2 T5 で判定を `WorkspaceAccess` に替えた後も）。
 
-        self.assertFalse(build_permission_query(real_scope()).can_manage(staff, self.pennant_team.id))
-        self.assertFalse(
-            build_permission_query(real_scope()).can_manage_any(staff, [self.pennant_team.id, self.pennant_rival.id])
-        )
+    チームの書き込みの判定（`WorkspaceAccess.can_edit_teams`）は、渡したチームが範囲にあるかを見ない（持ち主・編集者は
+    どのチームの id でも可）。ペナントの球団の id を実データの画面に渡す経路は、実データの範囲で絞ったサービスが
+    見つからない（404）として止める。ペナントの球団の行の担当者は、実データの担当にならない（`DjangoWorkspaceAccessQuery`
+    は実データのチームだけから担当を読む）。
+    """
 
-    def test_a_staff_user_can_still_edit_a_real_team(self):
-        staff = User.objects.create_user("staff", password="x", is_staff=True)
+    def _register(self, team_id: int):
+        return self.client.post(ws_url("player_list", team_id), {"name": "侵入", "number": "99", "position": "内野手"})
 
-        self.assertTrue(build_permission_query(real_scope()).can_manage(staff, self.team.id))
+    def test_an_editor_cannot_register_a_player_to_a_pennant_team_from_the_real_side(self):
+        self.client.force_login(make_editor(User.objects.create_user("editor", password="x")))
+        before = orm_models.PlayerStint.objects.count()
+
+        self.assertEqual(self._register(self.pennant_team.id).status_code, 404)
+        self.assertEqual(orm_models.PlayerStint.objects.count(), before)
 
     def test_a_manager_of_a_pennant_team_row_cannot_edit_it_from_the_real_side(self):
         manager = User.objects.create_user("gm", password="x")
         self.pennant_team.managers.add(manager)
+        self.client.force_login(manager)
+        before = orm_models.PlayerStint.objects.count()
 
-        self.assertFalse(build_permission_query(real_scope()).can_manage(manager, self.pennant_team.id))
-
-    def test_the_pennant_scope_never_allows_editing(self):
-        """ペナントの書き込みはオーナーで判定する（その判定を足すまで、常に False）。"""
-        superuser = User.objects.create_superuser("root", password="x")
-        query = DjangoTeamPermissionQuery(self.scope)
-
-        self.assertFalse(query.can_manage(superuser, self.pennant_team.id))
-        self.assertFalse(query.can_manage(superuser, self.team.id))
+        response = self.client.get(ws_url("player_list", self.team.id))
+        self.assertEqual(response.wsgi_request.workspace.access.role, WorkspaceRole.VIEWER, "担当にならない")
+        self.assertEqual(self._register(self.pennant_team.id).status_code, 404)
+        self.assertEqual(self._register(self.team.id).status_code, 403)
+        self.assertEqual(orm_models.PlayerStint.objects.count(), before)
 
 
 class AdminDoesNotShowThePennantWorldTest(WorldCase):

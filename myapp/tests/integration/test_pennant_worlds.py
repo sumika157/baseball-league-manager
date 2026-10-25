@@ -237,8 +237,9 @@ class DeleteWorldTest(HomeCase):
                 self.assertEqual(method(self.delete_url()).status_code, 403)
         self.assertTrue(orm_models.PennantWorld.objects.filter(id=self.world_a).exists())
 
-    def test_a_superuser_who_is_not_the_owner_gets_403(self):
-        self.client.force_login(User.objects.create_superuser("root", password="x"))
+    def test_an_editor_who_is_not_the_owner_gets_403(self):
+        """ワークスペースの編集者でも、世界の作成者でなければ消せない（持ち主による削除は W6）。"""
+        self.client.force_login(make_editor(User.objects.create_user("editor", password="x")))
 
         self.assertEqual(self.client.post(self.delete_url()).status_code, 403)
         self.assertTrue(orm_models.PennantWorld.objects.filter(id=self.world_a).exists())

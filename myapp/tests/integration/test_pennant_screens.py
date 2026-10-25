@@ -70,14 +70,14 @@ class WorldScreensAreReadOnlyTest(WorldCase):
     def test_no_edit_link_for_anonymous(self):
         self._assert_no_edit_link()
 
-    def test_no_edit_link_even_for_a_staff_user(self):
-        """実データなら編集できる管理ユーザーにも、世界の画面では出さない。"""
-        self.client.force_login(User.objects.create_superuser("root", password="x"))
+    def test_no_edit_link_even_for_an_editor(self):
+        """実データならどのチームも編集できるワークスペースの編集者にも、世界の画面では出さない。"""
+        self.client.force_login(make_editor(User.objects.create_user("editor", password="x")))
 
         self._assert_no_edit_link()
 
     def test_a_post_to_a_pennant_team_is_not_allowed(self):
-        self.client.force_login(User.objects.create_superuser("root", password="x"))
+        self.client.force_login(make_editor(User.objects.create_user("editor", password="x")))
         url = ws_url("pennant_player_list", self.world_id, self.pennant_team.id)
         before = orm_models.PlayerStint.objects.filter(team=self.pennant_team).count()
 

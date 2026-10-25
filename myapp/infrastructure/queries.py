@@ -14,7 +14,6 @@ from itertools import groupby
 from operator import itemgetter
 from typing import Any
 
-from django.contrib.auth.models import AnonymousUser, User
 from django.db.models import BooleanField, Case, Count, Exists, Max, Min, OuterRef, Q, QuerySet, Sum, Value, When
 
 from ..application.dto import (
@@ -533,42 +532,6 @@ class DjangoPlayerSearchQuery:
                 )
             )
         return results
-
-
-class DjangoTeamPermissionQuery:
-    """チーム担当者の権限判定。
-
-    ログインすれば誰でも全チームを編集できた状態をやめ、管理ユーザー
-    （is_staff）以外は自分が担当するチームが関わる範囲だけ編集できるようにする。
-    「担当者かどうか」は Team.managers という事実だけを見て決まるので、
-    ドメインの業務ルールではなく、この参照専用クエリに置く。
-
-    **範囲（`WorldScope`）の外のチームは、管理ユーザーでも編集できない。** ペナントの球団は
-    実データの側から書けず、ペナントの書き込みは世界のオーナーで判定する（その判定は
-    ペナントの画面を作る段階で足す。それまでペナントの範囲は常に False）。
-    """
-
-    def __init__(self, scope: WorldScope) -> None:
-        self._scope = scope
-
-    def can_manage(self, user: User | AnonymousUser, team_id: int) -> bool:
-        """指定チームを編集できるか。"""
-        return self.can_manage_any(user, (team_id,))
-
-    def can_manage_any(self, user: User | AnonymousUser, team_ids: Iterable[int]) -> bool:
-        """渡したチームのうち、少なくとも1つを編集できるか。
-
-        試合は2チームにまたがるため、どちらか一方の担当者であれば編集できる。
-        """
-        if not user.is_authenticated:
-            return False
-        if self._scope.is_pennant:
-            return False
-
-        in_scope = teams_in(self._scope).filter(id__in=list(team_ids))
-        if user.is_staff or user.is_superuser:
-            return in_scope.exists()
-        return in_scope.filter(managers=user).exists()
 
 
 class DjangoWorkspaceAccessQuery:

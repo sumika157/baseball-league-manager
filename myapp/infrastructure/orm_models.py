@@ -345,7 +345,10 @@ class Team(models.Model):
     display_order = models.PositiveIntegerField(default=0, verbose_name="表示順")
     # チーム担当者。ログインすれば誰でも全チームを編集できた状態をやめ、
     # 担当者はこのチームが関わる範囲（ロスター・このチームが絡む試合）だけ
-    # 編集できるようにする。管理ユーザー（is_staff）は担当者に関わらず全権を持つ
+    # 編集できるようにする。ワークスペースの持ち主・編集者は担当者に関わらず全体を編集できる
+    # （判定は domain の WorkspaceAccess。管理ユーザー（is_staff）はサイトでは何の権限も持たない。W2 T5）。
+    # help_text の「管理ユーザーは常に編集できます」は古い
+    # （変えるとマイグレーションが要るので、W2 T5 では直さない。T6 に回した）
     managers = models.ManyToManyField(
         settings.AUTH_USER_MODEL,
         blank=True,

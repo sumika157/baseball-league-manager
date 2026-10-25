@@ -22,7 +22,7 @@ from myapp.domain.pennant.season import SCREEN_ADVANCE_TARGETS, SeasonPhase, sum
 from myapp.infrastructure import orm_models
 from myapp.presentation.views import build_league_view_service, build_pennant_season_service
 
-from ..helpers import real_scope, world_scope, ws_url
+from ..helpers import make_editor, real_scope, world_scope, ws_url
 from .test_pennant_advance import SEASON_GAMES, YEAR, SeasonCase
 
 # 1シーズンを終えた世界のシード（同率で終わらないもの）
@@ -134,9 +134,9 @@ class HomeScreenTest(HomeCase):
         self.assertIn("1週間進める", content)
         self.assertIn(ws_url("pennant_delete", self.world_a), content)
 
-    def test_an_admin_who_is_not_the_owner_sees_nothing_to_write(self):
-        """管理ユーザーの権限は世界に及ばない（世界は遊ぶ人のセーブデータ）。"""
-        self.client.force_login(User.objects.create_superuser("root", password="x"))
+    def test_an_editor_who_is_not_the_owner_sees_nothing_to_write(self):
+        """ワークスペースの編集者でも、世界の作成者でなければ書けない（世界は遊ぶ人のセーブデータ）。"""
+        self.client.force_login(make_editor(User.objects.create_user("editor", password="x")))
 
         content = self.client.get(self.home_url()).content.decode()
 
@@ -221,8 +221,8 @@ class AdvancePermissionTest(HomeCase):
         self.assertEqual(self.post_advance("day").status_code, 403)
         self.assertEqual(self.games_in(), 0)
 
-    def test_a_superuser_who_is_not_the_owner_cannot_advance(self):
-        self.client.force_login(User.objects.create_superuser("root", password="x"))
+    def test_an_editor_who_is_not_the_owner_cannot_advance(self):
+        self.client.force_login(make_editor(User.objects.create_user("editor", password="x")))
 
         self.assertEqual(self.post_advance("day").status_code, 403)
         self.assertEqual(self.games_in(), 0)

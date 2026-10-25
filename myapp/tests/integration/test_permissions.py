@@ -8,7 +8,10 @@ from myapp.infrastructure import orm_models
 
 from ..helpers import (
     login_as_manager,
+    make_editor,
+    make_workspace,
     play_game,
+    post_game_scorebook_day_unrecorded,
     ws_url,
 )
 from .base import BaseCase
@@ -104,8 +107,9 @@ class WriteRequiresLoginTest(BaseCase):
 class TeamManagerPermissionTest(BaseCase):
     """チーム担当者制（フェーズ5）。
 
-    ログインしただけでは書き込めない。担当するチームが関わる範囲だけを
-    編集でき、管理ユーザーは担当に関わらず全権を持つ。
+    ログインしただけでは書き込めない。担当するチームが関わる範囲だけを編集できる。
+    ワークスペースの持ち主・編集者は担当に関わらず全体を編集できる。管理ユーザー（is_staff）・superuser でも、
+    ワークスペースの部外者ならサイトでは何もできない（W2 T5 で特権を廃止。#78）。
     """
 
     def setUp(self):
@@ -133,9 +137,22 @@ class TeamManagerPermissionTest(BaseCase):
         login_as_manager(self.client, self.outsider)
         self.assertEqual(self.client.get(self._player_edit_url()).status_code, 403)
 
-    def test_staff_can_edit_any_team(self):
-        self.client.force_login(User.objects.create_user(username="staff", password="x", is_staff=True))
+    def test_staff_outside_the_workspace_cannot_edit(self):
+        """特権の廃止の再発防止: is_staff・superuser でも、ワークスペースの部外者なら編集できない（W2 T5）。"""
+        staff = User.objects.create_user(username="staff", password="x", is_staff=True)
+        root = User.objects.create_superuser(username="root", password="x")
+        for user in (staff, root):
+            with self.subTest(user=user.username):
+                self.client.force_login(user)
+                self.assertEqual(self.client.get(self._player_edit_url()).status_code, 403)
+                self.assertEqual(self.client.get(ws_url("game_edit", self.game.id)).status_code, 403)
+                self.assertNotContains(self.client.get(ws_url("player_list", self.team.id)), "新入団選手の登録")
+
+    def test_an_editor_of_the_workspace_can_edit_any_team(self):
+        """全体の編集はワークスペースの編集者（と持ち主）の権限。staff かどうかは関係ない。"""
+        self.client.force_login(make_editor(User.objects.create_user(username="editor", password="x")))
         self.assertEqual(self.client.get(self._player_edit_url()).status_code, 200)
+        self.assertEqual(self.client.get(ws_url("game_edit", self.game.id)).status_code, 200)
 
     def test_anonymous_is_sent_to_login_not_403(self):
         """未ログインは拒否ではなくログインへ誘導する。まだ入る余地があるため。"""
@@ -211,3 +228,70 @@ class TeamManagerPermissionTest(BaseCase):
         response = self.client.get(ws_url("game_list"))
 
         self.assertNotContains(response, "試合を登録")
+
+    def test_the_scorebook_cannot_move_a_game_to_teams_you_do_not_manage(self):
+        """スコアブックの保存は、書き換えた後の対戦カードでも判定する（担当していない2チームの試合に替えさせない）。
+
+        保存前の試合の2チームだけで判定していたため、片方の担当者が対戦カードを担当外の2チームに替えられた（W2 T5 で
+        直した。再発防止）。
+        """
+        game = play_game(self.team, self.rival, recorded=False)
+        login_as_manager(self.client, self.team)
+        before = orm_models.Game.objects.filter(id=game.id).values().get()
+
+        response = post_game_scorebook_day_unrecorded(
+            self.client,
+            game.id,
+            {
+                "year": 2026,
+                "played_on": "2026-06-01",
+                "home_team": self.rival.id,
+                "away_team": self.outsider.id,
+                "lineup": [],
+                "plate_appearances": [],
+            },
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(orm_models.Game.objects.filter(id=game.id).values().get(), before)
+
+    def test_the_scorebook_keeps_a_game_with_one_of_your_teams(self):
+        """空振りの防止: 担当のチームが残る対戦カードなら保存できる。"""
+        game = play_game(self.team, self.rival, recorded=False)
+        login_as_manager(self.client, self.team)
+
+        response = post_game_scorebook_day_unrecorded(
+            self.client,
+            game.id,
+            {
+                "year": 2026,
+                "played_on": "2026-06-01",
+                "home_team": self.team.id,
+                "away_team": self.outsider.id,
+                "lineup": [],
+                "plate_appearances": [],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.content.decode())
+        self.assertEqual(orm_models.Game.objects.get(id=game.id).away_team_id, self.outsider.id)
+
+
+class EmptyWorkspaceGameCreateTest(BaseCase):
+    """チームの無いワークスペースでは、持ち主でも試合の登録の導線を出さず、画面は一覧へ戻す（対戦カードを選べない）。"""
+
+    def test_the_owner_of_a_workspace_without_teams_is_sent_back_to_the_list(self):
+        workspace = make_workspace(name="空のワークスペース")
+        self.client.force_login(workspace.owner)
+
+        listing = self.client.get(ws_url("game_list", workspace=workspace))
+        response = self.client.get(ws_url("game_create", workspace=workspace))
+
+        self.assertNotContains(listing, ws_url("game_create", workspace=workspace))
+        self.assertRedirects(response, ws_url("game_list", workspace=workspace), fetch_redirect_response=False)
+
+    def test_an_outsider_of_a_workspace_without_teams_gets_403(self):
+        workspace = make_workspace(name="空のワークスペース")
+        self.client.force_login(User.objects.create_user(username="outsider", password="x"))
+
+        self.assertEqual(self.client.get(ws_url("game_create", workspace=workspace)).status_code, 403)

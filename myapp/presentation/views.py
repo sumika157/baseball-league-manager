@@ -6,7 +6,7 @@
 
 import functools
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import date, timedelta
 from urllib.parse import urlencode
 
@@ -114,7 +114,6 @@ from ..infrastructure.queries import (
     DjangoSimulationContextQuery,
     DjangoTeamAnalysisQuery,
     DjangoTeamListQuery,
-    DjangoTeamPermissionQuery,
     DjangoWorkspaceAccessQuery,
     DjangoWorkspaceListQuery,
     DjangoWorldSummaryQuery,
@@ -206,16 +205,26 @@ def _url(request, name: str, *args) -> str:
     return reverse(name, args=(_workspace(request).key, *args))
 
 
-def _requires_team_permission(request, *team_ids):
-    """担当チームでなければ拒否する。
+def _can_edit_teams(request, team_ids: Iterable[int]) -> bool:
+    """今の要求の人が、渡したチームのどれか1つを編集できるか（試合は2チームにまたがる）。
 
-    _requires_login と役割は同じだが、ログインしているだけでは通さない。
-    管理ユーザーは常に通り、それ以外は渡したチームのうち少なくとも1つの
-    担当者であることを求める（試合は2チームにまたがるため）。
+    判定は `workspace_view` が解決した `WorkspaceAccess`（持ち主・編集者は常に可、チーム担当は担当のチームが
+    含まれるときだけ）に任せ、ここでは DB を読まない。**サイト側の `is_staff` は見ない**（管理画面に入れることは、
+    ワークスペースの書き込みに何も足さない。W2 T5）。未ログインの人の役割は閲覧者か関係なしなので、常に偽。
+    渡したチームがこのワークスペースの実データのチームかどうかは見ない（範囲で絞ったサービスとリポジトリが止める）。
+    """
+    return _workspace(request).access.can_edit_teams(team_ids)
+
+
+def _requires_team_permission(request, *team_ids):
+    """渡したチームを編集できなければ拒否する。未ログインはログインへ、ほかの人は 403。
+
+    _requires_login と役割は同じだが、ログインしているだけでは通さない。ワークスペースの持ち主・編集者と、
+    渡したチームのうち少なくとも1つの担当者だけを通す（`_can_edit_teams`）。
     """
     if not request.user.is_authenticated:
         return redirect_to_login(request.get_full_path())
-    if not build_permission_query(_real_scope(request)).can_manage_any(request.user, team_ids):
+    if not _can_edit_teams(request, team_ids):
         raise PermissionDenied("このチームを編集する権限がありません。")
     return None
 
@@ -515,12 +524,6 @@ def build_roster_service(scope: WorldScope) -> RosterService:
     )
 
 
-def build_permission_query(scope: WorldScope) -> DjangoTeamPermissionQuery:
-    """チームの編集権限の判定を組み立てる。実データの範囲だけを受け取る（ペナントの範囲なら InvalidWorld）。"""
-    _require_real(scope)
-    return DjangoTeamPermissionQuery(scope)
-
-
 def build_player_search_query(scope: WorldScope) -> DjangoPlayerSearchQuery:
     """選手検索を組み立てる。実データの範囲だけを受け取る（ペナントの範囲なら InvalidWorld）。"""
     _require_real(scope)
@@ -788,8 +791,8 @@ def _is_owner(request, world: WorldContext) -> bool:
 def _requires_world_owner(request, world: WorldContext):
     """世界のオーナーでなければ拒否する。未ログインはログインへ、ほかの人は 403。
 
-    実データの担当者の判定（`_requires_team_permission`）とは別で、管理ユーザーでも世界のオーナーでなければ通さない
-    （世界は遊ぶ人のセーブデータで、管理ユーザーの権限は世界に及ばない）。
+    実データのチームの判定（`_requires_team_permission`）とは別で、ワークスペースの持ち主・編集者でも世界のオーナーで
+    なければ通さない（世界は遊ぶ人のセーブデータ。持ち主による削除は W6）。
     """
     if not request.user.is_authenticated:
         return redirect_to_login(request.get_full_path())
@@ -1760,9 +1763,8 @@ def player_list(request, team_id, world_id=None):
             "current_sort": current_sort,
             "current_descending": current_descending,
             "months": months,
-            # このチームの担当者（または管理ユーザー）だけが登録・編集の導線を見える
-            "can_edit_team": world is None
-            and build_permission_query(_real_scope(request)).can_manage(request.user, team_id),
+            # このチームを編集できる人（持ち主・編集者・このチームの担当）だけが登録・編集の導線を見える
+            "can_edit_team": world is None and _can_edit_teams(request, (team_id,)),
         },
         world,
     )
@@ -1914,10 +1916,11 @@ def game_list(request, world_id=None):
             # 件数が何の件数かを添えるため、選んでいるものの名前も渡す
             "selected_league_name": next((lg.name for lg in leagues if lg.id == league_id), ""),
             "selected_team_name": next((t.name for t in teams if t.id == team_id), ""),
-            # 担当チームが1つも無ければ、押しても弾かれるだけの登録導線は見せない。
-            # 判定はリーグの絞り込みに関係なく、全チームで行う
+            # 編集できるチームが1つも無ければ（チームが無いワークスペースの持ち主も）、押しても弾かれるか
+            # 対戦カードを選べないだけの登録導線は見せない。判定はリーグの絞り込みに関係なく、全チームで行う
             "can_create_game": world is None
-            and build_permission_query(_real_scope(request)).can_manage_any(request.user, [t.id for t in all_teams]),
+            and bool(all_teams)
+            and _can_edit_teams(request, [t.id for t in all_teams]),
         },
         world,
     )
@@ -1930,12 +1933,19 @@ def game_create(request):
     """
     service = build_league_view_service(_real_scope(request))
     teams = service.list_teams().rows
+    if not _can_edit_teams(request, [team.id for team in teams]):
+        # 一覧の「試合を登録」と同じ条件。どのチームも編集できない人には、登録できない入力画面を見せない
+        raise PermissionDenied("このワークスペースで試合を登録する権限がありません。")
+    if not teams:
+        # 持ち主・編集者でも、チームが無ければ対戦カードを選べない画面になる（一覧の導線も出さない）
+        messages.error(request, "チームが登録されていないため、試合を登録できません。")
+        return redirect(_url(request, "game_list"))
     form = GameForm(request.POST or None, initial={"year": date.today().year})
 
     if request.method == "POST" and form.is_valid():
         home_team_id = form.cleaned_data["home_team"]
         away_team_id = form.cleaned_data["away_team"]
-        if not build_permission_query(_real_scope(request)).can_manage_any(request.user, (home_team_id, away_team_id)):
+        if not _can_edit_teams(request, (home_team_id, away_team_id)):
             messages.error(request, "どちらのチームも担当していないため、この試合は登録できません。")
         else:
             try:
@@ -1972,9 +1982,7 @@ def game_edit(request, game_id):
         raise Http404("試合が見つかりません。") from None
 
     header = data.header
-    if not build_permission_query(_real_scope(request)).can_manage_any(
-        request.user, (header.home_team_id, header.away_team_id)
-    ):
+    if not _can_edit_teams(request, (header.home_team_id, header.away_team_id)):
         raise PermissionDenied("このチームを編集する権限がありません。")
 
     return render(
@@ -2124,9 +2132,7 @@ def game_detail(request, game_id, world_id=None):
         raise Http404("試合が見つかりません。") from None
 
     # シミュレーションの試合は手で直さない
-    can_edit = world is None and build_permission_query(_real_scope(request)).can_manage_any(
-        request.user, (detail.game.home_team_id, detail.game.away_team_id)
-    )
+    can_edit = world is None and _can_edit_teams(request, (detail.game.home_team_id, detail.game.away_team_id))
     return _render(request, "myapp/game_detail.html", {"detail": detail, "can_edit": can_edit}, world)
 
 
@@ -2176,8 +2182,7 @@ def player_detail(request, team_id, player_id, world_id=None):
             "ratings_card": _ratings_card(request, world, player_id),
             "ratings_history": _ratings_history(request, world, player_id),
             "awards": _player_awards(request, world, team_id, player_id, {row.year for row in profile.years or []}),
-            "can_edit_team": world is None
-            and build_permission_query(_real_scope(request)).can_manage(request.user, team_id),
+            "can_edit_team": world is None and _can_edit_teams(request, (team_id,)),
         },
         world,
     )
@@ -2192,7 +2197,7 @@ def player_edit(request, team_id, player_id):
     except (TeamNotFound, PlayerNotFound):
         raise Http404("選手が見つかりません。") from None
 
-    if not build_permission_query(_real_scope(request)).can_manage(request.user, team_id):
+    if not _can_edit_teams(request, (team_id,)):
         raise PermissionDenied("このチームを編集する権限がありません。")
 
     if request.method == "POST":
