@@ -63,6 +63,7 @@ from .draft import (
     club_draftees,
     draw_rookie,
     plan_team_draft,
+    with_drawn_potential,
 )
 from .draft_order import DraftOrderRule, DraftOrderStrategy, DraftStandings, strategy_for
 from .initial_ratings import SEASON_START_MONTH
@@ -184,7 +185,14 @@ class ProspectPool:
         rng = make_random(game_seed(self.world_seed, self.year, f"draft-extra-{key}"))
         names = set(self.taken_names)
         prospect = _draw_prospect(
-            rng, key, position, path=None, year=self.year, used_names=names, development=development
+            rng,
+            key,
+            position,
+            path=None,
+            year=self.year,
+            world_seed=self.world_seed,
+            used_names=names,
+            development=development,
         )
         return replace(self, prospects=(*self.prospects, prospect), taken_names=frozenset(names))
 
@@ -196,9 +204,13 @@ def _draw_prospect(
     *,
     path: AmateurPath | None,
     year: int,
+    world_seed: int,
     used_names: set[str],
     development: bool = False,
 ) -> Prospect:
+    """候補ひとり。伸びしろは候補の番号ごとの乱数（`draft-potential-<番号>`）から引く（`rng` の流れに足さない
+    ので、名前・経歴・今の能力・成長型は伸びしろを足す前と同じ）。いまの AI は伸びしろを見ない（推定は #308 の P2）。
+    """
     if path is None:
         allowed = DraftRoute.development_amateur_paths() if development else tuple(AmateurPath)
         paths = [item for item in POOL_ROUTE_WEIGHTS if item in allowed]
@@ -213,6 +225,7 @@ def _draw_prospect(
         rating_shift=POOL_RATING_SHIFT[path] + (POOL_PITCHER_SHIFT if position.is_pitcher else 0.0),
         rating_sd=POOL_RATING_SD,
     )
+    rookie = with_drawn_potential(rookie, world_seed=world_seed, year=year, key=f"draft-potential-{key}")
     age = rookie.profile.age(date(year + 1, SEASON_START_MONTH, 1))
     assert age is not None, "候補は生年月日を持つ"
     return Prospect(key=key, rookie=rookie, age=age)
@@ -236,7 +249,7 @@ def draw_pool(
         for _ in range(max(POOL_PER_PICK * planned.get(position, 0), POOL_MIN_PER_POSITION) if total else 0)
     ]
     prospects = tuple(
-        _draw_prospect(rng, key, position, path=None, year=year, used_names=names)
+        _draw_prospect(rng, key, position, path=None, year=year, world_seed=world_seed, used_names=names)
         for key, position in enumerate(positions)
     )
     return ProspectPool(prospects=prospects, taken_names=frozenset(names), world_seed=world_seed, year=year)
@@ -929,7 +942,13 @@ def run_draft(
         rng = make_random(game_seed(world_seed, year + 1, f"draft-{team.team_id}"))
         draftees.extend(
             club_draftees(
-                rng, team, plans[team.team_id], drafted=drafted[team.team_id], year=year, used_names=used_names
+                rng,
+                team,
+                plans[team.team_id],
+                drafted=drafted[team.team_id],
+                year=year,
+                world_seed=world_seed,
+                used_names=used_names,
             )
         )
     return DraftResult(draftees=tuple(draftees), lotteries=tuple(state.lotteries), state=state)

@@ -21,8 +21,8 @@ from dataclasses import dataclass, field, replace
 from datetime import date
 from enum import Enum
 
-from ..simulation.estimate import draw_growth_type, with_growth
-from ..simulation.randomness import GameRandom, game_uniform
+from ..simulation.estimate import draw_growth_type, draw_potential, with_growth, with_potential
+from ..simulation.randomness import GameRandom, game_seed, game_uniform, make_random
 from ..simulation.ratings import AVERAGE_RATING, BatterRatings, PitcherRatings
 from ..value_objects import (
     DEVELOPMENTAL_FIRST_NUMBERS,
@@ -427,6 +427,7 @@ def club_draftees(
     *,
     drafted: Sequence[tuple[Rookie, DraftPick]],
     year: int,
+    world_seed: int,
     used_names: MutableSet[str],
 ) -> tuple[Draftee, ...]:
     """締める年 `year` に球団に入る新人（入団は翌年）。
@@ -437,10 +438,17 @@ def club_draftees(
     会議の候補を含む）の名前で、外国人の名前を足していく。乱数は `rng` から、外国人（1人ずつ）→ 支配下の背番号
     （本指名の順、続けて外国人）→ 育成の背番号（3桁。育成の指名の順）の順に引く（育成を足しても、本指名と外国人の
     背番号は変わらない）。返す並びは本指名・外国人・育成。
+    外国人の伸びしろは、球団と外国人の並びごとの乱数（`draft-foreign-potential-<球団 id>-<番号>`）から引く
+    （`rng` の流れに足さない。会議の候補の伸びしろは `draft_meeting.py`）。
     """
     foreign = [
-        draw_rookie(rng, position, foreign=True, year=year, used_names=used_names)
-        for position in plan.foreign_positions
+        with_drawn_potential(
+            draw_rookie(rng, position, foreign=True, year=year, used_names=used_names),
+            world_seed=world_seed,
+            year=year,
+            key=f"draft-foreign-potential-{team.team_id}-{index}",
+        )
+        for index, position in enumerate(plan.foreign_positions)
     ]
     signed = [replace(rookie, profile=replace(rookie.profile, draft=pick)) for rookie, pick in drafted]
     registered = [rookie for rookie in signed if not _drafted_as_development(rookie.profile)] + foreign
@@ -478,3 +486,12 @@ def _drafted_as_development(profile: Profile) -> bool:
     """育成ドラフトの指名を持つか（`Draftee.is_development` と会議の結果の振り分けが共有する判定）。"""
     draft = profile.draft
     return draft is not None and draft.is_development
+
+
+def with_drawn_potential(rookie: Rookie, *, world_seed: int, year: int, key: str) -> Rookie:
+    """新人に伸びしろを付ける。乱数は用途 `key` の専用の流れ（`draw_rookie` の乱数の流れに引く回数を足さない）。
+
+    外国人の新人（`club_draftees`）と会議の候補（`draft_meeting.py`）が通る。
+    """
+    potential = draw_potential(make_random(game_seed(world_seed, year, key)))
+    return replace(rookie, ratings=with_potential(rookie.ratings, potential))

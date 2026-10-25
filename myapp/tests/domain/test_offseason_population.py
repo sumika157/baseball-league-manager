@@ -32,7 +32,7 @@ from myapp.domain.pennant.ratings import PlayerRatings
 from myapp.domain.pennant.retirement import PlayingTime
 from myapp.domain.pennant.roster import DEVELOPMENT_BAND, OPENING_REGISTERED_BAND
 from myapp.domain.simulation.randomness import GameRandom, make_random, normal
-from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings
+from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings, potential_multiplier
 from myapp.domain.simulation.samples import BATTER_MEAN, BATTER_SD, PITCHER_MEAN, PITCHER_SD, draw_ratings
 from myapp.domain.value_objects import ContractStatus, DraftPick, ForeignPlayerRules, Position, Profile
 from myapp.domain.virtual_players import generator
@@ -239,6 +239,10 @@ class YearStats:
     anchor_sd_shift: float
     stamina_mean: float
     stamina_sd: float
+    # 支配下の伸びしろの倍率の平均と、伸びしろの無い選手の数
+    # （#308。合成の初期母集団は伸びしろを持たず、1回目のオフで付く）
+    potential_mean: float
+    without_potential: int
 
 
 def stats(members: list[Member], plan: OffseasonPlan, previous: list[Member]) -> YearStats:
@@ -285,6 +289,8 @@ def stats(members: list[Member], plan: OffseasonPlan, previous: list[Member]) ->
         anchor_sd_shift=plan.anchor.sd_shift,
         stamina_mean=fmean(staminas),
         stamina_sd=pstdev(staminas),
+        potential_mean=fmean(potential_multiplier(m.ratings.ratings.potential) for m in registered),
+        without_potential=sum(1 for m in members if m.ratings.ratings.potential is None),
     )
 
 
@@ -405,6 +411,17 @@ class OffseasonPopulationTest(unittest.TestCase):
             with self.subTest(year=stat.year):
                 self.assertTrue(47.0 <= stat.stamina_mean <= 54.0, stat.stamina_mean)
                 self.assertTrue(8.0 <= stat.stamina_sd <= 12.0, stat.stamina_sd)
+
+    def test_potential_stays_about_average(self) -> None:
+        """伸びしろ（#308 P1）: 1回目のオフで全員に付き、支配下の倍率の平均は 1.0 の近くに保たれる。
+
+        伸びしろの大きい選手は伸びて残りやすいので、平均はわずかに上へ寄る（引退・戦力外は伸びしろを見ないが、
+        能力を見る）。新人は事前の分布（平均 1.0）で入るので、寄りは止まる。実測（シード 1〜4）は 0.994〜1.007。
+        """
+        for stat in self.years:
+            with self.subTest(year=stat.year):
+                self.assertEqual(stat.without_potential, 0)
+                self.assertTrue(0.98 <= stat.potential_mean <= 1.03, stat.potential_mean)
 
     def test_same_seed_gives_same_result(self) -> None:
         self.assertEqual(run_years(years=3, roster_size=STEADY_ROSTER), self.years[:3])

@@ -60,7 +60,7 @@ from ..domain.pennant.schedule import Fixture
 from ..domain.pennant.season import is_season_closed
 from ..domain.pennant.world import World, WorldScope
 from ..domain.services import ensure_lines_match_plate_appearances
-from ..domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings
+from ..domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings, Potential
 from ..domain.value_objects import (
     AcquisitionRoute,
     AdvanceReason,
@@ -1521,17 +1521,26 @@ class DjangoRatingsRepository:
     def _to_row(item: PlayerRatings) -> orm_models.PennantPlayerRatings:
         values = {name: getattr(item.ratings, name) for name in _RATING_COLUMNS[type(item.ratings)]}
         return orm_models.PennantPlayerRatings(
-            player_id=item.player_id, year=item.year, growth=item.ratings.growth.value, **values
+            player_id=item.player_id,
+            year=item.year,
+            growth=item.ratings.growth.value,
+            potential=None if item.ratings.potential is None else item.ratings.potential.value,
+            **values,
         )
 
     @staticmethod
     def _to_domain(row: orm_models.PennantPlayerRatings) -> PlayerRatings:
         growth = GrowthType(row.growth)
+        potential = None if row.potential is None else Potential(row.potential)
         ratings: BatterRatings | PitcherRatings
         if row.contact is not None:
-            ratings = BatterRatings(**{name: getattr(row, name) for name in BatterRatings.LABELS}, growth=growth)
+            ratings = BatterRatings(
+                **{name: getattr(row, name) for name in BatterRatings.LABELS}, growth=growth, potential=potential
+            )
         else:
-            ratings = PitcherRatings(**{name: getattr(row, name) for name in PitcherRatings.LABELS}, growth=growth)
+            ratings = PitcherRatings(
+                **{name: getattr(row, name) for name in PitcherRatings.LABELS}, growth=growth, potential=potential
+            )
         return PlayerRatings(player_id=row.player_id, year=row.year, ratings=ratings)
 
 
