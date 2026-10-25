@@ -3,9 +3,19 @@
 from datetime import date
 from unittest import TestCase
 
-from myapp.domain.entities import Stadium
-from myapp.domain.exceptions import InvalidProfile, InvalidSeason
-from myapp.domain.value_objects import DraftPick, Handedness, Profile, StadiumProfile
+from myapp.domain.entities import Stadium, Team
+from myapp.domain.exceptions import InvalidDraftPick, InvalidProfile, InvalidSeason, PlayerNotFound
+from myapp.domain.value_objects import (
+    AcquisitionRoute,
+    ContractStatus,
+    DraftPick,
+    Handedness,
+    JerseyNumber,
+    Position,
+    Profile,
+    RosterLimits,
+    StadiumProfile,
+)
 
 
 class HandednessTest(TestCase):
@@ -171,3 +181,51 @@ class StadiumTest(TestCase):
 
         self.assertEqual(stadium.city, "仙台市")
         self.assertEqual(str(stadium), "テスト球場")
+
+
+class ChangePlayerProfileTest(TestCase):
+    """`Team.change_player_profile`。検査に落ちたら選手のプロフィールは変わらない。"""
+
+    def setUp(self):
+        self.team = Team(name="テストチーム", id=1, league_id=1)
+        self.player = self.team.add_player(
+            "山田",
+            JerseyNumber("120"),
+            Position.PITCHER,
+            from_year=2020,
+            contract=ContractStatus.DEVELOPMENTAL,
+            acquired_via=AcquisitionRoute.DEVELOPMENTAL_DRAFT,
+            limits=RosterLimits.UNLIMITED,
+        )
+        self.player.id = 7
+        self.before = Profile(height_cm=180, birthplace="東京都", draft=DraftPick(2019, round=2, is_development=True))
+        self.player.profile = self.before
+
+    def test_replaces_the_profile(self):
+        profile = Profile(
+            birth_date=date(2001, 4, 2),
+            throws=Handedness.RIGHT,
+            bats=Handedness.LEFT,
+            height_cm=185,
+            draft=DraftPick(2019, round=3, is_development=True),
+            name_kana="ヤマダ",
+            is_foreign_player=True,
+        )
+        self.team.change_player_profile(7, profile)
+        self.assertEqual(self.player.profile, profile)
+
+    def test_a_draft_that_contradicts_the_first_stint_is_rejected_and_nothing_changes(self):
+        """育成ドラフトで入団した選手のドラフトを本指名にはできない（`ensure_draft_fits_career`）。"""
+        with self.assertRaises(InvalidDraftPick):
+            self.team.change_player_profile(7, Profile(height_cm=190, draft=DraftPick(2019, round=1)))
+        self.assertEqual(self.player.profile, self.before)
+
+    def test_an_unrealistic_height_is_rejected_and_nothing_changes(self):
+        """値の上限は `Profile` が作るときに検査するので、集約に渡る前に止まる。"""
+        with self.assertRaises(InvalidProfile):
+            self.team.change_player_profile(7, Profile(height_cm=301))
+        self.assertEqual(self.player.profile, self.before)
+
+    def test_an_unknown_player_is_rejected(self):
+        with self.assertRaises(PlayerNotFound):
+            self.team.change_player_profile(999, Profile())

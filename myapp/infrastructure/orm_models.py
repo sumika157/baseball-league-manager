@@ -16,7 +16,9 @@ from ..domain.pennant.postseason import PostseasonFormat
 from ..domain.services.rankings import Title
 from ..domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings
 from ..domain.value_objects import (
+    BACK_NAME_MAX_LENGTH,
     DEFAULT_REGISTERED_PLAYER_LIMIT,
+    PROFILE_TEXT_MAX_LENGTH,
     AcquisitionRoute,
     AdvanceReason,
     Base,
@@ -376,9 +378,9 @@ class Player(models.Model):
     """
 
     name = models.CharField(max_length=100, verbose_name="選手名")
-    name_kana = models.CharField(max_length=100, blank=True, verbose_name="よみがな")
+    name_kana = models.CharField(max_length=PROFILE_TEXT_MAX_LENGTH, blank=True, verbose_name="よみがな")
     back_name = models.CharField(
-        max_length=20,
+        max_length=BACK_NAME_MAX_LENGTH,
         blank=True,
         verbose_name="背ネーム",
         help_text="ユニフォーム背面のアルファベット表記。",
@@ -397,7 +399,7 @@ class Player(models.Model):
     bats = models.CharField(max_length=2, choices=HANDEDNESS_CHOICES, blank=True, verbose_name="打")
     height_cm = models.PositiveIntegerField(null=True, blank=True, verbose_name="身長(cm)")
     weight_kg = models.PositiveIntegerField(null=True, blank=True, verbose_name="体重(kg)")
-    birthplace = models.CharField(max_length=100, blank=True, verbose_name="出身地")
+    birthplace = models.CharField(max_length=PROFILE_TEXT_MAX_LENGTH, blank=True, verbose_name="出身地")
     # ドラフトの指名（ドメインの `DraftPick`）。年が空ならドラフトを経ていない（外国人選手など）。入団年は持たない
     draft_year = models.IntegerField(
         null=True, blank=True, verbose_name="ドラフト年", help_text="指名された年。入団はふつうその翌年です。"
@@ -410,10 +412,10 @@ class Player(models.Model):
     )
     is_development_draft = models.BooleanField(default=False, verbose_name="育成ドラフト")
     # プロ入り前の経歴。通った所だけ埋める
-    high_school = models.CharField(max_length=100, blank=True, verbose_name="出身高校")
-    university = models.CharField(max_length=100, blank=True, verbose_name="出身大学")
-    corporate_team = models.CharField(max_length=100, blank=True, verbose_name="出身社会人チーム")
-    nationality = models.CharField(max_length=100, blank=True, verbose_name="国籍")
+    high_school = models.CharField(max_length=PROFILE_TEXT_MAX_LENGTH, blank=True, verbose_name="出身高校")
+    university = models.CharField(max_length=PROFILE_TEXT_MAX_LENGTH, blank=True, verbose_name="出身大学")
+    corporate_team = models.CharField(max_length=PROFILE_TEXT_MAX_LENGTH, blank=True, verbose_name="出身社会人チーム")
+    nationality = models.CharField(max_length=PROFILE_TEXT_MAX_LENGTH, blank=True, verbose_name="国籍")
     is_foreign_player = models.BooleanField(
         default=False,
         verbose_name="外国人選手",

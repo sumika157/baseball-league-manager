@@ -33,6 +33,7 @@ from .dto import (
 )
 from .ids import saved_id, team_names
 from .league_context import EMPTY_LEAGUE_CONTEXT, LeagueContext, LeagueContexts
+from .player_profile import profile_input_of
 from .player_stats_view import played_counts, stats_player
 from .queries import GameListQuery, PlayerFieldingQuery, PlayerStatsQuery
 from .stat_rows import compact_record_label, decision_label, to_batter_row, to_pitcher_row
@@ -440,6 +441,7 @@ class TeamViewService:
             strikeouts_batting=batting.strikeouts,
             double_plays=batting.double_plays,
             runs_allowed=pitching.runs_allowed,
+            profile=profile_input_of(player.profile),
             fa_declarations=[
                 FreeAgentDeclarationRow(
                     year=declaration.year,

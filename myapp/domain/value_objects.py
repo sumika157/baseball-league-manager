@@ -1872,6 +1872,19 @@ class DraftPick:
                 raise InvalidDraftPick("ドラフトの順位は1以上で入力してください。")
             object.__setattr__(self, "round", number)
 
+    @classmethod
+    def from_inputs(cls, year: int | None, round_: int | None, *, is_development: bool) -> DraftPick | None:
+        """入力の3つの欄（年・順位・育成）から。年が空ならドラフトを経ていない（None）。
+
+        年が空なのに順位か育成だけが入っている入力は、何の指名か決まらないので拒む（管理画面とサイトの
+        選手の編集の共通の規則）。保存済みの列を読むときは `infrastructure.repositories.draft_of` を使う。
+        """
+        if year is None:
+            if round_ is not None or is_development:
+                raise InvalidDraftPick("ドラフト年を入力してください（順位・育成だけでは登録できません）。")
+            return None
+        return cls(year=year, round=round_, is_development=is_development)
+
     @property
     def entry_year(self) -> int:
         """入団の年。**「入団はドラフトの翌年」の唯一の出典**（自由獲得枠などの例外は扱わない）。"""
@@ -1906,6 +1919,12 @@ class DraftPick:
             raise InvalidDraftPick(
                 "ドラフトで入団した選手は、ドラフトを育成にできません（育成は「育成ドラフト」で入団）。"
             )
+
+
+# プロフィールの文字の欄の長さの上限。ORM の列の `max_length` と、サイトの入力欄はこれを使う。
+# `Profile` 自身は長さを検査しない（入力の経路のフォームが止める。投入コマンドの生成値は上限の内）
+PROFILE_TEXT_MAX_LENGTH = 100
+BACK_NAME_MAX_LENGTH = 20
 
 
 @dataclass(frozen=True)

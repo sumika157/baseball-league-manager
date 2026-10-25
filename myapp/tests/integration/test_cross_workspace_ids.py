@@ -8,6 +8,8 @@ B の id を混ぜて送り、どれも 404 かフォームのエラー（500 �
 
 import json
 
+from myapp.presentation.forms import PROFILE_SECTION_MARKER
+
 from ..helpers import GAME_DAY_UNRECORDED, ws_url
 from .test_workspace_isolation import YEAR, WorkspaceCase, snapshot_all_rows
 
@@ -114,6 +116,14 @@ class CrossWorkspaceIdsTest(WorkspaceCase):
     def test_every_player_edit_button_with_b_ids_is_404(self):
         buttons = {
             "編集": {"name": "改ざん", "number": "99", "position": "内野手"},
+            "プロフィールの編集": {
+                "name": "改ざん",
+                "number": "99",
+                "position": "内野手",
+                PROFILE_SECTION_MARKER: "1",
+                "birthplace": "改ざん",
+                "height_cm": "180",
+            },
             "退団": {"retire": "1"},
             "主将の指名": {"appoint_captain": "1"},
             "主将の解任": {"remove_captain": "1"},

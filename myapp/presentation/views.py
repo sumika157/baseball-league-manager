@@ -162,9 +162,11 @@ from .club_input import (
 from .forms import (
     FIELDED_BY_SEPARATOR,
     MAX_INNINGS,
+    PROFILE_SECTION_MARKER,
     DraftOrderRuleForm,
     GameForm,
     PennantWorldForm,
+    PlayerProfileForm,
     PlayerRegistrationForm,
     PlayerUpdateForm,
     PostseasonFormatForm,
@@ -2226,6 +2228,7 @@ def player_edit(request, team_id, player_id):
     if not _can_edit_teams(request, (team_id,)):
         raise PermissionDenied("このチームを編集する権限がありません。")
 
+    profile_form = None  # プロフィールの節の目印が送られてきたときだけ作る
     if request.method == "POST":
         # 退団・主将の指名/解任はフォームの検証を通さず、押されたボタンで判断する
         if "retire" in request.POST:
@@ -2264,7 +2267,11 @@ def player_edit(request, team_id, player_id):
             return redirect(_url(request, "player_edit", team_id, player_id))
 
         base_form = PlayerUpdateForm(request.POST)
-        if base_form.is_valid():
+        # プロフィールは節の目印（隠し欄）が送られてきたときだけ読む。目印の無い要求（欄を持たない送信）で
+        # 欠けた欄を「空」と読み、保存済みのプロフィールを消さないため（JSON API の部分更新と同じ罠）
+        if PROFILE_SECTION_MARKER in request.POST:
+            profile_form = PlayerProfileForm(request.POST)
+        if base_form.is_valid() and (profile_form is None or profile_form.is_valid()):
             try:
                 build_roster_service(_real_scope(request)).update_player(
                     team_id=team_id,
@@ -2272,6 +2279,7 @@ def player_edit(request, team_id, player_id):
                     name=base_form.cleaned_data["name"],
                     number=base_form.cleaned_data["number"],
                     position_label=base_form.cleaned_data["position"],
+                    profile=profile_form.to_input() if profile_form is not None else None,
                 )
             except DomainError as error:
                 messages.error(request, str(error))
@@ -2280,7 +2288,7 @@ def player_edit(request, team_id, player_id):
                 mode = PITCHER_MODE if base_form.cleaned_data["position"] == Position.PITCHER.value else BATTER_MODE
                 return redirect(f"{_url(request, 'player_list', team_id)}?pos={mode}")
         else:
-            messages.error(request, _first_error(base_form))
+            messages.error(request, _first_error(base_form if base_form.errors else profile_form))
 
         detail = service.get_player_detail(team_id, player_id)
 
@@ -2289,6 +2297,11 @@ def player_edit(request, team_id, player_id):
         "myapp/player_edit.html",
         {
             "player": detail,
+            # 保存に失敗したときは送った値のまま出し直す（14項目を打ち直させない）
+            "profile_form": (
+                profile_form if profile_form is not None else PlayerProfileForm.initial_of(detail.profile)
+            ),
+            "profile_section_marker": PROFILE_SECTION_MARKER,
             "positions": Position.labels(),
             # FA 宣言の入力。種別の選択肢はドメインの FreeAgencyKind が出典
             "fa_kinds": FreeAgencyKind.labels(),

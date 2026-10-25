@@ -16,6 +16,7 @@ from django.contrib.auth.models import User
 
 from myapp.domain.workspace import Visibility
 from myapp.infrastructure import orm_models
+from myapp.presentation.forms import PROFILE_SECTION_MARKER
 from myapp.presentation.views import build_roster_service
 
 from ..helpers import (
@@ -184,9 +185,23 @@ class PermissionTableCase(BaseCase):
         )
         observed.append(self._write(response, orm_models.PlayerStint.objects.count() != stints))
 
-        name = f"改名{role}"
-        response = self.client.post(edit_url, {"name": name, "number": "10", "position": "内野手"})
-        observed.append(self._write(response, orm_models.Player.objects.get(id=player).name == name))
+        # 基本情報とプロフィール（節の目印つき。W3 T4）を同じ送信で書く。どちらも書かれたときだけ ok
+        name, birthplace = f"改名{role}", f"出身{role}"
+        response = self.client.post(
+            edit_url,
+            {
+                "name": name,
+                "number": "10",
+                "position": "内野手",
+                PROFILE_SECTION_MARKER: "1",
+                "birthplace": birthplace,
+                "height_cm": "180",
+            },
+        )
+        row = orm_models.Player.objects.get(id=player)
+        observed.append(self._write(response, row.name == name or row.birthplace == birthplace))
+        if row.name == name:
+            self.assertEqual((row.birthplace, row.height_cm), (birthplace, 180), "基本情報だけが書かれた")
 
         games = orm_models.Game.objects.count()
         response = self.client.post(

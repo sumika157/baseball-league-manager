@@ -6,24 +6,28 @@
 """
 
 from collections.abc import Sequence
+from dataclasses import asdict
 from typing import Any, cast
 
 from django import forms
 from django.core.exceptions import ValidationError
 
-from ..application.dto import LeagueTeams, LineupSlot
+from ..application.dto import LeagueTeams, LineupSlot, ProfileInput
 from ..domain.entities import FieldingError, PlateAppearance, RunnerAdvance
 from ..domain.exceptions import DomainError, InvalidJerseyNumber, InvalidPosition
 from ..domain.pennant.draft_order import DraftOrderRule
 from ..domain.pennant.postseason import PostseasonFormat
 from ..domain.pennant.world import MAX_NAME_LENGTH, MAX_SEED, MAX_SOURCE_LEAGUES, MAX_START_YEAR
 from ..domain.value_objects import (
+    BACK_NAME_MAX_LENGTH,
+    PROFILE_TEXT_MAX_LENGTH,
     AdvanceReason,
     Base,
     ContractStatus,
     ErrorKind,
     FieldingPosition,
     GameTimes,
+    Handedness,
     JerseyNumber,
     PlateAppearanceResult,
     Position,
@@ -31,6 +35,8 @@ from ..domain.value_objects import (
 )
 
 POSITION_CHOICES = [(position.value, position.value) for position in Position]
+# 投打の選択肢はドメインの Handedness が唯一の出典
+HANDEDNESS_CHOICES = [(label, label) for label in Handedness.labels()]
 # 試合で就いた守備位置。未記録も許すので空の選択肢を先頭に置く
 FIELDING_POSITION_CHOICES = [("", "—")] + [(p.value, p.value) for p in FieldingPosition]
 # 1試合の回数。延長を含めても12回までを入力できるようにする
@@ -83,6 +89,59 @@ class PlayerRegistrationForm(PlayerUpdateForm):
 
     def clean_contract(self) -> str:
         return self.cleaned_data.get("contract") or ContractStatus.REGISTERED.value
+
+
+# 選手の編集画面のプロフィールの節の目印（隠し欄）。これが送られてきた要求でだけプロフィールを更新する。
+# 退団・主将などのボタンや、節を持たない古いフォームの送信で、プロフィールを空で上書きしないため
+PROFILE_SECTION_MARKER = "profile_section"
+
+
+class PlayerProfileForm(forms.Form):
+    """選手のプロフィール（14項目。ドラフトは年・順位・育成の3欄）。すべて任意。
+
+    欄の型と長さだけをここで見る。値の規則（身長・体重の上限、ドラフトの年と順位、年の無い順位・育成、
+    育成ドラフトと最初の在籍の経路）は domain が出典で、`RosterService.update_player` の中で検査される
+    （管理画面の選手の編集と同じ規則）。投打の選択肢はドメインの `Handedness` が出典。
+    """
+
+    name_kana = forms.CharField(label="よみがな", max_length=PROFILE_TEXT_MAX_LENGTH, required=False)
+    back_name = forms.CharField(label="背ネーム", max_length=BACK_NAME_MAX_LENGTH, required=False)
+    birth_date = forms.DateField(
+        label="生年月日", required=False, widget=forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d")
+    )
+    throws = forms.ChoiceField(label="投", choices=[("", "—")] + HANDEDNESS_CHOICES, required=False)
+    bats = forms.ChoiceField(label="打", choices=[("", "—")] + HANDEDNESS_CHOICES, required=False)
+    height_cm = forms.IntegerField(label="身長(cm)", required=False)
+    weight_kg = forms.IntegerField(label="体重(kg)", required=False)
+    birthplace = forms.CharField(label="出身地", max_length=PROFILE_TEXT_MAX_LENGTH, required=False)
+    draft_year = forms.IntegerField(label="ドラフト年", required=False)
+    draft_round = forms.IntegerField(label="ドラフト順位", required=False)
+    is_development_draft = forms.BooleanField(label="育成ドラフト", required=False)
+    high_school = forms.CharField(label="出身高校", max_length=PROFILE_TEXT_MAX_LENGTH, required=False)
+    university = forms.CharField(label="出身大学", max_length=PROFILE_TEXT_MAX_LENGTH, required=False)
+    corporate_team = forms.CharField(label="出身社会人チーム", max_length=PROFILE_TEXT_MAX_LENGTH, required=False)
+    nationality = forms.CharField(label="国籍", max_length=PROFILE_TEXT_MAX_LENGTH, required=False)
+    is_foreign_player = forms.BooleanField(label="外国人選手（外国人枠の対象）", required=False)
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        # 見た目は画面の他の欄（Bootstrap）に揃える。欄はテンプレートが {{ form.欄 }} で描く
+        for field in self.fields.values():
+            if isinstance(field, forms.BooleanField):
+                field.widget.attrs["class"] = "form-check-input"
+            elif isinstance(field, forms.ChoiceField):
+                field.widget.attrs["class"] = "form-select"
+            else:
+                field.widget.attrs["class"] = "form-control"
+
+    @classmethod
+    def initial_of(cls, profile: ProfileInput) -> "PlayerProfileForm":
+        """保存済みのプロフィールを初期値にした（未送信の）フォーム。"""
+        return cls(initial=asdict(profile))
+
+    def to_input(self) -> ProfileInput:
+        """検証済みの値を application に渡す形にする。`is_valid()` の後に呼ぶ。"""
+        return ProfileInput(**self.cleaned_data)
 
 
 class GameForm(forms.Form):

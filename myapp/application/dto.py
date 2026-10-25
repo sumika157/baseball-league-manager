@@ -1095,6 +1095,34 @@ class FreeAgentDeclarationRow:
 
 
 @dataclass(frozen=True)
+class ProfileInput:
+    """選手のプロフィールの入力（14項目。ドラフトは年・順位・育成の3欄）。
+
+    選手の編集画面のフォームが作って `RosterService.update_player` に渡し、編集画面の初期値として
+    `PlayerDetail.profile` でも返す。値の検査（身長の上限・ドラフトの年など）は application が
+    domain の `Profile`・`DraftPick` を組み立てるときに行う（`application/player_profile.py`）。
+    投打は表記（「右」など）で、空は未設定。
+    """
+
+    name_kana: str = ""
+    back_name: str = ""
+    birth_date: date | None = None
+    throws: str = ""
+    bats: str = ""
+    height_cm: int | None = None
+    weight_kg: int | None = None
+    birthplace: str = ""
+    draft_year: int | None = None
+    draft_round: int | None = None
+    is_development_draft: bool = False
+    high_school: str = ""
+    university: str = ""
+    corporate_team: str = ""
+    nationality: str = ""
+    is_foreign_player: bool = False
+
+
+@dataclass(frozen=True)
 class PlayerDetail:
     """選手編集画面で使う詳細。"""
 
@@ -1159,6 +1187,8 @@ class PlayerDetail:
     runs_allowed: int = 0
     # FA 宣言（新しい年が先）。編集画面の追加・削除と個人ページの表示に使う
     fa_declarations: list[FreeAgentDeclarationRow] = field(default_factory=list)
+    # プロフィール（編集画面の初期値）
+    profile: ProfileInput = field(default_factory=ProfileInput)
 
 
 @dataclass(frozen=True)

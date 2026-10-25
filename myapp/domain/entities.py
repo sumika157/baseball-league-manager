@@ -721,6 +721,17 @@ class Team:
         if current is not None:
             current.number = number
 
+    def change_player_profile(self, player_id: int, profile: Profile) -> None:
+        """選手のプロフィールを置き換える。
+
+        身長・体重・ドラフトの年と順位などの値そのものは `Profile`（と `DraftPick`）が作るときに検査する。
+        ここでは、育成ドラフトかどうかが最初の在籍の経路と食い違わないか（`ensure_draft_fits_career`）を見る。
+        検査に落ちたら選手は変わらない。
+        """
+        player = self.find_player(player_id)
+        ensure_draft_fits_career(profile.draft, player.career)
+        player.profile = profile
+
     def ensure_promotable(self, player_id: int) -> None:
         """在籍中の育成選手か。昇格できない選手なら、その理由の例外を投げる。
 
