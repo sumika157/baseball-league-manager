@@ -615,6 +615,8 @@ class DraftState:
     _tastes: dict[int, DraftTaste] = field(default_factory=dict)
     # 球団 × 候補のスカウトの見立て（1位の順位と2巡目以降の順位の両方が使うので、推定を1回だけ作る）
     _reports: dict[tuple[int, int], ScoutingReport] = field(default_factory=dict)
+    # 球団 × 候補の将来値（2巡目以降の順位を作り直すたびに使う。見立てから導いた値を覚える）
+    _futures: dict[tuple[int, int], float] = field(default_factory=dict)
 
     @classmethod
     def open(
@@ -879,9 +881,13 @@ class DraftState:
     def evaluation(self, team_id: int, prospect: Prospect, *, tasted: bool = False) -> float:
         """球団 `team_id` から見た候補の評価（スカウトの見立てから）。`tasted` なら球団の好み（`DraftTaste`）と
         惚れ込み（`draft_liking`）を入れ、そうでなければ将来値（`future_value`）。"""
-        report = self.report(team_id, prospect)
         if not tasted:
-            return future_value(prospect, report)
+            future = self._futures.get((team_id, prospect.key))
+            if future is None:
+                future = future_value(prospect, self.report(team_id, prospect))
+                self._futures[(team_id, prospect.key)] = future
+            return future
+        report = self.report(team_id, prospect)
         liking = draft_liking(self.pool.world_seed, self.pool.year, team_id, prospect.key)
         return self.taste(team_id).evaluate(prospect, report, liking=liking)
 

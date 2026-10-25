@@ -19,7 +19,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, ClassVar
 
@@ -173,9 +173,9 @@ class BatterRatings:
     }
 
     def __post_init__(self) -> None:
-        for field in fields(self):
-            if field.name in self.LABELS:
-                _require_rating(self.LABELS[field.name], getattr(self, field.name))
+        # 項目は宣言の順（`LABELS` の並び）に検査する。`fields()` を毎回引くと、能力を大量に作る会議の推定で遅い
+        for name, label in self.LABELS.items():
+            _require_rating(label, getattr(self, name))
         _require_potential(self.potential)
 
     @property
@@ -214,9 +214,9 @@ class PitcherRatings:
     }
 
     def __post_init__(self) -> None:
-        for field in fields(self):
-            if field.name in self.LABELS:
-                _require_rating(self.LABELS[field.name], getattr(self, field.name))
+        # 項目は宣言の順（`LABELS` の並び）に検査する。`fields()` を毎回引くと、能力を大量に作る会議の推定で遅い
+        for name, label in self.LABELS.items():
+            _require_rating(label, getattr(self, name))
         _require_potential(self.potential)
 
     @property
