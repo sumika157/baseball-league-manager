@@ -5,13 +5,17 @@
 
 - **候補**は会議の年ごとに、世界のシード・年・世界の全選手の名前から決定的に作る（`draw_pool`。保存しない）
 - 候補の本当の能力は見せない。各球団は**スカウトの推定**（`scouting_report`。項目ごとに誤差を足して5刻み・成長型なし）
-  で見比べる。誤差は「世界・年・候補・見る球団」で決まるので、球団ごとに見立てが違い、全球団が同じ1人に集まらない
+  で見比べる。誤差は「世界・年・候補・見る球団」で決まるので、球団ごとに見立てが違う
 - 会議の状態（`DraftState`）は、行動（入札・指名・選択終了。`DraftAction`）の並びと設定（規則・人数の幅・候補）から
   **導く**。「いまの巡」「次の番」は持たない（同じ行動の並びなら、何度作り直しても同じ状態になる）
 - 入札の巡は、入札がそろったところで抽選まで解く（重複は1球団だけ当たり、外れた球団は同じ巡で再入札）。
   抽選の乱数は `game_seed(世界のシード, 年, "draft-lottery-main-<巡>-<回>-<候補>")`
 - AI の指名（`ai_action`）は、自分のスカウトの推定の**将来値**（`future_value`）に、位置の残りの重みを足した評価が
   最大の候補。位置は、その球団の新人の位置の計画（`draft.plan_team_draft`。今までの自動ドラフトと同じ）の中から選ぶ
+- **1位の好み**（#302）: 本指名の1巡目の入札（1位）だけ、将来値の代わりに球団の好み（`DraftTaste`。経路・
+  即戦力か将来性か・投手か野手か。世界のシードと球団から導く）と候補ひとりずつへの惚れ込み（`draft_liking`）を
+  入れた評価で選ぶ。際立った候補に全球団の入札が集まらないようにするため。2巡目以降は将来値のままなので、
+  新人の分布は変わらない
 - 位置の候補が尽きたら、その場で1人足す（`ProspectPool.with_extra`。締める処理を失敗させない）
 - **育成の巡**（#198 D2）: 本指名が全球団で終わった時点で、本指名の合計が「球団数 × `MAX_DRAFTEES`」（NPB の120名の
   一般化）に達しておらず、育成の枠（`DraftSlot.development_max`）のある球団がいれば続けて開く。巡は1から数え、
@@ -86,6 +90,14 @@ SCOUT_STEP = 5
 NEED_WEIGHT = 2.0
 # 将来値は、この年齢になるまでの普通型の伸び（`aging.expected_change` の積み上げ）を足した総合値
 PEAK_AGE = 27
+# 1位の好み（`DraftTaste`。#302）の幅。球団の色は、経路の加点（球団の中で平均0にそろえる前に ±TASTE_ROUTE 点）・
+# 伸びの重み（1 ± TASTE_GROWTH）・投手への加点（±TASTE_PITCHER 点）で、どれも一様。候補ひとりずつへの惚れ込みは
+# 標準偏差 TASTE_LIKING_SD 点の正規。球団の色だけでは際立った候補への集中がほとんど減らなかった（48球団の合成の会議で
+# 最多 40 → 38球団）ので惚れ込みを足し、最多が数球団〜10球団程度になる大きさを実測で決めた（Wiki「実測値」）
+TASTE_ROUTE = 3.0
+TASTE_GROWTH = 0.4
+TASTE_PITCHER = 2.0
+TASTE_LIKING_SD = 6.0
 
 
 class DraftActionKind(Enum):
@@ -220,12 +232,21 @@ _TWO_PI = 2.0 * math.pi
 
 
 def _scout_noise(world_seed: int, year: int, team_id: int, key: int, count: int) -> list[float]:
-    """推定の誤差（標準正規。Box–Muller 法）を `count` 個（8個まで）。種は「世界・年・候補・見る球団」。
+    """推定の誤差（標準正規）を `count` 個（8個まで）。種は「世界・年・候補・見る球団」。"""
+    return _hash_normals(f"{world_seed}:{year}:draft-scout-{team_id}-{key}", count)
+
+
+def _hash_words(text: str) -> tuple[int, ...]:
+    """`text` の hash を32ビットの整数16個に分けたもの（乱数源を作らずに引く乱数の元）。"""
+    return _NOISE_WORDS.unpack(hashlib.blake2b(text.encode(), digest_size=64).digest())
+
+
+def _hash_normals(text: str, count: int) -> list[float]:
+    """`text` を種にした標準正規（Box–Muller 法）を `count` 個（8個まで）。
 
     乱数源を作らずに hash から引く（1会議で 球団数 × 候補 ＝ 8リーグで約4.6万回引くため）。
     """
-    digest = hashlib.blake2b(f"{world_seed}:{year}:draft-scout-{team_id}-{key}".encode(), digest_size=64).digest()
-    words = _NOISE_WORDS.unpack(digest)
+    words = _hash_words(text)
     scale = 2.0**-32
     return [
         math.sqrt(-2.0 * math.log(1.0 - words[2 * index] * scale)) * math.cos(_TWO_PI * words[2 * index + 1] * scale)
@@ -315,6 +336,62 @@ def _clamp(value: float) -> int:
 def future_value(prospect: Prospect, estimate: Ratings) -> float:
     """将来値: 推定の総合（`scouting_value`）に、`PEAK_AGE` 歳までの伸びを足したもの。"""
     return scouting_value(estimate) + growth_to_peak(prospect.age, prospect.position)
+
+
+@dataclass(frozen=True)
+class DraftTaste:
+    """球団の1位の好み（#302。球団の色）。本指名の1巡目の入札だけ AI の評価に足し、1位の入札が際立った1人に
+    集まらないよう散らす。
+
+    保存しない（`draft_taste` が世界のシードと球団から導く。年では変わらない）。
+
+    - `route_bonus`: 経路（高校・大学・社会人）ごとの加点。球団の中で平均0
+    - `growth_weight`: `PEAK_AGE` 歳までの伸び（`growth_to_peak`）に掛ける重み。1より大きいと将来性を、
+      小さいと即戦力を重く見る
+    - `pitcher_bonus`: 投手の候補への加点（負なら野手を好む。野手の候補は0）
+    """
+
+    route_bonus: Mapping[DraftRoute, float] = field(default_factory=dict)
+    growth_weight: float = 1.0
+    pitcher_bonus: float = 0.0
+
+    def evaluate(self, prospect: Prospect, future: float, *, liking: float = 0.0) -> float:
+        """将来値 `future`（`future_value`）に好みを入れた評価:
+        将来値 + (重み − 1) × 伸び + 経路の加点 + 投手の加点 + 惚れ込み（`draft_liking`）。
+        好みが既定（`DraftTaste()`）なら将来値 + 惚れ込み。"""
+        return (
+            future
+            + (self.growth_weight - 1.0) * growth_to_peak(prospect.age, prospect.position)
+            + self.route_bonus.get(prospect.route, 0.0)
+            + (self.pitcher_bonus if prospect.position.is_pitcher else 0.0)
+            + liking
+        )
+
+
+# 日本人の経路（`DraftRoute` の並びのまま。並びは hash から引く乱数の位置に対応するので、変えると全球団の好みが変わる）
+_TASTE_ROUTES = tuple(route for route in DraftRoute if route is not DraftRoute.FOREIGN)
+
+
+def draft_taste(world_seed: int, team_id: int) -> DraftTaste:
+    """球団 `team_id` の好み。種は「世界・球団」（年に依らない）。乱数源を作らずに hash から一様に引く。"""
+    words = _hash_words(f"{world_seed}:draft-taste-{team_id}")
+    uniform = [2.0 * word * 2.0**-32 - 1.0 for word in words]  # [-1, 1)
+    count = len(_TASTE_ROUTES)
+    raw = [TASTE_ROUTE * value for value in uniform[:count]]
+    mean = sum(raw) / count
+    return DraftTaste(
+        route_bonus={route: value - mean for route, value in zip(_TASTE_ROUTES, raw, strict=True)},
+        growth_weight=1.0 + TASTE_GROWTH * uniform[count],
+        pitcher_bonus=TASTE_PITCHER * uniform[count + 1],
+    )
+
+
+def draft_liking(world_seed: int, year: int, team_id: int, prospect_key: int) -> float:
+    """球団 `team_id` の候補 `prospect_key` への惚れ込み（点。N(0, `TASTE_LIKING_SD`)）。種は「世界・年・候補・球団」。
+
+    スカウトの推定（`scouting_report`）とは別の値で、見立ての誤差ではなく球団の好み（1巡目の評価にだけ足す）。
+    """
+    return TASTE_LIKING_SD * _hash_normals(f"{world_seed}:{year}:draft-liking-{team_id}-{prospect_key}", 1)[0]
 
 
 @dataclass(frozen=True)
@@ -432,8 +509,12 @@ class DraftState:
     _development_positions: dict[int, Counter[Position]] = field(default_factory=dict)
     # 本指名で行動のあった最後の巡（育成の巡の順番の起点）
     _main_last_round: int = 0
-    # 球団 × 位置ごとの、候補の将来値の高い順（AI が使う。候補を足したら差し込む）
-    _rankings: dict[tuple[int, Position], list[tuple[float, int]]] = field(default_factory=dict)
+    # 球団 × 位置ごとの、候補の評価（`evaluation`）の高い順（AI が使う。候補を足したら差し込む）
+    _rankings: dict[tuple[int, Position, bool], list[tuple[float, int]]] = field(default_factory=dict)
+    # 球団ごとの好み（世界のシードと球団から導いた値。初めて要るときに導いて覚える）
+    _tastes: dict[int, DraftTaste] = field(default_factory=dict)
+    # 球団 × 候補の将来値（1位の順位と2巡目以降の順位の両方が使うので、推定を1回だけ作る）
+    _futures: dict[tuple[int, int], float] = field(default_factory=dict)
 
     @classmethod
     def open(
@@ -667,38 +748,63 @@ class DraftState:
 
     # --- AI ---
 
-    def evaluation(self, team_id: int, prospect: Prospect) -> float:
-        """球団 `team_id` から見た候補の将来値（スカウトの推定から）。"""
-        estimate = scouting_report(
-            prospect, team_id, world_seed=self.pool.world_seed, year=self.pool.year, accuracy=self.accuracy
-        )
-        return future_value(prospect, estimate)
+    def taste(self, team_id: int) -> DraftTaste:
+        """球団の好み（`draft_taste`。世界のシードと球団から導く）。"""
+        taste = self._tastes.get(team_id)
+        if taste is None:
+            taste = self._tastes[team_id] = draft_taste(self.pool.world_seed, team_id)
+        return taste
 
-    def _ranking(self, team_id: int, position: Position) -> list[tuple[float, int]]:
-        """球団から見た、位置の候補の将来値の高い順（同値は番号の順）。初めて要るときに作って覚える。"""
-        ranking = self._rankings.get((team_id, position))
+    def _tasted(self) -> bool:
+        """いまの巡で AI の評価に球団の好みを入れるか（本指名の1巡目が入札のとき＝1位の入札だけ。
+        外れ1位の再入札も含む）。
+
+        2巡目以降と育成の巡は将来値だけで選ぶ。好みを全巡に入れると、指名された新人の経路の割合と平均が動き、
+        候補の合わせ込み（`POOL_*`）をやり直すことになる（48球団の合成の会議で、大学の割合が 52% → 47%）。
+        1巡目だけなら、外れた候補は2巡目以降に将来値で取られ、新人の分布は変わらない。
+        1巡目が入札でない規則（完全ウェーバー・くじ順）は競合が起きないので入れない（前の球団ほど良い新人を取る形を保つ）。"""
+        return not self.is_development and self.round_number == 1 and self._bidding()
+
+    def evaluation(self, team_id: int, prospect: Prospect, *, tasted: bool = False) -> float:
+        """球団 `team_id` から見た候補の評価（スカウトの推定から）。`tasted` なら球団の好み（`DraftTaste`）と
+        惚れ込み（`draft_liking`）を入れ、そうでなければ将来値（`future_value`）。"""
+        future = self._futures.get((team_id, prospect.key))
+        if future is None:
+            estimate = scouting_report(
+                prospect, team_id, world_seed=self.pool.world_seed, year=self.pool.year, accuracy=self.accuracy
+            )
+            future = self._futures[(team_id, prospect.key)] = future_value(prospect, estimate)
+        if not tasted:
+            return future
+        liking = draft_liking(self.pool.world_seed, self.pool.year, team_id, prospect.key)
+        return self.taste(team_id).evaluate(prospect, future, liking=liking)
+
+    def _ranking(self, team_id: int, position: Position, tasted: bool) -> list[tuple[float, int]]:
+        """球団から見た、位置の候補の評価の高い順（同値は番号の順）。初めて要るときに作って覚える。"""
+        ranking = self._rankings.get((team_id, position, tasted))
         if ranking is None:
             ranking = sorted(
                 (
-                    (-self.evaluation(team_id, prospect), prospect.key)
+                    (-self.evaluation(team_id, prospect, tasted=tasted), prospect.key)
                     for prospect in self.pool.prospects
                     if prospect.position is position
                 ),
             )
-            self._rankings[(team_id, position)] = ranking
+            self._rankings[(team_id, position, tasted)] = ranking
         return ranking
 
     def _add_to_rankings(self, prospect: Prospect) -> None:
         """足した候補を、作り済みの順位に差し込む（いつ作った順位でも、同じ候補の並びになる）。"""
-        for (team_id, position), ranking in self._rankings.items():
+        for (team_id, position, tasted), ranking in self._rankings.items():
             if position is prospect.position:
-                bisect.insort(ranking, (-self.evaluation(team_id, prospect), prospect.key))
+                bisect.insort(ranking, (-self.evaluation(team_id, prospect, tasted=tasted), prospect.key))
 
     def ai_action(self) -> DraftAction:
         """次の番の球団を AI として動かす行動。計画した位置の残りの中から、評価がいちばん高い候補を選ぶ。
 
-        評価は `将来値 + NEED_WEIGHT × 位置の残り`。計画した位置を指名し尽くしていれば（GM が別の位置を選んだ後の
-        お任せ）、位置の最低人数を割らない候補から将来値で選ぶ。その位置の候補が尽きていれば、その場で1人足す。
+        評価は `将来値 + NEED_WEIGHT × 位置の残り`（1位の入札は将来値の代わりに好みを入れた評価。`_tasted`）。
+        計画した位置を指名し尽くしていれば（GM が別の位置を選んだ後のお任せ）、位置の最低人数を割らない候補から
+        同じ評価で選ぶ。その位置の候補が尽きていれば、その場で1人足す。
         育成の巡は育成の位置の計画（`DraftSlot.development_planned`）で同じように選ぶ。
         """
         turn = self.next_turn()
@@ -720,9 +826,10 @@ class DraftState:
             for position in order
             if self.position_allowed(team_id, position) and (needed[position] > 0 or not any_needed)
         ]
+        tasted = self._tasted()
         best: tuple[float, int] | None = None
         for position in allowed:
-            top = next((item for item in self._ranking(team_id, position) if item[1] not in self._taken), None)
+            top = next((item for item in self._ranking(team_id, position, tasted) if item[1] not in self._taken), None)
             if top is None:
                 continue
             score = -top[0] + NEED_WEIGHT * max(0, needed[position])

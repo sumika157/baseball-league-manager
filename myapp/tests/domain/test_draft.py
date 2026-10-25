@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import unittest
 from collections import Counter
+from dataclasses import replace
 from datetime import date
 
 from myapp.domain.pennant import draft
@@ -211,7 +212,15 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual(seen, set(DraftRoute))
 
     def test_domestic_routes_follow_the_weights(self) -> None:
-        counts = Counter(rookie.route for seed in range(150) for rookie in run(team(), seed))
+        """12球団の会議で数える（1球団だけの会議は候補が24人と少なく、高校の割合が 0.22 と許容の端にあった。
+        1位の好み（#302）で1人動いて外れたため、合わせ込みの前提に近い多球団の会議にした）。"""
+        teams = [replace(team(), team_id=team_id) for team_id in range(1, 13)]
+        context = DraftContext(DraftOrderRule.NPB, DraftStandings(leagues=(tuple(range(1, 13)),)))
+        counts = Counter(
+            rookie.route
+            for seed in range(1, 26)
+            for rookie in run_draft(teams, context, year=YEAR, world_seed=seed, used_names=set()).draftees
+        )
         domestic = counts[DraftRoute.HIGH_SCHOOL] + counts[DraftRoute.UNIVERSITY] + counts[DraftRoute.CORPORATE]
         self.assertAlmostEqual(counts[DraftRoute.UNIVERSITY] / domestic, 0.5, delta=0.08)
         self.assertAlmostEqual(counts[DraftRoute.HIGH_SCHOOL] / domestic, 0.3, delta=0.08)
