@@ -511,7 +511,7 @@ def with_drawn_potential(
     """新人に伸びしろを付ける。乱数は用途 `key` の専用の流れ（`draw_rookie` の乱数の流れに引く回数を足さない）。
 
     外国人の新人（`club_draftees`。平均は普通の50）と会議の候補（`draft_meeting.py`。平均は合わせ込んだ
-    `POOL_POTENTIAL_MEAN`）が通る。
+    `POOL_POTENTIAL_MEAN`。経路ごと）が通る。
     """
     potential = draw_potential(make_random(game_seed(world_seed, year, key)), mean=mean)
     return replace(rookie, ratings=with_potential(rookie.ratings, potential))

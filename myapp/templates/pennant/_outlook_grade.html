@@ -1,0 +1,5 @@
+{% comment %}
+見込みの区分（OutlookCell）を出す。区分と目立たせ方だけで、数値は出さない（伸びしろは隠し値）。
+grade が無いのは見込みの年齢（peak_age）以上の選手で「—」。目立たせ方のクラスは _rating_grade.html と同じ。
+{% endcomment %}
+{% if outlook.grade %}<strong class="{% if outlook.emphasis.value == 'high' %}stat-tier-high{% elif outlook.emphasis.value == 'mid' %}stat-tier-mid{% elif outlook.emphasis.value == 'muted' %}stat-muted{% endif %}">{{ outlook.grade }}</strong>{% else %}<span class="stat-muted">—</span>{% endif %}

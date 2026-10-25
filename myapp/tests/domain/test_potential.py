@@ -13,7 +13,7 @@ from myapp.domain.pennant.aging import BATTER_CURVES, PITCHER_CURVES, age_rating
 from myapp.domain.pennant.draft import DraftTeam, draw_rookie
 from myapp.domain.pennant.draft_meeting import POOL_POTENTIAL_MEAN, draw_pool, scouting_report
 from myapp.domain.pennant.initial_ratings import estimate_initial_ratings
-from myapp.domain.pennant.offseason import with_filled_potential
+from myapp.domain.pennant.outlook import with_filled_potential
 from myapp.domain.simulation.estimate import POTENTIAL_RANGE, CareerRecord, draw_potential
 from myapp.domain.simulation.ratings import (
     BatterRatings,
@@ -211,13 +211,22 @@ class RookiePotentialTest(unittest.TestCase):
             self.assertIsNone(report.ratings.potential)
             self.assertIsInstance(report.potential, Potential)
 
-    def test_prospects_draw_the_potential_around_the_pool_mean(self) -> None:
-        """候補は合わせ込んだ平均（`POOL_POTENTIAL_MEAN`。AI が伸びしろを見て上から取るぶん、普通の50より低い）。"""
-        pool = draw_pool({Position.PITCHER: 150, Position.INFIELDER: 150}, world_seed=4, year=YEAR, used_names=set())
-        values = [potential.value for prospect in pool.prospects if (potential := prospect.rookie.ratings.potential)]
-        self.assertEqual(len(values), len(pool))
-        self.assertAlmostEqual(fmean(values), POOL_POTENTIAL_MEAN, delta=1.0)
-        self.assertLess(POOL_POTENTIAL_MEAN, 50)
+    def test_prospects_draw_the_potential_around_the_pool_mean_of_their_route(self) -> None:
+        """候補は経路ごとに合わせ込んだ平均（`POOL_POTENTIAL_MEAN`。
+        AI が伸びしろを見て上から取るぶん、普通の50より低い。
+        #308 P3 段階0）。"""
+        pool = draw_pool({Position.PITCHER: 300, Position.INFIELDER: 300}, world_seed=4, year=YEAR, used_names=set())
+        self.assertTrue(all(prospect.rookie.ratings.potential is not None for prospect in pool.prospects))
+        for path, mean in POOL_POTENTIAL_MEAN.items():
+            values = [
+                potential.value
+                for prospect in pool.prospects
+                if prospect.route.value == path.value and (potential := prospect.rookie.ratings.potential)
+            ]
+            with self.subTest(path=path):
+                self.assertGreater(len(values), 100)
+                self.assertAlmostEqual(fmean(values), mean, delta=2.0)
+                self.assertLess(mean, 50)
 
     def test_every_draftee_has_a_potential(self) -> None:
         result = run([club(team_id) for team_id in range(1, 5)])

@@ -19,9 +19,11 @@ from ..domain.pennant.initial_ratings import age_at_season_start
 from ..domain.pennant.offseason import overall_value
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.season import ratings_year
+from ..domain.pennant.world import World
 from ..domain.repositories import FixtureRepository, RatingsRepository, WorldRepository
 from ..domain.simulation.ratings import RATING_MAX, RATING_MIN, BatterRatings, PitcherRatings, RatingGrade
 from .dto import (
+    OutlookCell,
     PlayerRatingsCard,
     PlayerRatingsHistory,
     RatingCell,
@@ -30,8 +32,9 @@ from .dto import (
     RatingsRow,
     RatingsTable,
 )
+from .pennant_outlook import is_on_club, outlook_cell
 from .player_stats_view import stats_player
-from .queries import PlayerStatsQuery, RatingsHistoryQuery, SimulationContextQuery
+from .queries import ClubTenureQuery, PlayerStatsQuery, RatingsHistoryQuery, SimulationContextQuery
 
 
 def rating_cells(ratings: BatterRatings | PitcherRatings) -> tuple[RatingCell, ...]:
@@ -68,6 +71,7 @@ class PennantRatingsViewService:
         stats: PlayerStatsQuery,
         ratings: RatingsRepository,
         history: RatingsHistoryQuery,
+        tenures: ClubTenureQuery,
         today: Callable[[], date],
     ) -> None:
         self._world_id = world_id
@@ -77,23 +81,48 @@ class PennantRatingsViewService:
         self._stats = stats
         self._ratings = ratings
         self._history = history
+        self._tenures = tenures
         self._today = today
 
     def current_year(self) -> int:
         """能力を見せる年（次に試合をする年。日を進める処理・編成と同じ規則）。"""
+        return self._current_year(self._worlds.find_by_id(self._world_id))
+
+    def _current_year(self, world: World) -> int:
         return ratings_year(
             next_game_on=self._fixtures.first_date(),
             last_played_on=self._context_query.last_played_on(),
-            start_year=self._worlds.find_by_id(self._world_id).start_year,
+            start_year=world.start_year,
         )
 
     def get_card(self, player_id: int) -> PlayerRatingsCard | None:
-        """選手のいまの年の能力のカード。その年の能力が無い選手や、範囲の外の選手は None。"""
-        found = self._ratings.find_by_players([player_id], self.current_year())
+        """選手のいまの年の能力のカード。その年の能力が無い選手や、範囲の外の選手は None。
+
+        受け持つ球団にその年在籍する選手だけ、見込みの区分（#308 P3）も添える（ほかの球団の選手には出さない）。
+        """
+        world = self._worlds.find_by_id(self._world_id)
+        found = self._ratings.find_by_players([player_id], self._current_year(world))
         if not found:
             return None
         item = found[0]
-        return PlayerRatingsCard(year=item.year, is_pitcher=item.is_pitcher, cells=rating_cells(item.ratings))
+        return PlayerRatingsCard(
+            year=item.year,
+            is_pitcher=item.is_pitcher,
+            cells=rating_cells(item.ratings),
+            outlook=self._outlook(world, item),
+        )
+
+    def _outlook(self, world: World, item: PlayerRatings) -> OutlookCell | None:
+        """受け持つ球団の在籍の選手の見込み。受け持つ球団が無い・その年に在籍していなければ None。"""
+        team_id = world.managed_team_id
+        if team_id is None:
+            return None
+        tenure = self._tenures.for_players(team_id, [item.player_id]).get(item.player_id)
+        if tenure is None or not is_on_club(tenure, team_id=team_id, year=item.year):
+            return None
+        return outlook_cell(
+            item.ratings, tenure=tenure, world=world, team_id=team_id, player_id=item.player_id, year=item.year
+        )
 
     def get_history(self, player_id: int) -> PlayerRatingsHistory | None:
         """選手の能力の推移（古い年から）。範囲の外の選手や、能力が一つも無い選手は None。

@@ -2015,12 +2015,30 @@ class RatingCell:
 
 
 @dataclass(frozen=True)
+class OutlookCell:
+    """受け持つ球団の選手の「見込み」（#308 P3）。`peak_age` 歳ごろの総合の見込みを、球団のスカウトの見立てで見た区分。
+
+    区分と目立たせ方だけを持ち、見込みの数値も伸びしろも持たない（隠し値を見せない）。
+    `grade` が None なのは `peak_age` 歳以上の選手（見込み＝今の能力。画面は「—」）。
+    区分は domain の `outlook.outlook_grade` が出典で、写すだけ。
+    """
+
+    grade: str | None
+    emphasis: RatingEmphasis
+    peak_age: int
+
+
+@dataclass(frozen=True)
 class PlayerRatingsCard:
-    """選手ページの「能力（年度）」カード。成長型は隠し値なので持たない。"""
+    """選手ページの「能力（年度）」カード。成長型・伸びしろは隠し値なので持たない。
+
+    `outlook` は受け持つ球団に在籍する選手だけ（ほかの球団の選手・受け持つ球団の無い世界は None）。
+    """
 
     year: int
     is_pitcher: bool
     cells: tuple[RatingCell, ...]
+    outlook: OutlookCell | None = None
 
 
 @dataclass(frozen=True)
@@ -2255,6 +2273,29 @@ class TeamSpan:
     team_name: str
     from_year: int
     to_year: int | None
+
+
+@dataclass(frozen=True)
+class ClubStint:
+    """球団での在籍ひとつぶん（加入年〜退団年。退団年が空なら現在も在籍）。
+
+    domain の `offseason_player.TenureSpan` を満たす。"""
+
+    team_id: int
+    from_year: int
+    to_year: int | None
+
+
+@dataclass(frozen=True)
+class ClubTenure:
+    """選手ひとりの、ある球団での在籍（古い順）と、年齢・見込みの材料（登録位置・プロフィール）。
+
+    在籍の選手の見込みの見立て（#308 P3。在籍年数で精度が上がる）に使う。参照クエリ（`ClubTenureQuery`）が作る。
+    """
+
+    position: Position
+    profile: Profile
+    stints: tuple[ClubStint, ...]
 
 
 @dataclass(frozen=True)
@@ -2745,6 +2786,8 @@ class ClubPlayerDetail[Row: (ClubPlayerRow, ReleasePlayerRow)]:
     """編成画面の選手1人の、選ぶ材料（年齢・能力の要約・今季の成績）。`player` は編成のタブの行か、「戦力外」タブの行。
 
     `overall` と `cells` は能力が無い選手では None / 空（画面では「—」）。成績は出場が無ければ None。
+    `outlook` は見込みの区分（#308 P3）で、
+    「戦力外」タブの受け持つ球団の選手だけ（ほかのタブと能力の無い選手は None）。
     """
 
     player: Row
@@ -2753,6 +2796,7 @@ class ClubPlayerDetail[Row: (ClubPlayerRow, ReleasePlayerRow)]:
     cells: tuple[RatingCell, ...]
     batting: ClubBattingStat | None
     pitching: ClubPitchingStat | None
+    outlook: OutlookCell | None = None
 
 
 # --- 優勝争い（#104） ---

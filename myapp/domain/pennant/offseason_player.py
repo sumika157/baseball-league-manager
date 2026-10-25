@@ -8,8 +8,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from typing import Protocol
 
 from ..entities import Stint
 from ..simulation.ratings import BatterRatings, PitcherRatings
@@ -76,8 +77,7 @@ class TrackRecord:
         在籍年数は、その球団の在籍が覆う年（締める年 `year` まで）の数。生え抜きは、最初の在籍がその球団への
         ドラフト・育成ドラフトでの入団で、ほかの球団に在籍したことがない選手（入団の経路が不明な在籍は生え抜きと見なさない）。
         """
-        own = [stint for stint in career if stint.team_id == team_id and stint.from_year <= year]
-        seasons = sum(min(year, stint.to_year or year) - stint.from_year + 1 for stint in own)
+        seasons = club_seasons(career, team_id=team_id, year=year)
         first = min(career, key=lambda stint: stint.from_year, default=None)
         homegrown = (
             first is not None
@@ -99,6 +99,40 @@ class TrackRecord:
 
 
 _HOMEGROWN_ROUTES = frozenset({AcquisitionRoute.DRAFT, AcquisitionRoute.DEVELOPMENTAL_DRAFT})
+
+
+class TenureSpan(Protocol):
+    """在籍の期間（球団と、いつからいつまで）。在籍（`Stint`）と、参照クエリが読んだ在籍の写しが満たす。"""
+
+    @property
+    def team_id(self) -> int: ...
+
+    @property
+    def from_year(self) -> int: ...
+
+    @property
+    def to_year(self) -> int | None: ...
+
+
+def club_seasons(career: Iterable[TenureSpan], *, team_id: int, year: int) -> int:
+    """球団 `team_id` に在籍した年数。その球団の在籍が覆う年（`year` まで。`year` を含む）の数。
+
+    **在籍年数の数え方の出典**で、戦力外の実績の加点（`TrackRecord.of`）と、在籍の選手の伸びしろの見立ての精度
+    （`outlook.roster_potential_estimate`）が使う。
+    """
+    return sum(
+        min(year, span.to_year or year) - span.from_year + 1
+        for span in career
+        if span.team_id == team_id and span.from_year <= year
+    )
+
+
+def is_at_club(career: Iterable[TenureSpan], *, team_id: int, year: int) -> bool:
+    """`year` 年に球団 `team_id` に在籍しているか（その球団の在籍のどれかがその年を覆う）。"""
+    return any(
+        span.team_id == team_id and span.from_year <= year and (span.to_year is None or year <= span.to_year)
+        for span in career
+    )
 
 
 @dataclass(frozen=True)

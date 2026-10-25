@@ -23,6 +23,7 @@ from .dto import (
     ActivePlayerStats,
     AwardRow,
     ChampionshipRow,
+    ClubTenure,
     FaSubjects,
     GameNote,
     GameRow,
@@ -326,6 +327,19 @@ class RatingsHistoryQuery(Protocol):
 
     def for_player(self, player_id: int) -> RatingsHistoryFacts | None:
         """範囲の外の選手は None。能力の無い選手は、能力が空の材料を返す。"""
+        ...
+
+
+@runtime_checkable
+class ClubTenureQuery(Protocol):
+    """球団の選手の、その球団での在籍（見込みの見立ての精度に使う在籍年数の材料）。#308 P3。
+
+    読む本数は選手の人数によらず一定（1本）。集約は組み立てない。
+    """
+
+    def for_players(self, team_id: int, player_ids: Sequence[int]) -> dict[int, ClubTenure]:
+        """選手 id ごとの、球団 `team_id` での在籍（古い順）と登録位置・プロフィール。
+        その球団に在籍したことのない選手と範囲の外の選手は含まない。"""
         ...
 
 

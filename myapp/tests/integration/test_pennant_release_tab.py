@@ -5,17 +5,27 @@
 指名が成り立つことを確かめるテストは最低人数を0に差し替える。
 """
 
+import re
+from datetime import date
 from unittest import mock
 
 from django.contrib.messages import get_messages
 from django.urls import reverse
 
 from myapp.domain.pennant.draft import MIN_BY_POSITION
+from myapp.domain.pennant.offseason_player import TrackRecord, player_age
+from myapp.domain.pennant.outlook import PEAK_AGE, outlook_grade, roster_projection
 from myapp.domain.pennant.release import ReleasePlan
 from myapp.domain.pennant.schedule import AdvanceTarget
 from myapp.domain.pennant.world import WorldScope
+from myapp.domain.value_objects import BattingLine, PitchingLine
 from myapp.infrastructure import orm_models
-from myapp.infrastructure.repositories import DjangoReleasePlanRepository
+from myapp.infrastructure.repositories import (
+    DjangoRatingsRepository,
+    DjangoReleasePlanRepository,
+    DjangoTeamRepository,
+    DjangoWorldRepository,
+)
 from myapp.presentation.club_input import REOPEN
 from myapp.presentation.views import build_pennant_season_service
 
@@ -212,3 +222,106 @@ class SeasonCloseCardReleaseLineTest(ReleaseTabCase):
         content = self.client.get(self.home_url()).content.decode()
         self.assertIn("戦力外: 手動（2人）", content)
         self.assertEqual(content.count(f'action="{self.close_url()}"'), 1)
+
+
+class ReleaseTabOutlookTest(ReleaseTabCase):
+    """「戦力外」タブの見込みの区分（#308 P3a）。受け持つ球団の選手だけ・区分だけ・締める処理と同じ材料から導く。"""
+
+    def setUp(self):
+        super().setUp()
+        ids = self.registered_ids()
+        # 若手を3人作る（18・21・24歳。4月1日時点）。残りは開発用の生年月日のまま（27歳以上なら「—」）
+        for player_id, age in zip(ids, (18, 21, 24), strict=False):
+            orm_models.Player.objects.filter(id=player_id).update(birth_date=date(YEAR - age - 1, 6, 1))
+        self.young = ids[:3]
+
+    def details(self):
+        response = self.client.get(self.club_url())
+        self.assertEqual(response.status_code, 200)
+        return response, list(response.context["release_players"])
+
+    def expected_grade(self, player_id: int) -> str | None:
+        """締める処理が AI の材料にするのと同じ値（その年の能力・4月1日の年齢・`TrackRecord` の在籍年数）から導く。"""
+        world = DjangoWorldRepository().find_by_id(self.world_a)
+        scope = WorldScope.pennant(self.world_a)
+        team = DjangoTeamRepository(scope).find_by_id(self.team_id())
+        player = next(p for p in team.players if p.id == player_id)
+        (rating,) = DjangoRatingsRepository(scope).find_by_players([player_id], YEAR)
+        age = player_age(player.profile, YEAR, start_year=world.start_year)
+        if age >= PEAK_AGE:
+            return None
+        record = TrackRecord.of(
+            team_id=self.team_id(),
+            career=player.career,
+            year=YEAR,
+            batting=BattingLine(),
+            pitching=PitchingLine(),
+            is_captain=False,
+            titles=0,
+        )
+        projected = roster_projection(
+            rating.ratings,
+            age=age,
+            position=player.position,
+            world_seed=world.seed,
+            team_id=self.team_id(),
+            player_id=player_id,
+            seasons=record.seasons,
+        )
+        return outlook_grade(projected).label
+
+    def test_every_registered_player_has_the_outlook_from_the_same_materials_as_closing(self):
+        _, details = self.details()
+        self.assertEqual({detail.player.player_id for detail in details}, set(self.registered_ids()))
+        for detail in details:
+            with self.subTest(player=detail.player.player_id):
+                assert detail.outlook is not None
+                self.assertEqual(detail.outlook.grade, self.expected_grade(detail.player.player_id))
+        young = [detail for detail in details if detail.player.player_id in self.young]
+        self.assertTrue(all(detail.outlook is not None and detail.outlook.grade for detail in young))
+
+    def test_the_page_shows_only_the_grade_to_anyone(self):
+        """GET は誰でも見られる。区分だけで、見込みの数値も伸びしろも出さない。"""
+        response, _ = self.details()
+        content = response.content.decode()
+        self.assertIn("見込み", content)
+        self.assertNotIn("伸びしろ", content)
+        cells = re.findall(r"<span class=\"ms-2\" data-outlook>(.*?)</span>\s*</div>", content, re.DOTALL)
+        self.assertEqual(len(cells), len(self.registered_ids()))
+        for cell in cells:
+            with self.subTest(cell=cell):
+                self.assertIsNone(re.search(r"\d", re.sub(r"<[^>]+>", "", cell)), "見込みの数値を出さない")
+
+    def test_a_world_without_potentials_is_shown_without_writing(self):
+        """伸びしろの無い世界（#308 より前）でも出る。締める処理が翌年に書く値を先に導いて使い、何も書かない。"""
+        orm_models.PennantPlayerRatings.objects.filter(player_id__in=self.registered_ids()).update(potential=None)
+        rows = orm_models.PennantPlayerRatings.objects.count()
+
+        _, details = self.details()
+
+        self.assertTrue(all(detail.outlook is not None for detail in details))
+        self.assertEqual(orm_models.PennantPlayerRatings.objects.count(), rows)
+        self.assertFalse(
+            orm_models.PennantPlayerRatings.objects.filter(
+                player_id__in=self.registered_ids(), potential__isnull=False
+            ).exists()
+        )
+        for player_id in self.young:
+            with self.subTest(player=player_id):
+                self.assertEqual(
+                    next(d for d in details if d.player.player_id == player_id).outlook.grade,
+                    self.expected_grade(player_id),
+                )
+
+    def test_other_tabs_do_not_read_the_outlook(self):
+        response = self.client.get(self.club_url("active"))
+        self.assertTrue(all(detail.outlook is None for detail in response.context["club_players"]))
+
+    def test_the_note_is_shown_once_even_if_the_first_player_has_no_ratings(self):
+        response, details = self.details()
+        orm_models.PennantPlayerRatings.objects.filter(player_id=details[0].player.player_id, year=YEAR).delete()
+
+        response, details = self.details()
+
+        self.assertIsNone(details[0].outlook)
+        self.assertEqual(response.content.decode().count("歳ごろの総合の見込み"), 1)
