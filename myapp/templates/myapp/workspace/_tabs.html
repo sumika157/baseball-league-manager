@@ -1,0 +1,22 @@
+{% load scoped %}
+{% comment %}
+ワークスペースの管理の画面（持ち主だけ）の共通の見出し（パンくず・見出し・タブ）。workspace_tab で今のタブを示す。
+タブは開ける画面だけを並べる（メンバー・削除は W4 T4・T5 で画面を作るときにここへ足す。押しても開けないタブを出さない）。
+{% endcomment %}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="{% workspace_url 'dashboard' %}">{{ workspace.name }}</a></li>
+    <li class="breadcrumb-item active">ワークスペースの管理</li>
+  </ol>
+</nav>
+
+<div class="page-head">
+  <h1 class="page-title">ワークスペースの管理</h1>
+  <p class="page-subtitle">このワークスペースの持ち主だけが開ける画面です。</p>
+</div>
+
+<ul class="nav nav-tabs mb-3">
+  <li class="nav-item">
+    <a class="nav-link{% if workspace_tab == 'settings' %} active{% endif %}" href="{% workspace_url 'workspace_settings' %}">設定</a>
+  </li>
+</ul>

@@ -21,7 +21,8 @@ from django.middleware.csrf import get_token
 from django.shortcuts import redirect, render
 from django.urls import reverse, reverse_lazy
 from django.utils import timezone
-from django.views.decorators.http import require_GET, require_safe
+from django.utils.functional import SimpleLazyObject
+from django.views.decorators.http import require_GET, require_POST, require_safe
 from django.views.generic import CreateView
 
 from ..application.club_management import ClubManagementService
@@ -40,6 +41,7 @@ from ..application.dto import (
     TeamMonthlyRow,
     TeamSetupRow,
     WorkspaceContext,
+    WorkspaceRow,
     WorldContext,
 )
 from ..application.foreign_quota import ForeignQuotaExemptions
@@ -74,6 +76,7 @@ from ..domain.exceptions import (
     GameNotFound,
     InvalidName,
     InvalidReleasePlan,
+    InvalidWorkspace,
     InvalidWorld,
     LeagueChangeLocked,
     LeagueNotFound,
@@ -81,6 +84,7 @@ from ..domain.exceptions import (
     RegisteredPlayerLimitExceeded,
     StadiumNotFound,
     TeamNotFound,
+    WorkspaceLimitReached,
     WorkspaceNotFound,
     WorldNotFound,
 )
@@ -107,7 +111,7 @@ from ..domain.value_objects import (
     PlateAppearanceResult,
     Position,
 )
-from ..domain.workspace import WorkspaceQuota
+from ..domain.workspace import WorkspaceAccess, WorkspaceQuota
 from ..infrastructure.queries import (
     DjangoAwardQuery,
     DjangoChampionshipQuery,
@@ -190,6 +194,7 @@ from .forms import (
     PostseasonFormatForm,
     StadiumSetupForm,
     TeamSetupForm,
+    WorkspaceForm,
 )
 
 BATTER_MODE = "batter"
@@ -1691,12 +1696,103 @@ def home(request):
 
     ログインしていれば、自分が持ち主・編集者・チーム担当として入っているワークスペースの一覧（名前順）。
     ログインしていなければ、紹介と、見本のワークスペース（`settings.SAMPLE_WORKSPACE_KEY`）へのリンクと、新規登録・ログイン。
-    見本のリンクは、設定があり、その key のワークスペースがあり、公開のときだけ出す（推し量らない。作成は W4）。
+    見本のリンクは、設定があり、その key のワークスペースがあり、公開のときだけ出す（推し量らない）。
+    ログインしていれば一覧の下に作成フォーム（送り先は `workspace_create`）。
     """
     if request.user.is_authenticated:
-        workspaces = build_workspace_list_query().list_for(request.user.id)
-        return render(request, "myapp/home.html", {"workspaces": workspaces})
+        return _render_home(request, WorkspaceForm())
     return render(request, "myapp/home.html", {"sample": _sample_workspace()})
+
+
+def _render_home(request, form: WorkspaceForm):
+    """ログインした人の `/`: 自分のワークスペースの一覧と、作成フォーム（上限に達していれば代わりに案内）。
+
+    上限を超える作成の送信（別のタブで先に作ったなど）も、ここで上限の案内として描く（フォームは出さない）。
+    """
+    service = build_workspace_service()
+    can_create = service.can_create(request.user.id)
+    return render(
+        request,
+        "myapp/home.html",
+        {
+            "workspaces": build_workspace_list_query().list_for(request.user.id),
+            "create_form": form if can_create else None,
+            "limit_message": None if can_create else service.limit_message,
+        },
+    )
+
+
+@require_POST
+def workspace_create(request):
+    """ワークスペースの作成（`/workspaces/new/`。ワークスペースの外。POST だけ。W4 T3）。
+
+    作ったら新しいワークスペースのダッシュボードへ（空の案内が出る）。入力の誤りは `/` をフォームのエラーつきで、
+    上限（`WorkspaceLimitReached`。数える → 上限 → 保存はサービスが1つのトランザクションで行う）はフォームの代わりに
+    上限の案内を出して、どちらも 200 で描き直す（何も作らない）。
+    未ログインはログインへ（戻り先は `/`。POST の URL へは戻さない）。
+    """
+    if not request.user.is_authenticated:
+        return redirect_to_login(reverse("home"))
+    form = WorkspaceForm(request.POST)
+    if form.is_valid():
+        data = form.cleaned_data
+        try:
+            key = build_workspace_service().create(
+                owner_id=request.user.id, name=data["name"], visibility=data["visibility"]
+            )
+        except InvalidWorkspace as error:
+            form.add_error("name", str(error))
+        except WorkspaceLimitReached:
+            pass  # `_render_home` が持っている数を数え直し、フォームの代わりに上限の案内を出す
+        else:
+            messages.success(request, f"ワークスペース「{data['name']}」を作りました。")
+            return redirect(reverse("dashboard", args=(key,)))
+    return _render_home(request, form)
+
+
+def my_workspaces(request) -> SimpleLazyObject | list[WorkspaceRow]:
+    """ヘッダーの切り替えに出す、ログインした人のワークスペースの一覧。**描くときだけ読む**（遅延オブジェクト）。
+
+    コンテキストプロセッサが渡す。テンプレートが一覧を描いたときに1回だけ読む（ログインした人は全画面で +1 クエリ。
+    JSON を返す API など、描かない要求では読まない）。未ログインなら空（読まない）。
+    """
+    if not request.user.is_authenticated:
+        return []
+    user_id = request.user.id
+    return SimpleLazyObject(lambda: build_workspace_list_query().list_for(user_id))
+
+
+def _requires_owner(request, check: Callable[[WorkspaceAccess], bool]) -> None:
+    """持ち主だけの画面（設定。メンバー・削除も同じ門を通す）の門。`check` が偽なら 403。
+
+    ログインは `workspace_view(login=True)` が先に求める。判定は解決済みの権限だけ（DB を読まない）。
+    """
+    if not check(_workspace(request).access):
+        raise PermissionDenied("このワークスペースの持ち主だけが使える画面です。")
+
+
+def workspace_settings(request):
+    """ワークスペースの設定（名前と公開範囲。`/w/<key>/settings/`）。持ち主だけ（GET も POST も）。"""
+    if request.method not in _SETUP_METHODS:
+        return HttpResponseNotAllowed(_SETUP_METHODS)
+    _requires_owner(request, WorkspaceAccess.can_change_settings)
+    workspace = _workspace(request)
+    if request.method == "POST":
+        form = WorkspaceForm(request.POST)
+        if form.is_valid():
+            data = form.cleaned_data
+            try:
+                build_workspace_service().change_settings(
+                    workspace.workspace_id, name=data["name"], visibility=data["visibility"]
+                )
+            except InvalidWorkspace as error:
+                form.add_error("name", str(error))
+            else:
+                messages.success(request, "ワークスペースの設定を保存しました。")
+                return redirect(_url(request, "workspace_settings"))
+    else:
+        form = WorkspaceForm(initial={"name": workspace.name, "visibility": workspace.visibility.value})
+    return render(request, "myapp/workspace/settings.html", {"form": form, "workspace_tab": "settings"})
 
 
 def _sample_workspace() -> WorkspaceContext | None:

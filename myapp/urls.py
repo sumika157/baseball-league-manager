@@ -34,6 +34,8 @@ def _pennant(route: str, view, name: str):
 # ワークスペースの中の画面（実データとペナント）。`config/urls.py` が `/w/<key>/` の下に置く
 workspace_urlpatterns = [
     _w("", views.dashboard, "dashboard"),
+    # ワークスペースそのものの設定（名前と公開範囲。W4 #80）。見るのも書くのも持ち主だけ
+    _w("settings/", views.workspace_settings, "workspace_settings", login=True),
     _w("teams/", views.team_list, "team_list"),
     _w("players/", views.player_search, "player_search"),
     _w("standings/", views.standings, "standings"),
@@ -107,4 +109,6 @@ workspace_urlpatterns = [
 urlpatterns = [
     path("", views.home, name="home"),
     path("accounts/signup/", views.SignUpView.as_view(), name="signup"),
+    # ワークスペースの作成（POST だけ。フォームは `/` にある。W4 #80）
+    path("workspaces/new/", views.workspace_create, name="workspace_create"),
 ]

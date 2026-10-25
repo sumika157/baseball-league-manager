@@ -14,6 +14,7 @@ import itertools
 import json
 
 from django.contrib.auth.models import User
+from django.urls import reverse
 
 from myapp.domain.workspace import Visibility
 from myapp.infrastructure import orm_models
@@ -327,3 +328,80 @@ class ManagerOfAnotherWorkspaceTest(PermissionTableCase):
             with self.subTest(user=user.username):
                 self.client.force_login(user)
                 self.assertEqual(self._observe(user.username), _NO_RIGHTS.split())
+
+
+# ワークスペースそのものの設定と作成（W4 T3。#80）。上の表とは別に、同じ役割で確かめる
+#   ヘッダーの設定の導線: Y・N・404・login ／ 設定（GET）: 200・403・404・login ／ 設定（POST）: ok・403・404・login
+#   作成（POST。ワークスペースの外なので公開範囲によらない）: ok・login
+WORKSPACE_CHECKS = ("ヘッダーの設定の導線", "設定（GET）", "設定（POST）", "作成（POST）")
+_WORKSPACE_MEMBERS = {
+    "持ち主": "Y 200 ok ok",
+    # 編集者でも設定は変えられない（持ち主だけ。`can_change_settings()`）
+    "編集者": "N 403 403 ok",
+    "担当": "N 403 403 ok",
+    "ほかのチームの担当": "N 403 403 ok",
+}
+WORKSPACE_PUBLIC = {
+    **_WORKSPACE_MEMBERS,
+    "ログインした部外者": "N 403 403 ok",
+    "staff の部外者": "N 403 403 ok",
+    "superuser の部外者": "N 403 403 ok",
+    "未ログイン": "N login login login",
+}
+WORKSPACE_PRIVATE = {
+    **_WORKSPACE_MEMBERS,
+    "ログインした部外者": "404 404 404 ok",
+    "staff の部外者": "404 404 404 ok",
+    "superuser の部外者": "404 404 404 ok",
+    "未ログイン": "login login login login",
+}
+
+
+class WorkspaceSettingsPermissionTest(PermissionTableCase):
+    """設定の画面と作成の、役割ごとの表（公開・非公開）。設定は持ち主だけ、作成はログインした人なら誰でも。"""
+
+    workspace_table = WORKSPACE_PUBLIC
+
+    def setUp(self):
+        super().setUp()
+        self.ws.name, self.ws.visibility = "元の名前", self.visibility.value
+        self.ws.save()
+
+    def _observe_workspace(self, role: str) -> list[str]:
+        settings_url = self.url("workspace_settings")
+        observed = [
+            self._link(self.url("dashboard"), f'href="{settings_url}"'),
+            self._get(settings_url),
+        ]
+        name = f"{role}が付けた名前"
+        response = self.client.post(settings_url, {"name": name, "visibility": self.visibility.value})
+        self.ws.refresh_from_db()
+        observed.append(self._write(response, self.ws.name == name))
+        # 次の役割のために戻す
+        orm_models.Workspace.objects.filter(id=self.ws.id).update(name="元の名前")
+
+        workspaces = orm_models.Workspace.objects.count()
+        response = self.client.post(reverse("workspace_create"), {"name": f"{role}の場所", "visibility": "private"})
+        observed.append(self._write(response, orm_models.Workspace.objects.count() != workspaces))
+        return observed
+
+    def _check(self, expected: dict[str, str]) -> None:
+        for role, row in expected.items():
+            with self.subTest(role=role):
+                user = self.users[role]
+                if user is None:
+                    self.client.logout()
+                else:
+                    self.client.force_login(user)
+                self.assertEqual(
+                    dict(zip(WORKSPACE_CHECKS, self._observe_workspace(role), strict=True)),
+                    dict(zip(WORKSPACE_CHECKS, row.split(), strict=True)),
+                )
+
+    def test_roles_by_pages(self):
+        self._check(self.workspace_table)
+
+
+class PrivateWorkspaceSettingsPermissionTest(WorkspaceSettingsPermissionTest):
+    visibility = Visibility.PRIVATE
+    workspace_table = WORKSPACE_PRIVATE

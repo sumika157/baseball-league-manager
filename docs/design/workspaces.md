@@ -1533,3 +1533,60 @@ W2 の本体。ワークスペースの中の画面43本（実データ20・ペ�
 - T3: `/` の作成フォームは `build_workspace_service().can_create(user_id)` と `limit_message`。設定の門は `can_change_settings()`。ドメイン例外（`InvalidWorkspace`・`WorkspaceLimitReached`）をフォームのエラーに。
 - T4: 発行の直後だけ `IssuedInvitation.token` からリンクを作る。招待の画面は `build_invitation_preview_query().preview(token, user_id, timezone.now())`（`InvalidInvitation` は 404。`is_member` なら受諾のボタンを出さない）。受諾は `accept_invitation(token, user_id)` が key を返す。役割の変更と除名は `MemberNotFound`・`InvalidWorkspace` を画面のエラーに。担当チームの選択肢はこのワークスペースの実データのチーム。
 - T6: 管理画面からワークスペースの台帳の組み立て口を使うときは、`test_wiring.py` の `WorkspaceLedgerUsersTest.ALLOWED` に `myapp/admin.py` を足す。
+
+#### T3 作成と設定の画面・ヘッダー（`feature/workspace-create-settings`、2026-10-25）
+
+epic の 3e954a4（W4 T1）から作り、コミットの前に epic の先端 2f68b4f（W3 T8）の上に載せ直した（衝突なし）。マイグレーションは無い。
+
+- 作成: `/` のログイン時の一覧の下に作成フォーム（`WorkspaceForm`。名前・公開範囲。選択肢は `Visibility.choices()`、既定は非公開）。
+  上限に達していれば（`build_workspace_service().can_create(user_id)` が偽）フォームの代わりに `limit_message` の案内だけ。
+  送り先は `/workspaces/new/`（`workspace_create`。ワークスペースの外、`require_POST`）。成功したら新しいワークスペースの
+  ダッシュボード（W3 の空の案内）へ。入力の誤り（`InvalidWorkspace` は名前の欄）と上限（`WorkspaceLimitReached` はフォーム全体）は
+  `/` を 200 で描き直す。未ログインの POST はログインへ（戻り先は `/`）。
+- 設定: `/w/<key>/settings/`（`workspace_settings`。`login=True`）。門は `_requires_owner(request, WorkspaceAccess.can_change_settings)`
+  （解決済みの権限だけで DB を読まない。持ち主以外は GET も POST も 403。T4・T5 のメンバー・削除の画面も同じ門に別の判定を渡す）。
+  初期値は `WorkspaceContext` の名前と公開範囲（読み直さない）。保存したら同じ画面へ。見出しとタブは `myapp/workspace/_tabs.html`
+  （今は「設定」だけ。メンバー・削除は画面を作るときに足す。押しても開けないタブを出さない）。
+- ヘッダー: ログインしていれば、ワークスペースの中で名前のところが Bootstrap のドロップダウン（ダッシュボード・持ち主には
+  「ワークスペースの設定」・自分のワークスペースへの切り替え・`/`）。未ログインは今どおり名前のリンク。コンテキストプロセッサが
+  `can_manage_workspace`（`can_change_settings()`。DB を読まない）と `my_workspaces`（`views.my_workspaces`。`list_for` を
+  描くときにだけ評価する `SimpleLazyObject`）を渡す。台帳の組み立て口の名前は `views.py` の外に出さない（`WorkspaceLedgerUsersTest`）。
+
+**計画からのずれ**
+
+- `/` のクエリは3本から4本（セッション・利用者・一覧・持っている数）。計画の見込み（`/` は今と同じ3クエリ）からずれた。
+  申し送りのとおり `can_create(user_id)` で数える（一覧の行から持ち主の行を数えて済ませると、上限の判定の数え方が作成の検査
+  （`count_owned_by`）と2か所になる）。ワークスペースの数にはよらない。
+- `NoBareReverseTest.ALLOWED` に `workspace_create` を足した（ワークスペースの外の画面で、行き先は作ったばかりの別のワークスペース。
+  今の要求の key が無いので `_url` では組めない）。
+- `test_the_workspace_is_read_once_per_request` は、ヘッダーの切り替えの一覧（コンテキストプロセッサの `my_workspaces` を空に差し替える）を「今の要求の
+  ワークスペースの読み」から除いた。
+- 上限を超える作成の送信（別のタブで先に作ったなど）は、フォームのエラーではなく、`/` をフォームの代わりに上限の案内で描き直す（200。
+  何も作らない）。上限に達した画面にはフォームを出さない、に揃えた（指示の「4つ目の POST は 200 でフォームのエラー」からの小さなずれ）。
+- 権限の表は、W3 T8 と衝突しないよう既存の `CHECKS` に列を足さず、同じ役割で別の表（`WORKSPACE_CHECKS`。設定の導線・GET・POST・作成）にした。
+
+**テスト**: integration 新 `test_workspace_screens.py`（作成フォームと既定の非公開・作成後のダッシュボード・入力の誤り・上限で
+フォームが消え4つ目は 200 のエラー・settings からの上限・編集者として入っている分は数えない・未ログインの POST・`/` のクエリ数・
+設定の往復・空の名前・持ち主以外は 403・未ログインはログインへ・ヘッダーの切り替えと設定のリンク（持ち主だけ）・一覧は1回だけ読み
+未ログインと API では読まない・クエリ数がワークスペースの数によらない）、`test_workspace_permissions.py` に `WorkspaceSettingsPermissionTest`
+（公開・非公開 × 8つの役割）、`test_workspace_isolation.py` の `URL_TABLE`・`WRITE_BODIES`・`ID_FREE_WRITES`・持ち主の書き込みの空振りの検査に
+`workspace_settings`、`header_pages()` に設定。
+件数: domain＋integration 4,162（epic の先端 2f68b4f の上。T1 の 4,120 に W3 T8 の分と、この段階の +21）、e2e 20（変わらず）。
+
+**変異の確かめ**（どれも戻した。`test_workspace_screens`・`test_workspace_permissions`・`test_workspace_isolation` を流した）: 設定の門を外す → 69件、
+設定のリンクを全員に出す → 10件、門を `can_set_up`（編集者も通す）にする → 3件、上限でもフォームを出す → 2件、作成の既定を公開にする → 1件、
+一覧を遅延させずに読む → 1件（最初は API の要求で確かめるテストにしたが、API はテンプレートを描かずコンテキストプロセッサも呼ばれないので
+生き残った。コンテキストプロセッサを直接呼んで、渡すときは0本・回したときに1本のテストに替えた）。
+
+**レビュー（ddd-boundary-reviewer）**: 重要な指摘なし。軽微を直した: (1) `WorkspaceLedgerUsersTest` の docstring に、コンテキストプロセッサは
+views の `my_workspaces` を通して読むことを書いた。(2) 1要求1回の読みの検査が SQL の注釈名で一覧を除いていた → `my_workspaces` を差し替える。
+(3) `header_pages()` の docstring に、ログインした人のヘッダーにはほかの自分のワークスペースの入口も出ること（検査の利用者はワークスペースを
+1つだけ持つ人にする）を書いた。(5) 上限の例外を描かれないフォームのエラーに積んでいた → 積まない。残したもの: (4) 作成の成功の文言は
+フォームの名前を写す（ドメインの正規化は前後の空白を除くだけで一致する）。
+
+**T4 以降への申し送り**
+
+- T4・T5: メンバー・削除の画面は `_requires_owner(request, WorkspaceAccess.can_manage_members)`・`(…, WorkspaceAccess.can_delete)` を通し、
+  `myapp/workspace/_tabs.html` にタブを足し、`workspace_tab` を渡す。ヘッダーのメニューに出すなら `can_manage_workspace` と同じく
+  コンテキストプロセッサから（DB を読まない）。
+- 計測（T7）: ログインした人はワークスペースの中の全画面でヘッダーの一覧の +1。`/` はログインした人で4本（一覧・持っている数）。

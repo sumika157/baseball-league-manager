@@ -121,7 +121,7 @@ class TopPageTest(TestCase):
         for workspace in (owned, edited, managed):
             self.assertIn(f'href="{ws_url("dashboard", workspace=workspace)}"', content)
         self.assertNotIn("見本のリーグ", content, "入っていない公開ワークスペースは一覧に出さない")
-        self.assertNotIn('<form method="post" class="card', content, "作成フォームは W4")
+        self.assertIn(f'action="{reverse("workspace_create")}"', content, "一覧の下に作成フォーム（W4）")
 
     def test_the_list_reads_once_whatever_the_number_of_workspaces(self):
         """一覧はワークスペースの数に比例しない（`Exists` の注釈で1本）。"""
@@ -129,7 +129,7 @@ class TopPageTest(TestCase):
         make_workspace(user, "1つ目", key="countws001")
         self.client.force_login(user)
         self.client.get(reverse("home"))  # セッションを温める
-        with self.assertNumQueries(3) as one:  # セッション・利用者・一覧
+        with self.assertNumQueries(4) as one:  # セッション・利用者・一覧・持っている数（作成フォームを出すか。W4）
             self.client.get(reverse("home"))
         for number in range(2, 5):
             make_workspace(user, f"{number}つ目", key=f"countws00{number}")
@@ -271,7 +271,9 @@ class UrlHelperTest(TestCase):
 class NoBareReverseTest(SimpleTestCase):
     """views・API が中の画面の URL を組むのは `_url` だけ（key を足し忘れた URL を作らない）。"""
 
-    ALLOWED = {("views.py", "_url"), ("views.py", "SignUpView")}
+    # 作成（W4 T3）はワークスペースの外の画面で、戻り先は `/`、成功の行き先は作ったばかりの別のワークスペース
+    # （今の要求の key が無いので `_url` では組めない）
+    ALLOWED = {("views.py", "_url"), ("views.py", "SignUpView"), ("views.py", "workspace_create")}
 
     def test_reverse_and_redirect_by_name_are_only_in_the_helper(self):
         offenders = []

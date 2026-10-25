@@ -171,6 +171,24 @@ main.container {
   color: var(--app-accent);
 }
 
+/* ログインしていれば名前がワークスペースの切り替えのドロップダウンになる。ボタンの枠と背景を消して名前のリンクと同じ見た目に */
+.app-workspace-switch {
+  min-width: 0;
+}
+
+button.app-workspace-name {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: inherit;
+}
+
+.app-workspace-switch .dropdown-menu {
+  font-size: 0.875rem;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
 /* ヘッダーの検索。狭い画面では隠して場所を空ける */
 .app-search {
   margin-left: auto;

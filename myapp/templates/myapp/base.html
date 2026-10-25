@@ -22,9 +22,34 @@
         導線を出す。外の画面（/・ログイン・404 など）にはワークスペースが無く、中の画面の URL を組めない。
         表示名は WorkspaceRole・Visibility が出典（テンプレートに並べない）。
         {% endcomment %}
+        {% comment %}
+        ログインしていれば、名前のところをドロップダウンにする: このワークスペースのダッシュボード、自分のワークスペースへの
+        切り替え（my_workspaces。描いたときにだけ読む）、/ の一覧、持ち主には設定（can_manage_workspace。DB は読まない）。
+        未ログインは名前のリンクだけ（一覧を読まない）。
+        {% endcomment %}
         {% if workspace %}
           <div class="app-workspace">
-            <a href="{% workspace_url 'dashboard' %}" class="app-workspace-name">{{ workspace.name }}</a>
+            {% if user.is_authenticated %}
+              <div class="dropdown app-workspace-switch">
+                <button type="button" class="app-workspace-name dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">{{ workspace.name }}</button>
+                <ul class="dropdown-menu">
+                  <li><a class="dropdown-item" href="{% workspace_url 'dashboard' %}">ダッシュボード</a></li>
+                  {% if can_manage_workspace %}
+                    <li><a class="dropdown-item" href="{% workspace_url 'workspace_settings' %}">ワークスペースの設定</a></li>
+                  {% endif %}
+                  <li><hr class="dropdown-divider" /></li>
+                  <li><h6 class="dropdown-header">ワークスペースを切り替える</h6></li>
+                  {% for row in my_workspaces %}
+                    <li>
+                      <a class="dropdown-item{% if row.key == workspace.key %} active{% endif %}" href="{% workspace_entry_url row.key %}"{% if row.key == workspace.key %} aria-current="true"{% endif %}>{{ row.name }}</a>
+                    </li>
+                  {% endfor %}
+                  <li><a class="dropdown-item" href="{% url 'home' %}">ワークスペースの一覧へ</a></li>
+                </ul>
+              </div>
+            {% else %}
+              <a href="{% workspace_url 'dashboard' %}" class="app-workspace-name">{{ workspace.name }}</a>
+            {% endif %}
             <span class="badge bg-secondary">{{ workspace.visibility.label }}</span>
             {% if user.is_authenticated %}
               <span class="badge bg-primary">{{ workspace.access.role.label }}</span>
