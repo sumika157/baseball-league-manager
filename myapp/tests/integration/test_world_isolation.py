@@ -708,10 +708,10 @@ class ModelClassificationTest(SimpleTestCase):
                     self.assertNotIn(field.related_model, below_league, f"{name}.{field.name}")
 
     def test_the_world_deletion_covers_every_model_that_belongs_to_a_league(self):
-        from myapp.infrastructure.repositories import _WORLD_ROWS_CHILD_FIRST
+        from myapp.infrastructure.repositories import _SCOPE_ROWS_CHILD_FIRST
 
         models = self._models()
-        deleted = {model.__name__ for model, _ in _WORLD_ROWS_CHILD_FIRST}
+        deleted = {model.__name__ for model, _ in _SCOPE_ROWS_CHILD_FIRST}
         # 選手・球団・リーグは個別に消す。ここに挙がるのは、行数が多く collector に任せないもの
         individually = {"Player", "Team", "League"}
         expected = {
@@ -720,7 +720,7 @@ class ModelClassificationTest(SimpleTestCase):
         self.assertEqual(deleted, expected, "世界の削除が、League 以下のモデルと食い違っています")
         self.assertTrue(deleted <= set(models))
         # 道（League までの関連名）も分類表と一致する。ずれると別の行を消す・消し残す
-        routes = {model.__name__: route for model, route in _WORLD_ROWS_CHILD_FIRST}
+        routes = {model.__name__: route for model, route in _SCOPE_ROWS_CHILD_FIRST}
         self.assertEqual(routes, {name: CLASSIFICATION[name][1] for name in expected})
         # 世界の削除が触れてはならない、ワークスペース直属・メンバー・全体のモデル
         for name, (kind, _) in CLASSIFICATION.items():

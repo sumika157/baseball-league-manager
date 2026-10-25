@@ -999,7 +999,8 @@ class WorkspaceLedgerUsersTest(SimpleTestCase):
     W4 で足したワークスペースそのものの台帳（`DjangoWorkspaceRepository`・`DjangoInvitationRepository`・
     `DjangoInvitationPreviewQuery`）と、その組み立て口（作成・設定・招待・メンバー）も同じ扱いにする
     （定義の `infrastructure/repositories.py` を足す）。管理画面がワークスペースの削除をサービスに通すときは（W4 T6）、
-    ここに `myapp/admin.py` を足す。
+    ここに `myapp/admin.py` を足す。運営者の管理コマンド `workspace_delete`（W4 T2）は、`--workspace` の key で指した
+    ワークスペースを消すのが仕事なので使ってよい（範囲を受け取る経路ではなく、範囲そのものを消す）。
     ヘッダーの切り替えの一覧（W4 T3）は、コンテキストプロセッサが views の `my_workspaces` を通して読む（名前は
     views.py の外に出さない。範囲を選び直す経路ではなく、利用者 id で自分の一覧を引くだけ）。
     """
@@ -1020,6 +1021,7 @@ class WorkspaceLedgerUsersTest(SimpleTestCase):
         Path("myapp/presentation/views.py"),
         Path("myapp/infrastructure/queries.py"),
         Path("myapp/infrastructure/repositories.py"),
+        Path("myapp/management/commands/workspace_delete.py"),
     }
 
     def test_only_the_views_use_the_workspace_ledgers(self):

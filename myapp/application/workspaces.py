@@ -4,7 +4,7 @@
 招待のリンクを開いた人に見せる中身は `InvitationPreviewQuery` が読む（更新と参照を分ける）。
 サービスは2つに分ける（2026-10-25 ユーザー決定 3）:
 
-- `WorkspaceService`: 作成・設定（名前と公開範囲）。削除は T2 で足す。
+- `WorkspaceService`: 作成・設定（名前と公開範囲）・削除。
 - `WorkspaceMemberService`: 招待の発行・取消・受諾、役割の変更、除名。
 
 規則の置き場所:
@@ -13,6 +13,8 @@
 - 担当チームがこのワークスペースの実データのチームであることは、保存のときにリポジトリが集約に検査させる。
 - 招待の期限と1回だけ使えることは `Invitation` と集約の `accept`。消すのはここ（受諾と同じトランザクション）。
 - 持てる数の上限は `WorkspaceQuota`（持っている数はリポジトリが数える）。
+- 消してよいか（世界が無い）は `workspace_deletion_blocker`。リポジトリの削除と、削除の確認の参照
+  （`WorkspaceContents`）が通す。
 
 権限（持ち主だけが設定・メンバーを扱える）は呼ぶ側（画面の門。`WorkspaceAccess`）が確かめる。ここでは見ない。
 """
@@ -37,7 +39,7 @@ from .pennant_season import AtomicBlock
 
 
 class WorkspaceService:
-    """ワークスペースの作成と設定。"""
+    """ワークスペースの作成・設定・削除。"""
 
     def __init__(
         self,
@@ -77,6 +79,14 @@ class WorkspaceService:
             workspace.rename(name)
             workspace.change_visibility(visibility)
             self._workspaces.save(workspace)
+
+    def delete(self, workspace_id: int) -> None:
+        """ワークスペースを、実データ・メンバー・招待ごと消す。元に戻せない。
+
+        ペナントの世界が1つでもあれば `NotDeletable`、ほかのワークスペースにも在籍がある選手がいれば
+        `InvalidWorkspace`（どちらも何も消さない。検査と削除はリポジトリが1つのトランザクションで行う）。
+        """
+        self._workspaces.delete(workspace_id)
 
 
 class WorkspaceMemberService:

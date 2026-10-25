@@ -395,6 +395,7 @@ class WorkspaceRepository(Protocol):
 
     集約（`Workspace`）の名前・公開範囲・メンバー（編集者・チーム担当）を読み書きする。中のデータ（リーグ・試合など）は
     読まない。担当の保存先は `Team.managers` の中間表のままで、触るのはこのワークスペースの実データのチームの行だけ。
+    例外は削除（`delete`）で、中のデータも消すが、そのワークスペースの範囲（`WorldScope.real(ws)`）で絞って消す。
     """
 
     def find_by_id(self, workspace_id: int) -> Workspace:
@@ -414,6 +415,18 @@ class WorkspaceRepository(Protocol):
 
     def count_owned_by(self, owner_id: int) -> int:
         """その利用者が持ち主のワークスペースの数（上限の検査に使う。数えるだけ）。"""
+        ...
+
+    def delete(self, workspace_id: int) -> None:
+        """ワークスペースと、その実データ・メンバー・招待をすべて消す（1つのトランザクション）。
+
+        - 無い id は `WorkspaceNotFound`。
+        - ペナントの世界が1つでもあれば `NotDeletable`（理由は `workspace_deletion_blocker`）。
+        - ほかのワークスペース（の実データ・世界）にも在籍がある選手が1人でもいれば `InvalidWorkspace`。
+        - ほかのワークスペース（とその世界）の行が、消す行を空にできない外部キー（試合の相手など）で指していれば
+          `InvalidWorkspace`（本拠地・受け持つ球団・編成の抑えは空にして消す）。
+        どれも何も消さない。在籍の無い選手はどの範囲にも属さないので消さない（残る）。
+        """
         ...
 
 

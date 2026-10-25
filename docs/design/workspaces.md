@@ -1534,6 +1534,42 @@ W2 の本体。ワークスペースの中の画面43本（実データ20・ペ�
 - T4: 発行の直後だけ `IssuedInvitation.token` からリンクを作る。招待の画面は `build_invitation_preview_query().preview(token, user_id, timezone.now())`（`InvalidInvitation` は 404。`is_member` なら受諾のボタンを出さない）。受諾は `accept_invitation(token, user_id)` が key を返す。役割の変更と除名は `MemberNotFound`・`InvalidWorkspace` を画面のエラーに。担当チームの選択肢はこのワークスペースの実データのチーム。
 - T6: 管理画面からワークスペースの台帳の組み立て口を使うときは、`test_wiring.py` の `WorkspaceLedgerUsersTest.ALLOWED` に `myapp/admin.py` を足す。
 
+#### T2 ワークスペースの削除（`feature/workspace-delete`、2026-10-25）
+
+画面（`workspace_delete`）は T5。マイグレーションは無い。
+
+- domain: `workspace_deletion_blocker(world_count)`（`domain/workspace.py`。世界が1つでもあれば日本語の理由、無ければ None。決定 2）。リポジトリの削除と削除の確認の DTO が同じ関数を通す。
+- `WorkspaceRepository.delete(workspace_id)`（Protocol と `DjangoWorkspaceRepository`）: 1つのトランザクションで、検査（行がある → 世界が無い（`NotDeletable`）→ ほかの範囲にも在籍がある選手がいない（`InvalidWorkspace`。選手の id を出す）→ ほかのワークスペース（とその世界）の行が、消す行を空にできない外部キーで指していない（`InvalidWorkspace`。下の「迷子の参照」））をすべて済ませてから、
+  1. 消す行を指す SET_NULL の参照を外す（`_WORKSPACE_DETACHED_REFERENCES`: `Team.home_stadium`・`PennantWorld.managed_team`・`PennantClubPlan.closer`。`_raw_delete` は on_delete を働かせないため。管理画面の直書きで、ほかのワークスペースのチームがこの球場を本拠地にしていることがある。`WorkspaceCase` の `_plant_stray_stadiums` がその形）、
+  2. `_SCOPE_ROWS_CHILD_FIRST`（`_WORLD_ROWS_CHILD_FIRST` から改名。世界の削除と共有）を `WorldScope.real(ws)` で流す、
+  3. 範囲の選手を500人ずつ、
+  4. `_WORKSPACE_ROWS_CHILD_FIRST`（担当の中間表 → 招待の担当チームの中間表 → チーム → リーグ → 球場 → 招待 → 編集者 → ワークスペース）を、ワークスペースの id への道で絞って消す。どれも `_raw_delete`（collector を通さない）。
+- application: `WorkspaceService.delete`（リポジトリに渡すだけ。検査と削除はリポジトリの1トランザクション）。参照 `WorkspaceManagementQuery.contents()` と DTO `WorkspaceContents`（リーグ・チーム・選手・試合の数と `WorkspaceWorldRow` の世界の一覧、`deletion_blocker`）。5本で読む。
+- 管理コマンド `workspace_delete --workspace <key> [--yes]`: 件数を出して `yes` の入力を求める（入力が無い実行は取りやめ）。世界が残っていれば世界の一覧と `pennant_delete` の案内を出して止まる。Wiki「本番公開」の「ワークスペースを消す」。
+- 在籍の無い選手はどの範囲にも属さないので消さない（試合の明細に出ていても。明細は消える）。管理画面の「選手」から消せる。
+- **迷子の参照**（ほかのワークスペースの行がこのワークスペースの行を指す。管理画面の直書きでしか起きない。2026-10-25 ユーザー決定、#80）: 本拠地・世界の受け持つ球団・編成の抑えは空にして消す（上の 1.）。**試合の相手など空にできない参照は、消す前の検査で拒む**（`InvalidWorkspace`。「ほかのワークスペースの試合（id=…）がこのワークスペースのチームを指しているため削除できません。運営者に連絡してください。」）。見る参照は手で並べず、全アプリのモデル（中間表を含む）のメタ情報から「消すモデル（削除の順）を指す外部キーのうち、空にして外す3つ以外」を導く（`_workspace_incoming_references`）。参照ごとに「消す行を指していて、自分は消す行でない行」を1本で引く（47本。行数によらない）。消す行の条件は消すときと同じ（`_workspace_deleted_rows`）。
+- 範囲を取らない台帳の組み立て口（`build_workspace_service`）を管理コマンドが使うので、`test_wiring.py` の `WorkspaceLedgerUsersTest.ALLOWED` に `workspace_delete.py` を足した（`--workspace` の key で指したワークスペースを消すのが仕事）。
+
+**計画からのずれ**
+
+- 計画の順（選手 → チーム → … → 担当の中間表 → ワークスペース）を、中間表を指す先より先に消す順に変えた（担当・招待の担当チームの中間表をチームより前に）。
+- SET_NULL の参照を外す処理を足した（計画に無い。外さないと、迷子の参照がコミットのときに外部キーの検査で落ちる）。外すのはほかのワークスペースの行でも本拠地・受け持つ球団・抑えの列だけで、Django の `on_delete=SET_NULL` と同じ結果。
+- 計画の `NotDeletable` 相当には既存の `NotDeletable` を使った（リーグ・チーム・球場の削除と同じ）。
+- 空にできない迷子の参照を消す前に拒む検査を足した（レビューの指摘を受けたユーザー決定。計画に無い）。
+
+**計測**（開発 DB を `sqlite3` の `backup()` で写し、0060〜0064 を当てて既定のワークスペースを消した。写しは消した）: 試合 3,480・選手 3,975・アプリの全表で 871,044 行 → 0 行。迷子の参照の検査を足す前は **1.6〜2.5秒**（2回。もう1つのエージェントのテストと並行）、クエリ 45本（選手の 500人ずつが8本）。検査を足した後は **2.8秒**（うち検査 1.05秒）、クエリ 92本（検査が47本）。時間のほぼすべてが SQL。タイムアウト（60秒）に十分な余裕があるので、T5 の画面からも同期で消してよい。
+
+**テスト**: 新 `test_workspace_delete.py`（`WorkspaceCase` の B から世界を消し、メンバー・招待と、まだ行の無い表（打席まわり・主将・編成の行・表彰・日本一・イニングスコア）の行を足して B を消す）: B の行（**分類表から**数える。削除の順は使わない）が全表で0行になり、ほかの行は1行も変わらない（多対多の中間表を含む全表・利用者）／B に行の無い表が無いこと（消えたことを確かめられない表を作らない）／分類表のモデル（世界を除く）と多対多の中間表がすべて削除の順に入っている／消す表を指す参照は、消す表から（指す側が先）か SET_NULL として外す一覧にある／世界が残る A は `NotDeletable`・B の選手が A や A の世界にも在籍があれば `InvalidWorkspace`・無い id は `WorkspaceNotFound`・A の試合の相手が B のチーム／A の打撃成績が B にしか在籍の無い選手／A の招待の担当チームに B のチーム（id は招待の id）／A の世界の日程の相手が B のチーム（ペナントのリーグは workspace が空）なら `InvalidWorkspace`（どれも全表が変わらない）／全アプリの外部キーのうち消すモデルを指すものは、空にして外すか消す前の検査の対象のどちらか（漏れると落ちる）／迷子の本拠地・A の世界の受け持つ球団と編成の抑えが B を指す迷子は外れる／在籍の無い選手は残る／クエリ数が小さいワークスペースと同じ／`contents()` の件数と5本／管理コマンド（`--yes`・`yes`・ほかの答え・入力なし・世界の一覧・`--workspace` 必須）。domain `test_workspace.py` に `DeletionBlockerTest`。
+
+**変異の確かめ**（どれも戻した。`test_workspace_delete` を流した）: 削除の順から `Captaincy` を外す → 5 FAIL・6 ERROR（分類表・参照の順・行の比較。teardown の外部キーの検査も落ちる）、招待の担当チームの中間表を外す → 5 FAIL・6 ERROR、在籍がまたがる選手の検査を外す → 2 FAIL・2 ERROR、世界の検査を外す → 1 FAIL・1 ERROR、SET_NULL の外しを止める → 1 FAIL・1 ERROR、抑えを外す道を書き間違える（`closer__stints__team__league__world__workspace_id`）→ 1 FAIL・1 ERROR。迷子の参照の検査を外す → 4 FAIL・4 ERROR、試合の相手を検査の対象から外す → 3 FAIL・2 ERROR（外部キーの網羅の検査を含む）、検査で消す行を除かない（自分の行も迷子とみなす）→ 5 FAIL・7 ERROR。
+
+**レビュー（ddd-boundary-reviewer）**: 重要な指摘なし。軽微を直した: SET_NULL を外す3本のうち行で確かめていたのが本拠地だけだった → 受け持つ球団と編成の抑え（在籍をたどる道）のテストを足した。(1) 在籍以外の参照がワークスペースをまたぐ迷子（A の試合の相手が B のチームなど）が事前の検査で拾えず、コミットの外部キーの検査で `IntegrityError` になる → ユーザー決定（2026-10-25）で、消す前の検査で `InvalidWorkspace` にした（上の「迷子の参照」）。検査を足した差分のレビューも重要な指摘なし。軽微を直した: 中間表の行で出す id を持ち主の行（招待）の id に、世界の行（null の道）が B を指す形のテスト、網羅のテストに PROTECT の参照。残したもの: 理由の「運営者に連絡してください」は T5 の画面（持ち主）向けで、管理コマンドでは運営者本人が読む（T5 と合わせて決める）。(2) 迷子の本拠地を黙って外す（Wiki に書いた。コマンドに外した件数を出すのは任意）。(3) 削除のトランザクションはリポジトリの `@transaction.atomic`（チームの削除と同じ）。
+
+**T5 への申し送り**
+
+- 削除の確認の画面は `build_workspace_management_query(ws).contents()`。`deletion_blocker` があれば削除のボタンを出さず、理由と世界の一覧（世界の削除の画面へのリンク）を出す。削除は `build_workspace_service().delete(ws)`（`NotDeletable`・`InvalidWorkspace` は画面のエラーに）。
+- 持ち主がほかの人の世界も消せるようにする（決定 2）のは T5 の世界の書き込みの判定と一緒に。
+
 #### T3 作成と設定の画面・ヘッダー（`feature/workspace-create-settings`、2026-10-25）
 
 epic の 3e954a4（W4 T1）から作り、コミットの前に epic の先端 2f68b4f（W3 T8）の上に載せ直した（衝突なし）。マイグレーションは無い。

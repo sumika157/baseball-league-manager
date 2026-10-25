@@ -59,8 +59,10 @@ from ..application.dto import (
     TeamSetupRow,
     TeamSpan,
     TeamSummary,
+    WorkspaceContents,
     WorkspaceContext,
     WorkspaceRow,
+    WorkspaceWorldRow,
     WorldSummary,
 )
 from ..domain.entities import Game, jersey_number_in, winning_team_id
@@ -638,9 +640,10 @@ class DjangoWorkspaceListQuery:
 
 
 class DjangoWorkspaceManagementQuery:
-    """WorkspaceManagementQuery の Django ORM 実装。ワークスペースの id（必須）のメンバーと招待だけを読む（W4。#80）。
+    """WorkspaceManagementQuery の Django ORM 実装。ワークスペースの id（必須）のメンバーと招待、削除の確認の件数だけを
+    読む（W4。#80）。
 
-    クエリの本数は人数・招待の数によらない（メンバーは3本、招待は2本。多段の prefetch は使わない）。
+    クエリの本数は人数・招待・件数によらない（メンバーは3本、招待は2本、件数は5本。多段の prefetch は使わない）。
     担当として読むのは、このワークスペースの実データのチーム（`teams_in(WorldScope.real(ws))`）の担当だけ。
     """
 
@@ -728,6 +731,21 @@ class DjangoWorkspaceManagementQuery:
             )
             for row in rows
         ]
+
+    def contents(self) -> WorkspaceContents:
+        """5本（リーグ・チーム・選手・試合の数と世界の台帳）。件数によらない。"""
+        scope = WorldScope.real(self._workspace_id)
+        worlds = worlds_in(self._workspace_id).values_list("id", "name", "owner__username")
+        return WorkspaceContents(
+            league_count=leagues_in(scope).count(),
+            team_count=teams_in(scope).count(),
+            player_count=players_in(scope).count(),
+            game_count=games_in(scope, stages=StageFilter.ALL_STAGES).count(),
+            worlds=tuple(
+                WorkspaceWorldRow(world_id=world_id, name=name, owner_name=owner_name)
+                for world_id, name, owner_name in worlds
+            ),
+        )
 
 
 class DjangoInvitationPreviewQuery:
