@@ -44,6 +44,8 @@ from ..domain.value_objects import (
     Season,
     StadiumProfile,
 )
+from ..domain.workspace import MAX_NAME_LENGTH as WORKSPACE_NAME_MAX_LENGTH
+from ..domain.workspace import Visibility
 
 POSITION_CHOICES = [(position.value, position.value) for position in Position]
 # 投打の選択肢はドメインの Handedness が唯一の出典
@@ -412,6 +414,32 @@ class DraftOrderRuleForm(forms.Form):
 
     def draft_order_choices(self) -> list[tuple[Any, str]]:
         return _draft_order_choices(self)
+
+
+class WorkspaceForm(forms.Form):
+    """ワークスペースの作成（`/`）と設定（名前と公開範囲）。
+
+    公開範囲の選択肢は domain の `Visibility` が出典。作成の既定は非公開（ビューが `initial` を渡さないとき）。
+    名前の空・長さはドメイン（`Workspace`）も検査し、ビューがそのエラーをこのフォームに写す。
+    """
+
+    name = forms.CharField(
+        label="名前",
+        max_length=WORKSPACE_NAME_MAX_LENGTH,
+        widget=forms.TextInput(attrs={"class": "form-control"}),
+    )
+    visibility = forms.ChoiceField(
+        label="公開範囲",
+        choices=Visibility.choices(),
+        initial=Visibility.PRIVATE.value,
+        help_text=(
+            "公開にすると、URL を知っている人なら誰でも（ログインしなくても）見られます。書けるのはメンバーだけです。"
+        ),
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
+
+    def clean_visibility(self) -> Visibility:
+        return Visibility(self.cleaned_data["visibility"])
 
 
 class PostseasonFormatForm(forms.Form):

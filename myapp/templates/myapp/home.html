@@ -7,7 +7,9 @@
 {% comment %}
 ワークスペースの外のトップ（/）。ログインしていれば自分のワークスペースの一覧（名前順。持ち主・編集者・チーム担当として
 入っているもの）、していなければ紹介と見本のワークスペースへのリンク・新規登録とログイン。
-ワークスペースの作成は W4（ここにはフォームを置かない）。公開範囲と役割の表示名は Visibility・WorkspaceRole が出典。
+ログインしていれば一覧の下に作成フォーム（名前・公開範囲。既定は非公開。送り先は /workspaces/new/）。持てる数の上限に
+達していれば（create_form が None）フォームの代わりに limit_message の案内だけを出す（両立しない操作を並べない）。
+公開範囲と役割の表示名・選択肢は Visibility・WorkspaceRole が出典。
 {% endcomment %}
 {% if user.is_authenticated %}
   <div class="page-head">
@@ -38,8 +40,29 @@
     </div>
   {% else %}
     <div class="alert alert-secondary">
-      まだどのワークスペースにも入っていません。公開されているワークスペースは、その URL を開けば誰でも見られます。
+      まだどのワークスペースにも入っていません。下のフォームから自分のワークスペースを作れます。
+      公開されているワークスペースは、その URL を開けば誰でも見られます。
     </div>
+  {% endif %}
+
+  <h2 class="h6 mb-2 mt-4">ワークスペースを作る</h2>
+  {% if create_form %}
+    <form method="post" action="{% url 'workspace_create' %}" class="card mb-4">
+      {% csrf_token %}
+      <div class="card-body">
+        {% for error in create_form.non_field_errors %}<div class="alert alert-danger">{{ error }}</div>{% endfor %}
+        <div class="row">
+          <div class="col-md-8">{% include 'myapp/setup/_field.html' with field=create_form.name %}</div>
+          <div class="col-md-4">{% include 'myapp/setup/_field.html' with field=create_form.visibility %}</div>
+        </div>
+        <p class="stat-muted mb-3" style="font-size: 0.8125rem;">
+          作ったワークスペースは空です。作った後の画面から、リーグ・チーム・球場を登録できます。
+        </p>
+        <button type="submit" class="btn btn-primary">作る</button>
+      </div>
+    </form>
+  {% else %}
+    <div class="alert alert-secondary">{{ limit_message }}持っているワークスペースが上限に達しているので、新しくは作れません。</div>
   {% endif %}
 {% else %}
   <div class="page-head">

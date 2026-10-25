@@ -1085,8 +1085,10 @@ class UrlsShowOnlyTheirWorkspaceTest(WorkspaceCase):
         staff = User.objects.create_user(username="staff-once", password="x", is_staff=True)
         self.client.force_login(staff)
         # 試合一覧は、画面の範囲と「登録の導線を出すか」（権限の判定）の両方で実データの範囲を使う
+        # ヘッダーの切り替えの一覧（W4）は今の要求のワークスペースの読みではないので、空にして数える
+        empty_list = patch("myapp.presentation.context_processors.my_workspaces", return_value=[])
         for url in (ws_url("game_list"), ws_url("player_list", self.team.id)):
-            with self.subTest(url=url), CaptureQueriesContext(connection) as captured:
+            with self.subTest(url=url), empty_list, CaptureQueriesContext(connection) as captured:
                 self.assertEqual(self.client.get(url).status_code, 200)
             reads = [q["sql"] for q in captured if 'FROM "myapp_workspace"' in q["sql"]]
             self.assertEqual(len(reads), 1, reads)
@@ -1678,6 +1680,7 @@ ID_ARGS = frozenset(
 # URL 名 → (引数（`Side` の属性名）, 種類, 閲覧にもログインが要るか)
 URL_TABLE: dict[str, tuple[tuple[str, ...], str, bool]] = {
     "dashboard": ((), PAGE, False),
+    "workspace_settings": ((), PAGE, True),
     "team_list": ((), PAGE, False),
     "player_search": ((), PAGE, False),
     "standings": ((), PAGE, False),
@@ -1783,6 +1786,7 @@ def _reversed_teams(league_id: int) -> list[int]:
 WRITE_BODIES: dict[str, Callable[[Side, int], dict]] = {
     "player_list": lambda side, rival: {"name": "侵入", "number": "99", "position": "内野手"},
     "player_edit": lambda side, rival: {"retire": "1"},
+    "workspace_settings": lambda side, rival: {"name": "改ざんの名前", "visibility": "public"},
     "game_create": lambda side, rival: {
         "year": str(side.year),
         "played_on": f"{side.year}-05-01",
@@ -1829,8 +1833,9 @@ WRITE_BODIES: dict[str, Callable[[Side, int], dict]] = {
 }
 
 # 本文にも URL にも id を持たない書き込み（作るだけ）。ほかのワークスペースの id を混ぜる余地が無いので、
-# 「B の id を混ぜた POST」の検査の対象外（門の検査は部外者の POST の検査が受け持つ）
-ID_FREE_WRITES = frozenset({"setup_leagues", "setup_stadiums"})
+# 「B の id を混ぜた POST」の検査の対象外（門の検査は部外者の POST の検査が受け持つ）。ワークスペースの設定（W4）も
+# 名前と公開範囲だけで id を持たない
+ID_FREE_WRITES = frozenset({"setup_leagues", "setup_stadiums", "workspace_settings"})
 
 
 def _world_side_ids(world_id: int) -> tuple[int, int, int, int]:
@@ -2061,7 +2066,7 @@ class EveryWorkspaceUrlTest(WorkspaceCase):
         # スコアブックは打席の記録の無い古い形式の試合を保存しないので、登録しただけの試合へ送る
         unrecorded = play_game(self.team, self.rival, recorded=False).id
         self.client.force_login(self.workspace.owner)
-        writes = ("player_list", "game_create", "api_game_scorebook", "pennant_index")
+        writes = ("player_list", "game_create", "api_game_scorebook", "pennant_index", "workspace_settings")
         setup_writes = (
             "setup_leagues",
             "setup_league_edit",
