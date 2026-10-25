@@ -11,3 +11,4 @@ paths:
 - 成績表は `tabular-nums` で桁を揃える。
 - 書き込みの導線（登録フォーム・編集ボタン）は未ログインの人に表示しない。`{% if user.is_authenticated %}` で囲む。
 - 選択肢の一覧（守備位置・球場の屋根種別など）をテンプレートに並べない。ドメインの値オブジェクトが唯一の出典で、ビューかフォーム経由で受け取る。
+- **JavaScript の文脈に値を埋めるときは `escapejs`／`json_script`**: `on*` のイベント属性・`<script>` の中・`javascript:` の URL に `{{ }}` を置くなら、最後のフィルタを `|escapejs` にする（自動エスケープは HTML 用で、イベント属性の値はブラウザが HTML として戻してから JavaScript に渡すので `'` で文字列を閉じられる。#320）。構造のあるデータは `json_script` で渡す。検査は `tests/integration/test_templates.py` にある。
