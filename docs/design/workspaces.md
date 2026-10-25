@@ -1210,3 +1210,52 @@ W2 の本体。ワークスペースの中の画面43本（実データ20・ペ�
 - 管理画面のオートコンプリートの候補は絞っていない（保存で弾く）
 - 未ログインの人には、無い key（404）とある非公開の key（ログインへ）で応答が分かれる（T4 のレビュー。key は推測しにくいので、ログインへ送る便利さを取った）
 - epic を main に入れるとき: 上の「epic を main に入れるときに必ず行うこと」（W1a の superuser の確認と、W2 の staff の編集者の確認・`SAMPLE_WORKSPACE_KEY`・古い URL の周知）と、main を取り込むたびのマイグレーション番号の確認
+
+### W3（#79）
+
+計画は #79 の計画コメント（2026-10-25。epic 1cd28f6 と照合）。決定（2026-10-25、すべて推奨）: 1. 球場はワークスペースで共有し、世界の球団が本拠地にしている球場は消せない／2. 所属リーグは試合が1つも無いときだけ変えられる／3. 管理画面は残してサイトと同じ規則で検査する（T5）／4. プロフィールの更新は `RosterService`（T4）。
+
+#### T1 domain・永続化・サービス（`feature/league-setup-service`、2026-10-25）
+
+画面はまだ使わない（T2・T3 の登録画面が使う）。マイグレーションは無い（`makemigrations --check` で確かめた。名前の長さの定数は今の列と同じ値）。
+
+- domain:
+  - 名前の長さの定数 `LEAGUE_NAME_MAX_LENGTH`（50）・`TEAM_NAME_MAX_LENGTH`（100）・`STADIUM_NAME_MAX_LENGTH`（100）を `entities.py` に置き、ORM の `max_length` はこれを import する。`clean_name()` が前後の空白を除いて空と上限超えを `InvalidName` にし、`League`・`Team`・`Stadium` の作成（`__post_init__`）と `rename()` が通す。既存の行を読むときに落ちないことは、既存のテストと開発 DB（リーグ8・チーム48・球場21。空・上限超えは0）で確かめた。
+  - `domain/setup.py`: `league_deletion_blocker(team_count)`・`team_deletion_blocker(stint_count, captaincy_count, game_count)`・`stadium_deletion_blocker(real_home_team_count, world_home_team_count)`（消せるなら None、消せなければ日本語の理由）と、`league_change_blocker(game_count)`・`ensure_league_change_allowed(game_count)`（試合があれば `LeagueChangeLocked`）。
+  - 例外 `InvalidName`・`DuplicateName`・`NotDeletable`・`LeagueChangeLocked`。`WorkspaceAccess.can_set_up()`（`can_edit_all()` と同じ）。
+  - リポジトリの Protocol: `StadiumRepository`（新。`find_by_id`・`save`・`delete`）、`LeagueRepository.delete`・`TeamRepository.delete`。
+- infrastructure:
+  - `DjangoStadiumRepository(scope)`: 実データの範囲だけ（ペナントの範囲はコンストラクタで `InvalidWorld`）。`stadiums_in(scope)` で引き、範囲の外は `StadiumNotFound`。
+  - 削除3つ: `transaction.atomic` の中で数を読む（`usage_counts`。クエリ1本）→ domain の規則（通らなければ `NotDeletable`）→ 範囲で絞った1行を消す。チームは担当の中間表の行も連鎖で消える。数え方は `league_usage`・`team_usage`・`stadium_usage`（相関した副問い合わせの COUNT）の1か所で、参照クエリの一覧も同じ注釈を使う。球場の世界の球団の数は、範囲のワークスペースの世界（台帳 `worlds_in` で絞る）の球団（`scoping.teams_of_worlds_in`）。
+  - 名前の一意: リーグ・球場は保存の前に範囲の中の同名を確かめ（`_name_taken`）、書き込みをセーブポイントで包んで一意制約の `IntegrityError`（0061 の `unique_workspace_league_name`・`unique_workspace_stadium_name` と世界の `unique_world_league_name`）を `DuplicateName` に訳す。SQLite は違反の文言に制約名を出さないので、制約の列から組み立てた「表.列, 表.列」でも見る（出典は ORM の `Meta.constraints`）。チーム名は新しいチームと改名のときだけ `teams_in(scope)` の中の同名を確かめる。
+  - 所属リーグの変更: `TeamRepository.save` が今のリーグと比べ、変えたときだけそのチームの試合（全区分）を数えて `ensure_league_change_allowed` を通す。
+  - `DjangoSetupQuery(scope)`（実データ専用。コンストラクタで検査）: `leagues()`・`teams()`・`stadiums()` はそれぞれクエリ1本（行数によらない。多段の prefetch なし）、`league(id)`・`team(id)`・`stadium(id)` は範囲の外なら `*NotFound`。チームの本拠地は `home_stadium_in`（範囲の外の球場は本拠地なし）。
+- application: `LeagueSetupService`（`application/league_setup.py`。更新だけ。依存はリーグ・チーム・球場のリポジトリ）。新しいリーグ・チームの表示順は末尾（今の最大＋1。チームはそのリーグの中、無ければ 0）。`SetupQuery`（Protocol）と DTO `LeagueSetupRow`・`TeamSetupRow`・`StadiumSetupRow`。消せない理由・所属リーグを変えられない理由は DTO のプロパティが件数から domain の関数で作る。
+- presentation: `build_league_setup_service(scope)`・`build_setup_query(scope)`（`_require_real`。`REAL_ONLY_BUILDERS`）。`tests/helpers.py` が再輸出する。
+
+**計画からのずれ**
+
+- 例外を2つ足した: 名前の検査の `InvalidName` と、所属リーグの変更の `LeagueChangeLocked`（前例 `PostseasonFormatLocked` と同じく、理由の文言は domain の `league_change_blocker` が出典）。表示順（0以上の整数）と支配下選手の登録枠（空か0以上の整数）も `League`・`Team` の作成と `reorder()`・`change_rules()` で検査する（ORM の `PositiveIntegerField` の CHECK 制約に当たって 500 になるのを防ぐ）。
+- **所属リーグの変更の規則はリポジトリ（`TeamRepository.save`）で通す**（サービスではなく）。理由: (1) 名前の一意・本拠地の範囲と同じく、集約が全体を見ないと決まらない検査の置き場所がリポジトリ（計画 3. の「違反はリポジトリが日本語の例外に変える」）。(2) 今のリーグはチームの存在を確かめるクエリで一緒に読めるので、変えない保存ではクエリが増えない。サービスに置くと、試合の数を読むためのメソッドをリポジトリの Protocol に足すことになり、`RosterService` など別の経路の保存には効かない。
+- `scoping.py` に `teams_of_worlds_in(workspace_id)` を足した（計画は「変更なし」）。世界の球団の本拠地を数えるのに、`.objects` を直接書かずに範囲の出入口を通すため。
+- チーム名・リーグ名の保存の前の確認は、ペナントの世界の範囲でも同じく範囲の中で効く（計画は「実データの中で一意」。世界の行は分岐の写しで、範囲の中では重複しない。世界の作成は新しい球団1つにつき1クエリ増える）。
+- 球場の数に入れる世界の球団は、そのワークスペースの世界の球団だけ（ORM の直書きでほかのワークスペースの世界の球団が指していても数えない。消すと `SET_NULL` で外れるが、もともと範囲の外の本拠地として読まれない行）。
+- `TeamSetupRow` に、削除の確認に出す担当者の数（`manager_count`）を足した（計画 6.）。
+- 既存のテストの直し: `test_repositories.py` の `HomeStadiumCheckQueriesTest` は、本拠地を変えない保存の基準に改名を使っていた（改名は重複の検査で1クエリ増える）。基準を表示順の変更に替えた（意図は同じ）。改名と所属の変更だけがクエリを1本増やすことは新しい `NameCheckQueriesTest` が固定する。
+- 試合を数える注釈は区分を明示する（`stage_condition("", StageFilter.ALL_STAGES)`。`test_postseason_isolation.py` の検査に合わせる）。
+
+**テスト**: domain `test_setup_rules.py`（新。名前の検査・表示順と枠・消してよいかの規則と文言・所属リーグの変更）、`test_workspace_access.py` の真理値表に「登録」の列。integration `test_league_setup_service.py`（新。往復・表示順の末尾・名前の一意はワークスペースの中だけ（B と世界では同じ名前を作れる）・`IntegrityError` の訳し・消せない行は `NotDeletable` で全表の行が変わらない・消すのはその1行だけ（`snapshot_all_rows()` と担当の中間表）・世界の球団だけが本拠地の球場も消せない・ほかのワークスペースの世界の球団は数えない・所属リーグの変更・B の id を混ぜた書き込み・ペナントの範囲を拒む・一覧のクエリ数が行数によらず1本ずつ・改名と所属の変更だけがクエリを増やす）、`test_workspace_isolation.py` の `CHECKS` に `DjangoStadiumRepository`・`DjangoSetupQuery`（A の範囲で B の行が出ない・B の id は見つからない・A のリーグ・チーム・球場の削除が B の行を消せない）、`test_wiring.py` の分類（`REAL_ONLY_BUILDERS`）・`ProtocolConformanceTest`・依存の検査。
+
+**変異の確かめ**（どれも戻した。`test_league_setup_service`・`test_workspace_isolation` を流した）: 削除が規則を通らない（3つの `raise NotDeletable` を外す）→ 6件、`DjangoStadiumRepository` が範囲で絞らない → 3件（うち isolation の `CHECKS` 1件）、チーム名の検査が範囲で絞らない → 16件（B と同じ名前を作れない2件と、世界の分岐が実データと同じ名前で弾かれて isolation の準備が14クラスで落ちる）。
+
+**レビュー（ddd-boundary-reviewer）で直したもの**: (1) 世界の作成が、分岐元に同じ名前のチームがあると写す途中で `DuplicateName` になる → `create_world` がリーグ名と同じく写す前に `InvalidWorld` で弾く（実データのチーム名は管理画面・投入コマンドが検査しないため）。(2) 所属リーグの変更の試合の数え方が一覧と別だった → 注釈 `team_game_count` の1か所にまとめた。(3) サービスが `Team.league_id`・`home_stadium_id` を直接書いていた → `Team.move_to_league()`・`change_home_stadium()`。(4) 前後に空白のある古いチーム名の行が、名前を変えない保存を改名扱いにして重複の検査で落ちうる → 空白を除いて比べる。残したもの: 数えてから消すまでの間の同時の書き込み（SQLite は書き込みが直列なので実害は小さい。`PROTECT` にして `ProtectedError` を訳す案はマイグレーションと世界の削除の順序の確かめが要るので、要るならユーザーが決める）。
+
+件数: domain＋integration 3,863（W2 の T6 より +48）。e2e は画面を変えないので流していない。
+
+**T2〜T4 への申し送り**
+
+- 画面は `DomainError`（`InvalidName`・`DuplicateName`・`NotDeletable`・`LeagueChangeLocked`・`*NotFound`）をフォームのエラーにする。削除のリンクは `deletion_blocker` が None の行だけに出し、消せない行の削除 URL は理由と「戻る」だけ（計画 6.）。所属リーグの選択は `league_change_blocker` があれば出さない（両立しない操作を並べない）。
+- フォームの選択肢の出典: 外国人枠の既定は `ForeignPlayerRules.NPB`、支配下枠の既定は `DEFAULT_REGISTERED_PLAYER_LIMIT`、グラウンド・屋根は `StadiumProfile.SURFACES`・`ROOFS`、名前の長さは `*_NAME_MAX_LENGTH`。所在地（`city`）の長さ100は domain が検査しないので、フォームで止める。
+- `update_team` は集約（ロスター込み）を読んで保存する。所属リーグを変えるとき、移す先のリーグの支配下枠・外国人枠は検査しない（試合の無いチームだけが移れるので外国人枠は効かないが、支配下枠を超えたまま移れる。T3 で扱いを決め、検査を足すなら `Team.move_to_league()` に足す）。
+- T4: プロフィールは `RosterService` に置く（決定 4）。`LeagueSetupService` には足さない。
+- T5: 管理画面の削除とチーム名の検査は、`domain/setup.py` の規則と `TeamRepository` の重複の検査を同じ形で通す。

@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from .exceptions import (
+    DomainError,
     DuplicateCaptain,
     DuplicateJerseyNumber,
     InvalidAcquisition,
@@ -23,6 +24,7 @@ from .exceptions import (
     InvalidContract,
     InvalidFreeAgentDeclaration,
     InvalidGame,
+    InvalidName,
     InvalidPlateAppearance,
     InvalidStint,
     PlayerNotEligibleForCaptaincy,
@@ -64,10 +66,39 @@ from .value_objects import (
 OUTS_PER_HALF_INNING = 3
 BATTING_ORDER_SIZE = 9
 
+# 名前の長さの上限。**出典はここ**で、ORM の `max_length` はこれを import する（前例: `workspace.MAX_NAME_LENGTH`）
+LEAGUE_NAME_MAX_LENGTH = 50
+TEAM_NAME_MAX_LENGTH = 100
+STADIUM_NAME_MAX_LENGTH = 100
+
+
+def clean_name(name: str, *, what: str, max_length: int) -> str:
+    """リーグ・チーム・球場の名前を検査して、前後の空白を除いた形を返す。
+
+    空（空白だけを含む）と、上限より長い名前は `InvalidName`。`what` は文言に入れる対象の名前（「リーグ」など）。
+    """
+    cleaned = (name or "").strip()
+    if not cleaned:
+        raise InvalidName(f"{what}名を入力してください。")
+    if len(cleaned) > max_length:
+        raise InvalidName(f"{what}名は{max_length}文字以内にしてください。")
+    return cleaned
+
+
+def _ensure_display_order(value: int) -> int:
+    """表示順（0以上の整数）を検査して返す。"""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise DomainError("表示順は0以上の整数で入力してください。")
+    return value
+
 
 @dataclass
 class League:
-    """リーグ。"""
+    """リーグ。
+
+    名前は作るときと `rename()` で検査する（空でなく、`LEAGUE_NAME_MAX_LENGTH` 文字以内）。
+    ワークスペースの中で名前が重複しないことは、どの集約も全体を見ないので、リポジトリ（と DB の一意制約）が守る。
+    """
 
     name: str
     id: int | None = None
@@ -78,6 +109,11 @@ class League:
     # 支配下選手の登録上限。NPB は70人。None なら無制限
     registered_player_limit: int | None = DEFAULT_REGISTERED_PLAYER_LIMIT
 
+    def __post_init__(self) -> None:
+        self.name = clean_name(self.name, what="リーグ", max_length=LEAGUE_NAME_MAX_LENGTH)
+        self.display_order = _ensure_display_order(self.display_order)
+        self._ensure_registered_limit(self.registered_player_limit)
+
     def __str__(self) -> str:
         return self.name
 
@@ -86,6 +122,23 @@ class League:
         """ロスターの人数の上限。`Team` の追加・移籍の受け入れ・昇格に渡す。"""
         return RosterLimits(registered=self.registered_player_limit)
 
+    def rename(self, name: str) -> None:
+        self.name = clean_name(name, what="リーグ", max_length=LEAGUE_NAME_MAX_LENGTH)
+
+    def reorder(self, display_order: int) -> None:
+        self.display_order = _ensure_display_order(display_order)
+
+    def change_rules(self, foreign_rules: ForeignPlayerRules, registered_player_limit: int | None) -> None:
+        """外国人枠と支配下選手の登録枠を変える（None は無制限）。"""
+        self._ensure_registered_limit(registered_player_limit)
+        self.foreign_rules = foreign_rules
+        self.registered_player_limit = registered_player_limit
+
+    @staticmethod
+    def _ensure_registered_limit(limit: int | None) -> None:
+        if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 0):
+            raise DomainError("支配下選手の登録枠は0以上の整数で入力してください（空欄なら無制限）。")
+
 
 @dataclass
 class Stadium:
@@ -93,11 +146,15 @@ class Stadium:
 
     所在地はここが持つ。チーム側に本拠地の地名を別に持たせると、
     同じ事実の出典が2つになるため。
+    名前は作るときと `rename()` で検査する（空でなく、`STADIUM_NAME_MAX_LENGTH` 文字以内）。
     """
 
     name: str
     id: int | None = None
     profile: StadiumProfile = field(default_factory=StadiumProfile)
+
+    def __post_init__(self) -> None:
+        self.name = clean_name(self.name, what="球場", max_length=STADIUM_NAME_MAX_LENGTH)
 
     def __str__(self) -> str:
         return self.name
@@ -105,6 +162,13 @@ class Stadium:
     @property
     def city(self) -> str:
         return self.profile.city
+
+    def rename(self, name: str) -> None:
+        self.name = clean_name(name, what="球場", max_length=STADIUM_NAME_MAX_LENGTH)
+
+    def change_profile(self, profile: StadiumProfile) -> None:
+        """所在地・収容人数・グラウンド・屋根・開場年を変える（値の検査は `StadiumProfile` が行う）。"""
+        self.profile = profile
 
 
 def jersey_number_in(
@@ -530,8 +594,31 @@ class Team:
     display_order: int = 0
     players: list[Player] = field(default_factory=list)
 
+    def __post_init__(self) -> None:
+        # 名前の重複（ワークスペースの中で一意）はチーム全体を見ないと決まらないので、リポジトリが検査する
+        self.name = clean_name(self.name, what="チーム", max_length=TEAM_NAME_MAX_LENGTH)
+        self.display_order = _ensure_display_order(self.display_order)
+
     def __str__(self) -> str:
         return self.name
+
+    # --- チームそのものの変更 ---
+
+    def rename(self, name: str) -> None:
+        self.name = clean_name(name, what="チーム", max_length=TEAM_NAME_MAX_LENGTH)
+
+    def reorder(self, display_order: int) -> None:
+        self.display_order = _ensure_display_order(display_order)
+
+    def move_to_league(self, league_id: int) -> None:
+        """所属リーグを変える。試合のあるチームは変えられない（`setup.ensure_league_change_allowed`）が、試合の数は
+        集約が持たないので、検査は保存するリポジトリが行う。移す先の枠の検査を足すなら、ここに足す（W3 T3 で決める）。
+        """
+        self.league_id = league_id
+
+    def change_home_stadium(self, stadium_id: int | None) -> None:
+        """本拠地を変える（None は本拠地なし）。範囲の球場かはリポジトリが確かめる。"""
+        self.home_stadium_id = stadium_id
 
     # --- ロスターの参照 ---
 

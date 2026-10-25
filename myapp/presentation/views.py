@@ -41,6 +41,7 @@ from ..application.dto import (
 from ..application.foreign_quota import ForeignQuotaExemptions
 from ..application.game_recording import GameRecordingService
 from ..application.game_view import GameViewService
+from ..application.league_setup import LeagueSetupService
 from ..application.league_view import LeagueViewService
 from ..application.pennant_championships import PostseasonHistoryReader
 from ..application.pennant_club_details import ClubDetailsService
@@ -111,6 +112,7 @@ from ..infrastructure.queries import (
     DjangoRatingsHistoryQuery,
     DjangoSeasonPlayingTimeQuery,
     DjangoServiceHistoryQuery,
+    DjangoSetupQuery,
     DjangoSimulationContextQuery,
     DjangoTeamAnalysisQuery,
     DjangoTeamListQuery,
@@ -127,6 +129,7 @@ from ..infrastructure.repositories import (
     DjangoLeagueRepository,
     DjangoRatingsRepository,
     DjangoReleasePlanRepository,
+    DjangoStadiumRepository,
     DjangoTeamRepository,
     DjangoWorldRepository,
 )
@@ -528,6 +531,29 @@ def build_player_search_query(scope: WorldScope) -> DjangoPlayerSearchQuery:
     """選手検索を組み立てる。実データの範囲だけを受け取る（ペナントの範囲なら InvalidWorld）。"""
     _require_real(scope)
     return DjangoPlayerSearchQuery(scope)
+
+
+def build_league_setup_service(scope: WorldScope) -> LeagueSetupService:
+    """リーグ・チーム・球場の登録（作成・編集・削除）のサービスを組み立てる（W3。#79）。
+
+    `build_league_view_service(scope)` と同じく**組み立てはここだけ**にし、依存（リーグ・チーム・球場のリポジトリ）を
+    全部、渡された範囲で作る。実データの範囲だけを受け取る（ペナントの範囲なら InvalidWorld）。
+    """
+    _require_real(scope)
+    return LeagueSetupService(
+        leagues=DjangoLeagueRepository(scope),
+        teams=DjangoTeamRepository(scope),
+        stadiums=DjangoStadiumRepository(scope),
+    )
+
+
+def build_setup_query(scope: WorldScope) -> DjangoSetupQuery:
+    """登録画面の一覧・編集フォームの初期値・消せない理由を読む参照クエリを組み立てる（W3。#79）。
+
+    実データの範囲だけを受け取る（ペナントの範囲なら InvalidWorld）。
+    """
+    _require_real(scope)
+    return DjangoSetupQuery(scope)
 
 
 def build_workspace_access_query() -> DjangoWorkspaceAccessQuery:

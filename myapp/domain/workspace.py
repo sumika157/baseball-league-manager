@@ -237,6 +237,13 @@ class WorkspaceAccess:
         """
         return self.can_edit_all()
 
+    def can_set_up(self) -> bool:
+        """リーグ・チーム・球場の登録画面を見て、作成・編集・削除ができるか。全体の編集権と同じ（W3。2026-10-25）。
+
+        登録画面はフォームだけの画面なので、書けない人（チーム担当・閲覧）には見せない（中身は既存の画面で読める）。
+        """
+        return self.can_edit_all()
+
     def can_manage_members(self) -> bool:
         """編集者・チーム担当の招待と除名ができるか（持ち主だけ。W4）。"""
         return self.role is WorkspaceRole.OWNER

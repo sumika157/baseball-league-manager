@@ -15,8 +15,22 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, Protocol
 
-from django.db import models, transaction
-from django.db.models import Count, Exists, F, Max, Min, OuterRef, Prefetch, Q, QuerySet, Sum
+from django.db import IntegrityError, models, transaction
+from django.db.models import (
+    Count,
+    Exists,
+    F,
+    Func,
+    IntegerField,
+    Max,
+    Min,
+    OuterRef,
+    Prefetch,
+    Q,
+    QuerySet,
+    Subquery,
+    Sum,
+)
 
 from ..domain.entities import (
     Captaincy,
@@ -31,11 +45,13 @@ from ..domain.entities import (
     Player,
     RunnerAdvance,
     RunnerSubstitution,
+    Stadium,
     Stint,
     Team,
 )
 from ..domain.exceptions import (
     AlreadyClosed,
+    DuplicateName,
     GameNotFound,
     InvalidAward,
     InvalidChampionship,
@@ -45,6 +61,7 @@ from ..domain.exceptions import (
     InvalidSchedule,
     InvalidWorld,
     LeagueNotFound,
+    NotDeletable,
     PlayerNotFound,
     StadiumNotFound,
     TeamNotFound,
@@ -61,6 +78,12 @@ from ..domain.pennant.schedule import Fixture
 from ..domain.pennant.season import is_season_closed
 from ..domain.pennant.world import World, WorldScope
 from ..domain.services import ensure_lines_match_plate_appearances
+from ..domain.setup import (
+    ensure_league_change_allowed,
+    league_deletion_blocker,
+    stadium_deletion_blocker,
+    team_deletion_blocker,
+)
 from ..domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings
 from ..domain.value_objects import (
     AcquisitionRoute,
@@ -86,6 +109,7 @@ from ..domain.value_objects import (
     Position,
     Profile,
     Season,
+    StadiumProfile,
 )
 from . import orm_models
 from .scoping import (
@@ -106,6 +130,7 @@ from .scoping import (
     stage_condition,
     stints_in,
     teams_in,
+    teams_of_worlds_in,
     world_condition,
     worlds_in,
 )
@@ -283,15 +308,30 @@ class DjangoTeamRepository:
         全員を書き直すと、シーズンを締める処理が引退した選手まで含めて約1.3万行（8リーグの9シーズン目）を書き、その間ずっと書き込みロックを持っていた。
         保存した後の DB の状態は全員を書き直す形と同じで、持っていない行は消さない（upsert だけ）。
         比べる相手は読み込んだ時点の写しではなく今の行なので、同じ選手を2つの集約で続けて保存する移籍も書き漏らさない。
+
+        **名前と所属リーグ（W3。#79）**: 新しいチームと改名のときだけ、範囲の中に同じ名前のチームが無いかを確かめる
+        （`DuplicateName`。チームの帰属はリーグ経由なので DB の一意制約では書けない）。所属リーグを変えるときは、
+        そのチームの試合を数えて domain の規則（`ensure_league_change_allowed`）を通す
+        （試合があれば `LeagueChangeLocked`）。
+        どちらも今の行を読むクエリで今の名前・リーグも読むので、名前もリーグも変えない保存ではクエリが増えない。
+        どの検査も書く前に済ませ、通らなければ何も書かない。
         """
         if team.league_id is None or not leagues_in(self._scope).filter(id=team.league_id).exists():
             raise LeagueNotFound(f"リーグが見つかりません（id={team.league_id}）。")
-        stadium_changed = True
+        stadium_changed = renamed = True
         if team.id is not None:
-            saved = teams_in(self._scope).filter(id=team.id).values("home_stadium_id").first()
+            saved = teams_in(self._scope).filter(id=team.id).values("home_stadium_id", "league_id", "name").first()
             if saved is None:
                 raise TeamNotFound(f"チームが見つかりません（id={team.id}）。")
             stadium_changed = saved["home_stadium_id"] != team.home_stadium_id
+            # 集約は名前の前後の空白を除いて読むので、除いた形で比べる（空白つきの古い行の保存を改名扱いにしない）
+            renamed = saved["name"].strip() != team.name
+            if saved["league_id"] != team.league_id:
+                # 数え方は一覧（`TeamSetupRow.league_change_blocker`）と同じ注釈（`team_game_count`）
+                counts = usage_counts(teams_in(self._scope).filter(id=team.id), {"game_count": team_game_count()})
+                ensure_league_change_allowed(counts["game_count"] if counts else 0)
+        if renamed and _name_taken(teams_in(self._scope), team.name, team.id):
+            raise DuplicateName(f"同じ名前のチーム「{team.name}」がすでにあります。")
         if (
             stadium_changed
             and team.home_stadium_id is not None
@@ -348,6 +388,22 @@ class DjangoTeamRepository:
             ],
         )
         return team
+
+    @transaction.atomic
+    def delete(self, team_id: int) -> None:
+        """チームを消す。範囲の外は `TeamNotFound`、在籍・主将の在任・試合があれば `NotDeletable`（何も消さない）。
+
+        数を読む → domain の規則（`team_deletion_blocker`）→ 範囲で絞った1行を消す、を1つのトランザクションで行う。
+        消えるのはチームの行と、担当者の割り当て（中間表）だけ（在籍・試合が無いので連鎖で消える行は無い）。
+        """
+        rows = teams_in(self._scope).filter(id=team_id)
+        counts = usage_counts(rows, team_usage())
+        if counts is None:
+            raise TeamNotFound(f"チームが見つかりません（id={team_id}）。")
+        reason = team_deletion_blocker(counts["stint_count"], counts["captaincy_count"], counts["game_count"])
+        if reason is not None:
+            raise NotDeletable(reason)
+        rows.delete()
 
     # --- 内部処理 ---
 
@@ -1412,8 +1468,104 @@ def foreign_rule_values(rules: ForeignPlayerRules) -> dict[str, int | None]:
     return dict(zip(FOREIGN_RULE_FIELDS, (rules.active, rules.pitchers, rules.batters), strict=True))
 
 
+# --- 登録（リーグ・チーム・球場の作成・編集・削除。W3 #79）の部品 ---
+#
+# 「消してよいか」の材料の数え方。**出典はここだけ**で、リポジトリの削除と参照クエリの一覧（`DjangoSetupQuery`）が
+# 同じ注釈を使う（数え方が2か所でずれると、一覧では消せると出るのに消すと弾かれる）。どれも相関した副問い合わせで
+# 数えるので、ほかの数と結合で掛け合わさらず、一覧の行数によらずクエリは1本のまま。
+
+
+def _count_of(rows: QuerySet[Any]) -> Subquery:
+    """`OuterRef` で外側の行に相関させた `rows` の行数（副問い合わせ1つ。GROUP BY を作らない COUNT）。"""
+    counted = rows.order_by().annotate(n=Func(F("pk"), function="COUNT", output_field=IntegerField())).values("n")
+    return Subquery(counted, output_field=IntegerField())
+
+
+def league_usage() -> dict[str, Subquery]:
+    """リーグを消してよいかの材料（`league_deletion_blocker`）: 所属するチームの数。"""
+    return {"team_count": _count_of(orm_models.Team.objects.filter(league_id=OuterRef("pk")))}
+
+
+def team_game_count() -> Subquery:
+    """チームの試合の数（`OuterRef("pk")` のチーム）。消してよいか・所属リーグを変えてよいかの材料。
+
+    区分（公式戦・ポストシーズン）もホーム・ビジターも問わず数える（消すと連鎖で消える試合の全部）。
+    """
+    pk = OuterRef("pk")
+    games = orm_models.Game.objects.filter(stage_condition("", StageFilter.ALL_STAGES))
+    return _count_of(games.filter(Q(home_team_id=pk) | Q(away_team_id=pk)))
+
+
+def team_usage() -> dict[str, Subquery]:
+    """チームを消してよいかの材料（`team_deletion_blocker`）と、消すと外れる担当者の数。
+
+    試合の数は `team_game_count`（所属リーグの変更の検査と同じ数え方）。
+    """
+    pk = OuterRef("pk")
+    return {
+        "stint_count": _count_of(orm_models.PlayerStint.objects.filter(team_id=pk)),
+        "captaincy_count": _count_of(orm_models.Captaincy.objects.filter(team_id=pk)),
+        "game_count": team_game_count(),
+        "manager_count": _count_of(orm_models.Team.managers.through.objects.filter(team_id=pk)),
+    }
+
+
+def stadium_usage(scope: WorldScope) -> dict[str, Subquery]:
+    """球場を消してよいかの材料（`stadium_deletion_blocker`）: 本拠地にしている実データのチームと、世界の球団の数。
+
+    世界の球団は、範囲のワークスペースの世界（全部）の球団を数える（世界は球場を共有する。2026-10-25 決定）。
+    """
+    pk = OuterRef("pk")
+    return {
+        "real_home_team_count": _count_of(teams_in(scope).filter(home_stadium_id=pk)),
+        "world_home_team_count": _count_of(teams_of_worlds_in(scope.workspace_id).filter(home_stadium_id=pk)),
+    }
+
+
+def usage_counts(rows: QuerySet[Any], usage: dict[str, Subquery]) -> dict[str, int] | None:
+    """`rows`（範囲で絞った1行）の、`usage`（上の注釈のどれか）の数。行が無ければ None。クエリ1本。"""
+    return rows.annotate(**usage).values(*usage).first()
+
+
+def _name_taken(rows: QuerySet[Any], name: str, own_id: int | None) -> bool:
+    """範囲の行（`rows`）に、自分（`own_id`）以外で同じ名前の行があるか。"""
+    same = rows.filter(name=name)
+    if own_id is not None:
+        same = same.exclude(id=own_id)
+    return same.exists()
+
+
+def _violates_unique(error: IntegrityError, model: type[models.Model], constraint_names: Sequence[str]) -> bool:
+    """`error` が `model` の一意制約（`constraint_names`）の違反か。
+
+    制約の出典は ORM の `Meta.constraints`（0061）。SQLite は違反の文言に制約名ではなく列（「表.列, 表.列」）を
+    出すので、制約名と、制約の列から組み立てた文言のどちらかを含むかで見る。
+    """
+    message = str(error)
+    for constraint in model._meta.constraints:
+        if constraint.name not in constraint_names or not isinstance(constraint, models.UniqueConstraint):
+            continue
+        fields = [model._meta.get_field(name) for name in constraint.fields]
+        columns = ", ".join(
+            f"{model._meta.db_table}.{field.column}" for field in fields if isinstance(field, models.Field)
+        )
+        if constraint.name in message or columns in message:
+            return True
+    return False
+
+
+# 名前の一意制約（0061 と、ペナントの世界の中の一意）。
+# 保存の前の確認をすり抜けた同時の書き込みは、これで `DuplicateName` に訳す
+_LEAGUE_NAME_CONSTRAINTS = ("unique_workspace_league_name", "unique_world_league_name")
+_STADIUM_NAME_CONSTRAINTS = ("unique_workspace_stadium_name",)
+
+
 class DjangoLeagueRepository:
-    """LeagueRepository の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る。"""
+    """LeagueRepository の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る。
+
+    名前の一意（範囲の中）は2段で守る: 保存の前に範囲の中の同名を確かめ（ふだんはここで `DuplicateName`）、
+    確かめた後の同時の書き込みで DB の一意制約に当たったら、その `IntegrityError` を `DuplicateName` に訳す。
+    """
 
     def __init__(self, scope: WorldScope) -> None:
         self._scope = scope
@@ -1430,10 +1582,16 @@ class DjangoLeagueRepository:
         # タブ・チーム一覧の並びが、この順に揃う
         return [self._to_domain(row) for row in leagues_in(self._scope).order_by("display_order", "name")]
 
+    @transaction.atomic
     def save(self, league: League) -> League:
-        """リーグを保存する。新しいリーグは範囲の世界に属する。範囲の外のリーグには書けない。"""
+        """リーグを保存する。新しいリーグは範囲の世界に属する。範囲の外のリーグには書けない。
+
+        範囲の中に同じ名前のリーグがあれば `DuplicateName` で、何も書かない。
+        """
         if league.id is not None and not leagues_in(self._scope).filter(id=league.id).exists():
             raise LeagueNotFound(f"リーグが見つかりません（id={league.id}）。")
+        if _name_taken(leagues_in(self._scope), league.name, league.id):
+            raise self._duplicate(league.name)
         defaults: dict[str, object] = {
             "name": league.name,
             "display_order": league.display_order,
@@ -1449,12 +1607,37 @@ class DjangoLeagueRepository:
             else:
                 defaults["workspace_id"] = None
                 defaults["world_id"] = self._scope.world_id
-        row, _ = orm_models.League.objects.update_or_create(  # type: ignore[misc]
-            id=league.id,
-            defaults=defaults,
-        )
+        try:
+            # 違反しても外側のトランザクションを使い続けられるよう、書き込みだけをセーブポイントで包む
+            with transaction.atomic():
+                row, _ = orm_models.League.objects.update_or_create(  # type: ignore[misc]
+                    id=league.id,
+                    defaults=defaults,
+                )
+        except IntegrityError as error:
+            if _violates_unique(error, orm_models.League, _LEAGUE_NAME_CONSTRAINTS):
+                raise self._duplicate(league.name) from None
+            raise
         league.id = row.id
         return league
+
+    @transaction.atomic
+    def delete(self, league_id: int) -> None:
+        """リーグを消す。範囲の外は `LeagueNotFound`、チームがあれば `NotDeletable`（何も消さない）。
+
+        数を読む → domain の規則（`league_deletion_blocker`）→ 範囲で絞った1行を消す、を1つのトランザクションで行う。
+        """
+        rows = leagues_in(self._scope).filter(id=league_id)
+        counts = usage_counts(rows, league_usage())
+        if counts is None:
+            raise LeagueNotFound(f"リーグが見つかりません（id={league_id}）。")
+        if (reason := league_deletion_blocker(counts["team_count"])) is not None:
+            raise NotDeletable(reason)
+        rows.delete()
+
+    @staticmethod
+    def _duplicate(name: str) -> DuplicateName:
+        return DuplicateName(f"同じ名前のリーグ「{name}」がすでにあります。")
 
     @staticmethod
     def _to_domain(row: orm_models.League) -> League:
@@ -1467,6 +1650,91 @@ class DjangoLeagueRepository:
             display_order=row.display_order,
             registered_player_limit=row.registered_player_limit,
         )
+
+
+class DjangoStadiumRepository:
+    """StadiumRepository の Django ORM 実装。**実データの範囲だけ**で組み立てる（ペナントの範囲なら `InvalidWorld`）。
+
+    球場はワークスペースに直属し、そのワークスペースのペナントの世界と共有する（2026-10-25 決定）。読み書きは
+    範囲の球場（`stadiums_in`）に絞り、ほかのワークスペースの球場の id は `StadiumNotFound`。
+    名前の一意は `DjangoLeagueRepository` と同じ2段（保存の前の確認と、一意制約の違反の訳し）で守る。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        if scope.is_pennant:
+            raise InvalidWorld("球場は実データの範囲で読み書きします。ペナントの世界の範囲は渡せません。")
+        self._scope = scope
+
+    def find_by_id(self, stadium_id: int) -> Stadium:
+        try:
+            row = stadiums_in(self._scope).get(id=stadium_id)
+        except orm_models.Stadium.DoesNotExist:
+            raise StadiumNotFound(f"球場が見つかりません（id={stadium_id}）。") from None
+        return self._to_domain(row)
+
+    @transaction.atomic
+    def save(self, stadium: Stadium) -> Stadium:
+        """球場を保存する。新しい球場は範囲のワークスペースに属する（既存の球場のワークスペースは書き換えない）。"""
+        rows = stadiums_in(self._scope)
+        if stadium.id is not None and not rows.filter(id=stadium.id).exists():
+            raise StadiumNotFound(f"球場が見つかりません（id={stadium.id}）。")
+        if _name_taken(rows, stadium.name, stadium.id):
+            raise self._duplicate(stadium.name)
+        profile = stadium.profile
+        values: dict[str, Any] = {
+            "name": stadium.name,
+            "city": profile.city,
+            "capacity": profile.capacity,
+            "surface": profile.surface,
+            "roof": profile.roof,
+            "opened_year": profile.opened_year,
+        }
+        try:
+            with transaction.atomic():
+                if stadium.id is None:
+                    stadium.id = orm_models.Stadium.objects.create(workspace_id=self._scope.workspace_id, **values).id
+                else:
+                    rows.filter(id=stadium.id).update(**values)
+        except IntegrityError as error:
+            if _violates_unique(error, orm_models.Stadium, _STADIUM_NAME_CONSTRAINTS):
+                raise self._duplicate(stadium.name) from None
+            raise
+        return stadium
+
+    @transaction.atomic
+    def delete(self, stadium_id: int) -> None:
+        """球場を消す。範囲の外は `StadiumNotFound`、本拠地にしているチーム（世界の球団を含む）があれば
+        `NotDeletable`。
+
+        数を読む → domain の規則（`stadium_deletion_blocker`）→ 範囲で絞った1行を消す、を1つのトランザクションで行う。
+        """
+        rows = stadiums_in(self._scope).filter(id=stadium_id)
+        counts = usage_counts(rows, stadium_usage(self._scope))
+        if counts is None:
+            raise StadiumNotFound(f"球場が見つかりません（id={stadium_id}）。")
+        reason = stadium_deletion_blocker(counts["real_home_team_count"], counts["world_home_team_count"])
+        if reason is not None:
+            raise NotDeletable(reason)
+        rows.delete()
+
+    @staticmethod
+    def _duplicate(name: str) -> DuplicateName:
+        return DuplicateName(f"同じ名前の球場「{name}」がすでにあります。")
+
+    @staticmethod
+    def _to_domain(row: orm_models.Stadium) -> Stadium:
+        return Stadium(id=row.id, name=row.name, profile=stadium_profile_of(row))
+
+
+def stadium_profile_of(row: orm_models.Stadium) -> StadiumProfile:
+    """球場の行の属性（所在地・収容人数・グラウンド・屋根・開場年）。リポジトリと参照クエリが同じ変換を使う。"""
+    return StadiumProfile(
+        city=row.city,
+        capacity=row.capacity,
+        surface=row.surface,
+        opened_year=row.opened_year,
+        roof=row.roof,
+    )
 
 
 # 世界に属する行を消す順（子から親へ）。(モデル, そのモデルから League へ至る道)。

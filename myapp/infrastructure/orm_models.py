@@ -10,6 +10,7 @@
 from django.conf import settings
 from django.db import models
 
+from ..domain.entities import LEAGUE_NAME_MAX_LENGTH, STADIUM_NAME_MAX_LENGTH, TEAM_NAME_MAX_LENGTH
 from ..domain.pennant.draft_order import DraftOrderRule
 from ..domain.pennant.postseason import PostseasonFormat
 from ..domain.services.rankings import Title
@@ -192,7 +193,7 @@ class PennantWorld(models.Model):
 
 
 class League(models.Model):
-    name = models.CharField(max_length=50, verbose_name="リーグ名")
+    name = models.CharField(max_length=LEAGUE_NAME_MAX_LENGTH, verbose_name="リーグ名")
     # 空なら実データ。実データとペナントの世界は、このリーグの帰属で分ける
     world = models.ForeignKey(
         PennantWorld,
@@ -294,7 +295,7 @@ class Stadium(models.Model):
     SURFACE_CHOICES = [(s, s) for s in StadiumProfile.SURFACES]
     ROOF_CHOICES = [(r, r) for r in StadiumProfile.ROOFS]
 
-    name = models.CharField(max_length=100, verbose_name="球場名")
+    name = models.CharField(max_length=STADIUM_NAME_MAX_LENGTH, verbose_name="球場名")
     workspace = models.ForeignKey(
         Workspace,
         on_delete=models.PROTECT,
@@ -332,7 +333,7 @@ class Stadium(models.Model):
 
 class Team(models.Model):
     league = models.ForeignKey(League, on_delete=models.CASCADE, related_name="teams", verbose_name="リーグ")
-    name = models.CharField(max_length=100, verbose_name="チーム名")
+    name = models.CharField(max_length=TEAM_NAME_MAX_LENGTH, verbose_name="チーム名")
     home_stadium = models.ForeignKey(
         Stadium,
         on_delete=models.SET_NULL,

@@ -122,7 +122,8 @@ class HomeStadiumCheckQueriesTest(BaseCase):
         return len(captured)
 
     def test_only_a_changed_stadium_costs_one_query(self):
-        unchanged = self._queries_to_save(lambda team: setattr(team, "name", "改名"))
+        # 名前を変えない保存を基準にする（改名はチーム名の重複の検査で1回引く。W3 の `NameCheckQueriesTest`）
+        unchanged = self._queries_to_save(lambda team: setattr(team, "display_order", 5))
         changed = self._queries_to_save(lambda team: setattr(team, "home_stadium_id", self.other.id))
         cleared = self._queries_to_save(lambda team: setattr(team, "home_stadium_id", None))
 

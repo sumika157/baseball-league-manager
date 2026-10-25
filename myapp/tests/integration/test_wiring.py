@@ -20,6 +20,7 @@ from django.test import SimpleTestCase
 from myapp.application.club_management import ClubManagementService
 from myapp.application.game_recording import GameRecordingService
 from myapp.application.game_view import GameViewService
+from myapp.application.league_setup import LeagueSetupService
 from myapp.application.league_view import LeagueViewService
 from myapp.application.pennant_championships import PostseasonHistoryReader
 from myapp.application.pennant_club_details import ClubDetailsService
@@ -46,6 +47,7 @@ from myapp.application.queries import (
     PostseasonStatsQuery,
     RatingsHistoryQuery,
     ServiceHistoryQuery,
+    SetupQuery,
     SimulationContextQuery,
     TeamAnalysisQuery,
     TeamListQuery,
@@ -67,6 +69,7 @@ from myapp.domain.repositories import (
     LeagueRepository,
     RatingsRepository,
     ReleasePlanRepository,
+    StadiumRepository,
     TeamRepository,
     WorldRepository,
 )
@@ -83,6 +86,7 @@ from myapp.infrastructure.queries import (
     DjangoPostseasonStatsQuery,
     DjangoRatingsHistoryQuery,
     DjangoServiceHistoryQuery,
+    DjangoSetupQuery,
     DjangoSimulationContextQuery,
     DjangoTeamAnalysisQuery,
     DjangoTeamListQuery,
@@ -99,6 +103,7 @@ from myapp.infrastructure.repositories import (
     DjangoLeagueRepository,
     DjangoRatingsRepository,
     DjangoReleasePlanRepository,
+    DjangoStadiumRepository,
     DjangoTeamRepository,
     DjangoWorldRepository,
 )
@@ -107,6 +112,7 @@ from myapp.presentation.views import (
     build_club_details_service,
     build_club_service,
     build_game_view_service,
+    build_league_setup_service,
     build_league_view_service,
     build_offseason_view_service,
     build_pennant_history_service,
@@ -122,6 +128,7 @@ from myapp.presentation.views import (
     build_player_search_query,
     build_recording_service,
     build_roster_service,
+    build_setup_query,
     build_team_analysis_service,
     build_team_view_service,
     build_workspace_access_query,
@@ -147,6 +154,8 @@ REAL_ONLY_BUILDERS = (
     build_roster_service,
     build_player_search_query,
     build_pennant_world_service,
+    build_league_setup_service,
+    build_setup_query,
 )
 # 世界の台帳だけを読む。範囲ではなくワークスペースの id を取る（台帳をそのワークスペースで絞り、世界ごとの範囲を作る）
 LEDGER_BUILDERS = (build_pennant_world_view,)
@@ -183,6 +192,8 @@ class ProtocolConformanceTest(SimpleTestCase):
         (DjangoTeamRepository(REAL), TeamRepository),
         (DjangoGameRepository(REAL), GameRepository),
         (DjangoLeagueRepository(REAL), LeagueRepository),
+        (DjangoStadiumRepository(REAL), StadiumRepository),
+        (DjangoSetupQuery(REAL), SetupQuery),
         (DjangoWorldRepository(1), WorldRepository),
         (DjangoRatingsRepository(REAL), RatingsRepository),
         (DjangoFixtureRepository(REAL), FixtureRepository),
@@ -379,6 +390,10 @@ class BuildServiceTest(SimpleTestCase):
         """契約区分（昇格）のサービスも同じ検査にかける（組み立て口は build_*() 関数だけ）。"""
         self._assert_wired(build_roster_service(REAL), RosterService)
 
+    def test_league_setup_service_dependencies_are_wired(self):
+        """リーグ・チーム・球場の登録のサービスも同じ検査にかける（W3。組み立て口は build_*() 関数だけ）。"""
+        self._assert_wired(build_league_setup_service(REAL), LeagueSetupService)
+
     def test_game_view_service_dependencies_are_wired(self):
         """試合の参照サービスも同じ検査にかける（組み立て口は build_*() 関数だけ）。"""
         self._assert_wired(build_game_view_service(REAL), GameViewService)
@@ -562,8 +577,16 @@ class RealScopeTest(SimpleTestCase):
             with self.subTest(dependency=name):
                 self.assertEqual(getattr(service, name)._scope, REAL)
 
+    def test_build_league_setup_service_is_fixed_to_the_real_scope(self):
+        """登録（リーグ・チーム・球場）は実データの操作。依存は全部、渡された実データの範囲で作る。"""
+        service = build_league_setup_service(REAL)
+        for name in ("_leagues", "_teams", "_stadiums"):
+            with self.subTest(dependency=name):
+                self.assertEqual(getattr(service, name)._scope, REAL)
+
     def test_queries_built_for_views_are_fixed_to_the_real_scope(self):
         self.assertEqual(build_player_search_query(REAL)._scope, REAL)
+        self.assertEqual(build_setup_query(REAL)._scope, REAL)
 
     def test_real_only_builders_reject_a_pennant_scope(self):
         """実データ専用の組み立て口にペナントの範囲を渡す取り違えは、組み立てるところで止める。"""

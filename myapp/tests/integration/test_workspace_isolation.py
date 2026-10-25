@@ -14,6 +14,8 @@ A の範囲で読んだもの・A の key の URL（`/w/<A の key>/...`）の�
   B の世界の id は `WorldNotFound`。A の台帳で B の世界を保存・削除できず、何も変わらない。A の key で
   B の世界（`/w/<A>/pennant/<B の世界>/` とその下）を開くと 404、A のペナントの一覧には A の世界だけが出る。
 - (5) `players_in(real(A))` に B の選手も A の世界の選手も出ない。
+- (6) 登録（W3。#79）: A の範囲の球場のリポジトリ・登録画面の参照に B の行が出ず、A の範囲のリーグ・チーム・球場の
+  削除は B の行を消せない（どの表の行も変わらない）。
 - ワークスペースの台帳（`DjangoWorkspaceAccessQuery`・`DjangoWorkspaceListQuery`。W2 T1）: A の key で B の行が
   出ず、B の編集者・担当は A では部外者。一覧に、入っていないワークスペースは出ない。
 - URL（W2 T4）: `workspace_urlpatterns` の全パターンを分類表（`URL_TABLE`）で検査する（表に無いパターンが
@@ -39,6 +41,7 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
 from myapp.domain.entities import Game
+from myapp.domain.entities import Stadium as DomainStadium
 from myapp.domain.entities import Team as DomainTeam
 from myapp.domain.exceptions import (
     DomainError,
@@ -83,6 +86,7 @@ from myapp.infrastructure.queries import (
     DjangoRatingsHistoryQuery,
     DjangoSeasonPlayingTimeQuery,
     DjangoServiceHistoryQuery,
+    DjangoSetupQuery,
     DjangoSimulationContextQuery,
     DjangoTeamAnalysisQuery,
     DjangoTeamListQuery,
@@ -99,6 +103,7 @@ from myapp.infrastructure.repositories import (
     DjangoLeagueRepository,
     DjangoRatingsRepository,
     DjangoReleasePlanRepository,
+    DjangoStadiumRepository,
     DjangoTeamRepository,
     DjangoWorldRepository,
 )
@@ -372,6 +377,16 @@ def _team_repository(t: WorkspaceCase) -> None:
     b_aggregate = DjangoTeamRepository(real_scope(t.workspace_b)).find_by_id(t.b_team.id)
     with t.assertRaises(LeagueNotFound):
         repo.save(b_aggregate)
+    # 削除も（W3）。B のチームの id は見つからない扱いで、何も消さない
+    _assert_unchanged(t, lambda: repo.delete(t.b_rival.id), TeamNotFound)
+
+
+def _assert_unchanged(t: WorkspaceCase, write: Callable[[], object], error: type[DomainError]) -> None:
+    """書き込みが `error` で弾かれ、どの表の行も変わらない。"""
+    before = snapshot_all_rows()
+    with t.assertRaises(error):
+        write()
+    t.assertEqual(snapshot_all_rows(), before, "弾かれた書き込みで行が変わった")
 
 
 def _game_repository(t: WorkspaceCase) -> None:
@@ -390,6 +405,43 @@ def _league_repository(t: WorkspaceCase) -> None:
     with t.assertRaises(LeagueNotFound):
         repo.find_by_id(t.b_league.id)
     t.assertEqual([league.id for league in repo.find_all()], [t.league.id])
+    # 削除（W3）。B のリーグを空にしても、A の範囲からは見つからない扱いで何も消さない
+    empty_b_league = make_league(f"{B_MARK}空のリーグ", workspace=t.workspace_b)
+    _assert_unchanged(t, lambda: repo.delete(empty_b_league.id), LeagueNotFound)
+
+
+def _stadium_repository(t: WorkspaceCase) -> None:
+    """球場（W3）: A の範囲で B の球場は読めも書けも消せもしない。A の球場は読める（空振りの防止）。"""
+    repo = DjangoStadiumRepository(t.a)
+    t.assertEqual(repo.find_by_id(t.stadium.id).name, t.stadium.name)
+    t.assert_hidden(lambda: repo.find_by_id(t.b_stadium.id))
+    unused_b_stadium = make_stadium(f"{B_MARK}空の球場", workspace=t.workspace_b)
+    for write in (
+        lambda: repo.save(DomainStadium(id=unused_b_stadium.id, name="上書き")),
+        lambda: repo.delete(unused_b_stadium.id),
+        lambda: repo.delete(t.b_stadium.id),
+    ):
+        _assert_unchanged(t, write, StadiumNotFound)
+
+
+def _setup_query(t: WorkspaceCase) -> None:
+    """登録画面の参照（W3）: A の範囲の一覧に B の行が出ず、B の id は見つからない。数も B の行を数えない。"""
+    query = DjangoSetupQuery(t.a)
+    leagues, teams, stadiums = query.leagues(), query.teams(), query.stadiums()
+    for rows in (leagues, teams, stadiums):
+        t.assert_no_mark(rows)
+    t.assertEqual([row.league_id for row in leagues], [t.league.id])
+    t.assertEqual({row.team_id for row in teams}, {t.team.id, t.rival.id})
+    t.assertNotIn(t.b_stadium.id, {row.stadium_id for row in stadiums})
+    t.assertIn(t.stadium.id, {row.stadium_id for row in stadiums}, "A の球場を読めていない（検査が空振りする）")
+    rival = query.team(t.rival.id)
+    t.assertIsNone(rival.home_stadium_id, "B の球場を A の球団の本拠地として読んだ")
+    t.assert_hidden(lambda: query.league(t.b_league.id))
+    t.assert_hidden(lambda: query.team(t.b_team.id))
+    t.assert_hidden(lambda: query.stadium(t.b_stadium.id))
+    # A の球場の数に、B の球団・B の世界の球団は入らない（A のチームと、A の世界のその写しだけ）
+    own = query.stadium(t.stadium.id)
+    t.assertEqual((own.real_home_team_count, own.world_home_team_count), (1, 1))
 
 
 def _ratings_repository(t: WorkspaceCase) -> None:
@@ -735,6 +787,8 @@ CHECKS: dict[type, Callable[[WorkspaceCase], None]] = {
     DjangoTeamRepository: _team_repository,
     DjangoGameRepository: _game_repository,
     DjangoLeagueRepository: _league_repository,
+    DjangoStadiumRepository: _stadium_repository,
+    DjangoSetupQuery: _setup_query,
     DjangoRatingsRepository: _ratings_repository,
     DjangoFixtureRepository: _fixture_repository,
     DjangoClubPlanRepository: _club_plan_repository,

@@ -39,6 +39,7 @@ OPERATIONS = {
     "試合（担当とほか）の編集": lambda a: a.can_edit_teams([OTHER_TEAM, MANAGED_TEAM]),
     "試合（どちらもほか）の編集": lambda a: a.can_edit_teams([OTHER_TEAM, ANOTHER_TEAM]),
     "世界の作成": lambda a: a.can_create_world(),
+    "登録（リーグ・チーム・球場）": lambda a: a.can_set_up(),
     "メンバーの管理": lambda a: a.can_manage_members(),
     "削除": lambda a: a.can_delete(),
 }
@@ -47,16 +48,16 @@ COLUMNS = tuple(OPERATIONS)
 Y, N = True, False
 # (利用者, 公開範囲) → (役割, 操作ごとの可否。COLUMNS の順)
 TABLE = {
-    ("持ち主", PUBLIC): (WorkspaceRole.OWNER, (Y, Y, Y, Y, Y, Y, Y, Y, Y)),
-    ("持ち主", PRIVATE): (WorkspaceRole.OWNER, (Y, Y, Y, Y, Y, Y, Y, Y, Y)),
-    ("編集者", PUBLIC): (WorkspaceRole.EDITOR, (Y, Y, Y, Y, Y, Y, Y, N, N)),
-    ("編集者", PRIVATE): (WorkspaceRole.EDITOR, (Y, Y, Y, Y, Y, Y, Y, N, N)),
-    ("チーム担当", PUBLIC): (WorkspaceRole.TEAM_MANAGER, (Y, N, Y, N, Y, N, N, N, N)),
-    ("チーム担当", PRIVATE): (WorkspaceRole.TEAM_MANAGER, (Y, N, Y, N, Y, N, N, N, N)),
-    ("ログインした部外者", PUBLIC): (WorkspaceRole.VIEWER, (Y, N, N, N, N, N, N, N, N)),
-    ("ログインした部外者", PRIVATE): (WorkspaceRole.NONE, (N, N, N, N, N, N, N, N, N)),
-    ("未ログイン", PUBLIC): (WorkspaceRole.VIEWER, (Y, N, N, N, N, N, N, N, N)),
-    ("未ログイン", PRIVATE): (WorkspaceRole.NONE, (N, N, N, N, N, N, N, N, N)),
+    ("持ち主", PUBLIC): (WorkspaceRole.OWNER, (Y, Y, Y, Y, Y, Y, Y, Y, Y, Y)),
+    ("持ち主", PRIVATE): (WorkspaceRole.OWNER, (Y, Y, Y, Y, Y, Y, Y, Y, Y, Y)),
+    ("編集者", PUBLIC): (WorkspaceRole.EDITOR, (Y, Y, Y, Y, Y, Y, Y, Y, N, N)),
+    ("編集者", PRIVATE): (WorkspaceRole.EDITOR, (Y, Y, Y, Y, Y, Y, Y, Y, N, N)),
+    ("チーム担当", PUBLIC): (WorkspaceRole.TEAM_MANAGER, (Y, N, Y, N, Y, N, N, N, N, N)),
+    ("チーム担当", PRIVATE): (WorkspaceRole.TEAM_MANAGER, (Y, N, Y, N, Y, N, N, N, N, N)),
+    ("ログインした部外者", PUBLIC): (WorkspaceRole.VIEWER, (Y, N, N, N, N, N, N, N, N, N)),
+    ("ログインした部外者", PRIVATE): (WorkspaceRole.NONE, (N, N, N, N, N, N, N, N, N, N)),
+    ("未ログイン", PUBLIC): (WorkspaceRole.VIEWER, (Y, N, N, N, N, N, N, N, N, N)),
+    ("未ログイン", PRIVATE): (WorkspaceRole.NONE, (N, N, N, N, N, N, N, N, N, N)),
 }
 
 
@@ -98,6 +99,13 @@ class PermissionTableTest(unittest.TestCase):
             access = access_for(user, visibility)
             with self.subTest(user=user, visibility=visibility.label):
                 self.assertIs(access.can_create_world(), access.can_edit_all())
+
+    def test_setting_up_leagues_needs_the_right_to_edit_everything(self):
+        """登録画面（リーグ・チーム・球場）は見るのも書くのも持ち主・編集者だけ（W3。2026-10-25）。担当・閲覧には見せない。"""
+        for user, visibility in TABLE:
+            access = access_for(user, visibility)
+            with self.subTest(user=user, visibility=visibility.label):
+                self.assertIs(access.can_set_up(), access.can_edit_all())
 
 
 class RolePriorityTest(unittest.TestCase):

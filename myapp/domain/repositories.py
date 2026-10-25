@@ -3,9 +3,9 @@
 ドメイン層は「永続化できる」ことだけを知り、それが Django ORM なのか
 他の手段なのかは知らない。実装は infrastructure 層に置く。
 
-**`TeamRepository` / `GameRepository` / `LeagueRepository` / `RatingsRepository` / `FixtureRepository` は、
-組み立てるときに `WorldScope` を必須で受け取る**（実装のコンストラクタの話で、このインターフェースには
-現れない）。読み出しはすべてその範囲に絞られ、範囲の外の id は「見つからない」になる。
+**`TeamRepository` / `GameRepository` / `LeagueRepository` / `StadiumRepository` / `RatingsRepository` /
+`FixtureRepository` は、組み立てるときに `WorldScope` を必須で受け取る**（実装のコンストラクタの話で、
+このインターフェースには現れない）。読み出しはすべてその範囲に絞られ、範囲の外の id は「見つからない」になる。
 `WorldRepository` だけは世界そのものの台帳なので、範囲の代わりにワークスペースを必須で受け取り、
 そのワークスペースの世界だけを読み書きする。
 """
@@ -16,7 +16,7 @@ from collections.abc import Callable, Sequence
 from datetime import date
 from typing import Protocol, runtime_checkable
 
-from .entities import Game, League, Team
+from .entities import Game, League, Stadium, Team
 from .pennant.awards import Award
 from .pennant.championship import Championship
 from .pennant.club_plan import ClubPlan
@@ -63,6 +63,16 @@ class TeamRepository(Protocol):
 
         今の行と比べて変わった行だけを書く（保存した後の状態は、集約の全体を書き直したのと同じ）。
         集約が持っていない行は消さない。
+        範囲の中に同じ名前のチームがあれば `DuplicateName`、試合のあるチームの所属リーグを変えようとすれば
+        `LeagueChangeLocked`（規則は `setup.ensure_league_change_allowed`）で、どちらも何も書かない。
+        """
+        ...
+
+    def delete(self, team_id: int) -> None:
+        """チームを消す（担当者の割り当ても外れる）。
+
+        範囲の外は `TeamNotFound`、在籍・主将の在任・試合があれば `NotDeletable`（理由は
+        `setup.team_deletion_blocker`）で、どちらも何も消さない。
         """
         ...
 
@@ -134,7 +144,43 @@ class LeagueRepository(Protocol):
     def find_all(self) -> list[League]: ...
 
     def save(self, league: League) -> League:
-        """リーグを保存する。新しいリーグは範囲の世界に属する形で作られる。"""
+        """リーグを保存する。新しいリーグは範囲の世界に属する形で作られる。
+
+        範囲の中に同じ名前のリーグがあれば `DuplicateName` で、何も書かない。
+        """
+        ...
+
+    def delete(self, league_id: int) -> None:
+        """リーグを消す。範囲の外は `LeagueNotFound`、チームがあれば `NotDeletable`（理由は
+        `setup.league_deletion_blocker`）で、どちらも何も消さない。
+        """
+        ...
+
+
+@runtime_checkable
+class StadiumRepository(Protocol):
+    """球場の永続化。球場は集約の外の単独のエンティティで、ワークスペースに直属する。
+
+    実装は**実データの範囲だけ**で組み立てる（ペナントの世界は、そのワークスペースの球場を共有する。
+    2026-10-25 決定）。範囲の外の球場の id は「見つからない」。
+    """
+
+    def find_by_id(self, stadium_id: int) -> Stadium:
+        """範囲の外（ほかのワークスペースの球場）は `StadiumNotFound`。"""
+        ...
+
+    def save(self, stadium: Stadium) -> Stadium:
+        """球場を保存する。新しい球場は範囲のワークスペースに属する。
+
+        範囲の外の球場は `StadiumNotFound`、ワークスペースの中に同じ名前の球場があれば `DuplicateName` で、
+        何も書かない。
+        """
+        ...
+
+    def delete(self, stadium_id: int) -> None:
+        """球場を消す。範囲の外は `StadiumNotFound`、本拠地にしているチーム（ペナントの世界の球団を含む）があれば
+        `NotDeletable`（理由は `setup.stadium_deletion_blocker`）で、どちらも何も消さない。
+        """
         ...
 
 
