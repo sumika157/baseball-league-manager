@@ -22,7 +22,9 @@
   順番は**本指名の最後の巡の続き**（戦略に `本指名の最後の巡 + 育成の巡` を渡す。全巡入札なら育成の巡も入札と抽選で、
   乱数の用途は `draft-lottery-development-<巡>-<回>-<候補>`）。候補は本指名の残り（同じ `ProspectPool`。候補の人数と
   合わせ込みは本指名の計画だけから決まるので、育成の巡を足しても本指名の分布は変わらない）。選択終了はいつでもでき、
-  位置の最低人数（支配下の話）は見ない。区分（本指名 / 育成）も行動の並びから導く（`DraftAction` は区分を持たない）
+  位置の最低人数（支配下の話）は見ない。区分（本指名 / 育成）も行動の並びから導く（`DraftAction` は区分を持たない）。
+  **社会人の候補は育成で指名できない**（#307。規則は `DraftRoute.allows_development_pick` の1か所で、AI の指名・
+  `DraftState.apply` の検査・育成の巡で足す候補が同じ判定を使う）。本指名では今までどおり指名できる
 
 GM の指名（D3。#198）は同じ `DraftState.apply` を通る。会議を始めなかった年は、締める処理が `auto_complete` で
 全球団を AI として最後まで進める。外国人は会議の外（`draft.club_draftees`）。
@@ -140,6 +142,13 @@ class Prospect:
     def route(self) -> DraftRoute:
         return self.rookie.route
 
+    @property
+    def allows_development_pick(self) -> bool:
+        """育成の巡で指名できる候補か（規則は `DraftRoute.allows_development_pick`）。
+
+        AI の指名と `DraftState.apply` の検査が使う。"""
+        return self.route.allows_development_pick
+
 
 @dataclass(frozen=True)
 class ProspectPool:
@@ -166,20 +175,33 @@ class ProspectPool:
             digest.update(f"{prospect.key}:{prospect.rookie.name}:{prospect.rookie.ratings!r};".encode())
         return digest.hexdigest()
 
-    def with_extra(self, position: Position) -> ProspectPool:
-        """位置 `position` の候補を1人足した候補（乱数は `draft-extra-<番号>`。同じ並びなら同じ人）。"""
+    def with_extra(self, position: Position, *, development: bool = False) -> ProspectPool:
+        """位置 `position` の候補を1人足した候補（乱数は `draft-extra-<番号>`。同じ並びなら同じ人）。
+
+        育成の巡（`development`）で足す候補は、育成で指名できる経路（`DraftRoute.allows_development_pick`）からだけ引く。
+        """
         key = len(self.prospects)
         rng = make_random(game_seed(self.world_seed, self.year, f"draft-extra-{key}"))
         names = set(self.taken_names)
-        prospect = _draw_prospect(rng, key, position, path=None, year=self.year, used_names=names)
+        prospect = _draw_prospect(
+            rng, key, position, path=None, year=self.year, used_names=names, development=development
+        )
         return replace(self, prospects=(*self.prospects, prospect), taken_names=frozenset(names))
 
 
 def _draw_prospect(
-    rng: GameRandom, key: int, position: Position, *, path: AmateurPath | None, year: int, used_names: set[str]
+    rng: GameRandom,
+    key: int,
+    position: Position,
+    *,
+    path: AmateurPath | None,
+    year: int,
+    used_names: set[str],
+    development: bool = False,
 ) -> Prospect:
     if path is None:
-        paths = list(POOL_ROUTE_WEIGHTS)
+        allowed = DraftRoute.development_amateur_paths() if development else tuple(AmateurPath)
+        paths = [item for item in POOL_ROUTE_WEIGHTS if item in allowed]
         path = paths[weighted_index(rng, [POOL_ROUTE_WEIGHTS[item] for item in paths])]
     rookie = draw_rookie(
         rng,
@@ -661,6 +683,8 @@ class DraftState:
         prospect = pool.get(action.prospect_key)
         if prospect.key in self._taken:
             raise InvalidDraftAction("その選手は既に指名されています。")
+        if self.is_development and not prospect.allows_development_pick:
+            raise InvalidDraftAction(f"{prospect.route.label}の選手は育成で指名できません。")
         if not self.position_allowed(action.team_id, prospect.position):
             raise InvalidDraftAction("位置の最低人数に届かなくなるので、その位置の選手は指名できません。")
         if pool is not self.pool:
@@ -692,7 +716,7 @@ class DraftState:
             return self.pool
         if action.prospect_key != len(self.pool):
             raise InvalidDraftAction("足す候補の番号が正しくありません。")
-        return self.pool.with_extra(action.extra_position)
+        return self.pool.with_extra(action.extra_position, development=self.is_development)
 
     def _select(self, team_id: int, prospect: Prospect) -> None:
         development = self.is_development
@@ -805,7 +829,8 @@ class DraftState:
         評価は `将来値 + NEED_WEIGHT × 位置の残り`（1位の入札は将来値の代わりに好みを入れた評価。`_tasted`）。
         計画した位置を指名し尽くしていれば（GM が別の位置を選んだ後のお任せ）、位置の最低人数を割らない候補から
         同じ評価で選ぶ。その位置の候補が尽きていれば、その場で1人足す。
-        育成の巡は育成の位置の計画（`DraftSlot.development_planned`）で同じように選ぶ。
+        育成の巡は育成の位置の計画（`DraftSlot.development_planned`）で、育成で指名できる候補
+        （`Prospect.allows_development_pick`）の中から同じように選ぶ。
         """
         turn = self.next_turn()
         if turn is None:
@@ -829,7 +854,15 @@ class DraftState:
         tasted = self._tasted()
         best: tuple[float, int] | None = None
         for position in allowed:
-            top = next((item for item in self._ranking(team_id, position, tasted) if item[1] not in self._taken), None)
+            top = next(
+                (
+                    item
+                    for item in self._ranking(team_id, position, tasted)
+                    if item[1] not in self._taken
+                    and (not turn.is_development or self.pool.get(item[1]).allows_development_pick)
+                ),
+                None,
+            )
             if top is None:
                 continue
             score = -top[0] + NEED_WEIGHT * max(0, needed[position])

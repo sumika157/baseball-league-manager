@@ -237,6 +237,20 @@ class SeedRosterTest(BaseCase):
                     self.assertEqual(player.nationality, "")
                     self.assertTrue(player.high_school)
 
+    def test_developmental_players_have_no_corporate_career(self):
+        """社会人の選手は育成で指名できない（#307）。育成ドラフトの選手の経歴は社会人にしない。"""
+        run()
+
+        for team in (self.team, self.rival):
+            _, developmental = split_by_contract(team)
+            with self.subTest(team=team.name):
+                self.assertTrue(developmental)
+                for stint in developmental:
+                    self.assertTrue(stint.player.is_development_draft)
+                    self.assertEqual(stint.player.corporate_team, "")
+        everyone = [s.player for team in (self.team, self.rival) for s in active_stints(team)]
+        self.assertTrue(any(p.corporate_team for p in everyone), "前提: 支配下には社会人の経歴がいる")
+
     def test_back_names_distinguish_same_surname_within_team(self):
         run()
 
@@ -440,6 +454,28 @@ class RefreshSchoolsTest(BaseCase):
         self.assertTrue(virtual.high_school)
         # ドラフトなど他の項目は変えない
         self.assertEqual((virtual.draft_year, virtual.draft_round), (2019, 3))
+
+    def test_development_draft_players_do_not_get_a_corporate_career(self):
+        """社会人の選手は育成で指名できない（#307）。経路の重みを社会人に寄せても、育成ドラフトの選手は社会人にならない。"""
+        development = add_player(
+            self.team,
+            "佐藤翔太",
+            number=13,
+            birthplace="北海道",
+            draft_year=2019,
+            draft_round=1,
+            is_development_draft=True,
+        )
+        registered = add_player(self.team, "鈴木大輔", number=12, birthplace="北海道", draft_year=2019, draft_round=1)
+        weights = {generator.AmateurPath.HIGH_SCHOOL: 0, generator.AmateurPath.UNIVERSITY: 1}
+        with mock.patch.dict(generator._AMATEUR_PATH_WEIGHTS, {**weights, generator.AmateurPath.CORPORATE: 1000}):
+            run("--refresh-schools")
+
+        development.refresh_from_db()
+        registered.refresh_from_db()
+        self.assertEqual(development.corporate_team, "")
+        self.assertTrue(development.university)
+        self.assertTrue(registered.corporate_team, "前提: 支配下は社会人を引く")
 
     def test_public_high_school_is_in_birthplace(self):
         virtual = add_player(self.team, "佐藤翔太", number=12, birthplace="北海道")
