@@ -20,6 +20,12 @@ from ..domain.pennant.season import SeasonPhase
 from ..domain.services.free_agency import SERVICE_DAYS_PER_SEASON
 from ..domain.services.rankings import Title
 from ..domain.services.roster_analysis import NEUTRAL_CATEGORY, ColorCategory
+from ..domain.setup import (
+    league_change_blocker,
+    league_deletion_blocker,
+    stadium_deletion_blocker,
+    team_deletion_blocker,
+)
 from ..domain.simulation.fatigue import FatigueLevel
 from ..domain.simulation.ratings import BatterRatings, PitcherRatings, RatingEmphasis
 from ..domain.value_objects import (
@@ -37,6 +43,7 @@ from ..domain.value_objects import (
     PitchingLine,
     Position,
     Profile,
+    StadiumProfile,
 )
 from ..domain.workspace import Visibility, WorkspaceAccess, WorkspaceRole
 
@@ -3024,3 +3031,72 @@ class OperatorOverview:
     game_count: int
     # 試合の多い順（同数は古い順）に最大 `OPERATOR_TOP_WORKSPACES` 件
     top_workspaces: list[OperatorWorkspaceRow]
+
+
+# --- 登録（リーグ・チーム・球場。W3 #79）---
+#
+# 消せない理由は保存せず、参照クエリが数えた件数から domain の規則（`domain/setup.py`）で作る。
+# 同じ規則をリポジトリの削除も通すので、一覧で「消せる」と出た行は、その時点では消せる。
+
+
+@dataclass(frozen=True)
+class LeagueSetupRow:
+    """登録画面のリーグの1行（一覧と編集フォームの初期値）。"""
+
+    league_id: int
+    name: str
+    display_order: int
+    foreign_rules: ForeignPlayerRules
+    # 支配下選手の登録上限。None は無制限
+    registered_player_limit: int | None
+    team_count: int
+
+    @property
+    def deletion_blocker(self) -> str | None:
+        """消せない理由（消せるなら None）。"""
+        return league_deletion_blocker(self.team_count)
+
+
+@dataclass(frozen=True)
+class TeamSetupRow:
+    """登録画面のチームの1行（一覧と編集フォームの初期値）。本拠地は範囲の球場だけを読む（範囲の外なら本拠地なし）。"""
+
+    team_id: int
+    name: str
+    league_id: int
+    league_name: str
+    display_order: int
+    home_stadium_id: int | None
+    home_stadium_name: str | None
+    stint_count: int
+    captaincy_count: int
+    game_count: int
+    # 消すと外れる担当者の数（削除の確認に出す）
+    manager_count: int
+
+    @property
+    def deletion_blocker(self) -> str | None:
+        """消せない理由（消せるなら None）。"""
+        return team_deletion_blocker(self.stint_count, self.captaincy_count, self.game_count)
+
+    @property
+    def league_change_blocker(self) -> str | None:
+        """所属リーグを変えられない理由（変えられるなら None）。"""
+        return league_change_blocker(self.game_count)
+
+
+@dataclass(frozen=True)
+class StadiumSetupRow:
+    """登録画面の球場の1行（一覧と編集フォームの初期値）。"""
+
+    stadium_id: int
+    name: str
+    profile: StadiumProfile
+    # 本拠地にしている実データのチームの数と、ペナントの世界の球団の数（世界は球場を共有する）
+    real_home_team_count: int
+    world_home_team_count: int
+
+    @property
+    def deletion_blocker(self) -> str | None:
+        """消せない理由（消せるなら None）。"""
+        return stadium_deletion_blocker(self.real_home_team_count, self.world_home_team_count)

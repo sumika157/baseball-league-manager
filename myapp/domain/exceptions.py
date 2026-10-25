@@ -205,3 +205,22 @@ class InvalidFreeAgentDeclaration(DomainError):
 
 class RegisteredPlayerLimitExceeded(DomainError):
     """支配下選手の人数が上限を超えている。"""
+
+
+class InvalidName(DomainError):
+    """リーグ・チーム・球場の名前として許されない（空・長すぎる）。"""
+
+
+class DuplicateName(DomainError):
+    """同じ範囲（ワークスペースの実データ・ペナントの世界）に同じ名前のリーグ・チーム・球場がある。"""
+
+
+class NotDeletable(DomainError):
+    """消せない状態のリーグ・チーム・球場を消そうとした。
+
+    理由の文言は domain の `setup.league_deletion_blocker` などが出典。
+    """
+
+
+class LeagueChangeLocked(DomainError):
+    """チームの所属リーグを変えられない（試合がある）。理由の文言は domain の `setup.league_change_blocker` が出典。"""

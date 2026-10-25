@@ -178,6 +178,12 @@ class PennantWorldService:
         duplicated = sorted({n for n in names if names.count(n) > 1})
         if duplicated:
             raise InvalidWorld(f"同じ名前のリーグを2つ以上分岐元に選べません（{'・'.join(duplicated)}）。")
+        # チーム名も世界の中で一意（`TeamRepository.save` が範囲の中の同名を弾く。W3）。管理画面・投入コマンドは
+        # 実データのチーム名の重複を検査しないので、写し始めてから `DuplicateName` で止まる前に弾く
+        team_names = [team.name for teams in source.rosters for team in teams]
+        duplicated = sorted({n for n in team_names if team_names.count(n) > 1})
+        if duplicated:
+            raise InvalidWorld(f"同じ名前のチームが分岐元に2つ以上あります（{'・'.join(duplicated)}）。")
         if world.start_year > MAX_START_YEAR:
             raise InvalidWorld(
                 f"開幕年は{MAX_START_YEAR}年までにしてください（{MAX_SEASONS_PER_WORLD}シーズン遊べる年が必要です）。"

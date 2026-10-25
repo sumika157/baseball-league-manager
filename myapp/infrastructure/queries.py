@@ -32,6 +32,7 @@ from ..application.dto import (
     HomeStadium,
     LastStart,
     LeagueOption,
+    LeagueSetupRow,
     MoveStintRow,
     OffseasonFacts,
     OffseasonPlayerFact,
@@ -50,7 +51,9 @@ from ..application.dto import (
     SimulationContext,
     SimulationPlayer,
     SimulationTeam,
+    StadiumSetupRow,
     TeamAnalysisFacts,
+    TeamSetupRow,
     TeamSpan,
     TeamSummary,
     WorkspaceContext,
@@ -58,7 +61,14 @@ from ..application.dto import (
     WorldSummary,
 )
 from ..domain.entities import Game, jersey_number_in, winning_team_id
-from ..domain.exceptions import WorkspaceNotFound, WorldNotFound
+from ..domain.exceptions import (
+    InvalidWorld,
+    LeagueNotFound,
+    StadiumNotFound,
+    TeamNotFound,
+    WorkspaceNotFound,
+    WorldNotFound,
+)
 from ..domain.pennant.postseason import PostseasonFormat, PostseasonResult
 from ..domain.pennant.retirement import PlayingTime
 from ..domain.pennant.world import WorldScope
@@ -92,8 +102,12 @@ from .repositories import (
     game_batting_of,
     game_counts,
     game_pitching_of,
+    league_usage,
     pitching_totals,
     profile_of,
+    stadium_profile_of,
+    stadium_usage,
+    team_usage,
 )
 from .scoping import (
     StageFilter,
@@ -111,6 +125,7 @@ from .scoping import (
     players_in,
     ratings_in,
     real_teams_of_outer_workspace,
+    stadiums_in,
     stage_condition,
     stints_in,
     teams_in,
@@ -1603,3 +1618,118 @@ class DjangoServiceHistoryQuery:
         )
         first: int | None = recorded["first"]
         return first
+
+
+class DjangoSetupQuery:
+    """SetupQuery の Django ORM 実装。**実データの範囲だけ**で組み立てる（ペナントの範囲なら `InvalidWorld`）。
+
+    一覧はどれもクエリ1本（行数によらない）。消してよいかの材料の数は、リポジトリの削除と同じ注釈
+    （`league_usage`・`team_usage`・`stadium_usage`）で、相関した副問い合わせとして数える
+    （多段の prefetch を使わない）。
+    チームの本拠地は範囲の球場だけを結合する（`home_stadium_in`。範囲の外の球場を指す行は本拠地なし）。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        if scope.is_pennant:
+            raise InvalidWorld("登録画面は実データの範囲で読みます。ペナントの世界の範囲は渡せません。")
+        self._scope = scope
+
+    # --- リーグ ---
+
+    def leagues(self) -> list[LeagueSetupRow]:
+        return [self._league_row(row) for row in self._league_rows().order_by("display_order", "name")]
+
+    def league(self, league_id: int) -> LeagueSetupRow:
+        row = self._league_rows().filter(id=league_id).first()
+        if row is None:
+            raise LeagueNotFound(f"リーグが見つかりません（id={league_id}）。")
+        return self._league_row(row)
+
+    def _league_rows(self) -> QuerySet[orm_models.League]:
+        return leagues_in(self._scope).annotate(**league_usage())
+
+    @staticmethod
+    def _league_row(row: orm_models.League) -> LeagueSetupRow:
+        return LeagueSetupRow(
+            league_id=row.id,
+            name=row.name,
+            display_order=row.display_order,
+            foreign_rules=foreign_rules_from(
+                row.foreign_active_limit, row.foreign_active_pitcher_limit, row.foreign_active_batter_limit
+            ),
+            registered_player_limit=row.registered_player_limit,
+            team_count=row.team_count,  # type: ignore[attr-defined]  # 注釈の列は型スタブが知らない
+        )
+
+    # --- チーム ---
+
+    _TEAM_COLUMNS = (
+        "id",
+        "name",
+        "league_id",
+        "league__name",
+        "display_order",
+        "stadium__id",
+        "stadium__name",
+        "stint_count",
+        "captaincy_count",
+        "game_count",
+        "manager_count",
+    )
+
+    def teams(self) -> list[TeamSetupRow]:
+        rows = self._team_rows().order_by("league__display_order", "league__name", "display_order", "name")
+        return [self._team_row(row) for row in rows]
+
+    def team(self, team_id: int) -> TeamSetupRow:
+        row = self._team_rows().filter(id=team_id).first()
+        if row is None:
+            raise TeamNotFound(f"チームが見つかりません（id={team_id}）。")
+        return self._team_row(row)
+
+    def _team_rows(self) -> QuerySet[orm_models.Team, dict[str, Any]]:
+        return (
+            teams_in(self._scope)
+            .annotate(stadium=home_stadium_in(self._scope), **team_usage())
+            .values(*self._TEAM_COLUMNS)
+        )
+
+    @staticmethod
+    def _team_row(row: dict[str, Any]) -> TeamSetupRow:
+        return TeamSetupRow(
+            team_id=row["id"],
+            name=row["name"],
+            league_id=row["league_id"],
+            league_name=row["league__name"],
+            display_order=row["display_order"],
+            home_stadium_id=row["stadium__id"],
+            home_stadium_name=row["stadium__name"],
+            stint_count=row["stint_count"],
+            captaincy_count=row["captaincy_count"],
+            game_count=row["game_count"],
+            manager_count=row["manager_count"],
+        )
+
+    # --- 球場 ---
+
+    def stadiums(self) -> list[StadiumSetupRow]:
+        return [self._stadium_row(row) for row in self._stadium_rows().order_by("name")]
+
+    def stadium(self, stadium_id: int) -> StadiumSetupRow:
+        row = self._stadium_rows().filter(id=stadium_id).first()
+        if row is None:
+            raise StadiumNotFound(f"球場が見つかりません（id={stadium_id}）。")
+        return self._stadium_row(row)
+
+    def _stadium_rows(self) -> QuerySet[orm_models.Stadium]:
+        return stadiums_in(self._scope).annotate(**stadium_usage(self._scope))
+
+    @staticmethod
+    def _stadium_row(row: orm_models.Stadium) -> StadiumSetupRow:
+        return StadiumSetupRow(
+            stadium_id=row.id,
+            name=row.name,
+            profile=stadium_profile_of(row),
+            real_home_team_count=row.real_home_team_count,  # type: ignore[attr-defined]
+            world_home_team_count=row.world_home_team_count,  # type: ignore[attr-defined]
+        )

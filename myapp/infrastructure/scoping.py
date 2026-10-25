@@ -231,6 +231,15 @@ def stadiums_in(scope: WorldScope) -> QuerySet[orm_models.Stadium]:
     return stadiums
 
 
+def teams_of_worlds_in(workspace_id: int) -> QuerySet[orm_models.Team]:
+    """そのワークスペースのペナントの世界（全部）の球団。球場の削除の検査だけが使う（W3。#79）。
+
+    世界はワークスペースの球場を共有するので、球場を消してよいかは世界の球団の本拠地も見て決める（2026-10-25 決定）。
+    世界は台帳（`worlds_in`）で絞るので、ほかのワークスペースの世界の球団は入らない。
+    """
+    return orm_models.Team.objects.filter(league__world__in=worlds_in(workspace_id))
+
+
 def home_stadium_in(scope: WorldScope) -> FilteredRelation:
     """球団の本拠地を、範囲の球場に限って結合する関連。
 

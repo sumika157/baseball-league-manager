@@ -27,6 +27,7 @@ from .dto import (
     GameNote,
     GameRow,
     HomeStadium,
+    LeagueSetupRow,
     OffseasonFacts,
     PeriodBatting,
     PeriodPitching,
@@ -36,7 +37,9 @@ from .dto import (
     ServiceHistory,
     SimulationContext,
     SimulationTeam,
+    StadiumSetupRow,
     TeamAnalysisFacts,
+    TeamSetupRow,
     TeamSummary,
     WorkspaceContext,
     WorkspaceRow,
@@ -421,4 +424,38 @@ class ChampionshipQuery(Protocol):
 
     def list_championships(self) -> list[ChampionshipRow]:
         """範囲の日本一の記録（古い順）。"""
+        ...
+
+
+@runtime_checkable
+class SetupQuery(Protocol):
+    """登録画面（リーグ・チーム・球場の作成・編集・削除。W3 #79）の参照。**実データの範囲だけ**。
+
+    一覧は行数によらず一定のクエリ数で読む（数は相関した副問い合わせで数え、多段の prefetch を使わない）。
+    消せない理由・所属リーグを変えられない理由は、DTO が件数から domain の規則で作る。
+    1行を引くもの（編集フォームの初期値）は、範囲の外の id なら `*NotFound`。
+    """
+
+    def leagues(self) -> list[LeagueSetupRow]:
+        """範囲のリーグを表示順に。"""
+        ...
+
+    def league(self, league_id: int) -> LeagueSetupRow:
+        """範囲の外は `LeagueNotFound`。"""
+        ...
+
+    def teams(self) -> list[TeamSetupRow]:
+        """範囲のチームを、リーグの表示順・チームの表示順に。"""
+        ...
+
+    def team(self, team_id: int) -> TeamSetupRow:
+        """範囲の外は `TeamNotFound`。"""
+        ...
+
+    def stadiums(self) -> list[StadiumSetupRow]:
+        """範囲（ワークスペース）の球場を名前の順に。"""
+        ...
+
+    def stadium(self, stadium_id: int) -> StadiumSetupRow:
+        """範囲の外は `StadiumNotFound`。"""
         ...
