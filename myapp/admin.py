@@ -1464,10 +1464,13 @@ class PlayerForm(DomainCheckedForm):
     def build_value_object(self, cleaned):
         draft_year, draft_round = cleaned.get("draft_year"), cleaned.get("draft_round")
         is_development = cleaned.get("is_development_draft", False)
-        if draft_year is None and (draft_round is not None or is_development):
-            raise forms.ValidationError(
-                {"draft_year": "ドラフト年を入力してください（順位・育成だけでは登録できません）。"}
-            )
+        # 年の無い順位・育成を拒む規則は domain（`DraftPick.from_inputs`。サイトと共通）。年の欄のエラーにする
+        try:
+            draft = DraftPick.from_inputs(draft_year, draft_round, is_development=is_development)
+        except DomainError as error:
+            if draft_year is None:
+                raise forms.ValidationError({"draft_year": str(error)}) from None
+            raise
         return DomainProfile(
             birth_date=cleaned.get("birth_date"),
             throws=cleaned.get("throws") or None,
@@ -1475,7 +1478,7 @@ class PlayerForm(DomainCheckedForm):
             height_cm=cleaned.get("height_cm"),
             weight_kg=cleaned.get("weight_kg"),
             birthplace=cleaned.get("birthplace", ""),
-            draft=draft_of(draft_year, draft_round, is_development=is_development),
+            draft=draft,
             high_school=cleaned.get("high_school", ""),
             university=cleaned.get("university", ""),
             corporate_team=cleaned.get("corporate_team", ""),

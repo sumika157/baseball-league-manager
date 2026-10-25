@@ -1259,3 +1259,25 @@ W2 の本体。ワークスペースの中の画面43本（実データ20・ペ�
 - `update_team` は集約（ロスター込み）を読んで保存する。所属リーグを変えるとき、移す先のリーグの支配下枠・外国人枠は検査しない（試合の無いチームだけが移れるので外国人枠は効かないが、支配下枠を超えたまま移れる。T3 で扱いを決め、検査を足すなら `Team.move_to_league()` に足す）。
 - T4: プロフィールは `RosterService` に置く（決定 4）。`LeagueSetupService` には足さない。
 - T5: 管理画面の削除とチーム名の検査は、`domain/setup.py` の規則と `TeamRepository` の重複の検査を同じ形で通す。
+
+#### T4 選手のプロフィールの編集（`feature/player-profile-edit`、2026-10-25）
+
+サイトの選手の編集画面に、プロフィールの14項目（よみがな・背ネーム・生年月日・投打・身長・体重・出身地・ドラフト（年・順位・育成）・出身高校・大学・社会人・国籍・外国人選手か）の節を足した。マイグレーションは無い（`makemigrations --check`）。
+
+- domain: `Team.change_player_profile(player_id, profile)`（`ensure_draft_fits_career` を通してから置き換える。値そのものは `Profile`・`DraftPick` が作るときに検査）。`DraftPick.from_inputs(year, round_, is_development=)`（年が空なら None、年の無い順位・育成は `InvalidDraftPick`）。文字の欄の長さの定数 `PROFILE_TEXT_MAX_LENGTH`（100）・`BACK_NAME_MAX_LENGTH`（20）を `value_objects.py` に置き、ORM の `max_length` はこれを import する（値は同じ）。
+- application: DTO `ProfileInput`（素の値だけ。投打は表記）、変換 `application/player_profile.py`（`profile_from_input`・`profile_input_of`）。`RosterService.update_player(..., profile: ProfileInput | None = None)` が名前・背番号・守備位置と**同じ1回の集約の保存**で書く。None ならプロフィールに触れない。`PlayerDetail.profile`（編集画面の初期値）。
+- presentation: `PlayerProfileForm`（欄の型と長さだけ。投打の選択肢は `Handedness`）、目印 `PROFILE_SECTION_MARKER`（隠し欄）。`player_edit` は**目印があるときだけ**プロフィールのフォームを読み、無い送信（基本情報だけ・退団などのボタン）でプロフィールを空で上書きしない。失敗したら送った値のまま出し直す。`player_edit.html` に「プロフィール」の節（同じフォーム・同じ「更新する」）。
+- 管理画面: `PlayerForm` の「年の無い順位・育成」の検査を `DraftPick.from_inputs` に移した（文言と、年の欄のエラーにする扱いは同じ）。
+
+**計画からのずれ**
+
+- 計画にない `DraftPick.from_inputs` を足した。管理画面の `PlayerForm` だけが持っていた規則（年の無い順位・育成を拒む）を、サイトにも同じく効かせるため domain に移した（画面に複製しない）。
+- 長さの定数を domain に足した（T1 の名前の長さと同じ形）。`Profile` 自身は長さを検査しない（入力の経路のフォームが止める。従来どおり）。
+
+**テスト**: domain `test_profile.py` の `ChangePlayerProfileTest`（置き換え・経路と食い違うドラフトと身長の上限は例外で選手は変わらない・知らない選手）、`test_draft_pick.py` の `DraftPickFromInputsTest`。integration `test_player_profile_edit.py`（新。14項目の往復と編集画面の初期値・育成ドラフトの往復・目印つきの空欄はプロフィールを空にする・選手詳細に出る・目印の無い送信と退団・主将のボタンでプロフィールが消えない・身長の上限／年の無い順位／経路と食い違うドラフト／数値でない身長／知らない投打／長すぎる背ネームは何も保存しない・ほかのチームの担当は 403）、`test_workspace_permissions.py` の「選手の編集（POST）」の本文にプロフィール（基本情報だけが書かれたら落ちる）、`test_cross_workspace_ids.py` の「プロフィールの編集」（B の id は 404）。件数: domain＋integration 3,884（T1 より +21）、e2e 14（+1）。
+
+**変異の確かめ**（どれも戻した）: 目印を見ずにプロフィールを読む → `test_a_post_without_the_marker_keeps_the_profile` が落ちる（1件）、`change_player_profile` が経路の整合を見ない → domain と integration の2件、`update_player` がプロフィールを捨てる → 27件（往復・権限の表の持ち主・編集者・担当の行など）、`from_inputs` が年の無い順位を許す → 4件。
+
+**レビュー（ddd-boundary-reviewer）**: 重要な指摘なし。軽微のうち、管理画面のコメントの途切れ・`draft_of` の docstring（読む変換と入力の検査の使い分け）・長さの定数のコメント（`Profile` は検査しない）を直した。残したもの: プロフィールの欄と退団・主将・支配下登録のボタンが同じ `<form>` にあり、欄を書き換えてからボタンを押すと入力は捨てられる（名前・背番号も以前から同じ。データは失われない）。分けるかはユーザーが決める。
+
+**Enter での送信の不具合の修正（既存の不具合。T4 で直した）**: 入力欄で Enter を押すと、HTML の仕様でフォームの文書順で最初の送信ボタンが押されたことになり、この画面では「支配下登録する」（育成選手）か「主将にする／解任する」が押されていた（プロフィールの欄が増えて踏みやすくなった）。フォームの先頭に「更新する」と同じ送信（name・value なし）を見えない形（`visually-hidden`・`tabindex="-1"`・`aria-hidden`）で置いた。再発防止: integration `DefaultSubmitButtonTest`（描いた HTML で最初の送信ボタンが「更新する」。育成・主将・主将でないの3通り）、e2e `test_player_edit_enter.py`（育成で主将でない選手のよみがなで Enter → 更新され、昇格も主将の指名も起きない）。変異: 隠しボタンを消す → integration 3件・e2e 1件が落ちる。

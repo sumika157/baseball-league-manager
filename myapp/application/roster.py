@@ -13,7 +13,9 @@ from django.db import transaction
 from ..domain.entities import Player
 from ..domain.repositories import LeagueRepository, TeamRepository
 from ..domain.value_objects import AcquisitionRoute, ContractStatus, FreeAgencyKind, JerseyNumber, Position
+from .dto import ProfileInput
 from .ids import saved_id
+from .player_profile import profile_from_input
 
 
 class RosterService:
@@ -81,10 +83,20 @@ class RosterService:
         self._teams.save(team)
         return player
 
-    def update_player(self, team_id: int, player_id: int, *, name: str, number: str, position_label: str) -> Player:
-        """選手の基本情報を更新する。
+    def update_player(
+        self,
+        team_id: int,
+        player_id: int,
+        *,
+        name: str,
+        number: str,
+        position_label: str,
+        profile: ProfileInput | None = None,
+    ) -> Player:
+        """選手の基本情報（とプロフィール）を更新する。名前・背番号・守備位置・プロフィールを1回の集約の保存で書く。
 
-        成績は試合から集計するため、ここでは扱わない。
+        `profile` が None ならプロフィールに触れない（欄が送られてこなかった要求で、空のプロフィールで
+        上書きしない）。どれかの検査に落ちたら何も保存しない。成績は試合から集計するため、ここでは扱わない。
         """
         team = self._teams.find_by_id(team_id)
         player = team.find_player(player_id)
@@ -92,6 +104,8 @@ class RosterService:
         player.rename(name)
         team.change_player_number(player, JerseyNumber(number))
         player.change_position(Position.from_label(position_label))
+        if profile is not None:
+            team.change_player_profile(player_id, profile_from_input(profile))
 
         self._teams.save(team)
         return player

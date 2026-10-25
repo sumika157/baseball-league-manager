@@ -64,6 +64,14 @@
 
 <form method="POST">
   {% csrf_token %}
+  {% comment %}
+    入力欄で Enter を押したときの送信（暗黙の送信）は、HTML の仕様でフォームの中の「文書順で最初の送信ボタン」が押されたことになる。
+    この画面は「支配下登録する」「主将にする／解任する」「退団にする」が「更新する」より前にあるため、置かないと Enter で
+    昇格や主将の変更が起きる。そこで「更新する」と同じ送信（name も value も持たない）を先頭に見えない形で置く。
+    display:none（hidden 属性・d-none）は、ブラウザによっては既定のボタンとして扱われないので visually-hidden にする。
+    test_player_profile_edit.py の DefaultSubmitButtonTest が「最初の送信ボタン」を検査する。
+  {% endcomment %}
+  <button type="submit" class="visually-hidden" tabindex="-1" aria-hidden="true">更新する</button>
 
   <div class="card mb-3">
     <div class="card-header">基本情報</div>
@@ -89,6 +97,89 @@
               <option value="{{ label }}" {% if label == player.position %}selected{% endif %}>{{ label }}</option>
             {% endfor %}
           </select>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% comment %}
+    プロフィール。基本情報と同じフォーム・同じ「更新する」で保存する（決定4）。
+    隠し欄は節の目印で、これがある送信でだけプロフィールを更新する（退団などのボタンでプロフィールを空にしない）。
+    選択肢（投打）はフォームがドメインの Handedness から作る。
+  {% endcomment %}
+  <input type="hidden" name="{{ profile_section_marker }}" value="1" />
+  <div class="card mb-3">
+    <div class="card-header">プロフィール</div>
+    <div class="card-body">
+      <p class="page-subtitle mb-3" style="font-size: 0.8125rem;">分かっているものだけ入力してください。すべて任意です。</p>
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label class="form-label" for="{{ profile_form.name_kana.id_for_label }}">{{ profile_form.name_kana.label }}</label>
+          {{ profile_form.name_kana }}
+        </div>
+        <div class="col-md-6">
+          <label class="form-label" for="{{ profile_form.back_name.id_for_label }}">{{ profile_form.back_name.label }}</label>
+          {{ profile_form.back_name }}
+        </div>
+        <div class="col-md-4">
+          <label class="form-label" for="{{ profile_form.birth_date.id_for_label }}">{{ profile_form.birth_date.label }}</label>
+          {{ profile_form.birth_date }}
+        </div>
+        <div class="col-md-2">
+          <label class="form-label" for="{{ profile_form.throws.id_for_label }}">{{ profile_form.throws.label }}</label>
+          {{ profile_form.throws }}
+        </div>
+        <div class="col-md-2">
+          <label class="form-label" for="{{ profile_form.bats.id_for_label }}">{{ profile_form.bats.label }}</label>
+          {{ profile_form.bats }}
+        </div>
+        <div class="col-md-2">
+          <label class="form-label" for="{{ profile_form.height_cm.id_for_label }}">{{ profile_form.height_cm.label }}</label>
+          {{ profile_form.height_cm }}
+        </div>
+        <div class="col-md-2">
+          <label class="form-label" for="{{ profile_form.weight_kg.id_for_label }}">{{ profile_form.weight_kg.label }}</label>
+          {{ profile_form.weight_kg }}
+        </div>
+        <div class="col-md-6">
+          <label class="form-label" for="{{ profile_form.birthplace.id_for_label }}">{{ profile_form.birthplace.label }}</label>
+          {{ profile_form.birthplace }}
+        </div>
+        <div class="col-md-6">
+          <label class="form-label" for="{{ profile_form.nationality.id_for_label }}">{{ profile_form.nationality.label }}</label>
+          {{ profile_form.nationality }}
+        </div>
+        <div class="col-12">
+          <div class="form-check">
+            {{ profile_form.is_foreign_player }}
+            <label class="form-check-label" for="{{ profile_form.is_foreign_player.id_for_label }}">{{ profile_form.is_foreign_player.label }}</label>
+          </div>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label" for="{{ profile_form.draft_year.id_for_label }}">{{ profile_form.draft_year.label }}</label>
+          {{ profile_form.draft_year }}
+        </div>
+        <div class="col-md-3">
+          <label class="form-label" for="{{ profile_form.draft_round.id_for_label }}">{{ profile_form.draft_round.label }}</label>
+          {{ profile_form.draft_round }}
+        </div>
+        <div class="col-md-6 d-flex align-items-end">
+          <div class="form-check mb-2">
+            {{ profile_form.is_development_draft }}
+            <label class="form-check-label" for="{{ profile_form.is_development_draft.id_for_label }}">{{ profile_form.is_development_draft.label }}</label>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label" for="{{ profile_form.high_school.id_for_label }}">{{ profile_form.high_school.label }}</label>
+          {{ profile_form.high_school }}
+        </div>
+        <div class="col-md-4">
+          <label class="form-label" for="{{ profile_form.university.id_for_label }}">{{ profile_form.university.label }}</label>
+          {{ profile_form.university }}
+        </div>
+        <div class="col-md-4">
+          <label class="form-label" for="{{ profile_form.corporate_team.id_for_label }}">{{ profile_form.corporate_team.label }}</label>
+          {{ profile_form.corporate_team }}
         </div>
       </div>
     </div>

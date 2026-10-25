@@ -109,3 +109,20 @@ class DraftFitsCareerTest(TestCase):
         ensure_draft_fits_career(DraftPick(2019, round=1, is_development=True), [unknown])
         ensure_draft_fits_career(None, [stint(2020, DEVELOPMENTAL_DRAFT)])
         ensure_draft_fits_career(DraftPick(2019, round=1, is_development=True), [])
+
+
+class DraftPickFromInputsTest(TestCase):
+    """入力の3欄（年・順位・育成）から。管理画面とサイトの選手の編集の共通の規則。"""
+
+    def test_blank_year_means_no_draft(self):
+        self.assertIsNone(DraftPick.from_inputs(None, None, is_development=False))
+
+    def test_round_or_development_without_a_year_is_rejected(self):
+        for round_, development in ((1, False), (None, True), (3, True)):
+            with self.subTest(round=round_, development=development), self.assertRaises(InvalidDraftPick):
+                DraftPick.from_inputs(None, round_, is_development=development)
+
+    def test_a_year_makes_a_pick(self):
+        self.assertEqual(
+            DraftPick.from_inputs(2020, 3, is_development=True), DraftPick(2020, round=3, is_development=True)
+        )

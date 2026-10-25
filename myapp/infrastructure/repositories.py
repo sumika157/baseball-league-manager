@@ -637,7 +637,10 @@ def _captaincy_values(captaincy: Captaincy, player_id: int) -> dict[str, Any]:
 
 
 def draft_of(year: int | None, round_: int | None, *, is_development: bool) -> DraftPick | None:
-    """ドラフトの3列から。年が空ならドラフトを経ていない（None）。参照クエリもこれを通す（変換の出典を1つにする）。"""
+    """保存済みのドラフトの3列から。年が空ならドラフトを経ていない（None）。参照クエリもこれを通す（読む変換の出典を1つにする）。
+
+    入力（管理画面・サイトの選手の編集）の検査と変換は `DraftPick.from_inputs`（年の無い順位・育成を拒む）。
+    """
     if year is None:
         return None
     return DraftPick(year=year, round=round_, is_development=is_development)
