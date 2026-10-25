@@ -34,7 +34,6 @@ class TeamScreensTest(SetupCase):
             "name": "テストチーム",
             "league": str(self.league.id),
             "home_stadium": str(self.stadium.id),
-            "display_order": "0",
             **overrides,
         }
 
@@ -106,14 +105,19 @@ class TeamScreensTest(SetupCase):
         other = make_league("移籍先")
         free = make_stadium("新しい本拠地")
         url = ws_url("setup_team_edit", self.team.id)
-        form = self.client.get(url).context["form"]
+        page = self.client.get(url)
+        form = page.context["form"]
         self.assertEqual(
-            [form[name].value() for name in ("name", "league", "home_stadium", "display_order")],
-            ["テストチーム", self.league.id, self.stadium.id, 0],
+            [form[name].value() for name in ("name", "league", "home_stadium")],
+            ["テストチーム", self.league.id, self.stadium.id],
         )
+        self.assertNotIn("display_order", form.fields, "表示順は一覧のドラッグで決める（W3 T8）")
+        self.assertNotContains(page, "表示順")
+        orm_models.Team.objects.create(league=other, name="移籍先の先客", display_order=2)
 
+        # 送られた表示順（古い画面など）は読まない。移したチームは移す先のリーグの末尾に入る
         response = self.client.post(
-            url, self._edit_body(name="改名チーム", league=other.id, home_stadium=free.id, display_order="3")
+            url, self._edit_body(name="改名チーム", league=other.id, home_stadium=free.id, display_order="9")
         )
 
         self.assertRedirects(response, ws_url("setup_teams"))
@@ -157,7 +161,7 @@ class TeamScreensTest(SetupCase):
         register_players(self.rival, [("一郎", "1", "投手"), ("二郎", "2", "捕手")])
         small = make_league("小さいリーグ", registered_player_limit=1)
         url = ws_url("setup_team_edit", self.rival.id)
-        body = {"name": "相手チーム", "league": small.id, "home_stadium": "", "display_order": "0"}
+        body = {"name": "相手チーム", "league": small.id, "home_stadium": ""}
         before = snapshot_all_rows()
 
         response = self.client.post(url, body)

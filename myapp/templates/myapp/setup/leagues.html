@@ -1,5 +1,5 @@
 {% extends 'myapp/base.html' %}
-{% load scoped %}
+{% load static scoped %}
 
 {% block title %}リーグの登録 - Baseball Manager{% endblock %}
 
@@ -7,15 +7,17 @@
 {% include 'myapp/setup/_head.html' %}
 
 {% comment %}
-リーグの一覧（表示順）。列ソートは付けない（並びは表示順の数値で決める）。
+リーグの一覧（表示順）。列ソートは付けない。表示順は行のドラッグで決める（W3 T8。編集画面に表示順の欄は無い）。
+並べ替えは setup-sortable.js が下の保存のフォームの隠し欄 order（リーグの id の並び）を書き直し、「並び順を保存する」で
+送る。JS が動かなければフォームと案内は hidden のままで、一覧は読める（並べ替えができないだけ）。
 削除のリンクは消せる行（チームが1つも無いリーグ）にだけ出す。消せない行はチームの数で理由が分かる。
 {% endcomment %}
 {% if leagues %}
+  <p class="sortable-hint" id="league-order-hint" hidden>行をドラッグして並べ替え、「並び順を保存する」で確定します。</p>
   <div class="table-responsive">
     <table class="table table-hover">
       <thead>
         <tr>
-          <th class="text-end">表示順</th>
           <th>リーグ名</th>
           <th class="text-end">チーム</th>
           <th>外国人選手の1軍登録の枠</th>
@@ -23,11 +25,10 @@
           <th></th>
         </tr>
       </thead>
-      <tbody class="tabular-nums">
+      <tbody class="tabular-nums" data-sortable-form="league-order" data-sortable-hint="league-order-hint">
         {% for league in leagues %}
-          <tr>
-            <td class="text-end stat-muted">{{ league.display_order }}</td>
-            <td><a href="{% workspace_url 'league_detail' league.league_id %}" class="player-name">{{ league.name }}</a></td>
+          <tr data-order-id="{{ league.league_id }}">
+            <td data-sortable-handle><a href="{% workspace_url 'league_detail' league.league_id %}" class="player-name">{{ league.name }}</a></td>
             <td class="text-end">{{ league.team_count }}</td>
             <td>{{ league.foreign_rules.label }}</td>
             <td class="text-end">{% if league.registered_player_limit is None %}無制限{% else %}{{ league.registered_player_limit }}人{% endif %}</td>
@@ -42,6 +43,13 @@
       </tbody>
     </table>
   </div>
+  <form method="post" action="{% workspace_url 'setup_leagues_reorder' %}" id="league-order" class="sortable-save mb-3" hidden>
+    {% for league in leagues %}<input type="hidden" name="order" value="{{ league.league_id }}">{% endfor %}
+    {% csrf_token %}
+    <button type="submit" class="btn btn-sm btn-primary">並び順を保存する</button>
+    <a href="{% workspace_url 'setup_leagues' %}" class="btn btn-sm btn-secondary">元に戻す</a>
+  </form>
+  <script src="{% static 'myapp/js/setup-sortable.js' %}" defer></script>
 {% else %}
   <div class="card mb-3">
     <div class="empty-state">まだリーグがありません。下のフォームから作ってください。</div>
@@ -61,7 +69,7 @@
     </div>
     {% include 'myapp/setup/_field.html' with field=form.registered_player_limit %}
     <button type="submit" class="btn btn-primary">作る</button>
-    <span class="stat-muted ms-2" style="font-size: 0.8125rem;">表示順は末尾に入ります（作った後に編集で変えられます）。</span>
+    <span class="stat-muted ms-2" style="font-size: 0.8125rem;">表示順は末尾に入ります（作った後に一覧の行をドラッグして変えられます）。</span>
   </div>
 </form>
 {% endblock %}

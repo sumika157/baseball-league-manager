@@ -521,7 +521,7 @@ def _blank_choices(options: Sequence[str]) -> list[tuple[str, str]]:
 class LeagueSetupForm(forms.Form):
     """リーグの作成・編集。外国人枠と支配下選手の登録枠は空欄なら無制限。
 
-    表示順は編集だけで入れる（作成は末尾。`with_display_order=False` で欄を外す）。初期値の出典は domain
+    表示順の欄は持たない（作成は末尾。並びは一覧のドラッグで決める。W3 T8）。初期値の出典は domain
     （外国人枠は `ForeignPlayerRules.NPB`、支配下枠は `DEFAULT_REGISTERED_PLAYER_LIMIT`）。
     名前の空・長さ・重複はドメインとリポジトリが検査し、ビューがこのフォームのエラーにする。
     """
@@ -531,19 +531,12 @@ class LeagueSetupForm(forms.Form):
         max_length=LEAGUE_NAME_MAX_LENGTH,
         widget=forms.TextInput(attrs={"class": "form-control"}),
     )
-    display_order = forms.IntegerField(
-        label="表示順",
-        min_value=0,
-        max_value=MAX_STORED_INTEGER,
-        help_text="小さいほど前に並びます。",
-        widget=forms.NumberInput(attrs={"class": "form-control"}),
-    )
     foreign_active = _count_field("外国人選手の1軍登録の枠（計）", help_text="空欄なら無制限。")
     foreign_pitchers = _count_field("うち投手", help_text="空欄なら無制限。")
     foreign_batters = _count_field("うち野手", help_text="空欄なら無制限。")
     registered_player_limit = _count_field("支配下選手の登録枠", help_text="空欄なら無制限。")
 
-    def __init__(self, *args: Any, with_display_order: bool = True, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         kwargs.setdefault(
             "initial",
             {
@@ -554,8 +547,6 @@ class LeagueSetupForm(forms.Form):
             },
         )
         super().__init__(*args, **kwargs)
-        if not with_display_order:
-            del self.fields["display_order"]
 
     def clean(self) -> dict[str, Any]:
         cleaned = super().clean() or {}
@@ -645,13 +636,13 @@ class StadiumSetupForm(forms.Form):
 
 
 class TeamSetupForm(forms.Form):
-    """チームの作成・編集（名前・所属リーグ・本拠地・表示順）。本拠地は空欄でよい（本拠地なし）。
+    """チームの作成・編集（名前・所属リーグ・本拠地）。本拠地は空欄でよい（本拠地なし）。
 
     所属リーグと本拠地の選択肢は、登録画面の参照クエリの行（`SetupQuery.leagues()`・`stadiums()`。範囲のリーグと
     球場だけ）から作る。**選択肢で絞るのは導線にすぎず**、ほかのワークスペースの id を止めるのはリポジトリの範囲の
     検査（`LeagueNotFound`・`StadiumNotFound`）。ここで選択肢の外の値を弾くのは、その手前のフォームのエラー。
 
-    - 表示順は編集だけで入れる（作成はリーグの末尾。`with_display_order=False` で欄を外す）。
+    - 表示順の欄は持たない（作成はリーグの末尾。リーグの中の並びは一覧のドラッグで決める。W3 T8）。
     - 所属リーグを変えられないチーム（試合がある。`TeamSetupRow.league_change_blocker`）の編集は
       `with_league=False` で欄を外す（POST に `league` があっても読まない）。
     - 名前の空・長さ・重複、移す先の支配下選手の登録枠はドメインとリポジトリが検査し、ビューがこのフォームの
@@ -676,20 +667,12 @@ class TeamSetupForm(forms.Form):
         help_text="空欄なら本拠地なし。球場は「球場」のタブで作ります。",
         widget=forms.Select(attrs={"class": "form-select"}),
     )
-    display_order = forms.IntegerField(
-        label="表示順",
-        min_value=0,
-        max_value=MAX_STORED_INTEGER,
-        help_text="リーグの中で、小さいほど前に並びます。",
-        widget=forms.NumberInput(attrs={"class": "form-control"}),
-    )
 
     def __init__(
         self,
         *args: Any,
         leagues: Sequence[LeagueSetupRow],
         stadiums: Sequence[StadiumSetupRow],
-        with_display_order: bool = True,
         with_league: bool = True,
         **kwargs: Any,
     ) -> None:
@@ -700,7 +683,5 @@ class TeamSetupForm(forms.Form):
         cast(forms.TypedChoiceField, self.fields["home_stadium"]).choices = [("", "なし")] + [
             (stadium.stadium_id, stadium.name) for stadium in stadiums
         ]
-        if not with_display_order:
-            del self.fields["display_order"]
         if not with_league:
             del self.fields["league"]

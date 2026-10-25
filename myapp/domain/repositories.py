@@ -71,6 +71,14 @@ class TeamRepository(Protocol):
         """
         ...
 
+    def save_display_orders(self, teams: Sequence[Team]) -> None:
+        """渡したチームの表示順だけを書く（ほかの欄・ロスターには触れない。W3 T8）。
+
+        行数によらないクエリ数で書く（1行ずつ `save` すると、名前・リーグの検査と在籍の比較が行ごとに走る）。
+        範囲の外のチームが1つでもあれば `TeamNotFound` で、何も書かない。
+        """
+        ...
+
     def delete(self, team_id: int) -> None:
         """チームを消す（担当者の割り当ても外れる）。
 
@@ -150,6 +158,13 @@ class LeagueRepository(Protocol):
         """リーグを保存する。新しいリーグは範囲の世界に属する形で作られる。
 
         範囲の中に同じ名前のリーグがあれば `DuplicateName` で、何も書かない。
+        """
+        ...
+
+    def save_display_orders(self, leagues: Sequence[League]) -> None:
+        """渡したリーグの表示順だけを書く（ほかの欄には触れない。W3 T8）。行数によらないクエリ数で書く。
+
+        範囲の外のリーグが1つでもあれば `LeagueNotFound` で、何も書かない。
         """
         ...
 

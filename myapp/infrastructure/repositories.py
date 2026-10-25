@@ -51,6 +51,7 @@ from ..domain.entities import (
 )
 from ..domain.exceptions import (
     AlreadyClosed,
+    DomainError,
     DuplicateName,
     GameNotFound,
     InvalidAward,
@@ -399,6 +400,19 @@ class DjangoTeamRepository:
             ],
         )
         return team
+
+    @transaction.atomic
+    def save_display_orders(self, teams: Sequence[Team]) -> None:
+        """渡したチームの表示順だけを書く（W3 T8）。範囲の外のチームがあれば `TeamNotFound` で何も書かない。
+
+        `save` を通さないので、名前・所属リーグ・本拠地の検査と在籍の比較は走らない（表示順のほかは書かない）。
+        """
+        _write_display_orders(
+            orm_models.Team,
+            teams_in(self._scope),
+            teams,
+            lambda team_id: TeamNotFound(f"チームが見つかりません（id={team_id}）。"),
+        )
 
     @transaction.atomic
     def delete(self, team_id: int) -> None:
@@ -1541,6 +1555,33 @@ def usage_counts(rows: QuerySet[Any], usage: dict[str, Subquery]) -> dict[str, i
     return rows.annotate(**usage).values(*usage).first()
 
 
+class _Ordered(Protocol):
+    id: int | None
+    display_order: int
+
+
+def _write_display_orders(
+    model: type[orm_models.League] | type[orm_models.Team],
+    rows: QuerySet[Any],
+    items: Sequence[_Ordered],
+    not_found: Callable[[int | None], DomainError],
+) -> None:
+    """範囲の行（`rows`）のうち `items` の表示順だけを書く（W3 T8）。読む1本と、変わった行の `bulk_update`。
+
+    `items` に範囲の外の id（id の無い行を含む）が1つでもあれば `not_found` の例外で、何も書かない。
+    """
+    orders = {item.id: item.display_order for item in items}
+    found = list(rows.filter(id__in=[i for i in orders if i is not None]).only("id", "display_order"))
+    missing = set(orders) - {row.id for row in found}
+    if missing:
+        raise not_found(next(iter(missing)))
+    changed = [row for row in found if row.display_order != orders[row.id]]
+    for row in changed:
+        row.display_order = orders[row.id]
+    if changed:
+        model.objects.bulk_update(changed, ["display_order"])
+
+
 def _name_taken(rows: QuerySet[Any], name: str, own_id: int | None) -> bool:
     """範囲の行（`rows`）に、自分（`own_id`）以外で同じ名前の行があるか。"""
     same = rows.filter(name=name)
@@ -1650,6 +1691,16 @@ class DjangoLeagueRepository:
             raise
         league.id = row.id
         return league
+
+    @transaction.atomic
+    def save_display_orders(self, leagues: Sequence[League]) -> None:
+        """渡したリーグの表示順だけを書く（W3 T8）。範囲の外のリーグがあれば `LeagueNotFound` で何も書かない。"""
+        _write_display_orders(
+            orm_models.League,
+            leagues_in(self._scope),
+            leagues,
+            lambda league_id: LeagueNotFound(f"リーグが見つかりません（id={league_id}）。"),
+        )
 
     @transaction.atomic
     def delete(self, league_id: int) -> None:
