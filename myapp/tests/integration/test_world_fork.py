@@ -75,7 +75,9 @@ class ForkTest(BaseCase):
             draft_year=2013,
             draft_round=4,
         )
-        orm_models.Player.objects.filter(id=self.pitcher.id).update(is_foreign_player=True, nationality="米国")
+        orm_models.Player.objects.filter(id=self.pitcher.id).update(
+            is_foreign_player=True, nationality="米国", foreign_background="メジャー経験"
+        )
         play_game(self.team, self.rival, year=2026, home_score=2, away_score=1)
         self.created = self._fork()
         self.world = orm_models.PennantWorld.objects.get(id=self.created.world.id)
@@ -161,6 +163,7 @@ class ForkTest(BaseCase):
         self.assertEqual((copy.high_school, copy.draft_year, copy.draft_round), ("東京高校", 2013, 4))
         foreign = orm_models.Player.objects.get(stints__team=self.copied_team, name="投手")
         self.assertTrue(foreign.is_foreign_player)
+        self.assertEqual(foreign.foreign_background, "メジャー経験")
 
     def test_players_are_new_rows_not_shared(self):
         original = orm_models.Player.objects.get(id=self.captain.id)

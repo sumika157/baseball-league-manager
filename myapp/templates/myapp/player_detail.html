@@ -173,6 +173,7 @@
             {% if profile.weight_kg %}{% include 'myapp/_stat_readout.html' with label='体重' value=profile.weight_kg %}{% endif %}
             {% if profile.birthplace %}{% include 'myapp/_stat_readout.html' with label='出身' value=profile.birthplace %}{% endif %}
             {% if profile.nationality %}{% include 'myapp/_stat_readout.html' with label='国籍' value=profile.nationality %}{% endif %}
+            {% if profile.foreign_background %}{% include 'myapp/_stat_readout.html' with label='前所属' value=profile.foreign_background %}{% endif %}
             {% if profile.draft_label %}{% include 'myapp/_stat_readout.html' with label='ドラフト' value=profile.draft_label %}{% endif %}
           </div>
 

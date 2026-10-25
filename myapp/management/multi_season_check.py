@@ -4,10 +4,12 @@
 推定・シミュレーション・オフはメモリの上だけで行う）。
 
     1年目: 実成績から能力を推定 → 1シーズン回す
-    シーズンの間: 出場機会（シミュレーションした試合から数える）で `plan_offseason` を回し、結果を適用
+    シーズンの間: 出場機会（シミュレーションした試合から数える）で `plan_offseason` を回し、結果（獲得した外国人と
+    新人を含む）を適用
     2年目以降: 翌年の能力で1シーズン回す
 
-シーズンごとに、水準の表（実データと並べる）・タイトル争い・年齢と能力の分布・入れ替わり・錨の補正を出す。
+シーズンごとに、水準の表（実データと並べる）・タイトル争い・年齢と能力の分布・入れ替わり・錨の補正・
+外国人の打席と投球回の割合・獲得した外国人（#169）を出す。
 曲線や引退の倍率を直したら、ここで3シーズンの分布を読んで確かめる（Wiki「ペナントモードの仕組み」の「実測値」）。
 """
 
@@ -194,20 +196,20 @@ def apply_plan(members: Sequence[Member], plan: OffseasonPlan) -> list[Member]:
     ]
     league_of = {m.team_id: m.league_id for m in members}
     next_id = max(m.player_id for m in members) + 1
-    for offset, draftee in enumerate(plan.draftees):
+    for offset, newcomer in enumerate(plan.newcomers):
         player_id = next_id + offset
         kept.append(
             Member(
                 player_id=player_id,
-                team_id=draftee.team_id,
-                league_id=league_of[draftee.team_id],
-                name=draftee.name,
-                position=draftee.position,
-                profile=draftee.profile,
-                number=draftee.number,
+                team_id=newcomer.team_id,
+                league_id=league_of[newcomer.team_id],
+                name=newcomer.name,
+                position=newcomer.position,
+                profile=newcomer.profile,
+                number=newcomer.number,
                 joined_year=plan.year + 1,
-                ratings=PlayerRatings(player_id, plan.year + 1, draftee.ratings),
-                contract=draftee.contract,
+                ratings=PlayerRatings(player_id, plan.year + 1, newcomer.ratings),
+                contract=newcomer.contract,
             )
         )
     return kept
@@ -227,17 +229,68 @@ def format_population(members: Sequence[Member], year: int) -> str:
     foreign = sum(1 for m in members if m.profile.is_foreign_player)
     team_ids = {m.team_id for m in members}
     sizes = [sum(1 for m in members if m.team_id == team_id) for team_id in team_ids]
+    registered = [
+        sum(1 for m in members if m.team_id == team_id and m.contract is ContractStatus.REGISTERED)
+        for team_id in team_ids
+    ]
     development = [
         sum(1 for m in members if m.team_id == team_id and m.contract is ContractStatus.DEVELOPMENTAL)
         for team_id in team_ids
     ]
     return (
-        f"現役 {len(members)}人（1球団 {min(sizes)}〜{max(sizes)}人・外国人 {foreign}人・"
+        f"現役 {len(members)}人（1球団 {min(sizes)}〜{max(sizes)}人・支配下 {min(registered)}〜{max(registered)}人"
+        f"＝平均 {_mean(registered):.1f}人・外国人 {foreign}人＝1球団 平均 {foreign / len(team_ids):.1f}人・"
         f"育成 {sum(development)}人＝1球団 {min(development)}〜{max(development)}人・"
         f"平均 {_mean(development):.1f}人）  "
         f"年齢 平均 {fmean(ages):.1f}・標準偏差 {pstdev(ages):.1f}・"
         f"35歳以上 {sum(1 for a in ages if a >= 35) / len(ages):.1%}・"
         f"22歳以下 {sum(1 for a in ages if a <= 22) / len(ages):.1%}"
+    )
+
+
+def format_foreign_share(
+    members: Sequence[Member], batting: dict[int, BattingLine], pitching: dict[int, PitchingLine]
+) -> str:
+    """シーズンの、外国人の打席と投球回（アウト）の割合。"""
+    foreign = {m.player_id for m in members if m.profile.is_foreign_player}
+    plate = sum(line.plate_appearances for line in batting.values())
+    outs = sum(line.innings.outs for line in pitching.values())
+    foreign_plate = sum(line.plate_appearances for player_id, line in batting.items() if player_id in foreign)
+    foreign_outs = sum(line.innings.outs for player_id, line in pitching.items() if player_id in foreign)
+    return f"外国人の打席の割合 {foreign_plate / max(1, plate):.1%}・投球回の割合 {foreign_outs / max(1, outs):.1%}"
+
+
+def format_foreign_offseason(plan: OffseasonPlan, members: Sequence[Member], year: int, *, start_year: int) -> str:
+    """直前のオフの外国人（獲得・戦力外・1年目が外れる割合）。1年目は締める年に加入した外国人（世界の開幕年は除く）。"""
+    by_id = {m.player_id: m for m in members}
+    teams = len({m.team_id for m in members})
+    signed = plan.signings
+    before = [overall_value(signing.candidate.ratings) for signing in signed]
+    after = [overall_value(signing.ratings) for signing in signed]
+    backgrounds: dict[str, int] = {}
+    for signing in signed:
+        label = signing.candidate.background.label
+        backgrounds[label] = backgrounds.get(label, 0) + 1
+    ages = [signing.candidate.age for signing in signed]
+    first_year = [
+        m
+        for m in members
+        if m.profile.is_foreign_player and m.contract is ContractStatus.REGISTERED and m.joined_year == year
+    ]
+    released = set(plan.released)
+    first_year_released = sum(1 for m in first_year if m.player_id in released)
+    foreign_released = sum(1 for player_id in plan.released if by_id[player_id].profile.is_foreign_player)
+    first_label = (
+        f"{first_year_released}/{len(first_year)}人＝{first_year_released / len(first_year):.0%}"
+        if first_year and year > start_year
+        else "—"
+    )
+    return (
+        f"  新外国人 {len(signed)}人（1球団 平均 {len(signed) / max(1, teams):.2f}人・"
+        f"{'・'.join(f'{k} {v}' for k, v in backgrounds.items())}・平均 {_mean(ages):.1f}歳）  "
+        f"総合 錨の前 平均 {_mean(before):.1f}・標準偏差 {pstdev(before) if before else 0.0:.1f}／"
+        f"錨の後 平均 {_mean(after):.1f}  "
+        f"外国人の戦力外 {foreign_released}人・1年目が外れる割合 {first_label}"
     )
 
 
@@ -261,7 +314,7 @@ def format_offseason(plan: OffseasonPlan, members: Sequence[Member], year: int) 
     development_routes: dict[str, int] = {}
     for draftee in development:
         development_routes[draftee.route.label] = development_routes.get(draftee.route.label, 0) + 1
-    registered_values = [overall_value(d.ratings) for d in plan.draftees if not d.is_development and not d.is_foreign]
+    registered_values = [overall_value(d.ratings) for d in plan.draftees if not d.is_development]
     development_values = [overall_value(d.ratings) for d in development]
     return "\n".join(
         [
@@ -347,6 +400,7 @@ def run_seasons(
         say(f"{games}試合  {(time.perf_counter() - started) / games * 1000:.1f} ms/試合")
         say(format_usage(usage.rows()))
         say(format_comparison(real, summarize(batting.values(), pitching.values()), "リーグ全体の水準:", LEVEL_LABELS))
+        say(format_foreign_share(members, batting, pitching))
         say("")
         simulated_titles = []
         for team_ids in leagues.values():
@@ -372,8 +426,9 @@ def run_seasons(
             ),
         )
         elapsed = time.perf_counter() - started
-        names.update(draftee.name for draftee in plan.draftees)
+        names.update(newcomer.name for newcomer in plan.newcomers)
         say("")
         say(f"---- {current}年のオフ（計算 {elapsed * 1000:.0f} ms）----")
         say(format_offseason(plan, members, current))
+        say(format_foreign_offseason(plan, members, current, start_year=year))
         members = apply_plan(members, plan)

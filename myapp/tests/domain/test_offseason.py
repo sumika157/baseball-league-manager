@@ -11,6 +11,7 @@ from myapp.domain.entities import Team
 from myapp.domain.pennant import draft
 from myapp.domain.pennant.draft_meeting import DraftContext
 from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
+from myapp.domain.pennant.foreign_market import ForeignSigning
 from myapp.domain.pennant.fork import estimated_birth_date, fork_roster, with_birth_date
 from myapp.domain.pennant.offseason import (
     OffseasonClub,
@@ -84,9 +85,9 @@ def plan(clubs: list[OffseasonClub], seed: int = 1):
     )
 
 
-def registered_rookies(result: OffseasonPlan) -> list[draft.Draftee]:
-    """支配下で入る新人（本指名と外国人。育成ドラフトの新人を除く）。"""
-    return [draftee for draftee in result.draftees if not draftee.is_development]
+def registered_rookies(result: OffseasonPlan) -> list[draft.Draftee | ForeignSigning]:
+    """支配下で入る新しい選手（獲得した外国人と本指名の新人。育成ドラフトの新人を除く）。"""
+    return [*result.signings, *(draftee for draftee in result.draftees if not draftee.is_development)]
 
 
 class DraftDoesNotMoveDeparturesTest(unittest.TestCase):
@@ -171,22 +172,23 @@ class PlanTest(unittest.TestCase):
         ]
         result = plan(clubs)
         for team_id, members in ((1, range(1, 31)), (2, range(101, 131))):
-            draftees = [d for d in result.draftees if d.team_id == team_id and not d.is_development]
-            self.assertEqual(len(draftees), draft.MAX_DRAFTEES, "支配下30人以下は1年の上限まで")
-            stay = {m for m in members if m not in result.retired}
-            numbers = [d.number for d in result.draftees if d.team_id == team_id]
+            newcomers = [d for d in registered_rookies(result) if d.team_id == team_id]
+            self.assertEqual(len(newcomers), draft.MAX_DRAFTEES, "支配下30人以下は1年の上限まで（外国人を含む）")
+            stay = {str(m) for m in members if m not in result.retired}
+            numbers = [d.number for d in result.newcomers if d.team_id == team_id]
             self.assertEqual(len(numbers), len(set(numbers)))
             self.assertFalse(set(numbers) & stay)
-        self.assertEqual(len({d.name for d in result.draftees}), len(result.draftees))
+        names = [d.name for d in result.newcomers]
+        self.assertEqual(len(set(names)), len(names))
 
     def test_draftee_names_avoid_used_names(self) -> None:
         clubs = [club(*(player(i) for i in range(1, 31)))]
         first = plan(clubs)
-        taken = {d.name for d in first.draftees}
+        taken = {d.name for d in first.newcomers}
         second = plan_offseason(
             clubs, year=YEAR, world_seed=1, start_year=START_YEAR, used_names=taken, draft=draft_context(clubs)
         )
-        self.assertFalse(taken & {d.name for d in second.draftees})
+        self.assertFalse(taken & {d.name for d in second.newcomers})
 
     def test_retirement_is_independent_of_other_players(self) -> None:
         """選手を足し引きしても、他の選手の引退は動かない（乱数の種が選手の id）。"""
@@ -245,15 +247,18 @@ class RegisteredOnlyDraftTest(unittest.TestCase):
         self.assertGreater(remaining, OPENING_REGISTERED_BAND.high, "前提: 引退の後も上端を超える")
         self.assertEqual(registered_rookies(result), [])
 
-    def test_rookies_join_as_draft_or_new_foreign_player(self) -> None:
+    def test_rookies_join_as_draft_and_signed_foreigners_as_new_foreign_players(self) -> None:
         result = plan([club(*(player(i) for i in range(1, 31)))])
         self.assertTrue(result.draftees)
         for draftee in result.draftees:
-            expected = AcquisitionRoute.NEW_FOREIGN if draftee.is_foreign else AcquisitionRoute.DRAFT
-            if draftee.is_development:
-                expected = AcquisitionRoute.DEVELOPMENTAL_DRAFT
+            expected = AcquisitionRoute.DEVELOPMENTAL_DRAFT if draftee.is_development else AcquisitionRoute.DRAFT
             self.assertIs(draftee.acquisition_route, expected)
-        self.assertTrue(any(d.is_foreign for d in result.draftees), "前提: 外国人の新人がいる")
+            self.assertFalse(draftee.profile.is_foreign_player)
+        self.assertTrue(result.signings, "前提: 外国人を獲得する")
+        for signing in result.signings:
+            self.assertIs(signing.acquisition_route, AcquisitionRoute.NEW_FOREIGN)
+            self.assertTrue(signing.profile.is_foreign_player)
+            self.assertIsNotNone(signing.profile.foreign_background)
 
 
 class HelperTest(unittest.TestCase):

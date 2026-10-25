@@ -38,6 +38,7 @@ from .domain.value_objects import (
     AcquisitionRoute,
     ContractStatus,
     DraftPick,
+    ForeignBackground,
     ForeignPlayerRules,
     FreeAgencyKind,
     GameTimes,
@@ -1123,6 +1124,7 @@ class PlayerForm(DomainCheckedForm):
             corporate_team=cleaned.get("corporate_team", ""),
             nationality=cleaned.get("nationality", ""),
             is_foreign_player=cleaned.get("is_foreign_player", False),
+            foreign_background=ForeignBackground.from_label(cleaned.get("foreign_background") or ""),
         )
 
 
@@ -1159,6 +1161,7 @@ class PlayerAdmin(RealDataOnlyMixin, admin.ModelAdmin):
                     ("draft_year", "draft_round", "is_development_draft"),
                     "nationality",
                     "is_foreign_player",
+                    "foreign_background",
                 ),
             },
         ),

@@ -8,9 +8,9 @@ from datetime import date
 from statistics import fmean
 
 from myapp.domain.pennant import draft
-from myapp.domain.pennant.draft import DraftRoute, expected_rookie_ratings
 from myapp.domain.pennant.draft_meeting import DraftContext
 from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
+from myapp.domain.pennant.foreign_market import SIGNED_RATING_MEAN, expected_signing_ages, expected_signing_ratings
 from myapp.domain.pennant.offseason import OffseasonClub, OffseasonPlayer, plan_offseason, retirement_value
 from myapp.domain.pennant.outlook import PEAK_AGE
 from myapp.domain.pennant.ratings import PlayerRatings
@@ -22,6 +22,7 @@ from myapp.domain.pennant.release import (
     foreign_prospect_value,
     keep_value,
     release_counts,
+    youth_credit,
 )
 from myapp.domain.pennant.retirement import PlayingTime
 from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND, RegisteredBand
@@ -141,12 +142,15 @@ class ReleaseCountsTest(unittest.TestCase):
 class ForeignProspectTest(unittest.TestCase):
     """新しく迎える外国人に見込める価値（ユーザー決定 2026-10-12: 外国人は価値で入れ替える）。"""
 
-    def test_the_prospect_is_the_mean_of_the_foreign_draftees(self) -> None:
-        """出典はドラフトの外国人の新人の分布（平均 `DraftRoute.FOREIGN.rating_mean`）。投手は3項目の平均そのもの。"""
-        self.assertAlmostEqual(foreign_prospect_value(Position.PITCHER), DraftRoute.FOREIGN.rating_mean + 3 / 7)
+    def test_the_prospect_is_the_mean_of_the_signed_foreigners(self) -> None:
+        """出典は獲得した外国人の分布（平均 `foreign_market.SIGNED_RATING_MEAN`。#169）と候補の年齢の分布。
+        投手は3項目の平均そのもの。若さの上乗せは前所属ごとの年齢の範囲から（マイナーの25・26歳だけが上乗せを持つ）。"""
+        youth = sum(share * youth_credit(age) for age, share in expected_signing_ages().items())
+        self.assertAlmostEqual(youth, 0.375)
+        self.assertAlmostEqual(foreign_prospect_value(Position.PITCHER), SIGNED_RATING_MEAN + youth)
 
     def test_catchers_are_compared_with_infielders(self) -> None:
-        """外国人の新人は捕手にしないので、捕手は内野手の見込みで比べる。"""
+        """外国人は捕手を獲得しないので、捕手は内野手の見込みで比べる。"""
         self.assertEqual(foreign_prospect_value(Position.CATCHER), foreign_prospect_value(Position.INFIELDER))
 
     def test_the_mean_ratings_follow_the_draw(self) -> None:
@@ -158,7 +162,7 @@ class ForeignProspectTest(unittest.TestCase):
                 for _ in range(2000)
             ]
             with self.subTest(position=position):
-                expected = retirement_value(position, expected_rookie_ratings(DraftRoute.FOREIGN, position))
+                expected = retirement_value(position, expected_signing_ratings(position))
                 self.assertAlmostEqual(fmean(drawn), expected, delta=0.5)
 
 
@@ -314,11 +318,12 @@ class PlanWithReleasesTest(unittest.TestCase):
         left = set(result.retired) | set(result.released)
         remaining = sum(1 for p in players if p.player_id not in left)
         self.assertEqual(
-            len([d for d in result.draftees if not d.is_development]),
+            len(result.signings) + len([d for d in result.draftees if not d.is_development]),
             draft.draftee_count(remaining, registered_limit=70),
         )
         self.assertEqual(
-            remaining + len([d for d in result.draftees if not d.is_development]), OPENING_REGISTERED_BAND.high
+            remaining + len(result.signings) + len([d for d in result.draftees if not d.is_development]),
+            OPENING_REGISTERED_BAND.high,
         )
 
     def test_a_club_with_room_is_planned_as_before(self) -> None:
@@ -331,7 +336,7 @@ class PlanWithReleasesTest(unittest.TestCase):
         self.assertEqual(result.released, ())
         remaining = sum(1 for p in players if p.player_id not in result.retired)
         self.assertEqual(
-            len([d for d in result.draftees if not d.is_development]),
+            len(result.signings) + len([d for d in result.draftees if not d.is_development]),
             draft.draftee_count(remaining, registered_limit=70),
         )
 

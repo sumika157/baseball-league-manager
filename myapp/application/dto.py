@@ -681,6 +681,8 @@ class PlayerProfile:
     nationality: str = ""
     # 外国人枠の対象か。国籍（事実）とは別の概念なので独立して持つ
     is_foreign_player: bool = False
+    # 前所属の区分（`ForeignBackground.label`。#169）。無ければ空
+    foreign_background: str = ""
     # ドラフトの表記（「2019年ドラフト1位」。`DraftPick.label`）。ドラフトを経ていない選手は空
     draft_label: str = ""
     # プロ入り前の経歴。(区分, 名称) を通った順に並べたもの
@@ -2091,10 +2093,11 @@ class SeasonClosed:
     retired_count: int
     # AI の戦力外の人数（引退した選手を含まない）
     released_count: int
-    # 新人の人数（育成を含む）と、そのうち外国人・育成ドラフトの人数
+    # 新人（ドラフトの日本人）の人数（育成を含む）と、そのうち育成ドラフトの人数
     draftee_count: int
-    foreign_draftee_count: int
     development_draftee_count: int
+    # 獲得した外国人（新外国人）の人数（#169）
+    signed_foreign_count: int
     # ドラフト会議の本指名の1巡目の入札の重複（抽選）の件数（外れ1位の再入札の抽選も数える。入札の無い規則は0）
     first_round_lottery_count: int
     # 翌年の能力を作らなかった選手の数（締める年の能力が無かった選手）
@@ -2214,10 +2217,10 @@ class OffseasonRookieRow:
     position: str
     # 翌年の開幕時点の満年齢
     age: int | None
-    # 高校・大学・社会人・外国人
+    # 高校・大学・社会人、獲得した外国人は「新外国人（前所属）」
     route: str
     rating: RatingCell | None
-    # ドラフトの指名の順位（「1位」。`DraftPick.order_label`）。外国人など指名の無い新人は空
+    # ドラフトの指名の順位（「1位」。`DraftPick.order_label`）。獲得した外国人など指名の無い選手は空
     pick: str = ""
 
 

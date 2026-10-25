@@ -579,6 +579,17 @@ class PlayerProfileTest(BaseCase):
 
         self.assertNotContains(response, "国籍")
         self.assertNotContains(response, "外国人")
+        self.assertNotContains(response, "前所属")
+
+    def test_the_foreign_background_reaches_the_player_page(self):
+        """前所属（#169 Q5）はプロフィールに出る。空の選手（既存の選手）には出さない（上のテスト）。"""
+        player = self.roster.register_player(self.team.id, "デイミアン・ベル", 42, "外野手")
+        orm_models.Player.objects.filter(id=player.id).update(is_foreign_player=True, foreign_background="マイナー")
+
+        response = self.client.get(reverse("player_detail", args=[self.team.id, player.id]))
+
+        self.assertContains(response, "前所属")
+        self.assertContains(response, "マイナー")
 
     def test_captain_badge_appears_on_the_player_page(self):
         player = self.roster.register_player(self.team.id, "山田", 10, "内野手")

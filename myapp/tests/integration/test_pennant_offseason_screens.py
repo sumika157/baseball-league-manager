@@ -127,7 +127,8 @@ class CloseSeasonPostTest(ScreenCase):
         self.assertRedirects(response, self.offseason_url(), fetch_redirect_response=False)
         self.assertRegex(
             self.last_message(response),
-            r"2026年のシーズンを締めました（引退 \d+人・戦力外 \d+人・新人 \d+人（うち育成 \d+人））。",
+            r"2026年のシーズンを締めました（引退 \d+人・戦力外 \d+人・新外国人 \d+人・"
+            r"新人 \d+人（うち育成 \d+人））。",
         )
         self.assertGreater(orm_models.PennantPlayerRatings.objects.filter(year=YEAR + 1).count(), 0)
 
@@ -259,7 +260,7 @@ class OffseasonResultTest(ScreenCase):
         for name in names:
             self.assertIn(name, content)
         self.assertIn("引退・退団・戦力外（2人）", content)
-        self.assertIn(f"新人（{result.draftee_count}人）", content)
+        self.assertIn(f"新人・新外国人（{result.draftee_count + result.signed_foreign_count}人）", content)
         self.assertIn("能力の変化", content)
 
     def test_links_to_a_retired_player_open_the_players_page(self):

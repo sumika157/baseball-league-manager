@@ -1,6 +1,8 @@
-"""ドラフトの新人（`domain/pennant/draft.py` の人数・位置・外国人・背番号と、1球団だけの会議の結果）。DB 不要。
+"""ドラフトの新人（`domain/pennant/draft.py` の人数・位置・外国人で補う人数・背番号と、1球団だけの会議の結果）。
+DB 不要。
 
-会議の指名順・入札と抽選・AI は `test_draft_meeting.py` / `test_draft_order.py` が見る。
+会議の指名順・入札と抽選・AI は `test_draft_meeting.py` / `test_draft_order.py`、外国人の獲得は
+`test_foreign_market.py` が見る。
 """
 
 from __future__ import annotations
@@ -147,9 +149,12 @@ class PositionTest(unittest.TestCase):
             self.assertIsInstance(rookie.ratings, expected)
 
 
-class ForeignTest(unittest.TestCase):
+class ForeignCountTest(unittest.TestCase):
+    """外国人の獲得で補う人数（`foreign_count_to_add`）。獲得は会議の前（`foreign_market.py`。#169）。"""
+
     def foreign_count(self, target: DraftTeam) -> int:
-        return sum(rookie.is_foreign for rookie in run(target))
+        count, _ = draft.newcomer_plan(target)
+        return draft.foreign_count_to_add(target, count)
 
     def test_adds_foreign_players_up_to_the_target(self) -> None:
         """戦力外で外した外国人を同じオフに埋めるので、年2人の上限は無い（#168。2026-10-12 ユーザー決定）。"""
@@ -170,18 +175,64 @@ class ForeignTest(unittest.TestCase):
         """協約は保有を縛らないので、目標は1軍に置ける外国人の計（第82条の2 の4人）。#204 の前の値と同じ。"""
         self.assertEqual(draft.foreign_target(ForeignPlayerRules.NPB.active), 4)
 
-    def test_foreign_players_are_never_catchers_and_carry_nationality(self) -> None:
-        counts = {Position.PITCHER: 15, Position.CATCHER: 0, Position.INFIELDER: 6, Position.OUTFIELDER: 5}
-        for seed in range(20):
-            for rookie in run(team(counts, limit=None), seed):
-                if rookie.is_foreign:
-                    self.assertIsNot(rookie.position, Position.CATCHER)
-                    self.assertTrue(rookie.profile.is_foreign_player)
-                    self.assertEqual(rookie.profile.nationality, rookie.profile.birthplace)
-                    self.assertEqual((rookie.profile.high_school, rookie.profile.university), ("", ""))
-                else:
-                    self.assertFalse(rookie.profile.is_foreign_player)
-                    self.assertEqual(rookie.profile.nationality, "")
+    def test_the_meeting_has_no_foreign_rookies(self) -> None:
+        """会議の新人は日本人だけ（外国人は会議の前に獲得する）。"""
+        for seed in range(10):
+            for rookie in run(team(foreign=0, limit=None), seed):
+                self.assertFalse(rookie.profile.is_foreign_player)
+                self.assertEqual(rookie.profile.nationality, "")
+
+
+class SignedForeignersTest(unittest.TestCase):
+    """獲得した外国人は新しい支配下の選手の枠の内側（#169 Q2）: 日本人の新人は「新人の人数 − 獲得した外国人」。"""
+
+    def test_japanese_positions_are_the_plan_without_the_signed_positions(self) -> None:
+        target = team()
+        count, planned = draft.newcomer_plan(target)
+        self.assertEqual(count, draft.USUAL_DRAFTEES)
+        signed = (planned[-1], planned[0])
+        plan = draft.plan_team_draft(target, signed)
+        self.assertEqual(plan.positions, planned)
+        self.assertEqual(plan.foreign_positions, signed)
+        self.assertEqual(plan.japanese_count, count - len(signed))
+        self.assertEqual(Counter(plan.japanese_positions) + Counter(signed), Counter(planned))
+
+    def test_no_signing_keeps_the_plan(self) -> None:
+        target = team()
+        _, planned = draft.newcomer_plan(target)
+        plan = draft.plan_team_draft(target)
+        self.assertEqual((plan.japanese_positions, plan.foreign_positions), (planned, ()))
+
+    def test_a_signed_position_outside_the_plan_takes_a_later_non_catcher_place(self) -> None:
+        counts = dict(generator.largest_remainder(64, generator.POSITION_RATIOS))
+        counts[Position.PITCHER] -= draft.USUAL_DRAFTEES
+        target = team(counts)
+        _, planned = draft.newcomer_plan(target)
+        self.assertEqual(set(planned), {Position.PITCHER}, "前提: 計画は投手だけ")
+        plan = draft.plan_team_draft(target, (Position.OUTFIELDER,))
+        self.assertEqual(plan.japanese_positions, planned[:-1])
+
+    def test_the_japanese_minimum_drops_by_the_signed_foreigners(self) -> None:
+        target = team(dict(generator.largest_remainder(52, generator.POSITION_RATIOS)))
+        count, planned = draft.newcomer_plan(target)
+        unsigned = draft.plan_team_draft(target)
+        signed = draft.plan_team_draft(target, (Position.PITCHER, Position.PITCHER))
+        self.assertEqual(signed.japanese_minimum, max(0, unsigned.japanese_minimum - 2))
+        self.assertEqual(signed.japanese_count, count - 2)
+
+    def test_signing_more_than_the_newcomers_fails(self) -> None:
+        target = team(registered_limit=60)
+        count, _ = draft.newcomer_plan(target)
+        with self.assertRaises(ValueError):
+            draft.plan_team_draft(target, (Position.PITCHER,) * (count + 1))
+
+    def test_the_meeting_drafts_the_rest(self) -> None:
+        target = team()
+        context = DraftContext(DraftOrderRule.NPB, DraftStandings(leagues=((target.team_id,),)))
+        rookies = run_draft(
+            [target], context, year=YEAR, world_seed=1, used_names=set(), signed={1: (Position.PITCHER,)}
+        ).draftees
+        self.assertEqual(len(rookies), draft.USUAL_DRAFTEES - 1)
 
 
 class NumberTest(unittest.TestCase):
@@ -212,10 +263,9 @@ class ProfileTest(unittest.TestCase):
                     self.assertEqual(age, 18)
                 elif rookie.route is DraftRoute.UNIVERSITY:
                     self.assertEqual(age, 22)
-                elif rookie.route is DraftRoute.CORPORATE:
-                    self.assertTrue(age is not None and 23 <= age <= 26)
                 else:
-                    self.assertTrue(age is not None and 25 <= age <= 31)
+                    self.assertIs(rookie.route, DraftRoute.CORPORATE)
+                    self.assertTrue(age is not None and 23 <= age <= 26)
         self.assertEqual(seen, set(DraftRoute))
 
     def test_domestic_routes_follow_the_weights(self) -> None:
@@ -232,7 +282,7 @@ class ProfileTest(unittest.TestCase):
         self.assertAlmostEqual(counts[DraftRoute.UNIVERSITY] / domestic, 0.5, delta=0.08)
         self.assertAlmostEqual(counts[DraftRoute.HIGH_SCHOOL] / domestic, 0.3, delta=0.08)
 
-    def test_rookies_are_weaker_than_the_league_average_and_foreign_stronger(self) -> None:
+    def test_rookies_get_stronger_along_the_route(self) -> None:
         by_route: dict[DraftRoute, list[float]] = {route: [] for route in DraftRoute}
         for seed in range(80):
             for rookie in run(team(), seed):
@@ -242,7 +292,6 @@ class ProfileTest(unittest.TestCase):
         means = {route: sum(values) / len(values) for route, values in by_route.items() if values}
         self.assertLess(means[DraftRoute.HIGH_SCHOOL], means[DraftRoute.UNIVERSITY])
         self.assertLess(means[DraftRoute.UNIVERSITY], means[DraftRoute.CORPORATE])
-        self.assertLess(means[DraftRoute.CORPORATE], means[DraftRoute.FOREIGN])
 
     def test_corporate_rookies_are_stronger_the_older_they_enter_and_keep_the_route_mean(self) -> None:
         """社会人だけ入団の年齢で今の能力を傾ける（#308 Q2）: 23歳 約41.3 → 26歳 約44.8、範囲の中央で経路の平均 43。
@@ -255,14 +304,14 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual(means, sorted(means))
         self.assertAlmostEqual(means[-1] - means[0], draft.CORPORATE_AGE_SPREAD)
         self.assertAlmostEqual(sum(means) / len(means), corporate.rating_mean)
-        for route in (DraftRoute.HIGH_SCHOOL, DraftRoute.UNIVERSITY, DraftRoute.FOREIGN):
+        for route in (DraftRoute.HIGH_SCHOOL, DraftRoute.UNIVERSITY):
             self.assertEqual(route.rating_mean_at(30), route.rating_mean)
         values: dict[int, list[float]] = {age: [] for age in range(low, high + 1)}
         rng = random.Random(5)
         as_of = date(YEAR + 1, 4, 1)
         for _ in range(2000):
             rookie = draft.draw_rookie(
-                rng, Position.OUTFIELDER, foreign=False, year=YEAR, used_names=set(), path=AmateurPath.CORPORATE
+                rng, Position.OUTFIELDER, year=YEAR, used_names=set(), path=AmateurPath.CORPORATE
             )
             age = rookie.profile.age(as_of)
             assert age is not None
@@ -275,7 +324,7 @@ class ProfileTest(unittest.TestCase):
                 self.assertAlmostEqual(sum(items) / len(items), expected, delta=0.8)
 
     def test_route_labels_are_the_screen_names(self) -> None:
-        self.assertEqual([route.label for route in DraftRoute], ["高校", "大学", "社会人", "外国人"])
+        self.assertEqual([route.label for route in DraftRoute], ["高校", "大学", "社会人"])
 
 
 class DraftPickTest(unittest.TestCase):
@@ -284,8 +333,6 @@ class DraftPickTest(unittest.TestCase):
     def test_japanese_rookies_are_drafted_in_the_closing_year_and_enter_the_next(self) -> None:
         for seed in range(20):
             for rookie in run(team(), seed):
-                if rookie.is_foreign:
-                    continue
                 pick = rookie.profile.draft
                 assert pick is not None
                 self.assertEqual((pick.year, pick.entry_year, pick.is_development), (YEAR, YEAR + 1, False))
@@ -296,18 +343,10 @@ class DraftPickTest(unittest.TestCase):
             rounds = [rookie.profile.draft.round for rookie in rookies if rookie.profile.draft is not None]
             self.assertEqual(rounds, list(range(1, len(rounds) + 1)))
 
-    def test_foreign_rookies_have_no_draft(self) -> None:
-        rookies = run(team(foreign=0, limit=None))
-        self.assertTrue(any(rookie.is_foreign for rookie in rookies), "前提: 外国人の新人がいる")
-        for rookie in rookies:
-            self.assertEqual(rookie.profile.draft is None, rookie.is_foreign)
-
     def test_acquisition_route_follows_the_draft(self) -> None:
         for rookie in run(team(foreign=0, limit=None)):
             pick = rookie.profile.draft
-            if pick is None:
-                self.assertIs(rookie.acquisition_route, AcquisitionRoute.NEW_FOREIGN)
-                continue
+            assert pick is not None, "会議の新人はドラフトの指名を持つ"
             self.assertIs(rookie.acquisition_route, pick.acquisition_route)
             self.assertIs(rookie.acquisition_route, AcquisitionRoute.DRAFT)
 
@@ -318,7 +357,6 @@ class RouteMappingTest(unittest.TestCase):
         for path in AmateurPath:
             route = DraftRoute.from_amateur_path(path)
             self.assertEqual(route.label, path.value)
-        self.assertIs(DraftRoute.from_amateur_path(None), DraftRoute.FOREIGN)
 
 
 class NameTest(unittest.TestCase):
@@ -345,7 +383,6 @@ class RouteFromProfileTest(unittest.TestCase):
     """経路は保存していないので、プロフィールから導く（画面がオフの結果を読むときに使う）。"""
 
     def test_each_route_is_derived_from_the_career(self) -> None:
-        self.assertIs(DraftRoute.of_profile(Profile(is_foreign_player=True)), DraftRoute.FOREIGN)
         self.assertIs(DraftRoute.of_profile(Profile(high_school="A高")), DraftRoute.HIGH_SCHOOL)
         self.assertIs(DraftRoute.of_profile(Profile(high_school="A高", university="B大")), DraftRoute.UNIVERSITY)
         self.assertIs(DraftRoute.of_profile(Profile(high_school="A高", corporate_team="C社")), DraftRoute.CORPORATE)

@@ -292,6 +292,27 @@ class ContractStatus(Enum):
         return [status.value for status in cls]
 
 
+class ForeignBackground(Enum):
+    """海外から入団した選手の、入団前の所属の区分（前所属）。**区分の選択肢の唯一の出典**で、画面・モデルに複製しない。
+
+    値は画面に出す名前。不明・当たらない（日本の学校から入った選手など）は値ではなく None で表す。
+    ペナントの外国人の獲得（`pennant/foreign_market.py`）は、区分ごとに年齢の範囲と能力の分布を変える（#169）。
+    """
+
+    MAJOR_LEAGUE = "メジャー経験"
+    MINOR_LEAGUE = "マイナー"
+    ASIAN_LEAGUE = "アジアのリーグ"
+
+    @property
+    def label(self) -> str:
+        return self.value
+
+    @classmethod
+    def from_label(cls, value: str) -> ForeignBackground | None:
+        """保存した値から。空は None（不明）。"""
+        return cls(value) if value else None
+
+
 class AcquisitionRoute(Enum):
     """入団の経路。その在籍にどう加わったか。
 
@@ -1941,6 +1962,8 @@ class Profile:
     # 外国人枠の判定に使う唯一の出典。nationality（実際の国籍という事実）とは
     # 別の概念（帰化選手など、枠制度上の扱いは国籍と一致しないことがある）
     is_foreign_player: bool = False
+    # 海外から入団した選手の前所属の区分（#169）。不明・当たらなければ None
+    foreign_background: ForeignBackground | None = None
 
     def __post_init__(self) -> None:
         for name, label, upper in (
@@ -2032,6 +2055,7 @@ class Profile:
                 self.university,
                 self.corporate_team,
                 self.nationality,
+                self.foreign_background,
             ]
         )
 

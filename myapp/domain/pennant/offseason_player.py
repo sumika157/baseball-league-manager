@@ -184,7 +184,7 @@ class OffseasonPlayer:
     def is_first_year(self, year: int, *, start_year: int) -> bool:
         """入団1年目（プロ入りの年が `year` 以降）か。戦力外（`release.py`）が使う。`start_year` は世界の開幕年。
 
-        ドラフトがあればその翌年（`DraftPick.entry_year`）で見る。ドラフトの無い選手（外国人の新人など）は、
+        ドラフトがあればその翌年（`DraftPick.entry_year`）で見る。ドラフトの無い選手（獲得した外国人など）は、
         在籍の開始年が開幕年より後（世界の中で迎えた選手）のときだけ在籍の開始年で見る。分岐した選手は一律に
         開幕年から在籍するので、在籍の開始年で代用すると、最初のオフで全員が1年目として戦力外から守られてしまう
         （`seasons_as_pro` と違い、分からない選手は1年目と見なさない側に倒す）。

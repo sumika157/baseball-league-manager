@@ -10,7 +10,7 @@ from statistics import fmean, pstdev
 from myapp.domain.exceptions import InvalidRatings
 from myapp.domain.pennant import aging
 from myapp.domain.pennant.aging import BATTER_CURVES, PITCHER_CURVES, age_ratings, expected_change
-from myapp.domain.pennant.draft import DraftTeam, draw_rookie
+from myapp.domain.pennant.draft import draw_rookie
 from myapp.domain.pennant.draft_meeting import POOL_POTENTIAL_MEAN, draw_pool, scouting_report
 from myapp.domain.pennant.initial_ratings import estimate_initial_ratings
 from myapp.domain.pennant.outlook import with_filled_potential
@@ -23,7 +23,6 @@ from myapp.domain.simulation.ratings import (
     potential_multiplier,
 )
 from myapp.domain.value_objects import Position
-from myapp.domain.virtual_players import generator
 from myapp.tests.domain.test_draft_meeting import club, run
 from myapp.tests.domain.test_offseason import YEAR, plan, player
 from myapp.tests.domain.test_offseason import club as offseason_club
@@ -173,11 +172,11 @@ class ForkedPlayersTest(unittest.TestCase):
 
 
 class RookiePotentialTest(unittest.TestCase):
-    """新人: 候補は `draft-potential-<番号>`、外国人は `draft-foreign-potential-<球団>-<番号>`
-    （`draw_rookie` の乱数の流れの外）。"""
+    """新人: 候補は `draft-potential-<番号>`（`draw_rookie` の乱数の流れの外）。外国人の獲得の候補は
+    候補ごとの別の流れ（`test_foreign_market.py`）。"""
 
     def test_draw_rookie_itself_does_not_draw_a_potential(self) -> None:
-        rookie = draw_rookie(random.Random(1), Position.PITCHER, foreign=False, year=YEAR, used_names=set())
+        rookie = draw_rookie(random.Random(1), Position.PITCHER, year=YEAR, used_names=set())
         self.assertIsNone(rookie.ratings.potential)
 
     def test_every_prospect_has_a_potential_and_the_pool_is_rebuilt_the_same(self) -> None:
@@ -188,20 +187,6 @@ class RookiePotentialTest(unittest.TestCase):
         self.assertGreater(len(set(values)), 10)
         again = draw_pool(planned, world_seed=4, year=YEAR, used_names=set())
         self.assertEqual(values, [prospect.rookie.ratings.potential for prospect in again.prospects])
-
-    def test_foreign_rookies_get_a_potential(self) -> None:
-        target = DraftTeam(
-            team_id=1,
-            position_counts=generator.largest_remainder(59, generator.POSITION_RATIOS),
-            foreign_count=1,
-            foreign_limit=4,
-            used_numbers=frozenset(),
-            surname_counts={},
-            registered_limit=70,
-        )
-        foreign = [draftee for draftee in run([target, club(2)]).draftees if draftee.is_foreign]
-        self.assertEqual(len(foreign), 3)
-        self.assertTrue(all(draftee.ratings.potential is not None for draftee in foreign))
 
     def test_the_scouting_report_shows_only_an_estimate_of_the_potential(self) -> None:
         """#308 P2: 球団は伸びしろを推定（`ScoutingReport.potential`）でだけ見る。推定の能力に本当の値が漏れない。"""

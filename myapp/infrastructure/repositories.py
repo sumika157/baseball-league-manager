@@ -72,6 +72,7 @@ from ..domain.value_objects import (
     ErrorKind,
     FieldingLine,
     FieldingPosition,
+    ForeignBackground,
     ForeignPlayerRules,
     FreeAgencyKind,
     GameStage,
@@ -581,6 +582,7 @@ def _profile_defaults(profile: Profile) -> dict:
         "name_kana": profile.name_kana,
         "back_name": profile.back_name,
         "is_foreign_player": profile.is_foreign_player,
+        "foreign_background": profile.foreign_background.value if profile.foreign_background else "",
     }
 
 
@@ -600,6 +602,7 @@ def profile_of(row: orm_models.Player) -> Profile:
         name_kana=row.name_kana,
         back_name=row.back_name,
         is_foreign_player=row.is_foreign_player,
+        foreign_background=ForeignBackground.from_label(row.foreign_background),
     )
 
 

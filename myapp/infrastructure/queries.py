@@ -73,6 +73,7 @@ from ..domain.value_objects import (
     DepartureRoute,
     FieldingLine,
     FieldingPosition,
+    ForeignBackground,
     FreeAgencyKind,
     GameStage,
     Handedness,
@@ -1088,6 +1089,7 @@ _OFFSEASON_STINT_FIELDS = (
     "player__position",
     "player__birth_date",
     "player__is_foreign_player",
+    "player__foreign_background",
     "player__high_school",
     "player__university",
     "player__corporate_team",
@@ -1160,6 +1162,7 @@ class DjangoOffseasonQuery:
                 university=row["player__university"],
                 corporate_team=row["player__corporate_team"],
                 is_foreign_player=row["player__is_foreign_player"],
+                foreign_background=ForeignBackground.from_label(row["player__foreign_background"]),
                 draft=draft_of(
                     row["player__draft_year"],
                     row["player__draft_round"],
