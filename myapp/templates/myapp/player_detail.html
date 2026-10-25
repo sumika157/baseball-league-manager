@@ -132,6 +132,14 @@
   <div class="card-body">
     <div class="row g-2">
       {% for cell in ratings_card.cells %}{% include 'myapp/_stat_readout.html' with label=cell.label rating=cell %}{% endfor %}
+      {% if ratings_card.outlook %}
+        <div class="col-6 col-md-3">
+          <div class="stat-readout">
+            <span class="stat-readout-label">見込み</span>
+            <span class="stat-readout-value" data-outlook>{% include 'pennant/_outlook_grade.html' with outlook=ratings_card.outlook %}</span>
+          </div>
+        </div>
+      {% endif %}
     </div>
     <details class="mt-3">
       <summary class="page-subtitle mb-0" style="font-size: 0.8125rem; cursor: pointer;">能力の見方</summary>
@@ -141,6 +149,9 @@
           球威は奪三振の多さ、制球は与四球の少なさ、一発回避は被本塁打の少なさに効きます。スタミナは先発として長いイニングを投げる力と、救援の連投のしやすさに効きます。
         {% else %}
           ミートは三振の少なさと安打の出やすさ、パワーは本塁打と長打の多さ、選球眼は四球の多さ、走力は盗塁と余分な進塁、守備力は失策の少なさに効きます。
+        {% endif %}
+        {% if ratings_card.outlook %}
+          見込みは、{{ ratings_card.outlook.peak_age }}歳ごろの総合の見込みを、受け持つ球団のスカウトの見立てで示した区分です（{{ ratings_card.year }}年4月1日に{{ ratings_card.outlook.peak_age }}歳以上は「—」）。見立てには誤差があり、長く在籍した選手ほど当たります。
         {% endif %}
       </p>
     </details>

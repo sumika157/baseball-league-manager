@@ -247,10 +247,18 @@ class YearStats:
     # （#308 P2。AI が伸びしろの推定を見る）
     rookie_potential_mean: float
     rookie_route_shares: tuple[float, float, float]
+    # 本指名の日本人の新人の伸びしろの倍率の平均（経路ごと。高校・大学・社会人。#308 P3 段階0）
+    rookie_route_potential_means: tuple[float, float, float]
 
 
 def _main_draft_japanese(plan: OffseasonPlan) -> list[Draftee]:
     return [draftee for draftee in plan.draftees if not draftee.is_foreign and not draftee.is_development]
+
+
+def _potential_mean(rookies: list[Draftee], route: DraftRoute) -> float:
+    """経路 `route` の新人の伸びしろの倍率の平均。その経路の新人がいない年は 0。"""
+    values = [potential_multiplier(d.ratings.potential) for d in rookies if d.route is route]
+    return fmean(values) if values else 0.0
 
 
 def stats(members: list[Member], plan: OffseasonPlan, previous: list[Member]) -> YearStats:
@@ -305,6 +313,11 @@ def stats(members: list[Member], plan: OffseasonPlan, previous: list[Member]) ->
             sum(1 for d in rookies if d.route is DraftRoute.HIGH_SCHOOL) / len(rookies),
             sum(1 for d in rookies if d.route is DraftRoute.UNIVERSITY) / len(rookies),
             sum(1 for d in rookies if d.route is DraftRoute.CORPORATE) / len(rookies),
+        ),
+        rookie_route_potential_means=(
+            _potential_mean(rookies, DraftRoute.HIGH_SCHOOL),
+            _potential_mean(rookies, DraftRoute.UNIVERSITY),
+            _potential_mean(rookies, DraftRoute.CORPORATE),
         ),
     )
 
@@ -457,6 +470,19 @@ class OffseasonPopulationTest(unittest.TestCase):
                 self.assertTrue(0.40 <= university <= 0.60, university)
                 self.assertTrue(0.12 <= corporate <= 0.28, corporate)
         self.assertAlmostEqual(fmean(stat.rookie_potential_mean for stat in self.years), 1.0, delta=0.03)
+
+    def test_drafted_rookies_keep_the_average_potential_on_every_route(self) -> None:
+        """#308 P3 段階0: 候補の伸びしろの平均を経路ごとに合わせ込んだ（`POOL_POTENTIAL_MEAN`）ので、本指名の日本人の
+        新人の倍率の平均は**どの経路も**約1.0（2026-10-25 ユーザー決定 B。P2 の1つの平均では 高校 0.95・大学 1.04・
+        社会人 0.96 に分かれた）。
+
+        実測（シード 1〜8・2〜3年目の合計）は 高校 1.013・大学 0.989・社会人 0.984（シードごとに 0.95〜1.06）。
+        10年の平均で見る（1年の高校・社会人は 60〜90人で揺れが大きい）。
+        """
+        for index, route in enumerate(("高校", "大学", "社会人")):
+            mean = fmean(stat.rookie_route_potential_means[index] for stat in self.years)
+            with self.subTest(route=route):
+                self.assertAlmostEqual(mean, 1.0, delta=0.05)
 
     def test_same_seed_gives_same_result(self) -> None:
         self.assertEqual(run_years(years=3, roster_size=STEADY_ROSTER), self.years[:3])

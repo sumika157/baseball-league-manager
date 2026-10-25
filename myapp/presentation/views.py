@@ -96,6 +96,7 @@ from ..domain.value_objects import (
 from ..infrastructure.queries import (
     DjangoAwardQuery,
     DjangoChampionshipQuery,
+    DjangoClubTenureQuery,
     DjangoFieldingTotalsQuery,
     DjangoGameListQuery,
     DjangoHomeStadiumQuery,
@@ -321,6 +322,7 @@ def build_pennant_ratings_service(world_id: int) -> PennantRatingsViewService:
         stats=DjangoPlayerStatsQuery(scope),
         ratings=DjangoRatingsRepository(scope),
         history=DjangoRatingsHistoryQuery(scope),
+        tenures=DjangoClubTenureQuery(scope),
         today=_world_clock(world_id, DjangoSimulationContextQuery(scope)),
     )
 
@@ -1206,8 +1208,11 @@ def build_club_details_service(world_id: int) -> ClubDetailsService:
     """
     scope = WorldScope.pennant(world_id)
     return ClubDetailsService(
+        world_id=world_id,
+        worlds=DjangoWorldRepository(),
         stats=DjangoPlayerStatsQuery(scope),
         ratings=DjangoRatingsRepository(scope),
+        tenures=DjangoClubTenureQuery(scope),
         today=_world_clock(world_id, DjangoSimulationContextQuery(scope)),
     )
 
@@ -1463,7 +1468,7 @@ def _render_club(
     if tab == RELEASE_TAB and release is not None:
         context.update(
             release_players=build_club_details_service(world.world_id).details(
-                release.team_id, release.year, release.players
+                release.team_id, release.year, release.players, with_outlook=True
             ),
             release_checked=release_state.checked if release_state is not None else release.chosen_ids,
         )

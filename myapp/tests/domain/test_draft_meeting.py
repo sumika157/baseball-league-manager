@@ -15,9 +15,6 @@ from myapp.domain.exceptions import InvalidDraftAction
 from myapp.domain.pennant import draft
 from myapp.domain.pennant.draft import DraftTeam, plan_team_draft
 from myapp.domain.pennant.draft_meeting import (
-    POTENTIAL_SCOUT_SD,
-    SCOUT_SD,
-    SCOUT_STEP,
     TASTE_GROWTH,
     TASTE_LIKING_SD,
     TASTE_PITCHER,
@@ -28,14 +25,12 @@ from myapp.domain.pennant.draft_meeting import (
     DraftState,
     DraftTaste,
     Prospect,
-    ScoutingAccuracy,
     ScoutingReport,
     _scout_noise,
     draft_liking,
     draft_taste,
     draw_pool,
     future_value,
-    growth_to_peak,
     projected_grade,
     projected_growth,
     run_draft,
@@ -44,6 +39,7 @@ from myapp.domain.pennant.draft_meeting import (
 )
 from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings, strategy_for
 from myapp.domain.pennant.initial_ratings import SEASON_START_MONTH
+from myapp.domain.pennant.outlook import POTENTIAL_SCOUT_SD, SCOUT_SD, SCOUT_STEP, ScoutingAccuracy, growth_to_peak
 from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND
 from myapp.domain.simulation.ratings import GrowthType, Potential, RatingGrade, potential_multiplier
 from myapp.domain.value_objects import Position

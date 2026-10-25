@@ -21,7 +21,6 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from math import sqrt
 
-from ..simulation.estimate import draw_potential, with_potential
 from ..simulation.randomness import game_seed, game_uniform, make_random
 from ..simulation.ratings import BatterRatings, PitcherRatings
 from ..simulation.spread import MIN_POPULATION, rescale, spread_ratings, target_mean, target_sd
@@ -36,6 +35,7 @@ from .offseason_player import (
     player_age,
     retirement_value,
 )
+from .outlook import with_filled_potential
 from .ratings import PlayerRatings
 from .release import decide_releases, releases_as_chosen
 from .retirement import retirement_chance
@@ -110,23 +110,6 @@ def decide_retirements(
             if game_uniform(world_seed, year, f"retire-{player.player_id}") < chance:
                 retired.append(player.player_id)
     return tuple(retired)
-
-
-# 伸びしろの無い選手に引く伸びしろの乱数の「年」。年に依らない種にして、どの年に締めても同じ値を引く
-POTENTIAL_FILL_SEED_YEAR = 0
-
-
-def with_filled_potential(ratings: Ratings, *, player_id: int, world_seed: int) -> Ratings:
-    """伸びしろの無い能力（#308 より前に作った世界の選手）に、事前の分布から伸びしろを引いて付ける。
-
-    締める処理が、翌年の能力を作る前に通す（その年の成長から効き、翌年の行に写る。締める年の行は書き換えない。
-    2026-10-25 ユーザー決定。#308 Q4）。乱数は `potential-<世界の選手 id>` で年に依らない。
-    伸びしろを持つ能力はそのまま。
-    """
-    if ratings.potential is not None:
-        return ratings
-    rng = make_random(game_seed(world_seed, POTENTIAL_FILL_SEED_YEAR, f"potential-{player_id}"))
-    return with_potential(ratings, draw_potential(rng))
 
 
 def _draft_team(club: OffseasonClub, remaining: Sequence[OffseasonPlayer], *, world_seed: int) -> DraftTeam:

@@ -12,10 +12,10 @@ from myapp.domain.pennant.draft import DraftRoute, expected_rookie_ratings
 from myapp.domain.pennant.draft_meeting import DraftContext
 from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
 from myapp.domain.pennant.offseason import OffseasonClub, OffseasonPlayer, plan_offseason, retirement_value
+from myapp.domain.pennant.outlook import PEAK_AGE
 from myapp.domain.pennant.ratings import PlayerRatings
 from myapp.domain.pennant.release import (
     FIRST_YEAR_FOREIGN_MARGIN,
-    PRIME_AGE,
     YOUTH_CREDIT,
     ReleaseCounts,
     decide_releases,
@@ -164,16 +164,16 @@ class ForeignProspectTest(unittest.TestCase):
 
 class KeepValueTest(unittest.TestCase):
     def test_young_players_get_credit(self) -> None:
-        young = member(1, value=45, age=PRIME_AGE - 4)
-        prime = member(2, value=45, age=PRIME_AGE)
-        older = member(3, value=45, age=PRIME_AGE + 5)
+        young = member(1, value=45, age=PEAK_AGE - 4)
+        prime = member(2, value=45, age=PEAK_AGE)
+        older = member(3, value=45, age=PEAK_AGE + 5)
         values = [keep_value(p, year=YEAR, start_year=START_YEAR) for p in (young, prime, older)]
         self.assertAlmostEqual(values[0] - values[1], 4 * YOUTH_CREDIT)
         self.assertEqual(values[1], values[2], "全盛を過ぎた年齢は総合値だけ")
 
     def test_catcher_uses_the_better_of_defense_and_batting(self) -> None:
         catcher = replace(
-            member(1, position=Position.CATCHER, age=PRIME_AGE),
+            member(1, position=Position.CATCHER, age=PEAK_AGE),
             ratings=PlayerRatings(1, YEAR, BatterRatings(30, 30, 30, 30, 70)),
         )
         self.assertEqual(keep_value(catcher, year=YEAR, start_year=START_YEAR), 70.0)
@@ -255,8 +255,8 @@ class DecideReleasesTest(unittest.TestCase):
     def test_the_comparison_uses_the_keep_value_with_the_youth_credit(self) -> None:
         """若い外国人は若さの上乗せで見込みを上回ることがある（`keep_value` の規則はそのまま）。"""
         prospect = foreign_prospect_value(Position.PITCHER)
-        young = member(101, position=Position.PITCHER, value=48, age=PRIME_AGE - 4, foreign=True)
-        old = member(102, position=Position.PITCHER, value=48, age=PRIME_AGE + 3, foreign=True)
+        young = member(101, position=Position.PITCHER, value=48, age=PEAK_AGE - 4, foreign=True)
+        old = member(102, position=Position.PITCHER, value=48, age=PEAK_AGE + 3, foreign=True)
         self.assertGreater(keep_value(young, year=YEAR, start_year=START_YEAR), prospect)
         self.assertEqual(releases([*roster(55), young, old]), (102,))
 

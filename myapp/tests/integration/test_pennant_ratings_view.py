@@ -11,9 +11,12 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
+from myapp.domain.pennant.outlook import PEAK_AGE, outlook_grade, roster_projection
 from myapp.domain.pennant.schedule import Fixture
 from myapp.domain.pennant.world import WorldScope
+from myapp.domain.value_objects import Position
 from myapp.infrastructure import orm_models
+from myapp.infrastructure.queries import DjangoClubTenureQuery
 from myapp.infrastructure.repositories import DjangoFixtureRepository, DjangoRatingsRepository
 from myapp.presentation.views import build_club_service, build_pennant_ratings_service, build_pennant_world_service
 
@@ -162,7 +165,7 @@ class PlayerDetailCardTest(WorldCase):
             self.assertNotIn(growth, content)
 
     def test_the_hidden_potential_and_the_outlook_are_not_shown(self):
-        """伸びしろは隠し値。見込みの区分を出すかは #308 の P3 で決める（それまでは出さない）。"""
+        """伸びしろは隠し値。見込みの区分は受け持つ球団の選手だけ（この世界には受け持つ球団が無い。#308 P3a）。"""
         content = self.client.get(self.batter_url).content.decode()
 
         for word in ("伸びしろ", "見込み"):
@@ -334,3 +337,101 @@ class FixtureFirstDateTest(WorldCase):
         table = service.get_table(self.pennant_team.id, pitchers=False)
         self.assertEqual(table.year, YEAR + 1)
         self.assertTrue(all(row.cells == () for row in table.rows))
+
+
+class OutlookCardTest(WorldCase):
+    """選手ページの能力のカードの見込み（#308 P3a）: 受け持つ球団にその年在籍する選手だけ。
+
+    区分だけで数値は出さない。"""
+
+    def setUp(self):
+        super().setUp()
+        orm_models.PennantWorld.objects.filter(id=self.world_id).update(managed_team_id=self.pennant_team.id)
+        players = self.pennant_players(self.pennant_team)
+        self.young_id, self.veteran_id = players[0], players[1]
+        orm_models.Player.objects.filter(id=self.young_id).update(birth_date=date(YEAR - 20, 6, 1))
+        orm_models.Player.objects.filter(id=self.veteran_id).update(birth_date=date(YEAR - 31, 6, 1))
+        orm_models.PennantPlayerRatings.objects.filter(player_id=self.young_id).update(potential=70)
+        self.service = build_pennant_ratings_service(self.world_id)
+
+    def url(self, team, player_id) -> str:
+        return reverse("pennant_player_detail", args=[self.world_id, team.id, player_id])
+
+    def expected_grade(self, player_id: int) -> str:
+        (item,) = DjangoRatingsRepository(self.scope).find_by_players([player_id], YEAR)
+        projected = roster_projection(
+            item.ratings,
+            age=19,
+            position=Position.from_label(orm_models.Player.objects.get(id=player_id).position),
+            world_seed=1,
+            team_id=self.pennant_team.id,
+            player_id=player_id,
+            seasons=1,
+        )
+        return outlook_grade(projected).label
+
+    def test_a_young_player_of_the_managed_club_has_the_grade(self):
+        card = self.service.get_card(self.young_id)
+        assert card is not None and card.outlook is not None
+        self.assertEqual(card.outlook.grade, self.expected_grade(self.young_id))
+        self.assertEqual(card.outlook.peak_age, PEAK_AGE)
+
+        content = self.client.get(self.url(self.pennant_team, self.young_id)).content.decode()
+        (cell,) = re.findall(
+            r"<span class=\"stat-readout-value\" data-outlook>(.*?)</span>\s*</div>", content, re.DOTALL
+        )
+        self.assertIn(f">{card.outlook.grade}</strong>", cell)
+        self.assertIsNone(re.search(r"\d", re.sub(r"<[^>]+>", "", cell)), "見込みの数値を出さない")
+        self.assertNotIn("伸びしろ", content)
+
+    def test_a_player_at_the_peak_age_is_dashed(self):
+        card = self.service.get_card(self.veteran_id)
+        assert card is not None and card.outlook is not None
+        self.assertIsNone(card.outlook.grade)
+        content = self.client.get(self.url(self.pennant_team, self.veteran_id)).content.decode()
+        self.assertRegex(content, r"data-outlook>\s*<span class=\"stat-muted\">—</span>")
+
+    def test_players_of_other_clubs_have_no_outlook(self):
+        rival = self.pennant_players(self.pennant_rival)[0]
+        card = self.service.get_card(rival)
+        assert card is not None
+        self.assertIsNone(card.outlook)
+        self.assertNotIn("見込み", self.client.get(self.url(self.pennant_rival, rival)).content.decode())
+
+    def test_a_player_who_left_the_club_has_no_outlook(self):
+        orm_models.PlayerStint.objects.filter(player_id=self.young_id).update(to_year=YEAR - 1)
+        card = self.service.get_card(self.young_id)
+        assert card is not None
+        self.assertIsNone(card.outlook)
+
+    def test_a_missing_potential_is_derived_without_writing(self):
+        orm_models.PennantPlayerRatings.objects.filter(player_id=self.young_id).update(potential=None)
+
+        card = self.service.get_card(self.young_id)
+
+        assert card is not None and card.outlook is not None
+        self.assertEqual(card.outlook.grade, self.expected_grade(self.young_id))
+        self.assertIsNone(orm_models.PennantPlayerRatings.objects.get(player_id=self.young_id, year=YEAR).potential)
+
+
+class ClubTenureQueryTest(WorldCase):
+    def test_reads_the_stints_at_the_club_in_one_query(self):
+        query = DjangoClubTenureQuery(self.scope)
+        ids = self.pennant_players(self.pennant_team)
+        for count in (1, len(ids)):
+            with self.subTest(players=count), CaptureQueriesContext(connection) as queries:
+                tenures = query.for_players(self.pennant_team.id, ids[:count])
+            self.assertEqual(len(queries), 1, "選手の人数によらず1本")
+            self.assertEqual(set(tenures), set(ids[:count]))
+        tenure = query.for_players(self.pennant_team.id, ids[:1])[ids[0]]
+        self.assertEqual(
+            [(stint.team_id, stint.from_year, stint.to_year) for stint in tenure.stints],
+            [(self.pennant_team.id, YEAR, None)],
+        )
+        self.assertEqual(query.for_players(self.pennant_team.id, []), {})
+
+    def test_players_of_another_club_or_world_are_not_read(self):
+        ids = self.pennant_players(self.pennant_team)
+        self.assertEqual(DjangoClubTenureQuery(self.scope).for_players(self.pennant_rival.id, ids), {})
+        self.assertEqual(DjangoClubTenureQuery(WorldScope.real()).for_players(self.pennant_team.id, ids), {})
+        self.assertEqual(DjangoClubTenureQuery(WorldScope.real()).for_players(self.team.id, ids), {})

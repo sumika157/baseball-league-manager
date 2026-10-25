@@ -38,11 +38,12 @@ from ..value_objects import ForeignPlayerRules, Position
 from .club_plan import ClubMember, lineup_capacity, playable_shortfall
 from .draft import FOREIGN_AGE_RANGE, MIN_BY_POSITION, USUAL_DRAFTEES, DraftRoute, expected_rookie_ratings
 from .offseason_player import OffseasonClub, OffseasonPlayer, TrackRecord, player_age, retirement_value
+from .outlook import PEAK_AGE
 from .roster import OPENING_REGISTERED_BAND
 
-# 残す価値の年齢の補正。この年齢より若い選手は、1歳につき `YOUTH_CREDIT` 点だけ総合値に上乗せして残しやすくする
+# 残す価値の年齢の補正。`outlook.PEAK_AGE` より若い選手は、
+# 1歳につき `YOUTH_CREDIT` 点だけ総合値に上乗せして残しやすくする
 # （伸びしろのある若手を、今の能力だけで外さない）
-PRIME_AGE = 27
 YOUTH_CREDIT = 1.0
 # 入団1年目の外国人の余裕（点）。1年目だけ、新しく迎える外国人の見込みからこの値を引いて比べ、大きく下回るときだけ外す
 # （2026-10-12 ユーザー決定。0 だと、見込みの平均の近くで入った1年目の外国人が成績と関係なく半分近く外れる。
@@ -90,8 +91,8 @@ def release_counts(*, registered: int, registered_limit: int | None) -> ReleaseC
 
 
 def youth_credit(age: int) -> float:
-    """若さの上乗せ。`PRIME_AGE` より若い1歳ごとに `YOUTH_CREDIT` 点。"""
-    return YOUTH_CREDIT * max(0, PRIME_AGE - age)
+    """若さの上乗せ。`outlook.PEAK_AGE`（27）より若い1歳ごとに `YOUTH_CREDIT` 点。"""
+    return YOUTH_CREDIT * max(0, PEAK_AGE - age)
 
 
 def career_points(record: TrackRecord) -> float:
