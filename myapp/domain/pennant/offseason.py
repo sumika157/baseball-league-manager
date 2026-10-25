@@ -35,11 +35,10 @@ from .offseason_player import (
     Ratings,
     overall_value,
     player_age,
-    retirement_value,
 )
 from .outlook import with_filled_potential
 from .ratings import PlayerRatings
-from .release import decide_releases, releases_as_chosen
+from .release import ability_value, decide_releases, releases_as_chosen
 from .retirement import retirement_chance
 
 
@@ -105,13 +104,19 @@ def rating_change(before: Ratings, after: Ratings) -> float:
 def decide_retirements(
     clubs: Sequence[OffseasonClub], *, year: int, world_seed: int, start_year: int
 ) -> tuple[int, ...]:
-    """引退（外国人は退団）する選手の id。球団の並び・選手の並びの順。"""
+    """引退（外国人は退団）する選手の id。球団の並び・選手の並びの順。
+
+    能力は戦力外と同じ「所属球団のスカウトの見立てで見た見込みの能力の総合値」（`release.ability_value`。#308 P3b）。
+    `PEAK_AGE` 歳以上は今の能力の総合値で、#308 より前と同じ確率。
+    """
     retired = []
     for club in clubs:
         for player in club.players:
             chance = retirement_chance(
                 age=player_age(player.profile, year, start_year=start_year),
-                value=retirement_value(player.position, None if player.ratings is None else player.ratings.ratings),
+                value=ability_value(
+                    player, team_id=club.team_id, year=year, start_year=start_year, world_seed=world_seed
+                ),
                 playing_time=player.playing_time,
                 is_foreign=player.profile.is_foreign_player,
                 seasons_as_pro=player.seasons_as_pro(year),
@@ -252,7 +257,7 @@ def plan_departures(
         # 戦力外は引退の後・ドラフトの前。ドラフトは戦力外の後の人数で数える。手動の球団は指名どおり
         chosen = (manual_releases or {}).get(club.team_id)
         leaving = set(
-            decide_releases(club, remaining, year=year, start_year=start_year)
+            decide_releases(club, remaining, year=year, start_year=start_year, world_seed=world_seed)
             if chosen is None
             else releases_as_chosen(chosen, remaining)
         )

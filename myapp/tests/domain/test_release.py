@@ -11,28 +11,32 @@ from myapp.domain.pennant import draft
 from myapp.domain.pennant.draft_meeting import DraftContext
 from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
 from myapp.domain.pennant.foreign_market import SIGNED_RATING_MEAN, expected_signing_ages, expected_signing_ratings
-from myapp.domain.pennant.offseason import OffseasonClub, OffseasonPlayer, plan_offseason, retirement_value
-from myapp.domain.pennant.outlook import PEAK_AGE
+from myapp.domain.pennant.offseason import OffseasonClub, OffseasonPlayer, plan_offseason
+from myapp.domain.pennant.offseason_player import TrackRecord, retirement_value
+from myapp.domain.pennant.outlook import PEAK_AGE, projected_ratings, roster_potential_estimate, roster_projection
 from myapp.domain.pennant.ratings import PlayerRatings
 from myapp.domain.pennant.release import (
     FIRST_YEAR_FOREIGN_MARGIN,
-    YOUTH_CREDIT,
     ReleaseCounts,
+    ability_value,
     decide_releases,
     foreign_prospect_value,
     keep_value,
     release_counts,
-    youth_credit,
 )
 from myapp.domain.pennant.retirement import PlayingTime
 from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND, RegisteredBand
+from myapp.domain.simulation.estimate import with_potential
 from myapp.domain.simulation.randomness import make_random
-from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings
+from myapp.domain.simulation.ratings import POTENTIAL_AVERAGE, BatterRatings, PitcherRatings, Potential
 from myapp.domain.simulation.samples import draw_ratings
 from myapp.domain.value_objects import ContractStatus, DraftPick, ForeignPlayerRules, Position, Profile
 
 YEAR = 2027
 START_YEAR = 2026
+SEED = 7
+# `club` の球団（見込みはこの球団のスカウトの見立て）
+TEAM = 1
 BENCH = PlayingTime(plate_appearances=50)
 REGULAR = PlayingTime(plate_appearances=500)
 
@@ -47,12 +51,18 @@ def member(
     playing_time: PlayingTime = BENCH,
     contract: ContractStatus = ContractStatus.REGISTERED,
     entered_year: int = 2015,
+    potential: int | None = None,
 ) -> OffseasonPlayer:
     """能力の総合値が `value` の選手（全項目を同じ値にする。捕手は守備力も同じなので総合値どおり）。
 
     `entered_year` はプロ入りの年で、在籍の開始年も同じ。日本人はその前年のドラフト、外国人はドラフトなし。
+    `potential` は本当の伸びしろ（None は #308 より前の世界の行。見立ては補う値から導く）。
     """
-    ratings = PitcherRatings(value, value, value, 50) if position.is_pitcher else BatterRatings(*(value,) * 5)
+    ratings: BatterRatings | PitcherRatings = (
+        PitcherRatings(value, value, value, 50) if position.is_pitcher else BatterRatings(*(value,) * 5)
+    )
+    if potential is not None:
+        ratings = with_potential(ratings, Potential(potential))
     return OffseasonPlayer(
         player_id=player_id,
         position=position,
@@ -89,7 +99,29 @@ def club(players: list[OffseasonPlayer], *, registered_limit: int | None = 70, f
 
 
 def releases(players: list[OffseasonPlayer], **limits: int | None) -> tuple[int, ...]:
-    return decide_releases(club(players, **limits), players, year=YEAR, start_year=START_YEAR)
+    return decide_releases(club(players, **limits), players, year=YEAR, start_year=START_YEAR, world_seed=SEED)
+
+
+def keep(player: OffseasonPlayer) -> float:
+    """`club` の球団が見た残す価値。"""
+    return keep_value(player, team_id=TEAM, year=YEAR, start_year=START_YEAR, world_seed=SEED)
+
+
+def ability(player: OffseasonPlayer) -> float:
+    """`club` の球団が見た能力で測れる価値。"""
+    return ability_value(player, team_id=TEAM, year=YEAR, start_year=START_YEAR, world_seed=SEED)
+
+
+def estimate(player: OffseasonPlayer) -> int:
+    """`club` の球団のスカウトが見た伸びしろ（`TrackRecord` の在籍年数で）。"""
+    assert player.ratings is not None
+    return roster_potential_estimate(
+        player.ratings.ratings,
+        world_seed=SEED,
+        team_id=TEAM,
+        player_id=player.player_id,
+        seasons=player.track_record.seasons,
+    ).value
 
 
 class ExcessTest(unittest.TestCase):
@@ -142,12 +174,25 @@ class ReleaseCountsTest(unittest.TestCase):
 class ForeignProspectTest(unittest.TestCase):
     """新しく迎える外国人に見込める価値（ユーザー決定 2026-10-12: 外国人は価値で入れ替える）。"""
 
-    def test_the_prospect_is_the_mean_of_the_signed_foreigners(self) -> None:
+    def test_the_prospect_is_the_outlook_of_the_signed_foreigners(self) -> None:
         """出典は獲得した外国人の分布（平均 `foreign_market.SIGNED_RATING_MEAN`。#169）と候補の年齢の分布。
-        投手は3項目の平均そのもの。若さの上乗せは前所属ごとの年齢の範囲から（マイナーの25・26歳だけが上乗せを持つ）。"""
-        youth = sum(share * youth_credit(age) for age, share in expected_signing_ages().items())
-        self.assertAlmostEqual(youth, 0.375)
-        self.assertAlmostEqual(foreign_prospect_value(Position.PITCHER), SIGNED_RATING_MEAN + youth)
+        年齢ごとに見込みの能力（伸びしろは普通。#308 P3b）にして平均する。27歳以上は今の能力のままで、
+        伸びを持つのはマイナーの25・26歳だけなので、平均よりわずかに上。"""
+        ratings = expected_signing_ratings(Position.PITCHER)
+        expected = sum(
+            share
+            * retirement_value(
+                Position.PITCHER,
+                projected_ratings(
+                    ratings, age=age, position=Position.PITCHER, potential_estimate=Potential(POTENTIAL_AVERAGE)
+                ),
+            )
+            for age, share in expected_signing_ages().items()
+        )
+        prospect = foreign_prospect_value(Position.PITCHER)
+        self.assertAlmostEqual(prospect, expected)
+        self.assertGreater(prospect, SIGNED_RATING_MEAN)
+        self.assertLess(prospect, SIGNED_RATING_MEAN + 0.5)
 
     def test_catchers_are_compared_with_infielders(self) -> None:
         """外国人は捕手を獲得しないので、捕手は内野手の見込みで比べる。"""
@@ -167,20 +212,51 @@ class ForeignProspectTest(unittest.TestCase):
 
 
 class KeepValueTest(unittest.TestCase):
-    def test_young_players_get_credit(self) -> None:
-        young = member(1, value=45, age=PEAK_AGE - 4)
-        prime = member(2, value=45, age=PEAK_AGE)
-        older = member(3, value=45, age=PEAK_AGE + 5)
-        values = [keep_value(p, year=YEAR, start_year=START_YEAR) for p in (young, prime, older)]
-        self.assertAlmostEqual(values[0] - values[1], 4 * YOUTH_CREDIT)
-        self.assertEqual(values[1], values[2], "全盛を過ぎた年齢は総合値だけ")
+    """能力で測れる価値は、所属球団のスカウトの見立てで見た見込みの能力の総合値
+    （#308 P3b。2026-10-25 ユーザー決定 Q3 A）。"""
+
+    def test_young_players_are_valued_by_the_outlook_seen_by_the_club(self) -> None:
+        """若手は見込みの能力（画面の見込みの区分と同じ `roster_projection`・同じ材料）の総合値。"""
+        young = replace(member(1, value=45, age=PEAK_AGE - 4, potential=60), track_record=TrackRecord(seasons=3))
+        assert young.ratings is not None
+        projected = roster_projection(
+            young.ratings.ratings,
+            age=PEAK_AGE - 4,
+            position=young.position,
+            world_seed=SEED,
+            team_id=TEAM,
+            player_id=1,
+            seasons=3,
+        )
+        self.assertEqual(ability(young), retirement_value(young.position, projected))
+        self.assertGreater(ability(young), 45)
+
+    def test_players_at_the_peak_age_are_valued_by_the_current_ratings(self) -> None:
+        """`PEAK_AGE` 歳以上は今の能力の総合値だけ（伸びしろを問わない。#308 より前と同じ）。"""
+        for age in (PEAK_AGE, PEAK_AGE + 5):
+            for potential in (None, 10, 90):
+                with self.subTest(age=age, potential=potential):
+                    self.assertEqual(keep(member(1, value=45, age=age, potential=potential)), 45.0)
+
+    def test_the_younger_the_more_the_outlook_adds(self) -> None:
+        """同じ今の能力・同じ見立てなら、若いほど見込みの伸びが大きい（若さの上乗せの代わり）。"""
+        values = [ability(member(1, value=45, age=age, potential=50)) for age in (19, 22, 25, PEAK_AGE)]
+        self.assertEqual(values, sorted(values, reverse=True))
+        self.assertGreater(values[0], values[-1] + 5)
+
+    def test_the_club_sees_the_estimate_not_the_truth(self) -> None:
+        """本当の伸びしろが同じ若手でも、球団のスカウトの見立てが低い方が残す価値は低い（AI も本当の値を見ない）。"""
+        players = [member(player_id, value=45, age=21, potential=50) for player_id in range(1, 200)]
+        low = next(p for p in players if estimate(p) <= 40)
+        high = next(p for p in players if estimate(p) >= 60)
+        self.assertLess(keep(low), keep(high))
 
     def test_catcher_uses_the_better_of_defense_and_batting(self) -> None:
         catcher = replace(
             member(1, position=Position.CATCHER, age=PEAK_AGE),
             ratings=PlayerRatings(1, YEAR, BatterRatings(30, 30, 30, 30, 70)),
         )
-        self.assertEqual(keep_value(catcher, year=YEAR, start_year=START_YEAR), 70.0)
+        self.assertEqual(keep(catcher), 70.0)
 
 
 class DecideReleasesTest(unittest.TestCase):
@@ -196,6 +272,53 @@ class DecideReleasesTest(unittest.TestCase):
         for index, value in ((20, 35), (10, 30)):
             players[index] = member(players[index].player_id, position=players[index].position, value=value)
         self.assertEqual(releases(players), (players[10].player_id, players[20].player_id))
+
+    def test_among_equal_youngsters_the_lower_estimate_goes_first(self) -> None:
+        """今の能力・年齢・本当の伸びしろが同じ若手なら、球団の見立ての低い方から外す。"""
+        youngsters = [member(player_id, value=40, age=21, potential=50) for player_id in range(101, 300)]
+        low = next(p for p in youngsters if estimate(p) <= 40)
+        high = next(p for p in youngsters if estimate(p) >= 60)
+        self.assertLess(keep(high), 50, "前提: 見立ての高い若手も、ロースターの選手（50）より残す価値が低い")
+        self.assertEqual(releases([*roster(61), high, low]), (low.player_id, high.player_id, 1))
+
+    def test_each_club_uses_its_own_scouts(self) -> None:
+        """見立ては見る球団で違う。同じ若手2人でも、球団によって外す順が入れ替わる（`club.team_id` を渡す）。"""
+
+        def seen_by(team_id: int, player: OffseasonPlayer) -> int:
+            assert player.ratings is not None
+            return roster_potential_estimate(
+                player.ratings.ratings, world_seed=SEED, team_id=team_id, player_id=player.player_id, seasons=0
+            ).value
+
+        youngsters = [member(player_id, value=40, age=21, potential=50) for player_id in range(101, 400)]
+        first = next(p for p in youngsters if seen_by(1, p) <= 40 and seen_by(2, p) >= 60)
+        second = next(p for p in youngsters if seen_by(1, p) >= 60 and seen_by(2, p) <= 40)
+        players = [*roster(60), first, second]
+        for team_id, expected in ((1, (first, second)), (2, (second, first))):
+            chosen = decide_releases(
+                replace(club(players), team_id=team_id), players, year=YEAR, start_year=START_YEAR, world_seed=SEED
+            )
+            with self.subTest(team_id=team_id):
+                self.assertEqual(chosen, tuple(p.player_id for p in expected))
+
+    def test_a_youngster_the_scouts_underrate_goes_before_one_they_overrate(self) -> None:
+        """本当は伸びしろが高いのに見立てが低い若手は、本当は普通なのに見立てが高い若手より先に外れる（見るのは見立て）。"""
+        candidates = range(101, 400)
+        underrated = next(
+            p for p in (member(i, value=40, age=21, potential=70) for i in candidates) if estimate(p) <= 55
+        )
+        overrated = next(
+            p for p in (member(i, value=40, age=21, potential=45) for i in candidates) if estimate(p) >= 60
+        )
+        self.assertLess(keep(overrated), 50, "前提: 2人ともロースターの選手（50）より残す価値が低い")
+        self.assertEqual(releases([*roster(60), overrated, underrated]), (underrated.player_id, overrated.player_id))
+
+    def test_young_bench_players_are_kept_over_older_ones_of_the_same_ability(self) -> None:
+        """今の能力が同じなら、伸びを見込める若手（見立てが普通）より、伸びの無い年長の控えから外す。"""
+        young = member(101, value=48, age=20, potential=50)
+        self.assertGreater(estimate(young), 30)
+        older = member(102, value=48, age=PEAK_AGE + 3)
+        self.assertEqual(releases([*roster(60), young, older])[0], 102)
 
     def test_ties_break_by_player_id_and_input_order_does_not_matter(self) -> None:
         players = roster(64)
@@ -221,7 +344,10 @@ class DecideReleasesTest(unittest.TestCase):
             member(101, value=20), joined_year=START_YEAR, profile=replace(member(101).profile, draft=None)
         )
         self.assertIn(
-            101, decide_releases(club([*players, forked]), [*players, forked], year=START_YEAR, start_year=START_YEAR)
+            101,
+            decide_releases(
+                club([*players, forked]), [*players, forked], year=START_YEAR, start_year=START_YEAR, world_seed=SEED
+            ),
         )
 
     def test_a_foreign_rookie_without_a_draft_is_a_first_year_player(self) -> None:
@@ -256,12 +382,13 @@ class DecideReleasesTest(unittest.TestCase):
         foreigners = [member(101 + i, position=Position.PITCHER, value=40 + i, foreign=True) for i in range(4)]
         self.assertEqual(releases([*players, *foreigners]), (101, 102, 103, 104))
 
-    def test_the_comparison_uses_the_keep_value_with_the_youth_credit(self) -> None:
-        """若い外国人は若さの上乗せで見込みを上回ることがある（`keep_value` の規則はそのまま）。"""
+    def test_the_comparison_uses_the_outlook_of_young_foreigners(self) -> None:
+        """若い外国人は、見立ての見込みの伸びで新しく迎える外国人の見込みを上回ることがある（物差しは日本人と同じ）。"""
         prospect = foreign_prospect_value(Position.PITCHER)
-        young = member(101, position=Position.PITCHER, value=48, age=PEAK_AGE - 4, foreign=True)
-        old = member(102, position=Position.PITCHER, value=48, age=PEAK_AGE + 3, foreign=True)
-        self.assertGreater(keep_value(young, year=YEAR, start_year=START_YEAR), prospect)
+        young = member(101, position=Position.PITCHER, value=48, age=PEAK_AGE - 4, foreign=True, potential=90)
+        old = member(102, position=Position.PITCHER, value=48, age=PEAK_AGE + 3, foreign=True, potential=90)
+        self.assertGreater(ability(young), prospect)
+        self.assertLess(ability(old), prospect)
         self.assertEqual(releases([*roster(55), young, old]), (102,))
 
     def test_foreign_turnover_is_not_filled_with_japanese_players(self) -> None:

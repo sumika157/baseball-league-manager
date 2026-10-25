@@ -17,7 +17,9 @@
 どちらも育成は外さない（#170・#174）。位置の最低人数（`draft.MIN_BY_POSITION`）を割らず、候補が足りなければ
 外せる分だけ（締める処理を失敗させない）。外国人を外した分も支配下の空きに数える。
 
-残す価値（`keep_value`）は、総合値に若さの上乗せと**実績の加点**（`track_record_credit`。生え抜き・その球団での
+残す価値（`keep_value`）は、**所属球団のスカウトの見立てで見た見込みの能力の総合値**（`ability_value`。
+`outlook.roster_projection`。#308 P3b。2026-10-25 ユーザー決定 Q3 A。それまでの「若さの上乗せ」＝27歳より若い1歳に
+一律1点を置き換えた）に**実績の加点**（`track_record_credit`。生え抜き・その球団での
 在籍年数・世界の通算の実績・主将・タイトル。2026-10-12 ユーザー決定。タイトルは #248）を足したもの。
 実績は外されにくくするだけで、試合には効かない。外国人の入れ替えの比較には、タイトルの加点だけを使う。
 
@@ -30,21 +32,19 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
+from functools import cache
 
 from ..exceptions import InvalidReleasePlan
 from ..simulation.manager import LINEUP_SIZE
+from ..simulation.ratings import POTENTIAL_AVERAGE, Potential
 from ..value_objects import ForeignPlayerRules, Position
 from .club_plan import ClubMember, lineup_capacity, playable_shortfall
 from .draft import MIN_BY_POSITION, USUAL_DRAFTEES
 from .foreign_market import expected_signing_ages, expected_signing_ratings
 from .offseason_player import OffseasonClub, OffseasonPlayer, TrackRecord, player_age, retirement_value
-from .outlook import PEAK_AGE
+from .outlook import projected_ratings, roster_projection
 from .roster import OPENING_REGISTERED_BAND
 
-# 残す価値の年齢の補正。`outlook.PEAK_AGE` より若い選手は、
-# 1歳につき `YOUTH_CREDIT` 点だけ総合値に上乗せして残しやすくする
-# （伸びしろのある若手を、今の能力だけで外さない）
-YOUTH_CREDIT = 1.0
 # 入団1年目の外国人の余裕（点）。1年目だけ、新しく迎える外国人の見込みからこの値を引いて比べ、大きく下回るときだけ外す
 # （2026-10-12 ユーザー決定。0 だと、見込みの平均の近くで入った1年目の外国人が成績と関係なく半分近く外れる。
 # 値は実測で決めた。Wiki「ペナントモードの仕組み」の「戦力外」）
@@ -90,11 +90,6 @@ def release_counts(*, registered: int, registered_limit: int | None) -> ReleaseC
     )
 
 
-def youth_credit(age: int) -> float:
-    """若さの上乗せ。`outlook.PEAK_AGE`（27）より若い1歳ごとに `YOUTH_CREDIT` 点。"""
-    return YOUTH_CREDIT * max(0, PEAK_AGE - age)
-
-
 def career_points(record: TrackRecord) -> float:
     """世界の通算の実績を「主力の1シーズンぶん ≒ 1点」に揃えた値。野手は安打と本塁打、投手は勝利・セーブ・ホールド。"""
     return (
@@ -131,23 +126,37 @@ def title_credit(record: TrackRecord) -> float:
     return TITLE_CREDIT * record.titles
 
 
-def ability_value(player: OffseasonPlayer, *, year: int, start_year: int) -> float:
-    """能力で測れる価値。総合値（`retirement_value`。捕手は守備力と打撃の大きい方）に、若さの上乗せを足す。
+def ability_value(player: OffseasonPlayer, *, team_id: int, year: int, start_year: int, world_seed: int) -> float:
+    """能力で測れる価値。球団 `team_id` のスカウトの見立てで見た**見込みの能力**（`outlook.roster_projection`）の
+    総合値（`retirement_value`。捕手は守備力と打撃の大きい方）。`outlook.PEAK_AGE` 歳以上は今の能力の総合値。
 
+    見込みの材料は画面の見込みの区分（`application/pennant_outlook.py`）と同じ: 締める年 `year` の能力・4月1日の年齢
+    （`player_age`）・その球団での在籍年数（`TrackRecord.seasons`＝`club_seasons`）。本当の伸びしろは見ない
+    （2026-10-25 ユーザー決定。AI も見立てを使う）。引退の確率（`offseason.decide_retirements`）もこれを使い、
     外国人の入れ替えは、これを新しく迎える外国人の見込み（`foreign_prospect_value`）と比べる。
     """
-    ratings = None if player.ratings is None else player.ratings.ratings
-    return retirement_value(player.position, ratings) + youth_credit(
-        player_age(player.profile, year, start_year=start_year)
+    if player.ratings is None:
+        # 能力の無い選手は年齢によらず中立の値（見込みは能力から導くので、若手にも上乗せしない）
+        return retirement_value(player.position, None)
+    projected = roster_projection(
+        player.ratings.ratings,
+        age=player_age(player.profile, year, start_year=start_year),
+        position=player.position,
+        world_seed=world_seed,
+        team_id=team_id,
+        player_id=player.player_id,
+        seasons=player.track_record.seasons,
     )
+    return retirement_value(player.position, projected)
 
 
-def keep_value(player: OffseasonPlayer, *, year: int, start_year: int) -> float:
+def keep_value(player: OffseasonPlayer, *, team_id: int, year: int, start_year: int, world_seed: int) -> float:
     """残す価値。能力で測れる価値（`ability_value`）に、実績の加点（`track_record_credit`）を足す。低いほど外される。"""
-    return ability_value(player, year=year, start_year=start_year) + track_record_credit(player.track_record)
+    ability = ability_value(player, team_id=team_id, year=year, start_year=start_year, world_seed=world_seed)
+    return ability + track_record_credit(player.track_record)
 
 
-def foreign_value(player: OffseasonPlayer, *, year: int, start_year: int) -> float:
+def foreign_value(player: OffseasonPlayer, *, team_id: int, year: int, start_year: int, world_seed: int) -> float:
     """外国人の入れ替えで、新しく迎える外国人の見込みと比べる値。能力で測れる価値に、**タイトルの加点だけ**を足す
     （`MAX_TRACK_RECORD_CREDIT` で頭打ち）。
 
@@ -156,20 +165,30 @@ def foreign_value(player: OffseasonPlayer, *, year: int, start_year: int) -> flo
     能力の見込みだけで入れ替えない）。
     """
     credit = min(MAX_TRACK_RECORD_CREDIT, title_credit(player.track_record))
-    return ability_value(player, year=year, start_year=start_year) + credit
+    ability = ability_value(player, team_id=team_id, year=year, start_year=start_year, world_seed=world_seed)
+    return ability + credit
 
 
+@cache
 def foreign_prospect_value(position: Position) -> float:
     """新しく迎える外国人に見込める価値（`ability_value` と同じ物差し。新しく迎える外国人に実績は無い）。
 
-    能力は獲得した外国人の平均（`foreign_market.expected_signing_ratings`。錨の前の尺度で、今の選手の能力と同じ尺度）、
-    若さの上乗せは候補の年齢の分布（`foreign_market.expected_signing_ages`。前所属ごとの範囲）の平均。
+    能力は獲得した外国人の平均（`foreign_market.expected_signing_ratings`。錨の前の尺度で、今の選手の能力と同じ尺度）を、
+    候補の年齢の分布（`foreign_market.expected_signing_ages`。前所属ごとの範囲）の年齢ごとに見込みの能力
+    （`outlook.projected_ratings`）にした総合値の平均。伸びしろは普通（`POTENTIAL_AVERAGE`。獲得した外国人の伸びしろの平均）。
     外国人は捕手を獲得しないので、捕手は内野手の見込みで比べる。
+    材料は定数だけ（獲得の分布）なので位置ごとに覚える。獲得の分布を世界・球団ごとに変えるとき（#208）は引数に足すこと。
     """
     compared = Position.INFIELDER if position is Position.CATCHER else position
     ratings = expected_signing_ratings(compared)
-    youth = sum(share * youth_credit(age) for age, share in expected_signing_ages().items())
-    return retirement_value(compared, ratings) + youth
+    potential = Potential(POTENTIAL_AVERAGE)
+    return sum(
+        share
+        * retirement_value(
+            compared, projected_ratings(ratings, age=age, position=compared, potential_estimate=potential)
+        )
+        for age, share in expected_signing_ages().items()
+    )
 
 
 def is_release_candidate(player: OffseasonPlayer, *, year: int, start_year: int) -> bool:
@@ -181,7 +200,9 @@ def is_release_candidate(player: OffseasonPlayer, *, year: int, start_year: int)
     )
 
 
-def is_replaceable_foreigner(player: OffseasonPlayer, *, year: int, start_year: int) -> bool:
+def is_replaceable_foreigner(
+    player: OffseasonPlayer, *, team_id: int, year: int, start_year: int, world_seed: int
+) -> bool:
     """新しい外国人と入れ替える外国人か。支配下の外国人で、比べる値（`foreign_value`。能力で測れる価値にタイトルの
     加点だけを足したもの）が新しく迎える外国人の見込みを下回る（主力も）。
 
@@ -193,16 +214,18 @@ def is_replaceable_foreigner(player: OffseasonPlayer, *, year: int, start_year: 
     threshold = foreign_prospect_value(player.position)
     if player.is_first_year(year, start_year=start_year):
         threshold -= FIRST_YEAR_FOREIGN_MARGIN
-    return foreign_value(player, year=year, start_year=start_year) < threshold
+    value = foreign_value(player, team_id=team_id, year=year, start_year=start_year, world_seed=world_seed)
+    return value < threshold
 
 
 def decide_releases(
-    club: OffseasonClub, remaining: Sequence[OffseasonPlayer], *, year: int, start_year: int
+    club: OffseasonClub, remaining: Sequence[OffseasonPlayer], *, year: int, start_year: int, world_seed: int
 ) -> tuple[int, ...]:
     """球団 `club` の戦力外の選手の id（外す順）。`remaining` は引退しなかった選手。
 
     先に入れ替える外国人、続けて支配下の候補から `ReleaseCounts.registered` 人に届くまで。
-    どちらも残す価値の昇順（同値は選手 id の昇順）で、その位置の支配下が `MIN_BY_POSITION` 以下なら飛ばす。
+    どちらも残す価値の昇順（同値は選手 id の昇順。見込みは球団 `club` のスカウトの見立て）で、
+    その位置の支配下が `MIN_BY_POSITION` 以下なら飛ばす。
     """
     counts = release_counts(
         registered=sum(1 for player in remaining if player.is_registered),
@@ -212,7 +235,11 @@ def decide_releases(
 
     def order(players: Sequence[OffseasonPlayer]) -> list[OffseasonPlayer]:
         return sorted(
-            players, key=lambda player: (keep_value(player, year=year, start_year=start_year), player.player_id)
+            players,
+            key=lambda player: (
+                keep_value(player, team_id=club.team_id, year=year, start_year=start_year, world_seed=world_seed),
+                player.player_id,
+            ),
         )
 
     chosen: list[int] = []
@@ -226,7 +253,15 @@ def decide_releases(
             by_position[player.position] -= 1
             chosen.append(player.player_id)
 
-    foreigners = order([p for p in remaining if is_replaceable_foreigner(p, year=year, start_year=start_year)])
+    foreigners = order(
+        [
+            player
+            for player in remaining
+            if is_replaceable_foreigner(
+                player, team_id=club.team_id, year=year, start_year=start_year, world_seed=world_seed
+            )
+        ]
+    )
     take(foreigners, len(foreigners))
     if counts.registered > len(chosen):
         take(

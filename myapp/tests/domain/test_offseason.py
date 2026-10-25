@@ -6,6 +6,7 @@ import unittest
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import date
+from unittest import mock
 
 from myapp.domain.entities import Team
 from myapp.domain.pennant import draft
@@ -17,13 +18,16 @@ from myapp.domain.pennant.offseason import (
     OffseasonClub,
     OffseasonPlan,
     OffseasonPlayer,
+    decide_retirements,
     overall_value,
     plan_departures,
     plan_offseason,
     rating_change,
-    retirement_value,
 )
+from myapp.domain.pennant.offseason_player import retirement_value
+from myapp.domain.pennant.outlook import PEAK_AGE
 from myapp.domain.pennant.ratings import PlayerRatings
+from myapp.domain.pennant.release import ability_value
 from myapp.domain.pennant.retirement import MAX_PLAYING_AGE, ROOKIE_FACTOR, PlayingTime, retirement_chance
 from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND
 from myapp.domain.simulation.randomness import game_uniform
@@ -322,6 +326,29 @@ class RookieProtectionTest(unittest.TestCase):
             for target in (veteran, rookie)
         ]
         self.assertAlmostEqual(chances[0], chances[1] / ROOKIE_FACTOR)
+
+
+class RetirementUsesTheOutlookTest(unittest.TestCase):
+    """引退の確率に渡す能力は、戦力外と同じ「所属球団のスカウトの見立てで見た見込みの能力の総合値」
+    （`release.ability_value`。#308 P3b）。`PEAK_AGE` 歳以上は今の能力の総合値のまま（確率は #308 より前と同じ）。"""
+
+    def values(self, *players: OffseasonPlayer) -> dict[int, float]:
+        with mock.patch("myapp.domain.pennant.offseason.retirement_chance", wraps=retirement_chance) as chance:
+            decide_retirements([club(*players, team_id=3)], year=YEAR, world_seed=9, start_year=START_YEAR)
+        return {p.player_id: call.kwargs["value"] for p, call in zip(players, chance.call_args_list, strict=True)}
+
+    def test_young_players_use_the_outlook_seen_by_their_club(self) -> None:
+        young = player(1, born=date(YEAR - 21, 1, 1))
+        values = self.values(young)
+        expected = ability_value(young, team_id=3, year=YEAR, start_year=START_YEAR, world_seed=9)
+        self.assertEqual(values[1], expected)
+        assert young.ratings is not None
+        self.assertGreater(values[1], retirement_value(young.position, young.ratings.ratings))
+
+    def test_players_at_the_peak_age_use_the_current_ratings(self) -> None:
+        veteran = player(1, born=date(YEAR - PEAK_AGE - 3, 1, 1))
+        assert veteran.ratings is not None
+        self.assertEqual(self.values(veteran)[1], retirement_value(veteran.position, veteran.ratings.ratings))
 
 
 if __name__ == "__main__":

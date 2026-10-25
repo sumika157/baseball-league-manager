@@ -171,7 +171,7 @@ class ManualReleasesInThePlanTest(unittest.TestCase):
         club = OffseasonClub(
             team_id=2, foreign_rules=ForeignPlayerRules.NPB, registered_player_limit=70, players=tuple(other)
         )
-        expected = decide_releases(club, remaining, year=YEAR, start_year=START_YEAR)
+        expected = decide_releases(club, remaining, year=YEAR, start_year=START_YEAR, world_seed=1)
         self.assertEqual(set(result.released), set(expected))
         self.assertTrue(expected)
 
