@@ -1,0 +1,21 @@
+{% extends 'myapp/base.html' %}
+{% load scoped %}
+
+{% block title %}ワークスペースの設定 - Baseball Manager{% endblock %}
+
+{% block content %}
+{% include 'myapp/workspace/_tabs.html' %}
+
+{% comment %}
+名前と公開範囲の変更（持ち主だけ。ビューの門が持ち主以外を 403 にする）。公開範囲の選択肢は Visibility が出典（フォーム経由）。
+{% endcomment %}
+<form method="post" class="card mb-4">
+  {% csrf_token %}
+  <div class="card-body">
+    {% for error in form.non_field_errors %}<div class="alert alert-danger">{{ error }}</div>{% endfor %}
+    {% include 'myapp/setup/_field.html' with field=form.name %}
+    {% include 'myapp/setup/_field.html' with field=form.visibility %}
+    <button type="submit" class="btn btn-primary">保存する</button>
+  </div>
+</form>
+{% endblock %}
