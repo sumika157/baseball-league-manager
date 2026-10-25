@@ -525,6 +525,61 @@ class AdminDoesNotShowThePennantWorldTest(WorldCase):
         self.assertIsNone(self.rival.home_stadium_id, "実データの球団は外される（既存の動作）")
 
 
+class SetupScreensAndTheWorldTest(WorldCase):
+    """登録画面（W3 #79）は実データだけを書く。球場はワークスペースで世界と共有する（2026-10-25 決定 1）ので、
+    サイトでの球場の編集は世界にも映るが、世界の球団の本拠地は外れない。世界の球団が使っている球場は消せない。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(self.workspace.owner)
+
+    def test_the_setup_pages_do_not_show_the_world(self):
+        for name in ("setup_leagues", "setup_teams", "setup_stadiums"):
+            with self.subTest(name=name):
+                response = self.client.get(ws_url(name))
+                self.assertEqual(response.status_code, 200)
+                for marker in MARKERS:
+                    self.assertNotContains(response, marker)
+
+    def test_editing_a_stadium_on_the_site_keeps_the_world_teams_home(self):
+        response = self.client.post(
+            ws_url("setup_stadium_edit", self.stadium.id), {"name": "改名した球場", "capacity": "12345"}
+        )
+
+        self.assertRedirects(response, ws_url("setup_stadiums"))
+        self.pennant_team.refresh_from_db()
+        self.assertEqual(self.pennant_team.home_stadium_id, self.stadium.id, "世界の球団の本拠地が外れた")
+        self.assertEqual(self.pennant_team.home_stadium.capacity, 12345, "球場は共有なので、編集は世界にも映る")
+
+    def test_changing_the_real_teams_home_does_not_touch_the_world_team(self):
+        """世界の球団は分岐の写し。実データのチームの本拠地を外しても、世界の球団の本拠地はそのまま。"""
+        response = self.client.post(
+            ws_url("setup_team_edit", self.team.id),
+            {"name": self.team.name, "league": self.league.id, "home_stadium": "", "display_order": "0"},
+        )
+
+        self.assertRedirects(response, ws_url("setup_teams"))
+        self.team.refresh_from_db()
+        self.pennant_team.refresh_from_db()
+        self.assertIsNone(self.team.home_stadium_id)
+        self.assertEqual(self.pennant_team.home_stadium_id, self.stadium.id)
+
+    def test_a_stadium_only_world_teams_call_home_cannot_be_deleted(self):
+        orm_models.Team.objects.filter(league=self.league).update(home_stadium=None)
+        url = ws_url("setup_stadium_delete", self.stadium.id)
+        self.assertNotIn(url, self.client.get(ws_url("setup_stadiums")).content.decode())
+        before = orm_models.Stadium.objects.count()
+
+        response = self.client.post(url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "ペナントの世界の")
+        self.assertEqual(orm_models.Stadium.objects.count(), before)
+        self.pennant_team.refresh_from_db()
+        self.assertEqual(self.pennant_team.home_stadium_id, self.stadium.id)
+
+
 # --- モデルの分類表 -----------------------------------------------------------------
 
 LEAGUE = "リーグ経由でワークスペースに属す"

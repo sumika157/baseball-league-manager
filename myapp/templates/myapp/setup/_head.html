@@ -1,7 +1,7 @@
 {% load scoped %}
 {% comment %}
-登録画面の共通の見出し（パンくず・見出し・タブ）。setup_tab（leagues・stadiums）で今のタブを示し、crumb を渡すと
-タブの下の階層（編集・削除）をパンくずに足す。リーグ・球場・チームはどれもこの見出しを使う（チームのタブは T3 で足す）。
+登録画面の共通の見出し（パンくず・見出し・タブ）。setup_tab（leagues・stadiums・teams）で今のタブを示し、crumb を渡すと
+タブの下の階層（編集・削除）をパンくずに足す。リーグ・球場・チームはどれもこの見出しを使う。
 並びは作る順（球場は本拠地としてチームから選ぶので、チームより先に作る）。
 {% endcomment %}
 <nav aria-label="breadcrumb">
@@ -27,5 +27,8 @@
   </li>
   <li class="nav-item">
     <a class="nav-link{% if setup_tab == 'stadiums' %} active{% endif %}" href="{% workspace_url 'setup_stadiums' %}">球場</a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link{% if setup_tab == 'teams' %} active{% endif %}" href="{% workspace_url 'setup_teams' %}">チーム</a>
   </li>
 </ul>

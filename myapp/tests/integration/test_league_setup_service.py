@@ -6,7 +6,8 @@
 - 消せない行は `NotDeletable` で、どの表の行も変わらない。消せる行は、その1行（チームなら担当の割り当ても）
   だけが消える。
   球場は、ペナントの世界の球団が本拠地にしているだけでも消せない（2026-10-25 決定 1）。
-- 所属リーグは、試合が1つも無いときだけ変えられる（2026-10-25 決定 2）。
+- 所属リーグは、試合が1つも無いときだけ変えられる（2026-10-25 決定 2）。移す先の支配下選手の登録枠を
+  超えるなら移せない（T3）。
 - 一覧は行数によらず一定のクエリ数で読む。
 """
 
@@ -24,6 +25,7 @@ from myapp.domain.exceptions import (
     LeagueChangeLocked,
     LeagueNotFound,
     NotDeletable,
+    RegisteredPlayerLimitExceeded,
     StadiumNotFound,
     TeamNotFound,
 )
@@ -390,6 +392,17 @@ class LeagueChangeTest(SetupCase):
             LeagueChangeLocked,
         )
         self.assertEqual(str(error), self.query.team(self.team.id).league_change_blocker)
+
+    def test_a_team_over_the_new_leagues_registered_limit_cannot_move(self):
+        """移す先のリーグの支配下選手の登録枠を超えるなら移せず、何も書かない（W3 T3）。"""
+        register_players(self.team, [("一郎", "1", "投手"), ("二郎", "2", "捕手")])
+        small = make_league("小さいリーグ", registered_player_limit=1)
+        self.assert_nothing_changes(
+            lambda: self.service.update_team(
+                self.team.id, name="改名も書かない", league_id=small.id, home_stadium_id=None, display_order=0
+            ),
+            RegisteredPlayerLimitExceeded,
+        )
 
     def test_a_team_with_games_can_still_be_edited_in_its_league(self):
         play_game(self.team, self.rival)

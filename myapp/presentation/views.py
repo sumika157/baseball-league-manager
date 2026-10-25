@@ -37,6 +37,7 @@ from ..application.dto import (
     ReleasePlanView,
     StadiumSetupRow,
     TeamMonthlyRow,
+    TeamSetupRow,
     WorkspaceContext,
     WorldContext,
 )
@@ -72,8 +73,10 @@ from ..domain.exceptions import (
     InvalidName,
     InvalidReleasePlan,
     InvalidWorld,
+    LeagueChangeLocked,
     LeagueNotFound,
     PlayerNotFound,
+    RegisteredPlayerLimitExceeded,
     StadiumNotFound,
     TeamNotFound,
     WorkspaceNotFound,
@@ -177,6 +180,7 @@ from .forms import (
     PlayerUpdateForm,
     PostseasonFormatForm,
     StadiumSetupForm,
+    TeamSetupForm,
 )
 
 BATTER_MODE = "batter"
@@ -2336,7 +2340,7 @@ def _handle_free_agency(request, team_id, player_id, player_name) -> None:
         messages.error(request, str(error))
 
 
-# --- 登録画面（リーグ・球場。W3 #79。チームは T3） ---
+# --- 登録画面（リーグ・チーム・球場。W3 #79） ---
 #
 # どれも `workspace_view(login=True)` で包み、門は `_requires_set_up`。一覧・編集フォームの初期値・消せない理由は
 # 参照クエリ（`build_setup_query`）、作成・編集・削除はサービス（`build_league_setup_service`）。
@@ -2576,6 +2580,149 @@ def setup_stadium_delete(request, stadium_id):
         reason=reason,
         back_url=_url(request, "setup_stadiums"),
         setup_tab="stadiums",
+    )
+
+
+def _team_setup_error(form, error: DomainError) -> None:
+    """チームの登録のドメイン例外をフォームのエラーにする。
+
+    名前は名前の欄、所属リーグ（範囲の外・試合がある・移す先の支配下枠）は所属リーグの欄（欄が無ければフォーム全体）、
+    本拠地（範囲の外）は本拠地の欄。
+    """
+    if isinstance(error, (LeagueNotFound, LeagueChangeLocked, RegisteredPlayerLimitExceeded)):
+        form.add_error("league" if "league" in form.fields else None, str(error))
+    elif isinstance(error, StadiumNotFound):
+        form.add_error("home_stadium", str(error))
+    else:
+        _setup_error(form, error)
+
+
+def _team_setup_form(query, data=None, **kwargs) -> TeamSetupForm:
+    """チームのフォーム。所属リーグと本拠地の選択肢は範囲のリーグ・球場（参照クエリの行）。"""
+    return TeamSetupForm(data, leagues=query.leagues(), stadiums=query.stadiums(), **kwargs)
+
+
+def setup_teams(request):
+    """チームの一覧（リーグの表示順・チームの表示順）と作成フォーム。新しいチームはそのリーグの末尾に入る。
+
+    リーグが1つも無いワークスペースでは作成フォームを出さず、リーグのタブへ案内する（チームはリーグに属する）。
+    """
+    if request.method not in _SETUP_METHODS:
+        return HttpResponseNotAllowed(_SETUP_METHODS)
+    _requires_set_up(request)
+    scope = _real_scope(request)
+    query = build_setup_query(scope)
+    if request.method == "POST":
+        form = _team_setup_form(query, request.POST, with_display_order=False)
+        if form.is_valid():
+            data = form.cleaned_data
+            try:
+                build_league_setup_service(scope).create_team(
+                    name=data["name"], league_id=data["league"], home_stadium_id=data["home_stadium"]
+                )
+            except DomainError as error:
+                _team_setup_error(form, error)
+            else:
+                messages.success(request, f"チーム「{data['name']}」を登録しました。")
+                return redirect(_url(request, "setup_teams"))
+    else:
+        form = _team_setup_form(query, with_display_order=False)
+    return render(
+        request,
+        "myapp/setup/teams.html",
+        {
+            "teams": query.teams(),
+            "form": form,
+            "can_create": bool(form.fields["league"].choices),
+            "setup_tab": "teams",
+        },
+    )
+
+
+def _setup_team(request, team_id: int) -> TeamSetupRow:
+    """登録画面のチームの1行。範囲の外（ほかのワークスペース・ペナントの世界）の id は 404。"""
+    try:
+        return build_setup_query(_real_scope(request)).team(team_id)
+    except TeamNotFound:
+        raise Http404("チームが見つかりません。") from None
+
+
+def setup_team_edit(request, team_id):
+    """チームの編集（名前・所属リーグ・本拠地・表示順）。保存したら一覧へ戻る。
+
+    所属リーグは試合が1つも無いときだけ変えられる（2026-10-25 決定 2）。変えられないチームは所属リーグの欄を出さず
+    理由を出し、POST に `league` があっても今のリーグのまま保存する。移す先の支配下選手の登録枠を超えるチームは
+    移せない（フォームのエラー。W3 T3）。
+    """
+    if request.method not in _SETUP_METHODS:
+        return HttpResponseNotAllowed(_SETUP_METHODS)
+    _requires_set_up(request)
+    scope = _real_scope(request)
+    team = _setup_team(request, team_id)
+    query = build_setup_query(scope)
+    with_league = team.league_change_blocker is None
+    if request.method == "POST":
+        form = _team_setup_form(query, request.POST, with_league=with_league)
+        if form.is_valid():
+            data = form.cleaned_data
+            try:
+                build_league_setup_service(scope).update_team(
+                    team_id,
+                    name=data["name"],
+                    league_id=data["league"] if with_league else team.league_id,
+                    home_stadium_id=data["home_stadium"],
+                    display_order=data["display_order"],
+                )
+            except TeamNotFound:
+                raise Http404("チームが見つかりません。") from None
+            except DomainError as error:
+                _team_setup_error(form, error)
+            else:
+                messages.success(request, f"チーム「{data['name']}」を更新しました。")
+                return redirect(_url(request, "setup_teams"))
+    else:
+        form = _team_setup_form(
+            query,
+            with_league=with_league,
+            initial={
+                "name": team.name,
+                "league": team.league_id,
+                "home_stadium": team.home_stadium_id,
+                "display_order": team.display_order,
+            },
+        )
+    return render(request, "myapp/setup/team_edit.html", {"team": team, "form": form, "setup_tab": "teams"})
+
+
+def setup_team_delete(request, team_id):
+    """チームの削除の確認（GET）と削除（POST）。在籍・主将の在任・試合が1つも無いチームだけ消せる。
+
+    消すと外れる担当者の割り当ての数を確認に出す。消せないチームへの POST は、理由を出して何も消さない。
+    """
+    if request.method not in _SETUP_METHODS:
+        return HttpResponseNotAllowed(_SETUP_METHODS)
+    _requires_set_up(request)
+    team = _setup_team(request, team_id)
+    reason = team.deletion_blocker
+    if request.method == "POST":
+        try:
+            build_league_setup_service(_real_scope(request)).delete_team(team_id)
+        except TeamNotFound:
+            raise Http404("チームが見つかりません。") from None
+        except DomainError as error:
+            reason = str(error)
+        else:
+            messages.success(request, f"チーム「{team.name}」を削除しました。")
+            return redirect(_url(request, "setup_teams"))
+    notes = [f"このチームの担当者{team.manager_count}人の割り当ても外れます。"] if team.manager_count else []
+    return _deletion_page(
+        request,
+        kind="チーム",
+        name=team.name,
+        reason=reason,
+        back_url=_url(request, "setup_teams"),
+        setup_tab="teams",
+        notes=notes,
     )
 
 

@@ -4,11 +4,13 @@
 （持ち主・編集者はどの id でも可）。前の判定（`DjangoTeamPermissionQuery`）は「範囲の外のチームなら偽」を
 兼ねていたので、その役目は範囲で絞ったサービスとリポジトリが負う。ここでは A の持ち主が A の key の下で
 B の id を混ぜて送り、どれも 404 かフォームのエラー（500 にならない）で、DB のどの行も変わらないことを確かめる。
-登録画面（W3）のリーグ・球場の id も同じ（範囲で絞った参照クエリとリポジトリが `*NotFound` にし、画面は 404）。
+登録画面（W3）のリーグ・チーム・球場の id も同じ（範囲で絞った参照クエリとリポジトリが `*NotFound` にし、画面は 404。
+チームの作成・編集の本文に混ぜたリーグ・球場の id はフォームのエラー）。
 """
 
 import json
 
+from myapp.infrastructure import orm_models
 from myapp.presentation.forms import PROFILE_SECTION_MARKER
 
 from ..helpers import GAME_DAY_UNRECORDED, ws_url
@@ -184,3 +186,47 @@ class CrossWorkspaceIdsTest(WorkspaceCase):
                 self.assertEqual(response.status_code, 200)
                 self.assertNotContains(response, self.b_league.name)
                 self.assertNotContains(response, self.b_stadium.name)
+
+    # --- 登録画面（チーム。W3 T3。#79） ---
+
+    def test_creating_or_editing_a_team_with_b_league_or_stadium_is_a_form_error(self):
+        """A のチームの作成・編集に B のリーグ・B の球場の id を混ぜると、フォームのエラー（200）で行は変わらない。
+
+        編集は所属リーグを変えられる（試合の無い）チームで確かめる（試合のあるチームは所属リーグの欄を読まない）。
+        """
+        fresh = orm_models.Team.objects.create(league=self.league, name="試合の無いチーム")
+        self.before = snapshot_all_rows()
+        edit = ws_url("setup_team_edit", fresh.id)
+        cases = {
+            "作成に B のリーグ": (ws_url("setup_teams"), {"name": "新", "league": self.b_league.id}),
+            "作成に B の球場": (
+                ws_url("setup_teams"),
+                {"name": "新", "league": self.league.id, "home_stadium": self.b_stadium.id},
+            ),
+            "編集で B のリーグへ": (edit, {"name": "改", "league": self.b_league.id, "display_order": "0"}),
+            "編集で B の球場へ": (
+                edit,
+                {"name": "改", "league": self.league.id, "home_stadium": self.b_stadium.id, "display_order": "0"},
+            ),
+        }
+        for label, (url, body) in cases.items():
+            with self.subTest(label):
+                response = self.client.post(url, body)
+                self.assertEqual(response.status_code, 200, "フォームのエラーとして同じ画面に戻る")
+                self.assertTrue(response.context["form"].errors)
+                self.assert_nothing_changed()
+
+    def test_the_team_setup_pages_with_b_team_ids_are_404(self):
+        body = {"name": "改ざん", "league": self.league.id, "display_order": "0"}
+        for name in ("setup_team_edit", "setup_team_delete"):
+            with self.subTest(name=name):
+                url = ws_url(name, self.b_team.id)
+                self.assertEqual(self.client.get(url).status_code, 404)
+                self.assertEqual(self.client.post(url, body).status_code, 404)
+                self.assert_nothing_changed()
+
+    def test_the_team_setup_list_does_not_offer_b_rows(self):
+        response = self.client.get(ws_url("setup_teams"))
+        self.assertEqual(response.status_code, 200)
+        for text in (self.b_team.name, self.b_league.name, self.b_stadium.name):
+            self.assertNotContains(response, text)

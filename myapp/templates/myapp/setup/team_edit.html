@@ -1,0 +1,37 @@
+{% extends 'myapp/base.html' %}
+{% load scoped %}
+
+{% block title %}{{ team.name }}の編集 - チームの登録 - Baseball Manager{% endblock %}
+
+{% block content %}
+{% workspace_url 'setup_teams' as back_url %}
+{% include 'myapp/setup/_head.html' with crumb='チームの編集' back_url=back_url %}
+
+<h2 class="h6 mb-2">{{ team.name }}</h2>
+<form method="post" class="card mb-4">
+  {% csrf_token %}
+  <div class="card-body">
+    {% for error in form.non_field_errors %}<div class="alert alert-danger">{{ error }}</div>{% endfor %}
+    {% include 'myapp/setup/_field.html' with field=form.name %}
+    {% comment %}
+    所属リーグは試合が1つも無いときだけ変えられる（2026-10-25 決定）。変えられないチームは欄を出さず、今のリーグと理由を出す
+    （無効の欄に案内文を添えない）。
+    {% endcomment %}
+    {% if team.league_change_blocker %}
+      <div class="mb-3">
+        <div class="form-label">所属リーグ</div>
+        <div>{{ team.league_name }}</div>
+        <div class="stat-muted mt-1" style="font-size: 0.8125rem;">{{ team.league_change_blocker }}</div>
+      </div>
+    {% else %}
+      {% include 'myapp/setup/_field.html' with field=form.league %}
+    {% endif %}
+    {% include 'myapp/setup/_field.html' with field=form.home_stadium %}
+    {% include 'myapp/setup/_field.html' with field=form.display_order %}
+    <div class="d-flex gap-2">
+      <button type="submit" class="btn btn-primary">保存する</button>
+      <a href="{{ back_url }}" class="btn btn-secondary">戻る</a>
+    </div>
+  </div>
+</form>
+{% endblock %}

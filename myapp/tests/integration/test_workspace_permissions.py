@@ -52,24 +52,25 @@ CHECKS = (
     "スコアブックの保存",
     "ペナントの作成（POST）",
     "リーグの登録（POST）",
+    "チームの登録（POST）",
 )
 
 # 役割 → 期待（CHECKS の順）。公開のワークスペース
 _MEMBERS = {
-    "持ち主": "Y Y Y Y Y Y 200 200 200 200 ok ok ok ok ok ok",
-    "編集者": "Y Y Y Y Y Y 200 200 200 200 ok ok ok ok ok ok",
+    "持ち主": "Y Y Y Y Y Y 200 200 200 200 ok ok ok ok ok ok ok",
+    "編集者": "Y Y Y Y Y Y 200 200 200 200 ok ok ok ok ok ok ok",
     # 担当: 登録画面（リーグ・チーム・球場）は全体の編集権だけ。導線も出さない
-    "担当": "Y Y Y Y N N 200 200 200 403 ok ok ok ok 403 403",
+    "担当": "Y Y Y Y N N 200 200 200 403 ok ok ok ok 403 403 403",
     # ほかのチームの担当: 試合の登録の画面は開ける（担当のチームがある）が、担当していない2チームの試合は登録できない
-    "ほかのチームの担当": "N N Y N N N 200 403 403 403 403 403 refused 403 403 403",
+    "ほかのチームの担当": "N N Y N N N 200 403 403 403 403 403 refused 403 403 403 403",
 }
-_NO_RIGHTS = "N N N N N N 403 403 403 403 403 403 403 403 403 403"
+_NO_RIGHTS = "N N N N N N 403 403 403 403 403 403 403 403 403 403 403"
 PUBLIC = {
     **_MEMBERS,
     "ログインした部外者": _NO_RIGHTS,
     "staff の部外者": _NO_RIGHTS,
     "superuser の部外者": _NO_RIGHTS,
-    "未ログイン": "N N N N N N login login login login login login login 403 login login",
+    "未ログイン": "N N N N N N login login login login login login login 403 login login login",
 }
 # 非公開: メンバーは公開と同じ。部外者は存在を明かさない（404）、未ログインはログインへ（API は 403）
 _HIDDEN = " ".join(["404"] * len(CHECKS))
@@ -78,7 +79,7 @@ PRIVATE = {
     "ログインした部外者": _HIDDEN,
     "staff の部外者": _HIDDEN,
     "superuser の部外者": _HIDDEN,
-    "未ログイン": " ".join(["login"] * (len(CHECKS) - 3) + ["403", "login", "login"]),
+    "未ログイン": " ".join(["login"] * (len(CHECKS) - 4) + ["403", "login", "login", "login"]),
 }
 
 
@@ -92,6 +93,7 @@ class PermissionTableCase(BaseCase):
     away: orm_models.Team
     other_team: orm_models.Team
     league_id: int
+    other_league_id: int
     users: dict[str, User | None]
 
     @classmethod
@@ -110,6 +112,7 @@ class PermissionTableCase(BaseCase):
         # ほかのチームは別のリーグに置く（世界の作成は元のリーグの球団数で日程を組むので、2球団のリーグのままにする）
         other_league = make_league("ほかのリーグ", workspace=cls.ws)
         cls.other_team = orm_models.Team.objects.create(league=other_league, name="ほかのチーム")
+        cls.other_league_id = other_league.id
 
         def user(name, **flags):
             return User.objects.create_user(username=name, password="x", **flags)
@@ -255,6 +258,14 @@ class PermissionTableCase(BaseCase):
             {"name": f"{role}のリーグ", "foreign_active": "4", "foreign_pitchers": "3", "foreign_batters": "3"},
         )
         observed.append(self._write(response, orm_models.League.objects.count() != leagues))
+
+        # 世界の作成（上）は元のリーグの名簿を検査するので、選手のいないチームはほかのリーグに足す
+        teams = orm_models.Team.objects.count()
+        response = self.client.post(
+            self.url("setup_teams"),
+            {"name": f"{role}のチーム", "league": str(self.other_league_id), "home_stadium": ""},
+        )
+        observed.append(self._write(response, orm_models.Team.objects.count() != teams))
         return observed
 
     def check_the_table(self):

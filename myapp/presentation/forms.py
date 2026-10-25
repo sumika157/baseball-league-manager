@@ -12,11 +12,12 @@ from typing import Any, cast
 from django import forms
 from django.core.exceptions import ValidationError
 
-from ..application.dto import LeagueTeams, LineupSlot, ProfileInput
+from ..application.dto import LeagueSetupRow, LeagueTeams, LineupSlot, ProfileInput, StadiumSetupRow
 from ..domain.entities import (
     LEAGUE_NAME_MAX_LENGTH,
     STADIUM_CITY_MAX_LENGTH,
     STADIUM_NAME_MAX_LENGTH,
+    TEAM_NAME_MAX_LENGTH,
     FieldingError,
     PlateAppearance,
     RunnerAdvance,
@@ -641,3 +642,65 @@ class StadiumSetupForm(forms.Form):
             "roof": profile.roof,
             "opened_year": profile.opened_year,
         }
+
+
+class TeamSetupForm(forms.Form):
+    """チームの作成・編集（名前・所属リーグ・本拠地・表示順）。本拠地は空欄でよい（本拠地なし）。
+
+    所属リーグと本拠地の選択肢は、登録画面の参照クエリの行（`SetupQuery.leagues()`・`stadiums()`。範囲のリーグと
+    球場だけ）から作る。**選択肢で絞るのは導線にすぎず**、ほかのワークスペースの id を止めるのはリポジトリの範囲の
+    検査（`LeagueNotFound`・`StadiumNotFound`）。ここで選択肢の外の値を弾くのは、その手前のフォームのエラー。
+
+    - 表示順は編集だけで入れる（作成はリーグの末尾。`with_display_order=False` で欄を外す）。
+    - 所属リーグを変えられないチーム（試合がある。`TeamSetupRow.league_change_blocker`）の編集は
+      `with_league=False` で欄を外す（POST に `league` があっても読まない）。
+    - 名前の空・長さ・重複、移す先の支配下選手の登録枠はドメインとリポジトリが検査し、ビューがこのフォームの
+      エラーにする。
+    """
+
+    name = forms.CharField(
+        label="チーム名",
+        max_length=TEAM_NAME_MAX_LENGTH,
+        widget=forms.TextInput(attrs={"class": "form-control"}),
+    )
+    league = forms.TypedChoiceField(
+        label="所属リーグ",
+        coerce=int,
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
+    home_stadium = forms.TypedChoiceField(
+        label="本拠地",
+        coerce=int,
+        required=False,
+        empty_value=None,
+        help_text="空欄なら本拠地なし。球場は「球場」のタブで作ります。",
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
+    display_order = forms.IntegerField(
+        label="表示順",
+        min_value=0,
+        max_value=MAX_STORED_INTEGER,
+        help_text="リーグの中で、小さいほど前に並びます。",
+        widget=forms.NumberInput(attrs={"class": "form-control"}),
+    )
+
+    def __init__(
+        self,
+        *args: Any,
+        leagues: Sequence[LeagueSetupRow],
+        stadiums: Sequence[StadiumSetupRow],
+        with_display_order: bool = True,
+        with_league: bool = True,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        cast(forms.TypedChoiceField, self.fields["league"]).choices = [
+            (league.league_id, league.name) for league in leagues
+        ]
+        cast(forms.TypedChoiceField, self.fields["home_stadium"]).choices = [("", "なし")] + [
+            (stadium.stadium_id, stadium.name) for stadium in stadiums
+        ]
+        if not with_display_order:
+            del self.fields["display_order"]
+        if not with_league:
+            del self.fields["league"]

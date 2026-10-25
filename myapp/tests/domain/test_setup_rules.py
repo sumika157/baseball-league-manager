@@ -2,7 +2,8 @@
 
 - 名前の検査（空でない・前後の空白を除く・長さの上限）は、作るときと `rename()` の両方で効く。
 - 消してよいか（`domain/setup.py`）は、消せるなら None、消せなければ日本語の理由。0件の境界で切り替わる。
-- 所属リーグの変更は、試合が1つも無いときだけ（2026-10-25 決定）。
+- 所属リーグの変更は、試合が1つも無いときだけ（2026-10-25 決定）。移す先の支配下選手の登録枠を超えるチームは
+  移せない（W3 T3）。
 """
 
 import unittest
@@ -15,7 +16,7 @@ from myapp.domain.entities import (
     Stadium,
     Team,
 )
-from myapp.domain.exceptions import DomainError, InvalidName, LeagueChangeLocked
+from myapp.domain.exceptions import DomainError, InvalidName, LeagueChangeLocked, RegisteredPlayerLimitExceeded
 from myapp.domain.setup import (
     ensure_league_change_allowed,
     league_change_blocker,
@@ -23,7 +24,7 @@ from myapp.domain.setup import (
     stadium_deletion_blocker,
     team_deletion_blocker,
 )
-from myapp.domain.value_objects import ForeignPlayerRules
+from myapp.domain.value_objects import ContractStatus, ForeignPlayerRules, JerseyNumber, Position, RosterLimits
 
 # 文言に出る対象の名前 → (名前だけで作る関数, 名前の長さの上限)
 KINDS = {
@@ -164,6 +165,46 @@ class LeagueChangeTest(unittest.TestCase):
         with self.assertRaisesRegex(LeagueChangeLocked, message):
             ensure_league_change_allowed(1)
         self.assertTrue(issubclass(LeagueChangeLocked, DomainError))
+
+
+class MoveToLeagueLimitTest(unittest.TestCase):
+    """移す先のリーグの支配下選手の登録枠を超えるチームは移せない（W3 T3）。育成は数えない。"""
+
+    def setUp(self):
+        self.team = Team(name="T", league_id=1, id=10)
+        for number in ("1", "2"):
+            self.team.add_player(
+                f"支配下{number}", JerseyNumber(number), Position.PITCHER, 2026, limits=RosterLimits.UNLIMITED
+            )
+        self.team.add_player(
+            "育成",
+            JerseyNumber("101"),
+            Position.PITCHER,
+            2026,
+            ContractStatus.DEVELOPMENTAL,
+            limits=RosterLimits.UNLIMITED,
+        )
+
+    def test_a_team_that_fits_the_new_leagues_limit_moves(self):
+        for limit in (2, None):
+            with self.subTest(limit=limit):
+                self.team.league_id = 1
+                self.team.move_to_league(2, limits=RosterLimits(registered=limit))
+                self.assertEqual(self.team.league_id, 2)
+
+    def test_a_team_over_the_new_leagues_limit_does_not_move(self):
+        message = (
+            "「T」の支配下選手（2人）が、移す先のリーグの支配下選手の登録枠（1人）を超えるため、"
+            "所属リーグを変えられません。"
+        )
+        with self.assertRaisesRegex(RegisteredPlayerLimitExceeded, message):
+            self.team.move_to_league(2, limits=RosterLimits(registered=1))
+        self.assertEqual(self.team.league_id, 1, "拒んだときは所属を変えない")
+
+    def test_staying_in_the_same_league_is_not_checked(self):
+        """今のリーグの枠を後から下げて超えているチームも、所属を変えない保存では咎めない。"""
+        self.team.move_to_league(1, limits=RosterLimits(registered=0))
+        self.assertEqual(self.team.league_id, 1)
 
 
 if __name__ == "__main__":
