@@ -46,7 +46,7 @@
   ペナント専用・実データ専用の組み立て口に違う種類の範囲を渡すと `InvalidWorld`（どれがどれかは `test_wiring.py` の分類が出典）。
 - **層をまたぐ受け渡しに素の `dict` を使わない。** application が presentation に返す形は `application/dto.py` の dataclass にする（文字列キーの dict は綴りを間違えても静的検査が黙る）。DTO に集約を包ませない。集約からの取り出しは application が担い、presentation は DTO を写すだけにする（前例: `application/game_edit.py` と `GameEditData`）。
 - **application のサービスは対象ごとに分けてある**（参照は `LeagueViewService`・`TeamViewService`・`GameViewService`、
-  更新は `RosterService`・`GameRecordingService`。#219）。対象の違うメソッドを既存のサービスに足す前に、別のサービスに置けないか考える。
+  更新は `RosterService`・`GameRecordingService`・`LeagueSetupService`。#219）。対象の違うメソッドを既存のサービスに足す前に、別のサービスに置けないか考える。
   参照のサービスに更新を足さない。分ける判断は選択肢としてユーザーに提示する。
 - **サイトの権限は `WorkspaceAccess`（持ち主・編集者・チーム担当・閲覧）だけで判定する。** 判定の材料は `workspace_view` が要求ごとに
   1回読む。`is_staff`・`is_superuser` は管理画面に入る条件にだけ使い、サイトの読み書きの判定に使わない。`WorkspaceAccess` は「そのチームを
