@@ -23,7 +23,7 @@ from enum import Enum
 
 from ..simulation.estimate import draw_growth_type, draw_potential, with_growth, with_potential
 from ..simulation.randomness import GameRandom, game_seed, game_uniform, make_random
-from ..simulation.ratings import AVERAGE_RATING, BatterRatings, PitcherRatings
+from ..simulation.ratings import AVERAGE_RATING, POTENTIAL_AVERAGE, BatterRatings, PitcherRatings
 from ..value_objects import (
     DEVELOPMENTAL_FIRST_NUMBERS,
     DEVELOPMENTAL_MIN_NUMBER,
@@ -64,6 +64,9 @@ FOREIGN_TARGET = ForeignPlayerRules.NPB.active or 0
 
 # 新人の能力の平均は経路ごと（`DraftRoute.rating_mean`）。標準偏差とスタミナの分布は `prospects.py`
 # （世界の作成で成績の無い選手＝2軍の層と同じ引き方）
+# 社会人の新人の能力の、入団の年齢の範囲の両端（23歳と26歳）の差（点。`DraftRoute.rating_mean_at`。#308 Q2）。
+# 平均 43 のまま 23歳 約41.3 → 26歳 約44.8（計画の「23歳 41.5 → 26歳 45」）
+CORPORATE_AGE_SPREAD = 3.5
 # 外国人の新人の年齢（満年齢）の範囲
 FOREIGN_AGE_RANGE = (25, 31)
 # 育成ドラフトで1球団が1年に迎える育成の上限（ドラフト会議の育成の巡の最多。#198 の一般化。GM の上限も同じ＝D3）。
@@ -92,6 +95,18 @@ class DraftRoute(Enum):
         """新人の能力の平均（錨の前）。ドラフト会議で指名される日本人の新人は、経路ごとにこの平均に合わせ込む
         （`draft_meeting.POOL_RATING_SHIFT`）。"""
         return _RATING_MEAN[self]
+
+    def rating_mean_at(self, age: int) -> float:
+        """`age` 歳で入る新人の能力の平均（錨の前）。
+
+        社会人だけ年齢で傾ける（#308 Q2。2026-10-25 ユーザー決定）: 入団の年齢の範囲（`CORPORATE_DEBUT_AGE_RANGE`）の
+        両端で `CORPORATE_AGE_SPREAD` 点違い、範囲の中央で経路の平均（`rating_mean`）になる（年齢は一様に引くので経路の
+        平均は変わらない）。年上ほど今の能力が高く、伸びる年が短い。ほかの経路は年齢が1つなので `rating_mean` のまま。
+        """
+        if self is not DraftRoute.CORPORATE:
+            return self.rating_mean
+        low, high = generator.CORPORATE_DEBUT_AGE_RANGE
+        return self.rating_mean + CORPORATE_AGE_SPREAD * (age - (low + high) / 2) / (high - low)
 
     @property
     def allows_development_pick(self) -> bool:
@@ -379,8 +394,8 @@ def draw_rookie(
     """新人ひとりぶんの名前・プロフィール・能力。乱数は名前 → 経歴 → 生年月日 → 体格 → 能力 → 成長型の順。
 
     `path` を渡すと日本人の経路をそれにする（省くと `AmateurPath.weight` で引く）。`rating_shift` は能力の平均を
-    経路の平均（`DraftRoute.rating_mean`）からずらす点、`rating_sd` は能力の標準偏差（どちらもドラフト会議の候補の
-    合わせ込み。`draft_meeting.py`）。
+    経路と年齢の平均（`DraftRoute.rating_mean_at`。社会人だけ年齢で傾く）からずらす点、`rating_sd` は能力の
+    標準偏差（どちらもドラフト会議の候補の合わせ込み。`draft_meeting.py`）。
     指名（`Profile.draft`）は持たない（会議の結果で付ける）。
     """
     if foreign:
@@ -399,7 +414,9 @@ def draw_rookie(
     birth_date = generator.birth_date_for(rng, age=age, as_of=date(year + 1, SEASON_START_MONTH, 1))
     throws, bats = generator.handedness(rng, position)
     height_cm, weight_kg = generator.physique(rng, position)
-    ratings = draw_prospect_ratings(rng, mean=route.rating_mean + rating_shift, position=position, sd=rating_sd)
+    ratings = draw_prospect_ratings(
+        rng, mean=route.rating_mean_at(age) + rating_shift, position=position, sd=rating_sd
+    )
     value = ratings.pitching_value if isinstance(ratings, PitcherRatings) else ratings.batting_value
     # 成長型は錨の前の能力の高さで傾ける（新人は平均より低く入るので、若いほど晩成に傾くのは意図どおり）
     growth = draw_growth_type(rng, age=age, strength=(value - AVERAGE_RATING) / STRENGTH_UNIT)
@@ -488,10 +505,13 @@ def _drafted_as_development(profile: Profile) -> bool:
     return draft is not None and draft.is_development
 
 
-def with_drawn_potential(rookie: Rookie, *, world_seed: int, year: int, key: str) -> Rookie:
+def with_drawn_potential(
+    rookie: Rookie, *, world_seed: int, year: int, key: str, mean: float = POTENTIAL_AVERAGE
+) -> Rookie:
     """新人に伸びしろを付ける。乱数は用途 `key` の専用の流れ（`draw_rookie` の乱数の流れに引く回数を足さない）。
 
-    外国人の新人（`club_draftees`）と会議の候補（`draft_meeting.py`）が通る。
+    外国人の新人（`club_draftees`。平均は普通の50）と会議の候補（`draft_meeting.py`。平均は合わせ込んだ
+    `POOL_POTENTIAL_MEAN`）が通る。
     """
-    potential = draw_potential(make_random(game_seed(world_seed, year, key)))
+    potential = draw_potential(make_random(game_seed(world_seed, year, key)), mean=mean)
     return replace(rookie, ratings=with_potential(rookie.ratings, potential))
