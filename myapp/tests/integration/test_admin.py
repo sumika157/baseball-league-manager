@@ -21,6 +21,7 @@ from ..helpers import (
     ws_url,
 )
 from .base import BaseCase
+from .test_workspace_isolation import snapshot_all_rows
 
 
 class AdminTest(BaseCase):
@@ -540,3 +541,275 @@ class AdminReadsEveryWorkspaceTest(BaseCase):
         response = self.client.post(f"/admin/myapp/game/{game_b.id}/change/", data, follow=True)
 
         self.assertContains(response, "収容人数（20,000人）を超えています")
+
+
+# --- 管理画面の削除と名前の検査をサイトの登録画面とそろえる（W3 T5。#79。2026-10-25 決定 3） ---
+
+
+def _admin_url(model, action, pk=None):
+    if pk is None:
+        return reverse(f"admin:myapp_{model}_{action}")
+    return reverse(f"admin:myapp_{model}_{action}", args=[pk])
+
+
+class SetupRulesDeletionTest(BaseCase):
+    """リーグ・チーム・球場の削除は、サイトの登録画面と同じ規則（`domain/setup.py`）で決まる。
+
+    消せない行は削除の導線（変更画面の「削除」）が出ず、削除画面を直接開いても・POST しても 403 で何も消えない。
+    一括削除は消せない行が1つでも含まれていれば何も消さず、理由を出す。空の行は消せる（消えるのはその1行だけ）。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(User.objects.create_superuser(username="root", password="x"))
+        self.empty_league = make_league("空のリーグ")
+        self.empty_team = orm_models.Team.objects.create(league=self.league, name="空のチーム")
+        self.empty_stadium = make_stadium("空の球場")
+
+    def _blocked_rows(self):
+        """消せない行（モデル, pk, 理由の一部）。"""
+        self.roster.register_player(self.team.id, "山田", 10, "内野手")  # 在籍
+        play_game(self.empty_team, self.rival)  # 試合（ホームもビジターも数える）
+        world = make_pennant_world("世界", seed=1, start_year=2026)
+        world_stadium = make_stadium("世界の本拠地")
+        orm_models.Team.objects.create(
+            league=make_league("世界のリーグ", world=world), name="世界の球団", home_stadium=world_stadium
+        )
+        return [
+            ("league", self.league.id, "このリーグにはチームが"),
+            ("team", self.team.id, "選手の在籍の記録が1件"),
+            ("team", self.rival.id, "試合が1試合"),
+            ("team", self.empty_team.id, "試合が1試合"),
+            ("stadium", self.stadium.id, "1チーム"),
+            ("stadium", world_stadium.id, "ペナントの世界の1球団"),
+        ]
+
+    def test_a_row_that_cannot_be_deleted_has_no_delete_link_and_its_delete_page_is_refused(self):
+        for model, pk, _ in self._blocked_rows():
+            with self.subTest(model=model, pk=pk):
+                delete_url = _admin_url(model, "delete", pk)
+                self.assertNotContains(self.client.get(_admin_url(model, "change", pk)), delete_url)
+                self.assertEqual(self.client.get(delete_url).status_code, 403)
+                before = snapshot_all_rows()
+
+                self.assertEqual(self.client.post(delete_url, {"post": "yes"}).status_code, 403)
+
+                self.assertEqual(snapshot_all_rows(), before)
+
+    def test_bulk_delete_with_a_row_that_cannot_be_deleted_deletes_nothing_and_says_why(self):
+        blocked = self._blocked_rows()
+        empties = {
+            "league": self.empty_league.id,
+            "team": orm_models.Team.objects.create(league=self.league, name="本当に空のチーム").id,
+            "stadium": self.empty_stadium.id,
+        }
+        for model, pk, reason in blocked:
+            with self.subTest(model=model, pk=pk):
+                before = snapshot_all_rows()
+
+                response = self.client.post(
+                    _admin_url(model, "changelist"),
+                    {"action": "delete_selected", "_selected_action": [pk, empties[model]], "post": "yes"},
+                    follow=True,
+                )
+
+                self.assertContains(response, "何も削除しませんでした")
+                self.assertContains(response, reason)
+                self.assertEqual(snapshot_all_rows(), before)
+
+    def test_an_empty_row_can_be_deleted_and_only_that_row_goes(self):
+        for model, row in (("league", self.empty_league), ("team", self.empty_team), ("stadium", self.empty_stadium)):
+            with self.subTest(model=model):
+                self.assertContains(
+                    self.client.get(_admin_url(model, "change", row.pk)), _admin_url(model, "delete", row.pk)
+                )
+                before = snapshot_all_rows()
+
+                response = self.client.post(_admin_url(model, "delete", row.pk), {"post": "yes"})
+
+                self.assertEqual(response.status_code, 302)
+                after = snapshot_all_rows()
+                table = type(row).__name__
+                self.assertEqual([r for r in before.pop(table) if r["id"] != row.pk], after.pop(table))
+                self.assertEqual(before, after)
+
+    def test_bulk_delete_of_empty_rows_deletes_them(self):
+        other = orm_models.Team.objects.create(league=self.league, name="もう1つの空のチーム")
+
+        response = self.client.post(
+            _admin_url("team", "changelist"),
+            {"action": "delete_selected", "_selected_action": [self.empty_team.id, other.id], "post": "yes"},
+            follow=True,
+        )
+
+        self.assertNotContains(response, "何も削除しませんでした")
+        self.assertFalse(orm_models.Team.objects.filter(id__in=[self.empty_team.id, other.id]).exists())
+        self.assertTrue(orm_models.Team.objects.filter(id=self.team.id).exists())
+
+    def test_a_team_with_a_captaincy_cannot_be_deleted(self):
+        player = orm_models.Player.objects.create(name="主将")
+        orm_models.Captaincy.objects.create(player=player, team=self.empty_team, from_year=2025)
+
+        self.assertEqual(self.client.get(_admin_url("team", "delete", self.empty_team.id)).status_code, 403)
+
+
+def _blank_if_none(value):
+    return "" if value is None else value
+
+
+def _league_change_data(league, rows):
+    """リーグの変更画面の POST（チームのインラインつき）。rows は行ごとの欄（`id`・`name`・`DELETE` など）。"""
+    data = {
+        "name": league.name,
+        "display_order": league.display_order,
+        "foreign_active_limit": _blank_if_none(league.foreign_active_limit),
+        "foreign_active_pitcher_limit": _blank_if_none(league.foreign_active_pitcher_limit),
+        "foreign_active_batter_limit": _blank_if_none(league.foreign_active_batter_limit),
+        "registered_player_limit": _blank_if_none(league.registered_player_limit),
+        "teams-TOTAL_FORMS": len(rows),
+        "teams-INITIAL_FORMS": sum(1 for row in rows if row.get("id")),
+        "teams-MIN_NUM_FORMS": 0,
+        "teams-MAX_NUM_FORMS": 1000,
+    }
+    for index, row in enumerate(rows):
+        values = {"id": "", "display_order": 0, "home_stadium": "", "league": league.id} | row
+        data |= {f"teams-{index}-{key}": value for key, value in values.items()}
+    return data
+
+
+class TeamInlineSetupRulesTest(BaseCase):
+    """リーグの変更画面のチームのインラインも、チームの変更画面と同じ規則（削除・名前の一意）で検査する。"""
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(User.objects.create_superuser(username="root", password="x"))
+        self.roster.register_player(self.team.id, "山田", 10, "内野手")  # team は消せない、rival は空
+
+    def _rows(self, team=None, rival=None):
+        """既存の2行（team・rival）。引数はその行に上書きする欄。"""
+        return [
+            {"id": row.id, "name": row.name, "home_stadium": _blank_if_none(row.home_stadium_id)} | (extra or {})
+            for row, extra in ((self.team, team), (self.rival, rival))
+        ]
+
+    def _post(self, rows):
+        return self.client.post(_admin_url("league", "change", self.league.id), _league_change_data(self.league, rows))
+
+    def test_the_delete_box_is_shown_only_for_teams_that_can_be_deleted(self):
+        response = self.client.get(_admin_url("league", "change", self.league.id))
+        formset = response.context["inline_admin_formsets"][0].formset
+        boxes = {form.instance.pk: form.fields["DELETE"].widget.input_type for form in formset.initial_forms}
+
+        self.assertEqual(boxes, {self.team.id: "hidden", self.rival.id: "checkbox"})
+
+    def test_a_forged_delete_of_a_team_that_cannot_be_deleted_is_refused(self):
+        before = snapshot_all_rows()
+
+        response = self._post(self._rows(team={"DELETE": "on"}))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "選手の在籍の記録が1件")
+        self.assertEqual(snapshot_all_rows(), before)
+
+    def test_an_empty_team_can_be_deleted_from_the_inline(self):
+        response = self._post(self._rows(rival={"DELETE": "on"}))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(orm_models.Team.objects.filter(id=self.rival.id).exists())
+        self.assertTrue(orm_models.Team.objects.filter(id=self.team.id).exists())
+
+    def test_a_new_row_or_a_rename_to_a_name_taken_in_the_workspace_is_a_form_error(self):
+        other = orm_models.Team.objects.create(league=make_league("別のリーグ"), name="別リーグのチーム")
+        cases = {
+            "新しい行が同じリーグのチームと同じ名前": [*self._rows(), {"name": "テストチーム"}],
+            "改名が同じリーグのチームと同じ名前": self._rows(rival={"name": "テストチーム"}),
+            "新しい行がほかのリーグのチームと同じ名前": [*self._rows(), {"name": other.name}],
+            "新しい行どうしが同じ名前": [*self._rows(), {"name": "新チーム"}, {"name": "新チーム"}],
+        }
+        for label, rows in cases.items():
+            with self.subTest(label):
+                before = snapshot_all_rows()
+
+                response = self._post(rows)
+
+                self.assertEqual(response.status_code, 200)
+                self.assertContains(response, "がすでにあります")
+                self.assertEqual(snapshot_all_rows(), before)
+
+    def test_names_that_do_not_collide_are_saved(self):
+        league_b = make_league("B のリーグ", workspace=make_workspace(name="別ワークスペース"))
+        orm_models.Team.objects.create(league=league_b, name="B のチーム")
+        # 入れ替え（保存した後は重ならない）と、ほかのワークスペースにある名前
+        rows = [*self._rows(team={"name": "相手チーム"}, rival={"name": "テストチーム"}), {"name": "B のチーム"}]
+
+        response = self._post(rows)
+
+        self.assertEqual(response.status_code, 302)
+        self.team.refresh_from_db()
+        self.assertEqual(self.team.name, "相手チーム")
+        self.assertEqual(orm_models.Team.objects.filter(name="B のチーム").count(), 2)
+
+
+class TeamFormSetupRulesTest(BaseCase):
+    """チームの追加・変更画面のチーム名の一意と所属リーグの変更は、サイトの登録画面と同じ規則。"""
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(User.objects.create_superuser(username="root", password="x"))
+        self.other_league = make_league("別のリーグ")
+
+    def _data(self, **overrides):
+        return {"league": self.league.id, "name": "新チーム", "display_order": 0, "home_stadium": ""} | overrides
+
+    def test_a_name_taken_in_the_workspace_is_a_form_error(self):
+        cases = {
+            "追加": (_admin_url("team", "add"), self._data(name="相手チーム", league=self.other_league.id)),
+            "改名": (_admin_url("team", "change", self.team.id), self._data(name="相手チーム")),
+        }
+        for label, (url, data) in cases.items():
+            with self.subTest(label):
+                before = snapshot_all_rows()
+
+                response = self.client.post(url, data)
+
+                self.assertEqual(response.status_code, 200)
+                self.assertFormError(
+                    response.context["adminform"].form, "name", "同じ名前のチーム「相手チーム」がすでにあります。"
+                )
+                self.assertEqual(snapshot_all_rows(), before)
+
+    def test_the_same_name_in_another_workspace_and_an_unchanged_name_are_saved(self):
+        league_b = make_league("B のリーグ", workspace=make_workspace(name="別ワークスペース"))
+
+        added = self.client.post(_admin_url("team", "add"), self._data(name="相手チーム", league=league_b.id))
+        kept = self.client.post(
+            _admin_url("team", "change", self.team.id), self._data(name="テストチーム", display_order=5)
+        )
+
+        self.assertEqual((added.status_code, kept.status_code), (302, 302))
+        self.assertTrue(orm_models.Team.objects.filter(name="相手チーム", league=league_b).exists())
+
+    def test_a_team_with_games_cannot_change_its_league(self):
+        play_game(self.team, self.rival)
+        before = snapshot_all_rows()
+
+        response = self.client.post(
+            _admin_url("team", "change", self.team.id), self._data(name="テストチーム", league=self.other_league.id)
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFormError(
+            response.context["adminform"].form,
+            "league",
+            "このチームには試合が1試合あるため、所属リーグを変えられません。",
+        )
+        self.assertEqual(snapshot_all_rows(), before)
+
+    def test_a_team_without_games_can_change_its_league(self):
+        response = self.client.post(
+            _admin_url("team", "change", self.team.id), self._data(name="テストチーム", league=self.other_league.id)
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.team.refresh_from_db()
+        self.assertEqual(self.team.league_id, self.other_league.id)

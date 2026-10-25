@@ -330,8 +330,8 @@ class DjangoTeamRepository:
                 # 数え方は一覧（`TeamSetupRow.league_change_blocker`）と同じ注釈（`team_game_count`）
                 counts = usage_counts(teams_in(self._scope).filter(id=team.id), {"game_count": team_game_count()})
                 ensure_league_change_allowed(counts["game_count"] if counts else 0)
-        if renamed and _name_taken(teams_in(self._scope), team.name, team.id):
-            raise DuplicateName(f"同じ名前のチーム「{team.name}」がすでにあります。")
+        if renamed:
+            ensure_team_name_free(teams_in(self._scope), team.name, team.id)
         if (
             stadium_changed
             and team.home_stadium_id is not None
@@ -1536,6 +1536,22 @@ def _name_taken(rows: QuerySet[Any], name: str, own_id: int | None) -> bool:
     if own_id is not None:
         same = same.exclude(id=own_id)
     return same.exists()
+
+
+def duplicate_team_name(name: str) -> DuplicateName:
+    """チーム名の重複の例外（文言の出典）。"""
+    return DuplicateName(f"同じ名前のチーム「{name}」がすでにあります。")
+
+
+def ensure_team_name_free(teams: QuerySet[orm_models.Team], name: str, own_id: int | None) -> None:
+    """`teams`（範囲の実データのチーム）に、自分（`own_id`）以外で同じ名前のチームがあれば `DuplicateName`。
+
+    チーム名の一意（ワークスペースの中。W3 #79）の検査の**出典はここだけ**で、`DjangoTeamRepository.save` と
+    管理画面のチームのフォーム（`admin.TeamForm`・リーグの変更画面のインライン）が同じ関数を通す。
+    チームの帰属はリーグ経由なので DB の一意制約では書けない。
+    """
+    if _name_taken(teams, name, own_id):
+        raise duplicate_team_name(name)
 
 
 def _violates_unique(error: IntegrityError, model: type[models.Model], constraint_names: Sequence[str]) -> bool:
