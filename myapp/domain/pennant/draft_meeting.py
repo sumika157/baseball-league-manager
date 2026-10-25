@@ -67,7 +67,9 @@ from .draft import (
     TeamDraftPlan,
     club_draftees,
     draw_rookie,
+    keeps_position_minimum,
     plan_team_draft,
+    position_shortfall,
     with_drawn_potential,
 )
 from .draft_order import DraftOrderRule, DraftOrderStrategy, DraftStandings, strategy_for
@@ -664,18 +666,17 @@ class DraftState:
         counts.update(self._positions.get(team_id, Counter()))
         if position is not None:
             counts[position] += 1
-        return sum(max(0, minimum - counts[pos]) for pos, minimum in MIN_BY_POSITION.items())
+        return position_shortfall(counts)
 
     def position_allowed(self, team_id: int, position: Position) -> bool:
-        """位置の最低人数の硬い制約（AI も GM も）。足りない位置はいつでも選べ、ほかの位置は、残りの指名で
-        最低人数に届く間だけ選べる（今までの自動ドラフト `choose_positions` が守っていた保証）。
+        """位置の最低人数の硬い制約（AI も GM も。規則は `draft.keeps_position_minimum`）。
         育成の巡はどの位置も選べる（位置の最低人数は支配下の話）。"""
         if self.is_development:
             return True
-        before = self.shortfall_after(team_id, None)
-        after = self.shortfall_after(team_id, position)
+        counts = Counter(self.slots[team_id].base_counts)
+        counts.update(self._positions.get(team_id, Counter()))
         remaining = self.slots[team_id].maximum - self._picked[team_id] - 1
-        return after < before or after <= remaining
+        return keeps_position_minimum(counts, position, remaining)
 
     # --- 1手ずつ進める ---
 
