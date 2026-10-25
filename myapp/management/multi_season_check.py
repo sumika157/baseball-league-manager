@@ -24,6 +24,7 @@ from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
 from myapp.domain.pennant.fork import with_birth_date
 from myapp.domain.pennant.initial_ratings import age_at_season_start
 from myapp.domain.pennant.offseason import OffseasonClub, OffseasonPlan, OffseasonPlayer, plan_offseason
+from myapp.domain.pennant.offseason_player import overall_value
 from myapp.domain.pennant.ratings import PlayerRatings
 from myapp.domain.pennant.retirement import PlayingTime
 from myapp.domain.pennant.schedule import ScheduleRules
@@ -59,7 +60,7 @@ class Member:
     number: str
     joined_year: int
     ratings: PlayerRatings
-    # 今の契約区分（分岐元の `Stint.contract_now`。新人は支配下）。育成は1軍の候補に入れない
+    # 今の契約区分（分岐元の `Stint.contract_now`。新人は `Draftee.contract`）。育成は1軍の候補に入れない
     contract: ContractStatus
 
 
@@ -206,7 +207,7 @@ def apply_plan(members: Sequence[Member], plan: OffseasonPlan) -> list[Member]:
                 number=draftee.number,
                 joined_year=plan.year + 1,
                 ratings=PlayerRatings(player_id, plan.year + 1, draftee.ratings),
-                contract=ContractStatus.REGISTERED,
+                contract=draftee.contract,
             )
         )
     return kept
@@ -224,9 +225,16 @@ def format_population(members: Sequence[Member], year: int) -> str:
     """現役の年齢の分布（開幕日=4月1日の満年齢）。"""
     ages = [age for m in members if (age := age_at_season_start(m.profile, year)) is not None]
     foreign = sum(1 for m in members if m.profile.is_foreign_player)
-    sizes = [sum(1 for m in members if m.team_id == team_id) for team_id in {m.team_id for m in members}]
+    team_ids = {m.team_id for m in members}
+    sizes = [sum(1 for m in members if m.team_id == team_id) for team_id in team_ids]
+    development = [
+        sum(1 for m in members if m.team_id == team_id and m.contract is ContractStatus.DEVELOPMENTAL)
+        for team_id in team_ids
+    ]
     return (
-        f"現役 {len(members)}人（1球団 {min(sizes)}〜{max(sizes)}人・外国人 {foreign}人）  "
+        f"現役 {len(members)}人（1球団 {min(sizes)}〜{max(sizes)}人・外国人 {foreign}人・"
+        f"育成 {sum(development)}人＝1球団 {min(development)}〜{max(development)}人・"
+        f"平均 {_mean(development):.1f}人）  "
         f"年齢 平均 {fmean(ages):.1f}・標準偏差 {pstdev(ages):.1f}・"
         f"35歳以上 {sum(1 for a in ages if a >= 35) / len(ages):.1%}・"
         f"22歳以下 {sum(1 for a in ages if a <= 22) / len(ages):.1%}"
@@ -247,16 +255,27 @@ def format_offseason(plan: OffseasonPlan, members: Sequence[Member], year: int) 
     deltas = [change.delta for change in plan.retained]
     routes: dict[str, int] = {}
     for draftee in plan.draftees:
-        routes[draftee.route.label] = routes.get(draftee.route.label, 0) + 1
+        if not draftee.is_development:
+            routes[draftee.route.label] = routes.get(draftee.route.label, 0) + 1
+    development = [draftee for draftee in plan.draftees if draftee.is_development]
+    development_routes: dict[str, int] = {}
+    for draftee in development:
+        development_routes[draftee.route.label] = development_routes.get(draftee.route.label, 0) + 1
+    registered_values = [overall_value(d.ratings) for d in plan.draftees if not d.is_development and not d.is_foreign]
+    development_values = [overall_value(d.ratings) for d in development]
     return "\n".join(
         [
             f"  引退 {len(plan.retired)}人（うち外国人 {foreign_retired}人・平均 {_mean(ages):.1f}歳）  "
             f"戦力外 {len(plan.released)}人（うち外国人 {foreign_released}人・平均 {_mean(released_ages):.1f}歳）  "
-            f"新人 {len(plan.draftees)}人（{'・'.join(f'{k} {v}' for k, v in routes.items())}）  "
+            f"新人 {len(plan.draftees) - len(development)}人（{'・'.join(f'{k} {v}' for k, v in routes.items())}）  "
             f"入れ替わり {(len(plan.retired) + len(plan.released)) / max(1, len(members)):.1%}",
+            f"  育成ドラフト {len(development)}人（{'・'.join(f'{k} {v}' for k, v in development_routes.items())}）  "
+            f"総合（錨の後）の平均: 本指名の日本人 {_mean(registered_values):.1f}・"
+            f"育成 {_mean(development_values):.1f}",
             f"  能力の変化（総合値）平均 {_mean(deltas):+.2f}・標準偏差 {pstdev(deltas) if deltas else 0.0:.2f}・"
             f"最大 {max(deltas, default=0.0):+.1f}・最小 {min(deltas, default=0.0):+.1f}",
-            f"  ドラフト: 1位の競合 {sum(1 for lot in plan.lotteries if lot.round_number == 1)}件"
+            f"  ドラフト: 1位の競合 "
+            f"{sum(1 for lot in plan.lotteries if lot.round_number == 1 and not lot.is_development)}件"
             f"（最多 {max((len(lot.bidders) for lot in plan.lotteries), default=0)}球団）",
             f"  錨の補正（前の分布の目標からのずれ）平均 最大 {plan.anchor.mean_shift:.2f} 点"
             f"（{plan.anchor.mean_item} {plan.anchor.mean_signed:+.2f}）・標準偏差 最大 {plan.anchor.sd_shift:.2f} 点",

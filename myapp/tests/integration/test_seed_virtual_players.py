@@ -14,11 +14,10 @@ from django.core.management.base import CommandError
 from django.test import SimpleTestCase
 
 from myapp.domain.entities import ensure_draft_fits_career
-from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND, RegisteredBand
+from myapp.domain.pennant.roster import DEVELOPMENT_BAND, OPENING_REGISTERED_BAND, RegisteredBand
 from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import AcquisitionRoute, ContractStatus
 from myapp.domain.virtual_players import generator
-from myapp.domain.virtual_players.generator import DEVELOPMENTAL_RANGE
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoTeamRepository
 from myapp.management.commands import seed_virtual_players
@@ -76,7 +75,7 @@ class SeedRosterTest(BaseCase):
             with self.subTest(team=team.name):
                 # 支配下はペナントの開幕前の帯（出典を共有する）、育成は投入の範囲
                 self.assertTrue(OPENING_REGISTERED_BAND.low <= len(registered) <= OPENING_REGISTERED_BAND.high)
-                self.assertTrue(DEVELOPMENTAL_RANGE[0] <= len(developmental) <= DEVELOPMENTAL_RANGE[1])
+                self.assertTrue(DEVELOPMENT_BAND.low <= len(developmental) <= DEVELOPMENT_BAND.high)
         # 既存の選手と在籍には手を付けない（追加専用）
         self.original.refresh_from_db()
         self.assertEqual(self.original.name, "藤井健吾")
@@ -156,7 +155,7 @@ class SeedRosterTest(BaseCase):
             registered, developmental = split_by_contract(team)
             with self.subTest(team=team.name):
                 self.assertTrue(OPENING_REGISTERED_BAND.low <= len(registered) <= OPENING_REGISTERED_BAND.high)
-                self.assertTrue(DEVELOPMENTAL_RANGE[0] <= len(developmental) <= DEVELOPMENTAL_RANGE[1])
+                self.assertTrue(DEVELOPMENT_BAND.low <= len(developmental) <= DEVELOPMENT_BAND.high)
 
     def test_profile_is_consistent_with_birth_date_and_stint(self):
         run()
@@ -459,7 +458,7 @@ class LargestRemainderTest(SimpleTestCase):
 
     def test_allocation_sums_to_total(self):
         ratios = generator.POSITION_RATIOS
-        for total in range(DEVELOPMENTAL_RANGE[0], OPENING_REGISTERED_BAND.high + 1):
+        for total in range(DEVELOPMENT_BAND.low, OPENING_REGISTERED_BAND.high + 1):
             with self.subTest(total=total):
                 allocation = generator.largest_remainder(total, ratios)
                 self.assertEqual(sum(allocation.values()), total)

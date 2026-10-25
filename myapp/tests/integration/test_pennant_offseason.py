@@ -28,7 +28,7 @@ from myapp.domain.pennant.club_plan import ClubPlan, LineupChoice, PlanSection
 from myapp.domain.pennant.schedule import AdvanceTarget
 from myapp.domain.pennant.season import SeasonPhase, season_phase, season_year
 from myapp.domain.pennant.world import WorldScope
-from myapp.domain.value_objects import FieldingPosition
+from myapp.domain.value_objects import ContractStatus, FieldingPosition
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoSimulationContextQuery
 from myapp.infrastructure.repositories import DjangoClubPlanRepository, DjangoFixtureRepository, DjangoWorldRepository
@@ -364,7 +364,15 @@ class AdvanceAfterCloseTest(ClosedSeasonCase):
         in_context = {player.player_id for team in context for player in team.players}
         rookies = set(active_stints(self.world_a).filter(from_year=YEAR + 1).values_list("player_id", flat=True))
         self.assertEqual(len(rookies), result.draftee_count)
-        self.assertTrue(rookies <= in_context)
+        # 育成ドラフトの新人は試合に出ない（材料に入るのは支配下の新人だけ。#198 D2）
+        registered = set(
+            active_stints(self.world_a)
+            .filter(from_year=YEAR + 1, signed_as=ContractStatus.REGISTERED.value)
+            .values_list("player_id", flat=True)
+        )
+        self.assertEqual(len(rookies - registered), result.development_draftee_count)
+        self.assertTrue(registered <= in_context)
+        self.assertFalse((rookies - registered) & in_context)
         self.assertEqual(
             set(ratings_of(self.world_a, YEAR + 1).values_list("player_id", flat=True)) & rookies, rookies
         )

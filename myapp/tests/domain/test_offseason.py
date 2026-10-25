@@ -84,6 +84,11 @@ def plan(clubs: list[OffseasonClub], seed: int = 1):
     )
 
 
+def registered_rookies(result: OffseasonPlan) -> list[draft.Draftee]:
+    """支配下で入る新人（本指名と外国人。育成ドラフトの新人を除く）。"""
+    return [draftee for draftee in result.draftees if not draftee.is_development]
+
+
 class DraftDoesNotMoveDeparturesTest(unittest.TestCase):
     """会議（#198）は引退・戦力外の後に、別の乱数で行う。規則を変えても引退・戦力外する選手は変わらない。"""
 
@@ -166,10 +171,10 @@ class PlanTest(unittest.TestCase):
         ]
         result = plan(clubs)
         for team_id, members in ((1, range(1, 31)), (2, range(101, 131))):
-            draftees = [d for d in result.draftees if d.team_id == team_id]
+            draftees = [d for d in result.draftees if d.team_id == team_id and not d.is_development]
             self.assertEqual(len(draftees), draft.MAX_DRAFTEES, "支配下30人以下は1年の上限まで")
             stay = {m for m in members if m not in result.retired}
-            numbers = [d.number for d in draftees]
+            numbers = [d.number for d in result.draftees if d.team_id == team_id]
             self.assertEqual(len(numbers), len(set(numbers)))
             self.assertFalse(set(numbers) & stay)
         self.assertEqual(len({d.name for d in result.draftees}), len(result.draftees))
@@ -212,8 +217,8 @@ class RegisteredOnlyDraftTest(unittest.TestCase):
         players = [*(player(i) for i in range(1, 56)), *(self.developmental(i) for i in range(101, 112))]
         result = plan([club(*players)])
         registered = self.remaining_registered(result, players)
-        self.assertEqual(len(result.draftees), draft.draftee_count(registered, registered_limit=70))
-        self.assertGreater(len(result.draftees), 0)
+        self.assertEqual(len(registered_rookies(result)), draft.draftee_count(registered, registered_limit=70))
+        self.assertGreater(len(registered_rookies(result)), 0)
 
     def test_a_developmental_catcher_does_not_fill_the_catcher_need(self) -> None:
         players = [
@@ -229,8 +234,8 @@ class RegisteredOnlyDraftTest(unittest.TestCase):
         players = [player(i) for i in range(1, 41)]
         result = plan([club(*players, registered_limit=42)])
         registered = self.remaining_registered(result, players)
-        self.assertEqual(len(result.draftees), draft.draftee_count(registered, registered_limit=42))
-        self.assertLessEqual(registered + len(result.draftees), 42)
+        self.assertEqual(len(registered_rookies(result)), draft.draftee_count(registered, registered_limit=42))
+        self.assertLessEqual(registered + len(registered_rookies(result)), 42)
 
     def test_a_club_over_the_band_gets_no_draftee(self) -> None:
         """実データから写した支配下が多い球団（帯の上端を超える）は、引退で減っても上端までしか迎えない。"""
@@ -238,13 +243,15 @@ class RegisteredOnlyDraftTest(unittest.TestCase):
         result = plan([club(*players, registered_limit=None)])
         remaining = self.remaining_registered(result, players)
         self.assertGreater(remaining, OPENING_REGISTERED_BAND.high, "前提: 引退の後も上端を超える")
-        self.assertEqual(result.draftees, ())
+        self.assertEqual(registered_rookies(result), [])
 
     def test_rookies_join_as_draft_or_new_foreign_player(self) -> None:
         result = plan([club(*(player(i) for i in range(1, 31)))])
         self.assertTrue(result.draftees)
         for draftee in result.draftees:
             expected = AcquisitionRoute.NEW_FOREIGN if draftee.is_foreign else AcquisitionRoute.DRAFT
+            if draftee.is_development:
+                expected = AcquisitionRoute.DEVELOPMENTAL_DRAFT
             self.assertIs(draftee.acquisition_route, expected)
         self.assertTrue(any(d.is_foreign for d in result.draftees), "前提: 外国人の新人がいる")
 
