@@ -4,8 +4,10 @@
 戦略（`draft_order.py`）が決め、ここは規則を知らない。
 
 - **候補**は会議の年ごとに、世界のシード・年・世界の全選手の名前から決定的に作る（`draw_pool`。保存しない）
-- 候補の本当の能力は見せない。各球団は**スカウトの推定**（`scouting_report`。項目ごとに誤差を足して5刻み・成長型なし）
-  で見比べる。誤差は「世界・年・候補・見る球団」で決まるので、球団ごとに見立てが違う
+- 候補の本当の能力は見せない。各球団は**スカウトの推定**（`scouting_report` の `ScoutingReport`。項目ごとと
+  伸びしろに誤差を足して5刻み・成長型なし）で見比べる。誤差は「世界・年・候補・見る球団」で決まるので、球団ごとに見立てが違う
+- **見込み**（#308 P2）: `PEAK_AGE` 歳までの伸びの見込みは `projected_growth`（普通型の伸び × 推定の伸びしろの倍率）が
+  唯一の出典で、将来値（`future_value`）・1位の好み（`DraftTaste.evaluate`）・見込みの区分（`projected_grade`）が使う
 - 会議の状態（`DraftState`）は、行動（入札・指名・選択終了。`DraftAction`）の並びと設定（規則・人数の幅・候補）から
   **導く**。「いまの巡」「次の番」は持たない（同じ行動の並びなら、何度作り直しても同じ状態になる）
 - 入札の巡は、入札がそろったところで抽選まで解く（重複は1球団だけ当たり、外れた球団は同じ巡で再入札）。
@@ -45,7 +47,16 @@ from functools import cache
 
 from ..exceptions import InvalidDraftAction
 from ..simulation.randomness import GameRandom, game_seed, make_random, weighted_index
-from ..simulation.ratings import RATING_MAX, RATING_MIN, BatterRatings, GrowthType, PitcherRatings
+from ..simulation.ratings import (
+    POTENTIAL_AVERAGE,
+    RATING_MAX,
+    RATING_MIN,
+    BatterRatings,
+    GrowthType,
+    PitcherRatings,
+    Potential,
+    RatingGrade,
+)
 from ..simulation.samples import BATTER_MEAN, PITCHER_MEAN, mean_ratings
 from ..value_objects import DraftPick, Position
 from ..virtual_players import generator
@@ -79,19 +90,29 @@ POOL_MIN_PER_POSITION = 4
 # **指名された日本人の新人**の錨の前の平均が経路ごとに今までの値（35/40/43）、経路の割合が今までの割合（30/50/20）、
 # 標準偏差が今までの値（6）に近くなるよう、定常状態の実測で決めた値（`test_offseason_population.py` が見張る。
 # 実測は Wiki「ペナントモードの仕組み」の「実測値」）。会議は候補の上の方から取るので、候補の平均は新人より低い
-POOL_ROUTE_WEIGHTS = {AmateurPath.HIGH_SCHOOL: 12.5, AmateurPath.UNIVERSITY: 79.5, AmateurPath.CORPORATE: 59.5}
+# #308 P2 で AI が伸びしろの推定を見るようになり、社会人の能力を年齢で傾けたので合わせ直した
+POOL_ROUTE_WEIGHTS = {AmateurPath.HIGH_SCHOOL: 14.0, AmateurPath.UNIVERSITY: 65.0, AmateurPath.CORPORATE: 72.0}
 # 候補の能力の標準偏差（新人の `prospects.PROSPECT_RATING_SD` 6 より広い。会議が上から取ると散らばりが狭くなるため）
 POOL_RATING_SD = 6.75
 # 投手の候補だけに足すずらし（投手は見比べる項目が3つで野手の5つより総合が散らばり、上から取ると野手より高く出るため）
 POOL_PITCHER_SHIFT = -1.4
-POOL_RATING_SHIFT = {AmateurPath.HIGH_SCHOOL: -0.1, AmateurPath.UNIVERSITY: -4.3, AmateurPath.CORPORATE: -5.4}
+POOL_RATING_SHIFT = {AmateurPath.HIGH_SCHOOL: -0.1, AmateurPath.UNIVERSITY: -3.5, AmateurPath.CORPORATE: -5.6}
+# 候補の伸びしろの平均（#308 P2）。AI は推定の伸びしろの大きい候補を上に見るので、指名された新人の伸びしろは候補より
+# 高く出る。**指名された日本人の新人**の倍率の平均が約1.0（年齢曲線を引き直さずに平衡を保つ条件）になるよう、
+# 上の合わせ込みと同じ定常状態の実測で決めた値。標準偏差と範囲は事前の分布
+# （`estimate.POTENTIAL_SD`・`POTENTIAL_RANGE`）
+POOL_POTENTIAL_MEAN = 45.0
 # スカウトの推定の誤差（項目ごとの標準偏差。点）と、推定を丸める刻み。誤差の大きさは球団ごとに変えられる形にしておく
 # （#208 のスカウトへの投資でつなぐ。`ScoutingAccuracy`）
 SCOUT_SD = 4.0
 SCOUT_STEP = 5
+# 伸びしろの推定の誤差（標準偏差。点。#308 P2）。今の能力（`SCOUT_SD`）より大きい
+# （伸びしろは試合で見えず、見立てが外れやすい）
+POTENTIAL_SCOUT_SD = 10.0
 # AI の評価: 将来値 + NEED_WEIGHT × その位置の残りの人数（計画した位置のうち、まだ指名していない数）
 NEED_WEIGHT = 2.0
-# 将来値は、この年齢になるまでの普通型の伸び（`aging.expected_change` の積み上げ）を足した総合値
+# 将来値は、この年齢になるまでの見込みの伸び（普通型の伸び＝`aging.expected_change` の積み上げ × 推定の伸びしろの
+# 倍率。`projected_growth`）を足した総合値
 PEAK_AGE = 27
 # 1位の好み（`DraftTaste`。#302）の幅。球団の色は、経路の加点（球団の中で平均0にそろえる前に ±TASTE_ROUTE 点）・
 # 伸びの重み（1 ± TASTE_GROWTH）・投手への加点（±TASTE_PITCHER 点）で、どれも一様。候補ひとりずつへの惚れ込みは
@@ -208,8 +229,8 @@ def _draw_prospect(
     used_names: set[str],
     development: bool = False,
 ) -> Prospect:
-    """候補ひとり。伸びしろは候補の番号ごとの乱数（`draft-potential-<番号>`）から引く（`rng` の流れに足さない
-    ので、名前・経歴・今の能力・成長型は伸びしろを足す前と同じ）。いまの AI は伸びしろを見ない（推定は #308 の P2）。
+    """候補ひとり。伸びしろは候補の番号ごとの乱数（`draft-potential-<番号>`）から、平均 `POOL_POTENTIAL_MEAN` で引く
+    （`rng` の流れに足さないので、名前・経歴・今の能力・成長型は伸びしろを足す前と同じ）。
     """
     if path is None:
         allowed = DraftRoute.development_amateur_paths() if development else tuple(AmateurPath)
@@ -225,7 +246,9 @@ def _draw_prospect(
         rating_shift=POOL_RATING_SHIFT[path] + (POOL_PITCHER_SHIFT if position.is_pitcher else 0.0),
         rating_sd=POOL_RATING_SD,
     )
-    rookie = with_drawn_potential(rookie, world_seed=world_seed, year=year, key=f"draft-potential-{key}")
+    rookie = with_drawn_potential(
+        rookie, world_seed=world_seed, year=year, key=f"draft-potential-{key}", mean=POOL_POTENTIAL_MEAN
+    )
     age = rookie.profile.age(date(year + 1, SEASON_START_MONTH, 1))
     assert age is not None, "候補は生年月日を持つ"
     return Prospect(key=key, rookie=rookie, age=age)
@@ -257,9 +280,23 @@ def draw_pool(
 
 @dataclass(frozen=True)
 class ScoutingAccuracy:
-    """スカウトの推定の精度（誤差の標準偏差）。いまは全球団 `SCOUT_SD`。#208 で球団ごとの値をここに渡す。"""
+    """スカウトの推定の精度（誤差の標準偏差）。今の能力の項目は `sd`、伸びしろは `potential_sd`。
+    いまは全球団 `SCOUT_SD`・`POTENTIAL_SCOUT_SD`。#208 で球団ごとの値をここに渡す。"""
 
     sd: float = SCOUT_SD
+    potential_sd: float = POTENTIAL_SCOUT_SD
+
+
+@dataclass(frozen=True)
+class ScoutingReport:
+    """球団のスカウトが見た候補（`scouting_report`）。
+
+    - `ratings`: 今の能力の推定（5刻み。成長型は普通、伸びしろは持たない＝隠し値は見せない）
+    - `potential`: 伸びしろの推定（5刻み）。見込み（`projected_growth`）に使う
+    """
+
+    ratings: Ratings
+    potential: Potential
 
 
 _NOISE_WORDS = struct.Struct(">16I")
@@ -267,7 +304,9 @@ _TWO_PI = 2.0 * math.pi
 
 
 def _scout_noise(world_seed: int, year: int, team_id: int, key: int, count: int) -> list[float]:
-    """推定の誤差（標準正規）を `count` 個（8個まで）。種は「世界・年・候補・見る球団」。"""
+    """推定の誤差（標準正規）を `count` 個（8個まで）。種は「世界・年・候補・見る球団」。
+
+    添字ごとに決まる（`count` を増やしても前の添字の値は変わらない）。"""
     return _hash_normals(f"{world_seed}:{year}:draft-scout-{team_id}-{key}", count)
 
 
@@ -300,32 +339,41 @@ def scouting_report(
     world_seed: int,
     year: int,
     accuracy: ScoutingAccuracy = ScoutingAccuracy(),  # noqa: B008  不変の値（frozen）なので既定値に置いてよい
-) -> Ratings:
-    """球団 `team_id` のスカウトが見た候補の能力。項目ごとに真の値 + N(0, 精度) を5刻みに丸める。
+) -> ScoutingReport:
+    """球団 `team_id` のスカウトが見た候補。項目ごとに真の値 + N(0, `accuracy.sd`)、伸びしろは
+    真の値 + N(0, `accuracy.potential_sd`) を、どれも5刻みに丸める。
 
-    成長型は普通（見せない）。
+    誤差は項目の宣言の順に引き、伸びしろはその次の添字（伸びしろを足す前と、今の項目の推定は変わらない）。
+    推定の能力は成長型が普通で伸びしろを持たない（隠し値を見せない）。伸びしろの無い候補（ふつうは無い）は普通として見る。
     """
     ratings = prospect.rookie.ratings
     labels = ratings.LABELS
-    noise = _scout_noise(world_seed, year, team_id, prospect.key, len(labels))
+    noise = _scout_noise(world_seed, year, team_id, prospect.key, len(labels) + 1)
     values = {
-        name: _rounded(getattr(ratings, name) + accuracy.sd * error) for name, error in zip(labels, noise, strict=True)
+        name: _rounded(getattr(ratings, name) + accuracy.sd * error)
+        for name, error in zip(labels, noise[: len(labels)], strict=True)
     }
-    # 成長型は既定の普通（見せない）
+    truth = POTENTIAL_AVERAGE if ratings.potential is None else ratings.potential.value
+    # 伸びしろの推定は5刻みのまま収める（下端を1にすると刻みから外れる）
+    potential = Potential(max(SCOUT_STEP, _rounded(truth + accuracy.potential_sd * noise[len(labels)])))
+    # 成長型は既定の普通、伸びしろは既定の None（見せない）
+    estimate: Ratings
     if isinstance(ratings, PitcherRatings):
-        return PitcherRatings(
+        estimate = PitcherRatings(
             stuff=values["stuff"],
             control=values["control"],
             home_run_avoidance=values["home_run_avoidance"],
             stamina=values["stamina"],
         )
-    return BatterRatings(
-        contact=values["contact"],
-        power=values["power"],
-        eye=values["eye"],
-        speed=values["speed"],
-        fielding=values["fielding"],
-    )
+    else:
+        estimate = BatterRatings(
+            contact=values["contact"],
+            power=values["power"],
+            eye=values["eye"],
+            speed=values["speed"],
+            fielding=values["fielding"],
+        )
+    return ScoutingReport(ratings=estimate, potential=potential)
 
 
 def scouting_value(ratings: Ratings) -> float:
@@ -347,7 +395,7 @@ def _judged_items(ratings: Ratings) -> list[str]:
 def growth_to_peak(age: int, position: Position) -> float:
     """`age` 歳の新人が `PEAK_AGE` 歳になるまでに見込める総合（`scouting_value`）の伸び。
 
-    普通型・ぶれなしで、平均的な能力で測る。
+    普通型・伸びしろは普通・ぶれなしで、平均的な能力で測る（伸びしろは `projected_growth` が倍率で掛ける）。
     """
     pitcher = position.is_pitcher
     current: Ratings = mean_ratings(
@@ -368,9 +416,26 @@ def _clamp(value: float) -> int:
     return min(RATING_MAX, max(RATING_MIN, round(value)))
 
 
-def future_value(prospect: Prospect, estimate: Ratings) -> float:
-    """将来値: 推定の総合（`scouting_value`）に、`PEAK_AGE` 歳までの伸びを足したもの。"""
-    return scouting_value(estimate) + growth_to_peak(prospect.age, prospect.position)
+def projected_growth(prospect: Prospect, report: ScoutingReport) -> float:
+    """見込みの伸び: `PEAK_AGE` 歳までの普通の伸び（`growth_to_peak`）× 推定の伸びしろの倍率。
+
+    **見込みの伸びの唯一の出典**（将来値・1位の好み・見込みの区分が使う）。成長の式（`aging.expected_change`）と同じく、
+    伸びしろは伸びの大きさだけに効く（75以上の半減は見ない近似。新人は平均より低く入るので届かない）。
+    """
+    return growth_to_peak(prospect.age, prospect.position) * report.potential.multiplier
+
+
+def future_value(prospect: Prospect, report: ScoutingReport) -> float:
+    """将来値（見込み）: 推定の総合（`scouting_value`）に、見込みの伸び（`projected_growth`）を足したもの。"""
+    return scouting_value(report.ratings) + projected_growth(prospect, report)
+
+
+def projected_grade(prospect: Prospect, report: ScoutingReport) -> RatingGrade:
+    """見込みの区分（S〜G）。将来値（`future_value`）を丸めて能力の区分（`RatingGrade`）で引く。
+
+    画面（D3 の会議・P3 の自軍の選手）に出すのはこの区分で、伸びしろの値も倍率も見せない。
+    """
+    return RatingGrade.from_value(_clamp(future_value(prospect, report)))
 
 
 @dataclass(frozen=True)
@@ -381,7 +446,7 @@ class DraftTaste:
     保存しない（`draft_taste` が世界のシードと球団から導く。年では変わらない）。
 
     - `route_bonus`: 経路（高校・大学・社会人）ごとの加点。球団の中で平均0
-    - `growth_weight`: `PEAK_AGE` 歳までの伸び（`growth_to_peak`）に掛ける重み。1より大きいと将来性を、
+    - `growth_weight`: `PEAK_AGE` 歳までの見込みの伸び（`projected_growth`）に掛ける重み。1より大きいと将来性を、
       小さいと即戦力を重く見る
     - `pitcher_bonus`: 投手の候補への加点（負なら野手を好む。野手の候補は0）
     """
@@ -390,13 +455,13 @@ class DraftTaste:
     growth_weight: float = 1.0
     pitcher_bonus: float = 0.0
 
-    def evaluate(self, prospect: Prospect, future: float, *, liking: float = 0.0) -> float:
-        """将来値 `future`（`future_value`）に好みを入れた評価:
-        将来値 + (重み − 1) × 伸び + 経路の加点 + 投手の加点 + 惚れ込み（`draft_liking`）。
-        好みが既定（`DraftTaste()`）なら将来値 + 惚れ込み。"""
+    def evaluate(self, prospect: Prospect, report: ScoutingReport, *, liking: float = 0.0) -> float:
+        """スカウトの見立て `report` に好みを入れた評価:
+        将来値（`future_value`）+ (重み − 1) × 見込みの伸び（`projected_growth`）+ 経路の加点 + 投手の加点
+        + 惚れ込み（`draft_liking`）。好みが既定（`DraftTaste()`）なら将来値 + 惚れ込み。"""
         return (
-            future
-            + (self.growth_weight - 1.0) * growth_to_peak(prospect.age, prospect.position)
+            future_value(prospect, report)
+            + (self.growth_weight - 1.0) * projected_growth(prospect, report)
             + self.route_bonus.get(prospect.route, 0.0)
             + (self.pitcher_bonus if prospect.position.is_pitcher else 0.0)
             + liking
@@ -548,7 +613,9 @@ class DraftState:
     _rankings: dict[tuple[int, Position, bool], list[tuple[float, int]]] = field(default_factory=dict)
     # 球団ごとの好み（世界のシードと球団から導いた値。初めて要るときに導いて覚える）
     _tastes: dict[int, DraftTaste] = field(default_factory=dict)
-    # 球団 × 候補の将来値（1位の順位と2巡目以降の順位の両方が使うので、推定を1回だけ作る）
+    # 球団 × 候補のスカウトの見立て（1位の順位と2巡目以降の順位の両方が使うので、推定を1回だけ作る）
+    _reports: dict[tuple[int, int], ScoutingReport] = field(default_factory=dict)
+    # 球団 × 候補の将来値（2巡目以降の順位を作り直すたびに使う。見立てから導いた値を覚える）
     _futures: dict[tuple[int, int], float] = field(default_factory=dict)
 
     @classmethod
@@ -802,19 +869,27 @@ class DraftState:
         1巡目が入札でない規則（完全ウェーバー・くじ順）は競合が起きないので入れない（前の球団ほど良い新人を取る形を保つ）。"""
         return not self.is_development and self.round_number == 1 and self._bidding()
 
-    def evaluation(self, team_id: int, prospect: Prospect, *, tasted: bool = False) -> float:
-        """球団 `team_id` から見た候補の評価（スカウトの推定から）。`tasted` なら球団の好み（`DraftTaste`）と
-        惚れ込み（`draft_liking`）を入れ、そうでなければ将来値（`future_value`）。"""
-        future = self._futures.get((team_id, prospect.key))
-        if future is None:
-            estimate = scouting_report(
+    def report(self, team_id: int, prospect: Prospect) -> ScoutingReport:
+        """球団 `team_id` のスカウトの見立て（`scouting_report`。会議の精度で。初めて要るときに作って覚える）。"""
+        report = self._reports.get((team_id, prospect.key))
+        if report is None:
+            report = self._reports[(team_id, prospect.key)] = scouting_report(
                 prospect, team_id, world_seed=self.pool.world_seed, year=self.pool.year, accuracy=self.accuracy
             )
-            future = self._futures[(team_id, prospect.key)] = future_value(prospect, estimate)
+        return report
+
+    def evaluation(self, team_id: int, prospect: Prospect, *, tasted: bool = False) -> float:
+        """球団 `team_id` から見た候補の評価（スカウトの見立てから）。`tasted` なら球団の好み（`DraftTaste`）と
+        惚れ込み（`draft_liking`）を入れ、そうでなければ将来値（`future_value`）。"""
         if not tasted:
+            future = self._futures.get((team_id, prospect.key))
+            if future is None:
+                future = future_value(prospect, self.report(team_id, prospect))
+                self._futures[(team_id, prospect.key)] = future
             return future
+        report = self.report(team_id, prospect)
         liking = draft_liking(self.pool.world_seed, self.pool.year, team_id, prospect.key)
-        return self.taste(team_id).evaluate(prospect, future, liking=liking)
+        return self.taste(team_id).evaluate(prospect, report, liking=liking)
 
     def _ranking(self, team_id: int, position: Position, tasted: bool) -> list[tuple[float, int]]:
         """球団から見た、位置の候補の評価の高い順（同値は番号の順）。初めて要るときに作って覚える。"""

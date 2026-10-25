@@ -62,6 +62,8 @@ PRIVATE_HIGH_SCHOOL_RATIO = 0.65
 
 # 外国人のプロ入りの年齢の範囲（投入の既定。自動ドラフトは `amateur_career` に別の範囲を渡す）
 FOREIGN_DEBUT_AGE_RANGE = (19, 30)
+# 社会人を経た選手のプロ入りの年齢の範囲（一様に引く。ペナントの新人の能力の年齢の傾きも読む。#308）
+CORPORATE_DEBUT_AGE_RANGE = (23, 26)
 
 # 名前の衝突を避けて引き直す回数。これでも衝突したら連番で確定させる
 _NAME_ATTEMPTS = 50
@@ -249,7 +251,9 @@ def amateur_career(
         return AmateurCareer(high_school, "", "", 18, path)
     if path is AmateurPath.UNIVERSITY:
         return AmateurCareer(high_school, pick(rng, pools.UNIVERSITIES), "", 22, path)
-    return AmateurCareer(high_school, "", pick(rng, pools.CORPORATE_TEAMS), randint(rng, 23, 26), path)
+    return AmateurCareer(
+        high_school, "", pick(rng, pools.CORPORATE_TEAMS), randint(rng, *CORPORATE_DEBUT_AGE_RANGE), path
+    )
 
 
 def physique(rng: GameRandom, position: Position) -> tuple[int, int]:

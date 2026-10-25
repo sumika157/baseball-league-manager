@@ -11,7 +11,7 @@ from myapp.domain.exceptions import InvalidRatings
 from myapp.domain.pennant import aging
 from myapp.domain.pennant.aging import BATTER_CURVES, PITCHER_CURVES, age_ratings, expected_change
 from myapp.domain.pennant.draft import DraftTeam, draw_rookie
-from myapp.domain.pennant.draft_meeting import draw_pool, scouting_report
+from myapp.domain.pennant.draft_meeting import POOL_POTENTIAL_MEAN, draw_pool, scouting_report
 from myapp.domain.pennant.initial_ratings import estimate_initial_ratings
 from myapp.domain.pennant.offseason import with_filled_potential
 from myapp.domain.simulation.estimate import POTENTIAL_RANGE, CareerRecord, draw_potential
@@ -203,11 +203,21 @@ class RookiePotentialTest(unittest.TestCase):
         self.assertEqual(len(foreign), 3)
         self.assertTrue(all(draftee.ratings.potential is not None for draftee in foreign))
 
-    def test_the_scouting_report_does_not_show_the_potential(self) -> None:
-        """P1 では球団は伸びしろを見ない（推定は #308 の P2）。推定に本当の値が漏れない。"""
+    def test_the_scouting_report_shows_only_an_estimate_of_the_potential(self) -> None:
+        """#308 P2: 球団は伸びしろを推定（`ScoutingReport.potential`）でだけ見る。推定の能力に本当の値が漏れない。"""
         pool = draw_pool({Position.PITCHER: 3, Position.INFIELDER: 3}, world_seed=4, year=YEAR, used_names=set())
         for prospect in pool.prospects:
-            self.assertIsNone(scouting_report(prospect, 1, world_seed=4, year=YEAR).potential)
+            report = scouting_report(prospect, 1, world_seed=4, year=YEAR)
+            self.assertIsNone(report.ratings.potential)
+            self.assertIsInstance(report.potential, Potential)
+
+    def test_prospects_draw_the_potential_around_the_pool_mean(self) -> None:
+        """候補は合わせ込んだ平均（`POOL_POTENTIAL_MEAN`。AI が伸びしろを見て上から取るぶん、普通の50より低い）。"""
+        pool = draw_pool({Position.PITCHER: 150, Position.INFIELDER: 150}, world_seed=4, year=YEAR, used_names=set())
+        values = [potential.value for prospect in pool.prospects if (potential := prospect.rookie.ratings.potential)]
+        self.assertEqual(len(values), len(pool))
+        self.assertAlmostEqual(fmean(values), POOL_POTENTIAL_MEAN, delta=1.0)
+        self.assertLess(POOL_POTENTIAL_MEAN, 50)
 
     def test_every_draftee_has_a_potential(self) -> None:
         result = run([club(team_id) for team_id in range(1, 5)])
