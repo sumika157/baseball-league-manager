@@ -15,6 +15,7 @@ from myapp.domain.workspace import (
     generate_workspace_key,
     members_from_rows,
     validate_workspace_key,
+    workspace_deletion_blocker,
 )
 
 KEY = "abcde12345"
@@ -263,3 +264,23 @@ class MembersFromRowsTest(unittest.TestCase):
         self.assertEqual(assignments, {})
         # 組み立てた集約は不変条件を満たす（読むときに落ちない）
         make(editor_ids=editors, team_assignments=assignments)
+
+
+class DeletionBlockerTest(unittest.TestCase):
+    """世界が1つでもあるワークスペースは消せない（2026-10-25 ユーザー決定 2）。"""
+
+    def test_a_workspace_without_worlds_can_be_deleted(self):
+        self.assertIsNone(workspace_deletion_blocker(0))
+
+    def test_worlds_block_the_deletion(self):
+        for count in (1, 3):
+            with self.subTest(count=count):
+                reason = workspace_deletion_blocker(count)
+                assert reason is not None
+                self.assertIn(f"ペナントの世界が{count}つ", reason)
+                self.assertIn("先に世界をすべて削除", reason)
+
+    def test_a_count_must_be_a_non_negative_integer(self):
+        for value in (-1, True, 1.0):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                workspace_deletion_blocker(value)  # type: ignore[arg-type]

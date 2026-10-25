@@ -45,7 +45,13 @@ from ..domain.value_objects import (
     Profile,
     StadiumProfile,
 )
-from ..domain.workspace import InvitedRole, Visibility, WorkspaceAccess, WorkspaceRole
+from ..domain.workspace import (
+    InvitedRole,
+    Visibility,
+    WorkspaceAccess,
+    WorkspaceRole,
+    workspace_deletion_blocker,
+)
 
 
 @dataclass(frozen=True)
@@ -3118,6 +3124,35 @@ class InvitationPreview:
     expires_at: datetime
     # 開いた人が既にメンバー（持ち主を含む）か。メンバーなら受諾のボタンを出さない。未ログインは False
     is_member: bool
+
+
+@dataclass(frozen=True)
+class WorkspaceWorldRow:
+    """削除の確認に出す、ワークスペースに残っているペナントの世界の1つ（先に消してもらう世界）。"""
+
+    world_id: int
+    name: str
+    # 世界の持ち主の利用者名。持ち主が消えた世界は None
+    owner_name: str | None
+
+
+@dataclass(frozen=True)
+class WorkspaceContents:
+    """ワークスペースの削除の確認に出す、消えるものの規模（`WorkspaceManagementQuery.contents`）。
+
+    件数は実データの範囲（`WorldScope.real(ws)`）のもの。世界は消せない理由の材料（1つでもあれば消せない）。
+    """
+
+    league_count: int
+    team_count: int
+    player_count: int
+    game_count: int
+    worlds: tuple[WorkspaceWorldRow, ...]
+
+    @property
+    def deletion_blocker(self) -> str | None:
+        """消せない理由（消せるなら None。出典は domain の `workspace_deletion_blocker`）。"""
+        return workspace_deletion_blocker(len(self.worlds))
 
 
 # --- 登録（リーグ・チーム・球場。W3 #79）---

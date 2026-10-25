@@ -15,6 +15,7 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime
 from typing import Any, Protocol
 
+from django.apps import apps
 from django.db import IntegrityError, models, transaction
 from django.db.models import (
     Count,
@@ -122,6 +123,7 @@ from ..domain.workspace import (
     Visibility,
     Workspace,
     members_from_rows,
+    workspace_deletion_blocker,
 )
 from . import orm_models
 from .scoping import (
@@ -1818,14 +1820,15 @@ def stadium_profile_of(row: orm_models.Stadium) -> StadiumProfile:
     )
 
 
-# 世界に属する行を消す順（子から親へ）。(モデル, そのモデルから League へ至る道)。
-# 世界の削除は Django の CASCADE の collector に任せない。打席などは1シーズンで数十万行
+# 範囲（世界・ワークスペースの実データ）に属する行を消す順（子から親へ）。(モデル, そのモデルから League へ至る道)。
+# 世界の削除（`DjangoWorldRepository.delete`）とワークスペースの削除（`DjangoWorkspaceRepository.delete`）が使う。
+# どちらも Django の CASCADE の collector に任せない。打席などは1シーズンで数十万行
 # あり、collector は消す行を Python に集めてしまうため。ここに挙げたモデルと、選手・球団・
 # リーグ・世界は、`tests/integration/test_world_isolation.py` の分類表が「世界に属する」と
 # したものと一致することを検査している（足したモデルを消し忘れると、そのテストが落ちる）。
 # 試合とその明細は区分（公式戦・ポストシーズン）を問わず全部消すので、`game_rows_condition` ではなく範囲だけで絞る
 _GAME_ROUTE = "home_team__league"
-_WORLD_ROWS_CHILD_FIRST: tuple[tuple[type[models.Model], str], ...] = (
+_SCOPE_ROWS_CHILD_FIRST: tuple[tuple[type[models.Model], str], ...] = (
     # 能力は選手の在籍をたどって世界が決まるので、在籍を消す前に消す
     # 表彰は選手・球団・リーグを指すので、それらを消す前に消す
     (orm_models.PennantAward, "league"),
@@ -1853,6 +1856,107 @@ _WORLD_ROWS_CHILD_FIRST: tuple[tuple[type[models.Model], str], ...] = (
     (orm_models.PlayerStint, "team__league"),
 )
 _PLAYER_DELETE_CHUNK = 500
+
+# ワークスペースの削除で、範囲の行（`_SCOPE_ROWS_CHILD_FIRST`）と選手を消した後に消す行（子から親へ）。
+# (モデル, そのモデルのワークスペースの id の列への道)。どれも件数の少ない表で、範囲で絞って `_raw_delete` で消す
+# （collector を通さない）。担当と招待の担当チームの中間表は、指すチーム・招待より先に消す。
+# `tests/integration/test_workspace_delete.py` が、分類表のモデル（世界を除く）と多対多の中間表がすべて、
+# `_SCOPE_ROWS_CHILD_FIRST`・選手・ここのどれかに入っていることを検査する。
+_WORKSPACE_ROWS_CHILD_FIRST: tuple[tuple[type[models.Model], str], ...] = (
+    (orm_models.Team.managers.through, "team__league__workspace_id"),
+    (orm_models.WorkspaceInvitation.teams.through, "workspaceinvitation__workspace_id"),
+    (orm_models.Team, "league__workspace_id"),
+    (orm_models.League, "workspace_id"),
+    (orm_models.Stadium, "workspace_id"),
+    (orm_models.WorkspaceInvitation, "workspace_id"),
+    (orm_models.WorkspaceEditor, "workspace_id"),
+    (orm_models.Workspace, "id"),
+)
+# 消す行を、消さない行（ほかのワークスペース・世界）が指しうる SET_NULL の参照。`_raw_delete` は on_delete を
+# 働かせないので、Django の SET_NULL と同じく先に外す（管理画面の直書きなどで、ほかのワークスペースのチームが
+# このワークスペースの球場を本拠地にしていることがある）。(モデル, 外す列, 指す先のワークスペースの id への道)。
+# `tests/integration/test_workspace_delete.py` が、消す表を指す SET_NULL の参照がすべてここにあることを検査する。
+_WORKSPACE_DETACHED_REFERENCES: tuple[tuple[type[models.Model], str, str], ...] = (
+    (orm_models.Team, "home_stadium", "home_stadium__workspace_id"),
+    (orm_models.PennantWorld, "managed_team", "managed_team__league__workspace_id"),
+    (orm_models.PennantClubPlan, "closer", "closer__stints__team__league__workspace_id"),
+)
+
+
+def _workspace_deleted_models() -> list[type[models.Model]]:
+    """ワークスペースの削除で消すモデル（消す順）: 範囲の行 → 選手 → ワークスペースの行。"""
+    return [
+        *(model for model, _ in _SCOPE_ROWS_CHILD_FIRST),
+        orm_models.Player,
+        *(model for model, _ in _WORKSPACE_ROWS_CHILD_FIRST),
+    ]
+
+
+def _workspace_deleted_rows(workspace_id: int) -> dict[type[models.Model], Q]:
+    """消すモデルごとの、消す行の条件（そのモデルから見た `Q`）。消すときと同じ絞り方。"""
+    scope = WorldScope.real(workspace_id)
+    conditions: dict[type[models.Model], Q] = {
+        model: world_condition(route, scope) for model, route in _SCOPE_ROWS_CHILD_FIRST
+    }
+    conditions[orm_models.Player] = Q(pk__in=players_in(scope).values("pk"))
+    conditions.update({model: Q(**{column: workspace_id}) for model, column in _WORKSPACE_ROWS_CHILD_FIRST})
+    return conditions
+
+
+def _workspace_incoming_references() -> list[tuple[type[models.Model], models.Field]]:
+    """消すモデルを指す外部キーのうち、空にして外すもの（`_WORKSPACE_DETACHED_REFERENCES`）を除いたすべて。
+
+    手で並べず、全アプリのモデル（多対多の中間表を含む）のメタ情報から導く（モデルや外部キーを足しても検査が漏れない）。
+    消さない行がこれで消す行を指していると、`_raw_delete` の後に指す先が無くなり、コミットの外部キーの検査で落ちる。
+    """
+    deleted = set(_workspace_deleted_models())
+    detached = {(model, column) for model, column, _ in _WORKSPACE_DETACHED_REFERENCES}
+    return [
+        (model, field)
+        for model in apps.get_models(include_auto_created=True)
+        for field in model._meta.concrete_fields
+        if field.is_relation and field.related_model in deleted and (model, field.name) not in detached
+    ]
+
+
+def _model_label(model: type[models.Model]) -> str:
+    """利用者に見せるモデルの名前。多対多の中間表は、それを持つモデルの名前（「チーム」「ワークスペースへの招待」）。"""
+    owner = model._meta.auto_created
+    return str((owner if isinstance(owner, type) else model)._meta.verbose_name)
+
+
+def _row_id_column(model: type[models.Model]) -> str:
+    """利用者に見せる行の id の列。多対多の中間表は、それを持つモデルの行の id（管理画面でその行を開けるように）。"""
+    owner = model._meta.auto_created
+    if isinstance(owner, type):
+        for field in model._meta.concrete_fields:
+            if field.is_relation and field.related_model is owner:
+                return field.attname
+    return "pk"
+
+
+def _outside_reference_blocker(workspace_id: int) -> str | None:
+    """消さない行（ほかのワークスペースとその世界の行）が、消す行を指していれば、消せない理由。
+
+    参照の種類ごとに1本（行数によらない）。空にして外す参照（本拠地・受け持つ球団・編成の抑え）は見ない
+    （2026-10-25 ユーザー決定: 空にできる参照は空にして消し、空にできない参照は消す前に拒む）。
+    """
+    conditions = _workspace_deleted_rows(workspace_id)
+    for model, field in _workspace_incoming_references():
+        target = field.related_model
+        assert isinstance(target, type)
+        rows = model._default_manager.filter(
+            **{f"{field.attname}__in": target._default_manager.filter(conditions[target]).values("pk")}
+        )
+        if model in conditions:
+            rows = rows.exclude(conditions[model])
+        found = rows.values_list(_row_id_column(model), flat=True).first()
+        if found is not None:
+            return (
+                f"ほかのワークスペースの{_model_label(model)}（id={found}）がこのワークスペースの"
+                f"{_model_label(target)}を指しているため削除できません。運営者に連絡してください。"
+            )
+    return None
 
 
 _RATING_COLUMNS = {
@@ -2285,7 +2389,7 @@ class DjangoWorldRepository:
         # 孫から順に消し終えているので、CASCADE や PROTECT の検査に頼らず行だけを消せる
         # （_raw_delete は collector を通さない。Django の非公開 API だが、数十万行を
         # Python に集めずに済ませる手段が他に無い）
-        for model, route in _WORLD_ROWS_CHILD_FIRST:
+        for model, route in _SCOPE_ROWS_CHILD_FIRST:
             manager = model._default_manager
             manager.filter(world_condition(route, scope))._raw_delete(manager.db)
         for start in range(0, len(player_ids), _PLAYER_DELETE_CHUNK):
@@ -2327,6 +2431,7 @@ class DjangoWorkspaceRepository:
     **担当の中間表で読み書きするのは、このワークスペースの実データのチーム（`teams_in(WorldScope.real(ws))`）の
     行だけ**（ほかのワークスペースのチームやペナントの世界の球団の担当には触れない）。管理画面で付けた重なった行
     （持ち主に担当の行など）は、読むときに `members_from_rows` が上の役割だけを残し、保存で消える。
+    削除（`delete`）だけは中のデータも消すが、そのワークスペースの範囲（`WorldScope.real(ws)`）で絞って消す。
     """
 
     def find_by_id(self, workspace_id: int) -> Workspace:
@@ -2414,6 +2519,50 @@ class DjangoWorkspaceRepository:
 
     def count_owned_by(self, owner_id: int) -> int:
         return orm_models.Workspace.objects.filter(owner_id=owner_id).count()
+
+    @transaction.atomic
+    def delete(self, workspace_id: int) -> None:
+        """ワークスペースと、その実データ・メンバー・招待をすべて消す。子の表から、範囲で絞って順に消す。
+
+        検査（行がある・世界が無い・ほかの範囲にも在籍がある選手がいない・ほかのワークスペースの行が消す行を
+        空にできない外部キーで指していない）をすべて済ませてから消す。クエリの本数は
+        チーム・試合の数によらない（選手だけ500人ずつ）。前例は `DjangoWorldRepository.delete`。
+        """
+        if not orm_models.Workspace.objects.filter(id=workspace_id).exists():
+            raise WorkspaceNotFound(f"ワークスペースが見つかりません（id={workspace_id}）。")
+        if (reason := workspace_deletion_blocker(worlds_in(workspace_id).count())) is not None:
+            raise NotDeletable(reason)
+        scope = WorldScope.real(workspace_id)
+
+        # 選手は在籍をたどって範囲が決まるので、在籍を消す前に控えておく。ほかの範囲（ほかのワークスペース・
+        # 世界）にも在籍がある選手を消すと、そちらの在籍・成績まで消える（`_raw_delete` は連鎖も検査もしない）
+        player_ids = list(players_in(scope).values_list("id", flat=True))
+        shared = (
+            orm_models.PlayerStint.objects.filter(player__in=players_in(scope))
+            .exclude(team__in=teams_in(scope))
+            .values_list("player_id", flat=True)
+            .first()
+        )
+        if shared is not None:
+            raise InvalidWorkspace(
+                f"ほかのワークスペースにも在籍の記録がある選手がいるため削除できません（選手 id={shared}）。"
+            )
+        # 試合の相手など、空にできない参照がワークスペースをまたいでいれば拒む（管理画面の直書きでしか起きない）
+        if (reason := _outside_reference_blocker(workspace_id)) is not None:
+            raise InvalidWorkspace(reason)
+
+        for model, column, target in _WORKSPACE_DETACHED_REFERENCES:
+            model._default_manager.filter(**{target: workspace_id}).update(**{column: None})
+        # 孫から順に消すので、CASCADE や PROTECT の検査に頼らず行だけを消せる（`DjangoWorldRepository.delete` と同じ）
+        for model, route in _SCOPE_ROWS_CHILD_FIRST:
+            manager = model._default_manager
+            manager.filter(world_condition(route, scope))._raw_delete(manager.db)
+        for start in range(0, len(player_ids), _PLAYER_DELETE_CHUNK):
+            chunk = player_ids[start : start + _PLAYER_DELETE_CHUNK]
+            orm_models.Player.objects.filter(id__in=chunk)._raw_delete(orm_models.Player.objects.db)
+        for model, column in _WORKSPACE_ROWS_CHILD_FIRST:
+            manager = model._default_manager
+            manager.filter(**{column: workspace_id})._raw_delete(manager.db)
 
 
 class DjangoInvitationRepository:

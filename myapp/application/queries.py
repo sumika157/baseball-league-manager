@@ -44,6 +44,7 @@ from .dto import (
     TeamAnalysisFacts,
     TeamSetupRow,
     TeamSummary,
+    WorkspaceContents,
     WorkspaceContext,
     WorkspaceRow,
     WorldSummary,
@@ -420,9 +421,10 @@ class WorkspaceListQuery(Protocol):
 
 @runtime_checkable
 class WorkspaceManagementQuery(Protocol):
-    """1つのワークスペースのメンバーと招待（W4。メンバーの画面）。実装はワークスペースの id を必須で受け取る。
+    """1つのワークスペースのメンバーと招待（W4。メンバーの画面）と、削除の確認の件数。実装はワークスペースの id を
+    必須で受け取る。
 
-    読むのはそのワークスペースのメンバー（持ち主・編集者の行・実データのチームの担当）と招待だけ。
+    読むのはそのワークスペースのメンバー（持ち主・編集者の行・実データのチームの担当）と招待、実データの件数と世界の台帳だけ。
     """
 
     def members(self) -> list[MemberRow]:
@@ -431,6 +433,10 @@ class WorkspaceManagementQuery(Protocol):
 
     def invitations(self, now: datetime) -> list[InvitationRow]:
         """未使用で期限内の招待を、新しく発行した順に。期限切れは出さない（使えないので取り消す対象でもない）。"""
+        ...
+
+    def contents(self) -> WorkspaceContents:
+        """削除の確認に出す件数（実データのリーグ・チーム・選手・試合）と、残っているペナントの世界（世界の一覧と同じ、新しい順）。"""
         ...
 
 

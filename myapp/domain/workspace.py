@@ -2,7 +2,7 @@
 
 リーグ・球場・ペナントの世界はワークスペースに属する。ここにあるのは、名前・key・公開範囲の
 検査と選択肢、メンバー（編集者・チーム担当）とその不変条件（`Workspace` 集約。W4）、招待（`Invitation`。W4）、
-持てる数の上限（`WorkspaceQuota`。W4）、それに権限の判定（`WorkspaceRole`・`WorkspaceAccess`。W2）。
+持てる数の上限（`WorkspaceQuota`。W4）、消してよいか（`workspace_deletion_blocker`。W4）、それに権限の判定（`WorkspaceRole`・`WorkspaceAccess`。W2）。
 Django は import しない。
 """
 
@@ -388,6 +388,26 @@ class WorkspaceQuota:
         """作れなければ `WorkspaceLimitReached`。"""
         if not self.can_create_workspace(owned_count):
             raise WorkspaceLimitReached(self.limit_message)
+
+
+# --- 削除 ---
+
+
+def workspace_deletion_blocker(world_count: int) -> str | None:
+    """ワークスペースを消せない理由。ペナントの世界が1つも無いときだけ消せる（2026-10-25 ユーザー決定 2）。
+
+    世界の削除は 10シーズンで約40秒かかり、ワークスペースとまとめて消すとタイムアウトを超えうる。世界は先に
+    1つずつ消してもらう。数は保存せず、呼ぶ側（リポジトリ・削除の確認の参照クエリ）が数えて渡す。
+    消せるなら None（前例: `setup.league_deletion_blocker`）。
+    """
+    if isinstance(world_count, bool) or not isinstance(world_count, int) or world_count < 0:
+        raise ValueError(f"数は0以上の整数で渡してください（{world_count!r}）。")
+    if world_count:
+        return (
+            f"このワークスペースにはペナントの世界が{world_count}つあるため削除できません。"
+            "先に世界をすべて削除してください。"
+        )
+    return None
 
 
 class WorkspaceRole(Enum):
