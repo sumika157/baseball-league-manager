@@ -1336,3 +1336,16 @@ W2 の本体。ワークスペースの中の画面43本（実データ20・ペ�
 **変異の確かめ**（どれも戻した。`test_admin` を流した）: 導線の検査（`has_delete_permission`）を外す → 7件、一括削除の差し替えを外す → 6件（行はリポジトリの検査で守られ、落ちるのは「何も消さない」と理由の表示）、`TeamForm` の名前の検査を外す → 2件、インラインの名前の検査を外す → 4件、所属リーグの検査を外す → 1件、インラインの削除の検査を外す → 1件（サービスの `NotDeletable` が 500 になる）、さらに collector で消す → 1件、インラインの削除の欄を隠さない → 1件、導線の検査と `delete_model` を外す → 7件。
 
 **レビュー（ddd-boundary-reviewer）**: 重要な指摘なし。残した軽微な指摘: (1) 検査と削除の間に在籍などが足されると、サービスの `NotDeletable` が 500 になる（データは消えない。一括削除では Django が `delete_queryset` の前に削除の LogEntry を書くので、弾かれても記録が残る）。(2) ワークスペースの削除の確認画面で、空でないリーグ・球場が「保護されている」ではなく「削除する権限がない」の表示になる（`get_deleted_objects` が行ごとに `has_delete_permission` を呼ぶため。消せないことは変わらない）。(3) 改名の判定がリポジトリ（前後の空白を除いて比べる）と管理画面（`changed_data`）でわずかに違う（管理画面が検査する方向に多いだけ）。(4) 一括削除の検査は行ごとにクエリ1本（一覧の `list_select_related` で行の関連は読み済み）。
+
+#### main の取り込み（2026-10-25 その4）
+
+`refactor/merge-main-into-workspaces-5` で、epic 23189a9（W3 T5 の後）に main 9f6a8fb を取り込んだ（マージコミット 24896c4）。T3 の前。
+
+- **main から来たもの**: #198 D2（PR #303。ドラフト会議の育成の巡。新人の契約区分 `Draftee.contract`・`SeasonClosed.development_draftee_count`）、#302（PR #306。AI の1位の入札に球団ごとの好み）、#307（PR #309。社会人は育成で指名できない。`DraftRoute.development_amateur_paths()`。`seed_virtual_players` の育成の選手の経歴もそこから引く）、#308 P1（PR #311。選手ごとの伸びしろ `Potential`・`PennantPlayerRatings.potential`。マイグレーション `0059_pennantplayerratings_potential`）、#308 P2（PR #314。スカウトが伸びしろも推定し、AI のドラフトを見込みで選ぶ）。どれもペナントのオフ・ドラフト・成長の domain が中心で、ORM に触れるのは `DjangoRatingsRepository` の `potential` の列の写しだけ。
+- **振り直し**: main が 0059 を使ったので、epic のマイグレーションを `0060_workspace`（依存は `0059_pennantplayerratings_potential`）・`0061_backfill_default_workspace`・`0062_workspace_constraints`・`0063_team_managers_help_text` に移した。依存・docstring・コメント（`admin.py` の編集者の行・`repositories.py` の名前の一意制約・`test_jersey_number.py`・`test_migration_draft_year.py`・`test_workspace_constraints.py`）・`test_workspace_migration.py` の BEFORE/AFTER をそろえた。この節より前の記録の番号（T1 の「0061 の `unique_workspace_league_name`」など）は書いた時点のままで、今は1つずつ後ろ（制約は 0062）。空の DB からの `migrate` と `makemigrations --check` を確かめた。PR の直前に origin/main を fetch し直し、最新が 0059 のままであることを確かめた。
+- **衝突**は5ファイルで、どれも import だけ: `repositories.py`（W3 T1 の `domain.setup` と main の `Potential` を両方）、`seed_virtual_players.py`（main の `REAL_SCOPE = WorldScope.real()` は epic で `--workspace` の範囲 `_real_scope()` に置き換え済みなので落とし、main の `ALL_PATHS`・`DEVELOPMENT_PATHS` を残した。main の `_refresh_schools` の変更は自動で `players_in(self._real_scope())` の形に乗った）、テスト3本（`test_pennant_offseason.py`・`test_pennant_ratings.py`・`test_seed_virtual_players.py`。epic で使わなくなった `WorldScope` の import を落とし、main の追加の import を残した）。
+- **合わせ込み**: 要らなかった。新しい組み立て口・`Django*`・URL・管理コマンドの引数は無く（`test_wiring.py`・`CHECKS`・`URL_TABLE` は変えていない）、main の新しいテストは既に epic の形（`world_scope`・`world_ledger`・編集者で作る世界）の上に書かれた既存のテストクラスへの追加だった。W3 の登録の規則とは交わらない（チーム名の一意はチームの新規作成と改名のときだけで、新人の追加は `Team.add_player` の在籍。世界の作成（`fork`）は main で変わっていない。伸びしろは作成時の能力の行に引くだけ）。
+- **変異の確かめ**: 新しい `Django*` が無いので行っていない。
+- **計測**: やり直していない（#303〜#314 はペナントの締める処理・ドラフト・成長の変更で、ビューの変更は締めた後の messages の文言だけ。`measure_pages` の画面の読み取りは変えない）。
+- テスト: domain＋integration 4,007、e2e 14。
+- **レビュー**（`ddd-boundary-reviewer`）: 重要な指摘なし。範囲なしの形（`WorldScope.real()`・`REAL_SCOPE`）が戻っていないこと、マイグレーションが1本道であること、domain が Django を import しないことを確かめた。軽微な指摘のうち、この記録が付け直しに追いついていない点はこの節で直した（前の記録の番号は書いた時点のまま）。

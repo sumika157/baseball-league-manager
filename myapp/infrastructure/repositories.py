@@ -84,7 +84,7 @@ from ..domain.setup import (
     stadium_deletion_blocker,
     team_deletion_blocker,
 )
-from ..domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings
+from ..domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings, Potential
 from ..domain.value_objects import (
     AcquisitionRoute,
     AdvanceReason,
@@ -1557,7 +1557,7 @@ def ensure_team_name_free(teams: QuerySet[orm_models.Team], name: str, own_id: i
 def _violates_unique(error: IntegrityError, model: type[models.Model], constraint_names: Sequence[str]) -> bool:
     """`error` が `model` の一意制約（`constraint_names`）の違反か。
 
-    制約の出典は ORM の `Meta.constraints`（0061）。SQLite は違反の文言に制約名ではなく列（「表.列, 表.列」）を
+    制約の出典は ORM の `Meta.constraints`（0062）。SQLite は違反の文言に制約名ではなく列（「表.列, 表.列」）を
     出すので、制約名と、制約の列から組み立てた文言のどちらかを含むかで見る。
     """
     message = str(error)
@@ -1573,7 +1573,7 @@ def _violates_unique(error: IntegrityError, model: type[models.Model], constrain
     return False
 
 
-# 名前の一意制約（0061 と、ペナントの世界の中の一意）。
+# 名前の一意制約（0062 と、ペナントの世界の中の一意）。
 # 保存の前の確認をすり抜けた同時の書き込みは、これで `DuplicateName` に訳す
 _LEAGUE_NAME_CONSTRAINTS = ("unique_workspace_league_name", "unique_world_league_name")
 _STADIUM_NAME_CONSTRAINTS = ("unique_workspace_stadium_name",)
@@ -1850,17 +1850,26 @@ class DjangoRatingsRepository:
     def _to_row(item: PlayerRatings) -> orm_models.PennantPlayerRatings:
         values = {name: getattr(item.ratings, name) for name in _RATING_COLUMNS[type(item.ratings)]}
         return orm_models.PennantPlayerRatings(
-            player_id=item.player_id, year=item.year, growth=item.ratings.growth.value, **values
+            player_id=item.player_id,
+            year=item.year,
+            growth=item.ratings.growth.value,
+            potential=None if item.ratings.potential is None else item.ratings.potential.value,
+            **values,
         )
 
     @staticmethod
     def _to_domain(row: orm_models.PennantPlayerRatings) -> PlayerRatings:
         growth = GrowthType(row.growth)
+        potential = None if row.potential is None else Potential(row.potential)
         ratings: BatterRatings | PitcherRatings
         if row.contact is not None:
-            ratings = BatterRatings(**{name: getattr(row, name) for name in BatterRatings.LABELS}, growth=growth)
+            ratings = BatterRatings(
+                **{name: getattr(row, name) for name in BatterRatings.LABELS}, growth=growth, potential=potential
+            )
         else:
-            ratings = PitcherRatings(**{name: getattr(row, name) for name in PitcherRatings.LABELS}, growth=growth)
+            ratings = PitcherRatings(
+                **{name: getattr(row, name) for name in PitcherRatings.LABELS}, growth=growth, potential=potential
+            )
         return PlayerRatings(player_id=row.player_id, year=row.year, ratings=ratings)
 
 

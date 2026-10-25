@@ -53,14 +53,16 @@ from .baserunning import DEFAULT_RULES, BaserunningRules
 from .fielding import ERROR_SKILL_BETA
 from .manager import STARTER_BATTERS, STARTER_BATTERS_PER_STAMINA
 from .odds import DEFAULT_SENSITIVITY, MAX_RATE, MIN_RATE, RATING_UNIT, RatingSensitivity
-from .randomness import GameRandom, weighted_index
+from .randomness import GameRandom, normal, weighted_index
 from .ratings import (
     AVERAGE_RATING,
+    POTENTIAL_AVERAGE,
     RATING_MAX,
     RATING_MIN,
     BatterRatings,
     GrowthType,
     PitcherRatings,
+    Potential,
 )
 
 
@@ -124,6 +126,11 @@ GROWTH_PRIOR = {GrowthType.EARLY: 0.20, GrowthType.NORMAL: 0.60, GrowthType.LATE
 GROWTH_TILT_BELOW_AGE = 26
 GROWTH_TILT = 0.4
 _GROWTH_STRENGTH_LIMIT = 2.0
+
+# 伸びしろの事前の分布（正規分布の標準偏差と、引いた値を収める範囲）。隠し値で、成績からも今の能力からも決めない
+# （今の能力と独立。経路でも変えない。#308）。範囲は 50 を中心に対称にして、平均の倍率を 1.0 に保つ
+POTENTIAL_SD = 15.0
+POTENTIAL_RANGE = (10, 90)
 
 
 @dataclass(frozen=True)
@@ -469,3 +476,20 @@ def draw_growth_type(rng: GameRandom, *, age: int | None, strength: float) -> Gr
 def with_growth(ratings: BatterRatings | PitcherRatings, growth: GrowthType) -> BatterRatings | PitcherRatings:
     """成長型だけを差し替える。"""
     return replace(ratings, growth=growth)
+
+
+def draw_potential(rng: GameRandom, *, mean: float = POTENTIAL_AVERAGE) -> Potential:
+    """伸びしろを引く。隠し値で、成績からも今の能力からも分からない（今の能力・年齢・経路と独立に、事前の分布から）。
+
+    N(`mean`, `POTENTIAL_SD`) を丸めて `POTENTIAL_RANGE` に収める。`random()` を 2 回だけ使う（`normal`）。
+    `mean` は既定の 50（普通）で、ドラフト会議の候補だけが合わせ込んだ平均
+    （`draft_meeting.POOL_POTENTIAL_MEAN`）を渡す。
+    呼び出し側は伸びしろ専用の乱数（用途 `potential-…`）を渡し、今の能力・成長型の乱数の流れに引く回数を足さない。
+    """
+    low, high = POTENTIAL_RANGE
+    return Potential(min(high, max(low, round(normal(rng, mean, POTENTIAL_SD)))))
+
+
+def with_potential(ratings: BatterRatings | PitcherRatings, potential: Potential) -> BatterRatings | PitcherRatings:
+    """伸びしろだけを差し替える。"""
+    return replace(ratings, potential=potential)

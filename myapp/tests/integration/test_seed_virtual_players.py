@@ -14,10 +14,9 @@ from django.core.management.base import CommandError
 from django.test import SimpleTestCase
 
 from myapp.domain.entities import ensure_draft_fits_career
-from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND, RegisteredBand
+from myapp.domain.pennant.roster import DEVELOPMENT_BAND, OPENING_REGISTERED_BAND, RegisteredBand
 from myapp.domain.value_objects import AcquisitionRoute, ContractStatus
 from myapp.domain.virtual_players import generator
-from myapp.domain.virtual_players.generator import DEVELOPMENTAL_RANGE
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoTeamRepository
 from myapp.management.commands import seed_virtual_players
@@ -76,7 +75,7 @@ class SeedRosterTest(BaseCase):
             with self.subTest(team=team.name):
                 # 支配下はペナントの開幕前の帯（出典を共有する）、育成は投入の範囲
                 self.assertTrue(OPENING_REGISTERED_BAND.low <= len(registered) <= OPENING_REGISTERED_BAND.high)
-                self.assertTrue(DEVELOPMENTAL_RANGE[0] <= len(developmental) <= DEVELOPMENTAL_RANGE[1])
+                self.assertTrue(DEVELOPMENT_BAND.low <= len(developmental) <= DEVELOPMENT_BAND.high)
         # 既存の選手と在籍には手を付けない（追加専用）
         self.original.refresh_from_db()
         self.assertEqual(self.original.name, "藤井健吾")
@@ -156,7 +155,7 @@ class SeedRosterTest(BaseCase):
             registered, developmental = split_by_contract(team)
             with self.subTest(team=team.name):
                 self.assertTrue(OPENING_REGISTERED_BAND.low <= len(registered) <= OPENING_REGISTERED_BAND.high)
-                self.assertTrue(DEVELOPMENTAL_RANGE[0] <= len(developmental) <= DEVELOPMENTAL_RANGE[1])
+                self.assertTrue(DEVELOPMENT_BAND.low <= len(developmental) <= DEVELOPMENT_BAND.high)
 
     def test_profile_is_consistent_with_birth_date_and_stint(self):
         run()
@@ -239,6 +238,20 @@ class SeedRosterTest(BaseCase):
                 else:
                     self.assertEqual(player.nationality, "")
                     self.assertTrue(player.high_school)
+
+    def test_developmental_players_have_no_corporate_career(self):
+        """社会人の選手は育成で指名できない（#307）。育成ドラフトの選手の経歴は社会人にしない。"""
+        run()
+
+        for team in (self.team, self.rival):
+            _, developmental = split_by_contract(team)
+            with self.subTest(team=team.name):
+                self.assertTrue(developmental)
+                for stint in developmental:
+                    self.assertTrue(stint.player.is_development_draft)
+                    self.assertEqual(stint.player.corporate_team, "")
+        everyone = [s.player for team in (self.team, self.rival) for s in active_stints(team)]
+        self.assertTrue(any(p.corporate_team for p in everyone), "前提: 支配下には社会人の経歴がいる")
 
     def test_back_names_distinguish_same_surname_within_team(self):
         run()
@@ -444,6 +457,28 @@ class RefreshSchoolsTest(BaseCase):
         # ドラフトなど他の項目は変えない
         self.assertEqual((virtual.draft_year, virtual.draft_round), (2019, 3))
 
+    def test_development_draft_players_do_not_get_a_corporate_career(self):
+        """社会人の選手は育成で指名できない（#307）。経路の重みを社会人に寄せても、育成ドラフトの選手は社会人にならない。"""
+        development = add_player(
+            self.team,
+            "佐藤翔太",
+            number=13,
+            birthplace="北海道",
+            draft_year=2019,
+            draft_round=1,
+            is_development_draft=True,
+        )
+        registered = add_player(self.team, "鈴木大輔", number=12, birthplace="北海道", draft_year=2019, draft_round=1)
+        weights = {generator.AmateurPath.HIGH_SCHOOL: 0, generator.AmateurPath.UNIVERSITY: 1}
+        with mock.patch.dict(generator._AMATEUR_PATH_WEIGHTS, {**weights, generator.AmateurPath.CORPORATE: 1000}):
+            run("--refresh-schools")
+
+        development.refresh_from_db()
+        registered.refresh_from_db()
+        self.assertEqual(development.corporate_team, "")
+        self.assertTrue(development.university)
+        self.assertTrue(registered.corporate_team, "前提: 支配下は社会人を引く")
+
     def test_public_high_school_is_in_birthplace(self):
         virtual = add_player(self.team, "佐藤翔太", number=12, birthplace="北海道")
 
@@ -461,7 +496,7 @@ class LargestRemainderTest(SimpleTestCase):
 
     def test_allocation_sums_to_total(self):
         ratios = generator.POSITION_RATIOS
-        for total in range(DEVELOPMENTAL_RANGE[0], OPENING_REGISTERED_BAND.high + 1):
+        for total in range(DEVELOPMENT_BAND.low, OPENING_REGISTERED_BAND.high + 1):
             with self.subTest(total=total):
                 allocation = generator.largest_remainder(total, ratios)
                 self.assertEqual(sum(allocation.values()), total)

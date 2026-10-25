@@ -2,21 +2,29 @@
 
 締める年 Y の4月1日時点の満年齢で、Y→Y+1 の1年ぶんの変化を決める。変化は
 
-    期待値（年齢曲線 × 成長型 × 項目の差）+ 選手ごとの共通のぶれ + 項目ごとのぶれ
+    期待値（年齢曲線 × 成長型 × 伸びしろ × 項目の差）+ 選手ごとの共通のぶれ + 項目ごとのぶれ
 
 を四捨五入して 1〜100 に収めたもの。期待値の表と倍率が**規則の出典**で、案から変えた経緯は
 Wiki「ペナントモードの仕組み」の「成長と衰え」にある。曲線だけでは分布を毎年は保てないので、
 翌年の能力を作る側（`offseason.py`）が最後に水準の錨（`simulation/spread.py`）をかける。
-乱数は `normal()`（`random()` だけを使う）。成長型は変えない（翌年の行に写す）。
+乱数は `normal()`（`random()` だけを使う）。成長型と伸びしろは変えない（翌年の行に写す）。
 """
 
 from __future__ import annotations
 
 from bisect import bisect_right
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ..simulation.randomness import GameRandom, normal
-from ..simulation.ratings import RATING_MAX, RATING_MIN, BatterRatings, GrowthType, PitcherRatings
+from ..simulation.ratings import (
+    RATING_MAX,
+    RATING_MIN,
+    BatterRatings,
+    GrowthType,
+    PitcherRatings,
+    Potential,
+    potential_multiplier,
+)
 
 # 年齢曲線（普通型の、1年あたりの変化の期待値。単位は能力の点）。
 # (その年齢から, 変化) の昇順。最初の行は「〜19歳」を兼ねる
@@ -78,36 +86,74 @@ def curve_change(age: int) -> float:
     return AGE_CURVE[bisect_right(_CURVE_AGES, age) - 1][1]
 
 
-def expected_change(item: ItemCurve, *, age: int, growth: GrowthType, value: int) -> float:
+def expected_change(
+    item: ItemCurve, *, age: int, growth: GrowthType, value: int, potential: Potential | None = None
+) -> float:
     """項目ひとつの、1年ぶんの変化の期待値（ぶれを除く）。
 
     成長型と項目の差で曲線を読む年齢をずらし、伸び（正）と衰え（負）に別々の倍率をかける。
-    成長型の倍率は伸びにだけ効く（早熟でも衰えは速くならない）。
+    成長型と伸びしろの倍率は伸びにだけ効く（早熟でも、伸びしろが大きくても、衰えは速くも遅くもならない）。
+    伸びしろの無い能力（`None`）と普通（50）は倍率 1.0 で、#308 より前と1点も変わらない。
     """
     change = curve_change(age + GROWTH_SHIFT[growth] - item.shift)
     if change > 0:
-        change *= item.gain * GROWTH_GAIN[growth]
+        change *= item.gain * GROWTH_GAIN[growth] * potential_multiplier(potential)
         if value >= HIGH_RATING:
             change *= HIGH_RATING_GAIN
         return change
     return change * item.decline
 
 
-def _aged(value: int, item: ItemCurve, *, age: int, growth: GrowthType, shared: float, rng: GameRandom) -> int:
-    change = expected_change(item, age=age, growth=growth, value=value) + shared + normal(rng, 0.0, ITEM_SD)
+def _aged(
+    value: int,
+    item: ItemCurve,
+    *,
+    age: int,
+    growth: GrowthType,
+    potential: Potential | None,
+    shared: float,
+    rng: GameRandom,
+) -> int:
+    expected = expected_change(item, age=age, growth=growth, value=value, potential=potential)
+    change = expected + shared + normal(rng, 0.0, ITEM_SD)
     return min(RATING_MAX, max(RATING_MIN, round(value + change)))
 
 
 def age_ratings(
     ratings: BatterRatings | PitcherRatings, *, age: int, rng: GameRandom
 ) -> BatterRatings | PitcherRatings:
-    """1年ぶん進めた能力。成長型は変えない。乱数は共通のぶれ → 項目ごと（宣言の順）の順に引く。"""
+    """1年ぶん進めた能力。乱数は共通のぶれ → 項目ごと（宣言の順）の順に引く。
+
+    `LABELS` に無いフィールド（成長型・伸びしろ）は変えない。作り直さず `replace` で項目だけを差し替える
+    （作り直すと、足したフィールドが黙って既定値に戻る）。
+    """
     shared = normal(rng, 0.0, PLAYER_SD)
     curves = BATTER_CURVES if isinstance(ratings, BatterRatings) else PITCHER_CURVES
     values = {
-        name: _aged(getattr(ratings, name), item, age=age, growth=ratings.growth, shared=shared, rng=rng)
+        name: _aged(
+            getattr(ratings, name),
+            item,
+            age=age,
+            growth=ratings.growth,
+            potential=ratings.potential,
+            shared=shared,
+            rng=rng,
+        )
         for name, item in curves.items()
     }
     if isinstance(ratings, BatterRatings):
-        return BatterRatings(**values, growth=ratings.growth)
-    return PitcherRatings(**values, growth=ratings.growth)
+        return replace(
+            ratings,
+            contact=values["contact"],
+            power=values["power"],
+            eye=values["eye"],
+            speed=values["speed"],
+            fielding=values["fielding"],
+        )
+    return replace(
+        ratings,
+        stuff=values["stuff"],
+        control=values["control"],
+        home_run_avoidance=values["home_run_avoidance"],
+        stamina=values["stamina"],
+    )

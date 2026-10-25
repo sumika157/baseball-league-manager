@@ -43,9 +43,8 @@ FOREIGN_PLAYER_RATIO = 0.12
 # 投入で1球団に置く外国人の上限（育成も数える）。協約（第82条の2）は保有の人数を縛らないので、生成の目安。
 # 1軍に置けるのは4人まで（`ForeignPlayerRules.NPB`）なので、控えを1人持てる5人にする（#204 の前の登録枠と同じ水準）
 FOREIGN_PLAYERS_PER_TEAM_MAX = 5
-# 1球団の支配下の人数は、ペナントの開幕前の帯（`pennant/roster.py` の `OPENING_REGISTERED_BAND`）を出典にする。
-# 育成の人数の範囲（1球団）。NPB は球団差が大きい（数人〜50人超）ので幅を持たせ、平均を約20人にする
-DEVELOPMENTAL_RANGE = (10, 30)
+# 1球団の支配下と育成の人数は、ペナントの開幕前の帯（`pennant/roster.py` の `OPENING_REGISTERED_BAND`）と
+# 育成の目安の帯（同じファイルの `DEVELOPMENT_BAND`）を出典にする。
 # 投入時の年齢（平均・標準偏差・下限・上限）。育成は高卒・大卒の直後が中心で若い
 REGISTERED_AGE = (27.5, 3.8, 19, 40)
 DEVELOPMENTAL_AGE = (21.5, 2.0, 19, 28)
@@ -63,6 +62,8 @@ PRIVATE_HIGH_SCHOOL_RATIO = 0.65
 
 # 外国人のプロ入りの年齢の範囲（投入の既定。自動ドラフトは `amateur_career` に別の範囲を渡す）
 FOREIGN_DEBUT_AGE_RANGE = (19, 30)
+# 社会人を経た選手のプロ入りの年齢の範囲（一様に引く。ペナントの新人の能力の年齢の傾きも読む。#308）
+CORPORATE_DEBUT_AGE_RANGE = (23, 26)
 
 # 名前の衝突を避けて引き直す回数。これでも衝突したら連番で確定させる
 _NAME_ATTEMPTS = 50
@@ -225,12 +226,15 @@ def amateur_career(
     is_foreign: bool,
     birthplace: str,
     path: AmateurPath | None = None,
+    paths: Sequence[AmateurPath] = tuple(AmateurPath),
     foreign_age_range: tuple[int, int] = FOREIGN_DEBUT_AGE_RANGE,
 ) -> AmateurCareer:
     """プロ入り前の経歴。
 
     公立高校は出身都道府県（birthplace）の高校にする。私立高校は全国から選手が集まる前提で、
-    出身地とは結び付けない架空校のプールから選ぶ。`path` を省くと経路を `AmateurPath.weight` で決める。
+    出身地とは結び付けない架空校のプールから選ぶ。`path` を省くと経路を `paths` の中から `AmateurPath.weight` で決める
+    （育成ドラフトの選手は、育成で指名できる経路だけを渡す。#307。
+    `path` を渡せば `paths` は見ない。`paths` は空にしない）。
     外国人は日本の学校を持たず、プロ入りの年齢は `foreign_age_range` から引く。
     """
     if is_foreign:
@@ -242,13 +246,14 @@ def amateur_career(
         high_school = public_high_school(rng, birthplace)
 
     if path is None:
-        paths = list(AmateurPath)
         path = paths[weighted_index(rng, [item.weight for item in paths])]
     if path is AmateurPath.HIGH_SCHOOL:
         return AmateurCareer(high_school, "", "", 18, path)
     if path is AmateurPath.UNIVERSITY:
         return AmateurCareer(high_school, pick(rng, pools.UNIVERSITIES), "", 22, path)
-    return AmateurCareer(high_school, "", pick(rng, pools.CORPORATE_TEAMS), randint(rng, 23, 26), path)
+    return AmateurCareer(
+        high_school, "", pick(rng, pools.CORPORATE_TEAMS), randint(rng, *CORPORATE_DEBUT_AGE_RANGE), path
+    )
 
 
 def physique(rng: GameRandom, position: Position) -> tuple[int, int]:

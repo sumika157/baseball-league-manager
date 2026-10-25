@@ -2019,7 +2019,7 @@ class WorkspaceForm(forms.ModelForm):
 
 
 class WorkspaceEditorFormSet(forms.BaseInlineFormSet):
-    """編集者の行。持ち主は編集者に入れない（持ち主は全権を持つ。移行 0060 も持ち主を除いた）。"""
+    """編集者の行。持ち主は編集者に入れない（持ち主は全権を持つ。移行 0061 も持ち主を除いた）。"""
 
     def clean(self):
         super().clean()

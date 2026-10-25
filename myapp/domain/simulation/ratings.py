@@ -19,7 +19,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, ClassVar
 
@@ -41,6 +41,35 @@ class GrowthType(Enum):
     @property
     def label(self) -> str:
         return self.value
+
+
+# 伸びしろの普通（倍率 1.0）
+POTENTIAL_AVERAGE = 50
+
+
+@dataclass(frozen=True)
+class Potential:
+    """伸びしろ。隠し値で、オフの成長の**伸びの大きさ**の倍率（`multiplier`）に使う。
+
+    1〜100 の整数で 50 が普通（倍率 1.0）。成長型（いつ伸びるか）と併せて持ち、伸びしろはどれだけ伸びるかを表す。
+    衰えには効かない（`pennant/aging.py`）。画面には出さない（画面と AI が見るのは、今の能力と伸びから導く
+    「見込み」で、保存しない。#308 の P2・P3）。
+    """
+
+    value: int
+
+    def __post_init__(self) -> None:
+        _require_rating("伸びしろ", self.value)
+
+    @property
+    def multiplier(self) -> float:
+        """伸びの倍率。50 で 1.0、100 で 2.0。"""
+        return self.value / POTENTIAL_AVERAGE
+
+
+def potential_multiplier(potential: Potential | None) -> float:
+    """伸びの倍率。伸びしろの無い能力（`None`。#308 より前に作った行）は普通（1.0）として扱う。"""
+    return 1.0 if potential is None else potential.multiplier
 
 
 class RatingEmphasis(Enum):
@@ -131,6 +160,9 @@ class BatterRatings:
     speed: int = AVERAGE_RATING  # 走力
     fielding: int = AVERAGE_RATING  # 守備力
     growth: GrowthType = GrowthType.NORMAL
+    # 伸びしろ（隠し値）。None は #308 より前に作った行で、普通として扱う（`potential_multiplier`）。
+    # 成長型と同じく `LABELS` に無いフィールドなので、能力を作り直す処理は `replace` で写す
+    potential: Potential | None = None
 
     LABELS: ClassVar[dict[str, str]] = {
         "contact": "ミート",
@@ -141,9 +173,10 @@ class BatterRatings:
     }
 
     def __post_init__(self) -> None:
-        for field in fields(self):
-            if field.name in self.LABELS:
-                _require_rating(self.LABELS[field.name], getattr(self, field.name))
+        # 項目は宣言の順（`LABELS` の並び）に検査する。`fields()` を毎回引くと、能力を大量に作る会議の推定で遅い
+        for name, label in self.LABELS.items():
+            _require_rating(label, getattr(self, name))
+        _require_potential(self.potential)
 
     @property
     def batting_value(self) -> float:
@@ -170,6 +203,8 @@ class PitcherRatings:
     home_run_avoidance: int = AVERAGE_RATING  # 一発回避
     stamina: int = AVERAGE_RATING  # スタミナ
     growth: GrowthType = GrowthType.NORMAL
+    # 伸びしろ（隠し値）。野手と同じ
+    potential: Potential | None = None
 
     LABELS: ClassVar[dict[str, str]] = {
         "stuff": "球威",
@@ -179,9 +214,10 @@ class PitcherRatings:
     }
 
     def __post_init__(self) -> None:
-        for field in fields(self):
-            if field.name in self.LABELS:
-                _require_rating(self.LABELS[field.name], getattr(self, field.name))
+        # 項目は宣言の順（`LABELS` の並び）に検査する。`fields()` を毎回引くと、能力を大量に作る会議の推定で遅い
+        for name, label in self.LABELS.items():
+            _require_rating(label, getattr(self, name))
+        _require_potential(self.potential)
 
     @property
     def pitching_value(self) -> float:
@@ -192,3 +228,9 @@ class PitcherRatings:
     def starter_value(self) -> float:
         """先発としての総合値。長いイニングを投げられることが要る。"""
         return 0.85 * self.pitching_value + 0.15 * self.stamina
+
+
+def _require_potential(potential: object) -> None:
+    """伸びしろが `Potential` か None であることを確かめる（素の整数を渡すと、締めるときまで気づけない）。"""
+    if potential is not None and not isinstance(potential, Potential):
+        raise InvalidRatings("伸びしろの値が正しくありません。")

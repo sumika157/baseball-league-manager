@@ -1,10 +1,11 @@
 """世界の作成時に、分岐した選手の初期能力を実成績から決める。
 
 推定の式は `simulation/estimate.py`。ここは選手全員を束ねる（リーグ全体の実測を求めてから
-ひとりずつ推定し、成長型を引く）。**純粋な関数**で、DB にも Django にも触れない。
+ひとりずつ推定し、成長型と伸びしろを引く）。**純粋な関数**で、DB にも Django にも触れない。
 
-成長型は隠し値。乱数は選手ごとに `blake2b(世界のシード, 年, 選手)` から作るので、
-同じ世界のシードなら何度作っても同じ能力になり、選手を足し引きしても他の選手の成長型は動かない。
+成長型と伸びしろは隠し値。乱数は選手ごとに `blake2b(世界のシード, 年, 用途-選手)`（用途は `growth-`・`potential-`）
+から作るので、同じ世界のシードなら何度作っても同じ能力になり、選手を足し引きしても他の選手の成長型・伸びしろは
+動かない。
 
 **分岐元に試合の成績が無い選手（野手は打席 0、投手はアウト 0）は2軍の層として、分布から引く**
 （`prospects.py`。自動ドラフトの新人と同じ引き方で、平均は錨の尺度の `farm_rating_mean`）。推定に通すと全員が
@@ -25,9 +26,11 @@ from ..simulation.estimate import (
     CareerRecord,
     LeagueNorms,
     draw_growth_type,
+    draw_potential,
     estimate_batter_ratings,
     estimate_pitcher_ratings,
     with_growth,
+    with_potential,
 )
 from ..simulation.randomness import game_seed, make_random
 from ..simulation.ratings import AVERAGE_RATING, BatterRatings, PitcherRatings
@@ -61,14 +64,14 @@ def estimate_initial_ratings(
     """選手全員の初期能力。`records` と同じ順に返す。
 
     成績のある選手は 推定 → 散らばりの調整（`spread.py`。成績のある選手全員を見渡して行う）、成績の無い選手は
-    2軍の層として分布から引く。成長型は調整後の能力の高さで傾くので、最後に引く。
+    2軍の層として分布から引く。成長型は調整後の能力の高さで傾くので、最後に引く（伸びしろも最後。能力と独立）。
     """
     norms = LeagueNorms.of(records)
     played = [index for index, record in enumerate(records) if has_record(record)]
     spread = spread_ratings([_estimate(records[index], norms, baseline=baseline) for index in played])
     by_index = dict(zip(played, spread, strict=True))
     return [
-        _with_growth(
+        _with_hidden(
             record,
             by_index[index] if index in by_index else _farm_ratings(record, seed=seed, year=year),
             seed=seed,
@@ -125,11 +128,15 @@ def _estimate(record: CareerRecord, norms: LeagueNorms, *, baseline: LeagueBasel
     return estimate_batter_ratings(record.batting, record.fielding, record.position, norms, baseline=baseline)
 
 
-def _with_growth(
+def _with_hidden(
     record: CareerRecord, ratings: BatterRatings | PitcherRatings, *, seed: int, year: int
 ) -> PlayerRatings:
     value = ratings.pitching_value if isinstance(ratings, PitcherRatings) else ratings.batting_value
     strength = (value - AVERAGE_RATING) / STRENGTH_UNIT
     rng = make_random(game_seed(seed, year, f"growth-{_seed_key(record)}"))
     growth = draw_growth_type(rng, age=record.age, strength=strength)
-    return PlayerRatings(player_id=record.player_id, year=year, ratings=with_growth(ratings, growth))
+    # 伸びしろは今の能力と独立に、事前の分布から（成績からは決められない）。成長型・2軍の層とは別の乱数の流れ
+    potential = draw_potential(make_random(game_seed(seed, year, f"potential-{_seed_key(record)}")))
+    return PlayerRatings(
+        player_id=record.player_id, year=year, ratings=with_potential(with_growth(ratings, growth), potential)
+    )

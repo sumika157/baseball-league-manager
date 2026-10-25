@@ -2102,10 +2102,11 @@ class SeasonClosed:
     retired_count: int
     # AI の戦力外の人数（引退した選手を含まない）
     released_count: int
-    # 新人の人数と、そのうち外国人の人数
+    # 新人の人数（育成を含む）と、そのうち外国人・育成ドラフトの人数
     draftee_count: int
     foreign_draftee_count: int
-    # ドラフト会議の1巡目の入札の重複（抽選）の件数（外れ1位の再入札の抽選も数える。入札の無い規則は0）
+    development_draftee_count: int
+    # ドラフト会議の本指名の1巡目の入札の重複（抽選）の件数（外れ1位の再入札の抽選も数える。入札の無い規則は0）
     first_round_lottery_count: int
     # 翌年の能力を作らなかった選手の数（締める年の能力が無かった選手）
     without_ratings_count: int

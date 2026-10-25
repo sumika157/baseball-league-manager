@@ -10,7 +10,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('myapp', '0061_workspace_constraints'),
+        ('myapp', '0062_workspace_constraints'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 

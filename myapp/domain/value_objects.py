@@ -84,6 +84,10 @@ class Position(Enum):
 
 # 育成選手の背番号はこの値以上（3桁）。支配下はこれより小さい（2桁以下）
 DEVELOPMENTAL_MIN_NUMBER = 100
+# 育成の背番号の範囲（3桁）。100番台を先に使い、尽きたら200番台以降。**範囲の出典はここだけ**で、実データの投入
+# （`seed_virtual_players`）とペナントの育成ドラフト（`pennant/draft.py`）が共有する
+DEVELOPMENTAL_FIRST_NUMBERS = tuple(str(number) for number in range(DEVELOPMENTAL_MIN_NUMBER, 200))
+DEVELOPMENTAL_SPARE_NUMBERS = tuple(str(number) for number in range(200, 1000))
 # 支配下選手の登録上限の既定値（NPB は70人）。League と永続化の既定値はこれを参照する
 DEFAULT_REGISTERED_PLAYER_LIMIT = 70
 

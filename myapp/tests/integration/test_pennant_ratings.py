@@ -14,7 +14,7 @@ from django.test.utils import CaptureQueriesContext
 from myapp.application.pennant_world import PennantWorldService, WorldRepositories
 from myapp.domain.exceptions import InvalidRatings, InvalidWorld, PlayerNotFound
 from myapp.domain.pennant.ratings import PlayerRatings
-from myapp.domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings
+from myapp.domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings, Potential
 from myapp.domain.simulation.samples import BATTER_SD
 from myapp.domain.simulation.spread import MIN_POPULATION, target_mean
 from myapp.domain.value_objects import BattingLine, InningsPitched, PitchingLine
@@ -48,11 +48,14 @@ class ColumnsMatchTheDomainTest(SimpleTestCase):
                     self.assertIn(name, columns)
                     self.assertEqual(columns[name].verbose_name, label)
 
-    def test_every_dataclass_field_is_a_label_or_the_growth_type(self):
-        """能力の項目は LABELS に挙がっているものだけ（挙げ忘れた項目は、保存も検査もされない）。"""
+    def test_every_dataclass_field_is_a_label_or_a_hidden_value(self):
+        """能力の項目は LABELS に挙がっているものと、隠し値（成長型・伸びしろ。列は `growth`・`potential`）だけ
+        （挙げ忘れた項目は、保存も検査もされない）。"""
         for cls in (BatterRatings, PitcherRatings):
             with self.subTest(cls=cls.__name__):
-                self.assertEqual({f.name for f in fields(cls)}, set(cls.LABELS) | {"growth"})
+                self.assertEqual({f.name for f in fields(cls)}, set(cls.LABELS) | {"growth", "potential"})
+        columns = {field.name for field in orm_models.PennantPlayerRatings._meta.get_fields()}
+        self.assertLessEqual({"growth", "potential"}, columns)
 
     def test_growth_choices_come_from_the_domain(self):
         self.assertEqual(
@@ -84,6 +87,24 @@ class RatingsRepositoryTest(WorldCase):
         loaded = {item.player_id: item for item in self.repository.find_by_year(2031)}
 
         self.assertEqual(loaded, {self.batter_id: batter, self.pitcher_id: pitcher})
+
+    def test_the_potential_round_trips_and_an_empty_one_reads_as_none(self):
+        """伸びしろは列 `potential` に値で保存し、空（#308 より前の行）は None で読む（普通として扱う）。"""
+        batter = PlayerRatings(self.batter_id, 2031, BatterRatings(61, 52, 47, 38, 70, potential=Potential(83)))
+        pitcher = PlayerRatings(self.pitcher_id, 2031, PitcherRatings(66, 58, 44, 72))
+
+        self.repository.add_all([batter, pitcher])
+        loaded = {item.player_id: item for item in self.repository.find_by_year(2031)}
+
+        self.assertEqual(loaded, {self.batter_id: batter, self.pitcher_id: pitcher})
+        rows = orm_models.PennantPlayerRatings.objects.filter(year=2031)
+        self.assertEqual(dict(rows.values_list("player_id", "potential")), {self.batter_id: 83, self.pitcher_id: None})
+
+    def test_the_world_creation_gives_everyone_a_potential(self):
+        stored = self.repository.find_by_year(YEAR)
+
+        self.assertTrue(stored)
+        self.assertTrue(all(item.ratings.potential is not None for item in stored))
 
     def test_the_ratings_of_one_player_are_listed_by_year(self):
         self.repository.add_all([PlayerRatings(self.batter_id, 2032, BatterRatings(40, 40, 40, 40, 40))])
@@ -312,7 +333,7 @@ class ForkedRatingsTest(BaseCase):
         self.assertEqual(self._ratings_by_name(again), self.ratings)
 
     def test_a_different_seed_changes_only_the_hidden_growth_type(self):
-        """成績から決まる項目は同じで、隠し値（成長型）だけがシードで変わる。"""
+        """成績から決まる項目は同じで、隠し値（成長型・伸びしろ）だけがシードで変わる。"""
         growths = set()
         for seed in range(30):
             rated = self._ratings_by_name(self._create(seed=seed, name=f"シード{seed}"))
