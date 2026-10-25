@@ -3,6 +3,7 @@
 プロフィールは基本情報と同じフォーム・同じ「更新する」で保存し（決定4。`RosterService.update_player` の1回の
 集約の保存）、**節の目印（隠し欄）が送られてきたときだけ**更新する。目印の無い送信（退団・主将などのボタンや、
 欄を持たない送信）でプロフィールを空で上書きしない（JSON API の部分更新と同じ罠。CLAUDE.md の既知の罠）。
+操作のボタンは T7 で入力のフォームの外の別のフォームに分けた（`ActionFormsTest`）。
 """
 
 from datetime import date
@@ -165,13 +166,34 @@ class PlayerProfileEditTest(BaseCase):
         self.assertEqual(self.columns(), SAVED_COLUMNS)
 
     def test_the_other_buttons_keep_the_profile(self):
-        """主将・退団のボタンは目印を送るフォームの中にあるが、プロフィールを読まない。"""
+        """操作のボタン（支配下登録・主将・退団）はプロフィールを読まない。
+
+        今の画面ではボタンごとに別のフォームで目印も欄も送らない（`ActionFormsTest`）。目印つきの送信（T4 の前の
+        画面を開いたままの人など）でも、ボタンが押されたらプロフィールを空で上書きしない。
+        """
         self.save_full_profile()
 
-        for button in ("appoint_captain", "remove_captain", "retire"):
-            with self.subTest(button=button):
-                self.client.post(self.url(), {button: "1", PROFILE_SECTION_MARKER: "1"})
-                self.assertEqual(self.columns(), SAVED_COLUMNS)
+        for button in ("promote", "appoint_captain", "remove_captain", "retire"):
+            for marker in ({}, {PROFILE_SECTION_MARKER: "1"}):
+                with self.subTest(button=button, marker=bool(marker)):
+                    self.client.post(self.url(), {button: "1", "promote_number": "5", **marker})
+                    self.assertEqual(self.columns(), SAVED_COLUMNS)
+
+    def test_a_successful_promotion_keeps_the_profile(self):
+        """育成選手の支配下登録が通っても、プロフィールは変わらない（上の検査の支配下登録はドメインの検査で止まるため）。"""
+        developmental = self.roster.register_player(self.team.id, "育成", "120", "投手", contract_label="育成")
+        self.client.post(
+            self.url(developmental.id), {**BASIC, "number": "120", PROFILE_SECTION_MARKER: "1", **FULL_PROFILE}
+        )
+        saved = orm_models.Player.objects.filter(id=developmental.id).values(*SAVED_COLUMNS).get()
+        self.assertEqual(saved, SAVED_COLUMNS)
+
+        response = self.client.post(self.url(developmental.id), {"promote": "1", "promote_number": "55"})
+
+        self.assertEqual(response.status_code, 302)
+        stint = orm_models.PlayerStint.objects.get(player_id=developmental.id)
+        self.assertEqual((stint.promoted_year is not None, stint.number), (True, "55"))
+        self.assertEqual(orm_models.Player.objects.filter(id=developmental.id).values(*SAVED_COLUMNS).get(), saved)
 
     # --- 検査（管理画面と同じ domain の規則）。落ちたら何も保存しない ---
 
@@ -247,8 +269,8 @@ class PlayerProfileEditTest(BaseCase):
         self.assertEqual(self.columns(), SAVED_COLUMNS)
 
 
-class _SubmitButtons(HTMLParser):
-    """各 `<form>` の送信ボタンの属性を、文書順に集める（`<button>` の type の既定は submit）。"""
+class _Forms(HTMLParser):
+    """`<form>` ごとに、送る欄の名前と送信ボタンの属性を文書順に集める（`<button>` の type の既定は submit）。"""
 
     def __init__(self):
         super().__init__()
@@ -266,7 +288,7 @@ class _SubmitButtons(HTMLParser):
             tag == "input" and attributes.get("type") == "submit"
         ):
             self._current["submits"].append(attributes)
-        elif tag in ("input", "select") and "name" in attributes:
+        elif tag in ("input", "select", "textarea") and "name" in attributes:
             self._current["fields"].add(attributes["name"])
 
     def handle_endtag(self, tag):
@@ -274,42 +296,62 @@ class _SubmitButtons(HTMLParser):
             self._current = None
 
 
-class DefaultSubmitButtonTest(BaseCase):
-    """入力欄で Enter を押したとき（暗黙の送信）に押されるのは、フォームの文書順で最初の送信ボタン（HTML の仕様）。
+# 操作のボタン（name）と、そのフォームが送ってよい欄。入力欄（名前・背番号・守備位置・プロフィール）は送らない
+ACTION_FIELDS = {
+    "promote": {"csrfmiddlewaretoken", "promote_number"},
+    "appoint_captain": {"csrfmiddlewaretoken"},
+    "remove_captain": {"csrfmiddlewaretoken"},
+    "retire": {"csrfmiddlewaretoken"},
+}
 
-    選手の編集フォームでは、それが「更新する」と同じ送信（name も value も持たない）でなければならない。
-    支配下登録・主将の指名／解任・退団のボタンが先に来ると、プロフィールの欄で Enter を押しただけで状態が変わる。
+
+class ActionFormsTest(BaseCase):
+    """選手の編集画面の操作のボタンは、入力の保存とは別のフォームにある（W3 T7。#79）。
+
+    同じフォームにあると、欄を書き換えてからボタンを押したときに入力が黙って捨てられ、入力欄で Enter を押すと
+    文書順で最初のボタン（支配下登録・主将の指名／解任）が押されたことになる（HTML の仕様。T4 で踏んだ）。
+    入力のフォームの送信ボタンは「更新する」（name も value も持たない）1つだけで、
+    操作のボタンはそれぞれ別のフォームにあり、入力欄の値を送らない。
     """
 
     def setUp(self):
         super().setUp()
         login_as_manager(self.client, self.team)
 
-    def first_submit_of_the_edit_form(self, player_id):
-        parser = _SubmitButtons()
+    def forms_of(self, player_id):
+        parser = _Forms()
         parser.feed(self.client.get(ws_url("player_edit", self.team.id, player_id)).content.decode())
-        edit_form = next(form for form in parser.forms if PROFILE_SECTION_MARKER in form["fields"])
-        return edit_form["submits"]
+        return parser.forms
 
-    def test_the_first_submit_button_is_the_update(self):
+    def test_the_action_buttons_are_outside_the_edit_form(self):
         developmental = self.roster.register_player(self.team.id, "育成", "120", "投手", contract_label="育成")
         captain = self.roster.register_player(self.team.id, "主将", "1", "内野手")
         self.roster.appoint_captain(self.team.id, captain.id)
         plain = self.roster.register_player(self.team.id, "山田", "10", "内野手")
         cases = {
-            "育成選手（支配下登録のボタンあり）": developmental,
-            "主将（解任のボタン）": captain,
-            "主将でない": plain,
+            "育成選手（支配下登録のボタンあり）": (developmental, {"promote", "appoint_captain", "retire"}),
+            "主将（解任のボタン）": (captain, {"remove_captain", "retire"}),
+            "主将でない": (plain, {"appoint_captain", "retire"}),
         }
 
-        for label, player in cases.items():
+        for label, (player, expected_actions) in cases.items():
             with self.subTest(label):
-                submits = self.first_submit_of_the_edit_form(player.id)
-                first = submits[0]
-                self.assertNotIn("name", first, f"最初の送信ボタンが {first} になっている")
-                self.assertNotIn("formnovalidate", first)
-                # 見える「更新する」も同じ送信（name・value なし）
-                update = next(button for button in submits[1:] if "name" not in button)
-                self.assertNotIn("value", update)
-                # 他のボタン（支配下登録・主将・退団）は、最初のボタンより後ろにある
-                self.assertTrue(all("name" in button for button in submits[1:] if button is not update))
+                forms = self.forms_of(player.id)
+                edit_form = next(form for form in forms if PROFILE_SECTION_MARKER in form["fields"])
+                self.assertTrue({"name", "number", "position"} <= edit_form["fields"])
+                # 入力のフォームの送信ボタンは「更新する」1つだけ（Enter でもこれが押される）
+                self.assertEqual(len(edit_form["submits"]), 1, edit_form["submits"])
+                self.assertNotIn("name", edit_form["submits"][0])
+                self.assertNotIn("value", edit_form["submits"][0])
+
+                action_forms = {
+                    button["name"]: form
+                    for form in forms
+                    for button in form["submits"]
+                    if button.get("name") in ACTION_FIELDS
+                }
+                self.assertEqual(set(action_forms), expected_actions)
+                for action, form in action_forms.items():
+                    # ボタンごとに別のフォームで、入力欄の値を送らない
+                    self.assertEqual(len(form["submits"]), 1, f"{action} のフォームにほかのボタンがある")
+                    self.assertEqual(form["fields"], ACTION_FIELDS[action], action)

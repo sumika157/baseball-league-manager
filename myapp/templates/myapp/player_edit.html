@@ -65,13 +65,9 @@
 <form method="POST">
   {% csrf_token %}
   {% comment %}
-    入力欄で Enter を押したときの送信（暗黙の送信）は、HTML の仕様でフォームの中の「文書順で最初の送信ボタン」が押されたことになる。
-    この画面は「支配下登録する」「主将にする／解任する」「退団にする」が「更新する」より前にあるため、置かないと Enter で
-    昇格や主将の変更が起きる。そこで「更新する」と同じ送信（name も value も持たない）を先頭に見えない形で置く。
-    display:none（hidden 属性・d-none）は、ブラウザによっては既定のボタンとして扱われないので visually-hidden にする。
-    test_player_profile_edit.py の DefaultSubmitButtonTest が「最初の送信ボタン」を検査する。
+    入力の保存のフォーム。送信ボタンは「更新する」1つだけにする（入力欄で Enter を押したときの送信は、HTML の仕様で
+    フォームの中の文書順で最初の送信ボタンが押されたことになる。操作のボタンは下の「操作」の節の別のフォームに置く）。
   {% endcomment %}
-  <button type="submit" class="visually-hidden" tabindex="-1" aria-hidden="true">更新する</button>
 
   <div class="card mb-3">
     <div class="card-header">基本情報</div>
@@ -104,7 +100,7 @@
 
   {% comment %}
     プロフィール。基本情報と同じフォーム・同じ「更新する」で保存する（決定4）。
-    隠し欄は節の目印で、これがある送信でだけプロフィールを更新する（退団などのボタンでプロフィールを空にしない）。
+    隠し欄は節の目印で、これがある送信でだけプロフィールを更新する（欄を持たない送信でプロフィールを空にしない）。
     選択肢（投打）はフォームがドメインの Handedness から作る。
   {% endcomment %}
   <input type="hidden" name="{{ profile_section_marker }}" value="1" />
@@ -223,53 +219,63 @@
     </div>
   </div>
 
-  {% comment %}
-    育成選手だけに出す。この画面自体がこのチームの担当者にしか開けないので、
-    押しても弾かれるだけの導線にはならない。
-  {% endcomment %}
-  {% if player.is_developmental %}
-  <div class="card mb-3">
-    <div class="card-header">契約区分: 育成</div>
-    <div class="card-body">
-      <p class="page-subtitle mb-3" style="font-size: 0.8125rem;">
+  <div class="d-flex justify-content-between align-items-center">
+    <a href="{% workspace_url 'player_list' player.team_id %}" class="btn btn-secondary">戻る</a>
+    <button type="submit" class="btn btn-primary">更新する</button>
+  </div>
+</form>
+
+{% comment %}
+  操作（支配下登録・主将の指名／解任・退団）。入力の保存とは別の操作なので、それぞれ別の小さなフォームにして
+  上の入力のフォームの外に置く（W3 T7。#79）。同じフォームにあると、欄を書き換えてからボタンを押したときに入力が黙って捨てられ、
+  入力欄で Enter を押すと文書順で最初のボタン（昇格や主将の変更）が押されたことになる。
+  どのフォームも入力欄の値を送らない（送るのは押したボタンと、支配下登録の新しい背番号だけ）。
+  test_player_profile_edit.py の ActionFormsTest が、入力のフォームに操作のボタンが無いこと・ボタンごとに別のフォームであることを検査する。
+  この画面自体がこのチームを編集できる人にしか開けないので、押しても弾かれるだけの導線にはならない。
+{% endcomment %}
+<div class="card mb-3 mt-4">
+  <div class="card-header">操作</div>
+  <div class="card-body">
+    <p class="page-subtitle mb-3" style="font-size: 0.8125rem;">
+      上の入力とは別の操作です。上で書き換えた内容は送られないので、先に「更新する」で保存してください。
+    </p>
+    {% if player.is_developmental %}
+    <form method="POST" class="mb-3">
+      {% csrf_token %}
+      <div class="fw-semibold mb-1">契約区分: 育成</div>
+      <p class="page-subtitle mb-2" style="font-size: 0.8125rem;">
         支配下登録にすると、背番号は支配下の番号（00・0〜99）に変わります。
       </p>
       <div class="row g-2 align-items-end">
         <div class="col-md-3">
-          <label class="form-label">新しい背番号</label>
-          <input type="text" name="promote_number" class="form-control" inputmode="numeric" pattern="0|00|[1-9][0-9]{0,1}" maxlength="2" title="支配下の背番号（00・0〜99）" />
+          <label class="form-label" for="promote-number">新しい背番号</label>
+          <input type="text" id="promote-number" name="promote_number" class="form-control" inputmode="numeric" pattern="0|00|[1-9][0-9]{0,1}" maxlength="2" title="支配下の背番号（00・0〜99）" required />
         </div>
         <div class="col-md-3">
-          <button type="submit" name="promote" value="1" class="btn btn-outline-secondary"
-                  formnovalidate>
-            支配下登録する
-          </button>
+          <button type="submit" name="promote" value="1" class="btn btn-outline-secondary">支配下登録する</button>
         </div>
       </div>
+    </form>
+    {% endif %}
+    <div class="d-flex flex-wrap gap-2">
+      <form method="POST">
+        {% csrf_token %}
+        {% if player.is_captain %}
+          <button type="submit" name="remove_captain" value="1" class="btn btn-outline-secondary">主将を解任する</button>
+        {% else %}
+          <button type="submit" name="appoint_captain" value="1" class="btn btn-outline-secondary">主将にする</button>
+        {% endif %}
+      </form>
+      <form method="POST">
+        {% csrf_token %}
+        <button type="submit" name="retire" value="1" class="btn btn-outline-danger"
+                onclick="return confirm('{{ player.name }} 選手を退団にします。成績は残り、背番号は再利用できるようになります。よろしいですか?')">
+          退団にする
+        </button>
+      </form>
     </div>
   </div>
-  {% endif %}
-
-  <div class="d-flex justify-content-between align-items-center">
-    <a href="{% workspace_url 'player_list' player.team_id %}" class="btn btn-secondary">戻る</a>
-    <div class="d-flex gap-2">
-      {% if player.is_captain %}
-        <button type="submit" name="remove_captain" value="1" class="btn btn-outline-secondary">
-          主将を解任する
-        </button>
-      {% else %}
-        <button type="submit" name="appoint_captain" value="1" class="btn btn-outline-secondary">
-          主将にする
-        </button>
-      {% endif %}
-      <button type="submit" name="retire" value="1" class="btn btn-outline-danger"
-              onclick="return confirm('{{ player.name }} 選手を退団にします。成績は残り、背番号は再利用できるようになります。よろしいですか?')">
-        退団にする
-      </button>
-      <button type="submit" class="btn btn-primary">更新する</button>
-    </div>
-  </div>
-</form>
+</div>
 
 <form method="POST" class="mt-4">
   {% csrf_token %}
