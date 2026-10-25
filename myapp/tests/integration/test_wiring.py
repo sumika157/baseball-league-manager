@@ -41,6 +41,7 @@ from myapp.application.queries import (
     FieldingTotalsQuery,
     GameListQuery,
     HomeStadiumQuery,
+    InvitationPreviewQuery,
     OffseasonQuery,
     PennantActivityQuery,
     PostseasonQuery,
@@ -53,11 +54,13 @@ from myapp.application.queries import (
     TeamListQuery,
     WorkspaceAccessQuery,
     WorkspaceListQuery,
+    WorkspaceManagementQuery,
     WorldSummaryQuery,
 )
 from myapp.application.roster import RosterService
 from myapp.application.team_analysis import TeamAnalysisService
 from myapp.application.team_view import TeamViewService
+from myapp.application.workspaces import WorkspaceMemberService, WorkspaceService
 from myapp.domain.exceptions import InvalidWorld
 from myapp.domain.pennant.world import WorldScope
 from myapp.domain.repositories import (
@@ -66,11 +69,13 @@ from myapp.domain.repositories import (
     ClubPlanRepository,
     FixtureRepository,
     GameRepository,
+    InvitationRepository,
     LeagueRepository,
     RatingsRepository,
     ReleasePlanRepository,
     StadiumRepository,
     TeamRepository,
+    WorkspaceRepository,
     WorldRepository,
 )
 from myapp.infrastructure import queries, repositories
@@ -80,6 +85,7 @@ from myapp.infrastructure.queries import (
     DjangoFieldingTotalsQuery,
     DjangoGameListQuery,
     DjangoHomeStadiumQuery,
+    DjangoInvitationPreviewQuery,
     DjangoOffseasonQuery,
     DjangoPennantActivityQuery,
     DjangoPostseasonQuery,
@@ -92,6 +98,7 @@ from myapp.infrastructure.queries import (
     DjangoTeamListQuery,
     DjangoWorkspaceAccessQuery,
     DjangoWorkspaceListQuery,
+    DjangoWorkspaceManagementQuery,
     DjangoWorldSummaryQuery,
 )
 from myapp.infrastructure.repositories import (
@@ -100,11 +107,13 @@ from myapp.infrastructure.repositories import (
     DjangoClubPlanRepository,
     DjangoFixtureRepository,
     DjangoGameRepository,
+    DjangoInvitationRepository,
     DjangoLeagueRepository,
     DjangoRatingsRepository,
     DjangoReleasePlanRepository,
     DjangoStadiumRepository,
     DjangoTeamRepository,
+    DjangoWorkspaceRepository,
     DjangoWorldRepository,
 )
 from myapp.presentation import views
@@ -112,6 +121,7 @@ from myapp.presentation.views import (
     build_club_details_service,
     build_club_service,
     build_game_view_service,
+    build_invitation_preview_query,
     build_league_setup_service,
     build_league_view_service,
     build_offseason_view_service,
@@ -133,6 +143,9 @@ from myapp.presentation.views import (
     build_team_view_service,
     build_workspace_access_query,
     build_workspace_list_query,
+    build_workspace_management_query,
+    build_workspace_member_service,
+    build_workspace_service,
 )
 
 # 組み立てるときに DB を読まないので、ワークスペースの id はリテラルでよい（SimpleTestCase のまま通す）
@@ -174,8 +187,18 @@ PENNANT_ONLY_BUILDERS = (
     build_pennant_settings_service,
 )
 # ワークスペースの台帳（W2 T1）。範囲もワークスペースの id も取らない（key・利用者からワークスペースそのものを引き、
-# 中のデータは読まない）。名前で列挙し、黙って増えないようにする（`WorkspaceLedgersTest`）
-WORKSPACE_LEDGER_BUILDERS = (build_workspace_access_query, build_workspace_list_query)
+# 中のデータは読まない）。名前で列挙し、黙って増えないようにする（`WorkspaceLedgersTest`）。
+# W4 で、ワークスペースが決まる前の操作（作成・招待の受諾・招待の中身）と、id でワークスペースそのものを書く操作
+# （設定・メンバー）の組み立て口を足した
+WORKSPACE_LEDGER_BUILDERS = (
+    build_workspace_access_query,
+    build_workspace_list_query,
+    build_workspace_service,
+    build_workspace_member_service,
+    build_invitation_preview_query,
+)
+# 1つのワークスペースのメンバーと招待だけを読む（W4）。範囲ではなくワークスペースの id を取る
+MEMBER_BUILDERS = (build_workspace_management_query,)
 
 # 範囲もワークスペースも受け取らずに作れる実装。W1b T3 で世界の台帳もワークスペースを受け取るようになり、空になった。
 # ここに足す前に、範囲かワークスペースで絞れないかを考える（全範囲を読む実装は、ワークスペースをまたいで行を漏らす）
@@ -184,7 +207,23 @@ UNSCOPED: set[type] = set()
 LEDGERS = {DjangoWorldRepository, DjangoWorldSummaryQuery}
 # ワークスペースの台帳（W2 T1）。何も受け取らない（key・利用者は呼ぶときに渡す）。ここに足すのは
 # 「ワークスペースそのものを引き、中のデータを読まない」実装だけ
-WORKSPACE_LEDGERS = {DjangoWorkspaceAccessQuery, DjangoWorkspaceListQuery}
+WORKSPACE_LEDGERS = {
+    DjangoWorkspaceAccessQuery,
+    DjangoWorkspaceListQuery,
+    DjangoWorkspaceRepository,
+    DjangoInvitationRepository,
+    DjangoInvitationPreviewQuery,
+}
+# 1つのワークスペースのメンバーと招待だけを読む参照（W4）。ワークスペースの id だけを受け取る
+MEMBER_QUERIES = {DjangoWorkspaceManagementQuery}
+# 何も受け取らずに作れる実装の名前（黙って増やさない）
+TAKES_NOTHING = {
+    "DjangoWorkspaceAccessQuery",
+    "DjangoWorkspaceListQuery",
+    "DjangoWorkspaceRepository",
+    "DjangoInvitationRepository",
+    "DjangoInvitationPreviewQuery",
+}
 
 
 class ProtocolConformanceTest(SimpleTestCase):
@@ -216,6 +255,10 @@ class ProtocolConformanceTest(SimpleTestCase):
         (DjangoHomeStadiumQuery(REAL), HomeStadiumQuery),
         (DjangoWorkspaceAccessQuery(), WorkspaceAccessQuery),
         (DjangoWorkspaceListQuery(), WorkspaceListQuery),
+        (DjangoWorkspaceRepository(), WorkspaceRepository),
+        (DjangoInvitationRepository(), InvitationRepository),
+        (DjangoInvitationPreviewQuery(), InvitationPreviewQuery),
+        (DjangoWorkspaceManagementQuery(1), WorkspaceManagementQuery),
         (DjangoPostseasonQuery(REAL), PostseasonQuery),
         (DjangoPostseasonStatsQuery(REAL), PostseasonStatsQuery),
     ]
@@ -253,7 +296,7 @@ class ScopeIsRequiredTest(SimpleTestCase):
             if cls in WORKSPACE_LEDGERS:
                 continue
             with self.subTest(implementation=cls.__name__):
-                expected = "workspace_id" if cls in LEDGERS else "scope"
+                expected = "workspace_id" if cls in LEDGERS | MEMBER_QUERIES else "scope"
                 parameters = signature(cls.__init__).parameters
                 self.assertEqual(list(parameters), ["self", expected], f"{expected} だけを受け取っていません")
                 self.assertIs(parameters[expected].default, Parameter.empty, f"{expected} に既定値があります")
@@ -263,12 +306,12 @@ class ScopeIsRequiredTest(SimpleTestCase):
             DjangoTeamRepository()  # type: ignore[call-arg]
 
     def test_a_workspace_cannot_be_omitted_from_the_ledgers(self):
-        for cls in LEDGERS:
+        for cls in LEDGERS | MEMBER_QUERIES:
             with self.subTest(implementation=cls.__name__), self.assertRaises(TypeError):
                 cls()
 
     def test_only_the_workspace_ledgers_take_nothing(self):
-        """何も受け取らずに作れるのは、ワークスペースの台帳の2つだけ（名前で固定し、黙って増やさない）。
+        """何も受け取らずに作れるのは、ワークスペースの台帳だけ（名前で固定し、黙って増やさない）。
 
         ワークスペースの台帳は key・利用者からワークスペースそのものを引くので、範囲を作る前に呼ばれる。
         ほかの実装が範囲を取らずに作れると、ワークスペースをまたいで行を読む。
@@ -276,9 +319,7 @@ class ScopeIsRequiredTest(SimpleTestCase):
         # クラスそのものの signature は、継いだコンストラクタも解決して呼ぶときの引数を返す
         # （`__init__` を定義しなければ object の `()`。親の `__init__(self, scope)` を継げば `(scope)`）
         takes_nothing = {cls for cls in self._implementations() if not signature(cls).parameters}
-        self.assertEqual(
-            {cls.__name__ for cls in takes_nothing}, {"DjangoWorkspaceAccessQuery", "DjangoWorkspaceListQuery"}
-        )
+        self.assertEqual({cls.__name__ for cls in takes_nothing}, TAKES_NOTHING)
         self.assertEqual(takes_nothing, WORKSPACE_LEDGERS)
 
 
@@ -393,6 +434,36 @@ class BuildServiceTest(SimpleTestCase):
     def test_league_setup_service_dependencies_are_wired(self):
         """リーグ・チーム・球場の登録のサービスも同じ検査にかける（W3。組み立て口は build_*() 関数だけ）。"""
         self._assert_wired(build_league_setup_service(REAL), LeagueSetupService)
+
+    def test_workspace_service_dependencies_are_wired(self):
+        """ワークスペースの作成・設定のサービス（W4）。上限は settings から、トランザクションは Django のもの。"""
+        from django.db import transaction
+        from django.test import override_settings
+
+        from myapp.infrastructure.workspaces import new_workspace_key
+
+        with override_settings(WORKSPACE_MAX_OWNED=7):
+            service = build_workspace_service()
+        self._assert_wired(service, WorkspaceService)
+        self.assertIsInstance(service._workspaces, DjangoWorkspaceRepository)
+        self.assertEqual(service._quota.max_owned_workspaces, 7)
+        self.assertIs(service._new_key, new_workspace_key)
+        self.assertIs(service._atomic, transaction.atomic)
+
+    def test_workspace_member_service_dependencies_are_wired(self):
+        """招待とメンバーのサービス（W4）。時計は Django の現在時刻（タイムゾーンつき）。"""
+        from django.db import transaction
+        from django.utils import timezone
+
+        from myapp.infrastructure.workspaces import new_invitation_token
+
+        service = build_workspace_member_service()
+        self._assert_wired(service, WorkspaceMemberService)
+        self.assertIsInstance(service._workspaces, DjangoWorkspaceRepository)
+        self.assertIsInstance(service._invitations, DjangoInvitationRepository)
+        self.assertIs(service._new_token, new_invitation_token)
+        self.assertIs(service._clock, timezone.now)
+        self.assertIs(service._atomic, transaction.atomic)
 
     def test_game_view_service_dependencies_are_wired(self):
         """試合の参照サービスも同じ検査にかける（組み立て口は build_*() 関数だけ）。"""
@@ -638,6 +709,7 @@ class BuildersRequireScopeTest(SimpleTestCase):
             PENNANT_ONLY_BUILDERS,
             LEDGER_BUILDERS,
             WORKSPACE_LEDGER_BUILDERS,
+            MEMBER_BUILDERS,
         )
         found = self._found_builders()
         self.assertGreaterEqual(len(found), 16, "検査の対象を拾えていません")
@@ -649,7 +721,7 @@ class BuildersRequireScopeTest(SimpleTestCase):
 
     def test_every_builder_takes_a_required_scope(self):
         for function in self._found_builders():
-            if function in LEDGER_BUILDERS or function in WORKSPACE_LEDGER_BUILDERS:
+            if function in LEDGER_BUILDERS + WORKSPACE_LEDGER_BUILDERS + MEMBER_BUILDERS:
                 continue
             with self.subTest(build=function.__name__):
                 parameters = signature(function).parameters
@@ -657,18 +729,31 @@ class BuildersRequireScopeTest(SimpleTestCase):
                 self.assertIs(parameters["scope"].default, Parameter.empty, "範囲に既定値があります")
 
     def test_the_ledger_only_view_takes_a_required_workspace(self):
-        for build in LEDGER_BUILDERS:
+        for build in LEDGER_BUILDERS + MEMBER_BUILDERS:
             parameters = signature(build).parameters
             self.assertEqual(list(parameters), ["workspace_id"])
             self.assertIs(parameters["workspace_id"].default, Parameter.empty, "ワークスペースに既定値があります")
 
     def test_only_the_workspace_ledgers_are_built_without_a_scope_or_a_workspace(self):
-        """範囲もワークスペースの id も取らない組み立て口は、ワークスペースの台帳の2つだけ（名前で固定する）。"""
+        """範囲もワークスペースの id も取らない組み立て口は、ワークスペースの台帳だけ（名前で固定する）。"""
         takes_nothing = {f.__name__ for f in self._found_builders() if not signature(f).parameters}
-        self.assertEqual(takes_nothing, {"build_workspace_access_query", "build_workspace_list_query"})
+        self.assertEqual(
+            takes_nothing,
+            {
+                "build_workspace_access_query",
+                "build_workspace_list_query",
+                "build_workspace_service",
+                "build_workspace_member_service",
+                "build_invitation_preview_query",
+            },
+        )
         self.assertEqual(takes_nothing, {f.__name__ for f in WORKSPACE_LEDGER_BUILDERS})
         self.assertIsInstance(build_workspace_access_query(), DjangoWorkspaceAccessQuery)
         self.assertIsInstance(build_workspace_list_query(), DjangoWorkspaceListQuery)
+        self.assertIsInstance(build_invitation_preview_query(), DjangoInvitationPreviewQuery)
+        query = build_workspace_management_query(3)
+        self.assertIsInstance(query, DjangoWorkspaceManagementQuery)
+        self.assertEqual(query._workspace_id, 3)
 
     def test_the_world_scope_builders_were_folded_into_the_scope_taking_ones(self):
         self.assertFalse(hasattr(views, "build_world_view_service"))
@@ -910,15 +995,30 @@ class WorkspaceLedgerUsersTest(SimpleTestCase):
     application・管理コマンド・テンプレートタグなど、範囲を受け取れる場所で台帳を引き始めると、範囲の外から
     ワークスペースを選び直す経路になる。`myapp/` の .py（テストを除く）を走査し、名前を出すのが
     この2つだけかを確かめる。
+
+    W4 で足したワークスペースそのものの台帳（`DjangoWorkspaceRepository`・`DjangoInvitationRepository`・
+    `DjangoInvitationPreviewQuery`）と、その組み立て口（作成・設定・招待・メンバー）も同じ扱いにする
+    （定義の `infrastructure/repositories.py` を足す）。管理画面がワークスペースの削除をサービスに通すときは（W4 T6）、
+    ここに `myapp/admin.py` を足す。
     """
 
     NAMES = (
         "build_workspace_access_query",
         "build_workspace_list_query",
+        "build_workspace_service",
+        "build_workspace_member_service",
+        "build_invitation_preview_query",
         "DjangoWorkspaceAccessQuery",
         "DjangoWorkspaceListQuery",
+        "DjangoWorkspaceRepository",
+        "DjangoInvitationRepository",
+        "DjangoInvitationPreviewQuery",
     )
-    ALLOWED = {Path("myapp/presentation/views.py"), Path("myapp/infrastructure/queries.py")}
+    ALLOWED = {
+        Path("myapp/presentation/views.py"),
+        Path("myapp/infrastructure/queries.py"),
+        Path("myapp/infrastructure/repositories.py"),
+    }
 
     def test_only_the_views_use_the_workspace_ledgers(self):
         root = Path(__file__).resolve().parents[3]

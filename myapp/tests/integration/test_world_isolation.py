@@ -602,6 +602,7 @@ ROOT = "全体"
 CLASSIFICATION: dict[str, tuple[str, str | None]] = {
     "Workspace": (ROOT, None),
     "WorkspaceEditor": (MEMBER, "workspace"),
+    "WorkspaceInvitation": (MEMBER, "workspace"),
     "PennantWorld": (DIRECT, "workspace"),
     "Stadium": (DIRECT, "workspace"),
     "League": (BOTH, None),
@@ -691,13 +692,14 @@ class ModelClassificationTest(SimpleTestCase):
     def test_workspace_level_models_do_not_point_into_a_league(self):
         """ワークスペース直属・メンバーのモデルは、リーグ以下の行を指さない（指すならリーグ経由）。
 
-        例外は世界の「受け持つ球団」だけ（世界は直属だが、遊ぶ球団を指す。球団を消すと外れる）。
+        例外は世界の「受け持つ球団」（世界は直属だが、遊ぶ球団を指す。球団を消すと外れる）と、招待の担当チーム
+        （受諾した人が担当になるチーム。チームを消すと外れる。W4）。
         """
         models = self._models()
         below_league = {
             models[name] for name, (kind, _) in CLASSIFICATION.items() if kind in (LEAGUE, PLAYER, GAME)
         } | {orm_models.League}
-        allowed = {("PennantWorld", "managed_team")}
+        allowed = {("PennantWorld", "managed_team"), ("WorkspaceInvitation", "teams")}
         for name, (kind, _) in CLASSIFICATION.items():
             if kind not in (DIRECT, MEMBER):
                 continue

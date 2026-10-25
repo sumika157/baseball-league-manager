@@ -20,6 +20,7 @@ from django.http import Http404, HttpResponseNotAllowed, JsonResponse
 from django.middleware.csrf import get_token
 from django.shortcuts import redirect, render
 from django.urls import reverse, reverse_lazy
+from django.utils import timezone
 from django.views.decorators.http import require_GET, require_safe
 from django.views.generic import CreateView
 
@@ -64,6 +65,7 @@ from ..application.queries import SimulationContextQuery
 from ..application.roster import RosterService
 from ..application.team_analysis import STATS_TAB, TeamAnalysisService
 from ..application.team_view import TeamViewService
+from ..application.workspaces import WorkspaceMemberService, WorkspaceService
 from ..domain.exceptions import (
     AlreadyAdvanced,
     AlreadyClosed,
@@ -104,12 +106,14 @@ from ..domain.value_objects import (
     PlateAppearanceResult,
     Position,
 )
+from ..domain.workspace import WorkspaceQuota
 from ..infrastructure.queries import (
     DjangoAwardQuery,
     DjangoChampionshipQuery,
     DjangoFieldingTotalsQuery,
     DjangoGameListQuery,
     DjangoHomeStadiumQuery,
+    DjangoInvitationPreviewQuery,
     DjangoOffseasonQuery,
     DjangoPennantActivityQuery,
     DjangoPlayerFieldingQuery,
@@ -126,6 +130,7 @@ from ..infrastructure.queries import (
     DjangoTeamListQuery,
     DjangoWorkspaceAccessQuery,
     DjangoWorkspaceListQuery,
+    DjangoWorkspaceManagementQuery,
     DjangoWorldSummaryQuery,
 )
 from ..infrastructure.repositories import (
@@ -134,13 +139,16 @@ from ..infrastructure.repositories import (
     DjangoClubPlanRepository,
     DjangoFixtureRepository,
     DjangoGameRepository,
+    DjangoInvitationRepository,
     DjangoLeagueRepository,
     DjangoRatingsRepository,
     DjangoReleasePlanRepository,
     DjangoStadiumRepository,
     DjangoTeamRepository,
+    DjangoWorkspaceRepository,
     DjangoWorldRepository,
 )
+from ..infrastructure.workspaces import new_invitation_token, new_workspace_key
 from .club_input import (
     ACTION_AUTO,
     ACTION_MANUAL,
@@ -580,6 +588,44 @@ def build_workspace_access_query() -> DjangoWorkspaceAccessQuery:
 def build_workspace_list_query() -> DjangoWorkspaceListQuery:
     """自分が入っているワークスペースの一覧（`/`）を組み立てる。範囲を取らない台帳（利用者で絞る）。"""
     return DjangoWorkspaceListQuery()
+
+
+def build_workspace_service() -> WorkspaceService:
+    """ワークスペースの作成・設定のサービスを組み立てる（W4。#80）。
+
+    範囲を取らない: 作成はワークスペースが決まる前の操作で、設定は id でワークスペースそのものの台帳を書く。
+    上限は `settings.WORKSPACE_MAX_OWNED`（環境変数。既定3）から作る。
+    """
+    return WorkspaceService(
+        workspaces=DjangoWorkspaceRepository(),
+        quota=WorkspaceQuota(max_owned_workspaces=settings.WORKSPACE_MAX_OWNED),
+        new_key=new_workspace_key,
+        atomic=transaction.atomic,
+    )
+
+
+def build_workspace_member_service() -> WorkspaceMemberService:
+    """招待の発行・取消・受諾と、メンバーの役割の変更・除名のサービスを組み立てる（W4。#80）。
+
+    範囲を取らない: 受諾はトークンからワークスペースを引く（ワークスペースが決まる前の操作）。
+    """
+    return WorkspaceMemberService(
+        workspaces=DjangoWorkspaceRepository(),
+        invitations=DjangoInvitationRepository(),
+        new_token=new_invitation_token,
+        clock=timezone.now,
+        atomic=transaction.atomic,
+    )
+
+
+def build_invitation_preview_query() -> DjangoInvitationPreviewQuery:
+    """招待のリンクを開いた人に招待の中身を見せる台帳を組み立てる（W4。範囲を取らない。トークンから引く）。"""
+    return DjangoInvitationPreviewQuery()
+
+
+def build_workspace_management_query(workspace_id: int) -> DjangoWorkspaceManagementQuery:
+    """メンバーの画面（メンバーと招待の一覧）の参照クエリを組み立てる（W4。ワークスペースの id は必須）。"""
+    return DjangoWorkspaceManagementQuery(workspace_id)
 
 
 def _repositories_for(scope: WorldScope) -> WorldRepositories:

@@ -18,6 +18,9 @@ A の範囲で読んだもの・A の key の URL（`/w/<A の key>/...`）の�
   削除は B の行を消せない（どの表の行も変わらない）。登録画面の URL（T2・T3）も `URL_TABLE` に載る（`Side.stadium`）。
 - ワークスペースの台帳（`DjangoWorkspaceAccessQuery`・`DjangoWorkspaceListQuery`。W2 T1）: A の key で B の行が
   出ず、B の編集者・担当は A では部外者。一覧に、入っていないワークスペースは出ない。
+- メンバーと招待（W4。#80）: A の集約・メンバーの一覧に B のメンバーと A の世界の球団の担当は入らず、A の保存は
+  B の行に触れず B のチームを拒む。A の id では B の招待を消せず、A の招待に B のチームは入らない。招待の中身に出る
+  担当チームは、その招待のワークスペースの実データのチームだけ。
 - URL（W2 T4）: `workspace_urlpatterns` の全パターンを分類表（`URL_TABLE`）で検査する（表に無いパターンが
   あれば落ちる）。A の key の下で B の id は 404・A の画面に B の目印が出ない（選手検索を含む）・非公開の B は
   未ログインならログインへ、部外者は 404、B の編集者と担当は通る・A の画面のリンクは A の key の下か
@@ -29,7 +32,7 @@ import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import patch
 
 from django.apps import apps
@@ -39,6 +42,7 @@ from django.http import Http404
 from django.test import RequestFactory, TestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
+from django.utils import timezone
 
 from myapp.domain.entities import Game
 from myapp.domain.entities import Stadium as DomainStadium
@@ -48,6 +52,8 @@ from myapp.domain.exceptions import (
     GameNotFound,
     InvalidAward,
     InvalidChampionship,
+    InvalidInvitation,
+    InvalidWorkspace,
     InvalidWorld,
     LeagueNotFound,
     StadiumNotFound,
@@ -68,7 +74,7 @@ from myapp.domain.value_objects import (
     RosterLimits,
     Season,
 )
-from myapp.domain.workspace import Visibility, WorkspaceRole
+from myapp.domain.workspace import Invitation, InvitedRole, Visibility, WorkspaceRole, invitation_digest
 from myapp.infrastructure import orm_models, queries, repositories
 from myapp.infrastructure.queries import (
     DjangoAwardQuery,
@@ -76,6 +82,7 @@ from myapp.infrastructure.queries import (
     DjangoFieldingTotalsQuery,
     DjangoGameListQuery,
     DjangoHomeStadiumQuery,
+    DjangoInvitationPreviewQuery,
     DjangoOffseasonQuery,
     DjangoPennantActivityQuery,
     DjangoPlayerFieldingQuery,
@@ -92,6 +99,7 @@ from myapp.infrastructure.queries import (
     DjangoTeamListQuery,
     DjangoWorkspaceAccessQuery,
     DjangoWorkspaceListQuery,
+    DjangoWorkspaceManagementQuery,
     DjangoWorldSummaryQuery,
 )
 from myapp.infrastructure.repositories import (
@@ -100,11 +108,13 @@ from myapp.infrastructure.repositories import (
     DjangoClubPlanRepository,
     DjangoFixtureRepository,
     DjangoGameRepository,
+    DjangoInvitationRepository,
     DjangoLeagueRepository,
     DjangoRatingsRepository,
     DjangoReleasePlanRepository,
     DjangoStadiumRepository,
     DjangoTeamRepository,
+    DjangoWorkspaceRepository,
     DjangoWorldRepository,
 )
 from myapp.infrastructure.scoping import players_in, stadiums_in
@@ -782,6 +792,125 @@ def _workspace_list_query(t: WorkspaceCase) -> None:
     t.assert_no_mark(a_rows)
 
 
+def _marked_b_member(t: WorkspaceCase) -> User:
+    """B の担当で、A の世界の球団の担当でもある利用者（名前に目印。A のメンバーではない）。2回目は同じ行を返す。"""
+    user, _ = User.objects.get_or_create(username=f"{B_MARK}担当")
+    t.b_team.managers.add(user)
+    a_world_team = orm_models.Team.objects.filter(league__world_id=t.a_world_id).order_by("id").first()
+    assert a_world_team is not None
+    a_world_team.managers.add(user)
+    return user
+
+
+def _managers_rows() -> set[tuple[int, int]]:
+    return set(orm_models.Team.managers.through.objects.values_list("team_id", "user_id"))
+
+
+def _workspace_repository(t: WorkspaceCase) -> None:
+    """A の集約に B のメンバー・A の世界の球団の担当は入らない。A の保存は B の行に触れず、B のチームを拒む。"""
+    repo = DjangoWorkspaceRepository()
+    _b_members(t)
+    marked = _marked_b_member(t)
+    workspace = repo.find_by_id(t.workspace.id)
+    t.assertFalse(workspace.is_member(marked.id), "B の担当・A の世界の球団の担当が A のメンバーになった")
+    t.assertTrue(all(team_ids <= {t.team.id, t.rival.id} for team_ids in workspace.team_assignments.values()))
+    t.assert_no_mark(workspace)
+
+    before = (_managers_rows(), list(orm_models.WorkspaceEditor.objects.values_list("workspace_id", "user_id")))
+    repo.save(workspace)
+    t.assertEqual(
+        (_managers_rows(), list(orm_models.WorkspaceEditor.objects.values_list("workspace_id", "user_id"))),
+        before,
+        "A の保存で B の行（か A の世界の球団の担当）が変わった",
+    )
+    workspace.assign_teams(marked.id, [t.team.id, t.b_team.id])
+    with t.assertRaises(InvalidWorkspace):
+        repo.save(workspace)
+    t.assertEqual(_managers_rows(), before[0])
+    # 空振りの防止: B の集約には B の担当として入っている
+    t.assertEqual(repo.find_by_id(t.workspace_b.id).team_assignments[marked.id], frozenset({t.b_team.id}))
+
+
+def _b_invitation(t: WorkspaceCase, *, expired: bool = False) -> int:
+    """B の招待（B のチームの担当）。ORM で直接置く。"""
+    now = timezone.now()
+    row = orm_models.WorkspaceInvitation.objects.create(
+        workspace=t.workspace_b,
+        token_digest=invitation_digest(f"b-token-{expired}-{orm_models.WorkspaceInvitation.objects.count()}"),
+        role=InvitedRole.EDIT_TEAMS.value,
+        expires_at=now - timedelta(days=1) if expired else now + timedelta(days=1),
+    )
+    row.teams.add(t.b_team)
+    return row.id
+
+
+def _invitation_repository(t: WorkspaceCase) -> None:
+    """A の招待に B のチームは入れられず、A の id では B の招待を消せない。期限切れの掃除も A の招待だけ。"""
+    repo = DjangoInvitationRepository()
+    now = timezone.now()
+    b_valid, b_expired = _b_invitation(t), _b_invitation(t, expired=True)
+    with t.assertRaises(InvalidInvitation):
+        repo.add(
+            Invitation.issue(
+                workspace_id=t.workspace.id, token="a-1", role=InvitedRole.EDIT_TEAMS, team_ids=[t.b_team.id], now=now
+            )
+        )
+    with t.assertRaises(InvalidInvitation):
+        repo.delete(t.workspace.id, b_valid)
+    repo.delete_expired(t.workspace.id, now)
+    t.assertEqual(
+        set(orm_models.WorkspaceInvitation.objects.filter(id__in=[b_valid, b_expired]).values_list("id", flat=True)),
+        {b_valid, b_expired},
+        "A の id で B の招待を消した",
+    )
+    t.assertFalse(orm_models.WorkspaceInvitation.objects.filter(workspace=t.workspace).exists())
+    # ORM で A の招待に B のチームを混ぜても、引いた招待の担当チームは A のチームだけ（招待の中身の参照と同じ）
+    mixed = orm_models.WorkspaceInvitation.objects.create(
+        workspace=t.workspace,
+        token_digest=invitation_digest("a-mixed"),
+        role=InvitedRole.EDIT_TEAMS.value,
+        expires_at=now + timedelta(days=1),
+    )
+    mixed.teams.add(t.team, t.b_team)
+    t.assertEqual(repo.find_by_digest(invitation_digest("a-mixed")).team_ids, frozenset({t.team.id}))
+    mixed.delete()
+
+
+def _workspace_management_query(t: WorkspaceCase) -> None:
+    """A のメンバー・招待に、B のメンバー・招待・チーム（と A の世界の球団の担当）は出ない。"""
+    _b_members(t)
+    _marked_b_member(t)
+    _b_invitation(t)
+    query = DjangoWorkspaceManagementQuery(t.workspace.id)
+    members = query.members()
+    t.assertEqual([row.user_id for row in members], [t.workspace.owner_id])
+    t.assert_no_mark(members)
+    t.assertEqual(query.invitations(timezone.now()), [])
+    # 空振りの防止: B では目印の担当と B の招待が出る
+    b_query = DjangoWorkspaceManagementQuery(t.workspace_b.id)
+    t.assertIn(f"{B_MARK}担当", [row.username for row in b_query.members()])
+    t.assertTrue(b_query.invitations(timezone.now()))
+
+
+def _invitation_preview_query(t: WorkspaceCase) -> None:
+    """招待の中身に出る担当チームは、招待のワークスペースの実データのチームだけ（ORM で A のチームを混ぜても出ない）。
+
+    B の招待を開いた A の持ち主は、B のメンバーではない。
+    """
+    token = "b-preview-token"
+    row = orm_models.WorkspaceInvitation.objects.create(
+        workspace=t.workspace_b,
+        token_digest=invitation_digest(token),
+        role=InvitedRole.EDIT_TEAMS.value,
+        expires_at=timezone.now() + timedelta(days=1),
+    )
+    row.teams.add(t.b_team, t.team)
+    preview = DjangoInvitationPreviewQuery().preview(token, t.workspace.owner_id, timezone.now())
+    t.assertEqual(preview.workspace_key, t.workspace_b.key)
+    t.assertEqual(preview.team_names, (B_TEAM,), "B の招待に A のチームが出た")
+    t.assertFalse(preview.is_member, "A の持ち主が B のメンバーになった")
+
+
 # 検査の表。`repositories`・`queries` の `Django*` は、ちょうどここに載る
 CHECKS: dict[type, Callable[[WorkspaceCase], None]] = {
     DjangoTeamRepository: _team_repository,
@@ -817,6 +946,10 @@ CHECKS: dict[type, Callable[[WorkspaceCase], None]] = {
     DjangoWorldSummaryQuery: _world_summary_query,
     DjangoWorkspaceAccessQuery: _workspace_access_query,
     DjangoWorkspaceListQuery: _workspace_list_query,
+    DjangoWorkspaceRepository: _workspace_repository,
+    DjangoInvitationRepository: _invitation_repository,
+    DjangoWorkspaceManagementQuery: _workspace_management_query,
+    DjangoInvitationPreviewQuery: _invitation_preview_query,
 }
 
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 
 from ..domain.entities import jersey_number_in, winning_team_id
 from ..domain.pennant.awards import Award
@@ -45,7 +45,7 @@ from ..domain.value_objects import (
     Profile,
     StadiumProfile,
 )
-from ..domain.workspace import Visibility, WorkspaceAccess, WorkspaceRole
+from ..domain.workspace import InvitedRole, Visibility, WorkspaceAccess, WorkspaceRole
 
 
 @dataclass(frozen=True)
@@ -3062,6 +3062,62 @@ class OperatorOverview:
     game_count: int
     # 試合の多い順（同数は古い順）に最大 `OPERATOR_TOP_WORKSPACES` 件
     top_workspaces: list[OperatorWorkspaceRow]
+
+
+# --- ワークスペースのメンバーと招待（W4 #80）---
+#
+# 役割は保存せず、持ち主・編集者の行・担当の中間表から導く（重なった行は上の役割だけ。`members_from_rows`）。
+
+
+@dataclass(frozen=True)
+class MemberRow:
+    """メンバーの画面の1行。持ち主・編集者・チーム担当（担当チームつき）。"""
+
+    user_id: int
+    username: str
+    role: WorkspaceRole
+    # チーム担当のときだけ持つ（チームの表示順）。持ち主・編集者は空
+    team_ids: tuple[int, ...] = ()
+    team_names: tuple[str, ...] = ()
+
+    @property
+    def is_owner(self) -> bool:
+        """持ち主の行（役割の変更と除名を出さない）。"""
+        return self.role is WorkspaceRole.OWNER
+
+
+@dataclass(frozen=True)
+class InvitationRow:
+    """未使用で期限内の招待の1行（取消の対象）。トークンは持たない（ダイジェストしか保存しないので見せられない）。"""
+
+    invitation_id: int
+    role: InvitedRole
+    team_names: tuple[str, ...]
+    expires_at: datetime
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class IssuedInvitation:
+    """発行した直後の招待。**トークンを持つのはこれだけ**（リンクを見せられるのは発行の直後1回だけ）。"""
+
+    invitation_id: int
+    token: str
+    role: InvitedRole
+    expires_at: datetime
+
+
+@dataclass(frozen=True)
+class InvitationPreview:
+    """招待のリンクを開いた人に見せる中身（`InvitationPreviewQuery`）。使える招待のときだけ作る。"""
+
+    workspace_key: str
+    workspace_name: str
+    role: InvitedRole
+    team_names: tuple[str, ...]
+    expires_at: datetime
+    # 開いた人が既にメンバー（持ち主を含む）か。メンバーなら受諾のボタンを出さない。未ログインは False
+    is_member: bool
 
 
 # --- 登録（リーグ・チーム・球場。W3 #79）---

@@ -41,7 +41,7 @@ from ..domain.value_objects import (
 )
 from ..domain.workspace import KEY_LENGTH as WORKSPACE_KEY_LENGTH
 from ..domain.workspace import MAX_NAME_LENGTH as WORKSPACE_NAME_MAX_LENGTH
-from ..domain.workspace import Visibility
+from ..domain.workspace import TOKEN_DIGEST_LENGTH, InvitedRole, Visibility
 
 # 守備位置の選択肢はドメインの Position を唯一の出典とする。
 POSITION_CHOICES = [(position.value, position.value) for position in Position]
@@ -69,6 +69,9 @@ FIELDED_BY_SEPARATOR = "-"
 # 公開範囲の選択肢もドメインの Visibility が唯一の出典
 VISIBILITY_CHOICES = Visibility.choices()
 VISIBILITY_MAX_LENGTH = max(len(member.value) for member in Visibility)
+# 招待の役割の選択肢もドメインの InvitedRole が唯一の出典
+INVITED_ROLE_CHOICES = InvitedRole.choices()
+INVITED_ROLE_MAX_LENGTH = max(len(member.value) for member in InvitedRole)
 
 
 class Workspace(models.Model):
@@ -374,6 +377,37 @@ class Team(models.Model):
 
     def __str__(self) -> str:
         return self.name
+
+
+class WorkspaceInvitation(models.Model):
+    """ワークスペースへの招待（W4。#80）。期限内に1回だけ使え、受諾したら消す。
+
+    トークンそのものは持たず、SHA-256 のダイジェストだけを持つ（リンクは発行の直後に1回だけ見せる）。
+    招待できるのは持ち主だけなので、作った人の列は持たない（持ち主と同じ事実の出典が2つになる）。
+    """
+
+    workspace = models.ForeignKey(
+        Workspace, on_delete=models.CASCADE, related_name="invitations", verbose_name="ワークスペース"
+    )
+    token_digest = models.CharField(max_length=TOKEN_DIGEST_LENGTH, unique=True, verbose_name="トークンのダイジェスト")
+    role = models.CharField(max_length=INVITED_ROLE_MAX_LENGTH, choices=INVITED_ROLE_CHOICES, verbose_name="役割")
+    teams = models.ManyToManyField(
+        Team,
+        blank=True,
+        related_name="invitations",
+        verbose_name="担当チーム",
+        help_text="役割が「担当チームを編集」のときに、受諾した人が担当になるチーム（このワークスペースの実データのチーム）。",
+    )
+    expires_at = models.DateTimeField(verbose_name="期限")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="作成日時")
+
+    class Meta:
+        verbose_name = "ワークスペースへの招待"
+        verbose_name_plural = "ワークスペースへの招待"
+        ordering = ["id"]
+
+    def __str__(self) -> str:
+        return f"{self.workspace} / {self.get_role_display()}"
 
 
 class Player(models.Model):

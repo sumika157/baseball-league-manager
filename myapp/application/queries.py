@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
-from datetime import date
+from datetime import date, datetime
 from typing import Protocol, runtime_checkable
 
 from ..domain.entities import Game
@@ -27,7 +27,10 @@ from .dto import (
     GameNote,
     GameRow,
     HomeStadium,
+    InvitationPreview,
+    InvitationRow,
     LeagueSetupRow,
+    MemberRow,
     OffseasonFacts,
     PeriodBatting,
     PeriodPitching,
@@ -412,6 +415,31 @@ class WorkspaceListQuery(Protocol):
 
         メンバーでないワークスペースは公開でも出さない（公開ワークスペースの一覧は作らない。2026-10-03 Q3）。
         """
+        ...
+
+
+@runtime_checkable
+class WorkspaceManagementQuery(Protocol):
+    """1つのワークスペースのメンバーと招待（W4。メンバーの画面）。実装はワークスペースの id を必須で受け取る。
+
+    読むのはそのワークスペースのメンバー（持ち主・編集者の行・実データのチームの担当）と招待だけ。
+    """
+
+    def members(self) -> list[MemberRow]:
+        """持ち主 → 編集者 → チーム担当の順（同じ役割は名前順）。重なった行は上の役割だけ（`members_from_rows`）。"""
+        ...
+
+    def invitations(self, now: datetime) -> list[InvitationRow]:
+        """未使用で期限内の招待を、新しく発行した順に。期限切れは出さない（使えないので取り消す対象でもない）。"""
+        ...
+
+
+@runtime_checkable
+class InvitationPreviewQuery(Protocol):
+    """招待のリンク（トークン）から、招待の中身を引く台帳（範囲は取らない。ワークスペースが決まる前に引く）。"""
+
+    def preview(self, token: str, user_id: int | None, now: datetime) -> InvitationPreview:
+        """使える招待の中身。無い・期限切れ・使えない（担当チームが消えた）は `InvalidInvitation`（同じ文言）。"""
         ...
 
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import fields
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from itertools import groupby
 from operator import itemgetter
 from typing import Any
@@ -30,9 +30,12 @@ from ..application.dto import (
     GameNote,
     GameRow,
     HomeStadium,
+    InvitationPreview,
+    InvitationRow,
     LastStart,
     LeagueOption,
     LeagueSetupRow,
+    MemberRow,
     MoveStintRow,
     OffseasonFacts,
     OffseasonPlayerFact,
@@ -62,6 +65,7 @@ from ..application.dto import (
 )
 from ..domain.entities import Game, jersey_number_in, winning_team_id
 from ..domain.exceptions import (
+    InvalidInvitation,
     InvalidWorld,
     LeagueNotFound,
     StadiumNotFound,
@@ -91,7 +95,16 @@ from ..domain.value_objects import (
     Profile,
     Season,
 )
-from ..domain.workspace import Visibility, WorkspaceAccess, WorkspaceRole
+from ..domain.workspace import (
+    INVITATION_UNAVAILABLE,
+    Invitation,
+    InvitedRole,
+    Visibility,
+    WorkspaceAccess,
+    WorkspaceRole,
+    invitation_digest,
+    members_from_rows,
+)
 from . import orm_models
 from .repositories import (
     FOREIGN_RULE_FIELDS,
@@ -622,6 +635,189 @@ class DjangoWorkspaceListQuery:
             )
             result.append(WorkspaceRow(key=row["key"], name=row["name"], visibility=visibility, role=role))
         return result
+
+
+class DjangoWorkspaceManagementQuery:
+    """WorkspaceManagementQuery の Django ORM 実装。ワークスペースの id（必須）のメンバーと招待だけを読む（W4。#80）。
+
+    クエリの本数は人数・招待の数によらない（メンバーは3本、招待は2本。多段の prefetch は使わない）。
+    担当として読むのは、このワークスペースの実データのチーム（`teams_in(WorldScope.real(ws))`）の担当だけ。
+    """
+
+    def __init__(self, workspace_id: int) -> None:
+        self._workspace_id = workspace_id
+
+    def members(self) -> list[MemberRow]:
+        workspace = (
+            orm_models.Workspace.objects.filter(id=self._workspace_id).values("owner_id", "owner__username").first()
+        )
+        if workspace is None:
+            raise WorkspaceNotFound(f"ワークスペースが見つかりません（id={self._workspace_id}）。")
+        owner_id = int(workspace["owner_id"])
+        editor_rows = list(
+            orm_models.WorkspaceEditor.objects.filter(workspace_id=self._workspace_id).values_list(
+                "user_id", "user__username"
+            )
+        )
+        # 担当の中間表の行（チームの表示順）。担当チームの並びはこの順になる
+        manager_rows = list(
+            orm_models.Team.managers.through.objects.filter(team__in=teams_in(WorldScope.real(self._workspace_id)))
+            .order_by("team__display_order", "team__name", "team_id", "user_id")
+            .values_list("team_id", "team__name", "user_id", "user__username")
+        )
+        names: dict[int, str] = {owner_id: workspace["owner__username"]}
+        names.update(editor_rows)
+        names.update((user_id, username) for _, _, user_id, username in manager_rows)
+        team_names = {team_id: team_name for team_id, team_name, _, _ in manager_rows}
+        team_order = {team_id: index for index, team_id in enumerate(dict.fromkeys(row[0] for row in manager_rows))}
+        editors, assignments = members_from_rows(
+            owner_id,
+            (user_id for user_id, _ in editor_rows),
+            ((team_id, user_id) for team_id, _, user_id, _ in manager_rows),
+        )
+
+        def by_name(row: MemberRow) -> tuple[str, int]:
+            return (row.username, row.user_id)
+
+        managers = []
+        for user_id, teams in assignments.items():
+            ordered = sorted(teams, key=team_order.__getitem__)
+            managers.append(
+                MemberRow(
+                    user_id=user_id,
+                    username=names[user_id],
+                    role=WorkspaceRole.TEAM_MANAGER,
+                    team_ids=tuple(ordered),
+                    team_names=tuple(team_names[team_id] for team_id in ordered),
+                )
+            )
+        return [
+            MemberRow(user_id=owner_id, username=names[owner_id], role=WorkspaceRole.OWNER),
+            *sorted(
+                (
+                    MemberRow(user_id=user_id, username=names[user_id], role=WorkspaceRole.EDITOR)
+                    for user_id in editors
+                ),
+                key=by_name,
+            ),
+            *sorted(managers, key=by_name),
+        ]
+
+    def invitations(self, now: datetime) -> list[InvitationRow]:
+        invitations = orm_models.WorkspaceInvitation.objects.filter(
+            workspace_id=self._workspace_id, expires_at__gt=now
+        )
+        rows = list(invitations.order_by("-created_at", "-id").values("id", "role", "expires_at", "created_at"))
+        team_rows = (
+            orm_models.WorkspaceInvitation.teams.through.objects.filter(
+                workspaceinvitation__in=invitations, team__in=teams_in(WorldScope.real(self._workspace_id))
+            )
+            .order_by("team__display_order", "team__name", "team_id")
+            .values_list("workspaceinvitation_id", "team__name")
+        )
+        teams_of: dict[int, list[str]] = {}
+        for invitation_id, team_name in team_rows:
+            teams_of.setdefault(invitation_id, []).append(team_name)
+        return [
+            InvitationRow(
+                invitation_id=int(row["id"]),
+                role=InvitedRole(row["role"]),
+                team_names=tuple(teams_of.get(row["id"], ())),
+                expires_at=row["expires_at"],
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
+
+
+class DjangoInvitationPreviewQuery:
+    """InvitationPreviewQuery の Django ORM 実装。トークンから招待とそのワークスペースを引く台帳（W4。#80）。
+
+    範囲を取らない（ワークスペースが決まる前に、トークンだけから引く）。読むのは招待・そのワークスペースの名前と key・
+    担当チームの名前・開いた人がメンバーかどうかだけで、中のデータ（リーグ・試合など）は読まない。
+    使えるかの判定（期限・担当チームの有無）は domain の `Invitation` に任せる（受諾と同じ規則）。
+    """
+
+    def preview(self, token: str, user_id: int | None, now: datetime) -> InvitationPreview:
+        row = (
+            orm_models.WorkspaceInvitation.objects.filter(token_digest=invitation_digest(token))
+            .values(
+                "id",
+                "workspace_id",
+                "token_digest",
+                "role",
+                "expires_at",
+                "workspace__key",
+                "workspace__name",
+                "workspace__owner_id",
+                "workspace__visibility",
+            )
+            .first()
+        )
+        if row is None:
+            raise InvalidInvitation(INVITATION_UNAVAILABLE)
+        workspace_id = int(row["workspace_id"])
+        real_teams = teams_in(WorldScope.real(workspace_id))
+        teams = list(
+            orm_models.WorkspaceInvitation.teams.through.objects.filter(
+                workspaceinvitation_id=row["id"], team__in=real_teams
+            )
+            .order_by("team__display_order", "team__name", "team_id")
+            .values_list("team_id", "team__name")
+        )
+        try:
+            invitation = Invitation(
+                id=int(row["id"]),
+                workspace_id=workspace_id,
+                token_digest=row["token_digest"],
+                role=InvitedRole(row["role"]),
+                team_ids=frozenset(team_id for team_id, _ in teams),
+                expires_at=row["expires_at"],
+            )
+        except (InvalidInvitation, ValueError):
+            # 担当チームがすべて消された「担当チームを編集」の招待は、もう使えない（無い招待と同じ扱い）
+            raise InvalidInvitation(INVITATION_UNAVAILABLE) from None
+        if invitation.is_expired(now):
+            raise InvalidInvitation(INVITATION_UNAVAILABLE)
+        return InvitationPreview(
+            workspace_key=row["workspace__key"],
+            workspace_name=row["workspace__name"],
+            role=invitation.role,
+            team_names=tuple(name for _, name in teams),
+            expires_at=invitation.expires_at,
+            is_member=self._is_member(
+                workspace_id=workspace_id,
+                owner_id=int(row["workspace__owner_id"]),
+                visibility=Visibility(row["workspace__visibility"]),
+                real_teams=real_teams,
+                user_id=user_id,
+            ),
+        )
+
+    @staticmethod
+    def _is_member(
+        *,
+        workspace_id: int,
+        owner_id: int,
+        visibility: Visibility,
+        real_teams: QuerySet[orm_models.Team],
+        user_id: int | None,
+    ) -> bool:
+        """開いた人が既にメンバーか（役割の決め方は `WorkspaceRole.of`）。未ログイン・持ち主はクエリを読まない。"""
+        if user_id is None:
+            return False
+        is_editor = (
+            user_id != owner_id
+            and orm_models.WorkspaceEditor.objects.filter(workspace_id=workspace_id, user_id=user_id).exists()
+        )
+        manages_a_team = user_id != owner_id and not is_editor and real_teams.filter(managers__id=user_id).exists()
+        return WorkspaceRole.of(
+            owner_id=owner_id,
+            visibility=visibility,
+            user_id=user_id,
+            is_editor=is_editor,
+            manages_a_team=manages_a_team,
+        ).is_member
 
 
 class DjangoGameListQuery:

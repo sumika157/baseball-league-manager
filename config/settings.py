@@ -251,3 +251,6 @@ MESSAGE_TAGS = {
 # 見本のワークスペースの key（`/` で、ログインしていない人に見せるリンクの先）。空なら出さない。
 # key のワークスペースが無い・非公開のときも出さない（推し量らない。W2 T4。#78）
 SAMPLE_WORKSPACE_KEY = os.environ.get("SAMPLE_WORKSPACE_KEY", "").strip()
+
+# 1人が持てるワークスペースの数（作成の画面の上限。W4。#80）。管理画面からは上限を超えて作れる（運営者の道具）
+WORKSPACE_MAX_OWNED = int(os.environ.get("WORKSPACE_MAX_OWNED") or 3)

@@ -38,6 +38,7 @@ from myapp.infrastructure.repositories import (
 # テストも画面と同じ組み立て（presentation/views.py）を使い、ここから再輸出する。
 # テスト専用の組み立てを別に持つと、依存が食い違ってもテストでは気づけない
 from myapp.presentation.views import build_game_view_service as build_game_view_service
+from myapp.presentation.views import build_invitation_preview_query as build_invitation_preview_query
 from myapp.presentation.views import build_league_setup_service as build_league_setup_service
 from myapp.presentation.views import build_league_view_service as build_league_view_service
 from myapp.presentation.views import build_recording_service as build_recording_service
@@ -47,6 +48,9 @@ from myapp.presentation.views import build_team_analysis_service as build_team_a
 from myapp.presentation.views import build_team_view_service as build_team_view_service
 from myapp.presentation.views import build_workspace_access_query as build_workspace_access_query
 from myapp.presentation.views import build_workspace_list_query as build_workspace_list_query
+from myapp.presentation.views import build_workspace_management_query as build_workspace_management_query
+from myapp.presentation.views import build_workspace_member_service as build_workspace_member_service
+from myapp.presentation.views import build_workspace_service as build_workspace_service
 
 LINEUP_SIZE = 9
 
