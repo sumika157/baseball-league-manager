@@ -13,6 +13,7 @@ from myapp.domain.exceptions import InvalidDraftAction
 from myapp.domain.pennant import draft
 from myapp.domain.pennant.draft import (
     MAX_DEVELOPMENT_PICKS,
+    DraftRoute,
     DraftTeam,
     development_draftee_count,
     development_positions,
@@ -190,6 +191,92 @@ class DevelopmentRoundTest(unittest.TestCase):
     def test_slot_must_fit_the_yearly_development_maximum(self) -> None:
         with self.assertRaises(ValueError):
             DraftSlot(1, 0, 0, (), {}, development_max=MAX_DEVELOPMENT_PICKS + 1)
+
+
+class CorporateNotInDevelopmentTest(unittest.TestCase):
+    """社会人の選手は育成で指名できない（日本野球連盟の申し入れによる慣行。#307）。本指名では指名できる。"""
+
+    TEAMS = [club(team_id, development=team_id, target=25) for team_id in range(1, 7)]
+
+    def _until_development(self, state: DraftState) -> None:
+        while (turn := state.next_turn()) is not None and not turn.is_development:
+            state.apply(state.ai_action())
+
+    def test_the_rule_is_on_the_route(self) -> None:
+        self.assertFalse(DraftRoute.CORPORATE.allows_development_pick)
+        for route in (DraftRoute.HIGH_SCHOOL, DraftRoute.UNIVERSITY, DraftRoute.FOREIGN):
+            self.assertTrue(route.allows_development_pick)
+
+    def test_the_ai_never_picks_corporate_players_in_the_development_rounds(self) -> None:
+        for rule in DraftOrderRule:
+            with self.subTest(rule=rule):
+                state = meeting(self.TEAMS, rule)
+                state.auto_complete()
+                routes = Counter(
+                    (selection.is_development, state.pool.get(selection.prospect_key).route)
+                    for selection in state.selections
+                )
+                self.assertGreater(sum(n for (dev, _), n in routes.items() if dev), 0, "前提: 育成の巡がある")
+                self.assertEqual(routes[(True, DraftRoute.CORPORATE)], 0)
+                self.assertGreater(routes[(False, DraftRoute.CORPORATE)], 0, "本指名では社会人を指名する")
+
+    def test_picking_or_bidding_a_corporate_player_in_the_development_rounds_is_rejected(self) -> None:
+        for rule in (DraftOrderRule.NPB, DraftOrderRule.ALL_LOTTERY):
+            with self.subTest(rule=rule):
+                state = meeting(self.TEAMS, rule)
+                self._until_development(state)
+                turn = state.next_turn()
+                assert turn is not None and turn.is_development
+                taken = {selection.prospect_key for selection in state.selections}
+                corporate = next(
+                    p for p in state.pool.prospects if p.route is DraftRoute.CORPORATE and p.key not in taken
+                )
+                kind = DraftActionKind.BID if turn.is_bid else DraftActionKind.PICK
+                before = list(state.actions)
+                with self.assertRaisesRegex(InvalidDraftAction, "社会人の選手は育成で指名できません"):
+                    state.apply(DraftAction(kind, turn.team_id, corporate.key))
+                self.assertEqual(state.actions, before, "何も変えない")
+                state.apply(state.ai_action())
+
+    def test_a_corporate_player_can_be_picked_in_the_main_rounds(self) -> None:
+        state = meeting(self.TEAMS)
+        turn = state.next_turn()
+        assert turn is not None and not turn.is_development
+        corporate = next(p for p in state.pool.prospects if p.route is DraftRoute.CORPORATE)
+        kind = DraftActionKind.BID if turn.is_bid else DraftActionKind.PICK
+        state.apply(DraftAction(kind, turn.team_id, corporate.key))
+
+    def test_a_prospect_added_in_the_development_rounds_is_not_corporate(self) -> None:
+        pool = draw_pool({Position.PITCHER: 1}, world_seed=1, year=YEAR, used_names=set())
+        added = pool
+        for _ in range(60):
+            added = added.with_extra(Position.PITCHER, development=True)
+        self.assertTrue(all(p.allows_development_pick for p in added.prospects[len(pool) :]))
+        main = pool
+        for _ in range(60):
+            main = main.with_extra(Position.PITCHER)
+        self.assertTrue(any(not p.allows_development_pick for p in main.prospects[len(pool) :]), "前提")
+
+    def test_prospects_added_in_the_development_rounds_are_the_same_on_replay(self) -> None:
+        """候補が尽きて育成の巡で足した候補は社会人でなく、行動の並びから作り直しても同じ候補になる。"""
+        teams = [club(team_id, target=25) for team_id in (1, 2)]
+        slots = [DraftSlot.of(team, plan_team_draft(team)) for team in teams]
+        pool = draw_pool({Position.PITCHER: 1}, world_seed=1, year=YEAR, used_names=set())
+        strategy = strategy_for(DraftOrderRule.WAIVER, DraftStandings(leagues=((1, 2),)), world_seed=1, year=YEAR)
+        state = DraftState.open(strategy, slots, pool)
+        added_in_development: list[int] = []
+        while (turn := state.next_turn()) is not None:
+            action = state.ai_action()
+            if turn.is_development and action.extra_position is not None:
+                assert action.prospect_key is not None
+                added_in_development.append(action.prospect_key)
+            state.apply(action)
+        self.assertTrue(added_in_development, "前提: 育成の巡で候補を足す")
+        for key in added_in_development:
+            self.assertTrue(state.pool.get(key).allows_development_pick)
+        replay = DraftState.open(strategy, slots, pool, state.actions)
+        self.assertEqual(replay.selections, state.selections)
+        self.assertEqual(replay.pool, state.pool)
 
 
 class DevelopmentRookieTest(unittest.TestCase):

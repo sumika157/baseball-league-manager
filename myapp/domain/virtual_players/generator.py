@@ -224,12 +224,15 @@ def amateur_career(
     is_foreign: bool,
     birthplace: str,
     path: AmateurPath | None = None,
+    paths: Sequence[AmateurPath] = tuple(AmateurPath),
     foreign_age_range: tuple[int, int] = FOREIGN_DEBUT_AGE_RANGE,
 ) -> AmateurCareer:
     """プロ入り前の経歴。
 
     公立高校は出身都道府県（birthplace）の高校にする。私立高校は全国から選手が集まる前提で、
-    出身地とは結び付けない架空校のプールから選ぶ。`path` を省くと経路を `AmateurPath.weight` で決める。
+    出身地とは結び付けない架空校のプールから選ぶ。`path` を省くと経路を `paths` の中から `AmateurPath.weight` で決める
+    （育成ドラフトの選手は、育成で指名できる経路だけを渡す。#307。
+    `path` を渡せば `paths` は見ない。`paths` は空にしない）。
     外国人は日本の学校を持たず、プロ入りの年齢は `foreign_age_range` から引く。
     """
     if is_foreign:
@@ -241,7 +244,6 @@ def amateur_career(
         high_school = public_high_school(rng, birthplace)
 
     if path is None:
-        paths = list(AmateurPath)
         path = paths[weighted_index(rng, [item.weight for item in paths])]
     if path is AmateurPath.HIGH_SCHOOL:
         return AmateurCareer(high_school, "", "", 18, path)

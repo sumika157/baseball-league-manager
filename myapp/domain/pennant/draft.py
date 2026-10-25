@@ -93,6 +93,21 @@ class DraftRoute(Enum):
         （`draft_meeting.POOL_RATING_SHIFT`）。"""
         return _RATING_MEAN[self]
 
+    @property
+    def allows_development_pick(self) -> bool:
+        """この経路の選手を育成で指名できるか。**育成で指名できるかの唯一の出典**（#307）。
+
+        社会人（日本野球連盟の企業チーム）の選手は育成で指名しない（育成制度の理念から外れるとして、日本野球連盟が
+        2011年に「指名するなら支配下で」と申し入れた慣行。明文の規定ではない。クラブチームの選手は育成でも指名できるが、
+        このアプリの社会人は企業とクラブを分けず、名前はすべて企業チーム）。外国人は育成でも契約できる。
+        """
+        return self is not DraftRoute.CORPORATE
+
+    @classmethod
+    def development_amateur_paths(cls) -> tuple[AmateurPath, ...]:
+        """育成で指名できる日本人の経歴の経路（`allows_development_pick` から導く。候補と実データの投入が使う）。"""
+        return tuple(path for path in AmateurPath if cls.from_amateur_path(path).allows_development_pick)
+
     @classmethod
     def from_amateur_path(cls, path: AmateurPath | None) -> DraftRoute:
         """日本人の経歴の経路から（名前で対応づける。経路を足して対応を忘れると KeyError。テストが見張る）。
