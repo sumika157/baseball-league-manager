@@ -1464,3 +1464,48 @@ W2 の本体。ワークスペースの中の画面43本（実データ20・ペ�
 **変異の確かめ**（戻した）: 「主将にする」を入力のフォームの「更新する」の前に戻す → integration 2件（`ActionFormsTest` の育成・主将でない）・e2e 2件（Enter が主将の指名になりよみがなが保存されない・ボタンが入力欄を送る）が落ちる。
 
 **計画からのずれ**: なし（`formnovalidate` を外して `required` にしたのは、フォームを分けたことで要らなくなった分の後始末）。
+
+### W4（#80）
+
+計画は #80 の計画（2026-10-25。epic 6e13a25 と照合）。T1 は 6e13a25 から作り、コミットの前に epic の先端 b1c027d（W3 T7）の上に載せ直した。決定（2026-10-25、すべて推奨）: 1. メンバーでなくなった人（担当に変えた人を含む）が作った世界は読むだけ（世界の書き込みに「今もこのワークスペースの全体の編集権」を足す）／2. 世界が1つでもあるワークスペースは消せない（確認画面に世界の一覧と削除への導線。持ち主がほかの人の世界も消せる）／3. サービスは `WorkspaceService`（作成・設定・削除）と `WorkspaceMemberService`（招待・受諾・役割・除名）の2つ／4. CLAUDE.md の差分は T7 で入れる。
+
+#### T1 domain・永続化・サービス（`feature/workspace-members-service`、2026-10-25）
+
+画面はまだ使わない（T3・T4 の画面が使う）。マイグレーションは `0064_workspace_invitation`（スキーマだけ。データの移行は無い）。作業の時点で main は 0059 まで（epic の 0063 の次でよい。main の取り込みのときに付け直す）。
+
+- domain（`domain/workspace.py`）:
+  - `Workspace` 集約に `editor_ids`・`team_assignments`（利用者 → 担当チームの id。メンバーの画面の単位が人なので「人 → チーム」の向き）。不変条件（1人の役割は1つ: 持ち主は編集者にも担当にも入らない・編集者は担当に入らない・担当は1チーム以上）は作成と各操作で検査する。操作は `rename`・`change_visibility`・`role_of`・`is_member`・`make_editor`・`assign_teams`・`change_role`（メンバーでなければ `MemberNotFound`。新しく入れるのは受諾だけ）・`remove_member`・`accept(invitation, user_id, *, now)`・`ensure_assignments_within(team_ids)`。
+  - `members_from_rows(owner_id, editor_ids, manager_rows)`: 表の行から集約のメンバーを組み立てる。管理画面で付けた重なった行は、役割の優先（持ち主 > 編集者 > 担当）で上の役割だけを残す（読むときに落とさない）。リポジトリとメンバーの一覧の参照クエリが同じ関数を使う。
+  - `InvitedRole`（`EDIT_ALL`・`EDIT_TEAMS`。表示名と `granted_role`。ORM の choices の出典）、`Invitation`（`issue`・`is_expired`・`ensure_teams_within`。ダイジェストは16進64文字、`EDIT_TEAMS` はチーム1つ以上・`EDIT_ALL` はチームなし）、`INVITATION_TTL`（7日）、`invitation_digest`（SHA-256）、`INVITATION_UNAVAILABLE`（無い・期限切れ・使用済みの同じ文言）。
+  - `WorkspaceQuota(max_owned_workspaces)`（`can_create_workspace`・`ensure_can_create_workspace`・`limit_message`）。`WorkspaceAccess.can_change_settings()`（持ち主）。例外 `WorkspaceLimitReached`・`InvalidInvitation`・`MemberNotFound`。
+  - リポジトリの Protocol `WorkspaceRepository`（`find_by_id`・`add`・`save`・`count_owned_by`）・`InvitationRepository`（`add`・`find_by_digest`・`delete(workspace_id, invitation_id)`・`delete_expired(workspace_id, now)`）。**削除は T2 で足す。**
+- infrastructure:
+  - `WorkspaceInvitation`（`workspace` CASCADE・`token_digest` unique・`role`・`teams` M2M・`expires_at`・`created_at`。作った人の列は持たない）。分類表は「メンバー」（担当チームの M2M は「受け持つ球団」と同じ例外）。
+  - `DjangoWorkspaceRepository`（範囲を取らない台帳）: 読むのは行・編集者の行・**そのワークスペースの実データのチーム（`teams_in(WorldScope.real(ws))`）の担当の中間表の行だけ**。`save` は検査（行がある・`ensure_assignments_within`）をすべて済ませてから、名前と公開範囲・編集者の行・範囲のチームの担当の行を、今の行と比べた差分だけ書く（ほかのワークスペースのチーム・世界の球団の担当には触れない）。
+  - `DjangoInvitationRepository`（範囲を取らない台帳）: `add` は担当チームを招待のワークスペースの実データのチームに限る（`Invitation.ensure_teams_within`）。`find_by_digest` は担当チームを同じ範囲で読み、`EDIT_TEAMS` で残ったチームが無ければ使えない招待。取消と期限切れの掃除はワークスペースの id で絞る。
+  - 参照クエリ `DjangoWorkspaceManagementQuery(workspace_id)`（`members()` は3本・`invitations(now)` は2本。人数・招待の数によらない）と `DjangoInvitationPreviewQuery()`（トークンから引く台帳。使えるかは domain の `Invitation` で判定。開いた人が既にメンバーか）。
+  - `infrastructure/workspaces.py` に `new_workspace_key()`（管理画面の `_new_workspace_key` から移した。管理画面も使う）と `new_invitation_token()`（`secrets.token_urlsafe(32)`）。
+- application（`application/workspaces.py`。更新だけ）: `WorkspaceService`（`can_create`・`limit_message`・`create`（数える → 上限 → 保存を1つのトランザクション）・`change_settings`）、`WorkspaceMemberService`（`issue_invitation`（期限切れの掃除と発行を1つのトランザクション。トークンを返すのはここだけ）・`revoke_invitation`・`accept_invitation`（引く → 集約の `accept` → 保存 → 招待を消す、を1つのトランザクション。消せなければ保存も戻る。key を返す）・`change_role`・`remove_member`）。権限はサービスでは見ない（画面の門）。参照の Protocol `WorkspaceManagementQuery`・`InvitationPreviewQuery`、DTO `MemberRow`・`InvitationRow`・`IssuedInvitation`・`InvitationPreview`。
+- presentation: `build_workspace_service()`・`build_workspace_member_service()`・`build_invitation_preview_query()`（範囲を取らない。`WORKSPACE_LEDGER_BUILDERS`）・`build_workspace_management_query(workspace_id)`（新しい分類 `MEMBER_BUILDERS`）。`tests/helpers.py` が再輸出する。`settings.WORKSPACE_MAX_OWNED`（環境変数、既定3。`.env.example`・Wiki「本番公開」）。
+
+**計画からのずれ**
+
+- 削除の確認の件数（DTO `WorkspaceContents`）と `workspace_deletion_blocker` は T2・T5 に回した（削除と一緒に作る）。
+- `InvitationRepository.delete_expired` はワークスペースの id を取る（計画は引数を書いていない）。全ワークスペースの招待を消す口を範囲を取らない台帳に作らないため。期限切れの招待は、そのワークスペースで発行するまで残る（使えないので害は無い。一覧にも出ない）。
+- 既にメンバーの人（持ち主を含む）の受諾は `InvalidInvitation`（「すでにこのワークスペースのメンバーです。」）で、招待は使わずに残る。役割を変えるのは持ち主の役割の変更だけ。
+- `WorkspaceService.can_create` を足した（`/` の作成フォームの代わりに上限の案内を出すかの判定。T3 が使う）。
+- 担当チームがすべて消えた（またはワークスペースの外へ出た）`EDIT_TEAMS` の招待は、受諾でも中身の表示でも「無い招待」と同じ扱い。
+- 重なった行は保存のときに消える（持ち主の担当の行・編集者の担当の行。権限に何も足さない行）。設定の変更（名前だけの保存）でも消える。
+
+**テスト**: domain `test_workspace.py`（設定・不変条件・操作・`members_from_rows`）、新 `test_invitation.py`・`test_workspace_quota.py`、`test_workspace_access.py` の真理値表に「設定の変更」の列。integration 新 `test_workspace_service.py`（作成・上限3と4つ目・settings からの上限・設定・集約の往復・重なった行・範囲の中だけの書き込み・範囲の外の拒否・招待の発行と受諾と1回だけ・期限切れ・既にメンバー・取消・役割の変更・除名・参照のクエリ数・招待の中身）、`test_workspace_isolation.py` の `CHECKS` に4つ、`test_wiring.py` の分類（`WORKSPACE_LEDGER_BUILDERS`・`MEMBER_BUILDERS`・`WORKSPACE_LEDGERS`・`MEMBER_QUERIES`・`TAKES_NOTHING`・`ProtocolConformanceTest`・依存の検査・`WorkspaceLedgerUsersTest` の名前と使ってよい場所に `infrastructure/repositories.py`）、`test_world_isolation.py` の分類表に `WorkspaceInvitation`。件数: domain＋integration 4,120（epic の先端 b1c027d の 4,038 より +82）、e2e 17（画面は変えていないが流した。変わらず）。
+
+**変異の確かめ**（どれも戻した。`test_workspace_service`・isolation の `CHECKS` を流した）: 保存が担当の行を範囲で絞らない → 5件、保存が範囲の検査をしない → 4件、受諾で招待を消さない → 2件、上限を検査しない → 2件、読みが担当を範囲で絞らない → 12件、招待の担当チームを検査しない → 5件、期限切れの掃除が他所の招待も消す → 2件、取消がワークスペースで絞らない → 2件、メンバーの一覧が範囲で絞らない → 3件、招待の中身がチームを範囲で絞らない → 1件（isolation）。domain: 持ち主を編集者・担当に入れられる → 2件、期限切れを受諾できる → 2件。
+
+**レビュー（ddd-boundary-reviewer）**: 重要な指摘なし。軽微を直した: (1) `find_by_digest` が担当チームを範囲で絞らず、中身の表示（絞る）と食い違っていた → 同じ範囲で読む（isolation に再発防止）。(2) 招待の範囲の検査がリポジトリに直書き → `Invitation.ensure_teams_within`。(3) `MemberRow.team_ids` のコメント（名前順 → 表示順）。残したもの: `AtomicBlock` を `pennant_season` から import している（共通の置き場所が無い。今のまま）、管理画面の編集者・担当のインラインは集約の検査を通らない（読むときに落とさず保存で消える設計。T6 で管理画面の書き込みをどうするか決める）。
+
+**T2 以降への申し送り**
+
+- T2: `WorkspaceRepository.delete` と `WorkspaceService.delete`。招待の表と担当チームの M2M（`WorkspaceInvitation.teams` の中間表）も削除の順に入れる。削除の確認の件数の DTO。
+- T3: `/` の作成フォームは `build_workspace_service().can_create(user_id)` と `limit_message`。設定の門は `can_change_settings()`。ドメイン例外（`InvalidWorkspace`・`WorkspaceLimitReached`）をフォームのエラーに。
+- T4: 発行の直後だけ `IssuedInvitation.token` からリンクを作る。招待の画面は `build_invitation_preview_query().preview(token, user_id, timezone.now())`（`InvalidInvitation` は 404。`is_member` なら受諾のボタンを出さない）。受諾は `accept_invitation(token, user_id)` が key を返す。役割の変更と除名は `MemberNotFound`・`InvalidWorkspace` を画面のエラーに。担当チームの選択肢はこのワークスペースの実データのチーム。
+- T6: 管理画面からワークスペースの台帳の組み立て口を使うときは、`test_wiring.py` の `WorkspaceLedgerUsersTest.ALLOWED` に `myapp/admin.py` を足す。

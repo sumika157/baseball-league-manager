@@ -8,12 +8,14 @@
 このインターフェースには現れない）。読み出しはすべてその範囲に絞られ、範囲の外の id は「見つからない」になる。
 `WorldRepository` だけは世界そのものの台帳なので、範囲の代わりにワークスペースを必須で受け取り、
 そのワークスペースの世界だけを読み書きする。
+`WorkspaceRepository`・`InvitationRepository`（W4）はワークスペースそのものの台帳なので、範囲もワークスペースも
+取らずに組み立てる（id・ダイジェストから引き、中のデータは読まない）。
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from datetime import date
+from datetime import date, datetime
 from typing import Protocol, runtime_checkable
 
 from .entities import Game, League, Stadium, Team
@@ -24,6 +26,7 @@ from .pennant.ratings import PlayerRatings
 from .pennant.release import ReleasePlan
 from .pennant.schedule import Fixture
 from .pennant.world import World
+from .workspace import Invitation, Workspace
 
 
 @runtime_checkable
@@ -368,4 +371,58 @@ class ChampionshipRepository(Protocol):
 
         実データの範囲には書けない（InvalidWorld）。範囲の外の球団は書けない（InvalidChampionship）。
         """
+        ...
+
+
+@runtime_checkable
+class WorkspaceRepository(Protocol):
+    """ワークスペースそのものの台帳（W4。#80）。範囲を取らない（id・持ち主からワークスペースを引く）。
+
+    集約（`Workspace`）の名前・公開範囲・メンバー（編集者・チーム担当）を読み書きする。中のデータ（リーグ・試合など）は
+    読まない。担当の保存先は `Team.managers` の中間表のままで、触るのはこのワークスペースの実データのチームの行だけ。
+    """
+
+    def find_by_id(self, workspace_id: int) -> Workspace:
+        """無ければ `WorkspaceNotFound`。担当は、このワークスペースの実データのチームの担当だけを読む。"""
+        ...
+
+    def add(self, workspace: Workspace) -> Workspace:
+        """新しいワークスペースを保存し、id の付いたものを返す。id のあるものは `InvalidWorkspace`。"""
+        ...
+
+    def save(self, workspace: Workspace) -> None:
+        """名前・公開範囲・メンバーを集約の状態にする（持ち主と key は変えない）。無い id は `WorkspaceNotFound`。
+
+        担当チームがこのワークスペースの実データのチームでなければ `InvalidWorkspace`（何も書かない）。
+        """
+        ...
+
+    def count_owned_by(self, owner_id: int) -> int:
+        """その利用者が持ち主のワークスペースの数（上限の検査に使う。数えるだけ）。"""
+        ...
+
+
+@runtime_checkable
+class InvitationRepository(Protocol):
+    """招待の台帳（W4。#80）。範囲を取らない（招待はトークンのダイジェストから引く）。
+
+    取消・期限切れの掃除は、ワークスペースの id を引数で受け取り、そのワークスペースの招待だけを消す。
+    """
+
+    def add(self, invitation: Invitation) -> Invitation:
+        """招待を保存し、id の付いたものを返す。担当チームがそのワークスペースの実データのチームでなければ
+        `InvalidInvitation`（何も書かない）。
+        """
+        ...
+
+    def find_by_digest(self, token_digest: str) -> Invitation:
+        """ダイジェストの招待（期限切れも返す。期限は受諾のときに集約が見る）。無ければ `InvalidInvitation`。"""
+        ...
+
+    def delete(self, workspace_id: int, invitation_id: int) -> None:
+        """そのワークスペースの招待を1つ消す。無ければ（ほかのワークスペースの招待でも）`InvalidInvitation`。"""
+        ...
+
+    def delete_expired(self, workspace_id: int, now: datetime) -> int:
+        """そのワークスペースの期限切れの招待を消し、消した数を返す。"""
         ...

@@ -11,8 +11,8 @@ ORM モデルとドメインオブジェクトの相互変換（マッピング�
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
-from datetime import date
+from dataclasses import dataclass, replace
+from datetime import date, datetime
 from typing import Any, Protocol
 
 from django.db import IntegrityError, models, transaction
@@ -56,15 +56,18 @@ from ..domain.exceptions import (
     InvalidAward,
     InvalidChampionship,
     InvalidGame,
+    InvalidInvitation,
     InvalidPosition,
     InvalidRatings,
     InvalidSchedule,
+    InvalidWorkspace,
     InvalidWorld,
     LeagueNotFound,
     NotDeletable,
     PlayerNotFound,
     StadiumNotFound,
     TeamNotFound,
+    WorkspaceNotFound,
     WorldNotFound,
 )
 from ..domain.pennant.awards import Award
@@ -110,6 +113,14 @@ from ..domain.value_objects import (
     Profile,
     Season,
     StadiumProfile,
+)
+from ..domain.workspace import (
+    INVITATION_UNAVAILABLE,
+    Invitation,
+    InvitedRole,
+    Visibility,
+    Workspace,
+    members_from_rows,
 )
 from . import orm_models
 from .scoping import (
@@ -2248,3 +2259,169 @@ class DjangoWorldRepository:
             postseason_format=PostseasonFormat(row.postseason_format),
             draft_order_rule=DraftOrderRule(row.draft_order_rule),
         )
+
+
+# --- ワークスペースそのものの台帳（W4。#80）---
+
+
+def _real_team_ids(workspace_id: int) -> set[int]:
+    """そのワークスペースの実データのチームの id（担当を読み書きしてよいチーム）。"""
+    return set(teams_in(WorldScope.real(workspace_id)).values_list("id", flat=True))
+
+
+class DjangoWorkspaceRepository:
+    """WorkspaceRepository の Django ORM 実装。範囲を取らない台帳（id・持ち主からワークスペースを引く）。
+
+    メンバーの保存先は既存の表のまま: 編集者は `WorkspaceEditor`、チーム担当は `Team.managers` の中間表。
+    **担当の中間表で読み書きするのは、このワークスペースの実データのチーム（`teams_in(WorldScope.real(ws))`）の
+    行だけ**（ほかのワークスペースのチームやペナントの世界の球団の担当には触れない）。管理画面で付けた重なった行
+    （持ち主に担当の行など）は、読むときに `members_from_rows` が上の役割だけを残し、保存で消える。
+    """
+
+    def find_by_id(self, workspace_id: int) -> Workspace:
+        row = orm_models.Workspace.objects.filter(id=workspace_id).values(
+            "id", "key", "name", "owner_id", "visibility"
+        )
+        found = row.first()
+        if found is None:
+            raise WorkspaceNotFound(f"ワークスペースが見つかりません（id={workspace_id}）。")
+        editor_ids = orm_models.WorkspaceEditor.objects.filter(workspace_id=workspace_id).values_list(
+            "user_id", flat=True
+        )
+        manager_rows = (
+            orm_models.Team.managers.through.objects.filter(team__in=teams_in(WorldScope.real(workspace_id)))
+            .order_by("team_id", "user_id")
+            .values_list("team_id", "user_id")
+        )
+        editors, assignments = members_from_rows(int(found["owner_id"]), editor_ids, manager_rows)
+        return Workspace(
+            id=int(found["id"]),
+            key=found["key"],
+            name=found["name"],
+            owner_id=int(found["owner_id"]),
+            visibility=Visibility(found["visibility"]),
+            editor_ids=editors,
+            team_assignments=assignments,
+        )
+
+    @transaction.atomic
+    def add(self, workspace: Workspace) -> Workspace:
+        """新しいワークスペースの行と編集者の行を書く。新しいワークスペースにはチームが無いので、担当は持てない。"""
+        if workspace.id is not None:
+            raise InvalidWorkspace("保存済みのワークスペースは追加できません。")
+        workspace.ensure_assignments_within(())
+        row = orm_models.Workspace.objects.create(
+            key=workspace.key,
+            name=workspace.name,
+            owner_id=workspace.owner_id,
+            visibility=workspace.visibility.value,
+        )
+        orm_models.WorkspaceEditor.objects.bulk_create(
+            orm_models.WorkspaceEditor(workspace_id=row.id, user_id=user_id)
+            for user_id in sorted(workspace.editor_ids)
+        )
+        workspace.id = row.id
+        return workspace
+
+    @transaction.atomic
+    def save(self, workspace: Workspace) -> None:
+        """名前・公開範囲と、編集者・担当の行を集約の状態にする（差分だけを書く）。
+
+        検査（行がある・担当チームが範囲の中）をすべて済ませてから書く（途中で止まって半分だけ書かない）。
+        """
+        if workspace.id is None or not orm_models.Workspace.objects.filter(id=workspace.id).exists():
+            raise WorkspaceNotFound(f"ワークスペースが見つかりません（id={workspace.id}）。")
+        workspace_id = workspace.id
+        team_ids = _real_team_ids(workspace_id)
+        workspace.ensure_assignments_within(team_ids)
+
+        orm_models.Workspace.objects.filter(id=workspace_id).update(
+            name=workspace.name, visibility=workspace.visibility.value
+        )
+
+        editors = orm_models.WorkspaceEditor.objects.filter(workspace_id=workspace_id)
+        current_editors = set(editors.values_list("user_id", flat=True))
+        editors.filter(user_id__in=current_editors - workspace.editor_ids).delete()
+        orm_models.WorkspaceEditor.objects.bulk_create(
+            orm_models.WorkspaceEditor(workspace_id=workspace_id, user_id=user_id)
+            for user_id in sorted(workspace.editor_ids - current_editors)
+        )
+
+        through = orm_models.Team.managers.through
+        managers = through.objects.filter(team_id__in=team_ids)
+        current = set(managers.values_list("team_id", "user_id"))
+        wanted = {(team_id, user_id) for user_id, teams in workspace.team_assignments.items() for team_id in teams}
+        stale = current - wanted
+        if stale:
+            condition = Q()
+            for team_id, user_id in stale:
+                condition |= Q(team_id=team_id, user_id=user_id)
+            managers.filter(condition).delete()
+        through.objects.bulk_create(
+            through(team_id=team_id, user_id=user_id) for team_id, user_id in sorted(wanted - current)
+        )
+
+    def count_owned_by(self, owner_id: int) -> int:
+        return orm_models.Workspace.objects.filter(owner_id=owner_id).count()
+
+
+class DjangoInvitationRepository:
+    """InvitationRepository の Django ORM 実装。範囲を取らない台帳（招待はトークンのダイジェストから引く）。
+
+    担当チームは、招待のワークスペースの実データのチームだけを書ける（ほかのワークスペースのチーム・世界の球団は拒む）。
+    """
+
+    @transaction.atomic
+    def add(self, invitation: Invitation) -> Invitation:
+        if invitation.id is not None:
+            raise InvalidInvitation("保存済みの招待は追加できません。")
+        invitation.ensure_teams_within(_real_team_ids(invitation.workspace_id))
+        row = orm_models.WorkspaceInvitation.objects.create(
+            workspace_id=invitation.workspace_id,
+            token_digest=invitation.token_digest,
+            role=invitation.role.value,
+            expires_at=invitation.expires_at,
+        )
+        row.teams.set(sorted(invitation.team_ids))
+        return replace(invitation, id=row.id)
+
+    def find_by_digest(self, token_digest: str) -> Invitation:
+        row = (
+            orm_models.WorkspaceInvitation.objects.filter(token_digest=token_digest)
+            .values("id", "workspace_id", "token_digest", "role", "expires_at")
+            .first()
+        )
+        if row is None:
+            raise InvalidInvitation(INVITATION_UNAVAILABLE)
+        # 担当チームは招待のワークスペースの実データのチームだけを読む（招待の中身の参照クエリと同じ絞り方。
+        # 発行の後に範囲の外へ出たチームは、消えたチームと同じく招待に残っていない扱い）
+        team_ids = frozenset(
+            orm_models.WorkspaceInvitation.teams.through.objects.filter(
+                workspaceinvitation_id=row["id"], team__in=teams_in(WorldScope.real(int(row["workspace_id"])))
+            ).values_list("team_id", flat=True)
+        )
+        try:
+            return Invitation(
+                id=int(row["id"]),
+                workspace_id=int(row["workspace_id"]),
+                token_digest=row["token_digest"],
+                role=InvitedRole(row["role"]),
+                team_ids=team_ids,
+                expires_at=row["expires_at"],
+            )
+        except (InvalidInvitation, ValueError):
+            # 担当チームがすべて消された「担当チームを編集」の招待は、もう使えない（無い招待と同じ扱い）
+            raise InvalidInvitation(INVITATION_UNAVAILABLE) from None
+
+    def delete(self, workspace_id: int, invitation_id: int) -> None:
+        deleted, _ = orm_models.WorkspaceInvitation.objects.filter(
+            workspace_id=workspace_id, id=invitation_id
+        ).delete()
+        if not deleted:
+            raise InvalidInvitation(INVITATION_UNAVAILABLE)
+
+    def delete_expired(self, workspace_id: int, now: datetime) -> int:
+        _, counts = orm_models.WorkspaceInvitation.objects.filter(
+            workspace_id=workspace_id, expires_at__lte=now
+        ).delete()
+        return counts.get(orm_models.WorkspaceInvitation._meta.label, 0)

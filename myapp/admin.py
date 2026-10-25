@@ -1,4 +1,3 @@
-import random
 import types
 from collections import Counter
 from typing import ClassVar
@@ -51,7 +50,7 @@ from .domain.value_objects import (
     StadiumProfile,
 )
 from .domain.value_objects import Profile as DomainProfile
-from .domain.workspace import Visibility, generate_workspace_key, validate_workspace_key
+from .domain.workspace import Visibility, validate_workspace_key
 from .infrastructure import orm_models
 from .infrastructure.orm_models import (
     Captaincy,
@@ -84,6 +83,7 @@ from .infrastructure.scoping import (
     stage_condition,
     teams_in,
 )
+from .infrastructure.workspaces import new_workspace_key
 from .presentation.views import build_league_setup_service, build_recording_service, build_setup_query
 
 # ヘッダーの文言
@@ -1983,15 +1983,6 @@ class GameAdmin(RealDataOnlyMixin, admin.ModelAdmin):
         return f"{(obj.home_team if winner == obj.home_team_id else obj.away_team).name} の勝ち"
 
 
-def _new_workspace_key() -> str:
-    """まだ使われていない key を作る。推測されないよう OS の乱数源（`SystemRandom`）で引く。"""
-    rng = random.SystemRandom()
-    while True:
-        key = generate_workspace_key(rng)
-        if not Workspace.objects.filter(key=key).exists():
-            return key
-
-
 class WorkspaceForm(forms.ModelForm):
     """ワークスペースの作成。key は空欄ならサーバーが作る（登録後は読み取り専用で変えられない）。"""
 
@@ -2011,7 +2002,7 @@ class WorkspaceForm(forms.ModelForm):
     def clean_key(self):
         key = (self.cleaned_data.get("key") or "").strip()
         if not key:
-            return _new_workspace_key()
+            return new_workspace_key()
         try:
             return validate_workspace_key(key)
         except DomainError as error:

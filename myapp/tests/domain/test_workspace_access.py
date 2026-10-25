@@ -40,6 +40,7 @@ OPERATIONS = {
     "試合（どちらもほか）の編集": lambda a: a.can_edit_teams([OTHER_TEAM, ANOTHER_TEAM]),
     "世界の作成": lambda a: a.can_create_world(),
     "登録（リーグ・チーム・球場）": lambda a: a.can_set_up(),
+    "設定の変更": lambda a: a.can_change_settings(),
     "メンバーの管理": lambda a: a.can_manage_members(),
     "削除": lambda a: a.can_delete(),
 }
@@ -48,16 +49,16 @@ COLUMNS = tuple(OPERATIONS)
 Y, N = True, False
 # (利用者, 公開範囲) → (役割, 操作ごとの可否。COLUMNS の順)
 TABLE = {
-    ("持ち主", PUBLIC): (WorkspaceRole.OWNER, (Y, Y, Y, Y, Y, Y, Y, Y, Y, Y)),
-    ("持ち主", PRIVATE): (WorkspaceRole.OWNER, (Y, Y, Y, Y, Y, Y, Y, Y, Y, Y)),
-    ("編集者", PUBLIC): (WorkspaceRole.EDITOR, (Y, Y, Y, Y, Y, Y, Y, Y, N, N)),
-    ("編集者", PRIVATE): (WorkspaceRole.EDITOR, (Y, Y, Y, Y, Y, Y, Y, Y, N, N)),
-    ("チーム担当", PUBLIC): (WorkspaceRole.TEAM_MANAGER, (Y, N, Y, N, Y, N, N, N, N, N)),
-    ("チーム担当", PRIVATE): (WorkspaceRole.TEAM_MANAGER, (Y, N, Y, N, Y, N, N, N, N, N)),
-    ("ログインした部外者", PUBLIC): (WorkspaceRole.VIEWER, (Y, N, N, N, N, N, N, N, N, N)),
-    ("ログインした部外者", PRIVATE): (WorkspaceRole.NONE, (N, N, N, N, N, N, N, N, N, N)),
-    ("未ログイン", PUBLIC): (WorkspaceRole.VIEWER, (Y, N, N, N, N, N, N, N, N, N)),
-    ("未ログイン", PRIVATE): (WorkspaceRole.NONE, (N, N, N, N, N, N, N, N, N, N)),
+    ("持ち主", PUBLIC): (WorkspaceRole.OWNER, (Y, Y, Y, Y, Y, Y, Y, Y, Y, Y, Y)),
+    ("持ち主", PRIVATE): (WorkspaceRole.OWNER, (Y, Y, Y, Y, Y, Y, Y, Y, Y, Y, Y)),
+    ("編集者", PUBLIC): (WorkspaceRole.EDITOR, (Y, Y, Y, Y, Y, Y, Y, Y, N, N, N)),
+    ("編集者", PRIVATE): (WorkspaceRole.EDITOR, (Y, Y, Y, Y, Y, Y, Y, Y, N, N, N)),
+    ("チーム担当", PUBLIC): (WorkspaceRole.TEAM_MANAGER, (Y, N, Y, N, Y, N, N, N, N, N, N)),
+    ("チーム担当", PRIVATE): (WorkspaceRole.TEAM_MANAGER, (Y, N, Y, N, Y, N, N, N, N, N, N)),
+    ("ログインした部外者", PUBLIC): (WorkspaceRole.VIEWER, (Y, N, N, N, N, N, N, N, N, N, N)),
+    ("ログインした部外者", PRIVATE): (WorkspaceRole.NONE, (N, N, N, N, N, N, N, N, N, N, N)),
+    ("未ログイン", PUBLIC): (WorkspaceRole.VIEWER, (Y, N, N, N, N, N, N, N, N, N, N)),
+    ("未ログイン", PRIVATE): (WorkspaceRole.NONE, (N, N, N, N, N, N, N, N, N, N, N)),
 }
 
 

@@ -69,6 +69,21 @@ class WorkspaceNotFound(DomainError):
     """ワークスペースが無い（書き込み先を決められない）。"""
 
 
+class WorkspaceLimitReached(DomainError):
+    """1人が持てるワークスペースの数の上限に達している（`WorkspaceQuota`）。"""
+
+
+class InvalidInvitation(DomainError):
+    """招待が使えない（無い・期限切れ・使用済み・既にメンバー）、または招待として成立しない内容。
+
+    無い・期限切れ・使用済みは同じ文言にする（`workspace.INVITATION_UNAVAILABLE`。どれかを推し量らせない）。
+    """
+
+
+class MemberNotFound(DomainError):
+    """ワークスペースのメンバー（編集者・チーム担当）ではない利用者を、役割の変更・除名の対象にした。"""
+
+
 class InvalidProfile(DomainError):
     """プロフィールの値が不正（現実的でない身長など）。"""
 
