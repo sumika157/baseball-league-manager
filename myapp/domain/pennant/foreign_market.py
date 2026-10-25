@@ -14,9 +14,12 @@
   （`BACKGROUNDS`）。獲得した選手のプロフィールにも保存する（#169 Q5）
 - 候補の本当の能力は見せない。球団は**スカウトの見立て**（`draft_meeting.scout_with_noise`。会議の候補と同じ誤差
   `SCOUT_SD`・同じ刻み）で見比べる
-- **AI**（`choose_signings`）は、見立ての総合（`draft_meeting.scouting_value`）に、位置の必要度（その球団の
-  新しい支配下の選手の位置の計画 `draft.newcomer_plan` のうち、まだ埋めていない数 × `NEED_WEIGHT`）を足した評価が
-  大きい候補から選ぶ
+- **AI**（`choose_signings`）は、見立ての総合（`draft_meeting.scouting_value`）に、位置の必要度（その位置の
+  **戦力の穴** × `HOLE_WEIGHT`。#169 F1b）を足した評価が大きい候補から選ぶ。戦力は支配下の今の能力の、1軍の単位
+  （`SquadUnit`。内野・外野の打線と先発・救援）ごとの上位の平均（`squad_strength`）、穴は世界の全球団の平均との差
+  （`squad_holes`。+ が弱い）。1人獲得するごとに、その候補の見立てを戦力に入れて穴を数え直す。位置の最低人数
+  （`draft.MIN_BY_POSITION`）は会議と同じ硬い制約（`draft.keeps_position_minimum`。残る新人の枠で最低人数に届く間だけ、
+  足りている位置を選べる）
 - **ゲームの上限**（#169 Q4。年俸・契約年数が無い間の代わり）: 外国人の保有は `MAX_FOREIGN_HELD` 人まで、
   シーズン中の獲得は1年 `MAX_MIDSEASON_SIGNINGS` 人まで（`ensure_signable`。AI も通る）
 - **合わせ込み**: 候補の能力の平均は `SIGNED_RATING_MEAN + POOL_RATING_SHIFT`（+ 前所属のずらし）。AI は候補の上から
@@ -35,14 +38,23 @@ from collections.abc import Collection, Mapping, MutableSet, Sequence
 from dataclasses import dataclass, replace
 from datetime import date
 from enum import Enum
+from statistics import fmean
 
 from ..exceptions import InvalidSigning
 from ..simulation.estimate import draw_growth_type, draw_potential, with_growth, with_potential
+from ..simulation.manager import ROTATION_SIZE
 from ..simulation.randomness import game_seed, make_random, weighted_index
 from ..simulation.ratings import AVERAGE_RATING, PitcherRatings
 from ..value_objects import AcquisitionRoute, ContractStatus, ForeignBackground, Position, Profile
 from ..virtual_players import generator
-from .draft import DraftRoute, DraftTeam, draw_number, foreign_count_to_add, newcomer_plan
+from .draft import (
+    DraftRoute,
+    DraftTeam,
+    draw_number,
+    foreign_count_to_add,
+    keeps_position_minimum,
+    newcomer_plan,
+)
 from .draft_meeting import ScoutingAccuracy, ScoutingReport, scout_noise, scout_with_noise, scouting_value
 from .initial_ratings import SEASON_START_MONTH, STRENGTH_UNIT
 from .offseason_player import Ratings
@@ -68,8 +80,37 @@ POOL_RATING_SHIFT = -3.8
 # ドラフト会議の `draft_meeting.POOL_PITCHER_SHIFT` と同じ考え）
 POOL_PITCHER_SHIFT = -1.3
 POOL_RATING_SD = 7.0
-# AI の評価: 見立ての総合 + NEED_WEIGHT × その位置の残りの必要数（ドラフト会議の AI と同じ重み）
-NEED_WEIGHT = 2.0
+# AI の評価: 見立ての総合 + HOLE_WEIGHT × その位置の戦力の穴（点。世界の平均との差）。実測で、外国人が投手か
+# 野手の一方に寄らず、穴の大きい側を多く取る値に決めた（Wiki「ペナントモードの仕組み」の「実測値」）
+HOLE_WEIGHT = 1.0
+# 空いた枠の能力（単位の人数に満たない球団。2軍の層の水準）
+VACANT_RATING = 40.0
+
+
+class SquadUnit(Enum):
+    """戦力の単位（1軍の打線と投手陣）。値は画面に出す名前。"""
+
+    INFIELD = "内野の打線"
+    OUTFIELD = "外野の打線"
+    ROTATION = "先発"
+    BULLPEN = "救援"
+
+
+# 単位ごとの、上位を数える人数（内野4・外野3の打線、先発6人・救援6人）。捕手は外国人を獲得しないので数えない
+SQUAD_SIZES: Mapping[SquadUnit, int] = {
+    SquadUnit.INFIELD: 4,
+    SquadUnit.OUTFIELD: 3,
+    SquadUnit.ROTATION: ROTATION_SIZE,
+    SquadUnit.BULLPEN: 6,
+}
+# 位置ごとに見る単位（投手は先発と救援の平均）
+UNITS_BY_POSITION: Mapping[Position, tuple[SquadUnit, ...]] = {
+    Position.INFIELDER: (SquadUnit.INFIELD,),
+    Position.OUTFIELDER: (SquadUnit.OUTFIELD,),
+    Position.PITCHER: (SquadUnit.ROTATION, SquadUnit.BULLPEN),
+}
+
+Squad = Sequence[tuple[Position, Ratings]]
 
 
 class SigningPhase(Enum):
@@ -269,33 +310,103 @@ def scouting_report(
     return scout_with_noise(candidate.ratings, scout_noise(text, candidate.ratings), accuracy=accuracy)
 
 
-def choose_signings(
-    candidates: Sequence[ForeignCandidate], count: int, planned: Sequence[Position], *, world_seed: int
-) -> tuple[ForeignCandidate, ...]:
-    """AI が獲得する候補 `count` 人（獲得する順）。
+def _top_mean(values: Sequence[float], size: int) -> float:
+    """上位 `size` 個の平均。足りない分は `VACANT_RATING`。"""
+    top = sorted(values, reverse=True)[:size]
+    return (sum(top) + VACANT_RATING * (size - len(top))) / size
 
-    評価は見立ての総合（`scouting_value`）+ `NEED_WEIGHT` × その位置の残りの必要数（`planned` のうち捕手でない位置。
-    1人選ぶごとに1つ減らす。0未満にはしない）。同じ評価は候補の添字の小さい方。候補の並びには依存しない。
+
+def squad_strength(squad: Squad) -> dict[SquadUnit, float]:
+    """球団の戦力（単位ごとの上位の平均）。`squad` は支配下の選手の位置と今の能力。
+
+    打線は位置ごとの打撃（`batting_value`）の上位、先発は投手の `starter_value` の上位、救援は先発の上位を除いた
+    投手の抑える力（`pitching_value`）の上位。同じ値の投手は並びの前を先発にする。
+    """
+    batters: dict[Position, list[float]] = {Position.INFIELDER: [], Position.OUTFIELDER: []}
+    pitchers: list[PitcherRatings] = []
+    for position, ratings in squad:
+        if isinstance(ratings, PitcherRatings):
+            pitchers.append(ratings)
+        elif position in batters:
+            batters[position].append(ratings.batting_value)
+    rotation_size = SQUAD_SIZES[SquadUnit.ROTATION]
+    order = sorted(range(len(pitchers)), key=lambda index: -pitchers[index].starter_value)
+    return {
+        SquadUnit.INFIELD: _top_mean(batters[Position.INFIELDER], SQUAD_SIZES[SquadUnit.INFIELD]),
+        SquadUnit.OUTFIELD: _top_mean(batters[Position.OUTFIELDER], SQUAD_SIZES[SquadUnit.OUTFIELD]),
+        SquadUnit.ROTATION: _top_mean(
+            [pitchers[index].starter_value for index in order[:rotation_size]], rotation_size
+        ),
+        SquadUnit.BULLPEN: _top_mean(
+            [pitchers[index].pitching_value for index in order[rotation_size:]], SQUAD_SIZES[SquadUnit.BULLPEN]
+        ),
+    }
+
+
+def world_strength(squads: Collection[Squad]) -> dict[SquadUnit, float]:
+    """世界の戦力の平均（単位ごと）。穴を測る基準。能力の錨（50 = 1軍の平均）は世界全体で決めるので、比べる相手も
+    世界の全球団（リーグが複数の世界でも）。球団が無ければ全単位0。"""
+    strengths = [squad_strength(squad) for squad in squads]
+    return {unit: fmean(strength[unit] for strength in strengths) if strengths else 0.0 for unit in SquadUnit}
+
+
+def squad_holes(squad: Squad, reference: Mapping[SquadUnit, float]) -> dict[SquadUnit, float]:
+    """戦力の穴（単位ごと。基準 − 球団の戦力。+ が弱い）。"""
+    strength = squad_strength(squad)
+    return {unit: reference[unit] - strength[unit] for unit in SquadUnit}
+
+
+def position_hole(holes: Mapping[SquadUnit, float], position: Position) -> float:
+    """位置の穴（`UNITS_BY_POSITION` の単位の穴の平均。投手は先発と救援）。外国人を獲得しない位置は0。"""
+    units = UNITS_BY_POSITION.get(position, ())
+    return fmean(holes[unit] for unit in units) if units else 0.0
+
+
+def choose_signings(
+    candidates: Sequence[ForeignCandidate],
+    count: int,
+    team: DraftTeam,
+    *,
+    reference: Mapping[SquadUnit, float],
+    world_seed: int,
+) -> tuple[ForeignCandidate, ...]:
+    """AI が球団 `team` のために獲得する候補（獲得する順。ふつうは `count` 人）。
+
+    評価は見立ての総合（`scouting_value`）+ `HOLE_WEIGHT` × その位置の穴（`position_hole`。球団の戦力
+    `team.squad` を基準 `reference`＝`world_strength` と比べる）。1人選ぶごとに、その候補の見立ての能力を戦力に
+    入れて穴を数え直す（基準は動かさない）。同じ評価は候補の添字の小さい方。候補の並びには依存しない。
+
+    位置の最低人数は硬い制約: 足りない位置はいつでも選べ、ほかの位置は、獲得の後に残る新しい支配下の選手の枠
+    （`draft.newcomer_plan` の人数 − 獲得した人数）で最低人数までの不足を埋められる間だけ選べる（会議の指名と同じ
+    `draft.keeps_position_minimum`）。選べる候補が尽きたら `count` 人より少なく獲得する（捕手だけが足りないなど）。
     """
     if count > len(candidates):
         raise ValueError("候補より多くは獲得できません。")
-    need: Counter[Position] = Counter(position for position in planned if position is not Position.CATCHER)
-    values = {
-        candidate.key: scouting_value(scouting_report(candidate, world_seed=world_seed).ratings)
-        for candidate in candidates
-    }
+    reports = {candidate.key: scouting_report(candidate, world_seed=world_seed).ratings for candidate in candidates}
+    values = {key: scouting_value(ratings) for key, ratings in reports.items()}
+    slots, _ = newcomer_plan(team)
+    counts: Counter[Position] = Counter(team.position_counts)
+    squad = list(team.squad)
     remaining = sorted(candidates, key=lambda candidate: candidate.key.index)
     chosen: list[ForeignCandidate] = []
     for _ in range(count):
+        open_slots = slots - len(chosen) - 1
+        allowed = [
+            candidate for candidate in remaining if keeps_position_minimum(counts, candidate.position, open_slots)
+        ]
+        if not allowed:
+            break
+        holes = squad_holes(squad, reference)
         best = max(
-            remaining,
+            allowed,
             key=lambda candidate: (
-                values[candidate.key] + NEED_WEIGHT * max(0, need[candidate.position]),
+                values[candidate.key] + HOLE_WEIGHT * position_hole(holes, candidate.position),
                 -candidate.key.index,
             ),
         )
         remaining.remove(best)
-        need[best.position] -= 1
+        counts[best.position] += 1
+        squad.append((best.position, reports[best.key]))
         chosen.append(best)
     return tuple(chosen)
 
@@ -332,16 +443,17 @@ def offseason_signings(
 ) -> OffseasonSignings:
     """締める年 `year` のオフに、AI が球団ごとに外国人を獲得する（球団 id の昇順）。入団は翌年。
 
-    `teams` は引退・戦力外の後の球団。補う人数は `foreign_count_to_add`（新しい支配下の選手の枠の内側）、
-    位置の必要度は `newcomer_plan` の計画。候補は世界の全選手の名前（`used_names` の呼び出し時点の値）と
-    重ならないように引き、獲得した外国人の名前を `used_names` に足していく。
-    背番号は球団ごとの乱数（`foreign-number-<球団 id>`、年は翌年）で、獲得した順に引く。
+    `teams` は引退・戦力外の後の**世界の全球団**（穴の基準 `world_strength` を全球団の戦力から獲得の前に決める）。
+    補う人数は `foreign_count_to_add`（新しい支配下の選手の枠の内側）、位置の必要度は戦力の穴（`choose_signings`）。
+    候補は世界の全選手の名前（`used_names` の呼び出し時点の値）と重ならないように引き、獲得した外国人の名前を
+    `used_names` に足していく。背番号は球団ごとの乱数（`foreign-number-<球団 id>`、年は翌年）で、獲得した順に引く。
     """
     world_names = frozenset(used_names)
+    reference = world_strength([team.squad for team in teams])
     signings: list[ForeignSigning] = []
     after: list[DraftTeam] = []
     for team in sorted(teams, key=lambda item: item.team_id):
-        count, planned = newcomer_plan(team)
+        count, _ = newcomer_plan(team)
         wanted = foreign_count_to_add(team, count)
         if wanted <= 0:
             after.append(team)
@@ -349,7 +461,10 @@ def offseason_signings(
         candidates = draw_candidates(
             team.team_id, year=year, phase=SigningPhase.OFFSEASON, world_seed=world_seed, used_names=world_names
         )
-        chosen = choose_signings(candidates, wanted, planned, world_seed=world_seed)
+        chosen = choose_signings(candidates, wanted, team, reference=reference, world_seed=world_seed)
+        if not chosen:
+            after.append(team)
+            continue
         ensure_signable(
             [candidate.key for candidate in chosen],
             candidates,

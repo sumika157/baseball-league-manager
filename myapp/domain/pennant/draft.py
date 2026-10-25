@@ -169,6 +169,9 @@ class DraftTeam:
     development_counts: Mapping[Position, int] = field(default_factory=dict)
     # 育成の人数の目標（`development_target`。目安の帯の中）。0 なら育成ドラフトで指名しない
     development_target: int = 0
+    # 支配下の選手の位置と今の能力（能力の無い選手は除く）。外国人の獲得が戦力の穴を測るのに使う
+    # （`foreign_market.squad_strength`。#169 F1b）。空は全単位が空き（全球団が空なら穴0。位置の偏りは生まない）
+    squad: tuple[tuple[Position, BatterRatings | PitcherRatings], ...] = ()
 
     @property
     def registered_count(self) -> int:
@@ -280,10 +283,26 @@ def foreign_count_to_add(team: DraftTeam, draftees: int) -> int:
 def newcomer_plan(team: DraftTeam) -> tuple[int, tuple[Position, ...]]:
     """新しい支配下の選手（獲得する外国人と日本人の新人）の人数と、位置の計画（`choose_positions` の並び）。
 
-    外国人の獲得（`foreign_market.py`）と会議の人数（`plan_team_draft`）が同じ計画を見る。
+    外国人の獲得（`foreign_market.py`）は人数（獲得で補う人数の上限と、位置の最低人数の制約に残る枠）だけを、
+    会議（`plan_team_draft`）は人数と位置を見る（獲得する外国人の位置は戦力の穴で決める。#169 F1b）。
     """
     count = draftee_count(team.registered_count, registered_limit=team.registered_limit)
     return count, tuple(choose_positions(team, count))
+
+
+def position_shortfall(counts: Mapping[Position, int]) -> int:
+    """位置の最低人数（`MIN_BY_POSITION`）までの不足の合計。`counts` は支配下の位置ごとの人数。"""
+    return sum(max(0, minimum - counts.get(position, 0)) for position, minimum in MIN_BY_POSITION.items())
+
+
+def keeps_position_minimum(counts: Mapping[Position, int], position: Position, remaining: int) -> bool:
+    """位置の最低人数の硬い制約。`position` を1人足してよいか。足りない位置はいつでも足せ、ほかの位置は、
+    足した後に残る新人の枠 `remaining` で最低人数に届く間だけ足せる（今までの自動ドラフト `choose_positions` が
+    守っていた保証）。**会議の指名（`draft_meeting`）と外国人の獲得（`foreign_market`）の唯一の出典**。"""
+    after = dict(counts)
+    after[position] = after.get(position, 0) + 1
+    shortfall = position_shortfall(after)
+    return shortfall < position_shortfall(counts) or shortfall <= remaining
 
 
 def plan_team_draft(team: DraftTeam, signed: Sequence[Position] = ()) -> TeamDraftPlan:

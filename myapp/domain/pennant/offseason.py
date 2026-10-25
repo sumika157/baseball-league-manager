@@ -1,8 +1,8 @@
 """シーズンを締めるときの計算。**純粋な関数**で、DB にも Django にも触れない。
 
     引退を決める → 球団ごとに戦力外（`release.py`。ここまでが `plan_departures`）→ 外国人の獲得
-    （`foreign_market.py`。補う人数と位置の計画は `draft.py`）→ ドラフト会議（`draft_meeting.py`。全球団の日本人の
-    新人。人数は新人の人数 − 獲得した外国人。本指名の後に育成の巡）→
+    （`foreign_market.py`。補う人数は `draft.py`、選ぶ位置は戦力の穴）→ ドラフト会議（`draft_meeting.py`。全球団の
+    日本人の新人。人数は新人の人数 − 獲得した外国人。本指名の後に育成の巡）→
     残る選手の能力を1年ぶん進める（伸びしろの無い選手には先に引いて付ける。`with_filled_potential`）→
     残る選手・新人・獲得した外国人をまとめて、項目ごとに水準の錨をかける（写像は支配下で決め、
     育成にも同じ写像を当てる）
@@ -126,6 +126,7 @@ def _draft_team(club: OffseasonClub, remaining: Sequence[OffseasonPlayer], *, wo
     育成ドラフトの人数と位置は、別に育成だけで数える（目標は `draft.development_target`）。
 
     外国人の人数・背番号・苗字は育成も含める（外国人の目標人数・背番号の重複・背ネームは区分によらない）。
+    戦力（`squad`。外国人の獲得が穴を測る）は支配下の今の能力だけ（育成は1軍に出られない）。
     """
     surnames = Counter(player.profile.back_name.split(".")[-1] for player in remaining if player.profile.back_name)
     return DraftTeam(
@@ -138,6 +139,11 @@ def _draft_team(club: OffseasonClub, remaining: Sequence[OffseasonPlayer], *, wo
         registered_limit=club.registered_player_limit,
         development_counts=dict(Counter(player.position for player in remaining if player.is_development)),
         development_target=development_target(club.team_id, world_seed=world_seed),
+        squad=tuple(
+            (player.position, player.ratings.ratings)
+            for player in remaining
+            if player.is_registered and player.ratings is not None
+        ),
     )
 
 

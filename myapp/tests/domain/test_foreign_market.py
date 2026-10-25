@@ -8,6 +8,7 @@ from __future__ import annotations
 import random
 import unittest
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import date
 from statistics import fmean
@@ -20,15 +21,22 @@ from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
 from myapp.domain.pennant.foreign_market import (
     BACKGROUNDS,
     CANDIDATES_BY_POSITION,
+    HOLE_WEIGHT,
     MAX_FOREIGN_HELD,
+    VACANT_RATING,
     CandidateKey,
     SigningPhase,
+    SquadUnit,
     choose_signings,
     draw_candidates,
     ensure_signable,
     expected_signing_ages,
     expected_signing_ratings,
     offseason_signings,
+    position_hole,
+    squad_holes,
+    squad_strength,
+    world_strength,
 )
 from myapp.domain.pennant.offseason import OffseasonClub, OffseasonPlayer, plan_departures, plan_offseason
 from myapp.domain.pennant.prospects import expected_prospect_ratings
@@ -171,38 +179,137 @@ class ExpectedSigningTest(unittest.TestCase):
             expected_signing_ratings(Position.CATCHER)
 
 
+def squad(*, infield: int = 50, outfield: int = 50, pitching: int = 50) -> tuple:
+    """内野6・外野5・投手15人が同じ能力の戦力（捕手3人は穴に効かない）。"""
+    batter = {
+        position: BatterRatings(contact=v, power=v, eye=v, speed=v)
+        for position, v in ((Position.INFIELDER, infield), (Position.OUTFIELDER, outfield), (Position.CATCHER, 50))
+    }
+    pitcher = PitcherRatings(stuff=pitching, control=pitching, home_run_avoidance=pitching)
+    return (
+        *((Position.INFIELDER, batter[Position.INFIELDER]) for _ in range(6)),
+        *((Position.OUTFIELDER, batter[Position.OUTFIELDER]) for _ in range(5)),
+        *((Position.CATCHER, batter[Position.CATCHER]) for _ in range(3)),
+        *((Position.PITCHER, pitcher) for _ in range(15)),
+    )
+
+
+def team_with(squad_: tuple, team_id: int = 1, *, foreign: int = 0) -> DraftTeam:
+    return replace(team(team_id, foreign=foreign), squad=squad_)
+
+
+AVERAGE = world_strength([squad()])
+
+
+def values_of(drawn: Sequence[foreign_market.ForeignCandidate]) -> dict:
+    return {c.key: scouting_value(foreign_market.scouting_report(c, world_seed=SEED).ratings) for c in drawn}
+
+
+class SquadTest(unittest.TestCase):
+    """戦力（単位ごとの上位の平均）と穴（#169 F1b）。"""
+
+    def test_units_take_the_top_of_each_position(self) -> None:
+        def batter(value: int) -> BatterRatings:
+            return BatterRatings(contact=value, power=value, eye=value, speed=value)
+
+        players = (
+            *((Position.INFIELDER, batter(v)) for v in (60, 55, 50, 45, 40)),
+            (Position.OUTFIELDER, batter(60)),
+            (Position.OUTFIELDER, batter(50)),
+            (Position.CATCHER, batter(80)),
+            (Position.DESIGNATED_HITTER, batter(80)),
+        )
+        strength = squad_strength(players)
+        self.assertAlmostEqual(strength[SquadUnit.INFIELD], (60 + 55 + 50 + 45) / 4)
+        self.assertAlmostEqual(strength[SquadUnit.OUTFIELD], (60 + 50 + VACANT_RATING) / 3, msg="空きは2軍の層の水準")
+        self.assertEqual(strength[SquadUnit.ROTATION], VACANT_RATING)
+        self.assertEqual(strength[SquadUnit.BULLPEN], VACANT_RATING)
+
+    def test_the_rotation_takes_the_starters_and_the_bullpen_the_rest(self) -> None:
+        """先発はスタミナ込みの `starter_value` の上位6人、救援はそれを除いた抑える力の上位。"""
+        workhorses = [PitcherRatings(stuff=50, control=50, home_run_avoidance=50, stamina=80) for _ in range(6)]
+        closer = PitcherRatings(stuff=60, control=60, home_run_avoidance=60, stamina=10)
+        strength = squad_strength([(Position.PITCHER, r) for r in (*workhorses, closer)])
+        self.assertAlmostEqual(strength[SquadUnit.ROTATION], workhorses[0].starter_value)
+        self.assertGreater(closer.pitching_value, workhorses[0].pitching_value)
+        self.assertAlmostEqual(strength[SquadUnit.BULLPEN], (60 + VACANT_RATING * 5) / 6)
+
+    def test_holes_are_the_world_average_minus_the_club(self) -> None:
+        reference = world_strength([squad(pitching=40), squad(pitching=60)])
+        holes = squad_holes(squad(pitching=40), reference)
+        self.assertGreater(holes[SquadUnit.ROTATION], 0, "弱い側は + ")
+        self.assertGreater(holes[SquadUnit.BULLPEN], 0)
+        self.assertAlmostEqual(holes[SquadUnit.INFIELD], 0)
+        self.assertLess(squad_holes(squad(pitching=60), reference)[SquadUnit.ROTATION], 0)
+        self.assertAlmostEqual(
+            position_hole(holes, Position.PITCHER), (holes[SquadUnit.ROTATION] + holes[SquadUnit.BULLPEN]) / 2
+        )
+        self.assertEqual(position_hole(holes, Position.CATCHER), 0.0, "外国人を獲得しない位置")
+
+
 class ChooseTest(unittest.TestCase):
-    def test_the_ai_takes_the_best_estimate_when_the_need_is_even(self) -> None:
+    def test_the_ai_takes_the_best_estimate_without_a_hole(self) -> None:
         drawn = candidates()
-        values = {c.key: scouting_value(foreign_market.scouting_report(c, world_seed=SEED).ratings) for c in drawn}
-        (chosen,) = choose_signings(drawn, 1, (), world_seed=SEED)
+        values = values_of(drawn)
+        (chosen,) = choose_signings(drawn, 1, team_with(squad()), reference=AVERAGE, world_seed=SEED)
         self.assertEqual(values[chosen.key], max(values.values()))
 
-    def test_the_need_pulls_towards_the_planned_position(self) -> None:
+    def test_a_weak_pitching_staff_signs_pitchers_and_a_weak_lineup_signs_batters(self) -> None:
+        """投手陣の弱い球団は投手を、打線の弱い球団は野手を取る（世界の平均と比べた穴）。"""
+        weak_pitching = squad(pitching=35)
+        weak_lineup = squad(infield=35, outfield=35)
+        reference = world_strength([weak_pitching, weak_lineup])
         drawn = candidates()
-        planned = (Position.OUTFIELDER,) * 20
-        chosen = choose_signings(drawn, 2, planned, world_seed=SEED)
-        self.assertEqual({c.position for c in chosen}, {Position.OUTFIELDER})
+        pitchers = choose_signings(drawn, 2, team_with(weak_pitching), reference=reference, world_seed=SEED)
+        batters = choose_signings(drawn, 2, team_with(weak_lineup), reference=reference, world_seed=SEED)
+        self.assertEqual({c.position for c in pitchers}, {Position.PITCHER})
+        self.assertNotIn(Position.PITCHER, {c.position for c in batters})
 
-    def test_catchers_in_the_plan_add_no_need(self) -> None:
-        drawn = candidates()
-        self.assertEqual(
-            choose_signings(drawn, 3, (Position.CATCHER,) * 10, world_seed=SEED),
-            choose_signings(drawn, 3, (), world_seed=SEED),
-        )
+    def test_each_signing_fills_the_hole_before_the_next(self) -> None:
+        """1人獲得するごとに、その候補の見立てを戦力に入れて穴を数え直す（基準は動かさない）。"""
+        for infield in (38, 42, 46, 50):
+            drawn = candidates()
+            values = values_of(drawn)
+            club = team_with(squad(infield=infield))
+            reference = world_strength([squad()])
+            first, second = choose_signings(drawn, 2, club, reference=reference, world_seed=SEED)
+            filled = (*club.squad, (first.position, foreign_market.scouting_report(first, world_seed=SEED).ratings))
+            holes = squad_holes(filled, reference)
+            rest = [c for c in drawn if c is not first]
+            expected = max(
+                rest, key=lambda c: (values[c.key] + HOLE_WEIGHT * position_hole(holes, c.position), -c.key.index)
+            )
+            with self.subTest(infield=infield):
+                self.assertEqual(second, expected)
+
+    def test_the_position_minimum_is_a_hard_limit(self) -> None:
+        """位置の最低人数に届かなくなる獲得はしない（会議と同じ保証）。投手が新人の枠の分だけ足りなければ、
+        打線に穴があっても投手だけを取る。捕手だけが足りないときは、捕手の分の枠を残して獲得を減らす。"""
+        counts = {Position.PITCHER: 9, Position.CATCHER: 3, Position.INFIELDER: 25, Position.OUTFIELDER: 22}
+        short_pitchers = replace(team_with(squad(infield=30, outfield=30)), position_counts=counts)
+        slots, _ = draft.newcomer_plan(short_pitchers)
+        self.assertEqual(slots, 6, "前提: 新人の枠6人・投手が6人足りない")
+        chosen = choose_signings(candidates(), 4, short_pitchers, reference=AVERAGE, world_seed=SEED)
+        self.assertEqual([c.position for c in chosen], [Position.PITCHER] * 4)
+
+        counts = {Position.PITCHER: 27, Position.CATCHER: 0, Position.INFIELDER: 17, Position.OUTFIELDER: 15}
+        short_catchers = replace(team_with(squad()), position_counts=counts)
+        self.assertEqual(draft.newcomer_plan(short_catchers)[0], 6)
+        self.assertEqual(len(choose_signings(candidates(), 4, short_catchers, reference=AVERAGE, world_seed=SEED)), 3)
 
     def test_the_choice_does_not_depend_on_the_order(self) -> None:
         drawn = list(candidates())
         shuffled = drawn[:]
         random.Random(1).shuffle(shuffled)
-        planned = (Position.PITCHER, Position.INFIELDER)
+        club = team_with(squad(outfield=45))
         self.assertEqual(
-            choose_signings(drawn, 3, planned, world_seed=SEED), choose_signings(shuffled, 3, planned, world_seed=SEED)
+            choose_signings(drawn, 3, club, reference=AVERAGE, world_seed=SEED),
+            choose_signings(shuffled, 3, club, reference=AVERAGE, world_seed=SEED),
         )
 
     def test_more_than_the_candidates_is_refused(self) -> None:
         with self.assertRaises(ValueError):
-            choose_signings(candidates(), 9, (), world_seed=SEED)
+            choose_signings(candidates(), 9, team(), reference=AVERAGE, world_seed=SEED)
 
 
 class EnsureSignableTest(unittest.TestCase):
@@ -277,7 +384,8 @@ class OffseasonSigningsTest(unittest.TestCase):
             self.assertTrue(set(signed) <= names)
 
     def test_another_club_does_not_change_a_clubs_signings(self) -> None:
-        """候補は球団ごとの種なので、他球団の有無で獲得する選手（能力・年齢・位置）は変わらない。"""
+        """候補は球団ごとの種なので、穴の基準（世界の平均）が同じなら、他球団の有無で獲得する選手（能力・年齢・位置）は
+        変わらない。"""
         alone = self.sign([team(2, foreign=2)]).signings
         together = [s for s in self.sign([team(1, foreign=0), team(2, foreign=2)]).signings if s.team_id == 2]
         self.assertEqual([s.candidate.key for s in alone], [s.candidate.key for s in together])
@@ -285,7 +393,7 @@ class OffseasonSigningsTest(unittest.TestCase):
 
     def test_a_renamed_signing_keeps_its_name_back_name_and_nationality_together(self) -> None:
         """他球団が同じ名前を先に獲得したときは、名前・読み・国・背ネームをまとめて引き直す（能力は動かない）。"""
-        (candidate,) = choose_signings(candidates(), 1, (), world_seed=SEED)
+        (candidate,) = choose_signings(candidates(), 1, team(), reference=AVERAGE, world_seed=SEED)
         taken = {candidate.name}
         (signing,) = foreign_market._sign(team(), [candidate], year=YEAR, world_seed=SEED, used_names=taken)
         renamed = foreign_market._resolved_name(candidate, 1, world_seed=SEED, used_names={candidate.name})
@@ -295,6 +403,24 @@ class OffseasonSigningsTest(unittest.TestCase):
         self.assertEqual((signing.profile.nationality, signing.profile.birthplace), (renamed.country, renamed.country))
         self.assertEqual(signing.ratings, candidate.ratings)
         self.assertIn(signing.name, taken)
+
+    def test_the_hole_is_measured_against_the_whole_world(self) -> None:
+        """穴の基準は渡した全球団の平均（#169 F1b）。投手陣の弱い球団は投手から、打線の弱い球団は野手から取る。"""
+        result = self.sign([team_with(squad(pitching=35), 1), team_with(squad(infield=35, outfield=35), 2)])
+        first: dict[int, Position] = {}
+        for signing in result.signings:
+            first.setdefault(signing.team_id, signing.position)
+        self.assertIs(first[1], Position.PITCHER)
+        self.assertIsNot(first[2], Position.PITCHER)
+
+    def test_a_club_whose_newcomers_must_all_be_catchers_signs_nobody(self) -> None:
+        """新人の枠を捕手の不足だけで使い切る球団は獲得せず、球団もそのまま（会議が捕手を指名する）。"""
+        counts = {Position.PITCHER: 31, Position.CATCHER: 0, Position.INFIELDER: 17, Position.OUTFIELDER: 15}
+        club = replace(team(1, foreign=0, size=63), position_counts=counts)
+        self.assertEqual(draft.newcomer_plan(club)[0], 3, "前提: 新人の枠3人・捕手が3人足りない")
+        result = self.sign([club])
+        self.assertEqual(result.signings, ())
+        self.assertEqual(result.teams, (club,))
 
     def test_the_held_limit_is_never_crossed_by_the_ai(self) -> None:
         result = self.sign([team(1, foreign=0)])
@@ -401,6 +527,19 @@ class PlanOffseasonTest(unittest.TestCase):
         planned = draft.plan_team_draft(draft_team)
         positions = tuple(d.position for d in result.draftees if not d.is_development)
         self.assertEqual(Counter(positions), Counter(planned.japanese_positions))
+
+    def test_the_squad_is_the_registered_players_with_ratings(self) -> None:
+        """戦力（穴を測る材料）は引退・戦力外の後の支配下で、能力のある選手だけ（育成は1軍に出られない）。"""
+        base = club(1, foreign=0)
+        development = replace(offseason_player(998, Position.PITCHER), contract=ContractStatus.DEVELOPMENTAL)
+        unrated = replace(offseason_player(999, Position.INFIELDER), ratings=None)
+        clubs = [replace(base, players=(*base.players, development, unrated))]
+        departures = plan_departures(clubs, year=YEAR, world_seed=SEED, start_year=START_YEAR)
+        (draft_team,) = departures.draft_teams
+        expected = [
+            (p.position, p.ratings.ratings) for p in departures.survivors if p.is_registered and p.ratings is not None
+        ]
+        self.assertEqual(list(draft_team.squad), expected)
 
     def test_same_world_gives_same_signings(self) -> None:
         clubs = [club(1, foreign=1)]

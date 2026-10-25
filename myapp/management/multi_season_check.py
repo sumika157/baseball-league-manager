@@ -9,23 +9,32 @@
     2年目以降: 翌年の能力で1シーズン回す
 
 シーズンごとに、水準の表（実データと並べる）・タイトル争い・年齢と能力の分布・入れ替わり・錨の補正・
-外国人の打席と投球回の割合・獲得した外国人（#169）を出す。
+外国人の打席と投球回の割合・獲得した外国人と戦力の穴との対応（#169）を出す。
 曲線や引退の倍率を直したら、ここで3シーズンの分布を読んで確かめる（Wiki「ペナントモードの仕組み」の「実測値」）。
 """
 
 from __future__ import annotations
 
 import time
+from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from statistics import fmean, pstdev
 
 from myapp.application.pennant_world import ForkSource
+from myapp.domain.pennant.draft import DraftTeam
 from myapp.domain.pennant.draft_meeting import DraftContext
 from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
+from myapp.domain.pennant.foreign_market import position_hole, squad_holes, world_strength
 from myapp.domain.pennant.fork import with_birth_date
 from myapp.domain.pennant.initial_ratings import age_at_season_start
-from myapp.domain.pennant.offseason import OffseasonClub, OffseasonPlan, OffseasonPlayer, plan_offseason
+from myapp.domain.pennant.offseason import (
+    OffseasonClub,
+    OffseasonPlan,
+    OffseasonPlayer,
+    plan_departures,
+    plan_offseason,
+)
 from myapp.domain.pennant.offseason_player import overall_value
 from myapp.domain.pennant.ratings import PlayerRatings
 from myapp.domain.pennant.retirement import PlayingTime
@@ -294,6 +303,34 @@ def format_foreign_offseason(plan: OffseasonPlan, members: Sequence[Member], yea
     )
 
 
+def format_foreign_needs(plan: OffseasonPlan, teams: Sequence[DraftTeam]) -> str:
+    """直前のオフの新外国人の位置と、戦力の穴との対応（#169 F1b）。`teams` は引退・戦力外の後の球団
+    （`plan_departures` の `draft_teams`。獲得の前の戦力）。
+
+    投手陣の穴（先発と救援の平均）が打線の穴（内野と外野の平均）より大きい球団と、そうでない球団に分け、
+    それぞれの新外国人に占める投手の割合を出す（穴の大きい側を取っていれば、前者の方が高い）。
+    """
+    reference = world_strength([team.squad for team in teams])
+    pitching_short: set[int] = set()
+    for team in teams:
+        holes = squad_holes(team.squad, reference)
+        batting = (position_hole(holes, Position.INFIELDER) + position_hole(holes, Position.OUTFIELDER)) / 2
+        if position_hole(holes, Position.PITCHER) > batting:
+            pitching_short.add(team.team_id)
+    positions = Counter(signing.position for signing in plan.signings)
+    sides = []
+    for label, inside in (("投手陣の穴が大きい球団", True), ("打線の穴が大きい球団", False)):
+        signed = [signing for signing in plan.signings if (signing.team_id in pitching_short) is inside]
+        clubs = sum(1 for team in teams if (team.team_id in pitching_short) is inside)
+        pitchers = sum(1 for signing in signed if signing.position is Position.PITCHER)
+        share = f"{pitchers / len(signed):.0%}" if signed else "—"
+        sides.append(f"{label} {clubs}球団→新外国人 {len(signed)}人・うち投手 {pitchers}人＝{share}")
+    return (
+        f"  新外国人の位置 投手 {positions[Position.PITCHER]}・内野手 {positions[Position.INFIELDER]}・"
+        f"外野手 {positions[Position.OUTFIELDER]}  穴との対応: {'／'.join(sides)}"
+    )
+
+
 def format_offseason(plan: OffseasonPlan, members: Sequence[Member], year: int) -> str:
     """直前のオフ（Y 年を締めた）の要約。"""
     by_id = {m.player_id: m for m in members}
@@ -415,8 +452,9 @@ def run_seasons(
         if season + 1 == seasons:
             break
         started = time.perf_counter()
+        clubs = offseason_clubs(members, teams, batting, pitching)
         plan = plan_offseason(
-            offseason_clubs(members, teams, batting, pitching),
+            clubs,
             year=current,
             world_seed=seed,
             start_year=year,
@@ -431,4 +469,6 @@ def run_seasons(
         say(f"---- {current}年のオフ（計算 {elapsed * 1000:.0f} ms）----")
         say(format_offseason(plan, members, current))
         say(format_foreign_offseason(plan, members, current, start_year=year))
+        departures = plan_departures(clubs, year=current, world_seed=seed, start_year=year)
+        say(format_foreign_needs(plan, departures.draft_teams))
         members = apply_plan(members, plan)
