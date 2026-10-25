@@ -161,6 +161,13 @@ class PlayerDetailCardTest(WorldCase):
         for growth in ("早熟", "晩成"):
             self.assertNotIn(growth, content)
 
+    def test_the_hidden_potential_and_the_outlook_are_not_shown(self):
+        """伸びしろは隠し値。見込みの区分を出すかは #308 の P3 で決める（それまでは出さない）。"""
+        content = self.client.get(self.batter_url).content.decode()
+
+        for word in ("伸びしろ", "見込み"):
+            self.assertNotIn(word, content)
+
     def test_a_player_without_ratings_still_opens_without_a_card(self):
         orm_models.PennantPlayerRatings.objects.filter(player_id=self.batter_id).delete()
 

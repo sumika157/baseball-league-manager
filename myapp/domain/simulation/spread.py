@@ -27,6 +27,7 @@ P1 の目標帯より低くなる。
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 from statistics import fmean, pstdev
 
 from .ratings import RATING_MAX, RATING_MIN, BatterRatings, PitcherRatings
@@ -80,7 +81,10 @@ def _population_size(count: int, population: Sequence[bool] | None) -> int:
 def spread_batter_ratings(
     ratings: Sequence[BatterRatings], *, population: Sequence[bool] | None = None
 ) -> list[BatterRatings]:
-    """野手の能力の散らばりを合わせる。入力と同じ順に返す。成長型は変えない。`population` は `rescale` と同じ。"""
+    """野手の能力の散らばりを合わせる。入力と同じ順に返す。`population` は `rescale` と同じ。
+
+    `LABELS` に無いフィールド（成長型・伸びしろ）は変えない（作り直さず `replace` で項目だけを差し替える）。
+    """
     if _population_size(len(ratings), population) < MIN_POPULATION:
         return list(ratings)
 
@@ -94,9 +98,7 @@ def spread_batter_ratings(
 
     contact, power, eye, speed, fielding = (column(name) for name in _BATTER_ITEMS)
     return [
-        BatterRatings(
-            contact=contact[i], power=power[i], eye=eye[i], speed=speed[i], fielding=fielding[i], growth=item.growth
-        )
+        replace(item, contact=contact[i], power=power[i], eye=eye[i], speed=speed[i], fielding=fielding[i])
         for i, item in enumerate(ratings)
     ]
 
@@ -104,8 +106,9 @@ def spread_batter_ratings(
 def spread_pitcher_ratings(
     ratings: Sequence[PitcherRatings], *, population: Sequence[bool] | None = None
 ) -> list[PitcherRatings]:
-    """投手の能力の散らばりを合わせる（スタミナを除く）。入力と同じ順に返す。成長型は変えない。
-    `population` は `rescale` と同じ。"""
+    """投手の能力の散らばりを合わせる（スタミナを除く）。入力と同じ順に返す。
+    `population` は `rescale` と同じ。成長型・伸びしろ・スタミナは変えない（`replace` で項目だけを差し替える）。
+    """
     if _population_size(len(ratings), population) < MIN_POPULATION:
         return list(ratings)
 
@@ -119,13 +122,7 @@ def spread_pitcher_ratings(
 
     stuff, control, avoidance = (column(name) for name in _PITCHER_ITEMS)
     return [
-        PitcherRatings(
-            stuff=stuff[i],
-            control=control[i],
-            home_run_avoidance=avoidance[i],
-            stamina=item.stamina,
-            growth=item.growth,
-        )
+        replace(item, stuff=stuff[i], control=control[i], home_run_avoidance=avoidance[i])
         for i, item in enumerate(ratings)
     ]
 

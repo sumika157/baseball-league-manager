@@ -801,7 +801,7 @@ def _rating_field(label: str) -> models.PositiveSmallIntegerField:
 class PennantPlayerRatings(models.Model):
     """ペナントの世界の、選手 × 年の能力。**入力**で、成績はここから生まれる結果。
 
-    野手は野手の5項目、投手は投手の4項目を持ち、もう片方は空。成長型は両方が持つ。
+    野手は野手の5項目、投手は投手の4項目を持ち、もう片方は空。成長型と伸びしろは両方が持つ。
     項目の列は domain の `BatterRatings` / `PitcherRatings` のフィールドが出典
     （`tests/integration/test_pennant_ratings.py` が突き合わせる）。
     ペナント専用だが、選手経由で世界に属す（選手の在籍をたどると世界が決まる）。
@@ -813,6 +813,9 @@ class PennantPlayerRatings(models.Model):
     player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="pennant_ratings", verbose_name="選手")
     year = models.IntegerField(verbose_name="年度")
     growth = models.CharField(max_length=4, choices=GROWTH_CHOICES, verbose_name="成長型")
+    # 伸びしろ（隠し値。1〜100、50 が普通）。空は #308 より前に作った行
+    # （普通として扱い、次に締めるときに引いて翌年の行に書く）
+    potential = models.PositiveSmallIntegerField(null=True, blank=True, verbose_name="伸びしろ")
     contact = _rating_field(BatterRatings.LABELS["contact"])
     power = _rating_field(BatterRatings.LABELS["power"])
     eye = _rating_field(BatterRatings.LABELS["eye"])
