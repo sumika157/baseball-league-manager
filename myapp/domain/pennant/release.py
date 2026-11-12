@@ -1,20 +1,21 @@
 """AI 球団の戦力外。締める処理の中で、引退の後・ドラフトの前に、球団ごとに外す選手を決める。
 **純粋な関数**で、乱数も使わない（同じ材料なら必ず同じ選手を外す）。DB にも Django にも触れない。
 
-    引退 → **戦力外** → 外国人の獲得 → ドラフト → 成長と衰え → 水準の錨
+    引退 → 昇格の希望 → **戦力外** → 昇格の確定・育成契約の満了 → 外国人の獲得 → ドラフト → 成長と衰え → 水準の錨
 
 規則は2つ（2026-10-11・10-12 ユーザー決定。Issue #168）:
 
-- **支配下の空き**（`release_counts`）: ふだんの新人（`draft.USUAL_DRAFTEES`）を迎えても天井（帯の上端か支配下の上限の
-  低い方）を超えない人数まで外す。式は `OPENING_REGISTERED_BAND.excess` が出典（ドラフトの `gap` と同じ天井）。
-  外すのは、その年の主力（`PlayingTime.is_regular`）と入団1年目を除いた支配下から、残す価値（`keep_value`）の低い順
+- **支配下の空き**（`release_counts`）: ふだんの新人（`draft.USUAL_DRAFTEES`）と育成からの昇格の希望（#170。新人の枠に
+  上乗せ）を迎えても天井（帯の上端か支配下の上限の低い方）を超えない人数まで外す。式は `OPENING_REGISTERED_BAND.excess`
+  が出典（ドラフトの `gap` と同じ天井）。外すのは、その年の主力（`PlayingTime.is_regular`）・入団1年目・その年に
+  育成から上がった選手を除いた支配下から、残す価値（`keep_value`）の低い順
 - **外国人の入れ替え**（`is_replaceable_foreigner`）: 外国人は、能力で測れる価値にタイトルの加点だけを足した値
   （`foreign_value`。ほかの実績の加点は足さない。タイトルは #248）が**新しく迎える外国人に見込める価値**
   （`foreign_prospect_value`。獲得した外国人の分布から導く。`foreign_market.py`）を下回れば、主力でも外す
   （入団1年目は `FIRST_YEAR_FOREIGN_MARGIN` 点の余裕を持たせる）。
   全員が下回れば全員を入れ替える。外した外国人は外国人の獲得が同じオフに目標（`draft.foreign_target`）まで補う
 
-どちらも育成は外さない（#170・#174）。位置の最低人数（`draft.MIN_BY_POSITION`）を割らず、候補が足りなければ
+どちらも育成は外さない（育成が外れるのは契約の満了だけ。`development.decide_expirations`。#170）。位置の最低人数（`draft.MIN_BY_POSITION`）を割らず、候補が足りなければ
 外せる分だけ（締める処理を失敗させない）。外国人を外した分も支配下の空きに数える。
 
 残す価値（`keep_value`）は、**所属球団のスカウトの見立てで見た見込みの能力の総合値**（`ability_value`。
@@ -80,13 +81,17 @@ class ReleaseCounts:
     registered: int
 
 
-def release_counts(*, registered: int, registered_limit: int | None) -> ReleaseCounts:
+def release_counts(*, registered: int, registered_limit: int | None, promotions: int = 0) -> ReleaseCounts:
     """支配下の空きを作るために外したい人数。**人数の式の出典はここだけ**。
 
-    `registered` は引退の後の支配下の人数（育成は数えない）。`excess(registered, expected=USUAL_DRAFTEES)` 人。
+    `registered` は引退の後の支配下の人数（育成は数えない）。`promotions` は育成から上げたい人数
+    （`development.decide_promotions`。昇格は新人の枠に上乗せ＝2026-10-24 ユーザー決定。#170 Q2）。
+    `excess(registered, expected=USUAL_DRAFTEES + promotions)` 人。
     """
     return ReleaseCounts(
-        registered=OPENING_REGISTERED_BAND.excess(registered, limit=registered_limit, expected=USUAL_DRAFTEES)
+        registered=OPENING_REGISTERED_BAND.excess(
+            registered, limit=registered_limit, expected=USUAL_DRAFTEES + promotions
+        )
     )
 
 
@@ -192,11 +197,13 @@ def foreign_prospect_value(position: Position) -> float:
 
 
 def is_release_candidate(player: OffseasonPlayer, *, year: int, start_year: int) -> bool:
-    """支配下の空きのために AI が外しうる選手か。支配下で、その年の主力でなく、入団1年目（`is_first_year`）でない。"""
+    """支配下の空きのために AI が外しうる選手か。支配下で、その年の主力でなく、入団1年目（`is_first_year`）でなく、
+    その年に育成から上がった選手（`promoted_in`。#170）でない。"""
     return (
         player.is_registered
         and not player.playing_time.is_regular
         and not player.is_first_year(year, start_year=start_year)
+        and not player.promoted_in(year)
     )
 
 
@@ -209,7 +216,7 @@ def is_replaceable_foreigner(
     入団1年目の外国人は、見込みから `FIRST_YEAR_FOREIGN_MARGIN` を引いた値と比べる（大きく下回るときだけ外す）。
     タイトル以外の実績の加点は足さない（理由は `foreign_value`。実測は Wiki「ペナントモードの仕組み」の「戦力外」）。
     """
-    if not (player.is_registered and player.profile.is_foreign_player):
+    if not (player.is_registered and player.profile.is_foreign_player) or player.promoted_in(year):
         return False
     threshold = foreign_prospect_value(player.position)
     if player.is_first_year(year, start_year=start_year):
@@ -218,18 +225,28 @@ def is_replaceable_foreigner(
     return value < threshold
 
 
-def decide_releases(
-    club: OffseasonClub, remaining: Sequence[OffseasonPlayer], *, year: int, start_year: int, world_seed: int
-) -> tuple[int, ...]:
-    """球団 `club` の戦力外の選手の id（外す順）。`remaining` は引退しなかった選手。
+def release_order(
+    club: OffseasonClub,
+    remaining: Sequence[OffseasonPlayer],
+    *,
+    year: int,
+    start_year: int,
+    world_seed: int,
+    promotions: int = 0,
+) -> tuple[tuple[OffseasonPlayer, ...], int]:
+    """戦力外にしうる順（人数で切る前の並び）と、そのうち外す人数。`remaining` は引退しなかった選手。
 
-    先に入れ替える外国人、続けて支配下の候補から `ReleaseCounts.registered` 人に届くまで。
-    どちらも残す価値の昇順（同値は選手 id の昇順。見込みは球団 `club` のスカウトの見立て）で、
-    その位置の支配下が `MIN_BY_POSITION` 以下なら飛ばす。
+    並びは、先に入れ替える外国人（全員外す）、続けて支配下の候補。どちらも残す価値の昇順（同値は選手 id の昇順。
+    見込みは球団 `club` のスカウトの見立て）で、その位置の支配下が `MIN_BY_POSITION` 以下になる選手は飛ばす。
+    外す人数は、外国人の数と `ReleaseCounts.registered`（`promotions` は昇格の希望の人数）の大きい方
+    （並びの長さまで）。
+    並びは人数によらず同じなので、昇格の希望（`development.decide_promotions`）は、その後ろを「上乗せで追加に外れる
+    選手」として読む。
     """
     counts = release_counts(
         registered=sum(1 for player in remaining if player.is_registered),
         registered_limit=club.registered_player_limit,
+        promotions=promotions,
     )
     by_position = Counter(player.position for player in remaining if player.is_registered)
 
@@ -242,33 +259,51 @@ def decide_releases(
             ),
         )
 
-    chosen: list[int] = []
+    chosen: list[OffseasonPlayer] = []
+    taken: set[int] = set()
 
-    def take(pool: Sequence[OffseasonPlayer], until: int) -> None:
+    def take(pool: Sequence[OffseasonPlayer]) -> None:
         for player in pool:
-            if len(chosen) >= until:
-                return
-            if player.player_id in chosen or by_position[player.position] <= MIN_BY_POSITION.get(player.position, 0):
+            if player.player_id in taken or by_position[player.position] <= MIN_BY_POSITION.get(player.position, 0):
                 continue
             by_position[player.position] -= 1
-            chosen.append(player.player_id)
+            chosen.append(player)
+            taken.add(player.player_id)
 
-    foreigners = order(
-        [
-            player
-            for player in remaining
-            if is_replaceable_foreigner(
-                player, team_id=club.team_id, year=year, start_year=start_year, world_seed=world_seed
-            )
-        ]
-    )
-    take(foreigners, len(foreigners))
-    if counts.registered > len(chosen):
-        take(
-            order([p for p in remaining if is_release_candidate(p, year=year, start_year=start_year)]),
-            counts.registered,
+    take(
+        order(
+            [
+                player
+                for player in remaining
+                if is_replaceable_foreigner(
+                    player, team_id=club.team_id, year=year, start_year=start_year, world_seed=world_seed
+                )
+            ]
         )
-    return tuple(chosen)
+    )
+    foreigners = len(chosen)
+    take(order([p for p in remaining if is_release_candidate(p, year=year, start_year=start_year)]))
+    return tuple(chosen), min(len(chosen), max(foreigners, counts.registered))
+
+
+def decide_releases(
+    club: OffseasonClub,
+    remaining: Sequence[OffseasonPlayer],
+    *,
+    year: int,
+    start_year: int,
+    world_seed: int,
+    promotions: int = 0,
+) -> tuple[int, ...]:
+    """球団 `club` の戦力外の選手の id（外す順）。`remaining` は引退しなかった選手。
+
+    先に入れ替える外国人、続けて支配下の候補から `ReleaseCounts.registered` 人に届くまで（並びは `release_order`）。
+    `promotions` は昇格の希望の人数（その分も空ける。#170 Q2）。
+    """
+    chosen, count = release_order(
+        club, remaining, year=year, start_year=start_year, world_seed=world_seed, promotions=promotions
+    )
+    return tuple(player.player_id for player in chosen[:count])
 
 
 # --- GM の指名（受け持つ球団だけ） ---

@@ -2091,8 +2091,11 @@ class SeasonClosed:
     year: int
     next_year: int
     retired_count: int
-    # AI の戦力外の人数（引退した選手を含まない）
+    # AI の戦力外の人数（引退した選手を含まない。育成契約の満了は別）
     released_count: int
+    # 育成から支配下への昇格の人数と、育成契約の満了で自由契約にした人数（#170）
+    promoted_count: int
+    expired_count: int
     # 新人（ドラフトの日本人）の人数（育成を含む）と、そのうち育成ドラフトの人数
     draftee_count: int
     development_draftee_count: int
@@ -2174,17 +2177,23 @@ class OffseasonPlayerFact:
     after: BatterRatings | PitcherRatings | None
     # 在籍の退団の経路（引退・戦力外）。None は不明（経路を記録する前に締めた年）か、退団していない
     left_via: DepartureRoute | None = None
+    # 締める年の契約区分が育成だったか（育成契約の満了の自由契約・昇格した選手を見分ける。#170）
+    was_development: bool = False
+    # 昇格前の背番号（昇格していなければ空）
+    number_before_promotion: str = ""
 
 
 @dataclass(frozen=True)
 class OffseasonFacts:
-    """締めた年の、世界全体のオフの材料（引退・退団・戦力外の選手、新人、残る選手）。"""
+    """締めた年の、世界全体のオフの材料（引退・退団・戦力外の選手、新人、残る選手、昇格した選手）。"""
 
     leagues: tuple[LeagueOption, ...]
     retired: tuple[OffseasonPlayerFact, ...]
     rookies: tuple[OffseasonPlayerFact, ...]
     # 締める年と翌年の両方の能力がある、残った選手
     retained: tuple[OffseasonPlayerFact, ...]
+    # オフに育成から支配下に上がった選手（翌年の年で昇格した在籍。#170）
+    promoted: tuple[OffseasonPlayerFact, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -2202,6 +2211,26 @@ class OffseasonRetiredRow:
     # 退団の経路が戦力外なら「戦力外」。ほか（引退・経路が不明）は外国人が「退団」、日本人が「引退」
     leaving: str
     # 締める年の総合（能力が無い選手は None）
+    rating: RatingCell | None
+    # 締める年に育成だったか（画面は育成のバッジ。育成の「戦力外」は育成契約の満了の自由契約。#170 Q3）
+    is_development: bool = False
+
+
+@dataclass(frozen=True)
+class OffseasonPromotedRow:
+    """オフの結果の「支配下登録（昇格）」の1行（#170）。"""
+
+    player_id: int
+    name: str
+    team_id: int
+    team_name: str
+    # 昇格後の背番号と、昇格前（育成）の背番号
+    number: str
+    number_before: str
+    position: str
+    # 翌年の開幕時点の満年齢
+    age: int | None
+    # 翌年の総合（能力が無い選手は None）
     rating: RatingCell | None
 
 
@@ -2252,6 +2281,7 @@ class OffseasonSummary:
     own_team_name: str
     own_retired: tuple[OffseasonRetiredRow, ...]
     own_rookies: tuple[OffseasonRookieRow, ...]
+    own_promoted: tuple[OffseasonPromotedRow, ...]
     # 自軍の残った選手の全員。差の大きい順
     own_changes: tuple[OffseasonChangeRow, ...]
     leagues: tuple[LeagueOption, ...]
@@ -2259,10 +2289,12 @@ class OffseasonSummary:
     # 選んだリーグの引退・退団・戦力外と新人
     retired: tuple[OffseasonRetiredRow, ...]
     rookies: tuple[OffseasonRookieRow, ...]
-    # 世界全体の人数（引退・退団・戦力外の合計と、そのうち戦力外。新人）
+    promoted: tuple[OffseasonPromotedRow, ...]
+    # 世界全体の人数（引退・退団・戦力外の合計と、そのうち戦力外（育成契約の満了を含む）。新人。昇格）
     retired_total: int
     released_total: int
     rookie_total: int
+    promoted_total: int
     # 成長と衰えの大きかった選手（世界全体の上位）
     risers: tuple[OffseasonChangeRow, ...]
     decliners: tuple[OffseasonChangeRow, ...]
