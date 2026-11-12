@@ -12,7 +12,14 @@ from typing import Any, cast
 from django import forms
 from django.core.exceptions import ValidationError
 
-from ..application.dto import LeagueSetupRow, LeagueTeams, LineupSlot, ProfileInput, StadiumSetupRow
+from ..application.dto import (
+    LeagueSetupRow,
+    LeagueTeams,
+    LineupSlot,
+    ProfileInput,
+    StadiumSetupRow,
+    TeamSetupRow,
+)
 from ..domain.entities import (
     LEAGUE_NAME_MAX_LENGTH,
     STADIUM_CITY_MAX_LENGTH,
@@ -46,7 +53,7 @@ from ..domain.value_objects import (
     StadiumProfile,
 )
 from ..domain.workspace import MAX_NAME_LENGTH as WORKSPACE_NAME_MAX_LENGTH
-from ..domain.workspace import Visibility
+from ..domain.workspace import InvitedRole, Visibility
 
 POSITION_CHOICES = [(position.value, position.value) for position in Position]
 # 投打の選択肢はドメインの Handedness が唯一の出典
@@ -446,6 +453,49 @@ class WorkspaceForm(forms.Form):
 
     def clean_visibility(self) -> Visibility:
         return Visibility(self.cleaned_data["visibility"])
+
+
+class MemberRoleForm(forms.Form):
+    """招待の発行と、メンバーの役割の変更（全体を編集 ⇔ 担当チーム。担当チームの付け替えを含む）。W4 T4。
+
+    役割の選択肢は domain の `InvitedRole` が出典。担当チームの選択肢は、登録画面の参照クエリの行
+    （`SetupQuery.teams()`。このワークスペースの実データのチームだけ）から作る。**選択肢で絞るのは導線にすぎず**、
+    ほかのワークスペースのチームを止めるのはリポジトリの範囲の検査（`InvalidInvitation`・`InvalidWorkspace`）。
+    ここで選択肢の外の値を弾くのは、その手前のフォームのエラー。
+
+    「全体を編集」のときは担当チームの欄を読まない（チェックが残っていても空にする。同じフォームで役割を
+    切り替えるので、外し忘れをエラーにしない）。「担当チームを編集」でチームが無いのはドメインが拒み、
+    ビューがこのフォームのエラーにする。
+    """
+
+    role = forms.ChoiceField(
+        label="役割",
+        choices=InvitedRole.choices(),
+        initial=InvitedRole.EDIT_TEAMS.value,
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
+    teams = forms.TypedMultipleChoiceField(
+        label="担当チーム",
+        coerce=int,
+        required=False,
+        help_text="「担当チームを編集」のときに選びます（1つ以上）。",
+        widget=forms.CheckboxSelectMultiple,
+    )
+
+    def __init__(self, *args: Any, teams: Sequence[TeamSetupRow], **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        cast(forms.TypedMultipleChoiceField, self.fields["teams"]).choices = [
+            (team.team_id, f"{team.name}（{team.league_name}）") for team in teams
+        ]
+
+    def clean_role(self) -> InvitedRole:
+        return InvitedRole(self.cleaned_data["role"])
+
+    def clean(self) -> dict[str, Any]:
+        cleaned = super().clean() or {}
+        if cleaned.get("role") is InvitedRole.EDIT_ALL:
+            cleaned["teams"] = []
+        return cleaned
 
 
 class PostseasonFormatForm(forms.Form):

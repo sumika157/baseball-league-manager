@@ -3,6 +3,10 @@
 {% block title %}新規登録 - Baseball Manager{% endblock %}
 
 {% block content %}
+{% comment %}
+next（招待のリンクから来た人など）は、ビューが安全な URL だけを渡す。登録の後はログインの画面へ next を運び（自動ではログインしない）、
+ログインの後にそこへ戻る。ログインへのリンクにも同じ next を付ける。
+{% endcomment %}
 <div class="auth-shell">
   <div class="card">
     <div class="card-body">
@@ -10,10 +14,11 @@
       <form method="post" class="form-stack">
         {% csrf_token %}
         {{ form.as_p }}
+        {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
         <button type="submit" class="btn btn-primary w-100 mt-2">登録する</button>
       </form>
       <p class="text-center mt-3 mb-0" style="font-size: 0.875rem;">
-        <a href="{% url 'login' %}">ログインはこちら</a>
+        <a href="{% url 'login' %}{% if next %}?next={{ next|urlencode }}{% endif %}">ログインはこちら</a>
       </p>
     </div>
   </div>

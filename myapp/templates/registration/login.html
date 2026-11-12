@@ -10,10 +10,11 @@
       <form method="post" class="form-stack">
         {% csrf_token %}
         {{ form.as_p }}
+        {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
         <button type="submit" class="btn btn-primary w-100 mt-2">ログイン</button>
       </form>
       <p class="text-center mt-3 mb-0" style="font-size: 0.875rem;">
-        <a href="{% url 'signup' %}">新規登録はこちら</a>
+        <a href="{% url 'signup' %}{% if next %}?next={{ next|urlencode }}{% endif %}">新規登録はこちら</a>
       </p>
     </div>
   </div>

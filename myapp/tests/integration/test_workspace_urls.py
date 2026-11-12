@@ -272,8 +272,15 @@ class NoBareReverseTest(SimpleTestCase):
     """views・API が中の画面の URL を組むのは `_url` だけ（key を足し忘れた URL を作らない）。"""
 
     # 作成（W4 T3）はワークスペースの外の画面で、戻り先は `/`、成功の行き先は作ったばかりの別のワークスペース
-    # （今の要求の key が無いので `_url` では組めない）
-    ALLOWED = {("views.py", "_url"), ("views.py", "SignUpView"), ("views.py", "workspace_create")}
+    # （今の要求の key が無いので `_url` では組めない）。招待（W4 T4）のリンクと受諾はワークスペースの外の画面
+    # （`invitation_accept`）で、受諾の行き先はトークンから引いたワークスペース（今の要求の key が無い）
+    ALLOWED = {
+        ("views.py", "_url"),
+        ("views.py", "SignUpView"),
+        ("views.py", "workspace_create"),
+        ("views.py", "_invitation_url"),
+        ("views.py", "invitation_accept"),
+    }
 
     def test_reverse_and_redirect_by_name_are_only_in_the_helper(self):
         offenders = []

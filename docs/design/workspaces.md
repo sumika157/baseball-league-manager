@@ -1627,6 +1627,69 @@ views の `my_workspaces` を通して読むことを書いた。(2) 1要求1回
   コンテキストプロセッサから（DB を読まない）。
 - 計測（T7）: ログインした人はワークスペースの中の全画面でヘッダーの一覧の +1。`/` はログインした人で4本（一覧・持っている数）。
 
+#### T4 メンバーと招待の画面（`feature/workspace-invitations`、2026-11-12）
+
+epic の 3d9e720（W4 T3）から作り、コミットの前に epic の先端 3717b0c（W4 T2）の上に載せ直した（衝突なし）。マイグレーションは無い。
+
+- メンバー: `/w/<key>/members/`（`workspace_members`。`login=True`。GET・HEAD だけ）。門は `_requires_owner(request, WorkspaceAccess.can_manage_members)`
+  （DB を読まない。持ち主以外は 403、非公開の部外者は 404、未ログインはログインへ）。一覧は `build_workspace_management_query(ws).members()`・
+  `invitations(now)`、担当チームの選択肢は `build_setup_query(_real_scope(request)).teams()` の行（導線にすぎず、止めるのはリポジトリ）。
+  `_tabs.html` に「メンバーと招待」のタブ、ヘッダーのメニューにも同じ導線（コンテキストプロセッサの `can_manage_members`。DB を読まない）。
+- フォーム `MemberRoleForm`（役割は `InvitedRole.choices()`、担当チームは `TypedMultipleChoiceField`）を招待の発行と役割の変更で共有する。
+  「全体を編集」では担当チームのチェックを読まない。担当チームの無い「担当チームを編集」はドメインの例外（`InvalidInvitation`・
+  `InvalidWorkspace`）をフォームのエラーにする。
+- 書き込み（どれも POST だけ・持ち主だけ）: 招待の発行 `members/invitations/`（成功したらメンバーの画面へ戻り、リンクを `messages` に
+  `extra_tags="invitation-link"` で1回だけ積む。`base.html` が写せる欄で描く＝PRG）・取消 `members/invitations/<id>/revoke/`
+  （無い・ほかのワークスペースの招待は 404）・役割の変更 `members/<user_id>/`・除名 `members/<user_id>/remove/`（持ち主・この
+  ワークスペースのメンバーでない人は 404。`_member_of` が一覧の行から引く）。入力の誤りはメンバーの画面を 200 で描き直す。
+  持ち主の行には役割の変更と除名を出さない。
+- 受諾: `/invitations/<token>/`（`invitation_accept`。ワークスペースの外）。中身は `build_invitation_preview_query().preview(token, user_id, now)`。
+  無い・期限切れ・使用済みは同じ 404。未ログインには名前と役割、「ログインして受け取る」「新規登録して受け取る」（`next` でこの URL）。
+  既にメンバー（持ち主を含む）なら受諾のボタンを出さずワークスペースの入口だけ（POST もダッシュボードへ戻し、招待は使わない）。
+  受諾したらダッシュボードへ。未ログインの POST はログインへ。
+- 新規登録: `SignUpView` が `next` を `url_has_allowed_host_and_scheme`（このホスト・HTTPS の要求なら https だけ）で確かめ、安全なら
+  ログインの URL に運ぶ（自動ではログインしない）。外部の URL・`javascript:` は捨てる。ログインと新規登録の画面は互いへのリンクに `next` を付ける。
+
+**計画からのずれ**
+
+- ヘッダーのメニューにも「メンバーと招待」を足した（計画はタブだけ。設定と同じく持ち主だけに出し、DB を読まない）。
+- `snapshot_all_rows`（漏れの検査の全表の写し）に多対多の中間表（`Team_managers`・招待の担当チーム）を含めた。担当の付け外しは中間表の
+  行だけが変わるため。`test_league_setup_service.py` が自前で足していた担当の中間表はこれに寄せた（表の名前が `Team_managers` に替わる）。
+- `NoBareReverseTest.ALLOWED` に `_invitation_url`・`invitation_accept` を足した（ワークスペースの外の画面で、行き先はトークンから引いた
+  ワークスペース。今の要求の key が無い）。
+
+**テスト**: integration 新 `test_workspace_members.py`（一覧と持ち主の行に操作が無い・役割のフォームの初期値・タブとヘッダーは持ち主だけ・
+403 とログイン・クエリ数がメンバーと招待の数によらない・GET だけ／POST だけ・リンクは発行の直後の1回だけで保存したダイジェストと合う・
+全体を編集はチェックを読まない・入力の誤りで何も発行しない・取消・期限切れは出さない・編集者 ⇔ 担当・担当の付け替え・チームの無い担当は
+フォームのエラー・持ち主とメンバーでない人は 404・除名・除名はほかのワークスペースの担当を残す・未ログインの受諾の画面・未ログインの POST・
+ログインして戻って受諾・2回目は 404・既にメンバーにはボタンが無い・期限切れ／使用済み／無いトークンは同じ 404・全体を編集の招待で編集者・
+新規登録の `next`（安全なものは運ぶ・ログインの画面から運ぶ・外部は捨てる・無ければログインへ））、`test_workspace_permissions.py` に
+`WorkspaceMembersPermissionTest`（公開・非公開 × 8つの役割 × 導線・一覧・発行・役割の変更・除名・取消）、`test_workspace_isolation.py` の
+`URL_TABLE`・`WRITE_BODIES`・`Side`（B の編集者の user id・招待の id）・持ち主の書き込みの空振りの検査、`test_cross_workspace_ids.py`
+（A の key の下で B の user id・招待の id は 404、本文に B のチームの id はフォームのエラーで行が変わらない）、`header_pages()` にメンバーの画面。
+e2e 新 `test_workspace_sharing.py`（新規登録 → 作成（非公開） → 中身はテストの補助 → ヘッダーのメニューからメンバーの画面 → 担当の招待の
+リンクを発行 → 別の人がリンクから新規登録 → ログインして招待に戻り受諾 → 担当チームの選手を編集 → 未ログインはログインへ → 公開にすると
+見える。#80 の完了条件）。
+件数: domain＋integration 4,222（epic の先端 3717b0c の上）、e2e 21（+1）。
+
+**変異の確かめ**（どれも戻した。`test_workspace_members`・`test_workspace_permissions`・`test_cross_workspace_ids` を流した）: 一覧の門を外す → 11件、
+発行の門を外す → 9件、持ち主の行にも操作を出す → 1件、`_member_of` が持ち主を通す → 1件、新規登録の `next` を検査しない → 3件、
+既にメンバーにも受諾のボタンを出す → 3件、受諾の POST で既にメンバーの判定を外す → 3件、メンバーの導線を全員に出す → 11件、
+除名で `_member_of` を引かない → 1件（持ち主の除名が 500。B の user id はサービスの `MemberNotFound` で 404 のまま）。
+担当チームの選択肢を範囲で絞らない変異は生き残る（リポジトリの範囲の検査が同じフォームのエラーにする。選択肢は導線にすぎない、の設計どおり）。
+
+**レビュー（ddd-boundary-reviewer）**: 重要な指摘なし。軽微を直した: (1) 受諾の画面のボタンを `user.is_authenticated` と `is_member` で
+分けていた → ビューが渡す `can_accept`（ログインしていて、まだメンバーでない）で囲む（templates.md）。(2) message の目印 `invitation-link` が
+views の定数とテンプレートの直書きの2か所 → 両方に互いを指すコメント（ずれるとリンクの欄の検査が落ちる）。(3) 「保存するのはダイジェストだけ」は
+サーバーの話で、トークンは messages の置き場所（既定では持ち主のブラウザの署名つきクッキー。暗号化しない）を1回だけ通る、とコメントに書いた。
+残したもの: (4) 役割の変更の入力の誤りで、画面の上の案内（messages）と欄のエラーの両方を出す（折りたたみの中の欄だけだと、長い一覧で気づきにくい）。
+
+**T5 以降への申し送り**
+
+- T5: 削除のタブは `_tabs.html` の「メンバーと招待」の後に足す（`workspace_tab = "delete"`）。ヘッダーのメニューに出すなら同じく
+  コンテキストプロセッサのフラグで。除名・担当への変更で全体の編集権を失った人の世界は、T5 の世界の書き込みの判定で読むだけにする（決定 1）。
+- 計測（T7）: 新しい画面はメンバー・受諾の2つ。メンバーの画面のクエリ数は人数・招待の数によらない（テストで固定）。
+
 #### main の取り込み（2026-11-12 その5）
 
 `refactor/merge-main-into-workspaces-6` で、epic 3717b0c（W4 T2 の後）に main c8b5f70 を取り込んだ（マージコミット。この記録もそのコミットに含む）。W4 T3・T4 の途中。

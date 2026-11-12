@@ -6,7 +6,7 @@
 
 import functools
 import secrets
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from datetime import date, timedelta
 from urllib.parse import urlencode
 
@@ -22,6 +22,7 @@ from django.shortcuts import redirect, render
 from django.urls import reverse, reverse_lazy
 from django.utils import timezone
 from django.utils.functional import SimpleLazyObject
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_GET, require_POST, require_safe
 from django.views.generic import CreateView
 
@@ -33,6 +34,7 @@ from ..application.dto import (
     GameEditPlateAppearance,
     LeagueSetupRow,
     Listing,
+    MemberRow,
     PlayerRatingsCard,
     PlayerRatingsHistory,
     RatingsTable,
@@ -74,12 +76,14 @@ from ..domain.exceptions import (
     DomainError,
     DuplicateName,
     GameNotFound,
+    InvalidInvitation,
     InvalidName,
     InvalidReleasePlan,
     InvalidWorkspace,
     InvalidWorld,
     LeagueChangeLocked,
     LeagueNotFound,
+    MemberNotFound,
     PlayerNotFound,
     RegisteredPlayerLimitExceeded,
     StadiumNotFound,
@@ -111,7 +115,7 @@ from ..domain.value_objects import (
     PlateAppearanceResult,
     Position,
 )
-from ..domain.workspace import WorkspaceAccess, WorkspaceQuota
+from ..domain.workspace import InvitedRole, WorkspaceAccess, WorkspaceQuota, WorkspaceRole
 from ..infrastructure.queries import (
     DjangoAwardQuery,
     DjangoChampionshipQuery,
@@ -188,6 +192,7 @@ from .forms import (
     DraftOrderRuleForm,
     GameForm,
     LeagueSetupForm,
+    MemberRoleForm,
     PennantWorldForm,
     PlayerProfileForm,
     PlayerRegistrationForm,
@@ -1801,6 +1806,222 @@ def workspace_settings(request):
     return render(request, "myapp/workspace/settings.html", {"form": form, "workspace_tab": "settings"})
 
 
+# --- メンバーと招待（W4 T4。#80）---
+#
+# 見るのも書くのも持ち主だけ（門は `_requires_owner(request, WorkspaceAccess.can_manage_members)`。DB を読まない）。
+# 一覧は参照クエリ（`build_workspace_management_query`）、書き込みは `WorkspaceMemberService`。担当チームの選択肢は
+# 登録画面の参照（`build_setup_query(_real_scope(request)).teams()`）の行から作る（導線にすぎず、止めるのは
+# リポジトリ）。
+# 招待のリンク（トークン）は発行の直後の1回だけ、リダイレクトの先で messages として見せる（サーバーに保存するのは
+# ダイジェストだけ。トークンは messages の置き場所（既定では持ち主のブラウザの署名つきクッキー。暗号化はしない）を
+# 1回だけ通り、表示した次の要求で消える）。
+
+# 招待のリンクを載せた message の目印（`base.html` がリンクを写せる欄で描く。テンプレートは同じ綴りを直書きしているので
+# 変えるなら両方。ずれると `test_workspace_members` のリンクの欄の検査が落ちる）
+INVITATION_LINK_TAG = "invitation-link"
+_POST_ONLY = ("POST",)
+
+
+def _member_form(member: MemberRow, teams: Sequence[TeamSetupRow], data=None) -> MemberRoleForm:
+    """メンバーの行の、役割の変更のフォーム（初期値は今の役割と担当チーム）。欄の id は行ごとに分ける。"""
+    is_manager = member.role is WorkspaceRole.TEAM_MANAGER
+    return MemberRoleForm(
+        data,
+        teams=teams,
+        auto_id=f"id_member{member.user_id}_%s",
+        initial={
+            "role": (InvitedRole.EDIT_TEAMS if is_manager else InvitedRole.EDIT_ALL).value,
+            "teams": list(member.team_ids),
+        },
+    )
+
+
+def _invitation_form(teams: Sequence[TeamSetupRow], data=None) -> MemberRoleForm:
+    return MemberRoleForm(data, teams=teams, auto_id="id_invite_%s")
+
+
+def _members_page(
+    request,
+    teams: Sequence[TeamSetupRow],
+    *,
+    invitation_form: MemberRoleForm | None = None,
+    member_form: tuple[int, MemberRoleForm] | None = None,
+):
+    """メンバーの画面（`myapp/workspace/members.html`）。入力の誤りのフォームを渡すと、その欄にエラーを出して描き直す。
+
+    持ち主の行には役割の変更と除名を出さない（フォームは None）。クエリの本数は人数・招待の数によらない。
+    """
+    query = build_workspace_management_query(_workspace_id(request))
+    rows = []
+    for member in query.members():
+        form = None
+        if not member.is_owner:
+            if member_form is not None and member_form[0] == member.user_id:
+                form = member_form[1]
+            else:
+                form = _member_form(member, teams)
+        rows.append((member, form))
+    return render(
+        request,
+        "myapp/workspace/members.html",
+        {
+            "members": rows,
+            "invitations": query.invitations(timezone.now()),
+            "invitation_form": invitation_form or _invitation_form(teams),
+            "workspace_tab": "members",
+        },
+    )
+
+
+def _member_of(request, user_id: int) -> MemberRow:
+    """このワークスペースの編集者・チーム担当の行。持ち主・メンバーでない人（よそのメンバー）は 404。"""
+    for member in build_workspace_management_query(_workspace_id(request)).members():
+        if member.user_id == user_id and not member.is_owner:
+            return member
+    raise Http404("メンバーが見つかりません。")
+
+
+def _setup_teams(request) -> list[TeamSetupRow]:
+    """担当チームの選択肢（このワークスペースの実データのチーム）。"""
+    return build_setup_query(_real_scope(request)).teams()
+
+
+def workspace_members(request):
+    """メンバー（持ち主・編集者・チーム担当）と未使用の招待の一覧、招待の発行フォーム（`/w/<key>/members/`）。持ち主だけ。"""
+    if request.method not in ("GET", "HEAD"):
+        return HttpResponseNotAllowed(("GET", "HEAD"))
+    _requires_owner(request, WorkspaceAccess.can_manage_members)
+    return _members_page(request, _setup_teams(request))
+
+
+def _invitation_url(request, token: str) -> str:
+    """招待のリンク（ワークスペースの外の `/invitations/<token>/`。ほかの人に渡すので絶対 URL）。"""
+    return request.build_absolute_uri(reverse("invitation_accept", args=(token,)))
+
+
+def workspace_invitation_create(request):
+    """招待の発行（POST だけ）。発行したらメンバーの画面へ戻り、リンクをその1回だけ見せる（PRG。再表示はできない）。
+
+    入力の誤り（担当チームが無い・選択肢の外・ほかのワークスペースのチーム）はメンバーの画面を 200 で描き直す。
+    """
+    if request.method != "POST":
+        return HttpResponseNotAllowed(_POST_ONLY)
+    _requires_owner(request, WorkspaceAccess.can_manage_members)
+    teams = _setup_teams(request)
+    form = _invitation_form(teams, request.POST)
+    if form.is_valid():
+        data = form.cleaned_data
+        try:
+            issued = build_workspace_member_service().issue_invitation(
+                _workspace_id(request), role=data["role"], team_ids=data["teams"]
+            )
+        except (InvalidInvitation, InvalidWorkspace) as error:
+            form.add_error("teams", str(error))
+        else:
+            messages.success(request, _invitation_url(request, issued.token), extra_tags=INVITATION_LINK_TAG)
+            return redirect(_url(request, "workspace_members"))
+    return _members_page(request, teams, invitation_form=form)
+
+
+def workspace_invitation_revoke(request, invitation_id):
+    """未使用の招待の取消（POST だけ）。無い・ほかのワークスペースの招待は 404。"""
+    if request.method != "POST":
+        return HttpResponseNotAllowed(_POST_ONLY)
+    _requires_owner(request, WorkspaceAccess.can_manage_members)
+    try:
+        build_workspace_member_service().revoke_invitation(_workspace_id(request), invitation_id)
+    except InvalidInvitation:
+        raise Http404("招待が見つかりません。") from None
+    messages.success(request, "招待を取り消しました。")
+    return redirect(_url(request, "workspace_members"))
+
+
+def workspace_member_edit(request, user_id):
+    """メンバーの役割（全体を編集 ⇔ 担当チーム）と担当チームの変更（POST だけ）。
+
+    持ち主・メンバーでない人（ほかのワークスペースのメンバーを含む）は 404。入力の誤り（担当チームが無い・選択肢の外・
+    ほかのワークスペースのチーム）はメンバーの画面を 200 で描き直す（何も変えない）。
+    """
+    if request.method != "POST":
+        return HttpResponseNotAllowed(_POST_ONLY)
+    _requires_owner(request, WorkspaceAccess.can_manage_members)
+    member = _member_of(request, user_id)
+    teams = _setup_teams(request)
+    form = _member_form(member, teams, request.POST)
+    if form.is_valid():
+        role = form.cleaned_data["role"]
+        try:
+            build_workspace_member_service().change_role(
+                _workspace_id(request), user_id, role=role, team_ids=form.cleaned_data["teams"]
+            )
+        except MemberNotFound:
+            raise Http404("メンバーが見つかりません。") from None
+        except InvalidWorkspace as error:
+            form.add_error("teams", str(error))
+        else:
+            messages.success(request, f"{member.username} さんの役割を「{role.label}」にしました。")
+            return redirect(_url(request, "workspace_members"))
+    messages.error(request, f"{member.username} さんの役割を変えられませんでした。")
+    return _members_page(request, teams, member_form=(user_id, form))
+
+
+def workspace_member_remove(request, user_id):
+    """編集者・チーム担当の除名（POST だけ。担当チームもすべて外れる）。持ち主・メンバーでない人は 404。"""
+    if request.method != "POST":
+        return HttpResponseNotAllowed(_POST_ONLY)
+    _requires_owner(request, WorkspaceAccess.can_manage_members)
+    member = _member_of(request, user_id)
+    try:
+        build_workspace_member_service().remove_member(_workspace_id(request), user_id)
+    except MemberNotFound:
+        raise Http404("メンバーが見つかりません。") from None
+    messages.success(request, f"{member.username} さんをメンバーから外しました。")
+    return redirect(_url(request, "workspace_members"))
+
+
+def invitation_accept(request, token):
+    """招待の受諾（`/invitations/<token>/`。ワークスペースの外）。
+
+    - 無い・期限切れ・使用済み（受諾したら消える）のトークンは同じ 404（どれかを推し量らせない）。
+    - 未ログインには、ワークスペースの名前と役割、「ログインして受け取る」「新規登録して受け取る」（`next` でこの
+      URL へ戻る）を出す。未ログインの POST はログインへ。
+    - 既にメンバー（持ち主を含む）なら受諾のボタンを出さず、ダッシュボードへの入口だけ（POST もダッシュボードへ戻す。
+      招待は使わずに残る）。
+    - 受諾したら、そのワークスペースのダッシュボードへ。
+    """
+    if request.method not in _SETUP_METHODS:
+        return HttpResponseNotAllowed(_SETUP_METHODS)
+    user_id = request.user.id if request.user.is_authenticated else None
+    try:
+        invitation = build_invitation_preview_query().preview(token, user_id, timezone.now())
+    except InvalidInvitation:
+        raise Http404("招待が見つからないか、期限が切れています。") from None
+    if request.method == "POST":
+        if user_id is None:
+            return redirect_to_login(request.path)
+        if invitation.is_member:
+            return redirect(reverse("dashboard", args=(invitation.workspace_key,)))
+        try:
+            key = build_workspace_member_service().accept_invitation(token, user_id)
+        except InvalidInvitation:
+            raise Http404("招待が見つからないか、期限が切れています。") from None
+        role = invitation.role.granted_role.label
+        messages.success(request, f"ワークスペース「{invitation.workspace_name}」に{role}として参加しました。")
+        return redirect(reverse("dashboard", args=(key,)))
+    back = urlencode({"next": request.path})
+    return render(
+        request,
+        "myapp/invitation.html",
+        {
+            "invitation": invitation,
+            # 受諾のボタンを出すか（ログインしていて、まだメンバーでない人だけ）
+            "can_accept": user_id is not None and not invitation.is_member,
+            "login_url": f"{reverse('login')}?{back}",
+            "signup_url": f"{reverse('signup')}?{back}",
+        },
+    )
+
+
 def _sample_workspace() -> WorkspaceContext | None:
     """見本のワークスペース（未ログインの人に見せる公開ワークスペース）。設定が無い・無い key・非公開なら None。"""
     key = settings.SAMPLE_WORKSPACE_KEY
@@ -2961,11 +3182,31 @@ def _first_error(form) -> str:
 
 
 class SignUpView(CreateView):
-    """新規ユーザー登録。登録後はログイン画面へ遷移する。"""
+    """新規ユーザー登録。登録後はログイン画面へ遷移する（自動ではログインしない）。
+
+    `next`（招待のリンクから来た人など）が安全な URL（このサイトの中。`url_has_allowed_host_and_scheme`）なら、
+    ログインの URL に運ぶ（ログインした後にそこへ戻る）。外部の URL・読めない値は捨てる。
+    """
 
     form_class = UserCreationForm
     template_name = "registration/signup.html"
-    success_url = reverse_lazy("login")
+
+    def _next_url(self) -> str:
+        candidate = self.request.POST.get("next") or self.request.GET.get("next") or ""
+        safe = url_has_allowed_host_and_scheme(
+            candidate, allowed_hosts={self.request.get_host()}, require_https=self.request.is_secure()
+        )
+        return candidate if safe else ""
+
+    def get_success_url(self) -> str:
+        login = str(reverse_lazy("login"))
+        next_url = self._next_url()
+        return f"{login}?{urlencode({'next': next_url})}" if next_url else login
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["next"] = self._next_url()
+        return context
 
 
 def _int_param(request, name):
