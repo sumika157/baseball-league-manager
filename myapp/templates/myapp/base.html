@@ -80,8 +80,8 @@
             {% endif %}
           {% endif %}
           {% if user.is_authenticated %}
-            {# is_staff が管理画面へ入れる条件そのものなので、それを表示条件にする #}
-            {% if user.is_staff %}
+            {# 管理画面に入れるのは superuser だけ（admin.py の `_superuser_only`。W4 T6）。入れる条件そのものを表示条件にする #}
+            {% if user.is_superuser %}
               <a href="{% url 'admin:index' %}" class="nav-admin-link">管理画面</a>
             {% endif %}
             <span>{{ user.username }}</span>

@@ -5,13 +5,18 @@ import unittest
 
 from myapp.domain.exceptions import InvalidWorkspace, MemberNotFound
 from myapp.domain.workspace import (
+    EDITOR_IS_NOT_A_MANAGER,
     KEY_ALPHABET,
     KEY_LENGTH,
+    MANAGER_IS_NOT_AN_EDITOR,
     MAX_NAME_LENGTH,
+    OWNER_IS_NOT_A_MANAGER,
+    OWNER_IS_NOT_AN_EDITOR,
     InvitedRole,
     Visibility,
     Workspace,
     WorkspaceRole,
+    ensure_one_role_each,
     generate_workspace_key,
     members_from_rows,
     validate_workspace_key,
@@ -284,3 +289,65 @@ class DeletionBlockerTest(unittest.TestCase):
         for value in (-1, True, 1.0):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 workspace_deletion_blocker(value)  # type: ignore[arg-type]
+
+
+class OperatorReplacementTest(unittest.TestCase):
+    """運営者（管理画面）の置き換え。ほかの役割から黙って移さず、1人1役割の検査で落とす（W4 T6）。"""
+
+    def test_one_role_each_names_the_conflict(self):
+        cases = (
+            ((OWNER, {OWNER}, ()), OWNER_IS_NOT_AN_EDITOR),
+            ((OWNER, (), {OWNER}), OWNER_IS_NOT_A_MANAGER),
+            ((OWNER, {EDITOR}, {EDITOR}), EDITOR_IS_NOT_A_MANAGER),
+        )
+        for args, message in cases:
+            with self.subTest(args=args), self.assertRaisesRegex(InvalidWorkspace, message):
+                ensure_one_role_each(*args)
+        ensure_one_role_each(OWNER, {EDITOR}, {MANAGER})
+
+    def test_replace_editors(self):
+        workspace = make(editor_ids=frozenset({EDITOR}), team_assignments={MANAGER: frozenset({TEAM_A})})
+        workspace.replace_editors([OUTSIDER])
+        self.assertEqual(workspace.editor_ids, frozenset({OUTSIDER}))
+        self.assertEqual(workspace.team_assignments, {MANAGER: frozenset({TEAM_A})})
+
+    def test_replace_editors_refuses_the_owner_and_a_manager_and_changes_nothing(self):
+        for user_id, message in ((OWNER, OWNER_IS_NOT_AN_EDITOR), (MANAGER, MANAGER_IS_NOT_AN_EDITOR), (0, "編集者")):
+            workspace = make(editor_ids=frozenset({EDITOR}), team_assignments={MANAGER: frozenset({TEAM_A})})
+            with self.subTest(user_id=user_id), self.assertRaisesRegex(InvalidWorkspace, message):
+                workspace.replace_editors([EDITOR, user_id])
+            self.assertEqual(workspace.editor_ids, frozenset({EDITOR}))
+            self.assertEqual(workspace.team_assignments, {MANAGER: frozenset({TEAM_A})})
+
+    def test_replace_team_managers_keeps_the_other_teams(self):
+        workspace = make(team_assignments={MANAGER: frozenset({TEAM_A, TEAM_B}), OUTSIDER: frozenset({TEAM_A})})
+        workspace.replace_team_managers(TEAM_A, [OUTSIDER, 7])
+        self.assertEqual(
+            workspace.team_assignments,
+            {MANAGER: frozenset({TEAM_B}), OUTSIDER: frozenset({TEAM_A}), 7: frozenset({TEAM_A})},
+        )
+
+    def test_a_manager_without_teams_left_is_no_longer_a_member(self):
+        workspace = make(team_assignments={MANAGER: frozenset({TEAM_A})})
+        workspace.replace_team_managers(TEAM_A, [])
+        self.assertEqual(workspace.team_assignments, {})
+        self.assertFalse(workspace.is_member(MANAGER))
+
+    def test_replace_team_managers_refuses_the_owner_and_an_editor_and_changes_nothing(self):
+        for user_id, message in ((OWNER, OWNER_IS_NOT_A_MANAGER), (EDITOR, EDITOR_IS_NOT_A_MANAGER)):
+            workspace = make(editor_ids=frozenset({EDITOR}), team_assignments={MANAGER: frozenset({TEAM_A})})
+            with self.subTest(user_id=user_id), self.assertRaisesRegex(InvalidWorkspace, message):
+                workspace.replace_team_managers(TEAM_A, [user_id])
+            self.assertEqual(workspace.team_assignments, {MANAGER: frozenset({TEAM_A})})
+        with self.assertRaises(InvalidWorkspace):
+            make().replace_team_managers(0, [MANAGER])
+
+    def test_hand_over_drops_the_lesser_roles_of_the_new_owner(self):
+        workspace = make(editor_ids=frozenset({EDITOR}), team_assignments={MANAGER: frozenset({TEAM_A})})
+        workspace.hand_over(EDITOR)
+        self.assertEqual((workspace.owner_id, workspace.editor_ids), (EDITOR, frozenset()))
+        self.assertIs(workspace.role_of(OWNER), WorkspaceRole.NONE, "前の持ち主は何の役割も持たない")
+        workspace.hand_over(MANAGER)
+        self.assertEqual((workspace.owner_id, workspace.team_assignments), (MANAGER, {}))
+        with self.assertRaises(InvalidWorkspace):
+            workspace.hand_over(0)

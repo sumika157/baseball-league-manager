@@ -2,20 +2,36 @@
 
 選択肢を絞るのは導線で、本体は `clean()` の「同じワークスペースか」の検査（追加画面は行の
 ワークスペースがまだ決まっておらず、選択肢を絞れない）。
+
+運営者の道具としての扱い（W4 T6。#80）: 管理画面に入れるのは superuser だけ。ワークスペースの削除は
+`WorkspaceService.delete`、編集者・チームの担当者の割り当ては `WorkspaceMemberService` を通す（サイトと同じ
+`Workspace` 集約の検査。落ちる入力はフォームのエラーで、行は1つも変わらない）。持ち主・編集者の欄は検索つきの選択。
 """
 
 from unittest.mock import patch
 
-from django.contrib.auth.models import User
+from django.contrib.admin.widgets import AutocompleteSelect
+from django.contrib.auth.models import Permission, User
 from django.urls import reverse
 
 from myapp.admin import CaptaincyForm, GameForm
+from myapp.application.workspaces import WorkspaceMemberService, WorkspaceService
 from myapp.domain.value_objects import GameStage
-from myapp.domain.workspace import KEY_LENGTH, validate_workspace_key
+from myapp.domain.workspace import (
+    EDITOR_IS_NOT_A_MANAGER,
+    KEY_LENGTH,
+    MANAGER_IS_NOT_AN_EDITOR,
+    OWNER_IS_NOT_A_MANAGER,
+    OWNER_IS_NOT_AN_EDITOR,
+    validate_workspace_key,
+    workspace_deletion_blocker,
+)
 from myapp.infrastructure import orm_models
 
-from ..helpers import make_league, make_stadium, make_workspace
+from ..helpers import build_workspace_management_query, make_league, make_stadium, make_workspace
 from .base import BaseCase
+from .test_workspace_delete import WorkspaceDeletionCase, _all_rows, _rows_of
+from .test_workspace_isolation import YEAR, snapshot_all_rows
 
 CROSS = "別のワークスペースに属しています"
 # 区分（stage）は ModelForm の必須欄（管理画面のフィールドセットには出ない。実データの試合は常に公式戦）
@@ -683,6 +699,37 @@ class WorkspaceEditorOwnerTest(BaseCase):
         self.operator = User.objects.create_superuser(username="root", password="x")
         self.client.force_login(self.operator)
 
+    def test_an_editor_is_added_on_the_add_screen_through_the_service(self):
+        """追加の画面でも、編集者はワークスペースを保存した後にサービスで書く（W4 T6）。"""
+        editor = User.objects.create_user(username="editor", password="x")
+        spy = patch.object(
+            WorkspaceMemberService,
+            "replace_editors",
+            autospec=True,
+            side_effect=WorkspaceMemberService.replace_editors,
+        )
+
+        with spy as replaced:
+            response = self.client.post(
+                reverse("admin:myapp_workspace_add"),
+                {
+                    "name": "新ワークスペース",
+                    "key": "",
+                    "owner": self.operator.id,
+                    "visibility": "public",
+                    "editors-TOTAL_FORMS": 1,
+                    "editors-INITIAL_FORMS": 0,
+                    "editors-MIN_NUM_FORMS": 0,
+                    "editors-MAX_NUM_FORMS": 1000,
+                    "editors-0-user": editor.id,
+                },
+            )
+
+        self.assertEqual(response.status_code, 302)
+        workspace = orm_models.Workspace.objects.get(name="新ワークスペース")
+        self.assertEqual(replaced.call_args.args[1:], (workspace.id, [editor.id]))
+        self.assertEqual(list(workspace.editors.values_list("user_id", flat=True)), [editor.id])
+
     def test_the_owner_cannot_be_an_editor_on_the_add_screen(self):
         response = self.client.post(
             reverse("admin:myapp_workspace_add"),
@@ -726,3 +773,335 @@ class WorkspaceEditorOwnerTest(BaseCase):
         self.assertContains(response, "持ち主は編集者に加えられません")
         self.workspace.refresh_from_db()
         self.assertNotEqual(self.workspace.owner_id, self.operator.id)
+
+
+# --- 運営者の管理画面（W4 T6。#80） ---
+
+
+class SuperuserOnlyAdminTest(BaseCase):
+    """管理画面に入れるのは superuser だけ。モデルの権限を持つ staff でも入れない（W1a T7 の残りの 500 も
+    起きない）。"""
+
+    def setUp(self):
+        super().setUp()
+        self.staff = User.objects.create_user(username="staff", password="x", is_staff=True)
+        # 閲覧だけの権限（W1a T7 の残り: この形で、インラインの `clean()` が変更の権限を前提にして 500 になりえた）
+        self.staff.user_permissions.set(Permission.objects.filter(codename__startswith="view_"))
+        self.player = orm_models.Player.objects.create(name="山田")
+        self.stint = orm_models.PlayerStint.objects.create(
+            player=self.player, team=self.team, number="10", from_year=2020
+        )
+
+    def _assert_sent_to_login(self, response):
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("admin:login"), response["Location"])
+
+    def test_staff_who_is_not_a_superuser_cannot_open_or_post_anything(self):
+        self.client.force_login(self.staff)
+        before = snapshot_all_rows()
+        for url in (
+            reverse("admin:index"),
+            reverse("admin:myapp_workspace_changelist"),
+            reverse("admin:myapp_workspace_change", args=[self.workspace.id]),
+            reverse("admin:myapp_player_change", args=[self.player.id]),
+        ):
+            with self.subTest(url=url):
+                self._assert_sent_to_login(self.client.get(url))
+        # インラインのある変更画面への POST（W1a T7 の残りの経路）
+        self._assert_sent_to_login(
+            self.client.post(
+                reverse("admin:myapp_player_change", args=[self.player.id]),
+                {"name": "書き換え", "stints-TOTAL_FORMS": 0, "stints-INITIAL_FORMS": 0},
+            )
+        )
+        self._assert_sent_to_login(
+            self.client.post(reverse("admin:myapp_workspace_delete", args=[self.workspace.id]), {"post": "yes"})
+        )
+        self.assertEqual(snapshot_all_rows(), before)
+
+    def test_the_superuser_can_open_the_admin(self):
+        self.client.force_login(User.objects.create_superuser(username="root", password="x"))
+        for url in (
+            reverse("admin:index"),
+            reverse("admin:myapp_workspace_change", args=[self.workspace.id]),
+            reverse("admin:myapp_player_change", args=[self.player.id]),
+        ):
+            with self.subTest(url=url):
+                self.assertEqual(self.client.get(url).status_code, 200)
+
+
+class OwnerAndEditorAutocompleteTest(BaseCase):
+    """持ち主・編集者の欄は、利用者を検索して選ぶ（`autocomplete_fields`）。"""
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(User.objects.create_superuser(username="root", password="x"))
+
+    def test_the_owner_and_editor_fields_are_autocomplete(self):
+        response = self.client.get(reverse("admin:myapp_workspace_change", args=[self.workspace.id]))
+
+        form = response.context["adminform"].form
+        self.assertIsInstance(form.fields["owner"].widget.widget, AutocompleteSelect)
+        (editors,) = response.context["inline_admin_formsets"]
+        self.assertIsInstance(editors.formset.empty_form.fields["user"].widget.widget, AutocompleteSelect)
+
+    def test_the_users_are_searched(self):
+        User.objects.create_user(username="searched-user", password="x")
+        for field, model in (("owner", "workspace"), ("user", "workspaceeditor")):
+            with self.subTest(field=field):
+                response = self.client.get(
+                    reverse("admin:autocomplete"),
+                    {"app_label": "myapp", "model_name": model, "field_name": field, "term": "searched"},
+                )
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual([row["text"] for row in response.json()["results"]], ["searched-user"])
+
+
+def _without(rows, removed):
+    """`_all_rows()` の形の行から、`removed`（`_rows_of()` の形）の行を除いたもの。"""
+    return {
+        label: {pk: row for pk, row in by_pk.items() if pk not in removed.get(label, set())}
+        for label, by_pk in rows.items()
+    }
+
+
+class AdminWorkspaceDeletionTest(WorkspaceDeletionCase):
+    """管理画面のワークスペースの削除は `WorkspaceService.delete` を通す（サイトの削除の画面と同じ規則）。
+
+    A（既定のワークスペース）には世界がある（消せない）。B は世界を消してあり、中身ごと消せる。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(User.objects.create_superuser(username="root", password="x"))
+
+    def _delete_url(self, workspace):
+        return reverse("admin:myapp_workspace_delete", args=[workspace.id])
+
+    def _bulk_delete(self, *workspaces):
+        return self.client.post(
+            reverse("admin:myapp_workspace_changelist"),
+            {"action": "delete_selected", "_selected_action": [ws.id for ws in workspaces], "post": "yes"},
+            follow=True,
+        )
+
+    def _spy_delete(self):
+        return patch.object(WorkspaceService, "delete", autospec=True, side_effect=WorkspaceService.delete)
+
+    def test_the_confirmation_shows_what_is_deleted(self):
+        contents = build_workspace_management_query(self.workspace_b.id).contents()
+
+        response = self.client.get(self._delete_url(self.workspace_b))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, f"選手 {contents.player_count}・試合 {contents.game_count}")
+
+    def test_deleting_goes_through_the_service_and_keeps_every_other_row(self):
+        b_rows = _rows_of(self.workspace_b.id)
+        before = _all_rows()
+
+        with self._spy_delete() as deleted:
+            response = self.client.post(self._delete_url(self.workspace_b), {"post": "yes"})
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual([call.args[1] for call in deleted.call_args_list], [self.workspace_b.id])
+        self.assertEqual(_all_rows(), _without(before, b_rows))
+
+    def test_a_workspace_with_a_world_has_no_deletion_and_cannot_be_deleted_directly(self):
+        before = snapshot_all_rows()
+
+        change = self.client.get(reverse("admin:myapp_workspace_change", args=[self.workspace.id]))
+        self.assertEqual(change.status_code, 200)
+        self.assertNotContains(change, self._delete_url(self.workspace))
+        self.assertEqual(self.client.get(self._delete_url(self.workspace)).status_code, 403)
+        self.assertEqual(self.client.post(self._delete_url(self.workspace), {"post": "yes"}).status_code, 403)
+
+        self.assertEqual(snapshot_all_rows(), before)
+
+    def test_bulk_deletion_with_a_workspace_with_a_world_deletes_nothing(self):
+        before = snapshot_all_rows()
+
+        response = self._bulk_delete(self.workspace, self.workspace_b)
+
+        self.assertContains(response, "何も削除しませんでした")
+        self.assertContains(response, workspace_deletion_blocker(1))
+        self.assertEqual(snapshot_all_rows(), before)
+
+    def test_bulk_deletion_goes_through_the_service(self):
+        b_rows = _rows_of(self.workspace_b.id)
+        before = _all_rows()
+
+        with self._spy_delete() as deleted:
+            self._bulk_delete(self.workspace_b)
+
+        self.assertEqual([call.args[1] for call in deleted.call_args_list], [self.workspace_b.id])
+        self.assertEqual(_all_rows(), _without(before, b_rows))
+
+    def test_a_refusal_of_the_repository_is_a_message_and_deletes_nothing(self):
+        """ほかのワークスペースにも在籍がある選手がいれば、リポジトリが拒む。理由を出して何も消さない。"""
+        orm_models.PlayerStint.objects.create(player_id=self.b_batters[0], team=self.team, from_year=YEAR)
+        before = snapshot_all_rows()
+
+        single = self.client.post(self._delete_url(self.workspace_b), {"post": "yes"}, follow=True)
+        bulk = self._bulk_delete(self.workspace_b)
+
+        for response in (single, bulk):
+            with self.subTest(path=response.request["PATH_INFO"]):
+                self.assertContains(response, "ほかのワークスペースにも在籍の記録がある選手")
+        self.assertEqual(snapshot_all_rows(), before)
+
+
+class EditorAssignmentThroughServiceTest(BaseCase):
+    """編集者の割り当ては `WorkspaceMemberService` を通す（2026-11-12 ユーザー決定）。
+
+    集約の検査に落ちれば何も書かない。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(User.objects.create_superuser(username="root", password="x"))
+        self.editor = User.objects.create_user(username="editor", password="x")
+        self.manager = User.objects.create_user(username="manager", password="x")
+        orm_models.WorkspaceEditor.objects.create(workspace=self.workspace, user=self.editor)
+        self.team.managers.add(self.manager)
+
+    def _post(self, users, *, owner=None, delete=()):
+        editors = list(orm_models.WorkspaceEditor.objects.filter(workspace=self.workspace).order_by("id"))
+        data = {
+            "name": self.workspace.name,
+            "owner": (owner or self.workspace.owner).id,
+            "visibility": self.workspace.visibility,
+            "editors-TOTAL_FORMS": len(editors) + len(users),
+            "editors-INITIAL_FORMS": len(editors),
+            "editors-MIN_NUM_FORMS": 0,
+            "editors-MAX_NUM_FORMS": 1000,
+        }
+        for index, row in enumerate(editors):
+            data[f"editors-{index}-id"] = row.id
+            data[f"editors-{index}-workspace"] = self.workspace.id
+            data[f"editors-{index}-user"] = row.user_id
+            if row.user in delete:
+                data[f"editors-{index}-DELETE"] = "on"
+        for offset, user in enumerate(users, start=len(editors)):
+            data[f"editors-{offset}-user"] = user.id
+        return self.client.post(reverse("admin:myapp_workspace_change", args=[self.workspace.id]), data)
+
+    def _editors(self):
+        return set(orm_models.WorkspaceEditor.objects.values_list("workspace_id", "user_id"))
+
+    def test_adding_and_removing_editors_goes_through_the_service(self):
+        newcomer = User.objects.create_user(username="newcomer", password="x")
+        spy = patch.object(
+            WorkspaceMemberService,
+            "replace_editors",
+            autospec=True,
+            side_effect=WorkspaceMemberService.replace_editors,
+        )
+
+        with spy as replaced:
+            response = self._post([newcomer], delete=[self.editor])
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(replaced.call_args.args[1:], (self.workspace.id, [newcomer.id]))
+        self.assertEqual(self._editors(), {(self.workspace.id, newcomer.id)})
+
+    def test_a_team_manager_cannot_be_an_editor(self):
+        before = snapshot_all_rows()
+
+        response = self._post([self.manager])
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, MANAGER_IS_NOT_AN_EDITOR)
+        self.assertEqual(snapshot_all_rows(), before)
+
+    def test_the_owner_cannot_be_an_editor(self):
+        before = snapshot_all_rows()
+
+        response = self._post([self.workspace.owner])
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, OWNER_IS_NOT_AN_EDITOR)
+        self.assertEqual(snapshot_all_rows(), before)
+
+    def test_handing_over_to_a_team_manager_drops_the_assignment(self):
+        """持ち主の譲渡（運営者の操作）。新しい持ち主の担当の行は残さない（持ち主は全権を持つ）。"""
+        response = self._post([], owner=self.manager)
+
+        self.assertEqual(response.status_code, 302)
+        self.workspace.refresh_from_db()
+        self.assertEqual(self.workspace.owner_id, self.manager.id)
+        self.assertFalse(self.team.managers.exists())
+        self.assertEqual(self._editors(), {(self.workspace.id, self.editor.id)})
+
+
+class TeamManagerAssignmentThroughServiceTest(TwoWorkspaceCase):
+    """チームの担当者の割り当ても `WorkspaceMemberService` を通す。
+
+    集約の検査に落ちればフォームのエラーで何も書かない。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.editor = User.objects.create_user(username="editor", password="x")
+        self.manager = User.objects.create_user(username="manager", password="x")
+        orm_models.WorkspaceEditor.objects.create(workspace=self.workspace, user=self.editor)
+        self.team.managers.add(self.manager)
+        self.rival.managers.add(self.manager)
+
+    def _post_team(self, team, users, **extra):
+        data = {"league": team.league_id, "name": team.name, "display_order": 0, "managers": [u.id for u in users]}
+        if team.pk is None:
+            return self.client.post(reverse("admin:myapp_team_add"), data | extra)
+        return self.client.post(reverse("admin:myapp_team_change", args=[team.id]), data | extra)
+
+    def _managers(self):
+        return set(orm_models.Team.managers.through.objects.values_list("team_id", "user_id"))
+
+    def test_changing_the_managers_goes_through_the_service_and_keeps_the_other_teams(self):
+        newcomer = User.objects.create_user(username="newcomer", password="x")
+        spy = patch.object(
+            WorkspaceMemberService,
+            "replace_team_managers",
+            autospec=True,
+            side_effect=WorkspaceMemberService.replace_team_managers,
+        )
+
+        with spy as replaced:
+            response = self._post_team(self.team, [newcomer])
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(replaced.call_args.args[1:], (self.workspace.id, self.team.id, [newcomer.id]))
+        self.assertEqual(self._managers(), {(self.team.id, newcomer.id), (self.rival.id, self.manager.id)})
+
+    def test_a_new_team_gets_its_managers_through_the_service(self):
+        newcomer = User.objects.create_user(username="newcomer", password="x")
+
+        response = self._post_team(orm_models.Team(league=self.league_b, name="新チーム"), [newcomer])
+
+        self.assertEqual(response.status_code, 302)
+        team = orm_models.Team.objects.get(name="新チーム")
+        self.assertEqual(set(team.managers.values_list("id", flat=True)), {newcomer.id})
+
+    def test_the_owner_and_an_editor_cannot_be_managers(self):
+        for user, message in ((self.workspace.owner, OWNER_IS_NOT_A_MANAGER), (self.editor, EDITOR_IS_NOT_A_MANAGER)):
+            for team in (self.team, orm_models.Team(league=self.league, name="新チーム")):
+                before = snapshot_all_rows()
+                with self.subTest(user=user.username, new=team.pk is None):
+                    response = self._post_team(team, [self.manager, user])
+                    self.assertEqual(response.status_code, 200)
+                    self.assertContains(response, message)
+                    self.assertEqual(snapshot_all_rows(), before)
+
+    def test_unchanged_managers_are_not_rewritten(self):
+        """W4 より前に付いた重なり（編集者に担当の行）は、担当者を変えない保存では書き換えない（エラーにもしない）。"""
+        self.team.managers.add(self.editor)
+        before = self._managers()
+
+        with patch.object(WorkspaceMemberService, "replace_team_managers") as replaced:
+            response = self._post_team(self.team, [self.manager, self.editor], name="改名")
+
+        self.assertEqual(response.status_code, 302)
+        replaced.assert_not_called()
+        self.assertEqual(self._managers(), before)
+        self.team.refresh_from_db()
+        self.assertEqual(self.team.name, "改名")

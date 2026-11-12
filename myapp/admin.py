@@ -85,7 +85,14 @@ from .infrastructure.scoping import (
     teams_in,
 )
 from .infrastructure.workspaces import new_workspace_key
-from .presentation.views import build_league_setup_service, build_recording_service, build_setup_query
+from .presentation.views import (
+    build_league_setup_service,
+    build_recording_service,
+    build_setup_query,
+    build_workspace_management_query,
+    build_workspace_member_service,
+    build_workspace_service,
+)
 
 # ヘッダーの文言
 admin.site.site_header = "Baseball Manager 管理"
@@ -133,6 +140,19 @@ def _ordered_app_list(self, request, app_label=None):
 _original_get_app_list = admin.site.get_app_list
 # AdminSite を継承した独自サイトに置き換えるほどではないため、メソッドを差し替える
 admin.site.get_app_list = types.MethodType(_ordered_app_list, admin.site)  # type: ignore[method-assign]
+
+
+def _superuser_only(self, request):
+    """管理画面に入れるのは運営者（superuser）だけ（W4 T6。#80 の推奨 8）。
+
+    管理画面は全ワークスペースの行を範囲なしで読み書きする運営者の道具なので、モデルごとの権限で一部だけ
+    開ける使い方をしない（閲覧だけの権限の staff では、インラインの `clean()` が変更の権限を前提にして 500 に
+    なりえた。W1a T7 の残り）。ヘッダーの「管理画面」のリンク（`base.html`）も同じ条件で出す。
+    """
+    return request.user.is_active and request.user.is_superuser
+
+
+admin.site.has_permission = types.MethodType(_superuser_only, admin.site)  # type: ignore[method-assign]
 
 # 管理画面で扱うのは**実データだけ**。ペナントの世界の行は、一覧にも・id を指定した編集画面にも・
 # 選択肢にも・フィルタにも出さない（手で直すと、世界の整合が実データの側から壊れるため）。
@@ -784,6 +804,15 @@ class TeamForm(forms.ModelForm):
             reason = build_setup_query(scope).team(self.instance.pk).league_change_blocker
             if reason is not None:
                 self.add_error("league", reason)
+        if "managers" in self.changed_data and cleaned.get("managers") is not None:
+            # 担当者は `Workspace` 集約の検査を通す（サイトのメンバーの画面と同じ規則。W4 T6）。
+            # 持ち主・編集者は入れられない
+            try:
+                build_workspace_member_service().validate_team_managers(
+                    league.workspace_id, [user.pk for user in cleaned["managers"]]
+                )
+            except DomainError as error:
+                self.add_error("managers", str(error))
         return cleaned
 
 
@@ -883,6 +912,20 @@ class TeamAdmin(SetupRulesDeletionAdmin, RealDataOnlyMixin, ManualOrderAdminMixi
     @admin.display(description="試合数", ordering="played_games_count")
     def game_count(self, obj):
         return obj.played_games_count
+
+    def save_related(self, request, form, formsets, change):
+        """担当者（`Team.managers` の中間表）はフォームに書かせず、`WorkspaceMemberService` で書く（W4 T6）。
+
+        サイトのメンバーの画面と同じ `Workspace` 集約の検査を通す（1人1役割。チームがこのワークスペースの
+        実データのチームか）。変えていなければ書かない（W4 より前に付いた重なりの行で、保存のたびに落ちないように）。
+        """
+        managers = form.cleaned_data.pop("managers", None)
+        super().save_related(request, form, formsets, change)
+        if managers is not None and "managers" in form.changed_data:
+            team = form.instance
+            build_workspace_member_service().replace_team_managers(
+                team.league.workspace_id, team.pk, [user.pk for user in managers]
+            )
 
     def setup_row(self, obj):
         # 在籍・主将の在任・試合が1つも無いときだけ消せる（`team_deletion_blocker`。試合は区分を問わず数える）
@@ -2013,18 +2056,43 @@ class WorkspaceForm(forms.ModelForm):
 
 
 class WorkspaceEditorFormSet(forms.BaseInlineFormSet):
-    """編集者の行。持ち主は編集者に入れない（持ち主は全権を持つ。移行 0062 も持ち主を除いた）。"""
+    """編集者の行。行を直接書かず、`WorkspaceMemberService` で置き換える（W4 T6。2026-11-12 ユーザー決定）。
+
+    検査も保存もサイトのメンバーの画面と同じ `Workspace` 集約を通す（1人1役割: 持ち主・チーム担当の人は
+    編集者に入れられない）。検査に落ちる入力はフォームのエラーにして、何も書かない。
+    """
+
+    def editor_ids(self) -> list[int]:
+        """送られた行のうち、消す印の無い行の利用者。"""
+        ids = []
+        for form in self.forms:
+            data = getattr(form, "cleaned_data", None)
+            if not data or data.get("DELETE"):
+                continue
+            user = data.get("user")
+            if user is not None:
+                ids.append(user.pk)
+        return ids
 
     def clean(self):
         super().clean()
+        if any(self.errors):
+            return
+        # 持ち主を同じ送信で変えるときは、新しい持ち主で検査する（フォームが行に写した値）
         owner_id = self.instance.owner_id
         if owner_id is None:
             return
-        for form in self.forms:
-            data = getattr(form, "cleaned_data", None)
-            user = data.get("user") if data and not data.get("DELETE") else None
-            if user is not None and user.pk == owner_id:
-                form.add_error("user", "持ち主は編集者に加えられません。持ち主はもともと全権を持っています。")
+        try:
+            build_workspace_member_service().validate_editors(self.instance.pk, self.editor_ids(), owner_id=owner_id)
+        except DomainError as error:
+            raise forms.ValidationError(str(error)) from None
+
+    def save(self, commit=True):
+        """編集者をサービスで置き換える（`WorkspaceAdmin.save_formset` から呼ばれる。持ち主は保存済み）。"""
+        build_workspace_member_service().replace_editors(self.instance.pk, self.editor_ids())
+        # 変更履歴の文言（`construct_change_message`）が読む。行はサービスが書いたので、ここでは挙げない
+        self.new_objects, self.changed_objects, self.deleted_objects = [], [], []
+        return []
 
 
 class WorkspaceEditorInline(admin.TabularInline):
@@ -2034,19 +2102,95 @@ class WorkspaceEditorInline(admin.TabularInline):
     formset = WorkspaceEditorFormSet
     extra = 0
     verbose_name_plural = "編集者"
+    # 利用者が増えても選べるよう、検索つきの選択にする（利用者の管理画面の検索を使う）
+    autocomplete_fields = ("user",)
+
+
+def _delete_workspaces(modeladmin, request, queryset):
+    """ワークスペースの一括削除。消せない行（世界が残る）があれば何も消さない（`_delete_selected_unless_blocked`）。
+
+    検査の後にリポジトリが拒んだとき（ほかのワークスペースにも在籍がある選手・迷子の参照）も、全体を戻して理由を出す。
+    """
+    try:
+        with transaction.atomic():
+            return _delete_selected_unless_blocked(modeladmin, request, queryset)
+    except DomainError as error:
+        modeladmin.message_user(request, f"何も削除しませんでした。{error}", level=messages.ERROR)
+        return None
 
 
 @admin.register(Workspace)
-class WorkspaceAdmin(admin.ModelAdmin):
-    """ワークスペース。空の DB で運営者が最初の1つを作る入口（リーグ・球場はこれに属す）。"""
+class WorkspaceAdmin(BlockedDeletionAdmin):
+    """ワークスペース。空の DB で運営者が最初の1つを作る入口（リーグ・球場はこれに属す）。
+
+    削除はサイトの削除の画面と同じ `WorkspaceService.delete` で行う（W4 T6）。ペナントの世界が残るワークスペースは
+    削除の導線を出さず、削除の画面を直接開いても 403（`BlockedDeletionAdmin`。消せない理由はサイトと同じ
+    `workspace_deletion_blocker`）。Django の collector の連鎖では消さない（リーグ・球場は PROTECT で、
+    そもそも消せない）。
+    作成は上限（`WorkspaceQuota`）を見ない（運営者の道具。#80 の推奨 2）。
+    """
 
     form = WorkspaceForm
     list_display = ("name", "key", "owner", "visibility", "created_at")
     list_filter = ("visibility",)
     search_fields = ("name", "key")
+    # 利用者が増えても選べるよう、検索つきの選択にする（利用者の管理画面の検索を使う）
+    autocomplete_fields = ("owner",)
     inlines = [WorkspaceEditorInline]
+
+    _CONTENTS_CACHE = "_workspace_contents"
 
     def get_readonly_fields(self, request, obj=None):
         """key は URL に入る識別子なので、作った後は変えさせない。"""
         fixed = super().get_readonly_fields(request, obj)
         return (*fixed, "key") if obj is not None else fixed
+
+    def _contents(self, obj):
+        """削除の確認に出す件数と世界（サイトの削除の画面と同じ参照クエリ）。1回の画面で何度も聞かれるので行に覚える。"""
+        if not hasattr(obj, self._CONTENTS_CACHE):
+            setattr(obj, self._CONTENTS_CACHE, build_workspace_management_query(obj.pk).contents())
+        return getattr(obj, self._CONTENTS_CACHE)
+
+    def deletion_blocker(self, obj) -> str | None:
+        return self._contents(obj).deletion_blocker
+
+    def get_deleted_objects(self, objs, request):
+        """削除の確認に、消えるものを件数で出す。
+
+        collector で全行を集めない（行数が多く、リーグ・球場は PROTECT なので消せないと判定される）。
+        """
+        lines = []
+        for obj in objs:
+            contents = self._contents(obj)
+            lines.append(
+                f"{obj}（リーグ {contents.league_count}・チーム {contents.team_count}・"
+                f"選手 {contents.player_count}・試合 {contents.game_count}。編集者・チーム担当・招待も外れます）"
+            )
+        return lines, {self.model._meta.verbose_name_plural: len(lines)}, set(), []
+
+    def delete_model(self, request, obj):
+        build_workspace_service().delete(obj.pk)
+
+    def delete_queryset(self, request, queryset):
+        # 一括削除は消す前に全行を検査済み（`_delete_selected_unless_blocked`）。途中で弾かれたら何も消さない
+        with transaction.atomic():
+            for obj in queryset:
+                build_workspace_service().delete(obj.pk)
+
+    def delete_view(self, request, object_id, extra_context=None):
+        """リポジトリが削除を拒んだら（ほかのワークスペースにも在籍がある選手など）、理由を出して変更画面へ戻す。
+
+        `delete_view` は1つのトランザクションなので、拒まれたときは何も消えていない。
+        """
+        try:
+            return super().delete_view(request, object_id, extra_context)
+        except DomainError as error:
+            self.message_user(request, f"削除できませんでした。{error}", level=messages.ERROR)
+            return HttpResponseRedirect(reverse("admin:myapp_workspace_change", args=[object_id]))
+
+    def get_actions(self, request):
+        actions = super().get_actions(request)
+        if "delete_selected" in actions:
+            _, name, description = actions["delete_selected"]
+            actions["delete_selected"] = (_delete_workspaces, name, description)
+        return actions
