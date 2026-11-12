@@ -9,6 +9,7 @@ from pathlib import Path
 
 from django.contrib.auth.models import User
 from django.urls import reverse
+from playwright.sync_api import expect
 
 from myapp.infrastructure import orm_models
 
@@ -46,15 +47,8 @@ class GameEditReactTest(PlaywrightTestCase):
         user = User.objects.create_user(username="manager", password="pass12345")
         self.team.managers.add(user)
 
-    def _login(self):
-        self.page.goto(self.live_server_url + "/accounts/login/")
-        self.page.fill('input[name="username"]', "manager")
-        self.page.fill('input[name="password"]', "pass12345")
-        self.page.locator('input[name="password"]').press("Enter")
-        self.page.wait_for_url(f"{self.live_server_url}/")
-
     def test_record_a_plate_appearance_and_save(self):
-        self._login()
+        self.login("manager")
         self.page.goto(self.live_server_url + reverse("game_edit", args=[self.game.id]))
 
         # 打順を決める。1回表はビジターの攻撃なので、そちらの1番が最初の打者になる
@@ -68,12 +62,12 @@ class GameEditReactTest(PlaywrightTestCase):
         # 結果を選ぶと進塁が既定値で埋まる。本塁打なら打者は本塁まで進む
         self.page.get_by_label("結果", exact=True).select_option("本塁打")
         self.page.get_by_label("投手", exact=True).select_option(str(self.pitcher.id))
-        self.assertEqual(self.page.get_by_label("山田の進塁後", exact=True).input_value(), "4")
+        expect(self.page.get_by_label("山田の進塁後", exact=True)).to_have_value("4")
 
         self.page.get_by_role("button", name="この打席を記録する").click()
 
         # 得点も打席から導かれる（入力欄は無い）
-        self.assertIn("ビジターズ 1 - 0 ホームズ", self.page.get_by_label("導出した得点").inner_text())
+        expect(self.page.get_by_label("導出した得点")).to_contain_text("ビジターズ 1 - 0 ホームズ")
 
         self.page.get_by_role("button", name="保存する").click()
         self.page.wait_for_url(f"{self.live_server_url}{reverse('game_detail', args=[self.game.id])}")
@@ -87,7 +81,7 @@ class GameEditReactTest(PlaywrightTestCase):
 
     def _record_a_home_run(self):
         """打順を決めて本塁打を1つ記録する（保存はしない）。"""
-        self._login()
+        self.login("manager")
         self.page.goto(self.live_server_url + reverse("game_edit", args=[self.game.id]))
         self.page.get_by_label("ビジターズ 1番の選手", exact=True).select_option(str(self.batter.id))
         self.page.get_by_label("ビジターズ 1番の守備位置", exact=True).select_option("指")

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import random
 import unittest
 from statistics import fmean
 
@@ -10,15 +9,7 @@ from myapp.domain.pennant import aging
 from myapp.domain.pennant.aging import BATTER_CURVES, PITCHER_CURVES, age_ratings, curve_change, expected_change
 from myapp.domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings
 
-
-class OnlyRandom:
-    """`random()` しか持たない乱数源。"""
-
-    def __init__(self, seed: int) -> None:
-        self._rng = random.Random(seed)
-
-    def random(self) -> float:
-        return self._rng.random()
+from .doubles import OnlyRandom
 
 
 class CurveTest(unittest.TestCase):
