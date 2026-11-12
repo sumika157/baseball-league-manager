@@ -13,3 +13,4 @@ paths:
 - どちらのタグも context の `workspace`（今の要求のワークスペース）の key を足し、`workspace` の無い描画では例外になる。ワークスペースの外でも描くテンプレート（`base.html`・`404.html` など）は、中の画面へのリンクを `{% if workspace %}` で囲む。`/` の一覧のように行ごとに別のワークスペースの入口を引くときは `{% workspace_entry_url key %}`。
 - 書き込みの導線（登録フォーム・編集ボタン）は、**ビューが渡す権限のフラグで囲む**（`can_edit_team`・`can_edit`・`can_create_game`・世界の `is_owner`・作成フォームの有無など。ビューは `request.workspace.access`（`WorkspaceAccess`）から作る）。`{% if user.is_authenticated %}` で囲まない（ログインしただけの人や、管理ユーザーでもワークスペースの部外者には、押しても弾かれる導線になる）。未ログインならフラグは偽。ヘッダーの「管理画面」のリンクだけは `user.is_staff`（管理画面に入れる条件そのもの）。
 - 選択肢の一覧（守備位置・球場の屋根種別など）をテンプレートに並べない。ドメインの値オブジェクトが唯一の出典で、ビューかフォーム経由で受け取る。
+- **JavaScript の文脈に値を埋めるときは `escapejs`／`json_script`**: `on*` のイベント属性・`<script>` の中・`javascript:` の URL に `{{ }}` を置くなら、最後のフィルタを `|escapejs` にする（自動エスケープは HTML 用で、イベント属性の値はブラウザが HTML として戻してから JavaScript に渡すので `'` で文字列を閉じられる。#320）。構造のあるデータは `json_script` で渡す。検査は `tests/integration/test_templates.py` にある。

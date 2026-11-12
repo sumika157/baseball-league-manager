@@ -181,6 +181,23 @@ class AdminCaptaincyValidationTest(BaseCase):
         payload.update(captaincy_overrides)
         return payload
 
+    def test_the_foreign_background_is_saved_from_the_admin(self):
+        """前所属（#169 Q5）は管理画面で選べ、選手のプロフィールに保存される。選択肢の出典は `ForeignBackground`。"""
+        payload = self._change_payload(
+            self.player, **{"captaincies-TOTAL_FORMS": "0", "foreign_background": "メジャー経験"}
+        )
+        response = self.client.post(f"/admin/myapp/player/{self.player.id}/change/", payload)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(orm_models.Player.objects.get(id=self.player.id).foreign_background, "メジャー経験")
+
+    def test_an_unknown_foreign_background_is_rejected(self):
+        payload = self._change_payload(self.player, **{"captaincies-TOTAL_FORMS": "0", "foreign_background": "独立"})
+        response = self.client.post(f"/admin/myapp/player/{self.player.id}/change/", payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(orm_models.Player.objects.get(id=self.player.id).foreign_background, "")
+
     def test_appointing_a_captain_via_admin(self):
         response = self.client.post(f"/admin/myapp/player/{self.player.id}/change/", self._change_payload(self.player))
 

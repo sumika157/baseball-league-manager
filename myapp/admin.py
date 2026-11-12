@@ -43,6 +43,7 @@ from .domain.value_objects import (
     AcquisitionRoute,
     ContractStatus,
     DraftPick,
+    ForeignBackground,
     ForeignPlayerRules,
     FreeAgencyKind,
     GameTimes,
@@ -1659,6 +1660,7 @@ class PlayerForm(DomainCheckedForm):
             corporate_team=cleaned.get("corporate_team", ""),
             nationality=cleaned.get("nationality", ""),
             is_foreign_player=cleaned.get("is_foreign_player", False),
+            foreign_background=ForeignBackground.from_label(cleaned.get("foreign_background") or ""),
         )
 
 
@@ -1696,6 +1698,7 @@ class PlayerAdmin(RealDataOnlyMixin, admin.ModelAdmin):
                     ("draft_year", "draft_round", "is_development_draft"),
                     "nationality",
                     "is_foreign_player",
+                    "foreign_background",
                 ),
             },
         ),
@@ -2010,7 +2013,7 @@ class WorkspaceForm(forms.ModelForm):
 
 
 class WorkspaceEditorFormSet(forms.BaseInlineFormSet):
-    """編集者の行。持ち主は編集者に入れない（持ち主は全権を持つ。移行 0061 も持ち主を除いた）。"""
+    """編集者の行。持ち主は編集者に入れない（持ち主は全権を持つ。移行 0062 も持ち主を除いた）。"""
 
     def clean(self):
         super().clean()

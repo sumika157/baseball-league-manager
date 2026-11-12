@@ -204,7 +204,7 @@ class CorporateNotInDevelopmentTest(unittest.TestCase):
 
     def test_the_rule_is_on_the_route(self) -> None:
         self.assertFalse(DraftRoute.CORPORATE.allows_development_pick)
-        for route in (DraftRoute.HIGH_SCHOOL, DraftRoute.UNIVERSITY, DraftRoute.FOREIGN):
+        for route in (DraftRoute.HIGH_SCHOOL, DraftRoute.UNIVERSITY):
             self.assertTrue(route.allows_development_pick)
 
     def test_the_ai_never_picks_corporate_players_in_the_development_rounds(self) -> None:
@@ -291,7 +291,7 @@ class DevelopmentRookieTest(unittest.TestCase):
             self.assertTrue(100 <= int(draftee.number) <= 199)
             assert draftee.profile.draft is not None
             self.assertTrue(draftee.profile.draft.is_development)
-            self.assertFalse(draftee.is_foreign)
+            self.assertFalse(draftee.profile.is_foreign_player)
         for draftee in result.draftees:
             if not draftee.is_development:
                 self.assertIs(draftee.contract, ContractStatus.REGISTERED)

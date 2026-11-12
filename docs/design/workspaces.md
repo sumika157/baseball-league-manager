@@ -1218,7 +1218,7 @@ W2 の本体。ワークスペースの中の画面43本（実データ20・ペ�
 #### T1 domain・永続化・サービス（`feature/league-setup-service`、2026-10-25）
 
 画面はまだ使わない（T2・T3 の登録画面が使う）。マイグレーションは無い（`makemigrations --check` で確かめた。名前の長さの定数は今の列と同じ値）。
-この節（と T4・T2・T5）のマイグレーションの番号（「0061 の制約」など）は書いた時点のままで、main の取り込み（2026-10-25 その4）の後は1つずつ後ろ（一意制約は `0062_workspace_constraints`）。
+この節（と T4・T2・T5）のマイグレーションの番号（「0061 の制約」など）は書いた時点のままで、main の取り込み（2026-10-25 その4）の後は1つずつ後ろ（一意制約は `0062_workspace_constraints`）、その5（2026-11-12）の後はさらに1つ後ろ（`0063_workspace_constraints`）。
 
 - domain:
   - 名前の長さの定数 `LEAGUE_NAME_MAX_LENGTH`（50）・`TEAM_NAME_MAX_LENGTH`（100）・`STADIUM_NAME_MAX_LENGTH`（100）を `entities.py` に置き、ORM の `max_length` はこれを import する。`clean_name()` が前後の空白を除いて空と上限超えを `InvalidName` にし、`League`・`Team`・`Stadium` の作成（`__post_init__`）と `rename()` が通す。既存の行を読むときに落ちないことは、既存のテストと開発 DB（リーグ8・チーム48・球場21。空・上限超えは0）で確かめた。
@@ -1263,7 +1263,7 @@ W2 の本体。ワークスペースの中の画面43本（実データ20・ペ�
 
 #### T4 選手のプロフィールの編集（`feature/player-profile-edit`、2026-10-25）
 
-サイトの選手の編集画面に、プロフィールの14項目（よみがな・背ネーム・生年月日・投打・身長・体重・出身地・ドラフト（年・順位・育成）・出身高校・大学・社会人・国籍・外国人選手か）の節を足した。マイグレーションは無い（`makemigrations --check`）。
+サイトの選手の編集画面に、プロフィールの14項目（main の取り込み（2026-11-12 その5）で前所属を足して今は15項目）（よみがな・背ネーム・生年月日・投打・身長・体重・出身地・ドラフト（年・順位・育成）・出身高校・大学・社会人・国籍・外国人選手か）の節を足した。マイグレーションは無い（`makemigrations --check`）。
 
 - domain: `Team.change_player_profile(player_id, profile)`（`ensure_draft_fits_career` を通してから置き換える。値そのものは `Profile`・`DraftPick` が作るときに検査）。`DraftPick.from_inputs(year, round_, is_development=)`（年が空なら None、年の無い順位・育成は `InvalidDraftPick`）。文字の欄の長さの定数 `PROFILE_TEXT_MAX_LENGTH`（100）・`BACK_NAME_MAX_LENGTH`（20）を `value_objects.py` に置き、ORM の `max_length` はこれを import する（値は同じ）。
 - application: DTO `ProfileInput`（素の値だけ。投打は表記）、変換 `application/player_profile.py`（`profile_from_input`・`profile_input_of`）。`RosterService.update_player(..., profile: ProfileInput | None = None)` が名前・背番号・守備位置と**同じ1回の集約の保存**で書く。None ならプロフィールに触れない。`PlayerDetail.profile`（編集画面の初期値）。
@@ -1689,3 +1689,21 @@ views の定数とテンプレートの直書きの2か所 → 両方に互い�
 - T5: 削除のタブは `_tabs.html` の「メンバーと招待」の後に足す（`workspace_tab = "delete"`）。ヘッダーのメニューに出すなら同じく
   コンテキストプロセッサのフラグで。除名・担当への変更で全体の編集権を失った人の世界は、T5 の世界の書き込みの判定で読むだけにする（決定 1）。
 - 計測（T7）: 新しい画面はメンバー・受諾の2つ。メンバーの画面のクエリ数は人数・招待の数によらない（テストで固定）。
+
+#### main の取り込み（2026-11-12 その5）
+
+`refactor/merge-main-into-workspaces-6` で、epic 3717b0c（W4 T2 の後）に main c8b5f70 を取り込んだ（マージコミット。この記録もそのコミットに含む）。W4 T3・T4 の途中。
+
+- **main から来たもの**: #321（#320。選手の編集画面の退団の確認文で、選手名を `|escapejs` で JavaScript の文字列としてエスケープ。テンプレートの JavaScript の文脈を走査する `TemplateJavaScriptContextTest`）、#322（#308 P3a。経路ごとの伸びしろの平均・自軍の選手の見込みの区分 `domain/pennant/outlook.py`・`application/pennant_outlook.py`。選手ページの能力のカードと「戦力外」タブに出す。在籍を読む `ClubTenureQuery`／`DjangoClubTenureQuery`）、#324（#169 F1。ドラフトの外国人の新人を、球団ごとの候補から AI が獲得する `domain/pennant/foreign_market.py`。選手の前所属 `Player.foreign_background`（`ForeignBackground`・`Profile.foreign_background`）。マイグレーション `0060_player_foreign_background`）、#328（#169 F1b。外国人の獲得の傾向を戦力の穴で）、#329（#308 P3b。AI の戦力外と引退を見込みの能力で）。
+- **振り直し**: main が 0060 を使ったので、epic のマイグレーションを `0061_workspace`（依存は `0060_player_foreign_background`）・`0062_backfill_default_workspace`・`0063_workspace_constraints`・`0064_team_managers_help_text`・`0065_workspace_invitation` に移した。依存・docstring・コメント（`admin.py` の編集者の行・`repositories.py` の名前の一意制約・`test_jersey_number.py`・`test_migration_draft_year.py`・`test_workspace_constraints.py`）・`test_workspace_migration.py` の BEFORE/AFTER をそろえた。この節より前の記録の番号は書いた時点のまま（W4 T1 の `0064_workspace_invitation` は今 `0065`）。空の DB からの `migrate` と `makemigrations --check` を確かめた。作業の最後に origin/main を fetch し直し、最新が 0060 のままであることを確かめた。
+- **衝突**は8ファイル: `views.py`（`build_pennant_ratings_service`・`build_club_details_service` の依存と「戦力外」タブの `with_outlook=True`）、`player_edit.html`（W3 T7 でボタンを操作のフォームに移したので epic の配置を残し、退団の確認文に `|escapejs` を当てた）、Wiki「チームと選手の管理」（項目表に epic の「名前」の行と main の「前所属」を両方）、テスト5本（`test_wiring.py`・`test_templates.py` は両方を残す、`test_pennant_offseason.py`・`test_pennant_ratings_view.py`・`test_pennant_release_tab.py` は import）。
+- **合わせ込み**:
+  - 組み立て口: `build_club_details_service(scope)` に main の `world_id`・`worlds`・`tenures` を範囲の形で（`DjangoWorldRepository(scope.workspace_id)`・`DjangoClubTenureQuery(scope)`）。`build_pennant_ratings_service(scope)` に `tenures`。`test_wiring.py` の `LedgersAreScopedToTheWorkspaceTest` の台帳を持つ組み立て口に `build_club_details_service` を足した。組み立て口の数は変わらない。
+  - 新しい `Django*`: `DjangoClubTenureQuery` を `test_workspace_isolation.py` の `CHECKS` に（`_club_tenure_query`。B の球団は空・A の球団は読める）。
+  - **選手のプロフィールの編集（W3 T4）に前所属**: main は前所属を管理画面の選手の編集にだけ足していた。サイトの編集はプロフィールを入力から丸ごと組み立て直す（`profile_from_input`）ので、そのままだと**サイトでプロフィールを保存するたびに前所属が空で上書きされる**（`_profile_defaults` が列を書く）。`ProfileInput.foreign_background`・`profile_from_input`／`profile_input_of`・`PlayerProfileForm.foreign_background`（選択肢は `ForeignBackground` から）・`player_edit.html` の欄を足して15項目にした。テスト: `test_player_profile_edit.py` の往復（`FULL_PROFILE`・`SAVED_COLUMNS` に前所属）と知らない区分はフォームのエラー。
+  - main の新しいテストを epic の形に: `world_scope`・`real_scope`・`ws_url`・`DjangoWorldRepository(scope.workspace_id)`（`test_pennant_ratings_view.py` の `OutlookCardTest`・`ClubTenureQueryTest`、`test_pennant_release_tab.py` の `ReleaseTabOutlookTest`、`test_players.py` の前所属の表示）。
+  - W4 T2 のワークスペースの削除: 影響なし（`foreign_background` は外部キーでない列。main は表を足していない）。網羅のテストもそのまま通る。
+- **変異の確かめ**（どれも戻した）: `DjangoClubTenureQuery` の `stints_in(scope)` を全件に → `CHECKS` と `ClubTenureQueryTest` が落ちる、`build_club_details_service` の台帳を別のワークスペースに → `LedgersAreScopedToTheWorkspaceTest` が落ちる、`profile_from_input` で前所属を捨てる → `test_player_profile_edit.py` の往復ほか多数が落ちる、退団の確認文の `|escapejs` を外す → `TemplateJavaScriptContextTest` が落ちる。
+- **計測**: やり直していない。main の変更で読み取りが増えるのはペナントの選手ページ（能力のカードの見込み。世界と在籍の各1本）と「戦力外」タブで、どちらも `measure_pages` の画面に入っていない。ほかはペナントの締める処理・ドラフトの domain。
+- テスト: domain＋integration 4,289、e2e 20。
+- **レビュー**（`ddd-boundary-reviewer`）: 重要な指摘なし。範囲なしの形が main から戻っていないこと、締める処理の外国人の獲得が範囲の `TeamRepository` と世界の年で書くこと、マイグレーションが1本道であること、domain が Django を import しないことを確かめた。軽微: この記録（直した）・T4 の「14項目」と番号の注記（直した）・`ForeignBackground.from_label` が知らない値で `ValueError`（今の入口はフォームの選択肢と管理画面で、どちらも先に弾く。直していない）。

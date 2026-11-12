@@ -79,6 +79,7 @@ from myapp.infrastructure import orm_models, queries, repositories
 from myapp.infrastructure.queries import (
     DjangoAwardQuery,
     DjangoChampionshipQuery,
+    DjangoClubTenureQuery,
     DjangoFieldingTotalsQuery,
     DjangoGameListQuery,
     DjangoHomeStadiumQuery,
@@ -584,6 +585,13 @@ def _ratings_history_query(t: WorkspaceCase) -> None:
     t.assertIsNone(DjangoRatingsHistoryQuery(t.a).for_player(t.b_batters[0]))
 
 
+def _club_tenure_query(t: WorkspaceCase) -> None:
+    query = DjangoClubTenureQuery(t.a)
+    t.assertEqual(query.for_players(t.b_team.id, t.b_batters), {})
+    # 空振りの防止: A の球団の選手は読める
+    t.assertEqual(set(query.for_players(t.team.id, t.a_batters)), set(t.a_batters))
+
+
 def _team_analysis_query(t: WorkspaceCase) -> None:
     query = DjangoTeamAnalysisQuery(t.a)
     t.assertEqual(query.list_years(t.b_team.id), [])
@@ -941,6 +949,7 @@ CHECKS: dict[type, Callable[[WorkspaceCase], None]] = {
     DjangoSeasonPlayingTimeQuery: _season_playing_time_query,
     DjangoOffseasonQuery: _offseason_query,
     DjangoRatingsHistoryQuery: _ratings_history_query,
+    DjangoClubTenureQuery: _club_tenure_query,
     DjangoTeamAnalysisQuery: _team_analysis_query,
     DjangoServiceHistoryQuery: _service_history_query,
     DjangoWorldRepository: _world_repository,

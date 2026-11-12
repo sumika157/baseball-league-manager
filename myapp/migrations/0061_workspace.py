@@ -8,7 +8,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('myapp', '0059_pennantplayerratings_potential'),
+        ('myapp', '0060_player_foreign_background'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 

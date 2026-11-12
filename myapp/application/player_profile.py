@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from ..domain.value_objects import DraftPick, Handedness, Profile
+from ..domain.value_objects import DraftPick, ForeignBackground, Handedness, Profile
 from .dto import ProfileInput
 
 
@@ -27,6 +27,7 @@ def profile_from_input(data: ProfileInput) -> Profile:
         name_kana=data.name_kana,
         back_name=data.back_name,
         is_foreign_player=data.is_foreign_player,
+        foreign_background=ForeignBackground.from_label(data.foreign_background),
     )
 
 
@@ -50,4 +51,5 @@ def profile_input_of(profile: Profile) -> ProfileInput:
         corporate_team=profile.corporate_team,
         nationality=profile.nationality,
         is_foreign_player=profile.is_foreign_player,
+        foreign_background=profile.foreign_background.label if profile.foreign_background else "",
     )

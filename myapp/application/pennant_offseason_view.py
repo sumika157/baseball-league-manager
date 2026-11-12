@@ -4,12 +4,13 @@
 在籍・プロフィール・能力の行から `OffseasonQuery` が導く。ここはその材料を画面向けの行にするだけで、
 集約（`Team`）は組み立てない。
 
-能力の変化と総合の出典は domain（`rating_change`・`overall_value`）、新人の経路の出典は `DraftRoute.of_profile`。
+能力の変化と総合の出典は domain（`rating_change`・`overall_value`）、新人と獲得した外国人の経路の出典は
+`foreign_market.newcomer_route_label`（#169）。
 """
 
 from __future__ import annotations
 
-from ..domain.pennant.draft import DraftRoute
+from ..domain.pennant.foreign_market import newcomer_route_label
 from ..domain.pennant.initial_ratings import age_at_season_start
 from ..domain.pennant.offseason import rating_change
 from ..domain.pennant.season import is_season_closed
@@ -113,7 +114,7 @@ class OffseasonViewService:
             number=fact.number,
             position=fact.position.label,
             age=age_at_season_start(fact.profile, year + 1),
-            route=DraftRoute.of_profile(fact.profile).label,
+            route=newcomer_route_label(fact.profile),
             rating=overall_cell(fact.after) if fact.after is not None else None,
             pick="" if fact.profile.draft is None else fact.profile.draft.order_label,
         )

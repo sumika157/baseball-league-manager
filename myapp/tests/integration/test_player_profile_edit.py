@@ -17,7 +17,7 @@ from myapp.presentation.forms import PROFILE_SECTION_MARKER
 from ..helpers import login_as_manager, ws_url
 from .base import BaseCase
 
-# 送る14項目（ドラフトは年・順位・育成の3欄）と、保存されたときの列の値
+# 送る15項目（ドラフトは年・順位・育成の3欄）と、保存されたときの列の値
 FULL_PROFILE = {
     "name_kana": "ヤマダタロウ",
     "back_name": "T.YAMADA",
@@ -34,6 +34,7 @@ FULL_PROFILE = {
     "corporate_team": "トヨタ自動車",
     "nationality": "日本",
     "is_foreign_player": "on",
+    "foreign_background": "マイナー",
 }
 SAVED_COLUMNS = {
     "name_kana": "ヤマダタロウ",
@@ -52,6 +53,7 @@ SAVED_COLUMNS = {
     "corporate_team": "トヨタ自動車",
     "nationality": "日本",
     "is_foreign_player": True,
+    "foreign_background": "マイナー",
 }
 BASIC = {"name": "山田", "number": "10", "position": "内野手"}
 
@@ -80,7 +82,7 @@ class PlayerProfileEditTest(BaseCase):
 
     # --- 往復 ---
 
-    def test_all_fourteen_items_round_trip(self):
+    def test_all_fifteen_items_round_trip(self):
         response = self.post_profile(FULL_PROFILE, name="山田太郎")
 
         self.assertEqual(response.status_code, 302, self.error_of(response))
@@ -209,7 +211,7 @@ class PlayerProfileEditTest(BaseCase):
         response = self.post_profile({**FULL_PROFILE, "height_cm": "301"}, name="改名")
 
         self.assert_refused(response, "身長の値が現実的ではありません")
-        # 送った値のまま出し直す（14項目を打ち直させない）
+        # 送った値のまま出し直す（15項目を打ち直させない）
         self.assertEqual(response.context["profile_form"]["height_cm"].value(), "301")
 
     def test_a_round_without_a_year_is_refused(self):
@@ -249,6 +251,14 @@ class PlayerProfileEditTest(BaseCase):
         response = self.post_profile({**FULL_PROFILE, "throws": "右利き"}, name="改名")
 
         self.assert_refused(response, "投:")
+
+    def test_an_unknown_foreign_background_is_a_form_error(self):
+        """前所属の選択肢はドメインの `ForeignBackground` から作る（main の #169 で増えた列。取り込みで足した）。"""
+        self.save_full_profile()
+
+        response = self.post_profile({**FULL_PROFILE, "foreign_background": "独立リーグ"}, name="改名")
+
+        self.assert_refused(response, "前所属:")
 
     def test_a_too_long_back_name_is_a_form_error(self):
         self.save_full_profile()
