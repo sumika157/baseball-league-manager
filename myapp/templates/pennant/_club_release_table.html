@@ -31,7 +31,10 @@
           <td class="text-end stat-muted">{{ detail.age|default:'—' }}</td>
           <td>
             {% if detail.overall %}
-              <div>{{ detail.overall.label }} {% include 'myapp/_rating_grade.html' with rating=detail.overall %}</div>
+              <div>
+                {{ detail.overall.label }} {% include 'myapp/_rating_grade.html' with rating=detail.overall %}
+                {% if detail.outlook %}<span class="ms-2" data-outlook>見込み {% include 'pennant/_outlook_grade.html' with outlook=detail.outlook %}</span>{% endif %}
+              </div>
               <div class="stat-muted" style="font-size: 0.8125rem;">
                 {% for cell in detail.cells %}{{ cell.label }} {% include 'myapp/_rating_grade.html' with rating=cell %}{% if not forloop.last %} · {% endif %}{% endfor %}
               </div>
@@ -52,3 +55,9 @@
     </tbody>
   </table>
 </div>
+{% comment %}見込みの注記。見込みのある最初の行で1回だけ出す（ifchanged は同じ内容を繰り返さない）{% endcomment %}
+{% for detail in release_players %}{% if detail.outlook %}{% ifchanged detail.outlook.peak_age %}
+<p class="page-subtitle mb-3" style="font-size: 0.8125rem;">
+  見込みは、{{ detail.outlook.peak_age }}歳ごろの総合の見込みを、球団のスカウトの見立てで示した区分です（{{ release.year }}年4月1日に{{ detail.outlook.peak_age }}歳以上は「—」）。見立てには誤差があり、長く在籍した選手ほど当たります。
+</p>
+{% endifchanged %}{% endif %}{% endfor %}

@@ -115,6 +115,7 @@ from ..domain.workspace import WorkspaceAccess, WorkspaceQuota
 from ..infrastructure.queries import (
     DjangoAwardQuery,
     DjangoChampionshipQuery,
+    DjangoClubTenureQuery,
     DjangoFieldingTotalsQuery,
     DjangoGameListQuery,
     DjangoHomeStadiumQuery,
@@ -477,6 +478,7 @@ def build_pennant_ratings_service(scope: WorldScope) -> PennantRatingsViewServic
         stats=DjangoPlayerStatsQuery(scope),
         ratings=DjangoRatingsRepository(scope),
         history=DjangoRatingsHistoryQuery(scope),
+        tenures=DjangoClubTenureQuery(scope),
         today=_world_clock(scope, DjangoSimulationContextQuery(scope)),
     )
 
@@ -1208,7 +1210,8 @@ def pennant_close_season(request, world_id):
     messages.success(
         request,
         f"{result.year}年のシーズンを締めました"
-        f"（引退 {result.retired_count}人・戦力外 {result.released_count}人・新人 {result.draftee_count}人"
+        f"（引退 {result.retired_count}人・戦力外 {result.released_count}人・"
+        f"新外国人 {result.signed_foreign_count}人・新人 {result.draftee_count}人"
         f"（うち育成 {result.development_draftee_count}人））。",
     )
     if result.reverted_sections:
@@ -1420,10 +1423,13 @@ def build_club_details_service(scope: WorldScope) -> ClubDetailsService:
     参照クエリとリポジトリは**渡された世界の範囲で**作る。年齢の基準日は世界の「今日」。
     ペナントの世界の範囲だけを受け取る（実データの範囲なら InvalidWorld）。
     """
-    _pennant_world_id(scope)
+    world_id = _pennant_world_id(scope)
     return ClubDetailsService(
+        world_id=world_id,
+        worlds=DjangoWorldRepository(scope.workspace_id),
         stats=DjangoPlayerStatsQuery(scope),
         ratings=DjangoRatingsRepository(scope),
+        tenures=DjangoClubTenureQuery(scope),
         today=_world_clock(scope, DjangoSimulationContextQuery(scope)),
     )
 
@@ -1683,7 +1689,7 @@ def _render_club(
     if tab == RELEASE_TAB and release is not None:
         context.update(
             release_players=build_club_details_service(_world_scope(request, world.world_id)).details(
-                release.team_id, release.year, release.players
+                release.team_id, release.year, release.players, with_outlook=True
             ),
             release_checked=release_state.checked if release_state is not None else release.chosen_ids,
         )
@@ -2453,7 +2459,7 @@ def player_edit(request, team_id, player_id):
         "myapp/player_edit.html",
         {
             "player": detail,
-            # 保存に失敗したときは送った値のまま出し直す（14項目を打ち直させない）
+            # 保存に失敗したときは送った値のまま出し直す（15項目を打ち直させない）
             "profile_form": (
                 profile_form if profile_form is not None else PlayerProfileForm.initial_of(detail.profile)
             ),

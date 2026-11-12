@@ -29,39 +29,33 @@
   `DraftState.apply` の検査・育成の巡で足す候補が同じ判定を使う）。本指名では今までどおり指名できる
 
 GM の指名（D3。#198）は同じ `DraftState.apply` を通る。会議を始めなかった年は、締める処理が `auto_complete` で
-全球団を AI として最後まで進める。外国人は会議の外（`draft.club_draftees`）。
+全球団を AI として最後まで進める。外国人は会議の前に獲得する（`foreign_market.py`。#169）。
 """
 
 from __future__ import annotations
 
 import bisect
 import hashlib
-import math
-import struct
 from collections import Counter
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date
 from enum import Enum
-from functools import cache
 
 from ..exceptions import InvalidDraftAction
-from ..simulation.randomness import GameRandom, game_seed, make_random, weighted_index
+from ..simulation.randomness import GameRandom, game_seed, hash_normals, hash_words, make_random, weighted_index
 from ..simulation.ratings import (
     POTENTIAL_AVERAGE,
     RATING_MAX,
     RATING_MIN,
     BatterRatings,
-    GrowthType,
     PitcherRatings,
     Potential,
     RatingGrade,
 )
-from ..simulation.samples import BATTER_MEAN, PITCHER_MEAN, mean_ratings
 from ..value_objects import DraftPick, Position
 from ..virtual_players import generator
 from ..virtual_players.generator import AmateurPath
-from .aging import BATTER_CURVES, PITCHER_CURVES, expected_change
 from .draft import (
     MAX_DEVELOPMENT_PICKS,
     MAX_DRAFTEES,
@@ -73,12 +67,15 @@ from .draft import (
     TeamDraftPlan,
     club_draftees,
     draw_rookie,
+    keeps_position_minimum,
     plan_team_draft,
+    position_shortfall,
     with_drawn_potential,
 )
 from .draft_order import DraftOrderRule, DraftOrderStrategy, DraftStandings, strategy_for
 from .initial_ratings import SEASON_START_MONTH
 from .offseason_player import Ratings
+from .outlook import ScoutingAccuracy, estimated_potential, growth_to_peak, judged_items, rounded_estimate
 
 # 候補の人数（指名の枠1つあたり）。位置ごとに、全球団がその位置に計画した指名の数 × この数の候補を作る。
 # 会議が候補の上から取る割合（約4人に1人）を、指名の人数と位置の偏りによらず一定にする（帯の下の球団が
@@ -97,23 +94,14 @@ POOL_RATING_SD = 6.75
 # 投手の候補だけに足すずらし（投手は見比べる項目が3つで野手の5つより総合が散らばり、上から取ると野手より高く出るため）
 POOL_PITCHER_SHIFT = -1.4
 POOL_RATING_SHIFT = {AmateurPath.HIGH_SCHOOL: -0.1, AmateurPath.UNIVERSITY: -3.5, AmateurPath.CORPORATE: -5.6}
-# 候補の伸びしろの平均（#308 P2）。AI は推定の伸びしろの大きい候補を上に見るので、指名された新人の伸びしろは候補より
-# 高く出る。**指名された日本人の新人**の倍率の平均が約1.0（年齢曲線を引き直さずに平衡を保つ条件）になるよう、
-# 上の合わせ込みと同じ定常状態の実測で決めた値。標準偏差と範囲は事前の分布
-# （`estimate.POTENTIAL_SD`・`POTENTIAL_RANGE`）
-POOL_POTENTIAL_MEAN = 45.0
-# スカウトの推定の誤差（項目ごとの標準偏差。点）と、推定を丸める刻み。誤差の大きさは球団ごとに変えられる形にしておく
-# （#208 のスカウトへの投資でつなぐ。`ScoutingAccuracy`）
-SCOUT_SD = 4.0
-SCOUT_STEP = 5
-# 伸びしろの推定の誤差（標準偏差。点。#308 P2）。今の能力（`SCOUT_SD`）より大きい
-# （伸びしろは試合で見えず、見立てが外れやすい）
-POTENTIAL_SCOUT_SD = 10.0
+# 候補の伸びしろの平均（経路ごと。#308 P2・P3）。AI は推定の伸びしろの大きい候補を上に見るので、指名された新人の
+# 伸びしろは候補より高く出る。上がり方は経路で違う（候補の多い大学は上から取る選び方が効き、ほとんどが指名される
+# 高校は効かない）ので、**指名された日本人の新人**の倍率の平均が**どの経路も**約1.0（年齢曲線を引き直さずに平衡を
+# 保つ条件。「伸びしろは経路で変えない」が指名された新人について成り立つ）になるよう、上の合わせ込みと同じ定常状態の
+# 実測で決めた値（2026-10-25 ユーザー決定 B）。標準偏差と範囲は事前の分布（`estimate.POTENTIAL_SD`・`POTENTIAL_RANGE`）
+POOL_POTENTIAL_MEAN = {AmateurPath.HIGH_SCHOOL: 48.0, AmateurPath.UNIVERSITY: 42.7, AmateurPath.CORPORATE: 46.3}
 # AI の評価: 将来値 + NEED_WEIGHT × その位置の残りの人数（計画した位置のうち、まだ指名していない数）
 NEED_WEIGHT = 2.0
-# 将来値は、この年齢になるまでの見込みの伸び（普通型の伸び＝`aging.expected_change` の積み上げ × 推定の伸びしろの
-# 倍率。`projected_growth`）を足した総合値
-PEAK_AGE = 27
 # 1位の好み（`DraftTaste`。#302）の幅。球団の色は、経路の加点（球団の中で平均0にそろえる前に ±TASTE_ROUTE 点）・
 # 伸びの重み（1 ± TASTE_GROWTH）・投手への加点（±TASTE_PITCHER 点）で、どれも一様。候補ひとりずつへの惚れ込みは
 # 標準偏差 TASTE_LIKING_SD 点の正規。球団の色だけでは際立った候補への集中がほとんど減らなかった（48球団の合成の会議で
@@ -229,7 +217,8 @@ def _draw_prospect(
     used_names: set[str],
     development: bool = False,
 ) -> Prospect:
-    """候補ひとり。伸びしろは候補の番号ごとの乱数（`draft-potential-<番号>`）から、平均 `POOL_POTENTIAL_MEAN` で引く
+    """候補ひとり。伸びしろは候補の番号ごとの乱数（`draft-potential-<番号>`）から、
+    経路の平均 `POOL_POTENTIAL_MEAN` で引く
     （`rng` の流れに足さないので、名前・経歴・今の能力・成長型は伸びしろを足す前と同じ）。
     """
     if path is None:
@@ -239,7 +228,6 @@ def _draw_prospect(
     rookie = draw_rookie(
         rng,
         position,
-        foreign=False,
         year=year,
         used_names=used_names,
         path=path,
@@ -247,7 +235,7 @@ def _draw_prospect(
         rating_sd=POOL_RATING_SD,
     )
     rookie = with_drawn_potential(
-        rookie, world_seed=world_seed, year=year, key=f"draft-potential-{key}", mean=POOL_POTENTIAL_MEAN
+        rookie, world_seed=world_seed, year=year, key=f"draft-potential-{key}", mean=POOL_POTENTIAL_MEAN[path]
     )
     age = rookie.profile.age(date(year + 1, SEASON_START_MONTH, 1))
     assert age is not None, "候補は生年月日を持つ"
@@ -279,15 +267,6 @@ def draw_pool(
 
 
 @dataclass(frozen=True)
-class ScoutingAccuracy:
-    """スカウトの推定の精度（誤差の標準偏差）。今の能力の項目は `sd`、伸びしろは `potential_sd`。
-    いまは全球団 `SCOUT_SD`・`POTENTIAL_SCOUT_SD`。#208 で球団ごとの値をここに渡す。"""
-
-    sd: float = SCOUT_SD
-    potential_sd: float = POTENTIAL_SCOUT_SD
-
-
-@dataclass(frozen=True)
 class ScoutingReport:
     """球団のスカウトが見た候補（`scouting_report`）。
 
@@ -299,37 +278,11 @@ class ScoutingReport:
     potential: Potential
 
 
-_NOISE_WORDS = struct.Struct(">16I")
-_TWO_PI = 2.0 * math.pi
-
-
 def _scout_noise(world_seed: int, year: int, team_id: int, key: int, count: int) -> list[float]:
     """推定の誤差（標準正規）を `count` 個（8個まで）。種は「世界・年・候補・見る球団」。
 
     添字ごとに決まる（`count` を増やしても前の添字の値は変わらない）。"""
-    return _hash_normals(f"{world_seed}:{year}:draft-scout-{team_id}-{key}", count)
-
-
-def _hash_words(text: str) -> tuple[int, ...]:
-    """`text` の hash を32ビットの整数16個に分けたもの（乱数源を作らずに引く乱数の元）。"""
-    return _NOISE_WORDS.unpack(hashlib.blake2b(text.encode(), digest_size=64).digest())
-
-
-def _hash_normals(text: str, count: int) -> list[float]:
-    """`text` を種にした標準正規（Box–Muller 法）を `count` 個（8個まで）。
-
-    乱数源を作らずに hash から引く（1会議で 球団数 × 候補 ＝ 8リーグで約4.6万回引くため）。
-    """
-    words = _hash_words(text)
-    scale = 2.0**-32
-    return [
-        math.sqrt(-2.0 * math.log(1.0 - words[2 * index] * scale)) * math.cos(_TWO_PI * words[2 * index + 1] * scale)
-        for index in range(count)
-    ]
-
-
-def _rounded(value: float) -> int:
-    return min(RATING_MAX, max(RATING_MIN, SCOUT_STEP * round(value / SCOUT_STEP)))
+    return hash_normals(f"{world_seed}:{year}:draft-scout-{team_id}-{key}", count)
 
 
 def scouting_report(
@@ -347,15 +300,32 @@ def scouting_report(
     推定の能力は成長型が普通で伸びしろを持たない（隠し値を見せない）。伸びしろの無い候補（ふつうは無い）は普通として見る。
     """
     ratings = prospect.rookie.ratings
+    noise = _scout_noise(world_seed, year, team_id, prospect.key, len(ratings.LABELS) + 1)
+    return scout_with_noise(ratings, noise, accuracy=accuracy)
+
+
+def scout_noise(text: str, ratings: Ratings) -> list[float]:
+    """`ratings` を見る推定の誤差（標準正規。項目の数 + 伸びしろの1つ）。種は用途を表す文字列 `text`。
+
+    会議の外の候補（外国人の獲得の候補。`foreign_market.py`）が、会議の候補と種の重ならない用途で見るのに使う。
+    """
+    return hash_normals(text, len(ratings.LABELS) + 1)
+
+
+def scout_with_noise(
+    ratings: Ratings,
+    noise: Sequence[float],
+    *,
+    accuracy: ScoutingAccuracy = ScoutingAccuracy(),  # noqa: B008  不変の値（frozen）なので既定値に置いてよい
+) -> ScoutingReport:
+    """真の能力 `ratings` に誤差 `noise`（項目の宣言の順、続けて伸びしろ）を足した推定（`scouting_report` の本体）。"""
     labels = ratings.LABELS
-    noise = _scout_noise(world_seed, year, team_id, prospect.key, len(labels) + 1)
     values = {
-        name: _rounded(getattr(ratings, name) + accuracy.sd * error)
+        name: rounded_estimate(getattr(ratings, name) + accuracy.sd * error)
         for name, error in zip(labels, noise[: len(labels)], strict=True)
     }
     truth = POTENTIAL_AVERAGE if ratings.potential is None else ratings.potential.value
-    # 伸びしろの推定は5刻みのまま収める（下端を1にすると刻みから外れる）
-    potential = Potential(max(SCOUT_STEP, _rounded(truth + accuracy.potential_sd * noise[len(labels)])))
+    potential = estimated_potential(truth + accuracy.potential_sd * noise[len(labels)])
     # 成長型は既定の普通、伸びしろは既定の None（見せない）
     estimate: Ratings
     if isinstance(ratings, PitcherRatings):
@@ -382,34 +352,8 @@ def scouting_value(ratings: Ratings) -> float:
     打撃だけ（`overall_value`）で選ぶと、指名された新人の守備・走力だけが候補の平均のまま残り、項目の間の
     つり合いが崩れる（錨の前の分布がずれる）。項目をそろえて見るので、合わせ込み（`POOL_RATING_SHIFT`）は全項目に同じだけ効く。
     """
-    names = _judged_items(ratings)
+    names = judged_items(ratings)
     return sum(getattr(ratings, name) for name in names) / len(names)
-
-
-def _judged_items(ratings: Ratings) -> list[str]:
-    """`scouting_value` が見る項目（スタミナを除く）。"""
-    return [name for name in ratings.LABELS if name != "stamina"]
-
-
-@cache
-def growth_to_peak(age: int, position: Position) -> float:
-    """`age` 歳の新人が `PEAK_AGE` 歳になるまでに見込める総合（`scouting_value`）の伸び。
-
-    普通型・伸びしろは普通・ぶれなしで、平均的な能力で測る（伸びしろは `projected_growth` が倍率で掛ける）。
-    """
-    pitcher = position.is_pitcher
-    current: Ratings = mean_ratings(
-        mean=PITCHER_MEAN if pitcher else BATTER_MEAN, position=position, stamina_mean=45.0
-    )
-    curves = PITCHER_CURVES if pitcher else BATTER_CURVES
-    names = _judged_items(current)
-    values = {name: float(getattr(current, name)) for name in names}
-    for year_age in range(age, PEAK_AGE):
-        for name in names:
-            values[name] += expected_change(
-                curves[name], age=year_age, growth=GrowthType.NORMAL, value=round(values[name])
-            )
-    return sum(_clamp(values[name]) - getattr(current, name) for name in names) / len(names)
 
 
 def _clamp(value: float) -> int:
@@ -417,10 +361,12 @@ def _clamp(value: float) -> int:
 
 
 def projected_growth(prospect: Prospect, report: ScoutingReport) -> float:
-    """見込みの伸び: `PEAK_AGE` 歳までの普通の伸び（`growth_to_peak`）× 推定の伸びしろの倍率。
+    """候補の見込みの伸び: `PEAK_AGE` 歳までの普通の伸び（`outlook.growth_to_peak`）× 推定の伸びしろの倍率。
 
-    **見込みの伸びの唯一の出典**（将来値・1位の好み・見込みの区分が使う）。成長の式（`aging.expected_change`）と同じく、
-    伸びしろは伸びの大きさだけに効く（75以上の半減は見ない近似。新人は平均より低く入るので届かない）。
+    **候補の見込みの伸びの唯一の出典**（将来値・1位の好み・見込みの区分が使う）。伸びの出典は在籍の選手の見込みと同じ
+    `outlook.item_growth_to_peak` で、物差しは候補を見比べる総合（`scouting_value`）。
+    成長の式（`aging.expected_change`）と同じく、伸びしろは伸びの大きさだけに効く
+    （75以上の半減は見ない近似。新人は平均より低く入るので届かない）。
     """
     return growth_to_peak(prospect.age, prospect.position) * report.potential.multiplier
 
@@ -433,7 +379,7 @@ def future_value(prospect: Prospect, report: ScoutingReport) -> float:
 def projected_grade(prospect: Prospect, report: ScoutingReport) -> RatingGrade:
     """見込みの区分（S〜G）。将来値（`future_value`）を丸めて能力の区分（`RatingGrade`）で引く。
 
-    画面（D3 の会議・P3 の自軍の選手）に出すのはこの区分で、伸びしろの値も倍率も見せない。
+    画面（D3 の会議）に出すのはこの区分で、伸びしろの値も倍率も見せない（在籍の選手の区分は `outlook.outlook_grade`）。
     """
     return RatingGrade.from_value(_clamp(future_value(prospect, report)))
 
@@ -469,12 +415,12 @@ class DraftTaste:
 
 
 # 日本人の経路（`DraftRoute` の並びのまま。並びは hash から引く乱数の位置に対応するので、変えると全球団の好みが変わる）
-_TASTE_ROUTES = tuple(route for route in DraftRoute if route is not DraftRoute.FOREIGN)
+_TASTE_ROUTES = tuple(DraftRoute)
 
 
 def draft_taste(world_seed: int, team_id: int) -> DraftTaste:
     """球団 `team_id` の好み。種は「世界・球団」（年に依らない）。乱数源を作らずに hash から一様に引く。"""
-    words = _hash_words(f"{world_seed}:draft-taste-{team_id}")
+    words = hash_words(f"{world_seed}:draft-taste-{team_id}")
     uniform = [2.0 * word * 2.0**-32 - 1.0 for word in words]  # [-1, 1)
     count = len(_TASTE_ROUTES)
     raw = [TASTE_ROUTE * value for value in uniform[:count]]
@@ -491,7 +437,7 @@ def draft_liking(world_seed: int, year: int, team_id: int, prospect_key: int) ->
 
     スカウトの推定（`scouting_report`）とは別の値で、見立ての誤差ではなく球団の好み（1巡目の評価にだけ足す）。
     """
-    return TASTE_LIKING_SD * _hash_normals(f"{world_seed}:{year}:draft-liking-{team_id}-{prospect_key}", 1)[0]
+    return TASTE_LIKING_SD * hash_normals(f"{world_seed}:{year}:draft-liking-{team_id}-{prospect_key}", 1)[0]
 
 
 @dataclass(frozen=True)
@@ -500,7 +446,7 @@ class DraftSlot:
 
     - `minimum`・`maximum`: 指名する日本人の人数の幅。AI は最多まで指名する。最少に届けば自分の番で選択終了できる
     - `planned`: AI が埋める位置（`draft.plan_team_draft` の日本人の位置）
-    - `base_counts`: 会議の前の支配下の位置ごとの人数に、外国人の新人の位置を足したもの（位置の最低人数の検査に使う）
+    - `base_counts`: 会議の前の支配下の位置ごとの人数に、獲得した外国人の位置を足したもの（位置の最低人数の検査に使う）
     - `development_planned`: 育成の巡で AI が埋める位置（`draft.plan_team_draft` の育成の位置）
     - `development_max`: 育成の巡で指名できる最多（AI は計画の人数。D3 で GM の球団は
       `MAX_DEVELOPMENT_PICKS` を写す）。
@@ -523,6 +469,7 @@ class DraftSlot:
 
     @classmethod
     def of(cls, team: DraftTeam, plan: TeamDraftPlan) -> DraftSlot:
+        """球団の計画から。位置の最低人数は、会議の前の支配下に獲得した外国人を足して数える。"""
         base = Counter({position: team.position_counts.get(position, 0) for position in MIN_BY_POSITION})
         base.update(plan.foreign_positions)
         return cls(
@@ -719,18 +666,17 @@ class DraftState:
         counts.update(self._positions.get(team_id, Counter()))
         if position is not None:
             counts[position] += 1
-        return sum(max(0, minimum - counts[pos]) for pos, minimum in MIN_BY_POSITION.items())
+        return position_shortfall(counts)
 
     def position_allowed(self, team_id: int, position: Position) -> bool:
-        """位置の最低人数の硬い制約（AI も GM も）。足りない位置はいつでも選べ、ほかの位置は、残りの指名で
-        最低人数に届く間だけ選べる（今までの自動ドラフト `choose_positions` が守っていた保証）。
+        """位置の最低人数の硬い制約（AI も GM も。規則は `draft.keeps_position_minimum`）。
         育成の巡はどの位置も選べる（位置の最低人数は支配下の話）。"""
         if self.is_development:
             return True
-        before = self.shortfall_after(team_id, None)
-        after = self.shortfall_after(team_id, position)
+        counts = Counter(self.slots[team_id].base_counts)
+        counts.update(self._positions.get(team_id, Counter()))
         remaining = self.slots[team_id].maximum - self._picked[team_id] - 1
-        return after < before or after <= remaining
+        return keeps_position_minimum(counts, position, remaining)
 
     # --- 1手ずつ進める ---
 
@@ -992,17 +938,20 @@ def run_draft(
     world_seed: int,
     used_names: set[str],
     actions: Sequence[DraftAction] = (),
+    signed: Mapping[int, Sequence[Position]] | None = None,
 ) -> DraftResult:
     """締める年 `year` の会議を開き、`actions`（D3 で保存した行動）を当ててから残りを AI で進め、新人を作る。
 
-    `teams` は引退・戦力外の後の球団（球団 id の昇順に処理する）。`used_names` は世界の全選手の名前で、
-    候補と外国人の新人の名前を足していく。外国人は球団ごとの乱数（`draft-<球団 id>`、年は翌年）で会議の外で作る。
+    `teams` は引退・戦力外・外国人の獲得の後の球団（球団 id の昇順に処理する）。`signed` は球団ごとの、会議の前に
+    獲得した外国人の位置（`foreign_market.OffseasonSignings.signed_positions`。日本人の人数と位置から除く）。
+    `used_names` は世界の全選手の名前で、候補の名前を足していく。新人の背番号は球団ごとの乱数（`draft-<球団 id>`、
+    年は翌年）で引く。
     """
     ordered = sorted(teams, key=lambda team: team.team_id)
     missing = {team.team_id for team in ordered} - context.standings.team_ids
     if missing:
         raise ValueError(f"最終順位に無い球団があります（{sorted(missing)}）。")
-    plans = {team.team_id: plan_team_draft(team) for team in ordered}
+    plans = {team.team_id: plan_team_draft(team, (signed or {}).get(team.team_id, ())) for team in ordered}
     slots = [DraftSlot.of(team, plans[team.team_id]) for team in ordered]
     planned = Counter(position for slot in slots for position in slot.planned)
     pool = draw_pool(planned, world_seed=world_seed, year=year, used_names=used_names)
@@ -1015,15 +964,5 @@ def run_draft(
     draftees: list[Draftee] = []
     for team in ordered:
         rng = make_random(game_seed(world_seed, year + 1, f"draft-{team.team_id}"))
-        draftees.extend(
-            club_draftees(
-                rng,
-                team,
-                plans[team.team_id],
-                drafted=drafted[team.team_id],
-                year=year,
-                world_seed=world_seed,
-                used_names=used_names,
-            )
-        )
+        draftees.extend(club_draftees(rng, team, plans[team.team_id], drafted=drafted[team.team_id]))
     return DraftResult(draftees=tuple(draftees), lotteries=tuple(state.lotteries), state=state)

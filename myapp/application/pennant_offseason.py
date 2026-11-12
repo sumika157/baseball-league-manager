@@ -1,4 +1,9 @@
-"""ペナントのシーズンを締める（オフ）。引退・戦力外・ドラフト・成長と衰え・編成の後始末・翌年の日程を、1つの操作にまとめる。
+"""ペナントのシーズンを締める（オフ）。引退・戦力外・外国人の獲得・ドラフト・成長と衰え・編成の後始末・翌年の日程を、
+1つの操作にまとめる。
+
+外国人の獲得（#169）は、戦力外の後・ドラフト会議の前に、AI が球団ごとの候補から選ぶ
+（`domain/pennant/foreign_market.py`。GM の指名は F2）。獲得した外国人は翌年 Y+1 から新外国人として加入し、
+前所属の区分をプロフィールに保存する。
 
 ドラフトは世界で1回の会議（`domain/pennant/draft_meeting.py`。#198）で、指名順は世界の規則（`World.draft_order_rule`）と
 締める年の**公式戦の最終順位**（`LeagueFinishReader`。NPB の「球団順位」は公式戦の年度順位で、CS・日本シリーズの
@@ -58,6 +63,7 @@ from ..domain.pennant.championship import Championship
 from ..domain.pennant.club_plan import ClubMember, PlanSection
 from ..domain.pennant.draft_meeting import DraftContext
 from ..domain.pennant.draft_order import DraftOrderRule, DraftStandings
+from ..domain.pennant.foreign_market import ForeignSigning
 from ..domain.pennant.offseason import Draftee, OffseasonClub, OffseasonPlan, OffseasonPlayer, plan_offseason
 from ..domain.pennant.offseason_player import TrackRecord
 from ..domain.pennant.postseason import PostseasonFormat, PostseasonStatus
@@ -97,11 +103,13 @@ def _saved_id(value: int | None) -> int:
 
 @dataclass
 class _RosterChange:
-    """メモリの上で引退・戦力外・新人を反映した球団（保存はまだ）。`added` と `draftees` は同じ並び。"""
+    """メモリの上で引退・戦力外・獲得した外国人・新人を反映した球団（保存はまだ）。
+
+    `added` と `newcomers` は同じ並び。"""
 
     team: Team
     added: list[Player]
-    draftees: list[Draftee]
+    newcomers: list[ForeignSigning | Draftee]
 
 
 @dataclass
@@ -504,10 +512,10 @@ class PennantOffseasonService:
         rookie_ratings: list[PlayerRatings] = []
         for change in prepared.changes:
             self._teams.save(change.team)
-            # 保存すると新人に id が入る。その id で翌年の能力と結びつける
+            # 保存すると新人と獲得した外国人に id が入る。その id で翌年の能力と結びつける
             rookie_ratings.extend(
-                PlayerRatings(player_id=_saved_id(player.id), year=year + 1, ratings=draftee.ratings)
-                for player, draftee in zip(change.added, change.draftees, strict=True)
+                PlayerRatings(player_id=_saved_id(player.id), year=year + 1, ratings=newcomer.ratings)
+                for player, newcomer in zip(change.added, change.newcomers, strict=True)
             )
         retained = [change.after for change in plan.retained]
         self._ratings.add_all([*retained, *rookie_ratings])
@@ -528,7 +536,7 @@ class PennantOffseasonService:
             retired_count=len(plan.retired),
             released_count=len(plan.released),
             draftee_count=len(plan.draftees),
-            foreign_draftee_count=sum(1 for draftee in plan.draftees if draftee.is_foreign),
+            signed_foreign_count=len(plan.signings),
             development_draftee_count=sum(1 for draftee in plan.draftees if draftee.is_development),
             first_round_lottery_count=sum(
                 1 for lottery in plan.lotteries if lottery.round_number == 1 and not lottery.is_development
@@ -542,7 +550,9 @@ class PennantOffseasonService:
     def _apply_roster_changes(
         self, teams: list[Team], plan: OffseasonPlan, limits: Mapping[int | None, RosterLimits], year: int
     ) -> list[_RosterChange]:
-        """引退・戦力外と新人を集約の操作でメモリの上に反映する（保存は `_commit`）。変わった球団だけ返す。"""
+        """引退・戦力外・獲得した外国人・新人を集約の操作でメモリの上に反映する（保存は `_commit`）。
+
+        変わった球団だけ返す。"""
         retired = set(plan.retired)
         released = set(plan.released)
         next_year = year + 1
@@ -552,7 +562,8 @@ class PennantOffseasonService:
             retiring = [player for player in team.active_players if player.id in retired]
             releasing = [player for player in team.active_players if player.id in released]
             draftees = [draftee for draftee in plan.draftees if draftee.team_id == team_id]
-            if not retiring and not releasing and not draftees:
+            signings = [signing for signing in plan.signings if signing.team_id == team_id]
+            if not retiring and not releasing and not draftees and not signings:
                 continue
             # 引退と戦力外を先に済ませ、在籍を Y で閉じて退団の経路を記録する（空いた背番号を新人へ渡せる）
             for player in retiring:
@@ -561,13 +572,27 @@ class PennantOffseasonService:
                 team.release_player(player, year=year)
             added: list[Player] = []
             team_limits = _limits_of(team, limits)
+            # 獲得した外国人を新人の前に（獲得はドラフト会議の前。#169）。翌年から支配下・新外国人で加入する。
+            # 前所属の区分はプロフィールに入っている（`ForeignSigning.profile`）。外国人の保有の人数は縛らない
+            # （協約第82条の2。ゲームの上限 `foreign_market.MAX_FOREIGN_HELD` は domain が獲得の前に検査した）
+            for signing in signings:
+                player = team.add_player(
+                    signing.name,
+                    JerseyNumber(signing.number),
+                    signing.position,
+                    from_year=next_year,
+                    contract=signing.contract,
+                    acquired_via=signing.acquisition_route,
+                    limits=team_limits,
+                )
+                player.profile = signing.profile
+                added.append(player)
             for draftee in draftees:
-                # 新人は契約区分（本指名・外国人は支配下、育成ドラフトは育成。`Draftee.contract`）と入団の経路
-                # （ドラフト / 育成ドラフト / 新外国人）を記録する。区分と背番号・経路の食い違いと支配下の上限は
+                # 新人は契約区分（本指名は支配下、育成ドラフトは育成。`Draftee.contract`）と入団の経路
+                # （ドラフト / 育成ドラフト）を記録する。区分と背番号・経路の食い違いと支配下の上限は
                 # 集約が検査する
                 # （人数は domain の `draftee_count` が上限を超えないように決めるので、ここでは失敗しない。
                 # 育成は上限に数えない）。
-                # 外国人の保有の人数は縛らない（協約第82条の2。外国人枠は1軍の登録にかかる）。
                 # 加入年は、ドラフトの指名があれば「入団はドラフトの翌年」の出典（`DraftPick.entry_year`）から
                 pick = draftee.profile.draft
                 player = team.add_player(
@@ -581,7 +606,7 @@ class PennantOffseasonService:
                 )
                 player.profile = draftee.profile
                 added.append(player)
-            changes.append(_RosterChange(team=team, added=added, draftees=draftees))
+            changes.append(_RosterChange(team=team, added=added, newcomers=[*signings, *draftees]))
         return changes
 
     def _revert_plans(self, plan: OffseasonPlan, world: World) -> tuple[tuple[PlanSection, ...], int]:

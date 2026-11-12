@@ -39,7 +39,7 @@ from myapp.domain.value_objects import (
     PitchingLine,
     Position,
 )
-from myapp.tests.domain.test_release import START_YEAR, YEAR, member, releases, roster
+from myapp.tests.domain.test_release import SEED, START_YEAR, YEAR, member, releases, roster
 
 TEAM = 1
 OTHER = 2
@@ -145,8 +145,8 @@ class CreditInReleasesTest(unittest.TestCase):
         plain = member(1, value=45, age=33)
         veteran = replace(plain, track_record=TrackRecord(seasons=8, hits=900))
         self.assertAlmostEqual(
-            keep_value(veteran, year=YEAR, start_year=START_YEAR)
-            - keep_value(plain, year=YEAR, start_year=START_YEAR),
+            keep_value(veteran, team_id=TEAM, year=YEAR, start_year=START_YEAR, world_seed=SEED)
+            - keep_value(plain, team_id=TEAM, year=YEAR, start_year=START_YEAR, world_seed=SEED),
             track_record_credit(veteran.track_record),
         )
 
@@ -176,7 +176,7 @@ class CreditInReleasesTest(unittest.TestCase):
             member(102, position=Position.PITCHER, value=value, age=30, foreign=True),
             track_record=TrackRecord(seasons=5, wins=60),
         )
-        self.assertGreater(keep_value(star, year=YEAR, start_year=START_YEAR), prospect)
+        self.assertGreater(keep_value(star, team_id=TEAM, year=YEAR, start_year=START_YEAR, world_seed=SEED), prospect)
         self.assertEqual(releases([*roster(55), newcomer, star]), (101, 102))
 
     def test_titles_count_in_the_foreign_replacement(self) -> None:
@@ -190,8 +190,8 @@ class CreditInReleasesTest(unittest.TestCase):
             track_record=TrackRecord(seasons=5, wins=60, titles=titles),
         )
         self.assertAlmostEqual(
-            foreign_value(champion, year=YEAR, start_year=START_YEAR),
-            ability_value(champion, year=YEAR, start_year=START_YEAR)
+            foreign_value(champion, team_id=TEAM, year=YEAR, start_year=START_YEAR, world_seed=SEED),
+            ability_value(champion, team_id=TEAM, year=YEAR, start_year=START_YEAR, world_seed=SEED)
             + min(MAX_TRACK_RECORD_CREDIT, title_credit(champion.track_record)),
         )
         self.assertEqual(releases([*roster(55), newcomer, champion]), (101,))
@@ -201,8 +201,8 @@ class CreditInReleasesTest(unittest.TestCase):
             member(102, position=Position.PITCHER, value=40, age=30, foreign=True), track_record=TrackRecord(titles=50)
         )
         self.assertAlmostEqual(
-            foreign_value(legend, year=YEAR, start_year=START_YEAR)
-            - ability_value(legend, year=YEAR, start_year=START_YEAR),
+            foreign_value(legend, team_id=TEAM, year=YEAR, start_year=START_YEAR, world_seed=SEED)
+            - ability_value(legend, team_id=TEAM, year=YEAR, start_year=START_YEAR, world_seed=SEED),
             MAX_TRACK_RECORD_CREDIT,
         )
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import math
 import random
+import struct
 from collections.abc import Sequence
 from typing import Protocol
 
@@ -69,3 +70,27 @@ def weighted_index(rng: GameRandom, weights: Sequence[float]) -> int:
         if threshold < running:
             return index
     return len(weights) - 1
+
+
+_HASH_WORDS = struct.Struct(">16I")
+_TWO_PI = 2.0 * math.pi
+
+
+def hash_words(text: str) -> tuple[int, ...]:
+    """`text` の hash を32ビットの整数16個に分けたもの（乱数源を作らずに引く乱数の元）。"""
+    return _HASH_WORDS.unpack(hashlib.blake2b(text.encode(), digest_size=64).digest())
+
+
+def hash_normals(text: str, count: int) -> list[float]:
+    """`text` を種にした標準正規（Box–Muller 法）を `count` 個（8個まで）。添字ごとに決まる
+    （`count` を増やしても前の添字の値は変わらない）。
+
+    乱数源を作らずに hash から引く（ドラフト会議の推定は1会議で 球団数 × 候補 ＝ 8リーグで約4.6万回引くため）。
+    スカウトの推定（ドラフトの候補と、在籍の選手の伸びしろ）が使う。
+    """
+    words = hash_words(text)
+    scale = 2.0**-32
+    return [
+        math.sqrt(-2.0 * math.log(1.0 - words[2 * index] * scale)) * math.cos(_TWO_PI * words[2 * index + 1] * scale)
+        for index in range(count)
+    ]

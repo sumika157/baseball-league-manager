@@ -101,7 +101,7 @@
   {% comment %}
     プロフィール。基本情報と同じフォーム・同じ「更新する」で保存する（決定4）。
     隠し欄は節の目印で、これがある送信でだけプロフィールを更新する（欄を持たない送信でプロフィールを空にしない）。
-    選択肢（投打）はフォームがドメインの Handedness から作る。
+    選択肢（投打・前所属）はフォームがドメインの Handedness・ForeignBackground から作る。
   {% endcomment %}
   <input type="hidden" name="{{ profile_section_marker }}" value="1" />
   <div class="card mb-3">
@@ -144,6 +144,10 @@
         <div class="col-md-6">
           <label class="form-label" for="{{ profile_form.nationality.id_for_label }}">{{ profile_form.nationality.label }}</label>
           {{ profile_form.nationality }}
+        </div>
+        <div class="col-md-6">
+          <label class="form-label" for="{{ profile_form.foreign_background.id_for_label }}">{{ profile_form.foreign_background.label }}</label>
+          {{ profile_form.foreign_background }}
         </div>
         <div class="col-12">
           <div class="form-check">
@@ -269,7 +273,7 @@
       <form method="POST">
         {% csrf_token %}
         <button type="submit" name="retire" value="1" class="btn btn-outline-danger"
-                onclick="return confirm('{{ player.name }} 選手を退団にします。成績は残り、背番号は再利用できるようになります。よろしいですか?')">
+                onclick="return confirm('{{ player.name|escapejs }} 選手を退団にします。成績は残り、背番号は再利用できるようになります。よろしいですか?')">
           退団にする
         </button>
       </form>

@@ -145,7 +145,7 @@ class ReleaseMessageAndResultTest(ReleaseCase):
             response = self.post_close()
 
         told = " ".join(str(message) for message in get_messages(response.wsgi_request))
-        self.assertIn("引退 0人・戦力外 2人・新人", told)
+        self.assertIn("引退 0人・戦力外 2人・新外国人", told)
 
     def test_the_result_lists_released_players_as_released(self):
         released = self.managed_players(2)[1:]

@@ -1,9 +1,10 @@
 """シーズンを締めるときの計算。**純粋な関数**で、DB にも Django にも触れない。
 
-    引退を決める → 球団ごとに戦力外（`release.py`。ここまでが `plan_departures`）→ 球団ごとの新人の人数と位置・
-    外国人（`draft.py`）→ ドラフト会議（`draft_meeting.py`。全球団の日本人の新人。本指名の後に育成の巡）→
+    引退を決める → 球団ごとに戦力外（`release.py`。ここまでが `plan_departures`）→ 外国人の獲得
+    （`foreign_market.py`。補う人数は `draft.py`、選ぶ位置は戦力の穴）→ ドラフト会議（`draft_meeting.py`。全球団の
+    日本人の新人。人数は新人の人数 − 獲得した外国人。本指名の後に育成の巡）→
     残る選手の能力を1年ぶん進める（伸びしろの無い選手には先に引いて付ける。`with_filled_potential`）→
-    残る選手と新人をまとめて、項目ごとに水準の錨をかける（写像は支配下で決め、
+    残る選手・新人・獲得した外国人をまとめて、項目ごとに水準の錨をかける（写像は支配下で決め、
     育成にも同じ写像を当てる）
 
 結果は `OffseasonPlan`（何を書くかの計画）。書くのは呼び出し側（application）で、ここは読み取った
@@ -21,23 +22,23 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from math import sqrt
 
-from ..simulation.estimate import draw_potential, with_potential
 from ..simulation.randomness import game_seed, game_uniform, make_random
 from ..simulation.ratings import BatterRatings, PitcherRatings
 from ..simulation.spread import MIN_POPULATION, rescale, spread_ratings, target_mean, target_sd
 from .aging import age_ratings
 from .draft import Draftee, DraftTeam, development_target
 from .draft_meeting import DraftAction, DraftContext, Lottery, run_draft
+from .foreign_market import ForeignSigning, offseason_signings
 from .offseason_player import (
     OffseasonClub,
     OffseasonPlayer,
     Ratings,
     overall_value,
     player_age,
-    retirement_value,
 )
+from .outlook import with_filled_potential
 from .ratings import PlayerRatings
-from .release import decide_releases, releases_as_chosen
+from .release import ability_value, decide_releases, releases_as_chosen
 from .retirement import retirement_chance
 
 
@@ -77,13 +78,20 @@ class OffseasonPlan:
     # AI の戦力外（`release.py`）。引退した選手は含まない。翌年の能力を作らず、錨の母集団にも入れない
     released: tuple[int, ...]
     retained: tuple[RatingChange, ...]
-    # 新人。能力は錨をかけた後の値
+    # 新人（ドラフトの日本人）。能力は錨をかけた後の値
     draftees: tuple[Draftee, ...]
+    # 獲得した外国人（`foreign_market.py`）。能力は錨をかけた後の値。入団は翌年で、経路は新外国人
+    signings: tuple[ForeignSigning, ...]
     # ドラフト会議の入札の重複と抽選の結果（D4 で記録する。いまは締めた結果の件数に使う）
     lotteries: tuple[Lottery, ...]
     # 能力が無いために翌年の能力を作らなかった選手
     without_ratings: tuple[int, ...]
     anchor: AnchorCorrection
+
+    @property
+    def newcomers(self) -> tuple[ForeignSigning | Draftee, ...]:
+        """翌年に加入する選手（獲得した外国人、続けて新人）。"""
+        return (*self.signings, *self.draftees)
 
 
 def rating_change(before: Ratings, after: Ratings) -> float:
@@ -96,13 +104,19 @@ def rating_change(before: Ratings, after: Ratings) -> float:
 def decide_retirements(
     clubs: Sequence[OffseasonClub], *, year: int, world_seed: int, start_year: int
 ) -> tuple[int, ...]:
-    """引退（外国人は退団）する選手の id。球団の並び・選手の並びの順。"""
+    """引退（外国人は退団）する選手の id。球団の並び・選手の並びの順。
+
+    能力は戦力外と同じ「所属球団のスカウトの見立てで見た見込みの能力の総合値」（`release.ability_value`。#308 P3b）。
+    `PEAK_AGE` 歳以上は今の能力の総合値で、#308 より前と同じ確率。
+    """
     retired = []
     for club in clubs:
         for player in club.players:
             chance = retirement_chance(
                 age=player_age(player.profile, year, start_year=start_year),
-                value=retirement_value(player.position, None if player.ratings is None else player.ratings.ratings),
+                value=ability_value(
+                    player, team_id=club.team_id, year=year, start_year=start_year, world_seed=world_seed
+                ),
                 playing_time=player.playing_time,
                 is_foreign=player.profile.is_foreign_player,
                 seasons_as_pro=player.seasons_as_pro(year),
@@ -112,28 +126,12 @@ def decide_retirements(
     return tuple(retired)
 
 
-# 伸びしろの無い選手に引く伸びしろの乱数の「年」。年に依らない種にして、どの年に締めても同じ値を引く
-POTENTIAL_FILL_SEED_YEAR = 0
-
-
-def with_filled_potential(ratings: Ratings, *, player_id: int, world_seed: int) -> Ratings:
-    """伸びしろの無い能力（#308 より前に作った世界の選手）に、事前の分布から伸びしろを引いて付ける。
-
-    締める処理が、翌年の能力を作る前に通す（その年の成長から効き、翌年の行に写る。締める年の行は書き換えない。
-    2026-10-25 ユーザー決定。#308 Q4）。乱数は `potential-<世界の選手 id>` で年に依らない。
-    伸びしろを持つ能力はそのまま。
-    """
-    if ratings.potential is not None:
-        return ratings
-    rng = make_random(game_seed(world_seed, POTENTIAL_FILL_SEED_YEAR, f"potential-{player_id}"))
-    return with_potential(ratings, draw_potential(rng))
-
-
 def _draft_team(club: OffseasonClub, remaining: Sequence[OffseasonPlayer], *, world_seed: int) -> DraftTeam:
     """引退・戦力外の後の球団。人数と位置は支配下だけで数える（育成の捕手がいても、支配下の捕手が足りなければ補う）。
     育成ドラフトの人数と位置は、別に育成だけで数える（目標は `draft.development_target`）。
 
     外国人の人数・背番号・苗字は育成も含める（外国人の目標人数・背番号の重複・背ネームは区分によらない）。
+    戦力（`squad`。外国人の獲得が穴を測る）は支配下の今の能力だけ（育成は1軍に出られない）。
     """
     surnames = Counter(player.profile.back_name.split(".")[-1] for player in remaining if player.profile.back_name)
     return DraftTeam(
@@ -146,6 +144,11 @@ def _draft_team(club: OffseasonClub, remaining: Sequence[OffseasonPlayer], *, wo
         registered_limit=club.registered_player_limit,
         development_counts=dict(Counter(player.position for player in remaining if player.is_development)),
         development_target=development_target(club.team_id, world_seed=world_seed),
+        squad=tuple(
+            (player.position, player.ratings.ratings)
+            for player in remaining
+            if player.is_registered and player.ratings is not None
+        ),
     )
 
 
@@ -254,7 +257,7 @@ def plan_departures(
         # 戦力外は引退の後・ドラフトの前。ドラフトは戦力外の後の人数で数える。手動の球団は指名どおり
         chosen = (manual_releases or {}).get(club.team_id)
         leaving = set(
-            decide_releases(club, remaining, year=year, start_year=start_year)
+            decide_releases(club, remaining, year=year, start_year=start_year, world_seed=world_seed)
             if chosen is None
             else releases_as_chosen(chosen, remaining)
         )
@@ -291,15 +294,20 @@ def plan_offseason(
     )
     retired = departures.retired
     survivors = departures.survivors
+    names = set(used_names)
+    # 外国人の獲得は会議の前（獲得した外国人の分だけ、会議で指名する日本人が減る。#169）
+    market = offseason_signings(departures.draft_teams, year=year, world_seed=world_seed, used_names=names)
     result = run_draft(
-        departures.draft_teams,
+        market.teams,
         draft,
         year=year,
         world_seed=world_seed,
-        used_names=set(used_names),
+        used_names=names,
         actions=draft_actions,
+        signed=market.signed_positions,
     )
     drafted = list(result.draftees)
+    signed = list(market.signings)
     ordered = sorted(clubs, key=lambda club: club.team_id)
 
     aged: list[tuple[int, PlayerRatings, Ratings]] = []
@@ -316,11 +324,15 @@ def plan_offseason(
         aged.append((player.player_id, player.ratings, age_ratings(current, age=age, rng=rng)))
         aged_inside.append(not player.is_development)
 
-    # 残る選手と新人をまとめて、項目ごとに水準の錨をかける（スタミナは別に、締める年の分布を保つ）。
-    # 写像は**支配下**（残る支配下と、本指名・外国人の新人）で決め、育成（残る育成と育成の新人）にも同じ写像を当てる
-    # （毎年の育成の流入で1軍の水準が動かないように。2026-10-12 ユーザー決定。#198 D2）
-    population: list[Ratings] = [ratings for _, _, ratings in aged] + [draftee.ratings for draftee in drafted]
-    inside = aged_inside + [not draftee.is_development for draftee in drafted]
+    # 残る選手・新人・獲得した外国人をまとめて、項目ごとに水準の錨をかける（スタミナは別に、締める年の分布を保つ）。
+    # 写像は**支配下**（残る支配下と、本指名の新人・獲得した外国人）で決め、育成（残る育成と育成の新人）にも
+    # 同じ写像を当てる（毎年の育成の流入で1軍の水準が動かないように。2026-10-12 ユーザー決定。#198 D2）
+    population: list[Ratings] = (
+        [ratings for _, _, ratings in aged]
+        + [draftee.ratings for draftee in drafted]
+        + [signing.ratings for signing in signed]
+    )
+    inside = aged_inside + [not draftee.is_development for draftee in drafted] + [True for _ in signed]
     anchored = anchor_stamina(
         spread_ratings(population, population=inside), _stamina_target(ordered), population=inside
     )
@@ -333,8 +345,13 @@ def plan_offseason(
         )
         for (player_id, before, _), ratings in zip(aged, kept, strict=True)
     )
+    rookies_end = len(aged) + len(drafted)
     draftees = tuple(
-        replace(draftee, ratings=ratings) for draftee, ratings in zip(drafted, anchored[len(aged) :], strict=True)
+        replace(draftee, ratings=ratings)
+        for draftee, ratings in zip(drafted, anchored[len(aged) : rookies_end], strict=True)
+    )
+    signings = tuple(
+        replace(signing, ratings=ratings) for signing, ratings in zip(signed, anchored[rookies_end:], strict=True)
     )
     return OffseasonPlan(
         year=year,
@@ -342,6 +359,7 @@ def plan_offseason(
         released=tuple(sorted(departures.released)),
         retained=retained,
         draftees=draftees,
+        signings=signings,
         lotteries=result.lotteries,
         without_ratings=tuple(without_ratings),
         anchor=anchor_correction([ratings for ratings, counted in zip(population, inside, strict=True) if counted]),

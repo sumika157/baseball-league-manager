@@ -35,6 +35,7 @@ from ..domain.value_objects import (
     ContractStatus,
     ErrorKind,
     FieldingPosition,
+    ForeignBackground,
     ForeignPlayerRules,
     GameTimes,
     Handedness,
@@ -50,6 +51,8 @@ from ..domain.workspace import Visibility
 POSITION_CHOICES = [(position.value, position.value) for position in Position]
 # 投打の選択肢はドメインの Handedness が唯一の出典
 HANDEDNESS_CHOICES = [(label, label) for label in Handedness.labels()]
+# 前所属の選択肢はドメインの ForeignBackground が唯一の出典
+FOREIGN_BACKGROUND_CHOICES = [(item.label, item.label) for item in ForeignBackground]
 # 試合で就いた守備位置。未記録も許すので空の選択肢を先頭に置く
 FIELDING_POSITION_CHOICES = [("", "—")] + [(p.value, p.value) for p in FieldingPosition]
 # 1試合の回数。延長を含めても12回までを入力できるようにする
@@ -110,11 +113,11 @@ PROFILE_SECTION_MARKER = "profile_section"
 
 
 class PlayerProfileForm(forms.Form):
-    """選手のプロフィール（14項目。ドラフトは年・順位・育成の3欄）。すべて任意。
+    """選手のプロフィール（15項目。ドラフトは年・順位・育成の3欄）。すべて任意。
 
     欄の型と長さだけをここで見る。値の規則（身長・体重の上限、ドラフトの年と順位、年の無い順位・育成、
     育成ドラフトと最初の在籍の経路）は domain が出典で、`RosterService.update_player` の中で検査される
-    （管理画面の選手の編集と同じ規則）。投打の選択肢はドメインの `Handedness` が出典。
+    （管理画面の選手の編集と同じ規則）。選択肢は、投打がドメインの `Handedness`、前所属が `ForeignBackground` が出典。
     """
 
     name_kana = forms.CharField(label="よみがな", max_length=PROFILE_TEXT_MAX_LENGTH, required=False)
@@ -135,6 +138,9 @@ class PlayerProfileForm(forms.Form):
     corporate_team = forms.CharField(label="出身社会人チーム", max_length=PROFILE_TEXT_MAX_LENGTH, required=False)
     nationality = forms.CharField(label="国籍", max_length=PROFILE_TEXT_MAX_LENGTH, required=False)
     is_foreign_player = forms.BooleanField(label="外国人選手（外国人枠の対象）", required=False)
+    foreign_background = forms.ChoiceField(
+        label="前所属", choices=[("", "—")] + FOREIGN_BACKGROUND_CHOICES, required=False
+    )
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)

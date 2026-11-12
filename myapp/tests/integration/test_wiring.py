@@ -38,6 +38,7 @@ from myapp.application.pennant_world import PennantWorldService
 from myapp.application.queries import (
     AwardQuery,
     ChampionshipQuery,
+    ClubTenureQuery,
     FieldingTotalsQuery,
     GameListQuery,
     HomeStadiumQuery,
@@ -82,6 +83,7 @@ from myapp.infrastructure import queries, repositories
 from myapp.infrastructure.queries import (
     DjangoAwardQuery,
     DjangoChampionshipQuery,
+    DjangoClubTenureQuery,
     DjangoFieldingTotalsQuery,
     DjangoGameListQuery,
     DjangoHomeStadiumQuery,
@@ -252,6 +254,7 @@ class ProtocolConformanceTest(SimpleTestCase):
         (DjangoWorldSummaryQuery(1), WorldSummaryQuery),
         (DjangoOffseasonQuery(REAL), OffseasonQuery),
         (DjangoRatingsHistoryQuery(REAL), RatingsHistoryQuery),
+        (DjangoClubTenureQuery(REAL), ClubTenureQuery),
         (DjangoHomeStadiumQuery(REAL), HomeStadiumQuery),
         (DjangoWorkspaceAccessQuery(), WorkspaceAccessQuery),
         (DjangoWorkspaceListQuery(), WorkspaceListQuery),
@@ -896,13 +899,14 @@ class ClubServiceScopeTest(SimpleTestCase):
 class ClubDetailsScopeTest(SimpleTestCase):
     """編成画面の詳細は、渡された世界の範囲だけを読む。"""
 
-    SCOPED = ("_stats", "_ratings")
+    SCOPED = ("_stats", "_ratings", "_tenures")
 
     def test_every_dependency_is_fixed_to_the_given_world(self):
         service = build_club_details_service(WORLD7)
         for name in self.SCOPED:
             with self.subTest(dependency=name):
                 self.assertEqual(getattr(service, name)._scope, WORLD7)
+        self.assertEqual(service._world_id, 7, "見込みに使う世界も渡された世界")
 
     def test_the_real_data_has_no_club_details_service(self):
         with self.assertRaises(InvalidWorld):
@@ -912,7 +916,7 @@ class ClubDetailsScopeTest(SimpleTestCase):
 class PennantRatingsScopeTest(SimpleTestCase):
     """能力の表示は、渡された世界の範囲だけを読む。"""
 
-    SCOPED = ("_stats", "_ratings", "_history", "_fixtures", "_context_query")
+    SCOPED = ("_stats", "_ratings", "_history", "_tenures", "_fixtures", "_context_query")
 
     def test_every_dependency_is_fixed_to_the_given_world(self):
         service = build_pennant_ratings_service(WORLD7)
@@ -1073,6 +1077,7 @@ class LedgersAreScopedToTheWorkspaceTest(SimpleTestCase):
             build_pennant_offseason_service,
             build_pennant_ratings_service,
             build_club_service,
+            build_club_details_service,
             build_offseason_view_service,
             build_pennant_postseason_service,
             build_pennant_postseason_view_service,

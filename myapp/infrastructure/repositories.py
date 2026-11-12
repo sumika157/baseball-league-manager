@@ -101,6 +101,7 @@ from ..domain.value_objects import (
     ErrorKind,
     FieldingLine,
     FieldingPosition,
+    ForeignBackground,
     ForeignPlayerRules,
     FreeAgencyKind,
     GameStage,
@@ -696,6 +697,7 @@ def _profile_defaults(profile: Profile) -> dict:
         "name_kana": profile.name_kana,
         "back_name": profile.back_name,
         "is_foreign_player": profile.is_foreign_player,
+        "foreign_background": profile.foreign_background.value if profile.foreign_background else "",
     }
 
 
@@ -715,6 +717,7 @@ def profile_of(row: orm_models.Player) -> Profile:
         name_kana=row.name_kana,
         back_name=row.back_name,
         is_foreign_player=row.is_foreign_player,
+        foreign_background=ForeignBackground.from_label(row.foreign_background),
     )
 
 
@@ -1611,7 +1614,7 @@ def ensure_team_name_free(teams: QuerySet[orm_models.Team], name: str, own_id: i
 def _violates_unique(error: IntegrityError, model: type[models.Model], constraint_names: Sequence[str]) -> bool:
     """`error` が `model` の一意制約（`constraint_names`）の違反か。
 
-    制約の出典は ORM の `Meta.constraints`（0062）。SQLite は違反の文言に制約名ではなく列（「表.列, 表.列」）を
+    制約の出典は ORM の `Meta.constraints`（0063）。SQLite は違反の文言に制約名ではなく列（「表.列, 表.列」）を
     出すので、制約名と、制約の列から組み立てた文言のどちらかを含むかで見る。
     """
     message = str(error)
@@ -1627,7 +1630,7 @@ def _violates_unique(error: IntegrityError, model: type[models.Model], constrain
     return False
 
 
-# 名前の一意制約（0062 と、ペナントの世界の中の一意）。
+# 名前の一意制約（0063 と、ペナントの世界の中の一意）。
 # 保存の前の確認をすり抜けた同時の書き込みは、これで `DuplicateName` に訳す
 _LEAGUE_NAME_CONSTRAINTS = ("unique_workspace_league_name", "unique_world_league_name")
 _STADIUM_NAME_CONSTRAINTS = ("unique_workspace_stadium_name",)

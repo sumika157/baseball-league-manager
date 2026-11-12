@@ -483,7 +483,7 @@ def draw_potential(rng: GameRandom, *, mean: float = POTENTIAL_AVERAGE) -> Poten
 
     N(`mean`, `POTENTIAL_SD`) を丸めて `POTENTIAL_RANGE` に収める。`random()` を 2 回だけ使う（`normal`）。
     `mean` は既定の 50（普通）で、ドラフト会議の候補だけが合わせ込んだ平均
-    （`draft_meeting.POOL_POTENTIAL_MEAN`）を渡す。
+    （`draft_meeting.POOL_POTENTIAL_MEAN`。経路ごと）を渡す。
     呼び出し側は伸びしろ専用の乱数（用途 `potential-…`）を渡し、今の能力・成長型の乱数の流れに引く回数を足さない。
     """
     low, high = POTENTIAL_RANGE

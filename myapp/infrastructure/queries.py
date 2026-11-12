@@ -21,6 +21,8 @@ from ..application.dto import (
     AnalysisRosterRow,
     AwardRow,
     ChampionshipRow,
+    ClubStint,
+    ClubTenure,
     ContractFacts,
     DeclarationFact,
     FaSubject,
@@ -88,6 +90,7 @@ from ..domain.value_objects import (
     DepartureRoute,
     FieldingLine,
     FieldingPosition,
+    ForeignBackground,
     FreeAgencyKind,
     GameStage,
     Handedness,
@@ -1382,6 +1385,7 @@ _OFFSEASON_STINT_FIELDS = (
     "player__position",
     "player__birth_date",
     "player__is_foreign_player",
+    "player__foreign_background",
     "player__high_school",
     "player__university",
     "player__corporate_team",
@@ -1454,6 +1458,7 @@ class DjangoOffseasonQuery:
                 university=row["player__university"],
                 corporate_team=row["player__corporate_team"],
                 is_foreign_player=row["player__is_foreign_player"],
+                foreign_background=ForeignBackground.from_label(row["player__foreign_background"]),
                 draft=draft_of(
                     row["player__draft_year"],
                     row["player__draft_round"],
@@ -1540,6 +1545,33 @@ class DjangoRatingsHistoryQuery:
             spans=tuple(TeamSpan(team_id, name, from_year, to_year) for team_id, name, from_year, to_year in spans),
             ratings=tuple(DjangoRatingsRepository(self._scope).find_by_player(player_id)),
         )
+
+
+class DjangoClubTenureQuery:
+    """ClubTenureQuery の Django ORM 実装。球団の在籍と選手を1本のクエリで読む（選手の人数によらない）。"""
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def for_players(self, team_id: int, player_ids: Sequence[int]) -> dict[int, ClubTenure]:
+        if not player_ids:
+            return {}
+        rows = (
+            stints_in(self._scope)
+            .filter(team_id=team_id, player_id__in=list(player_ids))
+            .select_related("player")
+            .order_by("player_id", "from_year")
+        )
+        result: dict[int, ClubTenure] = {}
+        for player_id, group in groupby(rows, key=lambda stint: stint.player_id):
+            stints = list(group)
+            player = stints[0].player
+            result[player_id] = ClubTenure(
+                position=Position.from_label(player.position),
+                profile=profile_of(player),
+                stints=tuple(ClubStint(team_id, stint.from_year, stint.to_year) for stint in stints),
+            )
+        return result
 
 
 def _contract_facts(stint: orm_models.PlayerStint) -> ContractFacts:

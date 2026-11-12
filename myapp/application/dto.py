@@ -695,6 +695,8 @@ class PlayerProfile:
     nationality: str = ""
     # 外国人枠の対象か。国籍（事実）とは別の概念なので独立して持つ
     is_foreign_player: bool = False
+    # 前所属の区分（`ForeignBackground.label`。#169）。無ければ空
+    foreign_background: str = ""
     # ドラフトの表記（「2019年ドラフト1位」。`DraftPick.label`）。ドラフトを経ていない選手は空
     draft_label: str = ""
     # プロ入り前の経歴。(区分, 名称) を通った順に並べたもの
@@ -1102,12 +1104,12 @@ class FreeAgentDeclarationRow:
 
 @dataclass(frozen=True)
 class ProfileInput:
-    """選手のプロフィールの入力（14項目。ドラフトは年・順位・育成の3欄）。
+    """選手のプロフィールの入力（15項目。ドラフトは年・順位・育成の3欄）。
 
     選手の編集画面のフォームが作って `RosterService.update_player` に渡し、編集画面の初期値として
     `PlayerDetail.profile` でも返す。値の検査（身長の上限・ドラフトの年など）は application が
     domain の `Profile`・`DraftPick` を組み立てるときに行う（`application/player_profile.py`）。
-    投打は表記（「右」など）で、空は未設定。
+    投打と前所属は表記（「右」「マイナー」など）で、空は未設定。
     """
 
     name_kana: str = ""
@@ -1126,6 +1128,7 @@ class ProfileInput:
     corporate_team: str = ""
     nationality: str = ""
     is_foreign_player: bool = False
+    foreign_background: str = ""
 
 
 @dataclass(frozen=True)
@@ -2050,12 +2053,30 @@ class RatingCell:
 
 
 @dataclass(frozen=True)
+class OutlookCell:
+    """受け持つ球団の選手の「見込み」（#308 P3）。`peak_age` 歳ごろの総合の見込みを、球団のスカウトの見立てで見た区分。
+
+    区分と目立たせ方だけを持ち、見込みの数値も伸びしろも持たない（隠し値を見せない）。
+    `grade` が None なのは `peak_age` 歳以上の選手（見込み＝今の能力。画面は「—」）。
+    区分は domain の `outlook.outlook_grade` が出典で、写すだけ。
+    """
+
+    grade: str | None
+    emphasis: RatingEmphasis
+    peak_age: int
+
+
+@dataclass(frozen=True)
 class PlayerRatingsCard:
-    """選手ページの「能力（年度）」カード。成長型は隠し値なので持たない。"""
+    """選手ページの「能力（年度）」カード。成長型・伸びしろは隠し値なので持たない。
+
+    `outlook` は受け持つ球団に在籍する選手だけ（ほかの球団の選手・受け持つ球団の無い世界は None）。
+    """
 
     year: int
     is_pitcher: bool
     cells: tuple[RatingCell, ...]
+    outlook: OutlookCell | None = None
 
 
 @dataclass(frozen=True)
@@ -2108,10 +2129,11 @@ class SeasonClosed:
     retired_count: int
     # AI の戦力外の人数（引退した選手を含まない）
     released_count: int
-    # 新人の人数（育成を含む）と、そのうち外国人・育成ドラフトの人数
+    # 新人（ドラフトの日本人）の人数（育成を含む）と、そのうち育成ドラフトの人数
     draftee_count: int
-    foreign_draftee_count: int
     development_draftee_count: int
+    # 獲得した外国人（新外国人）の人数（#169）
+    signed_foreign_count: int
     # ドラフト会議の本指名の1巡目の入札の重複（抽選）の件数（外れ1位の再入札の抽選も数える。入札の無い規則は0）
     first_round_lottery_count: int
     # 翌年の能力を作らなかった選手の数（締める年の能力が無かった選手）
@@ -2231,10 +2253,10 @@ class OffseasonRookieRow:
     position: str
     # 翌年の開幕時点の満年齢
     age: int | None
-    # 高校・大学・社会人・外国人
+    # 高校・大学・社会人、獲得した外国人は「新外国人（前所属）」
     route: str
     rating: RatingCell | None
-    # ドラフトの指名の順位（「1位」。`DraftPick.order_label`）。外国人など指名の無い新人は空
+    # ドラフトの指名の順位（「1位」。`DraftPick.order_label`）。獲得した外国人など指名の無い選手は空
     pick: str = ""
 
 
@@ -2290,6 +2312,29 @@ class TeamSpan:
     team_name: str
     from_year: int
     to_year: int | None
+
+
+@dataclass(frozen=True)
+class ClubStint:
+    """球団での在籍ひとつぶん（加入年〜退団年。退団年が空なら現在も在籍）。
+
+    domain の `offseason_player.TenureSpan` を満たす。"""
+
+    team_id: int
+    from_year: int
+    to_year: int | None
+
+
+@dataclass(frozen=True)
+class ClubTenure:
+    """選手ひとりの、ある球団での在籍（古い順）と、年齢・見込みの材料（登録位置・プロフィール）。
+
+    在籍の選手の見込みの見立て（#308 P3。在籍年数で精度が上がる）に使う。参照クエリ（`ClubTenureQuery`）が作る。
+    """
+
+    position: Position
+    profile: Profile
+    stints: tuple[ClubStint, ...]
 
 
 @dataclass(frozen=True)
@@ -2780,6 +2825,8 @@ class ClubPlayerDetail[Row: (ClubPlayerRow, ReleasePlayerRow)]:
     """編成画面の選手1人の、選ぶ材料（年齢・能力の要約・今季の成績）。`player` は編成のタブの行か、「戦力外」タブの行。
 
     `overall` と `cells` は能力が無い選手では None / 空（画面では「—」）。成績は出場が無ければ None。
+    `outlook` は見込みの区分（#308 P3）で、
+    「戦力外」タブの受け持つ球団の選手だけ（ほかのタブと能力の無い選手は None）。
     """
 
     player: Row
@@ -2788,6 +2835,7 @@ class ClubPlayerDetail[Row: (ClubPlayerRow, ReleasePlayerRow)]:
     cells: tuple[RatingCell, ...]
     batting: ClubBattingStat | None
     pitching: ClubPitchingStat | None
+    outlook: OutlookCell | None = None
 
 
 # --- 優勝争い（#104） ---

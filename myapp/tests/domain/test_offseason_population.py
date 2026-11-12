@@ -25,9 +25,12 @@ from datetime import date
 from statistics import fmean, pstdev
 
 from myapp.domain.pennant.draft import MAX_DEVELOPMENT_PICKS, MAX_DRAFTEES, Draftee, DraftRoute
-from myapp.domain.pennant.draft_meeting import DraftContext
+from myapp.domain.pennant.draft_meeting import DraftContext, scouting_value
 from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
+from myapp.domain.pennant.foreign_market import SIGNED_RATING_MEAN
 from myapp.domain.pennant.offseason import OffseasonClub, OffseasonPlan, OffseasonPlayer, plan_offseason
+from myapp.domain.pennant.outlook import PEAK_AGE, with_filled_potential
+from myapp.domain.pennant.prospects import expected_prospect_ratings
 from myapp.domain.pennant.ratings import PlayerRatings
 from myapp.domain.pennant.retirement import PlayingTime
 from myapp.domain.pennant.roster import DEVELOPMENT_BAND, OPENING_REGISTERED_BAND
@@ -197,18 +200,18 @@ def run_year(
     after = {change.player_id: change.after for change in plan.retained}
     next_members = [replace(m, ratings=after[m.player_id]) for m in members if m.player_id not in leaving]
     next_id = max(m.player_id for m in members) + 1
-    for offset, draftee in enumerate(plan.draftees):
+    for offset, newcomer in enumerate(plan.newcomers):
         player_id = next_id + offset
         next_members.append(
             Member(
                 player_id=player_id,
-                team_id=draftee.team_id,
-                position=draftee.position,
-                profile=draftee.profile,
-                number=draftee.number,
+                team_id=newcomer.team_id,
+                position=newcomer.position,
+                profile=newcomer.profile,
+                number=newcomer.number,
                 joined_year=year + 1,
-                ratings=PlayerRatings(player_id=player_id, year=year + 1, ratings=draftee.ratings),
-                contract=draftee.contract,
+                ratings=PlayerRatings(player_id=player_id, year=year + 1, ratings=newcomer.ratings),
+                contract=newcomer.contract,
             )
         )
     return next_members, plan
@@ -247,13 +250,50 @@ class YearStats:
     # （#308 P2。AI が伸びしろの推定を見る）
     rookie_potential_mean: float
     rookie_route_shares: tuple[float, float, float]
+    # 本指名の日本人の新人の伸びしろの倍率の平均（経路ごと。高校・大学・社会人。#308 P3 段階0）
+    rookie_route_potential_means: tuple[float, float, float]
+    # 獲得した外国人（#169）: 1球団あたりの人数、錨の前の総合（`scouting_value`）の平均の、今までの外国人の新人
+    # （平均 `SIGNED_RATING_MEAN`）からのずれ（点）と、獲得した後の1球団の外国人の平均人数
+    signings_per_club: float
+    signed_value_shift: float
+    foreign_per_club: float
+    # 締める年の若手（4月1日に `PEAK_AGE` 歳未満の支配下の日本人）の本当の伸びしろの倍率。戦力外になった若手と、
+    # 引退も戦力外もしなかった若手（#308 P3b。AI は所属球団の見立ての見込みで外す）
+    released_young_multipliers: tuple[float, ...]
+    kept_young_multipliers: tuple[float, ...]
 
 
 def _main_draft_japanese(plan: OffseasonPlan) -> list[Draftee]:
-    return [draftee for draftee in plan.draftees if not draftee.is_foreign and not draftee.is_development]
+    return [draftee for draftee in plan.draftees if not draftee.is_development]
 
 
-def stats(members: list[Member], plan: OffseasonPlan, previous: list[Member]) -> YearStats:
+def _potential_mean(rookies: list[Draftee], route: DraftRoute) -> float:
+    """経路 `route` の新人の伸びしろの倍率の平均。その経路の新人がいない年は 0。"""
+    values = [potential_multiplier(d.ratings.potential) for d in rookies if d.route is route]
+    return fmean(values) if values else 0.0
+
+
+def _young_multipliers(
+    previous: list[Member], plan: OffseasonPlan, *, world_seed: int
+) -> tuple[list[float], list[float]]:
+    """締める年の若手の本当の伸びしろの倍率（戦力外になった若手、残った若手）。伸びしろの無い行（合成の初期母集団）は
+    締める処理が付けるのと同じ値（`with_filled_potential`）で見る。外国人は入れ替えの規則が別なので数えない。"""
+    as_of = date(plan.year, 4, 1)
+    released = set(plan.released)
+    retired = set(plan.retired)
+    result: tuple[list[float], list[float]] = ([], [])
+    for member in previous:
+        age = member.profile.age(as_of)
+        if not member.is_registered or member.profile.is_foreign_player or age is None or age >= PEAK_AGE:
+            continue
+        if member.player_id in retired:
+            continue
+        ratings = with_filled_potential(member.ratings.ratings, player_id=member.player_id, world_seed=world_seed)
+        result[0 if member.player_id in released else 1].append(potential_multiplier(ratings.potential))
+    return result
+
+
+def stats(members: list[Member], plan: OffseasonPlan, previous: list[Member], *, world_seed: int) -> YearStats:
     """Y 年を締めた後（Y+1 の開幕時点）の分布。年齢・入れ替わり・人数・スタミナは**支配下**で測る
     （育成ドラフトの前と同じ物差し。育成は別に人数を測る。#198 D2）。"""
     as_of = date(plan.year + 1, 4, 1)
@@ -273,6 +313,7 @@ def stats(members: list[Member], plan: OffseasonPlan, previous: list[Member]) ->
     rookies = _main_draft_japanese(plan)
     retired = len(set(plan.retired) & set(before))
     released = len(set(plan.released) & set(before))
+    released_young, kept_young = _young_multipliers(previous, plan, world_seed=world_seed)
     return YearStats(
         year=plan.year,
         mean_age=fmean(values),
@@ -286,7 +327,10 @@ def stats(members: list[Member], plan: OffseasonPlan, previous: list[Member]) ->
         max_roster=max(sizes.values()),
         mean_roster=fmean(sizes.values()),
         max_draftees=max(
-            Counter(draftee.team_id for draftee in plan.draftees if not draftee.is_development).values(), default=0
+            Counter(
+                newcomer.team_id for newcomer in plan.newcomers if newcomer.contract is ContractStatus.REGISTERED
+            ).values(),
+            default=0,
         ),
         min_development=min(development.values()),
         max_development=max(development.values()),
@@ -306,6 +350,22 @@ def stats(members: list[Member], plan: OffseasonPlan, previous: list[Member]) ->
             sum(1 for d in rookies if d.route is DraftRoute.UNIVERSITY) / len(rookies),
             sum(1 for d in rookies if d.route is DraftRoute.CORPORATE) / len(rookies),
         ),
+        rookie_route_potential_means=(
+            _potential_mean(rookies, DraftRoute.HIGH_SCHOOL),
+            _potential_mean(rookies, DraftRoute.UNIVERSITY),
+            _potential_mean(rookies, DraftRoute.CORPORATE),
+        ),
+        signings_per_club=len(plan.signings) / len(sizes),
+        signed_value_shift=fmean(
+            scouting_value(s.candidate.ratings)
+            - scouting_value(expected_prospect_ratings(mean=SIGNED_RATING_MEAN, position=s.position))
+            for s in plan.signings
+        )
+        if plan.signings
+        else 0.0,
+        foreign_per_club=sum(1 for m in members if m.profile.is_foreign_player) / len(sizes),
+        released_young_multipliers=tuple(released_young),
+        kept_young_multipliers=tuple(kept_young),
     )
 
 
@@ -322,7 +382,7 @@ def run_years(
     for year in range(START_YEAR, START_YEAR + years):
         previous = members
         members, plan = run_year(members, year, world_seed=seed, rule=rule)
-        result.append(stats(members, plan, previous))
+        result.append(stats(members, plan, previous, world_seed=seed))
     return result
 
 
@@ -435,11 +495,21 @@ class OffseasonPopulationTest(unittest.TestCase):
 
         伸びしろの大きい選手は伸びて残りやすいので、平均はわずかに上へ寄る（引退・戦力外は伸びしろを見ないが、
         能力を見る）。新人は事前の分布（平均 1.0）で入るので、寄りは止まる。実測（シード 1〜4）は 0.994〜1.007。
+        #308 P3b（AI の戦力外・引退が見立ての見込みを見る）の後もシード 1〜8 で 0.985〜1.016（前 0.988〜1.015）で、
+        帯は変えていない（2026-10-25 ユーザー決定 Q4 A の「測り直して広げる」は不要だった）。
         """
         for stat in self.years:
             with self.subTest(year=stat.year):
                 self.assertEqual(stat.without_potential, 0)
                 self.assertTrue(0.98 <= stat.potential_mean <= 1.03, stat.potential_mean)
+
+    def test_released_youngsters_have_less_potential_than_kept_ones(self) -> None:
+        """#308 P3b: AI は若手を所属球団の見立ての見込みで外すので、戦力外になった若手の本当の伸びしろの倍率の平均は、
+        残った若手より低い（見立ては誤差つきなので、本当は伸びしろのある若手も外れうる）。10年の合計で見る。"""
+        released = [value for stat in self.years for value in stat.released_young_multipliers]
+        kept = [value for stat in self.years for value in stat.kept_young_multipliers]
+        self.assertTrue(released, "若手の戦力外がある")
+        self.assertLess(fmean(released), fmean(kept))
 
     def test_drafted_rookies_keep_the_average_potential_and_the_route_shares(self) -> None:
         """#308 P2: AI は伸びしろの推定の大きい候補を上に見るが、候補の伸びしろの平均（`POOL_POTENTIAL_MEAN`）を
@@ -457,6 +527,37 @@ class OffseasonPopulationTest(unittest.TestCase):
                 self.assertTrue(0.40 <= university <= 0.60, university)
                 self.assertTrue(0.12 <= corporate <= 0.28, corporate)
         self.assertAlmostEqual(fmean(stat.rookie_potential_mean for stat in self.years), 1.0, delta=0.03)
+
+    def test_drafted_rookies_keep_the_average_potential_on_every_route(self) -> None:
+        """#308 P3 段階0: 候補の伸びしろの平均を経路ごとに合わせ込んだ（`POOL_POTENTIAL_MEAN`）ので、本指名の日本人の
+        新人の倍率の平均は**どの経路も**約1.0（2026-10-25 ユーザー決定 B。P2 の1つの平均では 高校 0.95・大学 1.04・
+        社会人 0.96 に分かれた）。
+
+        実測（シード 1〜8・2〜3年目の合計）は 高校 1.013・大学 0.989・社会人 0.984（シードごとに 0.95〜1.06）。
+        10年の平均で見る（1年の高校・社会人は 60〜90人で揺れが大きい）。
+        """
+        for index, route in enumerate(("高校", "大学", "社会人")):
+            mean = fmean(stat.rookie_route_potential_means[index] for stat in self.years)
+            with self.subTest(route=route):
+                self.assertAlmostEqual(mean, 1.0, delta=0.05)
+
+    def test_signed_foreigners_keep_the_old_foreign_rookies(self) -> None:
+        """#169: 外国人は候補から獲得する（AI は見立てで上から取る）。候補の平均を下げた合わせ込み
+        （`foreign_market.POOL_RATING_SHIFT`）で、獲得した外国人の錨の前の平均は今までの外国人の新人と同じ
+        （`SIGNED_RATING_MEAN`。ずれ 0 点）。1球団の外国人は目標（4人）の近く、獲得は1球団1年 約1人（入れ替わり）。
+
+        実測（シード 1〜2・2〜10年目）はずれ 平均 −0.13 点（年ごとに −1.0〜+0.6）・獲得 1球団 1.1人/年（0.6〜1.65）・
+        1球団の外国人 4.0人。合わせ込みの値はシード 1〜6・2〜4年目でずれ +0.06 点
+        （投手 +0.11・内野手 −0.40・外野手 +0.54）。
+        1年 約45人なので年ごとの揺れを見込んだ帯。1年目は合成の初期母集団（外国人の数がばらつく）の入れ替えで多い。
+        """
+        for index, stat in enumerate(self.years):
+            with self.subTest(year=stat.year):
+                self.assertLess(abs(stat.signed_value_shift), 2.0)
+                self.assertTrue(3.5 <= stat.foreign_per_club <= 4.5, stat.foreign_per_club)
+                if index > 0:
+                    self.assertTrue(0.4 <= stat.signings_per_club <= 1.9, stat.signings_per_club)
+        self.assertLess(abs(fmean(stat.signed_value_shift for stat in self.years[1:])), 0.8)
 
     def test_same_seed_gives_same_result(self) -> None:
         self.assertEqual(run_years(years=3, roster_size=STEADY_ROSTER), self.years[:3])
