@@ -32,22 +32,11 @@ from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.samples import average_club, round_robin_days, spread_league
 from myapp.domain.value_objects import FieldingPosition, ForeignPlayerRules, GameStage, PlateAppearanceResult
 
+from .doubles import ScriptedRandom
+
 FP = FieldingPosition
 P = PlateAppearanceResult
 OPENING_DAY = date(2026, 4, 1)
-
-
-class ScriptedRandom:
-    """決めた列を繰り返す乱数源。"""
-
-    def __init__(self, *values: float) -> None:
-        self.values = values
-        self.index = 0
-
-    def random(self) -> float:
-        value = self.values[self.index % len(self.values)]
-        self.index += 1
-        return value
 
 
 # 1軍を選ぶときの外国人枠（計だけ。試合の枠のほうを確かめるため、1軍には外国人を多めに入れる）

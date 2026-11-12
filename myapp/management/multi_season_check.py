@@ -22,7 +22,8 @@ from dataclasses import dataclass, replace
 from statistics import fmean, pstdev
 
 from myapp.application.pennant_world import ForkSource
-from myapp.domain.pennant.draft import DraftTeam
+from myapp.domain.pennant.development import development_start_year, is_contract_expiring
+from myapp.domain.pennant.draft import DraftRoute, DraftTeam
 from myapp.domain.pennant.draft_meeting import DraftContext
 from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
 from myapp.domain.pennant.foreign_market import position_hole, squad_holes, world_strength
@@ -35,7 +36,7 @@ from myapp.domain.pennant.offseason import (
     plan_departures,
     plan_offseason,
 )
-from myapp.domain.pennant.offseason_player import overall_value
+from myapp.domain.pennant.offseason_player import overall_value, player_age
 from myapp.domain.pennant.ratings import PlayerRatings
 from myapp.domain.pennant.retirement import PlayingTime
 from myapp.domain.pennant.schedule import ScheduleRules
@@ -73,6 +74,8 @@ class Member:
     ratings: PlayerRatings
     # 今の契約区分（分岐元の `Stint.contract_now`。新人は `Draftee.contract`）。育成は1軍の候補に入れない
     contract: ContractStatus
+    # 育成から支配下に上がった年（分岐元の `Stint.promoted_year`・オフの昇格は翌年。#170）
+    promoted_year: int | None = None
 
 
 @dataclass(frozen=True)
@@ -120,6 +123,7 @@ def initial_members(
                         joined_year=year,
                         ratings=ratings[_id(player.id)],
                         contract=stint.contract_now,
+                        promoted_year=stint.promoted_year,
                     )
                 )
     for league_teams in source.rosters:
@@ -183,6 +187,7 @@ def offseason_clubs(
                 ratings=member.ratings,
                 contract=member.contract,
                 playing_time=_playing_time(batting, pitching, member.player_id),
+                promoted_year=member.promoted_year,
             )
         )
     return [
@@ -198,10 +203,21 @@ def offseason_clubs(
 
 def apply_plan(members: Sequence[Member], plan: OffseasonPlan) -> list[Member]:
     """計画を適用した翌年の現役。新人の id は既存の最大 + 1 から振る。"""
-    leaving = set(plan.retired) | set(plan.released)
+    leaving = set(plan.retired) | set(plan.released) | set(plan.expired)
     after = {change.player_id: change.after for change in plan.retained}
+    promoted = {promotion.player_id: promotion.number for promotion in plan.promotions}
     kept = [
-        replace(m, ratings=after[m.player_id]) for m in members if m.player_id not in leaving and m.player_id in after
+        replace(
+            m,
+            ratings=after[m.player_id],
+            contract=ContractStatus.REGISTERED,
+            number=promoted[m.player_id],
+            promoted_year=plan.year + 1,
+        )
+        if m.player_id in promoted
+        else replace(m, ratings=after[m.player_id])
+        for m in members
+        if m.player_id not in leaving and m.player_id in after
     ]
     league_of = {m.team_id: m.league_id for m in members}
     next_id = max(m.player_id for m in members) + 1
@@ -373,6 +389,37 @@ def format_offseason(plan: OffseasonPlan, members: Sequence[Member], year: int) 
     )
 
 
+def format_development(plan: OffseasonPlan, clubs: Sequence[OffseasonClub], year: int, *, start_year: int) -> str:
+    """直前のオフの育成（#170）: 昇格の人数・経路・年齢・育成の何年目と、育成契約の満了（自由契約と再契約）。"""
+    players = {player.player_id: player for club in clubs for player in club.players}
+    promoted = [players[promotion.player_id] for promotion in plan.promotions]
+    per_club = Counter(promotion.team_id for promotion in plan.promotions)
+    routes = Counter(
+        "外国人" if player.profile.is_foreign_player else DraftRoute.of_profile(player.profile).label
+        for player in promoted
+    )
+    ages = [player_age(player.profile, year, start_year=start_year) for player in promoted]
+    terms = [year - development_start_year(player) + 1 for player in promoted]
+    retired = set(plan.retired)
+    promoted_ids = {promotion.player_id for promotion in plan.promotions}
+    expiring = [
+        player
+        for player in players.values()
+        if player.is_development
+        and player.player_id not in retired
+        and player.player_id not in promoted_ids
+        and is_contract_expiring(development_start_year(player), year)
+    ]
+    released = len(plan.expired)
+    share = f"{released / len(expiring):.0%}" if expiring else "—"
+    return (
+        f"  昇格 {len(promoted)}人（1球団 平均 {len(promoted) / max(1, len(clubs)):.2f}人・最多 "
+        f"{max(per_club.values(), default=0)}人・{'・'.join(f'{k} {v}' for k, v in routes.items())}・"
+        f"平均 {_mean(ages):.1f}歳・育成 平均 {_mean(terms):.1f}年目）  "
+        f"育成契約の満了 {len(expiring)}人（自由契約 {released}人＝{share}・再契約 {len(expiring) - released}人）"
+    )
+
+
 def draft_standings(
     leagues: dict[int, list[int]],
     pitching: dict[int, PitchingLine],
@@ -468,6 +515,7 @@ def run_seasons(
         say("")
         say(f"---- {current}年のオフ（計算 {elapsed * 1000:.0f} ms）----")
         say(format_offseason(plan, members, current))
+        say(format_development(plan, clubs, current, start_year=year))
         say(format_foreign_offseason(plan, members, current, start_year=year))
         departures = plan_departures(clubs, year=current, world_seed=seed, start_year=year)
         say(format_foreign_needs(plan, departures.draft_teams))

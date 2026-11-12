@@ -751,8 +751,12 @@ class OtherIdsAreNotFoundInAWorldTest(WorldCase):
         urls = [
             reverse("pennant_player_list", args=[w, self.team.id]),
             reverse("pennant_player_detail", args=[w, self.team.id, real_player]),
+            reverse("pennant_team_history", args=[w, self.team.id]),
+            reverse("pennant_team_analysis", args=[w, self.team.id]),
             reverse("pennant_league_detail", args=[w, self.league.id]),
+            reverse("pennant_league_detail_by_year", args=[w, self.league.id, YEAR]),
             reverse("pennant_league_titles", args=[w, self.league.id]),
+            reverse("pennant_league_titles_by_year", args=[w, self.league.id, YEAR]),
             reverse("pennant_league_stats", args=[w, self.league.id]),
             reverse("pennant_game_detail", args=[w, self.real_game.id]),
         ]
@@ -765,8 +769,15 @@ class OtherIdsAreNotFoundInAWorldTest(WorldCase):
         urls = [
             reverse("pennant_player_list", args=[w, self.other_team.id]),
             reverse("pennant_player_detail", args=[w, self.other_team.id, self.other_player]),
+            reverse("pennant_team_history", args=[w, self.other_team.id]),
+            reverse("pennant_team_analysis", args=[w, self.other_team.id]),
             reverse("pennant_league_detail", args=[w, self.other_league.id]),
+            reverse("pennant_league_detail_by_year", args=[w, self.other_league.id, YEAR + 1]),
+            reverse("pennant_league_titles", args=[w, self.other_league.id]),
+            reverse("pennant_league_titles_by_year", args=[w, self.other_league.id, YEAR + 1]),
             reverse("pennant_league_stats", args=[w, self.other_league.id]),
+            # この世界の試合を、別の世界の URL で開く
+            reverse("pennant_game_detail", args=[self.other_id, self.pennant_game_id]),
         ]
         for url in urls:
             with self.subTest(url=url):

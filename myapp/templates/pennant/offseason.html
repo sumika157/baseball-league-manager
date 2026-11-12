@@ -13,12 +13,12 @@
 
 {% comment %}
 オフの結果。締める処理は結果を保存しないので、在籍・能力から導いた値（OffseasonSummary）を並べるだけ。
-上から、自軍（引退・退団・戦力外、新人・新外国人、能力の変化）→ リーグ別の引退・退団・戦力外と新人・新外国人 → 成長と衰えの大きかった選手。
+上から、自軍（引退・退団・戦力外、新人・新外国人、支配下登録（昇格）、能力の変化）→ リーグ別の引退・退団・戦力外と新人・新外国人と支配下登録（昇格）→ 成長と衰えの大きかった選手。
 年齢は、引退・退団・戦力外は締めた年、新人・新外国人と残った選手は翌年の開幕時点。能力は S〜G の区分と総合値（野手は打撃、投手は抑える力）。
 {% endcomment %}
 <div class="page-head">
   <h1 class="page-title">{{ summary.year }}年オフ（{{ summary.next_year }}年シーズンへ）</h1>
-  <p class="page-subtitle">引退・退団・戦力外 {{ summary.retired_total }}人（うち戦力外 {{ summary.released_total }}人） · 新人・新外国人 {{ summary.rookie_total }}人。年齢は、引退・退団・戦力外は{{ summary.year }}年、新人・新外国人と残った選手は{{ summary.next_year }}年の開幕時点です。</p>
+  <p class="page-subtitle">引退・退団・戦力外 {{ summary.retired_total }}人（うち戦力外 {{ summary.released_total }}人） · 支配下登録（昇格） {{ summary.promoted_total }}人 · 新人・新外国人 {{ summary.rookie_total }}人。育成のバッジの付いた戦力外は、育成契約の満了による自由契約です。年齢は、引退・退団・戦力外は{{ summary.year }}年、新人・新外国人と残った選手は{{ summary.next_year }}年の開幕時点です。</p>
 </div>
 
 {% if summary.own_team_id %}
@@ -47,6 +47,17 @@
           {% endif %}
         </div>
       </div>
+    </div>
+  </div>
+
+  <div class="card mb-4">
+    <div class="card-header">支配下登録（昇格）（{{ summary.own_promoted|length }}人）</div>
+    <div class="card-body p-0">
+      {% if summary.own_promoted %}
+        {% include 'pennant/_offseason_promoted.html' with rows=summary.own_promoted show_team=False %}
+      {% else %}
+        <div class="empty-state">育成から支配下に上がった選手はいません。</div>
+      {% endif %}
     </div>
   </div>
 
@@ -92,6 +103,17 @@
       {% include 'pennant/_offseason_rookies.html' with rows=summary.rookies show_team=True %}
     {% else %}
       <div class="empty-state">このリーグに新人・新外国人はいません。</div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header">支配下登録（昇格）（{{ summary.promoted|length }}人）</div>
+  <div class="card-body p-0">
+    {% if summary.promoted %}
+      {% include 'pennant/_offseason_promoted.html' with rows=summary.promoted show_team=True %}
+    {% else %}
+      <div class="empty-state">このリーグに育成から支配下に上がった選手はいません。</div>
     {% endif %}
   </div>
 </div>

@@ -1,4 +1,4 @@
-{% load scoped %}{% comment %}オフの結果の「引退・退団・戦力外」の表。rows は OffseasonRetiredRow（区分は引退・退団・戦力外）。{% endcomment %}
+{% load scoped %}{% comment %}オフの結果の「引退・退団・戦力外」の表。rows は OffseasonRetiredRow（区分は引退・退団・戦力外。締めた年に育成だった選手は育成のバッジ＝育成の戦力外は育成契約の満了の自由契約）。{% endcomment %}
 <div class="table-responsive">
   <table class="table table-hover mb-0">
     <thead>
@@ -17,7 +17,7 @@
         <tr>
           {% if show_team %}<td>{{ row.team_name }}</td>{% endif %}
           <td class="text-end stat-muted">{{ row.number }}</td>
-          <td><a href="{% scoped_url 'player_detail' row.team_id row.player_id %}" class="player-name">{{ row.name }}</a></td>
+          <td><a href="{% scoped_url 'player_detail' row.team_id row.player_id %}" class="player-name">{{ row.name }}</a>{% if row.is_development %} <span class="badge bg-primary" data-testid="development-badge">育成</span>{% endif %}</td>
           <td>{{ row.position }}</td>
           <td class="text-end">{{ row.age|default_if_none:"—" }}</td>
           <td>{{ row.leaving }}</td>

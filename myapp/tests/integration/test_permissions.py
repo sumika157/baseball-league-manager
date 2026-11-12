@@ -7,6 +7,7 @@ from django.urls import reverse
 from myapp.infrastructure import orm_models
 
 from ..helpers import (
+    TEST_YEAR,
     login_as_manager,
     play_game,
 )
@@ -33,7 +34,7 @@ class WriteRequiresLoginTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手", from_year=TEST_YEAR)
 
     def test_reading_needs_no_login(self):
         pages = [
@@ -109,7 +110,7 @@ class TeamManagerPermissionTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手", from_year=TEST_YEAR)
         self.game = play_game(self.team, self.rival)
         # 相手チームとも別リーグとも無関係な、どこも担当していないチーム
         self.outsider = orm_models.Team.objects.create(league=self.league, name="無関係チーム")

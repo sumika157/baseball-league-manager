@@ -1101,6 +1101,9 @@ _OFFSEASON_STINT_FIELDS = (
     "team__league_id",
     "number",
     "left_via",
+    "signed_as",
+    "promoted_year",
+    "number_before_promotion",
 )
 
 
@@ -1126,19 +1129,22 @@ class DjangoOffseasonQuery:
             ordered = sorted(
                 rows, key=lambda row: (row["team_id"], JerseyNumber(row["number"]).sort_key, row["player_id"])
             )
-            return tuple(self._fact(row, before, after) for row in ordered)
+            return tuple(self._fact(row, before, after, year=year) for row in ordered)
 
         stints = stints_in(self._scope)
         retired = stints.filter(to_year=year).values(*_OFFSEASON_STINT_FIELDS)
         rookies = stints.filter(from_year=year + 1).values(*_OFFSEASON_STINT_FIELDS)
         # 翌年も在籍し、前の年から居た選手（新人を除く）。両方の能力がある選手だけが能力の変化を持つ
         staying = stints.filter(period_covering(year + 1), from_year__lte=year).values(*_OFFSEASON_STINT_FIELDS)
+        # オフの昇格（#170）: 締める年より前から在籍し、翌年の年で育成から支配下に上がった在籍
+        promoted = stints.filter(promoted_year=year + 1, from_year__lte=year).values(*_OFFSEASON_STINT_FIELDS)
         leagues = leagues_in(self._scope).order_by("id").values_list("id", "name")
         return OffseasonFacts(
             leagues=tuple(LeagueOption(id=league_id, name=name) for league_id, name in leagues),
             retired=players(retired),
             rookies=players(rookies),
             retained=tuple(fact for fact in players(staying) if fact.before and fact.after),
+            promoted=players(promoted),
         )
 
     @staticmethod
@@ -1146,8 +1152,12 @@ class DjangoOffseasonQuery:
         row: dict[str, Any],
         before: Mapping[int, BatterRatings | PitcherRatings],
         after: Mapping[int, BatterRatings | PitcherRatings],
+        *,
+        year: int,
     ) -> OffseasonPlayerFact:
         player_id = row["player_id"]
+        # 締める年の契約区分（判定の出典は domain の `ContractStatus.in_year`）。昇格した選手は締める年は育成
+        signed_as = ContractStatus.from_label(row["signed_as"])
         return OffseasonPlayerFact(
             player_id=player_id,
             name=row["player__name"],
@@ -1173,6 +1183,9 @@ class DjangoOffseasonQuery:
             after=after.get(player_id),
             # 空（None・空文字）は不明（経路を記録する前に締めた年・実データ）
             left_via=DepartureRoute.from_label(row["left_via"]) if row["left_via"] else None,
+            was_development=ContractStatus.in_year(signed_as, row["promoted_year"], year)
+            is ContractStatus.DEVELOPMENTAL,
+            number_before_promotion=row["number_before_promotion"] or "",
         )
 
 

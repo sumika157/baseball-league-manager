@@ -334,4 +334,6 @@ def _offseason_player(
             is_captain=team.current_captain is player,
             titles=titles.get(player_id, 0),
         ),
+        # 昇格した年のオフは戦力外にしない（`release.py`。#170）
+        promoted_year=None if stint is None else stint.promoted_year,
     )
