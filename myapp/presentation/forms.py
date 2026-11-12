@@ -455,6 +455,30 @@ class WorkspaceForm(forms.Form):
         return Visibility(self.cleaned_data["visibility"])
 
 
+class WorkspaceDeleteForm(forms.Form):
+    """ワークスペースの削除の確かめ（W4 T5）。ワークスペースの名前を打ってもらい、今の名前と同じときだけ通す。
+
+    元に戻せない操作なので、ボタンを押し間違えただけでは消さない。前後の空白は除いて比べる（名前の保存と同じ）。
+    """
+
+    confirm_name = forms.CharField(
+        label="ワークスペースの名前",
+        max_length=WORKSPACE_NAME_MAX_LENGTH,
+        help_text="確かめのため、消すワークスペースの名前をそのまま入力してください。",
+        widget=forms.TextInput(attrs={"class": "form-control", "autocomplete": "off"}),
+    )
+
+    def __init__(self, *args: Any, workspace_name: str, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._workspace_name = workspace_name
+
+    def clean_confirm_name(self) -> str:
+        value = self.cleaned_data["confirm_name"]
+        if value != self._workspace_name:
+            raise ValidationError("名前が一致しません。消すワークスペースの名前をそのまま入力してください。")
+        return value
+
+
 class MemberRoleForm(forms.Form):
     """招待の発行と、メンバーの役割の変更（全体を編集 ⇔ 担当チーム。担当チームの付け替えを含む）。W4 T4。
 

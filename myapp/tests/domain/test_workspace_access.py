@@ -43,22 +43,28 @@ OPERATIONS = {
     "設定の変更": lambda a: a.can_change_settings(),
     "メンバーの管理": lambda a: a.can_manage_members(),
     "削除": lambda a: a.can_delete(),
+    # ペナントの世界（W4 の決定1・2）。自分が作った世界・ほかの人が作った世界
+    "自分の世界の書き込み": lambda a: a.can_write_world(is_creator=True),
+    "ほかの人の世界の書き込み": lambda a: a.can_write_world(is_creator=False),
+    "自分の世界の削除": lambda a: a.can_delete_world(is_creator=True),
+    "ほかの人の世界の削除": lambda a: a.can_delete_world(is_creator=False),
 }
 COLUMNS = tuple(OPERATIONS)
 
 Y, N = True, False
 # (利用者, 公開範囲) → (役割, 操作ごとの可否。COLUMNS の順)
 TABLE = {
-    ("持ち主", PUBLIC): (WorkspaceRole.OWNER, (Y, Y, Y, Y, Y, Y, Y, Y, Y, Y, Y)),
-    ("持ち主", PRIVATE): (WorkspaceRole.OWNER, (Y, Y, Y, Y, Y, Y, Y, Y, Y, Y, Y)),
-    ("編集者", PUBLIC): (WorkspaceRole.EDITOR, (Y, Y, Y, Y, Y, Y, Y, Y, N, N, N)),
-    ("編集者", PRIVATE): (WorkspaceRole.EDITOR, (Y, Y, Y, Y, Y, Y, Y, Y, N, N, N)),
-    ("チーム担当", PUBLIC): (WorkspaceRole.TEAM_MANAGER, (Y, N, Y, N, Y, N, N, N, N, N, N)),
-    ("チーム担当", PRIVATE): (WorkspaceRole.TEAM_MANAGER, (Y, N, Y, N, Y, N, N, N, N, N, N)),
-    ("ログインした部外者", PUBLIC): (WorkspaceRole.VIEWER, (Y, N, N, N, N, N, N, N, N, N, N)),
-    ("ログインした部外者", PRIVATE): (WorkspaceRole.NONE, (N, N, N, N, N, N, N, N, N, N, N)),
-    ("未ログイン", PUBLIC): (WorkspaceRole.VIEWER, (Y, N, N, N, N, N, N, N, N, N, N)),
-    ("未ログイン", PRIVATE): (WorkspaceRole.NONE, (N, N, N, N, N, N, N, N, N, N, N)),
+    ("持ち主", PUBLIC): (WorkspaceRole.OWNER, (Y, Y, Y, Y, Y, Y, Y, Y, Y, Y, Y, Y, N, Y, Y)),
+    ("持ち主", PRIVATE): (WorkspaceRole.OWNER, (Y, Y, Y, Y, Y, Y, Y, Y, Y, Y, Y, Y, N, Y, Y)),
+    ("編集者", PUBLIC): (WorkspaceRole.EDITOR, (Y, Y, Y, Y, Y, Y, Y, Y, N, N, N, Y, N, Y, N)),
+    ("編集者", PRIVATE): (WorkspaceRole.EDITOR, (Y, Y, Y, Y, Y, Y, Y, Y, N, N, N, Y, N, Y, N)),
+    # 担当・閲覧は、自分が作った世界（担当に変えられた・除名された作成者）でも書き込めない（W4 の決定1）
+    ("チーム担当", PUBLIC): (WorkspaceRole.TEAM_MANAGER, (Y, N, Y, N, Y, N, N, N, N, N, N, N, N, N, N)),
+    ("チーム担当", PRIVATE): (WorkspaceRole.TEAM_MANAGER, (Y, N, Y, N, Y, N, N, N, N, N, N, N, N, N, N)),
+    ("ログインした部外者", PUBLIC): (WorkspaceRole.VIEWER, (Y, N, N, N, N, N, N, N, N, N, N, N, N, N, N)),
+    ("ログインした部外者", PRIVATE): (WorkspaceRole.NONE, (N, N, N, N, N, N, N, N, N, N, N, N, N, N, N)),
+    ("未ログイン", PUBLIC): (WorkspaceRole.VIEWER, (Y, N, N, N, N, N, N, N, N, N, N, N, N, N, N)),
+    ("未ログイン", PRIVATE): (WorkspaceRole.NONE, (N, N, N, N, N, N, N, N, N, N, N, N, N, N, N)),
 }
 
 
@@ -100,6 +106,17 @@ class PermissionTableTest(unittest.TestCase):
             access = access_for(user, visibility)
             with self.subTest(user=user, visibility=visibility.label):
                 self.assertIs(access.can_create_world(), access.can_edit_all())
+
+    def test_writing_a_world_needs_the_creator_who_still_edits_everything(self):
+        """世界の書き込みは、作成者で今も全体の編集権を持つ人だけ（W4 の決定1）。
+
+        担当に変えた・除名した作成者は読むだけ。ほかの人の世界には、持ち主・編集者でも書き込めない。
+        """
+        for user, visibility in TABLE:
+            access = access_for(user, visibility)
+            with self.subTest(user=user, visibility=visibility.label):
+                self.assertIs(access.can_write_world(is_creator=True), access.can_edit_all())
+                self.assertFalse(access.can_write_world(is_creator=False))
 
     def test_setting_up_leagues_needs_the_right_to_edit_everything(self):
         """登録画面（リーグ・チーム・球場）は見るのも書くのも持ち主・編集者だけ（W3。2026-10-25）。担当・閲覧には見せない。"""

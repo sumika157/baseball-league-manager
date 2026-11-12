@@ -36,6 +36,7 @@ from myapp.infrastructure.repositories import (
     _workspace_incoming_references,
 )
 from myapp.infrastructure.scoping import players_in, world_condition
+from myapp.management.commands.workspace_delete import OPERATOR_HINT
 
 from ..helpers import (
     build_workspace_management_query,
@@ -413,8 +414,11 @@ class WorkspaceDeleteCommandTest(WorkspaceDeletionCase):
     def test_a_stray_reference_stops_the_command(self):
         orm_models.Game.objects.filter(id=self.a_game_id).update(away_team=self.b_team)
         before = _all_rows()
-        with self.assertRaisesMessage(CommandError, f"ほかのワークスペースの試合（id={self.a_game_id}）"):
+        with self.assertRaises(CommandError) as raised:
             self._call("--workspace", self.workspace_b.key, "--yes")
+        self.assertIn(f"ほかのワークスペースの試合（id={self.a_game_id}）", str(raised.exception))
+        # 理由の文は画面の持ち主向け。コマンドでは運営者本人が読むので、直し方を添える（W4 T5）
+        self.assertIn(OPERATOR_HINT, str(raised.exception))
         self.assertEqual(_all_rows(), before)
 
     def test_a_workspace_with_a_world_lists_the_worlds(self):

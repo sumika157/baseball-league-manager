@@ -394,10 +394,11 @@ GM ホーム。上から、自軍の位置 → 進めた結果 → 進める（�
   </div>
 {% endif %}
 
-{% if is_owner %}
+{% comment %}削除はワークスペースの持ち主にも出す（ほかの人の世界も消せる。設定・進めるは作成者だけ）。書き込める作成者は必ず消せる。{% endcomment %}
+{% if can_delete_world %}
   <p class="text-end mt-4">
-    <a href="{% workspace_url 'pennant_settings' world.world_id %}" class="btn-link-quiet me-3">設定</a>
-    <a href="{% workspace_url 'pennant_delete' world.world_id %}" class="btn-link-quiet">この世界を削除する</a>
+    {% if is_owner %}<a href="{% workspace_url 'pennant_settings' world.world_id %}" class="btn-link-quiet me-3">設定</a>{% endif %}
+    {% if can_delete_world %}<a href="{% workspace_url 'pennant_delete' world.world_id %}" class="btn-link-quiet">この世界を削除する</a>{% endif %}
   </p>
 {% endif %}
 

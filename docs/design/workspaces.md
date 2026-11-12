@@ -1707,3 +1707,55 @@ views の定数とテンプレートの直書きの2か所 → 両方に互い�
 - **計測**: やり直していない。main の変更で読み取りが増えるのはペナントの選手ページ（能力のカードの見込み。世界と在籍の各1本）と「戦力外」タブで、どちらも `measure_pages` の画面に入っていない。ほかはペナントの締める処理・ドラフトの domain。
 - テスト: domain＋integration 4,289、e2e 20。
 - **レビュー**（`ddd-boundary-reviewer`）: 重要な指摘なし。範囲なしの形が main から戻っていないこと、締める処理の外国人の獲得が範囲の `TeamRepository` と世界の年で書くこと、マイグレーションが1本道であること、domain が Django を import しないことを確かめた。軽微: この記録（直した）・T4 の「14項目」と番号の注記（直した）・`ForeignBackground.from_label` が知らない値で `ValueError`（今の入口はフォームの選択肢と管理画面で、どちらも先に弾く。直していない）。
+
+#### T5 削除の画面と世界の書き込みの判定（`feature/workspace-delete-screen`、2026-11-12）
+
+epic の 3717b0c（W4 T2）から作り（前の担当の途中の変更を引き継いだ）、W4 T4（#335、自動マージ待ち）の先端 94b00a3 の上に載せ直した。マイグレーションは無い。
+
+- 削除の画面: `/w/<key>/delete/`（`workspace_delete`。`login=True`。GET・HEAD・POST）。門は `_requires_owner(request, WorkspaceAccess.can_delete)`
+  （DB を読まない。持ち主以外は GET も POST も 403、非公開の部外者は 404、未ログインはログインへ）。確認は
+  `build_workspace_management_query(ws).contents()`（リーグ・チーム・選手・試合の数）。フォーム `WorkspaceDeleteForm` でワークスペースの名前を
+  打たせ、今の名前と同じときだけ `build_workspace_service().delete(ws)`。消したら `/` へ（`messages` に「削除しました」）。
+  `deletion_blocker` があれば削除のフォームを出さず、理由と世界の一覧（名前・作った人）と各世界の `pennant_delete` への導線を出す。
+  `NotDeletable`・`InvalidWorkspace`（迷子の参照・在籍がまたがる選手）は理由を画面に出して何も消さない（200）。
+  `_tabs.html` の「メンバーと招待」の後に「削除」のタブ。ヘッダーのメニューには出さない（消すのは設定の画面のタブから。危ない操作をメニューに並べない）。
+- 世界の書き込みの判定（決定1）: domain `WorkspaceAccess.can_write_world(is_creator=)`（作成者で、今も `can_create_world()`）と
+  `can_delete_world(is_creator=)`（それに加えて持ち主。決定2）。views の `_can_write_world`（`_is_owner` から改名。テンプレートへのフラグは `is_owner` のまま）が `can_write_world`、
+  新しい `_is_creator` が世界の行のオーナーとの一致、`_requires_world_deleter`・`_can_delete_world` が削除（`pennant_delete` と GM ホームの
+  「この世界を削除する」の導線）。判定は解決済みの権限だけ（DB を読まない）。進める・締める・編成・設定（`_requires_world_owner`）は作成者のまま。
+- 管理コマンド `workspace_delete`: `InvalidWorkspace` の理由（画面の持ち主向けの「運営者に連絡してください」）に
+  「（運営者の方へ）管理画面でその行を直してから消し直してください。」（`OPERATOR_HINT`）を添える（T2 の申し送り）。
+
+**計画からのずれ**
+
+- 世界の書き込みの判定を変えたので、世界のオーナーを直に付けている既存のテストの組み立て（`test_pennant_home` の `HomeCase`・
+  `test_pennant_postseason_settings`）で、オーナーを既定のワークスペースの編集者にした（それまでは部外者のオーナーが書けていた）。
+- 拒んだときの 403 の文は1つ（「この世界に書き込む権限がありません。」）にした（403 の画面は例外の文を出さないので、作成者向けに分けても読まれない）。
+- `ID_FREE_WRITES` に `workspace_delete` を足した（本文は確かめの名前だけで id を持たない）。
+- 世界のオーナーを素の利用者のまま付けていたテスト（`test_world_isolation`・`test_team_analysis_world`・`test_postseason_isolation` の
+  オーナーとして開く検査）も、オーナーを編集者にした（そのままだと読むだけの人として開き、検査が空振りする）。
+
+**テスト**: integration `test_workspace_screens.py` に `WorkspaceDeleteScreenTest`（件数とフォーム・名前が合えば消えて `/` へ・名前が違えば
+消えない・世界があればボタンが無く世界の一覧と `pennant_delete` への導線・持ち主がほかの人の世界を消してからワークスペースを消す・
+迷子の参照は `InvalidWorkspace` の理由を出して消さない・持ち主以外は 403・未ログインはログインへ・405）、`test_workspace_permissions.py` に
+`WorkspaceDeletePermissionTest`（公開・非公開 × 8つの役割 × タブ・確認・削除。持ち主の行は最後）、`test_workspace_isolation.py` の
+`URL_TABLE`・`WRITE_BODIES`・`ID_FREE_WRITES`、`test_pennant_home.py` に `WorldWriteAfterMembershipChangeTest`（除名した作成者・担当に変えた
+作成者は導線が無く進める・設定・削除が 403・編集者に戻せばまた書ける・持ち主はほかの人の世界と作成者のいない世界を消せるが進められない・
+作成者でない編集者は消せない）、`test_workspace_delete.py` のコマンドの検査に `OPERATOR_HINT`、domain `test_workspace_access.py` の表に4列。
+件数: domain＋integration 4,239（epic の先端 5f8eace の上）、e2e 21（変わらず）。
+
+**変異の確かめ**（どれも戻した）: `can_write_world` から「今も全体の編集権」を外す → integration 2件・domain 18件、`can_delete_world` から
+持ち主を外す → 3件・domain 2件、削除の画面の門を外す → 20件、名前の確かめを外す → 3件、世界があってもフォームを出す → 1件、
+GM ホームの削除の導線を `is_owner` で囲む → 1件、`pennant_delete` の門を作成者だけにする → 3件、コマンドの `OPERATOR_HINT` を外す → 1件。
+
+**レビュー（ddd-boundary-reviewer）**: 重要な指摘なし。軽微を直した: (1) オーナーを素の利用者のまま付けていた2本のテストが空振りしていた
+→ 編集者にした。(2) 編成の画面の注記が「持ち主なら変えられる」とも読めた → 「この世界を作った人（今もこのワークスペースの持ち主か編集者で
+ある人）だけ」。(3) GM ホームの `is_owner or can_delete_world` → `can_delete_world`（書き込める作成者は必ず消せる）。(4) `_is_owner` →
+`_can_write_world`（`_is_creator` と取り違えないよう）。残したもの（要確認）: 既存の世界のうち、作成者が既定のワークスペースの持ち主・編集者で
+ない世界は、この変更で読むだけになる（バックフィルで編集者にしたのは staff だけ。W2 T4 より前は一般の利用者も世界を作れた）。
+epic を main に入れる前に開発 DB・本番で数え、あれば作成者を編集者にするかを決める（T7 の申し送り）。
+
+**T6 以降への申し送り**
+
+- T7: 上の「要確認」を数える（`PennantWorld` の owner が既定のワークスペースの owner でも `WorkspaceEditor` でもない行）。計測は削除の画面
+  （`contents()` の5本＋権限の解決。削除は T2 の計測どおり同期で数秒）。

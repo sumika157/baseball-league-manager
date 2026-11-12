@@ -46,7 +46,15 @@ from myapp.infrastructure.repositories import (
 from myapp.infrastructure.scoping import StageFilter
 from myapp.presentation.views import build_league_view_service
 
-from ..helpers import build_scorebook, to_plate_appearances, world_ledger, world_scope, world_summary_query, ws_url
+from ..helpers import (
+    build_scorebook,
+    make_editor,
+    to_plate_appearances,
+    world_ledger,
+    world_scope,
+    world_summary_query,
+    ws_url,
+)
 from .world_case import YEAR, WorldCase
 
 # 世界の最後の公式戦の日（`WorldCase` の試合）。同じ日に足せば世界の今日は動かない
@@ -197,7 +205,7 @@ class PostseasonGamesDoNotCountTest(PostseasonCase):
 
         GM ホームは受け持ちの球団の期間の集計まで出るよう、オーナーとして開く。
         """
-        owner = User.objects.create_user("gm", password="x")
+        owner = make_editor(User.objects.create_user("gm", password="x"))
         orm_models.PennantWorld.objects.filter(id=self.world_id).update(
             owner_id=owner.id, managed_team_id=self.pennant_team.id
         )

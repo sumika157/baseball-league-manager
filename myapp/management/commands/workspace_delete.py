@@ -16,11 +16,13 @@ from typing import Any
 
 from django.core.management.base import BaseCommand, CommandError
 
-from myapp.domain.exceptions import DomainError
+from myapp.domain.exceptions import DomainError, InvalidWorkspace
 from myapp.management.workspaces import add_workspace_argument, real_scope_for_key
 from myapp.presentation.views import build_workspace_management_query, build_workspace_service
 
 CONFIRMATION = "yes"
+# 消す前の検査で拒まれたとき（在籍がほかのワークスペースにもまたがる選手・外せない迷子の参照）に、運営者へ添える直し方
+OPERATOR_HINT = "（運営者の方へ）管理画面でその行を直してから消し直してください。"
 
 
 class Command(BaseCommand):
@@ -53,6 +55,9 @@ class Command(BaseCommand):
                 raise CommandError("取りやめました（何も消していません）。")
         try:
             build_workspace_service().delete(workspace_id)
+        except InvalidWorkspace as error:
+            # 理由の文は画面の持ち主向け（「運営者に連絡してください」）。ここでは運営者本人が読むので直し方を添える
+            raise CommandError(f"{error}\n{OPERATOR_HINT}") from error
         except DomainError as error:
             raise CommandError(str(error)) from error
         self.stdout.write(self.style.SUCCESS(f"ワークスペース {key} を消しました"))

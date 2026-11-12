@@ -84,6 +84,7 @@ from ..domain.exceptions import (
     LeagueChangeLocked,
     LeagueNotFound,
     MemberNotFound,
+    NotDeletable,
     PlayerNotFound,
     RegisteredPlayerLimitExceeded,
     StadiumNotFound,
@@ -200,6 +201,7 @@ from .forms import (
     PostseasonFormatForm,
     StadiumSetupForm,
     TeamSetupForm,
+    WorkspaceDeleteForm,
     WorkspaceForm,
 )
 
@@ -638,7 +640,10 @@ def build_invitation_preview_query() -> DjangoInvitationPreviewQuery:
 
 
 def build_workspace_management_query(workspace_id: int) -> DjangoWorkspaceManagementQuery:
-    """メンバーの画面（メンバーと招待の一覧）の参照クエリを組み立てる（W4。ワークスペースの id は必須）。"""
+    """メンバーの画面（メンバーと招待の一覧）と削除の確認（消えるものの件数と世界）の参照クエリを組み立てる。
+
+    W4。ワークスペースの id は必須。
+    """
     return DjangoWorkspaceManagementQuery(workspace_id)
 
 
@@ -882,21 +887,45 @@ def _world_context(request, world_id: int) -> WorldContext:
     return context
 
 
-def _is_owner(request, world: WorldContext) -> bool:
-    """ログインしている人が、その世界のオーナーか。書き込みの導線を出す・操作を通すかの判定に使う。"""
+def _is_creator(request, world: WorldContext) -> bool:
+    """ログインしている人が、その世界を作った人（世界の行のオーナー）か。書けるかは `_can_write_world` が決める。"""
     return request.user.is_authenticated and world.owner_id is not None and world.owner_id == request.user.id
 
 
-def _requires_world_owner(request, world: WorldContext):
-    """世界のオーナーでなければ拒否する。未ログインはログインへ、ほかの人は 403。
+def _can_write_world(request, world: WorldContext) -> bool:
+    """その世界に書き込めるか（進める・締める・編成・設定）。書き込みの導線を出す・操作を通すかの判定に使う。
 
-    実データのチームの判定（`_requires_team_permission`）とは別で、ワークスペースの持ち主・編集者でも世界のオーナーで
-    なければ通さない（世界は遊ぶ人のセーブデータ。持ち主による削除は W6）。
+    世界を作った人で、今もこのワークスペースの全体の編集権を持つ人だけ（`WorkspaceAccess.can_write_world`。
+    W4 の決定1）。除名された・担当に変えられた作成者は読むだけになる。判定は解決済みの権限だけ（DB を読まない）。
+    テンプレートには `is_owner`（世界の書き込みの導線の合図）として渡す。
+    """
+    return _workspace(request).access.can_write_world(is_creator=_is_creator(request, world))
+
+
+def _can_delete_world(request, world: WorldContext) -> bool:
+    """その世界を削除できるか。書き込める作成者と、ワークスペースの持ち主（ほかの人の世界も。W4 の決定2）。"""
+    return _workspace(request).access.can_delete_world(is_creator=_is_creator(request, world))
+
+
+def _requires_world_owner(request, world: WorldContext):
+    """世界に書き込めなければ拒否する（`_can_write_world`）。未ログインはログインへ、ほかの人は 403。
+
+    実データのチームの判定（`_requires_team_permission`）とは別で、ワークスペースの持ち主・編集者でも世界の作成者で
+    なければ通さない（世界は遊ぶ人のセーブデータ。持ち主に許すのは削除だけ。`_requires_world_deleter`）。
     """
     if not request.user.is_authenticated:
         return redirect_to_login(request.get_full_path())
-    if not _is_owner(request, world):
-        raise PermissionDenied("この世界のオーナーではありません。")
+    if not _can_write_world(request, world):
+        raise PermissionDenied("この世界に書き込む権限がありません。")
+    return None
+
+
+def _requires_world_deleter(request, world: WorldContext):
+    """世界を削除できなければ拒否する（`_can_delete_world`）。未ログインはログインへ、ほかの人は 403。"""
+    if not request.user.is_authenticated:
+        return redirect_to_login(request.get_full_path())
+    if not _can_delete_world(request, world):
+        raise PermissionDenied("この世界に書き込む権限がありません。")
     return None
 
 
@@ -1038,7 +1067,7 @@ def pennant_world(request, world_id):
     `?since=<日付>` は進める前の今日（結果のまとめの起点）。読めない・未来の値はまとめを出さない。
     """
     world = _world_context(request, world_id)
-    is_owner = _is_owner(request, world)
+    is_owner = _can_write_world(request, world)
     # シーズン終了でポストシーズンのある世界は「ポストシーズン」のカード（勝ち上がりはここで1回だけ導き、
     # 世界の終了の判定と締めるカードにも同じ状況を使う）。方式「なし」の世界は導かない（読み込みを足さない）
     postseason = None
@@ -1076,6 +1105,7 @@ def pennant_world(request, world_id):
         {
             "home": home,
             "is_owner": is_owner,
+            "can_delete_world": _can_delete_world(request, world),
             "plan_notices": _plan_notices(request, world) if is_owner else [],
             "postseason": postseason,
             "close_option": close_option,
@@ -1294,7 +1324,7 @@ def pennant_settings(request, world_id):
     world = _world_context(request, world_id)
     if request.method not in ("GET", "HEAD", "POST"):
         return HttpResponseNotAllowed(["GET", "HEAD", "POST"])
-    is_owner = _is_owner(request, world)
+    is_owner = _can_write_world(request, world)
     service = build_pennant_settings_service(_world_scope(request, world_id))
     form = None
     if request.method == "POST":
@@ -1387,11 +1417,11 @@ def pennant_team_history(request, world_id, team_id):
 
 
 def pennant_delete(request, world_id):
-    """世界の削除の確認。GET も POST もオーナーだけ。削除したら世界の一覧へ戻る。"""
+    """世界の削除の確認。GET も POST も、書き込める作成者とワークスペースの持ち主だけ。削除したら世界の一覧へ戻る。"""
     world = _world_context(request, world_id)
     if request.method not in ("GET", "HEAD", "POST"):
         return HttpResponseNotAllowed(["GET", "HEAD", "POST"])
-    denied = _requires_world_owner(request, world)
+    denied = _requires_world_deleter(request, world)
     if denied is not None:
         return denied
 
@@ -1616,7 +1646,7 @@ def _render_club(
     if tab == RELEASE_TAB and release is None:
         tab = DEFAULT_TAB
     context: dict = {
-        "is_owner": _is_owner(request, world),
+        "is_owner": _can_write_world(request, world),
         "tab": tab,
         "club": None,
         "club_error": None,
@@ -1804,6 +1834,37 @@ def workspace_settings(request):
     else:
         form = WorkspaceForm(initial={"name": workspace.name, "visibility": workspace.visibility.value})
     return render(request, "myapp/workspace/settings.html", {"form": form, "workspace_tab": "settings"})
+
+
+def workspace_delete(request):
+    """ワークスペースの削除の確認（GET）と削除（POST。`/w/<key>/delete/`）。持ち主だけ（GET も POST も）。W4 T5。
+
+    確認には消えるものの件数（リーグ・チーム・選手・試合）を出し、ワークスペースの名前を打ってもらう（違えば消さない）。
+    ペナントの世界が残っていれば（`deletion_blocker`。決定2）削除のフォームを出さず、理由と世界の一覧と、各世界の
+    削除の画面への導線を出す（持ち主はほかの人の世界も消せる）。リポジトリが同じ規則で `NotDeletable` にし、
+    ほかのワークスペースの行が外せない形でこのワークスペースを指していれば `InvalidWorkspace` にする。どちらも理由を
+    画面に出して何も消さない（200）。消したら `/` へ。
+    """
+    if request.method not in _SETUP_METHODS:
+        return HttpResponseNotAllowed(_SETUP_METHODS)
+    _requires_owner(request, WorkspaceAccess.can_delete)
+    workspace = _workspace(request)
+    form = WorkspaceDeleteForm(request.POST if request.method == "POST" else None, workspace_name=workspace.name)
+    error = None
+    if request.method == "POST" and form.is_valid():
+        try:
+            build_workspace_service().delete(workspace.workspace_id)
+        except (NotDeletable, InvalidWorkspace) as raised:
+            error = str(raised)
+        else:
+            messages.success(request, f"ワークスペース「{workspace.name}」を削除しました。")
+            return redirect(reverse("home"))
+    contents = build_workspace_management_query(workspace.workspace_id).contents()
+    return render(
+        request,
+        "myapp/workspace/delete.html",
+        {"contents": contents, "form": form, "error": error, "workspace_tab": "delete"},
+    )
 
 
 # --- メンバーと招待（W4 T4。#80）---

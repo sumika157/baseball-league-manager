@@ -3,10 +3,12 @@
 - 作成（`/` のフォーム → `/workspaces/new/`）: 公開範囲の既定は非公開。作ったら新しいワークスペースのダッシュボード
   （空の案内）へ。上限に達したらフォームの代わりに案内。上限を超える POST は 200 でフォームのエラー（何も作らない）。
 - 設定（`/w/<key>/settings/`）: 持ち主だけが名前と公開範囲を変えられる。ほかの人は GET も POST も 403。
+- 削除（`/w/<key>/delete/`。W4 T5）: 持ち主だけ。名前を打って確かめる。世界が残っていればボタンの代わりに世界の一覧。
 - ヘッダー: ログインしていれば名前のところが切り替えのドロップダウン（自分のワークスペースと `/`）。
   「ワークスペースの設定」は持ち主だけ。一覧はワークスペースの数によらず1本で読み、未ログインでは読まない。
 """
 
+from datetime import date
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
@@ -15,11 +17,18 @@ from django.test import RequestFactory, TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
-from myapp.domain.workspace import Visibility
+from myapp.domain.workspace import Visibility, workspace_deletion_blocker
 from myapp.infrastructure import orm_models
 from myapp.presentation import context_processors, views
 
-from ..helpers import build_workspace_access_query, make_editor, make_league, make_workspace, ws_url
+from ..helpers import (
+    build_workspace_access_query,
+    make_editor,
+    make_league,
+    make_pennant_world,
+    make_workspace,
+    ws_url,
+)
 
 SWITCH_HEADER = "ワークスペースを切り替える"
 
@@ -163,6 +172,114 @@ class WorkspaceSettingsScreenTest(TestCase):
         response = self.client.get(self.url)
 
         self.assertRedirects(response, f"{reverse('login')}?next={self.url}", fetch_redirect_response=False)
+
+    def test_other_methods_are_not_allowed(self):
+        self.client.force_login(self.owner)
+        self.assertEqual(self.client.put(self.url).status_code, 405)
+
+
+class WorkspaceDeleteScreenTest(TestCase):
+    """ワークスペースの削除の画面（`/w/<key>/delete/`。W4 T5）。持ち主だけ。名前を打って確かめ、消したら `/` へ。"""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="owner", password="x")
+        self.ws = make_workspace(self.owner, "消す場所", visibility=Visibility.PUBLIC)
+        league = make_league("消すリーグ", workspace=self.ws)
+        self.team = orm_models.Team.objects.create(league=league, name="消す球団")
+        self.url = ws_url("workspace_delete", workspace=self.ws)
+
+    def exists(self) -> bool:
+        return orm_models.Workspace.objects.filter(id=self.ws.id).exists()
+
+    def test_the_owner_sees_the_counts_and_deletes_with_the_name(self):
+        self.client.force_login(self.owner)
+        page = self.client.get(self.url)
+        self.assertContains(page, "リーグ 1・チーム 1・選手 0・試合 0")
+        self.assertContains(page, 'name="confirm_name"')
+        self.assertContains(page, f'href="{self.url}"')  # 管理の画面のタブ
+
+        response = self.client.post(self.url, {"confirm_name": "消す場所"})
+
+        self.assertRedirects(response, reverse("home"), fetch_redirect_response=False)
+        self.assertFalse(self.exists())
+        self.assertFalse(orm_models.Team.objects.filter(id=self.team.id).exists())
+        self.assertContains(self.client.get(reverse("home")), "ワークスペース「消す場所」を削除しました。")
+
+    def test_a_wrong_name_deletes_nothing(self):
+        self.client.force_login(self.owner)
+        for sent in ("消す", "", "ほかの場所"):
+            with self.subTest(sent=sent):
+                response = self.client.post(self.url, {"confirm_name": sent})
+
+                self.assertEqual(response.status_code, 200)
+                self.assertTrue(response.context["form"].errors["confirm_name"])
+                self.assertTrue(self.exists())
+
+    def test_a_workspace_with_a_world_shows_the_worlds_instead_of_the_button(self):
+        """世界が残っていれば削除のフォームを出さず、理由と世界の一覧・各世界の削除の画面への導線を出す（決定2）。"""
+        creator = make_editor(User.objects.create_user(username="creator", password="x"), self.ws)
+        world = make_pennant_world("残る世界", workspace=self.ws, owner=creator, seed=1, start_year=2026)
+        self.client.force_login(self.owner)
+
+        page = self.client.get(self.url)
+
+        self.assertContains(page, workspace_deletion_blocker(1) or "")
+        self.assertNotContains(page, 'name="confirm_name"')
+        self.assertContains(page, "残る世界")
+        self.assertContains(page, "オーナー: creator")
+        self.assertContains(page, f'href="{ws_url("pennant_delete", world.id, workspace=self.ws)}"')
+        # 名前を打って送っても消えない（リポジトリが同じ規則で拒む）
+        response = self.client.post(self.url, {"confirm_name": "消す場所"})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(self.exists())
+
+    def test_the_owner_deletes_the_world_of_another_and_then_the_workspace(self):
+        """持ち主はほかの人が作った世界も消せる（決定2）。世界を消せば、ワークスペースも消せる。"""
+        creator = make_editor(User.objects.create_user(username="creator", password="x"), self.ws)
+        world = make_pennant_world("ほかの人の世界", workspace=self.ws, owner=creator, seed=1, start_year=2026)
+        self.client.force_login(self.owner)
+
+        self.client.post(ws_url("pennant_delete", world.id, workspace=self.ws))
+        self.assertContains(self.client.get(self.url), 'name="confirm_name"')
+        self.client.post(self.url, {"confirm_name": "消す場所"})
+
+        self.assertFalse(self.exists())
+
+    def test_a_stray_reference_shows_the_reason_and_deletes_nothing(self):
+        """ほかのワークスペースの試合がこのワークスペースのチームを指している（管理画面の直書き）。理由を出して何も消さない。"""
+        elsewhere = make_workspace(name="よそ")
+        other = orm_models.Team.objects.create(
+            league=make_league("よそのリーグ", workspace=elsewhere), name="よその球団"
+        )
+        game = orm_models.Game.objects.create(
+            year=2026, played_on=date(2026, 4, 1), home_team=other, away_team=self.team, home_score=1, away_score=0
+        )
+        self.client.force_login(self.owner)
+
+        response = self.client.post(self.url, {"confirm_name": "消す場所"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, f"ほかのワークスペースの試合（id={game.id}）")
+        self.assertContains(response, "運営者に連絡してください")
+        self.assertTrue(self.exists())
+
+    def test_only_the_owner_may_open_or_post(self):
+        editor = make_editor(User.objects.create_user(username="editor", password="x"), self.ws)
+        manager = User.objects.create_user(username="manager", password="x")
+        self.team.managers.add(manager)
+        outsider = User.objects.create_superuser("root", password="x")
+        for user in (editor, manager, outsider):
+            with self.subTest(user=user.username):
+                self.client.force_login(user)
+                self.assertEqual(self.client.get(self.url).status_code, 403)
+                self.assertEqual(self.client.post(self.url, {"confirm_name": "消す場所"}).status_code, 403)
+        self.assertTrue(self.exists())
+
+    def test_anonymous_goes_to_the_login(self):
+        response = self.client.post(self.url, {"confirm_name": "消す場所"})
+
+        self.assertRedirects(response, f"{reverse('login')}?next={self.url}", fetch_redirect_response=False)
+        self.assertTrue(self.exists())
 
     def test_other_methods_are_not_allowed(self):
         self.client.force_login(self.owner)

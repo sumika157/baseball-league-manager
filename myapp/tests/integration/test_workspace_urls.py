@@ -280,6 +280,8 @@ class NoBareReverseTest(SimpleTestCase):
         ("views.py", "workspace_create"),
         ("views.py", "_invitation_url"),
         ("views.py", "invitation_accept"),
+        # 消したワークスペースの外（`/`）へ戻す（今の要求の key はもう無い。W4 T5）
+        ("views.py", "workspace_delete"),
     }
 
     def test_reverse_and_redirect_by_name_are_only_in_the_helper(self):

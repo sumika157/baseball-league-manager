@@ -26,7 +26,7 @@ from myapp.presentation.views import (
     build_pennant_settings_service,
 )
 
-from ..helpers import world_ledger, world_scope, ws_url
+from ..helpers import make_editor, world_ledger, world_scope, ws_url
 from .world_case import YEAR, PostseasonWorldCase
 
 DECIDE_RETIREMENTS = "myapp.domain.pennant.offseason.decide_retirements"
@@ -43,7 +43,7 @@ class SettingsCase(PostseasonWorldCase):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        cls.owner = User.objects.create_user("gm", password="x")
+        cls.owner = make_editor(User.objects.create_user("gm", password="x"))
         orm_models.PennantWorld.objects.filter(id__in=[cls.npb_world, cls.none_world]).update(owner_id=cls.owner.id)
 
     def settings_page(self, world_id=None):
