@@ -180,3 +180,8 @@ def awards_in(scope: WorldScope) -> QuerySet[orm_models.PennantAward]:
 def championships_in(scope: WorldScope) -> QuerySet[orm_models.PennantChampionship]:
     """範囲の日本一の記録。記録は球団を持つので、球団のリーグで世界が決まる。"""
     return orm_models.PennantChampionship.objects.filter(world_condition("team__league", scope))
+
+
+def drafts_in(scope: WorldScope) -> QuerySet[orm_models.PennantDraft]:
+    """範囲のドラフト会議の記録。会議は世界そのものに属すので、世界を直接指す（`League.world` と同じ列の名前）。"""
+    return orm_models.PennantDraft.objects.filter(world_condition("", scope))

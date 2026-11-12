@@ -1571,3 +1571,13 @@ class DjangoServiceHistoryQuery:
         )
         first: int | None = recorded["first"]
         return first
+
+
+class DjangoPlayerNameQuery:
+    """PlayerNameQuery の Django ORM 実装。範囲（`WorldScope`）の選手の名前を1本のクエリで読む。"""
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def names(self) -> frozenset[str]:
+        return frozenset(players_in(self._scope).values_list("name", flat=True))
