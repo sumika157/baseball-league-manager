@@ -1,0 +1,103 @@
+{% extends 'myapp/base.html' %}
+{% load scoped %}
+
+{% block title %}メンバーと招待 - Baseball Manager{% endblock %}
+
+{% block content %}
+{% include 'myapp/workspace/_tabs.html' %}
+
+{% comment %}
+メンバーと招待（持ち主だけ。ビューの門が持ち主以外を 403 にする）。W4 T4。
+- メンバー: 持ち主 → 編集者 → チーム担当の順。持ち主の行には役割の変更と除名を出さない（form が None）。
+  役割の選択肢は InvitedRole、担当チームの選択肢はこのワークスペースのチーム（どちらもフォーム経由）。
+- 未使用の招待: 期限内のものだけ。リンク（トークン）は保存していないので出せない（発行の直後に1回だけ出す）。
+- 招待の発行: 発行したらこの画面へ戻り、リンクを上の案内に1回だけ出す（base.html の invitation-link）。
+{% endcomment %}
+
+<h2 class="h6 mb-2">メンバー</h2>
+<div class="card mb-4">
+  <ul class="list-group list-group-flush">
+    {% for member, form in members %}
+      <li class="list-group-item" id="member-{{ member.user_id }}">
+        <div class="d-flex flex-wrap align-items-center gap-2">
+          <span class="fw-semibold">{{ member.username }}</span>
+          <span class="badge bg-primary">{{ member.role.label }}</span>
+          {% if member.team_names %}
+            <span class="stat-muted" style="font-size: 0.8125rem;">担当: {{ member.team_names|join:"・" }}</span>
+          {% endif %}
+        </div>
+        {% if form %}
+          <details class="mt-2"{% if form.errors %} open{% endif %}>
+            <summary class="stat-muted" style="font-size: 0.8125rem;">役割を変える・メンバーから外す</summary>
+            <form method="post" action="{% workspace_url 'workspace_member_edit' member.user_id %}" class="mt-2">
+              {% csrf_token %}
+              {% for error in form.non_field_errors %}<div class="alert alert-danger">{{ error }}</div>{% endfor %}
+              <div class="row">
+                <div class="col-md-4">{% include 'myapp/setup/_field.html' with field=form.role %}</div>
+                <div class="col-md-8">{% include 'myapp/setup/_field.html' with field=form.teams %}</div>
+              </div>
+              <button type="submit" class="btn btn-sm btn-primary">役割を保存する</button>
+            </form>
+            <form method="post" action="{% workspace_url 'workspace_member_remove' member.user_id %}" class="mt-2" onsubmit="return confirm('このメンバーを外します。担当チームもすべて外れます。よろしいですか?')">
+              {% csrf_token %}
+              <button type="submit" class="btn btn-sm btn-outline-danger">メンバーから外す</button>
+            </form>
+          </details>
+        {% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+</div>
+
+<h2 class="h6 mb-2">未使用の招待</h2>
+{% if invitations %}
+  <div class="table-responsive mb-4">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>役割</th>
+          <th>担当チーム</th>
+          <th>発行</th>
+          <th>期限</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody class="tabular-nums">
+        {% for invitation in invitations %}
+          <tr>
+            <td>{{ invitation.role.label }}</td>
+            <td>{{ invitation.team_names|join:"・"|default:"—" }}</td>
+            <td>{{ invitation.created_at|date:"Y-m-d H:i" }}</td>
+            <td>{{ invitation.expires_at|date:"Y-m-d H:i" }}</td>
+            <td class="text-end">
+              <form method="post" action="{% workspace_url 'workspace_invitation_revoke' invitation.invitation_id %}">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-sm btn-outline-danger">取り消す</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <div class="card mb-4"><div class="empty-state">未使用の招待はありません。</div></div>
+{% endif %}
+
+<h2 class="h6 mb-2">招待する</h2>
+<form method="post" action="{% workspace_url 'workspace_invitation_create' %}" class="card mb-4">
+  {% csrf_token %}
+  <div class="card-body">
+    {% for error in invitation_form.non_field_errors %}<div class="alert alert-danger">{{ error }}</div>{% endfor %}
+    <div class="row">
+      <div class="col-md-4">{% include 'myapp/setup/_field.html' with field=invitation_form.role %}</div>
+      <div class="col-md-8">{% include 'myapp/setup/_field.html' with field=invitation_form.teams %}</div>
+    </div>
+    <p class="stat-muted mb-3" style="font-size: 0.8125rem;">
+      招待のリンクを発行します（メールは送りません）。リンクは発行した直後に1回だけ表示されるので、受け取る人に渡してください。
+      リンクは期限内に1回だけ使えます。なくしたら取り消して発行し直します。
+    </p>
+    <button type="submit" class="btn btn-primary">招待のリンクを発行する</button>
+  </div>
+</form>
+{% endblock %}

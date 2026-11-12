@@ -1,0 +1,40 @@
+{% extends 'myapp/base.html' %}
+{% load scoped %}
+
+{% block title %}招待 - Baseball Manager{% endblock %}
+
+{% block content %}
+{% comment %}
+招待の受諾（ワークスペースの外。/invitations/<token>/）。W4 T4。
+- 未ログイン: ワークスペースの名前と役割と、ログイン・新規登録への導線（next でこの画面へ戻る）。受諾のボタンは出さない。
+- 既にメンバー: 受諾のボタンを出さず、ダッシュボードへの入口だけ（両立しない操作を並べない）。
+- それ以外のログインした人: 受諾のボタン（ビューが渡す can_accept）。
+役割の表示名は InvitedRole（受諾した人がなる役割は granted_role）が出典。
+{% endcomment %}
+<div class="auth-shell">
+  <div class="card">
+    <div class="card-body">
+      <h1 class="auth-title">ワークスペースへの招待</h1>
+      <p>ワークスペース「<strong>{{ invitation.workspace_name }}</strong>」に、<strong>{{ invitation.role.granted_role.label }}</strong>（{{ invitation.role.label }}）として招待されています。</p>
+      {% if invitation.team_names %}
+        <p>担当チーム: {{ invitation.team_names|join:"・" }}</p>
+      {% endif %}
+      <p class="stat-muted" style="font-size: 0.8125rem;">期限: {{ invitation.expires_at|date:"Y-m-d H:i" }}</p>
+
+      {% if not user.is_authenticated %}
+        <p>招待を受け取るには、ログインするか、新規登録してからログインしてください。終わるとこの画面に戻ります。</p>
+        <a href="{{ login_url }}" class="btn btn-primary w-100 mb-2">ログインして受け取る</a>
+        <a href="{{ signup_url }}" class="btn btn-outline-primary w-100">新規登録して受け取る</a>
+      {% elif not can_accept %}
+        <div class="alert alert-secondary">すでにこのワークスペースのメンバーです。</div>
+        <a href="{% workspace_entry_url invitation.workspace_key %}" class="btn btn-primary w-100">ワークスペースを開く</a>
+      {% else %}
+        <form method="post">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-primary w-100">招待を受け取る</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
