@@ -14,6 +14,10 @@ paths:
 - **選手の登録には年を渡す（`from_year=TEST_YEAR`）。** 登録の年の既定は現実の今日の年で、試合の年（`helpers.TEST_YEAR`）は固定なので、
   渡さないと年が明けたとたんに「加入より前の年の試合」になって落ちる（#341 で 2027年として流して57件落ちた）。
   `date.today()` で作った年をテストの定数にしない。「今日の年」を既定に使うこと自体を確かめるテストだけは例外。
+- **テストダブルと土台は `test_` で始まらないモジュールに置き、テストのファイルに書き写さない。** domain の乱数源の偽物は
+  `tests/domain/doubles.py`（`ScriptedRandom`・`OnlyRandom`）、E2E の共通の操作は `tests/e2e/base.py`（`login` など）。
+  テストのメソッドを持つクラスを別の `test_` モジュールから import すると、import した先でも同じテストが流れる
+  （`test_test_modules.py` が検査する）。既存の `*Case` の多くは `test_` モジュールにあり、移すのは #343。
 - ソースの整合性を機械的に見るテストは `SimpleTestCase`（DB 不要）で書く。前例: `test_templates.py`（コメント記法）・`test_wiring.py`（依存の組み立て）・`test_stat_fields.py`（成績項目の列挙）。
 - **重い準備（選手の登録・世界の分岐・シーズンを回す）はクラスで1回（`setUpTestData`）にする。** テストごとの変更は `TestCase` が巻き戻す。
   同じシーズンを回すテストは同じクラスに集める（前例: `FinishedSeasonCase`・`FinishedSeasonTest`）。選手を何人も登録するときは

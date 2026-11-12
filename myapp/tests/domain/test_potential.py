@@ -27,17 +27,7 @@ from myapp.tests.domain.test_draft_meeting import club, run
 from myapp.tests.domain.test_offseason import YEAR, plan, player
 from myapp.tests.domain.test_offseason import club as offseason_club
 
-
-class CountingRandom:
-    """`random()` しか持たず、呼ばれた回数を数える乱数源。"""
-
-    def __init__(self, seed: int) -> None:
-        self._rng = random.Random(seed)
-        self.calls = 0
-
-    def random(self) -> float:
-        self.calls += 1
-        return self._rng.random()
+from .doubles import OnlyRandom
 
 
 class PotentialValueTest(unittest.TestCase):
@@ -72,7 +62,7 @@ class PotentialValueTest(unittest.TestCase):
 
 class DrawPotentialTest(unittest.TestCase):
     def test_follows_the_prior_and_uses_random_twice(self) -> None:
-        rng = CountingRandom(5)
+        rng = OnlyRandom(5)
         values = [draw_potential(rng).value for _ in range(4000)]
         self.assertEqual(rng.calls, 8000)
         low, high = POTENTIAL_RANGE

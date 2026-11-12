@@ -35,3 +35,11 @@ class PlaywrightTestCase(StaticLiveServerTestCase):
     def tearDown(self):
         self.page.close()
         super().tearDown()
+
+    def login(self, username: str, password: str = "pass12345") -> None:
+        """ログイン画面から入り、トップに戻るまで待つ。ログインの手順が変わったときの直しをここ1か所にする。"""
+        self.page.goto(self.live_server_url + "/accounts/login/")
+        self.page.fill('input[name="username"]', username)
+        self.page.fill('input[name="password"]', password)
+        self.page.locator('input[name="password"]').press("Enter")
+        self.page.wait_for_url(f"{self.live_server_url}/")

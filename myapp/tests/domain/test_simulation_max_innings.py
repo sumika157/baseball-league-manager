@@ -18,24 +18,13 @@ from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.samples import average_club, round_robin_days, spread_league
 from myapp.domain.value_objects import ForeignPlayerRules, GameStage
 
+from .doubles import ScriptedRandom
+
 OPENING_DAY = date(2026, 4, 1)
 # `max_innings` を足す前のエンジン（S1 のコミット 346ca65）で、下の `_season_fingerprint()` を取った値。
 # 公式戦の再現性（同じシードの世界が同じ試合を作る）を守るため、既定値の経路で打席列が1つも変わらないことを見る。
 # エンジンの振る舞いを意図して変えたときだけ、この値を取り直す
 FINGERPRINT_BEFORE_MAX_INNINGS = "8cd61263f94bd1cca9b7107dac46556ccfd0b381719f45d440f542d5e68a96b2"
-
-
-class ScriptedRandom:
-    """決めた列を繰り返す乱数源。"""
-
-    def __init__(self, *values: float) -> None:
-        self.values = values
-        self.index = 0
-
-    def random(self) -> float:
-        value = self.values[self.index % len(self.values)]
-        self.index += 1
-        return value
 
 
 def _season_fingerprint(**kwargs) -> tuple[str, int]:
