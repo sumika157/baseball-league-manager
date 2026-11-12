@@ -10,6 +10,7 @@ from myapp.domain.value_objects import (
 from myapp.infrastructure import orm_models
 
 from ..helpers import (
+    TEST_YEAR,
     build_scorebook,
     give_batting,
     give_pitching,
@@ -31,8 +32,8 @@ class RelativeMetricsTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.batter = self.roster.register_player(self.team.id, "山田", 10, "内野手")
-        self.pitcher = self.roster.register_player(self.team.id, "佐藤", 18, "投手")
+        self.batter = self.roster.register_player(self.team.id, "山田", 10, "内野手", from_year=TEST_YEAR)
+        self.pitcher = self.roster.register_player(self.team.id, "佐藤", 18, "投手", from_year=TEST_YEAR)
         give_batting(
             self.team,
             self.rival,
@@ -58,7 +59,7 @@ class RelativeMetricsTest(BaseCase):
 
     def test_a_better_batter_scores_above_a_hundred(self):
         """リーグ平均より良い打者は100を超える。"""
-        weak = self.roster.register_player(self.team.id, "田中", 11, "外野手")
+        weak = self.roster.register_player(self.team.id, "田中", 11, "外野手", from_year=TEST_YEAR)
         give_batting(self.team, self.rival, weak.id, BattingLine(at_bats=10, singles=1), day=3)
 
         rows = {r.name: r for r in self.team_view.list_batters(self.team.id).rows}
@@ -68,7 +69,7 @@ class RelativeMetricsTest(BaseCase):
 
     def test_era_plus_rewards_the_lower_earned_run_average(self):
         """ERA+ は防御率が低いほど大きい（FIP と向きが逆）。"""
-        weak = self.roster.register_player(self.team.id, "鈴木", 19, "投手")
+        weak = self.roster.register_player(self.team.id, "鈴木", 19, "投手", from_year=TEST_YEAR)
         give_pitching(
             self.team,
             self.rival,
@@ -87,7 +88,7 @@ class RelativeMetricsTest(BaseCase):
         other_league = orm_models.League.objects.create(name="別リーグ")
         other = orm_models.Team.objects.create(league=other_league, name="別チーム")
         opponent = orm_models.Team.objects.create(league=other_league, name="別の相手")
-        slugger = self.roster.register_player(other.id, "大砲", 3, "内野手")
+        slugger = self.roster.register_player(other.id, "大砲", 3, "内野手", from_year=TEST_YEAR)
         give_batting(
             other,
             opponent,
@@ -116,8 +117,8 @@ class AdvancedMetricsTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.pitcher = self.roster.register_player(self.team.id, "佐藤", 18, "投手")
-        self.batter = self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        self.pitcher = self.roster.register_player(self.team.id, "佐藤", 18, "投手", from_year=TEST_YEAR)
+        self.batter = self.roster.register_player(self.team.id, "山田", 10, "内野手", from_year=TEST_YEAR)
         give_pitching(
             self.team,
             self.rival,
@@ -176,7 +177,7 @@ class AdvancedMetricsTest(BaseCase):
         self.assertAlmostEqual(response.context["players"][0].isolated_power, 0.6)
 
     def test_pitchers_can_be_sorted_by_fip(self):
-        weak = self.roster.register_player(self.team.id, "田中", 19, "投手")
+        weak = self.roster.register_player(self.team.id, "田中", 19, "投手", from_year=TEST_YEAR)
         give_pitching(
             self.team,
             self.rival,

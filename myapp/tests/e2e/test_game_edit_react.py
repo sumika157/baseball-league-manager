@@ -12,7 +12,7 @@ from django.urls import reverse
 
 from myapp.infrastructure import orm_models
 
-from ..helpers import build_roster_service, play_game
+from ..helpers import TEST_YEAR, build_roster_service, play_game
 from .base import PlaywrightTestCase
 
 # React のビルド成果物。無いと画面が「読み込んでいます」のまま失敗し原因が
@@ -37,9 +37,9 @@ class GameEditReactTest(PlaywrightTestCase):
         self.rival = orm_models.Team.objects.create(league=league, name="ビジターズ")
 
         roster = build_roster_service()
-        self.batter = roster.register_player(self.rival.id, "山田", 3, "内野手")
-        self.home_batter = roster.register_player(self.team.id, "鈴木", 5, "内野手")
-        self.pitcher = roster.register_player(self.team.id, "佐藤", 18, "投手")
+        self.batter = roster.register_player(self.rival.id, "山田", 3, "内野手", from_year=TEST_YEAR)
+        self.home_batter = roster.register_player(self.team.id, "鈴木", 5, "内野手", from_year=TEST_YEAR)
+        self.pitcher = roster.register_player(self.team.id, "佐藤", 18, "投手", from_year=TEST_YEAR)
 
         self.game = play_game(self.team, self.rival, home_score=0, away_score=0)
 

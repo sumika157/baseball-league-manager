@@ -63,8 +63,12 @@ class RosterService:
         position_label: str,
         contract_label: str = ContractStatus.REGISTERED.value,
         acquired_via_label: str | None = None,
+        from_year: int | None = None,
     ) -> Player:
-        """新しい選手をロスターに加える。契約区分は既定で支配下。入団の経路は既定で不明。"""
+        """新しい選手をロスターに加える。契約区分は既定で支配下。入団の経路は既定で不明。
+
+        加入年は既定で現実の今日の年（画面からの登録）。過去の年の試合と組み合わせるとき（テスト・データ投入）は渡す。
+        """
         team = self._teams.find_by_id(team_id)
         contract = ContractStatus.from_label(contract_label)
         acquired_via = AcquisitionRoute.from_label(acquired_via_label) if acquired_via_label else None
@@ -74,6 +78,7 @@ class RosterService:
             name=name,
             number=JerseyNumber(number),
             position=Position.from_label(position_label),
+            from_year=from_year,
             contract=contract,
             acquired_via=acquired_via,
             limits=league.roster_limits,

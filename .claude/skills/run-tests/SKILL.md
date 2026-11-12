@@ -144,7 +144,7 @@ docker compose exec -e COVERAGE_FILE=/tmp/coverage-main web python -m coverage r
 | --- | --- |
 | 並列でだけ落ちる | テスト間で共有している状態（クラス変数・モジュールの変数・キャッシュ）。同じ worktree で別のテスト実行が同時にテスト DB を使っている（同じ worktree で同時に流さない） |
 | 単独では通り、スイートでは落ちる | 前のテストが残した状態（`setUpTestData` で作ったオブジェクトをテストの中で書き換えている、など） |
-| 日付や年が変わると落ちる | `date.today()`（`Team.add_player` などの年の既定値。CLAUDE.md「既知の罠」）。年は明示して渡す |
+| 日付や年が変わると落ちる | `date.today()`（`Team.add_player`・`RosterService.register_player` などの年の既定値。CLAUDE.md「既知の罠」）。年は明示して渡す（`helpers.TEST_YEAR`）。年をまたいでも通るかは、今日をずらして流して確かめる: `docker compose exec -e FAKE_YEAR=2030 web python .claude/skills/run-tests/fake_today.py myapp.tests.domain myapp.tests.integration --parallel 4`（#341 で 2027年として流して57件落ちた） |
 | シミュレーションの結果がぶれる | 乱数の種を固定していない。`make_random(seed)` か、テスト内の `ScriptedRandom` で出目を指定する |
 | E2E でだけ時々落ちる | 待ち方。`time.sleep` ではなく `wait_for_url`・`locator(...).wait_for()` で状態を待つ |
 | exit 137 で落ちる | 並行中のコンテナの再起動・メモリ不足（テストの不具合ではない。並行作業中はコンテナを再起動しない） |

@@ -39,12 +39,12 @@ from myapp.infrastructure.repositories import (
 )
 from myapp.presentation.views import build_pennant_offseason_service
 
-from ..helpers import register_players
+from ..helpers import TEST_YEAR, register_players
 from .base import BaseCase
 from .test_pennant_offseason import ClosedSeasonCase
 
 # `register_players` は年を省いて加える（現実の今日の年で在籍を開く）ので、FA 宣言や主将の年もそれに合わせる
-YEAR = date.today().year
+YEAR = TEST_YEAR
 UNLIMITED = RosterLimits.UNLIMITED
 
 # 集約の保存が書く表（球団の行は1行の update_or_create のまま）
