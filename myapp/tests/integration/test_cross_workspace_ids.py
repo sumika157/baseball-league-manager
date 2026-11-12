@@ -6,14 +6,19 @@
 B の id を混ぜて送り、どれも 404 かフォームのエラー（500 にならない）で、DB のどの行も変わらないことを確かめる。
 登録画面（W3）のリーグ・チーム・球場の id も同じ（範囲で絞った参照クエリとリポジトリが `*NotFound` にし、画面は 404。
 チームの作成・編集の本文に混ぜたリーグ・球場の id はフォームのエラー）。
+メンバーと招待（W4）: B のメンバーの user id・招待の id は 404、招待の発行・役割の変更の本文に混ぜた B のチームは
+フォームのエラー。
 """
 
 import json
 
+from django.contrib.auth.models import User
+
+from myapp.domain.workspace import InvitedRole
 from myapp.infrastructure import orm_models
 from myapp.presentation.forms import PROFILE_SECTION_MARKER
 
-from ..helpers import GAME_DAY_UNRECORDED, ws_url
+from ..helpers import GAME_DAY_UNRECORDED, build_workspace_member_service, make_editor, ws_url
 from .test_workspace_isolation import YEAR, WorkspaceCase, snapshot_all_rows
 
 
@@ -254,3 +259,46 @@ class CrossWorkspaceIdsTest(WorkspaceCase):
             with self.subTest(label):
                 self.assertEqual(self.client.post(url, {"order": order}).status_code, status)
                 self.assert_nothing_changed()
+
+    # --- メンバーと招待（W4 T4。#80） ---
+
+    def test_member_and_invitation_ids_of_b_are_404(self):
+        """A の key の下で、B の編集者の user id・B の招待の id を指すと 404（B の行は変わらない）。"""
+        b_editor = User.objects.create_user(username="b-editor-cross")
+        orm_models.WorkspaceEditor.objects.create(workspace=self.workspace_b, user=b_editor)
+        b_invitation = build_workspace_member_service().issue_invitation(
+            self.workspace_b.id, role=InvitedRole.EDIT_TEAMS, team_ids=[self.b_team.id]
+        )
+        self.before = snapshot_all_rows()
+        cases = {
+            "役割の変更": (ws_url("workspace_member_edit", b_editor.id), {"role": "edit_all"}),
+            "除名": (ws_url("workspace_member_remove", b_editor.id), {}),
+            "招待の取消": (ws_url("workspace_invitation_revoke", b_invitation.invitation_id), {}),
+        }
+        for label, (url, body) in cases.items():
+            with self.subTest(label):
+                self.assertEqual(self.client.post(url, body).status_code, 404)
+                self.assert_nothing_changed()
+
+    def test_b_teams_in_the_invitation_and_role_bodies_are_form_errors(self):
+        """招待の発行・役割の変更の本文に B のチームの id を混ぜると、フォームのエラー（200）で何も変わらない。"""
+        a_editor = make_editor(User.objects.create_user(username="a-editor-cross"), self.workspace)
+        self.before = snapshot_all_rows()
+        bodies = {
+            "B のチームだけ": [self.b_team.id],
+            "A と B のチーム": [self.team.id, self.b_team.id],
+        }
+        for label, teams in bodies.items():
+            body = {"role": InvitedRole.EDIT_TEAMS.value, "teams": teams}
+            for url in (ws_url("workspace_invitation_create"), ws_url("workspace_member_edit", a_editor.id)):
+                with self.subTest(label, url=url):
+                    response = self.client.post(url, body)
+                    self.assertEqual(response.status_code, 200)
+                    self.assert_nothing_changed()
+        # 空振りの防止: A のチームなら書ける
+        response = self.client.post(
+            ws_url("workspace_member_edit", a_editor.id),
+            {"role": InvitedRole.EDIT_TEAMS.value, "teams": [self.team.id]},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(self.team.managers.filter(id=a_editor.id).exists())

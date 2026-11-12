@@ -36,6 +36,17 @@ workspace_urlpatterns = [
     _w("", views.dashboard, "dashboard"),
     # ワークスペースそのものの設定（名前と公開範囲。W4 #80）。見るのも書くのも持ち主だけ
     _w("settings/", views.workspace_settings, "workspace_settings", login=True),
+    # メンバーと招待（W4 #80）。見るのも書くのも持ち主だけ。書き込み（発行・取消・役割の変更・除名）は POST だけ
+    _w("members/", views.workspace_members, "workspace_members", login=True),
+    _w("members/invitations/", views.workspace_invitation_create, "workspace_invitation_create", login=True),
+    _w(
+        "members/invitations/<int:invitation_id>/revoke/",
+        views.workspace_invitation_revoke,
+        "workspace_invitation_revoke",
+        login=True,
+    ),
+    _w("members/<int:user_id>/", views.workspace_member_edit, "workspace_member_edit", login=True),
+    _w("members/<int:user_id>/remove/", views.workspace_member_remove, "workspace_member_remove", login=True),
     _w("teams/", views.team_list, "team_list"),
     _w("players/", views.player_search, "player_search"),
     _w("standings/", views.standings, "standings"),
@@ -111,4 +122,6 @@ urlpatterns = [
     path("accounts/signup/", views.SignUpView.as_view(), name="signup"),
     # ワークスペースの作成（POST だけ。フォームは `/` にある。W4 #80）
     path("workspaces/new/", views.workspace_create, name="workspace_create"),
+    # 招待の受諾（トークンを持つ人。ワークスペースが決まる前に開くので外に置く。W4 #80）
+    path("invitations/<str:token>/", views.invitation_accept, name="invitation_accept"),
 ]

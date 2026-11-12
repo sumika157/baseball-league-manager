@@ -16,10 +16,10 @@ import json
 from django.contrib.auth.models import User
 from django.urls import reverse
 
-from myapp.domain.workspace import Visibility
+from myapp.domain.workspace import InvitedRole, Visibility
 from myapp.infrastructure import orm_models
 from myapp.presentation.forms import PROFILE_SECTION_MARKER
-from myapp.presentation.views import build_roster_service
+from myapp.presentation.views import build_roster_service, build_workspace_member_service
 
 from ..helpers import (
     GAME_DAY_UNRECORDED,
@@ -405,3 +405,100 @@ class WorkspaceSettingsPermissionTest(PermissionTableCase):
 class PrivateWorkspaceSettingsPermissionTest(WorkspaceSettingsPermissionTest):
     visibility = Visibility.PRIVATE
     workspace_table = WORKSPACE_PRIVATE
+
+
+# メンバーと招待（W4 T4。#80）。見るのも書くのも持ち主だけ（`can_manage_members()`）
+#   ヘッダーの導線: Y・N・404・login ／ 一覧（GET）: 200・403・404・login ／
+#   発行・役割の変更・除名・取消（POST）: ok・403・404・login
+MEMBER_CHECKS = ("ヘッダーの導線", "一覧（GET）", "招待の発行", "役割の変更", "除名", "招待の取消")
+_MEMBER_MEMBERS = {
+    "持ち主": "Y 200 ok ok ok ok",
+    # 編集者でもメンバーと招待は扱えない（持ち主だけ）
+    "編集者": "N 403 403 403 403 403",
+    "担当": "N 403 403 403 403 403",
+    "ほかのチームの担当": "N 403 403 403 403 403",
+}
+MEMBER_PUBLIC = {
+    **_MEMBER_MEMBERS,
+    "ログインした部外者": "N 403 403 403 403 403",
+    "staff の部外者": "N 403 403 403 403 403",
+    "superuser の部外者": "N 403 403 403 403 403",
+    "未ログイン": "N login login login login login",
+}
+MEMBER_PRIVATE = {
+    **_MEMBER_MEMBERS,
+    "ログインした部外者": "404 404 404 404 404 404",
+    "staff の部外者": "404 404 404 404 404 404",
+    "superuser の部外者": "404 404 404 404 404 404",
+    "未ログイン": "login login login login login login",
+}
+
+
+class WorkspaceMembersPermissionTest(PermissionTableCase):
+    """メンバーの画面と、招待・役割・除名の書き込みの、役割ごとの表（公開・非公開）。
+
+    書き込みの相手は表の役割とは別の編集者（`target`）と、役割ごとに発行し直す招待。持ち主の書き込みで変わった行は
+    役割ごとに戻す。
+    """
+
+    member_table = MEMBER_PUBLIC
+
+    def setUp(self):
+        super().setUp()
+        self.ws.visibility = self.visibility.value
+        self.ws.save()
+        self.target = User.objects.create_user(username="target", password="x")
+
+    def _is_editor(self) -> bool:
+        return orm_models.WorkspaceEditor.objects.filter(workspace=self.ws, user=self.target).exists()
+
+    def _observe_members(self) -> list[str]:
+        make_editor(self.target, self.ws)
+        orm_models.WorkspaceInvitation.objects.all().delete()
+        invitation_id = (
+            build_workspace_member_service()
+            .issue_invitation(self.ws.id, role=InvitedRole.EDIT_ALL, team_ids=())
+            .invitation_id
+        )
+        members_url = self.url("workspace_members")
+        observed = [self._link(self.url("dashboard"), f'href="{members_url}"'), self._get(members_url)]
+
+        invitations = orm_models.WorkspaceInvitation.objects.count()
+        response = self.client.post(self.url("workspace_invitation_create"), {"role": InvitedRole.EDIT_ALL.value})
+        observed.append(self._write(response, orm_models.WorkspaceInvitation.objects.count() != invitations))
+
+        response = self.client.post(
+            self.url("workspace_member_edit", self.target.id),
+            {"role": InvitedRole.EDIT_TEAMS.value, "teams": [self.home.id]},
+        )
+        changed = self.home.managers.filter(id=self.target.id).exists()
+        observed.append(self._write(response, changed))
+        # 次の項目のために編集者へ戻す
+        self.home.managers.remove(self.target)
+        make_editor(self.target, self.ws)
+
+        response = self.client.post(self.url("workspace_member_remove", self.target.id))
+        observed.append(self._write(response, not self._is_editor()))
+
+        response = self.client.post(self.url("workspace_invitation_revoke", invitation_id))
+        revoked = not orm_models.WorkspaceInvitation.objects.filter(id=invitation_id).exists()
+        observed.append(self._write(response, revoked))
+        return observed
+
+    def test_roles_by_pages(self):
+        for role, row in self.member_table.items():
+            with self.subTest(role=role):
+                user = self.users[role]
+                if user is None:
+                    self.client.logout()
+                else:
+                    self.client.force_login(user)
+                self.assertEqual(
+                    dict(zip(MEMBER_CHECKS, self._observe_members(), strict=True)),
+                    dict(zip(MEMBER_CHECKS, row.split(), strict=True)),
+                )
+
+
+class PrivateWorkspaceMembersPermissionTest(WorkspaceMembersPermissionTest):
+    visibility = Visibility.PRIVATE
+    member_table = MEMBER_PRIVATE

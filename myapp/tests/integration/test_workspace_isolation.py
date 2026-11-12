@@ -127,6 +127,7 @@ from ..helpers import (
     GAME_DAY_UNRECORDED,
     build_league_view_service,
     build_workspace_access_query,
+    build_workspace_member_service,
     make_editor,
     make_league,
     make_stadium,
@@ -1658,6 +1659,9 @@ class Side:
     world_league: int
     world_game: int
     world_year: int
+    # メンバーの画面（W4 T4）: 編集者の利用者の id と、未使用の招待の id
+    member: int
+    invitation: int
 
 
 # id の引数（年は id ではない。年だけの URL は「ほかのワークスペースの id」の検査の対象外）
@@ -1673,6 +1677,8 @@ ID_ARGS = frozenset(
         "world_player",
         "world_league",
         "world_game",
+        "member",
+        "invitation",
     }
 )
 
@@ -1681,6 +1687,11 @@ ID_ARGS = frozenset(
 URL_TABLE: dict[str, tuple[tuple[str, ...], str, bool]] = {
     "dashboard": ((), PAGE, False),
     "workspace_settings": ((), PAGE, True),
+    "workspace_members": ((), PAGE, True),
+    "workspace_invitation_create": ((), WRITE, True),
+    "workspace_invitation_revoke": (("invitation",), WRITE, True),
+    "workspace_member_edit": (("member",), WRITE, True),
+    "workspace_member_remove": (("member",), WRITE, True),
     "team_list": ((), PAGE, False),
     "player_search": ((), PAGE, False),
     "standings": ((), PAGE, False),
@@ -1751,10 +1762,13 @@ LINK = re.compile(r'(?:href|action)="([^"]*)"')
 
 
 def snapshot_all_rows() -> dict[str, list[dict]]:
-    """アプリの全表の行（中身ごと）。書き込みを送った前後で比べ、何も変わらなかったことを確かめる。"""
+    """アプリの全表の行（中身ごと）。書き込みを送った前後で比べ、何も変わらなかったことを確かめる。
+
+    多対多の中間表（チームの担当者・招待の担当チーム）も含める（W4 T4。担当の付け外しは中間表の行だけが変わる）。
+    """
     return {
         model.__name__: list(model._default_manager.order_by("pk").values())
-        for model in apps.get_app_config("myapp").get_models()
+        for model in apps.get_app_config("myapp").get_models(include_auto_created=True)
     }
 
 
@@ -1787,6 +1801,10 @@ WRITE_BODIES: dict[str, Callable[[Side, int], dict]] = {
     "player_list": lambda side, rival: {"name": "侵入", "number": "99", "position": "内野手"},
     "player_edit": lambda side, rival: {"retire": "1"},
     "workspace_settings": lambda side, rival: {"name": "改ざんの名前", "visibility": "public"},
+    "workspace_invitation_create": lambda side, rival: {"role": "edit_teams", "teams": [side.team]},
+    "workspace_invitation_revoke": lambda side, rival: {},
+    "workspace_member_edit": lambda side, rival: {"role": "edit_teams", "teams": [side.team]},
+    "workspace_member_remove": lambda side, rival: {},
     "game_create": lambda side, rival: {
         "year": str(side.year),
         "played_on": f"{side.year}-05-01",
@@ -1854,7 +1872,8 @@ class EveryWorkspaceUrlTest(WorkspaceCase):
     """`workspace_urlpatterns` の全パターンを、分類表で A と B について検査する（W2 T4。設計書 7.）。
 
     - 表に無いパターン・表にしか無い名前があれば落ちる。すべて `workspace_view` で包まれている。
-    - (1)(5) A の key の下で B の id（チーム・選手・試合・リーグ・世界とその中の id）を渡すと 404。
+    - (1)(5) A の key の下で B の id（チーム・選手・試合・リーグ・世界とその中の id、メンバーの user id・招待の id）を
+      渡すと 404。
     - (2)(6)(7) A の画面（未ログイン・A の持ち主）に B の目印が出ず、リンクは A の key の下かワークスペースの外だけ。
     - (3) B を非公開にすると、未ログインはログインへ（`next` つき）、A の持ち主（B の部外者）は 404、
       B の編集者と担当はワークスペースの門を通る（`request.workspace` が B になる。画面ごとの権限はその先で決まる）。
@@ -1882,6 +1901,10 @@ class EveryWorkspaceUrlTest(WorkspaceCase):
             cls.a_world_id,
             *a_world,
             YEAR,
+            make_editor(User.objects.create_user(username="a-editor-url"), cls.workspace).id,
+            build_workspace_member_service()
+            .issue_invitation(cls.workspace.id, role=InvitedRole.EDIT_ALL, team_ids=())
+            .invitation_id,
         )
         cls.side_b = Side(
             cls.b_team.id,
@@ -1893,6 +1916,8 @@ class EveryWorkspaceUrlTest(WorkspaceCase):
             cls.b_world_id,
             *b_world,
             B_YEAR,
+            _b_members(cls)[0].id,
+            _b_invitation(cls),
         )
 
     def _url(self, name: str, side: Side, workspace=None) -> str:
@@ -2067,6 +2092,13 @@ class EveryWorkspaceUrlTest(WorkspaceCase):
         unrecorded = play_game(self.team, self.rival, recorded=False).id
         self.client.force_login(self.workspace.owner)
         writes = ("player_list", "game_create", "api_game_scorebook", "pennant_index", "workspace_settings")
+        # メンバーと招待（W4 T4）: 発行 → 取消（下ごしらえの招待）→ 役割の変更（編集者を担当に）→ 除名の順
+        member_writes = (
+            "workspace_invitation_create",
+            "workspace_invitation_revoke",
+            "workspace_member_edit",
+            "workspace_member_remove",
+        )
         setup_writes = (
             "setup_leagues",
             "setup_league_edit",
@@ -2079,7 +2111,7 @@ class EveryWorkspaceUrlTest(WorkspaceCase):
         )
         # リーグの並べ替えが行を変えるよう、A のリーグを2つにする（上の作成でも増えるが、順に頼らない）
         make_league("並べ替えの相手", workspace=self.workspace)
-        for name in writes + setup_writes:
+        for name in writes + member_writes + setup_writes:
             with self.subTest(name=name), patch(ROSTER_CHECK):
                 before = snapshot_all_rows()
                 side = replace(self.side_a, game=unrecorded)

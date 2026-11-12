@@ -52,13 +52,11 @@ from .base import ROSTER_CHECK, BaseCase
 from .test_workspace_isolation import snapshot_all_rows
 
 NPB = ForeignPlayerRules.NPB
-MANAGERS = orm_models.Team.managers.through
 
 
 def _all_rows() -> dict[str, list[dict]]:
-    """アプリの全表の行と、担当者の中間表（自動で作られる表は `snapshot_all_rows` に入らない）。"""
-    managers: list[dict] = [dict(row) for row in MANAGERS.objects.order_by("pk").values()]
-    return {**snapshot_all_rows(), "managers": managers}
+    """アプリの全表の行（担当者の中間表 `Team_managers` を含む。`snapshot_all_rows`）。"""
+    return snapshot_all_rows()
 
 
 def _removed(before: dict[str, list[dict]], after: dict[str, list[dict]]) -> dict[str, list[dict]]:
@@ -313,9 +311,9 @@ class DeletionTest(SetupCase):
         before = _all_rows()
         self.service.delete_team(team_id)
         removed = _removed(before, _all_rows())
-        self.assertEqual(sorted(removed), ["Team", "managers"])
+        self.assertEqual(sorted(removed), ["Team", "Team_managers"])
         self.assertEqual([row["id"] for row in removed["Team"]], [team_id])
-        self.assertEqual([row["team_id"] for row in removed["managers"]], [team_id], "ほかのチームの担当は残る")
+        self.assertEqual([row["team_id"] for row in removed["Team_managers"]], [team_id], "ほかのチームの担当は残る")
 
     def test_a_league_with_teams_cannot_be_deleted(self):
         error = self.assert_nothing_changes(lambda: self.service.delete_league(self.league.id), NotDeletable)
