@@ -17,6 +17,7 @@ from myapp.infrastructure.queries import DjangoGameListQuery
 from myapp.infrastructure.repositories import DjangoGameRepository
 
 from ..helpers import (
+    TEST_YEAR,
     build_recording_service,
     build_scorebook,
     lineup_rows,
@@ -31,8 +32,8 @@ from .base import BaseCase
 class UnrecordedGameTest(BaseCase):
     def setUp(self):
         super().setUp()
-        self.pitcher = self.roster.register_player(self.team.id, "佐藤", 18, "投手")
-        self.rival_pitcher = self.roster.register_player(self.rival.id, "鈴木", 19, "投手")
+        self.pitcher = self.roster.register_player(self.team.id, "佐藤", 18, "投手", from_year=TEST_YEAR)
+        self.rival_pitcher = self.roster.register_player(self.rival.id, "鈴木", 19, "投手", from_year=TEST_YEAR)
 
     def _register(self, *, day=1):
         """登録しただけの試合。"""
@@ -99,7 +100,7 @@ class UnrecordedGameTest(BaseCase):
 
     def test_an_unrecorded_game_does_not_move_the_qualification_denominator(self):
         """規定打席は試合数で決まる。未記録の試合を数えると、規定に届く選手がいなくなる。"""
-        batter = self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        batter = self.roster.register_player(self.team.id, "山田", 10, "内野手", from_year=TEST_YEAR)
         # 1試合で 4打席、規定打席は 3.1 × 試合数 → 1試合なら 4 打席で足りる
         play_game(self.team, self.rival, batting={batter.id: BattingLine(at_bats=4, singles=2)}, day=1)
         play_game(self.team, self.rival, recorded=False, day=2)
@@ -204,8 +205,8 @@ class RecordedConditionMatchesTheDomainTest(BaseCase):
     """
 
     def test_every_kind_of_game_gets_the_same_answer(self):
-        batter = self.roster.register_player(self.team.id, "山田", 10, "内野手")
-        pitcher = self.roster.register_player(self.team.id, "佐藤", 18, "投手")
+        batter = self.roster.register_player(self.team.id, "山田", 10, "内野手", from_year=TEST_YEAR)
+        pitcher = self.roster.register_player(self.team.id, "佐藤", 18, "投手", from_year=TEST_YEAR)
         cases = {
             "登録しただけ": play_game(self.team, self.rival, recorded=False, day=1),
             "得点だけ": play_game(self.team, self.rival, home_score=4, away_score=2, recorded=False, day=2),

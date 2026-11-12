@@ -11,6 +11,9 @@ paths:
 - **ディレクトリの中は対象ごとのファイルに分ける。** 既存の大きいファイルに足し続けない（`test_integration.py` が 3,975行・47クラスまで膨らんで16ファイルに分割した前例がある）。目安として1ファイル600行を超えたら分ける。
 - 結合テストの共通の土台は `tests/integration/base.py` の `BaseCase`（リーグ・球場・チーム2つ・組み立て済みのサービス）。テスト専用のサービス組み立てを作らず、`tests/helpers.py` が再輸出する `build_*()`（画面と同じ組み立て口）を使う。`BaseCase` は `self.league_view`（`build_league_view_service()`。ダッシュボード・順位・リーグ・タイトル・成績・チーム一覧）・`self.team_view`（`build_team_view_service()`。選手の一覧・個人ページ）・`self.game_view`・`self.roster` を持つ。
 - 成績を持たせたい場合は `tests/helpers.py` の `play_game` / `give_batting` / `give_pitching` で試合を作る（成績は試合から集計されるため、選手に直接持たせられない）。
+- **選手の登録には年を渡す（`from_year=TEST_YEAR`）。** 登録の年の既定は現実の今日の年で、試合の年（`helpers.TEST_YEAR`）は固定なので、
+  渡さないと年が明けたとたんに「加入より前の年の試合」になって落ちる（#341 で 2027年として流して57件落ちた）。
+  `date.today()` で作った年をテストの定数にしない。「今日の年」を既定に使うこと自体を確かめるテストだけは例外。
 - ソースの整合性を機械的に見るテストは `SimpleTestCase`（DB 不要）で書く。前例: `test_templates.py`（コメント記法）・`test_wiring.py`（依存の組み立て）・`test_stat_fields.py`（成績項目の列挙）。
 - **重い準備（選手の登録・世界の分岐・シーズンを回す）はクラスで1回（`setUpTestData`）にする。** テストごとの変更は `TestCase` が巻き戻す。
   同じシーズンを回すテストは同じクラスに集める（前例: `FinishedSeasonCase`・`FinishedSeasonTest`）。選手を何人も登録するときは

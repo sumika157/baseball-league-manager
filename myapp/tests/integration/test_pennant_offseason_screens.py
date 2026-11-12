@@ -289,6 +289,22 @@ class OffseasonResultTest(ScreenCase):
         # 世界Bの選手は、名前が世界Aと同じ（分岐元が同じ）。ここでは世界Bの id のリンクが出ないことで見る
         self.assertNotIn(f"/pennant/{self.world_b}/", content)
 
+    def test_a_league_of_another_world_or_the_real_data_is_not_opened(self):
+        """`?league=` に実在する別の世界・実データのリーグを渡しても、その中身は出さない。"""
+        retiring = self.managed_players(1)
+        self.close_with(retiring)
+        other_world_league = orm_models.League.objects.filter(world_id=self.world_b).first().id
+        real_league = orm_models.League.objects.filter(world__isnull=True).first().id
+
+        for league_id in (other_world_league, real_league):
+            with self.subTest(league=league_id):
+                response = self.client.get(self.offseason_url(), {"league": league_id})
+
+                self.assertEqual(response.status_code, 200)
+                content = response.content.decode()
+                self.assertNotIn(f"/pennant/{self.world_b}/", content)
+                self.assertNotIn('href="/team/', content)
+
     def test_the_other_world_and_a_missing_world_are_404(self):
         self.close_with(self.managed_players(1))
 

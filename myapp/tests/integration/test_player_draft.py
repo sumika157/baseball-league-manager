@@ -4,12 +4,13 @@ from django.urls import reverse
 
 from myapp.infrastructure import orm_models
 
+from ..helpers import TEST_YEAR
 from .base import BaseCase
 
 
 class PlayerDraftReadoutTest(BaseCase):
     def page(self, **draft):
-        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手", from_year=TEST_YEAR)
         if draft:
             orm_models.Player.objects.filter(id=player.id).update(**draft)
         return self.client.get(reverse("player_detail", args=[self.team.id, player.id])).content.decode()
