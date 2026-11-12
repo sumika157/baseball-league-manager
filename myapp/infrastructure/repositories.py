@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, Protocol
 
-from django.db import models, transaction
+from django.db import IntegrityError, models, transaction
 from django.db.models import Count, Exists, Max, Min, OuterRef, Prefetch, Q, QuerySet, Sum
 
 from ..domain.entities import (
@@ -36,9 +36,12 @@ from ..domain.entities import (
 )
 from ..domain.exceptions import (
     AlreadyClosed,
+    DraftConflict,
+    DraftStarted,
     GameNotFound,
     InvalidAward,
     InvalidChampionship,
+    InvalidDraftAction,
     InvalidGame,
     InvalidPosition,
     InvalidRatings,
@@ -52,7 +55,9 @@ from ..domain.exceptions import (
 from ..domain.pennant.awards import Award
 from ..domain.pennant.championship import Championship
 from ..domain.pennant.club_plan import ClubPlan, LineupChoice
+from ..domain.pennant.draft_meeting import DraftAction, DraftActionKind, DraftSlot
 from ..domain.pennant.draft_order import DraftOrderRule
+from ..domain.pennant.draft_record import DraftRecord
 from ..domain.pennant.postseason import PostseasonFormat
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.release import ReleasePlan
@@ -93,6 +98,7 @@ from .scoping import (
     awards_in,
     championships_in,
     club_plans_in,
+    drafts_in,
     fixtures_in,
     game_rows_in_world,
     games_in,
@@ -1438,6 +1444,10 @@ class DjangoLeagueRepository:
 # 試合とその明細は区分（公式戦・ポストシーズン）を問わず全部消すので、`game_rows_condition` ではなく範囲だけで絞る
 _GAME_ROUTE = "home_team__league"
 _WORLD_ROWS_CHILD_FIRST: tuple[tuple[type[models.Model], str], ...] = (
+    # ドラフト会議の記録は世界を直接指し、行動と人数の幅は球団を指すので、球団を消す前に消す（行から先に）
+    (orm_models.PennantDraftAction, "draft"),
+    (orm_models.PennantDraftSlot, "draft"),
+    (orm_models.PennantDraft, ""),
     # 能力は選手の在籍をたどって世界が決まるので、在籍を消す前に消す
     # 表彰は選手・球団・リーグを指すので、それらを消す前に消す
     (orm_models.PennantAward, "league"),
@@ -1822,6 +1832,128 @@ class DjangoChampionshipRepository:
         if championships_in(self._scope).filter(year=championship.year).exists():
             raise InvalidChampionship(f"{championship.year}年の日本一は既に記録しています。")
         orm_models.PennantChampionship.objects.create(team_id=championship.team_id, year=championship.year)
+
+
+class DjangoDraftRepository:
+    """DraftRepository の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る。
+
+    ドラフト会議の記録はペナント専用で、実データの範囲には書けない。他の世界の会議は、読めも書けもしない。
+    1会議あたり行動は約600行・人数の幅は約50行（8リーグ）なので、行動と人数の幅はそれぞれ1本のクエリで読む。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def find(self, year: int) -> DraftRecord | None:
+        row = drafts_in(self._scope).filter(year=year).first()
+        if row is None:
+            return None
+        slots = tuple(
+            DraftSlot(
+                team_id=slot.team_id,
+                minimum=slot.minimum,
+                maximum=slot.maximum,
+                planned=tuple(Position(value) for value in slot.planned),
+                base_counts={Position(value): count for value, count in slot.base_counts.items()},
+                development_planned=tuple(Position(value) for value in slot.development_planned),
+                development_max=slot.development_max,
+            )
+            for slot in orm_models.PennantDraftSlot.objects.filter(draft=row).order_by("team_id")
+        )
+        actions = tuple(
+            DraftAction(
+                kind=DraftActionKind(kind),
+                team_id=team_id,
+                prospect_key=prospect_key,
+                extra_position=Position(extra) if extra else None,
+            )
+            for kind, team_id, prospect_key, extra in orm_models.PennantDraftAction.objects.filter(draft=row)
+            .order_by("seq")
+            .values_list("kind", "team_id", "prospect_key", "extra_position")
+        )
+        return DraftRecord(year=row.year, signature=row.signature, slots=slots, actions=actions)
+
+    def last_seq(self, year: int) -> int | None:
+        row = drafts_in(self._scope).filter(year=year).annotate(last=Max("actions__seq")).values("last").first()
+        if row is None:
+            return None
+        # 行動の無い会議は `Max` が None
+        return row["last"] or 0
+
+    @transaction.atomic
+    def start(self, record: DraftRecord) -> None:
+        if self._scope.is_real:
+            raise InvalidWorld("ドラフト会議はペナントの世界にだけ保存できます。")
+        world_id = self._scope.world_id
+        assert world_id is not None, "ペナントの範囲は世界の id を持つ"
+        known = set(teams_in(self._scope).filter(id__in=record.team_ids).values_list("id", flat=True))
+        if missing := sorted(record.team_ids - known):
+            raise TeamNotFound(f"球団が見つかりません（id={missing[0]}）。")
+        if drafts_in(self._scope).filter(year=record.year).exists():
+            raise DraftStarted(f"{record.year}年のドラフト会議は既に始まっています。")
+        try:
+            with transaction.atomic():
+                row = orm_models.PennantDraft.objects.create(
+                    world_id=world_id, year=record.year, signature=record.signature
+                )
+        except IntegrityError:
+            # 読み直しの後に別のリクエストが先に始めた（世界 × 年の一意制約）
+            raise DraftStarted(f"{record.year}年のドラフト会議は既に始まっています。") from None
+        orm_models.PennantDraftSlot.objects.bulk_create(
+            [
+                orm_models.PennantDraftSlot(
+                    draft=row,
+                    team_id=slot.team_id,
+                    minimum=slot.minimum,
+                    maximum=slot.maximum,
+                    planned=[position.value for position in slot.planned],
+                    base_counts={position.value: count for position, count in slot.base_counts.items()},
+                    development_planned=[position.value for position in slot.development_planned],
+                    development_max=slot.development_max,
+                )
+                for slot in record.slots
+            ]
+        )
+        self._write_actions(row, record.actions, first_seq=1)
+
+    @transaction.atomic
+    def append(self, year: int, actions: Sequence[DraftAction], *, expected_seq: int) -> None:
+        row = drafts_in(self._scope).filter(year=year).first()
+        if row is None:
+            raise DraftConflict()
+        team_ids = set(orm_models.PennantDraftSlot.objects.filter(draft=row).values_list("team_id", flat=True))
+        if any(action.team_id not in team_ids for action in actions):
+            raise InvalidDraftAction("この会議に参加していない球団の行動は書けません。")
+        last = orm_models.PennantDraftAction.objects.filter(draft=row).aggregate(last=Max("seq"))["last"] or 0
+        if last != expected_seq:
+            raise DraftConflict()
+        try:
+            with transaction.atomic():
+                self._write_actions(row, actions, first_seq=expected_seq + 1)
+        except IntegrityError:
+            # 読み直しの後に別のリクエストが同じ番号を先に書いた（会議 × 番号の一意制約。
+            # 直列にならない設定での最後の砦）
+            raise DraftConflict() from None
+
+    def remove(self, year: int) -> None:
+        # 行動と人数の幅は外部キーの CASCADE で消える（1会議あたり数百行なので、collector に任せてよい）
+        drafts_in(self._scope).filter(year=year).delete()
+
+    @staticmethod
+    def _write_actions(row: orm_models.PennantDraft, actions: Sequence[DraftAction], *, first_seq: int) -> None:
+        orm_models.PennantDraftAction.objects.bulk_create(
+            [
+                orm_models.PennantDraftAction(
+                    draft=row,
+                    seq=seq,
+                    team_id=action.team_id,
+                    kind=action.kind.value,
+                    prospect_key=action.prospect_key,
+                    extra_position=action.extra_position.value if action.extra_position else "",
+                )
+                for seq, action in enumerate(actions, start=first_seq)
+            ]
+        )
 
 
 class DjangoWorldRepository:

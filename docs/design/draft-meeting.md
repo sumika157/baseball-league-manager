@@ -87,7 +87,7 @@ CreateModel 3つ（backfill なし）。1会議あたり行動 約600行・人�
 
 | タスク | 内容 | PR |
 | --- | --- | --- |
-| T0 | epic とこの設計書 | |
+| T0 | epic とこの設計書 | #334 |
 | T1 | domain と保存（上の domain・infrastructure） | |
 | T2 | application（`PennantDraftService`・締める処理・ロック） | |
 | T3 | 画面 | |
@@ -128,3 +128,45 @@ D4（#298）: 抽選の記録（`PennantDraftLottery`）と「N球団競合」�
 - epic の構成: 統合ブランチ `epic/draft-meeting` は親 #198 に紐づけ（前例 #39 と `epic/postseason`。epic の親に紐づけ、
   epic を main に入れる PR は `Closes #198`）、タスクのブランチは D3 の #297 に紐づける。タスクは sub-issue にせず、
   #297 の本文のチェックリストで追う。
+
+### T1 domain と保存（2026-11-12）
+
+決めたこと:
+
+- **指紋は身元だけ**（`ProspectPool.signature`。番号・名前・位置・経歴（経路と学校・企業）・生年月日）。能力・伸びしろ・成長型を変えても指紋は変わらない（`tests/domain/test_draft_record.py`）。
+- **人数の幅は `meeting_slots` が唯一の出典**。`run_draft` もこれを通す（`DraftContext.managed_team_id`。締める処理は世界の受け持つ球団を渡す）。
+  GM の球団の育成の最多だけ `MAX_DEVELOPMENT_PICKS` で、AI が GM の番を進めると育成の計画の人数で選択を終える。会議を始めなかった年の新人は、
+  受け持つ球団の有無で変わらない（4規則で確かめた）。
+- `DraftRecord`（`domain/pennant/draft_record.py`）: `start`（指紋を写し、幅を球団 id の順に）・`state`（指紋が違う・当てられない行動は
+  `DraftChanged`）・`appended`（`expected_seq` が違えば `DraftConflict`）・`ensure_same_slots`（締めるときに計算し直した幅と比べる）・`last_seq`
+  （行動の数＝最後の `seq`）。`DraftMeetingStatus.of(record, state)` は記録の有無と再生した状態から導く。
+- `DraftState.resolved_moves(after_seq)` は確定した動き（`DraftMove`。入札の確定は抽選つき・指名・選択終了）を `seq` で絞る。保留中の入札は出ない。
+  `selectable(team_id, prospect)` は `apply` と同じ検査（`_selection_error`）を通す。
+- 変えられない理由: `draft_order_rule_change_blocker(*, world_over, meeting_started)`・`pre_draft_input_blocker(*, meeting_started)`。
+  **設定の画面は T2 まで `meeting_started=False` を渡す**（`application/pennant_settings.py` の `_MEETING_STARTED`。会議を始める操作が T2 で入るまで
+  会議の記録は無い）。T2 で `DraftRepository.last_seq(year) is not None` に置き換える。
+- 例外（既定の文言つき）: `DraftInProgress`・`DraftConflict`・`DraftChanged`・`DraftStarted`。
+- 保存: `PennantDraft`（世界 × 年で一意。**世界を直接指す**。会議は球団に属さないため。`test_world_isolation` の分類に「世界を直接指す」を足した）・
+  `PennantDraftSlot`（会議 × 球団で一意。位置の計画と会議の前の人数は JSON）・`PennantDraftAction`（会議 × `seq` で一意。種類・候補の番号・足した候補の位置）。
+  マイグレーション `0061_pennant_draft`（CreateModel 3つ。backfill なし）。世界の削除は子から（行動 → 幅 → 会議）。
+- `DraftRepository`（`find`・`last_seq`・`start`・`append(year, actions, *, expected_seq)`・`remove`）。`append` は中で最後の番号を読み直し、
+  すり抜けたら一意制約で `DraftConflict`。`start` の二重は `DraftStarted`。
+- 名前だけの参照 `PlayerNameQuery.names()`（`players_in` の名前を1本で読む）。締める処理が集約から作る名前（`team.players`）と同じ集まりになることを
+  `tests/integration/test_pennant_draft_record.py` が確かめる。
+
+T2 への申し送り:
+
+- `PennantSettingsService` の `_MEETING_STARTED` を `DraftRepository` から読む形に置き換え、組み立て口に `DraftRepository` を渡す。
+- 締める処理: 会議が途中なら `DraftInProgress`。終わっていれば `record.state(...)` の行動を `plan_offseason(draft_actions=…)` に渡し、
+  `record.ensure_same_slots(meeting_slots(...))` で幅を比べる。会議の目印は `last_seq(year)`。`_commit` で `remove(year)`。
+- 会議を始めるときは `plan_departures` → `offseason_signings` → `plan_team_draft` → `meeting_slots` → `draw_pool`（名前は `PlayerNameQuery`）の順
+  （候補の位置ごとの人数は獲得した外国人の位置で決まる）。
+- `DraftRepository.append` は番号と参加球団しか検査しない。書く前に必ず `DraftState.apply` で当て（`DraftRecord.appended` を通し）、当てられない行動を
+  書かない（書くと次に開いたときに `DraftChanged` になり、原因と違う案内でやり直しを求めることになる）。
+- 行動の行は足すだけで消さない（`last_seq` は domain が行動の数、リポジトリが `Max(seq)` で、番号が1から連続することが前提）。
+
+D4 への申し送り（Wiki への吸収）:
+
+- `PennantDraft` は `League.world` を経由せず**世界を直接指す**（会議はリーグをまたぐので、リーグを経由する道が無い。#198 本文の
+  「世界の範囲は世界・球団の外部キーで決まる」）。Wiki「ペナントモードの仕組み」の「世界の分け方」（世界の出典はリーグの1か所だけ）に、
+  この例外と理由（会議そのものの世界の出典は1つ。人数の幅と行動の球団の世界は、リポジトリが `teams_in(scope)` と参加球団で検査する）を書き足す。

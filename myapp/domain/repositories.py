@@ -19,6 +19,8 @@ from .entities import Game, League, Team
 from .pennant.awards import Award
 from .pennant.championship import Championship
 from .pennant.club_plan import ClubPlan
+from .pennant.draft_meeting import DraftAction
+from .pennant.draft_record import DraftRecord
 from .pennant.ratings import PlayerRatings
 from .pennant.release import ReleasePlan
 from .pennant.schedule import Fixture
@@ -314,4 +316,47 @@ class ChampionshipRepository(Protocol):
 
         実データの範囲には書けない（InvalidWorld）。範囲の外の球団は書けない（InvalidChampionship）。
         """
+        ...
+
+
+@runtime_checkable
+class DraftRepository(Protocol):
+    """ペナントのドラフト会議の記録（`DraftRecord`。世界 × 年）。#297 D3。
+
+    ペナントの世界にだけ置ける。会議は締める前の入力で、締める処理が使い終わったら消す（指名の事実は新人の
+    `Profile.draft` と在籍の経路に残る）。行動は `append` で足すだけで、書き換えない。
+    """
+
+    def find(self, year: int) -> DraftRecord | None:
+        """その年の会議の記録（人数の幅と、行動の並び）。始めていなければ None。"""
+        ...
+
+    def last_seq(self, year: int) -> int | None:
+        """その年の会議の最後の行動の番号（行動が無ければ 0）。始めていなければ None。
+
+        会議の目印（締める処理の `_state()`）と、書く前に「画面を開いたときと同じか」を比べるのに使う（クエリ1本）。
+        """
+        ...
+
+    def start(self, record: DraftRecord) -> None:
+        """会議を始める（記録の人数の幅と行動を書く）。その年の会議が既にあれば `DraftStarted` で、何も書かない。
+
+        実データの範囲には書けない（InvalidWorld）。範囲の外の球団は書けない（TeamNotFound）。
+        """
+        ...
+
+    def append(self, year: int, actions: Sequence[DraftAction], *, expected_seq: int) -> None:
+        """行動を足す。最後の番号が `expected_seq` と違う（画面が古い・二重送信・別のタブで先に進めた）・
+        その年の会議が無い（締めた・やり直した）ときは `DraftConflict` で、何も書かない。
+
+        読み直しと書き込みは1つのトランザクションで行う（本番の SQLite は IMMEDIATE で書き込みが直列なので、
+        読み直しで足りる）。
+        直列にならない設定ですり抜けても、会議 × 番号の一意制約が重複を書かせない（最後の砦。SQLite の DEFERRED では
+        `DraftConflict` ではなくロックのエラーになりうる）。
+        会議に参加していない球団の行動は書けない（InvalidDraftAction）。
+        """
+        ...
+
+    def remove(self, year: int) -> None:
+        """その年の会議の記録を消す（締める処理・会議のやり直し）。無ければ何もしない。"""
         ...

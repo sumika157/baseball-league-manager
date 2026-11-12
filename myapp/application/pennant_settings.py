@@ -29,6 +29,10 @@ from .pennant_postseason import PostseasonBracketReader
 from .pennant_season import AtomicBlock
 from .queries import PostseasonQuery, SimulationContextQuery
 
+# その年のドラフト会議を始めているか。会議を始める操作（`PennantDraftService`）は #297 T2 で入るので、それまでは
+# 会議の記録が無い。T2 で会議の記録（`DraftRepository`）から読む形に置き換える
+_MEETING_STARTED = False
+
 
 class PennantSettingsService:
     """世界ひとつの設定。リポジトリと参照クエリは、その世界の範囲で組み立てて渡す（世界の台帳は範囲を持たない）。"""
@@ -60,7 +64,10 @@ class PennantSettingsService:
             postseason_format=world.postseason_format,
             blocker=self._format_blocker(year, world_over) or "",
             draft_order_rule=world.draft_order_rule,
-            draft_order_blocker=draft_order_rule_change_blocker(world_over=world_over) or "",
+            draft_order_blocker=draft_order_rule_change_blocker(
+                world_over=world_over, meeting_started=_MEETING_STARTED
+            )
+            or "",
         )
 
     def change_postseason_format(self, postseason_format: PostseasonFormat) -> bool:
@@ -89,7 +96,7 @@ class PennantSettingsService:
         with self._atomic():
             world = self._worlds.find_by_id(self._world_id)
             _, world_over = self._season(world)
-            blocker = draft_order_rule_change_blocker(world_over=world_over)
+            blocker = draft_order_rule_change_blocker(world_over=world_over, meeting_started=_MEETING_STARTED)
             if blocker is not None:
                 raise DraftOrderRuleLocked(blocker)
             if world.draft_order_rule is rule:

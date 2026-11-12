@@ -475,7 +475,11 @@ class PennantOffseasonService:
             start_year=world.start_year,
             used_names={player.name for team in teams for player in team.players},
             manual_releases=manual,
-            draft=DraftContext(world.draft_order_rule, self._draft_standings(world, year, teams)),
+            draft=DraftContext(
+                world.draft_order_rule,
+                self._draft_standings(world, year, teams),
+                managed_team_id=world.managed_team_id,
+            ),
         )
         changes = self._apply_roster_changes(teams, plan, limits, year)
         schedule = season_schedule(

@@ -406,3 +406,15 @@ class ChampionshipQuery(Protocol):
     def list_championships(self) -> list[ChampionshipRow]:
         """範囲の日本一の記録（古い順）。"""
         ...
+
+
+@runtime_checkable
+class PlayerNameQuery(Protocol):
+    """範囲の選手の名前だけの参照（#297 D3）。ドラフト会議の候補の名前が世界の選手と重ならないようにするのに使う。
+
+    会議の画面と1手ごとの書き込みは候補を作り直すが、`Team` 集約（在籍と通算成績）は要らないので組み立てない。
+    """
+
+    def names(self) -> frozenset[str]:
+        """範囲の全選手（引退・退団した選手を含む）の名前。"""
+        ...
