@@ -102,6 +102,35 @@ def members_from_rows(
     return editors, {user_id: frozenset(teams) for user_id, teams in assignments.items()}
 
 
+# 1人1役割の検査の文言（集約の作成と、管理画面の割り当ての検査で同じものを出す）
+OWNER_IS_NOT_AN_EDITOR = "持ち主は編集者に加えられません。持ち主はもともと全権を持っています。"
+OWNER_IS_NOT_A_MANAGER = "持ち主はチーム担当（担当者）に加えられません。持ち主はもともと全権を持っています。"
+EDITOR_IS_NOT_A_MANAGER = (
+    "編集者はチーム担当（担当者）を兼ねられません。編集者は全チームを編集できます。"
+    "担当に変えるなら、先に編集者から外してください。"
+)
+MANAGER_IS_NOT_AN_EDITOR = (
+    "チーム担当（担当者）の人は編集者を兼ねられません。編集者は全チームを編集できます。"
+    "編集者に変えるなら、先にチームの担当者から外してください。"
+)
+
+
+def ensure_one_role_each(owner_id: int, editor_ids: Iterable[int], manager_ids: Iterable[int]) -> None:
+    """1人の役割は1つだけ: 持ち主は編集者にもチーム担当にも入らない。編集者はチーム担当に入らない。
+
+    集約の作成（`Workspace`）と、運営者が管理画面で編集者・担当者を丸ごと置き換える操作（`replace_editors`・
+    `replace_team_managers`）が通す。作成前のワークスペース（管理画面の追加の画面）では、チーム担当は空で渡す。
+    """
+    editors = frozenset(editor_ids)
+    managers = frozenset(manager_ids)
+    if owner_id in editors:
+        raise InvalidWorkspace(OWNER_IS_NOT_AN_EDITOR)
+    if owner_id in managers:
+        raise InvalidWorkspace(OWNER_IS_NOT_A_MANAGER)
+    if not editors.isdisjoint(managers):
+        raise InvalidWorkspace(EDITOR_IS_NOT_A_MANAGER)
+
+
 @dataclass
 class Workspace:
     """ワークスペース（集約ルート）。持ち主が全権を持つ、データの区切り。
@@ -140,10 +169,7 @@ class Workspace:
             raise InvalidWorkspace("チーム担当が正しくありません。")
         if any(not teams for teams in assignments.values()):
             raise InvalidWorkspace("チーム担当には、担当チームを1つ以上選んでください。")
-        if self.owner_id in editors or self.owner_id in assignments:
-            raise InvalidWorkspace("持ち主は編集者にもチーム担当にもなれません。持ち主はもともと全権を持っています。")
-        if not editors.isdisjoint(assignments):
-            raise InvalidWorkspace("編集者はチーム担当を兼ねられません。編集者は全チームを編集できます。")
+        ensure_one_role_each(self.owner_id, editors, assignments)
         self.editor_ids = editors
         self.team_assignments = assignments
 
@@ -207,6 +233,64 @@ class Workspace:
         self._ensure_member(user_id)
         self.editor_ids = self.editor_ids - {user_id}
         self.team_assignments.pop(user_id, None)
+
+    # --- 運営者の操作（管理画面。W4 T6） ---
+    # 管理画面は編集者を「ワークスペースごと」、担当者を「チームごと」に丸ごと送ってくるので、置き換える形で受ける。
+    # サイトの役割の変更（`change_role`）と違い、ほかの役割から黙って移さない（重なりは検査で落とし、
+    # フォームのエラーにする）。
+
+    def hand_over(self, new_owner_id: int) -> None:
+        """持ち主を変える（持ち主の譲渡は運営者が管理画面で行う。設計書 2.）。
+
+        新しい持ち主の編集者・担当は外れる（全権を持つので。読むときの `members_from_rows` と同じ優先）。
+        前の持ち主は何の役割も持たない（残すなら運営者が編集者に加える）。
+
+        **検査の見立てに使う**（`WorkspaceMemberService.validate_editors`）。リポジトリの `save` は持ち主の列を
+        書かないので、持ち主そのものは管理画面のフォームが書く（保存の側は、読むときの `members_from_rows` が
+        同じ優先で重なりを落とす）。
+        """
+        if not _is_id(new_owner_id):
+            raise InvalidWorkspace("ワークスペースの持ち主が正しくありません。")
+        self.owner_id = new_owner_id
+        self.editor_ids = self.editor_ids - {new_owner_id}
+        self.team_assignments.pop(new_owner_id, None)
+
+    def replace_editors(self, user_ids: Iterable[int]) -> None:
+        """編集者を、渡した利用者だけにする。持ち主・チーム担当の人は入れられない（`ensure_one_role_each`）。"""
+        editors = frozenset(user_ids)
+        if not all(_is_id(user_id) for user_id in editors):
+            raise InvalidWorkspace("編集者が正しくありません。")
+        if self.owner_id not in editors and not editors.isdisjoint(self.team_assignments):
+            # 担当の人を編集者に入れる向きの案内（逆向きは `ensure_one_role_each` の `EDITOR_IS_NOT_A_MANAGER`）
+            raise InvalidWorkspace(MANAGER_IS_NOT_AN_EDITOR)
+        ensure_one_role_each(self.owner_id, editors, self.team_assignments)
+        self.editor_ids = editors
+
+    def ensure_can_manage_teams(self, user_ids: Iterable[int]) -> None:
+        """渡した利用者を、チームの担当者に入れられるか（持ち主・編集者は入れられない）。"""
+        managers = frozenset(user_ids)
+        if not all(_is_id(user_id) for user_id in managers):
+            raise InvalidWorkspace("チーム担当が正しくありません。")
+        ensure_one_role_each(self.owner_id, self.editor_ids, managers)
+
+    def replace_team_managers(self, team_id: int, user_ids: Iterable[int]) -> None:
+        """そのチームの担当者を、渡した利用者だけにする（ほかのチームの担当はそのまま）。
+
+        外れた人は、ほかに担当チームが無ければメンバーでなくなる。チームがこのワークスペースの実データのチームかは、
+        保存のときにリポジトリが `ensure_assignments_within` で検査する。
+        """
+        if not _is_id(team_id):
+            raise InvalidWorkspace("担当チームの id が正しくありません。")
+        managers = frozenset(user_ids)
+        self.ensure_can_manage_teams(managers)
+        assignments: dict[int, frozenset[int]] = {}
+        for user_id, teams in self.team_assignments.items():
+            kept = teams - {team_id}
+            if kept:
+                assignments[user_id] = kept
+        for user_id in managers:
+            assignments[user_id] = assignments.get(user_id, frozenset()) | {team_id}
+        self.team_assignments = assignments
 
     def accept(self, invitation: Invitation, user_id: int, *, now: datetime) -> None:
         """招待を受けて、その利用者をメンバーにする。

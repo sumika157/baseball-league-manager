@@ -1759,3 +1759,31 @@ epic を main に入れる前に開発 DB・本番で数え、あれば作成者
 
 - T7: 上の「要確認」を数える（`PennantWorld` の owner が既定のワークスペースの owner でも `WorkspaceEditor` でもない行）。計測は削除の画面
   （`contents()` の5本＋権限の解決。削除は T2 の計測どおり同期で数秒）。
+
+#### T6 管理画面（`feature/admin-workspace-operator`、2026-11-13）
+
+推奨 8・9 と、2026-11-12 のユーザー回答（T1 からの確認事項）どおり。作業は epic の先端 cbc1196 で始め、コミットの前に T5（#344）が入った ed5a395 の上に載せ直した（衝突は Wiki「ワークスペースと共有」の1か所）。マイグレーションは無い。
+
+- **superuser 専用**: `admin.site.has_permission` を `_superuser_only`（`is_active and is_superuser`）に差し替えた（`get_app_list` と同じ差し替えの形）。ヘッダーの「管理画面」のリンク（`base.html`）も `user.is_superuser` で出す。W1a T7 の残り（閲覧だけの権限の staff で、インラインの `clean()` が 500 になりえた）は、staff が変更画面にもその POST にも届かなくなったので起きない（`SuperuserOnlyAdminTest` が、全モデルの閲覧の権限を持つ staff の GET・インラインのある画面への POST・削除の POST がすべてログインへ送られ、行が変わらないことを固定）。
+- **ワークスペースの削除**: `WorkspaceAdmin` を `BlockedDeletionAdmin` にし、消せない理由はサイトの削除の確認と同じ `WorkspaceManagementQuery.contents().deletion_blocker`（`workspace_deletion_blocker`）、消すのは `WorkspaceService.delete`。世界が残る行は削除のボタンを出さず、削除の画面は GET も POST も 403。一括削除は消せない行が1つでもあれば何も消さない（`_delete_selected_unless_blocked`）。確認の画面は Django の collector で集めず（リーグ・球場が PROTECT なので「消せない」と判定され、行数も多い）、件数（リーグ・チーム・選手・試合）を出す（`get_deleted_objects`）。リポジトリが検査の後に拒んだとき（ほかのワークスペースにも在籍がある選手・迷子の参照）は、`delete_view`（Django が1つのトランザクションにしている）と一括削除（`_delete_workspaces` が atomic で包む）のどちらも、全体を戻して理由を出す（「削除しました」は出ない）。
+- **編集者・担当者の割り当てをサービスに通す（2026-11-12 ユーザー決定）**。#80 のコメントの「ユーザーに後で確かめること（T1 より）」（管理画面のインラインが集約の検査を通らない）は、この決定で解消した。
+  - domain: 1人1役割の検査を `ensure_one_role_each(owner_id, editor_ids, manager_ids)` に切り出し、集約の作成もこれを通す（文言は向きごとに `OWNER_IS_NOT_AN_EDITOR`・`OWNER_IS_NOT_A_MANAGER`・`EDITOR_IS_NOT_A_MANAGER`・`MANAGER_IS_NOT_AN_EDITOR`）。運営者の操作として `replace_editors`（編集者を丸ごと置き換える）・`replace_team_managers(team_id, user_ids)`（そのチームの担当者だけを置き換え、ほかのチームの担当は残す。担当チームが無くなった人はメンバーでなくなる）・`ensure_can_manage_teams`・`hand_over`（持ち主の譲渡の見立て。新しい持ち主の編集者・担当は外れる）。サイトの `change_role` と違い、ほかの役割から黙って移さない（重なりはエラー）。
+  - application: `WorkspaceMemberService` に `validate_editors(workspace_id | None, user_ids, *, owner_id)`・`replace_editors`・`validate_team_managers`・`replace_team_managers`。フォームの `clean()` が `validate_*`（書かない）でエラーを出し、保存が `replace_*` で書く。同じ集約の操作を通すので、検査と保存の規則はずれない。
+  - 管理画面: 編集者のインライン（`WorkspaceEditorFormSet`）は行を保存せず、`save()` で `replace_editors` を呼ぶ（変更履歴の文言のために `new_objects` などを空で置く）。検査は送られた持ち主で行う（同じ送信で持ち主を変えるとき。保存の側は持ち主の列をフォームが書いた後に読むので、`members_from_rows` が同じ優先で新しい持ち主の行を落とし、`save` の差分が消す）。追加の画面（ワークスペースがまだ無い）は持ち主との重なりだけを見る。チームの担当者（`TeamAdmin`）は `save_related` で `cleaned_data` から `managers` を外して Django の M2M の保存に書かせず、`replace_team_managers` で書く。**担当者を変えていない保存では書かない**（W4 より前に付いた重なりの行で、チームを保存するたびにエラーにならないように）。
+  - 中間表を直接書く経路はほかに無い（リーグの変更画面のチームの行は `managers` を持たない。一覧の `list_editable` は表示順だけ）。
+- **検索つきの選択**: `WorkspaceAdmin.autocomplete_fields = ("owner",)`、編集者のインラインの `("user",)`（Django の利用者の管理画面の検索を使う）。
+- 組み立て口: 管理画面は `build_workspace_service`・`build_workspace_member_service`・`build_workspace_management_query` を `views.py` から取る。`test_wiring.py` の `WorkspaceLedgerUsersTest.ALLOWED` に `myapp/admin.py` を足した（T1 の申し送り）。
+
+**計画からのずれ**: 持ち主の譲渡そのもの（持ち主の列）はサービスを通さず、今までどおり管理画面のフォームが書く（指示の範囲は中間表。`hand_over` は検査の見立てにだけ使い、docstring にそう書いた）。`Team.managers` の `help_text` の「管理画面に入れること（スタッフ権限）」は、マイグレーションが要るので直していない（意味は今も合う: staff の印はサイトの権限に何も足さない）。
+
+**テスト**: domain `test_workspace.py` の `OperatorReplacementTest`（文言の向き・置き換え・ほかのチームの担当は残る・担当が空になればメンバーでない・失敗したら何も変わらない・`hand_over`）。integration `test_workspace_service.py` の `OperatorMemberTest`（範囲の外の担当は残る・ほかのワークスペースと世界の球団は `InvalidWorkspace` で行が変わらない・送られた持ち主での検査）、`test_admin_workspaces.py` に `SuperuserOnlyAdminTest`・`OwnerAndEditorAutocompleteTest`・`AdminWorkspaceDeletionTest`（`WorkspaceDeletionCase` の上で、削除と一括削除がサービスを通り B の行だけが消える・世界のある A は導線なし・403・一括で何も消さない・リポジトリが拒めば単体も一括も何も消さない）・`EditorAssignmentThroughServiceTest`・`TeamManagerAssignmentThroughServiceTest`（変更・追加の画面、持ち主と編集者はフォームのエラーで `snapshot_all_rows()` が変わらない、変えない保存は書かない）、追加の画面の編集者もサービスを通る。`test_navigation.py` はリンクと入口を superuser・staff・一般で分けた。
+件数: domain＋integration 4,371（T5 の入った ed5a395 の上。載せる前の cbc1196 の上では 4,353）、e2e 21。
+
+**変異の確かめ**（どれも戻した。`test_admin_workspaces`・`test_navigation` を流した）: superuser の判定を `is_staff` に → 6件、ヘッダーのリンクを `is_staff` に → 1件、単体の削除を `obj.delete()` に → 2件、一括削除を `obj.delete()` に → 2件、`WorkspaceAdmin` を `BlockedDeletionAdmin` でなくす → 1件、編集者の検査を外す → 5件、編集者を行で直接書く → 2件、担当者を Django の M2M の保存に書かせてサービスを呼ばない → 1件、担当者の検査を外す → 4件。
+
+**レビュー（ddd-boundary-reviewer）**: 重要な指摘なし（中間表を直接書く経路が残っていない・検査と保存がずれない・削除のトランザクション・domain が Django を import しない・組み立て口を確かめた）。軽微を直した: (1) `hand_over` を将来 `save` と組むと持ち主が黙って保存されない → 検査の見立て用で持ち主はフォームが書く、と docstring に書いた。(2) 担当の人を編集者に入れたときの案内が逆向き（「先に編集者から外して」）→ `MANAGER_IS_NOT_AN_EDITOR` を分けた。(3) `replace_team_managers` が保存で拒むと管理画面では 500（今の画面からは起きない）→ `validate_team_managers` の docstring に書いた。(4) 追加の画面で編集者を付ける経路のテストが無い → 足した。
+
+**T7 への申し送り**
+
+- CLAUDE.md の差分（決めてほしいこと 4）に、管理画面が台帳の組み立て口（`build_workspace_service`・`build_workspace_member_service`）を使うこと（`WorkspaceLedgerUsersTest.ALLOWED` の `myapp/admin.py`）を含めるか検討する。
+- 計測: 管理画面はワークスペースの変更画面で削除の可否に5本（`contents()`）増える。`measure_pages` の画面には入っていない。

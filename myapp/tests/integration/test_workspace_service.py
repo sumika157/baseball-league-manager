@@ -496,3 +496,68 @@ class PreviewQueryTest(WorkspaceCase):
         self.rival.delete()
         with self.assertRaisesRegex(InvalidInvitation, "見つからないか"):
             query.preview(self.issued.token, None, NOW)
+
+
+class OperatorMemberTest(WorkspaceCase):
+    """運営者（管理画面）の置き換え（W4 T6）。サイトと同じ集約の検査を通し、落ちたら何も書かない。"""
+
+    def _rows(self):
+        return (
+            set(orm_models.WorkspaceEditor.objects.values_list("workspace_id", "user_id")),
+            set(MANAGERS.objects.values_list("team_id", "user_id")),
+        )
+
+    def test_replace_editors(self):
+        build_workspace_member_service().replace_editors(self.workspace.id, [self.outsider.id])
+
+        self.assertEqual(self.ledger().find_by_id(self.workspace.id).editor_ids, frozenset({self.outsider.id}))
+        self.assertEqual(_managers_of(self.team), {(self.team.id, self.manager.id)})
+
+    def test_replace_editors_refuses_the_owner_and_a_manager(self):
+        before = self._rows()
+        for user in (self.owner, self.manager):
+            with self.subTest(user=user.username), self.assertRaises(InvalidWorkspace):
+                build_workspace_member_service().replace_editors(self.workspace.id, [user.id])
+        self.assertEqual(self._rows(), before)
+
+    def test_validate_editors_uses_the_owner_of_the_form(self):
+        """持ち主を同じ送信で変えるときは、新しい持ち主で検査する（新しい持ち主の担当は外れる見立て）。"""
+        service = build_workspace_member_service()
+        with self.assertRaises(InvalidWorkspace):
+            service.validate_editors(self.workspace.id, [self.editor.id], owner_id=self.editor.id)
+        # 担当の人を持ち主にすれば、その人の担当は外れるので、ほかの人を編集者に入れられる
+        service.validate_editors(self.workspace.id, [self.outsider.id], owner_id=self.manager.id)
+        # 作る前のワークスペースは、持ち主との重なりだけを見る
+        with self.assertRaises(InvalidWorkspace):
+            service.validate_editors(None, [self.owner.id], owner_id=self.owner.id)
+        service.validate_editors(None, [self.manager.id], owner_id=self.owner.id)
+
+    def test_replace_team_managers_keeps_the_other_teams_and_scopes(self):
+        self.rival.managers.add(self.manager)
+
+        build_workspace_member_service().replace_team_managers(self.workspace.id, self.team.id, [self.outsider.id])
+
+        self.assertEqual(_managers_of(self.team), {(self.team.id, self.outsider.id)})
+        self.assertEqual(_managers_of(self.rival), {(self.rival.id, self.manager.id)})
+        self.assertIn((self.other_team.id, self.manager.id), _managers_of(self.other_team))
+        self.assertEqual(
+            _managers_of(self.world_team),
+            {(self.world_team.id, self.manager.id), (self.world_team.id, self.outsider.id)},
+        )
+
+    def test_replace_team_managers_refuses_conflicts_and_teams_of_another_workspace(self):
+        before = self._rows()
+        service = build_workspace_member_service()
+        for team, user in ((self.team, self.owner), (self.team, self.editor), (self.other_team, self.outsider)):
+            with self.subTest(team=team.name, user=user.username), self.assertRaises(InvalidWorkspace):
+                service.replace_team_managers(self.workspace.id, team.id, [user.id])
+        with self.assertRaises(InvalidWorkspace):
+            service.replace_team_managers(self.workspace.id, self.world_team.id, [self.outsider.id])
+        self.assertEqual(self._rows(), before)
+
+    def test_validate_team_managers(self):
+        service = build_workspace_member_service()
+        for user in (self.owner, self.editor):
+            with self.subTest(user=user.username), self.assertRaises(InvalidWorkspace):
+                service.validate_team_managers(self.workspace.id, [user.id])
+        service.validate_team_managers(self.workspace.id, [self.manager.id, self.outsider.id])

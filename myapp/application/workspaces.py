@@ -5,7 +5,8 @@
 サービスは2つに分ける（2026-10-25 ユーザー決定 3）:
 
 - `WorkspaceService`: 作成・設定（名前と公開範囲）・削除。
-- `WorkspaceMemberService`: 招待の発行・取消・受諾、役割の変更、除名。
+- `WorkspaceMemberService`: 招待の発行・取消・受諾、役割の変更、除名。運営者が管理画面で行う編集者・担当者の
+  置き換えもここを通す（W4 T6）。
 
 規則の置き場所:
 
@@ -31,6 +32,7 @@ from ..domain.workspace import (
     Visibility,
     Workspace,
     WorkspaceQuota,
+    ensure_one_role_each,
     invitation_digest,
 )
 from .dto import IssuedInvitation
@@ -156,4 +158,45 @@ class WorkspaceMemberService:
         with self._atomic():
             workspace = self._workspaces.find_by_id(workspace_id)
             workspace.remove_member(user_id)
+            self._workspaces.save(workspace)
+
+    # --- 運営者の操作（管理画面。W4 T6。2026-11-12 ユーザー決定: サイトと同じ集約の検査を通す） ---
+    # 管理画面は、フォームの検査（`validate_*`。何も書かない）でエラーを出し、保存（`replace_*`）で書く。
+    # 検査に落ちる入力は保存でも同じ例外になる（同じ集約の操作を通すので、検査と保存の規則はずれない）。
+
+    def validate_editors(self, workspace_id: int | None, user_ids: Iterable[int], *, owner_id: int) -> None:
+        """編集者を `user_ids` に置き換えられるかを検査する（保存しない）。
+
+        `owner_id` はフォームで送られた持ち主（持ち主を同じ送信で変えるとき、新しい持ち主で検査する）。
+        作成前のワークスペース（`workspace_id` が None）はメンバーが居ないので、持ち主との重なりだけを見る。
+        """
+        if workspace_id is None:
+            ensure_one_role_each(owner_id, user_ids, ())
+            return
+        workspace = self._workspaces.find_by_id(workspace_id)
+        workspace.hand_over(owner_id)
+        workspace.replace_editors(user_ids)
+
+    def replace_editors(self, workspace_id: int, user_ids: Iterable[int]) -> None:
+        """編集者を `user_ids` に置き換える（持ち主・チーム担当の人は入れられない）。"""
+        with self._atomic():
+            workspace = self._workspaces.find_by_id(workspace_id)
+            workspace.replace_editors(user_ids)
+            self._workspaces.save(workspace)
+
+    def validate_team_managers(self, workspace_id: int, user_ids: Iterable[int]) -> None:
+        """チームの担当者に `user_ids` を入れられるかを検査する（保存しない。持ち主・編集者は入れられない）。
+
+        チームを決める前（管理画面のチームの追加の画面）にも呼べるよう、チームは受け取らない。チームが
+        このワークスペースの実データのチームかは、保存（`replace_team_managers`）のときにリポジトリが検査する（そこで
+        拒まれると管理画面ではフォームのエラーにならない。今の管理画面ではチームは必ずリーグのワークスペースのチームなので起きない）。
+        """
+        self._workspaces.find_by_id(workspace_id).ensure_can_manage_teams(user_ids)
+
+    def replace_team_managers(self, workspace_id: int, team_id: int, user_ids: Iterable[int]) -> None:
+        """チームの担当者を `user_ids` に置き換える。チームがこのワークスペースの実データのチームでなければ
+        `InvalidWorkspace`（何も書かない）。"""
+        with self._atomic():
+            workspace = self._workspaces.find_by_id(workspace_id)
+            workspace.replace_team_managers(team_id, user_ids)
             self._workspaces.save(workspace)
