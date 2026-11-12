@@ -257,8 +257,8 @@ def draftee_count(registered: int, *, registered_limit: int | None, expected_oth
     ふつうは、その前の戦力外（`release.py`）が `USUAL_DRAFTEES` 人を迎える空きを作っている。
 
     この人数は外国人の獲得を含めた新しい支配下の選手の枠（獲得した外国人の分だけ日本人の新人が減る。#169 Q2）。
-    `expected_other` は、ほかの獲得手段（トレード・昇格。どれも未実装）で埋まる見込みの人数。
-    ドラフトはその残りを埋める。いまは手段が無いので常に 0。
+    `expected_other` は、ほかの獲得手段（トレード。未実装）で埋まる見込みの人数。ドラフトはその残りを埋める。
+    いまは常に 0（育成の昇格は新人の枠に上乗せで、昇格の後の支配下の人数 `registered` に入る。#170）。
     """
     gap = OPENING_REGISTERED_BAND.gap(registered, limit=registered_limit, expected=expected_other)
     return min(max(USUAL_DRAFTEES, gap.shortfall), MAX_DRAFTEES, gap.vacancy)
