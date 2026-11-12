@@ -29,7 +29,8 @@
   `DraftState.apply` の検査・育成の巡で足す候補が同じ判定を使う）。本指名では今までどおり指名できる
 
 GM の指名（D3。#297）は同じ `DraftState.apply` を通り、行動の並びは会議の記録（`draft_record.DraftRecord`）に保存する。
-人数の幅は `meeting_slots` が唯一の出典（会議を始めるときに記録に写し、締めるときに比べる）。会議を始めなかった年は、
+人数の幅は `meeting_slots`、候補は `meeting_pool` が唯一の出典で、どちらも `open_meeting` が通す（会議を始めるときに
+幅を記録に写し、締めるときに比べる。1手ごとに写した幅から候補を作り直す）。会議を始めなかった年は、
 締める処理が `auto_complete` で全球団を AI として最後まで進める。
 外国人は会議の前に獲得する（`foreign_market.py`。#169）。
 """
@@ -749,6 +750,37 @@ class DraftState:
         turn = self.next_turn()
         return turn is not None and turn.team_id == team_id and self._selection_error(team_id, prospect) is None
 
+    def passable(self, team_id: int) -> bool:
+        """球団 `team_id` がいま選択を終えられるか（会議の画面の「選択終了」の出し分け）。
+
+        `apply` と同じ検査（`_pass_error`）を通すので、画面に出したボタンが `apply` で断られることはない。
+        """
+        turn = self.next_turn()
+        return turn is not None and turn.team_id == team_id and self._pass_error(team_id) is None
+
+    def _pass_error(self, team_id: int) -> str | None:
+        """選択を終えられない理由（終えられるなら None）。`apply` と `passable` が使う唯一の検査。
+
+        育成の巡はいつでも選択を終えられる（最少は無く、位置の最低人数は支配下の話）。
+        """
+        if self.is_development:
+            return None
+        slot = self.slots[team_id]
+        if self._picked[team_id] < slot.minimum:
+            return f"少なくとも{slot.minimum}人を指名するまで、選択を終えられません。"
+        if self.shortfall_after(team_id, None) > 0:
+            return "位置の最低人数に届くまで、選択を終えられません。"
+        return None
+
+    @property
+    def round_order(self) -> tuple[int, ...]:
+        """いまの巡の指名順（会議に参加する球団。選択を終えた球団・指名し終えた球団も含む。会議の画面の「この巡の指名順」）。
+
+        会議が終わっていれば空。"""
+        if self.is_complete:
+            return ()
+        return tuple(team_id for team_id in self.strategy.order(self._strategy_round()) if team_id in self.slots)
+
     def resolved_moves(self, after_seq: int = 0) -> tuple[DraftMove, ...]:
         """行動の番号 `after_seq` より後の行動で確定した動き（確定した順）。保留中の入札は出さない
         （入札がそろって抽選まで解けたときに、その回の全球団の分がまとめて出る）。"""
@@ -773,14 +805,10 @@ class DraftState:
             raise InvalidDraftAction("ドラフト会議は終わっています。")
         if action.team_id != turn.team_id:
             raise InvalidDraftAction("この球団の番ではありません。")
-        slot = self.slots[action.team_id]
         if action.kind is DraftActionKind.PASS:
-            # 育成の巡はいつでも選択を終えられる（最少は無く、位置の最低人数は支配下の話）
-            if not self.is_development:
-                if self._picked[action.team_id] < slot.minimum:
-                    raise InvalidDraftAction(f"少なくとも{slot.minimum}人を指名するまで、選択を終えられません。")
-                if self.shortfall_after(action.team_id, None) > 0:
-                    raise InvalidDraftAction("位置の最低人数に届くまで、選択を終えられません。")
+            error = self._pass_error(action.team_id)
+            if error is not None:
+                raise InvalidDraftAction(error)
             self._record(action)
             self.moves.append(
                 DraftMove(len(self.actions), action.team_id, action.kind, self.round_number, self.is_development)
@@ -1033,6 +1061,87 @@ class DraftResult:
     state: DraftState
 
 
+@dataclass(frozen=True)
+class MeetingSetup:
+    """会議を開く設定（`open_meeting` の結果）。会議を始めるとき（D3）と締めるときが同じ関数で作る。
+
+    - `teams`: 引退・戦力外・外国人の獲得の後の球団（球団 id の昇順）
+    - `plans`: 球団ごとの新人の計画（`draft.plan_team_draft`。背番号と新人の作り方に使う）
+    - `slots`: 人数の幅（`meeting_slots`）
+    - `pool`: 候補（`meeting_pool`。足した候補の無いもの）
+    - `strategy`: 指名順の戦略（世界の規則と最終順位から）
+    """
+
+    year: int
+    world_seed: int
+    teams: tuple[DraftTeam, ...]
+    plans: Mapping[int, TeamDraftPlan]
+    slots: tuple[DraftSlot, ...]
+    pool: ProspectPool
+    strategy: DraftOrderStrategy
+
+
+def meeting_pool(
+    slots: Sequence[DraftSlot], *, world_seed: int, year: int, used_names: Collection[str]
+) -> ProspectPool:
+    """人数の幅から会議の候補を作る（`draw_pool`。位置ごとの人数は全球団の `planned` の合計）。
+
+    **会議の候補を作る唯一の関数**。会議を開くとき（`open_meeting`）と、会議の途中に保存した人数の幅から候補を
+    作り直すとき（D3 の1手ごと）が同じ関数を通るので、同じ幅と名前なら同じ候補（同じ指紋）になる。
+
+    渡す名前は、会議を開くときは世界の全選手と獲得した外国人、作り直すときは世界の全選手だけ（外国人の獲得を
+    計算し直さない）。獲得した外国人の名前（`generator.foreign_name` のカタカナの「名・姓」）は候補の名前
+    （`generator.japanese_name` の漢字の氏名）と重ならないので、どちらでも同じ候補になる。前提が崩れても黙っては
+    壊れない（指紋が違って `DraftChanged`）。
+    """
+    planned = Counter(position for slot in slots for position in slot.planned)
+    return draw_pool(planned, world_seed=world_seed, year=year, used_names=used_names)
+
+
+def open_meeting(
+    teams: Sequence[DraftTeam],
+    context: DraftContext,
+    *,
+    year: int,
+    world_seed: int,
+    used_names: set[str],
+    signed: Mapping[int, Sequence[Position]] | None = None,
+) -> MeetingSetup:
+    """締める年 `year` の会議の設定を作る（人数の幅・候補・指名順。行動はまだ当てない）。
+
+    `teams` は引退・戦力外・外国人の獲得の後の球団（球団 id の昇順に処理する）。`signed` は球団ごとの、会議の前に
+    獲得した外国人の位置（`foreign_market.OffseasonSignings.signed_positions`。日本人の人数と位置から除く）。
+    `used_names` は世界の全選手の名前で、候補の名前を足していく。
+    """
+    ordered = tuple(sorted(teams, key=lambda team: team.team_id))
+    missing = {team.team_id for team in ordered} - context.standings.team_ids
+    if missing:
+        raise ValueError(f"最終順位に無い球団があります（{sorted(missing)}）。")
+    plans = {team.team_id: plan_team_draft(team, (signed or {}).get(team.team_id, ())) for team in ordered}
+    slots = meeting_slots(ordered, plans, managed_team_id=context.managed_team_id)
+    pool = meeting_pool(slots, world_seed=world_seed, year=year, used_names=used_names)
+    used_names.update(pool.taken_names)
+    strategy = strategy_for(context.rule, context.standings, world_seed=world_seed, year=year)
+    return MeetingSetup(
+        year=year, world_seed=world_seed, teams=ordered, plans=plans, slots=slots, pool=pool, strategy=strategy
+    )
+
+
+def finish_draft(setup: MeetingSetup, state: DraftState, *, used_names: set[str]) -> DraftResult:
+    """会議の残りを AI で最後まで進め（終わっていれば何もしない）、新人を作る。
+
+    新人の背番号は球団ごとの乱数（`draft-<球団 id>`、年は翌年）で引く。足した候補の名前を `used_names` に足す。
+    """
+    state.auto_complete()
+    used_names.update(state.pool.taken_names)
+    drafted = state.drafted()
+    draftees: list[Draftee] = []
+    for team in setup.teams:
+        rng = make_random(game_seed(setup.world_seed, setup.year + 1, f"draft-{team.team_id}"))
+        draftees.extend(club_draftees(rng, team, setup.plans[team.team_id], drafted=drafted[team.team_id]))
+    return DraftResult(draftees=tuple(draftees), lotteries=tuple(state.lotteries), state=state)
+
+
 def run_draft(
     teams: Sequence[DraftTeam],
     context: DraftContext,
@@ -1043,29 +1152,13 @@ def run_draft(
     actions: Sequence[DraftAction] = (),
     signed: Mapping[int, Sequence[Position]] | None = None,
 ) -> DraftResult:
-    """締める年 `year` の会議を開き、`actions`（D3 で保存した行動）を当ててから残りを AI で進め、新人を作る。
+    """締める年 `year` の会議を開き（`open_meeting`）、`actions` を当ててから残りを AI で進め、新人を作る
+    （`finish_draft`）。引数は `open_meeting` と同じ。
 
-    `teams` は引退・戦力外・外国人の獲得の後の球団（球団 id の昇順に処理する）。`signed` は球団ごとの、会議の前に
-    獲得した外国人の位置（`foreign_market.OffseasonSignings.signed_positions`。日本人の人数と位置から除く）。
-    `used_names` は世界の全選手の名前で、候補の名前を足していく。新人の背番号は球団ごとの乱数（`draft-<球団 id>`、
-    年は翌年）で引く。
+    会議のエンジンを試すための入口（テストが使う）。締める処理は `offseason.plan_offseason` を通り、
+    GM が開いた会議は人数の幅と候補の指紋を照合してから再生する（`offseason.replay_meeting`）。
     """
-    ordered = sorted(teams, key=lambda team: team.team_id)
-    missing = {team.team_id for team in ordered} - context.standings.team_ids
-    if missing:
-        raise ValueError(f"最終順位に無い球団があります（{sorted(missing)}）。")
-    plans = {team.team_id: plan_team_draft(team, (signed or {}).get(team.team_id, ())) for team in ordered}
-    slots = meeting_slots(ordered, plans, managed_team_id=context.managed_team_id)
-    planned = Counter(position for slot in slots for position in slot.planned)
-    pool = draw_pool(planned, world_seed=world_seed, year=year, used_names=used_names)
-    used_names.update(pool.taken_names)
-    strategy = strategy_for(context.rule, context.standings, world_seed=world_seed, year=year)
-    state = DraftState.open(strategy, slots, pool, actions)
-    state.auto_complete()
-    used_names.update(state.pool.taken_names)
-    drafted = state.drafted()
-    draftees: list[Draftee] = []
-    for team in ordered:
-        rng = make_random(game_seed(world_seed, year + 1, f"draft-{team.team_id}"))
-        draftees.extend(club_draftees(rng, team, plans[team.team_id], drafted=drafted[team.team_id]))
-    return DraftResult(draftees=tuple(draftees), lotteries=tuple(state.lotteries), state=state)
+    setup = open_meeting(teams, context, year=year, world_seed=world_seed, used_names=used_names, signed=signed)
+    return finish_draft(
+        setup, DraftState.open(setup.strategy, setup.slots, setup.pool, actions), used_names=used_names
+    )

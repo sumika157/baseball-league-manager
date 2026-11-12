@@ -43,9 +43,11 @@ from ..application.game_view import GameViewService
 from ..application.league_view import LeagueViewService
 from ..application.pennant_championships import PostseasonHistoryReader
 from ..application.pennant_club_details import ClubDetailsService
+from ..application.pennant_draft import PennantDraftService
 from ..application.pennant_history import PennantHistoryService
 from ..application.pennant_home import PennantHomeService
 from ..application.pennant_offseason import PennantOffseasonService
+from ..application.pennant_offseason_inputs import OffseasonInputsReader, OffseasonPhase
 from ..application.pennant_offseason_view import OffseasonViewService
 from ..application.pennant_postseason import PennantPostseasonService, PostseasonBracketReader
 from ..application.pennant_postseason_view import PennantPostseasonViewService
@@ -103,6 +105,7 @@ from ..infrastructure.queries import (
     DjangoOffseasonQuery,
     DjangoPennantActivityQuery,
     DjangoPlayerFieldingQuery,
+    DjangoPlayerNameQuery,
     DjangoPlayerSearchQuery,
     DjangoPlayerStatsQuery,
     DjangoPostseasonQuery,
@@ -120,6 +123,7 @@ from ..infrastructure.repositories import (
     DjangoAwardRepository,
     DjangoChampionshipRepository,
     DjangoClubPlanRepository,
+    DjangoDraftRepository,
     DjangoFixtureRepository,
     DjangoGameRepository,
     DjangoLeagueRepository,
@@ -501,28 +505,98 @@ def build_pennant_offseason_service(world_id: int) -> PennantOffseasonService:
     後始末を1つのトランザクションにまとめるので、`transaction.atomic` もここで渡す。
     世界の id が正しくなければ InvalidWorld、存在しなければ使うときに WorldNotFound。
     締める年の最終順位の読み取りは、勝ち上がり（締められるかの検査）とドラフトの指名順で1つを共有する。
+    局面の検査と入力の読み口はドラフト会議（`build_pennant_draft_service`）と同じ組み立て（`_OffseasonParts`）で、
+    同じリポジトリの実体をサービスと共有する。
     """
-    scope = WorldScope.pennant(world_id)
-    finishes = _league_finishes(world_id)
+    parts = _OffseasonParts(world_id)
     return PennantOffseasonService(
         world_id=world_id,
-        worlds=DjangoWorldRepository(),
-        leagues=DjangoLeagueRepository(scope),
-        teams=DjangoTeamRepository(scope),
-        fixtures=DjangoFixtureRepository(scope),
-        ratings=DjangoRatingsRepository(scope),
-        plans=DjangoClubPlanRepository(scope),
-        releases=DjangoReleasePlanRepository(scope),
-        awards=DjangoAwardRepository(scope),
-        championships=DjangoChampionshipRepository(scope),
-        titles=build_world_league_view_service(world_id),
-        context_query=DjangoSimulationContextQuery(scope),
-        playing_time=DjangoSeasonPlayingTimeQuery(scope),
-        postseason=_postseason_brackets(world_id, finishes=finishes),
-        finishes=finishes,
-        fa_exemptions=ForeignQuotaExemptions(DjangoServiceHistoryQuery(scope)),
+        worlds=parts.worlds,
+        leagues=parts.leagues,
+        teams=parts.teams,
+        fixtures=parts.fixtures,
+        ratings=parts.ratings,
+        plans=DjangoClubPlanRepository(parts.scope),
+        releases=parts.releases,
+        awards=parts.awards,
+        championships=DjangoChampionshipRepository(parts.scope),
+        drafts=parts.drafts,
+        titles=parts.titles,
+        context_query=parts.context_query,
+        postseason=parts.brackets,
+        phase=parts.phase(),
+        inputs=parts.inputs(),
+        fa_exemptions=ForeignQuotaExemptions(DjangoServiceHistoryQuery(parts.scope)),
         atomic=transaction.atomic,
     )
+
+
+def build_pennant_draft_service(world_id: int) -> PennantDraftService:
+    """ペナントの世界ひとつのドラフト会議（GM が1巡ずつ進める。#297 D3）のサービスを組み立てる。
+
+    **リポジトリと参照クエリは、すべて渡された世界の範囲で作る。** 会議を開ける条件と、会議を始めるときの入力は
+    締める処理と同じ組み立て（`_OffseasonParts`）。トランザクションはここで渡す。
+    世界の id が正しくなければ InvalidWorld、存在しなければ使うときに WorldNotFound。
+    """
+    parts = _OffseasonParts(world_id)
+    return PennantDraftService(
+        world_id=world_id,
+        worlds=parts.worlds,
+        teams=parts.teams,
+        drafts=parts.drafts,
+        names=DjangoPlayerNameQuery(parts.scope),
+        phase=parts.phase(),
+        inputs=parts.inputs(),
+        atomic=transaction.atomic,
+    )
+
+
+class _OffseasonParts:
+    """締める処理とドラフト会議が共有する部品（局面の検査・入力の読み口と、その依存）。依存は全部、世界の範囲で作る。
+
+    リポジトリの実体はサービスと部品で共有する（同じ世界・同じ範囲の読み書きを1つの実体で行う）。
+    締める年の最終順位の読み取りは、勝ち上がり（締められるかの検査）とドラフトの指名順で1つを共有する。
+    """
+
+    def __init__(self, world_id: int) -> None:
+        self.world_id = world_id
+        self.scope = WorldScope.pennant(world_id)
+        self.worlds = DjangoWorldRepository()
+        self.leagues = DjangoLeagueRepository(self.scope)
+        self.teams = DjangoTeamRepository(self.scope)
+        self.fixtures = DjangoFixtureRepository(self.scope)
+        self.ratings = DjangoRatingsRepository(self.scope)
+        self.releases = DjangoReleasePlanRepository(self.scope)
+        self.awards = DjangoAwardRepository(self.scope)
+        self.drafts = DjangoDraftRepository(self.scope)
+        self.context_query = DjangoSimulationContextQuery(self.scope)
+        self.titles = build_world_league_view_service(world_id)
+        self.finishes = _league_finishes(world_id)
+        self.brackets = _postseason_brackets(world_id, finishes=self.finishes)
+
+    def phase(self) -> OffseasonPhase:
+        return OffseasonPhase(
+            world_id=self.world_id,
+            worlds=self.worlds,
+            teams=self.teams,
+            fixtures=self.fixtures,
+            ratings=self.ratings,
+            releases=self.releases,
+            context_query=self.context_query,
+            postseason=self.brackets,
+        )
+
+    def inputs(self) -> OffseasonInputsReader:
+        return OffseasonInputsReader(
+            teams=self.teams,
+            leagues=self.leagues,
+            ratings=self.ratings,
+            releases=self.releases,
+            awards=self.awards,
+            titles=self.titles,
+            playing_time=DjangoSeasonPlayingTimeQuery(self.scope),
+            finishes=self.finishes,
+        )
 
 
 def build_pennant_postseason_service(world_id: int) -> PennantPostseasonService:
@@ -597,6 +671,7 @@ def build_pennant_settings_service(world_id: int) -> PennantSettingsService:
         world_id=world_id,
         worlds=DjangoWorldRepository(),
         fixtures=DjangoFixtureRepository(scope),
+        drafts=DjangoDraftRepository(scope),
         context_query=DjangoSimulationContextQuery(scope),
         postseason=DjangoPostseasonQuery(scope),
         brackets=_postseason_brackets(world_id),
