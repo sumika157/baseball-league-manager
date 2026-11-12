@@ -59,8 +59,8 @@ D1・D2 で会議のエンジン（行動の並びから導く `DraftState`・�
 - 書き込みは「外で読む → 候補を作り直す → 再生 → GM の行動 → `advance_ai(stop_at=GM)`」、中で `last_seq` と
   未締めを読み直して追記する。局面の検査（`_check`・`_season_over_year`）と締める処理の入力の読み口
   （`OffseasonInputsReader`）を切り出して共有する。
-- 締める処理: 会議が途中なら `DraftInProgress`、終わっていれば保存した行動を `plan_offseason(draft_actions=…)` に渡し、
-  `meeting_slots` と指紋を写したものと比べる。始めていなければ今と同じ。`_state()` に会議の目印、`_commit` で会議の表を消す。
+- 締める処理: 会議が途中なら `DraftInProgress`、終わっていれば保存した会議を `plan_offseason(meeting=…)` に渡し
+  （T2 で `draft_actions=` から変えた）、`meeting_slots` と指紋を写したものと比べる。始めていなければ今と同じ。`_state()` に会議の目印、`_commit` で会議の表を消す。
 - 戦力外の指名は、中で「会議が無い」を読み直してから書く。`PennantSettingsService` は会議の有無を見る。DTO（`DraftMeetingView` ほか）。
 
 ### infrastructure
@@ -88,8 +88,8 @@ CreateModel 3つ（backfill なし）。1会議あたり行動 約600行・人�
 | タスク | 内容 | PR |
 | --- | --- | --- |
 | T0 | epic とこの設計書 | #334 |
-| T1 | domain と保存（上の domain・infrastructure） | |
-| T2 | application（`PennantDraftService`・締める処理・ロック） | |
+| T1 | domain と保存（上の domain・infrastructure） | #337 |
+| T2 | application（`PennantDraftService`・締める処理・ロック） | （この PR） |
 | T3 | 画面 | |
 
 D4（#298）: 抽選の記録（`PennantDraftLottery`）と「N球団競合」・巡×球団の盤・世界の一覧の「会議の途中」・
@@ -170,3 +170,69 @@ D4 への申し送り（Wiki への吸収）:
 - `PennantDraft` は `League.world` を経由せず**世界を直接指す**（会議はリーグをまたぐので、リーグを経由する道が無い。#198 本文の
   「世界の範囲は世界・球団の外部キーで決まる」）。Wiki「ペナントモードの仕組み」の「世界の分け方」（世界の出典はリーグの1か所だけ）に、
   この例外と理由（会議そのものの世界の出典は1つ。人数の幅と行動の球団の世界は、リポジトリが `teams_in(scope)` と参加球団で検査する）を書き足す。
+
+### ユーザーの決定（2026-11-12。#297 のコメント）
+
+- **`PennantDraft` が世界を直接指すことを例外として認める**（会議はリーグをまたぐ世界全体の持ち物で、リーグを経由する道が無いため）。
+  Wiki「ペナントモードの仕組み」の「世界の分け方」に例外と理由を書き足す（D4 の Wiki 吸収で。上の「D4 への申し送り」）。
+
+### T2 application（2026-11-13）
+
+決めたこと:
+
+- **会議を始めるときと締めるときの計算を domain の1つの関数にした**（`offseason.prepare_meeting`。引退・戦力外 → 外国人の獲得 →
+  `draft_meeting.open_meeting`（`meeting_slots` → `meeting_pool` → 指名順の戦略））。`run_draft` も `open_meeting` と
+  `finish_draft`（残りを AI で進めて新人を作る）に分けた。候補を作るのは `meeting_pool`（人数の幅の `planned` の合計から
+  `draw_pool`）だけで、1手ごとに写した幅から候補を作り直すのも同じ関数。
+- **締める処理は `plan_offseason(meeting=記録)` で会議を再生する**（T1 の申し送りの `draft_actions=` は `meeting=` に替えた）。
+  domain の `replay_meeting` が、計算し直した幅との照合（`ensure_same_slots`）→ 指紋と行動の再生（`DraftRecord.state`）→
+  終わっていなければ `DraftInProgress` の順で検査する（幅の計算を application で2度しないため）。会議の無い年は今と同じ。
+- **局面の検査と入力の読み口を `application/pennant_offseason_inputs.py` に切り出した**。`OffseasonPhase`（`season_over_year`・
+  `closable_year`（＝会議を開ける条件。#297 Q1）・`ensure_not_closed`・状態の目印 `state()`）と `OffseasonInputsReader`
+  （`read`＝締める処理の入力。`strategy`＝会議の再生用の指名順。集約は組み立てない）。組み立ては views.py の `_OffseasonParts` で、
+  締める処理と会議の両方がリポジトリの実体を共有する。
+- `PennantDraftService`（`application/pennant_draft.py`）: `view`（開けない理由・状態・次の番・この巡の指名順と結果・自軍の指名・
+  直近の動き20件・候補（見込みの区分・指名済みの球団・指名できるか））・`start`・`nominate`・`pass_turn`・`delegate_turn`・
+  `auto_complete`・`reset`。書き込みは `DraftStep`（その操作で確定した動き。AI の分も）を返す。
+  - `start`: 外で `read` → `prepare_meeting` → GM の番まで AI → `DraftRecord.start`。中で状態の目印を読み直して `DraftRepository.start`
+    （二重は `DraftStarted`）。
+  - 1手: 外で記録を読み、`expected_seq` を比べ、`meeting_pool`（名前は `PlayerNameQuery`）と `strategy` で再生、GM の行動を
+    `DraftState.apply` で当て、`advance_ai(stop_at=GM)`。中では `append(expected_seq)` だけ（締めた・やり直した後は記録が無いので
+    `DraftConflict`。未締めの読み直しはこれで足りる）。
+  - `delegate_turn` は指名できる候補がいないときだけ（`selectable` が全部 False）。`reset` は `DraftChanged` のときだけで、
+    締める処理と同じ計算（幅の照合まで）で確かめる（締める処理だけが `DraftChanged` を出す会議もやり直せるように）。
+- domain に画面用の `DraftState.passable`（`apply` の選択終了と同じ検査 `_pass_error`）と `round_order`（いまの巡の指名順）を足した。
+- **ロック**: 締める処理は状態の目印に加えて会議の目印（`last_seq(year)`）を前後で比べる（計算中に会議を始めた・進めたら断る）。
+  `_commit` で `remove(year)`。戦力外の指名（手動にする・保存・自動に戻す）は書くトランザクションの中で会議の有無を読み直し、
+  始めていれば `DraftStarted`（理由は `pre_draft_input_blocker`。`ReleasePlanView.blocker` にも出す）。設定の指名順の規則は
+  `DraftRepository.last_seq(year) is not None` で固定（T1 の `_MEETING_STARTED` を置き換えた）。
+  **ポストシーズンの方式も会議を始めた後は変えられない**（`postseason_format_change_blocker(meeting_started=)`。方式「なし」の世界で
+  会議を始めた後に方式を変えると、ポストシーズンの前に始めた会議になり Q1 に反する。セルフレビューで見つけた穴。規則と同じく
+  変えるトランザクションの中で会議の有無を読み直し、会議を始める側も方式を状態の目印で比べる）。
+- 会議の画面の候補には、受け持つ球団のスカウトの見立ての見込みの区分だけを出す（`projected_grade`。好み・伸びしろは出さない）。
+
+実測（開発 DB のコピー・8リーグ 48球団・1シーズン目を最後まで進めた世界。方式「なし」。コピーは消した）:
+
+| 操作 | 時間 | クエリ | トランザクションの中 |
+| --- | --- | --- | --- |
+| 会議の材料（始める前） | 21ms | 5 | |
+| 会議を始める（GM の番まで AI 32手） | 2.1秒（目安 3秒） | 103 | 21ms |
+| 会議の材料（途中。候補 652人） | 165ms（目安 300ms） | 13 | |
+| 1手（指名して次の GM の番まで。5回） | 233〜361ms（目安 500ms） | 23 | 7〜13ms |
+| 残りをお任せ（残り 79手） | 315ms（目安 2秒） | 23 | 13ms |
+| 締める処理（会議あり／なし） | 2.6秒／3.1秒 | 851／846 | 700ms／638ms |
+
+締める処理のロックの差（約60ms）は会議の記録（行動 316行・幅 48行）を消す分。会議を始めなかった年のロックは変わらない
+（足したのは最後の行動の番号のクエリ1本）。10シーズン目の世界は名前と表彰が増えるので「始める」は締める処理の外の計算と同じだけ
+伸びる（締める処理は 8リーグの10シーズン目で約6秒）。
+
+T3 への申し送り:
+
+- URL は計画どおり。POST は `expected_year`・`expected_seq`（`DraftMeetingView.last_seq`）を送る。`DraftConflict` は「開き直して」、
+  `InvalidDraftAction` は理由をそのまま出す。`view().changed` のときは「会議をやり直す」だけを出す（締める処理が `DraftChanged` で
+  断ったときも、`reset` は同じ計算で確かめるのでやり直せる）。
+- GM ホームのカードの出し分けは `view()`（165ms）の `status`・`turn` で足りる。重ければ候補の行を作らない軽い読み方を足す。
+- 戦力外タブは `ReleasePlanView.can_change` が False なら読むだけにして `blocker` を出す。設定の指名順は `draft_order_blocker` が出る。
+- 候補の並べ替え（見込みの区分の降順など）は domain の `sorting.py` に足す（`DraftProspectRow` は番号の順）。
+- 会議の目印は締める処理の `close_option` には入れていない（途中かどうかは再生しないと分からない）。締めるボタンは会議が途中なら
+  出さない（会議のカードを出す）か、押されたら `DraftInProgress` の理由を出す。

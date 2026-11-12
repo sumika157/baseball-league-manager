@@ -1,8 +1,10 @@
 """シーズンを締めるときの計算。**純粋な関数**で、DB にも Django にも触れない。
 
     引退を決める → 球団ごとに戦力外（`release.py`。ここまでが `plan_departures`）→ 外国人の獲得
-    （`foreign_market.py`。補う人数は `draft.py`、選ぶ位置は戦力の穴）→ ドラフト会議（`draft_meeting.py`。全球団の
-    日本人の新人。人数は新人の人数 − 獲得した外国人。本指名の後に育成の巡）→
+    （`foreign_market.py`。補う人数は `draft.py`、選ぶ位置は戦力の穴）→ ドラフト会議の人数の幅と候補（ここまでが
+    `prepare_meeting`。会議を始めるとき（#297 D3）も同じ関数）→ ドラフト会議（`draft_meeting.py`。全球団の
+    日本人の新人。人数は新人の人数 − 獲得した外国人。本指名の後に育成の巡。GM が進めて終えた会議は保存した行動を
+    再生する）→
     残る選手の能力を1年ぶん進める（伸びしろの無い選手には先に引いて付ける。`with_filled_potential`）→
     残る選手・新人・獲得した外国人をまとめて、項目ごとに水準の錨をかける（写像は支配下で決め、
     育成にも同じ写像を当てる）
@@ -22,13 +24,15 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from math import sqrt
 
+from ..exceptions import DraftInProgress
 from ..simulation.randomness import game_seed, game_uniform, make_random
 from ..simulation.ratings import BatterRatings, PitcherRatings
 from ..simulation.spread import MIN_POPULATION, rescale, spread_ratings, target_mean, target_sd
 from .aging import age_ratings
 from .draft import Draftee, DraftTeam, development_target
-from .draft_meeting import DraftAction, DraftContext, Lottery, run_draft
-from .foreign_market import ForeignSigning, offseason_signings
+from .draft_meeting import DraftContext, DraftState, Lottery, MeetingSetup, finish_draft, open_meeting
+from .draft_record import DraftRecord
+from .foreign_market import ForeignSigning, OffseasonSignings, offseason_signings
 from .offseason_player import (
     OffseasonClub,
     OffseasonPlayer,
@@ -270,6 +274,66 @@ def plan_departures(
     )
 
 
+@dataclass(frozen=True)
+class PreparedMeeting:
+    """ドラフト会議を開くまでの計算（`prepare_meeting` の結果）。
+
+    - `departures`: 引退と戦力外（`plan_departures`）
+    - `market`: 外国人の獲得（`foreign_market.offseason_signings`）
+    - `setup`: 会議の人数の幅・候補・指名順（`draft_meeting.open_meeting`）
+    - `names`: 世界の全選手・獲得した外国人・候補の名前（新人の名前を重ねないため、続きの計算に渡す）
+    """
+
+    departures: Departures
+    market: OffseasonSignings
+    setup: MeetingSetup
+    names: frozenset[str]
+
+
+def prepare_meeting(
+    clubs: Sequence[OffseasonClub],
+    *,
+    year: int,
+    world_seed: int,
+    start_year: int,
+    used_names: Collection[str],
+    draft: DraftContext,
+    manual_releases: Mapping[int, Collection[int]] | None = None,
+) -> PreparedMeeting:
+    """Y 年のドラフト会議を開くまで: 引退・戦力外（`plan_departures`）→ 外国人の獲得 →
+    人数の幅と候補（`open_meeting`）。
+
+    **会議を始めるとき（#297 D3）と締めるとき（`plan_offseason`）の唯一の関数**。会議の人数の幅と候補の位置ごとの人数は
+    獲得した外国人の位置で決まるので、この順を両方で同じにする（獲得は決定的なので、入力が同じなら同じ幅になる）。
+    引数は `plan_offseason` と同じ。
+    """
+    departures = plan_departures(
+        clubs, year=year, world_seed=world_seed, start_year=start_year, manual_releases=manual_releases
+    )
+    names = set(used_names)
+    # 外国人の獲得は会議の前（獲得した外国人の分だけ、会議で指名する日本人が減る。#169）
+    market = offseason_signings(departures.draft_teams, year=year, world_seed=world_seed, used_names=names)
+    setup = open_meeting(
+        market.teams, draft, year=year, world_seed=world_seed, used_names=names, signed=market.signed_positions
+    )
+    return PreparedMeeting(departures=departures, market=market, setup=setup, names=frozenset(names))
+
+
+def replay_meeting(meeting: DraftRecord, setup: MeetingSetup) -> DraftState:
+    """保存した会議（D3）を、締めるときに計算し直した設定で再生する。
+
+    人数の幅が会議を始めたときと違う・候補の指紋が違う・行動を当てられない → `DraftChanged`。
+    会議が終わっていない → `DraftInProgress`（締める処理は、途中の会議の残りを AI で進めない）。
+    """
+    if meeting.year != setup.year:
+        raise ValueError("会議の年と締める年が違います。")
+    meeting.ensure_same_slots(setup.slots)
+    state = meeting.state(setup.strategy, setup.pool)
+    if not state.is_complete:
+        raise DraftInProgress()
+    return state
+
+
 def plan_offseason(
     clubs: Sequence[OffseasonClub],
     *,
@@ -279,7 +343,7 @@ def plan_offseason(
     used_names: Collection[str],
     draft: DraftContext,
     manual_releases: Mapping[int, Collection[int]] | None = None,
-    draft_actions: Sequence[DraftAction] = (),
+    meeting: DraftRecord | None = None,
 ) -> OffseasonPlan:
     """Y 年を締める計画。`clubs` は球団 id の昇順で処理する。
 
@@ -287,25 +351,25 @@ def plan_offseason(
     - `start_year`: 世界の開幕年（生年月日の無い選手の年齢の推定に使う）
     - `draft`: ドラフト会議の設定（世界の規則と、Y 年の公式戦の最終順位）。既定値は持たない
     - `manual_releases`: GM が手動で戦力外を指名した球団（球団 id → 選手 id）。無い球団は自動（`release.py`）
-    - `draft_actions`: 保存した会議の行動（D3）。残りは AI が最後まで進める
+    - `meeting`: GM が進めて終えた会議の記録（D3。`replay_meeting` の検査を通す）。None なら会議を開かなかった年で、
+      全球団を AI として最後まで進める
     """
-    departures = plan_departures(
-        clubs, year=year, world_seed=world_seed, start_year=start_year, manual_releases=manual_releases
-    )
-    retired = departures.retired
-    survivors = departures.survivors
-    names = set(used_names)
-    # 外国人の獲得は会議の前（獲得した外国人の分だけ、会議で指名する日本人が減る。#169）
-    market = offseason_signings(departures.draft_teams, year=year, world_seed=world_seed, used_names=names)
-    result = run_draft(
-        market.teams,
-        draft,
+    prepared = prepare_meeting(
+        clubs,
         year=year,
         world_seed=world_seed,
-        used_names=names,
-        actions=draft_actions,
-        signed=market.signed_positions,
+        start_year=start_year,
+        used_names=used_names,
+        draft=draft,
+        manual_releases=manual_releases,
     )
+    departures, market, setup = prepared.departures, prepared.market, prepared.setup
+    retired = departures.retired
+    survivors = departures.survivors
+    state = (
+        DraftState.open(setup.strategy, setup.slots, setup.pool) if meeting is None else replay_meeting(meeting, setup)
+    )
+    result = finish_draft(setup, state, used_names=set(prepared.names))
     drafted = list(result.draftees)
     signed = list(market.signings)
     ordered = sorted(clubs, key=lambda club: club.team_id)

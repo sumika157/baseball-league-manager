@@ -13,7 +13,9 @@ from datetime import date
 from ..domain.entities import jersey_number_in, winning_team_id
 from ..domain.pennant.awards import Award
 from ..domain.pennant.club_plan import PlanSection
+from ..domain.pennant.draft_meeting import DraftActionKind
 from ..domain.pennant.draft_order import DraftOrderRule
+from ..domain.pennant.draft_record import DraftMeetingStatus
 from ..domain.pennant.postseason import PostseasonFormat, PostseasonResult, PostseasonStatus
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.season import SeasonPhase
@@ -21,7 +23,7 @@ from ..domain.services.free_agency import SERVICE_DAYS_PER_SEASON
 from ..domain.services.rankings import Title
 from ..domain.services.roster_analysis import NEUTRAL_CATEGORY, ColorCategory
 from ..domain.simulation.fatigue import FatigueLevel
-from ..domain.simulation.ratings import BatterRatings, PitcherRatings, RatingEmphasis
+from ..domain.simulation.ratings import BatterRatings, PitcherRatings, RatingEmphasis, RatingGrade
 from ..domain.value_objects import (
     AcquisitionRoute,
     BattingLine,
@@ -2150,6 +2152,127 @@ class ReleasePlanView:
     is_manual: bool
     chosen_ids: frozenset[int]
     players: tuple[ReleasePlayerRow, ...]
+    # 指名を変えられない理由（その年のドラフト会議を始めた。domain の `pre_draft_input_blocker`）。変えられるなら空。
+    # 画面は指名を読むだけにして理由を出す（#297 D3）
+    blocker: str = ""
+
+    @property
+    def can_change(self) -> bool:
+        return not self.blocker
+
+
+# --- ドラフト会議（#297 D3） ---
+
+
+@dataclass(frozen=True)
+class DraftTurnView:
+    """会議の次の番（domain の `DraftTurn` に球団の名前と、受け持つ球団の番かを足したもの）。"""
+
+    team_id: int
+    team_name: str
+    # 区分の中の巡（本指名・育成それぞれ1から）と、入札の回（入札の巡だけ。指名の巡は1）
+    round_number: int
+    is_bid: bool
+    attempt: int
+    is_development: bool
+    is_mine: bool
+
+
+@dataclass(frozen=True)
+class DraftLotteryView:
+    """入札の重複と抽選の結果（入札した球団と当たった球団の名前）。"""
+
+    bidders: tuple[str, ...]
+    winner: str
+
+
+@dataclass(frozen=True)
+class DraftMoveRow:
+    """会議で確定した動きひとつ（domain の `DraftMove` に名前を足したもの）。選択終了は候補が無い（名前は空）。"""
+
+    seq: int
+    team_id: int
+    team_name: str
+    kind: DraftActionKind
+    round_number: int
+    is_development: bool
+    prospect_key: int | None
+    prospect_name: str
+    position: Position | None
+    lottery: DraftLotteryView | None = None
+
+
+@dataclass(frozen=True)
+class DraftRoundRow:
+    """いまの巡の指名順の1球団（この巡で確定した動きがあれば `move`）。"""
+
+    team_id: int
+    team_name: str
+    is_mine: bool
+    move: DraftMoveRow | None
+
+
+@dataclass(frozen=True)
+class DraftProspectRow:
+    """会議の候補ひとり。能力は見せず、受け持つ球団のスカウトの見立ての見込みの区分（`projected_grade`）だけを出す
+    （伸びしろ・球団の好みは出さない。#297 Q4）。"""
+
+    key: int
+    name: str
+    position: Position
+    route_label: str
+    age: int
+    grade: RatingGrade
+    # 指名された球団の名前（まだ指名されていなければ空）
+    taken_by: str
+    # 受け持つ球団がいま入札・指名できるか（domain の `DraftState.selectable`。`apply` と同じ検査）
+    selectable: bool
+
+
+@dataclass(frozen=True)
+class DraftMeetingView:
+    """ドラフト会議の画面の材料（#297 D3）。
+
+    - `blocker`: 会議を開けない理由（公式戦・ポストシーズンの途中・締めた後・最終シーズン・受け持つ球団が無い）。
+      空なら開ける（始めていなければ「会議を始める」を出せる）
+    - `changed`: 会議を始めた後にコードが変わって、保存した会議を再生できない（`DraftChanged`。
+      「会議をやり直す」だけを出す）
+    - `last_seq`: 最後の行動の番号。書き込みの操作に `expected_seq` として送り返す
+    """
+
+    year: int | None
+    status: DraftMeetingStatus
+    blocker: str
+    managed_team_id: int | None
+    last_seq: int = 0
+    changed: bool = False
+    turn: DraftTurnView | None = None
+    round_rows: tuple[DraftRoundRow, ...] = ()
+    own_moves: tuple[DraftMoveRow, ...] = ()
+    recent_moves: tuple[DraftMoveRow, ...] = ()
+    prospects: tuple[DraftProspectRow, ...] = ()
+    can_pass: bool = False
+    # 指名できる候補がいないときだけ、受け持つ球団の番を AI に任せられる（AI は候補を足して指名する）
+    can_delegate: bool = False
+
+    @property
+    def can_start(self) -> bool:
+        return self.status is DraftMeetingStatus.NOT_STARTED and not self.blocker
+
+    @property
+    def is_my_turn(self) -> bool:
+        return self.turn is not None and self.turn.is_mine
+
+
+@dataclass(frozen=True)
+class DraftStep:
+    """会議の書き込み（始める・指名・選択終了・お任せ）の結果。`moves` はその操作で確定した動き（AI の分も含む。
+    画面の「抽選の結果」などの知らせに使う）。"""
+
+    year: int
+    last_seq: int
+    moves: tuple[DraftMoveRow, ...]
+    is_complete: bool
 
 
 # --- オフの結果と能力の推移（P6c） ---

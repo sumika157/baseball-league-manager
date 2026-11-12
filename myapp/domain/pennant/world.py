@@ -50,12 +50,14 @@ def league_priority(league_ids: Iterable[int], *, year: int, start_year: int) ->
     return ids[shift:] + ids[:shift]
 
 
-def postseason_format_change_blocker(*, started: bool, world_over: bool) -> str | None:
+def postseason_format_change_blocker(*, started: bool, world_over: bool, meeting_started: bool) -> str | None:
     """ポストシーズンの方式を変えられない理由。変えられるなら None。**方式を変えられる条件の唯一の出典**。
 
     - `world_over`: 最終シーズンを終えた世界（これ以上シーズンが無いので、変えても使われない）
     - `started`: いまの年度のポストシーズンの試合がある（途中で方式が変わると、勝ち上がりが導けなくなる）。
       締めると年度が翌年に進むので、締めた後は変えられる（締めた年の勝ち上がりは、その年の試合から導く）
+    - `meeting_started`: その年のドラフト会議を始めている（会議を開けるのはポストシーズンの後＝#297 Q1。
+      方式「なし」から変えると、ポストシーズンの前に始めた会議になってしまう）。締めると会議の記録は消えるので、締めた後は変えられる
 
     公式戦の途中・ポストシーズンの開始前は変えられる（その年のポストシーズンから新しい方式になる）。
     """
@@ -63,6 +65,8 @@ def postseason_format_change_blocker(*, started: bool, world_over: bool) -> str 
         return "この世界は最終シーズンを終えているので、ポストシーズンの方式は変えられません。"
     if started:
         return "今年のポストシーズンが始まっているので、方式は変えられません。"
+    if meeting_started:
+        return "今年のドラフト会議が始まっているので、ポストシーズンの方式は変えられません。"
     return None
 
 
