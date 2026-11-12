@@ -502,3 +502,69 @@ class WorkspaceMembersPermissionTest(PermissionTableCase):
 class PrivateWorkspaceMembersPermissionTest(WorkspaceMembersPermissionTest):
     visibility = Visibility.PRIVATE
     member_table = MEMBER_PRIVATE
+
+
+# ワークスペースの削除（W4 T5。#80）。見るのも消すのも持ち主だけ（`can_delete()`）
+#   タブ（設定の画面の削除のタブ。設定の画面は持ち主だけが開ける）: Y・403・404・login ／
+#   確認（GET）: 200・403・404・login ／
+#   削除（名前を正しく打った POST）: ok・403・404・login。持ち主の行は最後に確かめる（消すとワークスペースが無くなる）
+DELETE_CHECKS = ("タブ", "確認（GET）", "削除（POST）")
+_DELETE_NON_OWNERS = {
+    # 編集者でもワークスペースは消せない（持ち主だけ）
+    "編集者": "403 403 403",
+    "担当": "403 403 403",
+    "ほかのチームの担当": "403 403 403",
+}
+DELETE_PUBLIC = {
+    **_DELETE_NON_OWNERS,
+    "ログインした部外者": "403 403 403",
+    "staff の部外者": "403 403 403",
+    "superuser の部外者": "403 403 403",
+    "未ログイン": "login login login",
+    "持ち主": "Y 200 ok",
+}
+DELETE_PRIVATE = {
+    **_DELETE_NON_OWNERS,
+    "ログインした部外者": "404 404 404",
+    "staff の部外者": "404 404 404",
+    "superuser の部外者": "404 404 404",
+    "未ログイン": "login login login",
+    "持ち主": "Y 200 ok",
+}
+
+
+class WorkspaceDeletePermissionTest(PermissionTableCase):
+    """削除の画面の、役割ごとの表（公開・非公開）。持ち主だけが開けて消せる。"""
+
+    delete_table = DELETE_PUBLIC
+
+    def setUp(self):
+        super().setUp()
+        self.ws.visibility = self.visibility.value
+        self.ws.save()
+
+    def _observe_delete(self) -> list[str]:
+        delete_url = self.url("workspace_delete")
+        observed = [self._link(self.url("workspace_settings"), f'href="{delete_url}"'), self._get(delete_url)]
+        response = self.client.post(delete_url, {"confirm_name": self.ws.name})
+        observed.append(self._write(response, not orm_models.Workspace.objects.filter(id=self.ws.id).exists()))
+        return observed
+
+    def test_roles_by_pages(self):
+        self.assertEqual(list(self.delete_table)[-1], "持ち主", "持ち主の行（消す）は最後")
+        for role, row in self.delete_table.items():
+            with self.subTest(role=role):
+                user = self.users[role]
+                if user is None:
+                    self.client.logout()
+                else:
+                    self.client.force_login(user)
+                self.assertEqual(
+                    dict(zip(DELETE_CHECKS, self._observe_delete(), strict=True)),
+                    dict(zip(DELETE_CHECKS, row.split(), strict=True)),
+                )
+
+
+class PrivateWorkspaceDeletePermissionTest(WorkspaceDeletePermissionTest):
+    visibility = Visibility.PRIVATE
+    delete_table = DELETE_PRIVATE

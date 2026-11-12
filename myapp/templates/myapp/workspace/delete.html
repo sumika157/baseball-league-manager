@@ -1,0 +1,49 @@
+{% extends 'myapp/base.html' %}
+{% load scoped %}
+
+{% block title %}ワークスペースの削除 - Baseball Manager{% endblock %}
+
+{% block content %}
+{% include 'myapp/workspace/_tabs.html' %}
+
+{% comment %}
+ワークスペースの削除（持ち主だけ。ビューの門が持ち主以外を 403 にする）。W4 T5。
+- ペナントの世界が残っている（contents.deletion_blocker）: 削除のフォームを出さず、理由と世界の一覧と、各世界の削除の画面への
+  導線を出す（両立しない操作を並べない。持ち主はほかの人の世界も消せる）。
+- 消せる: 消えるものの件数と、名前を打つ確かめのフォーム。名前が違えば消さない（フォームのエラー）。
+- error: 消す前の検査で拒まれた理由（ほかのワークスペースの行が外せない形でこのワークスペースを指している。InvalidWorkspace）。
+{% endcomment %}
+
+<h2 class="h6 mb-2">ワークスペース「{{ workspace.name }}」を削除する</h2>
+
+{% if contents.deletion_blocker %}
+  <div class="alert alert-secondary">{{ contents.deletion_blocker }}</div>
+  <div class="card mb-4">
+    <ul class="list-group list-group-flush">
+      {% for world in contents.worlds %}
+        <li class="list-group-item d-flex flex-wrap align-items-center gap-2" id="world-{{ world.world_id }}">
+          <a href="{% workspace_url 'pennant_world' world.world_id %}" class="fw-semibold">{{ world.name }}</a>
+          <span class="stat-muted" style="font-size: 0.8125rem;">オーナー: {{ world.owner_name|default:"なし" }}</span>
+          <a href="{% workspace_url 'pennant_delete' world.world_id %}" class="btn btn-sm btn-outline-danger ms-auto">この世界を削除する</a>
+        </li>
+      {% endfor %}
+    </ul>
+  </div>
+{% else %}
+  {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+  <div class="alert alert-danger">
+    このワークスペースを、リーグ {{ contents.league_count }}・チーム {{ contents.team_count }}・選手 {{ contents.player_count }}・試合 {{ contents.game_count }}
+    と、メンバー・招待ごと削除します。元に戻せません。
+  </div>
+  <form method="post" class="card mb-4">
+    {% csrf_token %}
+    <div class="card-body">
+      {% include 'myapp/setup/_field.html' with field=form.confirm_name %}
+      <div class="d-flex gap-2">
+        <button type="submit" class="btn btn-danger">削除する</button>
+        <a href="{% workspace_url 'dashboard' %}" class="btn btn-secondary">やめる</a>
+      </div>
+    </div>
+  </form>
+{% endif %}
+{% endblock %}

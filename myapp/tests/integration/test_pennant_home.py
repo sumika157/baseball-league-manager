@@ -22,7 +22,7 @@ from myapp.domain.pennant.season import SCREEN_ADVANCE_TARGETS, SeasonPhase, sum
 from myapp.infrastructure import orm_models
 from myapp.presentation.views import build_league_view_service, build_pennant_season_service
 
-from ..helpers import make_editor, real_scope, world_scope, ws_url
+from ..helpers import default_workspace, make_editor, real_scope, world_scope, ws_url
 from .test_pennant_advance import SEASON_GAMES, YEAR, SeasonCase
 
 # 1シーズンを終えた世界のシード（同率で終わらないもの）
@@ -38,7 +38,8 @@ class HomeCase(SeasonCase):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        cls.owner = User.objects.create_user("owner", password="x")
+        # 世界に書き込めるのは、作成者で今もワークスペースの全体の編集権を持つ人（W4 の決定1）。作成者は編集者にする
+        cls.owner = make_editor(User.objects.create_user("owner", password="x"))
         cls.other = User.objects.create_user("other", password="x")
         orm_models.PennantWorld.objects.filter(id=cls.world_a).update(owner_id=cls.owner.id)
 
@@ -239,6 +240,88 @@ class AdvancePermissionTest(HomeCase):
         self.post_advance("day")
 
         self.assertEqual(self.games_in(self.world_b), 0)
+
+
+class WorldWriteAfterMembershipChangeTest(HomeCase):
+    """世界の書き込みは、作成者で今もワークスペースの全体の編集権を持つ人だけ（W4 の決定1）。削除は持ち主も（決定2）。
+
+    - 除名した作成者・担当に変えた作成者は読むだけ（導線が消え、書き込みは 403。世界の行は変えないので戻せば書ける）。
+    - ワークスペースの持ち主は、ほかの人の世界を消せる（削除の導線と削除）が、進める・設定はできない。
+    """
+
+    def delete_url(self) -> str:
+        return ws_url("pennant_delete", self.world_a)
+
+    def settings_url(self) -> str:
+        return ws_url("pennant_settings", self.world_a)
+
+    def remove_from_editors(self) -> None:
+        orm_models.WorkspaceEditor.objects.filter(workspace=default_workspace(), user=self.owner).delete()
+
+    def assert_reads_only(self) -> None:
+        self.client.force_login(self.owner)
+        content = self.client.get(self.home_url()).content.decode()
+        self.assertNotIn(self.advance_url(), content)
+        self.assertNotIn(self.settings_url(), content)
+        self.assertNotIn(self.delete_url(), content)
+
+        self.assertEqual(self.post_advance("day").status_code, 403)
+        self.assertEqual(self.games_in(), 0)
+        self.assertEqual(self.client.get(self.delete_url()).status_code, 403)
+        self.assertEqual(self.client.post(self.delete_url()).status_code, 403)
+        self.assertEqual(self.client.get(self.settings_url()).status_code, 200, "設定は誰でも読める")
+        self.assertEqual(self.client.post(self.settings_url(), {"postseason_format": "NONE"}).status_code, 403)
+        self.assertTrue(orm_models.PennantWorld.objects.filter(id=self.world_a).exists())
+
+    def test_a_removed_creator_only_reads(self):
+        self.remove_from_editors()
+        self.assert_reads_only()
+
+    def test_a_creator_turned_into_a_team_manager_only_reads(self):
+        self.remove_from_editors()
+        self.home.managers.add(self.owner)
+        self.assert_reads_only()
+
+    def test_a_creator_invited_back_writes_again(self):
+        """世界の行は変えないので、全体の編集者に戻せば、また書ける。"""
+        self.remove_from_editors()
+        make_editor(self.owner)
+        self.client.force_login(self.owner)
+
+        self.assertEqual(self.post_advance("day").status_code, 302)
+        self.assertGreater(self.games_in(), 0)
+
+    def test_the_workspace_owner_deletes_but_does_not_advance_a_world_of_another(self):
+        self.client.force_login(default_workspace().owner)
+
+        content = self.client.get(self.home_url()).content.decode()
+        self.assertIn(self.delete_url(), content)
+        self.assertNotIn(self.advance_url(), content)
+        self.assertNotIn(self.settings_url(), content)
+        self.assertEqual(self.post_advance("day").status_code, 403)
+        self.assertEqual(self.client.post(self.settings_url(), {"postseason_format": "NONE"}).status_code, 403)
+        self.assertEqual(self.games_in(), 0)
+
+        self.assertEqual(self.client.get(self.delete_url()).status_code, 200)
+        response = self.client.post(self.delete_url())
+
+        self.assertRedirects(response, ws_url("pennant_index"), fetch_redirect_response=False)
+        self.assertFalse(orm_models.PennantWorld.objects.filter(id=self.world_a).exists())
+
+    def test_the_workspace_owner_also_deletes_a_world_without_a_creator(self):
+        """コマンドで作った（作成者のいない）世界も、持ち主が消せる（世界が残るとワークスペースを消せないため）。"""
+        self.client.force_login(default_workspace().owner)
+
+        self.client.post(ws_url("pennant_delete", self.world_b))
+
+        self.assertFalse(orm_models.PennantWorld.objects.filter(id=self.world_b).exists())
+
+    def test_an_editor_who_did_not_create_the_world_cannot_delete_it(self):
+        self.client.force_login(make_editor(User.objects.create_user("editor", password="x")))
+
+        self.assertNotIn(self.delete_url(), self.client.get(self.home_url()).content.decode())
+        self.assertEqual(self.client.post(self.delete_url()).status_code, 403)
+        self.assertTrue(orm_models.PennantWorld.objects.filter(id=self.world_a).exists())
 
 
 class AdvanceTest(HomeCase):

@@ -1,7 +1,7 @@
 {% load scoped %}
 {% comment %}
 ワークスペースの管理の画面（持ち主だけ）の共通の見出し（パンくず・見出し・タブ）。workspace_tab で今のタブを示す。
-タブは開ける画面だけを並べる（削除は W4 T5 で画面を作るときにここへ足す。押しても開けないタブを出さない）。
+タブは開ける画面だけを並べる（押しても開けないタブを出さない）。
 {% endcomment %}
 <nav aria-label="breadcrumb">
   <ol class="breadcrumb">
@@ -21,5 +21,8 @@
   </li>
   <li class="nav-item">
     <a class="nav-link{% if workspace_tab == 'members' %} active{% endif %}" href="{% workspace_url 'workspace_members' %}">メンバーと招待</a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link{% if workspace_tab == 'delete' %} active{% endif %}" href="{% workspace_url 'workspace_delete' %}">削除</a>
   </li>
 </ul>

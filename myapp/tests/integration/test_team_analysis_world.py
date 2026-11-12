@@ -13,7 +13,7 @@ from myapp.domain.value_objects import BattingLine
 from myapp.infrastructure import orm_models
 from myapp.presentation.views import build_pennant_world_service, build_team_analysis_service
 
-from ..helpers import header_pages, play_game, real_scope, world_scope, ws_url
+from ..helpers import header_pages, make_editor, play_game, real_scope, world_scope, ws_url
 from .world_case import PENNANT_PLAYER_PREFIX, PENNANT_RIVAL, PENNANT_TEAM, YEAR, WorldCase
 
 OLD_YEAR = 2019
@@ -174,7 +174,7 @@ class WorldAnalysisLinksTest(WorldAnalysisCase):
         self.assertIn(ws_url("team_analysis", self.team.id), links)
 
     def test_the_page_has_no_write_links_even_for_the_owner(self):
-        owner = User.objects.create_user("gm", password="x")
+        owner = make_editor(User.objects.create_user("gm", password="x"))
         orm_models.PennantWorld.objects.filter(id=self.world_id).update(
             owner_id=owner.id, managed_team_id=self.pennant_team.id
         )

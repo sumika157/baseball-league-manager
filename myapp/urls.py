@@ -47,6 +47,8 @@ workspace_urlpatterns = [
     ),
     _w("members/<int:user_id>/", views.workspace_member_edit, "workspace_member_edit", login=True),
     _w("members/<int:user_id>/remove/", views.workspace_member_remove, "workspace_member_remove", login=True),
+    # ワークスペースの削除（W4 #80）。見るのも消すのも持ち主だけ。ペナントの世界が残っていれば消せない
+    _w("delete/", views.workspace_delete, "workspace_delete", login=True),
     _w("teams/", views.team_list, "team_list"),
     _w("players/", views.player_search, "player_search"),
     _w("standings/", views.standings, "standings"),

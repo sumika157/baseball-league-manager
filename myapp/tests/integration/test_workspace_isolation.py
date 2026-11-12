@@ -1701,6 +1701,7 @@ URL_TABLE: dict[str, tuple[tuple[str, ...], str, bool]] = {
     "workspace_invitation_revoke": (("invitation",), WRITE, True),
     "workspace_member_edit": (("member",), WRITE, True),
     "workspace_member_remove": (("member",), WRITE, True),
+    "workspace_delete": ((), PAGE, True),
     "team_list": ((), PAGE, False),
     "player_search": ((), PAGE, False),
     "standings": ((), PAGE, False),
@@ -1804,6 +1805,11 @@ def _reversed_teams(league_id: int) -> list[int]:
     return list(rows.values_list("id", flat=True))
 
 
+def _workspace_name(side: Side) -> str:
+    """その側のワークスペースの今の名前（削除の確かめに打つ名前）。チームからたどる。"""
+    return orm_models.Workspace.objects.get(leagues__teams__id=side.team).name
+
+
 # 書き込み（POST）を受け付けるパターンと、送る本文（通れば実際に書ける形。空の本文で検証に落ちて空振りしないように）。
 # 引数は (その側の id, その側のもう1つのチーム)。表に無い画面への POST は、読むだけの画面への POST
 WRITE_BODIES: dict[str, Callable[[Side, int], dict]] = {
@@ -1814,6 +1820,8 @@ WRITE_BODIES: dict[str, Callable[[Side, int], dict]] = {
     "workspace_invitation_revoke": lambda side, rival: {},
     "workspace_member_edit": lambda side, rival: {"role": "edit_teams", "teams": [side.team]},
     "workspace_member_remove": lambda side, rival: {},
+    # 名前の確かめを通る本文（その側のワークスペースの今の名前）。世界が残るので、通っても消えない（`NotDeletable`）
+    "workspace_delete": lambda side, rival: {"confirm_name": _workspace_name(side)},
     "game_create": lambda side, rival: {
         "year": str(side.year),
         "played_on": f"{side.year}-05-01",
@@ -1861,8 +1869,8 @@ WRITE_BODIES: dict[str, Callable[[Side, int], dict]] = {
 
 # 本文にも URL にも id を持たない書き込み（作るだけ）。ほかのワークスペースの id を混ぜる余地が無いので、
 # 「B の id を混ぜた POST」の検査の対象外（門の検査は部外者の POST の検査が受け持つ）。ワークスペースの設定（W4）も
-# 名前と公開範囲だけで id を持たない
-ID_FREE_WRITES = frozenset({"setup_leagues", "setup_stadiums", "workspace_settings"})
+# 名前と公開範囲だけで id を持たない。ワークスペースの削除（W4 T5）も、確かめの名前だけで id を持たない
+ID_FREE_WRITES = frozenset({"setup_leagues", "setup_stadiums", "workspace_settings", "workspace_delete"})
 
 
 def _world_side_ids(world_id: int) -> tuple[int, int, int, int]:

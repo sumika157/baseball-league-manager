@@ -760,7 +760,7 @@ class PennantScreensStayInTheWorldTest(WorldCase):
 
     def test_the_owner_screens_stay_in_the_world(self):
         """オーナーにだけ出る導線（進める・削除）と、結果のまとめのリンクも、世界の中に留まる。"""
-        owner = User.objects.create_user("gm", password="x")
+        owner = make_editor(User.objects.create_user("gm", password="x"))
         orm_models.PennantWorld.objects.filter(id=self.world_id).update(
             owner_id=owner.id, managed_team_id=self.pennant_team.id
         )
@@ -789,7 +789,7 @@ class PennantScreensStayInTheWorldTest(WorldCase):
 
     def test_the_club_screens_stay_in_the_world_with_every_section_manual(self):
         """編成の編集欄・保存・自動に戻すのフォームの宛先と、リンクが、世界の中に留まる（オーナーにだけ出る導線）。"""
-        owner = User.objects.create_user("gm", password="x")
+        owner = make_editor(User.objects.create_user("gm", password="x"))
         orm_models.PennantWorld.objects.filter(id=self.world_id).update(
             owner_id=owner.id, managed_team_id=self.pennant_team.id
         )
