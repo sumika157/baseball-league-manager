@@ -41,7 +41,7 @@ model: sonnet
 
 - React を触ったら `frontend-check`（tsc --noEmit）と `frontend-build` を通す。どちらもコンテナを新しく作る操作で、`make` は WSL 側にしか無いので、
   Claude Code からは `wsl -e bash -c "cd /home/sumika/work/develop/my_django_project && make frontend-check"` のように WSL 経由で呼ぶ（worktree なら末尾に `WT=<名前>`）。
-- テンプレートの描画・API の動作は `tests/integration/`、JS・CSS が絡む実ブラウザ確認だけ `tests/e2e/`（ビルド済みアセットが前提）。実行方法は `run-tests` スキル参照。
+- テンプレートの描画・API の動作は `tests/integration/`、JS・CSS が絡む実ブラウザ確認だけ `tests/e2e/`（ビルド済みアセットが前提）。E2E の待ち方・操作の共通化・実行方法は `run-tests` スキル（design.md の「E2E を書くとき」）。
 - Python 側（views・api・forms）も触ったら lint とフルスイートを通す（コマンドは CLAUDE.md。worktree なら `worktree` スキルの手順2）。
 
 ## 5. 仕上げ
