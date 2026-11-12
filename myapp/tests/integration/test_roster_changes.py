@@ -22,6 +22,7 @@ from myapp.infrastructure.repositories import (
 )
 
 from ..helpers import (
+    TEST_YEAR,
     build_recording_service,
     build_scorebook,
     give_batting,
@@ -38,7 +39,7 @@ class TransferTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手", from_year=TEST_YEAR)
 
     def test_transfer_closes_the_old_stint_and_opens_a_new_one(self):
         self.roster.transfer_player(
@@ -94,11 +95,11 @@ class TransferTest(BaseCase):
         )
 
         # 空いた10番を別の選手が使える
-        self.roster.register_player(self.team.id, "田中", 10, "外野手")
+        self.roster.register_player(self.team.id, "田中", 10, "外野手", from_year=TEST_YEAR)
         self.assertEqual([r.name for r in self.team_view.list_batters(self.team.id).rows], ["田中"])
 
     def test_number_in_use_at_the_destination_is_rejected(self):
-        self.roster.register_player(self.rival.id, "先客", 7, "外野手")
+        self.roster.register_player(self.rival.id, "先客", 7, "外野手", from_year=TEST_YEAR)
 
         with self.assertRaises(DuplicateJerseyNumber):
             self.roster.transfer_player(
@@ -132,7 +133,7 @@ class TransferTest(BaseCase):
 
     def test_failed_transfer_leaves_the_source_team_untouched(self):
         """検査に失敗したら、元チームの退団も取り消されること（部分的な保存を残さない）。"""
-        self.roster.register_player(self.rival.id, "先客", 7, "外野手")
+        self.roster.register_player(self.rival.id, "先客", 7, "外野手", from_year=TEST_YEAR)
 
         with self.assertRaises(DuplicateJerseyNumber):
             self.roster.transfer_player(
@@ -153,7 +154,7 @@ class ForeignPlayerQuotaTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.foreign = self.roster.register_player(self.team.id, "助っ人", 50, "外野手")
+        self.foreign = self.roster.register_player(self.team.id, "助っ人", 50, "外野手", from_year=TEST_YEAR)
         orm_models.Player.objects.filter(id=self.foreign.id).update(is_foreign_player=True)
 
     def set_rules(self, active, pitchers, batters):
@@ -166,7 +167,7 @@ class ForeignPlayerQuotaTest(BaseCase):
         ids = []
         for offset, position in enumerate(positions):
             number = first_number + offset
-            player = self.roster.register_player(team.id, f"外国人{number}", number, position)
+            player = self.roster.register_player(team.id, f"外国人{number}", number, position, from_year=TEST_YEAR)
             orm_models.Player.objects.filter(id=player.id).update(is_foreign_player=True)
             ids.append(player.id)
         return ids
@@ -196,8 +197,8 @@ class ForeignPlayerQuotaTest(BaseCase):
         away[: len(away_batters)] = away_batters
         home[: len(home_batters)] = home_batters
         if home_pitchers is None:
-            home_pitchers = {1: self.roster.register_player(self.team.id, "投手", 91, "投手").id}
-        away_pitcher = self.roster.register_player(self.rival.id, "ビジター投手", 92, "投手")
+            home_pitchers = {1: self.roster.register_player(self.team.id, "投手", 91, "投手", from_year=TEST_YEAR).id}
+        away_pitcher = self.roster.register_player(self.rival.id, "ビジター投手", 92, "投手", from_year=TEST_YEAR)
 
         return build_recording_service().record_scorebook(
             game.id,
@@ -267,7 +268,7 @@ class ForeignPlayerQuotaTest(BaseCase):
         game = play_game(self.team, self.rival, recorded=False)
         batters = [self.foreign.id, *self.foreigners(self.team, ["内野手"] * 2, first_number=80)]
         [outfielder] = self.foreigners(self.team, ["外野手"], first_number=83)
-        pitcher = self.roster.register_player(self.team.id, "投手", 91, "投手")
+        pitcher = self.roster.register_player(self.team.id, "投手", 91, "投手", from_year=TEST_YEAR)
 
         with self.assertRaisesRegex(ForeignPlayerQuotaExceeded, "野手3人までです（4人）"):
             self._record(game, home_batters=batters, home_pitchers={1: pitcher.id, 2: outfielder})
@@ -379,7 +380,7 @@ class CaptaincyApplicationTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手", from_year=TEST_YEAR)
 
     def test_appoint_and_remove_round_trip_through_the_database(self):
         self.roster.appoint_captain(self.team.id, self.player.id, 2026)
@@ -405,7 +406,7 @@ class CaptaincyApplicationTest(BaseCase):
         self.assertEqual(team.current_captain.id, self.player.id)
 
     def test_player_edit_shows_duplicate_captain_error(self):
-        other = self.roster.register_player(self.team.id, "田中", 11, "外野手")
+        other = self.roster.register_player(self.team.id, "田中", 11, "外野手", from_year=TEST_YEAR)
         self.roster.appoint_captain(self.team.id, other.id)
         login_as_manager(self.client, self.team, username="u")
 

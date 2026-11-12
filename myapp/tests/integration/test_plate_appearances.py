@@ -29,6 +29,7 @@ from myapp.domain.value_objects import (
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
 
+from ..helpers import TEST_YEAR
 from .base import BaseCase
 
 P = PlateAppearanceResult
@@ -55,7 +56,7 @@ class PlateAppearancePersistenceTest(BaseCase):
         self.pinch_runner = self._register(self.rival, "代走", 40, "外野手")
 
     def _register(self, team, name, number, position) -> int:
-        return self.roster.register_player(team.id, name, number, position).id
+        return self.roster.register_player(team.id, name, number, position, from_year=TEST_YEAR).id
 
     def _plate_appearances(self) -> list[PlateAppearance]:
         first, second, third, fourth, fifth, sixth = self.batters

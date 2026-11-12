@@ -37,6 +37,7 @@ from myapp.presentation.views import (
 )
 
 from ..helpers import (
+    TEST_YEAR,
     build_roster_service,
     build_scorebook,
     play_game,
@@ -91,8 +92,8 @@ class WorldCase(BaseCase):
         # --- 実データ。各チームに打者9人と投手1人、記録済みの試合を1つ ---
         cls.real_batters = register_lineup(roster, cls.team, prefix="実打者", first_number=1)
         cls.real_rivals = register_lineup(roster, cls.rival, prefix="実相手", first_number=1)
-        cls.real_pitcher = roster.register_player(cls.team.id, "実投手", "18", "投手")
-        cls.real_rival_pitcher = roster.register_player(cls.rival.id, "実相手投手", "19", "投手")
+        cls.real_pitcher = roster.register_player(cls.team.id, "実投手", "18", "投手", from_year=TEST_YEAR)
+        cls.real_rival_pitcher = roster.register_player(cls.rival.id, "実相手投手", "19", "投手", from_year=TEST_YEAR)
         cls.real_game = play_game(
             cls.team,
             cls.rival,

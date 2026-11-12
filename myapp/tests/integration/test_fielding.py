@@ -30,7 +30,7 @@ from myapp.domain.value_objects import (
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
 
-from ..helpers import build_recording_service, login_as_manager, play_game
+from ..helpers import TEST_YEAR, build_recording_service, login_as_manager, play_game
 from .base import BaseCase
 
 P = PlateAppearanceResult
@@ -68,7 +68,7 @@ class FieldingTestBase(BaseCase):
         self.game = play_game(self.team, self.rival, home_score=0, away_score=0)
 
     def _player(self, team, name, number, position) -> int:
-        return self.roster.register_player(team.id, name, number, position).id
+        return self.roster.register_player(team.id, name, number, position, from_year=TEST_YEAR).id
 
     def _lineup(self) -> list[LineupSlot]:
         return [

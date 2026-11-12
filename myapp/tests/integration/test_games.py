@@ -12,6 +12,7 @@ from myapp.domain.value_objects import (
 from myapp.infrastructure import orm_models
 
 from ..helpers import (
+    TEST_YEAR,
     build_scorebook,
     lineup_rows,
     login_as_manager,
@@ -27,8 +28,8 @@ class GameViewTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.batter = self.roster.register_player(self.team.id, "山田", 10, "内野手")
-        self.pitcher = self.roster.register_player(self.team.id, "佐藤", 18, "投手")
+        self.batter = self.roster.register_player(self.team.id, "山田", 10, "内野手", from_year=TEST_YEAR)
+        self.pitcher = self.roster.register_player(self.team.id, "佐藤", 18, "投手", from_year=TEST_YEAR)
         self.game = play_game(
             self.team,
             self.rival,
@@ -248,8 +249,8 @@ class GameEntryTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.user = login_as_manager(self.client, self.team, username="scorer")
-        self.batter = self.roster.register_player(self.team.id, "山田", 10, "内野手")
-        self.pitcher = self.roster.register_player(self.team.id, "佐藤", 18, "投手")
+        self.batter = self.roster.register_player(self.team.id, "山田", 10, "内野手", from_year=TEST_YEAR)
+        self.pitcher = self.roster.register_player(self.team.id, "佐藤", 18, "投手", from_year=TEST_YEAR)
 
     def _create_game(self):
         return self.client.post(
@@ -376,10 +377,10 @@ class BoxScoreEntryTest(BaseCase):
     def setUp(self):
         super().setUp()
         login_as_manager(self.client, self.team, self.rival)
-        self.starter = self.roster.register_player(self.team.id, "先発", 11, "投手")
-        self.middle = self.roster.register_player(self.team.id, "中継ぎ", 12, "投手")
-        self.closer = self.roster.register_player(self.team.id, "抑え", 13, "投手")
-        self.loser = self.roster.register_player(self.rival.id, "相手先発", 21, "投手")
+        self.starter = self.roster.register_player(self.team.id, "先発", 11, "投手", from_year=TEST_YEAR)
+        self.middle = self.roster.register_player(self.team.id, "中継ぎ", 12, "投手", from_year=TEST_YEAR)
+        self.closer = self.roster.register_player(self.team.id, "抑え", 13, "投手", from_year=TEST_YEAR)
+        self.loser = self.roster.register_player(self.rival.id, "相手先発", 21, "投手", from_year=TEST_YEAR)
         self.home_batters = register_lineup(self.roster, self.team, prefix="ホーム", first_number=31)
         self.away_batters = register_lineup(self.roster, self.rival, prefix="ビジター", first_number=41)
         self.game = play_game(self.team, self.rival, home_score=0, away_score=0)
@@ -498,8 +499,8 @@ class BoxScoreColumnsTest(BaseCase):
     def setUp(self):
         super().setUp()
         login_as_manager(self.client, self.team, self.rival)
-        self.pitcher = self.roster.register_player(self.team.id, "先発", 11, "投手")
-        self.rival_pitcher = self.roster.register_player(self.rival.id, "相手先発", 21, "投手")
+        self.pitcher = self.roster.register_player(self.team.id, "先発", 11, "投手", from_year=TEST_YEAR)
+        self.rival_pitcher = self.roster.register_player(self.rival.id, "相手先発", 21, "投手", from_year=TEST_YEAR)
         self.home_batters = register_lineup(self.roster, self.team, prefix="ホーム", first_number=31)
         self.away_batters = register_lineup(self.roster, self.rival, prefix="ビジター", first_number=41)
         self.game = play_game(self.team, self.rival, home_score=0, away_score=0)

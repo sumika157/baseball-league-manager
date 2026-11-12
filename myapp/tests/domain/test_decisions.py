@@ -100,6 +100,24 @@ class WinningPitcherTest(TestCase):
 
         self.assertEqual(decisions.winner_id, 11)
 
+    def test_five_innings_is_the_boundary_for_the_starters_win(self):
+        """先発の勝利は「5回以上」。ちょうど5回なら先発に、あと1アウト足りない4回2/3なら救援に回る（境界の両側）。"""
+        cases = [
+            # (先発の投球回, 2番手の投球回, 2番手が登板した回, 勝利投手)。2番手は3番手より長く投げ、最も内容が良い
+            ("5.0", "2.0", 6, 10),
+            ("4.2", "2.1", 5, 11),
+        ]
+        for starter, second, second_from, expected in cases:
+            with self.subTest(starter=starter):
+                game = _game(
+                    [0] * 9,
+                    [3, 0, 0, 0, 0, 0, 0, 0, 0],
+                    home_staff=[(10, starter, 1), (11, second, second_from), (12, "2.0", 8)],
+                    away_staff=[(20, "9.0", 1)],
+                )
+
+                self.assertEqual(services.pitching_decisions(game, TEAM_OF).winner_id, expected)
+
     def test_a_reliever_of_record_wins_regardless_of_length(self):
         """救援は投球回の下限が無い。逆転した時点の投手が勝利投手になる。"""
         game = _game(
@@ -185,6 +203,34 @@ class SaveTest(TestCase):
         decisions = services.pitching_decisions(game, TEAM_OF)
 
         self.assertEqual(decisions.save_id, 11)
+
+    def test_save_boundaries_of_the_lead_and_the_length(self):
+        """セーブは「3点差以内のリードで登板して1回以上」か「3回以上」（日本プロ野球の規則）。
+
+        点差（3点・4点）と投球回（2/3回・1回、2回2/3・3回）の境目の両側を並べる。
+        """
+        cases = [
+            # (登板時のリード, 救援の投球回, 救援が登板した回, セーブが付くか)
+            (3, "1.0", 9, True),
+            (4, "1.0", 9, False),
+            (3, "0.2", 9, False),
+            (8, "2.2", 7, False),
+            (8, "3.0", 7, True),
+        ]
+        for lead, relief, entered, saved in cases:
+            with self.subTest(lead=lead, relief=relief):
+                starter_outs = 27 - InningsPitched.from_notation(relief).outs
+                starter = InningsPitched(outs=starter_outs).to_notation()
+                game = _game(
+                    [0] * 9,
+                    [lead, 0, 0, 0, 0, 0, 0, 0, 0],
+                    home_staff=[(10, str(starter), 1), (11, relief, entered)],
+                    away_staff=[(20, "9.0", 1)],
+                )
+
+                save_id = services.pitching_decisions(game, TEAM_OF).save_id
+
+                self.assertEqual(save_id, 11 if saved else None)
 
     def test_a_complete_game_has_no_save(self):
         """完投は勝利のみ。セーブは救援に付く記録。"""

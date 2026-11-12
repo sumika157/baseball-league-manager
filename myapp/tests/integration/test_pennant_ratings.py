@@ -30,7 +30,7 @@ from myapp.infrastructure.repositories import (
 from myapp.management.estimate_check import estimate_from_source
 from myapp.presentation.views import build_pennant_world_service
 
-from ..helpers import give_batting, give_pitching, play_game
+from ..helpers import TEST_YEAR, give_batting, give_pitching, play_game
 from .base import BaseCase
 from .world_case import YEAR, WorldCase
 
@@ -261,11 +261,11 @@ class ForkedRatingsTest(BaseCase):
         super().setUp()
         self.skip_roster_check()
         roster = self.roster
-        self.slugger = roster.register_player(self.team.id, "強打者", 3, "外野手")
-        self.rookie = roster.register_player(self.team.id, "新人", 4, "外野手")
-        self.ace = roster.register_player(self.team.id, "エース", 18, "投手")
-        self.novice_pitcher = roster.register_player(self.team.id, "控え投手", 19, "投手")
-        self.rival_player = roster.register_player(self.rival.id, "相手の選手", 3, "内野手")
+        self.slugger = roster.register_player(self.team.id, "強打者", 3, "外野手", from_year=TEST_YEAR)
+        self.rookie = roster.register_player(self.team.id, "新人", 4, "外野手", from_year=TEST_YEAR)
+        self.ace = roster.register_player(self.team.id, "エース", 18, "投手", from_year=TEST_YEAR)
+        self.novice_pitcher = roster.register_player(self.team.id, "控え投手", 19, "投手", from_year=TEST_YEAR)
+        self.rival_player = roster.register_player(self.rival.id, "相手の選手", 3, "内野手", from_year=TEST_YEAR)
         # 強打者: 本塁打が多く、四球も多い。エース: 奪三振が多く、四球が少なく、先発で長く投げる
         give_batting(
             self.team,
@@ -386,11 +386,11 @@ class SameMaterialTest(BaseCase):
         super().setUp()
         self.skip_roster_check()
         roster = self.roster
-        self.runner = roster.register_player(self.team.id, "走者", 5, "外野手")
-        self.slugger = roster.register_player(self.team.id, "強打者", 3, "外野手")
-        self.ace = roster.register_player(self.team.id, "エース", 18, "投手")
+        self.runner = roster.register_player(self.team.id, "走者", 5, "外野手", from_year=TEST_YEAR)
+        self.slugger = roster.register_player(self.team.id, "強打者", 3, "外野手", from_year=TEST_YEAR)
+        self.ace = roster.register_player(self.team.id, "エース", 18, "投手", from_year=TEST_YEAR)
         # 退団した選手が大量に盗塁していた。世界には写されないので、目印（リーグの盗塁の水準）にも入らない
-        self.retired = roster.register_player(self.rival.id, "退団した走者", 9, "外野手")
+        self.retired = roster.register_player(self.rival.id, "退団した走者", 9, "外野手", from_year=TEST_YEAR)
         give_batting(
             self.team,
             self.rival,
@@ -459,7 +459,9 @@ class ForkedSpreadTest(BaseCase):
         self.skip_roster_check()
         self.names = []
         for index in range(MIN_POPULATION + 5):
-            player = self.roster.register_player(self.team.id, f"野手{index}", 20 + index, "外野手")
+            player = self.roster.register_player(
+                self.team.id, f"野手{index}", 20 + index, "外野手", from_year=TEST_YEAR
+            )
             self.names.append(player.name)
             step = index % 10
             line = BattingLine(
@@ -472,7 +474,7 @@ class ForkedSpreadTest(BaseCase):
             play_game(self.team, self.rival, month=4 + index // 28, day=index % 28 + 1, batting={player.id: line})
         # 成績の無い選手（2軍の層）は散らばりの調整の母集団に入れない（入れると標準偏差が縮む。#175）
         for index in range(20):
-            self.roster.register_player(self.team.id, f"2軍{index}", 60 + index, "外野手")
+            self.roster.register_player(self.team.id, f"2軍{index}", 60 + index, "外野手", from_year=TEST_YEAR)
 
     def test_the_standard_deviation_of_the_world_matches_the_target(self):
         created = build_pennant_world_service().create_world(
@@ -503,8 +505,8 @@ class FieldingTotalsQueryTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.skip_roster_check()
-        self.shortstop = self.roster.register_player(self.team.id, "遊撃手", 6, "内野手")
-        self.bench = self.roster.register_player(self.team.id, "控え", 7, "内野手")
+        self.shortstop = self.roster.register_player(self.team.id, "遊撃手", 6, "内野手", from_year=TEST_YEAR)
+        self.bench = self.roster.register_player(self.team.id, "控え", 7, "内野手", from_year=TEST_YEAR)
         first = give_batting(self.team, self.rival, self.shortstop.id, BattingLine(at_bats=4), day=1)
         second = give_batting(self.team, self.rival, self.shortstop.id, BattingLine(at_bats=4), day=2)
         for game, (putouts, assists, errors) in ((first, (2, 4, 1)), (second, (1, 3, 0))):
