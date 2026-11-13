@@ -30,14 +30,7 @@ class SetupOrderingTest(PlaywrightTestCase):
         self.elsewhere = orm_models.Team.objects.create(
             league=self.leagues[1], name="別リーグのチーム", display_order=5
         )
-        self._login()
-
-    def _login(self):
-        self.page.goto(self.live_server_url + "/accounts/login/")
-        self.page.fill('input[name="username"]', "owner")
-        self.page.fill('input[name="password"]', "pass12345")
-        self.page.locator('input[name="password"]').press("Enter")
-        self.page.wait_for_url(f"{self.live_server_url}/")
+        self.login("owner")
 
     def _url(self, name: str, *args: object) -> str:
         return self.live_server_url + ws_url(name, *args, workspace=self.workspace)

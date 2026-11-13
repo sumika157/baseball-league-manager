@@ -12,15 +12,15 @@ from myapp.infrastructure.repositories import (
     DjangoLeagueRepository,
 )
 
-from ..helpers import make_league, play_game, real_scope, ws_url
+from ..helpers import TEST_YEAR, make_league, play_game, real_scope, ws_url
 from .base import BaseCase
 
 
 class SortingViewTest(BaseCase):
     def setUp(self):
         super().setUp()
-        a = self.roster.register_player(self.team.id, "少打", 1, "内野手")
-        b = self.roster.register_player(self.team.id, "多打", 2, "外野手")
+        a = self.roster.register_player(self.team.id, "少打", 1, "内野手", from_year=TEST_YEAR)
+        b = self.roster.register_player(self.team.id, "多打", 2, "外野手", from_year=TEST_YEAR)
         play_game(
             self.team,
             self.rival,
@@ -42,8 +42,8 @@ class SortingViewTest(BaseCase):
 
     def test_pitcher_default_order_is_jersey_number(self):
         """投手も防御率ではなく背番号順。防御率の良い投手が背番号で後ろにいても入れ替わらない。"""
-        bad = self.roster.register_player(self.team.id, "炎上", 11, "投手")
-        good = self.roster.register_player(self.team.id, "好投", 18, "投手")
+        bad = self.roster.register_player(self.team.id, "炎上", 11, "投手", from_year=TEST_YEAR)
+        good = self.roster.register_player(self.team.id, "好投", 18, "投手", from_year=TEST_YEAR)
         play_game(
             self.team,
             self.rival,

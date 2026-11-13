@@ -28,7 +28,7 @@ model: sonnet
 
 ## 3. テストと検証
 
-- 実装と同時にテストを書く: 業務ルールは `tests/domain/`（Django 非依存）、画面・永続化・フォームは `tests/integration/`。実行方法は `run-tests` スキル参照。
+- 実装と同時にテストを書く: 業務ルールは `tests/domain/`（Django 非依存）、画面・永続化・フォームは `tests/integration/`。分岐の網羅は domain に寄せ、E2E は代表1シナリオまで。置く層・入力の選び方・実行方法は `run-tests` スキル（§0 と design.md）。
 - 最後にフルスイートと lint（`ruff check`・`ruff format --check`・`mypy`。コミット前の必須ゲート）を通す。コマンドは CLAUDE.md、
   worktree で作業しているなら `worktree` スキルの手順2（`-w` を忘れると main のコードを検査してしまう）。
   `make` は WSL 側にしか無いので、Claude Code からは `docker compose exec` を直接叩く。

@@ -18,20 +18,11 @@ from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.samples import average_club
 from myapp.domain.value_objects import ForeignPlayerRules, GameStage
 
+from .doubles import ScriptedRandom
+
 WEEKDAY = date(2026, 4, 1)  # 水曜
 SATURDAY = date(2026, 4, 4)
 SAMPLES = 120
-
-
-class ScriptedRandom:
-    def __init__(self, *values: float) -> None:
-        self.values = values
-        self.index = 0
-
-    def random(self) -> float:
-        value = self.values[self.index % len(self.values)]
-        self.index += 1
-        return value
 
 
 def _clubs():

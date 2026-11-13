@@ -16,7 +16,7 @@ from myapp.infrastructure.repositories import (
     DjangoGameRepository,
 )
 
-from ..helpers import make_league, play_game, real_scope, ws_url
+from ..helpers import TEST_YEAR, make_league, play_game, real_scope, ws_url
 from .base import BaseCase
 
 
@@ -91,8 +91,8 @@ class MonthlySplitViewTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
-        self.pitcher = self.roster.register_player(self.team.id, "佐藤", 18, "投手")
+        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手", from_year=TEST_YEAR)
+        self.pitcher = self.roster.register_player(self.team.id, "佐藤", 18, "投手", from_year=TEST_YEAR)
         self._play(month=4, day=1, at_bats=4, singles=1)
         self._play(month=4, day=2, at_bats=4, singles=1)
         self._play(month=5, day=1, at_bats=4, singles=3)
@@ -150,7 +150,7 @@ class YearlySplitViewTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手", from_year=TEST_YEAR)
         self.url = ws_url("player_detail", self.team.id, self.player.id)
 
     def _play(self, *, year=2026, month=4, day=1, **line):
@@ -232,7 +232,7 @@ class PlayerGameMonthTabTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手", from_year=TEST_YEAR)
         self._play(month=4, day=1)
         self._play(month=4, day=2)
         self._play(month=5, day=1)
@@ -288,7 +288,7 @@ class TeamMonthlySplitViewTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.batter = self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        self.batter = self.roster.register_player(self.team.id, "山田", 10, "内野手", from_year=TEST_YEAR)
         self.url = ws_url("player_list", self.team.id)
 
     def test_grouped_by_month_oldest_first(self):
@@ -327,7 +327,7 @@ class TeamMonthlySplitViewTest(BaseCase):
 
     def test_the_opponents_lines_are_not_counted(self):
         """試合の明細には相手の選手も入る。自チームの分だけを合計する。"""
-        theirs = self.roster.register_player(self.rival.id, "相手", 1, "内野手")
+        theirs = self.roster.register_player(self.rival.id, "相手", 1, "内野手", from_year=TEST_YEAR)
         play_game(
             self.team,
             self.rival,
@@ -360,8 +360,8 @@ class PlayerGamesQueryTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.slugger = self.roster.register_player(self.team.id, "大砲", 3, "内野手")
-        self.bench = self.roster.register_player(self.team.id, "控え", 4, "内野手")
+        self.slugger = self.roster.register_player(self.team.id, "大砲", 3, "内野手", from_year=TEST_YEAR)
+        self.bench = self.roster.register_player(self.team.id, "控え", 4, "内野手", from_year=TEST_YEAR)
         play_game(
             self.team, self.rival, year=2025, month=4, batting={self.slugger.id: BattingLine(at_bats=4, singles=1)}
         )

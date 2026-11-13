@@ -14,7 +14,7 @@ from django.contrib.messages import get_messages
 from myapp.infrastructure import orm_models
 from myapp.presentation.forms import PROFILE_SECTION_MARKER
 
-from ..helpers import login_as_manager, ws_url
+from ..helpers import TEST_YEAR, login_as_manager, ws_url
 from .base import BaseCase
 
 # 送る15項目（ドラフトは年・順位・育成の3欄）と、保存されたときの列の値
@@ -61,7 +61,7 @@ BASIC = {"name": "山田", "number": "10", "position": "内野手"}
 class PlayerProfileEditTest(BaseCase):
     def setUp(self):
         super().setUp()
-        self.player = self.roster.register_player(self.team.id, "山田", "10", "内野手")
+        self.player = self.roster.register_player(self.team.id, "山田", "10", "内野手", from_year=TEST_YEAR)
         self.manager = login_as_manager(self.client, self.team)
 
     def url(self, player_id=None):
@@ -98,7 +98,13 @@ class PlayerProfileEditTest(BaseCase):
 
     def test_development_draft_round_trips(self):
         player = self.roster.register_player(
-            self.team.id, "育成", "120", "投手", contract_label="育成", acquired_via_label="育成ドラフト"
+            self.team.id,
+            "育成",
+            "120",
+            "投手",
+            contract_label="育成",
+            acquired_via_label="育成ドラフト",
+            from_year=TEST_YEAR,
         )
         response = self.client.post(
             self.url(player.id),
@@ -183,7 +189,9 @@ class PlayerProfileEditTest(BaseCase):
 
     def test_a_successful_promotion_keeps_the_profile(self):
         """育成選手の支配下登録が通っても、プロフィールは変わらない（上の検査の支配下登録はドメインの検査で止まるため）。"""
-        developmental = self.roster.register_player(self.team.id, "育成", "120", "投手", contract_label="育成")
+        developmental = self.roster.register_player(
+            self.team.id, "育成", "120", "投手", contract_label="育成", from_year=TEST_YEAR
+        )
         self.client.post(
             self.url(developmental.id), {**BASIC, "number": "120", PROFILE_SECTION_MARKER: "1", **FULL_PROFILE}
         )
@@ -224,7 +232,13 @@ class PlayerProfileEditTest(BaseCase):
     def test_a_draft_that_contradicts_the_first_stint_is_refused(self):
         """育成ドラフトで入団した選手を本指名にはできない（`ensure_draft_fits_career`）。"""
         player = self.roster.register_player(
-            self.team.id, "育成", "121", "投手", contract_label="育成", acquired_via_label="育成ドラフト"
+            self.team.id,
+            "育成",
+            "121",
+            "投手",
+            contract_label="育成",
+            acquired_via_label="育成ドラフト",
+            from_year=TEST_YEAR,
         )
 
         response = self.client.post(
@@ -334,10 +348,12 @@ class ActionFormsTest(BaseCase):
         return parser.forms
 
     def test_the_action_buttons_are_outside_the_edit_form(self):
-        developmental = self.roster.register_player(self.team.id, "育成", "120", "投手", contract_label="育成")
-        captain = self.roster.register_player(self.team.id, "主将", "1", "内野手")
+        developmental = self.roster.register_player(
+            self.team.id, "育成", "120", "投手", contract_label="育成", from_year=TEST_YEAR
+        )
+        captain = self.roster.register_player(self.team.id, "主将", "1", "内野手", from_year=TEST_YEAR)
         self.roster.appoint_captain(self.team.id, captain.id)
-        plain = self.roster.register_player(self.team.id, "山田", "10", "内野手")
+        plain = self.roster.register_player(self.team.id, "山田", "10", "内野手", from_year=TEST_YEAR)
         cases = {
             "育成選手（支配下登録のボタンあり）": (developmental, {"promote", "appoint_captain", "retire"}),
             "主将（解任のボタン）": (captain, {"remove_captain", "retire"}),

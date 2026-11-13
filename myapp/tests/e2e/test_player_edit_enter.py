@@ -13,7 +13,7 @@ from django.contrib.auth.models import User
 
 from myapp.infrastructure import orm_models
 
-from ..helpers import build_roster_service, make_league, real_scope, ws_url
+from ..helpers import TEST_YEAR, build_roster_service, make_league, real_scope, ws_url
 from .base import PlaywrightTestCase
 
 
@@ -24,20 +24,13 @@ class PlayerEditEnterTest(PlaywrightTestCase):
         self.team = orm_models.Team.objects.create(league=league, name="ホームズ")
         # 育成選手（支配下登録のボタンが出る）で、主将ではない（主将にするボタンが出る）
         self.player = build_roster_service(real_scope()).register_player(
-            self.team.id, "育成太郎", "120", "投手", contract_label="育成"
+            self.team.id, "育成太郎", "120", "投手", contract_label="育成", from_year=TEST_YEAR
         )
         user = User.objects.create_user(username="manager", password="pass12345")
         self.team.managers.add(user)
 
-    def _login(self):
-        self.page.goto(self.live_server_url + "/accounts/login/")
-        self.page.fill('input[name="username"]', "manager")
-        self.page.fill('input[name="password"]', "pass12345")
-        self.page.locator('input[name="password"]').press("Enter")
-        self.page.wait_for_url(f"{self.live_server_url}/")
-
     def _open_edit(self):
-        self._login()
+        self.login("manager")
         self.page.goto(self.live_server_url + ws_url("player_edit", self.team.id, self.player.id))
 
     def test_enter_in_a_profile_field_updates_and_changes_nothing_else(self):

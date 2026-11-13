@@ -14,7 +14,7 @@ from myapp.domain.value_objects import BattingLine, FieldingLine, PitchingLine
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
 
-from ..helpers import DEFAULT_WORKSPACE_KEY, real_scope
+from ..helpers import DEFAULT_WORKSPACE_KEY, TEST_YEAR, real_scope
 from .base import BaseCase
 
 YEAR = 2026
@@ -43,7 +43,7 @@ class SeedVirtualGamesTest(BaseCase):
         number = 1
         for label, count in (("捕手", 2), ("内野手", 6), ("外野手", 5), ("指名打者", 1), ("投手", 9)):
             for index in range(count):
-                self.roster.register_player(team.id, f"{team.name}{label}{index}", number, label)
+                self.roster.register_player(team.id, f"{team.name}{label}{index}", number, label, from_year=TEST_YEAR)
                 number += 1
 
     def test_every_game_holds_together_as_a_scorebook(self):

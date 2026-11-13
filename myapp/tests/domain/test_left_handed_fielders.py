@@ -15,8 +15,8 @@ from myapp.domain.simulation.ratings import BatterRatings
 from myapp.domain.value_objects import FieldingPosition, ForeignPlayerRules, Handedness, Position
 from myapp.domain.virtual_players import generator
 
+from .doubles import OnlyRandom
 from .test_ai_manager import full_pool
-from .test_virtual_players import OnlyRandom
 
 FP = FieldingPosition
 RESTRICTED = (FP.CATCHER, FP.SECOND_BASE, FP.THIRD_BASE, FP.SHORTSTOP)

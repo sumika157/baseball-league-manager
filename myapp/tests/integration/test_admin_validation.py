@@ -5,6 +5,7 @@ from django.contrib.auth.models import User
 from myapp.admin import PlayerStintForm, PlayerStintInline
 from myapp.infrastructure import orm_models
 
+from ..helpers import TEST_YEAR
 from .base import BaseCase
 
 
@@ -18,8 +19,8 @@ class AdminStintValidationTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.client.force_login(User.objects.create_superuser(username="root", password="x"))
-        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
-        self.other = self.roster.register_player(self.team.id, "田中", 11, "外野手")
+        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手", from_year=TEST_YEAR)
+        self.other = self.roster.register_player(self.team.id, "田中", 11, "外野手", from_year=TEST_YEAR)
 
     def _add(self, **overrides):
         payload = {
@@ -141,8 +142,8 @@ class AdminCaptaincyValidationTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.client.force_login(User.objects.create_superuser(username="root", password="x"))
-        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
-        self.other = self.roster.register_player(self.team.id, "田中", 11, "外野手")
+        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手", from_year=TEST_YEAR)
+        self.other = self.roster.register_player(self.team.id, "田中", 11, "外野手", from_year=TEST_YEAR)
 
     def _change_payload(self, player, **captaincy_overrides):
         payload = {
@@ -241,9 +242,11 @@ class AdminForeignPlayerQuotaTest(BaseCase):
         orm_models.League.objects.filter(id=self.league.id).update(
             foreign_active_limit=0, foreign_active_pitcher_limit=0, foreign_active_batter_limit=0
         )
-        self.existing_foreign = self.roster.register_player(self.team.id, "既存助っ人", 50, "外野手")
+        self.existing_foreign = self.roster.register_player(
+            self.team.id, "既存助っ人", 50, "外野手", from_year=TEST_YEAR
+        )
         orm_models.Player.objects.filter(id=self.existing_foreign.id).update(is_foreign_player=True)
-        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        self.player = self.roster.register_player(self.team.id, "山田", 10, "内野手", from_year=TEST_YEAR)
 
     def _player_change_payload(self, player, **overrides):
         payload = {
@@ -524,7 +527,7 @@ class AdminPlayerWithStintsTest(BaseCase):
 
     def test_number_taken_by_another_player_is_still_rejected(self):
         """新規登録でも、他の選手との背番号の重なりは弾く。"""
-        self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        self.roster.register_player(self.team.id, "山田", 10, "内野手", from_year=TEST_YEAR)
 
         response = self._post([(self.team, 10, 2026, "")])
 

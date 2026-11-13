@@ -6,7 +6,7 @@ integration では確かめられないため、実ブラウザで測る（#144�
 
 from myapp.infrastructure import orm_models
 
-from ..helpers import build_roster_service, make_league, real_scope, ws_url
+from ..helpers import TEST_YEAR, build_roster_service, make_league, real_scope, ws_url
 from .base import PlaywrightTestCase
 
 
@@ -17,7 +17,9 @@ class UsageMapLayoutTest(PlaywrightTestCase):
         self.team = orm_models.Team.objects.create(league=league, name="ホームズ")
         roster = build_roster_service(real_scope())
         for number in range(1, 8):
-            player = roster.register_player(self.team.id, f"サルバドール・グティエレス{number}", number, "外野手")
+            player = roster.register_player(
+                self.team.id, f"サルバドール・グティエレス{number}", number, "外野手", from_year=TEST_YEAR
+            )
             orm_models.Player.objects.filter(id=player.id).update(throws="右", bats="左")
 
     def _open(self, width: int, color: str = "hand") -> None:

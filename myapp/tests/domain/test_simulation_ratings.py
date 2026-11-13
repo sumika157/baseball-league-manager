@@ -13,6 +13,8 @@ from myapp.domain.simulation.ratings import (
     RatingGrade,
 )
 
+from .doubles import OnlyRandom
+
 
 class RatingsTest(TestCase):
     def test_default_ratings_are_the_league_average(self):
@@ -114,16 +116,7 @@ class RandomnessTest(TestCase):
         self.assertIsInstance(make_random(7), random.Random)
 
     def test_normal_uses_exactly_two_draws_and_has_the_right_moments(self):
-        class Counting:
-            def __init__(self) -> None:
-                self.inner = random.Random(3)
-                self.calls = 0
-
-            def random(self) -> float:
-                self.calls += 1
-                return self.inner.random()
-
-        counting = Counting()
+        counting = OnlyRandom(3)
         normal(counting)
         self.assertEqual(counting.calls, 2)
 

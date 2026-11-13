@@ -1874,3 +1874,19 @@ epic を main に入れる前に開発 DB・本番で数え、あれば作成者
 - epic を main に入れるとき: 上の「epic を main に入れるときに必ず行うこと」（W4 の分: `WORKSPACE_MAX_OWNED`・運営者が superuser か・作った人がメンバーでない世界の数・`workspace_delete` の使い方）と、main を取り込むたびのマイグレーション番号の確認
 - 残した軽微（各段階のレビューより）: `AtomicBlock` を `pennant_season` から import している（共通の置き場所が無い）／期限切れの招待はそのワークスペースで次に発行するまで残る（使えず一覧にも出ない）／役割の変更の入力の誤りで、画面の上の案内と欄のエラーの両方を出す／持ち主の譲渡（持ち主の列）は管理画面のフォームが書き、サービスを通さない（`hand_over` は検査の見立てだけ）／`Team.managers` の `help_text` の「スタッフ権限」はマイグレーションが要るので直していない／招待の受諾と設定の画面のクエリ数はテストで固定していない（上の表）／`test_wiring.py` の `WorkspaceLedgerUsersTest` の docstring の1行目とテスト名が「`views.py` だけ」のまま（本文と `ALLOWED` は `admin.py`・`workspace_delete` を含む。T7 はコードを変えないので次にこのテストを触るときに直す）
 - 要望が出たら: メンバーが自分で抜ける・招待の再表示・編集者による招待（計画の「やらないこと」）
+
+#### main の取り込み（2026-11-13 その6）
+
+`refactor/merge-main-into-workspaces-7` で、epic a5a4530（W4 T6 の後）に main c61b9b5 を取り込み（マージコミット。この記録もそのコミットに含む）、続けて作業中に main に入った c2d24b6（#351）を2つ目のマージコミットで取り込んだ。W4 T7 の途中。
+
+- **main から来たもの**: #338（run-tests スキルにテストを書く前の判断）・#333（Python の依存の更新。Django 5.2.19・ruff 0.17.4・mypy 2.4.1・playwright 1.64.1 ほか）・#330（docker/login-action）・#339（テストの期待値の規則を `.claude/rules/tests.md` へ）・#346（#341。テストの年またぎ: `helpers.TEST_YEAR` と `register_player(from_year=)`、境界値・空振りのテスト、世界の隔離の抜け）・#345（#170 P1。オフに AI が育成を支配下へ昇格させ、育成契約の満了で見込みの低い育成を自由契約にする `domain/pennant/development.py`。オフの結果の画面の「支配下登録（昇格）」）・#349（#342 B1。domain の乱数源の偽物 `tests/domain/doubles.py`、E2E の共通の操作 `PlaywrightTestCase.login`、テストの二重実行を防ぐ `test_test_modules.py`）・#351（#350。ドキュメントだけの PR でも CI で ruff を流す。CLAUDE.md の CI の段落と open-pr スキル）。
+- **マイグレーション**: main は 0060 のまま（取り込みの最初と最後に fetch して確かめた）。epic の 0061〜0065 は振り直していない。`makemigrations --check` は変更なし。
+- **衝突**は28ファイル、すべてテスト: `helpers.py`（epic のワークスペースの部品と main の `TEST_YEAR` を両方）、e2e 4本（`ws_url`・`real_scope` を残して `TEST_YEAR`・`self.login()`・`_create_world` を取り、`_create_world` の行き先を `ws_url("pennant_index")` に）、integration 23本（epic の `real_scope()`・`ws_url`・`make_league` を残し、main の `from_year=TEST_YEAR` と `THIS_YEAR = TEST_YEAR` を当てた。`test_admin.py` の概況のテストは epic で `test_admin_overview.py` に移してあるので epic の側、`test_world_isolation.py` の #341 で増えた URL は `ws_url` に書き直した）。CLAUDE.md は衝突なし（main の #351 の段落をそのまま取り込んだ。epic の承認済みの文は変えていない）。
+- **合わせ込み**:
+  - #345 の本番コード: 新しいリポジトリ・クエリ・組み立て口・管理コマンドは無い。`DjangoOffseasonQuery` は既存の `stints_in(self._scope)` に条件を足しただけ、昇格は締める処理の中で `Team.promote_player` に世界の翌年を渡して範囲付きの `TeamRepository` で書く（世界の書き込みの判定 W4 T5 を通る既存の経路）。新しいテンプレート `_offseason_promoted.html` は `scoped_url`。`test_wiring.py`・`CHECKS` の変更は要らない。
+  - main の新しいテスト `test_pennant_development.py` を `world_scope`・`ws_url` に、締める画面のテストの作成者を `make_editor` で全体の編集者にした（W4 T5）。
+  - **epic で足したテストを新しい規則に**: `register_player` に `from_year=TEST_YEAR`（`test_player_profile_edit.py`・`test_workspace_permissions.py`・`test_admin.py` の削除のテスト・e2e の `test_workspace_sharing.py`・`test_player_edit_enter.py`）。E2E の書き写した `_login` を `PlaywrightTestCase.login` に（`test_setup_flow.py`・`test_setup_ordering.py`・`test_player_edit_enter.py`。`test_workspace_sharing.py` の登録からの流れはログインの手順そのものを確かめるので残した）。二重実行の検査は epic のテストで落ちなかった（epic の土台 `WorkspaceCase`・`SetupCase`・`WorkspaceDeletionCase` はテストのメソッドを持たない）。
+  - **依存の版と ruff の Markdown の検査**: 共有のコンテナのイメージは #333 の前の版（Django 5.2.18・ruff 0.17.1・mypy 2.4.0・playwright 1.64.0 ほか）。並行作業中なのでイメージを作り直さず、共有の環境も変えず、変わった純 Python の6本（Django・asgiref・sqlparse・coverage・mypy・ruff）を `/tmp/deps-w4-merge7` に入れて `PYTHONPATH` で優先させて検査とテストを流した（playwright とブラウザは古い版のまま）。ruff 0.17.4 の `ruff format --check .` は Markdown を含む395ファイルで通った（epic の設計書・Wiki・`.claude/` も落ちない）。
+- **計測**: やり直していない。main の変更で読み取りが増えるのはオフの結果の画面（在籍の1本）と締める処理で、`measure_pages` の画面に入っていない。
+- テスト: domain＋integration 4,400、e2e 21（Django 5.2.19 で）。
+- **レビュー**（`ddd-boundary-reviewer`）: 重要な指摘なし（#345 に範囲なしの読み書き・新しい書き込みの経路・新しい `Django*` が無いこと、昇格が世界の年で書くこと、テストの範囲の取り違えが無いこと、domain が Django を import しないことを確かめた）。軽微: `test_pennant_development.py` がリポジトリ・クエリをテストの中で直接作る（main と epic の慣習どおりで範囲は `world_scope`。直していない）。

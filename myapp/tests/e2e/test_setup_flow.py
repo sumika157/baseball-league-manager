@@ -25,13 +25,6 @@ class SetupFlowTest(PlaywrightTestCase):
         owner = User.objects.create_user(username="owner", password="pass12345")
         self.workspace = make_workspace(owner=owner, name=WORKSPACE_NAME)
 
-    def _login(self):
-        self.page.goto(self.live_server_url + "/accounts/login/")
-        self.page.fill('input[name="username"]', "owner")
-        self.page.fill('input[name="password"]', "pass12345")
-        self.page.locator('input[name="password"]').press("Enter")
-        self.page.wait_for_url(f"{self.live_server_url}/")
-
     def _url(self, name: str, *args: object) -> str:
         return self.live_server_url + ws_url(name, *args, workspace=self.workspace)
 
@@ -40,7 +33,7 @@ class SetupFlowTest(PlaywrightTestCase):
         self.page.wait_for_url(self._url(url_name, *args))
 
     def test_the_owner_builds_a_league_and_registers_a_game(self):
-        self._login()
+        self.login("owner")
 
         # トップの一覧からワークスペースへ。空のダッシュボードには登録の案内が出る
         self.page.click(f'a:has-text("{WORKSPACE_NAME}")')

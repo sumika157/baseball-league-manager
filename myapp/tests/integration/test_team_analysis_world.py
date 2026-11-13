@@ -13,7 +13,7 @@ from myapp.domain.value_objects import BattingLine
 from myapp.infrastructure import orm_models
 from myapp.presentation.views import build_pennant_world_service, build_team_analysis_service
 
-from ..helpers import header_pages, make_editor, play_game, real_scope, world_scope, ws_url
+from ..helpers import TEST_YEAR, header_pages, make_editor, play_game, real_scope, world_scope, ws_url
 from .world_case import PENNANT_PLAYER_PREFIX, PENNANT_RIVAL, PENNANT_TEAM, YEAR, WorldCase
 
 OLD_YEAR = 2019
@@ -35,7 +35,7 @@ class WorldTeamAnalysisTest(WorldAnalysisCase):
 
     def test_only_the_worlds_players_are_counted(self):
         # 実データの球団にだけ、もう1人足す
-        self.roster.register_player(self.team.id, "実の控え", 50, "投手")
+        self.roster.register_player(self.team.id, "実の控え", 50, "投手", from_year=TEST_YEAR)
         response = self.client.get(self.url())
 
         analysis = response.context["analysis"]

@@ -24,6 +24,7 @@ from dataclasses import dataclass, replace
 from datetime import date
 from statistics import fmean, pstdev
 
+from myapp.domain.pennant.development import MAX_PROMOTIONS
 from myapp.domain.pennant.draft import MAX_DEVELOPMENT_PICKS, MAX_DRAFTEES, Draftee, DraftRoute
 from myapp.domain.pennant.draft_meeting import DraftContext, scouting_value
 from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
@@ -70,6 +71,8 @@ class Member:
     ratings: PlayerRatings
     # 今の契約区分（初期の母集団は全員支配下。育成ドラフトの新人は育成。#198 D2）
     contract: ContractStatus = ContractStatus.REGISTERED
+    # 育成から支配下に上がった年（オフの昇格は翌年。#170）
+    promoted_year: int | None = None
 
     @property
     def is_registered(self) -> bool:
@@ -180,6 +183,7 @@ def run_year(
                         ratings=m.ratings,
                         contract=m.contract,
                         playing_time=playing.get(m.player_id, PlayingTime()),
+                        promoted_year=m.promoted_year,
                     )
                     for m in team_members
                 ),
@@ -196,9 +200,22 @@ def run_year(
         draft=DraftContext(rule, standings),
     )
 
-    leaving = set(plan.retired) | set(plan.released)
+    leaving = set(plan.retired) | set(plan.released) | set(plan.expired)
     after = {change.player_id: change.after for change in plan.retained}
-    next_members = [replace(m, ratings=after[m.player_id]) for m in members if m.player_id not in leaving]
+    promoted = {promotion.player_id: promotion.number for promotion in plan.promotions}
+    next_members = [
+        replace(
+            m,
+            ratings=after[m.player_id],
+            contract=ContractStatus.REGISTERED,
+            number=promoted[m.player_id],
+            promoted_year=year + 1,
+        )
+        if m.player_id in promoted
+        else replace(m, ratings=after[m.player_id])
+        for m in members
+        if m.player_id not in leaving
+    ]
     next_id = max(m.player_id for m in members) + 1
     for offset, newcomer in enumerate(plan.newcomers):
         player_id = next_id + offset
@@ -228,6 +245,9 @@ class YearStats:
     turnover: float
     retired_share: float
     released_share: float
+    # 育成から支配下への昇格（締める年の支配下に対する割合）と、育成契約の満了の自由契約（1球団あたりの人数）（#170）
+    promoted_share: float
+    expired_per_club: float
     min_roster: int
     max_roster: int
     mean_roster: float
@@ -323,6 +343,8 @@ def stats(members: list[Member], plan: OffseasonPlan, previous: list[Member], *,
         turnover=(retired + released) / len(before),
         retired_share=retired / len(before),
         released_share=released / len(before),
+        promoted_share=len(plan.promotions) / len(before),
+        expired_per_club=len(plan.expired) / len(development),
         min_roster=min(sizes.values()),
         max_roster=max(sizes.values()),
         mean_roster=fmean(sizes.values()),
@@ -417,6 +439,9 @@ class OffseasonPopulationTest(unittest.TestCase):
 
         実測（シード 1〜4）は5回目のオフの後に全球団が目標に届き、平均 18.8〜21.3人。支配下の帯・年齢・入れ替わり・
         錨（支配下で測る）は育成ドラフトの前と同じ範囲。
+        #170 P1（育成の昇格と契約の満了）からは、毎年 昇格 約1.3〜2.5人・満了の自由契約 約2.4〜3.8人が出ていき、
+        育成ドラフトの1年6人では目標まで戻り切らないので、平均は 5回目のオフの後 13.8〜14.6人・10回目 15.5〜16.2人
+        （シード 1〜4）。平均の下限を 15 → 13 人にした（目安の帯の中）。
         """
         band = DEVELOPMENT_BAND
         for index, stat in enumerate(self.years):
@@ -425,7 +450,7 @@ class OffseasonPopulationTest(unittest.TestCase):
                 self.assertLessEqual(stat.max_development_draftees, MAX_DEVELOPMENT_PICKS)
                 if index >= 4:
                     self.assertGreaterEqual(stat.min_development, band.low)
-                    self.assertTrue(band.low + 5 <= stat.mean_development <= band.high - 5, stat.mean_development)
+                    self.assertTrue(band.low + 3 <= stat.mean_development <= band.high - 5, stat.mean_development)
 
     def test_age_distribution_is_kept(self) -> None:
         """当初の帯からの変更: 標準偏差の上限 4.5 → 4.8、22歳以下 5〜15% → 5〜22%、平均年齢の下限 27 → 26、
@@ -450,15 +475,36 @@ class OffseasonPopulationTest(unittest.TestCase):
         うち引退 6.2〜6.6%・戦力外 3.0〜3.2%（外国人の入れ替えを含む）。
         下限を 8% → 6.5% に下げた（前の年に下端を割った球団は空きがあるので戦力外が0人になり、その年だけ少ない。
         1年目の外国人に余裕を持たせてから最小 6.8%）。
+        #170 P1 から、戦力外が育成の昇格の分も空ける（新人の枠に上乗せ）ので、2年目からの入れ替わりは 8.9〜12.8%
+        （シード 1〜4。昇格の希望の分だけ増える）。帯は変えず、引退との比べ方は昇格の分を除いた戦力外にした。
         """
         for stat in self.years:
             with self.subTest(year=stat.year):
                 self.assertTrue(0.065 <= stat.turnover <= 0.13, stat.turnover)
                 self.assertGreater(stat.released_share, 0.0, "戦力外がある")
-        # 1年目は合成の初期母集団（外国人の数が球団ごとにばらつく）の入れ替えで戦力外が多い。10年の平均で比べる
+        # 1年目は合成の初期母集団（外国人の数が球団ごとにばらつく）の入れ替えで戦力外が多い。10年の平均で比べる。
+        # 育成の昇格（#170）は新人の枠に上乗せで、戦力外がその分も空けるので、昇格の分を除いた戦力外と比べる
         retired = fmean(stat.retired_share for stat in self.years)
-        released = fmean(stat.released_share for stat in self.years)
-        self.assertGreater(retired, released, "引退のほうが多い（#168 の調整）")
+        released = fmean(stat.released_share - stat.promoted_share for stat in self.years)
+        self.assertGreater(retired, released, "引退のほうが多い（#168 の調整。昇格の上乗せの分を除く）")
+
+    def test_promotions_are_a_few_per_club(self) -> None:
+        """育成の昇格（#170 P1）は1球団1年 `MAX_PROMOTIONS` 人まで、平均は 1〜3人の目安の中（2年目から。
+        合成の初期母集団は育成が0人で、1回目のオフの育成ドラフトの後から上がる）。"""
+        for stat in self.years[1:]:
+            with self.subTest(year=stat.year):
+                per_club = stat.promoted_share * stat.mean_roster
+                self.assertTrue(0.5 <= per_club <= MAX_PROMOTIONS, per_club)
+
+    def test_some_development_contracts_expire(self):
+        """育成契約の満了（#170 P1）: 育成ドラフトの1回目（1回目のオフ）の育成が3年目を終えた4回目のオフから、
+        見込みの低い育成が自由契約になる（シード 1〜4 で 1球団 約2.4〜3.8人）。それより前は満了の年の育成がいない。"""
+        for index, stat in enumerate(self.years):
+            with self.subTest(year=stat.year):
+                if index < 3:
+                    self.assertEqual(stat.expired_per_club, 0.0)
+                else:
+                    self.assertTrue(1.0 <= stat.expired_per_club <= 5.0, stat.expired_per_club)
 
     def test_opening_rosters_stay_in_the_band(self) -> None:
         """開幕前の支配下は上端（66人）を超えず、平均は帯の中。引退が多い年の球団だけ下端を割る（1年の上限10人）。"""

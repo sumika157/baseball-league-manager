@@ -18,7 +18,7 @@ from myapp.domain.value_objects import BattingLine, FieldingPosition, GameStage,
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
 
-from ..helpers import build_team_analysis_service, make_league, real_scope, ws_url
+from ..helpers import TEST_YEAR, build_team_analysis_service, make_league, real_scope, ws_url
 from .base import BaseCase
 
 
@@ -28,7 +28,7 @@ class AnalysisCase(BaseCase):
     def player(
         self, team, name, number, position="内野手", *, throws="", bats="", birth=None, from_year=2020, to_year=None
     ):
-        created = self.roster.register_player(team.id, name, number, position)
+        created = self.roster.register_player(team.id, name, number, position, from_year=TEST_YEAR)
         orm_models.Player.objects.filter(id=created.id).update(throws=throws, bats=bats, birth_date=birth)
         orm_models.PlayerStint.objects.filter(player_id=created.id).update(from_year=from_year, to_year=to_year)
         return created.id

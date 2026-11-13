@@ -11,7 +11,7 @@ from myapp.domain.value_objects import BattingLine, InningsPitched, PitchingLine
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoGameRepository
 
-from ..helpers import GAME_DAY_UNRECORDED, login_as_manager, play_game, post_game_scorebook, real_scope
+from ..helpers import GAME_DAY_UNRECORDED, TEST_YEAR, login_as_manager, play_game, post_game_scorebook, real_scope
 from .base import BaseCase
 
 # 塁の値（ドメインの Base と同じ）。API は数値で受け取る
@@ -31,7 +31,7 @@ class ScorebookApiTest(BaseCase):
         self.home_batters = [self._register(self.team, f"ホーム{i}", 30 + i, "内野手") for i in range(1, 4)]
 
     def _register(self, team, name, number, position) -> int:
-        return self.roster.register_player(team.id, name, number, position).id
+        return self.roster.register_player(team.id, name, number, position, from_year=TEST_YEAR).id
 
     # --- 送る中身 ---
 

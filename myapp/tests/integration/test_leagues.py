@@ -13,7 +13,7 @@ from myapp.domain.value_objects import (
 )
 from myapp.infrastructure import orm_models
 
-from ..helpers import give_batting, give_pitching, make_league, play_game, ws_url
+from ..helpers import TEST_YEAR, give_batting, give_pitching, make_league, play_game, ws_url
 from .base import BaseCase
 
 
@@ -154,8 +154,8 @@ class LeagueTitlesViewTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.slugger = self.roster.register_player(self.team.id, "大砲", 3, "内野手")
-        self.ace = self.roster.register_player(self.team.id, "エース", 18, "投手")
+        self.slugger = self.roster.register_player(self.team.id, "大砲", 3, "内野手", from_year=TEST_YEAR)
+        self.ace = self.roster.register_player(self.team.id, "エース", 18, "投手", from_year=TEST_YEAR)
         self.url = ws_url("league_titles", self.league.id)
 
     def _departments(self, year=None):
@@ -240,7 +240,7 @@ class LeagueTitlesViewTest(BaseCase):
             PitchingLine(innings=InningsPitched.from_notation("9.0"), wins=1),
             day=1,
         )
-        closer = self.roster.register_player(self.team.id, "守護神", 22, "投手")
+        closer = self.roster.register_player(self.team.id, "守護神", 22, "投手", from_year=TEST_YEAR)
         give_pitching(
             self.team,
             self.rival,
@@ -283,7 +283,7 @@ class LeagueTitlesViewTest(BaseCase):
         other_league = make_league(name="別リーグ")
         other = orm_models.Team.objects.create(league=other_league, name="別チーム")
         opponent = orm_models.Team.objects.create(league=other_league, name="別の相手")
-        outsider = self.roster.register_player(other.id, "他リーグの大砲", 9, "内野手")
+        outsider = self.roster.register_player(other.id, "他リーグの大砲", 9, "内野手", from_year=TEST_YEAR)
         give_batting(other, opponent, outsider.id, BattingLine(at_bats=10, home_runs=9), day=1)
         give_batting(
             self.team,
@@ -345,7 +345,7 @@ class LeagueTitlesViewTest(BaseCase):
 
     def test_each_department_lists_the_top_three(self):
         for number in range(4, 9):
-            player = self.roster.register_player(self.team.id, f"打者{number}", number, "外野手")
+            player = self.roster.register_player(self.team.id, f"打者{number}", number, "外野手", from_year=TEST_YEAR)
             give_batting(self.team, self.rival, player.id, BattingLine(at_bats=10, singles=number), day=number)
 
         entries = self._departments()["hits"].entries
@@ -373,9 +373,9 @@ class LeagueStatsViewTest(BaseCase):
 
     def setUp(self):
         super().setUp()
-        self.slugger = self.roster.register_player(self.team.id, "大砲", 3, "内野手")
-        self.contact = self.roster.register_player(self.rival.id, "安打製造機", 7, "外野手")
-        self.ace = self.roster.register_player(self.team.id, "エース", 18, "投手")
+        self.slugger = self.roster.register_player(self.team.id, "大砲", 3, "内野手", from_year=TEST_YEAR)
+        self.contact = self.roster.register_player(self.rival.id, "安打製造機", 7, "外野手", from_year=TEST_YEAR)
+        self.ace = self.roster.register_player(self.team.id, "エース", 18, "投手", from_year=TEST_YEAR)
         self.url = ws_url("league_stats", self.league.id)
 
     def test_batters_span_teams_within_the_league(self):
@@ -390,7 +390,7 @@ class LeagueStatsViewTest(BaseCase):
     def test_players_of_another_league_are_not_listed(self):
         other_league = make_league(name="別リーグ")
         other = orm_models.Team.objects.create(league=other_league, name="別チーム")
-        self.roster.register_player(other.id, "他リーグの大砲", 9, "内野手")
+        self.roster.register_player(other.id, "他リーグの大砲", 9, "内野手", from_year=TEST_YEAR)
 
         rows = self.league_view.get_league_stats(self.league.id).listing.rows
 
@@ -454,7 +454,7 @@ class LeagueStatsViewTest(BaseCase):
 
     def test_qualified_filter_keeps_only_players_reaching_the_line(self):
         # 1つの試合に2人ぶんを入れる（試合数を増やさずに規定未満の選手を作る）
-        pinch = self.roster.register_player(self.team.id, "代打", 44, "外野手")
+        pinch = self.roster.register_player(self.team.id, "代打", 44, "外野手", from_year=TEST_YEAR)
         play_game(
             self.team,
             self.rival,
@@ -486,7 +486,7 @@ class LeagueStatsViewTest(BaseCase):
             self.assertEqual(stats.qualified_count, 1)
 
     def test_pitchers_are_filtered_by_required_innings(self):
-        short = self.roster.register_player(self.team.id, "ワンポイント", 45, "投手")
+        short = self.roster.register_player(self.team.id, "ワンポイント", 45, "投手", from_year=TEST_YEAR)
         play_game(
             self.team,
             self.rival,

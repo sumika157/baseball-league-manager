@@ -38,6 +38,8 @@ class Command(BaseCommand):
             self.style.SUCCESS(
                 f"{result.year}年のシーズンを締めました（引退 {result.retired_count}人・"
                 f"戦力外 {result.released_count}人・"
+                f"支配下登録（昇格） {result.promoted_count}人・"
+                f"育成の自由契約 {result.expired_count}人・"
                 f"新外国人 {result.signed_foreign_count}人・"
                 f"新人 {result.draftee_count}人（うち育成 {result.development_draftee_count}人）・"
                 f"ドラフト1巡目の抽選 {result.first_round_lottery_count}件）　所要 {elapsed:.2f}秒"

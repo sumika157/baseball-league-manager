@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import random
 import unittest
 from datetime import date
 
@@ -11,15 +10,7 @@ from myapp.domain.value_objects import Handedness, Position, Profile
 from myapp.domain.virtual_players import generator, pools
 from myapp.domain.virtual_players.generator import AmateurPath
 
-
-class OnlyRandom:
-    """`random()` しか持たない乱数源。他のメソッド（`choice` など）を呼ぶと AttributeError で落ちる。"""
-
-    def __init__(self, seed: int) -> None:
-        self._rng = random.Random(seed)
-
-    def random(self) -> float:
-        return self._rng.random()
+from .doubles import OnlyRandom
 
 
 class RandomOnlyTest(unittest.TestCase):

@@ -23,6 +23,7 @@ from myapp.presentation.views import build_roster_service, build_workspace_membe
 
 from ..helpers import (
     GAME_DAY_UNRECORDED,
+    TEST_YEAR,
     make_editor,
     make_league,
     make_workspace,
@@ -138,7 +139,9 @@ class PermissionTableCase(BaseCase):
     def setUp(self):
         super().setUp()
         self.skip_roster_check()
-        self.player = build_roster_service(real_scope(self.ws)).register_player(self.home.id, "山田", 10, "内野手")
+        self.player = build_roster_service(real_scope(self.ws)).register_player(
+            self.home.id, "山田", 10, "内野手", from_year=TEST_YEAR
+        )
         self.game = play_game(self.home, self.away, recorded=False, scope=real_scope(self.ws))
         # 役割ごとに続けて保存するので、試合日を毎回変える（同じ内容の保存は行を変えず、通ったかを見分けられない）
         self.save_days = itertools.count(1)
