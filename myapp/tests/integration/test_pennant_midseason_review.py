@@ -17,6 +17,7 @@ from unittest import mock
 
 from django.db import transaction
 
+from myapp.application import pennant_midseason_review as review_module
 from myapp.application.pennant_simulation import DaySimulator
 from myapp.domain.exceptions import AlreadyAdvanced, TeamNotFound
 from myapp.domain.pennant.ratings import PlayerRatings
@@ -193,6 +194,42 @@ class RosterChangedWhileAdvancingTest(MidseasonReviewCase):
         self.assertTrue(promoted)
         self.assertEqual(build_pennant_season_service(self.world_a)._context_query.last_played_on(), today)
         self.assertGreater(len(self.snapshot(self.world_a)[0]), len(before[0]))
+
+    def test_a_gm_registration_after_the_ai_decided_stops_the_review_before_writing(self):
+        """AI が判定日の昇格を決めた後（球団は外で読む）に GM が期中の登録をしたら、AI の昇格を書かずに
+        AlreadyAdvanced（外で読んだ古い集約で上書きしない）。判定日の前の日までの試合は残る。"""
+        while build_pennant_season_service(self.world_a)._fixtures.first_date() < JUNE_1:
+            today = self.advance(self.world_a, AdvanceTarget.DAY).today
+        registration = build_midseason_registration_service(self.world_a)
+        next_on = registration.view().next_game_on
+        real_decide = review_module.decide_midseason_promotions
+        promoted = []
+
+        def decide_and_register(*args, **kwargs):
+            decided = real_decide(*args, **kwargs)
+            promoted.append(registration.promote(self.managed_prospect, expected_next_game_on=next_on))
+            return decided
+
+        with (
+            mock.patch.object(review_module, "decide_midseason_promotions", decide_and_register),
+            self.assertRaises(AlreadyAdvanced),
+        ):
+            self.advance(self.world_a, AdvanceTarget.DAY)
+
+        self.assertTrue(promoted)
+        self.assertEqual(
+            list(
+                orm_models.PennantMidseasonRegistration.objects.filter(
+                    team__league__world_id=self.world_a
+                ).values_list("player__name", flat=True)
+            ),
+            ["ホ育成"],
+            "GM の登録だけが残り、AI の昇格は書かない",
+        )
+        self.assertFalse(
+            orm_models.PlayerStint.objects.filter(player_id__in=self.strong, promoted_year__isnull=False).exists()
+        )
+        self.assertEqual(build_pennant_season_service(self.world_a)._context_query.last_played_on(), today)
 
 
 class ReviewMaterialsTest(MidseasonReviewCase):
