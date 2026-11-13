@@ -89,7 +89,7 @@ from ..domain.pennant.reinforcement import MidseasonRegistration, ensure_registr
 from ..domain.pennant.release import ReleasePlan
 from ..domain.pennant.schedule import Fixture
 from ..domain.pennant.season import is_season_closed
-from ..domain.pennant.world import World, WorldScope
+from ..domain.pennant.world import World, WorldScope, WorldUsage
 from ..domain.services import ensure_lines_match_plate_appearances
 from ..domain.setup import (
     ensure_league_change_allowed,
@@ -2657,13 +2657,19 @@ class DjangoWorldRepository:
     def find_all(self) -> list[World]:
         return [self._to_domain(row) for row in worlds_in(self._workspace_id)]
 
-    def count_by_owner(self, owner_id: int) -> int:
-        """そのユーザーがオーナーの世界の数。**ワークスペースで絞らず、全ワークスペースで数える。**
+    def usage(self) -> WorldUsage:
+        """このワークスペースの世界ごとの球団の数を1クエリで数え、使用量にする（見込みの式はドメイン）。
 
-        世界の数の上限は「1人あたり」の決まりなので、ワークスペースを分けても上限を回避できないようにしている。
-        ワークスペースごとの上限への読み替えは W6 で見直す。
+        台帳（`worlds_in`）で絞るので、ほかのワークスペースの世界は数えない。作成者は問わない。
         """
-        return orm_models.PennantWorld.objects.filter(owner_id=owner_id).count()
+        team_counts = (
+            worlds_in(self._workspace_id)
+            .order_by()
+            .values("id")  # 世界ごとに数える（GROUP BY を世界の id だけにする）
+            .annotate(team_count=Count("leagues__teams"))
+            .values_list("team_count", flat=True)
+        )
+        return WorldUsage.of(team_counts)
 
     def save(self, world: World) -> World:
         """このワークスペースに世界を書く。

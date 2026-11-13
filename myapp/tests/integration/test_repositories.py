@@ -12,7 +12,7 @@ from myapp.domain.exceptions import (
     LeagueNotFound,
     WorldNotFound,
 )
-from myapp.domain.pennant.world import World
+from myapp.domain.pennant.world import World, WorldUsage, world_game_reserve
 from myapp.domain.value_objects import (
     BattingLine,
     ForeignPlayerRules,
@@ -248,15 +248,31 @@ class WorldWorkspaceRoundTripTest(BaseCase):
             ledger.delete(theirs.id)
         self.assertTrue(orm_models.PennantWorld.objects.filter(id=theirs.id).exists())
 
-    def test_the_owner_count_spans_workspaces(self):
-        """世界の数の上限は1人あたりなので、`count_by_owner` は全ワークスペースで数える（W6 で見直す）。"""
+    def test_the_usage_counts_only_this_workspaces_worlds_in_one_query(self):
+        """使用量は台帳のワークスペースの世界だけを、作成者を問わず数える（ほかのワークスペースの世界は数えない）。"""
         owner = User.objects.create_user("world-owner", password="x")
-        for workspace in (self.workspace, self.other):
-            DjangoWorldRepository(workspace.id).save(
-                World(name="世界", seed=1, start_year=2040, owner_id=owner.id, workspace_id=workspace.id)
+        for workspace, teams in ((self.workspace, 3), (self.workspace, 0), (self.other, 6)):
+            world = DjangoWorldRepository(workspace.id).save(
+                World(
+                    name=f"世界{teams}",
+                    seed=1,
+                    start_year=2040,
+                    owner_id=owner.id if teams else None,  # 作成者のいない世界も数える
+                    workspace_id=workspace.id,
+                )
             )
+            if teams:
+                league = make_league(f"世界のリーグ{world.id}", world_id=world.id)
+                for number in range(teams):
+                    orm_models.Team.objects.create(league=league, name=f"球団{world.id}-{number}")
 
-        self.assertEqual(world_ledger().count_by_owner(owner.id), 2)
+        ledger = world_ledger()
+        with CaptureQueriesContext(connection) as captured:
+            usage = ledger.usage()
+
+        self.assertEqual(usage, WorldUsage(world_count=2, reserved_games=world_game_reserve(3)))
+        self.assertEqual(len(captured), 1, [query["sql"] for query in captured.captured_queries])
+        self.assertEqual(DjangoWorldRepository(self.other.id).usage().reserved_games, world_game_reserve(6))
 
 
 class LeagueWorkspaceTest(BaseCase):

@@ -2,23 +2,38 @@
 
 作成と削除は書き込みなので権限を確かめる（未ログインはログインへ、ほかの人は 403）。作成できるのは
 ワークスペースの持ち主・編集者だけ（W2 T4。#78）。削除・進めるは世界の作成者。
-上限（1人の世界の数・元にするリーグの数）と、フォームの検証エラー（日本語）も。
+上限（ワークスペースの世界の数と試合の枠・元にするリーグの数）と、フォームの検証エラー（日本語）も。
 GM ホームと進める操作は `test_pennant_home.py`。
 """
 
+from contextlib import contextmanager
+from io import StringIO
 from unittest import mock
 
+from django.conf import settings
 from django.contrib.auth.models import User
 from django.contrib.messages import get_messages
+from django.core.management import call_command
+from django.test import override_settings
 
 from myapp.application.pennant_season import PennantSeasonService
-from myapp.domain.exceptions import InvalidSchedule, InvalidWorld
+from myapp.domain.exceptions import InvalidSchedule, InvalidWorld, WorkspaceLimitReached
 from myapp.domain.pennant.schedule import AdvanceTarget
-from myapp.domain.pennant.world import MAX_WORLDS_PER_OWNER
+from myapp.domain.pennant.world import WorldUsage, world_game_reserve
 from myapp.infrastructure import orm_models
 from myapp.presentation.views import build_pennant_season_service, build_pennant_world_service, build_roster_service
 
-from ..helpers import make_editor, make_league, play_game, real_scope, world_ledger, world_scope, ws_url
+from ..helpers import (
+    default_workspace,
+    login_as_manager,
+    make_editor,
+    make_league,
+    play_game,
+    real_scope,
+    world_ledger,
+    world_scope,
+    ws_url,
+)
 from .test_pennant_advance import register_club
 from .test_pennant_home import HomeCase
 
@@ -162,35 +177,6 @@ class CreateWorldTest(HomeCase):
 
         self.assertIn("8つまで", str(raised.exception))
 
-    def test_the_number_of_worlds_per_owner_is_limited(self):
-        self.client.force_login(self.other)
-        for number in range(MAX_WORLDS_PER_OWNER):
-            response = self.client.post(ws_url("pennant_index"), self.form(name=f"世界{number}"))
-            self.assertEqual(response.status_code, 302, number)
-
-        content = self.client.get(ws_url("pennant_index")).content.decode()
-        self.assertNotIn('name="leagues"', content, "上限に達したらフォームを出さない")
-        self.assertIn(f"作れる世界は1人{MAX_WORLDS_PER_OWNER}つまで", content)
-        self.assertIn("alert-secondary", content)
-
-        # フォームを出さなくても、POST は弾く
-        before = orm_models.PennantWorld.objects.count()
-        response = self.client.post(ws_url("pennant_index"), self.form(name="あふれた世界"))
-        self.assertEqual(orm_models.PennantWorld.objects.count(), before)
-        self.assertIn(
-            f"作れる世界は1人{MAX_WORLDS_PER_OWNER}つまで", [str(m) for m in get_messages(response.wsgi_request)][0]
-        )
-
-    def test_the_limit_is_per_owner(self):
-        self.client.force_login(self.other)
-        for number in range(MAX_WORLDS_PER_OWNER):
-            self.client.post(ws_url("pennant_index"), self.form(name=f"世界{number}"))
-        self.client.force_login(self.owner)
-
-        response = self.client.post(ws_url("pennant_index"), self.form(name="別の人の世界"))
-
-        self.assertEqual(response.status_code, 302)
-
     def test_the_list_splits_my_worlds_from_others_and_hides_the_owner(self):
         self.client.force_login(self.owner)
 
@@ -300,9 +286,187 @@ class CreateFailureTest(HomeCase):
         self.assertIn("日程が組めませんでした。", response.content.decode())
 
 
-class WorldCountTest(HomeCase):
-    def test_the_count_is_per_owner_and_does_not_build_worlds(self):
-        repository = world_ledger()
+class WorkspaceQuotaTest(HomeCase):
+    """世界の数と試合の枠の上限は**ワークスペースごと**（W6 #82）。
 
-        self.assertEqual(repository.count_by_owner(self.owner.id), 1, "世界Aだけ")
-        self.assertEqual(repository.count_by_owner(self.other.id), 0)
+    既存の世界は3つ（世界A＝`owner` の世界、世界B・C＝作成者のいない世界）で、どれも球団2つ。
+    作る人（`other`・`owner`）は既定のワークスペースの編集者にしておく。
+    """
+
+    def setUp(self):
+        super().setUp()
+        make_editor(self.other)
+        make_editor(self.owner)
+        self.reserve = world_game_reserve(2)
+
+    def form(self, **overrides) -> dict:
+        data = {
+            "name": "新しい世界",
+            "leagues": [str(self.league_id)],
+            "managed_team": str(self.home.id),
+            "postseason_format": "NPB",
+            "start_year": "2040",
+            "seed": "5",
+        }
+        data.update(overrides)
+        return data
+
+    def messages_of(self, response) -> list[str]:
+        return [str(message) for message in get_messages(response.wsgi_request)]
+
+    def test_the_usage_counts_every_world_of_the_workspace(self):
+        """作成者を問わず、作成者のいない世界も数える。"""
+        self.assertEqual(world_ledger().usage(), WorldUsage(world_count=3, reserved_games=3 * self.reserve))
+
+    @override_settings(PENNANT_MAX_WORLDS=4)
+    def test_worlds_of_other_editors_and_ownerless_worlds_count_toward_the_limit(self):
+        self.client.force_login(self.other)
+        content = self.client.get(ws_url("pennant_index")).content.decode()
+        self.assertIn("このワークスペースの世界 3 / 4", content)
+        self.assertEqual(self.client.post(ws_url("pennant_index"), self.form()).status_code, 302)
+
+        # 別の編集者から見ても、ほかの人の世界と作成者のいない世界で上限に達している
+        self.client.force_login(self.owner)
+        content = self.client.get(ws_url("pennant_index")).content.decode()
+        self.assertIn("このワークスペースの世界 4 / 4", content)
+        self.assertNotIn('name="leagues"', content, "上限ならフォームを出さない")
+        self.assertIn("このワークスペースの世界は4つまでです。", content)
+
+        # フォームを出さなくても、POST は弾いて何も作らない
+        before = orm_models.PennantWorld.objects.count()
+        response = self.client.post(ws_url("pennant_index"), self.form(name="あふれた世界"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(orm_models.PennantWorld.objects.count(), before)
+        self.assertIn("このワークスペースの世界は4つまでです。", self.messages_of(response)[0])
+
+    def test_a_world_that_exactly_fills_the_game_quota_is_made_and_then_none_fits(self):
+        with override_settings(PENNANT_MAX_GAMES=4 * self.reserve):
+            self.client.force_login(self.other)
+            response = self.client.post(ws_url("pennant_index"), self.form())
+            self.assertEqual(response.status_code, 302, "ちょうど収まる")
+
+            content = self.client.get(ws_url("pennant_index")).content.decode()
+            self.assertNotIn('name="leagues"', content)
+            self.assertIn("収まるリーグがありません", content)
+
+            before = orm_models.PennantWorld.objects.count()
+            response = self.client.post(ws_url("pennant_index"), self.form(name="あふれた世界"))
+            self.assertEqual(orm_models.PennantWorld.objects.count(), before)
+            self.assertIn("このワークスペースの残りは0試合です", self.messages_of(response)[0])
+
+    def test_a_combination_over_the_remainder_is_refused_when_sent(self):
+        """リーグ1つずつなら収まるのでフォームは出し、超える組み合わせは送ったときに理由を出して何も作らない。"""
+        second = make_league(name="第二リーグ")
+        roster = build_roster_service(real_scope())
+        for name, prefix in (("甲球団", "甲"), ("乙球団", "乙")):
+            register_club(roster, orm_models.Team.objects.create(league=second, name=name), prefix)
+        with override_settings(PENNANT_MAX_GAMES=4 * self.reserve):
+            self.client.force_login(self.other)
+            content = self.client.get(ws_url("pennant_index")).content.decode()
+            self.assertIn('name="leagues"', content)
+            self.assertIn(f"（10シーズンで約{self.reserve:,}試合）", content, "リーグの横に見込みを出す")
+
+            before = orm_models.PennantWorld.objects.count()
+            response = self.client.post(
+                ws_url("pennant_index"), self.form(leagues=[str(self.league_id), str(second.id)])
+            )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(orm_models.PennantWorld.objects.count(), before)
+            self.assertIn(
+                f"この世界には10シーズンで約{2 * self.reserve:,}試合の枠が要りますが、"
+                f"このワークスペースの残りは{self.reserve:,}試合です。",
+                self.messages_of(response)[0],
+            )
+
+    def test_the_usage_is_counted_inside_the_creation_transaction(self):
+        """数える・検査する・保存するは1つのトランザクション（数えてから保存までに、別の作成が割り込まない）。"""
+        service = build_pennant_world_service(real_scope())
+        real_atomic = service._atomic
+        depth = [0]
+        counted_inside: list[bool] = []
+
+        @contextmanager
+        def tracking_atomic():
+            depth[0] += 1
+            try:
+                with real_atomic():
+                    yield
+            finally:
+                depth[0] -= 1
+
+        real_usage = service._worlds.usage
+
+        def tracking_usage() -> WorldUsage:
+            counted_inside.append(depth[0] > 0)
+            return real_usage()
+
+        with (
+            mock.patch.object(service, "_atomic", tracking_atomic),
+            mock.patch.object(service._worlds, "usage", side_effect=tracking_usage),
+        ):
+            service.create_world_with_schedule(
+                name="数える世界", owner_id=None, source_league_ids=[self.league_id], start_year=2040, seed=1
+            )
+
+        self.assertEqual(counted_inside, [True])
+
+    @override_settings(PENNANT_MAX_WORLDS=3)
+    def test_deleting_a_world_gives_its_room_back(self):
+        self.client.force_login(self.owner)
+        self.assertNotIn('name="leagues"', self.client.get(ws_url("pennant_index")).content.decode())
+
+        build_pennant_world_service(real_scope()).delete_world(self.world_b)
+
+        content = self.client.get(ws_url("pennant_index")).content.decode()
+        self.assertIn("このワークスペースの世界 2 / 3", content)
+        self.assertIn(f"試合の枠 {2 * self.reserve:,} / {settings.PENNANT_MAX_GAMES:,}", content)
+        self.assertIn('name="leagues"', content)
+
+    def test_people_who_cannot_create_see_neither_the_usage_nor_the_form(self):
+        def assignee() -> None:
+            login_as_manager(self.client, self.home)
+
+        def visitor() -> None:
+            self.client.force_login(User.objects.create_user("visitor", password="x"))
+
+        for label, login in {"anonymous": None, "assignee": assignee, "visitor": visitor}.items():
+            with self.subTest(label):
+                self.client.logout()
+                if login is not None:
+                    login()
+                response = self.client.get(ws_url("pennant_index"))
+
+                self.assertNotContains(response, 'data-testid="pennant-quota"')
+                self.assertNotContains(response, 'name="leagues"')
+                self.assertIsNone(response.context["quota"])
+
+    @override_settings(PENNANT_MAX_WORLDS=0, PENNANT_MAX_GAMES=0)
+    def test_the_command_ignores_the_limit(self):
+        """管理コマンドは運営者の道具なので上限を見ない（画面の入口だけが見る）。"""
+        with self.assertRaises(WorkspaceLimitReached):
+            build_pennant_world_service(real_scope()).create_world_with_schedule(
+                name="画面の世界", owner_id=None, source_league_ids=[self.league_id], start_year=2040, seed=1
+            )
+
+        call_command(
+            "pennant_create",
+            "--workspace",
+            default_workspace().key,
+            "--name",
+            "コマンドの世界",
+            "--league",
+            str(self.league_id),
+            "--year",
+            "2040",
+            "--seed",
+            "3",
+            "--owner",
+            self.owner.username,
+            "--managed-team",
+            str(self.home.id),
+            stdout=StringIO(),
+        )
+
+        self.assertTrue(orm_models.PennantWorld.objects.filter(name="コマンドの世界").exists())
+        self.assertFalse(orm_models.PennantWorld.objects.filter(name="画面の世界").exists())

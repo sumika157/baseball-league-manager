@@ -2,7 +2,7 @@
 
 リーグ・球場・ペナントの世界はワークスペースに属する。ここにあるのは、名前・key・公開範囲の
 検査と選択肢、メンバー（編集者・チーム担当）とその不変条件（`Workspace` 集約。W4）、招待（`Invitation`。W4）、
-持てる数の上限（`WorkspaceQuota`。W4）、消してよいか（`workspace_deletion_blocker`。W4）、それに権限の判定（`WorkspaceRole`・`WorkspaceAccess`。W2）。
+持てる数とペナントの世界の上限（`WorkspaceQuota`。W4・W6）、消してよいか（`workspace_deletion_blocker`。W4）、それに権限の判定（`WorkspaceRole`・`WorkspaceAccess`。W2）。
 Django は import しない。
 """
 
@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from enum import Enum
 
 from .exceptions import InvalidInvitation, InvalidWorkspace, MemberNotFound, WorkspaceLimitReached
+from .pennant.world import WorldUsage, reserve_label, world_game_reserve
 
 MAX_NAME_LENGTH = 100
 # URL に入れる識別子。10文字の英小文字と数字
@@ -447,18 +448,27 @@ class Invitation:
 
 @dataclass(frozen=True)
 class WorkspaceQuota:
-    """1人が持てるワークスペースの数の上限（値は settings から渡す。試合数・世界の数は W6 でここに足す）。
+    """上限の唯一の出典（値は settings から組み立て口が渡す）。判定と文言もここが持つ。
 
-    持っている数は保存しない（アプリケーション層が数えて渡す）。
+    - `max_owned_workspaces`: 1人が持ち主として持てるワークスペースの数（W4）
+    - `max_pennant_worlds`: 1つのワークスペースに作れるペナントの世界の数（作成者を問わず、作成者のいない世界も数える。
+      W6）
+    - `max_pennant_games`: 1つのワークスペースの世界の、見込みの試合数（`world_game_reserve`）の合計の上限（W6）。
+      1世界10シーズンで8リーグなら約760万行になり、世界の数だけでは容量が決まらないため、容量の軸を試合数にする
+      （2026-10-05 ユーザー決定。作るときに10シーズンぶんを予約する＝2026-11-13 ユーザー決定 1）
+
+    持っている数・使用量は保存しない（アプリケーション層が数えて渡す）。上限は作るときだけ見る
+    （既存の世界が上限を超えていても、消さない・止めない）。
     """
 
     max_owned_workspaces: int
+    max_pennant_worlds: int
+    max_pennant_games: int
 
     def __post_init__(self) -> None:
-        if not isinstance(self.max_owned_workspaces, int) or isinstance(self.max_owned_workspaces, bool):
-            raise InvalidWorkspace("ワークスペースの数の上限が正しくありません。")
-        if self.max_owned_workspaces < 0:
-            raise InvalidWorkspace("ワークスペースの数の上限が正しくありません。")
+        for value in (self.max_owned_workspaces, self.max_pennant_worlds, self.max_pennant_games):
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise InvalidWorkspace("ワークスペースの上限が正しくありません。")
 
     @property
     def limit_message(self) -> str:
@@ -472,6 +482,61 @@ class WorkspaceQuota:
         """作れなければ `WorkspaceLimitReached`。"""
         if not self.can_create_workspace(owned_count):
             raise WorkspaceLimitReached(self.limit_message)
+
+    # --- ペナントの世界（W6） ---
+
+    @property
+    def world_limit_message(self) -> str:
+        """世界の数が上限のときの理由（作成の拒否と、世界の一覧で作成フォームの代わりに出す理由の出典）。"""
+        return (
+            f"このワークスペースの世界は{self.max_pennant_worlds}つまでです。不要な世界を削除してから作ってください。"
+        )
+
+    def remaining_games(self, usage: WorldUsage) -> int:
+        """試合の枠の残り（使用量が上限を超えていれば0）。"""
+        return max(0, self.max_pennant_games - usage.reserved_games)
+
+    def can_add_world(self, usage: WorldUsage) -> bool:
+        """世界の数の上でもう1つ作れるか（試合の枠は見ない）。"""
+        return usage.world_count < self.max_pennant_worlds
+
+    def ensure_can_add_world(self, usage: WorldUsage) -> None:
+        """世界の数が上限なら `WorkspaceLimitReached`。"""
+        if not self.can_add_world(usage):
+            raise WorkspaceLimitReached(self.world_limit_message)
+
+    def fits_games(self, usage: WorldUsage, team_count: int) -> bool:
+        """球団が `team_count` の世界の見込みが、残りの試合の枠に収まるか（ちょうどは収まる）。"""
+        return world_game_reserve(team_count) <= self.remaining_games(usage)
+
+    def games_limit_message(self, usage: WorldUsage, team_count: int) -> str:
+        """球団が `team_count` の世界が残りの枠に収まらないときの理由。"""
+        return (
+            f"この世界には{reserve_label(world_game_reserve(team_count))}の枠が要りますが、"
+            f"このワークスペースの残りは{self.remaining_games(usage):,}試合です。"
+            "元にするリーグを減らすか、不要な世界を削除してから作ってください。"
+        )
+
+    def ensure_fits_games(self, usage: WorldUsage, team_count: int) -> None:
+        """見込みが残りの枠に収まらなければ `WorkspaceLimitReached`。"""
+        if not self.fits_games(usage, team_count):
+            raise WorkspaceLimitReached(self.games_limit_message(usage, team_count))
+
+    def world_creation_blocker(self, usage: WorldUsage, candidate_team_counts: Iterable[int]) -> str | None:
+        """世界の一覧で、作成フォームの代わりに出す理由。作れる候補があれば None。
+
+        世界の数が上限なら `world_limit_message`。候補（分岐元に選べるリーグ1つずつの球団の数）の
+        どれも残りの枠に収まらなければ、その理由（候補が無いときは理由を出さない。フォームの側で案内する）。
+        """
+        if not self.can_add_world(usage):
+            return self.world_limit_message
+        counts = list(candidate_team_counts)
+        if counts and not any(self.fits_games(usage, count) for count in counts):
+            return (
+                f"このワークスペースの試合の枠の残り（{self.remaining_games(usage):,}試合）に収まるリーグがありません。"
+                "不要な世界を削除してから作ってください。"
+            )
+        return None
 
 
 # --- 削除 ---

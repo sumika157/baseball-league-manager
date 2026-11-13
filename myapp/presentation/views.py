@@ -484,7 +484,8 @@ def build_pennant_world_view(workspace_id: int) -> PennantWorldViewService:
     （`build_league_view_service(世界の範囲)`）に任せる。世界の終了の判定に使うポストシーズンの状況も、世界ごとの範囲で
     導く（`build_pennant_postseason_view_service(世界の範囲)`）。世界の範囲は渡されたワークスペースで作る（世界の id は
     台帳が返したものだけなので、ほかのワークスペースの世界の範囲はできない。世界ごとにワークスペースを読み直さない）。
-    作成フォームを出すかの上限の判定は、作成の検査と同じ台帳の `count_by_owner`（全ワークスペースで数える）で行う。
+    作成フォームの代わりに出す理由と使用量（`quota`）は、作成の検査と同じ台帳の `usage()` と、
+    同じ上限（`_workspace_quota()`）で決める。
     """
     return PennantWorldViewService(
         summaries=DjangoWorldSummaryQuery(workspace_id),
@@ -494,6 +495,7 @@ def build_pennant_world_view(workspace_id: int) -> PennantWorldViewService:
         postseason_status_for=lambda world_id, year: build_pennant_postseason_view_service(
             WorldScope.pennant(workspace_id, world_id)
         ).status(year),
+        quota=_workspace_quota(),
     )
 
 
@@ -633,17 +635,31 @@ def build_workspace_list_query() -> DjangoWorkspaceListQuery:
     return DjangoWorkspaceListQuery()
 
 
+def _workspace_quota() -> WorkspaceQuota:
+    """上限（`WorkspaceQuota`）を settings から作る。
+
+    **上限を組み立てるのはここだけ**（組み立て口ごとに値がずれないように）。
+
+    値は環境変数から: `WORKSPACE_MAX_OWNED`（既定3）・`PENNANT_MAX_WORLDS`（既定5）・`PENNANT_MAX_GAMES`（既定40000）。
+    """
+    return WorkspaceQuota(
+        max_owned_workspaces=settings.WORKSPACE_MAX_OWNED,
+        max_pennant_worlds=settings.PENNANT_MAX_WORLDS,
+        max_pennant_games=settings.PENNANT_MAX_GAMES,
+    )
+
+
 def build_workspace_service() -> WorkspaceService:
     """ワークスペースの作成・設定のサービスを組み立てる（W4。#80）。
 
     範囲を取らない: 作成はワークスペースが決まる前の操作で、設定は id でワークスペースそのものの台帳を書く。
-    上限は `settings.WORKSPACE_MAX_OWNED`（環境変数。既定3）から作る。
+    上限は `_workspace_quota()`（settings の環境変数から作る）。
     作成で見本のリーグを入れる関数（W5）は、作ったワークスペースの実データの範囲で `build_workspace_sample_service` を
     組み立てて呼ぶ（範囲を作るのはここ。サービスは id と key しか知らない）。
     """
     return WorkspaceService(
         workspaces=DjangoWorkspaceRepository(),
-        quota=WorkspaceQuota(max_owned_workspaces=settings.WORKSPACE_MAX_OWNED),
+        quota=_workspace_quota(),
         new_key=new_workspace_key,
         atomic=transaction.atomic,
         seed_sample_league=lambda workspace_id, key: build_workspace_sample_service(
@@ -725,6 +741,7 @@ def build_pennant_world_service(scope: WorldScope) -> PennantWorldService:
             WorldScope.pennant(scope.workspace_id, world_id)
         ).ensure_schedule(),
         workspace_id=scope.workspace_id,
+        quota=_workspace_quota(),
     )
 
 
@@ -1130,7 +1147,9 @@ def pennant_index(request):
     """ペナントの世界の一覧と作成。一覧はワークスペースを読める人なら誰でも、作成（POST）は持ち主・編集者だけ。
 
     世界の一覧は「あなたの世界」と「ほかの人の世界」に分け、オーナーの名前は出さない。
-    作成フォームは世界を作れる人（`WorkspaceAccess.can_create_world()`）にだけ出す（上限に達していれば理由を出す）。
+    作成フォームとワークスペースの使用量は世界を作れる人（`WorkspaceAccess.can_create_world()`）にだけ出す。世界の数が
+    上限か、残りの試合の枠にどのリーグも入らなければ、フォームの代わりに理由を出す（`PennantWorldQuota.blocker`）。
+    選んだリーグの組み合わせが枠を超えるときは、送ったときに理由を出して何も作らない（`create_world_with_schedule`）。
     公開ワークスペースを見に来ただけの人が、他人のワークスペースに世界を作れないようにする（作成はワークスペースへの書き込み）。
     """
     if request.method not in ("GET", "HEAD", "POST"):
@@ -1145,11 +1164,10 @@ def pennant_index(request):
 
     views = build_pennant_world_view(_workspace_id(request))
     form = None
+    quota = None
     if can_create:
-        form_args = {
-            "groups": build_league_view_service(_real_scope(request)).list_teams_by_league().rows,
-            "default_year": _next_season_year(request),
-        }
+        groups = build_league_view_service(_real_scope(request)).list_teams_by_league().rows
+        form_args = {"groups": groups, "default_year": _next_season_year(request)}
         form = (
             PennantWorldForm(request.POST, **form_args) if request.method == "POST" else PennantWorldForm(**form_args)
         )
@@ -1157,11 +1175,18 @@ def pennant_index(request):
             created = _create_world(request, form)
             if created is not None:
                 return redirect(_url(request, "pennant_world", created))
+        # 使用量は作成を試みた後に数える（作れなかったときも、今の使用量と理由を出す）
+        quota = views.quota({group.league_id: len(group.teams) for group in groups})
+        form.show_league_reserves(quota.league_reserves)
 
     return render(
         request,
         "pennant/world_list.html",
-        {"worlds": views.list_worlds(request.user.id if request.user.is_authenticated else None), "form": form},
+        {
+            "worlds": views.list_worlds(request.user.id if request.user.is_authenticated else None),
+            "form": form,
+            "quota": quota,
+        },
     )
 
 

@@ -10,16 +10,25 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from datetime import date
 
 from ..domain.exceptions import InvalidPostseason
 from ..domain.pennant.postseason import PostseasonStatus
 from ..domain.pennant.season import is_final_season, season_phase, season_year
-from ..domain.pennant.world import MAX_WORLDS_PER_OWNER, WORLD_LIMIT_MESSAGE
+from ..domain.pennant.world import world_game_reserve
 from ..domain.repositories import WorldRepository
-from .dto import OwnRace, OwnStanding, PennantWorldList, PennantWorldListRow, WorldContext, WorldSummary
+from ..domain.workspace import WorkspaceQuota
+from .dto import (
+    OwnRace,
+    OwnStanding,
+    PennantWorldList,
+    PennantWorldListRow,
+    PennantWorldQuota,
+    WorldContext,
+    WorldSummary,
+)
 from .league_view import LeagueViewService
 from .pennant_race import own_race, tiebreak_for
 from .queries import GameListQuery, WorldSummaryQuery
@@ -43,9 +52,11 @@ class PennantWorldViewService:
         standings_for: Callable[[int], LeagueViewService],
         games_for: Callable[[int], GameListQuery],
         postseason_status_for: Callable[[int, int], PostseasonStatus],
+        quota: WorkspaceQuota,
     ) -> None:
         self._summaries = summaries
         self._worlds = worlds
+        self._quota = quota
         self._standings_for = standings_for
         self._games_for = games_for
         self._postseason_status_for = postseason_status_for
@@ -99,23 +110,30 @@ class PennantWorldViewService:
 
         どちらも最後に進めた日が新しい順（まだ進めていない世界は後ろ）。`viewer_id` が None
         （未ログイン）なら、自分の世界は無い。オーナーのいない世界（コマンドで作った世界）は
-        ほかの人の世界。
-
-        上限に達したか（作成フォームを出すか）は、作成の検査と同じ `count_by_owner`（全ワークスペースで数える）で
-        決める。このワークスペースの自分の世界の数で決めると、ほかのワークスペースに世界を持つ人に、送っても
-        拒まれるフォームを見せてしまう。未ログインなら数えない。
+        ほかの人の世界。ワークスペースの使用量と上限は `quota`（世界を作れる人にだけ出す）。
         """
         rows = sorted(
             self.list_rows(), key=lambda row: (row.context.today or date.min, row.context.world_id), reverse=True
         )
         mine = [row for row in rows if viewer_id is not None and row.context.owner_id == viewer_id]
         others = [row for row in rows if row not in mine]
-        return PennantWorldList(
-            mine=mine,
-            others=others,
-            world_limit=MAX_WORLDS_PER_OWNER,
-            owned_count=self._worlds.count_by_owner(viewer_id) if viewer_id is not None else 0,
-            limit_message=WORLD_LIMIT_MESSAGE,
+        return PennantWorldList(mine=mine, others=others)
+
+    def quota(self, source_team_counts: Mapping[int, int]) -> PennantWorldQuota:
+        """ワークスペースの使用量と上限、作成フォームの代わりに出す理由、リーグごとの見込みの試合数。
+
+        `source_team_counts` は分岐元に選べるリーグ（このワークスペースの実データ）の id → 球団の数。
+        使用量は作成の検査（`PennantWorldService.create_world_with_schedule`）と同じ `WorldRepository.usage()` で数える
+        （違う数で判定すると、送っても拒まれるフォームや、作れるのに出ないフォームになる）。世界を作れる人にだけ呼ぶ。
+        """
+        usage = self._worlds.usage()
+        return PennantWorldQuota(
+            world_count=usage.world_count,
+            max_worlds=self._quota.max_pennant_worlds,
+            reserved_games=usage.reserved_games,
+            max_games=self._quota.max_pennant_games,
+            blocker=self._quota.world_creation_blocker(usage, source_team_counts.values()),
+            league_reserves={league_id: world_game_reserve(count) for league_id, count in source_team_counts.items()},
         )
 
     def _row_of(self, summary: WorldSummary) -> PennantWorldListRow:

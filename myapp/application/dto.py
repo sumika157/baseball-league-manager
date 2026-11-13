@@ -1790,18 +1790,32 @@ class PennantWorldList:
 
     mine: list[PennantWorldListRow]
     others: list[PennantWorldListRow]
-    # 1人が持てる世界の数（上限に達したら作成フォームを出さない）
-    world_limit: int
-    # 見ている人がオーナーの世界の数。作成の検査（`WorldRepository.count_by_owner`）と同じ数え方で、
-    # ほかのワークスペースの世界も含む（`mine` はこのワークスペースの世界だけなので、数に使わない）
-    owned_count: int
-    # 上限に達したときに、作成フォームの代わりに出す理由（作成の拒否と同じ文言）
-    limit_message: str
+
+
+@dataclass(frozen=True)
+class PennantWorldQuota:
+    """世界の一覧に、世界を作れる人（持ち主・編集者）にだけ出す、ワークスペースの使用量と上限（W6 #82）。
+
+    使用量は作成の検査と同じ数え方（`WorldRepository.usage()`。作成者を問わず、このワークスペースの世界だけ）。
+    """
+
+    world_count: int
+    max_worlds: int
+    # 見込みの試合数（10シーズンぶんの公式戦）の合計と上限
+    reserved_games: int
+    max_games: int
+    # 作成フォームの代わりに出す理由（作れるなら None。文言の出典は `WorkspaceQuota`）
+    blocker: str | None
+    # 分岐元に選べるリーグごとの見込みの試合数（リーグの id → 試合数。フォームのリーグの横に出す）
+    league_reserves: Mapping[int, int]
 
     @property
-    def at_limit(self) -> bool:
-        """作ろうとしても拒まれるときだけ真（作成の検査と同じ数で判定する）。"""
-        return self.owned_count >= self.world_limit
+    def reserved_games_display(self) -> str:
+        return f"{self.reserved_games:,}"
+
+    @property
+    def max_games_display(self) -> str:
+        return f"{self.max_games:,}"
 
 
 @dataclass(frozen=True)
