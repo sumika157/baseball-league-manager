@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date
 
 from django.http import QueryDict
 
@@ -34,11 +35,14 @@ TAB_OF_SECTION: Mapping[PlanSection, str] = {
     PlanSection.ROTATION: "pitching",
     PlanSection.CLOSER: "pitching",
 }
-TABS = ("active", "lineup", "pitching", "release")
+TABS = ("active", "lineup", "pitching", "release", "development")
 DEFAULT_TAB = "active"
 # 「戦力外」タブ（シーズン終了で締められるときだけ出す）と、その hidden の `section`。編成の区画（`PlanSection`）とは別
 RELEASE_TAB = "release"
 RELEASE_SECTION = "release"
+# 「育成」タブ（補強の窓＝締めた後〜7月31日だけ出す。#170 P3a）と、その hidden の `section`
+DEVELOPMENT_TAB = "development"
+DEVELOPMENT_SECTION = "development"
 
 ACTION_MANUAL = "manual"
 ACTION_SAVE = "save"
@@ -245,6 +249,21 @@ def parse_expected_year(post: QueryDict) -> int:
     if year is None:
         raise ClubInputError(REOPEN)
     return year
+
+
+def parse_midseason_promotion(post: QueryDict) -> tuple[int, date]:
+    """「育成」タブの「支配下に登録」: 選手の id と、画面を開いたときの次の公式戦の日。
+
+    どちらかが欠けている・読めないなら古い画面として弾く（キーの欠落を既定値で埋めない）。
+    """
+    player_id = to_int(post.get("player"))
+    try:
+        next_game_on = date.fromisoformat(post.get("expected_next_game_on") or "")
+    except ValueError:
+        raise ClubInputError(REOPEN) from None
+    if player_id is None:
+        raise ClubInputError(REOPEN)
+    return player_id, next_game_on
 
 
 def parse_releases(post: QueryDict, current: ReleasePlanView) -> list[int]:

@@ -30,6 +30,7 @@ from ..application.dto import (
     GameEditData,
     GameEditPlateAppearance,
     Listing,
+    MidseasonRegistrationView,
     PlayerRatingsCard,
     PlayerRatingsHistory,
     RatingsTable,
@@ -45,6 +46,7 @@ from ..application.pennant_championships import PostseasonHistoryReader
 from ..application.pennant_club_details import ClubDetailsService
 from ..application.pennant_history import PennantHistoryService
 from ..application.pennant_home import PennantHomeService
+from ..application.pennant_midseason import MidseasonRegistrationService
 from ..application.pennant_offseason import PennantOffseasonService
 from ..application.pennant_offseason_view import OffseasonViewService
 from ..application.pennant_postseason import PennantPostseasonService, PostseasonBracketReader
@@ -97,6 +99,7 @@ from ..infrastructure.queries import (
     DjangoAwardQuery,
     DjangoChampionshipQuery,
     DjangoClubTenureQuery,
+    DjangoDevelopmentRosterQuery,
     DjangoFieldingTotalsQuery,
     DjangoGameListQuery,
     DjangoHomeStadiumQuery,
@@ -123,6 +126,7 @@ from ..infrastructure.repositories import (
     DjangoFixtureRepository,
     DjangoGameRepository,
     DjangoLeagueRepository,
+    DjangoMidseasonRegistrationRepository,
     DjangoRatingsRepository,
     DjangoReleasePlanRepository,
     DjangoTeamRepository,
@@ -133,6 +137,8 @@ from .club_input import (
     ACTION_MANUAL,
     ACTIONS,
     DEFAULT_TAB,
+    DEVELOPMENT_SECTION,
+    DEVELOPMENT_TAB,
     RELEASE_SECTION,
     RELEASE_TAB,
     SECTIONS,
@@ -148,6 +154,7 @@ from .club_input import (
     parse_closer,
     parse_expected_year,
     parse_lineup,
+    parse_midseason_promotion,
     parse_releases,
     parse_rotation,
     player_option,
@@ -1219,10 +1226,31 @@ def build_club_details_service(world_id: int) -> ClubDetailsService:
     )
 
 
+def build_midseason_registration_service(world_id: int) -> MidseasonRegistrationService:
+    """ペナントの世界ひとつの、期中の支配下登録（編成の「育成」タブ。#170 P3a）のサービスを組み立てる。
+
+    **リポジトリと参照クエリはすべて渡された世界の範囲で作る**（他の世界の球団の選手は、読めも書けもしない）。
+    昇格と登録日の記録を1つにまとめるので、`transaction.atomic` もここで渡す。世界の id が正しくなければ InvalidWorld。
+    """
+    scope = WorldScope.pennant(world_id)
+    return MidseasonRegistrationService(
+        world_id=world_id,
+        worlds=DjangoWorldRepository(),
+        leagues=DjangoLeagueRepository(scope),
+        teams=DjangoTeamRepository(scope),
+        fixtures=DjangoFixtureRepository(scope),
+        ratings=DjangoRatingsRepository(scope),
+        registrations=DjangoMidseasonRegistrationRepository(scope),
+        roster=DjangoDevelopmentRosterQuery(scope),
+        atomic=transaction.atomic,
+    )
+
+
 def pennant_club(request, world_id):
     """編成。1軍登録・オーダー・投手陣の3タブ（`?tab=`）と、シーズン終了で締められるときだけ「戦力外」タブ。
 
     受け持つ球団の編成を、区画ごとに自動か手動のどちらかで見せる。「戦力外」は締めるときの戦力外の指名（自動か手動）。
+    補強の窓（シーズンを締めた後〜7月31日）の中だけ「育成」タブ（育成選手を行ごとに支配下に登録する。#170 P3a）。
 
     GET は誰でも（読み取り専用）、POST はオーナーだけ（未ログインはログインへ、ほかの人は 403）。
     POST は区画ごとに「手動にする」「保存する」「自動に戻す」を受け、成功したら同じタブへ戻る
@@ -1248,6 +1276,8 @@ def _post_club(request, world: WorldContext):
         return redirect(club_url)
     if request.POST.get("section") == RELEASE_SECTION:
         return _post_release(request, world)
+    if request.POST.get("section") == DEVELOPMENT_SECTION:
+        return _post_development(request, world)
     section = SECTIONS.get(request.POST.get("section", ""))
     action = request.POST.get("action", "")
     if section is None or action not in ACTIONS:
@@ -1319,6 +1349,37 @@ def _post_release(request, world: WorldContext):
     return redirect(f"{club_url}?tab={RELEASE_TAB}")
 
 
+def _post_development(request, world: WorldContext):
+    """「育成」タブの「支配下に登録」。画面を開いたときの次の公式戦の日（`expected_next_game_on`）を送ってもらう。
+
+    登録できたら同じタブへ戻す（窓の中ならタブは残る）。古い画面・窓の外・上限・育成でない選手などは、理由を出して
+    同じタブへ戻す（窓の外ならタブは出ず、既定のタブに落ちる）。
+    """
+    tab_url = f"{reverse('pennant_club', args=[world.world_id])}?tab={DEVELOPMENT_TAB}"
+    try:
+        player_id, expected_next_game_on = parse_midseason_promotion(request.POST)
+        promoted = build_midseason_registration_service(world.world_id).promote(
+            player_id, expected_next_game_on=expected_next_game_on
+        )
+    except (ClubInputError, DomainError) as error:
+        messages.error(request, str(error))
+        return redirect(tab_url)
+    messages.success(
+        request,
+        f"{promoted.name}を支配下に登録しました（背番号 {promoted.number}。"
+        f"{promoted.registered_on.month}月{promoted.registered_on.day}日の試合から出られます）。",
+    )
+    return redirect(tab_url)
+
+
+def _development_view(world: WorldContext) -> MidseasonRegistrationView | None:
+    """「育成」タブの材料。補強の窓の外・受け持ちが無いときは None（タブを出さない）。"""
+    try:
+        return build_midseason_registration_service(world.world_id).view()
+    except DomainError:
+        return None
+
+
 def _release_view(world: WorldContext) -> ReleasePlanView | None:
     """「戦力外」タブの材料。指名できないとき（公式戦の途中・締めた後・最終シーズン）・受け持ちが無いときは None。
 
@@ -1381,17 +1442,28 @@ def _render_club(
     GM が決めた形のまま出す。解決後の値から作ると、保存したときに上書きが AI の形で置き換わる）。
     「戦力外」タブは公式戦を終えてから締めるまで出す（ポストシーズン中も出す。条件は `can_choose_releases`）。
     出せないときに `?tab=release` が来たら既定のタブに落とす。
+    「育成」タブは補強の窓（締めた後〜7月31日。条件は `MidseasonRegistrationService.is_open`）の中だけ出す。
+    出せないときに `?tab=development` が来たら既定のタブに落とす（「戦力外」タブとは時期が重ならない）。
     """
     # ほかのタブではタブを出すかだけを決める（指名できるか。支配下の一覧までは読まない）
     release = None
     has_release_tab = False
+    development = None
+    has_development_tab = False
     if world.managed_team_id is not None:
         if tab == RELEASE_TAB:
             release = _release_view(world)
             has_release_tab = release is not None
         else:
             has_release_tab = build_pennant_offseason_service(world.world_id).can_choose_releases()
+        if tab == DEVELOPMENT_TAB:
+            development = _development_view(world)
+            has_development_tab = development is not None
+        else:
+            has_development_tab = build_midseason_registration_service(world.world_id).is_open()
     if tab == RELEASE_TAB and release is None:
+        tab = DEFAULT_TAB
+    if tab == DEVELOPMENT_TAB and development is None:
         tab = DEFAULT_TAB
     context: dict = {
         "is_owner": _is_owner(request, world),
@@ -1400,6 +1472,8 @@ def _render_club(
         "club_error": None,
         "release": release,
         "has_release_tab": has_release_tab,
+        "development": development,
+        "has_development_tab": has_development_tab,
     }
     if world.managed_team_id is None:
         return render(request, "pennant/club.html", {**context, "world": world}, status=status)
@@ -1434,10 +1508,11 @@ def _render_club(
 
     # 選択肢は1軍の選手。保存済みの上書きに入っている1軍外の選手も、印を付けて残す（保存時にドメインが弾く）
     kept = {slot.player_id for slot in lineup} | {slot.player_id for slot in rotation} | {closer}
-    # 「戦力外」タブは編成の選手の詳細を使わない（下で支配下の詳細を作る）
+    # 「戦力外」タブは編成の選手の詳細を使わない（下で支配下の詳細を作る）。
+    # 「育成」タブも使わない（材料は `development`）
     details = (
         ()
-        if tab == RELEASE_TAB
+        if tab in (RELEASE_TAB, DEVELOPMENT_TAB)
         else build_club_details_service(world.world_id).details(world.managed_team_id, view.year, view.players)
     )
     batters = [

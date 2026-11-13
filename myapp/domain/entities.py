@@ -513,6 +513,22 @@ class Player:
         self.is_active = False
 
 
+def ensure_room_for_registered(team_name: str, registered_count: int, limit: int | None) -> None:
+    """支配下の選手（いま `registered_count` 人）が1人増えても上限 `limit` を超えないか。
+
+    超えれば `RegisteredPlayerLimitExceeded`。
+
+    **判定とメッセージの出典はここだけ**。集約の `Team.ensure_room_for_registered` が呼び、集約を組み立てない
+    参照の画面（編成の「育成」タブ。#170 P3a）も、支配下に登録できない理由を同じ関数で出す。
+    """
+    ensure_quota_not_exceeded(
+        registered_count + 1,
+        limit,
+        f"「{team_name}」の支配下選手登録数が上限（{limit}人）を超えています。",
+        RegisteredPlayerLimitExceeded,
+    )
+
+
 @dataclass
 class Team:
     """チーム。集約ルート。
@@ -842,14 +858,10 @@ class Team:
 
         支配下が増える操作（支配下での選手追加・支配下としての移籍受け入れ・昇格）が、`add_player`・
         `accept_transfer`・`promote_player` の中で**増える前に**呼ぶ（育成の追加は支配下が増えないので呼ばない）。
-        管理画面のように集約の操作を通らない書き込みは自分で呼ぶ。判定とメッセージの出典はここだけ。
+        管理画面のように集約の操作を通らない書き込みは自分で呼ぶ。判定とメッセージの出典は `ensure_room_for_registered`
+        （モジュールの関数。集約を組み立てない参照の画面も同じ関数で理由を出す）。
         """
-        ensure_quota_not_exceeded(
-            self.registered_player_count + 1,
-            limit,
-            f"「{self.name}」の支配下選手登録数が上限（{limit}人）を超えています。",
-            RegisteredPlayerLimitExceeded,
-        )
+        ensure_room_for_registered(self.name, self.registered_player_count, limit)
 
 
 @dataclass

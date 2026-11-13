@@ -30,7 +30,7 @@ from functools import cache
 
 from ..simulation.randomness import game_seed, make_random
 from ..simulation.ratings import POTENTIAL_AVERAGE, Potential
-from ..value_objects import Position
+from ..value_objects import DraftPick, Position
 from .draft import NUMBER_POOLS, DraftRoute, draftee_count, draw_number
 from .offseason_player import OffseasonClub, OffseasonPlayer, retirement_value
 from .outlook import projected_ratings
@@ -70,10 +70,21 @@ def development_start_year(player: OffseasonPlayer) -> int:
     （開幕3年目に一斉に満了させないため）。育成ドラフトの指名の無い分岐した育成（外国人の育成など）は、開幕3年目の
     オフにそろって満了の判定を受ける（実データの日本人の育成は投入で指名を持つので当たらない）。
     """
-    draft = player.profile.draft
+    return contract_start_year(player.profile.draft, joined_year=player.joined_year)
+
+
+def contract_start_year(draft: DraftPick | None, *, joined_year: int) -> int:
+    """`development_start_year` の材料版（ドラフトの指名と今の在籍の開始年から）。
+
+    編成の「育成」タブの「何年目」も使う。"""
     if draft is not None and draft.is_development:
         return draft.entry_year
-    return player.joined_year
+    return joined_year
+
+
+def contract_season(start_year: int, year: int) -> int:
+    """`year` 年が育成契約の何年目か（起点の年が1年目）。編成の「育成」タブに出す。"""
+    return year - start_year + 1
 
 
 def is_contract_expiring(start_year: int, year: int) -> bool:
@@ -82,7 +93,7 @@ def is_contract_expiring(start_year: int, year: int) -> bool:
     `DEVELOPMENT_CONTRACT_YEARS` 年目（`year - start_year + 1`）のオフに満了し、再契約した後は毎年のオフに満了する
     （NPB の再契約は1シーズンごと。再契約の記録は保存しないので、3年を過ぎた育成は毎年が満了の年になる）。
     """
-    return year - start_year + 1 >= DEVELOPMENT_CONTRACT_YEARS
+    return contract_season(start_year, year) >= DEVELOPMENT_CONTRACT_YEARS
 
 
 @cache
@@ -160,6 +171,16 @@ def confirm_promotions(
         Promotion(player_id=player_id, team_id=club.team_id, number=draw_number(rng, used, NUMBER_POOLS))
         for player_id in wished[:count]
     )
+
+
+def midseason_promotion_number(used: set[str], *, world_seed: int, year: int, team_id: int, player_id: int) -> str:
+    """期中の昇格（#170 P3a）の背番号。空いている支配下の番号から引く（オフの昇格と同じ `draft.draw_number`）。
+
+    GM は背番号を選ばない（自動）。乱数は世界のシード・登録の年・球団・選手から作るので、同じ状態なら同じ番号になる。
+    `used` はいま球団で使われている番号（引いた番号を足す）。
+    """
+    rng = make_random(game_seed(world_seed, year, f"midseason-promotion-number-{team_id}-{player_id}"))
+    return draw_number(rng, used, NUMBER_POOLS)
 
 
 def decide_expirations(

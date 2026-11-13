@@ -26,6 +26,8 @@ from ..application.dto import (
     ClubTenure,
     ContractFacts,
     DeclarationFact,
+    DevelopmentPlayerFacts,
+    DevelopmentRoster,
     FaSubject,
     FaSubjects,
     FielderUsage,
@@ -59,7 +61,7 @@ from ..application.dto import (
     WorldSummary,
 )
 from ..domain.entities import Game, jersey_number_in, winning_team_id
-from ..domain.exceptions import WorldNotFound
+from ..domain.exceptions import TeamNotFound, WorldNotFound
 from ..domain.pennant.postseason import PostseasonFormat, PostseasonResult
 from ..domain.pennant.retirement import PlayingTime
 from ..domain.pennant.world import WorldScope
@@ -106,6 +108,7 @@ from .scoping import (
     games_in_worlds,
     leagues_in,
     leagues_in_worlds,
+    midseason_registrations_in,
     period_covering,
     players_in,
     ratings_in,
@@ -1137,7 +1140,15 @@ class DjangoOffseasonQuery:
         # 翌年も在籍し、前の年から居た選手（新人を除く）。両方の能力がある選手だけが能力の変化を持つ
         staying = stints.filter(period_covering(year + 1), from_year__lte=year).values(*_OFFSEASON_STINT_FIELDS)
         # オフの昇格（#170）: 締める年より前から在籍し、翌年の年で育成から支配下に上がった在籍
-        promoted = stints.filter(promoted_year=year + 1, from_year__lte=year).values(*_OFFSEASON_STINT_FIELDS)
+        # 翌年の期中に支配下に登録した在籍（登録日のある在籍。#170 P3a）は、昇格の年が同じでもオフの昇格ではない
+        midseason = midseason_registrations_in(self._scope).filter(
+            team_id=OuterRef("team_id"), player_id=OuterRef("player_id"), registered_on__year=year + 1
+        )
+        promoted = (
+            stints.filter(promoted_year=year + 1, from_year__lte=year)
+            .exclude(Exists(midseason))
+            .values(*_OFFSEASON_STINT_FIELDS)
+        )
         leagues = leagues_in(self._scope).order_by("id").values_list("id", "name")
         return OffseasonFacts(
             leagues=tuple(LeagueOption(id=league_id, name=name) for league_id, name in leagues),
@@ -1289,6 +1300,46 @@ class DjangoClubTenureQuery:
                 stints=tuple(ClubStint(team_id, stint.from_year, stint.to_year) for stint in stints),
             )
         return result
+
+
+class DjangoDevelopmentRosterQuery:
+    """DevelopmentRosterQuery の Django ORM 実装。球団（リーグの上限）を1本、その年の在籍と選手を1本、
+    育成の選手のその球団での在籍を1本で読む（選手の人数によらない）。"""
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def for_team(self, team_id: int, year: int) -> DevelopmentRoster:
+        team = teams_in(self._scope).select_related("league").filter(id=team_id).first()
+        if team is None:
+            raise TeamNotFound(f"球団が見つかりません（id={team_id}）。")
+        stints = list(stints_in(self._scope).filter(period_covering(year), team_id=team_id).select_related("player"))
+        # その年の区分（判定の出典は domain の `ContractStatus.in_year`。集約の支配下の数え方と同じ）
+        development = []
+        registered = 0
+        for stint in stints:
+            status = ContractStatus.in_year(ContractStatus.from_label(stint.signed_as), stint.promoted_year, year)
+            if status is ContractStatus.REGISTERED:
+                registered += 1
+            else:
+                development.append(stint)
+        development.sort(key=lambda stint: (JerseyNumber(stint.number).sort_key, stint.player_id))
+        tenures = DjangoClubTenureQuery(self._scope).for_players(team_id, [stint.player_id for stint in development])
+        return DevelopmentRoster(
+            team_name=team.name,
+            registered_count=registered,
+            registered_limit=team.league.registered_player_limit if team.league is not None else None,
+            players=tuple(
+                DevelopmentPlayerFacts(
+                    player_id=stint.player_id,
+                    name=stint.player.name,
+                    number=stint.number,
+                    joined_year=stint.from_year,
+                    tenure=tenures[stint.player_id],
+                )
+                for stint in development
+            ),
+        )
 
 
 def _contract_facts(stint: orm_models.PlayerStint) -> ContractFacts:

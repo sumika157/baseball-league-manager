@@ -1013,6 +1013,31 @@ class PennantReleasePlanEntry(models.Model):
         return f"{self.plan} {self.player_id}"
 
 
+class PennantMidseasonRegistration(models.Model):
+    """ペナントの期中の支配下登録（#170 P3a）。球団・選手・登録日（その選手が出られる最初の公式戦の日）。
+
+    在籍は年単位で、オフの昇格（締めた年 Y に翌年 Y+1 で書く）と Y+1 年の期中の昇格を在籍からは区別できないので、
+    登録日だけを足す。昇格の事実は在籍（`PlayerStint.promoted_year`）が持ち、登録日の年と一致することは
+    リポジトリが書く前に照合する（`reinforcement.ensure_registration_matches_stint`）。
+    世界の列は持たない。球団のリーグで世界が決まる（編成と同じ）。
+    """
+
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="+", verbose_name="球団")
+    player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="+", verbose_name="選手")
+    registered_on = models.DateField(verbose_name="登録日")
+
+    class Meta:
+        verbose_name = "ペナントの期中の支配下登録"
+        verbose_name_plural = "ペナントの期中の支配下登録"
+        ordering = ["registered_on", "player_id"]
+        constraints = [
+            models.UniqueConstraint(fields=["player", "registered_on"], name="unique_pennant_midseason_registration"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.registered_on} {self.player_id}"
+
+
 class PennantAward(models.Model):
     """ペナントの表彰。締めたシーズンのタイトル受賞者（部門の1位。同率は1人ずつ1行）。
 

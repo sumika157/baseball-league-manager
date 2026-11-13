@@ -24,6 +24,7 @@ from .dto import (
     AwardRow,
     ChampionshipRow,
     ClubTenure,
+    DevelopmentRoster,
     FaSubjects,
     GameNote,
     GameRow,
@@ -405,4 +406,17 @@ class ChampionshipQuery(Protocol):
 
     def list_championships(self) -> list[ChampionshipRow]:
         """範囲の日本一の記録（古い順）。"""
+        ...
+
+
+@runtime_checkable
+class DevelopmentRosterQuery(Protocol):
+    """球団の育成選手と支配下の人数（編成の「育成」タブ。#170 P3a）。集約は組み立てない。
+
+    読む本数は選手の人数によらず一定。
+    """
+
+    def for_team(self, team_id: int, year: int) -> DevelopmentRoster:
+        """`year` 年に球団 `team_id` に在籍する育成選手（背番号の順）と、その年の支配下の人数・リーグの上限。
+        区分の判定は domain の `ContractStatus.in_year`。範囲の外の球団は TeamNotFound。"""
         ...

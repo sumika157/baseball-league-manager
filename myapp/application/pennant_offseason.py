@@ -36,10 +36,13 @@ GM の指名は P2）。昇格は `Team.promote_player` に翌年（Y+1）を渡
 締める年のポストシーズンの優勝球団（日本一）も**記録として保存する**（#242。表彰と同じ例外）。勝ち上がりは外で1回だけ導き、
 締められるかの検査（ポストシーズンが終わったか）と、書く優勝球団の両方に使う。
 
-**前提: 世界の `Team` 集約に書くのは、世界の作成とこの処理だけ。** 外で読んだ `Team` を中でそのまま
-`save()` して安全なのは、この前提による（`save()` は変わった行だけを書くが、比べる相手は今の DB なので、
-読んだあとに別の書き込みがあれば、集約の古い値が「違う」として書かれ、その書き込みを上書きして失う）。念のため、在籍の目印（`TeamRepository.roster_signature()`。行数・現在在籍の人数・
-最大の id）も読み込みの前後で比べ、変わっていれば書かずに断る。
+**前提: 世界の `Team` 集約に書くのは、世界の作成・この処理・期中の登録（`MidseasonRegistrationService`。
+#170 P3a）だけ。** 外で読んだ `Team` を中でそのまま `save()` して安全なのは、この前提による
+（`save()` は変わった行だけを書くが、比べる相手は今の DB なので、読んだあとに別の書き込みがあれば、
+集約の古い値が「違う」として書かれ、その書き込みを上書きして失う）。期中の登録は補強の窓（`ReinforcementWindow`。公式戦の対戦が残っているときだけ）の中でしか書かず、
+この処理は公式戦の対戦が残っていないときだけ動くので、時期が重ならない（`tests/integration/test_pennant_midseason.py`
+が固定する）。念のため、在籍の目印（`TeamRepository.roster_signature()`。行数・現在在籍の人数・最大の id・
+昇格した在籍の数）も読み込みの前後で比べ、変わっていれば書かずに断る。
 **世界の中で選手を書く操作を足すなら、その操作が `_state()` に現れるか、ここで中に読み直すこと。**
 
 同時に2回呼ばれても、翌年の能力の一意制約（選手 × 年）で後から来た方が
@@ -238,7 +241,9 @@ class PennantOffseasonService:
 
     def _state(
         self,
-    ) -> tuple[date | None, date | None, tuple[int, int, int], ReleasePlan | None, PostseasonFormat, DraftOrderRule]:
+    ) -> tuple[
+        date | None, date | None, tuple[int, int, int, int], ReleasePlan | None, PostseasonFormat, DraftOrderRule
+    ]:
         """締められるかと何を書くかを決める事実（最後に試合をした日・次の対戦の日・在籍の目印・受け持つ球団の戦力外の指名・
         ポストシーズンの方式・ドラフトの指名順の規則）。
 
