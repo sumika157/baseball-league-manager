@@ -59,20 +59,28 @@ presentation  →  application  →  domain  ←  infrastructure
 - **依存の組み立ては `presentation/views.py` の `build_*()` だけ**。サービスやリポジトリを別の場所（テンプレートタグ・管理画面・
   管理コマンド・テスト）で個別に組み立てていないか。テストは `tests/helpers.py` 経由で `build_league_view_service(real_scope())` などを呼ぶ。
 - **組み立て口・リポジトリ・参照クエリが範囲（`WorldScope(workspace_id, world_id)`）を必須で受け取っているか**。既定値を持たせる・
-  範囲を無視して全部読む・範囲を取らない例外（`admin_real_queryset` は `admin.py` だけ、ワークスペースの台帳
-  `build_workspace_access_query()`・`build_workspace_list_query()` は `views.py` だけ、`real_teams_of_outer_workspace()` は
+  範囲を無視して全部読む・範囲を取らない例外（`admin_real_queryset` は `admin.py` だけ、ワークスペースそのものの台帳
+  （`WorkspaceRepository`・`WorkspaceAccessQuery`・`WorkspaceListQuery`・`InvitationPreviewQuery`・`InvitationRepository`（トークンから引く `find_by_digest`。
+  取消 `delete` と期限切れの掃除 `delete_expired` はワークスペースの id で絞る））とその組み立て口 `build_workspace_access_query()`・`build_workspace_list_query()`・
+  `build_workspace_service()`・`build_workspace_member_service()`・`build_invitation_preview_query()` は `views.py`・
+  `admin.py`・管理コマンド `workspace_delete` だけ（`WorkspaceLedgerUsersTest.ALLOWED`）、`real_teams_of_outer_workspace()` は
   `infrastructure/queries.py` だけ）を決まった場所の外から使う、のどれかがあればワークスペース間の漏れになる。
-  新しい組み立て口は `test_wiring.py` の分類（両用・実データ専用・ペナント専用・台帳）に、新しい `Django*` の読み書きのクラスは
+  台帳は key・id・利用者・招待のトークンからワークスペースとそのメンバー・招待を引くだけで、中のデータ（リーグ・試合など）を
+  読んでいないか（担当の検査のために、そのワークスペースの実データのチームの id（`teams_in(WorldScope.real(ws))`）を読むのはよい）。ワークスペースの削除だけは中のデータを消すが、そのワークスペースの範囲（`WorldScope.real(ws)`）で絞って消しているか。
+  `build_workspace_management_query(workspace_id)` はワークスペースの id を必須で受け取る（範囲の代わり）。
+  新しい組み立て口は `test_wiring.py` の分類（両用・実データ専用・ペナント専用・台帳・1つのワークスペースの id を取るもの `MEMBER_BUILDERS`／`MEMBER_QUERIES`）に、新しい `Django*` の読み書きのクラスは
   `test_workspace_isolation.py` の検査の表に足してあるか。
   呼ぶ側ごとに一部の依存だけを渡すと、開く画面によって落ちるサービスになる（管理画面のテンプレートタグで実際に起きた）。
 - **管理画面（`admin.py`）に、登録の規則の別の数え方・別の削除の経路を作っていないか**。リーグ・チーム・球場を消せるかは登録画面と
   同じ参照クエリの行（`build_setup_query(scope)` の `deletion_blocker`）で決め、消すのは登録のサービス（`build_league_setup_service(scope)`
   の `delete_*`）、チーム名の一意は `ensure_team_name_free` を通す（W3 T5）。管理画面で件数を数え直す・Django の collector の連鎖で消す変更は、
-  サイトと管理画面で規則が食い違う。
+  サイトと管理画面で規則が食い違う。ワークスペースも同じで、編集者・担当者の割り当ては `WorkspaceMemberService` の
+  `validate_*`（フォームの検査）と `replace_*`（保存）、ワークスペースの削除は消せるかを `build_workspace_management_query(ws).contents()`
+  の `deletion_blocker`、消すのを `WorkspaceService.delete` に通す（W4 T6）。中間表（`Team.managers`・編集者の行）を管理画面から直接書く経路を足していないか。
 - **層をまたぐ受け渡しに素の `dict` を新しく使っていないか**。application が presentation に返す形は `application/dto.py` の
   dataclass にする（文字列キーの dict は綴りを間違えても静的検査が黙る）。既存の dict を触った変更なら、DTO へ寄せる余地を指摘してよい。
 - **サービスに別の対象のメソッドを足していないか**。application のサービスは対象ごとに分けてある（#219。参照は `LeagueViewService`・
-  `TeamViewService`・`GameViewService`、更新は `RosterService`・`GameRecordingService`・`LeagueSetupService`）。対象の違うメソッドを
+  `TeamViewService`・`GameViewService`、更新は `RosterService`・`GameRecordingService`・`LeagueSetupService`・`WorkspaceService`・`WorkspaceMemberService`）。対象の違うメソッドを
   既存のサービスに足しているなら、対象ごとの別サービスに置けないかを指摘する。分けるかどうかはユーザーが決めるので、「分ける案」として出す。
   参照のサービスに更新を足していないか（世界の範囲の参照用の組み立てから、現実の今日の年で書く更新を呼べるようになる）も見る。
 
