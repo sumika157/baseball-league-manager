@@ -21,6 +21,8 @@ from myapp.domain.pennant.schedule import (
 )
 from myapp.domain.simulation.randomness import game_seed, make_random
 
+from .doubles import OnlyRandom
+
 LEAGUES = {1: [1, 2, 3, 4, 5, 6], 2: [11, 12, 13, 14, 15, 16]}
 START = datetime.date(2026, 3, 27)  # 金曜
 
@@ -161,14 +163,7 @@ class ScheduleReproducibilityTests(TestCase):
         self.assertNotEqual(first, second)
 
     def test_only_random_is_used_from_the_source(self) -> None:
-        class OnlyRandom:
-            def __init__(self) -> None:
-                self._rng = random.Random(1)
-
-            def random(self) -> float:
-                return self._rng.random()
-
-        self.assertEqual(858, len(generate_schedule(LEAGUES, ScheduleRules(), START, OnlyRandom())))
+        self.assertEqual(858, len(generate_schedule(LEAGUES, ScheduleRules(), START, OnlyRandom(1))))
 
     def test_degenerate_random_source_still_terminates(self) -> None:
         class Zero:

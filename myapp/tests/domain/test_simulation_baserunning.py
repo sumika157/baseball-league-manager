@@ -12,20 +12,11 @@ from myapp.domain.simulation.fielding import draw_error, fielded_path, team_defe
 from myapp.domain.simulation.randomness import make_random
 from myapp.domain.value_objects import AdvanceReason, Base, ErrorKind, FieldingPosition, PlateAppearanceResult
 
+from .doubles import ScriptedRandom
+
 P = PlateAppearanceResult
 R = AdvanceReason
 FP = FieldingPosition
-
-
-class ScriptedRandom:
-    def __init__(self, *values: float) -> None:
-        self.values = values
-        self.index = 0
-
-    def random(self) -> float:
-        value = self.values[self.index % len(self.values)]
-        self.index += 1
-        return value
 
 
 def advances(result, occupied, *, outs=0, rng=None, speeds=None, batter=99):

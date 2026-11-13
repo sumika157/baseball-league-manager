@@ -172,6 +172,8 @@ class FormatOffseasonTest(TestCase):
             retired=(),
             released=(),
             retained=(),
+            promotions=(),
+            expired=(),
             draftees=(),
             signings=(),
             lotteries=(),
@@ -181,3 +183,4 @@ class FormatOffseasonTest(TestCase):
         text = multi_season_check.format_offseason(plan, [], 2026)
         self.assertIn("引退 0人", text)
         self.assertIn("戦力外 0人", text)
+        self.assertIn("昇格 0人", multi_season_check.format_development(plan, [], 2026, start_year=2026))

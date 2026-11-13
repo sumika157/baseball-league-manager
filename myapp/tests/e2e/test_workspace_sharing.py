@@ -12,7 +12,7 @@ import re
 
 from myapp.infrastructure import orm_models
 
-from ..helpers import build_roster_service, make_league, real_scope, ws_url
+from ..helpers import TEST_YEAR, build_roster_service, make_league, real_scope, ws_url
 from .base import PlaywrightTestCase
 
 WORKSPACE_NAME = "仲間のリーグ"
@@ -51,7 +51,9 @@ class WorkspaceSharingTest(PlaywrightTestCase):
         league = make_league("仲間リーグ", workspace=self.workspace)
         home = orm_models.Team.objects.create(league=league, name="ホームズ")
         orm_models.Team.objects.create(league=league, name="ビジターズ")
-        player = build_roster_service(real_scope(self.workspace)).register_player(home.id, "共有太郎", "18", "投手")
+        player = build_roster_service(real_scope(self.workspace)).register_player(
+            home.id, "共有太郎", "18", "投手", from_year=TEST_YEAR
+        )
 
         # 3. ヘッダーのメニューからメンバーの画面へ。ホームズの担当として招待のリンクを発行する
         owner.goto(self._url("dashboard"))

@@ -28,6 +28,7 @@ from myapp.presentation.views import build_pennant_world_service
 
 from ..helpers import (
     DEFAULT_WORKSPACE_KEY,
+    TEST_YEAR,
     make_league,
     make_workspace,
     play_game,
@@ -64,10 +65,10 @@ class ForkTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.skip_roster_check()
-        self.captain = self.roster.register_player(self.team.id, "主将", 10, "内野手")
-        self.pitcher = self.roster.register_player(self.team.id, "投手", 18, "投手")
-        self.retired = self.roster.register_player(self.team.id, "退団", 5, "外野手")
-        self.roster.register_player(self.rival.id, "相手の選手", 10, "内野手")
+        self.captain = self.roster.register_player(self.team.id, "主将", 10, "内野手", from_year=TEST_YEAR)
+        self.pitcher = self.roster.register_player(self.team.id, "投手", 18, "投手", from_year=TEST_YEAR)
+        self.retired = self.roster.register_player(self.team.id, "退団", 5, "外野手", from_year=TEST_YEAR)
+        self.roster.register_player(self.rival.id, "相手の選手", 10, "内野手", from_year=TEST_YEAR)
         self.roster.appoint_captain(self.team.id, self.captain.id)
         self.roster.retire_player(self.team.id, self.retired.id)
         orm_models.Player.objects.filter(id=self.captain.id).update(
@@ -188,7 +189,7 @@ class ForkTest(BaseCase):
 
         self.assertEqual(_real_counts(), before)
         stint = orm_models.PlayerStint.objects.get(player_id=self.captain.id, team=self.team)
-        self.assertEqual(stint.from_year, date.today().year, "実データの加入年は書き換わらない")
+        self.assertEqual(stint.from_year, TEST_YEAR, "実データの加入年は書き換わらない")
         self.assertIsNone(stint.to_year)
 
     def test_editing_the_world_does_not_change_the_real_data(self):
@@ -282,8 +283,8 @@ class ForkContractTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.skip_roster_check()
-        self.roster.register_player(self.team.id, "支配下", "18", "投手")
-        self.roster.register_player(self.team.id, "育成", "120", "投手", contract_label="育成")
+        self.roster.register_player(self.team.id, "支配下", "18", "投手", from_year=TEST_YEAR)
+        self.roster.register_player(self.team.id, "育成", "120", "投手", contract_label="育成", from_year=TEST_YEAR)
         orm_models.League.objects.filter(id=self.league.id).update(registered_player_limit=65)
         self.created = build_pennant_world_service(real_scope()).create_world(
             name="契約", owner_id=None, source_league_ids=[self.league.id], start_year=START, seed=7
@@ -318,7 +319,7 @@ class ForkOptionsTest(BaseCase):
         super().setUp()
         self.skip_roster_check()
         self.service_ = build_pennant_world_service(real_scope())
-        self.roster.register_player(self.team.id, "選手", 1, "内野手")
+        self.roster.register_player(self.team.id, "選手", 1, "内野手", from_year=TEST_YEAR)
         self.second_league = make_league(name="第二リーグ", display_order=1)
         self.other_team = orm_models.Team.objects.create(league=self.second_league, name="第二のチーム")
 
@@ -565,7 +566,7 @@ class PennantCommandsTest(BaseCase):
     def setUp(self):
         super().setUp()
         self.skip_roster_check()
-        self.roster.register_player(self.team.id, "選手", 1, "内野手")
+        self.roster.register_player(self.team.id, "選手", 1, "内野手", from_year=TEST_YEAR)
 
     def _create(self, *args):
         out = StringIO()

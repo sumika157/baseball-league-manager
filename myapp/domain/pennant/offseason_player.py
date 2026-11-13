@@ -154,6 +154,13 @@ class OffseasonPlayer:
     playing_time: PlayingTime = PlayingTime()
     # その球団での実績（戦力外で外されにくくするだけ。試合の成績には効かない）
     track_record: TrackRecord = TrackRecord()
+    # 今の在籍で育成から支配下に上がった年（`Stint.promoted_year`）。上がっていなければ None。
+    # 昇格した年のオフは戦力外にしない（`release.py`。#170）
+    promoted_year: int | None = None
+
+    def promoted_in(self, year: int) -> bool:
+        """`year` 年に育成から支配下に上がったか（オフの昇格は翌年の年で書くので、締める年 = 昇格の年）。"""
+        return self.promoted_year == year
 
     @property
     def is_registered(self) -> bool:

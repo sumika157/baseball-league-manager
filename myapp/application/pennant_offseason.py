@@ -1,5 +1,9 @@
-"""ペナントのシーズンを締める（オフ）。引退・戦力外・外国人の獲得・ドラフト・成長と衰え・編成の後始末・翌年の日程を、
-1つの操作にまとめる。
+"""ペナントのシーズンを締める（オフ）。引退・戦力外・育成の昇格と契約の満了・外国人の獲得・ドラフト・成長と衰え・
+編成の後始末・翌年の日程を、1つの操作にまとめる。
+
+育成の昇格と契約の満了（#170 P1）は、戦力外の後・外国人の獲得の前に AI が決める（`domain/pennant/development.py`。
+GM の指名は P2）。昇格は `Team.promote_player` に翌年（Y+1）を渡して書き（翌年から支配下・試合に出られる）、
+満了の自由契約は戦力外と同じく `release_player`（退団の経路は戦力外）。再契約は何も書かない。
 
 外国人の獲得（#169）は、戦力外の後・ドラフト会議の前に、AI が球団ごとの候補から選ぶ
 （`domain/pennant/foreign_market.py`。GM の指名は F2）。獲得した外国人は翌年 Y+1 から新外国人として加入し、
@@ -535,6 +539,8 @@ class PennantOffseasonService:
             next_year=year + 1,
             retired_count=len(plan.retired),
             released_count=len(plan.released),
+            promoted_count=len(plan.promotions),
+            expired_count=len(plan.expired),
             draftee_count=len(plan.draftees),
             signed_foreign_count=len(plan.signings),
             development_draftee_count=sum(1 for draftee in plan.draftees if draftee.is_development),
@@ -550,11 +556,13 @@ class PennantOffseasonService:
     def _apply_roster_changes(
         self, teams: list[Team], plan: OffseasonPlan, limits: Mapping[int | None, RosterLimits], year: int
     ) -> list[_RosterChange]:
-        """引退・戦力外・獲得した外国人・新人を集約の操作でメモリの上に反映する（保存は `_commit`）。
+        """引退・戦力外（育成契約の満了を含む）・昇格・獲得した外国人・新人を集約の操作でメモリの上に反映する
+        （保存は `_commit`）。
 
         変わった球団だけ返す。"""
         retired = set(plan.retired)
-        released = set(plan.released)
+        # 育成契約の満了の自由契約も、退団の経路は戦力外（2026-10-24 ユーザー決定。#170 Q3）
+        released = set(plan.released) | set(plan.expired)
         next_year = year + 1
         changes: list[_RosterChange] = []
         for team in teams:
@@ -563,7 +571,8 @@ class PennantOffseasonService:
             releasing = [player for player in team.active_players if player.id in released]
             draftees = [draftee for draftee in plan.draftees if draftee.team_id == team_id]
             signings = [signing for signing in plan.signings if signing.team_id == team_id]
-            if not retiring and not releasing and not draftees and not signings:
+            promotions = [promotion for promotion in plan.promotions if promotion.team_id == team_id]
+            if not retiring and not releasing and not promotions and not draftees and not signings:
                 continue
             # 引退と戦力外を先に済ませ、在籍を Y で閉じて退団の経路を記録する（空いた背番号を新人へ渡せる）
             for player in retiring:
@@ -572,6 +581,11 @@ class PennantOffseasonService:
                 team.release_player(player, year=year)
             added: list[Player] = []
             team_limits = _limits_of(team, limits)
+            # 育成から支配下への昇格（#170）。翌年から支配下（年は必ず渡す。省くと現実の今日の年になる）。
+            # 背番号は domain が空いている支配下の番号から引いた。支配下の上限は集約が検査する
+            # （domain が新人の枠を残して数えたので、ここでは失敗しない）
+            for promotion in promotions:
+                team.promote_player(promotion.player_id, JerseyNumber(promotion.number), next_year, limits=team_limits)
             # 獲得した外国人を新人の前に（獲得はドラフト会議の前。#169）。翌年から支配下・新外国人で加入する。
             # 前所属の区分はプロフィールに入っている（`ForeignSigning.profile`）。外国人の保有の人数は縛らない
             # （協約第82条の2。ゲームの上限 `foreign_market.MAX_FOREIGN_HELD` は domain が獲得の前に検査した）
@@ -611,7 +625,7 @@ class PennantOffseasonService:
 
     def _revert_plans(self, plan: OffseasonPlan, world: World) -> tuple[tuple[PlanSection, ...], int]:
         """引退・戦力外の選手を含む編成の区画を自動に戻して保存する（判断26。Wiki「ペナントモードの仕組み」の「決めたこと」）。受け持つ球団のぶんの区画と、戻した球団の数。"""
-        leaving = set(plan.retired) | set(plan.released)
+        leaving = set(plan.retired) | set(plan.released) | set(plan.expired)
         own_sections: tuple[PlanSection, ...] = ()
         clubs = 0
         for club_plan in self._plans.find_all():
@@ -662,6 +676,8 @@ def _offseason_player(
             is_captain=team.current_captain is player,
             titles=titles.get(player_id, 0),
         ),
+        # 昇格した年のオフは戦力外にしない（`release.py`。#170）
+        promoted_year=None if stint is None else stint.promoted_year,
     )
 
 

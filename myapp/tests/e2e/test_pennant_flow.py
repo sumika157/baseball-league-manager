@@ -45,12 +45,17 @@ class PennantFlowTest(PlaywrightTestCase):
         # 世界を作れるのはワークスペースの持ち主・編集者（W2 T4）
         make_editor(User.objects.create_user(username="gm", password="pass12345"))
 
-    def _login(self):
-        self.page.goto(self.live_server_url + "/accounts/login/")
-        self.page.fill('input[name="username"]', "gm")
-        self.page.fill('input[name="password"]', "pass12345")
-        self.page.locator('input[name="password"]').press("Enter")
-        self.page.wait_for_url(f"{self.live_server_url}/")
+    def _create_world(self, name: str) -> int:
+        """世界を作る画面から、元にするリーグと受け持つ球団を選んで作り、作った世界の id を返す。"""
+        self.page.goto(self.live_server_url + ws_url("pennant_index"))
+        self.page.fill('input[name="name"]', name)
+        self.page.check('input[name="leagues"]')
+        self.page.select_option('select[name="managed_team"]', label="ホームズ")
+        self.page.click('button:has-text("世界を作る")')
+        self.page.wait_for_url(re.compile(r"/pennant/\d+/$"))
+        created = re.search(r"/pennant/(\d+)/", self.page.url)
+        assert created is not None, self.page.url
+        return int(created.group(1))
 
     def _assert_links_stay_in_the_world(self, world_id: int):
         prefix = ws_url("pennant_world", world_id)
@@ -61,16 +66,10 @@ class PennantFlowTest(PlaywrightTestCase):
             self.assertTrue(allowed, f"{self.page.url} のリンク {href} が世界の外へ出ています")
 
     def test_create_advance_and_read(self):
-        self._login()
+        self.login("gm")
 
         # 世界を作る（元にするリーグと受け持つ球団を選ぶ）
-        self.page.goto(self.live_server_url + ws_url("pennant_index"))
-        self.page.fill('input[name="name"]', "スモークの世界")
-        self.page.check('input[name="leagues"]')
-        self.page.select_option('select[name="managed_team"]', label="ホームズ")
-        self.page.click('button:has-text("世界を作る")')
-        self.page.wait_for_url(re.compile(r"/pennant/\d+/$"))
-        world_id = int(re.search(r"/pennant/(\d+)/", self.page.url).group(1))
+        world_id = self._create_world("スモークの世界")
         self.assertIn("GM ホーム", self.page.content())
         self._assert_links_stay_in_the_world(world_id)
 
@@ -98,14 +97,8 @@ class PennantFlowTest(PlaywrightTestCase):
         self.assertEqual(orm_models.Game.objects.filter(home_team__league__world__isnull=True).count(), 0)
 
     def test_close_the_season_read_the_result_and_start_the_next_year(self):
-        self._login()
-        self.page.goto(self.live_server_url + ws_url("pennant_index"))
-        self.page.fill('input[name="name"]', "オフの世界")
-        self.page.check('input[name="leagues"]')
-        self.page.select_option('select[name="managed_team"]', label="ホームズ")
-        self.page.click('button:has-text("世界を作る")')
-        self.page.wait_for_url(re.compile(r"/pennant/\d+/$"))
-        world_id = int(re.search(r"/pennant/(\d+)/", self.page.url).group(1))
+        self.login("gm")
+        world_id = self._create_world("オフの世界")
 
         # 1シーズンの進行はサービスで済ませる（画面で143試合ぶんを押さない）。締める操作から画面で確かめる
         build_pennant_season_service(world_scope(world_id)).advance(AdvanceTarget.SEASON_END)

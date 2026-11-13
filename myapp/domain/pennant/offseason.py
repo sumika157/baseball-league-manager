@@ -1,6 +1,7 @@
 """シーズンを締めるときの計算。**純粋な関数**で、DB にも Django にも触れない。
 
-    引退を決める → 球団ごとに戦力外（`release.py`。ここまでが `plan_departures`）→ 外国人の獲得
+    引退を決める → 球団ごとに育成の昇格の希望 → 戦力外（`release.py`。昇格の希望の分も空ける）→ 昇格の確定と
+    育成契約の満了（`development.py`。#170。ここまでが `plan_departures`）→ 外国人の獲得
     （`foreign_market.py`。補う人数は `draft.py`、選ぶ位置は戦力の穴）→ ドラフト会議（`draft_meeting.py`。全球団の
     日本人の新人。人数は新人の人数 − 獲得した外国人。本指名の後に育成の巡）→
     残る選手の能力を1年ぶん進める（伸びしろの無い選手には先に引いて付ける。`with_filled_potential`）→
@@ -25,7 +26,9 @@ from math import sqrt
 from ..simulation.randomness import game_seed, game_uniform, make_random
 from ..simulation.ratings import BatterRatings, PitcherRatings
 from ..simulation.spread import MIN_POPULATION, rescale, spread_ratings, target_mean, target_sd
+from ..value_objects import ContractStatus
 from .aging import age_ratings
+from .development import Promotion, confirm_promotions, decide_expirations, decide_promotions
 from .draft import Draftee, DraftTeam, development_target
 from .draft_meeting import DraftAction, DraftContext, Lottery, run_draft
 from .foreign_market import ForeignSigning, offseason_signings
@@ -78,6 +81,12 @@ class OffseasonPlan:
     # AI の戦力外（`release.py`）。引退した選手は含まない。翌年の能力を作らず、錨の母集団にも入れない
     released: tuple[int, ...]
     retained: tuple[RatingChange, ...]
+    # 育成から支配下への昇格（`development.py`。#170）。翌年から支配下で、背番号は昇格後の番号。
+    # 残る選手（`retained`）にも入る
+    promotions: tuple[Promotion, ...]
+    # 育成契約の満了で自由契約にした育成の選手（`development.py`。退団の経路は戦力外）。
+    # 戦力外（`released`）とは別に持つ
+    expired: tuple[int, ...]
     # 新人（ドラフトの日本人）。能力は錨をかけた後の値
     draftees: tuple[Draftee, ...]
     # 獲得した外国人（`foreign_market.py`）。能力は錨をかけた後の値。入団は翌年で、経路は新外国人
@@ -127,7 +136,8 @@ def decide_retirements(
 
 
 def _draft_team(club: OffseasonClub, remaining: Sequence[OffseasonPlayer], *, world_seed: int) -> DraftTeam:
-    """引退・戦力外の後の球団。人数と位置は支配下だけで数える（育成の捕手がいても、支配下の捕手が足りなければ補う）。
+    """引退・戦力外・昇格・満了の後の球団（昇格した選手は支配下・昇格後の背番号で数える）。
+    人数と位置は支配下だけで数える（育成の捕手がいても、支配下の捕手が足りなければ補う）。
     育成ドラフトの人数と位置は、別に育成だけで数える（目標は `draft.development_target`）。
 
     外国人の人数・背番号・苗字は育成も含める（外国人の目標人数・背番号の重複・背ネームは区分によらない）。
@@ -224,15 +234,19 @@ def anchor_correction(before: Sequence[Ratings]) -> AnchorCorrection:
 
 @dataclass(frozen=True)
 class Departures:
-    """引退と戦力外の後の球団（`plan_departures` の結果）。ドラフトの人数はこの後の人数で数える。"""
+    """引退・戦力外・昇格・育成契約の満了の後の球団（`plan_departures` の結果）。
+    ドラフトの人数はこの後の人数で数える。"""
 
     retired: frozenset[int]
     # 戦力外の選手（球団ごとに外す順で、球団 id の順につなげたもの）
     released: tuple[int, ...]
-    # 残る選手（球団 id の順・選手の並びの順）
+    # 残る選手（球団 id の順・選手の並びの順）。昇格した選手は支配下・昇格後の背番号・翌年の昇格の年に置き換えてある
     survivors: tuple[OffseasonPlayer, ...]
-    # 引退・戦力外の後の球団（球団 id の昇順）
+    # 引退・戦力外・昇格・満了の後の球団（球団 id の昇順）
     draft_teams: tuple[DraftTeam, ...]
+    # 育成から支配下への昇格（球団 id の順・球団の中は上げる順）と、育成契約の満了で自由契約にした選手（#170）
+    promotions: tuple[Promotion, ...] = ()
+    expired: tuple[int, ...] = ()
 
 
 def plan_departures(
@@ -243,30 +257,66 @@ def plan_departures(
     start_year: int,
     manual_releases: Mapping[int, Collection[int]] | None = None,
 ) -> Departures:
-    """Y 年を締めるときの引退と戦力外（球団 id の昇順）。ドラフト会議の人数の幅（D3）も同じ関数で数える。
+    """Y 年を締めるときの引退・戦力外・昇格・育成契約の満了（球団 id の昇順）。ドラフト会議の人数の幅（D3）も
+    同じ関数で数える。
 
+    順序は 引退 → 昇格の希望 → 戦力外（希望の分も空ける＝上乗せ）→ 昇格の確定 → 満了（`development.py`。#170）。
     `manual_releases`: GM が手動で戦力外を指名した球団（球団 id → 選手 id）。無い球団は自動（`release.py`）。
+    手動の球団も昇格と満了は自動（GM の指名は #170 P2）で、昇格は指名の後の空きに収まる人数まで。
     """
     ordered = sorted(clubs, key=lambda club: club.team_id)
     retired = set(decide_retirements(ordered, year=year, world_seed=world_seed, start_year=start_year))
     survivors: list[OffseasonPlayer] = []
     released: list[int] = []
+    promotions: list[Promotion] = []
+    expired: list[int] = []
     teams: list[DraftTeam] = []
     for club in ordered:
         remaining = [player for player in club.players if player.player_id not in retired]
+        wished = decide_promotions(club, remaining, year=year, start_year=start_year, world_seed=world_seed)
         # 戦力外は引退の後・ドラフトの前。ドラフトは戦力外の後の人数で数える。手動の球団は指名どおり
         chosen = (manual_releases or {}).get(club.team_id)
         leaving = set(
-            decide_releases(club, remaining, year=year, start_year=start_year, world_seed=world_seed)
+            decide_releases(
+                club, remaining, year=year, start_year=start_year, world_seed=world_seed, promotions=len(wished)
+            )
             if chosen is None
             else releases_as_chosen(chosen, remaining)
         )
         released.extend(sorted(leaving))
         remaining = [player for player in remaining if player.player_id not in leaving]
+        promoted = confirm_promotions(club, remaining, wished, year=year, world_seed=world_seed)
+        promotions.extend(promoted)
+        lapsed = set(
+            decide_expirations(
+                club,
+                remaining,
+                promoted=[promotion.player_id for promotion in promoted],
+                year=year,
+                start_year=start_year,
+                world_seed=world_seed,
+            )
+        )
+        expired.extend(sorted(lapsed))
+        numbers = {promotion.player_id: promotion.number for promotion in promoted}
+        remaining = [
+            replace(
+                player, contract=ContractStatus.REGISTERED, number=numbers[player.player_id], promoted_year=year + 1
+            )
+            if player.player_id in numbers
+            else player
+            for player in remaining
+            if player.player_id not in lapsed
+        ]
         survivors.extend(remaining)
         teams.append(_draft_team(club, remaining, world_seed=world_seed))
     return Departures(
-        retired=frozenset(retired), released=tuple(released), survivors=tuple(survivors), draft_teams=tuple(teams)
+        retired=frozenset(retired),
+        released=tuple(released),
+        survivors=tuple(survivors),
+        draft_teams=tuple(teams),
+        promotions=tuple(promotions),
+        expired=tuple(expired),
     )
 
 
@@ -358,6 +408,8 @@ def plan_offseason(
         retired=tuple(sorted(retired)),
         released=tuple(sorted(departures.released)),
         retained=retained,
+        promotions=departures.promotions,
+        expired=tuple(sorted(departures.expired)),
         draftees=draftees,
         signings=signings,
         lotteries=result.lotteries,

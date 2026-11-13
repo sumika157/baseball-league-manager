@@ -18,6 +18,8 @@ from ..helpers import world_scope
 from .test_pennant_advance import YEAR
 from .test_pennant_offseason import DECIDE_RELEASES, DECIDE_RETIREMENTS, ClosedSeasonCase, active_stints
 
+DECIDE_PROMOTIONS = "myapp.domain.pennant.offseason.decide_promotions"
+
 
 class RegisteredRosterAfterCloseTest(ClosedSeasonCase):
     def registered_counts(self) -> dict[int, int]:
@@ -90,7 +92,12 @@ class RegisteredRosterAfterCloseTest(ClosedSeasonCase):
             stint.save()
         before = self.registered_counts()
         seed = orm_models.PennantWorld.objects.get(id=self.world_a).seed
-        with mock.patch(DECIDE_RETIREMENTS, return_value=()), mock.patch(DECIDE_RELEASES, return_value=()):
+        # 育成の昇格（#170。`test_pennant_development.py`）も止めて、育成の人数を引退の後の人数のままにする
+        with (
+            mock.patch(DECIDE_RETIREMENTS, return_value=()),
+            mock.patch(DECIDE_RELEASES, return_value=()),
+            mock.patch(DECIDE_PROMOTIONS, return_value=()),
+        ):
             result = self.close()
 
         after = self.registered_counts()

@@ -7,7 +7,7 @@ CSS の効き方の問題で integration では確かめられないため、実
 
 from myapp.infrastructure import orm_models
 
-from ..helpers import build_roster_service, make_league, real_scope, ws_url
+from ..helpers import TEST_YEAR, build_roster_service, make_league, real_scope, ws_url
 from .base import PlaywrightTestCase
 
 # セルの中身が2行以上に割れているセルを返す。
@@ -33,12 +33,12 @@ class RosterTableLayoutTest(PlaywrightTestCase):
         self.team = orm_models.Team.objects.create(league=league, name="ホームズ")
         roster = build_roster_service(real_scope())
         # 長い名前・投打・バッジ（外国人）がそろうと、折り返したときに崩れが最も大きい
-        pitcher = roster.register_player(self.team.id, "サルバドール・グティエレス", 42, "投手")
+        pitcher = roster.register_player(self.team.id, "サルバドール・グティエレス", 42, "投手", from_year=TEST_YEAR)
         orm_models.Player.objects.filter(id=pitcher.id).update(
             throws="右", bats="左", height_cm=190, weight_kg=95, is_foreign_player=True
         )
-        roster.register_player(self.team.id, "山田太郎", 18, "投手")
-        batter = roster.register_player(self.team.id, "ホセ・フェルナンデス", 7, "外野手")
+        roster.register_player(self.team.id, "山田太郎", 18, "投手", from_year=TEST_YEAR)
+        batter = roster.register_player(self.team.id, "ホセ・フェルナンデス", 7, "外野手", from_year=TEST_YEAR)
         orm_models.Player.objects.filter(id=batter.id).update(throws="右", bats="両", is_foreign_player=True)
 
     def _open(self, pos: str, width: int) -> None:

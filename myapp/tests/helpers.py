@@ -54,6 +54,10 @@ from myapp.presentation.views import build_workspace_service as build_workspace_
 
 LINEUP_SIZE = 9
 
+# テストの試合と在籍の年。選手の登録の年は既定で現実の今日の年なので、試合の年（ここ）と合わせて渡す。
+# 渡さないと、年が明けたとたんに「加入より前の年の試合」になって落ちる（2027年として流して57件落ちた）
+TEST_YEAR = 2026
+
 # 既定のワークスペース（バックフィルが作る「移したデータ」の入れ物に当たる）の key。10文字の英小文字と数字
 DEFAULT_WORKSPACE_KEY = "defaultws0"
 _workspace_serial = itertools.count(1)
@@ -163,7 +167,7 @@ def make_pennant_world(name, *, workspace=None, **fields) -> orm_models.PennantW
     return orm_models.PennantWorld.objects.create(name=name, workspace=workspace or default_workspace(), **fields)
 
 
-def register_players(team, rows) -> list[int]:
+def register_players(team, rows, *, from_year: int = TEST_YEAR) -> list[int]:
     """実データのチームに選手をまとめて登録して id を返す。rows は (名前, 背番号, 守備位置の表示名) の並び。
 
     `RosterService.register_player` を人数ぶん呼ぶのと同じ結果になる（集約の `add_player` が
@@ -181,6 +185,7 @@ def register_players(team, rows) -> list[int]:
             name=name,
             number=JerseyNumber(number),
             position=Position.from_label(position_label),
+            from_year=from_year,
             limits=limits,
         )
         for name, number, position_label in rows
@@ -380,7 +385,7 @@ def play_game(
     *,
     home_score=1,
     away_score=0,
-    year=2026,
+    year=TEST_YEAR,
     month=4,
     day=1,
     batting=None,
@@ -424,11 +429,11 @@ def _team_of(player_id, home_team, away_team) -> int:
     return home_team.id if stints.filter(team_id=home_team.id).exists() else away_team.id
 
 
-def give_batting(home_team, away_team, player_id, line: BattingLine, *, year=2026, day=1):
+def give_batting(home_team, away_team, player_id, line: BattingLine, *, year=TEST_YEAR, day=1):
     """ある選手に打撃成績を持たせるためだけの試合を作る。"""
     return play_game(home_team, away_team, year=year, day=day, batting={player_id: line})
 
 
-def give_pitching(home_team, away_team, player_id, line: PitchingLine, *, year=2026, day=1):
+def give_pitching(home_team, away_team, player_id, line: PitchingLine, *, year=TEST_YEAR, day=1):
     """ある選手に投球成績を持たせるためだけの試合を作る。"""
     return play_game(home_team, away_team, year=year, day=day, pitching={player_id: line})

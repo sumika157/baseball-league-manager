@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 from myapp.domain.pennant import retirement
 from myapp.domain.pennant.retirement import MAX_PLAYING_AGE, PlayingTime, retirement_chance
@@ -48,20 +49,29 @@ class RetirementChanceTest(unittest.TestCase):
         base = chance(age=30)
         regular_batter = chance(age=30, playing_time=PlayingTime(plate_appearances=550))
         regular_pitcher = chance(age=30, playing_time=PlayingTime(outs=300))
-        idle = chance(age=30, playing_time=PlayingTime())
         self.assertAlmostEqual(regular_batter, base * retirement.REGULAR_FACTOR)
         self.assertAlmostEqual(regular_pitcher, base * retirement.REGULAR_FACTOR)
-        self.assertAlmostEqual(idle, base * retirement.IDLE_FACTOR)
 
-    def test_idle_factor_does_not_apply_to_the_young(self) -> None:
-        age = retirement.IDLE_MIN_AGE - 1
-        self.assertEqual(chance(age=age, playing_time=PlayingTime()), chance(age=age))
+    def test_idle_veterans_are_not_pushed_out_by_retirement(self) -> None:
+        """出場の無かった選手を外すのは戦力外の役目で、引退の確率は変えない（#168 で倍率を 1.5 → 1）。"""
+        self.assertEqual(chance(age=30, playing_time=PlayingTime()), chance(age=30))
+
+    def test_the_idle_factor_applies_from_its_minimum_age(self) -> None:
+        """倍率を 1 以外にしたときに効くこと、効き始めがちょうど `IDLE_MIN_AGE` であること（境界の両側）。
+
+        今の倍率は 1 なので、差し替えないと何が壊れても同じ値になり、このテストは何も確かめない。
+        """
+        young, veteran = retirement.IDLE_MIN_AGE - 1, retirement.IDLE_MIN_AGE
+        with mock.patch.object(retirement, "IDLE_FACTOR", 2.0):
+            self.assertEqual(chance(age=young, playing_time=PlayingTime()), chance(age=young))
+            self.assertAlmostEqual(chance(age=veteran, playing_time=PlayingTime()), 2 * chance(age=veteran))
 
     def test_recent_young_players_are_protected(self) -> None:
+        """入団2年目まで・24歳以下は守られる。年数と年齢の境目の両側を見る。"""
         self.assertAlmostEqual(chance(age=22, seasons_as_pro=1), chance(age=22) * retirement.ROOKIE_FACTOR)
         self.assertAlmostEqual(chance(age=22, seasons_as_pro=2), chance(age=22) * retirement.ROOKIE_FACTOR)
         self.assertEqual(chance(age=22, seasons_as_pro=3), chance(age=22))
-        # 25歳を過ぎれば入団直後でも守られない
+        self.assertAlmostEqual(chance(age=24, seasons_as_pro=1), chance(age=24) * retirement.ROOKIE_FACTOR)
         self.assertEqual(chance(age=25, seasons_as_pro=1), chance(age=25))
 
     def test_capped_below_certainty(self) -> None:
@@ -72,6 +82,7 @@ class RetirementChanceTest(unittest.TestCase):
         self.assertTrue(PlayingTime(plate_appearances=300).is_regular)
         self.assertFalse(PlayingTime(plate_appearances=299).is_regular)
         self.assertTrue(PlayingTime(outs=240).is_regular)
+        self.assertFalse(PlayingTime(outs=239).is_regular)
         self.assertTrue(PlayingTime().is_idle)
         self.assertFalse(PlayingTime(outs=1).is_idle)
 

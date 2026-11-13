@@ -4,6 +4,7 @@ from django.contrib.auth.models import User
 
 from myapp.infrastructure import orm_models
 
+from ..helpers import TEST_YEAR
 from .base import BaseCase
 
 _EMPTY_INLINES = {
@@ -106,7 +107,7 @@ class AdminDraftTest(BaseCase):
 
     def test_stint_page_checks_the_saved_draft(self):
         """在籍だけの画面では、保存済みのドラフトと突き合わせる。"""
-        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手", from_year=TEST_YEAR)
         orm_models.Player.objects.filter(pk=player.id).update(draft_year=2017, draft_round=2)
         past = orm_models.Team.objects.create(league=self.league, name="前所属")
 
@@ -129,7 +130,7 @@ class AdminDraftTest(BaseCase):
 
     def test_stint_page_does_not_check_a_later_stint(self):
         """最初の在籍でない在籍の経路は見ない（ここでは不自然な「育成ドラフト」の2つ目の在籍でも通る）。"""
-        player = self.roster.register_player(self.team.id, "山田", 10, "内野手")
+        player = self.roster.register_player(self.team.id, "山田", 10, "内野手", from_year=TEST_YEAR)
         orm_models.Player.objects.filter(pk=player.id).update(draft_year=2017, draft_round=2)
         orm_models.PlayerStint.objects.filter(player_id=player.id).update(from_year=2018)
         other = orm_models.Team.objects.create(league=self.league, name="移籍先")

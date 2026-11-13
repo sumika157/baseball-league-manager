@@ -843,8 +843,12 @@ class OtherIdsAreNotFoundInAWorldTest(WorldCase):
         urls = [
             ws_url("pennant_player_list", w, self.team.id),
             ws_url("pennant_player_detail", w, self.team.id, real_player),
+            ws_url("pennant_team_history", w, self.team.id),
+            ws_url("pennant_team_analysis", w, self.team.id),
             ws_url("pennant_league_detail", w, self.league.id),
+            ws_url("pennant_league_detail_by_year", w, self.league.id, YEAR),
             ws_url("pennant_league_titles", w, self.league.id),
+            ws_url("pennant_league_titles_by_year", w, self.league.id, YEAR),
             ws_url("pennant_league_stats", w, self.league.id),
             ws_url("pennant_game_detail", w, self.real_game.id),
         ]
@@ -857,8 +861,15 @@ class OtherIdsAreNotFoundInAWorldTest(WorldCase):
         urls = [
             ws_url("pennant_player_list", w, self.other_team.id),
             ws_url("pennant_player_detail", w, self.other_team.id, self.other_player),
+            ws_url("pennant_team_history", w, self.other_team.id),
+            ws_url("pennant_team_analysis", w, self.other_team.id),
             ws_url("pennant_league_detail", w, self.other_league.id),
+            ws_url("pennant_league_detail_by_year", w, self.other_league.id, YEAR + 1),
+            ws_url("pennant_league_titles", w, self.other_league.id),
+            ws_url("pennant_league_titles_by_year", w, self.other_league.id, YEAR + 1),
             ws_url("pennant_league_stats", w, self.other_league.id),
+            # この世界の試合を、別の世界の URL で開く
+            ws_url("pennant_game_detail", self.other_id, self.pennant_game_id),
         ]
         for url in urls:
             with self.subTest(url=url):

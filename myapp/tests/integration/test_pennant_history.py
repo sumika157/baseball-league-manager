@@ -123,8 +123,11 @@ class FinishedSeasonTest(HistoryCase):
     def test_an_invalid_league_in_the_url_falls_back_to_the_default_league(self):
         self.finish_season()
         default = self.history(league_id=None).selected_league_id
+        # 実在するが、この世界のものではないリーグ（別の世界・実データ）も、無いリーグと同じく既定に落ちる
+        other_world_league = orm_models.League.objects.filter(world_id=self.world_b).first().id
+        real_league = orm_models.League.objects.filter(world__isnull=True).first().id
 
-        for value in ("abc", "²", "9999999", "-1", ""):
+        for value in ("abc", "²", "9999999", "-1", "", str(other_world_league), str(real_league)):
             with self.subTest(league=value):
                 response = self.client.get(self.history_url(), {"league": value})
 

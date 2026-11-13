@@ -1,6 +1,7 @@
 """ペナントの世界の「Y年オフの結果」を読む。読むだけで、書き込みはしない。
 
-締める処理（`PennantOffseasonService`）は結果を保存しない。引退・退団・戦力外の選手、新人、残った選手の能力の変化は、
+締める処理（`PennantOffseasonService`）は結果を保存しない。引退・退団・戦力外の選手、新人、昇格した選手（#170）、
+残った選手の能力の変化は、
 在籍・プロフィール・能力の行から `OffseasonQuery` が導く。ここはその材料を画面向けの行にするだけで、
 集約（`Team`）は組み立てない。
 
@@ -21,6 +22,7 @@ from .dto import (
     OffseasonChangeRow,
     OffseasonFacts,
     OffseasonPlayerFact,
+    OffseasonPromotedRow,
     OffseasonRetiredRow,
     OffseasonRookieRow,
     OffseasonSummary,
@@ -57,6 +59,7 @@ class OffseasonViewService:
 
         retired = [self._retired_row(fact, year) for fact in facts.retired]
         rookies = [self._rookie_row(fact, year) for fact in facts.rookies]
+        promoted = [self._promoted_row(fact, year) for fact in facts.promoted]
         changes = sorted(
             (self._change_row(fact, year) for fact in facts.retained), key=lambda row: (-row.delta, row.player_id)
         )
@@ -67,14 +70,19 @@ class OffseasonViewService:
             own_team_name=world.managed_team_name,
             own_retired=tuple(row for row in retired if row.team_id == own_id),
             own_rookies=tuple(row for row in rookies if row.team_id == own_id),
+            own_promoted=tuple(row for row in promoted if row.team_id == own_id),
             own_changes=tuple(row for row in changes if row.team_id == own_id),
             leagues=facts.leagues,
             selected_league_id=selected,
             retired=tuple(row for fact, row in zip(facts.retired, retired, strict=True) if fact.league_id == selected),
             rookies=tuple(row for fact, row in zip(facts.rookies, rookies, strict=True) if fact.league_id == selected),
+            promoted=tuple(
+                row for fact, row in zip(facts.promoted, promoted, strict=True) if fact.league_id == selected
+            ),
             retired_total=len(retired),
             released_total=sum(1 for fact in facts.retired if fact.left_via is DepartureRoute.RELEASED),
             rookie_total=len(rookies),
+            promoted_total=len(promoted),
             risers=tuple([row for row in changes if row.delta > 0][:TOP_CHANGES]),
             decliners=tuple(
                 sorted((row for row in changes if row.delta < 0), key=lambda r: (r.delta, r.player_id))[:TOP_CHANGES]
@@ -102,6 +110,21 @@ class OffseasonViewService:
             age=age_at_season_start(fact.profile, year),
             leaving=_leaving_label(fact),
             rating=overall_cell(fact.before) if fact.before is not None else None,
+            is_development=fact.was_development,
+        )
+
+    @staticmethod
+    def _promoted_row(fact: OffseasonPlayerFact, year: int) -> OffseasonPromotedRow:
+        return OffseasonPromotedRow(
+            player_id=fact.player_id,
+            name=fact.name,
+            team_id=fact.team_id,
+            team_name=fact.team_name,
+            number=str(fact.number),
+            number_before=fact.number_before_promotion,
+            position=fact.position.label,
+            age=age_at_season_start(fact.profile, year + 1),
+            rating=overall_cell(fact.after) if fact.after is not None else None,
         )
 
     @staticmethod
