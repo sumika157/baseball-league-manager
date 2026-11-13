@@ -4,7 +4,9 @@
 招待のリンクを開いた人に見せる中身は `InvitationPreviewQuery` が読む（更新と参照を分ける）。
 サービスは2つに分ける（2026-10-25 ユーザー決定 3）:
 
-- `WorkspaceService`: 作成・設定（名前と公開範囲）・削除。
+- `WorkspaceService`: 作成・設定（名前と公開範囲）・削除。作成で見本のリーグを入れる処理は
+  `WorkspaceSampleService`（`application/workspace_sample.py`。新しいワークスペースの範囲）にあり、組み立て口から
+  呼び出しの関数として受け取る（W5）。
 - `WorkspaceMemberService`: 招待の発行・取消・受諾、役割の変更、除名。運営者が管理画面で行う編集者・担当者の
   置き換えもここを通す（W4 T6）。
 
@@ -49,11 +51,15 @@ class WorkspaceService:
         quota: WorkspaceQuota,
         new_key: Callable[[], str],
         atomic: AtomicBlock,
+        seed_sample_league: Callable[[int, str], None],
     ) -> None:
         self._workspaces = workspaces
         self._quota = quota
         self._new_key = new_key
         self._atomic = atomic
+        # 新しいワークスペース（id と key）に見本のリーグを入れる関数（W5。#81）。新しいワークスペースの範囲で
+        # 組み立てた `WorkspaceSampleService.seed` を、組み立て口が包んで渡す（範囲を作るのは組み立て口だけ）
+        self._seed_sample_league = seed_sample_league
 
     def can_create(self, owner_id: int) -> bool:
         """その利用者が、もう1つ作れるか（作成のフォームの代わりに上限の案内を出すかの判定）。"""
@@ -64,15 +70,20 @@ class WorkspaceService:
         """上限に達したときの案内（文言の出典は `WorkspaceQuota`）。"""
         return self._quota.limit_message
 
-    def create(self, *, owner_id: int, name: str, visibility: Visibility) -> str:
-        """空のワークスペースを作り、key を返す。上限に達していれば `WorkspaceLimitReached`（何も作らない）。
+    def create(self, *, owner_id: int, name: str, visibility: Visibility, with_sample_league: bool) -> str:
+        """ワークスペースを作り、key を返す。上限に達していれば `WorkspaceLimitReached`（何も作らない）。
 
-        数える → 上限の検査 → 保存を1つのトランザクションで行う。
+        `with_sample_league` なら、作ったワークスペースに見本のリーグを入れる（W5。#81。偽なら空のまま）。
+        数える → 上限の検査 → 保存 →（見本）を1つのトランザクションで行う（2026-11-13 ユーザー決定 1）。
+        見本の途中で失敗したら、ワークスペースも見本も残らない（例外はそのまま投げる。上限も消費しない）。
         """
         with self._atomic():
             self._quota.ensure_can_create_workspace(self._workspaces.count_owned_by(owner_id))
             workspace = Workspace(name=name, key=self._new_key(), owner_id=owner_id, visibility=visibility)
-            return self._workspaces.add(workspace).key
+            saved = self._workspaces.add(workspace)
+            if with_sample_league:
+                self._seed_sample_league(saved_id(saved.id), saved.key)
+            return saved.key
 
     def change_settings(self, workspace_id: int, *, name: str, visibility: Visibility) -> None:
         """名前と公開範囲を変える。"""

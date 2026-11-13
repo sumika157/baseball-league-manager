@@ -99,7 +99,7 @@ class WorkspaceCase(TestCase):
 class CreateTest(WorkspaceCase):
     def test_create_makes_an_empty_workspace(self):
         key = build_workspace_service().create(
-            owner_id=self.outsider.id, name=" 新しいリーグ ", visibility=Visibility.PRIVATE
+            owner_id=self.outsider.id, name=" 新しいリーグ ", visibility=Visibility.PRIVATE, with_sample_league=False
         )
 
         self.assertEqual(validate_workspace_key(key), key)
@@ -113,19 +113,25 @@ class CreateTest(WorkspaceCase):
         service = build_workspace_service()
         for index in range(3):
             self.assertTrue(service.can_create(self.outsider.id))
-            service.create(owner_id=self.outsider.id, name=f"W{index}", visibility=Visibility.PUBLIC)
+            service.create(
+                owner_id=self.outsider.id, name=f"W{index}", visibility=Visibility.PUBLIC, with_sample_league=False
+            )
         self.assertFalse(service.can_create(self.outsider.id))
         before = orm_models.Workspace.objects.count()
 
         with self.assertRaisesRegex(WorkspaceLimitReached, "1人3つまで"):
-            service.create(owner_id=self.outsider.id, name="W3", visibility=Visibility.PUBLIC)
+            service.create(
+                owner_id=self.outsider.id, name="W3", visibility=Visibility.PUBLIC, with_sample_league=False
+            )
         self.assertEqual(orm_models.Workspace.objects.count(), before)
 
     def test_the_limit_counts_only_the_owners_workspaces(self):
         """編集者・担当として入っているワークスペースは数えない（持っている数だけ）。"""
         service = build_workspace_service()
         for index in range(3):
-            service.create(owner_id=self.editor.id, name=f"W{index}", visibility=Visibility.PUBLIC)
+            service.create(
+                owner_id=self.editor.id, name=f"W{index}", visibility=Visibility.PUBLIC, with_sample_league=False
+            )
         self.assertEqual(self.ledger().count_owned_by(self.editor.id), 3)
         self.assertEqual(self.ledger().count_owned_by(self.manager.id), 0)
 
@@ -135,12 +141,16 @@ class CreateTest(WorkspaceCase):
         self.assertFalse(service.can_create(self.owner.id))
         self.assertEqual(service.limit_message, "ワークスペースは1人1つまで作れます。")
         with self.assertRaises(WorkspaceLimitReached):
-            service.create(owner_id=self.owner.id, name="2つ目", visibility=Visibility.PUBLIC)
+            service.create(
+                owner_id=self.owner.id, name="2つ目", visibility=Visibility.PUBLIC, with_sample_league=False
+            )
 
     def test_a_bad_name_creates_nothing(self):
         before = orm_models.Workspace.objects.count()
         with self.assertRaises(InvalidWorkspace):
-            build_workspace_service().create(owner_id=self.outsider.id, name="  ", visibility=Visibility.PUBLIC)
+            build_workspace_service().create(
+                owner_id=self.outsider.id, name="  ", visibility=Visibility.PUBLIC, with_sample_league=False
+            )
         self.assertEqual(orm_models.Workspace.objects.count(), before)
 
     def test_add_refuses_a_saved_workspace(self):

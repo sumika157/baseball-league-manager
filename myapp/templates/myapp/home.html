@@ -55,8 +55,18 @@
           <div class="col-md-8">{% include 'myapp/setup/_field.html' with field=create_form.name %}</div>
           <div class="col-md-4">{% include 'myapp/setup/_field.html' with field=create_form.visibility %}</div>
         </div>
+        {% with field=create_form.with_sample_league %}
+          <div class="form-check mb-1">
+            {{ field }}
+            <label class="form-check-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+          </div>
+          {% for error in field.errors %}<div class="text-danger" style="font-size: 0.8125rem;">{{ error }}</div>{% endfor %}
+        {% endwith %}
         <p class="stat-muted mb-3" style="font-size: 0.8125rem;">
-          作ったワークスペースは空です。作った後の画面から、リーグ・チーム・球場を登録できます。
+          見本のリーグを入れると、1リーグ・{{ sample_league.teams }}チーム（各{{ sample_league.players_per_team }}人）と、
+          開幕から約2週間ぶんの試合（{{ sample_league.games }}試合）が入り、作ってすぐに順位表・成績・試合の結果を見られます。
+          見本の選手や試合も、自分で登録したものと同じように編集・削除できます。
+          要らなければチェックを外して作ってください（空のワークスペースになり、作った後の画面からリーグ・チーム・球場を登録できます）。
         </p>
         <button type="submit" class="btn btn-primary">作る</button>
       </div>

@@ -61,6 +61,7 @@ from myapp.application.queries import (
 from myapp.application.roster import RosterService
 from myapp.application.team_analysis import TeamAnalysisService
 from myapp.application.team_view import TeamViewService
+from myapp.application.workspace_sample import WorkspaceSampleService
 from myapp.application.workspaces import WorkspaceMemberService, WorkspaceService
 from myapp.domain.exceptions import InvalidWorld
 from myapp.domain.pennant.world import WorldScope
@@ -147,6 +148,7 @@ from myapp.presentation.views import (
     build_workspace_list_query,
     build_workspace_management_query,
     build_workspace_member_service,
+    build_workspace_sample_service,
     build_workspace_service,
 )
 
@@ -171,6 +173,7 @@ REAL_ONLY_BUILDERS = (
     build_pennant_world_service,
     build_league_setup_service,
     build_setup_query,
+    build_workspace_sample_service,
 )
 # 世界の台帳だけを読む。範囲ではなくワークスペースの id を取る（台帳をそのワークスペースで絞り、世界ごとの範囲を作る）
 LEDGER_BUILDERS = (build_pennant_world_view,)
@@ -452,6 +455,36 @@ class BuildServiceTest(SimpleTestCase):
         self.assertEqual(service._quota.max_owned_workspaces, 7)
         self.assertIs(service._new_key, new_workspace_key)
         self.assertIs(service._atomic, transaction.atomic)
+
+    def test_workspace_service_seeds_the_sample_league_in_the_new_workspace(self):
+        """作成が呼ぶ見本の関数は、作ったワークスペースの実データの範囲で組み立てた見本のサービスを呼ぶ（W5）。
+
+        範囲を作るのは組み立て口（サービスは id と key しか渡さない）。ほかのワークスペースの範囲で組むと、
+        見本がそのワークスペースに入る。
+        """
+        service = build_workspace_service()
+        with mock.patch.object(views, "build_workspace_sample_service") as build:
+            service._seed_sample_league(5, "sample-key")
+
+        build.assert_called_once_with(WorldScope.real(5))
+        build.return_value.seed.assert_called_once_with(key="sample-key")
+
+    def test_workspace_sample_service_dependencies_are_wired(self):
+        """見本のリーグのサービス（W5）。依存は全部、渡された実データの範囲で作る。「今日」は暦の今日。"""
+        from django.utils import timezone
+
+        service = build_workspace_sample_service(REAL)
+        self._assert_wired(service, WorkspaceSampleService)
+        for name, cls in (
+            ("_leagues", DjangoLeagueRepository),
+            ("_stadiums", DjangoStadiumRepository),
+            ("_teams", DjangoTeamRepository),
+            ("_games", DjangoGameRepository),
+        ):
+            with self.subTest(dependency=name):
+                self.assertIsInstance(getattr(service, name), cls)
+                self.assertEqual(getattr(service, name)._scope, REAL)
+        self.assertIs(service._today, timezone.localdate)
 
     def test_workspace_member_service_dependencies_are_wired(self):
         """招待とメンバーのサービス（W4）。時計は Django の現在時刻（タイムゾーンつき）。"""

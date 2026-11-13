@@ -75,7 +75,7 @@ class TopPageTest(TestCase):
 
     def setUp(self):
         self.owner = User.objects.create_user(username="ws-owner", password="x")
-        self.sample = make_workspace(self.owner, "見本のリーグ", key="sample0001")
+        self.sample = make_workspace(self.owner, "運営者の見本", key="sample0001")
 
     def test_anonymous_sees_the_introduction_and_the_entrances(self):
         content = self.client.get(reverse("home")).content.decode()
@@ -120,7 +120,7 @@ class TopPageTest(TestCase):
         content = response.content.decode()
         for workspace in (owned, edited, managed):
             self.assertIn(f'href="{ws_url("dashboard", workspace=workspace)}"', content)
-        self.assertNotIn("見本のリーグ", content, "入っていない公開ワークスペースは一覧に出さない")
+        self.assertNotIn("運営者の見本", content, "入っていない公開ワークスペースは一覧に出さない")
         self.assertIn(f'action="{reverse("workspace_create")}"', content, "一覧の下に作成フォーム（W4）")
 
     def test_the_list_reads_once_whatever_the_number_of_workspaces(self):

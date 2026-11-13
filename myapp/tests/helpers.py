@@ -50,6 +50,7 @@ from myapp.presentation.views import build_workspace_access_query as build_works
 from myapp.presentation.views import build_workspace_list_query as build_workspace_list_query
 from myapp.presentation.views import build_workspace_management_query as build_workspace_management_query
 from myapp.presentation.views import build_workspace_member_service as build_workspace_member_service
+from myapp.presentation.views import build_workspace_sample_service as build_workspace_sample_service
 from myapp.presentation.views import build_workspace_service as build_workspace_service
 
 LINEUP_SIZE = 9
