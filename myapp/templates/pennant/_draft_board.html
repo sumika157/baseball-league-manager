@@ -1,0 +1,24 @@
+{% load scoped %}{% comment %}
+ドラフトの盤（DraftBoard。行＝本指名の巡 → 育成の巡、列＝球団）。会議の画面とオフの結果が使う（#298 D4）。
+セルに player_id があれば選手のページへリンクする（オフの結果。会議の途中はまだ選手がいない）。抽選のセルは競合の数と入札した球団を添える。
+{% endcomment %}
+<div class="table-responsive">
+  <table class="table table-sm mb-0" data-testid="draft-board">
+    <thead>
+      <tr>
+        <th>巡</th>
+        {% for column in board.columns %}<th>{{ column.team_name }}{% if column.is_mine %} <span class="badge bg-primary">自軍</span>{% endif %}</th>{% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in board.rows %}
+        <tr>
+          <th scope="row" class="stat-muted text-nowrap">{{ row.round_label }}</th>
+          {% for cell in row.cells %}
+            <td>{% if cell %}{% if cell.player_id %}<a href="{% scoped_url 'player_detail' cell.team_id cell.player_id %}" class="player-name">{{ cell.name }}</a>{% else %}{{ cell.name }}{% endif %}<span class="stat-muted">（{{ cell.position }}）</span>{% if cell.lottery %}<br>{% include 'pennant/_draft_lottery.html' with lottery=cell.lottery %}{% endif %}{% else %}<span class="stat-muted">—</span>{% endif %}</td>
+          {% endfor %}
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

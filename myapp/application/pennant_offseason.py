@@ -71,6 +71,7 @@ from ..domain.exceptions import (
 from ..domain.pennant.awards import Award
 from ..domain.pennant.championship import Championship
 from ..domain.pennant.club_plan import ClubMember, PlanSection
+from ..domain.pennant.draft_lottery import DraftKey, lottery_records
 from ..domain.pennant.draft_record import pre_draft_input_blocker
 from ..domain.pennant.foreign_market import ForeignSigning
 from ..domain.pennant.offseason import Draftee, OffseasonPlan, plan_offseason
@@ -84,6 +85,7 @@ from ..domain.repositories import (
     AwardRepository,
     ChampionshipRepository,
     ClubPlanRepository,
+    DraftLotteryRepository,
     DraftRepository,
     FixtureRepository,
     LeagueRepository,
@@ -159,6 +161,7 @@ class PennantOffseasonService:
         awards: AwardRepository,
         championships: ChampionshipRepository,
         drafts: DraftRepository,
+        lotteries: DraftLotteryRepository,
         titles: LeagueViewService,
         context_query: SimulationContextQuery,
         postseason: PostseasonBracketReader,
@@ -179,6 +182,8 @@ class PennantOffseasonService:
         self._championships = championships
         # その年のドラフト会議の記録（GM が開いた会議。締めるときに再生して消す。#297 D3）
         self._drafts = drafts
+        # 締めた年の抽選の記録（会議の記録が消えた後の抽選の出典。#298 D4）
+        self._lotteries = lotteries
         # タイトルの受賞者を導く（世界の範囲の、タイトルの画面と同じサービス。表彰の補いが使う）
         self._titles = titles
         self._context_query = context_query
@@ -441,6 +446,8 @@ class PennantOffseasonService:
         """計算済みの変更を書く（トランザクションの中。SQL を流すだけにする）。"""
         plan, year = prepared.plan, prepared.year
         rookie_ratings: list[PlayerRatings] = []
+        # 指名した新人の選手 id（球団・巡・育成か → id）。抽選の記録を選手に結びつける（#298 D4）
+        drafted: dict[DraftKey, int] = {}
         for change in prepared.changes:
             self._teams.save(change.team)
             # 保存すると新人と獲得した外国人に id が入る。その id で翌年の能力と結びつける
@@ -448,6 +455,10 @@ class PennantOffseasonService:
                 PlayerRatings(player_id=_saved_id(player.id), year=year + 1, ratings=newcomer.ratings)
                 for player, newcomer in zip(change.added, change.newcomers, strict=True)
             )
+            for player, newcomer in zip(change.added, change.newcomers, strict=True):
+                pick = newcomer.profile.draft if isinstance(newcomer, Draftee) else None
+                if pick is not None and pick.round is not None:
+                    drafted[(newcomer.team_id, pick.round, pick.is_development)] = _saved_id(player.id)
         retained = [change.after for change in plan.retained]
         self._ratings.add_all([*retained, *rookie_ratings])
 
@@ -456,6 +467,9 @@ class PennantOffseasonService:
         self._releases.delete_all()
         # その年のドラフト会議の記録も使い終わった（指名の事実は新人のプロフィールと在籍の経路に残る。#297 D3）
         self._drafts.remove(year)
+        # 抽選の経過は、会議の記録が消えるとどこからも導けないので、指名された選手に結びつけて残す
+        # （締めた後はこの記録だけが出典。導ける年・巡・当たった球団は持たない。#298 D4・2026-10-12 ユーザー決定）
+        self._lotteries.add_all(lottery_records(plan.lotteries, drafted))
         self._fixtures.add_all(prepared.schedule)
         # 締める年のタイトル受賞者を表彰として書く（導いたのはロックの外。#248）
         self._awards.add_all(prepared.awards)

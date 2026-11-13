@@ -125,6 +125,7 @@ from ..infrastructure.repositories import (
     DjangoAwardRepository,
     DjangoChampionshipRepository,
     DjangoClubPlanRepository,
+    DjangoDraftLotteryRepository,
     DjangoDraftRepository,
     DjangoFixtureRepository,
     DjangoGameRepository,
@@ -523,6 +524,7 @@ def build_pennant_offseason_service(world_id: int) -> PennantOffseasonService:
         awards=parts.awards,
         championships=DjangoChampionshipRepository(parts.scope),
         drafts=parts.drafts,
+        lotteries=DjangoDraftLotteryRepository(parts.scope),
         titles=parts.titles,
         context_query=parts.context_query,
         postseason=parts.brackets,
@@ -1098,7 +1100,8 @@ def pennant_draft(request, world_id, year):
     """Y年のドラフト会議（#297 D3）。読むだけなら誰でも開ける。操作（`pennant_draft_act`）はオーナーにだけ出す。
 
     開けるのはいまの年度だけ。締めた年はオフの結果へ、まだ来ない年は 404。会議を開けない局面（公式戦・
-    ポストシーズンの途中）は理由を出す。`?sort=`・`?dir=` は候補の並べ替え（不正なキーは見込みの区分の高い順）。
+    ポストシーズンの途中）は理由を出す。`?sort=`・`?dir=` は候補の並べ替え（不正なキーは見込みの区分の高い順）、
+    `?position=`・`?route=` は候補の絞り込み（`Position`・`DraftRoute` の名前。不正な値は絞らない）。
     """
     world = _world_context(world_id)
     if year < world.season_year:
@@ -1106,7 +1109,13 @@ def pennant_draft(request, world_id, year):
     if year > world.season_year:
         raise Http404("その年のドラフト会議はありません。")
     sort, descending = _sort_params(request)
-    draft = build_pennant_draft_service(world_id).view(expected_year=year, sort=sort, descending=descending)
+    draft = build_pennant_draft_service(world_id).view(
+        expected_year=year,
+        sort=sort,
+        descending=descending,
+        position=request.GET.get("position"),
+        route=request.GET.get("route"),
+    )
     return _render(
         request,
         "pennant/draft.html",
@@ -1130,7 +1139,9 @@ def pennant_draft_act(request, world_id, year, action):
 
     URL の年が画面を開いたときの年（`expected_year`）で、始める以外は `expected_seq`（画面を開いたときの最後の
     行動の番号）も送ってもらう（二重送信や別のタブで進めたときに、さらに進めない。欠落は「検査なし」にせず弾く）。
-    結果は会議の画面で messages に出す（PRG。指名のフォームは並べ替えの指定 `sort`・`dir` も送るので、保って戻る）。
+    結果は会議の画面で messages に出す（PRG。指名のフォームは並べ替えと絞り込みの指定
+    `sort`・`dir`・`position`・`route`
+    も送るので、保って戻る）。
     """
     if action not in DRAFT_ACTIONS:
         raise Http404("その操作はありません。")
@@ -1141,8 +1152,8 @@ def pennant_draft_act(request, world_id, year, action):
     denied = _requires_world_owner(request, world)
     if denied is not None:
         return denied
-    sort_query = {key: request.POST[key] for key in ("sort", "dir") if request.POST.get(key)}
-    back = f"{draft_url}?{urlencode(sort_query)}" if sort_query else draft_url
+    back_query = {key: request.POST[key] for key in ("sort", "dir", "position", "route") if request.POST.get(key)}
+    back = f"{draft_url}?{urlencode(back_query)}" if back_query else draft_url
 
     service = build_pennant_draft_service(world_id)
     try:

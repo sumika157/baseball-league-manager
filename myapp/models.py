@@ -23,6 +23,8 @@ from .infrastructure.orm_models import (  # noqa: F401
     PennantClubPlanEntry,
     PennantDraft,
     PennantDraftAction,
+    PennantDraftLottery,
+    PennantDraftLotteryBid,
     PennantDraftSlot,
     PennantFixture,
     PennantPlayerRatings,

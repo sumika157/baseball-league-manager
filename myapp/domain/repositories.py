@@ -19,6 +19,7 @@ from .entities import Game, League, Team
 from .pennant.awards import Award
 from .pennant.championship import Championship
 from .pennant.club_plan import ClubPlan
+from .pennant.draft_lottery import DraftLotteryRecord
 from .pennant.draft_meeting import DraftAction
 from .pennant.draft_record import DraftRecord
 from .pennant.ratings import PlayerRatings
@@ -359,4 +360,20 @@ class DraftRepository(Protocol):
 
     def remove(self, year: int) -> None:
         """その年の会議の記録を消す（締める処理・会議のやり直し）。無ければ何もしない。"""
+        ...
+
+
+@runtime_checkable
+class DraftLotteryRepository(Protocol):
+    """ペナントの締めた年のドラフトの抽選の記録（`DraftLotteryRecord`。#298 D4）。書くのはシーズンを締める処理だけ。
+
+    ペナントの世界にだけ置ける。画面に出すときは参照クエリ（`OffseasonQuery.facts`）で読む。
+    """
+
+    def add_all(self, records: Sequence[DraftLotteryRecord]) -> None:
+        """抽選の記録を保存する。既に記録のある選手をもう一度書くことはできない（InvalidDraftAction）。
+
+        実データの範囲には書けない（InvalidWorld）。範囲の外の選手・球団は書けない（InvalidDraftAction）。
+        どれかが書けなければ何も書かない。
+        """
         ...

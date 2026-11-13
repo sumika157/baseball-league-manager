@@ -438,6 +438,8 @@ class AdminDoesNotShowThePennantWorldTest(WorldCase):
         self.assertNotIn(orm_models.PennantDraft, admin.site._registry)
         self.assertNotIn(orm_models.PennantDraftSlot, admin.site._registry)
         self.assertNotIn(orm_models.PennantDraftAction, admin.site._registry)
+        self.assertNotIn(orm_models.PennantDraftLottery, admin.site._registry)
+        self.assertNotIn(orm_models.PennantDraftLotteryBid, admin.site._registry)
 
     def test_change_pages_by_pennant_ids_do_not_open(self):
         """世界の id を直接指定しても、編集画面は開かない（Django は管理画面の一覧へ戻す）。"""
@@ -551,6 +553,8 @@ CLASSIFICATION: dict[str, tuple[str, str | None]] = {
     "PennantDraft": (WORLD, "world"),
     "PennantDraftSlot": (WORLD, "draft__world"),
     "PennantDraftAction": (WORLD, "draft__world"),
+    "PennantDraftLottery": (PLAYER, "player__stints__team__league__world"),
+    "PennantDraftLotteryBid": (LEAGUE, "team__league__world"),
     "Game": (GAME, "home_team__league__world"),
     "GameInningScore": (GAME, "game__home_team__league__world"),
     "GameBattingLine": (GAME, "game__home_team__league__world"),

@@ -25,9 +25,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 
 from ..domain import services as domain_services
+from ..domain.entities import Team
 from ..domain.exceptions import (
     AlreadyClosed,
     DraftChanged,
@@ -39,11 +40,13 @@ from ..domain.exceptions import (
     SeasonNotFinished,
     TeamNotFound,
 )
+from ..domain.pennant.draft import DraftRoute
 from ..domain.pennant.draft_meeting import (
     DraftAction,
     DraftActionKind,
     DraftMove,
     DraftState,
+    Lottery,
     meeting_pool,
     projected_grade,
 )
@@ -52,7 +55,12 @@ from ..domain.pennant.offseason import prepare_meeting
 from ..domain.pennant.postseason import PostseasonStatus
 from ..domain.pennant.world import World
 from ..domain.repositories import DraftRepository, TeamRepository, WorldRepository
+from ..domain.value_objects import Position
+from .draft_board import BoardPick, draft_board
 from .dto import (
+    DraftBoard,
+    DraftBoardCell,
+    DraftBoardColumn,
     DraftLotteryView,
     DraftMeetingView,
     DraftMoveRow,
@@ -61,7 +69,7 @@ from .dto import (
     DraftStep,
     DraftTurnView,
 )
-from .ids import team_names
+from .ids import saved_id, team_names
 from .pennant_offseason_inputs import OffseasonInputsReader, OffseasonPhase, managed_team_id
 from .pennant_season import AtomicBlock
 from .queries import PlayerNameQuery
@@ -108,12 +116,15 @@ class PennantDraftService:
         expected_year: int | None = None,
         sort: str | None = None,
         descending: bool | None = None,
+        position: str | None = None,
+        route: str | None = None,
         postseason_status: PostseasonStatus | None = None,
     ) -> DraftMeetingView:
         """会議の画面の材料。会議を開けないときは理由（`blocker`）だけを返す（例外にしない）。
 
         保存した会議を再生できないとき（`DraftChanged`）は `changed` を立てて返す（「会議をやり直す」だけを出す）。
-        候補は `sort`・`descending` で並べる（不正なキーは見込みの区分の高い順に落とす）。
+        候補は `position`・`route`（`Position`・`DraftRoute` の名前）で絞り、`sort`・`descending` で並べる
+        （不正な値は絞らず、不正なキーは見込みの区分の高い順に落とす）。
         `postseason_status` は呼び手（GM ホーム）が既に導いたその年のポストシーズンの状況（渡せば導き直さない。
         **表示にだけ使う**: 書き込みの操作は必ず導き直す）。
         """
@@ -144,7 +155,15 @@ class PennantDraftService:
                 changed=True,
             )
         return self._meeting_view(
-            year, managed, record, state, team_names(self._teams), sort=sort, descending=descending
+            year,
+            managed,
+            record,
+            state,
+            self._teams.find_all(),
+            sort=sort,
+            descending=descending,
+            position=position,
+            route=route,
         )
 
     # --- 書く ---
@@ -330,11 +349,14 @@ class PennantDraftService:
         managed: int,
         record: DraftRecord,
         state: DraftState,
-        names: Mapping[int, str],
+        teams: Sequence[Team],
         *,
         sort: str | None,
         descending: bool | None,
+        position: str | None,
+        route: str | None,
     ) -> DraftMeetingView:
+        names = {saved_id(team.id): team.name for team in teams}
         turn = state.next_turn()
         mine = turn is not None and turn.team_id == managed
         # いまの巡で確定した動き（球団ごと。1つの巡で球団が確定させるのは1回だけ）
@@ -349,7 +371,7 @@ class PennantDraftService:
                 key=prospect.key,
                 name=prospect.rookie.name,
                 position=prospect.position,
-                route_label=prospect.route.label,
+                route=prospect.route,
                 age=prospect.age,
                 grade=projected_grade(prospect, state.report(managed, prospect)),
                 taken_by=names.get(taken[prospect.key], "") if prospect.key in taken else "",
@@ -358,7 +380,11 @@ class PennantDraftService:
             )
             for prospect in state.pool.prospects
         ]
-        ordered, sort_key, sort_descending = domain_services.sort_prospects(rows, sort, descending)
+        kept, chosen_position, chosen_route = domain_services.filter_prospects(rows, position=position, route=route)
+        ordered, sort_key, sort_descending = domain_services.sort_prospects(kept, sort, descending)
+        # 絞り込みの選択肢は候補にいる位置と経歴だけ（並びは値オブジェクトの定義の順）
+        positions = {row.position for row in rows}
+        routes = {row.route for row in rows}
         return DraftMeetingView(
             year=year,
             status=DraftMeetingStatus.of(record, state),
@@ -391,8 +417,56 @@ class PennantDraftService:
             sort=sort_key,
             descending=sort_descending,
             can_pass=mine and state.passable(managed),
+            # 絞り込みで隠れた候補も数える（隠れているだけで指名できる候補がいれば、任せられない）
             can_delegate=mine and not any(row.selectable for row in rows),
+            prospect_total=len(rows),
+            position_choices=tuple(choice for choice in Position if choice in positions),
+            route_choices=tuple(choice for choice in DraftRoute if choice in routes),
+            position_filter=chosen_position,
+            route_filter=chosen_route,
+            board=_meeting_board(state, teams, managed, names),
         )
+
+
+def _meeting_board(
+    state: DraftState, teams: Sequence[Team], managed: int, names: Mapping[int, str]
+) -> DraftBoard | None:
+    """会議の途中の盤（受け持つ球団のリーグの球団。#298 D4）。セルは確定した指名と、抽選になった入札。"""
+    league_id = next((team.league_id for team in teams if team.id == managed), None)
+    columns = [
+        DraftBoardColumn(team_id=saved_id(team.id), team_name=team.name, is_mine=team.id == managed)
+        for team in sorted(teams, key=lambda team: saved_id(team.id))
+        if team.league_id == league_id
+    ]
+    # 抽選は当たった球団のその巡の指名に付く（1つの巡で球団が指名するのは1人）
+    lotteries = {
+        (lottery.winner, lottery.round_number, lottery.is_development): lottery for lottery in state.lotteries
+    }
+    picks = []
+    for selection in state.selections:
+        prospect = state.pool.get(selection.prospect_key)
+        lottery = lotteries.get((selection.team_id, selection.round_number, selection.is_development))
+        picks.append(
+            BoardPick(
+                round_number=selection.round_number,
+                is_development=selection.is_development,
+                cell=DraftBoardCell(
+                    team_id=selection.team_id,
+                    name=prospect.rookie.name,
+                    position=prospect.position.label,
+                    lottery=None if lottery is None else _lottery_view(lottery, names),
+                ),
+            )
+        )
+    return draft_board(columns, picks)
+
+
+def _lottery_view(lottery: Lottery, names: Mapping[int, str]) -> DraftLotteryView:
+    return DraftLotteryView(
+        bidders=tuple(names.get(team_id, "") for team_id in lottery.bidders),
+        winner=names.get(lottery.winner, ""),
+        bidder_ids=lottery.bidders,
+    )
 
 
 def _move_row(state: DraftState, move: DraftMove, names: Mapping[int, str]) -> DraftMoveRow:
@@ -408,11 +482,5 @@ def _move_row(state: DraftState, move: DraftMove, names: Mapping[int, str]) -> D
         prospect_key=move.prospect_key,
         prospect_name="" if prospect is None else prospect.rookie.name,
         position=None if prospect is None else prospect.position,
-        lottery=None
-        if lottery is None
-        else DraftLotteryView(
-            bidders=tuple(names.get(team_id, "") for team_id in lottery.bidders),
-            winner=names.get(lottery.winner, ""),
-            bidder_ids=lottery.bidders,
-        ),
+        lottery=None if lottery is None else _lottery_view(lottery, names),
     )
