@@ -25,6 +25,7 @@ from .dto import (
     ChampionshipRow,
     ClubTenure,
     DevelopmentRoster,
+    DevelopmentSquad,
     FaSubjects,
     GameNote,
     GameRow,
@@ -419,4 +420,9 @@ class DevelopmentRosterQuery(Protocol):
     def for_team(self, team_id: int, year: int) -> DevelopmentRoster:
         """`year` 年に球団 `team_id` に在籍する育成選手（背番号の順）と、その年の支配下の人数・リーグの上限。
         区分の判定は domain の `ContractStatus.in_year`。範囲の外の球団は TeamNotFound。"""
+        ...
+
+    def squads(self, year: int) -> tuple[DevelopmentSquad, ...]:
+        """範囲の全球団（id の順）の、`year` 年の育成選手（id の順）・支配下の人数・リーグの上限・使っている背番号
+        （AI の期中の昇格の材料。#170 P3b）。区分の判定は `for_team` と同じ。"""
         ...

@@ -2186,6 +2186,28 @@ class DevelopmentRoster:
 
 
 @dataclass(frozen=True)
+class DevelopmentSquadPlayer:
+    """AI の期中の昇格の候補ひとり（育成選手の id と登録位置）。"""
+
+    player_id: int
+    position: Position
+
+
+@dataclass(frozen=True)
+class DevelopmentSquad:
+    """球団ひとつの育成選手と支配下の人数・使っている背番号（AI の期中の昇格の材料。#170 P3b）。"""
+
+    team_id: int
+    # その年に支配下の選手の数（判定は domain の `ContractStatus.in_year`。`DevelopmentRoster` と同じ）
+    registered_count: int
+    # リーグの支配下の上限。None は無制限
+    registered_limit: int | None
+    # その年に在籍する選手（支配下・育成とも）の背番号
+    numbers: frozenset[str]
+    players: tuple[DevelopmentSquadPlayer, ...]
+
+
+@dataclass(frozen=True)
 class DevelopmentPlayerRow:
     """「育成」タブの1行。能力が無い選手は `overall` が None・`cells` が空。"""
 

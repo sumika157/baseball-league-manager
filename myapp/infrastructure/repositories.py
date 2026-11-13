@@ -10,7 +10,7 @@ ORM モデルとドメインオブジェクトの相互変換（マッピング�
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Protocol
@@ -228,6 +228,14 @@ class DjangoTeamRepository:
 
     def find_all_with_roster(self) -> list[Team]:
         return self._with_rosters(self._roster_rows())
+
+    def find_by_ids_with_roster(self, team_ids: Collection[int]) -> list[Team]:
+        """渡した球団だけを、ロスター込みで読む（絞り込みは SQL 側。id の順）。"""
+        wanted = set(team_ids)
+        teams = self._with_rosters(self._roster_rows().filter(id__in=wanted).order_by("id"))
+        if missing := sorted(wanted - {team.id for team in teams if team.id is not None}):
+            raise TeamNotFound(f"チームが見つかりません（id={missing[0]}）。")
+        return teams
 
     def find_by_league_with_roster(self, league_id: int) -> list[Team]:
         """そのリーグのチームだけを、ロスター込みで読む。**絞り込みは SQL 側で行う**。
@@ -1786,6 +1794,18 @@ class DjangoMidseasonRegistrationRepository:
         return [
             MidseasonRegistration(team_id=row.team_id, player_id=row.player_id, registered_on=row.registered_on)
             for row in rows
+        ]
+
+    def find_in_year(self, year: int) -> list[MidseasonRegistration]:
+        rows = (
+            midseason_registrations_in(self._scope)
+            .filter(registered_on__year=year)
+            .order_by("team_id", "registered_on", "player_id")
+            .values_list("team_id", "player_id", "registered_on")
+        )
+        return [
+            MidseasonRegistration(team_id=team_id, player_id=player_id, registered_on=registered_on)
+            for team_id, player_id, registered_on in rows
         ]
 
 

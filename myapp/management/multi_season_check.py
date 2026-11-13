@@ -4,6 +4,8 @@
 推定・シミュレーション・オフはメモリの上だけで行う）。
 
     1年目: 実成績から能力を推定 → 1シーズン回す
+    シーズン中: 判定日（6月1日・7月1日）に AI の期中の昇格（`decide_midseason_promotions`。#170 P3b）を全球団で回す
+    （人数はメモリの上の現役で数える近似。アプリは参照クエリでその年の在籍を数える）
     シーズンの間: 出場機会（シミュレーションした試合から数える）で `plan_offseason` を回し、結果（獲得した外国人と
     新人を含む）を適用
     2年目以降: 翌年の能力で1シーズン回す
@@ -19,10 +21,18 @@ import time
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
+from datetime import date
+from functools import partial
 from statistics import fmean, pstdev
 
 from myapp.application.pennant_world import ForkSource
-from myapp.domain.pennant.development import development_start_year, is_contract_expiring
+from myapp.domain.pennant.development import (
+    MidseasonClub,
+    MidseasonProspect,
+    decide_midseason_promotions,
+    development_start_year,
+    is_contract_expiring,
+)
 from myapp.domain.pennant.draft import DraftRoute, DraftTeam
 from myapp.domain.pennant.draft_meeting import DraftContext
 from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
@@ -136,6 +146,17 @@ def rosters_of(
     members: Sequence[Member], teams: dict[int, TeamInfo]
 ) -> tuple[dict[int, ClubRoster], dict[int, list[int]]]:
     """1軍の登録（`choose_active_roster`）と、リーグごとの球団 id。"""
+    rosters = {}
+    leagues: dict[int, list[int]] = {}
+    for team_id, club in pools_of(members, teams).items():
+        team = teams[team_id]
+        rosters[team_id] = choose_active_roster(club, rules=team.foreign_rules)
+        leagues.setdefault(team.league_id, []).append(team_id)
+    return rosters, leagues
+
+
+def pools_of(members: Sequence[Member], teams: dict[int, TeamInfo]) -> dict[int, ClubRoster]:
+    """球団ごとの登録候補（支配下の全員。育成は入れない）。"""
     batters: dict[int, list[SimBatter]] = {team_id: [] for team_id in teams}
     pitchers: dict[int, list[SimPitcher]] = {team_id: [] for team_id in teams}
     for member in members:
@@ -151,13 +172,73 @@ def rosters_of(
                     member.player_id, member.name, member.position, rating, foreign, throws=member.profile.throws
                 )
             )
-    rosters = {}
-    leagues: dict[int, list[int]] = {}
+    return {
+        team_id: ClubRoster(team_id, team.name, tuple(batters[team_id]), tuple(pitchers[team_id]))
+        for team_id, team in teams.items()
+    }
+
+
+@dataclass
+class MidseasonTally:
+    """1シーズンの AI の期中の昇格（#170 P3b）。メモリの上で、判定日ごとに `review` が数える。"""
+
+    registrations: dict[int, list[date]]
+    # シーズン中の支配下の最大（球団ごとの、判定日の後の人数の最大）
+    max_registered: int = 0
+
+    @property
+    def count(self) -> int:
+        return sum(len(days) for days in self.registrations.values())
+
+
+def midseason_review(
+    members: list[Member], teams: dict[int, TeamInfo], tally: MidseasonTally, on: date, *, seed: int
+) -> dict[int, ClubRoster] | None:
+    """判定日に AI の期中の昇格（`decide_midseason_promotions`）を回し、上げた選手を `members` に書き込む（その場で
+    置き換える）。上げた球団があれば、新しい1軍の登録を返す。メモリの上には受け持つ球団が無いので、全球団が対象。"""
+    pools = pools_of(members, teams)
+    clubs = []
     for team_id, team in teams.items():
-        club = ClubRoster(team_id, team.name, tuple(batters[team_id]), tuple(pitchers[team_id]))
-        rosters[team_id] = choose_active_roster(club, rules=team.foreign_rules)
-        leagues.setdefault(team.league_id, []).append(team_id)
-    return rosters, leagues
+        own = [m for m in members if m.team_id == team_id]
+        clubs.append(
+            MidseasonClub(
+                team_id=team_id,
+                is_managed=False,
+                pool=pools[team_id],
+                foreign_rules=team.foreign_rules,
+                development=tuple(
+                    MidseasonProspect(m.player_id, m.position, m.ratings.ratings)
+                    for m in own
+                    if m.contract is ContractStatus.DEVELOPMENTAL
+                ),
+                registered_count=sum(1 for m in own if m.contract is ContractStatus.REGISTERED),
+                registered_limit=team.registered_limit,
+                used_numbers=frozenset(m.number for m in own),
+                registrations=tuple(tally.registrations.get(team_id, ())),
+            )
+        )
+    promotions = {p.player_id: p for p in decide_midseason_promotions(clubs, on=on, world_seed=seed)}
+    for index, member in enumerate(members):
+        if member.player_id in promotions:
+            members[index] = replace(
+                member,
+                contract=ContractStatus.REGISTERED,
+                number=promotions[member.player_id].number,
+                promoted_year=on.year,
+            )
+            tally.registrations.setdefault(member.team_id, []).append(on)
+    registered = Counter(m.team_id for m in members if m.contract is ContractStatus.REGISTERED)
+    tally.max_registered = max(tally.max_registered, *registered.values())
+    return rosters_of(members, teams)[0] if promotions else None
+
+
+def format_midseason(tally: MidseasonTally, teams: int) -> str:
+    """そのシーズンの AI の期中の昇格（#170 P3b）の人数と、シーズン中の支配下の最大。"""
+    most = max((len(days) for days in tally.registrations.values()), default=0)
+    return (
+        f"期中の昇格 {tally.count}人（1球団 平均 {tally.count / max(1, teams):.2f}人・最多 {most}人）  "
+        f"シーズン中の支配下の最大 {tally.max_registered}人"
+    )
 
 
 def _playing_time(batting: dict[int, BattingLine], pitching: dict[int, PitchingLine], player_id: int) -> PlayingTime:
@@ -480,11 +561,21 @@ def run_seasons(
         rosters, leagues = rosters_of(members, teams)
         started = time.perf_counter()
         usage = UsageTally()
-        batting, pitching, games, team_games = play_season(rosters, leagues, seed=seed, year=current, usage=usage)
+        opening = Counter(m.team_id for m in members if m.contract is ContractStatus.REGISTERED)
+        tally = MidseasonTally(registrations={}, max_registered=max(opening.values()))
+        batting, pitching, games, team_games = play_season(
+            rosters,
+            leagues,
+            seed=seed,
+            year=current,
+            usage=usage,
+            review=partial(midseason_review, members, teams, tally, seed=seed),
+        )
         say(f"{games}試合  {(time.perf_counter() - started) / games * 1000:.1f} ms/試合")
         say(format_usage(usage.rows()))
         say(format_comparison(real, summarize(batting.values(), pitching.values()), "リーグ全体の水準:", LEVEL_LABELS))
         say(format_foreign_share(members, batting, pitching))
+        say(format_midseason(tally, len(teams)))
         say("")
         simulated_titles = []
         for team_ids in leagues.values():

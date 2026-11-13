@@ -10,8 +10,10 @@
 - 判定は世界の「次の公式戦の日」（未消化の対戦の最初の日）で行う。補強した選手は次の試合から出られるので、
   その日が期限の日以前なら補強できる。公式戦の対戦が残っていない（シーズン終了・ポストシーズン・締める前）なら
   補強できない。**締める処理（公式戦の対戦が残っていないときだけ動く）とは時期が重ならない。**
-- **補強の手段はすべてこの窓を通す**: 期中の昇格（#170 P3a）・期中の外国人の獲得（#169 F3）・トレード（#40）。
+- **補強の手段はすべてこの窓を通す**: 期中の昇格（#170 P3a・P3b）・期中の外国人の獲得（#169 F3）・トレード（#40）。
   期限を過ぎたら `ReinforcementClosed`（日本語）で断り、画面は期限の後は補強の導線を出さない。
+- **AI は判定日（`REVIEW_DAYS`。6月1日・7月1日）にだけ決める**（#170 P3b）。日を進める処理が、判定日の前で
+  区切って（`split_at_reviews`）その日以降の最初の試合日の前に決めるので、1日ずつ進めてもまとめて進めても同じになる。
 - **オフは対象外**: 締める処理の中のドラフト・戦力外・オフの昇格・オフの外国人の獲得は、この窓を通さない。
 - **実データには適用しない**（管理画面では過去の年の在籍も入力する）。窓を守るのはペナントの世界の操作だけ。
 
@@ -24,6 +26,7 @@
 from __future__ import annotations
 
 import datetime
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import ClassVar
 
@@ -76,10 +79,43 @@ class ReinforcementWindow:
 
 
 @dataclass(frozen=True)
+class PlaySegment:
+    """1回の「進める」の、判定日で区切った一続きの試合日。`reviews` はこの区切りの最初の日の前に済ませる判定日。"""
+
+    reviews: tuple[datetime.date, ...]
+    dates: tuple[datetime.date, ...]
+
+
+def split_at_reviews(dates: Sequence[datetime.date], *, last_played: datetime.date | None) -> tuple[PlaySegment, ...]:
+    """消化する日（古い順）を、AI の判定日（`ReinforcementWindow.review_dates`）の前で区切る（#170 P3b）。
+
+    判定日 D は、D 以降の最初の試合日の前に1回だけ済ませる（前の試合日 < D ≦ その日。`last_played` は消化した最後の
+    試合日で、まだ無ければ None）。どう区切って進めても、判定は同じ試合日の前に来る（1日ずつ進めても、まとめて
+    進めても同じ結果になる）。2つの判定日の間に試合日が無ければ、同じ区切りの前に古い順に並ぶ（登録日が同じなので、
+    判定はその区切りの前に1回。`development.decide_midseason_promotions` は同じ登録日に2人目を上げない）。
+    """
+    segments: list[PlaySegment] = []
+    previous = last_played if last_played is not None else datetime.date.min
+    reviews: tuple[datetime.date, ...] = ()
+    current: list[datetime.date] = []
+    for day in dates:
+        crossed = tuple(review for review in ReinforcementWindow.review_dates(day.year) if previous < review <= day)
+        if crossed:
+            if current:
+                segments.append(PlaySegment(reviews, tuple(current)))
+            reviews, current = crossed, []
+        current.append(day)
+        previous = day
+    if current:
+        segments.append(PlaySegment(reviews, tuple(current)))
+    return tuple(segments)
+
+
+@dataclass(frozen=True)
 class MidseasonRegistration:
     """期中の支配下登録ひとつ（球団・選手・登録日）。登録日はその選手が出られる最初の日（次の公式戦の日）。
 
-    期中の昇格（#170 P3a）が書く。#169 F3 の期中の外国人の獲得も同じ表に乗せる予定。
+    期中の昇格（GM は #170 P3a、AI は P3b の判定日）が書く。#169 F3 の期中の外国人の獲得も同じ表に乗せる予定。
     """
 
     team_id: int

@@ -25,6 +25,7 @@ from myapp.application.pennant_club_details import ClubDetailsService
 from myapp.application.pennant_history import PennantHistoryService
 from myapp.application.pennant_home import PennantHomeService
 from myapp.application.pennant_midseason import MidseasonRegistrationService
+from myapp.application.pennant_midseason_review import MidseasonReview
 from myapp.application.pennant_offseason import PennantOffseasonService
 from myapp.application.pennant_offseason_view import OffseasonViewService
 from myapp.application.pennant_postseason import PennantPostseasonService, PostseasonBracketReader
@@ -231,6 +232,8 @@ class BuildServiceTest(SimpleTestCase):
 
     def test_pennant_season_service_dependencies_are_wired(self):
         self._assert_wired(build_pennant_season_service(7), PennantSeasonService)
+        # 判定日の AI の期中の補強（#170 P3b）の協力者も、依存を全部渡す
+        self._assert_wired(build_pennant_season_service(7)._review, MidseasonReview)
 
     def test_pennant_offseason_service_dependencies_are_wired(self):
         self._assert_wired(build_pennant_offseason_service(7), PennantOffseasonService)
@@ -553,6 +556,17 @@ class PennantSeasonScopeTest(SimpleTestCase):
         for name in self.SCOPED:
             with self.subTest(dependency=name):
                 self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
+
+    def test_the_midseason_review_is_fixed_to_the_given_world(self):
+        """判定日の AI の期中の補強（#170 P3b）も、同じ世界の範囲だけを読み書きし、試合と同じトランザクションを
+        使う。"""
+        from django.db import transaction
+
+        review = build_pennant_season_service(7)._review
+        for name in ("_leagues", "_teams", "_ratings", "_registrations", "_squads", "_context_query"):
+            with self.subTest(dependency=name):
+                self.assertEqual(getattr(review, name)._scope, WorldScope.pennant(7))
+        self.assertIs(review._atomic, transaction.atomic)
 
     def test_a_different_world_gets_a_different_scope(self):
         self.assertEqual(build_pennant_season_service(8)._games._scope, WorldScope.pennant(8))

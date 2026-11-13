@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from datetime import date
 from typing import Protocol, runtime_checkable
 
@@ -57,6 +57,13 @@ class TeamRepository(Protocol):
 
     def find_all_with_roster(self) -> list[Team]:
         """全チームをロスター込みで取得する。リーグ全体の順位づけに使う。"""
+        ...
+
+    def find_by_ids_with_roster(self, team_ids: Collection[int]) -> list[Team]:
+        """渡した id のチームだけを、ロスター込みで取得する（id の順）。1つでも範囲に無ければ TeamNotFound。
+
+        書き換える球団だけを読む（AI の期中の昇格。#170 P3b）。全球団を読むと、使わない選手の通算成績まで組み立てる。
+        """
         ...
 
     def save(self, team: Team) -> Team:
@@ -299,6 +306,13 @@ class MidseasonRegistrationRepository(Protocol):
 
     def find_by_team(self, team_id: int) -> list[MidseasonRegistration]:
         """その球団の期中の登録（登録日・選手の id の順）。範囲の外の球団は TeamNotFound。"""
+        ...
+
+    def find_in_year(self, year: int) -> list[MidseasonRegistration]:
+        """範囲の全球団の、登録日が `year` 年の期中の登録（球団・登録日・選手の id の順）。
+
+        AI の期中の昇格（#170 P3b）が、判定日に球団ごとのその年の登録を1本で数える。
+        """
         ...
 
 

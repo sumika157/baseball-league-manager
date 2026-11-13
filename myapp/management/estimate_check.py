@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Iterable, Sequence
+from datetime import date
 from statistics import mean, pstdev
 
 from myapp.application.pennant_world import ForkSource, PennantWorldService
 from myapp.domain.entities import Team
 from myapp.domain.exceptions import DomainError
 from myapp.domain.pennant.ratings import PlayerRatings
+from myapp.domain.pennant.reinforcement import split_at_reviews
 from myapp.domain.pennant.schedule import ScheduleRules, default_opening_day, generate_schedule
 from myapp.domain.simulation.engine import simulate_game
 from myapp.domain.simulation.fatigue import PitchingHistory
@@ -230,11 +232,14 @@ def play_season(
     seed: int,
     year: int,
     usage: UsageTally | None = None,
+    review: Callable[[date], dict[int, ClubRoster] | None] | None = None,
 ) -> tuple[dict[int, BattingLine], dict[int, PitchingLine], int, int]:
     """球団の1軍の登録（`choose_active_roster` を通した後）で1シーズンを回す。
 
     (選手ごとの打撃, 投球, 試合数, 1球団の試合数)。複数シーズンの確認（`multi_season_check.py`）もここを通る。
     `usage` を渡すと、投手の起用と疲労（`UsageTally`）も数える。
+    `review` を渡すと、AI の期中の補強の判定日（`reinforcement.split_at_reviews`。ペナントの進行と同じ区切り）ごとに、
+    その後の最初の試合日を渡して呼ぶ。1軍の登録を返したら、その日からそれで回す（#170 P3b）。
     """
     rules = ScheduleRules()
     schedule_rng = make_random(game_seed(seed, year, "schedule-check"))
@@ -243,9 +248,17 @@ def play_season(
     except DomainError as error:
         raise ValueError(f"日程を組めません: {error}") from error
 
+    review_days: set[date] = set()
+    if review is not None:
+        fixtures = sorted(fixtures, key=lambda fixture: fixture.date)
+        segments = split_at_reviews(sorted({fixture.date for fixture in fixtures}), last_played=None)
+        review_days = {segment.dates[0] for segment in segments for _ in segment.reviews}
     history = PitchingHistory()
     season = SeasonTally(team_games=rules.games_per_team)
     for fixture in fixtures:
+        if review is not None and fixture.date in review_days:
+            review_days.discard(fixture.date)
+            rosters = review(fixture.date) or rosters
         rng = make_random(game_seed(seed, year, f"check-{fixture.date}-{fixture.home_team_id}"))
         played = simulate_game(
             rng,

@@ -20,21 +20,27 @@
 
 昇格の事実は在籍の `promoted_year`・`number_before_promotion` だけ、育成契約の起点・満了・再契約は在籍とドラフトの
 指名から導く（保存しない）。
+
+シーズン中は、GM が育成タブで上げ（#170 P3a）、AI は判定日（6月1日・7月1日）に今の力で上げる
+（`decide_midseason_promotions`。#170 P3b・Q2 A）。どちらも補強の窓（`reinforcement.ReinforcementWindow`）の中だけ。
 """
 
 from __future__ import annotations
 
+import datetime
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cache
 
+from ..simulation.manager import ClubRoster, choose_active_roster
 from ..simulation.randomness import game_seed, make_random
 from ..simulation.ratings import POTENTIAL_AVERAGE, Potential
-from ..value_objects import DraftPick, Position
+from ..value_objects import DraftPick, ForeignPlayerRules, Position
 from .draft import NUMBER_POOLS, DraftRoute, draftee_count, draw_number
-from .offseason_player import OffseasonClub, OffseasonPlayer, retirement_value
+from .offseason_player import OffseasonClub, OffseasonPlayer, Ratings, retirement_value
 from .outlook import projected_ratings
 from .prospects import expected_prospect_ratings
+from .reinforcement import ReinforcementWindow
 from .release import ability_value, keep_value, release_order
 from .roster import OPENING_REGISTERED_BAND
 
@@ -48,6 +54,10 @@ MAX_PROMOTIONS = 3
 PROMOTION_MARGIN = 3.0
 # 満了の余裕（点）。満了の育成の見込みの価値が、新しい育成の新人の見込みからこれを引いた値に届かなければ自由契約
 RESIGN_MARGIN = 5.0
+# AI の期中の昇格（#170 P3b。Q2 A）: 1球団1年の上限（判定日ごとに1人まで）と、支配下の上限のうち空けておく人数
+# （#169 F3 の期中の外国人の獲得の分）
+MIDSEASON_MAX_PROMOTIONS = 2
+MIDSEASON_RESERVED_SLOTS = 1
 # 新しい育成の新人の見込みに使う年齢と経路（育成の新人はほとんどが大学から入る。#198 D2 の実測）
 DEVELOPMENT_PROSPECT_AGE = 22
 DEVELOPMENT_PROSPECT_ROUTE = DraftRoute.UNIVERSITY
@@ -55,7 +65,10 @@ DEVELOPMENT_PROSPECT_ROUTE = DraftRoute.UNIVERSITY
 
 @dataclass(frozen=True)
 class Promotion:
-    """オフの昇格ひとり。翌年（締める年 + 1）から支配下で、背番号は `number`（支配下の番号）に変わる。"""
+    """昇格ひとり。背番号は `number`（支配下の番号）に変わる。
+
+    オフの昇格（`confirm_promotions`）は翌年（締める年 + 1）から、AI の期中の昇格（`decide_midseason_promotions`）は
+    登録日から支配下。"""
 
     player_id: int
     team_id: int
@@ -181,6 +194,101 @@ def midseason_promotion_number(used: set[str], *, world_seed: int, year: int, te
     """
     rng = make_random(game_seed(world_seed, year, f"midseason-promotion-number-{team_id}-{player_id}"))
     return draw_number(rng, used, NUMBER_POOLS)
+
+
+@dataclass(frozen=True)
+class MidseasonProspect:
+    """期中の昇格の候補の育成選手ひとり（登録位置と、判定日の年の能力。能力が無い選手は上げない）。"""
+
+    player_id: int
+    position: Position
+    ratings: Ratings | None
+
+
+@dataclass(frozen=True)
+class MidseasonClub:
+    """AI の期中の昇格（`decide_midseason_promotions`）の材料。判定日の時点の球団ひとつ。"""
+
+    team_id: int
+    # 受け持つ球団（GM が決める。AI は触れない）
+    is_managed: bool
+    # 支配下の登録候補（能力のある在籍選手。試合の進行の `pool_of` と同じもの）と、所属リーグの1軍の外国人枠
+    pool: ClubRoster
+    foreign_rules: ForeignPlayerRules
+    development: tuple[MidseasonProspect, ...]
+    # その年の支配下の人数とリーグの上限（None は無制限）
+    registered_count: int
+    registered_limit: int | None
+    # 球団でいま使われている背番号（支配下・育成とも）
+    used_numbers: frozenset[str]
+    # その年の期中の登録日（GM・AI とも。`MidseasonRegistration.registered_on`）
+    registrations: tuple[datetime.date, ...]
+
+
+def decide_midseason_promotions(
+    clubs: Sequence[MidseasonClub], *, on: datetime.date, world_seed: int
+) -> tuple[Promotion, ...]:
+    """判定日に AI が支配下に上げる育成選手（#170 P3b。2026-11-12 ユーザー決定 Q2 A）。`on` は登録日（判定日以降の
+    最初の公式戦の日。上げた選手はこの日の試合から出られる）。
+
+    - **受け持つ球団は対象にしない**（GM が育成タブで決める）。補強の窓（`ReinforcementWindow.is_open`）の外なら
+      誰も上げない
+    - 上げるのは、今の能力の総合値（`retirement_value`）がその球団の1軍の同じ登録位置の基準（自動の1軍
+      `choose_active_roster` に入る、その位置で最も低い選手の総合値）以上の育成。1軍にその位置の選手がいなければ
+      上げない。
+      候補が複数なら基準を上回る幅の大きい選手（同じなら id の小さい選手）
+    - 1判定日1球団1人・1年 `MIDSEASON_MAX_PROMOTIONS` 人まで（その年の期中の登録で数える）。
+      支配下の上限のうち `MIDSEASON_RESERVED_SLOTS` 人は空けておく（#169 F3 の期中の外国人の獲得の分）
+    - その判定日の登録（登録日が `on` 以降）がもうある球団は上げない（書いた後に試合を作る前で止まった「進める」を
+      やり直しても、2人目を上げない）
+
+    背番号は `midseason_promotion_number`（GM の期中の昇格と同じ）。判定日の材料だけで決まる。
+    """
+    if not ReinforcementWindow.is_open(next_regular_game_on=on):
+        return ()
+    promotions: list[Promotion] = []
+    for club in clubs:
+        if club.is_managed:
+            continue
+        this_year = [registered for registered in club.registrations if registered.year == on.year]
+        if any(registered >= on for registered in this_year) or len(this_year) >= MIDSEASON_MAX_PROMOTIONS:
+            continue
+        if (
+            club.registered_limit is not None
+            and club.registered_count + 1 > club.registered_limit - MIDSEASON_RESERVED_SLOTS
+        ):
+            continue
+        chosen = _midseason_candidate(club)
+        if chosen is None:
+            continue
+        number = midseason_promotion_number(
+            set(club.used_numbers), world_seed=world_seed, year=on.year, team_id=club.team_id, player_id=chosen
+        )
+        promotions.append(Promotion(player_id=chosen, team_id=club.team_id, number=number))
+    return tuple(promotions)
+
+
+def _midseason_candidate(club: MidseasonClub) -> int | None:
+    """1軍の同じ登録位置の基準以上の育成のうち、基準を上回る幅の最も大きい選手の id（いなければ None）。"""
+    active = choose_active_roster(club.pool, rules=club.foreign_rules)
+    bars: dict[Position, float] = {}
+    members: list[tuple[Position, Ratings]] = [(batter.position, batter.ratings) for batter in active.batters]
+    members.extend((Position.PITCHER, pitcher.ratings) for pitcher in active.pitchers)
+    for position, ratings in members:
+        value = retirement_value(position, ratings)
+        bars[position] = min(value, bars.get(position, value))
+    best: tuple[float, int] | None = None
+    for prospect in club.development:
+        bar = bars.get(prospect.position)
+        if prospect.ratings is None or bar is None:
+            continue
+        margin = retirement_value(prospect.position, prospect.ratings) - bar
+        if margin < 0:
+            continue
+        key = (-margin, prospect.player_id)
+        if best is None or key < best:
+            best = key
+    return None if best is None else best[1]
 
 
 def decide_expirations(
