@@ -38,6 +38,7 @@ from myapp.presentation.views import (
     build_world_league_view_service,
 )
 
+from ..helpers import max_games_per_advance
 from .test_pennant_advance import SEASON_GAMES, YEAR
 from .test_pennant_home import FinishedSeasonCase, HomeCase
 
@@ -100,10 +101,7 @@ class AdvanceUnitsTest(HomeCase):
         self.start_season()
         self.client.force_login(self.owner)
 
-        with (
-            mock.patch("myapp.domain.pennant.schedule.MAX_GAMES_PER_ADVANCE", 10),
-            mock.patch("myapp.presentation.views.MAX_GAMES_PER_ADVANCE", 10),
-        ):
+        with max_games_per_advance(10):
             self.post_advance("limit")
 
         self.assertEqual(self.games_in(), 10, "1日1試合なので10日ぶん")
@@ -112,9 +110,8 @@ class AdvanceUnitsTest(HomeCase):
         self.start_season()
         self.client.force_login(self.owner)
 
-        with mock.patch("myapp.application.pennant_home.MAX_GAMES_PER_ADVANCE", 3):
+        with max_games_per_advance(3):
             content = self.client.get(self.home_url()).content.decode()
-        with mock.patch("myapp.presentation.views.MAX_GAMES_PER_ADVANCE", 3):
             response = self.post_advance("month_end")
 
         self.assertNotIn("月末まで進める", content)

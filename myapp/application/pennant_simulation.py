@@ -94,6 +94,14 @@ class DaySimulator:
             plans={plan.team_id: plan for plan in plans.find_all()},
         )
 
+    def pool(self, team_id: int) -> ClubRoster:
+        """球団の登録候補（読んだ時点の支配下の、能力のある選手）。AI の期中の昇格の基準（#170 P3b）が使う。"""
+        return self._pools[team_id]
+
+    def foreign_rules(self, team_id: int) -> ForeignPlayerRules:
+        """球団の所属リーグの外国人枠（1軍登録の枠）。"""
+        return self._teams[team_id].foreign_rules
+
     @property
     def notices(self) -> tuple[PlanNotice, ...]:
         """編成の上書きが使えず自動に落ちた区画（球団ごと・区画ごとに、最初の日の1回だけ）。"""

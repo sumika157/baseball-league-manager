@@ -50,7 +50,7 @@ from .queries import SeasonPlayingTimeQuery, SimulationContextQuery
 
 # 締める処理と会議を始める処理が、外で読んだときと中で書く前とで比べる状態の目印（`OffseasonPhase.state`）
 OffseasonState = tuple[
-    date | None, date | None, tuple[int, int, int], ReleasePlan | None, PostseasonFormat, DraftOrderRule
+    date | None, date | None, tuple[int, int, int, int], ReleasePlan | None, PostseasonFormat, DraftOrderRule
 ]
 
 

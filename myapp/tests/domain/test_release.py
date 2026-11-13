@@ -10,10 +10,10 @@ from statistics import fmean
 from myapp.domain.pennant import draft
 from myapp.domain.pennant.draft_meeting import DraftContext
 from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
-from myapp.domain.pennant.foreign_market import SIGNED_RATING_MEAN, expected_signing_ages, expected_signing_ratings
+from myapp.domain.pennant.foreign_market import SIGNED_RATING_MEAN, expected_signing_ratings
 from myapp.domain.pennant.offseason import OffseasonClub, OffseasonPlayer, plan_offseason
 from myapp.domain.pennant.offseason_player import TrackRecord, retirement_value
-from myapp.domain.pennant.outlook import PEAK_AGE, projected_ratings, roster_potential_estimate, roster_projection
+from myapp.domain.pennant.outlook import PEAK_AGE, roster_potential_estimate, roster_projection
 from myapp.domain.pennant.ratings import PlayerRatings
 from myapp.domain.pennant.release import (
     FIRST_YEAR_FOREIGN_MARGIN,
@@ -28,7 +28,7 @@ from myapp.domain.pennant.retirement import PlayingTime
 from myapp.domain.pennant.roster import OPENING_REGISTERED_BAND, RegisteredBand
 from myapp.domain.simulation.estimate import with_potential
 from myapp.domain.simulation.randomness import make_random
-from myapp.domain.simulation.ratings import POTENTIAL_AVERAGE, BatterRatings, PitcherRatings, Potential
+from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings, Potential
 from myapp.domain.simulation.samples import draw_ratings
 from myapp.domain.value_objects import ContractStatus, DraftPick, ForeignPlayerRules, Position, Profile
 
@@ -177,22 +177,23 @@ class ForeignProspectTest(unittest.TestCase):
     def test_the_prospect_is_the_outlook_of_the_signed_foreigners(self) -> None:
         """出典は獲得した外国人の分布（平均 `foreign_market.SIGNED_RATING_MEAN`。#169）と候補の年齢の分布。
         年齢ごとに見込みの能力（伸びしろは普通。#308 P3b）にして平均する。27歳以上は今の能力のままで、
-        伸びを持つのはマイナーの25・26歳だけなので、平均よりわずかに上。"""
+        伸びを持つのはマイナーの25・26歳だけなので、今の能力の価値よりわずかに上（半点未満）。
+
+        本体と同じ式で期待値を計算し直すと、式の誤りが本体とテストで同じになって捕まえられないので、性質で見る。
+        """
         ratings = expected_signing_ratings(Position.PITCHER)
-        expected = sum(
-            share
-            * retirement_value(
-                Position.PITCHER,
-                projected_ratings(
-                    ratings, age=age, position=Position.PITCHER, potential_estimate=Potential(POTENTIAL_AVERAGE)
-                ),
-            )
-            for age, share in expected_signing_ages().items()
-        )
+        today = retirement_value(Position.PITCHER, ratings)
+
         prospect = foreign_prospect_value(Position.PITCHER)
-        self.assertAlmostEqual(prospect, expected)
+
+        self.assertGreater(prospect, today, "若い候補の伸びの分だけ、今の能力の価値より上")
+        self.assertLess(prospect, today + 0.5, "伸びるのは25・26歳だけなので、上乗せは小さい")
         self.assertGreater(prospect, SIGNED_RATING_MEAN)
         self.assertLess(prospect, SIGNED_RATING_MEAN + 0.5)
+
+    def test_catchers_are_compared_as_infielders(self) -> None:
+        """外国人は捕手を獲得しないので、捕手は内野手の見込みで比べる。"""
+        self.assertEqual(foreign_prospect_value(Position.CATCHER), foreign_prospect_value(Position.INFIELDER))
 
     def test_catchers_are_compared_with_infielders(self) -> None:
         """外国人は捕手を獲得しないので、捕手は内野手の見込みで比べる。"""

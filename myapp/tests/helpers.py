@@ -5,7 +5,11 @@
 """
 
 import json
+import sys
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from datetime import date
+from unittest import mock
 
 from django.contrib.auth.models import User
 from django.urls import reverse
@@ -41,6 +45,30 @@ from myapp.presentation.views import build_world_league_view_service as build_wo
 from myapp.presentation.views import build_world_team_view_service as build_world_team_view_service
 
 LINEUP_SIZE = 9
+
+
+@contextmanager
+def max_games_per_advance(limit: int) -> Iterator[None]:
+    """1回に進められる試合数の上限（`schedule.MAX_GAMES_PER_ADVANCE`）を、テストの間だけ小さくする。
+
+    上限は出典（domain の schedule.py）から各層へ値として import されている（画面・GM ホーム・ポストシーズン）。
+    1か所だけ差し替えると、画面に出す上限と実際に止める上限が食い違ったまま通ってしまうので、
+    読み込み済みの myapp のモジュールのうち、上限を持つものをすべて差し替える。
+    """
+    from myapp.domain.pennant import schedule
+
+    # 差し替える前の値で見分ける（出典を先に差し替えると、比べる相手が変わってほかのモジュールを取りこぼす）
+    original = schedule.MAX_GAMES_PER_ADVANCE
+    holders = [
+        module
+        for name, module in list(sys.modules.items())
+        if name.startswith("myapp.") and getattr(module, "MAX_GAMES_PER_ADVANCE", None) == original
+    ]
+    with ExitStack() as stack:
+        for module in holders:
+            stack.enter_context(mock.patch.object(module, "MAX_GAMES_PER_ADVANCE", limit))
+        yield
+
 
 # テストの試合と在籍の年。選手の登録の年は既定で現実の今日の年なので、試合の年（ここ）と合わせて渡す。
 # 渡さないと、年が明けたとたんに「加入より前の年の試合」になって落ちる（2027年として流して57件落ちた）

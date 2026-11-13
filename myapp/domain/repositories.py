@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from datetime import date
 from typing import Protocol, runtime_checkable
 
@@ -23,6 +23,7 @@ from .pennant.draft_lottery import DraftLotteryRecord
 from .pennant.draft_meeting import DraftAction
 from .pennant.draft_record import DraftRecord
 from .pennant.ratings import PlayerRatings
+from .pennant.reinforcement import MidseasonRegistration
 from .pennant.release import ReleasePlan
 from .pennant.schedule import Fixture
 from .pennant.world import World
@@ -36,10 +37,11 @@ class TeamRepository(Protocol):
         """ロスター込みでチームを取得する。存在しなければ TeamNotFound。"""
         ...
 
-    def roster_signature(self) -> tuple[int, int, int]:
-        """範囲の在籍の目印（行数・現在在籍の人数・最大の id）。加入・退団があれば変わる。
+    def roster_signature(self) -> tuple[int, int, int, int]:
+        """範囲の在籍の目印（行数・現在在籍の人数・最大の id・昇格した在籍の数）。加入・退団・昇格があれば変わる。
 
-        外で読んだ名簿が、書く前に変わっていないかを確かめるのに使う（クエリ1本）。
+        外で読んだ名簿が、書く前に変わっていないかを確かめるのに使う（クエリ1本）。昇格は在籍の行を書き換えるだけで
+        行数も id も変えないので、昇格した在籍の数を足してある（昇格は取り消さないので単調に増える。#170 P3a）。
         """
         ...
 
@@ -58,6 +60,13 @@ class TeamRepository(Protocol):
 
     def find_all_with_roster(self) -> list[Team]:
         """全チームをロスター込みで取得する。リーグ全体の順位づけに使う。"""
+        ...
+
+    def find_by_ids_with_roster(self, team_ids: Collection[int]) -> list[Team]:
+        """渡した id のチームだけを、ロスター込みで取得する（id の順）。1つでも範囲に無ければ TeamNotFound。
+
+        書き換える球団だけを読む（AI の期中の昇格。#170 P3b）。全球団を読むと、使わない選手の通算成績まで組み立てる。
+        """
         ...
 
     def save(self, team: Team) -> Team:
@@ -278,6 +287,35 @@ class ReleasePlanRepository(Protocol):
 
     def delete_all(self) -> None:
         """範囲の指名をすべて消す（締める処理が、使い終わった指名と締める年の違う指名を消す）。"""
+        ...
+
+
+@runtime_checkable
+class MidseasonRegistrationRepository(Protocol):
+    """期中の支配下登録の記録（`MidseasonRegistration`。#170 P3a）。書くのは期中の登録の操作だけ。
+
+    ペナントの世界にだけ置ける。在籍は年単位なので、オフの昇格と期中の昇格を区別するために登録日だけを足す
+    （`domain/pennant/reinforcement.py`）。
+    """
+
+    def add(self, registration: MidseasonRegistration) -> None:
+        """登録を1つ書く。在籍の昇格の年と登録日の年が合わなければ InvalidContract
+        （`reinforcement.ensure_registration_matches_stint`）。
+
+        実データの範囲には書けない（InvalidWorld）。範囲の外の球団は TeamNotFound、球団に在籍していない選手は
+        PlayerNotFound。
+        """
+        ...
+
+    def find_by_team(self, team_id: int) -> list[MidseasonRegistration]:
+        """その球団の期中の登録（登録日・選手の id の順）。範囲の外の球団は TeamNotFound。"""
+        ...
+
+    def find_in_year(self, year: int) -> list[MidseasonRegistration]:
+        """範囲の全球団の、登録日が `year` 年の期中の登録（球団・登録日・選手の id の順）。
+
+        AI の期中の昇格（#170 P3b）が、判定日に球団ごとのその年の登録を1本で数える。
+        """
         ...
 
 

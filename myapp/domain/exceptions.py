@@ -209,6 +209,10 @@ class AlreadyClosed(DomainError):
         self.year = year
 
 
+class ReinforcementClosed(DomainError):
+    """シーズン中の補強の窓（締めた後〜7月31日）の外で、支配下を増やそうとした（#207）。"""
+
+
 class SeasonLimitReached(DomainError):
     """世界のシーズン数の上限に達していて、これ以上締められない。"""
 

@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('myapp', '0060_player_foreign_background'),
+        ('myapp', '0061_pennant_midseason_registration'),
     ]
 
     operations = [

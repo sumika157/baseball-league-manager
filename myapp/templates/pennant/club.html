@@ -14,6 +14,7 @@
 編成。区画（1軍登録・オーダー・ローテーション・抑え）ごとに、自動か手動のどちらかの状態だけを持つ。
 自動のときは提案の読み取り専用の表と「手動にする」、手動のときは編集欄と「保存する」「自動に戻す」。
 シーズン終了で締められるときだけ「戦力外」タブを出す（ビューが has_release_tab と、開いたときは release を渡す）。
+補強の窓（締めた後〜7月31日）の中だけ「育成」タブを出す（ビューが has_development_tab と、開いたときは development を渡す）。
 書き込みの導線はオーナーにだけ出す。
 {% endcomment %}
 <div class="page-head">
@@ -29,6 +30,7 @@
     <a class="segmented-item {% if tab == 'lineup' %}is-active{% endif %}" href="?tab=lineup">オーダー</a>
     <a class="segmented-item {% if tab == 'pitching' %}is-active{% endif %}" href="?tab=pitching">投手陣</a>
     {% if has_release_tab %}<a class="segmented-item {% if tab == 'release' %}is-active{% endif %}" href="?tab=release">戦力外</a>{% endif %}
+    {% if has_development_tab %}<a class="segmented-item {% if tab == 'development' %}is-active{% endif %}" href="?tab=development">育成</a>{% endif %}
   </div>
 
   {% if not is_owner %}
@@ -46,6 +48,8 @@
     {% include 'pennant/_club_lineup.html' %}
   {% elif tab == 'pitching' %}
     {% include 'pennant/_club_pitching.html' %}
+  {% elif tab == 'development' %}
+    {% include 'pennant/_club_development.html' %}
   {% elif tab == 'release' %}
     {% include 'pennant/_club_release.html' %}
   {% else %}

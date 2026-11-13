@@ -2368,6 +2368,108 @@ class DraftStep:
     is_complete: bool
 
 
+# --- 期中の支配下登録（編成の「育成」タブ。#170 P3a） ---
+
+
+@dataclass(frozen=True)
+class DevelopmentPlayerFacts:
+    """受け持つ球団の育成選手ひとり（参照クエリ `DevelopmentRosterQuery` が読んだ値）。
+
+    `joined_year` は今の在籍の開始年（育成契約の起点の材料。`development.contract_start_year`）、
+    `tenure` はその球団での在籍と登録位置・プロフィール（年齢と見込みの材料）。
+    """
+
+    player_id: int
+    name: str
+    number: str
+    joined_year: int
+    tenure: ClubTenure
+
+
+@dataclass(frozen=True)
+class DevelopmentRoster:
+    """球団の育成選手と、支配下の人数・上限（支配下に登録できるかの材料）。"""
+
+    team_name: str
+    # その年に支配下の選手の数（判定は domain の `ContractStatus.in_year`。集約の `registered_player_count` と同じ）
+    registered_count: int
+    # リーグの支配下の上限。None は無制限
+    registered_limit: int | None
+    players: tuple[DevelopmentPlayerFacts, ...]
+
+
+@dataclass(frozen=True)
+class DevelopmentSquadPlayer:
+    """AI の期中の昇格の候補ひとり（育成選手の id と登録位置）。"""
+
+    player_id: int
+    position: Position
+
+
+@dataclass(frozen=True)
+class DevelopmentSquad:
+    """球団ひとつの育成選手と支配下の人数・使っている背番号（AI の期中の昇格の材料。#170 P3b）。"""
+
+    team_id: int
+    # その年に支配下の選手の数（判定は domain の `ContractStatus.in_year`。`DevelopmentRoster` と同じ）
+    registered_count: int
+    # リーグの支配下の上限。None は無制限
+    registered_limit: int | None
+    # その年に在籍する選手（支配下・育成とも）の背番号
+    numbers: frozenset[str]
+    players: tuple[DevelopmentSquadPlayer, ...]
+
+
+@dataclass(frozen=True)
+class DevelopmentPlayerRow:
+    """「育成」タブの1行。能力が無い選手は `overall` が None・`cells` が空。"""
+
+    player_id: int
+    name: str
+    number: str
+    position: Position
+    # その年の4月1日の年齢（締める処理・見込みと同じ。`offseason_player.player_age`）
+    age: int
+    overall: RatingCell | None
+    cells: tuple[RatingCell, ...]
+    outlook: OutlookCell | None
+    # 育成契約の何年目か（`development.contract_season`）
+    contract_season: int
+    # この年のオフに育成契約が満了するか（`development.is_contract_expiring`）
+    is_expiring: bool
+
+
+@dataclass(frozen=True)
+class MidseasonRegistrationView:
+    """編成の「育成」タブの材料。補強の窓（締めた後〜7月31日）の中だけで作る。
+
+    `blocked_reason` は支配下の上限で登録できないときの理由（行ごとのボタンの代わりに出す）。
+    """
+
+    team_id: int
+    team_name: str
+    # 次の公式戦の年（能力・年齢・何年目を見る年）
+    year: int
+    # 次の公式戦の日（登録した選手が出られる最初の日。POST で送ってもらい、古い画面を弾く）
+    next_game_on: date
+    # 補強の期限の日（`ReinforcementWindow.deadline`）
+    deadline: date
+    registered_count: int
+    registered_limit: int | None
+    blocked_reason: str | None
+    players: tuple[DevelopmentPlayerRow, ...]
+
+
+@dataclass(frozen=True)
+class MidseasonPromotion:
+    """期中に支配下に登録した結果（画面のメッセージに使う）。"""
+
+    player_id: int
+    name: str
+    number: str
+    registered_on: date
+
+
 # --- オフの結果と能力の推移（P6c） ---
 
 

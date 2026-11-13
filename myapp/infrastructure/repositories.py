@@ -10,7 +10,7 @@ ORM モデルとドメインオブジェクトの相互変換（マッピング�
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Protocol
@@ -61,6 +61,7 @@ from ..domain.pennant.draft_order import DraftOrderRule
 from ..domain.pennant.draft_record import DraftRecord
 from ..domain.pennant.postseason import PostseasonFormat
 from ..domain.pennant.ratings import PlayerRatings
+from ..domain.pennant.reinforcement import MidseasonRegistration, ensure_registration_matches_stint
 from ..domain.pennant.release import ReleasePlan
 from ..domain.pennant.schedule import Fixture
 from ..domain.pennant.season import is_season_closed
@@ -104,6 +105,7 @@ from .scoping import (
     game_rows_in_world,
     games_in,
     leagues_in,
+    midseason_registrations_in,
     players_in,
     ratings_in,
     release_plans_in,
@@ -213,15 +215,19 @@ class DjangoTeamRepository:
 
         return self._to_domain(row, roster=_RosterData.for_players(s.player for s in row.stints.all()))
 
-    def roster_signature(self) -> tuple[int, int, int]:
-        """範囲の在籍の目印（在籍の行数・現在在籍の人数・最大の id）。クエリ1本。
+    def roster_signature(self) -> tuple[int, int, int, int]:
+        """範囲の在籍の目印（在籍の行数・現在在籍の人数・最大の id・昇格した在籍の数）。クエリ1本。
 
-        選手の加入・退団・新しい選手の登録があれば変わる。外で読んだ名簿が、書く前に変わっていないかの確認に使う。
+        選手の加入・退団・新しい選手の登録・育成からの昇格があれば変わる。外で読んだ名簿が、書く前に変わっていないかの
+        確認に使う。
         """
         values = stints_in(self._scope).aggregate(
-            total=Count("id"), active=Count("id", filter=Q(to_year__isnull=True)), newest=Max("id")
+            total=Count("id"),
+            active=Count("id", filter=Q(to_year__isnull=True)),
+            newest=Max("id"),
+            promoted=Count("id", filter=Q(promoted_year__isnull=False)),
         )
-        return (values["total"], values["active"], values["newest"] or 0)
+        return (values["total"], values["active"], values["newest"] or 0, values["promoted"])
 
     def find_all(self) -> list[Team]:
         rows = teams_in(self._scope).select_related("league").order_by("display_order", "name")
@@ -229,6 +235,14 @@ class DjangoTeamRepository:
 
     def find_all_with_roster(self) -> list[Team]:
         return self._with_rosters(self._roster_rows())
+
+    def find_by_ids_with_roster(self, team_ids: Collection[int]) -> list[Team]:
+        """渡した球団だけを、ロスター込みで読む（絞り込みは SQL 側。id の順）。"""
+        wanted = set(team_ids)
+        teams = self._with_rosters(self._roster_rows().filter(id__in=wanted).order_by("id"))
+        if missing := sorted(wanted - {team.id for team in teams if team.id is not None}):
+            raise TeamNotFound(f"チームが見つかりません（id={missing[0]}）。")
+        return teams
 
     def find_by_league_with_roster(self, league_id: int) -> list[Team]:
         """そのリーグのチームだけを、ロスター込みで読む。**絞り込みは SQL 側で行う**。
@@ -1462,6 +1476,8 @@ _WORLD_ROWS_CHILD_FIRST: tuple[tuple[type[models.Model], str], ...] = (
     (orm_models.PennantClubPlan, "team__league"),
     (orm_models.PennantReleasePlanEntry, "plan__team__league"),
     (orm_models.PennantReleasePlan, "team__league"),
+    # 期中の支配下登録も選手・球団を指すので、選手・球団を消す前に消す
+    (orm_models.PennantMidseasonRegistration, "team__league"),
     (orm_models.PennantPlayerRatings, "player__stints__team__league"),
     # FA 宣言も選手の在籍をたどって世界が決まるので、在籍を消す前に消す
     (orm_models.PlayerFreeAgentDeclaration, "player__stints__team__league"),
@@ -1755,6 +1771,56 @@ class DjangoReleasePlanRepository:
     def delete_all(self) -> None:
         # 行は外部キーの CASCADE で消える（1世界に高々球団の数だけなので、collector に任せてよい）
         release_plans_in(self._scope).delete()
+
+
+class DjangoMidseasonRegistrationRepository:
+    """MidseasonRegistrationRepository の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る。
+
+    期中の支配下登録はペナント専用で、実データの範囲には書けない。他の世界の球団の登録は、読めも書けもしない。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def add(self, registration: MidseasonRegistration) -> None:
+        if self._scope.is_real:
+            raise InvalidWorld("期中の支配下登録はペナントの世界にだけ保存できます。")
+        if not teams_in(self._scope).filter(id=registration.team_id).exists():
+            raise TeamNotFound(f"球団が見つかりません（id={registration.team_id}）。")
+        stint = (
+            stints_in(self._scope)
+            .filter(team_id=registration.team_id, player_id=registration.player_id, to_year__isnull=True)
+            .values("promoted_year")
+            .first()
+        )
+        if stint is None:
+            raise PlayerNotFound(f"この球団に在籍していない選手は登録できません（id={registration.player_id}）。")
+        # 同じ事実（昇格の年）が在籍と登録日の2か所にあるので、書く前に照合する
+        ensure_registration_matches_stint(registration.registered_on, stint["promoted_year"])
+        orm_models.PennantMidseasonRegistration.objects.create(
+            team_id=registration.team_id, player_id=registration.player_id, registered_on=registration.registered_on
+        )
+
+    def find_by_team(self, team_id: int) -> list[MidseasonRegistration]:
+        if not teams_in(self._scope).filter(id=team_id).exists():
+            raise TeamNotFound(f"球団が見つかりません（id={team_id}）。")
+        rows = midseason_registrations_in(self._scope).filter(team_id=team_id).order_by("registered_on", "player_id")
+        return [
+            MidseasonRegistration(team_id=row.team_id, player_id=row.player_id, registered_on=row.registered_on)
+            for row in rows
+        ]
+
+    def find_in_year(self, year: int) -> list[MidseasonRegistration]:
+        rows = (
+            midseason_registrations_in(self._scope)
+            .filter(registered_on__year=year)
+            .order_by("team_id", "registered_on", "player_id")
+            .values_list("team_id", "player_id", "registered_on")
+        )
+        return [
+            MidseasonRegistration(team_id=team_id, player_id=player_id, registered_on=registered_on)
+            for team_id, player_id, registered_on in rows
+        ]
 
 
 class DjangoAwardRepository:
