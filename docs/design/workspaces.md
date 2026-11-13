@@ -1890,3 +1890,37 @@ epic を main に入れる前に開発 DB・本番で数え、あれば作成者
 - **計測**: やり直していない。main の変更で読み取りが増えるのはオフの結果の画面（在籍の1本）と締める処理で、`measure_pages` の画面に入っていない。
 - テスト: domain＋integration 4,400、e2e 21（Django 5.2.19 で）。
 - **レビュー**（`ddd-boundary-reviewer`）: 重要な指摘なし（#345 に範囲なしの読み書き・新しい書き込みの経路・新しい `Django*` が無いこと、昇格が世界の年で書くこと、テストの範囲の取り違えが無いこと、domain が Django を import しないことを確かめた）。軽微: `test_pennant_development.py` がリポジトリ・クエリをテストの中で直接作る（main と epic の慣習どおりで範囲は `world_scope`。直していない）。
+
+### W5（#81）
+
+計画は #81 の計画（2026-11-13。epic b75c222 と照合）。決定（2026-11-13、すべて推奨）: 1. 見本を入れる処理はワークスペースの作成と同じトランザクション（T3 で実測し、ロックが2秒を超えたら分ける）／2. 新しい `WorkspaceSampleService`（新しいワークスペースの範囲・実データ専用）に置き、`WorkspaceService.create` には組み立て口から呼び出しの関数として渡す／3. ベテランの組み立ては domain の `virtual_players/veteran.py` に切り出し、見本と `seed_virtual_players` の両方が通る／4. CLAUDE.md の差分は T3 で入れる。推奨で進めるもの 1〜9 も推奨どおり。
+
+#### T1 見本のリーグの domain（`feature/sample-league-domain`、2026-11-13）
+
+画面とサービスはまだ使わない（T2 が使う）。マイグレーションは無い。
+
+- `domain/virtual_players/veteran.py`（決定3）: `draw_veteran(rng, position, *, contract, is_foreign, as_of, used_names, draft_rounds) -> GeneratedPlayer`。`seed_virtual_players._new_player` から、名前・出身地・年齢（契約区分の帯）・生年月日・経歴（育成は `DraftRoute.development_amateur_paths()`）・加入年・ドラフトの指名・入団の経路・投打・体格の組み立てを移した。乱数を引く順は前と同じで、年齢だけ `rng.gauss` から `randomness.normal`（`random()` を2回）に替えた（**同じ `--seed` でも前とは違う選手になる。開発 DB は作り直さない**）。`GeneratedPlayer` は名前・位置・区分・加入年・経路・`Profile`（背ネームは空）・ローマ字。外国人は支配下だけ（育成で頼むと `ValueError`）。
+- `seed_virtual_players` は `draw_veteran` を通す。ORM に直接書く前の検査（背番号の桁・経路と区分・投入後の支配下の上限）と、人数の帯（支配下62〜66・育成10〜30）・背番号の配り方・外国人の判定・順位の振り方（`_next_rounds` をそのまま `draft_rounds` に渡す）は変えていない。既存の `test_seed_virtual_players.py` は規則だけを見ていたので、直さずに通った。
+- `domain/sample/`（Django を import しない）:
+  - `names.py`: 固定の架空のリーグ（「見本リーグ」）・6球団・6球場（所在地・収容人数・グラウンド・屋根・開場年。選択肢は `StadiumProfile.SURFACES`・`ROOFS` の値を指す）。
+  - `league.py`: 定数（6球団・25人・12試合・投手12（先発向き6・救援向き6）・捕手2・内野手6・外野手5・外国人は投手1と捕手以外の野手1・`SAMPLE_SEED`・能力の平均は `AVERAGE_RATING`）、`opening_day(year)`（`default_opening_day`）、`sample_year(today)`（今日が開幕＋`SAMPLE_SEASON_DAYS`（21日）を過ぎていれば今年、でなければ前年）、`sample_random(key, year)`、値の型 `SampleLeague`・`SampleStadium`・`SampleTeam`・`SamplePlayer`（全員支配下。番号は文字列、背ネーム入りの `Profile`、能力）、`draw_sample_league(key, year)`（名前は `draw_veteran`、背番号は `draft.draw_number`、背ネームは `generator.back_name`、能力は `samples.draw_ratings`。球団ごとに `ensure_roster_playable`）、`sample_club(team, *, team_id, player_ids)`（保存後の id で `ClubRoster` にする）、`sample_fixtures(team_ids, *, key, year)`、`play_sample_games(clubs, fixtures, *, key, year, foreign_rules, capacities)`（日付順に `simulate_game`、`PitchingHistory` を引き継ぐ、時刻と観客数は `game_day`。試合ごとの乱数は `game_seed(SAMPLE_SEED, year, "sample:<key>:<日付>:<ホームの並び>:<ビジターの並び>")` で、保存後の id に依らない）。
+
+**計画からのずれ**
+
+- **日程は `generate_schedule` で組めた（`round_robin_days` には落としていない）。ただし連戦の標準の長さを2にした**（`ScheduleRules(games_per_team=12, series_length=2)`）。標準の3連戦のままだと、5つの相手に2〜3試合ずつを「ホームの偏らない連戦」に分けられず `InvalidSchedule` になる。2連戦なら組め、開幕（3月最終週の金曜）から約15日で終わる。
+- `draw_veteran` に `draft_rounds`（球団 × ドラフト年 × 本指名/育成の最後の順位。書き足す）を足した（計画の引数に無い）。順位は球団の既存の選手で決まるので、呼ぶ側が持つ。
+- `sample_club` を足した（T2 が保存後の id で試合を回すため）。
+- 規定: 12試合で、規定打席に届く打者は1見本あたり約54人、規定投球回に届く投手は約11〜21人（5つの key で確かめた）。試合数は増やしていない。
+- 生成の時間（名簿・日程・36試合。保存は含まない）は1見本あたり約0.35秒（コンテナ内、5見本で1.77秒）。
+
+**テスト**: domain 新 `test_sample_league.py`（形・名前と背番号の重複なし・背ネームの同姓・外国人は枠の内側・全員支配下で加入は見本の年まで・名前は固定・同じ key と年なら同じ・key と年で変わる・`random()` だけ・名簿は key 200個で `ensure_roster_playable` を通る・組み立てが名簿の検査を通す・日程（36試合・各12試合・総当たり・開幕日・月曜休み・1日1試合・30 key × 4年で21日以内）・`sample_year` の境界と「今日より前」・36試合が照合を通る・時刻と観客数・規定に届く打者と投手（3つの key）・id が違っても同じ試合・試合ごとの乱数・key で試合が変わる）、新 `test_veteran.py`（`random()` だけ・年齢の帯・ドラフトの翌年の加入・育成は社会人なし・順位の採番・外国人・名前の重複なし・背ネームは空）。件数: domain＋integration 4,436（epic b75c222 の 4,400 より +36）、e2e 21。
+
+**変異の確かめ**（どれも戻した）: 名簿の検査を外す → 1件、試合の乱数を共有にする → 2件、`sample_year` の境界を `>=` にする → 1件、外国人の野手を2人にする → 6件、年齢を `rng.gauss` に戻す → 12件、順位を進めない → 1件、育成の経路を絞らない → 1件、背ネームの同姓を見ない → 多数（subTest）。
+
+**レビュー（ddd-boundary-reviewer）**: 重要な指摘なし。軽微を直した: 能力の平均の 50 を `AVERAGE_RATING` から取る。残したもの: スタミナの水準（62・38・10）は `samples.spread_club` のリテラルと同じ値（`samples.py` はペナントのセッションも触るので名前付きの定数にしなかった）、`names.py` の `StadiumProfile.SURFACES`・`ROOFS` の位置での分解（並びを変えると黙って意味が入れ替わる）、`veteran.py` が `pennant.draft.DraftRoute` を使う（パッケージの相互依存。モジュールの循環は無い）、`seed_virtual_players` の経路の検査は `draw_veteran` の中と二重（ORM に直接書く意図の明示として残した）。
+
+**T2 への申し送り**
+
+- 保存は `Team.add_player(name, JerseyNumber(player.number), player.position, from_year=player.from_year, contract=REGISTERED, acquired_via=player.acquired_via, limits=...)` の後に `change_player_profile` で `player.profile` を写す（年は必ず渡す）。
+- 試合は保存後の id で `sample_club` → `sample_fixtures(team_ids)` → `play_sample_games(..., foreign_rules=league.foreign_rules, capacities=本拠地の収容人数)` → `add_all`。`sample_fixtures`・`play_sample_games` に渡す key と年は `draw_sample_league` と同じもの（`SampleLeague.year`）。
+- `draw_sample_league` の名簿の検査は pennant の `InvalidWorld` を投げる（構成が固定なので起きない見込み）。
