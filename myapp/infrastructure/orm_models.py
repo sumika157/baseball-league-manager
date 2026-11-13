@@ -1147,3 +1147,45 @@ class PennantDraftAction(models.Model):
 
     def __str__(self) -> str:
         return f"{self.draft_id} {self.seq} {self.kind}"
+
+
+class PennantDraftLottery(models.Model):
+    """締めた年のドラフトの抽選ひとつ（domain の `DraftLotteryRecord`。#298 D4）。書くのはシーズンを締める処理だけ。
+
+    `player` は抽選で当たった球団が指名した選手（1人に抽選は1つ）。年・巡・本指名か育成かは選手の指名
+    （`draft_year` など）、当たった球団は選手の最初の在籍の球団で分かるので持たない。入札した球団は
+    `PennantDraftLotteryBid`。会議の行動の行は締めると消えるので、締めた後はこの行だけが抽選の出典。
+    """
+
+    player = models.OneToOneField(
+        Player, on_delete=models.CASCADE, related_name="draft_lottery", verbose_name="指名された選手"
+    )
+    attempt = models.PositiveSmallIntegerField(verbose_name="入札の回")
+
+    class Meta:
+        verbose_name = "ペナントのドラフトの抽選"
+        verbose_name_plural = "ペナントのドラフトの抽選"
+        ordering = ["player_id"]
+
+    def __str__(self) -> str:
+        return f"{self.player_id} {self.attempt}回目"
+
+
+class PennantDraftLotteryBid(models.Model):
+    """ドラフトの抽選に入札した球団ひとつ（当たった球団も含む）。"""
+
+    lottery = models.ForeignKey(
+        PennantDraftLottery, on_delete=models.CASCADE, related_name="bids", verbose_name="抽選"
+    )
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="+", verbose_name="球団")
+
+    class Meta:
+        verbose_name = "ペナントのドラフトの抽選の入札"
+        verbose_name_plural = "ペナントのドラフトの抽選の入札"
+        ordering = ["lottery_id", "team_id"]
+        constraints = [
+            models.UniqueConstraint(fields=["lottery", "team"], name="unique_pennant_draft_lottery_bid"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.lottery_id} {self.team_id}"

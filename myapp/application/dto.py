@@ -13,6 +13,8 @@ from datetime import date
 from ..domain.entities import jersey_number_in, winning_team_id
 from ..domain.pennant.awards import Award
 from ..domain.pennant.club_plan import PlanSection
+from ..domain.pennant.draft import DraftRoute
+from ..domain.pennant.draft_lottery import DraftLotteryRecord, contest_label
 from ..domain.pennant.draft_meeting import DraftActionKind
 from ..domain.pennant.draft_order import DraftOrderRule
 from ..domain.pennant.draft_record import DraftMeetingStatus
@@ -1583,6 +1585,8 @@ class WorldSummary:
     postseason_format: PostseasonFormat = PostseasonFormat.NONE
     # ポストシーズンの試合が1つでもあるか（方式を「なし」に変えた世界の、過去の年の表へのリンク）
     played_postseason: bool = False
+    # ドラフト会議の記録がある年（会議を始めてから締めるまで。締めると記録は消える）。世界の一覧だけが読む（#298 D4）
+    draft_year: int | None = None
 
 
 @dataclass(frozen=True)
@@ -1605,6 +1609,8 @@ class PennantWorldListRow:
     own_standing: OwnStanding | None
     # 優勝の確定・マジック（#104）。確定でもマジック点灯でもなければ None
     race: OwnRace | None = None
+    # いまの年度のドラフト会議を始めていて、まだ締めていない（指名を終えて締める前も含む。#298 D4）
+    draft_in_progress: bool = False
 
 
 @dataclass(frozen=True)
@@ -2167,7 +2173,7 @@ class ReleasePlanView:
 # --- ドラフト会議（#297 D3） ---
 
 
-def _draft_round_label(round_number: int, *, is_development: bool) -> str:
+def draft_round_label(round_number: int, *, is_development: bool) -> str:
     return f"{'育成' if is_development else ''}{round_number}巡目"
 
 
@@ -2187,7 +2193,7 @@ class DraftTurnView:
     @property
     def round_label(self) -> str:
         """「1巡目」「育成2巡目」（区分の中の巡）。"""
-        return _draft_round_label(self.round_number, is_development=self.is_development)
+        return draft_round_label(self.round_number, is_development=self.is_development)
 
 
 @dataclass(frozen=True)
@@ -2198,6 +2204,48 @@ class DraftLotteryView:
     bidders: tuple[str, ...]
     winner: str
     bidder_ids: tuple[int, ...] = ()
+
+    @property
+    def label(self) -> str:
+        """「3球団競合」（表記の出典は domain の `draft_lottery.contest_label`）。"""
+        return contest_label(len(self.bidders))
+
+
+@dataclass(frozen=True)
+class DraftBoardColumn:
+    """ドラフトの盤（巡 × 球団）の列ひとつ（球団）。"""
+
+    team_id: int
+    team_name: str
+    is_mine: bool
+
+
+@dataclass(frozen=True)
+class DraftBoardCell:
+    """盤のセル（球団がその巡で指名した選手）。`player_id` は入団した選手（オフの結果だけ。会議の途中は None）。"""
+
+    team_id: int
+    name: str
+    position: str
+    player_id: int | None = None
+    lottery: DraftLotteryView | None = None
+
+
+@dataclass(frozen=True)
+class DraftBoardRow:
+    """盤の行ひとつ（本指名か育成の巡）。`cells` は列と同じ順で、その巡で指名しなかった球団は None。"""
+
+    round_label: str
+    is_development: bool
+    cells: tuple[DraftBoardCell | None, ...]
+
+
+@dataclass(frozen=True)
+class DraftBoard:
+    """ドラフトの盤（行＝本指名の巡 → 育成の巡、列＝球団）。会議の画面とオフの結果が同じ部分テンプレートで出す。"""
+
+    columns: tuple[DraftBoardColumn, ...]
+    rows: tuple[DraftBoardRow, ...]
 
 
 @dataclass(frozen=True)
@@ -2217,7 +2265,7 @@ class DraftMoveRow:
 
     @property
     def round_label(self) -> str:
-        return _draft_round_label(self.round_number, is_development=self.is_development)
+        return draft_round_label(self.round_number, is_development=self.is_development)
 
 
 @dataclass(frozen=True)
@@ -2238,7 +2286,7 @@ class DraftProspectRow:
     key: int
     name: str
     position: Position
-    route_label: str
+    route: DraftRoute
     age: int
     grade: RatingGrade
     # 指名された球団の名前（まだ指名されていなければ空）
@@ -2247,6 +2295,10 @@ class DraftProspectRow:
     selectable: bool
     # 指名済みか（並べ替えで末尾に回す。domain の `sorting.ListedProspect`）。表示の名前ではなく指名の有無から立てる
     is_taken: bool = False
+
+    @property
+    def route_label(self) -> str:
+        return self.route.label
 
 
 @dataclass(frozen=True)
@@ -2258,7 +2310,9 @@ class DraftMeetingView:
     - `changed`: 会議を始めた後にコードが変わって、保存した会議を再生できない（`DraftChanged`。
       「会議をやり直す」だけを出す）
     - `last_seq`: 最後の行動の番号。書き込みの操作に `expected_seq` として送り返す
-    - `prospects`: 候補（`sort`・`descending` の並び。domain の `sorting.sort_prospects`。指名済みは末尾）
+    - `prospects`: 候補（`position_filter`・`route_filter` で絞り、`sort`・`descending` で並べたもの。
+      domain の `sorting.filter_prospects`・`sort_prospects`。指名済みは末尾）。`prospect_total` は絞る前の人数
+    - `board`: 受け持つ球団のリーグの盤（巡 × 球団。#298 D4）
     """
 
     year: int | None
@@ -2277,6 +2331,13 @@ class DraftMeetingView:
     can_pass: bool = False
     # 指名できる候補がいないときだけ、受け持つ球団の番を AI に任せられる（AI は候補を足して指名する）
     can_delegate: bool = False
+    prospect_total: int = 0
+    # 絞り込みの選択肢（候補にいる位置と経歴。並びは値オブジェクトの定義の順）と、実際に使った値（None は絞らない）
+    position_choices: tuple[Position, ...] = ()
+    route_choices: tuple[DraftRoute, ...] = ()
+    position_filter: Position | None = None
+    route_filter: DraftRoute | None = None
+    board: DraftBoard | None = None
 
     @property
     def can_start(self) -> bool:
@@ -2346,6 +2407,19 @@ class OffseasonFacts:
     retained: tuple[OffseasonPlayerFact, ...]
     # オフに育成から支配下に上がった選手（翌年の年で昇格した在籍。#170）
     promoted: tuple[OffseasonPlayerFact, ...] = ()
+    # 世界の球団（盤の列と、抽選に入札した球団の名前。#298 D4）
+    teams: tuple[OffseasonTeam, ...] = ()
+    # 締めた年のドラフトの抽選の記録（指名された選手に付く。D4 より前に締めた年は無い）
+    lotteries: tuple[DraftLotteryRecord, ...] = ()
+
+
+@dataclass(frozen=True)
+class OffseasonTeam:
+    """オフの結果の盤の列になる球団（id の順）。"""
+
+    id: int
+    name: str
+    league_id: int
 
 
 @dataclass(frozen=True)
@@ -2403,6 +2477,8 @@ class OffseasonRookieRow:
     rating: RatingCell | None
     # ドラフトの指名の順位（「1位」。`DraftPick.order_label`）。獲得した外国人など指名の無い選手は空
     pick: str = ""
+    # 抽選で当たった新人の抽選（「3球団競合」。#298 D4）
+    lottery: DraftLotteryView | None = None
 
 
 @dataclass(frozen=True)
@@ -2450,6 +2526,8 @@ class OffseasonSummary:
     # 成長と衰えの大きかった選手（世界全体の上位）
     risers: tuple[OffseasonChangeRow, ...]
     decliners: tuple[OffseasonChangeRow, ...]
+    # 選んだリーグのドラフトの盤（巡 × 球団。#298 D4）。指名の無い年（順位を持たない移した選手だけ）は None
+    board: DraftBoard | None = None
 
 
 @dataclass(frozen=True)

@@ -108,7 +108,9 @@ class PennantWorldViewService:
     def _row_of(self, summary: WorldSummary) -> PennantWorldListRow:
         context = self.settle(self._context_of(summary))
         standing, race = self._own_standing(context, summary)
-        return PennantWorldListRow(context=context, own_standing=standing, race=race)
+        # 会議の記録は締めると消えるので、記録がいまの年度にあれば会議を始めて締める前（会議は再生しない。#298 D4）
+        drafting = summary.draft_year is not None and summary.draft_year == context.season_year and not context.is_over
+        return PennantWorldListRow(context=context, own_standing=standing, race=race, draft_in_progress=drafting)
 
     def _own_standing(self, context: WorldContext, summary: WorldSummary) -> tuple[OwnStanding | None, OwnRace | None]:
         """受け持つ球団のいまの順位と、優勝の確定・マジック。順位が無い（試合の無い年など）ときは (None, None)。"""

@@ -12,8 +12,9 @@
 </nav>{% include 'pennant/_world_bar.html' %}
 
 {% comment %}
-オフの結果。締める処理は結果を保存しないので、在籍・能力から導いた値（OffseasonSummary）を並べるだけ。
-上から、自軍（引退・退団・戦力外、新人・新外国人、支配下登録（昇格）、能力の変化）→ リーグ別の引退・退団・戦力外と新人・新外国人と支配下登録（昇格）→ 成長と衰えの大きかった選手。
+オフの結果。締める処理は結果を保存しないので、在籍・能力から導いた値（OffseasonSummary）を並べるだけ
+（例外はドラフトの抽選の経過。会議の記録が締めると消えるので、締める処理が記録として残す。#298 D4）。
+上から、自軍（引退・退団・戦力外、新人・新外国人、支配下登録（昇格）、能力の変化）→ リーグ別のドラフトの盤（巡 × 球団）と引退・退団・戦力外と新人・新外国人と支配下登録（昇格）→ 成長と衰えの大きかった選手。
 年齢は、引退・退団・戦力外は締めた年、新人・新外国人と残った選手は翌年の開幕時点。能力は S〜G の区分と総合値（野手は打撃、投手は抑える力）。
 {% endcomment %}
 <div class="page-head">
@@ -73,7 +74,7 @@
   </div>
 {% endif %}
 
-<h2 class="h5 mb-3">リーグ別の引退・退団・戦力外と新人・新外国人</h2>
+<h2 class="h5 mb-3">リーグ別のドラフトと引退・退団・戦力外・新人・新外国人</h2>
 {% if summary.leagues|length > 1 %}
   <form method="get" class="d-flex gap-2 mb-3" action="{% url 'pennant_offseason' world.world_id summary.year %}">
     <select name="league" class="form-select form-select-sm" aria-label="リーグ" style="max-width: 16rem;">
@@ -83,6 +84,16 @@
     </select>
     <button type="submit" class="btn btn-secondary btn-sm">表示</button>
   </form>
+{% endif %}
+
+{% if summary.board %}
+  <div class="card mb-4" id="draft-board">
+    <div class="card-header">{{ summary.year }}年ドラフトの結果（巡 × 球団）</div>
+    <div class="card-body p-0">
+      {% include 'pennant/_draft_board.html' with board=summary.board %}
+      <p class="stat-muted px-3 py-2 mb-0" style="font-size: 0.8125rem;">「N球団競合」は、1つの候補に複数の球団が入札して抽選になったことを示します（当たった球団の欄に出します）。</p>
+    </div>
+  </div>
 {% endif %}
 
 <div class="card mb-4">

@@ -2,7 +2,8 @@
 
 土台の世界（2リーグ×3球団・公式戦を終えた方式「なし」と NPB 方式）は `world_case.PostseasonWorldCase`。
 会議は方式「なし」の世界で開く。NPB 方式の世界はポストシーズンの前なので開けない（#297 Q1）。
-仕様は #297 の「D3 実装計画」とユーザーの決定（Q1〜Q5）、`docs/design/draft-meeting.md` の T2 の申し送り。
+仕様は #297 の「D3 実装計画」とユーザーの決定（Q1〜Q5）、
+Wiki「ペナントモードの仕組み」の「ドラフト会議の保存と1巡ずつの進行」。
 """
 
 from __future__ import annotations

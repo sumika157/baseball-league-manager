@@ -38,6 +38,7 @@ from ..application.dto import (
     MoveStintRow,
     OffseasonFacts,
     OffseasonPlayerFact,
+    OffseasonTeam,
     PeriodBatting,
     PeriodPitching,
     PitcherUsage,
@@ -60,6 +61,7 @@ from ..application.dto import (
 )
 from ..domain.entities import Game, jersey_number_in, winning_team_id
 from ..domain.exceptions import WorldNotFound
+from ..domain.pennant.draft_lottery import DraftLotteryRecord
 from ..domain.pennant.postseason import PostseasonFormat, PostseasonResult
 from ..domain.pennant.retirement import PlayingTime
 from ..domain.pennant.world import WorldScope
@@ -100,6 +102,7 @@ from .scoping import (
     StageFilter,
     awards_in,
     championships_in,
+    draft_lotteries_in,
     fixtures_in_worlds,
     game_rows_condition,
     games_in,
@@ -897,7 +900,8 @@ class DjangoHomeStadiumQuery:
 class DjangoWorldSummaryQuery:
     """WorldSummaryQuery の Django ORM 実装。世界の台帳そのものなので、範囲は持たない。
 
-    世界の数にかかわらず、一定のクエリ数（世界・最後の試合日・次の対戦の日・リーグの4本。一覧は球団ごとの残り試合の2本が加わる）で読む。
+    世界の数にかかわらず、一定のクエリ数（世界・最後の試合日・次の対戦の日・リーグの4本。一覧は球団ごとの残り試合の2本と
+    ドラフト会議の記録の1本が加わる）で読む。
     """
 
     def get(self, world_id: int) -> WorldSummary:
@@ -943,6 +947,11 @@ class DjangoWorldSummaryQuery:
                 for world_id, team_id, count in counted:
                     teams = remaining.setdefault(world_id, {})
                     teams[team_id] = teams.get(team_id, 0) + count
+        # ドラフト会議の記録がある年（始めてから締めるまで。世界の一覧の「ドラフト会議中」。#298 D4）。
+        # 会議は再生しない（世界ごとに数百ミリ秒かかる）。一覧だけが使う
+        draft_year: dict[int, int] = {}
+        if with_remaining:
+            draft_year = dict(orm_models.PennantDraft.objects.filter(world_id__in=ids).values_list("world_id", "year"))
         first_league: dict[int, int] = {}
         leagues = leagues_in_worlds(ids).order_by("display_order", "name").values_list("world_id", "id")
         for world_id, league_id in leagues:
@@ -963,6 +972,7 @@ class DjangoWorldSummaryQuery:
                 remaining_by_team=remaining.get(row.id, {}),
                 postseason_format=PostseasonFormat(row.postseason_format),
                 played_postseason=row.id in played_postseason,
+                draft_year=draft_year.get(row.id),
             )
             for row in rows
         ]
@@ -1139,12 +1149,33 @@ class DjangoOffseasonQuery:
         # オフの昇格（#170）: 締める年より前から在籍し、翌年の年で育成から支配下に上がった在籍
         promoted = stints.filter(promoted_year=year + 1, from_year__lte=year).values(*_OFFSEASON_STINT_FIELDS)
         leagues = leagues_in(self._scope).order_by("id").values_list("id", "name")
+        teams = teams_in(self._scope).order_by("id").values_list("id", "name", "league_id")
         return OffseasonFacts(
             leagues=tuple(LeagueOption(id=league_id, name=name) for league_id, name in leagues),
             retired=players(retired),
             rookies=players(rookies),
             retained=tuple(fact for fact in players(staying) if fact.before and fact.after),
             promoted=players(promoted),
+            teams=tuple(OffseasonTeam(id=team_id, name=name, league_id=league) for team_id, name, league in teams),
+            lotteries=self._lotteries(year),
+        )
+
+    def _lotteries(self, year: int) -> tuple[DraftLotteryRecord, ...]:
+        """その年の指名の抽選（抽選1本・入札1本）。年は指名された選手の指名の年（記録は年を持たない）。"""
+        lotteries = list(
+            draft_lotteries_in(self._scope)
+            .filter(player__draft_year=year)
+            .order_by("player_id")
+            .values_list("id", "player_id", "attempt")
+        )
+        bidders: dict[int, list[int]] = {}
+        for lottery_id, team_id in orm_models.PennantDraftLotteryBid.objects.filter(
+            lottery_id__in=[lottery_id for lottery_id, _, _ in lotteries]
+        ).values_list("lottery_id", "team_id"):
+            bidders.setdefault(lottery_id, []).append(team_id)
+        return tuple(
+            DraftLotteryRecord(player_id=player_id, attempt=attempt, bidder_ids=tuple(bidders.get(lottery_id, ())))
+            for lottery_id, player_id, attempt in lotteries
         )
 
     @staticmethod

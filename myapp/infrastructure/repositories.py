@@ -55,6 +55,7 @@ from ..domain.exceptions import (
 from ..domain.pennant.awards import Award
 from ..domain.pennant.championship import Championship
 from ..domain.pennant.club_plan import ClubPlan, LineupChoice
+from ..domain.pennant.draft_lottery import DraftLotteryRecord
 from ..domain.pennant.draft_meeting import DraftAction, DraftActionKind, DraftSlot
 from ..domain.pennant.draft_order import DraftOrderRule
 from ..domain.pennant.draft_record import DraftRecord
@@ -1448,6 +1449,9 @@ _WORLD_ROWS_CHILD_FIRST: tuple[tuple[type[models.Model], str], ...] = (
     (orm_models.PennantDraftAction, "draft"),
     (orm_models.PennantDraftSlot, "draft"),
     (orm_models.PennantDraft, ""),
+    # 締めた年の抽選は選手を、入札は球団を指すので、それらを消す前に消す（入札から先に）
+    (orm_models.PennantDraftLotteryBid, "team__league"),
+    (orm_models.PennantDraftLottery, "player__stints__team__league"),
     # 能力は選手の在籍をたどって世界が決まるので、在籍を消す前に消す
     # 表彰は選手・球団・リーグを指すので、それらを消す前に消す
     (orm_models.PennantAward, "league"),
@@ -1952,6 +1956,49 @@ class DjangoDraftRepository:
                     extra_position=action.extra_position.value if action.extra_position else "",
                 )
                 for seq, action in enumerate(actions, start=first_seq)
+            ]
+        )
+
+
+class DjangoDraftLotteryRepository:
+    """DraftLotteryRepository の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る。
+
+    抽選の記録はペナント専用で、実データの範囲には書けない。1年の抽選は数件〜十数件なので、
+    抽選と入札をそれぞれ1回の `bulk_create` で書く。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    @transaction.atomic
+    def add_all(self, records: Sequence[DraftLotteryRecord]) -> None:
+        if not records:
+            return
+        if self._scope.is_real:
+            raise InvalidWorld("ドラフトの抽選の記録はペナントの世界にだけ保存できます。")
+        player_ids = {record.player_id for record in records}
+        team_ids = {team_id for record in records for team_id in record.bidder_ids}
+        if len(player_ids) != len(records):
+            raise InvalidDraftAction("同じ選手の抽選を2回は保存できません。")
+        outside_players = player_ids - set(
+            players_in(self._scope).filter(id__in=player_ids).values_list("id", flat=True)
+        )
+        outside_teams = team_ids - set(teams_in(self._scope).filter(id__in=team_ids).values_list("id", flat=True))
+        if outside_players or outside_teams:
+            raise InvalidDraftAction(
+                "この世界に無い選手・球団の抽選は保存できません"
+                f"（選手 {sorted(outside_players)}・球団 {sorted(outside_teams)}）。"
+            )
+        if orm_models.PennantDraftLottery.objects.filter(player_id__in=player_ids).exists():
+            raise InvalidDraftAction("既に抽選の記録がある選手です。")
+        rows = orm_models.PennantDraftLottery.objects.bulk_create(
+            [orm_models.PennantDraftLottery(player_id=record.player_id, attempt=record.attempt) for record in records]
+        )
+        orm_models.PennantDraftLotteryBid.objects.bulk_create(
+            [
+                orm_models.PennantDraftLotteryBid(lottery=row, team_id=team_id)
+                for row, record in zip(rows, records, strict=True)
+                for team_id in record.bidder_ids
             ]
         )
 
