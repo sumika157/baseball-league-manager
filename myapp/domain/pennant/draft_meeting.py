@@ -28,8 +28,11 @@
   **社会人の候補は育成で指名できない**（#307。規則は `DraftRoute.allows_development_pick` の1か所で、AI の指名・
   `DraftState.apply` の検査・育成の巡で足す候補が同じ判定を使う）。本指名では今までどおり指名できる
 
-GM の指名（D3。#198）は同じ `DraftState.apply` を通る。会議を始めなかった年は、締める処理が `auto_complete` で
-全球団を AI として最後まで進める。外国人は会議の前に獲得する（`foreign_market.py`。#169）。
+GM の指名（D3。#297）は同じ `DraftState.apply` を通り、行動の並びは会議の記録（`draft_record.DraftRecord`）に保存する。
+人数の幅は `meeting_slots`、候補は `meeting_pool` が唯一の出典で、どちらも `open_meeting` が通す（会議を始めるときに
+幅を記録に写し、締めるときに比べる。1手ごとに写した幅から候補を作り直す）。会議を始めなかった年は、
+締める処理が `auto_complete` で全球団を AI として最後まで進める。
+外国人は会議の前に獲得する（`foreign_market.py`。#169）。
 """
 
 from __future__ import annotations
@@ -179,10 +182,26 @@ class ProspectPool:
 
     @property
     def signature(self) -> str:
-        """候補の指紋（コードが変わって候補が変わったことを検出する。D3 で会議の行に写す）。"""
+        """候補の指紋。会議を始めたときに会議の記録（`draft_record.DraftRecord`）に写し、再生するときに作り直した
+        候補と比べる（コードが変わって候補が入れ替わったことを検出する）。
+
+        **候補の身元だけ**（番号・名前・位置・経歴・生年月日）から作る（#297 Q2。2026-10-25 ユーザー決定）。
+        能力・伸びしろ（隠し値）・成長型は入れないので、能力の式や隠し値を後から変えても途中の会議は壊れない。
+        """
         digest = hashlib.blake2b(digest_size=16)
         for prospect in self.prospects:
-            digest.update(f"{prospect.key}:{prospect.rookie.name}:{prospect.rookie.ratings!r};".encode())
+            profile = prospect.rookie.profile
+            identity = (
+                str(prospect.key),
+                prospect.rookie.name,
+                prospect.position.value,
+                prospect.route.value,
+                profile.high_school,
+                profile.university,
+                profile.corporate_team,
+                profile.birth_date.isoformat() if profile.birth_date else "",
+            )
+            digest.update(("|".join(identity) + ";").encode())
         return digest.hexdigest()
 
     def with_extra(self, position: Position, *, development: bool = False) -> ProspectPool:
@@ -483,12 +502,36 @@ class DraftSlot:
         )
 
 
+def meeting_slots(
+    teams: Sequence[DraftTeam], plans: Mapping[int, TeamDraftPlan], *, managed_team_id: int | None
+) -> tuple[DraftSlot, ...]:
+    """会議の人数の幅（球団 id の昇順）。**会議を始めるときと締めるときの唯一の関数**（#297）。
+
+    AI の球団は計画どおり（`DraftSlot.of`）。受け持つ球団（`managed_team_id`。GM）だけ、育成の最多を
+    `MAX_DEVELOPMENT_PICKS` にする（GM は育成の巡で 0〜最多を自由に選ぶ）。GM の球団の番を AI が進めたとき
+    （会議を始めなかった年・お任せ）は、育成の計画の人数で選択を終える（`DraftState.ai_action`）ので、
+    新人は受け持つ球団の無い会議と同じになる。
+    """
+    slots = []
+    for team in sorted(teams, key=lambda item: item.team_id):
+        slot = DraftSlot.of(team, plans[team.team_id])
+        if team.team_id == managed_team_id:
+            slot = replace(slot, development_max=MAX_DEVELOPMENT_PICKS)
+        slots.append(slot)
+    return tuple(slots)
+
+
 @dataclass(frozen=True)
 class DraftContext:
-    """締める処理に渡す会議の設定（世界の規則と、その年の公式戦の最終順位）。"""
+    """締める処理に渡す会議の設定（世界の規則と、その年の公式戦の最終順位、受け持つ球団）。
+
+    `managed_team_id` は人数の幅（`meeting_slots`）だけに効く。会議を始めなかった年の新人は、
+    受け持つ球団の有無で変わらない。
+    """
 
     rule: DraftOrderRule
     standings: DraftStandings
+    managed_team_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -525,6 +568,25 @@ class DraftSelection:
     is_development: bool = False
 
 
+@dataclass(frozen=True)
+class DraftMove:
+    """会議で確定した動きひとつ（会議の画面の「直近の動き」。`DraftState.resolved_moves`）。
+
+    - `seq`: 確定させた行動の番号（1から。行動の並びの位置 + 1。保存した行の `seq` と同じ数え方）
+    - `kind`: `BID` は入札で確定（重複して抽選になったら `lottery`）、`PICK` は指名、
+      `PASS` は選択終了（`prospect_key` は None）
+    - `round_number`・`is_development`: 区分の中の巡と、育成の巡か
+    """
+
+    seq: int
+    team_id: int
+    kind: DraftActionKind
+    round_number: int
+    is_development: bool = False
+    prospect_key: int | None = None
+    lottery: Lottery | None = None
+
+
 @dataclass
 class DraftState:
     """会議の状態。行動の並び（`actions`）から導く。`apply` で1手ずつ進める（不変条件は `InvalidDraftAction`）。
@@ -539,6 +601,8 @@ class DraftState:
     actions: list[DraftAction] = field(default_factory=list)
     selections: list[DraftSelection] = field(default_factory=list)
     lotteries: list[Lottery] = field(default_factory=list)
+    # 確定した動き（指名・入札の確定・選択終了）の順。保留中の入札は入らない
+    moves: list[DraftMove] = field(default_factory=list)
     # 区分の中の巡（本指名・育成それぞれ1から）と、育成の巡に入ったか（どちらも行動の並びから導いた値）
     round_number: int = 1
     attempt: int = 1
@@ -678,6 +742,60 @@ class DraftState:
         remaining = self.slots[team_id].maximum - self._picked[team_id] - 1
         return keeps_position_minimum(counts, position, remaining)
 
+    def selectable(self, team_id: int, prospect: Prospect) -> bool:
+        """球団 `team_id` がいま候補 `prospect` を入札・指名できるか（会議の画面の「指名する」の出し分け）。
+
+        `apply` と同じ検査（`_selection_error`）を通すので、画面に出したボタンが `apply` で断られることはない。
+        """
+        turn = self.next_turn()
+        return turn is not None and turn.team_id == team_id and self._selection_error(team_id, prospect) is None
+
+    def passable(self, team_id: int) -> bool:
+        """球団 `team_id` がいま選択を終えられるか（会議の画面の「選択終了」の出し分け）。
+
+        `apply` と同じ検査（`_pass_error`）を通すので、画面に出したボタンが `apply` で断られることはない。
+        """
+        turn = self.next_turn()
+        return turn is not None and turn.team_id == team_id and self._pass_error(team_id) is None
+
+    def _pass_error(self, team_id: int) -> str | None:
+        """選択を終えられない理由（終えられるなら None）。`apply` と `passable` が使う唯一の検査。
+
+        育成の巡はいつでも選択を終えられる（最少は無く、位置の最低人数は支配下の話）。
+        """
+        if self.is_development:
+            return None
+        slot = self.slots[team_id]
+        if self._picked[team_id] < slot.minimum:
+            return f"少なくとも{slot.minimum}人を指名するまで、選択を終えられません。"
+        if self.shortfall_after(team_id, None) > 0:
+            return "位置の最低人数に届くまで、選択を終えられません。"
+        return None
+
+    @property
+    def round_order(self) -> tuple[int, ...]:
+        """いまの巡の指名順（会議に参加する球団。選択を終えた球団・指名し終えた球団も含む。会議の画面の「この巡の指名順」）。
+
+        会議が終わっていれば空。"""
+        if self.is_complete:
+            return ()
+        return tuple(team_id for team_id in self.strategy.order(self._strategy_round()) if team_id in self.slots)
+
+    def resolved_moves(self, after_seq: int = 0) -> tuple[DraftMove, ...]:
+        """行動の番号 `after_seq` より後の行動で確定した動き（確定した順）。保留中の入札は出さない
+        （入札がそろって抽選まで解けたときに、その回の全球団の分がまとめて出る）。"""
+        return tuple(move for move in self.moves if move.seq > after_seq)
+
+    def _selection_error(self, team_id: int, prospect: Prospect) -> str | None:
+        """候補を入札・指名できない理由（できるなら None）。`apply` と `selectable` が使う唯一の検査。"""
+        if prospect.key in self._taken:
+            return "その選手は既に指名されています。"
+        if self.is_development and not prospect.allows_development_pick:
+            return f"{prospect.route.label}の選手は育成で指名できません。"
+        if not self.position_allowed(team_id, prospect.position):
+            return "位置の最低人数に届かなくなるので、その位置の選手は指名できません。"
+        return None
+
     # --- 1手ずつ進める ---
 
     def apply(self, action: DraftAction) -> None:
@@ -687,15 +805,14 @@ class DraftState:
             raise InvalidDraftAction("ドラフト会議は終わっています。")
         if action.team_id != turn.team_id:
             raise InvalidDraftAction("この球団の番ではありません。")
-        slot = self.slots[action.team_id]
         if action.kind is DraftActionKind.PASS:
-            # 育成の巡はいつでも選択を終えられる（最少は無く、位置の最低人数は支配下の話）
-            if not self.is_development:
-                if self._picked[action.team_id] < slot.minimum:
-                    raise InvalidDraftAction(f"少なくとも{slot.minimum}人を指名するまで、選択を終えられません。")
-                if self.shortfall_after(action.team_id, None) > 0:
-                    raise InvalidDraftAction("位置の最低人数に届くまで、選択を終えられません。")
+            error = self._pass_error(action.team_id)
+            if error is not None:
+                raise InvalidDraftAction(error)
             self._record(action)
+            self.moves.append(
+                DraftMove(len(self.actions), action.team_id, action.kind, self.round_number, self.is_development)
+            )
             (self._development_passed if self.is_development else self._passed).add(action.team_id)
             # 入札の巡で最後に残った球団が選択を終えたら、そろった入札をここで解く
             self._resolve_if_ready()
@@ -707,18 +824,15 @@ class DraftState:
         if action.prospect_key is None:
             raise InvalidDraftAction("指名する選手を選んでください。")
         prospect = pool.get(action.prospect_key)
-        if prospect.key in self._taken:
-            raise InvalidDraftAction("その選手は既に指名されています。")
-        if self.is_development and not prospect.allows_development_pick:
-            raise InvalidDraftAction(f"{prospect.route.label}の選手は育成で指名できません。")
-        if not self.position_allowed(action.team_id, prospect.position):
-            raise InvalidDraftAction("位置の最低人数に届かなくなるので、その位置の選手は指名できません。")
+        error = self._selection_error(action.team_id, prospect)
+        if error is not None:
+            raise InvalidDraftAction(error)
         if pool is not self.pool:
             self._add_to_rankings(prospect)
         self.pool = pool
         self._record(action)
         if action.kind is DraftActionKind.PICK:
-            self._select(action.team_id, prospect)
+            self._select(action.team_id, prospect, DraftActionKind.PICK)
         else:
             self._bids[action.team_id] = prospect.key
             self._resolve_if_ready()
@@ -744,9 +858,21 @@ class DraftState:
             raise InvalidDraftAction("足す候補の番号が正しくありません。")
         return self.pool.with_extra(action.extra_position, development=self.is_development)
 
-    def _select(self, team_id: int, prospect: Prospect) -> None:
+    def _select(self, team_id: int, prospect: Prospect, kind: DraftActionKind, lottery: Lottery | None = None) -> None:
+        """指名を確定する（`kind` は指名か入札の確定か。動きの記録に使う）。"""
         development = self.is_development
         self.selections.append(DraftSelection(team_id, prospect.key, self.round_number, is_development=development))
+        self.moves.append(
+            DraftMove(
+                len(self.actions),
+                team_id,
+                kind,
+                self.round_number,
+                development,
+                prospect_key=prospect.key,
+                lottery=lottery,
+            )
+        )
         self._taken.add(prospect.key)
         picked, positions = (
             (self._development_picked, self._development_positions) if development else (self._picked, self._positions)
@@ -762,6 +888,7 @@ class DraftState:
             by_prospect.setdefault(key, []).append(team_id)
         for key in sorted(by_prospect):
             bidders = tuple(sorted(by_prospect[key]))
+            lottery: Lottery | None = None
             if len(bidders) == 1:
                 winner = bidders[0]
             else:
@@ -774,10 +901,11 @@ class DraftState:
                     )
                 )
                 winner = bidders[min(len(bidders) - 1, int(rng.random() * len(bidders)))]
-                self.lotteries.append(
-                    Lottery(self.round_number, self.attempt, key, bidders, winner, is_development=self.is_development)
+                lottery = Lottery(
+                    self.round_number, self.attempt, key, bidders, winner, is_development=self.is_development
                 )
-            self._select(winner, self.pool.get(key))
+                self.lotteries.append(lottery)
+            self._select(winner, self.pool.get(key), DraftActionKind.BID, lottery)
         self._bids = {}
         self.attempt += 1
 
@@ -864,7 +992,8 @@ class DraftState:
         計画した位置を指名し尽くしていれば（GM が別の位置を選んだ後のお任せ）、位置の最低人数を割らない候補から
         同じ評価で選ぶ。その位置の候補が尽きていれば、その場で1人足す。
         育成の巡は育成の位置の計画（`DraftSlot.development_planned`）で、育成で指名できる候補
-        （`Prospect.allows_development_pick`）の中から同じように選ぶ。
+        （`Prospect.allows_development_pick`）の中から同じように選ぶ。計画の人数に達したら選択を終える
+        （GM の球団は育成の最多が計画より多い（`meeting_slots`）ので、AI が進めても計画の人数で止める）。
         """
         turn = self.next_turn()
         if turn is None:
@@ -872,6 +1001,8 @@ class DraftState:
         team_id = turn.team_id
         kind = DraftActionKind.BID if turn.is_bid else DraftActionKind.PICK
         slot = self.slots[team_id]
+        if turn.is_development and self._development_picked[team_id] >= len(slot.development_planned):
+            return DraftAction(DraftActionKind.PASS, team_id)
         if turn.is_development:
             needed = Counter(slot.development_planned)
             needed.subtract(self._development_positions.get(team_id, Counter()))
@@ -930,6 +1061,87 @@ class DraftResult:
     state: DraftState
 
 
+@dataclass(frozen=True)
+class MeetingSetup:
+    """会議を開く設定（`open_meeting` の結果）。会議を始めるとき（D3）と締めるときが同じ関数で作る。
+
+    - `teams`: 引退・戦力外・外国人の獲得の後の球団（球団 id の昇順）
+    - `plans`: 球団ごとの新人の計画（`draft.plan_team_draft`。背番号と新人の作り方に使う）
+    - `slots`: 人数の幅（`meeting_slots`）
+    - `pool`: 候補（`meeting_pool`。足した候補の無いもの）
+    - `strategy`: 指名順の戦略（世界の規則と最終順位から）
+    """
+
+    year: int
+    world_seed: int
+    teams: tuple[DraftTeam, ...]
+    plans: Mapping[int, TeamDraftPlan]
+    slots: tuple[DraftSlot, ...]
+    pool: ProspectPool
+    strategy: DraftOrderStrategy
+
+
+def meeting_pool(
+    slots: Sequence[DraftSlot], *, world_seed: int, year: int, used_names: Collection[str]
+) -> ProspectPool:
+    """人数の幅から会議の候補を作る（`draw_pool`。位置ごとの人数は全球団の `planned` の合計）。
+
+    **会議の候補を作る唯一の関数**。会議を開くとき（`open_meeting`）と、会議の途中に保存した人数の幅から候補を
+    作り直すとき（D3 の1手ごと）が同じ関数を通るので、同じ幅と名前なら同じ候補（同じ指紋）になる。
+
+    渡す名前は、会議を開くときは世界の全選手と獲得した外国人、作り直すときは世界の全選手だけ（外国人の獲得を
+    計算し直さない）。獲得した外国人の名前（`generator.foreign_name` のカタカナの「名・姓」）は候補の名前
+    （`generator.japanese_name` の漢字の氏名）と重ならないので、どちらでも同じ候補になる。前提が崩れても黙っては
+    壊れない（指紋が違って `DraftChanged`）。
+    """
+    planned = Counter(position for slot in slots for position in slot.planned)
+    return draw_pool(planned, world_seed=world_seed, year=year, used_names=used_names)
+
+
+def open_meeting(
+    teams: Sequence[DraftTeam],
+    context: DraftContext,
+    *,
+    year: int,
+    world_seed: int,
+    used_names: set[str],
+    signed: Mapping[int, Sequence[Position]] | None = None,
+) -> MeetingSetup:
+    """締める年 `year` の会議の設定を作る（人数の幅・候補・指名順。行動はまだ当てない）。
+
+    `teams` は引退・戦力外・外国人の獲得の後の球団（球団 id の昇順に処理する）。`signed` は球団ごとの、会議の前に
+    獲得した外国人の位置（`foreign_market.OffseasonSignings.signed_positions`。日本人の人数と位置から除く）。
+    `used_names` は世界の全選手の名前で、候補の名前を足していく。
+    """
+    ordered = tuple(sorted(teams, key=lambda team: team.team_id))
+    missing = {team.team_id for team in ordered} - context.standings.team_ids
+    if missing:
+        raise ValueError(f"最終順位に無い球団があります（{sorted(missing)}）。")
+    plans = {team.team_id: plan_team_draft(team, (signed or {}).get(team.team_id, ())) for team in ordered}
+    slots = meeting_slots(ordered, plans, managed_team_id=context.managed_team_id)
+    pool = meeting_pool(slots, world_seed=world_seed, year=year, used_names=used_names)
+    used_names.update(pool.taken_names)
+    strategy = strategy_for(context.rule, context.standings, world_seed=world_seed, year=year)
+    return MeetingSetup(
+        year=year, world_seed=world_seed, teams=ordered, plans=plans, slots=slots, pool=pool, strategy=strategy
+    )
+
+
+def finish_draft(setup: MeetingSetup, state: DraftState, *, used_names: set[str]) -> DraftResult:
+    """会議の残りを AI で最後まで進め（終わっていれば何もしない）、新人を作る。
+
+    新人の背番号は球団ごとの乱数（`draft-<球団 id>`、年は翌年）で引く。足した候補の名前を `used_names` に足す。
+    """
+    state.auto_complete()
+    used_names.update(state.pool.taken_names)
+    drafted = state.drafted()
+    draftees: list[Draftee] = []
+    for team in setup.teams:
+        rng = make_random(game_seed(setup.world_seed, setup.year + 1, f"draft-{team.team_id}"))
+        draftees.extend(club_draftees(rng, team, setup.plans[team.team_id], drafted=drafted[team.team_id]))
+    return DraftResult(draftees=tuple(draftees), lotteries=tuple(state.lotteries), state=state)
+
+
 def run_draft(
     teams: Sequence[DraftTeam],
     context: DraftContext,
@@ -940,29 +1152,13 @@ def run_draft(
     actions: Sequence[DraftAction] = (),
     signed: Mapping[int, Sequence[Position]] | None = None,
 ) -> DraftResult:
-    """締める年 `year` の会議を開き、`actions`（D3 で保存した行動）を当ててから残りを AI で進め、新人を作る。
+    """締める年 `year` の会議を開き（`open_meeting`）、`actions` を当ててから残りを AI で進め、新人を作る
+    （`finish_draft`）。引数は `open_meeting` と同じ。
 
-    `teams` は引退・戦力外・外国人の獲得の後の球団（球団 id の昇順に処理する）。`signed` は球団ごとの、会議の前に
-    獲得した外国人の位置（`foreign_market.OffseasonSignings.signed_positions`。日本人の人数と位置から除く）。
-    `used_names` は世界の全選手の名前で、候補の名前を足していく。新人の背番号は球団ごとの乱数（`draft-<球団 id>`、
-    年は翌年）で引く。
+    会議のエンジンを試すための入口（テストが使う）。締める処理は `offseason.plan_offseason` を通り、
+    GM が開いた会議は人数の幅と候補の指紋を照合してから再生する（`offseason.replay_meeting`）。
     """
-    ordered = sorted(teams, key=lambda team: team.team_id)
-    missing = {team.team_id for team in ordered} - context.standings.team_ids
-    if missing:
-        raise ValueError(f"最終順位に無い球団があります（{sorted(missing)}）。")
-    plans = {team.team_id: plan_team_draft(team, (signed or {}).get(team.team_id, ())) for team in ordered}
-    slots = [DraftSlot.of(team, plans[team.team_id]) for team in ordered]
-    planned = Counter(position for slot in slots for position in slot.planned)
-    pool = draw_pool(planned, world_seed=world_seed, year=year, used_names=used_names)
-    used_names.update(pool.taken_names)
-    strategy = strategy_for(context.rule, context.standings, world_seed=world_seed, year=year)
-    state = DraftState.open(strategy, slots, pool, actions)
-    state.auto_complete()
-    used_names.update(state.pool.taken_names)
-    drafted = state.drafted()
-    draftees: list[Draftee] = []
-    for team in ordered:
-        rng = make_random(game_seed(world_seed, year + 1, f"draft-{team.team_id}"))
-        draftees.extend(club_draftees(rng, team, plans[team.team_id], drafted=drafted[team.team_id]))
-    return DraftResult(draftees=tuple(draftees), lotteries=tuple(state.lotteries), state=state)
+    setup = open_meeting(teams, context, year=year, world_seed=world_seed, used_names=used_names, signed=signed)
+    return finish_draft(
+        setup, DraftState.open(setup.strategy, setup.slots, setup.pool, actions), used_names=used_names
+    )

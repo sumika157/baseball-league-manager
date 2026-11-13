@@ -157,8 +157,12 @@ admin.site.has_permission = types.MethodType(_superuser_only, admin.site)  # typ
 # 管理画面で扱うのは**実データだけ**。ペナントの世界の行は、一覧にも・id を指定した編集画面にも・
 # 選択肢にも・フィルタにも出さない（手で直すと、世界の整合が実データの側から壊れるため）。
 # ペナント専用のモデル（PennantWorld・PennantPlayerRatings・PennantFixture・PennantClubPlan と
-# その行 PennantClubPlanEntry・PennantReleasePlan とその行 PennantReleasePlanEntry・表彰 PennantAward・
-# 日本一 PennantChampionship）は管理画面に登録しない
+# その行 PennantClubPlanEntry・PennantReleasePlan とその行 PennantReleasePlanEntry・
+# 育成の指名 PennantDevelopmentPlan とその行 PennantDevelopmentPlanEntry・期中の支配下登録
+# PennantMidseasonRegistration・表彰 PennantAward・
+# 日本一 PennantChampionship・ドラフト会議 PennantDraft とその人数の幅 PennantDraftSlot・行動 PennantDraftAction・
+# ドラフトの抽選 PennantDraftLottery とその入札 PennantDraftLotteryBid）は
+# 管理画面に登録しない
 # （手で直すと、能力と成績・日程の整合が壊れるため）。
 # 管理画面は運営者が**全ワークスペースの実データ**を扱う。全範囲を読むのは `admin_real_queryset` だけで、
 # 「全範囲を読む API を作らない」規則の唯一の例外（決定 2026-10-07 Q4。admin.py 以外からは使わない）。

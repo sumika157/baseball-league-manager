@@ -25,6 +25,10 @@ from ..application.dto import (
     ClubTenure,
     ContractFacts,
     DeclarationFact,
+    DevelopmentPlayerFacts,
+    DevelopmentRoster,
+    DevelopmentSquad,
+    DevelopmentSquadPlayer,
     FaSubject,
     FaSubjects,
     FielderUsage,
@@ -41,6 +45,7 @@ from ..application.dto import (
     MoveStintRow,
     OffseasonFacts,
     OffseasonPlayerFact,
+    OffseasonTeam,
     PeriodBatting,
     PeriodPitching,
     PitcherUsage,
@@ -77,6 +82,7 @@ from ..domain.exceptions import (
     WorkspaceNotFound,
     WorldNotFound,
 )
+from ..domain.pennant.draft_lottery import DraftLotteryRecord
 from ..domain.pennant.postseason import PostseasonFormat, PostseasonResult
 from ..domain.pennant.retirement import PlayingTime
 from ..domain.pennant.world import WorldScope
@@ -132,6 +138,8 @@ from .scoping import (
     awards_in,
     championships_in,
     declarations_in,
+    draft_lotteries_in,
+    drafts_in_worlds,
     fixtures_in_worlds,
     game_rows_condition,
     games_in,
@@ -139,6 +147,7 @@ from .scoping import (
     home_stadium_in,
     leagues_in,
     leagues_in_worlds,
+    midseason_registrations_in,
     period_covering,
     players_in,
     ratings_in,
@@ -1182,8 +1191,9 @@ class DjangoHomeStadiumQuery:
 class DjangoWorldSummaryQuery:
     """WorldSummaryQuery の Django ORM 実装。世界の台帳を、ワークスペース（必須）で絞って読む。
 
+    世界の数にかかわらず、一定のクエリ数（世界・最後の試合日・次の対戦の日・リーグの4本。一覧は球団ごとの残り試合の2本と
     ほかのワークスペースの世界の id は `WorldNotFound`、一覧にも出ない。
-    世界の数にかかわらず、一定のクエリ数（世界・最後の試合日・次の対戦の日・リーグの4本。一覧は球団ごとの残り試合の2本が加わる）で読む。
+    ドラフト会議の記録の1本が加わる）で読む。
     """
 
     def __init__(self, workspace_id: int) -> None:
@@ -1239,6 +1249,11 @@ class DjangoWorldSummaryQuery:
                 for world_id, team_id, count in counted:
                     teams = remaining.setdefault(world_id, {})
                     teams[team_id] = teams.get(team_id, 0) + count
+        # ドラフト会議の記録がある年（始めてから締めるまで。世界の一覧の「ドラフト会議中」。#298 D4）。
+        # 会議は再生しない（世界ごとに数百ミリ秒かかる）。一覧だけが使う
+        draft_year: dict[int, int] = {}
+        if with_remaining:
+            draft_year = dict(drafts_in_worlds(ids).values_list("world_id", "year"))
         first_league: dict[int, int] = {}
         leagues = leagues_in_worlds(ids).order_by("display_order", "name").values_list("world_id", "id")
         for world_id, league_id in leagues:
@@ -1259,6 +1274,7 @@ class DjangoWorldSummaryQuery:
                 remaining_by_team=remaining.get(row.id, {}),
                 postseason_format=PostseasonFormat(row.postseason_format),
                 played_postseason=row.id in played_postseason,
+                draft_year=draft_year.get(row.id),
             )
             for row in rows
         ]
@@ -1433,14 +1449,43 @@ class DjangoOffseasonQuery:
         # 翌年も在籍し、前の年から居た選手（新人を除く）。両方の能力がある選手だけが能力の変化を持つ
         staying = stints.filter(period_covering(year + 1), from_year__lte=year).values(*_OFFSEASON_STINT_FIELDS)
         # オフの昇格（#170）: 締める年より前から在籍し、翌年の年で育成から支配下に上がった在籍
-        promoted = stints.filter(promoted_year=year + 1, from_year__lte=year).values(*_OFFSEASON_STINT_FIELDS)
+        # 翌年の期中に支配下に登録した在籍（登録日のある在籍。#170 P3a）は、昇格の年が同じでもオフの昇格ではない
+        midseason = midseason_registrations_in(self._scope).filter(
+            team_id=OuterRef("team_id"), player_id=OuterRef("player_id"), registered_on__year=year + 1
+        )
+        promoted = (
+            stints.filter(promoted_year=year + 1, from_year__lte=year)
+            .exclude(Exists(midseason))
+            .values(*_OFFSEASON_STINT_FIELDS)
+        )
         leagues = leagues_in(self._scope).order_by("id").values_list("id", "name")
+        teams = teams_in(self._scope).order_by("id").values_list("id", "name", "league_id")
         return OffseasonFacts(
             leagues=tuple(LeagueOption(id=league_id, name=name) for league_id, name in leagues),
             retired=players(retired),
             rookies=players(rookies),
             retained=tuple(fact for fact in players(staying) if fact.before and fact.after),
             promoted=players(promoted),
+            teams=tuple(OffseasonTeam(id=team_id, name=name, league_id=league) for team_id, name, league in teams),
+            lotteries=self._lotteries(year),
+        )
+
+    def _lotteries(self, year: int) -> tuple[DraftLotteryRecord, ...]:
+        """その年の指名の抽選（抽選1本・入札1本）。年は指名された選手の指名の年（記録は年を持たない）。"""
+        lotteries = list(
+            draft_lotteries_in(self._scope)
+            .filter(player__draft_year=year)
+            .order_by("player_id")
+            .values_list("id", "player_id", "attempt")
+        )
+        bidders: dict[int, list[int]] = {}
+        for lottery_id, team_id in orm_models.PennantDraftLotteryBid.objects.filter(
+            lottery_id__in=[lottery_id for lottery_id, _, _ in lotteries]
+        ).values_list("lottery_id", "team_id"):
+            bidders.setdefault(lottery_id, []).append(team_id)
+        return tuple(
+            DraftLotteryRecord(player_id=player_id, attempt=attempt, bidder_ids=tuple(bidders.get(lottery_id, ())))
+            for lottery_id, player_id, attempt in lotteries
         )
 
     @staticmethod
@@ -1585,6 +1630,79 @@ class DjangoClubTenureQuery:
                 stints=tuple(ClubStint(team_id, stint.from_year, stint.to_year) for stint in stints),
             )
         return result
+
+
+class DjangoDevelopmentRosterQuery:
+    """DevelopmentRosterQuery の Django ORM 実装。球団（リーグの上限）を1本、その年の在籍と選手を1本、
+    育成の選手のその球団での在籍を1本で読む（選手の人数によらない）。"""
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def for_team(self, team_id: int, year: int) -> DevelopmentRoster:
+        team = teams_in(self._scope).select_related("league").filter(id=team_id).first()
+        if team is None:
+            raise TeamNotFound(f"球団が見つかりません（id={team_id}）。")
+        stints = list(stints_in(self._scope).filter(period_covering(year), team_id=team_id).select_related("player"))
+        # その年の区分（判定の出典は domain の `ContractStatus.in_year`。集約の支配下の数え方と同じ）
+        development = []
+        registered = 0
+        for stint in stints:
+            status = ContractStatus.in_year(ContractStatus.from_label(stint.signed_as), stint.promoted_year, year)
+            if status is ContractStatus.REGISTERED:
+                registered += 1
+            else:
+                development.append(stint)
+        development.sort(key=lambda stint: (JerseyNumber(stint.number).sort_key, stint.player_id))
+        tenures = DjangoClubTenureQuery(self._scope).for_players(team_id, [stint.player_id for stint in development])
+        return DevelopmentRoster(
+            team_name=team.name,
+            registered_count=registered,
+            registered_limit=team.league.registered_player_limit if team.league is not None else None,
+            players=tuple(
+                DevelopmentPlayerFacts(
+                    player_id=stint.player_id,
+                    name=stint.player.name,
+                    number=stint.number,
+                    joined_year=stint.from_year,
+                    tenure=tenures[stint.player_id],
+                )
+                for stint in development
+            ),
+        )
+
+    def squads(self, year: int) -> tuple[DevelopmentSquad, ...]:
+        # 球団（リーグの上限）を1本、その年の在籍と選手の登録位置を1本（球団・選手の人数によらない）
+        teams = list(teams_in(self._scope).order_by("id").values_list("id", "league__registered_player_limit"))
+        rows = (
+            stints_in(self._scope)
+            .filter(period_covering(year))
+            .order_by("team_id", "player_id")
+            .values_list("team_id", "player_id", "number", "signed_as", "promoted_year", "player__position")
+        )
+        registered: dict[int, int] = {}
+        numbers: dict[int, set[str]] = {}
+        players: dict[int, list[DevelopmentSquadPlayer]] = {}
+        for team_id, player_id, number, signed_as, promoted_year, position in rows:
+            numbers.setdefault(team_id, set()).add(number)
+            # その年の区分（判定の出典は domain の `ContractStatus.in_year`。`for_team` と同じ）
+            status = ContractStatus.in_year(ContractStatus.from_label(signed_as), promoted_year, year)
+            if status is ContractStatus.REGISTERED:
+                registered[team_id] = registered.get(team_id, 0) + 1
+            else:
+                players.setdefault(team_id, []).append(
+                    DevelopmentSquadPlayer(player_id=player_id, position=Position.from_label(position))
+                )
+        return tuple(
+            DevelopmentSquad(
+                team_id=team_id,
+                registered_count=registered.get(team_id, 0),
+                registered_limit=limit,
+                numbers=frozenset(numbers.get(team_id, ())),
+                players=tuple(players.get(team_id, ())),
+            )
+            for team_id, limit in teams
+        )
 
 
 def _contract_facts(stint: orm_models.PlayerStint) -> ContractFacts:
@@ -1992,3 +2110,13 @@ class DjangoSetupQuery:
             real_home_team_count=row.real_home_team_count,  # type: ignore[attr-defined]
             world_home_team_count=row.world_home_team_count,  # type: ignore[attr-defined]
         )
+
+
+class DjangoPlayerNameQuery:
+    """PlayerNameQuery の Django ORM 実装。範囲（`WorldScope`）の選手の名前を1本のクエリで読む。"""
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def names(self) -> frozenset[str]:
+        return frozenset(players_in(self._scope).values_list("name", flat=True))

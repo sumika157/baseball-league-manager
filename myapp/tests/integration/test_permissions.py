@@ -87,11 +87,13 @@ class WriteRequiresLoginTest(BaseCase):
         self.assertEqual(orm_models.Player.objects.get(pk=self.player.id).name, "山田")
 
     def test_retiring_a_player_without_login_changes_nothing(self):
-        self.client.post(
+        response = self.client.post(
             ws_url("player_edit", self.team.id, self.player.id),
             {"retire": "1"},
         )
 
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/accounts/login/", response["Location"])
         stint = orm_models.PlayerStint.objects.get(player_id=self.player.id)
         self.assertIsNone(stint.to_year)
 
@@ -137,6 +139,26 @@ class TeamManagerPermissionTest(BaseCase):
     def test_manager_of_another_team_is_rejected(self):
         login_as_manager(self.client, self.outsider)
         self.assertEqual(self.client.get(self._player_edit_url()).status_code, 403)
+
+    def test_posts_from_outside_the_team_change_nothing(self):
+        """画面を開けないだけでなく、POST を直接送っても選手は変わらない（編集・退団の両方）。"""
+        outsider_manager = User.objects.create_user(username="outsider", password="x")
+        self.outsider.managers.add(outsider_manager)
+        outsiders = {
+            "担当のない人": User.objects.create_user(username="other", password="x"),
+            "別のチームの担当": outsider_manager,
+        }
+        for who, user in outsiders.items():
+            for data in ({"name": "改ざん", "number": "11", "position": "投手"}, {"retire": "1"}):
+                with self.subTest(who=who, data=data):
+                    self.client.force_login(user)
+
+                    response = self.client.post(self._player_edit_url(), data)
+
+                    self.assertEqual(response.status_code, 403)
+                    player = orm_models.Player.objects.get(pk=self.player.id)
+                    self.assertEqual(player.name, "山田")
+                    self.assertIsNone(orm_models.PlayerStint.objects.get(player_id=self.player.id).to_year)
 
     def test_staff_outside_the_workspace_cannot_edit(self):
         """特権の廃止の再発防止: is_staff・superuser でも、ワークスペースの部外者なら編集できない（W2 T5）。"""

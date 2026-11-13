@@ -31,11 +31,14 @@ from ..application.club_management import ClubManagementService
 from ..application.dto import (
     AwardRow,
     ClubPlanView,
+    DevelopmentPlanView,
+    DraftStep,
     GameEditData,
     GameEditPlateAppearance,
     LeagueSetupRow,
     Listing,
     MemberRow,
+    MidseasonRegistrationView,
     PlayerRatingsCard,
     PlayerRatingsHistory,
     RatingsTable,
@@ -54,9 +57,13 @@ from ..application.league_setup import LeagueSetupService
 from ..application.league_view import LeagueViewService
 from ..application.pennant_championships import PostseasonHistoryReader
 from ..application.pennant_club_details import ClubDetailsService
+from ..application.pennant_draft import PennantDraftService
 from ..application.pennant_history import PennantHistoryService
 from ..application.pennant_home import PennantHomeService
+from ..application.pennant_midseason import MidseasonRegistrationService
+from ..application.pennant_midseason_review import MidseasonReview
 from ..application.pennant_offseason import PennantOffseasonService
+from ..application.pennant_offseason_inputs import OffseasonInputsReader, OffseasonPhase
 from ..application.pennant_offseason_view import OffseasonViewService
 from ..application.pennant_postseason import PennantPostseasonService, PostseasonBracketReader
 from ..application.pennant_postseason_view import PennantPostseasonViewService
@@ -76,8 +83,10 @@ from ..domain.exceptions import (
     AlreadyAdvanced,
     AlreadyClosed,
     DomainError,
+    DraftConflict,
     DuplicateName,
     GameNotFound,
+    InvalidDevelopmentPlan,
     InvalidInvitation,
     InvalidName,
     InvalidReleasePlan,
@@ -96,6 +105,7 @@ from ..domain.exceptions import (
     WorldNotFound,
 )
 from ..domain.pennant.club_plan import PlanSection
+from ..domain.pennant.development import DevelopmentDecision
 from ..domain.pennant.postseason import PostseasonStatus
 from ..domain.pennant.roster import OPENING_REGISTERED_BAND
 from ..domain.pennant.schedule import AdvanceTarget
@@ -124,6 +134,7 @@ from ..infrastructure.queries import (
     DjangoAwardQuery,
     DjangoChampionshipQuery,
     DjangoClubTenureQuery,
+    DjangoDevelopmentRosterQuery,
     DjangoFieldingTotalsQuery,
     DjangoGameListQuery,
     DjangoHomeStadiumQuery,
@@ -131,6 +142,7 @@ from ..infrastructure.queries import (
     DjangoOffseasonQuery,
     DjangoPennantActivityQuery,
     DjangoPlayerFieldingQuery,
+    DjangoPlayerNameQuery,
     DjangoPlayerSearchQuery,
     DjangoPlayerStatsQuery,
     DjangoPostseasonQuery,
@@ -151,10 +163,14 @@ from ..infrastructure.repositories import (
     DjangoAwardRepository,
     DjangoChampionshipRepository,
     DjangoClubPlanRepository,
+    DjangoDevelopmentPlanRepository,
+    DjangoDraftLotteryRepository,
+    DjangoDraftRepository,
     DjangoFixtureRepository,
     DjangoGameRepository,
     DjangoInvitationRepository,
     DjangoLeagueRepository,
+    DjangoMidseasonRegistrationRepository,
     DjangoRatingsRepository,
     DjangoReleasePlanRepository,
     DjangoStadiumRepository,
@@ -168,12 +184,16 @@ from .club_input import (
     ACTION_MANUAL,
     ACTIONS,
     DEFAULT_TAB,
+    DEVELOPMENT_PLAN_SECTION,
+    DEVELOPMENT_SECTION,
+    DEVELOPMENT_TAB,
     RELEASE_SECTION,
     RELEASE_TAB,
     SECTIONS,
     TAB_OF_SECTION,
     ClubFormState,
     ClubInputError,
+    DevelopmentFormState,
     LineupSlotInput,
     NoticeLink,
     ReleaseFormState,
@@ -181,11 +201,14 @@ from .club_input import (
     failed_state,
     parse_active,
     parse_closer,
+    parse_development,
     parse_expected_year,
     parse_lineup,
+    parse_midseason_promotion,
     parse_releases,
     parse_rotation,
     player_option,
+    read_development,
     read_releases,
     tab_of,
 )
@@ -724,6 +747,15 @@ def build_pennant_season_service(scope: WorldScope) -> PennantSeasonService:
         plans=DjangoClubPlanRepository(scope),
         context_query=DjangoSimulationContextQuery(scope),
         fa_exemptions=ForeignQuotaExemptions(DjangoServiceHistoryQuery(scope)),
+        review=MidseasonReview(
+            leagues=DjangoLeagueRepository(scope),
+            teams=DjangoTeamRepository(scope),
+            ratings=DjangoRatingsRepository(scope),
+            registrations=DjangoMidseasonRegistrationRepository(scope),
+            squads=DjangoDevelopmentRosterQuery(scope),
+            context_query=DjangoSimulationContextQuery(scope),
+            atomic=transaction.atomic,
+        ),
         atomic=transaction.atomic,
     )
 
@@ -735,28 +767,106 @@ def build_pennant_offseason_service(scope: WorldScope) -> PennantOffseasonServic
     後始末を1つのトランザクションにまとめるので、`transaction.atomic` もここで渡す。
     ペナントの世界の範囲だけを受け取る（実データの範囲なら InvalidWorld）。存在しない世界は、使うときに WorldNotFound。
     締める年の最終順位の読み取りは、勝ち上がり（締められるかの検査）とドラフトの指名順で1つを共有する。
+    局面の検査と入力の読み口はドラフト会議（`build_pennant_draft_service`）と同じ組み立て（`_OffseasonParts`）で、
+    同じリポジトリの実体をサービスと共有する。
     """
     world_id = _pennant_world_id(scope)
-    finishes = _league_finishes(scope)
+    parts = _OffseasonParts(scope)
     return PennantOffseasonService(
         world_id=world_id,
-        worlds=DjangoWorldRepository(scope.workspace_id),
-        leagues=DjangoLeagueRepository(scope),
-        teams=DjangoTeamRepository(scope),
-        fixtures=DjangoFixtureRepository(scope),
-        ratings=DjangoRatingsRepository(scope),
-        plans=DjangoClubPlanRepository(scope),
-        releases=DjangoReleasePlanRepository(scope),
-        awards=DjangoAwardRepository(scope),
-        championships=DjangoChampionshipRepository(scope),
-        titles=build_league_view_service(scope),
-        context_query=DjangoSimulationContextQuery(scope),
-        playing_time=DjangoSeasonPlayingTimeQuery(scope),
-        postseason=_postseason_brackets(scope, finishes=finishes),
-        finishes=finishes,
-        fa_exemptions=ForeignQuotaExemptions(DjangoServiceHistoryQuery(scope)),
+        worlds=parts.worlds,
+        leagues=parts.leagues,
+        teams=parts.teams,
+        fixtures=parts.fixtures,
+        ratings=parts.ratings,
+        plans=DjangoClubPlanRepository(parts.scope),
+        releases=parts.releases,
+        developments=parts.developments,
+        development_roster=DjangoDevelopmentRosterQuery(parts.scope),
+        awards=parts.awards,
+        championships=DjangoChampionshipRepository(parts.scope),
+        drafts=parts.drafts,
+        lotteries=DjangoDraftLotteryRepository(parts.scope),
+        titles=parts.titles,
+        context_query=parts.context_query,
+        postseason=parts.brackets,
+        phase=parts.phase(),
+        inputs=parts.inputs(),
+        fa_exemptions=ForeignQuotaExemptions(DjangoServiceHistoryQuery(parts.scope)),
         atomic=transaction.atomic,
     )
+
+
+def build_pennant_draft_service(scope: WorldScope) -> PennantDraftService:
+    """ペナントの世界ひとつのドラフト会議（GM が1巡ずつ進める。#297 D3）のサービスを組み立てる。
+
+    **リポジトリと参照クエリは、すべて渡された世界の範囲で作る。** 会議を開ける条件と、会議を始めるときの入力は
+    締める処理と同じ組み立て（`_OffseasonParts`）。トランザクションはここで渡す。
+    ペナントの世界の範囲だけを受け取る（実データの範囲なら InvalidWorld）。存在しない世界は、使うときに WorldNotFound。
+    """
+    world_id = _pennant_world_id(scope)
+    parts = _OffseasonParts(scope)
+    return PennantDraftService(
+        world_id=world_id,
+        worlds=parts.worlds,
+        teams=parts.teams,
+        drafts=parts.drafts,
+        names=DjangoPlayerNameQuery(parts.scope),
+        phase=parts.phase(),
+        inputs=parts.inputs(),
+        atomic=transaction.atomic,
+    )
+
+
+class _OffseasonParts:
+    """締める処理とドラフト会議が共有する部品（局面の検査・入力の読み口と、その依存）。依存は全部、世界の範囲で作る。
+
+    リポジトリの実体はサービスと部品で共有する（同じ世界・同じ範囲の読み書きを1つの実体で行う）。
+    締める年の最終順位の読み取りは、勝ち上がり（締められるかの検査）とドラフトの指名順で1つを共有する。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self.world_id = _pennant_world_id(scope)
+        self.scope = scope
+        self.worlds = DjangoWorldRepository(scope.workspace_id)
+        self.leagues = DjangoLeagueRepository(self.scope)
+        self.teams = DjangoTeamRepository(self.scope)
+        self.fixtures = DjangoFixtureRepository(self.scope)
+        self.ratings = DjangoRatingsRepository(self.scope)
+        self.releases = DjangoReleasePlanRepository(self.scope)
+        self.developments = DjangoDevelopmentPlanRepository(self.scope)
+        self.awards = DjangoAwardRepository(self.scope)
+        self.drafts = DjangoDraftRepository(self.scope)
+        self.context_query = DjangoSimulationContextQuery(self.scope)
+        self.titles = build_league_view_service(scope)
+        self.finishes = _league_finishes(scope)
+        self.brackets = _postseason_brackets(scope, finishes=self.finishes)
+
+    def phase(self) -> OffseasonPhase:
+        return OffseasonPhase(
+            world_id=self.world_id,
+            worlds=self.worlds,
+            teams=self.teams,
+            fixtures=self.fixtures,
+            ratings=self.ratings,
+            releases=self.releases,
+            developments=self.developments,
+            context_query=self.context_query,
+            postseason=self.brackets,
+        )
+
+    def inputs(self) -> OffseasonInputsReader:
+        return OffseasonInputsReader(
+            teams=self.teams,
+            leagues=self.leagues,
+            ratings=self.ratings,
+            releases=self.releases,
+            developments=self.developments,
+            awards=self.awards,
+            titles=self.titles,
+            playing_time=DjangoSeasonPlayingTimeQuery(self.scope),
+            finishes=self.finishes,
+        )
 
 
 def build_pennant_postseason_service(scope: WorldScope) -> PennantPostseasonService:
@@ -830,6 +940,7 @@ def build_pennant_settings_service(scope: WorldScope) -> PennantSettingsService:
         world_id=world_id,
         worlds=DjangoWorldRepository(scope.workspace_id),
         fixtures=DjangoFixtureRepository(scope),
+        drafts=DjangoDraftRepository(scope),
         context_query=DjangoSimulationContextQuery(scope),
         postseason=DjangoPostseasonQuery(scope),
         brackets=_postseason_brackets(scope),
@@ -1125,6 +1236,15 @@ def pennant_world(request, world_id):
         and (status is None or status.is_settled)
         else None
     )
+    # 締められるときだけ、その年のドラフト会議の状態を読む（途中なら締めるカードの代わりに会議のカードを出す。
+    # 未開始・終了なら締めるカードにドラフトの行を出す。#297 D3）
+    draft = (
+        build_pennant_draft_service(_world_scope(request, world_id)).view(
+            expected_year=close_option.year, postseason_status=status
+        )
+        if close_option is not None and close_option.can_close
+        else None
+    )
     return _render(
         request,
         "pennant/home.html",
@@ -1135,6 +1255,7 @@ def pennant_world(request, world_id):
             "plan_notices": _plan_notices(request, world) if is_owner else [],
             "postseason": postseason,
             "close_option": close_option,
+            "draft": draft,
             "registered_band": OPENING_REGISTERED_BAND,
         },
         world,
@@ -1282,6 +1403,133 @@ def pennant_close_season(request, world_id):
     if result.without_ratings_count:
         messages.info(request, f"能力の無い選手 {result.without_ratings_count}人は、翌年の能力を作りませんでした。")
     return redirect(_url(request, "pennant_offseason", world_id, result.year))
+
+
+@require_safe
+def pennant_draft(request, world_id, year):
+    """Y年のドラフト会議（#297 D3）。読むだけなら誰でも開ける。操作（`pennant_draft_act`）はオーナーにだけ出す。
+
+    開けるのはいまの年度だけ。締めた年はオフの結果へ、まだ来ない年は 404。会議を開けない局面（公式戦・
+    ポストシーズンの途中）は理由を出す。`?sort=`・`?dir=` は候補の並べ替え（不正なキーは見込みの区分の高い順）、
+    `?position=`・`?route=` は候補の絞り込み（`Position`・`DraftRoute` の名前。不正な値は絞らない）。
+    """
+    world = _world_context(request, world_id)
+    if year < world.season_year:
+        return redirect(_url(request, "pennant_offseason", world_id, year))
+    if year > world.season_year:
+        raise Http404("その年のドラフト会議はありません。")
+    sort, descending = _sort_params(request)
+    draft = build_pennant_draft_service(_world_scope(request, world_id)).view(
+        expected_year=year,
+        sort=sort,
+        descending=descending,
+        position=request.GET.get("position"),
+        route=request.GET.get("route"),
+    )
+    return _render(
+        request,
+        "pennant/draft.html",
+        {
+            "draft": draft,
+            "year": year,
+            "is_owner": _can_write_world(request, world),
+            "current_sort": draft.sort,
+            "current_descending": draft.descending,
+        },
+        world,
+    )
+
+
+# 会議の操作（URL の末尾）。どれも POST だけで、オーナーだけが使える
+DRAFT_ACTIONS = frozenset({"start", "nominate", "pass", "delegate", "auto", "reset"})
+
+
+def pennant_draft_act(request, world_id, year, action):
+    """会議の操作（始める・指名・選択終了・この番を任せる・残りをお任せ・やり直す）。POST だけで、オーナーだけ。
+
+    URL の年が画面を開いたときの年（`expected_year`）で、始める以外は `expected_seq`（画面を開いたときの最後の
+    行動の番号）も送ってもらう（二重送信や別のタブで進めたときに、さらに進めない。欠落は「検査なし」にせず弾く）。
+    結果は会議の画面で messages に出す（PRG。指名のフォームは並べ替えと絞り込みの指定
+    `sort`・`dir`・`position`・`route`
+    も送るので、保って戻る）。
+    """
+    if action not in DRAFT_ACTIONS:
+        raise Http404("その操作はありません。")
+    world = _world_context(request, world_id)
+    draft_url = _url(request, "pennant_draft", world_id, year)
+    if request.method != "POST":
+        return redirect(draft_url)
+    denied = _requires_world_owner(request, world)
+    if denied is not None:
+        return denied
+    back_query = {key: request.POST[key] for key in ("sort", "dir", "position", "route") if request.POST.get(key)}
+    back = f"{draft_url}?{urlencode(back_query)}" if back_query else draft_url
+
+    service = build_pennant_draft_service(_world_scope(request, world_id))
+    try:
+        if action == "start":
+            step = service.start(expected_year=year)
+            messages.success(request, f"{year}年のドラフト会議を始めました。")
+            _draft_step_messages(request, step, world.managed_team_id)
+            return redirect(back)
+        sent = request.POST.get("expected_seq", "")
+        if not sent.isdigit():
+            messages.error(request, "画面が古いか、送信が正しくありません。開き直してからもう一度お試しください。")
+            return redirect(back)
+        expected_seq = int(sent)
+        if action == "reset":
+            service.reset(expected_year=year, expected_seq=expected_seq)
+            messages.success(request, f"{year}年のドラフト会議の記録を消しました。もう一度始めてください。")
+            return redirect(back)
+        if action == "nominate":
+            prospect = request.POST.get("prospect", "")
+            if not prospect.isdigit():
+                messages.error(request, "指名する選手を選んでください。")
+                return redirect(back)
+            step = service.nominate(int(prospect), expected_year=year, expected_seq=expected_seq)
+        elif action == "pass":
+            step = service.pass_turn(expected_year=year, expected_seq=expected_seq)
+            messages.success(request, "選択を終えました。")
+        elif action == "delegate":
+            step = service.delegate_turn(expected_year=year, expected_seq=expected_seq)
+            messages.success(request, "この番を任せました。")
+        else:
+            step = service.auto_complete(expected_year=year, expected_seq=expected_seq)
+            messages.success(request, "残りをお任せにしました。")
+    except AlreadyClosed as error:
+        messages.warning(request, str(error))
+        if error.year is not None:
+            return redirect(_url(request, "pennant_offseason", world_id, error.year))
+        return redirect(back)
+    except DraftConflict as error:
+        messages.warning(request, str(error))
+        return redirect(back)
+    except DomainError as error:
+        messages.error(request, str(error))
+        return redirect(back)
+    _draft_step_messages(request, step, world.managed_team_id, own_moves=action != "auto")
+    return redirect(back)
+
+
+def _draft_step_messages(request, step: DraftStep, managed_team_id: int | None, *, own_moves: bool = True) -> None:
+    """操作で確定した動きのうち、受け持つ球団に関わるもの（獲得・抽選の外れ）と、会議の終わりを知らせる。
+
+    `own_moves` が False（残りをお任せ）なら、受け持つ球団の動きは1件ずつ出さない（会議の画面の「自軍の指名」で読む）。
+    """
+    for move in step.moves if own_moves else ():
+        lottery = move.lottery
+        if move.team_id == managed_team_id and move.prospect_key is not None:
+            won = f"（{len(lottery.bidders)}球団の抽選で当選）" if lottery is not None else ""
+            position = f"（{move.position.label}）" if move.position is not None else ""
+            messages.success(request, f"{move.round_label}: {move.prospect_name}{position}を獲得しました{won}。")
+        elif lottery is not None and managed_team_id in lottery.bidder_ids and move.team_id != managed_team_id:
+            messages.warning(
+                request,
+                f"{move.round_label}: {move.prospect_name}の抽選に外れました（{lottery.winner}が獲得）。"
+                "もう一度入札してください。",
+            )
+    if step.is_complete:
+        messages.info(request, "ドラフト会議が終わりました。GM ホームでシーズンを締めると、新人が入団します。")
 
 
 def pennant_offseason(request, world_id, year):
@@ -1496,10 +1744,33 @@ def build_club_details_service(scope: WorldScope) -> ClubDetailsService:
     )
 
 
+def build_midseason_registration_service(scope: WorldScope) -> MidseasonRegistrationService:
+    """ペナントの世界ひとつの、期中の支配下登録（編成の「育成」タブ。#170 P3a）のサービスを組み立てる。
+
+    **リポジトリと参照クエリはすべて渡された世界の範囲で作る**（他の世界の球団の選手は、読めも書けもしない）。
+    昇格と登録日の記録を1つにまとめるので、`transaction.atomic` もここで渡す。
+    ペナントの世界の範囲だけを受け取る（実データの範囲なら InvalidWorld）。存在しない世界は、使うときに WorldNotFound。
+    """
+    world_id = _pennant_world_id(scope)
+    return MidseasonRegistrationService(
+        world_id=world_id,
+        worlds=DjangoWorldRepository(scope.workspace_id),
+        leagues=DjangoLeagueRepository(scope),
+        teams=DjangoTeamRepository(scope),
+        fixtures=DjangoFixtureRepository(scope),
+        ratings=DjangoRatingsRepository(scope),
+        registrations=DjangoMidseasonRegistrationRepository(scope),
+        roster=DjangoDevelopmentRosterQuery(scope),
+        atomic=transaction.atomic,
+    )
+
+
 def pennant_club(request, world_id):
     """編成。1軍登録・オーダー・投手陣の3タブ（`?tab=`）と、シーズン終了で締められるときだけ「戦力外」タブ。
 
     受け持つ球団の編成を、区画ごとに自動か手動のどちらかで見せる。「戦力外」は締めるときの戦力外の指名（自動か手動）。
+    補強の窓（シーズンを締めた後〜7月31日）の中だけ「育成」タブ（育成選手を行ごとに支配下に登録する。#170 P3a）。
+    公式戦を終えてから締めるまでは「育成」タブをオフの形（育成選手のオフの扱いの指名。自動か手動。#170 P2）で出す。
 
     GET は誰でも（読み取り専用）、POST はオーナーだけ（未ログインはログインへ、ほかの人は 403）。
     POST は区画ごとに「手動にする」「保存する」「自動に戻す」を受け、成功したら同じタブへ戻る
@@ -1525,6 +1796,10 @@ def _post_club(request, world: WorldContext):
         return redirect(club_url)
     if request.POST.get("section") == RELEASE_SECTION:
         return _post_release(request, world)
+    if request.POST.get("section") == DEVELOPMENT_SECTION:
+        return _post_development(request, world)
+    if request.POST.get("section") == DEVELOPMENT_PLAN_SECTION:
+        return _post_development_plan(request, world)
     section = SECTIONS.get(request.POST.get("section", ""))
     action = request.POST.get("action", "")
     if section is None or action not in ACTIONS:
@@ -1596,6 +1871,84 @@ def _post_release(request, world: WorldContext):
     return redirect(f"{club_url}?tab={RELEASE_TAB}")
 
 
+def _post_development(request, world: WorldContext):
+    """「育成」タブの「支配下に登録」。画面を開いたときの次の公式戦の日（`expected_next_game_on`）を送ってもらう。
+
+    登録できたら同じタブへ戻す（窓の中ならタブは残る）。古い画面・窓の外・上限・育成でない選手などは、理由を出して
+    同じタブへ戻す（窓の外ならタブは出ず、既定のタブに落ちる）。
+    """
+    tab_url = f"{_url(request, 'pennant_club', world.world_id)}?tab={DEVELOPMENT_TAB}"
+    try:
+        player_id, expected_next_game_on = parse_midseason_promotion(request.POST)
+        promoted = build_midseason_registration_service(_world_scope(request, world.world_id)).promote(
+            player_id, expected_next_game_on=expected_next_game_on
+        )
+    except (ClubInputError, DomainError) as error:
+        messages.error(request, str(error))
+        return redirect(tab_url)
+    messages.success(
+        request,
+        f"{promoted.name}を支配下に登録しました（背番号 {promoted.number}。"
+        f"{promoted.registered_on.month}月{promoted.registered_on.day}日の試合から出られます）。",
+    )
+    return redirect(tab_url)
+
+
+def _post_development_plan(request, world: WorldContext):
+    """「育成」タブのオフの形の操作（手動にする・保存する・自動に戻す。#170 P2）。どれも画面を開いたときの締める年を
+    送ってもらう。
+
+    指名として成立しない・古い画面なら、選んだ扱いを残して再表示する。指名できなくなっていたら（別の画面で締めた・
+    会議を始めた）、理由を出して編成の画面へ戻す。
+    """
+    club_url = _url(request, "pennant_club", world.world_id)
+    action = request.POST.get("action", "")
+    if action not in ACTIONS:
+        messages.error(request, "その操作はできません。")
+        return redirect(club_url)
+    service = build_pennant_offseason_service(_world_scope(request, world.world_id))
+    try:
+        expected_year = parse_expected_year(request.POST)
+        if action == ACTION_AUTO:
+            service.reset_development(expected_year=expected_year)
+            messages.success(request, "育成を自動に戻しました。")
+        elif action == ACTION_MANUAL:
+            service.start_manual_development(expected_year=expected_year)
+            messages.success(request, "育成を手動にしました。選手ごとに扱いを選んで保存してください。")
+        else:
+            decisions = parse_development(request.POST, service.development_view())
+            service.set_development(decisions, expected_year=expected_year)
+            promoted = sum(1 for decision in decisions.values() if decision is DevelopmentDecision.PROMOTE)
+            released = sum(1 for decision in decisions.values() if decision is DevelopmentDecision.RELEASE)
+            messages.success(
+                request, f"育成の指名を保存しました（支配下に登録 {promoted}人・自由契約 {released}人）。"
+            )
+    except (ClubInputError, InvalidDevelopmentPlan) as error:
+        state = DevelopmentFormState(error=str(error), decisions=read_development(request.POST))
+        return _render_club(request, world, DEVELOPMENT_TAB, development_state=state, status=400)
+    except DomainError as error:
+        messages.error(request, str(error))
+        return redirect(club_url)
+    return redirect(f"{club_url}?tab={DEVELOPMENT_TAB}")
+
+
+def _development_plan_view(request, world: WorldContext) -> DevelopmentPlanView | None:
+    """「育成」タブのオフの形の材料。指名できないとき（公式戦の途中・締めた後・最終シーズン）・受け持ちが無いときは
+    None。"""
+    try:
+        return build_pennant_offseason_service(_world_scope(request, world.world_id)).development_view()
+    except DomainError:
+        return None
+
+
+def _development_view(request, world: WorldContext) -> MidseasonRegistrationView | None:
+    """「育成」タブの材料。補強の窓の外・受け持ちが無いときは None（タブを出さない）。"""
+    try:
+        return build_midseason_registration_service(_world_scope(request, world.world_id)).view()
+    except DomainError:
+        return None
+
+
 def _release_view(request, world: WorldContext) -> ReleasePlanView | None:
     """「戦力外」タブの材料。指名できないとき（公式戦の途中・締めた後・最終シーズン）・受け持ちが無いときは None。
 
@@ -1650,6 +2003,7 @@ def _render_club(
     *,
     state: ClubFormState | None = None,
     release_state: ReleaseFormState | None = None,
+    development_state: DevelopmentFormState | None = None,
     status: int = 200,
 ):
     """編成の画面を描く。`state` / `release_state` があるときは、保存に失敗した入力を残して出す。
@@ -1658,10 +2012,17 @@ def _render_club(
     GM が決めた形のまま出す。解決後の値から作ると、保存したときに上書きが AI の形で置き換わる）。
     「戦力外」タブは公式戦を終えてから締めるまで出す（ポストシーズン中も出す。条件は `can_choose_releases`）。
     出せないときに `?tab=release` が来たら既定のタブに落とす。
+    「育成」タブは補強の窓（締めた後〜7月31日。条件は `MidseasonRegistrationService.is_open`）の中だけ出す。
+    出せないときに `?tab=development` が来たら既定のタブに落とす（「戦力外」タブとは時期が重ならない）。
+    「育成」タブは、公式戦を終えてから締めるまでもオフの形（育成の指名。#170 P2。条件は「戦力外」タブと同じ）で出す。
+    補強の窓とは時期が重ならない（窓は公式戦の対戦が残っているときだけ開く）。
     """
     # ほかのタブではタブを出すかだけを決める（指名できるか。支配下の一覧までは読まない）
     release = None
     has_release_tab = False
+    development = None
+    development_plan = None
+    has_development_tab = False
     if world.managed_team_id is not None:
         if tab == RELEASE_TAB:
             release = _release_view(request, world)
@@ -1670,7 +2031,20 @@ def _render_club(
             has_release_tab = build_pennant_offseason_service(
                 _world_scope(request, world.world_id)
             ).can_choose_releases()
+        if tab == DEVELOPMENT_TAB:
+            development = _development_view(request, world)
+            if development is None:
+                development_plan = _development_plan_view(request, world)
+            has_development_tab = development is not None or development_plan is not None
+        else:
+            # オフの形は「戦力外」タブと同じ条件（`can_choose_development`）なので、それを使い回す
+            has_development_tab = (
+                has_release_tab
+                or build_midseason_registration_service(_world_scope(request, world.world_id)).is_open()
+            )
     if tab == RELEASE_TAB and release is None:
+        tab = DEFAULT_TAB
+    if tab == DEVELOPMENT_TAB and development is None and development_plan is None:
         tab = DEFAULT_TAB
     context: dict = {
         "is_owner": _can_write_world(request, world),
@@ -1679,6 +2053,9 @@ def _render_club(
         "club_error": None,
         "release": release,
         "has_release_tab": has_release_tab,
+        "development": development,
+        "development_plan": development_plan,
+        "has_development_tab": has_development_tab,
     }
     if world.managed_team_id is None:
         return render(request, "pennant/club.html", {**context, "world": world}, status=status)
@@ -1713,10 +2090,11 @@ def _render_club(
 
     # 選択肢は1軍の選手。保存済みの上書きに入っている1軍外の選手も、印を付けて残す（保存時にドメインが弾く）
     kept = {slot.player_id for slot in lineup} | {slot.player_id for slot in rotation} | {closer}
-    # 「戦力外」タブは編成の選手の詳細を使わない（下で支配下の詳細を作る）
+    # 「戦力外」タブは編成の選手の詳細を使わない（下で支配下の詳細を作る）。
+    # 「育成」タブも使わない（材料は `development`）
     details = (
         ()
-        if tab == RELEASE_TAB
+        if tab in (RELEASE_TAB, DEVELOPMENT_TAB)
         else build_club_details_service(_world_scope(request, world.world_id)).details(
             world.managed_team_id, view.year, view.players
         )
@@ -1748,6 +2126,21 @@ def _render_club(
     if release_state is not None:
         # 戦力外の保存に失敗した理由（締められなくなってタブを出せないときも、既定のタブの上に出す）
         context["error"] = release_state.error
+    if development_state is not None:
+        # 育成の指名の保存に失敗した理由と、選んだ扱い（指名できなくなってオフの形を出せないときも、理由は出す）
+        context["error"] = development_state.error
+    if development_plan is not None:
+        # 行と、選ばれている扱いの表示名（テンプレートは辞書を引けないので組にする）。
+        # 保存に失敗したときは送られた値だけを残す（選んでいなかった行は未選択のまま出し、保存済みの値で埋めない）
+        context["development_rows"] = [
+            (
+                row,
+                row.decision.value
+                if development_state is None
+                else development_state.decisions.get(row.player.player_id, ""),
+            )
+            for row in development_plan.rows
+        ]
     if tab == RELEASE_TAB and release is not None:
         context.update(
             release_players=build_club_details_service(_world_scope(request, world.world_id)).details(

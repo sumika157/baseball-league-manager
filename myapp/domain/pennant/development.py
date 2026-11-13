@@ -20,21 +20,33 @@
 
 昇格の事実は在籍の `promoted_year`・`number_before_promotion` だけ、育成契約の起点・満了・再契約は在籍とドラフトの
 指名から導く（保存しない）。
+
+シーズン中は、GM が育成タブで上げ（#170 P3a）、AI は判定日（6月1日・7月1日）に今の力で上げる
+（`decide_midseason_promotions`。#170 P3b・Q2 A）。どちらも補強の窓（`reinforcement.ReinforcementWindow`）の中だけ。
+
+オフは、GM が受け持つ球団の育成選手を行ごとに1つの扱い（`DevelopmentDecision`）で決められる（`DevelopmentPlan`。
+#170 P2。検査は `ensure_development_plan`）。手動の球団は指名どおりに上げ・自由契約にし（`decisions_as_chosen`・
+`confirm_chosen_promotions`）、上の規則（自動）を使わない。AI 球団は常に自動。
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass
+import datetime
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from enum import Enum
 from functools import cache
 
+from ..exceptions import InvalidDevelopmentPlan
+from ..simulation.manager import ClubRoster, choose_active_roster
 from ..simulation.randomness import game_seed, make_random
 from ..simulation.ratings import POTENTIAL_AVERAGE, Potential
-from ..value_objects import Position
+from ..value_objects import DraftPick, ForeignPlayerRules, Position
 from .draft import NUMBER_POOLS, DraftRoute, draftee_count, draw_number
-from .offseason_player import OffseasonClub, OffseasonPlayer, retirement_value
+from .offseason_player import OffseasonClub, OffseasonPlayer, Ratings, retirement_value
 from .outlook import projected_ratings
 from .prospects import expected_prospect_ratings
+from .reinforcement import ReinforcementWindow
 from .release import ability_value, keep_value, release_order
 from .roster import OPENING_REGISTERED_BAND
 
@@ -48,6 +60,10 @@ MAX_PROMOTIONS = 3
 PROMOTION_MARGIN = 3.0
 # 満了の余裕（点）。満了の育成の見込みの価値が、新しい育成の新人の見込みからこれを引いた値に届かなければ自由契約
 RESIGN_MARGIN = 5.0
+# AI の期中の昇格（#170 P3b。Q2 A）: 1球団1年の上限（判定日ごとに1人まで）と、支配下の上限のうち空けておく人数
+# （#169 F3 の期中の外国人の獲得の分）
+MIDSEASON_MAX_PROMOTIONS = 2
+MIDSEASON_RESERVED_SLOTS = 1
 # 新しい育成の新人の見込みに使う年齢と経路（育成の新人はほとんどが大学から入る。#198 D2 の実測）
 DEVELOPMENT_PROSPECT_AGE = 22
 DEVELOPMENT_PROSPECT_ROUTE = DraftRoute.UNIVERSITY
@@ -55,7 +71,10 @@ DEVELOPMENT_PROSPECT_ROUTE = DraftRoute.UNIVERSITY
 
 @dataclass(frozen=True)
 class Promotion:
-    """オフの昇格ひとり。翌年（締める年 + 1）から支配下で、背番号は `number`（支配下の番号）に変わる。"""
+    """昇格ひとり。背番号は `number`（支配下の番号）に変わる。
+
+    オフの昇格（`confirm_promotions`）は翌年（締める年 + 1）から、AI の期中の昇格（`decide_midseason_promotions`）は
+    登録日から支配下。"""
 
     player_id: int
     team_id: int
@@ -70,10 +89,21 @@ def development_start_year(player: OffseasonPlayer) -> int:
     （開幕3年目に一斉に満了させないため）。育成ドラフトの指名の無い分岐した育成（外国人の育成など）は、開幕3年目の
     オフにそろって満了の判定を受ける（実データの日本人の育成は投入で指名を持つので当たらない）。
     """
-    draft = player.profile.draft
+    return contract_start_year(player.profile.draft, joined_year=player.joined_year)
+
+
+def contract_start_year(draft: DraftPick | None, *, joined_year: int) -> int:
+    """`development_start_year` の材料版（ドラフトの指名と今の在籍の開始年から）。
+
+    編成の「育成」タブの「何年目」も使う。"""
     if draft is not None and draft.is_development:
         return draft.entry_year
-    return player.joined_year
+    return joined_year
+
+
+def contract_season(start_year: int, year: int) -> int:
+    """`year` 年が育成契約の何年目か（起点の年が1年目）。編成の「育成」タブに出す。"""
+    return year - start_year + 1
 
 
 def is_contract_expiring(start_year: int, year: int) -> bool:
@@ -82,7 +112,7 @@ def is_contract_expiring(start_year: int, year: int) -> bool:
     `DEVELOPMENT_CONTRACT_YEARS` 年目（`year - start_year + 1`）のオフに満了し、再契約した後は毎年のオフに満了する
     （NPB の再契約は1シーズンごと。再契約の記録は保存しないので、3年を過ぎた育成は毎年が満了の年になる）。
     """
-    return year - start_year + 1 >= DEVELOPMENT_CONTRACT_YEARS
+    return contract_season(start_year, year) >= DEVELOPMENT_CONTRACT_YEARS
 
 
 @cache
@@ -152,14 +182,128 @@ def confirm_promotions(
         registered + count + rookies > ceiling or draftee_count(registered + count, registered_limit=limit) < rookies
     ):
         count -= 1
-    if count == 0:
+    return _numbered(club, remaining, wished[:count], year=year, world_seed=world_seed)
+
+
+def _numbered(
+    club: OffseasonClub, remaining: Sequence[OffseasonPlayer], player_ids: Sequence[int], *, year: int, world_seed: int
+) -> tuple[Promotion, ...]:
+    """オフの昇格に背番号を付ける（空いている支配下の番号から順に引く。乱数は `promotion-number-<球団 id>`）。
+
+    AI の昇格（`confirm_promotions`）と GM の指名（`confirm_chosen_promotions`）が共有する。"""
+    if not player_ids:
         return ()
     rng = make_random(game_seed(world_seed, year, f"promotion-number-{club.team_id}"))
     used = {player.number for player in remaining}
     return tuple(
         Promotion(player_id=player_id, team_id=club.team_id, number=draw_number(rng, used, NUMBER_POOLS))
-        for player_id in wished[:count]
+        for player_id in player_ids
     )
+
+
+def midseason_promotion_number(used: set[str], *, world_seed: int, year: int, team_id: int, player_id: int) -> str:
+    """期中の昇格（#170 P3a）の背番号。空いている支配下の番号から引く（オフの昇格と同じ `draft.draw_number`）。
+
+    GM は背番号を選ばない（自動）。乱数は世界のシード・登録の年・球団・選手から作るので、同じ状態なら同じ番号になる。
+    `used` はいま球団で使われている番号（引いた番号を足す）。
+    """
+    rng = make_random(game_seed(world_seed, year, f"midseason-promotion-number-{team_id}-{player_id}"))
+    return draw_number(rng, used, NUMBER_POOLS)
+
+
+@dataclass(frozen=True)
+class MidseasonProspect:
+    """期中の昇格の候補の育成選手ひとり（登録位置と、判定日の年の能力。能力が無い選手は上げない）。"""
+
+    player_id: int
+    position: Position
+    ratings: Ratings | None
+
+
+@dataclass(frozen=True)
+class MidseasonClub:
+    """AI の期中の昇格（`decide_midseason_promotions`）の材料。判定日の時点の球団ひとつ。"""
+
+    team_id: int
+    # 受け持つ球団（GM が決める。AI は触れない）
+    is_managed: bool
+    # 支配下の登録候補（能力のある在籍選手。試合の進行の `pool_of` と同じもの）と、所属リーグの1軍の外国人枠
+    pool: ClubRoster
+    foreign_rules: ForeignPlayerRules
+    development: tuple[MidseasonProspect, ...]
+    # その年の支配下の人数とリーグの上限（None は無制限）
+    registered_count: int
+    registered_limit: int | None
+    # 球団でいま使われている背番号（支配下・育成とも）
+    used_numbers: frozenset[str]
+    # その年の期中の登録日（GM・AI とも。`MidseasonRegistration.registered_on`）
+    registrations: tuple[datetime.date, ...]
+
+
+def decide_midseason_promotions(
+    clubs: Sequence[MidseasonClub], *, on: datetime.date, world_seed: int
+) -> tuple[Promotion, ...]:
+    """判定日に AI が支配下に上げる育成選手（#170 P3b。2026-11-12 ユーザー決定 Q2 A）。`on` は登録日（判定日以降の
+    最初の公式戦の日。上げた選手はこの日の試合から出られる）。
+
+    - **受け持つ球団は対象にしない**（GM が育成タブで決める）。補強の窓（`ReinforcementWindow.is_open`）の外なら
+      誰も上げない
+    - 上げるのは、今の能力の総合値（`retirement_value`）がその球団の1軍の同じ登録位置の基準（自動の1軍
+      `choose_active_roster` に入る、その位置で最も低い選手の総合値）以上の育成。1軍にその位置の選手がいなければ
+      上げない。
+      候補が複数なら基準を上回る幅の大きい選手（同じなら id の小さい選手）
+    - 1判定日1球団1人・1年 `MIDSEASON_MAX_PROMOTIONS` 人まで（その年の期中の登録で数える）。
+      支配下の上限のうち `MIDSEASON_RESERVED_SLOTS` 人は空けておく（#169 F3 の期中の外国人の獲得の分）
+    - その判定日の登録（登録日が `on` 以降）がもうある球団は上げない（書いた後に試合を作る前で止まった「進める」を
+      やり直しても、2人目を上げない）
+
+    背番号は `midseason_promotion_number`（GM の期中の昇格と同じ）。判定日の材料だけで決まる。
+    """
+    if not ReinforcementWindow.is_open(next_regular_game_on=on):
+        return ()
+    promotions: list[Promotion] = []
+    for club in clubs:
+        if club.is_managed:
+            continue
+        this_year = [registered for registered in club.registrations if registered.year == on.year]
+        if any(registered >= on for registered in this_year) or len(this_year) >= MIDSEASON_MAX_PROMOTIONS:
+            continue
+        if (
+            club.registered_limit is not None
+            and club.registered_count + 1 > club.registered_limit - MIDSEASON_RESERVED_SLOTS
+        ):
+            continue
+        chosen = _midseason_candidate(club)
+        if chosen is None:
+            continue
+        number = midseason_promotion_number(
+            set(club.used_numbers), world_seed=world_seed, year=on.year, team_id=club.team_id, player_id=chosen
+        )
+        promotions.append(Promotion(player_id=chosen, team_id=club.team_id, number=number))
+    return tuple(promotions)
+
+
+def _midseason_candidate(club: MidseasonClub) -> int | None:
+    """1軍の同じ登録位置の基準以上の育成のうち、基準を上回る幅の最も大きい選手の id（いなければ None）。"""
+    active = choose_active_roster(club.pool, rules=club.foreign_rules)
+    bars: dict[Position, float] = {}
+    members: list[tuple[Position, Ratings]] = [(batter.position, batter.ratings) for batter in active.batters]
+    members.extend((Position.PITCHER, pitcher.ratings) for pitcher in active.pitchers)
+    for position, ratings in members:
+        value = retirement_value(position, ratings)
+        bars[position] = min(value, bars.get(position, value))
+    best: tuple[float, int] | None = None
+    for prospect in club.development:
+        bar = bars.get(prospect.position)
+        if prospect.ratings is None or bar is None:
+            continue
+        margin = retirement_value(prospect.position, prospect.ratings) - bar
+        if margin < 0:
+            continue
+        key = (-margin, prospect.player_id)
+        if best is None or key < best:
+            best = key
+    return None if best is None else best[1]
 
 
 def decide_expirations(
@@ -187,4 +331,173 @@ def decide_expirations(
             and ability_value(player, team_id=club.team_id, year=year, start_year=start_year, world_seed=world_seed)
             < development_prospect_value(player.position) - RESIGN_MARGIN
         )
+    )
+
+
+# --- GM の指名（受け持つ球団だけ。#170 P2） ---
+
+
+class DevelopmentDecision(Enum):
+    """育成選手ひとりのオフの扱い（GM が行ごとに1つ選ぶ。2026-10-24 ユーザー決定 Q4 A）。
+    **選択肢（永続化の choices）の出典はこの Enum だけ**。
+
+    満了の年（`is_contract_expiring`）の選手は「支配下に登録」「再契約」「自由契約」、それ以外は「育成のまま」
+    「支配下に登録」から選ぶ（`choices_for`）。満了の自由契約の退団の経路は戦力外（`RELEASED`。Q3）。
+    """
+
+    KEEP = "育成のまま"
+    PROMOTE = "支配下に登録"
+    RESIGN = "再契約"
+    RELEASE = "自由契約"
+
+    @property
+    def label(self) -> str:
+        return self.value
+
+    @classmethod
+    def choices_for(cls, *, is_expiring: bool) -> tuple[DevelopmentDecision, ...]:
+        """その選手に選べる扱い（画面の並び順）。"""
+        if is_expiring:
+            return (cls.PROMOTE, cls.RESIGN, cls.RELEASE)
+        return (cls.KEEP, cls.PROMOTE)
+
+    @classmethod
+    def unchanged(cls, *, is_expiring: bool) -> DevelopmentDecision:
+        """何も変えない扱い（満了なら再契約、それ以外は育成のまま）。手動にしたときの初期値。"""
+        return cls.RESIGN if is_expiring else cls.KEEP
+
+    @classmethod
+    def from_label(cls, label: str) -> DevelopmentDecision:
+        for decision in cls:
+            if decision.value == label:
+                return decision
+        raise InvalidDevelopmentPlan(f"「{label}」は育成選手の扱いとして認識できません。")
+
+
+@dataclass(frozen=True)
+class DevelopmentPlan:
+    """GM の育成選手のオフの指名。球団ごとに1つで、締める年 `year` のオフに使う。
+
+    `decisions`（選手の id → 扱い）が None なら自動（AI と同じ規則）。戦力外の指名（`release.ReleasePlan`）と同じく
+    GM の上書き（入力）だけを持ち、締めた時点で消す（昇格の事実は在籍の `promoted_year`、自由契約は退団の経路に残る）。
+    コンストラクタは保存した値をそのまま写すので検査しない（検査は決めるときの `ensure_development_plan`）。
+    """
+
+    team_id: int
+    year: int
+    # 比べるのは値（`==`）だけ。辞書は hash できないので、hash の材料から外す
+    decisions: Mapping[int, DevelopmentDecision] | None = field(default=None, hash=False)
+
+    @property
+    def is_manual(self) -> bool:
+        return self.decisions is not None
+
+    def count(self, decision: DevelopmentDecision) -> int:
+        """その扱いを選んだ人数（自動なら 0）。"""
+        return sum(1 for chosen in (self.decisions or {}).values() if chosen is decision)
+
+
+@dataclass(frozen=True)
+class DevelopmentMember:
+    """指名の検査に使う、球団のいま在籍している育成選手ひとり（`is_expiring` は締める年に満了するか）。"""
+
+    player_id: int
+    name: str
+    is_expiring: bool
+
+
+def ensure_development_plan(
+    decisions: Mapping[int, DevelopmentDecision], members: Sequence[DevelopmentMember]
+) -> None:
+    """育成選手のオフの指名として成立するか。成立しなければ `InvalidDevelopmentPlan`。
+
+    - 指名できるのは球団のいま在籍している育成選手だけで、**全員に1つずつ選ぶ**（選んでいない選手を「何もしない」と
+      見なさない。画面のキーの欠落と同じく、黙って埋めない）
+    - 扱いはその選手に選べるもの（`DevelopmentDecision.choices_for`。再契約・自由契約は満了の選手だけ、
+      育成のままは満了でない選手だけ）
+
+    支配下に上げる人数は縛らない（AI が上げる人数の上限 `MAX_PROMOTIONS` は自動の規則で、GM の判断は縛らない）。
+    支配下の上限を超える分は締めるときに上げない（`confirm_chosen_promotions`）。
+    """
+    by_id = {member.player_id: member for member in members}
+    unknown = sorted(player_id for player_id in decisions if player_id not in by_id)
+    if unknown:
+        raise InvalidDevelopmentPlan(
+            f"育成の指名にできるのは、この球団に在籍している育成選手だけです（id={unknown[0]}）。"
+        )
+    for member in members:
+        decision = decisions.get(member.player_id)
+        if decision is None:
+            raise InvalidDevelopmentPlan(f"{member.name}の扱いを選んでください。")
+        if decision not in DevelopmentDecision.choices_for(is_expiring=member.is_expiring):
+            reason = "今季で育成契約が満了する" if member.is_expiring else "今季で育成契約が満了しない"
+            raise InvalidDevelopmentPlan(f"{member.name}は{reason}ので、「{decision.label}」は選べません。")
+
+
+@dataclass(frozen=True)
+class ChosenDevelopment:
+    """手動の指名から、締めるときに使う昇格の希望と満了の自由契約（どちらも id の昇順）。"""
+
+    promotions: tuple[int, ...]
+    releases: tuple[int, ...]
+
+
+def decisions_as_chosen(
+    decisions: Mapping[int, DevelopmentDecision], remaining: Sequence[OffseasonPlayer], *, year: int
+) -> ChosenDevelopment:
+    """手動の指名から、締めるときに上げる希望と自由契約にする選手。`remaining` は引退しなかった選手。
+
+    指名した後に引退した選手（引退として記録する）・育成でなくなった選手は黙って除く（`release.releases_as_chosen`
+    と同じ）。自由契約は、締める年に満了する選手（`is_contract_expiring`）だけ。
+    """
+    development = [player for player in remaining if player.is_development]
+    return ChosenDevelopment(
+        promotions=tuple(
+            sorted(
+                player.player_id
+                for player in development
+                if decisions.get(player.player_id) is DevelopmentDecision.PROMOTE
+            )
+        ),
+        releases=tuple(
+            sorted(
+                player.player_id
+                for player in development
+                if decisions.get(player.player_id) is DevelopmentDecision.RELEASE
+                and is_contract_expiring(development_start_year(player), year)
+            )
+        ),
+    )
+
+
+def confirm_chosen_promotions(
+    club: OffseasonClub,
+    remaining: Sequence[OffseasonPlayer],
+    chosen: Sequence[int],
+    *,
+    year: int,
+    start_year: int,
+    world_seed: int,
+) -> tuple[Promotion, ...]:
+    """GM が指名した昇格を、戦力外の後の球団で確定する。`remaining` は引退・戦力外の後の選手。
+
+    AI の `confirm_promotions` と違い、新人の人数を守るために削らない（GM の判断を優先し、新人は昇格の後の空きに
+    合わせて `draft.draftee_count` が減らす）。削るのは**支配下の上限**を超える分だけで、見込みの価値
+    （`ability_value`。AI の昇格と同じ物差し）の低い選手から削る。背番号は AI の昇格と同じく、空いている支配下の
+    番号から。
+    """
+    candidates = {player.player_id: player for player in remaining if player.is_development}
+    ranked = sorted(
+        (candidates[player_id] for player_id in chosen if player_id in candidates),
+        key=lambda player: (
+            -ability_value(player, team_id=club.team_id, year=year, start_year=start_year, world_seed=world_seed),
+            player.player_id,
+        ),
+    )
+    count = len(ranked)
+    if club.registered_player_limit is not None:
+        registered = sum(1 for player in remaining if player.is_registered)
+        count = min(count, max(0, club.registered_player_limit - registered))
+    return _numbered(
+        club, remaining, [player.player_id for player in ranked[:count]], year=year, world_seed=world_seed
     )

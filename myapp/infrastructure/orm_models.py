@@ -16,6 +16,8 @@ from ..domain.entities import (
     STADIUM_NAME_MAX_LENGTH,
     TEAM_NAME_MAX_LENGTH,
 )
+from ..domain.pennant.development import DevelopmentDecision
+from ..domain.pennant.draft_meeting import DraftActionKind
 from ..domain.pennant.draft_order import DraftOrderRule
 from ..domain.pennant.postseason import PostseasonFormat
 from ..domain.services.rankings import Title
@@ -58,6 +60,10 @@ GAME_STAGE_CHOICES = [(stage.value, stage.value) for stage in GameStage]
 # ポストシーズンの方式の選択肢もドメインの PostseasonFormat が唯一の出典
 POSTSEASON_FORMAT_CHOICES = [(item.value, item.value) for item in PostseasonFormat]
 DRAFT_ORDER_RULE_CHOICES = [(item.value, item.value) for item in DraftOrderRule]
+# 育成選手のオフの扱い（GM の指名。#170 P2）の選択肢もドメインの DevelopmentDecision が唯一の出典
+DEVELOPMENT_DECISION_CHOICES = [(item.value, item.value) for item in DevelopmentDecision]
+# ドラフト会議の行動の種類の選択肢もドメインの DraftActionKind が唯一の出典
+DRAFT_ACTION_KIND_CHOICES = [(item.value, item.value) for item in DraftActionKind]
 # 試合で就いた守備位置。登録位置（Position）とは別の概念
 FIELDING_POSITION_CHOICES = [(p.value, p.value) for p in FieldingPosition]
 # 打席まわりの選択肢も同じくドメインの値オブジェクトが出典。ここに文字列を
@@ -1168,6 +1174,73 @@ class PennantReleasePlanEntry(models.Model):
         return f"{self.plan} {self.player_id}"
 
 
+class PennantDevelopmentPlan(models.Model):
+    """ペナントの受け持つ球団の、育成選手のオフの手動の指名（#170 P2）。球団ごとに1つ。自動の球団は行を持たない。
+
+    `year` は指名した締める年（その年のオフにだけ使い、締めた時点で消す）。選手ごとの扱いは
+    `PennantDevelopmentPlanEntry`。
+    昇格の事実は在籍の昇格の年（`PlayerStint.promoted_year`）、自由契約は退団の経路に1つだけ残す。
+    世界の列は持たない。球団のリーグで世界が決まる（戦力外の指名と同じ）。
+    """
+
+    team = models.OneToOneField(Team, on_delete=models.CASCADE, related_name="development_plan", verbose_name="球団")
+    year = models.PositiveSmallIntegerField(verbose_name="締める年")
+
+    class Meta:
+        verbose_name = "ペナントの育成の指名"
+        verbose_name_plural = "ペナントの育成の指名"
+        ordering = ["team_id"]
+
+    def __str__(self) -> str:
+        return f"{self.team.name}の{self.year}年の育成の指名"
+
+
+class PennantDevelopmentPlanEntry(models.Model):
+    """育成の指名の1人（選手と扱い）。扱いの選択肢は domain の `DevelopmentDecision` が出典。"""
+
+    plan = models.ForeignKey(
+        PennantDevelopmentPlan, on_delete=models.CASCADE, related_name="entries", verbose_name="育成の指名"
+    )
+    player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="+", verbose_name="選手")
+    decision = models.CharField(max_length=10, choices=DEVELOPMENT_DECISION_CHOICES, verbose_name="扱い")
+
+    class Meta:
+        verbose_name = "ペナントの育成の指名の行"
+        verbose_name_plural = "ペナントの育成の指名の行"
+        ordering = ["plan_id", "player_id"]
+        constraints = [
+            models.UniqueConstraint(fields=["plan", "player"], name="unique_pennant_development_plan_entry_player"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.plan} {self.player_id} {self.decision}"
+
+
+class PennantMidseasonRegistration(models.Model):
+    """ペナントの期中の支配下登録（#170 P3a）。球団・選手・登録日（その選手が出られる最初の公式戦の日）。
+
+    在籍は年単位で、オフの昇格（締めた年 Y に翌年 Y+1 で書く）と Y+1 年の期中の昇格を在籍からは区別できないので、
+    登録日だけを足す。昇格の事実は在籍（`PlayerStint.promoted_year`）が持ち、登録日の年と一致することは
+    リポジトリが書く前に照合する（`reinforcement.ensure_registration_matches_stint`）。
+    世界の列は持たない。球団のリーグで世界が決まる（編成と同じ）。
+    """
+
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="+", verbose_name="球団")
+    player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="+", verbose_name="選手")
+    registered_on = models.DateField(verbose_name="登録日")
+
+    class Meta:
+        verbose_name = "ペナントの期中の支配下登録"
+        verbose_name_plural = "ペナントの期中の支配下登録"
+        ordering = ["registered_on", "player_id"]
+        constraints = [
+            models.UniqueConstraint(fields=["player", "registered_on"], name="unique_pennant_midseason_registration"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.registered_on} {self.player_id}"
+
+
 class PennantAward(models.Model):
     """ペナントの表彰。締めたシーズンのタイトル受賞者（部門の1位。同率は1人ずつ1行）。
 
@@ -1219,3 +1292,125 @@ class PennantChampionship(models.Model):
 
     def __str__(self) -> str:
         return f"{self.year}年 {self.team_id}"
+
+
+class PennantDraft(models.Model):
+    """ペナントのドラフト会議の記録（世界 × 年。#297 D3）。会議は締める前の入力で、締めた時点で消す。
+
+    `signature` は会議を始めたときの候補の指紋（候補の身元だけ。候補そのものは保存せず、決定的に作り直して照合する）。
+    人数の幅は `PennantDraftSlot`、行動は `PennantDraftAction`。巡・次の番・状態は保存せず、行動の並びから導く。
+    会議は世界そのものに属す（球団に属さない）ので、世界を直接指す（世界 × 年の一意を DB の制約で言える）。
+    """
+
+    world = models.ForeignKey(PennantWorld, on_delete=models.CASCADE, related_name="drafts", verbose_name="世界")
+    year = models.PositiveSmallIntegerField(verbose_name="締める年")
+    signature = models.CharField(max_length=64, verbose_name="候補の指紋")
+
+    class Meta:
+        verbose_name = "ペナントのドラフト会議"
+        verbose_name_plural = "ペナントのドラフト会議"
+        ordering = ["world_id", "year"]
+        constraints = [
+            models.UniqueConstraint(fields=["world", "year"], name="unique_pennant_draft_year"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.world_id} {self.year}年のドラフト会議"
+
+
+class PennantDraftSlot(models.Model):
+    """ドラフト会議を始めたときに写した、球団の人数の幅（domain の `DraftSlot`。出典は `meeting_slots`）。
+
+    位置の計画と会議の前の位置ごとの人数は、位置（`Position` の値）の並び・位置 → 人数として JSON で持つ。
+    """
+
+    draft = models.ForeignKey(PennantDraft, on_delete=models.CASCADE, related_name="slots", verbose_name="会議")
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="+", verbose_name="球団")
+    minimum = models.PositiveSmallIntegerField(verbose_name="本指名の最少")
+    maximum = models.PositiveSmallIntegerField(verbose_name="本指名の最多")
+    planned = models.JSONField(default=list, verbose_name="本指名の位置の計画")
+    base_counts = models.JSONField(default=dict, verbose_name="会議の前の位置ごとの人数")
+    development_planned = models.JSONField(default=list, verbose_name="育成の位置の計画")
+    development_max = models.PositiveSmallIntegerField(verbose_name="育成の最多")
+
+    class Meta:
+        verbose_name = "ペナントのドラフト会議の人数の幅"
+        verbose_name_plural = "ペナントのドラフト会議の人数の幅"
+        ordering = ["draft_id", "team_id"]
+        constraints = [
+            models.UniqueConstraint(fields=["draft", "team"], name="unique_pennant_draft_slot_team"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.draft_id} {self.team_id}"
+
+
+class PennantDraftAction(models.Model):
+    """ドラフト会議の行動ひとつ（入札・指名・選択終了。domain の `DraftAction`）。`seq` は1からの番号。
+
+    区分・巡・入札の回・抽選の当たり外れは持たない（行動の並びから導く。抽選は種で再生できる）。
+    `extra_position` は、位置の候補が尽きたときにその場で足した候補の位置（足していなければ空）。
+    会議 × 番号の一意制約が、二重送信・別のタブの同時の書き込みの最後の砦。
+    """
+
+    draft = models.ForeignKey(PennantDraft, on_delete=models.CASCADE, related_name="actions", verbose_name="会議")
+    seq = models.PositiveIntegerField(verbose_name="番号")
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="+", verbose_name="球団")
+    kind = models.CharField(max_length=8, choices=DRAFT_ACTION_KIND_CHOICES, verbose_name="種類")
+    prospect_key = models.PositiveIntegerField(null=True, blank=True, verbose_name="候補の番号")
+    extra_position = models.CharField(
+        max_length=10, choices=POSITION_CHOICES, blank=True, default="", verbose_name="足した候補の位置"
+    )
+
+    class Meta:
+        verbose_name = "ペナントのドラフト会議の行動"
+        verbose_name_plural = "ペナントのドラフト会議の行動"
+        ordering = ["draft_id", "seq"]
+        constraints = [
+            models.UniqueConstraint(fields=["draft", "seq"], name="unique_pennant_draft_action_seq"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.draft_id} {self.seq} {self.kind}"
+
+
+class PennantDraftLottery(models.Model):
+    """締めた年のドラフトの抽選ひとつ（domain の `DraftLotteryRecord`。#298 D4）。書くのはシーズンを締める処理だけ。
+
+    `player` は抽選で当たった球団が指名した選手（1人に抽選は1つ）。年・巡・本指名か育成かは選手の指名
+    （`draft_year` など）、当たった球団は選手の最初の在籍の球団で分かるので持たない。入札した球団は
+    `PennantDraftLotteryBid`。会議の行動の行は締めると消えるので、締めた後はこの行だけが抽選の出典。
+    """
+
+    player = models.OneToOneField(
+        Player, on_delete=models.CASCADE, related_name="draft_lottery", verbose_name="指名された選手"
+    )
+    attempt = models.PositiveSmallIntegerField(verbose_name="入札の回")
+
+    class Meta:
+        verbose_name = "ペナントのドラフトの抽選"
+        verbose_name_plural = "ペナントのドラフトの抽選"
+        ordering = ["player_id"]
+
+    def __str__(self) -> str:
+        return f"{self.player_id} {self.attempt}回目"
+
+
+class PennantDraftLotteryBid(models.Model):
+    """ドラフトの抽選に入札した球団ひとつ（当たった球団も含む）。"""
+
+    lottery = models.ForeignKey(
+        PennantDraftLottery, on_delete=models.CASCADE, related_name="bids", verbose_name="抽選"
+    )
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="+", verbose_name="球団")
+
+    class Meta:
+        verbose_name = "ペナントのドラフトの抽選の入札"
+        verbose_name_plural = "ペナントのドラフトの抽選の入札"
+        ordering = ["lottery_id", "team_id"]
+        constraints = [
+            models.UniqueConstraint(fields=["lottery", "team"], name="unique_pennant_draft_lottery_bid"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.lottery_id} {self.team_id}"

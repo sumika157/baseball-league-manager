@@ -1,0 +1,4 @@
+{% comment %}
+抽選の表記（DraftLotteryView）。「3球団競合（A・B・C）」。表記の出典は domain の draft_lottery.contest_label。
+会議の動き（_draft_move.html）・盤（_draft_board.html）・オフの結果の新人の表が使う。
+{% endcomment %}<span class="stat-muted" style="font-size: 0.8125rem;" data-testid="draft-lottery">{{ lottery.label }}（{{ lottery.bidders|join:"・" }}）</span>

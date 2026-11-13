@@ -24,6 +24,8 @@ from .dto import (
     AwardRow,
     ChampionshipRow,
     ClubTenure,
+    DevelopmentRoster,
+    DevelopmentSquad,
     FaSubjects,
     GameNote,
     GameRow,
@@ -319,6 +321,8 @@ class OffseasonQuery(Protocol):
     - 引退・退団: 在籍の退団年が Y
     - 新人: 在籍の加入年が Y+1
     - 残った選手: Y と Y+1 の両方の能力がある
+    - ドラフトの抽選: 締める処理が残した記録（指名の年が Y の選手の分。#298 D4）。
+      会議の記録は締めると消えて導けないため
     """
 
     def has_ratings(self, year: int) -> bool:
@@ -506,4 +510,34 @@ class SetupQuery(Protocol):
 
     def stadium(self, stadium_id: int) -> StadiumSetupRow:
         """範囲の外は `StadiumNotFound`。"""
+        ...
+
+
+@runtime_checkable
+class PlayerNameQuery(Protocol):
+    """範囲の選手の名前だけの参照（#297 D3）。ドラフト会議の候補の名前が世界の選手と重ならないようにするのに使う。
+
+    会議の画面と1手ごとの書き込みは候補を作り直すが、`Team` 集約（在籍と通算成績）は要らないので組み立てない。
+    """
+
+    def names(self) -> frozenset[str]:
+        """範囲の全選手（引退・退団した選手を含む）の名前。"""
+        ...
+
+
+@runtime_checkable
+class DevelopmentRosterQuery(Protocol):
+    """球団の育成選手と支配下の人数（編成の「育成」タブ。#170 P3a）。集約は組み立てない。
+
+    読む本数は選手の人数によらず一定。
+    """
+
+    def for_team(self, team_id: int, year: int) -> DevelopmentRoster:
+        """`year` 年に球団 `team_id` に在籍する育成選手（背番号の順）と、その年の支配下の人数・リーグの上限。
+        区分の判定は domain の `ContractStatus.in_year`。範囲の外の球団は TeamNotFound。"""
+        ...
+
+    def squads(self, year: int) -> tuple[DevelopmentSquad, ...]:
+        """範囲の全球団（id の順）の、`year` 年の育成選手（id の順）・支配下の人数・リーグの上限・使っている背番号
+        （AI の期中の昇格の材料。#170 P3b）。区分の判定は `for_team` と同じ。"""
         ...

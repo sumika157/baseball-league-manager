@@ -46,12 +46,14 @@ from ..helpers import (
     register_players,
 )
 from .test_workspace_isolation import B_YEAR, YEAR, WorkspaceCase
-from .test_world_isolation import BOTH, CLASSIFICATION, DIRECT, GAME, LEAGUE, MEMBER, PLAYER, ROOT
+from .test_world_isolation import BOTH, CLASSIFICATION, DIRECT, GAME, LEAGUE, MEMBER, PLAYER, ROOT, WORLD
 
 MANAGERS = orm_models.Team.managers.through
 INVITATION_TEAMS = orm_models.WorkspaceInvitation.teams.through
 # 世界はワークスペースの削除では消さない（1つでもあれば消せない。2026-10-25 ユーザー決定 2）
 NOT_DELETED = {"PennantWorld"}
+# 世界を直接指す行（ドラフト会議）は、世界とともに消える。世界が残るワークスペースは消せないので、消すときには無い
+WORLD_ONLY = {name for name, (kind, _) in CLASSIFICATION.items() if kind == WORLD}
 
 
 def _all_rows() -> dict[str, dict[int, dict]]:
@@ -76,6 +78,11 @@ def _rows_of(workspace_id: int) -> dict[str, set[int]]:
         elif kind in (BOTH, DIRECT, MEMBER):
             # League（BOTH）は実データの道（`workspace`）。ペナントのリーグは世界とともに消える
             rows = model._default_manager.filter(workspace_id=workspace_id)
+        elif kind == WORLD:
+            # 世界を直接指す行（ドラフト会議）は、そのワークスペースの世界の行。世界が残るワークスペースは
+            # 消せないので、消せるワークスペースでは空
+            assert route is not None
+            rows = model._default_manager.filter(**{f"{route}__workspace_id": workspace_id})
         else:
             assert kind == ROOT
             rows = model._default_manager.filter(id=workspace_id)
@@ -218,12 +225,22 @@ class WorkspaceDeletionCase(WorkspaceCase):
             league=cls.b_league, year=YEAR, title=Title.HOME_RUNS.value, player_id=batter, team=cls.b_team, value="1"
         )
         orm_models.PennantChampionship.objects.create(team=cls.b_team, year=B_YEAR)
+        # 締めた年の抽選・期中の支配下登録（#360・#356）。どれもペナントの表だが、範囲の条件が効くかを見るので
+        # 実データに置く
+        lottery = orm_models.PennantDraftLottery.objects.create(player_id=batter, attempt=1)
+        for team in (cls.b_team, cls.b_rival):
+            orm_models.PennantDraftLotteryBid.objects.create(lottery=lottery, team=team)
+        orm_models.PennantMidseasonRegistration.objects.create(
+            team=cls.b_team, player_id=batter, registered_on=date(YEAR, 6, 1)
+        )
 
 
 class DeletingAWorkspaceTest(WorkspaceDeletionCase):
     def test_every_row_of_b_is_deleted_and_nothing_else_changes(self):
         b_rows = _rows_of(self.workspace_b.id)
-        missing = sorted(label for label, ids in b_rows.items() if not ids and label.split(".")[1] not in NOT_DELETED)
+        missing = sorted(
+            label for label, ids in b_rows.items() if not ids and label.split(".")[1] not in NOT_DELETED | WORLD_ONLY
+        )
         self.assertEqual(missing, [], "B に行の無い表がある（消えたことを確かめられない）")
         before = _all_rows()
         users = list(User.objects.order_by("id").values())

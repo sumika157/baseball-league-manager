@@ -93,6 +93,9 @@ class SettingsTest(DraftOrderCase):
 
         self.client.force_login(User.objects.create_user("other", password="x"))
         self.assertEqual(self.post_rule("WAIVER").status_code, 403)
+        # 管理ユーザーでも、世界のオーナーでなければ変えられない（ほかの書き込みの画面と同じ）
+        self.client.force_login(User.objects.create_superuser("admin", password="x"))
+        self.assertEqual(self.post_rule("WAIVER").status_code, 403)
         self.assertIs(self.rule_of(self.npb_world), DraftOrderRule.NPB)
 
     def test_the_owner_changes_the_rule(self):
@@ -218,7 +221,7 @@ class CloseSeasonDraftTest(DraftOrderCase):
         self.assertEqual(draft.standings.unranked, ())
 
     def test_a_rule_changed_while_closing_closes_nothing(self):
-        """締める計算の間に規則が変わったら、古い規則の新人を書かずに断る（`_state()` に規則を入れた）。"""
+        """締める計算の間に規則が変わったら、古い規則の新人を書かずに断る（状態の目印に規則を入れた）。"""
         service = build_pennant_offseason_service(world_scope(self.none_world))
         atomic = service._atomic
 

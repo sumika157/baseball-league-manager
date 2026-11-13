@@ -149,9 +149,13 @@ class WorldTest(unittest.TestCase):
             with self.subTest(draft_order_rule=bad), self.assertRaises(InvalidWorld):
                 World(name="世界", seed=1, start_year=2026, draft_order_rule=bad)  # type: ignore[arg-type]
 
-    def test_the_draft_order_rule_can_change_until_the_world_is_over(self):
-        self.assertIsNone(draft_order_rule_change_blocker(world_over=False))
-        self.assertIn("最終シーズン", draft_order_rule_change_blocker(world_over=True) or "")
+    def test_the_draft_order_rule_can_change_until_the_meeting_starts_or_the_world_is_over(self):
+        self.assertIsNone(draft_order_rule_change_blocker(world_over=False, meeting_started=False))
+        self.assertIn("最終シーズン", draft_order_rule_change_blocker(world_over=True, meeting_started=False) or "")
+        self.assertIn(
+            "ドラフト会議が始まっている",
+            draft_order_rule_change_blocker(world_over=False, meeting_started=True) or "",
+        )
 
     def test_the_start_year_must_be_a_season(self):
         with self.assertRaises(InvalidSeason):

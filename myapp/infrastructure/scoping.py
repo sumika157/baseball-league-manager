@@ -106,6 +106,21 @@ def world_condition(path: str, scope: WorldScope) -> Q:
     return Q(**{f"{prefix}world_id": scope.world_id})
 
 
+def world_direct_condition(path: str, scope: WorldScope) -> Q:
+    """世界を直接指すモデル（ドラフト会議。League を通らない）の、範囲の条件。
+
+    `path` は対象のモデルから世界を持つモデルまでの関連名（会議そのものなら空文字、会議の行動なら "draft"）。
+
+    - 実データ: 何にも当たらない（世界を直接指す行は実データの範囲に属さない。`world_condition` でペナントの
+      リーグが実データの条件から外れるのと同じ）。
+    - ペナント: その世界（`world_id = W`）。世界がワークスペースに属することは、範囲を作る側（世界の台帳）が照合する。
+    """
+    if scope.is_real:
+        return Q(pk__in=[])
+    prefix = f"{path}__" if path else ""
+    return Q(**{f"{prefix}world_id": scope.world_id})
+
+
 def worlds_in(workspace_id: int) -> QuerySet[orm_models.PennantWorld]:
     """そのワークスペースの世界（台帳の行）。世界の台帳（`DjangoWorldRepository`・`DjangoWorldSummaryQuery`）が使う。
 
@@ -138,6 +153,11 @@ def games_in_worlds(world_ids: Sequence[int], *, stages: StageFilter) -> QuerySe
 
 def fixtures_in_worlds(world_ids: Sequence[int]) -> QuerySet[orm_models.PennantFixture]:
     return orm_models.PennantFixture.objects.filter(world_condition_in("home_team__league", world_ids))
+
+
+def drafts_in_worlds(world_ids: Sequence[int]) -> QuerySet[orm_models.PennantDraft]:
+    """ドラフト会議の記録の、世界の id の集まり版（世界の台帳が使う）。会議は世界を直接指す（`drafts_in` と同じ）。"""
+    return orm_models.PennantDraft.objects.filter(world_condition_in("", world_ids))
 
 
 def leagues_in(scope: WorldScope) -> QuerySet[orm_models.League]:
@@ -269,6 +289,16 @@ def release_plans_in(scope: WorldScope) -> QuerySet[orm_models.PennantReleasePla
     return orm_models.PennantReleasePlan.objects.filter(world_condition("team__league", scope))
 
 
+def development_plans_in(scope: WorldScope) -> QuerySet[orm_models.PennantDevelopmentPlan]:
+    """範囲の球団の育成の指名（#170 P2）。戦力外の指名と同じく、球団のリーグで世界が決まる。"""
+    return orm_models.PennantDevelopmentPlan.objects.filter(world_condition("team__league", scope))
+
+
+def midseason_registrations_in(scope: WorldScope) -> QuerySet[orm_models.PennantMidseasonRegistration]:
+    """範囲の期中の支配下登録。編成と同じく、球団のリーグで世界が決まる。"""
+    return orm_models.PennantMidseasonRegistration.objects.filter(world_condition("team__league", scope))
+
+
 def awards_in(scope: WorldScope) -> QuerySet[orm_models.PennantAward]:
     """範囲の表彰。表彰はリーグを持つので、リーグで世界が決まる。"""
     return orm_models.PennantAward.objects.filter(world_condition("league", scope))
@@ -309,3 +339,13 @@ def admin_real_queryset[M: Model](model: type[M]) -> QuerySet[M] | None:
 def championships_in(scope: WorldScope) -> QuerySet[orm_models.PennantChampionship]:
     """範囲の日本一の記録。記録は球団を持つので、球団のリーグで世界が決まる。"""
     return orm_models.PennantChampionship.objects.filter(world_condition("team__league", scope))
+
+
+def drafts_in(scope: WorldScope) -> QuerySet[orm_models.PennantDraft]:
+    """範囲のドラフト会議の記録。会議は世界そのものに属すので、世界を直接指す（`League.world` と同じ列の名前）。"""
+    return orm_models.PennantDraft.objects.filter(world_direct_condition("", scope))
+
+
+def draft_lotteries_in(scope: WorldScope) -> QuerySet[orm_models.PennantDraftLottery]:
+    """範囲の締めた年のドラフトの抽選。抽選は指名された選手に付くので、能力と同じく範囲の選手で絞る。"""
+    return orm_models.PennantDraftLottery.objects.filter(player_id__in=players_in(scope).values("id"))

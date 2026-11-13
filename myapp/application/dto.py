@@ -13,7 +13,12 @@ from datetime import date, datetime
 from ..domain.entities import jersey_number_in, winning_team_id
 from ..domain.pennant.awards import Award
 from ..domain.pennant.club_plan import PlanSection
+from ..domain.pennant.development import DevelopmentDecision
+from ..domain.pennant.draft import DraftRoute
+from ..domain.pennant.draft_lottery import DraftLotteryRecord, contest_label
+from ..domain.pennant.draft_meeting import DraftActionKind
 from ..domain.pennant.draft_order import DraftOrderRule
+from ..domain.pennant.draft_record import DraftMeetingStatus
 from ..domain.pennant.postseason import PostseasonFormat, PostseasonResult, PostseasonStatus
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.season import SeasonPhase
@@ -27,7 +32,7 @@ from ..domain.setup import (
     team_deletion_blocker,
 )
 from ..domain.simulation.fatigue import FatigueLevel
-from ..domain.simulation.ratings import BatterRatings, PitcherRatings, RatingEmphasis
+from ..domain.simulation.ratings import BatterRatings, PitcherRatings, RatingEmphasis, RatingGrade
 from ..domain.value_objects import (
     AcquisitionRoute,
     BattingLine,
@@ -1611,6 +1616,8 @@ class WorldSummary:
     postseason_format: PostseasonFormat = PostseasonFormat.NONE
     # ポストシーズンの試合が1つでもあるか（方式を「なし」に変えた世界の、過去の年の表へのリンク）
     played_postseason: bool = False
+    # ドラフト会議の記録がある年（会議を始めてから締めるまで。締めると記録は消える）。世界の一覧だけが読む（#298 D4）
+    draft_year: int | None = None
 
 
 @dataclass(frozen=True)
@@ -1633,6 +1640,8 @@ class PennantWorldListRow:
     own_standing: OwnStanding | None
     # 優勝の確定・マジック（#104）。確定でもマジック点灯でもなければ None
     race: OwnRace | None = None
+    # いまの年度のドラフト会議を始めていて、まだ締めていない（指名を終えて締める前も含む。#298 D4）
+    draft_in_progress: bool = False
 
 
 @dataclass(frozen=True)
@@ -2163,6 +2172,10 @@ class SeasonCloseOption:
     # 受け持つ球団の戦力外を手動で指名した人数（保存した指名の件数。締めるときに引退で除かれる選手も数える）。
     # None は自動（締められないときも None）
     release_count: int | None = None
+    # 受け持つ球団の育成の手動の指名（#170 P2）で、支配下に登録する人数と自由契約にする人数（保存した指名の件数）。
+    # None は自動（締められないときも None）
+    development_promote_count: int | None = None
+    development_release_count: int | None = None
 
 
 @dataclass(frozen=True)
@@ -2189,6 +2202,354 @@ class ReleasePlanView:
     is_manual: bool
     chosen_ids: frozenset[int]
     players: tuple[ReleasePlayerRow, ...]
+    # 指名を変えられない理由（その年のドラフト会議を始めた。domain の `pre_draft_input_blocker`）。変えられるなら空。
+    # 画面は指名を読むだけにして理由を出す（#297 D3）
+    blocker: str = ""
+
+    @property
+    def can_change(self) -> bool:
+        return not self.blocker
+
+
+# --- ドラフト会議（#297 D3） ---
+
+
+def draft_round_label(round_number: int, *, is_development: bool) -> str:
+    return f"{'育成' if is_development else ''}{round_number}巡目"
+
+
+@dataclass(frozen=True)
+class DraftTurnView:
+    """会議の次の番（domain の `DraftTurn` に球団の名前と、受け持つ球団の番かを足したもの）。"""
+
+    team_id: int
+    team_name: str
+    # 区分の中の巡（本指名・育成それぞれ1から）と、入札の回（入札の巡だけ。指名の巡は1）
+    round_number: int
+    is_bid: bool
+    attempt: int
+    is_development: bool
+    is_mine: bool
+
+    @property
+    def round_label(self) -> str:
+        """「1巡目」「育成2巡目」（区分の中の巡）。"""
+        return draft_round_label(self.round_number, is_development=self.is_development)
+
+
+@dataclass(frozen=True)
+class DraftLotteryView:
+    """入札の重複と抽選の結果（入札した球団と当たった球団の名前）。`bidder_ids` は入札した球団の id（名前と同じ順。
+    画面が受け持つ球団の外れを見分ける）。"""
+
+    bidders: tuple[str, ...]
+    winner: str
+    bidder_ids: tuple[int, ...] = ()
+
+    @property
+    def label(self) -> str:
+        """「3球団競合」（表記の出典は domain の `draft_lottery.contest_label`）。"""
+        return contest_label(len(self.bidders))
+
+
+@dataclass(frozen=True)
+class DraftBoardColumn:
+    """ドラフトの盤（巡 × 球団）の列ひとつ（球団）。"""
+
+    team_id: int
+    team_name: str
+    is_mine: bool
+
+
+@dataclass(frozen=True)
+class DraftBoardCell:
+    """盤のセル（球団がその巡で指名した選手）。`player_id` は入団した選手（オフの結果だけ。会議の途中は None）。"""
+
+    team_id: int
+    name: str
+    position: str
+    player_id: int | None = None
+    lottery: DraftLotteryView | None = None
+
+
+@dataclass(frozen=True)
+class DraftBoardRow:
+    """盤の行ひとつ（本指名か育成の巡）。`cells` は列と同じ順で、その巡で指名しなかった球団は None。"""
+
+    round_label: str
+    is_development: bool
+    cells: tuple[DraftBoardCell | None, ...]
+
+
+@dataclass(frozen=True)
+class DraftBoard:
+    """ドラフトの盤（行＝本指名の巡 → 育成の巡、列＝球団）。会議の画面とオフの結果が同じ部分テンプレートで出す。"""
+
+    columns: tuple[DraftBoardColumn, ...]
+    rows: tuple[DraftBoardRow, ...]
+
+
+@dataclass(frozen=True)
+class DraftMoveRow:
+    """会議で確定した動きひとつ（domain の `DraftMove` に名前を足したもの）。選択終了は候補が無い（名前は空）。"""
+
+    seq: int
+    team_id: int
+    team_name: str
+    kind: DraftActionKind
+    round_number: int
+    is_development: bool
+    prospect_key: int | None
+    prospect_name: str
+    position: Position | None
+    lottery: DraftLotteryView | None = None
+
+    @property
+    def round_label(self) -> str:
+        return draft_round_label(self.round_number, is_development=self.is_development)
+
+
+@dataclass(frozen=True)
+class DraftRoundRow:
+    """いまの巡の指名順の1球団（この巡で確定した動きがあれば `move`）。"""
+
+    team_id: int
+    team_name: str
+    is_mine: bool
+    move: DraftMoveRow | None
+
+
+@dataclass(frozen=True)
+class DraftProspectRow:
+    """会議の候補ひとり。能力は見せず、受け持つ球団のスカウトの見立ての見込みの区分（`projected_grade`）だけを出す
+    （伸びしろ・球団の好みは出さない。#297 Q4）。"""
+
+    key: int
+    name: str
+    position: Position
+    route: DraftRoute
+    age: int
+    grade: RatingGrade
+    # 指名された球団の名前（まだ指名されていなければ空）
+    taken_by: str
+    # 受け持つ球団がいま入札・指名できるか（domain の `DraftState.selectable`。`apply` と同じ検査）
+    selectable: bool
+    # 指名済みか（並べ替えで末尾に回す。domain の `sorting.ListedProspect`）。表示の名前ではなく指名の有無から立てる
+    is_taken: bool = False
+
+    @property
+    def route_label(self) -> str:
+        return self.route.label
+
+
+@dataclass(frozen=True)
+class DraftMeetingView:
+    """ドラフト会議の画面の材料（#297 D3）。
+
+    - `blocker`: 会議を開けない理由（公式戦・ポストシーズンの途中・締めた後・最終シーズン・受け持つ球団が無い）。
+      空なら開ける（始めていなければ「会議を始める」を出せる）
+    - `changed`: 会議を始めた後にコードが変わって、保存した会議を再生できない（`DraftChanged`。
+      「会議をやり直す」だけを出す）
+    - `last_seq`: 最後の行動の番号。書き込みの操作に `expected_seq` として送り返す
+    - `prospects`: 候補（`position_filter`・`route_filter` で絞り、`sort`・`descending` で並べたもの。
+      domain の `sorting.filter_prospects`・`sort_prospects`。指名済みは末尾）。`prospect_total` は絞る前の人数
+    - `board`: 受け持つ球団のリーグの盤（巡 × 球団。#298 D4）
+    """
+
+    year: int | None
+    status: DraftMeetingStatus
+    blocker: str
+    managed_team_id: int | None
+    last_seq: int = 0
+    changed: bool = False
+    turn: DraftTurnView | None = None
+    round_rows: tuple[DraftRoundRow, ...] = ()
+    own_moves: tuple[DraftMoveRow, ...] = ()
+    recent_moves: tuple[DraftMoveRow, ...] = ()
+    prospects: tuple[DraftProspectRow, ...] = ()
+    sort: str = ""
+    descending: bool = False
+    can_pass: bool = False
+    # 指名できる候補がいないときだけ、受け持つ球団の番を AI に任せられる（AI は候補を足して指名する）
+    can_delegate: bool = False
+    prospect_total: int = 0
+    # 絞り込みの選択肢（候補にいる位置と経歴。並びは値オブジェクトの定義の順）と、実際に使った値（None は絞らない）
+    position_choices: tuple[Position, ...] = ()
+    route_choices: tuple[DraftRoute, ...] = ()
+    position_filter: Position | None = None
+    route_filter: DraftRoute | None = None
+    board: DraftBoard | None = None
+
+    @property
+    def can_start(self) -> bool:
+        return self.status is DraftMeetingStatus.NOT_STARTED and not self.blocker
+
+    @property
+    def is_my_turn(self) -> bool:
+        return self.turn is not None and self.turn.is_mine
+
+    @property
+    def is_in_progress(self) -> bool:
+        """始めて、まだ終わっていない（再生できない会議も含む。締められない）。"""
+        return self.status is DraftMeetingStatus.IN_PROGRESS
+
+    @property
+    def is_finished(self) -> bool:
+        return self.status is DraftMeetingStatus.FINISHED
+
+
+@dataclass(frozen=True)
+class DraftStep:
+    """会議の書き込み（始める・指名・選択終了・お任せ）の結果。`moves` はその操作で確定した動き（AI の分も含む。
+    画面の「抽選の結果」などの知らせに使う）。"""
+
+    year: int
+    last_seq: int
+    moves: tuple[DraftMoveRow, ...]
+    is_complete: bool
+
+
+# --- 期中の支配下登録（編成の「育成」タブ。#170 P3a） ---
+
+
+@dataclass(frozen=True)
+class DevelopmentPlayerFacts:
+    """受け持つ球団の育成選手ひとり（参照クエリ `DevelopmentRosterQuery` が読んだ値）。
+
+    `joined_year` は今の在籍の開始年（育成契約の起点の材料。`development.contract_start_year`）、
+    `tenure` はその球団での在籍と登録位置・プロフィール（年齢と見込みの材料）。
+    """
+
+    player_id: int
+    name: str
+    number: str
+    joined_year: int
+    tenure: ClubTenure
+
+
+@dataclass(frozen=True)
+class DevelopmentRoster:
+    """球団の育成選手と、支配下の人数・上限（支配下に登録できるかの材料）。"""
+
+    team_name: str
+    # その年に支配下の選手の数（判定は domain の `ContractStatus.in_year`。集約の `registered_player_count` と同じ）
+    registered_count: int
+    # リーグの支配下の上限。None は無制限
+    registered_limit: int | None
+    players: tuple[DevelopmentPlayerFacts, ...]
+
+
+@dataclass(frozen=True)
+class DevelopmentSquadPlayer:
+    """AI の期中の昇格の候補ひとり（育成選手の id と登録位置）。"""
+
+    player_id: int
+    position: Position
+
+
+@dataclass(frozen=True)
+class DevelopmentSquad:
+    """球団ひとつの育成選手と支配下の人数・使っている背番号（AI の期中の昇格の材料。#170 P3b）。"""
+
+    team_id: int
+    # その年に支配下の選手の数（判定は domain の `ContractStatus.in_year`。`DevelopmentRoster` と同じ）
+    registered_count: int
+    # リーグの支配下の上限。None は無制限
+    registered_limit: int | None
+    # その年に在籍する選手（支配下・育成とも）の背番号
+    numbers: frozenset[str]
+    players: tuple[DevelopmentSquadPlayer, ...]
+
+
+@dataclass(frozen=True)
+class DevelopmentPlayerRow:
+    """「育成」タブの1行。能力が無い選手は `overall` が None・`cells` が空。"""
+
+    player_id: int
+    name: str
+    number: str
+    position: Position
+    # その年の4月1日の年齢（締める処理・見込みと同じ。`offseason_player.player_age`）
+    age: int
+    overall: RatingCell | None
+    cells: tuple[RatingCell, ...]
+    outlook: OutlookCell | None
+    # 育成契約の何年目か（`development.contract_season`）
+    contract_season: int
+    # この年のオフに育成契約が満了するか（`development.is_contract_expiring`）
+    is_expiring: bool
+
+
+@dataclass(frozen=True)
+class MidseasonRegistrationView:
+    """編成の「育成」タブの材料。補強の窓（締めた後〜7月31日）の中だけで作る。
+
+    `blocked_reason` は支配下の上限で登録できないときの理由（行ごとのボタンの代わりに出す）。
+    """
+
+    team_id: int
+    team_name: str
+    # 次の公式戦の年（能力・年齢・何年目を見る年）
+    year: int
+    # 次の公式戦の日（登録した選手が出られる最初の日。POST で送ってもらい、古い画面を弾く）
+    next_game_on: date
+    # 補強の期限の日（`ReinforcementWindow.deadline`）
+    deadline: date
+    registered_count: int
+    registered_limit: int | None
+    blocked_reason: str | None
+    players: tuple[DevelopmentPlayerRow, ...]
+
+
+@dataclass(frozen=True)
+class DevelopmentPlanRow:
+    """オフの「育成」タブの1行（#170 P2）。`choices` はその選手に選べる扱い（`DevelopmentDecision.choices_for`）、
+    `decision` は保存した扱い（自動のとき・保存した指名に無い選手は「何も変えない」扱い）。"""
+
+    player: DevelopmentPlayerRow
+    choices: tuple[DevelopmentDecision, ...]
+    decision: DevelopmentDecision
+
+
+@dataclass(frozen=True)
+class DevelopmentPlanView:
+    """編成の「育成」タブのオフの形の材料（#170 P2）。公式戦を終えてから締めるまで（ポストシーズン中も）だけ作る。
+
+    `is_manual` が False なら自動（AI と同じ規則で締めるときに決める）。
+    """
+
+    team_id: int
+    team_name: str
+    # 締める年（指名はこの年のオフにだけ使う）
+    year: int
+    is_manual: bool
+    registered_count: int
+    registered_limit: int | None
+    rows: tuple[DevelopmentPlanRow, ...]
+    # 指名を変えられない理由（その年のドラフト会議を始めた。domain の `pre_draft_input_blocker`）。変えられるなら空
+    blocker: str = ""
+
+    @property
+    def can_change(self) -> bool:
+        return not self.blocker
+
+    @property
+    def promote_count(self) -> int:
+        return sum(1 for row in self.rows if row.decision is DevelopmentDecision.PROMOTE)
+
+    @property
+    def release_count(self) -> int:
+        return sum(1 for row in self.rows if row.decision is DevelopmentDecision.RELEASE)
+
+
+@dataclass(frozen=True)
+class MidseasonPromotion:
+    """期中に支配下に登録した結果（画面のメッセージに使う）。"""
+
+    player_id: int
+    name: str
+    number: str
+    registered_on: date
 
 
 # --- オフの結果と能力の推移（P6c） ---
@@ -2230,6 +2591,19 @@ class OffseasonFacts:
     retained: tuple[OffseasonPlayerFact, ...]
     # オフに育成から支配下に上がった選手（翌年の年で昇格した在籍。#170）
     promoted: tuple[OffseasonPlayerFact, ...] = ()
+    # 世界の球団（盤の列と、抽選に入札した球団の名前。#298 D4）
+    teams: tuple[OffseasonTeam, ...] = ()
+    # 締めた年のドラフトの抽選の記録（指名された選手に付く。D4 より前に締めた年は無い）
+    lotteries: tuple[DraftLotteryRecord, ...] = ()
+
+
+@dataclass(frozen=True)
+class OffseasonTeam:
+    """オフの結果の盤の列になる球団（id の順）。"""
+
+    id: int
+    name: str
+    league_id: int
 
 
 @dataclass(frozen=True)
@@ -2287,6 +2661,8 @@ class OffseasonRookieRow:
     rating: RatingCell | None
     # ドラフトの指名の順位（「1位」。`DraftPick.order_label`）。獲得した外国人など指名の無い選手は空
     pick: str = ""
+    # 抽選で当たった新人の抽選（「3球団競合」。#298 D4）
+    lottery: DraftLotteryView | None = None
 
 
 @dataclass(frozen=True)
@@ -2334,6 +2710,8 @@ class OffseasonSummary:
     # 成長と衰えの大きかった選手（世界全体の上位）
     risers: tuple[OffseasonChangeRow, ...]
     decliners: tuple[OffseasonChangeRow, ...]
+    # 選んだリーグのドラフトの盤（巡 × 球団。#298 D4）。指名の無い年（順位を持たない移した選手だけ）は None
+    board: DraftBoard | None = None
 
 
 @dataclass(frozen=True)
