@@ -19,26 +19,52 @@ from ..exceptions import InvalidWorkspace, InvalidWorld
 from ..value_objects import Season
 from .draft_order import DraftOrderRule
 from .postseason import PostseasonFormat
+from .schedule import ScheduleRules
 
 MAX_NAME_LENGTH = 100
 # 乱数のシード。永続化先（64ビット符号つき整数）に収まる範囲
 MAX_SEED = 2**63 - 1
 # 世界の元にできる実データのリーグの数（8リーグ48球団で1シーズン約3,400試合）
 MAX_SOURCE_LEAGUES = 8
-# 1人のオーナーが持てる世界の数。1世界10シーズンで約190万行（8リーグなら約760万行）になるため、
-# 無制限にするとデータベースがオーナー1人に占められる（判断15。Wiki「ペナントモードの仕組み」の「決めたこと」）
-MAX_WORLDS_PER_OWNER = 5
-# 上限に達したときの文言（作成の拒否と、世界の一覧で作成フォームの代わりに出す理由の出典）。
-# 上限は1人あたりなので、ほかのワークスペースの世界も数える（ワークスペースごとの上限への読み替えは W6）
-WORLD_LIMIT_MESSAGE = (
-    f"作れる世界は1人{MAX_WORLDS_PER_OWNER}つまでです（ほかのワークスペースの世界も数えます）。"
-    "不要な世界を削除してから作ってください。"
-)
+# 世界の数と試合の枠の上限はワークスペースごと（`workspace.WorkspaceQuota`。値は settings。W6 #82）。
 # 1つの世界で遊べるシーズン数の上限（開幕年を1シーズン目と数える）。最後のシーズンは締められない
 MAX_SEASONS_PER_WORLD = 10
 # 開幕年の上限。最後のシーズン（開幕年 + 上限 − 1）が `Season` の範囲に収まる年。
 # **世界を作るときだけ**検査する（保存済みの世界を読み戻せなくしないため）
 MAX_START_YEAR = Season.MAX_YEAR - MAX_SEASONS_PER_WORLD + 1
+
+
+def world_game_reserve(team_count: int) -> int:
+    """球団が `team_count` の世界に見込む試合の枠（`MAX_SEASONS_PER_WORLD` シーズンぶんの公式戦の試合数）。
+
+    **見込みの唯一の出典**（作成の検査と世界の一覧の使用量が同じ式を使う）。1シーズンの公式戦は
+    「球団数 × 1球団の試合数 ÷ 2」（`ScheduleRules().games_per_team`。球団数が奇数なら切り上げ）。
+    ポストシーズンは試合数に上界が無く、公式戦の1〜2%なので数えない（枠の余白で吸収する。#82 推奨 3）。
+    保存しない（世界の球団の数から毎回導く）。
+    """
+    if isinstance(team_count, bool) or not isinstance(team_count, int) or team_count < 0:
+        raise ValueError(f"球団の数は0以上の整数で渡してください（{team_count!r}）。")
+    per_season = -(-team_count * ScheduleRules().games_per_team // 2)
+    return per_season * MAX_SEASONS_PER_WORLD
+
+
+def reserve_label(games: int) -> str:
+    """見込みの試合数の表記（「10シーズンで約4,290試合」）。作成の拒否の文言とフォームのリーグの横で使う。"""
+    return f"{MAX_SEASONS_PER_WORLD}シーズンで約{games:,}試合"
+
+
+@dataclass(frozen=True)
+class WorldUsage:
+    """ワークスペースの世界の使用量（世界の数と、見込みの試合数の合計）。保存しない（台帳が数えて作る）。"""
+
+    world_count: int
+    reserved_games: int
+
+    @classmethod
+    def of(cls, team_counts: Iterable[int]) -> WorldUsage:
+        """世界ごとの球団の数から（1要素が1世界。球団の無い世界も1つと数える）。"""
+        counts = list(team_counts)
+        return cls(world_count=len(counts), reserved_games=sum(world_game_reserve(count) for count in counts))
 
 
 def league_priority(league_ids: Iterable[int], *, year: int, start_year: int) -> list[int]:

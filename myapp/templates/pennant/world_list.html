@@ -24,14 +24,19 @@
 {% endif %}
 
 {% comment %}
-作成フォームは世界を作れる人（ワークスペースの持ち主・編集者）にだけ出す。上限に達していたら、フォームの代わりに理由を出す。
+作成フォームとワークスペースの使用量は世界を作れる人（ワークスペースの持ち主・編集者）にだけ出す。
+世界の数が上限か、残りの試合の枠にどのリーグも入らなければ、フォームの代わりに理由を出す。
 乱数のシードは詳細設定に畳む（決めなければ自動）。
 {% endcomment %}
 {% if form %}
   <h2 class="h6 mb-2 mt-4">世界を作る</h2>
-  {% if worlds.at_limit %}
+  <p class="stat-muted mb-2" style="font-size: 0.8125rem;" data-testid="pennant-quota">
+    このワークスペースの世界 {{ quota.world_count }} / {{ quota.max_worlds }}・試合の枠 {{ quota.reserved_games_display }} / {{ quota.max_games_display }}
+    （試合の枠は、世界1つにつき遊べる全シーズンの公式戦の試合数を見込みます）
+  </p>
+  {% if quota.blocker %}
     <div class="alert alert-secondary">
-      {{ worlds.limit_message }}
+      {{ quota.blocker }}
     </div>
   {% else %}
     <form method="post" class="card mb-4">

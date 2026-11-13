@@ -27,14 +27,13 @@ from ..domain.pennant.world import (
     MAX_SEASONS_PER_WORLD,
     MAX_SOURCE_LEAGUES,
     MAX_START_YEAR,
-    MAX_WORLDS_PER_OWNER,
-    WORLD_LIMIT_MESSAGE,
     World,
     WorldScope,
     earliest_start_year,
 )
 from ..domain.repositories import LeagueRepository, RatingsRepository, TeamRepository, WorldRepository
 from ..domain.value_objects import ContractStatus, ForeignPlayerRules
+from ..domain.workspace import WorkspaceQuota
 from .dto import PennantWorldCreated, PennantWorldRow
 from .pennant_season import AtomicBlock
 from .queries import FieldingTotalsQuery
@@ -103,6 +102,7 @@ class PennantWorldService:
         atomic: AtomicBlock,
         ensure_schedule: Callable[[int], bool],
         workspace_id: int,
+        quota: WorkspaceQuota,
     ) -> None:
         # 実データ範囲のリポジトリと参照クエリ。分岐元を読むだけで、書き込みには使わない
         self._real_leagues = real_leagues
@@ -115,6 +115,8 @@ class PennantWorldService:
         self._ensure_schedule = ensure_schedule
         # 作る世界が属するワークスペース（分岐元＝実データの範囲のワークスペース。組み立て口が渡す）
         self._workspace_id = workspace_id
+        # ワークスペースの世界の数と試合の枠の上限（画面の入口 `create_world_with_schedule` だけが見る）
+        self._quota = quota
 
     def list_worlds(self) -> list[PennantWorldRow]:
         return [_row(world) for world in self._worlds.find_all()]
@@ -153,14 +155,49 @@ class PennantWorldService:
         （`playable_shortfall` と `lineup_capacity`））。
 
         途中で失敗したら、作りかけの世界を消してから例外を投げる（半端な世界を残さない）。
+
+        **ワークスペースの上限（`WorkspaceQuota`）は見ない**（`pennant_create` が直接呼ぶ。運営者の道具）。
+        画面から作る入口 `create_world_with_schedule` が上限を検査する。
+        """
+        return self._create(
+            name=name,
+            owner_id=owner_id,
+            source_league_ids=source_league_ids,
+            start_year=start_year,
+            seed=seed,
+            managed_source_team_id=managed_source_team_id,
+            postseason_format=postseason_format,
+            draft_order_rule=draft_order_rule,
+            enforce_quota=False,
+        )
+
+    def _create(
+        self,
+        *,
+        name: str,
+        owner_id: int | None,
+        source_league_ids: Sequence[int],
+        start_year: int,
+        seed: int,
+        managed_source_team_id: int | None,
+        postseason_format: PostseasonFormat,
+        draft_order_rule: DraftOrderRule,
+        enforce_quota: bool,
+    ) -> PennantWorldCreated:
+        """`create_world` の本体。`enforce_quota` なら上限を検査する。
+
+        検査の順は「使用量を数える → 世界の数 → 分岐元を読む → 見込み」。
+
+        上限を見るときは、呼ぶ側がトランザクションの中で呼ぶ（数えてから保存するまでの間に、別の作成が割り込まないように）。
         """
         league_ids = list(dict.fromkeys(source_league_ids))
         if not league_ids:
             raise InvalidWorld("分岐元のリーグを1つ以上選んでください。")
         if len(league_ids) > MAX_SOURCE_LEAGUES:
             raise InvalidWorld(f"分岐元のリーグは{MAX_SOURCE_LEAGUES}つまで選べます。")
-        if owner_id is not None and self._worlds.count_by_owner(owner_id) >= MAX_WORLDS_PER_OWNER:
-            raise InvalidWorld(WORLD_LIMIT_MESSAGE)
+        usage = self._worlds.usage() if enforce_quota else None
+        if usage is not None:
+            self._quota.ensure_can_add_world(usage)
         # 検査を先に済ませる（世界を作ってから失敗すると、消す手間が増える）
         world = World(
             name=name,
@@ -172,6 +209,9 @@ class PennantWorldService:
             draft_order_rule=draft_order_rule,
         )
         source = self.load_source(league_ids)
+        if usage is not None:
+            # 見込みは写す球団の数から導く（分岐元のリーグの今の球団。写した世界の球団の数と同じ）
+            self._quota.ensure_fits_games(usage, sum(len(teams) for teams in source.rosters))
         # リーグ名はワークスペースの中でだけ一意なので、別のワークスペースの同名のリーグを両方選べてしまう。
         # 世界の中ではリーグ名が一意（unique_world_league_name）なので、写す前に弾く
         names = [league.name for league in source.leagues]
@@ -247,9 +287,12 @@ class PennantWorldService:
 
         日程まで揃えるのは、開幕前の GM ホームが「進める範囲と試合数」を出せるようにするため
         （画面から作る世界はこちらを使う。コマンドは `create_world` で、日程は最初の「進める」で作る）。
+
+        **ワークスペースの上限（世界の数と試合の枠。`WorkspaceQuota`）はここで見る。** 数える・検査する・保存するを
+        同じトランザクションで行う。超えるなら `WorkspaceLimitReached` で、何も作らない。
         """
         with self._atomic():
-            created = self.create_world(
+            created = self._create(
                 name=name,
                 owner_id=owner_id,
                 source_league_ids=source_league_ids,
@@ -258,6 +301,7 @@ class PennantWorldService:
                 managed_source_team_id=managed_source_team_id,
                 postseason_format=postseason_format,
                 draft_order_rule=draft_order_rule,
+                enforce_quota=True,
             )
             self._ensure_schedule(_saved_id(created.world.id))
         return created

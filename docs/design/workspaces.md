@@ -141,7 +141,7 @@ W1a（T1）で入れるのは `Visibility` と `Workspace` の最小形（`id`�
 | `Invitation` | エンティティ | `id`・`workspace_id`・`token_digest`（SHA-256 の16進64文字。トークンそのものは保存しない）・`role`・`team_ids`・`expires_at`（発行から7日。`INVITATION_TTL`）。**作った人（`created_by`）は持たない**（W4 T1。招待を出せるのは持ち主だけなので、持ち主と同じ事実の出典が2つになる）。受諾したら消す（残すと、メンバーである事実が2か所になる） |
 | `InvitedRole` | Enum | `EDIT_ALL`（全体を編集）/ `EDIT_TEAMS`（特定のチームを編集） |
 | `WorkspaceAccess` | 値オブジェクト（frozen） | 1回の要求で、その人がそのワークスペースで何をできるか。`role`（`OWNER` / `EDITOR` / `TEAM_MANAGER` / `VIEWER` / `NONE`）・`managed_team_ids`・`visibility` を持つ。メソッドは `can_view()`・`can_edit_all()`・`can_edit_teams(team_ids)`（どちらか1チームの担当なら可）・`can_manage_members()`・`can_delete()`。W2 T1 で `can_create_world()`（＝`can_edit_all()`。2026-10-24 決定）・`is_member` と、役割を導く `WorkspaceRole.of()`・組み立ての `WorkspaceAccess.of()` を足した（14. の W2 T1） |
-| `WorkspaceQuota` | 値オブジェクト | `max_owned_workspaces` だけを持つ（W4 T1。値は `settings.WORKSPACE_MAX_OWNED`（環境変数、既定3）から組み立て口が渡す）。`can_create_workspace(owned_count)`・`ensure_can_create_workspace(owned_count)`・`limit_message`。計画にあった `max_games`・`max_pennant_worlds` の差し込み口は、使う人がいないので作っていない（足すときにこの型に足す） |
+| `WorkspaceQuota` | 値オブジェクト | `max_owned_workspaces` だけを持つ（W4 T1。値は `settings.WORKSPACE_MAX_OWNED`（環境変数、既定3）から組み立て口が渡す）。`can_create_workspace(owned_count)`・`ensure_can_create_workspace(owned_count)`・`limit_message`。計画にあった `max_games`・`max_pennant_worlds` の差し込み口は、使う人がいないので作っていない（足すときにこの型に足す）。W6 T1 で `max_pennant_worlds`・`max_pennant_games` を足した（§14 の W6） |
 | 例外 | `DomainError` の派生 | `WorkspaceNotFound`・`WorkspaceLimitReached`・`InvalidInvitation`（無い・期限切れ・使用済みは同じ文言）・`InvalidWorkspace`・`MemberNotFound`（W4）。メッセージは日本語 |
 
 ### 3.3 不変条件と、それを守る場所
@@ -2047,3 +2047,33 @@ epic を main に入れる前に開発 DB・本番で数え、あれば作成者
 - **計測**: やり直していない。main の変更で読み取りが増えるのは、ペナントの世界の一覧（ドラフト会議の記録の1本）・GM ホームの締める欄（会議の状態）・編成の「育成」タブ・オフの結果（抽選）・ドラフト会議の画面で、どれもペナントの画面（`measure_pages` の実データの画面は変わらない）。
 - テスト: domain＋integration 4,688（epic 1a76690 の 4,454 より +234。main の分と、この取り込みで足した検査）、e2e 21。
 - **レビュー**（`ddd-boundary-reviewer`。1つ目のマージの後）: 重要な指摘なし。`world_direct_condition` の実データの分岐（何にも当たらない）は「実データとペナントの世界を混ぜない」に合う（実データの範囲を世界のワークスペースで絞る別案は、実データの範囲から世界の会議が読める・消せるようになるので採らない）。軽微を直した: 世界の台帳が会議を `.objects` で直接引いていた（`drafts_in_worlds` に）・`test_wiring.py` のワークスペースの id の直書き（`WORLD7.workspace_id` に）。残したもの: 削除の網羅のテストで A の世界に会議の行を置いて「他所の会議を消さない」まで縛ること・抽選のリポジトリの B の範囲での書き込みの確かめ・`find_by_ids_with_roster` を分離の検査に足すこと・台帳の検査がサービスの1段目しか見ないこと（今回より前から）。
+
+### W6（#82）
+
+計画は #82 の計画（2026-11-13。epic 1a76690 と main dea3345 と照合）。決定（2026-11-13、すべて推奨）: 1. 試合数の枠は**予約**（作るときに10シーズンぶんの公式戦の試合数を見込む）／2. 上限はワークスペースごとに世界5つ・試合 40,000（環境変数 `PENNANT_MAX_WORLDS`・`PENNANT_MAX_GAMES`）／3. 分岐元が小さいときの能力の推定は今のまま（T2 で実測）／4. 球場は世界と共有のまま（W3 の決定1を恒久の決定にする）。推奨で進めるもの 1〜10 も推奨どおり。タスク PR は T1（上限）・T2（記録と決定）。
+
+#### T1 ワークスペースごとの上限（`feature/pennant-workspace-quota`、2026-11-14）
+
+マイグレーションは無い（保存するものは増えない）。
+
+- domain: `pennant/world.py` に `world_game_reserve(team_count)`（`ScheduleRules().games_per_team` × 球団数 ÷ 2（切り上げ）× `MAX_SEASONS_PER_WORLD`。見込みの唯一の出典）・`reserve_label(games)`（「10シーズンで約4,290試合」の表記）・`WorldUsage`（世界の数と見込みの合計。`of(team_counts)`）。`MAX_WORLDS_PER_OWNER`・`WORLD_LIMIT_MESSAGE` を消した。`workspace.py` の `WorkspaceQuota` に `max_pennant_worlds`・`max_pennant_games`（3つとも必須。既定値を domain に持たない）と `world_limit_message`・`remaining_games`・`can_add_world`／`ensure_can_add_world`・`fits_games`／`games_limit_message`／`ensure_fits_games`・`world_creation_blocker(usage, 候補の球団数)`（世界の一覧で作成フォームの代わりに出す理由）。超えたら `WorkspaceLimitReached`（docstring を上限全般に広げた）。依存の向きは `workspace` → `pennant.world` → `pennant.schedule`（循環なし）。
+- `WorldRepository.count_by_owner` を消し、`usage()`（台帳のワークスペースの世界だけ。作成者を問わず、作成者のいない世界も数える）を足した。`DjangoWorldRepository.usage()` は `worlds_in(ws).order_by().values("id").annotate(Count("leagues__teams"))` の1クエリ。これで世界の台帳の「全ワークスペースで数える」例外が無くなった（Wiki「ペナントモードの仕組み」の範囲の例外は `admin_real_queryset` だけ）。
+- application: `PennantWorldService` に `quota`。本体を `_create(enforce_quota=)` に分け、画面の入口 `create_world_with_schedule` だけが `enforce_quota=True` で、トランザクションの中で「使用量を数える → 世界の数 → 分岐元を読む → 見込み（写す球団の数から）→ 保存」。`create_world`（管理コマンド `pennant_create` が呼ぶ）は上限を見ない（docstring とコマンドの docstring に書いた。`--owner` を付けたときの1人5世界の検査も無くなった）。`PennantWorldViewService` に `quota` と `quota(source_team_counts)`（使用量・上限・理由・リーグごとの見込み。DTO `PennantWorldQuota`）。`PennantWorldList` から上限の項目（`world_limit`・`owned_count`・`limit_message`・`at_limit`）を消した。
+- presentation: `_workspace_quota()`（settings から `WorkspaceQuota` を作る唯一の場所）を `build_workspace_service()`・`build_pennant_world_service(scope)`・`build_pennant_world_view(workspace_id)` が使う（シグネチャは変えていない）。`settings.PENNANT_MAX_WORLDS`（既定5）・`PENNANT_MAX_GAMES`（既定40000）、`.env.example`。世界の一覧は、作れる人（持ち主・編集者）にだけ使用量（「このワークスペースの世界 3 / 5・試合の枠 4,290 / 40,000」、`data-testid="pennant-quota"`）を出し、`blocker` があればフォームの代わりに理由を出す。リーグの選択肢に見込み（`PennantWorldForm.show_league_reserves`）。使用量は作成を試みた後に数える（作れなかったときも今の使用量を出す。作れたときはリダイレクトするので数えない）。
+
+**計画からのずれ**
+
+- 使用量と上限は `list_worlds` の戻り値に入れず、別のメソッド `PennantWorldViewService.quota(source_team_counts)` と DTO `PennantWorldQuota`（テンプレートの `quota`）にした。作成に成功した POST（リダイレクト）で一覧の行（世界ごとの順位）を組み立てないため。数え方は作成の検査と同じ `usage()`。
+- 「どのリーグも残りの枠に入らない」は、リーグ1つずつの球団の数で見る（組み合わせは送ったときに検査）。分岐元のリーグが無いワークスペースは理由を出さない（今までどおりフォームの側で案内する）。
+
+**テスト**: domain `test_workspace_quota.py`（3つの上限の型・世界の数の境界（上限ちょうど・+1・0）・試合の枠のちょうど・−1・文言・残りは0未満にならない・`world_creation_blocker`・`world_game_reserve` を定数から組み立てた期待値（奇数の切り上げ・12球団 8,580）・`WorldUsage`）。integration `test_pennant_worlds.py` の `WorkspaceQuotaTest`（ほかの編集者の世界・作成者のいない世界も数える・上限ならフォームを出さず POST も何も作らない・ちょうど収まる世界は作れ、その後はどのリーグも入らない・超える組み合わせは送ったときに理由・世界を消すと枠が戻る・担当・部外者・未ログインには使用量もフォームも出ない・`pennant_create` は上限0でも作れる（画面の入口は拒む）・使用量はトランザクションの中で数える）、`test_repositories.py`（`usage()` は台帳のワークスペースだけを1クエリで）、`test_workspace_isolation.py`（向きを逆に: B に A の上限を超える世界があっても、A の使用量は A の世界だけでフォームが出る）、`test_wiring.py`（3つの組み立て口の上限が settings から同じ値）。消したテスト: 1人あたりの上限（`test_the_limit_is_per_owner`・`count_by_owner` の2本）。件数: domain＋integration 4,704（epic e1a4b0d の 4,688 より +16）、e2e 21（足していない）。
+
+**変異の確かめ**（どれも戻した）: `usage()` を全ワークスペースで数える → 2件（`test_repositories`・`test_workspace_isolation`）、見込みの検査を外す → 2件、使用量をトランザクションの外で数える → 1件、一覧で別の数（作成者のいる世界だけ）を使う → 4件。
+
+**レビュー（ddd-boundary-reviewer）**: 重要な指摘なし。軽微を直した: 「10シーズンで約N試合」の表記をフォームと文言で二重に持っていた（`reserve_label` に）、`build_*` を通さずにサービスを組み立てる既存のテスト2本の上限の値に「`create_world` は上限を見ないので何でもよい」と書いた。残したもの: `WorkspaceQuota` が `pennant.world` を知る向き（上限の出典を1か所にする説明と合うので）、フォームの見込みは `list_teams_by_league()`、作成の検査は `load_source()` の名簿で球団を数える（どちらも実データのリーグの今の球団で、今は一致する）、Wiki の式の説明の `143`（例示）、この設計書の W6 より前の節の `count_by_owner`・1人5世界の記述（書いた時点の記録。3.2 の「`max_games`・`max_pennant_worlds` の差し込み口は作っていない」は、この T1 で足した）。
+
+**T2 への申し送り**
+
+- T1 の計測（世界の一覧・世界の作成を、基点 e1a4b0d と T1 で交互に3回ずつ）。クエリ数: 作れる人の `/pennant/` は `count_by_owner` の1本が `usage()` の1本に替わるだけ（±0 の見込み）。作れない人（担当・閲覧・未ログイン）は前は未ログイン以外で1本数えていたので、ログインした担当・閲覧者は −1 の見込み。作成の POST は `usage()` の1本が増える（前は `--owner` 付きのとき `count_by_owner` を数えていた）。
+- 分岐元の推定の実測と球場の決定の記録（球場は Wiki「ペナントモードの仕組み」を T1 で恒久の決定に書き直した。設計書・ROADMAP・#82 の本文は T2）。
+- 「epic を main に入れるときに必ず行うこと」に足す: 本番の `.env` の `PENNANT_MAX_WORLDS`・`PENNANT_MAX_GAMES`（無ければ 5・40000）と、R2 のバックアップの容量の見積もり。#98（重い処理のバックグラウンド化）で世界の作成を積むなら、上限の検査は積む時点と作る時点の両方で要る。

@@ -18,6 +18,7 @@ from myapp.domain.simulation.ratings import BatterRatings, GrowthType, PitcherRa
 from myapp.domain.simulation.samples import BATTER_SD
 from myapp.domain.simulation.spread import MIN_POPULATION, target_mean
 from myapp.domain.value_objects import BattingLine, InningsPitched, PitchingLine
+from myapp.domain.workspace import WorkspaceQuota
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoFieldingTotalsQuery
 from myapp.infrastructure.repositories import (
@@ -363,6 +364,8 @@ class ForkedRatingsTest(BaseCase):
             atomic=transaction.atomic,
             ensure_schedule=lambda world_id: False,
             workspace_id=real_scope().workspace_id,
+            # create_world は上限を見ないので、値は何でもよい
+            quota=WorkspaceQuota(max_owned_workspaces=3, max_pennant_worlds=5, max_pennant_games=40000),
         )
         worlds_before = orm_models.PennantWorld.objects.count()
 

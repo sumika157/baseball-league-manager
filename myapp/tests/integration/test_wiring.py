@@ -453,6 +453,24 @@ class BuildServiceTest(SimpleTestCase):
     def test_pennant_world_view_dependencies_are_wired(self):
         self._assert_wired(build_pennant_world_view(1), PennantWorldViewService)
 
+    def test_every_builder_gets_the_same_quota_from_settings(self):
+        """上限（`WorkspaceQuota`）は settings から1か所で作る。
+
+        作成の検査・一覧・ワークスペースの作成で値がずれない（W6 #82）。
+        """
+        from django.test import override_settings
+
+        from myapp.domain.workspace import WorkspaceQuota
+
+        with override_settings(WORKSPACE_MAX_OWNED=2, PENNANT_MAX_WORLDS=7, PENNANT_MAX_GAMES=1234):
+            quotas = [
+                build_workspace_service()._quota,
+                build_pennant_world_service(REAL)._quota,
+                build_pennant_world_view(1)._quota,
+            ]
+        expected = WorkspaceQuota(max_owned_workspaces=2, max_pennant_worlds=7, max_pennant_games=1234)
+        self.assertEqual(quotas, [expected] * 3)
+
     def test_club_service_dependencies_are_wired(self):
         self._assert_wired(build_club_service(WORLD7), ClubManagementService)
 

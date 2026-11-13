@@ -5,7 +5,7 @@
 アプリケーション層には検証済みの値だけを渡す。
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 from typing import Any, cast
 
@@ -32,7 +32,7 @@ from ..domain.entities import (
 from ..domain.exceptions import DomainError, InvalidJerseyNumber, InvalidPosition
 from ..domain.pennant.draft_order import DraftOrderRule
 from ..domain.pennant.postseason import PostseasonFormat
-from ..domain.pennant.world import MAX_NAME_LENGTH, MAX_SEED, MAX_SOURCE_LEAGUES, MAX_START_YEAR
+from ..domain.pennant.world import MAX_NAME_LENGTH, MAX_SEED, MAX_SOURCE_LEAGUES, MAX_START_YEAR, reserve_label
 from ..domain.value_objects import (
     BACK_NAME_MAX_LENGTH,
     DEFAULT_REGISTERED_PLAYER_LIMIT,
@@ -593,6 +593,14 @@ class PennantWorldForm(forms.Form):
             (group.league_name, [(str(team.id), team.name) for team in group.teams]) for group in groups
         ]
         self.fields["start_year"].initial = default_year
+        self._league_names = {str(group.league_id): group.league_name for group in groups}
+
+    def show_league_reserves(self, reserves: Mapping[int, int]) -> None:
+        """リーグの選択肢の横に、そのリーグから作る世界の見込みの試合数（`PennantWorldQuota.league_reserves`）を添える。"""
+        self._leagues_field.choices = [
+            (value, f"{name}（{reserve_label(reserves[int(value)])}）") if int(value) in reserves else (value, name)
+            for value, name in self._league_names.items()
+        ]
 
     def clean_postseason_format(self) -> PostseasonFormat:
         return PostseasonFormat[self.cleaned_data["postseason_format"]]

@@ -254,3 +254,7 @@ SAMPLE_WORKSPACE_KEY = os.environ.get("SAMPLE_WORKSPACE_KEY", "").strip()
 
 # 1人が持てるワークスペースの数（作成の画面の上限。W4。#80）。管理画面からは上限を超えて作れる（運営者の道具）
 WORKSPACE_MAX_OWNED = int(os.environ.get("WORKSPACE_MAX_OWNED") or 3)
+# 1つのワークスペースに作れるペナントの世界の数と、世界の見込みの試合数（10シーズンぶんの公式戦）の合計の上限
+# （世界の作成の画面の上限。W6。#82）。管理コマンド `pennant_create` は上限を見ない（運営者の道具）
+PENNANT_MAX_WORLDS = int(os.environ.get("PENNANT_MAX_WORLDS") or 5)
+PENNANT_MAX_GAMES = int(os.environ.get("PENNANT_MAX_GAMES") or 40000)

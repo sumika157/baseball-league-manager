@@ -16,6 +16,7 @@ from django.db import IntegrityError, transaction
 from myapp.application.pennant_world import PennantWorldService, WorldRepositories
 from myapp.domain.exceptions import InvalidSeason, InvalidWorld, LeagueNotFound, TeamNotFound, WorldNotFound
 from myapp.domain.pennant.world import World
+from myapp.domain.workspace import WorkspaceQuota
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoFieldingTotalsQuery, DjangoSimulationContextQuery
 from myapp.infrastructure.repositories import (
@@ -427,6 +428,8 @@ class ForkOptionsTest(BaseCase):
             atomic=transaction.atomic,
             ensure_schedule=lambda world_id: False,
             workspace_id=real_scope().workspace_id,
+            # create_world は上限を見ないので、値は何でもよい
+            quota=WorkspaceQuota(max_owned_workspaces=3, max_pennant_worlds=5, max_pennant_games=40000),
         )
 
         with self.assertRaises(RuntimeError):

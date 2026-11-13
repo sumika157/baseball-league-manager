@@ -70,7 +70,7 @@ class WorkspaceNotFound(DomainError):
 
 
 class WorkspaceLimitReached(DomainError):
-    """1人が持てるワークスペースの数の上限に達している（`WorkspaceQuota`）。"""
+    """上限に達している（1人が持てるワークスペースの数・ワークスペースの世界の数と試合の枠。`WorkspaceQuota`）。"""
 
 
 class InvalidInvitation(DomainError):

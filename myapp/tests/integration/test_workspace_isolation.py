@@ -39,7 +39,7 @@ from django.apps import apps
 from django.contrib.auth.models import User
 from django.db import connection
 from django.http import Http404
-from django.test import RequestFactory, TestCase
+from django.test import RequestFactory, TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
@@ -70,7 +70,7 @@ from myapp.domain.pennant.draft_meeting import DraftAction, DraftActionKind, Dra
 from myapp.domain.pennant.draft_record import DraftRecord
 from myapp.domain.pennant.reinforcement import MidseasonRegistration
 from myapp.domain.pennant.release import ReleasePlan
-from myapp.domain.pennant.world import MAX_WORLDS_PER_OWNER, WORLD_LIMIT_MESSAGE, World, WorldScope
+from myapp.domain.pennant.world import World, WorldScope
 from myapp.domain.services.rankings import Title
 from myapp.domain.value_objects import (
     BattingLine,
@@ -1678,15 +1678,16 @@ class WorldPagesOfTheOtherWorkspaceTest(WorkspaceCase):
         self.assertContains(response, A_WORLD)
         self.assertNotContains(response, B_MARK)
 
-    def test_worlds_in_other_workspaces_count_toward_the_limit(self):
-        """上限は全ワークスペースで数える（作成の検査と同じ）。
+    def test_bs_worlds_count_toward_neither_as_world_limit_nor_its_games(self):
+        """上限はワークスペースごと（W6 #82）。B の世界は、A の世界の数にも試合の枠にも入らない。
 
-        B に上限まで世界を持つ人には、A でも作成フォームを出さない。A の一覧に出る自分の世界は0でも、
-        送れば拒まれるフォームを見せない（A で世界を作れるよう、A の編集者にしておく）。
+        B に A の上限を超える数の世界があっても、A の編集者には A の使用量（A の世界だけ）とフォームを出し、作れる。
         """
-        make_editor(self.b_owner)
+        self.client.force_login(make_editor(self.b_owner))
+        reserves = self.client.get(ws_url("pennant_index")).context["quota"].league_reserves
+        a_usage = DjangoWorldRepository(self.workspace.id).usage()
         ledger_b = DjangoWorldRepository(self.workspace_b.id)
-        for number in range(MAX_WORLDS_PER_OWNER - 1):  # B の世界（setUpTestData）と合わせて上限ちょうど
+        for number in range(a_usage.world_count + 1):
             ledger_b.save(
                 World(
                     name=f"{B_MARK}世界{number}",
@@ -1696,24 +1697,19 @@ class WorldPagesOfTheOtherWorkspaceTest(WorkspaceCase):
                     workspace_id=self.workspace_b.id,
                 )
             )
-        self.client.force_login(self.b_owner)
+        b_usage = ledger_b.usage()
+        self.assertGreater(b_usage.world_count, a_usage.world_count)
+        self.assertGreater(b_usage.reserved_games, 0, "B の世界には球団がある（試合の枠を使っている）")
 
-        response = self.client.get(ws_url("pennant_index"))
+        with override_settings(
+            PENNANT_MAX_WORLDS=a_usage.world_count + 1,
+            PENNANT_MAX_GAMES=a_usage.reserved_games + max(reserves.values()),
+        ):
+            response = self.client.get(ws_url("pennant_index"))
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.context["worlds"].mine, [])
-        self.assertTrue(response.context["worlds"].at_limit)
-        self.assertContains(response, WORLD_LIMIT_MESSAGE)
-        self.assertContains(response, "ほかのワークスペースの世界も数えます")
-        self.assertNotContains(response, 'name="name"')
-
-    def test_below_the_limit_the_form_is_shown(self):
-        """検査が空振りしていないこと（B に1つだけなら、A の編集者には A で作成フォームが出る）。"""
-        self.client.force_login(make_editor(self.b_owner))
-
-        response = self.client.get(ws_url("pennant_index"))
-
-        self.assertFalse(response.context["worlds"].at_limit)
+        quota = response.context["quota"]
+        self.assertEqual((quota.world_count, quota.reserved_games), (a_usage.world_count, a_usage.reserved_games))
+        self.assertIsNone(quota.blocker)
         self.assertContains(response, 'name="name"')
 
 

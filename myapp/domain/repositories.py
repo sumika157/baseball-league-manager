@@ -30,7 +30,7 @@ from .pennant.ratings import PlayerRatings
 from .pennant.reinforcement import MidseasonRegistration
 from .pennant.release import ReleasePlan
 from .pennant.schedule import Fixture
-from .pennant.world import World
+from .pennant.world import World, WorldUsage
 from .workspace import Invitation, Workspace
 
 
@@ -231,8 +231,11 @@ class WorldRepository(Protocol):
         """このワークスペースの世界を、新しく作った世界から順に。"""
         ...
 
-    def count_by_owner(self, owner_id: int) -> int:
-        """そのユーザーがオーナーの世界の数（全ワークスペースで数える）。世界の数の上限の検査に使う（世界を組み立てずに数える）。"""
+    def usage(self) -> WorldUsage:
+        """このワークスペースの世界の使用量（世界の数と見込みの試合数の合計）。上限（`WorkspaceQuota`）の検査と一覧に使う。
+
+        作成者を問わず、作成者のいない世界も数える。ほかのワークスペースの世界は数えない。世界を組み立てずに数える。
+        """
         ...
 
     def save(self, world: World) -> World:
