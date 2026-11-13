@@ -98,10 +98,10 @@ class PlayedFormatTest(unittest.TestCase):
 
 class FormatChangeBlockerTest(unittest.TestCase):
     def test_can_change_before_the_postseason_starts(self):
-        self.assertIsNone(postseason_format_change_blocker(started=False, world_over=False))
+        self.assertIsNone(postseason_format_change_blocker(started=False, world_over=False, meeting_started=False))
 
     def test_cannot_change_once_this_years_postseason_has_started(self):
-        reason = postseason_format_change_blocker(started=True, world_over=False)
+        reason = postseason_format_change_blocker(started=True, world_over=False, meeting_started=False)
 
         self.assertIsNotNone(reason)
         self.assertIn("始まっている", reason or "")
@@ -109,8 +109,15 @@ class FormatChangeBlockerTest(unittest.TestCase):
     def test_cannot_change_a_world_that_is_over(self):
         for started in (False, True):
             with self.subTest(started=started):
-                reason = postseason_format_change_blocker(started=started, world_over=True)
+                reason = postseason_format_change_blocker(started=started, world_over=True, meeting_started=False)
                 self.assertIn("最終シーズンを終えている", reason or "")
+
+    def test_cannot_change_once_this_years_draft_meeting_has_started(self):
+        """会議はポストシーズンの後に開く（#297 Q1）。会議を始めた後に方式を変えると、ポストシーズンの前に始めた
+        会議になる。"""
+        reason = postseason_format_change_blocker(started=False, world_over=False, meeting_started=True)
+
+        self.assertIn("ドラフト会議が始まっている", reason or "")
 
 
 class PostseasonStatsSortTest(unittest.TestCase):

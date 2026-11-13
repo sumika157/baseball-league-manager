@@ -185,3 +185,13 @@ def awards_in(scope: WorldScope) -> QuerySet[orm_models.PennantAward]:
 def championships_in(scope: WorldScope) -> QuerySet[orm_models.PennantChampionship]:
     """範囲の日本一の記録。記録は球団を持つので、球団のリーグで世界が決まる。"""
     return orm_models.PennantChampionship.objects.filter(world_condition("team__league", scope))
+
+
+def drafts_in(scope: WorldScope) -> QuerySet[orm_models.PennantDraft]:
+    """範囲のドラフト会議の記録。会議は世界そのものに属すので、世界を直接指す（`League.world` と同じ列の名前）。"""
+    return orm_models.PennantDraft.objects.filter(world_condition("", scope))
+
+
+def draft_lotteries_in(scope: WorldScope) -> QuerySet[orm_models.PennantDraftLottery]:
+    """範囲の締めた年のドラフトの抽選。抽選は指名された選手に付くので、能力と同じく範囲の選手で絞る。"""
+    return orm_models.PennantDraftLottery.objects.filter(player_id__in=players_in(scope).values("id"))

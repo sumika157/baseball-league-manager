@@ -22,11 +22,13 @@ from myapp.application.game_view import GameViewService
 from myapp.application.league_view import LeagueViewService
 from myapp.application.pennant_championships import PostseasonHistoryReader
 from myapp.application.pennant_club_details import ClubDetailsService
+from myapp.application.pennant_draft import PennantDraftService
 from myapp.application.pennant_history import PennantHistoryService
 from myapp.application.pennant_home import PennantHomeService
 from myapp.application.pennant_midseason import MidseasonRegistrationService
 from myapp.application.pennant_midseason_review import MidseasonReview
 from myapp.application.pennant_offseason import PennantOffseasonService
+from myapp.application.pennant_offseason_inputs import OffseasonInputsReader, OffseasonPhase
 from myapp.application.pennant_offseason_view import OffseasonViewService
 from myapp.application.pennant_postseason import PennantPostseasonService, PostseasonBracketReader
 from myapp.application.pennant_postseason_view import PennantPostseasonViewService
@@ -45,6 +47,7 @@ from myapp.application.queries import (
     HomeStadiumQuery,
     OffseasonQuery,
     PennantActivityQuery,
+    PlayerNameQuery,
     PostseasonQuery,
     PostseasonStatsQuery,
     RatingsHistoryQuery,
@@ -63,6 +66,7 @@ from myapp.domain.repositories import (
     AwardRepository,
     ChampionshipRepository,
     ClubPlanRepository,
+    DraftRepository,
     FixtureRepository,
     GameRepository,
     LeagueRepository,
@@ -83,6 +87,7 @@ from myapp.infrastructure.queries import (
     DjangoHomeStadiumQuery,
     DjangoOffseasonQuery,
     DjangoPennantActivityQuery,
+    DjangoPlayerNameQuery,
     DjangoPostseasonQuery,
     DjangoPostseasonStatsQuery,
     DjangoRatingsHistoryQuery,
@@ -96,6 +101,7 @@ from myapp.infrastructure.repositories import (
     DjangoAwardRepository,
     DjangoChampionshipRepository,
     DjangoClubPlanRepository,
+    DjangoDraftRepository,
     DjangoFixtureRepository,
     DjangoGameRepository,
     DjangoLeagueRepository,
@@ -113,6 +119,7 @@ from myapp.presentation.views import (
     build_league_view_service,
     build_midseason_registration_service,
     build_offseason_view_service,
+    build_pennant_draft_service,
     build_pennant_history_service,
     build_pennant_home_service,
     build_pennant_offseason_service,
@@ -155,6 +162,8 @@ class ProtocolConformanceTest(SimpleTestCase):
         (DjangoAwardQuery(REAL), AwardQuery),
         (DjangoChampionshipRepository(REAL), ChampionshipRepository),
         (DjangoChampionshipQuery(REAL), ChampionshipQuery),
+        (DjangoDraftRepository(REAL), DraftRepository),
+        (DjangoPlayerNameQuery(REAL), PlayerNameQuery),
         (DjangoSimulationContextQuery(REAL), SimulationContextQuery),
         (DjangoFieldingTotalsQuery(REAL), FieldingTotalsQuery),
         (DjangoTeamListQuery(REAL), TeamListQuery),
@@ -236,7 +245,18 @@ class BuildServiceTest(SimpleTestCase):
         self._assert_wired(build_pennant_season_service(7)._review, MidseasonReview)
 
     def test_pennant_offseason_service_dependencies_are_wired(self):
-        self._assert_wired(build_pennant_offseason_service(7), PennantOffseasonService)
+        service = build_pennant_offseason_service(7)
+        self._assert_wired(service, PennantOffseasonService)
+        self._assert_wired(service._phase, OffseasonPhase)
+        self._assert_wired(service._inputs, OffseasonInputsReader)
+
+    def test_pennant_draft_service_dependencies_are_wired(self):
+        """ドラフト会議（#297 D3）も、局面の検査と入力の読み口まで依存を全部渡す（締める処理と同じ組み立て）。"""
+        service = build_pennant_draft_service(7)
+        self._assert_wired(service, PennantDraftService)
+        self._assert_wired(service._phase, OffseasonPhase)
+        self._assert_wired(service._inputs, OffseasonInputsReader)
+        self._assert_wired(service._phase._postseason, PostseasonBracketReader)
 
     def test_pennant_postseason_service_dependencies_are_wired(self):
         self._assert_wired(build_pennant_postseason_service(7), PennantPostseasonService)
@@ -267,7 +287,7 @@ class BuildServiceTest(SimpleTestCase):
         self._assert_wired(service, PennantSettingsService)
         self._assert_wired(service._brackets, PostseasonBracketReader)
         self.assertEqual(service._world_id, 7)
-        for name in ("_fixtures", "_context_query", "_postseason"):
+        for name in ("_fixtures", "_drafts", "_context_query", "_postseason"):
             with self.subTest(dependency=name):
                 self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
         self.assertEqual(service._brackets._postseason._scope, WorldScope.pennant(7))
@@ -651,9 +671,11 @@ class PennantOffseasonScopeTest(SimpleTestCase):
         "_releases",
         "_awards",
         "_championships",
+        "_drafts",
         "_context_query",
-        "_playing_time",
     )
+    PHASE_SCOPED = ("_teams", "_fixtures", "_ratings", "_releases", "_context_query")
+    INPUTS_SCOPED = ("_teams", "_leagues", "_ratings", "_releases", "_awards", "_playing_time")
 
     def test_every_dependency_is_fixed_to_the_given_world(self):
         service = build_pennant_offseason_service(7)
@@ -664,14 +686,49 @@ class PennantOffseasonScopeTest(SimpleTestCase):
         self.assertEqual(
             service._titles._game_list_query._scope, WorldScope.pennant(7), "タイトルを導くのも世界の範囲のサービス"
         )
+        self._assert_parts_in_world(service, 7)
+
+    def test_the_draft_meeting_is_fixed_to_the_given_world(self):
+        """ドラフト会議（#297 D3）も、記録・名前・局面の検査・入力の読み口を全部、渡された世界の範囲で読み書きする。"""
+        service = build_pennant_draft_service(7)
+        self.assertEqual(service._world_id, 7)
+        for name in ("_teams", "_drafts", "_names"):
+            with self.subTest(dependency=name):
+                self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
+        self._assert_parts_in_world(service, 7)
+        self.assertEqual(build_pennant_draft_service(8)._drafts._scope, WorldScope.pennant(8))
+        from django.db import transaction
+
+        self.assertIs(service._atomic, transaction.atomic)
+
+    def test_the_parts_share_the_services_repositories(self):
+        """局面の検査・入力の読み口は、サービスと同じリポジトリの実体を使う（同じ世界の読み書きを1つの実体で）。"""
+        service = build_pennant_offseason_service(7)
+        self.assertIs(service._phase._ratings, service._ratings)
+        self.assertIs(service._phase._releases, service._releases)
+        self.assertIs(service._inputs._teams, service._teams)
+        self.assertIs(service._phase._postseason, service._postseason)
+
+    def _assert_parts_in_world(self, service, world_id):
+        self.assertEqual(service._phase._world_id, world_id)
+        for name in self.PHASE_SCOPED:
+            with self.subTest(phase=name):
+                self.assertEqual(getattr(service._phase, name)._scope, WorldScope.pennant(world_id))
+        for name in self.INPUTS_SCOPED:
+            with self.subTest(inputs=name):
+                self.assertEqual(getattr(service._inputs, name)._scope, WorldScope.pennant(world_id))
+        self.assertEqual(service._inputs._titles._game_list_query._scope, WorldScope.pennant(world_id))
         # ドラフトの指名順の最終順位（#198）も世界の範囲
-        self.assertEqual(service._finishes._games._scope, WorldScope.pennant(7))
-        self.assertEqual(service._finishes._league_view._game_list_query._scope, WorldScope.pennant(7))
+        self.assertEqual(service._inputs._finishes._games._scope, WorldScope.pennant(world_id))
+        self.assertEqual(service._inputs._finishes._league_view._game_list_query._scope, WorldScope.pennant(world_id))
+        self.assertEqual(service._phase._postseason._postseason._scope, WorldScope.pennant(world_id))
 
     def test_the_real_data_cannot_be_closed(self):
         for bad in (0, -1, True):
             with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
                 build_pennant_offseason_service(bad)
+            with self.subTest(world_id=bad, service="draft"), self.assertRaises(InvalidWorld):
+                build_pennant_draft_service(bad)
 
 
 class ClubServiceScopeTest(SimpleTestCase):

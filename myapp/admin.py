@@ -116,7 +116,9 @@ admin.site.get_app_list = types.MethodType(_ordered_app_list, admin.site)  # typ
 # ペナント専用のモデル（PennantWorld・PennantPlayerRatings・PennantFixture・PennantClubPlan と
 # その行 PennantClubPlanEntry・PennantReleasePlan とその行 PennantReleasePlanEntry・期中の支配下登録
 # PennantMidseasonRegistration・表彰 PennantAward・
-# 日本一 PennantChampionship）は管理画面に登録しない
+# 日本一 PennantChampionship・ドラフト会議 PennantDraft とその人数の幅 PennantDraftSlot・行動 PennantDraftAction・
+# ドラフトの抽選 PennantDraftLottery とその入札 PennantDraftLotteryBid）は
+# 管理画面に登録しない
 # （手で直すと、能力と成績・日程の整合が壊れるため）。
 _REAL = WorldScope.real()
 _REAL_QUERYSETS = {

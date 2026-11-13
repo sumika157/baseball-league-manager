@@ -154,7 +154,7 @@ class PostseasonFormatLocked(DomainError):
 
 
 class DraftOrderRuleLocked(DomainError):
-    """ドラフトの指名順の規則を変えられない（世界が終了している）。
+    """ドラフトの指名順の規則を変えられない（世界が終了している・その年の会議が始まっている）。
 
     理由の文言は domain の `world.draft_order_rule_change_blocker` が出典。
     """
@@ -163,6 +163,39 @@ class DraftOrderRuleLocked(DomainError):
 class InvalidDraftAction(DomainError):
     """ドラフト会議の行動として成立しない（自分の番でない・候補にいない・既に指名された・人数の幅を超える・
     最少に届く前の選択終了・位置の最低人数を割る・会議が終わっている）。"""
+
+
+class DraftInProgress(DomainError):
+    """ドラフト会議が途中なので、シーズンを締められない（最後まで指名するか、残りをお任せにする）。"""
+
+    def __init__(
+        self, message: str = "ドラフト会議が途中です。最後まで指名するか、残りをお任せにしてください。"
+    ) -> None:
+        super().__init__(message)
+
+
+class DraftConflict(DomainError):
+    """画面を開いたときから会議が進んでいる（二重送信や、別のタブで先に指名した場合）。書かずに断る。"""
+
+    def __init__(self, message: str = "画面が古くなりました。ドラフト会議を開き直してください。") -> None:
+        super().__init__(message)
+
+
+class DraftChanged(DomainError):
+    """会議を始めたときと、作り直した候補か人数の幅が食い違う（コードが変わったときだけ起きる）。
+
+    保存した行動を当て直せないので、会議をやり直すしかない（GM の画面に「会議をやり直す」を出す。#297 Q5）。
+    """
+
+    def __init__(
+        self,
+        message: str = "会議を始めた後に、候補か指名の人数が変わりました。ドラフト会議をやり直してください。",
+    ) -> None:
+        super().__init__(message)
+
+
+class DraftStarted(DomainError):
+    """その年のドラフト会議は既に始まっている（会議を2度始める、会議の前に決める入力を会議の後に変える）。"""
 
 
 class AlreadyClosed(DomainError):

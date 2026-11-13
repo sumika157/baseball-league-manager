@@ -225,7 +225,7 @@ class CloseSeasonDraftTest(DraftOrderCase):
         self.assertEqual(draft.standings.unranked, ())
 
     def test_a_rule_changed_while_closing_closes_nothing(self):
-        """締める計算の間に規則が変わったら、古い規則の新人を書かずに断る（`_state()` に規則を入れた）。"""
+        """締める計算の間に規則が変わったら、古い規則の新人を書かずに断る（状態の目印に規則を入れた）。"""
         service = build_pennant_offseason_service(self.none_world)
         atomic = service._atomic
 
