@@ -2167,6 +2167,10 @@ class ReleasePlanView:
 # --- ドラフト会議（#297 D3） ---
 
 
+def _draft_round_label(round_number: int, *, is_development: bool) -> str:
+    return f"{'育成' if is_development else ''}{round_number}巡目"
+
+
 @dataclass(frozen=True)
 class DraftTurnView:
     """会議の次の番（domain の `DraftTurn` に球団の名前と、受け持つ球団の番かを足したもの）。"""
@@ -2180,13 +2184,20 @@ class DraftTurnView:
     is_development: bool
     is_mine: bool
 
+    @property
+    def round_label(self) -> str:
+        """「1巡目」「育成2巡目」（区分の中の巡）。"""
+        return _draft_round_label(self.round_number, is_development=self.is_development)
+
 
 @dataclass(frozen=True)
 class DraftLotteryView:
-    """入札の重複と抽選の結果（入札した球団と当たった球団の名前）。"""
+    """入札の重複と抽選の結果（入札した球団と当たった球団の名前）。`bidder_ids` は入札した球団の id（名前と同じ順。
+    画面が受け持つ球団の外れを見分ける）。"""
 
     bidders: tuple[str, ...]
     winner: str
+    bidder_ids: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -2203,6 +2214,10 @@ class DraftMoveRow:
     prospect_name: str
     position: Position | None
     lottery: DraftLotteryView | None = None
+
+    @property
+    def round_label(self) -> str:
+        return _draft_round_label(self.round_number, is_development=self.is_development)
 
 
 @dataclass(frozen=True)
@@ -2230,6 +2245,8 @@ class DraftProspectRow:
     taken_by: str
     # 受け持つ球団がいま入札・指名できるか（domain の `DraftState.selectable`。`apply` と同じ検査）
     selectable: bool
+    # 指名済みか（並べ替えで末尾に回す。domain の `sorting.ListedProspect`）。表示の名前ではなく指名の有無から立てる
+    is_taken: bool = False
 
 
 @dataclass(frozen=True)
@@ -2241,6 +2258,7 @@ class DraftMeetingView:
     - `changed`: 会議を始めた後にコードが変わって、保存した会議を再生できない（`DraftChanged`。
       「会議をやり直す」だけを出す）
     - `last_seq`: 最後の行動の番号。書き込みの操作に `expected_seq` として送り返す
+    - `prospects`: 候補（`sort`・`descending` の並び。domain の `sorting.sort_prospects`。指名済みは末尾）
     """
 
     year: int | None
@@ -2254,6 +2272,8 @@ class DraftMeetingView:
     own_moves: tuple[DraftMoveRow, ...] = ()
     recent_moves: tuple[DraftMoveRow, ...] = ()
     prospects: tuple[DraftProspectRow, ...] = ()
+    sort: str = ""
+    descending: bool = False
     can_pass: bool = False
     # 指名できる候補がいないときだけ、受け持つ球団の番を AI に任せられる（AI は候補を足して指名する）
     can_delegate: bool = False
@@ -2265,6 +2285,15 @@ class DraftMeetingView:
     @property
     def is_my_turn(self) -> bool:
         return self.turn is not None and self.turn.is_mine
+
+    @property
+    def is_in_progress(self) -> bool:
+        """始めて、まだ終わっていない（再生できない会議も含む。締められない）。"""
+        return self.status is DraftMeetingStatus.IN_PROGRESS
+
+    @property
+    def is_finished(self) -> bool:
+        return self.status is DraftMeetingStatus.FINISHED
 
 
 @dataclass(frozen=True)

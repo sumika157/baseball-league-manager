@@ -1,0 +1,4 @@
+{% comment %}
+会議で確定した動きひとつ（DraftMoveRow）の中身。選択終了は候補が無い。抽選になった入札は、入札した球団を添える。
+{% endcomment %}
+{% if move.prospect_key is None %}<span class="stat-muted">選択終了</span>{% else %}{{ move.prospect_name }}{% if move.position %}<span class="stat-muted">（{{ move.position.label }}）</span>{% endif %}{% if move.lottery %} <span class="stat-muted" style="font-size: 0.8125rem;">抽選: {{ move.lottery.bidders|join:"・" }}</span>{% endif %}{% endif %}

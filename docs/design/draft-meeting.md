@@ -1,6 +1,6 @@
 # 設計: ドラフト会議の保存と1巡ずつの進行（D3・D4）
 
-> 状態: D3 着手（2026-11-12）。親 Issue [#198](https://github.com/sumika157/baseball-league-manager/issues/198)、
+> 状態: D3 の T0〜T3 完了（2026-11-13）。次は D4。親 Issue [#198](https://github.com/sumika157/baseball-league-manager/issues/198)、
 > 段階は [#297](https://github.com/sumika157/baseball-league-manager/issues/297)（D3）・[#298](https://github.com/sumika157/baseball-league-manager/issues/298)（D4）。
 > 統合ブランチ `epic/draft-meeting`（D3・D4 だけを積む。D1・D2 は main に直接入った。2026-10-24 ユーザー決定）。
 > 段階ごとの決定と実測はこのファイルの「段階ごとの記録」に追記し、epic を main に入れるとき（D4 の後）に Wiki
@@ -89,8 +89,8 @@ CreateModel 3つ（backfill なし）。1会議あたり行動 約600行・人�
 | --- | --- | --- |
 | T0 | epic とこの設計書 | #334 |
 | T1 | domain と保存（上の domain・infrastructure） | #337 |
-| T2 | application（`PennantDraftService`・締める処理・ロック） | （この PR） |
-| T3 | 画面 | |
+| T2 | application（`PennantDraftService`・締める処理・ロック） | #348 |
+| T3 | 画面（会議の画面・GM ホームのカード・戦力外タブの固定・候補の並べ替え） | （この PR） |
 
 D4（#298）: 抽選の記録（`PennantDraftLottery`）と「N球団競合」・巡×球団の盤・世界の一覧の「会議の途中」・
 並べ替えの追加キー・Wiki への吸収。epic → main は D4 の後の1本で、自動マージにしない。
@@ -236,3 +236,64 @@ T3 への申し送り:
 - 候補の並べ替え（見込みの区分の降順など）は domain の `sorting.py` に足す（`DraftProspectRow` は番号の順）。
 - 会議の目印は締める処理の `close_option` には入れていない（途中かどうかは再生しないと分からない）。締めるボタンは会議が途中なら
   出さない（会議のカードを出す）か、押されたら `DraftInProgress` の理由を出す。
+
+### T3 画面（2026-11-13）
+
+決めたこと:
+
+- **URL**: GET `pennant/<世界>/draft/<年>/`（誰でも）。開けるのはいまの年度（`WorldContext.season_year`）だけで、前の年はオフの結果へ、
+  先の年は 404。会議を開けない局面（公式戦・ポストシーズンの途中）は `view().blocker` を出す。
+  POST は `draft/<年>/<操作>/`（`start`・`nominate`・`pass`・`delegate`・`auto`・`reset`。ほかは 404、GET は会議の画面へ戻す）で、
+  オーナーだけ（未ログインはログインへ、ほかの人は 403）。**URL の年が `expected_year`**。始める以外は `expected_seq`
+  （`view().last_seq`）を隠し項目で送り、欠落・数でない値は「検査なし」にせず弾く（締める操作の `expected_year` と同じ）。
+  結果は PRG で会議の画面の messages に出し、指名のあとは並べ替えの指定（`sort`・`dir`）を保って戻る。
+- **知らせ**: 1手の操作は、確定した動きのうち受け持つ球団の獲得（「1巡目: 〇〇（投手）を獲得しました（3球団の抽選で当選）」）と
+  抽選の外れ（`DraftLotteryView.bidder_ids` で見分ける）を出す。残りをお任せは1件ずつ出さない（「自軍の指名」で読む）。
+  会議が終わったら「GM ホームでシーズンを締めると、新人が入団します」。`DraftConflict` は警告（「開き直して」）、
+  `InvalidDraftAction`・`DraftChanged` などは理由をそのまま出す。
+- **会議の画面**（`pennant/draft.html`）は状態ごとに出す操作を分ける: 開けない → 理由だけ / 再生できない → 「会議をやり直す」だけ /
+  未開始 → 「会議を始める」（戦力外と指名順が固定になる・開かずに締めればお任せ、と書く） / 途中 → 候補の表の「入札する」「指名する」と
+  「選択を終える」（`can_pass` のときだけ）・「この番を任せる」（`can_delegate`＝指名できる候補がいないときだけ。候補のボタンとは同時に
+  出ない）・「残りをお任せにする」 / 終了 → GM ホームへの案内。並びは 操作 → 候補（650人前後なので高さを画面の7割に絞って中で
+  スクロール）→ 自軍の指名・直近の動き → この巡の指名順と結果（8リーグで48行なので最後）。
+- **候補の並べ替え**は domain の `sorting.sort_prospects`（`ListedProspect` の形。キーは見込みの区分（既定・高い順）・位置・年齢、
+  同値は候補の番号の順、指名済みは向きによらず末尾）。`view(sort=, descending=)` が並べて `DraftMeetingView.sort`・`descending` を返す。
+  キーを増やすのは D4。
+- **見込みの注記**（#297 Q3）: 「見込みは、あなたの球団のスカウトがいま見立てた、ピークの年齢ごろの総合の区分です。入団後は自軍の
+  スカウトが改めて見立てるので、ドラフトのときの見立てと同じとは限りません」。球団の好みは出さない（Q4）。
+- **GM ホーム**: 締められるとき（`close_option.can_close`）だけ `view()` を読む（導いたポストシーズンの状況を `postseason_status` で
+  渡し、導き直さない。表示にだけ使う）。途中（再生できない会議も含む）は締めるカードの代わりに会議のカード（`_draft_card.html`。
+  「2巡目・あなたの番」「会議へ」）だけ。未開始は締めるカードに「ドラフト: お任せ（会議を開かない） · ドラフト会議で指名する」、
+  終了は「ドラフト: 会議で指名済み · 会議の結果を見る」の行。オーナー以外には出さない（締めるカードと同じ）。
+- **戦力外タブ**: `ReleasePlanView.blocker` があれば理由を出し、オーナーにも「手動で選ぶ」「保存する」「自動に戻す」を出さない
+  （読むだけ）。設定の画面の指名順・方式は T2 のまま（理由は `draft_order_blocker`・`blocker`）。
+- DTO に画面用の値だけを足した（`round_label`・`DraftProspectRow.is_taken`・`DraftMeetingView.is_in_progress`・`is_finished`・
+  `DraftLotteryView.bidder_ids`）。
+- **E2E は足さない**（`.claude/rules/tests.md`: 画面は JavaScript を使わないフォームだけで、権限・状態ごとの操作・古い画面・
+  カードの切り替えは `tests/integration/test_pennant_draft_screens.py` で確かめられる）。
+
+実測（開発 DB のコピー・8リーグ 48球団・方式「なし」の世界を作って1シーズン目の公式戦を最後まで進めた。オーナーでログインした
+`django.test.Client`。コピーは消した）:
+
+| 画面・操作 | 応答 | クエリ |
+| --- | --- | --- |
+| GM ホーム（会議の前） | 398ms | 62 |
+| 会議の画面（始める前） | 22ms | 11 |
+| 会議を始める（POST） | 2.2秒 | 109 |
+| 会議の画面（途中・候補 668人） | 206ms（目安 300ms） | 19 |
+| 会議の画面（途中・年齢順） | 210ms | 19 |
+| GM ホーム（会議の途中） | 490ms | 70 |
+| 1手（指名の POST。5回） | 188〜466ms（目安 500ms） | 29 |
+| 残りをお任せ（POST） | 382ms | 29 |
+| 会議の画面（終了） | 214ms | 19 |
+| GM ホーム（会議の後） | 471ms | 70 |
+
+GM ホームは会議の記録があると約90ms 増える（会議の再生。候補の行も作る）。目安の中なので、候補の行を作らない軽い読み方は足していない。
+
+D4 への申し送り:
+
+- 会議の画面の「直近の動き」と「この巡の指名順と結果」は抽選の入札球団を名前で出している（`_draft_move.html`）。「N球団競合」と
+  抽選の記録を足すときは、この部分テンプレートをオフの結果と共有する形に寄せる。
+- 並べ替えのキーを足すときは `sorting.PROSPECT_SORT_KEYS` と `ListedProspect` に足す（画面の見出しは `sort_header`）。
+- 世界の一覧の「会議の途中」は、GM ホームと同じく `view()` の `is_in_progress` で足りるが、世界ごとに会議を再生すると重いので、
+  一覧では会議の記録の有無（`last_seq`）と終わったか（行動の数では分からない）を軽く読む口を設計する。
