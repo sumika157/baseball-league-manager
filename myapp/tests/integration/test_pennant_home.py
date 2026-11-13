@@ -6,7 +6,6 @@
 """
 
 from datetime import date, timedelta
-from unittest import mock
 
 from django.contrib.auth.models import User
 from django.contrib.messages import get_messages
@@ -23,6 +22,7 @@ from myapp.domain.pennant.season import SCREEN_ADVANCE_TARGETS, SeasonPhase, sum
 from myapp.infrastructure import orm_models
 from myapp.presentation.views import build_pennant_season_service, build_world_league_view_service
 
+from ..helpers import max_games_per_advance
 from .test_pennant_advance import SEASON_GAMES, YEAR, SeasonCase
 
 # 1シーズンを終えた世界のシード（同率で終わらないもの）
@@ -338,7 +338,7 @@ class AdvanceTest(HomeCase):
         self.assertEqual(self.games_in(), 0)
 
     def test_the_view_passes_the_limit(self):
-        with mock.patch("myapp.presentation.views.MAX_GAMES_PER_ADVANCE", 3):
+        with max_games_per_advance(3):
             self.start_season()
             self.post_advance("day")  # 1試合は通る
             today = build_pennant_season_service(self.world_a)._context_query.last_played_on()
@@ -406,10 +406,17 @@ class AdvanceOptionsTest(SimpleTestCase):
         self.assertEqual((by_target["week"].end_date, by_target["week"].games), (date(2026, 4, 7), 14))
 
     def test_a_range_over_the_limit_is_not_offered(self):
-        with mock.patch("myapp.application.pennant_home.MAX_GAMES_PER_ADVANCE", 10):
+        """上限（10）を超える範囲は出さず、「上限まで」は上限を超えない日の区切り（5日・10試合）で出す。
+
+        以前は GM ホームの上限だけを差し替えていて、「上限まで」の計算（schedule）は本来の 150 のままだったため、
+        20試合全部が上限を超えるとみなされて「上限まで」も消えていた（#342 で上限をそろえて差し替えるようにした）。
+        """
+        with max_games_per_advance(10):
             options = self.options(self.fixtures(10, per_day=2), today=date(2026, 3, 31))
 
-        self.assertEqual([option.target for option in options], ["day"], "1週間は14試合で上限（10）を超える")
+        by_target = {option.target: option for option in options}
+        self.assertEqual(list(by_target), ["day", "limit"], "1週間は14試合で上限（10）を超える")
+        self.assertEqual((by_target["limit"].end_date, by_target["limit"].games), (date(2026, 4, 5), 10))
 
     def test_a_range_equal_to_another_is_offered_once(self):
         """自軍が毎日試合をするなら、「次の自軍の試合まで」は「1日」と同じ範囲になる。"""

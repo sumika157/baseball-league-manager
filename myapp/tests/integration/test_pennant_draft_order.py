@@ -93,6 +93,9 @@ class SettingsTest(DraftOrderCase):
 
         self.client.force_login(User.objects.create_user("other", password="x"))
         self.assertEqual(self.post_rule("WAIVER").status_code, 403)
+        # 管理ユーザーでも、世界のオーナーでなければ変えられない（ほかの書き込みの画面と同じ）
+        self.client.force_login(User.objects.create_superuser("admin", password="x"))
+        self.assertEqual(self.post_rule("WAIVER").status_code, 403)
         self.assertIs(self.rule_of(self.npb_world), DraftOrderRule.NPB)
 
     def test_the_owner_changes_the_rule(self):
