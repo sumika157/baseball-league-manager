@@ -21,6 +21,7 @@ from datetime import date
 from ..domain.entities import Player, Team
 from ..domain.exceptions import AlreadyClosed, PostseasonNotFinished, SeasonLimitReached, TeamNotFound
 from ..domain.pennant.awards import Award, title_counts
+from ..domain.pennant.development import DevelopmentDecision, DevelopmentPlan
 from ..domain.pennant.draft_meeting import DraftContext
 from ..domain.pennant.draft_order import DraftOrderRule, DraftOrderStrategy, DraftStandings, strategy_for
 from ..domain.pennant.offseason import OffseasonClub, OffseasonPlayer
@@ -33,6 +34,7 @@ from ..domain.pennant.season import is_final_season, is_season_closed, regular_s
 from ..domain.pennant.world import World, league_priority
 from ..domain.repositories import (
     AwardRepository,
+    DevelopmentPlanRepository,
     FixtureRepository,
     LeagueRepository,
     RatingsRepository,
@@ -50,7 +52,13 @@ from .queries import SeasonPlayingTimeQuery, SimulationContextQuery
 
 # 締める処理と会議を始める処理が、外で読んだときと中で書く前とで比べる状態の目印（`OffseasonPhase.state`）
 OffseasonState = tuple[
-    date | None, date | None, tuple[int, int, int, int], ReleasePlan | None, PostseasonFormat, DraftOrderRule
+    date | None,
+    date | None,
+    tuple[int, int, int, int],
+    ReleasePlan | None,
+    DevelopmentPlan | None,
+    PostseasonFormat,
+    DraftOrderRule,
 ]
 
 
@@ -66,6 +74,7 @@ class OffseasonPhase:
         fixtures: FixtureRepository,
         ratings: RatingsRepository,
         releases: ReleasePlanRepository,
+        developments: DevelopmentPlanRepository,
         context_query: SimulationContextQuery,
         postseason: PostseasonBracketReader,
     ) -> None:
@@ -75,6 +84,7 @@ class OffseasonPhase:
         self._fixtures = fixtures
         self._ratings = ratings
         self._releases = releases
+        self._developments = developments
         self._context_query = context_query
         # ポストシーズンが終わるまで締めない・会議を開かない（その年の勝ち上がりを導いて状況を見る）
         self._postseason = postseason
@@ -123,9 +133,10 @@ class OffseasonPhase:
 
     def state(self) -> OffseasonState:
         """締められるかと何を計算するかを決める事実（最後に試合をした日・次の対戦の日・在籍の目印・受け持つ球団の
-        戦力外の指名・ポストシーズンの方式・ドラフトの指名順の規則）。
+        戦力外の指名・育成の指名・ポストシーズンの方式・ドラフトの指名順の規則）。
 
         読み込みの前後で比べる。戦力外の指名は GM が締める処理の計算中にも保存しうるので、ここに入れる（#100）。
+        育成の指名（昇格・満了の自由契約。#170 P2）も同じ（会議の人数の幅を変える）。
         方式も設定の画面で計算中に変えうる（「なし」から変えたのに、その年のポストシーズンを行わずに締めない。#280）。
         指名順の規則も同じ（古い規則で指名した新人を書かない。#198）。
         """
@@ -135,6 +146,7 @@ class OffseasonPhase:
             self._fixtures.first_date(),
             self._teams.roster_signature(),
             release_plan_of(self._releases, world.managed_team_id),
+            development_plan_of(self._developments, world.managed_team_id),
             world.postseason_format,
             world.draft_order_rule,
         )
@@ -149,6 +161,7 @@ class OffseasonInputs:
     - `clubs`: domain の計算に渡す球団（現役の選手と、締める年の能力・出場・実績）
     - `used_names`: 世界の全選手（引退した選手を含む）の名前
     - `manual_releases`: 受け持つ球団の、締める年の戦力外の手動の指名（自動なら空）
+    - `manual_development`: 受け持つ球団の、締める年の育成の手動の指名（選手 id → 扱い。自動なら空。#170 P2）
     - `draft`: ドラフト会議の設定（世界の規則・締める年の公式戦の最終順位・受け持つ球団）
     - `awards`: 締める年のタイトル受賞者（締める処理が表彰として書く。実績の加点にも使った）
     """
@@ -158,6 +171,7 @@ class OffseasonInputs:
     clubs: tuple[OffseasonClub, ...]
     used_names: frozenset[str]
     manual_releases: Mapping[int, frozenset[int]]
+    manual_development: Mapping[int, Mapping[int, DevelopmentDecision]]
     draft: DraftContext
     awards: list[Award]
 
@@ -172,6 +186,7 @@ class OffseasonInputsReader:
         leagues: LeagueRepository,
         ratings: RatingsRepository,
         releases: ReleasePlanRepository,
+        developments: DevelopmentPlanRepository,
         awards: AwardRepository,
         titles: LeagueViewService,
         playing_time: SeasonPlayingTimeQuery,
@@ -181,6 +196,7 @@ class OffseasonInputsReader:
         self._leagues = leagues
         self._ratings = ratings
         self._releases = releases
+        self._developments = developments
         self._awards = awards
         # タイトルの受賞者を導く（世界の範囲の、タイトルの画面と同じサービス）
         self._titles = titles
@@ -218,6 +234,7 @@ class OffseasonInputsReader:
             clubs=clubs,
             used_names=frozenset(player.name for team in teams for player in team.players),
             manual_releases=self.manual_releases(world, year),
+            manual_development=self.manual_development(world, year),
             draft=DraftContext(
                 world.draft_order_rule,
                 self.standings(world, year, {saved_id(team.id): team.league_id for team in teams}),
@@ -262,6 +279,25 @@ class OffseasonInputsReader:
             return {}
         chosen = chosen_releases(self._releases.find_by_team(world.managed_team_id), year)
         return {} if chosen is None else {world.managed_team_id: chosen}
+
+    def manual_development(self, world: World, year: int) -> dict[int, Mapping[int, DevelopmentDecision]]:
+        """締める処理が使う育成の手動の指名（受け持つ球団の、締める年の指名だけ。AI 球団は常に自動。#170 P2）。"""
+        if world.managed_team_id is None:
+            return {}
+        chosen = chosen_development(self._developments.find_by_team(world.managed_team_id), year)
+        return {} if chosen is None else {world.managed_team_id: chosen}
+
+
+def development_plan_of(developments: DevelopmentPlanRepository, team_id: int | None) -> DevelopmentPlan | None:
+    """球団の育成の手動の指名（受け持ちが無い・自動なら None）。"""
+    return None if team_id is None else developments.find_by_team(team_id)
+
+
+def chosen_development(plan: DevelopmentPlan | None, year: int) -> Mapping[int, DevelopmentDecision] | None:
+    """締める年 `year` に使う育成の手動の指名（選手 id → 扱い）。自動・締める年と違う指名なら None。"""
+    if plan is None or plan.year != year:
+        return None
+    return plan.decisions
 
 
 def release_plan_of(releases: ReleasePlanRepository, team_id: int | None) -> ReleasePlan | None:

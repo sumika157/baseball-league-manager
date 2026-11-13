@@ -24,6 +24,7 @@ from myapp.domain.exceptions import (
     PostseasonFormatLocked,
     PostseasonNotFinished,
 )
+from myapp.domain.pennant.development import DevelopmentDecision
 from myapp.domain.pennant.draft_order import DraftOrderRule
 from myapp.domain.pennant.draft_record import DraftMeetingStatus, DraftRecord
 from myapp.domain.pennant.offseason import prepare_meeting
@@ -37,6 +38,7 @@ from myapp.presentation.views import (
     build_pennant_settings_service,
 )
 
+from .test_pennant_midseason import add_development
 from .world_case import YEAR, PostseasonWorldCase
 
 
@@ -248,6 +250,19 @@ class CloseWithTheMeetingTest(DraftServiceCase):
         self.assertIsNone(self.record(), "締めたら会議の記録は消える")
         self.assertFalse(orm_models.PennantDraftAction.objects.exists())
 
+    def test_the_development_choices_reach_the_meeting_and_the_close_in_the_same_way(self):
+        """育成の指名（#170 P2）は会議を始めるときと締めるときの同じ入力（`OffseasonInputsReader`）から読むので、
+        指名した昇格を含めて人数の幅が食い違わない（`DraftChanged` にならない）。"""
+        prospect = add_development(self.world_id, "育成指名", "199", draft_year=YEAR - 1, year=YEAR)
+        self.offseason().set_development({prospect: DevelopmentDecision.PROMOTE}, expected_year=YEAR)
+        self.start()
+        self.auto_complete()
+
+        result = self.offseason().close_season(expected_year=YEAR)
+
+        self.assertGreaterEqual(result.promoted_count, 1)
+        self.assertEqual(orm_models.PlayerStint.objects.get(player_id=prospect).promoted_year, YEAR + 1)
+
     def test_leaving_the_whole_meeting_to_the_ai_drafts_the_same_rookies_as_no_meeting(self):
         savepoint = transaction.savepoint()
         try:
@@ -295,6 +310,26 @@ class LocksTest(DraftServiceCase):
             with self.assertRaises(DraftStarted):
                 change()
         self.assertFalse(orm_models.PennantReleasePlan.objects.exists(), "何も書かない")
+
+    def test_development_choices_are_fixed_after_the_start(self):
+        """育成の指名（昇格・満了の自由契約。#170 P2）も会議の人数の幅を変えるので、始めた後は変えられない。"""
+        offseason = self.offseason()
+        before = offseason.development_view()
+        self.assertTrue(before.can_change)
+        decisions = {row.player.player_id: row.decision for row in before.rows}
+        self.start()
+
+        view = offseason.development_view()
+        self.assertFalse(view.can_change)
+        self.assertIn("ドラフト会議", view.blocker)
+        for change in (
+            lambda: offseason.start_manual_development(expected_year=YEAR),
+            lambda: offseason.set_development(decisions, expected_year=YEAR),
+            lambda: offseason.reset_development(expected_year=YEAR),
+        ):
+            with self.assertRaises(DraftStarted):
+                change()
+        self.assertFalse(orm_models.PennantDevelopmentPlan.objects.exists(), "何も書かない")
 
     def test_the_postseason_format_is_fixed_while_the_meeting_lasts(self):
         """会議はポストシーズンの後に開く（#297 Q1）。会議を始めた後に方式「なし」から変えると、ポストシーズンの前に

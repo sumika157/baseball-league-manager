@@ -17,7 +17,8 @@
   （当てられない行動を書くと、次に開いたときに `DraftChanged` になり、原因と違う案内でやり直しを求めることになる）
 - **やり直し**（`reset`）: コードが変わって保存した会議を再生できないとき（`DraftChanged`）だけ。GM が抽選の結果を
   見てからやり直す操作は作らない（#297 Q5）
-- 会議を始めた後は、戦力外の指名（`PennantOffseasonService.set_releases` など）と指名順の規則（設定）を変えられない
+- 会議を始めた後は、戦力外の指名（`PennantOffseasonService.set_releases` など）・育成の指名（`set_development` など。
+  #170 P2）と指名順の規則（設定）を変えられない
   （`pre_draft_input_blocker`・`draft_order_rule_change_blocker`。どちらも書く直前に会議の有無を読み直す）
 
 見せるのは受け持つ球団のスカウトの見立ての見込みの区分だけ（球団の好み・伸びしろは見せない。#297 Q3・Q4）。
@@ -192,6 +193,7 @@ class PennantDraftService:
             used_names=inputs.used_names,
             draft=inputs.draft,
             manual_releases=inputs.manual_releases,
+            manual_development=inputs.manual_development,
         ).setup
         state = DraftState.open(setup.strategy, setup.slots, setup.pool)
         actions = state.advance_ai(stop_at=managed)
@@ -307,6 +309,7 @@ class PennantDraftService:
                 used_names=inputs.used_names,
                 draft=inputs.draft,
                 manual_releases=inputs.manual_releases,
+                manual_development=inputs.manual_development,
             ).setup
             record.ensure_same_slots(setup.slots)
             record.state(setup.strategy, setup.pool)

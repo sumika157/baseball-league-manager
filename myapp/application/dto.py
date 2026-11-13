@@ -13,6 +13,7 @@ from datetime import date
 from ..domain.entities import jersey_number_in, winning_team_id
 from ..domain.pennant.awards import Award
 from ..domain.pennant.club_plan import PlanSection
+from ..domain.pennant.development import DevelopmentDecision
 from ..domain.pennant.draft import DraftRoute
 from ..domain.pennant.draft_lottery import DraftLotteryRecord, contest_label
 from ..domain.pennant.draft_meeting import DraftActionKind
@@ -2135,6 +2136,10 @@ class SeasonCloseOption:
     # 受け持つ球団の戦力外を手動で指名した人数（保存した指名の件数。締めるときに引退で除かれる選手も数える）。
     # None は自動（締められないときも None）
     release_count: int | None = None
+    # 受け持つ球団の育成の手動の指名（#170 P2）で、支配下に登録する人数と自由契約にする人数（保存した指名の件数）。
+    # None は自動（締められないときも None）
+    development_promote_count: int | None = None
+    development_release_count: int | None = None
 
 
 @dataclass(frozen=True)
@@ -2458,6 +2463,47 @@ class MidseasonRegistrationView:
     registered_limit: int | None
     blocked_reason: str | None
     players: tuple[DevelopmentPlayerRow, ...]
+
+
+@dataclass(frozen=True)
+class DevelopmentPlanRow:
+    """オフの「育成」タブの1行（#170 P2）。`choices` はその選手に選べる扱い（`DevelopmentDecision.choices_for`）、
+    `decision` は保存した扱い（自動のとき・保存した指名に無い選手は「何も変えない」扱い）。"""
+
+    player: DevelopmentPlayerRow
+    choices: tuple[DevelopmentDecision, ...]
+    decision: DevelopmentDecision
+
+
+@dataclass(frozen=True)
+class DevelopmentPlanView:
+    """編成の「育成」タブのオフの形の材料（#170 P2）。公式戦を終えてから締めるまで（ポストシーズン中も）だけ作る。
+
+    `is_manual` が False なら自動（AI と同じ規則で締めるときに決める）。
+    """
+
+    team_id: int
+    team_name: str
+    # 締める年（指名はこの年のオフにだけ使う）
+    year: int
+    is_manual: bool
+    registered_count: int
+    registered_limit: int | None
+    rows: tuple[DevelopmentPlanRow, ...]
+    # 指名を変えられない理由（その年のドラフト会議を始めた。domain の `pre_draft_input_blocker`）。変えられるなら空
+    blocker: str = ""
+
+    @property
+    def can_change(self) -> bool:
+        return not self.blocker
+
+    @property
+    def promote_count(self) -> int:
+        return sum(1 for row in self.rows if row.decision is DevelopmentDecision.PROMOTE)
+
+    @property
+    def release_count(self) -> int:
+        return sum(1 for row in self.rows if row.decision is DevelopmentDecision.RELEASE)
 
 
 @dataclass(frozen=True)

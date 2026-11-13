@@ -1,0 +1,67 @@
+{% comment %}
+編成の「育成」タブのオフの形（#170 P2）。公式戦を終えてから締めるまで出る（ビューが development_plan と development_rows を渡す）。
+自動のあいだは規則の説明と「手動で選ぶ」、手動のあいだ（オーナーだけ）は行ごとの1択（ラジオボタン）と「保存する」「自動に戻す」。両方を同時に出さない。
+選べる扱いは行ごとに domain が決める（row.choices。満了の選手だけ再契約・自由契約、満了でない選手は育成のまま）。
+ラジオボタンは選ばれていないと何も送られないので、表示した全選手の id を shown で送り、いまの育成選手と突き合わせる。
+どのフォームも、画面を開いたときの締める年（expected_year）を送る（締めた後の古い画面から、次の年の指名を作らない）。
+その年のドラフト会議を始めた後（development_plan.blocker がある）は、オーナーにも操作を出さず、指名を読むだけにして理由を出す。
+{% endcomment %}
+{% load scoped %}
+<div class="card mb-4" id="club-development-plan" data-mode="{% if development_plan.is_manual %}manual{% else %}auto{% endif %}">
+  <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span>
+      {{ development_plan.year }}年オフの育成
+      {% if development_plan.is_manual %}<span class="badge bg-primary ms-2">手動（支配下に登録 {{ development_plan.promote_count }}人・自由契約 {{ development_plan.release_count }}人）</span>{% else %}<span class="badge bg-secondary ms-2">自動</span>{% endif %}
+    </span>
+    <span class="d-flex align-items-center gap-2">
+      <span class="stat-muted" style="font-size: 0.8125rem;" data-testid="registered-count">支配下 {{ development_plan.registered_count }}人{% if development_plan.registered_limit is not None %}／上限 {{ development_plan.registered_limit }}人{% endif %}</span>
+      {% if is_owner and development_plan.can_change and not development_plan.is_manual %}
+        <form method="post" action="{% url 'pennant_club' world.world_id %}" class="m-0">
+          {% csrf_token %}
+          <input type="hidden" name="section" value="development_plan">
+          <input type="hidden" name="expected_year" value="{{ development_plan.year }}">
+          <button type="submit" name="action" value="manual" class="btn btn-secondary btn-sm">手動で選ぶ</button>
+        </form>
+      {% endif %}
+    </span>
+  </div>
+  <div class="card-body">
+    {% if development_plan.blocker %}
+      <div class="alert alert-secondary" data-testid="development-plan-blocker">{{ development_plan.blocker }}</div>
+    {% endif %}
+    {% if development_plan.is_manual %}
+      <p class="mb-3">シーズンを締めるときに、選んだとおりに育成選手を支配下に登録し（翌シーズンから支配下。背番号は空いている支配下の番号から自動で決まります）、育成契約が満了する選手を再契約か自由契約にします。新人は、残った支配下の人数に合わせてドラフトが迎えます（戦力外が自動なら、登録する人数の分も空けます）。支配下の上限を超える分は、見込みの低い選手から登録しません（登録しなかった満了の選手は再契約になります）。選んだ選手が引退したときは、引退として記録します。</p>
+    {% else %}
+      <p class="mb-3">シーズンを締めるときに、ほかの球団と同じ規則で決めます。見込みが、支配下に上げると代わりに外れる選手の残す価値を上回る育成選手を、1年に数人まで支配下に登録します。育成契約が満了する選手（育成3年目から毎年）は、見込みが新しい育成の新人に届かなければ自由契約、届けば再契約します。</p>
+    {% endif %}
+    {% if development_rows %}
+      {% if is_owner and development_plan.can_change and development_plan.is_manual %}
+        <form method="post" action="{% url 'pennant_club' world.world_id %}">
+          {% csrf_token %}
+          <input type="hidden" name="section" value="development_plan">
+          <input type="hidden" name="expected_year" value="{{ development_plan.year }}">
+          {% for row, selected in development_rows %}<input type="hidden" name="shown" value="{{ row.player.player_id }}">{% endfor %}
+          {% include 'pennant/_club_development_plan_table.html' with editing=True %}
+          <div class="d-flex gap-2">
+            <button type="submit" name="action" value="save" class="btn btn-primary">保存する</button>
+            <button type="submit" form="club-reset-development-plan" name="action" value="auto" class="btn btn-secondary">自動に戻す</button>
+          </div>
+        </form>
+      {% else %}
+        {% include 'pennant/_club_development_plan_table.html' with editing=False %}
+      {% endif %}
+    {% else %}
+      <p class="stat-muted mb-0">育成選手はいません。</p>
+    {% endif %}
+    {% if is_owner and development_plan.can_change and development_plan.is_manual %}
+      {% if not development_rows %}
+        <button type="submit" form="club-reset-development-plan" name="action" value="auto" class="btn btn-secondary mt-3">自動に戻す</button>
+      {% endif %}
+      <form method="post" id="club-reset-development-plan" action="{% url 'pennant_club' world.world_id %}" class="d-none">
+        {% csrf_token %}
+        <input type="hidden" name="section" value="development_plan">
+        <input type="hidden" name="expected_year" value="{{ development_plan.year }}">
+      </form>
+    {% endif %}
+  </div>
+</div>
