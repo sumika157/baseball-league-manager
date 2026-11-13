@@ -7,7 +7,8 @@
 満了の自由契約は戦力外と同じく `release_player`（退団の経路は戦力外）。再契約は何も書かない。
 
 外国人の獲得（#169）は、戦力外の後・ドラフト会議の前に、AI が球団ごとの候補から選ぶ
-（`domain/pennant/foreign_market.py`。GM の指名は F2）。獲得した外国人は翌年 Y+1 から新外国人として加入し、
+（`domain/pennant/foreign_market.py`。受け持つ球団は GM の指名（`ForeignSigningPlan`。#169 F2）があればそのとおり）。
+獲得した外国人は翌年 Y+1 から新外国人として加入し、
 前所属の区分をプロフィールに保存する。
 
 ドラフトは世界で1回の会議（`domain/pennant/draft_meeting.py`。#198）で、指名順は世界の規則（`World.draft_order_rule`）と
@@ -32,11 +33,13 @@ GM が会議（`PennantDraftService`。#297 D3）を開いた年は、途中な�
 **中では、最後の試合日と次の対戦の日が読み込みの前と変わっていないこと・翌年の能力が無いことを読み直してから書く**。
 変わっていたら（外で計算している間に別のリクエストが締めた・進めた）、書かずに既存の例外
 （`AlreadyClosed` / `SeasonNotFinished`）で断る。編成（`ClubPlan`）は GM が保存しうるので、書く直前に中で読む。
-受け持つ球団の戦力外の指名（`ReleasePlan`）と育成の指名（`DevelopmentPlan`。#170 P2）も GM が保存しうるが、
+受け持つ球団の戦力外の指名（`ReleasePlan`）・育成の指名（`DevelopmentPlan`。#170 P2）・外国人の指名
+（`ForeignSigningPlan`。#169 F2）も GM が保存しうるが、
 こちらは計算に使うので状態の目印
 （`OffseasonPhase.state`）に入れて前後で比べる（変わっていたら断る）。その年の会議の目印（最後の行動の番号。
 `DraftRepository.last_seq`）も前後で比べる（計算している間に会議を始めた・進めたら、古い計算を書かない）。
-指名を決める操作（`set_releases`・`set_development` など）もこのサービスが持つ（指名は公式戦を終えれば
+指名を決める操作（`set_releases`・`set_development`・`set_foreign_signings` など）もこのサービスが持つ
+（指名は公式戦を終えれば
 ポストシーズン中もできる。
 会議を始めた後は変えられない＝`pre_draft_input_blocker`。書くトランザクションの中で会議の有無を読み直す）。
 
@@ -87,7 +90,19 @@ from ..domain.pennant.development import (
 )
 from ..domain.pennant.draft_lottery import DraftKey, lottery_records
 from ..domain.pennant.draft_record import pre_draft_input_blocker
-from ..domain.pennant.foreign_market import ForeignSigning
+from ..domain.pennant.foreign_market import (
+    MAX_FOREIGN_HELD,
+    ForeignCandidate,
+    ForeignSigning,
+    ForeignSigningPlan,
+    SigningPhase,
+    candidate_outlook_grade,
+    draw_candidates,
+    ensure_signable,
+    held_after_chosen_departures,
+    offseason_key,
+    scouting_report,
+)
 from ..domain.pennant.offseason import Draftee, OffseasonPlan, plan_offseason
 from ..domain.pennant.postseason import PostseasonStatus
 from ..domain.pennant.ratings import PlayerRatings
@@ -103,6 +118,7 @@ from ..domain.repositories import (
     DraftLotteryRepository,
     DraftRepository,
     FixtureRepository,
+    ForeignSigningPlanRepository,
     LeagueRepository,
     RatingsRepository,
     ReleasePlanRepository,
@@ -113,6 +129,9 @@ from ..domain.value_objects import DepartureRoute, ForeignPlayerRules, JerseyNum
 from .dto import (
     DevelopmentPlanRow,
     DevelopmentPlanView,
+    ForeignCandidateRow,
+    ForeignHeldRow,
+    ForeignSigningPlanView,
     ReleasePlanView,
     ReleasePlayerRow,
     SeasonClosed,
@@ -128,15 +147,19 @@ from .pennant_offseason_inputs import (
     OffseasonPhase,
     chosen_development,
     chosen_releases,
+    chosen_signings,
     development_plan_of,
     ensure_postseason_settled,
+    foreign_signing_plan_of,
     limits_of,
     managed_team_id,
     release_plan_of,
 )
+from .pennant_outlook import grade_outlook_cell
 from .pennant_postseason import PostseasonBracketReader
+from .pennant_ratings import overall_cell, rating_cells
 from .pennant_season import AtomicBlock
-from .queries import DevelopmentRosterQuery, SimulationContextQuery
+from .queries import DevelopmentRosterQuery, PlayerNameQuery, SimulationContextQuery
 
 
 def _saved_id(value: int | None) -> int:
@@ -186,6 +209,8 @@ class PennantOffseasonService:
         releases: ReleasePlanRepository,
         developments: DevelopmentPlanRepository,
         development_roster: DevelopmentRosterQuery,
+        foreign_signings: ForeignSigningPlanRepository,
+        names: PlayerNameQuery,
         awards: AwardRepository,
         championships: ChampionshipRepository,
         drafts: DraftRepository,
@@ -209,6 +234,9 @@ class PennantOffseasonService:
         # 受け持つ球団の育成の指名（#170 P2）と、その「育成」タブの材料（育成選手の一覧）
         self._developments = developments
         self._development_roster = development_roster
+        # 受け持つ球団の外国人の指名（#169 F2）と、候補の名前を世界の選手と重ねないための名前の一覧
+        self._foreign_signings = foreign_signings
+        self._names = names
         self._awards = awards
         self._championships = championships
         # その年のドラフト会議の記録（GM が開いた会議。締めるときに再生して消す。#297 D3）
@@ -248,6 +276,7 @@ class PennantOffseasonService:
         chosen = chosen_releases(release_plan_of(self._releases, world.managed_team_id), year)
         development = development_plan_of(self._developments, world.managed_team_id)
         manual = development if chosen_development(development, year) is not None else None
+        signings = chosen_signings(foreign_signing_plan_of(self._foreign_signings, world.managed_team_id), year)
         return SeasonCloseOption(
             year=year,
             next_year=year + 1,
@@ -255,6 +284,7 @@ class PennantOffseasonService:
             release_count=None if chosen is None else len(chosen),
             development_promote_count=None if manual is None else manual.count(DevelopmentDecision.PROMOTE),
             development_release_count=None if manual is None else manual.count(DevelopmentDecision.RELEASE),
+            foreign_signing_count=None if signings is None else len(signings),
         )
 
     def close_season(self, *, expected_year: int | None = None) -> SeasonClosed:
@@ -523,6 +553,115 @@ class PennantOffseasonService:
             members.append(DevelopmentMember(player.player_id, player.name, is_contract_expiring(start, year)))
         return members
 
+    # --- 外国人の指名（受け持つ球団だけ。#169 F2。戦力外の指名と同じ時期・同じ検査） ---
+
+    def foreign_view(self) -> ForeignSigningPlanView:
+        """編成の「外国人」タブの材料。公式戦の途中・締めた後・最終シーズンは例外（ポストシーズン中は出す）。
+
+        - `SeasonNotFinished` / `AlreadyClosed` / `SeasonLimitReached`: 指名できない（タブを出さない）
+        - `TeamNotFound`: 受け持つ球団が無い
+
+        候補は締める処理と同じ引き方（`draw_candidates`。名前は世界の全選手と重ならない）で、見せるのは受け持つ球団の
+        スカウトの見立てだけ。今の外国人の枠の数え方は翌シーズン（締める年 + 1）の扱い（戦力外の検査と同じ）。
+        """
+        world = self._worlds.find_by_id(self._world_id)
+        year, team_id = self._release_target(None)
+        teams = self._context_query.teams()
+        team = _team_of(teams, team_id)
+        held = self._held_foreign(team, year)
+        exemptions = self._fa_exemptions.for_year([row.player_id for row in held], year + 1)
+        keys = chosen_signings(self._foreign_signings.find_by_team(team_id), year)
+        rows = []
+        for candidate in self._candidates(world, team_id, year):
+            report = scouting_report(candidate, world_seed=world.seed)
+            rows.append(
+                ForeignCandidateRow(
+                    index=candidate.key.index,
+                    name=candidate.name,
+                    position=candidate.position,
+                    age=candidate.age,
+                    background=candidate.background,
+                    overall=overall_cell(report.ratings),
+                    cells=rating_cells(report.ratings),
+                    outlook=grade_outlook_cell(candidate_outlook_grade(candidate, report)),
+                    is_chosen=keys is not None and candidate.key in keys,
+                )
+            )
+        return ForeignSigningPlanView(
+            team_id=team_id,
+            team_name=team.name,
+            year=year,
+            is_manual=keys is not None,
+            players=tuple(
+                replace(row, counts_toward_quota=exemptions.counts(row.player_id, is_foreign_player=True))
+                for row in held
+            ),
+            held_limit=MAX_FOREIGN_HELD,
+            active_rules=team.foreign_rules,
+            candidates=tuple(rows),
+            blocker=self._release_blocker(year) or "",
+        )
+
+    def start_manual_foreign(self, *, expected_year: int | None) -> None:
+        """外国人の指名を手動にする（0人から選ぶ）。すでに手動なら何も変えない。会議を始めた後は `DraftStarted`。"""
+        year, team_id = self._release_target(expected_year)
+        with self._atomic():
+            self._ensure_releases_open(year)
+            if chosen_signings(self._foreign_signings.find_by_team(team_id), year) is None:
+                self._foreign_signings.save(ForeignSigningPlan(team_id=team_id, year=year, keys=frozenset()))
+
+    def set_foreign_signings(self, indices: Sequence[int], *, expected_year: int | None) -> None:
+        """獲得する候補（締める年のオフの候補の添字）を手動で指名する（丸ごと置き換える。0人も可）。
+        成立しなければ `InvalidSigning`（候補にいない・重複・保有の上限）、会議を始めた後は `DraftStarted`。
+
+        保有の上限は、いまの外国人（育成を含む）から、手動で戦力外・育成の自由契約に指名した外国人を除いた人数で
+        確かめる（締めるときは引退・戦力外の後の人数で数え直し、収まらない分は獲得しない。`confirm_chosen_signings`）。
+        """
+        year, team_id = self._release_target(expected_year)
+        world = self._worlds.find_by_id(self._world_id)
+        held = self._held_foreign(_team_of(self._context_query.teams(), team_id), year)
+        leaving = set(chosen_releases(self._releases.find_by_team(team_id), year) or ())
+        decisions = chosen_development(self._developments.find_by_team(team_id), year) or {}
+        leaving |= {player_id for player_id, decision in decisions.items() if decision is DevelopmentDecision.RELEASE}
+        keys = [offseason_key(year, index) for index in indices]
+        ensure_signable(
+            keys,
+            self._candidates(world, team_id, year),
+            held_foreign=held_after_chosen_departures([row.player_id for row in held], leaving),
+            phase=SigningPhase.OFFSEASON,
+        )
+        plan = ForeignSigningPlan(team_id=team_id, year=year, keys=frozenset(keys))
+        with self._atomic():
+            self._ensure_releases_open(year)
+            self._foreign_signings.save(plan)
+
+    def reset_foreign(self, *, expected_year: int | None) -> None:
+        """外国人の指名をお任せに戻す。すでにお任せなら何も変わらない。会議を始めた後は `DraftStarted`。"""
+        year, team_id = self._release_target(expected_year)
+        with self._atomic():
+            self._ensure_releases_open(year)
+            self._foreign_signings.save(ForeignSigningPlan(team_id=team_id, year=year, keys=None))
+
+    def _candidates(self, world: World, team_id: int, year: int) -> tuple[ForeignCandidate, ...]:
+        """受け持つ球団の、締める年のオフの候補（締める処理と同じ引き方。名前は世界の全選手と重ならない）。"""
+        return draw_candidates(
+            team_id, year=year, phase=SigningPhase.OFFSEASON, world_seed=world.seed, used_names=self._names.names()
+        )
+
+    def _held_foreign(self, team: SimulationTeam, year: int) -> list[ForeignHeldRow]:
+        """球団にいま在籍する外国人（支配下、続けて育成）。枠の数え方は呼び手が入れる（ここでは数える扱い）。"""
+        registered = [
+            ForeignHeldRow(p.player_id, p.name, p.position, is_development=False, counts_toward_quota=True)
+            for p in team.players
+            if p.is_foreign
+        ]
+        development = [
+            ForeignHeldRow(p.player_id, p.name, p.tenure.position, is_development=True, counts_toward_quota=True)
+            for p in self._development_roster.for_team(team.team_id, year).players
+            if p.tenure.profile.is_foreign_player
+        ]
+        return registered + development
+
     # --- 検査（`OffseasonPhase` が出典。ここは世界を渡すだけ） ---
 
     def _check(
@@ -552,6 +691,7 @@ class PennantOffseasonService:
             used_names=inputs.used_names,
             manual_releases=inputs.manual_releases,
             manual_development=inputs.manual_development,
+            manual_signings=inputs.manual_signings,
             draft=inputs.draft,
             meeting=self._drafts.find(year),
         )
@@ -591,6 +731,8 @@ class PennantOffseasonService:
         self._releases.delete_all()
         # 育成の指名も使い終わった（昇格の事実は在籍の昇格の年、自由契約は退団の経路に残る。#170 P2）
         self._developments.delete_all()
+        # 外国人の指名も使い終わった（獲得の事実は在籍の経路と前所属に残る。#169 F2）
+        self._foreign_signings.delete_all()
         # その年のドラフト会議の記録も使い終わった（指名の事実は新人のプロフィールと在籍の経路に残る。#297 D3）
         self._drafts.remove(year)
         # 抽選の経過は、会議の記録が消えるとどこからも導けないので、指名された選手に結びつけて残す

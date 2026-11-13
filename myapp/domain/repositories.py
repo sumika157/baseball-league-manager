@@ -23,6 +23,7 @@ from .pennant.development import DevelopmentPlan
 from .pennant.draft_lottery import DraftLotteryRecord
 from .pennant.draft_meeting import DraftAction
 from .pennant.draft_record import DraftRecord
+from .pennant.foreign_market import ForeignSigningPlan
 from .pennant.ratings import PlayerRatings
 from .pennant.reinforcement import MidseasonRegistration
 from .pennant.release import ReleasePlan
@@ -308,6 +309,30 @@ class DevelopmentPlanRepository(Protocol):
 
         範囲の外の球団には書けない（TeamNotFound）。実データの範囲には書けない（InvalidWorld）。
         範囲の外の選手は書けない（PlayerNotFound）。
+        """
+        ...
+
+    def delete_all(self) -> None:
+        """範囲の指名をすべて消す（締める処理が、使い終わった指名と締める年の違う指名を消す）。"""
+        ...
+
+
+@runtime_checkable
+class ForeignSigningPlanRepository(Protocol):
+    """GM の外国人のオフの指名（`ForeignSigningPlan`。#169 F2）。球団ごとに1つで、お任せ（`keys` が None）は
+    行を持たない。
+
+    ペナントの世界にだけ置ける。締める処理が使い終わったら消す（指名は入力で、事実は在籍の経路と前所属に残る）。
+    """
+
+    def find_by_team(self, team_id: int) -> ForeignSigningPlan | None:
+        """その球団の手動の指名。お任せなら None。範囲の外の球団は TeamNotFound。"""
+        ...
+
+    def save(self, plan: ForeignSigningPlan) -> ForeignSigningPlan:
+        """指名を丸ごと置き換える。お任せ（`keys` が None）なら保存済みの行を消す。
+
+        範囲の外の球団には書けない（TeamNotFound）。実データの範囲には書けない（InvalidWorld）。
         """
         ...
 

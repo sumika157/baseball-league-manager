@@ -29,6 +29,7 @@ from ..application.dto import (
     ClubPlanView,
     DevelopmentPlanView,
     DraftStep,
+    ForeignSigningPlanView,
     GameEditData,
     GameEditPlateAppearance,
     Listing,
@@ -74,6 +75,7 @@ from ..domain.exceptions import (
     GameNotFound,
     InvalidDevelopmentPlan,
     InvalidReleasePlan,
+    InvalidSigning,
     InvalidWorld,
     LeagueNotFound,
     PlayerNotFound,
@@ -136,6 +138,7 @@ from ..infrastructure.repositories import (
     DjangoDraftLotteryRepository,
     DjangoDraftRepository,
     DjangoFixtureRepository,
+    DjangoForeignSigningPlanRepository,
     DjangoGameRepository,
     DjangoLeagueRepository,
     DjangoMidseasonRegistrationRepository,
@@ -152,6 +155,8 @@ from .club_input import (
     DEVELOPMENT_PLAN_SECTION,
     DEVELOPMENT_SECTION,
     DEVELOPMENT_TAB,
+    FOREIGN_SECTION,
+    FOREIGN_TAB,
     RELEASE_SECTION,
     RELEASE_TAB,
     SECTIONS,
@@ -159,6 +164,7 @@ from .club_input import (
     ClubFormState,
     ClubInputError,
     DevelopmentFormState,
+    ForeignFormState,
     LineupSlotInput,
     NoticeLink,
     ReleaseFormState,
@@ -168,12 +174,14 @@ from .club_input import (
     parse_closer,
     parse_development,
     parse_expected_year,
+    parse_foreign_signings,
     parse_lineup,
     parse_midseason_promotion,
     parse_releases,
     parse_rotation,
     player_option,
     read_development,
+    read_foreign_signings,
     read_releases,
     tab_of,
 )
@@ -548,6 +556,8 @@ def build_pennant_offseason_service(world_id: int) -> PennantOffseasonService:
         releases=parts.releases,
         developments=parts.developments,
         development_roster=DjangoDevelopmentRosterQuery(parts.scope),
+        foreign_signings=parts.foreign_signings,
+        names=DjangoPlayerNameQuery(parts.scope),
         awards=parts.awards,
         championships=DjangoChampionshipRepository(parts.scope),
         drafts=parts.drafts,
@@ -599,6 +609,7 @@ class _OffseasonParts:
         self.ratings = DjangoRatingsRepository(self.scope)
         self.releases = DjangoReleasePlanRepository(self.scope)
         self.developments = DjangoDevelopmentPlanRepository(self.scope)
+        self.foreign_signings = DjangoForeignSigningPlanRepository(self.scope)
         self.awards = DjangoAwardRepository(self.scope)
         self.drafts = DjangoDraftRepository(self.scope)
         self.context_query = DjangoSimulationContextQuery(self.scope)
@@ -615,6 +626,7 @@ class _OffseasonParts:
             ratings=self.ratings,
             releases=self.releases,
             developments=self.developments,
+            foreign_signings=self.foreign_signings,
             context_query=self.context_query,
             postseason=self.brackets,
         )
@@ -626,6 +638,7 @@ class _OffseasonParts:
             ratings=self.ratings,
             releases=self.releases,
             developments=self.developments,
+            foreign_signings=self.foreign_signings,
             awards=self.awards,
             titles=self.titles,
             playing_time=DjangoSeasonPlayingTimeQuery(self.scope),
@@ -1489,6 +1502,7 @@ def pennant_club(request, world_id):
     受け持つ球団の編成を、区画ごとに自動か手動のどちらかで見せる。「戦力外」は締めるときの戦力外の指名（自動か手動）。
     補強の窓（シーズンを締めた後〜7月31日）の中だけ「育成」タブ（育成選手を行ごとに支配下に登録する。#170 P3a）。
     公式戦を終えてから締めるまでは「育成」タブをオフの形（育成選手のオフの扱いの指名。自動か手動。#170 P2）で出す。
+    同じ時期に「外国人」タブ（外国人のオフの獲得の指名。お任せか手動。#169 F2）も出す。
 
     GET は誰でも（読み取り専用）、POST はオーナーだけ（未ログインはログインへ、ほかの人は 403）。
     POST は区画ごとに「手動にする」「保存する」「自動に戻す」を受け、成功したら同じタブへ戻る
@@ -1518,6 +1532,8 @@ def _post_club(request, world: WorldContext):
         return _post_development(request, world)
     if request.POST.get("section") == DEVELOPMENT_PLAN_SECTION:
         return _post_development_plan(request, world)
+    if request.POST.get("section") == FOREIGN_SECTION:
+        return _post_foreign(request, world)
     section = SECTIONS.get(request.POST.get("section", ""))
     action = request.POST.get("action", "")
     if section is None or action not in ACTIONS:
@@ -1650,6 +1666,48 @@ def _post_development_plan(request, world: WorldContext):
     return redirect(f"{club_url}?tab={DEVELOPMENT_TAB}")
 
 
+def _post_foreign(request, world: WorldContext):
+    """「外国人」タブの操作（手動で選ぶ・保存する・お任せに戻す。#169 F2）。どれも画面を開いたときの締める年を
+    送ってもらう。
+
+    指名として成立しない（保有の上限など）・古い画面なら、チェックを残して再表示する。指名できなくなっていたら
+    （別の画面で締めた・会議を始めた）、理由を出して編成の画面へ戻す。
+    """
+    club_url = reverse("pennant_club", args=[world.world_id])
+    action = request.POST.get("action", "")
+    if action not in ACTIONS:
+        messages.error(request, "その操作はできません。")
+        return redirect(club_url)
+    service = build_pennant_offseason_service(world.world_id)
+    try:
+        expected_year = parse_expected_year(request.POST)
+        if action == ACTION_AUTO:
+            service.reset_foreign(expected_year=expected_year)
+            messages.success(request, "外国人の獲得をお任せに戻しました。")
+        elif action == ACTION_MANUAL:
+            service.start_manual_foreign(expected_year=expected_year)
+            messages.success(request, "外国人の獲得を手動にしました。獲得する候補を選んで保存してください。")
+        else:
+            chosen = parse_foreign_signings(request.POST, service.foreign_view())
+            service.set_foreign_signings(chosen, expected_year=expected_year)
+            messages.success(request, f"外国人の獲得の指名を保存しました（{len(chosen)}人）。")
+    except (ClubInputError, InvalidSigning) as error:
+        state = ForeignFormState(error=str(error), checked=read_foreign_signings(request.POST))
+        return _render_club(request, world, FOREIGN_TAB, foreign_state=state, status=400)
+    except DomainError as error:
+        messages.error(request, str(error))
+        return redirect(club_url)
+    return redirect(f"{club_url}?tab={FOREIGN_TAB}")
+
+
+def _foreign_view(world: WorldContext) -> ForeignSigningPlanView | None:
+    """「外国人」タブの材料。指名できないとき（公式戦の途中・締めた後・最終シーズン）・受け持ちが無いときは None。"""
+    try:
+        return build_pennant_offseason_service(world.world_id).foreign_view()
+    except DomainError:
+        return None
+
+
 def _development_plan_view(world: WorldContext) -> DevelopmentPlanView | None:
     """「育成」タブのオフの形の材料。指名できないとき（公式戦の途中・締めた後・最終シーズン）・受け持ちが無いときは
     None。"""
@@ -1722,6 +1780,7 @@ def _render_club(
     state: ClubFormState | None = None,
     release_state: ReleaseFormState | None = None,
     development_state: DevelopmentFormState | None = None,
+    foreign_state: ForeignFormState | None = None,
     status: int = 200,
 ):
     """編成の画面を描く。`state` / `release_state` があるときは、保存に失敗した入力を残して出す。
@@ -1734,6 +1793,7 @@ def _render_club(
     出せないときに `?tab=development` が来たら既定のタブに落とす（「戦力外」タブとは時期が重ならない）。
     「育成」タブは、公式戦を終えてから締めるまでもオフの形（育成の指名。#170 P2。条件は「戦力外」タブと同じ）で出す。
     補強の窓とは時期が重ならない（窓は公式戦の対戦が残っているときだけ開く）。
+    「外国人」タブ（外国人のオフの指名。#169 F2）は「戦力外」タブと同じ条件で出す（`can_choose_releases`）。
     """
     # ほかのタブではタブを出すかだけを決める（指名できるか。支配下の一覧までは読まない）
     release = None
@@ -1741,10 +1801,14 @@ def _render_club(
     development = None
     development_plan = None
     has_development_tab = False
+    foreign = None
     if world.managed_team_id is not None:
         if tab == RELEASE_TAB:
             release = _release_view(world)
             has_release_tab = release is not None
+        elif tab == FOREIGN_TAB:
+            foreign = _foreign_view(world)
+            has_release_tab = foreign is not None
         else:
             has_release_tab = build_pennant_offseason_service(world.world_id).can_choose_releases()
         if tab == DEVELOPMENT_TAB:
@@ -1759,6 +1823,8 @@ def _render_club(
         tab = DEFAULT_TAB
     if tab == DEVELOPMENT_TAB and development is None and development_plan is None:
         tab = DEFAULT_TAB
+    if tab == FOREIGN_TAB and foreign is None:
+        tab = DEFAULT_TAB
     context: dict = {
         "is_owner": _is_owner(request, world),
         "tab": tab,
@@ -1769,6 +1835,9 @@ def _render_club(
         "development": development,
         "development_plan": development_plan,
         "has_development_tab": has_development_tab,
+        "foreign": foreign,
+        # 「外国人」タブは「戦力外」タブと同じ条件（`can_choose_releases`）なので、それを使い回す
+        "has_foreign_tab": has_release_tab,
     }
     if world.managed_team_id is None:
         return render(request, "pennant/club.html", {**context, "world": world}, status=status)
@@ -1807,7 +1876,7 @@ def _render_club(
     # 「育成」タブも使わない（材料は `development`）
     details = (
         ()
-        if tab in (RELEASE_TAB, DEVELOPMENT_TAB)
+        if tab in (RELEASE_TAB, DEVELOPMENT_TAB, FOREIGN_TAB)
         else build_club_details_service(world.world_id).details(world.managed_team_id, view.year, view.players)
     )
     batters = [
@@ -1852,6 +1921,16 @@ def _render_club(
             )
             for row in development_plan.rows
         ]
+    if foreign_state is not None:
+        # 外国人の指名の保存に失敗した理由（指名できなくなってタブを出せないときも、既定のタブの上に出す）
+        context["error"] = foreign_state.error
+    if foreign is not None:
+        # チェックしている候補（保存に失敗したときは送られた値だけを残し、保存済みの指名で埋めない）
+        context["foreign_checked"] = (
+            foreign_state.checked
+            if foreign_state is not None
+            else frozenset(row.index for row in foreign.candidates if row.is_chosen)
+        )
     if tab == RELEASE_TAB and release is not None:
         context.update(
             release_players=build_club_details_service(world.world_id).details(
