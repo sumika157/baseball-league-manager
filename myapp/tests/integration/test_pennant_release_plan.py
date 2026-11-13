@@ -112,7 +112,7 @@ class CloseWithManualReleasesTest(ReleasePlanCase):
 
 class ReleasePlanChangedWhileClosingTest(ReleasePlanCase):
     def test_a_plan_saved_during_the_calculation_stops_the_close(self):
-        """外で計算している間に GM が指名を変えたら、古い計算を書かずに断る（`_state()` に指名が入る。#100）。"""
+        """外で計算している間に GM が指名を変えたら、古い計算を書かずに断る（状態の目印に指名が入る。#100）。"""
         service = build_pennant_offseason_service(world_scope(self.world_a))
         original = service._prepare
 

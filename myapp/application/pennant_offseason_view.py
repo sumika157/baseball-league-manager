@@ -3,21 +3,31 @@
 締める処理（`PennantOffseasonService`）は結果を保存しない。引退・退団・戦力外の選手、新人、昇格した選手（#170）、
 残った選手の能力の変化は、
 在籍・プロフィール・能力の行から `OffseasonQuery` が導く。ここはその材料を画面向けの行にするだけで、
-集約（`Team`）は組み立てない。
+集約（`Team`）は組み立てない。ドラフトの盤（巡 × 球団）も新人の指名（`DraftPick`）と在籍から並べる（`draft_board`）。
+例外はドラフトの抽選の経過で、締めると会議の記録が消えて導けないので、締める処理が残した記録（`DraftLotteryRecord`）を
+読む（当たった球団は記録に持たず、新人の在籍の球団から。#298 D4）。
 
 能力の変化と総合の出典は domain（`rating_change`・`overall_value`）、新人と獲得した外国人の経路の出典は
-`foreign_market.newcomer_route_label`（#169）。
+`foreign_market.newcomer_route_label`（#169）、抽選の表記は `draft_lottery.contest_label`。
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
+from ..domain.pennant.draft_lottery import DraftLotteryRecord
 from ..domain.pennant.foreign_market import newcomer_route_label
 from ..domain.pennant.initial_ratings import age_at_season_start
 from ..domain.pennant.offseason import rating_change
 from ..domain.pennant.season import is_season_closed
 from ..domain.repositories import WorldRepository
 from ..domain.value_objects import DepartureRoute, Season
+from .draft_board import BoardPick, draft_board
 from .dto import (
+    DraftBoard,
+    DraftBoardCell,
+    DraftBoardColumn,
+    DraftLotteryView,
     LeagueOption,
     OffseasonChangeRow,
     OffseasonFacts,
@@ -58,7 +68,14 @@ class OffseasonViewService:
         selected = self._selected_league(facts, league_id, world.default_league_id)
 
         retired = [self._retired_row(fact, year) for fact in facts.retired]
-        rookies = [self._rookie_row(fact, year) for fact in facts.rookies]
+        names = {team.id: team.name for team in facts.teams}
+        # 抽選で当たった球団は、指名された新人の最初の在籍の球団（記録には持たない）
+        drafted_by = {fact.player_id: fact.team_name for fact in facts.rookies}
+        lotteries = {
+            record.player_id: _lottery_view(record, names, winner=drafted_by.get(record.player_id, ""))
+            for record in facts.lotteries
+        }
+        rookies = [self._rookie_row(fact, year, lotteries.get(fact.player_id)) for fact in facts.rookies]
         promoted = [self._promoted_row(fact, year) for fact in facts.promoted]
         changes = sorted(
             (self._change_row(fact, year) for fact in facts.retained), key=lambda row: (-row.delta, row.player_id)
@@ -87,6 +104,7 @@ class OffseasonViewService:
             decliners=tuple(
                 sorted((row for row in changes if row.delta < 0), key=lambda r: (r.delta, r.player_id))[:TOP_CHANGES]
             ),
+            board=_offseason_board(facts, year, selected, own_id, lotteries),
         )
 
     @staticmethod
@@ -128,7 +146,7 @@ class OffseasonViewService:
         )
 
     @staticmethod
-    def _rookie_row(fact: OffseasonPlayerFact, year: int) -> OffseasonRookieRow:
+    def _rookie_row(fact: OffseasonPlayerFact, year: int, lottery: DraftLotteryView | None) -> OffseasonRookieRow:
         return OffseasonRookieRow(
             player_id=fact.player_id,
             name=fact.name,
@@ -140,6 +158,7 @@ class OffseasonViewService:
             route=newcomer_route_label(fact.profile),
             rating=overall_cell(fact.after) if fact.after is not None else None,
             pick="" if fact.profile.draft is None else fact.profile.draft.order_label,
+            lottery=lottery,
         )
 
     @staticmethod
@@ -158,6 +177,47 @@ class OffseasonViewService:
             delta_label=f"{delta:+.1f}",
             delta=delta,
         )
+
+
+def _lottery_view(record: DraftLotteryRecord, names: Mapping[int, str], *, winner: str) -> DraftLotteryView:
+    return DraftLotteryView(
+        bidders=tuple(names.get(team_id, "") for team_id in record.bidder_ids),
+        winner=winner,
+        bidder_ids=record.bidder_ids,
+    )
+
+
+def _offseason_board(
+    facts: OffseasonFacts,
+    year: int,
+    league_id: int | None,
+    own_id: int | None,
+    lotteries: Mapping[int, DraftLotteryView],
+) -> DraftBoard | None:
+    """選んだリーグのドラフトの盤（巡 × 球団。#298 D4）。
+
+    セルはその年の指名で入団した新人（順位の無い新人は置かない）。"""
+    columns = [
+        DraftBoardColumn(team_id=team.id, team_name=team.name, is_mine=team.id == own_id)
+        for team in facts.teams
+        if team.league_id == league_id
+    ]
+    picks = [
+        BoardPick(
+            round_number=pick.round,
+            is_development=pick.is_development,
+            cell=DraftBoardCell(
+                team_id=fact.team_id,
+                name=fact.name,
+                position=fact.position.label,
+                player_id=fact.player_id,
+                lottery=lotteries.get(fact.player_id),
+            ),
+        )
+        for fact in facts.rookies
+        if (pick := fact.profile.draft) is not None and pick.round is not None and pick.year == year
+    ]
+    return draft_board(columns, picks)
 
 
 def _first(leagues: tuple[LeagueOption, ...]) -> int | None:

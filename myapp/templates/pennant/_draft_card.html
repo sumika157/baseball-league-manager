@@ -1,0 +1,16 @@
+{% load scoped %}{% comment %}
+GM ホームの「ドラフト会議」のカード（#297 D3）。会議が途中のオーナーにだけ、締めるカードの代わりに出す（home.html が出し分ける。
+途中は締められないので、締めるボタンと並べない）。draft は DraftMeetingView。
+{% endcomment %}
+<div class="card mb-4" id="draft-meeting">
+  <div class="card-header">{{ draft.year }}年 ドラフト会議（途中）</div>
+  <div class="card-body">
+    {% if draft.changed %}
+      <p class="mb-2">会議を始めた後に候補か指名の人数が変わったため、会議を続けられません。会議の画面でやり直してください。</p>
+    {% elif draft.turn %}
+      <p class="mb-2"><span class="stat-key">{{ draft.turn.round_label }}{% if draft.turn.is_bid %}の入札{% endif %}</span> · {% if draft.turn.is_mine %}あなたの番{% else %}{{ draft.turn.team_name }}の番{% endif %}</p>
+    {% endif %}
+    <p class="mb-3 stat-muted">会議が終わると、シーズンを締められます。</p>
+    <a href="{% workspace_url 'pennant_draft' world.world_id draft.year %}" class="btn btn-primary">会議へ</a>
+  </div>
+</div>

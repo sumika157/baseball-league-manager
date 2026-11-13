@@ -26,7 +26,7 @@ from .test_pennant_home import HomeCase
 DECIDE_RETIREMENTS = "myapp.domain.pennant.offseason.decide_retirements"
 # 戦力外も差し替えて「引退させた選手だけが抜ける」前提にする（本物の規則は外国人を入れ替えうる）
 DECIDE_RELEASES = "myapp.domain.pennant.offseason.decide_releases"
-IS_FINAL_SEASON = "myapp.application.pennant_offseason.is_final_season"
+IS_FINAL_SEASON = "myapp.application.pennant_offseason_inputs.is_final_season"
 
 
 class ScreenCase(HomeCase):

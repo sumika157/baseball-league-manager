@@ -49,9 +49,11 @@ from myapp.domain.entities import Stadium as DomainStadium
 from myapp.domain.entities import Team as DomainTeam
 from myapp.domain.exceptions import (
     DomainError,
+    DraftConflict,
     GameNotFound,
     InvalidAward,
     InvalidChampionship,
+    InvalidDraftAction,
     InvalidInvitation,
     InvalidWorkspace,
     InvalidWorld,
@@ -62,6 +64,10 @@ from myapp.domain.exceptions import (
 )
 from myapp.domain.pennant.awards import Award
 from myapp.domain.pennant.championship import Championship
+from myapp.domain.pennant.draft_lottery import DraftLotteryRecord
+from myapp.domain.pennant.draft_meeting import DraftAction, DraftActionKind, DraftSlot
+from myapp.domain.pennant.draft_record import DraftRecord
+from myapp.domain.pennant.reinforcement import MidseasonRegistration
 from myapp.domain.pennant.release import ReleasePlan
 from myapp.domain.pennant.world import MAX_WORLDS_PER_OWNER, WORLD_LIMIT_MESSAGE, World, WorldScope
 from myapp.domain.services.rankings import Title
@@ -80,6 +86,7 @@ from myapp.infrastructure.queries import (
     DjangoAwardQuery,
     DjangoChampionshipQuery,
     DjangoClubTenureQuery,
+    DjangoDevelopmentRosterQuery,
     DjangoFieldingTotalsQuery,
     DjangoGameListQuery,
     DjangoHomeStadiumQuery,
@@ -87,6 +94,7 @@ from myapp.infrastructure.queries import (
     DjangoOffseasonQuery,
     DjangoPennantActivityQuery,
     DjangoPlayerFieldingQuery,
+    DjangoPlayerNameQuery,
     DjangoPlayerSearchQuery,
     DjangoPlayerStatsQuery,
     DjangoPostseasonQuery,
@@ -107,10 +115,13 @@ from myapp.infrastructure.repositories import (
     DjangoAwardRepository,
     DjangoChampionshipRepository,
     DjangoClubPlanRepository,
+    DjangoDraftLotteryRepository,
+    DjangoDraftRepository,
     DjangoFixtureRepository,
     DjangoGameRepository,
     DjangoInvitationRepository,
     DjangoLeagueRepository,
+    DjangoMidseasonRegistrationRepository,
     DjangoRatingsRepository,
     DjangoReleasePlanRepository,
     DjangoStadiumRepository,
@@ -210,6 +221,7 @@ class WorkspaceCase(BaseCase):
     b_award_player_id: int
     b_award_team_id: int
     b_world_team_id: int
+    b_world_player_id: int
     a_world_stray_team_id: int
     a_declaration_year: int
 
@@ -260,6 +272,7 @@ class WorkspaceCase(BaseCase):
             )
         cls._plant_b_award()
         cls._plant_b_postseason()
+        cls._plant_b_draft_rows()
         cls._plant_stray_stadiums()
         cls._plant_a_declaration()
 
@@ -315,6 +328,34 @@ class WorkspaceCase(BaseCase):
         """
         cls.b_world_team_id = _plant_postseason(WorldScope.pennant(cls.workspace_b.id, cls.b_world_id), B_YEAR)
         orm_models.PennantChampionship.objects.create(team_id=cls.b_world_team_id, year=B_YEAR)
+
+    @classmethod
+    def _plant_b_draft_rows(cls) -> None:
+        """B の世界の、ドラフト会議の記録（会議・人数の幅・行動）・締めた年の抽選と入札・期中の支配下登録。
+
+        #360・#356。どれも締める処理・会議・登録の画面を回さずに置くので ORM で直接置く。抽選の年は指名された選手の
+        指名の年で決まるので、選手の指名の年を `B_YEAR` にしておく。
+        """
+        stint = orm_models.PlayerStint.objects.filter(team_id=cls.b_world_team_id).order_by("-id").first()
+        assert stint is not None, "B の世界の球団に選手が写っていない"
+        cls.b_world_player_id = stint.player_id
+        orm_models.Player.objects.filter(id=stint.player_id).update(draft_year=B_YEAR)
+        draft = orm_models.PennantDraft.objects.create(world_id=cls.b_world_id, year=B_YEAR, signature="b")
+        orm_models.PennantDraftSlot.objects.create(
+            draft=draft, team_id=cls.b_world_team_id, minimum=1, maximum=1, development_max=0
+        )
+        orm_models.PennantDraftAction.objects.create(
+            draft=draft, seq=1, team_id=cls.b_world_team_id, kind=DraftActionKind.BID.value, prospect_key=1
+        )
+        lottery = orm_models.PennantDraftLottery.objects.create(player_id=stint.player_id, attempt=1)
+        b_teams = (
+            orm_models.Team.objects.filter(league__world_id=cls.b_world_id).order_by("id").values_list("id", flat=True)
+        )
+        for team_id in b_teams[:2]:
+            orm_models.PennantDraftLotteryBid.objects.create(lottery=lottery, team_id=team_id)
+        orm_models.PennantMidseasonRegistration.objects.create(
+            team_id=cls.b_world_team_id, player_id=stint.player_id, registered_on=date(B_YEAR, 6, 1)
+        )
 
     @staticmethod
     def _play(home, away, batter, pitcher, year, scope):
@@ -579,6 +620,91 @@ def _offseason_query(t: WorkspaceCase) -> None:
     query = DjangoOffseasonQuery(t.a)
     t.assertFalse(query.has_ratings(B_YEAR))
     t.assert_hidden(lambda: query.facts(YEAR))
+    # 締めた年の抽選（#360）: B の世界の抽選は、A の実データにも A の世界にも出ない
+    for scope in _a_scopes(t):
+        t.assertEqual(DjangoOffseasonQuery(scope).facts(B_YEAR).lotteries, (), f"{scope} で B の世界の抽選が読めた")
+    # 空振りの防止: B の世界の範囲では読める
+    lotteries = DjangoOffseasonQuery(_b_world(t)).facts(B_YEAR).lotteries
+    t.assertEqual([record.player_id for record in lotteries], [t.b_world_player_id])
+
+
+def _b_draft_slot(t: WorkspaceCase) -> DraftSlot:
+    return DraftSlot(team_id=t.b_world_team_id, minimum=1, maximum=1, planned=(), base_counts={})
+
+
+def _draft_repository(t: WorkspaceCase) -> None:
+    """ドラフト会議の記録（#360）。B の世界の会議は、A の実データ・A の世界から読めず、足せず、消せない。"""
+    b_actions = orm_models.PennantDraftAction.objects.filter(draft__world_id=t.b_world_id)
+    for scope in _a_scopes(t):
+        repo = DjangoDraftRepository(scope)
+        t.assertIsNone(repo.find(B_YEAR), f"{scope} で B の世界の会議が読めた")
+        t.assertIsNone(repo.last_seq(B_YEAR), f"{scope} で B の世界の会議の番号が読めた")
+        with t.assertRaises(DraftConflict):
+            repo.append(B_YEAR, [DraftAction(kind=DraftActionKind.PASS, team_id=t.b_world_team_id)], expected_seq=1)
+        repo.remove(B_YEAR)
+    t.assertEqual(b_actions.count(), 1, "A の範囲で B の世界の会議に書いた・消した")
+    # B の世界の球団で会議を始められない（実データは世界でないので書けない）
+    record = DraftRecord(year=YEAR, signature="a", slots=(_b_draft_slot(t),))
+    with t.assertRaises(InvalidWorld):
+        DjangoDraftRepository(t.a).start(record)
+    with t.assertRaises(TeamNotFound):
+        DjangoDraftRepository(WorldScope.pennant(t.workspace.id, t.a_world_id)).start(record)
+    t.assertFalse(orm_models.PennantDraft.objects.filter(year=YEAR).exists(), "B の世界の球団で会議を始めた")
+    # 空振りの防止: B の世界の範囲では読める
+    t.assertEqual(DjangoDraftRepository(_b_world(t)).last_seq(B_YEAR), 1)
+
+
+def _draft_lottery_repository(t: WorkspaceCase) -> None:
+    """締めた年の抽選の記録（#360）。A の世界の範囲で、B の世界の選手・球団の抽選は書けない。"""
+    before = orm_models.PennantDraftLottery.objects.count()
+    b_teams = orm_models.Team.objects.filter(league__world_id=t.b_world_id).order_by("id").values_list("id", flat=True)
+    record = DraftLotteryRecord(player_id=t.b_world_player_id, attempt=2, bidder_ids=tuple(b_teams[:2]))
+    with t.assertRaises(InvalidWorld):
+        DjangoDraftLotteryRepository(t.a).add_all([record])
+    with t.assertRaises(InvalidDraftAction):
+        DjangoDraftLotteryRepository(WorldScope.pennant(t.workspace.id, t.a_world_id)).add_all([record])
+    t.assertEqual(orm_models.PennantDraftLottery.objects.count(), before, "A の範囲で B の世界に抽選を書いた")
+
+
+def _midseason_registration_repository(t: WorkspaceCase) -> None:
+    """期中の支配下登録（#356）。B の世界の登録は、A の実データ・A の世界から読めず、B の球団に書けない。"""
+    for scope in _a_scopes(t):
+        repo = DjangoMidseasonRegistrationRepository(scope)
+        t.assertEqual(repo.find_in_year(B_YEAR), [], f"{scope} で B の世界の登録が読めた")
+        with t.assertRaises(TeamNotFound):
+            repo.find_by_team(t.b_world_team_id)
+    registration = MidseasonRegistration(
+        team_id=t.b_world_team_id, player_id=t.b_world_player_id, registered_on=date(B_YEAR, 7, 1)
+    )
+    with t.assertRaises(InvalidWorld):
+        DjangoMidseasonRegistrationRepository(t.a).add(registration)
+    with t.assertRaises(TeamNotFound):
+        DjangoMidseasonRegistrationRepository(WorldScope.pennant(t.workspace.id, t.a_world_id)).add(registration)
+    t.assertEqual(orm_models.PennantMidseasonRegistration.objects.count(), 1, "A の範囲で B の世界に登録を書いた")
+    # 空振りの防止: B の世界の範囲では読める
+    t.assertEqual(len(DjangoMidseasonRegistrationRepository(_b_world(t)).find_in_year(B_YEAR)), 1)
+
+
+def _player_name_query(t: WorkspaceCase) -> None:
+    """ドラフトの候補と重ならないようにする名前（#360）。B の実データ・B の世界の選手の名前は出ない。"""
+    for scope in _a_scopes(t):
+        names = DjangoPlayerNameQuery(scope).names()
+        t.assertTrue(names, f"{scope} の名前を読めていない（検査が空振りする）")
+        t.assert_no_mark(names)
+
+
+def _development_roster_query(t: WorkspaceCase) -> None:
+    """育成の一覧と球団ごとの人数（#356・#359）。B の球団は引けず、B の世界の球団は一覧に出ない。"""
+    for scope in _a_scopes(t):
+        query = DjangoDevelopmentRosterQuery(scope)
+        for team_id in (t.b_team.id, t.b_world_team_id):
+            with t.assertRaises(TeamNotFound):
+                query.for_team(team_id, B_YEAR)
+        squads = query.squads(YEAR)
+        t.assertTrue(squads, f"{scope} の球団を読めていない（検査が空振りする）")
+        t.assertFalse(
+            {squad.team_id for squad in squads} & {*t.b_ids, t.b_world_team_id}, f"{scope} で B の球団が出た"
+        )
 
 
 def _ratings_history_query(t: WorkspaceCase) -> None:
@@ -952,6 +1078,11 @@ CHECKS: dict[type, Callable[[WorkspaceCase], None]] = {
     DjangoClubTenureQuery: _club_tenure_query,
     DjangoTeamAnalysisQuery: _team_analysis_query,
     DjangoServiceHistoryQuery: _service_history_query,
+    DjangoDraftRepository: _draft_repository,
+    DjangoDraftLotteryRepository: _draft_lottery_repository,
+    DjangoMidseasonRegistrationRepository: _midseason_registration_repository,
+    DjangoPlayerNameQuery: _player_name_query,
+    DjangoDevelopmentRosterQuery: _development_roster_query,
     DjangoWorldRepository: _world_repository,
     DjangoWorldSummaryQuery: _world_summary_query,
     DjangoWorkspaceAccessQuery: _workspace_access_query,
@@ -1671,6 +1802,8 @@ class Side:
     # メンバーの画面（W4 T4）: 編集者の利用者の id と、未使用の招待の id
     member: int
     invitation: int
+    # ドラフト会議の操作（#360。URL の末尾の文字列。始めるだけを送る）
+    draft_action: str = "start"
 
 
 # id の引数（年は id ではない。年だけの URL は「ほかのワークスペースの id」の検査の対象外）
@@ -1760,6 +1893,8 @@ URL_TABLE: dict[str, tuple[tuple[str, ...], str, bool]] = {
     "pennant_postseason_stats": (("world", "world_year"), PAGE, False),
     "pennant_settings": (("world",), PAGE, False),
     "pennant_draft_order_settings": (("world",), WRITE, False),
+    "pennant_draft": (("world", "world_year"), PAGE, False),
+    "pennant_draft_act": (("world", "world_year", "draft_action"), WRITE, False),
 }
 
 # 下ごしらえにその年のオフの結果が無いので、自分のワークスペースでも 404 になる画面（ゲートの検査は別に効く）。
@@ -1850,6 +1985,7 @@ WRITE_BODIES: dict[str, Callable[[Side, int], dict]] = {
     "pennant_delete": lambda side, rival: {},
     "pennant_settings": lambda side, rival: {"postseason_format": "NONE"},
     "pennant_draft_order_settings": lambda side, rival: {"draft_order_rule": "NPB"},
+    "pennant_draft_act": lambda side, rival: {},
     "setup_leagues": lambda side, rival: {"name": "侵入のリーグ", **SETUP_LEAGUE_LIMITS},
     "setup_leagues_reorder": lambda side, rival: {"order": _reversed_leagues(side.league)},
     "setup_league_edit": lambda side, rival: {"name": "改ざんのリーグ", **SETUP_LEAGUE_LIMITS},

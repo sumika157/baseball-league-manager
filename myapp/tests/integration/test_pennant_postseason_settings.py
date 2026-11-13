@@ -101,6 +101,9 @@ class SettingsPageTest(SettingsCase):
 
         self.client.force_login(User.objects.create_user("other", password="x"))
         self.assertEqual(self.post_format("NONE").status_code, 403)
+        # 管理ユーザーでも、世界のオーナーでなければ変えられない（ほかの書き込みの画面と同じ）
+        self.client.force_login(User.objects.create_superuser("admin", password="x"))
+        self.assertEqual(self.post_format("NONE").status_code, 403)
 
         self.assertIs(self.format_of(self.npb_world), PostseasonFormat.NPB)
 

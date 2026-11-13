@@ -444,6 +444,12 @@ class AdminDoesNotShowThePennantWorldTest(WorldCase):
         self.assertNotIn(orm_models.PennantReleasePlanEntry, admin.site._registry)
         self.assertNotIn(orm_models.PennantAward, admin.site._registry)
         self.assertNotIn(orm_models.PennantChampionship, admin.site._registry)
+        self.assertNotIn(orm_models.PennantMidseasonRegistration, admin.site._registry)
+        self.assertNotIn(orm_models.PennantDraft, admin.site._registry)
+        self.assertNotIn(orm_models.PennantDraftSlot, admin.site._registry)
+        self.assertNotIn(orm_models.PennantDraftAction, admin.site._registry)
+        self.assertNotIn(orm_models.PennantDraftLottery, admin.site._registry)
+        self.assertNotIn(orm_models.PennantDraftLotteryBid, admin.site._registry)
 
     def test_change_pages_by_pennant_ids_do_not_open(self):
         """世界の id を直接指定しても、編集画面は開かない（Django は管理画面の一覧へ戻す）。"""
@@ -585,6 +591,8 @@ class SetupScreensAndTheWorldTest(WorldCase):
 LEAGUE = "リーグ経由でワークスペースに属す"
 PLAYER = "選手の在籍経由でワークスペースに属す"
 GAME = "試合経由でワークスペースに属す"
+# 世界そのものに属す行（球団に属さない。ドラフト会議の記録。`League.world` と同じく世界を直接指す）
+WORLD = "世界経由でワークスペースに属す"
 DIRECT = "ワークスペース直属"
 MEMBER = "メンバー"
 BOTH = "2経路（リーグ）"
@@ -593,6 +601,8 @@ ROOT = "全体"
 # モデル名 -> (分類, 道)。
 # - LEAGUE / PLAYER / GAME: 道は「そのモデルから League までの関連名を `__` でつないだもの」
 #   （今の絞り込み `world_condition` の path と同じ）。
+# - WORLD: 道は PennantWorld までの関連名（`world`）。末尾の `world` を除いたものが、世界を直接指すモデルの
+#   絞り込み `world_direct_condition` の path（会議は空文字、行動は `draft`）。
 # - DIRECT / MEMBER: 道は Workspace までの関連名（`workspace`）。
 # - BOTH（League だけ）: 道は無い。Workspace へ着く2経路を `LEAGUE_ROUTES` に持つ。
 # - ROOT（Workspace）: 自身。道は無い。
@@ -617,8 +627,14 @@ CLASSIFICATION: dict[str, tuple[str, str | None]] = {
     "PennantClubPlanEntry": (LEAGUE, "plan__team__league"),
     "PennantReleasePlan": (LEAGUE, "team__league"),
     "PennantReleasePlanEntry": (LEAGUE, "plan__team__league"),
+    "PennantMidseasonRegistration": (LEAGUE, "team__league"),
     "PennantAward": (LEAGUE, "league"),
     "PennantChampionship": (LEAGUE, "team__league"),
+    "PennantDraft": (WORLD, "world"),
+    "PennantDraftSlot": (WORLD, "draft__world"),
+    "PennantDraftAction": (WORLD, "draft__world"),
+    "PennantDraftLottery": (PLAYER, "player__stints__team__league"),
+    "PennantDraftLotteryBid": (LEAGUE, "team__league"),
     "Game": (GAME, "home_team__league"),
     "GameInningScore": (GAME, "game__home_team__league"),
     "GameBattingLine": (GAME, "game__home_team__league"),
@@ -676,6 +692,9 @@ class ModelClassificationTest(SimpleTestCase):
                 model, _ = _follow(models[name], route)
                 if kind in (LEAGUE, PLAYER, GAME):
                     self.assertIs(model, orm_models.League)
+                elif kind == WORLD:
+                    # 世界はワークスペース直属（`PennantWorld` の道は `workspace`）
+                    self.assertIs(model, orm_models.PennantWorld)
                 else:
                     self.assertIs(model, orm_models.Workspace)
 
@@ -715,13 +734,20 @@ class ModelClassificationTest(SimpleTestCase):
         # 選手・球団・リーグは個別に消す。ここに挙がるのは、行数が多く collector に任せないもの
         individually = {"Player", "Team", "League"}
         expected = {
-            name for name, (kind, _) in CLASSIFICATION.items() if kind in (LEAGUE, PLAYER, GAME)
+            name for name, (kind, _) in CLASSIFICATION.items() if kind in (LEAGUE, PLAYER, GAME, WORLD)
         } - individually
         self.assertEqual(deleted, expected, "世界の削除が、League 以下のモデルと食い違っています")
         self.assertTrue(deleted <= set(models))
-        # 道（League までの関連名）も分類表と一致する。ずれると別の行を消す・消し残す
+        # 道（League までの関連名。世界を直接指すモデルは世界を持つモデルまで）も分類表と一致する。
+        # ずれると別の行を消す・消し残す
         routes = {model.__name__: route for model, route in _SCOPE_ROWS_CHILD_FIRST}
-        self.assertEqual(routes, {name: CLASSIFICATION[name][1] for name in expected})
+
+        def deletion_route(name: str) -> str:
+            kind, route = CLASSIFICATION[name]
+            assert route is not None
+            return route.removesuffix("world").removesuffix("__") if kind == WORLD else route
+
+        self.assertEqual(routes, {name: deletion_route(name) for name in expected})
         # 世界の削除が触れてはならない、ワークスペース直属・メンバー・全体のモデル
         for name, (kind, _) in CLASSIFICATION.items():
             if kind in (DIRECT, MEMBER, ROOT):

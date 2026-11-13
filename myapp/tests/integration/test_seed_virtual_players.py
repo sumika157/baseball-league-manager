@@ -15,7 +15,7 @@ from django.test import SimpleTestCase
 
 from myapp.domain.entities import ensure_draft_fits_career
 from myapp.domain.pennant.roster import DEVELOPMENT_BAND, OPENING_REGISTERED_BAND, RegisteredBand
-from myapp.domain.value_objects import AcquisitionRoute, ContractStatus
+from myapp.domain.value_objects import AcquisitionRoute, ContractStatus, Profile
 from myapp.domain.virtual_players import generator
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoTeamRepository
@@ -166,7 +166,9 @@ class SeedRosterTest(BaseCase):
             if player == self.original:
                 continue
             born = player.birth_date
-            age = today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+            # 年齢の出典は domain の `Profile.age`（CLAUDE.md「年齢は保持しない」。テストで計算し直さない）
+            age = Profile(birth_date=born).age(today)
+            assert age is not None
             with self.subTest(player=player.name):
                 self.assertTrue(19 <= age <= 40)
                 # 高卒の18歳〜助っ人の30歳で入団している。日本人の在籍の開始はドラフトの翌年、助っ人はドラフトなし

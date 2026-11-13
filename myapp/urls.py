@@ -92,6 +92,8 @@ workspace_urlpatterns = [
     _w("pennant/<int:world_id>/", views.pennant_world, "pennant_world"),
     _pennant("advance/", views.pennant_advance, "advance"),
     _pennant("season/close/", views.pennant_close_season, "close_season"),
+    _pennant("draft/<int:year>/", views.pennant_draft, "draft"),
+    _pennant("draft/<int:year>/<str:action>/", views.pennant_draft_act, "draft_act"),
     _pennant("offseason/<int:year>/", views.pennant_offseason, "offseason"),
     _pennant("postseason/", views.pennant_postseason, "postseason"),
     _pennant("postseason/<int:year>/", views.pennant_postseason, "postseason_by_year"),

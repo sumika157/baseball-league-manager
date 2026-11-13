@@ -10,10 +10,15 @@ from __future__ import annotations
 
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from ..entities import Player
-from ..simulation.ratings import BatterRatings, PitcherRatings
+from ..simulation.ratings import BatterRatings, PitcherRatings, RatingGrade
+from ..value_objects import Position
+
+if TYPE_CHECKING:
+    # 実行時に import すると循環する（pennant.draft → simulation → services）。使う関数の中で import する
+    from ..pennant.draft import DraftRoute
 
 # 並べ替えキー → (選手から比較する値を取り出す関数, 既定の向き)。
 # 取り出す値は指標ごとに数値・文字列が混ざるため Any にしてある。
@@ -81,7 +86,9 @@ DEFAULT_ROSTER_SORT = "number"
 _RATE_PITCHER_KEYS = {"era", "whip", "k9", "bb9", "fip"}
 
 
-def _resolve(keys: SortKeys, key: str | None, descending: bool | None, default_key: str) -> tuple[str, bool]:
+def _resolve(
+    keys: Mapping[str, tuple[object, bool]], key: str | None, descending: bool | None, default_key: str
+) -> tuple[str, bool]:
     """URL 由来のキーを検証する。不正なら既定に落とす（エラーにしない）。"""
     resolved = key if key is not None and key in keys else default_key
     if descending is None:
@@ -242,3 +249,88 @@ def sort_rated_pitchers(
 ) -> tuple[list[RatedPitcher], str, bool]:
     """投手の能力の表を並べ替える。key が未指定・不正なら背番号の小さい順。"""
     return _sort_rated(items, PITCHER_RATING_SORT_KEYS, PitcherRatings.LABELS, key, descending)
+
+
+# --- ドラフト会議の候補（ペナントの会議の画面。#297 D3） ---
+#
+# 既定は見込みの区分の高い順（S が先頭）。同値は候補の番号の小さい順で安定させる。
+# 指名済みの候補は向きによらず末尾に回す（もう選べない候補で上位を埋めない）。
+
+
+class ListedProspect(Protocol):
+    """会議の候補の一覧の1行（並べ替えに使う項目だけ）。application の行（`DraftProspectRow`）がこの形を持つ。"""
+
+    @property
+    def key(self) -> int: ...
+
+    @property
+    def position(self) -> Position: ...
+
+    @property
+    def age(self) -> int: ...
+
+    @property
+    def grade(self) -> RatingGrade: ...
+
+    @property
+    def route(self) -> DraftRoute: ...
+
+    @property
+    def is_taken(self) -> bool: ...
+
+
+# 位置の並び（投手・捕手・内野手・外野手・指名打者）は `Position` の定義の順
+_POSITION_RANK = {position: rank for rank, position in enumerate(Position)}
+
+
+def _route_rank(route: DraftRoute) -> int:
+    """経歴の並び（高校・大学・社会人）は `DraftRoute` の定義の順。"""
+    return list(type(route)).index(route)
+
+
+PROSPECT_SORT_KEYS: dict[str, tuple[Callable[[ListedProspect], Any], bool]] = {
+    "grade": (lambda p: p.grade.lower_bound, True),
+    "position": (lambda p: _POSITION_RANK[p.position], False),
+    "age": (lambda p: p.age, False),
+    "route": (lambda p: _route_rank(p.route), False),
+}
+
+DEFAULT_PROSPECT_SORT = "grade"
+
+
+def sort_prospects[Listed: ListedProspect](
+    rows: Collection[Listed], key: str | None = None, descending: bool | None = None
+) -> tuple[list[Listed], str, bool]:
+    """会議の候補を並べ替える。key が未指定・不正なら見込みの区分の高い順。指名済みは末尾（その中も同じ並び）。
+
+    同値は候補の番号の小さい順。戻り値は (並べ替え後, 実際に使ったキー, 向き)。
+    """
+    key, descending = _resolve(PROSPECT_SORT_KEYS, key, descending, DEFAULT_PROSPECT_SORT)
+    getter = PROSPECT_SORT_KEYS[key][0]
+    ordered = sorted(rows, key=lambda row: row.key)
+    # reverse=True でも、同値の並び（番号順）は崩れない
+    ordered.sort(key=getter, reverse=descending)
+    return [row for row in ordered if not row.is_taken] + [row for row in ordered if row.is_taken], key, descending
+
+
+def filter_prospects[Listed: ListedProspect](
+    rows: Collection[Listed], *, position: str | None = None, route: str | None = None
+) -> tuple[list[Listed], Position | None, DraftRoute | None]:
+    """会議の候補を位置と経歴で絞り込む（指名済みも同じ条件で絞る。並びは変えない）。
+
+    値は `Position`・`DraftRoute` の名前（`PITCHER`・`HIGH_SCHOOL` など。選択肢の出典は値オブジェクト）。
+    未指定・不正な値は絞り込まない（並べ替えの不正なキーと同じく、エラーにせず既定に落とす）。
+    戻り値は (絞り込んだ行, 実際に使った位置, 実際に使った経歴)。
+    """
+    # モジュールの先頭で import すると循環する（上の TYPE_CHECKING）
+    from ..pennant.draft import DraftRoute
+
+    chosen_position = Position.__members__.get(position or "")
+    chosen_route = DraftRoute.__members__.get(route or "")
+    kept = [
+        row
+        for row in rows
+        if (chosen_position is None or row.position is chosen_position)
+        and (chosen_route is None or row.route is chosen_route)
+    ]
+    return kept, chosen_position, chosen_route
