@@ -33,7 +33,7 @@
   世界の台帳（`WorldRepository`・`WorldSummaryQuery`）もワークスペースの id を必須で受け取る。「範囲が無ければ全部読む」形の API を作らない。
   **例外は次の3つだけ**（どれも使ってよい場所を `test_wiring.py` が検査する）:
   - 管理画面専用の `admin_real_queryset`（全ワークスペースの実データ。`admin.py` だけ。運営向けの概況もここ）
-  - ワークスペースそのものを引く台帳（`WorkspaceAccessQuery`・`WorkspaceListQuery`）。key や利用者からワークスペースを引くだけで、中のデータは読まない
+  - ワークスペースそのものの台帳（`WorkspaceRepository`・`WorkspaceAccessQuery`・`WorkspaceListQuery`・`InvitationPreviewQuery`・`InvitationRepository`）。key・id・利用者・招待のトークンからワークスペースとそのメンバー・招待を引くだけで、中のデータ（リーグ・試合など）は読まない（招待の取消・期限切れの掃除はワークスペースの id で絞る）。ワークスペースの削除だけは中のデータを消すが、そのワークスペースの範囲（`WorldScope.real(ws)`）で絞って消す
   - 台帳の相関副問い合わせ用の `real_teams_of_outer_workspace()`（`infrastructure/queries.py` だけ）
 
   ワークスペースは URL（`/w/<key>/`）の key から `workspace_view` が解決する。範囲を作るのは views の `_real_scope(request)`・
@@ -42,11 +42,12 @@
   （`tests/integration/test_wiring.py` が検査する）。管理コマンドとテスト（`tests/helpers.py` 経由）もここから取る。呼ぶ側ごとに一部の依存だけを
   渡さない（渡し忘れが「開く画面によって落ちるサービス」になる。管理画面のテンプレートタグで実際に起きた）。
   **組み立て口はすべて範囲（`scope`）を必須で受け取る**（台帳だけを読む `build_pennant_world_view(workspace_id)`・
-  `build_workspace_access_query()`・`build_workspace_list_query()` を除く）。
+  `build_workspace_access_query()`・`build_workspace_list_query()`・`build_workspace_service()`・`build_workspace_member_service()`・
+  `build_invitation_preview_query()`・`build_workspace_management_query(workspace_id)` を除く）。
   ペナント専用・実データ専用の組み立て口に違う種類の範囲を渡すと `InvalidWorld`（どれがどれかは `test_wiring.py` の分類が出典）。
 - **層をまたぐ受け渡しに素の `dict` を使わない。** application が presentation に返す形は `application/dto.py` の dataclass にする（文字列キーの dict は綴りを間違えても静的検査が黙る）。DTO に集約を包ませない。集約からの取り出しは application が担い、presentation は DTO を写すだけにする（前例: `application/game_edit.py` と `GameEditData`）。
 - **application のサービスは対象ごとに分けてある**（参照は `LeagueViewService`・`TeamViewService`・`GameViewService`、
-  更新は `RosterService`・`GameRecordingService`・`LeagueSetupService`。#219）。対象の違うメソッドを既存のサービスに足す前に、別のサービスに置けないか考える。
+  更新は `RosterService`・`GameRecordingService`・`LeagueSetupService`・`WorkspaceService`・`WorkspaceMemberService`。#219）。対象の違うメソッドを既存のサービスに足す前に、別のサービスに置けないか考える。
   参照のサービスに更新を足さない。分ける判断は選択肢としてユーザーに提示する。
 - **サイトの権限は `WorkspaceAccess`（持ち主・編集者・チーム担当・閲覧）だけで判定する。** 判定の材料は `workspace_view` が要求ごとに
   1回読む。`is_staff`・`is_superuser` は管理画面に入る条件にだけ使い、サイトの読み書きの判定に使わない。`WorkspaceAccess` は「そのチームを
