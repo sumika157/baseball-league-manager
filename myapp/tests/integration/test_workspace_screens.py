@@ -2,6 +2,8 @@
 
 - 作成（`/` のフォーム → `/workspaces/new/`）: 公開範囲の既定は非公開。作ったら新しいワークスペースのダッシュボード
   （空の案内）へ。上限に達したらフォームの代わりに案内。上限を超える POST は 200 でフォームのエラー（何も作らない）。
+  見本のリーグの欄（W5）は作成のフォームだけにあり既定でチェック。送らなければ空で作る（見本ありの作成は
+  `test_workspace_sample.py`）。
 - 設定（`/w/<key>/settings/`）: 持ち主だけが名前と公開範囲を変えられる。ほかの人は GET も POST も 403。
 - 削除（`/w/<key>/delete/`。W4 T5）: 持ち主だけ。名前を打って確かめる。世界が残っていればボタンの代わりに世界の一覧。
 - ヘッダー: ログインしていれば名前のところが切り替えのドロップダウン（自分のワークスペースと `/`）。
@@ -64,6 +66,32 @@ class WorkspaceCreateScreenTest(TestCase):
         dashboard = self.client.get(response["Location"])
         self.assertContains(dashboard, "ワークスペース「わたしのリーグ」を作りました。")
         self.assertContains(dashboard, "まだチームが登録されていません。")
+
+    def test_the_form_has_the_sample_league_box_checked_by_default(self):
+        """見本のリーグ（W5）の欄は作成のフォームにあり、既定でチェック。設定の画面には無い。"""
+        top = self.client.get(reverse("home"))
+
+        self.assertContains(
+            top,
+            '<input type="checkbox" name="with_sample_league" class="form-check-input" '
+            'id="id_with_sample_league" checked>',
+            html=True,
+        )
+        self.assertContains(top, "見本のリーグを入れる")
+        workspace = make_workspace(self.user, "わたしの")
+        settings_page = self.client.get(ws_url("workspace_settings", workspace=workspace))
+        self.assertNotIn("with_sample_league", settings_page.context["form"].fields)
+        self.assertNotContains(settings_page, "with_sample_league")
+
+    def test_leaving_the_box_out_creates_an_empty_workspace(self):
+        """欄を送らない（チェックを外した）作成は空のまま。成功の文言に見本は出ない。"""
+        response = self.client.post(reverse("workspace_create"), {"name": "空のリーグ", "visibility": "private"})
+
+        created = self.owned().get()
+        self.assertFalse(orm_models.League.objects.filter(workspace=created).exists())
+        dashboard = self.client.get(response["Location"])
+        self.assertContains(dashboard, "ワークスペース「空のリーグ」を作りました。")
+        self.assertNotContains(dashboard, "見本のリーグ（")
 
     def test_a_public_workspace_can_be_made(self):
         self.client.post(reverse("workspace_create"), {"name": "公開のリーグ", "visibility": Visibility.PUBLIC.value})

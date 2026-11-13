@@ -7,6 +7,7 @@
 import functools
 import secrets
 from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass
 from datetime import date, timedelta
 from urllib.parse import urlencode
 
@@ -69,6 +70,7 @@ from ..application.queries import SimulationContextQuery
 from ..application.roster import RosterService
 from ..application.team_analysis import STATS_TAB, TeamAnalysisService
 from ..application.team_view import TeamViewService
+from ..application.workspace_sample import WorkspaceSampleService
 from ..application.workspaces import WorkspaceMemberService, WorkspaceService
 from ..domain.exceptions import (
     AlreadyAdvanced,
@@ -105,6 +107,7 @@ from ..domain.pennant.season import (
     world_today,
 )
 from ..domain.pennant.world import WorldScope
+from ..domain.sample.league import SAMPLE_GAME_COUNT, SAMPLE_PLAYERS_PER_TEAM, SAMPLE_TEAM_COUNT
 from ..domain.setup import ORDER_MISMATCH
 from ..domain.value_objects import (
     AdvanceReason,
@@ -201,6 +204,7 @@ from .forms import (
     PostseasonFormatForm,
     StadiumSetupForm,
     TeamSetupForm,
+    WorkspaceCreateForm,
     WorkspaceDeleteForm,
     WorkspaceForm,
 )
@@ -611,12 +615,34 @@ def build_workspace_service() -> WorkspaceService:
 
     範囲を取らない: 作成はワークスペースが決まる前の操作で、設定は id でワークスペースそのものの台帳を書く。
     上限は `settings.WORKSPACE_MAX_OWNED`（環境変数。既定3）から作る。
+    作成で見本のリーグを入れる関数（W5）は、作ったワークスペースの実データの範囲で `build_workspace_sample_service` を
+    組み立てて呼ぶ（範囲を作るのはここ。サービスは id と key しか知らない）。
     """
     return WorkspaceService(
         workspaces=DjangoWorkspaceRepository(),
         quota=WorkspaceQuota(max_owned_workspaces=settings.WORKSPACE_MAX_OWNED),
         new_key=new_workspace_key,
         atomic=transaction.atomic,
+        seed_sample_league=lambda workspace_id, key: build_workspace_sample_service(
+            WorldScope.real(workspace_id)
+        ).seed(key=key),
+    )
+
+
+def build_workspace_sample_service(scope: WorldScope) -> WorkspaceSampleService:
+    """新しいワークスペースに見本のリーグを入れるサービスを組み立てる（W5。#81）。
+
+    依存（リーグ・球場・チーム・試合のリポジトリ）は全部、渡された実データの範囲で作る。実データの範囲だけを受け取る
+    （ペナントの範囲なら InvalidWorld）。見本の年を決める「今日」は暦の今日（`timezone.localdate`）。
+    トランザクションは渡さない（作成のトランザクションの中で動く）。
+    """
+    _require_real(scope)
+    return WorkspaceSampleService(
+        leagues=DjangoLeagueRepository(scope),
+        stadiums=DjangoStadiumRepository(scope),
+        teams=DjangoTeamRepository(scope),
+        games=DjangoGameRepository(scope),
+        today=timezone.localdate,
     )
 
 
@@ -1742,11 +1768,23 @@ def home(request):
     ログインしていれば一覧の下に作成フォーム（送り先は `workspace_create`）。
     """
     if request.user.is_authenticated:
-        return _render_home(request, WorkspaceForm())
+        return _render_home(request, WorkspaceCreateForm())
     return render(request, "myapp/home.html", {"sample": _sample_workspace()})
 
 
-def _render_home(request, form: WorkspaceForm):
+@dataclass(frozen=True)
+class SampleLeagueSize:
+    """見本のリーグ（W5）の規模。作成フォームの案内と完了の文言に出す（出典は domain の `sample/league.py`）。"""
+
+    teams: int = SAMPLE_TEAM_COUNT
+    players_per_team: int = SAMPLE_PLAYERS_PER_TEAM
+    games: int = SAMPLE_GAME_COUNT
+
+
+SAMPLE_LEAGUE_SIZE = SampleLeagueSize()
+
+
+def _render_home(request, form: WorkspaceCreateForm):
     """ログインした人の `/`: 自分のワークスペースの一覧と、作成フォーム（上限に達していれば代わりに案内）。
 
     上限を超える作成の送信（別のタブで先に作ったなど）も、ここで上限の案内として描く（フォームは出さない）。
@@ -1760,6 +1798,7 @@ def _render_home(request, form: WorkspaceForm):
             "workspaces": build_workspace_list_query().list_for(request.user.id),
             "create_form": form if can_create else None,
             "limit_message": None if can_create else service.limit_message,
+            "sample_league": SAMPLE_LEAGUE_SIZE,
         },
     )
 
@@ -1768,26 +1807,49 @@ def _render_home(request, form: WorkspaceForm):
 def workspace_create(request):
     """ワークスペースの作成（`/workspaces/new/`。ワークスペースの外。POST だけ。W4 T3）。
 
-    作ったら新しいワークスペースのダッシュボードへ（空の案内が出る）。入力の誤りは `/` をフォームのエラーつきで、
-    上限（`WorkspaceLimitReached`。数える → 上限 → 保存はサービスが1つのトランザクションで行う）はフォームの代わりに
-    上限の案内を出して、どちらも 200 で描き直す（何も作らない）。
+    作ったら新しいワークスペースのダッシュボードへ（見本のリーグを入れたら順位表など、入れなければ空の案内が出る）。
+    入力の誤りは `/` をフォームのエラーつきで、上限（`WorkspaceLimitReached`。数える → 上限 → 保存 →（見本）は
+    サービスが1つのトランザクションで行う）はフォームの代わりに上限の案内を出して、見本のリーグを作れなかったときは
+    フォーム全体のエラーで、どれも 200 で描き直す（何も作らない）。
     未ログインはログインへ（戻り先は `/`。POST の URL へは戻さない）。
     """
     if not request.user.is_authenticated:
         return redirect_to_login(reverse("home"))
-    form = WorkspaceForm(request.POST)
+    form = WorkspaceCreateForm(request.POST)
     if form.is_valid():
         data = form.cleaned_data
+        with_sample = data["with_sample_league"]
         try:
             key = build_workspace_service().create(
-                owner_id=request.user.id, name=data["name"], visibility=data["visibility"]
+                owner_id=request.user.id,
+                name=data["name"],
+                visibility=data["visibility"],
+                with_sample_league=with_sample,
             )
         except InvalidWorkspace as error:
+            # 名前の検査（見本より先に `Workspace` が行う）。見本の「空でない」は新しいワークスペースでは起きない
             form.add_error("name", str(error))
         except WorkspaceLimitReached:
             pass  # `_render_home` が持っている数を数え直し、フォームの代わりに上限の案内を出す
+        except DomainError as error:
+            if not with_sample:
+                raise
+            # 見本のリーグの途中の失敗（ワークスペースごと戻っている）
+            form.add_error(
+                None,
+                f"見本のリーグを入れられなかったので、ワークスペースを作りませんでした（{error}）。"
+                "見本のリーグを外せば作れます。",
+            )
         else:
-            messages.success(request, f"ワークスペース「{data['name']}」を作りました。")
+            if with_sample:
+                size = SAMPLE_LEAGUE_SIZE
+                messages.success(
+                    request,
+                    f"ワークスペース「{data['name']}」を作り、"
+                    f"見本のリーグ（{size.teams}チーム・{size.games}試合）を入れました。",
+                )
+            else:
+                messages.success(request, f"ワークスペース「{data['name']}」を作りました。")
             return redirect(reverse("dashboard", args=(key,)))
     return _render_home(request, form)
 

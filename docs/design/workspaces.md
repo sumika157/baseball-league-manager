@@ -1924,3 +1924,31 @@ epic を main に入れる前に開発 DB・本番で数え、あれば作成者
 - 保存は `Team.add_player(name, JerseyNumber(player.number), player.position, from_year=player.from_year, contract=REGISTERED, acquired_via=player.acquired_via, limits=...)` の後に `change_player_profile` で `player.profile` を写す（年は必ず渡す）。
 - 試合は保存後の id で `sample_club` → `sample_fixtures(team_ids)` → `play_sample_games(..., foreign_rules=league.foreign_rules, capacities=本拠地の収容人数)` → `add_all`。`sample_fixtures`・`play_sample_games` に渡す key と年は `draw_sample_league` と同じもの（`SampleLeague.year`）。
 - `draw_sample_league` の名簿の検査は pennant の `InvalidWorld` を投げる（構成が固定なので起きない見込み）。
+
+#### T2 作成に見本のリーグを入れる（`feature/workspace-sample-league`、2026-11-13）
+
+マイグレーションは無い。CLAUDE.md は変えていない（T3）。
+
+- application: 新 `WorkspaceSampleService`（`application/workspace_sample.py`。更新だけ。依存は範囲つきの `LeagueRepository`・`StadiumRepository`・`TeamRepository`・`GameRepository` と `today`）の `seed(*, key)`。範囲にリーグかチームがあれば `InvalidWorkspace`「見本のリーグは空のワークスペースにだけ入れられます。」で何も書かない → `draw_sample_league(key, sample_year(today()))` → 球団ごとに 球場 → （リーグは最初に1回）→ チーム → `add_player(..., from_year=, contract=REGISTERED, acquired_via=, limits=league.roster_limits)` を25人 → 保存（選手の id が決まる）→ `change_player_profile` → 保存 → `sample_club` → `sample_fixtures` → `play_sample_games(..., foreign_rules=sample.foreign_rules, capacities=本拠地の収容人数)` → `add_all`。トランザクションは持たない。
+- `WorkspaceService.create(*, owner_id, name, visibility, with_sample_league: bool)`（既定値なし）と依存 `seed_sample_league: Callable[[int, str], None]`。見本ありのときは作成のトランザクションの中で、ワークスペースの保存の後に `(id, key)` で呼ぶ（決定1）。
+- presentation: 組み立て口 `build_workspace_sample_service(scope)`（`_require_real`。`today=timezone.localdate`。トランザクションは渡さない）。`build_workspace_service()` は `seed_sample_league=lambda workspace_id, key: build_workspace_sample_service(WorldScope.real(workspace_id)).seed(key=key)`。`WorkspaceCreateForm(WorkspaceForm)` に `with_sample_league`（既定はオン。設定の画面は `WorkspaceForm` のまま）。成功の文言は見本ありなら「ワークスペース「X」を作り、見本のリーグ（6チーム・36試合）を入れました。」（数は domain の `SAMPLE_TEAM_COUNT`・新しい定数 `SAMPLE_GAME_COUNT`）。見本の途中の `DomainError` は `/` を 200 で描き直し、フォーム全体のエラー（「見本のリーグを入れられなかったので、ワークスペースを作りませんでした（理由）。見本のリーグを外せば作れます。」）。`home.html` の「作ったワークスペースは空です…」を見本のリーグの説明に書き換えた（規模の数は views の `SAMPLE_LEAGUE_SIZE` から）。
+- Wiki: 「ワークスペースと共有」に「見本のリーグ」の節（中身・既定はオン・編集できる・見本だけは消せないのでワークスペースごと作り直す・運営者の「見本のワークスペース」との呼び分け）、「画面の歩き方」・「アーキテクチャ」（`build_workspace_sample_service(scope)`・`WorkspaceSampleService`・domain の `sample/`）。
+
+**計画からのずれ**
+
+- 「空か」の検査はリーグとチームだけを見る（`StadiumRepository` に一覧を読むメソッドが無く、infrastructure を変えないため）。チームはリーグに属し、選手・試合はチームに属すので、球場だけがあるワークスペースは「空」とみなす（そこに入れると同じ名前の球場があれば `DuplicateName` で、呼ぶ側のトランザクションごと戻る）。呼ぶのは作成だけなので実際には起きない。
+- 見本の途中の例外のうち、ビューがフォーム全体のエラーにするのは `DomainError`（名前の `InvalidWorkspace` と上限の `WorkspaceLimitReached` は先に拾う）。見本の `InvalidWorkspace`（空でない）は新しいワークスペースでは起きないので、名前の欄に出る扱いのままにした。それ以外の例外は 500（トランザクションは戻る）。
+- 既存の `test_workspace_urls.py` が運営者の見本のワークスペースに「見本のリーグ」という名前を付けていて、トップの案内の文言とぶつかったので「運営者の見本」に改名した。
+
+**作成1回の目安**（正式な計測は T3）: 空の DB（コンテナ内、`migrate` 直後の一時ファイル）で `WorkspaceService.create` を直接呼んで、見本ありは約 0.95〜0.99 秒・**336 クエリ**（SQL の合計は約 15〜20ms。残りは生成とシミュレーションと ORM の組み立て）、見本なしは 1ms・7 クエリ。計画の見込み「百数十クエリ」より多いのは、球団ごとにチームを3回保存する（作成・加入・プロフィール）ため。
+
+**テスト**: integration 新 `test_workspace_sample.py`（14件: 行数・順位表は6チーム各12試合・試合は「今日」より前の年・試合に出た選手はその年にそのチームの在籍がある・ダッシュボード／順位表／試合の詳細／試合の編集が開く・ほかのワークスペースの行は変わらない（全表の行を前後で比べ、増えた行は新しいワークスペースのものだけ）・見本なしはワークスペースの行だけ・上限なら何も作らない・試合の保存で失敗させると何も残らず上限も消費しない・空でないワークスペースへの `seed` は何も書かない・削除で全部消える・見本のリーグを分岐元に世界を作れる・作成の画面の成功の文言と失敗のエラー）。共有の見本は「今日」を 2026-03-01 に固定して作る（見本の年が現実の今日の年とずれ、加入年の渡し忘れが在籍の検査で落ちる）。`test_workspace_screens.py`（欄があり既定でチェック・設定の画面に無い・欄を送らなければ空で、文言に見本が出ない）。`test_wiring.py`（`REAL_ONLY_BUILDERS` に足す・依存が全部範囲つき・`build_workspace_service()` の見本の関数が `WorldScope.real(id)` で組み立てて `seed(key=)` を呼ぶ）。e2e `test_workspace_sharing.py`（見本ありの既定のまま作り、ダッシュボードに成功の文言・見本リーグ・球団名が出る）。件数: domain＋integration 4,454（T1 の 4,436 より +18）、e2e 21。
+
+**変異の確かめ**（どれも戻した）: 見本の範囲を別のワークスペース（`WorldScope.real(1)`）で組む → 6件、チェックボックスを無視して常に見本を入れる → 2件、見本をトランザクションの外で呼ぶ → 2件、`add_player` に `from_year` を渡さない → 935件（試合の行ごとの subTest）。
+
+**レビュー（ddd-boundary-reviewer）**: 重要な指摘なし。軽微を直した: 見本なしの作成で `DomainError` が出たら見本のエラーにせず投げ直す（作成の側に別の例外が増えたときに的外れな文言を出さない）、規模の値を文字列キーの dict から views の中の dataclass（`SampleLeagueSize`）にした。残したもの: 「空でない」を `InvalidWorkspace` で投げる（作成以外から `seed` を呼ぶ導線を足すなら専用の例外に分ける）、「空か」で球場を見ない（上の「計画からのずれ」）。
+
+**T3 への申し送り**
+
+- 作成の時間とロックの正式な計測（開発 DB の写しで `POST /workspaces/new/` を見本あり・なしで3回ずつ）。上の目安は空の DB で約1秒・336クエリ。クエリ数を減らすなら、プロフィールを加入と同じ保存に入れる（`add_player` の後の保存を省くには集約にプロフィールつきの加入が要る）。
+- CLAUDE.md（決定4）: 範囲の例外の台帳の末尾に見本のリーグの1文、更新のサービスの一覧に `WorkspaceSampleService`、組み立て口の一覧に `build_workspace_sample_service(scope)`。`ddd-boundary-reviewer.md` にも同じ。

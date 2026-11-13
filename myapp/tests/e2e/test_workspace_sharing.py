@@ -1,6 +1,7 @@
 """2人目を招待して共同で編集する（W4 T4。#80 の完了条件）。
 
-新規登録 → ワークスペースの作成（非公開） → 中身（リーグ・チーム・選手）はテストの補助で入れる → メンバーの画面で
+新規登録 → ワークスペースの作成（非公開。見本のリーグは既定のまま入れ、ダッシュボードに順位表が出る。W5）
+→ 担当させるチームと選手はテストの補助で足す → メンバーの画面で
 招待のリンクを発行 → 別の人が招待のリンクから新規登録して受諾 → 担当チームの選手を編集 → 未ログインでは見えない →
 持ち主が公開にすると見える、までを実ブラウザで通す。個々の分岐（門・フォームのエラー・期限切れ・既にメンバー）は
 integration（`test_workspace_members.py` ほか）で見ている。ここでは、フォームの送信・リダイレクト・`next` による戻りが
@@ -10,6 +11,8 @@ integration（`test_workspace_members.py` ほか）で見ている。ここで�
 
 import re
 
+from myapp.domain.sample.league import SAMPLE_GAME_COUNT, SAMPLE_TEAM_COUNT
+from myapp.domain.sample.names import SAMPLE_CLUBS, SAMPLE_LEAGUE_NAME
 from myapp.infrastructure import orm_models
 
 from ..helpers import TEST_YEAR, build_roster_service, make_league, real_scope, ws_url
@@ -46,6 +49,11 @@ class WorkspaceSharingTest(PlaywrightTestCase):
         owner.wait_for_url(re.compile(r"/w/[a-z0-9]{10}/$"))
         self.workspace = orm_models.Workspace.objects.get(name=WORKSPACE_NAME)
         self.assertEqual(self.workspace.visibility, "private", "作成の既定は非公開")
+        # 見本のリーグは既定でオン（W5）。作った直後のダッシュボードに見本のリーグの順位表が出る
+        dashboard = owner.content()
+        self.assertIn(f"見本のリーグ（{SAMPLE_TEAM_COUNT}チーム・{SAMPLE_GAME_COUNT}試合）を入れました", dashboard)
+        self.assertIn(SAMPLE_LEAGUE_NAME, dashboard)
+        self.assertIn(SAMPLE_CLUBS[0].team, dashboard)
 
         # 2. 中身はテストの補助で入れる（登録画面の流れは test_setup_flow.py）
         league = make_league("仲間リーグ", workspace=self.workspace)

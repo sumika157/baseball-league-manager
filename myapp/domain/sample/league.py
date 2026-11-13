@@ -53,6 +53,8 @@ SAMPLE_SEED = 20261113
 SAMPLE_TEAM_COUNT = 6
 SAMPLE_PLAYERS_PER_TEAM = 25
 SAMPLE_GAMES_PER_TEAM = 12
+# 見本の試合の総数（1試合に2球団が出るので、球団の数 × 1球団の試合数 ÷ 2 = 36）
+SAMPLE_GAME_COUNT = SAMPLE_TEAM_COUNT * SAMPLE_GAMES_PER_TEAM // 2
 # 1球団の構成（登録位置ごとの人数）。投手は先発向き・救援向きを半分ずつ（`STARTER_PITCHERS` 人が先発向き）
 SAMPLE_POSITIONS: Mapping[Position, int] = {
     Position.PITCHER: 12,

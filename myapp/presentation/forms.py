@@ -455,6 +455,21 @@ class WorkspaceForm(forms.Form):
         return Visibility(self.cleaned_data["visibility"])
 
 
+class WorkspaceCreateForm(WorkspaceForm):
+    """ワークスペースの作成（`/`）。設定の欄に、見本のリーグを入れるか（既定はオン。W5 #81）を足す。
+
+    見本の欄は作成のときだけ。設定の画面（`WorkspaceForm`）には出さない（後から見本を入れる導線は無い）。
+    チェックを外して送る（欄が送られない）と偽で、空のワークスペースを作る。
+    """
+
+    with_sample_league = forms.BooleanField(
+        label="見本のリーグを入れる",
+        required=False,
+        initial=True,
+        widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
+    )
+
+
 class WorkspaceDeleteForm(forms.Form):
     """ワークスペースの削除の確かめ（W4 T5）。ワークスペースの名前を打ってもらい、今の名前と同じときだけ通す。
 
