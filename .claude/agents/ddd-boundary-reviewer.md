@@ -67,6 +67,7 @@ presentation  →  application  →  domain  ←  infrastructure
   `infrastructure/queries.py` だけ）を決まった場所の外から使う、のどれかがあればワークスペース間の漏れになる。
   台帳は key・id・利用者・招待のトークンからワークスペースとそのメンバー・招待を引くだけで、中のデータ（リーグ・試合など）を
   読んでいないか（担当の検査のために、そのワークスペースの実データのチームの id（`teams_in(WorldScope.real(ws))`）を読むのはよい）。ワークスペースの削除だけは中のデータを消すが、そのワークスペースの範囲（`WorldScope.real(ws)`）で絞って消しているか。
+  作成で入れる見本のリーグ（W5）は、新しいワークスペースの範囲だけに書いているか（`build_workspace_service()` の見本の関数が `build_workspace_sample_service(WorldScope.real(workspace_id))` で組み、`WorkspaceSampleService` は集約とリポジトリだけを通す。範囲をサービスやビューで作る・ORM に直接書く変更は漏れになる）。
   `build_workspace_management_query(workspace_id)` はワークスペースの id を必須で受け取る（範囲の代わり）。
   新しい組み立て口は `test_wiring.py` の分類（両用・実データ専用・ペナント専用・台帳・1つのワークスペースの id を取るもの `MEMBER_BUILDERS`／`MEMBER_QUERIES`）に、新しい `Django*` の読み書きのクラスは
   `test_workspace_isolation.py` の検査の表に足してあるか。
@@ -80,7 +81,7 @@ presentation  →  application  →  domain  ←  infrastructure
 - **層をまたぐ受け渡しに素の `dict` を新しく使っていないか**。application が presentation に返す形は `application/dto.py` の
   dataclass にする（文字列キーの dict は綴りを間違えても静的検査が黙る）。既存の dict を触った変更なら、DTO へ寄せる余地を指摘してよい。
 - **サービスに別の対象のメソッドを足していないか**。application のサービスは対象ごとに分けてある（#219。参照は `LeagueViewService`・
-  `TeamViewService`・`GameViewService`、更新は `RosterService`・`GameRecordingService`・`LeagueSetupService`・`WorkspaceService`・`WorkspaceMemberService`）。対象の違うメソッドを
+  `TeamViewService`・`GameViewService`、更新は `RosterService`・`GameRecordingService`・`LeagueSetupService`・`WorkspaceService`・`WorkspaceMemberService`・`WorkspaceSampleService`）。対象の違うメソッドを
   既存のサービスに足しているなら、対象ごとの別サービスに置けないかを指摘する。分けるかどうかはユーザーが決めるので、「分ける案」として出す。
   参照のサービスに更新を足していないか（世界の範囲の参照用の組み立てから、現実の今日の年で書く更新を呼べるようになる）も見る。
 
