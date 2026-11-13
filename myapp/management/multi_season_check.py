@@ -53,7 +53,7 @@ from myapp.domain.pennant.schedule import ScheduleRules
 from myapp.domain.pennant.world import league_priority
 from myapp.domain.simulation.levels import UsageTally
 from myapp.domain.simulation.manager import ClubRoster, SimBatter, SimPitcher, choose_active_roster
-from myapp.domain.simulation.ratings import PitcherRatings
+from myapp.domain.simulation.ratings import PitcherRatings, potential_multiplier
 from myapp.domain.value_objects import BattingLine, ContractStatus, ForeignPlayerRules, PitchingLine, Position, Profile
 from myapp.management.estimate_check import (
     LEVEL_LABELS,
@@ -450,6 +450,9 @@ def format_offseason(plan: OffseasonPlan, members: Sequence[Member], year: int) 
         development_routes[draftee.route.label] = development_routes.get(draftee.route.label, 0) + 1
     registered_values = [overall_value(d.ratings) for d in plan.draftees if not d.is_development]
     development_values = [overall_value(d.ratings) for d in development]
+    # 育成の新人の伸びしろの倍率と入団の年の年齢（#362）
+    development_multipliers = [potential_multiplier(d.ratings.potential) for d in development]
+    development_ages = [age for d in development if (age := age_at_season_start(d.profile, year + 1)) is not None]
     return "\n".join(
         [
             f"  引退 {len(plan.retired)}人（うち外国人 {foreign_retired}人・平均 {_mean(ages):.1f}歳）  "
@@ -458,7 +461,8 @@ def format_offseason(plan: OffseasonPlan, members: Sequence[Member], year: int) 
             f"入れ替わり {(len(plan.retired) + len(plan.released)) / max(1, len(members)):.1%}",
             f"  育成ドラフト {len(development)}人（{'・'.join(f'{k} {v}' for k, v in development_routes.items())}）  "
             f"総合（錨の後）の平均: 本指名の日本人 {_mean(registered_values):.1f}・"
-            f"育成 {_mean(development_values):.1f}",
+            f"育成 {_mean(development_values):.1f}  育成の伸びしろの倍率の平均 {_mean(development_multipliers):.3f}・"
+            f"年齢の平均 {_mean(development_ages):.1f}歳",
             f"  能力の変化（総合値）平均 {_mean(deltas):+.2f}・標準偏差 {pstdev(deltas) if deltas else 0.0:.2f}・"
             f"最大 {max(deltas, default=0.0):+.1f}・最小 {min(deltas, default=0.0):+.1f}",
             f"  ドラフト: 1位の競合 "

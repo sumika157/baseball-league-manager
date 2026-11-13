@@ -8,6 +8,7 @@ from __future__ import annotations
 import unittest
 from collections import Counter
 from dataclasses import replace
+from statistics import fmean
 
 from myapp.domain.exceptions import InvalidDraftAction
 from myapp.domain.pennant import draft
@@ -21,13 +22,17 @@ from myapp.domain.pennant.draft import (
     plan_team_draft,
 )
 from myapp.domain.pennant.draft_meeting import (
+    DEVELOPMENT_POOL_PER_PICK,
+    DEVELOPMENT_POOL_ROUTE_WEIGHTS,
     DraftAction,
     DraftActionKind,
     DraftContext,
     DraftSlot,
     DraftState,
     draw_pool,
+    meeting_pool,
     run_draft,
+    scouting_value,
 )
 from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings, strategy_for
 from myapp.domain.pennant.roster import DEVELOPMENT_BAND, OPENING_REGISTERED_BAND
@@ -277,6 +282,98 @@ class CorporateNotInDevelopmentTest(unittest.TestCase):
         replay = DraftState.open(strategy, slots, pool, state.actions)
         self.assertEqual(replay.selections, state.selections)
         self.assertEqual(replay.pool, state.pool)
+
+
+class DevelopmentTierPoolTest(unittest.TestCase):
+    """育成の層の候補（#362）: 本指名の候補の後ろに、育成の計画に応じた高校生中心の候補を足す。"""
+
+    PLANNED = {Position.PITCHER: 10, Position.INFIELDER: 6}
+
+    def test_main_prospects_do_not_change_when_the_development_tier_is_added(self) -> None:
+        main = draw_pool(self.PLANNED, world_seed=1, year=YEAR, used_names=set())
+        both = draw_pool(
+            self.PLANNED, world_seed=1, year=YEAR, used_names=set(), development_planned={Position.PITCHER: 4}
+        )
+        self.assertEqual(both.prospects[: len(main)], main.prospects)
+        self.assertEqual(len(both), len(main) + DEVELOPMENT_POOL_PER_PICK * 4)
+        self.assertEqual([p.key for p in both.prospects], list(range(len(both))))
+        self.assertTrue(all(p.position is Position.PITCHER for p in both.prospects[len(main) :]))
+
+    def test_the_tier_is_mostly_high_school_and_never_corporate(self) -> None:
+        main = draw_pool(self.PLANNED, world_seed=1, year=YEAR, used_names=set())
+        both = draw_pool(
+            self.PLANNED, world_seed=1, year=YEAR, used_names=set(), development_planned={Position.PITCHER: 60}
+        )
+        tier = both.prospects[len(main) :]
+        self.assertTrue(all(p.allows_development_pick for p in tier))
+        self.assertGreater(sum(1 for p in tier if p.route is DraftRoute.HIGH_SCHOOL) / len(tier), 0.45)
+        self.assertEqual(set(DEVELOPMENT_POOL_ROUTE_WEIGHTS), set(DraftRoute.development_amateur_paths()))
+
+    def test_the_tier_is_weaker_now_than_main_prospects_of_the_same_route(self) -> None:
+        """今の能力は本指名の候補より低い（本指名ではほとんど取られず、本指名の新人の分布を変えない）。"""
+        planned = {Position.PITCHER: 60}
+        main = draw_pool(planned, world_seed=2, year=YEAR, used_names=set())
+        both = draw_pool(planned, world_seed=2, year=YEAR, used_names=set(), development_planned=planned)
+        for route in (DraftRoute.HIGH_SCHOOL, DraftRoute.UNIVERSITY):
+            with self.subTest(route=route):
+                tier = [scouting_value(p.rookie.ratings) for p in both.prospects[len(main) :] if p.route is route]
+                regular = [scouting_value(p.rookie.ratings) for p in main.prospects if p.route is route]
+                self.assertLess(fmean(tier), fmean(regular))
+
+    def test_the_meeting_pool_adds_the_tier_for_the_development_plans(self) -> None:
+        teams = [club(team_id, target=25) for team_id in (1, 2, 3)]
+        slots = [DraftSlot.of(team, plan_team_draft(team)) for team in teams]
+        development = sum(len(slot.development_planned) for slot in slots)
+        self.assertGreater(development, 0, "前提")
+        planned = Counter(position for slot in slots for position in slot.planned)
+        main = draw_pool(planned, world_seed=1, year=YEAR, used_names=set())
+        pool = meeting_pool(slots, world_seed=1, year=YEAR, used_names=())
+        self.assertEqual(len(pool), len(main) + DEVELOPMENT_POOL_PER_PICK * development)
+
+    def test_development_picks_take_high_school_players_from_the_tier(self) -> None:
+        """育成の巡の AI は将来値で選ぶので、育成の層の高校生を取る（育成の層が無い会議より高校生が増える）。"""
+        teams = [club(team_id, target=25) for team_id in range(1, 7)]
+        with_tier = meeting_state_with_tier(teams)
+        with_tier.auto_complete()
+        without_tier = meeting(teams)
+        without_tier.auto_complete()
+
+        def high_school(state: DraftState) -> int:
+            return sum(
+                1
+                for s in state.selections
+                if s.is_development and state.pool.get(s.prospect_key).route is DraftRoute.HIGH_SCHOOL
+            )
+
+        self.assertGreater(high_school(with_tier), high_school(without_tier))
+
+    def test_the_ai_does_not_take_the_tier_in_the_main_rounds(self) -> None:
+        """AI は本指名で育成の層の候補を指名しない（本指名の結果は育成の層の無い会議と同じ）。"""
+        teams = [club(team_id, target=25) for team_id in range(1, 7)]
+        with_tier = meeting_state_with_tier(teams)
+        with_tier.auto_complete()
+        without_tier = meeting(teams)
+        without_tier.auto_complete()
+        main = [s for s in with_tier.selections if not s.is_development]
+        self.assertEqual(main, [s for s in without_tier.selections if not s.is_development])
+        self.assertFalse(any(with_tier.pool.get(s.prospect_key).development_tier for s in main))
+
+    def test_the_gm_may_pick_a_tier_prospect_in_the_main_rounds(self) -> None:
+        state = meeting_state_with_tier([club(team_id, target=25) for team_id in (1, 2)])
+        turn = state.next_turn()
+        assert turn is not None and not turn.is_development
+        tier = next(p for p in state.pool.prospects if p.development_tier)
+        kind = DraftActionKind.BID if turn.is_bid else DraftActionKind.PICK
+        state.apply(DraftAction(kind, turn.team_id, tier.key))
+
+
+def meeting_state_with_tier(teams: list[DraftTeam]) -> DraftState:
+    """育成の層の候補を含めた会議（`meeting_pool`。締める処理と同じ候補）。"""
+    ids = [team.team_id for team in teams]
+    slots = [DraftSlot.of(team, plan_team_draft(team)) for team in teams]
+    pool = meeting_pool(slots, world_seed=1, year=YEAR, used_names=())
+    strategy = strategy_for(DraftOrderRule.NPB, DraftStandings(leagues=(tuple(ids),)), world_seed=1, year=YEAR)
+    return DraftState.open(strategy, slots, pool)
 
 
 class DevelopmentRookieTest(unittest.TestCase):
