@@ -2,7 +2,8 @@
 編成の後始末・翌年の日程を、1つの操作にまとめる。
 
 育成の昇格と契約の満了（#170 P1）は、戦力外の後・外国人の獲得の前に AI が決める（`domain/pennant/development.py`。
-GM の指名は P2）。昇格は `Team.promote_player` に翌年（Y+1）を渡して書き（翌年から支配下・試合に出られる）、
+受け持つ球団は GM の指名（`DevelopmentPlan`。#170 P2）があればそのとおり）。昇格は `Team.promote_player` に
+翌年（Y+1）を渡して書き（翌年から支配下・試合に出られる）、
 満了の自由契約は戦力外と同じく `release_player`（退団の経路は戦力外）。再契約は何も書かない。
 
 外国人の獲得（#169）は、戦力外の後・ドラフト会議の前に、AI が球団ごとの候補から選ぶ
@@ -31,10 +32,12 @@ GM が会議（`PennantDraftService`。#297 D3）を開いた年は、途中な�
 **中では、最後の試合日と次の対戦の日が読み込みの前と変わっていないこと・翌年の能力が無いことを読み直してから書く**。
 変わっていたら（外で計算している間に別のリクエストが締めた・進めた）、書かずに既存の例外
 （`AlreadyClosed` / `SeasonNotFinished`）で断る。編成（`ClubPlan`）は GM が保存しうるので、書く直前に中で読む。
-受け持つ球団の戦力外の指名（`ReleasePlan`）も GM が保存しうるが、こちらは計算に使うので状態の目印
+受け持つ球団の戦力外の指名（`ReleasePlan`）と育成の指名（`DevelopmentPlan`。#170 P2）も GM が保存しうるが、
+こちらは計算に使うので状態の目印
 （`OffseasonPhase.state`）に入れて前後で比べる（変わっていたら断る）。その年の会議の目印（最後の行動の番号。
 `DraftRepository.last_seq`）も前後で比べる（計算している間に会議を始めた・進めたら、古い計算を書かない）。
-指名を決める操作（`set_releases` など）もこのサービスが持つ（指名は公式戦を終えればポストシーズン中もできる。
+指名を決める操作（`set_releases`・`set_development` など）もこのサービスが持つ（指名は公式戦を終えれば
+ポストシーズン中もできる。
 会議を始めた後は変えられない＝`pre_draft_input_blocker`。書くトランザクションの中で会議の有無を読み直す）。
 
 締める年のタイトル受賞者は**表彰として保存する**（#248。CLAUDE.md の「集計を保存しない」の例外）。受賞者は外で
@@ -74,6 +77,14 @@ from ..domain.exceptions import (
 from ..domain.pennant.awards import Award
 from ..domain.pennant.championship import Championship
 from ..domain.pennant.club_plan import ClubMember, PlanSection
+from ..domain.pennant.development import (
+    DevelopmentDecision,
+    DevelopmentMember,
+    DevelopmentPlan,
+    contract_start_year,
+    ensure_development_plan,
+    is_contract_expiring,
+)
 from ..domain.pennant.draft_lottery import DraftKey, lottery_records
 from ..domain.pennant.draft_record import pre_draft_input_blocker
 from ..domain.pennant.foreign_market import ForeignSigning
@@ -88,6 +99,7 @@ from ..domain.repositories import (
     AwardRepository,
     ChampionshipRepository,
     ClubPlanRepository,
+    DevelopmentPlanRepository,
     DraftLotteryRepository,
     DraftRepository,
     FixtureRepository,
@@ -98,14 +110,25 @@ from ..domain.repositories import (
     WorldRepository,
 )
 from ..domain.value_objects import DepartureRoute, ForeignPlayerRules, JerseyNumber, RosterLimits
-from .dto import ReleasePlanView, ReleasePlayerRow, SeasonClosed, SeasonCloseOption, SimulationTeam
+from .dto import (
+    DevelopmentPlanRow,
+    DevelopmentPlanView,
+    ReleasePlanView,
+    ReleasePlayerRow,
+    SeasonClosed,
+    SeasonCloseOption,
+    SimulationTeam,
+)
 from .foreign_quota import ForeignQuotaExemptions
 from .league_view import LeagueViewService
 from .pennant_awards import derive_awards
+from .pennant_midseason import development_row
 from .pennant_offseason_inputs import (
     OffseasonInputsReader,
     OffseasonPhase,
+    chosen_development,
     chosen_releases,
+    development_plan_of,
     ensure_postseason_settled,
     limits_of,
     managed_team_id,
@@ -113,7 +136,7 @@ from .pennant_offseason_inputs import (
 )
 from .pennant_postseason import PostseasonBracketReader
 from .pennant_season import AtomicBlock
-from .queries import SimulationContextQuery
+from .queries import DevelopmentRosterQuery, SimulationContextQuery
 
 
 def _saved_id(value: int | None) -> int:
@@ -161,6 +184,8 @@ class PennantOffseasonService:
         ratings: RatingsRepository,
         plans: ClubPlanRepository,
         releases: ReleasePlanRepository,
+        developments: DevelopmentPlanRepository,
+        development_roster: DevelopmentRosterQuery,
         awards: AwardRepository,
         championships: ChampionshipRepository,
         drafts: DraftRepository,
@@ -181,6 +206,9 @@ class PennantOffseasonService:
         self._ratings = ratings
         self._plans = plans
         self._releases = releases
+        # 受け持つ球団の育成の指名（#170 P2）と、その「育成」タブの材料（育成選手の一覧）
+        self._developments = developments
+        self._development_roster = development_roster
         self._awards = awards
         self._championships = championships
         # その年のドラフト会議の記録（GM が開いた会議。締めるときに再生して消す。#297 D3）
@@ -218,8 +246,15 @@ class PennantOffseasonService:
                 reason=str(error),
             )
         chosen = chosen_releases(release_plan_of(self._releases, world.managed_team_id), year)
+        development = development_plan_of(self._developments, world.managed_team_id)
+        manual = development if chosen_development(development, year) is not None else None
         return SeasonCloseOption(
-            year=year, next_year=year + 1, can_close=True, release_count=None if chosen is None else len(chosen)
+            year=year,
+            next_year=year + 1,
+            can_close=True,
+            release_count=None if chosen is None else len(chosen),
+            development_promote_count=None if manual is None else manual.count(DevelopmentDecision.PROMOTE),
+            development_release_count=None if manual is None else manual.count(DevelopmentDecision.RELEASE),
         )
 
     def close_season(self, *, expected_year: int | None = None) -> SeasonClosed:
@@ -331,7 +366,10 @@ class PennantOffseasonService:
         )
 
     def can_choose_releases(self) -> bool:
-        """「戦力外」タブを出せるか（`release_view` が例外にならないか）。支配下の一覧までは読まない。"""
+        """「戦力外」タブを出せるか（`release_view` が例外にならないか）。支配下の一覧までは読まない。
+
+        育成の指名（「育成」タブのオフの形。`development_view`）を出せる条件も同じ（`can_choose_development`）。
+        """
         world = self._worlds.find_by_id(self._world_id)
         if world.managed_team_id is None:
             return False
@@ -403,6 +441,88 @@ class PennantOffseasonService:
         if blocker is not None:
             raise DraftStarted(blocker)
 
+    # --- 育成の指名（受け持つ球団だけ。#170 P2。戦力外の指名と同じ時期・同じ検査） ---
+
+    def can_choose_development(self) -> bool:
+        """「育成」タブのオフの形を出せるか（`development_view` が例外にならないか）。条件は戦力外の指名と同じ。"""
+        return self.can_choose_releases()
+
+    def development_view(self) -> DevelopmentPlanView:
+        """編成の「育成」タブのオフの形の材料。公式戦の途中・締めた後・最終シーズンは例外（ポストシーズン中は出す）。
+
+        - `SeasonNotFinished` / `AlreadyClosed` / `SeasonLimitReached`: 指名できない（オフの形を出さない）
+        - `TeamNotFound`: 受け持つ球団が無い
+
+        何年目・満了の印・能力は締める年で数える（締める処理の満了の判定と同じ年）。
+        """
+        world = self._worlds.find_by_id(self._world_id)
+        year, team_id = self._release_target(None)
+        roster = self._development_roster.for_team(team_id, year)
+        ratings = {
+            item.player_id: item.ratings
+            for item in self._ratings.find_by_players([player.player_id for player in roster.players], year)
+        }
+        decisions = chosen_development(self._developments.find_by_team(team_id), year)
+        rows = []
+        for player in roster.players:
+            row = development_row(player, ratings.get(player.player_id), world=world, team_id=team_id, year=year)
+            unchanged = DevelopmentDecision.unchanged(is_expiring=row.is_expiring)
+            choices = DevelopmentDecision.choices_for(is_expiring=row.is_expiring)
+            saved = None if decisions is None else decisions.get(player.player_id)
+            rows.append(
+                DevelopmentPlanRow(player=row, choices=choices, decision=saved if saved in choices else unchanged)
+            )
+        return DevelopmentPlanView(
+            team_id=team_id,
+            team_name=roster.team_name,
+            year=year,
+            is_manual=decisions is not None,
+            registered_count=roster.registered_count,
+            registered_limit=roster.registered_limit,
+            rows=tuple(rows),
+            blocker=self._release_blocker(year) or "",
+        )
+
+    def start_manual_development(self, *, expected_year: int | None) -> None:
+        """育成の指名を手動にする（全員「何も変えない」扱い＝育成のまま・再契約から選ぶ）。すでに手動なら何も変えない。
+        会議を始めた後は `DraftStarted`。"""
+        year, team_id = self._release_target(expected_year)
+        members = self._development_members(team_id, year)
+        with self._atomic():
+            self._ensure_releases_open(year)
+            current = self._developments.find_by_team(team_id)
+            if current is None or current.year != year:
+                decisions = {
+                    member.player_id: DevelopmentDecision.unchanged(is_expiring=member.is_expiring)
+                    for member in members
+                }
+                self._developments.save(DevelopmentPlan(team_id=team_id, year=year, decisions=decisions))
+
+    def set_development(self, decisions: Mapping[int, DevelopmentDecision], *, expected_year: int | None) -> None:
+        """育成の扱いを手動で指名する（丸ごと置き換える。全員に1つずつ）。成立しなければ `InvalidDevelopmentPlan`、
+        会議を始めた後は `DraftStarted`。"""
+        year, team_id = self._release_target(expected_year)
+        ensure_development_plan(decisions, self._development_members(team_id, year))
+        plan = DevelopmentPlan(team_id=team_id, year=year, decisions=dict(decisions))
+        with self._atomic():
+            self._ensure_releases_open(year)
+            self._developments.save(plan)
+
+    def reset_development(self, *, expected_year: int | None) -> None:
+        """育成の指名を自動に戻す。すでに自動なら何も変わらない。会議を始めた後は `DraftStarted`。"""
+        year, team_id = self._release_target(expected_year)
+        with self._atomic():
+            self._ensure_releases_open(year)
+            self._developments.save(DevelopmentPlan(team_id=team_id, year=year, decisions=None))
+
+    def _development_members(self, team_id: int, year: int) -> list[DevelopmentMember]:
+        """球団のいま在籍している育成選手と、締める年に満了するか（指名の検査の材料）。"""
+        members = []
+        for player in self._development_roster.for_team(team_id, year).players:
+            start = contract_start_year(player.tenure.profile.draft, joined_year=player.joined_year)
+            members.append(DevelopmentMember(player.player_id, player.name, is_contract_expiring(start, year)))
+        return members
+
     # --- 検査（`OffseasonPhase` が出典。ここは世界を渡すだけ） ---
 
     def _check(
@@ -431,6 +551,7 @@ class PennantOffseasonService:
             start_year=world.start_year,
             used_names=inputs.used_names,
             manual_releases=inputs.manual_releases,
+            manual_development=inputs.manual_development,
             draft=inputs.draft,
             meeting=self._drafts.find(year),
         )
@@ -468,6 +589,8 @@ class PennantOffseasonService:
         reverted, reverted_clubs = self._revert_plans(plan, world)
         # 戦力外の指名は使い終わった（締める年の違う指名も、使わずに消す）。事実は在籍の退団の経路に残る
         self._releases.delete_all()
+        # 育成の指名も使い終わった（昇格の事実は在籍の昇格の年、自由契約は退団の経路に残る。#170 P2）
+        self._developments.delete_all()
         # その年のドラフト会議の記録も使い終わった（指名の事実は新人のプロフィールと在籍の経路に残る。#297 D3）
         self._drafts.remove(year)
         # 抽選の経過は、会議の記録が消えるとどこからも導けないので、指名された選手に結びつけて残す

@@ -31,7 +31,15 @@ from ..simulation.ratings import BatterRatings, PitcherRatings
 from ..simulation.spread import MIN_POPULATION, rescale, spread_ratings, target_mean, target_sd
 from ..value_objects import ContractStatus
 from .aging import age_ratings
-from .development import Promotion, confirm_promotions, decide_expirations, decide_promotions
+from .development import (
+    DevelopmentDecision,
+    Promotion,
+    confirm_chosen_promotions,
+    confirm_promotions,
+    decide_expirations,
+    decide_promotions,
+    decisions_as_chosen,
+)
 from .draft import Draftee, DraftTeam, development_target
 from .draft_meeting import DraftContext, DraftState, Lottery, MeetingSetup, finish_draft, open_meeting
 from .draft_record import DraftRecord
@@ -260,13 +268,16 @@ def plan_departures(
     world_seed: int,
     start_year: int,
     manual_releases: Mapping[int, Collection[int]] | None = None,
+    manual_development: Mapping[int, Mapping[int, DevelopmentDecision]] | None = None,
 ) -> Departures:
     """Y 年を締めるときの引退・戦力外・昇格・育成契約の満了（球団 id の昇順）。ドラフト会議の人数の幅（D3）も
     同じ関数で数える。
 
     順序は 引退 → 昇格の希望 → 戦力外（希望の分も空ける＝上乗せ）→ 昇格の確定 → 満了（`development.py`。#170）。
     `manual_releases`: GM が手動で戦力外を指名した球団（球団 id → 選手 id）。無い球団は自動（`release.py`）。
-    手動の球団も昇格と満了は自動（GM の指名は #170 P2）で、昇格は指名の後の空きに収まる人数まで。
+    `manual_development`: GM が手動で育成の扱いを指名した球団（球団 id → 選手 id → 扱い。#170 P2）。無い球団は自動
+    （`development.py`）。手動の球団は指名どおりに上げ（支配下の上限を超える分だけ削る）、満了の選手を指名どおりに
+    自由契約にする。戦力外が自動なら、指名した昇格の分も空ける（上乗せ。AI と同じ）。
     """
     ordered = sorted(clubs, key=lambda club: club.team_id)
     retired = set(decide_retirements(ordered, year=year, world_seed=world_seed, start_year=start_year))
@@ -277,7 +288,13 @@ def plan_departures(
     teams: list[DraftTeam] = []
     for club in ordered:
         remaining = [player for player in club.players if player.player_id not in retired]
-        wished = decide_promotions(club, remaining, year=year, start_year=start_year, world_seed=world_seed)
+        decisions = (manual_development or {}).get(club.team_id)
+        chosen_development = None if decisions is None else decisions_as_chosen(decisions, remaining, year=year)
+        wished = (
+            decide_promotions(club, remaining, year=year, start_year=start_year, world_seed=world_seed)
+            if chosen_development is None
+            else chosen_development.promotions
+        )
         # 戦力外は引退の後・ドラフトの前。ドラフトは戦力外の後の人数で数える。手動の球団は指名どおり
         chosen = (manual_releases or {}).get(club.team_id)
         leaving = set(
@@ -289,7 +306,13 @@ def plan_departures(
         )
         released.extend(sorted(leaving))
         remaining = [player for player in remaining if player.player_id not in leaving]
-        promoted = confirm_promotions(club, remaining, wished, year=year, world_seed=world_seed)
+        promoted = (
+            confirm_promotions(club, remaining, wished, year=year, world_seed=world_seed)
+            if chosen_development is None
+            else confirm_chosen_promotions(
+                club, remaining, wished, year=year, start_year=start_year, world_seed=world_seed
+            )
+        )
         promotions.extend(promoted)
         lapsed = set(
             decide_expirations(
@@ -300,6 +323,8 @@ def plan_departures(
                 start_year=start_year,
                 world_seed=world_seed,
             )
+            if chosen_development is None
+            else chosen_development.releases
         )
         expired.extend(sorted(lapsed))
         numbers = {promotion.player_id: promotion.number for promotion in promoted}
@@ -349,6 +374,7 @@ def prepare_meeting(
     used_names: Collection[str],
     draft: DraftContext,
     manual_releases: Mapping[int, Collection[int]] | None = None,
+    manual_development: Mapping[int, Mapping[int, DevelopmentDecision]] | None = None,
 ) -> PreparedMeeting:
     """Y 年のドラフト会議を開くまで: 引退・戦力外（`plan_departures`）→ 外国人の獲得 →
     人数の幅と候補（`open_meeting`）。
@@ -358,7 +384,12 @@ def prepare_meeting(
     引数は `plan_offseason` と同じ。
     """
     departures = plan_departures(
-        clubs, year=year, world_seed=world_seed, start_year=start_year, manual_releases=manual_releases
+        clubs,
+        year=year,
+        world_seed=world_seed,
+        start_year=start_year,
+        manual_releases=manual_releases,
+        manual_development=manual_development,
     )
     names = set(used_names)
     # 外国人の獲得は会議の前（獲得した外国人の分だけ、会議で指名する日本人が減る。#169）
@@ -393,6 +424,7 @@ def plan_offseason(
     used_names: Collection[str],
     draft: DraftContext,
     manual_releases: Mapping[int, Collection[int]] | None = None,
+    manual_development: Mapping[int, Mapping[int, DevelopmentDecision]] | None = None,
     meeting: DraftRecord | None = None,
 ) -> OffseasonPlan:
     """Y 年を締める計画。`clubs` は球団 id の昇順で処理する。
@@ -401,6 +433,7 @@ def plan_offseason(
     - `start_year`: 世界の開幕年（生年月日の無い選手の年齢の推定に使う）
     - `draft`: ドラフト会議の設定（世界の規則と、Y 年の公式戦の最終順位）。既定値は持たない
     - `manual_releases`: GM が手動で戦力外を指名した球団（球団 id → 選手 id）。無い球団は自動（`release.py`）
+    - `manual_development`: GM が手動で育成の扱いを指名した球団（球団 id → 選手 id → 扱い。#170 P2）。無い球団は自動
     - `meeting`: GM が進めて終えた会議の記録（D3。`replay_meeting` の検査を通す）。None なら会議を開かなかった年で、
       全球団を AI として最後まで進める
     """
@@ -412,6 +445,7 @@ def plan_offseason(
         used_names=used_names,
         draft=draft,
         manual_releases=manual_releases,
+        manual_development=manual_development,
     )
     departures, market, setup = prepared.departures, prepared.market, prepared.setup
     retired = departures.retired

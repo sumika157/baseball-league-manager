@@ -1,0 +1,63 @@
+{% comment %}
+「育成」タブのオフの形の表（#170 P2）。editing が真のときだけ、行ごとの扱いをラジオボタンで選ぶ（呼び出し元が保存のフォームで囲む）。
+手動の指名を読むだけのとき（オーナー以外・会議の後）は、選ばれた扱いを出す。自動のときは扱いの列を出さない。
+development_rows は（行 DevelopmentPlanRow, 選ばれている扱いの表示名）の組。選択肢は行の choices（domain の DevelopmentDecision）。
+{% endcomment %}
+{% load scoped %}
+<div class="table-responsive">
+  <table class="table table-hover tabular-nums">
+    <thead>
+      <tr>
+        <th class="text-end">背番号</th>
+        <th>選手</th>
+        <th>登録位置</th>
+        <th class="text-end">年齢</th>
+        <th>能力</th>
+        <th>育成</th>
+        {% if editing or development_plan.is_manual %}<th>オフの扱い</th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for plan_row, selected in development_rows %}
+        {% with row=plan_row.player %}
+        <tr data-testid="development-plan-row">
+          <td class="text-end stat-muted">{{ row.number }}</td>
+          <td><a href="{% scoped_url 'player_detail' development_plan.team_id row.player_id %}" class="player-name">{{ row.name }}</a></td>
+          <td>{{ row.position.value }}</td>
+          <td class="text-end stat-muted">{{ row.age }}</td>
+          <td>
+            {% if row.overall %}
+              <div>
+                {{ row.overall.label }} {% include 'myapp/_rating_grade.html' with rating=row.overall %}
+                {% if row.outlook %}<span class="ms-2" data-outlook>見込み {% include 'pennant/_outlook_grade.html' with outlook=row.outlook %}</span>{% endif %}
+              </div>
+              <div class="stat-muted" style="font-size: 0.8125rem;">
+                {% for cell in row.cells %}{{ cell.label }} {% include 'myapp/_rating_grade.html' with rating=cell %}{% if not forloop.last %} · {% endif %}{% endfor %}
+              </div>
+            {% else %}<span class="stat-muted">—</span>{% endif %}
+          </td>
+          <td>{{ row.contract_season }}年目{% if row.is_expiring %} <span class="badge bg-warning text-dark" data-testid="expiring-badge">今季で満了</span>{% endif %}</td>
+          {% if editing %}
+            <td>
+              {% for choice in plan_row.choices %}
+                <div class="form-check form-check-inline">
+                  <input class="form-check-input" type="radio" name="decision_{{ row.player_id }}" id="decision-{{ row.player_id }}-{{ forloop.counter }}" value="{{ choice.value }}" {% if choice.value == selected %}checked{% endif %}>
+                  <label class="form-check-label" for="decision-{{ row.player_id }}-{{ forloop.counter }}">{{ choice.label }}</label>
+                </div>
+              {% endfor %}
+            </td>
+          {% elif development_plan.is_manual %}
+            <td>{% if plan_row.decision.name == 'PROMOTE' %}<span class="badge bg-primary">{{ plan_row.decision.label }}</span>{% elif plan_row.decision.name == 'RELEASE' %}<span class="badge bg-danger">{{ plan_row.decision.label }}</span>{% else %}<span class="stat-muted">{{ plan_row.decision.label }}</span>{% endif %}</td>
+          {% endif %}
+        </tr>
+        {% endwith %}
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% comment %}見込みの注記。見込みのある最初の行で1回だけ出す（ifchanged は同じ内容を繰り返さない）{% endcomment %}
+{% for plan_row, selected in development_rows %}{% if plan_row.player.outlook %}{% ifchanged plan_row.player.outlook.peak_age %}
+<p class="page-subtitle mb-3" style="font-size: 0.8125rem;">
+  見込みは、{{ plan_row.player.outlook.peak_age }}歳ごろの総合の見込みを、球団のスカウトの見立てで示した区分です（{{ development_plan.year }}年4月1日に{{ plan_row.player.outlook.peak_age }}歳以上は「—」）。「今季で満了」は、育成契約（3年。その後は1年ごと）が今季のオフに満了する選手です。
+</p>
+{% endifchanged %}{% endif %}{% endfor %}

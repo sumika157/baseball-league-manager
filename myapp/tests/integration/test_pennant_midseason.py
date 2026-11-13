@@ -338,13 +338,18 @@ class AfterTheSeasonTest(ScreenCase):
     """シーズンを終えた世界A（公式戦の対戦が残っていない）。"""
 
     def test_the_window_is_closed_while_the_season_can_be_closed(self):
-        """シーズン終了〜締めるまで（ポストシーズン中も）は窓の外。「戦力外」タブと「育成」タブは同時に出ない。"""
+        """シーズン終了〜締めるまで（ポストシーズン中も）は窓の外。「育成」タブはオフの形（育成の指名。
+        #170 P2）で出し、期中の「支配下に登録」は出さない。"""
         prospect = add_development(self.world_a, "育成期末", "150", draft_year=YEAR - 1, year=YEAR)
         self.client.force_login(self.owner)
 
         content = self.client.get(ws_url("pennant_club", self.world_a)).content.decode()
         self.assertIn("?tab=release", content)
-        self.assertNotIn("?tab=development", content)
+        self.assertIn("?tab=development", content)
+        content = self.client.get(ws_url("pennant_club", self.world_a) + "?tab=development").content.decode()
+        self.assertIn('id="club-development-plan"', content)
+        self.assertNotIn("支配下に登録</button>", content)
+        self.assertNotIn('data-testid="development-row"', content)
         with self.assertRaises(ReinforcementClosed):
             build_midseason_registration_service(world_scope(self.world_a)).promote(
                 prospect, expected_next_game_on=None

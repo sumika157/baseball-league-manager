@@ -140,6 +140,11 @@ class InvalidReleasePlan(DomainError):
     """戦力外の指名として成立しない（支配下の在籍選手でない・位置の最低人数を割る・試合を組めなくなる）。"""
 
 
+class InvalidDevelopmentPlan(DomainError):
+    """育成選手のオフの指名として成立しない（球団の育成選手でない・選んでいない選手がいる・満了でない選手を
+    再契約や自由契約にする、など。#170 P2）。"""
+
+
 class InvalidSigning(DomainError):
     """外国人の獲得として成立しない（候補にいない・重複・保有の上限を超える・期中の1年の上限を超える。#169）。"""
 

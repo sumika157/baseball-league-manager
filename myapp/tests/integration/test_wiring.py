@@ -75,6 +75,7 @@ from myapp.domain.repositories import (
     AwardRepository,
     ChampionshipRepository,
     ClubPlanRepository,
+    DevelopmentPlanRepository,
     DraftRepository,
     FixtureRepository,
     GameRepository,
@@ -118,6 +119,7 @@ from myapp.infrastructure.repositories import (
     DjangoAwardRepository,
     DjangoChampionshipRepository,
     DjangoClubPlanRepository,
+    DjangoDevelopmentPlanRepository,
     DjangoDraftRepository,
     DjangoFixtureRepository,
     DjangoGameRepository,
@@ -259,6 +261,7 @@ class ProtocolConformanceTest(SimpleTestCase):
         (DjangoFixtureRepository(REAL), FixtureRepository),
         (DjangoClubPlanRepository(REAL), ClubPlanRepository),
         (DjangoReleasePlanRepository(REAL), ReleasePlanRepository),
+        (DjangoDevelopmentPlanRepository(REAL), DevelopmentPlanRepository),
         (DjangoAwardRepository(REAL), AwardRepository),
         (DjangoAwardQuery(REAL), AwardQuery),
         (DjangoChampionshipRepository(REAL), ChampionshipRepository),
@@ -934,13 +937,15 @@ class PennantOffseasonScopeTest(SimpleTestCase):
         "_ratings",
         "_plans",
         "_releases",
+        "_developments",
+        "_development_roster",
         "_awards",
         "_championships",
         "_drafts",
         "_context_query",
     )
-    PHASE_SCOPED = ("_teams", "_fixtures", "_ratings", "_releases", "_context_query")
-    INPUTS_SCOPED = ("_teams", "_leagues", "_ratings", "_releases", "_awards", "_playing_time")
+    PHASE_SCOPED = ("_teams", "_fixtures", "_ratings", "_releases", "_developments", "_context_query")
+    INPUTS_SCOPED = ("_teams", "_leagues", "_ratings", "_releases", "_developments", "_awards", "_playing_time")
 
     def test_every_dependency_is_fixed_to_the_given_world(self):
         service = build_pennant_offseason_service(WORLD7)
@@ -969,6 +974,8 @@ class PennantOffseasonScopeTest(SimpleTestCase):
         service = build_pennant_offseason_service(WORLD7)
         self.assertIs(service._phase._ratings, service._ratings)
         self.assertIs(service._phase._releases, service._releases)
+        self.assertIs(service._phase._developments, service._developments)
+        self.assertIs(service._inputs._developments, service._developments)
         self.assertIs(service._inputs._teams, service._teams)
         self.assertIs(service._phase._postseason, service._postseason)
 

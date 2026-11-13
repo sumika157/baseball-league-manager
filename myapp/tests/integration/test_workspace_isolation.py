@@ -64,6 +64,7 @@ from myapp.domain.exceptions import (
 )
 from myapp.domain.pennant.awards import Award
 from myapp.domain.pennant.championship import Championship
+from myapp.domain.pennant.development import DevelopmentDecision, DevelopmentPlan
 from myapp.domain.pennant.draft_lottery import DraftLotteryRecord
 from myapp.domain.pennant.draft_meeting import DraftAction, DraftActionKind, DraftSlot
 from myapp.domain.pennant.draft_record import DraftRecord
@@ -115,6 +116,7 @@ from myapp.infrastructure.repositories import (
     DjangoAwardRepository,
     DjangoChampionshipRepository,
     DjangoClubPlanRepository,
+    DjangoDevelopmentPlanRepository,
     DjangoDraftLotteryRepository,
     DjangoDraftRepository,
     DjangoFixtureRepository,
@@ -390,6 +392,10 @@ class WorkspaceCase(BaseCase):
         orm_models.PennantClubPlan.objects.create(team=cls.b_team, closer_id=cls.b_pitcher)
         plan = orm_models.PennantReleasePlan.objects.create(team=cls.b_team, year=B_YEAR)
         orm_models.PennantReleasePlanEntry.objects.create(plan=plan, player_id=batter)
+        development = orm_models.PennantDevelopmentPlan.objects.create(team=cls.b_team, year=B_YEAR)
+        orm_models.PennantDevelopmentPlanEntry.objects.create(
+            plan=development, player_id=batter, decision=DevelopmentDecision.PROMOTE.value
+        )
 
     def setUp(self):
         super().setUp()
@@ -525,6 +531,23 @@ def _release_plan_repository(t: WorkspaceCase) -> None:
         repo.find_by_team(t.b_team.id)
     repo.delete_all()
     t.assertTrue(orm_models.PennantReleasePlan.objects.filter(team=t.b_team).exists(), "A の範囲で B の行を消した")
+
+
+def _development_plan_repository(t: WorkspaceCase) -> None:
+    """育成のオフの指名（#364）。B の球団の指名は、A の実データ・A の世界から読めず、書けず、消せない。"""
+    b_plans = orm_models.PennantDevelopmentPlan.objects.filter(team=t.b_team)
+    plan = DevelopmentPlan(team_id=t.b_team.id, year=B_YEAR, decisions={})
+    with t.assertRaises(InvalidWorld):
+        DjangoDevelopmentPlanRepository(t.a).save(plan)
+    for scope in _a_scopes(t):
+        repo = DjangoDevelopmentPlanRepository(scope)
+        with t.assertRaises(TeamNotFound):
+            repo.find_by_team(t.b_team.id)
+        repo.delete_all()
+    with t.assertRaises(TeamNotFound):
+        DjangoDevelopmentPlanRepository(WorldScope.pennant(t.workspace.id, t.a_world_id)).save(plan)
+    t.assertEqual(b_plans.get().year, B_YEAR, "A の範囲で B の行を書いた・消した")
+    t.assertTrue(orm_models.PennantDevelopmentPlanEntry.objects.filter(plan__team=t.b_team).exists())
 
 
 def _player_fielding_query(t: WorkspaceCase) -> None:
@@ -1057,6 +1080,7 @@ CHECKS: dict[type, Callable[[WorkspaceCase], None]] = {
     DjangoFixtureRepository: _fixture_repository,
     DjangoClubPlanRepository: _club_plan_repository,
     DjangoReleasePlanRepository: _release_plan_repository,
+    DjangoDevelopmentPlanRepository: _development_plan_repository,
     DjangoAwardRepository: _award_repository,
     DjangoAwardQuery: _award_query,
     DjangoChampionshipRepository: _championship_repository,

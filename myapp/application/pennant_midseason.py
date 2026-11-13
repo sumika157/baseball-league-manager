@@ -112,7 +112,7 @@ class MidseasonRegistrationService:
             registered_limit=roster.registered_limit,
             blocked_reason=blocked,
             players=tuple(
-                _row(player, ratings.get(player.player_id), world=world, team_id=team_id, year=year)
+                development_row(player, ratings.get(player.player_id), world=world, team_id=team_id, year=year)
                 for player in roster.players
             ),
         )
@@ -159,9 +159,12 @@ def _managed_team_id(world: World) -> int:
     return world.managed_team_id
 
 
-def _row(
+def development_row(
     player: DevelopmentPlayerFacts, found: Ratings | None, *, world: World, team_id: int, year: int
 ) -> DevelopmentPlayerRow:
+    """「育成」タブの1行（期中の登録と、オフの指名（`PennantOffseasonService.development_view`。#170 P2）が共有する）。
+
+    何年目と満了の印は `year` 年で数える（期中は登録の年、オフは締める年）。"""
     tenure = player.tenure
     start = contract_start_year(tenure.profile.draft, joined_year=player.joined_year)
     return DevelopmentPlayerRow(
