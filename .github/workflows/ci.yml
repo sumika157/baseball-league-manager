@@ -2,11 +2,13 @@
 # テストと配布を1つのワークフローに置き、publish を test に `needs` でつなぐ
 # （テストが落ちたコミットからはイメージを push しない。workflow_run で別ファイルにするより経路が1本で済む）。
 # 手元と同じ環境で流すため、検査もテストも開発用 Dockerfile のイメージの中で動かす（CLAUDE.md の「すべてのコマンドは Docker 経由」）。
+# 例外は ruff で、イメージを作らずに requirements-dev.txt と同じ版を流す（ドキュメントだけの変更でも流すため。#350）。
 name: CI
 
-# ワークフローは毎回動かし、テストに影響しない変更だけのときは test ジョブをスキップする（下の changes ジョブ）。
+# ワークフローは毎回動かし、テストに影響しない変更だけのときは test ジョブの中のビルドとテストを飛ばす（下の changes ジョブ）。
 # トリガーの paths-ignore で流さないと、必須のチェック test が報告されず、自動マージがいつまでも待つため（#244）。
-# スキップされたジョブは、必須のチェックとしては成功扱いになる。Terraform の検査は terraform.yml
+# ruff だけは毎回流す。ruff は Markdown の中の Python のコード例も検査するので、ドキュメントだけの変更でも落ちうる（#350）。
+# Terraform の検査は terraform.yml
 on:
   pull_request:
   # main と epic の統合ブランチの先端を流す（並行した PR を続けてマージすると、単独では通っても組み合わせで壊れることがあるため）。
@@ -92,9 +94,10 @@ jobs:
           done <<< "$files"
           echo "code=$code" >> "$GITHUB_OUTPUT"
 
+  # 必須のチェック。ジョブは毎回動かし、ruff は毎回、それ以外はテストに影響する変更のときだけ流す
+  # （ジョブごとスキップすると成功扱いになり、ruff も流れないまま自動マージされる。#350）
   test:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -105,10 +108,20 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # ruff はイメージを作らずに流す（ドキュメントだけの変更で数分のビルドを待たない）。版は requirements-dev.txt が出典
+      - name: ruff check・ruff format --check
+        run: |
+          version=$(sed -n 's/^ruff==//p' requirements-dev.txt)
+          test -n "$version"
+          pipx run "ruff==$version" check .
+          pipx run "ruff==$version" format --check .
+
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        if: needs.changes.outputs.code == 'true'
 
       # 開発用イメージ。requirements*.txt と Playwright のレイヤーを Actions のキャッシュで使い回す
       - name: 開発用イメージをビルドする
+        if: needs.changes.outputs.code == 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -118,29 +131,22 @@ jobs:
           cache-from: type=gha,scope=dev
           cache-to: type=gha,scope=dev,mode=max
 
-      - name: ruff check
-        run: |
-          # shellcheck disable=SC2086  # CACHE_ENV・RUN_ENV は複数の引数に分けて渡す
-          docker run --rm -v "$PWD:/app" -w /app $CACHE_ENV $RUN_ENV baseball-dev ruff check .
-
-      - name: ruff format --check
-        run: |
-          # shellcheck disable=SC2086  # CACHE_ENV・RUN_ENV は複数の引数に分けて渡す
-          docker run --rm -v "$PWD:/app" -w /app $CACHE_ENV $RUN_ENV baseball-dev ruff format --check .
-
       - name: mypy
+        if: needs.changes.outputs.code == 'true'
         run: |
           # shellcheck disable=SC2086  # CACHE_ENV・RUN_ENV は複数の引数に分けて渡す
           docker run --rm -v "$PWD:/app" -w /app $CACHE_ENV $RUN_ENV baseball-dev mypy .
 
       # 出力先は vite.config.ts の outDir（myapp/static/myapp/dist）。e2e の前提になるのでテストより先に作る
       - name: React をビルドして型検査する
+        if: needs.changes.outputs.code == 'true'
         run: |
           docker run --rm -v "$PWD:/app" -w /app/frontend node:22-bookworm-slim \
             sh -c "npm ci && npm run build && npm run typecheck"
 
       # フルスイートは Makefile の test と同じく2回に分ける。domain + integration は並列（CPU の数だけ子プロセス）
       - name: テスト（domain・integration。並列）
+        if: needs.changes.outputs.code == 'true'
         run: |
           # shellcheck disable=SC2086  # CACHE_ENV・RUN_ENV は複数の引数に分けて渡す
           docker run --rm -v "$PWD:/app" -w /app $CACHE_ENV $RUN_ENV \
@@ -148,15 +154,19 @@ jobs:
 
       # e2e（Playwright の Chromium）は直列。shm は compose と同じく広げる
       - name: テスト（e2e）
+        if: needs.changes.outputs.code == 'true'
         run: |
           # shellcheck disable=SC2086  # CACHE_ENV・RUN_ENV は複数の引数に分けて渡す
           docker run --rm --shm-size=1g -v "$PWD:/app" -w /app $CACHE_ENV $RUN_ENV \
             baseball-dev python manage.py test myapp.tests.e2e
 
-  # 本番イメージ。main への push と手動実行だけ。PR では動かさない（fork の PR に packages 権限を渡さないため）
+  # 本番イメージ。main への push と手動実行だけ。PR では動かさない（fork の PR に packages 権限を渡さないため）。
+  # テストに影響しない変更だけのときは作らない（手動実行は changes が常に code を返す）
   publish:
-    needs: test
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    needs: [changes, test]
+    if: >-
+      needs.changes.outputs.code == 'true' &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

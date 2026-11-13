@@ -31,7 +31,8 @@ $gh = "C:\Users\sumik\AppData\Local\Microsoft\WinGet\Packages\GitHub.cli_Microso
 - 直しは `git commit --amend` で機能のコミットに含める（push 前なので書き換えてよい）。
 - 周の途中でコードを直したら、その周の終わりに lint と、直した範囲のテストを通し直す（worktree なら `worktree` スキルの手順2。`-w` を忘れない）。
 - 最後の周の後、push の前に1回フルテストを流す（手元と CI の分担は `CLAUDE.md`「テストと品質のゲート」）。
-  差分がテストに影響しないパスだけなら流さない（CI も `test` をスキップする）。
+  差分がテストに影響しないパスだけなら流さない（CI も `test` の中で ruff だけを流す）。ただし Markdown にコード例を書いたら
+  `ruff format --check .` は通す（ruff は Markdown の中のコードも検査する。手元のイメージの ruff が requirements-dev.txt より古いと再現しない）。
   `git diff --name-only origin/<base>...HEAD` を `ci.yml` の `changes` ジョブの `UNAFFECTED_BY_TESTS` と見比べて決め、省いたことを PR 本文の「確認したこと」に書く。
 - 周ごとに「何を直したか」を1行ずつメモしておく（手順3の「セルフレビュー」節に貼る）。
 - 計画からずれたら Issue 本文を直し、理由をコメントに残す（`issue-plan` の手順5）。
@@ -118,7 +119,7 @@ PR を作ったら、Issue（epic のタスクなら段階の sub-issue）を Pr
 ## 5. CI の結果を確かめる
 
 PR を作ると CI（`.github/workflows/ci.yml`）が走る（初回は数分）。終わるまで待って結果を見る。待つあいだに手順6を進めてよい。
-テストに影響しないパスだけの PR では、`changes` ジョブだけが動き、`test` はスキップ（必須のチェックとしては成功扱い）になる。
+テストに影響しないパスだけの PR でも `test` は動き、ruff だけを流してビルドとテストの手順を飛ばす（#350）。
 `infra/` に触れていれば `terraform.yml` の検査も流れる。自動マージを予約していれば、`test` が通った時点でマージされる。
 
 **マージを待つ間に、ほかの PR が先に入って自分の PR がコンフリクトすることがある**（自動マージは止まったまま待つ）。
@@ -147,7 +148,7 @@ PR を作ると CI（`.github/workflows/ci.yml`）が走る（初回は数分）
 自動マージを予約した PR は、マージされるまで待ってから（`& $gh pr view <PR番号> --json state` が `MERGED`）:
 - **base（main・epic）への push で走った CI の結果を確かめる**（`& $gh run list --branch <base> --limit 3`）。
   並行した PR の組み合わせで先端が壊れていないかは、これで分かる（手で先端のフルテストを流す代わり）。落ちていたら次の作業より先に直す。
-  テストに影響しないパスだけの PR では `test` がスキップされるので確かめなくてよい
+  テストに影響しないパスだけの PR でも ruff は流れるので、結果を確かめる
   （`infra/` に触れていれば `--workflow terraform.yml` で Terraform の検査を確かめる）。
 - worktree を片付ける（`worktree` スキルの手順4）。
 - PR の URL と結果を報告する。CLAUDE.md を変えた PR は、規則の変更点を1行ずつ示す。画面を変えた PR は、プレビューの URL も示す。
