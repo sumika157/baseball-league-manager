@@ -16,9 +16,10 @@ from datetime import date
 
 from django.http import QueryDict
 
-from ..application.dto import ClubPlanView, ClubPlayerDetail, ClubPlayerRow, ReleasePlanView
+from ..application.dto import ClubPlanView, ClubPlayerDetail, ClubPlayerRow, DevelopmentPlanView, ReleasePlanView
 from ..domain.exceptions import DomainError
 from ..domain.pennant.club_plan import LINEUP_POSITIONS, LineupChoice, PlanSection
+from ..domain.pennant.development import DevelopmentDecision
 from ..domain.value_objects import FieldingPosition
 
 # 画面で区画を指す名前（hidden の `section`）と、区画の対応
@@ -43,6 +44,9 @@ RELEASE_SECTION = "release"
 # 「育成」タブ（補強の窓＝締めた後〜7月31日だけ出す。#170 P3a）と、その hidden の `section`
 DEVELOPMENT_TAB = "development"
 DEVELOPMENT_SECTION = "development"
+# 同じ「育成」タブのオフの形（公式戦を終えてから締めるまで。育成の指名。#170 P2）の hidden の `section`。
+# 期中の形（補強の窓）とは時期が重ならない
+DEVELOPMENT_PLAN_SECTION = "development_plan"
 
 ACTION_MANUAL = "manual"
 ACTION_SAVE = "save"
@@ -278,3 +282,49 @@ def parse_releases(post: QueryDict, current: ReleasePlanView) -> list[int]:
     if not set(checked) <= set(shown):
         raise ClubInputError(REOPEN)
     return [row.player_id for row in current.players if row.player_id in checked]
+
+
+# --- 育成の指名（「育成」タブのオフの形。#170 P2） ---
+
+
+@dataclass(frozen=True)
+class DevelopmentFormState:
+    """育成の指名の保存に失敗したときの、送られた入力（選手の id → 選んだ扱いの表示名）。
+
+    選んだ扱いを残して再表示する。"""
+
+    error: str
+    decisions: Mapping[int, str]
+
+
+def read_development(post: QueryDict) -> dict[int, str]:
+    """選手ごとに選ばれた扱い（`decision_<選手 id>`。読めないキーは無視する）。"""
+    chosen: dict[int, str] = {}
+    for key in post:
+        if not key.startswith("decision_"):
+            continue
+        player_id = to_int(key.removeprefix("decision_"))
+        if player_id is not None:
+            chosen[player_id] = post.get(key, "")
+    return chosen
+
+
+def parse_development(post: QueryDict, current: DevelopmentPlanView) -> dict[int, DevelopmentDecision]:
+    """育成の指名（選手の id → 扱い）。表示した全選手の id（`shown`）が今の育成選手と食い違えば古い画面として弾く。
+
+    行ごとの扱い（ラジオボタン）が欠けていたら、その選手を「何もしない」で埋めずに選ぶよう求める
+    （キーの欠落を既定値で埋めない）。扱いとして読めない値は古い画面として弾く。
+    """
+    shown = _ints(post.getlist("shown"))
+    if set(shown) != {row.player.player_id for row in current.rows}:
+        raise ClubInputError(REOPEN)
+    decisions: dict[int, DevelopmentDecision] = {}
+    for row in current.rows:
+        label = post.get(f"decision_{row.player.player_id}")
+        if label is None:
+            raise ClubInputError(f"{row.player.name}の扱いを選んでください。")
+        try:
+            decisions[row.player.player_id] = DevelopmentDecision.from_label(label)
+        except DomainError:
+            raise ClubInputError(REOPEN) from None
+    return decisions

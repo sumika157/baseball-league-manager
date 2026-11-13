@@ -15,6 +15,7 @@
 自動のときは提案の読み取り専用の表と「手動にする」、手動のときは編集欄と「保存する」「自動に戻す」。
 シーズン終了で締められるときだけ「戦力外」タブを出す（ビューが has_release_tab と、開いたときは release を渡す）。
 補強の窓（締めた後〜7月31日）の中だけ「育成」タブを出す（ビューが has_development_tab と、開いたときは development を渡す）。
+公式戦を終えてから締めるまでも「育成」タブを出し、オフの形（育成の指名。#170 P2）にする（開いたときは development_plan を渡す。窓とは時期が重ならない）。
 書き込みの導線はオーナーにだけ出す。
 {% endcomment %}
 <div class="page-head">
@@ -49,7 +50,7 @@
   {% elif tab == 'pitching' %}
     {% include 'pennant/_club_pitching.html' %}
   {% elif tab == 'development' %}
-    {% include 'pennant/_club_development.html' %}
+    {% if development %}{% include 'pennant/_club_development.html' %}{% else %}{% include 'pennant/_club_development_plan.html' %}{% endif %}
   {% elif tab == 'release' %}
     {% include 'pennant/_club_release.html' %}
   {% else %}

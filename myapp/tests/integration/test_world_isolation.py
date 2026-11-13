@@ -433,6 +433,8 @@ class AdminDoesNotShowThePennantWorldTest(WorldCase):
         self.assertNotIn(orm_models.PennantClubPlanEntry, admin.site._registry)
         self.assertNotIn(orm_models.PennantReleasePlan, admin.site._registry)
         self.assertNotIn(orm_models.PennantReleasePlanEntry, admin.site._registry)
+        self.assertNotIn(orm_models.PennantDevelopmentPlan, admin.site._registry)
+        self.assertNotIn(orm_models.PennantDevelopmentPlanEntry, admin.site._registry)
         self.assertNotIn(orm_models.PennantAward, admin.site._registry)
         self.assertNotIn(orm_models.PennantChampionship, admin.site._registry)
         self.assertNotIn(orm_models.PennantMidseasonRegistration, admin.site._registry)
@@ -549,6 +551,8 @@ CLASSIFICATION: dict[str, tuple[str, str | None]] = {
     "PennantClubPlanEntry": (LEAGUE, "plan__team__league__world"),
     "PennantReleasePlan": (LEAGUE, "team__league__world"),
     "PennantReleasePlanEntry": (LEAGUE, "plan__team__league__world"),
+    "PennantDevelopmentPlan": (LEAGUE, "team__league__world"),
+    "PennantDevelopmentPlanEntry": (LEAGUE, "plan__team__league__world"),
     "PennantMidseasonRegistration": (LEAGUE, "team__league__world"),
     "PennantAward": (LEAGUE, "league__world"),
     "PennantChampionship": (LEAGUE, "team__league__world"),

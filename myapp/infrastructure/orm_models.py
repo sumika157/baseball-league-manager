@@ -10,6 +10,7 @@
 from django.conf import settings
 from django.db import models
 
+from ..domain.pennant.development import DevelopmentDecision
 from ..domain.pennant.draft_meeting import DraftActionKind
 from ..domain.pennant.draft_order import DraftOrderRule
 from ..domain.pennant.postseason import PostseasonFormat
@@ -48,6 +49,8 @@ GAME_STAGE_CHOICES = [(stage.value, stage.value) for stage in GameStage]
 # ポストシーズンの方式の選択肢もドメインの PostseasonFormat が唯一の出典
 POSTSEASON_FORMAT_CHOICES = [(item.value, item.value) for item in PostseasonFormat]
 DRAFT_ORDER_RULE_CHOICES = [(item.value, item.value) for item in DraftOrderRule]
+# 育成選手のオフの扱い（GM の指名。#170 P2）の選択肢もドメインの DevelopmentDecision が唯一の出典
+DEVELOPMENT_DECISION_CHOICES = [(item.value, item.value) for item in DevelopmentDecision]
 # ドラフト会議の行動の種類の選択肢もドメインの DraftActionKind が唯一の出典
 DRAFT_ACTION_KIND_CHOICES = [(item.value, item.value) for item in DraftActionKind]
 # 試合で就いた守備位置。登録位置（Position）とは別の概念
@@ -1014,6 +1017,48 @@ class PennantReleasePlanEntry(models.Model):
 
     def __str__(self) -> str:
         return f"{self.plan} {self.player_id}"
+
+
+class PennantDevelopmentPlan(models.Model):
+    """ペナントの受け持つ球団の、育成選手のオフの手動の指名（#170 P2）。球団ごとに1つ。自動の球団は行を持たない。
+
+    `year` は指名した締める年（その年のオフにだけ使い、締めた時点で消す）。選手ごとの扱いは
+    `PennantDevelopmentPlanEntry`。
+    昇格の事実は在籍の昇格の年（`PlayerStint.promoted_year`）、自由契約は退団の経路に1つだけ残す。
+    世界の列は持たない。球団のリーグで世界が決まる（戦力外の指名と同じ）。
+    """
+
+    team = models.OneToOneField(Team, on_delete=models.CASCADE, related_name="development_plan", verbose_name="球団")
+    year = models.PositiveSmallIntegerField(verbose_name="締める年")
+
+    class Meta:
+        verbose_name = "ペナントの育成の指名"
+        verbose_name_plural = "ペナントの育成の指名"
+        ordering = ["team_id"]
+
+    def __str__(self) -> str:
+        return f"{self.team.name}の{self.year}年の育成の指名"
+
+
+class PennantDevelopmentPlanEntry(models.Model):
+    """育成の指名の1人（選手と扱い）。扱いの選択肢は domain の `DevelopmentDecision` が出典。"""
+
+    plan = models.ForeignKey(
+        PennantDevelopmentPlan, on_delete=models.CASCADE, related_name="entries", verbose_name="育成の指名"
+    )
+    player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="+", verbose_name="選手")
+    decision = models.CharField(max_length=10, choices=DEVELOPMENT_DECISION_CHOICES, verbose_name="扱い")
+
+    class Meta:
+        verbose_name = "ペナントの育成の指名の行"
+        verbose_name_plural = "ペナントの育成の指名の行"
+        ordering = ["plan_id", "player_id"]
+        constraints = [
+            models.UniqueConstraint(fields=["plan", "player"], name="unique_pennant_development_plan_entry_player"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.plan} {self.player_id} {self.decision}"
 
 
 class PennantMidseasonRegistration(models.Model):
