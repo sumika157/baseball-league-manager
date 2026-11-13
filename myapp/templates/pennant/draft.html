@@ -1,0 +1,204 @@
+{% extends 'myapp/base.html' %}
+{% load sorting %}
+
+{% block title %}{{ year }}年ドラフト会議 - {{ world.name }} - ペナント - Baseball Manager{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb">
+    {% include 'pennant/_crumbs.html' %}
+    <li class="breadcrumb-item active" aria-current="page">{{ year }}年ドラフト会議</li>
+  </ol>
+</nav>{% include 'pennant/_world_bar.html' %}
+
+{% comment %}
+ドラフト会議（#297 D3）。見るのは誰でも、操作（始める・入札/指名・選択終了・この番を任せる・残りをお任せ・やり直す）はオーナーにだけ出す。
+状態ごとに出す操作を分ける: 開けない → 理由だけ / 再生できない（changed） → 「会議をやり直す」だけ / 未開始 → 「会議を始める」 /
+途中 → 候補の表の入札・指名と、選択終了・この番を任せる（指名できる候補がいないときだけ。候補のボタンとは同時に出ない）・残りをお任せ / 終了 → GM ホームへの案内。
+どの書き込みも、画面を開いたときの最後の行動の番号（expected_seq）を送る。年は URL が持つ。
+見込みは受け持つ球団のスカウトの見立ての区分だけ（球団の好み・伸びしろは出さない。#297 Q3・Q4）。並べ替えのキーと既定は domain の sorting.PROSPECT_SORT_KEYS。
+{% endcomment %}
+<div class="page-head">
+  <h1 class="page-title">{{ year }}年 ドラフト会議</h1>
+  <p class="page-subtitle" data-testid="draft-status">{% if draft.blocker %}開けません{% else %}{{ draft.status.value }}{% endif %}{% if draft.turn %} · {{ draft.turn.round_label }}{% if draft.turn.is_bid %}の入札{% if draft.turn.attempt > 1 %}（{{ draft.turn.attempt }}回目）{% endif %}{% endif %} · {% if draft.turn.is_mine %}あなたの番{% else %}{{ draft.turn.team_name }}の番{% endif %}{% endif %}</p>
+</div>
+
+{% if draft.blocker %}
+  <div class="alert alert-secondary" data-testid="draft-blocker">{{ draft.blocker }}</div>
+{% elif draft.changed %}
+  <div class="card mb-4" id="draft-changed">
+    <div class="card-header">会議を続けられません</div>
+    <div class="card-body">
+      <p class="mb-3">会議を始めた後に、候補か指名の人数が変わったため、保存した会議を続けられません。会議をやり直してください（指名はすべて消え、もう一度始めます）。</p>
+      {% if is_owner %}
+        <form method="post" action="{% url 'pennant_draft_act' world.world_id year 'reset' %}">
+          {% csrf_token %}
+          <input type="hidden" name="expected_seq" value="{{ draft.last_seq }}">
+          <button type="submit" class="btn btn-primary">会議をやり直す</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+{% elif draft.can_start %}
+  <div class="card mb-4" id="draft-start">
+    <div class="card-header">会議を始める</div>
+    <div class="card-body">
+      <p class="mb-2">各球団の新人の人数（引退・戦力外・新外国人から決まります）と候補を確定し、1巡ずつ指名します。あなたの番まではほかの球団が進めます。</p>
+      <p class="mb-3 stat-muted">会議を始めると、今年の戦力外の指名とドラフトの指名順の規則は変えられません。会議を開かずにシーズンを締めると、あなたの球団のドラフトもお任せになります。</p>
+      {% if is_owner %}
+        <form method="post" action="{% url 'pennant_draft_act' world.world_id year 'start' %}">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-primary">{{ year }}年のドラフト会議を始める</button>
+        </form>
+      {% else %}
+        <p class="mb-0 stat-muted">会議はまだ始まっていません。</p>
+      {% endif %}
+    </div>
+  </div>
+{% else %}
+  {% if is_owner and draft.is_in_progress %}
+    <div class="card mb-4" id="draft-actions">
+      <div class="card-header">{% if draft.is_my_turn %}あなたの番{% else %}操作{% endif %}</div>
+      <div class="card-body">
+        {% if draft.is_my_turn %}
+          {% if draft.can_delegate %}
+            <p class="mb-2">この巡で指名できる候補がいません。この番を任せると、新しい候補を足して指名します。</p>
+            <form method="post" action="{% url 'pennant_draft_act' world.world_id year 'delegate' %}" class="mb-3">
+              {% csrf_token %}
+              <input type="hidden" name="expected_seq" value="{{ draft.last_seq }}">
+              <button type="submit" class="btn btn-primary">この番を任せる</button>
+            </form>
+          {% else %}
+            <p class="mb-2">下の候補から{% if draft.turn.is_bid %}入札{% else %}指名{% endif %}する選手を選んでください。{% if draft.turn.is_bid %}入札が重なったら抽選で、外れたらもう一度入札します。{% endif %}</p>
+          {% endif %}
+          {% if draft.can_pass %}
+            <form method="post" action="{% url 'pennant_draft_act' world.world_id year 'pass' %}" class="mb-3">
+              {% csrf_token %}
+              <input type="hidden" name="expected_seq" value="{{ draft.last_seq }}">
+              <button type="submit" class="btn btn-secondary">{% if draft.turn.is_development %}育成の{% else %}本指名の{% endif %}選択を終える</button>
+              <span class="stat-muted ms-2" style="font-size: 0.8125rem;">{% if draft.turn.is_development %}育成ではこれ以上指名しません。{% else %}本指名ではこれ以上指名せず、育成の巡へ進みます。{% endif %}</span>
+            </form>
+          {% endif %}
+        {% endif %}
+        <form method="post" action="{% url 'pennant_draft_act' world.world_id year 'auto' %}">
+          {% csrf_token %}
+          <input type="hidden" name="expected_seq" value="{{ draft.last_seq }}">
+          <button type="submit" class="btn btn-secondary">残りをお任せにする</button>
+          <span class="stat-muted ms-2" style="font-size: 0.8125rem;">あなたの球団の番もほかの球団と同じ規則で選び、会議を最後まで進めます。元に戻せません。</span>
+        </form>
+      </div>
+    </div>
+  {% elif draft.is_finished %}
+    <div class="alert alert-secondary" id="draft-finished">会議は終わりました。{% if is_owner %}<a href="{% url 'pennant_world' world.world_id %}" class="alert-link">GM ホームでシーズンを締める</a>と、新人が入団します。{% else %}シーズンを締めると、新人が入団します。{% endif %}</div>
+  {% endif %}
+
+  {% if draft.is_in_progress %}
+    <div class="card mb-4" id="draft-prospects">
+      <div class="card-header">候補（{{ draft.prospects|length }}人。指名済みは末尾）</div>
+      <div class="card-body p-0">
+        {% if is_owner and draft.is_my_turn %}<form method="post" action="{% url 'pennant_draft_act' world.world_id year 'nominate' %}">
+          {% csrf_token %}
+          <input type="hidden" name="expected_seq" value="{{ draft.last_seq }}">
+          {% if current_sort %}<input type="hidden" name="sort" value="{{ current_sort }}"><input type="hidden" name="dir" value="{% if current_descending %}desc{% else %}asc{% endif %}">{% endif %}
+        {% endif %}
+        <div class="table-responsive" style="max-height: 70vh; overflow-y: auto;">
+          <table class="table table-hover mb-0" data-testid="draft-prospects">
+            <thead>
+              <tr>
+                <th>選手</th>
+                {% sort_header 'position' '位置' 'start' False %}
+                <th>経歴</th>
+                {% sort_header 'age' '年齢' 'end' False %}
+                {% sort_header 'grade' '見込み' 'start' %}
+                <th>指名</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in draft.prospects %}
+                <tr{% if row.is_taken %} class="stat-muted"{% endif %}>
+                  <td>{{ row.name }}</td>
+                  <td>{{ row.position.label }}</td>
+                  <td>{{ row.route_label }}</td>
+                  <td class="text-end tabular-nums">{{ row.age }}</td>
+                  <td><strong class="{% if row.grade.emphasis.value == 'high' %}stat-tier-high{% elif row.grade.emphasis.value == 'mid' %}stat-tier-mid{% elif row.grade.emphasis.value == 'muted' %}stat-muted{% endif %}">{{ row.grade.label }}</strong></td>
+                  <td>{% if row.is_taken %}{{ row.taken_by|default:"指名済み" }}{% elif is_owner and row.selectable %}<button type="submit" name="prospect" value="{{ row.key }}" class="btn btn-primary btn-sm">{% if draft.turn.is_bid %}入札する{% else %}指名する{% endif %}</button>{% else %}<span class="stat-muted">—</span>{% endif %}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% if is_owner and draft.is_my_turn %}</form>{% endif %}
+        <p class="stat-muted px-3 py-2 mb-0" style="font-size: 0.8125rem;">見込みは、あなたの球団のスカウトがいま見立てた、ピークの年齢ごろの総合の区分です。入団後は自軍のスカウトが改めて見立てるので、ドラフトのときの見立てと同じとは限りません。</p>
+      </div>
+    </div>
+  {% endif %}
+
+  <div class="row g-3 mb-4">
+    <div class="col-lg-6">
+      <div class="card h-100">
+        <div class="card-header">自軍の指名（{{ draft.own_moves|length }}）</div>
+        <div class="card-body p-0">
+          {% if draft.own_moves %}
+            <div class="table-responsive">
+              <table class="table table-hover mb-0" data-testid="draft-own">
+                <thead><tr><th>巡</th><th>選手</th></tr></thead>
+                <tbody>
+                  {% for move in draft.own_moves %}
+                    <tr><td>{{ move.round_label }}</td><td>{% include 'pennant/_draft_move.html' %}</td></tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <div class="empty-state">まだ指名していません。</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="card h-100">
+        <div class="card-header">直近の動き（新しい順）</div>
+        <div class="card-body p-0">
+          {% if draft.recent_moves %}
+            <div class="table-responsive">
+              <table class="table table-hover mb-0" data-testid="draft-recent">
+                <thead><tr><th>巡</th><th>球団</th><th>動き</th></tr></thead>
+                <tbody>
+                  {% for move in draft.recent_moves reversed %}
+                    <tr><td>{{ move.round_label }}</td><td>{{ move.team_name }}</td><td>{% include 'pennant/_draft_move.html' %}</td></tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <div class="empty-state">まだ確定した指名はありません。</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% if draft.round_rows %}
+    <div class="card mb-4">
+      <div class="card-header">{{ draft.turn.round_label }}の指名順と結果</div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-hover mb-0" data-testid="draft-round">
+            <thead><tr><th class="text-end">順</th><th>球団</th><th>結果</th></tr></thead>
+            <tbody>
+              {% for row in draft.round_rows %}
+                <tr>
+                  <td class="text-end stat-muted">{{ forloop.counter }}</td>
+                  <td>{{ row.team_name }}{% if row.is_mine %} <span class="badge bg-primary">自軍</span>{% endif %}</td>
+                  <td>{% if row.move %}{% include 'pennant/_draft_move.html' with move=row.move %}{% else %}<span class="stat-muted">—</span>{% endif %}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% if draft.turn.is_bid %}<p class="stat-muted px-3 py-2 mb-0" style="font-size: 0.8125rem;">入札は、全球団の入札がそろって抽選が済むと結果に出ます。</p>{% endif %}
+      </div>
+    </div>
+  {% endif %}
+{% endif %}
+{% endblock %}

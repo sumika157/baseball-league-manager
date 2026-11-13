@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 
+from ..domain import services as domain_services
 from ..domain.exceptions import (
     AlreadyClosed,
     DraftChanged,
@@ -48,6 +49,7 @@ from ..domain.pennant.draft_meeting import (
 )
 from ..domain.pennant.draft_record import DraftMeetingStatus, DraftRecord
 from ..domain.pennant.offseason import prepare_meeting
+from ..domain.pennant.postseason import PostseasonStatus
 from ..domain.pennant.world import World
 from ..domain.repositories import DraftRepository, TeamRepository, WorldRepository
 from .dto import (
@@ -100,14 +102,24 @@ class PennantDraftService:
 
     # --- 読む ---
 
-    def view(self, *, expected_year: int | None = None) -> DraftMeetingView:
+    def view(
+        self,
+        *,
+        expected_year: int | None = None,
+        sort: str | None = None,
+        descending: bool | None = None,
+        postseason_status: PostseasonStatus | None = None,
+    ) -> DraftMeetingView:
         """会議の画面の材料。会議を開けないときは理由（`blocker`）だけを返す（例外にしない）。
 
         保存した会議を再生できないとき（`DraftChanged`）は `changed` を立てて返す（「会議をやり直す」だけを出す）。
+        候補は `sort`・`descending` で並べる（不正なキーは見込みの区分の高い順に落とす）。
+        `postseason_status` は呼び手（GM ホーム）が既に導いたその年のポストシーズンの状況（渡せば導き直さない。
+        **表示にだけ使う**: 書き込みの操作は必ず導き直す）。
         """
         world = self._worlds.find_by_id(self._world_id)
         try:
-            year, managed = self._open_year(world, expected_year)
+            year, managed = self._open_year(world, expected_year, postseason_status=postseason_status)
         except _CLOSED_REASONS as error:
             return DraftMeetingView(
                 year=None,
@@ -131,7 +143,9 @@ class PennantDraftService:
                 last_seq=record.last_seq,
                 changed=True,
             )
-        return self._meeting_view(year, managed, record, state, team_names(self._teams))
+        return self._meeting_view(
+            year, managed, record, state, team_names(self._teams), sort=sort, descending=descending
+        )
 
     # --- 書く ---
 
@@ -246,9 +260,11 @@ class PennantDraftService:
 
     # --- 中身 ---
 
-    def _open_year(self, world: World, expected_year: int | None) -> tuple[int, int]:
+    def _open_year(
+        self, world: World, expected_year: int | None, *, postseason_status: PostseasonStatus | None = None
+    ) -> tuple[int, int]:
         """会議を開ける年（締められる年と同じ条件。#297 Q1）と、受け持つ球団。開けなければ例外。"""
-        year = self._phase.closable_year(world, expected_year=expected_year)
+        year = self._phase.closable_year(world, expected_year=expected_year, postseason_status=postseason_status)
         self._phase.ensure_not_closed(world, year)
         return year, managed_team_id(world)
 
@@ -309,7 +325,15 @@ class PennantDraftService:
         )
 
     def _meeting_view(
-        self, year: int, managed: int, record: DraftRecord, state: DraftState, names: Mapping[int, str]
+        self,
+        year: int,
+        managed: int,
+        record: DraftRecord,
+        state: DraftState,
+        names: Mapping[int, str],
+        *,
+        sort: str | None,
+        descending: bool | None,
     ) -> DraftMeetingView:
         turn = state.next_turn()
         mine = turn is not None and turn.team_id == managed
@@ -320,7 +344,7 @@ class PennantDraftService:
             if move.round_number == state.round_number and move.is_development == state.is_development
         }
         taken = {selection.prospect_key: selection.team_id for selection in state.selections}
-        rows = tuple(
+        rows = [
             DraftProspectRow(
                 key=prospect.key,
                 name=prospect.rookie.name,
@@ -329,10 +353,12 @@ class PennantDraftService:
                 age=prospect.age,
                 grade=projected_grade(prospect, state.report(managed, prospect)),
                 taken_by=names.get(taken[prospect.key], "") if prospect.key in taken else "",
+                is_taken=prospect.key in taken,
                 selectable=mine and state.selectable(managed, prospect),
             )
             for prospect in state.pool.prospects
-        )
+        ]
+        ordered, sort_key, sort_descending = domain_services.sort_prospects(rows, sort, descending)
         return DraftMeetingView(
             year=year,
             status=DraftMeetingStatus.of(record, state),
@@ -361,7 +387,9 @@ class PennantDraftService:
             ),
             own_moves=tuple(_move_row(state, move, names) for move in state.moves if move.team_id == managed),
             recent_moves=tuple(_move_row(state, move, names) for move in state.moves[-RECENT_MOVES:]),
-            prospects=rows,
+            prospects=tuple(ordered),
+            sort=sort_key,
+            descending=sort_descending,
             can_pass=mine and state.passable(managed),
             can_delegate=mine and not any(row.selectable for row in rows),
         )
@@ -385,5 +413,6 @@ def _move_row(state: DraftState, move: DraftMove, names: Mapping[int, str]) -> D
         else DraftLotteryView(
             bidders=tuple(names.get(team_id, "") for team_id in lottery.bidders),
             winner=names.get(lottery.winner, ""),
+            bidder_ids=lottery.bidders,
         ),
     )

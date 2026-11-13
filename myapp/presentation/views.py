@@ -27,6 +27,7 @@ from ..application.club_management import ClubManagementService
 from ..application.dto import (
     AwardRow,
     ClubPlanView,
+    DraftStep,
     GameEditData,
     GameEditPlateAppearance,
     Listing,
@@ -65,6 +66,7 @@ from ..domain.exceptions import (
     AlreadyAdvanced,
     AlreadyClosed,
     DomainError,
+    DraftConflict,
     GameNotFound,
     InvalidReleasePlan,
     InvalidWorld,
@@ -929,6 +931,13 @@ def pennant_world(request, world_id):
         and (status is None or status.is_settled)
         else None
     )
+    # 締められるときだけ、その年のドラフト会議の状態を読む（途中なら締めるカードの代わりに会議のカードを出す。
+    # 未開始・終了なら締めるカードにドラフトの行を出す。#297 D3）
+    draft = (
+        build_pennant_draft_service(world_id).view(expected_year=close_option.year, postseason_status=status)
+        if close_option is not None and close_option.can_close
+        else None
+    )
     return _render(
         request,
         "pennant/home.html",
@@ -938,6 +947,7 @@ def pennant_world(request, world_id):
             "plan_notices": _plan_notices(world) if is_owner else [],
             "postseason": postseason,
             "close_option": close_option,
+            "draft": draft,
             "registered_band": OPENING_REGISTERED_BAND,
         },
         world,
@@ -1081,6 +1091,124 @@ def pennant_close_season(request, world_id):
     if result.without_ratings_count:
         messages.info(request, f"能力の無い選手 {result.without_ratings_count}人は、翌年の能力を作りませんでした。")
     return redirect("pennant_offseason", world_id=world_id, year=result.year)
+
+
+@require_safe
+def pennant_draft(request, world_id, year):
+    """Y年のドラフト会議（#297 D3）。読むだけなら誰でも開ける。操作（`pennant_draft_act`）はオーナーにだけ出す。
+
+    開けるのはいまの年度だけ。締めた年はオフの結果へ、まだ来ない年は 404。会議を開けない局面（公式戦・
+    ポストシーズンの途中）は理由を出す。`?sort=`・`?dir=` は候補の並べ替え（不正なキーは見込みの区分の高い順）。
+    """
+    world = _world_context(world_id)
+    if year < world.season_year:
+        return redirect("pennant_offseason", world_id=world_id, year=year)
+    if year > world.season_year:
+        raise Http404("その年のドラフト会議はありません。")
+    sort, descending = _sort_params(request)
+    draft = build_pennant_draft_service(world_id).view(expected_year=year, sort=sort, descending=descending)
+    return _render(
+        request,
+        "pennant/draft.html",
+        {
+            "draft": draft,
+            "year": year,
+            "is_owner": _is_owner(request, world),
+            "current_sort": draft.sort,
+            "current_descending": draft.descending,
+        },
+        world,
+    )
+
+
+# 会議の操作（URL の末尾）。どれも POST だけで、オーナーだけが使える
+DRAFT_ACTIONS = frozenset({"start", "nominate", "pass", "delegate", "auto", "reset"})
+
+
+def pennant_draft_act(request, world_id, year, action):
+    """会議の操作（始める・指名・選択終了・この番を任せる・残りをお任せ・やり直す）。POST だけで、オーナーだけ。
+
+    URL の年が画面を開いたときの年（`expected_year`）で、始める以外は `expected_seq`（画面を開いたときの最後の
+    行動の番号）も送ってもらう（二重送信や別のタブで進めたときに、さらに進めない。欠落は「検査なし」にせず弾く）。
+    結果は会議の画面で messages に出す（PRG。指名のフォームは並べ替えの指定 `sort`・`dir` も送るので、保って戻る）。
+    """
+    if action not in DRAFT_ACTIONS:
+        raise Http404("その操作はありません。")
+    world = _world_context(world_id)
+    draft_url = reverse("pennant_draft", args=[world_id, year])
+    if request.method != "POST":
+        return redirect(draft_url)
+    denied = _requires_world_owner(request, world)
+    if denied is not None:
+        return denied
+    sort_query = {key: request.POST[key] for key in ("sort", "dir") if request.POST.get(key)}
+    back = f"{draft_url}?{urlencode(sort_query)}" if sort_query else draft_url
+
+    service = build_pennant_draft_service(world_id)
+    try:
+        if action == "start":
+            step = service.start(expected_year=year)
+            messages.success(request, f"{year}年のドラフト会議を始めました。")
+            _draft_step_messages(request, step, world.managed_team_id)
+            return redirect(back)
+        sent = request.POST.get("expected_seq", "")
+        if not sent.isdigit():
+            messages.error(request, "画面が古いか、送信が正しくありません。開き直してからもう一度お試しください。")
+            return redirect(back)
+        expected_seq = int(sent)
+        if action == "reset":
+            service.reset(expected_year=year, expected_seq=expected_seq)
+            messages.success(request, f"{year}年のドラフト会議の記録を消しました。もう一度始めてください。")
+            return redirect(back)
+        if action == "nominate":
+            prospect = request.POST.get("prospect", "")
+            if not prospect.isdigit():
+                messages.error(request, "指名する選手を選んでください。")
+                return redirect(back)
+            step = service.nominate(int(prospect), expected_year=year, expected_seq=expected_seq)
+        elif action == "pass":
+            step = service.pass_turn(expected_year=year, expected_seq=expected_seq)
+            messages.success(request, "選択を終えました。")
+        elif action == "delegate":
+            step = service.delegate_turn(expected_year=year, expected_seq=expected_seq)
+            messages.success(request, "この番を任せました。")
+        else:
+            step = service.auto_complete(expected_year=year, expected_seq=expected_seq)
+            messages.success(request, "残りをお任せにしました。")
+    except AlreadyClosed as error:
+        messages.warning(request, str(error))
+        if error.year is not None:
+            return redirect("pennant_offseason", world_id=world_id, year=error.year)
+        return redirect(back)
+    except DraftConflict as error:
+        messages.warning(request, str(error))
+        return redirect(back)
+    except DomainError as error:
+        messages.error(request, str(error))
+        return redirect(back)
+    _draft_step_messages(request, step, world.managed_team_id, own_moves=action != "auto")
+    return redirect(back)
+
+
+def _draft_step_messages(request, step: DraftStep, managed_team_id: int | None, *, own_moves: bool = True) -> None:
+    """操作で確定した動きのうち、受け持つ球団に関わるもの（獲得・抽選の外れ）と、会議の終わりを知らせる。
+
+    `own_moves` が False（残りをお任せ）なら、受け持つ球団の動きは1件ずつ出さない（会議の画面の「自軍の指名」で読む）。
+    """
+    for move in step.moves if own_moves else ():
+        lottery = move.lottery
+        if move.team_id == managed_team_id and move.prospect_key is not None:
+            won = f"（{len(lottery.bidders)}球団の抽選で当選）" if lottery is not None else ""
+            position = f"（{move.position.label}）" if move.position is not None else ""
+            messages.success(request, f"{move.round_label}: {move.prospect_name}{position}を獲得しました{won}。")
+        elif lottery is not None and managed_team_id in lottery.bidder_ids and move.team_id != managed_team_id:
+            messages.warning(
+                request,
+                f"{move.round_label}: {move.prospect_name}の抽選に外れました（{lottery.winner}が獲得）。"
+                "もう一度入札してください。",
+            )
+    if step.is_complete:
+        messages.info(request, "ドラフト会議が終わりました。GM ホームでシーズンを締めると、新人が入団します。")
 
 
 def pennant_offseason(request, world_id, year):
