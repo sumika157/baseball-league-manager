@@ -24,6 +24,7 @@ from myapp.application.pennant_championships import PostseasonHistoryReader
 from myapp.application.pennant_club_details import ClubDetailsService
 from myapp.application.pennant_history import PennantHistoryService
 from myapp.application.pennant_home import PennantHomeService
+from myapp.application.pennant_midseason import MidseasonRegistrationService
 from myapp.application.pennant_offseason import PennantOffseasonService
 from myapp.application.pennant_offseason_view import OffseasonViewService
 from myapp.application.pennant_postseason import PennantPostseasonService, PostseasonBracketReader
@@ -37,6 +38,7 @@ from myapp.application.queries import (
     AwardQuery,
     ChampionshipQuery,
     ClubTenureQuery,
+    DevelopmentRosterQuery,
     FieldingTotalsQuery,
     GameListQuery,
     HomeStadiumQuery,
@@ -63,6 +65,7 @@ from myapp.domain.repositories import (
     FixtureRepository,
     GameRepository,
     LeagueRepository,
+    MidseasonRegistrationRepository,
     RatingsRepository,
     ReleasePlanRepository,
     TeamRepository,
@@ -73,6 +76,7 @@ from myapp.infrastructure.queries import (
     DjangoAwardQuery,
     DjangoChampionshipQuery,
     DjangoClubTenureQuery,
+    DjangoDevelopmentRosterQuery,
     DjangoFieldingTotalsQuery,
     DjangoGameListQuery,
     DjangoHomeStadiumQuery,
@@ -94,6 +98,7 @@ from myapp.infrastructure.repositories import (
     DjangoFixtureRepository,
     DjangoGameRepository,
     DjangoLeagueRepository,
+    DjangoMidseasonRegistrationRepository,
     DjangoRatingsRepository,
     DjangoReleasePlanRepository,
     DjangoTeamRepository,
@@ -105,6 +110,7 @@ from myapp.presentation.views import (
     build_club_service,
     build_game_view_service,
     build_league_view_service,
+    build_midseason_registration_service,
     build_offseason_view_service,
     build_pennant_history_service,
     build_pennant_home_service,
@@ -159,6 +165,8 @@ class ProtocolConformanceTest(SimpleTestCase):
         (DjangoOffseasonQuery(REAL), OffseasonQuery),
         (DjangoRatingsHistoryQuery(REAL), RatingsHistoryQuery),
         (DjangoClubTenureQuery(REAL), ClubTenureQuery),
+        (DjangoDevelopmentRosterQuery(REAL), DevelopmentRosterQuery),
+        (DjangoMidseasonRegistrationRepository(REAL), MidseasonRegistrationRepository),
         (DjangoHomeStadiumQuery(REAL), HomeStadiumQuery),
         (DjangoPostseasonQuery(REAL), PostseasonQuery),
         (DjangoPostseasonStatsQuery(REAL), PostseasonStatsQuery),
@@ -296,6 +304,9 @@ class BuildServiceTest(SimpleTestCase):
 
     def test_club_details_service_dependencies_are_wired(self):
         self._assert_wired(build_club_details_service(7), ClubDetailsService)
+
+    def test_midseason_registration_service_dependencies_are_wired(self):
+        self._assert_wired(build_midseason_registration_service(7), MidseasonRegistrationService)
 
     def test_pennant_ratings_service_dependencies_are_wired(self):
         self._assert_wired(build_pennant_ratings_service(7), PennantRatingsViewService)
@@ -686,6 +697,30 @@ class ClubDetailsScopeTest(SimpleTestCase):
         for bad in (0, -1, True):
             with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
                 build_club_details_service(bad)
+
+
+class MidseasonRegistrationScopeTest(SimpleTestCase):
+    """期中の支配下登録（編成の「育成」タブ。#170 P3a）は、依存を全部、渡された世界の範囲で組み立てる。"""
+
+    SCOPED = ("_leagues", "_teams", "_fixtures", "_ratings", "_registrations", "_roster")
+
+    def test_every_dependency_is_fixed_to_the_given_world(self):
+        from django.db import transaction
+
+        service = build_midseason_registration_service(7)
+        self.assertEqual(service._world_id, 7)
+        for name in self.SCOPED:
+            with self.subTest(dependency=name):
+                self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
+        self.assertIs(service._atomic, transaction.atomic, "昇格と登録日の記録は1つのトランザクション")
+
+    def test_a_different_world_gets_a_different_scope(self):
+        self.assertEqual(build_midseason_registration_service(8)._registrations._scope, WorldScope.pennant(8))
+
+    def test_the_real_data_has_no_midseason_registration(self):
+        for bad in (0, -1, True):
+            with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
+                build_midseason_registration_service(bad)
 
 
 class PennantRatingsScopeTest(SimpleTestCase):
