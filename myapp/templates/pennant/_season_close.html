@@ -4,6 +4,7 @@
 文言の人数は domain の OPENING_REGISTERED_BAND（ビューが渡す registered_band。開幕前の支配下の帯）。
 戦力外の行は、受け持つ球団の指名が自動か手動（人数）か。選ぶのは編成の「戦力外」タブで、締める操作はこのボタン1つのまま。
 育成の行（#170 P2）も同じく、自動か手動（昇格・自由契約の人数）か。選ぶのは編成の「育成」タブ。
+外国人の行（#169 F2）も同じく、お任せか手動（獲得する候補の人数）か。選ぶのは編成の「外国人」タブ。
 ドラフトの行（#297 D3）は、会議を開いていなければ「お任せ」と会議への導線、会議が終わっていれば「会議で指名済み」。
 会議が途中のときはこのカードを出さない（home.html が会議のカードを出す）。draft は DraftMeetingView（締められないときは無い）。
 {% endcomment %}
@@ -15,6 +16,7 @@
       <div class="mb-3 stat-muted">
         <p class="mb-1" id="season-close-release">戦力外: {% if close_option.release_count is None %}自動{% else %}手動（{{ close_option.release_count }}人）{% endif %} · <a href="{% url 'pennant_club' world.world_id %}?tab=release">{% if draft.is_finished %}編成の「戦力外」で見る（会議の後は変えられません）{% else %}編成の「戦力外」で選ぶ{% endif %}</a></p>
         <p class="mb-1" id="season-close-development">育成: {% if close_option.development_promote_count is None %}自動{% else %}手動（昇格 {{ close_option.development_promote_count }}人・自由契約 {{ close_option.development_release_count }}人）{% endif %} · <a href="{% url 'pennant_club' world.world_id %}?tab=development">{% if draft.is_finished %}編成の「育成」で見る（会議の後は変えられません）{% else %}編成の「育成」で選ぶ{% endif %}</a></p>
+        <p class="mb-1" id="season-close-foreign">外国人: {% if close_option.foreign_signing_count is None %}お任せ{% else %}手動（{{ close_option.foreign_signing_count }}人）{% endif %} · <a href="{% url 'pennant_club' world.world_id %}?tab=foreign">{% if draft.is_finished %}編成の「外国人」で見る（会議の後は変えられません）{% else %}編成の「外国人」で選ぶ{% endif %}</a></p>
         {% if draft.year %}
           <p class="mb-0" id="season-close-draft">ドラフト: {% if draft.is_finished %}会議で指名済み · <a href="{% url 'pennant_draft' world.world_id draft.year %}">会議の結果を見る</a>{% else %}お任せ（会議を開かない） · <a href="{% url 'pennant_draft' world.world_id draft.year %}">ドラフト会議で指名する</a>{% endif %}</p>
         {% endif %}

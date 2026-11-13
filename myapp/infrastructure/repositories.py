@@ -60,6 +60,7 @@ from ..domain.pennant.draft_lottery import DraftLotteryRecord
 from ..domain.pennant.draft_meeting import DraftAction, DraftActionKind, DraftSlot
 from ..domain.pennant.draft_order import DraftOrderRule
 from ..domain.pennant.draft_record import DraftRecord
+from ..domain.pennant.foreign_market import ForeignSigningPlan, offseason_key
 from ..domain.pennant.postseason import PostseasonFormat
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.reinforcement import MidseasonRegistration, ensure_registration_matches_stint
@@ -104,6 +105,7 @@ from .scoping import (
     development_plans_in,
     drafts_in,
     fixtures_in,
+    foreign_signing_plans_in,
     game_rows_in_world,
     games_in,
     leagues_in,
@@ -1480,6 +1482,8 @@ _WORLD_ROWS_CHILD_FIRST: tuple[tuple[type[models.Model], str], ...] = (
     (orm_models.PennantReleasePlan, "team__league"),
     (orm_models.PennantDevelopmentPlanEntry, "plan__team__league"),
     (orm_models.PennantDevelopmentPlan, "team__league"),
+    (orm_models.PennantForeignSigningPlanEntry, "plan__team__league"),
+    (orm_models.PennantForeignSigningPlan, "team__league"),
     # 期中の支配下登録も選手・球団を指すので、選手・球団を消す前に消す
     (orm_models.PennantMidseasonRegistration, "team__league"),
     (orm_models.PennantPlayerRatings, "player__stints__team__league"),
@@ -1826,6 +1830,50 @@ class DjangoDevelopmentPlanRepository:
     def delete_all(self) -> None:
         # 行は外部キーの CASCADE で消える（1世界に高々球団の数だけなので、collector に任せてよい）
         development_plans_in(self._scope).delete()
+
+
+class DjangoForeignSigningPlanRepository:
+    """ForeignSigningPlanRepository の Django ORM 実装（#169 F2）。範囲（`WorldScope`）を必須で受け取る。
+
+    外国人の指名はペナント専用で、実データの範囲には書けない。他の世界の球団の指名は、読めも書けもしない。
+    行は候補の添字だけを持ち、鍵は締める年から作り直す（`offseason_key`）。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def find_by_team(self, team_id: int) -> ForeignSigningPlan | None:
+        if not teams_in(self._scope).filter(id=team_id).exists():
+            raise TeamNotFound(f"球団が見つかりません（id={team_id}）。")
+        row = foreign_signing_plans_in(self._scope).prefetch_related("entries").filter(team_id=team_id).first()
+        if row is None:
+            return None
+        return ForeignSigningPlan(
+            team_id=row.team_id,
+            year=row.year,
+            keys=frozenset(offseason_key(row.year, entry.candidate_index) for entry in row.entries.all()),
+        )
+
+    @transaction.atomic
+    def save(self, plan: ForeignSigningPlan) -> ForeignSigningPlan:
+        if self._scope.is_real:
+            raise InvalidWorld("外国人の指名はペナントの世界にだけ保存できます。")
+        if not teams_in(self._scope).filter(id=plan.team_id).exists():
+            raise TeamNotFound(f"球団が見つかりません（id={plan.team_id}）。")
+        if plan.keys is None:
+            foreign_signing_plans_in(self._scope).filter(team_id=plan.team_id).delete()
+            return plan
+        row, _ = orm_models.PennantForeignSigningPlan.objects.update_or_create(  # type: ignore[misc]
+            team_id=plan.team_id, defaults={"year": plan.year}
+        )
+        row.entries.all().delete()
+        entries = orm_models.PennantForeignSigningPlanEntry
+        entries.objects.bulk_create([entries(plan=row, candidate_index=index) for index in sorted(plan.indices)])
+        return plan
+
+    def delete_all(self) -> None:
+        # 行は外部キーの CASCADE で消える（1世界に高々球団の数だけなので、collector に任せてよい）
+        foreign_signing_plans_in(self._scope).delete()
 
 
 class DjangoMidseasonRegistrationRepository:

@@ -1061,6 +1061,52 @@ class PennantDevelopmentPlanEntry(models.Model):
         return f"{self.plan} {self.player_id} {self.decision}"
 
 
+class PennantForeignSigningPlan(models.Model):
+    """ペナントの受け持つ球団の、外国人のオフの手動の指名（#169 F2）。球団ごとに1つ。お任せの球団は行を持たない。
+
+    `year` は指名した締める年（その年のオフにだけ使い、締めた時点で消す）。獲得する候補は
+    `PennantForeignSigningPlanEntry`（候補は保存せず、世界のシードから導く。行は候補の鍵＝添字だけ）。
+    獲得の事実は在籍の入団の経路（新外国人）とプロフィールの前所属に残す。
+    世界の列は持たない。球団のリーグで世界が決まる（戦力外の指名と同じ）。
+    """
+
+    team = models.OneToOneField(
+        Team, on_delete=models.CASCADE, related_name="foreign_signing_plan", verbose_name="球団"
+    )
+    year = models.PositiveSmallIntegerField(verbose_name="締める年")
+
+    class Meta:
+        verbose_name = "ペナントの外国人の指名"
+        verbose_name_plural = "ペナントの外国人の指名"
+        ordering = ["team_id"]
+
+    def __str__(self) -> str:
+        return f"{self.team.name}の{self.year}年の外国人の指名"
+
+
+class PennantForeignSigningPlanEntry(models.Model):
+    """外国人の指名の1人（候補の鍵）。候補は締める年・オフ・球団から導くので、球団の中の添字だけを持つ
+    （domain の `foreign_market.offseason_key`）。"""
+
+    plan = models.ForeignKey(
+        PennantForeignSigningPlan, on_delete=models.CASCADE, related_name="entries", verbose_name="外国人の指名"
+    )
+    candidate_index = models.PositiveSmallIntegerField(verbose_name="候補の添字")
+
+    class Meta:
+        verbose_name = "ペナントの外国人の指名の行"
+        verbose_name_plural = "ペナントの外国人の指名の行"
+        ordering = ["plan_id", "candidate_index"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["plan", "candidate_index"], name="unique_pennant_foreign_signing_plan_entry_candidate"
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.plan} {self.candidate_index}"
+
+
 class PennantMidseasonRegistration(models.Model):
     """ペナントの期中の支配下登録（#170 P3a）。球団・選手・登録日（その選手が出られる最初の公式戦の日）。
 

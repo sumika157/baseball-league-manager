@@ -43,7 +43,7 @@ from .development import (
 from .draft import Draftee, DraftTeam, development_target
 from .draft_meeting import DraftContext, DraftState, Lottery, MeetingSetup, finish_draft, open_meeting
 from .draft_record import DraftRecord
-from .foreign_market import ForeignSigning, OffseasonSignings, offseason_signings
+from .foreign_market import CandidateKey, ForeignSigning, OffseasonSignings, offseason_signings
 from .offseason_player import (
     OffseasonClub,
     OffseasonPlayer,
@@ -375,6 +375,7 @@ def prepare_meeting(
     draft: DraftContext,
     manual_releases: Mapping[int, Collection[int]] | None = None,
     manual_development: Mapping[int, Mapping[int, DevelopmentDecision]] | None = None,
+    manual_signings: Mapping[int, Collection[CandidateKey]] | None = None,
 ) -> PreparedMeeting:
     """Y 年のドラフト会議を開くまで: 引退・戦力外（`plan_departures`）→ 外国人の獲得 →
     人数の幅と候補（`open_meeting`）。
@@ -393,7 +394,9 @@ def prepare_meeting(
     )
     names = set(used_names)
     # 外国人の獲得は会議の前（獲得した外国人の分だけ、会議で指名する日本人が減る。#169）
-    market = offseason_signings(departures.draft_teams, year=year, world_seed=world_seed, used_names=names)
+    market = offseason_signings(
+        departures.draft_teams, year=year, world_seed=world_seed, used_names=names, manual=manual_signings
+    )
     setup = open_meeting(
         market.teams, draft, year=year, world_seed=world_seed, used_names=names, signed=market.signed_positions
     )
@@ -425,6 +428,7 @@ def plan_offseason(
     draft: DraftContext,
     manual_releases: Mapping[int, Collection[int]] | None = None,
     manual_development: Mapping[int, Mapping[int, DevelopmentDecision]] | None = None,
+    manual_signings: Mapping[int, Collection[CandidateKey]] | None = None,
     meeting: DraftRecord | None = None,
 ) -> OffseasonPlan:
     """Y 年を締める計画。`clubs` は球団 id の昇順で処理する。
@@ -434,6 +438,7 @@ def plan_offseason(
     - `draft`: ドラフト会議の設定（世界の規則と、Y 年の公式戦の最終順位）。既定値は持たない
     - `manual_releases`: GM が手動で戦力外を指名した球団（球団 id → 選手 id）。無い球団は自動（`release.py`）
     - `manual_development`: GM が手動で育成の扱いを指名した球団（球団 id → 選手 id → 扱い。#170 P2）。無い球団は自動
+    - `manual_signings`: GM が手動で外国人の獲得を指名した球団（球団 id → 候補の鍵。#169 F2）。無い球団は AI が選ぶ
     - `meeting`: GM が進めて終えた会議の記録（D3。`replay_meeting` の検査を通す）。None なら会議を開かなかった年で、
       全球団を AI として最後まで進める
     """
@@ -446,6 +451,7 @@ def plan_offseason(
         draft=draft,
         manual_releases=manual_releases,
         manual_development=manual_development,
+        manual_signings=manual_signings,
     )
     departures, market, setup = prepared.departures, prepared.market, prepared.setup
     retired = departures.retired
