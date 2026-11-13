@@ -47,6 +47,7 @@ from ..application.pennant_club_details import ClubDetailsService
 from ..application.pennant_history import PennantHistoryService
 from ..application.pennant_home import PennantHomeService
 from ..application.pennant_midseason import MidseasonRegistrationService
+from ..application.pennant_midseason_review import MidseasonReview
 from ..application.pennant_offseason import PennantOffseasonService
 from ..application.pennant_offseason_view import OffseasonViewService
 from ..application.pennant_postseason import PennantPostseasonService, PostseasonBracketReader
@@ -497,6 +498,15 @@ def build_pennant_season_service(world_id: int) -> PennantSeasonService:
         plans=DjangoClubPlanRepository(scope),
         context_query=DjangoSimulationContextQuery(scope),
         fa_exemptions=ForeignQuotaExemptions(DjangoServiceHistoryQuery(scope)),
+        review=MidseasonReview(
+            leagues=DjangoLeagueRepository(scope),
+            teams=DjangoTeamRepository(scope),
+            ratings=DjangoRatingsRepository(scope),
+            registrations=DjangoMidseasonRegistrationRepository(scope),
+            squads=DjangoDevelopmentRosterQuery(scope),
+            context_query=DjangoSimulationContextQuery(scope),
+            atomic=transaction.atomic,
+        ),
         atomic=transaction.atomic,
     )
 

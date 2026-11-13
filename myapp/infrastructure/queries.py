@@ -28,6 +28,8 @@ from ..application.dto import (
     DeclarationFact,
     DevelopmentPlayerFacts,
     DevelopmentRoster,
+    DevelopmentSquad,
+    DevelopmentSquadPlayer,
     FaSubject,
     FaSubjects,
     FielderUsage,
@@ -1339,6 +1341,39 @@ class DjangoDevelopmentRosterQuery:
                 )
                 for stint in development
             ),
+        )
+
+    def squads(self, year: int) -> tuple[DevelopmentSquad, ...]:
+        # 球団（リーグの上限）を1本、その年の在籍と選手の登録位置を1本（球団・選手の人数によらない）
+        teams = list(teams_in(self._scope).order_by("id").values_list("id", "league__registered_player_limit"))
+        rows = (
+            stints_in(self._scope)
+            .filter(period_covering(year))
+            .order_by("team_id", "player_id")
+            .values_list("team_id", "player_id", "number", "signed_as", "promoted_year", "player__position")
+        )
+        registered: dict[int, int] = {}
+        numbers: dict[int, set[str]] = {}
+        players: dict[int, list[DevelopmentSquadPlayer]] = {}
+        for team_id, player_id, number, signed_as, promoted_year, position in rows:
+            numbers.setdefault(team_id, set()).add(number)
+            # その年の区分（判定の出典は domain の `ContractStatus.in_year`。`for_team` と同じ）
+            status = ContractStatus.in_year(ContractStatus.from_label(signed_as), promoted_year, year)
+            if status is ContractStatus.REGISTERED:
+                registered[team_id] = registered.get(team_id, 0) + 1
+            else:
+                players.setdefault(team_id, []).append(
+                    DevelopmentSquadPlayer(player_id=player_id, position=Position.from_label(position))
+                )
+        return tuple(
+            DevelopmentSquad(
+                team_id=team_id,
+                registered_count=registered.get(team_id, 0),
+                registered_limit=limit,
+                numbers=frozenset(numbers.get(team_id, ())),
+                players=tuple(players.get(team_id, ())),
+            )
+            for team_id, limit in teams
         )
 
 
