@@ -56,17 +56,21 @@ DEVELOPMENT_CONTRACT_YEARS = 3
 # 1球団が1年のオフに上げる育成の上限（案3）。NPB の育成から支配下への移行は 2023年 30人・2024年 50人
 # ＝1球団1年 約2.5〜4.2人（npb.jp の「新規支配下選手登録」の公示。2月〜7月の分だけ）
 MAX_PROMOTIONS = 3
-# 昇格の基準の余裕（点）。育成の見込みの価値が、入れ替わる支配下の選手の残す価値をこれより上回るときだけ上げる
-PROMOTION_MARGIN = 3.0
+# 昇格の基準の余裕（点）。育成の見込みの価値が、入れ替わる支配下の選手の残す価値をこれより上回るときだけ上げる。
+# #362（育成の新人に高校生を増やした）で 3 → 6: 高校で入った育成は伸びの見込みが大きく、3点では昇格が増えて
+# 入れ替わりが上がった（2026-11-13 ユーザー決定 案1。昇格の人数は前と同じくらいに保ち、上がる選手が若くなる）
+PROMOTION_MARGIN = 6.0
 # 満了の余裕（点）。満了の育成の見込みの価値が、新しい育成の新人の見込みからこれを引いた値に届かなければ自由契約
 RESIGN_MARGIN = 5.0
 # AI の期中の昇格（#170 P3b。Q2 A）: 1球団1年の上限（判定日ごとに1人まで）と、支配下の上限のうち空けておく人数
 # （#169 F3 の期中の外国人の獲得の分）
 MIDSEASON_MAX_PROMOTIONS = 2
 MIDSEASON_RESERVED_SLOTS = 1
-# 新しい育成の新人の見込みに使う年齢と経路（育成の新人はほとんどが大学から入る。#198 D2 の実測）
-DEVELOPMENT_PROSPECT_AGE = 22
-DEVELOPMENT_PROSPECT_ROUTE = DraftRoute.UNIVERSITY
+# 新しい育成の新人の見込みに使う年齢と経路。#362 で育成の新人の約半分が高校から入るようになり、大学（22歳）のままでは
+# 高校で入った若い育成の見込みがいつも上回って満了の自由契約がほとんど出なくなったので、高校（18歳）にした
+# （前は大学22歳。育成の新人がほとんど大学だった #198 D2 の実測から）
+DEVELOPMENT_PROSPECT_AGE = 18
+DEVELOPMENT_PROSPECT_ROUTE = DraftRoute.HIGH_SCHOOL
 
 
 @dataclass(frozen=True)
@@ -119,7 +123,8 @@ def is_contract_expiring(start_year: int, year: int) -> bool:
 def development_prospect_value(position: Position) -> float:
     """新しい育成の新人に見込める価値（`release.ability_value` と同じ物差し）。満了の再契約の基準。
 
-    能力は大学の新人の平均（`DraftRoute.rating_mean_at`。錨の前の尺度）、年齢は大学から入る年齢、伸びしろは普通で見た
+    能力は `DEVELOPMENT_PROSPECT_ROUTE`（高校）の新人の平均（`DraftRoute.rating_mean_at`。錨の前の尺度）、年齢は
+    `DEVELOPMENT_PROSPECT_AGE`（高校から入る年齢）、伸びしろは普通で見た
     見込みの能力（`outlook.projected_ratings`）の総合値（`retirement_value`）。材料は定数だけなので位置ごとに覚える。
     """
     mean = DEVELOPMENT_PROSPECT_ROUTE.rating_mean_at(DEVELOPMENT_PROSPECT_AGE)
