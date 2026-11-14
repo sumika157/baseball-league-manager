@@ -21,7 +21,7 @@ from ..domain.pennant.initial_ratings import age_at_season_start
 from ..domain.pennant.offseason import rating_change
 from ..domain.pennant.season import is_season_closed
 from ..domain.repositories import WorldRepository
-from ..domain.value_objects import DepartureRoute, Season
+from ..domain.value_objects import DepartureRoute, GameStage, Season
 from .draft_board import BoardPick, draft_board
 from .dto import (
     DraftBoard,
@@ -32,14 +32,16 @@ from .dto import (
     OffseasonChangeRow,
     OffseasonFacts,
     OffseasonPlayerFact,
+    OffseasonPopularityRow,
     OffseasonPromotedRow,
     OffseasonRetiredRow,
     OffseasonRookieRow,
     OffseasonSummary,
     WorldContext,
 )
+from .pennant_popularity import PopularityReader, change_label
 from .pennant_ratings import overall_cell
-from .queries import OffseasonQuery
+from .queries import AttendanceQuery, OffseasonQuery
 
 # 成長と衰えの大きかった選手に載せる人数
 TOP_CHANGES = 10
@@ -48,9 +50,19 @@ TOP_CHANGES = 10
 class OffseasonViewService:
     """オフの結果の材料を作る。範囲（世界）は `OffseasonQuery` が持つ。"""
 
-    def __init__(self, *, worlds: WorldRepository, offseason: OffseasonQuery) -> None:
+    def __init__(
+        self,
+        *,
+        worlds: WorldRepository,
+        offseason: OffseasonQuery,
+        popularities: PopularityReader,
+        attendance: AttendanceQuery,
+    ) -> None:
         self._worlds = worlds
         self._offseason = offseason
+        # 人気の変化と観客動員の節（#208 E1）
+        self._popularities = popularities
+        self._attendance = attendance
 
     def get_summary(self, world: WorldContext, year: int, *, league_id: int | None = None) -> OffseasonSummary | None:
         """Y 年のオフの結果。Y 年を締めていない（範囲外・まだ締めていない年も）なら None。
@@ -105,7 +117,41 @@ class OffseasonViewService:
                 sorted((row for row in changes if row.delta < 0), key=lambda r: (r.delta, r.player_id))[:TOP_CHANGES]
             ),
             board=_offseason_board(facts, year, selected, own_id, lotteries),
+            popularity=self._popularity_rows(facts, year, selected, own_id),
         )
+
+    def _popularity_rows(
+        self, facts: OffseasonFacts, year: int, league_id: int | None, own_id: int | None
+    ) -> tuple[OffseasonPopularityRow, ...]:
+        """選んだリーグの球団の人気の変化（翌年の人気の高い順）と、締めた年の観客動員（#208 E1）。
+
+        保存した行だけを読む（この機能より前に締めた年は翌年の行が無いので空）。
+        """
+        after = self._popularities.recorded(year + 1)
+        if not after:
+            return ()
+        before = self._popularities.recorded(year)
+        attendance = {
+            row.team_id: row for row in self._attendance.home_totals(stage=GameStage.REGULAR, year=year, team_id=None)
+        }
+        rows = []
+        for team in facts.teams:
+            if team.league_id != league_id or team.id not in after:
+                continue
+            home = attendance.get(team.id)
+            rows.append(
+                OffseasonPopularityRow(
+                    team_id=team.id,
+                    team_name=team.name,
+                    is_own=team.id == own_id,
+                    before=before[team.id].value if team.id in before else None,
+                    after=after[team.id].value,
+                    change_label=change_label(before.get(team.id), after[team.id]),
+                    attendance_total=0 if home is None else home.total,
+                    attendance_average=0 if home is None else home.average,
+                )
+            )
+        return tuple(sorted(rows, key=lambda row: (-row.after, row.team_id)))
 
     @staticmethod
     def _selected_league(facts: OffseasonFacts, requested: int | None, default: int | None) -> int | None:

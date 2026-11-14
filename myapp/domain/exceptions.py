@@ -130,6 +130,10 @@ class InvalidChampionship(DomainError):
     """日本一の記録として保存できない内容（同じ年を2度書く、範囲の外の球団など）。"""
 
 
+class InvalidPopularity(DomainError):
+    """球団の人気として成り立たない値・保存できない内容（範囲の外の値・同じ球団 × 年の重複・範囲の外の球団）。"""
+
+
 class AlreadyAdvanced(DomainError):
     """画面を開いたときから世界が進んでいる（二重送信や、別の画面で先に進めた場合）。"""
 

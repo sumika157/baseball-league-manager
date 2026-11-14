@@ -43,6 +43,7 @@ from ..domain.exceptions import (
     InvalidChampionship,
     InvalidDraftAction,
     InvalidGame,
+    InvalidPopularity,
     InvalidPosition,
     InvalidRatings,
     InvalidSchedule,
@@ -61,6 +62,7 @@ from ..domain.pennant.draft_meeting import DraftAction, DraftActionKind, DraftSl
 from ..domain.pennant.draft_order import DraftOrderRule
 from ..domain.pennant.draft_record import DraftRecord
 from ..domain.pennant.foreign_market import ForeignSigningPlan, offseason_key
+from ..domain.pennant.popularity import ClubPopularity, Popularity
 from ..domain.pennant.postseason import PostseasonFormat
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.reinforcement import MidseasonRegistration, ensure_registration_matches_stint
@@ -111,6 +113,7 @@ from .scoping import (
     leagues_in,
     midseason_registrations_in,
     players_in,
+    popularities_in,
     ratings_in,
     release_plans_in,
     stage_condition,
@@ -1139,23 +1142,7 @@ class DjangoGameRepository:
         締めたかの判定は domain の `is_season_closed`（翌年の能力があるか）。締める前の年（シーズン終了後の
         ポストシーズンなど）は書ける。
         """
-        world_id = self._scope.world_id
-        if world_id is None or not years:
-            return
-        start_year = orm_models.PennantWorld.objects.filter(id=world_id).values_list("start_year", flat=True).first()
-        if start_year is None:
-            return
-        # 翌年の能力の有無は年ごとの exists（最初の1行で止まる。ふつうは1年ぶんの1クエリ）
-        closed = sorted(
-            year
-            for year in years
-            if is_season_closed(
-                year=year,
-                start_year=start_year,
-                next_year_ratings_exist=ratings_in(self._scope).filter(year=year + 1).exists(),
-            )
-        )
-        if closed:
+        if closed := closed_years(self._scope, years):
             raise AlreadyClosed(
                 f"{closed[0]}年のシーズンは既に締めているので、その年の試合は書けません。", year=closed[0]
             )
@@ -1462,6 +1449,33 @@ class DjangoLeagueRepository:
 # したものと一致することを検査している（足したモデルを消し忘れると、そのテストが落ちる）。
 # 試合とその明細は区分（公式戦・ポストシーズン）を問わず全部消すので、`game_rows_condition` ではなく範囲だけで絞る
 _GAME_ROUTE = "home_team__league"
+
+
+def closed_years(scope: WorldScope, years: Iterable[int]) -> list[int]:
+    """ペナントの世界の、`years` のうち締めた年（昇順）。実データの範囲は常に空。
+
+    締めたかの判定は domain の `is_season_closed`（翌年の能力があるか）。締めた年の試合（`DjangoGameRepository`）と
+    人気（`DjangoPopularityRepository`）を書かないための検査が共有する。
+    """
+    world_id = scope.world_id
+    wanted = set(years)
+    if world_id is None or not wanted:
+        return []
+    start_year = orm_models.PennantWorld.objects.filter(id=world_id).values_list("start_year", flat=True).first()
+    if start_year is None:
+        return []
+    # 翌年の能力の有無は年ごとの exists（最初の1行で止まる。ふつうは1年ぶんの1クエリ）
+    return sorted(
+        year
+        for year in wanted
+        if is_season_closed(
+            year=year,
+            start_year=start_year,
+            next_year_ratings_exist=ratings_in(scope).filter(year=year + 1).exists(),
+        )
+    )
+
+
 _WORLD_ROWS_CHILD_FIRST: tuple[tuple[type[models.Model], str], ...] = (
     # ドラフト会議の記録は世界を直接指し、行動と人数の幅は球団を指すので、球団を消す前に消す（行から先に）
     (orm_models.PennantDraftAction, "draft"),
@@ -1475,6 +1489,8 @@ _WORLD_ROWS_CHILD_FIRST: tuple[tuple[type[models.Model], str], ...] = (
     (orm_models.PennantAward, "league"),
     # 日本一の記録は球団を指すので、球団を消す前に消す
     (orm_models.PennantChampionship, "team__league"),
+    # 球団の人気も球団を指すので、球団を消す前に消す（#208 E1）
+    (orm_models.PennantClubPopularity, "team__league"),
     # 編成と戦力外の指名は選手を指すので、選手を消す前に消す（行から先に）
     (orm_models.PennantClubPlanEntry, "plan__team__league"),
     (orm_models.PennantClubPlan, "team__league"),
@@ -2005,6 +2021,70 @@ class DjangoChampionshipRepository:
         if championships_in(self._scope).filter(year=championship.year).exists():
             raise InvalidChampionship(f"{championship.year}年の日本一は既に記録しています。")
         orm_models.PennantChampionship.objects.create(team_id=championship.team_id, year=championship.year)
+
+
+class DjangoPopularityRepository:
+    """PopularityRepository の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る（#208 E1）。
+
+    人気はペナント専用で、実データの範囲には書けない。他の世界の人気は、読めも書けもしない。
+    1年ぶんは球団の数（8リーグで48行）なので、1回の `bulk_create` で書く。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def find_by_year(self, year: int) -> list[ClubPopularity]:
+        return [
+            self._to_domain(team_id, row_year, value)
+            for team_id, row_year, value in popularities_in(self._scope)
+            .filter(year=year)
+            .order_by("team_id")
+            .values_list("team_id", "year", "value")
+        ]
+
+    def find_by_team(self, team_id: int) -> list[ClubPopularity]:
+        return [
+            self._to_domain(row_team, year, value)
+            for row_team, year, value in popularities_in(self._scope)
+            .filter(team_id=team_id)
+            .order_by("year")
+            .values_list("team_id", "year", "value")
+        ]
+
+    @transaction.atomic
+    def add_all(self, popularities: Sequence[ClubPopularity]) -> None:
+        if not popularities:
+            return
+        if self._scope.is_real:
+            raise InvalidWorld("球団の人気はペナントの世界にだけ保存できます。")
+        keys = [(item.team_id, item.year) for item in popularities]
+        if len(set(keys)) != len(keys):
+            raise InvalidPopularity("同じ球団・年の人気を2回は保存できません。")
+        team_ids = {item.team_id for item in popularities}
+        known = set(teams_in(self._scope).filter(id__in=team_ids).values_list("id", flat=True))
+        if missing := sorted(team_ids - known):
+            raise InvalidPopularity(f"この世界に無い球団の人気は保存できません（id={missing[0]}）。")
+        if closed := closed_years(self._scope, {item.year for item in popularities}):
+            raise AlreadyClosed(
+                f"{closed[0]}年のシーズンは既に締めているので、その年の人気は書けません。", year=closed[0]
+            )
+        years = {item.year for item in popularities}
+        existing = set(
+            popularities_in(self._scope).filter(year__in=years, team_id__in=team_ids).values_list("team_id", "year")
+        )
+        if duplicated := sorted(existing & set(keys)):
+            team_id, year = duplicated[0]
+            raise InvalidPopularity(f"{year}年の人気は既に保存しています（球団 id={team_id}）。")
+        orm_models.PennantClubPopularity.objects.bulk_create(
+            [
+                orm_models.PennantClubPopularity(team_id=item.team_id, year=item.year, value=item.popularity.value)
+                for item in popularities
+            ]
+        )
+
+    @staticmethod
+    def _to_domain(team_id: int, year: int, value: int) -> ClubPopularity:
+        return ClubPopularity(team_id=team_id, year=year, popularity=Popularity(value))
 
 
 class DjangoDraftRepository:

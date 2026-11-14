@@ -43,6 +43,7 @@ from ..domain.value_objects import (
     PitchingLine,
     Position,
     Profile,
+    attendance_label,
 )
 
 
@@ -1245,7 +1246,7 @@ class SimulationTeam:
     name: str
     foreign_rules: ForeignPlayerRules
     players: tuple[SimulationPlayer, ...]
-    # 本拠地の収容人数。本拠地が無い・未設定なら None（ホーム試合の観客数を作らない）
+    # 本拠地の収容人数。本拠地が無い・未設定なら None（進める処理が標準の収容人数で補う。#208 E1）
     stadium_capacity: int | None
 
 
@@ -1974,6 +1975,35 @@ class HomeStandings:
 
 
 @dataclass(frozen=True)
+class PopularityCard:
+    """GM ホームの「人気と観客動員」のカード（自軍。#208 E1）。
+
+    人気はいまの年度の値（この機能より前の世界で行が無ければ初期値の50。進める処理が観客数に使う値と同じ）。
+    観客動員はいまの年度の公式戦のホーム試合の合計（観客数のある試合だけ）。
+    """
+
+    year: int
+    popularity: int
+    # 前年の人気と、前年からの変化（「+3」「-2」「+0」）。前年の行が無ければ None と空
+    previous: int | None
+    change_label: str
+    # 自軍のリーグの中での人気の順位（同じ値は同じ順位）とリーグの球団数
+    league_rank: int
+    league_team_count: int
+    home_games: int
+    attendance_total: int
+    attendance_average: int
+
+    @property
+    def attendance_total_label(self) -> str:
+        return attendance_label(self.attendance_total)
+
+    @property
+    def attendance_average_label(self) -> str:
+        return attendance_label(self.attendance_average)
+
+
+@dataclass(frozen=True)
 class PennantHome:
     """GM ホームの材料。状態は保存せず、日程と試合から導く。"""
 
@@ -1994,6 +2024,8 @@ class PennantHome:
     shows_previous_season: bool
     # 最終シーズンを終えた世界の通算（#104）。終えていなければ None
     finale: WorldFinale | None = None
+    # 自軍の人気と観客動員（#208 E1）。受け持つ球団が無ければ None
+    popularity: PopularityCard | None = None
 
     @property
     def season_finished(self) -> bool:
@@ -2726,6 +2758,30 @@ class OffseasonChangeRow:
 
 
 @dataclass(frozen=True)
+class OffseasonPopularityRow:
+    """オフの結果の「人気」の1行（球団ひとつ。#208 E1）。締めた年 Y の人気から翌年 Y+1 の人気への変化。"""
+
+    team_id: int
+    team_name: str
+    is_own: bool
+    before: int | None
+    after: int
+    # 変化（「+3」「-2」「+0」）。締めた年の値が無ければ空
+    change_label: str
+    # 締めた年の公式戦のホーム試合の観客動員（合計と1試合平均）。観客数のある試合が無ければ 0
+    attendance_total: int
+    attendance_average: int
+
+    @property
+    def attendance_total_label(self) -> str:
+        return attendance_label(self.attendance_total)
+
+    @property
+    def attendance_average_label(self) -> str:
+        return attendance_label(self.attendance_average)
+
+
+@dataclass(frozen=True)
 class OffseasonSummary:
     """Y年オフの結果ページの材料。"""
 
@@ -2754,6 +2810,8 @@ class OffseasonSummary:
     decliners: tuple[OffseasonChangeRow, ...]
     # 選んだリーグのドラフトの盤（巡 × 球団。#298 D4）。指名の無い年（順位を持たない移した選手だけ）は None
     board: DraftBoard | None = None
+    # 選んだリーグの球団の人気の変化と、締めた年の観客動員（#208 E1）。この機能より前に締めた年は空
+    popularity: tuple[OffseasonPopularityRow, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -3392,6 +3450,24 @@ class ChampionshipRow:
 
 
 @dataclass(frozen=True)
+class HomeAttendance:
+    """球団 × 年のホーム試合の観客数の合計（#208 E1）。参照クエリ `AttendanceQuery` が作る。
+
+    `games` は観客数のあるホーム試合の数（観客数の無い試合は合計にも試合数にも数えない）。
+    """
+
+    team_id: int
+    year: int
+    games: int
+    total: int
+
+    @property
+    def average(self) -> int:
+        """1試合あたりの観客数（四捨五入）。試合が無ければ 0。"""
+        return round(self.total / self.games) if self.games else 0
+
+
+@dataclass(frozen=True)
 class WorldHistoryYear:
     """歴代の記録の1年。各リーグの優勝と、選んだリーグのタイトル受賞者。"""
 
@@ -3445,6 +3521,14 @@ class ClubHistorySeason:
     # その年のポストシーズンの結果（「日本一」「CS ファイナルステージ敗退」「出場なし」「進行中」）。無い年は空
     postseason: str
     won_postseason: bool
+    # その年の人気（保存した行。この機能より前の年は None で「—」）と、公式戦のホーム試合の観客動員の合計（#208 E1）
+    popularity: int | None = None
+    attendance: int | None = None
+
+    @property
+    def attendance_text(self) -> str:
+        """観客動員の表記（「1,234,567人」）。観客数のあるホーム試合が無ければ空。"""
+        return "" if self.attendance is None else attendance_label(self.attendance)
 
 
 @dataclass(frozen=True)

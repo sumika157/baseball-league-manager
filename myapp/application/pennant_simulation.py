@@ -18,6 +18,7 @@ from datetime import date
 from ..domain.entities import Game
 from ..domain.exceptions import InvalidRoster
 from ..domain.pennant.club_plan import ClubLimits, ClubPlan, ResolvedClub, resolve_club
+from ..domain.pennant.popularity import PENNANT_DEFAULT_CAPACITY, Popularity
 from ..domain.pennant.world import World
 from ..domain.repositories import ClubPlanRepository, RatingsRepository
 from ..domain.simulation.engine import MAX_INNINGS, simulate_game
@@ -29,6 +30,7 @@ from ..domain.simulation.ratings import BatterRatings, PitcherRatings
 from ..domain.value_objects import ForeignPlayerRules, GameStage
 from .dto import PlanNotice, SimulationContext, SimulationTeam
 from .foreign_quota import ForeignQuotaExemptions, QuotaExemptions
+from .pennant_popularity import PopularityReader
 from .queries import SimulationContextQuery
 
 # ポストシーズンの試合の識別の接頭辞（公式戦の識別と混ざらない）
@@ -54,9 +56,12 @@ class DaySimulator:
         context: SimulationContext,
         pools: dict[int, ClubRoster],
         plans: dict[int, ClubPlan],
+        popularity: dict[int, Popularity],
     ) -> None:
         self._world_seed = world_seed
         self._teams = {team.team_id: team for team in context.teams}
+        # 球団ごとのその年の人気（ホーム試合の観客数に効く。#208 E1）
+        self._popularity = popularity
         self._pools = pools
         self._plans = plans
         self._history = pitching_history(context)
@@ -74,12 +79,14 @@ class DaySimulator:
         ratings: RatingsRepository,
         plans: ClubPlanRepository,
         fa_exemptions: ForeignQuotaExemptions,
+        popularities: PopularityReader,
     ) -> DaySimulator:
         """`first_day`（今回の最初の試合の日）より前の試合から導ける状態と、その年の能力と編成を読む。
 
         能力は `first_day` の年のもの（公式戦は日程の最初の日の年、ポストシーズンは同じ年の続き。
         domain の `ratings_year` と一致する）。FA 資格の取得による外国人枠の対象外（協約 第82条 (4)）も
         同じ年で導く（その年の扱いは前の年までの記録で決まるので、進める間は変わらない）。
+        球団の人気も同じ年の値（行の無い球団は初期値で補う。#208 E1）。
         """
         context = context_query.load(before=first_day)
         year = first_day.year
@@ -92,6 +99,7 @@ class DaySimulator:
             context=context,
             pools={team.team_id: pool_of(team, abilities, exemptions=exemptions) for team in context.teams},
             plans={plan.team_id: plan for plan in plans.find_all()},
+            popularity=popularities.for_year(year, [team.team_id for team in context.teams]),
         )
 
     def pool(self, team_id: int) -> ClubRoster:
@@ -145,7 +153,15 @@ class DaySimulator:
         # 試合の結果（得点・打席）と「まとめて進める」「1日ずつ進める」の一致を変えない
         day_rng = make_random(game_seed(self._world_seed, day.year, f"{key}:game-day"))
         simulated.game.times = simulated_times(simulated.game, day_rng)
-        simulated.game.attendance = simulated_attendance(self._teams[home_team_id].stadium_capacity, day, day_rng)
+        # 観客数は本拠地の収容人数（分からなければペナントの標準の収容人数）と両球団の人気から作る（#208 E1）
+        capacity = self._teams[home_team_id].stadium_capacity
+        simulated.game.attendance = simulated_attendance(
+            PENNANT_DEFAULT_CAPACITY if capacity is None else capacity,
+            day,
+            day_rng,
+            home_popularity=self._popularity[home_team_id].value,
+            away_popularity=self._popularity[away_team_id].value,
+        )
         return simulated.game
 
     def _club_of(self, team_id: int, day: date) -> ResolvedClub:

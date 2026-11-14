@@ -36,6 +36,7 @@ from ..application.dto import (
     FieldingRow,
     GameNote,
     GameRow,
+    HomeAttendance,
     HomeStadium,
     LastStart,
     LeagueOption,
@@ -1279,6 +1280,27 @@ class DjangoChampionshipQuery:
             for year, team_id, team_name in championships_in(self._scope)
             .order_by("year", "id")
             .values_list("year", "team_id", "team__name")
+        ]
+
+
+class DjangoAttendanceQuery:
+    """AttendanceQuery の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る。1本の GROUP BY で読む（#208 E1）。"""
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def home_totals(self, *, stage: GameStage, year: int | None, team_id: int | None) -> list[HomeAttendance]:
+        stages = StageFilter.POSTSEASON_ONLY if stage is GameStage.POSTSEASON else StageFilter.REGULAR_ONLY
+        rows = games_in(self._scope, stages=stages).filter(attendance__isnull=False)
+        if year is not None:
+            rows = rows.filter(year=year)
+        if team_id is not None:
+            rows = rows.filter(home_team_id=team_id)
+        return [
+            HomeAttendance(team_id=row["home_team_id"], year=row["year"], games=row["games"], total=row["total"])
+            for row in rows.values("home_team_id", "year")
+            .annotate(games=Count("id"), total=Sum("attendance"))
+            .order_by("year", "home_team_id")
         ]
 
 

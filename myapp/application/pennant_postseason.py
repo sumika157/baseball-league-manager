@@ -46,6 +46,7 @@ from ..domain.repositories import (
 from ..domain.value_objects import GameStage
 from .dto import PlanNotice, PostseasonAdvanceReport
 from .foreign_quota import ForeignQuotaExemptions
+from .pennant_popularity import PopularityReader
 from .pennant_race import LeagueFinishReader, StandingsSource
 from .pennant_season import AtomicBlock
 from .pennant_simulation import DaySimulator
@@ -168,6 +169,7 @@ class PennantPostseasonService:
         plans: ClubPlanRepository,
         context_query: SimulationContextQuery,
         fa_exemptions: ForeignQuotaExemptions,
+        popularities: PopularityReader,
         brackets: PostseasonBracketReader,
         atomic: AtomicBlock,
     ) -> None:
@@ -180,6 +182,8 @@ class PennantPostseasonService:
         self._context_query = context_query
         # FA 資格の取得による外国人枠の対象外（協約 第82条 (4)）。公式戦の進行と同じく1回の「進める」で1回だけ導く
         self._fa_exemptions = fa_exemptions
+        # 球団の人気（ホーム試合の観客数。#208 E1）
+        self._popularities = popularities
         self._brackets = brackets
         self._atomic = atomic
 
@@ -237,6 +241,7 @@ class PennantPostseasonService:
             ratings=self._ratings,
             plans=self._plans,
             fa_exemptions=self._fa_exemptions,
+            popularities=self._popularities,
         )
         games: list[Game] = []
         dates: list[date] = []

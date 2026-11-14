@@ -12,7 +12,7 @@
 
 {% comment %}
 GM ホーム。上から、自軍の位置 → 進めた結果 → 進める（シーズン終了なら「ポストシーズン」のカードと「締める」。
-ポストシーズンが終わるまでは締めるカードを出さない。ドラフト会議が途中なら締めるカードの代わりに会議のカード。進めると締めるを同時には出さない） → 次の試合 → 順位表 → 主力 → タイトル争い → 設定と削除（オーナーにだけ）。
+ポストシーズンが終わるまでは締めるカードを出さない。ドラフト会議が途中なら締めるカードの代わりに会議のカード。進めると締めるを同時には出さない） → 次の試合 → 人気と観客動員 → 順位表 → 主力 → タイトル争い → 設定と削除（オーナーにだけ）。
 状態は保存せず、日程と試合から導いた値（PennantHome）を並べるだけ。
 「注意」は、編成の上書きが使えず、いま進めると自動編成に落ちる区画（オーナーにだけ出す。自軍の帯の直後）。
 {% endcomment %}
@@ -258,6 +258,36 @@ GM ホーム。上から、自軍の位置 → 進めた結果 → 進める（�
       </table>
     </div>
   </div>
+{% endif %}
+
+{% if home.popularity %}
+  {% comment %}自軍の人気（いまの年度の値）とホーム試合の観客動員（公式戦。#208 E1）。読むだけで、書き込みの導線は無い。{% endcomment %}
+  {% with popularity=home.popularity %}
+  <div class="card mb-4" id="popularity">
+    <div class="card-header">人気と観客動員（{{ popularity.year }}年）</div>
+    <div class="card-body">
+      <div class="stat-strip mb-2">
+        <div class="stat-cell">
+          <div class="stat-value">{{ popularity.popularity }}</div>
+          <div class="stat-label">人気{% if popularity.change_label %}（前年から {{ popularity.change_label }}）{% endif %}</div>
+        </div>
+        <div class="stat-cell">
+          <div class="stat-value">{{ popularity.league_rank }}位</div>
+          <div class="stat-label">リーグの人気の順位（{{ popularity.league_team_count }}球団）</div>
+        </div>
+        <div class="stat-cell">
+          <div class="stat-value">{% if popularity.home_games %}{{ popularity.attendance_total_label }}{% else %}—{% endif %}</div>
+          <div class="stat-label">ホームの観客動員（公式戦 {{ popularity.home_games }}試合）</div>
+        </div>
+        <div class="stat-cell">
+          <div class="stat-value">{% if popularity.home_games %}{{ popularity.attendance_average_label }}{% else %}—{% endif %}</div>
+          <div class="stat-label">1試合平均</div>
+        </div>
+      </div>
+      <p class="stat-muted mb-0" style="font-size: 0.8125rem;">人気（1〜100。平均50）はシーズンを締めるときに勝率・優勝・日本一・スター選手で上下し、ホーム試合の観客数に効きます。</p>
+    </div>
+  </div>
+  {% endwith %}
 {% endif %}
 
 <div class="card mb-4">

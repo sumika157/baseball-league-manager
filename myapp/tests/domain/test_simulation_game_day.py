@@ -122,3 +122,69 @@ class AttendanceTest(TestCase):
         self.assertGreater(weekend, weekday)
         self.assertTrue(0.75 <= weekday / 40000 <= 0.85, weekday)
         self.assertTrue(0.85 <= weekend / 40000 <= 0.92, weekend)
+
+
+class _CountingRandom:
+    """引いた回数を数える乱数源（乱数を引く回数が人気の有無で変わらないことを確かめる）。"""
+
+    def __init__(self, seed: int) -> None:
+        self._rng = make_random(seed)
+        self.calls = 0
+
+    def random(self) -> float:
+        self.calls += 1
+        return self._rng.random()
+
+
+class PopularityAttendanceTest(TestCase):
+    """人気の観客数への効き（#208 E1。決定: 人気を渡さないか平均の50なら、足す前と完全に同じ値）。"""
+
+    def test_average_popularity_or_none_gives_exactly_the_same_attendance(self):
+        for seed in range(200):
+            for day in (WEEKDAY, SATURDAY):
+                with self.subTest(seed=seed, day=day):
+                    before = simulated_attendance(32000, day, make_random(seed))
+                    self.assertEqual(
+                        simulated_attendance(32000, day, make_random(seed), home_popularity=50, away_popularity=50),
+                        before,
+                    )
+                    self.assertEqual(
+                        simulated_attendance(
+                            32000, day, make_random(seed), home_popularity=None, away_popularity=None
+                        ),
+                        before,
+                    )
+
+    def test_popularity_does_not_change_how_many_numbers_are_drawn(self):
+        """乱数を引く回数は人気で変わらない（同じ乱数源の後続の値をずらさない）。"""
+        plain, popular = _CountingRandom(1), _CountingRandom(1)
+        for _ in range(100):
+            simulated_attendance(30000, WEEKDAY, plain)
+            simulated_attendance(30000, WEEKDAY, popular, home_popularity=90, away_popularity=10)
+        self.assertEqual(plain.calls, popular.calls)
+
+    def test_a_more_popular_home_club_draws_more(self):
+        means = []
+        for popularity in (20, 50, 80):
+            rng = make_random(21)
+            means.append(
+                mean(simulated_attendance(40000, WEEKDAY, rng, home_popularity=popularity) or 0 for _ in range(1000))
+            )
+        self.assertLess(means[0], means[1])
+        self.assertLess(means[1], means[2])
+
+    def test_the_visitor_counts_less_than_the_home_club(self):
+        home_rng, away_rng = make_random(31), make_random(31)
+        home = mean(simulated_attendance(40000, WEEKDAY, home_rng, home_popularity=80) or 0 for _ in range(1000))
+        away = mean(simulated_attendance(40000, WEEKDAY, away_rng, away_popularity=80) or 0 for _ in range(1000))
+        baseline = mean(simulated_attendance(40000, WEEKDAY, make_random(31)) or 0 for _ in range(1000))
+        self.assertGreater(away, baseline)
+        self.assertGreater(home, away)
+
+    def test_the_most_popular_club_never_exceeds_the_capacity(self):
+        rng = make_random(41)
+        for _ in range(500):
+            value = simulated_attendance(30000, SATURDAY, rng, home_popularity=100, away_popularity=100)
+            self.assertIsNotNone(value)
+            self.assertLessEqual(value, 30000)
+        self.assertIsNone(simulated_attendance(None, WEEKDAY, rng, home_popularity=100))

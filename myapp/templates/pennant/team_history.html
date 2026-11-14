@@ -14,6 +14,7 @@
 
 {% comment %}
 球団史。終わったシーズンだけ。年ごとの最終順位・勝敗・優勝と、ポストシーズンの結果（ポストシーズンのある世界だけ）、
+その年の人気（保存した値。人気を足す前の年は「—」）とホーム試合の観客動員（公式戦の合計。#208 E1）、
 その年に球団の選手が取ったタイトル。順位は順位表から導いた値（世界の終了と同じ関数を通る）。タイトルと日本一は、
 締めた年は締めたときに保存した記録、いまの年度は試合から導いた値。ポストシーズンの到達段は試合から導いた値。
 {% endcomment %}
@@ -43,6 +44,8 @@
               <th class="text-end">差</th>
               <th></th>
               {% if history.postseason_title %}<th>ポストシーズン</th>{% endif %}
+              <th class="text-end">人気</th>
+              <th class="text-end">観客動員</th>
               <th>タイトル</th>
             </tr>
           </thead>
@@ -60,6 +63,8 @@
                 {% if history.postseason_title %}
                   <td>{% if season.postseason %}<a href="{% url 'pennant_postseason_by_year' world.world_id season.year %}">{% if season.won_postseason %}<span class="badge bg-primary">{{ season.postseason }}</span>{% else %}{{ season.postseason }}{% endif %}</a>{% else %}<span class="stat-muted">—</span>{% endif %}</td>
                 {% endif %}
+                <td class="text-end tabular-nums">{% if season.popularity is not None %}{{ season.popularity }}{% else %}<span class="stat-muted">—</span>{% endif %}</td>
+                <td class="text-end tabular-nums">{% if season.attendance_text %}{{ season.attendance_text }}{% else %}<span class="stat-muted">—</span>{% endif %}</td>
                 <td>{% for title in season.titles %}{% if not forloop.first %} · {% endif %}{{ title.label }}（<a href="{% scoped_url 'player_detail' title.team_id title.player_id %}">{{ title.player_name }}</a> {{ title.value }}）{% empty %}<span class="stat-muted">—</span>{% endfor %}</td>
               </tr>
             {% endfor %}

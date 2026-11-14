@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 
@@ -27,7 +27,7 @@ from ..domain.pennant.draft_order import DraftOrderRule, DraftOrderStrategy, Dra
 from ..domain.pennant.foreign_market import CandidateKey, ForeignSigningPlan
 from ..domain.pennant.offseason import OffseasonClub, OffseasonPlayer
 from ..domain.pennant.offseason_player import TrackRecord
-from ..domain.pennant.postseason import PostseasonFormat, PostseasonStatus
+from ..domain.pennant.postseason import LeagueFinish, PostseasonFormat, PostseasonStatus
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.release import ReleasePlan
 from ..domain.pennant.retirement import PlayingTime
@@ -171,6 +171,7 @@ class OffseasonInputs:
     - `manual_signings`: 受け持つ球団の、締める年の外国人の手動の指名（候補の鍵。お任せなら空。#169 F2）
     - `draft`: ドラフト会議の設定（世界の規則・締める年の公式戦の最終順位・受け持つ球団）
     - `awards`: 締める年のタイトル受賞者（締める処理が表彰として書く。実績の加点にも使った）
+    - `finishes`: 締める年の公式戦のリーグごとの最終順位（ドラフトの指名順と、人気の材料の勝率・リーグ優勝。#208 E1）
     """
 
     teams: list[Team]
@@ -182,6 +183,7 @@ class OffseasonInputs:
     manual_signings: Mapping[int, frozenset[CandidateKey]]
     draft: DraftContext
     awards: list[Award]
+    finishes: tuple[LeagueFinish, ...]
 
 
 class OffseasonInputsReader:
@@ -226,6 +228,8 @@ class OffseasonInputsReader:
         awards = derive_awards(self._titles, year, [saved_id(league.id) for league in leagues])
         # 実績の加点の材料: 締めた年までの表彰の数と、いま締める年の受賞の数（過去の年を導き直さない）
         titles = title_counts(awards) + Counter(self._awards.count_by_player())
+        # 公式戦の最終順位は1回だけ読み、ドラフトの指名順と人気の材料（#208 E1）の両方に使う
+        finishes = tuple(self._finishes.finishes(year))
         clubs = tuple(
             OffseasonClub(
                 team_id=saved_id(team.id),
@@ -248,10 +252,11 @@ class OffseasonInputsReader:
             manual_signings=self.manual_signings(world, year),
             draft=DraftContext(
                 world.draft_order_rule,
-                self.standings(world, year, {saved_id(team.id): team.league_id for team in teams}),
+                self.standings(world, year, {saved_id(team.id): team.league_id for team in teams}, finishes=finishes),
                 managed_team_id=world.managed_team_id,
             ),
             awards=awards,
+            finishes=finishes,
         )
 
     def strategy(self, world: World, year: int) -> DraftOrderStrategy:
@@ -265,15 +270,22 @@ class OffseasonInputsReader:
             world.draft_order_rule, self.standings(world, year, teams), world_seed=world.seed, year=year
         )
 
-    def standings(self, world: World, year: int, team_leagues: Mapping[int, int | None]) -> DraftStandings:
+    def standings(
+        self,
+        world: World,
+        year: int,
+        team_leagues: Mapping[int, int | None],
+        *,
+        finishes: Sequence[LeagueFinish] | None = None,
+    ) -> DraftStandings:
         """ドラフトの指名順に使う、締める年の公式戦の最終順位。リーグはその年の優先順（`league_priority`）に並べる。
 
         `team_leagues` は世界の球団（id → リーグの id）。公式戦の順位に無い球団（その年に試合をしていない。
-        ふつうは無い）は、最下位の段より前に置く。
+        ふつうは無い）は、最下位の段より前に置く。`finishes` は既に読んだ締める年の最終順位（省くとここで読む）。
         """
         by_league = {
             finish.league_id: tuple(row.team_id for row in finish.standings)
-            for finish in self._finishes.finishes(year)
+            for finish in (self._finishes.finishes(year) if finishes is None else finishes)
         }
         league_ids = sorted({league_id for league_id in team_leagues.values() if league_id is not None})
         priority = league_priority(league_ids, year=year, start_year=world.start_year)

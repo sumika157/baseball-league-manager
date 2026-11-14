@@ -14,7 +14,7 @@
 {% comment %}
 オフの結果。締める処理は結果を保存しないので、在籍・能力から導いた値（OffseasonSummary）を並べるだけ
 （例外はドラフトの抽選の経過。会議の記録が締めると消えるので、締める処理が記録として残す。#298 D4）。
-上から、自軍（引退・退団・戦力外、新人・新外国人、支配下登録（昇格）、能力の変化）→ リーグ別のドラフトの盤（巡 × 球団）と引退・退団・戦力外と新人・新外国人と支配下登録（昇格）→ 成長と衰えの大きかった選手。
+上から、自軍（引退・退団・戦力外、新人・新外国人、支配下登録（昇格）、能力の変化）→ リーグ別の人気の変化と観客動員（#208 E1）・ドラフトの盤（巡 × 球団）と引退・退団・戦力外と新人・新外国人と支配下登録（昇格）→ 成長と衰えの大きかった選手。
 年齢は、引退・退団・戦力外は締めた年、新人・新外国人と残った選手は翌年の開幕時点。能力は S〜G の区分と総合値（野手は打撃、投手は抑える力）。
 {% endcomment %}
 <div class="page-head">
@@ -74,7 +74,7 @@
   </div>
 {% endif %}
 
-<h2 class="h5 mb-3">リーグ別のドラフトと引退・退団・戦力外・新人・新外国人</h2>
+<h2 class="h5 mb-3">リーグ別の人気・ドラフトと引退・退団・戦力外・新人・新外国人</h2>
 {% if summary.leagues|length > 1 %}
   <form method="get" class="d-flex gap-2 mb-3" action="{% url 'pennant_offseason' world.world_id summary.year %}">
     <select name="league" class="form-select form-select-sm" aria-label="リーグ" style="max-width: 16rem;">
@@ -84,6 +84,42 @@
     </select>
     <button type="submit" class="btn btn-secondary btn-sm">表示</button>
   </form>
+{% endif %}
+
+{% if summary.popularity %}
+  {% comment %}選んだリーグの球団の人気の変化（締めた年 → 翌年。翌年の人気の高い順）と、締めた年の公式戦のホーム試合の観客動員（#208 E1）。{% endcomment %}
+  <div class="card mb-4" id="popularity">
+    <div class="card-header">人気（{{ summary.year }}年 → {{ summary.next_year }}年）と{{ summary.year }}年の観客動員</div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead>
+            <tr>
+              <th>球団</th>
+              <th class="text-end">{{ summary.year }}年</th>
+              <th class="text-end">{{ summary.next_year }}年</th>
+              <th class="text-end">変化</th>
+              <th class="text-end">観客動員</th>
+              <th class="text-end">1試合平均</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in summary.popularity %}
+              <tr {% if row.is_own %}class="fw-semibold"{% endif %}>
+                <td><a href="{% scoped_url 'player_list' row.team_id %}" class="player-name">{{ row.team_name }}</a></td>
+                <td class="text-end tabular-nums">{% if row.before is not None %}{{ row.before }}{% else %}<span class="stat-muted">—</span>{% endif %}</td>
+                <td class="text-end tabular-nums stat-key">{{ row.after }}</td>
+                <td class="text-end tabular-nums">{{ row.change_label|default:"—" }}</td>
+                <td class="text-end tabular-nums">{% if row.attendance_total %}{{ row.attendance_total_label }}{% else %}<span class="stat-muted">—</span>{% endif %}</td>
+                <td class="text-end tabular-nums">{% if row.attendance_total %}{{ row.attendance_average_label }}{% else %}<span class="stat-muted">—</span>{% endif %}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p class="stat-muted px-3 py-2 mb-0" style="font-size: 0.8125rem;">人気（1〜100。平均50）は、シーズンを締めるときに勝率・リーグ優勝・日本一・スター選手で上下し、翌年のホーム試合の観客数に効きます。</p>
+    </div>
+  </div>
 {% endif %}
 
 {% if summary.board %}

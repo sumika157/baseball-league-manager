@@ -1185,6 +1185,29 @@ class PennantChampionship(models.Model):
         return f"{self.year}年 {self.team_id}"
 
 
+class PennantClubPopularity(models.Model):
+    """ペナントの球団の人気（球団 × 年。1〜100。#208 E1）。
+
+    試合の集計ではなく年ごとの状態（能力の行と同じ型）。書くのは世界の作成（開幕年）とシーズンを締める処理（翌年）だけ。
+    値の範囲の出典は domain の `Popularity`。世界の列は持たない（球団のリーグで世界が決まる）。管理画面には出さない。
+    """
+
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="+", verbose_name="球団")
+    year = models.PositiveSmallIntegerField(verbose_name="年度")
+    value = models.PositiveSmallIntegerField(verbose_name="人気")
+
+    class Meta:
+        verbose_name = "ペナントの球団の人気"
+        verbose_name_plural = "ペナントの球団の人気"
+        ordering = ["year", "team_id"]
+        constraints = [
+            models.UniqueConstraint(fields=["team", "year"], name="unique_pennant_club_popularity"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.year}年 {self.team_id} 人気{self.value}"
+
+
 class PennantDraft(models.Model):
     """ペナントのドラフト会議の記録（世界 × 年。#297 D3）。会議は締める前の入力で、締めた時点で消す。
 
