@@ -2181,6 +2181,20 @@ epic を main に入れる前に開発 DB・本番で数え、あれば作成者
 
 ### 仕上げ（#74）
 
+段階は #74 の仕上げの計画（T1 → T2（→ T2b）・T3 → T4 → 最後の取り込み → epic を main に入れる PR）。タスク PR の base は `epic/workspaces`（`Refs #74`）。
+
+#### T1. 見本つきのワークスペースを大量に作る管理コマンド（`feature/seed-sample-workspaces`）
+
+- `seed_sample_workspaces --count N [--prefix load] [--private]` / `--delete [--yes]`（`myapp/management/commands/seed_sample_workspaces.py`）。`<prefix>-0001`… の N 人（パスワードは使えない値）を作り、1人1つ、見本ありのワークスペースを `build_workspace_service().create(with_sample_league=True)` で作る（上限と見本の生成はサービスのまま。上限を素通りする口は無い）。ユーザーとワークスペースは1人ぶんずつ1つのトランザクション（失敗した人のユーザーを残さない。作れた分は残り、案内に `--delete` を出す）。既定は公開。10個ごとに進み具合、最後に合計と1個あたりの時間。
+- `--delete`: `<prefix>-<数字>` の名前のユーザーが**持ち主**のワークスペースを `WorkspaceService.delete`（`workspace_delete` と同じ）で消し、全部消せたらユーザーを消す（世界が残っていて消せなければ、ユーザーは消さずに止まる。`Workspace.owner` が PROTECT なのでこの順）。確認のプロンプトか `--yes`。
+- `DEBUG` が偽なら、作るのも消すのも拒む。同じ prefix のユーザーが1人でもいれば作らずに「先に --delete」と案内する。
+- 消す対象は利用者 id で引く一覧の台帳（`build_workspace_list_query().list_for`）の持ち主の行。組み立て口・application・infrastructure・domain は変えていない。`test_wiring.py` の `WorkspaceLedgerUsersTest` の `ALLOWED` にこのコマンドを足した（理由は行のコメント）。`test_seed_commands_scope.py` の分類は、実データを `--workspace` で読み書きするコマンドの表なので足さない（このコマンドは範囲を受け取らず、ワークスペースそのものを作る・消す）。
+- テスト（`test_seed_sample_workspaces.py`。16本）: `--count 2` で2人・2つ（公開・ログインできない）、それぞれの範囲に6チーム・36試合、選手の名前が key ごとに違う、既定のワークスペースの行が変わらない、同じ prefix の2回目は止まる、`--private`、`--delete` は prefix の分だけ（似た名前 `load-admin`・別の prefix・既定のワークスペースは残る）、確認で取りやめ・入力なしで取りやめ、世界があれば止まってユーザーが残る、消した後は同じ prefix で作り直せる、上限（`WORKSPACE_MAX_OWNED=0`）でユーザーも残らない、引数の誤り、`DEBUG=False` で作るのも消すのも拒む、コマンドが infrastructure を import しない。
+- **変異の確かめ**（どれも戻した）: `--delete` の対象を prefix で絞らない（全ユーザー）→ 1件（`test_delete_removes_only_that_prefix`）。`DEBUG` の検査を外す → 2件。名前の形（`<prefix>-<数字>`）を見ずに頭だけで拾う → `DeleteSampleWorkspacesTest` の準備で止まる（似た名前のユーザーがいるので作成が拒まれる）。
+- Wiki「仮想データの投入」に「見本つきのワークスペースを大量に作る（計測用）」の節。
+- テスト: domain＋integration 4,766（その8 の 4,750 に、このコマンドの16本）、e2e 21。
+- **レビュー**（`ddd-boundary-reviewer`）: 重要な指摘なし。軽微を直した: 作成をユーザーごと1つのトランザクションにして失敗時に `--delete` を案内／Wiki に「`<prefix>-<数字>` の名前なら作ったかどうかによらず消える」／`--delete` と `--private` の併用を拒む／世界で止まる経路・上限・入力なし・引数の誤りのテストを足した。残した軽微: `WorkspaceLedgerUsersTest` の docstring 本文にこのコマンドの理由を書いていない（`ALLOWED` の行のコメントに書いた。同じ docstring を T3 が直すので、衝突を避けた。→ T3 で書いた）。
+
 #### T3 漏れの検査の穴を埋める（`refactor/workspace-isolation-gaps`、2026-11-14）
 
 決定5（2026-11-14。A）のとおり、各段階で残した軽微なもののうち、漏れの検査の穴だけを埋めた。**テストだけの変更**で、コード・スキーマ・マイグレーションは変えていない。
@@ -2188,7 +2202,7 @@ epic を main に入れる前に開発 DB・本番で数え、あれば作成者
 - **削除の網羅**（`test_workspace_delete.py`）: `WorkspaceDeletionCase` の A の世界に、ドラフト会議（会議・人数の幅・行動）と締めた年の抽選・入札を置いた（`_plant_a_world_draft_rows`）。B の世界の会議は B を消す前に世界ごと消えているので、これまでは A にも B にも会議の行が無く、削除の順の会議・抽選の条件を外して全部消しても網羅のテストが通っていた。新しいテスト `test_the_draft_rows_of_a_world_of_another_workspace_are_kept` に加えて、既存の全表の比較（`test_every_row_of_b_is_deleted_and_nothing_else_changes`）もこの行を見るようになった。
 - **抽選のリポジトリ**（`test_workspace_isolation.py` の `_draft_lottery_repository`）: 記録の選手が `_plant_b_draft_rows` で抽選済みの選手だったため、A の世界の範囲での書き込みは範囲の検査ではなく「既に抽選の記録がある」で弾かれていた（**空振り**。範囲の検査を外しても通った）。まだ抽選の記録が無い選手で書き、弾く理由を「この世界に無い選手・球団」の文言まで確かめる。選手と球団の検査を別々に確かめるため、「B の選手＋B の球団」「B の選手＋A の世界の球団」「A の世界の選手＋B の球団」の3通りにした。B の世界の範囲では同じ記録が書けることも確かめる（savepoint の中で書いて巻き戻し、ほかの `CHECKS` に残さない）。
 - **`find_by_ids_with_roster`**（`DjangoTeamRepository`。#359 で main に入った）: `CHECKS` の `_team_repository` に足した。A の範囲で B の id（単独・A の id と混ぜたもの）は `TeamNotFound`、B の範囲では B のチームが読める。
-- **`WorkspaceLedgerUsersTest`**（`test_wiring.py`）: docstring の1行目とテスト名（`test_only_the_views_admin_and_workspace_delete_use_the_workspace_ledgers`）を `ALLOWED`（`views.py`・`admin.py`・`workspace_delete`）に合わせた。
+- **`WorkspaceLedgerUsersTest`**（`test_wiring.py`）: docstring の1行目とテスト名（`test_only_the_views_admin_and_workspace_commands_use_the_workspace_ledgers`）を `ALLOWED`（`views.py`・`admin.py`・`workspace_delete`・T1 の `seed_sample_workspaces`）に合わせた（T1 の取り込みでこのコマンドの理由も本文に書いた）。
 - **§14 から見つけた残り1つ**（その7 のレビューの「台帳の検査がサービスの1段目しか見ない」）: `LedgersAreScopedToTheWorkspaceTest` に、サービスから届くオブジェクト（`myapp` のクラスの属性・関数の閉包・束縛メソッド・入れ物の要素）をたどり、見つけた世界の台帳・範囲（`WorldScope`）・閉包の `workspace_id` がすべて範囲のワークスペースかを見る検査を足した（`_reachable_workspace_ids`）。空振りの防止に、2段目の台帳（GM ホーム・歴代の記録の `_postseason._worlds`）・閉包の中の台帳（世界の「今日」）・呼ばれたときに組み立てる工場の閉包（世界の見出しの `games_for`）を拾えていることも見る。
 
 **変異の確かめ**（どれも戻した。「元のテスト」は T3 の前の3ファイルで同じ変異を流したもの）
@@ -2205,6 +2219,6 @@ epic を main に入れる前に開発 DB・本番で数え、あれば作成者
 | オフの部品のタイトルの集計を別のワークスペースの範囲で組み立てる | 4件（wiring） | 通る |
 | 世界の見出しの `games_for` の閉包に別のワークスペースの id | 1件 | 通る |
 
-- テスト: domain＋integration 4,752（epic 95c57dc の 4,750 より +2。ほかの足した検査は既存のテストの中）、e2e 21。
+- テスト: domain＋integration 4,768（T1 の後の epic の 4,766 より +2。ほかの足した検査は既存のテストの中）、e2e 21。
 - **レビュー**（`ddd-boundary-reviewer`）: 重要な指摘なし。軽微を直した: 呼ばれたときに組み立てる工場の中が見えない → 閉包に取り込んだ範囲と `workspace_id` も見る（ただし工場の中に直書きした定数は見えない）、選手と球団の検査を別々に、`find_by_ids_with_roster` の組に `subTest`、たどらないもの（`functools.partial`・`__slots__`・評価前の `cached_property`）を docstring に。残したもの: `test_workspace_isolation.py`（約2,370行）と `test_wiring.py`（約1,550行）が目安の600行を超えている（分割は #343 の範囲）。
 - **テストだけでは埋まらないもの**（§14 の残したものから。コードを変えるので T3 ではしない。Wiki の「残した拡張」へ）: ペナントの条件に `world__workspace_id` を足す二重の防御（測ってから決める）・管理画面のオートコンプリートの候補を絞る（今は保存で弾く）・管理画面の編集者・担当のインラインが集約の検査を通らない。

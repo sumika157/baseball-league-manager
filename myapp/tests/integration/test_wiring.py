@@ -1194,7 +1194,8 @@ class OuterWorkspaceTeamsTest(SimpleTestCase):
 
 class WorkspaceLedgerUsersTest(SimpleTestCase):
     """範囲を取らないワークスペースの台帳は、定義（`infrastructure/` の `queries.py`・`repositories.py`）と、
-    `views.py`・管理画面（`admin.py`）・管理コマンド `workspace_delete` だけが使う（W2 T6。W4 で後の2つを足した）。
+    `views.py`・管理画面（`admin.py`）・管理コマンド `workspace_delete`・`seed_sample_workspaces` だけが使う
+    （W2 T6。W4 で `admin.py` と `workspace_delete` を、仕上げ T1 で `seed_sample_workspaces` を足した）。
 
     台帳は key・利用者からワークスペースそのものを引くだけで、範囲を作る前（`workspace_view`・`/` の一覧）に呼ばれる。
     application・ほかの管理コマンド・テンプレートタグなど、範囲を受け取れる場所で台帳を引き始めると、範囲の外から
@@ -1208,6 +1209,8 @@ class WorkspaceLedgerUsersTest(SimpleTestCase):
     ワークスペースそのものを扱う。範囲を受け取る経路ではない）。運営者の管理コマンド `workspace_delete`（W4 T2）は、
     `--workspace` の key で指した
     ワークスペースを消すのが仕事なので使ってよい（範囲を受け取る経路ではなく、範囲そのものを消す）。
+    計測用の管理コマンド `seed_sample_workspaces`（仕上げ T1）は、見本つきのワークスペースをサイトと同じサービスで
+    作り、prefix のユーザーが持ち主のワークスペースを利用者 id の一覧から引いて消す（範囲を受け取る経路ではない）。
     ヘッダーの切り替えの一覧（W4 T3）は、コンテキストプロセッサが views の `my_workspaces` を通して読む（名前は
     views.py の外に出さない。範囲を選び直す経路ではなく、利用者 id で自分の一覧を引くだけ）。
     """
@@ -1229,10 +1232,13 @@ class WorkspaceLedgerUsersTest(SimpleTestCase):
         Path("myapp/infrastructure/queries.py"),
         Path("myapp/infrastructure/repositories.py"),
         Path("myapp/management/commands/workspace_delete.py"),
+        # 計測用に見本つきのワークスペースを作る・消す（仕上げ T1 #74）。作成・削除はサイトと同じサービス、
+        # 消す対象は prefix のユーザーが持ち主のワークスペース（利用者 id で一覧を引く。範囲を受け取る経路ではない）
+        Path("myapp/management/commands/seed_sample_workspaces.py"),
         Path("myapp/admin.py"),
     }
 
-    def test_only_the_views_admin_and_workspace_delete_use_the_workspace_ledgers(self):
+    def test_only_the_views_admin_and_workspace_commands_use_the_workspace_ledgers(self):
         root = Path(__file__).resolve().parents[3]
         users = set()
         for path in (root / "myapp").rglob("*.py"):
