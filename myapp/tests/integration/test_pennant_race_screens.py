@@ -431,6 +431,7 @@ class FinaleTest(SimpleTestCase):
             # 世界の終了の通算だけを見る（人気と観客動員のカードは `test_pennant_popularity.py`）
             popularities=None,
             attendance=None,
+            finance=None,
         )
 
     def league(self, *rows):

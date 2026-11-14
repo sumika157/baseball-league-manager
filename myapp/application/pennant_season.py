@@ -25,6 +25,9 @@ AI の昇格と外国人の獲得を書き、登録候補を読み直して続�
 
 **書くときに在籍の目印（`TeamRepository.roster_signature`）を確かめる。** 登録候補を読んだ後に名簿が変わっていたら
 （進めている間に GM が期中の登録をした。#170 P3a の申し送り）、古い名簿で試合を書かずに `AlreadyAdvanced`。
+同じく GM が手動にしたチケットの値段（#208 E2）も読み直し、読んだ後に変わっていたら（開幕前に値段を変えるのと
+最初の試合を書くのが重なった）、古い値段の観客数で試合を書かずに `AlreadyAdvanced`（値段を変えられるのはその年の
+試合が無い間だけなので、最初の書き出しの後は変わらない）。
 """
 
 from __future__ import annotations
@@ -59,6 +62,7 @@ from .dto import AdvanceReport, PlanNotice
 from .foreign_quota import ForeignQuotaExemptions
 from .pennant_popularity import PopularityReader
 from .pennant_simulation import DaySimulator
+from .pennant_ticket_price import TicketPriceReader
 from .queries import SimulationContextQuery
 
 if TYPE_CHECKING:
@@ -95,6 +99,7 @@ class PennantSeasonService:
         context_query: SimulationContextQuery,
         fa_exemptions: ForeignQuotaExemptions,
         popularities: PopularityReader,
+        ticket_prices: TicketPriceReader,
         review: MidseasonReview,
         atomic: AtomicBlock,
     ) -> None:
@@ -111,6 +116,8 @@ class PennantSeasonService:
         self._fa_exemptions = fa_exemptions
         # 球団の人気（ホーム試合の観客数。#208 E1）
         self._popularities = popularities
+        # 球団のチケットの値段（ホーム試合の観客数。#208 E2）
+        self._ticket_prices = ticket_prices
         self._atomic = atomic
         # 判定日の AI の期中の補強（昇格は #170 P3b、外国人の獲得は #169 F3）
         self._review = review
@@ -231,9 +238,9 @@ class PennantSeasonService:
                     consumed.append(fixture)
                 # 日の途中では書き出さない（残りの対戦が「今日」より前になり、進められなくなる）
                 if len(games) >= FLUSH_EVERY_GAMES:
-                    total += self._flush(games, consumed, signature)
+                    total += self._flush(games, consumed, signature, simulator)
                     games, consumed = [], []
-            total += self._flush(games, consumed, signature)
+            total += self._flush(games, consumed, signature, simulator)
             last_played = segment.dates[-1]
             # 区切りごとに読み直すので、前の区切りで知らせた球団・区画は重ねない（最初の日の1回だけ）
             seen = {(notice.team_id, notice.section) for notice in notices}
@@ -254,10 +261,17 @@ class PennantSeasonService:
             plans=self._plans,
             fa_exemptions=self._fa_exemptions,
             popularities=self._popularities,
+            ticket_prices=self._ticket_prices,
         )
         return simulator, signature
 
-    def _flush(self, games: list[Game], consumed: list[Fixture], signature: tuple[int, int, int, int]) -> int:
+    def _flush(
+        self,
+        games: list[Game],
+        consumed: list[Fixture],
+        signature: tuple[int, int, int, int],
+        simulator: DaySimulator,
+    ) -> int:
         """試合を保存し、消化した対戦を消す。同じトランザクションで行う。
 
         試合の検査と行の組み立ては**トランザクションの外**で済ませる（CPU の仕事で、書き込みロックを
@@ -266,6 +280,8 @@ class PennantSeasonService:
 
         中で在籍の目印を確かめ、登録候補を読んだ後に名簿が変わっていたら（進めている間に GM が期中の登録をした）
         書かずに `AlreadyAdvanced`（登録した選手が出られるはずの試合を、古い名簿で作らない。書き出し済みの日は残る）。
+        GM が手動にしたチケットの値段も読み直し、読んだ後に変わっていたら同じく `AlreadyAdvanced`（#208 E2。
+        古い値段で観客数を作った試合を書かない）。
         """
         if not games:
             return 0
@@ -273,6 +289,10 @@ class PennantSeasonService:
         with self._atomic():
             if self._teams.roster_signature() != signature:
                 raise AlreadyAdvanced("進めている間に選手の登録が変わりました。最新の状態からもう一度進めてください。")
+            if self._ticket_prices.manual(consumed[0].date.year) != simulator.manual_ticket_prices:
+                raise AlreadyAdvanced(
+                    "進めている間にチケットの値段が変わりました。最新の状態からもう一度進めてください。"
+                )
             # 先に消す。すでに消化された対戦があれば InvalidSchedule で、試合を書かずに止まる
             # （同じ世界を同時に進めて、同じ対戦の試合が2つできるのを防ぐ）
             self._fixtures.remove(consumed)

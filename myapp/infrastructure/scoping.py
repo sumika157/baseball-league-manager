@@ -202,6 +202,11 @@ def popularities_in(scope: WorldScope) -> QuerySet[orm_models.PennantClubPopular
     return orm_models.PennantClubPopularity.objects.filter(world_condition("team__league", scope))
 
 
+def ticket_prices_in(scope: WorldScope) -> QuerySet[orm_models.PennantTicketPrice]:
+    """範囲の手動のチケットの値段（#208 E2）。人気と同じく、球団のリーグで世界が決まる。"""
+    return orm_models.PennantTicketPrice.objects.filter(world_condition("team__league", scope))
+
+
 def drafts_in(scope: WorldScope) -> QuerySet[orm_models.PennantDraft]:
     """範囲のドラフト会議の記録。会議は世界そのものに属すので、世界を直接指す（`League.world` と同じ列の名前）。"""
     return orm_models.PennantDraft.objects.filter(world_condition("", scope))

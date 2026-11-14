@@ -160,6 +160,7 @@ from .pennant_offseason_inputs import (
 from .pennant_popularity import PopularityBasis, popularity_basis
 from .pennant_postseason import PostseasonBracketReader
 from .pennant_season import AtomicBlock
+from .pennant_ticket_price import TicketPriceReader
 from .queries import DevelopmentRosterQuery, PlayerNameQuery, SimulationContextQuery
 
 
@@ -219,6 +220,7 @@ class PennantOffseasonService:
         awards: AwardRepository,
         championships: ChampionshipRepository,
         popularities: PopularityRepository,
+        ticket_prices: TicketPriceReader,
         drafts: DraftRepository,
         lotteries: DraftLotteryRepository,
         titles: LeagueViewService,
@@ -247,6 +249,8 @@ class PennantOffseasonService:
         self._championships = championships
         # 球団の人気（締めるときに翌年の値を書く。#208 E1）
         self._popularities = popularities
+        # 締める年のチケットの値段（翌年の人気への効き。#208 E2）
+        self._ticket_prices = ticket_prices
         # その年のドラフト会議の記録（GM が開いた会議。締めるときに再生して消す。#297 D3）
         self._drafts = drafts
         # 締めた年の抽選の記録（会議の記録が消えた後の抽選の出典。#298 D4）
@@ -701,6 +705,7 @@ class PennantOffseasonService:
             recorded={row.team_id: row.popularity for row in self._popularities.find_by_year(year)},
             finishes=inputs.finishes,
             clubs=inputs.clubs,
+            manual_prices=self._ticket_prices.manual(year),
         )
         return _PreparedClose(
             plan=plan,

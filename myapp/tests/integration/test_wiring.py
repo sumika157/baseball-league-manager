@@ -23,6 +23,7 @@ from myapp.application.league_view import LeagueViewService
 from myapp.application.pennant_championships import PostseasonHistoryReader
 from myapp.application.pennant_club_details import ClubDetailsService
 from myapp.application.pennant_draft import PennantDraftService
+from myapp.application.pennant_finance import ClubFinanceService, TicketPriceService
 from myapp.application.pennant_foreign_signing import ForeignSigningService
 from myapp.application.pennant_history import PennantHistoryService
 from myapp.application.pennant_home import PennantHomeService
@@ -42,6 +43,7 @@ from myapp.application.queries import (
     AttendanceQuery,
     AwardQuery,
     ChampionshipQuery,
+    ClubFinanceQuery,
     ClubTenureQuery,
     DevelopmentRosterQuery,
     FieldingTotalsQuery,
@@ -79,6 +81,7 @@ from myapp.domain.repositories import (
     RatingsRepository,
     ReleasePlanRepository,
     TeamRepository,
+    TicketPriceRepository,
     WorldRepository,
 )
 from myapp.infrastructure import queries, repositories
@@ -86,6 +89,7 @@ from myapp.infrastructure.queries import (
     DjangoAttendanceQuery,
     DjangoAwardQuery,
     DjangoChampionshipQuery,
+    DjangoClubFinanceQuery,
     DjangoClubTenureQuery,
     DjangoDevelopmentRosterQuery,
     DjangoFieldingTotalsQuery,
@@ -118,11 +122,13 @@ from myapp.infrastructure.repositories import (
     DjangoRatingsRepository,
     DjangoReleasePlanRepository,
     DjangoTeamRepository,
+    DjangoTicketPriceRepository,
     DjangoWorldRepository,
 )
 from myapp.presentation.views import (
     build_admin_overview_service,
     build_club_details_service,
+    build_club_finance_service,
     build_club_service,
     build_foreign_signing_service,
     build_game_view_service,
@@ -146,6 +152,7 @@ from myapp.presentation.views import (
     build_roster_service,
     build_team_analysis_service,
     build_team_view_service,
+    build_ticket_price_service,
     build_world_game_view_service,
     build_world_league_view_service,
     build_world_team_analysis_service,
@@ -176,6 +183,8 @@ class ProtocolConformanceTest(SimpleTestCase):
         (DjangoChampionshipQuery(REAL), ChampionshipQuery),
         (DjangoPopularityRepository(REAL), PopularityRepository),
         (DjangoAttendanceQuery(REAL), AttendanceQuery),
+        (DjangoTicketPriceRepository(REAL), TicketPriceRepository),
+        (DjangoClubFinanceQuery(REAL), ClubFinanceQuery),
         (DjangoDraftRepository(REAL), DraftRepository),
         (DjangoPlayerNameQuery(REAL), PlayerNameQuery),
         (DjangoSimulationContextQuery(REAL), SimulationContextQuery),
@@ -991,3 +1000,44 @@ class PopularityWiringTest(SimpleTestCase):
                 self.assertEqual(query._scope, world)
         offseason = build_pennant_offseason_service(7)
         self.assertEqual(offseason._popularities._scope, world)
+
+
+class FinanceWiringTest(SimpleTestCase):
+    """チケットの値段と収支（#208 E2）の読み口・サービスは、使うどれでも渡された世界の範囲で組み立てる。
+
+    依存も全部渡す。
+    """
+
+    def test_finance_services_are_fully_wired(self):
+        BuildServiceTest()._assert_wired(build_club_finance_service(7), ClubFinanceService)
+        BuildServiceTest()._assert_wired(build_ticket_price_service(7), TicketPriceService)
+
+    def test_ticket_price_readers_are_built_in_the_given_world(self):
+        world = WorldScope.pennant(7)
+        readers = {
+            "進める": build_pennant_season_service(7)._ticket_prices,
+            "ポストシーズン": build_pennant_postseason_service(7)._ticket_prices,
+            "締める": build_pennant_offseason_service(7)._ticket_prices,
+            "収支": build_club_finance_service(7)._ticket_prices,
+        }
+        for name, reader in readers.items():
+            with self.subTest(service=name):
+                self.assertEqual(reader._prices._scope, world)
+
+    def test_the_finance_service_and_its_users_read_the_given_world(self):
+        world = WorldScope.pennant(7)
+        finance = build_club_finance_service(7)
+        for name, dependency in {
+            "人気": finance._popularities._popularities,
+            "観客動員": finance._attendance,
+            "人数と収容人数": finance._facts,
+            "試合数": finance._games,
+        }.items():
+            with self.subTest(dependency=name):
+                self.assertEqual(dependency._scope, world)
+        self.assertEqual(build_pennant_home_service(7)._finance._facts._scope, world)
+        self.assertEqual(build_offseason_view_service(7)._finance._facts._scope, world)
+        prices = build_ticket_price_service(7)
+        self.assertEqual(prices._prices._scope, world)
+        self.assertEqual(prices._fixtures._scope, world)
+        self.assertEqual(prices._context_query._scope, world)

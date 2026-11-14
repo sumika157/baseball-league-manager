@@ -264,7 +264,10 @@ GM ホーム。上から、自軍の位置 → 進めた結果 → 進める（�
   {% comment %}自軍の人気（いまの年度の値）とホーム試合の観客動員（公式戦。#208 E1）。読むだけで、書き込みの導線は無い。{% endcomment %}
   {% with popularity=home.popularity %}
   <div class="card mb-4" id="popularity">
-    <div class="card-header">人気と観客動員（{{ popularity.year }}年）</div>
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>人気と観客動員（{{ popularity.year }}年）</span>
+      <a href="{% url 'pennant_finance' world.world_id %}" class="card-header-link">経営を見る</a>
+    </div>
     <div class="card-body">
       <div class="stat-strip mb-2">
         <div class="stat-cell">
@@ -284,7 +287,30 @@ GM ホーム。上から、自軍の位置 → 進めた結果 → 進める（�
           <div class="stat-label">1試合平均</div>
         </div>
       </div>
-      <p class="stat-muted mb-0" style="font-size: 0.8125rem;">人気（1〜100。平均50）はシーズンを締めるときに勝率・優勝・日本一・スター選手で上下し、ホーム試合の観客数に効きます。</p>
+      {% if home.finance and home.finance.figures %}
+        {% comment %}チケットの値段と今年の収支の要約（#208 E2）。値段を変えるのは経営の画面（開幕前だけ）。{% endcomment %}
+        {% with finance=home.finance %}
+        <div class="stat-strip mb-2" id="finance-summary">
+          <div class="stat-cell">
+            <div class="stat-value">{{ finance.price_label }}</div>
+            <div class="stat-label">チケットの値段</div>
+          </div>
+          <div class="stat-cell">
+            <div class="stat-value">{{ finance.figures.revenue.label }}</div>
+            <div class="stat-label">収入{% if finance.in_progress %}（途中経過）{% endif %}</div>
+          </div>
+          <div class="stat-cell">
+            <div class="stat-value">{{ finance.figures.expenses.label }}</div>
+            <div class="stat-label">支出</div>
+          </div>
+          <div class="stat-cell">
+            <div class="stat-value">{{ finance.figures.operating_balance.label }}</div>
+            <div class="stat-label">補填前の収支</div>
+          </div>
+        </div>
+        {% endwith %}
+      {% endif %}
+      <p class="stat-muted mb-0" style="font-size: 0.8125rem;">人気（1〜100。平均50）はシーズンを締めるときに勝率・優勝・日本一・スター選手・チケットの値段で上下し、ホーム試合の観客数に効きます。値段は経営の画面で開幕前に変えられます。</p>
     </div>
   </div>
   {% endwith %}

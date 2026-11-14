@@ -11,6 +11,9 @@
 - 翌年の値（`next_popularities`）は、平均への戻り＋勝率＋リーグ優勝＋日本一＋スター選手＋ぶれ。
   優勝・日本一・スター選手の項は**世界の球団の平均を引いて**から足す（毎年どこかが優勝するので、
   そのまま足すと世界全体の人気が年を追って上がり続ける）。勝率の項は 0.500 からの差なので平均はほぼ0
+- チケットの値段の効き（#208 E2。`ticket_price.TicketPrice.popularity_effect`）も足す。こちらは**世界の平均を
+  引かない**（値段は球団の選択で、全球団が上げれば全球団の人気が下がってよい。2026-11-14 の計画。漂流しないことは
+  `simulate_sample` で実測した）
 - 収容人数の分からない球団（本拠地が無い・未設定）は、ペナントの世界でだけ標準の収容人数
   `PENNANT_DEFAULT_CAPACITY` で観客数を作る（#44 の「根拠の無い数を作らない」をペナントでだけ緩める。
   2026-11-14 ユーザー決定。実データの側は変えない）
@@ -25,6 +28,7 @@ from ..exceptions import InvalidPopularity
 from ..simulation.randomness import game_seed, make_random, normal
 from ..value_objects import Season
 from .offseason_player import TrackRecord
+from .ticket_price import TicketPrice
 
 MIN_POPULARITY = 1
 MAX_POPULARITY = 100
@@ -80,6 +84,14 @@ def initial_popularity() -> Popularity:
     return Popularity(MEAN_POPULARITY)
 
 
+def pennant_capacity(capacity: int | None) -> int:
+    """ペナントの世界での本拠地の収容人数。分からなければ標準の収容人数で補う。**補いの規則の唯一の出典**。
+
+    進める処理（観客数）と収支（球場の運営費。#208 E2）が使う。実データの側では使わない。
+    """
+    return PENNANT_DEFAULT_CAPACITY if capacity is None else capacity
+
+
 @dataclass(frozen=True)
 class ClubPopularity:
     """球団 × 年の人気。世界は球団のリーグで決まる。"""
@@ -100,12 +112,14 @@ class PopularityFactors:
     - `league_champion`: 公式戦のリーグ優勝
     - `japan_champion`: ポストシーズンの優勝（日本一。1リーグの世界は CS の優勝）
     - `star_power`: スター選手の力（`star_power`。0〜`STAR_CAP`）
+    - `ticket_price`: 締める年のチケットの値段（#208 E2。高いほど人気が下がる。世界の平均は引かない）
     """
 
     winning_percentage: float
     league_champion: bool = False
     japan_champion: bool = False
     star_power: float = 0.0
+    ticket_price: TicketPrice = TicketPrice.STANDARD
 
 
 def star_power(records: Iterable[TrackRecord]) -> float:
@@ -130,8 +144,9 @@ def next_popularities(
 ) -> dict[int, Popularity]:
     """締める年 `year` の人気（`current`）と材料から、翌年 `year + 1` の人気を球団ごとに導く。
 
-    材料の無い球団（その年に試合をしていない。ふつうは無い）は、勝率 .500・優勝なし・スターなしとして扱う。
+    材料の無い球団（その年に試合をしていない。ふつうは無い）は、勝率 .500・優勝なし・スターなし・標準の値段として扱う。
     ぶれは球団ごとに別の乱数（用途 `popularity-{球団}`）で、同じ世界・年・球団なら同じ値になる。
+    チケットの値段の効きは世界の平均を引かずに足す（標準なら 0.0 を足すだけで、値段を足す前と同じ値）。
     """
     neutral = PopularityFactors(winning_percentage=0.5)
     resolved = {team_id: factors.get(team_id, neutral) for team_id in current}
@@ -150,6 +165,7 @@ def next_popularities(
             + _bonus(item)
             - mean_bonus
             + normal(rng, 0.0, NOISE_SD)
+            + item.ticket_price.popularity_effect
         )
         result[team_id] = Popularity.clamped(value)
     return result

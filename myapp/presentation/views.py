@@ -49,6 +49,7 @@ from ..application.league_view import LeagueViewService
 from ..application.pennant_championships import PostseasonHistoryReader
 from ..application.pennant_club_details import ClubDetailsService
 from ..application.pennant_draft import PennantDraftService
+from ..application.pennant_finance import ClubFinanceService, TicketPriceService
 from ..application.pennant_foreign_signing import ForeignSigningService
 from ..application.pennant_history import PennantHistoryService
 from ..application.pennant_home import PennantHomeService
@@ -64,6 +65,7 @@ from ..application.pennant_race import LeagueFinishReader
 from ..application.pennant_ratings import PennantRatingsViewService
 from ..application.pennant_season import PennantSeasonService
 from ..application.pennant_settings import PennantSettingsService
+from ..application.pennant_ticket_price import TicketPriceReader
 from ..application.pennant_view import PennantWorldViewService, settled_context
 from ..application.pennant_world import PennantWorldService, WorldRepositories
 from ..application.queries import SimulationContextQuery
@@ -112,6 +114,7 @@ from ..infrastructure.queries import (
     DjangoAttendanceQuery,
     DjangoAwardQuery,
     DjangoChampionshipQuery,
+    DjangoClubFinanceQuery,
     DjangoClubTenureQuery,
     DjangoDevelopmentRosterQuery,
     DjangoFieldingTotalsQuery,
@@ -150,6 +153,7 @@ from ..infrastructure.repositories import (
     DjangoRatingsRepository,
     DjangoReleasePlanRepository,
     DjangoTeamRepository,
+    DjangoTicketPriceRepository,
     DjangoWorldRepository,
 )
 from .club_input import (
@@ -201,6 +205,7 @@ from .forms import (
     PlayerRegistrationForm,
     PlayerUpdateForm,
     PostseasonFormatForm,
+    TicketPriceForm,
 )
 
 BATTER_MODE = "batter"
@@ -530,6 +535,7 @@ def build_pennant_season_service(world_id: int) -> PennantSeasonService:
         context_query=DjangoSimulationContextQuery(scope),
         fa_exemptions=ForeignQuotaExemptions(DjangoServiceHistoryQuery(scope)),
         popularities=_popularity_reader(scope),
+        ticket_prices=_ticket_price_reader(scope),
         review=MidseasonReview(
             leagues=DjangoLeagueRepository(scope),
             teams=DjangoTeamRepository(scope),
@@ -571,6 +577,7 @@ def build_pennant_offseason_service(world_id: int) -> PennantOffseasonService:
         awards=parts.awards,
         championships=DjangoChampionshipRepository(parts.scope),
         popularities=DjangoPopularityRepository(parts.scope),
+        ticket_prices=_ticket_price_reader(parts.scope),
         drafts=parts.drafts,
         lotteries=DjangoDraftLotteryRepository(parts.scope),
         titles=parts.titles,
@@ -675,6 +682,7 @@ def build_pennant_postseason_service(world_id: int) -> PennantPostseasonService:
         context_query=DjangoSimulationContextQuery(scope),
         fa_exemptions=ForeignQuotaExemptions(DjangoServiceHistoryQuery(scope)),
         popularities=_popularity_reader(scope),
+        ticket_prices=_ticket_price_reader(scope),
         brackets=_postseason_brackets(world_id),
         atomic=transaction.atomic,
     )
@@ -749,12 +757,50 @@ def build_offseason_view_service(world_id: int) -> OffseasonViewService:
         offseason=DjangoOffseasonQuery(scope),
         popularities=_popularity_reader(scope),
         attendance=DjangoAttendanceQuery(scope),
+        finance=build_club_finance_service(world_id),
     )
 
 
 def _popularity_reader(scope: WorldScope) -> PopularityReader:
     """球団の人気の読み口（進める処理・GM ホーム・球団史・オフの結果が使う。#208 E1）。世界の範囲で作る。"""
     return PopularityReader(popularities=DjangoPopularityRepository(scope))
+
+
+def _ticket_price_reader(scope: WorldScope) -> TicketPriceReader:
+    """チケットの値段の読み口（進める処理・締める処理・収支が使う。#208 E2）。世界の範囲で作る。"""
+    return TicketPriceReader(prices=DjangoTicketPriceRepository(scope))
+
+
+def build_club_finance_service(world_id: int) -> ClubFinanceService:
+    """球団の収支（参照。経営の画面・GM ホーム・オフの結果が使う。#208 E2）を組み立てる。
+
+    依存は全部、世界の範囲で作る。
+    """
+    scope = WorldScope.pennant(world_id)
+    return ClubFinanceService(
+        popularities=_popularity_reader(scope),
+        ticket_prices=_ticket_price_reader(scope),
+        attendance=DjangoAttendanceQuery(scope),
+        facts=DjangoClubFinanceQuery(scope),
+        games=DjangoGameListQuery(scope),
+    )
+
+
+def build_ticket_price_service(world_id: int) -> TicketPriceService:
+    """GM がチケットの値段を変えるサービス（更新。#208 E2）を組み立てる。
+
+    リポジトリと参照クエリは、すべて渡された世界の範囲で作る。トランザクションはここで渡す。
+    世界の id が正しくなければ InvalidWorld。
+    """
+    scope = WorldScope.pennant(world_id)
+    return TicketPriceService(
+        world_id=world_id,
+        worlds=DjangoWorldRepository(),
+        prices=DjangoTicketPriceRepository(scope),
+        fixtures=DjangoFixtureRepository(scope),
+        context_query=DjangoSimulationContextQuery(scope),
+        atomic=transaction.atomic,
+    )
 
 
 def build_pennant_home_service(world_id: int) -> PennantHomeService:
@@ -778,6 +824,7 @@ def build_pennant_home_service(world_id: int) -> PennantHomeService:
         postseason=_postseason_history(world_id),
         popularities=_popularity_reader(scope),
         attendance=DjangoAttendanceQuery(scope),
+        finance=build_club_finance_service(world_id),
     )
 
 
@@ -1422,6 +1469,46 @@ def pennant_draft_order_settings(request, world_id):
     else:
         messages.info(request, "ドラフトの指名順は変わっていません。")
     return redirect("pennant_settings", world_id=world_id)
+
+
+def pennant_finance(request, world_id):
+    """経営（受け持つ球団のチケットの値段と収支。#208 E2）。見るのは誰でも、値段を変える（POST）のはオーナーだけ。
+
+    値段を変えられないとき（その年が開幕した後）は、フォームを出さずに理由だけを出す（両立しない操作を並べない）。
+    """
+    world = _world_context(world_id)
+    if request.method not in ("GET", "HEAD", "POST"):
+        return HttpResponseNotAllowed(["GET", "HEAD", "POST"])
+    is_owner = _is_owner(request, world)
+    form = None
+    if request.method == "POST":
+        denied = _requires_world_owner(request, world)
+        if denied is not None:
+            return denied
+        form = TicketPriceForm(request.POST)
+        if form.is_valid():
+            chosen = form.cleaned_data["ticket_price"]
+            try:
+                changed = build_ticket_price_service(world_id).change(chosen)
+            except DomainError as error:
+                messages.error(request, str(error))
+                return redirect("pennant_finance", world_id=world_id)
+            label = "お任せ" if chosen is None else chosen.label
+            if changed:
+                messages.success(request, f"{world.season_year}年のチケットの値段を「{label}」にしました。")
+            else:
+                messages.info(request, "チケットの値段は変わっていません。")
+            return redirect("pennant_finance", world_id=world_id)
+    finance = build_club_finance_service(world_id).view(world)
+    can_change = is_owner and finance is not None and not finance.blocker
+    if can_change and form is None and finance is not None:
+        form = TicketPriceForm(initial={"ticket_price": TicketPriceForm.initial_for(finance.manual)})
+    return _render(
+        request,
+        "pennant/finance.html",
+        {"finance": finance, "form": form if can_change else None, "is_owner": is_owner},
+        world,
+    )
 
 
 @require_safe

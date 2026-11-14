@@ -23,6 +23,7 @@ from .dto import (
     ActivePlayerStats,
     AwardRow,
     ChampionshipRow,
+    ClubRosterSize,
     ClubTenure,
     DevelopmentRoster,
     DevelopmentSquad,
@@ -424,6 +425,27 @@ class AttendanceQuery(Protocol):
         """球団 × 年のホーム試合の観客数の合計（年・球団の id の順）。`year`・`team_id` は絞り込み（None は絞らない）。
 
         観客数のある試合だけを数える（1本の GROUP BY）。観客数のあるホーム試合が無い球団 × 年は含まない。
+        """
+        ...
+
+
+@runtime_checkable
+class ClubFinanceQuery(Protocol):
+    """球団の収支の材料のうち、試合と人気・値段の外にあるもの（#208 E2）。範囲（世界）は組み立てるときに必須で渡す。"""
+
+    def roster_sizes(self, *, years: Collection[int], team_ids: Collection[int]) -> list[ClubRosterSize]:
+        """球団 × 年の契約区分ごとの人数（その年に在籍した選手。在籍から1本のクエリ）。
+
+        年 Y に在籍したのは在籍の期間が Y を含む選手（退団年はその年を含む）。区分はその年の区分
+        （`ContractStatus.in_year`）。同じ選手が同じ球団に同じ年に2回在籍しても1人に数える。
+        在籍の無い球団 × 年も0人の行として返す（年・球団の id の順）。
+        """
+        ...
+
+    def stadium_capacities(self, team_ids: Collection[int]) -> dict[int, int | None]:
+        """球団の本拠地の収容人数（本拠地が無い・未設定なら None）。範囲の外の球団は含まない。
+
+        球場は実データと世界で共有で、いまの値を読む（過去の年も同じ値）。
         """
         ...
 

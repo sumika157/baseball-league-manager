@@ -1,0 +1,24 @@
+{% comment %}
+収支の表の1行のセル（`ClubFinanceRow`。見出しは `_finance_head.html`。#208 E2）。人気の行の無い年は「—」。
+{% endcomment %}
+{% if row.figures %}
+  {% with f=row.figures %}
+  <td class="text-end tabular-nums">{{ row.popularity }}</td>
+  <td>{{ row.price_label }}</td>
+  <td class="text-end tabular-nums">{{ row.regular_attendance_label }}</td>
+  <td class="text-end tabular-nums">{{ f.gate.label }}</td>
+  <td class="text-end tabular-nums">{{ f.broadcasting.label }}</td>
+  <td class="text-end tabular-nums">{{ f.sponsorship.label }}</td>
+  <td class="text-end tabular-nums">{{ f.merchandise.label }}</td>
+  <td class="text-end tabular-nums">{{ f.postseason.label }}</td>
+  <td class="text-end tabular-nums">{{ f.revenue.label }}</td>
+  <td class="text-end tabular-nums">{{ f.payroll.label }}</td>
+  <td class="text-end tabular-nums">{{ f.operations.label }}</td>
+  <td class="text-end tabular-nums">{{ f.expenses.label }}</td>
+  <td class="text-end tabular-nums stat-key">{{ f.operating_balance.label }}</td>
+  <td class="text-end tabular-nums">{{ f.subsidy.label }}</td>
+  {% endwith %}
+{% else %}
+  <td class="text-end"><span class="stat-muted">—</span></td>
+  <td colspan="13"><span class="stat-muted">—</span></td>
+{% endif %}

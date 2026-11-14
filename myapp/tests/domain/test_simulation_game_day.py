@@ -11,6 +11,7 @@ from datetime import date, time
 from statistics import mean
 from unittest import TestCase
 
+from myapp.domain.pennant.ticket_price import TicketPrice
 from myapp.domain.simulation.engine import simulate_game
 from myapp.domain.simulation.game_day import simulated_attendance, simulated_times
 from myapp.domain.simulation.manager import choose_active_roster
@@ -188,3 +189,40 @@ class PopularityAttendanceTest(TestCase):
             self.assertIsNotNone(value)
             self.assertLessEqual(value, 30000)
         self.assertIsNone(simulated_attendance(None, WEEKDAY, rng, home_popularity=100))
+
+
+class TicketPriceAttendanceTest(TestCase):
+    """チケットの値段（#208 E2）は入場率の平均に効く。渡さないか標準なら今と完全に同じ値、乱数を引く回数も変えない。"""
+
+    def test_no_price_or_the_standard_price_gives_exactly_the_same_attendance(self):
+        for seed in range(200):
+            for day in (WEEKDAY, SATURDAY):
+                with self.subTest(seed=seed, day=day):
+                    before = simulated_attendance(32000, day, make_random(seed), home_popularity=70)
+                    self.assertEqual(
+                        simulated_attendance(
+                            32000, day, make_random(seed), home_popularity=70, ticket_price=TicketPrice.STANDARD
+                        ),
+                        before,
+                    )
+
+    def test_the_price_does_not_change_how_many_numbers_are_drawn(self):
+        plain, priced = _CountingRandom(1), _CountingRandom(1)
+        for _ in range(100):
+            simulated_attendance(30000, WEEKDAY, plain)
+            simulated_attendance(30000, WEEKDAY, priced, ticket_price=TicketPrice.HIGH)
+        self.assertEqual(plain.calls, priced.calls)
+
+    def test_a_higher_price_draws_fewer_fans_and_never_exceeds_the_capacity(self):
+        """2026-11-14 ユーザー決定: 高いほど入場率が下がる（+0.08 / +0.04 / 0 / −0.05 / −0.10）。"""
+        means = []
+        for price in TicketPrice:
+            rng = make_random(51)
+            values = [
+                simulated_attendance(30000, SATURDAY, rng, home_popularity=60, ticket_price=price) or 0
+                for _ in range(1000)
+            ]
+            self.assertLessEqual(max(values), 30000)
+            means.append(mean(values))
+        self.assertEqual(means, sorted(means, reverse=True), "安い順に並べると観客数は減っていく")
+        self.assertGreater(means[0], means[-1])

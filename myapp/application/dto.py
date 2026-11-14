@@ -19,9 +19,11 @@ from ..domain.pennant.draft_lottery import DraftLotteryRecord, contest_label
 from ..domain.pennant.draft_meeting import DraftActionKind
 from ..domain.pennant.draft_order import DraftOrderRule
 from ..domain.pennant.draft_record import DraftMeetingStatus
+from ..domain.pennant.finance import money_label
 from ..domain.pennant.postseason import PostseasonFormat, PostseasonResult, PostseasonStatus
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.season import SeasonPhase
+from ..domain.pennant.ticket_price import TicketPrice
 from ..domain.services.free_agency import SERVICE_DAYS_PER_SEASON
 from ..domain.services.rankings import Title
 from ..domain.services.roster_analysis import NEUTRAL_CATEGORY, ColorCategory
@@ -2004,6 +2006,118 @@ class PopularityCard:
 
 
 @dataclass(frozen=True)
+class Money:
+    """金額（円）と、その表記（億円。domain の `finance.money_label`）。#208 E2。"""
+
+    amount: int
+
+    @property
+    def label(self) -> str:
+        return money_label(self.amount)
+
+    @property
+    def is_negative(self) -> bool:
+        return self.amount < 0
+
+
+@dataclass(frozen=True)
+class FinanceFigures:
+    """球団 × 年の収支の金額（domain の `ClubFinance` を写したもの。#208 E2）。"""
+
+    gate: Money
+    broadcasting: Money
+    sponsorship: Money
+    merchandise: Money
+    postseason: Money
+    revenue: Money
+    payroll: Money
+    operations: Money
+    expenses: Money
+    # 補填前の収支・親会社の補填・補填後の収支
+    operating_balance: Money
+    subsidy: Money
+    balance: Money
+
+
+@dataclass(frozen=True)
+class ClubFinanceRow:
+    """球団 × 年のチケットの値段と収支（#208 E2）。収支は保存せず導いた値。
+
+    人気の行の無い年（この機能より前の年）は、作っていない値を見せないよう `popularity`・`figures` が None（「—」）。
+    いまの年度は進める処理と同じく初期値で補う。`in_progress` はいまの年度の公式戦が終わっていない（年額の項目は
+    消化した公式戦の割合で按分した途中経過）。
+    """
+
+    team_id: int
+    year: int
+    popularity: int | None
+    # その年の値段（手動か、お任せ・AI の規則）と、手動か。人気の行の無い年は None
+    ticket_price: TicketPrice | None
+    manual_price: bool
+    figures: FinanceFigures | None
+    in_progress: bool
+    # 公式戦・ポストシーズンのホーム試合の観客動員の合計
+    regular_attendance: int
+    postseason_attendance: int
+
+    @property
+    def price_label(self) -> str:
+        """値段の表記（「やや高い」「標準（お任せ）」）。人気の行の無い年は空。"""
+        if self.ticket_price is None:
+            return ""
+        return self.ticket_price.label if self.manual_price else f"{self.ticket_price.label}（お任せ）"
+
+    @property
+    def unit_price_label(self) -> str:
+        """1人あたりの単価の表記（「4,000円」）。人気の行の無い年は空。"""
+        return "" if self.ticket_price is None else f"{self.ticket_price.unit_price:,}円"
+
+    @property
+    def regular_attendance_label(self) -> str:
+        return attendance_label(self.regular_attendance)
+
+
+@dataclass(frozen=True)
+class TicketPriceOption:
+    """値段の段階ひとつの説明（経営の画面の表。段階と効きの出典は domain の `TicketPrice`）。#208 E2。"""
+
+    price: TicketPrice
+    unit_price: int
+    # 入場率の平均への効き（「+0.08」）と、翌年の人気への効き（「-2.0」）
+    fill_effect_label: str
+    popularity_effect_label: str
+
+    @property
+    def label(self) -> str:
+        return self.price.label
+
+    @property
+    def unit_price_label(self) -> str:
+        return f"{self.unit_price:,}円"
+
+
+@dataclass(frozen=True)
+class ClubFinanceView:
+    """経営の画面の材料（受け持つ球団。#208 E2）。
+
+    - `current`: いまの年度の値段と収支（途中経過）
+    - `history`: 前の年までの値段と収支（新しい年が先。人気の行の無い年は「—」）
+    - `manual`: いまの年度の手動の値段（お任せなら None）、`auto_price`: いまの年度のお任せの値段（AI の規則）
+    - `blocker`: 値段を変えられない理由（開幕した後など）。変えられるなら空
+    """
+
+    team_id: int
+    team_name: str
+    year: int
+    current: ClubFinanceRow
+    history: tuple[ClubFinanceRow, ...]
+    manual: TicketPrice | None
+    auto_price: TicketPrice
+    blocker: str
+    options: tuple[TicketPriceOption, ...]
+
+
+@dataclass(frozen=True)
 class PennantHome:
     """GM ホームの材料。状態は保存せず、日程と試合から導く。"""
 
@@ -2026,6 +2140,8 @@ class PennantHome:
     finale: WorldFinale | None = None
     # 自軍の人気と観客動員（#208 E1）。受け持つ球団が無ければ None
     popularity: PopularityCard | None = None
+    # 自軍のいまの年度のチケットの値段と収支（途中経過。#208 E2）。受け持つ球団が無ければ None
+    finance: ClubFinanceRow | None = None
 
     @property
     def season_finished(self) -> bool:
@@ -2846,6 +2962,16 @@ class OffseasonPopularityRow:
 
 
 @dataclass(frozen=True)
+class OffseasonFinanceRow:
+    """オフの結果の「収支」の1行（球団ひとつ。締めた年 Y の値段と収支。#208 E2）。"""
+
+    team_id: int
+    team_name: str
+    is_own: bool
+    finance: ClubFinanceRow
+
+
+@dataclass(frozen=True)
 class OffseasonSummary:
     """Y年オフの結果ページの材料。"""
 
@@ -2876,6 +3002,8 @@ class OffseasonSummary:
     board: DraftBoard | None = None
     # 選んだリーグの球団の人気の変化と、締めた年の観客動員（#208 E1）。この機能より前に締めた年は空
     popularity: tuple[OffseasonPopularityRow, ...] = ()
+    # 選んだリーグの球団の締めた年の収支（#208 E2。補填前の収支の高い順）。人気の行の無い年は空
+    finance: tuple[OffseasonFinanceRow, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -3529,6 +3657,19 @@ class HomeAttendance:
     def average(self) -> int:
         """1試合あたりの観客数（四捨五入）。試合が無ければ 0。"""
         return round(self.total / self.games) if self.games else 0
+
+
+@dataclass(frozen=True)
+class ClubRosterSize:
+    """球団 × 年の契約区分ごとの人数（その年に在籍した選手。#208 E2 の仮の人件費の材料）。
+
+    参照クエリ `ClubFinanceQuery` が作る。その年の区分は domain の `ContractStatus.in_year` で決める。
+    """
+
+    team_id: int
+    year: int
+    registered: int
+    developmental: int
 
 
 @dataclass(frozen=True)

@@ -4,8 +4,8 @@
   初期値で補って読む（補いの規則は domain の `popularity.with_initial`。補う読み方はここ1つ）。
   球団史・オフの結果は保存した行だけを読む（人気を足す前の年に、作っていない値を出さない）
 - 締める処理の材料（`popularity_basis`）: 締める年の公式戦の最終順位（勝率・リーグ優勝）と日本一、在籍する選手の
-  実績（スター選手）から、翌年の人気を domain の `next_popularities` で導く。行の無い世界は、締める年の補った値も
-  一緒に書く（締めた年の値を後から作らない）
+  実績（スター選手）、締める年のチケットの値段（#208 E2）から、翌年の人気を domain の `next_popularities` で導く。
+  行の無い世界は、締める年の補った値も一緒に書く（締めた年の値を後から作らない）
 
 人気は年ごとの状態として保存する（2026-11-14 ユーザー決定）。書くのは世界の作成とシーズンを締める処理だけ。
 """
@@ -25,7 +25,9 @@ from ..domain.pennant.popularity import (
     with_initial,
 )
 from ..domain.pennant.postseason import LeagueFinish
+from ..domain.pennant.ticket_price import TicketPrice
 from ..domain.repositories import PopularityRepository
+from .pennant_ticket_price import resolve
 
 
 class PopularityReader:
@@ -58,7 +60,7 @@ class PopularityBasis:
 
     - `current`: 締める年の球団ごとの人気（行の無い球団は初期値で補った値）
     - `unrecorded_ids`: 締める年の行が無い球団（この機能より前の世界）
-    - `factors`: 勝率・リーグ優勝・スター選手（日本一は勝ち上がりから `following` で足す）
+    - `factors`: 勝率・リーグ優勝・スター選手・チケットの値段（日本一は勝ち上がりから `following` で足す）
     """
 
     year: int
@@ -86,12 +88,18 @@ def popularity_basis(
     recorded: Mapping[int, Popularity],
     finishes: Sequence[LeagueFinish],
     clubs: Sequence[OffseasonClub],
+    manual_prices: Mapping[int, TicketPrice],
 ) -> PopularityBasis:
     """締める年の人気の材料。勝率とリーグ優勝は公式戦の最終順位（全順序の先頭が優勝）から、スター選手は
     いま在籍している選手の実績から導く。最終順位に無い球団（その年に試合をしていない）は材料を持たない
     （domain が平凡な成績として扱う）。
+
+    チケットの値段（#208 E2）は、締める年の手動の値段（`manual_prices`）か、補った人気からのお任せの規則
+    （`pennant_ticket_price.resolve`。進める処理が観客数に使った値段と同じ）。
     """
     ordered = sorted(team_ids)
+    current = with_initial(ordered, recorded)
+    prices = resolve(manual_prices, current)
     stars = {club.team_id: star_power(player.track_record for player in club.players) for club in clubs}
     factors: dict[int, PopularityFactors] = {}
     for finish in finishes:
@@ -100,10 +108,11 @@ def popularity_basis(
                 winning_percentage=row.record.winning_percentage,
                 league_champion=rank == 1,
                 star_power=stars.get(row.team_id, 0.0),
+                ticket_price=prices.get(row.team_id, TicketPrice.STANDARD),
             )
     return PopularityBasis(
         year=year,
-        current=with_initial(ordered, recorded),
+        current=current,
         unrecorded_ids=tuple(team_id for team_id in ordered if team_id not in recorded),
         factors=factors,
     )
