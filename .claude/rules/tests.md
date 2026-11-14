@@ -15,7 +15,9 @@ paths:
   渡さないと年が明けたとたんに「加入より前の年の試合」になって落ちる（#341 で 2027年として流して57件落ちた）。
   `date.today()` で作った年をテストの定数にしない。「今日の年」を既定に使うこと自体を確かめるテストだけは例外。
 - **テストダブルと土台は `test_` で始まらないモジュールに置き、テストのファイルに書き写さない。** domain の乱数源の偽物は
-  `tests/domain/doubles.py`（`ScriptedRandom`・`OnlyRandom`）、E2E の共通の操作は `tests/e2e/base.py`（`login` など）。
+  `tests/domain/doubles.py`（`ScriptedRandom`・`OnlyRandom`）、複数のテストのファイルが使うデータの組み立ては
+  `tests/domain/*_builders.py`（前例: `pa_builders.py`・`fielding_builders.py`・`analysis_builders.py`）、
+  E2E の共通の操作は `tests/e2e/base.py`（`login` など）。
   テストのメソッドを持つクラスを別の `test_` モジュールから import すると、import した先でも同じテストが流れる
   （`test_test_modules.py` が検査する）。既存の `*Case` の多くは `test_` モジュールにあり、移すのは #343。
 - ソースの整合性を機械的に見るテストは `SimpleTestCase`（DB 不要）で書く。前例: `test_templates.py`（コメント記法）・`test_wiring.py`（依存の組み立て）・`test_stat_fields.py`（成績項目の列挙）。
