@@ -17,8 +17,13 @@ from myapp.domain.pennant.development import (
     is_contract_expiring,
     midseason_promotion_number,
 )
-from myapp.domain.pennant.reinforcement import ReinforcementWindow, ensure_registration_matches_stint
-from myapp.domain.value_objects import DraftPick
+from myapp.domain.pennant.reinforcement import (
+    MidseasonRegistration,
+    RegistrationKind,
+    ReinforcementWindow,
+    ensure_registration_matches_stint,
+)
+from myapp.domain.value_objects import AcquisitionRoute, DraftPick
 
 YEAR = 2027
 
@@ -61,12 +66,34 @@ class ReinforcementWindowTest(unittest.TestCase):
         self.assertTrue(all(self.is_open(day) for day in dates))
 
 
+def registration(kind: RegistrationKind) -> MidseasonRegistration:
+    return MidseasonRegistration(team_id=1, player_id=2, registered_on=date(YEAR, 5, 1), kind=kind)
+
+
 class RegistrationMatchesStintTest(unittest.TestCase):
     def test_the_registration_year_must_be_the_promotion_year(self):
-        ensure_registration_matches_stint(date(YEAR, 5, 1), YEAR)
+        """昇格の登録は、在籍の昇格の年＝登録日の年（加入年と経路は見ない）。"""
+        promotion = registration(RegistrationKind.PROMOTION)
+        ensure_registration_matches_stint(promotion, promoted_year=YEAR, from_year=YEAR - 3, acquired_via=None)
         for promoted_year in (None, YEAR - 1, YEAR + 1):
             with self.subTest(promoted_year=promoted_year), self.assertRaises(InvalidContract):
-                ensure_registration_matches_stint(date(YEAR, 5, 1), promoted_year)
+                ensure_registration_matches_stint(
+                    promotion, promoted_year=promoted_year, from_year=YEAR - 3, acquired_via=None
+                )
+
+    def test_a_signing_must_join_in_the_registration_year_as_a_new_foreign_player(self):
+        """獲得の登録（#169 F3）は、在籍の加入年＝登録日の年で、入団の経路が新外国人。昇格の年は見ない。"""
+        signing = registration(RegistrationKind.SIGNING)
+        new_foreign = AcquisitionRoute.NEW_FOREIGN
+        ensure_registration_matches_stint(signing, promoted_year=None, from_year=YEAR, acquired_via=new_foreign)
+        for from_year, route in (
+            (YEAR - 1, new_foreign),
+            (YEAR + 1, new_foreign),
+            (YEAR, AcquisitionRoute.DRAFT),
+            (YEAR, None),
+        ):
+            with self.subTest(from_year=from_year, route=route), self.assertRaises(InvalidContract):
+                ensure_registration_matches_stint(signing, promoted_year=None, from_year=from_year, acquired_via=route)
 
 
 class ContractSeasonTest(unittest.TestCase):

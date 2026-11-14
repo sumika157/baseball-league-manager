@@ -14,6 +14,7 @@ from ..domain.pennant.development import DevelopmentDecision
 from ..domain.pennant.draft_meeting import DraftActionKind
 from ..domain.pennant.draft_order import DraftOrderRule
 from ..domain.pennant.postseason import PostseasonFormat
+from ..domain.pennant.reinforcement import RegistrationKind
 from ..domain.services.rankings import Title
 from ..domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings
 from ..domain.value_objects import (
@@ -51,6 +52,8 @@ POSTSEASON_FORMAT_CHOICES = [(item.value, item.value) for item in PostseasonForm
 DRAFT_ORDER_RULE_CHOICES = [(item.value, item.value) for item in DraftOrderRule]
 # 育成選手のオフの扱い（GM の指名。#170 P2）の選択肢もドメインの DevelopmentDecision が唯一の出典
 DEVELOPMENT_DECISION_CHOICES = [(item.value, item.value) for item in DevelopmentDecision]
+# 期中の支配下登録の区分（昇格・獲得。#169 F3）の選択肢もドメインの RegistrationKind が唯一の出典
+REGISTRATION_KIND_CHOICES = [(item.value, item.value) for item in RegistrationKind]
 # ドラフト会議の行動の種類の選択肢もドメインの DraftActionKind が唯一の出典
 DRAFT_ACTION_KIND_CHOICES = [(item.value, item.value) for item in DraftActionKind]
 # 試合で就いた守備位置。登録位置（Position）とは別の概念
@@ -1108,17 +1111,20 @@ class PennantForeignSigningPlanEntry(models.Model):
 
 
 class PennantMidseasonRegistration(models.Model):
-    """ペナントの期中の支配下登録（#170 P3a）。球団・選手・登録日（その選手が出られる最初の公式戦の日）。
+    """ペナントの期中の支配下登録（#170 P3a・#169 F3）。球団・選手・登録日（その選手が出られる最初の公式戦の日）・区分
+    （育成からの昇格か、外国人の獲得か）。
 
-    在籍は年単位で、オフの昇格（締めた年 Y に翌年 Y+1 で書く）と Y+1 年の期中の昇格を在籍からは区別できないので、
-    登録日だけを足す。昇格の事実は在籍（`PlayerStint.promoted_year`）が持ち、登録日の年と一致することは
-    リポジトリが書く前に照合する（`reinforcement.ensure_registration_matches_stint`）。
+    在籍は年単位で、オフの昇格・獲得（締めた年 Y に翌年 Y+1 で書く）と Y+1 年の期中の昇格・獲得を在籍からは区別
+    できないので、登録日だけを足す。昇格・獲得の事実は在籍（`PlayerStint.promoted_year`・`from_year` と経路）が持ち、
+    登録日の年と一致することはリポジトリが書く前に照合する（`reinforcement.ensure_registration_matches_stint`）。
     世界の列は持たない。球団のリーグで世界が決まる（編成と同じ）。
+    一意制約は選手と登録日（同じ選手が同じ日に昇格と獲得の両方になることは無い）。
     """
 
     team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="+", verbose_name="球団")
     player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="+", verbose_name="選手")
     registered_on = models.DateField(verbose_name="登録日")
+    kind = models.CharField(max_length=4, choices=REGISTRATION_KIND_CHOICES, verbose_name="区分")
 
     class Meta:
         verbose_name = "ペナントの期中の支配下登録"
