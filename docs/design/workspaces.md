@@ -2178,3 +2178,19 @@ epic を main に入れる前に開発 DB・本番で数え、あれば作成者
 - **計測**: やり直していない。main の変更で読み取りが増えるのは、編成の「外国人」タブと GM ホームの締める欄（外国人の指名の1本）で、どちらもペナントの画面（`measure_pages` の実データの画面は変わらない）。
 - テスト: domain＋integration 4,750（epic 2bf3625 の分に main の分と、この取り込みで足した検査）、e2e 21。
 - **レビュー**（`ddd-boundary-reviewer`）: 重要な指摘なし。軽微を直した: この設計書の W4 の記録で「今は `0065_workspace_invitation`」と書いた箇所（W4 の表・その5 の振り直し）を、その8 の後の番号に合わせた（W4 の段階の表の行は書いた時点のまま）。
+
+### 仕上げ（#74）
+
+段階は #74 の仕上げの計画（T1 → T2（→ T2b）・T3 → T4 → 最後の取り込み → epic を main に入れる PR）。タスク PR の base は `epic/workspaces`（`Refs #74`）。
+
+#### T1. 見本つきのワークスペースを大量に作る管理コマンド（`feature/seed-sample-workspaces`）
+
+- `seed_sample_workspaces --count N [--prefix load] [--private]` / `--delete [--yes]`（`myapp/management/commands/seed_sample_workspaces.py`）。`<prefix>-0001`… の N 人（パスワードは使えない値）を作り、1人1つ、見本ありのワークスペースを `build_workspace_service().create(with_sample_league=True)` で作る（上限と見本の生成はサービスのまま。上限を素通りする口は無い）。ユーザーとワークスペースは1人ぶんずつ1つのトランザクション（失敗した人のユーザーを残さない。作れた分は残り、案内に `--delete` を出す）。既定は公開。10個ごとに進み具合、最後に合計と1個あたりの時間。
+- `--delete`: `<prefix>-<数字>` の名前のユーザーが**持ち主**のワークスペースを `WorkspaceService.delete`（`workspace_delete` と同じ）で消し、全部消せたらユーザーを消す（世界が残っていて消せなければ、ユーザーは消さずに止まる。`Workspace.owner` が PROTECT なのでこの順）。確認のプロンプトか `--yes`。
+- `DEBUG` が偽なら、作るのも消すのも拒む。同じ prefix のユーザーが1人でもいれば作らずに「先に --delete」と案内する。
+- 消す対象は利用者 id で引く一覧の台帳（`build_workspace_list_query().list_for`）の持ち主の行。組み立て口・application・infrastructure・domain は変えていない。`test_wiring.py` の `WorkspaceLedgerUsersTest` の `ALLOWED` にこのコマンドを足した（理由は行のコメント）。`test_seed_commands_scope.py` の分類は、実データを `--workspace` で読み書きするコマンドの表なので足さない（このコマンドは範囲を受け取らず、ワークスペースそのものを作る・消す）。
+- テスト（`test_seed_sample_workspaces.py`。16本）: `--count 2` で2人・2つ（公開・ログインできない）、それぞれの範囲に6チーム・36試合、選手の名前が key ごとに違う、既定のワークスペースの行が変わらない、同じ prefix の2回目は止まる、`--private`、`--delete` は prefix の分だけ（似た名前 `load-admin`・別の prefix・既定のワークスペースは残る）、確認で取りやめ・入力なしで取りやめ、世界があれば止まってユーザーが残る、消した後は同じ prefix で作り直せる、上限（`WORKSPACE_MAX_OWNED=0`）でユーザーも残らない、引数の誤り、`DEBUG=False` で作るのも消すのも拒む、コマンドが infrastructure を import しない。
+- **変異の確かめ**（どれも戻した）: `--delete` の対象を prefix で絞らない（全ユーザー）→ 1件（`test_delete_removes_only_that_prefix`）。`DEBUG` の検査を外す → 2件。名前の形（`<prefix>-<数字>`）を見ずに頭だけで拾う → `DeleteSampleWorkspacesTest` の準備で止まる（似た名前のユーザーがいるので作成が拒まれる）。
+- Wiki「仮想データの投入」に「見本つきのワークスペースを大量に作る（計測用）」の節。
+- テスト: domain＋integration 4,766（その8 の 4,750 に、このコマンドの16本）、e2e 21。
+- **レビュー**（`ddd-boundary-reviewer`）: 重要な指摘なし。軽微を直した: 作成をユーザーごと1つのトランザクションにして失敗時に `--delete` を案内／Wiki に「`<prefix>-<数字>` の名前なら作ったかどうかによらず消える」／`--delete` と `--private` の併用を拒む／世界で止まる経路・上限・入力なし・引数の誤りのテストを足した。残した軽微: `WorkspaceLedgerUsersTest` の docstring 本文にこのコマンドの理由を書いていない（`ALLOWED` の行のコメントに書いた。同じ docstring を T3 が直すので、衝突を避けた）。

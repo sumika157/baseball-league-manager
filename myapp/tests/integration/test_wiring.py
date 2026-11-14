@@ -1228,6 +1228,9 @@ class WorkspaceLedgerUsersTest(SimpleTestCase):
         Path("myapp/infrastructure/queries.py"),
         Path("myapp/infrastructure/repositories.py"),
         Path("myapp/management/commands/workspace_delete.py"),
+        # 計測用に見本つきのワークスペースを作る・消す（仕上げ T1 #74）。作成・削除はサイトと同じサービス、
+        # 消す対象は prefix のユーザーが持ち主のワークスペース（利用者 id で一覧を引く。範囲を受け取る経路ではない）
+        Path("myapp/management/commands/seed_sample_workspaces.py"),
         Path("myapp/admin.py"),
     }
 
