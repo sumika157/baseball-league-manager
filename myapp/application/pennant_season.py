@@ -56,6 +56,7 @@ from ..domain.repositories import (
 from ..domain.value_objects import GameStage
 from .dto import AdvanceReport, PlanNotice
 from .foreign_quota import ForeignQuotaExemptions
+from .pennant_popularity import PopularityReader
 from .pennant_simulation import DaySimulator
 from .queries import SimulationContextQuery
 
@@ -92,6 +93,7 @@ class PennantSeasonService:
         plans: ClubPlanRepository,
         context_query: SimulationContextQuery,
         fa_exemptions: ForeignQuotaExemptions,
+        popularities: PopularityReader,
         review: MidseasonReview,
         atomic: AtomicBlock,
     ) -> None:
@@ -106,6 +108,8 @@ class PennantSeasonService:
         self._context_query = context_query
         # FA 資格の取得による外国人枠の対象外（協約 第82条 (4)）。1回の「進める」で1回だけ導く（`DaySimulator.load`）
         self._fa_exemptions = fa_exemptions
+        # 球団の人気（ホーム試合の観客数。#208 E1）
+        self._popularities = popularities
         self._atomic = atomic
         # 判定日の AI の期中の補強（#170 P3b）
         self._review = review
@@ -245,6 +249,7 @@ class PennantSeasonService:
             ratings=self._ratings,
             plans=self._plans,
             fa_exemptions=self._fa_exemptions,
+            popularities=self._popularities,
         )
         return simulator, signature
 

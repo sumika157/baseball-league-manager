@@ -24,6 +24,7 @@ from .pennant.draft_lottery import DraftLotteryRecord
 from .pennant.draft_meeting import DraftAction
 from .pennant.draft_record import DraftRecord
 from .pennant.foreign_market import ForeignSigningPlan
+from .pennant.popularity import ClubPopularity
 from .pennant.ratings import PlayerRatings
 from .pennant.reinforcement import MidseasonRegistration
 from .pennant.release import ReleasePlan
@@ -405,6 +406,32 @@ class ChampionshipRepository(Protocol):
         """日本一を保存する。すでに記録のある年をもう一度書くことはできない（InvalidChampionship）。
 
         実データの範囲には書けない（InvalidWorld）。範囲の外の球団は書けない（InvalidChampionship）。
+        """
+        ...
+
+
+@runtime_checkable
+class PopularityRepository(Protocol):
+    """ペナントの球団の人気（`ClubPopularity`。球団 × 年。#208 E1）。書くのは世界の作成とシーズンを締める処理だけ。
+
+    ペナントの世界にだけ置ける。人気は年ごとの状態（能力の行と同じ型）で、締めた年の値は書き換えない。
+    行の無い球団（この機能より前の世界）は読む側が初期値で補う（`popularity.with_initial`）。
+    """
+
+    def find_by_year(self, year: int) -> list[ClubPopularity]:
+        """その年の、範囲の全球団の人気（行のある球団だけ）。球団の id の順。"""
+        ...
+
+    def find_by_team(self, team_id: int) -> list[ClubPopularity]:
+        """ひとつの球団の人気を、年の順に。範囲の外の球団や行の無い球団は空。"""
+        ...
+
+    def add_all(self, popularities: Sequence[ClubPopularity]) -> None:
+        """人気をまとめて保存する。どれかが書けなければ何も書かない。
+
+        実データの範囲には書けない（InvalidWorld）。範囲の外の球団・同じ球団 × 年の重複（渡した中・保存済み）は
+        InvalidPopularity。締めた年（`season.is_season_closed`）の値は AlreadyClosed（締めた年の状態を書き換えない。
+        締める処理は、翌年の能力を書く前に締める年の値を書く）。
         """
         ...
 

@@ -428,6 +428,9 @@ class FinaleTest(SimpleTestCase):
             leagues=SimpleNamespace(find_all=list),
             # ポストシーズンの無い世界（日本一は `test_pennant_championships.py`）
             postseason=SimpleNamespace(champions=lambda *args, **kwargs: {}, title=lambda *args: ""),
+            # 世界の終了の通算だけを見る（人気と観客動員のカードは `test_pennant_popularity.py`）
+            popularities=None,
+            attendance=None,
         )
 
     def league(self, *rows):

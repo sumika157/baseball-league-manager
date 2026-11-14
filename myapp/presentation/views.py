@@ -55,6 +55,7 @@ from ..application.pennant_midseason_review import MidseasonReview
 from ..application.pennant_offseason import PennantOffseasonService
 from ..application.pennant_offseason_inputs import OffseasonInputsReader, OffseasonPhase
 from ..application.pennant_offseason_view import OffseasonViewService
+from ..application.pennant_popularity import PopularityReader
 from ..application.pennant_postseason import PennantPostseasonService, PostseasonBracketReader
 from ..application.pennant_postseason_view import PennantPostseasonViewService
 from ..application.pennant_race import LeagueFinishReader
@@ -106,6 +107,7 @@ from ..domain.value_objects import (
     Position,
 )
 from ..infrastructure.queries import (
+    DjangoAttendanceQuery,
     DjangoAwardQuery,
     DjangoChampionshipQuery,
     DjangoClubTenureQuery,
@@ -142,6 +144,7 @@ from ..infrastructure.repositories import (
     DjangoGameRepository,
     DjangoLeagueRepository,
     DjangoMidseasonRegistrationRepository,
+    DjangoPopularityRepository,
     DjangoRatingsRepository,
     DjangoReleasePlanRepository,
     DjangoTeamRepository,
@@ -482,6 +485,7 @@ def _repositories_for(scope: WorldScope) -> WorldRepositories:
         leagues=DjangoLeagueRepository(scope),
         teams=DjangoTeamRepository(scope),
         ratings=DjangoRatingsRepository(scope),
+        popularities=DjangoPopularityRepository(scope),
     )
 
 
@@ -521,6 +525,7 @@ def build_pennant_season_service(world_id: int) -> PennantSeasonService:
         plans=DjangoClubPlanRepository(scope),
         context_query=DjangoSimulationContextQuery(scope),
         fa_exemptions=ForeignQuotaExemptions(DjangoServiceHistoryQuery(scope)),
+        popularities=_popularity_reader(scope),
         review=MidseasonReview(
             leagues=DjangoLeagueRepository(scope),
             teams=DjangoTeamRepository(scope),
@@ -560,6 +565,7 @@ def build_pennant_offseason_service(world_id: int) -> PennantOffseasonService:
         names=DjangoPlayerNameQuery(parts.scope),
         awards=parts.awards,
         championships=DjangoChampionshipRepository(parts.scope),
+        popularities=DjangoPopularityRepository(parts.scope),
         drafts=parts.drafts,
         lotteries=DjangoDraftLotteryRepository(parts.scope),
         titles=parts.titles,
@@ -663,6 +669,7 @@ def build_pennant_postseason_service(world_id: int) -> PennantPostseasonService:
         plans=DjangoClubPlanRepository(scope),
         context_query=DjangoSimulationContextQuery(scope),
         fa_exemptions=ForeignQuotaExemptions(DjangoServiceHistoryQuery(scope)),
+        popularities=_popularity_reader(scope),
         brackets=_postseason_brackets(world_id),
         atomic=transaction.atomic,
     )
@@ -731,9 +738,18 @@ def build_offseason_view_service(world_id: int) -> OffseasonViewService:
 
     世界の id が正しくなければ InvalidWorld。
     """
+    scope = WorldScope.pennant(world_id)
     return OffseasonViewService(
-        worlds=DjangoWorldRepository(), offseason=DjangoOffseasonQuery(WorldScope.pennant(world_id))
+        worlds=DjangoWorldRepository(),
+        offseason=DjangoOffseasonQuery(scope),
+        popularities=_popularity_reader(scope),
+        attendance=DjangoAttendanceQuery(scope),
     )
+
+
+def _popularity_reader(scope: WorldScope) -> PopularityReader:
+    """球団の人気の読み口（進める処理・GM ホーム・球団史・オフの結果が使う。#208 E1）。世界の範囲で作る。"""
+    return PopularityReader(popularities=DjangoPopularityRepository(scope))
 
 
 def build_pennant_home_service(world_id: int) -> PennantHomeService:
@@ -755,6 +771,8 @@ def build_pennant_home_service(world_id: int) -> PennantHomeService:
         team_records=DjangoTeamRepository(scope),
         leagues=DjangoLeagueRepository(scope),
         postseason=_postseason_history(world_id),
+        popularities=_popularity_reader(scope),
+        attendance=DjangoAttendanceQuery(scope),
     )
 
 
@@ -773,6 +791,8 @@ def build_pennant_history_service(world_id: int) -> PennantHistoryService:
         leagues=DjangoLeagueRepository(scope),
         awards=DjangoAwardQuery(scope),
         postseason=_postseason_history(world_id),
+        popularities=_popularity_reader(scope),
+        attendance=DjangoAttendanceQuery(scope),
     )
 
 

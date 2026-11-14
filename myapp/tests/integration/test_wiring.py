@@ -38,6 +38,7 @@ from myapp.application.pennant_settings import PennantSettingsService
 from myapp.application.pennant_view import PennantWorldViewService
 from myapp.application.pennant_world import PennantWorldService
 from myapp.application.queries import (
+    AttendanceQuery,
     AwardQuery,
     ChampionshipQuery,
     ClubTenureQuery,
@@ -73,6 +74,7 @@ from myapp.domain.repositories import (
     GameRepository,
     LeagueRepository,
     MidseasonRegistrationRepository,
+    PopularityRepository,
     RatingsRepository,
     ReleasePlanRepository,
     TeamRepository,
@@ -80,6 +82,7 @@ from myapp.domain.repositories import (
 )
 from myapp.infrastructure import queries, repositories
 from myapp.infrastructure.queries import (
+    DjangoAttendanceQuery,
     DjangoAwardQuery,
     DjangoChampionshipQuery,
     DjangoClubTenureQuery,
@@ -110,6 +113,7 @@ from myapp.infrastructure.repositories import (
     DjangoGameRepository,
     DjangoLeagueRepository,
     DjangoMidseasonRegistrationRepository,
+    DjangoPopularityRepository,
     DjangoRatingsRepository,
     DjangoReleasePlanRepository,
     DjangoTeamRepository,
@@ -168,6 +172,8 @@ class ProtocolConformanceTest(SimpleTestCase):
         (DjangoAwardQuery(REAL), AwardQuery),
         (DjangoChampionshipRepository(REAL), ChampionshipRepository),
         (DjangoChampionshipQuery(REAL), ChampionshipQuery),
+        (DjangoPopularityRepository(REAL), PopularityRepository),
+        (DjangoAttendanceQuery(REAL), AttendanceQuery),
         (DjangoDraftRepository(REAL), DraftRepository),
         (DjangoPlayerNameQuery(REAL), PlayerNameQuery),
         (DjangoSimulationContextQuery(REAL), SimulationContextQuery),
@@ -919,3 +925,30 @@ class ForeignQuotaExemptionScopeTest(SimpleTestCase):
         ):
             with self.subTest(build=build.__name__):
                 self.assertEqual(build(7)._fa_exemptions._query._scope, WorldScope.pennant(7))
+
+
+class PopularityWiringTest(SimpleTestCase):
+    """球団の人気（#208 E1）の読み口と観客動員の参照は、使うサービスのどれでも渡された世界の範囲で組み立てる。"""
+
+    def test_popularity_readers_and_attendance_are_built_in_the_given_world(self):
+        world = WorldScope.pennant(7)
+        readers = {
+            "進める": build_pennant_season_service(7)._popularities,
+            "ポストシーズン": build_pennant_postseason_service(7)._popularities,
+            "GM ホーム": build_pennant_home_service(7)._popularities,
+            "球団史": build_pennant_history_service(7)._popularities,
+            "オフの結果": build_offseason_view_service(7)._popularities,
+        }
+        for name, reader in readers.items():
+            with self.subTest(service=name):
+                self.assertEqual(reader._popularities._scope, world)
+        attendance = {
+            "GM ホーム": build_pennant_home_service(7)._attendance,
+            "球団史": build_pennant_history_service(7)._attendance,
+            "オフの結果": build_offseason_view_service(7)._attendance,
+        }
+        for name, query in attendance.items():
+            with self.subTest(service=name):
+                self.assertEqual(query._scope, world)
+        offseason = build_pennant_offseason_service(7)
+        self.assertEqual(offseason._popularities._scope, world)

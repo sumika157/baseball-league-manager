@@ -18,7 +18,7 @@ from typing import Protocol, runtime_checkable
 from ..domain.entities import Game
 from ..domain.pennant.postseason import PostseasonResult
 from ..domain.pennant.retirement import PlayingTime
-from ..domain.value_objects import FieldingLine
+from ..domain.value_objects import FieldingLine, GameStage
 from .dto import (
     ActivePlayerStats,
     AwardRow,
@@ -29,6 +29,7 @@ from .dto import (
     FaSubjects,
     GameNote,
     GameRow,
+    HomeAttendance,
     HomeStadium,
     OffseasonFacts,
     PeriodBatting,
@@ -409,6 +410,21 @@ class ChampionshipQuery(Protocol):
 
     def list_championships(self) -> list[ChampionshipRow]:
         """範囲の日本一の記録（古い順）。"""
+        ...
+
+
+@runtime_checkable
+class AttendanceQuery(Protocol):
+    """ホーム試合の観客数の合計（#208 E1）。範囲（世界）は組み立てるときに必須で渡す。
+
+    区分（`stage`）も必須（公式戦とポストシーズンの観客数を、入れ忘れで混ぜない。試合を読む入口と同じ考え）。
+    """
+
+    def home_totals(self, *, stage: GameStage, year: int | None, team_id: int | None) -> list[HomeAttendance]:
+        """球団 × 年のホーム試合の観客数の合計（年・球団の id の順）。`year`・`team_id` は絞り込み（None は絞らない）。
+
+        観客数のある試合だけを数える（1本の GROUP BY）。観客数のあるホーム試合が無い球団 × 年は含まない。
+        """
         ...
 
 
