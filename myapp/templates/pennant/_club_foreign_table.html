@@ -1,0 +1,48 @@
+{% comment %}
+「外国人」タブの候補の表（#169 F2）。editing が真のときだけ、先頭にチェックボックスの列を出す（呼び出し元が保存のフォームで囲む）。
+手動の指名を読むだけのとき（オーナー以外・会議の後）は、選ばれた候補に印を付ける。お任せのときは獲得の列を出さない。
+能力は自軍のスカウトの見立て（5刻みの推定）で、本当の値ではない。候補はまだ選手ではないので、選手ページへのリンクは無い。
+{% endcomment %}
+<div class="table-responsive">
+  <table class="table table-hover tabular-nums">
+    <thead>
+      <tr>
+        {% if editing or foreign.is_manual %}<th style="width: 4.5rem;">獲得</th>{% endif %}
+        <th>候補</th>
+        <th>位置</th>
+        <th class="text-end">年齢</th>
+        <th>前所属</th>
+        <th>見立て</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in foreign.candidates %}
+        <tr data-testid="foreign-candidate-row">
+          {% if editing %}
+            <td><input type="checkbox" class="form-check-input" name="sign" value="{{ row.index }}" aria-label="{{ row.name }}を獲得する" {% if row.index in foreign_checked %}checked{% endif %}></td>
+          {% elif foreign.is_manual %}
+            <td>{% if row.is_chosen %}<span class="badge bg-primary">獲得</span>{% endif %}</td>
+          {% endif %}
+          <td>{{ row.name }}</td>
+          <td>{{ row.position.value }}</td>
+          <td class="text-end stat-muted">{{ row.age }}</td>
+          <td>{{ row.background.label }}</td>
+          <td>
+            <div>
+              {{ row.overall.label }} {% include 'myapp/_rating_grade.html' with rating=row.overall %}
+              <span class="ms-2" data-outlook>見込み {% include 'pennant/_outlook_grade.html' with outlook=row.outlook %}</span>
+            </div>
+            <div class="stat-muted" style="font-size: 0.8125rem;">
+              {% for cell in row.cells %}{{ cell.label }} {% include 'myapp/_rating_grade.html' with rating=cell %}{% if not forloop.last %} · {% endif %}{% endfor %}
+            </div>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% with first=foreign.candidates.0 %}{% if first %}
+<p class="page-subtitle mb-3" style="font-size: 0.8125rem;">
+  能力は自軍のスカウトの見立て（誤差のある推定）です。見込みは、{{ first.outlook.peak_age }}歳ごろの総合の見込みを同じ見立てで示した区分です（{{ foreign.year|add:1 }}年4月1日に{{ first.outlook.peak_age }}歳以上は「—」）。年齢は入団する{{ foreign.year|add:1 }}年4月1日の年齢です。
+</p>
+{% endif %}{% endwith %}

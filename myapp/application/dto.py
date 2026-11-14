@@ -40,6 +40,7 @@ from ..domain.value_objects import (
     DepartureRoute,
     DraftPick,
     FieldingPosition,
+    ForeignBackground,
     ForeignPlayerRules,
     FreeAgencyKind,
     GameStage,
@@ -2190,6 +2191,9 @@ class SeasonCloseOption:
     # None は自動（締められないときも None）
     development_promote_count: int | None = None
     development_release_count: int | None = None
+    # 受け持つ球団の外国人の手動の指名（#169 F2）で獲得する候補の人数（保存した指名の件数。締めるときに枠に
+    # 収まらない分は獲得しない）。None はお任せ（締められないときも None）
+    foreign_signing_count: int | None = None
 
 
 @dataclass(frozen=True)
@@ -2554,6 +2558,80 @@ class DevelopmentPlanView:
     @property
     def release_count(self) -> int:
         return sum(1 for row in self.rows if row.decision is DevelopmentDecision.RELEASE)
+
+
+@dataclass(frozen=True)
+class ForeignHeldRow:
+    """「外国人」タブの、受け持つ球団にいま在籍する外国人ひとり（#169 F2）。
+
+    `counts_toward_quota` は翌シーズン（締める年 + 1）の外国人枠で数えるか（FA 資格の取得で枠外なら False。
+    判定は domain の `counts_toward_foreign_quota`）。`is_development` は育成（保有の人数には数え、
+    1軍の枠には出ない）。
+    """
+
+    player_id: int
+    name: str
+    position: Position
+    is_development: bool
+    counts_toward_quota: bool
+
+
+@dataclass(frozen=True)
+class ForeignCandidateRow:
+    """「外国人」タブの候補ひとり（#169 F2）。能力は見せず、受け持つ球団のスカウトの見立て（`overall`・`cells`）と
+    見込みの区分（`outlook`）だけを出す（2026-10-25 ユーザー決定 Q4 A）。
+
+    `index` は候補の鍵（締める年のオフの候補の添字。`foreign_market.offseason_key`）で、フォームはこれを送る。
+    `age` は入団する年（締める年 + 1）の4月1日時点の年齢。
+    """
+
+    index: int
+    name: str
+    position: Position
+    age: int
+    background: ForeignBackground
+    overall: RatingCell
+    cells: tuple[RatingCell, ...]
+    outlook: OutlookCell
+    is_chosen: bool
+
+
+@dataclass(frozen=True)
+class ForeignSigningPlanView:
+    """編成の「外国人」タブの材料（#169 F2）。公式戦を終えてから締めるまで（ポストシーズン中も）だけ作る。
+
+    - `is_manual` が False ならお任せ（AI と同じ規則で締めるときに選ぶ）。True なら `candidates` の `is_chosen` が指名
+    - `players`: いま在籍する外国人（育成を含む）。`held_limit` は保有の上限（ゲームの上限 `MAX_FOREIGN_HELD`）
+    - `active_rules`: 1軍の外国人枠（リーグの `ForeignPlayerRules`）
+    - `blocker`: 指名を変えられない理由（その年のドラフト会議を始めた。`pre_draft_input_blocker`）。変えられるなら空
+    """
+
+    team_id: int
+    team_name: str
+    # 締める年（候補はこの年のオフの候補で、入団は翌年）
+    year: int
+    is_manual: bool
+    players: tuple[ForeignHeldRow, ...]
+    held_limit: int
+    active_rules: ForeignPlayerRules
+    candidates: tuple[ForeignCandidateRow, ...]
+    blocker: str = ""
+
+    @property
+    def can_change(self) -> bool:
+        return not self.blocker
+
+    @property
+    def held_count(self) -> int:
+        return len(self.players)
+
+    @property
+    def quota_exempt_count(self) -> int:
+        return sum(1 for row in self.players if not row.counts_toward_quota)
+
+    @property
+    def chosen_count(self) -> int:
+        return sum(1 for row in self.candidates if row.is_chosen)
 
 
 @dataclass(frozen=True)

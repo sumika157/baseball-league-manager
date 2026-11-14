@@ -621,7 +621,7 @@ W4 で増えたもの（W4 の各段階の記録より。2026-11-13 の T7 で�
 W5 で増えたもの（2026-11-13 の T3 でまとめた）:
 
 - **設定・データ移行は無い**（W5 はマイグレーションも環境変数も足していない）。既にあるワークスペースには見本は入らない（作成のときだけ）。
-- **マイグレーションの番号**: main の取り込み（2026-11-13 その7）で、epic の5本を main の 0064_pennant_development_plan（#364）の後ろの `0065_workspace`〜`0069_workspace_invitation` に振り直した（`0065_workspace` の依存は `0064_pennant_development_plan`）。開発 DB は main の 0063 まで当たっている（その7 の時点）ので、main の 0064 の後に epic の 0065〜0069 をそのまま `migrate` できる。main を取り込むたびに番号を確かめ、増えていれば振り直す。W5 T3 の計測では、写しを main のコードで 0060 まで戻してから epic で `migrate` した（当時は epic が 0061〜0065）。
+- **マイグレーションの番号**: main の取り込み（2026-11-14 その8）で、epic の5本を main の 0065_pennant_foreign_signing_plan（#367）の後ろの `0066_workspace`〜`0070_workspace_invitation` に振り直した（`0066_workspace` の依存は `0065_pennant_foreign_signing_plan`）。開発 DB は main の 0065 まで当たっている（その8 の時点）ので、epic の 0066〜0070 をそのまま `migrate` できる。main を取り込むたびに番号を確かめ、増えていれば振り直す。W5 T3 の計測では、写しを main のコードで 0060 まで戻してから epic で `migrate` した（当時は epic が 0061〜0065）。
 - **仮想データの投入は同じ `--seed` でも T1 の前とは違う選手を作る**（`draw_veteran` で年齢の乱数を `random()` に替えた。W5 T1）。開発 DB は作り直していない。main に入れた後に仮想データを作り直すなら、`measure_pages` の基準もその DB で取り直す。
 - デプロイの後、見本ありで1つ作って作成の時間（下の「W5 のまとめ」の計測、約1.1秒）と桁が変わらないことを確かめ、試しに作ったワークスペースは消す。
 
@@ -637,7 +637,7 @@ W6 で増えたもの（2026-11-14 の T2 でまとめた）:
 
 W1a〜W6 の段階はすべて済んだ。`epic/workspaces` を main に入れる前に、次を上から順に済ませる（どれも W6 の範囲の外）。
 
-1. **main の取り込み**: その7（#356・#359・#360。2026-11-13 に済んだ）より後の main を取り込む。取り込むたびに、epic のマイグレーション（今は `0065_workspace`〜`0069_workspace_invitation`）の番号を main の最新の後ろに付け直す（上の W5 の分）。
+1. **main の取り込み**: その7（#356・#359・#360。2026-11-13 に済んだ）より後の main を取り込む。取り込むたびに、epic のマイグレーション（今は `0066_workspace`〜`0070_workspace_invitation`）の番号を main の最新の後ろに付け直す（上の W5 の分）。
 2. **見本つきのワークスペースを大量に作る管理コマンド**を足し、200個（約 +190万行）を作った DB で `measure_pages` と `--profile` を流す（10. の「ワークスペースが多い状態」。大きい表を全体で走査していないか。SQL の時間ではなく応答時間とクエリ数を見る）。
 3. **作成の回数制限・ボット対策**（3.5）を決める: 見本ありのワークスペースの作成は1回で書き込みのロックを約1.1秒持つ（W5 の計測）。新規登録・ワークスペースの作成・世界の作成の回数制限を決める。
 4. **#98 を公開の前に入れるか決める**: 8リーグ10シーズンの世界の削除は約40秒で、gunicorn のタイムアウト（60秒）に近い。
@@ -1753,7 +1753,7 @@ views の定数とテンプレートの直書きの2か所 → 両方に互い�
 `refactor/merge-main-into-workspaces-6` で、epic 3717b0c（W4 T2 の後）に main c8b5f70 を取り込んだ（マージコミット。この記録もそのコミットに含む）。W4 T3・T4 の途中。
 
 - **main から来たもの**: #321（#320。選手の編集画面の退団の確認文で、選手名を `|escapejs` で JavaScript の文字列としてエスケープ。テンプレートの JavaScript の文脈を走査する `TemplateJavaScriptContextTest`）、#322（#308 P3a。経路ごとの伸びしろの平均・自軍の選手の見込みの区分 `domain/pennant/outlook.py`・`application/pennant_outlook.py`。選手ページの能力のカードと「戦力外」タブに出す。在籍を読む `ClubTenureQuery`／`DjangoClubTenureQuery`）、#324（#169 F1。ドラフトの外国人の新人を、球団ごとの候補から AI が獲得する `domain/pennant/foreign_market.py`。選手の前所属 `Player.foreign_background`（`ForeignBackground`・`Profile.foreign_background`）。マイグレーション `0060_player_foreign_background`）、#328（#169 F1b。外国人の獲得の傾向を戦力の穴で）、#329（#308 P3b。AI の戦力外と引退を見込みの能力で）。
-- **振り直し**: main が 0060 を使ったので、epic のマイグレーションを `0061_workspace`（依存は `0060_player_foreign_background`）・`0062_backfill_default_workspace`・`0063_workspace_constraints`・`0064_team_managers_help_text`・`0065_workspace_invitation` に移した。依存・docstring・コメント（`admin.py` の編集者の行・`repositories.py` の名前の一意制約・`test_jersey_number.py`・`test_migration_draft_year.py`・`test_workspace_constraints.py`）・`test_workspace_migration.py` の BEFORE/AFTER をそろえた。この節より前の記録の番号は書いた時点のまま（W4 T1 の `0064_workspace_invitation` は今 `0065`）。空の DB からの `migrate` と `makemigrations --check` を確かめた。作業の最後に origin/main を fetch し直し、最新が 0060 のままであることを確かめた。
+- **振り直し**: main が 0060 を使ったので、epic のマイグレーションを `0061_workspace`（依存は `0060_player_foreign_background`）・`0062_backfill_default_workspace`・`0063_workspace_constraints`・`0064_team_managers_help_text`・`0065_workspace_invitation` に移した。依存・docstring・コメント（`admin.py` の編集者の行・`repositories.py` の名前の一意制約・`test_jersey_number.py`・`test_migration_draft_year.py`・`test_workspace_constraints.py`）・`test_workspace_migration.py` の BEFORE/AFTER をそろえた。この節より前の記録の番号は書いた時点のまま（W4 T1 の `0064_workspace_invitation` はその5 の後 `0065`、その8 の後は `0070`）。空の DB からの `migrate` と `makemigrations --check` を確かめた。作業の最後に origin/main を fetch し直し、最新が 0060 のままであることを確かめた。
 - **衝突**は8ファイル: `views.py`（`build_pennant_ratings_service`・`build_club_details_service` の依存と「戦力外」タブの `with_outlook=True`）、`player_edit.html`（W3 T7 でボタンを操作のフォームに移したので epic の配置を残し、退団の確認文に `|escapejs` を当てた）、Wiki「チームと選手の管理」（項目表に epic の「名前」の行と main の「前所属」を両方）、テスト5本（`test_wiring.py`・`test_templates.py` は両方を残す、`test_pennant_offseason.py`・`test_pennant_ratings_view.py`・`test_pennant_release_tab.py` は import）。
 - **合わせ込み**:
   - 組み立て口: `build_club_details_service(scope)` に main の `world_id`・`worlds`・`tenures` を範囲の形で（`DjangoWorldRepository(scope.workspace_id)`・`DjangoClubTenureQuery(scope)`）。`build_pennant_ratings_service(scope)` に `tenures`。`test_wiring.py` の `LedgersAreScopedToTheWorkspaceTest` の台帳を持つ組み立て口に `build_club_details_service` を足した。組み立て口の数は変わらない。
@@ -1864,7 +1864,7 @@ epic を main に入れる前に開発 DB・本番で数え、あれば作成者
 
 | 段階 | PR | 内容 |
 | --- | --- | --- |
-| T1 | #323 | `Workspace` 集約のメンバー（`editor_ids`・`team_assignments`）と操作、`Invitation`・`InvitedRole`・`WorkspaceQuota`、`WorkspaceRepository`・`InvitationRepository`、`WorkspaceInvitation`（マイグレーション、今は `0065_workspace_invitation`）、`WorkspaceService`・`WorkspaceMemberService`、参照 `WorkspaceManagementQuery`・`InvitationPreviewQuery`、組み立て口4つ |
+| T1 | #323 | `Workspace` 集約のメンバー（`editor_ids`・`team_assignments`）と操作、`Invitation`・`InvitedRole`・`WorkspaceQuota`、`WorkspaceRepository`・`InvitationRepository`、`WorkspaceInvitation`（マイグレーション。その8（2026-11-14）の後は `0070_workspace_invitation`）、`WorkspaceService`・`WorkspaceMemberService`、参照 `WorkspaceManagementQuery`・`InvitationPreviewQuery`、組み立て口4つ |
 | T3 | #326 | `/` の作成フォームと `/workspaces/new/`、設定の画面、ヘッダーの切り替え（ドロップダウン） |
 | T2 | #327 | `WorkspaceRepository.delete`（子から順に範囲で絞った `_raw_delete`。在籍がまたがる選手・迷子の参照は消す前に拒む）、`workspace_deletion_blocker`、`contents()`、管理コマンド `workspace_delete` |
 | T4 | #335 | メンバーと招待の画面（発行・取消・役割の変更・除名）、招待の受諾 `/invitations/<token>/`、新規登録が `next` を運ぶ。e2e `test_workspace_sharing.py` |
@@ -2159,3 +2159,22 @@ epic を main に入れる前に開発 DB・本番で数え、あれば作成者
 - 仕上げ（#74）: 上の「main に入れる前の手順」1〜8（main の取り込み・見本を大量に作る管理コマンドと200個での実測・回数制限・#98 の判断・R2 の容量・この節をたどる・Wiki への吸収）。
 - #98（重い処理のバックグラウンド化）へ: 世界の作成を積むなら、上限の検査は積む時点と作る時点の両方で要る。
 - 残した軽微（T1 のレビューより）: `WorkspaceQuota` が `pennant.world` を知る向き／フォームの見込みは `list_teams_by_league()`、作成の検査は `load_source()` の名簿で球団を数える（どちらも実データのリーグの今の球団で、今は一致する）／Wiki の式の説明の `143`（例示）／この設計書の W6 より前の節の `count_by_owner`・1人5世界の記述（書いた時点の記録として残す）。
+
+#### main の取り込み（2026-11-14 その8）
+
+`refactor/merge-main-into-workspaces-9` で、epic 2bf3625（W6 T1 の後）に main 58076aa を取り込んだ（マージコミット。この記録もそのコミットに含む）。W6 T2 の前。
+
+- **main から来たもの**: #365（#362。ドラフト会議に育成の層の候補を足し、育成の新人に高校生を増やした。domain の `draft_meeting`・`development` の変更だけで、新しい表・URL は無い）、#367（#169 F2。編成の「外国人」タブで GM が自軍のオフに獲得する外国人をお任せか手動で選ぶ。指名の入力 `PennantForeignSigningPlan`／`PennantForeignSigningPlanEntry`・`ForeignSigningPlanRepository`／`DjangoForeignSigningPlanRepository`・`scoping.foreign_signing_plans_in`。書き込みは `pennant_club` の POST の区画 `foreign`。マイグレーション `0065_pennant_foreign_signing_plan`）。
+- **振り直し**: main が 0065 を使ったので、epic のマイグレーションを `0066_workspace`（依存は `0065_pennant_foreign_signing_plan`）・`0067_backfill_default_workspace`・`0068_workspace_constraints`・`0069_team_managers_help_text`・`0070_workspace_invitation` に移した。依存・docstring・コメント（`repositories.py` の名前の一意制約・`test_workspace_constraints.py`・`test_workspace_migration.py` の BEFORE/AFTER・`test_jersey_number.py`・`test_migration_draft_year.py`）と Wiki「チームと選手の管理」のバックフィルの番号、上の「epic を main に入れるときに必ず行うこと」の番号をそろえた。この節より前の記録の番号は書いた時点のまま。空の DB からの `migrate` と `makemigrations --check` を確かめた。開発 DB は main の 0065 まで当たっている。作業の最後に origin/main を fetch し直し、最新が 0065 のままであることを確かめた。
+- **衝突**: 5ファイル（`views.py`（例外の import・`_post_foreign`／`_foreign_view` と epic の `_development_plan_view(request, …)`・編成の選手の詳細を読まないタブ）、`_season_close.html`（main の「外国人」の行を `workspace_url` で）、`test_pennant_draft_service.py`（import）、`test_world_isolation.py`（分類表は epic の形に、外国人の指名の2表を `LEAGUE`・`team__league` で）、Wiki「画面の歩き方」（epic の削除の行と main の「外国人」を足した編成の行））。CLAUDE.md は衝突なし（main は変えていない）。
+- **合わせ込み**:
+  - 組み立て口: 外国人の指名のリポジトリは `_OffseasonParts(scope)` が範囲から作る（main の形のまま epic の範囲が通る）。`build_pennant_offseason_service(scope)` の新しい依存（`foreign_signings`・`names`）も同じ範囲。組み立て口の数は変わらない。
+  - 画面: `_post_foreign`・`_foreign_view` を `_world_scope(request, …)`・`_url` に、`_club_foreign.html` の素の `{% url %}`（3つ）と `_season_close.html` の行を `workspace_url` に。URL は増えていない（`pennant_club` の POST の区画）ので `URL_TABLE`・`WRITE_BODIES` は変えていない。
+  - **世界の書き込みの判定（W4 T5）**: 外国人の指名の書き込み（手動にする・保存する・お任せに戻す）は `pennant_club` の POST の門（`_requires_world_owner`＝`_can_write_world`）を通る。導線も `is_owner` で出し分ける。テストで固定: 除名した作成者は「手動で選ぶ」が出ず、3つの操作の POST が 403 で何も書かない（`test_pennant_foreign_signing_plan.py`）。
+  - 新しい `Django*`（`DjangoForeignSigningPlanRepository`）を `test_workspace_isolation.py` の `CHECKS` に。B の実データの球団に指名の行を置き（`_plant_b_rows`）、A の実データ・A の世界から読めない・書けない・消せないことと、B の実データの範囲では読めること（空振りの防止）を見る。**変異の確かめ**（どれも戻した）: `find_by_team`・`delete_all` を範囲で絞らない → `test_workspace_isolation` が落ちる。削除の順から外国人の指名の2表を外す → `test_workspace_delete`（網羅・迷子の参照）と `test_world_isolation`（世界の削除の網羅）が落ちる。
+  - W4 T2 のワークスペースの削除: 外国人の指名の2表は範囲の行として消える（main が削除の順 `_SCOPE_ROWS_CHILD_FIRST` に足した道のまま）。網羅のテストは何も足さずに通った。
+  - main の新しいテストを epic の形に: `test_pennant_foreign_signing_plan.py` を `ws_url`・`world_scope`・`real_scope` に。
+  - W6 T1 との関係: main は古い上限（`MAX_WORLDS_PER_OWNER` など）に触れていない。付け替えは無い。
+- **計測**: やり直していない。main の変更で読み取りが増えるのは、編成の「外国人」タブと GM ホームの締める欄（外国人の指名の1本）で、どちらもペナントの画面（`measure_pages` の実データの画面は変わらない）。
+- テスト: domain＋integration 4,750（epic 2bf3625 の分に main の分と、この取り込みで足した検査）、e2e 21。
+- **レビュー**（`ddd-boundary-reviewer`）: 重要な指摘なし。軽微を直した: この設計書の W4 の記録で「今は `0065_workspace_invitation`」と書いた箇所（W4 の表・その5 の振り直し）を、その8 の後の番号に合わせた（W4 の段階の表の行は書いた時点のまま）。

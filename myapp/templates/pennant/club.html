@@ -16,6 +16,7 @@
 シーズン終了で締められるときだけ「戦力外」タブを出す（ビューが has_release_tab と、開いたときは release を渡す）。
 補強の窓（締めた後〜7月31日）の中だけ「育成」タブを出す（ビューが has_development_tab と、開いたときは development を渡す）。
 公式戦を終えてから締めるまでも「育成」タブを出し、オフの形（育成の指名。#170 P2）にする（開いたときは development_plan を渡す。窓とは時期が重ならない）。
+「外国人」タブ（外国人のオフの獲得の指名。#169 F2）は「戦力外」タブと同じ時期に出す（ビューが has_foreign_tab と、開いたときは foreign を渡す）。
 書き込みの導線はオーナーにだけ出す。
 {% endcomment %}
 <div class="page-head">
@@ -32,6 +33,7 @@
     <a class="segmented-item {% if tab == 'pitching' %}is-active{% endif %}" href="?tab=pitching">投手陣</a>
     {% if has_release_tab %}<a class="segmented-item {% if tab == 'release' %}is-active{% endif %}" href="?tab=release">戦力外</a>{% endif %}
     {% if has_development_tab %}<a class="segmented-item {% if tab == 'development' %}is-active{% endif %}" href="?tab=development">育成</a>{% endif %}
+    {% if has_foreign_tab %}<a class="segmented-item {% if tab == 'foreign' %}is-active{% endif %}" href="?tab=foreign">外国人</a>{% endif %}
   </div>
 
   {% if not is_owner %}
@@ -51,6 +53,8 @@
     {% include 'pennant/_club_pitching.html' %}
   {% elif tab == 'development' %}
     {% if development %}{% include 'pennant/_club_development.html' %}{% else %}{% include 'pennant/_club_development_plan.html' %}{% endif %}
+  {% elif tab == 'foreign' %}
+    {% include 'pennant/_club_foreign.html' %}
   {% elif tab == 'release' %}
     {% include 'pennant/_club_release.html' %}
   {% else %}

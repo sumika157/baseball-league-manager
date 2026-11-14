@@ -29,6 +29,7 @@ from myapp.domain.pennant.draft_order import DraftOrderRule
 from myapp.domain.pennant.draft_record import DraftMeetingStatus, DraftRecord
 from myapp.domain.pennant.offseason import prepare_meeting
 from myapp.domain.pennant.postseason import PostseasonFormat
+from myapp.domain.value_objects import AcquisitionRoute, Position
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoDraftRepository
 from myapp.presentation.views import (
@@ -263,6 +264,25 @@ class CloseWithTheMeetingTest(DraftServiceCase):
         self.assertGreaterEqual(result.promoted_count, 1)
         self.assertEqual(orm_models.PlayerStint.objects.get(player_id=prospect).promoted_year, YEAR + 1)
 
+    def test_the_foreign_choices_reach_the_meeting_and_the_close_in_the_same_way(self):
+        """外国人の指名（#169 F2）も同じ入力から読むので、獲得した外国人の分だけ減る日本人の人数の幅が
+        会議を始めたときと締めるときで食い違わない（`DraftChanged` にならない）。指名した候補が新外国人として入る。"""
+        offseason = self.offseason()
+        chosen = [row for row in offseason.foreign_view().candidates if row.position is Position.PITCHER][:2]
+        offseason.set_foreign_signings([row.index for row in chosen], expected_year=YEAR)
+        self.start()
+        self.auto_complete()
+
+        result = offseason.close_season(expected_year=YEAR)
+
+        signed = set(
+            orm_models.PlayerStint.objects.filter(
+                team_id=self.managed(), from_year=YEAR + 1, acquired_via=AcquisitionRoute.NEW_FOREIGN.value
+            ).values_list("player__name", flat=True)
+        )
+        self.assertEqual(signed, {row.name for row in chosen})
+        self.assertGreaterEqual(result.signed_foreign_count, 2)
+
     def test_leaving_the_whole_meeting_to_the_ai_drafts_the_same_rookies_as_no_meeting(self):
         savepoint = transaction.savepoint()
         try:
@@ -330,6 +350,25 @@ class LocksTest(DraftServiceCase):
             with self.assertRaises(DraftStarted):
                 change()
         self.assertFalse(orm_models.PennantDevelopmentPlan.objects.exists(), "何も書かない")
+
+    def test_foreign_choices_are_fixed_after_the_start(self):
+        """外国人の指名（#169 F2）も会議の人数の幅を変えるので、始めた後は変えられない
+        （`pre_draft_input_blocker`）。"""
+        offseason = self.offseason()
+        self.assertTrue(offseason.foreign_view().can_change)
+        self.start()
+
+        view = offseason.foreign_view()
+        self.assertFalse(view.can_change)
+        self.assertIn("ドラフト会議", view.blocker)
+        for change in (
+            lambda: offseason.start_manual_foreign(expected_year=YEAR),
+            lambda: offseason.set_foreign_signings([0], expected_year=YEAR),
+            lambda: offseason.reset_foreign(expected_year=YEAR),
+        ):
+            with self.assertRaises(DraftStarted):
+                change()
+        self.assertFalse(orm_models.PennantForeignSigningPlan.objects.exists(), "何も書かない")
 
     def test_the_postseason_format_is_fixed_while_the_meeting_lasts(self):
         """会議はポストシーズンの後に開く（#297 Q1）。会議を始めた後に方式「なし」から変えると、ポストシーズンの前に

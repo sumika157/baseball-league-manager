@@ -294,6 +294,11 @@ def development_plans_in(scope: WorldScope) -> QuerySet[orm_models.PennantDevelo
     return orm_models.PennantDevelopmentPlan.objects.filter(world_condition("team__league", scope))
 
 
+def foreign_signing_plans_in(scope: WorldScope) -> QuerySet[orm_models.PennantForeignSigningPlan]:
+    """範囲の球団の外国人の指名（#169 F2）。戦力外の指名と同じく、球団のリーグで世界が決まる。"""
+    return orm_models.PennantForeignSigningPlan.objects.filter(world_condition("team__league", scope))
+
+
 def midseason_registrations_in(scope: WorldScope) -> QuerySet[orm_models.PennantMidseasonRegistration]:
     """範囲の期中の支配下登録。編成と同じく、球団のリーグで世界が決まる。"""
     return orm_models.PennantMidseasonRegistration.objects.filter(world_condition("team__league", scope))

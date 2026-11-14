@@ -158,7 +158,8 @@ admin.site.has_permission = types.MethodType(_superuser_only, admin.site)  # typ
 # 選択肢にも・フィルタにも出さない（手で直すと、世界の整合が実データの側から壊れるため）。
 # ペナント専用のモデル（PennantWorld・PennantPlayerRatings・PennantFixture・PennantClubPlan と
 # その行 PennantClubPlanEntry・PennantReleasePlan とその行 PennantReleasePlanEntry・
-# 育成の指名 PennantDevelopmentPlan とその行 PennantDevelopmentPlanEntry・期中の支配下登録
+# 育成の指名 PennantDevelopmentPlan とその行 PennantDevelopmentPlanEntry・
+# 外国人の指名 PennantForeignSigningPlan とその行 PennantForeignSigningPlanEntry・期中の支配下登録
 # PennantMidseasonRegistration・表彰 PennantAward・
 # 日本一 PennantChampionship・ドラフト会議 PennantDraft とその人数の幅 PennantDraftSlot・行動 PennantDraftAction・
 # ドラフトの抽選 PennantDraftLottery とその入札 PennantDraftLotteryBid）は

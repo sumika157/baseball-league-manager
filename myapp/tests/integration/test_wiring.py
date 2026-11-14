@@ -78,6 +78,7 @@ from myapp.domain.repositories import (
     DevelopmentPlanRepository,
     DraftRepository,
     FixtureRepository,
+    ForeignSigningPlanRepository,
     GameRepository,
     InvitationRepository,
     LeagueRepository,
@@ -122,6 +123,7 @@ from myapp.infrastructure.repositories import (
     DjangoDevelopmentPlanRepository,
     DjangoDraftRepository,
     DjangoFixtureRepository,
+    DjangoForeignSigningPlanRepository,
     DjangoGameRepository,
     DjangoInvitationRepository,
     DjangoLeagueRepository,
@@ -262,6 +264,7 @@ class ProtocolConformanceTest(SimpleTestCase):
         (DjangoClubPlanRepository(REAL), ClubPlanRepository),
         (DjangoReleasePlanRepository(REAL), ReleasePlanRepository),
         (DjangoDevelopmentPlanRepository(REAL), DevelopmentPlanRepository),
+        (DjangoForeignSigningPlanRepository(REAL), ForeignSigningPlanRepository),
         (DjangoAwardRepository(REAL), AwardRepository),
         (DjangoAwardQuery(REAL), AwardQuery),
         (DjangoChampionshipRepository(REAL), ChampionshipRepository),
@@ -957,13 +960,32 @@ class PennantOffseasonScopeTest(SimpleTestCase):
         "_releases",
         "_developments",
         "_development_roster",
+        "_foreign_signings",
+        "_names",
         "_awards",
         "_championships",
         "_drafts",
         "_context_query",
     )
-    PHASE_SCOPED = ("_teams", "_fixtures", "_ratings", "_releases", "_developments", "_context_query")
-    INPUTS_SCOPED = ("_teams", "_leagues", "_ratings", "_releases", "_developments", "_awards", "_playing_time")
+    PHASE_SCOPED = (
+        "_teams",
+        "_fixtures",
+        "_ratings",
+        "_releases",
+        "_developments",
+        "_foreign_signings",
+        "_context_query",
+    )
+    INPUTS_SCOPED = (
+        "_teams",
+        "_leagues",
+        "_ratings",
+        "_releases",
+        "_developments",
+        "_foreign_signings",
+        "_awards",
+        "_playing_time",
+    )
 
     def test_every_dependency_is_fixed_to_the_given_world(self):
         service = build_pennant_offseason_service(WORLD7)
@@ -994,6 +1016,8 @@ class PennantOffseasonScopeTest(SimpleTestCase):
         self.assertIs(service._phase._releases, service._releases)
         self.assertIs(service._phase._developments, service._developments)
         self.assertIs(service._inputs._developments, service._developments)
+        self.assertIs(service._phase._foreign_signings, service._foreign_signings)
+        self.assertIs(service._inputs._foreign_signings, service._foreign_signings)
         self.assertIs(service._inputs._teams, service._teams)
         self.assertIs(service._phase._postseason, service._postseason)
 

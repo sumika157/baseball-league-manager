@@ -68,6 +68,7 @@ from myapp.domain.pennant.development import DevelopmentDecision, DevelopmentPla
 from myapp.domain.pennant.draft_lottery import DraftLotteryRecord
 from myapp.domain.pennant.draft_meeting import DraftAction, DraftActionKind, DraftSlot
 from myapp.domain.pennant.draft_record import DraftRecord
+from myapp.domain.pennant.foreign_market import ForeignSigningPlan
 from myapp.domain.pennant.reinforcement import MidseasonRegistration
 from myapp.domain.pennant.release import ReleasePlan
 from myapp.domain.pennant.world import World, WorldScope
@@ -120,6 +121,7 @@ from myapp.infrastructure.repositories import (
     DjangoDraftLotteryRepository,
     DjangoDraftRepository,
     DjangoFixtureRepository,
+    DjangoForeignSigningPlanRepository,
     DjangoGameRepository,
     DjangoInvitationRepository,
     DjangoLeagueRepository,
@@ -396,6 +398,8 @@ class WorkspaceCase(BaseCase):
         orm_models.PennantDevelopmentPlanEntry.objects.create(
             plan=development, player_id=batter, decision=DevelopmentDecision.PROMOTE.value
         )
+        foreign = orm_models.PennantForeignSigningPlan.objects.create(team=cls.b_team, year=B_YEAR)
+        orm_models.PennantForeignSigningPlanEntry.objects.create(plan=foreign, candidate_index=0)
 
     def setUp(self):
         super().setUp()
@@ -548,6 +552,28 @@ def _development_plan_repository(t: WorkspaceCase) -> None:
         DjangoDevelopmentPlanRepository(WorldScope.pennant(t.workspace.id, t.a_world_id)).save(plan)
     t.assertEqual(b_plans.get().year, B_YEAR, "A の範囲で B の行を書いた・消した")
     t.assertTrue(orm_models.PennantDevelopmentPlanEntry.objects.filter(plan__team=t.b_team).exists())
+
+
+def _foreign_signing_plan_repository(t: WorkspaceCase) -> None:
+    """外国人のオフの指名（#367）。B の球団の指名は、A の実データ・A の世界から読めず、書けず、消せない。"""
+    b_plans = orm_models.PennantForeignSigningPlan.objects.filter(team=t.b_team)
+    plan = ForeignSigningPlan(team_id=t.b_team.id, year=B_YEAR, keys=frozenset())
+    with t.assertRaises(InvalidWorld):
+        DjangoForeignSigningPlanRepository(t.a).save(plan)
+    for scope in _a_scopes(t):
+        repo = DjangoForeignSigningPlanRepository(scope)
+        with t.assertRaises(TeamNotFound):
+            repo.find_by_team(t.b_team.id)
+        repo.delete_all()
+    with t.assertRaises(TeamNotFound):
+        DjangoForeignSigningPlanRepository(WorldScope.pennant(t.workspace.id, t.a_world_id)).save(plan)
+    t.assertEqual(b_plans.get().year, B_YEAR, "A の範囲で B の行を書いた・消した")
+    t.assertTrue(orm_models.PennantForeignSigningPlanEntry.objects.filter(plan__team=t.b_team).exists())
+    # 空振りの防止: B の実データの範囲では読める
+    found = DjangoForeignSigningPlanRepository(real_scope(t.workspace_b)).find_by_team(t.b_team.id)
+    t.assertIsNotNone(found)
+    assert found is not None
+    t.assertEqual(found.indices, frozenset({0}))
 
 
 def _player_fielding_query(t: WorkspaceCase) -> None:
@@ -1081,6 +1107,7 @@ CHECKS: dict[type, Callable[[WorkspaceCase], None]] = {
     DjangoClubPlanRepository: _club_plan_repository,
     DjangoReleasePlanRepository: _release_plan_repository,
     DjangoDevelopmentPlanRepository: _development_plan_repository,
+    DjangoForeignSigningPlanRepository: _foreign_signing_plan_repository,
     DjangoAwardRepository: _award_repository,
     DjangoAwardQuery: _award_query,
     DjangoChampionshipRepository: _championship_repository,

@@ -30,6 +30,7 @@ from myapp.domain.pennant.draft_meeting import DraftContext, scouting_value
 from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
 from myapp.domain.pennant.foreign_market import SIGNED_RATING_MEAN
 from myapp.domain.pennant.offseason import OffseasonClub, OffseasonPlan, OffseasonPlayer, plan_offseason
+from myapp.domain.pennant.offseason_player import overall_value
 from myapp.domain.pennant.outlook import PEAK_AGE, with_filled_potential
 from myapp.domain.pennant.prospects import expected_prospect_ratings
 from myapp.domain.pennant.ratings import PlayerRatings
@@ -272,6 +273,11 @@ class YearStats:
     rookie_route_shares: tuple[float, float, float]
     # 本指名の日本人の新人の伸びしろの倍率の平均（経路ごと。高校・大学・社会人。#308 P3 段階0）
     rookie_route_potential_means: tuple[float, float, float]
+    # 育成の新人の人数・高校の割合・伸びしろの倍率の平均・総合（錨の後）の平均（#362。育成の層の候補）
+    development_draftees: int
+    development_high_school_share: float
+    development_potential_mean: float
+    development_value_mean: float
     # 獲得した外国人（#169）: 1球団あたりの人数、錨の前の総合（`scouting_value`）の平均の、今までの外国人の新人
     # （平均 `SIGNED_RATING_MEAN`）からのずれ（点）と、獲得した後の1球団の外国人の平均人数
     signings_per_club: float
@@ -331,6 +337,7 @@ def stats(members: list[Member], plan: OffseasonPlan, previous: list[Member], *,
     staminas = [float(m.ratings.ratings.stamina) for m in registered if isinstance(m.ratings.ratings, PitcherRatings)]
     before = [m.player_id for m in previous if m.is_registered]
     rookies = _main_draft_japanese(plan)
+    development_rookies = [draftee for draftee in plan.draftees if draftee.is_development]
     retired = len(set(plan.retired) & set(before))
     released = len(set(plan.released) & set(before))
     released_young, kept_young = _young_multipliers(previous, plan, world_seed=world_seed)
@@ -376,6 +383,20 @@ def stats(members: list[Member], plan: OffseasonPlan, previous: list[Member], *,
             _potential_mean(rookies, DraftRoute.HIGH_SCHOOL),
             _potential_mean(rookies, DraftRoute.UNIVERSITY),
             _potential_mean(rookies, DraftRoute.CORPORATE),
+        ),
+        development_draftees=len(development_rookies),
+        development_high_school_share=(
+            sum(1 for d in development_rookies if d.route is DraftRoute.HIGH_SCHOOL) / len(development_rookies)
+            if development_rookies
+            else 0.0
+        ),
+        development_potential_mean=(
+            fmean(potential_multiplier(d.ratings.potential) for d in development_rookies)
+            if development_rookies
+            else 0.0
+        ),
+        development_value_mean=(
+            fmean(overall_value(d.ratings) for d in development_rookies) if development_rookies else 0.0
         ),
         signings_per_club=len(plan.signings) / len(sizes),
         signed_value_shift=fmean(
@@ -459,13 +480,16 @@ class OffseasonPopulationTest(unittest.TestCase):
         高校卒（18歳）を日本人の新人の30%入れる規則の定常状態は、22歳以下が約17〜20%・標準偏差が約4.5になる
         （Wiki「ペナントモードの仕組み」の「実測値」）。戦力外を足して引退の表を下げてから（#168）は、
         平均年齢 27.3〜28.1 歳・35歳以上 3.5〜7.5%・22歳以下 11.1〜16.2%（シード 1〜4。帯は変えていない）。
+        #362（育成の新人に高校生を増やした。2026-11-13 ユーザー決定 案1）で、高校で入った育成が伸びて若く昇格するので
+        22歳以下が増えた（10年の最大 シード1 17.6% → 22.2%・シード1〜4 で 22.2〜23.1%）。
+        帯の上限を 22% → 26% にした（ほかの帯は変えていない）。
         """
         for stat in self.years:
             with self.subTest(year=stat.year):
                 self.assertTrue(26.0 <= stat.mean_age <= 29.0, stat.mean_age)
                 self.assertTrue(3.3 <= stat.sd_age <= 4.8, stat.sd_age)
                 self.assertTrue(0.015 <= stat.share_35_plus <= 0.08, stat.share_35_plus)
-                self.assertTrue(0.05 <= stat.share_22_minus <= 0.22, stat.share_22_minus)
+                self.assertTrue(0.05 <= stat.share_22_minus <= 0.26, stat.share_22_minus)
 
     def test_turnover_is_about_a_tenth(self) -> None:
         """入れ替わり（引退＋戦力外）の割合。約10%（NPB の退団の水準）。
@@ -477,6 +501,9 @@ class OffseasonPopulationTest(unittest.TestCase):
         1年目の外国人に余裕を持たせてから最小 6.8%）。
         #170 P1 から、戦力外が育成の昇格の分も空ける（新人の枠に上乗せ）ので、2年目からの入れ替わりは 8.9〜12.8%
         （シード 1〜4。昇格の希望の分だけ増える）。帯は変えず、引退との比べ方は昇格の分を除いた戦力外にした。
+        #362（育成の新人に高校生を増やし、昇格する選手が若くなった）で支配下が若くなり引退が減った（10年の平均
+        引退 4.6% → 4.4%・昇格の分を除いた戦力外 4.4% → 4.6%。入れ替わりの合計は同じ）。新人と昇格の人数が同じなら
+        引退が減った分だけ戦力外が増えるので、「引退のほうが多い」を「引退が戦力外の 0.9倍以上」にした。
         """
         for stat in self.years:
             with self.subTest(year=stat.year):
@@ -486,7 +513,7 @@ class OffseasonPopulationTest(unittest.TestCase):
         # 育成の昇格（#170）は新人の枠に上乗せで、戦力外がその分も空けるので、昇格の分を除いた戦力外と比べる
         retired = fmean(stat.retired_share for stat in self.years)
         released = fmean(stat.released_share - stat.promoted_share for stat in self.years)
-        self.assertGreater(retired, released, "引退のほうが多い（#168 の調整。昇格の上乗せの分を除く）")
+        self.assertGreater(retired, 0.9 * released, "引退が戦力外と同じくらい（#168 の調整。昇格の上乗せの分を除く）")
 
     def test_promotions_are_a_few_per_club(self) -> None:
         """育成の昇格（#170 P1）は1球団1年 `MAX_PROMOTIONS` 人まで、平均は 1〜3人の目安の中（2年目から。
@@ -586,6 +613,18 @@ class OffseasonPopulationTest(unittest.TestCase):
             mean = fmean(stat.rookie_route_potential_means[index] for stat in self.years)
             with self.subTest(route=route):
                 self.assertAlmostEqual(mean, 1.0, delta=0.05)
+
+    def test_development_rookies_are_about_half_high_school(self) -> None:
+        """#362: 育成の新人は育成の層の候補（高校生が中心）から取るので、高校が約半分（前は約1割。本指名の残りの
+        大学生ばかりだった）。伸びしろの倍率の平均は 1.0 の少し下（前は 0.83〜0.85）。実測（シード 1〜4）は
+        高校 47〜51%・倍率 0.93〜0.95。2年目からの合計で見る
+        （1回目のオフは合成の初期母集団で育成が0人から全球団6人ずつ取る）。"""
+        later = [stat for stat in self.years[1:] if stat.development_draftees]
+        total = sum(stat.development_draftees for stat in later)
+        high_school = sum(stat.development_high_school_share * stat.development_draftees for stat in later) / total
+        multiplier = sum(stat.development_potential_mean * stat.development_draftees for stat in later) / total
+        self.assertTrue(0.35 <= high_school <= 0.65, high_school)
+        self.assertTrue(0.90 <= multiplier <= 1.05, multiplier)
 
     def test_signed_foreigners_keep_the_old_foreign_rookies(self) -> None:
         """#169: 外国人は候補から獲得する（AI は見立てで上から取る）。候補の平均を下げた合わせ込み
