@@ -4,7 +4,8 @@
 推定・シミュレーション・オフはメモリの上だけで行う）。
 
     1年目: 実成績から能力を推定 → 1シーズン回す
-    シーズン中: 判定日（6月1日・7月1日）に AI の期中の昇格（`decide_midseason_promotions`。#170 P3b）を全球団で回す
+    シーズン中: 判定日（6月1日・7月1日）に AI の期中の昇格（`decide_midseason_promotions`。#170 P3b）と、その後で
+    外国人の獲得（`decide_midseason_signings`。#169 F3）を全球団で回す
     （人数はメモリの上の現役で数える近似。アプリは参照クエリでその年の在籍を数える）
     シーズンの間: 出場機会（シミュレーションした試合から数える）で `plan_offseason` を回し、結果（獲得した外国人と
     新人を含む）を適用
@@ -20,7 +21,7 @@ from __future__ import annotations
 import time
 from collections import Counter
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date
 from functools import partial
 from statistics import fmean, pstdev
@@ -36,7 +37,15 @@ from myapp.domain.pennant.development import (
 from myapp.domain.pennant.draft import DraftRoute, DraftTeam
 from myapp.domain.pennant.draft_meeting import DraftContext
 from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
-from myapp.domain.pennant.foreign_market import position_hole, squad_holes, world_strength
+from myapp.domain.pennant.foreign_market import (
+    ForeignSigning,
+    MidseasonForeignClub,
+    decide_midseason_signings,
+    position_hole,
+    sign_midseason,
+    squad_holes,
+    world_strength,
+)
 from myapp.domain.pennant.fork import with_birth_date
 from myapp.domain.pennant.initial_ratings import age_at_season_start
 from myapp.domain.pennant.offseason import (
@@ -48,6 +57,7 @@ from myapp.domain.pennant.offseason import (
 )
 from myapp.domain.pennant.offseason_player import overall_value, player_age
 from myapp.domain.pennant.ratings import PlayerRatings
+from myapp.domain.pennant.reinforcement import MidseasonRegistration, RegistrationKind
 from myapp.domain.pennant.retirement import PlayingTime
 from myapp.domain.pennant.schedule import ScheduleRules
 from myapp.domain.pennant.world import league_priority
@@ -180,22 +190,42 @@ def pools_of(members: Sequence[Member], teams: dict[int, TeamInfo]) -> dict[int,
 
 @dataclass
 class MidseasonTally:
-    """1シーズンの AI の期中の昇格（#170 P3b）。メモリの上で、判定日ごとに `review` が数える。"""
+    """1シーズンの AI の期中の補強（昇格は #170 P3b、外国人の獲得は #169 F3）。メモリの上で、判定日ごとに `review` が
+    数える。"""
 
-    registrations: dict[int, list[date]]
+    registrations: dict[int, list[MidseasonRegistration]]
     # シーズン中の支配下の最大（球団ごとの、判定日の後の人数の最大）
     max_registered: int = 0
+    # 期中に獲得した外国人（獲得の順）
+    signings: list[ForeignSigning] = field(default_factory=list)
+
+    def _of(self, kind: RegistrationKind) -> list[MidseasonRegistration]:
+        return [item for items in self.registrations.values() for item in items if item.kind is kind]
 
     @property
     def count(self) -> int:
-        return sum(len(days) for days in self.registrations.values())
+        """期中の昇格の人数。"""
+        return len(self._of(RegistrationKind.PROMOTION))
+
+    @property
+    def most(self) -> int:
+        """1球団の期中の昇格の最多。"""
+        return max(Counter(item.team_id for item in self._of(RegistrationKind.PROMOTION)).values(), default=0)
 
 
 def midseason_review(
-    members: list[Member], teams: dict[int, TeamInfo], tally: MidseasonTally, on: date, *, seed: int
+    members: list[Member],
+    teams: dict[int, TeamInfo],
+    tally: MidseasonTally,
+    names: set[str],
+    on: date,
+    *,
+    seed: int,
 ) -> dict[int, ClubRoster] | None:
-    """判定日に AI の期中の昇格（`decide_midseason_promotions`）を回し、上げた選手を `members` に書き込む（その場で
-    置き換える）。上げた球団があれば、新しい1軍の登録を返す。メモリの上には受け持つ球団が無いので、全球団が対象。"""
+    """判定日に AI の期中の昇格（`decide_midseason_promotions`）と、昇格の後の球団で外国人の獲得
+    （`decide_midseason_signings`）を回し、上げた選手と獲得した外国人を `members` に書き込む（その場で置き換え・
+    足す）。名簿が変わった球団があれば、新しい1軍の登録を返す。メモリの上には受け持つ球団が無いので、全球団が対象。
+    獲得した外国人の名前は `names` に足す。"""
     pools = pools_of(members, teams)
     clubs = []
     for team_id, team in teams.items():
@@ -226,17 +256,83 @@ def midseason_review(
                 number=promotions[member.player_id].number,
                 promoted_year=on.year,
             )
-            tally.registrations.setdefault(member.team_id, []).append(on)
+            tally.registrations.setdefault(member.team_id, []).append(
+                MidseasonRegistration(member.team_id, member.player_id, on, RegistrationKind.PROMOTION)
+            )
+    signings = _midseason_signings(members, teams, tally, names, on, seed=seed)
     registered = Counter(m.team_id for m in members if m.contract is ContractStatus.REGISTERED)
     tally.max_registered = max(tally.max_registered, *registered.values())
-    return rosters_of(members, teams)[0] if promotions else None
+    return rosters_of(members, teams)[0] if promotions or signings else None
+
+
+def _midseason_signings(
+    members: list[Member], teams: dict[int, TeamInfo], tally: MidseasonTally, names: set[str], on: date, *, seed: int
+) -> list[ForeignSigning]:
+    """昇格の後の球団で、AI の期中の外国人の獲得を回して `members` に足す（アプリの `MidseasonReview` と同じ順）。"""
+    pools = pools_of(members, teams)
+    clubs = []
+    for team_id, team in teams.items():
+        own = [m for m in members if m.team_id == team_id]
+        clubs.append(
+            MidseasonForeignClub(
+                team_id=team_id,
+                is_managed=False,
+                pool=pools[team_id],
+                foreign_rules=team.foreign_rules,
+                held_foreign=sum(1 for m in own if m.profile.is_foreign_player),
+                registered_count=sum(1 for m in own if m.contract is ContractStatus.REGISTERED),
+                registered_limit=team.registered_limit,
+                signed_on=tuple(
+                    item.registered_on
+                    for item in tally.registrations.get(team_id, ())
+                    if item.kind is RegistrationKind.SIGNING
+                ),
+            )
+        )
+    signings: list[ForeignSigning] = []
+    next_id = max(m.player_id for m in members) + 1
+    for candidate in decide_midseason_signings(clubs, on=on, world_seed=seed, used_names=names):
+        own = [m for m in members if m.team_id == candidate.team_id]
+        signing = sign_midseason(
+            candidate,
+            world_seed=seed,
+            used_names=names,
+            used_numbers=frozenset(m.number for m in own),
+            surname_counts=Counter(m.profile.back_name.split(".")[-1] for m in own if m.profile.back_name),
+        )
+        player_id = next_id + len(signings)
+        members.append(
+            Member(
+                player_id=player_id,
+                team_id=signing.team_id,
+                league_id=teams[signing.team_id].league_id,
+                name=signing.name,
+                position=signing.position,
+                profile=signing.profile,
+                number=signing.number,
+                joined_year=on.year,
+                ratings=PlayerRatings(player_id, on.year, signing.ratings),
+                contract=signing.contract,
+            )
+        )
+        tally.registrations.setdefault(signing.team_id, []).append(
+            MidseasonRegistration(signing.team_id, player_id, on, RegistrationKind.SIGNING)
+        )
+        signings.append(signing)
+    tally.signings.extend(signings)
+    return signings
 
 
 def format_midseason(tally: MidseasonTally, teams: int) -> str:
-    """そのシーズンの AI の期中の昇格（#170 P3b）の人数と、シーズン中の支配下の最大。"""
-    most = max((len(days) for days in tally.registrations.values()), default=0)
+    """そのシーズンの AI の期中の昇格（#170 P3b）と外国人の獲得（#169 F3）の人数と、シーズン中の支配下の最大。"""
+    signed = tally.signings
+    positions = Counter(signing.position for signing in signed)
+    values = [overall_value(signing.ratings) for signing in signed]
     return (
-        f"期中の昇格 {tally.count}人（1球団 平均 {tally.count / max(1, teams):.2f}人・最多 {most}人）  "
+        f"期中の昇格 {tally.count}人（1球団 平均 {tally.count / max(1, teams):.2f}人・最多 {tally.most}人）  "
+        f"期中の外国人の獲得 {len(signed)}人（1球団 平均 {len(signed) / max(1, teams):.2f}人・"
+        f"投手 {positions[Position.PITCHER]}・内野手 {positions[Position.INFIELDER]}・"
+        f"外野手 {positions[Position.OUTFIELDER]}・総合 平均 {_mean(values):.1f}）  "
         f"シーズン中の支配下の最大 {tally.max_registered}人"
     )
 
@@ -573,7 +669,7 @@ def run_seasons(
             seed=seed,
             year=current,
             usage=usage,
-            review=partial(midseason_review, members, teams, tally, seed=seed),
+            review=partial(midseason_review, members, teams, tally, names, seed=seed),
         )
         say(f"{games}試合  {(time.perf_counter() - started) / games * 1000:.1f} ms/試合")
         say(format_usage(usage.rows()))

@@ -18,7 +18,12 @@ from myapp.domain.pennant.development import (
     decide_midseason_promotions,
     midseason_promotion_number,
 )
-from myapp.domain.pennant.reinforcement import PlaySegment, split_at_reviews
+from myapp.domain.pennant.reinforcement import (
+    MidseasonRegistration,
+    PlaySegment,
+    RegistrationKind,
+    split_at_reviews,
+)
 from myapp.domain.simulation.manager import ClubRoster, SimBatter, SimPitcher
 from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings
 from myapp.domain.value_objects import ForeignPlayerRules, Position
@@ -51,7 +56,21 @@ def pool() -> ClubRoster:
     return ClubRoster(team_id=1, name="球団", batters=tuple(batters), pitchers=tuple(pitchers))
 
 
-def club(*prospects: MidseasonProspect, team_id: int = 1, **changes) -> MidseasonClub:
+def club(
+    *prospects: MidseasonProspect,
+    team_id: int = 1,
+    registrations: tuple[date, ...] = (),
+    signings: tuple[date, ...] = (),
+    **changes,
+) -> MidseasonClub:
+    """`registrations` は期中の昇格の登録日、`signings` は期中の外国人の獲得（#169 F3）の登録日。"""
+    recorded = tuple(
+        MidseasonRegistration(team_id, 800 + n, registered_on, kind)
+        for n, (registered_on, kind) in enumerate(
+            [(on, RegistrationKind.PROMOTION) for on in registrations]
+            + [(on, RegistrationKind.SIGNING) for on in signings]
+        )
+    )
     base = MidseasonClub(
         team_id=team_id,
         is_managed=False,
@@ -61,7 +80,7 @@ def club(*prospects: MidseasonProspect, team_id: int = 1, **changes) -> Midseaso
         registered_count=60,
         registered_limit=LIMIT,
         used_numbers=frozenset({"1", "2", "011"}),
-        registrations=(),
+        registrations=recorded,
     )
     return replace(base, **changes)
 
@@ -133,6 +152,14 @@ class MidseasonPromotionRuleTest(unittest.TestCase):
         """その判定日の登録（登録日が登録日以降）がもうあれば、やり直しても2人目を上げない。"""
         candidate = prospect(900, Position.PITCHER, 70)
         self.assertEqual(promoted([club(candidate, registrations=(JUNE_1,))]), [])
+
+    def test_foreign_signings_are_not_counted_as_promotions(self):
+        """期中の外国人の獲得（#169 F3）の登録は、1年2人にも、その判定日のやり直しにも数えない（同じ判定日に昇格の後で
+        獲得しても、昇格は止まらない）。"""
+        candidate = prospect(900, Position.PITCHER, 70)
+        self.assertEqual(promoted([club(candidate, signings=(JUNE_1,))]), [(1, 900)])
+        one_each = {"registrations": (date(YEAR, 6, 2),), "signings": (date(YEAR, 6, 2),)}
+        self.assertEqual(promoted([club(candidate, **one_each)], on=date(YEAR, 7, 1)), [(1, 900)])
 
     def test_one_slot_is_left_under_the_limit_for_the_foreign_signing(self):
         """支配下の上限70のうち1人は #169 F3 の期中の獲得のために残す（69人までは上げる）。上限が無ければ

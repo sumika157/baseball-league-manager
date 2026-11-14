@@ -1,0 +1,105 @@
+{% comment %}
+編成の「外国人」タブの期中の形（#169 F3）。補強の窓（シーズンを締めた後〜7月31日）の中だけ出る（ビューが foreign_midseason を渡す）。
+上に今の外国人（保有の人数と上限・1軍の枠・その年の枠の数え方。FA 取得で枠外の印）、下にその年の期中の候補の表（位置・年齢・前所属・スカウトの見立て・見込みの区分）と、行ごとの「獲得する」（オーナーだけ。確認つき）。
+候補の本当の能力は出さない（見立てだけ。2026-10-25 ユーザー決定 Q4 A）。
+1年の上限・保有の上限・支配下の上限で獲得できないときは、ボタンの代わりに理由を出す（押しても弾かれるだけの導線を見せない）。
+その年の獲得が済んだら、候補の表は出さない（次に引く候補はその年には獲得できない）。
+フォームは、画面を開いたときの次の公式戦の日（expected_next_game_on）を送る（日を進めた後の古い画面から獲得しない）。
+{% endcomment %}
+{% load scoped %}
+<div class="card mb-4" id="club-foreign-midseason">
+  <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span>{{ foreign_midseason.year }}年のシーズン中の外国人の獲得</span>
+    <span class="stat-muted" style="font-size: 0.8125rem;" data-testid="foreign-signed-count">今季の獲得 {{ foreign_midseason.signed_this_season }}人／上限 {{ foreign_midseason.signing_limit }}人 · 支配下 {{ foreign_midseason.registered_count }}人{% if foreign_midseason.registered_limit is not None %}／上限 {{ foreign_midseason.registered_limit }}人{% endif %}</span>
+  </div>
+  <div class="card-body">
+    <p class="mb-3">シーズン中に外国人を獲得できるのは、{{ foreign_midseason.deadline.month }}月{{ foreign_midseason.deadline.day }}日までです（1年に{{ foreign_midseason.signing_limit }}人まで）。獲得した選手は支配下・新外国人になり、次の試合（{{ foreign_midseason.next_game_on.month }}月{{ foreign_midseason.next_game_on.day }}日）から1軍に入れられます。背番号は空いている番号から自動で決まり、獲得は取り消せません。</p>
+    {% if foreign_midseason.blocked_reason %}
+      <div class="alert alert-secondary" data-testid="foreign-midseason-blocked">{{ foreign_midseason.blocked_reason }}獲得できません。</div>
+    {% endif %}
+
+    <h2 class="h6 mb-2">今の外国人</h2>
+    <p class="stat-muted mb-2" style="font-size: 0.8125rem;" data-testid="foreign-held-count">保有 {{ foreign_midseason.held_count }}人／上限 {{ foreign_midseason.held_limit }}人 · 1軍の枠 {{ foreign_midseason.active_rules.label }}{% if foreign_midseason.quota_exempt_count %} · FA取得で枠外 {{ foreign_midseason.quota_exempt_count }}人{% endif %}</p>
+    {% if foreign_midseason.players %}
+      <div class="table-responsive">
+        <table class="table table-hover tabular-nums">
+          <thead>
+            <tr>
+              <th>選手</th>
+              <th>登録位置</th>
+              <th>区分</th>
+              <th>今季の枠</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in foreign_midseason.players %}
+              <tr data-testid="foreign-held-row">
+                <td><a href="{% scoped_url 'player_detail' foreign_midseason.team_id row.player_id %}" class="player-name">{{ row.name }}</a></td>
+                <td>{{ row.position.value }}</td>
+                <td>{% if row.is_development %}<span class="badge bg-warning text-dark">育成</span>{% else %}支配下{% endif %}</td>
+                <td>{% if row.counts_toward_quota %}枠で数える{% else %}<span class="stat-muted text-nowrap" title="FA 資格の取得で、外国人枠の対象外（野球協約 第82条 (4)）" data-testid="quota-exempt">FA取得で枠外</span>{% endif %}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="stat-muted">外国人選手はいません。</p>
+    {% endif %}
+
+    <h2 class="h6 mb-2 mt-4">今季の候補</h2>
+    {% if foreign_midseason.is_done %}
+    <p class="stat-muted mb-0" data-testid="foreign-midseason-done">今季のシーズン中の獲得は済みました。</p>
+    {% else %}
+    <div class="table-responsive">
+      <table class="table table-hover tabular-nums">
+        <thead>
+          <tr>
+            <th>候補</th>
+            <th>位置</th>
+            <th class="text-end">年齢</th>
+            <th>前所属</th>
+            <th>見立て</th>
+            {% if is_owner and foreign_midseason.can_sign %}<th></th>{% endif %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in foreign_midseason.candidates %}
+            <tr data-testid="foreign-candidate-row">
+              <td>{{ row.name }}</td>
+              <td>{{ row.position.value }}</td>
+              <td class="text-end stat-muted">{{ row.age }}</td>
+              <td>{{ row.background.label }}</td>
+              <td>
+                <div>
+                  {{ row.overall.label }} {% include 'myapp/_rating_grade.html' with rating=row.overall %}
+                  <span class="ms-2" data-outlook>見込み {% include 'pennant/_outlook_grade.html' with outlook=row.outlook %}</span>
+                </div>
+                <div class="stat-muted" style="font-size: 0.8125rem;">
+                  {% for cell in row.cells %}{{ cell.label }} {% include 'myapp/_rating_grade.html' with rating=cell %}{% if not forloop.last %} · {% endif %}{% endfor %}
+                </div>
+              </td>
+              {% if is_owner and foreign_midseason.can_sign %}
+                <td class="text-end">
+                  <form method="post" action="{% url 'pennant_club' world.world_id %}" class="m-0" onsubmit="return confirm('{{ row.name|escapejs }}を獲得します。獲得は取り消せません。よろしいですか?')">
+                    {% csrf_token %}
+                    <input type="hidden" name="section" value="foreign_midseason">
+                    <input type="hidden" name="candidate" value="{{ row.index }}">
+                    <input type="hidden" name="expected_next_game_on" value="{{ foreign_midseason.next_game_on|date:'Y-m-d' }}">
+                    <button type="submit" class="btn btn-primary btn-sm">獲得する</button>
+                  </form>
+                </td>
+              {% endif %}
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% with first=foreign_midseason.candidates.0 %}{% if first %}
+    <p class="page-subtitle mb-0" style="font-size: 0.8125rem;">
+      能力は自軍のスカウトの見立て（誤差のある推定）です。見込みは、{{ first.outlook.peak_age }}歳ごろの総合の見込みを同じ見立てで示した区分です（{{ foreign_midseason.year }}年4月1日に{{ first.outlook.peak_age }}歳以上は「—」）。年齢は{{ foreign_midseason.year }}年4月1日の年齢です。
+    </p>
+    {% endif %}{% endwith %}
+    {% endif %}
+  </div>
+</div>

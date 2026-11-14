@@ -343,15 +343,16 @@ class ForeignSigningPlanRepository(Protocol):
 
 @runtime_checkable
 class MidseasonRegistrationRepository(Protocol):
-    """期中の支配下登録の記録（`MidseasonRegistration`。#170 P3a）。書くのは期中の登録の操作だけ。
+    """期中の支配下登録の記録（`MidseasonRegistration`。育成からの昇格は #170 P3a、外国人の獲得は #169 F3）。
+    書くのは期中の登録の操作（昇格・獲得）だけ。
 
-    ペナントの世界にだけ置ける。在籍は年単位なので、オフの昇格と期中の昇格を区別するために登録日だけを足す
-    （`domain/pennant/reinforcement.py`）。
+    ペナントの世界にだけ置ける。在籍は年単位なので、オフの昇格・獲得と期中の昇格・獲得を区別するために登録日だけを
+    足す（`domain/pennant/reinforcement.py`）。
     """
 
     def add(self, registration: MidseasonRegistration) -> None:
-        """登録を1つ書く。在籍の昇格の年と登録日の年が合わなければ InvalidContract
-        （`reinforcement.ensure_registration_matches_stint`）。
+        """登録を1つ書く。今の在籍と区分ごとに照合し（昇格は昇格の年、獲得は加入年と経路が新外国人）、合わなければ
+        InvalidContract（`reinforcement.ensure_registration_matches_stint`）。
 
         実データの範囲には書けない（InvalidWorld）。範囲の外の球団は TeamNotFound、球団に在籍していない選手は
         PlayerNotFound。
@@ -365,7 +366,7 @@ class MidseasonRegistrationRepository(Protocol):
     def find_in_year(self, year: int) -> list[MidseasonRegistration]:
         """範囲の全球団の、登録日が `year` 年の期中の登録（球団・登録日・選手の id の順）。
 
-        AI の期中の昇格（#170 P3b）が、判定日に球団ごとのその年の登録を1本で数える。
+        AI の期中の昇格（#170 P3b）と獲得（#169 F3）が、判定日に球団ごとのその年の登録を1本で数える。
         """
         ...
 

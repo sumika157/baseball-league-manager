@@ -32,8 +32,13 @@
   保有の上限まで選べる。締めるときに、新しい支配下の選手の枠・保有の上限・位置の最低人数に収まらない分を、見立ての
   低い候補から削る（`confirm_chosen_signings`）。候補の表に出す見込みの区分は `candidate_outlook_grade`
 
-シーズン中の獲得（F3）は、ここに後から足す（局面 `SigningPhase.MIDSEASON` と `ensure_signable` の
-1年の上限は、その土台）。
+- **シーズン中の獲得**（F3）: 補強の窓（`reinforcement.ReinforcementWindow`。締めた後〜7月31日）の中で、期中の候補
+  （`SigningPhase.MIDSEASON`。何回目 `nth` はその年に期中に獲得した人数）から1年 `MAX_MIDSEASON_SIGNINGS` 人まで。
+  GM は窓の中ならいつでも（`application/pennant_foreign_signing.py`）、AI は判定日に昇格の後で決める
+  （`decide_midseason_signings`）。
+  獲得した外国人の名前・背番号・背ネームはオフと同じ作り方（`sign_midseason`）。能力は錨をかけずにその年の能力にする
+  （候補の分布は、獲得した外国人の錨の前の平均が `SIGNED_RATING_MEAN` になるよう合わせてある。錨は締めるときに
+  世界全体にかかる）
 """
 
 from __future__ import annotations
@@ -47,10 +52,17 @@ from statistics import fmean
 
 from ..exceptions import InvalidSigning
 from ..simulation.estimate import draw_growth_type, draw_potential, with_growth, with_potential
-from ..simulation.manager import ROTATION_SIZE
-from ..simulation.randomness import game_seed, make_random, weighted_index
+from ..simulation.manager import ROTATION_SIZE, ClubRoster, choose_active_roster
+from ..simulation.randomness import GameRandom, game_seed, make_random, weighted_index
 from ..simulation.ratings import AVERAGE_RATING, PitcherRatings, RatingGrade
-from ..value_objects import AcquisitionRoute, ContractStatus, ForeignBackground, Position, Profile
+from ..value_objects import (
+    AcquisitionRoute,
+    ContractStatus,
+    ForeignBackground,
+    ForeignPlayerRules,
+    Position,
+    Profile,
+)
 from ..virtual_players import generator
 from .draft import (
     DraftRoute,
@@ -65,6 +77,7 @@ from .initial_ratings import SEASON_START_MONTH, STRENGTH_UNIT
 from .offseason_player import Ratings
 from .outlook import PEAK_AGE, outlook_grade, projected_ratings
 from .prospects import draw_prospect_ratings, expected_prospect_ratings
+from .reinforcement import ReinforcementWindow
 
 # 1回の候補の、位置ごとの人数（計8人。捕手はいない＝外国人の捕手は NPB でもまれ）
 CANDIDATES_BY_POSITION: Mapping[Position, int] = {
@@ -74,7 +87,7 @@ CANDIDATES_BY_POSITION: Mapping[Position, int] = {
 }
 # 外国人の保有の上限（ゲームの上限。協約は保有の人数を縛らない。#169 Q4）
 MAX_FOREIGN_HELD = 6
-# シーズン中の獲得の、1球団1年の上限（#169 Q4。F3 が使う）
+# シーズン中の獲得の、1球団1年の上限（#169 Q4。GM・AI とも）
 MAX_MIDSEASON_SIGNINGS = 1
 # 獲得した外国人の能力の平均（錨の前）。今までの外国人の新人と同じ（`release.foreign_prospect_value` の出典）
 SIGNED_RATING_MEAN = 50.0
@@ -444,6 +457,157 @@ def ensure_signable(
         raise InvalidSigning(f"シーズン中の外国人選手の獲得は1年に{MAX_MIDSEASON_SIGNINGS}人までです。")
 
 
+# --- シーズン中の獲得（#169 F3） ---
+
+
+def midseason_key(year: int, nth: int, index: int) -> CandidateKey:
+    """`year` 年の期中の候補の鍵。`nth` はその年に期中に獲得した人数（獲得するたびに別の候補になる）。"""
+    return CandidateKey(year, SigningPhase.MIDSEASON, nth, index)
+
+
+@dataclass(frozen=True)
+class MidseasonForeignClub:
+    """AI の期中の外国人の獲得（`decide_midseason_signings`）の材料。判定日の、**昇格の後の**球団ひとつ。"""
+
+    team_id: int
+    # 受け持つ球団（GM が決める。AI は触れない）
+    is_managed: bool
+    # 支配下の登録候補（能力のある在籍選手。その判定日に昇格した選手を含む）と、所属リーグの1軍の外国人枠
+    pool: ClubRoster
+    foreign_rules: ForeignPlayerRules
+    # 在籍する外国人の人数（支配下・育成とも。保有の上限 `MAX_FOREIGN_HELD` で数える）
+    held_foreign: int
+    # その年の支配下の人数（昇格の後）とリーグの上限（None は無制限）
+    registered_count: int
+    registered_limit: int | None
+    # その年に期中に外国人を獲得した登録日（GM・AI とも。`RegistrationKind.SIGNING` の登録）
+    signed_on: tuple[date, ...]
+
+
+def squad_of(pool: ClubRoster) -> Squad:
+    """登録候補の戦力（位置と今の能力。`squad_strength` の材料）。"""
+    return [(batter.position, batter.ratings) for batter in pool.batters] + [
+        (Position.PITCHER, pitcher.ratings) for pitcher in pool.pitchers
+    ]
+
+
+def foreign_openings(pool: ClubRoster, rules: ForeignPlayerRules) -> frozenset[Position]:
+    """自動の1軍（`choose_active_roster`）で、外国人枠に空きのある位置。
+
+    1軍で外国人枠に数える選手（`counts_as_foreign`）が枠の計を下回るときだけ、投手の枠に空きがあれば投手、野手の枠に
+    空きがあれば内野手・外野手（外国人の候補に捕手はいない）。計が無制限なら、埋める目安が無いので空いていない扱い。
+    """
+    if rules.active is None:
+        return frozenset()
+    active = choose_active_roster(pool, rules=rules)
+    pitchers = sum(1 for pitcher in active.pitchers if pitcher.counts_as_foreign)
+    batters = sum(1 for batter in active.batters if batter.counts_as_foreign)
+    if pitchers + batters >= rules.active:
+        return frozenset()
+    positions: set[Position] = set()
+    if rules.pitchers is None or pitchers < rules.pitchers:
+        positions.add(Position.PITCHER)
+    if rules.batters is None or batters < rules.batters:
+        positions.update((Position.INFIELDER, Position.OUTFIELDER))
+    return frozenset(positions)
+
+
+def decide_midseason_signings(
+    clubs: Sequence[MidseasonForeignClub], *, on: date, world_seed: int, used_names: Collection[str]
+) -> tuple[ForeignCandidate, ...]:
+    """判定日に AI が獲得する期中の候補（球団 id の順。1球団1人まで）。`on` は登録日（判定日以降の最初の公式戦の日）。
+
+    - **受け持つ球団は対象にしない**（GM が「外国人」タブで決める）。補強の窓の外なら誰も獲得しない
+    - 獲得するのは次をすべて満たす球団: 自動の1軍で外国人枠に数える選手が枠の計を下回る（`foreign_openings`）・
+      支配下が上限未満（期中の昇格が空けておいた1枠＝`development.MIDSEASON_RESERVED_SLOTS` を使う）・
+      保有が `MAX_FOREIGN_HELD` 人未満・その年の期中の獲得が `MAX_MIDSEASON_SIGNINGS` 人未満（`ensure_signable`）
+    - その判定日の獲得の登録（登録日が `on` 以降）がもうある球団は獲得しない（やり直しても2人目を獲得しない）
+    - 候補は期中の候補（`draw_candidates`。何回目はその年の獲得の人数）のうち、1軍の枠に空きのある位置だけ。
+      評価はオフの AI と同じ「見立ての総合 + `HOLE_WEIGHT` × 位置の穴」。穴の基準は世界の全球団の登録候補の戦力
+      （`world_strength`。受け持つ球団も含む）。同じ評価は候補の添字の小さい方
+
+    候補の名前は `used_names`（世界の全選手の名前）と重ならないように引く。判定日の材料だけで決まり、球団の並びに
+    依存しない。獲得した外国人にするのは `sign_midseason`（名前の重なりは獲得の順に解消する）。
+    """
+    if not ReinforcementWindow.is_open(next_regular_game_on=on):
+        return ()
+    reference = world_strength([squad_of(club.pool) for club in clubs])
+    names = frozenset(used_names)
+    chosen: list[ForeignCandidate] = []
+    for club in sorted(clubs, key=lambda item: item.team_id):
+        if club.is_managed:
+            continue
+        this_year = [signed for signed in club.signed_on if signed.year == on.year]
+        if any(signed >= on for signed in this_year) or len(this_year) >= MAX_MIDSEASON_SIGNINGS:
+            continue
+        if club.registered_limit is not None and club.registered_count + 1 > club.registered_limit:
+            continue
+        if club.held_foreign >= MAX_FOREIGN_HELD:
+            continue
+        openings = foreign_openings(club.pool, club.foreign_rules)
+        if not openings:
+            continue
+        candidates = draw_candidates(
+            club.team_id,
+            year=on.year,
+            phase=SigningPhase.MIDSEASON,
+            world_seed=world_seed,
+            used_names=names,
+            nth=len(this_year),
+        )
+        allowed = [candidate for candidate in candidates if candidate.position in openings]
+        if not allowed:
+            continue
+        holes = squad_holes(squad_of(club.pool), reference)
+        best = max(
+            allowed,
+            key=lambda candidate: (
+                scouting_value(scouting_report(candidate, world_seed=world_seed).ratings)
+                + HOLE_WEIGHT * position_hole(holes, candidate.position),
+                -candidate.key.index,
+            ),
+        )
+        ensure_signable(
+            [best.key],
+            candidates,
+            held_foreign=club.held_foreign,
+            phase=SigningPhase.MIDSEASON,
+            signed_this_season=len(this_year),
+        )
+        chosen.append(best)
+    return tuple(chosen)
+
+
+def sign_midseason(
+    candidate: ForeignCandidate,
+    *,
+    world_seed: int,
+    used_names: MutableSet[str],
+    used_numbers: Collection[str],
+    surname_counts: Mapping[str, int],
+) -> ForeignSigning:
+    """期中の候補を、獲得した外国人にする（GM・AI とも。オフの `_sign` と同じ作り方）。
+
+    名前が世界の選手（`used_names`）と重なっていれば名前だけを引き直し、`used_names` に足す。背番号は球団で使われて
+    いない番号（`used_numbers`）から、乱数 `midseason-foreign-number-<球団 id>-<何回目>`（年はその年）で引く。
+    背ネームは球団の苗字の人数（`surname_counts`）で決める。能力は候補の能力のまま（錨の前の尺度。締めるときに
+    世界全体の錨がかかる）。
+    """
+    key = candidate.key
+    if key.phase is not SigningPhase.MIDSEASON:
+        raise ValueError("期中の獲得には、期中の候補だけを渡せます。")
+    (signing,) = _signed(
+        candidate.team_id,
+        [candidate],
+        rng=make_random(game_seed(world_seed, key.year, f"midseason-foreign-number-{candidate.team_id}-{key.nth}")),
+        used_numbers=used_numbers,
+        surname_counts=surname_counts,
+        world_seed=world_seed,
+        used_names=used_names,
+    )
+    return signing
+
+
 # --- GM の指名（受け持つ球団のオフ。#169 F2） ---
 
 
@@ -614,13 +778,35 @@ def _sign(
     world_seed: int,
     used_names: MutableSet[str],
 ) -> list[ForeignSigning]:
-    """候補を獲得した外国人にする（名前の重複の解消・背番号・背ネーム）。"""
-    names = [
-        _resolved_name(candidate, team.team_id, world_seed=world_seed, used_names=used_names) for candidate in chosen
-    ]
-    rng = make_random(game_seed(world_seed, year + 1, f"foreign-number-{team.team_id}"))
-    used_numbers = set(team.used_numbers)
-    surnames = Counter(team.surname_counts) + Counter(name.surname_romaji for name in names)
+    """オフの候補を獲得した外国人にする。背番号は球団ごとの乱数（`foreign-number-<球団 id>`、年は翌年）。"""
+    return _signed(
+        team.team_id,
+        chosen,
+        rng=make_random(game_seed(world_seed, year + 1, f"foreign-number-{team.team_id}")),
+        used_numbers=team.used_numbers,
+        surname_counts=team.surname_counts,
+        world_seed=world_seed,
+        used_names=used_names,
+    )
+
+
+def _signed(
+    team_id: int,
+    chosen: Sequence[ForeignCandidate],
+    *,
+    rng: GameRandom,
+    used_numbers: Collection[str],
+    surname_counts: Mapping[str, int],
+    world_seed: int,
+    used_names: MutableSet[str],
+) -> list[ForeignSigning]:
+    """候補を獲得した外国人にする（名前の重複の解消・背番号・背ネーム）。オフと期中が共有する。
+
+    `used_numbers` は球団でいま使われている背番号、`surname_counts` は球団の選手の背ネームの苗字の人数。
+    """
+    names = [_resolved_name(candidate, team_id, world_seed=world_seed, used_names=used_names) for candidate in chosen]
+    numbers = set(used_numbers)
+    surnames = Counter(surname_counts) + Counter(name.surname_romaji for name in names)
     result = []
     for candidate, name in zip(chosen, names, strict=True):
         back_name = generator.back_name(
@@ -628,9 +814,9 @@ def _sign(
         )
         result.append(
             ForeignSigning(
-                team_id=team.team_id,
+                team_id=team_id,
                 candidate=candidate,
-                number=draw_number(rng, used_numbers),
+                number=draw_number(rng, numbers),
                 name=name.name,
                 profile=replace(
                     candidate.profile,

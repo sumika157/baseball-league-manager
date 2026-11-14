@@ -57,6 +57,9 @@ DEVELOPMENT_PLAN_SECTION = "development_plan"
 # 「外国人」タブ（公式戦を終えてから締めるまで。外国人のオフの指名。#169 F2）と、その hidden の `section`
 FOREIGN_TAB = "foreign"
 FOREIGN_SECTION = "foreign"
+# 同じ「外国人」タブの期中の形（補強の窓＝締めた後〜7月31日。期中の外国人の獲得。#169 F3）の hidden の `section`。
+# オフの形（公式戦を終えてから締めるまで）とは時期が重ならない
+FOREIGN_MIDSEASON_SECTION = "foreign_midseason"
 
 ACTION_MANUAL = "manual"
 ACTION_SAVE = "save"
@@ -278,6 +281,21 @@ def parse_midseason_promotion(post: QueryDict) -> tuple[int, date]:
     if player_id is None:
         raise ClubInputError(REOPEN)
     return player_id, next_game_on
+
+
+def parse_midseason_signing(post: QueryDict) -> tuple[int, date]:
+    """「外国人」タブの期中の「獲得する」: 候補の添字と、画面を開いたときの次の公式戦の日。
+
+    どちらかが欠けている・読めないなら古い画面として弾く（キーの欠落を既定値で埋めない）。
+    """
+    index = to_int(post.get("candidate"))
+    try:
+        next_game_on = date.fromisoformat(post.get("expected_next_game_on") or "")
+    except ValueError:
+        raise ClubInputError(REOPEN) from None
+    if index is None:
+        raise ClubInputError(REOPEN)
+    return index, next_game_on
 
 
 def parse_releases(post: QueryDict, current: ReleasePlanView) -> list[int]:
