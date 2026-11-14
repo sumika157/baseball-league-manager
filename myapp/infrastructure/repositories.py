@@ -65,7 +65,11 @@ from ..domain.pennant.foreign_market import ForeignSigningPlan, offseason_key
 from ..domain.pennant.popularity import ClubPopularity, Popularity
 from ..domain.pennant.postseason import PostseasonFormat
 from ..domain.pennant.ratings import PlayerRatings
-from ..domain.pennant.reinforcement import MidseasonRegistration, ensure_registration_matches_stint
+from ..domain.pennant.reinforcement import (
+    MidseasonRegistration,
+    RegistrationKind,
+    ensure_registration_matches_stint,
+)
 from ..domain.pennant.release import ReleasePlan
 from ..domain.pennant.schedule import Fixture
 from ..domain.pennant.season import is_season_closed
@@ -1909,15 +1913,23 @@ class DjangoMidseasonRegistrationRepository:
         stint = (
             stints_in(self._scope)
             .filter(team_id=registration.team_id, player_id=registration.player_id, to_year__isnull=True)
-            .values("promoted_year")
+            .values("promoted_year", "from_year", "acquired_via")
             .first()
         )
         if stint is None:
             raise PlayerNotFound(f"この球団に在籍していない選手は登録できません（id={registration.player_id}）。")
-        # 同じ事実（昇格の年）が在籍と登録日の2か所にあるので、書く前に照合する
-        ensure_registration_matches_stint(registration.registered_on, stint["promoted_year"])
+        # 同じ事実（昇格の年・獲得した年）が在籍と登録日の2か所にあるので、書く前に照合する
+        ensure_registration_matches_stint(
+            registration,
+            promoted_year=stint["promoted_year"],
+            from_year=stint["from_year"],
+            acquired_via=AcquisitionRoute.from_label(stint["acquired_via"]) if stint["acquired_via"] else None,
+        )
         orm_models.PennantMidseasonRegistration.objects.create(
-            team_id=registration.team_id, player_id=registration.player_id, registered_on=registration.registered_on
+            team_id=registration.team_id,
+            player_id=registration.player_id,
+            registered_on=registration.registered_on,
+            kind=registration.kind.value,
         )
 
     def find_by_team(self, team_id: int) -> list[MidseasonRegistration]:
@@ -1925,7 +1937,12 @@ class DjangoMidseasonRegistrationRepository:
             raise TeamNotFound(f"球団が見つかりません（id={team_id}）。")
         rows = midseason_registrations_in(self._scope).filter(team_id=team_id).order_by("registered_on", "player_id")
         return [
-            MidseasonRegistration(team_id=row.team_id, player_id=row.player_id, registered_on=row.registered_on)
+            MidseasonRegistration(
+                team_id=row.team_id,
+                player_id=row.player_id,
+                registered_on=row.registered_on,
+                kind=RegistrationKind(row.kind),
+            )
             for row in rows
         ]
 
@@ -1934,11 +1951,13 @@ class DjangoMidseasonRegistrationRepository:
             midseason_registrations_in(self._scope)
             .filter(registered_on__year=year)
             .order_by("team_id", "registered_on", "player_id")
-            .values_list("team_id", "player_id", "registered_on")
+            .values_list("team_id", "player_id", "registered_on", "kind")
         )
         return [
-            MidseasonRegistration(team_id=team_id, player_id=player_id, registered_on=registered_on)
-            for team_id, player_id, registered_on in rows
+            MidseasonRegistration(
+                team_id=team_id, player_id=player_id, registered_on=registered_on, kind=RegistrationKind(kind)
+            )
+            for team_id, player_id, registered_on, kind in rows
         ]
 
 

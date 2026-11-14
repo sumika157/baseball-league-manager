@@ -1,5 +1,5 @@
-"""AI の期中の昇格（#170 P3b）: 日を進める処理が判定日（6月1日・7月1日）をまたぐときに、AI の球団の育成を
-支配下に上げる。
+"""AI の期中の昇格（#170 P3b）と外国人の獲得（#169 F3）: 日を進める処理が判定日（6月1日・7月1日）をまたぐときに、
+AI の球団の育成を支配下に上げ、昇格の後の球団で1軍の外国人枠に空きがあれば外国人を獲得する。
 
 期待値の根拠: #170 のユーザーの決定 Q2 A（2026-11-12。判定日は6月1日・7月1日、1軍の同じ位置の基準以上の育成、
 1判定日1球団1人・1年2人まで、受け持つ球団は対象にしない）、P3a の申し送り（登録日は判定日以降の最初の公式戦の日で、
@@ -21,6 +21,7 @@ from myapp.application import pennant_midseason_review as review_module
 from myapp.application.pennant_simulation import DaySimulator
 from myapp.domain.exceptions import AlreadyAdvanced, TeamNotFound
 from myapp.domain.pennant.ratings import PlayerRatings
+from myapp.domain.pennant.reinforcement import RegistrationKind
 from myapp.domain.pennant.schedule import AdvanceTarget
 from myapp.domain.pennant.world import WorldScope
 from myapp.domain.simulation.ratings import PitcherRatings
@@ -105,14 +106,22 @@ class MidseasonReviewCase(SeasonCase):
         registrations = tuple(
             orm_models.PennantMidseasonRegistration.objects.filter(team__league__world_id=world_id)
             .order_by("registered_on", "player__name")
-            .values_list("player__name", "team__name", "registered_on")
+            .values_list("player__name", "team__name", "registered_on", "kind")
         )
         stints = tuple(
             orm_models.PlayerStint.objects.filter(team__league__world_id=world_id, promoted_year__isnull=False)
             .order_by("player__name")
             .values_list("player__name", "promoted_year", "number", "number_before_promotion")
         )
-        return registrations, stints
+        # 期中に獲得した外国人（#169 F3）の在籍（名前・球団・加入年・背番号・区分）
+        signed = tuple(
+            orm_models.PlayerStint.objects.filter(
+                team__league__world_id=world_id, from_year=YEAR, acquired_via=AcquisitionRoute.NEW_FOREIGN.value
+            )
+            .order_by("player__name")
+            .values_list("player__name", "team__name", "from_year", "number", "signed_as")
+        )
+        return registrations, stints, signed
 
     def advance_until(self, target, last_day):
         """`target` の単位で、世界の今日が `last_day` 以降になるまで進める。"""
@@ -123,9 +132,9 @@ class MidseasonReviewCase(SeasonCase):
 class MidseasonReviewTest(MidseasonReviewCase):
     def test_the_ai_promotes_one_prospect_on_each_review_date(self):
         """6月1日・7月1日に1人ずつ（強い順）。登録日は判定日以降の最初の試合日。3人目は1年2人までで上げない。"""
-        registrations, stints = self.whole_season[1]
+        registrations, stints, _ = self.whole_season[1]
         self.assertEqual(
-            registrations,
+            tuple(row[:3] for row in registrations if row[3] == RegistrationKind.PROMOTION.value),
             (
                 ("ラ育成1", self.rival.name, self.first_game_from[JUNE_1]),
                 ("ラ育成2", self.rival.name, self.first_game_from[JULY_1]),
@@ -138,7 +147,7 @@ class MidseasonReviewTest(MidseasonReviewCase):
 
     def test_the_managed_club_and_a_weak_prospect_are_not_promoted(self):
         """受け持つ球団の育成は GM が決める（AI は触れない）。1軍の基準に届かない育成は上げない。"""
-        names = {name for name, _, _ in self.whole_season[1][0]}
+        names = {name for name, *_ in self.whole_season[1][0]}
         self.assertNotIn("ホ育成", names)
         self.assertNotIn("ラ育成弱", names)
 
@@ -169,6 +178,44 @@ class MidseasonReviewTest(MidseasonReviewCase):
                     return
 
         self.assertEqual(self.whole_season, self.replay(self.world_a, months))
+
+
+class MidseasonForeignSigningReviewTest(MidseasonReviewCase):
+    """AI の期中の外国人の獲得（#169 F3）。SeasonCase の球団は外国人が0人なので、AI の球団は1軍の外国人枠に空きがあり、
+    最初の判定日（6月1日）に昇格の後で1人獲得する。1年1人までなので7月1日には獲得しない。"""
+
+    def signed_name(self) -> str:
+        (row,) = self.whole_season[1][2]
+        return row[0]
+
+    def test_the_ai_signs_one_foreign_player_on_the_first_review_date(self):
+        registrations, _, signed = self.whole_season[1]
+        (row,) = signed
+        name, team, from_year, number, signed_as = row
+        self.assertEqual((team, from_year, signed_as), (self.rival.name, YEAR, ContractStatus.REGISTERED.value))
+        self.assertEqual(
+            [r[:3] for r in registrations if r[3] == RegistrationKind.SIGNING.value],
+            [(name, self.rival.name, self.first_game_from[JUNE_1])],
+            "登録日は判定日以降の最初の試合日。受け持つ球団は獲得しない（GM が決める）",
+        )
+        self.assertTrue(number)
+
+    def test_the_signed_player_has_ratings_of_the_year_and_plays_only_from_the_registration_date(self):
+        def run():
+            self.advance(self.world_a, AdvanceTarget.SEASON_END)
+            player = orm_models.Player.objects.get(
+                name=self.signed_name(), stints__team__league__world_id=self.world_a
+            )
+            self.assertTrue(player.is_foreign_player)
+            ratings = DjangoRatingsRepository(WorldScope.pennant(self.world_a)).find_by_players([player.id], YEAR)
+            self.assertEqual(len(ratings), 1, "獲得した年の能力の行がある")
+
+        self.replay(self.world_a, run)
+        plate_appearances = self.whole_season[0][0]
+        name = self.signed_name()
+        played = sorted({row[0] for row in plate_appearances if name in (row[8], row[9])})
+        self.assertTrue(played, "外国人枠の空きを埋める選手なので1軍で出る")
+        self.assertGreaterEqual(played[0], self.first_game_from[JUNE_1])
 
 
 class RosterChangedWhileAdvancingTest(MidseasonReviewCase):
@@ -224,7 +271,12 @@ class RosterChangedWhileAdvancingTest(MidseasonReviewCase):
                 ).values_list("player__name", flat=True)
             ),
             ["ホ育成"],
-            "GM の登録だけが残り、AI の昇格は書かない",
+            "GM の登録だけが残り、AI の昇格・獲得は書かない",
+        )
+        self.assertFalse(
+            orm_models.PlayerStint.objects.filter(
+                team__league__world_id=self.world_a, acquired_via=AcquisitionRoute.NEW_FOREIGN.value
+            ).exists()
         )
         self.assertFalse(
             orm_models.PlayerStint.objects.filter(player_id__in=self.strong, promoted_year__isnull=False).exists()
@@ -252,6 +304,8 @@ class ReviewMaterialsTest(MidseasonReviewCase):
             [(player_id, Position.PITCHER) for player_id in sorted([*self.strong, self.weak])],
         )
         self.assertTrue({"101", "199", "1"} <= squad.numbers, "支配下と育成の両方の背番号")
+        self.assertEqual(squad.foreign_count, 0, "外国人の保有の人数（#169 F3。分岐元に外国人はいない）")
+        self.assertFalse(any(player.is_foreign for player in squad.players))
 
     def test_only_the_given_clubs_of_the_world_are_read_with_their_roster(self):
         teams = DjangoTeamRepository(WorldScope.pennant(self.world_a))
@@ -268,8 +322,17 @@ class ReviewMaterialsTest(MidseasonReviewCase):
             self.advance(self.world_a, AdvanceTarget.SEASON_END)
             mine = DjangoMidseasonRegistrationRepository(WorldScope.pennant(self.world_a))
             self.assertEqual(
-                [(r.player_id, r.registered_on) for r in mine.find_in_year(YEAR)],
+                [
+                    (r.player_id, r.registered_on)
+                    for r in mine.find_in_year(YEAR)
+                    if r.kind is RegistrationKind.PROMOTION
+                ],
                 [(self.strong[0], self.first_game_from[JUNE_1]), (self.strong[1], self.first_game_from[JULY_1])],
+            )
+            # 期中の外国人の獲得（#169 F3）も区分つきで読める
+            self.assertEqual(
+                [(r.registered_on, r.kind) for r in mine.find_in_year(YEAR) if r.kind is RegistrationKind.SIGNING],
+                [(self.first_game_from[JUNE_1], RegistrationKind.SIGNING)],
             )
             self.assertEqual(mine.find_in_year(YEAR + 1), [])
             other = DjangoMidseasonRegistrationRepository(WorldScope.pennant(self.world_b))

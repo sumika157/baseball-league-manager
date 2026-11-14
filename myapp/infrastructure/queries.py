@@ -68,6 +68,7 @@ from ..domain.entities import Game, jersey_number_in, winning_team_id
 from ..domain.exceptions import TeamNotFound, WorldNotFound
 from ..domain.pennant.draft_lottery import DraftLotteryRecord
 from ..domain.pennant.postseason import PostseasonFormat, PostseasonResult
+from ..domain.pennant.reinforcement import RegistrationKind
 from ..domain.pennant.retirement import PlayingTime
 from ..domain.pennant.world import WorldScope
 from ..domain.services.rankings import Title
@@ -1148,18 +1149,29 @@ class DjangoOffseasonQuery:
             return tuple(self._fact(row, before, after, year=year) for row in ordered)
 
         stints = stints_in(self._scope)
+
+        def midseason(kind: RegistrationKind) -> Exists:
+            # 翌年の期中の登録（登録日のある在籍。昇格は #170 P3a、獲得は #169 F3）
+            return Exists(
+                midseason_registrations_in(self._scope).filter(
+                    team_id=OuterRef("team_id"),
+                    player_id=OuterRef("player_id"),
+                    registered_on__year=year + 1,
+                    kind=kind.value,
+                )
+            )
+
         retired = stints.filter(to_year=year).values(*_OFFSEASON_STINT_FIELDS)
-        rookies = stints.filter(from_year=year + 1).values(*_OFFSEASON_STINT_FIELDS)
+        # オフに加わった選手（新人と獲得した外国人）。翌年の期中に獲得した外国人は、加入年が同じでもオフの獲得ではない
+        rookies = stints.filter(from_year=year + 1).exclude(midseason(RegistrationKind.SIGNING))
+        rookies = rookies.values(*_OFFSEASON_STINT_FIELDS)
         # 翌年も在籍し、前の年から居た選手（新人を除く）。両方の能力がある選手だけが能力の変化を持つ
         staying = stints.filter(period_covering(year + 1), from_year__lte=year).values(*_OFFSEASON_STINT_FIELDS)
         # オフの昇格（#170）: 締める年より前から在籍し、翌年の年で育成から支配下に上がった在籍
-        # 翌年の期中に支配下に登録した在籍（登録日のある在籍。#170 P3a）は、昇格の年が同じでもオフの昇格ではない
-        midseason = midseason_registrations_in(self._scope).filter(
-            team_id=OuterRef("team_id"), player_id=OuterRef("player_id"), registered_on__year=year + 1
-        )
+        # 翌年の期中に支配下に登録した在籍は、昇格の年が同じでもオフの昇格ではない
         promoted = (
             stints.filter(promoted_year=year + 1, from_year__lte=year)
-            .exclude(Exists(midseason))
+            .exclude(midseason(RegistrationKind.PROMOTION))
             .values(*_OFFSEASON_STINT_FIELDS)
         )
         leagues = leagues_in(self._scope).order_by("id").values_list("id", "name")
@@ -1403,20 +1415,33 @@ class DjangoDevelopmentRosterQuery:
             stints_in(self._scope)
             .filter(period_covering(year))
             .order_by("team_id", "player_id")
-            .values_list("team_id", "player_id", "number", "signed_as", "promoted_year", "player__position")
+            .values_list(
+                "team_id",
+                "player_id",
+                "number",
+                "signed_as",
+                "promoted_year",
+                "player__position",
+                "player__is_foreign_player",
+            )
         )
         registered: dict[int, int] = {}
+        foreign: dict[int, int] = {}
         numbers: dict[int, set[str]] = {}
         players: dict[int, list[DevelopmentSquadPlayer]] = {}
-        for team_id, player_id, number, signed_as, promoted_year, position in rows:
+        for team_id, player_id, number, signed_as, promoted_year, position, is_foreign in rows:
             numbers.setdefault(team_id, set()).add(number)
+            if is_foreign:
+                foreign[team_id] = foreign.get(team_id, 0) + 1
             # その年の区分（判定の出典は domain の `ContractStatus.in_year`。`for_team` と同じ）
             status = ContractStatus.in_year(ContractStatus.from_label(signed_as), promoted_year, year)
             if status is ContractStatus.REGISTERED:
                 registered[team_id] = registered.get(team_id, 0) + 1
             else:
                 players.setdefault(team_id, []).append(
-                    DevelopmentSquadPlayer(player_id=player_id, position=Position.from_label(position))
+                    DevelopmentSquadPlayer(
+                        player_id=player_id, position=Position.from_label(position), is_foreign=is_foreign
+                    )
                 )
         return tuple(
             DevelopmentSquad(
@@ -1424,6 +1449,7 @@ class DjangoDevelopmentRosterQuery:
                 registered_count=registered.get(team_id, 0),
                 registered_limit=limit,
                 numbers=frozenset(numbers.get(team_id, ())),
+                foreign_count=foreign.get(team_id, 0),
                 players=tuple(players.get(team_id, ())),
             )
             for team_id, limit in teams

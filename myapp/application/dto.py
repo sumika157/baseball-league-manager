@@ -2441,10 +2441,12 @@ class DevelopmentRoster:
 
 @dataclass(frozen=True)
 class DevelopmentSquadPlayer:
-    """AI の期中の昇格の候補ひとり（育成選手の id と登録位置）。"""
+    """AI の期中の昇格の候補ひとり（育成選手の id と登録位置、外国人か）。"""
 
     player_id: int
     position: Position
+    # 外国人選手か（昇格した後の1軍の外国人枠で数える。#169 F3 の AI の期中の獲得の材料）
+    is_foreign: bool
 
 
 @dataclass(frozen=True)
@@ -2458,6 +2460,8 @@ class DevelopmentSquad:
     registered_limit: int | None
     # その年に在籍する選手（支配下・育成とも）の背番号
     numbers: frozenset[str]
+    # その年に在籍する外国人の人数（支配下・育成とも。#169 F3 の保有の上限で数える）
+    foreign_count: int
     players: tuple[DevelopmentSquadPlayer, ...]
 
 
@@ -2546,7 +2550,8 @@ class DevelopmentPlanView:
 class ForeignHeldRow:
     """「外国人」タブの、受け持つ球団にいま在籍する外国人ひとり（#169 F2）。
 
-    `counts_toward_quota` は翌シーズン（締める年 + 1）の外国人枠で数えるか（FA 資格の取得で枠外なら False。
+    `counts_toward_quota` は枠を見る年（オフの形は翌シーズン＝締める年 + 1、期中の形はその年。#169 F3）の外国人枠で
+    数えるか（FA 資格の取得で枠外なら False。
     判定は domain の `counts_toward_foreign_quota`）。`is_development` は育成（保有の人数には数え、
     1軍の枠には出ない）。
     """
@@ -2563,8 +2568,9 @@ class ForeignCandidateRow:
     """「外国人」タブの候補ひとり（#169 F2）。能力は見せず、受け持つ球団のスカウトの見立て（`overall`・`cells`）と
     見込みの区分（`outlook`）だけを出す（2026-10-25 ユーザー決定 Q4 A）。
 
-    `index` は候補の鍵（締める年のオフの候補の添字。`foreign_market.offseason_key`）で、フォームはこれを送る。
-    `age` は入団する年（締める年 + 1）の4月1日時点の年齢。
+    `index` は候補の鍵の添字（オフは締める年のオフの候補。`foreign_market.offseason_key`。期中はその年の期中の候補。
+    `midseason_key`。#169 F3）で、フォームはこれを送る。
+    `age` は入団する年（オフは締める年 + 1、期中はその年）の4月1日時点の年齢。
     """
 
     index: int
@@ -2623,6 +2629,64 @@ class MidseasonPromotion:
     player_id: int
     name: str
     number: str
+    registered_on: date
+
+
+@dataclass(frozen=True)
+class MidseasonForeignView:
+    """編成の「外国人」タブの期中の形の材料（#169 F3）。補強の窓（締めた後〜7月31日）の中だけで作る。
+
+    - `players`: いま在籍する外国人（育成を含む）。`counts_toward_quota` はその年（`year`）の外国人枠で数えるか
+    - `candidates`: その年の期中の候補（見せるのは受け持つ球団のスカウトの見立てだけ。`is_chosen` はいつも False）
+    - `blocked_reason`: 獲得できない理由（1年の上限・保有の上限・支配下の上限）。行ごとのボタンの代わりに出す。
+      獲得できるなら None
+    """
+
+    team_id: int
+    team_name: str
+    # 次の公式戦の年（候補・能力・年齢・枠を見る年）
+    year: int
+    # 次の公式戦の日（獲得した選手が出られる最初の日。POST で送ってもらい、古い画面を弾く）
+    next_game_on: date
+    # 補強の期限の日（`ReinforcementWindow.deadline`）
+    deadline: date
+    players: tuple[ForeignHeldRow, ...]
+    held_limit: int
+    active_rules: ForeignPlayerRules
+    # その年に期中に獲得した人数と、1年の上限
+    signed_this_season: int
+    signing_limit: int
+    registered_count: int
+    registered_limit: int | None
+    candidates: tuple[ForeignCandidateRow, ...]
+    blocked_reason: str | None = None
+
+    @property
+    def held_count(self) -> int:
+        return len(self.players)
+
+    @property
+    def quota_exempt_count(self) -> int:
+        return sum(1 for row in self.players if not row.counts_toward_quota)
+
+    @property
+    def can_sign(self) -> bool:
+        return not self.blocked_reason
+
+    @property
+    def is_done(self) -> bool:
+        """その年の期中の獲得を上限まで済ませたか（次に引く候補はその年には獲得できないので、候補を出さない）。"""
+        return self.signed_this_season >= self.signing_limit
+
+
+@dataclass(frozen=True)
+class MidseasonSigning:
+    """期中に外国人を獲得した結果（画面のメッセージに使う）。"""
+
+    player_id: int
+    name: str
+    number: str
+    position: Position
     registered_on: date
 
 

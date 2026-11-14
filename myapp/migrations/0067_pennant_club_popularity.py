@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('myapp', '0065_pennant_foreign_signing_plan'),
+        ('myapp', '0066_pennantmidseasonregistration_kind'),
     ]
 
     operations = [

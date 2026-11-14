@@ -46,7 +46,7 @@ from .draft import NUMBER_POOLS, DraftRoute, draftee_count, draw_number
 from .offseason_player import OffseasonClub, OffseasonPlayer, Ratings, retirement_value
 from .outlook import projected_ratings
 from .prospects import expected_prospect_ratings
-from .reinforcement import ReinforcementWindow
+from .reinforcement import MidseasonRegistration, RegistrationKind, ReinforcementWindow
 from .release import ability_value, keep_value, release_order
 from .roster import OPENING_REGISTERED_BAND
 
@@ -241,8 +241,8 @@ class MidseasonClub:
     registered_limit: int | None
     # 球団でいま使われている背番号（支配下・育成とも）
     used_numbers: frozenset[str]
-    # その年の期中の登録日（GM・AI とも。`MidseasonRegistration.registered_on`）
-    registrations: tuple[datetime.date, ...]
+    # 期中の登録（GM・AI とも。昇格だけを数える＝外国人の獲得（#169 F3）の登録は昇格の上限に数えない）
+    registrations: tuple[MidseasonRegistration, ...]
 
 
 def decide_midseason_promotions(
@@ -257,10 +257,11 @@ def decide_midseason_promotions(
       `choose_active_roster` に入る、その位置で最も低い選手の総合値）以上の育成。1軍にその位置の選手がいなければ
       上げない。
       候補が複数なら基準を上回る幅の大きい選手（同じなら id の小さい選手）
-    - 1判定日1球団1人・1年 `MIDSEASON_MAX_PROMOTIONS` 人まで（その年の期中の登録で数える）。
-      支配下の上限のうち `MIDSEASON_RESERVED_SLOTS` 人は空けておく（#169 F3 の期中の外国人の獲得の分）
-    - その判定日の登録（登録日が `on` 以降）がもうある球団は上げない（書いた後に試合を作る前で止まった「進める」を
-      やり直しても、2人目を上げない）
+    - 1判定日1球団1人・1年 `MIDSEASON_MAX_PROMOTIONS` 人まで（その年の期中の**昇格の**登録で数える。外国人の獲得の
+      登録は数えない）。支配下の上限のうち `MIDSEASON_RESERVED_SLOTS` 人は空けておく（#169 F3 の期中の外国人の
+      獲得の分）
+    - その判定日の昇格の登録（登録日が `on` 以降）がもうある球団は上げない（書いた後に試合を作る前で止まった
+      「進める」をやり直しても、2人目を上げない）
 
     背番号は `midseason_promotion_number`（GM の期中の昇格と同じ）。判定日の材料だけで決まる。
     """
@@ -270,7 +271,11 @@ def decide_midseason_promotions(
     for club in clubs:
         if club.is_managed:
             continue
-        this_year = [registered for registered in club.registrations if registered.year == on.year]
+        this_year = [
+            registration.registered_on
+            for registration in club.registrations
+            if registration.kind is RegistrationKind.PROMOTION and registration.registered_on.year == on.year
+        ]
         if any(registered >= on for registered in this_year) or len(this_year) >= MIDSEASON_MAX_PROMOTIONS:
             continue
         if (

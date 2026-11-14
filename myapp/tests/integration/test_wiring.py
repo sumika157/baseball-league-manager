@@ -23,6 +23,7 @@ from myapp.application.league_view import LeagueViewService
 from myapp.application.pennant_championships import PostseasonHistoryReader
 from myapp.application.pennant_club_details import ClubDetailsService
 from myapp.application.pennant_draft import PennantDraftService
+from myapp.application.pennant_foreign_signing import ForeignSigningService
 from myapp.application.pennant_history import PennantHistoryService
 from myapp.application.pennant_home import PennantHomeService
 from myapp.application.pennant_midseason import MidseasonRegistrationService
@@ -123,6 +124,7 @@ from myapp.presentation.views import (
     build_admin_overview_service,
     build_club_details_service,
     build_club_service,
+    build_foreign_signing_service,
     build_game_view_service,
     build_league_view_service,
     build_midseason_registration_service,
@@ -342,6 +344,9 @@ class BuildServiceTest(SimpleTestCase):
 
     def test_midseason_registration_service_dependencies_are_wired(self):
         self._assert_wired(build_midseason_registration_service(7), MidseasonRegistrationService)
+
+    def test_foreign_signing_service_dependencies_are_wired(self):
+        self._assert_wired(build_foreign_signing_service(7), ForeignSigningService)
 
     def test_pennant_ratings_service_dependencies_are_wired(self):
         self._assert_wired(build_pennant_ratings_service(7), PennantRatingsViewService)
@@ -590,12 +595,12 @@ class PennantSeasonScopeTest(SimpleTestCase):
                 self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
 
     def test_the_midseason_review_is_fixed_to_the_given_world(self):
-        """判定日の AI の期中の補強（#170 P3b）も、同じ世界の範囲だけを読み書きし、試合と同じトランザクションを
-        使う。"""
+        """判定日の AI の期中の補強（昇格は #170 P3b、外国人の獲得は #169 F3）も、同じ世界の範囲だけを読み書きし、
+        試合と同じトランザクションを使う。"""
         from django.db import transaction
 
         review = build_pennant_season_service(7)._review
-        for name in ("_leagues", "_teams", "_ratings", "_registrations", "_squads", "_context_query"):
+        for name in ("_leagues", "_teams", "_ratings", "_registrations", "_squads", "_names", "_context_query"):
             with self.subTest(dependency=name):
                 self.assertEqual(getattr(review, name)._scope, WorldScope.pennant(7))
         self.assertIs(review._atomic, transaction.atomic)
@@ -831,6 +836,39 @@ class MidseasonRegistrationScopeTest(SimpleTestCase):
                 build_midseason_registration_service(bad)
 
 
+class ForeignSigningScopeTest(SimpleTestCase):
+    """期中の外国人の獲得（編成の「外国人」タブの期中の形。#169 F3）は、依存を全部、渡された世界の範囲で組み立てる。"""
+
+    SCOPED = (
+        "_leagues",
+        "_teams",
+        "_fixtures",
+        "_ratings",
+        "_registrations",
+        "_context_query",
+        "_development_roster",
+        "_names",
+    )
+
+    def test_every_dependency_is_fixed_to_the_given_world(self):
+        from django.db import transaction
+
+        service = build_foreign_signing_service(7)
+        self.assertEqual(service._world_id, 7)
+        for name in self.SCOPED:
+            with self.subTest(dependency=name):
+                self.assertEqual(getattr(service, name)._scope, WorldScope.pennant(7))
+        self.assertIs(service._atomic, transaction.atomic, "加入・能力・登録日の記録は1つのトランザクション")
+
+    def test_a_different_world_gets_a_different_scope(self):
+        self.assertEqual(build_foreign_signing_service(8)._registrations._scope, WorldScope.pennant(8))
+
+    def test_the_real_data_has_no_midseason_signing(self):
+        for bad in (0, -1, True):
+            with self.subTest(world_id=bad), self.assertRaises(InvalidWorld):
+                build_foreign_signing_service(bad)
+
+
 class PennantRatingsScopeTest(SimpleTestCase):
     """能力の表示は、渡された世界の範囲だけを読む。"""
 
@@ -922,6 +960,7 @@ class ForeignQuotaExemptionScopeTest(SimpleTestCase):
             build_pennant_postseason_service,
             build_club_service,
             build_pennant_offseason_service,
+            build_foreign_signing_service,
         ):
             with self.subTest(build=build.__name__):
                 self.assertEqual(build(7)._fa_exemptions._query._scope, WorldScope.pennant(7))

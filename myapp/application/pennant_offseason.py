@@ -98,12 +98,10 @@ from ..domain.pennant.foreign_market import (
     ForeignSigning,
     ForeignSigningPlan,
     SigningPhase,
-    candidate_outlook_grade,
     draw_candidates,
     ensure_signable,
     held_after_chosen_departures,
     offseason_key,
-    scouting_report,
 )
 from ..domain.pennant.offseason import Draftee, OffseasonPlan, plan_offseason
 from ..domain.pennant.popularity import ClubPopularity
@@ -133,7 +131,6 @@ from ..domain.value_objects import DepartureRoute, ForeignPlayerRules, JerseyNum
 from .dto import (
     DevelopmentPlanRow,
     DevelopmentPlanView,
-    ForeignCandidateRow,
     ForeignHeldRow,
     ForeignSigningPlanView,
     ReleasePlanView,
@@ -145,6 +142,7 @@ from .dto import (
 from .foreign_quota import ForeignQuotaExemptions
 from .league_view import LeagueViewService
 from .pennant_awards import derive_awards
+from .pennant_foreign_rows import foreign_candidate_row, held_foreign_rows
 from .pennant_midseason import development_row
 from .pennant_offseason_inputs import (
     OffseasonInputsReader,
@@ -159,10 +157,8 @@ from .pennant_offseason_inputs import (
     managed_team_id,
     release_plan_of,
 )
-from .pennant_outlook import grade_outlook_cell
 from .pennant_popularity import PopularityBasis, popularity_basis
 from .pennant_postseason import PostseasonBracketReader
-from .pennant_ratings import overall_cell, rating_cells
 from .pennant_season import AtomicBlock
 from .queries import DevelopmentRosterQuery, PlayerNameQuery, SimulationContextQuery
 
@@ -585,22 +581,12 @@ class PennantOffseasonService:
         held = self._held_foreign(team, year)
         exemptions = self._fa_exemptions.for_year([row.player_id for row in held], year + 1)
         keys = chosen_signings(self._foreign_signings.find_by_team(team_id), year)
-        rows = []
-        for candidate in self._candidates(world, team_id, year):
-            report = scouting_report(candidate, world_seed=world.seed)
-            rows.append(
-                ForeignCandidateRow(
-                    index=candidate.key.index,
-                    name=candidate.name,
-                    position=candidate.position,
-                    age=candidate.age,
-                    background=candidate.background,
-                    overall=overall_cell(report.ratings),
-                    cells=rating_cells(report.ratings),
-                    outlook=grade_outlook_cell(candidate_outlook_grade(candidate, report)),
-                    is_chosen=keys is not None and candidate.key in keys,
-                )
+        rows = [
+            foreign_candidate_row(
+                candidate, world_seed=world.seed, is_chosen=keys is not None and candidate.key in keys
             )
+            for candidate in self._candidates(world, team_id, year)
+        ]
         return ForeignSigningPlanView(
             team_id=team_id,
             team_name=team.name,
@@ -663,18 +649,8 @@ class PennantOffseasonService:
         )
 
     def _held_foreign(self, team: SimulationTeam, year: int) -> list[ForeignHeldRow]:
-        """球団にいま在籍する外国人（支配下、続けて育成）。枠の数え方は呼び手が入れる（ここでは数える扱い）。"""
-        registered = [
-            ForeignHeldRow(p.player_id, p.name, p.position, is_development=False, counts_toward_quota=True)
-            for p in team.players
-            if p.is_foreign
-        ]
-        development = [
-            ForeignHeldRow(p.player_id, p.name, p.tenure.position, is_development=True, counts_toward_quota=True)
-            for p in self._development_roster.for_team(team.team_id, year).players
-            if p.tenure.profile.is_foreign_player
-        ]
-        return registered + development
+        """球団にいま在籍する外国人（支配下、続けて育成。期中の獲得と同じ `held_foreign_rows`）。"""
+        return held_foreign_rows(team, self._development_roster.for_team(team.team_id, year))
 
     # --- 検査（`OffseasonPhase` が出典。ここは世界を渡すだけ） ---
 
