@@ -47,10 +47,12 @@ from ..domain.exceptions import (
     InvalidPosition,
     InvalidRatings,
     InvalidSchedule,
+    InvalidTicketPrice,
     InvalidWorld,
     LeagueNotFound,
     PlayerNotFound,
     TeamNotFound,
+    TicketPriceLocked,
     WorldNotFound,
 )
 from ..domain.pennant.awards import Award
@@ -73,6 +75,7 @@ from ..domain.pennant.reinforcement import (
 from ..domain.pennant.release import ReleasePlan
 from ..domain.pennant.schedule import Fixture
 from ..domain.pennant.season import is_season_closed
+from ..domain.pennant.ticket_price import ClubTicketPrice, TicketPrice, ticket_price_change_blocker
 from ..domain.pennant.world import World, WorldScope
 from ..domain.services import ensure_lines_match_plate_appearances
 from ..domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings, Potential
@@ -123,6 +126,7 @@ from .scoping import (
     stage_condition,
     stints_in,
     teams_in,
+    ticket_prices_in,
     world_condition,
 )
 
@@ -1495,6 +1499,8 @@ _WORLD_ROWS_CHILD_FIRST: tuple[tuple[type[models.Model], str], ...] = (
     (orm_models.PennantChampionship, "team__league"),
     # 球団の人気も球団を指すので、球団を消す前に消す（#208 E1）
     (orm_models.PennantClubPopularity, "team__league"),
+    # 手動のチケットの値段も球団を指すので、球団を消す前に消す（#208 E2）
+    (orm_models.PennantTicketPrice, "team__league"),
     # 編成と戦力外の指名は選手を指すので、選手を消す前に消す（行から先に）
     (orm_models.PennantClubPlanEntry, "plan__team__league"),
     (orm_models.PennantClubPlan, "team__league"),
@@ -2104,6 +2110,67 @@ class DjangoPopularityRepository:
     @staticmethod
     def _to_domain(team_id: int, year: int, value: int) -> ClubPopularity:
         return ClubPopularity(team_id=team_id, year=year, popularity=Popularity(value))
+
+
+class DjangoTicketPriceRepository:
+    """TicketPriceRepository の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る（#208 E2）。
+
+    手動のチケットの値段はペナント専用で、実データの範囲には書けない。他の世界の値段は、読めも書けもしない。
+    書く前に、締めた年（`closed_years`）と開幕した年（その年の試合がある。domain の `ticket_price_change_blocker`）を
+    トランザクションの中で確かめる。進める処理は書き出すときに手動の値段を読み直す（`PennantSeasonService._flush`）。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def find_by_year(self, year: int) -> list[ClubTicketPrice]:
+        return [
+            self._to_domain(team_id, row_year, price)
+            for team_id, row_year, price in ticket_prices_in(self._scope)
+            .filter(year=year)
+            .order_by("team_id")
+            .values_list("team_id", "year", "price")
+        ]
+
+    def find_by_team(self, team_id: int) -> list[ClubTicketPrice]:
+        return [
+            self._to_domain(row_team, year, price)
+            for row_team, year, price in ticket_prices_in(self._scope)
+            .filter(team_id=team_id)
+            .order_by("year")
+            .values_list("team_id", "year", "price")
+        ]
+
+    @transaction.atomic
+    def save(self, price: ClubTicketPrice) -> None:
+        self._ensure_writable(price.team_id, price.year)
+        orm_models.PennantTicketPrice.objects.update_or_create(
+            team_id=price.team_id, year=price.year, defaults={"price": price.price.value}
+        )
+
+    @transaction.atomic
+    def delete(self, team_id: int, year: int) -> None:
+        self._ensure_writable(team_id, year)
+        ticket_prices_in(self._scope).filter(team_id=team_id, year=year).delete()
+
+    def _ensure_writable(self, team_id: int, year: int) -> None:
+        if self._scope.is_real:
+            raise InvalidWorld("チケットの値段はペナントの世界にだけ保存できます。")
+        if not teams_in(self._scope).filter(id=team_id).exists():
+            raise InvalidTicketPrice(f"この世界に無い球団の値段は保存できません（id={team_id}）。")
+        if closed_years(self._scope, [year]):
+            raise AlreadyClosed(f"{year}年のシーズンは既に締めているので、その年の値段は変えられません。", year=year)
+        last_played_on = (
+            games_in(self._scope, stages=StageFilter.ALL_STAGES)
+            .filter(year__gte=year)
+            .aggregate(last=Max("played_on"))["last"]
+        )
+        if blocker := ticket_price_change_blocker(year=year, last_played_on=last_played_on):
+            raise TicketPriceLocked(blocker)
+
+    @staticmethod
+    def _to_domain(team_id: int, year: int, price: str) -> ClubTicketPrice:
+        return ClubTicketPrice(team_id=team_id, year=year, price=TicketPrice(price))
 
 
 class DjangoDraftRepository:

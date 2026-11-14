@@ -122,6 +122,34 @@
   </div>
 {% endif %}
 
+{% if summary.finance %}
+  {% comment %}選んだリーグの球団の締めた年の収支（補填前の収支の高い順。#208 E2）。保存せず導いた値。{% endcomment %}
+  <div class="card mb-4" id="finance">
+    <div class="card-header">{{ summary.year }}年の収支</div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead>
+            <tr>
+              <th>球団</th>
+              {% include 'pennant/_finance_head.html' %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in summary.finance %}
+              <tr {% if item.is_own %}class="fw-semibold"{% endif %}>
+                <td><a href="{% scoped_url 'player_list' item.team_id %}" class="player-name">{{ item.team_name }}</a></td>
+                {% include 'pennant/_finance_cells.html' with row=item.finance %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p class="stat-muted px-3 py-2 mb-0" style="font-size: 0.8125rem;">収入は入場料・放映権・スポンサー・グッズ・ポストシーズンの入場料、支出は人件費（仮。契約区分ごとの定額 × 人数）と球場の運営費です。赤字は親会社が補填します（資金は繰り越しません）。</p>
+    </div>
+  </div>
+{% endif %}
+
 {% if summary.board %}
   <div class="card mb-4" id="draft-board">
     <div class="card-header">{{ summary.year }}年ドラフトの結果（巡 × 球団）</div>

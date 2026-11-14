@@ -348,7 +348,9 @@ class PopularityBasisTest(SimpleTestCase):
             registered_player_limit=None,
             players=(),
         )
-        return popularity_basis(year=YEAR, team_ids=[2, 1, 3], recorded=recorded, finishes=[finish], clubs=[club])
+        return popularity_basis(
+            year=YEAR, team_ids=[2, 1, 3], recorded=recorded, finishes=[finish], clubs=[club], manual_prices={}
+        )
 
     def test_the_league_leader_is_the_champion_and_clubs_without_a_finish_have_no_factors(self):
         basis = self.basis({1: Popularity(60)})

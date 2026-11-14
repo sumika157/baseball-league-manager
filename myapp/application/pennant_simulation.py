@@ -13,12 +13,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date
 
 from ..domain.entities import Game
 from ..domain.exceptions import InvalidRoster
 from ..domain.pennant.club_plan import ClubLimits, ClubPlan, ResolvedClub, resolve_club
-from ..domain.pennant.popularity import PENNANT_DEFAULT_CAPACITY, Popularity
+from ..domain.pennant.popularity import Popularity, pennant_capacity
+from ..domain.pennant.ticket_price import TicketPrice
 from ..domain.pennant.world import World
 from ..domain.repositories import ClubPlanRepository, RatingsRepository
 from ..domain.simulation.engine import MAX_INNINGS, simulate_game
@@ -31,6 +33,7 @@ from ..domain.value_objects import ForeignPlayerRules, GameStage
 from .dto import PlanNotice, SimulationContext, SimulationTeam
 from .foreign_quota import ForeignQuotaExemptions, QuotaExemptions
 from .pennant_popularity import PopularityReader
+from .pennant_ticket_price import TicketPriceReader, TicketPrices
 from .queries import SimulationContextQuery
 
 # ポストシーズンの試合の識別の接頭辞（公式戦の識別と混ざらない）
@@ -57,11 +60,14 @@ class DaySimulator:
         pools: dict[int, ClubRoster],
         plans: dict[int, ClubPlan],
         popularity: dict[int, Popularity],
+        ticket_prices: TicketPrices,
     ) -> None:
         self._world_seed = world_seed
         self._teams = {team.team_id: team for team in context.teams}
         # 球団ごとのその年の人気（ホーム試合の観客数に効く。#208 E1）
         self._popularity = popularity
+        # 球団ごとのその年のチケットの値段（ホーム試合の観客数に効く。#208 E2）
+        self._ticket_prices = ticket_prices
         self._pools = pools
         self._plans = plans
         self._history = pitching_history(context)
@@ -80,6 +86,7 @@ class DaySimulator:
         plans: ClubPlanRepository,
         fa_exemptions: ForeignQuotaExemptions,
         popularities: PopularityReader,
+        ticket_prices: TicketPriceReader,
     ) -> DaySimulator:
         """`first_day`（今回の最初の試合の日）より前の試合から導ける状態と、その年の能力と編成を読む。
 
@@ -87,6 +94,7 @@ class DaySimulator:
         domain の `ratings_year` と一致する）。FA 資格の取得による外国人枠の対象外（協約 第82条 (4)）も
         同じ年で導く（その年の扱いは前の年までの記録で決まるので、進める間は変わらない）。
         球団の人気も同じ年の値（行の無い球団は初期値で補う。#208 E1）。
+        チケットの値段も同じ年の値（手動の値段か、その年の人気からお任せの規則で決める。#208 E2）。
         """
         context = context_query.load(before=first_day)
         year = first_day.year
@@ -94,13 +102,20 @@ class DaySimulator:
         exemptions = fa_exemptions.for_year(
             [player.player_id for team in context.teams for player in team.players if player.is_foreign], year
         )
+        popularity = popularities.for_year(year, [team.team_id for team in context.teams])
         return cls(
             world_seed=world.seed,
             context=context,
             pools={team.team_id: pool_of(team, abilities, exemptions=exemptions) for team in context.teams},
             plans={plan.team_id: plan for plan in plans.find_all()},
-            popularity=popularities.for_year(year, [team.team_id for team in context.teams]),
+            popularity=popularity,
+            ticket_prices=ticket_prices.for_year(year, popularity),
         )
+
+    @property
+    def manual_ticket_prices(self) -> Mapping[int, TicketPrice]:
+        """読んだときの、GM が手動にした値段（書き出すときに変わっていないかを確かめる。#208 E2）。"""
+        return self._ticket_prices.manual
 
     def pool(self, team_id: int) -> ClubRoster:
         """球団の登録候補（読んだ時点の支配下の、能力のある選手）。AI の期中の昇格の基準（#170 P3b）が使う。"""
@@ -153,14 +168,15 @@ class DaySimulator:
         # 試合の結果（得点・打席）と「まとめて進める」「1日ずつ進める」の一致を変えない
         day_rng = make_random(game_seed(self._world_seed, day.year, f"{key}:game-day"))
         simulated.game.times = simulated_times(simulated.game, day_rng)
-        # 観客数は本拠地の収容人数（分からなければペナントの標準の収容人数）と両球団の人気から作る（#208 E1）
-        capacity = self._teams[home_team_id].stadium_capacity
+        # 観客数は本拠地の収容人数（分からなければペナントの標準の収容人数）と両球団の人気（#208 E1）と
+        # ホームの球団のチケットの値段（#208 E2）から作る
         simulated.game.attendance = simulated_attendance(
-            PENNANT_DEFAULT_CAPACITY if capacity is None else capacity,
+            pennant_capacity(self._teams[home_team_id].stadium_capacity),
             day,
             day_rng,
             home_popularity=self._popularity[home_team_id].value,
             away_popularity=self._popularity[away_team_id].value,
+            ticket_price=self._ticket_prices.prices.get(home_team_id),
         )
         return simulated.game
 

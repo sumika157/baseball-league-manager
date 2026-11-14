@@ -50,6 +50,7 @@ from .pennant_popularity import PopularityReader
 from .pennant_race import LeagueFinishReader, StandingsSource
 from .pennant_season import AtomicBlock
 from .pennant_simulation import DaySimulator
+from .pennant_ticket_price import TicketPriceReader
 from .queries import PostseasonQuery, SimulationContextQuery
 
 
@@ -170,6 +171,7 @@ class PennantPostseasonService:
         context_query: SimulationContextQuery,
         fa_exemptions: ForeignQuotaExemptions,
         popularities: PopularityReader,
+        ticket_prices: TicketPriceReader,
         brackets: PostseasonBracketReader,
         atomic: AtomicBlock,
     ) -> None:
@@ -184,6 +186,8 @@ class PennantPostseasonService:
         self._fa_exemptions = fa_exemptions
         # 球団の人気（ホーム試合の観客数。#208 E1）
         self._popularities = popularities
+        # 球団のチケットの値段（ホーム試合の観客数。#208 E2。ポストシーズンはその年の値段のまま）
+        self._ticket_prices = ticket_prices
         self._brackets = brackets
         self._atomic = atomic
 
@@ -242,6 +246,7 @@ class PennantPostseasonService:
             plans=self._plans,
             fa_exemptions=self._fa_exemptions,
             popularities=self._popularities,
+            ticket_prices=self._ticket_prices,
         )
         games: list[Game] = []
         dates: list[date] = []

@@ -29,6 +29,7 @@ from .pennant.ratings import PlayerRatings
 from .pennant.reinforcement import MidseasonRegistration
 from .pennant.release import ReleasePlan
 from .pennant.schedule import Fixture
+from .pennant.ticket_price import ClubTicketPrice
 from .pennant.world import World
 
 
@@ -434,6 +435,35 @@ class PopularityRepository(Protocol):
         InvalidPopularity。締めた年（`season.is_season_closed`）の値は AlreadyClosed（締めた年の状態を書き換えない。
         締める処理は、翌年の能力を書く前に締める年の値を書く）。
         """
+        ...
+
+
+@runtime_checkable
+class TicketPriceRepository(Protocol):
+    """GM が手動にしたチケットの値段（`ClubTicketPrice`。球団 × 年。#208 E2）。ペナントの世界にだけ置ける。
+
+    行の無い球団 × 年はお任せ（AI と同じ規則。読む側が `ticket_price.resolved_ticket_price` で決める）。
+    書けるのはその年の開幕前だけ（その年の試合が1つも無い）で、翌年には引き継がない。
+    """
+
+    def find_by_year(self, year: int) -> list[ClubTicketPrice]:
+        """その年の、範囲の手動の値段（行のある球団だけ）。球団の id の順。"""
+        ...
+
+    def find_by_team(self, team_id: int) -> list[ClubTicketPrice]:
+        """ひとつの球団の手動の値段を、年の順に。範囲の外の球団は空。"""
+        ...
+
+    def save(self, price: ClubTicketPrice) -> None:
+        """手動の値段を書く（同じ球団 × 年の行があれば上書き）。
+
+        実データの範囲には書けない（InvalidWorld）。範囲の外の球団は InvalidTicketPrice。締めた年は AlreadyClosed、
+        開幕した年（その年の試合が1つでもある）は TicketPriceLocked（どちらも何も書かない）。
+        """
+        ...
+
+    def delete(self, team_id: int, year: int) -> None:
+        """手動の値段を消す（お任せに戻す）。行が無ければ何もしない。書けない年の扱いは `save` と同じ。"""
         ...
 
 

@@ -29,6 +29,7 @@ from ..domain.value_objects import GameStage, InningsPitched, format_average
 from .dto import (
     AdvanceOption,
     AdvanceSummary,
+    ClubFinanceRow,
     FinaleSeason,
     GameRow,
     HomeStandings,
@@ -53,6 +54,7 @@ from .dto import (
 )
 from .league_view import LeagueViewService
 from .pennant_championships import PostseasonHistoryReader, YearChampion
+from .pennant_finance import ClubFinanceService
 from .pennant_popularity import PopularityReader, change_label
 from .pennant_race import final_standings, own_race, remaining_by_team, team_order, tiebreak_for
 from .queries import AttendanceQuery, GameListQuery, PennantActivityQuery
@@ -116,6 +118,7 @@ class PennantHomeService:
         postseason: PostseasonHistoryReader,
         popularities: PopularityReader,
         attendance: AttendanceQuery,
+        finance: ClubFinanceService,
     ) -> None:
         self._league_view = league_view
         # 主力打者・投手陣（自軍の選手の一覧）
@@ -133,6 +136,8 @@ class PennantHomeService:
         # 自軍の人気と観客動員のカード（#208 E1）
         self._popularities = popularities
         self._attendance = attendance
+        # 自軍のいまの年度のチケットの値段と収支（#208 E2）
+        self._finance = finance
 
     def get_home(
         self,
@@ -178,7 +183,15 @@ class PennantHomeService:
             shows_previous_season=stats_year != year,
             finale=self._finale(world, postseason),
             popularity=self._popularity(world, team_leagues),
+            finance=self._finance_row(world, team_leagues),
         )
+
+    def _finance_row(self, world: WorldContext, team_leagues: dict[int, tuple[int, str]]) -> ClubFinanceRow | None:
+        """自軍のいまの年度のチケットの値段と収支（途中経過。#208 E2）。受け持つ球団が無ければ None。"""
+        own_id = world.managed_team_id
+        if own_id is None or own_id not in team_leagues:
+            return None
+        return self._finance.year_rows(world, world.season_year, [own_id])[own_id]
 
     def _popularity(self, world: WorldContext, team_leagues: dict[int, tuple[int, str]]) -> PopularityCard | None:
         """自軍の人気と観客動員（#208 E1）。人気はいまの年度の値（行が無ければ初期値。進める処理が使う値と同じ）、

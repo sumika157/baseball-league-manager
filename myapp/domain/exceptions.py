@@ -134,6 +134,17 @@ class InvalidPopularity(DomainError):
     """球団の人気として成り立たない値・保存できない内容（範囲の外の値・同じ球団 × 年の重複・範囲の外の球団）。"""
 
 
+class InvalidTicketPrice(DomainError):
+    """チケットの値段として保存できない内容（段階に無い値・範囲の外の球団・受け持つ球団が無い世界）。#208 E2。"""
+
+
+class TicketPriceLocked(DomainError):
+    """チケットの値段を変えられない（その年が開幕している・締めている）。#208 E2。
+
+    理由の文言は domain の `ticket_price.ticket_price_change_blocker` が出典。
+    """
+
+
 class AlreadyAdvanced(DomainError):
     """画面を開いたときから世界が進んでいる（二重送信や、別の画面で先に進めた場合）。"""
 

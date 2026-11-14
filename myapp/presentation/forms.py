@@ -16,6 +16,7 @@ from ..domain.entities import FieldingError, PlateAppearance, RunnerAdvance
 from ..domain.exceptions import DomainError, InvalidJerseyNumber, InvalidPosition
 from ..domain.pennant.draft_order import DraftOrderRule
 from ..domain.pennant.postseason import PostseasonFormat
+from ..domain.pennant.ticket_price import TicketPrice
 from ..domain.pennant.world import MAX_NAME_LENGTH, MAX_SEED, MAX_SOURCE_LEAGUES, MAX_START_YEAR
 from ..domain.value_objects import (
     AdvanceReason,
@@ -342,6 +343,30 @@ class DraftOrderRuleForm(forms.Form):
 
     def draft_order_choices(self) -> list[tuple[Any, str]]:
         return _draft_order_choices(self)
+
+
+class TicketPriceForm(forms.Form):
+    """経営の画面の、いまの年度のチケットの値段（#208 E2）。「お任せ」か段階のどれか。
+
+    段階の選択肢は domain の `TicketPrice` が出典（送る値は名前、表示は `label`）。お任せは手動の値段を消す。
+    """
+
+    AUTO = "AUTO"
+
+    ticket_price = forms.ChoiceField(
+        label="チケットの値段",
+        choices=[(AUTO, "お任せ（人気で決める）"), *((option.name, option.label) for option in TicketPrice)],
+        widget=forms.RadioSelect(attrs={"class": "form-check-input"}),
+    )
+
+    def clean_ticket_price(self) -> TicketPrice | None:
+        value = self.cleaned_data["ticket_price"]
+        return None if value == self.AUTO else TicketPrice[value]
+
+    @classmethod
+    def initial_for(cls, manual: TicketPrice | None) -> str:
+        """いまの手動の値段（お任せなら None）に合わせた初期値。"""
+        return cls.AUTO if manual is None else manual.name
 
 
 class PostseasonFormatForm(forms.Form):

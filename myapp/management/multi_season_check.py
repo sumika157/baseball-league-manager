@@ -37,6 +37,7 @@ from myapp.domain.pennant.development import (
 from myapp.domain.pennant.draft import DraftRoute, DraftTeam
 from myapp.domain.pennant.draft_meeting import DraftContext
 from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
+from myapp.domain.pennant.finance import OKU, ClubFinance, FinanceInputs, RosterSize, club_finance
 from myapp.domain.pennant.foreign_market import (
     ForeignSigning,
     MidseasonForeignClub,
@@ -67,6 +68,7 @@ from myapp.domain.pennant.ratings import PlayerRatings
 from myapp.domain.pennant.reinforcement import MidseasonRegistration, RegistrationKind
 from myapp.domain.pennant.retirement import PlayingTime
 from myapp.domain.pennant.schedule import ScheduleRules
+from myapp.domain.pennant.ticket_price import TicketPrice, ai_ticket_price
 from myapp.domain.pennant.world import league_priority
 from myapp.domain.simulation.game_day import simulated_attendance
 from myapp.domain.simulation.levels import UsageTally
@@ -651,14 +653,30 @@ class PopularityTally:
     last_streak: dict[int, tuple[int, int]] = field(default_factory=dict)
 
 
-def expected_fill(popularity: Popularity, *, opponents: int, seed: int, year: int, team_id: int) -> float:
-    """人気 `popularity` の球団のホーム試合の入場率の見込み（4〜9月の毎日。相手の人気は `opponents`）。"""
+def expected_fill(
+    popularity: Popularity,
+    *,
+    opponents: int,
+    seed: int,
+    year: int,
+    team_id: int,
+    ticket_price: TicketPrice | None = None,
+) -> float:
+    """人気 `popularity` の球団のホーム試合の入場率の見込み（4〜9月の毎日）。
+
+    相手の人気は `opponents`、ホームの球団の値段は `ticket_price`（#208 E2）。
+    """
     rng = make_random(game_seed(seed, year, f"popularity-fill-{team_id}"))
     days = [date(year, 4, 1) + timedelta(days=offset) for offset in range(183)]
     values = [
         (
             simulated_attendance(
-                PENNANT_DEFAULT_CAPACITY, day, rng, home_popularity=popularity.value, away_popularity=opponents
+                PENNANT_DEFAULT_CAPACITY,
+                day,
+                rng,
+                home_popularity=popularity.value,
+                away_popularity=opponents,
+                ticket_price=ticket_price,
             )
             or 0
         )
@@ -677,7 +695,12 @@ def popularity_season(
     seed: int,
     year: int,
 ) -> str:
-    """その年の人気・入場率の見込みと、締めたときの人気の変化（優勝・最下位）を1行にまとめ、`tally` を翌年に進める。"""
+    """その年の人気・入場率の見込みと、締めたときの人気の変化（優勝・最下位）を1行に、チケットの値段（AI の規則）と
+    収支の分布（#208 E2）をもう1行にまとめ、`tally` を翌年に進める。
+
+    収支の近似: 観客動員は入場率の見込み × 標準の収容人数 × ホーム試合（年間の試合数の半分）、ポストシーズンは
+    リーグ優勝がホーム 5試合・2位が 2試合（満員の9割）、人数はいまの名簿（契約区分は今の区分）。
+    """
     team_of = {m.player_id: m.team_id for m in members}
     wins: Counter[int] = Counter()
     losses: Counter[int] = Counter()
@@ -697,21 +720,33 @@ def popularity_season(
     champions = {order[0] for order in ordered.values()}
     lasts = {order[-1] for order in ordered.values()}
     japan = max(champions, key=lambda team_id: (record[team_id], -team_id))
+    current = tally.popularity
+    prices = {team_id: ai_ticket_price(value.value) for team_id, value in current.items()}
     factors = {
         team_id: PopularityFactors(
             winning_percentage=record[team_id],
             league_champion=team_id in champions,
             japan_champion=team_id == japan,
+            ticket_price=prices[team_id],
         )
         for team_id in record
     }
-    current = tally.popularity
     values = [value.value for value in current.values()]
     mean_value = round(fmean(values))
     fills = {
-        team_id: expected_fill(value, opponents=mean_value, seed=seed, year=year, team_id=team_id)
+        team_id: expected_fill(
+            value, opponents=mean_value, seed=seed, year=year, team_id=team_id, ticket_price=prices[team_id]
+        )
         for team_id, value in current.items()
     }
+    finance = club_finances(
+        current,
+        prices,
+        fills,
+        members,
+        seconds={order[1] for order in ordered.values() if len(order) > 1},
+        champions=champions,
+    )
     top = max(current, key=lambda team_id: (current[team_id], -team_id))
     bottom = min(current, key=lambda team_id: (current[team_id], team_id))
     following = next_popularities(current, factors, world_seed=seed, year=year)
@@ -733,6 +768,63 @@ def popularity_season(
         f"締めたときの変化: リーグ優勝 平均 {_mean([change[t] for t in champions]):+.1f}"
         f"（日本一 {change[japan]:+d}）・最下位 平均 {_mean([change[t] for t in lasts]):+.1f}"
         + (f"・3年続けて最下位の3年間 平均 {_mean(streaks):+.1f}" if streaks else "")
+        + "\n"
+        + format_finance(current, prices, finance)
+    )
+
+
+def club_finances(
+    popularity: dict[int, Popularity],
+    prices: dict[int, TicketPrice],
+    fills: dict[int, float],
+    members: Sequence[Member],
+    *,
+    seconds: set[int],
+    champions: set[int] | None = None,
+) -> dict[int, ClubFinance]:
+    """球団ごとの収支の見込み（`popularity_season` の近似）。"""
+    home_games = ScheduleRules().games_per_team / 2
+    registered: Counter[int] = Counter()
+    developmental: Counter[int] = Counter()
+    for member in members:
+        if member.contract is ContractStatus.DEVELOPMENTAL:
+            developmental[member.team_id] += 1
+        else:
+            registered[member.team_id] += 1
+    result = {}
+    for team_id, value in popularity.items():
+        postseason_games = 5 if champions and team_id in champions else 2 if team_id in seconds else 0
+        result[team_id] = club_finance(
+            FinanceInputs(
+                regular_attendance=round(fills[team_id] * PENNANT_DEFAULT_CAPACITY * home_games),
+                postseason_attendance=round(0.9 * PENNANT_DEFAULT_CAPACITY * postseason_games),
+                ticket_price=prices[team_id],
+                popularity=value,
+                roster=RosterSize(registered=registered[team_id], developmental=developmental[team_id]),
+                capacity=None,
+            )
+        )
+    return result
+
+
+def format_finance(
+    popularity: dict[int, Popularity],
+    prices: dict[int, TicketPrice],
+    finance: dict[int, ClubFinance],
+) -> str:
+    """値段の分布と、収支（補填前）の分布を1行にまとめる。"""
+    counts = Counter(prices.values())
+    balances = sorted(item.operating_balance for item in finance.values())
+    middle = [finance[t].operating_balance for t, v in popularity.items() if 45 <= v.value <= 55]
+    deficit = [item for item in finance.values() if item.operating_balance < 0]
+    oku = OKU
+    return (
+        "値段（AI）: " + "・".join(f"{price.label} {counts[price]}" for price in TicketPrice) + "  "
+        f"収支（補填前・億円）: 平均 {fmean(balances) / oku:+.1f}・中央 {balances[len(balances) // 2] / oku:+.1f}・"
+        f"最高 {balances[-1] / oku:+.1f}・最低 {balances[0] / oku:+.1f}・人気45〜55 平均 {_mean(middle) / oku:+.1f}"
+        f"（{len(middle)}球団）・赤字 {len(deficit)}球団・補填 平均 {_mean([i.subsidy for i in deficit]) / oku:.1f}・"
+        f"収入 平均 {fmean(i.revenue for i in finance.values()) / oku:.1f}・"
+        f"人件費 平均 {fmean(i.payroll for i in finance.values()) / oku:.1f}"
     )
 
 

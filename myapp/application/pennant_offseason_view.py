@@ -24,6 +24,7 @@ from ..domain.repositories import WorldRepository
 from ..domain.value_objects import DepartureRoute, GameStage, Season
 from .draft_board import BoardPick, draft_board
 from .dto import (
+    ClubFinanceRow,
     DraftBoard,
     DraftBoardCell,
     DraftBoardColumn,
@@ -31,6 +32,7 @@ from .dto import (
     LeagueOption,
     OffseasonChangeRow,
     OffseasonFacts,
+    OffseasonFinanceRow,
     OffseasonPlayerFact,
     OffseasonPopularityRow,
     OffseasonPromotedRow,
@@ -39,6 +41,7 @@ from .dto import (
     OffseasonSummary,
     WorldContext,
 )
+from .pennant_finance import ClubFinanceService
 from .pennant_popularity import PopularityReader, change_label
 from .pennant_ratings import overall_cell
 from .queries import AttendanceQuery, OffseasonQuery
@@ -57,12 +60,15 @@ class OffseasonViewService:
         offseason: OffseasonQuery,
         popularities: PopularityReader,
         attendance: AttendanceQuery,
+        finance: ClubFinanceService,
     ) -> None:
         self._worlds = worlds
         self._offseason = offseason
         # 人気の変化と観客動員の節（#208 E1）
         self._popularities = popularities
         self._attendance = attendance
+        # 締めた年の収支の節（#208 E2）
+        self._finance = finance
 
     def get_summary(self, world: WorldContext, year: int, *, league_id: int | None = None) -> OffseasonSummary | None:
         """Y 年のオフの結果。Y 年を締めていない（範囲外・まだ締めていない年も）なら None。
@@ -118,7 +124,24 @@ class OffseasonViewService:
             ),
             board=_offseason_board(facts, year, selected, own_id, lotteries),
             popularity=self._popularity_rows(facts, year, selected, own_id),
+            finance=self._finance_rows(world, facts, year, selected, own_id),
         )
+
+    def _finance_rows(
+        self, world: WorldContext, facts: OffseasonFacts, year: int, league_id: int | None, own_id: int | None
+    ) -> tuple[OffseasonFinanceRow, ...]:
+        """選んだリーグの球団の締めた年の値段と収支（補填前の収支の高い順。#208 E2）。
+
+        人気の行の無い年（この機能より前に締めた年）は収支を導かないので空（節ごと出さない）。
+        """
+        teams = [team for team in facts.teams if team.league_id == league_id]
+        found = self._finance.year_rows(world, year, [team.id for team in teams])
+        rows = [
+            OffseasonFinanceRow(team_id=team.id, team_name=team.name, is_own=team.id == own_id, finance=finance)
+            for team in teams
+            if (finance := found[team.id]).figures is not None
+        ]
+        return tuple(sorted(rows, key=lambda row: (-_operating_balance(row.finance), row.team_id)))
 
     def _popularity_rows(
         self, facts: OffseasonFacts, year: int, league_id: int | None, own_id: int | None
@@ -275,3 +298,8 @@ def _leaving_label(fact: OffseasonPlayerFact) -> str:
     if fact.left_via is DepartureRoute.RELEASED:
         return DepartureRoute.RELEASED.label
     return "退団" if fact.profile.is_foreign_player else DepartureRoute.RETIRED.label
+
+
+def _operating_balance(row: ClubFinanceRow) -> int:
+    """並べ替えのための補填前の収支（収支の無い行は先頭に来ないよう最も小さく扱う）。"""
+    return row.figures.operating_balance.amount if row.figures is not None else -(10**15)
