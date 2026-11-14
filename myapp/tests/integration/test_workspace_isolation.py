@@ -37,7 +37,7 @@ from unittest.mock import patch
 
 from django.apps import apps
 from django.contrib.auth.models import User
-from django.db import connection
+from django.db import connection, transaction
 from django.http import Http404
 from django.test import RequestFactory, TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
@@ -433,6 +433,14 @@ def _team_repository(t: WorkspaceCase) -> None:
     t.assertEqual({team.id for team in with_roster}, {t.team.id, t.rival.id})
     t.assert_no_mark(with_roster)
     t.assertEqual(repo.find_by_league_with_roster(t.b_league.id), [])
+    # id を指してロスター込みで読む（期中の昇格。#359）。B の id は、混ぜても見つからない扱い
+    for ids in ([t.b_team.id], [t.team.id, t.b_team.id]):
+        with t.subTest(team_ids=ids), t.assertRaises(TeamNotFound):
+            repo.find_by_ids_with_roster(ids)
+    t.assertEqual([team.id for team in repo.find_by_ids_with_roster([t.team.id])], [t.team.id])
+    # 空振りの防止: B の範囲では B のチームが読める
+    b_with_roster = DjangoTeamRepository(real_scope(t.workspace_b)).find_by_ids_with_roster([t.b_team.id])
+    t.assertEqual([team.id for team in b_with_roster], [t.b_team.id])
     signature = repo.roster_signature()
     register_players(t.b_team, [(f"{B_PLAYER}追加", 50, "外野手")])
     t.assertEqual(repo.roster_signature(), signature, "B の在籍が A の名簿の目印を変えた")
@@ -704,15 +712,49 @@ def _draft_repository(t: WorkspaceCase) -> None:
 
 
 def _draft_lottery_repository(t: WorkspaceCase) -> None:
-    """締めた年の抽選の記録（#360）。A の世界の範囲で、B の世界の選手・球団の抽選は書けない。"""
-    before = orm_models.PennantDraftLottery.objects.count()
-    b_teams = orm_models.Team.objects.filter(league__world_id=t.b_world_id).order_by("id").values_list("id", flat=True)
-    record = DraftLotteryRecord(player_id=t.b_world_player_id, attempt=2, bidder_ids=tuple(b_teams[:2]))
+    """締めた年の抽選の記録（#360）。A の世界の範囲で、B の世界の選手・球団の抽選は書けない。
+
+    同じ記録が B の世界の範囲では書けることも確かめる（空振りの防止）。記録の選手は、まだ抽選の記録が無い B の世界の
+    選手にする（記録済みの選手だと「既に抽選の記録がある」で弾かれ、範囲の検査を外しても通ってしまう）。
+    """
+    lotteries = orm_models.PennantDraftLottery.objects
+
+    def teams_and_free_player(world_id: int) -> tuple[list[int], int]:
+        """その世界の球団2つと、まだ抽選の記録が無いその球団の選手。"""
+        teams = list(
+            orm_models.Team.objects.filter(league__world_id=world_id).order_by("id").values_list("id", flat=True)[:2]
+        )
+        stint = (
+            orm_models.PlayerStint.objects.filter(team_id__in=teams)
+            .exclude(player_id__in=lotteries.values("player_id"))
+            .order_by("id")
+            .first()
+        )
+        assert stint is not None, "抽選の記録の無い選手がいない"
+        return teams, stint.player_id
+
+    before = lotteries.count()
+    b_teams, b_player = teams_and_free_player(t.b_world_id)
+    a_teams, a_player = teams_and_free_player(t.a_world_id)
+    record = DraftLotteryRecord(player_id=b_player, attempt=2, bidder_ids=tuple(b_teams))
     with t.assertRaises(InvalidWorld):
         DjangoDraftLotteryRepository(t.a).add_all([record])
-    with t.assertRaises(InvalidDraftAction):
-        DjangoDraftLotteryRepository(WorldScope.pennant(t.workspace.id, t.a_world_id)).add_all([record])
-    t.assertEqual(orm_models.PennantDraftLottery.objects.count(), before, "A の範囲で B の世界に抽選を書いた")
+    # 選手と球団の範囲の検査を別々に確かめる（B の選手だけ・B の球団だけを混ぜる）
+    for player_id, team_ids in ((b_player, b_teams), (b_player, a_teams), (a_player, b_teams)):
+        mixed = DraftLotteryRecord(player_id=player_id, attempt=2, bidder_ids=tuple(team_ids))
+        with (
+            t.subTest(player_id=player_id, team_ids=team_ids),
+            t.assertRaisesRegex(InvalidDraftAction, "この世界に無い選手・球団"),
+        ):
+            DjangoDraftLotteryRepository(WorldScope.pennant(t.workspace.id, t.a_world_id)).add_all([mixed])
+    t.assertEqual(lotteries.count(), before, "A の範囲で B の世界に抽選を書いた")
+    # 空振りの防止: B の世界の範囲では同じ記録が書ける（ほかの検査に残さないよう巻き戻す）
+    with transaction.atomic():
+        DjangoDraftLotteryRepository(_b_world(t)).add_all([record])
+        written = lotteries.get(player_id=b_player)
+        t.assertEqual(sorted(written.bids.values_list("team_id", flat=True)), sorted(b_teams))
+        transaction.set_rollback(True)
+    t.assertEqual(lotteries.count(), before)
 
 
 def _midseason_registration_repository(t: WorkspaceCase) -> None:

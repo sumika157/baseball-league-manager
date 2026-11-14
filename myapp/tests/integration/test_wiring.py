@@ -1193,12 +1193,14 @@ class OuterWorkspaceTeamsTest(SimpleTestCase):
 
 
 class WorkspaceLedgerUsersTest(SimpleTestCase):
-    """範囲を取らないワークスペースの台帳は、定義（`infrastructure/queries.py`）と `views.py` だけが使う（W2 T6）。
+    """範囲を取らないワークスペースの台帳は、定義（`infrastructure/` の `queries.py`・`repositories.py`）と、
+    `views.py`・管理画面（`admin.py`）・管理コマンド `workspace_delete`・`seed_sample_workspaces` だけが使う
+    （W2 T6。W4 で `admin.py` と `workspace_delete` を、仕上げ T1 で `seed_sample_workspaces` を足した）。
 
     台帳は key・利用者からワークスペースそのものを引くだけで、範囲を作る前（`workspace_view`・`/` の一覧）に呼ばれる。
-    application・管理コマンド・テンプレートタグなど、範囲を受け取れる場所で台帳を引き始めると、範囲の外から
+    application・ほかの管理コマンド・テンプレートタグなど、範囲を受け取れる場所で台帳を引き始めると、範囲の外から
     ワークスペースを選び直す経路になる。`myapp/` の .py（テストを除く）を走査し、名前を出すのが
-    この2つだけかを確かめる。
+    `ALLOWED` のファイルだけかを確かめる。
 
     W4 で足したワークスペースそのものの台帳（`DjangoWorkspaceRepository`・`DjangoInvitationRepository`・
     `DjangoInvitationPreviewQuery`）と、その組み立て口（作成・設定・招待・メンバー）も同じ扱いにする
@@ -1207,6 +1209,8 @@ class WorkspaceLedgerUsersTest(SimpleTestCase):
     ワークスペースそのものを扱う。範囲を受け取る経路ではない）。運営者の管理コマンド `workspace_delete`（W4 T2）は、
     `--workspace` の key で指した
     ワークスペースを消すのが仕事なので使ってよい（範囲を受け取る経路ではなく、範囲そのものを消す）。
+    計測用の管理コマンド `seed_sample_workspaces`（仕上げ T1）は、見本つきのワークスペースをサイトと同じサービスで
+    作り、prefix のユーザーが持ち主のワークスペースを利用者 id の一覧から引いて消す（範囲を受け取る経路ではない）。
     ヘッダーの切り替えの一覧（W4 T3）は、コンテキストプロセッサが views の `my_workspaces` を通して読む（名前は
     views.py の外に出さない。範囲を選び直す経路ではなく、利用者 id で自分の一覧を引くだけ）。
     """
@@ -1234,7 +1238,7 @@ class WorkspaceLedgerUsersTest(SimpleTestCase):
         Path("myapp/admin.py"),
     }
 
-    def test_only_the_views_use_the_workspace_ledgers(self):
+    def test_only_the_views_admin_and_workspace_commands_use_the_workspace_ledgers(self):
         root = Path(__file__).resolve().parents[3]
         users = set()
         for path in (root / "myapp").rglob("*.py"):
@@ -1244,7 +1248,50 @@ class WorkspaceLedgerUsersTest(SimpleTestCase):
             if any(name in text for name in self.NAMES):
                 users.add(path.relative_to(root))
         self.assertIn(Path("myapp/presentation/views.py"), users, "検査の対象を拾えていません")
-        self.assertEqual(users - self.ALLOWED, set(), "views.py の外でワークスペースの台帳を使っています")
+        self.assertEqual(users - self.ALLOWED, set(), "使ってよい場所の外でワークスペースの台帳を使っています")
+
+
+def _reachable_workspace_ids(root: object) -> list[tuple[str, int]]:
+    """`root` から届く世界の台帳（`LEDGERS`）・範囲（`WorldScope`）・閉包の `workspace_id` の、id と道。
+
+    たどるのは `myapp` のクラスのインスタンスの属性・関数の閉包の変数・束縛メソッドの持ち主・タプル／リスト／
+    辞書の要素。同じオブジェクトは1度だけ見る。呼ばれたときに組み立てる工場（`standings_for` など）は、中で作る台帳
+    までは見えないので、閉包に取り込んだ範囲と `workspace_id` を見る。`functools.partial`・`__slots__` のクラス・
+    評価前の `cached_property` の中は見ない（今の組み立て口には無い）。
+    """
+    found: list[tuple[str, int]] = []
+    seen: set[int] = set()
+
+    def walk(value: object, path: str) -> None:
+        if id(value) in seen:
+            return
+        seen.add(id(value))
+        if isinstance(value, (DjangoWorldRepository, DjangoWorldSummaryQuery)):  # `LEDGERS` と同じ2つ
+            found.append((path, value._workspace_id))
+            return
+        if isinstance(value, WorldScope):
+            found.append((path, value.workspace_id))
+            return
+        if isinstance(value, (tuple, list, set, frozenset)):
+            for index, item in enumerate(value):
+                walk(item, f"{path}[{index}]")
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                walk(item, f"{path}[{key!r}]")
+        elif inspect.ismethod(value):
+            walk(value.__self__, path)
+        elif inspect.isfunction(value):
+            for name, item in inspect.getclosurevars(value).nonlocals.items():
+                if name == "workspace_id" and isinstance(item, int):
+                    found.append((f"{path}<closure {name}>", item))
+                else:
+                    walk(item, f"{path}<closure {name}>")
+        elif type(value).__module__.startswith("myapp.") and hasattr(value, "__dict__"):
+            for name, item in vars(value).items():
+                walk(item, f"{path}.{name}")
+
+    walk(root, "")
+    return found
 
 
 class LedgersAreScopedToTheWorkspaceTest(SimpleTestCase):
@@ -1292,6 +1339,28 @@ class LedgersAreScopedToTheWorkspaceTest(SimpleTestCase):
             build_midseason_registration_service,
         }
         self.assertEqual(seen, {build.__name__ for build in expected})
+
+    def test_every_ledger_reachable_from_a_builder_is_of_the_scopes_workspace(self):
+        """依存の依存・閉包（世界の「今日」など）の奥にある台帳と範囲も、範囲のワークスペースのもの（#74 仕上げ T3）。
+
+        上の検査はサービスの1段目の依存だけを見る。ここではサービスから届くオブジェクト（`myapp` のクラスの属性・
+        関数の閉包・束縛メソッド・入れ物の要素）をたどり、見つけた台帳・範囲・閉包の `workspace_id` を確かめる
+        （たどる範囲と見えないものは `_reachable_workspace_ids`）。
+        """
+        found: dict[str, list[str]] = {}
+        for build, service in self._built():
+            for path, workspace_id in _reachable_workspace_ids(service):
+                found.setdefault(build.__name__, []).append(path)
+                with self.subTest(build=build.__name__, path=path):
+                    self.assertEqual(workspace_id, self.WORKSPACE)
+        # 空振りの防止: 2段目より奥の台帳と、閉包の中の台帳を拾えている
+        self.assertIn("._postseason._worlds", found.get(build_pennant_home_service.__name__, []))
+        self.assertIn("._postseason._worlds", found.get(build_pennant_history_service.__name__, []))
+        self.assertIn("._games_for<closure workspace_id>", found.get(build_pennant_world_view.__name__, []))
+        self.assertTrue(
+            any("<closure worlds>" in path for path in found.get(build_league_view_service.__name__, [])),
+            found.get(build_league_view_service.__name__),
+        )
 
     def test_the_postseason_history_reads_the_ledger_of_the_scopes_workspace(self):
         """日本一・ポストシーズンの結果の読み取り（GM ホーム・歴代の記録）も、範囲のワークスペースの台帳を使う。"""

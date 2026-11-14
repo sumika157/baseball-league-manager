@@ -3,6 +3,7 @@
 - B を消すと、B の行（分類表で B に属すとした行と、担当・招待の担当チームの中間表の行）がすべての表で0行になり、
   ほかの行（A・A の世界・在籍の無い選手・利用者）は1行も変わらない。B の行は、削除の順（実装）からではなく
   分類表（`test_world_isolation.CLASSIFICATION`）から数える（削除の順から1つ外すと、消し残しとして落ちる）。
+  A の世界にもドラフト会議と抽選の行を置き、B を消しても変わらないことを見る（世界を直接指す行の条件を外すと落ちる）。
 - 削除の順: 分類表のどのモデル（世界を除く）と多対多の中間表も、削除の順のどれかに入っている。消す表を指す
   参照は、消す表から（子が先）か、SET_NULL として外す一覧にある。
 - 消せないとき（何も消さない）: 世界が1つでもある（`NotDeletable`）・ほかのワークスペースにも在籍がある選手がいる
@@ -24,6 +25,7 @@ from django.test import SimpleTestCase
 from django.test.utils import CaptureQueriesContext
 
 from myapp.domain.exceptions import InvalidWorkspace, NotDeletable, WorkspaceNotFound
+from myapp.domain.pennant.draft_meeting import DraftActionKind
 from myapp.domain.pennant.world import WorldScope
 from myapp.domain.services.rankings import Title
 from myapp.domain.workspace import InvitedRole, workspace_deletion_blocker
@@ -171,6 +173,7 @@ class WorkspaceDeletionCase(WorkspaceCase):
     """`WorkspaceCase` の B から世界を消し、メンバー・招待と、まだ行の無い表の行を足したもの（A にも同じく）。"""
 
     member: User
+    a_world_draft_rows: dict[type[models.Model], set[int]]
 
     @classmethod
     def setUpTestData(cls):
@@ -192,6 +195,38 @@ class WorkspaceDeletionCase(WorkspaceCase):
             )
             invitation.teams.add(team)
         cls._plant_more_b_rows()
+        cls._plant_a_world_draft_rows()
+
+    @classmethod
+    def _plant_a_world_draft_rows(cls) -> None:
+        """A の世界のドラフト会議（会議・人数の幅・行動）と締めた年の抽選・入札（B を消しても変わらないことを見る）。
+
+        B の世界の会議は、B を消す前に世界とともに消えている（世界が残るワークスペースは消せない）。A の世界にも
+        会議が無いと、削除の順の会議・抽選の条件を外して全部消しても網羅のテストが通ってしまう。
+        """
+        team_ids = list(
+            orm_models.Team.objects.filter(league__world_id=cls.a_world_id).order_by("id").values_list("id", flat=True)
+        )[:2]
+        stint = orm_models.PlayerStint.objects.filter(team_id=team_ids[0]).order_by("id").first()
+        assert stint is not None, "A の世界の球団に選手が写っていない"
+        draft = orm_models.PennantDraft.objects.create(world_id=cls.a_world_id, year=YEAR, signature="a")
+        slot = orm_models.PennantDraftSlot.objects.create(
+            draft=draft, team_id=team_ids[0], minimum=1, maximum=1, development_max=0
+        )
+        action = orm_models.PennantDraftAction.objects.create(
+            draft=draft, seq=1, team_id=team_ids[0], kind=DraftActionKind.BID.value, prospect_key=1
+        )
+        lottery = orm_models.PennantDraftLottery.objects.create(player_id=stint.player_id, attempt=1)
+        bids = [
+            orm_models.PennantDraftLotteryBid.objects.create(lottery=lottery, team_id=team_id) for team_id in team_ids
+        ]
+        cls.a_world_draft_rows = {
+            orm_models.PennantDraft: {draft.id},
+            orm_models.PennantDraftSlot: {slot.id},
+            orm_models.PennantDraftAction: {action.id},
+            orm_models.PennantDraftLottery: {lottery.id},
+            orm_models.PennantDraftLotteryBid: {bid.id for bid in bids},
+        }
 
     @classmethod
     def _plant_more_b_rows(cls) -> None:
@@ -253,6 +288,14 @@ class DeletingAWorkspaceTest(WorkspaceDeletionCase):
         }
         self.assertEqual(_all_rows(), expected)
         self.assertEqual(list(User.objects.order_by("id").values()), users, "利用者は消さない")
+
+    def test_the_draft_rows_of_a_world_of_another_workspace_are_kept(self):
+        """ほかのワークスペース（A）の世界のドラフト会議・抽選は消さない（会議は世界を直接指し、球団のリーグを通らない）。"""
+        build_workspace_service().delete(self.workspace_b.id)
+
+        for model, ids in self.a_world_draft_rows.items():
+            with self.subTest(model=model.__name__):
+                self.assertEqual(set(model._default_manager.filter(id__in=ids).values_list("id", flat=True)), ids)
 
     def test_a_player_without_a_stint_is_kept(self):
         """在籍の無い選手はどの範囲にも属さないので消さない（B の試合の明細に出ていても）。"""

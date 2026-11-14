@@ -1856,7 +1856,7 @@ epic を main に入れる前に開発 DB・本番で数え、あれば作成者
 - この設計書: 3.1 の書き込みの判定（W4 T5 で済ませた分）、3.2（担当の向き `team_assignments`・招待に `created_by` を持たない・`WorkspaceQuota` は `max_owned_workspaces` だけ・`MemberNotFound`）、3.3（1人1役割・招待の範囲・世界の残るワークスペースは消せない）、6.（W4 の URL）、9.（W4 は完了・W6 の範囲）、「epic を main に入れるときに必ず行うこと」に W4 の分。
 - Wiki「アーキテクチャ」: W4 の組み立て口の「使う場所」を今の画面に（「画面は W4 の T3 で足す」などを直した）。範囲を取らない台帳を使ってよい場所に `admin.py` と `workspace_delete`、ワークスペースの削除は範囲で絞って消すこと。
 - 件数: domain＋integration 4,371（コードは変えていない。T6 の後の epic の先端と同じ）。e2e は画面を変えないので流していない。
-- レビュー（ddd-boundary-reviewer）: 重要な指摘なし（規則・例外・組み立て口・使ってよい場所・設計書の記述がコードと一致、CLAUDE.md の差分は承認の3か所だけ）。軽微を直した: `ddd-boundary-reviewer.md` で (1) `InvitationRepository` をメソッド単位でなくクラスとして台帳に（取消と掃除はワークスペースの id で絞る）、(2) 台帳が担当の検査のためにそのワークスペースの実データのチームの id を読むのはよいと但し書き、(3) `test_wiring.py` の分類に `MEMBER_BUILDERS`／`MEMBER_QUERIES`。残したもの: `WorkspaceLedgerUsersTest` の docstring とテスト名が古い（下の「残した軽微」）。CLAUDE.md の台帳の書き方は、2026-11-13 のユーザー回答でクラス単位（`InvitationRepository`）に直した。
+- レビュー（ddd-boundary-reviewer）: 重要な指摘なし（規則・例外・組み立て口・使ってよい場所・設計書の記述がコードと一致、CLAUDE.md の差分は承認の3か所だけ）。軽微を直した: `ddd-boundary-reviewer.md` で (1) `InvitationRepository` をメソッド単位でなくクラスとして台帳に（取消と掃除はワークスペースの id で絞る）、(2) 台帳が担当の検査のためにそのワークスペースの実データのチームの id を読むのはよいと但し書き、(3) `test_wiring.py` の分類に `MEMBER_BUILDERS`／`MEMBER_QUERIES`。残したもの: `WorkspaceLedgerUsersTest` の docstring とテスト名が古い（下の「残した軽微」。仕上げ T3 で埋めた）。CLAUDE.md の台帳の書き方は、2026-11-13 のユーザー回答でクラス単位（`InvitationRepository`）に直した。
 
 #### W4 のまとめ（T7、2026-11-13）
 
@@ -1921,7 +1921,7 @@ epic を main に入れる前に開発 DB・本番で数え、あれば作成者
 - W5（#81）: 見本の生成。`/` の作成フォームに見本の欄を足す余地を残した
 - W6（#82）: 世界の数の上限をワークスペースごとに読み替える（今は1人5つを全ワークスペースで数える `count_by_owner`。「容量の軸は試合数」は W6 で `WorkspaceQuota` に移す）・分岐元・世界ごとの球場の複製の要否（W3 の決定 1）
 - epic を main に入れるとき: 上の「epic を main に入れるときに必ず行うこと」（W4 の分: `WORKSPACE_MAX_OWNED`・運営者が superuser か・作った人がメンバーでない世界の数・`workspace_delete` の使い方）と、main を取り込むたびのマイグレーション番号の確認
-- 残した軽微（各段階のレビューより）: `AtomicBlock` を `pennant_season` から import している（共通の置き場所が無い）／期限切れの招待はそのワークスペースで次に発行するまで残る（使えず一覧にも出ない）／役割の変更の入力の誤りで、画面の上の案内と欄のエラーの両方を出す／持ち主の譲渡（持ち主の列）は管理画面のフォームが書き、サービスを通さない（`hand_over` は検査の見立てだけ）／`Team.managers` の `help_text` の「スタッフ権限」はマイグレーションが要るので直していない／招待の受諾と設定の画面のクエリ数はテストで固定していない（上の表）／`test_wiring.py` の `WorkspaceLedgerUsersTest` の docstring の1行目とテスト名が「`views.py` だけ」のまま（本文と `ALLOWED` は `admin.py`・`workspace_delete` を含む。T7 はコードを変えないので次にこのテストを触るときに直す）
+- 残した軽微（各段階のレビューより）: `AtomicBlock` を `pennant_season` から import している（共通の置き場所が無い）／期限切れの招待はそのワークスペースで次に発行するまで残る（使えず一覧にも出ない）／役割の変更の入力の誤りで、画面の上の案内と欄のエラーの両方を出す／持ち主の譲渡（持ち主の列）は管理画面のフォームが書き、サービスを通さない（`hand_over` は検査の見立てだけ）／`Team.managers` の `help_text` の「スタッフ権限」はマイグレーションが要るので直していない／招待の受諾と設定の画面のクエリ数はテストで固定していない（上の表）／`test_wiring.py` の `WorkspaceLedgerUsersTest` の docstring の1行目とテスト名が「`views.py` だけ」のまま（本文と `ALLOWED` は `admin.py`・`workspace_delete` を含む。T7 はコードを変えないので次にこのテストを触るときに直す。→ 仕上げ T3 で埋めた）
 - 要望が出たら: メンバーが自分で抜ける・招待の再表示・編集者による招待（計画の「やらないこと」）
 
 #### main の取り込み（2026-11-13 その6）
@@ -2079,7 +2079,7 @@ epic を main に入れる前に開発 DB・本番で数え、あれば作成者
   - main の新しいテストを epic の形に: `world_scope`・`real_scope`・`world_ledger`・`world_summary_query`・`ws_url`・`make_pennant_world`、会議の画面のオーナーを `make_editor` に。#352 の `test_permissions.py` の POST のテストは `ws_url` で（epic の権限の形のまま通った）。
 - **計測**: やり直していない。main の変更で読み取りが増えるのは、ペナントの世界の一覧（ドラフト会議の記録の1本）・GM ホームの締める欄（会議の状態）・編成の「育成」タブ・オフの結果（抽選）・ドラフト会議の画面で、どれもペナントの画面（`measure_pages` の実データの画面は変わらない）。
 - テスト: domain＋integration 4,688（epic 1a76690 の 4,454 より +234。main の分と、この取り込みで足した検査）、e2e 21。
-- **レビュー**（`ddd-boundary-reviewer`。1つ目のマージの後）: 重要な指摘なし。`world_direct_condition` の実データの分岐（何にも当たらない）は「実データとペナントの世界を混ぜない」に合う（実データの範囲を世界のワークスペースで絞る別案は、実データの範囲から世界の会議が読める・消せるようになるので採らない）。軽微を直した: 世界の台帳が会議を `.objects` で直接引いていた（`drafts_in_worlds` に）・`test_wiring.py` のワークスペースの id の直書き（`WORLD7.workspace_id` に）。残したもの: 削除の網羅のテストで A の世界に会議の行を置いて「他所の会議を消さない」まで縛ること・抽選のリポジトリの B の範囲での書き込みの確かめ・`find_by_ids_with_roster` を分離の検査に足すこと・台帳の検査がサービスの1段目しか見ないこと（今回より前から）。
+- **レビュー**（`ddd-boundary-reviewer`。1つ目のマージの後）: 重要な指摘なし。`world_direct_condition` の実データの分岐（何にも当たらない）は「実データとペナントの世界を混ぜない」に合う（実データの範囲を世界のワークスペースで絞る別案は、実データの範囲から世界の会議が読める・消せるようになるので採らない）。軽微を直した: 世界の台帳が会議を `.objects` で直接引いていた（`drafts_in_worlds` に）・`test_wiring.py` のワークスペースの id の直書き（`WORLD7.workspace_id` に）。残したもの: 削除の網羅のテストで A の世界に会議の行を置いて「他所の会議を消さない」まで縛ること・抽選のリポジトリの B の範囲での書き込みの確かめ・`find_by_ids_with_roster` を分離の検査に足すこと・台帳の検査がサービスの1段目しか見ないこと（今回より前から）。→ 4つとも仕上げ T3 で埋めた。
 
 ### W6（#82）
 
@@ -2193,4 +2193,32 @@ epic を main に入れる前に開発 DB・本番で数え、あれば作成者
 - **変異の確かめ**（どれも戻した）: `--delete` の対象を prefix で絞らない（全ユーザー）→ 1件（`test_delete_removes_only_that_prefix`）。`DEBUG` の検査を外す → 2件。名前の形（`<prefix>-<数字>`）を見ずに頭だけで拾う → `DeleteSampleWorkspacesTest` の準備で止まる（似た名前のユーザーがいるので作成が拒まれる）。
 - Wiki「仮想データの投入」に「見本つきのワークスペースを大量に作る（計測用）」の節。
 - テスト: domain＋integration 4,766（その8 の 4,750 に、このコマンドの16本）、e2e 21。
-- **レビュー**（`ddd-boundary-reviewer`）: 重要な指摘なし。軽微を直した: 作成をユーザーごと1つのトランザクションにして失敗時に `--delete` を案内／Wiki に「`<prefix>-<数字>` の名前なら作ったかどうかによらず消える」／`--delete` と `--private` の併用を拒む／世界で止まる経路・上限・入力なし・引数の誤りのテストを足した。残した軽微: `WorkspaceLedgerUsersTest` の docstring 本文にこのコマンドの理由を書いていない（`ALLOWED` の行のコメントに書いた。同じ docstring を T3 が直すので、衝突を避けた）。
+- **レビュー**（`ddd-boundary-reviewer`）: 重要な指摘なし。軽微を直した: 作成をユーザーごと1つのトランザクションにして失敗時に `--delete` を案内／Wiki に「`<prefix>-<数字>` の名前なら作ったかどうかによらず消える」／`--delete` と `--private` の併用を拒む／世界で止まる経路・上限・入力なし・引数の誤りのテストを足した。残した軽微: `WorkspaceLedgerUsersTest` の docstring 本文にこのコマンドの理由を書いていない（`ALLOWED` の行のコメントに書いた。同じ docstring を T3 が直すので、衝突を避けた。→ T3 で書いた）。
+
+#### T3 漏れの検査の穴を埋める（`refactor/workspace-isolation-gaps`、2026-11-14）
+
+決定5（2026-11-14。A）のとおり、各段階で残した軽微なもののうち、漏れの検査の穴だけを埋めた。**テストだけの変更**で、コード・スキーマ・マイグレーションは変えていない。
+
+- **削除の網羅**（`test_workspace_delete.py`）: `WorkspaceDeletionCase` の A の世界に、ドラフト会議（会議・人数の幅・行動）と締めた年の抽選・入札を置いた（`_plant_a_world_draft_rows`）。B の世界の会議は B を消す前に世界ごと消えているので、これまでは A にも B にも会議の行が無く、削除の順の会議・抽選の条件を外して全部消しても網羅のテストが通っていた。新しいテスト `test_the_draft_rows_of_a_world_of_another_workspace_are_kept` に加えて、既存の全表の比較（`test_every_row_of_b_is_deleted_and_nothing_else_changes`）もこの行を見るようになった。
+- **抽選のリポジトリ**（`test_workspace_isolation.py` の `_draft_lottery_repository`）: 記録の選手が `_plant_b_draft_rows` で抽選済みの選手だったため、A の世界の範囲での書き込みは範囲の検査ではなく「既に抽選の記録がある」で弾かれていた（**空振り**。範囲の検査を外しても通った）。まだ抽選の記録が無い選手で書き、弾く理由を「この世界に無い選手・球団」の文言まで確かめる。選手と球団の検査を別々に確かめるため、「B の選手＋B の球団」「B の選手＋A の世界の球団」「A の世界の選手＋B の球団」の3通りにした。B の世界の範囲では同じ記録が書けることも確かめる（savepoint の中で書いて巻き戻し、ほかの `CHECKS` に残さない）。
+- **`find_by_ids_with_roster`**（`DjangoTeamRepository`。#359 で main に入った）: `CHECKS` の `_team_repository` に足した。A の範囲で B の id（単独・A の id と混ぜたもの）は `TeamNotFound`、B の範囲では B のチームが読める。
+- **`WorkspaceLedgerUsersTest`**（`test_wiring.py`）: docstring の1行目とテスト名（`test_only_the_views_admin_and_workspace_commands_use_the_workspace_ledgers`）を `ALLOWED`（`views.py`・`admin.py`・`workspace_delete`・T1 の `seed_sample_workspaces`）に合わせた（T1 の取り込みでこのコマンドの理由も本文に書いた）。
+- **§14 から見つけた残り1つ**（その7 のレビューの「台帳の検査がサービスの1段目しか見ない」）: `LedgersAreScopedToTheWorkspaceTest` に、サービスから届くオブジェクト（`myapp` のクラスの属性・関数の閉包・束縛メソッド・入れ物の要素）をたどり、見つけた世界の台帳・範囲（`WorldScope`）・閉包の `workspace_id` がすべて範囲のワークスペースかを見る検査を足した（`_reachable_workspace_ids`）。空振りの防止に、2段目の台帳（GM ホーム・歴代の記録の `_postseason._worlds`）・閉包の中の台帳（世界の「今日」）・呼ばれたときに組み立てる工場の閉包（世界の見出しの `games_for`）を拾えていることも見る。
+
+**変異の確かめ**（どれも戻した。「元のテスト」は T3 の前の3ファイルで同じ変異を流したもの）
+
+| 変異 | T3 のテスト | 元のテスト |
+| --- | --- | --- |
+| `find_by_ids_with_roster` を範囲で絞らない | 1件（isolation） | 通る |
+| 抽選の選手と球団の検査の両方を範囲で絞らない | 1件 | 通る |
+| 抽選の選手の検査だけを外す | 2件 | 通る |
+| 抽選の球団の検査だけを外す | 2件 | 通る |
+| ワークスペースの削除の会議の3表を全部消す（削除のループだけ） | 5件（delete） | 通る |
+| ワークスペースの削除の抽選・入札を全部消す（削除のループだけ） | 4件 | 通る |
+| 会議の3表の範囲の条件（`_scope_rows_condition`）を全部にする | 8件（消す前の検査が拾う） | 通る |
+| オフの部品のタイトルの集計を別のワークスペースの範囲で組み立てる | 4件（wiring） | 通る |
+| 世界の見出しの `games_for` の閉包に別のワークスペースの id | 1件 | 通る |
+
+- テスト: domain＋integration 4,768（T1 の後の epic の 4,766 より +2。ほかの足した検査は既存のテストの中）、e2e 21。
+- **レビュー**（`ddd-boundary-reviewer`）: 重要な指摘なし。軽微を直した: 呼ばれたときに組み立てる工場の中が見えない → 閉包に取り込んだ範囲と `workspace_id` も見る（ただし工場の中に直書きした定数は見えない）、選手と球団の検査を別々に、`find_by_ids_with_roster` の組に `subTest`、たどらないもの（`functools.partial`・`__slots__`・評価前の `cached_property`）を docstring に。残したもの: `test_workspace_isolation.py`（約2,370行）と `test_wiring.py`（約1,550行）が目安の600行を超えている（分割は #343 の範囲）。
+- **テストだけでは埋まらないもの**（§14 の残したものから。コードを変えるので T3 ではしない。Wiki の「残した拡張」へ）: ペナントの条件に `world__workspace_id` を足す二重の防御（測ってから決める）・管理画面のオートコンプリートの候補を絞る（今は保存で弾く）・管理画面の編集者・担当のインラインが集約の検査を通らない。
