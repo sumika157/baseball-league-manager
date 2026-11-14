@@ -8,7 +8,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('myapp', '0064_pennant_development_plan'),
+        ('myapp', '0065_pennant_foreign_signing_plan'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 

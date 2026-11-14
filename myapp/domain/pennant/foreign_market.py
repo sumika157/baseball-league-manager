@@ -27,7 +27,12 @@
   定常状態の実測で決めた（`test_offseason_population.py` が見張る）。戦力外が新しく迎える外国人と比べる見込み
   （`release.foreign_prospect_value`）の出典は `expected_signing_ratings` と `expected_signing_ages`
 
-GM の指名（F2）とシーズン中の獲得（F3）は、ここに後から足す（局面 `SigningPhase.MIDSEASON` と `ensure_signable` の
+- **GM の指名**（F2）: 受け持つ球団は、オフの候補から GM が選べる（`ForeignSigningPlan`。None はお任せ＝AI と同じ、
+  空は手動で0人）。指名した候補は AI の選択と差し替え（`offseason_signings(manual=)`）、人数は「補う人数」に縛られず
+  保有の上限まで選べる。締めるときに、新しい支配下の選手の枠・保有の上限・位置の最低人数に収まらない分を、見立ての
+  低い候補から削る（`confirm_chosen_signings`）。候補の表に出す見込みの区分は `candidate_outlook_grade`
+
+シーズン中の獲得（F3）は、ここに後から足す（局面 `SigningPhase.MIDSEASON` と `ensure_signable` の
 1年の上限は、その土台）。
 """
 
@@ -44,7 +49,7 @@ from ..exceptions import InvalidSigning
 from ..simulation.estimate import draw_growth_type, draw_potential, with_growth, with_potential
 from ..simulation.manager import ROTATION_SIZE
 from ..simulation.randomness import game_seed, make_random, weighted_index
-from ..simulation.ratings import AVERAGE_RATING, PitcherRatings
+from ..simulation.ratings import AVERAGE_RATING, PitcherRatings, RatingGrade
 from ..value_objects import AcquisitionRoute, ContractStatus, ForeignBackground, Position, Profile
 from ..virtual_players import generator
 from .draft import (
@@ -58,6 +63,7 @@ from .draft import (
 from .draft_meeting import ScoutingAccuracy, ScoutingReport, scout_noise, scout_with_noise, scouting_value
 from .initial_ratings import SEASON_START_MONTH, STRENGTH_UNIT
 from .offseason_player import Ratings
+from .outlook import PEAK_AGE, outlook_grade, projected_ratings
 from .prospects import draw_prospect_ratings, expected_prospect_ratings
 
 # 1回の候補の、位置ごとの人数（計8人。捕手はいない＝外国人の捕手は NPB でもまれ）
@@ -438,13 +444,121 @@ def ensure_signable(
         raise InvalidSigning(f"シーズン中の外国人選手の獲得は1年に{MAX_MIDSEASON_SIGNINGS}人までです。")
 
 
+# --- GM の指名（受け持つ球団のオフ。#169 F2） ---
+
+
+def offseason_key(year: int, index: int) -> CandidateKey:
+    """締める年 `year` のオフの候補の鍵（オフは1回だけ引くので何回目は0）。保存した指名の行（候補の添字）から作る。"""
+    return CandidateKey(year, SigningPhase.OFFSEASON, 0, index)
+
+
+@dataclass(frozen=True)
+class ForeignSigningPlan:
+    """GM の外国人のオフの指名。球団ごとに1つで、締める年 `year` のオフに使う。
+
+    `keys`（獲得する候補の鍵）が None ならお任せ（AI と同じ規則）、空集合なら手動で0人。戦力外の指名
+    （`release.ReleasePlan`）と同じく GM の上書き（入力）だけを持ち、締めた時点で消す（獲得の事実は在籍の経路
+    `NEW_FOREIGN` とプロフィールの前所属に残る）。鍵はその年のオフの候補のもの（`offseason_key`）だけ。
+    """
+
+    team_id: int
+    year: int
+    keys: frozenset[CandidateKey] | None = None
+
+    def __post_init__(self) -> None:
+        if self.keys is not None and any(key != offseason_key(self.year, key.index) for key in self.keys):
+            raise ValueError("外国人の指名には、締める年のオフの候補だけを入れられます。")
+
+    @property
+    def is_manual(self) -> bool:
+        return self.keys is not None
+
+    @property
+    def indices(self) -> frozenset[int]:
+        """指名した候補の添字（お任せなら空）。"""
+        return frozenset(key.index for key in self.keys or ())
+
+
+def held_after_chosen_departures(held: Collection[int], leaving: Collection[int]) -> int:
+    """GM の指名を保存するときに保有の上限（`ensure_signable` の `held_foreign`）で数える外国人の人数。
+
+    いまの外国人（育成を含む。`held`）から、同じ年に GM が手動で戦力外・育成の自由契約に指名した選手（`leaving`）を
+    除く（入れ替えを1回で選べるように）。締めるときは引退・戦力外の後の人数で数え直す（`confirm_chosen_signings`）。
+    """
+    gone = set(leaving)
+    return sum(1 for player_id in held if player_id not in gone)
+
+
+def confirm_chosen_signings(
+    candidates: Sequence[ForeignCandidate],
+    chosen: Collection[CandidateKey],
+    team: DraftTeam,
+    *,
+    world_seed: int,
+) -> tuple[ForeignCandidate, ...]:
+    """GM が指名した候補を、引退・戦力外の後の球団 `team` で確定する（獲得する順）。
+
+    GM の判断を優先し、AI の「補う人数」（`foreign_count_to_add`）には縛らない。削るのは収まらない分だけで、
+    見立ての総合（`scouting_value`）の高い候補から順に（同じなら添字の小さい方）、次のどれかを破る候補を飛ばす:
+
+    - 新しい支配下の選手の枠（`draft.newcomer_plan` の人数。獲得した外国人はこの枠の内側。#169 Q2）
+    - 外国人の保有の上限（`MAX_FOREIGN_HELD`。引退・退団の後の人数 `team.foreign_count` に足して）
+    - 位置の最低人数（`draft.keeps_position_minimum`。AI の獲得・会議の指名と同じ硬い制約）
+
+    指名に無い鍵（候補にいない）は黙って除く。候補の並びには依存しない。
+    """
+    wanted = set(chosen)
+    values = {
+        candidate.key: scouting_value(scouting_report(candidate, world_seed=world_seed).ratings)
+        for candidate in candidates
+        if candidate.key in wanted
+    }
+    ranked = sorted(
+        (candidate for candidate in candidates if candidate.key in values),
+        key=lambda candidate: (-values[candidate.key], candidate.key.index),
+    )
+    slots, _ = newcomer_plan(team)
+    counts: Counter[Position] = Counter(team.position_counts)
+    accepted: list[ForeignCandidate] = []
+    for candidate in ranked:
+        if len(accepted) >= slots or team.foreign_count + len(accepted) >= MAX_FOREIGN_HELD:
+            break
+        if not keeps_position_minimum(counts, candidate.position, slots - len(accepted) - 1):
+            continue
+        counts[candidate.position] += 1
+        accepted.append(candidate)
+    return tuple(accepted)
+
+
+def candidate_outlook_grade(candidate: ForeignCandidate, report: ScoutingReport) -> RatingGrade | None:
+    """候補の見込みの区分（`PEAK_AGE` 歳ごろの総合の見込みを、球団のスカウトの見立てで見た区分）。
+
+    在籍の選手の見込み（`outlook.roster_projection`）と同じ式で、今の能力も伸びしろも見立て（`scouting_report`）を使う。
+    `PEAK_AGE` 歳以上（入団する年の4月1日の年齢）は None（見込み＝今の能力。画面は「—」）。
+    """
+    if candidate.age >= PEAK_AGE:
+        return None
+    return outlook_grade(
+        projected_ratings(
+            report.ratings, age=candidate.age, position=candidate.position, potential_estimate=report.potential
+        )
+    )
+
+
 def offseason_signings(
-    teams: Sequence[DraftTeam], *, year: int, world_seed: int, used_names: MutableSet[str]
+    teams: Sequence[DraftTeam],
+    *,
+    year: int,
+    world_seed: int,
+    used_names: MutableSet[str],
+    manual: Mapping[int, Collection[CandidateKey]] | None = None,
 ) -> OffseasonSignings:
-    """締める年 `year` のオフに、AI が球団ごとに外国人を獲得する（球団 id の昇順）。入団は翌年。
+    """締める年 `year` のオフに、球団ごとに外国人を獲得する（球団 id の昇順）。入団は翌年。
 
     `teams` は引退・戦力外の後の**世界の全球団**（穴の基準 `world_strength` を全球団の戦力から獲得の前に決める）。
-    補う人数は `foreign_count_to_add`（新しい支配下の選手の枠の内側）、位置の必要度は戦力の穴（`choose_signings`）。
+    AI は補う人数 `foreign_count_to_add`（新しい支配下の選手の枠の内側）を、位置の必要度は戦力の穴で選ぶ
+    （`choose_signings`）。`manual` は GM が手動で指名した球団（球団 id → 候補の鍵。#169 F2）で、その球団は AI の選択の
+    代わりに指名を `confirm_chosen_signings` で確定する（空なら獲得しない）。
     候補は世界の全選手の名前（`used_names` の呼び出し時点の値）と重ならないように引き、獲得した外国人の名前を
     `used_names` に足していく。背番号は球団ごとの乱数（`foreign-number-<球団 id>`、年は翌年）で、獲得した順に引く。
     """
@@ -453,15 +567,20 @@ def offseason_signings(
     signings: list[ForeignSigning] = []
     after: list[DraftTeam] = []
     for team in sorted(teams, key=lambda item: item.team_id):
+        chosen_keys = (manual or {}).get(team.team_id)
         count, _ = newcomer_plan(team)
         wanted = foreign_count_to_add(team, count)
-        if wanted <= 0:
+        if (wanted if chosen_keys is None else len(chosen_keys)) <= 0:
             after.append(team)
             continue
         candidates = draw_candidates(
             team.team_id, year=year, phase=SigningPhase.OFFSEASON, world_seed=world_seed, used_names=world_names
         )
-        chosen = choose_signings(candidates, wanted, team, reference=reference, world_seed=world_seed)
+        chosen = (
+            choose_signings(candidates, wanted, team, reference=reference, world_seed=world_seed)
+            if chosen_keys is None
+            else confirm_chosen_signings(candidates, chosen_keys, team, world_seed=world_seed)
+        )
         if not chosen:
             after.append(team)
             continue

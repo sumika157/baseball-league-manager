@@ -11,7 +11,7 @@ from __future__ import annotations
 from ..domain.pennant.offseason_player import Ratings, club_seasons, is_at_club, player_age
 from ..domain.pennant.outlook import PEAK_AGE, roster_outlook_grade
 from ..domain.pennant.world import World
-from ..domain.simulation.ratings import RatingEmphasis
+from ..domain.simulation.ratings import RatingEmphasis, RatingGrade
 from .dto import ClubTenure, OutlookCell
 
 
@@ -33,6 +33,13 @@ def outlook_cell(
         player_id=player_id,
         seasons=club_seasons(tenure.stints, team_id=team_id, year=year),
     )
+    return grade_outlook_cell(grade)
+
+
+def grade_outlook_cell(grade: RatingGrade | None) -> OutlookCell:
+    """見込みの区分を画面の形にする（None は `PEAK_AGE` 歳以上＝「—」）。
+
+    在籍の選手と外国人の候補（#169 F2）が共有する。"""
     if grade is None:
         return OutlookCell(grade=None, emphasis=RatingEmphasis.NONE, peak_age=PEAK_AGE)
     return OutlookCell(grade=grade.label, emphasis=grade.emphasis, peak_age=PEAK_AGE)

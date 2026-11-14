@@ -16,7 +16,14 @@ from datetime import date
 
 from django.http import QueryDict
 
-from ..application.dto import ClubPlanView, ClubPlayerDetail, ClubPlayerRow, DevelopmentPlanView, ReleasePlanView
+from ..application.dto import (
+    ClubPlanView,
+    ClubPlayerDetail,
+    ClubPlayerRow,
+    DevelopmentPlanView,
+    ForeignSigningPlanView,
+    ReleasePlanView,
+)
 from ..domain.exceptions import DomainError
 from ..domain.pennant.club_plan import LINEUP_POSITIONS, LineupChoice, PlanSection
 from ..domain.pennant.development import DevelopmentDecision
@@ -36,7 +43,7 @@ TAB_OF_SECTION: Mapping[PlanSection, str] = {
     PlanSection.ROTATION: "pitching",
     PlanSection.CLOSER: "pitching",
 }
-TABS = ("active", "lineup", "pitching", "release", "development")
+TABS = ("active", "lineup", "pitching", "release", "development", "foreign")
 DEFAULT_TAB = "active"
 # 「戦力外」タブ（シーズン終了で締められるときだけ出す）と、その hidden の `section`。編成の区画（`PlanSection`）とは別
 RELEASE_TAB = "release"
@@ -47,6 +54,9 @@ DEVELOPMENT_SECTION = "development"
 # 同じ「育成」タブのオフの形（公式戦を終えてから締めるまで。育成の指名。#170 P2）の hidden の `section`。
 # 期中の形（補強の窓）とは時期が重ならない
 DEVELOPMENT_PLAN_SECTION = "development_plan"
+# 「外国人」タブ（公式戦を終えてから締めるまで。外国人のオフの指名。#169 F2）と、その hidden の `section`
+FOREIGN_TAB = "foreign"
+FOREIGN_SECTION = "foreign"
 
 ACTION_MANUAL = "manual"
 ACTION_SAVE = "save"
@@ -328,3 +338,34 @@ def parse_development(post: QueryDict, current: DevelopmentPlanView) -> dict[int
         except DomainError:
             raise ClubInputError(REOPEN) from None
     return decisions
+
+
+# --- 外国人の指名（「外国人」タブ。#169 F2） ---
+
+
+@dataclass(frozen=True)
+class ForeignFormState:
+    """外国人の指名の保存に失敗したときの、送られた入力。チェックした候補（添字）を残して再表示する。"""
+
+    error: str
+    checked: frozenset[int]
+
+
+def read_foreign_signings(post: QueryDict) -> frozenset[int]:
+    """チェックされた候補の添字（読めない値は無視する）。"""
+    return frozenset(number for number in map(to_int, post.getlist("sign")) if number is not None)
+
+
+def parse_foreign_signings(post: QueryDict, current: ForeignSigningPlanView) -> list[int]:
+    """獲得する候補の添字。表示した全候補の添字（`shown`）が今の候補と食い違えば古い画面として弾く。
+
+    チェックボックスは外すと何も送られないので、`shown` と突き合わせないと「0人を選んだ」と「欠けた」を区別できない
+    （キーの欠落を0人と扱わない）。
+    """
+    shown = _ints(post.getlist("shown"))
+    if not shown or set(shown) != {row.index for row in current.candidates}:
+        raise ClubInputError(REOPEN)
+    checked = _ints(post.getlist("sign"))
+    if not set(checked) <= set(shown):
+        raise ClubInputError(REOPEN)
+    return [row.index for row in current.candidates if row.index in checked]

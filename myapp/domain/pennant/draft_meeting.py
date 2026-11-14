@@ -22,11 +22,14 @@
 - **育成の巡**（#198 D2）: 本指名が全球団で終わった時点で、本指名の合計が「球団数 × `MAX_DRAFTEES`」（NPB の120名の
   一般化）に達しておらず、育成の枠（`DraftSlot.development_max`）のある球団がいれば続けて開く。巡は1から数え、
   順番は**本指名の最後の巡の続き**（戦略に `本指名の最後の巡 + 育成の巡` を渡す。全巡入札なら育成の巡も入札と抽選で、
-  乱数の用途は `draft-lottery-development-<巡>-<回>-<候補>`）。候補は本指名の残り（同じ `ProspectPool`。候補の人数と
-  合わせ込みは本指名の計画だけから決まるので、育成の巡を足しても本指名の分布は変わらない）。選択終了はいつでもでき、
+  乱数の用途は `draft-lottery-development-<巡>-<回>-<候補>`）。候補は本指名の残り（同じ `ProspectPool`）と、
+  本指名の候補の後ろに足した**育成の層の候補**（#362。今の能力が低めの高校生中心。`DEVELOPMENT_POOL_*`）。本指名の候補の
+  人数と合わせ込みは本指名の計画だけから決まり、AI は本指名で育成の層を指名しない（`Prospect.development_tier`）ので、
+  育成の巡を足しても AI の本指名の分布は変わらない（本指名の途中で候補を足すと番号 `len(pool)` に育成の層の人数が乗り、
+  足す人は変わる。GM が本指名で育成の層を取れば AI の結果も変わる）。選択終了はいつでもでき、
   位置の最低人数（支配下の話）は見ない。区分（本指名 / 育成）も行動の並びから導く（`DraftAction` は区分を持たない）。
   **社会人の候補は育成で指名できない**（#307。規則は `DraftRoute.allows_development_pick` の1か所で、AI の指名・
-  `DraftState.apply` の検査・育成の巡で足す候補が同じ判定を使う）。本指名では今までどおり指名できる
+  `DraftState.apply` の検査・育成の層と育成の巡で足す候補の経路が同じ判定を使う）。本指名では今までどおり指名できる
 
 GM の指名（D3。#297）は同じ `DraftState.apply` を通り、行動の並びは会議の記録（`draft_record.DraftRecord`）に保存する。
 人数の幅は `meeting_slots`、候補は `meeting_pool` が唯一の出典で、どちらも `open_meeting` が通す（会議を始めるときに
@@ -103,6 +106,22 @@ POOL_RATING_SHIFT = {AmateurPath.HIGH_SCHOOL: -0.1, AmateurPath.UNIVERSITY: -3.5
 # 保つ条件。「伸びしろは経路で変えない」が指名された新人について成り立つ）になるよう、上の合わせ込みと同じ定常状態の
 # 実測で決めた値（2026-10-25 ユーザー決定 B）。標準偏差と範囲は事前の分布（`estimate.POTENTIAL_SD`・`POTENTIAL_RANGE`）
 POOL_POTENTIAL_MEAN = {AmateurPath.HIGH_SCHOOL: 48.0, AmateurPath.UNIVERSITY: 42.7, AmateurPath.CORPORATE: 46.3}
+# **育成の層の候補**（#362。#170 Q3 B「育成の新人は高校生を増やす」。2026-11-12 ユーザー決定）。本指名の候補の後ろに、
+# 全球団の育成の位置の計画（`DraftSlot.development_planned`）× `DEVELOPMENT_POOL_PER_PICK` 人を足す。
+# 本指名の候補だけだと、将来値の高い高校生は本指名で先に取られ、育成の巡には大学生しか残らなかった（育成の新人の
+# 高校 約3〜7%・伸びしろの倍率 0.82〜0.86）。経路は育成で指名できる経路だけ（`DraftRoute.allows_development_pick`）で、
+# 目安は NPB の育成ドラフト（2021〜2024年度。高校 54%・大学 24%・独立リーグ 22%。独立リーグはこのアプリに無く、
+# 年頃の近い大学に寄せると 高校 約半分）。
+# 今の能力は本指名の候補（`POOL_RATING_SHIFT`）より低くずらす。AI は本指名で育成の層を指名しない
+# （`Prospect.development_tier`。見ると本指名が将来値の高い高校生に偏る。合成の母集団で本指名の高校が 31% → 85%）ので、
+# AI の本指名の新人の分布は変わらない。伸びしろの平均は本指名の候補（`POOL_POTENTIAL_MEAN`）より低い
+# （AI が推定の伸びしろで上から取るので、同じ平均では育成の新人の倍率が 1.08〜1.14 になった）。
+# 値は「育成の新人の高校が約半分・倍率が 1.0 の少し下・母集団テストの帯（2年目の錨の補正 1.5 点以下など）の中」に
+# なるよう、定常状態（48球団 × 64人）で実測して決めた（Wiki「実測値」）
+DEVELOPMENT_POOL_PER_PICK = 2
+DEVELOPMENT_POOL_ROUTE_WEIGHTS = {AmateurPath.HIGH_SCHOOL: 60.0, AmateurPath.UNIVERSITY: 40.0}
+DEVELOPMENT_POOL_RATING_SHIFT = {AmateurPath.HIGH_SCHOOL: -9.0, AmateurPath.UNIVERSITY: -4.0}
+DEVELOPMENT_POOL_POTENTIAL_MEAN = {AmateurPath.HIGH_SCHOOL: 40.0, AmateurPath.UNIVERSITY: 37.0}
 # AI の評価: 将来値 + NEED_WEIGHT × その位置の残りの人数（計画した位置のうち、まだ指名していない数）
 NEED_WEIGHT = 2.0
 # 1位の好み（`DraftTaste`。#302）の幅。球団の色は、経路の加点（球団の中で平均0にそろえる前に ±TASTE_ROUTE 点）・
@@ -141,11 +160,16 @@ class Prospect:
     """候補ひとり。`key` は候補の番号（会議の中で一意）、`age` は入団の年の4月1日時点の満年齢。
 
     能力は錨の前で、本当の値（球団にはスカウトの推定 `scouting_report` しか見せない）。
+
+    `development_tier` は育成の層の候補か（#362。`draw_pool` の育成の層と、育成の巡で足した候補）。AI は本指名で
+    育成の層の候補を指名しない（スカウトが育成で指名する候補として見ている。`DraftState.ai_action`）。GM は本指名でも
+    指名できる（NPB に「育成でしか指名できない選手」の規則は無い）。
     """
 
     key: int
     rookie: Rookie
     age: int
+    development_tier: bool = False
 
     @property
     def position(self) -> Position:
@@ -207,7 +231,8 @@ class ProspectPool:
     def with_extra(self, position: Position, *, development: bool = False) -> ProspectPool:
         """位置 `position` の候補を1人足した候補（乱数は `draft-extra-<番号>`。同じ並びなら同じ人）。
 
-        育成の巡（`development`）で足す候補は、育成で指名できる経路（`DraftRoute.allows_development_pick`）からだけ引く。
+        育成の巡（`development`）で足す候補は、育成の層の候補（`draw_pool` の育成の層と同じ分布。育成で指名できる
+        経路 `DraftRoute.allows_development_pick` だけ）から引く。
         """
         key = len(self.prospects)
         rng = make_random(game_seed(self.world_seed, self.year, f"draft-extra-{key}"))
@@ -239,35 +264,49 @@ def _draw_prospect(
     """候補ひとり。伸びしろは候補の番号ごとの乱数（`draft-potential-<番号>`）から、
     経路の平均 `POOL_POTENTIAL_MEAN` で引く
     （`rng` の流れに足さないので、名前・経歴・今の能力・成長型は伸びしろを足す前と同じ）。
+
+    `development` なら育成の層の候補（経路の重み `DEVELOPMENT_POOL_ROUTE_WEIGHTS`・能力のずらし
+    `DEVELOPMENT_POOL_RATING_SHIFT`・伸びしろの平均 `DEVELOPMENT_POOL_POTENTIAL_MEAN`。
+    経路は育成で指名できる経路（`DraftRoute.development_amateur_paths`。規則の出典）に絞ってから引く）。
     """
+    weights = DEVELOPMENT_POOL_ROUTE_WEIGHTS if development else POOL_ROUTE_WEIGHTS
+    shifts = DEVELOPMENT_POOL_RATING_SHIFT if development else POOL_RATING_SHIFT
+    potentials = DEVELOPMENT_POOL_POTENTIAL_MEAN if development else POOL_POTENTIAL_MEAN
     if path is None:
         allowed = DraftRoute.development_amateur_paths() if development else tuple(AmateurPath)
-        paths = [item for item in POOL_ROUTE_WEIGHTS if item in allowed]
-        path = paths[weighted_index(rng, [POOL_ROUTE_WEIGHTS[item] for item in paths])]
+        paths = [item for item in weights if item in allowed]
+        path = paths[weighted_index(rng, [weights[item] for item in paths])]
     rookie = draw_rookie(
         rng,
         position,
         year=year,
         used_names=used_names,
         path=path,
-        rating_shift=POOL_RATING_SHIFT[path] + (POOL_PITCHER_SHIFT if position.is_pitcher else 0.0),
+        rating_shift=shifts[path] + (POOL_PITCHER_SHIFT if position.is_pitcher else 0.0),
         rating_sd=POOL_RATING_SD,
     )
     rookie = with_drawn_potential(
-        rookie, world_seed=world_seed, year=year, key=f"draft-potential-{key}", mean=POOL_POTENTIAL_MEAN[path]
+        rookie, world_seed=world_seed, year=year, key=f"draft-potential-{key}", mean=potentials[path]
     )
     age = rookie.profile.age(date(year + 1, SEASON_START_MONTH, 1))
     assert age is not None, "候補は生年月日を持つ"
-    return Prospect(key=key, rookie=rookie, age=age)
+    return Prospect(key=key, rookie=rookie, age=age, development_tier=development)
 
 
 def draw_pool(
-    planned: Mapping[Position, int], *, world_seed: int, year: int, used_names: Collection[str]
+    planned: Mapping[Position, int],
+    *,
+    world_seed: int,
+    year: int,
+    used_names: Collection[str],
+    development_planned: Mapping[Position, int] | None = None,
 ) -> ProspectPool:
-    """締める年 `year` の会議の候補。乱数は `draft-pool`。
+    """締める年 `year` の会議の候補。乱数は本指名の候補が `draft-pool`、育成の層の候補が `draft-pool-development`。
 
-    位置ごとの人数は、全球団がその位置に計画した指名の数（`planned`）× `POOL_PER_PICK`
+    本指名の候補の位置ごとの人数は、全球団がその位置に計画した指名の数（`planned`）× `POOL_PER_PICK`
     （最少 `POOL_MIN_PER_POSITION`。指名が1つも無い会議は0人）。経路は `POOL_ROUTE_WEIGHTS` で1人ずつ引く。
+    その後ろに、育成の層の候補を全球団の育成の位置の計画（`development_planned`）× `DEVELOPMENT_POOL_PER_PICK` 人
+    足す（#362。経路は `DEVELOPMENT_POOL_ROUTE_WEIGHTS`）。本指名の候補は育成の層を足す前と同じ（番号・身元・能力）。
     名前は `used_names`（世界の全選手）と重ならない。
     """
     rng = make_random(game_seed(world_seed, year, "draft-pool"))
@@ -278,11 +317,30 @@ def draw_pool(
         for position in generator.POSITION_RATIOS
         for _ in range(max(POOL_PER_PICK * planned.get(position, 0), POOL_MIN_PER_POSITION) if total else 0)
     ]
-    prospects = tuple(
+    prospects = [
         _draw_prospect(rng, key, position, path=None, year=year, world_seed=world_seed, used_names=names)
         for key, position in enumerate(positions)
+    ]
+    development_rng = make_random(game_seed(world_seed, year, "draft-pool-development"))
+    development_positions = [
+        position
+        for position in generator.POSITION_RATIOS
+        for _ in range(DEVELOPMENT_POOL_PER_PICK * (development_planned or {}).get(position, 0))
+    ]
+    prospects.extend(
+        _draw_prospect(
+            development_rng,
+            key,
+            position,
+            path=None,
+            year=year,
+            world_seed=world_seed,
+            used_names=names,
+            development=True,
+        )
+        for key, position in enumerate(development_positions, start=len(prospects))
     )
-    return ProspectPool(prospects=prospects, taken_names=frozenset(names), world_seed=world_seed, year=year)
+    return ProspectPool(prospects=tuple(prospects), taken_names=frozenset(names), world_seed=world_seed, year=year)
 
 
 @dataclass(frozen=True)
@@ -991,6 +1049,7 @@ class DraftState:
         評価は `将来値 + NEED_WEIGHT × 位置の残り`（1位の入札は将来値の代わりに好みを入れた評価。`_tasted`）。
         計画した位置を指名し尽くしていれば（GM が別の位置を選んだ後のお任せ）、位置の最低人数を割らない候補から
         同じ評価で選ぶ。その位置の候補が尽きていれば、その場で1人足す。
+        本指名では育成の層の候補（`Prospect.development_tier`。#362）を見ない。
         育成の巡は育成の位置の計画（`DraftSlot.development_planned`）で、育成で指名できる候補
         （`Prospect.allows_development_pick`）の中から同じように選ぶ。計画の人数に達したら選択を終える
         （GM の球団は育成の最多が計画より多い（`meeting_slots`）ので、AI が進めても計画の人数で止める）。
@@ -1023,8 +1082,7 @@ class DraftState:
                 (
                     item
                     for item in self._ranking(team_id, position, tasted)
-                    if item[1] not in self._taken
-                    and (not turn.is_development or self.pool.get(item[1]).allows_development_pick)
+                    if item[1] not in self._taken and self._ai_considers(self.pool.get(item[1]), turn.is_development)
                 ),
                 None,
             )
@@ -1037,6 +1095,12 @@ class DraftState:
             return DraftAction(kind, team_id, best[1])
         position = max(allowed or order, key=lambda item: (needed[item], -order.index(item)))
         return DraftAction(kind, team_id, len(self.pool), extra_position=position)
+
+    @staticmethod
+    def _ai_considers(prospect: Prospect, development: bool) -> bool:
+        """AI が指名を考える候補か。育成の巡は育成で指名できる候補（社会人でない。#307）、本指名は育成の層でない候補
+        （#362。育成の層は今の能力が低く伸びしろで選ばれるので、本指名で見ると将来値の高い高校生に偏る）。"""
+        return prospect.allows_development_pick if development else not prospect.development_tier
 
     def advance_ai(self, *, stop_at: int | None = None) -> list[DraftAction]:
         """`stop_at` の球団の番か、会議の終わりまで AI を進める。当てた行動を返す。"""
@@ -1084,7 +1148,8 @@ class MeetingSetup:
 def meeting_pool(
     slots: Sequence[DraftSlot], *, world_seed: int, year: int, used_names: Collection[str]
 ) -> ProspectPool:
-    """人数の幅から会議の候補を作る（`draw_pool`。位置ごとの人数は全球団の `planned` の合計）。
+    """人数の幅から会議の候補を作る（`draw_pool`。位置ごとの人数は全球団の `planned` の合計、
+    育成の層は全球団の `development_planned` の合計）。
 
     **会議の候補を作る唯一の関数**。会議を開くとき（`open_meeting`）と、会議の途中に保存した人数の幅から候補を
     作り直すとき（D3 の1手ごと）が同じ関数を通るので、同じ幅と名前なら同じ候補（同じ指紋）になる。
@@ -1095,7 +1160,8 @@ def meeting_pool(
     壊れない（指紋が違って `DraftChanged`）。
     """
     planned = Counter(position for slot in slots for position in slot.planned)
-    return draw_pool(planned, world_seed=world_seed, year=year, used_names=used_names)
+    development = Counter(position for slot in slots for position in slot.development_planned)
+    return draw_pool(planned, world_seed=world_seed, year=year, used_names=used_names, development_planned=development)
 
 
 def open_meeting(
