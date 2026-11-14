@@ -83,12 +83,33 @@ def pitching_line_for(plate_appearances: Iterable[PlateAppearance], pitcher_id: 
 
     勝敗・セーブ・ホールド・先発登板は含めない（`decisions` が継投とイニングスコアから
     決める別の関心事で、ここで 0 のまま返すと二重の出典になる）。呼ぶ側が
-    `decisions` の結果と合わせて使う。
+    `decisions` の結果と合わせて使う。1試合の投手を何人も数えるなら `pitching_lines_for` を使う。
+    """
+    return pitching_lines_for(plate_appearances).get(pitcher_id, _pitching_line([], []))
+
+
+def pitching_lines_for(plate_appearances: Iterable[PlateAppearance]) -> dict[int, PitchingLine]:
+    """1試合の投手全員の投球成績（投手 id → 成績）を打席から組み立てる。
+
+    得点の再生（`runs_scored_in`）を試合ごとに1回で済ませる。投手ごとに `pitching_line_for` を
+    呼ぶと、1人ごとに試合の全打席を再生し直すことになる（1シーズン 143試合で 2,302回。#384）。
+    打席に立ち会っていない投手は含まない。
     """
     ordered = _in_order(plate_appearances)
-    faced = [entry for entry in ordered if entry.pitcher_id == pitcher_id]
-    # 失点と自責点は同じ再生から出る。2度呼ぶと1試合ぶんを2回たどることになる
-    charged = [run for run in runs_scored_in(ordered) if run.responsible_pitcher_id == pitcher_id]
+    faced: dict[int, list[PlateAppearance]] = {}
+    for entry in ordered:
+        faced.setdefault(entry.pitcher_id, []).append(entry)
+    charged: dict[int, list[RunScored]] = {}
+    for run in runs_scored_in(ordered):
+        charged.setdefault(run.responsible_pitcher_id, []).append(run)
+    return {
+        pitcher_id: _pitching_line(faced.get(pitcher_id, []), charged.get(pitcher_id, []))
+        for pitcher_id in faced.keys() | charged.keys()
+    }
+
+
+def _pitching_line(faced: list[PlateAppearance], charged: list[RunScored]) -> PitchingLine:
+    """1人の投手が立ち会った打席と、責任を負う得点から成績を作る。"""
     return PitchingLine(
         innings=InningsPitched(outs=sum(entry.outs_recorded for entry in faced)),
         runs_allowed=len(charged),
@@ -464,8 +485,9 @@ def ensure_lines_match_plate_appearances(game: Game) -> None:
             )
 
     # 打撃と型が違うので変数名を分ける（同じ名前だと mypy が最初の型で固定してしまう）
+    pitched_by = pitching_lines_for(game.plate_appearances)
     for outing in game.pitching:
-        pitched = pitching_line_for(game.plate_appearances, outing.player_id)
+        pitched = pitched_by.get(outing.player_id, _pitching_line([], []))
         if outing.line.innings != pitched.innings:
             raise InvalidPlateAppearance(
                 f"投球回が打席の記録と一致しません（選手id={outing.player_id}）。"
@@ -562,11 +584,12 @@ def _record_pitching_from_plate_appearances(game: Game) -> None:
         team_id = game.away_team_id if entry.is_bottom else game.home_team_id
         by_team.setdefault(team_id, []).append(pitcher_id)
 
+    lines = pitching_lines_for(game.plate_appearances)
     for pitchers in by_team.values():
         for order, pitcher_id in enumerate(pitchers, start=1):
             game.record_pitching(
                 pitcher_id,
-                pitching_line_for(game.plate_appearances, pitcher_id),
+                lines[pitcher_id],
                 appearance_order=order,
                 entered_inning=first_seen[pitcher_id].inning,
             )
@@ -605,7 +628,7 @@ def assemble_game(
 
     1. 得点とイニングスコア（`derived_line_score`）。スコアブックとして成立しているかも検算する
     2. ラインアップの枠ごとに打撃成績（`batting_line_for`）。打席が回らなかった枠も0の行で残す
-    3. 初登板の順に投球成績（`pitching_line_for`）と登板順・登板した回
+    3. 初登板の順に投球成績（`pitching_lines_for`）と登板順・登板した回
     4. 守備成績（`record_derived_fielding`）。守備位置を選手に引くのにラインアップが要るので、3の後
     5. 勝敗・セーブ・ホールド（`pitching_decisions`）
 
