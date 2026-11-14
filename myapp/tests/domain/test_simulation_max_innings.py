@@ -19,6 +19,7 @@ from myapp.domain.simulation.samples import average_club, round_robin_days, spre
 from myapp.domain.value_objects import ForeignPlayerRules, GameStage
 
 from .doubles import ScriptedRandom
+from .markers import slow
 
 OPENING_DAY = date(2026, 4, 1)
 # `max_innings` を足す前のエンジン（S1 のコミット 346ca65）で、下の `_season_fingerprint()` を取った値。
@@ -80,6 +81,7 @@ def _first_tied_seed() -> int:
     raise AssertionError("500 シードで引分が1試合も無い（この検査が空振りしている）")
 
 
+@slow
 class DefaultMaxInningsTest(TestCase):
     def test_the_default_gives_the_same_plate_appearances_as_before_the_argument(self):
         fingerprint, ties = _season_fingerprint()

@@ -43,6 +43,8 @@ from myapp.domain.simulation.ratings import BatterRatings, GrowthType, PitcherRa
 from myapp.domain.simulation.samples import average_club, round_robin_days, spread_league
 from myapp.domain.value_objects import ForeignPlayerRules, GameStage
 
+from .markers import slow
+
 TODAY = date(2026, 5, 10)
 OPENING_DAY = date(2026, 4, 1)
 
@@ -284,6 +286,7 @@ def _season(orders_for: dict[int, ClubOrders] | None = None, days: int = 28):
     return rosters, games, usage
 
 
+@slow
 class UsualUsageTest(TestCase):
     """AI の普段の起用: 先発に疲労は付かず、重い疲労はほとんど無い。
 
@@ -315,6 +318,7 @@ class UsualUsageTest(TestCase):
         self.assertTrue(all(stamina[o.pitcher_id] >= HIGH_STAMINA_RELIEVER for o in three_day))
 
 
+@slow
 class FiveManRotationTest(TestCase):
     """手動の5人ローテは、毎日の試合で中4日の先発が出て、疲労（軽い）が付く。"""
 

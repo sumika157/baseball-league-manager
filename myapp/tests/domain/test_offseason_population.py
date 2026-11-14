@@ -42,6 +42,8 @@ from myapp.domain.simulation.samples import BATTER_MEAN, BATTER_SD, PITCHER_MEAN
 from myapp.domain.value_objects import ContractStatus, DraftPick, ForeignPlayerRules, Position, Profile
 from myapp.domain.virtual_players import generator
 
+from .markers import slow
+
 START_YEAR = 2026
 TEAMS = 48
 YEARS = 10
@@ -52,6 +54,8 @@ INITIAL_ROSTER = 34
 STEADY_ROSTER = 64
 # 帯に追いつく途中を見るときの球団数（人数の推移だけを見るので少なくてよい）
 GROWTH_TEAMS = 12
+# 上端を超えた球団を見る年数（1回目のオフで帯へ戻ることと、その後に崩れないこと）
+OVERFULL_YEARS = 3
 # 試合で使う人数（1軍の野手は打順9人、投手は先発6人）
 REGULAR_BATTERS = 9
 PART_TIME_BATTERS = 3
@@ -429,6 +433,7 @@ def run_years(
     return result
 
 
+@slow
 class OffseasonPopulationTest(unittest.TestCase):
     """合成した 48 球団 × 64 人（開幕前の支配下の帯の中）を 10 年回して、分布が帯の内側に保たれる。"""
 
@@ -648,9 +653,14 @@ class OffseasonPopulationTest(unittest.TestCase):
         self.assertLess(abs(fmean(stat.signed_value_shift for stat in self.years[1:])), 0.8)
 
     def test_same_seed_gives_same_result(self) -> None:
-        self.assertEqual(run_years(years=3, roster_size=STEADY_ROSTER), self.years[:3])
+        """同じシードなら同じ結果になる。決まり方を見るだけなので、球団を減らして2年で比べる（48球団・3年で約6秒だった。#385）。"""
+        self.assertEqual(
+            run_years(years=2, roster_size=STEADY_ROSTER, teams=GROWTH_TEAMS),
+            run_years(years=2, roster_size=STEADY_ROSTER, teams=GROWTH_TEAMS),
+        )
 
 
+@slow
 class RosterGrowthTest(unittest.TestCase):
     """実データから分岐した球団（支配下 約34人）が、上端を超えずに開幕前の帯（62〜66人）へ届く。
 
@@ -701,18 +711,22 @@ class RosterGrowthTest(unittest.TestCase):
                 self.assertLessEqual(stat.anchor_sd_shift, 1.3 if index == 0 else 1.0)
 
 
+@slow
 class OverfullRosterTest(unittest.TestCase):
     """帯の上端を超えた球団（48 球団 × 支配下の上限 70 人から）を、戦力外が帯へ戻す（#168）。
 
     1回目のオフで、引退の後に残った人数から、ふだんの新人（6人）を迎えても上端（66人）を超えない人数まで外す。
     実測（シード 1〜4）は1回目の入れ替わり 約15%（うち戦力外 約8%）、その後は定常状態と同じ（平均 約10%）。
+
+    回すのは1回目のオフと続く2年（`OVERFULL_YEARS`）。同じシードの10年の先頭3年と同じ結果になる。
+    帯に戻った後の定常状態は `OffseasonPopulationTest` が10年で見る（10年回すと約21秒だった。#385）。
     """
 
     years: list[YearStats]
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.years = run_years(roster_size=LEAGUE_REGISTERED_LIMIT)
+        cls.years = run_years(roster_size=LEAGUE_REGISTERED_LIMIT, years=OVERFULL_YEARS)
 
     def test_rosters_come_back_into_the_band_at_the_first_offseason(self) -> None:
         first = self.years[0]
