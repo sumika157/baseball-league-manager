@@ -22,7 +22,6 @@ from ..application.dto import (
     AnalysisRosterRow,
     AwardRow,
     ChampionshipRow,
-    ClubRosterSize,
     ClubStint,
     ClubTenure,
     ContractFacts,
@@ -45,6 +44,7 @@ from ..application.dto import (
     OffseasonFacts,
     OffseasonPlayerFact,
     OffseasonTeam,
+    PayrollMember,
     PeriodBatting,
     PeriodPitching,
     PitcherUsage,
@@ -123,6 +123,7 @@ from .scoping import (
     period_covering,
     players_in,
     ratings_in,
+    salary_contracts_in,
     staff_tenures_in,
     stage_condition,
     stints_in,
@@ -175,9 +176,9 @@ class DjangoPlayerFieldingQuery:
         if not total["games"]:
             return None
 
-        # 年度別はこのチームでの成績（打撃・投球の年度別と同じ）。通算は移籍前も含む
+        # 年度別はこのチームでの成績（打撃・投球の年度別と同じ。明細のチームで引く。#396）。通算は移籍前も含む
         yearly = (
-            rows.filter(Q(game__home_team_id=team_id) | Q(game__away_team_id=team_id))
+            rows.filter(team_id=team_id)
             .values("game__year")
             .annotate(games=Count("id"), **self._SUMS)
             .order_by("game__year")
@@ -383,6 +384,10 @@ class DjangoPlayerStatsQuery:
         # 成績は公式戦だけ（ポストシーズンは数えない）
         regular = StageFilter.REGULAR_ONLY
         games = Q() if year is None else Q(game__year=year)
+        if team_id is not None and year is not None:
+            # 球団のその年の成績は、明細のチームがその球団の試合だけ。年の途中で移った選手は、
+            # 移る前の球団の分を移った先に数えない（#396）。年を省いた通算は移籍前も含む
+            games &= Q(team_id=team_id)
         if team_id is None and league_id is None:
             # 世界の全選手。IN 句に何千件も並べず、範囲の試合で絞る
             batting = batting_totals(self._scope, stages=regular, games=games)
@@ -693,13 +698,15 @@ class DjangoGameListQuery:
         ]
 
     def list_for_player(self, team_id: int, player_id: int) -> list[Game]:
-        """そのチームの試合のうち、選手が出場した試合（打撃か投球に記録がある試合）。試合日の古い順。
+        """選手がそのチームで出場した試合（そのチームの打撃か投球の明細がある試合）。試合日の古い順。
 
         **その選手の打撃・投球の明細だけ**を持つ（相手や他の選手の明細・イニングスコアは読まない）。
         選手ページの年度別・月別の成績と試合ごとの記録はこの選手の明細だけで足りる。チームの試合を
         明細ごと全シーズンぶん組み立てると、シーズンが増えるほど遅くなる。参照専用で、保存しない。
+        チームは明細のチームで引く（試合のホームかビジターで引くと、年の途中で移った選手の、移る前の球団と
+        移った先の球団の対戦が両方に入る。#396）。
         """
-        in_team = Q(game__home_team_id=team_id) | Q(game__away_team_id=team_id)
+        in_team = Q(team_id=team_id)
         in_scope = game_rows_condition("game", self._scope, stages=StageFilter.REGULAR_ONLY)
         batting = orm_models.GameBattingLine.objects.filter(in_scope, in_team, player_id=player_id).select_related(
             "game"
@@ -846,9 +853,8 @@ class DjangoPennantActivityQuery:
                 game_rows_condition("game", self._scope, stages=StageFilter.REGULAR_ONLY),
                 game__played_on__gt=after,
                 game__played_on__lte=through,
-                # 投球の明細は球団を持たない。在籍中の球団で引く（世界の選手の在籍は1つ）
-                player__stints__team_id=team_id,
-                player__stints__to_year__isnull=True,
+                # 明細のチームで引く（今の在籍で引くと、期間の途中で移った投手の移る前の登板まで入る。#396）
+                team_id=team_id,
             )
             .values("player_id", "player__name")
             .annotate(wins=Sum("wins"), losses=Sum("losses"), saves=Sum("saves"))
@@ -1321,46 +1327,107 @@ class DjangoAttendanceQuery:
         ]
 
 
+class DjangoPayrollQuery:
+    """PayrollQuery の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る（#40 K1a）。
+
+    在籍（選手の名前・位置・外国人・ドラフトの年を JOIN）と、その年を期間に含む契約の2本で読み、Python で突き合わせる
+    （年ごとの在籍は期間の重なりで決まるので、1本の GROUP BY では「契約の無い選手」を数えられない。8リーグの1年で
+    約4,000行）。prefetch は使わない。
+    """
+
+    _STINT_COLUMNS = (
+        "team_id",
+        "team__name",
+        "player_id",
+        "from_year",
+        "to_year",
+        "signed_as",
+        "promoted_year",
+        "player__name",
+        "player__position",
+        "player__is_foreign_player",
+        "player__draft_year",
+    )
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def members(self, *, years: Collection[int], team_ids: Collection[int]) -> list[PayrollMember]:
+        wanted_years, wanted_teams = sorted(set(years)), sorted(set(team_ids))
+        if not wanted_years or not wanted_teams:
+            return []
+        stints = (
+            stints_in(self._scope)
+            .filter(team_id__in=wanted_teams, from_year__lte=wanted_years[-1])
+            .filter(Q(to_year__isnull=True) | Q(to_year__gte=wanted_years[0]))
+        )
+        return self._members(stints, wanted_years)
+
+    def for_player(self, player_id: int, *, through_year: int) -> list[PayrollMember]:
+        stints = stints_in(self._scope).filter(player_id=player_id, from_year__lte=through_year)
+        spans = list(stints.values_list("from_year", "to_year"))
+        if not spans:
+            return []
+        first = min(from_year for from_year, _ in spans)
+        return self._members(stints, list(range(first, through_year + 1)))
+
+    def _members(self, stints: QuerySet[orm_models.PlayerStint], years: list[int]) -> list[PayrollMember]:
+        rows = list(stints.order_by("from_year", "id").values_list(*self._STINT_COLUMNS))
+        salaries = self._salaries(stints, years) if rows else {}
+        # (年, 球団, 選手) → 行（同じ球団に同じ年に2回在籍しても1人。後の在籍の区分で上書きする）
+        found: dict[tuple[int, int, int], PayrollMember] = {}
+        for (
+            team_id,
+            team_name,
+            player_id,
+            from_year,
+            to_year,
+            signed_as,
+            promoted_year,
+            name,
+            position,
+            is_foreign,
+            draft_year,
+        ) in rows:
+            status = ContractStatus(signed_as)
+            for year in years:
+                if from_year <= year and (to_year is None or year <= to_year):
+                    found[(year, team_id, player_id)] = PayrollMember(
+                        team_id=team_id,
+                        team_name=team_name,
+                        year=year,
+                        player_id=player_id,
+                        name=name,
+                        position=Position.from_label(position),
+                        contract=ContractStatus.in_year(status, promoted_year, year),
+                        is_foreign=is_foreign,
+                        draft_year=draft_year,
+                        joined_year=from_year,
+                        salary=salaries.get((player_id, year)),
+                    )
+        return [found[key] for key in sorted(found)]
+
+    def _salaries(self, stints: QuerySet[orm_models.PlayerStint], years: list[int]) -> dict[tuple[int, int], int]:
+        """(選手, 年) → その年を期間に含む契約の年俸（円）。選手は在籍の副問い合わせで絞る（id を並べない）。"""
+        rows = (
+            salary_contracts_in(self._scope)
+            .filter(player_id__in=stints.values("player_id"), first_year__lte=years[-1], last_year__gte=years[0])
+            .values_list("player_id", "first_year", "last_year", "salary")
+        )
+        wanted = set(years)
+        return {
+            (player_id, year): salary
+            for player_id, first_year, last_year, salary in rows
+            for year in range(first_year, last_year + 1)
+            if year in wanted
+        }
+
+
 class DjangoClubFinanceQuery:
     """ClubFinanceQuery の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る（#208 E2）。"""
 
     def __init__(self, scope: WorldScope) -> None:
         self._scope = scope
-
-    def roster_sizes(self, *, years: Collection[int], team_ids: Collection[int]) -> list[ClubRosterSize]:
-        wanted_years, wanted_teams = sorted(set(years)), sorted(set(team_ids))
-        if not wanted_years or not wanted_teams:
-            return []
-        rows = (
-            stints_in(self._scope)
-            .filter(team_id__in=wanted_teams, from_year__lte=wanted_years[-1])
-            .filter(Q(to_year__isnull=True) | Q(to_year__gte=wanted_years[0]))
-            .order_by("from_year", "id")
-            .values_list("team_id", "player_id", "from_year", "to_year", "signed_as", "promoted_year")
-        )
-        # (球団, 年) → 選手 → その年の区分（同じ球団に同じ年に2回在籍しても1人。後の在籍の区分で上書きする）
-        members: dict[tuple[int, int], dict[int, ContractStatus]] = {}
-        for team_id, player_id, from_year, to_year, signed_as, promoted_year in rows:
-            status = ContractStatus(signed_as)
-            for year in wanted_years:
-                if from_year <= year and (to_year is None or year <= to_year):
-                    members.setdefault((team_id, year), {})[player_id] = ContractStatus.in_year(
-                        status, promoted_year, year
-                    )
-        result = []
-        for year in wanted_years:
-            for team_id in wanted_teams:
-                statuses = list(members.get((team_id, year), {}).values())
-                developmental = sum(1 for status in statuses if status is ContractStatus.DEVELOPMENTAL)
-                result.append(
-                    ClubRosterSize(
-                        team_id=team_id,
-                        year=year,
-                        registered=len(statuses) - developmental,
-                        developmental=developmental,
-                    )
-                )
-        return result
 
     def stadium_capacities(self, team_ids: Collection[int]) -> dict[int, int | None]:
         return dict(teams_in(self._scope).filter(id__in=set(team_ids)).values_list("id", "home_stadium__capacity"))
@@ -1645,15 +1712,11 @@ class DjangoTeamAnalysisQuery:
             .annotate(games=Count("id"), starts=Count("id", filter=Q(slot_sequence=0)))
             .order_by()
         )
-        # 投手: 投球の明細はチームを持たない。そのチームの試合（ホームかビジター）で、
-        # その年に在籍した選手の登板を数える近似（`DjangoPlayerFieldingQuery` の年度別と同じ）。
+        # 投手: 野手と同じく、明細のチームがそのチームの登板だけを数える（#396）。
         # 先発の意味は pitching_totals と同じ（登板順が1以下）
         pitcher_rows = (
             orm_models.GamePitchingLine.objects.filter(
-                Q(game__home_team_id=team_id) | Q(game__away_team_id=team_id),
-                regular,
-                game__year=year,
-                player_id__in=player_ids,
+                regular, team_id=team_id, game__year=year, player_id__in=player_ids
             )
             .values("player_id")
             .annotate(games=Count("id"), starts=Count("id", filter=Q(appearance_order__lte=1)))

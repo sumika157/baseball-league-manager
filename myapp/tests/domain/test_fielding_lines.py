@@ -240,7 +240,7 @@ class FieldingConsistencyTest(TestCase):
 
     def test_a_rewritten_line_is_rejected(self):
         game = self._recorded_game()
-        game.record_fielding(SHORT, FieldingLine(assists=5))
+        game.record_fielding(SHORT, FieldingLine(assists=5), team_id=services.line_teams(game)[SHORT])
         with self.assertRaisesRegex(InvalidPlateAppearance, "守備成績が打席の記録と一致しません"):
             services.ensure_lines_match_plate_appearances(game)
 
@@ -252,7 +252,7 @@ class FieldingConsistencyTest(TestCase):
 
     def test_a_row_for_someone_who_never_fielded_must_be_empty(self):
         game = self._recorded_game()
-        game.record_fielding(9999, FieldingLine(putouts=1))
+        game.record_fielding(9999, FieldingLine(putouts=1), team_id=game.home_team_id)
         with self.assertRaises(InvalidPlateAppearance):
             services.ensure_lines_match_plate_appearances(game)
 

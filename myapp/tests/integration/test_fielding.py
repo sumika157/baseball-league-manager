@@ -261,7 +261,7 @@ class FieldingConsistencyTest(FieldingTestBase):
         before = _snapshot(self.rows())
         repo = DjangoGameRepository(WorldScope.real())
         game = repo.find_by_id(self.game.id)
-        game.record_fielding(self.home[0], FieldingLine(putouts=99))
+        game.record_fielding(self.home[0], FieldingLine(putouts=99), team_id=game.home_team_id)
 
         with self.assertRaisesRegex(InvalidPlateAppearance, "守備成績が打席の記録と一致しません"):
             repo.save(game)

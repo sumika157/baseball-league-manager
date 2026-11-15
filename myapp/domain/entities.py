@@ -922,6 +922,9 @@ class GamePitching:
 
     player_id: int
     line: PitchingLine
+    # どちらのチームで投げたか（試合のホームかビジター）。年の途中で移籍した投手の成績を球団ごとに
+    # 分けて数えるのに使う（今の所属で引くと、移籍前の登板まで移籍先に入る。#396）
+    team_id: int
     id: int | None = None
     appearance_order: int = 1
     # 何回から投げたか。勝敗・セーブ・ホールドは登板した時点のスコアで決まるため、
@@ -950,6 +953,8 @@ class GameFielding:
 
     player_id: int
     line: FieldingLine
+    # どちらのチームで守ったか（試合のホームかビジター）。打撃・投球と同じく球団ごとに数えるため（#396）
+    team_id: int
     id: int | None = None
 
 
@@ -1314,8 +1319,7 @@ class Game:
         entered_sequence: int | None = None,
     ) -> GameBatting:
         """選手の打撃成績を記録する。同じ選手が既にあれば上書きする。"""
-        if team_id not in (self.home_team_id, self.away_team_id):
-            raise InvalidGame("打撃成績のチームは、試合のホームかビジターでなければなりません。")
+        self._ensure_side(team_id, "打撃成績")
         candidate = GameBatting(
             player_id=player_id,
             line=line,
@@ -1338,34 +1342,45 @@ class Game:
         player_id: int,
         line: PitchingLine,
         *,
+        team_id: int,
         appearance_order: int = 1,
         entered_inning: int = 1,
     ) -> GamePitching:
         """投手の投球成績を記録する。同じ選手が既にあれば上書きする。"""
+        self._ensure_side(team_id, "投球成績")
         for entry in self.pitching:
             if entry.player_id == player_id:
                 entry.line = line
+                entry.team_id = team_id
                 entry.appearance_order = appearance_order
                 entry.entered_inning = entered_inning
                 return entry
         entry = GamePitching(
             player_id=player_id,
             line=line,
+            team_id=team_id,
             appearance_order=appearance_order,
             entered_inning=entered_inning,
         )
         self.pitching.append(entry)
         return entry
 
-    def record_fielding(self, player_id: int, line: FieldingLine) -> GameFielding:
+    def record_fielding(self, player_id: int, line: FieldingLine, *, team_id: int) -> GameFielding:
         """選手の守備成績を記録する。同じ選手が既にあれば上書きする。"""
+        self._ensure_side(team_id, "守備成績")
         for entry in self.fielding:
             if entry.player_id == player_id:
                 entry.line = line
+                entry.team_id = team_id
                 return entry
-        entry = GameFielding(player_id=player_id, line=line)
+        entry = GameFielding(player_id=player_id, line=line, team_id=team_id)
         self.fielding.append(entry)
         return entry
+
+    def _ensure_side(self, team_id: int, kind: str) -> None:
+        """明細のチームが試合のホームかビジターであることを確かめる。"""
+        if team_id not in (self.home_team_id, self.away_team_id):
+            raise InvalidGame(f"{kind}のチームは、試合のホームかビジターでなければなりません。")
 
     def ensure_line_score_matches(self) -> None:
         """イニングスコアの合計が最終得点と一致することを確かめる。

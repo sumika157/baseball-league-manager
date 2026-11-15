@@ -124,7 +124,9 @@ class LinesMatchPlateAppearancesTest(TestCase):
                 batting_order=batter,
                 team_id=game.away_team_id,
             )
-        game.record_pitching(STARTER, services.pitching_line_for(game.plate_appearances, STARTER))
+        game.record_pitching(
+            STARTER, services.pitching_line_for(game.plate_appearances, STARTER), team_id=game.home_team_id
+        )
         services.record_derived_fielding(game)
         return game
 
@@ -153,9 +155,44 @@ class LinesMatchPlateAppearancesTest(TestCase):
 
     def test_a_pitching_line_that_drifted_is_rejected(self):
         game = self._game_with_lines()
-        game.record_pitching(STARTER, PitchingLine(innings=InningsPitched(outs=27)))
+        game.record_pitching(STARTER, PitchingLine(innings=InningsPitched(outs=27)), team_id=game.home_team_id)
 
         with self.assertRaises(InvalidPlateAppearance):
+            services.ensure_lines_match_plate_appearances(game)
+
+    def test_lines_carry_the_side_the_player_appeared_on(self):
+        """表で投げた投手はホーム、打った選手はビジター。守備の明細も守った側（#396）。
+
+        年の途中で移った選手の成績を球団で分けるのに、明細のチームを使う。今の所属ではなく、その試合の側。
+        """
+        game = self._game_with_lines()
+
+        self.assertEqual(services.line_teams(game)[STARTER], HOME)
+        self.assertEqual(services.line_teams(game)[1], AWAY)
+        self.assertEqual({entry.player_id: entry.team_id for entry in game.fielding}[STARTER], HOME)
+
+    def test_a_pitcher_on_both_sides_is_rejected(self):
+        """投手の明細は1試合に1行でチームを1つしか持てない。表と裏の両方で投げた記録は成り立たない。"""
+        entries = [*_half_inning(), _pa(6, 1, P.STRIKEOUT_LOOKING, inning=1, bottom=True, pitcher=STARTER)]
+
+        with self.assertRaisesRegex(InvalidPlateAppearance, "両方のチームで投げて"):
+            services.line_teams(_game(entries))
+
+    def test_a_pitching_line_on_the_wrong_side_is_rejected(self):
+        """明細のチームだけを書き換えた記録は保存させない。移る前の登板が移った先に数えられるため（#396）。"""
+        game = self._game_with_lines()
+        line = game.pitching[0].line
+        game.record_pitching(STARTER, line, team_id=AWAY)
+
+        with self.assertRaisesRegex(InvalidPlateAppearance, "投球成績のチーム"):
+            services.ensure_lines_match_plate_appearances(game)
+
+    def test_a_fielding_line_on_the_wrong_side_is_rejected(self):
+        game = self._game_with_lines()
+        fielded = next(entry for entry in game.fielding if entry.player_id == STARTER)
+        game.record_fielding(STARTER, fielded.line, team_id=AWAY)
+
+        with self.assertRaisesRegex(InvalidPlateAppearance, "守備成績のチーム"):
             services.ensure_lines_match_plate_appearances(game)
 
     def test_a_batter_missing_from_the_box_score_is_rejected(self):

@@ -300,6 +300,7 @@ def play_game(
     pitching=None,
     recorded=True,
     scope: WorldScope | None = None,
+    teams: dict[int, int] | None = None,
 ) -> Game:
     """試合を1件作って保存する。
 
@@ -310,6 +311,8 @@ def play_game(
     空の打撃行を1つ足す（明細が1行でもあれば記録済み。順位・勝敗・試合数に数えられる）。
     登録しただけの未記録の試合を作るときは recorded=False。
     scope を渡すと、その世界の試合として保存する（ペナントの世界のチームを渡すときに要る。既定は実データ）。
+    teams は {選手id: チームid}。渡した選手は在籍から引かずにそのチームの明細にする（年の途中で移った選手など、
+    両チームに在籍がある選手の試合を作るときに要る）。
     """
     game = Game(
         season=Season(year),
@@ -321,9 +324,9 @@ def play_game(
         away_score=away_score,
     )
     for player_id, line in (batting or {}).items():
-        game.record_batting(player_id, line, team_id=_team_of(player_id, home_team, away_team))
+        game.record_batting(player_id, line, team_id=_team_of(player_id, home_team, away_team, teams))
     for player_id, line in (pitching or {}).items():
-        game.record_pitching(player_id, line)
+        game.record_pitching(player_id, line, team_id=_team_of(player_id, home_team, away_team, teams))
     if recorded and not game.is_recorded:
         placeholder = orm_models.Player.objects.create(name="記録用ダミー")
         game.record_batting(placeholder.id, BattingLine(), team_id=home_team.id)
@@ -331,8 +334,10 @@ def play_game(
     return DjangoGameRepository(scope or WorldScope.real()).save(game)
 
 
-def _team_of(player_id, home_team, away_team) -> int:
+def _team_of(player_id, home_team, away_team, teams=None) -> int:
     """選手がどちらのチームに在籍しているか。成績だけを持たせるテスト用の試合に要る。"""
+    if teams and player_id in teams:
+        return teams[player_id]
     stints = orm_models.PlayerStint.objects.filter(player_id=player_id)
     return home_team.id if stints.filter(team_id=home_team.id).exists() else away_team.id
 

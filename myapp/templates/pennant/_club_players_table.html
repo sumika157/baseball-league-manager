@@ -1,6 +1,6 @@
 {% comment %}
 1軍登録の選手の表。editing が真のときだけ、先頭にチェックボックスの列を出す（呼び出し元が保存のフォームで囲む）。
-選ぶ材料として、年齢・能力の要約（総合と各項目の区分）・今季の成績を並べる。club_players は選手ごとの詳細（ClubPlayerDetail）。
+選ぶ材料として、年齢・年俸（#40 K1a）・能力の要約（総合と各項目の区分）・今季の成績を並べる。club_players は選手ごとの詳細（ClubPlayerDetail）。
 区分と目立たせ方は DTO（RatingCell）が持つので、ここには境目の数値を書かない。
 {% endcomment %}
 {% load scoped %}
@@ -14,6 +14,7 @@
         <th>外国人</th>
         <th>区分</th>
         <th class="text-end">年齢</th>
+        <th class="text-end">年俸</th>
         <th>能力</th>
         <th>今季の成績</th>
       </tr>
@@ -30,6 +31,7 @@
           <td>{% if row.is_foreign %}<span class="badge bg-secondary">外国人</span>{% if row.quota_exempt %} <span class="stat-muted text-nowrap" title="FA 資格の取得で、この年の外国人枠の対象外（野球協約 第82条 (4)）">FA取得で枠外</span>{% endif %}{% endif %}</td>
           <td>{% if row.is_active %}1軍{% else %}<span class="stat-muted">2軍</span>{% endif %}</td>
           <td class="text-end stat-muted">{{ detail.age|default:'—' }}</td>
+          <td class="text-end text-nowrap">{% if detail.salary %}{{ detail.salary.label }}{% else %}<span class="stat-muted">—</span>{% endif %}</td>
           <td>
             {% if detail.overall %}
               <div>{{ detail.overall.label }} {% include 'myapp/_rating_grade.html' with rating=detail.overall %}</div>
