@@ -48,7 +48,8 @@ from myapp.domain.pennant.ticket_price import (
 YEAR = 2026
 SEED = 20261114
 # 平均的な球団の1年（8リーグの世界の1年目の実測。標準の収容人数3万人の球団のホームの観客動員 約179万人、
-# ポストシーズンの入場料 平均 3.5億円 ≒ 5.8万人、支配下65人・育成20人。docs/design/club-finance.md の E2）
+# ポストシーズンの入場料 平均 3.5億円 ≒ 5.8万人、支配下65人・育成20人。
+# Wiki「ペナントモードの仕組み」の「実測値」の「人気と収支」）
 AVERAGE_ATTENDANCE = 1_790_000
 AVERAGE_POSTSEASON = 58_000
 AVERAGE_ROSTER = RosterSize(registered=65, developmental=20)
