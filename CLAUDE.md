@@ -37,7 +37,7 @@
   - 台帳の相関副問い合わせ用の `real_teams_of_outer_workspace()`（`infrastructure/queries.py` だけ）
 
   ワークスペースは URL（`/w/<key>/`）の key から `workspace_view` が解決する。範囲を作るのは views の `_real_scope(request)`・
-  `_world_scope(request, world_id)`、管理コマンドの `--workspace`・`--world`、テストの `real_scope()`・`world_scope()` だけ（Wiki「ペナントモードの仕組み」の「世界の分け方」・設計書 `docs/design/workspaces.md`）。
+  `_world_scope(request, world_id)`、管理コマンドの `--workspace`・`--world`、テストの `real_scope()`・`world_scope()` だけ（Wiki「ペナントモードの仕組み」の「世界の分け方」・Wiki「ワークスペースの仕組み」の「範囲と例外」）。
 - **依存の組み立ては `presentation/views.py` の `build_*()` 関数だけ。** サービスを増やすときは組み立て口もここに足し、依存を全部渡す
   （`tests/integration/test_wiring.py` が検査する）。管理コマンドとテスト（`tests/helpers.py` 経由）もここから取る。呼ぶ側ごとに一部の依存だけを
   渡さない（渡し忘れが「開く画面によって落ちるサービス」になる。管理画面のテンプレートタグで実際に起きた）。

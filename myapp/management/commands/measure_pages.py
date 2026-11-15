@@ -166,7 +166,10 @@ class Command(BaseCommand):
 
     @staticmethod
     def _world_targets(scope: WorldScope, key: str) -> list[tuple[str, str]]:
-        """ペナントの世界の10画面（設計書 14. の W1b T0 の表と同じ並び）。リーグ・球団は世界の最初の行。"""
+        """ペナントの世界の10画面（W1b T0 の計測と同じ並び）。リーグ・球団は世界の最初の行。
+
+        計測の表は、Wiki「ワークスペースの仕組み」の「経緯」から辿る削除前の設計書にある。
+        """
         world_id = scope.world_id
         league = leagues_in(scope).order_by("id").first()
         team = teams_in(scope).order_by("id").first()

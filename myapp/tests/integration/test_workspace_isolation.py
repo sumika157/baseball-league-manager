@@ -2111,7 +2111,9 @@ def _world_side_ids(world_id: int) -> tuple[int, int, int, int]:
 
 
 class EveryWorkspaceUrlTest(WorkspaceCase):
-    """`workspace_urlpatterns` の全パターンを、分類表で A と B について検査する（W2 T4。設計書 7.）。
+    """`workspace_urlpatterns` の全パターンを、分類表で A と B について検査する（W2 T4）。
+
+    検査の考え方は Wiki「ワークスペースの仕組み」の「漏れの検査」。
 
     - 表に無いパターン・表にしか無い名前があれば落ちる。すべて `workspace_view` で包まれている。
     - (1)(5) A の key の下で B の id（チーム・選手・試合・リーグ・世界とその中の id、メンバーの user id・招待の id）を

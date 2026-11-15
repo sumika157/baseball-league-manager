@@ -168,7 +168,7 @@ class RolePriorityTest(unittest.TestCase):
 
 
 class NoStaffPrivilegeTest(unittest.TestCase):
-    """サイト側の `is_staff` の特権は、入れようがない形にする（設計書 2.・4.）。"""
+    """サイト側の `is_staff` の特権は、入れようがない形にする（Wiki「ワークスペースの仕組み」の「権限」）。"""
 
     def test_the_builders_take_no_staff_flag(self):
         for build in (WorkspaceAccess.of, WorkspaceRole.of):

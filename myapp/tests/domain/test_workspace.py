@@ -122,7 +122,7 @@ class SettingsTest(unittest.TestCase):
 
 
 class MemberInvariantTest(unittest.TestCase):
-    """1人の役割は1つだけ。持ち主は編集者にも担当にも入らない（設計書 3.3）。"""
+    """1人の役割は1つだけ。持ち主は編集者にも担当にも入らない（Wiki「ワークスペースの仕組み」の「不変条件と守る場所」）。"""
 
     def test_members_are_held_and_roles_are_derived(self):
         workspace = make(editor_ids=frozenset({EDITOR}), team_assignments={MANAGER: frozenset({TEAM_A})})
