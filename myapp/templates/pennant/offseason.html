@@ -190,6 +190,9 @@
     <div class="card-header">契約更改（{{ summary.year }}年 → {{ summary.next_year }}年）</div>
     <div class="card-body p-0">
       <p class="px-3 pt-3 mb-2">世界全体で {{ renewals.total_count }}人が更改し、更改した選手の年俸の合計は {{ renewals.total_change_label }} 変わりました。</p>
+      {% if renewals.next_total and renewals.next_cap %}
+        <p class="px-3 mb-2" data-testid="next-payroll">{{ summary.own_team_name }}の{{ summary.next_year }}年の年俸の合計 {{ renewals.next_total.label }}／上限 {{ renewals.next_cap.label }}（新人・獲得した外国人を含む。上限を超えた分は親会社が補填します）</p>
+      {% endif %}
       {% if renewals.own %}
         <div class="table-responsive">
           <table class="table table-sm mb-0 tabular-nums">

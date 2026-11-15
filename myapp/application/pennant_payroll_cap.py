@@ -7,6 +7,8 @@
   前年の人気の行が無い球団（開幕年・人気を記録する前の年の翌年）は、標準の球団の収入の見込み（`finance.expected_revenue`）から
 
 前の年の人気は保存した行だけを読む（人気の読み口と同じ使い分け。行の無い年は「収入が無い」として見込みに回す）。
+例外は**締める年**（締める処理・会議を始める処理・オフの「外国人」タブが翌年の上限を導くとき。`supplement_previous`）で、
+締める処理と同じく行の無い球団を初期値で補う（締めるとその値が行として書かれるので、締めた後に導き直しても同じ上限になる）。
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ from dataclasses import dataclass
 
 from ..domain.pennant.finance import ClubRevenue, club_revenue, expected_revenue
 from ..domain.pennant.payroll_cap import PayrollCap, payroll_cap
-from ..domain.pennant.popularity import Popularity
+from ..domain.pennant.popularity import Popularity, with_initial
 from ..domain.pennant.schedule import ScheduleRules
 from ..domain.pennant.ticket_price import TicketPrice, resolved_ticket_price
 from ..domain.value_objects import GameStage
@@ -94,9 +96,12 @@ class ClubRevenueReader:
         self._ticket_prices = ticket_prices
         self._attendance = attendance
 
-    def materials(self, year: int, team_ids: Sequence[int]) -> RevenueMaterials:
-        """公式戦を終えた年 `year` の収入の材料（人気は保存した行だけ）。"""
+    def materials(self, year: int, team_ids: Sequence[int], *, supplement: bool) -> RevenueMaterials:
+        """公式戦を終えた年 `year` の収入の材料。人気は保存した行だけ（`supplement` なら行の無い球団を初期値で補う。
+        締める年）。"""
         recorded = self._popularities.recorded(year)
+        if supplement:
+            recorded = with_initial(team_ids, recorded)
         return RevenueMaterials(
             popularity={(team_id, year): value for team_id, value in recorded.items() if team_id in team_ids},
             manual={(team_id, year): price for team_id, price in self._ticket_prices.manual(year).items()},
@@ -109,7 +114,7 @@ class ClubRevenueReader:
 
         人気の行の無い球団は None（収入が無い）。年の途中の年には使わない（按分しないため）。
         """
-        materials = self.materials(year, team_ids)
+        materials = self.materials(year, team_ids, supplement=False)
         result: dict[int, int | None] = {}
         for team_id in team_ids:
             revenue = materials.revenue(team_id, year)
@@ -125,8 +130,12 @@ class PayrollCapReader:
         # 本拠地の収容人数（前年の収入が無い球団の見込み）
         self._facts = facts
 
-    def caps(self, year: int, team_ids: Sequence[int]) -> dict[int, PayrollCap]:
-        """`year` 年の球団ごとの上限（前年の収入から。無ければ標準の球団の見込みから）。"""
-        materials = self._revenues.materials(year - 1, team_ids)
+    def caps(self, year: int, team_ids: Sequence[int], *, supplement_previous: bool) -> dict[int, PayrollCap]:
+        """`year` 年の球団ごとの上限（前年の収入から。無ければ標準の球団の見込みから）。
+
+        `supplement_previous` は前年が締める年（締める処理・会議・オフの「外国人」タブ）のとき True で、前年の人気の
+        行の無い球団を初期値で補う（締める処理が書く値と同じ）。締めた年・前の年を読むときは False。
+        """
+        materials = self._revenues.materials(year - 1, team_ids, supplement=supplement_previous)
         capacities = self._facts.stadium_capacities(team_ids)
         return {team_id: cap_from(materials, team_id, year, capacities.get(team_id)) for team_id in team_ids}

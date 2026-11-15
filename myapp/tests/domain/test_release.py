@@ -31,6 +31,7 @@ from myapp.domain.simulation.randomness import make_random
 from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings, Potential
 from myapp.domain.simulation.samples import draw_ratings
 from myapp.domain.value_objects import ContractStatus, DraftPick, ForeignPlayerRules, Position, Profile
+from myapp.tests.domain.payroll_builders import AMPLE_CAP
 
 YEAR = 2027
 START_YEAR = 2026
@@ -95,6 +96,7 @@ def club(players: list[OffseasonPlayer], *, registered_limit: int | None = 70, f
         foreign_rules=ForeignPlayerRules(active=foreign_limit, pitchers=None, batters=None),
         registered_player_limit=registered_limit,
         players=tuple(players),
+        payroll_cap=AMPLE_CAP,
     )
 
 

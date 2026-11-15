@@ -15,13 +15,15 @@ from unittest import mock
 
 from django.urls import reverse
 
-from myapp.domain.exceptions import AlreadyClosed, InvalidSigning, InvalidWorld, TeamNotFound
-from myapp.domain.pennant.foreign_market import MAX_FOREIGN_HELD, ForeignSigningPlan, offseason_key
-from myapp.domain.pennant.release import ReleasePlan
+from myapp.domain.exceptions import AlreadyClosed, InvalidWorld, TeamNotFound
+from myapp.domain.pennant import payroll_cap as payroll_cap_module
+from myapp.domain.pennant.draft import USUAL_DRAFTEES
+from myapp.domain.pennant.foreign_market import ForeignSigningPlan, offseason_key
+from myapp.domain.pennant.salary import rookie_reserve
 from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import AcquisitionRoute, ContractStatus
 from myapp.infrastructure import orm_models
-from myapp.infrastructure.repositories import DjangoForeignSigningPlanRepository, DjangoReleasePlanRepository
+from myapp.infrastructure.repositories import DjangoForeignSigningPlanRepository
 from myapp.presentation.club_input import REOPEN
 from myapp.presentation.views import build_pennant_offseason_service, build_pennant_world_service
 
@@ -103,7 +105,9 @@ class ForeignTabTest(ForeignPlanCase):
         self.assertIn('id="club-foreign" data-mode="auto"', content)
         self.assertEqual(content.count('data-testid="foreign-candidate-row"'), 8)
         self.assertEqual(content.count('data-testid="foreign-held-row"'), self.held())
-        self.assertIn(f"保有 {self.held()}人／上限 {MAX_FOREIGN_HELD}人", content)
+        self.assertIn(f"保有 {self.held()}人 · ", content)
+        self.assertIn('data-testid="foreign-payroll-cap"', content)
+        self.assertEqual(content.count('data-testid="candidate-salary"'), 8, "候補ごとの年俸（提示）")
         self.assertIn("計4人・投手3人・野手3人", content)
         self.assertIn("ほかの球団と同じ規則", content)
         self.assertIn("見立て", content)
@@ -208,33 +212,19 @@ class ForeignPostTest(ForeignPlanCase):
                 self.assertContains(response, REOPEN, status_code=400)
         self.assertEqual(self.plan().indices, {2, 3})
 
-    def test_the_held_limit_is_shown_again_with_the_checks_kept(self):
-        """保有の上限（6人）を超える指名は保存せず、理由と、チェックを残して出す。"""
-        self.client.force_login(self.owner)
-        self.save_plan([])
-        over = list(range(MAX_FOREIGN_HELD - self.held() + 1))
+    def test_every_candidate_can_be_chosen_without_a_held_limit(self):
+        """保有の6人の上限はやめた（#394）。全員を指名して保存できる（年俸の上限は締めるときに確かめる）。"""
+        build_pennant_offseason_service(self.world_a).set_foreign_signings(list(range(8)), expected_year=YEAR)
+        self.assertEqual(self.plan().indices, frozenset(range(8)))
 
-        response = self.post("save", sign=over)
-
-        self.assertContains(response, f"{MAX_FOREIGN_HELD}人まで", status_code=400)
-        content = response.content.decode()
-        for index in over:
-            self.assertRegex(content, rf'name="sign" value="{index}"[^>]*checked')
-        self.assertEqual(self.plan().indices, frozenset())
-
-    def test_foreigners_chosen_to_leave_make_room(self):
-        """手動で戦力外に選んだ外国人は保有に数えない（締めるときは引退・戦力外の後の人数で数え直す）。"""
-        service = build_pennant_offseason_service(self.world_a)
-        limit = MAX_FOREIGN_HELD - self.held() + 1
-        with self.assertRaises(InvalidSigning):
-            service.set_foreign_signings(list(range(limit)), expected_year=YEAR)
-        DjangoReleasePlanRepository(WorldScope.pennant(self.world_a)).save(
-            ReleasePlan(team_id=self.team_id(), year=YEAR, player_ids=frozenset({self.foreigner}))
-        )
-
-        service.set_foreign_signings(list(range(limit)), expected_year=YEAR)
-
-        self.assertEqual(len(self.plan().indices), limit)
+    def test_the_tab_shows_the_cap_and_the_estimated_room(self):
+        """翌年の上限・締める年の合計・新人の取り置き・残りの見込み（上限 − 合計 − 取り置き）。#40 K1b。"""
+        view = self.view()
+        self.assertEqual(view.rookie_reserve.amount, rookie_reserve(USUAL_DRAFTEES))
+        self.assertEqual(view.room.amount, view.cap.amount - view.current_total.amount - view.rookie_reserve.amount)
+        self.assertGreater(view.current_total.amount, 0)
+        content = self.client.get(self.club_url()).content.decode()
+        self.assertIn(f"{YEAR + 1}年の年俸の上限 {view.cap.label}", content)
 
     def test_a_stale_year_is_refused(self):
         self.client.force_login(self.owner)
@@ -261,6 +251,25 @@ class CloseWithManualForeignTest(ForeignPlanCase):
             self.assertEqual(stint.player.foreign_background, row.background.value)
         self.assertIsNone(self.plan(), "使い終わった指名は消す")
         self.assertFalse(orm_models.PennantForeignSigningPlanEntry.objects.exists())
+
+    def test_the_signed_salary_is_the_one_shown_on_the_tab(self):
+        """獲得した外国人の翌年の年俸は、タブに出した見立てからの額（#394 Q2 の A）。"""
+        chosen = {row.name: row.salary for row in self.view().candidates if row.index in (0, 4)}
+        self.save_plan([0, 4])
+
+        self.close()
+
+        for name, salary in chosen.items():
+            contract = orm_models.PennantSalaryContract.objects.get(player__name=name, first_year=YEAR + 1)
+            self.assertEqual(contract.salary, salary.yen)
+
+    def test_a_low_cap_trims_the_chosen_candidates(self):
+        """翌年の上限に収まらない指名は獲得せず、その人数を締めた結果に出す（#40 K1b）。"""
+        self.save_plan([0, 4])
+        with mock.patch.object(payroll_cap_module, "PAYROLL_CAP_RATE", 0.001):
+            result = self.close()
+        self.assertEqual(self.new_foreigners(), set())
+        self.assertGreaterEqual(result.cap_trimmed_count, 2)
 
     def test_nobody_is_signed_when_the_gm_chose_nobody(self):
         self.save_plan([])

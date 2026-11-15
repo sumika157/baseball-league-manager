@@ -2,6 +2,7 @@
 「外国人」タブの候補の表（#169 F2）。editing が真のときだけ、先頭にチェックボックスの列を出す（呼び出し元が保存のフォームで囲む）。
 手動の指名を読むだけのとき（オーナー以外・会議の後）は、選ばれた候補に印を付ける。お任せのときは獲得の列を出さない。
 能力は自軍のスカウトの見立て（5刻みの推定）で、本当の値ではない。候補はまだ選手ではないので、選手ページへのリンクは無い。
+年俸（提示）は獲得したときの入団する年の年俸で、同じ見立てから決まる（#40 K1b）。
 {% endcomment %}
 <div class="table-responsive">
   <table class="table table-hover tabular-nums">
@@ -13,6 +14,7 @@
         <th class="text-end">年齢</th>
         <th>前所属</th>
         <th>見立て</th>
+        <th class="text-end">年俸（提示）</th>
       </tr>
     </thead>
     <tbody>
@@ -36,6 +38,7 @@
               {% for cell in row.cells %}{{ cell.label }} {% include 'myapp/_rating_grade.html' with rating=cell %}{% if not forloop.last %} · {% endif %}{% endfor %}
             </div>
           </td>
+          <td class="text-end" data-testid="candidate-salary">{{ row.salary.label }}</td>
         </tr>
       {% endfor %}
     </tbody>
@@ -43,6 +46,6 @@
 </div>
 {% with first=foreign.candidates.0 %}{% if first %}
 <p class="page-subtitle mb-3" style="font-size: 0.8125rem;">
-  能力は自軍のスカウトの見立て（誤差のある推定）です。見込みは、{{ first.outlook.peak_age }}歳ごろの総合の見込みを同じ見立てで示した区分です（{{ foreign.year|add:1 }}年4月1日に{{ first.outlook.peak_age }}歳以上は「—」）。年齢は入団する{{ foreign.year|add:1 }}年4月1日の年齢です。
+  能力は自軍のスカウトの見立て（誤差のある推定）です。見込みは、{{ first.outlook.peak_age }}歳ごろの総合の見込みを同じ見立てで示した区分です（{{ foreign.year|add:1 }}年4月1日に{{ first.outlook.peak_age }}歳以上は「—」）。年齢は入団する{{ foreign.year|add:1 }}年4月1日の年齢です。年俸（提示）は獲得したときの{{ foreign.year|add:1 }}年の年俸で、同じ見立てから決まります。
 </p>
 {% endif %}{% endwith %}

@@ -161,7 +161,10 @@ class ClubFinanceService:
             payrolls=self._salaries.payrolls([year], team_ids, open_year=year if year == world.season_year else None),
             capacities=self._facts.stadium_capacities(team_ids),
             played=self._played(world) if year == world.season_year else {},
-            caps={(team_id, year): cap for team_id, cap in self._caps.caps(year, team_ids).items()},
+            caps={
+                (team_id, year): cap
+                for team_id, cap in self._caps.caps(year, team_ids, supplement_previous=False).items()
+            },
         )
         return {team_id: self._row(world, team_id, year, materials) for team_id in team_ids}
 

@@ -556,6 +556,8 @@ def build_pennant_season_service(world_id: int) -> PennantSeasonService:
             squads=DjangoDevelopmentRosterQuery(scope),
             names=DjangoPlayerNameQuery(scope),
             context_query=DjangoSimulationContextQuery(scope),
+            salaries=_salary_reader(scope),
+            caps=_payroll_cap_reader(scope),
             atomic=transaction.atomic,
         ),
         atomic=transaction.atomic,
@@ -600,6 +602,8 @@ def build_pennant_offseason_service(world_id: int) -> PennantOffseasonService:
         phase=parts.phase(),
         inputs=parts.inputs(),
         fa_exemptions=ForeignQuotaExemptions(DjangoServiceHistoryQuery(parts.scope)),
+        salaries=_salary_reader(parts.scope, contracts=parts.salary_contracts, ratings=parts.ratings),
+        caps=_payroll_cap_reader(parts.scope),
         atomic=transaction.atomic,
     )
 
@@ -677,6 +681,7 @@ class _OffseasonParts:
             playing_time=DjangoSeasonPlayingTimeQuery(self.scope),
             finishes=self.finishes,
             salaries=_salary_reader(self.scope, contracts=self.salary_contracts, ratings=self.ratings),
+            caps=_payroll_cap_reader(self.scope),
         )
 
 
@@ -1284,6 +1289,10 @@ def pennant_close_season(request, world_id):
         messages.warning(request, f"引退・戦力外の選手を含んでいたため、自軍の編成（{labels}）を自動に戻しました。")
     if result.without_ratings_count:
         messages.info(request, f"能力の無い選手 {result.without_ratings_count}人は、翌年の能力を作りませんでした。")
+    if result.cap_trimmed_count:
+        messages.info(
+            request, f"年俸の上限に収まらないため、外国人 {result.cap_trimmed_count}人を獲得しませんでした（全球団）。"
+        )
     return redirect("pennant_offseason", world_id=world_id, year=result.year)
 
 
@@ -1717,6 +1726,8 @@ def build_foreign_signing_service(world_id: int) -> ForeignSigningService:
         development_roster=DjangoDevelopmentRosterQuery(scope),
         names=DjangoPlayerNameQuery(scope),
         fa_exemptions=ForeignQuotaExemptions(DjangoServiceHistoryQuery(scope)),
+        salaries=_salary_reader(scope),
+        caps=_payroll_cap_reader(scope),
         atomic=transaction.atomic,
     )
 

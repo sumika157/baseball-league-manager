@@ -22,7 +22,6 @@ from myapp.domain.pennant.foreign_market import (
     BACKGROUNDS,
     CANDIDATES_BY_POSITION,
     HOLE_WEIGHT,
-    MAX_FOREIGN_HELD,
     VACANT_RATING,
     CandidateKey,
     SigningPhase,
@@ -54,6 +53,7 @@ from myapp.domain.value_objects import (
     Profile,
 )
 from myapp.domain.virtual_players import generator
+from myapp.tests.domain.payroll_builders import AMPLE_CAP
 
 YEAR = 2027
 START_YEAR = 2026
@@ -313,35 +313,32 @@ class ChooseTest(unittest.TestCase):
 
 
 class EnsureSignableTest(unittest.TestCase):
-    """ゲームの上限（#169 Q4）: 保有は6人まで、シーズン中は1年1人まで。"""
+    """ゲームの上限（#169 Q4）: シーズン中は1年1人まで（保有の6人の上限は年俸の上限に置き換えてやめた。#394）。"""
 
     def setUp(self) -> None:
         self.drawn = candidates()
         self.keys = [c.key for c in self.drawn]
 
     def test_a_valid_signing_passes(self) -> None:
-        ensure_signable(self.keys[:2], self.drawn, held_foreign=MAX_FOREIGN_HELD - 2, phase=SigningPhase.OFFSEASON)
-        ensure_signable([], self.drawn, held_foreign=MAX_FOREIGN_HELD, phase=SigningPhase.OFFSEASON)
-
-    def test_the_held_limit(self) -> None:
-        with self.assertRaisesRegex(InvalidSigning, "6人まで"):
-            ensure_signable(self.keys[:2], self.drawn, held_foreign=MAX_FOREIGN_HELD - 1, phase=SigningPhase.OFFSEASON)
+        ensure_signable(self.keys[:2], self.drawn, phase=SigningPhase.OFFSEASON)
+        ensure_signable(self.keys, self.drawn, phase=SigningPhase.OFFSEASON)
+        ensure_signable([], self.drawn, phase=SigningPhase.OFFSEASON)
 
     def test_duplicates_and_unknown_candidates(self) -> None:
         with self.assertRaises(InvalidSigning):
-            ensure_signable([self.keys[0]] * 2, self.drawn, held_foreign=0, phase=SigningPhase.OFFSEASON)
+            ensure_signable([self.keys[0]] * 2, self.drawn, phase=SigningPhase.OFFSEASON)
         with self.assertRaises(InvalidSigning):
             unknown = CandidateKey(YEAR, SigningPhase.OFFSEASON, 0, 99)
-            ensure_signable([unknown], self.drawn, held_foreign=0, phase=SigningPhase.OFFSEASON)
+            ensure_signable([unknown], self.drawn, phase=SigningPhase.OFFSEASON)
 
     def test_one_midseason_signing_a_year(self) -> None:
         midseason = candidates(phase=SigningPhase.MIDSEASON)
         keys = [c.key for c in midseason]
-        ensure_signable(keys[:1], midseason, held_foreign=0, phase=SigningPhase.MIDSEASON)
+        ensure_signable(keys[:1], midseason, phase=SigningPhase.MIDSEASON)
         with self.assertRaisesRegex(InvalidSigning, "1年に1人まで"):
-            ensure_signable(keys[:1], midseason, held_foreign=0, phase=SigningPhase.MIDSEASON, signed_this_season=1)
+            ensure_signable(keys[:1], midseason, phase=SigningPhase.MIDSEASON, signed_this_season=1)
         with self.assertRaises(InvalidSigning):
-            ensure_signable(keys[:2], midseason, held_foreign=0, phase=SigningPhase.MIDSEASON)
+            ensure_signable(keys[:2], midseason, phase=SigningPhase.MIDSEASON)
 
 
 class OffseasonSigningsTest(unittest.TestCase):
@@ -422,9 +419,12 @@ class OffseasonSigningsTest(unittest.TestCase):
         self.assertEqual(result.signings, ())
         self.assertEqual(result.teams, (club,))
 
-    def test_the_held_limit_is_never_crossed_by_the_ai(self) -> None:
-        result = self.sign([team(1, foreign=0)])
-        self.assertLessEqual(len(result.signings), MAX_FOREIGN_HELD)
+    def test_the_ai_signs_up_to_the_shortfall_without_a_cap(self) -> None:
+        """上限の無い球団（`payroll_cap` が None）は、今までどおり目標までの不足を獲得する。"""
+        club = team(1, foreign=0)
+        result = self.sign([club])
+        self.assertEqual(len(result.signings), draft.foreign_count_to_add(club, draft.newcomer_plan(club)[0]))
+        self.assertEqual(result.cap_trimmed, 0)
 
 
 def offseason_player(player_id: int, position: Position, *, foreign: bool = False) -> OffseasonPlayer:
@@ -454,7 +454,11 @@ def club(team_id: int, *, foreign: int) -> OffseasonClub:
         for index, position in enumerate(positions)
     )
     return OffseasonClub(
-        team_id=team_id, foreign_rules=ForeignPlayerRules.NPB, registered_player_limit=70, players=players
+        team_id=team_id,
+        foreign_rules=ForeignPlayerRules.NPB,
+        registered_player_limit=70,
+        players=players,
+        payroll_cap=AMPLE_CAP,
     )
 
 

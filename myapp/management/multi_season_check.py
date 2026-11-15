@@ -52,13 +52,16 @@ from myapp.domain.pennant.foreign_market import (
 from myapp.domain.pennant.fork import with_birth_date
 from myapp.domain.pennant.initial_ratings import age_at_season_start
 from myapp.domain.pennant.offseason import (
+    Departures,
     OffseasonClub,
     OffseasonPlan,
     OffseasonPlayer,
     plan_departures,
     plan_offseason,
+    renewal_budget,
 )
 from myapp.domain.pennant.offseason_player import overall_value, player_age
+from myapp.domain.pennant.payroll_cap import PayrollCap
 from myapp.domain.pennant.popularity import (
     PENNANT_DEFAULT_CAPACITY,
     Popularity,
@@ -69,7 +72,13 @@ from myapp.domain.pennant.popularity import (
 from myapp.domain.pennant.ratings import PlayerRatings
 from myapp.domain.pennant.reinforcement import MidseasonRegistration, RegistrationKind
 from myapp.domain.pennant.retirement import PlayingTime
-from myapp.domain.pennant.salary import foreign_salary, initial_salary, payroll, rookie_salary, salary_basis
+from myapp.domain.pennant.salary import (
+    decide_renewals,
+    initial_salary,
+    payroll,
+    rookie_salary,
+    salary_basis,
+)
 from myapp.domain.pennant.schedule import ScheduleRules
 from myapp.domain.pennant.staff import (
     StaffAssignment,
@@ -235,6 +244,8 @@ class MidseasonTally:
     max_registered: int = 0
     # 期中に獲得した外国人（獲得の順）
     signings: list[ForeignSigning] = field(default_factory=list)
+    # その年の球団ごとの年俸の上限（#40 K1b。前年の収入から）
+    caps: dict[int, PayrollCap] = field(default_factory=dict)
 
     def _of(self, kind: RegistrationKind) -> list[MidseasonRegistration]:
         return [item for items in self.registrations.values() for item in items if item.kind is kind]
@@ -316,7 +327,8 @@ def _midseason_signings(
                 is_managed=False,
                 pool=pools[team_id],
                 foreign_rules=team.foreign_rules,
-                held_foreign=sum(1 for m in own if m.profile.is_foreign_player),
+                payroll=payroll(m.salary for m in own if m.salary is not None),
+                payroll_cap=tally.caps[team_id],
                 registered_count=sum(1 for m in own if m.contract is ContractStatus.REGISTERED),
                 registered_limit=team.registered_limit,
                 signed_on=tuple(
@@ -350,7 +362,7 @@ def _midseason_signings(
                 joined_year=on.year,
                 ratings=PlayerRatings(player_id, on.year, signing.ratings),
                 contract=signing.contract,
-                salary=foreign_salary(signing.position, signing.ratings, year=on.year),
+                salary=signing.salary,
             )
         )
         tally.registrations.setdefault(signing.team_id, []).append(
@@ -389,7 +401,10 @@ def offseason_clubs(
     teams: dict[int, TeamInfo],
     batting: dict[int, BattingLine],
     pitching: dict[int, PitchingLine],
+    *,
+    caps: dict[int, PayrollCap],
 ) -> list[OffseasonClub]:
+    """締める処理の材料。`caps` は翌年の年俸の上限（#40 K1b。締める年の収入から）。"""
     by_team: dict[int, list[OffseasonPlayer]] = {team_id: [] for team_id in teams}
     for member in members:
         by_team[member.team_id].append(
@@ -412,6 +427,7 @@ def offseason_clubs(
             foreign_rules=team.foreign_rules,
             registered_player_limit=team.registered_limit,
             players=tuple(by_team[team_id]),
+            payroll_cap=caps[team_id],
         )
         for team_id, team in teams.items()
     ]
@@ -453,11 +469,7 @@ def apply_plan(members: Sequence[Member], plan: OffseasonPlan) -> list[Member]:
                 joined_year=plan.year + 1,
                 ratings=PlayerRatings(player_id, plan.year + 1, newcomer.ratings),
                 contract=newcomer.contract,
-                salary=(
-                    rookie_salary(newcomer)
-                    if isinstance(newcomer, Draftee)
-                    else foreign_salary(newcomer.position, newcomer.ratings, year=plan.year + 1)
-                ),
+                salary=(rookie_salary(newcomer) if isinstance(newcomer, Draftee) else newcomer.salary),
             )
         )
     return kept
@@ -889,6 +901,42 @@ def format_salaries(members: Sequence[Member]) -> str:
     )
 
 
+def format_offseason_caps(
+    plan: OffseasonPlan, clubs: Sequence[OffseasonClub], departures: Departures, year: int
+) -> str:
+    """オフの年俸の上限（#40 K1b）を1行にまとめる。上限に当たった球団（更改の上げ幅を縮めた・外国人を上限で
+    獲得しなかった）の数と割合、上限で獲得しなかった外国人の人数、翌年の合計と上限。"""
+    caps = {club.team_id: club.payroll_cap for club in clubs}
+    team_of = {player.player_id: club.team_id for club in clubs for player in club.players}
+    survivors: dict[int, list[OffseasonPlayer]] = {}
+    for player in departures.survivors:
+        survivors.setdefault(team_of[player.player_id], []).append(player)
+    squeezed = set()
+    for team in departures.draft_teams:
+        budget = renewal_budget(team, caps[team.team_id])
+        full = payroll(r.salary for r in decide_renewals(survivors.get(team.team_id, []), year=year, budget=None))
+        if full > budget:
+            squeezed.add(team.team_id)
+    renewed = {renewal.player_id: renewal.salary for renewal in plan.renewals}
+    totals: dict[int, int] = {}
+    for player_id, salary in renewed.items():
+        team_id = team_of[player_id]
+        totals[team_id] = totals.get(team_id, 0) + salary.yen
+    for signing in plan.signings:
+        totals[signing.team_id] = totals.get(signing.team_id, 0) + signing.salary.yen
+    for draftee in plan.draftees:
+        totals[draftee.team_id] = totals.get(draftee.team_id, 0) + rookie_salary(draftee).yen
+    over = [team_id for team_id, total in totals.items() if total > caps[team_id].yen]
+    count = len(caps)
+    return (
+        f"年俸の上限（オフ）: 更改の上げ幅を縮めた球団 {len(squeezed)}/{count}（{len(squeezed) / count:.0%}）・"
+        f"上限で獲得しなかった外国人 {plan.cap_trimmed}人  "
+        f"翌年の合計 平均 {fmean(totals.values()) / OKU:.1f}億円・"
+        f"上限 平均 {fmean(c.yen for c in caps.values()) / OKU:.1f}・"
+        f"翌年の開幕で上限を超える球団 {len(over)}"
+    )
+
+
 def format_renewals(plan: OffseasonPlan) -> str:
     """契約更改（#40 K1a）の人数と増減を1行にまとめる。"""
     changes = [renewal.change for renewal in plan.renewals]
@@ -998,7 +1046,11 @@ def run_seasons(
         started = time.perf_counter()
         usage = UsageTally()
         opening = Counter(m.team_id for m in members if m.contract is ContractStatus.REGISTERED)
-        tally = MidseasonTally(registrations={}, max_registered=max(opening.values()))
+        tally = MidseasonTally(
+            registrations={},
+            max_registered=max(opening.values()),
+            caps={team_id: cap_of(popularity.revenues.get(team_id), None) for team_id in teams},
+        )
         batting, pitching, games, team_games = play_season(
             rosters,
             leagues,
@@ -1029,7 +1081,13 @@ def run_seasons(
         if season + 1 == seasons:
             break
         started = time.perf_counter()
-        clubs = offseason_clubs(members, teams, batting, pitching)
+        clubs = offseason_clubs(
+            members,
+            teams,
+            batting,
+            pitching,
+            caps={team_id: cap_of(popularity.revenues.get(team_id), None) for team_id in teams},
+        )
         plan = plan_offseason(
             clubs,
             year=current,
@@ -1050,6 +1108,7 @@ def run_seasons(
         say(format_foreign_offseason(plan, members, current, start_year=year))
         departures = plan_departures(clubs, year=current, world_seed=seed, start_year=year)
         say(format_foreign_needs(plan, departures.draft_teams))
+        say(format_offseason_caps(plan, clubs, departures, current))
         members = apply_plan(members, plan)
         serving = [
             StaffAssignment(member, StaffTenure(index, team_id, StaffRole.MANAGER, first_year=manager_since[team_id]))

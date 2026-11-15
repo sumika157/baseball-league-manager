@@ -24,6 +24,7 @@ from myapp.domain.exceptions import (
     PostseasonFormatLocked,
     PostseasonNotFinished,
 )
+from myapp.domain.pennant import payroll_cap as payroll_cap_module
 from myapp.domain.pennant.development import DevelopmentDecision
 from myapp.domain.pennant.draft_order import DraftOrderRule
 from myapp.domain.pennant.draft_record import DraftMeetingStatus, DraftRecord
@@ -311,6 +312,34 @@ class CloseWithTheMeetingTest(DraftServiceCase):
             service.close_season(expected_year=YEAR)
         self.assertFalse(self.next_year_ratings(), "何も書かない")
         self.assertIsNotNone(self.record(), "会議は残る")
+
+
+class PayrollCapMeetingTest(DraftServiceCase):
+    """年俸の上限（#40 K1b）は締める年の収入から決まり、会議を始めた後は動かない。会議と締める処理が同じ上限を読む。"""
+
+    def test_a_binding_cap_reaches_the_meeting_and_the_close_in_the_same_way(self):
+        """締める年の人気の行が無い（補う）世界で、上限が効く強さにしても、会議を始めてから締めて `DraftChanged` に
+        ならない。指名した外国人は上限で削られ、締めた後に導き直した上限は締める前と同じ。"""
+        orm_models.PennantClubPopularity.objects.filter(team__league__world_id=self.world_id, year=YEAR).delete()
+        offseason = self.offseason()
+        chosen = [row.index for row in offseason.foreign_view().candidates][:2]
+        offseason.set_foreign_signings(chosen, expected_year=YEAR)
+        teams = list(
+            orm_models.Team.objects.filter(league__world_id=self.world_id).order_by("id").values_list("id", flat=True)
+        )
+        with mock.patch.object(payroll_cap_module, "PAYROLL_CAP_RATE", 0.05):
+            before = offseason._caps.caps(YEAR + 1, teams, supplement_previous=True)
+            self.start()
+            self.auto_complete()
+            result = offseason.close_season(expected_year=YEAR)
+            after = self.offseason()._caps.caps(YEAR + 1, teams, supplement_previous=False)
+
+        self.assertEqual(after, before, "締めると補った人気が行として書かれ、同じ上限になる")
+        self.assertGreaterEqual(result.cap_trimmed_count, 2)
+        signed = orm_models.PlayerStint.objects.filter(
+            team_id=self.managed(), from_year=YEAR + 1, acquired_via=AcquisitionRoute.NEW_FOREIGN.value
+        )
+        self.assertFalse(signed.exists())
 
 
 class LocksTest(DraftServiceCase):

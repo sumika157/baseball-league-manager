@@ -15,7 +15,7 @@ from unittest import mock
 from django.urls import reverse
 
 from myapp.domain.exceptions import InvalidSigning, RegisteredPlayerLimitExceeded, ReinforcementClosed
-from myapp.domain.pennant.foreign_market import MAX_FOREIGN_HELD
+from myapp.domain.pennant import payroll_cap as payroll_cap_module
 from myapp.domain.pennant.reinforcement import RegistrationKind
 from myapp.domain.pennant.salary import FOREIGN_MIN_SALARY
 from myapp.domain.pennant.world import WorldScope
@@ -72,7 +72,9 @@ class ForeignTabTest(ForeignSigningCase):
         self.assertNotIn('id="club-foreign"', content, "オフの形は出さない")
         self.assertEqual(content.count('data-testid="foreign-candidate-row"'), 8)
         self.assertNotIn("獲得する</button>", content)
-        self.assertIn("保有 0人／上限 6人", content)
+        self.assertIn("保有 0人 · ", content)
+        self.assertIn('data-testid="foreign-payroll-cap"', content)
+        self.assertEqual(content.count('data-testid="candidate-salary"'), 8, "候補ごとの年俸（提示）")
 
         self.client.force_login(self.owner)
         content = self.client.get(self.foreign_url()).content.decode()
@@ -95,15 +97,26 @@ class ForeignTabTest(ForeignSigningCase):
         self.assertEqual(response.context["tab"], "active", "出せないタブは既定のタブに落とす")
         self.assertNotIn('data-testid="foreign-candidate-row"', response.content.decode())
 
-    def test_at_the_held_limit_the_reason_replaces_the_buttons(self):
-        self.make_foreign(MAX_FOREIGN_HELD)
+    def test_six_foreigners_are_not_a_limit_any_more(self):
+        """保有の6人の上限はやめた（#394）。外国人を6人持つ球団にも「獲得する」を出す。"""
+        self.make_foreign(6)
         self.client.force_login(self.owner)
 
         content = self.client.get(self.foreign_url()).content.decode()
-        self.assertIn('data-testid="foreign-midseason-blocked"', content)
-        self.assertIn("保有は6人まで", content)
+        self.assertNotIn('data-testid="foreign-midseason-blocked"', content)
+        self.assertIn("獲得する</button>", content)
+        self.assertEqual(content.count('data-testid="foreign-held-row"'), 6)
+
+    def test_candidates_over_the_payroll_cap_show_the_reason_instead_of_the_button(self):
+        """年俸の上限に収まらない候補は、ボタンの代わりに「上限を超える」（#40 K1b）。"""
+        self.client.force_login(self.owner)
+        with mock.patch.object(payroll_cap_module, "PAYROLL_CAP_RATE", 0.001):
+            view = build_foreign_signing_service(self.world_a).view()
+            content = self.client.get(self.foreign_url()).content.decode()
+        self.assertTrue(all(not row.within_cap for row in view.candidates))
+        self.assertLess(view.room.amount, 0)
+        self.assertEqual(content.count('data-testid="over-cap"'), 8)
         self.assertNotIn("獲得する</button>", content)
-        self.assertEqual(content.count('data-testid="foreign-held-row"'), MAX_FOREIGN_HELD)
 
     def test_at_the_registered_limit_the_reason_replaces_the_buttons(self):
         self.set_the_limit(23)
@@ -140,6 +153,7 @@ class SigningTest(ForeignSigningCase):
         (contract,) = DjangoSalaryContractRepository(WorldScope.pennant(self.world_a)).for_players([stint.player_id])
         self.assertEqual((contract.first_year, contract.last_year), (YEAR, YEAR), "獲得した年の年俸（年額。#40 K1a）")
         self.assertGreaterEqual(contract.salary.yen, FOREIGN_MIN_SALARY)
+        self.assertEqual(contract.salary, candidate.salary, "見立てから決めた、画面に出した額を書く（#394 Q2 の A）")
         (registration,) = self.signings()
         self.assertEqual((registration.player_id, registration.registered_on), (stint.player_id, next_game))
         # 次の試合の候補に入る
@@ -166,12 +180,13 @@ class SigningTest(ForeignSigningCase):
         self.assertIn("今季の獲得 1人／上限 1人", content)
         self.assertEqual(content.count('data-testid="foreign-held-row"'), 1)
 
-    def test_the_held_and_registered_limits_refuse_the_signing(self):
+    def test_the_payroll_cap_and_the_registered_limit_refuse_the_signing(self):
         next_game = first_fixture_on(self.world_a)
-        self.make_foreign(MAX_FOREIGN_HELD)
-        with self.assertRaisesRegex(InvalidSigning, "保有は6人まで"):
+        with (
+            mock.patch.object(payroll_cap_module, "PAYROLL_CAP_RATE", 0.001),
+            self.assertRaisesRegex(InvalidSigning, "年俸の合計が上限"),
+        ):
             build_foreign_signing_service(self.world_a).sign(0, expected_next_game_on=next_game)
-        orm_models.Player.objects.update(is_foreign_player=False)
         self.set_the_limit(23)
         with self.assertRaisesRegex(RegisteredPlayerLimitExceeded, "上限（23人）"):
             build_foreign_signing_service(self.world_a).sign(0, expected_next_game_on=next_game)

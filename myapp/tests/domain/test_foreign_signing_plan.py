@@ -1,8 +1,8 @@
 """GM の外国人のオフの指名（`foreign_market.ForeignSigningPlan`・`confirm_chosen_signings`。#169 F2）。DB 不要。
 
-期待値の根拠: 候補は球団ごとに8人・見えるのはスカウトの見立てだけ・オフは外国人の保有がゲームの上限6人まで
-（2026-10-25 ユーザー決定 Q4 A）。獲得した外国人は新しい支配下の選手の枠の内側で数える（Q2 A）。
-指名した候補は AI の選択と差し替え、締めるときに枠・保有の上限・位置の最低人数に収まらない分を見立ての低い順に削る。
+期待値の根拠: 候補は球団ごとに8人・見えるのはスカウトの見立てだけ（2026-10-25 ユーザー決定 Q4 A）。獲得した外国人は
+新しい支配下の選手の枠の内側で数える（Q2 A）。指名した候補は AI の選択と差し替え、締めるときに枠・年俸の上限・
+位置の最低人数に収まらない分を見立ての低い順に削る。保有の6人の上限は年俸の上限に置き換えてやめた（#40 K1b・#394）。
 """
 
 from __future__ import annotations
@@ -16,13 +16,11 @@ from myapp.domain.pennant import draft
 from myapp.domain.pennant.draft_meeting import DraftContext
 from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
 from myapp.domain.pennant.foreign_market import (
-    MAX_FOREIGN_HELD,
     CandidateKey,
     ForeignSigningPlan,
     SigningPhase,
     candidate_outlook_grade,
     confirm_chosen_signings,
-    held_after_chosen_departures,
     offseason_key,
     offseason_signings,
     scouting_report,
@@ -61,7 +59,7 @@ class ForeignSigningPlanTest(unittest.TestCase):
 
 class ConfirmChosenSigningsTest(unittest.TestCase):
     def test_the_gm_is_not_bound_by_the_ai_shortfall(self) -> None:
-        """外国人が目標（4人）に達した球団でも、指名した候補を獲得する（保有の上限まで）。"""
+        """外国人が目標（4人）に達した球団でも、指名した候補を獲得する。"""
         full = team(foreign=4)
         self.assertEqual(draft.foreign_count_to_add(full, draft.newcomer_plan(full)[0]), 0, "前提: AI は獲得しない")
         chosen = confirm_chosen_signings(candidates(), keys_of(0, 4), full, world_seed=SEED)
@@ -80,14 +78,10 @@ class ConfirmChosenSigningsTest(unittest.TestCase):
         best = max((offseason_key(YEAR, i) for i in (0, 1, 4)), key=lambda key: (values[key], -key.index))
         self.assertEqual([c.key for c in chosen], [best])
 
-    def test_the_held_limit(self) -> None:
-        chosen = confirm_chosen_signings(
-            candidates(), keys_of(0, 1, 2), team(foreign=MAX_FOREIGN_HELD - 1), world_seed=SEED
-        )
-        self.assertEqual(len(chosen), 1)
-        self.assertEqual(
-            confirm_chosen_signings(candidates(), keys_of(0), team(foreign=MAX_FOREIGN_HELD), world_seed=SEED), ()
-        )
+    def test_there_is_no_held_limit_any_more(self) -> None:
+        """保有の6人の上限はやめた（#394）。外国人を6人持つ球団も、指名した候補を獲得する（7人目・8人目）。"""
+        chosen = confirm_chosen_signings(candidates(), keys_of(0, 1), team(foreign=6), world_seed=SEED)
+        self.assertEqual(len(chosen), 2)
 
     def test_the_position_minimum_is_kept(self) -> None:
         """投手が新人の枠の分だけ足りない球団は、指名した野手を獲得しない（会議の指名・AI の獲得と同じ制約）。"""
@@ -181,12 +175,6 @@ class CandidateOutlookTest(unittest.TestCase):
                     )
                     self.assertEqual(grade, expected)
         self.assertTrue(any(c.age < PEAK_AGE for c in drawn), "前提: ピークより若い候補がいる")
-
-
-class HeldAfterChosenDeparturesTest(unittest.TestCase):
-    def test_foreigners_chosen_to_leave_are_not_counted(self) -> None:
-        self.assertEqual(held_after_chosen_departures([1, 2, 3], []), 3)
-        self.assertEqual(held_after_chosen_departures([1, 2, 3], [2, 9]), 2, "外国人でない選手の指名は数えに効かない")
 
 
 if __name__ == "__main__":

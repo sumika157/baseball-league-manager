@@ -42,6 +42,7 @@ from myapp.domain.value_objects import (
     Profile,
     RosterLimits,
 )
+from myapp.tests.domain.payroll_builders import AMPLE_CAP
 
 YEAR = 2027
 START_YEAR = 2026
@@ -75,6 +76,7 @@ def club(*players: OffseasonPlayer, team_id: int = 1, registered_limit: int | No
         foreign_rules=ForeignPlayerRules.NPB,
         registered_player_limit=registered_limit,
         players=players,
+        payroll_cap=AMPLE_CAP,
     )
 
 

@@ -17,6 +17,7 @@ from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
 from myapp.domain.pennant.offseason import OffseasonClub, OffseasonPlayer, plan_offseason
 from myapp.domain.pennant.release import ReleasePlan, decide_releases, ensure_releasable
 from myapp.domain.value_objects import ContractStatus, ForeignPlayerRules, Position
+from myapp.tests.domain.payroll_builders import AMPLE_CAP
 from myapp.tests.domain.test_release import REGULAR, START_YEAR, YEAR, member, roster
 
 
@@ -111,13 +112,21 @@ class ManualReleasesInThePlanTest(unittest.TestCase):
     ):
         clubs = [
             OffseasonClub(
-                team_id=1, foreign_rules=ForeignPlayerRules.NPB, registered_player_limit=70, players=tuple(own)
+                team_id=1,
+                foreign_rules=ForeignPlayerRules.NPB,
+                registered_player_limit=70,
+                players=tuple(own),
+                payroll_cap=AMPLE_CAP,
             )
         ]
         if other is not None:
             clubs.append(
                 OffseasonClub(
-                    team_id=2, foreign_rules=ForeignPlayerRules.NPB, registered_player_limit=70, players=tuple(other)
+                    team_id=2,
+                    foreign_rules=ForeignPlayerRules.NPB,
+                    registered_player_limit=70,
+                    players=tuple(other),
+                    payroll_cap=AMPLE_CAP,
                 )
             )
         return plan_offseason(
@@ -169,7 +178,11 @@ class ManualReleasesInThePlanTest(unittest.TestCase):
         result = self.plan(roster(60), {1: frozenset()}, other=other)
         remaining = [p for p in other if p.player_id not in result.retired]
         club = OffseasonClub(
-            team_id=2, foreign_rules=ForeignPlayerRules.NPB, registered_player_limit=70, players=tuple(other)
+            team_id=2,
+            foreign_rules=ForeignPlayerRules.NPB,
+            registered_player_limit=70,
+            players=tuple(other),
+            payroll_cap=AMPLE_CAP,
         )
         expected = decide_releases(club, remaining, year=YEAR, start_year=START_YEAR, world_seed=1)
         self.assertEqual(set(result.released), set(expected))

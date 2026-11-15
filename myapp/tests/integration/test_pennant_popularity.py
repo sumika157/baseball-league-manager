@@ -42,6 +42,7 @@ from myapp.presentation.views import (
     build_pennant_world_service,
     build_pennant_world_view,
 )
+from myapp.tests.domain.payroll_builders import AMPLE_CAP
 
 from .world_case import YEAR, _register_club
 
@@ -347,6 +348,7 @@ class PopularityBasisTest(SimpleTestCase):
             foreign_rules=ForeignPlayerRules.UNLIMITED,
             registered_player_limit=None,
             players=(),
+            payroll_cap=AMPLE_CAP,
         )
         return popularity_basis(
             year=YEAR, team_ids=[2, 1, 3], recorded=recorded, finishes=[finish], clubs=[club], manual_prices={}

@@ -243,17 +243,21 @@ class RenewalOfferTest(unittest.TestCase):
 class DecideRenewalsTest(unittest.TestCase):
     def test_renewals_do_not_depend_on_the_order_of_players(self):
         players = [offseason_player(i, salary=man(400 + 100 * i), level=40 + i) for i in range(1, 8)]
-        forward = decide_renewals(players, year=YEAR)
-        backward = decide_renewals(list(reversed(players)), year=YEAR)
+        forward = decide_renewals(players, year=YEAR, budget=None)
+        backward = decide_renewals(list(reversed(players)), year=YEAR, budget=None)
         self.assertEqual(forward, backward)
         self.assertEqual([r.player_id for r in forward], list(range(1, 8)))
 
     def test_players_without_a_salary_are_not_renewed(self):
-        renewals = decide_renewals([offseason_player(1, salary=None), offseason_player(2, salary=man(500))], year=YEAR)
+        renewals = decide_renewals(
+            [offseason_player(1, salary=None), offseason_player(2, salary=man(500))], year=YEAR, budget=None
+        )
         self.assertEqual([r.player_id for r in renewals], [2])
 
     def test_a_promoted_player_gets_at_least_the_registered_minimum(self):
-        (renewal,) = decide_renewals([offseason_player(1, salary=man(300), level=30, plate_appearances=0)], year=YEAR)
+        (renewal,) = decide_renewals(
+            [offseason_player(1, salary=man(300), level=30, plate_appearances=0)], year=YEAR, budget=None
+        )
         self.assertGreaterEqual(renewal.salary.yen, MIN_REGISTERED_SALARY)
 
     def test_a_star_regular_gets_a_raise_and_an_idle_veteran_a_cut(self):
@@ -263,6 +267,7 @@ class DecideRenewalsTest(unittest.TestCase):
                 offseason_player(2, salary=man(20_000), level=40, plate_appearances=0),
             ],
             year=YEAR,
+            budget=None,
         )
         self.assertGreater(star.change, 0)
         self.assertLess(idle.change, 0)
@@ -271,8 +276,8 @@ class DecideRenewalsTest(unittest.TestCase):
     def test_the_market_uses_the_track_record_titles(self):
         plain = offseason_player(1, salary=man(5_000), level=60, plate_appearances=550)
         champion = replace(plain, track_record=TrackRecord(titles=2))
-        (a,) = decide_renewals([plain], year=YEAR)
-        (b,) = decide_renewals([champion], year=YEAR)
+        (a,) = decide_renewals([plain], year=YEAR, budget=None)
+        (b,) = decide_renewals([champion], year=YEAR, budget=None)
         self.assertGreater(b.salary, a.salary)
 
 

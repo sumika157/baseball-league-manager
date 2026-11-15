@@ -96,17 +96,16 @@ from ..domain.pennant.development import (
     ensure_development_plan,
     is_contract_expiring,
 )
+from ..domain.pennant.draft import USUAL_DRAFTEES
 from ..domain.pennant.draft_lottery import DraftKey, lottery_records
 from ..domain.pennant.draft_record import pre_draft_input_blocker
 from ..domain.pennant.foreign_market import (
-    MAX_FOREIGN_HELD,
     ForeignCandidate,
     ForeignSigning,
     ForeignSigningPlan,
     SigningPhase,
     draw_candidates,
     ensure_signable,
-    held_after_chosen_departures,
     offseason_key,
 )
 from ..domain.pennant.offseason import Draftee, OffseasonPlan, plan_offseason
@@ -114,7 +113,7 @@ from ..domain.pennant.popularity import ClubPopularity
 from ..domain.pennant.postseason import PostseasonStatus
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.release import ReleasePlan, ensure_releasable
-from ..domain.pennant.salary import foreign_salary, rookie_salary
+from ..domain.pennant.salary import rookie_reserve, rookie_salary
 from ..domain.pennant.schedule import Fixture, season_schedule
 from ..domain.pennant.season import is_season_closed
 from ..domain.pennant.staff import ManagerChanges, plan_manager_changes
@@ -143,6 +142,7 @@ from .dto import (
     DevelopmentPlanView,
     ForeignHeldRow,
     ForeignSigningPlanView,
+    Money,
     ReleasePlanView,
     ReleasePlayerRow,
     SeasonClosed,
@@ -167,8 +167,10 @@ from .pennant_offseason_inputs import (
     managed_team_id,
     release_plan_of,
 )
+from .pennant_payroll_cap import PayrollCapReader
 from .pennant_popularity import PopularityBasis, popularity_basis
 from .pennant_postseason import PostseasonBracketReader
+from .pennant_salary import SalaryContractReader
 from .pennant_season import AtomicBlock
 from .pennant_ticket_price import TicketPriceReader
 from .queries import DevelopmentRosterQuery, PlayerNameQuery, SimulationContextQuery
@@ -247,6 +249,8 @@ class PennantOffseasonService:
         phase: OffseasonPhase,
         inputs: OffseasonInputsReader,
         fa_exemptions: ForeignQuotaExemptions,
+        salaries: SalaryContractReader,
+        caps: PayrollCapReader,
         atomic: AtomicBlock,
     ) -> None:
         self._world_id = world_id
@@ -263,6 +267,9 @@ class PennantOffseasonService:
         # 受け持つ球団の外国人の指名（#169 F2）と、候補の名前を世界の選手と重ねないための名前の一覧
         self._foreign_signings = foreign_signings
         self._names = names
+        # 「外国人」タブの年俸の上限・合計（#40 K1b。締める処理の上限は入力の読み口が読む）
+        self._salaries = salaries
+        self._caps = caps
         self._awards = awards
         self._championships = championships
         # 球団の人気（締めるときに翌年の値を書く。#208 E1）
@@ -613,6 +620,10 @@ class PennantOffseasonService:
             )
             for candidate in self._candidates(world, team_id, year)
         ]
+        # 年俸の上限（#40 K1b）: 翌年の上限は締める処理と同じ読み方（締める年の収入から）。合計と取り置きは見込み
+        cap = self._caps.caps(year + 1, [team_id], supplement_previous=True)[team_id]
+        current = self._salaries.payrolls([year], [team_id], open_year=year).get((team_id, year), 0) or 0
+        reserve = rookie_reserve(USUAL_DRAFTEES)
         return ForeignSigningPlanView(
             team_id=team_id,
             team_name=team.name,
@@ -622,9 +633,13 @@ class PennantOffseasonService:
                 replace(row, counts_toward_quota=exemptions.counts(row.player_id, is_foreign_player=True))
                 for row in held
             ),
-            held_limit=MAX_FOREIGN_HELD,
             active_rules=team.foreign_rules,
             candidates=tuple(rows),
+            cap=Money(cap.yen),
+            cap_estimated=cap.estimated,
+            current_total=Money(current),
+            rookie_reserve=Money(reserve),
+            room=Money(cap.yen - current - reserve),
             blocker=self._release_blocker(year) or "",
         )
 
@@ -638,24 +653,15 @@ class PennantOffseasonService:
 
     def set_foreign_signings(self, indices: Sequence[int], *, expected_year: int | None) -> None:
         """獲得する候補（締める年のオフの候補の添字）を手動で指名する（丸ごと置き換える。0人も可）。
-        成立しなければ `InvalidSigning`（候補にいない・重複・保有の上限）、会議を始めた後は `DraftStarted`。
+        成立しなければ `InvalidSigning`（候補にいない・重複）、会議を始めた後は `DraftStarted`。
 
-        保有の上限は、いまの外国人（育成を含む）から、手動で戦力外・育成の自由契約に指名した外国人を除いた人数で
-        確かめる（締めるときは引退・戦力外の後の人数で数え直し、収まらない分は獲得しない。`confirm_chosen_signings`）。
+        年俸の上限（#40 K1b）は保存するときには確かめない（翌年の合計は更改と戦力外の後、締めるときまで決まらない）。
+        締めるときに収まらない分は、見立ての低い候補から獲得しない（`confirm_chosen_signings`）。
         """
         year, team_id = self._release_target(expected_year)
         world = self._worlds.find_by_id(self._world_id)
-        held = self._held_foreign(_team_of(self._context_query.teams(), team_id), year)
-        leaving = set(chosen_releases(self._releases.find_by_team(team_id), year) or ())
-        decisions = chosen_development(self._developments.find_by_team(team_id), year) or {}
-        leaving |= {player_id for player_id, decision in decisions.items() if decision is DevelopmentDecision.RELEASE}
         keys = [offseason_key(year, index) for index in indices]
-        ensure_signable(
-            keys,
-            self._candidates(world, team_id, year),
-            held_foreign=held_after_chosen_departures([row.player_id for row in held], leaving),
-            phase=SigningPhase.OFFSEASON,
-        )
+        ensure_signable(keys, self._candidates(world, team_id, year), phase=SigningPhase.OFFSEASON)
         plan = ForeignSigningPlan(team_id=team_id, year=year, keys=frozenset(keys))
         with self._atomic():
             self._ensure_releases_open(year)
@@ -829,6 +835,7 @@ class PennantOffseasonService:
             manager_changes=prepared.managers.count,
             renewal_count=len(plan.renewals),
             renewal_change=sum(renewal.change for renewal in plan.renewals),
+            cap_trimmed_count=plan.cap_trimmed,
         )
 
     def _apply_roster_changes(
@@ -866,7 +873,7 @@ class PennantOffseasonService:
                 team.promote_player(promotion.player_id, JerseyNumber(promotion.number), next_year, limits=team_limits)
             # 獲得した外国人を新人の前に（獲得はドラフト会議の前。#169）。翌年から支配下・新外国人で加入する。
             # 前所属の区分はプロフィールに入っている（`ForeignSigning.profile`）。外国人の保有の人数は縛らない
-            # （協約第82条の2。ゲームの上限 `foreign_market.MAX_FOREIGN_HELD` は domain が獲得の前に検査した）
+            # （協約第82条の2。年俸の上限は domain が獲得の前に検査した。#40 K1b）
             for signing in signings:
                 player = team.add_player(
                     signing.name,
@@ -898,10 +905,9 @@ class PennantOffseasonService:
                 )
                 player.profile = draftee.profile
                 added.append(player)
-            # 翌年の年俸（#40 K1a）。獲得した外国人は能力から、新人はドラフトの巡から
-            salaries = [foreign_salary(s.position, s.ratings, year=next_year) for s in signings] + [
-                rookie_salary(draftee) for draftee in draftees
-            ]
+            # 翌年の年俸（#40 K1a）。獲得した外国人は獲得を決めた時点の見立てから（#40 K1b。上限の検査と同じ額）、
+            # 新人はドラフトの巡から
+            salaries = [signing.salary for signing in signings] + [rookie_salary(draftee) for draftee in draftees]
             changes.append(_RosterChange(team=team, added=added, newcomers=[*signings, *draftees], salaries=salaries))
         return changes
 

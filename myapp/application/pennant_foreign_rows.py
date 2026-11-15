@@ -11,7 +11,13 @@ from __future__ import annotations
 from collections import Counter
 
 from ..domain.entities import Team
-from ..domain.pennant.foreign_market import ForeignCandidate, candidate_outlook_grade, scouting_report
+from ..domain.pennant.foreign_market import (
+    ForeignCandidate,
+    candidate_outlook_grade,
+    candidate_salary,
+    scouting_report,
+)
+from ..domain.pennant.payroll_cap import PayrollCap
 from .dto import DevelopmentRoster, ForeignCandidateRow, ForeignHeldRow, SimulationTeam
 from .pennant_outlook import grade_outlook_cell
 from .pennant_ratings import overall_cell, rating_cells
@@ -37,9 +43,21 @@ def held_foreign_rows(team: SimulationTeam, development: DevelopmentRoster) -> l
     return registered + developmental
 
 
-def foreign_candidate_row(candidate: ForeignCandidate, *, world_seed: int, is_chosen: bool) -> ForeignCandidateRow:
-    """「外国人」タブの候補ひとり（オフの指名と期中の獲得が共有する）。能力は球団のスカウトの見立てだけ。"""
+def foreign_candidate_row(
+    candidate: ForeignCandidate,
+    *,
+    world_seed: int,
+    is_chosen: bool,
+    payroll: tuple[int, PayrollCap] | None = None,
+) -> ForeignCandidateRow:
+    """「外国人」タブの候補ひとり（オフの指名と期中の獲得が共有する）。能力は球団のスカウトの見立てだけ。
+
+    年俸は見立てから（`candidate_salary`。#40 K1b）。`payroll` はその年の年俸の合計と上限（期中）で、獲得すると上限に
+    収まらない候補は `within_cap` を落とす（判定は domain の `PayrollCap.fits`）。None は見ない（オフ。締めるときに
+    確かめる）。
+    """
     report = scouting_report(candidate, world_seed=world_seed)
+    salary = candidate_salary(candidate, world_seed=world_seed)
     return ForeignCandidateRow(
         index=candidate.key.index,
         name=candidate.name,
@@ -50,6 +68,8 @@ def foreign_candidate_row(candidate: ForeignCandidate, *, world_seed: int, is_ch
         cells=rating_cells(report.ratings),
         outlook=grade_outlook_cell(candidate_outlook_grade(candidate, report)),
         is_chosen=is_chosen,
+        salary=salary,
+        within_cap=payroll is None or payroll[1].fits(payroll[0] + salary.yen),
     )
 
 

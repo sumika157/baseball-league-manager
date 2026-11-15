@@ -40,6 +40,7 @@ from ..value_objects import (
 from ..virtual_players import generator
 from ..virtual_players.generator import AmateurPath
 from .initial_ratings import SEASON_START_MONTH, STRENGTH_UNIT
+from .payroll_cap import PayrollCap
 from .prospects import PROSPECT_RATING_SD, draw_prospect_ratings
 from .roster import DEVELOPMENT_BAND, OPENING_REGISTERED_BAND
 
@@ -172,6 +173,10 @@ class DraftTeam:
     # 支配下の選手の位置と今の能力（能力の無い選手は除く）。外国人の獲得が戦力の穴を測るのに使う
     # （`foreign_market.squad_strength`。#169 F1b）。空は全単位が空き（全球団が空なら穴0。位置の偏りは生まない）
     squad: tuple[tuple[Position, BatterRatings | PitcherRatings], ...] = ()
+    # 翌年の年俸の合計（契約更改の後の残る選手と、獲得を決めた外国人）と、翌年の年俸の上限（#40 K1b）。
+    # 外国人の獲得が上限を見る（`foreign_market._offseason_fits`）。上限の None は上限を見ない
+    payroll: int = 0
+    payroll_cap: PayrollCap | None = None
 
     @property
     def registered_count(self) -> int:
