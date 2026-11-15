@@ -799,6 +799,7 @@ def _pitching_values(entry: GamePitching) -> dict[str, Any]:
     values["innings_pitched"] = float(entry.line.innings.to_notation())
     values["appearance_order"] = entry.appearance_order
     values["entered_inning"] = entry.entered_inning
+    values["team_id"] = entry.team_id
     return values
 
 
@@ -930,7 +931,9 @@ class _NewGame:
                 orm_models.GamePitchingLine(player_id=e.player_id, **_pitching_values(e)) for e in game.pitching
             ],
             fielding=[
-                orm_models.GameFieldingLine(player_id=e.player_id, **{f: getattr(e.line, f) for f in _FIELDING_FIELDS})
+                orm_models.GameFieldingLine(
+                    player_id=e.player_id, team_id=e.team_id, **{f: getattr(e.line, f) for f in _FIELDING_FIELDS}
+                )
                 for e in game.fielding
             ],
             innings=[
@@ -1179,7 +1182,7 @@ class DjangoGameRepository:
             fielding_row, _ = orm_models.GameFieldingLine.objects.update_or_create(
                 game=row,
                 player_id=entry.player_id,
-                defaults={f: getattr(entry.line, f) for f in _FIELDING_FIELDS},
+                defaults={"team_id": entry.team_id, **{f: getattr(entry.line, f) for f in _FIELDING_FIELDS}},
             )
             entry.id = fielding_row.id
         orm_models.GameFieldingLine.objects.filter(game=row).exclude(
@@ -1310,6 +1313,7 @@ class DjangoGameRepository:
                 id=f.id,
                 player_id=f.player_id,
                 line=FieldingLine(**{name: getattr(f, name) for name in _FIELDING_FIELDS}),
+                team_id=f.team_id,
             )
             for f in row.fielding_lines.all()
         ]
@@ -1382,6 +1386,7 @@ def game_pitching_of(row: orm_models.GamePitchingLine) -> GamePitching:
             starts=1 if row.appearance_order <= 1 else 0,
             relief_wins=row.wins if row.appearance_order > 1 else 0,
         ),
+        team_id=row.team_id,
         appearance_order=row.appearance_order,
         entered_inning=row.entered_inning,
     )

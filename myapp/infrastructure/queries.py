@@ -171,9 +171,9 @@ class DjangoPlayerFieldingQuery:
         if not total["games"]:
             return None
 
-        # 年度別はこのチームでの成績（打撃・投球の年度別と同じ）。通算は移籍前も含む
+        # 年度別はこのチームでの成績（打撃・投球の年度別と同じ。明細のチームで引く。#396）。通算は移籍前も含む
         yearly = (
-            rows.filter(Q(game__home_team_id=team_id) | Q(game__away_team_id=team_id))
+            rows.filter(team_id=team_id)
             .values("game__year")
             .annotate(games=Count("id"), **self._SUMS)
             .order_by("game__year")
@@ -379,6 +379,10 @@ class DjangoPlayerStatsQuery:
         # 成績は公式戦だけ（ポストシーズンは数えない）
         regular = StageFilter.REGULAR_ONLY
         games = Q() if year is None else Q(game__year=year)
+        if team_id is not None and year is not None:
+            # 球団のその年の成績は、明細のチームがその球団の試合だけ。年の途中で移った選手は、
+            # 移る前の球団の分を移った先に数えない（#396）。年を省いた通算は移籍前も含む
+            games &= Q(team_id=team_id)
         if team_id is None and league_id is None:
             # 世界の全選手。IN 句に何千件も並べず、範囲の試合で絞る
             batting = batting_totals(self._scope, stages=regular, games=games)
@@ -689,13 +693,15 @@ class DjangoGameListQuery:
         ]
 
     def list_for_player(self, team_id: int, player_id: int) -> list[Game]:
-        """そのチームの試合のうち、選手が出場した試合（打撃か投球に記録がある試合）。試合日の古い順。
+        """選手がそのチームで出場した試合（そのチームの打撃か投球の明細がある試合）。試合日の古い順。
 
         **その選手の打撃・投球の明細だけ**を持つ（相手や他の選手の明細・イニングスコアは読まない）。
         選手ページの年度別・月別の成績と試合ごとの記録はこの選手の明細だけで足りる。チームの試合を
         明細ごと全シーズンぶん組み立てると、シーズンが増えるほど遅くなる。参照専用で、保存しない。
+        チームは明細のチームで引く（試合のホームかビジターで引くと、年の途中で移った選手の、移る前の球団と
+        移った先の球団の対戦が両方に入る。#396）。
         """
-        in_team = Q(game__home_team_id=team_id) | Q(game__away_team_id=team_id)
+        in_team = Q(team_id=team_id)
         in_scope = game_rows_condition("game", self._scope, stages=StageFilter.REGULAR_ONLY)
         batting = orm_models.GameBattingLine.objects.filter(in_scope, in_team, player_id=player_id).select_related(
             "game"
@@ -842,9 +848,8 @@ class DjangoPennantActivityQuery:
                 game_rows_condition("game", self._scope, stages=StageFilter.REGULAR_ONLY),
                 game__played_on__gt=after,
                 game__played_on__lte=through,
-                # 投球の明細は球団を持たない。在籍中の球団で引く（世界の選手の在籍は1つ）
-                player__stints__team_id=team_id,
-                player__stints__to_year__isnull=True,
+                # 明細のチームで引く（今の在籍で引くと、期間の途中で移った投手の移る前の登板まで入る。#396）
+                team_id=team_id,
             )
             .values("player_id", "player__name")
             .annotate(wins=Sum("wins"), losses=Sum("losses"), saves=Sum("saves"))
@@ -1641,15 +1646,11 @@ class DjangoTeamAnalysisQuery:
             .annotate(games=Count("id"), starts=Count("id", filter=Q(slot_sequence=0)))
             .order_by()
         )
-        # 投手: 投球の明細はチームを持たない。そのチームの試合（ホームかビジター）で、
-        # その年に在籍した選手の登板を数える近似（`DjangoPlayerFieldingQuery` の年度別と同じ）。
+        # 投手: 野手と同じく、明細のチームがそのチームの登板だけを数える（#396）。
         # 先発の意味は pitching_totals と同じ（登板順が1以下）
         pitcher_rows = (
             orm_models.GamePitchingLine.objects.filter(
-                Q(game__home_team_id=team_id) | Q(game__away_team_id=team_id),
-                regular,
-                game__year=year,
-                player_id__in=player_ids,
+                regular, team_id=team_id, game__year=year, player_id__in=player_ids
             )
             .values("player_id")
             .annotate(games=Count("id"), starts=Count("id", filter=Q(appearance_order__lte=1)))
