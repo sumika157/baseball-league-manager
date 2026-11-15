@@ -183,12 +183,8 @@ class TeamViewService:
         """チームの月別成績。個人の月別成績と対になる、チーム単位の推移。
 
         `year` を渡すと、その年の試合だけを読む（全シーズンの試合の明細を組み立てない）。
+        自チームの成績は明細のチームで分ける（選手の顔ぶれを読まない。#396）。
         """
-        if year is None:
-            member_ids = {saved_id(p.id) for p in self._teams.find_by_id(team_id).players}
-        else:
-            member_ids = {row.player_id for row in self._player_stats_query.list_roster(year=year, team_id=team_id)}
-
         return [
             TeamMonthlyRow(
                 label=split.label,
@@ -202,9 +198,7 @@ class TeamViewService:
                 whip=split.pitching.whip,
                 strikeouts=split.pitching.strikeouts,
             )
-            for split in domain_services.team_monthly_splits(
-                self._games.find_by_team(team_id, year=year), team_id, member_ids
-            )
+            for split in domain_services.team_monthly_splits(self._games.find_by_team(team_id, year=year), team_id)
         ]
 
     def get_player_detail(self, team_id: int, player_id: int) -> PlayerDetail:

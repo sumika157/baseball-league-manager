@@ -9,9 +9,9 @@
 行数ではなくスキーマ（索引）だけから計画を選ぶ。行を置かなくても、本番の大きさの写しと同じ計画になる
 （T2b で、200個の見本を作った開発 DB の写しでも同じ計画になることを確かめた）。
 
-見る SQL: `players_in` そのもの（実データ・ペナント）、それで絞る読み取り（能力・抽選・FA 宣言・id の照合）、選手検索、
-ワークスペースの削除と世界の削除の全 SQL。管理画面の概況の「実データの選手の数」（`admin_real_queryset`）は
-全ワークスペースの選手を数えるので、選手の表を読むのは意味のうち（対象にしない）。
+見る SQL: `players_in` そのもの（実データ・ペナント）、それで絞る読み取り（能力・抽選・FA 宣言・年俸の契約・
+id の照合）、選手検索、ワークスペースの削除と世界の削除の全 SQL。管理画面の概況の「実データの選手の数」
+（`admin_real_queryset`）は全ワークスペースの選手を数えるので、選手の表を読むのは意味のうち（対象にしない）。
 """
 
 import re
@@ -24,7 +24,13 @@ from django.test.utils import CaptureQueriesContext
 from myapp.domain.pennant.world import WorldScope
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import DjangoWorldRepository
-from myapp.infrastructure.scoping import declarations_in, draft_lotteries_in, players_in, ratings_in
+from myapp.infrastructure.scoping import (
+    declarations_in,
+    draft_lotteries_in,
+    players_in,
+    ratings_in,
+    salary_contracts_in,
+)
 from myapp.presentation.views import build_player_search_query
 
 from ..helpers import (
@@ -104,12 +110,16 @@ class PlayersInScopeTest(PlayerScopePlanCase):
                 self.assertEqual(queryset_scans(players_in(scope).filter(name__icontains="田").order_by("name")), [])
 
     def test_reads_filtered_by_the_players_of_the_scope(self):
-        """世界の能力の読み取り（世界ダッシュボード・選手一覧・球団ホーム）と、締めた年の抽選。"""
+        """世界の能力の読み取り（世界ダッシュボード・選手一覧・球団ホーム）・締めた年の抽選・年俸の契約（#40 K1a）。"""
         scope = world_scope(self.world.id)
         self.assertEqual(queryset_scans(ratings_in(scope).filter(year=2030)), [])
         self.assertEqual(queryset_scans(ratings_in(scope).filter(player_id__in=[1, 2], year=2030)), [])
         self.assertEqual(queryset_scans(draft_lotteries_in(scope)), [])
         self.assertEqual(queryset_scans(declarations_in(scope).filter(player_id__in=[1, 2])), [])
+        self.assertEqual(
+            queryset_scans(salary_contracts_in(scope).filter(first_year__lte=2030, last_year__gte=2030)), []
+        )
+        self.assertEqual(queryset_scans(salary_contracts_in(scope).filter(player_id__in=[1, 2])), [])
 
     def test_free_agent_declarations_are_read_through_the_players_of_the_scope(self):
         """FA 宣言の表も走査しない（宣言の行ごとに在籍を見る相関した `Exists` にすると、全世界の宣言を走査する）。"""

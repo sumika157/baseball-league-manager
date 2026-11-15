@@ -22,6 +22,7 @@ from .entities import Game, League, Stadium, Team
 from .pennant.awards import Award
 from .pennant.championship import Championship
 from .pennant.club_plan import ClubPlan
+from .pennant.contract import SalaryContract
 from .pennant.development import DevelopmentPlan
 from .pennant.draft_lottery import DraftLotteryRecord
 from .pennant.draft_meeting import DraftAction
@@ -664,5 +665,33 @@ class DraftLotteryRepository(Protocol):
 
         実データの範囲には書けない（InvalidWorld）。範囲の外の選手・球団は書けない（InvalidDraftAction）。
         どれかが書けなければ何も書かない。
+        """
+        ...
+
+
+@runtime_checkable
+class SalaryContractRepository(Protocol):
+    """ペナントの選手の年俸の契約（`SalaryContract`。選手 × 期間。#40 K1a）。ペナントの世界にだけ置ける。
+
+    書くのは世界の作成・シーズンを締める処理・期中の外国人の獲得だけ。締めた年の契約は書き換えない。
+    行の無い選手（この機能より前の世界）は読む側が補う（`salary.initial_salary`。補う読み方は
+    application の `pennant_salary` の1か所）。
+    """
+
+    def find_by_year(self, year: int) -> list[SalaryContract]:
+        """その年を期間に含む、範囲の全選手の契約（行のある選手だけ）。選手の id の順。"""
+        ...
+
+    def for_players(self, player_ids: Collection[int]) -> list[SalaryContract]:
+        """選手たちの全ての契約（選手の id・最初の年の順）。範囲の外の選手は含まない。"""
+        ...
+
+    def add_all(self, contracts: Sequence[SalaryContract]) -> None:
+        """契約をまとめて保存する。どれかが書けなければ何も書かない。
+
+        実データの範囲には書けない（InvalidWorld）。範囲の外の選手は PlayerNotFound。同じ選手の期間の重なり
+        （渡した中・保存済みとの間。`contract.ensure_no_overlap`）は InvalidSalaryContract。期間が締めた年
+        （`season.is_season_closed`）にかかる契約は AlreadyClosed（締める処理は、翌年の能力を書く前に締める年の
+        補った値を書く）。
         """
         ...

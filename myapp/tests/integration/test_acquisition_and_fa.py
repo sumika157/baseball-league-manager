@@ -462,7 +462,7 @@ class MovesDisplayTest(BaseCase):
             home_score=1,
             away_score=0,
         )
-        game.record_pitching(starter.id, PitchingLine(), appearance_order=1)
+        game.record_pitching(starter.id, PitchingLine(), team_id=self.team.id, appearance_order=1)
         DjangoGameRepository(real_scope()).save(game)
 
     def test_joiners_carry_the_route_and_unknown_is_empty(self):

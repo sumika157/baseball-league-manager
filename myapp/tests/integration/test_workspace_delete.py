@@ -265,6 +265,10 @@ class WorkspaceDeletionCase(WorkspaceCase):
         # 球団の人気・手動のチケットの値段（#208 E1・E2）も球団を指すので、範囲の条件が効くかを実データの球団で見る
         orm_models.PennantClubPopularity.objects.create(team=cls.b_team, year=B_YEAR, value=60)
         orm_models.PennantTicketPrice.objects.create(team=cls.b_team, year=B_YEAR, price=TicketPrice.HIGH.value)
+        # 年俸の契約（#40 K1a）は選手を指すので、同じく実データの選手で見る
+        orm_models.PennantSalaryContract.objects.create(
+            player_id=batter, first_year=B_YEAR, last_year=B_YEAR, salary=10_000_000
+        )
         # 締めた年の抽選・期中の支配下登録（#360・#356）。どれもペナントの表だが、範囲の条件が効くかを見るので
         # 実データに置く
         lottery = orm_models.PennantDraftLottery.objects.create(player_id=batter, attempt=1)

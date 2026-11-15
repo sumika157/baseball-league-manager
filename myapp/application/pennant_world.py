@@ -18,12 +18,14 @@ from ..domain import services as domain_services
 from ..domain.entities import League, Player, Team
 from ..domain.exceptions import InvalidWorld, TeamNotFound
 from ..domain.pennant.club_plan import ClubMember, ensure_roster_playable
+from ..domain.pennant.contract import SalaryContract
 from ..domain.pennant.draft_order import DraftOrderRule
 from ..domain.pennant.fork import fork_league, fork_roster, fork_team
 from ..domain.pennant.initial_ratings import career_record, estimate_initial_ratings
 from ..domain.pennant.popularity import ClubPopularity, initial_popularity
 from ..domain.pennant.postseason import PostseasonFormat
 from ..domain.pennant.ratings import PlayerRatings
+from ..domain.pennant.salary import initial_salary, salary_basis
 from ..domain.pennant.world import (
     MAX_SEASONS_PER_WORLD,
     MAX_SOURCE_LEAGUES,
@@ -36,6 +38,7 @@ from ..domain.repositories import (
     LeagueRepository,
     PopularityRepository,
     RatingsRepository,
+    SalaryContractRepository,
     TeamRepository,
     WorldRepository,
 )
@@ -71,6 +74,7 @@ class WorldRepositories:
     teams: TeamRepository
     ratings: RatingsRepository
     popularities: PopularityRepository
+    salary_contracts: SalaryContractRepository
 
 
 # 範囲を渡すと、その範囲のリポジトリを返す生成器。実装は組み立ての1か所が渡す
@@ -326,6 +330,8 @@ class PennantWorldService:
         forked_team_ids: dict[int, int] = {}
         # (分岐元の選手, 写した選手)。能力の推定が、元の成績と写した先を結びつけるのに使う
         forked_players: list[tuple[Player, Player]] = []
+        # 写した選手の開幕年の契約区分（年俸の補いの材料。#40 K1a）
+        contracts: dict[int, ContractStatus | None] = {}
 
         for order, (source, source_teams) in enumerate(zip(sources, source_rosters, strict=True)):
             league = repositories.leagues.save(fork_league(source, display_order=order))
@@ -335,11 +341,14 @@ class PennantWorldService:
                 pairs = fork_roster(source_team, team, start_year=world.start_year)
                 team = repositories.teams.save(team)
                 forked_players.extend(pairs)
+                contracts.update({_saved_id(copy.id): team.contract_of(copy) for _, copy in pairs})
                 forked_team_ids[_saved_id(source_team.id)] = _saved_id(team.id)
                 team_count += 1
                 player_count += len(team.active_players)
 
-        rating_count = self._save_initial_ratings(world, repositories, forked_players)
+        ratings = self._save_initial_ratings(world, repositories, forked_players)
+        # 開幕年の年俸の契約（全員1年。補いと同じ `initial_salary`。#40 K1a）
+        self._save_initial_salaries(world, repositories, [copy for _, copy in forked_players], contracts, ratings)
         # 球団の人気の開幕年の値（全球団50。2026-11-14 ユーザー決定。#208 E1）
         repositories.popularities.add_all(
             [
@@ -357,7 +366,7 @@ class PennantWorldService:
             league_count=len(sources),
             team_count=team_count,
             player_count=player_count,
-            rating_count=rating_count,
+            rating_count=len(ratings),
         )
 
     def load_source(self, league_ids: Sequence[int]) -> ForkSource:
@@ -389,8 +398,8 @@ class PennantWorldService:
 
     def _save_initial_ratings(
         self, world: World, repositories: WorldRepositories, forked_players: list[tuple[Player, Player]]
-    ) -> int:
-        """分岐した選手の初期能力を、実成績から推定して**1回の一括**で保存する。"""
+    ) -> list[PlayerRatings]:
+        """分岐した選手の初期能力を、実成績から推定して**1回の一括**で保存する。保存した能力を返す。"""
         ratings = self.estimate_ratings(
             [source for source, _ in forked_players],
             seed=world.seed,
@@ -398,7 +407,35 @@ class PennantWorldService:
             player_ids=[_saved_id(copy.id) for _, copy in forked_players],
         )
         repositories.ratings.add_all(ratings)
-        return len(ratings)
+        return ratings
+
+    @staticmethod
+    def _save_initial_salaries(
+        world: World,
+        repositories: WorldRepositories,
+        players: Sequence[Player],
+        contracts: dict[int, ContractStatus | None],
+        ratings: Sequence[PlayerRatings],
+    ) -> None:
+        """写した選手の開幕年の年俸（1年の契約）を1回の一括で保存する。額は行の無い選手の補いと同じ
+        `salary.initial_salary`（出場の実績を使わず能力と年数から。分岐前の成績は数えない）。"""
+        by_player = {item.player_id: item.ratings for item in ratings}
+        year = world.start_year
+        salaries = []
+        for player in players:
+            player_id = _saved_id(player.id)
+            draft = player.profile.draft
+            basis = salary_basis(
+                position=player.position,
+                ratings=by_player.get(player_id),
+                contract=contracts.get(player_id),
+                is_foreign=player.profile.is_foreign_player,
+                # 写した選手の在籍は開幕年から（`fork_roster`）。プロ入りの年はドラフトの翌年を優先する
+                entered_year=year if draft is None else draft.entry_year,
+                year=year,
+            )
+            salaries.append(SalaryContract.for_year(player_id, year, initial_salary(basis)))
+        repositories.salary_contracts.add_all(salaries)
 
     def delete_world(self, world_id: int) -> None:
         """世界と、属するリーグ・球団・選手・試合をすべて消す。無ければ WorldNotFound。"""

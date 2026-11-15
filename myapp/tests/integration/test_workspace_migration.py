@@ -1,11 +1,11 @@
-"""0070: 既存のリーグ・球場・世界を既定のワークスペースに帰属させるデータ移行の検査。"""
+"""0074: 既存のリーグ・球場・世界を既定のワークスペースに帰属させるデータ移行の検査。"""
 
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 from django.test import TransactionTestCase
 
-BEFORE = [("myapp", "0069_workspace")]
-AFTER = [("myapp", "0070_backfill_default_workspace")]
+BEFORE = [("myapp", "0073_workspace")]
+AFTER = [("myapp", "0074_backfill_default_workspace")]
 
 
 class BackfillDefaultWorkspaceMigrationTest(TransactionTestCase):

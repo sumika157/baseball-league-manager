@@ -54,7 +54,11 @@ class AnalysisCase(BaseCase):
                 fielding_position=FieldingPosition.from_label(label),
             )
         for player_id, order in pitching:
-            game.record_pitching(player_id, PitchingLine(), appearance_order=order)
+            # 投手のチームは在籍から（ホームに在籍していればホーム）
+            on_home = orm_models.PlayerStint.objects.filter(player_id=player_id, team_id=home.id).exists()
+            game.record_pitching(
+                player_id, PitchingLine(), team_id=home.id if on_home else away.id, appearance_order=order
+            )
         return DjangoGameRepository(real_scope()).save(game)
 
     @staticmethod

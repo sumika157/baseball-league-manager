@@ -1386,6 +1386,7 @@ class Command(BaseCommand):
                 player_id=entry.player_id,
                 appearance_order=entry.appearance_order,
                 entered_inning=entry.entered_inning,
+                team_id=entry.team_id,
                 innings_pitched=float(line.innings.to_notation()),
                 **{f.name: getattr(line, f.name) for f in fields(PitchingLine) if f.name not in PITCHING_NOT_STORED},
             )
@@ -1397,6 +1398,7 @@ class Command(BaseCommand):
             yield GameFieldingLine(
                 game=row,
                 player_id=entry.player_id,
+                team_id=entry.team_id,
                 **{f.name: getattr(entry.line, f.name) for f in fields(FieldingLine)},
             )
 

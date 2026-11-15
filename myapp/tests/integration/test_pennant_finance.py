@@ -28,13 +28,18 @@ from myapp.domain.exceptions import (
     InvalidWorld,
     TicketPriceLocked,
 )
+from myapp.domain.pennant.contract import Salary, SalaryContract
 from myapp.domain.pennant.finance import money_label
 from myapp.domain.pennant.schedule import AdvanceTarget
 from myapp.domain.pennant.ticket_price import ClubTicketPrice, TicketPrice
 from myapp.domain.value_objects import ContractStatus
 from myapp.infrastructure import orm_models
-from myapp.infrastructure.queries import DjangoClubFinanceQuery
-from myapp.infrastructure.repositories import DjangoFixtureRepository, DjangoTicketPriceRepository
+from myapp.infrastructure.queries import DjangoClubFinanceQuery, DjangoPayrollQuery
+from myapp.infrastructure.repositories import (
+    DjangoFixtureRepository,
+    DjangoSalaryContractRepository,
+    DjangoTicketPriceRepository,
+)
 from myapp.presentation.views import (
     build_club_finance_service,
     build_offseason_view_service,
@@ -306,12 +311,11 @@ class FinanceViewTest(FinanceCase):
         assert own.figures is not None
         self.assertEqual(own.figures.gate.amount, home_total * TicketPrice.SLIGHTLY_LOW.unit_price)
         self.assertFalse(own.in_progress)
-        # 人件費はその年に在籍した人数（全員支配下）× 4,000万円
-        (size,) = DjangoClubFinanceQuery(world_scope(self.world_id)).roster_sizes(
-            years=[YEAR], team_ids=[self.teams[0]]
-        )
-        self.assertGreater(size.registered, 0)
-        self.assertEqual(own.figures.payroll.amount, 40_000_000 * size.registered + 5_000_000 * size.developmental)
+        # 人件費はその年に在籍した選手の年俸の合計（#40 K1a。締めた年は全員に契約の行がある）
+        members = DjangoPayrollQuery(world_scope(self.world_id)).members(years=[YEAR], team_ids=[self.teams[0]])
+        self.assertTrue(members)
+        self.assertEqual(own.figures.payroll.amount, sum(member.salary or 0 for member in members))
+        self.assertTrue(all(member.salary is not None for member in members))
         rival = rows[self.teams[1]]
         self.assertEqual((rival.ticket_price, rival.manual_price), (TicketPrice.STANDARD, False))
 
@@ -416,12 +420,14 @@ class ScreenTest(FinanceCase):
         self.assertContains(finance, f"{YEAR}年")
 
 
-class RosterSizeQueryTest(FinanceCase):
-    def test_registered_and_developmental_players_are_counted_per_year(self):
-        """その年の区分で数える（育成で入って昇格した選手は昇格の年から支配下）。同じ年に2回在籍しても1人。"""
+class PayrollQueryTest(FinanceCase):
+    def test_members_are_counted_once_per_year_with_the_contract_of_that_year(self):
+        """その年の区分で数える（育成で入って昇格した選手は昇格の年から支配下）。同じ年に2回在籍しても1人。
+        年俸はその年を期間に含む契約（無ければ None。#40 K1a）。"""
         team_id = self.teams[0]
-        query = DjangoClubFinanceQuery(world_scope(self.world_id))
-        (before,) = query.roster_sizes(years=[YEAR], team_ids=[team_id])
+        scope = world_scope(self.world_id)
+        query = DjangoPayrollQuery(scope)
+        before = len(query.members(years=[YEAR], team_ids=[team_id]))
         player = orm_models.Player.objects.create(name="育成から昇格", position="投手")
         orm_models.PlayerStint.objects.create(
             player=player,
@@ -441,14 +447,22 @@ class RosterSizeQueryTest(FinanceCase):
             number_before_promotion="121",
         )
 
-        sizes = {row.year: row for row in query.roster_sizes(years=[YEAR, YEAR + 1], team_ids=[team_id])}
+        DjangoSalaryContractRepository(scope).add_all(
+            [SalaryContract.for_year(player.id, YEAR + 1, Salary(5_000_000))]
+        )
 
-        self.assertEqual(sizes[YEAR].developmental, before.developmental + 1)
-        self.assertEqual(sizes[YEAR].registered, before.registered)
-        self.assertEqual(sizes[YEAR + 1].registered, before.registered + 1)
-        self.assertEqual(query.roster_sizes(years=[], team_ids=[team_id]), [])
+        rows = query.members(years=[YEAR, YEAR + 1], team_ids=[team_id])
+        mine = {row.year: row for row in rows if row.player_id == player.id}
+
+        self.assertEqual(len([row for row in rows if row.year == YEAR]), before + 1)
+        self.assertEqual(mine[YEAR].contract, ContractStatus.DEVELOPMENTAL)
+        self.assertIsNone(mine[YEAR].salary)
+        self.assertEqual(mine[YEAR + 1].contract, ContractStatus.REGISTERED)
+        self.assertEqual(mine[YEAR + 1].salary, 5_000_000)
+        self.assertEqual((mine[YEAR].draft_year, mine[YEAR].joined_year), (None, YEAR), "その年の後の在籍の開始年")
+        self.assertEqual(query.members(years=[], team_ids=[team_id]), [])
         self.assertEqual(
-            query.stadium_capacities([team_id, self.all_teams[-1]]),
+            DjangoClubFinanceQuery(scope).stadium_capacities([team_id, self.all_teams[-1]]),
             {
                 team_id: CAPACITY,
                 self.all_teams[-1]: CAPACITY,

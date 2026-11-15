@@ -23,6 +23,7 @@ from ..value_objects import (
     Position,
     Profile,
 )
+from .contract import Salary
 from .fork import ESTIMATED_AGE_AT_START, with_birth_date
 from .initial_ratings import age_at_season_start
 from .ratings import PlayerRatings
@@ -157,6 +158,9 @@ class OffseasonPlayer:
     # 今の在籍で育成から支配下に上がった年（`Stint.promoted_year`）。上がっていなければ None。
     # 昇格した年のオフは戦力外にしない（`release.py`。#170）
     promoted_year: int | None = None
+    # Y の年俸（#40 K1a。契約の行が無ければ読み口が補った値）。契約更改（`salary.decide_renewals`）の前の年俸。
+    # None の選手は更改しない（読み口は必ず渡す）
+    salary: Salary | None = None
 
     def promoted_in(self, year: int) -> bool:
         """`year` 年に育成から支配下に上がったか（オフの昇格は翌年の年で書くので、締める年 = 昇格の年）。"""

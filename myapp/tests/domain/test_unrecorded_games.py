@@ -27,7 +27,7 @@ def _game(home_score=0, away_score=0, *, day=1, month=4, season=2026, record=Non
     if record == "batting":
         game.record_batting(10, BattingLine(at_bats=3), team_id=HOME)
     elif record == "pitching":
-        game.record_pitching(20, PitchingLine(innings=InningsPitched.from_notation("9.0")))
+        game.record_pitching(20, PitchingLine(innings=InningsPitched.from_notation("9.0")), team_id=AWAY)
     return game
 
 
@@ -108,7 +108,7 @@ class UnrecordedGamesAreNotCountedTest(TestCase):
 
     def test_team_monthly_splits_skip_unrecorded_games(self):
         splits = services.team_monthly_splits(
-            [_game(4, 1, record="batting"), _game(day=2), _game(day=1, month=5)], HOME, {10}
+            [_game(4, 1, record="batting"), _game(day=2), _game(day=1, month=5)], HOME
         )
 
         self.assertEqual([(s.month, s.record.games_played) for s in splits], [(4, 1)])

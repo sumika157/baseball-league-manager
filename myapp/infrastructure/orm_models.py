@@ -780,6 +780,13 @@ class GamePitchingLine(models.Model):
 
     game = models.ForeignKey(Game, on_delete=models.CASCADE, related_name="pitching_lines", verbose_name="試合")
     player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="game_pitching", verbose_name="選手")
+    team = models.ForeignKey(
+        Team,
+        on_delete=models.CASCADE,
+        related_name="game_pitching_lines",
+        verbose_name="チーム",
+        help_text="試合のホームかビジター。年の途中で移籍した投手の成績を球団ごとに分けるのに使います。",
+    )
     # 登板順。1 が先発。ボックススコアは投げた順に並べる
     appearance_order = models.IntegerField(default=1, verbose_name="登板順")
     # 何回から投げたか。セーブ・ホールドの条件は登板した時点のスコアで決まる
@@ -823,6 +830,13 @@ class GameFieldingLine(models.Model):
 
     game = models.ForeignKey(Game, on_delete=models.CASCADE, related_name="fielding_lines", verbose_name="試合")
     player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="game_fielding", verbose_name="選手")
+    team = models.ForeignKey(
+        Team,
+        on_delete=models.CASCADE,
+        related_name="game_fielding_lines",
+        verbose_name="チーム",
+        help_text="試合のホームかビジター。年の途中で移籍した選手の成績を球団ごとに分けるのに使います。",
+    )
     putouts = models.IntegerField(default=0, verbose_name="刺殺")
     assists = models.IntegerField(default=0, verbose_name="補殺")
     errors = models.IntegerField(default=0, verbose_name="失策")
@@ -1393,6 +1407,35 @@ class PennantTicketPrice(models.Model):
 
     def __str__(self) -> str:
         return f"{self.year}年 {self.team_id} {self.price}"
+
+
+class PennantSalaryContract(models.Model):
+    """ペナントの選手の年俸の契約（選手 × 期間。#40 K1a）。決めた事実で、相場・総額・減額の下限は保存せず導く。
+
+    書くのは世界の作成（開幕年）・シーズンを締める処理（翌年と、行の無い選手の締める年の補った値）・期中の外国人の
+    獲得（その年）だけ。同じ選手の期間は重ならない（検査はリポジトリ。domain の `contract.ensure_no_overlap`）。
+    球団は持たない（在籍から引く）。選手経由で世界に属す。年俸は円（万円刻み）。管理画面には出さない。
+    """
+
+    player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="+", verbose_name="選手")
+    first_year = models.PositiveSmallIntegerField(verbose_name="最初の年")
+    last_year = models.PositiveSmallIntegerField(verbose_name="最後の年")
+    salary = models.PositiveBigIntegerField(verbose_name="年俸（円）")
+
+    class Meta:
+        verbose_name = "ペナントの年俸の契約"
+        verbose_name_plural = "ペナントの年俸の契約"
+        ordering = ["player_id", "first_year"]
+        constraints = [
+            models.UniqueConstraint(fields=["player", "first_year"], name="unique_pennant_salary_contract"),
+            models.CheckConstraint(
+                condition=models.Q(first_year__lte=models.F("last_year")),
+                name="pennant_salary_contract_period",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.player_id} {self.first_year}〜{self.last_year}年 {self.salary}円"
 
 
 class PennantDraft(models.Model):

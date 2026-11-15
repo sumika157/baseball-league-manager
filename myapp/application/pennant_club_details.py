@@ -1,4 +1,4 @@
-"""編成画面に並べる選手の、選ぶ材料（年齢・能力の要約・今季の成績）。
+"""編成画面に並べる選手の、選ぶ材料（年齢・年俸・能力の要約・今季の成績）。
 
 読むだけで、書き込みはしない。編成（`ClubManagementService`）とは別の小さなサービスにして、
 あちらに能力の表示や成績の知識を足さない。年は編成の画面が使っている年（`ClubPlanView.year`。
@@ -25,6 +25,7 @@ from .dto import (
 )
 from .pennant_outlook import outlook_cell
 from .pennant_ratings import overall_cell, rating_cells
+from .pennant_salary import PennantPayrollViewService
 from .queries import ClubTenureQuery, PlayerStatsQuery
 
 
@@ -41,6 +42,7 @@ class ClubDetailsService:
         stats: PlayerStatsQuery,
         ratings: RatingsRepository,
         tenures: ClubTenureQuery,
+        payroll: PennantPayrollViewService,
         today: Callable[[], date],
     ) -> None:
         self._world_id = world_id
@@ -48,6 +50,8 @@ class ClubDetailsService:
         self._stats = stats
         self._ratings = ratings
         self._tenures = tenures
+        # その年の年俸（「年俸」列。行の無い選手は補う。#40 K1a）
+        self._payroll = payroll
         self._today = today
 
     def details[Row: (ClubPlayerRow, ReleasePlayerRow)](
@@ -68,6 +72,7 @@ class ClubDetailsService:
             if world is not None and world.managed_team_id == team_id
             else {}
         )
+        salaries = self._payroll.team_salaries(team_id, year)
         today = self._today()
         details = []
         for player in players:
@@ -94,6 +99,7 @@ class ClubDetailsService:
                         if found is not None and tenure is not None and world is not None
                         else None
                     ),
+                    salary=salaries.get(player.player_id),
                 )
             )
         return tuple(details)
