@@ -217,6 +217,7 @@ class AdvancedMetricsTest(BaseCase):
         game = play_game(self.team, self.rival, home_score=0, away_score=0)
         batters = register_lineup(self.roster, self.rival, prefix="相手打者", first_number=71)
         home_batters = register_lineup(self.roster, self.team, prefix="自軍打者", first_number=81)
+        rival_pitcher = self.roster.register_player(self.rival.id, "相手投手", 91, "投手", from_year=TEST_YEAR)
 
         post_game_scorebook_day_unrecorded(
             self.client,
@@ -233,7 +234,7 @@ class AdvancedMetricsTest(BaseCase):
                     home=[0],
                     away_batters=batters,
                     home_batters=home_batters,
-                    away_pitchers={1: self.pitcher.id},
+                    away_pitchers={1: rival_pitcher.id},
                     home_pitchers={1: self.pitcher.id},
                 ),
             },
@@ -242,4 +243,5 @@ class AdvancedMetricsTest(BaseCase):
         line = orm_models.GamePitchingLine.objects.get(game_id=game.id, player_id=self.pitcher.id)
         self.assertEqual(line.home_runs_allowed, 2)
         self.assertEqual(line.hits_allowed, 2)
-        self.assertEqual(line.strikeouts, 6)
+        # 表の3アウト（裏は相手の投手が投げる。以前は同じ投手を両チームで投げさせていて6だった）
+        self.assertEqual(line.strikeouts, 3)

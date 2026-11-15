@@ -625,6 +625,13 @@ class GamePitchingLine(models.Model):
 
     game = models.ForeignKey(Game, on_delete=models.CASCADE, related_name="pitching_lines", verbose_name="試合")
     player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="game_pitching", verbose_name="選手")
+    team = models.ForeignKey(
+        Team,
+        on_delete=models.CASCADE,
+        related_name="game_pitching_lines",
+        verbose_name="チーム",
+        help_text="試合のホームかビジター。年の途中で移籍した投手の成績を球団ごとに分けるのに使います。",
+    )
     # 登板順。1 が先発。ボックススコアは投げた順に並べる
     appearance_order = models.IntegerField(default=1, verbose_name="登板順")
     # 何回から投げたか。セーブ・ホールドの条件は登板した時点のスコアで決まる
@@ -668,6 +675,13 @@ class GameFieldingLine(models.Model):
 
     game = models.ForeignKey(Game, on_delete=models.CASCADE, related_name="fielding_lines", verbose_name="試合")
     player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="game_fielding", verbose_name="選手")
+    team = models.ForeignKey(
+        Team,
+        on_delete=models.CASCADE,
+        related_name="game_fielding_lines",
+        verbose_name="チーム",
+        help_text="試合のホームかビジター。年の途中で移籍した選手の成績を球団ごとに分けるのに使います。",
+    )
     putouts = models.IntegerField(default=0, verbose_name="刺殺")
     assists = models.IntegerField(default=0, verbose_name="補殺")
     errors = models.IntegerField(default=0, verbose_name="失策")

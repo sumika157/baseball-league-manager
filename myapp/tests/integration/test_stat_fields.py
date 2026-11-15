@@ -86,7 +86,8 @@ class FieldingStatFieldsTest(SimpleTestCase):
 
     def test_table_columns_match_the_line(self):
         columns = {f.name for f in orm_models.GameFieldingLine._meta.get_fields() if getattr(f, "column", None)}
-        columns -= {"id", "game", "player"}
+        # 試合・選手・チーム（どちらの側で守ったか。#396）は行の持ち主で、カウント項目ではない
+        columns -= {"id", "game", "player", "team"}
         self.assertEqual({f.name for f in fields(FieldingLine)}, columns, "テーブルの列が FieldingLine と違います")
 
 

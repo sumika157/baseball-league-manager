@@ -49,6 +49,7 @@ def _game(away_innings, home_innings, *, home_staff=(), away_staff=()) -> Game:
             game.record_pitching(
                 player_id,
                 _line(notation),
+                team_id=HOME if staff is home_staff else AWAY,
                 appearance_order=order,
                 entered_inning=entered,
             )
@@ -157,7 +158,7 @@ class WinningPitcherTest(TestCase):
             home_score=5,
             away_score=3,
         )
-        game.record_pitching(10, _line("9.0"), appearance_order=1, entered_inning=1)
+        game.record_pitching(10, _line("9.0"), team_id=HOME, appearance_order=1, entered_inning=1)
 
         decisions = services.pitching_decisions(game, TEAM_OF)
 

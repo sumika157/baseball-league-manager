@@ -93,8 +93,9 @@ class GameViewService:
                     player_id=entry.player_id,
                     player_name=info.name,
                     number=info.number,
-                    team_id=info.team_id,
-                    team_name=names.get(info.team_id, ""),
+                    # 両軍への振り分けは明細のチーム（今の所属で引くと、移籍した選手の過去の試合が相手側に載る。#396）
+                    team_id=entry.team_id,
+                    team_name=names.get(entry.team_id, ""),
                     at_bats=line.at_bats,
                     hits=line.hits,
                     home_runs=line.home_runs,
@@ -129,8 +130,8 @@ class GameViewService:
                     player_id=outing.player_id,
                     player_name=info.name,
                     number=info.number,
-                    team_id=info.team_id,
-                    team_name=names.get(info.team_id, ""),
+                    team_id=outing.team_id,
+                    team_name=names.get(outing.team_id, ""),
                     innings_pitched=str(pitched.innings),
                     runs_allowed=pitched.runs_allowed,
                     earned_runs=pitched.earned_runs,
@@ -176,7 +177,7 @@ class GameViewService:
         位置はラインアップの守備位置。打順にいない投手は「投」。守備成績は打席から導いた値で、
         打席の記録が無い試合では行が無い。
         """
-        by_player = {entry.player_id: entry.line for entry in game.fielding}
+        by_player = {entry.player_id: entry for entry in game.fielding}
         lineup = {entry.player_id: entry for entry in game.batting}
         pitched = {outing.player_id for outing in game.pitching}
 
@@ -196,13 +197,14 @@ class GameViewService:
                 label = position.label
             else:
                 label = FieldingPosition.PITCHER.label if player_id in pitched else ""
-            line = by_player[player_id]
+            fielded = by_player[player_id]
+            line = fielded.line
             rows.append(
                 GameFieldingRow(
                     player_id=player_id,
                     player_name=info.name,
                     number=info.number,
-                    team_id=info.team_id,
+                    team_id=fielded.team_id,
                     position_label=label,
                     putouts=line.putouts,
                     assists=line.assists,
