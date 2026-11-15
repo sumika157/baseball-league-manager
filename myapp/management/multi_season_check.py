@@ -70,6 +70,15 @@ from myapp.domain.pennant.reinforcement import MidseasonRegistration, Registrati
 from myapp.domain.pennant.retirement import PlayingTime
 from myapp.domain.pennant.salary import foreign_salary, initial_salary, payroll, rookie_salary, salary_basis
 from myapp.domain.pennant.schedule import ScheduleRules
+from myapp.domain.pennant.staff import (
+    StaffAssignment,
+    StaffMember,
+    StaffRole,
+    StaffTenure,
+    plan_manager_changes,
+    plan_opening_managers,
+    tactics_of,
+)
 from myapp.domain.pennant.ticket_price import TicketPrice, ai_ticket_price
 from myapp.domain.pennant.world import WorldScope, league_priority
 from myapp.domain.simulation.game_day import simulated_attendance
@@ -77,6 +86,7 @@ from myapp.domain.simulation.levels import UsageTally
 from myapp.domain.simulation.manager import ClubRoster, SimBatter, SimPitcher, choose_active_roster
 from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.ratings import PitcherRatings, potential_multiplier
+from myapp.domain.simulation.tactics import TacticAxis, TacticLevel
 from myapp.domain.value_objects import BattingLine, ContractStatus, ForeignPlayerRules, PitchingLine, Position, Profile
 from myapp.management.estimate_check import (
     LEVEL_LABELS,
@@ -904,6 +914,20 @@ def format_finance(
     )
 
 
+def format_managers(managers: dict[int, StaffMember], year: int, changes: int | None) -> str:
+    """監督の年齢と傾向の分布（#210 M1）。`changes` は前のオフに就いた監督の数（1年目は None）。"""
+    ages = [member.age_in(year) for member in managers.values()]
+    styles = [tactics_of(member.style) for member in managers.values()]
+    axes = "  ".join(
+        f"{axis.title} "
+        + "/".join(str(sum(1 for item in styles if item.level(axis) == level)) for level in TacticLevel)
+        for axis in TacticAxis
+    )
+    changed = "" if changes is None else f"・前のオフに就任 {changes}人"
+    head = f"監督: {len(managers)}人・平均 {fmean(ages):.1f}歳（{min(ages)}〜{max(ages)}）{changed}"
+    return f"{head}  傾向（−2/−1/0/+1/+2）: {axes}"
+
+
 def run_seasons(
     scope: WorldScope,
     league_ids: Sequence[int],
@@ -930,11 +954,22 @@ def run_seasons(
         real_titles.append(league_titles(real_batting, real_pitching, ids, ScheduleRules().games_per_team))
 
     popularity = PopularityTally(popularity={team_id: initial_popularity() for team_id in teams})
+    # 監督（#210 M1）。世界の作成と同じく全球団に架空の監督を置き、オフごとに高齢の退任と後任を回す
+    managers = {
+        appointment.team_id: appointment.member
+        for appointment in plan_opening_managers(
+            {team_id: team_id for team_id in teams}, year=year, world_seed=seed, used_names=set(names)
+        )
+    }
+    manager_changes: int | None = None
+    # 球団ごとの、いまの監督の就任の初年
+    manager_since = dict.fromkeys(teams, year)
     for season in range(seasons):
         current = year + season
         say("")
         say(f"==== {current}年（{season + 1}シーズン目） ====")
         say(format_population(members, current))
+        say(format_managers(managers, current, manager_changes))
         say(format_distribution(m.ratings for m in members))
         say("")
         rosters, leagues = rosters_of(members, teams)
@@ -949,6 +984,7 @@ def run_seasons(
             year=current,
             usage=usage,
             review=partial(midseason_review, members, teams, tally, names, seed=seed),
+            tactics={team_id: tactics_of(member.style) for team_id, member in managers.items()},
         )
         say(f"{games}試合  {(time.perf_counter() - started) / games * 1000:.1f} ms/試合")
         say(format_usage(usage.rows()))
@@ -993,3 +1029,17 @@ def run_seasons(
         departures = plan_departures(clubs, year=current, world_seed=seed, start_year=year)
         say(format_foreign_needs(plan, departures.draft_teams))
         members = apply_plan(members, plan)
+        serving = [
+            StaffAssignment(member, StaffTenure(index, team_id, StaffRole.MANAGER, first_year=manager_since[team_id]))
+            for index, (team_id, member) in enumerate(managers.items())
+        ]
+        changes = plan_manager_changes(
+            serving,
+            list(teams),
+            year=current,
+            world_seed=seed,
+            used_names=set(names) | {m.name for m in managers.values()},
+        )
+        managers.update({appointment.team_id: appointment.member for appointment in changes.appointments})
+        manager_since.update({appointment.team_id: appointment.first_year for appointment in changes.appointments})
+        manager_changes = changes.count

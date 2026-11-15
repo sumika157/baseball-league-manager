@@ -56,6 +56,7 @@ from myapp.domain.exceptions import (
     InvalidDraftAction,
     InvalidInvitation,
     InvalidPopularity,
+    InvalidStaffTenure,
     InvalidTicketPrice,
     InvalidWorkspace,
     InvalidWorld,
@@ -77,6 +78,7 @@ from myapp.domain.pennant.popularity import ClubPopularity, Popularity
 from myapp.domain.pennant.reinforcement import MidseasonRegistration, RegistrationKind
 from myapp.domain.pennant.release import ReleasePlan
 from myapp.domain.pennant.salary import MIN_REGISTERED_SALARY
+from myapp.domain.pennant.staff import Appointment, ManagerStyle, StaffMember, StaffRole
 from myapp.domain.pennant.ticket_price import ClubTicketPrice, TicketPrice
 from myapp.domain.pennant.world import World, WorldScope
 from myapp.domain.services.rankings import Title
@@ -116,6 +118,7 @@ from myapp.infrastructure.queries import (
     DjangoServiceHistoryQuery,
     DjangoSetupQuery,
     DjangoSimulationContextQuery,
+    DjangoStaffQuery,
     DjangoTeamAnalysisQuery,
     DjangoTeamListQuery,
     DjangoWorkspaceAccessQuery,
@@ -141,6 +144,7 @@ from myapp.infrastructure.repositories import (
     DjangoReleasePlanRepository,
     DjangoSalaryContractRepository,
     DjangoStadiumRepository,
+    DjangoStaffRepository,
     DjangoTeamRepository,
     DjangoTicketPriceRepository,
     DjangoWorkspaceRepository,
@@ -1090,6 +1094,54 @@ def _payroll_query(t: WorkspaceCase) -> None:
     t.assertIn(t.b_world_player_id, {m.player_id for m in members if m.salary is not None})
 
 
+def _b_staff_year(t: WorkspaceCase) -> int:
+    """B の世界の球団（`b_world_team_id`）の監督の就任の初年。監督は世界の作成が全球団に置く（#210 M1）。"""
+    year = (
+        orm_models.PennantStaffTenure.objects.filter(team_id=t.b_world_team_id)
+        .values_list("first_year", flat=True)
+        .first()
+    )
+    assert year is not None, "B の世界の球団に監督がいない（世界の作成が置くはず）"
+    return year
+
+
+def _staff_repository(t: WorkspaceCase) -> None:
+    """首脳陣（#210 M1）。B の世界の監督は A の実データ・A の世界から読めず、A の範囲で B の球団に就任を書けない。"""
+    year = _b_staff_year(t)
+    for scope in _a_scopes(t):
+        serving = DjangoStaffRepository(scope).find_serving(year)
+        t.assertNotIn(t.b_world_team_id, {a.tenure.team_id for a in serving}, f"{scope} で B の監督が読めた")
+    b_tenures = orm_models.PennantStaffTenure.objects.filter(team_id=t.b_world_team_id)
+    before = (list(b_tenures.values()), orm_models.PennantStaffMember.objects.count())
+    member = StaffMember(name="越境の監督", name_kana="エッキョウ", birth_date=date(1970, 1, 1), style=ManagerStyle())
+    appointment = Appointment(member, t.b_world_team_id, StaffRole.MANAGER, year + 5)
+    with t.assertRaises(InvalidWorld):
+        DjangoStaffRepository(t.a).apply(retirements=[], appointments=[appointment])
+    with t.assertRaises(InvalidStaffTenure):
+        DjangoStaffRepository(WorldScope.pennant(t.workspace.id, t.a_world_id)).apply(
+            retirements=[], appointments=[appointment]
+        )
+    after = (list(b_tenures.values()), orm_models.PennantStaffMember.objects.count())
+    t.assertEqual(after, before, "A の範囲で B の世界の球団に首脳陣を書いた")
+    # 空振りの防止: B の世界の範囲では読める
+    serving = DjangoStaffRepository(_b_world(t)).find_serving(year)
+    t.assertIn(t.b_world_team_id, {a.tenure.team_id for a in serving})
+
+
+def _staff_query(t: WorkspaceCase) -> None:
+    """首脳陣の参照（#210 M1）。A の範囲では B の世界の球団の就任を出さない。"""
+    year = _b_staff_year(t)
+    for scope in _a_scopes(t):
+        query = DjangoStaffQuery(scope)
+        t.assertEqual(query.for_team(t.b_world_team_id), [], f"{scope} で B の球団の監督が読めた")
+        t.assertNotIn(
+            t.b_world_team_id, {row.team_id for row in query.changed_at(year - 1)}, f"{scope} で B の就任が読めた"
+        )
+    # 空振りの防止: B の世界の範囲では読め、就任の年で引ける
+    t.assertTrue(DjangoStaffQuery(_b_world(t)).for_team(t.b_world_team_id))
+    t.assertIn(t.b_world_team_id, {row.team_id for row in DjangoStaffQuery(_b_world(t)).changed_at(year - 1)})
+
+
 def _postseason_query(t: WorkspaceCase) -> None:
     for scope in _a_scopes(t):
         query = DjangoPostseasonQuery(scope)
@@ -1320,6 +1372,8 @@ CHECKS: dict[type, Callable[[WorkspaceCase], None]] = {
     DjangoClubFinanceQuery: _club_finance_query,
     DjangoSalaryContractRepository: _salary_contract_repository,
     DjangoPayrollQuery: _payroll_query,
+    DjangoStaffRepository: _staff_repository,
+    DjangoStaffQuery: _staff_query,
     DjangoPostseasonQuery: _postseason_query,
     DjangoPostseasonStatsQuery: _postseason_stats_query,
     DjangoPlayerFieldingQuery: _player_fielding_query,

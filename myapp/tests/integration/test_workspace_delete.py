@@ -101,10 +101,11 @@ def _rows_of(workspace_id: int) -> dict[str, set[int]]:
 
 
 def _deleted_models() -> list[type[models.Model]]:
-    """削除の順（子から親へ）: 範囲の行 → 選手 → ワークスペースの行。"""
+    """削除の順（子から親へ）: 範囲の行 → 選手・首脳陣の人 → ワークスペースの行。"""
     return [
         *(model for model, _ in _SCOPE_ROWS_CHILD_FIRST),
         orm_models.Player,
+        orm_models.PennantStaffMember,
         *(model for model, _ in _WORKSPACE_ROWS_CHILD_FIRST),
     ]
 
@@ -269,6 +270,17 @@ class WorkspaceDeletionCase(WorkspaceCase):
         orm_models.PennantSalaryContract.objects.create(
             player_id=batter, first_year=B_YEAR, last_year=B_YEAR, salary=10_000_000
         )
+        # 首脳陣（#210 M1）は球団を指す就任から人をたどるので、同じく実データの球団で見る
+        staff = orm_models.PennantStaffMember.objects.create(
+            name="B の監督",
+            name_kana="ビーノカントク",
+            birth_date=date(1970, 1, 1),
+            starter_leash=0,
+            pinch_hitting=0,
+            base_stealing=0,
+            bunting=0,
+        )
+        orm_models.PennantStaffTenure.objects.create(member=staff, team=cls.b_team, role="監督", first_year=B_YEAR)
         # 締めた年の抽選・期中の支配下登録（#360・#356）。どれもペナントの表だが、範囲の条件が効くかを見るので
         # 実データに置く
         lottery = orm_models.PennantDraftLottery.objects.create(player_id=batter, attempt=1)

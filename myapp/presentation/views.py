@@ -78,6 +78,7 @@ from ..application.pennant_ratings import PennantRatingsViewService
 from ..application.pennant_salary import PennantPayrollViewService, SalaryContractReader
 from ..application.pennant_season import PennantSeasonService
 from ..application.pennant_settings import PennantSettingsService
+from ..application.pennant_staff import PennantStaffViewService, StaffReader
 from ..application.pennant_ticket_price import TicketPriceReader
 from ..application.pennant_view import PennantWorldViewService, settled_context
 from ..application.pennant_world import PennantWorldService, WorldRepositories
@@ -164,6 +165,7 @@ from ..infrastructure.queries import (
     DjangoServiceHistoryQuery,
     DjangoSetupQuery,
     DjangoSimulationContextQuery,
+    DjangoStaffQuery,
     DjangoTeamAnalysisQuery,
     DjangoTeamListQuery,
     DjangoWorkspaceAccessQuery,
@@ -189,6 +191,7 @@ from ..infrastructure.repositories import (
     DjangoReleasePlanRepository,
     DjangoSalaryContractRepository,
     DjangoStadiumRepository,
+    DjangoStaffRepository,
     DjangoTeamRepository,
     DjangoTicketPriceRepository,
     DjangoWorkspaceRepository,
@@ -743,6 +746,7 @@ def _repositories_for(scope: WorldScope) -> WorldRepositories:
         teams=DjangoTeamRepository(scope),
         ratings=DjangoRatingsRepository(scope),
         popularities=DjangoPopularityRepository(scope),
+        staff=DjangoStaffRepository(scope),
         salary_contracts=DjangoSalaryContractRepository(scope),
     )
 
@@ -792,6 +796,7 @@ def build_pennant_season_service(scope: WorldScope) -> PennantSeasonService:
         fa_exemptions=ForeignQuotaExemptions(DjangoServiceHistoryQuery(scope)),
         popularities=_popularity_reader(scope),
         ticket_prices=_ticket_price_reader(scope),
+        staff=_staff_reader(scope),
         review=MidseasonReview(
             leagues=DjangoLeagueRepository(scope),
             teams=DjangoTeamRepository(scope),
@@ -836,6 +841,7 @@ def build_pennant_offseason_service(scope: WorldScope) -> PennantOffseasonServic
         championships=DjangoChampionshipRepository(parts.scope),
         popularities=DjangoPopularityRepository(parts.scope),
         ticket_prices=_ticket_price_reader(parts.scope),
+        staff=DjangoStaffRepository(parts.scope),
         salary_contracts=parts.salary_contracts,
         drafts=parts.drafts,
         lotteries=DjangoDraftLotteryRepository(parts.scope),
@@ -945,6 +951,7 @@ def build_pennant_postseason_service(scope: WorldScope) -> PennantPostseasonServ
         fa_exemptions=ForeignQuotaExemptions(DjangoServiceHistoryQuery(scope)),
         popularities=_popularity_reader(scope),
         ticket_prices=_ticket_price_reader(scope),
+        staff=_staff_reader(scope),
         brackets=_postseason_brackets(scope),
         atomic=transaction.atomic,
     )
@@ -1027,6 +1034,21 @@ def _popularity_reader(scope: WorldScope) -> PopularityReader:
     """球団の人気の読み口（進める処理・GM ホーム・球団史・オフの結果が使う。#208 E1）。世界の範囲で作る。"""
     _pennant_world_id(scope)
     return PopularityReader(popularities=DjangoPopularityRepository(scope))
+
+
+def _staff_reader(scope: WorldScope) -> StaffReader:
+    """首脳陣の読み口（進める処理が監督の采配の傾向を読む。#210 M1）。世界の範囲で作る。"""
+    _pennant_world_id(scope)
+    return StaffReader(staff=DjangoStaffRepository(scope))
+
+
+def build_pennant_staff_view_service(scope: WorldScope) -> PennantStaffViewService:
+    """首脳陣の参照（GM ホームの監督・球団史の監督の列・オフの結果の監督の交代。#210 M1）を組み立てる。読むだけ。
+
+    参照クエリは渡された世界の範囲で作る。ペナントの世界の範囲だけを受け取る（実データの範囲なら InvalidWorld）。
+    """
+    _pennant_world_id(scope)
+    return PennantStaffViewService(staff=DjangoStaffQuery(scope))
 
 
 def _ticket_price_reader(scope: WorldScope) -> TicketPriceReader:
@@ -1400,6 +1422,10 @@ def pennant_world(request, world_id):
         "pennant/home.html",
         {
             "home": home,
+            # 自軍の監督（いまの年度。#210 M1）。受け持つ球団が無い・監督のいない年は None
+            "manager": build_pennant_staff_view_service(_world_scope(request, world_id)).manager_card(
+                world.managed_team_id, world.season_year
+            ),
             "is_owner": is_owner,
             "can_delete_world": _can_delete_world(request, world),
             "plan_notices": _plan_notices(request, world) if is_owner else [],
@@ -1545,7 +1571,8 @@ def pennant_close_season(request, world_id):
         f"（引退 {result.retired_count}人・戦力外 {result.released_count}人・"
         f"支配下登録（昇格） {result.promoted_count}人・育成の自由契約 {result.expired_count}人・"
         f"新外国人 {result.signed_foreign_count}人・新人 {result.draftee_count}人"
-        f"（うち育成 {result.development_draftee_count}人）・契約更改 {result.renewal_count}人）。",
+        f"（うち育成 {result.development_draftee_count}人）・契約更改 {result.renewal_count}人・"
+        f"新監督 {result.manager_changes}人）。",
     )
     if result.reverted_sections:
         labels = "・".join(section.value for section in result.reverted_sections)
@@ -1694,7 +1721,8 @@ def pennant_offseason(request, world_id, year):
     )
     if summary is None:
         raise Http404("その年のオフの結果は、まだありません。")
-    return _render(request, "pennant/offseason.html", {"summary": summary}, world)
+    manager_changes = build_pennant_staff_view_service(_world_scope(request, world_id)).manager_changes(year)
+    return _render(request, "pennant/offseason.html", {"summary": summary, "manager_changes": manager_changes}, world)
 
 
 @require_safe
@@ -1879,7 +1907,16 @@ def pennant_team_history(request, world_id, team_id):
         history = build_pennant_history_service(_world_scope(request, world_id)).get_club_history(world, team_id)
     except TeamNotFound:
         raise Http404("球団が見つかりません。") from None
-    return _render(request, "pennant/team_history.html", {"history": history}, world)
+    # 年ごとの監督（#210 M1）。球団史の行と同じ順に並べて渡す
+    managers = build_pennant_staff_view_service(_world_scope(request, world_id)).manager_history(
+        team_id, [season.year for season in history.seasons]
+    )
+    return _render(
+        request,
+        "pennant/team_history.html",
+        {"history": history, "season_rows": list(zip(history.seasons, managers, strict=True))},
+        world,
+    )
 
 
 def pennant_delete(request, world_id):

@@ -33,6 +33,7 @@ from .pennant.ratings import PlayerRatings
 from .pennant.reinforcement import MidseasonRegistration
 from .pennant.release import ReleasePlan
 from .pennant.schedule import Fixture
+from .pennant.staff import Appointment, StaffAssignment, StaffTenure
 from .pennant.ticket_price import ClubTicketPrice
 from .pennant.world import World, WorldUsage
 from .workspace import Invitation, Workspace
@@ -665,6 +666,32 @@ class DraftLotteryRepository(Protocol):
 
         実データの範囲には書けない（InvalidWorld）。範囲の外の選手・球団は書けない（InvalidDraftAction）。
         どれかが書けなければ何も書かない。
+        """
+        ...
+
+
+@runtime_checkable
+class StaffRepository(Protocol):
+    """ペナントの首脳陣（人 `StaffMember` と就任 `StaffTenure`。#210 M1）。ペナントの世界にだけ置ける。
+
+    人は就任を通して世界に属す（世界を直接指さない）。書くのは世界の作成とシーズンを締める処理だけ。
+    不変条件（同じ球団の同じ役割は同時に1人・1人1職）は書く前に domain の `ensure_valid_tenures` で確かめる。
+    画面に出すときは参照クエリ（`application/queries.py` の `StaffQuery`）で読む（更新と参照を分ける）。
+    """
+
+    def find_serving(self, year: int) -> list[StaffAssignment]:
+        """その年に就いている首脳陣（人と就任の組）。球団の id の順。1回のクエリで読む。"""
+        ...
+
+    def apply(self, *, retirements: Sequence[StaffTenure], appointments: Sequence[Appointment]) -> None:
+        """就任を閉じ（`retirements` は閉じた後の就任）、新しい人を就任とともに保存する。
+
+        どれかが書けなければ何も書かない。
+
+        実データの範囲には書けない（InvalidWorld）。範囲の外の球団・閉じる就任が見つからない・不変条件を破る
+        （同じ球団の同じ役割が同じ年に2人・1人が同じ年に2職）は InvalidStaffTenure。閉じる就任の最終年・新しい就任の
+        初年が締めた年（`season.is_season_closed`）なら AlreadyClosed（締めた年の首脳陣を書き換えない。締める処理は、
+        翌年の能力を書く前に書く）。
         """
         ...
 

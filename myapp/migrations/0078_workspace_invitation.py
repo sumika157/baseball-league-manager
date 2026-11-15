@@ -11,7 +11,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('myapp', '0076_team_managers_help_text'),
+        ('myapp', '0077_team_managers_help_text'),
     ]
 
     operations = [

@@ -369,6 +369,11 @@ def draft_lotteries_in(scope: WorldScope) -> QuerySet[orm_models.PennantDraftLot
     return orm_models.PennantDraftLottery.objects.filter(player_id__in=players_in(scope).values("id"))
 
 
+def staff_tenures_in(scope: WorldScope) -> QuerySet[orm_models.PennantStaffTenure]:
+    """範囲の首脳陣の就任（#210 M1）。球団のリーグで世界が決まる。"""
+    return orm_models.PennantStaffTenure.objects.filter(world_condition("team__league", scope))
+
+
 def salary_contracts_in(scope: WorldScope) -> QuerySet[orm_models.PennantSalaryContract]:
     """範囲の年俸の契約（#40 K1a）。契約は選手に付くので、能力と同じく範囲の選手で絞る。"""
     return orm_models.PennantSalaryContract.objects.filter(player_id__in=players_in(scope).values("id"))

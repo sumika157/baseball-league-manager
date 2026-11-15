@@ -8,7 +8,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('myapp', '0072_pitching_fielding_line_team_required'),
+        ('myapp', '0073_pennant_staff'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 

@@ -40,6 +40,7 @@ from myapp.application.pennant_ratings import PennantRatingsViewService
 from myapp.application.pennant_salary import PennantPayrollViewService, SalaryContractReader
 from myapp.application.pennant_season import PennantSeasonService
 from myapp.application.pennant_settings import PennantSettingsService
+from myapp.application.pennant_staff import PennantStaffViewService
 from myapp.application.pennant_view import PennantWorldViewService
 from myapp.application.pennant_world import PennantWorldService
 from myapp.application.queries import (
@@ -172,6 +173,7 @@ from myapp.presentation.views import (
     build_pennant_ratings_service,
     build_pennant_season_service,
     build_pennant_settings_service,
+    build_pennant_staff_view_service,
     build_pennant_world_service,
     build_pennant_world_view,
     build_player_search_query,
@@ -233,6 +235,7 @@ PENNANT_ONLY_BUILDERS = (
     build_club_finance_service,
     build_ticket_price_service,
     build_pennant_payroll_view_service,
+    build_pennant_staff_view_service,
 )
 # ワークスペースの台帳（W2 T1）。範囲もワークスペースの id も取らない（key・利用者からワークスペースそのものを引き、
 # 中のデータは読まない）。名前で列挙し、黙って増えないようにする（`WorkspaceLedgersTest`）。
@@ -815,6 +818,7 @@ class RealScopeTest(SimpleTestCase):
         self.assertEqual(repositories_.ratings._scope, WORLD7)
         self.assertEqual(repositories_.popularities._scope, WORLD7)
         self.assertEqual(repositories_.salary_contracts._scope, WORLD7, "開幕年の年俸の契約も写し先の世界に書く")
+        self.assertEqual(repositories_.staff._scope, WORLD7, "全球団の監督も写し先の世界に書く")
 
 
 class BuildersRequireScopeTest(SimpleTestCase):
@@ -1656,6 +1660,24 @@ class FinanceWiringTest(SimpleTestCase):
         self.assertEqual(prices._prices._scope, world)
         self.assertEqual(prices._fixtures._scope, world)
         self.assertEqual(prices._context_query._scope, world)
+
+
+class StaffWiringTest(SimpleTestCase):
+    """首脳陣（#210 M1）の読み口・リポジトリ・参照は、使うサービスのどれでも渡された世界の範囲で組み立てる。"""
+
+    def test_staff_dependencies_are_built_in_the_given_world(self):
+        world = WORLD7
+        for name, repository in {
+            "進める": build_pennant_season_service(WORLD7)._staff._staff,
+            "ポストシーズン": build_pennant_postseason_service(WORLD7)._staff._staff,
+            "締める": build_pennant_offseason_service(WORLD7)._staff,
+            "参照": build_pennant_staff_view_service(WORLD7)._staff,
+        }.items():
+            with self.subTest(service=name):
+                self.assertEqual(repository._scope, world)
+
+    def test_the_staff_view_service_is_fully_wired(self):
+        BuildServiceTest()._assert_wired(build_pennant_staff_view_service(WORLD7), PennantStaffViewService)
 
 
 class SalaryWiringTest(SimpleTestCase):
