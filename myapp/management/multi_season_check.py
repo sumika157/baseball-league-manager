@@ -26,6 +26,7 @@ from datetime import date, timedelta
 from functools import partial
 from statistics import fmean, median, pstdev
 
+from myapp.application.pennant_payroll_cap import cap_of
 from myapp.application.pennant_world import ForkSource
 from myapp.domain.pennant.contract import Salary
 from myapp.domain.pennant.development import (
@@ -675,6 +676,8 @@ class PopularityTally:
     popularity: dict[int, Popularity]
     # 球団ごとの、続けて最下位の年数と、その間の人気の変化
     last_streak: dict[int, tuple[int, int]] = field(default_factory=dict)
+    # 球団ごとの前年の収入（年俸の上限の材料。#40 K1b）。1年目は空（標準の球団の見込みから）
+    revenues: dict[int, int] = field(default_factory=dict)
 
 
 def expected_fill(
@@ -770,7 +773,9 @@ def popularity_season(
         members,
         seconds={order[1] for order in ordered.values() if len(order) > 1},
         champions=champions,
+        previous_revenues=tally.revenues,
     )
+    tally.revenues = {team_id: item.revenue for team_id, item in finance.items()}
     top = max(current, key=lambda team_id: (current[team_id], -team_id))
     bottom = min(current, key=lambda team_id: (current[team_id], team_id))
     following = next_popularities(current, factors, world_seed=seed, year=year)
@@ -805,8 +810,10 @@ def club_finances(
     *,
     seconds: set[int],
     champions: set[int] | None = None,
+    previous_revenues: dict[int, int],
 ) -> dict[int, ClubFinance]:
-    """球団ごとの収支の見込み（`popularity_season` の近似）。"""
+    """球団ごとの収支の見込み（`popularity_season` の近似）。年俸の上限は前年の収入（`previous_revenues`。無ければ
+    標準の球団の見込み）から（#40 K1b）。"""
     home_games = ScheduleRules().games_per_team / 2
     payrolls = payrolls_of(members)
     result = {}
@@ -820,6 +827,7 @@ def club_finances(
                 popularity=value,
                 payroll=payrolls.get(team_id, 0),
                 capacity=None,
+                payroll_cap=cap_of(previous_revenues.get(team_id), None),
             )
         )
     return result
@@ -898,9 +906,25 @@ def format_finance(
         "値段（AI）: " + "・".join(f"{price.label} {counts[price]}" for price in TicketPrice) + "  "
         f"収支（補填前・億円）: 平均 {fmean(balances) / oku:+.1f}・中央 {balances[len(balances) // 2] / oku:+.1f}・"
         f"最高 {balances[-1] / oku:+.1f}・最低 {balances[0] / oku:+.1f}・人気45〜55 平均 {_mean(middle) / oku:+.1f}"
-        f"（{len(middle)}球団）・赤字 {len(deficit)}球団・補填 平均 {_mean([i.subsidy for i in deficit]) / oku:.1f}・"
+        f"（{len(middle)}球団）・赤字 {len(deficit)}球団・"
+        f"補填 平均 {_mean([i.subsidy.total for i in deficit]) / oku:.1f}・"
         f"収入 平均 {fmean(i.revenue for i in finance.values()) / oku:.1f}・"
-        f"人件費 平均 {fmean(i.payroll for i in finance.values()) / oku:.1f}"
+        f"人件費 平均 {fmean(i.payroll for i in finance.values()) / oku:.1f}\n" + format_payroll_cap(finance)
+    )
+
+
+def format_payroll_cap(finance: dict[int, ClubFinance]) -> str:
+    """年俸の上限（#40 K1b）を1行にまとめる。上限・合計・残りの平均（億円）と、上限を超えた球団の数と超過の平均。"""
+    items = list(finance.values())
+    over = [item.overrun for item in items if item.overrun > 0]
+    caps = [item.payroll_cap.yen for item in items]
+    estimated = sum(1 for item in items if item.payroll_cap.estimated)
+    return (
+        f"年俸の上限（億円）: 平均 {fmean(caps) / OKU:.1f}（{min(caps) / OKU:.1f}〜{max(caps) / OKU:.1f}"
+        + (f"・見込み {estimated}球団" if estimated else "")
+        + f"）・合計 平均 {fmean(i.payroll for i in items) / OKU:.1f}・"
+        f"残り 平均 {fmean(i.payroll_cap.room(i.payroll) for i in items) / OKU:+.1f}  "
+        f"上限を超えた球団 {len(over)}/{len(items)}（{len(over) / len(items):.0%}）・超過 平均 {_mean(over) / OKU:.1f}"
     )
 
 

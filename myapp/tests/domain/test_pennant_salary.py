@@ -30,6 +30,7 @@ from myapp.domain.pennant.contract import (
 from myapp.domain.pennant.draft import Draftee, DraftRoute
 from myapp.domain.pennant.finance import FinanceInputs, club_finance
 from myapp.domain.pennant.offseason_player import OffseasonPlayer, TrackRecord
+from myapp.domain.pennant.payroll_cap import PayrollCap
 from myapp.domain.pennant.popularity import Popularity
 from myapp.domain.pennant.ratings import PlayerRatings
 from myapp.domain.pennant.retirement import PlayingTime
@@ -366,6 +367,7 @@ class PayrollTest(unittest.TestCase):
                 popularity=Popularity(50),
                 payroll=payroll(salaries),
                 capacity=None,
+                payroll_cap=PayrollCap(yen=100 * OKU, estimated=False),
             )
         )
         self.assertEqual(finance.payroll, payroll(salaries))

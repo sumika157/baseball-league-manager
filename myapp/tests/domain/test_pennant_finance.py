@@ -8,6 +8,7 @@
 - 変えられるのはその年の開幕前だけ（その年の試合が1つも無い）
 - 収支は円で NPB の水準: 入場料＝観客動員 × 単価、ポストシーズンは単価の1.5倍、人件費は年俸の合計（#40 K1a）、
   赤字は親会社が補填（補填後は0）、平均的な球団で補填前の収支がおおむね0
+- 年俸の合計が上限を超えた分は、黒字でも親会社が補填する（補填は「上限超過」と「残る赤字」の2行。#40 K1b・#394 Q1）
 - 人気への値段の効きは世界の平均を引かない（全球団が上げれば全球団の人気が下がる）
 """
 
@@ -17,14 +18,19 @@ from unittest import TestCase
 
 from myapp.domain.exceptions import InvalidSeason
 from myapp.domain.pennant.finance import (
+    EXPECTED_FILL,
     OKU,
     POSTSEASON_PRICE_FACTOR,
     FinanceInputs,
+    ParentSubsidy,
     club_finance,
+    club_revenue,
+    expected_revenue,
     money_label,
     parent_subsidy,
     season_share,
 )
+from myapp.domain.pennant.payroll_cap import PayrollCap
 from myapp.domain.pennant.popularity import (
     PENNANT_DEFAULT_CAPACITY,
     Popularity,
@@ -49,6 +55,8 @@ SEED = 20261114
 AVERAGE_ATTENDANCE = 1_790_000
 AVERAGE_POSTSEASON = 58_000
 AVERAGE_PAYROLL = 36 * OKU
+# 年俸の合計より十分に高い上限（上限を超えない場合の収支を見る。#40 K1b）
+AMPLE_CAP = PayrollCap(yen=100 * OKU, estimated=False)
 
 
 def _inputs(**overrides) -> FinanceInputs:
@@ -59,6 +67,7 @@ def _inputs(**overrides) -> FinanceInputs:
         popularity=Popularity(50),
         payroll=AVERAGE_PAYROLL,
         capacity=None,
+        payroll_cap=AMPLE_CAP,
     )
     return replace(average, **overrides)
 
@@ -187,14 +196,84 @@ class FinanceTest(TestCase):
     def test_a_deficit_is_covered_by_the_parent_company_and_a_surplus_is_not(self):
         deficit = club_finance(_inputs(popularity=Popularity(20), regular_attendance=1_200_000))
         self.assertLess(deficit.operating_balance, 0)
-        self.assertEqual(deficit.subsidy, -deficit.operating_balance)
+        self.assertEqual(deficit.subsidy, ParentSubsidy(overrun=0, deficit=-deficit.operating_balance))
         self.assertEqual(deficit.balance, 0)
         surplus = club_finance(_inputs(popularity=Popularity(80), regular_attendance=2_300_000))
         self.assertGreater(surplus.operating_balance, 0)
-        self.assertEqual(surplus.subsidy, 0)
+        self.assertEqual(surplus.subsidy.total, 0)
         self.assertEqual(surplus.balance, surplus.operating_balance)
-        self.assertEqual(parent_subsidy(-3), 3)
-        self.assertEqual(parent_subsidy(0), 0)
+        self.assertEqual(parent_subsidy(-3, overrun=0), ParentSubsidy(overrun=0, deficit=3))
+        self.assertEqual(parent_subsidy(0, overrun=0).total, 0)
+
+    def test_the_overrun_of_the_cap_is_paid_even_in_the_black(self):
+        """上限を超えた分は黒字でも親会社が払う（#394 Q1 の A）。補填後の収支はその分だけ上乗せになる。"""
+        surplus = club_finance(
+            _inputs(popularity=Popularity(80), regular_attendance=2_300_000, payroll_cap=PayrollCap(30 * OKU, False))
+        )
+        self.assertGreater(surplus.operating_balance, 0)
+        self.assertEqual(surplus.overrun, AVERAGE_PAYROLL - 30 * OKU)
+        self.assertEqual(surplus.subsidy, ParentSubsidy(overrun=6 * OKU, deficit=0))
+        self.assertEqual(surplus.balance, surplus.operating_balance + 6 * OKU)
+
+    def test_the_deficit_line_is_what_remains_after_the_overrun(self):
+        """赤字の球団は、上限超過の補填を足してもなお残る赤字だけを2行目で補う（補填後は0）。"""
+        deficit = club_finance(
+            _inputs(popularity=Popularity(20), regular_attendance=1_200_000, payroll_cap=PayrollCap(30 * OKU, False))
+        )
+        self.assertLess(deficit.operating_balance + deficit.overrun, 0)
+        self.assertEqual(
+            deficit.subsidy,
+            ParentSubsidy(overrun=6 * OKU, deficit=-(deficit.operating_balance + 6 * OKU)),
+        )
+        self.assertEqual(deficit.balance, 0)
+        # 上限超過の補填だけで赤字が埋まるなら、2行目は0
+        self.assertEqual(parent_subsidy(-2 * OKU, overrun=3 * OKU), ParentSubsidy(overrun=3 * OKU, deficit=0))
+        with self.assertRaises(ValueError):
+            parent_subsidy(0, overrun=-1)
+
+    def test_a_payroll_exactly_at_the_cap_is_not_an_overrun(self):
+        self.assertEqual(club_finance(_inputs(payroll_cap=PayrollCap(AVERAGE_PAYROLL, False))).overrun, 0)
+        self.assertEqual(club_finance(_inputs(payroll_cap=PayrollCap(AVERAGE_PAYROLL - 1, False))).overrun, 1)
+
+    def test_the_overrun_is_prorated_with_the_payroll_during_the_season(self):
+        full = club_finance(_inputs(payroll_cap=PayrollCap(30 * OKU, False)))
+        half = club_finance(_inputs(payroll_cap=PayrollCap(30 * OKU, False), season_share=0.5))
+        self.assertEqual(half.overrun, round(full.overrun / 2))
+        self.assertEqual(half.payroll_cap, full.payroll_cap, "上限そのものは年額のまま")
+
+    def test_the_revenue_does_not_depend_on_the_payroll_or_the_cap(self):
+        """収入（年俸の上限の材料）は人件費と上限によらず、収支の収入と同じ式（`club_revenue`）。"""
+        inputs = _inputs()
+        revenue = club_revenue(
+            regular_attendance=inputs.regular_attendance,
+            postseason_attendance=inputs.postseason_attendance,
+            ticket_price=inputs.ticket_price,
+            popularity=inputs.popularity,
+        )
+        for payroll, cap in ((0, AMPLE_CAP), (AVERAGE_PAYROLL, PayrollCap(10 * OKU, True))):
+            with self.subTest(payroll=payroll):
+                self.assertEqual(
+                    club_finance(replace(inputs, payroll=payroll, payroll_cap=cap)).revenue, revenue.total
+                )
+
+    def test_the_expected_revenue_of_a_standard_club(self):
+        """標準の球団（人気50・標準の値段・入場率 0.83・ポストシーズンなし）の収入の見込み。大きい球場ほど高い。"""
+        home_games = 71.5
+        attendance = round(PENNANT_DEFAULT_CAPACITY * EXPECTED_FILL * home_games)
+        self.assertEqual(
+            expected_revenue(None, home_games=home_games),
+            attendance * 4_000 + 15 * OKU + 20 * OKU + attendance * 1_000,
+        )
+        self.assertEqual(
+            expected_revenue(None, home_games=home_games),
+            expected_revenue(PENNANT_DEFAULT_CAPACITY, home_games=home_games),
+        )
+        self.assertLess(
+            expected_revenue(20_000, home_games=home_games), expected_revenue(45_000, home_games=home_games)
+        )
+        # 平均的な球団の実際の収入（ポストシーズンを除く）とおおむね合う（±10%）
+        actual = club_finance(_inputs(postseason_attendance=0)).revenue
+        self.assertAlmostEqual(expected_revenue(None, home_games=home_games) / actual, 1.0, delta=0.1)
 
     def test_annual_items_are_prorated_during_the_season(self):
         full = club_finance(_inputs())
