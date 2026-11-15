@@ -1631,7 +1631,7 @@ def ensure_team_name_free(teams: QuerySet[orm_models.Team], name: str, own_id: i
 def _violates_unique(error: IntegrityError, model: type[models.Model], constraint_names: Sequence[str]) -> bool:
     """`error` が `model` の一意制約（`constraint_names`）の違反か。
 
-    制約の出典は ORM の `Meta.constraints`（0068）。SQLite は違反の文言に制約名ではなく列（「表.列, 表.列」）を
+    制約の出典は ORM の `Meta.constraints`（0071）。SQLite は違反の文言に制約名ではなく列（「表.列, 表.列」）を
     出すので、制約名と、制約の列から組み立てた文言のどちらかを含むかで見る。
     """
     message = str(error)
@@ -1647,7 +1647,7 @@ def _violates_unique(error: IntegrityError, model: type[models.Model], constrain
     return False
 
 
-# 名前の一意制約（0068 と、ペナントの世界の中の一意）。
+# 名前の一意制約（0071 と、ペナントの世界の中の一意）。
 # 保存の前の確認をすり抜けた同時の書き込みは、これで `DuplicateName` に訳す
 _LEAGUE_NAME_CONSTRAINTS = ("unique_workspace_league_name", "unique_world_league_name")
 _STADIUM_NAME_CONSTRAINTS = ("unique_workspace_stadium_name",)

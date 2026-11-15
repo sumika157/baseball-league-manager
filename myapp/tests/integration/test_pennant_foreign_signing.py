@@ -12,12 +12,9 @@ AI の規則そのものは `tests/domain/test_midseason_foreign_signings.py`、
 
 from unittest import mock
 
-from django.urls import reverse
-
 from myapp.domain.exceptions import InvalidSigning, RegisteredPlayerLimitExceeded, ReinforcementClosed
 from myapp.domain.pennant.foreign_market import MAX_FOREIGN_HELD
 from myapp.domain.pennant.reinforcement import RegistrationKind
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import AcquisitionRoute, ContractStatus
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoOffseasonQuery, DjangoSimulationContextQuery
@@ -25,6 +22,7 @@ from myapp.infrastructure.repositories import DjangoRatingsRepository, DjangoTea
 from myapp.presentation.club_input import REOPEN
 from myapp.presentation.views import build_foreign_signing_service, build_pennant_offseason_service
 
+from ..helpers import world_scope, ws_url
 from .test_pennant_advance import YEAR
 from .test_pennant_midseason import MidseasonCase, first_fixture_on, managed_team_id
 from .test_pennant_offseason_screens import DECIDE_RELEASES, DECIDE_RETIREMENTS, ScreenCase
@@ -114,7 +112,7 @@ class SigningTest(ForeignSigningCase):
     def test_the_owner_signs_a_candidate_who_can_play_from_the_next_game(self):
         self.client.force_login(self.owner)
         next_game = first_fixture_on(self.world_a)
-        candidate = build_foreign_signing_service(self.world_a).view().candidates[2]
+        candidate = build_foreign_signing_service(world_scope(self.world_a)).view().candidates[2]
 
         response = self.post_signing(candidate.index)
 
@@ -130,21 +128,21 @@ class SigningTest(ForeignSigningCase):
             "number", flat=True
         )
         self.assertEqual(len(numbers), len(set(numbers)), "背番号は重ならない")
-        ratings = DjangoRatingsRepository(WorldScope.pennant(self.world_a)).find_by_players([stint.player_id], YEAR)
+        ratings = DjangoRatingsRepository(world_scope(self.world_a)).find_by_players([stint.player_id], YEAR)
         self.assertEqual(len(ratings), 1, "獲得した年の能力の行")
         (registration,) = self.signings()
         self.assertEqual((registration.player_id, registration.registered_on), (stint.player_id, next_game))
         # 次の試合の候補に入る
         candidates = {
             player.player_id
-            for team in DjangoSimulationContextQuery(WorldScope.pennant(self.world_a)).teams()
+            for team in DjangoSimulationContextQuery(world_scope(self.world_a)).teams()
             for player in team.players
         }
         self.assertIn(stint.player_id, candidates)
 
     def test_one_a_year_and_the_tab_says_so(self):
         """1年1人まで。獲得した後は候補の表とボタンを出さず、済んだことを出す。"""
-        service = build_foreign_signing_service(self.world_a)
+        service = build_foreign_signing_service(world_scope(self.world_a))
         next_game = first_fixture_on(self.world_a)
         service.sign(0, expected_next_game_on=next_game)
 
@@ -162,17 +160,19 @@ class SigningTest(ForeignSigningCase):
         next_game = first_fixture_on(self.world_a)
         self.make_foreign(MAX_FOREIGN_HELD)
         with self.assertRaisesRegex(InvalidSigning, "保有は6人まで"):
-            build_foreign_signing_service(self.world_a).sign(0, expected_next_game_on=next_game)
+            build_foreign_signing_service(world_scope(self.world_a)).sign(0, expected_next_game_on=next_game)
         orm_models.Player.objects.update(is_foreign_player=False)
         self.set_the_limit(23)
         with self.assertRaisesRegex(RegisteredPlayerLimitExceeded, "上限（23人）"):
-            build_foreign_signing_service(self.world_a).sign(0, expected_next_game_on=next_game)
+            build_foreign_signing_service(world_scope(self.world_a)).sign(0, expected_next_game_on=next_game)
         self.assertFalse(self.signed_stints().exists())
         self.assertEqual(self.signings(), [])
 
     def test_an_unknown_candidate_is_refused(self):
         with self.assertRaisesRegex(InvalidSigning, "候補にいません"):
-            build_foreign_signing_service(self.world_a).sign(8, expected_next_game_on=first_fixture_on(self.world_a))
+            build_foreign_signing_service(world_scope(self.world_a)).sign(
+                8, expected_next_game_on=first_fixture_on(self.world_a)
+            )
         self.assertFalse(self.signed_stints().exists())
 
     def test_anonymous_goes_to_the_login_and_others_get_403(self):
@@ -202,14 +202,18 @@ class SigningTest(ForeignSigningCase):
     def test_after_july_the_signing_is_refused(self):
         self.move_the_schedule_past_july()
         with self.assertRaisesRegex(ReinforcementClosed, "7月31日"):
-            build_foreign_signing_service(self.world_a).sign(0, expected_next_game_on=first_fixture_on(self.world_a))
+            build_foreign_signing_service(world_scope(self.world_a)).sign(
+                0, expected_next_game_on=first_fixture_on(self.world_a)
+            )
         self.assertFalse(self.signed_stints().exists())
 
     def test_the_roster_signature_changes_with_a_signing(self):
         """獲得は在籍を足すので、進めている間に獲得したら、進める処理は古い名簿で書かない（目印が変わる）。"""
-        teams = DjangoTeamRepository(WorldScope.pennant(self.world_a))
+        teams = DjangoTeamRepository(world_scope(self.world_a))
         before = teams.roster_signature()
-        build_foreign_signing_service(self.world_a).sign(0, expected_next_game_on=first_fixture_on(self.world_a))
+        build_foreign_signing_service(world_scope(self.world_a)).sign(
+            0, expected_next_game_on=first_fixture_on(self.world_a)
+        )
         self.assertNotEqual(teams.roster_signature(), before)
 
 
@@ -219,21 +223,21 @@ class AfterTheSeasonTest(ScreenCase):
     def test_the_window_is_closed_while_the_season_can_be_closed(self):
         """シーズン終了〜締めるまでは窓の外。「外国人」タブはオフの形（#169 F2）で出し、期中の形は出さない。"""
         self.client.force_login(self.owner)
-        content = self.client.get(reverse("pennant_club", args=[self.world_a]) + "?tab=foreign").content.decode()
+        content = self.client.get(ws_url("pennant_club", self.world_a) + "?tab=foreign").content.decode()
         self.assertIn('id="club-foreign"', content)
         self.assertNotIn('id="club-foreign-midseason"', content)
         self.assertNotIn("獲得する</button>", content)
         with self.assertRaises(ReinforcementClosed):
-            build_foreign_signing_service(self.world_a).sign(0, expected_next_game_on=None)
+            build_foreign_signing_service(world_scope(self.world_a)).sign(0, expected_next_game_on=None)
 
     def test_a_midseason_signing_is_not_an_offseason_rookie(self):
         """締めた後（翌年の開幕前）は窓の中。期中に獲得した外国人は、加入年が翌年でもオフの結果の新人に載せない。"""
         with mock.patch(DECIDE_RETIREMENTS, return_value=()), mock.patch(DECIDE_RELEASES, return_value=()):
-            build_pennant_offseason_service(self.world_a).close_season(expected_year=YEAR)
-        query = DjangoOffseasonQuery(WorldScope.pennant(self.world_a))
+            build_pennant_offseason_service(world_scope(self.world_a)).close_season(expected_year=YEAR)
+        query = DjangoOffseasonQuery(world_scope(self.world_a))
         rookies_before = {fact.player_id for fact in query.facts(YEAR).rookies}
 
-        service = build_foreign_signing_service(self.world_a)
+        service = build_foreign_signing_service(world_scope(self.world_a))
         self.assertTrue(service.is_open())
         opening = first_fixture_on(self.world_a)
         self.assertEqual(opening.year, YEAR + 1)

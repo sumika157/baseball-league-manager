@@ -223,6 +223,9 @@ PENNANT_ONLY_BUILDERS = (
     build_pennant_settings_service,
     build_pennant_draft_service,
     build_midseason_registration_service,
+    build_foreign_signing_service,
+    build_club_finance_service,
+    build_ticket_price_service,
 )
 # ワークスペースの台帳（W2 T1）。範囲もワークスペースの id も取らない（key・利用者からワークスペースそのものを引き、
 # 中のデータは読まない）。名前で列挙し、黙って増えないようにする（`WorkspaceLedgersTest`）。
@@ -1389,6 +1392,8 @@ class LedgersAreScopedToTheWorkspaceTest(SimpleTestCase):
             build_pennant_settings_service,
             build_pennant_draft_service,
             build_midseason_registration_service,
+            build_foreign_signing_service,
+            build_ticket_price_service,
         }
         self.assertEqual(seen, {build.__name__ for build in expected})
 

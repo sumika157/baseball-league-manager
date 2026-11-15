@@ -26,6 +26,8 @@ from django.test.utils import CaptureQueriesContext
 
 from myapp.domain.exceptions import InvalidWorkspace, NotDeletable, WorkspaceNotFound
 from myapp.domain.pennant.draft_meeting import DraftActionKind
+from myapp.domain.pennant.reinforcement import RegistrationKind
+from myapp.domain.pennant.ticket_price import TicketPrice
 from myapp.domain.pennant.world import WorldScope
 from myapp.domain.services.rankings import Title
 from myapp.domain.workspace import InvitedRole, workspace_deletion_blocker
@@ -260,13 +262,16 @@ class WorkspaceDeletionCase(WorkspaceCase):
             league=cls.b_league, year=YEAR, title=Title.HOME_RUNS.value, player_id=batter, team=cls.b_team, value="1"
         )
         orm_models.PennantChampionship.objects.create(team=cls.b_team, year=B_YEAR)
+        # 球団の人気・手動のチケットの値段（#208 E1・E2）も球団を指すので、範囲の条件が効くかを実データの球団で見る
+        orm_models.PennantClubPopularity.objects.create(team=cls.b_team, year=B_YEAR, value=60)
+        orm_models.PennantTicketPrice.objects.create(team=cls.b_team, year=B_YEAR, price=TicketPrice.HIGH.value)
         # 締めた年の抽選・期中の支配下登録（#360・#356）。どれもペナントの表だが、範囲の条件が効くかを見るので
         # 実データに置く
         lottery = orm_models.PennantDraftLottery.objects.create(player_id=batter, attempt=1)
         for team in (cls.b_team, cls.b_rival):
             orm_models.PennantDraftLotteryBid.objects.create(lottery=lottery, team=team)
         orm_models.PennantMidseasonRegistration.objects.create(
-            team=cls.b_team, player_id=batter, registered_on=date(YEAR, 6, 1)
+            team=cls.b_team, player_id=batter, registered_on=date(YEAR, 6, 1), kind=RegistrationKind.PROMOTION.value
         )
 
 

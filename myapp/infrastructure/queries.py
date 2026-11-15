@@ -1656,7 +1656,13 @@ class DjangoClubFinanceQuery:
         return result
 
     def stadium_capacities(self, team_ids: Collection[int]) -> dict[int, int | None]:
-        return dict(teams_in(self._scope).filter(id__in=set(team_ids)).values_list("id", "home_stadium__capacity"))
+        # 本拠地は範囲の球場だけを結合する（範囲の外の球場を指す球団は本拠地なし＝None。`home_stadium_in`）
+        return dict(
+            teams_in(self._scope)
+            .filter(id__in=set(team_ids))
+            .annotate(stadium=home_stadium_in(self._scope))
+            .values_list("id", "stadium__capacity")
+        )
 
 
 class DjangoRatingsHistoryQuery:

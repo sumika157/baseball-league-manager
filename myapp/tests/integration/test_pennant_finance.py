@@ -31,7 +31,6 @@ from myapp.domain.exceptions import (
 from myapp.domain.pennant.finance import money_label
 from myapp.domain.pennant.schedule import AdvanceTarget
 from myapp.domain.pennant.ticket_price import ClubTicketPrice, TicketPrice
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import ContractStatus
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoClubFinanceQuery
@@ -47,6 +46,7 @@ from myapp.presentation.views import (
     build_ticket_price_service,
 )
 
+from ..helpers import make_editor, make_league, make_stadium, real_scope, world_scope, ws_url
 from .world_case import YEAR, _register_club
 
 SEED = 13
@@ -66,11 +66,11 @@ class FinanceCase(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        cls.owner = User.objects.create_user("gm", password="x")
-        league = orm_models.League.objects.create(name="経営リーグ")
-        other = orm_models.League.objects.create(name="相手リーグ")
+        cls.owner = make_editor(User.objects.create_user("gm", password="x"))
+        league = make_league(name="経営リーグ")
+        other = make_league(name="相手リーグ")
         cls.league_id, cls.other_league_id = league.id, other.id
-        stadium = orm_models.Stadium.objects.create(name="経営球場", city="東京", capacity=CAPACITY)
+        stadium = make_stadium(name="経営球場", city="東京", capacity=CAPACITY)
         for index in range(3):
             team = orm_models.Team.objects.create(league=league, name=f"経営{index}球団", home_stadium=stadium)
             _register_club(team, f"経{index}")
@@ -92,7 +92,7 @@ class FinanceCase(TestCase):
     @classmethod
     def create_world(cls) -> int:
         world_id = (
-            build_pennant_world_service()
+            build_pennant_world_service(real_scope())
             .create_world(
                 name="経営の世界",
                 owner_id=None,
@@ -109,7 +109,7 @@ class FinanceCase(TestCase):
     # --- 道具 ---
 
     def repository(self, scope=None) -> DjangoTicketPriceRepository:
-        return DjangoTicketPriceRepository(scope or WorldScope.pennant(self.world_id))
+        return DjangoTicketPriceRepository(scope or world_scope(self.world_id))
 
     def prices(self, world_id=None) -> list[tuple[int, int, str]]:
         world_id = self.world_id if world_id is None else world_id
@@ -120,16 +120,16 @@ class FinanceCase(TestCase):
         )
 
     def advance_week(self) -> None:
-        build_pennant_season_service(self.world_id).advance(AdvanceTarget.WEEK)
+        build_pennant_season_service(world_scope(self.world_id)).advance(AdvanceTarget.WEEK)
 
     def finish_regular_season(self) -> None:
         """公式戦を1週間だけ進め、残りの対戦を消して「公式戦を終えた」年にする。"""
         self.advance_week()
-        fixtures = DjangoFixtureRepository(WorldScope.pennant(self.world_id))
+        fixtures = DjangoFixtureRepository(world_scope(self.world_id))
         fixtures.remove(fixtures.find_all())
 
     def close(self) -> None:
-        build_pennant_offseason_service(self.world_id).close_season()
+        build_pennant_offseason_service(world_scope(self.world_id)).close_season()
 
     def games(self):
         return list(
@@ -149,10 +149,10 @@ class FinanceCase(TestCase):
         return orm_models.PennantClubPopularity.objects.get(team_id=team_id, year=year).value
 
     def context(self):
-        return build_pennant_world_view().get_context(self.world_id)
+        return build_pennant_world_view(real_scope().workspace_id).get_context(self.world_id)
 
     def url(self) -> str:
-        return reverse("pennant_finance", args=[self.world_id])
+        return ws_url("pennant_finance", self.world_id)
 
 
 class RepositoryTest(FinanceCase):
@@ -171,12 +171,12 @@ class RepositoryTest(FinanceCase):
     def test_the_real_data_and_other_worlds_cannot_hold_prices(self):
         real_team = orm_models.Team.objects.filter(league_id=self.league_id).values_list("id", flat=True).first()
         with self.assertRaises(InvalidWorld):
-            self.repository(WorldScope.real()).save(ClubTicketPrice(real_team, YEAR, TicketPrice.HIGH))
+            self.repository(real_scope()).save(ClubTicketPrice(real_team, YEAR, TicketPrice.HIGH))
         with self.assertRaises(InvalidTicketPrice):
             self.repository().save(ClubTicketPrice(real_team, YEAR, TicketPrice.HIGH))
         other = self.create_world()
         other_team = orm_models.Team.objects.filter(league__world_id=other).values_list("id", flat=True).first()
-        self.repository(WorldScope.pennant(other)).save(ClubTicketPrice(other_team, YEAR, TicketPrice.HIGH))
+        self.repository(world_scope(other)).save(ClubTicketPrice(other_team, YEAR, TicketPrice.HIGH))
         self.assertEqual(self.repository().find_by_year(YEAR), [], "他の世界の値段は読まない")
         self.assertEqual(self.repository().find_by_team(other_team), [])
 
@@ -187,7 +187,7 @@ class RepositoryTest(FinanceCase):
             self.repository().save(ClubTicketPrice(self.teams[0], YEAR, TicketPrice.HIGH))
         with self.assertRaises(TicketPriceLocked):
             self.repository().delete(self.teams[0], YEAR)
-        fixtures = DjangoFixtureRepository(WorldScope.pennant(self.world_id))
+        fixtures = DjangoFixtureRepository(world_scope(self.world_id))
         fixtures.remove(fixtures.find_all())
         self.close()
         with self.assertRaises(AlreadyClosed):
@@ -199,10 +199,10 @@ class RepositoryTest(FinanceCase):
     def test_deleting_the_world_deletes_its_prices(self):
         other = self.create_world()
         other_team = orm_models.Team.objects.filter(league__world_id=other).values_list("id", flat=True).first()
-        self.repository(WorldScope.pennant(other)).save(ClubTicketPrice(other_team, YEAR, TicketPrice.HIGH))
+        self.repository(world_scope(other)).save(ClubTicketPrice(other_team, YEAR, TicketPrice.HIGH))
         self.repository().save(ClubTicketPrice(self.teams[0], YEAR, TicketPrice.HIGH))
 
-        build_pennant_world_service().delete_world(other)
+        build_pennant_world_service(real_scope()).delete_world(other)
 
         self.assertEqual(self.prices(other), [])
         self.assertEqual(len(self.prices()), 1, "他の世界の値段は残る")
@@ -210,7 +210,7 @@ class RepositoryTest(FinanceCase):
 
 class TicketPriceServiceTest(FinanceCase):
     def test_the_gm_sets_and_resets_the_price_of_the_managed_club(self):
-        service = build_ticket_price_service(self.world_id)
+        service = build_ticket_price_service(world_scope(self.world_id))
         self.assertTrue(service.change(TicketPrice.SLIGHTLY_HIGH))
         self.assertFalse(service.change(TicketPrice.SLIGHTLY_HIGH), "同じなら何もしない")
         self.assertEqual(self.prices(), [(YEAR, self.teams[0], "やや高い")])
@@ -220,20 +220,20 @@ class TicketPriceServiceTest(FinanceCase):
 
     def test_a_manual_price_is_not_carried_over_to_the_next_year(self):
         """2026-11-14 ユーザー決定: 手動の値段は翌年に引き継がない（新しい年はお任せから）。"""
-        build_ticket_price_service(self.world_id).change(TicketPrice.HIGH)
+        build_ticket_price_service(world_scope(self.world_id)).change(TicketPrice.HIGH)
         self.finish_regular_season()
         with self.assertRaises(TicketPriceLocked):
-            build_ticket_price_service(self.world_id).change(TicketPrice.LOW)
+            build_ticket_price_service(world_scope(self.world_id)).change(TicketPrice.LOW)
         self.close()
 
         self.assertEqual(self.prices(), [(YEAR, self.teams[0], "高い")], "締めた年の手動の値段は残る")
-        view = build_club_finance_service(self.world_id).view(self.context())
+        view = build_club_finance_service(world_scope(self.world_id)).view(self.context())
         assert view is not None
         self.assertEqual(view.year, YEAR + 1)
         self.assertIsNone(view.manual)
         self.assertEqual(view.blocker, "")
         # 翌年の値段は翌年の開幕前に変えられる
-        self.assertTrue(build_ticket_price_service(self.world_id).change(TicketPrice.LOW))
+        self.assertTrue(build_ticket_price_service(world_scope(self.world_id)).change(TicketPrice.LOW))
         self.assertIn((YEAR + 1, self.teams[0], "安い"), self.prices())
 
 
@@ -298,7 +298,7 @@ class FinanceViewTest(FinanceCase):
         self.finish_regular_season()
         self.close()
 
-        rows = build_club_finance_service(self.world_id).year_rows(self.context(), YEAR, self.teams)
+        rows = build_club_finance_service(world_scope(self.world_id)).year_rows(self.context(), YEAR, self.teams)
         own = rows[self.teams[0]]
         home_total = sum(game[5] for game in self.games() if game[1] == self.teams[0])
         self.assertEqual(own.regular_attendance, home_total)
@@ -307,7 +307,7 @@ class FinanceViewTest(FinanceCase):
         self.assertEqual(own.figures.gate.amount, home_total * TicketPrice.SLIGHTLY_LOW.unit_price)
         self.assertFalse(own.in_progress)
         # 人件費はその年に在籍した人数（全員支配下）× 4,000万円
-        (size,) = DjangoClubFinanceQuery(WorldScope.pennant(self.world_id)).roster_sizes(
+        (size,) = DjangoClubFinanceQuery(world_scope(self.world_id)).roster_sizes(
             years=[YEAR], team_ids=[self.teams[0]]
         )
         self.assertGreater(size.registered, 0)
@@ -321,18 +321,18 @@ class FinanceViewTest(FinanceCase):
         self.close()
         orm_models.PennantClubPopularity.objects.filter(team__league__world_id=self.world_id, year=YEAR).delete()
 
-        view = build_club_finance_service(self.world_id).view(self.context())
+        view = build_club_finance_service(world_scope(self.world_id)).view(self.context())
         assert view is not None
         (past,) = view.history
         self.assertEqual(past.year, YEAR)
         self.assertIsNone(past.figures)
         self.assertIsNone(past.popularity)
-        summary = build_offseason_view_service(self.world_id).get_summary(self.context(), YEAR)
+        summary = build_offseason_view_service(world_scope(self.world_id)).get_summary(self.context(), YEAR)
         assert summary is not None
         self.assertEqual(summary.finance, ())
 
     def test_the_current_year_is_prorated_and_is_zero_before_the_opening(self):
-        view = build_club_finance_service(self.world_id).view(self.context())
+        view = build_club_finance_service(world_scope(self.world_id)).view(self.context())
         assert view is not None
         self.assertTrue(view.current.in_progress)
         assert view.current.figures is not None
@@ -340,7 +340,7 @@ class FinanceViewTest(FinanceCase):
         self.assertEqual(view.history, ())
 
         self.advance_week()
-        view = build_club_finance_service(self.world_id).view(self.context())
+        view = build_club_finance_service(world_scope(self.world_id)).view(self.context())
         assert view is not None and view.current.figures is not None
         self.assertGreater(view.current.figures.payroll.amount, 0)
         self.assertGreater(view.current.figures.gate.amount, 0)
@@ -394,20 +394,20 @@ class ScreenTest(FinanceCase):
     def test_the_home_card_and_the_offseason_show_the_finance(self):
         self.finish_regular_season()
 
-        home = build_pennant_home_service(self.world_id).get_home(self.context(), include_advance=False)
+        home = build_pennant_home_service(world_scope(self.world_id)).get_home(self.context(), include_advance=False)
         assert home.finance is not None and home.finance.figures is not None
         self.assertEqual(home.finance.year, YEAR)
-        content = self.client.get(reverse("pennant_world", args=[self.world_id])).content.decode()
+        content = self.client.get(ws_url("pennant_world", self.world_id)).content.decode()
         self.assertIn("経営を見る", content)
         self.assertIn(home.finance.figures.operating_balance.label, content)
 
         self.close()
-        summary = build_offseason_view_service(self.world_id).get_summary(self.context(), YEAR)
+        summary = build_offseason_view_service(world_scope(self.world_id)).get_summary(self.context(), YEAR)
         assert summary is not None
         self.assertEqual({row.team_id for row in summary.finance}, set(self.teams))
         balances = [row.finance.figures.operating_balance.amount for row in summary.finance if row.finance.figures]
         self.assertEqual(balances, sorted(balances, reverse=True))
-        content = self.client.get(reverse("pennant_offseason", args=[self.world_id, YEAR])).content.decode()
+        content = self.client.get(ws_url("pennant_offseason", self.world_id, YEAR)).content.decode()
         self.assertIn(f"{YEAR}年の収支", content)
         self.assertIn(money_label(balances[0]), content)
 
@@ -420,7 +420,7 @@ class RosterSizeQueryTest(FinanceCase):
     def test_registered_and_developmental_players_are_counted_per_year(self):
         """その年の区分で数える（育成で入って昇格した選手は昇格の年から支配下）。同じ年に2回在籍しても1人。"""
         team_id = self.teams[0]
-        query = DjangoClubFinanceQuery(WorldScope.pennant(self.world_id))
+        query = DjangoClubFinanceQuery(world_scope(self.world_id))
         (before,) = query.roster_sizes(years=[YEAR], team_ids=[team_id])
         player = orm_models.Player.objects.create(name="育成から昇格", position="投手")
         orm_models.PlayerStint.objects.create(

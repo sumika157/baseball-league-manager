@@ -207,7 +207,7 @@ class MidseasonForeignSigningReviewTest(MidseasonReviewCase):
                 name=self.signed_name(), stints__team__league__world_id=self.world_a
             )
             self.assertTrue(player.is_foreign_player)
-            ratings = DjangoRatingsRepository(WorldScope.pennant(self.world_a)).find_by_players([player.id], YEAR)
+            ratings = DjangoRatingsRepository(world_scope(self.world_a)).find_by_players([player.id], YEAR)
             self.assertEqual(len(ratings), 1, "獲得した年の能力の行がある")
 
         self.replay(self.world_a, run)

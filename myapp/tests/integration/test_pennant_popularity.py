@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from django.db import transaction
 from django.test import SimpleTestCase, TestCase
-from django.urls import reverse
 
 from myapp.application.pennant_popularity import popularity_basis
 from myapp.application.pennant_simulation import game_key
@@ -24,7 +23,6 @@ from myapp.domain.pennant.offseason import OffseasonClub
 from myapp.domain.pennant.popularity import PENNANT_DEFAULT_CAPACITY, ClubPopularity, Popularity
 from myapp.domain.pennant.postseason import FinalStanding, LeagueFinish
 from myapp.domain.pennant.schedule import AdvanceTarget
-from myapp.domain.pennant.world import WorldScope
 from myapp.domain.simulation.game_day import simulated_attendance
 from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.value_objects import ForeignPlayerRules, GameStage, TeamRecord
@@ -32,7 +30,6 @@ from myapp.infrastructure import orm_models
 from myapp.infrastructure.repositories import (
     DjangoFixtureRepository,
     DjangoPopularityRepository,
-    DjangoWorldRepository,
 )
 from myapp.presentation.views import (
     build_offseason_view_service,
@@ -43,6 +40,7 @@ from myapp.presentation.views import (
     build_pennant_world_view,
 )
 
+from ..helpers import make_league, make_stadium, real_scope, world_ledger, world_scope, ws_url
 from .world_case import YEAR, _register_club
 
 SEED = 11
@@ -63,13 +61,13 @@ class PopularityCase(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        league = orm_models.League.objects.create(name="人気リーグ")
-        other = orm_models.League.objects.create(name="相手リーグ")
+        league = make_league(name="人気リーグ")
+        other = make_league(name="相手リーグ")
         cls.league_id = league.id
         cls.other_league_id = other.id
         stadiums = [
-            orm_models.Stadium.objects.create(name="人気球場", city="東京", capacity=CAPACITY),
-            orm_models.Stadium.objects.create(name="収容人数の無い球場", city="大阪", capacity=None),
+            make_stadium(name="人気球場", city="東京", capacity=CAPACITY),
+            make_stadium(name="収容人数の無い球場", city="大阪", capacity=None),
             None,
         ]
         for index, stadium in enumerate(stadiums):
@@ -78,7 +76,7 @@ class PopularityCase(TestCase):
             if index == 0:
                 cls.managed_source_id = team.id
         # 日程は2リーグ×3球団で組む（1リーグ×3球団では年間の試合数を配れない）
-        other_stadium = orm_models.Stadium.objects.create(name="相手球場", city="福岡", capacity=CAPACITY)
+        other_stadium = make_stadium(name="相手球場", city="福岡", capacity=CAPACITY)
         for index in range(3):
             team = orm_models.Team.objects.create(league=other, name=f"相手{index}球団", home_stadium=other_stadium)
             _register_club(team, f"相{index}")
@@ -95,7 +93,7 @@ class PopularityCase(TestCase):
     @classmethod
     def create_world(cls) -> int:
         return (
-            build_pennant_world_service()
+            build_pennant_world_service(real_scope())
             .create_world(
                 name="人気の世界",
                 owner_id=None,
@@ -120,12 +118,12 @@ class PopularityCase(TestCase):
     def finish_regular_season(self, world_id=None) -> None:
         """公式戦を1週間だけ進め、残りの対戦を消して「公式戦を終えた」年にする。"""
         world_id = self.world_id if world_id is None else world_id
-        build_pennant_season_service(world_id).advance(AdvanceTarget.WEEK)
-        fixtures = DjangoFixtureRepository(WorldScope.pennant(world_id))
+        build_pennant_season_service(world_scope(world_id)).advance(AdvanceTarget.WEEK)
+        fixtures = DjangoFixtureRepository(world_scope(world_id))
         fixtures.remove(fixtures.find_all())
 
     def close(self, world_id=None) -> None:
-        build_pennant_offseason_service(self.world_id if world_id is None else world_id).close_season()
+        build_pennant_offseason_service(world_scope(self.world_id if world_id is None else world_id)).close_season()
 
     def games(self, world_id=None):
         world_id = self.world_id if world_id is None else world_id
@@ -146,7 +144,7 @@ class PopularityCase(TestCase):
         orm_models.PennantClubPopularity.objects.filter(team_id=team_id, year=year).update(value=value)
 
     def context(self):
-        return build_pennant_world_view().get_context(self.world_id)
+        return build_pennant_world_view(real_scope().workspace_id).get_context(self.world_id)
 
 
 class WorldCreationTest(PopularityCase):
@@ -156,7 +154,7 @@ class WorldCreationTest(PopularityCase):
 
     def test_deleting_the_world_deletes_its_popularity(self):
         other = self.create_world()
-        build_pennant_world_service().delete_world(other)
+        build_pennant_world_service(real_scope()).delete_world(other)
 
         self.assertEqual(self.rows(other), [])
         self.assertEqual(len(self.rows()), len(self.all_teams), "他の世界の人気は残る")
@@ -166,7 +164,7 @@ class AttendanceTest(PopularityCase):
     def test_a_world_where_every_club_is_at_fifty_keeps_the_attendance_of_the_old_formula(self):
         """全球団50なら、観客数は人気を足す前の式（収容人数 × 入場率）と同じ値（乱数源も同じ）。"""
         self.finish_regular_season()
-        world = DjangoWorldRepository().find_by_id(self.world_id)
+        world = world_ledger().find_by_id(self.world_id)
 
         games = [game for game in self.games() if game[1] == self.teams[0]]
         self.assertTrue(games, "収容人数のある球場のホーム試合がある")
@@ -180,7 +178,7 @@ class AttendanceTest(PopularityCase):
 
     def test_clubs_without_a_known_capacity_use_the_standard_capacity_in_a_world(self):
         """収容人数の無い球場・本拠地の無い球団も、ペナントの世界では標準の収容人数で観客数を作る。"""
-        season = build_pennant_season_service(self.world_id)
+        season = build_pennant_season_service(world_scope(self.world_id))
         # どちらの球団もホーム試合をするまで進める（1週間ではホーム試合の無い球団がある）
         for _ in range(6):
             if all(any(game[1] == team_id for game in self.games()) for team_id in self.teams[1:]):
@@ -231,7 +229,7 @@ class CloseTest(PopularityCase):
         orm_models.PennantClubPopularity.objects.filter(team_id=self.teams[0], year=YEAR).delete()
 
         with self.assertRaises(AlreadyClosed):
-            DjangoPopularityRepository(WorldScope.pennant(self.world_id)).add_all(
+            DjangoPopularityRepository(world_scope(self.world_id)).add_all(
                 [ClubPopularity(team_id=self.teams[0], year=YEAR, popularity=Popularity(60))]
             )
 
@@ -250,12 +248,12 @@ class CloseTest(PopularityCase):
 
 class RepositoryTest(PopularityCase):
     def repository(self, scope=None):
-        return DjangoPopularityRepository(scope or WorldScope.pennant(self.world_id))
+        return DjangoPopularityRepository(scope or world_scope(self.world_id))
 
     def test_the_real_data_cannot_hold_popularity(self):
         real_team = orm_models.Team.objects.filter(league_id=self.league_id).values_list("id", flat=True).first()
         with self.assertRaises(InvalidWorld):
-            self.repository(WorldScope.real()).add_all(
+            self.repository(real_scope()).add_all(
                 [ClubPopularity(team_id=real_team, year=YEAR, popularity=Popularity(50))]
             )
 
@@ -282,7 +280,7 @@ class ScreenTest(PopularityCase):
     def test_the_home_shows_the_popularity_card(self):
         self.finish_regular_season()
 
-        home = build_pennant_home_service(self.world_id).get_home(self.context(), include_advance=False)
+        home = build_pennant_home_service(world_scope(self.world_id)).get_home(self.context(), include_advance=False)
         card = home.popularity
         self.assertIsNotNone(card)
         assert card is not None
@@ -292,7 +290,7 @@ class ScreenTest(PopularityCase):
         self.assertEqual(card.home_games, len(own_games))
         self.assertEqual(card.attendance_total, sum(game[5] for game in own_games))
 
-        content = self.client.get(reverse("pennant_world", args=[self.world_id])).content.decode()
+        content = self.client.get(ws_url("pennant_world", self.world_id)).content.decode()
         self.assertIn("人気と観客動員", content)
 
     def test_the_offseason_and_the_club_history_show_popularity_after_closing(self):
@@ -303,17 +301,17 @@ class ScreenTest(PopularityCase):
             team_id: value for year, team_id, value in self.rows() if year == YEAR + 1 and team_id in self.teams
         }
 
-        summary = build_offseason_view_service(self.world_id).get_summary(self.context(), YEAR)
+        summary = build_offseason_view_service(world_scope(self.world_id)).get_summary(self.context(), YEAR)
         assert summary is not None
         self.assertEqual(
             {row.team_id: (row.before, row.after) for row in summary.popularity},
             {team_id: (50, value) for team_id, value in following.items()},
         )
         self.assertEqual([row.after for row in summary.popularity], sorted(following.values(), reverse=True))
-        content = self.client.get(reverse("pennant_offseason", args=[self.world_id, YEAR])).content.decode()
+        content = self.client.get(ws_url("pennant_offseason", self.world_id, YEAR)).content.decode()
         self.assertIn(f"人気（{YEAR}年 → {YEAR + 1}年）", content)
 
-        history = self.client.get(reverse("pennant_team_history", args=[self.world_id, self.teams[0]]))
+        history = self.client.get(ws_url("pennant_team_history", self.world_id, self.teams[0]))
         self.assertEqual(history.status_code, 200)
         (season,) = history.context["history"].seasons
         own_total = sum(game[5] for game in self.games() if game[1] == self.teams[0])
@@ -325,7 +323,7 @@ class ScreenTest(PopularityCase):
         orm_models.PennantClubPopularity.objects.filter(team__league__world_id=self.world_id).delete()
         self.finish_regular_season()
 
-        history = self.client.get(reverse("pennant_team_history", args=[self.world_id, self.teams[0]]))
+        history = self.client.get(ws_url("pennant_team_history", self.world_id, self.teams[0]))
         (season,) = history.context["history"].seasons
         self.assertIsNone(season.popularity)
 
