@@ -1,7 +1,6 @@
 ---
 name: frontend-impl
-description: フロントエンド（Django テンプレート・theme.css・frontend/ の React アイランド）の実装を行う。「画面を作って」「テンプレートを直して」「React 画面を実装して」「CSS を調整して」のように画面側のコードを書く作業で使う。実装は Sonnet で行い、設計・要件定義が未確定なら feature-designer エージェント（Opus）に先に委譲する。
-model: sonnet
+description: フロントエンド（Django テンプレート・theme.css・frontend/ の React アイランド）の実装を行う。「画面を作って」「テンプレートを直して」「React 画面を実装して」「CSS を調整して」のように画面側のコードを書く作業で使う。モデルは CLAUDE.md の表で複雑度と難易度から選び、設計・要件定義が未確定なら feature-designer エージェント（Opus）に先に委譲する。
 ---
 
 フロントエンド実装のワークフロー。**ここには進め方だけを書く。** 規約の本体は
@@ -12,7 +11,8 @@ model: sonnet
 
 ## 0. モデルの使い分け
 
-- このスキルが有効なターンは Sonnet で動く（frontmatter `model: sonnet`）。ターンをまたいで実装を続けるときは、次のターンでもこのスキルを呼び直す。
+- モデルと effort は固定しない。CLAUDE.md「モデルと推論の強さ（effort）の使い分け」の表で、実装する段ごとに複雑度と難易度から選び、
+  セッションと違う欄ならサブエージェントに `model` と `effort` を指定して渡す（文言・スタイルの調整は `haiku`、前例のある画面は `sonnet`、JSON API の部分更新など静かに壊れうる箇所は `opus`）。
 - **設計・要件定義は Opus の担当**。実装中に設計判断（新しい画面が要るか、操作の共存・削除、API の形の変更）が必要になったら、自分で決めずに `feature-designer` エージェント（`model: opus`）に委譲するかユーザーに確認する。
 
 ## 1. 設計を確認してから書く
