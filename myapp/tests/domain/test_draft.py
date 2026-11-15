@@ -24,6 +24,8 @@ from myapp.domain.value_objects import AcquisitionRoute, ForeignPlayerRules, Pos
 from myapp.domain.virtual_players import generator
 from myapp.domain.virtual_players.generator import AmateurPath
 
+from .markers import slow
+
 YEAR = 2027
 
 
@@ -268,6 +270,7 @@ class ProfileTest(unittest.TestCase):
                     self.assertTrue(age is not None and 23 <= age <= 26)
         self.assertEqual(seen, set(DraftRoute))
 
+    @slow
     def test_domestic_routes_follow_the_weights(self) -> None:
         """12球団の会議で数える（1球団だけの会議は候補が24人と少なく、高校の割合が 0.22 と許容の端にあった。
         1位の好み（#302）で1人動いて外れたため、合わせ込みの前提に近い多球団の会議にした）。"""

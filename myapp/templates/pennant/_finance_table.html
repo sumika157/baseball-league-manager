@@ -1,0 +1,21 @@
+{% comment %}
+球団ひとつの年ごとの収支の表（経営の画面の「過去の年の収支」。`rows` は `ClubFinanceRow` の並び。#208 E2）。
+{% endcomment %}
+<div class="table-responsive">
+  <table class="table table-sm mb-0">
+    <thead>
+      <tr>
+        <th>年</th>
+        {% include 'pennant/_finance_head.html' %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+        <tr>
+          <td>{{ row.year }}年</td>
+          {% include 'pennant/_finance_cells.html' with row=row %}
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

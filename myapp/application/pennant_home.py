@@ -25,10 +25,11 @@ from ..domain.pennant.season import (
 )
 from ..domain.pennant.season import stats_year as stats_year_of
 from ..domain.repositories import FixtureRepository, GameRepository, LeagueRepository, TeamRepository
-from ..domain.value_objects import InningsPitched, format_average
+from ..domain.value_objects import GameStage, InningsPitched, format_average
 from .dto import (
     AdvanceOption,
     AdvanceSummary,
+    ClubFinanceRow,
     FinaleSeason,
     GameRow,
     HomeStandings,
@@ -42,6 +43,7 @@ from .dto import (
     PeriodBatter,
     PeriodBatting,
     PeriodPitching,
+    PopularityCard,
     PostseasonCard,
     StandingRow,
     TitleRaceRow,
@@ -52,8 +54,10 @@ from .dto import (
 )
 from .league_view import LeagueViewService
 from .pennant_championships import PostseasonHistoryReader, YearChampion
+from .pennant_finance import ClubFinanceService
+from .pennant_popularity import PopularityReader, change_label
 from .pennant_race import final_standings, own_race, remaining_by_team, team_order, tiebreak_for
-from .queries import GameListQuery, PennantActivityQuery
+from .queries import AttendanceQuery, GameListQuery, PennantActivityQuery
 from .scorebook_view import build_line_score
 from .standings import record_label
 from .team_view import TeamViewService
@@ -112,6 +116,9 @@ class PennantHomeService:
         team_records: TeamRepository,
         leagues: LeagueRepository,
         postseason: PostseasonHistoryReader,
+        popularities: PopularityReader,
+        attendance: AttendanceQuery,
+        finance: ClubFinanceService,
     ) -> None:
         self._league_view = league_view
         # 主力打者・投手陣（自軍の選手の一覧）
@@ -126,6 +133,11 @@ class PennantHomeService:
         self._activity = activity
         # 世界の終了の日本一（締めた年は記録、最終シーズンは導く）
         self._postseason = postseason
+        # 自軍の人気と観客動員のカード（#208 E1）
+        self._popularities = popularities
+        self._attendance = attendance
+        # 自軍のいまの年度のチケットの値段と収支（#208 E2）
+        self._finance = finance
 
     def get_home(
         self,
@@ -170,6 +182,41 @@ class PennantHomeService:
             stats_year=stats_year,
             shows_previous_season=stats_year != year,
             finale=self._finale(world, postseason),
+            popularity=self._popularity(world, team_leagues),
+            finance=self._finance_row(world, team_leagues),
+        )
+
+    def _finance_row(self, world: WorldContext, team_leagues: dict[int, tuple[int, str]]) -> ClubFinanceRow | None:
+        """自軍のいまの年度のチケットの値段と収支（途中経過。#208 E2）。受け持つ球団が無ければ None。"""
+        own_id = world.managed_team_id
+        if own_id is None or own_id not in team_leagues:
+            return None
+        return self._finance.year_rows(world, world.season_year, [own_id])[own_id]
+
+    def _popularity(self, world: WorldContext, team_leagues: dict[int, tuple[int, str]]) -> PopularityCard | None:
+        """自軍の人気と観客動員（#208 E1）。人気はいまの年度の値（行が無ければ初期値。進める処理が使う値と同じ）、
+        観客動員はいまの年度の公式戦のホーム試合の合計。受け持つ球団が無ければ None。"""
+        own_id = world.managed_team_id
+        if own_id is None or own_id not in team_leagues:
+            return None
+        year = world.season_year
+        league_id = team_leagues[own_id][0]
+        rivals = [team_id for team_id, (league, _) in team_leagues.items() if league == league_id]
+        current = self._popularities.for_year(year, rivals)
+        own = current[own_id]
+        previous = self._popularities.recorded(year - 1).get(own_id)
+        totals = self._attendance.home_totals(stage=GameStage.REGULAR, year=year, team_id=own_id)
+        home = totals[0] if totals else None
+        return PopularityCard(
+            year=year,
+            popularity=own.value,
+            previous=None if previous is None else previous.value,
+            change_label=change_label(previous, own),
+            league_rank=1 + sum(1 for value in current.values() if value > own),
+            league_team_count=len(current),
+            home_games=0 if home is None else home.games,
+            attendance_total=0 if home is None else home.total,
+            attendance_average=0 if home is None else home.average,
         )
 
     def get_deletion(self, world: WorldContext) -> WorldDeletion:

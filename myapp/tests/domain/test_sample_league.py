@@ -45,6 +45,7 @@ from myapp.domain.value_objects import (
 )
 
 from .doubles import OnlyRandom
+from .markers import slow
 
 YEAR = 2025
 KEY = "sample-key"
@@ -169,6 +170,7 @@ class SampleLeagueShapeTest(unittest.TestCase):
         self.assertEqual(self.league.name, other.name)
 
 
+@slow
 class SampleLeagueRandomnessTest(unittest.TestCase):
     def test_the_same_key_and_year_give_the_same_sample(self) -> None:
         self.assertEqual(draw_sample_league(KEY, YEAR), draw_sample_league(KEY, YEAR))

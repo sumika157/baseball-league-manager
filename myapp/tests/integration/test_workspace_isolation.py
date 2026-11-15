@@ -55,6 +55,8 @@ from myapp.domain.exceptions import (
     InvalidChampionship,
     InvalidDraftAction,
     InvalidInvitation,
+    InvalidPopularity,
+    InvalidTicketPrice,
     InvalidWorkspace,
     InvalidWorld,
     LeagueNotFound,
@@ -69,8 +71,10 @@ from myapp.domain.pennant.draft_lottery import DraftLotteryRecord
 from myapp.domain.pennant.draft_meeting import DraftAction, DraftActionKind, DraftSlot
 from myapp.domain.pennant.draft_record import DraftRecord
 from myapp.domain.pennant.foreign_market import ForeignSigningPlan
-from myapp.domain.pennant.reinforcement import MidseasonRegistration
+from myapp.domain.pennant.popularity import ClubPopularity, Popularity
+from myapp.domain.pennant.reinforcement import MidseasonRegistration, RegistrationKind
 from myapp.domain.pennant.release import ReleasePlan
+from myapp.domain.pennant.ticket_price import ClubTicketPrice, TicketPrice
 from myapp.domain.pennant.world import World, WorldScope
 from myapp.domain.services.rankings import Title
 from myapp.domain.value_objects import (
@@ -85,8 +89,10 @@ from myapp.domain.value_objects import (
 from myapp.domain.workspace import Invitation, InvitedRole, Visibility, WorkspaceRole, invitation_digest
 from myapp.infrastructure import orm_models, queries, repositories
 from myapp.infrastructure.queries import (
+    DjangoAttendanceQuery,
     DjangoAwardQuery,
     DjangoChampionshipQuery,
+    DjangoClubFinanceQuery,
     DjangoClubTenureQuery,
     DjangoDevelopmentRosterQuery,
     DjangoFieldingTotalsQuery,
@@ -126,10 +132,12 @@ from myapp.infrastructure.repositories import (
     DjangoInvitationRepository,
     DjangoLeagueRepository,
     DjangoMidseasonRegistrationRepository,
+    DjangoPopularityRepository,
     DjangoRatingsRepository,
     DjangoReleasePlanRepository,
     DjangoStadiumRepository,
     DjangoTeamRepository,
+    DjangoTicketPriceRepository,
     DjangoWorkspaceRepository,
     DjangoWorldRepository,
 )
@@ -277,6 +285,7 @@ class WorkspaceCase(BaseCase):
         cls._plant_b_award()
         cls._plant_b_postseason()
         cls._plant_b_draft_rows()
+        cls._plant_b_club_rows()
         cls._plant_stray_stadiums()
         cls._plant_a_declaration()
 
@@ -358,8 +367,23 @@ class WorkspaceCase(BaseCase):
         for team_id in b_teams[:2]:
             orm_models.PennantDraftLotteryBid.objects.create(lottery=lottery, team_id=team_id)
         orm_models.PennantMidseasonRegistration.objects.create(
-            team_id=cls.b_world_team_id, player_id=stint.player_id, registered_on=date(B_YEAR, 6, 1)
+            team_id=cls.b_world_team_id,
+            player_id=stint.player_id,
+            registered_on=date(B_YEAR, 6, 1),
+            kind=RegistrationKind.PROMOTION.value,
         )
+
+    @classmethod
+    def _plant_b_club_rows(cls) -> None:
+        """B の世界の球団の人気・手動のチケットの値段（#208 E1・E2）と、B の世界の試合の観客数。
+
+        どれも世界の作成・締める処理・経営の画面を回さずに置くので ORM で直接置く。人気と値段は `B_YEAR` に置く。
+        """
+        orm_models.PennantClubPopularity.objects.create(team_id=cls.b_world_team_id, year=B_YEAR, value=77)
+        orm_models.PennantTicketPrice.objects.create(
+            team_id=cls.b_world_team_id, year=B_YEAR, price=TicketPrice.HIGH.value
+        )
+        orm_models.Game.objects.filter(home_team__league__world_id=cls.b_world_id).update(attendance=12345)
 
     @staticmethod
     def _play(home, away, batter, pitcher, year, scope):
@@ -765,7 +789,10 @@ def _midseason_registration_repository(t: WorkspaceCase) -> None:
         with t.assertRaises(TeamNotFound):
             repo.find_by_team(t.b_world_team_id)
     registration = MidseasonRegistration(
-        team_id=t.b_world_team_id, player_id=t.b_world_player_id, registered_on=date(B_YEAR, 7, 1)
+        team_id=t.b_world_team_id,
+        player_id=t.b_world_player_id,
+        registered_on=date(B_YEAR, 7, 1),
+        kind=RegistrationKind.PROMOTION,
     )
     with t.assertRaises(InvalidWorld):
         DjangoMidseasonRegistrationRepository(t.a).add(registration)
@@ -928,6 +955,87 @@ def _championship_query(t: WorkspaceCase) -> None:
     t.assertEqual(
         [row.team_id for row in DjangoChampionshipQuery(_b_world(t)).list_championships()], [t.b_world_team_id]
     )
+
+
+def _popularity_repository(t: WorkspaceCase) -> None:
+    """球団の人気（#208 E1）。B の世界の人気は A の実データ・A の世界から読めず、A の世界の範囲で B の球団に
+    書けない。
+    """
+    for scope in _a_scopes(t):
+        repo = DjangoPopularityRepository(scope)
+        t.assertEqual(repo.find_by_year(B_YEAR), [], f"{scope} で B の世界の人気が読めた")
+        t.assertEqual(repo.find_by_team(t.b_world_team_id), [], f"{scope} で B の球団の人気が読めた")
+    b_rows = orm_models.PennantClubPopularity.objects.filter(team_id=t.b_world_team_id)
+    before = list(b_rows.values())
+    popularity = ClubPopularity(team_id=t.b_world_team_id, year=B_YEAR + 1, popularity=Popularity(50))
+    with t.assertRaises(InvalidWorld):
+        DjangoPopularityRepository(t.a).add_all([popularity])
+    with t.assertRaises(InvalidPopularity):
+        DjangoPopularityRepository(WorldScope.pennant(t.workspace.id, t.a_world_id)).add_all([popularity])
+    t.assertEqual(list(b_rows.values()), before, "A の範囲で B の世界に人気を書いた")
+    # 空振りの防止: B の世界の範囲では読める
+    t.assertEqual(
+        [item.team_id for item in DjangoPopularityRepository(_b_world(t)).find_by_year(B_YEAR)], [t.b_world_team_id]
+    )
+
+
+def _ticket_price_repository(t: WorkspaceCase) -> None:
+    """手動のチケットの値段（#208 E2）。B の世界の値段は A から読めず、A の世界の範囲で B の球団の値段を
+    変えも消しもできない。
+    """
+    for scope in _a_scopes(t):
+        repo = DjangoTicketPriceRepository(scope)
+        t.assertEqual(repo.find_by_year(B_YEAR), [], f"{scope} で B の世界の値段が読めた")
+        t.assertEqual(repo.find_by_team(t.b_world_team_id), [], f"{scope} で B の球団の値段が読めた")
+    b_rows = orm_models.PennantTicketPrice.objects.filter(team_id=t.b_world_team_id)
+    before = list(b_rows.values())
+    price = ClubTicketPrice(team_id=t.b_world_team_id, year=B_YEAR, price=TicketPrice.LOW)
+    with t.assertRaises(InvalidWorld):
+        DjangoTicketPriceRepository(t.a).save(price)
+    a_world = DjangoTicketPriceRepository(WorldScope.pennant(t.workspace.id, t.a_world_id))
+    with t.assertRaises(InvalidTicketPrice):
+        a_world.save(price)
+    with t.assertRaises(InvalidTicketPrice):
+        a_world.delete(t.b_world_team_id, B_YEAR)
+    t.assertEqual(list(b_rows.values()), before, "A の範囲で B の世界の値段を書き換えた")
+    # 空振りの防止: B の世界の範囲では読める
+    t.assertEqual(
+        [item.team_id for item in DjangoTicketPriceRepository(_b_world(t)).find_by_year(B_YEAR)], [t.b_world_team_id]
+    )
+
+
+def _attendance_query(t: WorkspaceCase) -> None:
+    """ホーム試合の観客数（#208 E1）。A の範囲の合計に B の世界の球団の試合が入らない。"""
+    for scope in _a_scopes(t):
+        query = DjangoAttendanceQuery(scope)
+        for stage in (GameStage.REGULAR, GameStage.POSTSEASON):
+            rows = query.home_totals(stage=stage, year=None, team_id=None)
+            t.assertFalse([row for row in rows if row.year == B_YEAR], f"{scope} で B の世界の観客数が読めた")
+        t.assertEqual(query.home_totals(stage=GameStage.POSTSEASON, year=B_YEAR, team_id=t.b_world_team_id), [])
+    # 空振りの防止: B の世界の範囲では読める
+    for stage in (GameStage.REGULAR, GameStage.POSTSEASON):
+        t.assertTrue(DjangoAttendanceQuery(_b_world(t)).home_totals(stage=stage, year=B_YEAR, team_id=None), stage)
+
+
+def _club_finance_query(t: WorkspaceCase) -> None:
+    """収支の材料（#208 E2）。A の範囲では B の世界の球団の人数を数えず、本拠地の収容人数も返さない。"""
+    for scope in _a_scopes(t):
+        query = DjangoClubFinanceQuery(scope)
+        sizes = query.roster_sizes(years=[B_YEAR], team_ids=[t.b_world_team_id])
+        t.assertEqual(
+            [(size.registered, size.developmental) for size in sizes], [(0, 0)], f"{scope} で B の球団の人数を数えた"
+        )
+        t.assertEqual(query.stadium_capacities([t.b_world_team_id]), {}, f"{scope} で B の球団の球場が読めた")
+    # 空振りの防止: B の世界の範囲では数える
+    (b_size,) = DjangoClubFinanceQuery(_b_world(t)).roster_sizes(years=[B_YEAR], team_ids=[t.b_world_team_id])
+    t.assertGreater(b_size.registered + b_size.developmental, 0)
+    # A の球団が B の球場を指していても（`_plant_stray_stadiums`）、B の球場の収容人数は読まない（本拠地なし）
+    a_world = WorldScope.pennant(t.workspace.id, t.a_world_id)
+    t.assertEqual(
+        DjangoClubFinanceQuery(a_world).stadium_capacities([t.a_world_stray_team_id]), {t.a_world_stray_team_id: None}
+    )
+    t.assertEqual(DjangoClubFinanceQuery(t.a).stadium_capacities([t.rival.id]), {t.rival.id: None})
+    t.assertIn(t.b_world_team_id, DjangoClubFinanceQuery(_b_world(t)).stadium_capacities([t.b_world_team_id]))
 
 
 def _postseason_query(t: WorkspaceCase) -> None:
@@ -1154,6 +1262,10 @@ CHECKS: dict[type, Callable[[WorkspaceCase], None]] = {
     DjangoAwardQuery: _award_query,
     DjangoChampionshipRepository: _championship_repository,
     DjangoChampionshipQuery: _championship_query,
+    DjangoPopularityRepository: _popularity_repository,
+    DjangoTicketPriceRepository: _ticket_price_repository,
+    DjangoAttendanceQuery: _attendance_query,
+    DjangoClubFinanceQuery: _club_finance_query,
     DjangoPostseasonQuery: _postseason_query,
     DjangoPostseasonStatsQuery: _postseason_stats_query,
     DjangoPlayerFieldingQuery: _player_fielding_query,
@@ -1438,6 +1550,24 @@ class MisbuiltWorldScopeGameWritesTest(WorkspaceCase):
             with self.subTest(write=label), self.assertRaises(WorldNotFound):
                 write()
         self.assertEqual(orm_models.Game.objects.count(), before, "取り違えた範囲で B の世界に試合を書いた")
+
+    def test_popularity_and_ticket_price_writes_through_a_misbuilt_scope_raise_and_write_nothing(self):
+        """人気・手動のチケットの値段（#208 E1・E2）も、同じ締めた年の検査（`closed_years`）で拒む。"""
+        misbuilt = WorldScope.pennant(self.workspace.id, self.b_world_id)
+        team_id = self.b_world_team_id
+        popularity = ClubPopularity(team_id=team_id, year=B_YEAR + 1, popularity=Popularity(50))
+        price = ClubTicketPrice(team_id=team_id, year=B_YEAR + 1, price=TicketPrice.LOW)
+        rows = (orm_models.PennantClubPopularity.objects, orm_models.PennantTicketPrice.objects)
+        before = [list(manager.filter(team_id=team_id).values()) for manager in rows]
+        for label, write in (
+            ("人気", lambda: DjangoPopularityRepository(misbuilt).add_all([popularity])),
+            ("値段の保存", lambda: DjangoTicketPriceRepository(misbuilt).save(price)),
+            ("値段の削除", lambda: DjangoTicketPriceRepository(misbuilt).delete(team_id, B_YEAR)),
+        ):
+            with self.subTest(write=label), self.assertRaises(WorldNotFound):
+                write()
+        after = [list(manager.filter(team_id=team_id).values()) for manager in rows]
+        self.assertEqual(after, before, "取り違えた範囲で B の世界の人気・値段を書いた")
 
 
 class StadiumsInTest(WorkspaceCase):
@@ -1981,6 +2111,7 @@ URL_TABLE: dict[str, tuple[tuple[str, ...], str, bool]] = {
     "pennant_postseason_by_year": (("world", "world_year"), PAGE, False),
     "pennant_postseason_stats": (("world", "world_year"), PAGE, False),
     "pennant_settings": (("world",), PAGE, False),
+    "pennant_finance": (("world",), PAGE, False),
     "pennant_draft_order_settings": (("world",), WRITE, False),
     "pennant_draft": (("world", "world_year"), PAGE, False),
     "pennant_draft_act": (("world", "world_year", "draft_action"), WRITE, False),
@@ -2073,6 +2204,7 @@ WRITE_BODIES: dict[str, Callable[[Side, int], dict]] = {
     "pennant_club": lambda side, rival: {"section": "lineup", "action": "manual"},
     "pennant_delete": lambda side, rival: {},
     "pennant_settings": lambda side, rival: {"postseason_format": "NONE"},
+    "pennant_finance": lambda side, rival: {"ticket_price": "HIGH"},
     "pennant_draft_order_settings": lambda side, rival: {"draft_order_rule": "NPB"},
     "pennant_draft_act": lambda side, rival: {},
     "setup_leagues": lambda side, rival: {"name": "侵入のリーグ", **SETUP_LEAGUE_LIMITS},

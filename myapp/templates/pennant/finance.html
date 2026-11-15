@@ -1,0 +1,103 @@
+{% extends 'myapp/base.html' %}
+
+{% block title %}経営 - {{ world.name }} - ペナント - Baseball Manager{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb">
+    {% include 'pennant/_crumbs.html' %}
+    <li class="breadcrumb-item active" aria-current="page">経営</li>
+  </ol>
+</nav>{% include 'pennant/_world_bar.html' %}
+
+{% comment %}
+経営（受け持つ球団のチケットの値段と収支。#208 E2）。見るのは誰でも、値段を変えるのはオーナーだけ（フォームはオーナーにだけ出す）。
+値段を変えられるのはその年の開幕前だけで、変えられないときはフォームを出さずに理由だけを出す。手動の値段は翌年に引き継がない。
+段階の選択肢と効きは domain の `TicketPrice` が出典。収支は保存せず、観客動員・人気・値段・人数から導いた値。
+人気の行の無い年（この機能より前の年）は収支を「—」にする。
+{% endcomment %}
+<div class="page-head">
+  <h1 class="page-title">経営</h1>
+</div>
+
+{% if not finance %}
+  <div class="empty-state">受け持つ球団が無いので、経営の情報はありません。</div>
+{% else %}
+  {% with current=finance.current %}
+  <div class="card mb-4" id="ticket-price">
+    <div class="card-header">チケットの値段（{{ finance.year }}年・{{ finance.team_name }}）</div>
+    <div class="card-body">
+      <p class="mb-1">
+        いまの値段: <span class="fw-semibold" data-testid="ticket-price">{{ current.ticket_price.label }}</span>
+        {% if finance.manual %}（手動）{% else %}（お任せ。今年の人気 {{ current.popularity }} の規則で「{{ finance.auto_price.label }}」）{% endif %}
+        · 1人あたり {{ current.unit_price_label }}
+      </p>
+      <p class="stat-muted mb-3" style="font-size: 0.8125rem;">値段を上げると客単価が上がりますが、ホーム試合の入場率と翌年の人気が下がります。変えられるのはその年の開幕前だけで、翌年はお任せに戻ります。</p>
+
+      <div class="table-responsive mb-3">
+        <table class="table table-sm mb-0">
+          <thead>
+            <tr>
+              <th>段階</th>
+              <th class="text-end">1人あたりの単価</th>
+              <th class="text-end">入場率への効き</th>
+              <th class="text-end">翌年の人気への効き</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for option in finance.options %}
+              <tr {% if option.price == current.ticket_price %}class="fw-semibold"{% endif %}>
+                <td>{{ option.label }}</td>
+                <td class="text-end tabular-nums">{{ option.unit_price_label }}</td>
+                <td class="text-end tabular-nums">{{ option.fill_effect_label }}</td>
+                <td class="text-end tabular-nums">{{ option.popularity_effect_label }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      {% if form %}
+        <form method="post">
+          {% csrf_token %}
+          <div class="mb-3">
+            <div class="form-label">{{ form.ticket_price.label }}</div>
+            {% for radio in form.ticket_price %}
+              <div class="form-check form-check-inline">
+                {{ radio.tag }}
+                <label class="form-check-label" for="{{ radio.id_for_label }}">{{ radio.choice_label }}</label>
+              </div>
+            {% endfor %}
+            {% include 'pennant/_field_errors.html' with errors=form.ticket_price.errors %}
+          </div>
+          <button type="submit" class="btn btn-primary">変更する</button>
+        </form>
+      {% elif is_owner and finance.blocker %}
+        <p class="mb-0" data-testid="ticket-price-blocker">{{ finance.blocker }}</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card mb-4" id="finance-current">
+    <div class="card-header">{{ finance.year }}年の収支{% if current.in_progress %}（途中経過）{% endif %}</div>
+    <div class="card-body">
+      {% include 'pennant/_finance_breakdown.html' with row=current %}
+      {% if current.in_progress %}
+        <p class="stat-muted mb-0 mt-2" style="font-size: 0.8125rem;">放映権・スポンサー・人件費・運営費は年額を消化した公式戦の割合で按分しています。人件費は仮（契約区分ごとの定額 × 人数）です。</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card mb-4" id="finance-history">
+    <div class="card-header">過去の年の収支</div>
+    <div class="card-body p-0">
+      {% if finance.history %}
+        {% include 'pennant/_finance_table.html' with rows=finance.history %}
+      {% else %}
+        <div class="empty-state">まだ終わった年はありません。</div>
+      {% endif %}
+    </div>
+  </div>
+  {% endwith %}
+{% endif %}
+{% endblock %}

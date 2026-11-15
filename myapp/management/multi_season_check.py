@@ -4,14 +4,15 @@
 推定・シミュレーション・オフはメモリの上だけで行う）。
 
     1年目: 実成績から能力を推定 → 1シーズン回す
-    シーズン中: 判定日（6月1日・7月1日）に AI の期中の昇格（`decide_midseason_promotions`。#170 P3b）を全球団で回す
+    シーズン中: 判定日（6月1日・7月1日）に AI の期中の昇格（`decide_midseason_promotions`。#170 P3b）と、その後で
+    外国人の獲得（`decide_midseason_signings`。#169 F3）を全球団で回す
     （人数はメモリの上の現役で数える近似。アプリは参照クエリでその年の在籍を数える）
     シーズンの間: 出場機会（シミュレーションした試合から数える）で `plan_offseason` を回し、結果（獲得した外国人と
     新人を含む）を適用
     2年目以降: 翌年の能力で1シーズン回す
 
 シーズンごとに、水準の表（実データと並べる）・タイトル争い・年齢と能力の分布・入れ替わり・錨の補正・
-外国人の打席と投球回の割合・獲得した外国人と戦力の穴との対応（#169）を出す。
+外国人の打席と投球回の割合・獲得した外国人と戦力の穴との対応（#169）・球団の人気と入場率の見込み（#208 E1）を出す。
 曲線や引退の倍率を直したら、ここで3シーズンの分布を読んで確かめる（Wiki「ペナントモードの仕組み」の「実測値」）。
 """
 
@@ -20,8 +21,8 @@ from __future__ import annotations
 import time
 from collections import Counter
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
-from datetime import date
+from dataclasses import dataclass, field, replace
+from datetime import date, timedelta
 from functools import partial
 from statistics import fmean, pstdev
 
@@ -36,7 +37,16 @@ from myapp.domain.pennant.development import (
 from myapp.domain.pennant.draft import DraftRoute, DraftTeam
 from myapp.domain.pennant.draft_meeting import DraftContext
 from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
-from myapp.domain.pennant.foreign_market import position_hole, squad_holes, world_strength
+from myapp.domain.pennant.finance import OKU, ClubFinance, FinanceInputs, RosterSize, club_finance
+from myapp.domain.pennant.foreign_market import (
+    ForeignSigning,
+    MidseasonForeignClub,
+    decide_midseason_signings,
+    position_hole,
+    sign_midseason,
+    squad_holes,
+    world_strength,
+)
 from myapp.domain.pennant.fork import with_birth_date
 from myapp.domain.pennant.initial_ratings import age_at_season_start
 from myapp.domain.pennant.offseason import (
@@ -47,12 +57,23 @@ from myapp.domain.pennant.offseason import (
     plan_offseason,
 )
 from myapp.domain.pennant.offseason_player import overall_value, player_age
+from myapp.domain.pennant.popularity import (
+    PENNANT_DEFAULT_CAPACITY,
+    Popularity,
+    PopularityFactors,
+    initial_popularity,
+    next_popularities,
+)
 from myapp.domain.pennant.ratings import PlayerRatings
+from myapp.domain.pennant.reinforcement import MidseasonRegistration, RegistrationKind
 from myapp.domain.pennant.retirement import PlayingTime
 from myapp.domain.pennant.schedule import ScheduleRules
+from myapp.domain.pennant.ticket_price import TicketPrice, ai_ticket_price
 from myapp.domain.pennant.world import WorldScope, league_priority
+from myapp.domain.simulation.game_day import simulated_attendance
 from myapp.domain.simulation.levels import UsageTally
 from myapp.domain.simulation.manager import ClubRoster, SimBatter, SimPitcher, choose_active_roster
+from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.ratings import PitcherRatings, potential_multiplier
 from myapp.domain.value_objects import BattingLine, ContractStatus, ForeignPlayerRules, PitchingLine, Position, Profile
 from myapp.management.estimate_check import (
@@ -180,22 +201,42 @@ def pools_of(members: Sequence[Member], teams: dict[int, TeamInfo]) -> dict[int,
 
 @dataclass
 class MidseasonTally:
-    """1シーズンの AI の期中の昇格（#170 P3b）。メモリの上で、判定日ごとに `review` が数える。"""
+    """1シーズンの AI の期中の補強（昇格は #170 P3b、外国人の獲得は #169 F3）。メモリの上で、判定日ごとに `review` が
+    数える。"""
 
-    registrations: dict[int, list[date]]
+    registrations: dict[int, list[MidseasonRegistration]]
     # シーズン中の支配下の最大（球団ごとの、判定日の後の人数の最大）
     max_registered: int = 0
+    # 期中に獲得した外国人（獲得の順）
+    signings: list[ForeignSigning] = field(default_factory=list)
+
+    def _of(self, kind: RegistrationKind) -> list[MidseasonRegistration]:
+        return [item for items in self.registrations.values() for item in items if item.kind is kind]
 
     @property
     def count(self) -> int:
-        return sum(len(days) for days in self.registrations.values())
+        """期中の昇格の人数。"""
+        return len(self._of(RegistrationKind.PROMOTION))
+
+    @property
+    def most(self) -> int:
+        """1球団の期中の昇格の最多。"""
+        return max(Counter(item.team_id for item in self._of(RegistrationKind.PROMOTION)).values(), default=0)
 
 
 def midseason_review(
-    members: list[Member], teams: dict[int, TeamInfo], tally: MidseasonTally, on: date, *, seed: int
+    members: list[Member],
+    teams: dict[int, TeamInfo],
+    tally: MidseasonTally,
+    names: set[str],
+    on: date,
+    *,
+    seed: int,
 ) -> dict[int, ClubRoster] | None:
-    """判定日に AI の期中の昇格（`decide_midseason_promotions`）を回し、上げた選手を `members` に書き込む（その場で
-    置き換える）。上げた球団があれば、新しい1軍の登録を返す。メモリの上には受け持つ球団が無いので、全球団が対象。"""
+    """判定日に AI の期中の昇格（`decide_midseason_promotions`）と、昇格の後の球団で外国人の獲得
+    （`decide_midseason_signings`）を回し、上げた選手と獲得した外国人を `members` に書き込む（その場で置き換え・
+    足す）。名簿が変わった球団があれば、新しい1軍の登録を返す。メモリの上には受け持つ球団が無いので、全球団が対象。
+    獲得した外国人の名前は `names` に足す。"""
     pools = pools_of(members, teams)
     clubs = []
     for team_id, team in teams.items():
@@ -226,17 +267,83 @@ def midseason_review(
                 number=promotions[member.player_id].number,
                 promoted_year=on.year,
             )
-            tally.registrations.setdefault(member.team_id, []).append(on)
+            tally.registrations.setdefault(member.team_id, []).append(
+                MidseasonRegistration(member.team_id, member.player_id, on, RegistrationKind.PROMOTION)
+            )
+    signings = _midseason_signings(members, teams, tally, names, on, seed=seed)
     registered = Counter(m.team_id for m in members if m.contract is ContractStatus.REGISTERED)
     tally.max_registered = max(tally.max_registered, *registered.values())
-    return rosters_of(members, teams)[0] if promotions else None
+    return rosters_of(members, teams)[0] if promotions or signings else None
+
+
+def _midseason_signings(
+    members: list[Member], teams: dict[int, TeamInfo], tally: MidseasonTally, names: set[str], on: date, *, seed: int
+) -> list[ForeignSigning]:
+    """昇格の後の球団で、AI の期中の外国人の獲得を回して `members` に足す（アプリの `MidseasonReview` と同じ順）。"""
+    pools = pools_of(members, teams)
+    clubs = []
+    for team_id, team in teams.items():
+        own = [m for m in members if m.team_id == team_id]
+        clubs.append(
+            MidseasonForeignClub(
+                team_id=team_id,
+                is_managed=False,
+                pool=pools[team_id],
+                foreign_rules=team.foreign_rules,
+                held_foreign=sum(1 for m in own if m.profile.is_foreign_player),
+                registered_count=sum(1 for m in own if m.contract is ContractStatus.REGISTERED),
+                registered_limit=team.registered_limit,
+                signed_on=tuple(
+                    item.registered_on
+                    for item in tally.registrations.get(team_id, ())
+                    if item.kind is RegistrationKind.SIGNING
+                ),
+            )
+        )
+    signings: list[ForeignSigning] = []
+    next_id = max(m.player_id for m in members) + 1
+    for candidate in decide_midseason_signings(clubs, on=on, world_seed=seed, used_names=names):
+        own = [m for m in members if m.team_id == candidate.team_id]
+        signing = sign_midseason(
+            candidate,
+            world_seed=seed,
+            used_names=names,
+            used_numbers=frozenset(m.number for m in own),
+            surname_counts=Counter(m.profile.back_name.split(".")[-1] for m in own if m.profile.back_name),
+        )
+        player_id = next_id + len(signings)
+        members.append(
+            Member(
+                player_id=player_id,
+                team_id=signing.team_id,
+                league_id=teams[signing.team_id].league_id,
+                name=signing.name,
+                position=signing.position,
+                profile=signing.profile,
+                number=signing.number,
+                joined_year=on.year,
+                ratings=PlayerRatings(player_id, on.year, signing.ratings),
+                contract=signing.contract,
+            )
+        )
+        tally.registrations.setdefault(signing.team_id, []).append(
+            MidseasonRegistration(signing.team_id, player_id, on, RegistrationKind.SIGNING)
+        )
+        signings.append(signing)
+    tally.signings.extend(signings)
+    return signings
 
 
 def format_midseason(tally: MidseasonTally, teams: int) -> str:
-    """そのシーズンの AI の期中の昇格（#170 P3b）の人数と、シーズン中の支配下の最大。"""
-    most = max((len(days) for days in tally.registrations.values()), default=0)
+    """そのシーズンの AI の期中の昇格（#170 P3b）と外国人の獲得（#169 F3）の人数と、シーズン中の支配下の最大。"""
+    signed = tally.signings
+    positions = Counter(signing.position for signing in signed)
+    values = [overall_value(signing.ratings) for signing in signed]
     return (
-        f"期中の昇格 {tally.count}人（1球団 平均 {tally.count / max(1, teams):.2f}人・最多 {most}人）  "
+        f"期中の昇格 {tally.count}人（1球団 平均 {tally.count / max(1, teams):.2f}人・最多 {tally.most}人）  "
+        f"期中の外国人の獲得 {len(signed)}人（1球団 平均 {len(signed) / max(1, teams):.2f}人・"
+        f"投手 {positions[Position.PITCHER]}・内野手 {positions[Position.INFIELDER]}・"
+        f"外野手 {positions[Position.OUTFIELDER]}・総合 平均 {_mean(values):.1f}）  "
         f"シーズン中の支配下の最大 {tally.max_registered}人"
     )
 
@@ -532,6 +639,195 @@ def draft_standings(
     )
 
 
+@dataclass
+class PopularityTally:
+    """球団の人気（#208 E1）の年ごとの移り変わり（メモリの上。締める処理と同じ `next_popularities`）。
+
+    確認用の近似: 勝率は投手の勝敗の合計から、日本一は勝率の最も高いリーグ優勝球団（ポストシーズンは回さない）、
+    スター選手は数えない（メモリの上の選手は世界の実績を持たない）。入場率は、球団の人気と相手の人気（世界の平均）で
+    4〜9月の毎日のホーム試合を作ったときの平均（収容人数は標準の値）。
+    """
+
+    popularity: dict[int, Popularity]
+    # 球団ごとの、続けて最下位の年数と、その間の人気の変化
+    last_streak: dict[int, tuple[int, int]] = field(default_factory=dict)
+
+
+def expected_fill(
+    popularity: Popularity,
+    *,
+    opponents: int,
+    seed: int,
+    year: int,
+    team_id: int,
+    ticket_price: TicketPrice | None = None,
+) -> float:
+    """人気 `popularity` の球団のホーム試合の入場率の見込み（4〜9月の毎日）。
+
+    相手の人気は `opponents`、ホームの球団の値段は `ticket_price`（#208 E2）。
+    """
+    rng = make_random(game_seed(seed, year, f"popularity-fill-{team_id}"))
+    days = [date(year, 4, 1) + timedelta(days=offset) for offset in range(183)]
+    values = [
+        (
+            simulated_attendance(
+                PENNANT_DEFAULT_CAPACITY,
+                day,
+                rng,
+                home_popularity=popularity.value,
+                away_popularity=opponents,
+                ticket_price=ticket_price,
+            )
+            or 0
+        )
+        / PENNANT_DEFAULT_CAPACITY
+        for day in days
+    ]
+    return fmean(values)
+
+
+def popularity_season(
+    tally: PopularityTally,
+    leagues: dict[int, list[int]],
+    pitching: dict[int, PitchingLine],
+    members: Sequence[Member],
+    *,
+    seed: int,
+    year: int,
+) -> str:
+    """その年の人気・入場率の見込みと、締めたときの人気の変化（優勝・最下位）を1行に、チケットの値段（AI の規則）と
+    収支の分布（#208 E2）をもう1行にまとめ、`tally` を翌年に進める。
+
+    収支の近似: 観客動員は入場率の見込み × 標準の収容人数 × ホーム試合（年間の試合数の半分）、ポストシーズンは
+    リーグ優勝がホーム 5試合・2位が 2試合（満員の9割）、人数はいまの名簿（契約区分は今の区分）。
+    """
+    team_of = {m.player_id: m.team_id for m in members}
+    wins: Counter[int] = Counter()
+    losses: Counter[int] = Counter()
+    for player_id, line in pitching.items():
+        if (team_id := team_of.get(player_id)) is not None:
+            wins[team_id] += line.wins
+            losses[team_id] += line.losses
+    record = {
+        team_id: wins[team_id] / (wins[team_id] + losses[team_id]) if wins[team_id] + losses[team_id] else 0.5
+        for team_ids in leagues.values()
+        for team_id in team_ids
+    }
+    ordered = {
+        league_id: sorted(team_ids, key=lambda team_id: (-record[team_id], team_id))
+        for league_id, team_ids in leagues.items()
+    }
+    champions = {order[0] for order in ordered.values()}
+    lasts = {order[-1] for order in ordered.values()}
+    japan = max(champions, key=lambda team_id: (record[team_id], -team_id))
+    current = tally.popularity
+    prices = {team_id: ai_ticket_price(value.value) for team_id, value in current.items()}
+    factors = {
+        team_id: PopularityFactors(
+            winning_percentage=record[team_id],
+            league_champion=team_id in champions,
+            japan_champion=team_id == japan,
+            ticket_price=prices[team_id],
+        )
+        for team_id in record
+    }
+    values = [value.value for value in current.values()]
+    mean_value = round(fmean(values))
+    fills = {
+        team_id: expected_fill(
+            value, opponents=mean_value, seed=seed, year=year, team_id=team_id, ticket_price=prices[team_id]
+        )
+        for team_id, value in current.items()
+    }
+    finance = club_finances(
+        current,
+        prices,
+        fills,
+        members,
+        seconds={order[1] for order in ordered.values() if len(order) > 1},
+        champions=champions,
+    )
+    top = max(current, key=lambda team_id: (current[team_id], -team_id))
+    bottom = min(current, key=lambda team_id: (current[team_id], team_id))
+    following = next_popularities(current, factors, world_seed=seed, year=year)
+    change = {team_id: following[team_id].value - current[team_id].value for team_id in current}
+    streaks = []
+    for team_id in current:
+        if team_id in lasts:
+            years, total = tally.last_streak.get(team_id, (0, 0))
+            tally.last_streak[team_id] = (years + 1, total + change[team_id])
+            if years + 1 == 3:
+                streaks.append(total + change[team_id])
+        else:
+            tally.last_streak.pop(team_id, None)
+    tally.popularity = following
+    return (
+        f"人気: 平均 {fmean(values):.1f}・標準偏差 {pstdev(values):.1f}・最高 {max(values)}・最低 {min(values)}  "
+        f"入場率の見込み: 全体 {fmean(fills.values()):.3f}・"
+        f"最も人気の球団 {fills[top]:.3f}・最も低い球団 {fills[bottom]:.3f}  "
+        f"締めたときの変化: リーグ優勝 平均 {_mean([change[t] for t in champions]):+.1f}"
+        f"（日本一 {change[japan]:+d}）・最下位 平均 {_mean([change[t] for t in lasts]):+.1f}"
+        + (f"・3年続けて最下位の3年間 平均 {_mean(streaks):+.1f}" if streaks else "")
+        + "\n"
+        + format_finance(current, prices, finance)
+    )
+
+
+def club_finances(
+    popularity: dict[int, Popularity],
+    prices: dict[int, TicketPrice],
+    fills: dict[int, float],
+    members: Sequence[Member],
+    *,
+    seconds: set[int],
+    champions: set[int] | None = None,
+) -> dict[int, ClubFinance]:
+    """球団ごとの収支の見込み（`popularity_season` の近似）。"""
+    home_games = ScheduleRules().games_per_team / 2
+    registered: Counter[int] = Counter()
+    developmental: Counter[int] = Counter()
+    for member in members:
+        if member.contract is ContractStatus.DEVELOPMENTAL:
+            developmental[member.team_id] += 1
+        else:
+            registered[member.team_id] += 1
+    result = {}
+    for team_id, value in popularity.items():
+        postseason_games = 5 if champions and team_id in champions else 2 if team_id in seconds else 0
+        result[team_id] = club_finance(
+            FinanceInputs(
+                regular_attendance=round(fills[team_id] * PENNANT_DEFAULT_CAPACITY * home_games),
+                postseason_attendance=round(0.9 * PENNANT_DEFAULT_CAPACITY * postseason_games),
+                ticket_price=prices[team_id],
+                popularity=value,
+                roster=RosterSize(registered=registered[team_id], developmental=developmental[team_id]),
+                capacity=None,
+            )
+        )
+    return result
+
+
+def format_finance(
+    popularity: dict[int, Popularity],
+    prices: dict[int, TicketPrice],
+    finance: dict[int, ClubFinance],
+) -> str:
+    """値段の分布と、収支（補填前）の分布を1行にまとめる。"""
+    counts = Counter(prices.values())
+    balances = sorted(item.operating_balance for item in finance.values())
+    middle = [finance[t].operating_balance for t, v in popularity.items() if 45 <= v.value <= 55]
+    deficit = [item for item in finance.values() if item.operating_balance < 0]
+    oku = OKU
+    return (
+        "値段（AI）: " + "・".join(f"{price.label} {counts[price]}" for price in TicketPrice) + "  "
+        f"収支（補填前・億円）: 平均 {fmean(balances) / oku:+.1f}・中央 {balances[len(balances) // 2] / oku:+.1f}・"
+        f"最高 {balances[-1] / oku:+.1f}・最低 {balances[0] / oku:+.1f}・人気45〜55 平均 {_mean(middle) / oku:+.1f}"
+        f"（{len(middle)}球団）・赤字 {len(deficit)}球団・補填 平均 {_mean([i.subsidy for i in deficit]) / oku:.1f}・"
+        f"収入 平均 {fmean(i.revenue for i in finance.values()) / oku:.1f}・"
+        f"人件費 平均 {fmean(i.payroll for i in finance.values()) / oku:.1f}"
+    )
+
+
 def run_seasons(
     scope: WorldScope,
     league_ids: Sequence[int],
@@ -557,6 +853,7 @@ def run_seasons(
         ids = {_id(p.id) for team in league_teams for p in team.active_players}
         real_titles.append(league_titles(real_batting, real_pitching, ids, ScheduleRules().games_per_team))
 
+    popularity = PopularityTally(popularity={team_id: initial_popularity() for team_id in teams})
     for season in range(seasons):
         current = year + season
         say("")
@@ -575,13 +872,14 @@ def run_seasons(
             seed=seed,
             year=current,
             usage=usage,
-            review=partial(midseason_review, members, teams, tally, seed=seed),
+            review=partial(midseason_review, members, teams, tally, names, seed=seed),
         )
         say(f"{games}試合  {(time.perf_counter() - started) / games * 1000:.1f} ms/試合")
         say(format_usage(usage.rows()))
         say(format_comparison(real, summarize(batting.values(), pitching.values()), "リーグ全体の水準:", LEVEL_LABELS))
         say(format_foreign_share(members, batting, pitching))
         say(format_midseason(tally, len(teams)))
+        say(popularity_season(popularity, leagues, pitching, members, seed=seed, year=current))
         say("")
         simulated_titles = []
         for team_ids in leagues.values():
