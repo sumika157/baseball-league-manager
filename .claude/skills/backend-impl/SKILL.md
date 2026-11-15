@@ -1,14 +1,14 @@
 ---
 name: backend-impl
-description: バックエンド（myapp/ の domain・application・infrastructure・presentation 層、マイグレーション）の実装を行う。「この設計を実装して」「API を追加して」「集約・業務ルールを変更して」のように Python 側のコードを書く作業で使う。実装は Sonnet で行い、設計・要件定義が未確定なら feature-designer エージェント（Opus）に先に委譲する。
-model: sonnet
+description: バックエンド（myapp/ の domain・application・infrastructure・presentation 層、マイグレーション）の実装を行う。「この設計を実装して」「API を追加して」「集約・業務ルールを変更して」のように Python 側のコードを書く作業で使う。モデルは CLAUDE.md の表で複雑度と難易度から選び、設計・要件定義が未確定なら feature-designer エージェント（Opus）に先に委譲する。
 ---
 
 バックエンド実装のワークフロー。規約の本体は `CLAUDE.md`（アーキテクチャ規則・出典の一元化・不変条件・マイグレーション・文言）。ここには進め方だけを書く。
 
 ## 0. モデルの使い分け
 
-- このスキルが有効なターンは Sonnet で動く（frontmatter `model: sonnet`）。ターンをまたいで実装を続けるときは、次のターンでもこのスキルを呼び直す。
+- モデルと effort は固定しない。CLAUDE.md「モデルと推論の強さ（effort）の使い分け」の表で、実装する段ごとに複雑度と難易度から選び、
+  セッションと違う欄ならサブエージェントに `model` と `effort` を指定して渡す（前例をなぞる実装は `sonnet`、集約の不変条件・出典・逐次再生に触れる実装は `opus`）。
 - **設計・要件定義は Opus の担当**。実装中に設計判断（新しい集約が要るか、フィールド追加が出典の二重化にならないか、スコープの変更）が必要になったら、自分で決めずに `feature-designer` エージェント（`model: opus`）に委譲するかユーザーに確認する。
 
 ## 1. 設計を確認してから書く
