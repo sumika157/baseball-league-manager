@@ -60,6 +60,10 @@ endif
 test-domain: ## domain 層のみ（Django 設定なし・DB 不要・最速）
 	docker compose exec -w $(WORKDIR) $(CACHE_ENV) -e DJANGO_SETTINGS_MODULE= web python -m unittest discover -s myapp/tests/domain -t .
 
+.PHONY: test-domain-fast
+test-domain-fast: ## domain 層のうち数秒かかる統計のテスト（@slow）を外して流す。実装中の繰り返し用で、push 前はフルスイート
+	docker compose exec -w $(WORKDIR) $(CACHE_ENV) -e DJANGO_SETTINGS_MODULE= -e SKIP_SLOW_TESTS=1 web python -m unittest discover -s myapp/tests/domain -t .
+
 .PHONY: test-integration
 test-integration: ## integration 層のみ（リポジトリ往復・画面動作・テンプレート検査。並列）
 	$(EXEC) python manage.py test myapp.tests.integration --parallel $(PARALLEL)

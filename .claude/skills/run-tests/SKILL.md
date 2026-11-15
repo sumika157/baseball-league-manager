@@ -62,6 +62,10 @@ docker compose ps
 直しては確かめる間は、**変更に近い速いテストから**回し、広げるのは通ってから:
 
 1. 触った domain のテストファイルだけ（`python -m unittest myapp.tests.domain.test_xxx`。DB 不要で数秒）
+   - domain 全体を繰り返し流すなら `make test-domain-fast`（Windows 側からは domain のコマンドに `-e SKIP_SLOW_TESTS=1` を足す）。
+     数秒かかる統計・母集団・シミュレーションのテスト（`tests/domain/markers.py` の `@slow`）を外し、約82秒が約13秒になる。
+     外したテストは、push 前のフルスイートと CI では流れる。母集団・シミュレーションの規則を触ったときは外さずに流す
+   - 新しく書いたテストのクラスが（準備を含めて）約1秒以上かかるなら `@slow` を付ける
 2. 触った範囲の integration のファイルだけ（§3）
 3. push の前に1回だけフルスイート（CLAUDE.md）
 

@@ -33,6 +33,7 @@ from myapp.domain.simulation.samples import average_club, round_robin_days, spre
 from myapp.domain.value_objects import FieldingPosition, ForeignPlayerRules, GameStage, PlateAppearanceResult
 
 from .doubles import ScriptedRandom
+from .markers import slow
 
 FP = FieldingPosition
 P = PlateAppearanceResult
@@ -121,6 +122,7 @@ class ScriptedGameTest(TestCase):
             )
 
 
+@slow
 class SimulatedGamesTest(TestCase):
     """能力を散らした6球団で、毎日1試合ずつ数十日回した試合の集まり。"""
 
@@ -413,6 +415,7 @@ class ForeignQuotaInGameTest(TestCase):
                     )
 
 
+@slow
 class ThirdOutTest(TestCase):
     def test_no_run_scores_on_the_play_that_makes_the_third_out(self):
         """3つ目のアウトを打者がアウトになって取った打席では、得点は入らない（規則 5.08）。"""
