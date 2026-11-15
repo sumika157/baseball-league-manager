@@ -59,6 +59,7 @@ from ..application.pennant_midseason_review import MidseasonReview
 from ..application.pennant_offseason import PennantOffseasonService
 from ..application.pennant_offseason_inputs import OffseasonInputsReader, OffseasonPhase
 from ..application.pennant_offseason_view import OffseasonViewService
+from ..application.pennant_payroll_cap import ClubRevenueReader, PayrollCapReader
 from ..application.pennant_popularity import PopularityReader
 from ..application.pennant_postseason import PennantPostseasonService, PostseasonBracketReader
 from ..application.pennant_postseason_view import PennantPostseasonViewService
@@ -814,6 +815,19 @@ def build_club_finance_service(world_id: int) -> ClubFinanceService:
         facts=DjangoClubFinanceQuery(scope),
         games=DjangoGameListQuery(scope),
         salaries=_salary_reader(scope),
+        caps=_payroll_cap_reader(scope),
+    )
+
+
+def _payroll_cap_reader(scope: WorldScope) -> PayrollCapReader:
+    """年俸の総額の上限の読み口（収支・年俸の参照が使う。#40 K1b）。前年の収入の読み口ごと世界の範囲で作る。"""
+    return PayrollCapReader(
+        revenues=ClubRevenueReader(
+            popularities=_popularity_reader(scope),
+            ticket_prices=_ticket_price_reader(scope),
+            attendance=DjangoAttendanceQuery(scope),
+        ),
+        facts=DjangoClubFinanceQuery(scope),
     )
 
 
@@ -839,7 +853,8 @@ def build_pennant_payroll_view_service(world_id: int) -> PennantPayrollViewServi
 
     依存は全部、世界の範囲で作る。世界の id が正しくなければ InvalidWorld。
     """
-    return PennantPayrollViewService(salaries=_salary_reader(WorldScope.pennant(world_id)))
+    scope = WorldScope.pennant(world_id)
+    return PennantPayrollViewService(salaries=_salary_reader(scope), caps=_payroll_cap_reader(scope))
 
 
 def build_ticket_price_service(world_id: int) -> TicketPriceService:

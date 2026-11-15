@@ -32,6 +32,7 @@ from myapp.application.pennant_midseason_review import MidseasonReview
 from myapp.application.pennant_offseason import PennantOffseasonService
 from myapp.application.pennant_offseason_inputs import OffseasonInputsReader, OffseasonPhase
 from myapp.application.pennant_offseason_view import OffseasonViewService
+from myapp.application.pennant_payroll_cap import ClubRevenueReader, PayrollCapReader
 from myapp.application.pennant_postseason import PennantPostseasonService, PostseasonBracketReader
 from myapp.application.pennant_postseason_view import PennantPostseasonViewService
 from myapp.application.pennant_ratings import PennantRatingsViewService
@@ -1047,6 +1048,20 @@ class FinanceWiringTest(SimpleTestCase):
                 self.assertEqual(dependency._scope, world)
         self.assertEqual(build_pennant_home_service(7)._finance._facts._scope, world)
         self.assertEqual(build_offseason_view_service(7)._finance._facts._scope, world)
+        # 年俸の上限（#40 K1b）の読み口も、使うどれでも世界の範囲で、依存を全部渡す
+        caps = {
+            "収支": finance._caps,
+            "年俸の参照": build_pennant_payroll_view_service(7)._caps,
+            "GM ホーム": build_pennant_home_service(7)._payroll._caps,
+        }
+        for name, reader in caps.items():
+            with self.subTest(caps=name):
+                BuildServiceTest()._assert_wired(reader, PayrollCapReader)
+                BuildServiceTest()._assert_wired(reader._revenues, ClubRevenueReader)
+                self.assertEqual(reader._facts._scope, world)
+                self.assertEqual(reader._revenues._attendance._scope, world)
+                self.assertEqual(reader._revenues._popularities._popularities._scope, world)
+                self.assertEqual(reader._revenues._ticket_prices._prices._scope, world)
         prices = build_ticket_price_service(7)
         self.assertEqual(prices._prices._scope, world)
         self.assertEqual(prices._fixtures._scope, world)

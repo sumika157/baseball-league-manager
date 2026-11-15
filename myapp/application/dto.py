@@ -21,6 +21,7 @@ from ..domain.pennant.draft_meeting import DraftActionKind
 from ..domain.pennant.draft_order import DraftOrderRule
 from ..domain.pennant.draft_record import DraftMeetingStatus
 from ..domain.pennant.finance import money_label
+from ..domain.pennant.payroll_cap import PAYROLL_CAP_RATE
 from ..domain.pennant.postseason import PostseasonFormat, PostseasonResult, PostseasonStatus
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.season import SeasonPhase
@@ -2035,10 +2036,15 @@ class FinanceFigures:
     payroll: Money
     operations: Money
     expenses: Money
-    # 補填前の収支・親会社の補填・補填後の収支
+    # 補填前の収支・親会社の補填（合計と、上限を超えた分・残る赤字の分の2行。#40 K1b）・補填後の収支
     operating_balance: Money
     subsidy: Money
+    overrun_subsidy: Money
+    deficit_subsidy: Money
     balance: Money
+    # その年の年俸の総額の上限（年額。#40 K1b）と、前年の収入が無く見込みから作った値か
+    payroll_cap: Money
+    cap_estimated: bool
 
 
 @dataclass(frozen=True)
@@ -3723,6 +3729,17 @@ class PayrollSummary:
     top_name: str
     top: Salary
     previous_total: Money | None
+    # その年の年俸の総額の上限（#40 K1b。前年の収入 × 割合）と、前年の収入が無く見込みから作った値か
+    cap: Money
+    cap_estimated: bool
+    # 上限までの残り（超えていれば0）と、上限を超えた分（domain の `payroll_overrun`。超えた分は親会社が補填する）
+    room: Money
+    overrun: Money
+
+    @property
+    def cap_rate_label(self) -> str:
+        """上限の割合の表記（「32%」。出典は domain の `PAYROLL_CAP_RATE`）。"""
+        return f"{PAYROLL_CAP_RATE:.0%}"
 
     @property
     def average_label(self) -> str:

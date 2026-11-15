@@ -1,9 +1,10 @@
 """ペナントの球団の収支とチケットの値段の変更（#208 E2）。値段の読み口は `pennant_ticket_price`。
 
 - 収支（`ClubFinanceService`。参照）: 保存せず、観客動員（公式戦とポストシーズン）・人気・値段・人件費（年俸の合計。
-  `pennant_salary`。#40 K1a）・収容人数から domain の `club_finance` で導く。人気の行の無い年（#208 E1 より前の年）と、
-  契約の行の無い選手のいる前の年（#40 K1a より前に締めた年）は出さない（「—」。2026-11-14 ユーザー決定）。
-  いまの年度は進める処理と同じく人気と年俸を補い、年額の項目を消化した公式戦の割合で按分する
+  `pennant_salary`。#40 K1a）・収容人数・年俸の上限から domain の `club_finance` で導く。人気の行の無い年（#208 E1 より
+  前の年）と、契約の行の無い選手のいる前の年（#40 K1a より前に締めた年）は出さない（「—」。2026-11-14 ユーザー決定）。
+  いまの年度は進める処理と同じく人気と年俸を補い、年額の項目を消化した公式戦の割合で按分する。
+  年俸の上限（#40 K1b）は前年の収入から `pennant_payroll_cap` の `cap_of` で導き、超えた分を親会社の補填の1行にする
 - 値段の変更（`TicketPriceService`。更新）: GM が受け持つ球団のいまの年度の値段を手動にする・お任せに戻す。
   変えられるのは開幕前だけ（検査はリポジトリがトランザクションの中で行う。domain の `ticket_price_change_blocker`）
 """
@@ -15,14 +16,14 @@ from dataclasses import dataclass
 
 from ..domain.exceptions import InvalidTicketPrice
 from ..domain.pennant.finance import ClubFinance, FinanceInputs, club_finance, season_share
-from ..domain.pennant.popularity import MEAN_POPULARITY, Popularity, with_initial
+from ..domain.pennant.payroll_cap import PayrollCap
+from ..domain.pennant.popularity import MEAN_POPULARITY, with_initial
 from ..domain.pennant.schedule import ScheduleRules
 from ..domain.pennant.season import SeasonPhase, season_year
 from ..domain.pennant.ticket_price import (
     ClubTicketPrice,
     TicketPrice,
     ai_ticket_price,
-    resolved_ticket_price,
     ticket_price_change_blocker,
 )
 from ..domain.repositories import FixtureRepository, TicketPriceRepository, WorldRepository
@@ -35,6 +36,7 @@ from .dto import (
     TicketPriceOption,
     WorldContext,
 )
+from .pennant_payroll_cap import PayrollCapReader, RevenueMaterials, cap_from, home_totals
 from .pennant_popularity import PopularityReader
 from .pennant_salary import SalaryContractReader
 from .pennant_season import AtomicBlock
@@ -44,17 +46,16 @@ from .queries import AttendanceQuery, ClubFinanceQuery, GameListQuery, Simulatio
 
 @dataclass(frozen=True)
 class _Materials:
-    """収支を導く材料（球団 × 年）。読むのは呼ぶ側の範囲だけ。"""
+    """収支を導く材料（球団 × 年）。読むのは呼ぶ側の範囲だけ。収入の材料は年俸の上限の読み口と共通。"""
 
-    popularity: Mapping[tuple[int, int], Popularity]
-    manual: Mapping[tuple[int, int], TicketPrice]
-    regular: Mapping[tuple[int, int], int]
-    postseason: Mapping[tuple[int, int], int]
+    revenue: RevenueMaterials
     # 人件費（年俸の合計。#40 K1a）。分からない球団 × 年（契約の行の無い前の年）は None
     payrolls: Mapping[tuple[int, int], int | None]
     capacities: Mapping[int, int | None]
     # いまの年度の、球団ごとの消化した公式戦の数（いまの年度を含まなければ空）
     played: Mapping[int, int]
+    # 年俸の上限（#40 K1b。前年の収入から）
+    caps: Mapping[tuple[int, int], PayrollCap]
 
 
 class ClubFinanceService:
@@ -69,6 +70,7 @@ class ClubFinanceService:
         facts: ClubFinanceQuery,
         games: GameListQuery,
         salaries: SalaryContractReader,
+        caps: PayrollCapReader,
     ) -> None:
         self._popularities = popularities
         self._ticket_prices = ticket_prices
@@ -78,6 +80,9 @@ class ClubFinanceService:
         self._games = games
         # 人件費（年俸の合計。#40 K1a）。いまの年度は契約の行の無い選手を補う
         self._salaries = salaries
+        # 年俸の上限（#40 K1b）。ある年の行だけを出すときに使う（球団ひとつの年ごとの表は、手元の材料から
+        # 同じ関数で導く）
+        self._caps = caps
 
     def view(self, world: WorldContext) -> ClubFinanceView | None:
         """経営の画面の材料（受け持つ球団）。受け持つ球団が無ければ None。"""
@@ -122,14 +127,21 @@ class ClubFinanceService:
         found = {team_id: recorded[year]} if year in recorded else {}
         current = with_initial([team_id], found)
         popularity[(team_id, year)] = current[team_id]
-        materials = _Materials(
+        revenue = RevenueMaterials(
             popularity=popularity,
             manual={(team_id, y): price for y, price in self._ticket_prices.manual_history(team_id).items()},
             regular=regular,
             postseason=postseason,
+        )
+        capacities = self._facts.stadium_capacities([team_id])
+        # 前年の収入は手元の全年の材料から（年ごとに読み直さない。`PayrollCapReader.caps` と同じ `cap_from`）
+        caps = {(team_id, y): cap_from(revenue, team_id, y, capacities.get(team_id)) for y in years}
+        materials = _Materials(
+            revenue=revenue,
             payrolls=self._salaries.payrolls(years, [team_id], open_year=year),
-            capacities=self._facts.stadium_capacities([team_id]),
+            capacities=capacities,
             played=self._played(world),
+            caps=caps,
         )
         return [self._row(world, team_id, y, materials) for y in years]
 
@@ -140,24 +152,28 @@ class ClubFinanceService:
             recorded = with_initial(team_ids, recorded)
         manual = self._ticket_prices.manual(year)
         materials = _Materials(
-            popularity={(team_id, year): value for team_id, value in recorded.items() if team_id in team_ids},
-            manual={(team_id, year): price for team_id, price in manual.items()},
-            regular=self._totals(GameStage.REGULAR, year=year, team_id=None),
-            postseason=self._totals(GameStage.POSTSEASON, year=year, team_id=None),
+            revenue=RevenueMaterials(
+                popularity={(team_id, year): value for team_id, value in recorded.items() if team_id in team_ids},
+                manual={(team_id, year): price for team_id, price in manual.items()},
+                regular=self._totals(GameStage.REGULAR, year=year, team_id=None),
+                postseason=self._totals(GameStage.POSTSEASON, year=year, team_id=None),
+            ),
             payrolls=self._salaries.payrolls([year], team_ids, open_year=year if year == world.season_year else None),
             capacities=self._facts.stadium_capacities(team_ids),
             played=self._played(world) if year == world.season_year else {},
+            caps={(team_id, year): cap for team_id, cap in self._caps.caps(year, team_ids).items()},
         )
         return {team_id: self._row(world, team_id, year, materials) for team_id in team_ids}
 
     def _row(self, world: WorldContext, team_id: int, year: int, materials: _Materials) -> ClubFinanceRow:
         key = (team_id, year)
-        regular = materials.regular.get(key, 0)
-        postseason = materials.postseason.get(key, 0)
+        regular = materials.revenue.regular.get(key, 0)
+        postseason = materials.revenue.postseason.get(key, 0)
         in_progress = year == world.season_year and world.phase is not SeasonPhase.FINISHED
-        popularity = materials.popularity.get(key)
+        popularity = materials.revenue.popularity.get(key)
+        price = materials.revenue.price(team_id, year)
         payroll = materials.payrolls.get(key)
-        if popularity is None or payroll is None:
+        if popularity is None or price is None or payroll is None:
             # 人気の行の無い年（#208 E1 より前の年）と、契約の行の無い選手のいる前の年（#40 K1a より前に締めた年。
             # 人件費が分からない）は、作っていない値を見せない
             return ClubFinanceRow(
@@ -171,8 +187,6 @@ class ClubFinanceService:
                 regular_attendance=regular,
                 postseason_attendance=postseason,
             )
-        manual = materials.manual.get(key)
-        price = resolved_ticket_price(manual, popularity.value)
         share = season_share(
             games_played=materials.played.get(team_id, 0),
             games_per_team=ScheduleRules().games_per_team,
@@ -186,6 +200,7 @@ class ClubFinanceService:
                 popularity=popularity,
                 payroll=payroll,
                 capacity=materials.capacities.get(team_id),
+                payroll_cap=materials.caps[key],
                 season_share=share,
             )
         )
@@ -194,7 +209,7 @@ class ClubFinanceService:
             year=year,
             popularity=popularity.value,
             ticket_price=price,
-            manual_price=manual is not None,
+            manual_price=key in materials.revenue.manual,
             figures=figures_of(finance),
             in_progress=in_progress,
             regular_attendance=regular,
@@ -202,10 +217,7 @@ class ClubFinanceService:
         )
 
     def _totals(self, stage: GameStage, *, year: int | None, team_id: int | None) -> dict[tuple[int, int], int]:
-        return {
-            (row.team_id, row.year): row.total
-            for row in self._attendance.home_totals(stage=stage, year=year, team_id=team_id)
-        }
+        return home_totals(self._attendance, stage, year=year, team_id=team_id)
 
     def _played(self, world: WorldContext) -> dict[int, int]:
         """いまの年度の消化した公式戦の数（公式戦が終わっていれば按分しないので読まない）。"""
@@ -216,6 +228,7 @@ class ClubFinanceService:
 
 def figures_of(finance: ClubFinance) -> FinanceFigures:
     """domain の収支を画面に渡す形に写す。"""
+    subsidy = finance.subsidy
     return FinanceFigures(
         gate=Money(finance.gate),
         broadcasting=Money(finance.broadcasting),
@@ -227,8 +240,12 @@ def figures_of(finance: ClubFinance) -> FinanceFigures:
         operations=Money(finance.operations),
         expenses=Money(finance.expenses),
         operating_balance=Money(finance.operating_balance),
-        subsidy=Money(finance.subsidy),
+        subsidy=Money(subsidy.total),
+        overrun_subsidy=Money(subsidy.overrun),
+        deficit_subsidy=Money(subsidy.deficit),
         balance=Money(finance.balance),
+        payroll_cap=Money(finance.payroll_cap.yen),
+        cap_estimated=finance.payroll_cap.estimated,
     )
 
 

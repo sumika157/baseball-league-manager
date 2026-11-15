@@ -4,8 +4,8 @@
   `salary.initial_salary` で補う。**補う読み方はここ1つ**（`fill_salaries`）。補う／行だけ読むの使い分けは人気
   （`pennant_popularity`）に揃える: いまの年度（進める処理が人件費に使う年）と締める年は補い、前の年は保存した行だけを
   読む（行の無い年は「—」。作っていない値を見せない）
-- 参照（`PennantPayrollViewService`）: GM ホームの「年俸」のカード・選手ページの「年俸の推移」・オフの結果の
-  「契約更改」の節。読むだけで、書き込みはしない
+- 参照（`PennantPayrollViewService`）: GM ホームの「年俸」のカード（上限と残り・超過。#40 K1b）・選手ページの
+  「年俸の推移」・オフの結果の「契約更改」の節。読むだけで、書き込みはしない
 
 年俸の契約は決めた事実として保存する（相場・総額・減額の下限は保存せず導く）。書くのは世界の作成・シーズンを締める
 処理・期中の外国人の獲得だけ。締める処理は、行の無い選手の締める年の補った値を、翌年の能力より先に書く。
@@ -17,6 +17,7 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 
 from ..domain.pennant.contract import Salary
+from ..domain.pennant.payroll_cap import payroll_overrun
 from ..domain.pennant.salary import SalaryBasis, entered_year_of, initial_salary, payroll, salary_basis
 from ..domain.repositories import RatingsRepository, SalaryContractRepository
 from .dto import (
@@ -28,6 +29,7 @@ from .dto import (
     SalaryHistoryRow,
     WorldContext,
 )
+from .pennant_payroll_cap import PayrollCapReader
 from .queries import PayrollQuery
 
 
@@ -131,11 +133,14 @@ def _member_salary(row: PayrollMember, filled: Mapping[int, Salary]) -> MemberSa
 class PennantPayrollViewService:
     """年俸の参照の画面の材料（#40 K1a）。依存は世界の範囲で組み立てて渡す。"""
 
-    def __init__(self, *, salaries: SalaryContractReader) -> None:
+    def __init__(self, *, salaries: SalaryContractReader, caps: PayrollCapReader) -> None:
         self._salaries = salaries
+        # 年俸の総額の上限（#40 K1b。GM ホームのカード）
+        self._caps = caps
 
     def summary(self, world: WorldContext) -> PayrollSummary | None:
-        """GM ホームの「年俸」のカード（自軍のいまの年度）。受け持つ球団が無い・在籍する選手がいなければ None。"""
+        """GM ホームの「年俸」のカード（自軍のいまの年度。上限と残り・超過も）。受け持つ球団が無い・在籍する選手が
+        いなければ None。"""
         team_id = world.managed_team_id
         if team_id is None:
             return None
@@ -150,6 +155,7 @@ class PennantPayrollViewService:
         top_member, top = max(paid, key=lambda pair: (pair[1], -pair[0].player_id))
         total = payroll(salary for _, salary in paid)
         previous = self._salaries.payrolls([year - 1], [team_id], open_year=None).get((team_id, year - 1))
+        cap = self._caps.caps(year, [team_id])[team_id]
         return PayrollSummary(
             year=year,
             total=Money(total),
@@ -158,6 +164,10 @@ class PennantPayrollViewService:
             top_name=top_member.name,
             top=top,
             previous_total=None if previous is None else Money(previous),
+            cap=Money(cap.yen),
+            cap_estimated=cap.estimated,
+            room=Money(max(0, cap.room(total))),
+            overrun=Money(payroll_overrun(total, cap)),
         )
 
     def team_salaries(self, team_id: int, year: int) -> dict[int, Salary]:

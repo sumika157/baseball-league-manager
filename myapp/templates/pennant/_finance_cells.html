@@ -13,12 +13,14 @@
   <td class="text-end tabular-nums">{{ f.postseason.label }}</td>
   <td class="text-end tabular-nums">{{ f.revenue.label }}</td>
   <td class="text-end tabular-nums">{{ f.payroll.label }}</td>
+  <td class="text-end tabular-nums">{{ f.payroll_cap.label }}{% if f.cap_estimated %}<span class="stat-muted">（見込み）</span>{% endif %}</td>
   <td class="text-end tabular-nums">{{ f.operations.label }}</td>
   <td class="text-end tabular-nums">{{ f.expenses.label }}</td>
   <td class="text-end tabular-nums stat-key">{{ f.operating_balance.label }}</td>
-  <td class="text-end tabular-nums">{{ f.subsidy.label }}</td>
+  <td class="text-end tabular-nums">{{ f.overrun_subsidy.label }}</td>
+  <td class="text-end tabular-nums">{{ f.deficit_subsidy.label }}</td>
   {% endwith %}
 {% else %}
   <td class="text-end"><span class="stat-muted">—</span></td>
-  <td colspan="13"><span class="stat-muted">—</span></td>
+  <td colspan="15"><span class="stat-muted">—</span></td>
 {% endif %}
