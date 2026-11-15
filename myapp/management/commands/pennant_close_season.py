@@ -41,7 +41,8 @@ class Command(BaseCommand):
                 f"育成の自由契約 {result.expired_count}人・"
                 f"新外国人 {result.signed_foreign_count}人・"
                 f"新人 {result.draftee_count}人（うち育成 {result.development_draftee_count}人）・"
-                f"ドラフト1巡目の抽選 {result.first_round_lottery_count}件）　所要 {elapsed:.2f}秒"
+                f"ドラフト1巡目の抽選 {result.first_round_lottery_count}件・"
+                f"新監督 {result.manager_changes}人）　所要 {elapsed:.2f}秒"
             )
         )
         self.stdout.write(f"{result.next_year}年の日程を作りました（{result.fixture_count}試合）")

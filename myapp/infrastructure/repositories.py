@@ -47,6 +47,7 @@ from ..domain.exceptions import (
     InvalidPosition,
     InvalidRatings,
     InvalidSchedule,
+    InvalidStaffTenure,
     InvalidTicketPrice,
     InvalidWorld,
     LeagueNotFound,
@@ -76,10 +77,20 @@ from ..domain.pennant.reinforcement import (
 from ..domain.pennant.release import ReleasePlan
 from ..domain.pennant.schedule import Fixture
 from ..domain.pennant.season import is_season_closed
+from ..domain.pennant.staff import (
+    Appointment,
+    ManagerStyle,
+    StaffAssignment,
+    StaffMember,
+    StaffRole,
+    StaffTenure,
+    ensure_valid_tenures,
+)
 from ..domain.pennant.ticket_price import ClubTicketPrice, TicketPrice, ticket_price_change_blocker
 from ..domain.pennant.world import World, WorldScope
 from ..domain.services import ensure_lines_match_plate_appearances
 from ..domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings, Potential
+from ..domain.simulation.tactics import TacticLevel
 from ..domain.value_objects import (
     AcquisitionRoute,
     AdvanceReason,
@@ -125,6 +136,7 @@ from .scoping import (
     ratings_in,
     release_plans_in,
     salary_contracts_in,
+    staff_tenures_in,
     stage_condition,
     stints_in,
     teams_in,
@@ -1510,6 +1522,11 @@ _WORLD_ROWS_CHILD_FIRST: tuple[tuple[type[models.Model], str], ...] = (
     (orm_models.PennantSalaryContract, "player__stints__team__league"),
     # 手動のチケットの値段も球団を指すので、球団を消す前に消す（#208 E2）
     (orm_models.PennantTicketPrice, "team__league"),
+    # 首脳陣の人は就任をたどって世界が決まるので、就任より先に消す
+    # （SQLite の外部キーはトランザクションの終わりで検査する）。
+    # 就任は球団を指すので、球団を消す前に消す（#210 M1）
+    (orm_models.PennantStaffMember, "tenures__team__league"),
+    (orm_models.PennantStaffTenure, "team__league"),
     # 編成と戦力外の指名は選手を指すので、選手を消す前に消す（行から先に）
     (orm_models.PennantClubPlanEntry, "plan__team__league"),
     (orm_models.PennantClubPlan, "team__league"),
@@ -2252,6 +2269,124 @@ class DjangoTicketPriceRepository:
     @staticmethod
     def _to_domain(team_id: int, year: int, price: str) -> ClubTicketPrice:
         return ClubTicketPrice(team_id=team_id, year=year, price=TicketPrice(price))
+
+
+class DjangoStaffRepository:
+    """StaffRepository の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る（#210 M1）。
+
+    首脳陣はペナント専用で、実データの範囲には書けない。他の世界の首脳陣は、読めも書けもしない。
+    1世界の就任は多くても球団の数 × 締めた回数なので、検査は世界の就任を全部読んで domain の関数に渡す。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def find_serving(self, year: int) -> list[StaffAssignment]:
+        rows = (
+            staff_tenures_in(self._scope)
+            .filter(Q(last_year__isnull=True) | Q(last_year__gte=year), first_year__lte=year)
+            .select_related("member")
+            .order_by("team_id", "role")
+        )
+        return [StaffAssignment(member=self._member(row.member), tenure=self._tenure(row)) for row in rows]
+
+    @transaction.atomic
+    def apply(self, *, retirements: Sequence[StaffTenure], appointments: Sequence[Appointment]) -> None:
+        if not retirements and not appointments:
+            return
+        if self._scope.is_real:
+            raise InvalidWorld("首脳陣はペナントの世界にだけ保存できます。")
+        team_ids = {item.team_id for item in retirements} | {item.team_id for item in appointments}
+        known = set(teams_in(self._scope).filter(id__in=team_ids).values_list("id", flat=True))
+        if missing := sorted(team_ids - known):
+            raise InvalidStaffTenure(f"この世界に無い球団の首脳陣は保存できません（id={missing[0]}）。")
+        years = {item.last_year for item in retirements if item.last_year is not None}
+        years |= {item.first_year for item in appointments}
+        if closed := closed_years(self._scope, years):
+            raise AlreadyClosed(
+                f"{closed[0]}年のシーズンは既に締めているので、その年の首脳陣は書き換えられません。", year=closed[0]
+            )
+
+        rows = {row.id: row for row in staff_tenures_in(self._scope)}
+        current = {row_id: self._tenure(row) for row_id, row in rows.items()}
+        closing: dict[int, int] = {}
+        for retired in retirements:
+            if retired.last_year is None:
+                raise InvalidStaffTenure("閉じる就任には最終年が要ります。")
+            row_id = next(
+                (
+                    row_id
+                    for row_id, tenure in current.items()
+                    if tenure.is_current
+                    and (tenure.member_id, tenure.team_id, tenure.role, tenure.first_year)
+                    == (retired.member_id, retired.team_id, retired.role, retired.first_year)
+                ),
+                None,
+            )
+            if row_id is None:
+                raise InvalidStaffTenure(f"閉じる就任が見つかりません（球団 id={retired.team_id}）。")
+            current[row_id] = retired
+            closing[row_id] = retired.last_year
+        # 新しい人はまだ id を持たないので、検査では重ならない仮の id（負の数）で就任を並べる
+        pending = [appointment.tenure(-index) for index, appointment in enumerate(appointments, start=1)]
+        ensure_valid_tenures([*current.values(), *pending])
+
+        for row_id, last_year in closing.items():
+            row = rows[row_id]
+            row.last_year = last_year
+            row.save(update_fields=["last_year"])
+        members = orm_models.PennantStaffMember.objects.bulk_create(
+            [self._member_row(appointment.member) for appointment in appointments]
+        )
+        orm_models.PennantStaffTenure.objects.bulk_create(
+            [
+                orm_models.PennantStaffTenure(
+                    member_id=member.id,
+                    team_id=appointment.team_id,
+                    role=appointment.role.value,
+                    first_year=appointment.first_year,
+                )
+                for member, appointment in zip(members, appointments, strict=True)
+            ]
+        )
+
+    @staticmethod
+    def _member_row(member: StaffMember) -> orm_models.PennantStaffMember:
+        style = member.style
+        return orm_models.PennantStaffMember(
+            name=member.name,
+            name_kana=member.name_kana,
+            birth_date=member.birth_date,
+            starter_leash=int(style.starter_leash),
+            pinch_hitting=int(style.pinch_hitting),
+            base_stealing=int(style.base_stealing),
+            bunting=int(style.bunting),
+        )
+
+    @staticmethod
+    def _member(row: orm_models.PennantStaffMember) -> StaffMember:
+        return StaffMember(
+            id=row.id,
+            name=row.name,
+            name_kana=row.name_kana,
+            birth_date=row.birth_date,
+            style=ManagerStyle(
+                starter_leash=TacticLevel(row.starter_leash),
+                pinch_hitting=TacticLevel(row.pinch_hitting),
+                base_stealing=TacticLevel(row.base_stealing),
+                bunting=TacticLevel(row.bunting),
+            ),
+        )
+
+    @staticmethod
+    def _tenure(row: orm_models.PennantStaffTenure) -> StaffTenure:
+        return StaffTenure(
+            member_id=row.member_id,
+            team_id=row.team_id,
+            role=StaffRole(row.role),
+            first_year=row.first_year,
+            last_year=row.last_year,
+        )
 
 
 class DjangoDraftRepository:

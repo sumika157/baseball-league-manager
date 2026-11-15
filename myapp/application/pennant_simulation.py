@@ -29,10 +29,12 @@ from ..domain.simulation.game_day import simulated_attendance, simulated_times
 from ..domain.simulation.manager import ClubRoster, SimBatter, SimPitcher
 from ..domain.simulation.randomness import game_seed, make_random
 from ..domain.simulation.ratings import BatterRatings, PitcherRatings
+from ..domain.simulation.tactics import Tactics
 from ..domain.value_objects import ForeignPlayerRules, GameStage
 from .dto import PlanNotice, SimulationContext, SimulationTeam
 from .foreign_quota import ForeignQuotaExemptions, QuotaExemptions
 from .pennant_popularity import PopularityReader
+from .pennant_staff import StaffReader
 from .pennant_ticket_price import TicketPriceReader, TicketPrices
 from .queries import SimulationContextQuery
 
@@ -61,6 +63,7 @@ class DaySimulator:
         plans: dict[int, ClubPlan],
         popularity: dict[int, Popularity],
         ticket_prices: TicketPrices,
+        tactics: Mapping[int, Tactics],
     ) -> None:
         self._world_seed = world_seed
         self._teams = {team.team_id: team for team in context.teams}
@@ -68,6 +71,8 @@ class DaySimulator:
         self._popularity = popularity
         # 球団ごとのその年のチケットの値段（ホーム試合の観客数に効く。#208 E2）
         self._ticket_prices = ticket_prices
+        # 球団ごとのその年の監督の采配の傾向（監督のいない球団は標準。#210 M1）
+        self._tactics = tactics
         self._pools = pools
         self._plans = plans
         self._history = pitching_history(context)
@@ -87,6 +92,7 @@ class DaySimulator:
         fa_exemptions: ForeignQuotaExemptions,
         popularities: PopularityReader,
         ticket_prices: TicketPriceReader,
+        staff: StaffReader,
     ) -> DaySimulator:
         """`first_day`（今回の最初の試合の日）より前の試合から導ける状態と、その年の能力と編成を読む。
 
@@ -95,6 +101,7 @@ class DaySimulator:
         同じ年で導く（その年の扱いは前の年までの記録で決まるので、進める間は変わらない）。
         球団の人気も同じ年の値（行の無い球団は初期値で補う。#208 E1）。
         チケットの値段も同じ年の値（手動の値段か、その年の人気からお任せの規則で決める。#208 E2）。
+        監督の采配の傾向も同じ年の値（1回のクエリ。監督のいない球団は標準で補う。#210 M1）。
         """
         context = context_query.load(before=first_day)
         year = first_day.year
@@ -110,6 +117,7 @@ class DaySimulator:
             plans={plan.team_id: plan for plan in plans.find_all()},
             popularity=popularity,
             ticket_prices=ticket_prices.for_year(year, popularity),
+            tactics=staff.tactics_for(year, [team.team_id for team in context.teams]),
         )
 
     @property
@@ -160,6 +168,8 @@ class DaySimulator:
                 foreign_rules=self._teams[home_team_id].foreign_rules,
                 home_orders=home_club.orders,
                 away_orders=away_club.orders,
+                home_tactics=self._tactics[home_team_id],
+                away_tactics=self._tactics[away_team_id],
                 max_innings=max_innings,
             )
         except InvalidRoster as error:

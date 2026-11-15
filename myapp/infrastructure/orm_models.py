@@ -15,9 +15,11 @@ from ..domain.pennant.draft_meeting import DraftActionKind
 from ..domain.pennant.draft_order import DraftOrderRule
 from ..domain.pennant.postseason import PostseasonFormat
 from ..domain.pennant.reinforcement import RegistrationKind
+from ..domain.pennant.staff import StaffRole
 from ..domain.pennant.ticket_price import TicketPrice
 from ..domain.services.rankings import Title
 from ..domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings
+from ..domain.simulation.tactics import TacticAxis, TacticLevel
 from ..domain.value_objects import (
     DEFAULT_REGISTERED_PLAYER_LIMIT,
     AcquisitionRoute,
@@ -57,6 +59,7 @@ DEVELOPMENT_DECISION_CHOICES = [(item.value, item.value) for item in Development
 REGISTRATION_KIND_CHOICES = [(item.value, item.value) for item in RegistrationKind]
 # チケットの値段の段階（#208 E2）の選択肢もドメインの TicketPrice が唯一の出典
 TICKET_PRICE_CHOICES = [(item.value, item.value) for item in TicketPrice]
+STAFF_ROLE_CHOICES = [(item.value, item.value) for item in StaffRole]
 # ドラフト会議の行動の種類の選択肢もドメインの DraftActionKind が唯一の出典
 DRAFT_ACTION_KIND_CHOICES = [(item.value, item.value) for item in DraftActionKind]
 # 試合で就いた守備位置。登録位置（Position）とは別の概念
@@ -1252,6 +1255,69 @@ class PennantTicketPrice(models.Model):
 
     def __str__(self) -> str:
         return f"{self.year}年 {self.team_id} {self.price}"
+
+
+def _tactic_level_check(field: str) -> models.Q:
+    return models.Q(**{f"{field}__gte": int(min(TacticLevel)), f"{field}__lte": int(max(TacticLevel))})
+
+
+class PennantStaffMember(models.Model):
+    """ペナントの首脳陣のひとり（#210 M1: 監督）。名前・生年月日と素の傾向（4軸。−2〜+2）。
+
+    世界の列は持たない（就任 `PennantStaffTenure` の球団のリーグで世界が決まる。未雇用の候補は保存しない）。
+    年齢は保持しない（生年月日から導く）。傾向の段階の出典は domain の `TacticLevel`。管理画面には出さない。
+    """
+
+    name = models.CharField(max_length=50, verbose_name="名前")
+    name_kana = models.CharField(max_length=100, verbose_name="よみがな")
+    birth_date = models.DateField(verbose_name="生年月日")
+    starter_leash = models.SmallIntegerField(verbose_name=TacticAxis.STARTER_LEASH.title)
+    pinch_hitting = models.SmallIntegerField(verbose_name=TacticAxis.PINCH_HITTING.title)
+    base_stealing = models.SmallIntegerField(verbose_name=TacticAxis.BASE_STEALING.title)
+    bunting = models.SmallIntegerField(verbose_name=TacticAxis.BUNTING.title)
+
+    class Meta:
+        verbose_name = "ペナントの首脳陣"
+        verbose_name_plural = "ペナントの首脳陣"
+        ordering = ["id"]
+        constraints = [
+            models.CheckConstraint(condition=_tactic_level_check(axis.value), name=f"pennant_staff_{axis.value}_range")
+            for axis in TacticAxis
+        ]
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class PennantStaffTenure(models.Model):
+    """首脳陣の就任（人・球団・役割・初年〜最終年。最終年が空なら、いまも就いている。#210 M1）。
+
+    同じ球団の同じ役割が同じ年に2人・1人が同じ年に2職にならないことは、リポジトリが domain の
+    `ensure_valid_tenures` で確かめる（期間の重なりは制約で書けないため）。管理画面には出さない。
+    """
+
+    member = models.ForeignKey(
+        PennantStaffMember, on_delete=models.CASCADE, related_name="tenures", verbose_name="首脳陣"
+    )
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="+", verbose_name="球団")
+    role = models.CharField(max_length=10, choices=STAFF_ROLE_CHOICES, verbose_name="役割")
+    first_year = models.PositiveSmallIntegerField(verbose_name="初年")
+    last_year = models.PositiveSmallIntegerField(null=True, blank=True, verbose_name="最終年")
+
+    class Meta:
+        verbose_name = "ペナントの首脳陣の就任"
+        verbose_name_plural = "ペナントの首脳陣の就任"
+        ordering = ["team_id", "first_year", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["team", "role", "first_year"], name="unique_pennant_staff_tenure"),
+            models.CheckConstraint(
+                condition=models.Q(last_year__isnull=True) | models.Q(first_year__lte=models.F("last_year")),
+                name="pennant_staff_tenure_years_ordered",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.team_id} {self.role} {self.first_year}〜{self.last_year or ''}"
 
 
 class PennantSalaryContract(models.Model):
