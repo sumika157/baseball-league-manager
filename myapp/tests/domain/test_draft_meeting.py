@@ -45,6 +45,8 @@ from myapp.domain.simulation.ratings import GrowthType, Potential, RatingGrade, 
 from myapp.domain.value_objects import Position
 from myapp.domain.virtual_players import generator
 
+from .markers import slow
+
 YEAR = 2027
 
 
@@ -465,6 +467,7 @@ class TasteTest(unittest.TestCase):
         self.assertEqual((rebid.round_number, rebid.attempt), (1, 2))
         self.assertTrue(state._tasted())
 
+    @slow
     def test_first_round_bids_do_not_gather_on_one_prospect(self) -> None:
         """再発防止（#302）: 8リーグ48球団の会議で、1位の入札が1人に集まるのは多くても十数球団。
 

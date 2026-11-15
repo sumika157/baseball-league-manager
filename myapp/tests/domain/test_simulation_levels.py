@@ -27,6 +27,8 @@ from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.samples import average_club
 from myapp.domain.value_objects import ForeignPlayerRules, GameStage, PitchingLine
 
+from .markers import slow
+
 GAMES = 400
 OPENING_DAY = date(2026, 4, 1)
 
@@ -47,6 +49,7 @@ WIDE_BANDS = {
 }
 
 
+@slow
 class AverageLeagueLevelsTest(TestCase):
     @classmethod
     def setUpClass(cls):
