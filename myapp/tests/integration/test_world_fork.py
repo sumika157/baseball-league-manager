@@ -23,6 +23,7 @@ from myapp.infrastructure.repositories import (
     DjangoLeagueRepository,
     DjangoPopularityRepository,
     DjangoRatingsRepository,
+    DjangoStaffRepository,
     DjangoTeamRepository,
     DjangoWorldRepository,
 )
@@ -369,6 +370,7 @@ class ForkOptionsTest(BaseCase):
                 teams=FailingTeams(DjangoTeamRepository(scope)),
                 ratings=DjangoRatingsRepository(scope),
                 popularities=DjangoPopularityRepository(scope),
+                staff=DjangoStaffRepository(scope),
             )
 
         service = PennantWorldService(

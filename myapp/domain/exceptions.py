@@ -134,6 +134,11 @@ class InvalidPopularity(DomainError):
     """球団の人気として成り立たない値・保存できない内容（範囲の外の値・同じ球団 × 年の重複・範囲の外の球団）。"""
 
 
+class InvalidStaffTenure(DomainError):
+    """首脳陣の就任として成り立たない内容（最終年が初年より前・同じ球団の同じ役割が同じ年に2人・1人が同じ年に2職・
+    範囲の外の球団）。#210 M1。"""
+
+
 class InvalidTicketPrice(DomainError):
     """チケットの値段として保存できない内容（段階に無い値・範囲の外の球団・受け持つ球団が無い世界）。#208 E2。"""
 

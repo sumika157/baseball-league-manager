@@ -23,6 +23,7 @@ from ..domain.pennant.finance import money_label
 from ..domain.pennant.postseason import PostseasonFormat, PostseasonResult, PostseasonStatus
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.season import SeasonPhase
+from ..domain.pennant.staff import ManagerStyle, StaffRole, StaffTenure
 from ..domain.pennant.ticket_price import TicketPrice
 from ..domain.services.free_agency import SERVICE_DAYS_PER_SEASON
 from ..domain.services.rankings import Title
@@ -2269,6 +2270,8 @@ class SeasonClosed:
     reverted_club_count: int
     # 翌年の日程の試合数
     fixture_count: int
+    # 新しく就いた監督の数（高齢の退任の後任と、監督のいなかった球団への就任。#210 M1）
+    manager_changes: int = 0
 
 
 @dataclass(frozen=True)
@@ -3798,3 +3801,73 @@ class AwardRow:
             team_id=self.team_id,
             value=self.value,
         )
+
+
+# --- 首脳陣（#210 M1） ---
+
+
+@dataclass(frozen=True)
+class StaffTenureRow:
+    """首脳陣の就任ひとつ（人の名前・生年月日・傾向を添えた参照の行。`StaffQuery` が作る）。"""
+
+    member_id: int
+    name: str
+    name_kana: str
+    birth_date: date
+    style: ManagerStyle
+    team_id: int
+    team_name: str
+    role: StaffRole
+    first_year: int
+    # いまも就いていれば None
+    last_year: int | None
+
+    def covers(self, year: int) -> bool:
+        """その年に就いているか（判定の出典は domain の `StaffTenure.covers`）。"""
+        tenure = StaffTenure(self.member_id, self.team_id, self.role, self.first_year, self.last_year)
+        return tenure.covers(year)
+
+
+@dataclass(frozen=True)
+class TacticCell:
+    """監督の方針の1軸（「継投」「先発を引っ張る」など）。`level` は −2〜+2 で、0 が標準。"""
+
+    title: str
+    label: str
+    level: int
+
+
+@dataclass(frozen=True)
+class ManagerCard:
+    """GM ホームの「監督」カード（その年に自軍を率いる監督）。"""
+
+    year: int
+    name: str
+    name_kana: str
+    age: int
+    # 就任何年目（初年が1年目）
+    tenure_year: int
+    tactics: tuple[TacticCell, ...]
+
+
+@dataclass(frozen=True)
+class ManagerHistoryRow:
+    """球団史の1年の監督。監督のいない年（この機能より前の年）は `name` が空。"""
+
+    year: int
+    name: str = ""
+
+
+@dataclass(frozen=True)
+class ManagerChangeRow:
+    """オフの結果の「監督の交代」の1球団。前任のいない就任（監督のいなかった球団）は前任の欄が空。"""
+
+    team_id: int
+    team_name: str
+    successor_name: str
+    successor_age: int
+    # 後任の方針のうち標準でない軸（「よく走る・バントが多め」。すべて標準なら「標準」）
+    successor_style: str
+    predecessor_name: str = ""
+    # 前任の退任時（締めた年）の年齢。前任がいなければ None
+    predecessor_age: int | None = None

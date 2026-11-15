@@ -50,6 +50,8 @@ GM が会議（`PennantDraftService`。#297 D3）を開いた年は、途中な�
 締められるかの検査（ポストシーズンが終わったか）と、書く優勝球団の両方に使う。
 翌年の球団の人気（#208 E1。年ごとの状態で、この例外ではない）も外で導き（`pennant_popularity`。最終順位・日本一・
 在籍する選手の実績から）、中で書く（行の無い球団の締める年の補った値は翌年の能力より先に、翌年の値は後に）。
+監督の交代（#210 M1。高齢の退任と架空の後任・監督のいない球団への就任。`domain/pennant/staff.py`）も外で決め、
+中で翌年の能力より先に書く（退任の最終年は締める年、就任は翌年から）。
 
 **前提: 世界の `Team` 集約に書くのは、世界の作成・この処理・期中の登録（`MidseasonRegistrationService`。
 #170 P3a）だけ。** 外で読んだ `Team` を中でそのまま `save()` して安全なのは、この前提による
@@ -110,6 +112,7 @@ from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.release import ReleasePlan, ensure_releasable
 from ..domain.pennant.schedule import Fixture, season_schedule
 from ..domain.pennant.season import is_season_closed
+from ..domain.pennant.staff import ManagerChanges, plan_manager_changes
 from ..domain.pennant.world import World
 from ..domain.repositories import (
     AwardRepository,
@@ -124,6 +127,7 @@ from ..domain.repositories import (
     PopularityRepository,
     RatingsRepository,
     ReleasePlanRepository,
+    StaffRepository,
     TeamRepository,
     WorldRepository,
 )
@@ -193,6 +197,8 @@ class _PreparedClose:
     awards: list[Award]
     # 締める年の人気の材料（#208 E1。ロックの外で読んだ値）
     popularity: PopularityBasis
+    # 監督の交代（高齢の退任と後任・監督のいない球団への就任。#210 M1。ロックの外で決めた値）
+    managers: ManagerChanges = field(default_factory=ManagerChanges)
     # 締める年の日本一（記録として書く。ロックの外で導いた勝ち上がりから `close_season` が入れる）。無い年は None
     championship: Championship | None = None
     # 翌年の全球団の人気（ロックの外で材料と日本一から `close_season` が入れる。#208 E1）
@@ -221,6 +227,7 @@ class PennantOffseasonService:
         championships: ChampionshipRepository,
         popularities: PopularityRepository,
         ticket_prices: TicketPriceReader,
+        staff: StaffRepository,
         drafts: DraftRepository,
         lotteries: DraftLotteryRepository,
         titles: LeagueViewService,
@@ -251,6 +258,8 @@ class PennantOffseasonService:
         self._popularities = popularities
         # 締める年のチケットの値段（翌年の人気への効き。#208 E2）
         self._ticket_prices = ticket_prices
+        # 首脳陣（締めるときに監督の退任と就任を書く。#210 M1）
+        self._staff = staff
         # その年のドラフト会議の記録（GM が開いた会議。締めるときに再生して消す。#297 D3）
         self._drafts = drafts
         # 締めた年の抽選の記録（会議の記録が消えた後の抽選の出典。#298 D4）
@@ -707,6 +716,17 @@ class PennantOffseasonService:
             clubs=inputs.clubs,
             manual_prices=self._ticket_prices.manual(year),
         )
+        serving = self._staff.find_serving(year)
+        managers = plan_manager_changes(
+            serving,
+            [_saved_id(team.id) for team in teams],
+            year=year,
+            world_seed=world.seed,
+            # 後任の名前は世界の選手・その年の新人・いまの監督と重ねない
+            used_names=set(inputs.used_names)
+            | {newcomer.name for newcomer in plan.newcomers}
+            | {item.member.name for item in serving},
+        )
         return _PreparedClose(
             plan=plan,
             changes=changes,
@@ -714,6 +734,7 @@ class PennantOffseasonService:
             year=year,
             awards=inputs.awards,
             popularity=popularity,
+            managers=managers,
         )
 
     def _commit(self, world: World, prepared: _PreparedClose) -> SeasonClosed:
@@ -736,6 +757,9 @@ class PennantOffseasonService:
         # 行の無い球団の締める年の人気は翌年の能力より先に書く（翌年の能力を書くと締める年が「締めた年」になり、
         # その年の値は書けない。#208 E1）
         self._popularities.add_all(prepared.popularity.unrecorded())
+        # 監督の退任（締める年で閉じる）と就任（翌年から）も、翌年の能力より先に書く
+        # （締めた年の首脳陣は書き換えない。#210 M1）
+        self._staff.apply(retirements=prepared.managers.retirements, appointments=prepared.managers.appointments)
         retained = [change.after for change in plan.retained]
         self._ratings.add_all([*retained, *rookie_ratings])
         # 翌年の人気は能力の後に書く（同時に2回締めたときは、能力の一意制約が先に止める）
@@ -777,6 +801,7 @@ class PennantOffseasonService:
             reverted_sections=reverted,
             reverted_club_count=reverted_clubs,
             fixture_count=len(prepared.schedule),
+            manager_changes=prepared.managers.count,
         )
 
     def _apply_roster_changes(
