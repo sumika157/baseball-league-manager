@@ -71,7 +71,6 @@ from .manager import (
 )
 from .odds import DEFAULT_SENSITIVITY, MatchupOdds, RatingSensitivity, matchup
 from .randomness import GameRandom, weighted_index
-from .tactics import Tactics
 
 P = PlateAppearanceResult
 FP = FieldingPosition
@@ -155,8 +154,6 @@ class _Side:
     slots: list[_Slot]
     bench: list[SimBatter]
     speeds: dict[int, int]
-    # この球団の監督の傾向（先発の目安・代打・盗塁・犠打の重み。#210 M1）
-    tactics: Tactics = Tactics.STANDARD
     entries: list[LineupEntry] = field(default_factory=list)
     mounds: list[_Mound] = field(default_factory=list)
     used_pitchers: set[int] = field(default_factory=set)
@@ -205,8 +202,6 @@ def simulate_game(
     foreign_rules: ForeignPlayerRules,
     home_orders: ClubOrders | None = None,
     away_orders: ClubOrders | None = None,
-    home_tactics: Tactics = Tactics.STANDARD,
-    away_tactics: Tactics = Tactics.STANDARD,
     baseline: LeagueBaseline = NPB,
     sensitivity: RatingSensitivity = DEFAULT_SENSITIVITY,
     rules: BaserunningRules = DEFAULT_RULES,
@@ -226,9 +221,6 @@ def simulate_game(
 
     `home_orders` / `away_orders` は GM の編成の上書き（オーダー・投手陣）。渡さなければ（または
     区画が `None` なら）AI 監督が決めるので、渡さないときの結果は上書きを知らない版と同じ。
-
-    `home_tactics` / `away_tactics` は監督の采配の傾向（試合の中の判断の重み。`tactics.py`。#210 M1）。
-    乱数を引く回数を変えないので、標準（`Tactics.STANDARD`）なら傾向を知らない版と同じ打席列になる。
     """
     if max_innings is not None and not INNINGS_PER_GAME <= max_innings <= _MAX_INNINGS_WITHOUT_LIMIT:
         raise ValueError(
@@ -238,8 +230,8 @@ def simulate_game(
     engine = _Engine(rng, baseline, sensitivity, rules, max_innings)
     history = history if history is not None else PitchingHistory()
     sides = {
-        True: engine.make_side(home, True, played_on, history, foreign_rules, home_orders, home_tactics),
-        False: engine.make_side(away, False, played_on, history, foreign_rules, away_orders, away_tactics),
+        True: engine.make_side(home, True, played_on, history, foreign_rules, home_orders),
+        False: engine.make_side(away, False, played_on, history, foreign_rules, away_orders),
     }
     plate_appearances = engine.play(sides, played_on, history)
 
@@ -300,7 +292,6 @@ class _Engine:
         history: PitchingHistory,
         foreign_rules: ForeignPlayerRules,
         orders: ClubOrders | None = None,
-        tactics: Tactics = Tactics.STANDARD,
     ) -> _Side:
         staff = orders.staff if orders and orders.staff else plan_pitching_staff(roster.pitchers)
         quota = ForeignQuota(rules=foreign_rules)
@@ -331,7 +322,6 @@ class _Engine:
             slots=slots,
             bench=[b for b in roster.batters if b.player_id not in started],
             speeds={b.player_id: b.ratings.speed for b in roster.batters},
-            tactics=tactics,
         )
         side.entries = [
             LineupEntry(
@@ -347,7 +337,7 @@ class _Engine:
         side.mounds.append(
             _Mound(
                 starter,
-                starter_batter_target(self.rng, starter, tactics),
+                starter_batter_target(self.rng, starter),
                 is_starter=True,
                 workload=workload,
                 fatigue_before=pregame_fatigue_points(workload, as_starter=True, stamina=starter.ratings.stamina),
@@ -543,7 +533,6 @@ class _Engine:
                 position=slot.position,
                 bench=side.bench,
                 quota=side.quota,
-                tactics=side.tactics,
             )
         )
         if decision is None:
@@ -593,12 +582,10 @@ class _Engine:
         odds = matchup(
             slot.batter.ratings, fatigued(pitcher.ratings, fatigue), fielding.defense, self.baseline, self.sensitivity
         )
-        result = self._draw_result(odds, occupied, outs, batting.tactics)
+        result = self._draw_result(odds, occupied, outs)
         batter_id = slot.batter.player_id
 
-        advances = build_advances(
-            self.rng, self.rules, result, batter_id, occupied, outs, batting.speeds, batting.tactics
-        )
+        advances = build_advances(self.rng, self.rules, result, batter_id, occupied, outs, batting.speeds)
         errors = [draw_error(self.rng, self._fielders(fielding, pitcher))] if result is P.REACHED_ON_ERROR else []
         # 併殺は、打者への守備で2つ以上のアウトが取られた打席（盗塁刺は含めない）
         double_play = sum(1 for a in advances if a.is_out and not a.reason.is_baserunning_out) >= 2
@@ -617,13 +604,11 @@ class _Engine:
             errors=errors,
         )
 
-    def _draw_result(
-        self, odds: MatchupOdds, occupied: dict[Base, int], outs: int, tactics: Tactics
-    ) -> PlateAppearanceResult:
+    def _draw_result(self, odds: MatchupOdds, occupied: dict[Base, int], outs: int) -> PlateAppearanceResult:
         """1打席の結果を引く。
 
         判定の順は「死球 → 四球 → 犠打 → 犠飛 → 三振 → 本塁打 → インプレー」。打数に数えない結果を
-        先に落とすことで、残りが打数になる。犠打の率は攻撃側の監督の傾向（`tactics`）でずらす。
+        先に落とすことで、残りが打数になる。
         """
         rng, baseline = self.rng, self.baseline
         if rng.random() < odds.hit_by_pitch:
@@ -633,8 +618,7 @@ class _Engine:
 
         if outs < OUTS_PER_INNING - 1:
             on_first_or_second = Base.FIRST in occupied or Base.SECOND in occupied
-            bunt_rate = tactics.bunt_rate(baseline.sacrifice_bunt_rate)
-            if on_first_or_second and Base.THIRD not in occupied and rng.random() < bunt_rate:
+            if on_first_or_second and Base.THIRD not in occupied and rng.random() < baseline.sacrifice_bunt_rate:
                 return P.SACRIFICE_BUNT
             if Base.THIRD in occupied and rng.random() < baseline.sacrifice_fly_rate:
                 return P.SACRIFICE_FLY

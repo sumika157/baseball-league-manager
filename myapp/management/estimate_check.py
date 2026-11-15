@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from datetime import date
 from statistics import mean, pstdev
 
@@ -28,7 +28,6 @@ from myapp.domain.simulation.levels import SeasonTally, UsageRow, UsageTally
 from myapp.domain.simulation.manager import ClubRoster, SimBatter, SimPitcher, choose_active_roster
 from myapp.domain.simulation.randomness import game_seed, make_random
 from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings, RatingGrade
-from myapp.domain.simulation.tactics import Tactics
 from myapp.domain.value_objects import (
     BattingLine,
     ContractStatus,
@@ -234,7 +233,6 @@ def play_season(
     year: int,
     usage: UsageTally | None = None,
     review: Callable[[date], dict[int, ClubRoster] | None] | None = None,
-    tactics: Mapping[int, Tactics] | None = None,
 ) -> tuple[dict[int, BattingLine], dict[int, PitchingLine], int, int]:
     """球団の1軍の登録（`choose_active_roster` を通した後）で1シーズンを回す。
 
@@ -242,9 +240,7 @@ def play_season(
     `usage` を渡すと、投手の起用と疲労（`UsageTally`）も数える。
     `review` を渡すと、AI の期中の補強の判定日（`reinforcement.split_at_reviews`。ペナントの進行と同じ区切り）ごとに、
     その後の最初の試合日を渡して呼ぶ。1軍の登録を返したら、その日からそれで回す（#170 P3b）。
-    `tactics` を渡すと、球団ごとの監督の采配の傾向で回す（無い球団は標準。#210 M1）。
     """
-    tactics = tactics or {}
     rules = ScheduleRules()
     schedule_rng = make_random(game_seed(seed, year, "schedule-check"))
     try:
@@ -273,8 +269,6 @@ def play_season(
             history=history,
             # 1軍はリーグの外国人枠で選んであるので、試合では縛らない（交流戦の枠の違いは測らない）
             foreign_rules=ForeignPlayerRules.UNLIMITED,
-            home_tactics=tactics.get(fixture.home_team_id, Tactics.STANDARD),
-            away_tactics=tactics.get(fixture.visitor_team_id, Tactics.STANDARD),
         )
         season.add(played.game)
         if usage is not None:

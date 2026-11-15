@@ -21,7 +21,6 @@ from ..value_objects import AdvanceReason, Base, InningsPitched, PlateAppearance
 from .odds import RATING_UNIT, from_odds, to_odds
 from .randomness import GameRandom
 from .ratings import AVERAGE_RATING
-from .tactics import Tactics
 
 P = PlateAppearanceResult
 R = AdvanceReason
@@ -70,17 +69,15 @@ def build_advances(
     occupied: dict[Base, int],
     outs: int,
     speeds: Mapping[int, int],
-    tactics: Tactics = Tactics.STANDARD,
 ) -> list[RunnerAdvance]:
     """打席の結果に応じて、走者と打者の進塁を組み立てる。`occupied` を書き換える。
 
     盗塁は打者が球を打たない打席で、打者の進塁より前に起きる。盗塁の結果は打者の進塁を
     組み立てる前に塁の状態へ反映する（押し出しの判定が変わるため）。
-    `tactics` は攻撃側の監督の傾向（盗塁を試みる確率をずらす。成功の確率は変えない）。
     """
     advances: list[RunnerAdvance] = []
     if result in _NO_CONTACT:
-        _maybe_steal(rng, rules, advances, occupied, outs, speeds, tactics)
+        _maybe_steal(rng, rules, advances, occupied, outs, speeds)
 
     if result is P.HOME_RUN:
         _send_home(advances, occupied)
@@ -119,7 +116,6 @@ def _maybe_steal(
     occupied: dict[Base, int],
     outs: int,
     speeds: Mapping[int, int],
-    tactics: Tactics,
 ) -> None:
     """一塁走者の盗塁。二塁が空いていて、2アウト未満のときだけ試みる。
 
@@ -130,9 +126,7 @@ def _maybe_steal(
     if runner is None or Base.SECOND in occupied or outs >= OUTS_PER_INNING - 1:
         return
     speed = speeds.get(runner, AVERAGE_RATING)
-    if rng.random() >= tactics.steal_attempt_rate(
-        adjusted(rules.steal_attempt_rate, rules.speed_steal_attempt, speed)
-    ):
+    if rng.random() >= adjusted(rules.steal_attempt_rate, rules.speed_steal_attempt, speed):
         return
 
     if rng.random() < adjusted(rules.steal_success_rate, rules.speed_steal_success, speed):

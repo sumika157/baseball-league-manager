@@ -62,7 +62,6 @@ from .dto import AdvanceReport, PlanNotice
 from .foreign_quota import ForeignQuotaExemptions
 from .pennant_popularity import PopularityReader
 from .pennant_simulation import DaySimulator
-from .pennant_staff import StaffReader
 from .pennant_ticket_price import TicketPriceReader
 from .queries import SimulationContextQuery
 
@@ -101,7 +100,6 @@ class PennantSeasonService:
         fa_exemptions: ForeignQuotaExemptions,
         popularities: PopularityReader,
         ticket_prices: TicketPriceReader,
-        staff: StaffReader,
         review: MidseasonReview,
         atomic: AtomicBlock,
     ) -> None:
@@ -120,8 +118,6 @@ class PennantSeasonService:
         self._popularities = popularities
         # 球団のチケットの値段（ホーム試合の観客数。#208 E2）
         self._ticket_prices = ticket_prices
-        # 監督の采配の傾向（1回の「進める」で1回だけ読む。#210 M1）
-        self._staff = staff
         self._atomic = atomic
         # 判定日の AI の期中の補強（昇格は #170 P3b、外国人の獲得は #169 F3）
         self._review = review
@@ -266,7 +262,6 @@ class PennantSeasonService:
             fa_exemptions=self._fa_exemptions,
             popularities=self._popularities,
             ticket_prices=self._ticket_prices,
-            staff=self._staff,
         )
         return simulator, signature
 

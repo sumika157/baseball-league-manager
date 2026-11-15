@@ -60,7 +60,6 @@ from ..application.dto import (
     SimulationContext,
     SimulationPlayer,
     SimulationTeam,
-    StaffTenureRow,
     TeamAnalysisFacts,
     TeamSpan,
     TeamSummary,
@@ -72,12 +71,10 @@ from ..domain.pennant.draft_lottery import DraftLotteryRecord
 from ..domain.pennant.postseason import PostseasonFormat, PostseasonResult
 from ..domain.pennant.reinforcement import RegistrationKind
 from ..domain.pennant.retirement import PlayingTime
-from ..domain.pennant.staff import ManagerStyle, StaffRole
 from ..domain.pennant.world import WorldScope
 from ..domain.services.rankings import Title
 from ..domain.simulation.fatigue import FATIGUE_WINDOW_DAYS
 from ..domain.simulation.ratings import BatterRatings, PitcherRatings
-from ..domain.simulation.tactics import TacticLevel
 from ..domain.value_objects import (
     AcquisitionRoute,
     BattingLine,
@@ -124,7 +121,6 @@ from .scoping import (
     players_in,
     ratings_in,
     salary_contracts_in,
-    staff_tenures_in,
     stage_condition,
     stints_in,
     teams_in,
@@ -1872,39 +1868,3 @@ class DjangoPlayerNameQuery:
 
     def names(self) -> frozenset[str]:
         return frozenset(players_in(self._scope).values_list("name", flat=True))
-
-
-class DjangoStaffQuery:
-    """StaffQuery の Django ORM 実装（#210 M1）。範囲（`WorldScope`）を必須で受け取る。1回のクエリで読む。"""
-
-    def __init__(self, scope: WorldScope) -> None:
-        self._scope = scope
-
-    def for_team(self, team_id: int) -> list[StaffTenureRow]:
-        return self._rows(staff_tenures_in(self._scope).filter(team_id=team_id))
-
-    def changed_at(self, year: int) -> list[StaffTenureRow]:
-        return self._rows(staff_tenures_in(self._scope).filter(Q(last_year=year) | Q(first_year=year + 1)))
-
-    @staticmethod
-    def _rows(rows: QuerySet[orm_models.PennantStaffTenure]) -> list[StaffTenureRow]:
-        return [
-            StaffTenureRow(
-                member_id=row.member_id,
-                name=row.member.name,
-                name_kana=row.member.name_kana,
-                birth_date=row.member.birth_date,
-                style=ManagerStyle(
-                    starter_leash=TacticLevel(row.member.starter_leash),
-                    pinch_hitting=TacticLevel(row.member.pinch_hitting),
-                    base_stealing=TacticLevel(row.member.base_stealing),
-                    bunting=TacticLevel(row.member.bunting),
-                ),
-                team_id=row.team_id,
-                team_name=row.team.name,
-                role=StaffRole(row.role),
-                first_year=row.first_year,
-                last_year=row.last_year,
-            )
-            for row in rows.select_related("member", "team").order_by("team_id", "first_year", "id")
-        ]

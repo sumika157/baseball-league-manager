@@ -86,39 +86,6 @@
   </form>
 {% endif %}
 
-{% comment %}監督の交代（世界の全球団。高齢の退任と後任・監督のいなかった球団への就任。#210 M1）。読むだけ。{% endcomment %}
-<div class="card mb-4" id="managers">
-  <div class="card-header">監督の交代（{{ manager_changes|length }}球団）</div>
-  <div class="card-body p-0">
-    {% if manager_changes %}
-      <div class="table-responsive">
-        <table class="table table-sm mb-0">
-          <thead>
-            <tr>
-              <th>球団</th>
-              <th>前任</th>
-              <th>{{ summary.next_year }}年からの監督</th>
-              <th>方針</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for change in manager_changes %}
-              <tr {% if change.team_id == summary.own_team_id %}class="fw-semibold"{% endif %}>
-                <td><a href="{% scoped_url 'player_list' change.team_id %}" class="player-name">{{ change.team_name }}</a></td>
-                <td>{% if change.predecessor_name %}{{ change.predecessor_name }}（{{ change.predecessor_age }}歳・退任）{% else %}<span class="stat-muted">—</span>{% endif %}</td>
-                <td>{{ change.successor_name }}（{{ change.successor_age }}歳）</td>
-                <td>{{ change.successor_style }}</td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    {% else %}
-      <div class="empty-state">このオフに監督の交代はありませんでした。</div>
-    {% endif %}
-  </div>
-</div>
-
 {% if summary.popularity %}
   {% comment %}選んだリーグの球団の人気の変化（締めた年 → 翌年。翌年の人気の高い順）と、締めた年の公式戦のホーム試合の観客動員（#208 E1）。{% endcomment %}
   <div class="card mb-4" id="popularity">

@@ -26,7 +26,6 @@ from ..domain.pennant.popularity import ClubPopularity, initial_popularity
 from ..domain.pennant.postseason import PostseasonFormat
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.salary import initial_salary, salary_basis
-from ..domain.pennant.staff import plan_opening_managers
 from ..domain.pennant.world import (
     MAX_SEASONS_PER_WORLD,
     MAX_SOURCE_LEAGUES,
@@ -41,7 +40,6 @@ from ..domain.repositories import (
     PopularityRepository,
     RatingsRepository,
     SalaryContractRepository,
-    StaffRepository,
     TeamRepository,
     WorldRepository,
 )
@@ -76,7 +74,6 @@ class WorldRepositories:
     teams: TeamRepository
     ratings: RatingsRepository
     popularities: PopularityRepository
-    staff: StaffRepository
     salary_contracts: SalaryContractRepository
 
 
@@ -299,16 +296,6 @@ class PennantWorldService:
                 ClubPopularity(team_id=team_id, year=world.start_year, popularity=initial_popularity())
                 for team_id in forked_team_ids.values()
             ]
-        )
-        # 全球団に架空の監督（開幕年から。乱数は世界のシードと分岐元の球団の id。名前は世界の選手と重ねない。#210 M1）
-        repositories.staff.apply(
-            retirements=[],
-            appointments=plan_opening_managers(
-                {team_id: source_id for source_id, team_id in forked_team_ids.items()},
-                year=world.start_year,
-                world_seed=world.seed,
-                used_names={copy.name for _, copy in forked_players},
-            ),
         )
 
         if managed_source_team_id is not None:
