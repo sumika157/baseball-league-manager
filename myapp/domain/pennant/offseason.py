@@ -2,7 +2,8 @@
 
     引退を決める → 球団ごとに育成の昇格の希望 → 戦力外（`release.py`。昇格の希望の分も空ける）→ 昇格の確定と
     育成契約の満了（`development.py`。#170。ここまでが `plan_departures`）→ 残る選手の契約更改（`salary.py`。
-    #40 K1a。翌年の年俸）→ 外国人の獲得
+    #40 K1a。翌年の年俸。上げ幅は球団ごとの翌年の年俸の上限 − 新人の取り置きに収める。#40 K1b）→ 外国人の獲得
+    （年俸の上限に収まる候補だけ）
     （`foreign_market.py`。補う人数は `draft.py`、選ぶ位置は戦力の穴）→ ドラフト会議の人数の幅と候補（ここまでが
     `prepare_meeting`。会議を始めるとき（#297 D3）も同じ関数）→ ドラフト会議（`draft_meeting.py`。全球団の
     日本人の新人。人数は新人の人数 − 獲得した外国人。本指名の後に育成の巡。GM が進めて終えた会議は保存した行動を
@@ -41,7 +42,7 @@ from .development import (
     decide_promotions,
     decisions_as_chosen,
 )
-from .draft import Draftee, DraftTeam, development_target
+from .draft import Draftee, DraftTeam, development_target, newcomer_plan
 from .draft_meeting import DraftContext, DraftState, Lottery, MeetingSetup, finish_draft, open_meeting
 from .draft_record import DraftRecord
 from .foreign_market import CandidateKey, ForeignSigning, OffseasonSignings, offseason_signings
@@ -53,10 +54,11 @@ from .offseason_player import (
     player_age,
 )
 from .outlook import with_filled_potential
+from .payroll_cap import PayrollCap
 from .ratings import PlayerRatings
 from .release import ability_value, decide_releases, releases_as_chosen
 from .retirement import retirement_chance
-from .salary import Renewal, decide_renewals
+from .salary import Renewal, decide_renewals, rookie_reserve
 
 
 @dataclass(frozen=True)
@@ -112,6 +114,8 @@ class OffseasonPlan:
     anchor: AnchorCorrection
     # 残る選手の契約更改（翌年の年俸。#40 K1a。選手 id の順）。年俸の無い選手は含まない
     renewals: tuple[Renewal, ...] = ()
+    # 年俸の上限（#40 K1b）で獲得しなかった外国人の人数（AI の補いたかった人数と GM の指名のうち。全球団の和）
+    cap_trimmed: int = 0
 
     @property
     def newcomers(self) -> tuple[ForeignSigning | Draftee, ...]:
@@ -361,7 +365,7 @@ class PreparedMeeting:
     - `market`: 外国人の獲得（`foreign_market.offseason_signings`）
     - `setup`: 会議の人数の幅・候補・指名順（`draft_meeting.open_meeting`）
     - `names`: 世界の全選手・獲得した外国人・候補の名前（新人の名前を重ねないため、続きの計算に渡す）
-    - `renewals`: 残る選手の契約更改（`salary.decide_renewals`。#40 K1a）
+    - `renewals`: 残る選手の契約更改（`salary.decide_renewals`。#40 K1a。上げ幅は年俸の上限に収める。#40 K1b）
     """
 
     departures: Departures
@@ -386,8 +390,8 @@ def prepare_meeting(
     """Y 年のドラフト会議を開くまで: 引退・戦力外（`plan_departures`）→ 残る選手の契約更改（#40 K1a）→
     外国人の獲得 → 人数の幅と候補（`open_meeting`）。
 
-    更改は外国人の獲得の前に置く（#40 K1b で、獲得の可否が更改の後の年俸の総額と上限で決まるようになる）。
-    K1a では更改の結果は獲得と会議に効かない。
+    更改は外国人の獲得の前に置く（獲得の可否は、更改の後の年俸の合計と翌年の上限 `OffseasonClub.payroll_cap` で決まる。
+    #40 K1b。`renew_within_caps`）。
 
     **会議を始めるとき（#297 D3）と締めるとき（`plan_offseason`）の唯一の関数**。会議の人数の幅と候補の位置ごとの人数は
     獲得した外国人の位置で決まるので、この順を両方で同じにする（獲得は決定的なので、入力が同じなら同じ幅になる）。
@@ -401,18 +405,50 @@ def prepare_meeting(
         manual_releases=manual_releases,
         manual_development=manual_development,
     )
-    renewals = decide_renewals(departures.survivors, year=year)
+    renewals, teams = renew_within_caps(clubs, departures, year=year)
     names = set(used_names)
     # 外国人の獲得は会議の前（獲得した外国人の分だけ、会議で指名する日本人が減る。#169）
-    market = offseason_signings(
-        departures.draft_teams, year=year, world_seed=world_seed, used_names=names, manual=manual_signings
-    )
+    market = offseason_signings(teams, year=year, world_seed=world_seed, used_names=names, manual=manual_signings)
     setup = open_meeting(
         market.teams, draft, year=year, world_seed=world_seed, used_names=names, signed=market.signed_positions
     )
     return PreparedMeeting(
         departures=departures, market=market, setup=setup, names=frozenset(names), renewals=renewals
     )
+
+
+def renew_within_caps(
+    clubs: Sequence[OffseasonClub], departures: Departures, *, year: int
+) -> tuple[tuple[Renewal, ...], tuple[DraftTeam, ...]]:
+    """残る選手の契約更改（選手 id の順）と、更改の後の年俸の合計と翌年の上限を入れた球団（外国人の獲得に渡す）。
+
+    球団ごとに、翌年の上限 − 新人の取り置き（`salary.rookie_reserve`。新しい支配下の選手の枠 `draft.newcomer_plan` の
+    人数ぶん。育成は数えない）を予算にして `salary.decide_renewals` の上げ幅を縮める。更改の後の合計は上限を超えうる
+    （下げは減額制限まで。上限で止めるのは年俸の増える獲得だけ。#394 の計画）。
+    """
+    caps = {club.team_id: club.payroll_cap for club in clubs}
+    team_of = {player.player_id: club.team_id for club in clubs for player in club.players}
+    members: dict[int, list[OffseasonPlayer]] = {}
+    for player in departures.survivors:
+        members.setdefault(team_of[player.player_id], []).append(player)
+    renewals: list[Renewal] = []
+    teams: list[DraftTeam] = []
+    for team in departures.draft_teams:
+        cap = caps[team.team_id]
+        own = members.get(team.team_id, [])
+        renewed = decide_renewals(own, year=year, budget=renewal_budget(team, cap))
+        renewals.extend(renewed)
+        # 年俸の無い選手は更改しない（読み口は必ず補って渡すので、ふつうはいない）
+        payroll = sum(renewal.salary.yen for renewal in renewed)
+        teams.append(replace(team, payroll=payroll, payroll_cap=cap))
+    return tuple(sorted(renewals, key=lambda renewal: renewal.player_id)), tuple(teams)
+
+
+def renewal_budget(team: DraftTeam, cap: PayrollCap) -> int:
+    """球団 `team`（引退・戦力外の後）の更改に使える額。翌年の上限 − 新しい支配下の選手の枠のぶんの新人の取り置き
+    （`salary.rookie_reserve`）。**更改の予算の唯一の出典**。"""
+    slots, _ = newcomer_plan(team)
+    return cap.yen - rookie_reserve(slots)
 
 
 def replay_meeting(meeting: DraftRecord, setup: MeetingSetup) -> DraftState:
@@ -532,4 +568,5 @@ def plan_offseason(
         without_ratings=tuple(without_ratings),
         anchor=anchor_correction([ratings for ratings, counted in zip(population, inside, strict=True) if counted]),
         renewals=prepared.renewals,
+        cap_trimmed=market.cap_trimmed,
     )

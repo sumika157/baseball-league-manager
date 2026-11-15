@@ -41,6 +41,7 @@ from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings, poten
 from myapp.domain.simulation.samples import BATTER_MEAN, BATTER_SD, PITCHER_MEAN, PITCHER_SD, draw_ratings
 from myapp.domain.value_objects import ContractStatus, DraftPick, ForeignPlayerRules, Position, Profile
 from myapp.domain.virtual_players import generator
+from myapp.tests.domain.payroll_builders import AMPLE_CAP
 
 from .markers import slow
 
@@ -192,6 +193,7 @@ def run_year(
                     )
                     for m in team_members
                 ),
+                payroll_cap=AMPLE_CAP,
             )
         )
     # 指名順の最終順位は1リーグ・球団 id の順（合成の母集団に順位は無い。規則ごとの違いは `test_draft_meeting` が見る）

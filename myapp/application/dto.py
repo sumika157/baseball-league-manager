@@ -2284,6 +2284,8 @@ class SeasonClosed:
     # 契約更改（#40 K1a）の人数と、年俸の総額の増減（翌年 − 締めた年。円）
     renewal_count: int = 0
     renewal_change: int = 0
+    # 年俸の上限（#40 K1b）で獲得しなかった外国人の人数（全球団。AI の補いたかった人数と GM の指名のうち）
+    cap_trimmed_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -2702,6 +2704,8 @@ class ForeignCandidateRow:
     `index` は候補の鍵の添字（オフは締める年のオフの候補。`foreign_market.offseason_key`。期中はその年の期中の候補。
     `midseason_key`。#169 F3）で、フォームはこれを送る。
     `age` は入団する年（オフは締める年 + 1、期中はその年）の4月1日時点の年齢。
+    `salary` は獲得したときの入団する年の年俸（見立てから。`foreign_market.candidate_salary`。#40 K1b）、
+    `within_cap` は獲得しても年俸の上限に収まるか（期中だけ見る。オフは締めるときに確かめるのでいつも True）。
     """
 
     index: int
@@ -2713,6 +2717,8 @@ class ForeignCandidateRow:
     cells: tuple[RatingCell, ...]
     outlook: OutlookCell
     is_chosen: bool
+    salary: Salary
+    within_cap: bool = True
 
 
 @dataclass(frozen=True)
@@ -2720,8 +2726,11 @@ class ForeignSigningPlanView:
     """編成の「外国人」タブの材料（#169 F2）。公式戦を終えてから締めるまで（ポストシーズン中も）だけ作る。
 
     - `is_manual` が False ならお任せ（AI と同じ規則で締めるときに選ぶ）。True なら `candidates` の `is_chosen` が指名
-    - `players`: いま在籍する外国人（育成を含む）。`held_limit` は保有の上限（ゲームの上限 `MAX_FOREIGN_HELD`）
+    - `players`: いま在籍する外国人（育成を含む）
     - `active_rules`: 1軍の外国人枠（リーグの `ForeignPlayerRules`）
+    - 年俸の上限（#40 K1b）: `cap` は翌年の上限（締める年の収入から）、`current_total` は締める年の年俸の合計
+      （更改の前）、`rookie_reserve` は新人の取り置き（ふだんの新人の人数ぶん）、`room` は残りの見込み
+      （上限 − 合計 − 取り置き。更改と戦力外の前の見込みで、締めるときに確定する。負は超過）
     - `blocker`: 指名を変えられない理由（その年のドラフト会議を始めた。`pre_draft_input_blocker`）。変えられるなら空
     """
 
@@ -2731,9 +2740,13 @@ class ForeignSigningPlanView:
     year: int
     is_manual: bool
     players: tuple[ForeignHeldRow, ...]
-    held_limit: int
     active_rules: ForeignPlayerRules
     candidates: tuple[ForeignCandidateRow, ...]
+    cap: Money
+    cap_estimated: bool
+    current_total: Money
+    rookie_reserve: Money
+    room: Money
     blocker: str = ""
 
     @property
@@ -2769,8 +2782,9 @@ class MidseasonForeignView:
 
     - `players`: いま在籍する外国人（育成を含む）。`counts_toward_quota` はその年（`year`）の外国人枠で数えるか
     - `candidates`: その年の期中の候補（見せるのは受け持つ球団のスカウトの見立てだけ。`is_chosen` はいつも False）
-    - `blocked_reason`: 獲得できない理由（1年の上限・保有の上限・支配下の上限）。行ごとのボタンの代わりに出す。
-      獲得できるなら None
+    - `blocked_reason`: 獲得できない理由（1年の上限・支配下の上限）。行ごとのボタンの代わりに出す。
+      獲得できるなら None。年俸の上限に収まらない候補は、行ごとにボタンの代わりに「上限を超える」（`within_cap`）
+    - `payroll`・`cap`・`room`: その年の年俸の合計・上限・残り（#40 K1b。残りは負なら超過）
     """
 
     team_id: int
@@ -2782,7 +2796,6 @@ class MidseasonForeignView:
     # 補強の期限の日（`ReinforcementWindow.deadline`）
     deadline: date
     players: tuple[ForeignHeldRow, ...]
-    held_limit: int
     active_rules: ForeignPlayerRules
     # その年に期中に獲得した人数と、1年の上限
     signed_this_season: int
@@ -2790,6 +2803,9 @@ class MidseasonForeignView:
     registered_count: int
     registered_limit: int | None
     candidates: tuple[ForeignCandidateRow, ...]
+    payroll: Money
+    cap: Money
+    room: Money
     blocked_reason: str | None = None
 
     @property
@@ -3786,6 +3802,9 @@ class RenewalSummary:
     own: tuple[RenewalRow, ...]
     total_count: int
     total_change: int
+    # 自軍の翌年の年俸の合計と上限（#40 K1b）。受け持つ球団が無い・翌年の契約の無い選手がいれば None
+    next_total: Money | None = None
+    next_cap: Money | None = None
 
     @property
     def total_change_label(self) -> str:

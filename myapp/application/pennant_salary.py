@@ -155,7 +155,7 @@ class PennantPayrollViewService:
         top_member, top = max(paid, key=lambda pair: (pair[1], -pair[0].player_id))
         total = payroll(salary for _, salary in paid)
         previous = self._salaries.payrolls([year - 1], [team_id], open_year=None).get((team_id, year - 1))
-        cap = self._caps.caps(year, [team_id])[team_id]
+        cap = self._caps.caps(year, [team_id], supplement_previous=False)[team_id]
         return PayrollSummary(
             year=year,
             total=Money(total),
@@ -202,8 +202,16 @@ class PennantPayrollViewService:
         before = self._salaries.recorded(year)
         renewed = sorted(set(before) & set(after))
         own: list[RenewalRow] = []
+        next_total: Money | None = None
+        next_cap: Money | None = None
         if world.managed_team_id is not None:
-            for item in self._salaries.members(year + 1, [world.managed_team_id], supplement=False):
+            members = self._salaries.members(year + 1, [world.managed_team_id], supplement=False)
+            # 自軍の翌年の年俸の合計（新人・獲得した外国人を含む。締めた直後は全員に契約の行がある）と上限（#40 K1b）
+            if members and all(item.salary is not None for item in members):
+                next_total = Money(payroll(item.salary for item in members if item.salary is not None))
+                cap = self._caps.caps(year + 1, [world.managed_team_id], supplement_previous=False)
+                next_cap = Money(cap[world.managed_team_id].yen)
+            for item in members:
                 player_id = item.member.player_id
                 if player_id in before and player_id in after:
                     own.append(
@@ -219,4 +227,6 @@ class PennantPayrollViewService:
             own=tuple(sorted(own, key=lambda row: (-row.change, row.player_id))),
             total_count=len(renewed),
             total_change=sum(after[pid].yen - before[pid].yen for pid in renewed),
+            next_total=next_total,
+            next_cap=next_cap,
         )

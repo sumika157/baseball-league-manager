@@ -343,7 +343,7 @@ GM ホーム。上から、自軍の位置 → 進めた結果 → 進める（�
           <div class="stat-label">年俸の上限{% if payroll.cap_estimated %}（見込み）{% endif %}・{% if payroll.overrun.amount %}{{ payroll.overrun.label }} 超過{% else %}残り {{ payroll.room.label }}{% endif %}</div>
         </div>
       </div>
-      <p class="stat-muted mb-0" style="font-size: 0.8125rem;">年俸は1年契約で、シーズンを締めるときに能力と出場から決まる相場へ寄せて更改します（下げ幅は野球協約の減額制限まで）。年俸の合計が経営の人件費です。年俸の合計の上限は前年の収入の {{ payroll.cap_rate_label }} で、超えた分は親会社が補填します（前年の収入が無い年は標準の球団の見込みから）。</p>
+      <p class="stat-muted mb-0" style="font-size: 0.8125rem;">年俸は1年契約で、シーズンを締めるときに能力と出場から決まる相場へ寄せて更改します（下げ幅は野球協約の減額制限まで）。年俸の合計が経営の人件費です。年俸の合計の上限は前年の収入の {{ payroll.cap_rate_label }} で、更改の上げ幅はこの上限に収まるよう抑え、上限を超える外国人は獲得しません（前年の収入が無い年は標準の球団の見込みから。それでも超えた分は親会社が補填します）。</p>
     </div>
   </div>
   {% endwith %}

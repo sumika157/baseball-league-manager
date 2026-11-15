@@ -20,16 +20,21 @@
   （`squad_holes`。+ が弱い）。1人獲得するごとに、その候補の見立てを戦力に入れて穴を数え直す。位置の最低人数
   （`draft.MIN_BY_POSITION`）は会議と同じ硬い制約（`draft.keeps_position_minimum`。残る新人の枠で最低人数に届く間だけ、
   足りている位置を選べる）
-- **ゲームの上限**（#169 Q4。年俸・契約年数が無い間の代わり）: 外国人の保有は `MAX_FOREIGN_HELD` 人まで、
-  シーズン中の獲得は1年 `MAX_MIDSEASON_SIGNINGS` 人まで（`ensure_signable`。AI も通る）
+- **年俸の上限**（#40 K1b）: 獲得した外国人の年俸は、球団の**見立て**から決める（`candidate_salary`。本当の能力を
+  見せない。#394 Q2 の A）。獲得の後の年俸の合計（オフは更改の後の合計＋獲得した外国人＋残る新人の枠の取り置き
+  `salary.rookie_reserve`、期中はその年の合計＋獲得した外国人）が上限（`payroll_cap.py`）を超える候補は獲得しない
+  （AI は選ばず、GM の指名は見立ての低い候補から削る。検査は `payroll_cap.ensure_within_cap`）。上限で取れなかった
+  枠はドラフトの日本人の新人に回る。保有の人数の上限（#169 Q4 の6人）は年俸の上限に置き換えてやめた
+- **ゲームの上限**（#169 Q4）: シーズン中の獲得は1年 `MAX_MIDSEASON_SIGNINGS` 人まで（`ensure_signable`。AI も通る）
 - **合わせ込み**: 候補の能力の平均は `SIGNED_RATING_MEAN + POOL_RATING_SHIFT`（+ 前所属のずらし）。AI は候補の上から
   取るので、**獲得した外国人**の錨の前の平均が今までの外国人の新人と同じ50になるよう、`POOL_RATING_SHIFT` を
   定常状態の実測で決めた（`test_offseason_population.py` が見張る）。戦力外が新しく迎える外国人と比べる見込み
   （`release.foreign_prospect_value`）の出典は `expected_signing_ratings` と `expected_signing_ages`
 
 - **GM の指名**（F2）: 受け持つ球団は、オフの候補から GM が選べる（`ForeignSigningPlan`。None はお任せ＝AI と同じ、
-  空は手動で0人）。指名した候補は AI の選択と差し替え（`offseason_signings(manual=)`）、人数は「補う人数」に縛られず
-  保有の上限まで選べる。締めるときに、新しい支配下の選手の枠・保有の上限・位置の最低人数に収まらない分を、見立ての
+  空は手動で0人）。指名した候補は AI の選択と差し替え（`offseason_signings(manual=)`）、人数は「補う人数」に
+  縛られない。
+  締めるときに、新しい支配下の選手の枠・年俸の上限・位置の最低人数に収まらない分を、見立ての
   低い候補から削る（`confirm_chosen_signings`）。候補の表に出す見込みの区分は `candidate_outlook_grade`
 
 - **シーズン中の獲得**（F3）: 補強の窓（`reinforcement.ReinforcementWindow`。締めた後〜7月31日）の中で、期中の候補
@@ -64,6 +69,7 @@ from ..value_objects import (
     Profile,
 )
 from ..virtual_players import generator
+from .contract import Salary
 from .draft import (
     DraftRoute,
     DraftTeam,
@@ -76,8 +82,10 @@ from .draft_meeting import ScoutingAccuracy, ScoutingReport, scout_noise, scout_
 from .initial_ratings import SEASON_START_MONTH, STRENGTH_UNIT
 from .offseason_player import Ratings
 from .outlook import PEAK_AGE, outlook_grade, projected_ratings
+from .payroll_cap import PayrollCap, ensure_within_cap
 from .prospects import draw_prospect_ratings, expected_prospect_ratings
 from .reinforcement import ReinforcementWindow
+from .salary import foreign_salary, rookie_reserve
 
 # 1回の候補の、位置ごとの人数（計8人。捕手はいない＝外国人の捕手は NPB でもまれ）
 CANDIDATES_BY_POSITION: Mapping[Position, int] = {
@@ -85,8 +93,6 @@ CANDIDATES_BY_POSITION: Mapping[Position, int] = {
     Position.INFIELDER: 2,
     Position.OUTFIELDER: 2,
 }
-# 外国人の保有の上限（ゲームの上限。協約は保有の人数を縛らない。#169 Q4）
-MAX_FOREIGN_HELD = 6
 # シーズン中の獲得の、1球団1年の上限（#169 Q4。GM・AI とも）
 MAX_MIDSEASON_SIGNINGS = 1
 # 獲得した外国人の能力の平均（錨の前）。今までの外国人の新人と同じ（`release.foreign_prospect_value` の出典）
@@ -199,7 +205,10 @@ class ForeignCandidate:
 
 @dataclass(frozen=True)
 class ForeignSigning:
-    """獲得した外国人。支配下で入り、入団の経路は新外国人。能力は錨の前（`offseason.py` が錨をかけて差し替える）。"""
+    """獲得した外国人。支配下で入り、入団の経路は新外国人。能力は錨の前（`offseason.py` が錨をかけて差し替える）。
+
+    `salary` は入団する年の年俸（獲得を決めた時点の見立てから。`candidate_salary`。#40 K1b・#394 Q2 の A）。
+    """
 
     team_id: int
     candidate: ForeignCandidate
@@ -207,6 +216,7 @@ class ForeignSigning:
     name: str
     profile: Profile
     ratings: Ratings
+    salary: Salary
 
     @property
     def position(self) -> Position:
@@ -227,6 +237,8 @@ class OffseasonSignings:
 
     signings: tuple[ForeignSigning, ...]
     teams: tuple[DraftTeam, ...]
+    # 年俸の上限（#40 K1b）で獲得しなかった人数（AI が補いたかった人数・GM の指名のうち、上限に収まらなかった分）
+    cap_trimmed: int = 0
 
     @property
     def signed_positions(self) -> dict[int, tuple[Position, ...]]:
@@ -329,6 +341,24 @@ def scouting_report(
     return scout_with_noise(candidate.ratings, scout_noise(text, candidate.ratings), accuracy=accuracy)
 
 
+def candidate_salary(candidate: ForeignCandidate, *, world_seed: int) -> Salary:
+    """候補を獲得したときの入団する年の年俸。**球団の見立て**（`scouting_report`）から `salary.foreign_salary` で作る
+    （本当の能力から作ると、候補ごとの年俸から能力が逆算できる。検査した額と書く額が一致する。#394 Q2 の A）。
+    同じ見立てなら同じ年俸。"""
+    report = scouting_report(candidate, world_seed=world_seed)
+    return foreign_salary(
+        candidate.position, report.ratings, year=_season_year(candidate.key.year, candidate.key.phase)
+    )
+
+
+def _offseason_fits(team: DraftTeam, spent: int, salary: int, rookies_left: int) -> bool:
+    """オフに年俸 `salary` の候補を足しても上限に収まるか。`spent` はその球団が先に獲得を決めた外国人の年俸の和、
+    `rookies_left` は足した後に残る新人の枠（`salary.rookie_reserve` で取り置く）。上限の無い球団はいつでも収まる。"""
+    if team.payroll_cap is None:
+        return True
+    return team.payroll_cap.fits(team.payroll + spent + salary + rookie_reserve(rookies_left))
+
+
 def _top_mean(values: Sequence[float], size: int) -> float:
     """上位 `size` 個の平均。足りない分は `VACANT_RATING`。"""
     top = sorted(values, reverse=True)[:size]
@@ -389,7 +419,19 @@ def choose_signings(
     reference: Mapping[SquadUnit, float],
     world_seed: int,
 ) -> tuple[ForeignCandidate, ...]:
-    """AI が球団 `team` のために獲得する候補（獲得する順。ふつうは `count` 人）。
+    """AI が球団 `team` のために獲得する候補（獲得する順。ふつうは `count` 人）。規則は `_choose_signings`。"""
+    return _choose_signings(candidates, count, team, reference=reference, world_seed=world_seed)[0]
+
+
+def _choose_signings(
+    candidates: Sequence[ForeignCandidate],
+    count: int,
+    team: DraftTeam,
+    *,
+    reference: Mapping[SquadUnit, float],
+    world_seed: int,
+) -> tuple[tuple[ForeignCandidate, ...], int]:
+    """AI が球団 `team` のために獲得する候補（獲得する順）と、年俸の上限で獲得しなかった人数。
 
     評価は見立ての総合（`scouting_value`）+ `HOLE_WEIGHT` × その位置の穴（`position_hole`。球団の戦力
     `team.squad` を基準 `reference`＝`world_strength` と比べる）。1人選ぶごとに、その候補の見立ての能力を戦力に
@@ -398,16 +440,21 @@ def choose_signings(
     位置の最低人数は硬い制約: 足りない位置はいつでも選べ、ほかの位置は、獲得の後に残る新しい支配下の選手の枠
     （`draft.newcomer_plan` の人数 − 獲得した人数）で最低人数までの不足を埋められる間だけ選べる（会議の指名と同じ
     `draft.keeps_position_minimum`）。選べる候補が尽きたら `count` 人より少なく獲得する（捕手だけが足りないなど）。
+
+    年俸の上限（#40 K1b）: 獲得の後の合計（`_offseason_fits`）が上限に収まる候補だけを選ぶ。位置の制約では選べるのに
+    上限に収まる候補がいなければ、そこで止め、残りの人数を「上限で獲得しなかった人数」として返す。
     """
     if count > len(candidates):
         raise ValueError("候補より多くは獲得できません。")
     reports = {candidate.key: scouting_report(candidate, world_seed=world_seed).ratings for candidate in candidates}
     values = {key: scouting_value(ratings) for key, ratings in reports.items()}
+    salaries = {candidate.key: candidate_salary(candidate, world_seed=world_seed).yen for candidate in candidates}
     slots, _ = newcomer_plan(team)
     counts: Counter[Position] = Counter(team.position_counts)
     squad = list(team.squad)
     remaining = sorted(candidates, key=lambda candidate: candidate.key.index)
     chosen: list[ForeignCandidate] = []
+    spent = 0
     for _ in range(count):
         open_slots = slots - len(chosen) - 1
         allowed = [
@@ -415,6 +462,11 @@ def choose_signings(
         ]
         if not allowed:
             break
+        allowed = [
+            candidate for candidate in allowed if _offseason_fits(team, spent, salaries[candidate.key], open_slots)
+        ]
+        if not allowed:
+            return tuple(chosen), count - len(chosen)
         holes = squad_holes(squad, reference)
         best = max(
             allowed,
@@ -427,21 +479,20 @@ def choose_signings(
         counts[best.position] += 1
         squad.append((best.position, reports[best.key]))
         chosen.append(best)
-    return tuple(chosen)
+        spent += salaries[best.key]
+    return tuple(chosen), 0
 
 
 def ensure_signable(
     chosen: Sequence[CandidateKey],
     candidates: Sequence[ForeignCandidate],
     *,
-    held_foreign: int,
     phase: SigningPhase,
     signed_this_season: int = 0,
 ) -> None:
-    """獲得として成立するか。成立しなければ `InvalidSigning`。
+    """獲得として成立するか。成立しなければ `InvalidSigning`。年俸の上限は別に `payroll_cap.ensure_within_cap`。
 
     - `chosen`: 獲得する候補。候補（`candidates`）の中から、重複なく
-    - `held_foreign`: 獲得の前に球団が保有する外国人の人数（育成も数える）。獲得の後が `MAX_FOREIGN_HELD` 人まで
     - `signed_this_season`: シーズン中の局面で、その年に既に獲得した人数。合わせて `MAX_MIDSEASON_SIGNINGS` 人まで
     """
     if len(set(chosen)) != len(chosen):
@@ -449,10 +500,6 @@ def ensure_signable(
     known = {candidate.key for candidate in candidates}
     if any(key not in known for key in chosen):
         raise InvalidSigning("その選手は候補にいません。")
-    if held_foreign + len(chosen) > MAX_FOREIGN_HELD:
-        raise InvalidSigning(
-            f"外国人選手の保有は{MAX_FOREIGN_HELD}人までです（獲得すると{held_foreign + len(chosen)}人）。"
-        )
     if phase is SigningPhase.MIDSEASON and signed_this_season + len(chosen) > MAX_MIDSEASON_SIGNINGS:
         raise InvalidSigning(f"シーズン中の外国人選手の獲得は1年に{MAX_MIDSEASON_SIGNINGS}人までです。")
 
@@ -475,8 +522,9 @@ class MidseasonForeignClub:
     # 支配下の登録候補（能力のある在籍選手。その判定日に昇格した選手を含む）と、所属リーグの1軍の外国人枠
     pool: ClubRoster
     foreign_rules: ForeignPlayerRules
-    # 在籍する外国人の人数（支配下・育成とも。保有の上限 `MAX_FOREIGN_HELD` で数える）
-    held_foreign: int
+    # その年の年俸の合計（在籍した選手。期中に獲得した外国人も年額）と上限（#40 K1b）
+    payroll: int
+    payroll_cap: PayrollCap
     # その年の支配下の人数（昇格の後）とリーグの上限（None は無制限）
     registered_count: int
     registered_limit: int | None
@@ -520,7 +568,8 @@ def decide_midseason_signings(
     - **受け持つ球団は対象にしない**（GM が「外国人」タブで決める）。補強の窓の外なら誰も獲得しない
     - 獲得するのは次をすべて満たす球団: 自動の1軍で外国人枠に数える選手が枠の計を下回る（`foreign_openings`）・
       支配下が上限未満（期中の昇格が空けておいた1枠＝`development.MIDSEASON_RESERVED_SLOTS` を使う）・
-      保有が `MAX_FOREIGN_HELD` 人未満・その年の期中の獲得が `MAX_MIDSEASON_SIGNINGS` 人未満（`ensure_signable`）
+      その年の期中の獲得が `MAX_MIDSEASON_SIGNINGS` 人未満（`ensure_signable`）・獲得の後の年俸の合計が上限に収まる
+      （年俸は見立てから。`candidate_salary`。収まらない候補は選ばない。#40 K1b）
     - その判定日の獲得の登録（登録日が `on` 以降）がもうある球団は獲得しない（やり直しても2人目を獲得しない）
     - 候補は期中の候補（`draw_candidates`。何回目はその年の獲得の人数）のうち、1軍の枠に空きのある位置だけ。
       評価はオフの AI と同じ「見立ての総合 + `HOLE_WEIGHT` × 位置の穴」。穴の基準は世界の全球団の登録候補の戦力
@@ -542,8 +591,6 @@ def decide_midseason_signings(
             continue
         if club.registered_limit is not None and club.registered_count + 1 > club.registered_limit:
             continue
-        if club.held_foreign >= MAX_FOREIGN_HELD:
-            continue
         openings = foreign_openings(club.pool, club.foreign_rules)
         if not openings:
             continue
@@ -555,7 +602,12 @@ def decide_midseason_signings(
             used_names=names,
             nth=len(this_year),
         )
-        allowed = [candidate for candidate in candidates if candidate.position in openings]
+        allowed = [
+            candidate
+            for candidate in candidates
+            if candidate.position in openings
+            and club.payroll_cap.fits(club.payroll + candidate_salary(candidate, world_seed=world_seed).yen)
+        ]
         if not allowed:
             continue
         holes = squad_holes(squad_of(club.pool), reference)
@@ -567,13 +619,8 @@ def decide_midseason_signings(
                 -candidate.key.index,
             ),
         )
-        ensure_signable(
-            [best.key],
-            candidates,
-            held_foreign=club.held_foreign,
-            phase=SigningPhase.MIDSEASON,
-            signed_this_season=len(this_year),
-        )
+        ensure_signable([best.key], candidates, phase=SigningPhase.MIDSEASON, signed_this_season=len(this_year))
+        ensure_within_cap(club.payroll + candidate_salary(best, world_seed=world_seed).yen, club.payroll_cap)
         chosen.append(best)
     return tuple(chosen)
 
@@ -643,16 +690,6 @@ class ForeignSigningPlan:
         return frozenset(key.index for key in self.keys or ())
 
 
-def held_after_chosen_departures(held: Collection[int], leaving: Collection[int]) -> int:
-    """GM の指名を保存するときに保有の上限（`ensure_signable` の `held_foreign`）で数える外国人の人数。
-
-    いまの外国人（育成を含む。`held`）から、同じ年に GM が手動で戦力外・育成の自由契約に指名した選手（`leaving`）を
-    除く（入れ替えを1回で選べるように）。締めるときは引退・戦力外の後の人数で数え直す（`confirm_chosen_signings`）。
-    """
-    gone = set(leaving)
-    return sum(1 for player_id in held if player_id not in gone)
-
-
 def confirm_chosen_signings(
     candidates: Sequence[ForeignCandidate],
     chosen: Collection[CandidateKey],
@@ -662,11 +699,24 @@ def confirm_chosen_signings(
 ) -> tuple[ForeignCandidate, ...]:
     """GM が指名した候補を、引退・戦力外の後の球団 `team` で確定する（獲得する順）。
 
+    規則は `_confirm_chosen_signings`。"""
+    return _confirm_chosen_signings(candidates, chosen, team, world_seed=world_seed)[0]
+
+
+def _confirm_chosen_signings(
+    candidates: Sequence[ForeignCandidate],
+    chosen: Collection[CandidateKey],
+    team: DraftTeam,
+    *,
+    world_seed: int,
+) -> tuple[tuple[ForeignCandidate, ...], int]:
+    """GM が指名した候補を、引退・戦力外の後の球団 `team` で確定する（獲得する順）と、年俸の上限で削った人数。
+
     GM の判断を優先し、AI の「補う人数」（`foreign_count_to_add`）には縛らない。削るのは収まらない分だけで、
     見立ての総合（`scouting_value`）の高い候補から順に（同じなら添字の小さい方）、次のどれかを破る候補を飛ばす:
 
     - 新しい支配下の選手の枠（`draft.newcomer_plan` の人数。獲得した外国人はこの枠の内側。#169 Q2）
-    - 外国人の保有の上限（`MAX_FOREIGN_HELD`。引退・退団の後の人数 `team.foreign_count` に足して）
+    - 年俸の上限（#40 K1b。更改の後の合計＋先に確定した候補＋この候補＋残る新人の枠の取り置き。`_offseason_fits`）
     - 位置の最低人数（`draft.keeps_position_minimum`。AI の獲得・会議の指名と同じ硬い制約）
 
     指名に無い鍵（候補にいない）は黙って除く。候補の並びには依存しない。
@@ -684,14 +734,21 @@ def confirm_chosen_signings(
     slots, _ = newcomer_plan(team)
     counts: Counter[Position] = Counter(team.position_counts)
     accepted: list[ForeignCandidate] = []
+    spent = 0
+    trimmed = 0
     for candidate in ranked:
-        if len(accepted) >= slots or team.foreign_count + len(accepted) >= MAX_FOREIGN_HELD:
+        if len(accepted) >= slots:
             break
         if not keeps_position_minimum(counts, candidate.position, slots - len(accepted) - 1):
             continue
+        salary = candidate_salary(candidate, world_seed=world_seed).yen
+        if not _offseason_fits(team, spent, salary, slots - len(accepted) - 1):
+            trimmed += 1
+            continue
         counts[candidate.position] += 1
         accepted.append(candidate)
-    return tuple(accepted)
+        spent += salary
+    return tuple(accepted), trimmed
 
 
 def candidate_outlook_grade(candidate: ForeignCandidate, report: ScoutingReport) -> RatingGrade | None:
@@ -730,6 +787,7 @@ def offseason_signings(
     reference = world_strength([team.squad for team in teams])
     signings: list[ForeignSigning] = []
     after: list[DraftTeam] = []
+    cap_trimmed = 0
     for team in sorted(teams, key=lambda item: item.team_id):
         chosen_keys = (manual or {}).get(team.team_id)
         count, _ = newcomer_plan(team)
@@ -740,25 +798,25 @@ def offseason_signings(
         candidates = draw_candidates(
             team.team_id, year=year, phase=SigningPhase.OFFSEASON, world_seed=world_seed, used_names=world_names
         )
-        chosen = (
-            choose_signings(candidates, wanted, team, reference=reference, world_seed=world_seed)
+        chosen, trimmed = (
+            _choose_signings(candidates, wanted, team, reference=reference, world_seed=world_seed)
             if chosen_keys is None
-            else confirm_chosen_signings(candidates, chosen_keys, team, world_seed=world_seed)
+            else _confirm_chosen_signings(candidates, chosen_keys, team, world_seed=world_seed)
         )
+        cap_trimmed += trimmed
         if not chosen:
             after.append(team)
             continue
-        ensure_signable(
-            [candidate.key for candidate in chosen],
-            candidates,
-            held_foreign=team.foreign_count,
-            phase=SigningPhase.OFFSEASON,
-        )
+        ensure_signable([candidate.key for candidate in chosen], candidates, phase=SigningPhase.OFFSEASON)
         signed = _sign(team, chosen, year=year, world_seed=world_seed, used_names=used_names)
+        added = sum(signing.salary.yen for signing in signed)
+        if team.payroll_cap is not None:
+            ensure_within_cap(team.payroll + added + rookie_reserve(count - len(signed)), team.payroll_cap)
         signings.extend(signed)
         after.append(
             replace(
                 team,
+                payroll=team.payroll + added,
                 foreign_count=team.foreign_count + len(signed),
                 used_numbers=team.used_numbers | {signing.number for signing in signed},
                 surname_counts=dict(
@@ -767,7 +825,7 @@ def offseason_signings(
                 ),
             )
         )
-    return OffseasonSignings(signings=tuple(signings), teams=tuple(after))
+    return OffseasonSignings(signings=tuple(signings), teams=tuple(after), cap_trimmed=cap_trimmed)
 
 
 def _sign(
@@ -826,6 +884,7 @@ def _signed(
                     back_name=back_name,
                 ),
                 ratings=candidate.ratings,
+                salary=candidate_salary(candidate, world_seed=world_seed),
             )
         )
     return result

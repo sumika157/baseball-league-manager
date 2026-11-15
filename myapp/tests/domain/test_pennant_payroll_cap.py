@@ -6,8 +6,9 @@
 - 超えた分は「上限を超えた分」（ちょうどは超えていない）
 """
 
-from unittest import TestCase
+from unittest import TestCase, mock
 
+from myapp.domain.pennant import payroll_cap as payroll_cap_module
 from myapp.domain.pennant.contract import MAN
 from myapp.domain.pennant.finance import OKU
 from myapp.domain.pennant.payroll_cap import (
@@ -24,7 +25,10 @@ class PayrollCapTest(TestCase):
         self.assertEqual(cap, PayrollCap(yen=round(125 * PAYROLL_CAP_RATE * 10) * 1_000 * MAN, estimated=False))
         self.assertFalse(cap.estimated)
 
+    @mock.patch.object(payroll_cap_module, "PAYROLL_CAP_RATE", 0.32)
     def test_the_cap_is_rounded_down_to_ten_million_yen(self):
+        """割合の値によらない丸めの規則を、割合 0.32 で確かめる（浮動小数の 0.32 でもちょうどの額が1段下に
+        落ちない）。"""
         # 100億円 × 0.32 ＝ 32億円ちょうど、100億円＋1円 でも 32億円（端数は切り捨て）
         self.assertEqual(payroll_cap(100 * OKU, expected_revenue=0).yen, 32 * OKU)
         self.assertEqual(payroll_cap(100 * OKU + 1, expected_revenue=0).yen, 32 * OKU)
@@ -48,6 +52,8 @@ class PayrollCapTest(TestCase):
         self.assertEqual(payroll_overrun(35 * OKU, cap), 0)
         self.assertEqual(cap.room(35 * OKU), 5 * OKU)
         self.assertEqual(cap.room(41 * OKU), -OKU)
+        self.assertTrue(cap.fits(40 * OKU), "ちょうどは収まる")
+        self.assertFalse(cap.fits(40 * OKU + 1))
 
     def test_negative_values_are_rejected(self):
         with self.assertRaises(ValueError):

@@ -26,6 +26,7 @@ from ..value_objects import (
 from .contract import Salary
 from .fork import ESTIMATED_AGE_AT_START, with_birth_date
 from .initial_ratings import age_at_season_start
+from .payroll_cap import PayrollCap
 from .ratings import PlayerRatings
 from .retirement import PlayingTime
 
@@ -216,6 +217,8 @@ class OffseasonClub:
     # リーグの支配下の上限（NPB は70人）。None は無制限。ドラフトはこれを超えない人数にする
     registered_player_limit: int | None
     players: tuple[OffseasonPlayer, ...]
+    # 翌年（Y + 1）の年俸の総額の上限（#40 K1b。締める年の収入から。`payroll_cap.payroll_cap`）。既定値は持たない
+    payroll_cap: PayrollCap
 
 
 def overall_value(ratings: Ratings) -> float:

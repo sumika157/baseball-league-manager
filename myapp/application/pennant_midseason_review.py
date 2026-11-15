@@ -38,9 +38,9 @@ from ..domain.pennant.foreign_market import (
     sign_midseason,
 )
 from ..domain.pennant.offseason_player import Ratings
+from ..domain.pennant.payroll_cap import PayrollCap
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.reinforcement import MidseasonRegistration, RegistrationKind
-from ..domain.pennant.salary import foreign_salary
 from ..domain.pennant.world import World
 from ..domain.repositories import (
     LeagueRepository,
@@ -55,6 +55,8 @@ from ..domain.value_objects import JerseyNumber, Position
 from .dto import DevelopmentSquad
 from .ids import saved_id
 from .pennant_foreign_rows import surname_counts, used_numbers
+from .pennant_payroll_cap import PayrollCapReader
+from .pennant_salary import SalaryContractReader
 from .pennant_season import AtomicBlock
 from .pennant_simulation import DaySimulator
 from .queries import DevelopmentRosterQuery, PlayerNameQuery, SimulationContextQuery
@@ -87,6 +89,8 @@ class MidseasonReview:
         squads: DevelopmentRosterQuery,
         names: PlayerNameQuery,
         context_query: SimulationContextQuery,
+        salaries: SalaryContractReader,
+        caps: PayrollCapReader,
         atomic: AtomicBlock,
     ) -> None:
         self._leagues = leagues
@@ -99,6 +103,9 @@ class MidseasonReview:
         # 外国人の候補の名前を世界の選手と重ねないための名前の一覧
         self._names = names
         self._context_query = context_query
+        # その年の年俸の合計と上限（#40 K1b。獲得の後の合計が上限に収まる候補だけを獲得する）
+        self._salaries = salaries
+        self._caps = caps
         self._atomic = atomic
 
     def run(
@@ -126,8 +133,20 @@ class MidseasonReview:
             self._clubs(world, squads, prospects, registrations, simulator), on=on, world_seed=world.seed
         )
         names = set(self._names.names())
+        team_ids = [squad.team_id for squad in squads]
+        payrolls = self._salaries.payrolls([year], team_ids, open_year=year)
+        caps = self._caps.caps(year, team_ids, supplement_previous=False)
         chosen = decide_midseason_signings(
-            self._foreign_clubs(world, squads, prospects, registrations, simulator, promotions),
+            self._foreign_clubs(
+                world,
+                squads,
+                prospects,
+                registrations,
+                simulator,
+                promotions,
+                payrolls={team_id: payrolls.get((team_id, year)) or 0 for team_id in team_ids},
+                caps=caps,
+            ),
             on=on,
             world_seed=world.seed,
             used_names=names,
@@ -188,9 +207,8 @@ class MidseasonReview:
             )
             self._salary_contracts.add_all(
                 [
-                    SalaryContract.for_year(
-                        saved_id(player.id), year, foreign_salary(s.position, s.ratings, year=year)
-                    )
+                    # 年俸は獲得を決めた時点の見立てから（上限の検査と同じ額。#40 K1b）
+                    SalaryContract.for_year(saved_id(player.id), year, s.salary)
                     for player, s in signed
                 ]
             )
@@ -249,8 +267,12 @@ class MidseasonReview:
         registrations: Mapping[int, Sequence[MidseasonRegistration]],
         simulator: DaySimulator,
         promotions: Sequence[Promotion],
+        *,
+        payrolls: Mapping[int, int],
+        caps: Mapping[int, PayrollCap],
     ) -> list[MidseasonForeignClub]:
-        """外国人の獲得の材料。**昇格の後の球団**（昇格した選手を登録候補と支配下の人数に入れる）。"""
+        """外国人の獲得の材料。**昇格の後の球団**（昇格した選手を登録候補と支配下の人数に入れる）。
+        `payrolls`・`caps` はその年の球団ごとの年俸の合計と上限（#40 K1b。昇格では年俸は変わらない）。"""
         promoted = {promotion.team_id: promotion.player_id for promotion in promotions}
         clubs = []
         for squad in squads:
@@ -267,7 +289,8 @@ class MidseasonReview:
                     is_managed=squad.team_id == world.managed_team_id,
                     pool=pool,
                     foreign_rules=simulator.foreign_rules(squad.team_id),
-                    held_foreign=squad.foreign_count,
+                    payroll=payrolls[squad.team_id],
+                    payroll_cap=caps[squad.team_id],
                     registered_count=squad.registered_count + (1 if player_id is not None else 0),
                     registered_limit=squad.registered_limit,
                     signed_on=tuple(

@@ -1053,6 +1053,11 @@ class FinanceWiringTest(SimpleTestCase):
             "収支": finance._caps,
             "年俸の参照": build_pennant_payroll_view_service(7)._caps,
             "GM ホーム": build_pennant_home_service(7)._payroll._caps,
+            "締める（外国人タブ）": build_pennant_offseason_service(7)._caps,
+            "締める（入力）": build_pennant_offseason_service(7)._inputs._caps,
+            "会議（入力）": build_pennant_draft_service(7)._inputs._caps,
+            "期中の獲得（GM）": build_foreign_signing_service(7)._caps,
+            "期中の獲得（AI）": build_pennant_season_service(7)._review._caps,
         }
         for name, reader in caps.items():
             with self.subTest(caps=name):
@@ -1104,6 +1109,9 @@ class SalaryWiringTest(SimpleTestCase):
             "GM ホーム": build_pennant_home_service(7)._payroll._salaries,
             "オフの結果": build_offseason_view_service(7)._payroll._salaries,
             "編成の表": build_club_details_service(7)._payroll._salaries,
+            "締める（外国人タブ）": build_pennant_offseason_service(7)._salaries,
+            "期中の獲得（GM）": build_foreign_signing_service(7)._salaries,
+            "期中の獲得（AI）": build_pennant_season_service(7)._review._salaries,
         }
         for name, reader in readers.items():
             with self.subTest(service=name):

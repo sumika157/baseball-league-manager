@@ -1,8 +1,9 @@
 """シーズン中の外国人の獲得（#169 F3）: AI の規則（`decide_midseason_signings`）と、獲得した外国人の作り方
 （`sign_midseason`）。DB 不要。
 
-期待値の根拠: #169 のユーザーの決定 Q3 A・Q4 A（2026-10-25。期中の獲得は1球団1年1人・保有は6人まで・見せるのは
-見立てだけ）と F3 の計画（2026-11-14。判定日に昇格の後で、自動の1軍で外国人枠に空きがあり、支配下が上限未満の
+期待値の根拠: #169 のユーザーの決定 Q3 A・Q4 A（2026-10-25。期中の獲得は1球団1年1人・見せるのは見立てだけ。
+保有の6人の上限は年俸の上限に置き換えてやめた。#40 K1b・#394）と F3 の計画（2026-11-14。判定日に昇格の後で、
+自動の1軍で外国人枠に空きがあり、支配下が上限未満の
 球団が、枠の空いた区分の候補から「見立て + 穴」で1人）。補強の窓は7月31日まで（#207・野球協約）。
 """
 
@@ -13,11 +14,12 @@ from dataclasses import replace
 from datetime import date
 
 from myapp.domain.exceptions import InvalidSigning
+from myapp.domain.pennant.contract import MAN, OKU
 from myapp.domain.pennant.foreign_market import (
-    MAX_FOREIGN_HELD,
     CandidateKey,
     MidseasonForeignClub,
     SigningPhase,
+    candidate_salary,
     decide_midseason_signings,
     draw_candidates,
     ensure_signable,
@@ -25,9 +27,11 @@ from myapp.domain.pennant.foreign_market import (
     midseason_key,
     sign_midseason,
 )
+from myapp.domain.pennant.payroll_cap import PayrollCap
 from myapp.domain.simulation.manager import ClubRoster, SimBatter, SimPitcher
 from myapp.domain.simulation.ratings import BatterRatings, PitcherRatings
 from myapp.domain.value_objects import AcquisitionRoute, ContractStatus, ForeignPlayerRules, Position
+from myapp.tests.domain.payroll_builders import AMPLE_CAP
 
 YEAR = 2027
 JUNE_1 = date(YEAR, 6, 1)
@@ -83,7 +87,8 @@ def club(team_id: int = 1, *, roster: ClubRoster | None = None, **changes) -> Mi
         is_managed=False,
         pool=pool(team_id) if roster is None else roster,
         foreign_rules=ForeignPlayerRules.NPB,
-        held_foreign=0,
+        payroll=0,
+        payroll_cap=AMPLE_CAP,
         registered_count=65,
         registered_limit=LIMIT,
         signed_on=(),
@@ -147,11 +152,26 @@ class DecideMidseasonSigningsTest(unittest.TestCase):
     def test_the_managed_club_is_left_to_the_gm(self):
         self.assertEqual([team_id for team_id, _ in signed([club(1, is_managed=True), club(2)])], [2])
 
-    def test_the_held_limit(self):
-        """外国人の保有（育成を含む）が6人なら獲得しない。5人なら獲得する。"""
-        self.assertEqual(MAX_FOREIGN_HELD, 6)
-        self.assertEqual(signed([club(held_foreign=MAX_FOREIGN_HELD)]), [])
-        self.assertEqual(len(signed([club(held_foreign=MAX_FOREIGN_HELD - 1)])), 1)
+    def test_the_payroll_cap(self):
+        """獲得の後の年俸の合計（見立てからの年俸を足す）が上限を超える候補は獲得しない。ちょうどは獲得する（#394）。"""
+        (candidate,) = decide_midseason_signings([club()], on=JUNE_1, world_seed=SEED, used_names=())
+        salary = candidate_salary(candidate, world_seed=SEED).yen
+        drawn = draw_candidates(1, year=YEAR, phase=SigningPhase.MIDSEASON, world_seed=SEED, used_names=())
+        cheapest = min(candidate_salary(c, world_seed=SEED).yen for c in drawn)
+        exact = club(payroll=40 * OKU - salary, payroll_cap=PayrollCap(40 * OKU, False))
+        self.assertEqual(decide_midseason_signings([exact], on=JUNE_1, world_seed=SEED, used_names=()), (candidate,))
+        none_fits = club(payroll=40 * OKU - cheapest + MAN, payroll_cap=PayrollCap(40 * OKU, False))
+        self.assertEqual(signed([none_fits]), [])
+
+    def test_the_cheaper_candidate_is_taken_when_the_best_does_not_fit(self):
+        """いちばん評価の高い候補が上限を超えるなら、収まる候補の中から選ぶ。"""
+        (best,) = decide_midseason_signings([club()], on=JUNE_1, world_seed=SEED, used_names=())
+        salary = candidate_salary(best, world_seed=SEED).yen
+        tight = club(payroll=40 * OKU - salary + MAN, payroll_cap=PayrollCap(40 * OKU, False))
+        chosen = decide_midseason_signings([tight], on=JUNE_1, world_seed=SEED, used_names=())
+        for candidate in chosen:
+            self.assertNotEqual(candidate.key, best.key)
+            self.assertLessEqual(candidate_salary(candidate, world_seed=SEED).yen, salary - MAN)
 
     def test_the_registered_limit(self):
         """支配下が上限なら獲得しない（期中の昇格が空けておいた1枠を使う）。上限が無ければ制限しない。"""
@@ -192,7 +212,7 @@ class DecideMidseasonSigningsTest(unittest.TestCase):
         (candidate,) = decide_midseason_signings([club()], on=JUNE_1, world_seed=SEED, used_names=())
         drawn = draw_candidates(1, year=YEAR, phase=SigningPhase.MIDSEASON, world_seed=SEED, used_names=())
         self.assertIn(candidate, drawn)
-        ensure_signable([candidate.key], drawn, held_foreign=0, phase=SigningPhase.MIDSEASON)
+        ensure_signable([candidate.key], drawn, phase=SigningPhase.MIDSEASON)
 
 
 class SignMidseasonTest(unittest.TestCase):
@@ -244,6 +264,4 @@ class SignMidseasonTest(unittest.TestCase):
         self.assertEqual(midseason_key(YEAR, 1, 3), CandidateKey(YEAR, SigningPhase.MIDSEASON, 1, 3))
         second = draw_candidates(1, year=YEAR, phase=SigningPhase.MIDSEASON, world_seed=SEED, used_names=(), nth=1)
         with self.assertRaises(InvalidSigning):
-            ensure_signable(
-                [second[0].key], second, held_foreign=0, phase=SigningPhase.MIDSEASON, signed_this_season=1
-            )
+            ensure_signable([second[0].key], second, phase=SigningPhase.MIDSEASON, signed_this_season=1)

@@ -6,10 +6,11 @@
   相場は保存しない
 - 減額の下限（`salary_floor`）: 野球協約 第92条の減額制限と最低年俸。**減額の下限の唯一の出典**
 - AI の更改（`ai_renewal_offer`）: 前の年俸から相場へ一定の割合だけ寄せ、減額の下限で切る。受け持つ球団もいまは
-  同じ規則（GM の提示は #40 K1c）。`room_factor` は K1b で総額の上限の余裕から上下させる口（K1a は 1.0）
+  同じ規則（GM の提示は #40 K1c）。上げ幅は球団ごとの予算（翌年の年俸の上限 − 新人の取り置き。#40 K1b）に収まるよう
+  `payroll_cap.room_factor` で0〜1倍に縮める（`decide_renewals`）
 - 補い（`initial_salary`）: 契約の行の無い選手（世界の作成・この機能より前の世界）の年俸。出場の実績を使わず、能力から
   見込んだ出場で相場を作り、プロでの年数が浅いほど最低年俸に寄せる。**補いの唯一の出典**
-- 新人（`rookie_salary`）と獲得した外国人（`foreign_salary`）の年俸
+- 新人（`rookie_salary`）と獲得した外国人（`foreign_salary`）の年俸。新人の取り置き（`rookie_reserve`）
 - 人件費（`payroll`）: 年俸の合計。球団の収支（`finance.py`）の人件費はこれ
 
 NPB の水準（実測は Wiki「ペナントモードの仕組み」の「年俸（K1a）」の「実測」）: 選手会の 2026年度の年俸調査で、
@@ -28,6 +29,7 @@ from ..value_objects import ContractStatus, DraftPick, Position
 from .contract import MAN, OKU, Salary
 from .draft import Draftee
 from .offseason_player import OffseasonPlayer, retirement_value
+from .payroll_cap import room_factor
 
 # --- 協約・規約の数（円） ---
 # 支配下の最低年俸 420万円（日本プロフェッショナル野球協約 2025 第89条。税別。
@@ -260,20 +262,59 @@ def ai_renewal_offer(
     return max(round_salary(target), salary_floor(previous, contract=contract))
 
 
-def decide_renewals(players: Sequence[OffseasonPlayer], *, year: int) -> tuple[Renewal, ...]:
-    """締める年 `year` に残る選手の契約更改（翌年の年俸）。選手 id の順で、並びによらない。
+def decide_renewals(players: Sequence[OffseasonPlayer], *, year: int, budget: int | None) -> tuple[Renewal, ...]:
+    """締める年 `year` に残る、ひとつの球団の選手の契約更改（翌年の年俸）。選手 id の順で、並びによらない。
 
     `players` は引退・戦力外・育成契約の満了の後に残る選手（昇格した選手は支配下で渡ってくる。`plan_departures` の
     `survivors`）。年俸（`OffseasonPlayer.salary`）の無い選手は更改しない（読み口が必ず補って渡す）。
+
+    `budget` は更改に使える額（翌年の年俸の上限 − 新人の取り置き。#40 K1b）。上げ幅を `payroll_cap.room_factor` で
+    縮め、合計がおおむね予算に収まるようにする（下げは減額制限のとおりで、予算を超えても更改は通す）。None は上限を
+    見ない（倍率1。K1a と同じ）。
     """
-    renewals = []
-    for player in sorted(players, key=lambda item: item.player_id):
-        if player.salary is None:
-            continue
-        facts = market_facts(player, year)
-        offer = ai_renewal_offer(player.salary, market_salary(facts), contract=facts.basis.contract)
-        renewals.append(Renewal(player_id=player.player_id, previous=player.salary, salary=offer))
-    return tuple(renewals)
+    paid = [player for player in sorted(players, key=lambda item: item.player_id) if player.salary is not None]
+    facts = {player.player_id: market_facts(player, year) for player in paid}
+    markets = {player_id: market_salary(item) for player_id, item in facts.items()}
+
+    def offers(factor: float) -> list[Renewal]:
+        result = []
+        for player in paid:
+            assert player.salary is not None
+            offer = ai_renewal_offer(
+                player.salary,
+                markets[player.player_id],
+                contract=facts[player.player_id].basis.contract,
+                room_factor=factor,
+            )
+            result.append(Renewal(player_id=player.player_id, previous=player.salary, salary=offer))
+        return result
+
+    full = offers(1.0)
+    if budget is None:
+        return tuple(full)
+    factor = room_factor(
+        budget=budget,
+        at_zero=payroll(renewal.salary for renewal in offers(0.0)),
+        at_full=payroll(renewal.salary for renewal in full),
+    )
+    return tuple(full if factor == 1.0 else offers(factor))
+
+
+def rookie_reserve(slots: int) -> int:
+    """新人 `slots` 人（本指名の1巡から）の初年度の年俸の和（円）。**新人の取り置きの唯一の出典**（#40 K1b）。
+
+    年俸の上限の検査は会議の前に行うので、会議で指名する新人のぶんを先に取り置く。育成ドラフトの新人は数えない
+    （人数が会議まで決まらず、1人300万円と小さい）。
+    """
+    return sum(rookie_round_salary(number).yen for number in range(1, max(0, slots) + 1))
+
+
+def rookie_round_salary(round_number: int | None) -> Salary:
+    """本指名の巡 `round_number`（1から。分からなければ None）の新人の初年度の年俸（上限 `ROOKIE_SALARY_CAP`）。
+    **巡ごとの新人の年俸の唯一の出典**（`rookie_salary` と `rookie_reserve` が通る）。"""
+    if round_number is None or round_number > len(ROOKIE_SALARIES):
+        return Salary(ROOKIE_LATER_SALARY)
+    return Salary(min(ROOKIE_SALARY_CAP, ROOKIE_SALARIES[round_number - 1]))
 
 
 def rookie_salary(draftee: Draftee) -> Salary:
@@ -281,10 +322,7 @@ def rookie_salary(draftee: Draftee) -> Salary:
     if draftee.is_development:
         return Salary(DEVELOPMENTAL_ROOKIE_SALARY)
     pick = draftee.profile.draft
-    number = None if pick is None else pick.round
-    if number is None or number > len(ROOKIE_SALARIES):
-        return Salary(ROOKIE_LATER_SALARY)
-    return Salary(min(ROOKIE_SALARY_CAP, ROOKIE_SALARIES[number - 1]))
+    return rookie_round_salary(None if pick is None else pick.round)
 
 
 def foreign_salary(position: Position, ratings: BatterRatings | PitcherRatings, *, year: int) -> Salary:

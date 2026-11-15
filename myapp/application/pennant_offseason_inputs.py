@@ -50,6 +50,7 @@ from ..domain.value_objects import ForeignPlayerRules, RosterLimits
 from .ids import saved_id
 from .league_view import LeagueViewService
 from .pennant_awards import derive_awards
+from .pennant_payroll_cap import PayrollCapReader
 from .pennant_postseason import PostseasonBracketReader
 from .pennant_race import LeagueFinishReader
 from .pennant_salary import SalaryContractReader, fill_salaries
@@ -209,6 +210,7 @@ class OffseasonInputsReader:
         playing_time: SeasonPlayingTimeQuery,
         finishes: LeagueFinishReader,
         salaries: SalaryContractReader,
+        caps: PayrollCapReader,
     ) -> None:
         self._teams = teams
         self._leagues = leagues
@@ -224,6 +226,8 @@ class OffseasonInputsReader:
         self._finishes = finishes
         # 締める年の年俸（契約更改の前の年俸。行の無い選手は補う。#40 K1a）
         self._salaries = salaries
+        # 翌年の年俸の上限（#40 K1b。締める年の収入から。締める年の人気の行の無い球団は締める処理と同じく補う）
+        self._caps = caps
 
     def read(self, world: World, year: int) -> OffseasonInputs:
         """締める年 `year` の入力を読む（8リーグで数秒。トランザクションの外で呼ぶ）。"""
@@ -239,6 +243,8 @@ class OffseasonInputsReader:
         titles = title_counts(awards) + Counter(self._awards.count_by_player())
         # 公式戦の最終順位は1回だけ読み、ドラフトの指名順と人気の材料（#208 E1）の両方に使う
         finishes = tuple(self._finishes.finishes(year))
+        # 翌年の年俸の上限（#40 K1b）。締める年の収入はポストシーズンの後に確定し、会議を始めた後は動かない
+        caps = self._caps.caps(year + 1, [saved_id(team.id) for team in teams], supplement_previous=True)
         clubs = tuple(
             OffseasonClub(
                 team_id=saved_id(team.id),
@@ -248,6 +254,7 @@ class OffseasonInputsReader:
                     _offseason_player(team, player, ratings_by_player, playing, titles, year=year)
                     for player in team.active_players
                 ),
+                payroll_cap=caps[saved_id(team.id)],
             )
             for team in teams
         )
