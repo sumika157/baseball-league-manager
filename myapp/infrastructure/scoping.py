@@ -31,7 +31,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from enum import Enum
 
-from django.db.models import Exists, FilteredRelation, Model, OuterRef, Q, QuerySet
+from django.db.models import FilteredRelation, Model, OuterRef, Q, QuerySet
 
 from ..domain.pennant.world import WorldScope
 from ..domain.value_objects import GameStage
@@ -202,25 +202,25 @@ def declarations_in(scope: WorldScope) -> QuerySet[orm_models.PlayerFreeAgentDec
     """範囲の選手の FA 宣言。宣言は選手の行に付くので、`players_in` と同じく範囲の在籍がある選手で絞る。
 
     呼ぶ側が渡す選手の id だけで絞ると、ほかのワークスペース・世界の選手の id を渡されたときに宣言が漏れる。
-    条件は宣言の行ごとの相関した `Exists`（同じ1本の中）。`player_id__in=players_in(scope)` の形にすると、
-    相関しない副問い合わせが全ワークスペースの選手を走査する（チームの読み込みのたびに）。
+    能力と同じく範囲の選手（`players_in`）の id で絞る。宣言の行ごとに在籍を見る相関した `Exists` にすると、
+    宣言の表（全ワークスペースの全世界・全シーズンぶん）を全部走査する（#74 仕上げ T2b）。
     """
-    in_scope = orm_models.PlayerStint.objects.filter(player_id=OuterRef("player_id")).filter(
-        world_condition("team__league", scope)
-    )
-    return orm_models.PlayerFreeAgentDeclaration.objects.filter(Exists(in_scope))
+    return orm_models.PlayerFreeAgentDeclaration.objects.filter(player_id__in=players_in(scope).values("id"))
 
 
 def players_in(scope: WorldScope) -> QuerySet[orm_models.Player]:
-    """範囲に属する選手。範囲のリーグの球団に在籍の行がある選手（肯定形の `Exists`）。
+    """範囲に属する選手。範囲のリーグの球団に在籍の行がある選手。
 
     実データもペナントも同じ形。在籍の無い選手はどの範囲にも出ない（管理画面だけが
     `admin_real_queryset` で拾う）。複製した選手と元の選手は同じ名前なので、名前ではなく在籍で引く。
+
+    **範囲のリーグ → 球団 → 在籍 → 選手の向きに引く**（`id IN (範囲の在籍の選手 id)`。相関しない副問い合わせ）。
+    リーグ（`workspace_id`・`world_id`）・球団（`league_id`）・在籍（`team_id`）の索引でたどり、選手は主キーで引く。
+    選手の行ごとに在籍を見る相関した `Exists` の形にすると、SQLite は**選手の表を全部走査する**（範囲が小さくても、
+    DB 全体の選手の数＝ワークスペースの数に比例して遅くなる。#74 仕上げ T2b）。
+    `tests/integration/test_player_scope_plan.py` が、この絞り込みの計画に選手の表の走査が無いことを固定する。
     """
-    in_scope = orm_models.PlayerStint.objects.filter(player_id=OuterRef("pk")).filter(
-        world_condition("team__league", scope)
-    )
-    return orm_models.Player.objects.filter(Exists(in_scope))
+    return orm_models.Player.objects.filter(pk__in=stints_in(scope).values("player_id"))
 
 
 def club_plans_in(scope: WorldScope) -> QuerySet[orm_models.PennantClubPlan]:
@@ -332,8 +332,11 @@ def admin_real_queryset[M: Model](model: type[M]) -> QuerySet[M] | None:
       選択肢をワークスペースで絞るときは `stadiums_in` を使う）。
     """
     if model is orm_models.Player:
-        in_pennant = orm_models.PlayerStint.objects.filter(player_id=OuterRef("pk"), team__league__world__isnull=False)
-        return model._default_manager.filter(~Exists(in_pennant))
+        # 否定形の相関した `Exists` にすると、選手の行ごとに在籍 → 球団 → リーグを引く（選手の数 × 結合）。
+        # ペナントの在籍の選手 id を1回だけ集めて除く（`NOT IN`。在籍の `player_id` は NOT NULL で、NULL の罠は無い）。
+        # 全ワークスペースの実データの選手を数える・並べるので、選手の表を読むこと自体は意味のうち（T2b）
+        in_pennant = orm_models.PlayerStint.objects.filter(team__league__world__isnull=False).values("player_id")
+        return model._default_manager.exclude(pk__in=in_pennant)
     path = _ADMIN_REAL_ROUTES.get(model)
     if path is None:
         return None
