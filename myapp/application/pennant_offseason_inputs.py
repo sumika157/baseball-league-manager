@@ -15,12 +15,13 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 
 from ..domain.entities import Player, Team
 from ..domain.exceptions import AlreadyClosed, PostseasonNotFinished, SeasonLimitReached, TeamNotFound
 from ..domain.pennant.awards import Award, title_counts
+from ..domain.pennant.contract import SalaryContract
 from ..domain.pennant.development import DevelopmentDecision, DevelopmentPlan
 from ..domain.pennant.draft_meeting import DraftContext
 from ..domain.pennant.draft_order import DraftOrderRule, DraftOrderStrategy, DraftStandings, strategy_for
@@ -31,6 +32,7 @@ from ..domain.pennant.postseason import LeagueFinish, PostseasonFormat, Postseas
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.release import ReleasePlan
 from ..domain.pennant.retirement import PlayingTime
+from ..domain.pennant.salary import basis_of
 from ..domain.pennant.season import is_final_season, is_season_closed, regular_season_over_year
 from ..domain.pennant.world import World, league_priority
 from ..domain.repositories import (
@@ -50,6 +52,7 @@ from .league_view import LeagueViewService
 from .pennant_awards import derive_awards
 from .pennant_postseason import PostseasonBracketReader
 from .pennant_race import LeagueFinishReader
+from .pennant_salary import SalaryContractReader, fill_salaries
 from .queries import SeasonPlayingTimeQuery, SimulationContextQuery
 
 # 締める処理と会議を始める処理が、外で読んだときと中で書く前とで比べる状態の目印（`OffseasonPhase.state`）
@@ -172,6 +175,8 @@ class OffseasonInputs:
     - `draft`: ドラフト会議の設定（世界の規則・締める年の公式戦の最終順位・受け持つ球団）
     - `awards`: 締める年のタイトル受賞者（締める処理が表彰として書く。実績の加点にも使った）
     - `finishes`: 締める年の公式戦のリーグごとの最終順位（ドラフトの指名順と、人気の材料の勝率・リーグ優勝。#208 E1）
+    - `unrecorded_salaries`: 締める年の契約の行が無く補った選手の契約（#40 K1a。締める処理が翌年の能力より先に書く）。
+      選手（`clubs` の `OffseasonPlayer.salary`）には補った値を含む締める年の年俸が入っている
     """
 
     teams: list[Team]
@@ -184,6 +189,7 @@ class OffseasonInputs:
     draft: DraftContext
     awards: list[Award]
     finishes: tuple[LeagueFinish, ...]
+    unrecorded_salaries: tuple[SalaryContract, ...] = ()
 
 
 class OffseasonInputsReader:
@@ -202,6 +208,7 @@ class OffseasonInputsReader:
         titles: LeagueViewService,
         playing_time: SeasonPlayingTimeQuery,
         finishes: LeagueFinishReader,
+        salaries: SalaryContractReader,
     ) -> None:
         self._teams = teams
         self._leagues = leagues
@@ -215,6 +222,8 @@ class OffseasonInputsReader:
         self._playing_time = playing_time
         # 締める年の公式戦の最終順位（ドラフトの指名順の「球団順位」）
         self._finishes = finishes
+        # 締める年の年俸（契約更改の前の年俸。行の無い選手は補う。#40 K1a）
+        self._salaries = salaries
 
     def read(self, world: World, year: int) -> OffseasonInputs:
         """締める年 `year` の入力を読む（8リーグで数秒。トランザクションの外で呼ぶ）。"""
@@ -242,6 +251,7 @@ class OffseasonInputsReader:
             )
             for team in teams
         )
+        clubs, unrecorded = self._with_salaries(clubs, year)
         return OffseasonInputs(
             teams=teams,
             limits=limits,
@@ -257,6 +267,29 @@ class OffseasonInputsReader:
             ),
             awards=awards,
             finishes=finishes,
+            unrecorded_salaries=unrecorded,
+        )
+
+    def _with_salaries(
+        self, clubs: tuple[OffseasonClub, ...], year: int
+    ) -> tuple[tuple[OffseasonClub, ...], tuple[SalaryContract, ...]]:
+        """選手に締める年の年俸を添える（行の無い選手は `fill_salaries` で補う）。補った選手の契約も返す
+        （締める処理が、翌年の能力より先に締める年の値として書く）。"""
+        recorded = self._salaries.recorded(year)
+        filled = fill_salaries(
+            recorded, {player.player_id: basis_of(player, year) for club in clubs for player in club.players}
+        )
+        unrecorded = tuple(
+            SalaryContract.for_year(player_id, year, salary)
+            for player_id, salary in sorted(filled.items())
+            if player_id not in recorded
+        )
+        return (
+            tuple(
+                replace(club, players=tuple(replace(p, salary=filled[p.player_id]) for p in club.players))
+                for club in clubs
+            ),
+            unrecorded,
         )
 
     def strategy(self, world: World, year: int) -> DraftOrderStrategy:

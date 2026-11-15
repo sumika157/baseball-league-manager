@@ -1240,6 +1240,35 @@ class PennantTicketPrice(models.Model):
         return f"{self.year}年 {self.team_id} {self.price}"
 
 
+class PennantSalaryContract(models.Model):
+    """ペナントの選手の年俸の契約（選手 × 期間。#40 K1a）。決めた事実で、相場・総額・減額の下限は保存せず導く。
+
+    書くのは世界の作成（開幕年）・シーズンを締める処理（翌年と、行の無い選手の締める年の補った値）・期中の外国人の
+    獲得（その年）だけ。同じ選手の期間は重ならない（検査はリポジトリ。domain の `contract.ensure_no_overlap`）。
+    球団は持たない（在籍から引く）。選手経由で世界に属す。年俸は円（万円刻み）。管理画面には出さない。
+    """
+
+    player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="+", verbose_name="選手")
+    first_year = models.PositiveSmallIntegerField(verbose_name="最初の年")
+    last_year = models.PositiveSmallIntegerField(verbose_name="最後の年")
+    salary = models.PositiveBigIntegerField(verbose_name="年俸（円）")
+
+    class Meta:
+        verbose_name = "ペナントの年俸の契約"
+        verbose_name_plural = "ペナントの年俸の契約"
+        ordering = ["player_id", "first_year"]
+        constraints = [
+            models.UniqueConstraint(fields=["player", "first_year"], name="unique_pennant_salary_contract"),
+            models.CheckConstraint(
+                condition=models.Q(first_year__lte=models.F("last_year")),
+                name="pennant_salary_contract_period",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.player_id} {self.first_year}〜{self.last_year}年 {self.salary}円"
+
+
 class PennantDraft(models.Model):
     """ペナントのドラフト会議の記録（世界 × 年。#297 D3）。会議は締める前の入力で、締めた時点で消す。
 

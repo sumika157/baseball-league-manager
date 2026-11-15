@@ -6,8 +6,8 @@
 - AI（お任せ）は人気で決める: 80以上で高い・65以上でやや高い・20以下で安い・35以下でやや安い・それ以外は標準
 - 手動の値段があればそれ、無ければ AI の規則
 - 変えられるのはその年の開幕前だけ（その年の試合が1つも無い）
-- 収支は円で NPB の水準: 入場料＝観客動員 × 単価、ポストシーズンは単価の1.5倍、仮の人件費は支配下 4,000万円・
-  育成 500万円、赤字は親会社が補填（補填後は0）、平均的な球団で補填前の収支がおおむね0
+- 収支は円で NPB の水準: 入場料＝観客動員 × 単価、ポストシーズンは単価の1.5倍、人件費は年俸の合計（#40 K1a）、
+  赤字は親会社が補填（補填後は0）、平均的な球団で補填前の収支がおおむね0
 - 人気への値段の効きは世界の平均を引かない（全球団が上げれば全球団の人気が下がる）
 """
 
@@ -17,16 +17,12 @@ from unittest import TestCase
 
 from myapp.domain.exceptions import InvalidSeason
 from myapp.domain.pennant.finance import (
-    DEVELOPMENTAL_PAYROLL,
     OKU,
     POSTSEASON_PRICE_FACTOR,
-    REGISTERED_PAYROLL,
     FinanceInputs,
-    RosterSize,
     club_finance,
     money_label,
     parent_subsidy,
-    provisional_payroll,
     season_share,
 )
 from myapp.domain.pennant.popularity import (
@@ -48,11 +44,11 @@ from myapp.domain.pennant.ticket_price import (
 YEAR = 2026
 SEED = 20261114
 # 平均的な球団の1年（8リーグの世界の1年目の実測。標準の収容人数3万人の球団のホームの観客動員 約179万人、
-# ポストシーズンの入場料 平均 3.5億円 ≒ 5.8万人、支配下65人・育成20人。
+# ポストシーズンの入場料 平均 3.5億円 ≒ 5.8万人。人件費（年俸の合計）は #40 K1a の8シーズンの5〜8年目の平均。
 # Wiki「ペナントモードの仕組み」の「実測値」の「人気と収支」）
 AVERAGE_ATTENDANCE = 1_790_000
 AVERAGE_POSTSEASON = 58_000
-AVERAGE_ROSTER = RosterSize(registered=65, developmental=20)
+AVERAGE_PAYROLL = 36 * OKU
 
 
 def _inputs(**overrides) -> FinanceInputs:
@@ -61,7 +57,7 @@ def _inputs(**overrides) -> FinanceInputs:
         postseason_attendance=AVERAGE_POSTSEASON,
         ticket_price=TicketPrice.STANDARD,
         popularity=Popularity(50),
-        roster=AVERAGE_ROSTER,
+        payroll=AVERAGE_PAYROLL,
         capacity=None,
     )
     return replace(average, **overrides)
@@ -168,12 +164,10 @@ class FinanceTest(TestCase):
             self.assertGreater(finance.broadcasting, 0)
             self.assertGreater(finance.sponsorship, 0)
 
-    def test_the_provisional_payroll_has_two_contract_classes(self):
-        """2026-11-14 ユーザー決定: 支配下 4,000万円・育成 500万円（外国人も支配下の定額）。"""
-        self.assertEqual(REGISTERED_PAYROLL, 40_000_000)
-        self.assertEqual(DEVELOPMENTAL_PAYROLL, 5_000_000)
-        self.assertEqual(provisional_payroll(RosterSize(registered=2, developmental=3)), 95_000_000)
-        self.assertEqual(club_finance(_inputs()).payroll, provisional_payroll(AVERAGE_ROSTER))
+    def test_the_payroll_is_the_given_salary_total(self):
+        """人件費は年俸の合計（`salary.payroll`。#40 K1a）をそのまま使う。"""
+        self.assertEqual(club_finance(_inputs()).payroll, AVERAGE_PAYROLL)
+        self.assertEqual(club_finance(_inputs(payroll=0)).payroll, 0)
 
     def test_a_bigger_stadium_costs_more_to_run(self):
         small = club_finance(_inputs(capacity=20_000))
@@ -224,7 +218,7 @@ class FinanceTest(TestCase):
         with self.assertRaises(ValueError):
             _inputs(season_share=1.5)
         with self.assertRaises(ValueError):
-            RosterSize(registered=-1, developmental=0)
+            _inputs(payroll=-1)
 
     def test_money_is_shown_in_oku_yen(self):
         self.assertEqual(money_label(7_034_000_000), "70.3億円")

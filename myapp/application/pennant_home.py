@@ -57,6 +57,7 @@ from .pennant_championships import PostseasonHistoryReader, YearChampion
 from .pennant_finance import ClubFinanceService
 from .pennant_popularity import PopularityReader, change_label
 from .pennant_race import final_standings, own_race, remaining_by_team, team_order, tiebreak_for
+from .pennant_salary import PennantPayrollViewService
 from .queries import AttendanceQuery, GameListQuery, PennantActivityQuery
 from .scorebook_view import build_line_score
 from .standings import record_label
@@ -119,6 +120,7 @@ class PennantHomeService:
         popularities: PopularityReader,
         attendance: AttendanceQuery,
         finance: ClubFinanceService,
+        payroll: PennantPayrollViewService,
     ) -> None:
         self._league_view = league_view
         # 主力打者・投手陣（自軍の選手の一覧）
@@ -138,6 +140,8 @@ class PennantHomeService:
         self._attendance = attendance
         # 自軍のいまの年度のチケットの値段と収支（#208 E2）
         self._finance = finance
+        # 自軍のいまの年度の年俸のカード（#40 K1a）
+        self._payroll = payroll
 
     def get_home(
         self,
@@ -184,6 +188,7 @@ class PennantHomeService:
             finale=self._finale(world, postseason),
             popularity=self._popularity(world, team_leagues),
             finance=self._finance_row(world, team_leagues),
+            payroll=self._payroll.summary(world),
         )
 
     def _finance_row(self, world: WorldContext, team_leagues: dict[int, tuple[int, str]]) -> ClubFinanceRow | None:

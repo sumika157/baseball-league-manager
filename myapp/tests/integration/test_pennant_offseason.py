@@ -18,7 +18,6 @@ from django.db.models import Count
 from myapp.application.dto import SeasonClosed
 from myapp.domain.exceptions import (
     AlreadyClosed,
-    InvalidRatings,
     InvalidSchedule,
     SeasonLimitReached,
     SeasonNotFinished,
@@ -441,8 +440,10 @@ class DoubleCloseTest(ClosedSeasonCase):
         self.assertEqual(self.counts(), before)
 
     def test_a_second_close_that_slips_past_the_checks_leaves_nothing(self):
-        """検査と翌年の能力の確認をすり抜けた2回目も、能力の保存（`add_all` の検査）で落ちて、
-        在籍・新人・能力・編成が何も残らない。
+        """検査と翌年の能力の確認をすり抜けた2回目も、書き込みの検査で落ちて、在籍・新人・能力・編成・年俸が何も残らない。
+
+        #40 K1a から、能力より先に書く「締める年の年俸の補った値」（翌年に入った新人の分）が、締めた年の契約を拒む検査
+        （`AlreadyClosed`）で先に止まる（能力の保存の検査 `InvalidRatings` まで届かない）。
 
         `add_all` の検査もすり抜けたときの最後の砦は DB の一意制約（`IntegrityError`）で、
         同じトランザクションごと巻き戻る。
@@ -466,7 +467,7 @@ class DoubleCloseTest(ClosedSeasonCase):
             mock.patch(DECIDE_RETIREMENTS, return_value=(players[0],)),
             # 戦力外も外さない（翌年に入った新人の外国人を、締めた年で閉じようとして別の検査で落ちるため）
             mock.patch(DECIDE_RELEASES, return_value=()),
-            self.assertRaises(InvalidRatings),
+            self.assertRaises(AlreadyClosed),
         ):
             service.close_season()
 

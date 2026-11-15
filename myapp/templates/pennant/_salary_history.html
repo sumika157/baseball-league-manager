@@ -1,0 +1,29 @@
+{% comment %}
+選手ページの「年俸の推移」（ペナントの世界の選手だけ。#40 K1a）。salary_history は SalaryHistoryRow の並び（古い順）。
+契約の行が無い前の年は「—」、いまの年度で行が無ければ補った値に「（見込み）」を付ける。読むだけで、書き込みの導線は無い。
+{% endcomment %}
+<div class="card mb-3" id="salary-history">
+  <div class="card-header">年俸の推移</div>
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover mb-0 tabular-nums">
+        <thead>
+          <tr>
+            <th>年度</th>
+            <th>球団</th>
+            <th class="text-end">年俸</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in salary_history %}
+            <tr>
+              <td>{{ row.year }}年</td>
+              <td>{{ row.team_name }}</td>
+              <td class="text-end">{% if row.salary %}{{ row.label }}{% if row.supplemented %}<span class="stat-muted">（見込み）</span>{% endif %}{% else %}<span class="stat-muted">—</span>{% endif %}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>

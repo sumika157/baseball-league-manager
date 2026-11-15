@@ -134,6 +134,11 @@ class InvalidPopularity(DomainError):
     """球団の人気として成り立たない値・保存できない内容（範囲の外の値・同じ球団 × 年の重複・範囲の外の球団）。"""
 
 
+class InvalidSalaryContract(DomainError):
+    """年俸の契約として成り立たない値・保存できない内容（万円刻みでない額・期間の逆転・同じ選手の期間の重なり・
+    範囲の外の選手）。#40 K1a。契約区分の例外 `InvalidContract` とは別。"""
+
+
 class InvalidTicketPrice(DomainError):
     """チケットの値段として保存できない内容（段階に無い値・範囲の外の球団・受け持つ球団が無い世界）。#208 E2。"""
 

@@ -39,6 +39,7 @@ from ..application.dto import (
     PlayerRatingsHistory,
     RatingsTable,
     ReleasePlanView,
+    SalaryHistoryRow,
     TeamMonthlyRow,
     WorldContext,
 )
@@ -63,6 +64,7 @@ from ..application.pennant_postseason import PennantPostseasonService, Postseaso
 from ..application.pennant_postseason_view import PennantPostseasonViewService
 from ..application.pennant_race import LeagueFinishReader
 from ..application.pennant_ratings import PennantRatingsViewService
+from ..application.pennant_salary import PennantPayrollViewService, SalaryContractReader
 from ..application.pennant_season import PennantSeasonService
 from ..application.pennant_settings import PennantSettingsService
 from ..application.pennant_ticket_price import TicketPriceReader
@@ -121,6 +123,7 @@ from ..infrastructure.queries import (
     DjangoGameListQuery,
     DjangoHomeStadiumQuery,
     DjangoOffseasonQuery,
+    DjangoPayrollQuery,
     DjangoPennantActivityQuery,
     DjangoPlayerFieldingQuery,
     DjangoPlayerNameQuery,
@@ -152,6 +155,7 @@ from ..infrastructure.repositories import (
     DjangoPopularityRepository,
     DjangoRatingsRepository,
     DjangoReleasePlanRepository,
+    DjangoSalaryContractRepository,
     DjangoTeamRepository,
     DjangoTicketPriceRepository,
     DjangoWorldRepository,
@@ -495,6 +499,7 @@ def _repositories_for(scope: WorldScope) -> WorldRepositories:
         teams=DjangoTeamRepository(scope),
         ratings=DjangoRatingsRepository(scope),
         popularities=DjangoPopularityRepository(scope),
+        salary_contracts=DjangoSalaryContractRepository(scope),
     )
 
 
@@ -540,6 +545,7 @@ def build_pennant_season_service(world_id: int) -> PennantSeasonService:
             leagues=DjangoLeagueRepository(scope),
             teams=DjangoTeamRepository(scope),
             ratings=DjangoRatingsRepository(scope),
+            salary_contracts=DjangoSalaryContractRepository(scope),
             registrations=DjangoMidseasonRegistrationRepository(scope),
             squads=DjangoDevelopmentRosterQuery(scope),
             names=DjangoPlayerNameQuery(scope),
@@ -578,6 +584,7 @@ def build_pennant_offseason_service(world_id: int) -> PennantOffseasonService:
         championships=DjangoChampionshipRepository(parts.scope),
         popularities=DjangoPopularityRepository(parts.scope),
         ticket_prices=_ticket_price_reader(parts.scope),
+        salary_contracts=parts.salary_contracts,
         drafts=parts.drafts,
         lotteries=DjangoDraftLotteryRepository(parts.scope),
         titles=parts.titles,
@@ -630,6 +637,7 @@ class _OffseasonParts:
         self.foreign_signings = DjangoForeignSigningPlanRepository(self.scope)
         self.awards = DjangoAwardRepository(self.scope)
         self.drafts = DjangoDraftRepository(self.scope)
+        self.salary_contracts = DjangoSalaryContractRepository(self.scope)
         self.context_query = DjangoSimulationContextQuery(self.scope)
         self.titles = build_world_league_view_service(world_id)
         self.finishes = _league_finishes(world_id)
@@ -661,6 +669,7 @@ class _OffseasonParts:
             titles=self.titles,
             playing_time=DjangoSeasonPlayingTimeQuery(self.scope),
             finishes=self.finishes,
+            salaries=_salary_reader(self.scope, contracts=self.salary_contracts, ratings=self.ratings),
         )
 
 
@@ -758,6 +767,7 @@ def build_offseason_view_service(world_id: int) -> OffseasonViewService:
         popularities=_popularity_reader(scope),
         attendance=DjangoAttendanceQuery(scope),
         finance=build_club_finance_service(world_id),
+        payroll=build_pennant_payroll_view_service(world_id),
     )
 
 
@@ -783,7 +793,33 @@ def build_club_finance_service(world_id: int) -> ClubFinanceService:
         attendance=DjangoAttendanceQuery(scope),
         facts=DjangoClubFinanceQuery(scope),
         games=DjangoGameListQuery(scope),
+        salaries=_salary_reader(scope),
     )
+
+
+def _salary_reader(
+    scope: WorldScope,
+    *,
+    contracts: DjangoSalaryContractRepository | None = None,
+    ratings: DjangoRatingsRepository | None = None,
+) -> SalaryContractReader:
+    """年俸の読み口（締める処理・収支・年俸の参照が使う。#40 K1a）。世界の範囲で作る。
+
+    締める処理は、自分が書くのと同じリポジトリの実体（`contracts`・`ratings`）を渡す（省くとここで作る）。
+    """
+    return SalaryContractReader(
+        contracts=contracts if contracts is not None else DjangoSalaryContractRepository(scope),
+        payroll=DjangoPayrollQuery(scope),
+        ratings=ratings if ratings is not None else DjangoRatingsRepository(scope),
+    )
+
+
+def build_pennant_payroll_view_service(world_id: int) -> PennantPayrollViewService:
+    """年俸の参照（GM ホームのカード・選手ページの推移・オフの結果の契約更改・編成の表の列。#40 K1a）を組み立てる。
+
+    依存は全部、世界の範囲で作る。世界の id が正しくなければ InvalidWorld。
+    """
+    return PennantPayrollViewService(salaries=_salary_reader(WorldScope.pennant(world_id)))
 
 
 def build_ticket_price_service(world_id: int) -> TicketPriceService:
@@ -825,6 +861,7 @@ def build_pennant_home_service(world_id: int) -> PennantHomeService:
         popularities=_popularity_reader(scope),
         attendance=DjangoAttendanceQuery(scope),
         finance=build_club_finance_service(world_id),
+        payroll=build_pennant_payroll_view_service(world_id),
     )
 
 
@@ -1200,7 +1237,7 @@ def pennant_close_season(request, world_id):
         f"（引退 {result.retired_count}人・戦力外 {result.released_count}人・"
         f"支配下登録（昇格） {result.promoted_count}人・育成の自由契約 {result.expired_count}人・"
         f"新外国人 {result.signed_foreign_count}人・新人 {result.draftee_count}人"
-        f"（うち育成 {result.development_draftee_count}人））。",
+        f"（うち育成 {result.development_draftee_count}人）・契約更改 {result.renewal_count}人）。",
     )
     if result.reverted_sections:
         labels = "・".join(section.value for section in result.reverted_sections)
@@ -1584,6 +1621,7 @@ def build_club_details_service(world_id: int) -> ClubDetailsService:
         stats=DjangoPlayerStatsQuery(scope),
         ratings=DjangoRatingsRepository(scope),
         tenures=DjangoClubTenureQuery(scope),
+        payroll=build_pennant_payroll_view_service(world_id),
         today=_world_clock(world_id, DjangoSimulationContextQuery(scope)),
     )
 
@@ -1623,6 +1661,7 @@ def build_foreign_signing_service(world_id: int) -> ForeignSigningService:
         teams=DjangoTeamRepository(scope),
         fixtures=DjangoFixtureRepository(scope),
         ratings=DjangoRatingsRepository(scope),
+        salary_contracts=DjangoSalaryContractRepository(scope),
         registrations=DjangoMidseasonRegistrationRepository(scope),
         context_query=DjangoSimulationContextQuery(scope),
         development_roster=DjangoDevelopmentRosterQuery(scope),
@@ -2643,6 +2682,13 @@ def _ratings_history(world: WorldContext | None, player_id: int) -> PlayerRating
     return build_pennant_ratings_service(world.world_id).get_history(player_id)
 
 
+def _salary_history(world: WorldContext | None, player_id: int) -> tuple[SalaryHistoryRow, ...]:
+    """選手ページの年俸の推移（#40 K1a）。年俸はペナントの世界の選手だけで、実データの選手には出さない。"""
+    if world is None:
+        return ()
+    return build_pennant_payroll_view_service(world.world_id).history(world, player_id)
+
+
 def _player_awards(world: WorldContext | None, team_id: int, player_id: int, played_years: set[int]) -> list[AwardRow]:
     """選手ページの「獲得タイトル」。表彰はペナントの世界だけで、実データの選手には出さない（実データは保存しない）。"""
     if world is None:
@@ -2672,6 +2718,7 @@ def player_detail(request, team_id, player_id, world_id=None):
             "player": profile.detail,
             "ratings_card": _ratings_card(world, player_id),
             "ratings_history": _ratings_history(world, player_id),
+            "salary_history": _salary_history(world, player_id),
             "awards": _player_awards(world, team_id, player_id, {row.year for row in profile.years or []}),
             "can_edit_team": world is None and build_permission_query().can_manage(request.user, team_id),
         },

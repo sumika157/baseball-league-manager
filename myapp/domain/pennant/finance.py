@@ -1,19 +1,19 @@
 """ペナントの球団の年の収支（#208 E2）。**純粋な値と規則**で、DB にも Django にも触れない。
 
 収支は**保存せず導く**（2026-11-14 ユーザー決定。#208）。材料（`FinanceInputs`）はその年のホーム試合の観客動員
-（公式戦とポストシーズン）・チケットの値段・人気・契約区分ごとの人数・本拠地の収容人数で、どれも試合・在籍・
+（公式戦とポストシーズン）・チケットの値段・人気・年俸の合計・本拠地の収容人数で、どれも試合・在籍・契約・
 年ごとの状態から読める。資金の繰越は持たない（翌年の予算は前年1年の収支から。E3）。
 
 金額は円の整数で、NPB の水準に合わせる（2026-11-14 ユーザー決定。#371 Q2 の A）:
 
 - 収入: 入場料（観客動員 × 単価）・放映権（基準＋人気の差）・スポンサー（基準＋人気の差）・グッズ（観客動員 ×
   1人あたり。人気で上下）・ポストシーズン（ホームの観客動員 × 単価 × 1.5）
-- 支出: 仮の人件費（`provisional_payroll`。契約区分ごとの定額 × 人数。#40 K1 で年俸の合計に置き換える）・
+- 支出: 人件費（その年に在籍した選手の年俸の合計。`salary.payroll`。#40 K1a）・
   球場の運営費（定額＋収容人数に比例）
 - 親会社の補填（`parent_subsidy`）: 補填前の収支が赤字なら、その分（繰越なし）
 
 平均的な球団（人気50・標準の値段・標準の収容人数）で補填前の収支がおおむね0になるよう、運営費を合わせてある
-（実測は Wiki「ペナントモードの仕組み」の「実測値」の「人気と収支」）。
+（実測は Wiki「ペナントモードの仕組み」の「年俸（K1a）」の「実測」）。
 年額の項目（放映権・スポンサー・人件費・運営費）は、年の途中なら消化した公式戦の割合（`season_share`）で按分する
 （「今年の収支（途中経過）」。終わった年は 1）。
 """
@@ -42,38 +42,16 @@ MERCHANDISE_PER_POINT = 0.01
 POSTSEASON_PRICE_FACTOR = 1.5
 
 # --- 支出（円） ---
-# 仮の人件費（1人あたりの年額）。#40 K1 で年俸の合計に置き換える
-REGISTERED_PAYROLL = 40_000_000
-DEVELOPMENTAL_PAYROLL = 5_000_000
-# 球場の運営費 = 定額 ＋ 収容人数 1席あたり。平均的な球団で補填前の収支がおおむね0になるよう合わせた（E2 の実測）
-OPERATIONS_BASE = 54 * OKU
+# 人件費は年俸の合計（`salary.payroll`。#40 K1a）で、ここには数を持たない
+# 球場の運営費 = 定額 ＋ 収容人数 1席あたり。平均的な球団で補填前の収支がおおむね0になるよう合わせた（#40 K1a の実測）
+OPERATIONS_BASE = 44 * OKU
 OPERATIONS_PER_SEAT = 150_000
-
-
-@dataclass(frozen=True)
-class RosterSize:
-    """球団 × 年の契約区分ごとの人数（その年に在籍した選手。仮の人件費の材料）。"""
-
-    registered: int
-    developmental: int
-
-    def __post_init__(self) -> None:
-        if self.registered < 0 or self.developmental < 0:
-            raise ValueError("人数は0以上にしてください。")
-
-
-def provisional_payroll(size: RosterSize) -> int:
-    """仮の人件費（年額。円）。契約区分ごとの定額 × 人数（支配下・育成の2区分。外国人も支配下の定額。
-    2026-11-14 ユーザー決定）。**人件費の唯一の出典**で、#40 K1 で年俸の合計に置き換える。
-    """
-    return REGISTERED_PAYROLL * size.registered + DEVELOPMENTAL_PAYROLL * size.developmental
 
 
 def parent_subsidy(operating_balance: int) -> int:
     """親会社の補填（円）。補填前の収支が赤字なら、その分（繰越なし）。**補填を決める唯一の出典**。
 
-    #40 K1 は年俸の総額に予算の上限を置き、超えた分を親会社の補填とオーナーの評価で効かせる（#40 Q3）。
-    その項はこの関数に足す。
+    #40 K1b は年俸の総額に上限を置き、超えた分を親会社の補填の項として足す（その項はこの関数に足す）。
     """
     return max(0, -operating_balance)
 
@@ -85,7 +63,8 @@ class FinanceInputs:
     - `regular_attendance`・`postseason_attendance`: 公式戦・ポストシーズンのホーム試合の観客動員の合計
     - `ticket_price`: その年のチケットの値段（手動か、お任せ・AI の規則）
     - `popularity`: その年の人気
-    - `roster`: 契約区分ごとの人数
+    - `payroll`: 人件費（年額。その年に在籍した選手の年俸の合計＝`salary.payroll`。円。期中に獲得した外国人も
+      年額で数え、期中に2球団に在籍した選手は両方で数える。#40 K1a）
     - `capacity`: 本拠地の収容人数（分からなければ None。ペナントの標準の収容人数で補う）
     - `season_share`: 年額の項目に掛ける割合（終わった年は 1、年の途中は消化した公式戦の割合。0〜1）
     """
@@ -94,13 +73,15 @@ class FinanceInputs:
     postseason_attendance: int
     ticket_price: TicketPrice
     popularity: Popularity
-    roster: RosterSize
+    payroll: int
     capacity: int | None
     season_share: float = 1.0
 
     def __post_init__(self) -> None:
         if self.regular_attendance < 0 or self.postseason_attendance < 0:
             raise ValueError("観客動員は0以上にしてください。")
+        if self.payroll < 0:
+            raise ValueError("人件費は0以上にしてください。")
         if not 0.0 <= self.season_share <= 1.0:
             raise ValueError("年額の項目の割合は0〜1にしてください。")
 
@@ -154,7 +135,7 @@ def club_finance(inputs: FinanceInputs) -> ClubFinance:
         sponsorship=round(share * max(0, SPONSORSHIP_BASE + SPONSORSHIP_PER_POINT * points)),
         merchandise=round(inputs.regular_attendance * merchandise_per_fan),
         postseason=round(inputs.postseason_attendance * unit * POSTSEASON_PRICE_FACTOR),
-        payroll=round(share * provisional_payroll(inputs.roster)),
+        payroll=round(share * inputs.payroll),
         operations=round(share * (OPERATIONS_BASE + OPERATIONS_PER_SEAT * pennant_capacity(inputs.capacity))),
     )
 

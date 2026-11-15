@@ -17,11 +17,16 @@ from django.urls import reverse
 from myapp.domain.exceptions import InvalidSigning, RegisteredPlayerLimitExceeded, ReinforcementClosed
 from myapp.domain.pennant.foreign_market import MAX_FOREIGN_HELD
 from myapp.domain.pennant.reinforcement import RegistrationKind
+from myapp.domain.pennant.salary import FOREIGN_MIN_SALARY
 from myapp.domain.pennant.world import WorldScope
 from myapp.domain.value_objects import AcquisitionRoute, ContractStatus
 from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoOffseasonQuery, DjangoSimulationContextQuery
-from myapp.infrastructure.repositories import DjangoRatingsRepository, DjangoTeamRepository
+from myapp.infrastructure.repositories import (
+    DjangoRatingsRepository,
+    DjangoSalaryContractRepository,
+    DjangoTeamRepository,
+)
 from myapp.presentation.club_input import REOPEN
 from myapp.presentation.views import build_foreign_signing_service, build_pennant_offseason_service
 
@@ -132,6 +137,9 @@ class SigningTest(ForeignSigningCase):
         self.assertEqual(len(numbers), len(set(numbers)), "背番号は重ならない")
         ratings = DjangoRatingsRepository(WorldScope.pennant(self.world_a)).find_by_players([stint.player_id], YEAR)
         self.assertEqual(len(ratings), 1, "獲得した年の能力の行")
+        (contract,) = DjangoSalaryContractRepository(WorldScope.pennant(self.world_a)).for_players([stint.player_id])
+        self.assertEqual((contract.first_year, contract.last_year), (YEAR, YEAR), "獲得した年の年俸（年額。#40 K1a）")
+        self.assertGreaterEqual(contract.salary.yen, FOREIGN_MIN_SALARY)
         (registration,) = self.signings()
         self.assertEqual((registration.player_id, registration.registered_on), (stint.player_id, next_game))
         # 次の試合の候補に入る

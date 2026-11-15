@@ -145,9 +145,50 @@
           </tbody>
         </table>
       </div>
-      <p class="stat-muted px-3 py-2 mb-0" style="font-size: 0.8125rem;">収入は入場料・放映権・スポンサー・グッズ・ポストシーズンの入場料、支出は人件費（仮。契約区分ごとの定額 × 人数）と球場の運営費です。赤字は親会社が補填します（資金は繰り越しません）。</p>
+      <p class="stat-muted px-3 py-2 mb-0" style="font-size: 0.8125rem;">収入は入場料・放映権・スポンサー・グッズ・ポストシーズンの入場料、支出は人件費（その年に在籍した選手の年俸の合計）と球場の運営費です。赤字は親会社が補填します（資金は繰り越しません）。</p>
     </div>
   </div>
+{% endif %}
+
+{% if summary.renewals %}
+  {% comment %}締めた年の契約更改（#40 K1a）。自軍の残った選手の全員（増減の大きい順）と、世界全体の人数と総額の増減。{% endcomment %}
+  {% with renewals=summary.renewals %}
+  <div class="card mb-4" id="renewals">
+    <div class="card-header">契約更改（{{ summary.year }}年 → {{ summary.next_year }}年）</div>
+    <div class="card-body p-0">
+      <p class="px-3 pt-3 mb-2">世界全体で {{ renewals.total_count }}人が更改し、更改した選手の年俸の合計は {{ renewals.total_change_label }} 変わりました。</p>
+      {% if renewals.own %}
+        <div class="table-responsive">
+          <table class="table table-sm mb-0 tabular-nums">
+            <thead>
+              <tr>
+                <th>{{ summary.own_team_name }}の選手</th>
+                <th>登録位置</th>
+                <th class="text-end">{{ summary.year }}年</th>
+                <th class="text-end">{{ summary.next_year }}年</th>
+                <th class="text-end">増減</th>
+                <th class="text-end">割合</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in renewals.own %}
+                <tr>
+                  <td><a href="{% scoped_url 'player_detail' summary.own_team_id row.player_id %}" class="player-name">{{ row.name }}</a></td>
+                  <td>{{ row.position.value }}</td>
+                  <td class="text-end">{{ row.before.label }}</td>
+                  <td class="text-end">{{ row.after.label }}</td>
+                  <td class="text-end">{{ row.change_label }}</td>
+                  <td class="text-end stat-muted">{{ row.rate_label }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% endif %}
+      <p class="stat-muted px-3 py-2 mb-0" style="font-size: 0.8125rem;">契約はすべて1年で、締めるときに能力と出場から決まる相場へ寄せて自動で更改します。下げ幅は野球協約の減額制限で止めます。新人と獲得した外国人は含みません。</p>
+    </div>
+  </div>
+  {% endwith %}
 {% endif %}
 
 {% if summary.board %}
