@@ -39,6 +39,7 @@ from ..application.dto import (
     LeagueSetupRow,
     Listing,
     MemberRow,
+    MidseasonForeignView,
     MidseasonRegistrationView,
     PlayerRatingsCard,
     PlayerRatingsHistory,
@@ -59,6 +60,8 @@ from ..application.league_view import LeagueViewService
 from ..application.pennant_championships import PostseasonHistoryReader
 from ..application.pennant_club_details import ClubDetailsService
 from ..application.pennant_draft import PennantDraftService
+from ..application.pennant_finance import ClubFinanceService, TicketPriceService
+from ..application.pennant_foreign_signing import ForeignSigningService
 from ..application.pennant_history import PennantHistoryService
 from ..application.pennant_home import PennantHomeService
 from ..application.pennant_midseason import MidseasonRegistrationService
@@ -66,12 +69,14 @@ from ..application.pennant_midseason_review import MidseasonReview
 from ..application.pennant_offseason import PennantOffseasonService
 from ..application.pennant_offseason_inputs import OffseasonInputsReader, OffseasonPhase
 from ..application.pennant_offseason_view import OffseasonViewService
+from ..application.pennant_popularity import PopularityReader
 from ..application.pennant_postseason import PennantPostseasonService, PostseasonBracketReader
 from ..application.pennant_postseason_view import PennantPostseasonViewService
 from ..application.pennant_race import LeagueFinishReader
 from ..application.pennant_ratings import PennantRatingsViewService
 from ..application.pennant_season import PennantSeasonService
 from ..application.pennant_settings import PennantSettingsService
+from ..application.pennant_ticket_price import TicketPriceReader
 from ..application.pennant_view import PennantWorldViewService, settled_context
 from ..application.pennant_world import PennantWorldService, WorldRepositories
 from ..application.queries import SimulationContextQuery
@@ -133,8 +138,10 @@ from ..domain.value_objects import (
 )
 from ..domain.workspace import InvitedRole, WorkspaceAccess, WorkspaceQuota, WorkspaceRole
 from ..infrastructure.queries import (
+    DjangoAttendanceQuery,
     DjangoAwardQuery,
     DjangoChampionshipQuery,
+    DjangoClubFinanceQuery,
     DjangoClubTenureQuery,
     DjangoDevelopmentRosterQuery,
     DjangoFieldingTotalsQuery,
@@ -174,10 +181,12 @@ from ..infrastructure.repositories import (
     DjangoInvitationRepository,
     DjangoLeagueRepository,
     DjangoMidseasonRegistrationRepository,
+    DjangoPopularityRepository,
     DjangoRatingsRepository,
     DjangoReleasePlanRepository,
     DjangoStadiumRepository,
     DjangoTeamRepository,
+    DjangoTicketPriceRepository,
     DjangoWorkspaceRepository,
     DjangoWorldRepository,
 )
@@ -190,6 +199,7 @@ from .club_input import (
     DEVELOPMENT_PLAN_SECTION,
     DEVELOPMENT_SECTION,
     DEVELOPMENT_TAB,
+    FOREIGN_MIDSEASON_SECTION,
     FOREIGN_SECTION,
     FOREIGN_TAB,
     RELEASE_SECTION,
@@ -212,6 +222,7 @@ from .club_input import (
     parse_foreign_signings,
     parse_lineup,
     parse_midseason_promotion,
+    parse_midseason_signing,
     parse_releases,
     parse_rotation,
     player_option,
@@ -235,6 +246,7 @@ from .forms import (
     PostseasonFormatForm,
     StadiumSetupForm,
     TeamSetupForm,
+    TicketPriceForm,
     WorkspaceCreateForm,
     WorkspaceDeleteForm,
     WorkspaceForm,
@@ -726,6 +738,7 @@ def _repositories_for(scope: WorldScope) -> WorldRepositories:
         leagues=DjangoLeagueRepository(scope),
         teams=DjangoTeamRepository(scope),
         ratings=DjangoRatingsRepository(scope),
+        popularities=DjangoPopularityRepository(scope),
     )
 
 
@@ -772,12 +785,15 @@ def build_pennant_season_service(scope: WorldScope) -> PennantSeasonService:
         plans=DjangoClubPlanRepository(scope),
         context_query=DjangoSimulationContextQuery(scope),
         fa_exemptions=ForeignQuotaExemptions(DjangoServiceHistoryQuery(scope)),
+        popularities=_popularity_reader(scope),
+        ticket_prices=_ticket_price_reader(scope),
         review=MidseasonReview(
             leagues=DjangoLeagueRepository(scope),
             teams=DjangoTeamRepository(scope),
             ratings=DjangoRatingsRepository(scope),
             registrations=DjangoMidseasonRegistrationRepository(scope),
             squads=DjangoDevelopmentRosterQuery(scope),
+            names=DjangoPlayerNameQuery(scope),
             context_query=DjangoSimulationContextQuery(scope),
             atomic=transaction.atomic,
         ),
@@ -812,6 +828,8 @@ def build_pennant_offseason_service(scope: WorldScope) -> PennantOffseasonServic
         names=DjangoPlayerNameQuery(parts.scope),
         awards=parts.awards,
         championships=DjangoChampionshipRepository(parts.scope),
+        popularities=DjangoPopularityRepository(parts.scope),
+        ticket_prices=_ticket_price_reader(parts.scope),
         drafts=parts.drafts,
         lotteries=DjangoDraftLotteryRepository(parts.scope),
         titles=parts.titles,
@@ -916,6 +934,8 @@ def build_pennant_postseason_service(scope: WorldScope) -> PennantPostseasonServ
         plans=DjangoClubPlanRepository(scope),
         context_query=DjangoSimulationContextQuery(scope),
         fa_exemptions=ForeignQuotaExemptions(DjangoServiceHistoryQuery(scope)),
+        popularities=_popularity_reader(scope),
+        ticket_prices=_ticket_price_reader(scope),
         brackets=_postseason_brackets(scope),
         atomic=transaction.atomic,
     )
@@ -985,7 +1005,55 @@ def build_offseason_view_service(scope: WorldScope) -> OffseasonViewService:
     """
     _pennant_world_id(scope)
     return OffseasonViewService(
-        worlds=DjangoWorldRepository(scope.workspace_id), offseason=DjangoOffseasonQuery(scope)
+        worlds=DjangoWorldRepository(scope.workspace_id),
+        offseason=DjangoOffseasonQuery(scope),
+        popularities=_popularity_reader(scope),
+        attendance=DjangoAttendanceQuery(scope),
+        finance=build_club_finance_service(scope),
+    )
+
+
+def _popularity_reader(scope: WorldScope) -> PopularityReader:
+    """球団の人気の読み口（進める処理・GM ホーム・球団史・オフの結果が使う。#208 E1）。世界の範囲で作る。"""
+    _pennant_world_id(scope)
+    return PopularityReader(popularities=DjangoPopularityRepository(scope))
+
+
+def _ticket_price_reader(scope: WorldScope) -> TicketPriceReader:
+    """チケットの値段の読み口（進める処理・締める処理・収支が使う。#208 E2）。世界の範囲で作る。"""
+    _pennant_world_id(scope)
+    return TicketPriceReader(prices=DjangoTicketPriceRepository(scope))
+
+
+def build_club_finance_service(scope: WorldScope) -> ClubFinanceService:
+    """球団の収支（参照。経営の画面・GM ホーム・オフの結果が使う。#208 E2）を組み立てる。
+
+    依存は全部、渡された世界の範囲で作る。ペナントの世界の範囲だけを受け取る（実データの範囲なら InvalidWorld）。
+    """
+    _pennant_world_id(scope)
+    return ClubFinanceService(
+        popularities=_popularity_reader(scope),
+        ticket_prices=_ticket_price_reader(scope),
+        attendance=DjangoAttendanceQuery(scope),
+        facts=DjangoClubFinanceQuery(scope),
+        games=DjangoGameListQuery(scope),
+    )
+
+
+def build_ticket_price_service(scope: WorldScope) -> TicketPriceService:
+    """GM がチケットの値段を変えるサービス（更新。#208 E2）を組み立てる。
+
+    リポジトリと参照クエリは、すべて渡された世界の範囲で作る。トランザクションはここで渡す。
+    ペナントの世界の範囲だけを受け取る（実データの範囲なら InvalidWorld）。
+    """
+    world_id = _pennant_world_id(scope)
+    return TicketPriceService(
+        world_id=world_id,
+        worlds=DjangoWorldRepository(scope.workspace_id),
+        prices=DjangoTicketPriceRepository(scope),
+        fixtures=DjangoFixtureRepository(scope),
+        context_query=DjangoSimulationContextQuery(scope),
+        atomic=transaction.atomic,
     )
 
 
@@ -1008,6 +1076,9 @@ def build_pennant_home_service(scope: WorldScope) -> PennantHomeService:
         team_records=DjangoTeamRepository(scope),
         leagues=DjangoLeagueRepository(scope),
         postseason=_postseason_history(scope),
+        popularities=_popularity_reader(scope),
+        attendance=DjangoAttendanceQuery(scope),
+        finance=build_club_finance_service(scope),
     )
 
 
@@ -1026,6 +1097,8 @@ def build_pennant_history_service(scope: WorldScope) -> PennantHistoryService:
         leagues=DjangoLeagueRepository(scope),
         awards=DjangoAwardQuery(scope),
         postseason=_postseason_history(scope),
+        popularities=_popularity_reader(scope),
+        attendance=DjangoAttendanceQuery(scope),
     )
 
 
@@ -1704,6 +1777,47 @@ def pennant_draft_order_settings(request, world_id):
     return redirect(_url(request, "pennant_settings", world_id))
 
 
+def pennant_finance(request, world_id):
+    """経営（受け持つ球団のチケットの値段と収支。#208 E2）。見るのは誰でも、値段を変える（POST）のはオーナーだけ。
+
+    値段を変えられないとき（その年が開幕した後）は、フォームを出さずに理由だけを出す（両立しない操作を並べない）。
+    """
+    world = _world_context(request, world_id)
+    if request.method not in ("GET", "HEAD", "POST"):
+        return HttpResponseNotAllowed(["GET", "HEAD", "POST"])
+    is_owner = _can_write_world(request, world)
+    scope = _world_scope(request, world_id)
+    form = None
+    if request.method == "POST":
+        denied = _requires_world_owner(request, world)
+        if denied is not None:
+            return denied
+        form = TicketPriceForm(request.POST)
+        if form.is_valid():
+            chosen = form.cleaned_data["ticket_price"]
+            try:
+                changed = build_ticket_price_service(scope).change(chosen)
+            except DomainError as error:
+                messages.error(request, str(error))
+                return redirect(_url(request, "pennant_finance", world_id))
+            label = "お任せ" if chosen is None else chosen.label
+            if changed:
+                messages.success(request, f"{world.season_year}年のチケットの値段を「{label}」にしました。")
+            else:
+                messages.info(request, "チケットの値段は変わっていません。")
+            return redirect(_url(request, "pennant_finance", world_id))
+    finance = build_club_finance_service(scope).view(world)
+    can_change = is_owner and finance is not None and not finance.blocker
+    if can_change and form is None and finance is not None:
+        form = TicketPriceForm(initial={"ticket_price": TicketPriceForm.initial_for(finance.manual)})
+    return _render(
+        request,
+        "pennant/finance.html",
+        {"finance": finance, "form": form if can_change else None, "is_owner": is_owner},
+        world,
+    )
+
+
 @require_safe
 def pennant_history(request, world_id):
     """歴代の記録。各リーグの年ごとの優勝と、選んだリーグ（`?league=`）のタイトル受賞者。読むだけで誰でも開ける。
@@ -1803,13 +1917,38 @@ def build_midseason_registration_service(scope: WorldScope) -> MidseasonRegistra
     )
 
 
+def build_foreign_signing_service(scope: WorldScope) -> ForeignSigningService:
+    """ペナントの世界ひとつの、期中の外国人の獲得（編成の「外国人」タブの期中の形。#169 F3）のサービスを組み立てる。
+
+    **リポジトリと参照クエリはすべて渡された世界の範囲で作る**（他の世界の球団には、読めも書けもしない）。
+    加入・その年の能力・登録日の記録を1つにまとめるので、`transaction.atomic` もここで渡す。
+    ペナントの世界の範囲だけを受け取る（実データの範囲なら InvalidWorld）。存在しない世界は、使うときに WorldNotFound。
+    """
+    world_id = _pennant_world_id(scope)
+    return ForeignSigningService(
+        world_id=world_id,
+        worlds=DjangoWorldRepository(scope.workspace_id),
+        leagues=DjangoLeagueRepository(scope),
+        teams=DjangoTeamRepository(scope),
+        fixtures=DjangoFixtureRepository(scope),
+        ratings=DjangoRatingsRepository(scope),
+        registrations=DjangoMidseasonRegistrationRepository(scope),
+        context_query=DjangoSimulationContextQuery(scope),
+        development_roster=DjangoDevelopmentRosterQuery(scope),
+        names=DjangoPlayerNameQuery(scope),
+        fa_exemptions=ForeignQuotaExemptions(DjangoServiceHistoryQuery(scope)),
+        atomic=transaction.atomic,
+    )
+
+
 def pennant_club(request, world_id):
     """編成。1軍登録・オーダー・投手陣の3タブ（`?tab=`）と、シーズン終了で締められるときだけ「戦力外」タブ。
 
     受け持つ球団の編成を、区画ごとに自動か手動のどちらかで見せる。「戦力外」は締めるときの戦力外の指名（自動か手動）。
     補強の窓（シーズンを締めた後〜7月31日）の中だけ「育成」タブ（育成選手を行ごとに支配下に登録する。#170 P3a）。
     公式戦を終えてから締めるまでは「育成」タブをオフの形（育成選手のオフの扱いの指名。自動か手動。#170 P2）で出す。
-    同じ時期に「外国人」タブ（外国人のオフの獲得の指名。お任せか手動。#169 F2）も出す。
+    同じ時期に「外国人」タブ（外国人のオフの獲得の指名。お任せか手動。#169 F2）も出す。補強の窓の中は「外国人」タブを
+    期中の形（候補を行ごとに獲得する。#169 F3）で出す。
 
     GET は誰でも（読み取り専用）、POST はオーナーだけ（未ログインはログインへ、ほかの人は 403）。
     POST は区画ごとに「手動にする」「保存する」「自動に戻す」を受け、成功したら同じタブへ戻る
@@ -1841,6 +1980,8 @@ def _post_club(request, world: WorldContext):
         return _post_development_plan(request, world)
     if request.POST.get("section") == FOREIGN_SECTION:
         return _post_foreign(request, world)
+    if request.POST.get("section") == FOREIGN_MIDSEASON_SECTION:
+        return _post_foreign_midseason(request, world)
     section = SECTIONS.get(request.POST.get("section", ""))
     action = request.POST.get("action", "")
     if section is None or action not in ACTIONS:
@@ -2007,6 +2148,38 @@ def _post_foreign(request, world: WorldContext):
     return redirect(f"{club_url}?tab={FOREIGN_TAB}")
 
 
+def _post_foreign_midseason(request, world: WorldContext):
+    """「外国人」タブの期中の「獲得する」（#169 F3）。画面を開いたときの次の公式戦の日（`expected_next_game_on`）を
+    送ってもらう。
+
+    獲得できたら同じタブへ戻す（窓の中ならタブは残る）。古い画面・窓の外・1年の上限・保有の上限・支配下の上限などは、
+    理由を出して同じタブへ戻す（窓の外ならタブは期中の形で出ず、オフの形か既定のタブに落ちる）。
+    """
+    tab_url = f"{_url(request, 'pennant_club', world.world_id)}?tab={FOREIGN_TAB}"
+    try:
+        index, expected_next_game_on = parse_midseason_signing(request.POST)
+        signed = build_foreign_signing_service(_world_scope(request, world.world_id)).sign(
+            index, expected_next_game_on=expected_next_game_on
+        )
+    except (ClubInputError, DomainError) as error:
+        messages.error(request, str(error))
+        return redirect(tab_url)
+    messages.success(
+        request,
+        f"{signed.name}（{signed.position.value}）を獲得しました（背番号 {signed.number}。"
+        f"{signed.registered_on.month}月{signed.registered_on.day}日の試合から出られます）。",
+    )
+    return redirect(tab_url)
+
+
+def _foreign_midseason_view(request, world: WorldContext) -> MidseasonForeignView | None:
+    """「外国人」タブの期中の形の材料。補強の窓の外・受け持ちが無いときは None（期中の形を出さない）。"""
+    try:
+        return build_foreign_signing_service(_world_scope(request, world.world_id)).view()
+    except DomainError:
+        return None
+
+
 def _foreign_view(request, world: WorldContext) -> ForeignSigningPlanView | None:
     """「外国人」タブの材料。指名できないとき（公式戦の途中・締めた後・最終シーズン）・受け持ちが無いときは None。"""
     try:
@@ -2101,6 +2274,8 @@ def _render_club(
     「育成」タブは、公式戦を終えてから締めるまでもオフの形（育成の指名。#170 P2。条件は「戦力外」タブと同じ）で出す。
     補強の窓とは時期が重ならない（窓は公式戦の対戦が残っているときだけ開く）。
     「外国人」タブ（外国人のオフの指名。#169 F2）は「戦力外」タブと同じ条件で出す（`can_choose_releases`）。
+    補強の窓の中は、同じ「外国人」タブを期中の形（期中の外国人の獲得。#169 F3。条件は `ForeignSigningService.is_open`）
+    で出す（「育成」タブと同じく、窓とオフの形は時期が重ならない）。
     """
     # ほかのタブではタブを出すかだけを決める（指名できるか。支配下の一覧までは読まない）
     release = None
@@ -2109,12 +2284,18 @@ def _render_club(
     development_plan = None
     has_development_tab = False
     foreign = None
+    foreign_midseason = None
+    has_foreign_tab = False
     if world.managed_team_id is not None:
         if tab == RELEASE_TAB:
             release = _release_view(request, world)
             has_release_tab = release is not None
         elif tab == FOREIGN_TAB:
-            foreign = _foreign_view(request, world)
+            # 期中の形（補強の窓）を先に試し、出せなければオフの形（時期が重ならない。「育成」タブと同じ）
+            foreign_midseason = _foreign_midseason_view(request, world)
+            if foreign_midseason is None:
+                foreign = _foreign_view(request, world)
+            # オフの形は「戦力外」タブと同じ条件（`can_choose_releases`）なので、それを使い回す
             has_release_tab = foreign is not None
         else:
             has_release_tab = build_pennant_offseason_service(
@@ -2124,18 +2305,25 @@ def _render_club(
             development = _development_view(request, world)
             if development is None:
                 development_plan = _development_plan_view(request, world)
-            has_development_tab = development is not None or development_plan is not None
+        # 「育成」「外国人」タブの期中の形は、どちらも補強の窓の中（受け持つ球団があり窓の中。条件は同じ）。
+        # 開いたタブの材料で分かるときは使い回し、分からないときだけ1回読む（窓と「戦力外」タブは時期が重ならない）
+        if tab == DEVELOPMENT_TAB:
+            window_open = development is not None
+        elif tab == FOREIGN_TAB:
+            window_open = foreign_midseason is not None
         else:
-            # オフの形は「戦力外」タブと同じ条件（`can_choose_development`）なので、それを使い回す
-            has_development_tab = (
-                has_release_tab
-                or build_midseason_registration_service(_world_scope(request, world.world_id)).is_open()
+            window_open = (
+                not has_release_tab
+                and build_midseason_registration_service(_world_scope(request, world.world_id)).is_open()
             )
+        # オフの形はどちらも「戦力外」タブと同じ条件（`can_choose_releases`）なので、それを使い回す
+        has_development_tab = has_release_tab or window_open
+        has_foreign_tab = has_release_tab or window_open
     if tab == RELEASE_TAB and release is None:
         tab = DEFAULT_TAB
     if tab == DEVELOPMENT_TAB and development is None and development_plan is None:
         tab = DEFAULT_TAB
-    if tab == FOREIGN_TAB and foreign is None:
+    if tab == FOREIGN_TAB and foreign is None and foreign_midseason is None:
         tab = DEFAULT_TAB
     context: dict = {
         "is_owner": _can_write_world(request, world),
@@ -2148,8 +2336,8 @@ def _render_club(
         "development_plan": development_plan,
         "has_development_tab": has_development_tab,
         "foreign": foreign,
-        # 「外国人」タブは「戦力外」タブと同じ条件（`can_choose_releases`）なので、それを使い回す
-        "has_foreign_tab": has_release_tab,
+        "foreign_midseason": foreign_midseason,
+        "has_foreign_tab": has_foreign_tab,
     }
     if world.managed_team_id is None:
         return render(request, "pennant/club.html", {**context, "world": world}, status=status)

@@ -27,10 +27,12 @@ from .pennant.draft_lottery import DraftLotteryRecord
 from .pennant.draft_meeting import DraftAction
 from .pennant.draft_record import DraftRecord
 from .pennant.foreign_market import ForeignSigningPlan
+from .pennant.popularity import ClubPopularity
 from .pennant.ratings import PlayerRatings
 from .pennant.reinforcement import MidseasonRegistration
 from .pennant.release import ReleasePlan
 from .pennant.schedule import Fixture
+from .pennant.ticket_price import ClubTicketPrice
 from .pennant.world import World, WorldUsage
 from .workspace import Invitation, Workspace
 
@@ -418,15 +420,16 @@ class ForeignSigningPlanRepository(Protocol):
 
 @runtime_checkable
 class MidseasonRegistrationRepository(Protocol):
-    """期中の支配下登録の記録（`MidseasonRegistration`。#170 P3a）。書くのは期中の登録の操作だけ。
+    """期中の支配下登録の記録（`MidseasonRegistration`。育成からの昇格は #170 P3a、外国人の獲得は #169 F3）。
+    書くのは期中の登録の操作（昇格・獲得）だけ。
 
-    ペナントの世界にだけ置ける。在籍は年単位なので、オフの昇格と期中の昇格を区別するために登録日だけを足す
-    （`domain/pennant/reinforcement.py`）。
+    ペナントの世界にだけ置ける。在籍は年単位なので、オフの昇格・獲得と期中の昇格・獲得を区別するために登録日だけを
+    足す（`domain/pennant/reinforcement.py`）。
     """
 
     def add(self, registration: MidseasonRegistration) -> None:
-        """登録を1つ書く。在籍の昇格の年と登録日の年が合わなければ InvalidContract
-        （`reinforcement.ensure_registration_matches_stint`）。
+        """登録を1つ書く。今の在籍と区分ごとに照合し（昇格は昇格の年、獲得は加入年と経路が新外国人）、合わなければ
+        InvalidContract（`reinforcement.ensure_registration_matches_stint`）。
 
         実データの範囲には書けない（InvalidWorld）。範囲の外の球団は TeamNotFound、球団に在籍していない選手は
         PlayerNotFound。
@@ -440,7 +443,7 @@ class MidseasonRegistrationRepository(Protocol):
     def find_in_year(self, year: int) -> list[MidseasonRegistration]:
         """範囲の全球団の、登録日が `year` 年の期中の登録（球団・登録日・選手の id の順）。
 
-        AI の期中の昇格（#170 P3b）が、判定日に球団ごとのその年の登録を1本で数える。
+        AI の期中の昇格（#170 P3b）と獲得（#169 F3）が、判定日に球団ごとのその年の登録を1本で数える。
         """
         ...
 
@@ -548,6 +551,61 @@ class InvitationRepository(Protocol):
 
     def delete_expired(self, workspace_id: int, now: datetime) -> int:
         """そのワークスペースの期限切れの招待を消し、消した数を返す。"""
+        ...
+
+
+@runtime_checkable
+class PopularityRepository(Protocol):
+    """ペナントの球団の人気（`ClubPopularity`。球団 × 年。#208 E1）。書くのは世界の作成とシーズンを締める処理だけ。
+
+    ペナントの世界にだけ置ける。人気は年ごとの状態（能力の行と同じ型）で、締めた年の値は書き換えない。
+    行の無い球団（この機能より前の世界）は読む側が初期値で補う（`popularity.with_initial`）。
+    """
+
+    def find_by_year(self, year: int) -> list[ClubPopularity]:
+        """その年の、範囲の全球団の人気（行のある球団だけ）。球団の id の順。"""
+        ...
+
+    def find_by_team(self, team_id: int) -> list[ClubPopularity]:
+        """ひとつの球団の人気を、年の順に。範囲の外の球団や行の無い球団は空。"""
+        ...
+
+    def add_all(self, popularities: Sequence[ClubPopularity]) -> None:
+        """人気をまとめて保存する。どれかが書けなければ何も書かない。
+
+        実データの範囲には書けない（InvalidWorld）。範囲の外の球団・同じ球団 × 年の重複（渡した中・保存済み）は
+        InvalidPopularity。締めた年（`season.is_season_closed`）の値は AlreadyClosed（締めた年の状態を書き換えない。
+        締める処理は、翌年の能力を書く前に締める年の値を書く）。
+        """
+        ...
+
+
+@runtime_checkable
+class TicketPriceRepository(Protocol):
+    """GM が手動にしたチケットの値段（`ClubTicketPrice`。球団 × 年。#208 E2）。ペナントの世界にだけ置ける。
+
+    行の無い球団 × 年はお任せ（AI と同じ規則。読む側が `ticket_price.resolved_ticket_price` で決める）。
+    書けるのはその年の開幕前だけ（その年の試合が1つも無い）で、翌年には引き継がない。
+    """
+
+    def find_by_year(self, year: int) -> list[ClubTicketPrice]:
+        """その年の、範囲の手動の値段（行のある球団だけ）。球団の id の順。"""
+        ...
+
+    def find_by_team(self, team_id: int) -> list[ClubTicketPrice]:
+        """ひとつの球団の手動の値段を、年の順に。範囲の外の球団は空。"""
+        ...
+
+    def save(self, price: ClubTicketPrice) -> None:
+        """手動の値段を書く（同じ球団 × 年の行があれば上書き）。
+
+        実データの範囲には書けない（InvalidWorld）。範囲の外の球団は InvalidTicketPrice。締めた年は AlreadyClosed、
+        開幕した年（その年の試合が1つでもある）は TicketPriceLocked（どちらも何も書かない）。
+        """
+        ...
+
+    def delete(self, team_id: int, year: int) -> None:
+        """手動の値段を消す（お任せに戻す）。行が無ければ何もしない。書けない年の扱いは `save` と同じ。"""
         ...
 
 

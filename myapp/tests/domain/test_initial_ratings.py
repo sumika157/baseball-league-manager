@@ -29,6 +29,8 @@ from myapp.domain.value_objects import (
     Profile,
 )
 
+from .markers import slow
+
 YEAR = 2027
 
 
@@ -224,6 +226,7 @@ def _with_estimates(pool: dict[int, ClubRoster], estimated: list[PlayerRatings])
     return clubs
 
 
+@slow
 class EstimatedRatingsReproduceTheLevelTest(TestCase):
     """エンジンが作った1シーズンの成績（能力は分かっている）から能力を推定し、同じ顔ぶれで回し直す。
 

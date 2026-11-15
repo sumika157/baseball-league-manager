@@ -10,7 +10,7 @@ from unittest import TestCase
 from myapp.domain.exceptions import InvalidPlateAppearance
 from myapp.domain.value_objects import AdvanceReason, Base, PlateAppearanceResult
 
-from .test_plate_appearances import _game, _pa, _to
+from .pa_builders import _game, _pa, _to
 
 P = PlateAppearanceResult
 R = AdvanceReason

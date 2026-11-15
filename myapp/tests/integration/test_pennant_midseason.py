@@ -24,7 +24,7 @@ from myapp.domain.exceptions import (
     TeamNotFound,
 )
 from myapp.domain.pennant.ratings import PlayerRatings
-from myapp.domain.pennant.reinforcement import MidseasonRegistration
+from myapp.domain.pennant.reinforcement import MidseasonRegistration, RegistrationKind
 from myapp.domain.simulation.ratings import PitcherRatings
 from myapp.domain.value_objects import AcquisitionRoute, ContractStatus, Position
 from myapp.infrastructure import orm_models
@@ -189,7 +189,10 @@ class PromotionTest(MidseasonCase):
             self.registrations(),
             [
                 MidseasonRegistration(
-                    team_id=managed_team_id(self.world_a), player_id=self.rookie, registered_on=next_game
+                    team_id=managed_team_id(self.world_a),
+                    player_id=self.rookie,
+                    registered_on=next_game,
+                    kind=RegistrationKind.PROMOTION,
                 )
             ],
         )
@@ -312,11 +315,17 @@ class RegistrationRepositoryTest(MidseasonCase):
         """登録日の年と在籍の昇格の年は、書く前に照合する（同じ事実が2か所にある）。"""
         repository = DjangoMidseasonRegistrationRepository(world_scope(self.world_a))
         with self.assertRaises(InvalidContract):
-            repository.add(MidseasonRegistration(managed_team_id(self.world_a), self.rookie, date(YEAR, 5, 1)))
+            repository.add(
+                MidseasonRegistration(
+                    managed_team_id(self.world_a), self.rookie, date(YEAR, 5, 1), RegistrationKind.PROMOTION
+                )
+            )
         self.assertEqual(self.registrations(), [])
 
     def test_the_real_data_and_other_worlds_cannot_be_written(self):
-        registration = MidseasonRegistration(managed_team_id(self.world_a), self.rookie, date(YEAR, 5, 1))
+        registration = MidseasonRegistration(
+            managed_team_id(self.world_a), self.rookie, date(YEAR, 5, 1), RegistrationKind.PROMOTION
+        )
         with self.assertRaises(InvalidWorld):
             DjangoMidseasonRegistrationRepository(real_scope()).add(registration)
         with self.assertRaises(TeamNotFound):

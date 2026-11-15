@@ -349,6 +349,16 @@ def championships_in(scope: WorldScope) -> QuerySet[orm_models.PennantChampionsh
     return orm_models.PennantChampionship.objects.filter(world_condition("team__league", scope))
 
 
+def popularities_in(scope: WorldScope) -> QuerySet[orm_models.PennantClubPopularity]:
+    """範囲の球団の人気（#208 E1）。日本一の記録と同じく、球団のリーグで世界が決まる。"""
+    return orm_models.PennantClubPopularity.objects.filter(world_condition("team__league", scope))
+
+
+def ticket_prices_in(scope: WorldScope) -> QuerySet[orm_models.PennantTicketPrice]:
+    """範囲の手動のチケットの値段（#208 E2）。人気と同じく、球団のリーグで世界が決まる。"""
+    return orm_models.PennantTicketPrice.objects.filter(world_condition("team__league", scope))
+
+
 def drafts_in(scope: WorldScope) -> QuerySet[orm_models.PennantDraft]:
     """範囲のドラフト会議の記録。会議は世界そのものに属すので、世界を直接指す（`League.world` と同じ列の名前）。"""
     return orm_models.PennantDraft.objects.filter(world_direct_condition("", scope))

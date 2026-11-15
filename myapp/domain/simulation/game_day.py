@@ -12,7 +12,12 @@
   9回の試合で平均およそ3時間04分、標準偏差およそ18分（NPB の近年の水準）。延長は打席が増えるぶん長くなる。
   中断は作らない（天候のモデルが無い）。
 - 観客数: 収容人数 × 入場率。入場率は土日が高く、0.4〜1.0 に収める（収容人数を超えない）。
-  収容人数が分からない（本拠地が無い・未設定）なら `None`（根拠の無い数を作らない）。
+  収容人数が分からない（本拠地が無い・未設定）なら `None`（根拠の無い数を作らない）。ペナントの世界は、
+  呼ぶ側が標準の収容人数（`pennant.popularity.PENNANT_DEFAULT_CAPACITY`）で補ってから渡す（#208 E1）。
+- ペナントは入場率の平均に球団の人気（ホームが主、相手は従。平均50からの差）を足す（#208 E1）。
+  人気を渡さない（実データの投入）か、人気が平均の50なら、足す前と同じ値になる（乱数を引く回数も変えない）。
+- ペナントはホームの球団のチケットの値段の効き（`pennant.ticket_price.TicketPrice.fill_effect`）も足す（#208 E2）。
+  値段を渡さないか標準なら、足す前と同じ値になる（乱数を引く回数も変えない）。
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ from __future__ import annotations
 from datetime import date, time
 
 from ..entities import Game
+from ..pennant.ticket_price import TicketPrice
 from ..value_objects import GameTimes
 from .randomness import GameRandom, normal
 
@@ -38,6 +44,10 @@ WEEKDAY_FILL = (0.80, 0.08)  # (平均, 標準偏差)
 WEEKEND_FILL = (0.90, 0.07)
 MIN_FILL = 0.4
 MAX_FILL = 1.0  # 収容人数を超えない
+# 人気（1〜100。平均50）の 1 点あたりの入場率の平均の上下（ホーム・相手。#208 E1）
+POPULARITY_MEAN = 50
+HOME_POPULARITY_FILL = 0.008
+AWAY_POPULARITY_FILL = 0.002
 
 
 def _is_weekend(played_on: date) -> bool:
@@ -67,9 +77,29 @@ def simulated_times(game: Game, rng: GameRandom) -> GameTimes:
     return GameTimes(start=start, end=time(end_total // 60, end_total % 60), ends_next_day=ends_next_day)
 
 
-def simulated_attendance(capacity: int | None, played_on: date, rng: GameRandom) -> int | None:
-    """観客数。収容人数が分からなければ `None`。収容人数を超えない。"""
+def simulated_attendance(
+    capacity: int | None,
+    played_on: date,
+    rng: GameRandom,
+    *,
+    home_popularity: int | None = None,
+    away_popularity: int | None = None,
+    ticket_price: TicketPrice | None = None,
+) -> int | None:
+    """観客数。収容人数が分からなければ `None`。収容人数を超えない。
+
+    `home_popularity`・`away_popularity` は両球団の人気（1〜100。ペナントだけ）。平均50からの差の分だけ
+    入場率の平均を上下させる。省いた側は平均と同じ扱い（両方を省くか50なら、人気を足す前と同じ値）。
+    `ticket_price` はホームの球団のその年のチケットの値段（ペナントだけ。#208 E2）。高いほど入場率の平均が下がる
+    （省くか標準なら、値段を足す前と同じ値）。
+    """
     mean, sd = WEEKEND_FILL if _is_weekend(played_on) else WEEKDAY_FILL
+    if home_popularity is not None:
+        mean += HOME_POPULARITY_FILL * (home_popularity - POPULARITY_MEAN)
+    if away_popularity is not None:
+        mean += AWAY_POPULARITY_FILL * (away_popularity - POPULARITY_MEAN)
+    if ticket_price is not None:
+        mean += ticket_price.fill_effect
     # 収容人数が無くても乱数は引く（1試合あたりの乱数の消費を一定にし、後から収容人数が入っても列がずれないように）
     fill = min(max(normal(rng, mean, sd), MIN_FILL), MAX_FILL)
     if capacity is None:

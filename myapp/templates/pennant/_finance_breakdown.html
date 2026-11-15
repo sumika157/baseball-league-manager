@@ -1,0 +1,55 @@
+{% comment %}
+球団 × 年の収支の内訳（`ClubFinanceRow`。#208 E2）。経営の画面の「今年の収支」が使う。人気の行の無い年は「—」。
+{% endcomment %}
+{% if row.figures %}
+  {% with f=row.figures %}
+  <div class="stat-strip mb-3">
+    <div class="stat-cell">
+      <div class="stat-value">{{ f.revenue.label }}</div>
+      <div class="stat-label">収入</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-value">{{ f.expenses.label }}</div>
+      <div class="stat-label">支出</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-value" data-testid="operating-balance">{{ f.operating_balance.label }}</div>
+      <div class="stat-label">補填前の収支</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-value">{{ f.subsidy.label }}</div>
+      <div class="stat-label">親会社の補填</div>
+    </div>
+  </div>
+  <div class="row g-3">
+    <div class="col-md-6">
+      <table class="table table-sm mb-0">
+        <thead><tr><th>収入</th><th class="text-end">金額</th></tr></thead>
+        <tbody>
+          <tr><td>入場料（観客動員 {{ row.regular_attendance_label }}）</td><td class="text-end tabular-nums">{{ f.gate.label }}</td></tr>
+          <tr><td>放映権</td><td class="text-end tabular-nums">{{ f.broadcasting.label }}</td></tr>
+          <tr><td>スポンサー</td><td class="text-end tabular-nums">{{ f.sponsorship.label }}</td></tr>
+          <tr><td>グッズ</td><td class="text-end tabular-nums">{{ f.merchandise.label }}</td></tr>
+          <tr><td>ポストシーズンの入場料</td><td class="text-end tabular-nums">{{ f.postseason.label }}</td></tr>
+          <tr class="fw-semibold"><td>計</td><td class="text-end tabular-nums">{{ f.revenue.label }}</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="col-md-6">
+      <table class="table table-sm mb-0">
+        <thead><tr><th>支出</th><th class="text-end">金額</th></tr></thead>
+        <tbody>
+          <tr><td>人件費（仮）</td><td class="text-end tabular-nums">{{ f.payroll.label }}</td></tr>
+          <tr><td>球場の運営費</td><td class="text-end tabular-nums">{{ f.operations.label }}</td></tr>
+          <tr class="fw-semibold"><td>計</td><td class="text-end tabular-nums">{{ f.expenses.label }}</td></tr>
+          <tr><td>補填前の収支</td><td class="text-end tabular-nums">{{ f.operating_balance.label }}</td></tr>
+          <tr><td>親会社の補填</td><td class="text-end tabular-nums">{{ f.subsidy.label }}</td></tr>
+          <tr class="fw-semibold"><td>補填後の収支</td><td class="text-end tabular-nums">{{ f.balance.label }}</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endwith %}
+{% else %}
+  <p class="stat-muted mb-0">—（人気を記録する前の年なので、収支は出しません）</p>
+{% endif %}

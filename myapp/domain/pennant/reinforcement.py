@@ -1,4 +1,4 @@
-"""シーズン中の補強の窓（#207）と、期中の支配下登録の記録（#170 P3a）。
+"""シーズン中の補強の窓（#207）と、期中の支配下登録の記録（#170 P3a・#169 F3）。
 
 **純粋な値と関数**で、DB にも Django にも触れない。
 
@@ -19,7 +19,9 @@
 
 期中の登録の日付は保存する（`MidseasonRegistration`。CLAUDE.md の「同じ事実の出典を2つ作らない」には当たらない:
 在籍は年単位で、オフの昇格（締めた年 Y に `promoted_year = Y+1` で書く）と Y+1 年の期中の昇格を在籍からは
-区別できないため、登録日だけを足す）。登録日の年と在籍の昇格の年が一致することは
+区別できないため、登録日だけを足す）。期中の外国人の獲得（#169 F3）も同じ表に区分（`RegistrationKind`）を付けて
+乗せる（オフに獲得した外国人（締めた年 Y に `from_year = Y+1` で書く）と Y+1 年の期中の獲得を在籍からは
+区別できないのは同じ）。登録日の年と在籍の年（昇格の年・加入年）が一致することは
 `ensure_registration_matches_stint` が照合する。
 """
 
@@ -28,9 +30,11 @@ from __future__ import annotations
 import datetime
 from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import Enum
 from typing import ClassVar
 
 from ..exceptions import InvalidContract, ReinforcementClosed
+from ..value_objects import AcquisitionRoute
 
 
 class ReinforcementWindow:
@@ -111,24 +115,54 @@ def split_at_reviews(dates: Sequence[datetime.date], *, last_played: datetime.da
     return tuple(segments)
 
 
+class RegistrationKind(Enum):
+    """期中の支配下登録の区分。値は画面と永続化の choices に使う名前。**区分の選択肢の唯一の出典**。"""
+
+    # 育成からの昇格（GM は #170 P3a、AI は P3b）
+    PROMOTION = "昇格"
+    # 外国人の獲得（GM・AI とも。#169 F3）
+    SIGNING = "獲得"
+
+    @property
+    def label(self) -> str:
+        return self.value
+
+
 @dataclass(frozen=True)
 class MidseasonRegistration:
-    """期中の支配下登録ひとつ（球団・選手・登録日）。登録日はその選手が出られる最初の日（次の公式戦の日）。
+    """期中の支配下登録ひとつ（球団・選手・登録日・区分）。登録日はその選手が出られる最初の日（次の公式戦の日）。
 
-    期中の昇格（GM は #170 P3a、AI は P3b の判定日）が書く。#169 F3 の期中の外国人の獲得も同じ表に乗せる予定。
+    期中の昇格（GM は #170 P3a、AI は P3b の判定日）と、期中の外国人の獲得（GM・AI とも。#169 F3）が書く。
     """
 
     team_id: int
     player_id: int
     registered_on: datetime.date
+    kind: RegistrationKind
 
 
-def ensure_registration_matches_stint(registered_on: datetime.date, promoted_year: int | None) -> None:
-    """期中の登録日と、在籍の昇格の年が合うか（同じ事実が2か所にあるので照合する）。合わなければ `InvalidContract`。
+def ensure_registration_matches_stint(
+    registration: MidseasonRegistration,
+    *,
+    promoted_year: int | None,
+    from_year: int,
+    acquired_via: AcquisitionRoute | None,
+) -> None:
+    """期中の登録日と、今の在籍（昇格の年・加入年・入団の経路）が合うか（同じ事実が2か所にあるので照合する）。
+    合わなければ `InvalidContract`。
 
-    期中の昇格は登録日の年で在籍に書く（`Team.promote_player(year=登録日の年)`）。
+    - 昇格: 登録日の年で在籍に書く（`Team.promote_player(year=登録日の年)`）ので、昇格の年＝登録日の年
+    - 獲得: 登録日の年に新外国人で加入する（`Team.add_player(from_year=登録日の年, acquired_via=NEW_FOREIGN)`）
     """
-    if promoted_year != registered_on.year:
+    registered_on = registration.registered_on
+    if registration.kind is RegistrationKind.PROMOTION:
+        if promoted_year != registered_on.year:
+            raise InvalidContract(
+                f"支配下登録の日（{registered_on.isoformat()}）と、在籍の支配下登録の年（{promoted_year}）が合いません。"
+            )
+        return
+    if from_year != registered_on.year or acquired_via is not AcquisitionRoute.NEW_FOREIGN:
+        route = acquired_via.label if acquired_via is not None else "経路不明"
         raise InvalidContract(
-            f"支配下登録の日（{registered_on.isoformat()}）と、在籍の支配下登録の年（{promoted_year}）が合いません。"
+            f"外国人選手の獲得の日（{registered_on.isoformat()}）と、在籍の加入（{from_year}年・{route}）が合いません。"
         )

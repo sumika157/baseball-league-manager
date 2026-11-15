@@ -18,8 +18,8 @@
 こちらは残っているときだけ動く）。締める処理は念のため在籍の目印（`roster_signature`。昇格した在籍の数を含む）を
 前後で比べる。
 
-AI の期中の昇格（P3b）と期中の外国人の獲得（#169 F3）はまだ無い。F3 の獲得もこの記録の表に乗せる予定
-（同じサービスにするかは #170 の P3a のコメントで選択肢として示した）。
+AI の期中の昇格（P3b）は `pennant_midseason_review.MidseasonReview`。期中の外国人の獲得（#169 F3）は別のサービス
+（`pennant_foreign_signing.ForeignSigningService`。2026-11-13 ユーザー決定）で、この記録の表に区分＝獲得で乗せる。
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ from ..domain.pennant.development import (
     midseason_promotion_number,
 )
 from ..domain.pennant.offseason_player import Ratings, player_age
-from ..domain.pennant.reinforcement import MidseasonRegistration, ReinforcementWindow
+from ..domain.pennant.reinforcement import MidseasonRegistration, RegistrationKind, ReinforcementWindow
 from ..domain.pennant.world import World
 from ..domain.repositories import (
     FixtureRepository,
@@ -143,7 +143,11 @@ class MidseasonRegistrationService:
             )
             player = team.promote_player(player_id, JerseyNumber(number), next_on.year, limits=limits)
             self._teams.save(team)
-            self._registrations.add(MidseasonRegistration(team_id=team_id, player_id=player_id, registered_on=next_on))
+            self._registrations.add(
+                MidseasonRegistration(
+                    team_id=team_id, player_id=player_id, registered_on=next_on, kind=RegistrationKind.PROMOTION
+                )
+            )
         return MidseasonPromotion(player_id=player_id, name=player.name, number=number, registered_on=next_on)
 
     def _open_next_game_on(self) -> date:
