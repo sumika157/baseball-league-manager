@@ -24,9 +24,10 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from functools import partial
-from statistics import fmean, pstdev
+from statistics import fmean, median, pstdev
 
 from myapp.application.pennant_world import ForkSource
+from myapp.domain.pennant.contract import Salary
 from myapp.domain.pennant.development import (
     MidseasonClub,
     MidseasonProspect,
@@ -34,10 +35,10 @@ from myapp.domain.pennant.development import (
     development_start_year,
     is_contract_expiring,
 )
-from myapp.domain.pennant.draft import DraftRoute, DraftTeam
+from myapp.domain.pennant.draft import Draftee, DraftRoute, DraftTeam
 from myapp.domain.pennant.draft_meeting import DraftContext
 from myapp.domain.pennant.draft_order import DraftOrderRule, DraftStandings
-from myapp.domain.pennant.finance import OKU, ClubFinance, FinanceInputs, RosterSize, club_finance
+from myapp.domain.pennant.finance import OKU, ClubFinance, FinanceInputs, club_finance
 from myapp.domain.pennant.foreign_market import (
     ForeignSigning,
     MidseasonForeignClub,
@@ -67,6 +68,7 @@ from myapp.domain.pennant.popularity import (
 from myapp.domain.pennant.ratings import PlayerRatings
 from myapp.domain.pennant.reinforcement import MidseasonRegistration, RegistrationKind
 from myapp.domain.pennant.retirement import PlayingTime
+from myapp.domain.pennant.salary import foreign_salary, initial_salary, payroll, rookie_salary, salary_basis
 from myapp.domain.pennant.schedule import ScheduleRules
 from myapp.domain.pennant.ticket_price import TicketPrice, ai_ticket_price
 from myapp.domain.pennant.world import league_priority
@@ -107,6 +109,8 @@ class Member:
     contract: ContractStatus
     # 育成から支配下に上がった年（分岐元の `Stint.promoted_year`・オフの昇格は翌年。#170）
     promoted_year: int | None = None
+    # その年の年俸（#40 K1a。分岐した選手は `initial_salary`、新人と獲得した外国人はその年俸、残る選手は更改の額）
+    salary: Salary | None = None
 
 
 @dataclass(frozen=True)
@@ -142,6 +146,7 @@ def initial_members(
             for player in team.active_players:
                 stint = team.current_stint(player)
                 assert stint is not None
+                draft = player.profile.draft
                 members.append(
                     Member(
                         player_id=_id(player.id),
@@ -155,6 +160,16 @@ def initial_members(
                         ratings=ratings[_id(player.id)],
                         contract=stint.contract_now,
                         promoted_year=stint.promoted_year,
+                        salary=initial_salary(
+                            salary_basis(
+                                position=player.position,
+                                ratings=ratings[_id(player.id)].ratings,
+                                contract=stint.contract_now,
+                                is_foreign=player.profile.is_foreign_player,
+                                entered_year=year if draft is None else draft.entry_year,
+                                year=year,
+                            )
+                        ),
                     )
                 )
     for league_teams in source.rosters:
@@ -324,6 +339,7 @@ def _midseason_signings(
                 joined_year=on.year,
                 ratings=PlayerRatings(player_id, on.year, signing.ratings),
                 contract=signing.contract,
+                salary=foreign_salary(signing.position, signing.ratings, year=on.year),
             )
         )
         tally.registrations.setdefault(signing.team_id, []).append(
@@ -376,6 +392,7 @@ def offseason_clubs(
                 contract=member.contract,
                 playing_time=_playing_time(batting, pitching, member.player_id),
                 promoted_year=member.promoted_year,
+                salary=member.salary,
             )
         )
     return [
@@ -394,6 +411,7 @@ def apply_plan(members: Sequence[Member], plan: OffseasonPlan) -> list[Member]:
     leaving = set(plan.retired) | set(plan.released) | set(plan.expired)
     after = {change.player_id: change.after for change in plan.retained}
     promoted = {promotion.player_id: promotion.number for promotion in plan.promotions}
+    renewed = {renewal.player_id: renewal.salary for renewal in plan.renewals}
     kept = [
         replace(
             m,
@@ -401,9 +419,10 @@ def apply_plan(members: Sequence[Member], plan: OffseasonPlan) -> list[Member]:
             contract=ContractStatus.REGISTERED,
             number=promoted[m.player_id],
             promoted_year=plan.year + 1,
+            salary=renewed.get(m.player_id, m.salary),
         )
         if m.player_id in promoted
-        else replace(m, ratings=after[m.player_id])
+        else replace(m, ratings=after[m.player_id], salary=renewed.get(m.player_id, m.salary))
         for m in members
         if m.player_id not in leaving and m.player_id in after
     ]
@@ -423,6 +442,11 @@ def apply_plan(members: Sequence[Member], plan: OffseasonPlan) -> list[Member]:
                 joined_year=plan.year + 1,
                 ratings=PlayerRatings(player_id, plan.year + 1, newcomer.ratings),
                 contract=newcomer.contract,
+                salary=(
+                    rookie_salary(newcomer)
+                    if isinstance(newcomer, Draftee)
+                    else foreign_salary(newcomer.position, newcomer.ratings, year=plan.year + 1)
+                ),
             )
         )
     return kept
@@ -784,13 +808,7 @@ def club_finances(
 ) -> dict[int, ClubFinance]:
     """球団ごとの収支の見込み（`popularity_season` の近似）。"""
     home_games = ScheduleRules().games_per_team / 2
-    registered: Counter[int] = Counter()
-    developmental: Counter[int] = Counter()
-    for member in members:
-        if member.contract is ContractStatus.DEVELOPMENTAL:
-            developmental[member.team_id] += 1
-        else:
-            registered[member.team_id] += 1
+    payrolls = payrolls_of(members)
     result = {}
     for team_id, value in popularity.items():
         postseason_games = 5 if champions and team_id in champions else 2 if team_id in seconds else 0
@@ -800,11 +818,69 @@ def club_finances(
                 postseason_attendance=round(0.9 * PENNANT_DEFAULT_CAPACITY * postseason_games),
                 ticket_price=prices[team_id],
                 popularity=value,
-                roster=RosterSize(registered=registered[team_id], developmental=developmental[team_id]),
+                payroll=payrolls.get(team_id, 0),
                 capacity=None,
             )
         )
     return result
+
+
+def payrolls_of(members: Sequence[Member]) -> dict[int, int]:
+    """球団ごとの人件費（いまの名簿の年俸の合計。`salary.payroll`）。"""
+    by_team: dict[int, list[Salary]] = {}
+    for member in members:
+        if member.salary is not None:
+            by_team.setdefault(member.team_id, []).append(member.salary)
+    return {team_id: payroll(salaries) for team_id, salaries in by_team.items()}
+
+
+def format_salaries(members: Sequence[Member]) -> str:
+    """年俸の分布（#40 K1a）を1行にまとめる。支配下の日本人（選手会の年俸調査と同じ範囲）の平均・中央値・最高、
+    支配下の外国人の平均・最高、育成の平均、球団ごとの年俸の合計（全員）の幅。単位は万円（合計は億円）。"""
+    man = 10_000
+    japanese = [
+        m.salary.yen
+        for m in members
+        if m.salary and m.contract is ContractStatus.REGISTERED and not m.profile.is_foreign_player
+    ]
+    foreign = [
+        m.salary.yen
+        for m in members
+        if m.salary and m.contract is ContractStatus.REGISTERED and m.profile.is_foreign_player
+    ]
+    development = [m.salary.yen for m in members if m.salary and m.contract is ContractStatus.DEVELOPMENTAL]
+    totals = sorted(payrolls_of(members).values())
+    japanese_totals = sorted(
+        payroll(
+            m.salary
+            for m in members
+            if m.team_id == team_id
+            and m.salary
+            and m.contract is ContractStatus.REGISTERED
+            and not m.profile.is_foreign_player
+        )
+        for team_id in {m.team_id for m in members}
+    )
+    return (
+        f"年俸（万円）: 支配下の日本人 {len(japanese)}人 平均 {_mean(japanese) / man:,.0f}・"
+        f"中央 {median(japanese) / man:,.0f}・最高 {max(japanese) / man:,.0f}  "
+        f"外国人 {len(foreign)}人 平均 {_mean(foreign) / man:,.0f}・最高 {max(foreign, default=0) / man:,.0f}  "
+        f"育成 平均 {_mean(development) / man:,.0f}  "
+        f"球団の合計（億円）: 全員 {totals[0] / OKU:.1f}〜{totals[-1] / OKU:.1f}（平均 {fmean(totals) / OKU:.1f}）・"
+        f"支配下の日本人 {japanese_totals[0] / OKU:.1f}〜{japanese_totals[-1] / OKU:.1f}"
+    )
+
+
+def format_renewals(plan: OffseasonPlan) -> str:
+    """契約更改（#40 K1a）の人数と増減を1行にまとめる。"""
+    changes = [renewal.change for renewal in plan.renewals]
+    raised = [c for c in changes if c > 0]
+    cut = [c for c in changes if c < 0]
+    return (
+        f"契約更改: {len(changes)}人（増 {len(raised)}・減 {len(cut)}・"
+        f"据え置き {len(changes) - len(raised) - len(cut)}）  総額の増減 {sum(changes) / OKU:+.1f}億円・"
+        f"増の平均 {_mean(raised) / 10_000:,.0f}万円・減の平均 {_mean(cut) / 10_000:,.0f}万円"
+    )
 
 
 def format_finance(
@@ -878,6 +954,7 @@ def run_seasons(
         say(format_foreign_share(members, batting, pitching))
         say(format_midseason(tally, len(teams)))
         say(popularity_season(popularity, leagues, pitching, members, seed=seed, year=current))
+        say(format_salaries(members))
         say("")
         simulated_titles = []
         for team_ids in leagues.values():
@@ -908,6 +985,7 @@ def run_seasons(
         say("")
         say(f"---- {current}年のオフ（計算 {elapsed * 1000:.0f} ms）----")
         say(format_offseason(plan, members, current))
+        say(format_renewals(plan))
         say(format_development(plan, clubs, current, start_year=year))
         say(format_foreign_offseason(plan, members, current, start_year=year))
         departures = plan_departures(clubs, year=current, world_seed=seed, start_year=year)

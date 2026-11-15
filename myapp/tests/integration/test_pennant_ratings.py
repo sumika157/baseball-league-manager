@@ -25,6 +25,7 @@ from myapp.infrastructure.repositories import (
     DjangoLeagueRepository,
     DjangoPopularityRepository,
     DjangoRatingsRepository,
+    DjangoSalaryContractRepository,
     DjangoTeamRepository,
     DjangoWorldRepository,
 )
@@ -356,6 +357,7 @@ class ForkedRatingsTest(BaseCase):
                 teams=DjangoTeamRepository(scope),
                 ratings=FailingRatings(),  # type: ignore[arg-type]
                 popularities=DjangoPopularityRepository(scope),
+                salary_contracts=DjangoSalaryContractRepository(scope),
             )
 
         service = PennantWorldService(

@@ -58,6 +58,7 @@ from ..domain.exceptions import (
 from ..domain.pennant.awards import Award
 from ..domain.pennant.championship import Championship
 from ..domain.pennant.club_plan import ClubPlan, LineupChoice
+from ..domain.pennant.contract import Salary, SalaryContract, ensure_no_overlap
 from ..domain.pennant.development import DevelopmentDecision, DevelopmentPlan
 from ..domain.pennant.draft_lottery import DraftLotteryRecord
 from ..domain.pennant.draft_meeting import DraftAction, DraftActionKind, DraftSlot
@@ -123,6 +124,7 @@ from .scoping import (
     popularities_in,
     ratings_in,
     release_plans_in,
+    salary_contracts_in,
     stage_condition,
     stints_in,
     teams_in,
@@ -1504,6 +1506,8 @@ _WORLD_ROWS_CHILD_FIRST: tuple[tuple[type[models.Model], str], ...] = (
     (orm_models.PennantChampionship, "team__league"),
     # 球団の人気も球団を指すので、球団を消す前に消す（#208 E1）
     (orm_models.PennantClubPopularity, "team__league"),
+    # 年俸の契約は選手を指すので、選手を消す前に消す（#40 K1a）
+    (orm_models.PennantSalaryContract, "player__stints__team__league"),
     # 手動のチケットの値段も球団を指すので、球団を消す前に消す（#208 E2）
     (orm_models.PennantTicketPrice, "team__league"),
     # 編成と戦力外の指名は選手を指すので、選手を消す前に消す（行から先に）
@@ -2115,6 +2119,78 @@ class DjangoPopularityRepository:
     @staticmethod
     def _to_domain(team_id: int, year: int, value: int) -> ClubPopularity:
         return ClubPopularity(team_id=team_id, year=year, popularity=Popularity(value))
+
+
+class DjangoSalaryContractRepository:
+    """SalaryContractRepository の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る（#40 K1a）。
+
+    年俸の契約はペナント専用で、実データの範囲には書けない。他の世界の契約は、読めも書けもしない。
+    1年ぶんは世界の選手の数（8リーグで約4,000行）なので、`bulk_create` で書く。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def find_by_year(self, year: int) -> list[SalaryContract]:
+        rows = (
+            salary_contracts_in(self._scope)
+            .filter(first_year__lte=year, last_year__gte=year)
+            .order_by("player_id")
+            .values_list("player_id", "first_year", "last_year", "salary")
+        )
+        return [self._to_domain(*row) for row in rows]
+
+    def for_players(self, player_ids: Collection[int]) -> list[SalaryContract]:
+        wanted = set(player_ids)
+        if not wanted:
+            return []
+        rows = (
+            salary_contracts_in(self._scope)
+            .filter(player_id__in=wanted)
+            .order_by("player_id", "first_year")
+            .values_list("player_id", "first_year", "last_year", "salary")
+        )
+        return [self._to_domain(*row) for row in rows]
+
+    @transaction.atomic
+    def add_all(self, contracts: Sequence[SalaryContract]) -> None:
+        if not contracts:
+            return
+        if self._scope.is_real:
+            raise InvalidWorld("年俸の契約はペナントの世界にだけ保存できます。")
+        player_ids = {item.player_id for item in contracts}
+        known = set(players_in(self._scope).filter(id__in=player_ids).values_list("id", flat=True))
+        if missing := sorted(player_ids - known):
+            raise PlayerNotFound(f"この世界に居ない選手の年俸の契約は保存できません（id={missing[0]}）。")
+        years = {year for item in contracts for year in range(item.first_year, item.last_year + 1)}
+        if closed := closed_years(self._scope, years):
+            raise AlreadyClosed(
+                f"{closed[0]}年のシーズンは既に締めているので、その年の年俸の契約は書けません。", year=closed[0]
+            )
+        # 渡した契約どうしと、保存済みの契約との重なりを1回で確かめる（同じ選手の期間は重ならない）。保存済みは
+        # 渡した期間にかかりうる行だけ読む（締める処理の翌年の契約なら、締める年までの行は読まない）
+        saved = (
+            salary_contracts_in(self._scope)
+            .filter(player_id__in=player_ids, first_year__lte=max(years), last_year__gte=min(years))
+            .values_list("player_id", "first_year", "last_year", "salary")
+        )
+        ensure_no_overlap([*(self._to_domain(*row) for row in saved), *contracts])
+        orm_models.PennantSalaryContract.objects.bulk_create(
+            [
+                orm_models.PennantSalaryContract(
+                    player_id=item.player_id,
+                    first_year=item.first_year,
+                    last_year=item.last_year,
+                    salary=item.salary.yen,
+                )
+                for item in contracts
+            ],
+            batch_size=_RATINGS_CHUNK,
+        )
+
+    @staticmethod
+    def _to_domain(player_id: int, first_year: int, last_year: int, salary: int) -> SalaryContract:
+        return SalaryContract(player_id=player_id, first_year=first_year, last_year=last_year, salary=Salary(salary))
 
 
 class DjangoTicketPriceRepository:

@@ -215,3 +215,8 @@ def drafts_in(scope: WorldScope) -> QuerySet[orm_models.PennantDraft]:
 def draft_lotteries_in(scope: WorldScope) -> QuerySet[orm_models.PennantDraftLottery]:
     """範囲の締めた年のドラフトの抽選。抽選は指名された選手に付くので、能力と同じく範囲の選手で絞る。"""
     return orm_models.PennantDraftLottery.objects.filter(player_id__in=players_in(scope).values("id"))
+
+
+def salary_contracts_in(scope: WorldScope) -> QuerySet[orm_models.PennantSalaryContract]:
+    """範囲の年俸の契約（#40 K1a）。契約は選手に付くので、能力と同じく範囲の選手で絞る。"""
+    return orm_models.PennantSalaryContract.objects.filter(player_id__in=players_in(scope).values("id"))

@@ -316,6 +316,35 @@ GM ホーム。上から、自軍の位置 → 進めた結果 → 進める（�
   {% endwith %}
 {% endif %}
 
+{% if home.payroll %}
+  {% comment %}自軍のいまの年度の年俸（#40 K1a）。契約更改はシーズンを締めるときに自動で行う（書き込みの導線は無い）。{% endcomment %}
+  {% with payroll=home.payroll %}
+  <div class="card mb-4" id="payroll">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>年俸（{{ payroll.year }}年）</span>
+      <a href="{% url 'pennant_finance' world.world_id %}" class="card-header-link">経営を見る</a>
+    </div>
+    <div class="card-body">
+      <div class="stat-strip mb-2">
+        <div class="stat-cell">
+          <div class="stat-value">{{ payroll.total.label }}</div>
+          <div class="stat-label">年俸の合計（{{ payroll.player_count }}人）{% if payroll.change_label %}・前年から {{ payroll.change_label }}{% endif %}</div>
+        </div>
+        <div class="stat-cell">
+          <div class="stat-value">{{ payroll.average_label }}</div>
+          <div class="stat-label">平均</div>
+        </div>
+        <div class="stat-cell">
+          <div class="stat-value">{{ payroll.top.label }}</div>
+          <div class="stat-label">最高（{{ payroll.top_name }}）</div>
+        </div>
+      </div>
+      <p class="stat-muted mb-0" style="font-size: 0.8125rem;">年俸は1年契約で、シーズンを締めるときに能力と出場から決まる相場へ寄せて更改します（下げ幅は野球協約の減額制限まで）。年俸の合計が経営の人件費です。</p>
+    </div>
+  </div>
+  {% endwith %}
+{% endif %}
+
 <div class="card mb-4">
   <div class="card-header d-flex justify-content-between align-items-center">
     <span>順位表（{{ home.standings.year }}年）</span>

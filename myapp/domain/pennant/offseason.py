@@ -1,7 +1,8 @@
 """シーズンを締めるときの計算。**純粋な関数**で、DB にも Django にも触れない。
 
     引退を決める → 球団ごとに育成の昇格の希望 → 戦力外（`release.py`。昇格の希望の分も空ける）→ 昇格の確定と
-    育成契約の満了（`development.py`。#170。ここまでが `plan_departures`）→ 外国人の獲得
+    育成契約の満了（`development.py`。#170。ここまでが `plan_departures`）→ 残る選手の契約更改（`salary.py`。
+    #40 K1a。翌年の年俸）→ 外国人の獲得
     （`foreign_market.py`。補う人数は `draft.py`、選ぶ位置は戦力の穴）→ ドラフト会議の人数の幅と候補（ここまでが
     `prepare_meeting`。会議を始めるとき（#297 D3）も同じ関数）→ ドラフト会議（`draft_meeting.py`。全球団の
     日本人の新人。人数は新人の人数 − 獲得した外国人。本指名の後に育成の巡。GM が進めて終えた会議は保存した行動を
@@ -55,6 +56,7 @@ from .outlook import with_filled_potential
 from .ratings import PlayerRatings
 from .release import ability_value, decide_releases, releases_as_chosen
 from .retirement import retirement_chance
+from .salary import Renewal, decide_renewals
 
 
 @dataclass(frozen=True)
@@ -108,6 +110,8 @@ class OffseasonPlan:
     # 能力が無いために翌年の能力を作らなかった選手
     without_ratings: tuple[int, ...]
     anchor: AnchorCorrection
+    # 残る選手の契約更改（翌年の年俸。#40 K1a。選手 id の順）。年俸の無い選手は含まない
+    renewals: tuple[Renewal, ...] = ()
 
     @property
     def newcomers(self) -> tuple[ForeignSigning | Draftee, ...]:
@@ -357,12 +361,14 @@ class PreparedMeeting:
     - `market`: 外国人の獲得（`foreign_market.offseason_signings`）
     - `setup`: 会議の人数の幅・候補・指名順（`draft_meeting.open_meeting`）
     - `names`: 世界の全選手・獲得した外国人・候補の名前（新人の名前を重ねないため、続きの計算に渡す）
+    - `renewals`: 残る選手の契約更改（`salary.decide_renewals`。#40 K1a）
     """
 
     departures: Departures
     market: OffseasonSignings
     setup: MeetingSetup
     names: frozenset[str]
+    renewals: tuple[Renewal, ...] = ()
 
 
 def prepare_meeting(
@@ -377,8 +383,11 @@ def prepare_meeting(
     manual_development: Mapping[int, Mapping[int, DevelopmentDecision]] | None = None,
     manual_signings: Mapping[int, Collection[CandidateKey]] | None = None,
 ) -> PreparedMeeting:
-    """Y 年のドラフト会議を開くまで: 引退・戦力外（`plan_departures`）→ 外国人の獲得 →
-    人数の幅と候補（`open_meeting`）。
+    """Y 年のドラフト会議を開くまで: 引退・戦力外（`plan_departures`）→ 残る選手の契約更改（#40 K1a）→
+    外国人の獲得 → 人数の幅と候補（`open_meeting`）。
+
+    更改は外国人の獲得の前に置く（#40 K1b で、獲得の可否が更改の後の年俸の総額と上限で決まるようになる）。
+    K1a では更改の結果は獲得と会議に効かない。
 
     **会議を始めるとき（#297 D3）と締めるとき（`plan_offseason`）の唯一の関数**。会議の人数の幅と候補の位置ごとの人数は
     獲得した外国人の位置で決まるので、この順を両方で同じにする（獲得は決定的なので、入力が同じなら同じ幅になる）。
@@ -392,6 +401,7 @@ def prepare_meeting(
         manual_releases=manual_releases,
         manual_development=manual_development,
     )
+    renewals = decide_renewals(departures.survivors, year=year)
     names = set(used_names)
     # 外国人の獲得は会議の前（獲得した外国人の分だけ、会議で指名する日本人が減る。#169）
     market = offseason_signings(
@@ -400,7 +410,9 @@ def prepare_meeting(
     setup = open_meeting(
         market.teams, draft, year=year, world_seed=world_seed, used_names=names, signed=market.signed_positions
     )
-    return PreparedMeeting(departures=departures, market=market, setup=setup, names=frozenset(names))
+    return PreparedMeeting(
+        departures=departures, market=market, setup=setup, names=frozenset(names), renewals=renewals
+    )
 
 
 def replay_meeting(meeting: DraftRecord, setup: MeetingSetup) -> DraftState:
@@ -519,4 +531,5 @@ def plan_offseason(
         lotteries=result.lotteries,
         without_ratings=tuple(without_ratings),
         anchor=anchor_correction([ratings for ratings, counted in zip(population, inside, strict=True) if counted]),
+        renewals=prepared.renewals,
     )
