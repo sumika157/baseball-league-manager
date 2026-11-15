@@ -24,10 +24,12 @@ from .pennant.draft_lottery import DraftLotteryRecord
 from .pennant.draft_meeting import DraftAction
 from .pennant.draft_record import DraftRecord
 from .pennant.foreign_market import ForeignSigningPlan
+from .pennant.popularity import ClubPopularity
 from .pennant.ratings import PlayerRatings
 from .pennant.reinforcement import MidseasonRegistration
 from .pennant.release import ReleasePlan
 from .pennant.schedule import Fixture
+from .pennant.ticket_price import ClubTicketPrice
 from .pennant.world import World
 
 
@@ -407,6 +409,61 @@ class ChampionshipRepository(Protocol):
 
         実データの範囲には書けない（InvalidWorld）。範囲の外の球団は書けない（InvalidChampionship）。
         """
+        ...
+
+
+@runtime_checkable
+class PopularityRepository(Protocol):
+    """ペナントの球団の人気（`ClubPopularity`。球団 × 年。#208 E1）。書くのは世界の作成とシーズンを締める処理だけ。
+
+    ペナントの世界にだけ置ける。人気は年ごとの状態（能力の行と同じ型）で、締めた年の値は書き換えない。
+    行の無い球団（この機能より前の世界）は読む側が初期値で補う（`popularity.with_initial`）。
+    """
+
+    def find_by_year(self, year: int) -> list[ClubPopularity]:
+        """その年の、範囲の全球団の人気（行のある球団だけ）。球団の id の順。"""
+        ...
+
+    def find_by_team(self, team_id: int) -> list[ClubPopularity]:
+        """ひとつの球団の人気を、年の順に。範囲の外の球団や行の無い球団は空。"""
+        ...
+
+    def add_all(self, popularities: Sequence[ClubPopularity]) -> None:
+        """人気をまとめて保存する。どれかが書けなければ何も書かない。
+
+        実データの範囲には書けない（InvalidWorld）。範囲の外の球団・同じ球団 × 年の重複（渡した中・保存済み）は
+        InvalidPopularity。締めた年（`season.is_season_closed`）の値は AlreadyClosed（締めた年の状態を書き換えない。
+        締める処理は、翌年の能力を書く前に締める年の値を書く）。
+        """
+        ...
+
+
+@runtime_checkable
+class TicketPriceRepository(Protocol):
+    """GM が手動にしたチケットの値段（`ClubTicketPrice`。球団 × 年。#208 E2）。ペナントの世界にだけ置ける。
+
+    行の無い球団 × 年はお任せ（AI と同じ規則。読む側が `ticket_price.resolved_ticket_price` で決める）。
+    書けるのはその年の開幕前だけ（その年の試合が1つも無い）で、翌年には引き継がない。
+    """
+
+    def find_by_year(self, year: int) -> list[ClubTicketPrice]:
+        """その年の、範囲の手動の値段（行のある球団だけ）。球団の id の順。"""
+        ...
+
+    def find_by_team(self, team_id: int) -> list[ClubTicketPrice]:
+        """ひとつの球団の手動の値段を、年の順に。範囲の外の球団は空。"""
+        ...
+
+    def save(self, price: ClubTicketPrice) -> None:
+        """手動の値段を書く（同じ球団 × 年の行があれば上書き）。
+
+        実データの範囲には書けない（InvalidWorld）。範囲の外の球団は InvalidTicketPrice。締めた年は AlreadyClosed、
+        開幕した年（その年の試合が1つでもある）は TicketPriceLocked（どちらも何も書かない）。
+        """
+        ...
+
+    def delete(self, team_id: int, year: int) -> None:
+        """手動の値段を消す（お任せに戻す）。行が無ければ何もしない。書けない年の扱いは `save` と同じ。"""
         ...
 
 

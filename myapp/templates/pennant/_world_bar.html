@@ -2,6 +2,7 @@
 世界バー。いまペナントの中にいることを、世界の全画面で示す。パンくずの下に置く。
 1行目は世界の名前と「いま」（今日・局面・受け持つ球団）、2行目は世界の中の移動。
 「ホーム」は GM ホーム（P4b）、「編成」は受け持つ球団の編成（P5b。見るのは誰でもできる）。
+「経営」は受け持つ球団のチケットの値段と収支（#208 E2。見るのは誰でもできる）。
 「ポストシーズン」は勝ち上がりの表で、いまの方式が「なし」でないか、過去の年の試合がある世界にだけ出す。
 成績とタイトルはリーグごとの画面なので、受け持つ球団のリーグ（無ければ先頭のリーグ）へ向ける。
 {% endcomment %}
@@ -30,6 +31,8 @@
        href="{% url 'pennant_team_list' world.world_id %}">球団</a>
     <a class="segmented-item {% if name == 'pennant_club' %}is-active{% endif %}"
        href="{% url 'pennant_club' world.world_id %}">編成</a>
+    <a class="segmented-item {% if name == 'pennant_finance' %}is-active{% endif %}"
+       href="{% url 'pennant_finance' world.world_id %}">経営</a>
     {% if world.shows_postseason %}
       <a class="segmented-item {% if name == 'pennant_postseason' or name == 'pennant_postseason_by_year' or name == 'pennant_postseason_stats' %}is-active{% endif %}"
          href="{% url 'pennant_postseason' world.world_id %}">ポストシーズン</a>

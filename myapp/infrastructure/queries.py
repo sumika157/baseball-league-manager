@@ -22,6 +22,7 @@ from ..application.dto import (
     AnalysisRosterRow,
     AwardRow,
     ChampionshipRow,
+    ClubRosterSize,
     ClubStint,
     ClubTenure,
     ContractFacts,
@@ -36,6 +37,7 @@ from ..application.dto import (
     FieldingRow,
     GameNote,
     GameRow,
+    HomeAttendance,
     HomeStadium,
     LastStart,
     LeagueOption,
@@ -1292,6 +1294,72 @@ class DjangoChampionshipQuery:
             .order_by("year", "id")
             .values_list("year", "team_id", "team__name")
         ]
+
+
+class DjangoAttendanceQuery:
+    """AttendanceQuery の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る。1本の GROUP BY で読む（#208 E1）。"""
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def home_totals(self, *, stage: GameStage, year: int | None, team_id: int | None) -> list[HomeAttendance]:
+        stages = StageFilter.POSTSEASON_ONLY if stage is GameStage.POSTSEASON else StageFilter.REGULAR_ONLY
+        rows = games_in(self._scope, stages=stages).filter(attendance__isnull=False)
+        if year is not None:
+            rows = rows.filter(year=year)
+        if team_id is not None:
+            rows = rows.filter(home_team_id=team_id)
+        return [
+            HomeAttendance(team_id=row["home_team_id"], year=row["year"], games=row["games"], total=row["total"])
+            for row in rows.values("home_team_id", "year")
+            .annotate(games=Count("id"), total=Sum("attendance"))
+            .order_by("year", "home_team_id")
+        ]
+
+
+class DjangoClubFinanceQuery:
+    """ClubFinanceQuery の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る（#208 E2）。"""
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def roster_sizes(self, *, years: Collection[int], team_ids: Collection[int]) -> list[ClubRosterSize]:
+        wanted_years, wanted_teams = sorted(set(years)), sorted(set(team_ids))
+        if not wanted_years or not wanted_teams:
+            return []
+        rows = (
+            stints_in(self._scope)
+            .filter(team_id__in=wanted_teams, from_year__lte=wanted_years[-1])
+            .filter(Q(to_year__isnull=True) | Q(to_year__gte=wanted_years[0]))
+            .order_by("from_year", "id")
+            .values_list("team_id", "player_id", "from_year", "to_year", "signed_as", "promoted_year")
+        )
+        # (球団, 年) → 選手 → その年の区分（同じ球団に同じ年に2回在籍しても1人。後の在籍の区分で上書きする）
+        members: dict[tuple[int, int], dict[int, ContractStatus]] = {}
+        for team_id, player_id, from_year, to_year, signed_as, promoted_year in rows:
+            status = ContractStatus(signed_as)
+            for year in wanted_years:
+                if from_year <= year and (to_year is None or year <= to_year):
+                    members.setdefault((team_id, year), {})[player_id] = ContractStatus.in_year(
+                        status, promoted_year, year
+                    )
+        result = []
+        for year in wanted_years:
+            for team_id in wanted_teams:
+                statuses = list(members.get((team_id, year), {}).values())
+                developmental = sum(1 for status in statuses if status is ContractStatus.DEVELOPMENTAL)
+                result.append(
+                    ClubRosterSize(
+                        team_id=team_id,
+                        year=year,
+                        registered=len(statuses) - developmental,
+                        developmental=developmental,
+                    )
+                )
+        return result
+
+    def stadium_capacities(self, team_ids: Collection[int]) -> dict[int, int | None]:
+        return dict(teams_in(self._scope).filter(id__in=set(team_ids)).values_list("id", "home_stadium__capacity"))
 
 
 class DjangoRatingsHistoryQuery:

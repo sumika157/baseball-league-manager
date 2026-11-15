@@ -21,6 +21,7 @@ from ..domain.exceptions import TeamNotFound
 from ..domain.pennant.season import completed_years, unclosed_completed_year
 from ..domain.repositories import LeagueRepository, TeamRepository
 from ..domain.services.rankings import Title
+from ..domain.value_objects import GameStage
 from .dto import (
     AwardRow,
     ClubHistory,
@@ -38,8 +39,9 @@ from .dto import (
 from .league_view import LeagueViewService
 from .pennant_awards import derive_award_rows
 from .pennant_championships import PostseasonHistoryReader, YearChampion
+from .pennant_popularity import PopularityReader
 from .pennant_race import SeasonFinal, final_standings, team_order
-from .queries import AwardQuery, GameListQuery
+from .queries import AttendanceQuery, AwardQuery, GameListQuery
 from .standings import record_label
 
 
@@ -55,6 +57,8 @@ class PennantHistoryService:
         leagues: LeagueRepository,
         awards: AwardQuery,
         postseason: PostseasonHistoryReader,
+        popularities: PopularityReader,
+        attendance: AttendanceQuery,
     ) -> None:
         self._league_view = league_view
         self._games = games
@@ -63,6 +67,9 @@ class PennantHistoryService:
         self._leagues = leagues
         self._awards = awards
         self._postseason = postseason
+        # 球団史の人気と観客動員の列（#208 E1）
+        self._popularities = popularities
+        self._attendance = attendance
 
     def get_world_history(self, world: WorldContext, *, league_id: int | None) -> WorldHistory:
         """歴代の記録。`league_id` は受賞者を見るリーグ（無効な値は既定のリーグ、無ければ先頭に落とす）。"""
@@ -126,6 +133,12 @@ class PennantHistoryService:
         seasons: list[ClubHistorySeason] = []
         league_ids = [league.id for league in leagues if league.id is not None]
         postseason = self._postseason.club_results(world, finals, league_ids, team_id)
+        # 人気は保存した行だけ（この機能より前の年は「—」）。観客動員は公式戦のホーム試合の合計（#208 E1）
+        popularity = self._popularities.history(team_id)
+        attendance = {
+            row.year: row.total
+            for row in self._attendance.home_totals(stage=GameStage.REGULAR, year=None, team_id=team_id)
+        }
         wins = losses = ties = 0
         for final in finals:
             league = final.league_of(team_id)
@@ -148,6 +161,8 @@ class PennantHistoryService:
                     titles=[_club_title(award) for award in holders.get(final.year, [])],
                     postseason=outcome.label if outcome is not None else "",
                     won_postseason=outcome is not None and outcome.won,
+                    popularity=popularity[final.year].value if final.year in popularity else None,
+                    attendance=attendance.get(final.year),
                 )
             )
             wins += row.wins

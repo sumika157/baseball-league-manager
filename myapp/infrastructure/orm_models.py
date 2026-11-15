@@ -15,6 +15,7 @@ from ..domain.pennant.draft_meeting import DraftActionKind
 from ..domain.pennant.draft_order import DraftOrderRule
 from ..domain.pennant.postseason import PostseasonFormat
 from ..domain.pennant.reinforcement import RegistrationKind
+from ..domain.pennant.ticket_price import TicketPrice
 from ..domain.services.rankings import Title
 from ..domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings
 from ..domain.value_objects import (
@@ -54,6 +55,8 @@ DRAFT_ORDER_RULE_CHOICES = [(item.value, item.value) for item in DraftOrderRule]
 DEVELOPMENT_DECISION_CHOICES = [(item.value, item.value) for item in DevelopmentDecision]
 # 期中の支配下登録の区分（昇格・獲得。#169 F3）の選択肢もドメインの RegistrationKind が唯一の出典
 REGISTRATION_KIND_CHOICES = [(item.value, item.value) for item in RegistrationKind]
+# チケットの値段の段階（#208 E2）の選択肢もドメインの TicketPrice が唯一の出典
+TICKET_PRICE_CHOICES = [(item.value, item.value) for item in TicketPrice]
 # ドラフト会議の行動の種類の選択肢もドメインの DraftActionKind が唯一の出典
 DRAFT_ACTION_KIND_CHOICES = [(item.value, item.value) for item in DraftActionKind]
 # 試合で就いた守備位置。登録位置（Position）とは別の概念
@@ -1189,6 +1192,52 @@ class PennantChampionship(models.Model):
 
     def __str__(self) -> str:
         return f"{self.year}年 {self.team_id}"
+
+
+class PennantClubPopularity(models.Model):
+    """ペナントの球団の人気（球団 × 年。1〜100。#208 E1）。
+
+    試合の集計ではなく年ごとの状態（能力の行と同じ型）。書くのは世界の作成（開幕年）とシーズンを締める処理（翌年）だけ。
+    値の範囲の出典は domain の `Popularity`。世界の列は持たない（球団のリーグで世界が決まる）。管理画面には出さない。
+    """
+
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="+", verbose_name="球団")
+    year = models.PositiveSmallIntegerField(verbose_name="年度")
+    value = models.PositiveSmallIntegerField(verbose_name="人気")
+
+    class Meta:
+        verbose_name = "ペナントの球団の人気"
+        verbose_name_plural = "ペナントの球団の人気"
+        ordering = ["year", "team_id"]
+        constraints = [
+            models.UniqueConstraint(fields=["team", "year"], name="unique_pennant_club_popularity"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.year}年 {self.team_id} 人気{self.value}"
+
+
+class PennantTicketPrice(models.Model):
+    """GM が手動にしたチケットの値段（球団 × 年。#208 E2）。行の無い球団 × 年はお任せ（AI と同じ規則で導く）。
+
+    書けるのはその年の開幕前だけで、翌年には引き継がない。段階の選択肢の出典は domain の `TicketPrice`。
+    世界の列は持たない（球団のリーグで世界が決まる）。管理画面には出さない。
+    """
+
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="+", verbose_name="球団")
+    year = models.PositiveSmallIntegerField(verbose_name="年度")
+    price = models.CharField(max_length=10, choices=TICKET_PRICE_CHOICES, verbose_name="チケットの値段")
+
+    class Meta:
+        verbose_name = "ペナントのチケットの値段"
+        verbose_name_plural = "ペナントのチケットの値段"
+        ordering = ["year", "team_id"]
+        constraints = [
+            models.UniqueConstraint(fields=["team", "year"], name="unique_pennant_ticket_price"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.year}年 {self.team_id} {self.price}"
 
 
 class PennantDraft(models.Model):

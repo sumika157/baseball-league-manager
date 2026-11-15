@@ -21,6 +21,7 @@ from ..domain.pennant.club_plan import ClubMember, ensure_roster_playable
 from ..domain.pennant.draft_order import DraftOrderRule
 from ..domain.pennant.fork import fork_league, fork_roster, fork_team
 from ..domain.pennant.initial_ratings import career_record, estimate_initial_ratings
+from ..domain.pennant.popularity import ClubPopularity, initial_popularity
 from ..domain.pennant.postseason import PostseasonFormat
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.world import (
@@ -32,7 +33,13 @@ from ..domain.pennant.world import (
     WorldScope,
     earliest_start_year,
 )
-from ..domain.repositories import LeagueRepository, RatingsRepository, TeamRepository, WorldRepository
+from ..domain.repositories import (
+    LeagueRepository,
+    PopularityRepository,
+    RatingsRepository,
+    TeamRepository,
+    WorldRepository,
+)
 from ..domain.value_objects import ContractStatus, ForeignPlayerRules
 from .dto import PennantWorldCreated, PennantWorldRow
 from .pennant_season import AtomicBlock
@@ -63,6 +70,7 @@ class WorldRepositories:
     leagues: LeagueRepository
     teams: TeamRepository
     ratings: RatingsRepository
+    popularities: PopularityRepository
 
 
 # 範囲を渡すと、その範囲のリポジトリを返す生成器。実装は組み立ての1か所が渡す
@@ -273,6 +281,13 @@ class PennantWorldService:
                 player_count += len(team.active_players)
 
         rating_count = self._save_initial_ratings(world, repositories, forked_players)
+        # 球団の人気の開幕年の値（全球団50。2026-11-14 ユーザー決定。#208 E1）
+        repositories.popularities.add_all(
+            [
+                ClubPopularity(team_id=team_id, year=world.start_year, popularity=initial_popularity())
+                for team_id in forked_team_ids.values()
+            ]
+        )
 
         if managed_source_team_id is not None:
             world.managed_team_id = forked_team_ids[managed_source_team_id]

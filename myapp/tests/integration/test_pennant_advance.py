@@ -24,6 +24,7 @@ from myapp.domain.exceptions import (
     TeamNotFound,
     WorldNotFound,
 )
+from myapp.domain.pennant.popularity import PENNANT_DEFAULT_CAPACITY
 from myapp.domain.pennant.schedule import AdvanceTarget, Fixture
 from myapp.domain.pennant.world import WorldScope
 from myapp.domain.simulation.fatigue import max_consecutive_days
@@ -237,7 +238,11 @@ class AdvanceTest(SeasonCase):
                 self.assertEqual(wins, 0 if loaded.home_score == loaded.away_score else 1, "引分以外は勝ち投手が1人")
 
     def test_a_simulated_game_has_times_and_attendance(self):
-        """進めた試合には開始・終了の時刻と観客数が付く。観客数は収容人数を超えない。"""
+        """進めた試合には開始・終了の時刻と観客数が付く。観客数は収容人数を超えない。
+
+        本拠地の無い球団のホーム試合も、ペナントの世界では標準の収容人数で観客数を作る（#208 E1。2026-11-14
+        ユーザー決定で、#44 の「根拠の無い数を作らない」をペナントでだけ緩めた）。
+        """
         self.advance(self.world_a, AdvanceTarget.MONTH_END)
 
         games = self.games_of(self.world_a)
@@ -255,7 +260,8 @@ class AdvanceTest(SeasonCase):
                     self.assertLessEqual(game.attendance, STADIUM_CAPACITY)
                 else:
                     rival_games += 1
-                    self.assertIsNone(game.attendance, "本拠地の無い球団のホーム試合は観客数を作らない")
+                    self.assertIsNotNone(game.attendance, "本拠地の無い球団も標準の収容人数で観客数を作る")
+                    self.assertLessEqual(game.attendance, PENNANT_DEFAULT_CAPACITY)
         self.assertGreater(home_games, 0)
         self.assertGreater(rival_games, 0)
 

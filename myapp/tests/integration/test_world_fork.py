@@ -21,6 +21,7 @@ from myapp.infrastructure import orm_models
 from myapp.infrastructure.queries import DjangoFieldingTotalsQuery, DjangoSimulationContextQuery
 from myapp.infrastructure.repositories import (
     DjangoLeagueRepository,
+    DjangoPopularityRepository,
     DjangoRatingsRepository,
     DjangoTeamRepository,
     DjangoWorldRepository,
@@ -367,6 +368,7 @@ class ForkOptionsTest(BaseCase):
                 leagues=DjangoLeagueRepository(scope),
                 teams=FailingTeams(DjangoTeamRepository(scope)),
                 ratings=DjangoRatingsRepository(scope),
+                popularities=DjangoPopularityRepository(scope),
             )
 
         service = PennantWorldService(

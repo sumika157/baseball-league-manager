@@ -48,6 +48,8 @@ GM が会議（`PennantDraftService`。#297 D3）を開いた年は、途中な�
 戦力外の実績の加点に使うタイトルの数は、締めた年までの表彰と、いま導いた締める年の受賞を足す（過去の年を導き直さない）。
 締める年のポストシーズンの優勝球団（日本一）も**記録として保存する**（#242。表彰と同じ例外）。勝ち上がりは外で1回だけ導き、
 締められるかの検査（ポストシーズンが終わったか）と、書く優勝球団の両方に使う。
+翌年の球団の人気（#208 E1。年ごとの状態で、この例外ではない）も外で導き（`pennant_popularity`。最終順位・日本一・
+在籍する選手の実績から）、中で書く（行の無い球団の締める年の補った値は翌年の能力より先に、翌年の値は後に）。
 
 **前提: 世界の `Team` 集約に書くのは、世界の作成・この処理・期中の登録（`MidseasonRegistrationService`。
 #170 P3a）だけ。** 外で読んだ `Team` を中でそのまま `save()` して安全なのは、この前提による
@@ -66,7 +68,7 @@ GM が会議（`PennantDraftService`。#297 D3）を開いた年は、途中な�
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from ..domain.entities import Player, Team
 from ..domain.exceptions import (
@@ -102,6 +104,7 @@ from ..domain.pennant.foreign_market import (
     offseason_key,
 )
 from ..domain.pennant.offseason import Draftee, OffseasonPlan, plan_offseason
+from ..domain.pennant.popularity import ClubPopularity
 from ..domain.pennant.postseason import PostseasonStatus
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.release import ReleasePlan, ensure_releasable
@@ -118,6 +121,7 @@ from ..domain.repositories import (
     FixtureRepository,
     ForeignSigningPlanRepository,
     LeagueRepository,
+    PopularityRepository,
     RatingsRepository,
     ReleasePlanRepository,
     TeamRepository,
@@ -153,8 +157,10 @@ from .pennant_offseason_inputs import (
     managed_team_id,
     release_plan_of,
 )
+from .pennant_popularity import PopularityBasis, popularity_basis
 from .pennant_postseason import PostseasonBracketReader
 from .pennant_season import AtomicBlock
+from .pennant_ticket_price import TicketPriceReader
 from .queries import DevelopmentRosterQuery, PlayerNameQuery, SimulationContextQuery
 
 
@@ -185,8 +191,12 @@ class _PreparedClose:
     year: int
     # 締める年のタイトル受賞者（表彰として書く。ロックの外で導いた値）
     awards: list[Award]
+    # 締める年の人気の材料（#208 E1。ロックの外で読んだ値）
+    popularity: PopularityBasis
     # 締める年の日本一（記録として書く。ロックの外で導いた勝ち上がりから `close_season` が入れる）。無い年は None
     championship: Championship | None = None
+    # 翌年の全球団の人気（ロックの外で材料と日本一から `close_season` が入れる。#208 E1）
+    next_popularities: list[ClubPopularity] = field(default_factory=list)
 
 
 class PennantOffseasonService:
@@ -209,6 +219,8 @@ class PennantOffseasonService:
         names: PlayerNameQuery,
         awards: AwardRepository,
         championships: ChampionshipRepository,
+        popularities: PopularityRepository,
+        ticket_prices: TicketPriceReader,
         drafts: DraftRepository,
         lotteries: DraftLotteryRepository,
         titles: LeagueViewService,
@@ -235,6 +247,10 @@ class PennantOffseasonService:
         self._names = names
         self._awards = awards
         self._championships = championships
+        # 球団の人気（締めるときに翌年の値を書く。#208 E1）
+        self._popularities = popularities
+        # 締める年のチケットの値段（翌年の人気への効き。#208 E2）
+        self._ticket_prices = ticket_prices
         # その年のドラフト会議の記録（GM が開いた会議。締めるときに再生して消す。#297 D3）
         self._drafts = drafts
         # 締めた年の抽選の記録（会議の記録が消えた後の抽選の出典。#298 D4）
@@ -310,9 +326,11 @@ class PennantOffseasonService:
         ensure_postseason_settled(year, bracket.status)
         self._ensure_not_closed(world, year)
         champion = bracket.champion
+        prepared = self._prepare(world, year)
         prepared = replace(
-            self._prepare(world, year),
+            prepared,
             championship=Championship(year=year, team_id=champion) if champion is not None else None,
+            next_popularities=prepared.popularity.following(japan_champion=champion, world_seed=world.seed),
         )
         with self._atomic():
             if self._phase.state() != state or self._drafts.last_seq(year) != meeting_mark:
@@ -656,6 +674,7 @@ class PennantOffseasonService:
         """読んで計算し、集約の変更（引退・戦力外・新人）をメモリの上で済ませる。DB には何も書かない。
 
         GM が開いた会議があれば、その記録を再生する（途中なら `DraftInProgress`。domain の `replay_meeting`）。
+        人気の材料（#208 E1。締める年の人気・最終順位・在籍する選手の実績）も読む（日本一は `close_season` が足す）。
         """
         inputs = self._inputs.read(world, year)
         teams = inputs.teams
@@ -680,7 +699,22 @@ class PennantOffseasonService:
             world_seed=world.seed,
             year=year + 1,
         )
-        return _PreparedClose(plan=plan, changes=changes, schedule=schedule, year=year, awards=inputs.awards)
+        popularity = popularity_basis(
+            year=year,
+            team_ids=[_saved_id(team.id) for team in teams],
+            recorded={row.team_id: row.popularity for row in self._popularities.find_by_year(year)},
+            finishes=inputs.finishes,
+            clubs=inputs.clubs,
+            manual_prices=self._ticket_prices.manual(year),
+        )
+        return _PreparedClose(
+            plan=plan,
+            changes=changes,
+            schedule=schedule,
+            year=year,
+            awards=inputs.awards,
+            popularity=popularity,
+        )
 
     def _commit(self, world: World, prepared: _PreparedClose) -> SeasonClosed:
         """計算済みの変更を書く（トランザクションの中。SQL を流すだけにする）。"""
@@ -699,8 +733,13 @@ class PennantOffseasonService:
                 pick = newcomer.profile.draft if isinstance(newcomer, Draftee) else None
                 if pick is not None and pick.round is not None:
                     drafted[(newcomer.team_id, pick.round, pick.is_development)] = _saved_id(player.id)
+        # 行の無い球団の締める年の人気は翌年の能力より先に書く（翌年の能力を書くと締める年が「締めた年」になり、
+        # その年の値は書けない。#208 E1）
+        self._popularities.add_all(prepared.popularity.unrecorded())
         retained = [change.after for change in plan.retained]
         self._ratings.add_all([*retained, *rookie_ratings])
+        # 翌年の人気は能力の後に書く（同時に2回締めたときは、能力の一意制約が先に止める）
+        self._popularities.add_all(prepared.next_popularities)
 
         reverted, reverted_clubs = self._revert_plans(plan, world)
         # 戦力外の指名は使い終わった（締める年の違う指名も、使わずに消す）。事実は在籍の退団の経路に残る
