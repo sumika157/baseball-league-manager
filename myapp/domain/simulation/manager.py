@@ -13,6 +13,7 @@
 **疲労は保存しない。** 直近の登板の記録（`fatigue.PitchingHistory`）から導く。
 疲労が率に効くのはエンジン（`fatigue.py`）。
 乱数は呼び出し側から受け取る（`random()` だけを使う）。
+監督の傾向（`tactics.Tactics`。#210 M1）は、先発の目安と代打の差をずらすだけで、規則は全球団で同じ。
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from .fatigue import (
 )
 from .randomness import GameRandom, normal, weighted_index
 from .ratings import BatterRatings, PitcherRatings
+from .tactics import Tactics
 
 FP = FieldingPosition
 
@@ -723,12 +725,16 @@ def relief_fatigue(history: PitchingHistory, pitcher: SimPitcher, today: date) -
     return FatigueLevel.from_points(points)
 
 
-def starter_batter_target(rng: GameRandom, pitcher: SimPitcher) -> int:
-    """先発が受け持つ打者数の目安。スタミナと抑える力で決まり、試合ごとにばらつく。"""
+def starter_batter_target(rng: GameRandom, pitcher: SimPitcher, tactics: Tactics = Tactics.STANDARD) -> int:
+    """先発が受け持つ打者数の目安。スタミナと抑える力で決まり、試合ごとにばらつく。
+
+    監督の傾向（先発の引っ張り）で平均をずらす（`Tactics.starter_batters_shift`。乱数の回数は変えない）。
+    """
     mean = (
         STARTER_BATTERS
         + STARTER_BATTERS_PER_STAMINA * (pitcher.ratings.stamina - 50)
         + STARTER_BATTERS_PER_PITCHING_VALUE * (pitcher.ratings.pitching_value - 50)
+        + tactics.starter_batters_shift()
     )
     return max(12, round(normal(rng, mean, STARTER_BATTERS_SD)))
 
@@ -840,10 +846,15 @@ class PinchHitSituation:
     position: FieldingPosition
     bench: Sequence[SimBatter] = field(default_factory=tuple)
     quota: ForeignQuota = field(default_factory=ForeignQuota)
+    # 攻撃側の監督の傾向（代打の「明確に上」の差をずらす）
+    tactics: Tactics = Tactics.STANDARD
 
 
 def choose_pinch_hitter(situation: PinchHitSituation) -> PinchHit | None:
-    """代打を出すか。7回以降・負けている・控えに明確に上の打者がいる、の3つが揃ったときだけ。"""
+    """代打を出すか。7回以降・負けている・控えに明確に上の打者がいる、の3つが揃ったときだけ。
+
+    「明確に上」の差は、攻撃側の監督の傾向（代打）でずらす（`Tactics.pinch_hitter_margin`）。
+    """
     if (
         situation.inning < PINCH_HITTER_FROM_INNING
         or situation.lead >= 0
@@ -852,10 +863,11 @@ def choose_pinch_hitter(situation: PinchHitSituation) -> PinchHit | None:
         return None
 
     current_value = situation.current.ratings.batting_value
+    margin = situation.tactics.pinch_hitter_margin(PINCH_HITTER_MARGIN)
     by_batting = sorted(situation.bench, key=lambda b: -b.ratings.batting_value)
     by_regular = sorted(situation.bench, key=regular_value, reverse=True)
     for candidate in by_batting:
-        if candidate.ratings.batting_value - current_value < PINCH_HITTER_MARGIN:
+        if candidate.ratings.batting_value - current_value < margin:
             break  # これより後の控えはさらに劣る
         if not situation.quota.allows(candidate.counts_as_foreign, position=candidate.position):
             continue

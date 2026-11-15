@@ -41,6 +41,7 @@ from .dto import (
     ServiceHistory,
     SimulationContext,
     SimulationTeam,
+    StaffTenureRow,
     TeamAnalysisFacts,
     TeamSummary,
     WorldSummary,
@@ -488,4 +489,17 @@ class DevelopmentRosterQuery(Protocol):
     def squads(self, year: int) -> tuple[DevelopmentSquad, ...]:
         """範囲の全球団（id の順）の、`year` 年の育成選手（id の順）・支配下の人数・リーグの上限・使っている背番号
         （AI の期中の昇格の材料。#170 P3b）。区分の判定は `for_team` と同じ。"""
+        ...
+
+
+@runtime_checkable
+class StaffQuery(Protocol):
+    """首脳陣の就任の参照（人の名前・傾向と球団名を添える。#210 M1）。範囲（世界）は組み立てるときに必須で渡す。"""
+
+    def for_team(self, team_id: int) -> list[StaffTenureRow]:
+        """ひとつの球団の就任を、初年の順に。範囲の外の球団は空。"""
+        ...
+
+    def changed_at(self, year: int) -> list[StaffTenureRow]:
+        """`year` を締めたときに動いた就任（最終年が `year` か、初年が翌年）。球団の id・初年の順。"""
         ...
