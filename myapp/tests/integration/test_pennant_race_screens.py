@@ -428,6 +428,7 @@ class FinaleTest(SimpleTestCase):
             popularities=None,
             attendance=None,
             finance=None,
+            payroll=None,
         )
 
     def league(self, *rows):

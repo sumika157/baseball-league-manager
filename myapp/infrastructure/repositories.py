@@ -66,6 +66,7 @@ from ..domain.exceptions import (
     InvalidPosition,
     InvalidRatings,
     InvalidSchedule,
+    InvalidStaffTenure,
     InvalidTicketPrice,
     InvalidWorkspace,
     InvalidWorld,
@@ -81,6 +82,7 @@ from ..domain.exceptions import (
 from ..domain.pennant.awards import Award
 from ..domain.pennant.championship import Championship
 from ..domain.pennant.club_plan import ClubPlan, LineupChoice
+from ..domain.pennant.contract import Salary, SalaryContract, ensure_no_overlap
 from ..domain.pennant.development import DevelopmentDecision, DevelopmentPlan
 from ..domain.pennant.draft_lottery import DraftLotteryRecord
 from ..domain.pennant.draft_meeting import DraftAction, DraftActionKind, DraftSlot
@@ -98,6 +100,15 @@ from ..domain.pennant.reinforcement import (
 from ..domain.pennant.release import ReleasePlan
 from ..domain.pennant.schedule import Fixture
 from ..domain.pennant.season import is_season_closed
+from ..domain.pennant.staff import (
+    Appointment,
+    ManagerStyle,
+    StaffAssignment,
+    StaffMember,
+    StaffRole,
+    StaffTenure,
+    ensure_valid_tenures,
+)
 from ..domain.pennant.ticket_price import ClubTicketPrice, TicketPrice, ticket_price_change_blocker
 from ..domain.pennant.world import World, WorldScope, WorldUsage
 from ..domain.services import ensure_lines_match_plate_appearances
@@ -108,6 +119,7 @@ from ..domain.setup import (
     team_deletion_blocker,
 )
 from ..domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings, Potential
+from ..domain.simulation.tactics import TacticLevel
 from ..domain.value_objects import (
     AcquisitionRoute,
     AdvanceReason,
@@ -164,7 +176,9 @@ from .scoping import (
     popularities_in,
     ratings_in,
     release_plans_in,
+    salary_contracts_in,
     stadiums_in,
+    staff_tenures_in,
     stage_condition,
     stints_in,
     teams_in,
@@ -915,6 +929,7 @@ def _pitching_values(entry: GamePitching) -> dict[str, Any]:
     values["innings_pitched"] = float(entry.line.innings.to_notation())
     values["appearance_order"] = entry.appearance_order
     values["entered_inning"] = entry.entered_inning
+    values["team_id"] = entry.team_id
     return values
 
 
@@ -1046,7 +1061,9 @@ class _NewGame:
                 orm_models.GamePitchingLine(player_id=e.player_id, **_pitching_values(e)) for e in game.pitching
             ],
             fielding=[
-                orm_models.GameFieldingLine(player_id=e.player_id, **{f: getattr(e.line, f) for f in _FIELDING_FIELDS})
+                orm_models.GameFieldingLine(
+                    player_id=e.player_id, team_id=e.team_id, **{f: getattr(e.line, f) for f in _FIELDING_FIELDS}
+                )
                 for e in game.fielding
             ],
             innings=[
@@ -1295,7 +1312,7 @@ class DjangoGameRepository:
             fielding_row, _ = orm_models.GameFieldingLine.objects.update_or_create(
                 game=row,
                 player_id=entry.player_id,
-                defaults={f: getattr(entry.line, f) for f in _FIELDING_FIELDS},
+                defaults={"team_id": entry.team_id, **{f: getattr(entry.line, f) for f in _FIELDING_FIELDS}},
             )
             entry.id = fielding_row.id
         orm_models.GameFieldingLine.objects.filter(game=row).exclude(
@@ -1426,6 +1443,7 @@ class DjangoGameRepository:
                 id=f.id,
                 player_id=f.player_id,
                 line=FieldingLine(**{name: getattr(f, name) for name in _FIELDING_FIELDS}),
+                team_id=f.team_id,
             )
             for f in row.fielding_lines.all()
         ]
@@ -1498,6 +1516,7 @@ def game_pitching_of(row: orm_models.GamePitchingLine) -> GamePitching:
             starts=1 if row.appearance_order <= 1 else 0,
             relief_wins=row.wins if row.appearance_order > 1 else 0,
         ),
+        team_id=row.team_id,
         appearance_order=row.appearance_order,
         entered_inning=row.entered_inning,
     )
@@ -1631,7 +1650,7 @@ def ensure_team_name_free(teams: QuerySet[orm_models.Team], name: str, own_id: i
 def _violates_unique(error: IntegrityError, model: type[models.Model], constraint_names: Sequence[str]) -> bool:
     """`error` が `model` の一意制約（`constraint_names`）の違反か。
 
-    制約の出典は ORM の `Meta.constraints`（0071）。SQLite は違反の文言に制約名ではなく列（「表.列, 表.列」）を
+    制約の出典は ORM の `Meta.constraints`（0076）。SQLite は違反の文言に制約名ではなく列（「表.列, 表.列」）を
     出すので、制約名と、制約の列から組み立てた文言のどちらかを含むかで見る。
     """
     message = str(error)
@@ -1647,7 +1666,7 @@ def _violates_unique(error: IntegrityError, model: type[models.Model], constrain
     return False
 
 
-# 名前の一意制約（0071 と、ペナントの世界の中の一意）。
+# 名前の一意制約（0076 と、ペナントの世界の中の一意）。
 # 保存の前の確認をすり抜けた同時の書き込みは、これで `DuplicateName` に訳す
 _LEAGUE_NAME_CONSTRAINTS = ("unique_workspace_league_name", "unique_world_league_name")
 _STADIUM_NAME_CONSTRAINTS = ("unique_workspace_stadium_name",)
@@ -1893,8 +1912,13 @@ _SCOPE_ROWS_CHILD_FIRST: tuple[tuple[type[models.Model], str], ...] = (
     (orm_models.PennantChampionship, "team__league"),
     # 球団の人気も球団を指すので、球団を消す前に消す（#208 E1）
     (orm_models.PennantClubPopularity, "team__league"),
+    # 年俸の契約は選手を指すので、選手を消す前に消す（#40 K1a）
+    (orm_models.PennantSalaryContract, "player__stints__team__league"),
     # 手動のチケットの値段も球団を指すので、球団を消す前に消す（#208 E2）
     (orm_models.PennantTicketPrice, "team__league"),
+    # 首脳陣の就任は球団を指すので、球団を消す前に消す（#210 M1）。人は就任をたどって範囲が決まるので、選手と
+    # 同じく就任を消す前に id を控え、就任の後に消す（`_staff_member_ids`。指す側＝就任を先に消す順を守る）
+    (orm_models.PennantStaffTenure, "team__league"),
     # 編成と戦力外の指名は選手を指すので、選手を消す前に消す（行から先に）
     (orm_models.PennantClubPlanEntry, "plan__team__league"),
     (orm_models.PennantClubPlan, "team__league"),
@@ -1941,6 +1965,25 @@ def _scope_rows_condition(model: type[models.Model], route: str, scope: WorldSco
 
 _PLAYER_DELETE_CHUNK = 500
 
+
+def _staff_member_ids(scope: WorldScope) -> list[int]:
+    """範囲の首脳陣の人の id（#210 M1）。人は就任をたどって範囲が決まるので、就任を消す前に控える。
+
+    人は世界ごとに作る（世界をまたいで就任しない）ので、範囲の就任の人はすべて消してよい。数は球団 × 締めた回数まで。
+    """
+    return list(staff_tenures_in(scope).values_list("member_id", flat=True).distinct())
+
+
+def _delete_staff_members(member_ids: list[int]) -> None:
+    """控えた首脳陣の人を消す（就任を消した後に呼ぶ）。
+
+    空でもクエリを1本出す（`id IN ()` は Django がクエリごと省く）。削除のクエリ数を首脳陣の有無によらず一定にする
+    （`DeletionQueryCountTest`）。
+    """
+    condition = Q(id__in=member_ids) if member_ids else Q(pk__isnull=True)
+    orm_models.PennantStaffMember.objects.filter(condition)._raw_delete(orm_models.PennantStaffMember.objects.db)
+
+
 # ワークスペースの削除で、範囲の行（`_SCOPE_ROWS_CHILD_FIRST`）と選手を消した後に消す行（子から親へ）。
 # (モデル, そのモデルのワークスペースの id の列への道)。どれも件数の少ない表で、範囲で絞って `_raw_delete` で消す
 # （collector を通さない）。担当と招待の担当チームの中間表は、指すチーム・招待より先に消す。
@@ -1968,10 +2011,11 @@ _WORKSPACE_DETACHED_REFERENCES: tuple[tuple[type[models.Model], str, str], ...] 
 
 
 def _workspace_deleted_models() -> list[type[models.Model]]:
-    """ワークスペースの削除で消すモデル（消す順）: 範囲の行 → 選手 → ワークスペースの行。"""
+    """ワークスペースの削除で消すモデル（消す順）: 範囲の行 → 選手・首脳陣の人 → ワークスペースの行。"""
     return [
         *(model for model, _ in _SCOPE_ROWS_CHILD_FIRST),
         orm_models.Player,
+        orm_models.PennantStaffMember,
         *(model for model, _ in _WORKSPACE_ROWS_CHILD_FIRST),
     ]
 
@@ -1983,6 +2027,7 @@ def _workspace_deleted_rows(workspace_id: int) -> dict[type[models.Model], Q]:
         model: _scope_rows_condition(model, route, scope) for model, route in _SCOPE_ROWS_CHILD_FIRST
     }
     conditions[orm_models.Player] = Q(pk__in=players_in(scope).values("pk"))
+    conditions[orm_models.PennantStaffMember] = Q(pk__in=staff_tenures_in(scope).values("member_id"))
     conditions.update({model: Q(**{column: workspace_id}) for model, column in _WORKSPACE_ROWS_CHILD_FIRST})
     return conditions
 
@@ -2624,6 +2669,78 @@ class DjangoPopularityRepository:
         return ClubPopularity(team_id=team_id, year=year, popularity=Popularity(value))
 
 
+class DjangoSalaryContractRepository:
+    """SalaryContractRepository の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る（#40 K1a）。
+
+    年俸の契約はペナント専用で、実データの範囲には書けない。他の世界の契約は、読めも書けもしない。
+    1年ぶんは世界の選手の数（8リーグで約4,000行）なので、`bulk_create` で書く。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def find_by_year(self, year: int) -> list[SalaryContract]:
+        rows = (
+            salary_contracts_in(self._scope)
+            .filter(first_year__lte=year, last_year__gte=year)
+            .order_by("player_id")
+            .values_list("player_id", "first_year", "last_year", "salary")
+        )
+        return [self._to_domain(*row) for row in rows]
+
+    def for_players(self, player_ids: Collection[int]) -> list[SalaryContract]:
+        wanted = set(player_ids)
+        if not wanted:
+            return []
+        rows = (
+            salary_contracts_in(self._scope)
+            .filter(player_id__in=wanted)
+            .order_by("player_id", "first_year")
+            .values_list("player_id", "first_year", "last_year", "salary")
+        )
+        return [self._to_domain(*row) for row in rows]
+
+    @transaction.atomic
+    def add_all(self, contracts: Sequence[SalaryContract]) -> None:
+        if not contracts:
+            return
+        if self._scope.is_real:
+            raise InvalidWorld("年俸の契約はペナントの世界にだけ保存できます。")
+        player_ids = {item.player_id for item in contracts}
+        known = set(players_in(self._scope).filter(id__in=player_ids).values_list("id", flat=True))
+        if missing := sorted(player_ids - known):
+            raise PlayerNotFound(f"この世界に居ない選手の年俸の契約は保存できません（id={missing[0]}）。")
+        years = {year for item in contracts for year in range(item.first_year, item.last_year + 1)}
+        if closed := closed_years(self._scope, years):
+            raise AlreadyClosed(
+                f"{closed[0]}年のシーズンは既に締めているので、その年の年俸の契約は書けません。", year=closed[0]
+            )
+        # 渡した契約どうしと、保存済みの契約との重なりを1回で確かめる（同じ選手の期間は重ならない）。保存済みは
+        # 渡した期間にかかりうる行だけ読む（締める処理の翌年の契約なら、締める年までの行は読まない）
+        saved = (
+            salary_contracts_in(self._scope)
+            .filter(player_id__in=player_ids, first_year__lte=max(years), last_year__gte=min(years))
+            .values_list("player_id", "first_year", "last_year", "salary")
+        )
+        ensure_no_overlap([*(self._to_domain(*row) for row in saved), *contracts])
+        orm_models.PennantSalaryContract.objects.bulk_create(
+            [
+                orm_models.PennantSalaryContract(
+                    player_id=item.player_id,
+                    first_year=item.first_year,
+                    last_year=item.last_year,
+                    salary=item.salary.yen,
+                )
+                for item in contracts
+            ],
+            batch_size=_RATINGS_CHUNK,
+        )
+
+    @staticmethod
+    def _to_domain(player_id: int, first_year: int, last_year: int, salary: int) -> SalaryContract:
+        return SalaryContract(player_id=player_id, first_year=first_year, last_year=last_year, salary=Salary(salary))
+
+
 class DjangoTicketPriceRepository:
     """TicketPriceRepository の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る（#208 E2）。
 
@@ -2683,6 +2800,124 @@ class DjangoTicketPriceRepository:
     @staticmethod
     def _to_domain(team_id: int, year: int, price: str) -> ClubTicketPrice:
         return ClubTicketPrice(team_id=team_id, year=year, price=TicketPrice(price))
+
+
+class DjangoStaffRepository:
+    """StaffRepository の Django ORM 実装。範囲（`WorldScope`）を必須で受け取る（#210 M1）。
+
+    首脳陣はペナント専用で、実データの範囲には書けない。他の世界の首脳陣は、読めも書けもしない。
+    1世界の就任は多くても球団の数 × 締めた回数なので、検査は世界の就任を全部読んで domain の関数に渡す。
+    """
+
+    def __init__(self, scope: WorldScope) -> None:
+        self._scope = scope
+
+    def find_serving(self, year: int) -> list[StaffAssignment]:
+        rows = (
+            staff_tenures_in(self._scope)
+            .filter(Q(last_year__isnull=True) | Q(last_year__gte=year), first_year__lte=year)
+            .select_related("member")
+            .order_by("team_id", "role")
+        )
+        return [StaffAssignment(member=self._member(row.member), tenure=self._tenure(row)) for row in rows]
+
+    @transaction.atomic
+    def apply(self, *, retirements: Sequence[StaffTenure], appointments: Sequence[Appointment]) -> None:
+        if not retirements and not appointments:
+            return
+        if self._scope.is_real:
+            raise InvalidWorld("首脳陣はペナントの世界にだけ保存できます。")
+        team_ids = {item.team_id for item in retirements} | {item.team_id for item in appointments}
+        known = set(teams_in(self._scope).filter(id__in=team_ids).values_list("id", flat=True))
+        if missing := sorted(team_ids - known):
+            raise InvalidStaffTenure(f"この世界に無い球団の首脳陣は保存できません（id={missing[0]}）。")
+        years = {item.last_year for item in retirements if item.last_year is not None}
+        years |= {item.first_year for item in appointments}
+        if closed := closed_years(self._scope, years):
+            raise AlreadyClosed(
+                f"{closed[0]}年のシーズンは既に締めているので、その年の首脳陣は書き換えられません。", year=closed[0]
+            )
+
+        rows = {row.id: row for row in staff_tenures_in(self._scope)}
+        current = {row_id: self._tenure(row) for row_id, row in rows.items()}
+        closing: dict[int, int] = {}
+        for retired in retirements:
+            if retired.last_year is None:
+                raise InvalidStaffTenure("閉じる就任には最終年が要ります。")
+            row_id = next(
+                (
+                    row_id
+                    for row_id, tenure in current.items()
+                    if tenure.is_current
+                    and (tenure.member_id, tenure.team_id, tenure.role, tenure.first_year)
+                    == (retired.member_id, retired.team_id, retired.role, retired.first_year)
+                ),
+                None,
+            )
+            if row_id is None:
+                raise InvalidStaffTenure(f"閉じる就任が見つかりません（球団 id={retired.team_id}）。")
+            current[row_id] = retired
+            closing[row_id] = retired.last_year
+        # 新しい人はまだ id を持たないので、検査では重ならない仮の id（負の数）で就任を並べる
+        pending = [appointment.tenure(-index) for index, appointment in enumerate(appointments, start=1)]
+        ensure_valid_tenures([*current.values(), *pending])
+
+        for row_id, last_year in closing.items():
+            row = rows[row_id]
+            row.last_year = last_year
+            row.save(update_fields=["last_year"])
+        members = orm_models.PennantStaffMember.objects.bulk_create(
+            [self._member_row(appointment.member) for appointment in appointments]
+        )
+        orm_models.PennantStaffTenure.objects.bulk_create(
+            [
+                orm_models.PennantStaffTenure(
+                    member_id=member.id,
+                    team_id=appointment.team_id,
+                    role=appointment.role.value,
+                    first_year=appointment.first_year,
+                )
+                for member, appointment in zip(members, appointments, strict=True)
+            ]
+        )
+
+    @staticmethod
+    def _member_row(member: StaffMember) -> orm_models.PennantStaffMember:
+        style = member.style
+        return orm_models.PennantStaffMember(
+            name=member.name,
+            name_kana=member.name_kana,
+            birth_date=member.birth_date,
+            starter_leash=int(style.starter_leash),
+            pinch_hitting=int(style.pinch_hitting),
+            base_stealing=int(style.base_stealing),
+            bunting=int(style.bunting),
+        )
+
+    @staticmethod
+    def _member(row: orm_models.PennantStaffMember) -> StaffMember:
+        return StaffMember(
+            id=row.id,
+            name=row.name,
+            name_kana=row.name_kana,
+            birth_date=row.birth_date,
+            style=ManagerStyle(
+                starter_leash=TacticLevel(row.starter_leash),
+                pinch_hitting=TacticLevel(row.pinch_hitting),
+                base_stealing=TacticLevel(row.base_stealing),
+                bunting=TacticLevel(row.bunting),
+            ),
+        )
+
+    @staticmethod
+    def _tenure(row: orm_models.PennantStaffTenure) -> StaffTenure:
+        return StaffTenure(
+            member_id=row.member_id,
+            team_id=row.team_id,
+            role=StaffRole(row.role),
+            first_year=row.first_year,
+            last_year=row.last_year,
+        )
 
 
 class DjangoDraftRepository:
@@ -2925,6 +3160,7 @@ class DjangoWorldRepository:
 
         # 選手は在籍をたどって世界が決まるので、在籍を消す前に控えておく
         player_ids = list(players_in(scope).values_list("id", flat=True))
+        staff_ids = _staff_member_ids(scope)
 
         # 孫から順に消し終えているので、CASCADE や PROTECT の検査に頼らず行だけを消せる
         # （_raw_delete は collector を通さない。Django の非公開 API だが、数十万行を
@@ -2935,6 +3171,7 @@ class DjangoWorldRepository:
         for start in range(0, len(player_ids), _PLAYER_DELETE_CHUNK):
             chunk = player_ids[start : start + _PLAYER_DELETE_CHUNK]
             orm_models.Player.objects.filter(id__in=chunk)._raw_delete(orm_models.Player.objects.db)
+        _delete_staff_members(staff_ids)
 
         # 球団・リーグ・世界は数が少ないので、通常の削除でよい（担当者や受け持ちの参照も外れる）
         teams_in(scope).delete()
@@ -3077,6 +3314,7 @@ class DjangoWorkspaceRepository:
         # 選手は在籍をたどって範囲が決まるので、在籍を消す前に控えておく。ほかの範囲（ほかのワークスペース・
         # 世界）にも在籍がある選手を消すと、そちらの在籍・成績まで消える（`_raw_delete` は連鎖も検査もしない）
         player_ids = list(players_in(scope).values_list("id", flat=True))
+        staff_ids = _staff_member_ids(scope)
         shared = (
             orm_models.PlayerStint.objects.filter(player__in=players_in(scope))
             .exclude(team__in=teams_in(scope))
@@ -3100,6 +3338,7 @@ class DjangoWorkspaceRepository:
         for start in range(0, len(player_ids), _PLAYER_DELETE_CHUNK):
             chunk = player_ids[start : start + _PLAYER_DELETE_CHUNK]
             orm_models.Player.objects.filter(id__in=chunk)._raw_delete(orm_models.Player.objects.db)
+        _delete_staff_members(staff_ids)
         for model, column in _WORKSPACE_ROWS_CHILD_FIRST:
             manager = model._default_manager
             manager.filter(**{column: workspace_id})._raw_delete(manager.db)

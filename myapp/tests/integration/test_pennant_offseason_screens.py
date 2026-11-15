@@ -128,7 +128,7 @@ class CloseSeasonPostTest(ScreenCase):
             self.last_message(response),
             r"2026年のシーズンを締めました（引退 \d+人・戦力外 \d+人・支配下登録（昇格） \d+人・育成の自由契約 \d+人・"
             r"新外国人 \d+人・"
-            r"新人 \d+人（うち育成 \d+人））。",
+            r"新人 \d+人（うち育成 \d+人）・契約更改 \d+人・新監督 \d+人）。",
         )
         self.assertGreater(orm_models.PennantPlayerRatings.objects.filter(year=YEAR + 1).count(), 0)
 

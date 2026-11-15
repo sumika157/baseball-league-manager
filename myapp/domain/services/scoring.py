@@ -417,8 +417,37 @@ def record_derived_fielding(game: Game) -> None:
     集約の照合が弾く（打席があるのに守備成績が空の集約は保存できない）。
     """
     game.fielding = []
+    teams = line_teams(game)
     for player_id, line in fielding_lines_for(game).items():
-        game.record_fielding(player_id, line)
+        game.record_fielding(player_id, line, team_id=teams[player_id])
+
+
+def line_teams(game: Game) -> dict[int, int]:
+    """選手 id → その試合で出たチーム id。明細（打撃・投球・守備）のチームの出典。
+
+    打順の行はチームを持つ。投手と失策の守備者は打席が答えを持つ（攻めている側の反対が守っている。
+    規則は `team_of_players` と同じで、組み立て済みの集約から引く版）。年の途中で移籍した選手も、
+    その試合でどちらの側に出たかで決まる（今の所属を引かない。#396）。
+    """
+    teams = {entry.player_id: entry.team_id for entry in game.batting}
+    pitched_for: dict[int, int] = {}
+    for entry in game.plate_appearances:
+        batting_team, fielding_team = _sides(game.home_team_id, game.away_team_id, is_bottom=entry.is_bottom)
+        teams.setdefault(entry.batter_id, batting_team)
+        if pitched_for.setdefault(entry.pitcher_id, fielding_team) != fielding_team:
+            # 投手の明細は1試合に1行で、チームは1つしか持てない
+            raise InvalidPlateAppearance(f"同じ投手が両方のチームで投げています（選手id={entry.pitcher_id}）。")
+        teams[entry.pitcher_id] = fielding_team
+        for error in entry.errors:
+            teams.setdefault(error.player_id, fielding_team)
+    return teams
+
+
+def _sides(home_team_id: int, away_team_id: int, *, is_bottom: bool) -> tuple[int, int]:
+    """打席の (攻めているチーム, 守っているチーム)。表はビジターが攻め、裏はホームが攻める。"""
+    if is_bottom:
+        return home_team_id, away_team_id
+    return away_team_id, home_team_id
 
 
 def hits_by_inning(plate_appearances: Iterable[PlateAppearance], *, home: bool) -> dict[int, int]:
@@ -486,7 +515,9 @@ def ensure_lines_match_plate_appearances(game: Game) -> None:
 
     # 打撃と型が違うので変数名を分ける（同じ名前だと mypy が最初の型で固定してしまう）
     pitched_by = pitching_lines_for(game.plate_appearances)
+    teams = line_teams(game)
     for outing in game.pitching:
+        _ensure_team_matches(outing.player_id, outing.team_id, teams, "投球成績")
         pitched = pitched_by.get(outing.player_id, _pitching_line([], []))
         if outing.line.innings != pitched.innings:
             raise InvalidPlateAppearance(
@@ -531,7 +562,9 @@ def _ensure_fielding_matches_plate_appearances(game: Game) -> None:
     counted = fielding_lines_for(game, alignments)
     if not game.fielding:
         raise InvalidPlateAppearance("打席の記録がある試合には、守備成績（打席から導いた値）が要ります。")
+    teams = line_teams(game)
     for fielder in game.fielding:
+        _ensure_team_matches(fielder.player_id, fielder.team_id, teams, "守備成績")
         expected = counted.get(fielder.player_id, FieldingLine())
         if fielder.line != expected:
             raise InvalidPlateAppearance(
@@ -543,6 +576,20 @@ def _ensure_fielding_matches_plate_appearances(game: Game) -> None:
     absent = set(counted) - {fielder.player_id for fielder in game.fielding}
     if absent:
         raise InvalidPlateAppearance(f"守備に就いた選手の守備成績がありません（選手id={sorted(absent)}）。")
+
+
+def _ensure_team_matches(player_id: int, team_id: int, teams: dict[int, int], kind: str) -> None:
+    """明細のチームが、打席から導いたチーム（`line_teams`）と一致することを確かめる。
+
+    打席に現れない選手（導けない）は比べない。年の途中で移籍した選手の成績を球団で分けるのに
+    明細のチームを使うので、食い違うと移籍前の成績が移籍先に数えられる（#396）。
+    """
+    expected = teams.get(player_id)
+    if expected is not None and expected != team_id:
+        raise InvalidPlateAppearance(
+            f"{kind}のチームが打席の記録と一致しません（選手id={player_id}）。"
+            "この試合は打席が出典なので、チームだけを書き換えることはできません。"
+        )
 
 
 # --- 試合の組み立て ---------------------------------------------------------
@@ -560,8 +607,9 @@ def team_of_players(
     """
     team_of = {entry.player_id: entry.team_id for entry in lineup}
     for plate_appearance in plate_appearances:
-        batting_team = header.home_team_id if plate_appearance.is_bottom else header.away_team_id
-        fielding_team = header.away_team_id if plate_appearance.is_bottom else header.home_team_id
+        batting_team, fielding_team = _sides(
+            header.home_team_id, header.away_team_id, is_bottom=plate_appearance.is_bottom
+        )
         team_of.setdefault(plate_appearance.batter_id, batting_team)
         team_of[plate_appearance.pitcher_id] = fielding_team
     return team_of
@@ -581,15 +629,16 @@ def _record_pitching_from_plate_appearances(game: Game) -> None:
     by_team: dict[int, list[int]] = {}
     for pitcher_id, entry in first_seen.items():
         # 表の攻撃で投げているのはホーム、裏はビジター
-        team_id = game.away_team_id if entry.is_bottom else game.home_team_id
+        _, team_id = _sides(game.home_team_id, game.away_team_id, is_bottom=entry.is_bottom)
         by_team.setdefault(team_id, []).append(pitcher_id)
 
     lines = pitching_lines_for(game.plate_appearances)
-    for pitchers in by_team.values():
+    for team_id, pitchers in by_team.items():
         for order, pitcher_id in enumerate(pitchers, start=1):
             game.record_pitching(
                 pitcher_id,
                 lines[pitcher_id],
+                team_id=team_id,
                 appearance_order=order,
                 entered_inning=first_seen[pitcher_id].inning,
             )

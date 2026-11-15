@@ -44,6 +44,7 @@ from .dto import (
 from .pennant_finance import ClubFinanceService
 from .pennant_popularity import PopularityReader, change_label
 from .pennant_ratings import overall_cell
+from .pennant_salary import PennantPayrollViewService
 from .queries import AttendanceQuery, OffseasonQuery
 
 # 成長と衰えの大きかった選手に載せる人数
@@ -61,6 +62,7 @@ class OffseasonViewService:
         popularities: PopularityReader,
         attendance: AttendanceQuery,
         finance: ClubFinanceService,
+        payroll: PennantPayrollViewService,
     ) -> None:
         self._worlds = worlds
         self._offseason = offseason
@@ -69,6 +71,8 @@ class OffseasonViewService:
         self._attendance = attendance
         # 締めた年の収支の節（#208 E2）
         self._finance = finance
+        # 締めた年の契約更改の節（#40 K1a）
+        self._payroll = payroll
 
     def get_summary(self, world: WorldContext, year: int, *, league_id: int | None = None) -> OffseasonSummary | None:
         """Y 年のオフの結果。Y 年を締めていない（範囲外・まだ締めていない年も）なら None。
@@ -125,6 +129,7 @@ class OffseasonViewService:
             board=_offseason_board(facts, year, selected, own_id, lotteries),
             popularity=self._popularity_rows(facts, year, selected, own_id),
             finance=self._finance_rows(world, facts, year, selected, own_id),
+            renewals=self._payroll.renewals(world, year),
         )
 
     def _finance_rows(

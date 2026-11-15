@@ -22,6 +22,7 @@ from myapp.application.pennant_simulation import DaySimulator
 from myapp.domain.exceptions import AlreadyAdvanced, TeamNotFound
 from myapp.domain.pennant.ratings import PlayerRatings
 from myapp.domain.pennant.reinforcement import RegistrationKind
+from myapp.domain.pennant.salary import FOREIGN_MIN_SALARY
 from myapp.domain.pennant.schedule import AdvanceTarget
 from myapp.domain.simulation.ratings import PitcherRatings
 from myapp.domain.value_objects import AcquisitionRoute, ContractStatus, Position
@@ -30,6 +31,7 @@ from myapp.infrastructure.queries import DjangoDevelopmentRosterQuery
 from myapp.infrastructure.repositories import (
     DjangoMidseasonRegistrationRepository,
     DjangoRatingsRepository,
+    DjangoSalaryContractRepository,
     DjangoTeamRepository,
 )
 from myapp.presentation.views import build_midseason_registration_service, build_pennant_season_service
@@ -209,6 +211,10 @@ class MidseasonForeignSigningReviewTest(MidseasonReviewCase):
             self.assertTrue(player.is_foreign_player)
             ratings = DjangoRatingsRepository(world_scope(self.world_a)).find_by_players([player.id], YEAR)
             self.assertEqual(len(ratings), 1, "獲得した年の能力の行がある")
+            # その年の年俸の契約（年額。#40 K1a）
+            (contract,) = DjangoSalaryContractRepository(world_scope(self.world_a)).for_players([player.id])
+            self.assertEqual((contract.first_year, contract.last_year), (YEAR, YEAR))
+            self.assertGreaterEqual(contract.salary.yen, FOREIGN_MIN_SALARY)
 
         self.replay(self.world_a, run)
         plate_appearances = self.whole_season[0][0]

@@ -21,9 +21,11 @@ from ..domain.pennant.draft_meeting import DraftActionKind
 from ..domain.pennant.draft_order import DraftOrderRule
 from ..domain.pennant.postseason import PostseasonFormat
 from ..domain.pennant.reinforcement import RegistrationKind
+from ..domain.pennant.staff import StaffRole
 from ..domain.pennant.ticket_price import TicketPrice
 from ..domain.services.rankings import Title
 from ..domain.simulation.ratings import BatterRatings, GrowthType, PitcherRatings
+from ..domain.simulation.tactics import TacticAxis, TacticLevel
 from ..domain.value_objects import (
     BACK_NAME_MAX_LENGTH,
     DEFAULT_REGISTERED_PLAYER_LIMIT,
@@ -68,6 +70,7 @@ DEVELOPMENT_DECISION_CHOICES = [(item.value, item.value) for item in Development
 REGISTRATION_KIND_CHOICES = [(item.value, item.value) for item in RegistrationKind]
 # チケットの値段の段階（#208 E2）の選択肢もドメインの TicketPrice が唯一の出典
 TICKET_PRICE_CHOICES = [(item.value, item.value) for item in TicketPrice]
+STAFF_ROLE_CHOICES = [(item.value, item.value) for item in StaffRole]
 # ドラフト会議の行動の種類の選択肢もドメインの DraftActionKind が唯一の出典
 DRAFT_ACTION_KIND_CHOICES = [(item.value, item.value) for item in DraftActionKind]
 # 試合で就いた守備位置。登録位置（Position）とは別の概念
@@ -780,6 +783,13 @@ class GamePitchingLine(models.Model):
 
     game = models.ForeignKey(Game, on_delete=models.CASCADE, related_name="pitching_lines", verbose_name="試合")
     player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="game_pitching", verbose_name="選手")
+    team = models.ForeignKey(
+        Team,
+        on_delete=models.CASCADE,
+        related_name="game_pitching_lines",
+        verbose_name="チーム",
+        help_text="試合のホームかビジター。年の途中で移籍した投手の成績を球団ごとに分けるのに使います。",
+    )
     # 登板順。1 が先発。ボックススコアは投げた順に並べる
     appearance_order = models.IntegerField(default=1, verbose_name="登板順")
     # 何回から投げたか。セーブ・ホールドの条件は登板した時点のスコアで決まる
@@ -823,6 +833,13 @@ class GameFieldingLine(models.Model):
 
     game = models.ForeignKey(Game, on_delete=models.CASCADE, related_name="fielding_lines", verbose_name="試合")
     player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="game_fielding", verbose_name="選手")
+    team = models.ForeignKey(
+        Team,
+        on_delete=models.CASCADE,
+        related_name="game_fielding_lines",
+        verbose_name="チーム",
+        help_text="試合のホームかビジター。年の途中で移籍した選手の成績を球団ごとに分けるのに使います。",
+    )
     putouts = models.IntegerField(default=0, verbose_name="刺殺")
     assists = models.IntegerField(default=0, verbose_name="補殺")
     errors = models.IntegerField(default=0, verbose_name="失策")
@@ -1393,6 +1410,98 @@ class PennantTicketPrice(models.Model):
 
     def __str__(self) -> str:
         return f"{self.year}年 {self.team_id} {self.price}"
+
+
+def _tactic_level_check(field: str) -> models.Q:
+    return models.Q(**{f"{field}__gte": int(min(TacticLevel)), f"{field}__lte": int(max(TacticLevel))})
+
+
+class PennantStaffMember(models.Model):
+    """ペナントの首脳陣のひとり（#210 M1: 監督）。名前・生年月日と素の傾向（4軸。−2〜+2）。
+
+    世界の列は持たない（就任 `PennantStaffTenure` の球団のリーグで世界が決まる。未雇用の候補は保存しない）。
+    年齢は保持しない（生年月日から導く）。傾向の段階の出典は domain の `TacticLevel`。管理画面には出さない。
+    """
+
+    name = models.CharField(max_length=50, verbose_name="名前")
+    name_kana = models.CharField(max_length=100, verbose_name="よみがな")
+    birth_date = models.DateField(verbose_name="生年月日")
+    starter_leash = models.SmallIntegerField(verbose_name=TacticAxis.STARTER_LEASH.title)
+    pinch_hitting = models.SmallIntegerField(verbose_name=TacticAxis.PINCH_HITTING.title)
+    base_stealing = models.SmallIntegerField(verbose_name=TacticAxis.BASE_STEALING.title)
+    bunting = models.SmallIntegerField(verbose_name=TacticAxis.BUNTING.title)
+
+    class Meta:
+        verbose_name = "ペナントの首脳陣"
+        verbose_name_plural = "ペナントの首脳陣"
+        ordering = ["id"]
+        constraints = [
+            models.CheckConstraint(condition=_tactic_level_check(axis.value), name=f"pennant_staff_{axis.value}_range")
+            for axis in TacticAxis
+        ]
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class PennantStaffTenure(models.Model):
+    """首脳陣の就任（人・球団・役割・初年〜最終年。最終年が空なら、いまも就いている。#210 M1）。
+
+    同じ球団の同じ役割が同じ年に2人・1人が同じ年に2職にならないことは、リポジトリが domain の
+    `ensure_valid_tenures` で確かめる（期間の重なりは制約で書けないため）。管理画面には出さない。
+    """
+
+    member = models.ForeignKey(
+        PennantStaffMember, on_delete=models.CASCADE, related_name="tenures", verbose_name="首脳陣"
+    )
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="+", verbose_name="球団")
+    role = models.CharField(max_length=10, choices=STAFF_ROLE_CHOICES, verbose_name="役割")
+    first_year = models.PositiveSmallIntegerField(verbose_name="初年")
+    last_year = models.PositiveSmallIntegerField(null=True, blank=True, verbose_name="最終年")
+
+    class Meta:
+        verbose_name = "ペナントの首脳陣の就任"
+        verbose_name_plural = "ペナントの首脳陣の就任"
+        ordering = ["team_id", "first_year", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["team", "role", "first_year"], name="unique_pennant_staff_tenure"),
+            models.CheckConstraint(
+                condition=models.Q(last_year__isnull=True) | models.Q(first_year__lte=models.F("last_year")),
+                name="pennant_staff_tenure_years_ordered",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.team_id} {self.role} {self.first_year}〜{self.last_year or ''}"
+
+
+class PennantSalaryContract(models.Model):
+    """ペナントの選手の年俸の契約（選手 × 期間。#40 K1a）。決めた事実で、相場・総額・減額の下限は保存せず導く。
+
+    書くのは世界の作成（開幕年）・シーズンを締める処理（翌年と、行の無い選手の締める年の補った値）・期中の外国人の
+    獲得（その年）だけ。同じ選手の期間は重ならない（検査はリポジトリ。domain の `contract.ensure_no_overlap`）。
+    球団は持たない（在籍から引く）。選手経由で世界に属す。年俸は円（万円刻み）。管理画面には出さない。
+    """
+
+    player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="+", verbose_name="選手")
+    first_year = models.PositiveSmallIntegerField(verbose_name="最初の年")
+    last_year = models.PositiveSmallIntegerField(verbose_name="最後の年")
+    salary = models.PositiveBigIntegerField(verbose_name="年俸（円）")
+
+    class Meta:
+        verbose_name = "ペナントの年俸の契約"
+        verbose_name_plural = "ペナントの年俸の契約"
+        ordering = ["player_id", "first_year"]
+        constraints = [
+            models.UniqueConstraint(fields=["player", "first_year"], name="unique_pennant_salary_contract"),
+            models.CheckConstraint(
+                condition=models.Q(first_year__lte=models.F("last_year")),
+                name="pennant_salary_contract_period",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.player_id} {self.first_year}〜{self.last_year}年 {self.salary}円"
 
 
 class PennantDraft(models.Model):

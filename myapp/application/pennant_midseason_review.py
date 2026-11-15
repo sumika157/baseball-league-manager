@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from ..domain.exceptions import AlreadyAdvanced
+from ..domain.pennant.contract import SalaryContract
 from ..domain.pennant.development import MidseasonClub, MidseasonProspect, Promotion, decide_midseason_promotions
 from ..domain.pennant.foreign_market import (
     ForeignCandidate,
@@ -39,11 +40,13 @@ from ..domain.pennant.foreign_market import (
 from ..domain.pennant.offseason_player import Ratings
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.reinforcement import MidseasonRegistration, RegistrationKind
+from ..domain.pennant.salary import foreign_salary
 from ..domain.pennant.world import World
 from ..domain.repositories import (
     LeagueRepository,
     MidseasonRegistrationRepository,
     RatingsRepository,
+    SalaryContractRepository,
     TeamRepository,
 )
 from ..domain.simulation.manager import ClubRoster, SimBatter, SimPitcher
@@ -79,6 +82,7 @@ class MidseasonReview:
         leagues: LeagueRepository,
         teams: TeamRepository,
         ratings: RatingsRepository,
+        salary_contracts: SalaryContractRepository,
         registrations: MidseasonRegistrationRepository,
         squads: DevelopmentRosterQuery,
         names: PlayerNameQuery,
@@ -88,6 +92,8 @@ class MidseasonReview:
         self._leagues = leagues
         self._teams = teams
         self._ratings = ratings
+        # 獲得した外国人のその年の年俸（年額。#40 K1a）
+        self._salary_contracts = salary_contracts
         self._registrations = registrations
         self._squads = squads
         # 外国人の候補の名前を世界の選手と重ねないための名前の一覧
@@ -179,6 +185,14 @@ class MidseasonReview:
             # 保存すると獲得した外国人に id が入る。その id でその年の能力と登録日を結びつける
             self._ratings.add_all(
                 [PlayerRatings(player_id=saved_id(player.id), year=year, ratings=s.ratings) for player, s in signed]
+            )
+            self._salary_contracts.add_all(
+                [
+                    SalaryContract.for_year(
+                        saved_id(player.id), year, foreign_salary(s.position, s.ratings, year=year)
+                    )
+                    for player, s in signed
+                ]
             )
             for player, signing in signed:
                 self._registrations.add(

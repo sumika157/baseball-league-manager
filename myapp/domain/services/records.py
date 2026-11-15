@@ -262,11 +262,12 @@ class TeamMonthlySplit:
         return self.record.games_played
 
 
-def team_monthly_splits(games: list[Game], team_id: int, member_ids: set[int]) -> list[TeamMonthlySplit]:
+def team_monthly_splits(games: list[Game], team_id: int) -> list[TeamMonthlySplit]:
     """チームの成績を月ごとにまとめる。古い順。
 
-    member_ids はそのチームの選手。試合の明細は両チームの選手が混ざって
-    入っているため、自チームの選手だけに絞らないと相手の成績まで足してしまう。
+    試合の明細は両チームの選手が混ざって入っているため、明細のチームが自チームの行だけを足す
+    （相手の成績を足さない）。選手の顔ぶれで絞ると、年の途中で移った選手の、移る前の球団と
+    移った先の球団の対戦が両方に入る（#396）。
     試合のあった月だけを返す（選手の月別成績と同じ規則）。
     """
     buckets: dict[tuple[int, int], list[Game]] = {}
@@ -282,10 +283,10 @@ def team_monthly_splits(games: list[Game], team_id: int, member_ids: set[int]) -
             month=month,
             record=team_record(month_games, team_id),
             batting=BattingLine.total(
-                entry.line for game in month_games for entry in game.batting if entry.player_id in member_ids
+                entry.line for game in month_games for entry in game.batting if entry.team_id == team_id
             ),
             pitching=PitchingLine.total(
-                entry.line for game in month_games for entry in game.pitching if entry.player_id in member_ids
+                outing.line for game in month_games for outing in game.pitching if outing.team_id == team_id
             ),
         )
         for (year, month), month_games in sorted(buckets.items())

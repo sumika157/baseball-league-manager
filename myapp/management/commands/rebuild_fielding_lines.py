@@ -47,6 +47,8 @@ class Command(BaseCommand):
         for game_id in game_ids:
             try:
                 game = repository.find_by_id(game_id)
+                # 守った側（同じ投手が両チームで投げた記録はここで弾く）
+                teams = domain_services.line_teams(game)
             except (DomainError, ValueError):
                 # 記録が成立していない試合。ここで止めると全体が使えなくなるので飛ばす
                 skipped.append(game_id)
@@ -56,6 +58,7 @@ class Command(BaseCommand):
                 orm_models.GameFieldingLine(
                     game_id=game_id,
                     player_id=player_id,
+                    team_id=teams[player_id],
                     putouts=line.putouts,
                     assists=line.assists,
                     errors=line.errors,

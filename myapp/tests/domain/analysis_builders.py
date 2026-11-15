@@ -31,7 +31,9 @@ def _game(
     season=2026,
     batting=None,
     pitching=None,
+    away_batting=None,
 ) -> Game:
+    """batting・pitching はホームの選手の明細、away_batting はビジターの選手の打撃の明細。"""
     game = Game(
         season=Season(season),
         played_on=date(season, month, day),
@@ -43,8 +45,10 @@ def _game(
     )
     for player_id, line in (batting or {}).items():
         game.record_batting(player_id, line, team_id=game.home_team_id)
+    for player_id, line in (away_batting or {}).items():
+        game.record_batting(player_id, line, team_id=game.away_team_id)
     for player_id, line in (pitching or {}).items():
-        game.record_pitching(player_id, line)
+        game.record_pitching(player_id, line, team_id=game.home_team_id)
     if not game.is_recorded:
         # 明細が1行でもあれば記録済み。中身は問わず、集計に数えられる試合にする
         game.record_batting(0, BattingLine(), team_id=game.home_team_id)

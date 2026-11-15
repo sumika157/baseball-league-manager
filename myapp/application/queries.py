@@ -23,7 +23,6 @@ from .dto import (
     ActivePlayerStats,
     AwardRow,
     ChampionshipRow,
-    ClubRosterSize,
     ClubTenure,
     DevelopmentRoster,
     DevelopmentSquad,
@@ -37,6 +36,7 @@ from .dto import (
     LeagueSetupRow,
     MemberRow,
     OffseasonFacts,
+    PayrollMember,
     PeriodBatting,
     PeriodPitching,
     PlayerFielding,
@@ -46,6 +46,7 @@ from .dto import (
     SimulationContext,
     SimulationTeam,
     StadiumSetupRow,
+    StaffTenureRow,
     TeamAnalysisFacts,
     TeamSetupRow,
     TeamSummary,
@@ -96,7 +97,9 @@ class PlayerStatsQuery(Protocol):
         """球団（`team_id`）またはリーグ（`league_id`）の選手と成績。どちらも None なら世界の全選手。
 
         `year` が None なら在籍中の選手の通算成績、年を渡せばその年に在籍していた選手のその年の成績
-        （`list_season` と同じ数え方）。球団を指定したときだけ、主将かどうか（`is_captain`）を読む。
+        （`list_season` と同じ数え方）。**球団と年を渡したときは、その球団で出た試合だけ**を数える（明細のチームで
+        引く。年の途中で移った選手は、移る前と後の球団の一覧にそれぞれの分が載る。#396）。年を省いた通算は移籍前も含む。
+        球団を指定したときだけ、主将かどうか（`is_captain`）を読む。
         `with_profile` を立てたときだけ、年齢などの材料（`profile`）を読む（タイトルには要らない）。
         `with_games` を立てたときだけ、出場試合数と登板数（`games` / `appearances`）を数える（一覧の列に使う）。
         """
@@ -532,22 +535,31 @@ class AttendanceQuery(Protocol):
 
 @runtime_checkable
 class ClubFinanceQuery(Protocol):
-    """球団の収支の材料のうち、試合と人気・値段の外にあるもの（#208 E2）。範囲（世界）は組み立てるときに必須で渡す。"""
-
-    def roster_sizes(self, *, years: Collection[int], team_ids: Collection[int]) -> list[ClubRosterSize]:
-        """球団 × 年の契約区分ごとの人数（その年に在籍した選手。在籍から1本のクエリ）。
-
-        年 Y に在籍したのは在籍の期間が Y を含む選手（退団年はその年を含む）。区分はその年の区分
-        （`ContractStatus.in_year`）。同じ選手が同じ球団に同じ年に2回在籍しても1人に数える。
-        在籍の無い球団 × 年も0人の行として返す（年・球団の id の順）。
-        """
-        ...
+    """球団の収支の材料のうち、試合・人気・値段・年俸の外にあるもの（#208 E2）。範囲（世界）は組み立てるときに渡す。"""
 
     def stadium_capacities(self, team_ids: Collection[int]) -> dict[int, int | None]:
         """球団の本拠地の収容人数（本拠地が無い・未設定なら None）。範囲の外の球団は含まない。
 
         球場は実データと世界で共有で、いまの値を読む（過去の年も同じ値）。
         """
+        ...
+
+
+@runtime_checkable
+class PayrollQuery(Protocol):
+    """球団 × 年に在籍した選手と、その年の年俸の契約（#40 K1a）。範囲（世界）は組み立てるときに必須で渡す。
+
+    年 Y に在籍したのは在籍の期間が Y を含む選手（退団年はその年を含む）。同じ選手が同じ球団に同じ年に2回在籍しても
+    1人に数え、期中に2球団に在籍した選手は両方の球団で数える（期中の移籍の成績を分けるまで。#40 K4a）。
+    年俸はその年を期間に含む契約（無ければ None。補うのは application の `pennant_salary`）。
+    """
+
+    def members(self, *, years: Collection[int], team_ids: Collection[int]) -> list[PayrollMember]:
+        """球団 × 年の在籍した選手と年俸（年・球団の id・選手の id の順。在籍と契約の2本のクエリ）。"""
+        ...
+
+    def for_player(self, player_id: int, *, through_year: int) -> list[PayrollMember]:
+        """選手ひとりの、在籍した球団 × 年と年俸（`through_year` 年まで。年・球団の id の順）。範囲の外は空。"""
         ...
 
 
@@ -578,4 +590,17 @@ class DevelopmentRosterQuery(Protocol):
     def squads(self, year: int) -> tuple[DevelopmentSquad, ...]:
         """範囲の全球団（id の順）の、`year` 年の育成選手（id の順）・支配下の人数・リーグの上限・使っている背番号
         （AI の期中の昇格の材料。#170 P3b）。区分の判定は `for_team` と同じ。"""
+        ...
+
+
+@runtime_checkable
+class StaffQuery(Protocol):
+    """首脳陣の就任の参照（人の名前・傾向と球団名を添える。#210 M1）。範囲（世界）は組み立てるときに必須で渡す。"""
+
+    def for_team(self, team_id: int) -> list[StaffTenureRow]:
+        """ひとつの球団の就任を、初年の順に。範囲の外の球団は空。"""
+        ...
+
+    def changed_at(self, year: int) -> list[StaffTenureRow]:
+        """`year` を締めたときに動いた就任（最終年が `year` か、初年が翌年）。球団の id・初年の順。"""
         ...

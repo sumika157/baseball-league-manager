@@ -69,16 +69,18 @@ class TeamStatsTabTest(TeamStatsTabBase):
         play_game(self.team, self.rival, year=2027)
         self.assertNotIn("退団済み", self.names(self.get(year=2027)))
 
-    def test_mid_season_transfer_is_listed_on_both_clubs_with_all_games_counted(self):
+    def test_mid_season_transfer_is_listed_on_both_clubs_with_the_games_for_each(self):
+        """年の途中で移った選手は両方の球団の一覧に載り、成績はそれぞれの球団で出た試合の分（#40 K4a・#396 で
+        「両方の球団での試合を合わせた値」から変えた。期中のトレードで毎年起きるようになるため）。"""
         mover = self.player(self.rival, "シーズン途中", 7, "外野手", from_year=2020, to_year=2026)
         orm_models.PlayerStint.objects.create(player_id=mover, team=self.team, number="8", from_year=2026)
         give_batting(self.rival, self.team, mover, BattingLine(at_bats=4, singles=2), day=6)
         give_batting(self.team, self.rival, mover, BattingLine(at_bats=6, singles=1), day=7)
         row = next(r for r in self.get().context["players"] if r.name == "シーズン途中")
-        self.assertEqual((row.at_bats, row.hits), (10, 3))
+        self.assertEqual((row.at_bats, row.hits), (6, 1))
         rival_page = self.client.get(self.url(self.rival), {"tab": "stats"})
         rival_row = next(r for r in rival_page.context["players"] if r.name == "シーズン途中")
-        self.assertEqual((rival_row.at_bats, rival_row.hits), (10, 3))
+        self.assertEqual((rival_row.at_bats, rival_row.hits), (4, 2))
 
     def test_sort_and_default_direction(self):
         by_hits = self.get(sort="hits")

@@ -1,19 +1,20 @@
 """ペナントの球団の収支とチケットの値段の変更（#208 E2）。値段の読み口は `pennant_ticket_price`。
 
-- 収支（`ClubFinanceService`。参照）: 保存せず、観客動員（公式戦とポストシーズン）・人気・値段・契約区分ごとの人数・
-  収容人数から domain の `club_finance` で導く。人気の行の無い年（この機能より前の年）は出さない（「—」。
-  2026-11-14 ユーザー決定）。いまの年度は進める処理と同じく初期値で補い、年額の項目を消化した公式戦の割合で按分する
+- 収支（`ClubFinanceService`。参照）: 保存せず、観客動員（公式戦とポストシーズン）・人気・値段・人件費（年俸の合計。
+  `pennant_salary`。#40 K1a）・収容人数から domain の `club_finance` で導く。人気の行の無い年（#208 E1 より前の年）と、
+  契約の行の無い選手のいる前の年（#40 K1a より前に締めた年）は出さない（「—」。2026-11-14 ユーザー決定）。
+  いまの年度は進める処理と同じく人気と年俸を補い、年額の項目を消化した公式戦の割合で按分する
 - 値段の変更（`TicketPriceService`。更新）: GM が受け持つ球団のいまの年度の値段を手動にする・お任せに戻す。
   変えられるのは開幕前だけ（検査はリポジトリがトランザクションの中で行う。domain の `ticket_price_change_blocker`）
 """
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from ..domain.exceptions import InvalidTicketPrice
-from ..domain.pennant.finance import ClubFinance, FinanceInputs, RosterSize, club_finance, season_share
+from ..domain.pennant.finance import ClubFinance, FinanceInputs, club_finance, season_share
 from ..domain.pennant.popularity import MEAN_POPULARITY, Popularity, with_initial
 from ..domain.pennant.schedule import ScheduleRules
 from ..domain.pennant.season import SeasonPhase, season_year
@@ -35,6 +36,7 @@ from .dto import (
     WorldContext,
 )
 from .pennant_popularity import PopularityReader
+from .pennant_salary import SalaryContractReader
 from .pennant_season import AtomicBlock
 from .pennant_ticket_price import TicketPriceReader
 from .queries import AttendanceQuery, ClubFinanceQuery, GameListQuery, SimulationContextQuery
@@ -48,7 +50,8 @@ class _Materials:
     manual: Mapping[tuple[int, int], TicketPrice]
     regular: Mapping[tuple[int, int], int]
     postseason: Mapping[tuple[int, int], int]
-    sizes: Mapping[tuple[int, int], RosterSize]
+    # 人件費（年俸の合計。#40 K1a）。分からない球団 × 年（契約の行の無い前の年）は None
+    payrolls: Mapping[tuple[int, int], int | None]
     capacities: Mapping[int, int | None]
     # いまの年度の、球団ごとの消化した公式戦の数（いまの年度を含まなければ空）
     played: Mapping[int, int]
@@ -65,6 +68,7 @@ class ClubFinanceService:
         attendance: AttendanceQuery,
         facts: ClubFinanceQuery,
         games: GameListQuery,
+        salaries: SalaryContractReader,
     ) -> None:
         self._popularities = popularities
         self._ticket_prices = ticket_prices
@@ -72,6 +76,8 @@ class ClubFinanceService:
         self._facts = facts
         # いまの年度の消化した公式戦の数（年額の項目の按分）
         self._games = games
+        # 人件費（年俸の合計。#40 K1a）。いまの年度は契約の行の無い選手を補う
+        self._salaries = salaries
 
     def view(self, world: WorldContext) -> ClubFinanceView | None:
         """経営の画面の材料（受け持つ球団）。受け持つ球団が無ければ None。"""
@@ -121,7 +127,7 @@ class ClubFinanceService:
             manual={(team_id, y): price for y, price in self._ticket_prices.manual_history(team_id).items()},
             regular=regular,
             postseason=postseason,
-            sizes=self._sizes(years, [team_id]),
+            payrolls=self._salaries.payrolls(years, [team_id], open_year=year),
             capacities=self._facts.stadium_capacities([team_id]),
             played=self._played(world),
         )
@@ -138,7 +144,7 @@ class ClubFinanceService:
             manual={(team_id, year): price for team_id, price in manual.items()},
             regular=self._totals(GameStage.REGULAR, year=year, team_id=None),
             postseason=self._totals(GameStage.POSTSEASON, year=year, team_id=None),
-            sizes=self._sizes([year], team_ids),
+            payrolls=self._salaries.payrolls([year], team_ids, open_year=year if year == world.season_year else None),
             capacities=self._facts.stadium_capacities(team_ids),
             played=self._played(world) if year == world.season_year else {},
         )
@@ -150,8 +156,10 @@ class ClubFinanceService:
         postseason = materials.postseason.get(key, 0)
         in_progress = year == world.season_year and world.phase is not SeasonPhase.FINISHED
         popularity = materials.popularity.get(key)
-        if popularity is None:
-            # 人気の行の無い年（この機能より前の年）は、作っていない値を見せない
+        payroll = materials.payrolls.get(key)
+        if popularity is None or payroll is None:
+            # 人気の行の無い年（#208 E1 より前の年）と、契約の行の無い選手のいる前の年（#40 K1a より前に締めた年。
+            # 人件費が分からない）は、作っていない値を見せない
             return ClubFinanceRow(
                 team_id=team_id,
                 year=year,
@@ -176,7 +184,7 @@ class ClubFinanceService:
                 postseason_attendance=postseason,
                 ticket_price=price,
                 popularity=popularity,
-                roster=materials.sizes.get(key, RosterSize(registered=0, developmental=0)),
+                payroll=payroll,
                 capacity=materials.capacities.get(team_id),
                 season_share=share,
             )
@@ -197,12 +205,6 @@ class ClubFinanceService:
         return {
             (row.team_id, row.year): row.total
             for row in self._attendance.home_totals(stage=stage, year=year, team_id=team_id)
-        }
-
-    def _sizes(self, years: Collection[int], team_ids: Collection[int]) -> dict[tuple[int, int], RosterSize]:
-        return {
-            (row.team_id, row.year): RosterSize(registered=row.registered, developmental=row.developmental)
-            for row in self._facts.roster_sizes(years=years, team_ids=team_ids)
         }
 
     def _played(self, world: WorldContext) -> dict[int, int]:

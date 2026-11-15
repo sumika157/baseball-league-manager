@@ -450,6 +450,9 @@ class AdminDoesNotShowThePennantWorldTest(WorldCase):
         self.assertNotIn(orm_models.PennantChampionship, admin.site._registry)
         self.assertNotIn(orm_models.PennantClubPopularity, admin.site._registry)
         self.assertNotIn(orm_models.PennantTicketPrice, admin.site._registry)
+        self.assertNotIn(orm_models.PennantStaffMember, admin.site._registry)
+        self.assertNotIn(orm_models.PennantStaffTenure, admin.site._registry)
+        self.assertNotIn(orm_models.PennantSalaryContract, admin.site._registry)
         self.assertNotIn(orm_models.PennantMidseasonRegistration, admin.site._registry)
         self.assertNotIn(orm_models.PennantDraft, admin.site._registry)
         self.assertNotIn(orm_models.PennantDraftSlot, admin.site._registry)
@@ -642,6 +645,9 @@ CLASSIFICATION: dict[str, tuple[str, str | None]] = {
     "PennantChampionship": (LEAGUE, "team__league"),
     "PennantClubPopularity": (LEAGUE, "team__league"),
     "PennantTicketPrice": (LEAGUE, "team__league"),
+    "PennantStaffMember": (LEAGUE, "tenures__team__league"),
+    "PennantStaffTenure": (LEAGUE, "team__league"),
+    "PennantSalaryContract": (PLAYER, "player__stints__team__league"),
     "PennantDraft": (WORLD, "world"),
     "PennantDraftSlot": (WORLD, "draft__world"),
     "PennantDraftAction": (WORLD, "draft__world"),
@@ -743,8 +749,9 @@ class ModelClassificationTest(SimpleTestCase):
 
         models = self._models()
         deleted = {model.__name__ for model, _ in _SCOPE_ROWS_CHILD_FIRST}
-        # 選手・球団・リーグは個別に消す。ここに挙がるのは、行数が多く collector に任せないもの
-        individually = {"Player", "Team", "League"}
+        # 選手・首脳陣の人・球団・リーグは個別に消す（選手と首脳陣の人は在籍・就任をたどって範囲が決まるので、
+        # 消す前に id を控える）。ここに挙がるのは、行数が多く collector に任せないもの
+        individually = {"Player", "PennantStaffMember", "Team", "League"}
         expected = {
             name for name, (kind, _) in CLASSIFICATION.items() if kind in (LEAGUE, PLAYER, GAME, WORLD)
         } - individually

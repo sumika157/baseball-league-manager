@@ -308,8 +308,6 @@ class YearlySplitTest(TestCase):
 class TeamMonthlySplitTest(TestCase):
     """チームの月別成績。選手の月別成績と対になる、チーム単位の推移。"""
 
-    OURS, THEIRS = {10, 11}, {20}
-
     def test_record_and_totals_per_month(self):
         games = [
             _game(
@@ -348,7 +346,7 @@ class TeamMonthlySplitTest(TestCase):
             ),
         ]
 
-        splits = services.team_monthly_splits(games, TIGERS, self.OURS)
+        splits = services.team_monthly_splits(games, TIGERS)
 
         self.assertEqual([s.label for s in splits], ["2026年4月", "2026年5月"])
         april = splits[0]
@@ -366,17 +364,32 @@ class TeamMonthlySplitTest(TestCase):
                 1,
                 0,
                 month=4,
-                batting={
-                    10: BattingLine(at_bats=4, singles=1),
-                    20: BattingLine(at_bats=4, singles=4),
-                },
+                batting={10: BattingLine(at_bats=4, singles=1)},
+                away_batting={20: BattingLine(at_bats=4, singles=4)},
             ),
         ]
 
-        april = services.team_monthly_splits(games, TIGERS, self.OURS)[0]
+        april = services.team_monthly_splits(games, TIGERS)[0]
 
         self.assertEqual(april.batting.at_bats, 4)
         self.assertEqual(april.batting.hits, 1)
+
+    def test_a_player_who_moved_counts_only_for_the_side_he_played_on(self):
+        """年の途中で移った選手は、どちらの球団の選手でもある。顔ぶれではなく明細のチームで分ける（#396）。
+
+        移る前（ビジターの DRAGONS）で打った分は、移った先（TIGERS）の月別に入らない。
+        """
+        moved = 10
+        games = [
+            _game(TIGERS, DRAGONS, 1, 0, month=4, day=1, away_batting={moved: BattingLine(at_bats=4, singles=4)}),
+            _game(TIGERS, DRAGONS, 1, 0, month=4, day=20, batting={moved: BattingLine(at_bats=3, singles=1)}),
+        ]
+
+        tigers = services.team_monthly_splits(games, TIGERS)[0]
+        dragons = services.team_monthly_splits(games, DRAGONS)[0]
+
+        self.assertEqual((tigers.batting.at_bats, tigers.batting.hits), (3, 1))
+        self.assertEqual((dragons.batting.at_bats, dragons.batting.hits), (4, 4))
 
     def test_rate_is_recalculated_from_the_monthly_total(self):
         games = [
@@ -404,7 +417,7 @@ class TeamMonthlySplitTest(TestCase):
             ),
         ]
 
-        april = services.team_monthly_splits(games, TIGERS, self.OURS)[0]
+        april = services.team_monthly_splits(games, TIGERS)[0]
 
         # 率の平均なら .500 だが、合計から求めれば 1/4 = .250
         self.assertAlmostEqual(april.batting.batting_average, 0.25)
@@ -415,7 +428,7 @@ class TeamMonthlySplitTest(TestCase):
             _game(DRAGONS, SWALLOWS, 5, 0, month=4, day=2),
         ]
 
-        april = services.team_monthly_splits(games, TIGERS, self.OURS)[0]
+        april = services.team_monthly_splits(games, TIGERS)[0]
 
         self.assertEqual(april.games_played, 1)
 
@@ -425,13 +438,13 @@ class TeamMonthlySplitTest(TestCase):
             _game(TIGERS, DRAGONS, 1, 0, season=2026, month=4),
         ]
 
-        splits = services.team_monthly_splits(games, TIGERS, self.OURS)
+        splits = services.team_monthly_splits(games, TIGERS)
 
         self.assertEqual([s.label for s in splits], ["2025年4月", "2026年4月"])
 
     def test_months_without_games_are_omitted(self):
         """試合の無い月は行を作らない。選手の月別成績と同じ規則。"""
-        self.assertEqual(services.team_monthly_splits([], TIGERS, self.OURS), [])
+        self.assertEqual(services.team_monthly_splits([], TIGERS), [])
 
     def test_innings_are_added_as_outs(self):
         games = [
@@ -459,7 +472,7 @@ class TeamMonthlySplitTest(TestCase):
             ),
         ]
 
-        april = services.team_monthly_splits(games, TIGERS, self.OURS)[0]
+        april = services.team_monthly_splits(games, TIGERS)[0]
 
         # 5.2 + 5.2 = 11.1（10.4 にはならない）
         self.assertEqual(str(april.pitching.innings), "11.1")

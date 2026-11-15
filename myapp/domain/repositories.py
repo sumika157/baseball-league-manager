@@ -22,6 +22,7 @@ from .entities import Game, League, Stadium, Team
 from .pennant.awards import Award
 from .pennant.championship import Championship
 from .pennant.club_plan import ClubPlan
+from .pennant.contract import SalaryContract
 from .pennant.development import DevelopmentPlan
 from .pennant.draft_lottery import DraftLotteryRecord
 from .pennant.draft_meeting import DraftAction
@@ -32,6 +33,7 @@ from .pennant.ratings import PlayerRatings
 from .pennant.reinforcement import MidseasonRegistration
 from .pennant.release import ReleasePlan
 from .pennant.schedule import Fixture
+from .pennant.staff import Appointment, StaffAssignment, StaffTenure
 from .pennant.ticket_price import ClubTicketPrice
 from .pennant.world import World, WorldUsage
 from .workspace import Invitation, Workspace
@@ -664,5 +666,59 @@ class DraftLotteryRepository(Protocol):
 
         実データの範囲には書けない（InvalidWorld）。範囲の外の選手・球団は書けない（InvalidDraftAction）。
         どれかが書けなければ何も書かない。
+        """
+        ...
+
+
+@runtime_checkable
+class StaffRepository(Protocol):
+    """ペナントの首脳陣（人 `StaffMember` と就任 `StaffTenure`。#210 M1）。ペナントの世界にだけ置ける。
+
+    人は就任を通して世界に属す（世界を直接指さない）。書くのは世界の作成とシーズンを締める処理だけ。
+    不変条件（同じ球団の同じ役割は同時に1人・1人1職）は書く前に domain の `ensure_valid_tenures` で確かめる。
+    画面に出すときは参照クエリ（`application/queries.py` の `StaffQuery`）で読む（更新と参照を分ける）。
+    """
+
+    def find_serving(self, year: int) -> list[StaffAssignment]:
+        """その年に就いている首脳陣（人と就任の組）。球団の id の順。1回のクエリで読む。"""
+        ...
+
+    def apply(self, *, retirements: Sequence[StaffTenure], appointments: Sequence[Appointment]) -> None:
+        """就任を閉じ（`retirements` は閉じた後の就任）、新しい人を就任とともに保存する。
+
+        どれかが書けなければ何も書かない。
+
+        実データの範囲には書けない（InvalidWorld）。範囲の外の球団・閉じる就任が見つからない・不変条件を破る
+        （同じ球団の同じ役割が同じ年に2人・1人が同じ年に2職）は InvalidStaffTenure。閉じる就任の最終年・新しい就任の
+        初年が締めた年（`season.is_season_closed`）なら AlreadyClosed（締めた年の首脳陣を書き換えない。締める処理は、
+        翌年の能力を書く前に書く）。
+        """
+        ...
+
+
+@runtime_checkable
+class SalaryContractRepository(Protocol):
+    """ペナントの選手の年俸の契約（`SalaryContract`。選手 × 期間。#40 K1a）。ペナントの世界にだけ置ける。
+
+    書くのは世界の作成・シーズンを締める処理・期中の外国人の獲得だけ。締めた年の契約は書き換えない。
+    行の無い選手（この機能より前の世界）は読む側が補う（`salary.initial_salary`。補う読み方は
+    application の `pennant_salary` の1か所）。
+    """
+
+    def find_by_year(self, year: int) -> list[SalaryContract]:
+        """その年を期間に含む、範囲の全選手の契約（行のある選手だけ）。選手の id の順。"""
+        ...
+
+    def for_players(self, player_ids: Collection[int]) -> list[SalaryContract]:
+        """選手たちの全ての契約（選手の id・最初の年の順）。範囲の外の選手は含まない。"""
+        ...
+
+    def add_all(self, contracts: Sequence[SalaryContract]) -> None:
+        """契約をまとめて保存する。どれかが書けなければ何も書かない。
+
+        実データの範囲には書けない（InvalidWorld）。範囲の外の選手は PlayerNotFound。同じ選手の期間の重なり
+        （渡した中・保存済みとの間。`contract.ensure_no_overlap`）は InvalidSalaryContract。期間が締めた年
+        （`season.is_season_closed`）にかかる契約は AlreadyClosed（締める処理は、翌年の能力を書く前に締める年の
+        補った値を書く）。
         """
         ...

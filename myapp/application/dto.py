@@ -13,6 +13,7 @@ from datetime import date, datetime
 from ..domain.entities import jersey_number_in, winning_team_id
 from ..domain.pennant.awards import Award
 from ..domain.pennant.club_plan import PlanSection
+from ..domain.pennant.contract import MAN, Salary, salary_change_label, salary_label
 from ..domain.pennant.development import DevelopmentDecision
 from ..domain.pennant.draft import DraftRoute
 from ..domain.pennant.draft_lottery import DraftLotteryRecord, contest_label
@@ -23,6 +24,7 @@ from ..domain.pennant.finance import money_label
 from ..domain.pennant.postseason import PostseasonFormat, PostseasonResult, PostseasonStatus
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.season import SeasonPhase
+from ..domain.pennant.staff import ManagerStyle, StaffRole, StaffTenure
 from ..domain.pennant.ticket_price import TicketPrice
 from ..domain.services.free_agency import SERVICE_DAYS_PER_SEASON
 from ..domain.services.rankings import Title
@@ -2192,6 +2194,8 @@ class PennantHome:
     popularity: PopularityCard | None = None
     # 自軍のいまの年度のチケットの値段と収支（途中経過。#208 E2）。受け持つ球団が無ければ None
     finance: ClubFinanceRow | None = None
+    # 自軍のいまの年度の年俸の合計・平均・最高と前年との差（#40 K1a）。受け持つ球団が無ければ None
+    payroll: PayrollSummary | None = None
 
     @property
     def season_finished(self) -> bool:
@@ -2319,6 +2323,11 @@ class SeasonClosed:
     reverted_club_count: int
     # 翌年の日程の試合数
     fixture_count: int
+    # 新しく就いた監督の数（高齢の退任の後任と、監督のいなかった球団への就任。#210 M1）
+    manager_changes: int = 0
+    # 契約更改（#40 K1a）の人数と、年俸の総額の増減（翌年 − 締めた年。円）
+    renewal_count: int = 0
+    renewal_change: int = 0
 
 
 @dataclass(frozen=True)
@@ -3054,6 +3063,8 @@ class OffseasonSummary:
     popularity: tuple[OffseasonPopularityRow, ...] = ()
     # 選んだリーグの球団の締めた年の収支（#208 E2。補填前の収支の高い順）。人気の行の無い年は空
     finance: tuple[OffseasonFinanceRow, ...] = ()
+    # 締めた年の契約更改（#40 K1a）。契約を記録する前に締めた年は None（節ごと出さない）
+    renewals: RenewalSummary | None = None
 
 
 @dataclass(frozen=True)
@@ -3588,6 +3599,8 @@ class ClubPlayerDetail[Row: (ClubPlayerRow, ReleasePlayerRow)]:
     batting: ClubBattingStat | None
     pitching: ClubPitchingStat | None
     outlook: OutlookCell | None = None
+    # その年の年俸（#40 K1a。契約の行が無ければ補った値）。無ければ None（「—」）
+    salary: Salary | None = None
 
 
 # --- 優勝争い（#104） ---
@@ -3710,16 +3723,107 @@ class HomeAttendance:
 
 
 @dataclass(frozen=True)
-class ClubRosterSize:
-    """球団 × 年の契約区分ごとの人数（その年に在籍した選手。#208 E2 の仮の人件費の材料）。
+class PayrollMember:
+    """球団 × 年に在籍した選手ひとりと、その年の年俸の契約（#40 K1a）。参照クエリ `PayrollQuery` が作る。
 
-    参照クエリ `ClubFinanceQuery` が作る。その年の区分は domain の `ContractStatus.in_year` で決める。
+    契約の行が無い選手（この機能より前の世界）は `salary` が None（補うのは application の `pennant_salary` の1か所）。
+    補いの材料として、その年の区分（`ContractStatus.in_year`）・外国人か・ドラフトの年とその年の在籍の開始年も持つ。
     """
 
     team_id: int
+    team_name: str
     year: int
-    registered: int
-    developmental: int
+    player_id: int
+    name: str
+    position: Position
+    contract: ContractStatus
+    is_foreign: bool
+    # ドラフトの年（無ければ None）と、その年の在籍の開始年（プロ入りの年は domain の `salary.entered_year_of`）
+    draft_year: int | None
+    joined_year: int
+    salary: int | None
+
+
+@dataclass(frozen=True)
+class SalaryHistoryRow:
+    """選手ページの「年俸の推移」の1年（#40 K1a）。契約の行が無い前の年は「—」、いまの年度は補った値。"""
+
+    year: int
+    team_name: str
+    salary: Salary | None
+    # 契約の行が無く、補った値（いまの年度だけ）
+    supplemented: bool = False
+
+    @property
+    def label(self) -> str:
+        return "—" if self.salary is None else self.salary.label
+
+
+@dataclass(frozen=True)
+class PayrollSummary:
+    """GM ホームの「年俸」のカード（自軍のいまの年度。#40 K1a）。行の無い選手は補った値で数える。
+
+    `previous_total` は前年の年俸の合計（前年に契約の行の無い選手がいれば None）。
+    """
+
+    year: int
+    total: Money
+    player_count: int
+    average: int
+    top_name: str
+    top: Salary
+    previous_total: Money | None
+
+    @property
+    def average_label(self) -> str:
+        return salary_label(round(self.average / MAN) * MAN)
+
+    @property
+    def change_label(self) -> str:
+        """前年との差（「+1.2億円」「-0.4億円」）。前年が分からなければ空。"""
+        if self.previous_total is None:
+            return ""
+        change = self.total.amount - self.previous_total.amount
+        return f"+{money_label(change)}" if change > 0 else money_label(change)
+
+
+@dataclass(frozen=True)
+class RenewalRow:
+    """オフの結果の「契約更改」の1人（自軍。締めた年の年俸 → 翌年の年俸。#40 K1a）。"""
+
+    player_id: int
+    name: str
+    position: Position
+    before: Salary
+    after: Salary
+
+    @property
+    def change(self) -> int:
+        return self.after.yen - self.before.yen
+
+    @property
+    def change_label(self) -> str:
+        return salary_change_label(self.before.yen, self.after.yen)
+
+    @property
+    def rate_label(self) -> str:
+        """増減の割合（「+25%」「-10%」「±0%」）。"""
+        rate = round(100 * self.change / self.before.yen)
+        return "±0%" if rate == 0 else f"{rate:+d}%"
+
+
+@dataclass(frozen=True)
+class RenewalSummary:
+    """締めた年の契約更改のまとめ（自軍の全員と、世界全体の人数と総額の増減。#40 K1a）。"""
+
+    own: tuple[RenewalRow, ...]
+    total_count: int
+    total_change: int
+
+    @property
+    def total_change_label(self) -> str:
+        change = self.total_change
+        return f"+{money_label(change)}" if change > 0 else money_label(change)
 
 
 @dataclass(frozen=True)
@@ -4061,3 +4165,73 @@ class StadiumSetupRow:
     def deletion_blocker(self) -> str | None:
         """消せない理由（消せるなら None）。"""
         return stadium_deletion_blocker(self.real_home_team_count, self.world_home_team_count)
+
+
+# --- 首脳陣（#210 M1） ---
+
+
+@dataclass(frozen=True)
+class StaffTenureRow:
+    """首脳陣の就任ひとつ（人の名前・生年月日・傾向を添えた参照の行。`StaffQuery` が作る）。"""
+
+    member_id: int
+    name: str
+    name_kana: str
+    birth_date: date
+    style: ManagerStyle
+    team_id: int
+    team_name: str
+    role: StaffRole
+    first_year: int
+    # いまも就いていれば None
+    last_year: int | None
+
+    def covers(self, year: int) -> bool:
+        """その年に就いているか（判定の出典は domain の `StaffTenure.covers`）。"""
+        tenure = StaffTenure(self.member_id, self.team_id, self.role, self.first_year, self.last_year)
+        return tenure.covers(year)
+
+
+@dataclass(frozen=True)
+class TacticCell:
+    """監督の方針の1軸（「継投」「先発を引っ張る」など）。`level` は −2〜+2 で、0 が標準。"""
+
+    title: str
+    label: str
+    level: int
+
+
+@dataclass(frozen=True)
+class ManagerCard:
+    """GM ホームの「監督」カード（その年に自軍を率いる監督）。"""
+
+    year: int
+    name: str
+    name_kana: str
+    age: int
+    # 就任何年目（初年が1年目）
+    tenure_year: int
+    tactics: tuple[TacticCell, ...]
+
+
+@dataclass(frozen=True)
+class ManagerHistoryRow:
+    """球団史の1年の監督。監督のいない年（この機能より前の年）は `name` が空。"""
+
+    year: int
+    name: str = ""
+
+
+@dataclass(frozen=True)
+class ManagerChangeRow:
+    """オフの結果の「監督の交代」の1球団。前任のいない就任（監督のいなかった球団）は前任の欄が空。"""
+
+    team_id: int
+    team_name: str
+    successor_name: str
+    successor_age: int
+    # 後任の方針のうち標準でない軸（「よく走る・バントが多め」。すべて標準なら「標準」）
+    successor_style: str
+    predecessor_name: str = ""
+    # 前任の退任時（締めた年）の年齢。前任がいなければ None
+    predecessor_age: int | None = None

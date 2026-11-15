@@ -30,6 +30,7 @@ from datetime import date
 
 from ..domain.entities import ensure_room_for_registered
 from ..domain.exceptions import AlreadyAdvanced, InvalidSigning, RegisteredPlayerLimitExceeded, TeamNotFound
+from ..domain.pennant.contract import SalaryContract
 from ..domain.pennant.foreign_market import (
     MAX_FOREIGN_HELD,
     MAX_MIDSEASON_SIGNINGS,
@@ -42,12 +43,14 @@ from ..domain.pennant.foreign_market import (
 )
 from ..domain.pennant.ratings import PlayerRatings
 from ..domain.pennant.reinforcement import MidseasonRegistration, RegistrationKind, ReinforcementWindow
+from ..domain.pennant.salary import foreign_salary
 from ..domain.pennant.world import World
 from ..domain.repositories import (
     FixtureRepository,
     LeagueRepository,
     MidseasonRegistrationRepository,
     RatingsRepository,
+    SalaryContractRepository,
     TeamRepository,
     WorldRepository,
 )
@@ -71,6 +74,7 @@ class ForeignSigningService:
         teams: TeamRepository,
         fixtures: FixtureRepository,
         ratings: RatingsRepository,
+        salary_contracts: SalaryContractRepository,
         registrations: MidseasonRegistrationRepository,
         context_query: SimulationContextQuery,
         development_roster: DevelopmentRosterQuery,
@@ -84,6 +88,8 @@ class ForeignSigningService:
         self._teams = teams
         self._fixtures = fixtures
         self._ratings = ratings
+        # 獲得した外国人のその年の年俸（年額。#40 K1a）
+        self._salary_contracts = salary_contracts
         self._registrations = registrations
         # 画面の材料と保有の人数（支配下は球団の現在の選手、育成は育成の一覧。集約を組み立てない）
         self._context_query = context_query
@@ -186,6 +192,13 @@ class ForeignSigningService:
             self._teams.save(team)
             assert player.id is not None, "保存すると獲得した選手に id が入る"
             self._ratings.add_all([PlayerRatings(player_id=player.id, year=year, ratings=signing.ratings)])
+            self._salary_contracts.add_all(
+                [
+                    SalaryContract.for_year(
+                        player.id, year, foreign_salary(signing.position, signing.ratings, year=year)
+                    )
+                ]
+            )
             self._registrations.add(
                 MidseasonRegistration(
                     team_id=team_id, player_id=player.id, registered_on=next_on, kind=RegistrationKind.SIGNING

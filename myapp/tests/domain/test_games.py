@@ -8,6 +8,7 @@ from myapp.domain.entities import Game, Team
 from myapp.domain.exceptions import InvalidGame
 from myapp.domain.value_objects import (
     BattingLine,
+    FieldingLine,
     GameHeader,
     GameStage,
     InningsPitched,
@@ -84,6 +85,16 @@ class GameRuleTest(TestCase):
         self.assertEqual(len(game.batting), 1)
         self.assertEqual(game.batting[0].line.home_runs, 2)
 
+    def test_lines_must_belong_to_either_side(self):
+        """明細のチームは試合のホームかビジター。打撃・投球・守備のどれも同じ（#396）。"""
+        game = _game(5, 3, recorded=False)
+        with self.assertRaisesRegex(InvalidGame, "打撃成績のチーム"):
+            game.record_batting(10, BattingLine(), team_id=999)
+        with self.assertRaisesRegex(InvalidGame, "投球成績のチーム"):
+            game.record_pitching(10, PitchingLine(), team_id=999)
+        with self.assertRaisesRegex(InvalidGame, "守備成績のチーム"):
+            game.record_fielding(10, FieldingLine(), team_id=999)
+
 
 class TeamRecordFromGamesTest(TestCase):
     def setUp(self):
@@ -134,8 +145,8 @@ class PlayerTotalsTest(TestCase):
         """5.2 + 5.2 は 10.4 ではなく 11.1（アウト数で足す）。"""
         g1, g2 = _game(5, 3, 1), _game(1, 4, 2)
         line = PitchingLine(innings=InningsPitched.from_notation("5.2"), earned_runs=1)
-        g1.record_pitching(18, line)
-        g2.record_pitching(18, line)
+        g1.record_pitching(18, line, team_id=g1.home_team_id)
+        g2.record_pitching(18, line, team_id=g2.home_team_id)
 
         total = services.player_pitching_total([g1, g2], 18)
 

@@ -25,6 +25,8 @@ from myapp.infrastructure.repositories import (
     DjangoLeagueRepository,
     DjangoPopularityRepository,
     DjangoRatingsRepository,
+    DjangoSalaryContractRepository,
+    DjangoStaffRepository,
     DjangoTeamRepository,
     DjangoWorldRepository,
 )
@@ -355,6 +357,8 @@ class ForkedRatingsTest(BaseCase):
                 teams=DjangoTeamRepository(scope),
                 ratings=FailingRatings(),  # type: ignore[arg-type]
                 popularities=DjangoPopularityRepository(scope),
+                staff=DjangoStaffRepository(scope),
+                salary_contracts=DjangoSalaryContractRepository(scope),
             )
 
         service = PennantWorldService(
@@ -515,7 +519,12 @@ class FieldingTotalsQueryTest(BaseCase):
         second = give_batting(self.team, self.rival, self.shortstop.id, BattingLine(at_bats=4), day=2)
         for game, (putouts, assists, errors) in ((first, (2, 4, 1)), (second, (1, 3, 0))):
             orm_models.GameFieldingLine.objects.create(
-                game_id=game.id, player_id=self.shortstop.id, putouts=putouts, assists=assists, errors=errors
+                game_id=game.id,
+                player_id=self.shortstop.id,
+                team=self.team,
+                putouts=putouts,
+                assists=assists,
+                errors=errors,
             )
 
     def test_totals_are_summed_over_games(self):
